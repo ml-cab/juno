@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+	<groupId>cab.ml</groupId>
+	<artifactId>juno</artifactId>
+		<version>0.1.0-SNAPSHOT</version>
+	</parent>
+
+	<artifactId>player</artifactId>
+	<name>player</name>
+	<description>
+		Console player and cluster harness utilities used for manual runs.
+	</description>
+
+	<dependencies>
+
+		<!-- Core modules used by the console and harness -->
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>api</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>registry</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>coordinator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>node</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>kvcache</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>tokenizer</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>sampler</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>health</artifactId>
+		</dependency>
+
+		<!-- gRPC runtime for node servers and pipeline client -->
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-netty-shaded</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-protobuf</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-stub</artifactId>
+		</dependency>
+
+	</dependencies>
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-shade-plugin</artifactId>
+				<version>3.5.1</version>
+				<executions>
+					<execution>
+						<phase>package</phase>
+						<goals>
+							<goal>shade</goal>
+						</goals>
+						<configuration>
+							<transformers>
+								<transformer
+									implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+									<mainClass>
+										cab.ml.juno.player.ConsoleMain</mainClass>
+								</transformer>
+								<!-- Merge service files if any (gRPC uses them) -->
+								<transformer
+									implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
+							</transformers>
+							<filters>
+								<filter>
+									<artifact>*:*</artifact>
+									<excludes>
+										<exclude>module-info.class</exclude>
+										<exclude>META-INF/*.SF</exclude>
+										<exclude>META-INF/*.DSA</exclude>
+										<exclude>META-INF/*.RSA</exclude>
+									</excludes>
+								</filter>
+							</filters>
+							<finalName>player</finalName>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+
+		</plugins>
+	</build>
+</project>
+

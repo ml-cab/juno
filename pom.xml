@@ -1,0 +1,375 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>cab.ml</groupId>
+	<artifactId>juno</artifactId>
+	<version>0.1.0-SNAPSHOT</version>
+	<packaging>pom</packaging>
+
+	<name>Java Unified Neural Orchestration</name>
+	<description>Distributed LLM inference engine for JVM clusters</description>
+	<url>https://github.com/ml-cab/juno</url>
+
+	<modules>
+		<module>api</module>
+		<module>registry</module>
+		<module>coordinator</module>
+		<module>node</module>
+		<module>kvcache</module>
+		<module>tokenizer</module>
+		<module>sampler</module>
+		<module>health</module>
+		<module>player</module>
+		<module>integration</module>
+	</modules>
+
+	<properties>
+		<!-- Java -->
+		<java.version>25</java.version>
+		<maven.compiler.release>25</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+		<!-- Hazelcast -->
+		<hazelcast.version>5.4.0</hazelcast.version>
+
+		<!-- gRPC / Protobuf -->
+		<grpc.version>1.68.0</grpc.version>
+		<protobuf.version>3.25.3</protobuf.version>
+		<protobuf-plugin.version>3.11.4</protobuf-plugin.version>
+
+		<!-- GPU -->
+		<jcuda.version>12.0.0</jcuda.version>
+
+		<!-- DJL / Tokenizer -->
+		<djl.version>0.27.0</djl.version>
+
+		<!-- Cache -->
+		<caffeine.version>3.1.8</caffeine.version>
+
+		<!-- Resilience -->
+		<resilience4j.version>2.2.0</resilience4j.version>
+
+		<!-- Observability -->
+		<micrometer.version>1.13.0</micrometer.version>
+		<prometheus.version>1.13.0</prometheus.version>
+
+		<!-- Serialization -->
+		<flatbuffers.version>24.3.25</flatbuffers.version>
+
+		<!-- Web runtime -->
+		<javalin.version>6.3.0</javalin.version>
+
+		<!-- Logging -->
+		<slf4j.version>2.0.13</slf4j.version>
+		<logback.version>1.5.6</logback.version>
+
+		<!-- Testing -->
+		<junit.version>5.10.2</junit.version>
+		<mockito.version>5.12.0</mockito.version>
+		<assertj.version>3.26.0</assertj.version>
+
+		<!-- Maven plugins -->
+		<maven-compiler.version>3.13.0</maven-compiler.version>
+		<maven-surefire.version>3.3.0</maven-surefire.version>
+	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+
+			<!-- Internal modules -->
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>api</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>registry</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>coordinator</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>node</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>kvcache</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>tokenizer</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>sampler</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>health</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>player</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<!-- Hazelcast -->
+			<dependency>
+				<groupId>com.hazelcast</groupId>
+				<artifactId>hazelcast</artifactId>
+				<version>${hazelcast.version}</version>
+			</dependency>
+
+			<!-- gRPC -->
+			<dependency>
+				<groupId>io.grpc</groupId>
+				<artifactId>grpc-netty-shaded</artifactId>
+				<version>${grpc.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.grpc</groupId>
+				<artifactId>grpc-protobuf</artifactId>
+				<version>${grpc.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.grpc</groupId>
+				<artifactId>grpc-stub</artifactId>
+				<version>${grpc.version}</version>
+			</dependency>
+
+			<!-- Protobuf -->
+			<dependency>
+				<groupId>com.google.protobuf</groupId>
+				<artifactId>protobuf-java</artifactId>
+				<version>${protobuf.version}</version>
+			</dependency>
+
+			<!-- JCuda -->
+			<dependency>
+				<groupId>org.jcuda</groupId>
+				<artifactId>jcuda</artifactId>
+				<version>${jcuda.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.jcuda</groupId>
+				<artifactId>jcublas</artifactId>
+				<version>${jcuda.version}</version>
+			</dependency>
+
+			<!-- DJL -->
+			<dependency>
+				<groupId>ai.djl</groupId>
+				<artifactId>api</artifactId>
+				<version>${djl.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>ai.djl.sentencepiece</groupId>
+				<artifactId>sentencepiece</artifactId>
+				<version>${djl.version}</version>
+			</dependency>
+
+			<!-- chronicle-map off-heap cache -->
+			<dependency>
+				<groupId>net.openhft</groupId>
+				<artifactId>chronicle-map</artifactId>
+				<version>${chronicle-map.version}</version>
+			</dependency>
+
+			<!-- Ehcache 3 -->
+			<dependency>
+				<groupId>org.ehcache</groupId>
+				<artifactId>ehcache</artifactId>
+				<version>${ehcache.version}</version>
+			</dependency>
+
+			<!-- Caffeine -->
+			<dependency>
+				<groupId>com.github.ben-manes.caffeine</groupId>
+				<artifactId>caffeine</artifactId>
+				<version>${caffeine.version}</version>
+			</dependency>
+
+			<!-- Resilience4j -->
+			<dependency>
+				<groupId>io.github.resilience4j</groupId>
+				<artifactId>resilience4j-circuitbreaker</artifactId>
+				<version>${resilience4j.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.github.resilience4j</groupId>
+				<artifactId>resilience4j-retry</artifactId>
+				<version>${resilience4j.version}</version>
+			</dependency>
+
+			<!-- Micrometer -->
+			<dependency>
+				<groupId>io.micrometer</groupId>
+				<artifactId>micrometer-core</artifactId>
+				<version>${micrometer.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.micrometer</groupId>
+				<artifactId>micrometer-registry-prometheus</artifactId>
+				<version>${prometheus.version}</version>
+			</dependency>
+
+			<dependency>
+				<groupId>io.javalin</groupId>
+				<artifactId>javalin</artifactId>
+				<version>${javalin.version}</version>
+			</dependency>
+
+			<dependency>
+				<groupId>io.prometheus</groupId>
+				<artifactId>prometheus-metrics-exporter-httpserver</artifactId>
+				<version>1.3.1</version>
+			</dependency>
+
+			<!-- Logging -->
+			<dependency>
+				<groupId>org.slf4j</groupId>
+				<artifactId>slf4j-api</artifactId>
+				<version>${slf4j.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>ch.qos.logback</groupId>
+				<artifactId>logback-classic</artifactId>
+				<version>${logback.version}</version>
+			</dependency>
+
+			<!-- Testing -->
+			<dependency>
+				<groupId>org.junit.jupiter</groupId>
+				<artifactId>junit-jupiter</artifactId>
+				<version>${junit.version}</version>
+				<scope>test</scope>
+			</dependency>
+			<dependency>
+				<groupId>org.mockito</groupId>
+				<artifactId>mockito-core</artifactId>
+				<version>${mockito.version}</version>
+				<scope>test</scope>
+			</dependency>
+			<dependency>
+				<groupId>org.assertj</groupId>
+				<artifactId>assertj-core</artifactId>
+				<version>${assertj.version}</version>
+				<scope>test</scope>
+			</dependency>
+
+		</dependencies>
+	</dependencyManagement>
+
+	<!-- Common deps for all modules -->
+	<dependencies>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>ch.qos.logback</groupId>
+			<artifactId>logback-classic</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.mockito</groupId>
+			<artifactId>mockito-core</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<pluginManagement>
+			<plugins>
+
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-compiler-plugin</artifactId>
+					<version>${maven-compiler.version}</version>
+					<configuration>
+						<release>${maven.compiler.release}</release>
+						<compilerArgs>
+							<arg>--enable-preview</arg>
+						</compilerArgs>
+					</configuration>
+				</plugin>
+
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-surefire-plugin</artifactId>
+					<version>${maven-surefire.version}</version>
+					<configuration>
+						<argLine>--enable-preview
+							--enable-native-access=ALL-UNNAMED</argLine>
+					</configuration>
+				</plugin>
+
+				<!-- Protobuf / gRPC code generation -->
+				<plugin>
+					<groupId>com.github.os72</groupId>
+					<artifactId>protoc-jar-maven-plugin</artifactId>
+					<version>${protobuf-plugin.version}</version>
+					<executions>
+						<execution>
+							<phase>generate-sources</phase>
+							<goals>
+								<goal>run</goal>
+							</goals>
+							<configuration>
+								<protocVersion>${protobuf.version}</protocVersion>
+								<includeGoogleProtobuf>true</includeGoogleProtobuf>
+								<outputTargets>
+									<outputTarget>
+										<type>java</type>
+										<outputDirectory>
+											target/generated-sources/protobuf</outputDirectory>
+									</outputTarget>
+									<outputTarget>
+										<type>grpc-java</type>
+										<pluginArtifact>
+											io.grpc:protoc-gen-grpc-java:${grpc.version}</pluginArtifact>
+										<outputDirectory>
+											target/generated-sources/grpc</outputDirectory>
+									</outputTarget>
+								</outputTargets>
+							</configuration>
+						</execution>
+					</executions>
+				</plugin>
+
+			</plugins>
+		</pluginManagement>
+
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+			</plugin>
+		</plugins>
+	</build>
+</project>

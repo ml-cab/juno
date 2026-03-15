@@ -1,0 +1,68 @@
+# hyper-stack-4j cluster configuration
+# Copy and adjust per deployment
+
+cluster:
+  name: hyper-stack-4j-cluster
+  seed-nodes:
+    - 192.168.1.10:5701     # coordinator-1 (stable machine)
+    - 192.168.1.11:5701     # coordinator-2 (stable machine)
+  seed-node-count: 2        # never 1 — no SPOF
+  backup-count: 2           # Hazelcast map replicas
+
+coordinator:
+  count: 2                  # leader + standby
+  grpc-port: 9090
+  http-port: 8080
+  max-queue-depth: 1000
+  max-batch-size: 8
+  preemption-enabled: true
+  preemption-strategy: ABORT  # ABORT | CHECKPOINT
+
+scheduler:
+  max-wait-ms: 50
+  priority-weights:
+    HIGH: 3
+    NORMAL: 1
+    LOW: 1
+
+node:
+  grpc-port: 9091
+  device-id: 0              # CUDA device index
+  vram-headroom-fraction: 0.10  # keep 10% VRAM free
+
+kv-cache:
+  gpu:
+    capacity-fraction: 0.85
+    eviction: LRU
+  cpu:
+    capacity-gb: 24
+    eviction: LFU
+  disk:
+    capacity-gb: 200
+    path: /mnt/kvcache
+    eviction: LFU
+
+health:
+  probe-interval-ms: 5000
+  vram-warning-threshold: 0.90
+  vram-critical-threshold: 0.98
+  circuit-breaker:
+    failure-rate-threshold: 50
+    sliding-window-size: 10
+    wait-duration-seconds: 30
+
+sampling:
+  defaults:
+    temperature: 0.7
+    top-k: 50
+    top-p: 0.9
+    repetition-penalty: 1.1
+    max-tokens: 512
+  profiles:
+    deterministic:
+      temperature: 0.1
+      greedy: true
+    creative:
+      temperature: 1.2
+      top-k: 100
+      top-p: 0.95

@@ -1,0 +1,808 @@
+#
+# Copyright 2026 Dmytro Soloviov
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+openapi: 3.0.3
+
+info:
+  title: juno Inference API
+  description: |
+    Client-facing REST API for the juno distributed Java LLM inference engine.
+    Internal node-to-node communication uses gRPC (see inference.proto).
+  version: 0.1.0-SNAPSHOT
+  contact:
+    name: juno
+    url: https://github.com/ml-cab/juno
+
+servers:
+  - url: http://localhost:8080/v1
+    description: Local coordinator
+
+tags:
+  - name: inference
+    description: LLM inference endpoints
+  - name: models
+    description: Model lifecycle management
+  - name: cluster
+    description: Cluster health and node status
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATHS
+# ─────────────────────────────────────────────────────────────────────────────
+
+paths:
+
+  # ── Inference ──────────────────────────────────────────────────────────────
+
+  /inference:
+    post:
+      tags: [inference]
+      operationId: infer
+      summary: Run inference (blocking, full response)
+      description: |
+        Submits a prompt and waits for the complete generated response.
+        For token-by-token streaming use /inference/stream instead.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InferenceRequest'
+            examples:
+              basic:
+                summary: Basic chat request
+                value:
+                  messages:
+                    - role: system
+                      content: You are a helpful assistant.
+                    - role: user
+                      content: What is Java?
+                  sampling:
+                    temperature: 0.7
+                    topK: 50
+                    topP: 0.9
+                    maxTokens: 512
+                    priority: NORMAL
+      responses:
+        '200':
+          description: Successful inference response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InferenceResponse'
+        '429':
+          description: Scheduler queue full
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryableError'
+        '503':
+          description: Cluster unavailable or resharding in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryableError'
+        '500':
+          description: Internal inference error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /inference/stream:
+    post:
+      tags: [inference]
+      operationId: inferStream
+      summary: Run inference (streaming, token by token)
+      description: |
+        Submits a prompt and streams generated tokens back as Server-Sent Events.
+        Each event contains a single TokenEvent. The stream ends with
+        a final event where isComplete = true.
+
+        Event format:
+          data: {"token": "Hello", "tokenId": 9906, "isComplete": false, "requestId": "..."}
+          data: {"token": " world", "tokenId": 1917, "isComplete": false, "requestId": "..."}
+          data: {"token": "", "tokenId": 2, "isComplete": true, "requestId": "..."}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InferenceRequest'
+      responses:
+        '200':
+          description: SSE token stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/TokenEvent'
+        '429':
+          description: Scheduler queue full
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryableError'
+        '503':
+          description: Cluster unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryableError'
+
+  # ── Models ─────────────────────────────────────────────────────────────────
+
+  /models:
+    get:
+      tags: [models]
+      operationId: listModels
+      summary: List all registered models
+      responses:
+        '200':
+          description: List of registered models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelList'
+
+    post:
+      tags: [models]
+      operationId: loadModel
+      summary: Load a model into the cluster
+      description: |
+        Registers a model and triggers shard distribution across available nodes.
+        The model must be accessible on the coordinator's filesystem.
+        Returns immediately — poll /models/{modelId} for READY status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoadModelRequest'
+            examples:
+              llama3:
+                summary: Load LLaMA 3 8B
+                value:
+                  modelId: llama3-8b
+                  path: /models/llama3-8b.Q4_K_M.gguf
+                  architecture: llama3
+                  quantization: Q4_K_M
+      responses:
+        '202':
+          description: Model load accepted, sharding in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelDescriptor'
+        '409':
+          description: Model with this ID already loaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '507':
+          description: Insufficient cluster VRAM
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /models/{modelId}:
+    get:
+      tags: [models]
+      operationId: getModel
+      summary: Get model status and shard map
+      parameters:
+        - $ref: '#/components/parameters/modelId'
+      responses:
+        '200':
+          description: Model details and current shard assignment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelDescriptor'
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+    delete:
+      tags: [models]
+      operationId: unloadModel
+      summary: Unload a model from the cluster
+      description: Frees VRAM on all nodes holding shards of this model.
+      parameters:
+        - $ref: '#/components/parameters/modelId'
+      responses:
+        '204':
+          description: Model unloaded successfully
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  # ── Cluster ────────────────────────────────────────────────────────────────
+
+  /cluster/health:
+    get:
+      tags: [cluster]
+      operationId: getClusterHealth
+      summary: Cluster health overview
+      responses:
+        '200':
+          description: Cluster is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterHealth'
+        '503':
+          description: Cluster is degraded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterHealth'
+
+  /cluster/nodes:
+    get:
+      tags: [cluster]
+      operationId: listNodes
+      summary: List all inference nodes and their status
+      responses:
+        '200':
+          description: List of nodes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeList'
+
+  /cluster/nodes/{nodeId}:
+    get:
+      tags: [cluster]
+      operationId: getNode
+      summary: Get detailed status for a single node
+      parameters:
+        - $ref: '#/components/parameters/nodeId'
+      responses:
+        '200':
+          description: Node details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeDescriptor'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /cluster/shardmap:
+    get:
+      tags: [cluster]
+      operationId: getShardMap
+      summary: Current layer-to-node shard assignments
+      responses:
+        '200':
+          description: Current shard map
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShardMap'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPONENTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+components:
+
+  parameters:
+
+    modelId:
+      name: modelId
+      in: path
+      required: true
+      schema:
+        type: string
+        example: llama3-8b
+
+    nodeId:
+      name: nodeId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+
+    # ── Inference models ──────────────────────────────────────────────────────
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant]
+          description: Message role in the conversation
+          example: user
+        content:
+          type: string
+          description: Message text content
+          example: What is Java?
+
+    SamplingConfig:
+      type: object
+      properties:
+        temperature:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 2.0
+          default: 0.7
+          description: |
+            Controls randomness. Low = deterministic, High = creative.
+            0.0 approaches greedy decoding.
+          example: 0.7
+        topK:
+          type: integer
+          minimum: 0
+          default: 50
+          description: |
+            Keep only the top K tokens before sampling.
+            0 = disabled.
+          example: 50
+        topP:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          default: 0.9
+          description: |
+            Nucleus sampling — keep smallest set of tokens whose
+            cumulative probability exceeds topP.
+          example: 0.9
+        repetitionPenalty:
+          type: number
+          format: float
+          minimum: 1.0
+          default: 1.1
+          description: |
+            Penalize tokens that have already appeared.
+            1.0 = disabled.
+          example: 1.1
+        greedy:
+          type: boolean
+          default: false
+          description: |
+            If true, always pick the highest probability token.
+            Overrides temperature/topK/topP.
+        maxTokens:
+          type: integer
+          minimum: 1
+          maximum: 32768
+          default: 512
+          description: Maximum number of tokens to generate
+          example: 512
+        priority:
+          type: string
+          enum: [HIGH, NORMAL, LOW]
+          default: NORMAL
+          description: |
+            Request priority in the scheduler queue.
+            HIGH requests preempt LOW ones if preemption is enabled.
+        profile:
+          type: string
+          enum: [defaults, deterministic, creative]
+          description: |
+            Named preset profile. If set, overrides individual fields
+            with the profile defaults defined in cluster-config.yaml.
+            deterministic -> temperature=0.1, greedy=true (code gen)
+            creative      -> temperature=1.2, topK=100  (storytelling)
+
+    InferenceRequest:
+      type: object
+      required: [messages]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+          description: |
+            Optional client-provided request ID for tracing.
+            Generated by coordinator if not provided.
+          example: 550e8400-e29b-41d4-a716-446655440000
+        modelId:
+          type: string
+          description: |
+            Model to use for inference.
+            Defaults to the first loaded model if not specified.
+          example: llama3-8b
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+          minItems: 1
+          description: Conversation history in chat format
+        sampling:
+          $ref: '#/components/schemas/SamplingConfig'
+        stream:
+          type: boolean
+          default: false
+          description: |
+            If true and calling /inference (not /inference/stream),
+            this is ignored — use /inference/stream for SSE.
+
+    InferenceResponse:
+      type: object
+      required: [requestId, text, tokenCount, finishReason]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+          description: Request ID for tracing
+        text:
+          type: string
+          description: Complete generated text
+          example: Java is a high-level, object-oriented programming language...
+        tokenCount:
+          type: integer
+          description: Number of tokens generated
+          example: 42
+        promptTokenCount:
+          type: integer
+          description: Number of tokens in the input prompt
+          example: 18
+        finishReason:
+          type: string
+          enum: [stop, length, error]
+          description: |
+            stop   -> EOS token reached (natural completion)
+            length -> maxTokens limit reached
+            error  -> generation error occurred
+          example: stop
+        modelId:
+          type: string
+          description: Model used for this inference
+          example: llama3-8b
+        latencyMs:
+          type: integer
+          description: Total inference latency in milliseconds
+          example: 843
+
+    TokenEvent:
+      type: object
+      description: Single token in a streaming SSE response
+      required: [requestId, token, tokenId, isComplete]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        token:
+          type: string
+          description: Decoded token text piece
+          example: " world"
+        tokenId:
+          type: integer
+          description: Raw token ID from vocabulary
+          example: 1917
+        isComplete:
+          type: boolean
+          description: True on the final event — stream ends after this
+          example: false
+        finishReason:
+          type: string
+          enum: [stop, length, error]
+          description: Only set on the final event (isComplete = true)
+
+    # ── Model models ──────────────────────────────────────────────────────────
+
+    LoadModelRequest:
+      type: object
+      required: [modelId, path, architecture]
+      properties:
+        modelId:
+          type: string
+          description: Unique identifier for this model
+          example: llama3-8b
+        path:
+          type: string
+          description: Absolute path to GGUF file on coordinator filesystem
+          example: /models/llama3-8b.Q4_K_M.gguf
+        architecture:
+          type: string
+          enum: [llama2, llama3, mistral, gemma]
+          description: Model architecture — determines chat template
+          example: llama3
+        quantization:
+          type: string
+          enum: [F16, Q8_0, Q4_K_M, Q4_0, Q5_K_M, Q6_K]
+          description: Quantization format from GGUF metadata
+          example: Q4_K_M
+        contextLength:
+          type: integer
+          default: 4096
+          description: Maximum context length in tokens
+          example: 4096
+
+    ModelDescriptor:
+      type: object
+      required: [modelId, architecture, status, totalLayers]
+      properties:
+        modelId:
+          type: string
+          example: llama3-8b
+        architecture:
+          type: string
+          enum: [llama2, llama3, mistral, gemma]
+          example: llama3
+        quantization:
+          type: string
+          example: Q4_K_M
+        totalLayers:
+          type: integer
+          description: Total number of transformer layers
+          example: 32
+        hiddenDim:
+          type: integer
+          description: Hidden dimension size
+          example: 4096
+        vocabSize:
+          type: integer
+          description: Vocabulary size
+          example: 32000
+        contextLength:
+          type: integer
+          example: 4096
+        status:
+          type: string
+          enum: [LOADING, READY, DEGRADED, UNLOADED]
+          description: Current model status across the cluster
+          example: READY
+        shardCount:
+          type: integer
+          description: Number of nodes holding shards of this model
+          example: 4
+        loadedAt:
+          type: string
+          format: date-time
+          description: When the model was loaded
+
+    ModelList:
+      type: object
+      required: [models, total]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelDescriptor'
+        total:
+          type: integer
+          example: 2
+
+    # ── Shard models ──────────────────────────────────────────────────────────
+
+    LayerRange:
+      type: object
+      required: [startLayer, endLayer, estimatedVramBytes]
+      properties:
+        startLayer:
+          type: integer
+          example: 0
+        endLayer:
+          type: integer
+          example: 7
+        estimatedVramBytes:
+          type: integer
+          format: int64
+          example: 1073741824
+
+    ShardAssignment:
+      type: object
+      required: [nodeId, layerRange]
+      properties:
+        nodeId:
+          type: string
+          format: uuid
+        layerRange:
+          $ref: '#/components/schemas/LayerRange'
+        hasEmbeddings:
+          type: boolean
+          description: True if this node holds the embedding layer (Node 1)
+          example: true
+        hasOutputProjection:
+          type: boolean
+          description: True if this node holds the output projection (Last Node)
+          example: false
+
+    ShardMap:
+      type: object
+      required: [modelId, assignments, computedAt]
+      properties:
+        modelId:
+          type: string
+          example: llama3-8b
+        assignments:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShardAssignment'
+        computedAt:
+          type: string
+          format: date-time
+          description: When this shard map was last computed
+
+    # ── Node models ───────────────────────────────────────────────────────────
+
+    NodeDescriptor:
+      type: object
+      required: [nodeId, host, port, status]
+      properties:
+        nodeId:
+          type: string
+          format: uuid
+        host:
+          type: string
+          example: 192.168.1.12
+        port:
+          type: integer
+          example: 9091
+        status:
+          type: string
+          enum: [IDLE, LOADING, READY, DEGRADED, DEAD]
+          example: READY
+        availableVramBytes:
+          type: integer
+          format: int64
+          description: Free VRAM in bytes (10% headroom already reserved)
+          example: 3865470566
+        totalVramBytes:
+          type: integer
+          format: int64
+          example: 4294967296
+        vramPressure:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+          description: Current VRAM utilization 0.0-1.0
+          example: 0.72
+        gpuTemperatureCelsius:
+          type: integer
+          example: 68
+        inferenceLatencyP99Ms:
+          type: number
+          format: double
+          description: P99 forward pass latency in milliseconds
+          example: 42.5
+        seedScore:
+          type: number
+          format: double
+          description: IMQ-inspired seed election score
+          example: 0.847
+        registeredAt:
+          type: string
+          format: date-time
+
+    NodeList:
+      type: object
+      required: [nodes, total, healthy, degraded]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeDescriptor'
+        total:
+          type: integer
+          example: 16
+        healthy:
+          type: integer
+          example: 15
+        degraded:
+          type: integer
+          example: 1
+
+    # ── Cluster health models ─────────────────────────────────────────────────
+
+    ClusterHealth:
+      type: object
+      required: [status, coordinatorRole, totalNodes, healthyNodes]
+      properties:
+        status:
+          type: string
+          enum: [HEALTHY, DEGRADED, CRITICAL, RESHARDING]
+          example: HEALTHY
+        coordinatorRole:
+          type: string
+          enum: [LEADER, STANDBY]
+          description: Role of the coordinator receiving this request
+          example: LEADER
+        totalNodes:
+          type: integer
+          example: 16
+        healthyNodes:
+          type: integer
+          example: 16
+        degradedNodes:
+          type: integer
+          example: 0
+        totalVramBytes:
+          type: integer
+          format: int64
+          description: Total VRAM across all healthy nodes
+          example: 68719476736
+        freeVramBytes:
+          type: integer
+          format: int64
+          description: Free VRAM across all healthy nodes
+          example: 32212254720
+        loadedModels:
+          type: integer
+          example: 1
+        activeInferences:
+          type: integer
+          description: Currently running inference requests
+          example: 3
+        queueDepth:
+          type: integer
+          description: Requests waiting in scheduler queue
+          example: 0
+        resharding:
+          type: boolean
+          description: True if a reshard is currently in progress
+          example: false
+        uptimeSecs:
+          type: integer
+          format: int64
+          example: 86400
+
+    # ── Error models ──────────────────────────────────────────────────────────
+
+    ApiError:
+      type: object
+      required: [code, message, timestamp]
+      properties:
+        code:
+          type: integer
+          example: 500
+        error:
+          type: string
+          example: INTERNAL_ERROR
+        message:
+          type: string
+          example: Unexpected error during inference
+        requestId:
+          type: string
+          format: uuid
+          description: Request ID if available
+        timestamp:
+          type: string
+          format: date-time
+
+    RetryableError:
+      allOf:
+        - $ref: '#/components/schemas/ApiError'
+        - type: object
+          required: [retryAfterMs]
+          properties:
+            retryAfterMs:
+              type: integer
+              description: Estimated milliseconds before retry should succeed
+              example: 2500
+            queueDepth:
+              type: integer
+              description: Current queue depth (for 429 responses)
+              example: 47

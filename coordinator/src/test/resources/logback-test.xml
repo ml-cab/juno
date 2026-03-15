@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} -- %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- Silence Jetty's very chatty DEBUG output -->
+  <logger name="org.eclipse.jetty"         level="ERROR"/>
+
+  <!-- Keep gRPC/Netty quiet too -->
+  <logger name="io.grpc.netty.shaded"      level="DEBUG"/>
+  <logger name="io.netty"                  level="DEBUG"/>
+
+  <root level="DEBUG">
+    <appender-ref ref="STDOUT"/>
+  </root>
+
+</configuration>

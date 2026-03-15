@@ -1,0 +1,238 @@
+//
+// Copyright 2026 Dmytro Soloviov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+
+package cab.ml.juno.api;
+
+option java_package = "cab.ml.juno.api.grpc";
+option java_outer_classname = "InferenceProto";
+option java_multiple_files = true;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INFERENCE SERVICE — Client → Coordinator
+// Served by: coordinator
+// Called by: external clients (via Javalin REST → gRPC bridge internally)
+// ─────────────────────────────────────────────────────────────────────────────
+
+service InferenceService {
+    // Blocking — waits for full response
+    rpc Infer(InferenceRequest) returns (InferenceResponse);
+
+    // Streaming — token by token, real-time
+    rpc InferStream(InferenceRequest) returns (stream TokenResponse);
+}
+
+message ChatMessage {
+    string role    = 1;  // "system" | "user" | "assistant"
+    string content = 2;
+}
+
+message SamplingConfig {
+    float   temperature        = 1;  // 0.0 - 2.0
+    int32   top_k              = 2;  // 0 = disabled
+    float   top_p              = 3;  // 0.0 - 1.0
+    float   repetition_penalty = 4;  // 1.0 = disabled
+    bool    greedy             = 5;
+    int32   max_tokens         = 6;
+    string  priority           = 7;  // HIGH | NORMAL | LOW
+    string  profile            = 8;  // defaults | deterministic | creative
+}
+
+message InferenceRequest {
+    string              request_id = 1;  // UUID — generated if empty
+    string              model_id   = 2;  // defaults to first loaded model
+    repeated ChatMessage messages  = 3;
+    SamplingConfig      sampling   = 4;
+}
+
+message TokenResponse {
+    string request_id   = 1;
+    string token        = 2;  // decoded token text piece
+    int32  token_id     = 3;  // raw vocab id
+    bool   is_complete  = 4;  // true on final token
+    string finish_reason = 5; // stop | length | error (set on final token)
+}
+
+message InferenceResponse {
+    string request_id        = 1;
+    string text              = 2;  // full generated text
+    int32  token_count       = 3;
+    int32  prompt_token_count = 4;
+    string finish_reason     = 5;  // stop | length | error
+    string model_id          = 6;
+    int64  latency_ms        = 7;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NODE SERVICE — Coordinator → Inference Nodes
+// Served by: each GPU node
+// Called by: coordinator (pipeline forward pass)
+// ─────────────────────────────────────────────────────────────────────────────
+
+service NodeService {
+    // Forward pass through this node's assigned layer range
+    rpc ForwardPass(ForwardRequest) returns (ForwardResponse);
+
+    // Load a model shard onto this node's GPU
+    rpc LoadShard(LoadShardRequest) returns (LoadShardResponse);
+
+    // Unload a model shard and free VRAM
+    rpc UnloadShard(UnloadShardRequest) returns (UnloadShardResponse);
+
+    // Get current node status and GPU health
+    rpc GetNodeStatus(NodeStatusRequest) returns (NodeStatusResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACTIVATION DTYPE — wire encoding for activation tensors between nodes
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Compression format for the activation bytes in ForwardRequest / ForwardResponse.
+//
+// Choosing a smaller dtype reduces network transfer at the cost of precision loss.
+// The tradeoff is acceptable: quantisation error is far smaller than sampling noise.
+//
+// Ratios vs FLOAT32 at hidden_dim=8192 (70B model):
+//   FLOAT32 → 64 MB / hop  (~51 ms on 10GbE)
+//   FLOAT16 → 32 MB / hop  (~26 ms on 10GbE)  — 2× saving, ~0.1% relative error
+//   INT8    → 16 MB / hop  (~13 ms on 10GbE)  — 4× saving, ~1%  relative error
+enum ActivationDtype {
+    FLOAT32 = 0;  // default — raw IEEE 754 single-precision, 4 bytes/element
+    FLOAT16 = 1;  // IEEE 754 half-precision, 2 bytes/element
+    INT8    = 2;  // symmetric quantisation: [scale:float32 (4B)][values:byte × N]
+}
+
+message ForwardRequest {
+    string         request_id   = 1;
+    string         model_id     = 2;
+    int32          start_layer  = 3;  // inclusive
+    int32          end_layer    = 4;  // exclusive
+    bytes          activation   = 5;  // encoded per dtype field — see ActivationCodec
+    int32          sequence_pos = 6;  // current position in sequence
+    bool           use_kv_cache = 7;  // whether to read/write KV cache for this pass
+    int32          batch_size   = 8;  // number of sequences in this batch
+    ActivationDtype dtype       = 9;  // encoding of the activation bytes field
+}
+
+message ForwardResponse {
+    string         request_id   = 1;
+    bytes          activation   = 2;  // encoded per dtype field — see ActivationCodec
+    bool           is_last_node = 3;  // if true, activation contains final logits
+    string         error        = 4;  // non-empty if forward pass failed
+    ActivationDtype dtype       = 5;  // encoding of the activation bytes field
+}
+
+message LoadShardRequest {
+    string model_id     = 1;
+    string model_path   = 2;  // absolute path to GGUF file
+    int32  start_layer  = 3;  // inclusive
+    int32  end_layer    = 4;  // exclusive
+    bool   has_embeddings        = 5;  // true for node 1 (first in pipeline)
+    bool   has_output_projection = 6;  // true for last node in pipeline
+}
+
+message LoadShardResponse {
+    bool   success      = 1;
+    string message      = 2;
+    int64  vram_used    = 3;  // bytes consumed by this shard
+    int64  vram_free    = 4;  // bytes remaining after load
+}
+
+message UnloadShardRequest {
+    string model_id = 1;
+}
+
+message UnloadShardResponse {
+    bool   success  = 1;
+    string message  = 2;
+    int64  vram_freed = 3;  // bytes freed
+}
+
+message NodeStatusRequest {}
+
+message NodeStatusResponse {
+    string node_id               = 1;
+    string status                = 2;  // IDLE | LOADING | READY | DEGRADED
+    int64  vram_free_bytes       = 3;
+    int64  vram_total_bytes      = 4;
+    double vram_pressure         = 5;  // 0.0 - 1.0
+    int32  gpu_temperature_celsius = 6;
+    double inference_latency_p99_ms = 7;
+    double seed_score            = 8;  // IMQ-inspired election score
+    repeated string loaded_models = 9; // model IDs currently loaded
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REGISTRY SERVICE — Internal registry queries
+// Served by: registry module (Hazelcast-backed)
+// Called by: coordinator, health monitor
+// ─────────────────────────────────────────────────────────────────────────────
+
+service RegistryService {
+    // Get current shard map for a model
+    rpc GetShardMap(GetShardMapRequest) returns (GetShardMapResponse);
+
+    // Register a node into the cluster
+    rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
+
+    // Trigger a shard recomputation (called by health monitor on node change)
+    rpc RecomputeShards(RecomputeShardsRequest) returns (RecomputeShardsResponse);
+}
+
+message GetShardMapRequest {
+    string model_id = 1;
+}
+
+message ShardAssignmentProto {
+    string node_id     = 1;
+    string node_host   = 2;
+    int32  node_port   = 3;
+    int32  start_layer = 4;
+    int32  end_layer   = 5;
+    bool   has_embeddings        = 6;
+    bool   has_output_projection = 7;
+}
+
+message GetShardMapResponse {
+    string model_id                         = 1;
+    repeated ShardAssignmentProto assignments = 2;
+    int64  computed_at_epoch_ms             = 3;
+}
+
+message RegisterNodeRequest {
+    string node_id          = 1;
+    string host             = 2;
+    int32  port             = 3;
+    int64  vram_total_bytes = 4;
+    int64  vram_free_bytes  = 5;
+}
+
+message RegisterNodeResponse {
+    bool   success = 1;
+    string message = 2;
+}
+
+message RecomputeShardsRequest {
+    string trigger_reason = 1;  // NODE_JOINED | NODE_LEFT | MANUAL
+    string node_id        = 2;  // node that triggered the event
+}
+
+message RecomputeShardsResponse {
+    bool   success          = 1;
+    int32  nodes_assigned   = 2;
+    string message          = 3;
+}
