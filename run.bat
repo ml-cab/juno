@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 rem ============================================================================
-rem  hyper-stack-4j — Windows runtime launcher (no Maven required)
+rem  juno — Windows runtime launcher (no Maven required)
 rem  Uses pre-built shade jars from target/.
 rem  Build first with:
 rem      mvn clean package -DskipTests
@@ -483,7 +483,7 @@ rem ============================================================================
 
 :usage
 echo.
-echo hyper-stack-4j runtime launcher ^(Windows, no Maven — uses pre-built jars^)
+echo juno runtime launcher ^(Windows, no Maven — uses pre-built jars^)
 echo   Java:      %JAVA_CMD%
 echo   Player jar:%PLAYER_JAR%
 echo   Live jar:  %LIVE_JAR%
@@ -583,7 +583,7 @@ exit /b 0
 
 @echo off
 rem ============================================================================
-rem hyper-stack-4j — Windows launcher (cmd.exe)
+rem juno — Windows launcher (cmd.exe)
 rem
 rem 1) player cluster     : run.bat cluster  --model-path C:\path\model.gguf
 rem 2) player local REPL  : run.bat console  --model-path C:\path\model.gguf
@@ -676,7 +676,7 @@ rem --- Usage ------------------------------------------------------------------
 :usage
 if "%~1"=="" (
   echo.
-  echo hyper-stack-4j runtime launcher ^(Windows batch, uses pre-built jars^)
+  echo juno runtime launcher ^(Windows batch, uses pre-built jars^)
   echo   Java:        %JAVA%
   echo   player jar:  %PLAYER_JAR%
   echo   live jar:    %LIVE_JAR%
@@ -1020,4 +1020,3 @@ echo.
 
 "%JAVA%" %JVM_BASE% -Xms512m -Xmx%HEAP% -jar "%LIVE_JAR%" "%MODEL%"
 goto :eof
-

@@ -1,8 +1,8 @@
-# hyper-stack-4j cluster configuration
+# juno cluster configuration
 # Copy and adjust per deployment
 
 cluster:
-  name: hyper-stack-4j-cluster
+  name: juno-cluster
   seed-nodes:
     - 192.168.1.10:5701     # coordinator-1 (stable machine)
     - 192.168.1.11:5701     # coordinator-2 (stable machine)

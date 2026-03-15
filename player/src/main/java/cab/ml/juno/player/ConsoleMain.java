@@ -43,7 +43,6 @@ import cab.ml.juno.registry.ShardMap;
 import cab.ml.juno.registry.ShardPlanner;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
-import cab.ml.juno.tokenizer.ChatMessage;
 import cab.ml.juno.tokenizer.GgufTokenizer;
 import cab.ml.juno.tokenizer.Tokenizer;
 
@@ -319,11 +318,8 @@ public final class ConsoleMain {
 	// -------------------------------------------------------------------------
 
 	private static void startRepl(GenerationLoop loop, Tokenizer tokenizer) throws IOException {
-		SamplingParams params = SamplingParams.defaults()
-				.withMaxTokens(maxTokens)
-				.withTemperature(temperature)
-				.withTopK(topK)
-				.withTopP(topP);
+		SamplingParams params = SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(temperature)
+				.withTopK(topK).withTopP(topP);
 
 		ChatHistory history = new ChatHistory();
 
@@ -351,8 +347,8 @@ public final class ConsoleMain {
 
 			// Use ofSession so the GenerationLoop can reuse KV blocks from prior turns.
 			// The session key (history.sessionId()) is stable for the entire conversation.
-			InferenceRequest request = InferenceRequest.ofSession(
-					history.sessionId(), modelType, history.getMessages(), params, RequestPriority.NORMAL);
+			InferenceRequest request = InferenceRequest.ofSession(history.sessionId(), modelType, history.getMessages(),
+					params, RequestPriority.NORMAL);
 
 			System.out.print(BOLD + GREEN + "bot> " + RESET);
 			System.out.flush();
@@ -406,16 +402,13 @@ public final class ConsoleMain {
 
 	private static void banner() {
 		System.out.println();
-		System.out.println(BOLD + CYAN + "  ██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗ ");
-		System.out.println("  ██║  ██║╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗");
-		System.out.println("  ███████║ ╚████╔╝ ██████╔╝█████╗  ██████╔╝");
-		System.out.println("  ██╔══██║  ╚██╔╝  ██╔═══╝ ██╔══╝  ██╔══██╗");
-		System.out.println("  ██║  ██║   ██║   ██║     ███████╗██║  ██║");
-		System.out.println("  ╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝╚═╝  ╚═╝" + RESET);
+		System.out.println(BOLD + CYAN + "░▀▀█░█░█░█▀█░█▀█");
+		System.out.println("░░░█░█░█░█░█░█░█");
+		System.out.println("░▀▀░░▀▀▀░▀░▀░▀▀▀" + RESET);
 		System.out.println();
 
 		String mode = localMode ? "local in‑process" : "cluster (forked JVMs)";
-		System.out.printf("%s  hyper‑stack‑4j  ·  %s  ·  %s  ·  interactive console%s%n", CYAN, mode,
+		System.out.printf("%s  juno player  ·  %s  ·  %s  ·  interactive console%s%n", CYAN, mode,
 				Path.of(modelPath).getFileName(), RESET);
 		System.out.printf("%s  dtype=%s  max_tokens=%d  temperature=%.2f  top_k=%d  top_p=%.2f  nodes=%d%s%n", DIM,
 				dtype, maxTokens, temperature, topK, topP, localMode ? nodeCount : 3, RESET);

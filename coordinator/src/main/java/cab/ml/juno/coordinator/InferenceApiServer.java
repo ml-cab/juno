@@ -28,7 +28,7 @@ import io.javalin.Javalin;
 import io.javalin.http.Context;
 
 /**
- * Javalin-based REST API server for the hyper-stack-4j coordinator.
+ * Javalin-based REST API server for the juno coordinator.
  *
  * Implements the OpenAPI spec at api/src/main/resources/openapi.yaml.
  *

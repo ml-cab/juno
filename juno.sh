@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# hyper-stack-4j — dev runner
+# juno — dev runner
 # Requires: JDK 21+  ·  Maven 3.8+
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -321,7 +321,7 @@ cmd_watch() {
 
 usage() {
   echo ""
-  echo -e "${CYAN}hyper-stack-4j dev runner${NC}"
+  echo -e "${CYAN}juno dev runner${NC}"
   echo ""
   echo -e "  ${GREEN}$0 cluster${NC}                   Boot 3-node cluster + interactive prompt console"
   echo    "  $0 cluster --dtype FLOAT32    Use FLOAT32 activations (debug; default is FLOAT16)"

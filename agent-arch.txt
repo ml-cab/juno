@@ -1,5 +1,5 @@
 ================================================================================
-  hyper-stack-4j — Distributed Java LLM Inference Engine
+  juno — Distributed Java LLM Inference Engine
   Full Architecture Design Document
   JDK 25 · Maven · Java-native · Commodity GPU Cluster
   Last updated: 2026-03-14 (session 9)
@@ -49,7 +49,7 @@ Far cheaper than one 64GB GPU.
 Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
 2026-03-14 (session 9). 72+ production Java source files, test files, 355 @Test methods.
 
-  hyper-stack-4j/               <- parent POM
+  juno/               <- parent POM
   |
   +-- api/                      <- OpenAPI spec + generated models/interfaces
   |   +-- src/main/resources/openapi.yaml
@@ -113,7 +113,7 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
       Depends on: player module (for ClusterHarness, ProcessPipelineClient, etc.)
 
 Group ID:    io.hyperstack4j
-Artifact ID: hyper-stack-4j
+Artifact ID: juno
 Version:     0.1.0-SNAPSHOT
 
 Key dependency versions:
@@ -789,7 +789,7 @@ TESTS:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 cluster:
-  name: hyper-stack-4j-cluster
+  name: juno-cluster
   seed-nodes:
     - 192.168.1.10:5701
     - 192.168.1.11:5701
@@ -883,7 +883,7 @@ sampling:
 13. BUILD STATUS (as of 2026-03-14, session 9)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  hyper-stack-4j   SUCCESS  (parent pom)
+  juno   SUCCESS  (parent pom)
   api              SUCCESS  (OpenAPI + gRPC + proto generated sources)
   registry         SUCCESS  (11 classes: NodeDescriptor, ShardPlanner, ShardMap,
                              ShardAssignment, SeedScorer, ModelDescriptor,

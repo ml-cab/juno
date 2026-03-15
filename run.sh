@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# hyper-stack-4j — runtime launcher  (no Maven required)
+# juno — runtime launcher  (no Maven required)
 # Uses pre-built shade jars from target/.  Build first with:
 #   mvn clean package -DskipTests   or   ./hyper.sh build
 #
@@ -369,7 +369,7 @@ cmd_live() {
 # ── Usage ─────────────────────────────────────────────────────────────────────
 usage() {
   echo ""
-  echo -e "${CYAN}hyper-stack-4j runtime launcher${NC}  (no Maven — uses pre-built jars)"
+  echo -e "${CYAN}juno runtime launcher${NC}  (no Maven — uses pre-built jars)"
   echo -e "  OS detected: ${DIM}${OS}${NC}"
   echo -e "  Java:        ${DIM}${JAVA}${NC}"
   echo -e "  player jar:  ${DIM}${PLAYER_JAR}${NC}"

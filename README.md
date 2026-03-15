@@ -1,4 +1,4 @@
-# hyper-stack-4j
+# juno
 
 Distributed Java-native LLM inference engine. Runs large language models across a cluster of commodity GPUs. No Python, no GIL, no Spring.
 
