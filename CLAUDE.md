@@ -1,19 +1,16 @@
-A. This is your Baby project - needs high importance
+A. This requires high importance. Think hard on it.
 
-B. up-to speed youself with @agent-arch.txt @README.md and @run-me.log (where the errors are possibly listed)
+B. Up-to speed yourself with @docs/agent-arch.txt @docs/howto.md @README.md and @docs/juno-seq.pdf.
 
-C. read the rest code
+C. Read the rest code.
 
-D. Think hard on it
-
-E. It's better to add new java classes than extand extisting files
-
-F. follow this implementation rools:
+D. follow this implementation rools:
 
     1 - unit tests first
     2 - (if applicable) @integration tests
     3 - implementation, follow KISS
-    4 - (if applicable) update @agent-arch.txt
+    4 - it's better to add new java classes than extend existing once
+    4 - (if applicable) update @agent-arch.txt, @howto.md
     5 - (if applicable) update @README.md, no emojis, be strict and precise
 
-G. output - present as files for preview
+E. output - present as files for preview
