@@ -1017,13 +1017,19 @@ New tests: GenerationLoopSessionTest (9 tests in coordinator module)
 19. SESSION 8 CHANGES (2026-03-12)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-19.1  run.sh — pure-Java no-Maven launcher
+19.1  run.sh / run.bat / juno — cross-platform launcher
 -----------------------------------------------
-New file: run.sh
+New files: scripts/run.sh  scripts/run.bat  scripts/juno.sh
+Unified entry point: juno  (no extension, delegates based on OS)
 
-A production-facing launcher that drives the pre-built shade jars directly via
-java -jar.  No Maven required.  Runs on Linux, macOS, and Windows (Git Bash /
-WSL / Cygwin).
+A unified launcher at the project root (juno) performs a simple OS check and
+delegates to the appropriate platform-specific runner in scripts/:
+  Linux / macOS / Git Bash / WSL  →  scripts/run.sh
+  Windows (native cmd / Cygwin)   →  scripts/run.bat
+
+scripts/run.sh is a production-facing launcher that drives the pre-built shade
+jars directly via java -jar.  No Maven required.  Runs on Linux, macOS, and
+Windows (Git Bash / WSL / Cygwin).
 
 Three commands:
 
@@ -1074,7 +1080,7 @@ live flags:
 Environment overrides: MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  HEAP  NODES
 Custom JDK:            JAVA_HOME=/path/to/jdk ./run.sh cluster --model-path ...
 
-Jar paths:
+Jar paths (relative to project root):
   player jar     player/target/player.jar    (main: ConsoleMain)
   live jar       integration/target/player.jar  (main: ModelLiveRunner)
 
@@ -1270,10 +1276,11 @@ Test results after fixes:
     [x] run-me.sh   Renamed to hyper.sh
 
   Phase 3 — Orchestration  [COMPLETE — runtime launcher + test fixes, session 8]
-    [x] run.sh      Pure-Java launcher — no Maven required
+    [x] run.sh/run.bat  Pure-Java launcher — no Maven required (scripts/)
                     console command: java -jar player.jar --local (in-process REPL)
                     cluster command: java -jar player.jar (forked JVM cluster)
                     live command:    java -jar integration/target/player.jar
+                    Unified entry point: juno (OS-detecting dispatcher at root)
                     OS auto-detect: linux | macos | windows (Git Bash / WSL)
                     JDK auto-detect: JAVA_HOME → PATH → Windows install locations
     [x] logback     Runtime logback.xml added to player and integration modules

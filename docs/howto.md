@@ -1,9 +1,46 @@
-Here is the complete reference, organized by purpose.
+## Juno, the complete reference, organized by purpose.
+
+```
+/juno
+```
+
+Unified launcher. Detects the OS and delegates to `scripts/run.sh` (Linux / macOS / Git Bash / WSL) or `scripts/run.bat` (Windows). Requires a JDK and pre-built jars from `target/`.
+
+| Command | Description |
+|---------|-------------|
+| `local` | In-process REPL, single JVM, no forking |
+| *(default)* | 3-node cluster, forked JVMs, real gRPC — no keyword needed |
+| `test` | 6 automated real-model checks, exits 0/1 |
+
+**Flags (local and default cluster):**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model-path PATH` | — | Path to GGUF file (required) |
+| `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | Activation wire format |
+| `--max-tokens N` | `200` | Max tokens per response |
+| `--temperature F` | `0.6` | Sampling temperature |
+| `--heap SIZE` | `4g` | JVM heap, e.g. `8g` for 7B models |
+| `--verbose` | — | Show gRPC and node logs |
+
+**Environment overrides:** `MODEL_PATH`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `HEAP`, `NODES`, `JAVA_HOME`.
+
+---
 
 No-argument usage summary
 
 ```
 ./run.sh        # prints all commands, detected OS, and jar paths
+```
+
+Download a model:
+
+```
+
+wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf -O models/tinyllama.gguf
+
+wget https://huggingface.co/jartine/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile
+
 ```
 
 cluster — 3-node distributed cluster + REPL (forked JVM nodes)

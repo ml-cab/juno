@@ -13,8 +13,7 @@ rem  Runs on:  Windows (cmd.exe, PowerShell -> cmd)
 rem ============================================================================
 
 rem --- Script directory -------------------------------------------------------
-set "DIR=%~dp0"
-if "%DIR:~-1%"=="\" set "DIR=%DIR:~0,-1%"
+for %%I in ("%~dp0..") do set "DIR=%%~fI"
 
 set "PLAYER_JAR=%DIR%\player\target\player.jar"
 set "LIVE_JAR=%DIR%\integration\target\integration.jar"
@@ -32,14 +31,26 @@ if "%~1"=="" goto :usage
 set "CMD=%~1"
 shift
 
+if /i "%CMD%"=="local"   goto :local
+if /i "%CMD%"=="test"    goto :test
 if /i "%CMD%"=="cluster" goto :cluster
-if /i "%CMD%"=="console" goto :console
-if /i "%CMD%"=="live" goto :live
+if /i "%CMD%"=="--model-path" goto :cluster_default_path
+if exist "%CMD%" goto :cluster_default_file
 goto :usage
 
 rem ============================================================================
 rem  Commands
 rem ============================================================================
+
+:cluster_default_path
+set "MODEL=%~1"
+shift
+goto :cluster_done
+
+:cluster_default_file
+set "MODEL=%CMD%"
+goto :cluster_done
+
 
 :cluster
 rem 3-node distributed cluster + interactive REPL (forked JVM nodes)
@@ -214,7 +225,7 @@ if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
   %VERBOSE_FLAG%
 goto :eof
 
-:console
+:local
 rem Single-JVM in-process REPL ^(no forked nodes, fastest startup^)
 set "MODEL=%MODEL_PATH%"
 set "DTYPE=%DTYPE%"
@@ -232,82 +243,82 @@ if "%NODES%"=="" set "NODES=3"
 if "%TOP_K%"=="" set "TOP_K=20"
 if "%TOP_P%"=="" set "TOP_P=0.95"
 
-:console_parse
-if "%~1"=="" goto :console_done
+:local_parse
+if "%~1"=="" goto :local_done
 
 if /i "%~1"=="--model-path" (
   set "MODEL=%~2"
   shift & shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--dtype" (
   set "DTYPE=%~2"
   shift & shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--max-tokens" (
   set "MAX_TOKENS=%~2"
   shift & shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--temperature" (
   set "TEMPERATURE=%~2"
   shift & shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--top-k" (
   set "TOP_K=%~2"
   shift & shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--top-p" (
   set "TOP_P=%~2"
   shift & shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--heap" (
   set "HEAP=%~2"
   shift & shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--nodes" (
   set "NODES=%~2"
   shift & shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--float16" (
   set "DTYPE=FLOAT16"
   shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--fp16" (
   set "DTYPE=FLOAT16"
   shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--float32" (
   set "DTYPE=FLOAT32"
   shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--int8" (
   set "DTYPE=INT8"
   shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--verbose" (
   set "VERBOSE=true"
   shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="-v" (
   set "VERBOSE=true"
   shift
-  goto :console_parse
+  goto :local_parse
 )
 if /i "%~1"=="--help" (
   echo.
-  echo   Usage: run.bat console --model-path ^<path-to-model.gguf^> [flags]
+  echo   Usage: run.bat local --model-path ^<path-to-model.gguf^> [flags]
   echo      or: set MODEL_PATH=^<path^> ^&^& run.bat console [flags]
   echo      or: run.bat console ^<path-to-model.gguf^> [flags]
   echo.
@@ -346,17 +357,17 @@ rem Positional model path support: first non-flag argument
 if "%MODEL%"=="" if exist "%~1" (
   set "MODEL=%~1"
   shift
-  goto :console_parse
+  goto :local_parse
 )
 
-echo Unknown console flag: %1
-echo Run: run.bat console --help
+echo Unknown local flag: %1
+echo Run: run.bat local --help
 exit /b 1
 
-:console_done
+:local_done
 if "%MODEL%"=="" (
   echo Model path is required.
-  echo   Usage: run.bat console --model-path ^<path-to-model.gguf^>
+  echo   Usage: run.bat local --model-path ^<path-to-model.gguf^>
   echo      or: set MODEL_PATH=^<path^> ^&^& run.bat console
   exit /b 1
 )
@@ -397,28 +408,28 @@ if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
   %VERBOSE_FLAG%
 goto :eof
 
-:live
+:test
 rem ModelLiveRunner: 6 real-model smoke checks, exits 0/1
 set "MODEL=%MODEL_PATH%"
 set "HEAP=%HEAP%"
 if "%HEAP%"=="" set "HEAP=4g"
 
-:live_parse
-if "%~1"=="" goto :live_done
+:test_parse
+if "%~1"=="" goto :test_done
 
 if /i "%~1"=="--model-path" (
   set "MODEL=%~2"
   shift & shift
-  goto :live_parse
+  goto :test_parse
 )
 if /i "%~1"=="--heap" (
   set "HEAP=%~2"
   shift & shift
-  goto :live_parse
+  goto :test_parse
 )
 if /i "%~1"=="--help" (
   echo.
-  echo   Usage: run.bat live --model-path ^<path-to-model.gguf^> [flags]
+  echo   Usage: run.bat test --model-path ^<path-to-model.gguf^> [flags]
   echo      or: set MODEL_PATH=^<path^> ^&^& run.bat live [flags]
   echo      or: run.bat live ^<path-to-model.gguf^>
   echo.
@@ -437,14 +448,14 @@ if /i "%~1"=="--help" (
 if "%MODEL%"=="" if exist "%~1" (
   set "MODEL=%~1"
   shift
-  goto :live_parse
+  goto :test_parse
 )
 
-echo Unknown live flag: %1
-echo Run: run.bat live --help
+echo Unknown test flag: %1
+echo Run: run.bat test --help
 exit /b 1
 
-:live_done
+:test_done
 if "%MODEL%"=="" (
   echo Model path is required.
   echo   Usage: set MODEL_PATH=^<path^> ^&^& run.bat live
@@ -493,16 +504,16 @@ echo     mvn clean package -DskipTests
 echo     hyper.sh build
 echo.
 echo   run.bat cluster --model-path PATH    3-node cluster ^+ REPL  ^(forked JVM nodes^)
-echo   run.bat cluster --help               all cluster flags
+echo   run.bat cluster --help               all cluster flags  (cluster keyword still works)
 echo.
 echo   run.bat console --model-path PATH    in-process REPL  ^(single JVM, fast startup^)
-echo   run.bat console --help               all console flags
+echo   run.bat local --help                 all local flags
 echo.
-echo   run.bat live --model-path PATH       6 real-model smoke checks, exits 0/1
+echo   run.bat test --model-path PATH       6 real-model smoke checks, exits 0/1
 echo   run.bat live ^<path-to-model.gguf^>        model as positional arg
-echo   run.bat live --help                  all live flags
+echo   run.bat test --help                  all test flags
 echo.
-echo   Flags common to cluster and console:
+echo   Flags common to cluster and local:
 echo     --dtype FLOAT32^|FLOAT16^|INT8    activation wire format   ^(default FLOAT16^)
 echo     --float16 / --fp16                shorthand
 echo     --float32                         lossless reference / debug
@@ -514,19 +525,19 @@ echo     --top-p F                         top-p nucleus sampling    ^(default 0
 echo     --heap SIZE                       JVM heap e.g. 4g 8g      ^(default 4g^)
 echo     --verbose / -v                    show gRPC / node logs
 echo.
-echo   console only:
+echo   local only:
 echo     --nodes N                         in-process shard count   ^(default 3^)
 echo.
 echo   Environment overrides:
 echo     MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES
 echo.
 echo   Examples:
-echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat cluster
-echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat cluster --float32 --heap 8g --verbose
-echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat console --temperature 0.3 --max-tokens 512
-echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat console --nodes 1
-echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat live
-echo     run.bat live C:\models\tiny.gguf --heap 8g
+echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat          rem  default = cluster
+echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat          rem  default = cluster --float32 --heap 8g --verbose
+echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat local --temperature 0.3 --max-tokens 512
+echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat local --nodes 1
+echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat test
+echo     run.bat test C:\models\tiny.gguf --heap 8g
 echo.
 goto :eof
 
@@ -586,8 +597,8 @@ rem ============================================================================
 rem juno — Windows launcher (cmd.exe)
 rem
 rem 1) player cluster     : run.bat cluster  --model-path C:\path\model.gguf
-rem 2) player local REPL  : run.bat console  --model-path C:\path\model.gguf
-rem 3) integration live   : run.bat live     C:\path\model.gguf
+rem 2) player local REPL  : run.bat local   --model-path C:\path\model.gguf
+rem 3) integration test   : run.bat test     C:\path\model.gguf
 rem
 rem Uses pre-built shade jars from target/. Build first with:
 rem   mvn clean package -DskipTests   or   ./hyper.sh build
@@ -596,9 +607,9 @@ rem ============================================================================
 
 setlocal enabledelayedexpansion
 
-set "DIR=%~dp0"
-set "PLAYER_JAR=%DIR%player\target\player.jar"
-set "LIVE_JAR=%DIR%integration\target\integration.jar"
+for %%I in ("%~dp0..") do set "DIR=%%~fI"
+set "PLAYER_JAR=%DIR%\player\target\player.jar"
+set "LIVE_JAR=%DIR%\integration\target\integration.jar"
 
 rem --- Colour-ish prefixes (plain text, no ANSI for maximum compatibility) ----
 set "P_INFO=[INFO]"
@@ -689,11 +700,11 @@ if "%~1"=="" (
   echo     run.bat cluster --model-path C:\path\to\model.gguf  [flags]
   echo.
   echo   2^)^ player local REPL ^(single JVM, fast startup^):
-  echo     run.bat console --model-path C:\path\to\model.gguf  [flags]
+  echo     run.bat local --model-path C:\path\to\model.gguf  [flags]
   echo.
-  echo   3^)^ integration live checks:
-  echo     run.bat live C:\path\to\model.gguf
-  echo     run.bat live --model-path C:\path\to\model.gguf
+  echo   3^)^ integration test checks:
+  echo     run.bat test C:\path\to\model.gguf
+  echo     run.bat test --model-path C:\path\to\model.gguf
   echo.
   echo   Shared flags for cluster/console:
   echo     --dtype FLOAT32^|FLOAT16^|INT8   ^(default FLOAT16^)
@@ -705,7 +716,7 @@ if "%~1"=="" (
   echo     --heap SIZE                     ^(default 4g^)
   echo     --verbose  ^| -v
   echo.
-  echo   console only:
+  echo   local only:
   echo     --nodes N                       ^(default 3^)
   echo.
   echo   Env vars:
@@ -717,9 +728,9 @@ if "%~1"=="" (
 set "CMD=%~1"
 shift
 
+if /i "%CMD%"=="local"   goto :local
+if /i "%CMD%"=="test"    goto :test
 if /i "%CMD%"=="cluster" goto :cluster
-if /i "%CMD%"=="console" goto :console
-if /i "%CMD%"=="live"    goto :live
 
 goto :usage
 
@@ -839,7 +850,7 @@ goto :eof
 
 rem --- console: in-process REPL (single JVM) ----------------------------------
 
-:console
+:local
 set "MODEL=%MODEL_PATH%"
 set "DTYPE=%DTYPE%"
 if not defined DTYPE set "DTYPE=FLOAT16"
@@ -853,78 +864,78 @@ set "NODES=%NODES%"
 if not defined NODES set "NODES=3"
 set "VERBOSE=false"
 
-:console_args
-if "%~1"=="" goto :console_run
+:local_args
+if "%~1"=="" goto :local_run
 
 if /i "%~1"=="--model-path" (
   set "MODEL=%~2"
   shift
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="--dtype" (
   set "DTYPE=%~2"
   shift
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="--max-tokens" (
   set "MAX_TOKENS=%~2"
   shift
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="--temperature" (
   set "TEMPERATURE=%~2"
   shift
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="--heap" (
   set "HEAP=%~2"
   shift
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="--nodes" (
   set "NODES=%~2"
   shift
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="--float16" (
   set "DTYPE=FLOAT16"
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="--fp16" (
   set "DTYPE=FLOAT16"
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="--float32" (
   set "DTYPE=FLOAT32"
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="--int8" (
   set "DTYPE=INT8"
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="--verbose" (
   set "VERBOSE=true"
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="-v" (
   set "VERBOSE=true"
   shift
-  goto :console_args
+  goto :local_args
 )
 if /i "%~1"=="--help" (
   echo.
-  echo   Usage: run.bat console --model-path C:\path\to\model.gguf [flags]
+  echo   Usage: run.bat local --model-path C:\path\to\model.gguf [flags]
   echo          MODEL_PATH=C:\path\to\model.gguf run.bat console [flags]
   echo.
   echo   Runs all transformer nodes in-process in a single JVM.
@@ -932,14 +943,14 @@ if /i "%~1"=="--help" (
   goto :eof
 )
 
-echo %P_ERR% Unknown console flag: %~1
-echo        Run: run.bat console --help
+echo %P_ERR% Unknown local flag: %~1
+echo        Run: run.bat local --help
 exit /b 1
 
-:console_run
+:local_run
 if not defined MODEL (
   echo %P_ERR% Model path is required.
-  echo        Usage: run.bat console --model-path C:\path\to\model.gguf
+  echo        Usage: run.bat local --model-path C:\path\to\model.gguf
   echo           or: set MODEL_PATH=... ^&^& run.bat console
   exit /b 1
 )
@@ -960,30 +971,30 @@ goto :eof
 
 rem --- live: ModelLiveRunner (integration) ------------------------------------
 
-:live
+:test
 set "MODEL=%MODEL_PATH%"
 set "HEAP=%HEAP%"
 if not defined HEAP set "HEAP=4g"
 
-:live_args
-if "%~1"=="" goto :live_run
+:test_args
+if "%~1"=="" goto :test_run
 
 if /i "%~1"=="--model-path" (
   set "MODEL=%~2"
   shift
   shift
-  goto :live_args
+  goto :test_args
 )
 if /i "%~1"=="--heap" (
   set "HEAP=%~2"
   shift
   shift
-  goto :live_args
+  goto :test_args
 )
 if /i "%~1"=="--help" (
   echo.
-  echo   Usage: run.bat live --model-path C:\path\to\model.gguf [flags]
-  echo          MODEL_PATH=C:\path\to\model.gguf run.bat live [flags]
+  echo   Usage: run.bat test --model-path C:\path\to\model.gguf [flags]
+  echo          MODEL_PATH=C:\path\to\model.gguf run.bat test [flags]
   echo          run.bat live C:\path\to\model.gguf
   echo.
   echo   Runs ModelLiveRunner — 6 automated real-model checks.
@@ -995,19 +1006,19 @@ rem Positional model path if file exists
 if not defined MODEL if exist "%~1" (
   set "MODEL=%~1"
   shift
-  goto :live_args
+  goto :test_args
 )
 
-echo %P_ERR% Unknown live flag: %~1
-echo        Run: run.bat live --help
+echo %P_ERR% Unknown test flag: %~1
+echo        Run: run.bat test --help
 exit /b 1
 
-:live_run
+:test_run
 if not defined MODEL (
   echo %P_ERR% Model path is required.
-  echo        Usage: MODEL_PATH=C:\path\to\model.gguf run.bat live
+  echo        Usage: MODEL_PATH=C:\path\to\model.gguf run.bat test
   echo           or: run.bat live C:\path\to\model.gguf
-  echo           or: run.bat live --model-path C:\path\to\model.gguf
+  echo           or: run.bat test --model-path C:\path\to\model.gguf
   exit /b 1
 )
 if not exist "%MODEL%" (

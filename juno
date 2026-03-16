@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────────
+# juno — unified cross-platform launcher
+#
+# Detects the current OS and delegates to the appropriate platform script:
+#   Linux / macOS / WSL / Git Bash  →  scripts/run.sh
+#   Windows (native cmd / Cygwin)   →  scripts/run.bat
+#
+# All flags and commands are forwarded as-is to the underlying script.
+# Run with --help for full usage.
+# ─────────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+case "${OSTYPE:-$(uname -s 2>/dev/null || echo unknown)}" in
+  msys* | cygwin* | win32* | MINGW* | Windows_NT*)
+    exec "$DIR/scripts/run.bat" "$@"
+    ;;
+  *)
+    exec "$DIR/scripts/run.sh" "$@"
+    ;;
+esac

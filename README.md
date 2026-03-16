@@ -41,7 +41,7 @@ bot> Your name is Dima.
               │
     ┌──────────────────────────────────────┐
     │  Node 1    Node 2    Node 3  ...     │  10/25 GbE
-    │  L 0–7    L 8–14   L 15–21          │
+    │  L 0–7     L 8–14    L 15–21         │
     │  +embed              +output proj    │
     └──────────────────────────────────────┘
 ```
@@ -50,49 +50,24 @@ Each node runs `CpuForwardPassHandler` — full LLaMA-family transformer math in
 
 ---
 
-## Quick Start
+## Quick Start (CPU-only)
 
 ```bash
-# Download model (637 MB, CPU-only)
+# Download model (637 MB)
 wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
 
 # Build
 mvn clean package -DskipTests
 
-# Interactive REPL — all nodes in one JVM (dev)
-./run.sh console --model-path /path/to/model.gguf
+# Interactive REPL — all nodes in one JVM (local dev)
+./juno local --model-path /path/to/model.gguf
 
-# 3-node cluster — forked JVM nodes, real gRPC (production)
-./run.sh cluster --model-path /path/to/model.gguf
+# 3-node cluster — forked JVM nodes, gRPC messaging
+./juno --model-path /path/to/model.gguf
 
 # Real-model smoke test — 6 checks, exits 0/1
-./run.sh live --model-path /path/to/model.gguf
+./juno test --model-path /path/to/model.gguf
 ```
-
----
-
-## run.sh
-
-Production launcher. Requires a JDK and pre-built jars from `target/`. No Maven.
-
-| Command | Description |
-|---------|-------------|
-| `console` | In-process REPL, single JVM, no forking |
-| `cluster` | 3-node cluster, forked JVMs, real gRPC |
-| `live` | 6 automated real-model checks, exits 0/1 |
-
-**Flags (console and cluster):**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--model-path PATH` | — | Path to GGUF file (required) |
-| `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | Activation wire format |
-| `--max-tokens N` | `200` | Max tokens per response |
-| `--temperature F` | `0.6` | Sampling temperature |
-| `--heap SIZE` | `4g` | JVM heap, e.g. `8g` for 7B models |
-| `--verbose` | — | Show gRPC and node logs |
-
-**Environment overrides:** `MODEL_PATH`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `HEAP`, `NODES`, `JAVA_HOME`.
 
 ---
 
@@ -140,7 +115,7 @@ mvn test -pl tokenizer,node,coordinator,sampler,kvcache,health,registry,player
 
 mvn verify -pl integration             # integration tests — forks 3 JVM nodes (stub mode)
 
-./run.sh live /path/to/model.gguf      # real-model smoke test
+./juno test /path/to/model.gguf      # real-model smoke test
 ```
 
 ---

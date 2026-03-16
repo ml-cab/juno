@@ -9,7 +9,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 PLAYER_JAR="$DIR/player/target/player.jar"
 LIVE_JAR="$DIR/integration/target/integration.jar"
@@ -213,7 +213,7 @@ cmd_cluster() {
 # console — single-JVM in-process REPL (no forked nodes, fastest startup)
 #           Use this for interactive sessions and everyday model experimentation.
 # ---------------------------------------------------------------------------
-cmd_console() {
+cmd_local() {
   local model="${MODEL_PATH:-}"
   local dtype="${DTYPE:-FLOAT16}"
   local max_tokens="${MAX_TOKENS:-200}"
@@ -240,8 +240,8 @@ cmd_console() {
       --verbose | -v)     verbose="true";   shift   ;;
       --help)
         echo ""
-        echo "  Usage: $0 console --model-path /path/to/model.gguf [flags]"
-        echo "     or: MODEL_PATH=/path/to/model.gguf $0 console [flags]"
+        echo "  Usage: $0 local --model-path /path/to/model.gguf [flags]"
+        echo "     or: MODEL_PATH=/path/to/model.gguf $0 local [flags]"
         echo ""
         echo "  Runs all transformer nodes in-process in a single JVM — no forking,"
         echo "  no gRPC sockets. Fastest startup. Use this for everyday experimentation."
@@ -272,17 +272,17 @@ cmd_console() {
         echo "    --verbose / -v"
         echo ""
         exit 0 ;;
-      *) err "Unknown console flag: $1.  Run: $0 console --help" ;;
+      *) err "Unknown local flag: $1.  Run: $0 local --help" ;;
     esac
   done
 
-  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 console --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 console"
+  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 local --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 local"
   [[ -f "$model" ]] || err "Model file not found: $model"
 
   require_jar "$PLAYER_JAR" "player"
   check_java_version
 
-  info "Starting local in-process console  (dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  os=${OS})"
+  info "Starting local in-process REPL  (dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   echo ""
 
@@ -309,7 +309,7 @@ cmd_console() {
 # live — ModelLiveRunner: 6 real-model smoke checks, exits 0/1
 #        Use this as a quick regression check after any code change.
 # ---------------------------------------------------------------------------
-cmd_live() {
+cmd_test() {
   local model="${MODEL_PATH:-}"
   local heap="${HEAP:-4g}"
 
@@ -319,9 +319,9 @@ cmd_live() {
       --heap)          heap="$2";  shift 2 ;;
       --help)
         echo ""
-        echo "  Usage: $0 live --model-path /path/to/model.gguf [flags]"
-        echo "     or: MODEL_PATH=/path/to/model.gguf $0 live [flags]"
-        echo "     or: $0 live /path/to/model.gguf"
+        echo "  Usage: $0 test --model-path /path/to/model.gguf [flags]"
+        echo "     or: MODEL_PATH=/path/to/model.gguf $0 test [flags]"
+        echo "     or: $0 test /path/to/model.gguf"
         echo ""
         echo "  Runs ModelLiveRunner — 6 automated real-model checks:"
         echo "    1. hello greeting coherence (>= 3 tokens, >= 2 greeting words)"
@@ -345,12 +345,12 @@ cmd_live() {
         if [[ -z "$model" && -f "$1" ]]; then
           model="$1"; shift
         else
-          err "Unknown live flag: $1.  Run: $0 live --help"
+          err "Unknown test flag: $1.  Run: $0 test --help"
         fi ;;
     esac
   done
 
-  [[ -n "$model" ]] || err "Model path is required.\n  Usage: MODEL_PATH=/path/to/model.gguf $0 live\n     or: $0 live /path/to/model.gguf\n     or: $0 live --model-path /path/to/model.gguf"
+  [[ -n "$model" ]] || err "Model path is required.\n  Usage: MODEL_PATH=/path/to/model.gguf $0 test\n     or: $0 test /path/to/model.gguf\n     or: $0 test --model-path /path/to/model.gguf"
   [[ -f "$model" ]] || err "Model file not found: $model"
 
   require_jar "$LIVE_JAR" "integration"
@@ -379,17 +379,17 @@ usage() {
   echo "    mvn clean package -DskipTests"
   echo "    ./hyper.sh build"
   echo ""
-  echo -e "  ${GREEN}$0 cluster${NC} --model-path PATH    3-node cluster + REPL  (forked JVM nodes, GPU)"
-  echo    "  $0 cluster --help                  all cluster flags"
+  echo -e "  ${GREEN}$0${NC} --model-path PATH           3-node cluster + REPL  ${DIM}(default, forked JVM nodes)${NC}"
+  echo    "  $0 cluster --help                  all cluster flags  (cluster keyword still works)"
   echo ""
-  echo -e "  ${GREEN}$0 console${NC} --model-path PATH    in-process REPL  (single JVM, fast startup)"
-  echo    "  $0 console --help                  all console flags"
+  echo -e "  ${GREEN}$0 local${NC} --model-path PATH      in-process REPL  (single JVM, fast startup)"
+  echo    "  $0 local --help                    all local flags"
   echo ""
-  echo -e "  ${GREEN}$0 live${NC} --model-path PATH       6 real-model smoke checks, exits 0/1"
-  echo    "  $0 live /path/to/model.gguf        model as positional arg"
-  echo    "  $0 live --help                     all live flags"
+  echo -e "  ${GREEN}$0 test${NC} --model-path PATH       6 real-model smoke checks, exits 0/1"
+  echo    "  $0 test /path/to/model.gguf        model as positional arg"
+  echo    "  $0 test --help                     all test flags"
   echo ""
-  echo "  Flags common to cluster and console:"
+  echo "  Flags common to default (cluster) and local:"
   echo "    --dtype FLOAT32|FLOAT16|INT8   activation wire format   (default FLOAT16)"
   echo "    --float16 / --fp16             shorthand"
   echo "    --float32                      lossless reference / debug"
@@ -401,19 +401,19 @@ usage() {
   echo "    --heap SIZE                    JVM heap e.g. 4g 8g      (default 4g)"
   echo "    --verbose / -v                 show gRPC / node logs"
   echo ""
-  echo "  console only:"
+  echo "  local only:"
   echo "    --nodes N                      in-process shard count   (default 3)"
   echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
   echo "    MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES"
   echo ""
   echo "  Examples:"
-  echo "    MODEL_PATH=/models/tiny.gguf $0 cluster"
-  echo "    MODEL_PATH=/models/tiny.gguf $0 cluster --float32 --heap 8g --verbose"
-  echo "    MODEL_PATH=/models/tiny.gguf $0 console --temperature 0.3 --max-tokens 512"
-  echo "    MODEL_PATH=/models/tiny.gguf $0 console --nodes 1"
-  echo "    MODEL_PATH=/models/tiny.gguf $0 live"
-  echo "    $0 live /models/tiny.gguf --heap 8g"
+  echo "    MODEL_PATH=/models/tiny.gguf $0               # default = cluster"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 --float32 --heap 8g --verbose"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 local --temperature 0.3 --max-tokens 512"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 local --nodes 1"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 test"
+  echo "    $0 test /models/tiny.gguf --heap 8g"
   echo ""
   echo "  Custom Java:"
   echo "    JAVA_HOME=/path/to/jdk $0 cluster --model-path /models/tiny.gguf"
@@ -425,8 +425,8 @@ CMD="${1:-}"
 shift || true
 
 case "$CMD" in
+  local)   cmd_local   "$@" ;;
+  test)    cmd_test    "$@" ;;
   cluster) cmd_cluster "$@" ;;
-  console) cmd_console "$@" ;;
-  live)    cmd_live    "$@" ;;
-  *)       usage ;;
+  *)       cmd_cluster ${CMD:+"$CMD"} "$@" ;;
 esac

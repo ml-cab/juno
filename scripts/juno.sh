@@ -5,7 +5,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MVN="${MVN:-mvn}"     # override: MVN=/path/to/mvn ./hyper.sh test
 PORT="${PORT:-8080}"  # coordinator REST port
 
@@ -113,14 +113,14 @@ cmd_cluster() {
     -q
 }
 
-cmd_test() {
+cmd_unit() {
   info "Running all unit tests (skipping integration)..."
   cd "$DIR"
   "$MVN" test -DskipITs --no-transfer-progress
   ok "All unit tests passed"
 }
 
-cmd_test_module() {
+cmd_unit_module() {
   local mod="${1:-}"
   [[ -n "$mod" ]] || err "Usage: $0 test-module <module>  e.g. coordinator  health  kvcache"
   [[ -d "$DIR/$mod" ]] || err "Module not found: $mod"
@@ -130,7 +130,7 @@ cmd_test_module() {
   ok "$mod tests passed"
 }
 
-cmd_test_fault() {
+cmd_unit_fault() {
   info "Running fault tolerance tests only..."
   cd "$DIR"
   "$MVN" test -pl coordinator -am \
@@ -154,7 +154,7 @@ cmd_integration_fast() {
   ok "InProcessClusterIT passed"
 }
 
-cmd_live() {
+cmd_test() {
   # ── Resolve model path ────────────────────────────────────────────────────
   local model="${MODEL_PATH:-}"
   local heap="${HEAP:-4g}"
@@ -166,7 +166,7 @@ cmd_live() {
       --skip-build|-B) skip_build="true";  shift ;;
       --help)
         echo ""
-        echo "  Usage: MODEL_PATH=/path/to/model.gguf $0 live [flags]"
+        echo "  Usage: MODEL_PATH=/path/to/model.gguf $0 test [flags]"
         echo ""
         echo "  Runs ModelLiveRunner — 6 real-model smoke checks with coloured output."
         echo "  Exits 0 if all pass, 1 if any fail."
@@ -181,13 +181,13 @@ cmd_live() {
         if [[ -z "$model" && -f "$1" ]]; then
           model="$1"; shift
         else
-          err "Unknown live flag: $1.  Run: $0 live --help"
+          err "Unknown test flag: $1.  Run: $0 test --help"
         fi ;;
     esac
   done
 
   if [[ -z "$model" ]]; then
-    err "MODEL_PATH is not set.\n  Usage: MODEL_PATH=/path/to/model.gguf $0 live\n     or: $0 live /path/to/model.gguf"
+    err "MODEL_PATH is not set.\n  Usage: MODEL_PATH=/path/to/model.gguf $0 test\n     or: $0 test /path/to/model.gguf"
   fi
   if [[ ! -f "$model" ]]; then
     err "Model file not found: $model"
@@ -323,25 +323,25 @@ usage() {
   echo ""
   echo -e "${CYAN}juno dev runner${NC}"
   echo ""
-  echo -e "  ${GREEN}$0 cluster${NC}                   Boot 3-node cluster + interactive prompt console"
-  echo    "  $0 cluster --dtype FLOAT32    Use FLOAT32 activations (debug; default is FLOAT16)"
-  echo    "  $0 cluster --dtype INT8       Use INT8  compressed activations"
-  echo    "  $0 cluster --max-tokens 512   Override max generation tokens (default 200)"
-  echo    "  $0 cluster --temperature 0.9  Override sampling temperature  (default 0.7)"
-  echo    "  $0 cluster --heap 8g          Override JVM heap size         (default 4g)"
-  echo    "  $0 cluster --skip-build / -B  Skip mvn compile (use last build)"
-  echo    "  $0 cluster --verbose          Show full gRPC + Maven logs"
-  echo    "  $0 cluster --help             All cluster flags"
+  echo -e "  ${GREEN}$0${NC}                           Boot 3-node cluster + interactive console  ${DIM}(default)${NC}"
+  echo    "  $0 --dtype FLOAT32            Use FLOAT32 activations (debug; default is FLOAT16)"
+  echo    "  $0 --dtype INT8               Use INT8  compressed activations"
+  echo    "  $0 --max-tokens 512           Override max generation tokens (default 200)"
+  echo    "  $0 --temperature 0.9          Override sampling temperature  (default 0.7)"
+  echo    "  $0 --heap 8g                  Override JVM heap size         (default 4g)"
+  echo    "  $0 --skip-build / -B          Skip mvn compile (use last build)"
+  echo    "  $0 --verbose                  Show full gRPC + Maven logs"
+  echo    "  $0 cluster --help             All cluster flags  (cluster keyword still works)"
   echo ""
-  echo -e "  ${GREEN}$0 live${NC}                      Run ModelLiveRunner — 6 real-model smoke checks"
-  echo    "  $0 live /path/to/model.gguf  Model path as positional arg (or set MODEL_PATH)"
-  echo    "  $0 live --heap 8g            Override JVM heap size (default 4g)"
-  echo    "  $0 live --skip-build / -B    Skip mvn compile (use last build)"
-  echo    "  $0 live --help               All live flags"
+  echo -e "  ${GREEN}$0 test${NC}                      Run ModelLiveRunner — 6 real-model smoke checks"
+  echo    "  $0 test /path/to/model.gguf  Model path as positional arg (or set MODEL_PATH)"
+  echo    "  $0 test --heap 8g            Override JVM heap size (default 4g)"
+  echo    "  $0 test --skip-build / -B    Skip mvn compile (use last build)"
+  echo    "  $0 test --help               All test flags"
   echo ""
-  echo    "  $0 test                   Unit tests — all modules, skip integration (~10s)"
-  echo    "  $0 test-module <mod>      Unit tests for one module  e.g. coordinator  health"
-  echo    "  $0 test-fault             Fault tolerance tests only"
+  echo    "  $0 unit                   Unit tests — all modules, skip integration (~10s)"
+  echo    "  $0 unit-module <mod>      Unit tests for one module  e.g. coordinator  health"
+  echo    "  $0 unit-fault             Fault tolerance tests only"
   echo    "  $0 integration            Full integration suite — forks 3 JVMs (~30s)"
   echo    "  $0 integration-fast       InProcessClusterIT only (~250ms)"
   echo    "  $0 build                  Compile only, no tests"
@@ -355,7 +355,7 @@ usage() {
   echo    "    MVN=/path/to/mvn ./hyper.sh test"
   echo    "    PORT=9090 ./hyper.sh curl-demo"
   echo    "    DTYPE=FLOAT16 MAX_TOKENS=512 HEAP=8g ./hyper.sh cluster"
-  echo    "    MODEL_PATH=/path/to/model.gguf ./hyper.sh live"
+  echo    "    MODEL_PATH=/path/to/model.gguf ./hyper.sh test"
   echo ""
 }
 
@@ -366,11 +366,11 @@ CMD="${1:-}"
 shift || true   # drop $1 so remaining args are available as $@
 
 case "$CMD" in
+  test)              cmd_test    "$@" ;;
   cluster)           cmd_cluster "$@" ;;
-  live)              cmd_live "$@" ;;
-  test)              cmd_test ;;
-  test-module)       cmd_test_module "${1:-}" ;;
-  test-fault)        cmd_test_fault ;;
+  unit)              cmd_unit ;;
+  unit-module)       cmd_unit_module "${1:-}" ;;
+  unit-fault)        cmd_unit_fault ;;
   integration)       cmd_integration ;;
   integration-fast)  cmd_integration_fast ;;
   build)             cmd_build ;;
@@ -379,5 +379,5 @@ case "$CMD" in
   health-demo)       cmd_health_demo ;;
   curl-demo)         cmd_curl_demo ;;
   watch)             cmd_watch "${1:-coordinator}" ;;
-  *)                 usage ;;
+  *)                 cmd_cluster ${CMD:+"$CMD"} "$@" ;;
 esac
