@@ -13,4 +13,4 @@ D. follow this implementation rools:
     4 - (if applicable) update @agent-arch.txt, @howto.md
     5 - (if applicable) update @README.md, no emojis, be strict and precise
 
-E. output - present as files for preview
+E. output - just list all the files for preview, never zip me files back!
