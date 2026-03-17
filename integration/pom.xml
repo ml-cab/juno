@@ -102,6 +102,14 @@
 					<argLine>--enable-preview --enable-native-access=ALL-UNNAMED</argLine>
 					<forkCount>1</forkCount>
 					<reuseForks>false</reuseForks>
+					<!-- Exclude GPU tests from the default run.
+					     GpuForwardPassIT loads JCuda native libs into the coordinator
+					     JVM. Those CUDA device FDs are inherited by the node JVMs
+					     forked by ClusterHarness, crashing them before READY is printed.
+					     Enable GPU tests with: mvn verify -Pgpu -Dit.model.path=... -->
+					<excludes>
+						<exclude>**/GpuForwardPassIT.java</exclude>
+					</excludes>
 					<systemPropertyVariables>
 						<it.model.path>${it.model.path}</it.model.path>
 						<it.timeout.ms>120000</it.timeout.ms>
@@ -160,5 +168,40 @@
 			</plugin>
 		</plugins>
 	</build>
+
+	<!-- ── GPU profile ──────────────────────────────────────────────────────────
+	     Activate with: mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf
+	     Requires: CUDA 12.x, Nvidia GPU, model file at it.model.path.
+	     Recommended instance: AWS g4dn.xlarge (T4, 16 GB VRAM).
+	-->
+	<profiles>
+		<profile>
+			<id>gpu</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-failsafe-plugin</artifactId>
+						<configuration>
+							<argLine>--enable-preview --enable-native-access=ALL-UNNAMED</argLine>
+							<forkCount>1</forkCount>
+							<reuseForks>false</reuseForks>
+							<!-- Include GPU tests when -Pgpu is active -->
+							<excludes/>
+							<includes>
+								<include>**/GpuForwardPassIT.java</include>
+							</includes>
+							<systemPropertyVariables>
+								<it.model.path>${it.model.path}</it.model.path>
+								<it.timeout.ms>120000</it.timeout.ms>
+								<!-- Unlocks JCuda loading in GpuForwardPassIT -->
+								<juno.gpu.test>true</juno.gpu.test>
+							</systemPropertyVariables>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 
 </project>

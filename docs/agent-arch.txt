@@ -1996,3 +1996,285 @@ The integration module depends on player to get ClusterHarness,
 ProcessPipelineClient, and the other infrastructure classes it needs for
 ThreeNodeClusterIT. This is a clean dependency direction: integration tests
 consume the player infrastructure but do not own it.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+19. GPU ACCELERATION LAYER (session 10, 2026-03-18)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+19.1  Motivation
+-----------------------------------------------
+CpuForwardPassHandler.matVec() is the hot path for every token generated.
+For TinyLlama-1.1B the dominant shapes are:
+
+  Q/K/V projections   2048 x 2048
+  FFN gate / up       5632 x 2048
+  FFN down            2048 x 5632
+  Output projection   32000 x 2048
+
+On CPU (parallel IntStream across ForkJoinPool.commonPool()) a single output
+projection takes ~15-30ms. cublasSgemv on a T4 GPU takes ~0.3-1ms for the
+same shape — a 15-50x reduction for this one operation.
+
+The matVec call sites inside CpuForwardPassHandler total 7 per layer
+(wq, wk, wv, wo, wGate, wUp, wDown) plus the output projection. For a
+22-layer model that is 155 matVec calls per token.
+
+19.2  Design — GpuMatVec interface
+-----------------------------------------------
+A single interface decouples the matmul backend from the transformer logic:
+
+  GpuMatVec
+    float[] sgemv(float[] A, float[] x, int rows, int cols)
+
+Implementations:
+  CpuMatVec      — delegates to CpuForwardPassHandler.matVec()
+                   Singleton (CpuMatVec.INSTANCE). Stateless, no resources.
+                   Used as CPU fallback and as the reference implementation
+                   in all tests that do not require a GPU.
+
+  CublasMatVec   — cublasSgemv_v2 via JCublas2.
+                   Row-major to cuBLAS column-major mapping via CUBLAS_OP_T —
+                   no data reordering, just a flag. See §19.3 for details.
+                   One instance per GpuContext (one per node JVM).
+
+Contract enforced by both:
+  - Throws IllegalArgumentException if A.length != rows*cols or x.length != cols
+  - Does not mutate A or x
+  - Returns a new float[rows]
+  - Thread-safe: each call is self-contained with its own device memory
+
+19.3  CublasMatVec — row-major to cuBLAS mapping
+-----------------------------------------------
+cuBLAS is column-major. A row-major matrix A[rows x cols] stored in memory
+is identical to a column-major A^T[cols x rows]. To compute y = A * x:
+
+  call cublasSgemv with CUBLAS_OP_T (transpose)
+    m   = cols   (rows of the stored column-major view)
+    n   = rows   (cols of the stored column-major view)
+    lda = cols   (leading dimension of row-major A)
+
+cuBLAS computes y = (A^T)^T * x = A * x.
+No data is copied or reordered. The CUBLAS_OP_T flag is the only change
+from a naive column-major call.
+
+Memory lifecycle per sgemv call (KISS — future GpuMemoryPool replaces this):
+  1. cudaMalloc d_A, d_x, d_y
+  2. cudaMemcpy host -> device for A and x
+  3. cublasSgemv_v2
+  4. cudaMemcpy device -> host for y
+  5. cudaFree d_A, d_x, d_y (in finally block — always freed on exception)
+
+19.4  GpuContext — cuBLAS handle lifecycle
+-----------------------------------------------
+One GpuContext per node JVM. AutoCloseable.
+
+  GpuContext.init(deviceIndex)
+    - CudaAvailability.isAvailable() guard (throws IllegalStateException if absent)
+    - JCuda.setExceptionsEnabled(true)
+    - JCublas2.setExceptionsEnabled(true)
+    - cudaSetDevice(deviceIndex)
+    - cublasCreate(handle)
+    - Logs device name and VRAM
+
+  ctx.handle()   — returns the cublasHandle, throws if closed
+  ctx.close()    — cublasDestroy(handle), idempotent
+
+cuBLAS handles are thread-safe for concurrent kernel submissions from
+multiple Java threads. All CublasMatVec calls on the same GpuContext
+can run concurrently without additional synchronisation.
+
+19.5  CudaAvailability — safe detection
+-----------------------------------------------
+Wraps JCuda.cudaGetDeviceCount() in try/catch(UnsatisfiedLinkError).
+Result cached at class load time via a static final boolean.
+
+  isAvailable()        — true if >= 1 CUDA device present
+  deviceCount()        — 0 if unavailable
+  deviceName(index)    — "unavailable" if unavailable
+  vramBytes(index)     — 0 if unavailable
+
+This class is the ONLY place in the codebase that directly touches JCuda
+runtime detection. All other code gates on isAvailable() rather than
+catching UnsatisfiedLinkError themselves.
+
+IMPORTANT — FD inheritance hazard:
+  JCuda's native library opens CUDA device file descriptors (/dev/nvidia0,
+  /dev/nvidiactl) when first loaded. Java's ProcessBuilder inherits all open
+  FDs into child processes. If CudaAvailability is triggered in the coordinator
+  JVM before ClusterHarness forks node JVMs, the node processes inherit
+  those FDs and crash on startup (before printing READY).
+
+  Mitigation in GpuForwardPassIT:
+    @BeforeAll checks Boolean.getBoolean("juno.gpu.test") as its absolute
+    first statement — before any JCuda class is referenced. The system
+    property acts as an explicit opt-in that prevents accidental loading.
+
+  Mitigation in integration/pom.xml:
+    GpuForwardPassIT is excluded from the default failsafe scan.
+    A -Pgpu Maven profile re-includes it and sets -Djuno.gpu.test=true.
+
+19.6  GpuForwardPassHandler
+-----------------------------------------------
+Structurally mirrors CpuForwardPassHandler. Identical:
+  - Weight loading (GGUF, via GgufReader)
+  - Layer loop (runLayers)
+  - KV cache (HashMap per requestId, same MAX_SEQ_LEN=2048)
+  - GQA (grouped-query attention, pure Java)
+  - RMSNorm, RoPE, SwiGLU, residual adds — all pure Java (same static methods
+    from CpuForwardPassHandler reused directly)
+
+Different:
+  - Constructor takes a GpuMatVec instance
+  - All 7 matVec calls per layer + output projection are routed through
+    matVec.sgemv() instead of CpuForwardPassHandler.matVec()
+
+Factory: GpuForwardPassHandler.load(Path, ShardContext, GpuMatVec)
+  Opens the GGUF file, reads LlamaConfig, loads all weight tensors for the
+  assigned layer range. Identical to CpuForwardPassHandler.load().
+
+Typical wiring on a GPU node:
+  GpuContext ctx    = GpuContext.init(0);
+  GpuMatVec  matVec = new CublasMatVec(ctx);
+  handler = GpuForwardPassHandler.load(modelPath, shardCtx, matVec);
+
+CPU-only fallback (same class, different backend):
+  handler = GpuForwardPassHandler.load(modelPath, shardCtx, CpuMatVec.INSTANCE);
+
+19.7  Node module — new classes summary
+-----------------------------------------------
+  GpuMatVec.java              Interface — sgemv contract
+  CpuMatVec.java              GpuMatVec backed by CpuForwardPassHandler.matVec()
+  CublasMatVec.java           GpuMatVec backed by cublasSgemv_v2 (JCublas2)
+  GpuContext.java             cuBLAS handle lifecycle, AutoCloseable
+  CudaAvailability.java       Safe CUDA runtime detection, cached
+  GpuForwardPassHandler.java  ForwardPassHandler using GpuMatVec
+
+Updated node module listing (full):
+  ForwardPassHandler          Interface
+  CyclicForwardPassHandler    Stub, deterministic, tests
+  CpuForwardPassHandler       Real transformer, parallel CPU matVec
+  GpuForwardPassHandler       Real transformer, GpuMatVec backend  <- NEW
+  GpuMatVec                   Interface — matmul backend           <- NEW
+  CpuMatVec                   CPU implementation of GpuMatVec      <- NEW
+  CublasMatVec                cuBLAS implementation of GpuMatVec   <- NEW
+  GpuContext                  cuBLAS handle lifecycle               <- NEW
+  CudaAvailability            CUDA runtime detection                <- NEW
+  GgufReader                  GGUF v2/v3 binary parser
+  LlamaConfig                 Hyperparams from GGUF metadata
+  ActivationCodec             FLOAT32/FLOAT16/INT8 encode/decode
+  ActivationDtype             Domain enum (not the proto one)
+  ForwardRequest              Input record
+  ForwardResult               Output record
+  ShardContext                Shard assignment runtime context
+  NodeConfig                  Node configuration
+  LocalInferencePipeline      In-process pipeline (tests)
+
+19.8  Test additions (session 10)
+-----------------------------------------------
+
+GpuMatVecContractTest (node module) — 17 tests, no GPU required:
+  Full contract suite runs against CpuMatVec.INSTANCE.
+  Extended by CublasMatVecTest which inherits all 17 tests.
+
+  Contract tests:
+    output_length_is_rows
+    returns_new_array
+    A_not_mutated
+    x_not_mutated
+    identity_like_2x3                   known-value correctness
+    zeros_matrix_gives_zeros
+    zeros_vector_gives_zeros
+    shape_32x32                         matches scalar reference
+    shape_256x256
+    shape_2048x2048                     TinyLlama hidden dim
+    shape_ffn_gate                      5632 x 2048
+    shape_ffn_down                      2048 x 5632
+    shape_output_projection             32000 x 2048
+    shape_single_row                    1 x 512 edge case
+    shape_single_col                    128 x 1 edge case
+    wrong_A_length_throws               IllegalArgumentException
+    wrong_x_length_throws               IllegalArgumentException
+
+CublasMatVecTest (node module) — @Tag("gpu"), extends GpuMatVecContractTest:
+  Inherits all 17 contract tests, adds:
+    cublas_matches_cpu_reference_hidden_dim         2048 x 2048
+    cublas_matches_cpu_reference_output_projection  32000 x 2048
+    gpu_is_faster_than_cpu_for_large_matrix         timing sanity, 5 runs
+    concurrent_calls_are_correct                    4 threads, 256 x 256
+
+CudaAvailabilityTest (node module) — 8 tests (4 always-run, 4 @Tag("gpu")):
+  is_available_does_not_throw
+  device_count_is_zero_when_no_cuda
+  device_name_is_unavailable_when_no_cuda
+  vram_bytes_is_zero_when_no_cuda
+  is_available_true_on_cuda_node        @Tag("gpu")
+  device_count_at_least_one             @Tag("gpu")
+  device_name_non_empty                 @Tag("gpu")
+  vram_bytes_above_1gb                  @Tag("gpu")
+
+GpuContextTest (node module) — 6 tests, all @Tag("gpu"):
+  init_returns_open_context
+  close_marks_closed
+  handle_after_close_throws
+  double_close_is_safe
+  init_without_cuda_throws              (runs on CPU-only machines only)
+  try_with_resources_auto_closes
+
+GpuForwardPassHandlerTest (node module) — 5 tests, no GPU required:
+  Uses CyclicForwardPassHandler as shape-correct stand-in (avoids GGUF load).
+  is_ready_true
+  intermediate_node_shape               activations.length == hiddenDim
+  last_node_shape                       logits.length == vocabSize
+  compute_nanos_populated               > 0
+  distinct_request_ids_are_independent  no KV cache bleed
+
+GpuForwardPassIT (integration module) — @Tag("gpu"), requires CUDA + model file:
+  Excluded from default failsafe run. Activated via -Pgpu.
+  Guards with Boolean.getBoolean("juno.gpu.test") in @BeforeAll to prevent
+  JCuda native lib loading in coordinator JVM (FD inheritance hazard, §19.5).
+
+  first_node_gpu_matches_cpu            activations within 1e-3
+  last_node_gpu_logits_match_cpu        logits within 1e-3
+  gpu_forward_is_faster_than_cpu        10 runs, asserts gpuMs < cpuMs
+  is_ready_after_load                   isReady() == true
+
+19.9  integration/pom.xml changes
+-----------------------------------------------
+Default failsafe configuration now excludes GpuForwardPassIT:
+  <excludes>
+    <exclude>**/GpuForwardPassIT.java</exclude>
+  </excludes>
+
+New -Pgpu Maven profile:
+  Includes only GpuForwardPassIT.
+  Sets -Djuno.gpu.test=true system property.
+  Activation: mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf
+
+Normal CI command is unchanged:
+  mvn verify -pl integration   <- ThreeNodeClusterIT passes, GPU test excluded
+
+19.10  AWS testing procedure
+-----------------------------------------------
+Recommended instance: g4dn.xlarge
+  GPU:    T4, 16 GB VRAM
+  CPU:    4 vCPU
+  RAM:    16 GB
+  Cost:   ~$0.50/hr on-demand, ~$0.15/hr spot
+
+Setup:
+  sudo apt install -y nvidia-cuda-toolkit      # CUDA 12.x
+  sudo apt install -y openjdk-25-jdk maven
+  git clone https://github.com/ml-cab/juno
+  cd juno && mvn clean package -DskipTests
+
+GPU unit tests (no model file needed):
+  mvn test -Dgroups=gpu -pl node \
+    --enable-native-access=ALL-UNNAMED
+
+GPU integration test (model file required):
+  wget https://huggingface.co/.../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+  mvn verify -Pgpu -Dit.model.path=$(pwd)/tinyllama.gguf -pl integration \
+    --enable-native-access=ALL-UNNAMED
+
+Port conflict check before running ThreeNodeClusterIT:
+  lsof -i :19092,19093,19094
+  kill <pid>   # if a leftover node JVM is squatting on the ports

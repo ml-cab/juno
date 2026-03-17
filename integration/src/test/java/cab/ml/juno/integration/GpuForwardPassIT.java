@@ -52,6 +52,12 @@ class GpuForwardPassIT {
 
     @BeforeAll
     static void setup() {
+        // Guard first — before any JCuda class is touched.
+        // Without -Djuno.gpu.test=true, JCuda native libs are never loaded into
+        // the coordinator JVM, so no CUDA device FDs are inherited by the node
+        // JVMs forked by ClusterHarness (which would crash them on startup).
+        assumeTrue(Boolean.getBoolean("juno.gpu.test"),
+            "Skipping GpuForwardPassIT — pass -Djuno.gpu.test=true to enable");
         assumeTrue(CudaAvailability.isAvailable(),
             "Skipping GpuForwardPassIT — no CUDA device available");
 

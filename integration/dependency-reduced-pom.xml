@@ -46,6 +46,9 @@
           <argLine>--enable-preview --enable-native-access=ALL-UNNAMED</argLine>
           <forkCount>1</forkCount>
           <reuseForks>false</reuseForks>
+          <excludes>
+            <exclude>**/GpuForwardPassIT.java</exclude>
+          </excludes>
           <systemPropertyVariables>
             <it.model.path>${it.model.path}</it.model.path>
             <it.timeout.ms>120000</it.timeout.ms>
@@ -91,6 +94,32 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <profile>
+      <id>gpu</id>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-failsafe-plugin</artifactId>
+            <configuration>
+              <argLine>--enable-preview --enable-native-access=ALL-UNNAMED</argLine>
+              <forkCount>1</forkCount>
+              <reuseForks>false</reuseForks>
+              <excludes />
+              <includes>
+                <include>**/GpuForwardPassIT.java</include>
+              </includes>
+              <systemPropertyVariables>
+                <it.model.path>${it.model.path}</it.model.path>
+                <it.timeout.ms>120000</it.timeout.ms>
+                <juno.gpu.test>true</juno.gpu.test>
+              </systemPropertyVariables>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
   <dependencies>
     <dependency>
       <groupId>org.junit.jupiter</groupId>

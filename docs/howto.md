@@ -294,3 +294,73 @@ MODEL_PATH=/path/to/TinyLlama.gguf ./hyper.sh live -B
 # 6. Before committing — full suite
 ./hyper.sh verify
 ```
+---
+
+GPU testing
+
+Unit tests — node module only, no model file, no GPU needed on CPU machines
+
+```
+# Run all tests including GPU-tagged (requires CUDA 12.x + Nvidia GPU)
+mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
+
+# Skip GPU-tagged tests (default — works on any machine)
+mvn test -Dgroups='!gpu' -pl node
+```
+
+GPU integration test — requires CUDA 12.x, Nvidia GPU, and a GGUF model file
+
+```
+# Activate the gpu Maven profile, pass model path
+mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl integration \
+  --enable-native-access=ALL-UNNAMED
+
+# Via env var
+MODEL_PATH=/path/to/model.gguf mvn verify -Pgpu -pl integration \
+  --enable-native-access=ALL-UNNAMED
+```
+
+GpuForwardPassIT is excluded from the default failsafe scan to prevent its
+JCuda native library from loading into the coordinator JVM and poisoning FD
+inheritance into the node processes forked by ClusterHarness. The -Pgpu profile
+also sets -Djuno.gpu.test=true, which is the guard checked in GpuForwardPassIT
+@BeforeAll before any JCuda class is touched.
+
+AWS setup for GPU testing (g4dn.xlarge — T4 16 GB VRAM, ~$0.50/hr)
+
+```
+# 1. Install CUDA 12.x
+sudo apt update
+sudo apt install -y nvidia-cuda-toolkit
+
+# 2. Verify GPU is visible
+nvidia-smi
+
+# 3. Install JDK 25 and Maven
+sudo apt install -y openjdk-25-jdk maven
+
+# 4. Clone and build
+git clone https://github.com/ml-cab/juno
+cd juno
+mvn clean package -DskipTests
+
+# 5. Download TinyLlama (637 MB — smallest supported model)
+wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+
+# 6. GPU unit tests (no model needed — run first to validate CUDA wiring)
+mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
+
+# 7. GPU integration test (forward pass CPU vs GPU numerical comparison)
+mvn verify -Pgpu -Dit.model.path=$(pwd)/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf \
+  -pl integration --enable-native-access=ALL-UNNAMED
+```
+
+Port conflict check before running ThreeNodeClusterIT
+
+```
+# Check if a leftover node JVM is squatting on cluster ports
+lsof -i :19092,19093,19094
+
+# Kill it
+kill <pid>
+```
