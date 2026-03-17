@@ -47,7 +47,7 @@ import cab.ml.juno.tokenizer.GgufTokenizer;
 import cab.ml.juno.tokenizer.Tokenizer;
 
 /**
- * Interactive REPL that runs a model using the hyper‑stack engine.
+ * Interactive REPL that runs a model using the Juno engine.
  *
  * Can operate in two modes: - cluster mode (default): forks 3 node JVMs (as
  * before) - local mode (--local): runs all nodes in‑process, no child JVMs
@@ -63,25 +63,17 @@ import cab.ml.juno.tokenizer.Tokenizer;
  *
  * Example: java --enable-preview --enable-native-access=ALL-UNNAMED \
  * --add-opens java.base/java.lang=ALL-UNNAMED \ --add-opens
- * java.base/java.nio=ALL-UNNAMED \ -jar hyper-player.jar --model-path
+ * java.base/java.nio=ALL-UNNAMED \ -jar player.jar --model-path
  * /models/tinyllama.gguf --local
  */
 public final class ConsoleMain {
-
-	// ANSI colours (same as original)
-	private static final String CYAN = "\033[0;36m";
-	private static final String GREEN = "\033[0;32m";
-	private static final String YELLOW = "\033[1;33m";
-	private static final String DIM = "\033[2m";
-	private static final String RESET = "\033[0m";
-	private static final String BOLD = "\033[1m";
 
 	private static final Logger log = Logger.getLogger(ConsoleMain.class.getName());
 
 	// Silence logging unless verbose (same as original)
 	static {
-		boolean verbose = Boolean.getBoolean("HYPER_VERBOSE")
-				|| "true".equalsIgnoreCase(System.getenv("HYPER_VERBOSE"));
+		boolean verbose = Boolean.getBoolean("JUNO_VERBOSE")
+				|| "true".equalsIgnoreCase(System.getenv("JUNO_VERBOSE"));
 		if (!verbose) {
 			java.util.logging.LogManager.getLogManager().reset();
 			java.util.logging.Logger.getLogger("").setLevel(java.util.logging.Level.OFF);
@@ -131,7 +123,7 @@ public final class ConsoleMain {
 		System.setProperty("TOP_K", String.valueOf(topK));
 		System.setProperty("TOP_P", String.valueOf(topP));
 		if (verbose) {
-			System.setProperty("HYPER_VERBOSE", "true");
+			System.setProperty("JUNO_VERBOSE", "true");
 		}
 
 		// Show banner
@@ -201,7 +193,7 @@ public final class ConsoleMain {
 
 	private static void printHelp() {
 		System.out.println();
-		System.out.println("Usage: java -jar hyper-player.jar [options]");
+		System.out.println("Usage: java -jar player.jar [options]");
 		System.out.println();
 		System.out.println("Required:");
 		System.out.println("  --model-path PATH          Path to GGUF model file");
@@ -229,7 +221,7 @@ public final class ConsoleMain {
 	// -------------------------------------------------------------------------
 
 	private static void runLocalRepl() throws Exception {
-		print(CYAN + "▶ Starting local in‑process " + nodeCount + "-node pipeline..." + RESET);
+		print(Color.CYAN + "▶ Starting local in‑process " + nodeCount + "-node pipeline..." + Color.RESET);
 
 		// Read model config and tokenizer from GGUF
 		LlamaConfig config;
@@ -279,7 +271,7 @@ public final class ConsoleMain {
 	// -------------------------------------------------------------------------
 
 	private static void runClusterRepl() throws Exception {
-		print(CYAN + "▶ Starting 3‑node cluster (forked JVMs)..." + RESET);
+		print(Color.CYAN_BOLD + "▶ Starting 3‑node cluster (forked JVMs)..." + Color.RESET);
 
 		int totalLayers;
 		try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
@@ -288,16 +280,16 @@ public final class ConsoleMain {
 		ClusterHarness harness = ClusterHarness.threeNodes(modelPath, totalLayers);
 
 		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
-			print("\n" + YELLOW + "⏹ Shutting down cluster..." + RESET);
+			print("\n" + Color.YELLOW + "⏹ Shutting down cluster..." + Color.RESET);
 			try {
 				harness.stop();
 			} catch (Exception e) {
 				/* best effort */ }
-			print(YELLOW + "✔ Cluster stopped." + RESET);
+			print(Color.YELLOW + "✔ Cluster stopped." + Color.RESET);
 		}));
 
 		harness.start();
-		print(GREEN + "✔ Cluster ready  (" + dtype + " activations)" + RESET + "\n");
+		print(Color.GREEN + "✔ Cluster ready  (" + dtype + " activations)" + Color.RESET + "\n");
 
 		var pipeline = new ProcessPipelineClient(harness.nodeAddresses(), EmbeddedNodeServer.VOCAB_SIZE, dtype);
 
@@ -323,14 +315,14 @@ public final class ConsoleMain {
 
 		ChatHistory history = new ChatHistory();
 
-		print(DIM + "Type your prompt and press Enter. Type 'exit' or Ctrl-C to quit." + RESET);
+		print(Color.DIM + "Type your prompt and press Enter. Type 'exit' or Ctrl-C to quit." + Color.RESET);
 		print("");
 
 		BufferedReader stdin = new BufferedReader(new InputStreamReader(System.in));
 		String line;
 
 		while (true) {
-			System.out.print(BOLD + CYAN + "you> " + RESET);
+			System.out.print(Color.CYAN_BOLD + "you> " + Color.RESET);
 			System.out.flush();
 
 			line = stdin.readLine();
@@ -350,7 +342,7 @@ public final class ConsoleMain {
 			InferenceRequest request = InferenceRequest.ofSession(history.sessionId(), modelType, history.getMessages(),
 					params, RequestPriority.NORMAL);
 
-			System.out.print(BOLD + GREEN + "bot> " + RESET);
+			System.out.print(Color.GREEN_BOLD + "bot> " + Color.RESET);
 			System.out.flush();
 
 			long start = System.currentTimeMillis();
@@ -367,13 +359,13 @@ public final class ConsoleMain {
 
 				@Override
 				public void onPrefillStart(int promptLen) {
-					System.out.print(DIM + "(prefilling " + promptLen + " tokens…) " + RESET);
+					System.out.print(Color.DIM + "(prefilling " + promptLen + " tokens…) " + Color.RESET);
 					System.out.flush();
 				}
 
 				@Override
 				public void onPrefillComplete() {
-					System.out.print("\r" + BOLD + GREEN + "bot> " + RESET);
+					System.out.print("\r" + Color.GREEN + "bot> " + Color.RESET);
 					System.out.flush();
 				}
 			};
@@ -384,7 +376,7 @@ public final class ConsoleMain {
 
 			long elapsed = System.currentTimeMillis() - start;
 			System.out.println();
-			System.out.printf(DIM + "     [%d tokens · %d ms · %s]" + RESET + "%n", result.generatedTokens(), elapsed,
+			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · %s]" + Color.RESET + "%n", result.generatedTokens(), elapsed,
 					dtype);
 			System.out.println();
 		}
@@ -392,7 +384,7 @@ public final class ConsoleMain {
 		// Release KV memory for the session before exiting.
 		loop.evictSession(history.sessionId());
 
-		print(YELLOW + "\nbye." + RESET);
+		print(Color.YELLOW + "\nbye." + Color.RESET);
 		System.exit(0);
 	}
 
@@ -401,18 +393,16 @@ public final class ConsoleMain {
 	// -------------------------------------------------------------------------
 
 	private static void banner() {
-		System.out.println();
-		System.out.println(BOLD + CYAN + "░▀▀█░█░█░█▀█░█▀█");
-		System.out.println("░░░█░█░█░█░█░█░█");
-		System.out.println("░▀▀░░▀▀▀░▀░▀░▀▀▀" + RESET);
-		System.out.println();
-
-		String mode = localMode ? "local in‑process" : "cluster (forked JVMs)";
-		System.out.printf("%s  juno player  ·  %s  ·  %s  ·  interactive console%s%n", CYAN, mode,
-				Path.of(modelPath).getFileName(), RESET);
-		System.out.printf("%s  dtype=%s  max_tokens=%d  temperature=%.2f  top_k=%d  top_p=%.2f  nodes=%d%s%n", DIM,
-				dtype, maxTokens, temperature, topK, topP, localMode ? nodeCount : 3, RESET);
-		System.out.println();
+		System.out.println(Color.RED_BOLD + "░▀▀█" + Color.WHITE_BOLD + "░█░█" + Color.RESET);
+		System.out.println(Color.RED + "░░░█" + Color.WHITE + "░█░█" + Color.RESET
+				+ String.format("  %sJuno interactive console  ·  model: %s%s", 
+				Color.YELLOW_BOLD_BRIGHT, Path.of(modelPath).getFileName(), Color.RESET));
+		System.out.println(Color.RED + "░▀▀░" + Color.WHITE + "░▀▀▀" + Color.RESET);
+		System.out.println(Color.WHITE_BOLD + "░█▀█" + Color.YELLOW_BOLD + "░█▀█" + Color.RESET);
+		System.out.println(Color.WHITE + "░█░█" + Color.YELLOW + "░█░█" + Color.RESET
+				+ String.format("  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s",
+				Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP, localMode ? "local" : "cluster", nodeCount, Color.RESET));
+		System.out.println(Color.WHITE + "░▀░▀" + Color.YELLOW + "░▀▀▀" + Color.RESET);
 	}
 
 	private static void print(String msg) {

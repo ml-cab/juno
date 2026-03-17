@@ -47,7 +47,7 @@ import cab.ml.juno.tokenizer.GgufTokenizer;
  *   java --enable-preview ... -cp integration/target/classes:... \
  *       cab.ml.juno.player.TinyLlamaLiveRunner /path/to/model.gguf
  *
- * Or via hyper.sh with the integration‑single command (which uses Maven).
+ * Or via juno.sh with the integration‑single command (which uses Maven).
  *
  * Exit code: 0 if all checks pass, 1 if any check fails.
  */

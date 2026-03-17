@@ -202,14 +202,14 @@ public final class ClusterHarness implements AutoCloseable {
 				.orElse(Path.of(System.getProperty("java.home"), "bin", "java").toString());
 
 		String classpath = System.getProperty("java.class.path");
-		boolean verbose = "true".equalsIgnoreCase(System.getProperty("HYPER_VERBOSE"));
+		boolean verbose = "true".equalsIgnoreCase(System.getProperty("JUNO_VERBOSE"));
 
 		java.util.List<String> cmd = new java.util.ArrayList<>(java.util.List.of(javaExe, "--enable-preview",
 				"--enable-native-access=ALL-UNNAMED", "-Xms512m", "-Xmx4g", "-XX:+UseZGC"));
 
 		if (!verbose) {
 			// Write a temp JUL config that silences all logging in this node JVM.
-			java.io.File q = java.io.File.createTempFile("hyper-quiet-", ".properties");
+			java.io.File q = java.io.File.createTempFile("juno-quiet-", ".properties");
 			q.deleteOnExit();
 			try (java.io.PrintWriter pw = new java.io.PrintWriter(q)) {
 				pw.println("handlers="); // no handlers -> nothing printed
