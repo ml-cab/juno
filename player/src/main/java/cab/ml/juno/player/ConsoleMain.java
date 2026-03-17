@@ -393,16 +393,18 @@ public final class ConsoleMain {
 	// -------------------------------------------------------------------------
 
 	private static void banner() {
-		System.out.println(Color.RED_BOLD + "░▀▀█" + Color.WHITE_BOLD + "░█░█" + Color.RESET);
-		System.out.println(Color.RED + "░░░█" + Color.WHITE + "░█░█" + Color.RESET
-				+ String.format("  %sJuno interactive console  ·  model: %s%s", 
-				Color.YELLOW_BOLD_BRIGHT, Path.of(modelPath).getFileName(), Color.RESET));
-		System.out.println(Color.RED + "░▀▀░" + Color.WHITE + "░▀▀▀" + Color.RESET);
-		System.out.println(Color.WHITE_BOLD + "░█▀█" + Color.YELLOW_BOLD + "░█▀█" + Color.RESET);
-		System.out.println(Color.WHITE + "░█░█" + Color.YELLOW + "░█░█" + Color.RESET
-				+ String.format("  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s",
-				Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP, localMode ? "local" : "cluster", nodeCount, Color.RESET));
-		System.out.println(Color.WHITE + "░▀░▀" + Color.YELLOW + "░▀▀▀" + Color.RESET);
+		System.out.println(String.format("  %sJuno interactive console  ·  model: %s%s", Color.YELLOW_BOLD_BRIGHT,
+				Path.of(modelPath).getFileName(), Color.RESET));
+		System.out.println(Color.RED_BOLD + "░▀▀█" + Color.GREEN_BOLD + "░█░█" + Color.RESET);
+		System.out.println(Color.RED + "░░░█" + Color.GREEN + "░█░█" + Color.RESET);
+		System.out.println(Color.RED + "░▀▀░" + Color.GREEN + "░▀▀▀" + Color.RESET);
+		System.out.println(Color.BLUE_BOLD + "░█▀█" + Color.YELLOW_BOLD + "░█▀█" + Color.RESET);
+		System.out.println(Color.BLUE + "░█░█" + Color.YELLOW + "░█░█" + Color.RESET);
+		System.out.println(Color.BLUE + "░▀░▀" + Color.YELLOW + "░▀▀▀" + Color.RESET);
+		System.out.println(
+				String.format("  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s",
+						Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP,
+						localMode ? "local" : "cluster", nodeCount, Color.RESET));
 	}
 
 	private static void print(String msg) {
