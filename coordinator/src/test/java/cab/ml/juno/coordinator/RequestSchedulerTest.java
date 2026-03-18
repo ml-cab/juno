@@ -10,12 +10,6 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.coordinator.GenerationLoop;
-import cab.ml.juno.coordinator.GenerationResult;
-import cab.ml.juno.coordinator.InferenceRequest;
-import cab.ml.juno.coordinator.RequestPriority;
-import cab.ml.juno.coordinator.RequestScheduler;
-import cab.ml.juno.coordinator.TokenConsumer;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
@@ -51,7 +45,7 @@ class RequestSchedulerTest {
 	@Test
 	void async_submit_calls_consumer() throws InterruptedException {
 		CountDownLatch latch = new CountDownLatch(1);
-		TokenConsumer consumer = (piece, tokenId, pos) -> {
+		TokenConsumer consumer = (_, _, pos) -> {
 			if (pos == 0)
 				latch.countDown();
 		};

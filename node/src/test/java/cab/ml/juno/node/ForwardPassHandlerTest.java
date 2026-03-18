@@ -4,11 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.node.CyclicForwardPassHandler;
-import cab.ml.juno.node.ForwardRequest;
-import cab.ml.juno.node.ForwardResult;
-import cab.ml.juno.node.ShardContext;
-
 class ForwardPassHandlerTest {
 
 	private ShardContext intermediateCtx() {

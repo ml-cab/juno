@@ -11,6 +11,8 @@ package cab.ml.juno.registry;
  */
 public final class InsufficientClusterVramException extends RuntimeException {
 
+	private static final long serialVersionUID = InsufficientClusterVramException.class.getName().hashCode();
+
 	public InsufficientClusterVramException(String message) {
 		super(message);
 	}

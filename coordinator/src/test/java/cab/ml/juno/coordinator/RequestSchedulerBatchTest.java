@@ -12,13 +12,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.coordinator.BatchConfig;
-import cab.ml.juno.coordinator.GenerationLoop;
-import cab.ml.juno.coordinator.GenerationResult;
-import cab.ml.juno.coordinator.InferenceRequest;
-import cab.ml.juno.coordinator.RequestPriority;
-import cab.ml.juno.coordinator.RequestScheduler;
-import cab.ml.juno.coordinator.TokenConsumer;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
@@ -163,7 +156,7 @@ class RequestSchedulerBatchTest {
 		scheduler = new RequestScheduler(10, loop, BatchConfig.of(4, 50));
 
 		List<String> pieces = new java.util.concurrent.CopyOnWriteArrayList<>();
-		TokenConsumer consumer = (piece, tokenId, pos) -> pieces.add(piece);
+		TokenConsumer consumer = (piece, _, _) -> pieces.add(piece);
 
 		CompletableFuture<GenerationResult> future = scheduler.submit(req("stream"), consumer);
 		future.get(10, TimeUnit.SECONDS);

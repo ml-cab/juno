@@ -5,8 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.player.ChatModelType;
-
 /**
  * Unit tests for ChatModelType — model type derivation from GGUF path.
  */

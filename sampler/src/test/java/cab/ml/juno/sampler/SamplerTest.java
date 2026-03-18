@@ -5,9 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.sampler.Sampler;
-import cab.ml.juno.sampler.SamplingParams;
-
 class SamplerTest {
 
 	private final Sampler sampler = Sampler.create();

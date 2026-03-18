@@ -5,9 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.kvcache.GpuKVCache;
-import cab.ml.juno.kvcache.KVKey;
-
 class GpuKVCacheTest {
 
 	private static final long MB = 1024 * 1024;

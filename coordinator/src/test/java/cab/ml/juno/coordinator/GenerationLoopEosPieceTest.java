@@ -9,10 +9,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.coordinator.GenerationLoop;
-import cab.ml.juno.coordinator.GenerationResult;
-import cab.ml.juno.coordinator.InferenceRequest;
-import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
@@ -30,155 +26,183 @@ import cab.ml.juno.tokenizer.Tokenizer;
 @DisplayName("GenerationLoop — EOS piece suppression")
 class GenerationLoopEosPieceTest {
 
-    private StubTokenizer stubTokenizer;
-    private Sampler sampler;
-    private KVCacheManager kvCache;
+	private StubTokenizer stubTokenizer;
+	private Sampler sampler;
+	private KVCacheManager kvCache;
 
-    @BeforeEach
-    void setUp() {
-        stubTokenizer = new StubTokenizer();
-        sampler       = Sampler.create();
-        kvCache       = new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000));
-    }
+	@BeforeEach
+	void setUp() {
+		stubTokenizer = new StubTokenizer();
+		sampler = Sampler.create();
+		kvCache = new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000));
+	}
 
-    // ── Delegating tokenizer — StubTokenizer is final so we can't subclass it.
-    // Use a delegation wrapper so tests can override decodeToken() per-token-ID.
+	// ── Delegating tokenizer — StubTokenizer is final so we can't subclass it.
+	// Use a delegation wrapper so tests can override decodeToken() per-token-ID.
 
-    private static final class DelegatingTokenizer implements Tokenizer {
-        private final StubTokenizer delegate;
-        private final java.util.Map<Integer, String> overrides = new java.util.HashMap<>();
+	private static final class DelegatingTokenizer implements Tokenizer {
+		private final StubTokenizer delegate;
+		private final java.util.Map<Integer, String> overrides = new java.util.HashMap<>();
 
-        DelegatingTokenizer(StubTokenizer delegate) { this.delegate = delegate; }
+		DelegatingTokenizer(StubTokenizer delegate) {
+			this.delegate = delegate;
+		}
 
-        void override(int id, String piece) { overrides.put(id, piece); }
+		void override(int id, String piece) {
+			overrides.put(id, piece);
+		}
 
-        @Override public int[] encode(String text)       { return delegate.encode(text); }
-        @Override public String decode(int[] ids)        { return delegate.decode(ids); }
-        @Override public String decodeToken(int tokenId) {
-            return overrides.getOrDefault(tokenId, delegate.decodeToken(tokenId));
-        }
-        @Override public int bosTokenId()   { return delegate.bosTokenId(); }
-        @Override public int eosTokenId()   { return delegate.eosTokenId(); }
-        @Override public int padTokenId()   { return delegate.padTokenId(); }
-        @Override public int vocabSize()    { return delegate.vocabSize(); }
-        @Override public String modelType() { return delegate.modelType(); }
-        @Override public boolean isReady()  { return delegate.isReady(); }
-    }
+		@Override
+		public int[] encode(String text) {
+			return delegate.encode(text);
+		}
 
-    // ── helpers ───────────────────────────────────────────────────────────────
+		@Override
+		public String decode(int[] ids) {
+			return delegate.decode(ids);
+		}
 
-    private GenerationLoop loopWith(Tokenizer tok, InferencePipeline pipeline) {
-        return new GenerationLoop(tok, sampler, pipeline, kvCache);
-    }
+		@Override
+		public String decodeToken(int tokenId) {
+			return overrides.getOrDefault(tokenId, delegate.decodeToken(tokenId));
+		}
 
-    private InferenceRequest req(String prompt) {
-        return InferenceRequest.of("llama3-8b",
-                List.of(ChatMessage.user(prompt)),
-                SamplingParams.defaults().withMaxTokens(10),
-                RequestPriority.NORMAL);
-    }
+		@Override
+		public int bosTokenId() {
+			return delegate.bosTokenId();
+		}
 
-    // ── Test 1 ────────────────────────────────────────────────────────────────
+		@Override
+		public int eosTokenId() {
+			return delegate.eosTokenId();
+		}
 
-    @Test
-    @DisplayName("EOS token ID stops generation without streaming any piece")
-    void eos_token_id_stops_immediately_no_piece_streamed() {
-        int eos = stubTokenizer.eosTokenId();
+		@Override
+		public int padTokenId() {
+			return delegate.padTokenId();
+		}
 
-        StubInferencePipeline pipeline = new StubInferencePipeline(
-                StubInferencePipeline.DEFAULT_TOKEN, // index 0 — prefill, discarded
-                eos                                  // index 1 — decode step 0
-        );
+		@Override
+		public int vocabSize() {
+			return delegate.vocabSize();
+		}
 
-        List<String> received = new ArrayList<>();
-        GenerationResult result = loopWith(stubTokenizer, pipeline)
-                .generate(req("hi"), (piece, id, step) -> received.add(piece));
+		@Override
+		public String modelType() {
+			return delegate.modelType();
+		}
 
-        assertThat(received).isEmpty();
-        assertThat(result.text()).isEmpty();
-        assertThat(result.generatedTokens()).isEqualTo(0);
-        assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
-    }
+		@Override
+		public boolean isReady() {
+			return delegate.isReady();
+		}
+	}
 
-    // ── Test 2 — the actual regression ───────────────────────────────────────
+	// ── helpers ───────────────────────────────────────────────────────────────
 
-    /**
-     * REGRESSION: a non-EOS token ID decodes to "</s>" — seen in GgufTokenizer
-     * when the vocab stores "</s>" both as a regular token and at the special EOS ID.
-     *
-     * FAILS before the isEosMarker() fix, PASSES after.
-     */
-    @Test
-    @DisplayName("Non-EOS token that decodes to \"</s>\" must not appear in output")
-    void eos_string_piece_from_non_eos_token_suppressed() {
-        int suspiciousToken = 100;
-        assertThat(suspiciousToken).isNotEqualTo(stubTokenizer.eosTokenId());
+	private GenerationLoop loopWith(Tokenizer tok, InferencePipeline pipeline) {
+		return new GenerationLoop(tok, sampler, pipeline, kvCache);
+	}
 
-        DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
-        tok.override(suspiciousToken, "</s>");
+	private InferenceRequest req(String prompt) {
+		return InferenceRequest.of("llama3-8b", List.of(ChatMessage.user(prompt)),
+				SamplingParams.defaults().withMaxTokens(10), RequestPriority.NORMAL);
+	}
 
-        StubInferencePipeline pipeline = new StubInferencePipeline(
-                StubInferencePipeline.DEFAULT_TOKEN, // prefill
-                suspiciousToken,                     // decode step 0 → "</s>"
-                StubInferencePipeline.DEFAULT_TOKEN  // step 1 — must never reach
-        );
+	// ── Test 1 ────────────────────────────────────────────────────────────────
 
-        List<String> streamed = new ArrayList<>();
-        GenerationResult result = loopWith(tok, pipeline)
-                .generate(req("hi"), (piece, id, step) -> streamed.add(piece));
+	@Test
+	@DisplayName("EOS token ID stops generation without streaming any piece")
+	void eos_token_id_stops_immediately_no_piece_streamed() {
+		int eos = stubTokenizer.eosTokenId();
 
-        assertThat(streamed).as("</s> must not be streamed").doesNotContain("</s>");
-        assertThat(result.text()).as("</s> must not appear in text()").doesNotContain("</s>");
-        assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
-    }
+		StubInferencePipeline pipeline = new StubInferencePipeline(StubInferencePipeline.DEFAULT_TOKEN, // index 0 —
+																										// prefill,
+																										// discarded
+				eos // index 1 — decode step 0
+		);
 
-    // ── Test 3 ────────────────────────────────────────────────────────────────
+		List<String> received = new ArrayList<>();
+		GenerationResult result = loopWith(stubTokenizer, pipeline).generate(req("hi"),
+				(piece, _, _) -> received.add(piece));
 
-    @Test
-    @DisplayName("Non-EOS token that decodes to \"<|endoftext|>\" must not appear in output")
-    void endoftext_string_piece_from_non_eos_token_suppressed() {
-        int suspiciousToken = 101;
-        assertThat(suspiciousToken).isNotEqualTo(stubTokenizer.eosTokenId());
+		assertThat(received).isEmpty();
+		assertThat(result.text()).isEmpty();
+		assertThat(result.generatedTokens()).isEqualTo(0);
+		assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
+	}
 
-        DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
-        tok.override(suspiciousToken, "<|endoftext|>");
+	// ── Test 2 — the actual regression ───────────────────────────────────────
 
-        StubInferencePipeline pipeline = new StubInferencePipeline(
-                StubInferencePipeline.DEFAULT_TOKEN,
-                suspiciousToken,
-                StubInferencePipeline.DEFAULT_TOKEN
-        );
+	/**
+	 * REGRESSION: a non-EOS token ID decodes to "</s>" — seen in GgufTokenizer when
+	 * the vocab stores "</s>" both as a regular token and at the special EOS ID.
+	 *
+	 * FAILS before the isEosMarker() fix, PASSES after.
+	 */
+	@Test
+	@DisplayName("Non-EOS token that decodes to \"</s>\" must not appear in output")
+	void eos_string_piece_from_non_eos_token_suppressed() {
+		int suspiciousToken = 100;
+		assertThat(suspiciousToken).isNotEqualTo(stubTokenizer.eosTokenId());
 
-        List<String> streamed = new ArrayList<>();
-        GenerationResult result = loopWith(tok, pipeline)
-                .generate(req("hi"), (piece, id, step) -> streamed.add(piece));
+		DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
+		tok.override(suspiciousToken, "</s>");
 
-        assertThat(streamed).doesNotContain("<|endoftext|>");
-        assertThat(result.text()).doesNotContain("<|endoftext|>");
-        assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
-    }
+		StubInferencePipeline pipeline = new StubInferencePipeline(StubInferencePipeline.DEFAULT_TOKEN, // prefill
+				suspiciousToken, // decode step 0 → "</s>"
+				StubInferencePipeline.DEFAULT_TOKEN // step 1 — must never reach
+		);
 
-    // ── Test 4 ────────────────────────────────────────────────────────────────
+		List<String> streamed = new ArrayList<>();
+		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, _, _) -> streamed.add(piece));
 
-    @Test
-    @DisplayName("Tokens with angle brackets that are not EOS markers pass through normally")
-    void non_eos_angle_bracket_tokens_are_not_filtered() {
-        int mathToken = 200;
-        assertThat(mathToken).isNotEqualTo(stubTokenizer.eosTokenId());
+		assertThat(streamed).as("</s> must not be streamed").doesNotContain("</s>");
+		assertThat(result.text()).as("</s> must not appear in text()").doesNotContain("</s>");
+		assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
+	}
 
-        DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
-        tok.override(mathToken, "3<x<7");
+	// ── Test 3 ────────────────────────────────────────────────────────────────
 
-        StubInferencePipeline pipeline = new StubInferencePipeline(
-                StubInferencePipeline.DEFAULT_TOKEN, // prefill
-                mathToken,                           // decode step 0 → "3<x<7"
-                stubTokenizer.eosTokenId()           // decode step 1 — stop
-        );
+	@Test
+	@DisplayName("Non-EOS token that decodes to \"<|endoftext|>\" must not appear in output")
+	void endoftext_string_piece_from_non_eos_token_suppressed() {
+		int suspiciousToken = 101;
+		assertThat(suspiciousToken).isNotEqualTo(stubTokenizer.eosTokenId());
 
-        List<String> streamed = new ArrayList<>();
-        loopWith(tok, pipeline)
-                .generate(req("hi"), (piece, id, step) -> streamed.add(piece));
+		DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
+		tok.override(suspiciousToken, "<|endoftext|>");
 
-        assertThat(streamed).contains("3<x<7");
-    }
+		StubInferencePipeline pipeline = new StubInferencePipeline(StubInferencePipeline.DEFAULT_TOKEN, suspiciousToken,
+				StubInferencePipeline.DEFAULT_TOKEN);
+
+		List<String> streamed = new ArrayList<>();
+		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, _, _) -> streamed.add(piece));
+
+		assertThat(streamed).doesNotContain("<|endoftext|>");
+		assertThat(result.text()).doesNotContain("<|endoftext|>");
+		assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
+	}
+
+	// ── Test 4 ────────────────────────────────────────────────────────────────
+
+	@Test
+	@DisplayName("Tokens with angle brackets that are not EOS markers pass through normally")
+	void non_eos_angle_bracket_tokens_are_not_filtered() {
+		int mathToken = 200;
+		assertThat(mathToken).isNotEqualTo(stubTokenizer.eosTokenId());
+
+		DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
+		tok.override(mathToken, "3<x<7");
+
+		StubInferencePipeline pipeline = new StubInferencePipeline(StubInferencePipeline.DEFAULT_TOKEN, // prefill
+				mathToken, // decode step 0 → "3<x<7"
+				stubTokenizer.eosTokenId() // decode step 1 — stop
+		);
+
+		List<String> streamed = new ArrayList<>();
+		loopWith(tok, pipeline).generate(req("hi"), (piece, _, _) -> streamed.add(piece));
+
+		assertThat(streamed).contains("3<x<7");
+	}
 }

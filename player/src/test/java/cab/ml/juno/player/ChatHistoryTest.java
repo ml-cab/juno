@@ -7,7 +7,6 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.player.ChatHistory;
 import cab.ml.juno.tokenizer.ChatMessage;
 
 /**

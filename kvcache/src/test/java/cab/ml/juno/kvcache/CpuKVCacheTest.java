@@ -5,10 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.kvcache.CpuKVCache;
-import cab.ml.juno.kvcache.KVBlock;
-import cab.ml.juno.kvcache.KVKey;
-
 class CpuKVCacheTest {
 
 	private final CpuKVCache cache = new CpuKVCache(100);

@@ -8,8 +8,6 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.node.CyclicForwardPassHandler;
-import cab.ml.juno.node.LocalInferencePipeline;
 import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.registry.ShardMap;
 

@@ -4,9 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.sampler.SamplingParams;
-import cab.ml.juno.sampler.TopKStep;
-
 class TopKStepTest {
 
 	private final TopKStep step = TopKStep.INSTANCE;

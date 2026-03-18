@@ -2,9 +2,6 @@ package cab.ml.juno.kvcache;
 
 import java.time.Instant;
 
-import cab.ml.juno.kvcache.KVBlock;
-import cab.ml.juno.kvcache.KVKey;
-
 /** Test helper — builds KVBlock instances without boilerplate. */
 final class KVBlockFactory {
 

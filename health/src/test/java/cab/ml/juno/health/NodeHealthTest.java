@@ -7,8 +7,6 @@ import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.health.NodeHealth;
-
 class NodeHealthTest {
 
 	private NodeHealth health(double pressure) {

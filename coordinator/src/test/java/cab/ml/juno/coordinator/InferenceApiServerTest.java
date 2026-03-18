@@ -13,9 +13,6 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.coordinator.GenerationLoop;
-import cab.ml.juno.coordinator.InferenceApiServer;
-import cab.ml.juno.coordinator.RequestScheduler;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;

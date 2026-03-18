@@ -4,8 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.tokenizer.StubTokenizer;
-
 /**
  * Tests StubTokenizer AND validates the Tokenizer contract. Since DJLTokenizer
  * requires a model file, StubTokenizer is our test vehicle for anything that

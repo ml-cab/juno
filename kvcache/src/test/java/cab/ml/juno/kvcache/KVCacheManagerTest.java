@@ -5,12 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.kvcache.CpuKVCache;
-import cab.ml.juno.kvcache.GpuKVCache;
-import cab.ml.juno.kvcache.KVCacheManager;
-import cab.ml.juno.kvcache.KVKey;
-import cab.ml.juno.kvcache.PrefixCache;
-
 class KVCacheManagerTest {
 
 	private static final long MB = 1024 * 1024;

@@ -6,9 +6,6 @@ import static org.assertj.core.api.Assertions.within;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.sampler.SamplingParams;
-import cab.ml.juno.sampler.SoftmaxStep;
-
 class SoftmaxStepTest {
 
 	private final SoftmaxStep step = SoftmaxStep.INSTANCE;

@@ -8,10 +8,6 @@ import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.registry.NodeDescriptor;
-import cab.ml.juno.registry.NodeStatus;
-import cab.ml.juno.registry.SeedScorer;
-
 class SeedScorerTest {
 
 	private final SeedScorer scorer = SeedScorer.defaults();

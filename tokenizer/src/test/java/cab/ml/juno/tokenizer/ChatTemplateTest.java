@@ -6,9 +6,6 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.tokenizer.ChatMessage;
-import cab.ml.juno.tokenizer.ChatTemplate;
-
 class ChatTemplateTest {
 
 	private final List<ChatMessage> messages = List.of(ChatMessage.system("You are helpful."),

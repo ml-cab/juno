@@ -118,6 +118,7 @@ public final class EmbeddedNodeServer {
 		private final String modelPath; // null = stub mode
 		private volatile ForwardPassHandler handler;
 		private volatile ShardContext context;
+		@SuppressWarnings("unused")
 		private volatile KVCacheManager kvCache;
 
 		NodeServiceImpl(String nodeId, String modelPath) {

@@ -7,8 +7,6 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.coordinator.SseTokenConsumer;
-
 /**
  * Unit tests for SseTokenConsumer.
  *

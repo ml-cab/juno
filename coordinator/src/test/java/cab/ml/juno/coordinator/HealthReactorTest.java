@@ -8,11 +8,6 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.coordinator.FaultTolerantPipeline;
-import cab.ml.juno.coordinator.GenerationLoop;
-import cab.ml.juno.coordinator.HealthReactor;
-import cab.ml.juno.coordinator.RequestScheduler;
-import cab.ml.juno.coordinator.RetryPolicy;
 import cab.ml.juno.health.CircuitBreaker;
 import cab.ml.juno.health.HealthThresholds;
 import cab.ml.juno.health.NodeHealth;

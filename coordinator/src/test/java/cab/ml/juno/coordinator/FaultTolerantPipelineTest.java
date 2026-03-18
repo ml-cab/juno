@@ -9,9 +9,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.coordinator.FaultTolerantPipeline;
-import cab.ml.juno.coordinator.PipelineUnavailableException;
-import cab.ml.juno.coordinator.RetryPolicy;
 import cab.ml.juno.health.CircuitBreaker;
 import cab.ml.juno.node.InferencePipeline;
 
@@ -51,6 +48,7 @@ class FaultTolerantPipelineTest {
 		};
 	}
 
+	@SuppressWarnings("unused")
 	private InferencePipeline failsThenSucceeds(int failCount, int winner) {
 		AtomicInteger calls = new AtomicInteger(0);
 		return new InferencePipeline() {

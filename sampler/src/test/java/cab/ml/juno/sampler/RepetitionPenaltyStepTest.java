@@ -5,9 +5,6 @@ import static org.assertj.core.api.Assertions.within;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.sampler.RepetitionPenaltyStep;
-import cab.ml.juno.sampler.SamplingParams;
-
 class RepetitionPenaltyStepTest {
 
 	private final RepetitionPenaltyStep step = RepetitionPenaltyStep.INSTANCE;

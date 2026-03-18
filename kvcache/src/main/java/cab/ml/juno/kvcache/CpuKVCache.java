@@ -39,7 +39,7 @@ public final class CpuKVCache implements KVCache {
 	public CpuKVCache(long maxBlocks) {
 		if (maxBlocks < 1)
 			throw new IllegalArgumentException("maxBlocks must be >= 1");
-		this.cache = Caffeine.newBuilder().maximumSize(maxBlocks).removalListener((key, block, cause) -> {
+		this.cache = Caffeine.newBuilder().maximumSize(maxBlocks).removalListener((_, block, _) -> {
 			if (block instanceof KVBlock b)
 				totalBytesStored.addAndGet(-b.sizeBytes());
 		}).build();

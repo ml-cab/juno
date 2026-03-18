@@ -8,8 +8,6 @@ import java.util.Random;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.node.CpuForwardPassHandler;
-
 /**
  * Correctness tests for CpuForwardPassHandler.matVec().
  *

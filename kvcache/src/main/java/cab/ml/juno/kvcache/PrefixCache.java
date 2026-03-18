@@ -88,7 +88,7 @@ public final class PrefixCache {
 		try {
 			TrieNode current = root;
 			for (int i = 0; i < len; i++) {
-				current = current.children.computeIfAbsent(tokens[i], k -> new TrieNode());
+				current = current.children.computeIfAbsent(tokens[i], _ -> new TrieNode());
 			}
 			current.cacheKey = cacheKey;
 		} finally {

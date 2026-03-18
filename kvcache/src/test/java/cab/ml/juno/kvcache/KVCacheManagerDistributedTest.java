@@ -6,12 +6,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.kvcache.CpuKVCache;
-import cab.ml.juno.kvcache.GpuKVCache;
-import cab.ml.juno.kvcache.KVCacheManager;
-import cab.ml.juno.kvcache.KVKey;
-import cab.ml.juno.kvcache.LayerRange;
-
 /**
  * Tests for distributed KV cache behaviour — each node owns only its layer
  * range.

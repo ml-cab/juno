@@ -7,9 +7,6 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.tokenizer.ChatMessage;
-import cab.ml.juno.tokenizer.ChatTemplateFormatter;
-
 class ChatTemplateFormatterTest {
 
 	@Test

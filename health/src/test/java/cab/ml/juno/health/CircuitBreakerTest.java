@@ -6,9 +6,6 @@ import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.health.CircuitBreaker;
-import cab.ml.juno.health.CircuitState;
-
 class CircuitBreakerTest {
 
 	private CircuitBreaker cb() {

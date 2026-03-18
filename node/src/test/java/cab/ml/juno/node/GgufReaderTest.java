@@ -13,8 +13,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import cab.ml.juno.node.GgufReader;
-
 /**
  * Unit tests for GgufReader's dequantization routines.
  *
@@ -311,15 +309,12 @@ class GgufReaderTest {
 	 * Wraps a GGUF file inside a minimal ZIP archive (stored, not deflated) with a
 	 * fake APE/MZ executable prefix, mimicking the real llamafile format.
 	 *
-	 * ZIP layout:
-	 *   [ape-stub bytes]
-	 *   [local file header + GGUF data]
-	 *   [central directory entry]
-	 *   [end-of-central-directory record]
+	 * ZIP layout: [ape-stub bytes] [local file header + GGUF data] [central
+	 * directory entry] [end-of-central-directory record]
 	 */
 	private static Path buildLlamafile(Path dir, String ggufEntryName, byte[] ggufBytes) throws IOException {
-		byte[] stub = "MZqFpD\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0".getBytes(
-				java.nio.charset.StandardCharsets.ISO_8859_1);
+		byte[] stub = "MZqFpD\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+				.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
 
 		byte[] fn = ggufEntryName.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 		int fnLen = fn.length;
@@ -329,51 +324,51 @@ class GgufReaderTest {
 		long localHeaderOffset = stub.length; // absolute offset in file
 
 		ByteBuffer lh = ByteBuffer.allocate(localHeaderSize).order(ByteOrder.LITTLE_ENDIAN);
-		lh.putInt(0x04034b50);  // signature
+		lh.putInt(0x04034b50); // signature
 		lh.putShort((short) 20); // version needed
-		lh.putShort((short) 0);  // general purpose flags
-		lh.putShort((short) 0);  // compression: STORED
-		lh.putShort((short) 0);  // mod time
-		lh.putShort((short) 0);  // mod date
-		lh.putInt(0);            // CRC-32 (not validated by GgufReader)
+		lh.putShort((short) 0); // general purpose flags
+		lh.putShort((short) 0); // compression: STORED
+		lh.putShort((short) 0); // mod time
+		lh.putShort((short) 0); // mod date
+		lh.putInt(0); // CRC-32 (not validated by GgufReader)
 		lh.putInt(ggufBytes.length); // compressed size
 		lh.putInt(ggufBytes.length); // uncompressed size
-		lh.putShort((short) fnLen);  // filename length
-		lh.putShort((short) 0);      // extra field length
+		lh.putShort((short) fnLen); // filename length
+		lh.putShort((short) 0); // extra field length
 		lh.put(fn);
 
 		// Central directory entry (46 + fnLen bytes)
 		ByteBuffer cde = ByteBuffer.allocate(46 + fnLen).order(ByteOrder.LITTLE_ENDIAN);
-		cde.putInt(0x02014b50);  // signature
+		cde.putInt(0x02014b50); // signature
 		cde.putShort((short) 20); // version made by
 		cde.putShort((short) 20); // version needed
-		cde.putShort((short) 0);  // flags
-		cde.putShort((short) 0);  // compression: STORED
-		cde.putShort((short) 0);  // mod time
-		cde.putShort((short) 0);  // mod date
-		cde.putInt(0);            // CRC-32
+		cde.putShort((short) 0); // flags
+		cde.putShort((short) 0); // compression: STORED
+		cde.putShort((short) 0); // mod time
+		cde.putShort((short) 0); // mod date
+		cde.putInt(0); // CRC-32
 		cde.putInt(ggufBytes.length); // compressed size
 		cde.putInt(ggufBytes.length); // uncompressed size
-		cde.putShort((short) fnLen);  // filename length
-		cde.putShort((short) 0);      // extra length
-		cde.putShort((short) 0);      // comment length
-		cde.putShort((short) 0);      // disk number start
-		cde.putShort((short) 0);      // internal attributes
-		cde.putInt(0);                // external attributes
+		cde.putShort((short) fnLen); // filename length
+		cde.putShort((short) 0); // extra length
+		cde.putShort((short) 0); // comment length
+		cde.putShort((short) 0); // disk number start
+		cde.putShort((short) 0); // internal attributes
+		cde.putInt(0); // external attributes
 		cde.putInt((int) localHeaderOffset); // relative offset of local header
 		cde.put(fn);
 
 		long cdOffset = localHeaderOffset + localHeaderSize + ggufBytes.length;
-		int  cdSize   = cde.capacity();
+		int cdSize = cde.capacity();
 
 		// End-of-central-directory (22 bytes)
 		ByteBuffer eocd = ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);
-		eocd.putInt(0x06054b50);  // signature
+		eocd.putInt(0x06054b50); // signature
 		eocd.putShort((short) 0); // disk number
 		eocd.putShort((short) 0); // start disk
 		eocd.putShort((short) 1); // entries on disk
 		eocd.putShort((short) 1); // total entries
-		eocd.putInt(cdSize);      // central directory size
+		eocd.putInt(cdSize); // central directory size
 		eocd.putInt((int) cdOffset); // central directory offset
 		eocd.putShort((short) 0); // comment length
 
@@ -397,7 +392,8 @@ class GgufReaderTest {
 		// Build a minimal GGUF with some F32 tensor data
 		float[] values = { 1.0f, 2.0f, 3.0f, 4.0f };
 		ByteBuffer data = ByteBuffer.allocate(values.length * 4).order(ByteOrder.LITTLE_ENDIAN);
-		for (float v : values) data.putFloat(v);
+		for (float v : values)
+			data.putFloat(v);
 
 		Path gguf = buildMinimalGguf(tempDir, "inner", 0 /* F32 */, values.length, data.array());
 		byte[] ggufBytes = Files.readAllBytes(gguf);
@@ -422,8 +418,8 @@ class GgufReaderTest {
 
 		Path llamafile = buildLlamafile(tempDir, "magic_check.gguf", ggufBytes);
 
-		try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(
-				llamafile, java.nio.file.StandardOpenOption.READ)) {
+		try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(llamafile,
+				java.nio.file.StandardOpenOption.READ)) {
 			long offset = GgufReader.findGgufOffsetInZip(ch);
 
 			// The GGUF magic must appear at the discovered offset
@@ -439,7 +435,8 @@ class GgufReaderTest {
 	void plain_gguf_still_opens_correctly(@TempDir Path tempDir) throws IOException {
 		float[] values = { -1.0f, 0.0f, 1.0f, 2.0f };
 		ByteBuffer data = ByteBuffer.allocate(values.length * 4).order(ByteOrder.LITTLE_ENDIAN);
-		for (float v : values) data.putFloat(v);
+		for (float v : values)
+			data.putFloat(v);
 
 		Path gguf = buildMinimalGguf(tempDir, "plain", 0 /* F32 */, values.length, data.array());
 
@@ -457,7 +454,8 @@ class GgufReaderTest {
 		short scale16 = 0x3800; // 0.5f in FP16
 		ByteBuffer blockData = ByteBuffer.allocate(2 + 32).order(ByteOrder.LITTLE_ENDIAN);
 		blockData.putShort(scale16);
-		for (int i = 0; i < 32; i++) blockData.put((byte) i);
+		for (int i = 0; i < 32; i++)
+			blockData.put((byte) i);
 
 		Path gguf = buildMinimalGguf(tempDir, "q8test", 8 /* Q8_0 */, 32, blockData.array());
 		byte[] ggufBytes = Files.readAllBytes(gguf);
@@ -474,8 +472,8 @@ class GgufReaderTest {
 
 	/**
 	 * Simulates a real cosmopolitan APE llamafile where a large PE/Mach-O overlay
-	 * is appended AFTER the ZIP's EOCD, pushing the EOCD more than 65557 bytes
-	 * from the end of the file.  The backward EOCD scan will fail; the forward
+	 * is appended AFTER the ZIP's EOCD, pushing the EOCD more than 65557 bytes from
+	 * the end of the file. The backward EOCD scan will fail; the forward
 	 * local-header scan must kick in and still find the embedded GGUF.
 	 */
 	@Test
@@ -483,7 +481,8 @@ class GgufReaderTest {
 	void llamafile_large_pe_overlay_uses_forward_scan(@TempDir Path tempDir) throws IOException {
 		float[] values = { 5.0f, 6.0f, 7.0f, 8.0f };
 		ByteBuffer data = ByteBuffer.allocate(values.length * 4).order(ByteOrder.LITTLE_ENDIAN);
-		for (float v : values) data.putFloat(v);
+		for (float v : values)
+			data.putFloat(v);
 
 		Path gguf = buildMinimalGguf(tempDir, "overlay_test", 0 /* F32 */, values.length, data.array());
 		byte[] ggufBytes = Files.readAllBytes(gguf);
@@ -492,7 +491,7 @@ class GgufReaderTest {
 		Path base = buildLlamafile(tempDir, "overlay_test.gguf", ggufBytes);
 		byte[] baseBytes = Files.readAllBytes(base);
 
-		// Append 70 000 bytes of "PE overlay" data AFTER the EOCD.  This pushes the
+		// Append 70 000 bytes of "PE overlay" data AFTER the EOCD. This pushes the
 		// EOCD more than 65557 bytes from the new end-of-file, defeating the standard
 		// backward scan.
 		byte[] overlay = new byte[70_000];
@@ -522,7 +521,8 @@ class GgufReaderTest {
 	void llamafile_large_ape_stub_forward_scan(@TempDir Path tempDir) throws IOException {
 		float[] values = { -3.0f, -2.0f, -1.0f, 0.0f };
 		ByteBuffer data = ByteBuffer.allocate(values.length * 4).order(ByteOrder.LITTLE_ENDIAN);
-		for (float v : values) data.putFloat(v);
+		for (float v : values)
+			data.putFloat(v);
 
 		Path gguf = buildMinimalGguf(tempDir, "bigstub", 0 /* F32 */, values.length, data.array());
 		byte[] ggufBytes = Files.readAllBytes(gguf);
@@ -530,7 +530,10 @@ class GgufReaderTest {
 		// Build a llamafile whose APE stub is 1.2 MiB (larger than the 1 MiB chunk),
 		// then append a PE overlay so the EOCD is also out of the backward-scan window.
 		byte[] bigStub = new byte[1_200_000];
-		bigStub[0] = 'M'; bigStub[1] = 'Z'; bigStub[2] = 'q'; bigStub[3] = 'F';
+		bigStub[0] = 'M';
+		bigStub[1] = 'Z';
+		bigStub[2] = 'q';
+		bigStub[3] = 'F';
 		// The rest is zero — no accidental EOCD/LFH signatures.
 
 		byte[] fn = "bigstub.gguf".getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -538,27 +541,51 @@ class GgufReaderTest {
 
 		// Local file header.
 		ByteBuffer lh = ByteBuffer.allocate(30 + fnLen).order(ByteOrder.LITTLE_ENDIAN);
-		lh.putInt(0x04034b50); lh.putShort((short) 20); lh.putShort((short) 0);
-		lh.putShort((short) 0); lh.putShort((short) 0); lh.putShort((short) 0);
-		lh.putInt(0); lh.putInt(ggufBytes.length); lh.putInt(ggufBytes.length);
-		lh.putShort((short) fnLen); lh.putShort((short) 0); lh.put(fn);
+		lh.putInt(0x04034b50);
+		lh.putShort((short) 20);
+		lh.putShort((short) 0);
+		lh.putShort((short) 0);
+		lh.putShort((short) 0);
+		lh.putShort((short) 0);
+		lh.putInt(0);
+		lh.putInt(ggufBytes.length);
+		lh.putInt(ggufBytes.length);
+		lh.putShort((short) fnLen);
+		lh.putShort((short) 0);
+		lh.put(fn);
 
 		// Central directory entry.
 		ByteBuffer cde = ByteBuffer.allocate(46 + fnLen).order(ByteOrder.LITTLE_ENDIAN);
-		cde.putInt(0x02014b50); cde.putShort((short) 20); cde.putShort((short) 20);
-		cde.putShort((short) 0); cde.putShort((short) 0); cde.putShort((short) 0); cde.putShort((short) 0);
-		cde.putInt(0); cde.putInt(ggufBytes.length); cde.putInt(ggufBytes.length);
-		cde.putShort((short) fnLen); cde.putShort((short) 0); cde.putShort((short) 0);
-		cde.putShort((short) 0); cde.putShort((short) 0); cde.putInt(0);
+		cde.putInt(0x02014b50);
+		cde.putShort((short) 20);
+		cde.putShort((short) 20);
+		cde.putShort((short) 0);
+		cde.putShort((short) 0);
+		cde.putShort((short) 0);
+		cde.putShort((short) 0);
+		cde.putInt(0);
+		cde.putInt(ggufBytes.length);
+		cde.putInt(ggufBytes.length);
+		cde.putShort((short) fnLen);
+		cde.putShort((short) 0);
+		cde.putShort((short) 0);
+		cde.putShort((short) 0);
+		cde.putShort((short) 0);
+		cde.putInt(0);
 		cde.putInt(bigStub.length); // local header offset = right after stub
 		cde.put(fn);
 
 		long cdOffset = (long) bigStub.length + 30 + fnLen + ggufBytes.length;
 
 		ByteBuffer eocd = ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);
-		eocd.putInt(0x06054b50); eocd.putShort((short) 0); eocd.putShort((short) 0);
-		eocd.putShort((short) 1); eocd.putShort((short) 1);
-		eocd.putInt(cde.capacity()); eocd.putInt((int) cdOffset); eocd.putShort((short) 0);
+		eocd.putInt(0x06054b50);
+		eocd.putShort((short) 0);
+		eocd.putShort((short) 0);
+		eocd.putShort((short) 1);
+		eocd.putShort((short) 1);
+		eocd.putInt(cde.capacity());
+		eocd.putInt((int) cdOffset);
+		eocd.putShort((short) 0);
 
 		// 70 000 byte PE overlay after the EOCD.
 		byte[] overlay = new byte[70_000];

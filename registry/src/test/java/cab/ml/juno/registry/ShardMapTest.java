@@ -9,9 +9,6 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.registry.ShardAssignment;
-import cab.ml.juno.registry.ShardMap;
-
 class ShardMapTest {
 
 	private ShardAssignment shard(String nodeId, int start, int end) {

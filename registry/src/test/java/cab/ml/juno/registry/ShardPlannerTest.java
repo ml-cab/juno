@@ -9,12 +9,6 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.registry.InsufficientClusterVramException;
-import cab.ml.juno.registry.NodeDescriptor;
-import cab.ml.juno.registry.NodeStatus;
-import cab.ml.juno.registry.ShardMap;
-import cab.ml.juno.registry.ShardPlanner;
-
 class ShardPlannerTest {
 
 	private static final long GB = 1024L * 1024 * 1024;

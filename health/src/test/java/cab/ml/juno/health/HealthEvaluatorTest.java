@@ -8,11 +8,6 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.health.HealthEvaluator;
-import cab.ml.juno.health.HealthEvent;
-import cab.ml.juno.health.HealthThresholds;
-import cab.ml.juno.health.NodeHealth;
-
 class HealthEvaluatorTest {
 
 	private HealthEvaluator evaluator;

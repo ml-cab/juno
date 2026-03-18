@@ -28,6 +28,8 @@ package cab.ml.juno.coordinator;
  */
 public final class PipelineUnavailableException extends RuntimeException {
 
+	private static final long serialVersionUID = PipelineUnavailableException.class.getName().hashCode();
+
 	public enum Reason {
 		/**
 		 * All node circuit breakers were OPEN — request rejected without attempting a

@@ -5,10 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.registry.ModelDescriptor;
-import cab.ml.juno.registry.ModelStatus;
-import cab.ml.juno.registry.QuantizationType;
-
 class ModelDescriptorTest {
 
 	private ModelDescriptor tinyllama() {

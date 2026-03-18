@@ -68,12 +68,12 @@ import cab.ml.juno.tokenizer.Tokenizer;
  */
 public final class ConsoleMain {
 
+	@SuppressWarnings("unused")
 	private static final Logger log = Logger.getLogger(ConsoleMain.class.getName());
 
 	// Silence logging unless verbose (same as original)
 	static {
-		boolean verbose = Boolean.getBoolean("JUNO_VERBOSE")
-				|| "true".equalsIgnoreCase(System.getenv("JUNO_VERBOSE"));
+		boolean verbose = Boolean.getBoolean("JUNO_VERBOSE") || "true".equalsIgnoreCase(System.getenv("JUNO_VERBOSE"));
 		if (!verbose) {
 			java.util.logging.LogManager.getLogManager().reset();
 			java.util.logging.Logger.getLogger("").setLevel(java.util.logging.Level.OFF);
@@ -376,8 +376,8 @@ public final class ConsoleMain {
 
 			long elapsed = System.currentTimeMillis() - start;
 			System.out.println();
-			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · %s]" + Color.RESET + "%n", result.generatedTokens(), elapsed,
-					dtype);
+			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · %s]" + Color.RESET + "%n",
+					result.generatedTokens(), elapsed, dtype);
 			System.out.println();
 		}
 
@@ -393,16 +393,16 @@ public final class ConsoleMain {
 	// -------------------------------------------------------------------------
 
 	private static void banner() {
-		System.out.println(String.format("  %sJuno interactive console  ·  model: %s%s", Color.YELLOW_BOLD_BRIGHT,
+		System.out.println(String.format("  %sJuno interactive console  ·  model: %s%s%n", Color.YELLOW_BOLD_BRIGHT,
 				Path.of(modelPath).getFileName(), Color.RESET));
 		System.out.println(Color.RED_BOLD + "░▀▀█" + Color.GREEN_BOLD + "░█░█" + Color.RESET);
 		System.out.println(Color.RED + "░░░█" + Color.GREEN + "░█░█" + Color.RESET);
 		System.out.println(Color.RED + "░▀▀░" + Color.GREEN + "░▀▀▀" + Color.RESET);
 		System.out.println(Color.BLUE_BOLD + "░█▀█" + Color.YELLOW_BOLD + "░█▀█" + Color.RESET);
 		System.out.println(Color.BLUE + "░█░█" + Color.YELLOW + "░█░█" + Color.RESET);
-		System.out.println(Color.BLUE + "░▀░▀" + Color.YELLOW + "░▀▀▀" + Color.RESET);
+		System.out.println(Color.BLUE + "░▀░▀" + Color.YELLOW + "░▀▀▀" + Color.RESET + "\n");
 		System.out.println(
-				String.format("  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s",
+				String.format("  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
 						Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP,
 						localMode ? "local" : "cluster", nodeCount, Color.RESET));
 	}

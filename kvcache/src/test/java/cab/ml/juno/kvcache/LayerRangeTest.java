@@ -5,8 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.kvcache.LayerRange;
-
 class LayerRangeTest {
 
 	@Test

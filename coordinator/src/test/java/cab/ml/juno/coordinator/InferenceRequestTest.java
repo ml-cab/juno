@@ -7,8 +7,6 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.coordinator.InferenceRequest;
-import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
 

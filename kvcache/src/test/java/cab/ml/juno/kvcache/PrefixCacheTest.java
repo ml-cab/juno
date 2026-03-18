@@ -4,8 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.kvcache.PrefixCache;
-
 class PrefixCacheTest {
 
 	private final PrefixCache cache = new PrefixCache();

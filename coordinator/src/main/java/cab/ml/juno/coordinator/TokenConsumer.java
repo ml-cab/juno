@@ -56,12 +56,12 @@ public interface TokenConsumer {
 
 	/** No-op consumer — useful for non-streaming (batch) generation. */
 	static TokenConsumer discard() {
-		return (piece, tokenId, position) -> {
+		return (_, _, _) -> {
 		};
 	}
 
 	/** Collects pieces into a StringBuilder — useful for testing. */
 	static TokenConsumer collecting(StringBuilder sb) {
-		return (piece, tokenId, position) -> sb.append(piece);
+		return (piece, _, _) -> sb.append(piece);
 	}
 }

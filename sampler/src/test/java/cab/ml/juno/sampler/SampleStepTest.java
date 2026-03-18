@@ -4,9 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.sampler.SampleStep;
-import cab.ml.juno.sampler.SamplingParams;
-
 class SampleStepTest {
 
 	private final SampleStep step = SampleStep.INSTANCE;

@@ -4,9 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.sampler.SamplingParams;
-import cab.ml.juno.sampler.TemperatureStep;
-
 class TemperatureStepTest {
 
 	private final TemperatureStep step = TemperatureStep.INSTANCE;

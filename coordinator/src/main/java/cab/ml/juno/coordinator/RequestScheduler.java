@@ -253,6 +253,7 @@ public final class RequestScheduler {
 	}
 
 	public static final class QueueFullException extends RuntimeException {
+		private static final long serialVersionUID = QueueFullException.class.getName().hashCode();
 		private final int retryAfterSeconds;
 
 		public QueueFullException(String message, int retryAfterSeconds) {

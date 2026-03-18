@@ -214,8 +214,8 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 		int L = endLayer - startLayer;
 
 		// Ensure KV cache exists for this request
-		kvCacheK.computeIfAbsent(requestId, k -> new float[L][MAX_SEQ_LEN * cfg.kvDim()]);
-		kvCacheV.computeIfAbsent(requestId, k -> new float[L][MAX_SEQ_LEN * cfg.kvDim()]);
+		kvCacheK.computeIfAbsent(requestId, _ -> new float[L][MAX_SEQ_LEN * cfg.kvDim()]);
+		kvCacheV.computeIfAbsent(requestId, _ -> new float[L][MAX_SEQ_LEN * cfg.kvDim()]);
 
 		float[][] kCache = kvCacheK.get(requestId);
 		float[][] vCache = kvCacheV.get(requestId);
@@ -367,6 +367,7 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 	 */
 	private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen) {
 		int H = cfg.numHeads();
+		@SuppressWarnings("unused")
 		int KVH = cfg.numKvHeads();
 		int Hd = cfg.headDim();
 		int gqa = cfg.gqaRatio();

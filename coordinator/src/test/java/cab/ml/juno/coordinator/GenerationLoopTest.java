@@ -9,11 +9,6 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.coordinator.GenerationLoop;
-import cab.ml.juno.coordinator.GenerationResult;
-import cab.ml.juno.coordinator.InferenceRequest;
-import cab.ml.juno.coordinator.RequestPriority;
-import cab.ml.juno.coordinator.TokenConsumer;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
@@ -28,6 +23,7 @@ class GenerationLoopTest {
 	private StubTokenizer tokenizer;
 	private Sampler sampler;
 	private KVCacheManager kvCache;
+	@SuppressWarnings("unused")
 	private GenerationLoop loop;
 
 	@BeforeEach
@@ -125,7 +121,7 @@ class GenerationLoopTest {
 		GenerationLoop loop = loopWith(pipeline);
 
 		List<Integer> receivedTokens = new ArrayList<>();
-		TokenConsumer consumer = (piece, tokenId, pos) -> receivedTokens.add(tokenId);
+		TokenConsumer consumer = (_, tokenId, _) -> receivedTokens.add(tokenId);
 
 		loop.generate(requestFor("test"), consumer);
 
@@ -160,6 +156,7 @@ class GenerationLoopTest {
 		// After generation, prefix should be cached
 		int[] encoded = tokenizer.encode("the same system prompt");
 		// The prefix cache should have something for these tokens
+		@SuppressWarnings("unused")
 		var match = kvCache.findLongestPrefix(encoded);
 		// May or may not hit depending on template formatting, but should not throw
 		assertThatCode(() -> kvCache.findLongestPrefix(encoded)).doesNotThrowAnyException();

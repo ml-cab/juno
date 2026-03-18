@@ -9,16 +9,6 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.registry.InsufficientClusterVramException;
-import cab.ml.juno.registry.ModelDescriptor;
-import cab.ml.juno.registry.ModelRegistry;
-import cab.ml.juno.registry.ModelStatus;
-import cab.ml.juno.registry.NodeDescriptor;
-import cab.ml.juno.registry.NodeStatus;
-import cab.ml.juno.registry.QuantizationType;
-import cab.ml.juno.registry.ShardMap;
-import cab.ml.juno.registry.ShardPlanner;
-
 class ModelRegistryTest {
 
 	private static final long GB = 1024L * 1024 * 1024;

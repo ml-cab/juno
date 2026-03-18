@@ -8,9 +8,6 @@ import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.registry.NodeDescriptor;
-import cab.ml.juno.registry.NodeStatus;
-
 class NodeDescriptorTest {
 
 	private NodeDescriptor node(long vramTotal, long vramFree, NodeStatus status) {
