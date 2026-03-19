@@ -17,13 +17,17 @@ Unified launcher. Detects the OS and delegates to `scripts/run.sh` (Linux / macO
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--model-path PATH` | — | Path to GGUF file (required) |
+| `--gpu` | (default) | Use GPU when available |
+| `--cpu` | — | Use CPU only |
 | `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | Activation wire format |
 | `--max-tokens N` | `200` | Max tokens per response |
 | `--temperature F` | `0.6` | Sampling temperature |
 | `--heap SIZE` | `4g` | JVM heap, e.g. `8g` for 7B models |
 | `--verbose` | — | Show gRPC and node logs |
 
-**Environment overrides:** `MODEL_PATH`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `HEAP`, `NODES`, `JAVA_HOME`.
+Without `--gpu` or `--cpu`, GPU is used by default. Use `--cpu` to force CPU.
+
+**Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `HEAP`, `NODES`, `JAVA_HOME`. For GPU cluster runs, either set `CUDA_PATH`/`CUDA_HOME` (or run `setenv.bat` / `source setenv.sh`), or on Windows use the single-DLL option: run `get-cudart.bat` and save the downloaded `cudart64_12.dll` to `%USERPROFILE%\.javacpp\cache\` (see https://www.dllme.com/dll/files/cudart64_12).
 
 ---
 
@@ -96,6 +100,10 @@ MODEL_PATH=/path/to/model.gguf ./run.sh console
 ./run.sh console --model-path /path/to/model.gguf --float32
 ./run.sh console --model-path /path/to/model.gguf --max-tokens 512 --temperature 0.1
 ./run.sh console --model-path /path/to/model.gguf --heap 8g
+
+# Backend: GPU (default) or CPU
+./run.sh console --model-path /path/to/model.gguf              # GPU when available
+./run.sh console --model-path /path/to/model.gguf --cpu        # force CPU
 
 # Control how many in-process shards (default 3)
 ./run.sh console --model-path /path/to/model.gguf --nodes 1   # single shard
@@ -298,17 +306,22 @@ MODEL_PATH=/path/to/TinyLlama.gguf ./hyper.sh live -B
 
 GPU testing
 
+GPU stack: org.bytedeco cuda-platform (cudart + cublas). Works with various
+NVIDIA GPUs (e.g. GTX 1080, T4). Requires NVIDIA driver; CUDA runtime is
+bundled in the cuda-platform dependency. On Windows ensure nvidia-smi shows
+your GPU; no extra PATH needed for tests (JavaCPP loads natives from the jar).
+
 Unit tests — node module only, no model file, no GPU needed on CPU machines
 
 ```
-# Run all tests including GPU-tagged (requires CUDA 12.x + Nvidia GPU)
+# Run all tests including GPU-tagged (requires CUDA + Nvidia GPU, org.bytedeco cuda)
 mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
 
 # Skip GPU-tagged tests (default — works on any machine)
 mvn test -Dgroups='!gpu' -pl node
 ```
 
-GPU integration test — requires CUDA 12.x, Nvidia GPU, and a GGUF model file
+GPU integration test — requires CUDA, Nvidia GPU, and a GGUF model file
 
 ```
 # Activate the gpu Maven profile, pass model path
@@ -320,8 +333,8 @@ MODEL_PATH=/path/to/model.gguf mvn verify -Pgpu -pl integration \
   --enable-native-access=ALL-UNNAMED
 ```
 
-GpuForwardPassIT is excluded from the default failsafe scan to prevent its
-JCuda native library from loading into the coordinator JVM and poisoning FD
+GpuForwardPassIT is excluded from the default failsafe scan to prevent CUDA
+native libraries (bytedeco) from loading into the coordinator JVM and poisoning FD
 inheritance into the node processes forked by ClusterHarness. The -Pgpu profile
 also sets -Djuno.gpu.test=true, which is the guard checked in GpuForwardPassIT
 @BeforeAll before any JCuda class is touched.
@@ -333,7 +346,7 @@ AWS setup for GPU testing (g4dn.xlarge — T4 16 GB VRAM, ~$0.50/hr)
 sudo apt update
 sudo apt install -y nvidia-cuda-toolkit
 
-# 2. Verify GPU is visible
+# 2. Verify GPU is visible (e.g. GTX 1080, T4, or any NVIDIA GPU)
 nvidia-smi
 
 # 3. Install JDK 25 and Maven

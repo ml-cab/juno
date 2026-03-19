@@ -51,6 +51,7 @@ set "TOP_K=%TOP_K%"
 set "TOP_P=%TOP_P%"
 set "HEAP=%HEAP%"
 set "VERBOSE=false"
+set "USE_GPU=true"
 
 if "%DTYPE%"=="" set "DTYPE=FLOAT16"
 if "%MAX_TOKENS%"=="" set "MAX_TOKENS=200"
@@ -127,6 +128,16 @@ if /i "%~1"=="-v" (
   shift
   goto :cluster_parse
 )
+if /i "%~1"=="--gpu" (
+  set "USE_GPU=true"
+  shift
+  goto :cluster_parse
+)
+if /i "%~1"=="--cpu" (
+  set "USE_GPU=false"
+  shift
+  goto :cluster_parse
+)
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat cluster --model-path ^<path-to-model.gguf^> [flags]
@@ -154,6 +165,10 @@ if /i "%~1"=="--help" (
   echo.
   echo   JVM:
   echo     --heap SIZE                 JVM heap e.g. 4g 8g 16g   ^(default 4g^)
+  echo.
+  echo   Backend:
+  echo     --gpu                      use GPU when available  ^(default^)
+  echo     --cpu                      use CPU only
   echo.
   echo   Logging:
   echo     --verbose / -v              show gRPC and node logs
@@ -189,12 +204,35 @@ if not exist "%PLAYER_JAR%" (
   exit /b 1
 )
 
+rem --- GPU: ensure CUDA runtime is on PATH so jnicudart.dll can load cudart64_*.dll (see bytedeco UnsatisfiedLinkError on Windows) ---
+if /i "%USE_GPU%"=="true" (
+  set "CUDA_BIN="
+  if not "%CUDA_PATH%"=="" (
+    if exist "%CUDA_PATH%\bin\x64" set "CUDA_BIN=%CUDA_PATH%\bin\x64;%CUDA_PATH%\bin"
+    if "!CUDA_BIN!"=="" if exist "%CUDA_PATH%\bin" set "CUDA_BIN=%CUDA_PATH%\bin"
+  )
+  if "!CUDA_BIN!"=="" if not "%CUDA_HOME%"=="" (
+    if exist "%CUDA_HOME%\bin\x64" set "CUDA_BIN=%CUDA_HOME%\bin\x64;%CUDA_HOME%\bin"
+    if "!CUDA_BIN!"=="" if exist "%CUDA_HOME%\bin" set "CUDA_BIN=%CUDA_HOME%\bin"
+  )
+  if "!CUDA_BIN!"=="" (
+    for /f "delims=" %%v in ('dir /b /ad "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v*" 2^>nul') do set "CUDA_VER=%%v"
+    if defined CUDA_VER (
+      set "CUDA_BIN=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\!CUDA_VER!\bin"
+      if exist "!CUDA_BIN!\x64" set "CUDA_BIN=!CUDA_BIN!\x64;!CUDA_BIN!"
+    )
+  )
+  if not "!CUDA_BIN!"=="" set "PATH=!CUDA_BIN!;!PATH!"
+)
+
 echo Starting 3-node cluster  ^(dtype=%DTYPE%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  heap=%HEAP%^)
 if /i "%VERBOSE%"=="true" echo Verbose mode ON
 echo.
 
 set "VERBOSE_FLAG="
 if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
+set "GPU_FLAG=--gpu"
+if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
 
 "%JAVA_CMD%" ^
   --enable-preview ^
@@ -211,6 +249,7 @@ if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
   --temperature %TEMPERATURE% ^
   --top-k %TOP_K% ^
   --top-p %TOP_P% ^
+  %GPU_FLAG% ^
   %VERBOSE_FLAG%
 goto :eof
 
@@ -223,6 +262,7 @@ set "TEMPERATURE=%TEMPERATURE%"
 set "HEAP=%HEAP%"
 set "NODES=%NODES%"
 set "VERBOSE=false"
+set "USE_GPU=true"
 
 if "%DTYPE%"=="" set "DTYPE=FLOAT16"
 if "%MAX_TOKENS%"=="" set "MAX_TOKENS=200"
@@ -305,6 +345,16 @@ if /i "%~1"=="-v" (
   shift
   goto :console_parse
 )
+if /i "%~1"=="--gpu" (
+  set "USE_GPU=true"
+  shift
+  goto :console_parse
+)
+if /i "%~1"=="--cpu" (
+  set "USE_GPU=false"
+  shift
+  goto :console_parse
+)
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat console --model-path ^<path-to-model.gguf^> [flags]
@@ -335,6 +385,10 @@ if /i "%~1"=="--help" (
   echo.
   echo   JVM:
   echo     --heap SIZE                 e.g. 4g 8g 16g               ^(default 4g^)
+  echo.
+  echo   Backend:
+  echo     --gpu                      use GPU when available  ^(default^)
+  echo     --cpu                      use CPU only
   echo.
   echo   Logging:
   echo     --verbose / -v
@@ -376,6 +430,8 @@ echo.
 
 set "VERBOSE_FLAG="
 if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
+set "GPU_FLAG=--gpu"
+if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
 
 "%JAVA_CMD%" ^
   --enable-preview ^
@@ -394,6 +450,7 @@ if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
   --top-p %TOP_P% ^
   --nodes %NODES% ^
   --local ^
+  %GPU_FLAG% ^
   %VERBOSE_FLAG%
 goto :eof
 
@@ -553,12 +610,14 @@ exit /b 1
 
 :check_java_version
 set "JAVA_VER="
-for /f "tokens=3 delims= " %%v in ('"%JAVA_CMD%" -version 2^>^&1 ^| findstr /i "version"') do (
+set "JUNO_VER_FILE=%TEMP%\juno_java_ver_%RANDOM%.txt"
+"%JAVA_CMD%" -version 2> "%JUNO_VER_FILE%"
+for /f "tokens=3 delims= " %%v in ('type "%JUNO_VER_FILE%" ^| findstr /i "version"') do (
   set "JAVA_VER=%%v"
   goto :have_ver
 )
-
 :have_ver
+del /q "%JUNO_VER_FILE%" 2>nul
 if "%JAVA_VER%"=="" (
   echo Warning: unable to determine Java version. Continuing.
   exit /b 0

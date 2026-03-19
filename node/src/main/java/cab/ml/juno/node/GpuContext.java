@@ -1,4 +1,7 @@
 /*
+ * Created by Yevhen Soldatov
+ * Initial implementation: 2026
+ *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,9 +18,9 @@
  */
 package cab.ml.juno.node;
 
-import jcuda.jcublas.JCublas2;
-import jcuda.jcublas.cublasHandle;
-import jcuda.runtime.JCuda;
+import org.bytedeco.cuda.cublas.cublasContext;
+import org.bytedeco.cuda.global.cublas;
+import org.bytedeco.cuda.global.cudart;
 
 import java.util.logging.Logger;
 
@@ -25,8 +28,10 @@ import java.util.logging.Logger;
  * cuBLAS context: device selection and handle lifecycle.
  *
  * One GpuContext per node JVM. Created once at startup, destroyed at shutdown.
- * The cublasHandle it owns is shared across all CublasMatVec calls on that node
+ * The cublasContext it owns is shared across all CublasMatVec calls on that node
  * — cuBLAS handles are thread-safe for concurrent kernel launches.
+ *
+ * Uses org.bytedeco (JavaCPP) cuda/cublas.
  *
  * Usage:
  *   try (GpuContext ctx = GpuContext.init(0)) {
@@ -43,10 +48,10 @@ public final class GpuContext implements AutoCloseable {
     private static final Logger log = Logger.getLogger(GpuContext.class.getName());
 
     private final int deviceIndex;
-    private final cublasHandle handle;
+    private final cublasContext handle;
     private volatile boolean closed = false;
 
-    private GpuContext(int deviceIndex, cublasHandle handle) {
+    private GpuContext(int deviceIndex, cublasContext handle) {
         this.deviceIndex = deviceIndex;
         this.handle = handle;
     }
@@ -64,13 +69,13 @@ public final class GpuContext implements AutoCloseable {
                 "CUDA not available — cannot create GpuContext on this node");
         }
 
-        JCuda.setExceptionsEnabled(true);
-        JCublas2.setExceptionsEnabled(true);
+        cudart.cudaSetDevice(deviceIndex);
 
-        JCuda.cudaSetDevice(deviceIndex);
-
-        cublasHandle handle = new cublasHandle();
-        JCublas2.cublasCreate(handle);
+        cublasContext handle = new cublasContext();
+        int rc = cublas.cublasCreate_v2(handle);
+        if (rc != 0) {
+            throw new IllegalStateException("cublasCreate failed: " + rc);
+        }
 
         String name = CudaAvailability.deviceName(deviceIndex);
         long vram = CudaAvailability.vramBytes(deviceIndex);
@@ -82,7 +87,7 @@ public final class GpuContext implements AutoCloseable {
     }
 
     /** The cuBLAS handle — valid until close(). */
-    public cublasHandle handle() {
+    public cublasContext handle() {
         if (closed) throw new IllegalStateException("GpuContext already closed");
         return handle;
     }
@@ -103,7 +108,7 @@ public final class GpuContext implements AutoCloseable {
         if (!closed) {
             closed = true;
             try {
-                JCublas2.cublasDestroy(handle);
+                cublas.cublasDestroy_v2(handle);
                 log.info("GpuContext closed — device " + deviceIndex);
             } catch (Exception e) {
                 log.warning("Error closing GpuContext: " + e.getMessage());

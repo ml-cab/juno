@@ -13,7 +13,7 @@
 
     <artifactId>node</artifactId>
     <name>node</name>
-    <description>Inference Node — runs on each GPU machine, JCublas SGEMM, pipeline forward pass, gRPC activation transfer</description>
+    <description>Inference Node — runs on each GPU machine, cuBLAS SGEMM via bytedeco/cuda, pipeline forward pass, gRPC activation transfer</description>
 
     <dependencies>
         <dependency>
@@ -37,12 +37,8 @@
             <artifactId>hazelcast</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.jcuda</groupId>
-            <artifactId>jcuda</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.jcuda</groupId>
-            <artifactId>jcublas</artifactId>
+            <groupId>org.bytedeco</groupId>
+            <artifactId>cuda-platform</artifactId>
         </dependency>
         <dependency>
             <groupId>io.grpc</groupId>

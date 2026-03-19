@@ -17,6 +17,7 @@
 package cab.ml.juno.player;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.file.Path;
@@ -24,6 +25,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
+
+import cab.ml.juno.node.CudaAvailability;
+import org.bytedeco.javacpp.Loader;
 
 /**
  * Manages the lifecycle of 3 forked node JVM processes for integration testing.
@@ -132,10 +136,32 @@ public final class ClusterHarness implements AutoCloseable {
 				modelPath);
 	}
 
+	/** JavaCPP cache dir (where jnicudart etc. are extracted); null if not available. */
+	private static String javacppCacheDir;
+
 	/**
 	 * Fork all three node JVMs and wait until each reports READY.
 	 */
 	public void start() throws IOException, InterruptedException {
+		// Flat cache so java.library.path to cache root finds jnicudart.dll (Loader otherwise uses subdirs per jar).
+		if (System.getProperty("org.bytedeco.javacpp.cachedir.nosubdir") == null) {
+			System.setProperty("org.bytedeco.javacpp.cachedir.nosubdir", "true");
+		}
+		// Trigger CUDA/JavaCPP native load in this JVM so cache is populated; forked nodes need it on java.library.path.
+		try {
+			CudaAvailability.isAvailable();
+			File cache = Loader.getCacheDir();
+			if (cache != null) {
+				javacppCacheDir = cache.getAbsolutePath();
+				if (!cache.exists()) {
+					cache.mkdirs();
+				}
+				log.fine("JavaCPP cache dir: " + javacppCacheDir);
+			}
+		} catch (Throwable t) {
+			log.fine("JavaCPP cache not available: " + t.getMessage());
+		}
+
 		for (NodeSpec spec : specs) {
 			Process proc = launchNode(spec.nodeId(), spec.port());
 			processes.add(proc);
@@ -207,6 +233,18 @@ public final class ClusterHarness implements AutoCloseable {
 		java.util.List<String> cmd = new java.util.ArrayList<>(java.util.List.of(javaExe, "--enable-preview",
 				"--enable-native-access=ALL-UNNAMED", "-Xms512m", "-Xmx4g", "-XX:+UseZGC"));
 
+		// So forked nodes can load jnicudart (JavaCPP extracts to cache); flat cache = no subdirs.
+		cmd.add("-Dorg.bytedeco.javacpp.cachedir.nosubdir=true");
+		if (javacppCacheDir != null && !javacppCacheDir.isEmpty()) {
+			String existingPath = System.getProperty("java.library.path", "");
+			String newPath = existingPath.isEmpty() ? javacppCacheDir : (existingPath + File.pathSeparator + javacppCacheDir);
+			cmd.add("-Djava.library.path=" + newPath);
+		}
+
+		String useGpu = System.getProperty("JUNO_USE_GPU", "true");
+		cmd.add("-DJUNO_USE_GPU=" + useGpu);
+		cmd.add("-DJUNO_VERBOSE=" + (verbose ? "true" : "false"));
+
 		if (!verbose) {
 			// Write a temp JUL config that silences all logging in this node JVM.
 			java.io.File q = java.io.File.createTempFile("juno-quiet-", ".properties");
@@ -223,6 +261,37 @@ public final class ClusterHarness implements AutoCloseable {
 			cmd.add(modelPath);
 
 		ProcessBuilder pb = new ProcessBuilder(cmd);
+		// So jnicudart.dll can load cudart64_*.dll etc.: put CUDA bin and JavaCPP cache on PATH for the child.
+		if ("true".equalsIgnoreCase(useGpu)) {
+			java.util.Map<String, String> env = pb.environment();
+			String pathKey = getPathKey(env);
+			String path = pathKey != null ? env.get(pathKey) : null;
+			if (path == null) path = System.getenv("PATH");
+			if (path == null) path = System.getenv("Path");
+			StringBuilder prefix = new StringBuilder();
+			String cudaPath = System.getenv("CUDA_PATH");
+			if (cudaPath == null) cudaPath = System.getenv("CUDA_HOME");
+			if (cudaPath == null) cudaPath = findCudaPathFromPath(path);
+			if (cudaPath == null) cudaPath = findCudaPathFromPath(System.getenv("PATH"));
+			if (cudaPath == null) cudaPath = findCudaPathFromPath(System.getenv("Path"));
+			if (cudaPath == null) cudaPath = findCudaPathFromCommonLocations();
+			if (cudaPath != null) {
+				File bin = new File(cudaPath, "bin");
+				if (bin.isDirectory()) {
+					File x64 = new File(bin, "x64");
+					if (x64.isDirectory()) prefix.append(x64.getAbsolutePath()).append(File.pathSeparator);
+					prefix.append(bin.getAbsolutePath()).append(File.pathSeparator);
+				}
+			}
+			if (javacppCacheDir != null && !javacppCacheDir.isEmpty()) {
+				prefix.append(javacppCacheDir).append(File.pathSeparator);
+			}
+			if (prefix.length() > 0) {
+				String newPath = prefix + (path != null ? path : "");
+				if (pathKey != null) env.put(pathKey, newPath);
+				else env.put("PATH", newPath);
+			}
+		}
 		pb.redirectErrorStream(false);
 		if (verbose) {
 			pb.redirectError(ProcessBuilder.Redirect.INHERIT);
@@ -269,6 +338,78 @@ public final class ClusterHarness implements AutoCloseable {
 		String stderr = drainStderr(proc);
 		throw new IOException("Node [" + expectedNodeId + "] stdout closed without READY signal"
 				+ (stderr.isBlank() ? "" : "\nNode stderr:\n" + stderr));
+	}
+
+	/**
+	 * Fallback: check common Windows CUDA install roots for a versioned dir with bin/.
+	 */
+	private static String findCudaPathFromCommonLocations() {
+		String root = "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA";
+		File cudaRoot = new File(root);
+		if (!cudaRoot.isDirectory()) return null;
+		File[] versions = cudaRoot.listFiles(File::isDirectory);
+		if (versions == null) return null;
+		// Prefer higher version (e.g. v13.2 over v12.0); simple string sort puts v13 after v12.
+		java.util.Arrays.sort(versions, (a, b) -> b.getName().compareTo(a.getName()));
+		for (File v : versions) {
+			if (v.getName().toLowerCase().startsWith("v")) {
+				File bin = new File(v, "bin");
+				if (bin.isDirectory()) return v.getAbsolutePath();
+			}
+		}
+		return null;
+	}
+
+	/** On Windows the env map may use "Path" instead of "PATH". Return the key that exists. */
+	private static String getPathKey(java.util.Map<String, String> env) {
+		if (env.containsKey("PATH")) return "PATH";
+		if (env.containsKey("Path")) return "Path";
+		for (String key : env.keySet()) {
+			if ("path".equalsIgnoreCase(key)) return key;
+		}
+		return null;
+	}
+
+	/**
+	 * If CUDA_PATH/CUDA_HOME are not set, try to find a CUDA install from PATH
+	 * (e.g. "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2\bin" -> return parent of bin).
+	 */
+	private static String findCudaPathFromPath(String pathEnv) {
+		if (pathEnv == null) return null;
+		String sep = File.pathSeparator;
+		int i = 0;
+		while (i < pathEnv.length()) {
+			int j = pathEnv.indexOf(sep, i);
+			if (j < 0) j = pathEnv.length();
+			String segment = pathEnv.substring(i, j).trim();
+			i = j + 1;
+			if (segment.isEmpty()) continue;
+			File dir = new File(segment);
+			if (!dir.isDirectory()) continue;
+			String name = dir.getName().toLowerCase();
+			// PATH often has .../CUDA/vX.Y/bin — we want .../CUDA/vX.Y
+			if (name.equals("bin")) {
+				File parent = dir.getParentFile();
+				if (parent != null && parent.getName().toLowerCase().startsWith("v")
+						&& parent.getParent() != null
+						&& parent.getParentFile().getName().equalsIgnoreCase("cuda")) {
+					return parent.getAbsolutePath();
+				}
+			}
+			// Or path is .../CUDA/vX.Y/bin/x64 — want .../CUDA/vX.Y
+			if (name.equals("x64")) {
+				File bin = dir.getParentFile();
+				if (bin != null && bin.getName().equalsIgnoreCase("bin")) {
+					File parent = bin.getParentFile();
+					if (parent != null && parent.getName().toLowerCase().startsWith("v")
+							&& parent.getParentFile() != null
+							&& parent.getParentFile().getName().equalsIgnoreCase("cuda")) {
+						return parent.getAbsolutePath();
+					}
+				}
+			}
+		}
+		return null;
 	}
 
 	/** Drain stderr from a (possibly dead) process into a string. */

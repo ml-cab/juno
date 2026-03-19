@@ -31,9 +31,9 @@ import cab.ml.juno.node.ShardContext;
  * GpuForwardPassHandler, and asserts numerical equivalence within float32
  * rounding tolerance.
  *
- * Prerequisites on the AWS node: 1. CUDA 12.x installed (nvidia-smi shows the
- * GPU) 2. A GGUF model available at $MODEL_PATH or passed via -Dmodel.path=...
- * 3. mvn test -Dgroups=gpu -Dit.model.path=/path/to/model.gguf -pl integration
+ * Prerequisites: 1. NVIDIA driver + CUDA (nvidia-smi shows the GPU) 2. GGUF
+ * model at $MODEL_PATH or -Dit.model.path=... 3. mvn verify -Pgpu
+ * -Dit.model.path=/path/to/model.gguf -pl integration --enable-native-access=ALL-UNNAMED
  *
  * Recommended AWS instance: g4dn.xlarge (T4, 16 GB VRAM), ~$0.50/hr on-demand.
  * Expected result for TinyLlama-1.1B Q4_K_M: - GPU output matches CPU output
@@ -51,8 +51,8 @@ class GpuForwardPassIT {
 
 	@BeforeAll
 	static void setup() {
-		// Guard first — before any JCuda class is touched.
-		// Without -Djuno.gpu.test=true, JCuda native libs are never loaded into
+		// Guard first — before any CUDA (bytedeco) class is touched.
+		// Without -Djuno.gpu.test=true, CUDA native libs are never loaded into
 		// the coordinator JVM, so no CUDA device FDs are inherited by the node
 		// JVMs forked by ClusterHarness (which would crash them on startup).
 		assumeTrue(Boolean.getBoolean("juno.gpu.test"),

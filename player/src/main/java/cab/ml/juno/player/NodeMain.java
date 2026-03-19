@@ -47,8 +47,9 @@ public final class NodeMain {
 		String nodeId = args[0];
 		int port = Integer.parseInt(args[1]);
 		String modelPath = args.length >= 3 ? args[2] : null;
+		boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "true"));
 
-		EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath);
+		EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu);
 		server.start();
 
 		// Signal readiness to the parent process (ClusterHarness polls for this line)

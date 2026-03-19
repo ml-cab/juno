@@ -11,7 +11,7 @@ import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * CublasMatVec tests — requires CUDA 12.x and an Nvidia GPU.
+ * CublasMatVec tests — requires CUDA and an Nvidia GPU (org.bytedeco cuda).
  *
  * Inherits the full GpuMatVecContractTest suite. Every contract test that
  * passes on CpuMatVec must also pass on CublasMatVec — numerically identical
@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  *   mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
  */
 @Tag("gpu")
-@DisplayName("CublasMatVec — JCublas cublasSgemv correctness (requires CUDA)")
+@DisplayName("CublasMatVec — cuBLAS cublasSgemv correctness (requires CUDA)")
 class CublasMatVecTest extends GpuMatVecContractTest {
 
     private static GpuContext ctx;

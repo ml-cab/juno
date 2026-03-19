@@ -34,6 +34,11 @@ import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.ActivationDtype;
 import cab.ml.juno.node.CpuForwardPassHandler;
+import cab.ml.juno.node.CudaAvailability;
+import cab.ml.juno.node.CublasMatVec;
+import cab.ml.juno.node.ForwardPassHandler;
+import cab.ml.juno.node.GpuContext;
+import cab.ml.juno.node.GpuForwardPassHandler;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
@@ -94,6 +99,8 @@ public final class ConsoleMain {
 	private static float topP = 0.95f;
 	private static boolean localMode = false;
 	private static int nodeCount = 3;
+	/** When true use GPU (default); when false use CPU. */
+	private static boolean useGpu = true;
 	private static boolean verbose = false;
 	private static boolean help = false;
 
@@ -115,8 +122,9 @@ public final class ConsoleMain {
 			System.exit(1);
 		}
 
-		// Set system properties for legacy code (ClusterHarness reads these)
+		// Set system properties for legacy code (ClusterHarness / node JVMs read these)
 		System.setProperty("MODEL_PATH", modelPath);
+		System.setProperty("JUNO_USE_GPU", String.valueOf(useGpu));
 		System.setProperty("DTYPE", dtype.name());
 		System.setProperty("MAX_TOKENS", String.valueOf(maxTokens));
 		System.setProperty("TEMPERATURE", String.valueOf(temperature));
@@ -175,6 +183,12 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					nodeCount = parseInt(args[++i], 3);
 				break;
+			case "--gpu":
+				useGpu = true;
+				break;
+			case "--cpu":
+				useGpu = false;
+				break;
 			case "--verbose":
 			case "-v":
 				verbose = true;
@@ -204,6 +218,8 @@ public final class ConsoleMain {
 		System.out.println("  --temperature F            Sampling temperature (default: 0.6)");
 		System.out.println("  --top-k N                  Top-K sampling cutoff (default: 20, 0 = disabled)");
 		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.95, 0 = disabled)");
+		System.out.println("  --gpu                      Use GPU (default)");
+		System.out.println("  --cpu                      Use CPU");
 		System.out.println("  --local                    Use in‑process nodes (no forking)");
 		System.out.println("  --nodes N                  Number of in‑process nodes (default: 3, only with --local)");
 		System.out.println("  --verbose, -v              Show more logging");
@@ -246,16 +262,33 @@ public final class ConsoleMain {
 		// Compute shard map
 		ShardMap shardMap = ShardPlanner.create().plan("model", config.numLayers(), vramPerLayerBytes, nodes);
 
-		// Load one CpuForwardPassHandler per shard
-		List<CpuForwardPassHandler> handlers = new ArrayList<>();
-		for (var assignment : shardMap.assignments()) {
-			var context = cab.ml.juno.node.ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(),
-					config.numHeads());
-			handlers.add(CpuForwardPassHandler.load(Path.of(modelPath), context));
+		// Load one ForwardPassHandler per shard (GPU or CPU depending on --gpu/--cpu)
+		List<ForwardPassHandler> handlers = new ArrayList<>();
+		GpuContext gpuCtx = null;
+		if (useGpu && CudaAvailability.isAvailable()) {
+			gpuCtx = GpuContext.init(0);
+			final GpuContext gpuCtxRef = gpuCtx;
+			Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
+				if (gpuCtxRef != null) gpuCtxRef.close();
+			}));
+			CublasMatVec matVec = new CublasMatVec(gpuCtx);
+			for (var assignment : shardMap.assignments()) {
+				var context = cab.ml.juno.node.ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(),
+						config.numHeads());
+				handlers.add(GpuForwardPassHandler.load(Path.of(modelPath), context, matVec));
+			}
+		} else {
+			if (useGpu && !CudaAvailability.isAvailable())
+				print(Color.YELLOW + "▶ GPU requested but CUDA not available — using CPU" + Color.RESET);
+			for (var assignment : shardMap.assignments()) {
+				var context = cab.ml.juno.node.ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(),
+						config.numHeads());
+				handlers.add(CpuForwardPassHandler.load(Path.of(modelPath), context));
+			}
 		}
 
 		// Build in‑process pipeline
-		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
+		var pipeline = LocalInferencePipeline.from(shardMap, handlers, config.vocabSize(),
 				config.hiddenDim(), config.numHeads());
 
 		// KV cache (size generous)
@@ -401,10 +434,11 @@ public final class ConsoleMain {
 		System.out.println(Color.BLUE_BOLD + "░█▀█" + Color.YELLOW_BOLD + "░█▀█" + Color.RESET);
 		System.out.println(Color.BLUE + "░█░█" + Color.YELLOW + "░█░█" + Color.RESET);
 		System.out.println(Color.BLUE + "░▀░▀" + Color.YELLOW + "░▀▀▀" + Color.RESET + "\n");
+		String backend = useGpu ? "GPU" : "CPU";
 		System.out.println(
-				String.format("  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
+				String.format("  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · backend=%s · %s nodes=%d%s%n",
 						Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP,
-						localMode ? "local" : "cluster", nodeCount, Color.RESET));
+						backend, localMode ? "local" : "cluster", nodeCount, Color.RESET));
 	}
 
 	private static void print(String msg) {

@@ -27,7 +27,7 @@ import java.util.List;
  *
  * The default forwardBatch() implementation calls forward() N times serially —
  * all existing implementations get batching support for free. The real
- * GpuForwardPassHandler overrides forwardBatch() to use CUDA batched matrix
+ * GpuForwardPassHandler overrides forwardBatch() to use cuBLAS batched matrix
  * ops, turning N serial GPU launches into one, dramatically increasing
  * utilisation.
  */

@@ -46,7 +46,7 @@ bot> Your name is Dima.
     +--------------------------------------+
 ```
 
-Each node runs either `CpuForwardPassHandler` (pure Java, parallel matVec) or `GpuForwardPassHandler` (JCublas cublasSgemv). Both implement `ForwardPassHandler` via the `GpuMatVec` interface. Node selection is automatic: GPU nodes use `CublasMatVec`; CPU-only nodes fall back to `CpuMatVec`.
+Each node runs either `CpuForwardPassHandler` (pure Java, parallel matVec) or `GpuForwardPassHandler` (cuBLAS cublasSgemv via org.bytedeco cuda). Both implement `ForwardPassHandler` via the `GpuMatVec` interface. Node selection is automatic: GPU nodes use `CublasMatVec`; CPU-only nodes fall back to `CpuMatVec`. Works with various NVIDIA GPUs (e.g. GTX 1080, T4).
 
 ---
 
@@ -69,6 +69,8 @@ mvn clean package -DskipTests
 ./run.sh live --model-path /path/to/model.gguf
 ```
 
+**GPU cluster:** The harness extracts JavaCPP CUDA natives into a cache and passes `java.library.path` to forked node JVMs so they can load `jnicudart`. You need `cudart64_12.dll` (and on Linux `libcudart.so`) for the loader to succeed. Options: (1) Install the NVIDIA CUDA Toolkit and set `CUDA_PATH` or `CUDA_HOME`, or run `setenv.bat` / `source setenv.sh` so its `bin` is on `PATH`; (2) On Windows only, use the single-DLL option: run `get-cudart.bat` to open https://www.dllme.com/dll/files/cudart64_12 and save the 64-bit DLL as `%USERPROFILE%\.javacpp\cache\cudart64_12.dll` (no full toolkit download).
+
 ---
 
 ## Modules
@@ -80,7 +82,7 @@ mvn clean package -DskipTests
 | `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, Javalin REST, SSE |
 | `kvcache` | `KVCacheManager`, `GpuKVCache`, `CpuKVCache`, `PrefixCache` |
 | `tokenizer` | `GgufTokenizer` (SentencePiece BPE), `ChatTemplate`, `StubTokenizer` |
-| `node` | `CpuForwardPassHandler`, `GpuForwardPassHandler`, `GpuMatVec`, `CublasMatVec`, `CpuMatVec`, `GpuContext`, `CudaAvailability`, `GgufReader`, `LlamaConfig`, `ActivationCodec` |
+| `node` | `CpuForwardPassHandler`, `GpuForwardPassHandler`, `GpuMatVec`, `CublasMatVec`, `CpuMatVec`, `GpuContext`, `CudaAvailability`, `GgufReader`, `LlamaConfig`, `ActivationCodec` (GPU: org.bytedeco cuda) |
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | Health monitor, circuit breakers (Resilience4j) |
 | `player` | `ConsoleMain` REPL, `ClusterHarness`, `ProcessPipelineClient`, `ChatHistory` |
@@ -118,7 +120,7 @@ mvn verify -pl integration             # integration tests — forks 3 JVM nodes
 ./run.sh live --model-path /path/to/model.gguf   # real-model smoke test
 ```
 
-### GPU tests (requires CUDA 12.x and Nvidia GPU)
+### GPU tests (requires CUDA and Nvidia GPU; uses org.bytedeco cuda-platform)
 
 ```bash
 # Unit tests — node module only, no model file needed
@@ -155,8 +157,8 @@ Session 9 turn latency grows with new tokens per turn only, not with total histo
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
 - Stub mode — cluster boots in seconds without a model file; all integration tests run stub.
 - Two `ActivationDtype` enums by design: protobuf-generated for wire, domain enum for application code.
-- `GpuMatVec` interface decouples the matmul backend from the transformer logic. `CublasMatVec` in production, `CpuMatVec` as CPU fallback and test reference. Swappable without touching `GpuForwardPassHandler`.
-- GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent JCuda native libs loading into the coordinator JVM and poisoning FD inheritance into forked node processes.
+- `GpuMatVec` interface decouples the matmul backend from the transformer logic. `CublasMatVec` in production (org.bytedeco cuda), `CpuMatVec` as CPU fallback and test reference. Swappable without touching `GpuForwardPassHandler`.
+- GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent CUDA native libs (bytedeco) loading into the coordinator JVM and poisoning FD inheritance into forked node processes.
 
 ---
 
@@ -164,7 +166,7 @@ Session 9 turn latency grows with new tokens per turn only, not with total histo
 
 - JDK 25+
 - Maven 3.9+
-- CUDA 12.x (GPU nodes only — not required for CPU mode or any unit/integration tests)
+- CUDA / NVIDIA driver (GPU nodes only — not required for CPU mode or any unit/integration tests); Java bindings via org.bytedeco cuda-platform
 
 ---
 

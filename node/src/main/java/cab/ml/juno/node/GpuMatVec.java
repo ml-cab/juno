@@ -21,7 +21,7 @@ package cab.ml.juno.node;
  * A is stored row-major: A[r, c] = weights[r * cols + c].
  *
  * Implementations:
- *   CublasMatVec   — real JCublas cublasSgemv on an Nvidia GPU (CUDA 12.x)
+ *   CublasMatVec   — real cuBLAS cublasSgemv via org.bytedeco cuda (Nvidia GPU)
  *   CpuMatVec      — thin wrapper around CpuForwardPassHandler.matVec(),
  *                    used as the CPU reference in tests and CPU-only nodes
  *

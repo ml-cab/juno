@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
  *
  * Uses CpuMatVec as the GpuMatVec backend so all tests run on any machine,
  * including CPU-only CI. The numerical correctness of the matVec backend is
- * tested separately in GpuMatVecContractTest and CublasMatVecTest.
+ * tested separately in GpuMatVecContractTest and CublasMatVecTest (cuBLAS).
  *
  * These tests verify: - isReady() returns true once loaded - Intermediate node
  * returns activations of hiddenDim size - Last node returns logits of vocabSize

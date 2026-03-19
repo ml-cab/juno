@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.within;
  *
  * Runs against CpuMatVec so the full suite passes on any machine without a GPU.
  * The same suite is inherited by CublasMatVecTest (see that class) which
- * re-runs all these cases against the real JCublas implementation on AWS.
+ * re-runs all these cases against the real cuBLAS implementation (bytedeco cuda).
  *
  * Rules verified:
  *   - Output shape is always float[rows]

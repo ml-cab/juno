@@ -121,7 +121,7 @@ Key dependency versions:
   hazelcast.version             5.4.0
   grpc.version                  1.63.0
   protobuf.version              3.25.3
-  jcuda.version                 12.0.0
+  bytedeco.cuda.version          12.6-9.5-1.5.11   <- org.bytedeco cuda-platform (cudart + cublas)
   djl.version                   0.27.0
   caffeine.version              3.1.8        <- ONLY cache library (see §6)
   resilience4j.version          2.2.0
@@ -250,7 +250,7 @@ Original three-tier design (GPU + CPU off-heap + Disk) was simplified.
 
 DECISION: Two tiers, RAM only. No disk IO ever.
 
-Tier 1  GPU VRAM      JCuda CudaBuffer      hot, active sequences
+Tier 1  GPU VRAM      CUDA device memory (bytedeco)  hot, active sequences
 Tier 2  JVM heap      Caffeine              warm sequences, evicts via W-TinyLFU
 
 Rationale:
@@ -323,7 +323,7 @@ Example metrics endpoint:
   Embeddings              Node 1 (first in pipeline)
   Output projection       Last Node (last in pipeline)
   Node registration       Push — nodes self-register on startup
-  VRAM reporting          JCuda self-reported, 10% headroom reserved
+  VRAM reporting          cudart self-reported, 10% headroom reserved
 
   8.1a  Fair layer distribution (ShardPlanner)
   -----------------------------------------------
@@ -431,7 +431,7 @@ Example metrics endpoint:
 
 8.4  HEALTH MONITOR
   Node liveness           Hazelcast memberRemoved event (automatic)
-  GPU health probe        JCuda every 5s, published to Hazelcast IMap
+  GPU health probe        CUDA (cudart) every 5s, published to Hazelcast IMap
   Circuit breaker         per node, wraps all forward pass calls
   VRAM warning            90% (configurable) → logged, future: reduce batch size
   VRAM critical           98% (configurable) → circuit open → reshard
@@ -859,7 +859,7 @@ sampling:
 
   Language              Java 25
   Build                 Maven (multi-module)
-  GPU compute           JCuda / JCublas 12.x
+  GPU compute           org.bytedeco cuda (cudart + cublas), works with various NVIDIA GPUs
   Distributed state     Hazelcast 5.x
   Leader election       Hazelcast CP FencedLock
   Data plane            gRPC + Protocol Buffers
@@ -868,7 +868,7 @@ sampling:
   Concurrency           Java 25 Virtual Threads + CompletableFuture
   REST API server       Javalin 6.x (NO Spring Boot)
   REST API spec         OpenAPI 3.0 — jaxrs-spec generator
-  KV Cache L1           JCuda CudaBuffer (GPU VRAM)
+  KV Cache L1           CUDA device memory (GPU VRAM)
   KV Cache L2           Caffeine (JVM heap, W-TinyLFU)
   KV Cache L3           REMOVED (no disk IO)
   Circuit breaker       Resilience4j
@@ -1232,7 +1232,7 @@ Test results after fixes:
                     Prefill: runs all prompt tokens sequentially to fill KV cache
                     Decode: incremental single-token forward pass
                     GPU path: GpuForwardPassHandler will override matVec with
-                              JCublas dgemv — same interface above the math layer
+                              cuBLAS sgemv — same interface above the math layer
     [x] tokenizer   GgufTokenizer — SentencePiece BPE from GGUF metadata
                     No separate tokenizer.model file required
                     Reads tokenizer.ggml.tokens / .scores / .token_type arrays
@@ -1250,7 +1250,7 @@ Test results after fixes:
                     Skipped via Assumptions.assumeTrue when no MODEL_PATH
                     Covers: greeting coherence, no ▁ markers, determinism,
                             multi-turn, float16 parity
-    [ ] node        GpuForwardPassHandler (JCuda/JCublas) — matVec → cublasSgemv
+    [ ] node        GpuForwardPassHandler (bytedeco cuda/cublas) — matVec → cublasSgemv
     [ ] coordinator Hazelcast leader election
     [x] coordinator Strip EOS token </s> from displayed output in GenerationLoop
                     Two-layer defence: (1) token ID check breaks before decodeToken()
@@ -1719,7 +1719,7 @@ vocabSize=32000, 22 layers):
   output projection           32000 × 2048  last node only
 
 Note on GpuForwardPassHandler (pending): the GPU path will override matVec()
-with a JCublas cublasSgemv() call. The parallel CPU path above is the CPU
+with a cuBLAS cublasSgemv() call (org.bytedeco cuda). The parallel CPU path above is the CPU
 equivalent — it serves as a reference for correctness testing and as a working
 fallback for CPU-only deployments.
 
@@ -2031,7 +2031,7 @@ Implementations:
                    Used as CPU fallback and as the reference implementation
                    in all tests that do not require a GPU.
 
-  CublasMatVec   — cublasSgemv_v2 via JCublas2.
+  CublasMatVec   — cublasSgemv_v2 via org.bytedeco cuda (cublas).
                    Row-major to cuBLAS column-major mapping via CUBLAS_OP_T —
                    no data reordering, just a flag. See §19.3 for details.
                    One instance per GpuContext (one per node JVM).
@@ -2069,8 +2069,7 @@ One GpuContext per node JVM. AutoCloseable.
 
   GpuContext.init(deviceIndex)
     - CudaAvailability.isAvailable() guard (throws IllegalStateException if absent)
-    - JCuda.setExceptionsEnabled(true)
-    - JCublas2.setExceptionsEnabled(true)
+    - cudart/cublas return codes checked (no setExceptionsEnabled; bytedeco)
     - cudaSetDevice(deviceIndex)
     - cublasCreate(handle)
     - Logs device name and VRAM
@@ -2084,7 +2083,7 @@ can run concurrently without additional synchronisation.
 
 19.5  CudaAvailability — safe detection
 -----------------------------------------------
-Wraps JCuda.cudaGetDeviceCount() in try/catch(UnsatisfiedLinkError).
+Wraps cudart.cudaGetDeviceCount() in try/catch (org.bytedeco cuda).
 Result cached at class load time via a static final boolean.
 
   isAvailable()        — true if >= 1 CUDA device present
@@ -2092,12 +2091,12 @@ Result cached at class load time via a static final boolean.
   deviceName(index)    — "unavailable" if unavailable
   vramBytes(index)     — 0 if unavailable
 
-This class is the ONLY place in the codebase that directly touches JCuda
+This class is one of the few that directly touch CUDA runtime (cudart)
 runtime detection. All other code gates on isAvailable() rather than
 catching UnsatisfiedLinkError themselves.
 
 IMPORTANT — FD inheritance hazard:
-  JCuda's native library opens CUDA device file descriptors (/dev/nvidia0,
+  The CUDA native library (bytedeco) opens CUDA device file descriptors (/dev/nvidia0,
   /dev/nvidiactl) when first loaded. Java's ProcessBuilder inherits all open
   FDs into child processes. If CudaAvailability is triggered in the coordinator
   JVM before ClusterHarness forks node JVMs, the node processes inherit
@@ -2105,7 +2104,7 @@ IMPORTANT — FD inheritance hazard:
 
   Mitigation in GpuForwardPassIT:
     @BeforeAll checks Boolean.getBoolean("juno.gpu.test") as its absolute
-    first statement — before any JCuda class is referenced. The system
+    first statement — before any CUDA (bytedeco) class is referenced. The system
     property acts as an explicit opt-in that prevents accidental loading.
 
   Mitigation in integration/pom.xml:
@@ -2143,7 +2142,7 @@ CPU-only fallback (same class, different backend):
 -----------------------------------------------
   GpuMatVec.java              Interface — sgemv contract
   CpuMatVec.java              GpuMatVec backed by CpuForwardPassHandler.matVec()
-  CublasMatVec.java           GpuMatVec backed by cublasSgemv_v2 (JCublas2)
+  CublasMatVec.java           GpuMatVec backed by cublasSgemv_v2 (org.bytedeco cublas)
   GpuContext.java             cuBLAS handle lifecycle, AutoCloseable
   CudaAvailability.java       Safe CUDA runtime detection, cached
   GpuForwardPassHandler.java  ForwardPassHandler using GpuMatVec
@@ -2230,7 +2229,7 @@ GpuForwardPassHandlerTest (node module) — 5 tests, no GPU required:
 GpuForwardPassIT (integration module) — @Tag("gpu"), requires CUDA + model file:
   Excluded from default failsafe run. Activated via -Pgpu.
   Guards with Boolean.getBoolean("juno.gpu.test") in @BeforeAll to prevent
-  JCuda native lib loading in coordinator JVM (FD inheritance hazard, §19.5).
+  CUDA native lib loading in coordinator JVM (FD inheritance hazard, §19.5).
 
   first_node_gpu_matches_cpu            activations within 1e-3
   last_node_gpu_logits_match_cpu        logits within 1e-3

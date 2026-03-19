@@ -27,8 +27,8 @@ import java.util.logging.Logger;
  *
  * This is the production-path implementation that replaces
  * CyclicForwardPassHandler once a real GGUF model file is available.
- * GpuForwardPassHandler will use the same interface but accelerate the matmuls
- * with JCuda/JCublas — the logic above the math primitives is identical.
+ * GpuForwardPassHandler uses the same interface but accelerates the matmuls
+ * with cuBLAS (org.bytedeco cuda) — the logic above the math primitives is identical.
  *
  * Each node in the cluster owns a contiguous shard of transformer layers.
  * ShardContext tells this handler: hasEmbeddings → run token embedding lookup
@@ -50,7 +50,7 @@ import java.util.logging.Logger;
  * Softmax (inplace, over a slice)
  *
  * All primitives are pure Java — no JNI, no GPU, no external dependencies. A
- * future GpuForwardPassHandler will override matVec with a JCublas dgemv call.
+ * GpuForwardPassHandler delegates matVec to CublasMatVec (cublasSgemv).
  */
 public final class CpuForwardPassHandler implements ForwardPassHandler {
 

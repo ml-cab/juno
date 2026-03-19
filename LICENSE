@@ -5,7 +5,7 @@ Distributed Java-native LLM Inference Engine for commodity GPU clusters.
 
 This product includes software developed by:
 - Dmytro Soloviov (soulaway) - Project lead and core architecture
-- Yevhen Soldatov (yevhensoldatov) - Core Maintainer
+- Yevhen Soldatov (yevhensoldatov) - Core maintainer
 - ml-cab collective - Contributions from community members
 
 =========================================================================
@@ -29,7 +29,7 @@ This software includes third-party libraries, each under its own license:
 - Javalin (Apache 2.0) - lightweight REST API framework
 - gRPC Java (Apache 2.0) - high-performance RPC framework
 - Protocol Buffers (Apache 2.0) - data serialization format
-- JCuda/JCublas (MIT/BSD-derived) - GPU computation bindings
+- JavaCPP Presets / Bytedeco CUDA (Apache 2.0) - GPU computation bindings (cudart, cublas)
 - Caffeine (Apache 2.0) - high-performance caching library
 - Resilience4j (Apache 2.0) - fault tolerance library
 - Micrometer (Apache 2.0) - metrics collection

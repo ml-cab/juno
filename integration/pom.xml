@@ -103,7 +103,7 @@
 					<forkCount>1</forkCount>
 					<reuseForks>false</reuseForks>
 					<!-- Exclude GPU tests from the default run.
-					     GpuForwardPassIT loads JCuda native libs into the coordinator
+					     GpuForwardPassIT loads CUDA native libs (bytedeco) into the coordinator
 					     JVM. Those CUDA device FDs are inherited by the node JVMs
 					     forked by ClusterHarness, crashing them before READY is printed.
 					     Enable GPU tests with: mvn verify -Pgpu -Dit.model.path=... -->
@@ -194,7 +194,7 @@
 							<systemPropertyVariables>
 								<it.model.path>${it.model.path}</it.model.path>
 								<it.timeout.ms>120000</it.timeout.ms>
-								<!-- Unlocks JCuda loading in GpuForwardPassIT -->
+								<!-- Unlocks CUDA native loading in GpuForwardPassIT -->
 								<juno.gpu.test>true</juno.gpu.test>
 							</systemPropertyVariables>
 						</configuration>
