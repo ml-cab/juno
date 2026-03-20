@@ -99,6 +99,7 @@ public final class ConsoleMain {
 	private static boolean help = false;
 
 	public static void main(String[] args) throws Exception {
+		AnsiSupport.enable();
 		parseArgs(args);
 		if (help) {
 			printHelp();
