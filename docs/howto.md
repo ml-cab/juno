@@ -1,317 +1,325 @@
-## Juno, the complete reference, organized by purpose.
+## Juno — complete how-to reference
 
 ```
-/juno
+./juno
 ```
 
-Unified launcher. Detects the OS and delegates to `scripts/run.sh` (Linux / macOS / Git Bash / WSL) or `scripts/run.bat` (Windows). Requires a JDK and pre-built jars from `target/`.
+Unified launcher at the project root. Detects the OS and delegates to
+`scripts/run.sh` (Linux / macOS / Git Bash / WSL) or `scripts/run.bat` (Windows).
+Requires a JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
+
+---
+
+### Commands
 
 | Command | Description |
 |---------|-------------|
-| `local` | In-process REPL, single JVM, no forking |
-| *(default)* | 3-node cluster, forked JVMs, real gRPC — no keyword needed |
-| `test` | 6 automated real-model checks, exits 0/1 |
+| `local` | In-process REPL — all transformer shards in one JVM, no forking, no gRPC |
+| *(no command)* | 3-node cluster — forked JVMs, real gRPC, pipeline-parallel |
+| `test` | 6 automated real-model smoke checks, exits 0 (all pass) or 1 (any fail) |
 
-**Flags (local and default cluster):**
+### Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--model-path PATH` | — | Path to GGUF file (required) |
-| `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | Activation wire format |
-| `--max-tokens N` | `200` | Max tokens per response |
-| `--temperature F` | `0.6` | Sampling temperature |
-| `--heap SIZE` | `4g` | JVM heap, e.g. `8g` for 7B models |
-| `--verbose` | — | Show gRPC and node logs |
+| `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | Activation wire format between nodes |
+| `--max-tokens N` | `200` | Maximum tokens per response |
+| `--temperature F` | `0.6` | Sampling temperature (0.0 = deterministic) |
+| `--top-k N` | `20` | Top-K sampling cutoff (0 = disabled) |
+| `--top-p F` | `0.95` | Nucleus (top-p) sampling cutoff (0 = disabled) |
+| `--heap SIZE` | `4g` | JVM heap per node, e.g. `4g` for Phi-3, `8g` for 7B models |
+| `--nodes N` | `3` | Number of pipeline nodes (`local` only) |
+| `--verbose` / `-v` | — | Show node startup, gRPC, and shard loading logs |
 
-**Environment overrides:** `MODEL_PATH`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `HEAP`, `NODES`, `JAVA_HOME`.
+**Environment overrides:** `MODEL_PATH`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`
 
 ---
 
-No-argument usage summary
+### Download a model
 
-```
-./run.sh        # prints all commands, detected OS, and jar paths
-```
+```bash
+# TinyLlama 1.1B — smallest, fastest, 637 MB, needs ~2g heap
+wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
 
-Download a model:
+# Phi-3.5 Mini Instruct — 3.8B, good quality, 2.4 GB, needs 4g heap
+wget https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf
 
-```
+# Mistral 7B — 4.1 GB, needs 8g heap
+wget https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf
 
-wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf -O models/tinyllama.gguf
-
+# TinyLlama as llamafile (self-contained executable, ZIP polyglot)
 wget https://huggingface.co/jartine/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile
-
 ```
 
-cluster — 3-node distributed cluster + REPL (forked JVM nodes)
-For GPU deployments and pipeline-parallel scenarios. Each node is a separate JVM process.
+---
 
-```
+### `local` — in-process REPL (fastest startup, everyday use)
+
+All transformer shards run inside one JVM. No network, no forked processes.
+`ForwardPassHandlerLoader` auto-detects model architecture from the GGUF file —
+`phi3` routes to `Phi3TransformerHandler`, everything else to `LlamaTransformerHandler`.
+
+```bash
 # Minimal
-./run.sh cluster --model-path /path/to/model.gguf
+./juno local --model-path /path/to/model.gguf
 
 # Via env var
-MODEL_PATH=/path/to/model.gguf ./run.sh cluster
+MODEL_PATH=/path/to/model.gguf ./juno local
 
-# Activation dtype
-./run.sh cluster --model-path /path/to/model.gguf --float16      # default
-./run.sh cluster --model-path /path/to/model.gguf --float32      # lossless debug
-./run.sh cluster --model-path /path/to/model.gguf --int8         # max compression
-./run.sh cluster --model-path /path/to/model.gguf --dtype FLOAT16
+# Phi-3.5 Mini (needs at least 4g)
+./juno local --model-path /path/to/phi-3.5-mini-instruct-Q4_K_M.gguf --heap 4g
+
+# TinyLlama (comfortable at 2g)
+./juno local --model-path /path/to/TinyLlama.Q4_K_M.gguf --heap 2g
 
 # Generation params
-./run.sh cluster --model-path /path/to/model.gguf --max-tokens 512
-./run.sh cluster --model-path /path/to/model.gguf --temperature 0.3
+./juno local --model-path /path/to/model.gguf --max-tokens 512 --temperature 0.3
+./juno local --model-path /path/to/model.gguf --top-k 40              # wider sampling
+./juno local --model-path /path/to/model.gguf --top-k 1               # near-greedy
+./juno local --model-path /path/to/model.gguf --top-p 0.8             # tighter nucleus
+./juno local --model-path /path/to/model.gguf --top-k 0 --top-p 0     # disable both filters
 
-# Bigger heap (needed for 7B+ models)
-./run.sh cluster --model-path /path/to/model.gguf --heap 8g
+# More / fewer in-process shards (default 3)
+./juno local --model-path /path/to/model.gguf --nodes 1   # single shard
+./juno local --model-path /path/to/model.gguf --nodes 6   # more shards
 
-# Show gRPC and node logs
-./run.sh cluster --model-path /path/to/model.gguf --verbose
-./run.sh cluster --model-path /path/to/model.gguf -v
+# Activation dtype (local mode uses this for intermediate shard communication)
+./juno local --model-path /path/to/model.gguf --dtype FLOAT32   # lossless debug
+./juno local --model-path /path/to/model.gguf --dtype INT8      # max compression
+
+# Verbose — shows shard loading, architecture detection, token timing
+./juno local --model-path /path/to/model.gguf --verbose
 
 # Everything combined
-./run.sh cluster --model-path /path/to/model.gguf --dtype FLOAT16 --max-tokens 512 --temperature 0.5 --heap 8g -v
+./juno local --model-path /path/to/model.gguf --dtype FLOAT16 --max-tokens 512 \
+  --temperature 0.5 --top-k 40 --top-p 0.9 --nodes 3 --heap 4g -v
 
 # All via env vars
-MODEL_PATH=/path/to/model.gguf DTYPE=FLOAT16 MAX_TOKENS=512 TEMPERATURE=0.5 HEAP=8g ./run.sh cluster
-
-# Custom Java installation
-JAVA_HOME=/opt/jdk-25 ./run.sh cluster --model-path /path/to/model.gguf
-
-./run.sh cluster --help
+MODEL_PATH=/path/to/model.gguf DTYPE=FLOAT16 MAX_TOKENS=200 NODES=3 HEAP=4g \
+  TOP_K=40 TOP_P=0.9 ./juno local
 ```
 
-console — single-JVM in-process REPL (fastest startup, everyday use)
-All transformer shards run inside one JVM. No forking, no gRPC sockets.
+---
 
-```
+### *(no command)* — 3-node cluster (forked JVMs, real gRPC)
+
+Forks 3 separate JVM node processes. Each node loads its own shard of the model.
+`ForwardPassHandlerLoader` runs inside each node JVM. Use this for GPU deployments
+and to test pipeline-parallel behaviour.
+
+```bash
 # Minimal
-./run.sh console --model-path /path/to/model.gguf
+./juno --model-path /path/to/model.gguf
 
 # Via env var
-MODEL_PATH=/path/to/model.gguf ./run.sh console
+MODEL_PATH=/path/to/model.gguf ./juno
 
-# Dtype, generation, heap — same flags as cluster
-./run.sh console --model-path /path/to/model.gguf --float32
-./run.sh console --model-path /path/to/model.gguf --max-tokens 512 --temperature 0.1
-./run.sh console --model-path /path/to/model.gguf --heap 8g
+# Phi-3.5 Mini (2.4 GB model, 3 nodes each load ~800 MB of weights)
+./juno --model-path /path/to/phi-3.5-mini-instruct-Q4_K_M.gguf --heap 4g
 
-# Control how many in-process shards (default 3)
-./run.sh console --model-path /path/to/model.gguf --nodes 1   # single shard
-./run.sh console --model-path /path/to/model.gguf --nodes 6   # more shards
+# 7B model
+./juno --model-path /path/to/mistral-7b.gguf --heap 8g
 
-# Verbose
-./run.sh console --model-path /path/to/model.gguf -v
+# Activation dtype between nodes
+./juno --model-path /path/to/model.gguf --float16      # default
+./juno --model-path /path/to/model.gguf --float32      # lossless debug
+./juno --model-path /path/to/model.gguf --int8         # max compression
+./juno --model-path /path/to/model.gguf --dtype FLOAT16
+
+# Generation params
+./juno --model-path /path/to/model.gguf --max-tokens 512
+./juno --model-path /path/to/model.gguf --temperature 0.3
+./juno --model-path /path/to/model.gguf --top-k 40
+./juno --model-path /path/to/model.gguf --top-p 0.8
+./juno --model-path /path/to/model.gguf --top-k 0 --top-p 0    # disable both filters
+
+# Verbose — shows gRPC, shard assignments, node startup
+./juno --model-path /path/to/model.gguf --verbose
+./juno --model-path /path/to/model.gguf -v
 
 # Everything combined
-./run.sh console --model-path /path/to/model.gguf --dtype FLOAT16 --max-tokens 512 --temperature 0.3 --nodes 3 --heap 8g -v
+./juno --model-path /path/to/model.gguf --dtype FLOAT16 --max-tokens 512 \
+  --temperature 0.5 --top-k 40 --top-p 0.9 --heap 4g -v
 
 # All via env vars
-MODEL_PATH=/path/to/model.gguf DTYPE=FLOAT32 MAX_TOKENS=200 NODES=3 HEAP=4g ./run.sh console
+MODEL_PATH=/path/to/model.gguf DTYPE=FLOAT16 MAX_TOKENS=512 TEMPERATURE=0.5 \
+  TOP_K=40 TOP_P=0.9 HEAP=4g ./juno
 
-./run.sh console --help
+# Custom JDK
+JAVA_HOME=/opt/jdk-25 ./juno --model-path /path/to/model.gguf
 ```
 
-live — ModelLiveRunner (6 automated smoke checks, exits 0/1)
+---
 
-```
+### `test` — real-model smoke test (6 checks, exits 0/1)
+
+Runs `ModelLiveRunner`: 6 automated checks with coloured pass/fail output.
+Use after any change to `node`, `tokenizer`, or `coordinator` before committing.
+
+```bash
 # Model as flag
-./run.sh live --model-path /path/to/model.gguf
+./juno test --model-path /path/to/model.gguf
 
 # Model as env var
-MODEL_PATH=/path/to/model.gguf ./run.sh live
+MODEL_PATH=/path/to/model.gguf ./juno test
 
-# Model as positional arg
-./run.sh live /path/to/model.gguf
+# Bigger heap for larger models
+./juno test --model-path /path/to/phi-3.5-mini.gguf --heap 4g
 
-# Bigger heap
-./run.sh live --model-path /path/to/model.gguf --heap 8g
-./run.sh live /path/to/model.gguf --heap 8g
-MODEL_PATH=/path/to/model.gguf HEAP=8g ./run.sh live
-
-./run.sh live --help
+# Verbose — shows prefill timing and token IDs per step
+./juno test --model-path /path/to/model.gguf --verbose
 ```
 
+Checks run (in order):
+1. `hello_greeting` — response contains a greeting word
+2. `no_raw_sentencepiece_markers` — no `▁` (U+2581) in output
+3. `question_response` — non-empty response to "What is 2 plus 2?"
+4. `greedy_determinism` — identical output on two runs with `SamplingParams.deterministic()`
+5. `multi_turn_conversation` — 3-turn conversation, prompt grows correctly
+6. `float16_parity` — FLOAT16 activation pipeline runs end-to-end without error
 
-Interactive cluster hyper.sh (ConsoleMain REPL)
+---
 
-```
-# Minimal — stub mode, no model, cluster plumbing only
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster
+### Supported models and heap requirements
 
-# FLOAT16 is the default activation dtype — this is identical to the above
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --float16
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --fp16
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --dtype FLOAT16
+| Model | Size GB | `--heap` |
+|-------|------|----------|
 
-# FLOAT32 — lossless, for debugging / reference runs
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --float32
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --dtype FLOAT32
+| TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf | 0.667 | 2g |
+| TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile | 1 | 2g |
+| Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile | 1.6 | 2g |
+| phi-3.5-mini-instruct.Q4_K_M.gguf | 2.4 | 4g |
 
-# INT8 — maximum compression, ~1% error
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --int8
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --dtype INT8
 
-# Override generation params
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --max-tokens 512
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --temperature 0.3
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --max-tokens 512 --temperature 0.3
+**Chat template** is derived automatically from the model path:
+`phi-3*` → phi3, `tinyllama*` / `zephyr*` → tinyllama, `llama-3*` / `llama3*` → llama3,
+`mistral*` → mistral, `gemma*` → gemma, everything else → chatml.
 
-# Override heap (needed for 7B+ models)
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --heap 8g
+**Architecture routing** (`ForwardPassHandlerLoader`):
+`phi3` → `Phi3TransformerHandler`, all others → `LlamaTransformerHandler`.
 
-# Skip recompile when source hasn't changed (~10s saved)
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster -B
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --skip-build
+---
 
-# Show gRPC and Maven logs (verbose)
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --verbose
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster -v
+### `hyper.sh` — developer build+test tool
 
-# Combine everything
-MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster --dtype FLOAT16 --max-tokens 512 --temperature 0.5 --heap 8g -B -v
+`hyper.sh` is the Maven-based dev runner. Unlike `juno` (which uses pre-built jars),
+`hyper.sh` compiles source before running.
 
-# Same flags via environment variables
-DTYPE=FLOAT16 MAX_TOKENS=512 TEMPERATURE=0.5 HEAP=8g MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster
-
-# Show flag reference
-./hyper.sh cluster --help
-```
-
-Real-model smoke test (ModelLiveRunner — 6 checks, exit 0/1)
-
-```
-# Model path as env var
-MODEL_PATH=/path/to/model.gguf ./hyper.sh live
-
-# Model path as positional arg
-./hyper.sh live /path/to/model.gguf
-
-# Override heap
-MODEL_PATH=/path/to/model.gguf ./hyper.sh live --heap 8g
-
-# Skip recompile
-MODEL_PATH=/path/to/model.gguf ./hyper.sh live -B
-MODEL_PATH=/path/to/model.gguf ./hyper.sh live --skip-build
-
-# Combine
-./hyper.sh live /path/to/model.gguf --heap 8g -B
-
-# Show flag reference
-./hyper.sh live --help
-```
-
-Unit tests
-
-```
-# All modules, all unit tests, no integration tests (~10s)
+```bash
+# Unit tests — all modules (~10–15s)
 ./hyper.sh test
 
 # One module at a time
-./hyper.sh test-module api
-./hyper.sh test-module registry
-./hyper.sh test-module coordinator
 ./hyper.sh test-module node
-./hyper.sh test-module kvcache
 ./hyper.sh test-module tokenizer
+./hyper.sh test-module coordinator
+./hyper.sh test-module player
+./hyper.sh test-module kvcache
 ./hyper.sh test-module sampler
 ./hyper.sh test-module health
-./hyper.sh test-module player
+./hyper.sh test-module registry
 
-# Fault tolerance tests only (FaultTolerantPipelineTest, HealthReactorTest, RetryPolicyTest)
+# Fault-tolerance tests only
 ./hyper.sh test-fault
-```
 
-Integration tests (JUnit, no model needed)
-
-```
-# Full suite — forks 3 real JVM node processes (~30s)
-# Runs InProcessClusterIT + ThreeNodeClusterIT
+# Integration tests — forks 3 JVM node processes in stub mode (~30s)
 ./hyper.sh integration
 
-# Fast in-process only — zero network, ~250ms
+# Fast integration — in-process only, zero network (~250ms)
 ./hyper.sh integration-fast
-```
 
-Build / clean / full verify
+# Real-model smoke test (same 6 checks as ./juno test, but recompiles first)
+MODEL_PATH=/path/to/model.gguf ./hyper.sh live
 
-```
-# Compile all modules, no tests
+# Interactive cluster with recompile
+MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster
+
+# Skip recompile (~10s saved when source hasn't changed)
+MODEL_PATH=/path/to/model.gguf ./hyper.sh cluster -B
+MODEL_PATH=/path/to/model.gguf ./hyper.sh live -B
+
+# Build only (no tests)
 ./hyper.sh build
 
-# Remove all target/ directories
+# Clean all target/ directories
 ./hyper.sh clean
 
-# Full: compile + all unit tests + all integration tests
+# Full: compile + unit tests + integration tests
 ./hyper.sh verify
+
+# Reference / demo
+./hyper.sh health-demo      # fault-tolerance wiring walkthrough
+./hyper.sh curl-demo        # example REST API curl commands
+./hyper.sh watch node       # auto-rerun tests on file change (requires fswatch)
 ```
 
-Reference / demo commands
-
-```
-# Print fault-tolerance wiring walkthrough
-./hyper.sh health-demo
-
-# Print example curl commands for the REST API
-./hyper.sh curl-demo
-
-# Auto-rerun tests on file change (requires fswatch)
-./hyper.sh watch                    # defaults to coordinator module
-./hyper.sh watch node
-./hyper.sh watch tokenizer
+**Global env overrides for hyper.sh:**
+```bash
+MVN=/opt/maven/bin/mvn ./hyper.sh test    # custom Maven
+PORT=9090 ./hyper.sh curl-demo            # custom coordinator port
 ```
 
-Global environment overrides (apply to any command)
+---
 
-```
-# Use a non-default Maven installation
-MVN=/opt/maven/bin/mvn ./hyper.sh test
+### Typical dev session flow
 
-# Change the coordinator REST port shown in curl-demo
-PORT=9090 ./hyper.sh curl-demo
-```
-
-Typical dev session flow
-
-```
-# 1. First run — full build and verify everything compiles and all tests pass
+```bash
+# 1. First run — full build, verify everything passes
 ./hyper.sh clean && ./hyper.sh verify
 
-# 2. After changing node or tokenizer — fast unit test loop
+# 2. After changing node/ or tokenizer/ — fast unit loop
 ./hyper.sh test-module node
 ./hyper.sh test-module tokenizer
 
-# 3. Smoke the cluster stack without a model (stub mode, no MODEL_PATH)
-./hyper.sh cluster -B                           # no MODEL_PATH → stubs
+# 3. Smoke the cluster without a model (stub mode)
+./hyper.sh cluster -B                     # no MODEL_PATH → CyclicForwardPassHandler stubs
 
-# 4. Interactive session with real model
+# 4. Interactive session with real model (recompile + run)
 MODEL_PATH=/path/to/TinyLlama.gguf ./hyper.sh cluster -B
 
-# 5. Regression check after changes
+# 5. Interactive session with Phi-3 (larger heap)
+MODEL_PATH=/path/to/phi-3.5-mini.gguf HEAP=4g ./hyper.sh cluster -B
+
+# 6. Regression check
 MODEL_PATH=/path/to/TinyLlama.gguf ./hyper.sh live -B
 
-# 6. Before committing — full suite
+# 7. Before committing — full suite
 ./hyper.sh verify
 ```
+
+Or using pre-built jars (faster startup, no Maven):
+```bash
+# Build once
+mvn clean package -DskipTests
+
+# Then use juno directly for all runs
+./juno local --model-path /path/to/TinyLlama.gguf
+./juno test --model-path /path/to/TinyLlama.gguf
+```
+
 ---
 
-GPU testing
+### GPU testing
 
-Unit tests — node module only, no model file, no GPU needed on CPU machines
+GPU tests are tagged `@Tag("gpu")` and excluded from the default test run.
+A CUDA 12.x device and the JCuda native libs are required.
 
-```
-# Run all tests including GPU-tagged (requires CUDA 12.x + Nvidia GPU)
+```bash
+# GPU unit tests — node module only, no model file needed
 mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
 
-# Skip GPU-tagged tests (default — works on any machine)
+# Skip GPU tests (default — works on any machine)
 mvn test -Dgroups='!gpu' -pl node
 ```
 
-GPU integration test — requires CUDA 12.x, Nvidia GPU, and a GGUF model file
+`CudaMatVecBackendTest` inherits all 17 contract tests from `MatVecBackendContractTest`
+and adds CUDA-specific numerical comparison and timing assertions.
+`GpuContextTest` verifies cuBLAS handle lifecycle (6 tests, all `@Tag("gpu")`).
+`CudaAvailabilityTest` has 4 always-run tests + 4 `@Tag("gpu")` tests.
 
-```
-# Activate the gpu Maven profile, pass model path
+```bash
+# GPU integration test — requires CUDA 12.x, GPU, and a GGUF model file
 mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl integration \
   --enable-native-access=ALL-UNNAMED
 
@@ -320,20 +328,30 @@ MODEL_PATH=/path/to/model.gguf mvn verify -Pgpu -pl integration \
   --enable-native-access=ALL-UNNAMED
 ```
 
-GpuForwardPassIT is excluded from the default failsafe scan to prevent its
-JCuda native library from loading into the coordinator JVM and poisoning FD
-inheritance into the node processes forked by ClusterHarness. The -Pgpu profile
-also sets -Djuno.gpu.test=true, which is the guard checked in GpuForwardPassIT
-@BeforeAll before any JCuda class is touched.
+`GpuForwardPassIT` is excluded from the default failsafe scan. The `-Pgpu` Maven
+profile re-includes it and sets `-Djuno.gpu.test=true` — a guard checked in
+`@BeforeAll` before any JCuda class is loaded. This prevents the JCuda native
+library from loading into the coordinator JVM and poisoning FD inheritance into
+the node processes forked by `ClusterHarness`.
 
-AWS setup for GPU testing (g4dn.xlarge — T4 16 GB VRAM, ~$0.50/hr)
-
+Wiring a GPU node (code reference):
+```java
+GpuContext ctx      = GpuContext.init(0);            // open cuBLAS handle
+MatVecBackend matVec = new CudaMatVecBackend(ctx);   // CUDA backend
+ForwardPassHandler h = LlamaTransformerHandler.load(modelPath, shardCtx, matVec);
+// or for Phi-3:
+ForwardPassHandler h = Phi3TransformerHandler.load(modelPath, shardCtx, matVec);
 ```
-# 1. Install CUDA 12.x
-sudo apt update
-sudo apt install -y nvidia-cuda-toolkit
 
-# 2. Verify GPU is visible
+---
+
+### AWS setup for GPU testing (g4dn.xlarge — T4 16 GB VRAM, ~$0.50/hr)
+
+```bash
+# 1. Install CUDA 12.x
+sudo apt update && sudo apt install -y nvidia-cuda-toolkit
+
+# 2. Verify GPU
 nvidia-smi
 
 # 3. Install JDK 25 and Maven
@@ -344,23 +362,31 @@ git clone https://github.com/ml-cab/juno
 cd juno
 mvn clean package -DskipTests
 
-# 5. Download TinyLlama (637 MB — smallest supported model)
-wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+# 5. Download a model
+wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
 
-# 6. GPU unit tests (no model needed — run first to validate CUDA wiring)
+# 6. GPU unit tests first (validates CUDA wiring, no model needed)
 mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
 
-# 7. GPU integration test (forward pass CPU vs GPU numerical comparison)
-mvn verify -Pgpu -Dit.model.path=$(pwd)/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf \
+# 7. GPU integration test
+mvn verify -Pgpu -Dit.model.path=$(pwd)/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf \
   -pl integration --enable-native-access=ALL-UNNAMED
+
+# 8. Interactive session on GPU
+./juno local --model-path $(pwd)/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
 ```
 
-Port conflict check before running ThreeNodeClusterIT
+---
 
-```
-# Check if a leftover node JVM is squatting on cluster ports
+### Port conflicts
+
+`ThreeNodeClusterIT` and the cluster mode use ports 19092–19094. If a previous
+run crashed without cleanup:
+
+```bash
+# Check
 lsof -i :19092,19093,19094
 
-# Kill it
+# Kill
 kill <pid>
 ```

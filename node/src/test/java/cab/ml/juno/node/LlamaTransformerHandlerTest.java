@@ -6,25 +6,25 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * GpuForwardPassHandler unit tests — no GPU required.
+ * LlamaTransformerHandler unit tests — no GPU required.
  *
- * Uses CpuMatVec as the GpuMatVec backend so all tests run on any machine,
+ * Uses CpuMatVecBackend as the MatVecBackend backend so all tests run on any machine,
  * including CPU-only CI. The numerical correctness of the matVec backend is
- * tested separately in GpuMatVecContractTest and CublasMatVecTest.
+ * tested separately in MatVecBackendContractTest and CudaMatVecBackendTest.
  *
  * These tests verify: - isReady() returns true once loaded - Intermediate node
  * returns activations of hiddenDim size - Last node returns logits of vocabSize
  * - Distinct requestIds get independent KV caches (no cross-request bleed) -
  * computeNanos is populated (> 0)
  */
-@DisplayName("GpuForwardPassHandler — shape contracts (CpuMatVec backend)")
-class GpuForwardPassHandlerTest {
+@DisplayName("LlamaTransformerHandler — shape contracts (CpuMatVecBackend backend)")
+class LlamaTransformerHandlerTest {
 
 	// ── Fixtures ──────────────────────────────────────────────────────────────
 
 	/**
 	 * Minimal stub handler: bypasses GGUF loading by injecting pre-built weight
-	 * arrays directly. Uses CpuMatVec so no GPU is required.
+	 * arrays directly. Uses CpuMatVecBackend so no GPU is required.
 	 *
 	 * TinyLlama dimensions: hiddenDim=2048, intermediateSize=5632, numHeads=32,
 	 * numKvHeads=4, vocabSize=32000, headDim=64
@@ -39,7 +39,7 @@ class GpuForwardPassHandlerTest {
 	@SuppressWarnings("unused")
 	private static final int KVD = KVH * H / NH * NH; // kvDim approximation
 
-	/** Build a minimal GpuForwardPassHandler via reflection-free test double. */
+	/** Build a minimal LlamaTransformerHandler via reflection-free test double. */
 	private ForwardPassHandler stubHandler(boolean hasEmbd, boolean hasOutProj) {
 		// Use CyclicForwardPassHandler as a shape-correct stand-in for tests
 		// that don't require real weight math — it satisfies the ForwardPassHandler
@@ -58,7 +58,7 @@ class GpuForwardPassHandlerTest {
 	// ── Tests ─────────────────────────────────────────────────────────────────
 
 	@Test
-	@DisplayName("isReady() returns true — no GPU warm-up required for CpuMatVec backend")
+	@DisplayName("isReady() returns true — no GPU warm-up required for CpuMatVecBackend backend")
 	void is_ready_true() {
 		assertThat(stubHandler(true, false).isReady()).isTrue();
 	}

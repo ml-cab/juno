@@ -33,7 +33,8 @@ import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.ActivationDtype;
-import cab.ml.juno.node.CpuForwardPassHandler;
+import cab.ml.juno.node.ForwardPassHandler;
+import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
@@ -246,12 +247,13 @@ public final class ConsoleMain {
 		// Compute shard map
 		ShardMap shardMap = ShardPlanner.create().plan("model", config.numLayers(), vramPerLayerBytes, nodes);
 
-		// Load one CpuForwardPassHandler per shard
-		List<CpuForwardPassHandler> handlers = new ArrayList<>();
+		// Load one handler per shard — ForwardPassHandlerLoader selects the
+		// correct implementation based on general.architecture in the GGUF file.
+		List<ForwardPassHandler> handlers = new ArrayList<>();
 		for (var assignment : shardMap.assignments()) {
 			var context = cab.ml.juno.node.ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(),
 					config.numHeads());
-			handlers.add(CpuForwardPassHandler.load(Path.of(modelPath), context));
+			handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context));
 		}
 
 		// Build in‑process pipeline

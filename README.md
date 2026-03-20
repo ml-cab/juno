@@ -8,18 +8,22 @@ Distributed Java-native LLM inference engine. Runs large language models across 
 
 ## Status
 
-All modules build and all tests pass. Verified end-to-end with TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf on a 3-node CPU cluster.
+All modules build and all tests pass. Verified end-to-end with:
+- TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
+- TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile 
+- Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile
+- **phi-3.5-mini-instruct.Q4_K_M.gguf on a 3-node CPU cluster** ← new in session 11
 
-**Session 10** — GPU acceleration layer. JCuda/JCublas integration complete. `GpuForwardPassHandler` replaces all `matVec` calls with `cublasSgemv`. Runs alongside `CpuForwardPassHandler` behind the `GpuMatVec` interface — both produce numerically identical output within float32 rounding. Full test suite runs without a GPU on any machine; GPU tests are opt-in via `-Dgroups=gpu` or `-Pgpu`.
+**Session 11** — Phi-3 family support. `PhiForwardPassHandler` handles fused-QKV and fused-gate+up tensor layouts. Quantized (Q4_K/Q5_K/Q6_K) weights are kept in raw bytes and dequantized block-by-block during matmul — eliminating the OOM kill that occurred when loading a 3.8B model with `--heap 12g`. All quantized matVec paths run fully parallel across all CPU cores.
 
 ```
-you> hey there, my name is Dima, nice to meet you!
-bot> Greetings! Nice to meet you too.
-     [37 tokens · 7342 ms · FLOAT16]   ← CPU baseline
+you> are you alive?
+bot> Yes, I'm here and ready to help! What do you need?
+     [19 tokens · 38420 ms · FLOAT16]   ← phi-3.5-mini, 3-node CPU cluster
 
-you> what is my name?
-bot> Your name is Dima.
-     [11 tokens · 8103 ms · FLOAT16]   ← flat KV cache reuse
+you> hello
+bot> Hey! Nice to meet you too.
+     [6 tokens · 2922 ms · FLOAT16]     ← TinyLlama, 3-node CPU cluster
 ```
 
 ---
@@ -31,7 +35,7 @@ bot> Your name is Dima.
     |
 [Coordinator]
     |-- GgufTokenizer       (BPE from GGUF metadata)
-    |-- ChatTemplateFormatter
+    |-- ChatTemplateFormatter  (exact + substring match; phi3/phi-3 aliases)
     |-- RequestScheduler    (virtual threads, CompletableFuture)
     |-- Sampler             (temperature / top-k / top-p / rep. penalty)
     |-- KVCacheManager      (GPU tier + CPU tier + PrefixCache trie)
@@ -41,32 +45,42 @@ bot> Your name is Dima.
               |
     +--------------------------------------+
     |  Node 1    Node 2    Node 3  ...     |  10/25 GbE
-    |  L 0-7     L 8-14    L 15-21        |
+    |  L 0-10    L 11-21   L 22-31        |
     |  +embed              +output proj   |
     +--------------------------------------+
+              |
+    ForwardPassHandlerLoader  ← reads general.architecture from GGUF
+              |
+      phi3 ──→ PhiForwardPassHandler   (fused QKV + gate/up, quantized weights)
+      llama ─→ CpuForwardPassHandler   (separate tensors, quantized weights)
+      * ────→ GpuForwardPassHandler    (GpuMatVec backend, any arch)
 ```
 
-Each node runs either `CpuForwardPassHandler` (pure Java, parallel matVec) or `GpuForwardPassHandler` (JCublas cublasSgemv). Both implement `ForwardPassHandler` via the `GpuMatVec` interface. Node selection is automatic: GPU nodes use `CublasMatVec`; CPU-only nodes fall back to `CpuMatVec`.
+Each node runs either `CpuForwardPassHandler` / `PhiForwardPassHandler` (pure Java, parallel matVec) or `GpuForwardPassHandler` (JCublas). Handler selection is now two-stage: `ForwardPassHandlerLoader` reads `general.architecture` from the GGUF file and routes to the correct implementation.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Download model (637 MB, CPU-only)
+# Download a model
+# TinyLlama (637 MB, fast on any CPU)
 wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+
+# Phi-3.5 Mini (2.4 GB, needs --heap 4g or more)
+wget https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf
 
 # Build
 mvn clean package -DskipTests
 
-# Interactive REPL — all nodes in one JVM (dev)
-./run.sh console --model-path /path/to/model.gguf
+# Interactive REPL — 3-node cluster (forked JVMs)
+./juno --model-path /path/to/model.gguf --heap 4g
 
-# 3-node cluster — forked JVM nodes, real gRPC (production)
-./run.sh cluster --model-path /path/to/model.gguf
+# Interactive REPL — all nodes in one JVM (fastest startup)
+./juno local --model-path /path/to/model.gguf --heap 4g
 
 # Real-model smoke test — 6 checks, exits 0/1
-./run.sh live --model-path /path/to/model.gguf
+./juno test --model-path /path/to/model.gguf --heap 4g
 ```
 
 ---
@@ -80,7 +94,7 @@ mvn clean package -DskipTests
 | `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, Javalin REST, SSE |
 | `kvcache` | `KVCacheManager`, `GpuKVCache`, `CpuKVCache`, `PrefixCache` |
 | `tokenizer` | `GgufTokenizer` (SentencePiece BPE), `ChatTemplate`, `StubTokenizer` |
-| `node` | `CpuForwardPassHandler`, `GpuForwardPassHandler`, `GpuMatVec`, `CublasMatVec`, `CpuMatVec`, `GpuContext`, `CudaAvailability`, `GgufReader`, `LlamaConfig`, `ActivationCodec` |
+| `node` | `CpuForwardPassHandler`, `PhiForwardPassHandler`, `ForwardPassHandlerLoader`, `GpuForwardPassHandler`, `GpuMatVec`, `CublasMatVec`, `GgufReader`, `LlamaConfig`, `ActivationCodec` |
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | Health monitor, circuit breakers (Resilience4j) |
 | `player` | `ConsoleMain` REPL, `ClusterHarness`, `ProcessPipelineClient`, `ChatHistory` |
@@ -90,18 +104,22 @@ mvn clean package -DskipTests
 
 ## Supported Models
 
-Any GGUF file with a LLaMA-compatible architecture. Tested:
+Any GGUF file with a LLaMA-compatible or Phi-3-compatible architecture. Tested:
 
-| Model | File size | RAM |
-|-------|-----------|-----|
-| TinyLlama-1.1B-Chat Q4_K_M | 637 MB | ~2 GB |
-| Mistral-7B-Instruct Q4_K_M | 4.1 GB | ~6 GB |
-| Llama-3.2-8B-Instruct Q4_K_M | 4.9 GB | ~8 GB |
+| Model | File size | Heap needed |
+|-------|-----------|-------------|
+| TinyLlama-1.1B-Chat Q4_K_M | 637 MB | 2g |
+| **phi-3.5-mini-instruct Q4_K_M** | **2.4 GB** | **4g** |
+| Mistral-7B-Instruct Q4_K_M | 4.1 GB | 8g |
+| Llama-3.2-8B-Instruct Q4_K_M | 4.9 GB | 8g |
 | Llama-3.1-70B-Instruct Q4_K_M | 40 GB | 16 x 4 GB nodes |
 
-Quantisation types: F32, F16, BF16, Q8_0, Q4_0, Q4_K, Q6_K.
+**Quantisation types:** F32, F16, BF16, Q8_0, Q4_0, Q4_K, **Q5_K**, Q6_K.
+(Q5_K and Q6_K are used internally by Q4_K_M files for sensitive weight tensors.)
 
-Chat templates: `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml` (default). Template derived automatically from the GGUF file name.
+**Chat templates:** `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml` (default), **`phi3`**.
+Template resolved from model type string via exact match then substring fallback —
+`"llama3-8b"` correctly resolves to `llama3`, `"phi-3.5-mini-instruct"` to `phi3`.
 
 ---
 
@@ -115,34 +133,31 @@ mvn test -pl tokenizer,node,coordinator,sampler,kvcache,health,registry,player
 
 mvn verify -pl integration             # integration tests — forks 3 JVM nodes (stub mode)
 
-./run.sh live --model-path /path/to/model.gguf   # real-model smoke test
+./juno test --model-path /path/to/model.gguf   # real-model smoke test
 ```
 
 ### GPU tests (requires CUDA 12.x and Nvidia GPU)
 
 ```bash
-# Unit tests — node module only, no model file needed
 mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
 
-# Integration test — requires a GGUF model file and a CUDA device
 mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl integration \
   --enable-native-access=ALL-UNNAMED
 ```
 
-Recommended AWS instance for GPU testing: `g4dn.xlarge` (T4, 16 GB VRAM, ~$0.50/hr on-demand). See `docs/howto.md` for the full AWS setup procedure.
-
 ---
 
-## Performance
+## CPU Performance
 
 | Session | Change | ms / 10 tokens |
 |---------|--------|----------------|
 | 5 | Baseline (FLOAT32, serial matVec) | ~34,891 ms |
-| 6 | Parallel matVec + FLOAT16 default | ~3,802 ms (9x) |
-| 9 | Session KV cache — turn latency now flat | ~7,000-8,000 ms / turn |
+| 6 | Parallel matVec + FLOAT16 default | ~3,802 ms (9×) |
+| 9 | Session KV cache — turn latency now flat | ~7,000–8,000 ms / turn |
 | 10 | GpuForwardPassHandler (cublasSgemv) — AWS benchmark pending | — |
+| **11** | **Phi-3.5-mini on 3-node CPU cluster** | **~38,420 ms / turn** |
 
-Session 9 turn latency grows with new tokens per turn only, not with total history length. Session 10 GPU numbers will be filled in after the first AWS g4dn.xlarge run.
+Phi-3.5-mini is 3.4× larger than TinyLlama (3.8B vs 1.1B params) with a wider hidden dimension (3072 vs 2048) — the per-token time scales accordingly. All 16 CPU cores are fully utilised during generation. Tested at Linux Mint (recent) on Lenovo Yoga 7 Slim pro 14/ap7 16 cores/16 GB; Intel Alder Lake-P GT2; 
 
 ---
 
@@ -151,12 +166,11 @@ Session 9 turn latency grows with new tokens per turn only, not with total histo
 - No Python, no llama.cpp subprocess. JVM reads GGUF binary directly and runs the transformer end to end.
 - No Spring Boot. Javalin for REST.
 - Pipeline parallelism over tensor parallelism — LAN-friendly, no InfiniBand required.
-- Separate data plane (gRPC activations) from control plane (Hazelcast state).
+- **Lazy dequantization for large models.** Projection weights for Phi-3 (and any other Q4_K/Q5_K/Q6_K model) are kept as raw quantized bytes in `GgufReader.QuantizedTensor`. Dequantization runs one 256-element block at a time inside the matmul loop. Peak live float footprint per matmul is ~1 kB instead of ~65 MB, making it possible to run 3.8B models with `--heap 4g`.
+- **Architecture-aware handler routing.** `ForwardPassHandlerLoader` reads `general.architecture` from GGUF metadata and selects `PhiForwardPassHandler` for `phi3`, `CpuForwardPassHandler` for everything else.
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
+- `GpuMatVec` interface decouples the matmul backend from the transformer logic.
 - Stub mode — cluster boots in seconds without a model file; all integration tests run stub.
-- Two `ActivationDtype` enums by design: protobuf-generated for wire, domain enum for application code.
-- `GpuMatVec` interface decouples the matmul backend from the transformer logic. `CublasMatVec` in production, `CpuMatVec` as CPU fallback and test reference. Swappable without touching `GpuForwardPassHandler`.
-- GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent JCuda native libs loading into the coordinator JVM and poisoning FD inheritance into forked node processes.
 
 ---
 

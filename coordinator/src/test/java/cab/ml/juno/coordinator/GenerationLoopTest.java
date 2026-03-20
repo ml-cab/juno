@@ -16,6 +16,7 @@ import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
+import cab.ml.juno.tokenizer.ChatTemplateFormatter;
 import cab.ml.juno.tokenizer.StubTokenizer;
 
 class GenerationLoopTest {
@@ -160,5 +161,75 @@ class GenerationLoopTest {
 		var match = kvCache.findLongestPrefix(encoded);
 		// May or may not hit depending on template formatting, but should not throw
 		assertThatCode(() -> kvCache.findLongestPrefix(encoded)).doesNotThrowAnyException();
+	}
+
+	// ── Chat template routing tests ───────────────────────────────────────────
+
+	/**
+	 * Regression test for phi-3 garbage output.
+	 *
+	 * <p>Root cause: GenerationLoop had a hardcoded ternary chain that checked only
+	 * for "tinyllama", "llama3", "mistral", "gemma" — phi3 fell through to the
+	 * default ChatML template. Phi-3 was never trained on ChatML, so the model
+	 * saw unrecognised tokens and generated garbage by trying to "complete" the
+	 * ChatML structure.
+	 *
+	 * <p>The prompt produced by ChatML for a "hello" user message looks like:
+	 * {@code <|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n}
+	 * Phi-3 was trained on:
+	 * {@code <|user|>\nhello<|end|>\n<|assistant|>\n}
+	 * so it outputs individual pieces that spell out the ChatML tokens instead of
+	 * generating a coherent response.
+	 *
+	 * <p>Fix: pass {@code modelId} directly to {@code ChatTemplateFormatter.forModelType()},
+	 * which delegates to {@code ChatTemplate.forModelType()} — the single authoritative
+	 * lookup that covers all known model types including phi3.
+	 */
+	@Test
+	void phi3_modelId_selects_phi3_template_not_chatml() {
+		// The prompt formatted by phi3 template must contain phi3 special tokens,
+		// NOT ChatML tokens.  GenerationLoop uses the formatted prompt for tokenization,
+		// so the wrong template directly causes wrong token IDs → garbage output.
+		InferenceRequest req = InferenceRequest.of("phi3",
+				List.of(ChatMessage.user("hello")),
+				SamplingParams.defaults().withMaxTokens(1), RequestPriority.NORMAL);
+
+		// We can't call GenerationLoop.generate() without a real pipeline,
+		// but we CAN verify that ChatTemplateFormatter.forModelType("phi3") gives
+		// the phi3 template — which is what GenerationLoop must now call.
+		ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(req.modelId());
+
+		String prompt = formatter.format(req.messages());
+
+		assertThat(formatter.modelType()).isEqualTo("phi3");
+		assertThat(prompt).contains("<|user|>")
+				.contains("<|end|>")
+				.contains("<|assistant|>")
+				.doesNotContain("<|im_start|>")
+				.doesNotContain("<|im_end|>");
+	}
+
+	@Test
+	void tinyllama_modelId_selects_tinyllama_template() {
+		InferenceRequest req = InferenceRequest.of("tinyllama",
+				List.of(ChatMessage.user("hello")),
+				SamplingParams.defaults().withMaxTokens(1), RequestPriority.NORMAL);
+
+		ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(req.modelId());
+		String prompt = formatter.format(req.messages());
+
+		assertThat(formatter.modelType()).isEqualTo("tinyllama");
+		assertThat(prompt).contains("<|user|>").contains("</s>").contains("<|assistant|>");
+		assertThat(prompt).doesNotContain("<|im_start|>");
+	}
+
+	@Test
+	void unknown_modelId_falls_back_to_chatml() {
+		InferenceRequest req = InferenceRequest.of("some-unknown-model",
+				List.of(ChatMessage.user("hi")),
+				SamplingParams.defaults().withMaxTokens(1), RequestPriority.NORMAL);
+
+		ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(req.modelId());
+		assertThat(formatter.modelType()).isEqualTo("chatml");
 	}
 }

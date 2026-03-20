@@ -40,6 +40,16 @@ public record LlamaConfig(int hiddenDim, // embedding / residual stream dimensio
 	/**
 	 * Extract config from an open GgufReader. Reads standard GGUF metadata keys in
 	 * priority order, falling back to llama.cpp legacy keys for older files.
+	 *
+	 * <h3>Vocab size — why we read from the tokenizer, not the architecture</h3>
+	 * Some models (notably the Phi-3 family) store only the <em>base</em> vocabulary
+	 * count in the architecture metadata key ({@code phi3.vocab_size = 32000}) while
+	 * the actual tokenizer includes additional special tokens that push the true count
+	 * higher ({@code tokenizer.ggml.tokens} array length = 32064 for phi-3.5-mini).
+	 * The EOS token for phi-3.5-mini is ID 32000 — which sits exactly at the boundary
+	 * of the arch vocab and is unreachable if we size the output projection to only
+	 * 32000 rows.  We therefore use {@code tokenizer.ggml.tokens} array length as the
+	 * authoritative vocab size whenever it is larger than the arch metadata value.
 	 */
 	public static LlamaConfig from(GgufReader r) {
 
@@ -53,7 +63,16 @@ public record LlamaConfig(int hiddenDim, // embedding / residual stream dimensio
 		int numLayers = r.metaInt(p + "block_count", r.metaInt("llama.block_count", 22));
 		int numHeads = r.metaInt(p + "attention.head_count", r.metaInt("llama.attention.head_count", 32));
 		int numKvHeads = r.metaInt(p + "attention.head_count_kv", r.metaInt("llama.attention.head_count_kv", numHeads));
-		int vocabSize = r.metaInt(p + "vocab_size", r.metaInt("llama.vocab_size", 32000));
+
+		// ── Vocab size: arch metadata vs. actual tokenizer count ──────────────
+		// phi3.vocab_size (and equivalents for other arch prefixes) counts only the
+		// base vocabulary.  tokenizer.ggml.tokens is the complete list including all
+		// special tokens added by the model author.  We take the larger value so that
+		// the output projection covers every token the tokenizer can produce.
+		int archVocabSize = r.metaInt(p + "vocab_size", r.metaInt("llama.vocab_size", 32000));
+		int tokenizerVocabSize = tokenizerTokenCount(r);
+		int vocabSize = Math.max(archVocabSize, tokenizerVocabSize);
+
 		int intermediateSize = r.metaInt(p + "feed_forward_length", r.metaInt("llama.feed_forward_length",
 				// TinyLlama default 5632 (hidden 2048 * 2.75)
 				hiddenDim * 11 / 4));
@@ -65,6 +84,16 @@ public record LlamaConfig(int hiddenDim, // embedding / residual stream dimensio
 
 		return new LlamaConfig(hiddenDim, numLayers, numHeads, numKvHeads, headDim, intermediateSize, vocabSize,
 				rmsNormEps, ropeTheta, arch);
+	}
+
+	/**
+	 * Returns the number of tokens in {@code tokenizer.ggml.tokens}, or 0 if the
+	 * key is absent.  This is the authoritative vocab count for models that add
+	 * special tokens beyond their declared {@code arch.vocab_size}.
+	 */
+	private static int tokenizerTokenCount(GgufReader r) {
+		Object v = r.meta("tokenizer.ggml.tokens");
+		return (v instanceof Object[] arr) ? arr.length : 0;
 	}
 
 	/** Grouped-query attention ratio: how many Q-heads share each KV head. */

@@ -25,13 +25,13 @@ import java.util.logging.Logger;
  * cuBLAS context: device selection and handle lifecycle.
  *
  * One GpuContext per node JVM. Created once at startup, destroyed at shutdown.
- * The cublasHandle it owns is shared across all CublasMatVec calls on that node
+ * The cublasHandle it owns is shared across all CudaMatVecBackend calls on that node
  * — cuBLAS handles are thread-safe for concurrent kernel launches.
  *
  * Usage:
  *   try (GpuContext ctx = GpuContext.init(0)) {
- *       CublasMatVec matVec = new CublasMatVec(ctx);
- *       GpuForwardPassHandler handler = GpuForwardPassHandler.load(path, shard, matVec);
+ *       CudaMatVecBackend matVec = new CudaMatVecBackend(ctx);
+ *       LlamaTransformerHandler handler = LlamaTransformerHandler.load(path, shard, matVec);
  *       ...
  *   }
  *

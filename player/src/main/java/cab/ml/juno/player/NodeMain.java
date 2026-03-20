@@ -27,7 +27,7 @@ import java.util.logging.Logger;
  * Usage (ClusterHarness handles this automatically): java ...
  * cab.ml.juno.integration.NodeMain <nodeId> <port> [modelPath]
  *
- * When modelPath is supplied, EmbeddedNodeServer uses CpuForwardPassHandler
+ * When modelPath is supplied, EmbeddedNodeServer uses LlamaTransformerHandler
  * (real transformer math) instead of CyclicForwardPassHandler.
  *
  * Manual launch for debugging: mvn exec:java -pl integration \

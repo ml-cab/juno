@@ -105,11 +105,12 @@ public final class GenerationLoop {
 			requestIds[i] = req.requestId();
 			starts[i] = Instant.now();
 
-			ChatTemplateFormatter formatter = ChatTemplateFormatter
-					.forModelType(req.modelId().toLowerCase().contains("tinyllama") ? "tinyllama"
-							: req.modelId().contains("llama3") ? "llama3"
-									: req.modelId().contains("mistral") ? "mistral"
-											: req.modelId().contains("gemma") ? "gemma" : "chatml");
+			// modelId is set by the caller (e.g. ConsoleMain via ChatModelType.fromPath)
+			// to the canonical type key ("phi3", "tinyllama", "llama3", etc.).
+			// ChatTemplateFormatter.forModelType() handles the full lookup including phi3;
+			// the previous inline ternary chain omitted phi3 → fell through to ChatML →
+			// model saw foreign tokens and generated garbage.
+			ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(req.modelId());
 			String prompt = formatter.format(req.messages());
 			int[] promptIds = tokenizer.encode(prompt);
 
@@ -249,11 +250,8 @@ public final class GenerationLoop {
 		Instant start = Instant.now();
 
 		// ── Step 1: Encode prompt ─────────────────────────────────────────────
-		ChatTemplateFormatter formatter = ChatTemplateFormatter
-				.forModelType(request.modelId().toLowerCase().contains("tinyllama") ? "tinyllama"
-						: request.modelId().contains("llama3") ? "llama3"
-								: request.modelId().contains("mistral") ? "mistral"
-										: request.modelId().contains("gemma") ? "gemma" : "chatml");
+		// modelId is the canonical type key set by the caller ("phi3", "tinyllama", …).
+		ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(request.modelId());
 		String prompt = formatter.format(request.messages());
 		int[] promptIds = tokenizer.encode(prompt);
 

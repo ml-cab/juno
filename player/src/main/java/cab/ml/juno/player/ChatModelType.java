@@ -28,7 +28,7 @@ public final class ChatModelType {
 	 * case-insensitively; unknown paths return "chatml".
 	 *
 	 * @param path path to the GGUF file (may be null)
-	 * @return "tinyllama", "llama3", "mistral", "gemma", or "chatml"
+	 * @return "tinyllama", "llama3", "mistral", "gemma", "phi3", or "chatml"
 	 */
 	public static String fromPath(String path) {
 		if (path == null)
@@ -42,6 +42,8 @@ public final class ChatModelType {
 			return "mistral";
 		if (lower.contains("gemma"))
 			return "gemma";
+		if (lower.contains("phi-3") || lower.contains("phi3") || lower.contains("phi_3"))
+			return "phi3";
 		return "chatml";
 	}
 }

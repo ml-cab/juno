@@ -186,20 +186,80 @@ public interface ChatTemplate {
 		};
 	}
 
+	/**
+	 * Phi-3 chat template.
+	 * {@code <|user|>\n{user}<|end|>\n<|assistant|>\n}
+	 *
+	 * Phi-3 and Phi-3.5 Mini Instruct are fine-tuned with this exact format.
+	 * System messages are prepended to the first user turn separated by a newline.
+	 */
+	static ChatTemplate phi3() {
+		return new ChatTemplate() {
+			@Override
+			public String format(List<ChatMessage> messages) {
+				StringBuilder sb = new StringBuilder();
+				String pendingSystem = null;
+				for (ChatMessage msg : messages) {
+					switch (msg.role()) {
+					case "system" -> pendingSystem = msg.content();
+					case "user" -> {
+						sb.append("<|user|>\n");
+						if (pendingSystem != null) {
+							sb.append(pendingSystem).append("\n");
+							pendingSystem = null;
+						}
+						sb.append(msg.content()).append("<|end|>\n");
+					}
+					case "assistant" -> sb.append("<|assistant|>\n").append(msg.content()).append("<|end|>\n");
+					}
+				}
+				sb.append("<|assistant|>\n");
+				return sb.toString();
+			}
+
+			@Override
+			public String modelType() {
+				return "phi3";
+			}
+		};
+	}
+
 	// ── Registry ─────────────────────────────────────────────────────────────
 
 	/** All built-in templates keyed by modelType. */
 	Map<String, ChatTemplate> BUILT_IN = Map.of("llama3", llama3(), "mistral", mistral(), "gemma", gemma(), "chatml",
-			chatml(), "tinyllama", tinyllama(), "zephyr", tinyllama() // same format, alternate lookup key
+			chatml(), "tinyllama", tinyllama(), "zephyr", tinyllama(), // same format, alternate lookup key
+			"phi3", phi3(), "phi-3", phi3() // hyphenated form used in raw file paths
 	);
 
 	/**
 	 * Resolve a template by model type string. Falls back to ChatML for unknown
 	 * model types.
+	 *
+	 * <p>Resolution order:
+	 * <ol>
+	 *   <li><b>Exact match</b> — {@code "phi3"} → phi3, {@code "tinyllama"} → tinyllama, etc.
+	 *   <li><b>Substring match</b> — {@code "llama3-8b"} contains {@code "llama3"} → llama3.
+	 *       Keys are checked longest-first to avoid shorter keys shadowing longer ones
+	 *       (e.g. "tinyllama" must win over "llama" for a "tinyllama-1b" input).
+	 *   <li><b>Default</b> — ChatML for anything unrecognised.
+	 * </ol>
 	 */
 	static ChatTemplate forModelType(String modelType) {
 		if (modelType == null)
 			return chatml();
-		return BUILT_IN.getOrDefault(modelType.toLowerCase().strip(), chatml());
+		String key = modelType.toLowerCase().strip();
+
+		// 1. Exact match
+		ChatTemplate exact = BUILT_IN.get(key);
+		if (exact != null)
+			return exact;
+
+		// 2. Substring match — longest key first to avoid "llama" shadowing "tinyllama"
+		return BUILT_IN.entrySet().stream()
+				.filter(e -> key.contains(e.getKey()))
+				.max(java.util.Comparator.comparingInt(e -> e.getKey().length()))
+				.map(java.util.Map.Entry::getValue)
+				.orElse(chatml());
 	}
 }

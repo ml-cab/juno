@@ -44,6 +44,14 @@ class ChatModelTypeTest {
 	}
 
 	@Test
+	@DisplayName("path containing phi-3 or phi3 returns phi3")
+	void phi3() {
+		assertThat(ChatModelType.fromPath("../models/phi-3.5-mini-instruct.Q4_K_M.gguf")).isEqualTo("phi3");
+		assertThat(ChatModelType.fromPath("/models/Phi3-mini.gguf")).isEqualTo("phi3");
+		assertThat(ChatModelType.fromPath("/models/phi_3-medium.gguf")).isEqualTo("phi3");
+	}
+
+	@Test
 	@DisplayName("unknown path returns chatml")
 	void unknownPath() {
 		assertThat(ChatModelType.fromPath("/models/foo.gguf")).isEqualTo("chatml");

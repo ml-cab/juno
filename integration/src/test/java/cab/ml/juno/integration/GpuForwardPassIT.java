@@ -13,22 +13,22 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.node.CpuForwardPassHandler;
-import cab.ml.juno.node.CublasMatVec;
+import cab.ml.juno.node.LlamaTransformerHandler;
+import cab.ml.juno.node.CudaMatVecBackend;
 import cab.ml.juno.node.CudaAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardRequest;
 import cab.ml.juno.node.ForwardResult;
 import cab.ml.juno.node.GpuContext;
-import cab.ml.juno.node.GpuForwardPassHandler;
+import cab.ml.juno.node.LlamaTransformerHandler;
 import cab.ml.juno.node.ShardContext;
 
 /**
  * GPU forward pass integration test — requires CUDA 12.x + a GGUF model file.
  *
  * This is the AWS smoke test. It loads a real model (TinyLlama or any GGUF),
- * runs the same input through both CpuForwardPassHandler and
- * GpuForwardPassHandler, and asserts numerical equivalence within float32
+ * runs the same input through both LlamaTransformerHandler and
+ * LlamaTransformerHandler, and asserts numerical equivalence within float32
  * rounding tolerance.
  *
  * Prerequisites on the AWS node: 1. CUDA 12.x installed (nvidia-smi shows the
@@ -41,7 +41,7 @@ import cab.ml.juno.node.ShardContext;
  * forward
  */
 @Tag("gpu")
-@DisplayName("GpuForwardPassHandler — end-to-end integration (requires CUDA + model file)")
+@DisplayName("LlamaTransformerHandler — end-to-end integration (requires CUDA + model file)")
 class GpuForwardPassIT {
 
 	private static final float DELTA = 1e-3f; // float32 rounding across backends
@@ -100,8 +100,8 @@ class GpuForwardPassIT {
 	void first_node_gpu_matches_cpu() throws Exception {
 		ShardContext ctx = new ShardContext("gpu-it", 0, 11, true, false, 32000, 2048, 32);
 
-		ForwardPassHandler cpu = CpuForwardPassHandler.load(modelPath, ctx);
-		ForwardPassHandler gpu = GpuForwardPassHandler.load(modelPath, ctx, new CublasMatVec(gpuCtx));
+		ForwardPassHandler cpu = LlamaTransformerHandler.load(modelPath, ctx);
+		ForwardPassHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVecBackend(gpuCtx));
 
 		ForwardRequest req = ForwardRequest.withTokens("it-req-1", new int[] { 1 }, 0);
 
@@ -123,8 +123,8 @@ class GpuForwardPassIT {
 		for (int i = 0; i < fakeActivations.length; i++)
 			fakeActivations[i] = (float) Math.sin(i * 0.01);
 
-		ForwardPassHandler cpu = CpuForwardPassHandler.load(modelPath, ctx);
-		ForwardPassHandler gpu = GpuForwardPassHandler.load(modelPath, ctx, new CublasMatVec(gpuCtx));
+		ForwardPassHandler cpu = LlamaTransformerHandler.load(modelPath, ctx);
+		ForwardPassHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVecBackend(gpuCtx));
 
 		ForwardRequest req = ForwardRequest.withActivations("it-req-2", fakeActivations, 0);
 
@@ -143,8 +143,8 @@ class GpuForwardPassIT {
 	void gpu_forward_is_faster_than_cpu() throws Exception {
 		ShardContext ctx = new ShardContext("gpu-it", 0, 11, true, false, 32000, 2048, 32);
 
-		ForwardPassHandler cpu = CpuForwardPassHandler.load(modelPath, ctx);
-		ForwardPassHandler gpu = GpuForwardPassHandler.load(modelPath, ctx, new CublasMatVec(gpuCtx));
+		ForwardPassHandler cpu = LlamaTransformerHandler.load(modelPath, ctx);
+		ForwardPassHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVecBackend(gpuCtx));
 
 		ForwardRequest req = ForwardRequest.withTokens("it-perf", new int[] { 42 }, 0);
 
@@ -174,7 +174,7 @@ class GpuForwardPassIT {
 	@DisplayName("isReady() true after load on GPU node")
 	void is_ready_after_load() throws Exception {
 		ShardContext ctx = new ShardContext("gpu-it", 0, 11, true, false, 32000, 2048, 32);
-		ForwardPassHandler gpu = GpuForwardPassHandler.load(modelPath, ctx, new CublasMatVec(gpuCtx));
+		ForwardPassHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVecBackend(gpuCtx));
 		assertThat(gpu.isReady()).isTrue();
 	}
 }

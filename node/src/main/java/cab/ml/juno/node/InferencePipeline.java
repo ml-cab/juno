@@ -27,7 +27,7 @@ import java.util.List;
  *
  * The default forwardBatch() implementation calls forward() N times serially —
  * all existing implementations get batching support for free. The real
- * GpuForwardPassHandler overrides forwardBatch() to use CUDA batched matrix
+ * LlamaTransformerHandler overrides forwardBatch() to use CUDA batched matrix
  * ops, turning N serial GPU launches into one, dramatically increasing
  * utilisation.
  */
@@ -48,7 +48,7 @@ public interface InferencePipeline {
 	 * Run a batched forward pass — N requests in, N logit arrays out.
 	 *
 	 * Default implementation calls forward() serially — correct but not fast.
-	 * Override in GpuForwardPassHandler for true CUDA batching.
+	 * Override in LlamaTransformerHandler for true CUDA batching.
 	 *
 	 * Contract: - requestIds.size() == allTokens.size() == startPositions.size() -
 	 * result[i] corresponds to requestIds.get(i) - All result arrays have length

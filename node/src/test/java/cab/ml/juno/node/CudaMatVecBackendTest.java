@@ -11,14 +11,14 @@ import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * CublasMatVec tests — requires CUDA 12.x and an Nvidia GPU.
+ * CudaMatVecBackend tests — requires CUDA 12.x and an Nvidia GPU.
  *
- * Inherits the full GpuMatVecContractTest suite. Every contract test that
- * passes on CpuMatVec must also pass on CublasMatVec — numerically identical
+ * Inherits the full MatVecBackendContractTest suite. Every contract test that
+ * passes on CpuMatVecBackend must also pass on CudaMatVecBackend — numerically identical
  * output is the correctness requirement.
  *
  * Additionally tests:
- *   - cublasSgemv output matches CpuForwardPassHandler.matVec reference
+ *   - cublasSgemv output matches LlamaTransformerHandler.matVec reference
  *     (cross-impl numerical equivalence — the primary regression anchor)
  *   - Large matrix throughput is measurably faster than CPU (sanity check)
  *
@@ -32,18 +32,18 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  *   mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
  */
 @Tag("gpu")
-@DisplayName("CublasMatVec — JCublas cublasSgemv correctness (requires CUDA)")
-class CublasMatVecTest extends GpuMatVecContractTest {
+@DisplayName("CudaMatVecBackend — JCublas cublasSgemv correctness (requires CUDA)")
+class CudaMatVecBackendTest extends MatVecBackendContractTest {
 
     private static GpuContext ctx;
-    private static CublasMatVec cublasImpl;
+    private static CudaMatVecBackend cublasImpl;
 
     @BeforeAll
     static void initCuda() {
         assumeTrue(CudaAvailability.isAvailable(),
-            "Skipping CublasMatVecTest — no CUDA device available");
+            "Skipping CudaMatVecBackendTest — no CUDA device available");
         ctx = GpuContext.init(0);
-        cublasImpl = new CublasMatVec(ctx);
+        cublasImpl = new CudaMatVecBackend(ctx);
     }
 
     @AfterAll
@@ -51,22 +51,22 @@ class CublasMatVecTest extends GpuMatVecContractTest {
         if (ctx != null) ctx.close();
     }
 
-    /** Provide CublasMatVec to the inherited contract tests. */
+    /** Provide CudaMatVecBackend to the inherited contract tests. */
     @Override
-    protected GpuMatVec impl() {
+    protected MatVecBackend impl() {
         return cublasImpl;
     }
 
-    // ── CublasMatVec-specific tests ───────────────────────────────────────────
+    // ── CudaMatVecBackend-specific tests ───────────────────────────────────────────
 
     @Test
-    @DisplayName("cublasSgemv matches CpuForwardPassHandler.matVec reference — 2048×2048")
+    @DisplayName("cublasSgemv matches LlamaTransformerHandler.matVec reference — 2048×2048")
     void cublas_matches_cpu_reference_hidden_dim() {
         int rows = 2048, cols = 2048;
         float[] A = randomMatrix(rows, cols, 100);
         float[] x = randomVector(cols, 101);
 
-        float[] cpuResult    = CpuForwardPassHandler.matVec(A, x, rows, cols);
+        float[] cpuResult    = LlamaTransformerHandler.matVec(A, x, rows, cols);
         float[] cublasResult = cublasImpl.sgemv(A, x, rows, cols);
 
         assertThat(cublasResult).hasSize(rows);
@@ -83,7 +83,7 @@ class CublasMatVecTest extends GpuMatVecContractTest {
         float[] A = randomMatrix(rows, cols, 102);
         float[] x = randomVector(cols, 103);
 
-        float[] cpuResult    = CpuForwardPassHandler.matVec(A, x, rows, cols);
+        float[] cpuResult    = LlamaTransformerHandler.matVec(A, x, rows, cols);
         float[] cublasResult = cublasImpl.sgemv(A, x, rows, cols);
 
         for (int i = 0; i < rows; i++)
@@ -100,12 +100,12 @@ class CublasMatVecTest extends GpuMatVecContractTest {
         float[] x = randomVector(cols, 201);
 
         // Warm up both
-        CpuForwardPassHandler.matVec(A, x, rows, cols);
+        LlamaTransformerHandler.matVec(A, x, rows, cols);
         cublasImpl.sgemv(A, x, rows, cols);
 
         // CPU timing
         long cpuStart = System.nanoTime();
-        for (int i = 0; i < 5; i++) CpuForwardPassHandler.matVec(A, x, rows, cols);
+        for (int i = 0; i < 5; i++) LlamaTransformerHandler.matVec(A, x, rows, cols);
         long cpuMs = (System.nanoTime() - cpuStart) / 1_000_000;
 
         // GPU timing

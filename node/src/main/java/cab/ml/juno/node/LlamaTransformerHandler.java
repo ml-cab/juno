@@ -23,12 +23,13 @@ import java.util.Map;
 import java.util.logging.Logger;
 
 /**
- * CPU implementation of the LLaMA-family transformer forward pass.
+ * LLaMA-family transformer forward pass with a pluggable {@link MatVecBackend}.
  *
- * This is the production-path implementation that replaces
- * CyclicForwardPassHandler once a real GGUF model file is available.
- * GpuForwardPassHandler will use the same interface but accelerate the matmuls
- * with JCuda/JCublas — the logic above the math primitives is identical.
+ * <p>Handles all LLaMA-compatible architectures: LLaMA 2/3, TinyLlama, Mistral,
+ * Gemma — any model whose GGUF {@code general.architecture} is not {@code phi3}.
+ * The transformer math (RMS norm, RoPE, GQA, SwiGLU FFN) is identical regardless
+ * of the backend. Swapping {@link CpuMatVecBackend} for {@link CudaMatVecBackend}
+ * moves all matrix multiplies from CPU threads to cublasSgemv on a GPU.
  *
  * Each node in the cluster owns a contiguous shard of transformer layers.
  * ShardContext tells this handler: hasEmbeddings → run token embedding lookup
@@ -50,11 +51,11 @@ import java.util.logging.Logger;
  * Softmax (inplace, over a slice)
  *
  * All primitives are pure Java — no JNI, no GPU, no external dependencies. A
- * future GpuForwardPassHandler will override matVec with a JCublas dgemv call.
+ * future CudaMatVecBackend routes matVec calls to cublasSgemv on a GPU.
  */
-public final class CpuForwardPassHandler implements ForwardPassHandler {
+public final class LlamaTransformerHandler implements ForwardPassHandler {
 
-	private static final Logger log = Logger.getLogger(CpuForwardPassHandler.class.getName());
+	private static final Logger log = Logger.getLogger(LlamaTransformerHandler.class.getName());
 
 	// ── Loaded weights ────────────────────────────────────────────────────────
 
@@ -80,10 +81,15 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 	private final float[][] wUp; // [L][hiddenDim × intermediateSize]
 	private final float[][] wDown; // [L][intermediateSize × hiddenDim]
 
-	// Per-request KV cache: key → float[layers * maxPos * kvDim]
+	// Per-request KV cache — lazily allocated and grown on demand.
+	// Starts at INITIAL_SEQ_CAPACITY slots, doubles until MAX_SEQ_LEN.
 	private final Map<String, float[][]> kvCacheK = new HashMap<>();
 	private final Map<String, float[][]> kvCacheV = new HashMap<>();
-	private static final int MAX_SEQ_LEN = 2048;
+	private static final int MAX_SEQ_LEN         = 2048;
+	private static final int INITIAL_SEQ_CAPACITY = 64; // grows on demand
+
+	// ── MatVec backend (CPU or CUDA) ─────────────────────────────────────────
+	private final MatVecBackend backend;
 
 	// ── Factory ───────────────────────────────────────────────────────────────
 
@@ -95,19 +101,39 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 	 * @param context   describes which layers/embeddings this node is responsible
 	 *                  for
 	 */
-	public static CpuForwardPassHandler load(Path modelPath, ShardContext context) throws IOException {
+	public static LlamaTransformerHandler load(Path modelPath, ShardContext context) throws IOException {
 		log.info("Loading GGUF shard: layers " + context.startLayer() + "–" + context.endLayer() + "  embd="
 				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection() + "  file=" + modelPath);
 
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			LlamaConfig cfg = LlamaConfig.from(r);
 			log.info("Model: " + cfg);
-			return new CpuForwardPassHandler(r, cfg, context);
+			return new LlamaTransformerHandler(r, cfg, context, CpuMatVecBackend.INSTANCE);
 		}
 	}
 
-	private CpuForwardPassHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx) throws IOException {
+	/**
+	 * Load weights and wire a specific {@link MatVecBackend}.
+	 *
+	 * @param backend {@link CpuMatVecBackend#INSTANCE} for CPU-only nodes,
+	 *                {@code new CudaMatVecBackend(ctx)} for GPU nodes
+	 */
+	public static LlamaTransformerHandler load(Path modelPath, ShardContext context,
+			MatVecBackend backend) throws IOException {
+		log.info("Loading GGUF shard: layers " + context.startLayer() + "–" + context.endLayer() + "  embd="
+				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection()
+				+ "  backend=" + backend.getClass().getSimpleName() + "  file=" + modelPath);
+
+		try (GgufReader r = GgufReader.open(modelPath)) {
+			LlamaConfig cfg = LlamaConfig.from(r);
+			log.info("Model: " + cfg);
+			return new LlamaTransformerHandler(r, cfg, context, backend);
+		}
+	}
+
+	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVecBackend backend) throws IOException {
 		this.cfg = cfg;
+		this.backend = backend;
 		this.startLayer = ctx.startLayer();
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
@@ -211,19 +237,46 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 
 	/** Run all assigned transformer layers in sequence. */
 	private float[] runLayers(float[] x, String requestId, int pos) {
-		int L = endLayer - startLayer;
+		int L     = endLayer - startLayer;
+		int kvDim = cfg.kvDim();
 
-		// Ensure KV cache exists for this request
-		kvCacheK.computeIfAbsent(requestId, _ -> new float[L][MAX_SEQ_LEN * cfg.kvDim()]);
-		kvCacheV.computeIfAbsent(requestId, _ -> new float[L][MAX_SEQ_LEN * cfg.kvDim()]);
+		// Lazy initial allocation — 64 slots, grows on demand.
+		kvCacheK.computeIfAbsent(requestId, _ -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		kvCacheV.computeIfAbsent(requestId, _ -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
 
 		float[][] kCache = kvCacheK.get(requestId);
 		float[][] vCache = kvCacheV.get(requestId);
+
+		// Grow before writing at pos
+		ensureKvCapacity(kCache, pos, kvDim);
+		ensureKvCapacity(vCache, pos, kvDim);
 
 		for (int li = 0; li < L; li++) {
 			x = transformerLayer(x, li, pos, kCache[li], vCache[li]);
 		}
 		return x;
+	}
+
+	/**
+	 * Grows KV cache arrays to accommodate {@code pos}. Doubling growth,
+	 * capped at {@link #MAX_SEQ_LEN}. Modifies array slots in-place.
+	 */
+	private static void ensureKvCapacity(float[][] cache, int pos, int kvDim) {
+		int required = (pos + 1) * kvDim;
+		for (int li = 0; li < cache.length; li++) {
+			if (cache[li].length < required) {
+				int newLen = cache[li].length;
+				while (newLen < required)
+					newLen = Math.min(newLen * 2, MAX_SEQ_LEN * kvDim);
+				cache[li] = java.util.Arrays.copyOf(cache[li], newLen);
+			}
+		}
+	}
+
+	/** Package-private for testing: allocated KV cache slots for a request. */
+	int kvCacheAllocatedSlots(String requestId) {
+		float[][] k = kvCacheK.get(requestId);
+		return (k == null || k.length == 0) ? 0 : k[0].length / cfg.kvDim();
 	}
 
 	/**
@@ -236,9 +289,9 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 		float[] xNorm = rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
 
 		// Project to Q, K, V
-		float[] q = matVec(wq[li], xNorm, H, H);
-		float[] k = matVec(wk[li], xNorm, cfg.kvDim(), H);
-		float[] v = matVec(wv[li], xNorm, cfg.kvDim(), H);
+		float[] q = backend.sgemv(wq[li], xNorm, H, H);
+		float[] k = backend.sgemv(wk[li], xNorm, cfg.kvDim(), H);
+		float[] v = backend.sgemv(wv[li], xNorm, cfg.kvDim(), H);
 
 		// Rotary position embeddings on Q and K
 		rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
@@ -252,7 +305,7 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 		float[] attnOut = gqa(q, kCacheLayer, vCacheLayer, pos + 1);
 
 		// Output projection + residual
-		float[] attnProj = matVec(wo[li], attnOut, H, H);
+		float[] attnProj = backend.sgemv(wo[li], attnOut, H, H);
 		float[] x2 = add(x, attnProj);
 
 		// ── FFN sub-layer ─────────────────────────────────────────────────────
@@ -265,19 +318,19 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 	private float[] ffn(float[] x, int li) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
-		float[] gate = matVec(wGate[li], x, I, H);
-		float[] up = matVec(wUp[li], x, I, H);
+		float[] gate = backend.sgemv(wGate[li], x, I, H);
+		float[] up = backend.sgemv(wUp[li], x, I, H);
 		// SiLU(gate) * up
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
 			hidden[i] = silu(gate[i]) * up[i];
-		return matVec(wDown[li], hidden, H, I);
+		return backend.sgemv(wDown[li], hidden, H, I);
 	}
 
 	/** Final RMS norm + output projection → float[vocabSize] logits. */
 	private float[] outputProjection(float[] x) {
 		float[] xNorm = rmsNorm(x, outputNorm, cfg.rmsNormEps());
-		return matVec(outputProj, xNorm, cfg.vocabSize(), cfg.hiddenDim());
+		return backend.sgemv(outputProj, xNorm, cfg.vocabSize(), cfg.hiddenDim());
 	}
 
 	// ── Math primitives ───────────────────────────────────────────────────────
@@ -341,7 +394,7 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 	 * Matrix–vector multiply against a raw quantised weight tensor.
 	 *
 	 * <p><b>Replaces the float[] overload for large projection matrices in
-	 * PhiForwardPassHandler.</b>  Dequantisation happens one block at a time
+	 * Phi3TransformerHandler.</b>  Dequantisation happens one block at a time
 	 * inside the inner loop; the maximum live float allocation is one 256-element
 	 * block (~1 kB), not the full weight tensor (~10–100 MB for large models).
 	 *

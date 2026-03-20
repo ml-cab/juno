@@ -26,9 +26,9 @@ import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.kvcache.LayerRange;
 import cab.ml.juno.node.ActivationCodec;
-import cab.ml.juno.node.CpuForwardPassHandler;
 import cab.ml.juno.node.CyclicForwardPassHandler;
 import cab.ml.juno.node.ForwardPassHandler;
+import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.ForwardResult;
 import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.ShardAssignment;
@@ -193,9 +193,9 @@ public final class EmbeddedNodeServer {
 					log.info("Shard context: layers " + request.getStartLayer() + "-" + request.getEndLayer()
 							+ " embeddings=" + request.getHasEmbeddings() + " outputProj="
 							+ request.getHasOutputProjection());
-					handler = CpuForwardPassHandler.load(Path.of(modelPath), newCtx);
-					msg = "Real shard loaded (CpuForwardPassHandler) layers " + request.getStartLayer() + "–"
-							+ request.getEndLayer();
+					handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx);
+					msg = "Real shard loaded (" + handler.getClass().getSimpleName() + ") layers "
+							+ request.getStartLayer() + "–" + request.getEndLayer();
 					log.info(msg);
 				} catch (Exception e) {
 					log.severe("FAILED to load real model: " + e.getMessage());

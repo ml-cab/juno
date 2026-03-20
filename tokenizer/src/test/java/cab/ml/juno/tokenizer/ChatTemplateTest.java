@@ -113,4 +113,34 @@ class ChatTemplateTest {
 
 		assertThat(t.modelType()).isEqualTo("chatml");
 	}
+
+	// ── Substring-match regression tests ─────────────────────────────────────
+
+	/**
+	 * Regression: GenerationLoopTest used "llama3-8b" as modelId. Before the fix,
+	 * GenerationLoop did its own {@code .contains("llama3")} check. After switching
+	 * to {@code ChatTemplate.forModelType(modelId)}, an exact-only lookup would
+	 * not find "llama3-8b" in the BUILT_IN map and fall back to chatml — producing
+	 * a different token count and breaking tests that assert on prompt length.
+	 */
+	@Test
+	void forModelType_resolves_versioned_llama3_id_via_substring() {
+		assertThat(ChatTemplate.forModelType("llama3-8b").modelType()).isEqualTo("llama3");
+		assertThat(ChatTemplate.forModelType("llama3-70b-instruct").modelType()).isEqualTo("llama3");
+		assertThat(ChatTemplate.forModelType("Meta-Llama3-8B").modelType()).isEqualTo("llama3");
+	}
+
+	@Test
+	void forModelType_exact_key_wins_over_substring() {
+		// "tinyllama" contains "llama" — exact match must win and give tinyllama,
+		// not llama3 via substring match on "llama3".
+		assertThat(ChatTemplate.forModelType("tinyllama").modelType()).isEqualTo("tinyllama");
+		assertThat(ChatTemplate.forModelType("tinyllama-1.1b-chat").modelType()).isEqualTo("tinyllama");
+	}
+
+	@Test
+	void forModelType_phi3_exact_and_substring() {
+		assertThat(ChatTemplate.forModelType("phi3").modelType()).isEqualTo("phi3");
+		assertThat(ChatTemplate.forModelType("phi-3.5-mini-instruct").modelType()).isEqualTo("phi3");
+	}
 }

@@ -2,7 +2,7 @@
   juno — Distributed Java LLM Inference Engine
   Full Architecture Design Document
   JDK 25 · Maven · Java-native · Commodity GPU Cluster
-  Last updated: 2026-03-14 (session 9)
+  Last updated: 2026-03-20 (session 12)
 ================================================================================
 
 
@@ -67,7 +67,7 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
   |                                SseTokenConsumer
   +-- node/                     <- InferencePipeline, LocalInferencePipeline,
   |                                ForwardPassHandler, CyclicForwardPassHandler,
-  |                                CpuForwardPassHandler (real transformer math),
+  |                                LlamaTransformerHandler (real transformer math),
   |                                GgufReader (GGUF v2/v3 binary parser),
   |                                LlamaConfig (hyperparams from GGUF metadata),
   |                                ActivationCodec, ActivationDtype,
@@ -89,7 +89,7 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
   |                                HealthEvent, HealthThresholds, NodeHealth
   +-- player/                   <- Model interaction layer; cluster harness + REPL
   |   +-- ClusterHarness        <- forks 3 node JVMs; accepts optional MODEL_PATH
-  |   +-- EmbeddedNodeServer    <- gRPC NodeServiceImpl; uses CpuForwardPassHandler
+  |   +-- EmbeddedNodeServer    <- gRPC NodeServiceImpl; uses LlamaTransformerHandler
   |   |                            when MODEL_PATH set, CyclicForwardPassHandler otherwise
   |   +-- NodeMain              <- JVM entry point, prints READY:<nodeId>:<port>
   |   +-- ProcessPipelineClient <- InferencePipeline over real gRPC channels
@@ -375,7 +375,7 @@ Example metrics endpoint:
   InferencePipeline.forwardBatch() (new default method):
   ----------------------------------------
   Default: calls forward() N times serially — all existing impls work unchanged.
-  Override in GpuForwardPassHandler: one CUDA batched matmul for the whole batch.
+  Override in LlamaTransformerHandler: one CUDA batched matmul for the whole batch.
   The GPU utilization gain comes entirely from this override.
 
   GenerationLoop.generateBatch(List<BatchEntry>) (new method):
@@ -898,7 +898,7 @@ sampling:
   health           SUCCESS  (6 classes: CircuitBreaker, CircuitState,
                              HealthEvaluator, HealthEvent, HealthThresholds,
                              NodeHealth)
-  node             SUCCESS  (13 classes: CpuForwardPassHandler [parallel matVec],
+  node             SUCCESS  (13 classes: LlamaTransformerHandler [parallel matVec],
                              GgufReader, LlamaConfig, LocalInferencePipeline,
                              InferencePipeline, ForwardPassHandler,
                              CyclicForwardPassHandler, ActivationCodec,
@@ -1223,7 +1223,7 @@ Test results after fixes:
     [x] node        LlamaConfig — extracts model hyperparams from GGUF metadata
                     (hiddenDim, numLayers, numHeads, numKvHeads, ropeTheta, ...)
                     Works for LLaMA 2/3, TinyLlama, Mistral, Gemma
-    [x] node        CpuForwardPassHandler — full LLaMA transformer, pure Java
+    [x] node        LlamaTransformerHandler — full LLaMA transformer, pure Java
                     Primitives: rmsNorm, matVec (parallel), rope, gqa (GQA with
                                 KV cache), swiGLU ffn, softmax
                     matVec parallelised with IntStream.range().parallel() for
@@ -1231,7 +1231,7 @@ Test results after fixes:
                     primary 9× speedup on TinyLlama-1.1B CPU cluster
                     Prefill: runs all prompt tokens sequentially to fill KV cache
                     Decode: incremental single-token forward pass
-                    GPU path: GpuForwardPassHandler will override matVec with
+                    GPU path: LlamaTransformerHandler will override matVec with
                               JCublas dgemv — same interface above the math layer
     [x] tokenizer   GgufTokenizer — SentencePiece BPE from GGUF metadata
                     No separate tokenizer.model file required
@@ -1242,7 +1242,7 @@ Test results after fixes:
                     "tinyllama" and "zephyr" aliases in BUILT_IN map
                     Bug fixed: was silently falling back to ChatML for TinyLlama,
                     causing complete garbage output
-    [x] integration EmbeddedNodeServer — uses CpuForwardPassHandler when MODEL_PATH set
+    [x] integration EmbeddedNodeServer — uses LlamaTransformerHandler when MODEL_PATH set
                     ClusterHarness.threeNodes(modelPath) — passes model path to nodes
                     ConsoleMain — loads GgufTokenizer when MODEL_PATH set
                     End-to-end verified with TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
@@ -1250,7 +1250,8 @@ Test results after fixes:
                     Skipped via Assumptions.assumeTrue when no MODEL_PATH
                     Covers: greeting coherence, no ▁ markers, determinism,
                             multi-turn, float16 parity
-    [ ] node        GpuForwardPassHandler (JCuda/JCublas) — matVec → cublasSgemv
+    [x] node        LlamaTransformerHandler(CudaMatVecBackend) — matVec → cublasSgemv
+                    (session 10 implementation, session 12 rename)
     [ ] coordinator Hazelcast leader election
     [x] coordinator Strip EOS token </s> from displayed output in GenerationLoop
                     Two-layer defence: (1) token ID check breaks before decodeToken()
@@ -1349,7 +1350,7 @@ llm.* / {arch}.* key hierarchy. Provides fallbacks for legacy key names.
     LlamaConfig{arch=llama hidden=2048 layers=22 heads=32 kvHeads=4
                 headDim=64 ffn=5632 vocab=32000 eps=1.0e-05 ropeTheta=10000}
 
-15.3  CpuForwardPassHandler
+15.3  LlamaTransformerHandler
 -----------------------------------------------
 Implements the LLaMA-family transformer forward pass, pure Java.
 Constructed with a GgufReader and a ShardContext — loads only the weight
@@ -1402,7 +1403,7 @@ tensors for its assigned layer range.
     Loops all prompt tokens through runLayers(), populating the KV cache,
     returns only the last token's activations.
 
-  GpuForwardPassHandler upgrade path:
+  LlamaTransformerHandler upgrade path:
     Override matVec() with cublasSgemv (or cublasSgemm for batched decode).
     All other methods (rmsNorm, rope, gqa, ffn, softmax) stay identical.
     The only thing that changes is where the matrix multiply runs.
@@ -1456,7 +1457,7 @@ Fixed approach (matches standard LLM inference practice):
     stream nextToken to client
     currentToken = nextToken
 
-  Node-1 also has an internal prefill fast-path (CpuForwardPassHandler):
+  Node-1 also has an internal prefill fast-path (LlamaTransformerHandler):
   when it receives all prompt tokens at once (startPosition=0, len>1),
   it loops them internally. This is a redundant safety net — the loop
   in GenerationLoop is authoritative.
@@ -1665,9 +1666,9 @@ Two independent changes produced this:
   - FLOAT16 default (smaller gRPC)   smaller secondary gain
 
 -----------------------------------------------
-17.1  Parallel matVec in CpuForwardPassHandler  [DONE]
+17.1  Parallel matVec in LlamaTransformerHandler  [DONE]
 -----------------------------------------------
-File: node/src/main/java/io/hyperstack4j/node/CpuForwardPassHandler.java
+File: node/src/main/java/io/hyperstack4j/node/LlamaTransformerHandler.java
 
 Old implementation:
   static float[] matVec(float[] A, float[] x, int rows, int cols) {
@@ -1718,7 +1719,7 @@ vocabSize=32000, 22 layers):
   down_proj                   2048 × 5632   every layer
   output projection           32000 × 2048  last node only
 
-Note on GpuForwardPassHandler (pending): the GPU path will override matVec()
+Note on LlamaTransformerHandler (pending): the GPU path will override matVec()
 with a JCublas cublasSgemv() call. The parallel CPU path above is the CPU
 equivalent — it serves as a reference for correctness testing and as a working
 fallback for CPU-only deployments.
@@ -1898,7 +1899,7 @@ The codebase contains two enums named ActivationDtype:
 
 This is intentional. The protobuf enum exists purely for wire serialisation
 within the gRPC protocol. The domain enum is used throughout application code
-(CpuForwardPassHandler, ActivationCodec, ConsoleMain, ProcessPipelineClient
+(LlamaTransformerHandler, ActivationCodec, ConsoleMain, ProcessPipelineClient
 constructor, etc.). Coupling domain code to protobuf-generated types creates
 a transitive dependency on the generated API module throughout the entire
 codebase, making future proto changes expensive.
@@ -2002,7 +2003,7 @@ consume the player infrastructure but do not own it.
 
 19.1  Motivation
 -----------------------------------------------
-CpuForwardPassHandler.matVec() is the hot path for every token generated.
+LlamaTransformerHandler.matVec() is the hot path for every token generated.
 For TinyLlama-1.1B the dominant shapes are:
 
   Q/K/V projections   2048 x 2048
@@ -2014,24 +2015,25 @@ On CPU (parallel IntStream across ForkJoinPool.commonPool()) a single output
 projection takes ~15-30ms. cublasSgemv on a T4 GPU takes ~0.3-1ms for the
 same shape — a 15-50x reduction for this one operation.
 
-The matVec call sites inside CpuForwardPassHandler total 7 per layer
+The matVec call sites inside LlamaTransformerHandler total 7 per layer
 (wq, wk, wv, wo, wGate, wUp, wDown) plus the output projection. For a
 22-layer model that is 155 matVec calls per token.
 
-19.2  Design — GpuMatVec interface
+19.2  Design — MatVecBackend interface (was GpuMatVec, renamed session 12)
 -----------------------------------------------
 A single interface decouples the matmul backend from the transformer logic:
 
-  GpuMatVec
+  MatVecBackend
     float[] sgemv(float[] A, float[] x, int rows, int cols)
 
 Implementations:
-  CpuMatVec      — delegates to CpuForwardPassHandler.matVec()
-                   Singleton (CpuMatVec.INSTANCE). Stateless, no resources.
+  CpuMatVecBackend      — delegates to LlamaTransformerHandler.matVec()
+                   (was CpuMatVec; renamed session 12)
+                   Singleton (CpuMatVecBackend.INSTANCE). Stateless, no resources.
                    Used as CPU fallback and as the reference implementation
                    in all tests that do not require a GPU.
 
-  CublasMatVec   — cublasSgemv_v2 via JCublas2.
+  CudaMatVecBackend   — cublasSgemv_v2 via JCublas2.
                    Row-major to cuBLAS column-major mapping via CUBLAS_OP_T —
                    no data reordering, just a flag. See §19.3 for details.
                    One instance per GpuContext (one per node JVM).
@@ -2042,7 +2044,7 @@ Contract enforced by both:
   - Returns a new float[rows]
   - Thread-safe: each call is self-contained with its own device memory
 
-19.3  CublasMatVec — row-major to cuBLAS mapping
+19.3  CudaMatVecBackend — row-major to cuBLAS mapping
 -----------------------------------------------
 cuBLAS is column-major. A row-major matrix A[rows x cols] stored in memory
 is identical to a column-major A^T[cols x rows]. To compute y = A * x:
@@ -2079,7 +2081,7 @@ One GpuContext per node JVM. AutoCloseable.
   ctx.close()    — cublasDestroy(handle), idempotent
 
 cuBLAS handles are thread-safe for concurrent kernel submissions from
-multiple Java threads. All CublasMatVec calls on the same GpuContext
+multiple Java threads. All CudaMatVecBackend calls on the same GpuContext
 can run concurrently without additional synchronisation.
 
 19.5  CudaAvailability — safe detection
@@ -2112,50 +2114,50 @@ IMPORTANT — FD inheritance hazard:
     GpuForwardPassIT is excluded from the default failsafe scan.
     A -Pgpu Maven profile re-includes it and sets -Djuno.gpu.test=true.
 
-19.6  GpuForwardPassHandler
+19.6  LlamaTransformerHandler
 -----------------------------------------------
-Structurally mirrors CpuForwardPassHandler. Identical:
+Structurally mirrors LlamaTransformerHandler. Identical:
   - Weight loading (GGUF, via GgufReader)
   - Layer loop (runLayers)
   - KV cache (HashMap per requestId, same MAX_SEQ_LEN=2048)
   - GQA (grouped-query attention, pure Java)
   - RMSNorm, RoPE, SwiGLU, residual adds — all pure Java (same static methods
-    from CpuForwardPassHandler reused directly)
+    from LlamaTransformerHandler reused directly)
 
 Different:
-  - Constructor takes a GpuMatVec instance
+  - Constructor takes a MatVecBackend instance
   - All 7 matVec calls per layer + output projection are routed through
-    matVec.sgemv() instead of CpuForwardPassHandler.matVec()
+    matVec.sgemv() instead of LlamaTransformerHandler.matVec()
 
-Factory: GpuForwardPassHandler.load(Path, ShardContext, GpuMatVec)
+Factory: LlamaTransformerHandler.load(Path, ShardContext, MatVecBackend)
   Opens the GGUF file, reads LlamaConfig, loads all weight tensors for the
-  assigned layer range. Identical to CpuForwardPassHandler.load().
+  assigned layer range. Identical to LlamaTransformerHandler.load().
 
 Typical wiring on a GPU node:
   GpuContext ctx    = GpuContext.init(0);
-  GpuMatVec  matVec = new CublasMatVec(ctx);
-  handler = GpuForwardPassHandler.load(modelPath, shardCtx, matVec);
+  MatVecBackend  matVec = new CudaMatVecBackend(ctx);
+  handler = LlamaTransformerHandler.load(modelPath, shardCtx, matVec);
 
 CPU-only fallback (same class, different backend):
-  handler = GpuForwardPassHandler.load(modelPath, shardCtx, CpuMatVec.INSTANCE);
+  handler = LlamaTransformerHandler.load(modelPath, shardCtx, CpuMatVecBackend.INSTANCE);
 
 19.7  Node module — new classes summary
 -----------------------------------------------
-  GpuMatVec.java              Interface — sgemv contract
-  CpuMatVec.java              GpuMatVec backed by CpuForwardPassHandler.matVec()
-  CublasMatVec.java           GpuMatVec backed by cublasSgemv_v2 (JCublas2)
+  MatVecBackend.java              Interface — sgemv contract
+  CpuMatVecBackend.java              MatVecBackend backed by LlamaTransformerHandler.matVec()
+  CudaMatVecBackend.java           MatVecBackend backed by cublasSgemv_v2 (JCublas2)
   GpuContext.java             cuBLAS handle lifecycle, AutoCloseable
   CudaAvailability.java       Safe CUDA runtime detection, cached
-  GpuForwardPassHandler.java  ForwardPassHandler using GpuMatVec
+  LlamaTransformerHandler.java  ForwardPassHandler using MatVecBackend
 
 Updated node module listing (full):
   ForwardPassHandler          Interface
   CyclicForwardPassHandler    Stub, deterministic, tests
-  CpuForwardPassHandler       Real transformer, parallel CPU matVec
-  GpuForwardPassHandler       Real transformer, GpuMatVec backend  <- NEW
-  GpuMatVec                   Interface — matmul backend           <- NEW
-  CpuMatVec                   CPU implementation of GpuMatVec      <- NEW
-  CublasMatVec                cuBLAS implementation of GpuMatVec   <- NEW
+  LlamaTransformerHandler       Real transformer, parallel CPU matVec
+  LlamaTransformerHandler       Real transformer, MatVecBackend backend  <- NEW
+  MatVecBackend                   Interface — matmul backend           <- NEW
+  CpuMatVecBackend                   CPU implementation of MatVecBackend      <- NEW
+  CudaMatVecBackend                cuBLAS implementation of MatVecBackend   <- NEW
   GpuContext                  cuBLAS handle lifecycle               <- NEW
   CudaAvailability            CUDA runtime detection                <- NEW
   GgufReader                  GGUF v2/v3 binary parser
@@ -2171,9 +2173,9 @@ Updated node module listing (full):
 19.8  Test additions (session 10)
 -----------------------------------------------
 
-GpuMatVecContractTest (node module) — 17 tests, no GPU required:
-  Full contract suite runs against CpuMatVec.INSTANCE.
-  Extended by CublasMatVecTest which inherits all 17 tests.
+MatVecBackendContractTest (node module) — 17 tests, no GPU required:
+  Full contract suite runs against CpuMatVecBackend.INSTANCE.
+  Extended by CudaMatVecBackendTest which inherits all 17 tests.
 
   Contract tests:
     output_length_is_rows
@@ -2194,7 +2196,7 @@ GpuMatVecContractTest (node module) — 17 tests, no GPU required:
     wrong_A_length_throws               IllegalArgumentException
     wrong_x_length_throws               IllegalArgumentException
 
-CublasMatVecTest (node module) — @Tag("gpu"), extends GpuMatVecContractTest:
+CudaMatVecBackendTest (node module) — @Tag("gpu"), extends MatVecBackendContractTest:
   Inherits all 17 contract tests, adds:
     cublas_matches_cpu_reference_hidden_dim         2048 x 2048
     cublas_matches_cpu_reference_output_projection  32000 x 2048
@@ -2219,7 +2221,7 @@ GpuContextTest (node module) — 6 tests, all @Tag("gpu"):
   init_without_cuda_throws              (runs on CPU-only machines only)
   try_with_resources_auto_closes
 
-GpuForwardPassHandlerTest (node module) — 5 tests, no GPU required:
+LlamaTransformerHandlerTest (node module) — 5 tests, no GPU required:
   Uses CyclicForwardPassHandler as shape-correct stand-in (avoids GGUF load).
   is_ready_true
   intermediate_node_shape               activations.length == hiddenDim
@@ -2278,3 +2280,550 @@ GPU integration test (model file required):
 Port conflict check before running ThreeNodeClusterIT:
   lsof -i :19092,19093,19094
   kill <pid>   # if a leftover node JVM is squatting on the ports
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+21. SESSION 11 CHANGES (2026-03-20) — PHI-3 FAMILY SUPPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Verified end-to-end with phi-3.5-mini-instruct.Q4_K_M.gguf on a 3-node CPU
+cluster. All unit tests and integration tests still pass (114 tests, 0 failures).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+21.1  Phi3TransformerHandler — Phi-3 transformer forward pass
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: node/src/main/java/cab/ml/juno/node/Phi3TransformerHandler.java
+
+Phi-3 differs from LLaMA in two tensor layout choices that require dedicated
+handling at load time and during the forward pass.
+
+DIFFERENCE 1 — Fused QKV projection:
+  LLaMA stores three separate tensors per layer:
+    blk.{i}.attn_q.weight      [H,    H]
+    blk.{i}.attn_k.weight      [kvDim, H]
+    blk.{i}.attn_v.weight      [kvDim, H]
+
+  Phi-3 stores one fused tensor:
+    blk.{i}.attn_qkv.weight    [H + kvDim + kvDim, H]
+
+  The row layout within attn_qkv.weight:
+    rows [0, H)            → Q projection
+    rows [H, H+kvDim)      → K projection
+    rows [H+kvDim, end)    → V projection
+
+  The old approach (session 10 initial implementation) used Arrays.copyOfRange()
+  to split at load time, materialising three separate float[] arrays.
+  Phi3TransformerHandler keeps the fused tensor as one QuantizedTensor and uses
+  row-range matVec to extract Q, K, V at call time — no copy, no split.
+
+DIFFERENCE 2 — Fused gate+up FFN projection:
+  LLaMA stores:
+    blk.{i}.ffn_gate.weight    [I, H]
+    blk.{i}.ffn_up.weight      [I, H]
+
+  Phi-3 stores:
+    blk.{i}.ffn_up.weight      [2*I, H]
+
+  Row layout within the fused tensor:
+    rows [0, I)     → gate projection (SiLU input)
+    rows [I, 2*I)   → up projection
+
+  Same treatment: kept as one QuantizedTensor, row-range matVec extracts
+  gate and up independently at call time.
+
+Weight fields in Phi3TransformerHandler:
+  Small tensors → float[] (norm weights, token_embd, output_norm, output)
+  Large tensors → GgufReader.QuantizedTensor[] (raw Q4_K/Q5_K/Q6_K bytes):
+    attnQkv[L]    — fused [H + 2*kvDim, H]
+    wo[L]         — [H, H]
+    ffnGateUp[L]  — fused [2*I, H]
+    wDown[L]      — [H, I]
+
+Forward pass per layer:
+  x_norm = rmsNorm(x, attnNorm[li])
+  q = matVec(attnQkv[li], x_norm, rowStart=0,      rowEnd=H)
+  k = matVec(attnQkv[li], x_norm, rowStart=H,      rowEnd=H+kvDim)
+  v = matVec(attnQkv[li], x_norm, rowStart=H+kvDim, rowEnd=H+2*kvDim)
+  rope(q, pos, numHeads, headDim, ropeTheta)
+  rope(k, pos, numKvHeads, headDim, ropeTheta)
+  ... KV cache, GQA (identical to LlamaTransformerHandler) ...
+  attnProj = matVec(wo[li], attnOut, rowStart=0, rowEnd=H)
+  x2 = x + attnProj
+  x_norm2 = rmsNorm(x2, ffnNorm[li])
+  gate = matVec(ffnGateUp[li], x_norm2, rowStart=0, rowEnd=I)
+  up   = matVec(ffnGateUp[li], x_norm2, rowStart=I, rowEnd=2*I)
+  hidden = silu(gate) ⊙ up
+  x = x2 + matVec(wDown[li], hidden, rowStart=0, rowEnd=H)
+
+phi-3.5-mini-instruct hyperparameters (from GGUF metadata):
+  LlamaConfig{arch=phi3 hidden=3072 layers=32 heads=32 kvHeads=32
+              headDim=96 ffn=8192 vocab=32064 eps=1e-05 ropeTheta=10000}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+21.2  ForwardPassHandlerLoader — architecture-based routing
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: node/src/main/java/cab/ml/juno/node/ForwardPassHandlerLoader.java
+
+New factory that reads general.architecture from GGUF metadata and routes to
+the correct handler implementation.
+
+  public static ForwardPassHandler load(Path modelPath, ShardContext context)
+    reads general.architecture
+    switch(arch):
+      "phi3"    → Phi3TransformerHandler.load(modelPath, context)
+      default   → LlamaTransformerHandler.load(modelPath, context)
+
+Usage (ConsoleMain, EmbeddedNodeServer — both updated):
+  Before: handlers.add(LlamaTransformerHandler.load(Path.of(modelPath), context))
+  After:  handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context))
+
+Adding a new architecture requires only: implement a new ForwardPassHandler
+subclass and add a case branch in ForwardPassHandlerLoader.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+21.3  GgufReader.QuantizedTensor and tensorRaw() — lazy dequantization
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: node/src/main/java/cab/ml/juno/node/GgufReader.java
+
+ROOT CAUSE OF OOM ("Killed"):
+  The old Phi3TransformerHandler called r.tensor(name) for every projection
+  weight. GgufReader.tensor() dequantizes the entire tensor to float[] eagerly.
+
+  phi-3.5-mini memory breakdown with eager dequantization:
+    32 layers × 7 projection matrices × avg ~65 MB (float32) ≈ 14.5 GB
+    --heap 12g → OOM → Linux SIGKILL ("Killed", no Java stack trace)
+
+  The process was killed by the Linux OOM killer before any Java exception
+  could be printed. The --verbose flag only showed "Killed" on its own line.
+
+NEW API:
+
+  record QuantizedTensor(String name, int type, long nelems, byte[] data) {}
+
+  QuantizedTensor tensorRaw(String name) throws IOException
+    — loads raw quantized bytes, NO dequantization
+    — Q4_K: nelems/256 × 144 bytes per block (~4.5 bits/weight)
+    — Q5_K: nelems/256 × 176 bytes per block
+    — Q6_K: nelems/256 × 210 bytes per block
+
+  static long rawByteCount(int type, long nelems)
+    — byte size formula for each GGML type
+
+Memory after the fix (phi-3.5-mini, Q4_K_M):
+  32 layers × 4 fused tensors × ~9 MB (Q4_K raw) ≈ 2 GB
+  --heap 4g → works comfortably
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+21.4  LlamaTransformerHandler — quantized matVec overloads
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: node/src/main/java/cab/ml/juno/node/LlamaTransformerHandler.java
+
+NEW SIGNATURES:
+
+  // Full-matrix overload
+  static float[] matVec(QuantizedTensor A, float[] x, int rows, int cols)
+
+  // Row-range overload (used for fused tensors)
+  static float[] matVec(QuantizedTensor A, float[] x,
+                        int rowStart, int rowEnd, int cols)
+
+Dispatch table:
+  type  0 (F32)  → matVecF32raw   — byte reinterpret, ByteBuffer.getFloat
+  type  8 (Q8_0) → matVecQ8_0raw  — scale(f16) + 32 signed bytes per block
+  type 12 (Q4_K) → matVecQ4Kraw   — 4-group 256-elem blocks, nibble+scale+min
+  type 13 (Q5_K) → matVecQ5Kraw   — Q4_K + 5th bit per element from qh[]
+  type 14 (Q6_K) → matVecQ6Kraw   — signed 6-bit, two-halves×32 structure
+
+PARALLELISM:
+  All five implementations use IntStream.range(0, rows).parallel().forEach(),
+  distributing rows across ForkJoinPool.commonPool() — identical to the
+  existing float[] matVec overload. Each lambda allocates its own thread-local
+  scratch byte arrays (sc, qs, qh, ql) — no shared mutable state.
+
+  Before parallelization: only CPU4 at 100%, rest idle.
+  After: all 16 cores fully utilized during generation.
+
+Q5_K note:
+  phi-3.5-mini-instruct.Q4_K_M uses Q5_K for attn_output.weight in some
+  layers (the Q4_K_M "medium" mixed scheme uses Q5_K for the most sensitive
+  tensors). Even though the filename says Q4_K_M, type-13 tensors are present.
+
+Q6_K note:
+  Used for ffn_down.weight in some layers by the Q4_K_M scheme. Type-14.
+  The two-halves×32 loop structure is critical — using a flat i/4 index for
+  qh (as was the original Q6_K bug in session 5) produces wrong values for
+  ≥75% of each block's elements.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+21.5  LlamaConfig — tokenizer vocab size fix
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: node/src/main/java/cab/ml/juno/node/LlamaConfig.java
+
+BUG:
+  phi3.vocab_size in GGUF architecture metadata = 32000 (base vocab only).
+  tokenizer.ggml.tokens array has 32064 entries (base + 64 special tokens).
+  EOS token ID = 32000 — the first special token, right at the boundary.
+
+  LlamaConfig read phi3.vocab_size=32000 → output projection computed 32000
+  logits (indices 0..31999). EOS at index 32000 was outside the array → never
+  sampled → model ran for all max_tokens generating garbage text.
+
+  The garbage output looked like broken SentencePiece pieces:
+    [0:29966]<  [1:29989]|  [2:326]im  [3:29918]_  [4:2962]start ...
+  These spell out "<|im_start|>" — the model was "completing" a ChatML prompt
+  it had never been trained on, but even with a correct phi3 template the EOS
+  issue would have prevented clean termination.
+
+FIX:
+  Read both values, take the larger:
+    int archVocabSize      = r.metaInt(p + "vocab_size", ...)
+    int tokenizerVocabSize = tokenizerTokenCount(r)  // tokenizer.ggml.tokens.length
+    int vocabSize = Math.max(archVocabSize, tokenizerVocabSize)
+
+  Helper:
+    private static int tokenizerTokenCount(GgufReader r) {
+        Object v = r.meta("tokenizer.ggml.tokens");
+        return (v instanceof Object[] arr) ? arr.length : 0;
+    }
+
+  TinyLlama: both = 32000 → no change.
+  phi-3.5-mini: 32000 vs 32064 → 32064 wins.
+  LlamaConfig now logs: vocab=32064 (correct).
+
+DEFENCE IN DEPTH — Phi3TransformerHandler:
+  Both hot paths also derive their counts from actual tensor dimensions:
+
+  getInitialActivation():
+    int actualVocab = tokenEmbd.length / cfg.hiddenDim();
+    tokenId = Math.max(0, Math.min(tokenId, actualVocab - 1));
+    // was: cfg.vocabSize() - 1 → would clamp to 31999, wrong for IDs ≥ 32000
+
+  outputProjection():
+    int actualVocab = outputProj.length / cfg.hiddenDim();
+    return matVec(outputProj, xNorm, actualVocab, cfg.hiddenDim());
+    // was: cfg.vocabSize() → 32000 rows, missing EOS logit at index 32000
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+21.6  GenerationLoop — template routing fix
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: coordinator/src/main/java/cab/ml/juno/coordinator/GenerationLoop.java
+
+BUG:
+  GenerationLoop had a duplicated inline ternary chain at two call sites:
+
+    ChatTemplateFormatter formatter = ChatTemplateFormatter
+        .forModelType(request.modelId().toLowerCase().contains("tinyllama") ? "tinyllama"
+                : request.modelId().contains("llama3") ? "llama3"
+                        : request.modelId().contains("mistral") ? "mistral"
+                                : request.modelId().contains("gemma") ? "gemma" : "chatml");
+
+  "phi3" was absent from the chain → fell through to ChatML.
+
+  Phi-3 was never trained on ChatML. The model treated <|im_start|>, <|im_end|>
+  as ordinary tokens to complete, producing individual SentencePiece pieces
+  that spelled out the ChatML structure:
+    bot> <|im_startof the>user: \nThe assistant><|assistant|end|> ...
+
+  The correct phi-3 template is:
+    <|user|>\n{user}<|end|>\n<|assistant|>\n
+
+  ChatTemplate.phi3() and ChatModelType.fromPath() were both correct —
+  ConsoleMain correctly passed "phi3" as modelId. GenerationLoop discarded
+  it and re-derived the template type using its own incomplete logic.
+
+FIX (two lines changed):
+  Before (both call sites):
+    ChatTemplateFormatter formatter = ChatTemplateFormatter
+        .forModelType(<five-line ternary chain>);
+
+  After (both call sites):
+    ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(request.modelId());
+
+  modelId already contains the canonical type key ("phi3", "tinyllama", etc.)
+  set by ChatModelType.fromPath() in ConsoleMain. ChatTemplateFormatter
+  .forModelType() delegates to ChatTemplate.forModelType() which handles the
+  full registry lookup including phi3.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+21.7  ChatTemplate.forModelType() — exact + substring resolution
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: tokenizer/src/main/java/cab/ml/juno/tokenizer/ChatTemplate.java
+
+BUG:
+  After the GenerationLoop fix, existing GenerationLoopTest tests broke.
+  Tests passed "llama3-8b" as modelId. forModelType() used an exact map
+  lookup: "llama3-8b" was not a key in BUILT_IN → fell to chatml → wrong
+  prompt format → 3 tokens instead of expected 2 → cascade failures in 6 tests.
+
+BUILT_IN KEYS ADDED:
+  "phi-3" added as alias for phi3 (hyphenated form used in raw file paths like
+  "phi-3.5-mini-instruct"). Map.of() supports up to 10 pairs (now at 8).
+
+RESOLUTION ORDER (new forModelType algorithm):
+  1. Exact key match: "phi3" → phi3, "tinyllama" → tinyllama, etc.
+  2. Substring match, longest key first:
+       "llama3-8b" contains "llama3" (len 6) → llama3
+       "tinyllama-1.1b" contains "tinyllama" (len 9, wins over "llama3" len 6)
+       "phi-3.5-mini-instruct" contains "phi-3" (len 5) → phi3
+  3. Default: chatml for anything unrecognised.
+
+  Longest-key-first ordering in the substring search prevents shorter keys
+  from shadowing longer ones. The comparison is case-insensitive (key lowered).
+
+COMPLETE BUILT_IN REGISTRY (after session 11):
+  "llama3"    → LLaMA 3   <|begin_of_text|>...<|eot_id|>...<|start_header_id|>assistant
+  "mistral"   → Mistral   [INST] ... [/INST]
+  "gemma"     → Gemma     <start_of_turn>user\n...<end_of_turn>\n<start_of_turn>model\n
+  "chatml"    → ChatML    <|im_start|>role\n...<|im_end|>\n   (default fallback)
+  "tinyllama" → Zephyr    <|user|>\n{content}</s>\n<|assistant|>\n
+  "zephyr"    → (alias for tinyllama — same instance)
+  "phi3"      → Phi-3     <|user|>\n{user}<|end|>\n<|assistant|>\n
+  "phi-3"     → (alias for phi3 — hyphenated path form)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+21.8  Test additions (session 11)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PhiQuantizedMatVecTest (node module) — 6 tests:
+  f32_quantizedTensor_matchesPlainMatVec
+    QuantizedTensor(F32) matVec == float[] matVec exactly.
+
+  q4k_quantizedTensor_matchesDequantMatVec
+    Q4_K QuantizedTensor matVec matches GgufReader.tensor() + float[] matVec
+    within 1e-3. Uses GgufReaderTest golden block (seed=42, d=0.25).
+
+  q4k_rowRange_extractsCorrectSubMatrix
+    Row-range matVec on a 3-row Q4_K tensor: rows 0, 1, 0+1 each match their
+    corresponding slice of the fully-dequantized array.
+
+  tensorRaw_q4k_returnsBytesNotFloats
+    Q4_K raw bytes = nelems/256 × 144. Asserts byte count is the Q4_K-sized
+    value, not nelems × 4 (float32). Regression guard for lazy dequantization.
+
+  q5k_quantizedTensor_matchesDequantMatVec
+    Q5_K (type 13) QuantizedTensor path matches eager dequant within 1e-3.
+
+  q6k_quantizedTensor_matchesDequantMatVec
+    Q6_K (type 14) QuantizedTensor path matches eager dequant within 1e-3.
+    Uses same golden block bytes as GgufReaderTest.q6k_single_block_golden_values.
+
+PhiHandlerQuantizedLoadTest (node module) — 8 tests:
+  singleShard_load_producesLogitsOfVocabSize
+    Full single-shard load on synthetic phi3 GGUF → logits.length == vocabSize.
+
+  intermediateShard_returnsActivationsNotLogits
+    Intermediate shard (no output proj) → activations.length == hiddenDim.
+
+  loaderRoutesPhiArchToPhiHandler
+    ForwardPassHandlerLoader.load() on phi3 GGUF → instanceof Phi3TransformerHandler.
+
+  twoRequests_haveIndependentKvCaches
+    Two concurrent requests on same handler → both produce valid logits.
+
+  llamaConfig_usesTokenizerVocabSize_whenLargerThanArchMetadata
+    GGUF with phi3.vocab_size=256 but 264 tokenizer tokens → cfg.vocabSize()=264.
+    Direct regression test for the EOS-unreachable bug.
+
+  llamaConfig_keepsArchVocabSize_whenTokenizerMatches
+    When arch vocab == tokenizer count → vocabSize unchanged.
+
+  phi_outputLogits_matchTokenizerVocab_notArchMetadata
+    Handler loaded with archVocab=256, tokenizerVocab=264 →
+    result.logits().length == 264 (not 256).
+
+  phi_embeddingLookup_acceptsTokensAboveArchVocab
+    Token ID 260 (valid in tokenizer but > archVocab=256) → no exception,
+    logits.length == 264.
+
+GenerationLoopTest (coordinator module) — 3 new tests:
+  phi3_modelId_selects_phi3_template_not_chatml
+    ChatTemplateFormatter.forModelType("phi3") returns phi3 template.
+    Prompt contains <|user|>, <|end|>, <|assistant|> and does NOT contain
+    <|im_start|> or <|im_end|>. Primary regression anchor for the GenerationLoop
+    ternary-chain removal.
+
+  tinyllama_modelId_selects_tinyllama_template
+    "tinyllama" → tinyllama template, not chatml.
+
+  unknown_modelId_falls_back_to_chatml
+    "some-unknown-model" → chatml fallback.
+
+ChatTemplateTest (tokenizer module) — 3 new tests:
+  forModelType_resolves_versioned_llama3_id_via_substring
+    "llama3-8b", "llama3-70b-instruct", "Meta-Llama3-8B" → all resolve to llama3.
+
+  forModelType_exact_key_wins_over_substring
+    "tinyllama" exact-matches tinyllama, not llama3 via substring.
+    "tinyllama-1.1b-chat" substring-matches tinyllama (len 9 > llama3 len 6).
+
+  forModelType_phi3_exact_and_substring
+    "phi3" exact → phi3.
+    "phi-3.5-mini-instruct" substring ("phi-3", len 5) → phi3.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+21.9  Files changed in session 11
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  node/src/main/java/.../node/
+    GgufReader.java                 + QuantizedTensor record, tensorRaw(),
+                                      rawByteCount()
+    LlamaConfig.java                + tokenizer vocab size fix (Math.max)
+    LlamaTransformerHandler.java      + matVec(QuantizedTensor, ...) overloads:
+                                      F32, Q4_K, Q5_K, Q6_K, Q8_0 — all parallel
+    Phi3TransformerHandler.java      NEW — Phi-3 transformer, fused tensors,
+                                      QuantizedTensor[] weight fields
+    ForwardPassHandlerLoader.java   NEW — architecture routing factory
+
+  node/src/test/java/.../node/
+    PhiQuantizedMatVecTest.java     NEW — 6 matVec correctness tests
+    PhiHandlerQuantizedLoadTest.java  NEW — 8 handler load + vocab tests
+
+  coordinator/src/main/java/.../coordinator/
+    GenerationLoop.java             ternary chain → forModelType(modelId)
+                                    (2 call sites — batch path + single path)
+
+  coordinator/src/test/java/.../coordinator/
+    GenerationLoopTest.java         + 3 template routing regression tests
+
+  tokenizer/src/main/java/.../tokenizer/
+    ChatTemplate.java               + phi3() template, "phi-3" alias in BUILT_IN,
+                                      forModelType() exact+substring resolution
+
+  tokenizer/src/test/java/.../tokenizer/
+    ChatTemplateTest.java           + 3 substring resolution regression tests
+
+  player/src/main/java/.../player/
+    ConsoleMain.java                LlamaTransformerHandler.load → ForwardPassHandlerLoader.load
+    EmbeddedNodeServer.java         LlamaTransformerHandler.load → ForwardPassHandlerLoader.load
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+21.10  Updated build status (session 11)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  node           SUCCESS  (+2 new classes: Phi3TransformerHandler,
+                            ForwardPassHandlerLoader;
+                            GgufReader + LlamaTransformerHandler + LlamaConfig updated)
+  tokenizer      SUCCESS  (ChatTemplate updated)
+  coordinator    SUCCESS  (GenerationLoop updated)
+  player         SUCCESS  (ConsoleMain + EmbeddedNodeServer updated)
+  All others     unchanged
+
+  Unit tests (session 11 additions):
+    PhiQuantizedMatVecTest       6 new
+    PhiHandlerQuantizedLoadTest  8 new
+    GenerationLoopTest           3 new
+    ChatTemplateTest             3 new
+                                ───
+    Total new:                  20
+
+  Previous total: 355
+  New total:      375
+  Failures:       0
+  Errors:         0
+
+  Real-model verification:
+    phi-3.5-mini-instruct.Q4_K_M.gguf — 3-node CPU cluster, --heap 4g
+    ✓ Loads without OOM
+    ✓ All 16 CPU cores utilized during generation
+    ✓ Generates coherent phi3-templated responses
+    ✓ EOS token (ID 32000) reachable → generation terminates normally
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+22. SESSION 12 CHANGES (2026-03-20) — ARCHITECTURE / HARDWARE NAMING REFACTOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Pure rename refactor. No logic changes. All tests pass (0 failures).
+
+22.1  Motivation
+-----------------------------------------------
+The old naming bundled two orthogonal concerns into each class name:
+
+  CpuForwardPassHandler   = "LLaMA architecture" + "CPU hardware" mixed together
+  GpuForwardPassHandler   = "LLaMA architecture" + "GPU hardware" mixed together
+  PhiForwardPassHandler   = "Phi-3 architecture" (hardware ignored — always CPU)
+  GpuMatVec               = hardware backend interface, but name implied GPU-only
+  CpuMatVec               = hardware backend (CPU), name didn't say "backend"
+  CublasMatVec            = hardware backend (CUDA), name leaked implementation
+
+The two axes are independent:
+  Model family:   LLaMA, Phi-3, (future: Gemma, Mistral-specific, ...)
+  Hardware:       CPU threads, CUDA, (future: Vulkan, Metal, ...)
+
+Any model family must be able to run on any hardware. The old naming made
+GpuForwardPassHandler appear to be a different model family, not a different
+backend — wrong mental model.
+
+22.2  Rename table
+-----------------------------------------------
+  BEFORE                         AFTER
+  ─────────────────────────────────────────────────────────
+  GpuMatVec              →  MatVecBackend          (interface)
+  CpuMatVec              →  CpuMatVecBackend       (parallel IntStream impl)
+  CublasMatVec           →  CudaMatVecBackend      (cublasSgemv impl)
+  CpuForwardPassHandler  →  LlamaTransformerHandler (LLaMA-family arch, any backend)
+  GpuForwardPassHandler  →  (eliminated — merged into LlamaTransformerHandler)
+  PhiForwardPassHandler  →  Phi3TransformerHandler  (Phi-3 arch, any backend)
+
+  Test files renamed to match:
+  GpuMatVecContractTest      → MatVecBackendContractTest
+  CublasMatVecTest           → CudaMatVecBackendTest
+  GpuForwardPassHandlerTest  → LlamaTransformerHandlerTest
+  PhiHandlerQuantizedLoadTest → Phi3TransformerHandlerTest
+
+22.3  GpuForwardPassHandler eliminated
+-----------------------------------------------
+GpuForwardPassHandler was structurally identical to LlamaTransformerHandler
+(same weight loading, same attention math, same KV cache) with only the
+matVec calls different. That is exactly what the MatVecBackend field is for.
+
+Merged result:
+  LlamaTransformerHandler(MatVecBackend backend)
+
+  CPU node:  LlamaTransformerHandler.load(path, ctx)
+               → uses CpuMatVecBackend.INSTANCE by default
+
+  GPU node:  LlamaTransformerHandler.load(path, ctx, new CudaMatVecBackend(ctx))
+               → routes all matmul calls to cublasSgemv
+
+Two factory overloads preserve backward compatibility for callers that don't
+specify a backend (they get CPU).
+
+22.4  ForwardPassHandler vs TransformerHandler — why kept separate
+-----------------------------------------------
+Question asked during design: should ForwardPassHandler be renamed
+TransformerHandler?
+
+Decision: no. ForwardPassHandler is the broader pipeline interface —
+forward(request, context) → result. Transformers are one family of
+implementations. Other forward-pass strategies exist (Mamba/SSM, future MoE
+routing, diffusion decoders) that would implement ForwardPassHandler without
+being transformers. LlamaTransformerHandler and Phi3TransformerHandler
+implement ForwardPassHandler, not the other way around.
+
+22.5  Final node module class listing (session 12)
+-----------------------------------------------
+  ForwardPassHandler          Interface — pipeline contract (unchanged)
+  CyclicForwardPassHandler    Stub, deterministic, tests (unchanged)
+  LlamaTransformerHandler     LLaMA/Mistral/Gemma/TinyLlama + MatVecBackend
+  Phi3TransformerHandler      Phi-3 fused tensors + MatVecBackend
+  ForwardPassHandlerLoader    Architecture routing factory (unchanged name)
+  MatVecBackend               Interface — compute substrate contract
+  CpuMatVecBackend            Parallel IntStream implementation
+  CudaMatVecBackend           cublasSgemv_v2 via JCublas2
+  GpuContext                  cuBLAS handle lifecycle (unchanged)
+  CudaAvailability            CUDA runtime detection (unchanged)
+  GgufReader                  GGUF v2/v3 parser (unchanged)
+  LlamaConfig                 Hyperparams from GGUF metadata (unchanged)
+  ActivationCodec             FLOAT32/FLOAT16/INT8 encode/decode (unchanged)
+  ActivationDtype             Domain enum (unchanged)
+  ForwardRequest              Input record (unchanged)
+  ForwardResult               Output record (unchanged)
+  ShardContext                Shard assignment runtime context (unchanged)
+  NodeConfig                  Node configuration (unchanged)
+  LocalInferencePipeline      In-process pipeline for tests (unchanged)
+  InferencePipeline           Pipeline interface (unchanged)

@@ -200,6 +200,65 @@ public final class GgufReader implements AutoCloseable {
 		return java.util.Collections.unmodifiableMap(metadata);
 	}
 
+	// ── QuantizedTensor ───────────────────────────────────────────────────────
+
+	/**
+	 * A tensor held in its original quantized encoding (e.g. Q4_K bytes).
+	 *
+	 * <p>Use this instead of {@link #tensor(String)} when you want to keep the
+	 * weights compressed and dequantize on-the-fly during matmul, avoiding the
+	 * enormous float32 allocation that causes OOM for large models.
+	 *
+	 * <p>Memory comparison for one phi-3.5-mini projection matrix (3072 × 3072):
+	 * <ul>
+	 *   <li>{@code tensor()} → float[]  = 3072 × 3072 × 4 B ≈  37.7 MB per layer
+	 *   <li>{@code tensorRaw()} → Q4_K  = 3072 × 12 blocks × 144 B ≈  5.3 MB per layer
+	 * </ul>
+	 *
+	 * @param name  tensor name as it appears in the GGUF file
+	 * @param type  GGML quantisation type ID (0=F32, 1=F16, 8=Q8_0, 12=Q4_K, …)
+	 * @param nelems total number of logical scalar elements in the tensor
+	 * @param data  raw quantised bytes (NOT dequantised)
+	 */
+	public record QuantizedTensor(String name, int type, long nelems, byte[] data) {}
+
+	/**
+	 * Load the raw (quantised) bytes for a tensor without dequantising.
+	 *
+	 * @throws IllegalArgumentException if the tensor does not exist
+	 * @throws UnsupportedOperationException if the type has no known byte-size formula
+	 */
+	public QuantizedTensor tensorRaw(String name) throws IOException {
+		TensorInfo info = tensors.get(name);
+		if (info == null)
+			throw new IllegalArgumentException(
+					"Tensor not found: " + name + "  (available: " + tensors.size() + " tensors)");
+		long byteCount = rawByteCount(info.type, info.nelems);
+		ByteBuffer buf = readBytes(info.offset, byteCount);
+		byte[] raw = new byte[(int) byteCount];
+		buf.get(raw);
+		return new QuantizedTensor(name, info.type, info.nelems, raw);
+	}
+
+	/**
+	 * Byte size of a quantised tensor in its encoded form.
+	 *
+	 * @param type   GGML quantisation type ID
+	 * @param nelems number of logical scalar elements
+	 */
+	public static long rawByteCount(int type, long nelems) {
+		return switch (type) {
+		case GGML_TYPE_F32  -> nelems * 4L;
+		case GGML_TYPE_F16, GGML_TYPE_BF16 -> nelems * 2L;
+		case GGML_TYPE_Q8_0 -> (nelems / 32L) * 34L;
+		case GGML_TYPE_Q4_0 -> (nelems / 32L) * 18L;
+		case GGML_TYPE_Q4_K -> (nelems / 256L) * 144L;
+		case GGML_TYPE_Q5_K -> (nelems / 256L) * 176L;
+		case GGML_TYPE_Q6_K -> (nelems / 256L) * 210L;
+		default -> throw new UnsupportedOperationException("No byte-size formula for GGML type " + type);
+		};
+	}
+
 	/**
 	 * Load and dequantize a tensor to float[]. Results are cached — subsequent
 	 * calls with the same name are free.

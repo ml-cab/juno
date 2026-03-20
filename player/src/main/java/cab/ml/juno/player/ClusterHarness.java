@@ -85,7 +85,7 @@ public final class ClusterHarness implements AutoCloseable {
 	/**
 	 * Create a 3-node cluster that loads real weights from a GGUF file. Each node
 	 * receives the model path as a CLI arg and loads its layer shard via
-	 * CpuForwardPassHandler when loadShard() is called.
+	 * LlamaTransformerHandler when loadShard() is called.
 	 *
 	 * Uses the default 22-layer split (TinyLlama). For other models call
 	 * {@link #threeNodes(String, int)} and pass the actual layer count.
