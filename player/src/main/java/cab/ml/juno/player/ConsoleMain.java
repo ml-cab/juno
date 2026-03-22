@@ -99,6 +99,7 @@ public final class ConsoleMain {
 	private static boolean verbose = false;
 	private static boolean help = false;
 	private static ParallelismType pType = ParallelismType.PIPELINE;
+	private static String jfrDuration = null;
 
 	public static void main(String[] args) throws Exception {
 		AnsiSupport.enable();
@@ -128,6 +129,9 @@ public final class ConsoleMain {
 		System.setProperty("TOP_P", String.valueOf(topP));
 		if (verbose) {
 			System.setProperty("JUNO_VERBOSE", "true");
+		}
+		if (jfrDuration != null) {
+			System.setProperty("juno.jfr.duration", jfrDuration);
 		}
 
 		// Show banner
@@ -177,6 +181,13 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					i++;
 				break;
+			case "--jfr":
+				// consumed by run.sh/run.bat as -XX:StartFlightRecording; recognised here
+				// so that direct `java -jar player.jar --jfr 5m` invocations don't fail,
+				// and so juno.jfr.duration is available as a system property at runtime.
+				if (i + 1 < args.length)
+					jfrDuration = args[++i];
+				break;
 			case "--local":
 				localMode = true;
 				break;
@@ -218,6 +229,9 @@ public final class ConsoleMain {
 		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.95, 0 = disabled)");
 		System.out.println("  --local                    Use in-process nodes (no forking)");
 		System.out.println("  --nodes N                  Number of in-process nodes (default: 3, only with --local)");
+		System.out.println("  --jfr DURATION             Java Flight Recording duration, e.g. 5m 30s 1h");
+		System.out.println("                             (handled by run.sh/run.bat as -XX:StartFlightRecording;");
+		System.out.println("                             also accepted here for direct jar invocations)");
 		System.out.println("  --verbose, -v              Show more logging");
 		System.out.println("  --help, -h                 Show this help");
 		System.out.println();
@@ -431,6 +445,10 @@ public final class ConsoleMain {
 				String.format("  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
 						Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP,
 						localMode ? "local" : "cluster", nodeCount, Color.RESET));
+		if (jfrDuration != null) {
+			System.out.println(String.format("  %s⏱ JFR active · duration=%s%s%n",
+					Color.YELLOW, jfrDuration, Color.RESET));
+		}
 	}
 
 	private static void print(String msg) {

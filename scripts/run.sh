@@ -132,21 +132,23 @@ cmd_cluster() {
   local heap="${HEAP:-4g}"
   local verbose="false"
   local ptype="pipeline"
+  local jfr_duration=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --model-path)       model="$2";       shift 2 ;;
-      --pType | --ptype)  ptype="$2";       shift 2 ;;
-      --dtype)            dtype="$2";       shift 2 ;;
-      --max-tokens)       max_tokens="$2";  shift 2 ;;
-      --temperature)      temperature="$2"; shift 2 ;;
-      --top-k)            top_k="$2";       shift 2 ;;
-      --top-p)            top_p="$2";       shift 2 ;;
-      --heap)             heap="$2";        shift 2 ;;
-      --float16 | --fp16) dtype="FLOAT16";  shift   ;;
-      --float32)          dtype="FLOAT32";  shift   ;;
-      --int8)             dtype="INT8";     shift   ;;
-      --verbose | -v)     verbose="true";   shift   ;;
+      --model-path)       model="$2";        shift 2 ;;
+      --pType | --ptype)  ptype="$2";        shift 2 ;;
+      --dtype)            dtype="$2";        shift 2 ;;
+      --max-tokens)       max_tokens="$2";   shift 2 ;;
+      --temperature)      temperature="$2";  shift 2 ;;
+      --top-k)            top_k="$2";        shift 2 ;;
+      --top-p)            top_p="$2";        shift 2 ;;
+      --heap)             heap="$2";         shift 2 ;;
+      --jfr)              jfr_duration="$2"; shift 2 ;;
+      --float16 | --fp16) dtype="FLOAT16";   shift   ;;
+      --float32)          dtype="FLOAT32";   shift   ;;
+      --int8)             dtype="INT8";      shift   ;;
+      --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
         echo "  Usage: $0 cluster --model-path /path/to/model.gguf [flags]"
@@ -180,6 +182,9 @@ cmd_cluster() {
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE                JVM heap  e.g. 4g 8g 16g  (default 4g)"
+        echo "    --jfr DURATION             Enable Java Flight Recording for DURATION"
+        echo "                               e.g. 5m 30s 1h — records from JVM start,"
+        echo "                               writes juno-<timestamp>.jfr on exit"
         echo ""
         echo "  Logging:"
         echo "    --verbose / -v             show gRPC and node logs"
@@ -190,6 +195,7 @@ cmd_cluster() {
         echo "  Examples:"
         echo "    $0 cluster --model-path /models/tiny.gguf"
         echo "    $0 cluster --model-path /models/tiny.gguf --pType tensor"
+        echo "    $0 cluster --model-path /models/tiny.gguf --jfr 5m"
         echo "    PTYPE=tensor MODEL_PATH=/models/tiny.gguf $0"
         echo ""
         exit 0 ;;
@@ -211,11 +217,19 @@ cmd_cluster() {
   local verbose_flag=""
   [[ "$verbose" == "true" ]] && verbose_flag="--verbose"
 
+  local jfr_flag=""
+  if [[ -n "$jfr_duration" ]]; then
+    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
+    warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
+  fi
+
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
     "-Djuno.node.heap=${heap}" \
+    ${jfr_flag:+"$jfr_flag"} \
     -jar "$PLAYER_JAR" \
     --model-path "$model" \
     --dtype "$dtype" \
@@ -242,22 +256,24 @@ cmd_local() {
   local nodes="${NODES:-3}"
   local verbose="false"
   local ptype="pipeline"
+  local jfr_duration=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --model-path)       model="$2";       shift 2 ;;
-      --pType | --ptype)  ptype="$2";       shift 2 ;;
-      --dtype)            dtype="$2";       shift 2 ;;
-      --max-tokens)       max_tokens="$2";  shift 2 ;;
-      --temperature)      temperature="$2"; shift 2 ;;
-      --top-k)            top_k="$2";       shift 2 ;;
-      --top-p)            top_p="$2";       shift 2 ;;
-      --heap)             heap="$2";        shift 2 ;;
-      --nodes)            nodes="$2";       shift 2 ;;
-      --float16 | --fp16) dtype="FLOAT16";  shift   ;;
-      --float32)          dtype="FLOAT32";  shift   ;;
-      --int8)             dtype="INT8";     shift   ;;
-      --verbose | -v)     verbose="true";   shift   ;;
+      --model-path)       model="$2";        shift 2 ;;
+      --pType | --ptype)  ptype="$2";        shift 2 ;;
+      --dtype)            dtype="$2";        shift 2 ;;
+      --max-tokens)       max_tokens="$2";   shift 2 ;;
+      --temperature)      temperature="$2";  shift 2 ;;
+      --top-k)            top_k="$2";        shift 2 ;;
+      --top-p)            top_p="$2";        shift 2 ;;
+      --heap)             heap="$2";         shift 2 ;;
+      --nodes)            nodes="$2";        shift 2 ;;
+      --jfr)              jfr_duration="$2"; shift 2 ;;
+      --float16 | --fp16) dtype="FLOAT16";   shift   ;;
+      --float32)          dtype="FLOAT32";   shift   ;;
+      --int8)             dtype="INT8";      shift   ;;
+      --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
         echo "  Usage: $0 local --model-path /path/to/model.gguf [flags]"
@@ -287,6 +303,8 @@ cmd_local() {
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE                e.g. 4g 8g 16g               (default 4g)"
+        echo "    --jfr DURATION             Enable Java Flight Recording for DURATION"
+        echo "                               e.g. 5m 30s 1h — writes juno-<timestamp>.jfr"
         echo ""
         echo "  Logging:"
         echo "    --verbose / -v"
@@ -309,10 +327,18 @@ cmd_local() {
   local verbose_flag=""
   [[ "$verbose" == "true" ]] && verbose_flag="--verbose"
 
+  local jfr_flag=""
+  if [[ -n "$jfr_duration" ]]; then
+    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
+    warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
+  fi
+
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
+    ${jfr_flag:+"$jfr_flag"} \
     -jar "$PLAYER_JAR" \
     --model-path "$model" \
     --dtype "$dtype" \
@@ -333,12 +359,14 @@ cmd_test() {
   local model="${MODEL_PATH:-}"
   local heap="${HEAP:-4g}"
   local ptype="${PTYPE:-all}"
+  local jfr_duration=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --model-path)       model="$2";  shift 2 ;;
-      --heap)             heap="$2";   shift 2 ;;
-      --pType | --ptype)  ptype="$2";  shift 2 ;;
+      --model-path)       model="$2";        shift 2 ;;
+      --heap)             heap="$2";         shift 2 ;;
+      --pType | --ptype)  ptype="$2";        shift 2 ;;
+      --jfr)              jfr_duration="$2"; shift 2 ;;
       --help)
         echo ""
         echo "  Usage: $0 test --model-path /path/to/model.gguf [flags]"
@@ -368,6 +396,8 @@ cmd_test() {
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE        e.g. 4g 8g 16g  (default 4g)"
+        echo "    --jfr DURATION     Enable Java Flight Recording for DURATION"
+        echo "                       e.g. 5m 30s 1h — writes juno-<timestamp>.jfr"
         echo ""
         exit 0 ;;
       # positional model path
@@ -389,11 +419,19 @@ cmd_test() {
   info "Running ModelLiveRunner  (model=$(basename "$model")  pType=${ptype}  heap=${heap}  os=${OS})"
   echo ""
 
+  local jfr_flag=""
+  if [[ -n "$jfr_duration" ]]; then
+    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
+    warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
+  fi
+
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
     "-DpType=${ptype}" \
     "-Djuno.node.heap=${heap}" \
+    ${jfr_flag:+"$jfr_flag"} \
     -jar "$LIVE_JAR" \
     "$model"
 }
@@ -433,6 +471,7 @@ usage() {
   echo "    --top-k N                      top-K sampling cutoff     (default 20, 0=disabled)"
   echo "    --top-p F                      top-p nucleus sampling    (default 0.95, 0=disabled)"
   echo "    --heap SIZE                    JVM heap e.g. 4g 8g      (default 4g)"
+  echo "    --jfr DURATION                 Java Flight Recording     e.g. 5m 30s 1h"
   echo "    --verbose / -v                 show gRPC / node logs"
   echo ""
   echo "  local only:"

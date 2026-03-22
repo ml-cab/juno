@@ -48,6 +48,7 @@ if "%TOP_P%"==""       set "TOP_P=0.95"
 if "%HEAP%"==""        set "HEAP=4g"
 set "VERBOSE=false"
 if "%PTYPE%"=="" set "PTYPE=pipeline"
+set "JFR_DURATION_CLUSTER="
 
 :cluster_parse
 if "%~1"=="" goto :cluster_done
@@ -60,6 +61,7 @@ if /i "%~1"=="--temperature"( set "TEMPERATURE=%~2" & shift & shift & goto :clus
 if /i "%~1"=="--top-k"      ( set "TOP_K=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--top-p"      ( set "TOP_P=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--jfr"        ( set "JFR_DURATION_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :cluster_parse )
@@ -82,6 +84,8 @@ if /i "%~1"=="--help" (
   echo   --top-k N         (default 20)
   echo   --top-p F         (default 0.95)
   echo   --heap SIZE       (default 4g)
+  echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
+  echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
   echo   --verbose / -v
   goto :eof
 )
@@ -108,7 +112,15 @@ echo.
 set "VERBOSE_FLAG="
 if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %VERBOSE_FLAG%
+set "JFR_FLAG_CLUSTER="
+if not "%JFR_DURATION_CLUSTER%"=="" (
+  for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
+  set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
+  set "JFR_FLAG_CLUSTER=-XX:StartFlightRecording=duration=%JFR_DURATION_CLUSTER%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
+  echo [WARN] JFR enabled -- duration=%JFR_DURATION_CLUSTER%  output=juno-!JFR_TS!.jfr
+)
+
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" %JFR_FLAG_CLUSTER% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -125,6 +137,7 @@ if "%TOP_P%"==""       set "TOP_P=0.95"
 if "%HEAP%"==""        set "HEAP=4g"
 if "%NODES%"==""       set "NODES=3"
 set "VERBOSE=false"
+set "JFR_DURATION_LOCAL="
 
 :local_parse
 if "%~1"=="" goto :local_done
@@ -136,6 +149,7 @@ if /i "%~1"=="--top-k"      ( set "TOP_K=%~2" & shift & shift & goto :local_pars
 if /i "%~1"=="--top-p"      ( set "TOP_P=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--nodes"      ( set "NODES=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--jfr"        ( set "JFR_DURATION_LOCAL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :local_parse )
@@ -154,6 +168,8 @@ if /i "%~1"=="--help" (
   echo   --top-p F         (default 0.95)
   echo   --nodes N         (default 3)
   echo   --heap SIZE       (default 4g)
+  echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
+  echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
   echo   --verbose / -v
   goto :eof
 )
@@ -179,7 +195,15 @@ echo.
 set "VERBOSE_FLAG="
 if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %VERBOSE_FLAG%
+set "JFR_FLAG_LOCAL="
+if not "%JFR_DURATION_LOCAL%"=="" (
+  for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
+  set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
+  set "JFR_FLAG_LOCAL=-XX:StartFlightRecording=duration=%JFR_DURATION_LOCAL%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
+  echo [WARN] JFR enabled -- duration=%JFR_DURATION_LOCAL%  output=juno-!JFR_TS!.jfr
+)
+
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LOCAL% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -190,6 +214,7 @@ rem ============================================================================
 set "MODEL=%MODEL_PATH%"
 if "%HEAP%"==""  set "HEAP=4g"
 if "%PTYPE%"=="" set "PTYPE=all"
+set "JFR_DURATION_TEST="
 
 :test_parse
 if "%~1"=="" goto :test_done
@@ -197,6 +222,7 @@ if /i "%~1"=="--model-path" ( set "MODEL=%~2" & shift & shift & goto :test_parse
 if /i "%~1"=="--heap"       ( set "HEAP=%~2"  & shift & shift & goto :test_parse )
 if /i "%~1"=="--pType"      ( set "PTYPE=%~2" & shift & shift & goto :test_parse )
 if /i "%~1"=="--ptype"      ( set "PTYPE=%~2" & shift & shift & goto :test_parse )
+if /i "%~1"=="--jfr"        ( set "JFR_DURATION_TEST=%~2" & shift & shift & goto :test_parse )
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat test --model-path PATH [flags]
@@ -217,6 +243,8 @@ if /i "%~1"=="--help" (
   echo.
   echo   --pType pipeline^|tensor^|all   filter cluster tests (default: all)
   echo   --heap SIZE                    (default 4g)
+  echo   --jfr DURATION                 Java Flight Recording  e.g. 5m 30s 1h
+  echo                                  Records from start, writes juno-^<timestamp^>.jfr on exit
   goto :eof
 )
 if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :test_parse )
@@ -237,7 +265,15 @@ if errorlevel 1 exit /b 1
 echo [INFO] Running ModelLiveRunner  (pType=%PTYPE%  heap=%HEAP%)
 echo.
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-DpType=%PTYPE%" "-Djuno.node.heap=%HEAP%" -jar "%LIVE_JAR%" "%MODEL%"
+set "JFR_FLAG_TEST="
+if not "%JFR_DURATION_TEST%"=="" (
+  for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
+  set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
+  set "JFR_FLAG_TEST=-XX:StartFlightRecording=duration=%JFR_DURATION_TEST%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
+  echo [WARN] JFR enabled -- duration=%JFR_DURATION_TEST%  output=juno-!JFR_TS!.jfr
+)
+
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-DpType=%PTYPE%" "-Djuno.node.heap=%HEAP%" %JFR_FLAG_TEST% -jar "%LIVE_JAR%" "%MODEL%"
 goto :eof
 
 rem ============================================================================
@@ -259,6 +295,7 @@ echo   run.bat local   --model-path PATH    in-process REPL (single JVM)
 echo   run.bat test    --model-path PATH    6 smoke checks
 echo.
 echo   Env overrides: MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES
+echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h  (all commands)
 echo.
 goto :eof
 
