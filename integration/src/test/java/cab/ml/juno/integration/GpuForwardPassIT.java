@@ -13,9 +13,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import cab.ml.juno.node.LlamaTransformerHandler;
-import cab.ml.juno.node.CudaMatVecBackend;
 import cab.ml.juno.node.CudaAvailability;
+import cab.ml.juno.node.CudaMatVecBackend;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardRequest;
 import cab.ml.juno.node.ForwardResult;

@@ -143,6 +143,12 @@ message LoadShardRequest {
     int32  end_layer    = 4;  // exclusive
     bool   has_embeddings        = 5;  // true for node 1 (first in pipeline)
     bool   has_output_projection = 6;  // true for last node in pipeline
+
+    // Tensor-parallel fields (default 0 / 1 = pipeline mode — no tensor parallelism).
+    // In tensor-parallel mode every node receives the full layer range [0, totalLayers)
+    // and uses tensor_rank to select its weight slice (attention heads, FFN width).
+    int32  tensor_rank        = 7;  // this node's rank in [0, tensor_world_size); 0 in pipeline mode
+    int32  tensor_world_size  = 8;  // total tensor-parallel nodes; 1 in pipeline mode
 }
 
 message LoadShardResponse {

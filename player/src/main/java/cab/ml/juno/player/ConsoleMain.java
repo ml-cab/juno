@@ -40,6 +40,7 @@ import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
 import cab.ml.juno.registry.NodeDescriptor;
 import cab.ml.juno.registry.NodeStatus;
+import cab.ml.juno.registry.ParallelismType;
 import cab.ml.juno.registry.ShardMap;
 import cab.ml.juno.registry.ShardPlanner;
 import cab.ml.juno.sampler.Sampler;
@@ -97,6 +98,7 @@ public final class ConsoleMain {
 	private static int nodeCount = 3;
 	private static boolean verbose = false;
 	private static boolean help = false;
+	private static ParallelismType pType = ParallelismType.PIPELINE;
 
 	public static void main(String[] args) throws Exception {
 		AnsiSupport.enable();
@@ -165,8 +167,13 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					temperature = parseFloat(args[++i], 0.6f);
 				break;
+			case "--pType":
+			case "--ptype":
+				if (i + 1 < args.length)
+					pType = parseParallelismType(args[++i]);
+				break;
 			case "--heap":
-				// ignored when run as jar, but consume argument
+				// consumed by run.sh as -Xmx; ignored here but must be consumed
 				if (i + 1 < args.length)
 					i++;
 				break;
@@ -201,15 +208,18 @@ public final class ConsoleMain {
 		System.out.println("  --model-path PATH          Path to GGUF model file");
 		System.out.println();
 		System.out.println("Options:");
+		System.out.println("  --pType pipeline|tensor    Parallelism type (default: pipeline)");
+		System.out.println("    pipeline: contiguous layer blocks, serial activation flow");
+		System.out.println("    tensor:   all layers on every node, weight slices, AllReduce");
 		System.out.println("  --dtype FLOAT32|FLOAT16|INT8   Activation wire format (default: FLOAT16)");
 		System.out.println("  --max-tokens N             Max generated tokens (default: 200)");
 		System.out.println("  --temperature F            Sampling temperature (default: 0.6)");
 		System.out.println("  --top-k N                  Top-K sampling cutoff (default: 20, 0 = disabled)");
 		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.95, 0 = disabled)");
-		System.out.println("  --local                    Use in‑process nodes (no forking)");
-		System.out.println("  --nodes N                  Number of in‑process nodes (default: 3, only with --local)");
+		System.out.println("  --local                    Use in-process nodes (no forking)");
+		System.out.println("  --nodes N                  Number of in-process nodes (default: 3, only with --local)");
 		System.out.println("  --verbose, -v              Show more logging");
-		System.out.println("  --help, -h                  Show this help");
+		System.out.println("  --help, -h                 Show this help");
 		System.out.println();
 		System.out.println("JVM flags required:");
 		System.out.println("  --enable-preview");
@@ -274,13 +284,22 @@ public final class ConsoleMain {
 	// -------------------------------------------------------------------------
 
 	private static void runClusterRepl() throws Exception {
-		print(Color.CYAN_BOLD + "▶ Starting 3‑node cluster (forked JVMs)..." + Color.RESET);
+		String modeLabel = pType == ParallelismType.TENSOR ? "tensor-parallel" : "pipeline-parallel";
+		print(Color.CYAN_BOLD + "▶ Starting 3-node " + modeLabel + " cluster (forked JVMs)..." + Color.RESET);
 
 		int totalLayers;
+		int numHeads;
+		int vocabSize;
 		try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
-			totalLayers = LlamaConfig.from(cfgReader).numLayers();
+			LlamaConfig cfg = LlamaConfig.from(cfgReader);
+			totalLayers = cfg.numLayers();
+			numHeads    = cfg.numHeads();
+			vocabSize   = cfg.vocabSize();
 		}
-		ClusterHarness harness = ClusterHarness.threeNodes(modelPath, totalLayers);
+
+		ClusterHarness harness = (pType == ParallelismType.TENSOR)
+				? ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads)
+				: ClusterHarness.threeNodes(modelPath, totalLayers);
 
 		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
 			print("\n" + Color.YELLOW + "⏹ Shutting down cluster..." + Color.RESET);
@@ -292,9 +311,14 @@ public final class ConsoleMain {
 		}));
 
 		harness.start();
-		print(Color.GREEN + "✔ Cluster ready  (" + dtype + " activations)" + Color.RESET + "\n");
+		print(Color.GREEN + "✔ Cluster ready  (" + modeLabel + "  " + dtype + " activations)" + Color.RESET + "\n");
 
-		var pipeline = new ProcessPipelineClient(harness.nodeAddresses(), EmbeddedNodeServer.VOCAB_SIZE, dtype);
+		// For tensor mode harness.pipeline() returns TensorParallelPipelineClient
+		// (built with actual vocabSize inside startTensorParallel).
+		// For pipeline mode we build our own client with the actual vocabSize from GGUF.
+		var pipeline = (pType == ParallelismType.TENSOR)
+				? harness.pipeline()
+				: new ProcessPipelineClient(harness.nodeAddresses(), vocabSize, dtype);
 
 		Tokenizer tokenizer;
 		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
@@ -302,8 +326,7 @@ public final class ConsoleMain {
 		}
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop    = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
 
 		startRepl(loop, tokenizer);
 	}
@@ -422,6 +445,15 @@ public final class ConsoleMain {
 		case "FLOAT16", "F16", "FP16" -> ActivationDtype.FLOAT16;
 		case "INT8", "I8" -> ActivationDtype.INT8;
 		default -> ActivationDtype.FLOAT32;
+		};
+	}
+
+	private static ParallelismType parseParallelismType(String s) {
+		if (s == null)
+			return ParallelismType.PIPELINE;
+		return switch (s.toLowerCase()) {
+		case "tensor" -> ParallelismType.TENSOR;
+		default       -> ParallelismType.PIPELINE;
 		};
 	}
 

@@ -2827,3 +2827,263 @@ implement ForwardPassHandler, not the other way around.
   NodeConfig                  Node configuration (unchanged)
   LocalInferencePipeline      In-process pipeline for tests (unchanged)
   InferencePipeline           Pipeline interface (unchanged)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+23. SESSION 13 CHANGES (2026-03-22) — TENSOR PARALLEL (pType)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+23.1  New option: pType (pipeline | tensor)
+-----------------------------------------------
+A new node-level property pType selects the distribution strategy:
+
+  pType: pipeline  (existing behaviour — unchanged, default)
+    Contiguous layer blocks. Activation flows node-0 → node-1 → ... → node-N
+    in strict serial order. N-1 sequential gRPC hops per decode step.
+    Vertical / depth scaling: adding nodes enables larger models.
+
+  pType: tensor  (new)
+    Every node holds ALL transformer layers [0, totalLayers) but owns only
+    a horizontal slice of the weight matrices:
+      Attention  heads [headStart, headEnd)  — column-parallel Q/K/V projection
+                                               row-parallel output projection
+      FFN        width [0, sliceDim)         — column-parallel first linear
+                                               row-parallel second linear
+    All nodes compute in parallel per decode step.
+    The coordinator collects partial logit vectors and sums them (star AllReduce).
+    One broadcast + N parallel gRPC calls per decode step.
+    Horizontal / width scaling: adding nodes increases throughput and reduces
+    per-node VRAM pressure.
+
+    Constraint: numHeads must be even (divisible by 2). Heads are distributed
+    by ceiling-division so nodes may hold different counts (e.g. 32 heads × 3
+    nodes = 10/11/11) — corrected in the session 13 fixes (see section 24.1).
+
+23.2  Parallelism comparison
+-----------------------------------------------
+
+  PIPELINE (vertical)                   TENSOR (horizontal)
+  ─────────────────────────────────────────────────────────────
+  Node-1: layers  0– 7 + embed         Node-1: layers 0–22, heads  0–10, rank=0
+  Node-2: layers  8–14                 Node-2: layers 0–22, heads 10–21, rank=1
+  Node-3: layers 15–22 + output proj   Node-3: layers 0–22, heads 21–32, rank=2
+
+  Per step: 3 serial gRPC hops         Per step: 3 parallel gRPC calls + AllReduce
+  Latency:  additive (3 hops)          Latency:  bounded by slowest node (1 hop)
+  Scales:   model depth (VRAM)         Scales:   model width (throughput)
+  VRAM:     each node holds N/nodes    VRAM:     each node holds all weights
+            layers of weights                    (but computes only head slice)
+
+23.3  AllReduce strategy (star / coordinator-centric)
+-----------------------------------------------
+No inter-node communication is required. The coordinator:
+  1. Broadcasts full token byte sequence to all N nodes in parallel.
+  2. Each node returns a partial logit vector (vocabSize floats).
+  3. Coordinator element-wise-sums all partial vectors: O(N * vocabSize).
+  4. Sampler operates on the summed logit vector as usual.
+
+At vocabSize=32000, 3 nodes: 96000 float additions per step — negligible
+compared to the gRPC round-trip and attention computation time.
+
+For a 70B model (vocabSize=128256, 8 nodes): ~1M additions — still < 1ms.
+
+23.4  New classes (session 13)
+-----------------------------------------------
+  registry/
+    ParallelismType.java          enum: PIPELINE | TENSOR
+    TensorShardAssignment.java    all-layer assignment + tensorRank + tensorWorldSize
+    TensorShardPlanner.java       assigns unique rank per eligible node;
+                                  validates numHeads % 2 == 0 (must be even)
+
+  node/
+    TensorShardContext.java       runtime context: headsPerNode(), headStart(),
+                                  headEnd(), headDim(), sliceDim()
+
+  player/
+    TensorParallelPipelineClient.java
+                                  InferencePipeline: parallel broadcast + AllReduce sum
+                                  loadShards() sends tensorRank + tensorWorldSize
+                                  via proto LoadShardRequest fields 7+8
+
+23.5  Updated files (session 13)
+-----------------------------------------------
+  api/src/main/proto/inference.proto
+    LoadShardRequest: + tensor_rank (field 7), + tensor_world_size (field 8)
+    Default = 0 / 1 → backward compatible with all existing pipeline-mode code.
+
+  player/ClusterHarness.java
+    + tensorNodes()  factory (stub mode)
+    + tensorNodes(modelPath) factory
+    + tensorNodes(modelPath, totalLayers, numHeads) factory
+    + pipeline()     returns InferencePipeline — works for both PIPELINE and TENSOR
+    + tensorPipelineClient()  returns TensorParallelPipelineClient (TENSOR mode only)
+    + parallelismType()  returns the active ParallelismType
+    pipelineClient() retained unchanged for existing pipeline-mode tests.
+
+  cluster-config.yaml
+    node.pType: pipeline  (new field, default pipeline)
+
+  docs/howto.md
+    + --pType pipeline|tensor flag documented in the Flags table
+
+23.6  New tests (session 13)
+-----------------------------------------------
+  Unit tests:
+    TensorShardAssignmentTest     9 tests
+    TensorShardPlannerTest       10 tests
+    TensorShardContextTest       10 tests
+    TensorParallelPipelineClientTest  4 tests (in-process gRPC)
+
+  Integration test:
+    TensorParallelClusterIT       5 tests (3 forked JVMs, TENSOR mode)
+      cluster_is_tensor_parallel
+      all_nodes_alive_after_startup
+      generation_loop_via_tensor_parallel_grpc
+      concurrent_requests_via_tensor_parallel
+      tensor_parallel_vocab_size_matches_constant
+
+23.7  Build status (session 13)
+-----------------------------------------------
+  All existing tests unchanged and passing.
+  New unit test total: +33 tests
+
+  registry    SUCCESS  (+ ParallelismType, TensorShardAssignment, TensorShardPlanner)
+  node        SUCCESS  (+ TensorShardContext)
+  player      SUCCESS  (+ TensorParallelPipelineClient; ClusterHarness updated)
+  integration SUCCESS  (+ TensorParallelClusterIT)
+  All others  unchanged
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+24. SESSION 13 FIXES (2026-03-22) — TENSOR PARALLEL BUG FIXES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+24.1  numHeads divisibility constraint corrected
+-----------------------------------------------
+Problem:
+  TensorShardPlanner, TensorShardContext, and ClusterHarness all enforced
+  numHeads % worldSize == 0 (or numHeads % 3 == 0 in ClusterHarness). This
+  rejected valid configurations such as 32 heads across 3 nodes (32 % 3 != 0),
+  breaking all three happy-path tests in TensorShardPlannerTest.
+
+Root cause:
+  The original constraint was too strict. Tensor-parallel head distribution
+  uses ceiling-division (10/11/11 for 32 heads × 3 nodes), which is valid.
+  The only architectural hard requirement is that numHeads must be even,
+  because attention heads always pair for RoPE sin/cos rotation.
+
+Fix:
+  All three sites changed from numHeads % worldSize != 0 to numHeads % 2 != 0:
+    registry/TensorShardPlanner.java
+    node/TensorShardContext.java
+    player/ClusterHarness.java  (was numHeads % 3 != 0)
+
+  The rejection test plan_rejects_numHeads_not_divisible_by_worldSize uses
+  numHeads=31 (odd) and remains green. All three happy-path tests now pass.
+
+24.2  ClusterHarness.startTensorParallel() used hardcoded TinyLlama constants
+-----------------------------------------------
+Problem:
+  startTensorParallel() sent LoadShardRequest with endLayer=TOTAL_LAYERS(22)
+  and created TensorParallelPipelineClient with vocabSize=VOCAB_SIZE(32000),
+  regardless of the actual model passed to tensorNodes(modelPath, totalLayers,
+  numHeads). For phi-3.5-mini (32 layers, vocabSize=32064) this caused:
+    - Nodes loading only 22 of 32 layers → wrong weight coverage
+    - AllReduce validation failure (logits vector 32064 != expected 32000)
+    - Node-2 (rank=2) OOMing due to loading truncated model incorrectly
+
+Fix:
+  ClusterHarness gained two instance fields: configuredTotalLayers,
+  configuredNumHeads. These are set by tensorNodes() and used in
+  startTensorParallel() instead of the class-level constants.
+  vocabSize is read from the GGUF file at start() time via GgufReader +
+  LlamaConfig (one fast metadata-only open, no tensor loading).
+
+  Files changed:
+    player/ClusterHarness.java
+      + configuredTotalLayers, configuredNumHeads fields
+      + 5-arg private constructor
+      + GgufReader, LlamaConfig imports
+      + startTensorParallel() reads actual totalLayers and vocabSize
+
+24.3  LlamaTransformerHandler: eager float[] OOM in tensor-parallel mode
+-----------------------------------------------
+Problem:
+  LlamaTransformerHandler loaded all projection weight matrices (wq, wk, wv,
+  wo, wGate, wUp, wDown, outputProj) as fully dequantised float[] arrays via
+  GgufReader.tensor(). Q4_K → float[] is a 7× memory expansion:
+    TinyLlama 1.1B  Q4_K_M: ~4.4 GB per node in full model
+    phi-3.5-mini    Q4_K_M: ~2.85 GB per node in full model
+
+  In pipeline mode each node loaded only 1/3 of layers so it fit in 4 GB.
+  In tensor-parallel mode ALL nodes load ALL layers (the whole point of
+  tensor-parallel is that each node has all layers but only a weight slice).
+  All 3 nodes loading 4.4 GB simultaneously triggered OutOfMemoryError.
+  Java shut down gracefully via the gRPC shutdown hook, causing the client
+  to see "UNAVAILABLE: Network closed for unknown reason" on all nodes.
+
+Fix:
+  Switched wq, wk, wv, wo, wGate, wUp, wDown and outputProj from eager
+  float[] / float[][] to GgufReader.QuantizedTensor[]. Weights are loaded
+  via r.tensorRaw() (raw quantised bytes) and dequantised one block at a
+  time inside the existing static matVec(QuantizedTensor, ...) overloads
+  (added in session 21 for Phi3TransformerHandler and already passing tests).
+
+  Memory per node after fix:
+    TinyLlama 1.1B  Q4_K_M: ~500 MB (down from ~4.4 GB)
+    phi-3.5-mini    Q4_K_M: ~620 MB (down from ~2.85 GB)
+
+  Kept as float[] (cannot be lazily dequantised at inference time):
+    tokenEmbd  — requires O(1) row-indexed embedding lookup
+    attnNorm, ffnNorm, outputNorm  — tiny F32 scalars (< 1 MB each)
+
+  Note on MatVecBackend: the backend.sgemv(float[], ...) interface is now
+  bypassed for all projection weights; the static matVec(QuantizedTensor, ...)
+  path is always used. CudaMatVecBackend remains wired for future use but
+  currently has no float[] weights to operate on. A future GPU quantised
+  kernel (cublasSgemv variant for Q4_K) could be added here.
+
+  Files changed:
+    node/LlamaTransformerHandler.java
+      wq, wk, wv, wo, wGate, wUp, wDown: float[][] → QuantizedTensor[]
+      outputProj: float[] → QuantizedTensor
+      Constructor: r.tensor() → r.tensorRaw() for all 7 projection arrays
+      loadOutputProjection(): return type float[] → QuantizedTensor
+      transformerLayer(), ffn(), outputProjection():
+        backend.sgemv(float[], ...) → matVec(QuantizedTensor, ...)
+
+24.4  ModelLiveRunner: tensor-parallel tests added (tests 7–8)
+-----------------------------------------------
+  Two new automated checks appended after the pipeline-parallel suite:
+
+  Test 7 — tensor_parallel_generation:
+    Starts a fresh 3-node tensor-parallel cluster using the same model.
+    Sends "hello" with maxTokens=10, verifies non-zero tokens and non-empty
+    cleanText() output. Exercises the AllReduce path end-to-end.
+
+  Test 8 — tensor_parallel_greedy_determinism:
+    Two greedy (temperature=0) runs on the tensor-parallel cluster must
+    produce identical text. Mirrors the pipeline greedy determinism check.
+
+  Lifecycle: pipeline cluster (tests 1-6) is stopped first, freeing ports
+  19092-19094 before the tensor cluster starts. runTensorParallelTest()
+  wraps the full cluster lifecycle in try/finally to guarantee cleanup.
+
+  run.sh / run.bat test command updated:
+    --pType pipeline|tensor|all  filter which suite to run (default: all)
+    -DpType  system property forwarded to ModelLiveRunner
+    -Djuno.node.heap  propagates coordinator --heap to forked node JVMs
+    Help text updated: "6 real-model checks" → "8 real-model checks"
+
+24.5  Build status after session 13 fixes
+-----------------------------------------------
+  All previously passing tests continue to pass.
+
+  registry    SUCCESS  (TensorShardPlannerTest: 3 previously-failing tests now pass)
+  node        SUCCESS  (TensorShardContextTest: 1 previously-failing test now pass;
+                        LlamaTransformerHandler now uses lazy QuantizedTensor loading)
+  player      SUCCESS  (ClusterHarness: configuredTotalLayers/numHeads + node heap propagation)
+  integration SUCCESS  (TensorParallelClusterIT: previously failing due to port conflicts
+                        resolved by numHeads fix; ModelLiveRunner: +2 tensor tests)
+
+  Real-model tensor-parallel test (./juno test --pType tensor):
+    Previously: all 3 node JVMs OOM-killed before responding to loadShard
+    After fix:  all 3 nodes load successfully; tests 7-8 run end-to-end

@@ -71,10 +71,14 @@ public final class ModelLiveRunner {
 	private static final List<String> TEMPLATE_MARKERS = List.of("</s>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>",
 			"<|user|>", "<|assistant|>", "<|system|>", "<|im_end|>", "<|im_start|>");
 
+	/** Parallelism filter — set via -DpType=pipeline|tensor|all (default: all). */
+	private static final String PTYPE = System.getProperty("pType", "all").toLowerCase();
+
 	private static String modelPath;
 	private static ClusterHarness harness;
 	private static GenerationLoop loop;
 	private static GgufTokenizer tokenizer;
+	private static int vocabSize = EmbeddedNodeServer.VOCAB_SIZE; // updated from GGUF in startCluster
 	private static int totalTests = 0;
 	private static int passedTests = 0;
 	private static List<String> failures = new ArrayList<>();
@@ -94,13 +98,32 @@ public final class ModelLiveRunner {
 		System.out.println();
 		System.out.println(BOLD + "TinyLlama Live Runner" + RESET);
 		System.out.println("Model: " + modelPath);
+		if (!PTYPE.equals("all"))
+			System.out.println("Mode:  " + PTYPE + " tests only");
 		System.out.println();
 
-		try {
-			startCluster();
-			runAllTests();
-		} finally {
-			stopCluster();
+		// ── Pipeline tests (1-6) ─────────────────────────────────────────────────
+		if (!PTYPE.equals("tensor")) {
+			try {
+				startCluster();
+				runAllTests();
+			} finally {
+				stopCluster();
+			}
+		} else {
+			// Tokenizer is still needed for tensor-parallel tests even when the
+			// pipeline cluster is skipped.
+			System.out.println("(Skipping pipeline tests 1-6: pType=" + PTYPE + ")");
+			try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
+				LlamaConfig cfg = LlamaConfig.from(reader);
+				vocabSize = cfg.vocabSize();
+				tokenizer = GgufTokenizer.load(reader);
+			}
+		}
+
+		// ── Tensor-parallel tests (7-8) ───────────────────────────────────────────
+		if (!PTYPE.equals("pipeline")) {
+			runTensorParallelTest();
 		}
 
 		printSummary();
@@ -116,23 +139,25 @@ public final class ModelLiveRunner {
 	}
 
 	private static void startCluster() throws Exception {
-		System.out.print("Starting 3‑node cluster... ");
+		System.out.print("Starting 3-node pipeline cluster... ");
 		System.out.flush();
 
+		// Single GGUF pass: read model config + tokenizer together.
 		int totalLayers;
 		try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
-			totalLayers = LlamaConfig.from(cfgReader).numLayers();
+			LlamaConfig cfg = LlamaConfig.from(cfgReader);
+			totalLayers = cfg.numLayers();
+			vocabSize   = cfg.vocabSize();       // actual vocab (e.g. 32064 for phi-3.5)
+			tokenizer   = GgufTokenizer.load(cfgReader);
 		}
+
 		harness = ClusterHarness.threeNodes(modelPath, totalLayers);
 		harness.start();
 
-		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
-			tokenizer = GgufTokenizer.load(reader);
-		}
-
+		// Reuse the harness's already-connected pipeline client; pass the actual
+		// vocabSize so GenerationLoop reports the correct output dimension.
 		loop = new GenerationLoop(tokenizer, Sampler.create(),
-				new ProcessPipelineClient(harness.nodeAddresses(), EmbeddedNodeServer.VOCAB_SIZE,
-						ActivationDtype.FLOAT32),
+				new ProcessPipelineClient(harness.nodeAddresses(), vocabSize, ActivationDtype.FLOAT32),
 				new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096)));
 
 		System.out.println(GREEN + "OK" + RESET);
@@ -292,7 +317,7 @@ public final class ModelLiveRunner {
 
 		ProcessPipelineClient f16Pipeline = null;
 		try {
-			f16Pipeline = new ProcessPipelineClient(harness.nodeAddresses(), EmbeddedNodeServer.VOCAB_SIZE,
+			f16Pipeline = new ProcessPipelineClient(harness.nodeAddresses(), vocabSize,
 					ActivationDtype.FLOAT16);
 			GenerationLoop f16Loop = new GenerationLoop(tokenizer, Sampler.create(), f16Pipeline,
 					new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(256)));
@@ -316,13 +341,128 @@ public final class ModelLiveRunner {
 			}
 			System.out.println(GREEN + "PASS" + RESET);
 			passedTests++;
+		} catch (Exception e) {
+			fail("Exception: " + e.getMessage());
+			e.printStackTrace();
 		} finally {
 			if (f16Pipeline != null)
 				try {
 					f16Pipeline.shutdown();
-				} catch (InterruptedException e) {
-					System.err.println("unable to shutdown pipeline due to " + e.getMessage());
+				} catch (InterruptedException ie) {
+					System.err.println("unable to shutdown f16 pipeline: " + ie.getMessage());
 				}
+		}
+	}
+
+	/**
+	 * Standalone lifecycle for the tensor-parallel check (Test 7).
+	 *
+	 * The pipeline cluster (Tests 1-6) is already stopped before this runs, so
+	 * the three node ports are free. A fresh 3-node tensor-parallel cluster is
+	 * started, one generation is verified, then the cluster is torn down.
+	 */
+	private static void runTensorParallelTest() {
+		ClusterHarness tensorHarness = null;
+		try {
+			System.out.print("Starting 3-node tensor-parallel cluster... ");
+			System.out.flush();
+
+			int totalLayers;
+			int numHeads;
+			try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
+				LlamaConfig cfg = LlamaConfig.from(cfgReader);
+				totalLayers = cfg.numLayers();
+				numHeads    = cfg.numHeads();
+			}
+
+			tensorHarness = ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads);
+			tensorHarness.start();
+			System.out.println(GREEN + "OK" + RESET);
+
+			GenerationLoop tensorLoop = new GenerationLoop(
+					tokenizer,
+					Sampler.create(),
+					tensorHarness.pipeline(),
+					new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096)));
+
+			testTensorParallelGeneration(tensorLoop);
+			testTensorParallelDeterminism(tensorLoop);
+		} catch (Exception e) {
+			System.out.println(RED + "FAIL" + RESET + " (cluster startup: " + e.getMessage() + ")");
+			failures.add("Tensor-parallel cluster failed to start: " + e.getMessage());
+			totalTests += 2;   // count both skipped tests as failures
+		} finally {
+			if (tensorHarness != null) {
+				try {
+					tensorHarness.stop();
+				} catch (Exception e) {
+					System.err.println("Warning: tensor harness stop failed: " + e.getMessage());
+				}
+			}
+		}
+	}
+
+	private static void testTensorParallelGeneration(GenerationLoop tensorLoop) {
+		totalTests++;
+		System.out.print("Test 7: tensor-parallel generation (AllReduce)... ");
+		System.out.flush();
+
+		try {
+			GenerationResult result = tensorLoop.generate(
+					InferenceRequest.of("tinyllama",
+							List.of(ChatMessage.user("hello")),
+							SamplingParams.defaults().withMaxTokens(10).withTemperature(0.7f),
+							RequestPriority.NORMAL),
+					TokenConsumer.discard());
+
+			if (result.generatedTokens() == 0) {
+				fail("Tensor-parallel pipeline produced no tokens");
+				return;
+			}
+			String text = cleanText(result.text());
+			if (text.isEmpty()) {
+				fail("Tensor-parallel response is empty after cleanup (raw: \"" + result.text() + "\")");
+				return;
+			}
+			System.out.println(GREEN + "PASS" + RESET
+					+ "  (" + result.generatedTokens() + " tokens via AllReduce)");
+			passedTests++;
+		} catch (Exception e) {
+			fail("Exception: " + e.getMessage());
+			e.printStackTrace();
+		}
+	}
+
+	private static void testTensorParallelDeterminism(GenerationLoop tensorLoop) {
+		totalTests++;
+		System.out.print("Test 8: tensor-parallel greedy determinism... ");
+		System.out.flush();
+
+		try {
+			SamplingParams greedy = SamplingParams.deterministic().withMaxTokens(8);
+
+			GenerationResult r1 = tensorLoop.generate(
+					InferenceRequest.of("tinyllama",
+							List.of(ChatMessage.user("hello")),
+							greedy, RequestPriority.NORMAL),
+					TokenConsumer.discard());
+
+			GenerationResult r2 = tensorLoop.generate(
+					InferenceRequest.of("tinyllama",
+							List.of(ChatMessage.user("hello")),
+							greedy, RequestPriority.NORMAL),
+					TokenConsumer.discard());
+
+			if (!r1.text().equals(r2.text())) {
+				fail("Tensor-parallel responses differ:\n  r1: \"" + r1.text()
+						+ "\"\n  r2: \"" + r2.text() + "\"");
+				return;
+			}
+			System.out.println(GREEN + "PASS" + RESET);
+			passedTests++;
+		} catch (Exception e) {
+			fail("Exception: " + e.getMessage());
+			e.printStackTrace();
 		}
 	}
 

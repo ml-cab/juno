@@ -15,8 +15,8 @@ Requires a JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
 | Command | Description |
 |---------|-------------|
 | `local` | In-process REPL — all transformer shards in one JVM, no forking, no gRPC |
-| *(no command)* | 3-node cluster — forked JVMs, real gRPC, pipeline-parallel |
-| `test` | 6 automated real-model smoke checks, exits 0 (all pass) or 1 (any fail) |
+| *(no command)* | 3-node cluster — forked JVMs, real gRPC. Default `--pType pipeline`; use `--pType tensor` for AllReduce mode |
+| `test` | 8 automated real-model smoke checks (6 pipeline + 2 tensor), exits 0 (all pass) or 1 (any fail). Use `--pType pipeline\|tensor\|all` to filter |
 
 ### Flags
 
@@ -30,6 +30,7 @@ Requires a JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
 | `--top-p F` | `0.95` | Nucleus (top-p) sampling cutoff (0 = disabled) |
 | `--heap SIZE` | `4g` | JVM heap per node, e.g. `4g` for Phi-3, `8g` for 7B models |
 | `--nodes N` | `3` | Number of pipeline nodes (`local` only) |
+| `--pType pipeline|tensor` | `pipeline` | Parallelism type: `pipeline` = contiguous layer blocks (vertical scaling); `tensor` = weight-matrix slices, all nodes in parallel (horizontal scaling). Constraint for tensor: `numHeads` must be even |
 | `--verbose` / `-v` | — | Show node startup, gRPC, and shard loading logs |
 
 **Environment overrides:** `MODEL_PATH`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`
@@ -105,18 +106,28 @@ MODEL_PATH=/path/to/model.gguf DTYPE=FLOAT16 MAX_TOKENS=200 NODES=3 HEAP=4g \
 ### *(no command)* — 3-node cluster (forked JVMs, real gRPC)
 
 Forks 3 separate JVM node processes. Each node loads its own shard of the model.
-`ForwardPassHandlerLoader` runs inside each node JVM. Use this for GPU deployments
-and to test pipeline-parallel behaviour.
+`ForwardPassHandlerLoader` runs inside each node JVM. Supports two distribution
+strategies selected with `--pType`:
+
+- **`pipeline`** (default) — contiguous layer blocks, serial activation flow node-1→node-2→node-3
+- **`tensor`** — every node holds all layers but only a horizontal weight slice; coordinator broadcasts tokens to all nodes in parallel and reduces partial logit vectors (AllReduce)
 
 ```bash
-# Minimal
+# Minimal — pipeline-parallel (default)
 ./juno --model-path /path/to/model.gguf
+
+# Tensor-parallel cluster
+./juno --pType tensor --model-path /path/to/model.gguf
 
 # Via env var
 MODEL_PATH=/path/to/model.gguf ./juno
+MODEL_PATH=/path/to/model.gguf PTYPE=tensor ./juno
 
-# Phi-3.5 Mini (2.4 GB model, 3 nodes each load ~800 MB of weights)
+# Phi-3.5 Mini (2.4 GB model, pipeline: 3 nodes each load ~800 MB of weights)
 ./juno --model-path /path/to/phi-3.5-mini-instruct-Q4_K_M.gguf --heap 4g
+
+# Phi-3.5 Mini — tensor-parallel (each node loads full weights, lazy dequant keeps it in 4g)
+./juno --pType tensor --model-path /path/to/phi-3.5-mini-instruct-Q4_K_M.gguf --heap 4g
 
 # 7B model
 ./juno --model-path /path/to/mistral-7b.gguf --heap 8g
@@ -138,13 +149,13 @@ MODEL_PATH=/path/to/model.gguf ./juno
 ./juno --model-path /path/to/model.gguf --verbose
 ./juno --model-path /path/to/model.gguf -v
 
-# Everything combined
-./juno --model-path /path/to/model.gguf --dtype FLOAT16 --max-tokens 512 \
-  --temperature 0.5 --top-k 40 --top-p 0.9 --heap 4g -v
+# Everything combined — tensor-parallel
+./juno --pType tensor --model-path /path/to/model.gguf --dtype FLOAT16 \
+  --max-tokens 512 --temperature 0.5 --top-k 40 --top-p 0.9 --heap 4g -v
 
 # All via env vars
-MODEL_PATH=/path/to/model.gguf DTYPE=FLOAT16 MAX_TOKENS=512 TEMPERATURE=0.5 \
-  TOP_K=40 TOP_P=0.9 HEAP=4g ./juno
+MODEL_PATH=/path/to/model.gguf PTYPE=tensor DTYPE=FLOAT16 MAX_TOKENS=512 \
+  TEMPERATURE=0.5 TOP_K=40 TOP_P=0.9 HEAP=4g ./juno
 
 # Custom JDK
 JAVA_HOME=/opt/jdk-25 ./juno --model-path /path/to/model.gguf
@@ -152,13 +163,13 @@ JAVA_HOME=/opt/jdk-25 ./juno --model-path /path/to/model.gguf
 
 ---
 
-### `test` — real-model smoke test (6 checks, exits 0/1)
+### `test` — real-model smoke test (8 checks, exits 0/1)
 
-Runs `ModelLiveRunner`: 6 automated checks with coloured pass/fail output.
+Runs `ModelLiveRunner`: 8 automated checks with coloured pass/fail output.
 Use after any change to `node`, `tokenizer`, or `coordinator` before committing.
 
 ```bash
-# Model as flag
+# Full suite (pipeline tests 1-6 + tensor tests 7-8)
 ./juno test --model-path /path/to/model.gguf
 
 # Model as env var
@@ -167,11 +178,19 @@ MODEL_PATH=/path/to/model.gguf ./juno test
 # Bigger heap for larger models
 ./juno test --model-path /path/to/phi-3.5-mini.gguf --heap 4g
 
+# Pipeline-parallel checks only (tests 1-6, faster)
+./juno test --model-path /path/to/model.gguf --pType pipeline
+
+# Tensor-parallel checks only (tests 7-8)
+./juno test --model-path /path/to/model.gguf --pType tensor
+
 # Verbose — shows prefill timing and token IDs per step
 ./juno test --model-path /path/to/model.gguf --verbose
 ```
 
 Checks run (in order):
+
+Pipeline-parallel cluster (tests 1-6):
 1. `hello_greeting` — response contains a greeting word
 2. `no_raw_sentencepiece_markers` — no `▁` (U+2581) in output
 3. `question_response` — non-empty response to "What is 2 plus 2?"
@@ -179,17 +198,22 @@ Checks run (in order):
 5. `multi_turn_conversation` — 3-turn conversation, prompt grows correctly
 6. `float16_parity` — FLOAT16 activation pipeline runs end-to-end without error
 
+Tensor-parallel cluster (tests 7-8, fresh 3-node cluster started after pipeline cluster stops):
+7. `tensor_parallel_generation` — non-empty output from AllReduce forward pass
+8. `tensor_parallel_greedy_determinism` — identical output on two greedy runs through AllReduce
+
 ---
 
 ### Supported models and heap requirements
 
 | Model | Size GB | `--heap` |
-|-------|------|----------|
-
-| TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf | 0.667 | 2g |
-| TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile | 1 | 2g |
+|-------|---------|----------|
+| TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf | 0.67 | 2g |
+| TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile | 0.97 | 2g |
 | Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile | 1.6 | 2g |
 | phi-3.5-mini-instruct.Q4_K_M.gguf | 2.4 | 4g |
+| Mistral-7B-Instruct-v0.2.Q4_K_M.gguf | 4.1 | 8g |
+| Llama-3.2-8B-Instruct-Q4_K_M.gguf | 4.9 | 8g |
 
 
 **Chat template** is derived automatically from the model path:

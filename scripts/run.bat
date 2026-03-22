@@ -47,10 +47,13 @@ if "%TOP_K%"==""       set "TOP_K=20"
 if "%TOP_P%"==""       set "TOP_P=0.95"
 if "%HEAP%"==""        set "HEAP=4g"
 set "VERBOSE=false"
+if "%PTYPE%"=="" set "PTYPE=pipeline"
 
 :cluster_parse
 if "%~1"=="" goto :cluster_done
 if /i "%~1"=="--model-path" ( set "MODEL=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--pType"      ( set "PTYPE=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--ptype"      ( set "PTYPE=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--dtype"      ( set "DTYPE=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--max-tokens" ( set "MAX_TOKENS=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--temperature"( set "TEMPERATURE=%~2" & shift & shift & goto :cluster_parse )
@@ -68,6 +71,10 @@ if /i "%~1"=="--help" (
   echo   Usage: run.bat cluster --model-path PATH [flags]
   echo      or: set MODEL_PATH=PATH ^&^& run.bat cluster [flags]
   echo.
+  echo   --pType pipeline^|tensor  parallelism type (default pipeline)
+  echo     pipeline: contiguous layer blocks, serial activation flow
+  echo     tensor:   weight-matrix slices, all nodes in parallel (AllReduce)
+  echo               Constraint: numHeads %% 3 == 0
   echo   --dtype FLOAT32^|FLOAT16^|INT8  (default FLOAT16)
   echo   --float16 / --fp16 / --float32 / --int8
   echo   --max-tokens N    (default 200)
@@ -93,7 +100,7 @@ if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
 call :require_jar "%PLAYER_JAR%" "player"
 if errorlevel 1 exit /b 1
 
-echo [WARN] Starting 3-node cluster  (dtype=%DTYPE%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  heap=%HEAP%)
+echo [WARN] Starting 3-node cluster  (pType=%PTYPE%  dtype=%DTYPE%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  heap=%HEAP%)
 if /i "%VERBOSE%"=="true" echo [WARN] Verbose mode ON
 echo [WARN] Ctrl-C to stop all nodes and exit
 echo.
@@ -101,7 +108,7 @@ echo.
 set "VERBOSE_FLAG="
 if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -181,19 +188,35 @@ rem ============================================================================
 :test
 
 set "MODEL=%MODEL_PATH%"
-if "%HEAP%"=="" set "HEAP=4g"
+if "%HEAP%"==""  set "HEAP=4g"
+if "%PTYPE%"=="" set "PTYPE=all"
 
 :test_parse
 if "%~1"=="" goto :test_done
 if /i "%~1"=="--model-path" ( set "MODEL=%~2" & shift & shift & goto :test_parse )
-if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :test_parse )
+if /i "%~1"=="--heap"       ( set "HEAP=%~2"  & shift & shift & goto :test_parse )
+if /i "%~1"=="--pType"      ( set "PTYPE=%~2" & shift & shift & goto :test_parse )
+if /i "%~1"=="--ptype"      ( set "PTYPE=%~2" & shift & shift & goto :test_parse )
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat test --model-path PATH [flags]
   echo      or: run.bat test PATH
   echo.
-  echo   Runs ModelLiveRunner - 6 real-model checks, exits 0 or 1.
-  echo   --heap SIZE   (default 4g)
+  echo   Runs ModelLiveRunner - 8 real-model checks, exits 0 or 1.
+  echo.
+  echo   Pipeline-parallel (tests 1-6):
+  echo     1. hello greeting coherence
+  echo     2. no raw SentencePiece markers
+  echo     3. question response is non-empty
+  echo     4. greedy sampling is deterministic
+  echo     5. multi-turn conversation accumulates context
+  echo     6. FLOAT16 pipeline produces non-empty output
+  echo   Tensor-parallel (tests 7-8):
+  echo     7. tensor-parallel generation via AllReduce
+  echo     8. tensor-parallel greedy determinism
+  echo.
+  echo   --pType pipeline^|tensor^|all   filter cluster tests (default: all)
+  echo   --heap SIZE                    (default 4g)
   goto :eof
 )
 if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :test_parse )
@@ -211,10 +234,10 @@ if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
 call :require_jar "%LIVE_JAR%" "integration"
 if errorlevel 1 exit /b 1
 
-echo [INFO] Running ModelLiveRunner  (heap=%HEAP%)
+echo [INFO] Running ModelLiveRunner  (pType=%PTYPE%  heap=%HEAP%)
 echo.
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%LIVE_JAR%" "%MODEL%"
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-DpType=%PTYPE%" "-Djuno.node.heap=%HEAP%" -jar "%LIVE_JAR%" "%MODEL%"
 goto :eof
 
 rem ============================================================================

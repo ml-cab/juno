@@ -25,75 +25,87 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import cab.ml.juno.node.GgufReader;
+import cab.ml.juno.node.InferencePipeline;
+import cab.ml.juno.node.LlamaConfig;
+import cab.ml.juno.registry.ParallelismType;
+
 /**
- * Manages the lifecycle of 3 forked node JVM processes for integration testing.
+ * Manages the lifecycle of N forked node JVM processes for integration testing.
  *
- * Each node is launched as a separate JVM via ProcessBuilder running NodeMain.
- * The harness waits for each node to print "READY:<nodeId>:<port>" before
- * proceeding — so tests don't start sending requests to nodes that aren't up
- * yet.
+ * Two parallelism strategies are supported, selected at construction time:
  *
- * Memory allocation per node JVM (16 GB host): -Xms512m -Xmx4g -XX:+UseZGC
+ * PIPELINE (default — threeNodes() factories):
+ *   3 nodes, each holding a contiguous layer block.
+ *   Activations flow node-1 → node-2 → node-3 in serial order.
+ *   Backed by ProcessPipelineClient.
  *
- * Usage: ClusterHarness harness = ClusterHarness.threeNodes(); harness.start();
- * // ... run tests using harness.pipelineClient() ... harness.stop();
+ * TENSOR (tensorNodes() factories):
+ *   3 nodes, each holding ALL layers but a different weight-tensor slice.
+ *   Every decode step fans out to all nodes in parallel; results are summed
+ *   (star AllReduce) by the coordinator.
+ *   Backed by TensorParallelPipelineClient.
  *
- * Or with try-with-resources (implements AutoCloseable): try (ClusterHarness
- * harness = ClusterHarness.threeNodes()) { harness.start(); // ... tests ... }
+ * Usage (pipeline mode):
+ *   ClusterHarness harness = ClusterHarness.threeNodes();
+ *   harness.start();
+ *   InferencePipeline pipeline = harness.pipeline();
+ *
+ * Usage (tensor parallel mode):
+ *   ClusterHarness harness = ClusterHarness.tensorNodes();
+ *   harness.start();
+ *   InferencePipeline pipeline = harness.pipeline();
  */
 public final class ClusterHarness implements AutoCloseable {
 
 	private static final Logger log = Logger.getLogger(ClusterHarness.class.getName());
 
-	/** How long to wait for each node to report READY (ms). */
 	private static final long NODE_STARTUP_TIMEOUT_MS = 30_000;
 
-	/** gRPC ports for the three nodes. */
 	static final int NODE_1_PORT = 19092;
 	static final int NODE_2_PORT = 19093;
 	static final int NODE_3_PORT = 19094;
 
-	/** TinyLlama-1.1B shape constants — matches EmbeddedNodeServer defaults. */
-	private static final int VOCAB_SIZE = EmbeddedNodeServer.VOCAB_SIZE;
+	private static final int VOCAB_SIZE   = EmbeddedNodeServer.VOCAB_SIZE;
 	private static final int TOTAL_LAYERS = EmbeddedNodeServer.TOTAL_LAYERS;
+	private static final int NUM_HEADS    = EmbeddedNodeServer.NUM_HEADS;
 
-	private final List<NodeSpec> specs;
-	private final List<Process> processes = new ArrayList<>();
-	private ProcessPipelineClient pipelineClient;
-	private static String modelPath; // null = stub mode
+	private final List<NodeSpec>  specs;
+	private final List<Process>   processes = new ArrayList<>();
+	private final ParallelismType parallelismType;
+	// Tensor-parallel model shape — set by tensorNodes() factory, used in startTensorParallel().
+	// totalLayers and numHeads come from the factory args; vocabSize is read from GGUF at start().
+	private final int configuredTotalLayers;
+	private final int configuredNumHeads;
+
+	private ProcessPipelineClient        pipelineClient;
+	private TensorParallelPipelineClient tensorPipelineClient;
+
+	private static String modelPath;
 
 	private ClusterHarness(List<NodeSpec> specs) {
-		this(specs, null);
+		this(specs, null, ParallelismType.PIPELINE, TOTAL_LAYERS, NUM_HEADS);
 	}
 
-	private ClusterHarness(List<NodeSpec> specs, String pathToModel) {
-		this.specs = specs;
-		modelPath = pathToModel;
+	private ClusterHarness(List<NodeSpec> specs, String pathToModel, ParallelismType pType) {
+		this(specs, pathToModel, pType, TOTAL_LAYERS, NUM_HEADS);
 	}
 
-	/**
-	 * Create a standard 3-node cluster.
-	 *
-	 * Layer split for 22-layer TinyLlama across 3 nodes: Node-1: layers 0– 7 (8
-	 * layers) + embeddings Node-2: layers 8–14 (7 layers) Node-3: layers 15–21 (7
-	 * layers) + output projection
-	 */
+	private ClusterHarness(List<NodeSpec> specs, String pathToModel, ParallelismType pType,
+			int totalLayers, int numHeads) {
+		this.specs                  = specs;
+		this.parallelismType        = pType;
+		this.configuredTotalLayers  = totalLayers;
+		this.configuredNumHeads     = numHeads;
+		modelPath                   = pathToModel;
+	}
+
+	// ── Pipeline-parallel factories ───────────────────────────────────────────
+
 	public static ClusterHarness threeNodes() {
 		return threeNodes(null);
 	}
 
-	/**
-	 * Create a 3-node cluster that loads real weights from a GGUF file. Each node
-	 * receives the model path as a CLI arg and loads its layer shard via
-	 * LlamaTransformerHandler when loadShard() is called.
-	 *
-	 * Uses the default 22-layer split (TinyLlama). For other models call
-	 * {@link #threeNodes(String, int)} and pass the actual layer count.
-	 *
-	 * @param modelPath path to a GGUF file, e.g.
-	 *                  "/models/TinyLlama-1.1B-Chat.Q4_K_M.gguf" Pass null for stub
-	 *                  mode (no real model).
-	 */
 	public static ClusterHarness threeNodes(String modelPath) {
 		return threeNodes(modelPath, TOTAL_LAYERS);
 	}
@@ -104,8 +116,8 @@ public final class ClusterHarness implements AutoCloseable {
 	 * possible across the three nodes (ceiling-first distribution).
 	 *
 	 * <pre>
-	 *  22 layers → [0,8)  [8,15)  [15,22)   (TinyLlama-1.1B)
-	 *  16 layers → [0,6)  [6,11)  [11,16)   (Llama-3.2-1B)
+	 *  22 layers -&gt; [0,8)  [8,15)  [15,22)   (TinyLlama-1.1B)
+	 *  16 layers -&gt; [0,6)  [6,11)  [11,16)   (Llama-3.2-1B)
 	 * </pre>
 	 *
 	 * @param modelPath   path to a GGUF/llamafile, or null for stub mode
@@ -113,24 +125,79 @@ public final class ClusterHarness implements AutoCloseable {
 	 */
 	public static ClusterHarness threeNodes(String modelPath, int totalLayers) {
 		if (totalLayers < 3)
-			throw new IllegalArgumentException("totalLayers must be >= 3 to split across 3 nodes, got: " + totalLayers);
+			throw new IllegalArgumentException(
+					"totalLayers must be >= 3 to split across 3 nodes, got: " + totalLayers);
 
-		// Ceiling-first: give the extra layers to the earlier nodes.
-		int base = totalLayers / 3;
+		int base  = totalLayers / 3;
 		int extra = totalLayers % 3;
-		int end1 = base + (extra > 0 ? 1 : 0); // node-1 layer count
-		int end2 = end1 + base + (extra > 1 ? 1 : 0); // node-2 layer count
-		// node-3 gets the rest up to totalLayers
+		int end1  = base + (extra > 0 ? 1 : 0);
+		int end2  = end1 + base + (extra > 1 ? 1 : 0);
 
 		return new ClusterHarness(List.of(
 				new NodeSpec("node-1", "localhost", NODE_1_PORT,
-						new ProcessPipelineClient.ShardConfig(0, end1, true, false)),
+						new ProcessPipelineClient.ShardConfig(0,    end1,        true,  false)),
 				new NodeSpec("node-2", "localhost", NODE_2_PORT,
-						new ProcessPipelineClient.ShardConfig(end1, end2, false, false)),
+						new ProcessPipelineClient.ShardConfig(end1, end2,        false, false)),
 				new NodeSpec("node-3", "localhost", NODE_3_PORT,
 						new ProcessPipelineClient.ShardConfig(end2, totalLayers, false, true))),
-				modelPath);
+				modelPath,
+				ParallelismType.PIPELINE);
 	}
+
+	// ── Tensor-parallel factories (new) ───────────────────────────────────────
+
+	/**
+	 * Create a 3-node tensor-parallel cluster (stub mode, no model).
+	 *
+	 * All 3 nodes receive the full layer range [0, totalLayers) and tensor ranks
+	 * 0, 1, 2. NUM_HEADS (32) is even — uneven head distribution across 3 nodes
+	 * is fine (10 / 11 / 11); only an odd total head count is rejected.
+	 */
+	public static ClusterHarness tensorNodes() {
+		return tensorNodes(null);
+	}
+
+	/**
+	 * Create a 3-node tensor-parallel cluster that loads real weights.
+	 *
+	 * @param modelPath path to a GGUF file, or null for stub mode
+	 */
+	public static ClusterHarness tensorNodes(String modelPath) {
+		return tensorNodes(modelPath, TOTAL_LAYERS, NUM_HEADS);
+	}
+
+	/**
+	 * Create a 3-node tensor-parallel cluster for a specific model shape.
+	 *
+	 * Constraint: numHeads must be even (divisible by 2). Uneven distribution
+	 * across the 3 nodes is handled by ceiling-division in TensorShardContext.
+	 * All 3 nodes receive startLayer=0, endLayer=totalLayers, hasEmbeddings=true,
+	 * hasOutputProjection=true. The node uses its tensorRank to slice weights.
+	 *
+	 * @param modelPath   path to a GGUF/llamafile, or null for stub mode
+	 * @param totalLayers transformer layer count
+	 * @param numHeads    attention head count — must be even (divisible by 2)
+	 */
+	public static ClusterHarness tensorNodes(String modelPath, int totalLayers, int numHeads) {
+		if (numHeads % 2 != 0)
+			throw new IllegalArgumentException(
+					"numHeads (" + numHeads + ") must be even (divisible by 2) "
+					+ "for a tensor-parallel cluster");
+
+		return new ClusterHarness(List.of(
+				new NodeSpec("node-1", "localhost", NODE_1_PORT,
+						new ProcessPipelineClient.ShardConfig(0, totalLayers, true, true)),
+				new NodeSpec("node-2", "localhost", NODE_2_PORT,
+						new ProcessPipelineClient.ShardConfig(0, totalLayers, true, true)),
+				new NodeSpec("node-3", "localhost", NODE_3_PORT,
+						new ProcessPipelineClient.ShardConfig(0, totalLayers, true, true))),
+				modelPath,
+				ParallelismType.TENSOR,
+				totalLayers,
+				numHeads);
+	}
+
+	// ── Lifecycle ─────────────────────────────────────────────────────────────
 
 	/**
 	 * Fork all three node JVMs and wait until each reports READY.
@@ -143,51 +210,136 @@ public final class ClusterHarness implements AutoCloseable {
 			log.info("Node [" + spec.nodeId() + "] is up on port " + spec.port());
 		}
 
-		// Wire up the pipeline client
-		List<ProcessPipelineClient.NodeAddress> addresses = specs.stream()
-				.map(s -> new ProcessPipelineClient.NodeAddress(s.host(), s.port())).toList();
+		if (parallelismType == ParallelismType.TENSOR) {
+			startTensorParallel();
+		} else {
+			startPipelineParallel();
+		}
+	}
 
+	private void startPipelineParallel() {
+		List<ProcessPipelineClient.NodeAddress> addresses = specs.stream()
+				.map(s -> new ProcessPipelineClient.NodeAddress(s.host(), s.port()))
+				.toList();
 		pipelineClient = new ProcessPipelineClient(addresses, VOCAB_SIZE);
 
-		// Tell each node which shard it owns
-		List<ProcessPipelineClient.ShardConfig> shards = specs.stream().map(NodeSpec::shard).toList();
+		List<ProcessPipelineClient.ShardConfig> shards = specs.stream()
+				.map(NodeSpec::pipelineShard).toList();
 		pipelineClient.loadShards(shards);
 
-		log.info("Cluster ready — 3 nodes, " + TOTAL_LAYERS + " total layers distributed");
+		log.info("Pipeline-parallel cluster ready — 3 nodes, "
+				+ TOTAL_LAYERS + " total layers distributed");
+	}
+
+	private void startTensorParallel() {
+		int worldSize = specs.size();
+
+		// Resolve actual vocabSize from the GGUF file when a real model is being used.
+		// The class-level VOCAB_SIZE constant is TinyLlama-specific (32 000) and wrong
+		// for other models (e.g. phi-3.5-mini has vocabSize=32 064).
+		int vocabSize = VOCAB_SIZE; // fallback for stub mode
+		if (modelPath != null) {
+			try (GgufReader r = GgufReader.open(java.nio.file.Path.of(modelPath))) {
+				vocabSize = LlamaConfig.from(r).vocabSize();
+			} catch (java.io.IOException e) {
+				log.warning("Could not read vocabSize from GGUF — falling back to " + VOCAB_SIZE
+						+ ". Cause: " + e.getMessage());
+			}
+		}
+
+		List<TensorParallelPipelineClient.NodeAddress> addresses = specs.stream()
+				.map(s -> new TensorParallelPipelineClient.NodeAddress(s.host(), s.port()))
+				.toList();
+		tensorPipelineClient = new TensorParallelPipelineClient(addresses, vocabSize);
+
+		List<TensorParallelPipelineClient.TensorShardConfig> shards = new ArrayList<>();
+		for (int rank = 0; rank < worldSize; rank++) {
+			shards.add(new TensorParallelPipelineClient.TensorShardConfig(
+					0, configuredTotalLayers,
+					true,  // hasEmbeddings — all tensor-parallel nodes embed independently
+					true,  // hasOutputProjection — all nodes produce partial logits
+					rank,
+					worldSize));
+		}
+		tensorPipelineClient.loadShards(shards);
+
+		log.info("Tensor-parallel cluster ready — " + worldSize
+				+ " nodes, worldSize=" + worldSize
+				+ ", layers=" + configuredTotalLayers
+				+ ", vocabSize=" + vocabSize);
+	}
+
+	// ── Accessors ─────────────────────────────────────────────────────────────
+
+	/**
+	 * Returns the InferencePipeline for this cluster, regardless of parallelism type.
+	 * Works for both PIPELINE and TENSOR modes.
+	 * Only valid after start() has been called.
+	 */
+	public InferencePipeline pipeline() {
+		if (parallelismType == ParallelismType.TENSOR) {
+			if (tensorPipelineClient == null)
+				throw new IllegalStateException("ClusterHarness not started — call start() first");
+			return tensorPipelineClient;
+		}
+		return pipelineClient();
 	}
 
 	/**
-	 * Returns the InferencePipeline that routes forward passes across the 3 nodes.
-	 * Only valid after start() has been called.
+	 * Returns the ProcessPipelineClient for PIPELINE mode.
+	 * Only valid after start() on a threeNodes() harness.
+	 * For mode-agnostic code, prefer {@link #pipeline()}.
 	 */
 	public ProcessPipelineClient pipelineClient() {
+		if (parallelismType == ParallelismType.TENSOR)
+			throw new IllegalStateException(
+					"pipelineClient() is only valid for PIPELINE mode. Use pipeline().");
 		if (pipelineClient == null)
 			throw new IllegalStateException("ClusterHarness not started — call start() first");
 		return pipelineClient;
 	}
 
 	/**
-	 * Returns the node addresses in pipeline order. Use this to create additional
-	 * ProcessPipelineClient instances (e.g. with a different ActivationDtype)
-	 * pointing at the same running nodes.
+	 * Returns the TensorParallelPipelineClient for TENSOR mode.
+	 * Only valid after start() on a tensorNodes() harness.
 	 */
-	public List<ProcessPipelineClient.NodeAddress> nodeAddresses() {
-		return specs.stream().map(s -> new ProcessPipelineClient.NodeAddress(s.host(), s.port())).toList();
+	public TensorParallelPipelineClient tensorPipelineClient() {
+		if (parallelismType != ParallelismType.TENSOR)
+			throw new IllegalStateException(
+					"tensorPipelineClient() is only valid for TENSOR mode. Use pipeline().");
+		if (tensorPipelineClient == null)
+			throw new IllegalStateException("ClusterHarness not started — call start() first");
+		return tensorPipelineClient;
 	}
 
 	/**
-	 * Shut down all node processes and close gRPC channels.
+	 * Returns the node addresses in pipeline order.
+	 * Use this to create additional ProcessPipelineClient instances.
 	 */
+	public List<ProcessPipelineClient.NodeAddress> nodeAddresses() {
+		return specs.stream()
+				.map(s -> new ProcessPipelineClient.NodeAddress(s.host(), s.port()))
+				.toList();
+	}
+
+	/** Returns the parallelism type this cluster was created with. */
+	public ParallelismType parallelismType() {
+		return parallelismType;
+	}
+
+	// ── Teardown ──────────────────────────────────────────────────────────────
+
 	public void stop() throws InterruptedException {
-		if (pipelineClient != null) {
+		if (pipelineClient != null)
 			pipelineClient.shutdown();
-		}
+		if (tensorPipelineClient != null)
+			tensorPipelineClient.shutdown();
 		for (Process proc : processes) {
 			proc.destroy();
 			proc.waitFor(5, TimeUnit.SECONDS);
 		}
 		processes.clear();
-		log.info("Cluster stopped");
+		log.info("Cluster stopped (" + parallelismType + " mode)");
 	}
 
 	@Override
@@ -201,24 +353,29 @@ public final class ClusterHarness implements AutoCloseable {
 		String javaExe = ProcessHandle.current().info().command()
 				.orElse(Path.of(System.getProperty("java.home"), "bin", "java").toString());
 
-		String classpath = System.getProperty("java.class.path");
-		boolean verbose = "true".equalsIgnoreCase(System.getProperty("JUNO_VERBOSE"));
+		String  classpath = System.getProperty("java.class.path");
+		boolean verbose   = "true".equalsIgnoreCase(System.getProperty("JUNO_VERBOSE"));
+		// Inherit heap from coordinator via -Djuno.node.heap=<size>; default 4g.
+		// Large models (phi-3.5-mini, Llama-7B) need >=6g on node-0 which eagerly
+		// dequantises token_embd.weight to float[vocabSize * hiddenDim].
+		String  nodeHeap  = System.getProperty("juno.node.heap", "4g");
 
-		java.util.List<String> cmd = new java.util.ArrayList<>(java.util.List.of(javaExe, "--enable-preview",
-				"--enable-native-access=ALL-UNNAMED", "-Xms512m", "-Xmx4g", "-XX:+UseZGC"));
+		java.util.List<String> cmd = new java.util.ArrayList<>(java.util.List.of(
+				javaExe, "--enable-preview", "--enable-native-access=ALL-UNNAMED",
+				"-Xms512m", "-Xmx" + nodeHeap, "-XX:+UseZGC"));
 
 		if (!verbose) {
-			// Write a temp JUL config that silences all logging in this node JVM.
 			java.io.File q = java.io.File.createTempFile("juno-quiet-", ".properties");
 			q.deleteOnExit();
 			try (java.io.PrintWriter pw = new java.io.PrintWriter(q)) {
-				pw.println("handlers="); // no handlers -> nothing printed
+				pw.println("handlers=");
 				pw.println(".level=OFF");
 			}
 			cmd.add("-Djava.util.logging.config.file=" + q.getAbsolutePath());
 		}
 
-		cmd.addAll(java.util.List.of("-cp", classpath, NodeMain.class.getName(), nodeId, String.valueOf(port)));
+		cmd.addAll(java.util.List.of("-cp", classpath, NodeMain.class.getName(),
+				nodeId, String.valueOf(port)));
 		if (modelPath != null)
 			cmd.add(modelPath);
 
@@ -227,10 +384,6 @@ public final class ClusterHarness implements AutoCloseable {
 		if (verbose) {
 			pb.redirectError(ProcessBuilder.Redirect.INHERIT);
 		} else {
-			// DISCARD stderr in quiet mode — do NOT leave it as PIPE.
-			// Netty/gRPC debug output can exceed the 64 KB OS pipe buffer before
-			// READY is printed, causing the child to block on stderr writes and
-			// deadlock with the parent waiting on waitForReady().
 			pb.redirectError(ProcessBuilder.Redirect.DISCARD);
 		}
 		Process proc = pb.start();
@@ -238,15 +391,12 @@ public final class ClusterHarness implements AutoCloseable {
 		return proc;
 	}
 
-	/**
-	 * Block until the process prints "READY:<nodeId>:..." or the timeout expires.
-	 * On failure, drains stderr from the dead process and includes it in the
-	 * exception.
-	 */
-	private static void waitForReady(Process proc, String expectedNodeId) throws IOException, InterruptedException {
+	private static void waitForReady(Process proc, String expectedNodeId)
+			throws IOException, InterruptedException {
 
 		long deadline = System.currentTimeMillis() + NODE_STARTUP_TIMEOUT_MS;
-		try (BufferedReader reader = new BufferedReader(new InputStreamReader(proc.getInputStream()))) {
+		try (BufferedReader reader = new BufferedReader(
+				new InputStreamReader(proc.getInputStream()))) {
 
 			String line;
 			while ((line = reader.readLine()) != null) {
@@ -255,26 +405,23 @@ public final class ClusterHarness implements AutoCloseable {
 					return;
 				}
 				if (System.currentTimeMillis() > deadline) {
-					throw new IOException("Node [" + expectedNodeId + "] did not become ready within "
-							+ NODE_STARTUP_TIMEOUT_MS + " ms");
+					throw new IOException("Node [" + expectedNodeId
+							+ "] did not become ready within " + NODE_STARTUP_TIMEOUT_MS + " ms");
 				}
 				if (!proc.isAlive()) {
-					throw new IOException("Node [" + expectedNodeId + "] process died before becoming ready (exit="
+					throw new IOException("Node [" + expectedNodeId
+							+ "] process died before becoming ready (exit="
 							+ proc.exitValue() + ")\n" + drainStderr(proc));
 				}
 			}
 		}
 
-		// stdout EOF — process exited without READY. Capture stderr for diagnosis.
 		String stderr = drainStderr(proc);
 		throw new IOException("Node [" + expectedNodeId + "] stdout closed without READY signal"
 				+ (stderr.isBlank() ? "" : "\nNode stderr:\n" + stderr));
 	}
 
-	/** Drain stderr from a (possibly dead) process into a string. */
 	private static String drainStderr(Process proc) {
-		// stderr is discarded in quiet mode (Redirect.DISCARD) to prevent pipe
-		// deadlock — run with --verbose to see node stderr on startup failures.
 		try {
 			var errStream = proc.getErrorStream();
 			if (errStream == null || errStream.available() == 0)
@@ -286,8 +433,10 @@ public final class ClusterHarness implements AutoCloseable {
 		}
 	}
 
-	// ── Inner type ────────────────────────────────────────────────────────────
-
-	private record NodeSpec(String nodeId, String host, int port, ProcessPipelineClient.ShardConfig shard) {
+	private record NodeSpec(
+			String nodeId,
+			String host,
+			int    port,
+			ProcessPipelineClient.ShardConfig pipelineShard) {
 	}
 }

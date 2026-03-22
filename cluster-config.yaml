@@ -26,6 +26,12 @@ scheduler:
     LOW: 1
 
 node:
+  pType: pipeline           # pipeline | tensor
+                            #   pipeline -- contiguous layer blocks, sequential activation flow
+                            #              (vertical scaling; add nodes to run larger models)
+                            #   tensor   -- all layers on every node, weight matrices split by rank
+                            #              (horizontal scaling; add nodes to increase throughput)
+                            # Constraint for tensor mode: numHeads % nodeCount == 0
   grpc-port: 9091
   device-id: 0              # CUDA device index
   vram-headroom-fraction: 0.10  # keep 10% VRAM free

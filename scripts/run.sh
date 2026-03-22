@@ -131,10 +131,12 @@ cmd_cluster() {
   local top_p="${TOP_P:-0.95}"
   local heap="${HEAP:-4g}"
   local verbose="false"
+  local ptype="pipeline"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --model-path)       model="$2";       shift 2 ;;
+      --pType | --ptype)  ptype="$2";       shift 2 ;;
       --dtype)            dtype="$2";       shift 2 ;;
       --max-tokens)       max_tokens="$2";  shift 2 ;;
       --temperature)      temperature="$2"; shift 2 ;;
@@ -151,12 +153,18 @@ cmd_cluster() {
         echo "     or: MODEL_PATH=/path/to/model.gguf $0 cluster [flags]"
         echo ""
         echo "  Starts a 3-node cluster (one forked JVM per node) and an interactive"
-        echo "  REPL. Each node serves gRPC on localhost:19092-19094. Use this for"
-        echo "  real GPU deployments and pipeline-parallel inference."
+        echo "  REPL. Each node serves gRPC on localhost:19092-19094."
         echo ""
         echo "  Required:"
         echo "    --model-path PATH          Path to a GGUF model file"
         echo "                               (or set MODEL_PATH env var)"
+        echo ""
+        echo "  Parallelism:"
+        echo "    --pType pipeline           pipeline-parallel: contiguous layer blocks,"
+        echo "                               serial activation flow  (default)"
+        echo "    --pType tensor             tensor-parallel: all layers on every node,"
+        echo "                               weight-matrix slices, parallel AllReduce"
+        echo "                               Constraint: numHeads % 3 == 0"
         echo ""
         echo "  Activation dtype:"
         echo "    --dtype FLOAT32|FLOAT16|INT8  wire format between nodes (default FLOAT16)"
@@ -176,6 +184,14 @@ cmd_cluster() {
         echo "  Logging:"
         echo "    --verbose / -v             show gRPC and node logs"
         echo ""
+        echo "  Environment overrides:"
+        echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP"
+        echo ""
+        echo "  Examples:"
+        echo "    $0 cluster --model-path /models/tiny.gguf"
+        echo "    $0 cluster --model-path /models/tiny.gguf --pType tensor"
+        echo "    PTYPE=tensor MODEL_PATH=/models/tiny.gguf $0"
+        echo ""
         exit 0 ;;
       *) err "Unknown cluster flag: $1.  Run: $0 cluster --help" ;;
     esac
@@ -187,7 +203,7 @@ cmd_cluster() {
   require_jar "$PLAYER_JAR" "player"
   check_java_version
 
-  warn "Starting 3-node cluster  (dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  os=${OS})"
+  warn "Starting 3-node cluster  (pType=${ptype}  dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   warn "Ctrl-C to stop all nodes and exit"
   echo ""
@@ -199,6 +215,7 @@ cmd_cluster() {
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
+    "-Djuno.node.heap=${heap}" \
     -jar "$PLAYER_JAR" \
     --model-path "$model" \
     --dtype "$dtype" \
@@ -206,6 +223,7 @@ cmd_cluster() {
     --temperature "$temperature" \
     --top-k "$top_k" \
     --top-p "$top_p" \
+    --pType "$ptype" \
     ${verbose_flag}
 }
 
@@ -223,10 +241,12 @@ cmd_local() {
   local top_p="${TOP_P:-0.95}"
   local nodes="${NODES:-3}"
   local verbose="false"
+  local ptype="pipeline"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --model-path)       model="$2";       shift 2 ;;
+      --pType | --ptype)  ptype="$2";       shift 2 ;;
       --dtype)            dtype="$2";       shift 2 ;;
       --max-tokens)       max_tokens="$2";  shift 2 ;;
       --temperature)      temperature="$2"; shift 2 ;;
@@ -312,29 +332,39 @@ cmd_local() {
 cmd_test() {
   local model="${MODEL_PATH:-}"
   local heap="${HEAP:-4g}"
+  local ptype="${PTYPE:-all}"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --model-path)    model="$2"; shift 2 ;;
-      --heap)          heap="$2";  shift 2 ;;
+      --model-path)       model="$2";  shift 2 ;;
+      --heap)             heap="$2";   shift 2 ;;
+      --pType | --ptype)  ptype="$2";  shift 2 ;;
       --help)
         echo ""
         echo "  Usage: $0 test --model-path /path/to/model.gguf [flags]"
         echo "     or: MODEL_PATH=/path/to/model.gguf $0 test [flags]"
         echo "     or: $0 test /path/to/model.gguf"
         echo ""
-        echo "  Runs ModelLiveRunner — 6 automated real-model checks:"
-        echo "    1. hello greeting coherence (>= 3 tokens, >= 2 greeting words)"
+        echo "  Runs ModelLiveRunner — 8 automated real-model checks:"
+        echo "    Pipeline-parallel (tests 1-6):"
+        echo "    1. hello greeting coherence"
         echo "    2. no raw SentencePiece ▁ markers in output"
         echo "    3. question response is non-empty"
         echo "    4. greedy sampling is deterministic (temperature=0)"
         echo "    5. multi-turn conversation accumulates context (>20 prompt tokens)"
-        echo "    6. FLOAT16 first token matches FLOAT32 first token"
+        echo "    6. FLOAT16 pipeline produces non-empty output"
+        echo "    Tensor-parallel (tests 7-8):"
+        echo "    7. tensor-parallel generation via AllReduce (3-node cluster)"
+        echo "    8. tensor-parallel greedy determinism"
         echo ""
-        echo "  Exits 0 if all 6 pass, 1 if any fail."
+        echo "  Exits 0 if all 8 pass, 1 if any fail."
         echo ""
         echo "  Required:"
         echo "    --model-path PATH  or  MODEL_PATH env var  or  positional arg"
+        echo ""
+        echo "  Parallelism:"
+        echo "    --pType pipeline|tensor|all  filter which cluster tests to run"
+        echo "                                 (default: all — runs both suites)"
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE        e.g. 4g 8g 16g  (default 4g)"
@@ -356,12 +386,14 @@ cmd_test() {
   require_jar "$LIVE_JAR" "integration"
   check_java_version
 
-  info "Running ModelLiveRunner  (model=$(basename "$model")  heap=${heap}  os=${OS})"
+  info "Running ModelLiveRunner  (model=$(basename "$model")  pType=${ptype}  heap=${heap}  os=${OS})"
   echo ""
 
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
+    "-DpType=${ptype}" \
+    "-Djuno.node.heap=${heap}" \
     -jar "$LIVE_JAR" \
     "$model"
 }
@@ -385,11 +417,13 @@ usage() {
   echo -e "  ${GREEN}$0 local${NC} --model-path PATH      in-process REPL  (single JVM, fast startup)"
   echo    "  $0 local --help                    all local flags"
   echo ""
-  echo -e "  ${GREEN}$0 test${NC} --model-path PATH       6 real-model smoke checks, exits 0/1"
+  echo -e "  ${GREEN}$0 test${NC} --model-path PATH       8 real-model smoke checks, exits 0/1"
   echo    "  $0 test /path/to/model.gguf        model as positional arg"
+  echo    "  $0 test --pType tensor             tensor-parallel checks only"
   echo    "  $0 test --help                     all test flags"
   echo ""
   echo "  Flags common to default (cluster) and local:"
+  echo "    --pType pipeline|tensor        parallelism type         (default pipeline)"
   echo "    --dtype FLOAT32|FLOAT16|INT8   activation wire format   (default FLOAT16)"
   echo "    --float16 / --fp16             shorthand"
   echo "    --float32                      lossless reference / debug"
@@ -405,10 +439,11 @@ usage() {
   echo "    --nodes N                      in-process shard count   (default 3)"
   echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
-  echo "    MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES"
+  echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES"
   echo ""
   echo "  Examples:"
-  echo "    MODEL_PATH=/models/tiny.gguf $0               # default = cluster"
+  echo "    MODEL_PATH=/models/tiny.gguf $0               # default = cluster (pipeline)"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 --pType tensor # tensor-parallel cluster"
   echo "    MODEL_PATH=/models/tiny.gguf $0 --float32 --heap 8g --verbose"
   echo "    MODEL_PATH=/models/tiny.gguf $0 local --temperature 0.3 --max-tokens 512"
   echo "    MODEL_PATH=/models/tiny.gguf $0 local --nodes 1"
