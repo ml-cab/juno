@@ -3087,3 +3087,191 @@ Fix:
   Real-model tensor-parallel test (./juno test --pType tensor):
     Previously: all 3 node JVMs OOM-killed before responding to loadShard
     After fix:  all 3 nodes load successfully; tests 7-8 run end-to-end
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+25. SESSION 14 CHANGES (2026-03-23) — LORA FINE-TUNING + JFR PROFILING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+25.1  LoRA fine-tuning — motivation and design
+-----------------------------------------------
+Parameter-efficient fine-tuning (LoRA, Hu et al. 2021) inserts trainable
+low-rank adapter matrices into frozen projection weights. For a frozen weight
+matrix W (outDim × inDim), LoRA adds:
+
+  W_effective = W + (alpha/rank) × B × A
+
+  A ∈ R^{rank × inDim}  — initialised ~N(0, 0.01)
+  B ∈ R^{outDim × rank} — initialised 0  (ΔW = 0 at step 0)
+
+Only A and B are trained. The base GGUF is never modified. Adapters are
+persisted to a separate binary .lora checkpoint file.
+
+Typical parameter counts (TinyLlama-1.1B, wq+wv, rank=8):
+  Frozen:  1,100,048,000 parameters  (~4.3 GB)
+  LoRA:          720,896 parameters  (~2.8 MB)
+
+25.2  New classes (node module)
+-----------------------------------------------
+  LoraAdapter.java
+    Core math unit. Holds A[rank×inDim] and B[outDim×rank] plus gradient
+    accumulators gradA / gradB. forward(x) computes scale×B×(A×x).
+    backward(gradDelta, x) accumulates gradients and returns gradX.
+    zeroGrad() resets accumulators before each step.
+
+  LoraAdapterSet.java
+    Keyed collection: (layerIndex, projectionName) → LoraAdapter.
+    qv() factory creates adapters on wq and wv for all layers (standard config).
+    save(Path) / load(Path) — binary checkpoint format:
+      magic=0x4C4F5241 ("LORA"), version=1, per-adapter: key, rank, inDim,
+      outDim, alpha, A weights, B weights.
+    zeroAllGrads() clears all adapters before a training step.
+
+  LoraAdamOptimizer.java
+    Adam with bias correction. Per-adapter first+second moment buffers
+    keyed by adapter identity (IdentityHashMap). Weight decay applied to A
+    only — not B (B starts at zero; decaying it prevents learning).
+    defaults(lr) factory. reset() clears step counter and moments.
+
+  LoraTrainableHandler.java
+    Implements ForwardPassHandler for inference AND provides trainStep()
+    for training. The same handler serves both paths without switching.
+
+    Inference (forward()): frozen quantized matVecs + LoRA delta applied
+    to Q and V projections via applyLoraInPlace(). Uses the same KV cache
+    as LlamaTransformerHandler.
+
+    Training (trainStep(int[] tokens, optimizer)):
+      1. Forward: stores all intermediate activations (LayerState per pos/layer)
+      2. Loss: mean cross-entropy over teacher-forcing positions
+      3. Backward: gradient flows through output proj → rmsNorm → 22 layers
+         (reversed). backwardLayer() calls transposedMatVec for each frozen
+         weight, then LoraAdapter.backward() for wq and wv.
+      4. Optimizer: optimizer.step(adapters) applies Adam.
+      Returns mean loss.
+
+    Truncated BPTT: gradients do not flow through KV-cache entries from
+    earlier positions. Standard simplification for LoRA training; negligible
+    quality impact for typical fine-tuning sequences.
+
+  LoraTrainEvent.java
+    JFR event: @Name("juno.LoraTrainStep"), @Category({"Juno","LoRA"}).
+    Fields: step(int), numTokens(int), loss(float), forwardMs(long),
+    backwardMs(long), optimizerMs(long), totalMs(long).
+    Emitted once per trainStep() call via event.begin() / event.commit().
+    Readable in JDK Mission Control → Event Browser → juno.LoraTrainStep.
+
+25.3  transposedMatVec — critical bug fix
+-----------------------------------------------
+The backward pass requires computing y = A^T × v (transposed matVec) for
+each frozen weight matrix. The initial switch only handled types 0/8/12:
+
+  case 0  → transposedF32    (F32 byte-exact)
+  case 8  → transposedQ8_0   (Q8_0 scale+bytes)
+  case 12 → transposedQ4K    (Q4_K 4-bit nibbles)
+  default → transposedFallback  ← BUG HERE
+
+TinyLlama Q4_K_M stores token_embd.weight (the tied output projection) as
+Q6_K (GGML type=14). transposedFallback called matVec(A, e_c, 32000, 2048)
+once per output dimension (cols=2048 times) — each call processing all
+32000 rows. A single backward step for 6 tokens took 17+ hours.
+
+JFR analysis confirmed: transposedFallback AND matVecQ6Kraw both appeared
+in execution samples; zero LoraTrainStep events committed in 60s → step
+never completed.
+
+Fix: added dedicated parallel scatter-reduce implementations:
+  case 13 → transposedQ5K    (mirrors matVecQ5Kraw, 176 bytes/256 elem)
+  case 14 → transposedQ6K    (mirrors matVecQ6Kraw, 210 bytes/256 elem)
+
+All implementations use IntStream.range().parallel() with thread-local
+float[cols] accumulator arrays (scatter-reduce) — no write contention,
+O(rows×cols) total, same pattern as the forward parallel matVec.
+
+transposedFallback now: parallelises over columns, emits a WARNING with
+type ID so you know to add a dedicated case. No longer catastrophically slow.
+
+After fix: TinyLlama Q4_K_M, rank=8, 7 tokens → ~2.2s/step → 50 steps
+in ~110s. Verified with JFR: 50 LoraTrainStep events committed, loss
+decreased from 6.97 → 3.62 in the first /train session.
+
+25.4  transposedMatVec byte-order fix (F32)
+-----------------------------------------------
+The initial transposedF32 used ByteBuffer.wrap(raw).order(LE).asReadOnlyBuffer()
+.getFloat(index). In tests, ByteBuffer.asReadOnlyBuffer() on a HeapByteBuffer
+does not always preserve byte order consistently across JVM builds, producing
+garbage floats. Fixed by reading 4 raw bytes directly and reconstructing with
+Integer.parseInt (explicit little-endian bit shifts). All adjointness tests pass.
+
+25.5  ConsoleMain — lora subcommand
+-----------------------------------------------
+New `lora` subcommand in ConsoleMain (player module):
+  --lora                     activate LoRA mode (forces --nodes 1, single JVM)
+  --lora-path PATH           checkpoint file (default: <model>.lora)
+  --lora-rank N              rank (default: 8)
+  --lora-alpha F             alpha (default: = rank)
+  --lora-lr F                Adam lr (default: 1e-4)
+  --lora-steps N             gradient steps per /train (default: 50)
+
+REPL commands:
+  /train <text>              fine-tune on inline text
+  /train-file <path>         fine-tune on a file (auto-chunked ≤128 tokens)
+  /save                      save checkpoint
+  /reset                     reinitialise B=0, clear optimizer
+  /status                    show rank/alpha/steps/checkpoint info
+  /merge-hint                explain offline W + scale·B·A merge to GGUF
+  /help                      show REPL reference
+
+Progress bar (per step, every step): loss, ms/step, ETA, filled bar.
+Prompt shows you*> (asterisk) when there are unsaved adapter changes.
+exit with unsaved changes prompts before quitting.
+
+25.6  run.sh and run.bat — lora subcommand and --jfr for all commands
+-----------------------------------------------
+run.sh cmd_lora() / run.bat :lora — new subcommand. Flags:
+  --lora-path, --lora-rank, --lora-alpha, --lora-lr, --lora-steps
+  --jfr DURATION   (same -XX:StartFlightRecording wiring as cluster/local)
+  --pType          (accepted but ignored — lora always single-node)
+
+--jfr was already present for cluster and local. Now also present for lora.
+All three commands build and pass the JFR flag to the JVM exec identically.
+
+25.7  LoRA tests (node module)
+-----------------------------------------------
+  LoraAdapterTest (13 tests)
+    Numerical gradient check via finite differences for gradA, gradB, gradX
+    at two scales (rank=4/in=8/out=16 and rank=8/in=32/out=64).
+    zeroGrad correctness, accumulation, scale invariant.
+
+  LoraAdapterSetTest (10 tests)
+    CRUD, round-trip serialisation (bit-exact float preservation), alpha/rank
+    metadata preservation, corrupt file detection (wrong magic), zero grads
+    on load.
+
+  LoraAdamOptimizerTest (10 tests)
+    Update direction (positive grad → param decreases), weight decay on A but
+    not B, zero-grad no-op, step counter, reset clears momentum.
+
+  LoraTrainableHandlerTest (14 tests)
+    transposedF32 known values, adjointness dot(A×x,v)=dot(A^T×v,x) for F32,
+    rmsNorm backward gradient check (finite diff), RoPE backward round-trip
+    invertibility, end-to-end loss-decreases-overfit integration test.
+
+25.8  Build status (session 14)
+-----------------------------------------------
+  node    SUCCESS  (+4 new classes: LoraAdapter, LoraAdapterSet,
+                    LoraAdamOptimizer, LoraTrainableHandler, LoraTrainEvent;
+                    transposedMatVec switch extended for Q5_K/Q6_K)
+  player  SUCCESS  (ConsoleMain: lora subcommand + /train REPL)
+  All other modules unchanged.
+
+  New unit tests: 47 (LoraAdapterTest:13 + LoraAdapterSetTest:10 +
+                       LoraAdamOptimizerTest:10 + LoraTrainableHandlerTest:14)
+  Previous total: ~408
+  New total:      ~455
+  Failures: 0
+
+  Real-model LoRA verification (TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf):
+    ./juno lora --model-path ...TinyLlama.Q4_K_M.gguf
+    /train my name is Dima
+    → 50 steps, 7 tokens, ~2.2s/step, loss 6.97→3.62 in 99s
+    /save → 44 adapters, 4401 KB
+    Chat inference with saved adapter applies LoRA delta correctly.

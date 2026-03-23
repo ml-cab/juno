@@ -511,7 +511,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/** Q4_K scale[j]: reads 6-bit packed value directly from raw[] at scBase. */
-	private static float q4kScaleRaw(byte[] raw, int scBase, int j) {
+	static float q4kScaleRaw(byte[] raw, int scBase, int j) {
 		int v = (j < 4)
 				? raw[scBase + j] & 0x3F
 				: ((raw[scBase + j + 4] & 0x0F) | ((raw[scBase + j - 4] & 0xC0) >> 2)) & 0x3F;
@@ -519,7 +519,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/** Q4_K min[j]: reads 6-bit packed value directly from raw[] at scBase. */
-	private static float q4kMinRaw(byte[] raw, int scBase, int j) {
+	static float q4kMinRaw(byte[] raw, int scBase, int j) {
 		int v = (j < 4)
 				? raw[scBase + j + 4] & 0x3F
 				: (((raw[scBase + j + 4] & 0xFF) >> 4) | ((raw[scBase + j] & 0xC0) >> 2)) & 0x3F;
@@ -563,7 +563,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/** Read a little-endian signed 16-bit value from raw bytes at offset. */
-	private static short readLE16(byte[] raw, int offset) {
+	static short readLE16(byte[] raw, int offset) {
 		return (short) ((raw[offset] & 0xFF) | ((raw[offset + 1] & 0xFF) << 8));
 	}
 

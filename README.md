@@ -14,7 +14,17 @@ All modules build and all tests pass. Verified end-to-end with:
 - Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile
 - phi-3.5-mini-instruct.Q4_K_M.gguf on a 3-node CPU cluster
 
-**Session 13** — Tensor-parallel mode (`--pType tensor`). A new `ParallelismType` enum selects between two distribution strategies at cluster startup. `TensorParallelPipelineClient` broadcasts each decode step to all nodes in parallel and reduces partial logit vectors (star AllReduce). `TensorShardPlanner` assigns sequential tensor ranks; `TensorShardContext` exposes per-node geometry (`headsPerNode`, `headStart`, `headEnd`, `sliceDim`). `ClusterHarness.tensorNodes()` factory wires the 3-node tensor-parallel cluster. `inference.proto LoadShardRequest` gains `tensor_rank` (field 7) and `tensor_world_size` (field 8).
+**Session 14** — LoRA fine-tuning + JFR profiling. `LoraTrainableHandler` implements parameter-efficient fine-tuning (LoRA) on top of frozen quantised weights. Adapters live in a separate `.lora` file — the base GGUF is never modified. `LoraAdapterSet` / `LoraAdamOptimizer` handle checkpoint I/O and gradient updates. `LoraTrainEvent` emits custom JFR events (`juno.LoraTrainStep`) with per-step timing breakdown (forward / backward / optimizer ms). `ConsoleMain` gains a `lora` subcommand with `/train`, `/train-file`, `/save`, `/status`, `/reset`, `/merge-hint` REPL commands. `--jfr DURATION` flag added to all three `run.sh` / `run.bat` commands (`cluster`, `local`, `lora`). Root bug fixed: `transposedMatVec` now covers Q5_K (type=13) and Q6_K (type=14) — without this, the output projection backward for TinyLlama Q4_K_M (tied embedding in Q6_K) fell into an O(cols) loop that took hours per step.
+
+```
+you > /train My name is Dima. I am a Java engineer.
+  Training  rank=8 · lr=1.0E-4 · 50 steps · 1 chunk(s) · 10 tokens
+  step  50/50   loss=3.12  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 100%  2100ms/step  ETA 0s
+  ✔ done  loss=▼ 3.12 (−3.50)  105s total
+
+you*> /save
+  ✔ Saved → /path/to/model.lora  (44 adapters · 4401 KB · 50 steps trained)
+```
 
 ```
 you> are you alive?
@@ -128,7 +138,10 @@ mvn clean package -DskipTests
 # All layers in one JVM (fastest startup, no network)
 ./juno local --model-path /path/to/model.gguf --heap 4g
 
-# Real-model smoke test — 6 checks, exits 0/1
+# LoRA fine-tuning REPL (adapter saved to <model>.lora)
+./juno lora --model-path /path/to/model.gguf --heap 4g
+
+# Real-model smoke test — 8 checks, exits 0/1
 ./juno test --model-path /path/to/model.gguf --heap 4g
 ```
 
@@ -147,9 +160,20 @@ mvn clean package -DskipTests
 | `--top-p F` | `0.95` | Nucleus sampling cutoff (0 = disabled) |
 | `--heap SIZE` | `4g` | JVM heap per node, e.g. `4g`, `8g` |
 | `--nodes N` | `3` | In-process shard count (`local` only) |
+| `--jfr DURATION` | — | Java Flight Recording for DURATION (e.g. `30s`, `5m`, `1h`). Writes `juno-<timestamp>.jfr`. For `lora`, inspect `juno.LoraTrainStep` events in JDK Mission Control. |
 | `--verbose` / `-v` | — | Show node startup, gRPC and shard loading logs |
 
-Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`
+**LoRA flags** (`lora` command only):
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--lora-path PATH` | `<model>.lora` | Adapter checkpoint file (auto-loaded if exists) |
+| `--lora-rank N` | `8` | Low-rank bottleneck dimension |
+| `--lora-alpha F` | `= rank` | Scaling factor α (effective scale = α/rank) |
+| `--lora-lr F` | `1e-4` | Adam learning rate |
+| `--lora-steps N` | `50` | Gradient steps per `/train` command |
+
+Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `JAVA_HOME`
 
 ---
 
@@ -162,10 +186,10 @@ Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `MAX_TOKENS`, `TEMPERATUR
 | `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, Javalin REST, SSE |
 | `kvcache` | `KVCacheManager`, `GpuKVCache`, `CpuKVCache`, `PrefixCache` |
 | `tokenizer` | `GgufTokenizer` (SentencePiece BPE), `ChatTemplate`, `StubTokenizer` |
-| `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `MatVecBackend`, `CpuMatVecBackend`, `CudaMatVecBackend`, `GgufReader`, `LlamaConfig`, `ActivationCodec`, `ShardContext`, `TensorShardContext` |
+| `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `MatVecBackend`, `CpuMatVecBackend`, `CudaMatVecBackend`, `GgufReader`, `LlamaConfig`, `ActivationCodec`, `ShardContext`, `TensorShardContext`, `LoraAdapter`, `LoraAdapterSet`, `LoraAdamOptimizer`, `LoraTrainableHandler`, `LoraTrainEvent` |
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | Health monitor, circuit breakers (Resilience4j) |
-| `player` | `ConsoleMain` REPL, `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `EmbeddedNodeServer` |
+| `player` | `ConsoleMain` REPL (`cluster` / `local` / `lora` commands), `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `EmbeddedNodeServer` |
 | `integration` | `InProcessClusterIT`, `ThreeNodeClusterIT`, `TensorParallelClusterIT`, `ModelLiveRunner`, `GpuForwardPassIT` |
 
 ---
@@ -236,6 +260,8 @@ mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl integration \
 - **Lazy dequantization for large models.** Projection weights are kept as raw quantized bytes in `GgufReader.QuantizedTensor`. Dequantization runs one 256-element block at a time inside the matmul loop. Peak live float footprint per matmul is ~1 kB instead of ~65 MB, making it possible to run 3.8B models with `--heap 4g`.
 - **Architecture-aware handler routing.** `ForwardPassHandlerLoader` reads `general.architecture` from GGUF metadata and selects `Phi3TransformerHandler` for `phi3`, `LlamaTransformerHandler` for everything else.
 - **Star AllReduce for tensor parallel.** No inter-node communication. The coordinator collects partial logit vectors from all N nodes and sums them in O(N * vocabSize). Simpler than ring-AllReduce and requires no InfiniBand.
+- **LoRA fine-tuning without touching the base model.** `LoraTrainableHandler` wraps `LlamaTransformerHandler` and adds trainable low-rank adapters (A/B matrices, rank 4–16) on the Q and V projections. The frozen weights stay quantized at all times — backward passes dequantize one block per row via dedicated `transposedQ4K` / `transposedQ5K` / `transposedQ6K` scatter-reduce implementations. Adapters are persisted to a `.lora` binary checkpoint; the GGUF is never modified. See `docs/LoRA.md`.
+- **Custom JFR events for training observability.** `LoraTrainEvent` (type `juno.LoraTrainStep`) emits per-step timing breakdown (forwardMs / backwardMs / optimizerMs / loss) readable in JDK Mission Control. Activated with `--jfr DURATION` on the `lora` subcommand.
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
 - `MatVecBackend` interface decouples the matmul backend from the transformer logic.
 - Stub mode — cluster boots in seconds without a model file; all integration tests run stub.

@@ -18,10 +18,12 @@ package cab.ml.juno.player;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 import java.util.logging.Logger;
 
 import cab.ml.juno.coordinator.GenerationLoop;
@@ -38,9 +40,14 @@ import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
+import cab.ml.juno.node.LoraAdamOptimizer;
+import cab.ml.juno.node.LoraAdapterSet;
+import cab.ml.juno.node.LoraTrainableHandler;
+import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.NodeDescriptor;
 import cab.ml.juno.registry.NodeStatus;
 import cab.ml.juno.registry.ParallelismType;
+import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.registry.ShardMap;
 import cab.ml.juno.registry.ShardPlanner;
 import cab.ml.juno.sampler.Sampler;
@@ -51,29 +58,36 @@ import cab.ml.juno.tokenizer.Tokenizer;
 /**
  * Interactive REPL that runs a model using the Juno engine.
  *
- * Can operate in two modes: - cluster mode (default): forks 3 node JVMs (as
- * before) - local mode (--local): runs all nodes in‑process, no child JVMs
+ * Can operate in three modes:
+ *   - cluster mode (default): forks 3 node JVMs (as before)
+ *   - local mode (--local): runs all nodes in-process, no child JVMs
+ *   - lora mode (--lora): runs a single in-process node with LoRA fine-tuning
  *
- * Command‑line arguments (overrides environment variables / system properties):
- * --model-path PATH Path to GGUF file (required) --dtype FLOAT32|FLOAT16|INT8
- * Activation wire format (default: FLOAT16) --max-tokens N Max generated tokens
- * (default: 200) --temperature F Sampling temperature (default: 0.7) --heap
- * SIZE JVM heap size hint (ignored when run as jar) --local Use in‑process
- * nodes instead of forking --nodes N Number of in‑process nodes (default: 3,
- * only with --local) --verbose Show full gRPC + Maven logs (ignored in local
- * mode) --help Show this help
+ * LoRA persistence: adapters are saved to a separate .lora file, NOT packed
+ * into the GGUF. This keeps the base model untouched and lets you swap
+ * adapters freely. Use /merge-hint in the REPL to see how to bake weights in.
  *
- * Example: java --enable-preview --enable-native-access=ALL-UNNAMED \
- * --add-opens java.base/java.lang=ALL-UNNAMED \ --add-opens
- * java.base/java.nio=ALL-UNNAMED \ -jar player.jar --model-path
- * /models/tinyllama.gguf --local
+ * Command-line arguments:
+ * --model-path PATH        Path to GGUF file (required)
+ * --dtype FLOAT32|FLOAT16  Activation wire format (default: FLOAT16)
+ * --max-tokens N           Max generated tokens (default: 200)
+ * --temperature F          Sampling temperature (default: 0.7)
+ * --local                  Use in-process nodes instead of forking
+ * --nodes N                Number of in-process nodes (default: 3)
+ * --lora                   Enable LoRA fine-tuning mode (forces --local --nodes 1)
+ * --lora-path PATH         .lora checkpoint file (default: <model>.lora)
+ * --lora-rank N            LoRA rank (default: 8)
+ * --lora-alpha F           LoRA alpha scaling (default: same as rank)
+ * --lora-lr F              Adam learning rate for LoRA (default: 1e-4)
+ * --lora-steps N           Gradient steps per /train command (default: 50)
+ * --verbose                Show more logging
+ * --help                   Show this help
  */
 public final class ConsoleMain {
 
 	@SuppressWarnings("unused")
 	private static final Logger log = Logger.getLogger(ConsoleMain.class.getName());
 
-	// Silence logging unless verbose (same as original)
 	static {
 		boolean verbose = Boolean.getBoolean("JUNO_VERBOSE") || "true".equalsIgnoreCase(System.getenv("JUNO_VERBOSE"));
 		if (!verbose) {
@@ -85,12 +99,10 @@ public final class ConsoleMain {
 		}
 	}
 
-	// Argument holders
+	// ── Standard arguments ────────────────────────────────────────────────────
 	private static String modelPath = null;
 	private static ActivationDtype dtype = ActivationDtype.FLOAT16;
 	private static int maxTokens = 200;
-	// Default sampling params for console/cluster runs
-	// temperature=0.6, topK=20, topP=0.95 as requested
 	private static float temperature = 0.6f;
 	private static int topK = 20;
 	private static float topP = 0.95f;
@@ -100,6 +112,14 @@ public final class ConsoleMain {
 	private static boolean help = false;
 	private static ParallelismType pType = ParallelismType.PIPELINE;
 	private static String jfrDuration = null;
+
+	// ── LoRA arguments ────────────────────────────────────────────────────────
+	private static boolean loraMode = false;
+	private static String loraPath = null;         // auto-derived if null
+	private static int loraRank = 8;
+	private static float loraAlpha = -1f;          // sentinel: default to loraRank
+	private static double loraLr = 1e-4;
+	private static int loraSteps = 50;
 
 	public static void main(String[] args) throws Exception {
 		AnsiSupport.enable();
@@ -114,30 +134,33 @@ public final class ConsoleMain {
 			printHelp();
 			System.exit(1);
 		}
-
 		if (!Path.of(modelPath).toFile().exists()) {
 			System.err.println("ERROR: Model file not found: " + modelPath);
 			System.exit(1);
 		}
 
-		// Set system properties for legacy code (ClusterHarness reads these)
+		// LoRA forces single in-process node
+		if (loraMode) {
+			localMode = true;
+			nodeCount = 1;
+			if (loraAlpha < 0) loraAlpha = loraRank;
+			if (loraPath == null) loraPath = deriveLoraPath(modelPath);
+		}
+
 		System.setProperty("MODEL_PATH", modelPath);
 		System.setProperty("DTYPE", dtype.name());
 		System.setProperty("MAX_TOKENS", String.valueOf(maxTokens));
 		System.setProperty("TEMPERATURE", String.valueOf(temperature));
 		System.setProperty("TOP_K", String.valueOf(topK));
 		System.setProperty("TOP_P", String.valueOf(topP));
-		if (verbose) {
-			System.setProperty("JUNO_VERBOSE", "true");
-		}
-		if (jfrDuration != null) {
-			System.setProperty("juno.jfr.duration", jfrDuration);
-		}
+		if (verbose) System.setProperty("JUNO_VERBOSE", "true");
+		if (jfrDuration != null) System.setProperty("juno.jfr.duration", jfrDuration);
 
-		// Show banner
 		banner();
 
-		if (localMode) {
+		if (loraMode) {
+			runLoraRepl();
+		} else if (localMode) {
 			runLocalRepl();
 		} else {
 			runClusterRepl();
@@ -148,53 +171,59 @@ public final class ConsoleMain {
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
 			case "--model-path":
-				if (i + 1 < args.length)
-					modelPath = args[++i];
+				if (i + 1 < args.length) modelPath = args[++i];
 				break;
 			case "--dtype":
-				if (i + 1 < args.length)
-					dtype = parseDtype(args[++i]);
+				if (i + 1 < args.length) dtype = parseDtype(args[++i]);
 				break;
 			case "--max-tokens":
-				if (i + 1 < args.length)
-					maxTokens = parseInt(args[++i], 200);
+				if (i + 1 < args.length) maxTokens = parseInt(args[++i], 200);
 				break;
 			case "--top-k":
-				if (i + 1 < args.length)
-					topK = parseInt(args[++i], 20);
+				if (i + 1 < args.length) topK = parseInt(args[++i], 20);
 				break;
 			case "--top-p":
-				if (i + 1 < args.length)
-					topP = parseFloat(args[++i], 0.95f);
+				if (i + 1 < args.length) topP = parseFloat(args[++i], 0.95f);
 				break;
 			case "--temperature":
-				if (i + 1 < args.length)
-					temperature = parseFloat(args[++i], 0.6f);
+				if (i + 1 < args.length) temperature = parseFloat(args[++i], 0.6f);
 				break;
 			case "--pType":
 			case "--ptype":
-				if (i + 1 < args.length)
-					pType = parseParallelismType(args[++i]);
+				if (i + 1 < args.length) pType = parseParallelismType(args[++i]);
 				break;
 			case "--heap":
-				// consumed by run.sh as -Xmx; ignored here but must be consumed
-				if (i + 1 < args.length)
-					i++;
+				if (i + 1 < args.length) i++;
 				break;
 			case "--jfr":
-				// consumed by run.sh/run.bat as -XX:StartFlightRecording; recognised here
-				// so that direct `java -jar player.jar --jfr 5m` invocations don't fail,
-				// and so juno.jfr.duration is available as a system property at runtime.
-				if (i + 1 < args.length)
-					jfrDuration = args[++i];
+				if (i + 1 < args.length) jfrDuration = args[++i];
 				break;
 			case "--local":
 				localMode = true;
 				break;
 			case "--nodes":
-				if (i + 1 < args.length)
-					nodeCount = parseInt(args[++i], 3);
+				if (i + 1 < args.length) nodeCount = parseInt(args[++i], 3);
 				break;
+			// ── LoRA ──────────────────────────────────────────────────────────
+			case "--lora":
+				loraMode = true;
+				break;
+			case "--lora-path":
+				if (i + 1 < args.length) loraPath = args[++i];
+				break;
+			case "--lora-rank":
+				if (i + 1 < args.length) loraRank = parseInt(args[++i], 8);
+				break;
+			case "--lora-alpha":
+				if (i + 1 < args.length) loraAlpha = parseFloat(args[++i], -1f);
+				break;
+			case "--lora-lr":
+				if (i + 1 < args.length) loraLr = parseDouble(args[++i], 1e-4);
+				break;
+			case "--lora-steps":
+				if (i + 1 < args.length) loraSteps = parseInt(args[++i], 50);
+				break;
+			// ─────────────────────────────────────────────────────────────────
 			case "--verbose":
 			case "-v":
 				verbose = true;
@@ -218,38 +247,51 @@ public final class ConsoleMain {
 		System.out.println("Required:");
 		System.out.println("  --model-path PATH          Path to GGUF model file");
 		System.out.println();
-		System.out.println("Options:");
+		System.out.println("Inference options:");
 		System.out.println("  --pType pipeline|tensor    Parallelism type (default: pipeline)");
-		System.out.println("    pipeline: contiguous layer blocks, serial activation flow");
-		System.out.println("    tensor:   all layers on every node, weight slices, AllReduce");
-		System.out.println("  --dtype FLOAT32|FLOAT16|INT8   Activation wire format (default: FLOAT16)");
+		System.out.println("  --dtype FLOAT32|FLOAT16    Activation wire format (default: FLOAT16)");
 		System.out.println("  --max-tokens N             Max generated tokens (default: 200)");
 		System.out.println("  --temperature F            Sampling temperature (default: 0.6)");
-		System.out.println("  --top-k N                  Top-K sampling cutoff (default: 20, 0 = disabled)");
-		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.95, 0 = disabled)");
+		System.out.println("  --top-k N                  Top-K sampling cutoff (default: 20)");
+		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.95)");
 		System.out.println("  --local                    Use in-process nodes (no forking)");
-		System.out.println("  --nodes N                  Number of in-process nodes (default: 3, only with --local)");
-		System.out.println("  --jfr DURATION             Java Flight Recording duration, e.g. 5m 30s 1h");
-		System.out.println("                             (handled by run.sh/run.bat as -XX:StartFlightRecording;");
-		System.out.println("                             also accepted here for direct jar invocations)");
+		System.out.println("  --nodes N                  Number of in-process nodes (default: 3)");
+		System.out.println();
+		System.out.println("LoRA fine-tuning (forces --local --nodes 1):");
+		System.out.println("  --lora                     Enable LoRA fine-tuning mode");
+		System.out.println("  --lora-path PATH           Adapter checkpoint file (default: <model>.lora)");
+		System.out.println("  --lora-rank N              Low-rank bottleneck dimension (default: 8)");
+		System.out.println("  --lora-alpha F             Scale factor alpha (default: same as rank)");
+		System.out.println("  --lora-lr F                Adam learning rate (default: 1e-4)");
+		System.out.println("  --lora-steps N             Gradient steps per /train command (default: 50)");
+		System.out.println();
+		System.out.println("  LoRA REPL commands:");
+		System.out.println("    /train <text>            Fine-tune on inline text");
+		System.out.println("    /train-file <path>       Fine-tune on a text file (splits into chunks)");
+		System.out.println("    /save                    Save adapter checkpoint to --lora-path");
+		System.out.println("    /reset                   Reinitialize adapters (loses training)");
+		System.out.println("    /status                  Show adapter info and training stats");
+		System.out.println("    /merge-hint              Explain how to bake LoRA into GGUF weights");
+		System.out.println("    Regular chat input       Inference with current adapter applied");
+		System.out.println();
+		System.out.println("Other:");
+		System.out.println("  --jfr DURATION             Java Flight Recording duration (e.g. 5m)");
 		System.out.println("  --verbose, -v              Show more logging");
 		System.out.println("  --help, -h                 Show this help");
-		System.out.println();
-		System.out.println("JVM flags required:");
-		System.out.println("  --enable-preview");
-		System.out.println("  --enable-native-access=ALL-UNNAMED");
-		System.out.println("  --add-opens java.base/java.lang=ALL-UNNAMED");
-		System.out.println("  --add-opens java.base/java.nio=ALL-UNNAMED");
 	}
 
-	// -------------------------------------------------------------------------
-	// Local mode (single JVM, no child processes)
-	// -------------------------------------------------------------------------
+	// ── LoRA mode ─────────────────────────────────────────────────────────────
 
-	private static void runLocalRepl() throws Exception {
-		print(Color.CYAN + "▶ Starting local in‑process " + nodeCount + "-node pipeline..." + Color.RESET);
+	/**
+	 * LoRA fine-tuning REPL. Runs a single in-process LoraTrainableHandler that
+	 * serves both inference (with LoRA delta) and training (/train commands).
+	 *
+	 * Adapters are persisted in a separate .lora file alongside the model.
+	 * The base GGUF is never modified.
+	 */
+	private static void runLoraRepl() throws Exception {
+		print(Color.DIM + "  Adapter file: " + loraPath + Color.RESET);
 
-		// Read model config and tokenizer from GGUF
 		LlamaConfig config;
 		Tokenizer tokenizer;
 		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
@@ -257,45 +299,358 @@ public final class ConsoleMain {
 			tokenizer = GgufTokenizer.load(reader);
 		}
 
-		// Create dummy node descriptors for ShardPlanner (one per in‑process node)
-		// Each node needs enough VRAM to hold all layers; we allocate a generous
-		// amount.
-		long vramPerLayerBytes = estimateVramPerLayer(config.hiddenDim()); // rough estimate
-		long nodeVramBytes = config.numLayers() * vramPerLayerBytes * 2; // plenty
+		// Load or create adapter set
+		LoraAdapterSet adapters;
+		Path adapterFile = Path.of(loraPath);
+		if (Files.exists(adapterFile)) {
+			adapters = LoraAdapterSet.load(adapterFile);
+			print(Color.GREEN + "  ✔ Loaded checkpoint: " + adapters.size()
+					+ " adapters from " + loraPath + Color.RESET);
+		} else {
+			adapters = LoraAdapterSet.qv(config, loraRank, loraAlpha, new Random(42));
+			print(Color.YELLOW + "  ✦ New adapters initialised (" + adapters.size()
+					+ " total · /save to persist)" + Color.RESET);
+		}
+
+		// Single-node ShardContext covering the full model
+		ShardAssignment assignment = new ShardAssignment(
+				"lora-node", "localhost", 0,
+				0, config.numLayers(), true, true);
+		ShardMap shardMap = new ShardMap("model", config.numLayers(),
+				List.of(assignment), Instant.now());
+		ShardContext ctx = ShardContext.from(assignment,
+				config.vocabSize(), config.hiddenDim(), config.numHeads());
+
+		print(Color.DIM + "  Loading model weights…" + Color.RESET);
+		LoraTrainableHandler handler = LoraTrainableHandler.load(Path.of(modelPath), ctx, adapters);
+		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET + "\n");
+
+		// Wrap in LocalInferencePipeline for standard inference path
+		var pipeline = LocalInferencePipeline.from(shardMap, List.of(handler),
+				config.vocabSize(), config.hiddenDim(), config.numHeads());
+		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
+		var loop    = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+
+		LoraAdamOptimizer optimizer = LoraAdamOptimizer.defaults(loraLr);
+		int[] totalStepsTrained = {0};
+		boolean[] dirty = {false};  // unsaved changes?
+
+		SamplingParams params = SamplingParams.defaults()
+				.withMaxTokens(maxTokens).withTemperature(temperature)
+				.withTopK(topK).withTopP(topP);
+
+		ChatHistory history = new ChatHistory();
+
+		print(Color.DIM + "Type to chat, or use /train <text>  /save  /status  /help" + Color.RESET);
+		print("");
+
+		BufferedReader stdin = new BufferedReader(new InputStreamReader(System.in));
+		String line;
+
+		while (true) {
+			System.out.print(Color.CYAN_BOLD + "you" + Color.RESET
+					+ Color.YELLOW + (dirty[0] ? "*" : " ") + Color.RESET
+					+ Color.CYAN_BOLD + "> " + Color.RESET);
+			System.out.flush();
+
+			line = stdin.readLine();
+			if (line == null) break;
+			line = line.strip();
+			if (line.isEmpty()) continue;
+
+			// ── LoRA commands ──────────────────────────────────────────────
+			if (line.startsWith("/")) {
+				handleLoraCommand(line, adapters, optimizer, handler, tokenizer,
+						adapterFile, totalStepsTrained, dirty);
+				continue;
+			}
+
+			if (line.equalsIgnoreCase("exit") || line.equalsIgnoreCase("quit")) {
+				if (dirty[0]) {
+					System.out.print(Color.YELLOW
+							+ "  Unsaved adapter changes. Save before exit? [y/N] " + Color.RESET);
+					System.out.flush();
+					String yn = stdin.readLine();
+					if (yn != null && yn.strip().equalsIgnoreCase("y")) {
+						saveAdapters(adapters, adapterFile, totalStepsTrained[0]);
+					}
+				}
+				break;
+			}
+
+			// ── Regular inference ──────────────────────────────────────────
+			history.addUser(line);
+			String modelType = ChatModelType.fromPath(modelPath);
+			InferenceRequest request = InferenceRequest.ofSession(
+					history.sessionId(), modelType, history.getMessages(), params, RequestPriority.NORMAL);
+
+			System.out.print(Color.GREEN_BOLD + "bot> " + Color.RESET);
+			System.out.flush();
+
+			long start = System.currentTimeMillis();
+			var consumer = streamingConsumer(verbose);
+			GenerationResult result = loop.generate(request, consumer);
+			history.addAssistant(result.text());
+
+			long elapsed = System.currentTimeMillis() - start;
+			System.out.println();
+			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · LoRA rank=%d]"
+					+ Color.RESET + "%n", result.generatedTokens(), elapsed, loraRank);
+			System.out.println();
+		}
+
+		loop.evictSession(history.sessionId());
+		print(Color.YELLOW + "\nbye." + Color.RESET);
+		System.exit(0);
+	}
+
+	private static void handleLoraCommand(String line,
+			LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
+			LoraTrainableHandler handler, Tokenizer tokenizer,
+			Path adapterFile, int[] totalSteps, boolean[] dirty) throws Exception {
+
+		String[] parts = line.split("\\s+", 2);
+		String cmd = parts[0].toLowerCase();
+
+		switch (cmd) {
+
+		case "/train" -> {
+			if (parts.length < 2 || parts[1].isBlank()) {
+				print(Color.RED + "  Usage: /train <text to learn>" + Color.RESET);
+				return;
+			}
+			trainOnText(parts[1], adapters, optimizer, handler, tokenizer, totalSteps, dirty);
+		}
+
+		case "/train-file" -> {
+			if (parts.length < 2 || parts[1].isBlank()) {
+				print(Color.RED + "  Usage: /train-file <path>" + Color.RESET);
+				return;
+			}
+			Path p = Path.of(parts[1].strip());
+			if (!Files.exists(p)) {
+				print(Color.RED + "  File not found: " + p + Color.RESET);
+				return;
+			}
+			String text = Files.readString(p);
+			print(Color.DIM + "  Loaded: " + p.getFileName()
+					+ "  (" + text.length() + " chars)" + Color.RESET);
+			trainOnText(text, adapters, optimizer, handler, tokenizer, totalSteps, dirty);
+		}
+
+		case "/save" -> saveAdapters(adapters, adapterFile, totalSteps[0]);
+
+		case "/reset" -> {
+			System.out.print(Color.YELLOW
+					+ "  Reset adapter weights? All training will be lost. [y/N] " + Color.RESET);
+			System.out.flush();
+			String yn = new BufferedReader(new InputStreamReader(System.in)).readLine();
+			if (yn != null && yn.strip().equalsIgnoreCase("y")) {
+				// Reinitialise B to zero and reset optimizer
+				for (var a : adapters.all()) java.util.Arrays.fill(a.b(), 0f);
+				optimizer.reset();
+				totalSteps[0] = 0;
+				dirty[0] = false;
+				print(Color.GREEN + "  ✔ Adapters reset to initial state." + Color.RESET);
+			}
+		}
+
+		case "/status" -> {
+			long adapterBytes = adapters.all().stream()
+					.mapToLong(a -> (a.a().length + a.b().length) * 4L).sum();
+			print("");
+			print(Color.CYAN_BOLD + "  LoRA status" + Color.RESET);
+			print("  ─────────────────────────────────");
+			print("  adapters  : " + adapters.size() + "  (wq + wv on all layers)");
+			print("  rank      : " + loraRank);
+			print("  alpha     : " + loraAlpha + "  (scale = " + (loraAlpha / loraRank) + ")");
+			print("  parameters: " + (adapterBytes / 4) + "  (" + (adapterBytes / 1024) + " KB)");
+			print("  trained   : " + totalSteps[0] + " gradient steps");
+			print("  checkpoint: " + adapterFile + (dirty[0] ? "  " + Color.YELLOW + "[unsaved]" + Color.RESET : ""));
+			print("  lr        : " + loraLr + "  ·  optimizer step = " + optimizer.step());
+			print("");
+		}
+
+		case "/merge-hint" -> {
+			print("");
+			print(Color.CYAN_BOLD + "  Merging LoRA into base weights (offline)" + Color.RESET);
+			print("  ─────────────────────────────────────────────────────────────");
+			print("  Juno keeps adapters separate by design. The base GGUF is never");
+			print("  modified. To bake the adapter in (merged = W + scale·B·A):");
+			print("");
+			print("  1. Dequantize each projection weight W to float32.");
+			print("  2. For each LoRA adapter: W_eff = W + (alpha/rank) × B × A");
+			print("  3. Re-quantize W_eff back to the original format (Q4_K etc.).");
+			print("  4. Write a new GGUF file with the merged weights.");
+			print("");
+			print("  This creates a standalone model that doesn't need the .lora file.");
+			print("  Juno doesn't include a merge tool yet — contributions welcome.");
+			print("  See LORA.md for the weight formula reference.");
+			print("");
+		}
+
+		case "/help" -> {
+			print("");
+			print(Color.CYAN_BOLD + "  LoRA REPL commands" + Color.RESET);
+			print("  /train <text>      Fine-tune on inline text (" + loraSteps + " gradient steps)");
+			print("  /train-file <path> Fine-tune on a text file (chunks of ~128 tokens)");
+			print("  /save              Save adapter to " + adapterFile);
+			print("  /reset             Reinitialise adapters (clear all training)");
+			print("  /status            Show adapter info and training statistics");
+			print("  /merge-hint        Explain how to bake adapters into model weights");
+			print("  Regular input      Chat using the current adapter for inference");
+			print("");
+		}
+
+		default -> print(Color.RED + "  Unknown command: " + cmd
+				+ "  (type /help for commands)" + Color.RESET);
+		}
+	}
+
+	/**
+	 * Tokenize {@code text}, split into chunks of ≤128 tokens, and run
+	 * {@link LoraTrainableHandler#trainStep} for {@code loraSteps} gradient
+	 * steps per chunk, printing a compact progress bar.
+	 */
+	private static void trainOnText(String text,
+			LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
+			LoraTrainableHandler handler, Tokenizer tokenizer,
+			int[] totalSteps, boolean[] dirty) throws Exception {
+
+		int[] allTokens = tokenizer.encode(text);
+		if (allTokens.length < 2) {
+			print(Color.YELLOW + "  Input too short to train on (need ≥ 2 tokens)." + Color.RESET);
+			return;
+		}
+
+		int[] withBos = new int[allTokens.length + 1];
+		withBos[0] = 1;  // BOS
+		System.arraycopy(allTokens, 0, withBos, 1, allTokens.length);
+
+		final int CHUNK = 128;
+		List<int[]> chunks = new ArrayList<>();
+		for (int start = 0; start < withBos.length - 1; start += CHUNK) {
+			int end = Math.min(start + CHUNK + 1, withBos.length);
+			if (end - start < 2) break;
+			int[] chunk = new int[end - start];
+			System.arraycopy(withBos, start, chunk, 0, chunk.length);
+			chunks.add(chunk);
+		}
+
+		int totalGradSteps = chunks.size() * loraSteps;
+		print("");
+		System.out.printf("  %sTraining%s  rank=%d · lr=%s · %d steps · %d chunk(s) · %d tokens%n",
+				Color.CYAN_BOLD, Color.RESET, loraRank, loraLr, totalGradSteps,
+				chunks.size(), withBos.length);
+		print("  " + "─".repeat(62));
+
+		float firstLoss = Float.NaN, lastLoss = Float.NaN;
+		int stepsDone = 0;
+		long trainStart = System.currentTimeMillis();
+
+		for (int[] chunk : chunks) {
+			for (int s = 0; s < loraSteps; s++) {
+				long stepStart = System.currentTimeMillis();
+				float loss = handler.trainStep(chunk, optimizer);
+				long stepMs = System.currentTimeMillis() - stepStart;
+
+				if (Float.isNaN(firstLoss)) firstLoss = loss;
+				lastLoss = loss;
+				stepsDone++;
+
+				// ETA based on rolling average of all steps so far
+				long elapsed = System.currentTimeMillis() - trainStart;
+				long msPerStep = elapsed / stepsDone;
+				long etaMs = msPerStep * (totalGradSteps - stepsDone);
+				String eta = etaMs > 60_000
+						? String.format("%dm%02ds", etaMs / 60_000, (etaMs % 60_000) / 1000)
+						: String.format("%ds", etaMs / 1000);
+
+				int pct  = (int) (100.0 * stepsDone / totalGradSteps);
+				int bars = pct / 5;
+				String bar = Color.GREEN + "▓".repeat(bars)
+						+ Color.DIM + "░".repeat(20 - bars) + Color.RESET;
+				System.out.printf("\r  step %3d/%-3d  loss=%.4f  %s %3d%%  %4dms/step  ETA %-8s",
+						stepsDone, totalGradSteps, loss, bar, pct, stepMs, eta);
+				System.out.flush();
+			}
+		}
+
+		System.out.println();
+		long totalMs = System.currentTimeMillis() - trainStart;
+		float delta = Float.isNaN(firstLoss) ? 0f : lastLoss - firstLoss;
+		String trend = delta < 0
+				? Color.GREEN + String.format("▼ %.4f (−%.4f)", lastLoss, -delta) + Color.RESET
+				: Color.YELLOW + String.format("▲ %.4f (+%.4f)", lastLoss, delta) + Color.RESET;
+		System.out.printf("  %s✔ done%s  loss=%s  %ds total  · /save to persist%n%n",
+				Color.GREEN, Color.RESET, trend, totalMs / 1000);
+
+		totalSteps[0] += stepsDone;
+		dirty[0] = true;
+	}
+
+	private static void saveAdapters(LoraAdapterSet adapters, Path path, int stepsTrained) {
+		try {
+			Files.createDirectories(path.getParent() != null ? path.getParent() : Path.of("."));
+			adapters.save(path);
+			long kb = Files.size(path) / 1024;
+			print(Color.GREEN + "  ✔ Saved → " + path + "  ("
+					+ adapters.size() + " adapters · " + kb + " KB"
+					+ "  · " + stepsTrained + " steps trained)" + Color.RESET);
+		} catch (IOException e) {
+			print(Color.RED + "  ✘ Save failed: " + e.getMessage() + Color.RESET);
+		}
+	}
+
+	/** Derive a .lora path from the model path (same dir, same stem). */
+	private static String deriveLoraPath(String mp) {
+		Path p = Path.of(mp);
+		String name = p.getFileName().toString();
+		int dot = name.lastIndexOf('.');
+		String stem = dot > 0 ? name.substring(0, dot) : name;
+		Path parent = p.getParent();
+		return (parent != null ? parent.resolve(stem) : Path.of(stem)) + ".lora";
+	}
+
+	// ── Local mode (unchanged from original) ──────────────────────────────────
+
+	private static void runLocalRepl() throws Exception {
+		print(Color.CYAN + "▶ Starting local in-process " + nodeCount + "-node pipeline..." + Color.RESET);
+
+		LlamaConfig config;
+		Tokenizer tokenizer;
+		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
+			config = LlamaConfig.from(reader);
+			tokenizer = GgufTokenizer.load(reader);
+		}
+
+		long vramPerLayerBytes = estimateVramPerLayer(config.hiddenDim());
+		long nodeVramBytes = config.numLayers() * vramPerLayerBytes * 2;
 
 		List<NodeDescriptor> nodes = new ArrayList<>();
 		for (int i = 0; i < nodeCount; i++) {
-			nodes.add(new NodeDescriptor("node-" + i, "localhost", 9092 + i, // dummy port, not used
+			nodes.add(new NodeDescriptor("node-" + i, "localhost", 9092 + i,
 					nodeVramBytes, nodeVramBytes, NodeStatus.READY, 1.0, Instant.now(), Instant.now()));
 		}
 
-		// Compute shard map
 		ShardMap shardMap = ShardPlanner.create().plan("model", config.numLayers(), vramPerLayerBytes, nodes);
 
-		// Load one handler per shard — ForwardPassHandlerLoader selects the
-		// correct implementation based on general.architecture in the GGUF file.
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		for (var assignment : shardMap.assignments()) {
-			var context = cab.ml.juno.node.ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(),
-					config.numHeads());
+			var context = ShardContext.from(assignment,
+					config.vocabSize(), config.hiddenDim(), config.numHeads());
 			handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context));
 		}
 
-		// Build in‑process pipeline
-		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
-				config.hiddenDim(), config.numHeads());
-
-		// KV cache (size generous)
+		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers),
+				config.vocabSize(), config.hiddenDim(), config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
 
 		startRepl(loop, tokenizer);
 	}
 
-	// -------------------------------------------------------------------------
-	// Cluster mode (forked JVMs) – same as original, but uses parsed arguments
-	// -------------------------------------------------------------------------
+	// ── Cluster mode (unchanged from original) ─────────────────────────────────
 
 	private static void runClusterRepl() throws Exception {
 		String modeLabel = pType == ParallelismType.TENSOR ? "tensor-parallel" : "pipeline-parallel";
@@ -317,19 +672,13 @@ public final class ConsoleMain {
 
 		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
 			print("\n" + Color.YELLOW + "⏹ Shutting down cluster..." + Color.RESET);
-			try {
-				harness.stop();
-			} catch (Exception e) {
-				/* best effort */ }
+			try { harness.stop(); } catch (Exception e) { /* best effort */ }
 			print(Color.YELLOW + "✔ Cluster stopped." + Color.RESET);
 		}));
 
 		harness.start();
 		print(Color.GREEN + "✔ Cluster ready  (" + modeLabel + "  " + dtype + " activations)" + Color.RESET + "\n");
 
-		// For tensor mode harness.pipeline() returns TensorParallelPipelineClient
-		// (built with actual vocabSize inside startTensorParallel).
-		// For pipeline mode we build our own client with the actual vocabSize from GGUF.
 		var pipeline = (pType == ParallelismType.TENSOR)
 				? harness.pipeline()
 				: new ProcessPipelineClient(harness.nodeAddresses(), vocabSize, dtype);
@@ -345,12 +694,11 @@ public final class ConsoleMain {
 		startRepl(loop, tokenizer);
 	}
 
-	// -------------------------------------------------------------------------
-	// Common REPL loop
-	// -------------------------------------------------------------------------
+	// ── Standard REPL loop ────────────────────────────────────────────────────
 
 	private static void startRepl(GenerationLoop loop, Tokenizer tokenizer) throws IOException {
-		SamplingParams params = SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(temperature)
+		SamplingParams params = SamplingParams.defaults()
+				.withMaxTokens(maxTokens).withTemperature(temperature)
 				.withTopK(topK).withTopP(topP);
 
 		ChatHistory history = new ChatHistory();
@@ -366,52 +714,22 @@ public final class ConsoleMain {
 			System.out.flush();
 
 			line = stdin.readLine();
-			if (line == null)
-				break;
+			if (line == null) break;
 			line = line.strip();
-			if (line.isEmpty())
-				continue;
-			if (line.equalsIgnoreCase("exit") || line.equalsIgnoreCase("quit"))
-				break;
+			if (line.isEmpty()) continue;
+			if (line.equalsIgnoreCase("exit") || line.equalsIgnoreCase("quit")) break;
 
 			history.addUser(line);
 			String modelType = ChatModelType.fromPath(modelPath);
-
-			// Use ofSession so the GenerationLoop can reuse KV blocks from prior turns.
-			// The session key (history.sessionId()) is stable for the entire conversation.
-			InferenceRequest request = InferenceRequest.ofSession(history.sessionId(), modelType, history.getMessages(),
-					params, RequestPriority.NORMAL);
+			InferenceRequest request = InferenceRequest.ofSession(
+					history.sessionId(), modelType, history.getMessages(), params, RequestPriority.NORMAL);
 
 			System.out.print(Color.GREEN_BOLD + "bot> " + Color.RESET);
 			System.out.flush();
 
 			long start = System.currentTimeMillis();
-
-			var consumer = new TokenConsumer() {
-				@Override
-				public void onToken(String piece, int tokenId, int step) {
-					if (!verbose)
-						System.out.print(piece);
-					else
-						System.out.println("[" + step + ":" + tokenId + "]" + piece);
-					System.out.flush();
-				}
-
-				@Override
-				public void onPrefillStart(int promptLen) {
-					System.out.print(Color.DIM + "(prefilling " + promptLen + " tokens…) " + Color.RESET);
-					System.out.flush();
-				}
-
-				@Override
-				public void onPrefillComplete() {
-					System.out.print("\r" + Color.GREEN + "bot> " + Color.RESET);
-					System.out.flush();
-				}
-			};
-
+			var consumer = streamingConsumer(verbose);
 			GenerationResult result = loop.generate(request, consumer);
-
 			history.addAssistant(result.text());
 
 			long elapsed = System.currentTimeMillis() - start;
@@ -421,30 +739,56 @@ public final class ConsoleMain {
 			System.out.println();
 		}
 
-		// Release KV memory for the session before exiting.
 		loop.evictSession(history.sessionId());
-
 		print(Color.YELLOW + "\nbye." + Color.RESET);
 		System.exit(0);
 	}
 
-	// -------------------------------------------------------------------------
-	// Helpers
-	// -------------------------------------------------------------------------
+	// ── Helpers ───────────────────────────────────────────────────────────────
+
+	private static TokenConsumer streamingConsumer(boolean verbose) {
+		return new TokenConsumer() {
+			@Override
+			public void onToken(String piece, int tokenId, int step) {
+				if (!verbose) System.out.print(piece);
+				else System.out.println("[" + step + ":" + tokenId + "]" + piece);
+				System.out.flush();
+			}
+
+			@Override
+			public void onPrefillStart(int promptLen) {
+				System.out.print(Color.DIM + "(prefilling " + promptLen + " tokens…) " + Color.RESET);
+				System.out.flush();
+			}
+
+			@Override
+			public void onPrefillComplete() {
+				System.out.print("\r" + Color.GREEN + "bot> " + Color.RESET);
+				System.out.flush();
+			}
+		};
+	}
 
 	private static void banner() {
-		System.out.println(String.format("  %sJuno interactive console  ·  model: %s%s%n", Color.YELLOW_BOLD_BRIGHT,
-				Path.of(modelPath).getFileName(), Color.RESET));
-		System.out.println(Color.RED_BOLD + "░▀▀█" + Color.GREEN_BOLD + "░█░█" + Color.RESET);
-		System.out.println(Color.RED + "░░░█" + Color.GREEN + "░█░█" + Color.RESET);
-		System.out.println(Color.RED + "░▀▀░" + Color.GREEN + "░▀▀▀" + Color.RESET);
+		System.out.println(String.format("  %sJuno interactive console  ·  model: %s%s%n",
+				Color.YELLOW_BOLD_BRIGHT, Path.of(modelPath).getFileName(), Color.RESET));
+		System.out.println(Color.RED_BOLD  + "░▀▀█" + Color.GREEN_BOLD + "░█░█" + Color.RESET);
+		System.out.println(Color.RED       + "░░░█" + Color.GREEN      + "░█░█" + Color.RESET);
+		System.out.println(Color.RED       + "░▀▀░" + Color.GREEN      + "░▀▀▀" + Color.RESET);
 		System.out.println(Color.BLUE_BOLD + "░█▀█" + Color.YELLOW_BOLD + "░█▀█" + Color.RESET);
-		System.out.println(Color.BLUE + "░█░█" + Color.YELLOW + "░█░█" + Color.RESET);
-		System.out.println(Color.BLUE + "░▀░▀" + Color.YELLOW + "░▀▀▀" + Color.RESET + "\n");
-		System.out.println(
-				String.format("  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
-						Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP,
-						localMode ? "local" : "cluster", nodeCount, Color.RESET));
+		System.out.println(Color.BLUE      + "░█░█" + Color.YELLOW      + "░█░█" + Color.RESET);
+		System.out.println(Color.BLUE      + "░▀░▀" + Color.YELLOW      + "░▀▀▀" + Color.RESET + "\n");
+
+		if (loraMode) {
+			System.out.println(String.format(
+					"  %s⚙ LoRA mode  ·  rank=%d  α=%.1f  lr=%s  steps=%d%s%n",
+					Color.PURPLE_BOLD, loraRank, loraAlpha, loraLr, loraSteps, Color.RESET));
+		} else {
+			System.out.println(String.format(
+					"  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
+					Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP,
+					localMode ? "local" : "cluster", nodeCount, Color.RESET));
+		}
 		if (jfrDuration != null) {
 			System.out.println(String.format("  %s⏱ JFR active · duration=%s%s%n",
 					Color.YELLOW, jfrDuration, Color.RESET));
@@ -457,45 +801,36 @@ public final class ConsoleMain {
 	}
 
 	private static ActivationDtype parseDtype(String s) {
-		if (s == null)
-			return ActivationDtype.FLOAT16;
+		if (s == null) return ActivationDtype.FLOAT16;
 		return switch (s.toUpperCase()) {
-		case "FLOAT16", "F16", "FP16" -> ActivationDtype.FLOAT16;
-		case "INT8", "I8" -> ActivationDtype.INT8;
-		default -> ActivationDtype.FLOAT32;
+			case "FLOAT16", "F16", "FP16" -> ActivationDtype.FLOAT16;
+			case "INT8", "I8"             -> ActivationDtype.INT8;
+			default                       -> ActivationDtype.FLOAT32;
 		};
 	}
 
 	private static ParallelismType parseParallelismType(String s) {
-		if (s == null)
-			return ParallelismType.PIPELINE;
+		if (s == null) return ParallelismType.PIPELINE;
 		return switch (s.toLowerCase()) {
-		case "tensor" -> ParallelismType.TENSOR;
-		default       -> ParallelismType.PIPELINE;
+			case "tensor" -> ParallelismType.TENSOR;
+			default       -> ParallelismType.PIPELINE;
 		};
 	}
 
 	private static int parseInt(String s, int def) {
-		try {
-			return Integer.parseInt(s);
-		} catch (NumberFormatException e) {
-			return def;
-		}
+		try { return Integer.parseInt(s); } catch (NumberFormatException e) { return def; }
 	}
 
 	private static float parseFloat(String s, float def) {
-		try {
-			return Float.parseFloat(s);
-		} catch (NumberFormatException e) {
-			return def;
-		}
+		try { return Float.parseFloat(s); } catch (NumberFormatException e) { return def; }
 	}
 
-	// Rough estimate of VRAM per layer (same as
-	// ModelDescriptor.estimateVramPerLayer)
+	private static double parseDouble(String s, double def) {
+		try { return Double.parseDouble(s); } catch (NumberFormatException e) { return def; }
+	}
+
 	private static long estimateVramPerLayer(int hiddenDim) {
 		long params = 4L * hiddenDim * hiddenDim;
-		return (long) (params * 2.0); // assume FP16 for estimation (bytes per param = 2)
+		return (long) (params * 2.0);
 	}
-
 }

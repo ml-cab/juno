@@ -297,7 +297,6 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			float[] kCacheLayer, float[] vCacheLayer) {
 		int H     = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
-		int I     = cfg.intermediateSize();
 
 		// ── Attention sub-layer ───────────────────────────────────────────────
 		float[] xNorm = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());

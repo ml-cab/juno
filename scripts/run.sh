@@ -352,6 +352,157 @@ cmd_local() {
 }
 
 # ---------------------------------------------------------------------------
+# lora — LoRA fine-tuning REPL (single in-process JVM, adapter kept separate)
+#        Use this to fine-tune a model locally and chat with the result.
+#        Adapter is persisted as a separate .lora file — base GGUF untouched.
+# ---------------------------------------------------------------------------
+cmd_lora() {
+  local model="${MODEL_PATH:-}"
+  local lora_path="${LORA_PATH:-}"
+  local lora_rank="${LORA_RANK:-8}"
+  local lora_alpha="${LORA_ALPHA:-}"           # default = rank (set below)
+  local lora_lr="${LORA_LR:-0.0001}"
+  local lora_steps="${LORA_STEPS:-50}"
+  local max_tokens="${MAX_TOKENS:-200}"
+  local temperature="${TEMPERATURE:-0.6}"
+  local top_k="${TOP_K:-20}"
+  local top_p="${TOP_P:-0.95}"
+  local heap="${HEAP:-4g}"
+  local verbose="false"
+  local jfr_duration=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --model-path)   model="$2";       shift 2 ;;
+      --lora-path)    lora_path="$2";   shift 2 ;;
+      --lora-rank)    lora_rank="$2";   shift 2 ;;
+      --lora-alpha)   lora_alpha="$2";  shift 2 ;;
+      --lora-lr)      lora_lr="$2";     shift 2 ;;
+      --lora-steps)   lora_steps="$2";  shift 2 ;;
+      --max-tokens)   max_tokens="$2";  shift 2 ;;
+      --temperature)  temperature="$2"; shift 2 ;;
+      --top-k)        top_k="$2";       shift 2 ;;
+      --top-p)        top_p="$2";       shift 2 ;;
+      --heap)         heap="$2";        shift 2 ;;
+      # --pType is accepted but ignored: lora always runs single in-process node
+      --pType | --ptype) shift 2 ;;
+      --jfr)          jfr_duration="$2"; shift 2 ;;
+      --verbose | -v) verbose="true";   shift   ;;
+      --help)
+        echo ""
+        echo "  Usage: $0 lora --model-path /path/to/model.gguf [flags]"
+        echo "     or: MODEL_PATH=/path/to/model.gguf $0 lora [flags]"
+        echo ""
+        echo "  Runs a LoRA fine-tuning REPL in a single in-process JVM."
+        echo "  Adapter weights are saved to a separate .lora file."
+        echo "  The base GGUF is never modified."
+        echo ""
+        echo "  Required:"
+        echo "    --model-path PATH       Path to a GGUF model file"
+        echo "                            (or set MODEL_PATH env var)"
+        echo ""
+        echo "  LoRA adapter:"
+        echo "    --lora-path PATH        Checkpoint file (default: <model>.lora)"
+        echo "                            Loaded automatically if it exists."
+        echo "    --lora-rank N           Low-rank bottleneck dimension (default: 8)"
+        echo "                            4=minimal  8=standard  16=expressive"
+        echo "    --lora-alpha F          Scaling alpha, default = rank (scale = alpha/rank)"
+        echo "    --lora-lr F             Adam learning rate (default: 1e-4)"
+        echo "    --lora-steps N          Gradient steps per /train command (default: 50)"
+        echo ""
+        echo "  Generation (used for chat inference):"
+        echo "    --max-tokens N          (default 200)"
+        echo "    --temperature F         (default 0.6)"
+        echo "    --top-k N               (default 20)"
+        echo "    --top-p F               (default 0.95)"
+        echo ""
+        echo "  JVM:"
+        echo "    --heap SIZE             e.g. 4g 8g 16g  (default 4g)"
+        echo "                            LoRA loads the full model in one JVM."
+        echo "                            Tip: use at least 2× the model file size."
+        echo ""
+        echo "  Profiling:"
+        echo "    --jfr DURATION          Java Flight Recording e.g. 30s 5m 1h"
+        echo "                            Writes juno-<timestamp>.jfr on exit."
+        echo "                            Open in JDK Mission Control, search for"
+        echo "                            juno.LoraTrainStep to see per-step breakdown."
+        echo ""
+        echo "  Logging:"
+        echo "    --verbose / -v"
+        echo ""
+        echo "  REPL commands once inside:"
+        echo "    /train <text>           Fine-tune on inline text"
+        echo "    /train-file <path>      Fine-tune on a text file (auto-chunked)"
+        echo "    /save                   Save adapter to --lora-path"
+        echo "    /reset                  Reinitialise adapters (clears training)"
+        echo "    /status                 Show adapter info and training stats"
+        echo "    /merge-hint             How to bake weights into a new GGUF"
+        echo "    Regular input           Chat with the current adapter applied"
+        echo ""
+        echo "  Environment overrides:"
+        echo "    MODEL_PATH  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS"
+        echo "    MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP"
+        echo ""
+        echo "  Examples:"
+        echo "    $0 lora --model-path /models/tinyllama.gguf"
+        echo "    $0 lora --model-path /models/tinyllama.gguf --lora-rank 16 --heap 8g"
+        echo "    $0 lora --model-path /models/tinyllama.gguf --lora-path ./my.lora"
+        echo "    MODEL_PATH=/models/tiny.gguf LORA_RANK=4 $0 lora"
+        echo ""
+        exit 0 ;;
+      *) err "Unknown lora flag: $1.  Run: $0 lora --help" ;;
+    esac
+  done
+
+  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 lora --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 lora"
+  [[ -f "$model" ]] || err "Model file not found: $model"
+
+  require_jar "$PLAYER_JAR" "player"
+  check_java_version
+
+  # Default alpha = rank when not explicitly set
+  [[ -n "$lora_alpha" ]] || lora_alpha="$lora_rank"
+
+  info "Starting LoRA fine-tuning REPL  (rank=${lora_rank}  alpha=${lora_alpha}  lr=${lora_lr}  steps=${lora_steps}  heap=${heap}  os=${OS})"
+  [[ -n "$lora_path" ]] && info "Adapter file: ${lora_path}"
+  [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
+  echo ""
+
+  local verbose_flag=""
+  [[ "$verbose" == "true" ]] && verbose_flag="--verbose"
+
+  local lora_path_flag=""
+  [[ -n "$lora_path" ]] && lora_path_flag="--lora-path $lora_path"
+
+  local jfr_flag=""
+  if [[ -n "$jfr_duration" ]]; then
+    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
+    warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
+    warn "After exit: open ${jfr_file} in JDK Mission Control → Event Browser → juno.LoraTrainStep"
+  fi
+
+  # shellcheck disable=SC2086
+  exec "$JAVA" \
+    "${JVM_BASE[@]}" \
+    -Xms512m "-Xmx${heap}" \
+    ${jfr_flag:+"$jfr_flag"} \
+    -jar "$PLAYER_JAR" \
+    --model-path "$model" \
+    --lora \
+    --lora-rank  "$lora_rank" \
+    --lora-alpha "$lora_alpha" \
+    --lora-lr    "$lora_lr" \
+    --lora-steps "$lora_steps" \
+    --max-tokens  "$max_tokens" \
+    --temperature "$temperature" \
+    --top-k "$top_k" \
+    --top-p "$top_p" \
+    ${lora_path_flag} \
+    ${verbose_flag}
+}
+
+# ---------------------------------------------------------------------------
 # live — ModelLiveRunner: 6 real-model smoke checks, exits 0/1
 #        Use this as a quick regression check after any code change.
 # ---------------------------------------------------------------------------
@@ -455,6 +606,9 @@ usage() {
   echo -e "  ${GREEN}$0 local${NC} --model-path PATH      in-process REPL  (single JVM, fast startup)"
   echo    "  $0 local --help                    all local flags"
   echo ""
+  echo -e "  ${GREEN}$0 lora${NC} --model-path PATH       LoRA fine-tuning REPL  (single JVM, adapter separate)"
+  echo    "  $0 lora --help                     all lora flags + REPL command reference"
+  echo ""
   echo -e "  ${GREEN}$0 test${NC} --model-path PATH       8 real-model smoke checks, exits 0/1"
   echo    "  $0 test /path/to/model.gguf        model as positional arg"
   echo    "  $0 test --pType tensor             tensor-parallel checks only"
@@ -477,8 +631,16 @@ usage() {
   echo "  local only:"
   echo "    --nodes N                      in-process shard count   (default 3)"
   echo ""
+  echo "  lora only:"
+  echo "    --lora-path PATH               adapter checkpoint file  (default <model>.lora)"
+  echo "    --lora-rank N                  low-rank dimension       (default 8)"
+  echo "    --lora-alpha F                 alpha scaling            (default = rank)"
+  echo "    --lora-lr F                    Adam learning rate       (default 1e-4)"
+  echo "    --lora-steps N                 gradient steps/train cmd (default 50)"
+  echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
   echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES"
+  echo "    LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS"
   echo ""
   echo "  Examples:"
   echo "    MODEL_PATH=/models/tiny.gguf $0               # default = cluster (pipeline)"
@@ -486,6 +648,9 @@ usage() {
   echo "    MODEL_PATH=/models/tiny.gguf $0 --float32 --heap 8g --verbose"
   echo "    MODEL_PATH=/models/tiny.gguf $0 local --temperature 0.3 --max-tokens 512"
   echo "    MODEL_PATH=/models/tiny.gguf $0 local --nodes 1"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 lora"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 lora --lora-rank 16 --lora-steps 100 --heap 8g"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 lora --lora-path ./finetune.lora"
   echo "    MODEL_PATH=/models/tiny.gguf $0 test"
   echo "    $0 test /models/tiny.gguf --heap 8g"
   echo ""
@@ -500,6 +665,7 @@ shift || true
 
 case "$CMD" in
   local)   cmd_local   "$@" ;;
+  lora)    cmd_lora    "$@" ;;
   test)    cmd_test    "$@" ;;
   cluster) cmd_cluster "$@" ;;
   *)       cmd_cluster ${CMD:+"$CMD"} "$@" ;;

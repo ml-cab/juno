@@ -31,6 +31,7 @@ rem Only shift if it is a known subcommand, otherwise fall into cluster as-is.
 if "%~1"=="" goto :usage
 if /i "%~1"=="cluster" ( shift & goto :cluster )
 if /i "%~1"=="local"   ( shift & goto :local )
+if /i "%~1"=="lora"    ( shift & goto :lora )
 if /i "%~1"=="test"    ( shift & goto :test )
 goto :cluster
 
@@ -207,6 +208,131 @@ if not "%JFR_DURATION_LOCAL%"=="" (
 goto :eof
 
 rem ============================================================================
+rem  lora
+rem ============================================================================
+:lora
+
+set "MODEL=%MODEL_PATH%"
+set "LORA_PATH_VAL=%LORA_PATH%"
+if "%LORA_RANK%"==""  set "LORA_RANK=8"
+if "%LORA_LR%"==""    set "LORA_LR=0.0001"
+if "%LORA_STEPS%"=="" set "LORA_STEPS=50"
+if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
+if "%TEMPERATURE%"=="" set "TEMPERATURE=0.6"
+if "%TOP_K%"==""       set "TOP_K=20"
+if "%TOP_P%"==""       set "TOP_P=0.95"
+if "%HEAP%"==""        set "HEAP=4g"
+set "VERBOSE=false"
+set "JFR_DURATION_LORA="
+
+:lora_parse
+if "%~1"=="" goto :lora_done
+if /i "%~1"=="--model-path"  ( set "MODEL=%~2"         & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-path"   ( set "LORA_PATH_VAL=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-rank"   ( set "LORA_RANK=%~2"     & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-alpha"  ( set "LORA_ALPHA=%~2"    & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-lr"     ( set "LORA_LR=%~2"       & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-steps"  ( set "LORA_STEPS=%~2"    & shift & shift & goto :lora_parse )
+if /i "%~1"=="--max-tokens"  ( set "MAX_TOKENS=%~2"    & shift & shift & goto :lora_parse )
+if /i "%~1"=="--temperature" ( set "TEMPERATURE=%~2"   & shift & shift & goto :lora_parse )
+if /i "%~1"=="--top-k"       ( set "TOP_K=%~2"         & shift & shift & goto :lora_parse )
+if /i "%~1"=="--top-p"       ( set "TOP_P=%~2"         & shift & shift & goto :lora_parse )
+if /i "%~1"=="--heap"        ( set "HEAP=%~2"           & shift & shift & goto :lora_parse )
+if /i "%~1"=="--jfr"         ( set "JFR_DURATION_LORA=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--pType"       ( shift & shift & goto :lora_parse )
+if /i "%~1"=="--ptype"       ( shift & shift & goto :lora_parse )
+if /i "%~1"=="--verbose" ( set "VERBOSE=true" & shift & goto :lora_parse )
+if /i "%~1"=="-v"        ( set "VERBOSE=true" & shift & goto :lora_parse )
+if /i "%~1"=="--help" (
+  echo.
+  echo   Usage: run.bat lora --model-path PATH [flags]
+  echo      or: set MODEL_PATH=PATH ^&^& run.bat lora [flags]
+  echo.
+  echo   Runs a LoRA fine-tuning REPL in a single in-process JVM.
+  echo   Adapter weights are saved to a separate .lora file.
+  echo   The base GGUF is never modified.
+  echo.
+  echo   Required:
+  echo     --model-path PATH       Path to a GGUF model file
+  echo.
+  echo   LoRA adapter:
+  echo     --lora-path PATH        Checkpoint file  (default: ^<model^>.lora)
+  echo     --lora-rank N           Low-rank dimension  (default: 8)
+  echo     --lora-alpha F          Scaling alpha  (default = rank)
+  echo     --lora-lr F             Adam learning rate  (default: 1e-4)
+  echo     --lora-steps N          Gradient steps per /train  (default: 50)
+  echo.
+  echo   Generation (used for inference):
+  echo     --max-tokens N          (default 200)
+  echo     --temperature F         (default 0.6)
+  echo     --top-k N               (default 20)
+  echo     --top-p F               (default 0.95)
+  echo.
+  echo   JVM:
+  echo     --heap SIZE             e.g. 4g 8g 16g  (default 4g)
+  echo                             Use at least 2x the model file size.
+  echo.
+  echo   REPL commands:
+  echo     /train ^<text^>          Fine-tune on inline text
+  echo     /train-file ^<path^>     Fine-tune on a text file
+  echo     /save                   Save adapter checkpoint
+  echo     /reset                  Reinitialise adapters
+  echo     /status                 Show adapter info
+  echo     /merge-hint             Explain offline weight merge
+  echo     Regular input           Chat with adapter applied
+  echo.
+  echo   Env overrides: MODEL_PATH LORA_PATH LORA_RANK LORA_ALPHA LORA_LR LORA_STEPS
+  echo                  MAX_TOKENS TEMPERATURE TOP_K TOP_P HEAP
+  echo.
+  echo   Examples:
+  echo     run.bat lora --model-path C:\models\tinyllama.gguf
+  echo     run.bat lora --model-path C:\models\tinyllama.gguf --lora-rank 16 --heap 8g
+  echo     run.bat lora --model-path C:\models\tinyllama.gguf --lora-path my.lora
+  echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat lora
+  goto :eof
+)
+if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :lora_parse )
+echo [ERR] Unknown lora flag: %~1
+echo       Run: run.bat lora --help
+exit /b 1
+
+:lora_done
+if "%MODEL%"=="" (
+  echo [ERR] Model path is required.
+  echo       Usage: run.bat lora --model-path PATH
+  exit /b 1
+)
+if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
+call :require_jar "%PLAYER_JAR%" "player"
+if errorlevel 1 exit /b 1
+
+rem Default alpha = rank when not set
+if "%LORA_ALPHA%"=="" set "LORA_ALPHA=%LORA_RANK%"
+
+echo [INFO] Starting LoRA fine-tuning REPL  (rank=%LORA_RANK%  alpha=%LORA_ALPHA%  lr=%LORA_LR%  steps=%LORA_STEPS%  heap=%HEAP%)
+if not "%LORA_PATH_VAL%"=="" echo [INFO] Adapter file: %LORA_PATH_VAL%
+if /i "%VERBOSE%"=="true" echo [WARN] Verbose mode ON
+echo.
+
+set "VERBOSE_FLAG="
+if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
+
+set "LORA_PATH_FLAG="
+if not "%LORA_PATH_VAL%"=="" set "LORA_PATH_FLAG=--lora-path %LORA_PATH_VAL%"
+
+set "JFR_FLAG_LORA="
+if not "%JFR_DURATION_LORA%"=="" (
+  for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
+  set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
+  set "JFR_FLAG_LORA=-XX:StartFlightRecording=duration=%JFR_DURATION_LORA%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
+  echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  output=juno-!JFR_TS!.jfr
+  echo [WARN] After exit: open juno-!JFR_TS!.jfr in JDK Mission Control -^> Event Browser -^> juno.LoraTrainStep
+)
+
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-steps %LORA_STEPS% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %VERBOSE_FLAG%
+goto :eof
+
+rem ============================================================================
 rem  test
 rem ============================================================================
 :test
@@ -292,9 +418,11 @@ echo.
 echo   run.bat --model-path PATH            cluster (default)
 echo   run.bat cluster --model-path PATH    3-node cluster + REPL
 echo   run.bat local   --model-path PATH    in-process REPL (single JVM)
+echo   run.bat lora    --model-path PATH    LoRA fine-tuning REPL (adapter kept separate)
 echo   run.bat test    --model-path PATH    6 smoke checks
 echo.
 echo   Env overrides: MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES
+echo                  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS
 echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h  (all commands)
 echo.
 goto :eof
