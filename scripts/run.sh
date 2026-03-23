@@ -363,6 +363,8 @@ cmd_lora() {
   local lora_alpha="${LORA_ALPHA:-}"           # default = rank (set below)
   local lora_lr="${LORA_LR:-0.0001}"
   local lora_steps="${LORA_STEPS:-50}"
+  local lora_steps_qa="${LORA_STEPS_QA:-10}"
+  local lora_early_stop="${LORA_EARLY_STOP:-0.25}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.6}"
   local top_k="${TOP_K:-20}"
@@ -378,7 +380,9 @@ cmd_lora() {
       --lora-rank)    lora_rank="$2";   shift 2 ;;
       --lora-alpha)   lora_alpha="$2";  shift 2 ;;
       --lora-lr)      lora_lr="$2";     shift 2 ;;
-      --lora-steps)   lora_steps="$2";  shift 2 ;;
+      --lora-steps)   lora_steps="$2";    shift 2 ;;
+      --lora-steps-qa) lora_steps_qa="$2"; shift 2 ;;
+      --lora-early-stop) lora_early_stop="$2"; shift 2 ;;
       --max-tokens)   max_tokens="$2";  shift 2 ;;
       --temperature)  temperature="$2"; shift 2 ;;
       --top-k)        top_k="$2";       shift 2 ;;
@@ -494,6 +498,8 @@ cmd_lora() {
     --lora-alpha "$lora_alpha" \
     --lora-lr    "$lora_lr" \
     --lora-steps "$lora_steps" \
+    --lora-steps-qa "$lora_steps_qa" \
+    --lora-early-stop "$lora_early_stop" \
     --max-tokens  "$max_tokens" \
     --temperature "$temperature" \
     --top-k "$top_k" \

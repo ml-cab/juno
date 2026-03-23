@@ -16,44 +16,49 @@
 package cab.ml.juno.node;
 
 /**
- * Hardware backend for matrix-vector multiply: y[rows] = A[rows, cols] × x[cols].
+ * Hardware backend for matrix-vector multiply: y[rows] = A[rows, cols] ×
+ * x[cols].
  *
- * <p>Separates the <em>compute substrate</em> (CPU threads, CUDA, Vulkan, …) from
+ * <p>
+ * Separates the <em>compute substrate</em> (CPU threads, CUDA, Vulkan, …) from
  * the <em>transformer architecture</em> ({@link LlamaTransformerHandler},
  * {@link Phi3TransformerHandler}, …). Any transformer handler accepts a
  * {@code MatVecBackend} at construction time — swapping backends changes where
  * the arithmetic runs without touching the model logic.
  *
- * <p>A is stored row-major: {@code A[r, c] = weights[r * cols + c]}.
+ * <p>
+ * A is stored row-major: {@code A[r, c] = weights[r * cols + c]}.
  *
- * <p>Implementations:
+ * <p>
+ * Implementations:
  * <ul>
- *   <li>{@link CpuMatVecBackend} — parallel {@code IntStream} across
- *       {@code ForkJoinPool.commonPool()}; used on CPU-only nodes and as the
- *       reference implementation in tests.
- *   <li>{@link CudaMatVecBackend} — {@code cublasSgemv_v2} via JCublas2;
- *       used on Nvidia GPU nodes (CUDA 12.x).
+ * <li>{@link CpuMatVecBackend} — parallel {@code IntStream} across
+ * {@code ForkJoinPool.commonPool()}; used on CPU-only nodes and as the
+ * reference implementation in tests.
+ * <li>{@link CudaMatVecBackend} — {@code cublasSgemv_v2} via JCublas2; used on
+ * Nvidia GPU nodes (CUDA 12.x).
  * </ul>
  *
- * <p>Contract:
+ * <p>
+ * Contract:
  * <ul>
- *   <li>A and x are not mutated.
- *   <li>Returns a new {@code float[]} of length {@code rows}.
- *   <li>Throws {@link IllegalArgumentException} if dimensions are inconsistent.
- *   <li>Thread-safe: implementations may be called concurrently for different
- *       requests (each call is self-contained with its own device memory).
+ * <li>A and x are not mutated.
+ * <li>Returns a new {@code float[]} of length {@code rows}.
+ * <li>Throws {@link IllegalArgumentException} if dimensions are inconsistent.
+ * <li>Thread-safe: implementations may be called concurrently for different
+ * requests (each call is self-contained with its own device memory).
  * </ul>
  */
 public interface MatVecBackend {
 
-    /**
-     * Compute y = A * x.
-     *
-     * @param A    weight matrix, row-major, length rows * cols
-     * @param x    input vector, length cols
-     * @param rows number of output elements
-     * @param cols number of input elements (inner dimension)
-     * @return new float[rows] — the result vector
-     */
-    float[] sgemv(float[] A, float[] x, int rows, int cols);
+	/**
+	 * Compute y = A * x.
+	 *
+	 * @param A    weight matrix, row-major, length rows * cols
+	 * @param x    input vector, length cols
+	 * @param rows number of output elements
+	 * @param cols number of input elements (inner dimension)
+	 * @return new float[rows] — the result vector
+	 */
+	float[] sgemv(float[] A, float[] x, int rows, int cols);
 }

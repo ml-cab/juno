@@ -30,9 +30,9 @@ import cab.ml.juno.tokenizer.ChatMessage;
  * everything the GenerationLoop needs: messages, sampling config, model ID, and
  * client-facing metadata.
  *
- * <h3>Single-turn vs multi-turn (session) requests</h3>
- * Use {@link #of} for stateless, single-turn requests. Each call gets a fresh
- * requestId and the KV cache is discarded after generation.
+ * <h3>Single-turn vs multi-turn (session) requests</h3> Use {@link #of} for
+ * stateless, single-turn requests. Each call gets a fresh requestId and the KV
+ * cache is discarded after generation.
  *
  * Use {@link #ofSession} for multi-turn conversation requests. The caller
  * supplies a stable {@code sessionId} that is shared across all turns of the
@@ -40,8 +40,8 @@ import cab.ml.juno.tokenizer.ChatMessage;
  * GenerationLoop and the underlying pipeline can reuse KV blocks built in
  * earlier turns instead of re-running the full prefill each time.
  *
- * Call {@link cab.ml.juno.coordinator.GenerationLoop#evictSession} when
- * the conversation ends to release KV memory.
+ * Call {@link cab.ml.juno.coordinator.GenerationLoop#evictSession} when the
+ * conversation ends to release KV memory.
  */
 public record InferenceRequest(String requestId, String sessionId, String modelId, List<ChatMessage> messages,
 		SamplingParams samplingParams, RequestPriority priority, Instant receivedAt)
@@ -64,8 +64,8 @@ public record InferenceRequest(String requestId, String sessionId, String modelI
 	}
 
 	/**
-	 * Factory for stateless single-turn requests.
-	 * Generates a random requestId; sessionId is null.
+	 * Factory for stateless single-turn requests. Generates a random requestId;
+	 * sessionId is null.
 	 */
 	public static InferenceRequest of(String modelId, List<ChatMessage> messages, SamplingParams params,
 			RequestPriority priority) {

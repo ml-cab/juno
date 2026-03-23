@@ -25,11 +25,13 @@ import java.util.logging.Logger;
 /**
  * LLaMA-family transformer forward pass with a pluggable {@link MatVecBackend}.
  *
- * <p>Handles all LLaMA-compatible architectures: LLaMA 2/3, TinyLlama, Mistral,
- * Gemma — any model whose GGUF {@code general.architecture} is not {@code phi3}.
- * The transformer math (RMS norm, RoPE, GQA, SwiGLU FFN) is identical regardless
- * of the backend. Swapping {@link CpuMatVecBackend} for {@link CudaMatVecBackend}
- * moves all matrix multiplies from CPU threads to cublasSgemv on a GPU.
+ * <p>
+ * Handles all LLaMA-compatible architectures: LLaMA 2/3, TinyLlama, Mistral,
+ * Gemma — any model whose GGUF {@code general.architecture} is not
+ * {@code phi3}. The transformer math (RMS norm, RoPE, GQA, SwiGLU FFN) is
+ * identical regardless of the backend. Swapping {@link CpuMatVecBackend} for
+ * {@link CudaMatVecBackend} moves all matrix multiplies from CPU threads to
+ * cublasSgemv on a GPU.
  *
  * Each node in the cluster owns a contiguous shard of transformer layers.
  * ShardContext tells this handler: hasEmbeddings → run token embedding lookup
@@ -66,28 +68,31 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private final boolean hasOutputProj;
 
 	// Embedding + output weights (null if this shard doesn't have them)
-	private final float[]                 tokenEmbd;  // [vocabSize × hiddenDim] – first node only; kept as float[] for O(1) embedding lookup
-	private final float[]                 outputNorm; // [hiddenDim] – last node only; tiny, kept as float[]
-	private final GgufReader.QuantizedTensor outputProj; // [vocabSize × hiddenDim] – last node only; raw bytes, dequantised lazily per-block
+	private final float[] tokenEmbd; // [vocabSize × hiddenDim] – first node only; kept as float[] for O(1) embedding
+										// lookup
+	private final float[] outputNorm; // [hiddenDim] – last node only; tiny, kept as float[]
+	private final GgufReader.QuantizedTensor outputProj; // [vocabSize × hiddenDim] – last node only; raw bytes,
+															// dequantised lazily per-block
 
 	// Per-layer weights stored as raw quantised bytes (dequantised one block at a
 	// time inside matVec — never materialised as a full float[] array).
-	// This gives 6–8× lower VRAM vs eager float[][], enabling all-layer tensor-parallel loads.
+	// This gives 6–8× lower VRAM vs eager float[][], enabling all-layer
+	// tensor-parallel loads.
 	private final float[][] attnNorm; // [L][hiddenDim] — tiny F32 scalars, kept as float[]
-	private final float[][] ffnNorm;  // [L][hiddenDim] — tiny F32 scalars, kept as float[]
-	private final GgufReader.QuantizedTensor[] wq;    // [L][hiddenDim × hiddenDim]
-	private final GgufReader.QuantizedTensor[] wk;    // [L][kvDim × hiddenDim]
-	private final GgufReader.QuantizedTensor[] wv;    // [L][kvDim × hiddenDim]
-	private final GgufReader.QuantizedTensor[] wo;    // [L][hiddenDim × hiddenDim]
+	private final float[][] ffnNorm; // [L][hiddenDim] — tiny F32 scalars, kept as float[]
+	private final GgufReader.QuantizedTensor[] wq; // [L][hiddenDim × hiddenDim]
+	private final GgufReader.QuantizedTensor[] wk; // [L][kvDim × hiddenDim]
+	private final GgufReader.QuantizedTensor[] wv; // [L][kvDim × hiddenDim]
+	private final GgufReader.QuantizedTensor[] wo; // [L][hiddenDim × hiddenDim]
 	private final GgufReader.QuantizedTensor[] wGate; // [L][intermediateSize × hiddenDim]
-	private final GgufReader.QuantizedTensor[] wUp;   // [L][intermediateSize × hiddenDim]
+	private final GgufReader.QuantizedTensor[] wUp; // [L][intermediateSize × hiddenDim]
 	private final GgufReader.QuantizedTensor[] wDown; // [L][hiddenDim × intermediateSize]
 
 	// Per-request KV cache — lazily allocated and grown on demand.
 	// Starts at INITIAL_SEQ_CAPACITY slots, doubles until MAX_SEQ_LEN.
 	private final Map<String, float[][]> kvCacheK = new HashMap<>();
 	private final Map<String, float[][]> kvCacheV = new HashMap<>();
-	private static final int MAX_SEQ_LEN         = 2048;
+	private static final int MAX_SEQ_LEN = 2048;
 	private static final int INITIAL_SEQ_CAPACITY = 64; // grows on demand
 
 	// ── MatVec backend (CPU or CUDA) ─────────────────────────────────────────
@@ -120,11 +125,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * @param backend {@link CpuMatVecBackend#INSTANCE} for CPU-only nodes,
 	 *                {@code new CudaMatVecBackend(ctx)} for GPU nodes
 	 */
-	public static LlamaTransformerHandler load(Path modelPath, ShardContext context,
-			MatVecBackend backend) throws IOException {
+	public static LlamaTransformerHandler load(Path modelPath, ShardContext context, MatVecBackend backend)
+			throws IOException {
 		log.info("Loading GGUF shard: layers " + context.startLayer() + "–" + context.endLayer() + "  embd="
-				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection()
-				+ "  backend=" + backend.getClass().getSimpleName() + "  file=" + modelPath);
+				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection() + "  backend="
+				+ backend.getClass().getSimpleName() + "  file=" + modelPath);
 
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			LlamaConfig cfg = LlamaConfig.from(r);
@@ -133,7 +138,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 	}
 
-	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVecBackend backend) throws IOException {
+	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVecBackend backend)
+			throws IOException {
 		this.cfg = cfg;
 		this.backend = backend;
 		this.startLayer = ctx.startLayer();
@@ -152,27 +158,27 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		// Projection matrices (Q/K/V/O/Gate/Up/Down) are large quantised tensors;
 		// loaded as raw bytes to avoid 6–8× dequantisation expansion at load time.
 		attnNorm = new float[L][];
-		ffnNorm  = new float[L][];
-		wq       = new GgufReader.QuantizedTensor[L];
-		wk       = new GgufReader.QuantizedTensor[L];
-		wv       = new GgufReader.QuantizedTensor[L];
-		wo       = new GgufReader.QuantizedTensor[L];
-		wGate    = new GgufReader.QuantizedTensor[L];
-		wUp      = new GgufReader.QuantizedTensor[L];
-		wDown    = new GgufReader.QuantizedTensor[L];
+		ffnNorm = new float[L][];
+		wq = new GgufReader.QuantizedTensor[L];
+		wk = new GgufReader.QuantizedTensor[L];
+		wv = new GgufReader.QuantizedTensor[L];
+		wo = new GgufReader.QuantizedTensor[L];
+		wGate = new GgufReader.QuantizedTensor[L];
+		wUp = new GgufReader.QuantizedTensor[L];
+		wDown = new GgufReader.QuantizedTensor[L];
 
 		for (int li = 0; li < L; li++) {
 			int i = li + startLayer;
 			log.fine("Loading layer " + i + " weights...");
 			attnNorm[li] = r.tensor("blk." + i + ".attn_norm.weight");
-			ffnNorm[li]  = r.tensor("blk." + i + ".ffn_norm.weight");
-			wq[li]       = r.tensorRaw("blk." + i + ".attn_q.weight");
-			wk[li]       = r.tensorRaw("blk." + i + ".attn_k.weight");
-			wv[li]       = r.tensorRaw("blk." + i + ".attn_v.weight");
-			wo[li]       = r.tensorRaw("blk." + i + ".attn_output.weight");
-			wGate[li]    = r.tensorRaw("blk." + i + ".ffn_gate.weight");
-			wUp[li]      = r.tensorRaw("blk." + i + ".ffn_up.weight");
-			wDown[li]    = r.tensorRaw("blk." + i + ".ffn_down.weight");
+			ffnNorm[li] = r.tensor("blk." + i + ".ffn_norm.weight");
+			wq[li] = r.tensorRaw("blk." + i + ".attn_q.weight");
+			wk[li] = r.tensorRaw("blk." + i + ".attn_k.weight");
+			wv[li] = r.tensorRaw("blk." + i + ".attn_v.weight");
+			wo[li] = r.tensorRaw("blk." + i + ".attn_output.weight");
+			wGate[li] = r.tensorRaw("blk." + i + ".ffn_gate.weight");
+			wUp[li] = r.tensorRaw("blk." + i + ".ffn_up.weight");
+			wDown[li] = r.tensorRaw("blk." + i + ".ffn_down.weight");
 		}
 
 		log.info("Shard loaded — " + L + " layers, " + (hasEmbeddings ? "with embeddings, " : "")
@@ -188,7 +194,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		if (r.hasTensor("output.weight")) {
 			return r.tensorRaw("output.weight");
 		}
-		log.info("output.weight not found — model uses tied embeddings; reusing token_embd.weight as output projection");
+		log.info(
+				"output.weight not found — model uses tied embeddings; reusing token_embd.weight as output projection");
 		return r.tensorRaw("token_embd.weight");
 	}
 
@@ -241,7 +248,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	/** Run all assigned transformer layers in sequence. */
 	private float[] runLayers(float[] x, String requestId, int pos) {
-		int L     = endLayer - startLayer;
+		int L = endLayer - startLayer;
 		int kvDim = cfg.kvDim();
 
 		// Lazy initial allocation — 64 slots, grows on demand.
@@ -262,8 +269,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * Grows KV cache arrays to accommodate {@code pos}. Doubling growth,
-	 * capped at {@link #MAX_SEQ_LEN}. Modifies array slots in-place.
+	 * Grows KV cache arrays to accommodate {@code pos}. Doubling growth, capped at
+	 * {@link #MAX_SEQ_LEN}. Modifies array slots in-place.
 	 */
 	private static void ensureKvCapacity(float[][] cache, int pos, int kvDim) {
 		int required = (pos + 1) * kvDim;
@@ -323,7 +330,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
 		float[] gate = matVec(wGate[li], x, I, H);
-		float[] up   = matVec(wUp[li],   x, I, H);
+		float[] up = matVec(wUp[li], x, I, H);
 		// SiLU(gate) * up
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
@@ -397,16 +404,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	/**
 	 * Matrix–vector multiply against a raw quantised weight tensor.
 	 *
-	 * <p><b>Replaces the float[] overload for large projection matrices in
-	 * Phi3TransformerHandler.</b>  Dequantisation happens one block at a time
-	 * inside the inner loop; the maximum live float allocation is one 256-element
-	 * block (~1 kB), not the full weight tensor (~10–100 MB for large models).
+	 * <p>
+	 * <b>Replaces the float[] overload for large projection matrices in
+	 * Phi3TransformerHandler.</b> Dequantisation happens one block at a time inside
+	 * the inner loop; the maximum live float allocation is one 256-element block
+	 * (~1 kB), not the full weight tensor (~10–100 MB for large models).
 	 *
-	 * <p>Supports type IDs:
+	 * <p>
+	 * Supports type IDs:
 	 * <ul>
-	 *   <li>0  (F32)  — byte-reinterpret, same precision as the float[] overload
-	 *   <li>12 (Q4_K) — block-wise dequantisation, the format used by Q4_K_M models
-	 *   <li>8  (Q8_0) — block-wise dequantisation
+	 * <li>0 (F32) — byte-reinterpret, same precision as the float[] overload
+	 * <li>12 (Q4_K) — block-wise dequantisation, the format used by Q4_K_M models
+	 * <li>8 (Q8_0) — block-wise dequantisation
 	 * </ul>
 	 *
 	 * @param A        quantised weight tensor (row-major, shape [totalRows, cols])
@@ -418,13 +427,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	static float[] matVec(GgufReader.QuantizedTensor A, float[] x, int rowStart, int rowEnd, int cols) {
 		return switch (A.type()) {
-		case 0  -> matVecF32raw(A.data(), x, rowStart, rowEnd, cols);
-		case 8  -> matVecQ8_0raw(A.data(), x, rowStart, rowEnd, cols);
+		case 0 -> matVecF32raw(A.data(), x, rowStart, rowEnd, cols);
+		case 8 -> matVecQ8_0raw(A.data(), x, rowStart, rowEnd, cols);
 		case 12 -> matVecQ4Kraw(A.data(), x, rowStart, rowEnd, cols);
 		case 13 -> matVecQ5Kraw(A.data(), x, rowStart, rowEnd, cols);
 		case 14 -> matVecQ6Kraw(A.data(), x, rowStart, rowEnd, cols);
-		default -> throw new UnsupportedOperationException(
-				"Quantized matVec not implemented for GGML type " + A.type()
+		default -> throw new UnsupportedOperationException("Quantized matVec not implemented for GGML type " + A.type()
 				+ " — add a case branch or convert to float[] first.");
 		};
 	}
@@ -444,7 +452,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 		// Wrap once; random-access via absolute getFloat(offset) — position-state free.
-		java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN).asReadOnlyBuffer();
+		java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+				.asReadOnlyBuffer();
 		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
 			float acc = 0f;
 			int base = (rowStart + r) * cols;
@@ -460,19 +469,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	/**
 	 * Q4_K block-wise matrix–vector multiply.
 	 *
-	 * Block layout: [d:f16(2)][dmin:f16(2)][sc:12][qs:128] = 144 bytes per 256 elements.
-	 * 4 groups of 64 elements; each group yields two 32-element sub-blocks via
-	 * low/high nibbles of the same qs bytes — matching llama.cpp dequantize_row_q4_K.
+	 * Block layout: [d:f16(2)][dmin:f16(2)][sc:12][qs:128] = 144 bytes per 256
+	 * elements. 4 groups of 64 elements; each group yields two 32-element
+	 * sub-blocks via low/high nibbles of the same qs bytes — matching llama.cpp
+	 * dequantize_row_q4_K.
 	 *
 	 * No per-row heap allocations: sc and qs data are read directly from raw[]
 	 * using offset arithmetic, eliminating the byte[] copies that would otherwise
 	 * produce ~140 B × rows of GC pressure per call.
 	 */
 	private static float[] matVecQ4Kraw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
-		final int BLOCK_SIZE   = 256;
-		final int BLOCK_BYTES  = 144;
+		final int BLOCK_SIZE = 256;
+		final int BLOCK_BYTES = 144;
 		final int blocksPerRow = cols / BLOCK_SIZE;
-		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
@@ -482,20 +492,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			int xBase = 0;
 
 			for (int b = 0; b < blocksPerRow; b++) {
-				int bo     = rowByteOffset + b * BLOCK_BYTES;
-				int scBase = bo + 4;   // 12 scale bytes at [bo+4, bo+15]
-				int qsBase = bo + 16;  // 128 nibble bytes at [bo+16, bo+143]
-				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
+				int bo = rowByteOffset + b * BLOCK_BYTES;
+				int scBase = bo + 4; // 12 scale bytes at [bo+4, bo+15]
+				int qsBase = bo + 16; // 128 nibble bytes at [bo+16, bo+143]
+				float d = GgufReader.f16ToF32(readLE16(raw, bo));
 				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
 
 				int qi = 0;
 				for (int g = 0; g < BLOCK_SIZE; g += 64) {
 					int s0 = g / 32;
 					int s1 = s0 + 1;
-					float scale0 = d    * q4kScaleRaw(raw, scBase, s0);
-					float min0   = dmin * q4kMinRaw(raw, scBase, s0);
-					float scale1 = d    * q4kScaleRaw(raw, scBase, s1);
-					float min1   = dmin * q4kMinRaw(raw, scBase, s1);
+					float scale0 = d * q4kScaleRaw(raw, scBase, s0);
+					float min0 = dmin * q4kMinRaw(raw, scBase, s0);
+					float scale1 = d * q4kScaleRaw(raw, scBase, s1);
+					float min1 = dmin * q4kMinRaw(raw, scBase, s1);
 
 					for (int i = 0; i < 32; i++)
 						acc += (scale0 * (raw[qsBase + qi + i] & 0x0F) - min0) * x[xBase + g + i];
@@ -512,26 +522,30 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	/** Q4_K scale[j]: reads 6-bit packed value directly from raw[] at scBase. */
 	static float q4kScaleRaw(byte[] raw, int scBase, int j) {
-		int v = (j < 4)
-				? raw[scBase + j] & 0x3F
+		int v = (j < 4) ? raw[scBase + j] & 0x3F
 				: ((raw[scBase + j + 4] & 0x0F) | ((raw[scBase + j - 4] & 0xC0) >> 2)) & 0x3F;
 		return v;
 	}
 
 	/** Q4_K min[j]: reads 6-bit packed value directly from raw[] at scBase. */
 	static float q4kMinRaw(byte[] raw, int scBase, int j) {
-		int v = (j < 4)
-				? raw[scBase + j + 4] & 0x3F
+		int v = (j < 4) ? raw[scBase + j + 4] & 0x3F
 				: (((raw[scBase + j + 4] & 0xFF) >> 4) | ((raw[scBase + j] & 0xC0) >> 2)) & 0x3F;
 		return v;
 	}
 
-	/** @deprecated Used only by the old byte[]-based helpers; retained for test compatibility. */
+	/**
+	 * @deprecated Used only by the old byte[]-based helpers; retained for test
+	 *             compatibility.
+	 */
 	private static float q4kScale(byte[] sc, int j) {
 		return q4kScaleRaw(sc, 0, j);
 	}
 
-	/** @deprecated Used only by the old byte[]-based helpers; retained for test compatibility. */
+	/**
+	 * @deprecated Used only by the old byte[]-based helpers; retained for test
+	 *             compatibility.
+	 */
 	private static float q4kMin(byte[] sc, int j) {
 		return q4kMinRaw(sc, 0, j);
 	}
@@ -539,10 +553,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	// ── Q8_0 raw bytes matVec ─────────────────────────────────────────────────
 
 	private static float[] matVecQ8_0raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
-		final int BLOCK_SIZE  = 32;
+		final int BLOCK_SIZE = 32;
 		final int BLOCK_BYTES = 34; // 2 (f16 scale) + 32 (int8)
 		final int blocksPerRow = cols / BLOCK_SIZE;
-		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
@@ -572,16 +586,17 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	/**
 	 * Q5_K block-wise matrix–vector multiply.
 	 *
-	 * Block layout: [d:f16(2)][dmin:f16(2)][sc:12][qh:32][qs:128] = 176 bytes
-	 * per 256 elements. 5th bit per element stored in qh: value = (nibble | (qh_bit << 4)).
+	 * Block layout: [d:f16(2)][dmin:f16(2)][sc:12][qh:32][qs:128] = 176 bytes per
+	 * 256 elements. 5th bit per element stored in qh: value = (nibble | (qh_bit <<
+	 * 4)).
 	 *
 	 * No per-row heap allocations: sc, qh, qs are read directly from raw[].
 	 */
 	private static float[] matVecQ5Kraw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
-		final int BLOCK_SIZE  = 256;
+		final int BLOCK_SIZE = 256;
 		final int BLOCK_BYTES = 176;
 		final int blocksPerRow = cols / BLOCK_SIZE;
-		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
@@ -591,21 +606,21 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			int xBase = 0;
 
 			for (int b = 0; b < blocksPerRow; b++) {
-				int bo     = rowByteOffset + b * BLOCK_BYTES;
-				int scBase = bo + 4;   // 12 scale bytes  [bo+4,  bo+15]
-				int qhBase = bo + 16;  // 32 hi-bit bytes [bo+16, bo+47]
-				int qsBase = bo + 48;  // 128 nibble bytes[bo+48, bo+175]
-				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
+				int bo = rowByteOffset + b * BLOCK_BYTES;
+				int scBase = bo + 4; // 12 scale bytes [bo+4, bo+15]
+				int qhBase = bo + 16; // 32 hi-bit bytes [bo+16, bo+47]
+				int qsBase = bo + 48; // 128 nibble bytes[bo+48, bo+175]
+				float d = GgufReader.f16ToF32(readLE16(raw, bo));
 				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
 
 				int qi = 0;
 				for (int g = 0; g < 4; g++) {
 					int s0 = g * 2;
 					int s1 = s0 + 1;
-					float scale0 = d    * q4kScaleRaw(raw, scBase, s0);
-					float min0   = dmin * q4kMinRaw(raw, scBase, s0);
-					float scale1 = d    * q4kScaleRaw(raw, scBase, s1);
-					float min1   = dmin * q4kMinRaw(raw, scBase, s1);
+					float scale0 = d * q4kScaleRaw(raw, scBase, s0);
+					float min0 = dmin * q4kMinRaw(raw, scBase, s0);
+					float scale1 = d * q4kScaleRaw(raw, scBase, s1);
+					float min1 = dmin * q4kMinRaw(raw, scBase, s1);
 					int hiBit0 = g * 2;
 					int hiBit1 = g * 2 + 1;
 
@@ -639,10 +654,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * No per-row heap allocations: ql, qh, sc are read directly from raw[].
 	 */
 	private static float[] matVecQ6Kraw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
-		final int BLOCK_SIZE  = 256;
+		final int BLOCK_SIZE = 256;
 		final int BLOCK_BYTES = 210;
 		final int blocksPerRow = cols / BLOCK_SIZE;
-		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
@@ -657,21 +672,21 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				float d = GgufReader.f16ToF32(readLE16(raw, bo + 208));
 
 				for (int half = 0; half < 2; half++) {
-					int qlOff = bo        + half * 64;  // ql base for this half
-					int qhOff = bo + 128  + half * 32;  // qh base for this half
-					int scOff = bo + 192  + half * 8;   // sc base for this half
-					int xOff  = xBase + half * 128;
+					int qlOff = bo + half * 64; // ql base for this half
+					int qhOff = bo + 128 + half * 32; // qh base for this half
+					int scOff = bo + 192 + half * 8; // sc base for this half
+					int xOff = xBase + half * 128;
 
 					for (int l = 0; l < 32; l++) {
-						int is   = l / 16;
-						int qlL  = raw[qlOff + l]      & 0xFF;
+						int is = l / 16;
+						int qlL = raw[qlOff + l] & 0xFF;
 						int qlL2 = raw[qlOff + l + 32] & 0xFF;
-						int qhL  = raw[qhOff + l]      & 0xFF;
+						int qhL = raw[qhOff + l] & 0xFF;
 
-						int q1 = ((qlL  & 0x0F) | (((qhL >> 0) & 3) << 4)) - 32;
+						int q1 = ((qlL & 0x0F) | (((qhL >> 0) & 3) << 4)) - 32;
 						int q2 = ((qlL2 & 0x0F) | (((qhL >> 2) & 3) << 4)) - 32;
-						int q3 = ((qlL  >> 4)   | (((qhL >> 4) & 3) << 4)) - 32;
-						int q4 = ((qlL2 >> 4)   | (((qhL >> 6) & 3) << 4)) - 32;
+						int q3 = ((qlL >> 4) | (((qhL >> 4) & 3) << 4)) - 32;
+						int q4 = ((qlL2 >> 4) | (((qhL >> 6) & 3) << 4)) - 32;
 
 						float d1 = d * raw[scOff + is];
 						float d2 = d * raw[scOff + is + 2];
@@ -690,7 +705,6 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		});
 		return y;
 	}
-
 
 	/**
 	 * Rotary position embeddings (RoPE). Applied in-place to x[nHeads * headDim],

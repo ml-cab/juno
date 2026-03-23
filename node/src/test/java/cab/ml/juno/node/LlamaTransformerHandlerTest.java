@@ -8,9 +8,10 @@ import org.junit.jupiter.api.Test;
 /**
  * LlamaTransformerHandler unit tests — no GPU required.
  *
- * Uses CpuMatVecBackend as the MatVecBackend backend so all tests run on any machine,
- * including CPU-only CI. The numerical correctness of the matVec backend is
- * tested separately in MatVecBackendContractTest and CudaMatVecBackendTest.
+ * Uses CpuMatVecBackend as the MatVecBackend backend so all tests run on any
+ * machine, including CPU-only CI. The numerical correctness of the matVec
+ * backend is tested separately in MatVecBackendContractTest and
+ * CudaMatVecBackendTest.
  *
  * These tests verify: - isReady() returns true once loaded - Intermediate node
  * returns activations of hiddenDim size - Last node returns logits of vocabSize

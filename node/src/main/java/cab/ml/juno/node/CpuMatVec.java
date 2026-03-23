@@ -18,28 +18,26 @@ package cab.ml.juno.node;
 /**
  * GpuMatVec backed by the CPU parallel matVec from CpuForwardPassHandler.
  *
- * Two uses:
- *   1. CPU-only nodes — GpuForwardPassHandler falls back to this when
- *      CudaAvailability.isAvailable() is false.
- *   2. Tests — GpuMatVecContractTest runs the full contract suite against this
- *      implementation without needing a GPU, ensuring correctness of the
- *      contract itself before testing CublasMatVec on AWS.
+ * Two uses: 1. CPU-only nodes — GpuForwardPassHandler falls back to this when
+ * CudaAvailability.isAvailable() is false. 2. Tests — GpuMatVecContractTest
+ * runs the full contract suite against this implementation without needing a
+ * GPU, ensuring correctness of the contract itself before testing CublasMatVec
+ * on AWS.
  */
 public final class CpuMatVec implements GpuMatVec {
 
-    /** Singleton — stateless, no resources to manage. */
-    public static final CpuMatVec INSTANCE = new CpuMatVec();
+	/** Singleton — stateless, no resources to manage. */
+	public static final CpuMatVec INSTANCE = new CpuMatVec();
 
-    private CpuMatVec() {}
+	private CpuMatVec() {
+	}
 
-    @Override
-    public float[] sgemv(float[] A, float[] x, int rows, int cols) {
-        if (A.length != (long) rows * cols)
-            throw new IllegalArgumentException(
-                "A.length=" + A.length + " != rows*cols=" + ((long) rows * cols));
-        if (x.length != cols)
-            throw new IllegalArgumentException(
-                "x.length=" + x.length + " != cols=" + cols);
-        return CpuForwardPassHandler.matVec(A, x, rows, cols);
-    }
+	@Override
+	public float[] sgemv(float[] A, float[] x, int rows, int cols) {
+		if (A.length != (long) rows * cols)
+			throw new IllegalArgumentException("A.length=" + A.length + " != rows*cols=" + ((long) rows * cols));
+		if (x.length != cols)
+			throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
+		return CpuForwardPassHandler.matVec(A, x, rows, cols);
+	}
 }

@@ -1,0 +1,1328 @@
+robocop@robot:~/dev/hyper/juno$ ./juno test --model-path ../../models/TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile 
+▶ Running ModelLiveRunner  (model=TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile  pType=all  heap=4g  os=linux)
+
+
+TinyLlama Live Runner
+Model: ../../models/TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile
+
+Starting 3-node pipeline cluster... Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader open
+INFO: File does not start with GGUF magic (0x46715a4d) — trying ZIP/llamafile scan…
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 sentinels detected — reading ZIP64 EOCD
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 EOCD record at abs-offset 1024872577
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 EOCD: cdOffset=1024852044  cdSize=20533
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: .symtab.amd64  localHdr=13382182
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: .symtab.arm64  localHdr=13651626
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/compcap.cu  localHdr=13885231
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/llamafile.h  localHdr=13885714
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/tinyblas.cu  localHdr=13886690
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/tinyblas.h  localHdr=13893771
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-alloc.h  localHdr=13894424
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-backend-impl.h  localHdr=13895428
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-backend.h  localHdr=13897695
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-common.h  localHdr=13900435
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-cuda.cu  localHdr=13923595
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-cuda.h  localHdr=14021768
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-impl.h  localHdr=14022394
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-metal.h  localHdr=14027681
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-metal.m  localHdr=14028737
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-metal.metal  localHdr=14052147
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-quants.h  localHdr=14104413
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml.h  localHdr=14105496
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/main/main.1.asc  localHdr=14121590
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/server/main.1.asc  localHdr=14135957
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/completion.js  localHdr=14141425
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/history-template.txt  localHdr=14143434
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/index.html  localHdr=14143508
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/index.js  localHdr=14155009
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/json-schema-to-grammar.mjs  localHdr=14163558
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/prompt-template.txt  localHdr=14164952
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/chatbot.css  localHdr=14165025
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/chatbot.js  localHdr=14167613
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/chatbot.png  localHdr=14174334
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/clipboard.js  localHdr=14191956
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/close.svg  localHdr=14192694
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/ctype.js  localHdr=14192881
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/favicon.ico  localHdr=14193637
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/gear.svg  localHdr=14224988
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight.css  localHdr=14225427
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight.js  localHdr=14225941
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ada.js  localHdr=14226913
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_asm.js  localHdr=14228390
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_basic.js  localHdr=14230766
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_c.js  localHdr=14233712
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cmake.js  localHdr=14243206
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cobol.js  localHdr=14244647
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cpp.js  localHdr=14247518
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_csharp.js  localHdr=14248074
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_css.js  localHdr=14249998
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cxx.js  localHdr=14251306
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_d.js  localHdr=14252697
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_forth.js  localHdr=14255281
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_fortran.js  localHdr=14256723
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_go.js  localHdr=14258889
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_haskell.js  localHdr=14260339
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_html.js  localHdr=14262031
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_java.js  localHdr=14263769
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_js.js  localHdr=14265501
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_julia.js  localHdr=14268033
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_kotlin.js  localHdr=14269505
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ld.js  localHdr=14271561
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_lisp.js  localHdr=14273607
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_lua.js  localHdr=14275438
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_m4.js  localHdr=14277232
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_make.js  localHdr=14278948
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_markdown.js  localHdr=14280544
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_matlab.js  localHdr=14282233
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ocaml.js  localHdr=14285391
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_pascal.js  localHdr=14287311
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_perl.js  localHdr=14291662
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_php.js  localHdr=14294260
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_python.js  localHdr=14295914
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_r.js  localHdr=14297788
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ruby.js  localHdr=14299907
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_rust.js  localHdr=14303932
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_scala.js  localHdr=14305698
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_shell.js  localHdr=14307597
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_sql.js  localHdr=14310096
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_swift.js  localHdr=14315068
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_tcl.js  localHdr=14322016
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_tex.js  localHdr=14323776
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_txt.js  localHdr=14324984
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_typescript.js  localHdr=14325516
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_zig.js  localHdr=14327598
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/index.html  localHdr=14330034
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/ooc.svg  localHdr=14331570
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/redo.svg  localHdr=14331801
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/render_markdown.js  localHdr=14332078
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/test/  localHdr=14336719
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/upload.svg  localHdr=14336758
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/  localHdr=14337020
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/CET  localHdr=14337069
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/CST6CDT  localHdr=14337449
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/EET  localHdr=14338019
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/EST  localHdr=14338327
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/EST5EDT  localHdr=14338412
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/GMT  localHdr=14338982
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/HST  localHdr=14339062
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/MET  localHdr=14339148
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/MST  localHdr=14339528
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/MST7MDT  localHdr=14339613
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/PST8PDT  localHdr=14340184
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/WET  localHdr=14340753
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/  localHdr=14341056
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Brussels  localHdr=14341112
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Bucharest  localHdr=14341762
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Dublin  localHdr=14342187
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Istanbul  localHdr=14342994
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/  localHdr=14343696
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Bangkok  localHdr=14343750
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Dhaka  localHdr=14343880
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Dubai  localHdr=14344069
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Hong_Kong  localHdr=14344183
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Jakarta  localHdr=14344667
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Jerusalem  localHdr=14344873
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Kabul  localHdr=14345532
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Karachi  localHdr=14345666
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Kolkata  localHdr=14345879
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Manila  localHdr=14346065
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Seoul  localHdr=14346255
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Shanghai  localHdr=14346551
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Singapore  localHdr=14346825
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Taipei  localHdr=14347031
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Tehran  localHdr=14347375
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Tokyo  localHdr=14347887
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/  localHdr=14348051
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Auckland  localHdr=14348108
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Chatham  localHdr=14348728
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Fiji  localHdr=14349217
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Guam  localHdr=14349482
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Honolulu  localHdr=14349741
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Port_Moresby  localHdr=14349925
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/  localHdr=14350067
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Anchorage  localHdr=14350124
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Argentina/  localHdr=14350734
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Argentina/Buenos_Aires  localHdr=14350801
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Bogota  localHdr=14351282
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Chicago  localHdr=14351435
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Denver  localHdr=14352394
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Halifax  localHdr=14353019
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Lima  localHdr=14353940
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Los_Angeles  localHdr=14354156
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Mexico_City  localHdr=14354898
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/New_York  localHdr=14355388
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Phoenix  localHdr=14356334
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Santiago  localHdr=14356529
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Sao_Paulo  localHdr=14357320
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/St_Johns  localHdr=14357901
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/  localHdr=14358937
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Algiers  localHdr=14358993
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Cairo  localHdr=14359321
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Johannesburg  localHdr=14360078
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Lagos  localHdr=14360241
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Nairobi  localHdr=14360388
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/  localHdr=14360551
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Adelaide  localHdr=14360610
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Brisbane  localHdr=14361163
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Melbourne  localHdr=14361375
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Perth  localHdr=14361912
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Sydney  localHdr=14362128
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/  localHdr=14362660
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/UTC  localHdr=14362713
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-14  localHdr=14362797
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-13  localHdr=14362893
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-12  localHdr=14362989
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-11  localHdr=14363085
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-10  localHdr=14363181
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-9  localHdr=14363277
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-8  localHdr=14363371
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-7  localHdr=14363464
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-6  localHdr=14363557
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-5  localHdr=14363649
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-4  localHdr=14363742
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-3  localHdr=14363835
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-2  localHdr=14363928
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-1  localHdr=14364021
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT  localHdr=14364114
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+1  localHdr=14364198
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+2  localHdr=14364291
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+3  localHdr=14364384
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+4  localHdr=14364477
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+5  localHdr=14364570
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+6  localHdr=14364663
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+7  localHdr=14364756
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+8  localHdr=14364849
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+9  localHdr=14364942
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+10  localHdr=14365035
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+11  localHdr=14365130
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+12  localHdr=14365225
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: .cosmo  localHdr=14365320
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-cuda.dll  localHdr=4294967295
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-rocm.dll  localHdr=4294967295
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-cuda.so  localHdr=4294967295
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-rocm.so  localHdr=4294967295
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: TinyLlama-1.1B-Chat-v1.0.Q5_K_M.gguf  localHdr=4294967295
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 local header offset from extra field: 242745258
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: GGUF data starts at abs-offset 242745344
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader open
+INFO: Found GGUF data at byte offset 242745344 inside llamafile
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader open
+INFO: GGUF v3 — tensors=201 metadata=40
+Mar 23, 2026 4:54:43 PM cab.ml.juno.node.GgufReader open
+INFO: Data section starts at byte 243482656
+Mar 23, 2026 4:54:43 PM cab.ml.juno.tokenizer.GgufTokenizer load
+INFO: Loading tokenizer from GGUF metadata...
+Mar 23, 2026 4:54:43 PM cab.ml.juno.tokenizer.GgufTokenizer load
+INFO: Tokenizer loaded: vocabSize=32000 bos=1 eos=2
+Mar 23, 2026 4:54:43 PM cab.ml.juno.player.ClusterHarness launchNode
+INFO: Forked JVM for node [node-1] PID=6616
+Mar 23, 2026 4:54:44 PM cab.ml.juno.player.ClusterHarness start
+INFO: Node [node-1] is up on port 19092
+Mar 23, 2026 4:54:44 PM cab.ml.juno.player.ClusterHarness launchNode
+INFO: Forked JVM for node [node-2] PID=6664
+Mar 23, 2026 4:54:45 PM cab.ml.juno.player.ClusterHarness start
+INFO: Node [node-2] is up on port 19093
+Mar 23, 2026 4:54:45 PM cab.ml.juno.player.ClusterHarness launchNode
+INFO: Forked JVM for node [node-3] PID=6711
+Mar 23, 2026 4:54:46 PM cab.ml.juno.player.ClusterHarness start
+INFO: Node [node-3] is up on port 19094
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::objectFieldOffset has been called by io.grpc.netty.shaded.io.netty.util.internal.PlatformDependent0$4 (file:/home/robocop/dev/hyper/juno/integration/target/integration.jar)
+WARNING: Please consider reporting this to the maintainers of class io.grpc.netty.shaded.io.netty.util.internal.PlatformDependent0$4
+WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+Mar 23, 2026 4:54:46 PM cab.ml.juno.player.ProcessPipelineClient <init>
+INFO: ProcessPipelineClient created — dtype=FLOAT32, nodes=3
+Mar 23, 2026 4:54:48 PM cab.ml.juno.player.ProcessPipelineClient lambda$loadShards$0
+INFO: Node 1 shard load: Real shard loaded (LlamaTransformerHandler) layers 8–15
+Mar 23, 2026 4:54:48 PM cab.ml.juno.player.ProcessPipelineClient lambda$loadShards$0
+INFO: Node 2 shard load: Real shard loaded (LlamaTransformerHandler) layers 15–22
+Mar 23, 2026 4:54:49 PM cab.ml.juno.player.ProcessPipelineClient lambda$loadShards$0
+INFO: Node 0 shard load: Real shard loaded (LlamaTransformerHandler) layers 0–8
+Mar 23, 2026 4:54:49 PM cab.ml.juno.player.ClusterHarness startPipelineParallel
+INFO: Pipeline-parallel cluster ready — 3 nodes, 22 total layers distributed
+Mar 23, 2026 4:54:49 PM cab.ml.juno.player.ProcessPipelineClient <init>
+INFO: ProcessPipelineClient created — dtype=FLOAT32, nodes=3
+OK
+Test 1: hello greeting... Mar 23, 2026 4:54:49 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 18 steps for prompt of 19 tokens (kvKey=a3588695-fcec-4142-a7bd-6c2a17cd3e77)
+Mar 23, 2026 4:54:55 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 18
+PASS  (5 tokens)
+Test 2: no raw ▁ markers... Mar 23, 2026 4:54:57 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 18 steps for prompt of 19 tokens (kvKey=2641b541-5568-492e-be19-b648fc509665)
+Mar 23, 2026 4:55:02 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 18
+PASS
+Test 3: question response... Mar 23, 2026 4:55:06 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 25 steps for prompt of 26 tokens (kvKey=ffc2786c-815c-444c-b389-8215b0a85673)
+Mar 23, 2026 4:55:13 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 25
+PASS  (12 tokens)
+Test 4: greedy determinism... Mar 23, 2026 4:55:16 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 18 steps for prompt of 19 tokens (kvKey=95a920b3-5d5f-4457-ba9d-2146f928051d)
+Mar 23, 2026 4:55:21 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 18
+Mar 23, 2026 4:55:24 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 18 steps for prompt of 19 tokens (kvKey=9d8b7777-1ddb-4b6e-9e55-e8431953dd69)
+Mar 23, 2026 4:55:28 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 18
+PASS
+Test 5: multi-turn conversation... Mar 23, 2026 4:55:31 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 52 steps for prompt of 53 tokens (kvKey=6866fb35-bedb-4e6e-bd3a-a032adb53888)
+Mar 23, 2026 4:55:44 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 52
+PASS  (12 tokens)
+Test 6: FLOAT16 parity... Mar 23, 2026 4:55:47 PM cab.ml.juno.player.ProcessPipelineClient <init>
+INFO: ProcessPipelineClient created — dtype=FLOAT16, nodes=3
+Mar 23, 2026 4:55:47 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 18 steps for prompt of 19 tokens (kvKey=25e9cd05-0796-4f38-bc46-352f78681e3a)
+Mar 23, 2026 4:55:50 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 18
+Mar 23, 2026 4:55:52 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 18 steps for prompt of 19 tokens (kvKey=4fef533c-52aa-4a5f-8de2-7e899e4ae918)
+Mar 23, 2026 4:55:56 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 18
+PASS
+Mar 23, 2026 4:55:58 PM cab.ml.juno.player.ClusterHarness stop
+INFO: Cluster stopped (PIPELINE mode)
+Starting 3-node tensor-parallel cluster... Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader open
+INFO: File does not start with GGUF magic (0x46715a4d) — trying ZIP/llamafile scan…
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 sentinels detected — reading ZIP64 EOCD
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 EOCD record at abs-offset 1024872577
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 EOCD: cdOffset=1024852044  cdSize=20533
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: .symtab.amd64  localHdr=13382182
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: .symtab.arm64  localHdr=13651626
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/compcap.cu  localHdr=13885231
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/llamafile.h  localHdr=13885714
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/tinyblas.cu  localHdr=13886690
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/tinyblas.h  localHdr=13893771
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-alloc.h  localHdr=13894424
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-backend-impl.h  localHdr=13895428
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-backend.h  localHdr=13897695
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-common.h  localHdr=13900435
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-cuda.cu  localHdr=13923595
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-cuda.h  localHdr=14021768
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-impl.h  localHdr=14022394
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-metal.h  localHdr=14027681
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-metal.m  localHdr=14028737
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-metal.metal  localHdr=14052147
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-quants.h  localHdr=14104413
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml.h  localHdr=14105496
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/main/main.1.asc  localHdr=14121590
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/server/main.1.asc  localHdr=14135957
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/completion.js  localHdr=14141425
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/history-template.txt  localHdr=14143434
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/index.html  localHdr=14143508
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/index.js  localHdr=14155009
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/json-schema-to-grammar.mjs  localHdr=14163558
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/prompt-template.txt  localHdr=14164952
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/chatbot.css  localHdr=14165025
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/chatbot.js  localHdr=14167613
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/chatbot.png  localHdr=14174334
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/clipboard.js  localHdr=14191956
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/close.svg  localHdr=14192694
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/ctype.js  localHdr=14192881
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/favicon.ico  localHdr=14193637
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/gear.svg  localHdr=14224988
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight.css  localHdr=14225427
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight.js  localHdr=14225941
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ada.js  localHdr=14226913
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_asm.js  localHdr=14228390
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_basic.js  localHdr=14230766
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_c.js  localHdr=14233712
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cmake.js  localHdr=14243206
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cobol.js  localHdr=14244647
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cpp.js  localHdr=14247518
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_csharp.js  localHdr=14248074
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_css.js  localHdr=14249998
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cxx.js  localHdr=14251306
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_d.js  localHdr=14252697
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_forth.js  localHdr=14255281
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_fortran.js  localHdr=14256723
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_go.js  localHdr=14258889
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_haskell.js  localHdr=14260339
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_html.js  localHdr=14262031
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_java.js  localHdr=14263769
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_js.js  localHdr=14265501
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_julia.js  localHdr=14268033
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_kotlin.js  localHdr=14269505
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ld.js  localHdr=14271561
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_lisp.js  localHdr=14273607
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_lua.js  localHdr=14275438
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_m4.js  localHdr=14277232
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_make.js  localHdr=14278948
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_markdown.js  localHdr=14280544
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_matlab.js  localHdr=14282233
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ocaml.js  localHdr=14285391
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_pascal.js  localHdr=14287311
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_perl.js  localHdr=14291662
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_php.js  localHdr=14294260
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_python.js  localHdr=14295914
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_r.js  localHdr=14297788
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ruby.js  localHdr=14299907
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_rust.js  localHdr=14303932
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_scala.js  localHdr=14305698
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_shell.js  localHdr=14307597
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_sql.js  localHdr=14310096
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_swift.js  localHdr=14315068
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_tcl.js  localHdr=14322016
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_tex.js  localHdr=14323776
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_txt.js  localHdr=14324984
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_typescript.js  localHdr=14325516
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_zig.js  localHdr=14327598
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/index.html  localHdr=14330034
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/ooc.svg  localHdr=14331570
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/redo.svg  localHdr=14331801
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/render_markdown.js  localHdr=14332078
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/test/  localHdr=14336719
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/upload.svg  localHdr=14336758
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/  localHdr=14337020
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/CET  localHdr=14337069
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/CST6CDT  localHdr=14337449
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/EET  localHdr=14338019
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/EST  localHdr=14338327
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/EST5EDT  localHdr=14338412
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/GMT  localHdr=14338982
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/HST  localHdr=14339062
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/MET  localHdr=14339148
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/MST  localHdr=14339528
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/MST7MDT  localHdr=14339613
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/PST8PDT  localHdr=14340184
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/WET  localHdr=14340753
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/  localHdr=14341056
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Brussels  localHdr=14341112
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Bucharest  localHdr=14341762
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Dublin  localHdr=14342187
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Istanbul  localHdr=14342994
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/  localHdr=14343696
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Bangkok  localHdr=14343750
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Dhaka  localHdr=14343880
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Dubai  localHdr=14344069
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Hong_Kong  localHdr=14344183
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Jakarta  localHdr=14344667
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Jerusalem  localHdr=14344873
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Kabul  localHdr=14345532
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Karachi  localHdr=14345666
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Kolkata  localHdr=14345879
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Manila  localHdr=14346065
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Seoul  localHdr=14346255
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Shanghai  localHdr=14346551
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Singapore  localHdr=14346825
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Taipei  localHdr=14347031
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Tehran  localHdr=14347375
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Tokyo  localHdr=14347887
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/  localHdr=14348051
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Auckland  localHdr=14348108
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Chatham  localHdr=14348728
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Fiji  localHdr=14349217
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Guam  localHdr=14349482
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Honolulu  localHdr=14349741
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Port_Moresby  localHdr=14349925
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/  localHdr=14350067
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Anchorage  localHdr=14350124
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Argentina/  localHdr=14350734
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Argentina/Buenos_Aires  localHdr=14350801
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Bogota  localHdr=14351282
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Chicago  localHdr=14351435
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Denver  localHdr=14352394
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Halifax  localHdr=14353019
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Lima  localHdr=14353940
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Los_Angeles  localHdr=14354156
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Mexico_City  localHdr=14354898
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/New_York  localHdr=14355388
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Phoenix  localHdr=14356334
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Santiago  localHdr=14356529
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Sao_Paulo  localHdr=14357320
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/St_Johns  localHdr=14357901
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/  localHdr=14358937
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Algiers  localHdr=14358993
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Cairo  localHdr=14359321
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Johannesburg  localHdr=14360078
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Lagos  localHdr=14360241
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Nairobi  localHdr=14360388
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/  localHdr=14360551
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Adelaide  localHdr=14360610
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Brisbane  localHdr=14361163
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Melbourne  localHdr=14361375
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Perth  localHdr=14361912
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Sydney  localHdr=14362128
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/  localHdr=14362660
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/UTC  localHdr=14362713
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-14  localHdr=14362797
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-13  localHdr=14362893
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-12  localHdr=14362989
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-11  localHdr=14363085
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-10  localHdr=14363181
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-9  localHdr=14363277
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-8  localHdr=14363371
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-7  localHdr=14363464
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-6  localHdr=14363557
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-5  localHdr=14363649
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-4  localHdr=14363742
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-3  localHdr=14363835
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-2  localHdr=14363928
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-1  localHdr=14364021
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT  localHdr=14364114
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+1  localHdr=14364198
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+2  localHdr=14364291
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+3  localHdr=14364384
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+4  localHdr=14364477
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+5  localHdr=14364570
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+6  localHdr=14364663
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+7  localHdr=14364756
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+8  localHdr=14364849
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+9  localHdr=14364942
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+10  localHdr=14365035
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+11  localHdr=14365130
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+12  localHdr=14365225
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: .cosmo  localHdr=14365320
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-cuda.dll  localHdr=4294967295
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-rocm.dll  localHdr=4294967295
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-cuda.so  localHdr=4294967295
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-rocm.so  localHdr=4294967295
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: TinyLlama-1.1B-Chat-v1.0.Q5_K_M.gguf  localHdr=4294967295
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 local header offset from extra field: 242745258
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: GGUF data starts at abs-offset 242745344
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader open
+INFO: Found GGUF data at byte offset 242745344 inside llamafile
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader open
+INFO: GGUF v3 — tensors=201 metadata=40
+Mar 23, 2026 4:55:58 PM cab.ml.juno.node.GgufReader open
+INFO: Data section starts at byte 243482656
+Mar 23, 2026 4:55:58 PM cab.ml.juno.player.ClusterHarness launchNode
+INFO: Forked JVM for node [node-1] PID=6955
+Mar 23, 2026 4:55:59 PM cab.ml.juno.player.ClusterHarness start
+INFO: Node [node-1] is up on port 19092
+Mar 23, 2026 4:55:59 PM cab.ml.juno.player.ClusterHarness launchNode
+INFO: Forked JVM for node [node-2] PID=7001
+Mar 23, 2026 4:56:00 PM cab.ml.juno.player.ClusterHarness start
+INFO: Node [node-2] is up on port 19093
+Mar 23, 2026 4:56:00 PM cab.ml.juno.player.ClusterHarness launchNode
+INFO: Forked JVM for node [node-3] PID=7048
+Mar 23, 2026 4:56:01 PM cab.ml.juno.player.ClusterHarness start
+INFO: Node [node-3] is up on port 19094
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader open
+INFO: File does not start with GGUF magic (0x46715a4d) — trying ZIP/llamafile scan…
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 sentinels detected — reading ZIP64 EOCD
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 EOCD record at abs-offset 1024872577
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 EOCD: cdOffset=1024852044  cdSize=20533
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: .symtab.amd64  localHdr=13382182
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: .symtab.arm64  localHdr=13651626
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/compcap.cu  localHdr=13885231
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/llamafile.h  localHdr=13885714
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/tinyblas.cu  localHdr=13886690
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/tinyblas.h  localHdr=13893771
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-alloc.h  localHdr=13894424
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-backend-impl.h  localHdr=13895428
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-backend.h  localHdr=13897695
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-common.h  localHdr=13900435
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-cuda.cu  localHdr=13923595
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-cuda.h  localHdr=14021768
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-impl.h  localHdr=14022394
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-metal.h  localHdr=14027681
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-metal.m  localHdr=14028737
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-metal.metal  localHdr=14052147
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml-quants.h  localHdr=14104413
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/ggml.h  localHdr=14105496
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/main/main.1.asc  localHdr=14121590
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llamafile/server/main.1.asc  localHdr=14135957
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/completion.js  localHdr=14141425
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/history-template.txt  localHdr=14143434
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/index.html  localHdr=14143508
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/index.js  localHdr=14155009
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/json-schema-to-grammar.mjs  localHdr=14163558
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: llama.cpp/server/public/prompt-template.txt  localHdr=14164952
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/chatbot.css  localHdr=14165025
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/chatbot.js  localHdr=14167613
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/chatbot.png  localHdr=14174334
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/clipboard.js  localHdr=14191956
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/close.svg  localHdr=14192694
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/ctype.js  localHdr=14192881
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/favicon.ico  localHdr=14193637
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/gear.svg  localHdr=14224988
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight.css  localHdr=14225427
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight.js  localHdr=14225941
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ada.js  localHdr=14226913
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_asm.js  localHdr=14228390
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_basic.js  localHdr=14230766
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_c.js  localHdr=14233712
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cmake.js  localHdr=14243206
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cobol.js  localHdr=14244647
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cpp.js  localHdr=14247518
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_csharp.js  localHdr=14248074
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_css.js  localHdr=14249998
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_cxx.js  localHdr=14251306
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_d.js  localHdr=14252697
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_forth.js  localHdr=14255281
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_fortran.js  localHdr=14256723
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_go.js  localHdr=14258889
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_haskell.js  localHdr=14260339
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_html.js  localHdr=14262031
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_java.js  localHdr=14263769
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_js.js  localHdr=14265501
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_julia.js  localHdr=14268033
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_kotlin.js  localHdr=14269505
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ld.js  localHdr=14271561
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_lisp.js  localHdr=14273607
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_lua.js  localHdr=14275438
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_m4.js  localHdr=14277232
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_make.js  localHdr=14278948
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_markdown.js  localHdr=14280544
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_matlab.js  localHdr=14282233
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ocaml.js  localHdr=14285391
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_pascal.js  localHdr=14287311
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_perl.js  localHdr=14291662
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_php.js  localHdr=14294260
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_python.js  localHdr=14295914
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_r.js  localHdr=14297788
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_ruby.js  localHdr=14299907
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_rust.js  localHdr=14303932
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_scala.js  localHdr=14305698
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_shell.js  localHdr=14307597
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_sql.js  localHdr=14310096
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_swift.js  localHdr=14315068
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_tcl.js  localHdr=14322016
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_tex.js  localHdr=14323776
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_txt.js  localHdr=14324984
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_typescript.js  localHdr=14325516
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/highlight_zig.js  localHdr=14327598
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/index.html  localHdr=14330034
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/ooc.svg  localHdr=14331570
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/redo.svg  localHdr=14331801
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/render_markdown.js  localHdr=14332078
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/test/  localHdr=14336719
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: www/upload.svg  localHdr=14336758
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/  localHdr=14337020
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/CET  localHdr=14337069
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/CST6CDT  localHdr=14337449
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/EET  localHdr=14338019
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/EST  localHdr=14338327
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/EST5EDT  localHdr=14338412
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/GMT  localHdr=14338982
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/HST  localHdr=14339062
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/MET  localHdr=14339148
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/MST  localHdr=14339528
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/MST7MDT  localHdr=14339613
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/PST8PDT  localHdr=14340184
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/WET  localHdr=14340753
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/  localHdr=14341056
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Brussels  localHdr=14341112
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Bucharest  localHdr=14341762
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Dublin  localHdr=14342187
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Europe/Istanbul  localHdr=14342994
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/  localHdr=14343696
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Bangkok  localHdr=14343750
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Dhaka  localHdr=14343880
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Dubai  localHdr=14344069
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Hong_Kong  localHdr=14344183
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Jakarta  localHdr=14344667
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Jerusalem  localHdr=14344873
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Kabul  localHdr=14345532
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Karachi  localHdr=14345666
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Kolkata  localHdr=14345879
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Manila  localHdr=14346065
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Seoul  localHdr=14346255
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Shanghai  localHdr=14346551
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Singapore  localHdr=14346825
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Taipei  localHdr=14347031
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Tehran  localHdr=14347375
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Asia/Tokyo  localHdr=14347887
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/  localHdr=14348051
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Auckland  localHdr=14348108
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Chatham  localHdr=14348728
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Fiji  localHdr=14349217
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Guam  localHdr=14349482
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Honolulu  localHdr=14349741
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Pacific/Port_Moresby  localHdr=14349925
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/  localHdr=14350067
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Anchorage  localHdr=14350124
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Argentina/  localHdr=14350734
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Argentina/Buenos_Aires  localHdr=14350801
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Bogota  localHdr=14351282
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Chicago  localHdr=14351435
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Denver  localHdr=14352394
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Halifax  localHdr=14353019
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Lima  localHdr=14353940
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Los_Angeles  localHdr=14354156
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Mexico_City  localHdr=14354898
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/New_York  localHdr=14355388
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Phoenix  localHdr=14356334
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Santiago  localHdr=14356529
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/Sao_Paulo  localHdr=14357320
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/America/St_Johns  localHdr=14357901
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/  localHdr=14358937
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Algiers  localHdr=14358993
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Cairo  localHdr=14359321
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Johannesburg  localHdr=14360078
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Lagos  localHdr=14360241
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Africa/Nairobi  localHdr=14360388
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/  localHdr=14360551
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Adelaide  localHdr=14360610
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Brisbane  localHdr=14361163
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Melbourne  localHdr=14361375
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Perth  localHdr=14361912
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Australia/Sydney  localHdr=14362128
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/  localHdr=14362660
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/UTC  localHdr=14362713
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-14  localHdr=14362797
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-13  localHdr=14362893
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-12  localHdr=14362989
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-11  localHdr=14363085
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-10  localHdr=14363181
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-9  localHdr=14363277
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-8  localHdr=14363371
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-7  localHdr=14363464
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-6  localHdr=14363557
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-5  localHdr=14363649
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-4  localHdr=14363742
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-3  localHdr=14363835
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-2  localHdr=14363928
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT-1  localHdr=14364021
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT  localHdr=14364114
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+1  localHdr=14364198
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+2  localHdr=14364291
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+3  localHdr=14364384
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+4  localHdr=14364477
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+5  localHdr=14364570
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+6  localHdr=14364663
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+7  localHdr=14364756
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+8  localHdr=14364849
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+9  localHdr=14364942
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+10  localHdr=14365035
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+11  localHdr=14365130
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: usr/share/zoneinfo/Etc/GMT+12  localHdr=14365225
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: .cosmo  localHdr=14365320
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-cuda.dll  localHdr=4294967295
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-rocm.dll  localHdr=4294967295
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-cuda.so  localHdr=4294967295
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: ggml-rocm.so  localHdr=4294967295
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP entry: TinyLlama-1.1B-Chat-v1.0.Q5_K_M.gguf  localHdr=4294967295
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: ZIP64 local header offset from extra field: 242745258
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader findGgufOffsetInZip
+INFO: GGUF data starts at abs-offset 242745344
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader open
+INFO: Found GGUF data at byte offset 242745344 inside llamafile
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader open
+INFO: GGUF v3 — tensors=201 metadata=40
+Mar 23, 2026 4:56:01 PM cab.ml.juno.node.GgufReader open
+INFO: Data section starts at byte 243482656
+Mar 23, 2026 4:56:01 PM cab.ml.juno.player.TensorParallelPipelineClient <init>
+INFO: TensorParallelPipelineClient created — worldSize=3, vocabSize=32000
+Mar 23, 2026 4:56:03 PM cab.ml.juno.player.TensorParallelPipelineClient lambda$loadShards$0
+INFO: Tensor-parallel node 1 (rank=1) shard load: Real shard loaded (LlamaTransformerHandler) layers 0–22
+Mar 23, 2026 4:56:03 PM cab.ml.juno.player.TensorParallelPipelineClient lambda$loadShards$0
+INFO: Tensor-parallel node 2 (rank=2) shard load: Real shard loaded (LlamaTransformerHandler) layers 0–22
+Mar 23, 2026 4:56:03 PM cab.ml.juno.player.TensorParallelPipelineClient lambda$loadShards$0
+INFO: Tensor-parallel node 0 (rank=0) shard load: Real shard loaded (LlamaTransformerHandler) layers 0–22
+Mar 23, 2026 4:56:03 PM cab.ml.juno.player.ClusterHarness startTensorParallel
+INFO: Tensor-parallel cluster ready — 3 nodes, worldSize=3, layers=22, vocabSize=32000
+OK
+Test 7: tensor-parallel generation (AllReduce)... Mar 23, 2026 4:56:03 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 18 steps for prompt of 19 tokens (kvKey=a7a8f37d-1438-4284-8f97-ae52abf32728)
+Mar 23, 2026 4:56:14 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 18
+PASS  (10 tokens via AllReduce)
+Test 8: tensor-parallel greedy determinism... Mar 23, 2026 4:56:19 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 18 steps for prompt of 19 tokens (kvKey=593710a5-babb-4b06-9200-4151a3c7a106)
+Mar 23, 2026 4:56:30 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 18
+Mar 23, 2026 4:56:34 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 18 steps for prompt of 19 tokens (kvKey=75779a22-710d-4926-b92f-a8458a2e2968)
+Mar 23, 2026 4:56:44 PM cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 18
+PASS
+Mar 23, 2026 4:56:50 PM cab.ml.juno.player.ClusterHarness stop
+INFO: Cluster stopped (TENSOR mode)
+
+========================================
+Tests run: 8, Passed: 8, Failed: 0
+========================================
+
+
+

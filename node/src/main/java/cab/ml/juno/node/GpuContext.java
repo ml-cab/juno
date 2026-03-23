@@ -15,99 +15,94 @@
  */
 package cab.ml.juno.node;
 
+import java.util.logging.Logger;
+
 import jcuda.jcublas.JCublas2;
 import jcuda.jcublas.cublasHandle;
 import jcuda.runtime.JCuda;
-
-import java.util.logging.Logger;
 
 /**
  * cuBLAS context: device selection and handle lifecycle.
  *
  * One GpuContext per node JVM. Created once at startup, destroyed at shutdown.
- * The cublasHandle it owns is shared across all CudaMatVecBackend calls on that node
- * — cuBLAS handles are thread-safe for concurrent kernel launches.
+ * The cublasHandle it owns is shared across all CudaMatVecBackend calls on that
+ * node — cuBLAS handles are thread-safe for concurrent kernel launches.
  *
- * Usage:
- *   try (GpuContext ctx = GpuContext.init(0)) {
- *       CudaMatVecBackend matVec = new CudaMatVecBackend(ctx);
- *       LlamaTransformerHandler handler = LlamaTransformerHandler.load(path, shard, matVec);
- *       ...
- *   }
+ * Usage: try (GpuContext ctx = GpuContext.init(0)) { CudaMatVecBackend matVec =
+ * new CudaMatVecBackend(ctx); LlamaTransformerHandler handler =
+ * LlamaTransformerHandler.load(path, shard, matVec); ... }
  *
- * Throws IllegalStateException if CUDA is not available.
- * Use CudaAvailability.isAvailable() to guard the call site.
+ * Throws IllegalStateException if CUDA is not available. Use
+ * CudaAvailability.isAvailable() to guard the call site.
  */
 public final class GpuContext implements AutoCloseable {
 
-    private static final Logger log = Logger.getLogger(GpuContext.class.getName());
+	private static final Logger log = Logger.getLogger(GpuContext.class.getName());
 
-    private final int deviceIndex;
-    private final cublasHandle handle;
-    private volatile boolean closed = false;
+	private final int deviceIndex;
+	private final cublasHandle handle;
+	private volatile boolean closed = false;
 
-    private GpuContext(int deviceIndex, cublasHandle handle) {
-        this.deviceIndex = deviceIndex;
-        this.handle = handle;
-    }
+	private GpuContext(int deviceIndex, cublasHandle handle) {
+		this.deviceIndex = deviceIndex;
+		this.handle = handle;
+	}
 
-    /**
-     * Initialise CUDA device {@code deviceIndex} and create a cuBLAS handle.
-     *
-     * @param deviceIndex 0-based GPU index (0 for single-GPU nodes)
-     * @return a ready GpuContext — caller must close() when done
-     * @throws IllegalStateException if CUDA is not available or init fails
-     */
-    public static GpuContext init(int deviceIndex) {
-        if (!CudaAvailability.isAvailable()) {
-            throw new IllegalStateException(
-                "CUDA not available — cannot create GpuContext on this node");
-        }
+	/**
+	 * Initialise CUDA device {@code deviceIndex} and create a cuBLAS handle.
+	 *
+	 * @param deviceIndex 0-based GPU index (0 for single-GPU nodes)
+	 * @return a ready GpuContext — caller must close() when done
+	 * @throws IllegalStateException if CUDA is not available or init fails
+	 */
+	public static GpuContext init(int deviceIndex) {
+		if (!CudaAvailability.isAvailable()) {
+			throw new IllegalStateException("CUDA not available — cannot create GpuContext on this node");
+		}
 
-        JCuda.setExceptionsEnabled(true);
-        JCublas2.setExceptionsEnabled(true);
+		JCuda.setExceptionsEnabled(true);
+		JCublas2.setExceptionsEnabled(true);
 
-        JCuda.cudaSetDevice(deviceIndex);
+		JCuda.cudaSetDevice(deviceIndex);
 
-        cublasHandle handle = new cublasHandle();
-        JCublas2.cublasCreate(handle);
+		cublasHandle handle = new cublasHandle();
+		JCublas2.cublasCreate(handle);
 
-        String name = CudaAvailability.deviceName(deviceIndex);
-        long vram = CudaAvailability.vramBytes(deviceIndex);
-        log.info(String.format(
-            "GpuContext ready — device %d: %s, %.1f GB VRAM",
-            deviceIndex, name, vram / 1e9));
+		String name = CudaAvailability.deviceName(deviceIndex);
+		long vram = CudaAvailability.vramBytes(deviceIndex);
+		log.info(String.format("GpuContext ready — device %d: %s, %.1f GB VRAM", deviceIndex, name, vram / 1e9));
 
-        return new GpuContext(deviceIndex, handle);
-    }
+		return new GpuContext(deviceIndex, handle);
+	}
 
-    /** The cuBLAS handle — valid until close(). */
-    public cublasHandle handle() {
-        if (closed) throw new IllegalStateException("GpuContext already closed");
-        return handle;
-    }
+	/** The cuBLAS handle — valid until close(). */
+	public cublasHandle handle() {
+		if (closed)
+			throw new IllegalStateException("GpuContext already closed");
+		return handle;
+	}
 
-    /** The device index this context is bound to. */
-    public int deviceIndex() {
-        return deviceIndex;
-    }
+	/** The device index this context is bound to. */
+	public int deviceIndex() {
+		return deviceIndex;
+	}
 
-    /** Whether this context has been closed. */
-    public boolean isClosed() {
-        return closed;
-    }
+	/** Whether this context has been closed. */
+	public boolean isClosed() {
+		return closed;
+	}
 
-    /** Destroy the cuBLAS handle and release device resources. */
-    @Override
-    public void close() {
-        if (!closed) {
-            closed = true;
-            try {
-                JCublas2.cublasDestroy(handle);
-                log.info("GpuContext closed — device " + deviceIndex);
-            } catch (Exception e) {
-                log.warning("Error closing GpuContext: " + e.getMessage());
-            }
-        }
-    }
+	/** Destroy the cuBLAS handle and release device resources. */
+	@Override
+	public void close() {
+		if (!closed) {
+			closed = true;
+			try {
+				JCublas2.cublasDestroy(handle);
+				log.info("GpuContext closed — device " + deviceIndex);
+			} catch (Exception e) {
+				log.warning("Error closing GpuContext: " + e.getMessage());
+			}
+		}
+	}
 }

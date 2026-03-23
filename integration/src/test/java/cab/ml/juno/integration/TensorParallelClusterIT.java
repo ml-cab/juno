@@ -35,22 +35,20 @@ import cab.ml.juno.tokenizer.StubTokenizer;
 /**
  * Full multi-JVM 3-node tensor-parallel cluster integration test.
  *
- * Topology:
- *   3 separate JVM processes each running EmbeddedNodeServer (gRPC).
- *   Every node holds ALL transformer layers [0, 22) with hasEmbeddings=true,
- *   hasOutputProjection=true and a unique tensorRank in {0, 1, 2}.
+ * Topology: 3 separate JVM processes each running EmbeddedNodeServer (gRPC).
+ * Every node holds ALL transformer layers [0, 22) with hasEmbeddings=true,
+ * hasOutputProjection=true and a unique tensorRank in {0, 1, 2}.
  *
- * Forward pass per decode step:
- *   Coordinator broadcasts the token sequence to all 3 nodes simultaneously.
- *   Each node (CyclicForwardPassHandler) sees hasOutputProjection=true and
- *   returns logits[42]=100.0f in FLOAT32.
- *   TensorParallelPipelineClient sums the 3 partial logit vectors:
- *   logits[42] = 300.0f — token 42 is still the argmax.
- *   GenerationLoop samples token 42 each step.
+ * Forward pass per decode step: Coordinator broadcasts the token sequence to
+ * all 3 nodes simultaneously. Each node (CyclicForwardPassHandler) sees
+ * hasOutputProjection=true and returns logits[42]=100.0f in FLOAT32.
+ * TensorParallelPipelineClient sums the 3 partial logit vectors: logits[42] =
+ * 300.0f — token 42 is still the argmax. GenerationLoop samples token 42 each
+ * step.
  *
- * Compare with ThreeNodeClusterIT (pipeline parallel):
- *   Activation flows node-1 → node-2 → node-3 serially.
- *   This IT fans out to all 3 nodes in parallel and reduces.
+ * Compare with ThreeNodeClusterIT (pipeline parallel): Activation flows node-1
+ * → node-2 → node-3 serially. This IT fans out to all 3 nodes in parallel and
+ * reduces.
  *
  * Run: mvn verify -pl integration -Dit.test=TensorParallelClusterIT
  */
@@ -58,23 +56,20 @@ import cab.ml.juno.tokenizer.StubTokenizer;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class TensorParallelClusterIT {
 
-	private static ClusterHarness  harness;
+	private static ClusterHarness harness;
 	private static InferencePipeline pipeline;
-	private static GenerationLoop  generationLoop;
+	private static GenerationLoop generationLoop;
 	private static RequestScheduler scheduler;
 
 	@BeforeAll
 	static void startCluster() throws Exception {
-		harness  = ClusterHarness.tensorNodes(); // tensor-parallel, stub mode
+		harness = ClusterHarness.tensorNodes(); // tensor-parallel, stub mode
 		harness.start();
 
 		// pipeline() returns TensorParallelPipelineClient for TENSOR mode
 		pipeline = harness.pipeline();
 
-		generationLoop = new GenerationLoop(
-				new StubTokenizer(),
-				Sampler.create(),
-				pipeline,
+		generationLoop = new GenerationLoop(new StubTokenizer(), Sampler.create(), pipeline,
 				new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096)));
 
 		scheduler = new RequestScheduler(100, generationLoop);
@@ -108,19 +103,14 @@ class TensorParallelClusterIT {
 	@DisplayName("GenerationLoop generates tokens via tensor-parallel gRPC (AllReduce)")
 	void generation_loop_via_tensor_parallel_grpc() {
 		int maxTokens = 8;
-		InferenceRequest request = InferenceRequest.of(
-				"tinyllama",
+		InferenceRequest request = InferenceRequest.of("tinyllama",
 				List.of(ChatMessage.user("Explain tensor parallelism in one sentence.")),
-				SamplingParams.defaults().withMaxTokens(maxTokens),
-				RequestPriority.NORMAL);
+				SamplingParams.defaults().withMaxTokens(maxTokens), RequestPriority.NORMAL);
 
 		List<String> pieces = new ArrayList<>();
-		GenerationResult result = generationLoop.generate(
-				request, (piece, id, step) -> pieces.add(piece));
+		GenerationResult result = generationLoop.generate(request, (piece, _, _) -> pieces.add(piece));
 
-		assertThat(result.generatedTokens())
-				.as("at least one token generated")
-				.isGreaterThan(0)
+		assertThat(result.generatedTokens()).as("at least one token generated").isGreaterThan(0)
 				.isLessThanOrEqualTo(maxTokens);
 		assertThat(pieces).isNotEmpty();
 	}
@@ -130,26 +120,21 @@ class TensorParallelClusterIT {
 	@DisplayName("concurrent requests run in parallel through tensor-parallel pipeline")
 	void concurrent_requests_via_tensor_parallel() throws Exception {
 		int concurrency = 4;
-		int maxTokens   = 5;
+		int maxTokens = 5;
 
 		List<CompletableFuture<GenerationResult>> futures = new ArrayList<>();
 		for (int i = 0; i < concurrency; i++) {
-			InferenceRequest req = InferenceRequest.of(
-					"tinyllama",
-					List.of(ChatMessage.user("Request " + i)),
-					SamplingParams.defaults().withMaxTokens(maxTokens),
-					RequestPriority.NORMAL);
+			InferenceRequest req = InferenceRequest.of("tinyllama", List.of(ChatMessage.user("Request " + i)),
+					SamplingParams.defaults().withMaxTokens(maxTokens), RequestPriority.NORMAL);
 			futures.add(scheduler.submit(req, TokenConsumer.discard()));
 		}
 
-		CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-				.get(30, java.util.concurrent.TimeUnit.SECONDS);
+		CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(30,
+				java.util.concurrent.TimeUnit.SECONDS);
 
 		for (int i = 0; i < concurrency; i++) {
 			GenerationResult r = futures.get(i).get();
-			assertThat(r.generatedTokens())
-					.as("request " + i + " generated tokens")
-					.isGreaterThan(0);
+			assertThat(r.generatedTokens()).as("request " + i + " generated tokens").isGreaterThan(0);
 		}
 	}
 

@@ -117,8 +117,8 @@ public final class GgufReader implements AutoCloseable {
 		long kvCount = header.getLong();
 
 		if (magic != GGUF_MAGIC)
-			throw new IOException("Not a GGUF file (magic=0x" + Integer.toHexString(magic)
-					+ " at offset " + ggufOffset + ")");
+			throw new IOException(
+					"Not a GGUF file (magic=0x" + Integer.toHexString(magic) + " at offset " + ggufOffset + ")");
 		if (version < 2 || version > 3)
 			throw new IOException("Unsupported GGUF version: " + version);
 
@@ -153,7 +153,7 @@ public final class GgufReader implements AutoCloseable {
 		}
 
 		// Align to ALIGNMENT bytes — the GGUF spec aligns relative to the start
-		// of the GGUF header, not the start of the file.  When the GGUF is
+		// of the GGUF header, not the start of the file. When the GGUF is
 		// embedded inside a llamafile the header starts at ggufOffset, so we
 		// must compute the aligned position relative to ggufOffset and then
 		// add it back to get the absolute file position.
@@ -205,28 +205,32 @@ public final class GgufReader implements AutoCloseable {
 	/**
 	 * A tensor held in its original quantized encoding (e.g. Q4_K bytes).
 	 *
-	 * <p>Use this instead of {@link #tensor(String)} when you want to keep the
-	 * weights compressed and dequantize on-the-fly during matmul, avoiding the
-	 * enormous float32 allocation that causes OOM for large models.
+	 * <p>
+	 * Use this instead of {@link #tensor(String)} when you want to keep the weights
+	 * compressed and dequantize on-the-fly during matmul, avoiding the enormous
+	 * float32 allocation that causes OOM for large models.
 	 *
-	 * <p>Memory comparison for one phi-3.5-mini projection matrix (3072 × 3072):
+	 * <p>
+	 * Memory comparison for one phi-3.5-mini projection matrix (3072 × 3072):
 	 * <ul>
-	 *   <li>{@code tensor()} → float[]  = 3072 × 3072 × 4 B ≈  37.7 MB per layer
-	 *   <li>{@code tensorRaw()} → Q4_K  = 3072 × 12 blocks × 144 B ≈  5.3 MB per layer
+	 * <li>{@code tensor()} → float[] = 3072 × 3072 × 4 B ≈ 37.7 MB per layer
+	 * <li>{@code tensorRaw()} → Q4_K = 3072 × 12 blocks × 144 B ≈ 5.3 MB per layer
 	 * </ul>
 	 *
-	 * @param name  tensor name as it appears in the GGUF file
-	 * @param type  GGML quantisation type ID (0=F32, 1=F16, 8=Q8_0, 12=Q4_K, …)
+	 * @param name   tensor name as it appears in the GGUF file
+	 * @param type   GGML quantisation type ID (0=F32, 1=F16, 8=Q8_0, 12=Q4_K, …)
 	 * @param nelems total number of logical scalar elements in the tensor
-	 * @param data  raw quantised bytes (NOT dequantised)
+	 * @param data   raw quantised bytes (NOT dequantised)
 	 */
-	public record QuantizedTensor(String name, int type, long nelems, byte[] data) {}
+	public record QuantizedTensor(String name, int type, long nelems, byte[] data) {
+	}
 
 	/**
 	 * Load the raw (quantised) bytes for a tensor without dequantising.
 	 *
-	 * @throws IllegalArgumentException if the tensor does not exist
-	 * @throws UnsupportedOperationException if the type has no known byte-size formula
+	 * @throws IllegalArgumentException      if the tensor does not exist
+	 * @throws UnsupportedOperationException if the type has no known byte-size
+	 *                                       formula
 	 */
 	public QuantizedTensor tensorRaw(String name) throws IOException {
 		TensorInfo info = tensors.get(name);
@@ -248,7 +252,7 @@ public final class GgufReader implements AutoCloseable {
 	 */
 	public static long rawByteCount(int type, long nelems) {
 		return switch (type) {
-		case GGML_TYPE_F32  -> nelems * 4L;
+		case GGML_TYPE_F32 -> nelems * 4L;
 		case GGML_TYPE_F16, GGML_TYPE_BF16 -> nelems * 2L;
 		case GGML_TYPE_Q8_0 -> (nelems / 32L) * 34L;
 		case GGML_TYPE_Q4_0 -> (nelems / 32L) * 18L;
@@ -410,17 +414,19 @@ public final class GgufReader implements AutoCloseable {
 	}
 
 	// Q5_K: superblocks of 256 elements
-	// [d:f16][dmin:f16][scales:12 bytes][qh:32 bytes][qs:128 bytes] = 176 bytes per 256 elements
+	// [d:f16][dmin:f16][scales:12 bytes][qh:32 bytes][qs:128 bytes] = 176 bytes per
+	// 256 elements
 	//
 	// Layout mirrors Q4_K's grouped nibble scheme (not interleaved):
-	//   4 groups of 64 elements, each group split into two sub-blocks of 32.
-	//   For group g (0..3), the 32 qs bytes at offset g*32 serve BOTH sub-blocks:
-	//     sub-block 2g+0 (first 32):  low  nibbles of qs[g*32 .. g*32+32)
-	//     sub-block 2g+1 (second 32): high nibbles of the same qs bytes
-	//   The qh byte array is 32 bytes; each byte provides one bit per element l (0..31):
-	//     sub-block 2g+0 uses bit (2*g)   of qh[l]
-	//     sub-block 2g+1 uses bit (2*g+1) of qh[l]
-	//   This matches llama.cpp: m1=1,m2=2 shifted left by 2 each group iteration.
+	// 4 groups of 64 elements, each group split into two sub-blocks of 32.
+	// For group g (0..3), the 32 qs bytes at offset g*32 serve BOTH sub-blocks:
+	// sub-block 2g+0 (first 32): low nibbles of qs[g*32 .. g*32+32)
+	// sub-block 2g+1 (second 32): high nibbles of the same qs bytes
+	// The qh byte array is 32 bytes; each byte provides one bit per element l
+	// (0..31):
+	// sub-block 2g+0 uses bit (2*g) of qh[l]
+	// sub-block 2g+1 uses bit (2*g+1) of qh[l]
+	// This matches llama.cpp: m1=1,m2=2 shifted left by 2 each group iteration.
 	private float[] loadQ5_K(TensorInfo info) throws IOException {
 		int n = (int) info.nelems;
 		int QK_K = 256;
@@ -434,7 +440,7 @@ public final class GgufReader implements AutoCloseable {
 		byte[] qs = new byte[128];
 
 		for (int b = 0; b < nBlocks; b++) {
-			float d    = f16ToF32(buf.getShort());
+			float d = f16ToF32(buf.getShort());
 			float dmin = f16ToF32(buf.getShort());
 			buf.get(sc);
 			buf.get(qh);
@@ -444,12 +450,12 @@ public final class GgufReader implements AutoCloseable {
 			for (int g = 0; g < 4; g++) {
 				int s0 = g * 2;
 				int s1 = s0 + 1;
-				float scale0 = d    * getScale4K(sc, s0);
-				float min0   = dmin * getMin4K(sc, s0);
-				float scale1 = d    * getScale4K(sc, s1);
-				float min1   = dmin * getMin4K(sc, s1);
-				int hiBit0 = g * 2;       // bit within qh[l] for first  32
-				int hiBit1 = g * 2 + 1;   // bit within qh[l] for second 32
+				float scale0 = d * getScale4K(sc, s0);
+				float min0 = dmin * getMin4K(sc, s0);
+				float scale1 = d * getScale4K(sc, s1);
+				float min1 = dmin * getMin4K(sc, s1);
+				int hiBit0 = g * 2; // bit within qh[l] for first 32
+				int hiBit1 = g * 2 + 1; // bit within qh[l] for second 32
 
 				// First 32 of group: low nibbles, qh bit hiBit0
 				for (int l = 0; l < 32; l++) {
@@ -469,8 +475,8 @@ public final class GgufReader implements AutoCloseable {
 		return out;
 	}
 
-	/** (12 bytes, 8 scales + 8 mins
-	 * each 6-bit).
+	/**
+	 * (12 bytes, 8 scales + 8 mins each 6-bit).
 	 */
 	private static int getScale4K(byte[] sc, int j) {
 		if (j < 4)
@@ -563,14 +569,11 @@ public final class GgufReader implements AutoCloseable {
 	 * Locate the byte offset of a GGUF file stored uncompressed inside a ZIP
 	 * archive (the llamafile format).
 	 *
-	 * Algorithm:
-	 *   1. Scan the last ≤65557 bytes for the ZIP End-of-Central-Directory
-	 *      signature (0x06054b50, little-endian).
-	 *   2. Read the central-directory offset + size from the EOCD record.
-	 *   3. Walk central-directory entries looking for one whose filename ends
-	 *      with ".gguf".
-	 *   4. Read the matching local-file-header to determine where the raw
-	 *      (uncompressed) GGUF bytes begin.
+	 * Algorithm: 1. Scan the last ≤65557 bytes for the ZIP End-of-Central-Directory
+	 * signature (0x06054b50, little-endian). 2. Read the central-directory offset +
+	 * size from the EOCD record. 3. Walk central-directory entries looking for one
+	 * whose filename ends with ".gguf". 4. Read the matching local-file-header to
+	 * determine where the raw (uncompressed) GGUF bytes begin.
 	 *
 	 * Only ZIP32 is required here — TinyLlama Q5_K_M is ~700 MB which fits
 	 * comfortably within ZIP32 limits.
@@ -587,7 +590,8 @@ public final class GgufReader implements AutoCloseable {
 		ByteBuffer tail = ByteBuffer.allocate(searchLen).order(ByteOrder.LITTLE_ENDIAN);
 		while (tail.hasRemaining()) {
 			int r = channel.read(tail, searchStart + tail.position());
-			if (r < 0) break;
+			if (r < 0)
+				break;
 		}
 		tail.flip();
 		int actualLen = tail.limit();
@@ -597,20 +601,25 @@ public final class GgufReader implements AutoCloseable {
 		// cd-offset/size fields carry the ZIP64 sentinel value 0xFFFFFFFF.
 		int eocdIdx = -1;
 		for (int i = actualLen - 22; i >= 0; i--) {
-			if ((tail.getInt(i) & 0xFFFFFFFFL) != 0x06054b50L) continue;
+			if ((tail.getInt(i) & 0xFFFFFFFFL) != 0x06054b50L)
+				continue;
 
-			long candidateCdSize   = tail.getInt(i + 12) & 0xFFFFFFFFL;
+			long candidateCdSize = tail.getInt(i + 12) & 0xFFFFFFFFL;
 			long candidateCdOffset = tail.getInt(i + 16) & 0xFFFFFFFFL;
-			long eocdAbsPos        = searchStart + i;
+			long eocdAbsPos = searchStart + i;
 
 			// ZIP64 sentinel: at least one field is 0xFFFFFFFF — defer geometry
 			// check to after we've read the real values from the ZIP64 EOCD.
 			boolean zip64 = (candidateCdSize == 0xFFFFFFFFL || candidateCdOffset == 0xFFFFFFFFL);
 			if (!zip64) {
-				if (candidateCdSize == 0)                             continue;
-				if (candidateCdSize > eocdAbsPos)                     continue;
-				if (candidateCdOffset + candidateCdSize > eocdAbsPos) continue;
-				if (candidateCdOffset >= fileSize)                    continue;
+				if (candidateCdSize == 0)
+					continue;
+				if (candidateCdSize > eocdAbsPos)
+					continue;
+				if (candidateCdOffset + candidateCdSize > eocdAbsPos)
+					continue;
+				if (candidateCdOffset >= fileSize)
+					continue;
 			}
 
 			eocdIdx = i;
@@ -620,7 +629,7 @@ public final class GgufReader implements AutoCloseable {
 		if (eocdIdx < 0) {
 			// Real llamafiles (cosmopolitan APE binaries) sometimes have OS-specific
 			// PE/Mach-O sections appended AFTER the ZIP's EOCD, pushing it more than
-			// 65557 bytes from the end.  Fall back to a forward scan: walk the file
+			// 65557 bytes from the end. Fall back to a forward scan: walk the file
 			// from the beginning looking for a ZIP local-file-header (0x04034b50)
 			// whose filename ends with ".gguf".
 			log.info("EOCD backward scan failed — trying forward local-header scan for .gguf entry");
@@ -632,44 +641,44 @@ public final class GgufReader implements AutoCloseable {
 		// ZIP64 EOCD record contains the real 64-bit cdOffset and cdSize.
 		//
 		// ZIP64 EOCD locator layout:
-		//   +0  sig           4  = 0x07064b50
-		//   +4  disk of z64   4
-		//   +8  z64 EOCD off  8  ← absolute offset of the ZIP64 EOCD record
-		//  +16  total disks   4
+		// +0 sig 4 = 0x07064b50
+		// +4 disk of z64 4
+		// +8 z64 EOCD off 8 ← absolute offset of the ZIP64 EOCD record
+		// +16 total disks 4
 		//
 		// ZIP64 EOCD record layout:
-		//   +0  sig            4  = 0x06064b50
-		//   +4  record size    8
-		//  +12  version made   2
-		//  +14  version needed 2
-		//  +16  this disk      4
-		//  +20  CD start disk  4
-		//  +24  entries here   8
-		//  +32  entries total  8
-		//  +40  CD size        8  ← what we want
-		//  +48  CD offset      8  ← what we want
-		long rawCdSize   = tail.getInt(eocdIdx + 12) & 0xFFFFFFFFL;
+		// +0 sig 4 = 0x06064b50
+		// +4 record size 8
+		// +12 version made 2
+		// +14 version needed 2
+		// +16 this disk 4
+		// +20 CD start disk 4
+		// +24 entries here 8
+		// +32 entries total 8
+		// +40 CD size 8 ← what we want
+		// +48 CD offset 8 ← what we want
+		long rawCdSize = tail.getInt(eocdIdx + 12) & 0xFFFFFFFFL;
 		long rawCdOffset = tail.getInt(eocdIdx + 16) & 0xFFFFFFFFL;
 		long cdSize;
 		long cdOffset;
 
 		if (rawCdSize == 0xFFFFFFFFL || rawCdOffset == 0xFFFFFFFFL) {
 			log.info("ZIP64 sentinels detected — reading ZIP64 EOCD");
-			long eocdAbsPos  = searchStart + eocdIdx;
-			long locatorPos  = eocdAbsPos - 20;
+			long eocdAbsPos = searchStart + eocdIdx;
+			long locatorPos = eocdAbsPos - 20;
 			if (locatorPos < 0)
 				throw new IOException("ZIP64 EOCD locator would be before start of file");
 
 			ByteBuffer loc = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
 			while (loc.hasRemaining()) {
 				int r = channel.read(loc, locatorPos + loc.position());
-				if (r < 0) break;
+				if (r < 0)
+					break;
 			}
 			loc.flip();
 
 			if (loc.limit() < 20 || (loc.getInt(0) & 0xFFFFFFFFL) != 0x07064b50L)
-				throw new IOException(
-						"ZIP64 EOCD locator signature not found at offset " + locatorPos);
+				throw new IOException("ZIP64 EOCD locator signature not found at offset " + locatorPos);
 
 			long z64EocdAbsPos = loc.getLong(8);
 			log.info("ZIP64 EOCD record at abs-offset " + z64EocdAbsPos);
@@ -677,22 +686,22 @@ public final class GgufReader implements AutoCloseable {
 			ByteBuffer z64 = ByteBuffer.allocate(56).order(ByteOrder.LITTLE_ENDIAN);
 			while (z64.hasRemaining()) {
 				int r = channel.read(z64, z64EocdAbsPos + z64.position());
-				if (r < 0) break;
+				if (r < 0)
+					break;
 			}
 			z64.flip();
 
 			if (z64.limit() < 56 || (z64.getInt(0) & 0xFFFFFFFFL) != 0x06064b50L)
-				throw new IOException(
-						"ZIP64 EOCD record signature not found at offset " + z64EocdAbsPos);
+				throw new IOException("ZIP64 EOCD record signature not found at offset " + z64EocdAbsPos);
 
-			cdSize   = z64.getLong(40);
+			cdSize = z64.getLong(40);
 			cdOffset = z64.getLong(48);
 			log.info("ZIP64 EOCD: cdOffset=" + cdOffset + "  cdSize=" + cdSize);
 		} else {
-			cdSize   = rawCdSize;
+			cdSize = rawCdSize;
 			cdOffset = rawCdOffset;
-			log.info("EOCD found at abs-offset " + (searchStart + eocdIdx)
-					+ "  cdOffset=" + cdOffset + "  cdSize=" + cdSize);
+			log.info("EOCD found at abs-offset " + (searchStart + eocdIdx) + "  cdOffset=" + cdOffset + "  cdSize="
+					+ cdSize);
 		}
 
 		if (cdSize == 0)
@@ -704,7 +713,8 @@ public final class GgufReader implements AutoCloseable {
 		ByteBuffer cd = ByteBuffer.allocate((int) cdSize).order(ByteOrder.LITTLE_ENDIAN);
 		while (cd.hasRemaining()) {
 			int r = channel.read(cd, cdOffset + cd.position());
-			if (r < 0) break;
+			if (r < 0)
+				break;
 		}
 		cd.flip();
 
@@ -714,15 +724,17 @@ public final class GgufReader implements AutoCloseable {
 		int cdPos = 0;
 		while (cdPos + 46 <= cd.limit()) {
 			long sig = cd.getInt(cdPos) & 0xFFFFFFFFL;
-			if (sig != 0x02014b50L) break; // not a CD entry signature — stop
+			if (sig != 0x02014b50L)
+				break; // not a CD entry signature — stop
 
-			int fnLen      = cd.getShort(cdPos + 28) & 0xFFFF;
-			int extraLen   = cd.getShort(cdPos + 30) & 0xFFFF;
+			int fnLen = cd.getShort(cdPos + 28) & 0xFFFF;
+			int extraLen = cd.getShort(cdPos + 30) & 0xFFFF;
 			int commentLen = cd.getShort(cdPos + 32) & 0xFFFF;
 			long localHdrOffset = cd.getInt(cdPos + 42) & 0xFFFFFFFFL;
 
 			int nextEntry = cdPos + 46 + fnLen + extraLen + commentLen;
-			if (nextEntry > cd.limit()) break; // truncated entry — stop
+			if (nextEntry > cd.limit())
+				break; // truncated entry — stop
 
 			byte[] fnBytes = new byte[fnLen];
 			cd.position(cdPos + 46);
@@ -743,21 +755,20 @@ public final class GgufReader implements AutoCloseable {
 				ByteBuffer lh = ByteBuffer.allocate(30).order(ByteOrder.LITTLE_ENDIAN);
 				while (lh.hasRemaining()) {
 					int r = channel.read(lh, localHdrOffset + lh.position());
-					if (r < 0) break;
+					if (r < 0)
+						break;
 				}
 				lh.flip();
 
 				if (lh.limit() < 30)
-					throw new IOException(
-							"Truncated local file header at offset " + localHdrOffset);
+					throw new IOException("Truncated local file header at offset " + localHdrOffset);
 
 				long lhSig = lh.getInt(0) & 0xFFFFFFFFL;
 				if (lhSig != 0x04034b50L)
-					throw new IOException(
-							"Bad local file header signature 0x" + Long.toHexString(lhSig)
-							+ " at offset " + localHdrOffset);
+					throw new IOException("Bad local file header signature 0x" + Long.toHexString(lhSig) + " at offset "
+							+ localHdrOffset);
 
-				int localFnLen    = lh.getShort(26) & 0xFFFF;
+				int localFnLen = lh.getShort(26) & 0xFFFF;
 				int localExtraLen = lh.getShort(28) & 0xFFFF;
 
 				long dataStart = localHdrOffset + 30L + localFnLen + localExtraLen;
@@ -768,8 +779,7 @@ public final class GgufReader implements AutoCloseable {
 			cdPos = nextEntry;
 		}
 
-		throw new IOException(
-				"No .gguf entry found in the ZIP central directory of this llamafile");
+		throw new IOException("No .gguf entry found in the ZIP central directory of this llamafile");
 	}
 
 	/**
@@ -782,20 +792,20 @@ public final class GgufReader implements AutoCloseable {
 	 * Returns the absolute byte offset of the raw (uncompressed) GGUF data.
 	 *
 	 * To avoid misidentifying random bytes as a header, we do a lightweight
-	 * sanity-check on each candidate: the filename length must be ≤ 512 bytes,
-	 * the compression method must be 0 (STORED), and the filename must end
-	 * with ".gguf".
+	 * sanity-check on each candidate: the filename length must be ≤ 512 bytes, the
+	 * compression method must be 0 (STORED), and the filename must end with
+	 * ".gguf".
 	 */
 	private static long findGgufOffsetByForwardScan(FileChannel channel) throws IOException {
-		final long fileSize  = channel.size();
-		final int  CHUNK     = 1 << 20; // 1 MiB
-		final long SIG       = 0x04034b50L;
+		final long fileSize = channel.size();
+		final int CHUNK = 1 << 20; // 1 MiB
+		final long SIG = 0x04034b50L;
 
 		// We keep a 4-byte "carry" so we don't miss a signature that straddles
 		// two consecutive chunks.
 		byte[] carry = new byte[3];
-		int    carryLen = 0;
-		long   chunkStart = 0;
+		int carryLen = 0;
+		long chunkStart = 0;
 
 		ByteBuffer buf = ByteBuffer.allocate(CHUNK).order(ByteOrder.LITTLE_ENDIAN);
 
@@ -808,7 +818,8 @@ public final class GgufReader implements AutoCloseable {
 			long readPos = chunkStart;
 			while (buf.hasRemaining() && readPos < fileSize) {
 				int r = channel.read(buf, readPos + (buf.position() - carryLen));
-				if (r < 0) break;
+				if (r < 0)
+					break;
 				readPos += r;
 			}
 			buf.flip();
@@ -816,47 +827,57 @@ public final class GgufReader implements AutoCloseable {
 
 			// Search this chunk for the local-file-header signature.
 			for (int i = 0; i + 3 < limit; i++) {
-				if ((buf.getInt(i) & 0xFFFFFFFFL) != SIG) continue;
+				if ((buf.getInt(i) & 0xFFFFFFFFL) != SIG)
+					continue;
 
 				// Candidate at absolute offset = chunkStart - carryLen + i.
 				long absPos = chunkStart - carryLen + i;
 
 				// Need at least 30 bytes for the fixed local header.
-				if (absPos + 30 > fileSize) continue;
+				if (absPos + 30 > fileSize)
+					continue;
 
 				// Read the fixed part of the local header (30 bytes).
 				ByteBuffer lh = ByteBuffer.allocate(30).order(ByteOrder.LITTLE_ENDIAN);
 				while (lh.hasRemaining()) {
 					int r = channel.read(lh, absPos + lh.position());
-					if (r < 0) break;
+					if (r < 0)
+						break;
 				}
 				lh.flip();
-				if (lh.limit() < 30) continue;
+				if (lh.limit() < 30)
+					continue;
 
 				// Sanity-check: compression must be STORED (0).
 				int compression = lh.getShort(8) & 0xFFFF;
-				if (compression != 0) continue;
+				if (compression != 0)
+					continue;
 
-				int fnLen    = lh.getShort(26) & 0xFFFF;
+				int fnLen = lh.getShort(26) & 0xFFFF;
 				int extraLen = lh.getShort(28) & 0xFFFF;
 
 				// Sanity-check filename length.
-				if (fnLen == 0 || fnLen > 512) continue;
+				if (fnLen == 0 || fnLen > 512)
+					continue;
 
 				// Read the filename.
-				if (absPos + 30 + fnLen > fileSize) continue;
+				if (absPos + 30 + fnLen > fileSize)
+					continue;
 				ByteBuffer fnBuf = ByteBuffer.allocate(fnLen);
 				while (fnBuf.hasRemaining()) {
 					int r = channel.read(fnBuf, absPos + 30 + fnBuf.position());
-					if (r < 0) break;
+					if (r < 0)
+						break;
 				}
 				fnBuf.flip();
-				if (fnBuf.limit() < fnLen) continue;
+				if (fnBuf.limit() < fnLen)
+					continue;
 
 				String filename = new String(fnBuf.array(), 0, fnLen, StandardCharsets.UTF_8);
 				log.info("Forward scan — ZIP local entry: " + filename + "  at abs-offset " + absPos);
 
-				if (!filename.endsWith(".gguf")) continue;
+				if (!filename.endsWith(".gguf"))
+					continue;
 
 				long dataStart = absPos + 30L + fnLen + extraLen;
 				log.info("Forward scan — GGUF data starts at abs-offset " + dataStart);
@@ -871,24 +892,20 @@ public final class GgufReader implements AutoCloseable {
 			chunkStart += (limit - carryLen);
 		}
 
-		throw new IOException(
-				"No valid ZIP EOCD record found — file is neither a GGUF nor a llamafile ZIP");
+		throw new IOException("No valid ZIP EOCD record found — file is neither a GGUF nor a llamafile ZIP");
 	}
 
 	/**
 	 * Extract the local-header offset from a ZIP64 extra field block.
 	 *
-	 * ZIP64 extended information extra field (id=0x0001):
-	 *   +0  header id    2  = 0x0001
-	 *   +2  data size    2
-	 *   +4  [optional fields in order: uncompressed size(8), compressed size(8),
-	 *        local header offset(8), disk number(4)]
+	 * ZIP64 extended information extra field (id=0x0001): +0 header id 2 = 0x0001
+	 * +2 data size 2 +4 [optional fields in order: uncompressed size(8), compressed
+	 * size(8), local header offset(8), disk number(4)]
 	 *
 	 * Fields are only present if the corresponding CD fixed field held 0xFFFFFFFF.
 	 * We scan all extra blocks to find the ZIP64 one, then read the offset field.
 	 */
-	private static long readZip64ExtraLocalOffset(ByteBuffer cd, int extraStart, int extraLen)
-			throws IOException {
+	private static long readZip64ExtraLocalOffset(ByteBuffer cd, int extraStart, int extraLen) throws IOException {
 		int pos = extraStart;
 		int end = extraStart + extraLen;
 		while (pos + 4 <= end) {
@@ -896,7 +913,7 @@ public final class GgufReader implements AutoCloseable {
 			int dataSize = cd.getShort(pos + 2) & 0xFFFF;
 			if (headerId == 0x0001) {
 				// ZIP64 extra block — offset field is at +4+16 (skip two 8-byte
-				// size fields that precede it).  Guard against truncation.
+				// size fields that precede it). Guard against truncation.
 				int offsetPos = pos + 4 + 16;
 				if (offsetPos + 8 <= end)
 					return cd.getLong(offsetPos);

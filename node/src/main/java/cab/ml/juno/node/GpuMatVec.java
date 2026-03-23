@@ -14,33 +14,30 @@
  * limitations under the License.
  */
 package cab.ml.juno.node;
- 
+
 /**
  * Matrix-vector multiply contract: y[rows] = A[rows, cols] × x[cols].
  *
  * A is stored row-major: A[r, c] = weights[r * cols + c].
  *
- * Implementations:
- *   CublasMatVec   — real JCublas cublasSgemv on an Nvidia GPU (CUDA 12.x)
- *   CpuMatVec      — thin wrapper around CpuForwardPassHandler.matVec(),
- *                    used as the CPU reference in tests and CPU-only nodes
+ * Implementations: CublasMatVec — real JCublas cublasSgemv on an Nvidia GPU
+ * (CUDA 12.x) CpuMatVec — thin wrapper around CpuForwardPassHandler.matVec(),
+ * used as the CPU reference in tests and CPU-only nodes
  *
- * Contract:
- *   - A and x are not mutated.
- *   - Returns a new float[] of length rows.
- *   - Thread-safe: implementations may be called concurrently for different
- *     requests (each call is self-contained with its own device memory).
+ * Contract: - A and x are not mutated. - Returns a new float[] of length rows.
+ * - Thread-safe: implementations may be called concurrently for different
+ * requests (each call is self-contained with its own device memory).
  */
 public interface GpuMatVec {
- 
-    /**
-     * Compute y = A * x.
-     *
-     * @param A    weight matrix, row-major, length rows * cols
-     * @param x    input vector, length cols
-     * @param rows number of output elements
-     * @param cols number of input elements (inner dimension)
-     * @return new float[rows] — the result vector
-     */
-    float[] sgemv(float[] A, float[] x, int rows, int cols);
+
+	/**
+	 * Compute y = A * x.
+	 *
+	 * @param A    weight matrix, row-major, length rows * cols
+	 * @param x    input vector, length cols
+	 * @param rows number of output elements
+	 * @param cols number of input elements (inner dimension)
+	 * @return new float[rows] — the result vector
+	 */
+	float[] sgemv(float[] A, float[] x, int rows, int cols);
 }

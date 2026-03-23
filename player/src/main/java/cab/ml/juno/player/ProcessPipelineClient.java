@@ -9,16 +9,16 @@ import java.util.logging.Logger;
 
 import com.google.protobuf.ByteString;
 
-import cab.ml.juno.node.ActivationCodec;
-import cab.ml.juno.node.ActivationDtype;
-import cab.ml.juno.node.InferencePipeline;
-import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import cab.ml.juno.api.grpc.ForwardRequest;
 import cab.ml.juno.api.grpc.ForwardResponse;
 import cab.ml.juno.api.grpc.LoadShardRequest;
 import cab.ml.juno.api.grpc.LoadShardResponse;
 import cab.ml.juno.api.grpc.NodeServiceGrpc;
+import cab.ml.juno.node.ActivationCodec;
+import cab.ml.juno.node.ActivationDtype;
+import cab.ml.juno.node.InferencePipeline;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
 
 /**
  * InferencePipeline that fans a forward pass across N remote node processes

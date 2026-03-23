@@ -35,7 +35,9 @@ public final class ChatHistory {
 	private final String sessionId = UUID.randomUUID().toString();
 	private final List<ChatMessage> messages = new ArrayList<>();
 
-	/** Stable session identifier — share this across all turns of the conversation. */
+	/**
+	 * Stable session identifier — share this across all turns of the conversation.
+	 */
 	public String sessionId() {
 		return sessionId;
 	}
@@ -50,7 +52,9 @@ public final class ChatHistory {
 		messages.add(ChatMessage.assistant(content));
 	}
 
-	/** Returns a copy of the current message list for building an InferenceRequest. */
+	/**
+	 * Returns a copy of the current message list for building an InferenceRequest.
+	 */
 	public List<ChatMessage> getMessages() {
 		return List.copyOf(messages);
 	}

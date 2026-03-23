@@ -119,7 +119,9 @@ public final class ConsoleMain {
 	private static int loraRank = 8;
 	private static float loraAlpha = -1f;          // sentinel: default to loraRank
 	private static double loraLr = 1e-4;
-	private static int loraSteps = 50;
+	private static int loraSteps = 50;             // steps per chunk for /train
+	private static int loraStepsQa = 10;           // steps per chunk for /train-qa
+	private static float loraEarlyStop = 0.25f;    // stop training when loss drops below this
 
 	public static void main(String[] args) throws Exception {
 		AnsiSupport.enable();
@@ -223,6 +225,12 @@ public final class ConsoleMain {
 			case "--lora-steps":
 				if (i + 1 < args.length) loraSteps = parseInt(args[++i], 50);
 				break;
+			case "--lora-steps-qa":
+				if (i + 1 < args.length) loraStepsQa = parseInt(args[++i], 10);
+				break;
+			case "--lora-early-stop":
+				if (i + 1 < args.length) loraEarlyStop = parseFloat(args[++i], 0.25f);
+				break;
 			// ─────────────────────────────────────────────────────────────────
 			case "--verbose":
 			case "-v":
@@ -273,6 +281,12 @@ public final class ConsoleMain {
 		System.out.println("    /status                  Show adapter info and training stats");
 		System.out.println("    /merge-hint              Explain how to bake LoRA into GGUF weights");
 		System.out.println("    Regular chat input       Inference with current adapter applied");
+		System.out.println();
+		System.out.println("  LoRA training controls:");
+		System.out.println("  --lora-steps N           Gradient steps/chunk for /train (default: 50)");
+		System.out.println("  --lora-steps-qa N        Gradient steps/chunk for /train-qa (default: 10)");
+		System.out.println("  --lora-early-stop F      Stop when loss < F (default: 0.25). Prevents");
+		System.out.println("                           catastrophic overfitting. Set 0 to disable.");
 		System.out.println();
 		System.out.println("Other:");
 		System.out.println("  --jfr DURATION             Java Flight Recording duration (e.g. 5m)");
@@ -422,6 +436,29 @@ public final class ConsoleMain {
 			trainOnText(parts[1], adapters, optimizer, handler, tokenizer, totalSteps, dirty);
 		}
 
+		case "/train-qa" -> {
+			// Format: /train-qa Q: <question> A: <answer>
+			// OR two-arg form (separator is " A: "): /train-qa What is my name? A: Dima
+			if (parts.length < 2 || parts[1].isBlank()) {
+				print(Color.RED + "  Usage: /train-qa <question> A: <answer>" + Color.RESET);
+				print(Color.RED + "  Example: /train-qa What is my name? A: Your name is Dima." + Color.RESET);
+				return;
+			}
+			String qaSrc = parts[1].trim();
+			// Strip optional leading "Q:" prefix
+			if (qaSrc.toLowerCase().startsWith("q:")) qaSrc = qaSrc.substring(2).trim();
+			int sepIdx = qaSrc.indexOf(" A: ");
+			if (sepIdx < 0) {
+				print(Color.RED + "  Could not find \" A: \" separator." + Color.RESET);
+				print(Color.RED + "  Usage: /train-qa What is my name? A: Your name is Dima." + Color.RESET);
+				return;
+			}
+			String question = qaSrc.substring(0, sepIdx).trim();
+			String answer   = qaSrc.substring(sepIdx + 4).trim();
+			trainOnQA(question, answer, adapters, optimizer, handler, tokenizer,
+					  totalSteps, dirty, ChatModelType.fromPath(modelPath));
+		}
+
 		case "/train-file" -> {
 			if (parts.length < 2 || parts[1].isBlank()) {
 				print(Color.RED + "  Usage: /train-file <path>" + Color.RESET);
@@ -492,19 +529,102 @@ public final class ConsoleMain {
 		case "/help" -> {
 			print("");
 			print(Color.CYAN_BOLD + "  LoRA REPL commands" + Color.RESET);
-			print("  /train <text>      Fine-tune on inline text (" + loraSteps + " gradient steps)");
-			print("  /train-file <path> Fine-tune on a text file (chunks of ~128 tokens)");
-			print("  /save              Save adapter to " + adapterFile);
-			print("  /reset             Reinitialise adapters (clear all training)");
-			print("  /status            Show adapter info and training statistics");
-			print("  /merge-hint        Explain how to bake adapters into model weights");
-			print("  Regular input      Chat using the current adapter for inference");
+			print("  /train-qa <q> A: <a>  Fine-tune on a Q&A pair in the correct chat format  ← USE THIS");
+			print("  /train <text>          Fine-tune on raw text (no chat template applied)");
+			print("  /train-file <path>     Fine-tune on a text file (chunks of ~128 tokens)");
+			print("  /save                  Save adapter to " + adapterFile);
+			print("  /reset                 Reinitialise adapters (clear all training)");
+			print("  /status                Show adapter info and training statistics");
+			print("  /merge-hint            Explain how to bake adapters into model weights");
+			print("  Regular input          Chat using the current adapter for inference");
+			print("");
+			print("  " + Color.YELLOW + "TIP:" + Color.RESET + " Use /train-qa for factual recall (names, dates, preferences).");
+			print("       /train is for style/vocabulary adaptation.");
 			print("");
 		}
 
 		default -> print(Color.RED + "  Unknown command: " + cmd
 				+ "  (type /help for commands)" + Color.RESET);
 		}
+	}
+
+	/**
+	 * Fine-tune on a question/answer pair using the model's own chat template.
+	 *
+	 * <p>This is the correct way to teach the model factual recall. The training
+	 * text is formatted with the same Zephyr/phi3/llama3/... template that the
+	 * model sees during inference, so the LoRA adapters learn the right token
+	 * distribution. Using {@code /train} with raw text produces no effect on
+	 * question-answering because the training context (plain sentence) doesn't
+	 * match the inference context (chat-templated question+answer).
+	 *
+	 * <p>Generates multiple phrasings of the question automatically to avoid
+	 * the model overfitting to a single exact wording.
+	 */
+	private static void trainOnQA(String question, String answer,
+			LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
+			LoraTrainableHandler handler, Tokenizer tokenizer,
+			int[] totalSteps, boolean[] dirty, String modelType) throws Exception {
+
+		// Echo the parsed question and answer BEFORE training starts — catches typos.
+		// "mt" vs "my" won't be caught by the model; it must be caught by the human.
+		print("");
+		print(Color.CYAN_BOLD + "  Question: " + Color.RESET + question);
+		print(Color.CYAN_BOLD + "  Answer  : " + Color.RESET + answer);
+		print(Color.DIM + "  (check spelling above — typos in Q won't match inference phrasing)" + Color.RESET);
+		print("");
+
+		// Build several phrasings of the same Q&A so the model generalises.
+		// All variations must use the EXACT spelling of the key terms (name, etc.)
+		// because the BPE tokenization of "mt" ≠ "my" → different token IDs → no transfer.
+		String q = question.endsWith("?") ? question : question + "?";
+		String qLow = q.substring(0, 1).toLowerCase() + q.substring(1);  // lower-case version
+		String[] questions = {
+			q,
+			qLow,
+			"Can you tell me: " + qLow,
+			"Please answer: " + qLow,
+		};
+
+		// Format each as a full chat exchange using the model's own template
+		// so training and inference see identical token sequences.
+		StringBuilder sb = new StringBuilder();
+		for (String variant : questions) {
+			sb.append(formatQA(variant, answer, modelType));
+		}
+		String trainingText = sb.toString();
+
+		print(Color.DIM + "  Formatted as " + questions.length + " Q&A pairs  ·  model type: " + modelType + Color.RESET);
+		print(Color.DIM + "  steps/chunk=" + loraStepsQa + "  early-stop=" + loraEarlyStop
+				+ "  (tune with --lora-steps-qa N  --lora-early-stop F)" + Color.RESET);
+
+		trainOnText(trainingText, adapters, optimizer, handler, tokenizer, totalSteps, dirty, loraStepsQa);
+	}
+
+	/**
+	 * Format a single question/answer pair using the chat template for {@code modelType}.
+	 * Mirrors the format applied by {@link cab.ml.juno.tokenizer.ChatTemplateFormatter}
+	 * so training and inference see identical token sequences.
+	 */
+	private static String formatQA(String question, String answer, String modelType) {
+		return switch (modelType) {
+			case "tinyllama", "zephyr" ->
+				"<|user|>\n" + question + "</s>\n<|assistant|>\n" + answer + "</s>\n";
+			case "phi3", "phi-3" ->
+				"<|user|>\n" + question + "<|end|>\n<|assistant|>\n" + answer + "<|end|>\n";
+			case "llama3" ->
+				"<|start_header_id|>user<|end_header_id|>\n\n" + question
+				+ "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+				+ answer + "<|eot_id|>";
+			case "mistral" ->
+				"[INST] " + question + " [/INST] " + answer + "</s>";
+			case "gemma" ->
+				"<start_of_turn>user\n" + question + "<end_of_turn>\n"
+				+ "<start_of_turn>model\n" + answer + "<end_of_turn>\n";
+			default -> // chatml
+				"<|im_start|>user\n" + question + "<|im_end|>\n"
+				+ "<|im_start|>assistant\n" + answer + "<|im_end|>\n";
+		};
 	}
 
 	/**
@@ -516,6 +636,13 @@ public final class ConsoleMain {
 			LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
 			LoraTrainableHandler handler, Tokenizer tokenizer,
 			int[] totalSteps, boolean[] dirty) throws Exception {
+		trainOnText(text, adapters, optimizer, handler, tokenizer, totalSteps, dirty, loraSteps);
+	}
+
+	private static void trainOnText(String text,
+			LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
+			LoraTrainableHandler handler, Tokenizer tokenizer,
+			int[] totalSteps, boolean[] dirty, int stepsPerChunk) throws Exception {
 
 		int[] allTokens = tokenizer.encode(text);
 		if (allTokens.length < 2) {
@@ -527,7 +654,9 @@ public final class ConsoleMain {
 		withBos[0] = 1;  // BOS
 		System.arraycopy(allTokens, 0, withBos, 1, allTokens.length);
 
-		final int CHUNK = 128;
+		// CHUNK=32 keeps T (prediction positions per step) small so steps complete
+		// in ~10–15 s on CPU. CHUNK=128 gives T=128 → ~50 s/step → appears frozen.
+		final int CHUNK = 32;
 		List<int[]> chunks = new ArrayList<>();
 		for (int start = 0; start < withBos.length - 1; start += CHUNK) {
 			int end = Math.min(start + CHUNK + 1, withBos.length);
@@ -537,7 +666,7 @@ public final class ConsoleMain {
 			chunks.add(chunk);
 		}
 
-		int totalGradSteps = chunks.size() * loraSteps;
+		int totalGradSteps = chunks.size() * stepsPerChunk;
 		print("");
 		System.out.printf("  %sTraining%s  rank=%d · lr=%s · %d steps · %d chunk(s) · %d tokens%n",
 				Color.CYAN_BOLD, Color.RESET, loraRank, loraLr, totalGradSteps,
@@ -547,9 +676,11 @@ public final class ConsoleMain {
 		float firstLoss = Float.NaN, lastLoss = Float.NaN;
 		int stepsDone = 0;
 		long trainStart = System.currentTimeMillis();
+		boolean stoppedEarly = false;
 
+		outer:
 		for (int[] chunk : chunks) {
-			for (int s = 0; s < loraSteps; s++) {
+			for (int s = 0; s < stepsPerChunk; s++) {
 				long stepStart = System.currentTimeMillis();
 				float loss = handler.trainStep(chunk, optimizer);
 				long stepMs = System.currentTimeMillis() - stepStart;
@@ -557,6 +688,31 @@ public final class ConsoleMain {
 				if (Float.isNaN(firstLoss)) firstLoss = loss;
 				lastLoss = loss;
 				stepsDone++;
+
+				// Early stop: loss below threshold → model has memorised the chunk.
+				// Continuing would drive loss toward 0 and destroy generalisation.
+				if (loraEarlyStop > 0 && loss < loraEarlyStop) {
+					int pct = (int) (100.0 * stepsDone / totalGradSteps);
+					int bars = Math.min(20, pct / 5);
+					String bar = Color.GREEN + "▓".repeat(bars)
+							+ Color.DIM + "░".repeat(20 - bars) + Color.RESET;
+					System.out.printf("\r  step %3d/%-3d  loss=%.4f  %s %3d%%  %4dms/step  ETA %-8s",
+							stepsDone, totalGradSteps, loss, bar, pct, stepMs, "0s");
+					System.out.flush();
+					System.out.println();
+					System.out.printf("  %s⚠ Early stop%s  loss=%.4f < threshold=%.2f%n",
+							Color.YELLOW, Color.RESET, loss, loraEarlyStop);
+					stoppedEarly = true;
+					break outer;
+				}
+
+				// Overfitting warning: loss < 0.5 but early stop not triggered
+				// (user set loraEarlyStop=0 or threshold is very low)
+				if (loss < 0.5f && loraEarlyStop == 0) {
+					System.out.printf("\r  %s⚠ loss=%.4f — risk of overfitting. "
+							+ "Consider stopping soon or lowering --lora-steps-qa.%s%n",
+							Color.YELLOW, loss, Color.RESET);
+				}
 
 				// ETA based on rolling average of all steps so far
 				long elapsed = System.currentTimeMillis() - trainStart;
@@ -582,8 +738,20 @@ public final class ConsoleMain {
 		String trend = delta < 0
 				? Color.GREEN + String.format("▼ %.4f (−%.4f)", lastLoss, -delta) + Color.RESET
 				: Color.YELLOW + String.format("▲ %.4f (+%.4f)", lastLoss, delta) + Color.RESET;
-		System.out.printf("  %s✔ done%s  loss=%s  %ds total  · /save to persist%n%n",
-				Color.GREEN, Color.RESET, trend, totalMs / 1000);
+		String doneLabel = stoppedEarly ? Color.YELLOW + "⚠ stopped early" + Color.RESET : Color.GREEN + "✔ done" + Color.RESET;
+		System.out.printf("  %s  loss=%s  %ds total  · /save to persist%n",
+				doneLabel, trend, totalMs / 1000);
+		if (lastLoss < 0.1f) {
+			System.out.printf("  %s⚠ WARNING: loss=%.4f — adapter is severely overfit.%s%n",
+					Color.RED, lastLoss, Color.RESET);
+			System.out.printf("  %s  The model will generate garbage until you /reset adapters.%s%n%n",
+					Color.RED, Color.RESET);
+		} else if (lastLoss < 0.5f && !stoppedEarly) {
+			System.out.printf("  %s⚠ loss < 0.5 — consider stopping here. "
+					+ "More steps risk overfitting.%s%n%n", Color.YELLOW, Color.RESET);
+		} else {
+			System.out.println();
+		}
 
 		totalSteps[0] += stepsDone;
 		dirty[0] = true;

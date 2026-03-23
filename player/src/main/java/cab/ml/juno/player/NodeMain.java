@@ -31,8 +31,8 @@ import java.util.logging.Logger;
  * (real transformer math) instead of CyclicForwardPassHandler.
  *
  * Manual launch for debugging: mvn exec:java -pl integration \
- * -Dexec.mainClass=cab.ml.juno.integration.NodeMain \ -Dexec.args="node-1
- * 9092 /models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
+ * -Dexec.mainClass=cab.ml.juno.integration.NodeMain \ -Dexec.args="node-1 9092
+ * /models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
  */
 public final class NodeMain {
 

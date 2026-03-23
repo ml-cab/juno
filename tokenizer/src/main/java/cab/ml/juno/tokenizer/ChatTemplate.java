@@ -187,11 +187,10 @@ public interface ChatTemplate {
 	}
 
 	/**
-	 * Phi-3 chat template.
-	 * {@code <|user|>\n{user}<|end|>\n<|assistant|>\n}
+	 * Phi-3 chat template. {@code <|user|>\n{user}<|end|>\n<|assistant|>\n}
 	 *
-	 * Phi-3 and Phi-3.5 Mini Instruct are fine-tuned with this exact format.
-	 * System messages are prepended to the first user turn separated by a newline.
+	 * Phi-3 and Phi-3.5 Mini Instruct are fine-tuned with this exact format. System
+	 * messages are prepended to the first user turn separated by a newline.
 	 */
 	static ChatTemplate phi3() {
 		return new ChatTemplate() {
@@ -236,13 +235,15 @@ public interface ChatTemplate {
 	 * Resolve a template by model type string. Falls back to ChatML for unknown
 	 * model types.
 	 *
-	 * <p>Resolution order:
+	 * <p>
+	 * Resolution order:
 	 * <ol>
-	 *   <li><b>Exact match</b> — {@code "phi3"} → phi3, {@code "tinyllama"} → tinyllama, etc.
-	 *   <li><b>Substring match</b> — {@code "llama3-8b"} contains {@code "llama3"} → llama3.
-	 *       Keys are checked longest-first to avoid shorter keys shadowing longer ones
-	 *       (e.g. "tinyllama" must win over "llama" for a "tinyllama-1b" input).
-	 *   <li><b>Default</b> — ChatML for anything unrecognised.
+	 * <li><b>Exact match</b> — {@code "phi3"} → phi3, {@code "tinyllama"} →
+	 * tinyllama, etc.
+	 * <li><b>Substring match</b> — {@code "llama3-8b"} contains {@code "llama3"} →
+	 * llama3. Keys are checked longest-first to avoid shorter keys shadowing longer
+	 * ones (e.g. "tinyllama" must win over "llama" for a "tinyllama-1b" input).
+	 * <li><b>Default</b> — ChatML for anything unrecognised.
 	 * </ol>
 	 */
 	static ChatTemplate forModelType(String modelType) {
@@ -256,10 +257,8 @@ public interface ChatTemplate {
 			return exact;
 
 		// 2. Substring match — longest key first to avoid "llama" shadowing "tinyllama"
-		return BUILT_IN.entrySet().stream()
-				.filter(e -> key.contains(e.getKey()))
-				.max(java.util.Comparator.comparingInt(e -> e.getKey().length()))
-				.map(java.util.Map.Entry::getValue)
+		return BUILT_IN.entrySet().stream().filter(e -> key.contains(e.getKey()))
+				.max(java.util.Comparator.comparingInt(e -> e.getKey().length())).map(java.util.Map.Entry::getValue)
 				.orElse(chatml());
 	}
 }

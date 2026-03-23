@@ -141,8 +141,8 @@ public final class KVCacheManager {
 	 * Remove the prefix-trie entry associated with {@code cacheKey}.
 	 *
 	 * Call this together with {@link #evict(String)} when a conversation session
-	 * ends, so a future session that begins with the same tokens does not obtain
-	 * a stale prefix-cache hit pointing at evicted KV blocks.
+	 * ends, so a future session that begins with the same tokens does not obtain a
+	 * stale prefix-cache hit pointing at evicted KV blocks.
 	 *
 	 * @param cacheKey the key used in {@link #cachePrefix} — typically the
 	 *                 sessionId for multi-turn requests.

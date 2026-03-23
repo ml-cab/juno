@@ -21,6 +21,15 @@ import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import cab.ml.juno.api.grpc.ActivationDtype;
+import cab.ml.juno.api.grpc.ForwardResponse;
+import cab.ml.juno.api.grpc.LoadShardRequest;
+import cab.ml.juno.api.grpc.LoadShardResponse;
+import cab.ml.juno.api.grpc.NodeServiceGrpc;
+import cab.ml.juno.api.grpc.NodeStatusRequest;
+import cab.ml.juno.api.grpc.NodeStatusResponse;
+import cab.ml.juno.api.grpc.UnloadShardRequest;
+import cab.ml.juno.api.grpc.UnloadShardResponse;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
@@ -35,15 +44,6 @@ import cab.ml.juno.registry.ShardAssignment;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
-import cab.ml.juno.api.grpc.ActivationDtype;
-import cab.ml.juno.api.grpc.ForwardResponse;
-import cab.ml.juno.api.grpc.LoadShardRequest;
-import cab.ml.juno.api.grpc.LoadShardResponse;
-import cab.ml.juno.api.grpc.NodeServiceGrpc;
-import cab.ml.juno.api.grpc.NodeStatusRequest;
-import cab.ml.juno.api.grpc.NodeStatusResponse;
-import cab.ml.juno.api.grpc.UnloadShardRequest;
-import cab.ml.juno.api.grpc.UnloadShardResponse;
 
 /**
  * Minimal gRPC NodeService backed by CyclicForwardPassHandler.
@@ -150,8 +150,8 @@ public final class EmbeddedNodeServer {
 				} else {
 					// Subsequent nodes: bytes are compressed activations
 					float[] inputActivations = ActivationCodec.decode(rawBytes, inDtype);
-					nodeReq = cab.ml.juno.node.ForwardRequest.withActivations(request.getRequestId(),
-							inputActivations, request.getSequencePos());
+					nodeReq = cab.ml.juno.node.ForwardRequest.withActivations(request.getRequestId(), inputActivations,
+							request.getSequencePos());
 				}
 
 				ForwardResult result = handler.forward(nodeReq, context);

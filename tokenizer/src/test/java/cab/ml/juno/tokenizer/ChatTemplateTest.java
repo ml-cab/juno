@@ -119,9 +119,9 @@ class ChatTemplateTest {
 	/**
 	 * Regression: GenerationLoopTest used "llama3-8b" as modelId. Before the fix,
 	 * GenerationLoop did its own {@code .contains("llama3")} check. After switching
-	 * to {@code ChatTemplate.forModelType(modelId)}, an exact-only lookup would
-	 * not find "llama3-8b" in the BUILT_IN map and fall back to chatml — producing
-	 * a different token count and breaking tests that assert on prompt length.
+	 * to {@code ChatTemplate.forModelType(modelId)}, an exact-only lookup would not
+	 * find "llama3-8b" in the BUILT_IN map and fall back to chatml — producing a
+	 * different token count and breaking tests that assert on prompt length.
 	 */
 	@Test
 	void forModelType_resolves_versioned_llama3_id_via_substring() {

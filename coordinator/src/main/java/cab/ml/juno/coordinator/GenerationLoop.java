@@ -226,17 +226,17 @@ public final class GenerationLoop {
 	/**
 	 * Run generation for a single request.
 	 *
-	 * <h3>Session-aware KV cache</h3>
-	 * When {@code request.sessionId()} is present the loop uses the sessionId as
-	 * the KV key for both the underlying pipeline and the prefix trie. This means:
+	 * <h3>Session-aware KV cache</h3> When {@code request.sessionId()} is present
+	 * the loop uses the sessionId as the KV key for both the underlying pipeline
+	 * and the prefix trie. This means:
 	 * <ul>
-	 *   <li>On turn 1 the full prompt is prefilled and the resulting KV blocks are
-	 *       stored under the sessionId.</li>
-	 *   <li>On turn N {@link KVCacheManager#findLongestPrefix} returns the token
-	 *       count already processed in earlier turns. Prefill starts from that
-	 *       offset, so no token is ever processed twice.</li>
-	 *   <li>KV blocks are NOT evicted at the end of each turn — they survive until
-	 *       the caller explicitly calls {@link #evictSession(String)}.</li>
+	 * <li>On turn 1 the full prompt is prefilled and the resulting KV blocks are
+	 * stored under the sessionId.</li>
+	 * <li>On turn N {@link KVCacheManager#findLongestPrefix} returns the token
+	 * count already processed in earlier turns. Prefill starts from that offset, so
+	 * no token is ever processed twice.</li>
+	 * <li>KV blocks are NOT evicted at the end of each turn — they survive until
+	 * the caller explicitly calls {@link #evictSession(String)}.</li>
 	 * </ul>
 	 *
 	 * Stateless requests (no sessionId) behave exactly as before: always prefill
@@ -271,8 +271,8 @@ public final class GenerationLoop {
 			var prefixMatch = kvCache.findLongestPrefix(promptIds);
 			if (prefixMatch.isHit()) {
 				startPos = prefixMatch.matchedTokens();
-				log.info("Prefix cache hit: " + startPos + "/" + promptIds.length
-						+ " tokens cached (session=" + kvKey + ")");
+				log.info("Prefix cache hit: " + startPos + "/" + promptIds.length + " tokens cached (session=" + kvKey
+						+ ")");
 			}
 		}
 
@@ -288,8 +288,8 @@ public final class GenerationLoop {
 		// the decode loop so its logits drive the first sampled token.
 		int prefillSteps = promptIds.length - 1 - startPos;
 		if (prefillSteps > 0) {
-			log.info("Prefill: " + prefillSteps + " steps for prompt of " + promptIds.length
-					+ " tokens (kvKey=" + kvKey + ")");
+			log.info("Prefill: " + prefillSteps + " steps for prompt of " + promptIds.length + " tokens (kvKey=" + kvKey
+					+ ")");
 			consumer.onPrefillStart(promptIds.length);
 			for (int p = startPos; p < promptIds.length - 1; p++) {
 				int[] prefillSlice = Arrays.copyOfRange(promptIds, 0, p + 1);
@@ -370,15 +370,8 @@ public final class GenerationLoop {
 			kvCache.evict(kvKey);
 		}
 
-		return new GenerationResult(
-				kvKey,
-				fullText.toString(),
-				generatedIds,
-				promptIds.length,
-				generatedIds.size(),
-				stopReason,
-				Instant.now(),
-				Duration.between(start, Instant.now()));
+		return new GenerationResult(kvKey, fullText.toString(), generatedIds, promptIds.length, generatedIds.size(),
+				stopReason, Instant.now(), Duration.between(start, Instant.now()));
 	}
 
 	/**
@@ -399,29 +392,29 @@ public final class GenerationLoop {
 		kvCache.invalidatePrefix(sessionId);
 	}
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+	// ── Helpers ───────────────────────────────────────────────────────────────
 
-    /**
-     * Returns true if a decoded piece string is a known EOS marker.
-     *
-     * GgufTokenizer quirk: some models have EOS strings like "</s>" stored as
-     * regular vocabulary entries at token IDs that differ from the special EOS ID.
-     * Treating these as EOS prevents them leaking into the generated text.
-     *
-     * Marker set: "</s>" (LLaMA/Mistral/TinyLlama), "<|endoftext|>" (GPT/Phi),
-     * "<|eot_id|>" (LLaMA 3), "<end_of_turn>" (Gemma).
-     */
-    private static boolean isEosMarker(String piece) {
-        return switch (piece) {
-            case "</s>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>" -> true;
-            default -> false;
-        };
-    }
+	/**
+	 * Returns true if a decoded piece string is a known EOS marker.
+	 *
+	 * GgufTokenizer quirk: some models have EOS strings like "</s>" stored as
+	 * regular vocabulary entries at token IDs that differ from the special EOS ID.
+	 * Treating these as EOS prevents them leaking into the generated text.
+	 *
+	 * Marker set: "</s>" (LLaMA/Mistral/TinyLlama), "<|endoftext|>" (GPT/Phi),
+	 * "<|eot_id|>" (LLaMA 3), "<end_of_turn>" (Gemma).
+	 */
+	private static boolean isEosMarker(String piece) {
+		return switch (piece) {
+		case "</s>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>" -> true;
+		default -> false;
+		};
+	}
 
-    private int[] appendToken(int[] tokens, int newToken) {
-        int[] next = new int[tokens.length + 1];
-        System.arraycopy(tokens, 0, next, 0, tokens.length);
-        next[tokens.length] = newToken;
-        return next;
-    }
+	private int[] appendToken(int[] tokens, int newToken) {
+		int[] next = new int[tokens.length + 1];
+		System.arraycopy(tokens, 0, next, 0, tokens.length);
+		next[tokens.length] = newToken;
+		return next;
+	}
 }

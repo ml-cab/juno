@@ -158,7 +158,8 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 		if (r.hasTensor("output.weight")) {
 			return r.tensor("output.weight");
 		}
-		log.info("output.weight not found — model uses tied embeddings; reusing token_embd.weight as output projection");
+		log.info(
+				"output.weight not found — model uses tied embeddings; reusing token_embd.weight as output projection");
 		return r.tensor("token_embd.weight");
 	}
 
@@ -340,16 +341,18 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 	/**
 	 * Matrix–vector multiply against a raw quantised weight tensor.
 	 *
-	 * <p><b>Replaces the float[] overload for large projection matrices in
-	 * PhiForwardPassHandler.</b>  Dequantisation happens one block at a time
-	 * inside the inner loop; the maximum live float allocation is one 256-element
-	 * block (~1 kB), not the full weight tensor (~10–100 MB for large models).
+	 * <p>
+	 * <b>Replaces the float[] overload for large projection matrices in
+	 * PhiForwardPassHandler.</b> Dequantisation happens one block at a time inside
+	 * the inner loop; the maximum live float allocation is one 256-element block
+	 * (~1 kB), not the full weight tensor (~10–100 MB for large models).
 	 *
-	 * <p>Supports type IDs:
+	 * <p>
+	 * Supports type IDs:
 	 * <ul>
-	 *   <li>0  (F32)  — byte-reinterpret, same precision as the float[] overload
-	 *   <li>12 (Q4_K) — block-wise dequantisation, the format used by Q4_K_M models
-	 *   <li>8  (Q8_0) — block-wise dequantisation
+	 * <li>0 (F32) — byte-reinterpret, same precision as the float[] overload
+	 * <li>12 (Q4_K) — block-wise dequantisation, the format used by Q4_K_M models
+	 * <li>8 (Q8_0) — block-wise dequantisation
 	 * </ul>
 	 *
 	 * @param A        quantised weight tensor (row-major, shape [totalRows, cols])
@@ -361,13 +364,12 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 	 */
 	static float[] matVec(GgufReader.QuantizedTensor A, float[] x, int rowStart, int rowEnd, int cols) {
 		return switch (A.type()) {
-		case 0  -> matVecF32raw(A.data(), x, rowStart, rowEnd, cols);
-		case 8  -> matVecQ8_0raw(A.data(), x, rowStart, rowEnd, cols);
+		case 0 -> matVecF32raw(A.data(), x, rowStart, rowEnd, cols);
+		case 8 -> matVecQ8_0raw(A.data(), x, rowStart, rowEnd, cols);
 		case 12 -> matVecQ4Kraw(A.data(), x, rowStart, rowEnd, cols);
 		case 13 -> matVecQ5Kraw(A.data(), x, rowStart, rowEnd, cols);
 		case 14 -> matVecQ6Kraw(A.data(), x, rowStart, rowEnd, cols);
-		default -> throw new UnsupportedOperationException(
-				"Quantized matVec not implemented for GGML type " + A.type()
+		default -> throw new UnsupportedOperationException("Quantized matVec not implemented for GGML type " + A.type()
 				+ " — add a case branch or convert to float[] first.");
 		};
 	}
@@ -386,7 +388,8 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 	private static float[] matVecF32raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
-		// Each thread reads its own slice of raw; ByteBuffer.wrap is view-only (no copy).
+		// Each thread reads its own slice of raw; ByteBuffer.wrap is view-only (no
+		// copy).
 		// Wrap once per thread inside the lambda to avoid position-state sharing.
 		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
 			java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
@@ -404,18 +407,19 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 	/**
 	 * Q4_K block-wise matrix–vector multiply.
 	 *
-	 * Block layout: [d:f16(2)][dmin:f16(2)][sc:12][qs:128] = 144 bytes per 256 elements.
-	 * 4 groups of 64 elements; each group yields two 32-element sub-blocks via
-	 * low/high nibbles of the same qs bytes — matching llama.cpp dequantize_row_q4_K.
+	 * Block layout: [d:f16(2)][dmin:f16(2)][sc:12][qs:128] = 144 bytes per 256
+	 * elements. 4 groups of 64 elements; each group yields two 32-element
+	 * sub-blocks via low/high nibbles of the same qs bytes — matching llama.cpp
+	 * dequantize_row_q4_K.
 	 *
-	 * The outer row loop runs in parallel across ForkJoinPool.commonPool().
-	 * Scratch byte arrays (sc, qs) are allocated per-thread inside the lambda.
+	 * The outer row loop runs in parallel across ForkJoinPool.commonPool(). Scratch
+	 * byte arrays (sc, qs) are allocated per-thread inside the lambda.
 	 */
 	private static float[] matVecQ4Kraw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
-		final int BLOCK_SIZE   = 256;
-		final int BLOCK_BYTES  = 144;
+		final int BLOCK_SIZE = 256;
+		final int BLOCK_BYTES = 144;
 		final int blocksPerRow = cols / BLOCK_SIZE;
-		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
@@ -429,19 +433,19 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 
 			for (int b = 0; b < blocksPerRow; b++) {
 				int bo = rowByteOffset + b * BLOCK_BYTES;
-				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
+				float d = GgufReader.f16ToF32(readLE16(raw, bo));
 				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
-				System.arraycopy(raw, bo + 4,  sc, 0, 12);
+				System.arraycopy(raw, bo + 4, sc, 0, 12);
 				System.arraycopy(raw, bo + 16, qs, 0, 128);
 
 				int qi = 0;
 				for (int g = 0; g < BLOCK_SIZE; g += 64) {
 					int s0 = g / 32;
 					int s1 = s0 + 1;
-					float scale0 = d    * q4kScale(sc, s0);
-					float min0   = dmin * q4kMin(sc, s0);
-					float scale1 = d    * q4kScale(sc, s1);
-					float min1   = dmin * q4kMin(sc, s1);
+					float scale0 = d * q4kScale(sc, s0);
+					float min0 = dmin * q4kMin(sc, s0);
+					float scale1 = d * q4kScale(sc, s1);
+					float min1 = dmin * q4kMin(sc, s1);
 
 					for (int i = 0; i < 32; i++)
 						acc += (scale0 * (qs[qi + i] & 0x0F) - min0) * x[xBase + g + i];
@@ -456,29 +460,30 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 		return y;
 	}
 
-	/** Extract 6-bit scale[j] from a Q4_K scales block (mirrors GgufReader.getScale4K). */
+	/**
+	 * Extract 6-bit scale[j] from a Q4_K scales block (mirrors
+	 * GgufReader.getScale4K).
+	 */
 	private static float q4kScale(byte[] sc, int j) {
-		int v = (j < 4)
-				? sc[j] & 0x3F
-				: ((sc[j + 4] & 0x0F) | ((sc[j - 4] & 0xC0) >> 2)) & 0x3F;
+		int v = (j < 4) ? sc[j] & 0x3F : ((sc[j + 4] & 0x0F) | ((sc[j - 4] & 0xC0) >> 2)) & 0x3F;
 		return v;
 	}
 
-	/** Extract 6-bit min[j] from a Q4_K scales block (mirrors GgufReader.getMin4K). */
+	/**
+	 * Extract 6-bit min[j] from a Q4_K scales block (mirrors GgufReader.getMin4K).
+	 */
 	private static float q4kMin(byte[] sc, int j) {
-		int v = (j < 4)
-				? sc[j + 4] & 0x3F
-				: (((sc[j + 4] & 0xFF) >> 4) | ((sc[j] & 0xC0) >> 2)) & 0x3F;
+		int v = (j < 4) ? sc[j + 4] & 0x3F : (((sc[j + 4] & 0xFF) >> 4) | ((sc[j] & 0xC0) >> 2)) & 0x3F;
 		return v;
 	}
 
 	// ── Q8_0 raw bytes matVec ─────────────────────────────────────────────────
 
 	private static float[] matVecQ8_0raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
-		final int BLOCK_SIZE  = 32;
+		final int BLOCK_SIZE = 32;
 		final int BLOCK_BYTES = 34; // 2 (f16 scale) + 32 (int8)
 		final int blocksPerRow = cols / BLOCK_SIZE;
-		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
@@ -508,15 +513,15 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 	/**
 	 * Q5_K block-wise matrix–vector multiply.
 	 *
-	 * Block layout: [d:f16(2)][dmin:f16(2)][sc:12][qh:32][qs:128] = 176 bytes
-	 * per 256 elements. 5th bit per element stored in qh: value = (nibble | (qh_bit << 4)).
-	 * Mirrors GgufReader.loadQ5_K exactly.
+	 * Block layout: [d:f16(2)][dmin:f16(2)][sc:12][qh:32][qs:128] = 176 bytes per
+	 * 256 elements. 5th bit per element stored in qh: value = (nibble | (qh_bit <<
+	 * 4)). Mirrors GgufReader.loadQ5_K exactly.
 	 */
 	private static float[] matVecQ5Kraw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
-		final int BLOCK_SIZE  = 256;
+		final int BLOCK_SIZE = 256;
 		final int BLOCK_BYTES = 176;
 		final int blocksPerRow = cols / BLOCK_SIZE;
-		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
@@ -530,9 +535,9 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 
 			for (int b = 0; b < blocksPerRow; b++) {
 				int bo = rowByteOffset + b * BLOCK_BYTES;
-				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
+				float d = GgufReader.f16ToF32(readLE16(raw, bo));
 				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
-				System.arraycopy(raw, bo + 4,  sc, 0, 12);
+				System.arraycopy(raw, bo + 4, sc, 0, 12);
 				System.arraycopy(raw, bo + 16, qh, 0, 32);
 				System.arraycopy(raw, bo + 48, qs, 0, 128);
 
@@ -540,10 +545,10 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 				for (int g = 0; g < 4; g++) {
 					int s0 = g * 2;
 					int s1 = s0 + 1;
-					float scale0 = d    * q4kScale(sc, s0);
-					float min0   = dmin * q4kMin(sc, s0);
-					float scale1 = d    * q4kScale(sc, s1);
-					float min1   = dmin * q4kMin(sc, s1);
+					float scale0 = d * q4kScale(sc, s0);
+					float min0 = dmin * q4kMin(sc, s0);
+					float scale1 = d * q4kScale(sc, s1);
+					float min1 = dmin * q4kMin(sc, s1);
 					int hiBit0 = g * 2;
 					int hiBit1 = g * 2 + 1;
 
@@ -572,14 +577,14 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 	 * Q6_K block-wise matrix–vector multiply.
 	 *
 	 * Block layout: [ql:128][qh:64][sc:16][d:f16] = 210 bytes per 256 elements.
-	 * Signed 6-bit values in [-32,31], scaled by d * sc[].
-	 * Mirrors GgufReader.loadQ6_K exactly.
+	 * Signed 6-bit values in [-32,31], scaled by d * sc[]. Mirrors
+	 * GgufReader.loadQ6_K exactly.
 	 */
 	private static float[] matVecQ6Kraw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
-		final int BLOCK_SIZE  = 256;
+		final int BLOCK_SIZE = 256;
 		final int BLOCK_BYTES = 210;
 		final int blocksPerRow = cols / BLOCK_SIZE;
-		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
@@ -593,7 +598,7 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 
 			for (int b = 0; b < blocksPerRow; b++) {
 				int bo = rowByteOffset + b * BLOCK_BYTES;
-				System.arraycopy(raw, bo,       ql, 0, 128);
+				System.arraycopy(raw, bo, ql, 0, 128);
 				System.arraycopy(raw, bo + 128, qh, 0, 64);
 				System.arraycopy(raw, bo + 192, sc, 0, 16);
 				float d = GgufReader.f16ToF32(readLE16(raw, bo + 208));
@@ -602,18 +607,18 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 					int qlBase = half * 64;
 					int qhBase = half * 32;
 					int scBase = half * 8;
-					int xOff   = xBase + half * 128;
+					int xOff = xBase + half * 128;
 
 					for (int l = 0; l < 32; l++) {
-						int is   = l / 16;
-						int qlL  = ql[qlBase + l]      & 0xFF;
+						int is = l / 16;
+						int qlL = ql[qlBase + l] & 0xFF;
 						int qlL2 = ql[qlBase + l + 32] & 0xFF;
-						int qhL  = qh[qhBase + l]      & 0xFF;
+						int qhL = qh[qhBase + l] & 0xFF;
 
-						int q1 = ((qlL  & 0x0F) | (((qhL >> 0) & 3) << 4)) - 32;
+						int q1 = ((qlL & 0x0F) | (((qhL >> 0) & 3) << 4)) - 32;
 						int q2 = ((qlL2 & 0x0F) | (((qhL >> 2) & 3) << 4)) - 32;
-						int q3 = ((qlL  >> 4)   | (((qhL >> 4) & 3) << 4)) - 32;
-						int q4 = ((qlL2 >> 4)   | (((qhL >> 6) & 3) << 4)) - 32;
+						int q3 = ((qlL >> 4) | (((qhL >> 4) & 3) << 4)) - 32;
+						int q4 = ((qlL2 >> 4) | (((qhL >> 6) & 3) << 4)) - 32;
 
 						float d1 = d * sc[scBase + is];
 						float d2 = d * sc[scBase + is + 2];
@@ -632,7 +637,6 @@ public final class CpuForwardPassHandler implements ForwardPassHandler {
 		});
 		return y;
 	}
-
 
 	/**
 	 * Rotary position embeddings (RoPE). Applied in-place to x[nHeads * headDim],

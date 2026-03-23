@@ -21,7 +21,8 @@ package cab.ml.juno.player;
  */
 public final class ChatModelType {
 
-	private ChatModelType() {}
+	private ChatModelType() {
+	}
 
 	/**
 	 * Returns the model type key for ChatTemplate lookup. Path is compared
