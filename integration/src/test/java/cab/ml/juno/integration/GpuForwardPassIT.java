@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import cab.ml.juno.node.CpuForwardPassHandler;
-import cab.ml.juno.node.CublasMatVec;
 import cab.ml.juno.node.CudaAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardRequest;
@@ -101,18 +100,21 @@ class GpuForwardPassIT {
 		ShardContext ctx = new ShardContext("gpu-it", 0, 11, true, false, 32000, 2048, 32);
 
 		ForwardPassHandler cpu = CpuForwardPassHandler.load(modelPath, ctx);
-		ForwardPassHandler gpu = GpuForwardPassHandler.load(modelPath, ctx, new CublasMatVec(gpuCtx));
+		ForwardPassHandler gpu = GpuForwardPassHandler.loadGpuResident(modelPath, ctx, gpuCtx);
+		try {
+			ForwardRequest req = ForwardRequest.withTokens("it-req-1", new int[] { 1 }, 0);
 
-		ForwardRequest req = ForwardRequest.withTokens("it-req-1", new int[] { 1 }, 0);
+			ForwardResult cpuResult = cpu.forward(req, ctx);
+			ForwardResult gpuResult = gpu.forward(req, ctx);
 
-		ForwardResult cpuResult = cpu.forward(req, ctx);
-		ForwardResult gpuResult = gpu.forward(req, ctx);
-
-		assertThat(gpuResult.activations()).hasSize(cpuResult.activations().length);
-		float[] cpuAct = cpuResult.activations();
-		float[] gpuAct = gpuResult.activations();
-		for (int i = 0; i < cpuAct.length; i++)
-			assertThat(gpuAct[i]).as("activation[%d]", i).isCloseTo(cpuAct[i], within(DELTA));
+			assertThat(gpuResult.activations()).hasSize(cpuResult.activations().length);
+			float[] cpuAct = cpuResult.activations();
+			float[] gpuAct = gpuResult.activations();
+			for (int i = 0; i < cpuAct.length; i++)
+				assertThat(gpuAct[i]).as("activation[%d]", i).isCloseTo(cpuAct[i], within(DELTA));
+		} finally {
+			((GpuForwardPassHandler) gpu).releaseGpuResources();
+		}
 	}
 
 	@Test
@@ -124,18 +126,21 @@ class GpuForwardPassIT {
 			fakeActivations[i] = (float) Math.sin(i * 0.01);
 
 		ForwardPassHandler cpu = CpuForwardPassHandler.load(modelPath, ctx);
-		ForwardPassHandler gpu = GpuForwardPassHandler.load(modelPath, ctx, new CublasMatVec(gpuCtx));
+		ForwardPassHandler gpu = GpuForwardPassHandler.loadGpuResident(modelPath, ctx, gpuCtx);
+		try {
+			ForwardRequest req = ForwardRequest.withActivations("it-req-2", fakeActivations, 0);
 
-		ForwardRequest req = ForwardRequest.withActivations("it-req-2", fakeActivations, 0);
+			ForwardResult cpuResult = cpu.forward(req, ctx);
+			ForwardResult gpuResult = gpu.forward(req, ctx);
 
-		ForwardResult cpuResult = cpu.forward(req, ctx);
-		ForwardResult gpuResult = gpu.forward(req, ctx);
-
-		assertThat(gpuResult.logits()).hasSize(32000);
-		float[] cpuLogits = cpuResult.logits();
-		float[] gpuLogits = gpuResult.logits();
-		for (int i = 0; i < cpuLogits.length; i++)
-			assertThat(gpuLogits[i]).as("logit[%d]", i).isCloseTo(cpuLogits[i], within(DELTA));
+			assertThat(gpuResult.logits()).hasSize(32000);
+			float[] cpuLogits = cpuResult.logits();
+			float[] gpuLogits = gpuResult.logits();
+			for (int i = 0; i < cpuLogits.length; i++)
+				assertThat(gpuLogits[i]).as("logit[%d]", i).isCloseTo(cpuLogits[i], within(DELTA));
+		} finally {
+			((GpuForwardPassHandler) gpu).releaseGpuResources();
+		}
 	}
 
 	@Test
@@ -144,37 +149,44 @@ class GpuForwardPassIT {
 		ShardContext ctx = new ShardContext("gpu-it", 0, 11, true, false, 32000, 2048, 32);
 
 		ForwardPassHandler cpu = CpuForwardPassHandler.load(modelPath, ctx);
-		ForwardPassHandler gpu = GpuForwardPassHandler.load(modelPath, ctx, new CublasMatVec(gpuCtx));
+		ForwardPassHandler gpu = GpuForwardPassHandler.loadGpuResident(modelPath, ctx, gpuCtx);
+		try {
+			ForwardRequest req = ForwardRequest.withTokens("it-perf", new int[] { 42 }, 0);
 
-		ForwardRequest req = ForwardRequest.withTokens("it-perf", new int[] { 42 }, 0);
-
-		// Warm up
-		cpu.forward(req, ctx);
-		gpu.forward(req, ctx);
-
-		// CPU timing
-		long cpuStart = System.nanoTime();
-		for (int i = 0; i < 10; i++)
+			// Warm up
 			cpu.forward(req, ctx);
-		long cpuMs = (System.nanoTime() - cpuStart) / 1_000_000;
-
-		// GPU timing
-		long gpuStart = System.nanoTime();
-		for (int i = 0; i < 10; i++)
 			gpu.forward(req, ctx);
-		long gpuMs = (System.nanoTime() - gpuStart) / 1_000_000;
 
-		System.out.printf("Forward pass 10 runs — CPU: %dms  GPU: %dms  speedup: %.1fx%n", cpuMs, gpuMs,
-				(double) cpuMs / gpuMs);
+			// CPU timing
+			long cpuStart = System.nanoTime();
+			for (int i = 0; i < 10; i++)
+				cpu.forward(req, ctx);
+			long cpuMs = (System.nanoTime() - cpuStart) / 1_000_000;
 
-		assertThat(gpuMs).isLessThan(cpuMs);
+			// GPU timing
+			long gpuStart = System.nanoTime();
+			for (int i = 0; i < 10; i++)
+				gpu.forward(req, ctx);
+			long gpuMs = (System.nanoTime() - gpuStart) / 1_000_000;
+
+			System.out.printf("Forward pass 10 runs — CPU: %dms  GPU: %dms  speedup: %.1fx%n", cpuMs, gpuMs,
+					(double) cpuMs / gpuMs);
+
+			assertThat(gpuMs).isLessThan(cpuMs);
+		} finally {
+			((GpuForwardPassHandler) gpu).releaseGpuResources();
+		}
 	}
 
 	@Test
 	@DisplayName("isReady() true after load on GPU node")
 	void is_ready_after_load() throws Exception {
 		ShardContext ctx = new ShardContext("gpu-it", 0, 11, true, false, 32000, 2048, 32);
-		ForwardPassHandler gpu = GpuForwardPassHandler.load(modelPath, ctx, new CublasMatVec(gpuCtx));
-		assertThat(gpu.isReady()).isTrue();
+		ForwardPassHandler gpu = GpuForwardPassHandler.loadGpuResident(modelPath, ctx, gpuCtx);
+		try {
+			assertThat(gpu.isReady()).isTrue();
+		} finally {
+			((GpuForwardPassHandler) gpu).releaseGpuResources();
+		}
 	}
 }

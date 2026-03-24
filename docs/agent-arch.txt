@@ -2128,12 +2128,18 @@ Different:
 
 Factory: GpuForwardPassHandler.load(Path, ShardContext, GpuMatVec)
   Opens the GGUF file, reads LlamaConfig, loads all weight tensors for the
-  assigned layer range. Identical to CpuForwardPassHandler.load().
+  assigned layer range. Identical to CpuForwardPassHandler.load(). Matmul
+  weights stay on the host; each CublasMatVec.sgemv uploads A every call (tests,
+  CpuMatVec backend).
 
-Typical wiring on a GPU node:
-  GpuContext ctx    = GpuContext.init(0);
-  GpuMatVec  matVec = new CublasMatVec(ctx);
-  handler = GpuForwardPassHandler.load(modelPath, shardCtx, matVec);
+Production GPU path — weights uploaded once:
+  GpuContext ctx = GpuContext.init(0);
+  handler = GpuForwardPassHandler.loadGpuResident(modelPath, shardCtx, ctx);
+  // call handler.releaseGpuResources() before ctx.close()
+
+DeviceFloatMatrix — row-major GPU buffer for one weight matrix; created by
+  DeviceFloatMatrix.upload(GpuContext, float[] host, rows, cols). CublasMatVec
+  implements GpuMatVec.sgemv(DeviceFloatMatrix, float[]) — copies x and y only.
 
 CPU-only fallback (same class, different backend):
   handler = GpuForwardPassHandler.load(modelPath, shardCtx, CpuMatVec.INSTANCE);
@@ -2143,6 +2149,7 @@ CPU-only fallback (same class, different backend):
   GpuMatVec.java              Interface — sgemv contract
   CpuMatVec.java              GpuMatVec backed by CpuForwardPassHandler.matVec()
   CublasMatVec.java           GpuMatVec backed by cublasSgemv_v2 (org.bytedeco cublas)
+  DeviceFloatMatrix.java      GPU-resident weight matrix (upload once)
   GpuContext.java             cuBLAS handle lifecycle, AutoCloseable
   CudaAvailability.java       Safe CUDA runtime detection, cached
   GpuForwardPassHandler.java  ForwardPassHandler using GpuMatVec
@@ -2170,9 +2177,9 @@ Updated node module listing (full):
 19.8  Test additions (session 10)
 -----------------------------------------------
 
-GpuMatVecContractTest (node module) — 17 tests, no GPU required:
+GpuMatVecContractTest (node module) — 18 tests, no GPU required:
   Full contract suite runs against CpuMatVec.INSTANCE.
-  Extended by CublasMatVecTest which inherits all 17 tests.
+  Extended by CublasMatVecTest which inherits all 18 tests.
 
   Contract tests:
     output_length_is_rows
@@ -2194,11 +2201,16 @@ GpuMatVecContractTest (node module) — 17 tests, no GPU required:
     wrong_x_length_throws               IllegalArgumentException
 
 CublasMatVecTest (node module) — @Tag("gpu"), extends GpuMatVecContractTest:
-  Inherits all 17 contract tests, adds:
+  Inherits all 18 contract tests, adds:
+    device_matrix_sgemv_matches_host_path           DeviceFloatMatrix vs host A
     cublas_matches_cpu_reference_hidden_dim         2048 x 2048
     cublas_matches_cpu_reference_output_projection  32000 x 2048
-    gpu_is_faster_than_cpu_for_large_matrix         timing sanity, 5 runs
+    gpu_path_has_reasonable_overhead_for_large_matrix  timing sanity, 5 runs
     concurrent_calls_are_correct                    4 threads, 256 x 256
+
+DeviceFloatMatrixTest (node module) — @Tag("gpu"):
+  upload_rejects_mismatched_length
+  device_pointer_throws_after_close
 
 CudaAvailabilityTest (node module) — 8 tests (4 always-run, 4 @Tag("gpu")):
   is_available_does_not_throw

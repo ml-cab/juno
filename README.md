@@ -10,7 +10,7 @@ Distributed Java-native LLM inference engine. Runs large language models across 
 
 All modules build and all tests pass. Verified end-to-end with TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf on a 3-node CPU cluster.
 
-**Session 10** — GPU acceleration layer. JCuda/JCublas integration complete. `GpuForwardPassHandler` replaces all `matVec` calls with `cublasSgemv`. Runs alongside `CpuForwardPassHandler` behind the `GpuMatVec` interface — both produce numerically identical output within float32 rounding. Full test suite runs without a GPU on any machine; GPU tests are opt-in via `-Dgroups=gpu` or `-Pgpu`.
+**Session 10** — GPU acceleration layer. JCuda/JCublas integration complete. `GpuForwardPassHandler` routes matmul through `cublasSgemv`. Production GPU loads use `GpuForwardPassHandler.loadGpuResident`: each weight matrix is uploaded once (`DeviceFloatMatrix`); per-token matmuls copy only the activation vector and result, not full weights. `GpuForwardPassHandler.load` with host tensors remains for `CpuMatVec` and tests. Full test suite runs without a GPU on any machine; GPU tests are opt-in via `-Dgroups=gpu` or `-Pgpu`.
 
 ```
 you> hey there, my name is Dima, nice to meet you!
@@ -46,7 +46,7 @@ bot> Your name is Dima.
     +--------------------------------------+
 ```
 
-Each node runs either `CpuForwardPassHandler` (pure Java, parallel matVec) or `GpuForwardPassHandler` (cuBLAS cublasSgemv via org.bytedeco cuda). Both implement `ForwardPassHandler` via the `GpuMatVec` interface. Node selection is automatic: GPU nodes use `CublasMatVec`; CPU-only nodes fall back to `CpuMatVec`. Works with various NVIDIA GPUs (e.g. GTX 1080, T4).
+Each node runs either `CpuForwardPassHandler` (pure Java, parallel matVec) or `GpuForwardPassHandler` (cuBLAS cublasSgemv via org.bytedeco cuda). GPU nodes load resident device weights via `loadGpuResident`; CPU-only nodes use `CpuMatVec`. Both implement `ForwardPassHandler` via the `GpuMatVec` interface. Works with various NVIDIA GPUs (e.g. GTX 1080, T4).
 
 ---
 
@@ -124,7 +124,7 @@ Environment variable overrides (equivalent to flag counterparts): `MODEL_PATH`, 
 | `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, Javalin REST, SSE |
 | `kvcache` | `KVCacheManager`, `GpuKVCache`, `CpuKVCache`, `PrefixCache` |
 | `tokenizer` | `GgufTokenizer` (SentencePiece BPE), `ChatTemplate`, `StubTokenizer` |
-| `node` | `CpuForwardPassHandler`, `GpuForwardPassHandler`, `GpuMatVec`, `CublasMatVec`, `CpuMatVec`, `GpuContext`, `CudaAvailability`, `GgufReader`, `LlamaConfig`, `ActivationCodec` (GPU: org.bytedeco cuda) |
+| `node` | `CpuForwardPassHandler`, `GpuForwardPassHandler`, `GpuMatVec`, `CublasMatVec`, `DeviceFloatMatrix`, `CpuMatVec`, `GpuContext`, `CudaAvailability`, `GgufReader`, `LlamaConfig`, `ActivationCodec` (GPU: org.bytedeco cuda) |
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | Health monitor, circuit breakers (Resilience4j) |
 | `player` | `ConsoleMain` REPL, `ClusterHarness`, `ProcessPipelineClient`, `ChatHistory` |
@@ -199,7 +199,7 @@ Session 9 turn latency grows with new tokens per turn only, not with total histo
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
 - Stub mode — cluster boots in seconds without a model file; all integration tests run stub.
 - Two `ActivationDtype` enums by design: protobuf-generated for wire, domain enum for application code.
-- `GpuMatVec` interface decouples the matmul backend from the transformer logic. `CublasMatVec` in production (org.bytedeco cuda), `CpuMatVec` as CPU fallback and test reference. Swappable without touching `GpuForwardPassHandler`.
+- `GpuMatVec` interface decouples the matmul backend from the transformer logic. `CublasMatVec` implements host `sgemv` (full H2D per call) and device `sgemv(DeviceFloatMatrix, x)` for resident weights. `CpuMatVec` as CPU fallback and test reference. Swappable without touching `GpuForwardPassHandler`.
 - GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent CUDA native libs (bytedeco) loading into the coordinator JVM and poisoning FD inheritance into forked node processes.
 
 ---

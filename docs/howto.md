@@ -311,6 +311,11 @@ NVIDIA GPUs (e.g. GTX 1080, T4). Requires NVIDIA driver; CUDA runtime is
 bundled in the cuda-platform dependency. On Windows ensure nvidia-smi shows
 your GPU; no extra PATH needed for tests (JavaCPP loads natives from the jar).
 
+Production GPU loads use `GpuForwardPassHandler.loadGpuResident`: each matmul
+weight matrix is uploaded once (`DeviceFloatMatrix`). Call
+`GpuForwardPassHandler.releaseGpuResources()` before closing `GpuContext`.
+`GpuForwardPassHandler.load` with host tensors remains for `CpuMatVec` and tests.
+
 Unit tests — node module only, no model file, no GPU needed on CPU machines
 
 ```

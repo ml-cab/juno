@@ -28,7 +28,6 @@ import cab.ml.juno.kvcache.LayerRange;
 import cab.ml.juno.node.ActivationCodec;
 import cab.ml.juno.node.CudaAvailability;
 import cab.ml.juno.node.CpuForwardPassHandler;
-import cab.ml.juno.node.CublasMatVec;
 import cab.ml.juno.node.CyclicForwardPassHandler;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.GpuContext;
@@ -207,6 +206,9 @@ public final class EmbeddedNodeServer {
 			if (modelPath != null) {
 				try {
 					if (gpuContext != null) {
+						if (handler instanceof GpuForwardPassHandler g) {
+							g.releaseGpuResources();
+						}
 						gpuContext.close();
 						gpuContext = null;
 					}
@@ -216,8 +218,7 @@ public final class EmbeddedNodeServer {
 							+ request.getHasOutputProjection());
 					if (useGpu && CudaAvailability.isAvailable()) {
 						gpuContext = GpuContext.init(0);
-						CublasMatVec matVec = new CublasMatVec(gpuContext);
-						handler = GpuForwardPassHandler.load(Path.of(modelPath), newCtx, matVec);
+						handler = GpuForwardPassHandler.loadGpuResident(Path.of(modelPath), newCtx, gpuContext);
 						msg = "Real shard loaded (GpuForwardPassHandler) layers " + request.getStartLayer() + "–"
 								+ request.getEndLayer();
 					} else {
@@ -254,6 +255,9 @@ public final class EmbeddedNodeServer {
 
 		@Override
 		public void unloadShard(UnloadShardRequest request, StreamObserver<UnloadShardResponse> responseObserver) {
+			if (handler instanceof GpuForwardPassHandler g) {
+				g.releaseGpuResources();
+			}
 			if (gpuContext != null) {
 				gpuContext.close();
 				gpuContext = null;

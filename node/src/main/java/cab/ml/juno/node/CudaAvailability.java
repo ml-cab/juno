@@ -35,9 +35,9 @@ import java.util.logging.Logger;
  *
  * Usage:
  *   if (CudaAvailability.isAvailable()) {
- *       handler = GpuForwardPassHandler.load(path, ctx);
+ *       GpuForwardPassHandler h = GpuForwardPassHandler.loadGpuResident(path, shard, ctx);
  *   } else {
- *       handler = CpuForwardPassHandler.load(path, ctx);
+ *       CpuForwardPassHandler h = CpuForwardPassHandler.load(path, shard);
  *   }
  */
 public final class CudaAvailability {

@@ -210,4 +210,11 @@ class GpuMatVecContractTest {
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("cols");
     }
+
+    @Test
+    @DisplayName("CpuMatVec rejects device-resident sgemv (default contract)")
+    void cpu_backend_rejects_device_sgemv() {
+        assertThatThrownBy(() -> CpuMatVec.INSTANCE.sgemv(null, new float[4]))
+            .isInstanceOf(UnsupportedOperationException.class);
+    }
 }

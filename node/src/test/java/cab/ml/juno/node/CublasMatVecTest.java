@@ -60,6 +60,24 @@ class CublasMatVecTest extends GpuMatVecContractTest {
     // ── CublasMatVec-specific tests ───────────────────────────────────────────
 
     @Test
+    @DisplayName("sgemv(DeviceFloatMatrix, x) matches host sgemv — 2048×2048")
+    void device_matrix_sgemv_matches_host_path() {
+        int rows = 2048, cols = 2048;
+        float[] A = randomMatrix(rows, cols, 400);
+        float[] x = randomVector(cols, 401);
+        DeviceFloatMatrix d = DeviceFloatMatrix.upload(ctx, A, rows, cols);
+        try {
+            float[] hostPath = cublasImpl.sgemv(A, x, rows, cols);
+            float[] devPath = cublasImpl.sgemv(d, x);
+            assertThat(devPath).hasSize(rows);
+            for (int i = 0; i < rows; i++)
+                assertThat(devPath[i]).as("y[%d]", i).isCloseTo(hostPath[i], within(DELTA));
+        } finally {
+            d.close();
+        }
+    }
+
+    @Test
     @DisplayName("cublasSgemv matches CpuForwardPassHandler.matVec reference — 2048×2048")
     void cublas_matches_cpu_reference_hidden_dim() {
         int rows = 2048, cols = 2048;
@@ -116,9 +134,7 @@ class CublasMatVecTest extends GpuMatVecContractTest {
         System.out.printf("32000×2048 sgemv — CPU: %dms  GPU: %dms  (5 runs each)%n",
             cpuMs, gpuMs);
 
-        // This implementation performs cudaMalloc + H2D + D2H per call.
-        // Until buffers are made persistent, absolute "GPU faster than CPU"
-        // is hardware- and driver-dependent. Keep a coarse upper bound only.
+        // Host-path sgemv still copies A each call; keep a coarse upper bound for CI variance.
         assertThat(gpuMs).isLessThan(3_000L);
     }
 

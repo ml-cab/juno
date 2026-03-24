@@ -32,7 +32,7 @@ package cab.ml.juno.node;
  *     requests (each call is self-contained with its own device memory).
  */
 public interface GpuMatVec {
- 
+
     /**
      * Compute y = A * x.
      *
@@ -43,4 +43,16 @@ public interface GpuMatVec {
      * @return new float[rows] — the result vector
      */
     float[] sgemv(float[] A, float[] x, int rows, int cols);
+
+    /**
+     * Compute y = A * x with {@code A} already on the device (see
+     * {@link DeviceFloatMatrix}).
+     *
+     * @throws UnsupportedOperationException for backends that only support host
+     *                                       weights (e.g. {@link CpuMatVec})
+     */
+    default float[] sgemv(DeviceFloatMatrix A, float[] x) {
+        throw new UnsupportedOperationException(
+            "device-resident weights are not supported by this GpuMatVec implementation");
+    }
 }

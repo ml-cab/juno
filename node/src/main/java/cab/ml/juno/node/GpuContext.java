@@ -35,9 +35,9 @@ import java.util.logging.Logger;
  *
  * Usage:
  *   try (GpuContext ctx = GpuContext.init(0)) {
- *       CublasMatVec matVec = new CublasMatVec(ctx);
- *       GpuForwardPassHandler handler = GpuForwardPassHandler.load(path, shard, matVec);
+ *       GpuForwardPassHandler handler = GpuForwardPassHandler.loadGpuResident(path, shard, ctx);
  *       ...
+ *       handler.releaseGpuResources();
  *   }
  *
  * Throws IllegalStateException if CUDA is not available.
