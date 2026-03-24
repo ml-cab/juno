@@ -90,6 +90,22 @@ find_java() {
 
 JAVA="$(find_java)"
 
+# ── CUDA runtime on PATH (GPU mode) ─────────────────────────────────────────────
+# Matches run.bat: when using GPU, prepend CUDA toolkit bin so libcudart / jnicudart load.
+prepend_cuda_bin_to_path_if_gpu() {
+  local use_gpu="$1"
+  [[ "$use_gpu" == "true" ]] || return 0
+  local cuda_bin=""
+  if [[ -n "${CUDA_PATH:-}" && -d "${CUDA_PATH}/bin" ]]; then
+    cuda_bin="${CUDA_PATH}/bin"
+  elif [[ -n "${CUDA_HOME:-}" && -d "${CUDA_HOME}/bin" ]]; then
+    cuda_bin="${CUDA_HOME}/bin"
+  fi
+  if [[ -n "$cuda_bin" ]]; then
+    export PATH="${cuda_bin}:${PATH}"
+  fi
+}
+
 # ── Java version check ────────────────────────────────────────────────────────
 check_java_version() {
   local ver
@@ -131,6 +147,13 @@ cmd_cluster() {
   local top_p="${TOP_P:-0.95}"
   local heap="${HEAP:-4g}"
   local verbose="false"
+  local use_gpu="true"
+  if [[ -n "${USE_GPU:-}" ]]; then
+    case "${USE_GPU}" in
+      false|0|no|NO) use_gpu="false" ;;
+      *)             use_gpu="true"  ;;
+    esac
+  fi
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -144,6 +167,8 @@ cmd_cluster() {
       --float16 | --fp16) dtype="FLOAT16";  shift   ;;
       --float32)          dtype="FLOAT32";  shift   ;;
       --int8)             dtype="INT8";     shift   ;;
+      --gpu)              use_gpu="true";   shift   ;;
+      --cpu)              use_gpu="false";  shift   ;;
       --verbose | -v)     verbose="true";   shift   ;;
       --help)
         echo ""
@@ -173,11 +198,21 @@ cmd_cluster() {
         echo "  JVM:"
         echo "    --heap SIZE                JVM heap  e.g. 4g 8g 16g  (default 4g)"
         echo ""
+        echo "  Backend:"
+        echo "    --gpu                      use GPU when available (default)"
+        echo "    --cpu                      use CPU only"
+        echo ""
         echo "  Logging:"
         echo "    --verbose / -v             show gRPC and node logs"
         echo ""
         exit 0 ;;
-      *) err "Unknown cluster flag: $1.  Run: $0 cluster --help" ;;
+      *)
+        if [[ -z "$model" && -f "$1" ]]; then
+          model="$1"; shift
+        else
+          err "Unknown cluster flag: $1.  Run: $0 cluster --help"
+        fi
+        ;;
     esac
   done
 
@@ -195,6 +230,10 @@ cmd_cluster() {
   local verbose_flag=""
   [[ "$verbose" == "true" ]] && verbose_flag="--verbose"
 
+  local gpu_flag="--gpu"
+  [[ "$use_gpu" == "false" ]] && gpu_flag="--cpu"
+  prepend_cuda_bin_to_path_if_gpu "$use_gpu"
+
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
@@ -206,6 +245,7 @@ cmd_cluster() {
     --temperature "$temperature" \
     --top-k "$top_k" \
     --top-p "$top_p" \
+    "$gpu_flag" \
     ${verbose_flag}
 }
 
@@ -223,6 +263,13 @@ cmd_local() {
   local top_p="${TOP_P:-0.95}"
   local nodes="${NODES:-3}"
   local verbose="false"
+  local use_gpu="true"
+  if [[ -n "${USE_GPU:-}" ]]; then
+    case "${USE_GPU}" in
+      false|0|no|NO) use_gpu="false" ;;
+      *)             use_gpu="true"  ;;
+    esac
+  fi
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -237,6 +284,8 @@ cmd_local() {
       --float16 | --fp16) dtype="FLOAT16";  shift   ;;
       --float32)          dtype="FLOAT32";  shift   ;;
       --int8)             dtype="INT8";     shift   ;;
+      --gpu)              use_gpu="true";   shift   ;;
+      --cpu)              use_gpu="false";  shift   ;;
       --verbose | -v)     verbose="true";   shift   ;;
       --help)
         echo ""
@@ -268,11 +317,21 @@ cmd_local() {
         echo "  JVM:"
         echo "    --heap SIZE                e.g. 4g 8g 16g               (default 4g)"
         echo ""
+        echo "  Backend:"
+        echo "    --gpu                      use GPU when available (default)"
+        echo "    --cpu                      use CPU only"
+        echo ""
         echo "  Logging:"
         echo "    --verbose / -v"
         echo ""
         exit 0 ;;
-      *) err "Unknown local flag: $1.  Run: $0 local --help" ;;
+      *)
+        if [[ -z "$model" && -f "$1" ]]; then
+          model="$1"; shift
+        else
+          err "Unknown local flag: $1.  Run: $0 local --help"
+        fi
+        ;;
     esac
   done
 
@@ -289,6 +348,10 @@ cmd_local() {
   local verbose_flag=""
   [[ "$verbose" == "true" ]] && verbose_flag="--verbose"
 
+  local gpu_flag="--gpu"
+  [[ "$use_gpu" == "false" ]] && gpu_flag="--cpu"
+  prepend_cuda_bin_to_path_if_gpu "$use_gpu"
+
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
@@ -302,6 +365,7 @@ cmd_local() {
     --top-p "$top_p" \
     --nodes "$nodes" \
     --local \
+    "$gpu_flag" \
     ${verbose_flag}
 }
 
@@ -383,9 +447,11 @@ usage() {
   echo    "  $0 cluster --help                  all cluster flags  (cluster keyword still works)"
   echo ""
   echo -e "  ${GREEN}$0 local${NC} --model-path PATH      in-process REPL  (single JVM, fast startup)"
+  echo    "  $0 console ...                     same as local (alias for Windows run.bat)"
   echo    "  $0 local --help                    all local flags"
   echo ""
   echo -e "  ${GREEN}$0 test${NC} --model-path PATH       6 real-model smoke checks, exits 0/1"
+  echo    "  $0 live ...                        same as test (alias for Windows run.bat)"
   echo    "  $0 test /path/to/model.gguf        model as positional arg"
   echo    "  $0 test --help                     all test flags"
   echo ""
@@ -401,11 +467,15 @@ usage() {
   echo "    --heap SIZE                    JVM heap e.g. 4g 8g      (default 4g)"
   echo "    --verbose / -v                 show gRPC / node logs"
   echo ""
+  echo "  Backend (cluster and local):"
+  echo "    --gpu                          use GPU when available (default)"
+  echo "    --cpu                          use CPU only"
+  echo ""
   echo "  local only:"
   echo "    --nodes N                      in-process shard count   (default 3)"
   echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
-  echo "    MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES"
+  echo "    MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES  USE_GPU"
   echo ""
   echo "  Examples:"
   echo "    MODEL_PATH=/models/tiny.gguf $0               # default = cluster"
@@ -425,8 +495,8 @@ CMD="${1:-}"
 shift || true
 
 case "$CMD" in
-  local)   cmd_local   "$@" ;;
-  test)    cmd_test    "$@" ;;
-  cluster) cmd_cluster "$@" ;;
-  *)       cmd_cluster ${CMD:+"$CMD"} "$@" ;;
+  local|console) cmd_local   "$@" ;;
+  test|live)     cmd_test    "$@" ;;
+  cluster)       cmd_cluster "$@" ;;
+  *)             cmd_cluster ${CMD:+"$CMD"} "$@" ;;
 esac

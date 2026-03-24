@@ -32,7 +32,9 @@ set "CMD=%~1"
 shift
 
 if /i "%CMD%"=="local"   goto :local
+if /i "%CMD%"=="console" goto :local
 if /i "%CMD%"=="test"    goto :test
+if /i "%CMD%"=="live"    goto :test
 if /i "%CMD%"=="cluster" goto :cluster
 if /i "%CMD%"=="--model-path" goto :cluster_default_path
 if exist "%CMD%" goto :cluster_default_file
@@ -768,7 +770,9 @@ set "CMD=%~1"
 shift
 
 if /i "%CMD%"=="local"   goto :local
+if /i "%CMD%"=="console" goto :local
 if /i "%CMD%"=="test"    goto :test
+if /i "%CMD%"=="live"    goto :test
 if /i "%CMD%"=="cluster" goto :cluster
 
 goto :usage

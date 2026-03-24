@@ -73,6 +73,48 @@ mvn clean package -DskipTests
 
 ---
 
+## Runtime Flags (`scripts/run.sh`)
+
+`scripts/run.sh` supports `cluster` (default), `local`, and `test` modes. Aliases match `run.bat`: `console` is the same as `local`; `live` is the same as `test`.
+
+### Common flags (`cluster` and `local`)
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--model-path PATH` | Path to GGUF model file (required unless `MODEL_PATH` is set). | — |
+| `--dtype FLOAT32\|FLOAT16\|INT8` | Activation wire format between shards. | `FLOAT16` |
+| `--float16`, `--fp16` | Shorthand for `--dtype FLOAT16`. | — |
+| `--float32` | Shorthand for `--dtype FLOAT32` (reference/debug runs). | — |
+| `--int8` | Shorthand for `--dtype INT8` (max compression). | — |
+| `--max-tokens N` | Maximum generated tokens per response. | `200` |
+| `--temperature F` | Sampling temperature. | `0.6` |
+| `--top-k N` | Top-K sampling cutoff (`0` disables). | `20` |
+| `--top-p F` | Nucleus sampling top-p (`0` disables). | `0.95` |
+| `--heap SIZE` | JVM heap size (for example `4g`, `8g`, `16g`). | `4g` |
+| `--gpu` | Prefer GPU matmul when CUDA is available (passed to `player.jar`). | on |
+| `--cpu` | Force CPU matmul. | — |
+| `--verbose`, `-v` | Enable verbose startup/runtime logs. | off |
+
+### Mode-specific flags
+
+| Mode | Flag | Description | Default |
+|------|------|-------------|---------|
+| `local` | `--nodes N` | Number of in-process shards. | `3` |
+| `test` | `--model-path PATH` | GGUF model path for `ModelLiveRunner` smoke tests. | — |
+| `test` | `--heap SIZE` | JVM heap for smoke tests. | `4g` |
+
+For full mode help:
+
+```bash
+scripts/run.sh cluster --help
+scripts/run.sh local --help
+scripts/run.sh test --help
+```
+
+Environment variable overrides (equivalent to flag counterparts): `MODEL_PATH`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `USE_GPU` (`true`/`false`). With `--gpu`, the launcher prepends `$CUDA_PATH/bin` or `$CUDA_HOME/bin` to `PATH` when set, so the CUDA runtime can be found (same idea as `run.bat` on Windows).
+
+---
+
 ## Modules
 
 | Module | Contents |

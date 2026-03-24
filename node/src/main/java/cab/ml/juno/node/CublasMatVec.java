@@ -78,6 +78,10 @@ public final class CublasMatVec implements GpuMatVec {
         PointerPointer pX = new PointerPointer(1);
         PointerPointer pY = new PointerPointer(1);
         try {
+            // CUDA device selection is thread-local; bind on every call.
+            int setDeviceRc = cudart.cudaSetDevice(ctx.deviceIndex());
+            checkCuda(setDeviceRc, "cudaSetDevice");
+
             int rA = cudart.cudaMalloc(pA, bytesA);
             int rX = cudart.cudaMalloc(pX, bytesX);
             int rY = cudart.cudaMalloc(pY, bytesY);
@@ -93,8 +97,8 @@ public final class CublasMatVec implements GpuMatVec {
             Pointer d_y = pY.get(0);
 
             try (FloatPointer hA = new FloatPointer(A); FloatPointer hX = new FloatPointer(x)) {
-                cudart.cudaMemcpy(d_A, hA, bytesA, H2D);
-                cudart.cudaMemcpy(d_x, hX, bytesX, H2D);
+                checkCuda(cudart.cudaMemcpy(d_A, hA, bytesA, H2D), "cudaMemcpy(A H2D)");
+                checkCuda(cudart.cudaMemcpy(d_x, hX, bytesX, H2D), "cudaMemcpy(x H2D)");
             }
 
             try (
@@ -104,6 +108,11 @@ public final class CublasMatVec implements GpuMatVec {
                 FloatPointer d_x_f = new FloatPointer(d_x);
                 FloatPointer d_y_f = new FloatPointer(d_y);
             ) {
+                int pointerModeRc = cublas.cublasSetPointerMode_v2(
+                    ctx.handle(), cublas.CUBLAS_POINTER_MODE_HOST);
+                if (pointerModeRc != 0)
+                    throw new IllegalStateException("cublasSetPointerMode failed: " + pointerModeRc);
+
                 int rc = cublas.cublasSgemv_v2(ctx.handle(), CUBLAS_OP_T,
                     cols, rows,
                     alpha, d_A_f, cols,
@@ -114,7 +123,9 @@ public final class CublasMatVec implements GpuMatVec {
             }
 
             try (FloatPointer hy = new FloatPointer(y)) {
-                cudart.cudaMemcpy(hy, d_y, bytesY, D2H);
+                checkCuda(cudart.cudaMemcpy(hy, d_y, bytesY, D2H), "cudaMemcpy(y D2H)");
+                // FloatPointer(y) is native memory initialized from y[]; copy back to heap array.
+                hy.get(y);
             }
 
             return y;
@@ -126,5 +137,9 @@ public final class CublasMatVec implements GpuMatVec {
             pX.close();
             pY.close();
         }
+    }
+
+    private static void checkCuda(int rc, String op) {
+        if (rc != 0) throw new IllegalStateException(op + " failed: " + rc);
     }
 }

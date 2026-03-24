@@ -7,6 +7,8 @@
 #   Windows (native cmd / Cygwin)   →  scripts/run.bat
 #
 # All flags and commands are forwarded as-is to the underlying script.
+# On Unix, scripts/run.sh accepts the same cluster/local/test flags as scripts/run.bat
+# (plus aliases: console = local, live = test).
 # Run with --help for full usage.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
