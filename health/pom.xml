@@ -13,7 +13,7 @@
 
     <artifactId>health</artifactId>
     <name>health</name>
-    <description>Health Monitor — Hazelcast membership events, JCuda GPU probes, Resilience4j circuit breakers, Micrometer metrics</description>
+    <description>Health Monitor — Hazelcast membership events, GPU probes (via node), Resilience4j circuit breakers, Micrometer metrics</description>
 
     <dependencies>
         <dependency>
@@ -23,10 +23,6 @@
         <dependency>
             <groupId>com.hazelcast</groupId>
             <artifactId>hazelcast</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.jcuda</groupId>
-            <artifactId>jcuda</artifactId>
         </dependency>
         <dependency>
             <groupId>io.github.resilience4j</groupId>

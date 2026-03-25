@@ -90,6 +90,22 @@ find_java() {
 
 JAVA="$(find_java)"
 
+# ── CUDA runtime on PATH (GPU mode) ─────────────────────────────────────────────
+# When using GPU, prepend CUDA toolkit bin so libcudart / jnicudart load.
+prepend_cuda_bin_to_path_if_gpu() {
+  local use_gpu="$1"
+  [[ "$use_gpu" == "true" ]] || return 0
+  local cuda_bin=""
+  if [[ -n "${CUDA_PATH:-}" && -d "${CUDA_PATH}/bin" ]]; then
+    cuda_bin="${CUDA_PATH}/bin"
+  elif [[ -n "${CUDA_HOME:-}" && -d "${CUDA_HOME}/bin" ]]; then
+    cuda_bin="${CUDA_HOME}/bin"
+  fi
+  if [[ -n "$cuda_bin" ]]; then
+    export PATH="${cuda_bin}:${PATH}"
+  fi
+}
+
 # ── Java version check ────────────────────────────────────────────────────────
 check_java_version() {
   local ver
@@ -133,6 +149,13 @@ cmd_cluster() {
   local verbose="false"
   local ptype="pipeline"
   local jfr_duration=""
+  local use_gpu="true"
+  if [[ -n "${USE_GPU:-}" ]]; then
+    case "${USE_GPU}" in
+      false|0|no|NO) use_gpu="false" ;;
+      *)             use_gpu="true"  ;;
+    esac
+  fi
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -148,6 +171,8 @@ cmd_cluster() {
       --float16 | --fp16) dtype="FLOAT16";   shift   ;;
       --float32)          dtype="FLOAT32";   shift   ;;
       --int8)             dtype="INT8";      shift   ;;
+      --gpu)              use_gpu="true";    shift   ;;
+      --cpu)              use_gpu="false";   shift   ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -180,6 +205,10 @@ cmd_cluster() {
         echo "    --top-k N                  top-K sampling cutoff     (default 20, 0=disabled)"
         echo "    --top-p F                  top-p nucleus sampling    (default 0.95, 0=disabled)"
         echo ""
+        echo "  Backend:"
+        echo "    --gpu                      use GPU when available (default)"
+        echo "    --cpu                      use CPU only"
+        echo ""
         echo "  JVM:"
         echo "    --heap SIZE                JVM heap  e.g. 4g 8g 16g  (default 4g)"
         echo "    --jfr DURATION             Enable Java Flight Recording for DURATION"
@@ -190,7 +219,7 @@ cmd_cluster() {
         echo "    --verbose / -v             show gRPC and node logs"
         echo ""
         echo "  Environment overrides:"
-        echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP"
+        echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
         echo ""
         echo "  Examples:"
         echo "    $0 cluster --model-path /models/tiny.gguf"
@@ -209,13 +238,17 @@ cmd_cluster() {
   require_jar "$PLAYER_JAR" "player"
   check_java_version
 
-  warn "Starting 3-node cluster  (pType=${ptype}  dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  os=${OS})"
+  warn "Starting 3-node cluster  (pType=${ptype}  dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   warn "Ctrl-C to stop all nodes and exit"
   echo ""
 
   local verbose_flag=""
   [[ "$verbose" == "true" ]] && verbose_flag="--verbose"
+
+  local gpu_flag="--gpu"
+  [[ "$use_gpu" == "false" ]] && gpu_flag="--cpu"
+  prepend_cuda_bin_to_path_if_gpu "$use_gpu"
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
@@ -238,6 +271,7 @@ cmd_cluster() {
     --top-k "$top_k" \
     --top-p "$top_p" \
     --pType "$ptype" \
+    "$gpu_flag" \
     ${verbose_flag}
 }
 
@@ -255,13 +289,18 @@ cmd_local() {
   local top_p="${TOP_P:-0.95}"
   local nodes="${NODES:-3}"
   local verbose="false"
-  local ptype="pipeline"
   local jfr_duration=""
+  local use_gpu="true"
+  if [[ -n "${USE_GPU:-}" ]]; then
+    case "${USE_GPU}" in
+      false|0|no|NO) use_gpu="false" ;;
+      *)             use_gpu="true"  ;;
+    esac
+  fi
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --model-path)       model="$2";        shift 2 ;;
-      --pType | --ptype)  ptype="$2";        shift 2 ;;
       --dtype)            dtype="$2";        shift 2 ;;
       --max-tokens)       max_tokens="$2";   shift 2 ;;
       --temperature)      temperature="$2";  shift 2 ;;
@@ -273,6 +312,8 @@ cmd_local() {
       --float16 | --fp16) dtype="FLOAT16";   shift   ;;
       --float32)          dtype="FLOAT32";   shift   ;;
       --int8)             dtype="INT8";      shift   ;;
+      --gpu)              use_gpu="true";    shift   ;;
+      --cpu)              use_gpu="false";   shift   ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -301,6 +342,10 @@ cmd_local() {
         echo "  Pipeline:"
         echo "    --nodes N                  number of in-process shards  (default 3)"
         echo ""
+        echo "  Backend:"
+        echo "    --gpu                      use GPU when available (default)"
+        echo "    --cpu                      use CPU only"
+        echo ""
         echo "  JVM:"
         echo "    --heap SIZE                e.g. 4g 8g 16g               (default 4g)"
         echo "    --jfr DURATION             Enable Java Flight Recording for DURATION"
@@ -320,12 +365,16 @@ cmd_local() {
   require_jar "$PLAYER_JAR" "player"
   check_java_version
 
-  info "Starting local in-process REPL  (dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  os=${OS})"
+  info "Starting local in-process REPL  (dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   echo ""
 
   local verbose_flag=""
   [[ "$verbose" == "true" ]] && verbose_flag="--verbose"
+
+  local gpu_flag="--gpu"
+  [[ "$use_gpu" == "false" ]] && gpu_flag="--cpu"
+  prepend_cuda_bin_to_path_if_gpu "$use_gpu"
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
@@ -348,6 +397,7 @@ cmd_local() {
     --top-p "$top_p" \
     --nodes "$nodes" \
     --local \
+    "$gpu_flag" \
     ${verbose_flag}
 }
 
@@ -372,6 +422,13 @@ cmd_lora() {
   local heap="${HEAP:-4g}"
   local verbose="false"
   local jfr_duration=""
+  local use_gpu="true"
+  if [[ -n "${USE_GPU:-}" ]]; then
+    case "${USE_GPU}" in
+      false|0|no|NO) use_gpu="false" ;;
+      *)             use_gpu="true"  ;;
+    esac
+  fi
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -391,6 +448,8 @@ cmd_lora() {
       # --pType is accepted but ignored: lora always runs single in-process node
       --pType | --ptype) shift 2 ;;
       --jfr)          jfr_duration="$2"; shift 2 ;;
+      --gpu)          use_gpu="true";    shift   ;;
+      --cpu)          use_gpu="false";   shift   ;;
       --verbose | -v) verbose="true";   shift   ;;
       --help)
         echo ""
@@ -420,6 +479,10 @@ cmd_lora() {
         echo "    --top-k N               (default 20)"
         echo "    --top-p F               (default 0.95)"
         echo ""
+        echo "  Backend:"
+        echo "    --gpu                   use GPU when available (default)"
+        echo "    --cpu                   use CPU only"
+        echo ""
         echo "  JVM:"
         echo "    --heap SIZE             e.g. 4g 8g 16g  (default 4g)"
         echo "                            LoRA loads the full model in one JVM."
@@ -445,7 +508,7 @@ cmd_lora() {
         echo ""
         echo "  Environment overrides:"
         echo "    MODEL_PATH  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS"
-        echo "    MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP"
+        echo "    MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
         echo ""
         echo "  Examples:"
         echo "    $0 lora --model-path /models/tinyllama.gguf"
@@ -467,13 +530,17 @@ cmd_lora() {
   # Default alpha = rank when not explicitly set
   [[ -n "$lora_alpha" ]] || lora_alpha="$lora_rank"
 
-  info "Starting LoRA fine-tuning REPL  (rank=${lora_rank}  alpha=${lora_alpha}  lr=${lora_lr}  steps=${lora_steps}  heap=${heap}  os=${OS})"
+  info "Starting LoRA fine-tuning REPL  (rank=${lora_rank}  alpha=${lora_alpha}  lr=${lora_lr}  steps=${lora_steps}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
   [[ -n "$lora_path" ]] && info "Adapter file: ${lora_path}"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   echo ""
 
   local verbose_flag=""
   [[ "$verbose" == "true" ]] && verbose_flag="--verbose"
+
+  local gpu_flag="--gpu"
+  [[ "$use_gpu" == "false" ]] && gpu_flag="--cpu"
+  prepend_cuda_bin_to_path_if_gpu "$use_gpu"
 
   local lora_path_flag=""
   [[ -n "$lora_path" ]] && lora_path_flag="--lora-path $lora_path"
@@ -504,12 +571,13 @@ cmd_lora() {
     --temperature "$temperature" \
     --top-k "$top_k" \
     --top-p "$top_p" \
+    "$gpu_flag" \
     ${lora_path_flag} \
     ${verbose_flag}
 }
 
 # ---------------------------------------------------------------------------
-# live — ModelLiveRunner: 6 real-model smoke checks, exits 0/1
+# live — ModelLiveRunner: 8 real-model smoke checks, exits 0/1
 #        Use this as a quick regression check after any code change.
 # ---------------------------------------------------------------------------
 cmd_test() {
@@ -620,7 +688,7 @@ usage() {
   echo    "  $0 test --pType tensor             tensor-parallel checks only"
   echo    "  $0 test --help                     all test flags"
   echo ""
-  echo "  Flags common to default (cluster) and local:"
+  echo "  Flags common to default (cluster), local, and lora:"
   echo "    --pType pipeline|tensor        parallelism type         (default pipeline)"
   echo "    --dtype FLOAT32|FLOAT16|INT8   activation wire format   (default FLOAT16)"
   echo "    --float16 / --fp16             shorthand"
@@ -632,6 +700,8 @@ usage() {
   echo "    --top-p F                      top-p nucleus sampling    (default 0.95, 0=disabled)"
   echo "    --heap SIZE                    JVM heap e.g. 4g 8g      (default 4g)"
   echo "    --jfr DURATION                 Java Flight Recording     e.g. 5m 30s 1h"
+  echo "    --gpu                          use GPU when available (default)"
+  echo "    --cpu                          use CPU only"
   echo "    --verbose / -v                 show gRPC / node logs"
   echo ""
   echo "  local only:"
@@ -645,7 +715,7 @@ usage() {
   echo "    --lora-steps N                 gradient steps/train cmd (default 50)"
   echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
-  echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES"
+  echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES  USE_GPU"
   echo "    LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS"
   echo ""
   echo "  Examples:"

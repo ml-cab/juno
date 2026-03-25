@@ -22,14 +22,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * GPU-tier KV cache backed by JCuda CudaBuffer allocations.
+ * GPU-tier KV cache backed by Cuda CudaBuffer allocations.
  *
  * In production: each KVBlock's data array is a pointer into a pre-allocated
  * VRAM slab. Blocks are managed via a custom LRU within the slab.
  *
  * Current implementation: stores references in a ConcurrentHashMap index (the
  * actual CUDA buffer management is wired in by the node module which has the
- * JCuda dependency). This module stays free of the JCuda dep so it can compile
+ * Cuda dependency). This module stays free of the Cuda dep so it can compile
  * and test without a GPU present.
  *
  * The node module subclasses or wraps this with real CUDA buffer calls. See:

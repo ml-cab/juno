@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * size. Last node: returns logits with all probability mass on a configurable
  * winner token.
  *
- * No GPU, no model weights, no JCuda. Compiles and runs anywhere.
+ * No GPU, no model weights, no Cuda. Compiles and runs anywhere.
  */
 public final class CyclicForwardPassHandler implements ForwardPassHandler {
 

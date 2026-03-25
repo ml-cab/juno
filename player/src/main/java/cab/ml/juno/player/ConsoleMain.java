@@ -35,9 +35,12 @@ import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.ActivationDtype;
+import cab.ml.juno.node.CudaAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
+import cab.ml.juno.node.GpuContext;
+import cab.ml.juno.node.GpuForwardPassHandler;
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
 import cab.ml.juno.node.LoraAdamOptimizer;
@@ -58,30 +61,25 @@ import cab.ml.juno.tokenizer.Tokenizer;
 /**
  * Interactive REPL that runs a model using the Juno engine.
  *
- * Can operate in three modes:
- *   - cluster mode (default): forks 3 node JVMs (as before)
- *   - local mode (--local): runs all nodes in-process, no child JVMs
- *   - lora mode (--lora): runs a single in-process node with LoRA fine-tuning
+ * Can operate in three modes: - cluster mode (default): forks 3 node JVMs (as
+ * before) - local mode (--local): runs all nodes in-process, no child JVMs -
+ * lora mode (--lora): runs a single in-process node with LoRA fine-tuning
  *
  * LoRA persistence: adapters are saved to a separate .lora file, NOT packed
- * into the GGUF. This keeps the base model untouched and lets you swap
- * adapters freely. Use /merge-hint in the REPL to see how to bake weights in.
+ * into the GGUF. This keeps the base model untouched and lets you swap adapters
+ * freely. Use /merge-hint in the REPL to see how to bake weights in.
  *
- * Command-line arguments:
- * --model-path PATH        Path to GGUF file (required)
- * --dtype FLOAT32|FLOAT16  Activation wire format (default: FLOAT16)
- * --max-tokens N           Max generated tokens (default: 200)
- * --temperature F          Sampling temperature (default: 0.7)
- * --local                  Use in-process nodes instead of forking
- * --nodes N                Number of in-process nodes (default: 3)
- * --lora                   Enable LoRA fine-tuning mode (forces --local --nodes 1)
- * --lora-path PATH         .lora checkpoint file (default: <model>.lora)
- * --lora-rank N            LoRA rank (default: 8)
- * --lora-alpha F           LoRA alpha scaling (default: same as rank)
- * --lora-lr F              Adam learning rate for LoRA (default: 1e-4)
- * --lora-steps N           Gradient steps per /train command (default: 50)
- * --verbose                Show more logging
- * --help                   Show this help
+ * Command-line arguments: --model-path PATH Path to GGUF file (required) --cpu
+ * Force computation on CPU --dtype FLOAT32|FLOAT16 Activation wire format
+ * (default: FLOAT16) --max-tokens N Max generated tokens (default: 200)
+ * --temperature F Sampling temperature (default: 0.7) --local Use in-process
+ * nodes instead of forking --nodes N Number of in-process nodes (default: 3)
+ * --lora Enable LoRA fine-tuning mode (forces --local --nodes 1) --lora-path
+ * PATH .lora checkpoint file (default: <model>.lora) --lora-rank N LoRA rank
+ * (default: 8) --lora-alpha F LoRA alpha scaling (default: same as rank)
+ * --lora-lr F Adam learning rate for LoRA (default: 1e-4) --lora-steps N
+ * Gradient steps per /train command (default: 50) --verbose Show more logging
+ * --help Show this help
  */
 public final class ConsoleMain {
 
@@ -112,16 +110,17 @@ public final class ConsoleMain {
 	private static boolean help = false;
 	private static ParallelismType pType = ParallelismType.PIPELINE;
 	private static String jfrDuration = null;
-
+	// ── GPU arguments ─────────────────────────────────────────────────────────
+	private static boolean useGpu = true; // use CPU
 	// ── LoRA arguments ────────────────────────────────────────────────────────
 	private static boolean loraMode = false;
-	private static String loraPath = null;         // auto-derived if null
+	private static String loraPath = null; // auto-derived if null
 	private static int loraRank = 8;
-	private static float loraAlpha = -1f;          // sentinel: default to loraRank
+	private static float loraAlpha = -1f; // sentinel: default to loraRank
 	private static double loraLr = 1e-4;
-	private static int loraSteps = 50;             // steps per chunk for /train
-	private static int loraStepsQa = 10;           // steps per chunk for /train-qa
-	private static float loraEarlyStop = 0.25f;    // stop training when loss drops below this
+	private static int loraSteps = 50; // steps per chunk for /train
+	private static int loraStepsQa = 10; // steps per chunk for /train-qa
+	private static float loraEarlyStop = 0.25f; // stop training when loss drops below this
 
 	public static void main(String[] args) throws Exception {
 		AnsiSupport.enable();
@@ -145,18 +144,23 @@ public final class ConsoleMain {
 		if (loraMode) {
 			localMode = true;
 			nodeCount = 1;
-			if (loraAlpha < 0) loraAlpha = loraRank;
-			if (loraPath == null) loraPath = deriveLoraPath(modelPath);
+			if (loraAlpha < 0)
+				loraAlpha = loraRank;
+			if (loraPath == null)
+				loraPath = deriveLoraPath(modelPath);
 		}
 
+		System.setProperty("JUNO_USE_GPU", String.valueOf(useGpu));
 		System.setProperty("MODEL_PATH", modelPath);
 		System.setProperty("DTYPE", dtype.name());
 		System.setProperty("MAX_TOKENS", String.valueOf(maxTokens));
 		System.setProperty("TEMPERATURE", String.valueOf(temperature));
 		System.setProperty("TOP_K", String.valueOf(topK));
 		System.setProperty("TOP_P", String.valueOf(topP));
-		if (verbose) System.setProperty("JUNO_VERBOSE", "true");
-		if (jfrDuration != null) System.setProperty("juno.jfr.duration", jfrDuration);
+		if (verbose)
+			System.setProperty("JUNO_VERBOSE", "true");
+		if (jfrDuration != null)
+			System.setProperty("juno.jfr.duration", jfrDuration);
 
 		banner();
 
@@ -173,63 +177,86 @@ public final class ConsoleMain {
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
 			case "--model-path":
-				if (i + 1 < args.length) modelPath = args[++i];
+				if (i + 1 < args.length)
+					modelPath = args[++i];
 				break;
 			case "--dtype":
-				if (i + 1 < args.length) dtype = parseDtype(args[++i]);
+				if (i + 1 < args.length)
+					dtype = parseDtype(args[++i]);
 				break;
 			case "--max-tokens":
-				if (i + 1 < args.length) maxTokens = parseInt(args[++i], 200);
+				if (i + 1 < args.length)
+					maxTokens = parseInt(args[++i], 200);
 				break;
 			case "--top-k":
-				if (i + 1 < args.length) topK = parseInt(args[++i], 20);
+				if (i + 1 < args.length)
+					topK = parseInt(args[++i], 20);
 				break;
 			case "--top-p":
-				if (i + 1 < args.length) topP = parseFloat(args[++i], 0.95f);
+				if (i + 1 < args.length)
+					topP = parseFloat(args[++i], 0.95f);
 				break;
 			case "--temperature":
-				if (i + 1 < args.length) temperature = parseFloat(args[++i], 0.6f);
+				if (i + 1 < args.length)
+					temperature = parseFloat(args[++i], 0.6f);
 				break;
 			case "--pType":
 			case "--ptype":
-				if (i + 1 < args.length) pType = parseParallelismType(args[++i]);
+				if (i + 1 < args.length)
+					pType = parseParallelismType(args[++i]);
 				break;
 			case "--heap":
-				if (i + 1 < args.length) i++;
+				if (i + 1 < args.length)
+					i++;
 				break;
 			case "--jfr":
-				if (i + 1 < args.length) jfrDuration = args[++i];
+				if (i + 1 < args.length)
+					jfrDuration = args[++i];
 				break;
 			case "--local":
 				localMode = true;
 				break;
 			case "--nodes":
-				if (i + 1 < args.length) nodeCount = parseInt(args[++i], 3);
+				if (i + 1 < args.length)
+					nodeCount = parseInt(args[++i], 3);
 				break;
-			// ── LoRA ──────────────────────────────────────────────────────────
+			// ── GPU ──────────────────────────────────────────────────────────
+			case "--gpu":
+				useGpu = true;
+				break;
+			case "--cpu":
+				useGpu = false;
+				// ── LoRA ──────────────────────────────────────────────────────────
 			case "--lora":
 				loraMode = true;
 				break;
 			case "--lora-path":
-				if (i + 1 < args.length) loraPath = args[++i];
+				if (i + 1 < args.length)
+					loraPath = args[++i];
 				break;
 			case "--lora-rank":
-				if (i + 1 < args.length) loraRank = parseInt(args[++i], 8);
+				if (i + 1 < args.length)
+					loraRank = parseInt(args[++i], 8);
 				break;
 			case "--lora-alpha":
-				if (i + 1 < args.length) loraAlpha = parseFloat(args[++i], -1f);
+				if (i + 1 < args.length)
+					loraAlpha = parseFloat(args[++i], -1f);
 				break;
 			case "--lora-lr":
-				if (i + 1 < args.length) loraLr = parseDouble(args[++i], 1e-4);
+				if (i + 1 < args.length)
+					loraLr = parseDouble(args[++i], 1e-4);
 				break;
 			case "--lora-steps":
-				if (i + 1 < args.length) loraSteps = parseInt(args[++i], 50);
+				if (i + 1 < args.length)
+					loraSteps = parseInt(args[++i], 50);
 				break;
 			case "--lora-steps-qa":
-				if (i + 1 < args.length) loraStepsQa = parseInt(args[++i], 10);
+				if (i + 1 < args.length)
+					loraStepsQa = parseInt(args[++i], 10);
 				break;
 			case "--lora-early-stop":
-				if (i + 1 < args.length) loraEarlyStop = parseFloat(args[++i], 0.25f);
+				if (i + 1 < args.length)
+					loraEarlyStop = parseFloat(args[++i], 0.25f);
 				break;
 			// ─────────────────────────────────────────────────────────────────
 			case "--verbose":
@@ -256,6 +283,8 @@ public final class ConsoleMain {
 		System.out.println("  --model-path PATH          Path to GGUF model file");
 		System.out.println();
 		System.out.println("Inference options:");
+		System.out.println("  --gpu                      Use GPU (default, no need to set)");
+		System.out.println("  --cpu                      Force to use CPU");
 		System.out.println("  --pType pipeline|tensor    Parallelism type (default: pipeline)");
 		System.out.println("  --dtype FLOAT32|FLOAT16    Activation wire format (default: FLOAT16)");
 		System.out.println("  --max-tokens N             Max generated tokens (default: 200)");
@@ -300,8 +329,8 @@ public final class ConsoleMain {
 	 * LoRA fine-tuning REPL. Runs a single in-process LoraTrainableHandler that
 	 * serves both inference (with LoRA delta) and training (/train commands).
 	 *
-	 * Adapters are persisted in a separate .lora file alongside the model.
-	 * The base GGUF is never modified.
+	 * Adapters are persisted in a separate .lora file alongside the model. The base
+	 * GGUF is never modified.
 	 */
 	private static void runLoraRepl() throws Exception {
 		print(Color.DIM + "  Adapter file: " + loraPath + Color.RESET);
@@ -318,39 +347,35 @@ public final class ConsoleMain {
 		Path adapterFile = Path.of(loraPath);
 		if (Files.exists(adapterFile)) {
 			adapters = LoraAdapterSet.load(adapterFile);
-			print(Color.GREEN + "  ✔ Loaded checkpoint: " + adapters.size()
-					+ " adapters from " + loraPath + Color.RESET);
+			print(Color.GREEN + "  ✔ Loaded checkpoint: " + adapters.size() + " adapters from " + loraPath
+					+ Color.RESET);
 		} else {
 			adapters = LoraAdapterSet.qv(config, loraRank, loraAlpha, new Random(42));
-			print(Color.YELLOW + "  ✦ New adapters initialised (" + adapters.size()
-					+ " total · /save to persist)" + Color.RESET);
+			print(Color.YELLOW + "  ✦ New adapters initialised (" + adapters.size() + " total · /save to persist)"
+					+ Color.RESET);
 		}
 
 		// Single-node ShardContext covering the full model
-		ShardAssignment assignment = new ShardAssignment(
-				"lora-node", "localhost", 0,
-				0, config.numLayers(), true, true);
-		ShardMap shardMap = new ShardMap("model", config.numLayers(),
-				List.of(assignment), Instant.now());
-		ShardContext ctx = ShardContext.from(assignment,
-				config.vocabSize(), config.hiddenDim(), config.numHeads());
+		ShardAssignment assignment = new ShardAssignment("lora-node", "localhost", 0, 0, config.numLayers(), true,
+				true);
+		ShardMap shardMap = new ShardMap("model", config.numLayers(), List.of(assignment), Instant.now());
+		ShardContext ctx = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 
 		print(Color.DIM + "  Loading model weights…" + Color.RESET);
 		LoraTrainableHandler handler = LoraTrainableHandler.load(Path.of(modelPath), ctx, adapters);
 		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET + "\n");
 
 		// Wrap in LocalInferencePipeline for standard inference path
-		var pipeline = LocalInferencePipeline.from(shardMap, List.of(handler),
-				config.vocabSize(), config.hiddenDim(), config.numHeads());
+		var pipeline = LocalInferencePipeline.from(shardMap, List.of(handler), config.vocabSize(), config.hiddenDim(),
+				config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop    = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
 
 		LoraAdamOptimizer optimizer = LoraAdamOptimizer.defaults(loraLr);
-		int[] totalStepsTrained = {0};
-		boolean[] dirty = {false};  // unsaved changes?
+		int[] totalStepsTrained = { 0 };
+		boolean[] dirty = { false }; // unsaved changes?
 
-		SamplingParams params = SamplingParams.defaults()
-				.withMaxTokens(maxTokens).withTemperature(temperature)
+		SamplingParams params = SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(temperature)
 				.withTopK(topK).withTopP(topP);
 
 		ChatHistory history = new ChatHistory();
@@ -362,27 +387,27 @@ public final class ConsoleMain {
 		String line;
 
 		while (true) {
-			System.out.print(Color.CYAN_BOLD + "you" + Color.RESET
-					+ Color.YELLOW + (dirty[0] ? "*" : " ") + Color.RESET
+			System.out.print(Color.CYAN_BOLD + "you" + Color.RESET + Color.YELLOW + (dirty[0] ? "*" : " ") + Color.RESET
 					+ Color.CYAN_BOLD + "> " + Color.RESET);
 			System.out.flush();
 
 			line = stdin.readLine();
-			if (line == null) break;
+			if (line == null)
+				break;
 			line = line.strip();
-			if (line.isEmpty()) continue;
+			if (line.isEmpty())
+				continue;
 
 			// ── LoRA commands ──────────────────────────────────────────────
 			if (line.startsWith("/")) {
-				handleLoraCommand(line, adapters, optimizer, handler, tokenizer,
-						adapterFile, totalStepsTrained, dirty);
+				handleLoraCommand(line, adapters, optimizer, handler, tokenizer, adapterFile, totalStepsTrained, dirty);
 				continue;
 			}
 
 			if (line.equalsIgnoreCase("exit") || line.equalsIgnoreCase("quit")) {
 				if (dirty[0]) {
-					System.out.print(Color.YELLOW
-							+ "  Unsaved adapter changes. Save before exit? [y/N] " + Color.RESET);
+					System.out
+							.print(Color.YELLOW + "  Unsaved adapter changes. Save before exit? [y/N] " + Color.RESET);
 					System.out.flush();
 					String yn = stdin.readLine();
 					if (yn != null && yn.strip().equalsIgnoreCase("y")) {
@@ -395,8 +420,8 @@ public final class ConsoleMain {
 			// ── Regular inference ──────────────────────────────────────────
 			history.addUser(line);
 			String modelType = ChatModelType.fromPath(modelPath);
-			InferenceRequest request = InferenceRequest.ofSession(
-					history.sessionId(), modelType, history.getMessages(), params, RequestPriority.NORMAL);
+			InferenceRequest request = InferenceRequest.ofSession(history.sessionId(), modelType, history.getMessages(),
+					params, RequestPriority.NORMAL);
 
 			System.out.print(Color.GREEN_BOLD + "bot> " + Color.RESET);
 			System.out.flush();
@@ -408,8 +433,8 @@ public final class ConsoleMain {
 
 			long elapsed = System.currentTimeMillis() - start;
 			System.out.println();
-			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · LoRA rank=%d]"
-					+ Color.RESET + "%n", result.generatedTokens(), elapsed, loraRank);
+			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · LoRA rank=%d]" + Color.RESET + "%n",
+					result.generatedTokens(), elapsed, loraRank);
 			System.out.println();
 		}
 
@@ -418,10 +443,9 @@ public final class ConsoleMain {
 		System.exit(0);
 	}
 
-	private static void handleLoraCommand(String line,
-			LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
-			LoraTrainableHandler handler, Tokenizer tokenizer,
-			Path adapterFile, int[] totalSteps, boolean[] dirty) throws Exception {
+	private static void handleLoraCommand(String line, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
+			LoraTrainableHandler handler, Tokenizer tokenizer, Path adapterFile, int[] totalSteps, boolean[] dirty)
+			throws Exception {
 
 		String[] parts = line.split("\\s+", 2);
 		String cmd = parts[0].toLowerCase();
@@ -446,7 +470,8 @@ public final class ConsoleMain {
 			}
 			String qaSrc = parts[1].trim();
 			// Strip optional leading "Q:" prefix
-			if (qaSrc.toLowerCase().startsWith("q:")) qaSrc = qaSrc.substring(2).trim();
+			if (qaSrc.toLowerCase().startsWith("q:"))
+				qaSrc = qaSrc.substring(2).trim();
 			int sepIdx = qaSrc.indexOf(" A: ");
 			if (sepIdx < 0) {
 				print(Color.RED + "  Could not find \" A: \" separator." + Color.RESET);
@@ -454,9 +479,9 @@ public final class ConsoleMain {
 				return;
 			}
 			String question = qaSrc.substring(0, sepIdx).trim();
-			String answer   = qaSrc.substring(sepIdx + 4).trim();
-			trainOnQA(question, answer, adapters, optimizer, handler, tokenizer,
-					  totalSteps, dirty, ChatModelType.fromPath(modelPath));
+			String answer = qaSrc.substring(sepIdx + 4).trim();
+			trainOnQA(question, answer, adapters, optimizer, handler, tokenizer, totalSteps, dirty,
+					ChatModelType.fromPath(modelPath));
 		}
 
 		case "/train-file" -> {
@@ -470,21 +495,20 @@ public final class ConsoleMain {
 				return;
 			}
 			String text = Files.readString(p);
-			print(Color.DIM + "  Loaded: " + p.getFileName()
-					+ "  (" + text.length() + " chars)" + Color.RESET);
+			print(Color.DIM + "  Loaded: " + p.getFileName() + "  (" + text.length() + " chars)" + Color.RESET);
 			trainOnText(text, adapters, optimizer, handler, tokenizer, totalSteps, dirty);
 		}
 
 		case "/save" -> saveAdapters(adapters, adapterFile, totalSteps[0]);
 
 		case "/reset" -> {
-			System.out.print(Color.YELLOW
-					+ "  Reset adapter weights? All training will be lost. [y/N] " + Color.RESET);
+			System.out.print(Color.YELLOW + "  Reset adapter weights? All training will be lost. [y/N] " + Color.RESET);
 			System.out.flush();
 			String yn = new BufferedReader(new InputStreamReader(System.in)).readLine();
 			if (yn != null && yn.strip().equalsIgnoreCase("y")) {
 				// Reinitialise B to zero and reset optimizer
-				for (var a : adapters.all()) java.util.Arrays.fill(a.b(), 0f);
+				for (var a : adapters.all())
+					java.util.Arrays.fill(a.b(), 0f);
 				optimizer.reset();
 				totalSteps[0] = 0;
 				dirty[0] = false;
@@ -493,8 +517,7 @@ public final class ConsoleMain {
 		}
 
 		case "/status" -> {
-			long adapterBytes = adapters.all().stream()
-					.mapToLong(a -> (a.a().length + a.b().length) * 4L).sum();
+			long adapterBytes = adapters.all().stream().mapToLong(a -> (a.a().length + a.b().length) * 4L).sum();
 			print("");
 			print(Color.CYAN_BOLD + "  LoRA status" + Color.RESET);
 			print("  ─────────────────────────────────");
@@ -538,33 +561,34 @@ public final class ConsoleMain {
 			print("  /merge-hint            Explain how to bake adapters into model weights");
 			print("  Regular input          Chat using the current adapter for inference");
 			print("");
-			print("  " + Color.YELLOW + "TIP:" + Color.RESET + " Use /train-qa for factual recall (names, dates, preferences).");
+			print("  " + Color.YELLOW + "TIP:" + Color.RESET
+					+ " Use /train-qa for factual recall (names, dates, preferences).");
 			print("       /train is for style/vocabulary adaptation.");
 			print("");
 		}
 
-		default -> print(Color.RED + "  Unknown command: " + cmd
-				+ "  (type /help for commands)" + Color.RESET);
+		default -> print(Color.RED + "  Unknown command: " + cmd + "  (type /help for commands)" + Color.RESET);
 		}
 	}
 
 	/**
 	 * Fine-tune on a question/answer pair using the model's own chat template.
 	 *
-	 * <p>This is the correct way to teach the model factual recall. The training
-	 * text is formatted with the same Zephyr/phi3/llama3/... template that the
-	 * model sees during inference, so the LoRA adapters learn the right token
+	 * <p>
+	 * This is the correct way to teach the model factual recall. The training text
+	 * is formatted with the same Zephyr/phi3/llama3/... template that the model
+	 * sees during inference, so the LoRA adapters learn the right token
 	 * distribution. Using {@code /train} with raw text produces no effect on
 	 * question-answering because the training context (plain sentence) doesn't
 	 * match the inference context (chat-templated question+answer).
 	 *
-	 * <p>Generates multiple phrasings of the question automatically to avoid
-	 * the model overfitting to a single exact wording.
+	 * <p>
+	 * Generates multiple phrasings of the question automatically to avoid the model
+	 * overfitting to a single exact wording.
 	 */
-	private static void trainOnQA(String question, String answer,
-			LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
-			LoraTrainableHandler handler, Tokenizer tokenizer,
-			int[] totalSteps, boolean[] dirty, String modelType) throws Exception {
+	private static void trainOnQA(String question, String answer, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
+			LoraTrainableHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty, String modelType)
+			throws Exception {
 
 		// Echo the parsed question and answer BEFORE training starts — catches typos.
 		// "mt" vs "my" won't be caught by the model; it must be caught by the human.
@@ -576,15 +600,11 @@ public final class ConsoleMain {
 
 		// Build several phrasings of the same Q&A so the model generalises.
 		// All variations must use the EXACT spelling of the key terms (name, etc.)
-		// because the BPE tokenization of "mt" ≠ "my" → different token IDs → no transfer.
+		// because the BPE tokenization of "mt" ≠ "my" → different token IDs → no
+		// transfer.
 		String q = question.endsWith("?") ? question : question + "?";
-		String qLow = q.substring(0, 1).toLowerCase() + q.substring(1);  // lower-case version
-		String[] questions = {
-			q,
-			qLow,
-			"Can you tell me: " + qLow,
-			"Please answer: " + qLow,
-		};
+		String qLow = q.substring(0, 1).toLowerCase() + q.substring(1); // lower-case version
+		String[] questions = { q, qLow, "Can you tell me: " + qLow, "Please answer: " + qLow, };
 
 		// Format each as a full chat exchange using the model's own template
 		// so training and inference see identical token sequences.
@@ -594,7 +614,8 @@ public final class ConsoleMain {
 		}
 		String trainingText = sb.toString();
 
-		print(Color.DIM + "  Formatted as " + questions.length + " Q&A pairs  ·  model type: " + modelType + Color.RESET);
+		print(Color.DIM + "  Formatted as " + questions.length + " Q&A pairs  ·  model type: " + modelType
+				+ Color.RESET);
 		print(Color.DIM + "  steps/chunk=" + loraStepsQa + "  early-stop=" + loraEarlyStop
 				+ "  (tune with --lora-steps-qa N  --lora-early-stop F)" + Color.RESET);
 
@@ -602,47 +623,38 @@ public final class ConsoleMain {
 	}
 
 	/**
-	 * Format a single question/answer pair using the chat template for {@code modelType}.
-	 * Mirrors the format applied by {@link cab.ml.juno.tokenizer.ChatTemplateFormatter}
-	 * so training and inference see identical token sequences.
+	 * Format a single question/answer pair using the chat template for
+	 * {@code modelType}. Mirrors the format applied by
+	 * {@link cab.ml.juno.tokenizer.ChatTemplateFormatter} so training and inference
+	 * see identical token sequences.
 	 */
 	private static String formatQA(String question, String answer, String modelType) {
 		return switch (modelType) {
-			case "tinyllama", "zephyr" ->
-				"<|user|>\n" + question + "</s>\n<|assistant|>\n" + answer + "</s>\n";
-			case "phi3", "phi-3" ->
-				"<|user|>\n" + question + "<|end|>\n<|assistant|>\n" + answer + "<|end|>\n";
-			case "llama3" ->
-				"<|start_header_id|>user<|end_header_id|>\n\n" + question
-				+ "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-				+ answer + "<|eot_id|>";
-			case "mistral" ->
-				"[INST] " + question + " [/INST] " + answer + "</s>";
-			case "gemma" ->
-				"<start_of_turn>user\n" + question + "<end_of_turn>\n"
-				+ "<start_of_turn>model\n" + answer + "<end_of_turn>\n";
-			default -> // chatml
-				"<|im_start|>user\n" + question + "<|im_end|>\n"
-				+ "<|im_start|>assistant\n" + answer + "<|im_end|>\n";
+		case "tinyllama", "zephyr" -> "<|user|>\n" + question + "</s>\n<|assistant|>\n" + answer + "</s>\n";
+		case "phi3", "phi-3" -> "<|user|>\n" + question + "<|end|>\n<|assistant|>\n" + answer + "<|end|>\n";
+		case "llama3" -> "<|start_header_id|>user<|end_header_id|>\n\n" + question
+				+ "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n" + answer + "<|eot_id|>";
+		case "mistral" -> "[INST] " + question + " [/INST] " + answer + "</s>";
+		case "gemma" -> "<start_of_turn>user\n" + question + "<end_of_turn>\n" + "<start_of_turn>model\n" + answer
+				+ "<end_of_turn>\n";
+		default -> // chatml
+			"<|im_start|>user\n" + question + "<|im_end|>\n" + "<|im_start|>assistant\n" + answer + "<|im_end|>\n";
 		};
 	}
 
 	/**
 	 * Tokenize {@code text}, split into chunks of ≤128 tokens, and run
-	 * {@link LoraTrainableHandler#trainStep} for {@code loraSteps} gradient
-	 * steps per chunk, printing a compact progress bar.
+	 * {@link LoraTrainableHandler#trainStep} for {@code loraSteps} gradient steps
+	 * per chunk, printing a compact progress bar.
 	 */
-	private static void trainOnText(String text,
-			LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
-			LoraTrainableHandler handler, Tokenizer tokenizer,
-			int[] totalSteps, boolean[] dirty) throws Exception {
+	private static void trainOnText(String text, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
+			LoraTrainableHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty) throws Exception {
 		trainOnText(text, adapters, optimizer, handler, tokenizer, totalSteps, dirty, loraSteps);
 	}
 
-	private static void trainOnText(String text,
-			LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
-			LoraTrainableHandler handler, Tokenizer tokenizer,
-			int[] totalSteps, boolean[] dirty, int stepsPerChunk) throws Exception {
+	private static void trainOnText(String text, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
+			LoraTrainableHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty, int stepsPerChunk)
+			throws Exception {
 
 		int[] allTokens = tokenizer.encode(text);
 		if (allTokens.length < 2) {
@@ -651,7 +663,7 @@ public final class ConsoleMain {
 		}
 
 		int[] withBos = new int[allTokens.length + 1];
-		withBos[0] = 1;  // BOS
+		withBos[0] = 1; // BOS
 		System.arraycopy(allTokens, 0, withBos, 1, allTokens.length);
 
 		// CHUNK=32 keeps T (prediction positions per step) small so steps complete
@@ -660,7 +672,8 @@ public final class ConsoleMain {
 		List<int[]> chunks = new ArrayList<>();
 		for (int start = 0; start < withBos.length - 1; start += CHUNK) {
 			int end = Math.min(start + CHUNK + 1, withBos.length);
-			if (end - start < 2) break;
+			if (end - start < 2)
+				break;
 			int[] chunk = new int[end - start];
 			System.arraycopy(withBos, start, chunk, 0, chunk.length);
 			chunks.add(chunk);
@@ -668,9 +681,8 @@ public final class ConsoleMain {
 
 		int totalGradSteps = chunks.size() * stepsPerChunk;
 		print("");
-		System.out.printf("  %sTraining%s  rank=%d · lr=%s · %d steps · %d chunk(s) · %d tokens%n",
-				Color.CYAN_BOLD, Color.RESET, loraRank, loraLr, totalGradSteps,
-				chunks.size(), withBos.length);
+		System.out.printf("  %sTraining%s  rank=%d · lr=%s · %d steps · %d chunk(s) · %d tokens%n", Color.CYAN_BOLD,
+				Color.RESET, loraRank, loraLr, totalGradSteps, chunks.size(), withBos.length);
 		print("  " + "─".repeat(62));
 
 		float firstLoss = Float.NaN, lastLoss = Float.NaN;
@@ -678,14 +690,14 @@ public final class ConsoleMain {
 		long trainStart = System.currentTimeMillis();
 		boolean stoppedEarly = false;
 
-		outer:
-		for (int[] chunk : chunks) {
+		outer: for (int[] chunk : chunks) {
 			for (int s = 0; s < stepsPerChunk; s++) {
 				long stepStart = System.currentTimeMillis();
 				float loss = handler.trainStep(chunk, optimizer);
 				long stepMs = System.currentTimeMillis() - stepStart;
 
-				if (Float.isNaN(firstLoss)) firstLoss = loss;
+				if (Float.isNaN(firstLoss))
+					firstLoss = loss;
 				lastLoss = loss;
 				stepsDone++;
 
@@ -694,14 +706,13 @@ public final class ConsoleMain {
 				if (loraEarlyStop > 0 && loss < loraEarlyStop) {
 					int pct = (int) (100.0 * stepsDone / totalGradSteps);
 					int bars = Math.min(20, pct / 5);
-					String bar = Color.GREEN + "▓".repeat(bars)
-							+ Color.DIM + "░".repeat(20 - bars) + Color.RESET;
-					System.out.printf("\r  step %3d/%-3d  loss=%.4f  %s %3d%%  %4dms/step  ETA %-8s",
-							stepsDone, totalGradSteps, loss, bar, pct, stepMs, "0s");
+					String bar = Color.GREEN + "▓".repeat(bars) + Color.DIM + "░".repeat(20 - bars) + Color.RESET;
+					System.out.printf("\r  step %3d/%-3d  loss=%.4f  %s %3d%%  %4dms/step  ETA %-8s", stepsDone,
+							totalGradSteps, loss, bar, pct, stepMs, "0s");
 					System.out.flush();
 					System.out.println();
-					System.out.printf("  %s⚠ Early stop%s  loss=%.4f < threshold=%.2f%n",
-							Color.YELLOW, Color.RESET, loss, loraEarlyStop);
+					System.out.printf("  %s⚠ Early stop%s  loss=%.4f < threshold=%.2f%n", Color.YELLOW, Color.RESET,
+							loss, loraEarlyStop);
 					stoppedEarly = true;
 					break outer;
 				}
@@ -709,8 +720,9 @@ public final class ConsoleMain {
 				// Overfitting warning: loss < 0.5 but early stop not triggered
 				// (user set loraEarlyStop=0 or threshold is very low)
 				if (loss < 0.5f && loraEarlyStop == 0) {
-					System.out.printf("\r  %s⚠ loss=%.4f — risk of overfitting. "
-							+ "Consider stopping soon or lowering --lora-steps-qa.%s%n",
+					System.out.printf(
+							"\r  %s⚠ loss=%.4f — risk of overfitting. "
+									+ "Consider stopping soon or lowering --lora-steps-qa.%s%n",
 							Color.YELLOW, loss, Color.RESET);
 				}
 
@@ -718,16 +730,14 @@ public final class ConsoleMain {
 				long elapsed = System.currentTimeMillis() - trainStart;
 				long msPerStep = elapsed / stepsDone;
 				long etaMs = msPerStep * (totalGradSteps - stepsDone);
-				String eta = etaMs > 60_000
-						? String.format("%dm%02ds", etaMs / 60_000, (etaMs % 60_000) / 1000)
+				String eta = etaMs > 60_000 ? String.format("%dm%02ds", etaMs / 60_000, (etaMs % 60_000) / 1000)
 						: String.format("%ds", etaMs / 1000);
 
-				int pct  = (int) (100.0 * stepsDone / totalGradSteps);
+				int pct = (int) (100.0 * stepsDone / totalGradSteps);
 				int bars = pct / 5;
-				String bar = Color.GREEN + "▓".repeat(bars)
-						+ Color.DIM + "░".repeat(20 - bars) + Color.RESET;
-				System.out.printf("\r  step %3d/%-3d  loss=%.4f  %s %3d%%  %4dms/step  ETA %-8s",
-						stepsDone, totalGradSteps, loss, bar, pct, stepMs, eta);
+				String bar = Color.GREEN + "▓".repeat(bars) + Color.DIM + "░".repeat(20 - bars) + Color.RESET;
+				System.out.printf("\r  step %3d/%-3d  loss=%.4f  %s %3d%%  %4dms/step  ETA %-8s", stepsDone,
+						totalGradSteps, loss, bar, pct, stepMs, eta);
 				System.out.flush();
 			}
 		}
@@ -735,20 +745,19 @@ public final class ConsoleMain {
 		System.out.println();
 		long totalMs = System.currentTimeMillis() - trainStart;
 		float delta = Float.isNaN(firstLoss) ? 0f : lastLoss - firstLoss;
-		String trend = delta < 0
-				? Color.GREEN + String.format("▼ %.4f (−%.4f)", lastLoss, -delta) + Color.RESET
+		String trend = delta < 0 ? Color.GREEN + String.format("▼ %.4f (−%.4f)", lastLoss, -delta) + Color.RESET
 				: Color.YELLOW + String.format("▲ %.4f (+%.4f)", lastLoss, delta) + Color.RESET;
-		String doneLabel = stoppedEarly ? Color.YELLOW + "⚠ stopped early" + Color.RESET : Color.GREEN + "✔ done" + Color.RESET;
-		System.out.printf("  %s  loss=%s  %ds total  · /save to persist%n",
-				doneLabel, trend, totalMs / 1000);
+		String doneLabel = stoppedEarly ? Color.YELLOW + "⚠ stopped early" + Color.RESET
+				: Color.GREEN + "✔ done" + Color.RESET;
+		System.out.printf("  %s  loss=%s  %ds total  · /save to persist%n", doneLabel, trend, totalMs / 1000);
 		if (lastLoss < 0.1f) {
-			System.out.printf("  %s⚠ WARNING: loss=%.4f — adapter is severely overfit.%s%n",
-					Color.RED, lastLoss, Color.RESET);
-			System.out.printf("  %s  The model will generate garbage until you /reset adapters.%s%n%n",
-					Color.RED, Color.RESET);
+			System.out.printf("  %s⚠ WARNING: loss=%.4f — adapter is severely overfit.%s%n", Color.RED, lastLoss,
+					Color.RESET);
+			System.out.printf("  %s  The model will generate garbage until you /reset adapters.%s%n%n", Color.RED,
+					Color.RESET);
 		} else if (lastLoss < 0.5f && !stoppedEarly) {
-			System.out.printf("  %s⚠ loss < 0.5 — consider stopping here. "
-					+ "More steps risk overfitting.%s%n%n", Color.YELLOW, Color.RESET);
+			System.out.printf("  %s⚠ loss < 0.5 — consider stopping here. " + "More steps risk overfitting.%s%n%n",
+					Color.YELLOW, Color.RESET);
 		} else {
 			System.out.println();
 		}
@@ -762,9 +771,8 @@ public final class ConsoleMain {
 			Files.createDirectories(path.getParent() != null ? path.getParent() : Path.of("."));
 			adapters.save(path);
 			long kb = Files.size(path) / 1024;
-			print(Color.GREEN + "  ✔ Saved → " + path + "  ("
-					+ adapters.size() + " adapters · " + kb + " KB"
-					+ "  · " + stepsTrained + " steps trained)" + Color.RESET);
+			print(Color.GREEN + "  ✔ Saved → " + path + "  (" + adapters.size() + " adapters · " + kb + " KB" + "  · "
+					+ stepsTrained + " steps trained)" + Color.RESET);
 		} catch (IOException e) {
 			print(Color.RED + "  ✘ Save failed: " + e.getMessage() + Color.RESET);
 		}
@@ -797,27 +805,44 @@ public final class ConsoleMain {
 
 		List<NodeDescriptor> nodes = new ArrayList<>();
 		for (int i = 0; i < nodeCount; i++) {
-			nodes.add(new NodeDescriptor("node-" + i, "localhost", 9092 + i,
-					nodeVramBytes, nodeVramBytes, NodeStatus.READY, 1.0, Instant.now(), Instant.now()));
+			nodes.add(new NodeDescriptor("node-" + i, "localhost", 9092 + i, nodeVramBytes, nodeVramBytes,
+					NodeStatus.READY, 1.0, Instant.now(), Instant.now()));
 		}
 
 		ShardMap shardMap = ShardPlanner.create().plan("model", config.numLayers(), vramPerLayerBytes, nodes);
 
 		List<ForwardPassHandler> handlers = new ArrayList<>();
+		GpuContext gpuCtx = prepareGpuContext();
 		for (var assignment : shardMap.assignments()) {
-			var context = ShardContext.from(assignment,
-					config.vocabSize(), config.hiddenDim(), config.numHeads());
-			handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context));
+			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
+			if (gpuCtx != null) {
+				handlers.add(GpuForwardPassHandler.loadGpuResident(Path.of(modelPath), context, gpuCtx));
+			} else {
+				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context));
+			}
 		}
 
-		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers),
-				config.vocabSize(), config.hiddenDim(), config.numHeads());
+		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
+				config.hiddenDim(), config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
 
 		startRepl(loop, tokenizer);
 	}
 
+	private static GpuContext prepareGpuContext() {
+		GpuContext gpuCtx = null;
+		if (useGpu && CudaAvailability.isAvailable())
+			gpuCtx = GpuContext.init(0);
+		else
+			return null;
+		final GpuContext gpuCtxRef = gpuCtx;
+		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
+			if (gpuCtxRef != null)
+				gpuCtxRef.close();
+		}));
+		return gpuCtx;
+	}
 	// ── Cluster mode (unchanged from original) ─────────────────────────────────
 
 	private static void runClusterRepl() throws Exception {
@@ -830,8 +855,8 @@ public final class ConsoleMain {
 		try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
 			LlamaConfig cfg = LlamaConfig.from(cfgReader);
 			totalLayers = cfg.numLayers();
-			numHeads    = cfg.numHeads();
-			vocabSize   = cfg.vocabSize();
+			numHeads = cfg.numHeads();
+			vocabSize = cfg.vocabSize();
 		}
 
 		ClusterHarness harness = (pType == ParallelismType.TENSOR)
@@ -840,15 +865,17 @@ public final class ConsoleMain {
 
 		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
 			print("\n" + Color.YELLOW + "⏹ Shutting down cluster..." + Color.RESET);
-			try { harness.stop(); } catch (Exception e) { /* best effort */ }
+			try {
+				harness.stop();
+			} catch (Exception e) {
+				/* best effort */ }
 			print(Color.YELLOW + "✔ Cluster stopped." + Color.RESET);
 		}));
 
 		harness.start();
 		print(Color.GREEN + "✔ Cluster ready  (" + modeLabel + "  " + dtype + " activations)" + Color.RESET + "\n");
 
-		var pipeline = (pType == ParallelismType.TENSOR)
-				? harness.pipeline()
+		var pipeline = (pType == ParallelismType.TENSOR) ? harness.pipeline()
 				: new ProcessPipelineClient(harness.nodeAddresses(), vocabSize, dtype);
 
 		Tokenizer tokenizer;
@@ -857,7 +884,7 @@ public final class ConsoleMain {
 		}
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop    = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
 
 		startRepl(loop, tokenizer);
 	}
@@ -865,8 +892,7 @@ public final class ConsoleMain {
 	// ── Standard REPL loop ────────────────────────────────────────────────────
 
 	private static void startRepl(GenerationLoop loop, Tokenizer tokenizer) throws IOException {
-		SamplingParams params = SamplingParams.defaults()
-				.withMaxTokens(maxTokens).withTemperature(temperature)
+		SamplingParams params = SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(temperature)
 				.withTopK(topK).withTopP(topP);
 
 		ChatHistory history = new ChatHistory();
@@ -882,15 +908,18 @@ public final class ConsoleMain {
 			System.out.flush();
 
 			line = stdin.readLine();
-			if (line == null) break;
+			if (line == null)
+				break;
 			line = line.strip();
-			if (line.isEmpty()) continue;
-			if (line.equalsIgnoreCase("exit") || line.equalsIgnoreCase("quit")) break;
+			if (line.isEmpty())
+				continue;
+			if (line.equalsIgnoreCase("exit") || line.equalsIgnoreCase("quit"))
+				break;
 
 			history.addUser(line);
 			String modelType = ChatModelType.fromPath(modelPath);
-			InferenceRequest request = InferenceRequest.ofSession(
-					history.sessionId(), modelType, history.getMessages(), params, RequestPriority.NORMAL);
+			InferenceRequest request = InferenceRequest.ofSession(history.sessionId(), modelType, history.getMessages(),
+					params, RequestPriority.NORMAL);
 
 			System.out.print(Color.GREEN_BOLD + "bot> " + Color.RESET);
 			System.out.flush();
@@ -918,8 +947,10 @@ public final class ConsoleMain {
 		return new TokenConsumer() {
 			@Override
 			public void onToken(String piece, int tokenId, int step) {
-				if (!verbose) System.out.print(piece);
-				else System.out.println("[" + step + ":" + tokenId + "]" + piece);
+				if (!verbose)
+					System.out.print(piece);
+				else
+					System.out.println("[" + step + ":" + tokenId + "]" + piece);
 				System.out.flush();
 			}
 
@@ -938,28 +969,27 @@ public final class ConsoleMain {
 	}
 
 	private static void banner() {
-		System.out.println(String.format("  %sJuno interactive console  ·  model: %s%s%n",
-				Color.YELLOW_BOLD_BRIGHT, Path.of(modelPath).getFileName(), Color.RESET));
-		System.out.println(Color.RED_BOLD  + "░▀▀█" + Color.GREEN_BOLD + "░█░█" + Color.RESET);
-		System.out.println(Color.RED       + "░░░█" + Color.GREEN      + "░█░█" + Color.RESET);
-		System.out.println(Color.RED       + "░▀▀░" + Color.GREEN      + "░▀▀▀" + Color.RESET);
+		System.out.println(String.format("  %sJuno interactive console  ·  model: %s%s%n", Color.YELLOW_BOLD_BRIGHT,
+				Path.of(modelPath).getFileName(), Color.RESET));
+		System.out.println(Color.RED_BOLD + "░▀▀█" + Color.GREEN_BOLD + "░█░█" + Color.RESET);
+		System.out.println(Color.RED + "░░░█" + Color.GREEN + "░█░█" + Color.RESET);
+		System.out.println(Color.RED + "░▀▀░" + Color.GREEN + "░▀▀▀" + Color.RESET);
 		System.out.println(Color.BLUE_BOLD + "░█▀█" + Color.YELLOW_BOLD + "░█▀█" + Color.RESET);
-		System.out.println(Color.BLUE      + "░█░█" + Color.YELLOW      + "░█░█" + Color.RESET);
-		System.out.println(Color.BLUE      + "░▀░▀" + Color.YELLOW      + "░▀▀▀" + Color.RESET + "\n");
+		System.out.println(Color.BLUE + "░█░█" + Color.YELLOW + "░█░█" + Color.RESET);
+		System.out.println(Color.BLUE + "░▀░▀" + Color.YELLOW + "░▀▀▀" + Color.RESET + "\n");
 
 		if (loraMode) {
-			System.out.println(String.format(
-					"  %s⚙ LoRA mode  ·  rank=%d  α=%.1f  lr=%s  steps=%d%s%n",
+			System.out.println(String.format("  %s⚙ LoRA mode  ·  rank=%d  α=%.1f  lr=%s  steps=%d%s%n",
 					Color.PURPLE_BOLD, loraRank, loraAlpha, loraLr, loraSteps, Color.RESET));
 		} else {
 			System.out.println(String.format(
 					"  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
-					Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP,
-					localMode ? "local" : "cluster", nodeCount, Color.RESET));
+					Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP, localMode ? "local" : "cluster",
+					nodeCount, Color.RESET));
 		}
 		if (jfrDuration != null) {
-			System.out.println(String.format("  %s⏱ JFR active · duration=%s%s%n",
-					Color.YELLOW, jfrDuration, Color.RESET));
+			System.out.println(
+					String.format("  %s⏱ JFR active · duration=%s%s%n", Color.YELLOW, jfrDuration, Color.RESET));
 		}
 	}
 
@@ -969,32 +999,46 @@ public final class ConsoleMain {
 	}
 
 	private static ActivationDtype parseDtype(String s) {
-		if (s == null) return ActivationDtype.FLOAT16;
+		if (s == null)
+			return ActivationDtype.FLOAT16;
 		return switch (s.toUpperCase()) {
-			case "FLOAT16", "F16", "FP16" -> ActivationDtype.FLOAT16;
-			case "INT8", "I8"             -> ActivationDtype.INT8;
-			default                       -> ActivationDtype.FLOAT32;
+		case "FLOAT16", "F16", "FP16" -> ActivationDtype.FLOAT16;
+		case "INT8", "I8" -> ActivationDtype.INT8;
+		default -> ActivationDtype.FLOAT32;
 		};
 	}
 
 	private static ParallelismType parseParallelismType(String s) {
-		if (s == null) return ParallelismType.PIPELINE;
+		if (s == null)
+			return ParallelismType.PIPELINE;
 		return switch (s.toLowerCase()) {
-			case "tensor" -> ParallelismType.TENSOR;
-			default       -> ParallelismType.PIPELINE;
+		case "tensor" -> ParallelismType.TENSOR;
+		default -> ParallelismType.PIPELINE;
 		};
 	}
 
 	private static int parseInt(String s, int def) {
-		try { return Integer.parseInt(s); } catch (NumberFormatException e) { return def; }
+		try {
+			return Integer.parseInt(s);
+		} catch (NumberFormatException e) {
+			return def;
+		}
 	}
 
 	private static float parseFloat(String s, float def) {
-		try { return Float.parseFloat(s); } catch (NumberFormatException e) { return def; }
+		try {
+			return Float.parseFloat(s);
+		} catch (NumberFormatException e) {
+			return def;
+		}
 	}
 
 	private static double parseDouble(String s, double def) {
-		try { return Double.parseDouble(s); } catch (NumberFormatException e) { return def; }
+		try {
+			return Double.parseDouble(s);
+		} catch (NumberFormatException e) {
+			return def;
+		}
 	}
 
 	private static long estimateVramPerLayer(int hiddenDim) {

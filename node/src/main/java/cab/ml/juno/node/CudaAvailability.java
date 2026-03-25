@@ -17,102 +17,108 @@ package cab.ml.juno.node;
 
 import java.util.logging.Logger;
 
-import jcuda.runtime.JCuda;
-import jcuda.runtime.cudaDeviceProp;
+import org.bytedeco.javacpp.IntPointer;
+import org.bytedeco.cuda.cudart.cudaDeviceProp;
+import org.bytedeco.cuda.global.cudart;
 
 /**
  * Safe CUDA runtime detection.
  *
- * Calling JCuda directly without checking availability throws
- * UnsatisfiedLinkError when libcuda.so is absent (e.g., CPU-only CI, Intel
- * integrated graphics, dev laptops). This class wraps all JCuda calls in a
- * single try/catch so the rest of the codebase can branch on isAvailable()
- * without defensive exception handling everywhere.
+ * Uses org.bytedeco (JavaCPP) cudart. Calling CUDA directly without checking
+ * availability throws when the native library or driver is absent (e.g. CPU-only
+ * CI, Intel integrated graphics). This class wraps all cudart calls in a single
+ * try/catch so the rest of the codebase can branch on isAvailable() without
+ * defensive exception handling everywhere.
  *
- * Usage: if (CudaAvailability.isAvailable()) { handler =
- * LlamaTransformerHandler.load(path, ctx); } else { handler =
- * LlamaTransformerHandler.load(path, ctx); }
+ * Usage:
+ *   if (CudaAvailability.isAvailable()) {
+ *       GpuForwardPassHandler h = GpuForwardPassHandler.loadGpuResident(path, shard, ctx);
+ *   } else {
+ *       CpuForwardPassHandler h = CpuForwardPassHandler.load(path, shard);
+ *   }
+ *   
+ * @author Yevhen Soldatov
+ * 
  */
+
 public final class CudaAvailability {
 
-	private static final Logger log = Logger.getLogger(CudaAvailability.class.getName());
+    private static final Logger log = Logger.getLogger(CudaAvailability.class.getName());
 
-	/** Cached result — detection runs once at class load time. */
-	private static final boolean AVAILABLE = detect();
+    /** Cached result — detection runs once at class load time. */
+    private static final boolean AVAILABLE = detect();
 
-	private CudaAvailability() {
-	}
+    private CudaAvailability() {
+    }
 
-	/**
-	 * Returns true if at least one CUDA-capable device is present and initialised.
-	 * False on any failure: missing driver, no GPU, wrong arch.
-	 */
-	public static boolean isAvailable() {
-		return AVAILABLE;
-	}
+    /**
+     * Returns true if at least one CUDA-capable device is present and initialised.
+     * False on any failure: missing driver, no GPU, wrong arch.
+     */
+    public static boolean isAvailable() {
+        return AVAILABLE;
+    }
 
-	/**
-	 * Returns the number of CUDA-capable devices, or 0 if CUDA is unavailable.
-	 */
-	public static int deviceCount() {
-		if (!AVAILABLE)
-			return 0;
-		try {
-			int[] count = new int[1];
-			JCuda.cudaGetDeviceCount(count);
-			return count[0];
-		} catch (Exception e) {
-			return 0;
-		}
-	}
+    /**
+     * Returns the number of CUDA-capable devices, or 0 if CUDA is unavailable.
+     */
+    public static int deviceCount() {
+        if (!AVAILABLE) return 0;
+        try (IntPointer count = new IntPointer(1)) {
+            int rc = cudart.cudaGetDeviceCount(count);
+            return (rc == 0) ? count.get() : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
 
-	/**
-	 * Returns a human-readable description of device {@code index}, or
-	 * "unavailable" if CUDA is not present.
-	 */
-	public static String deviceName(int index) {
-		if (!AVAILABLE)
-			return "unavailable";
-		try {
-			cudaDeviceProp prop = new cudaDeviceProp();
-			JCuda.cudaGetDeviceProperties(prop, index);
-			return new String(prop.name).trim().replaceAll("\0", "");
-		} catch (Exception e) {
-			return "unknown";
-		}
-	}
+    /**
+     * Returns a human-readable description of device {@code index}, or
+     * "unavailable" if CUDA is not present.
+     */
+    public static String deviceName(int index) {
+        if (!AVAILABLE) return "unavailable";
+        try (cudaDeviceProp prop = new cudaDeviceProp()) {
+            int rc = cudart.cudaGetDeviceProperties(prop, index);
+            if (rc != 0) return "unknown";
+            String n = prop.name().getString();
+            return n != null ? n.trim().replaceAll("\\0", "") : "unknown";
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
 
-	/**
-	 * Returns total VRAM in bytes for device {@code index}, or 0 if unavailable.
-	 */
-	public static long vramBytes(int index) {
-		if (!AVAILABLE)
-			return 0L;
-		try {
-			cudaDeviceProp prop = new cudaDeviceProp();
-			JCuda.cudaGetDeviceProperties(prop, index);
-			return prop.totalGlobalMem;
-		} catch (Exception e) {
-			return 0L;
-		}
-	}
+    /**
+     * Returns total VRAM in bytes for device {@code index}, or 0 if unavailable.
+     */
+    public static long vramBytes(int index) {
+        if (!AVAILABLE) return 0L;
+        try (cudaDeviceProp prop = new cudaDeviceProp()) {
+            int rc = cudart.cudaGetDeviceProperties(prop, index);
+            return (rc == 0) ? prop.totalGlobalMem() : 0L;
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
 
-	// ── Private ───────────────────────────────────────────────────────────────
+    // ── Private ───────────────────────────────────────────────────────────────
 
-	private static boolean detect() {
-		try {
-			int[] count = new int[1];
-			int rc = JCuda.cudaGetDeviceCount(count);
-			boolean ok = rc == 0 && count[0] > 0;
-			if (ok) {
-				log.info("CUDA available — " + count[0] + " device(s)");
-			} else {
-				log.info("CUDA not available (rc=" + rc + ", devices=" + count[0] + ")");
-			}
-			return ok;
-		} catch (UnsatisfiedLinkError | Exception e) {
-			log.info("CUDA not available — " + e.getMessage());
-			return false;
-		}
-	}
+    private static boolean detect() {
+        try {
+            IntPointer count = new IntPointer(1);
+            int rc = cudart.cudaGetDeviceCount(count);
+            int n = count.get();
+            count.close();
+            boolean ok = (rc == 0 && n > 0);
+            if (ok) {
+                log.info("CUDA available — " + n + " device(s)");
+            } else {
+                log.info("CUDA not available (rc=" + rc + ", devices=" + n + ")");
+            }
+            return ok;
+        } catch (UnsatisfiedLinkError | Exception e) {
+            log.info("CUDA not available — " + e.getMessage());
+            return false;
+        }
+    }
 }

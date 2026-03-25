@@ -35,10 +35,13 @@ import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.kvcache.LayerRange;
 import cab.ml.juno.node.ActivationCodec;
+import cab.ml.juno.node.CudaAvailability;
+import cab.ml.juno.node.CpuForwardPassHandler;
 import cab.ml.juno.node.CyclicForwardPassHandler;
 import cab.ml.juno.node.ForwardPassHandler;
-import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.ForwardResult;
+import cab.ml.juno.node.GpuContext;
+import cab.ml.juno.node.GpuForwardPassHandler;
 import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.ShardAssignment;
 import io.grpc.Server;
@@ -46,10 +49,8 @@ import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
 
 /**
- * Minimal gRPC NodeService backed by CyclicForwardPassHandler.
- *
- * Used by ThreeNodeClusterIT — each node JVM runs one of these. No GPU, no real
- * weights — deterministic stub responses only.
+ * gRPC NodeService backed by either GpuForwardPassHandler (GPU) or
+ * CpuForwardPassHandler (CPU) depending on the {@code useGpu} flag.
  *
  * Activation compression: Each ForwardRequest carries a dtype field that tells
  * this node how to decode the incoming activation bytes. The response
@@ -72,18 +73,28 @@ public final class EmbeddedNodeServer {
 
 	/** Stub mode (no real model — used by integration tests). */
 	public EmbeddedNodeServer(String nodeId, int port) {
-		this(nodeId, port, null);
+		this(nodeId, port, null, true);
+	}
+
+	/**
+	 * Real-model mode (GPU by default).
+	 *
+	 * @param modelPath path to a GGUF file, or null to fall back to stub mode.
+	 */
+	public EmbeddedNodeServer(String nodeId, int port, String modelPath) {
+		this(nodeId, port, modelPath, true);
 	}
 
 	/**
 	 * Real-model mode.
-	 * 
+	 *
 	 * @param modelPath path to a GGUF file, or null to fall back to stub mode.
+	 * @param useGpu    when true use GPU if available; when false use CPU.
 	 */
-	public EmbeddedNodeServer(String nodeId, int port, String modelPath) {
+	public EmbeddedNodeServer(String nodeId, int port, String modelPath, boolean useGpu) {
 		this.nodeId = nodeId;
 		this.port = port;
-		this.grpcServer = ServerBuilder.forPort(port).addService(new NodeServiceImpl(nodeId, modelPath)).build();
+		this.grpcServer = ServerBuilder.forPort(port).addService(new NodeServiceImpl(nodeId, modelPath, useGpu)).build();
 	}
 
 	public void start() throws IOException {
@@ -116,14 +127,17 @@ public final class EmbeddedNodeServer {
 
 		private final String nodeId;
 		private final String modelPath; // null = stub mode
+		private final boolean useGpu;
 		private volatile ForwardPassHandler handler;
 		private volatile ShardContext context;
+		private volatile GpuContext gpuContext; // non-null only when handler is GPU
 		@SuppressWarnings("unused")
 		private volatile KVCacheManager kvCache;
 
-		NodeServiceImpl(String nodeId, String modelPath) {
+		NodeServiceImpl(String nodeId, String modelPath, boolean useGpu) {
 			this.nodeId = nodeId;
 			this.modelPath = modelPath;
+			this.useGpu = useGpu;
 			this.handler = new CyclicForwardPassHandler(); // replaced in loadShard() when real model
 			this.context = buildDefaultContext();
 			this.kvCache = new KVCacheManager(new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256));
@@ -134,7 +148,6 @@ public final class EmbeddedNodeServer {
 				StreamObserver<ForwardResponse> responseObserver) {
 			try {
 				// ── Decode incoming activation ──────────────────────────────
-				// Inside forwardPass, after checking request.getError().isEmpty()
 				byte[] rawBytes = request.getActivation().toByteArray();
 				cab.ml.juno.node.ActivationDtype inDtype = fromProto(request.getDtype());
 				cab.ml.juno.node.ForwardRequest nodeReq;
@@ -189,18 +202,37 @@ public final class EmbeddedNodeServer {
 			String msg;
 			if (modelPath != null) {
 				try {
-					log.info("Loading real model from: " + modelPath);
+					// Release any existing GPU resources before reloading
+					if (gpuContext != null) {
+						if (handler instanceof GpuForwardPassHandler g) {
+							g.releaseGpuResources();
+						}
+						gpuContext.close();
+						gpuContext = null;
+					}
+					log.info("Loading real model from: " + modelPath + " (useGpu=" + useGpu + ")");
 					log.info("Shard context: layers " + request.getStartLayer() + "-" + request.getEndLayer()
 							+ " embeddings=" + request.getHasEmbeddings() + " outputProj="
 							+ request.getHasOutputProjection());
-					handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx);
-					msg = "Real shard loaded (" + handler.getClass().getSimpleName() + ") layers "
-							+ request.getStartLayer() + "–" + request.getEndLayer();
+					if (useGpu && CudaAvailability.isAvailable()) {
+						gpuContext = GpuContext.init(0);
+						handler = GpuForwardPassHandler.loadGpuResident(Path.of(modelPath), newCtx, gpuContext);
+						msg = "Real shard loaded (GpuForwardPassHandler) layers " + request.getStartLayer() + "–"
+								+ request.getEndLayer();
+					} else {
+						handler = CpuForwardPassHandler.load(Path.of(modelPath), newCtx);
+						msg = "Real shard loaded (CpuForwardPassHandler) layers " + request.getStartLayer() + "–"
+								+ request.getEndLayer();
+					}
 					log.info(msg);
 				} catch (Exception e) {
 					log.severe("FAILED to load real model: " + e.getMessage());
-					e.printStackTrace(); // <-- Print full stack trace
+					e.printStackTrace();
 					log.warning("Falling back to stub handler");
+					if (gpuContext != null) {
+						gpuContext.close();
+						gpuContext = null;
+					}
 					handler = new CyclicForwardPassHandler();
 					msg = "Stub shard (model load failed: " + e.getMessage() + ") layers " + request.getStartLayer()
 							+ "–" + request.getEndLayer();
@@ -221,6 +253,13 @@ public final class EmbeddedNodeServer {
 
 		@Override
 		public void unloadShard(UnloadShardRequest request, StreamObserver<UnloadShardResponse> responseObserver) {
+			if (handler instanceof GpuForwardPassHandler g) {
+				g.releaseGpuResources();
+			}
+			if (gpuContext != null) {
+				gpuContext.close();
+				gpuContext = null;
+			}
 			context = buildDefaultContext();
 			responseObserver.onNext(UnloadShardResponse.newBuilder().setSuccess(true).build());
 			responseObserver.onCompleted();

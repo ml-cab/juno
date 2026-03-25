@@ -36,6 +36,21 @@ if /i "%~1"=="test"    ( shift & goto :test )
 goto :cluster
 
 rem ============================================================================
+rem  Helper: prepend CUDA bin to PATH if GPU mode and CUDA available
+rem ============================================================================
+:prepend_cuda_path
+if /i "%USE_GPU%"=="false" exit /b 0
+if not "%CUDA_PATH%"=="" if exist "%CUDA_PATH%\bin" (
+  set "PATH=%CUDA_PATH%\bin;%PATH%"
+  exit /b 0
+)
+if not "%CUDA_HOME%"=="" if exist "%CUDA_HOME%\bin" (
+  set "PATH=%CUDA_HOME%\bin;%PATH%"
+  exit /b 0
+)
+exit /b 0
+
+rem ============================================================================
 rem  cluster
 rem ============================================================================
 :cluster
@@ -50,6 +65,12 @@ if "%HEAP%"==""        set "HEAP=4g"
 set "VERBOSE=false"
 if "%PTYPE%"=="" set "PTYPE=pipeline"
 set "JFR_DURATION_CLUSTER="
+set "USE_GPU=true"
+if not "%USE_GPU_ENV%"=="" (
+  if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
+  if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
+  if /i "%USE_GPU_ENV%"=="no" set "USE_GPU=false"
+)
 
 :cluster_parse
 if "%~1"=="" goto :cluster_done
@@ -69,6 +90,8 @@ if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :cluster_parse )
 if /i "%~1"=="--int8"    ( set "DTYPE=INT8"    & shift & goto :cluster_parse )
 if /i "%~1"=="--verbose" ( set "VERBOSE=true"  & shift & goto :cluster_parse )
 if /i "%~1"=="-v"        ( set "VERBOSE=true"  & shift & goto :cluster_parse )
+if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :cluster_parse )
+if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :cluster_parse )
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat cluster --model-path PATH [flags]
@@ -87,6 +110,8 @@ if /i "%~1"=="--help" (
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
+  echo   --gpu             use GPU when available (default)
+  echo   --cpu             use CPU only
   echo   --verbose / -v
   goto :eof
 )
@@ -105,13 +130,16 @@ if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
 call :require_jar "%PLAYER_JAR%" "player"
 if errorlevel 1 exit /b 1
 
-echo [WARN] Starting 3-node cluster  (pType=%PTYPE%  dtype=%DTYPE%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  heap=%HEAP%)
+echo [WARN] Starting 3-node cluster  (pType=%PTYPE%  dtype=%DTYPE%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  heap=%HEAP%  gpu=%USE_GPU%)
 if /i "%VERBOSE%"=="true" echo [WARN] Verbose mode ON
 echo [WARN] Ctrl-C to stop all nodes and exit
 echo.
 
 set "VERBOSE_FLAG="
 if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
+
+set "GPU_FLAG=--gpu"
+if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
 
 set "JFR_FLAG_CLUSTER="
 if not "%JFR_DURATION_CLUSTER%"=="" (
@@ -121,7 +149,9 @@ if not "%JFR_DURATION_CLUSTER%"=="" (
   echo [WARN] JFR enabled -- duration=%JFR_DURATION_CLUSTER%  output=juno-!JFR_TS!.jfr
 )
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" %JFR_FLAG_CLUSTER% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %VERBOSE_FLAG%
+call :prepend_cuda_path
+
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" %JFR_FLAG_CLUSTER% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -139,6 +169,12 @@ if "%HEAP%"==""        set "HEAP=4g"
 if "%NODES%"==""       set "NODES=3"
 set "VERBOSE=false"
 set "JFR_DURATION_LOCAL="
+set "USE_GPU=true"
+if not "%USE_GPU_ENV%"=="" (
+  if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
+  if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
+  if /i "%USE_GPU_ENV%"=="no" set "USE_GPU=false"
+)
 
 :local_parse
 if "%~1"=="" goto :local_done
@@ -157,6 +193,8 @@ if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :local_parse )
 if /i "%~1"=="--int8"    ( set "DTYPE=INT8"    & shift & goto :local_parse )
 if /i "%~1"=="--verbose" ( set "VERBOSE=true"  & shift & goto :local_parse )
 if /i "%~1"=="-v"        ( set "VERBOSE=true"  & shift & goto :local_parse )
+if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :local_parse )
+if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :local_parse )
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat local --model-path PATH [flags]
@@ -171,6 +209,8 @@ if /i "%~1"=="--help" (
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
+  echo   --gpu             use GPU when available (default)
+  echo   --cpu             use CPU only
   echo   --verbose / -v
   goto :eof
 )
@@ -189,12 +229,15 @@ if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
 call :require_jar "%PLAYER_JAR%" "player"
 if errorlevel 1 exit /b 1
 
-echo [INFO] Starting local in-process REPL  (dtype=%DTYPE%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  nodes=%NODES%  heap=%HEAP%)
+echo [INFO] Starting local in-process REPL  (dtype=%DTYPE%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  nodes=%NODES%  heap=%HEAP%  gpu=%USE_GPU%)
 if /i "%VERBOSE%"=="true" echo [WARN] Verbose mode ON
 echo.
 
 set "VERBOSE_FLAG="
 if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
+
+set "GPU_FLAG=--gpu"
+if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
 
 set "JFR_FLAG_LOCAL="
 if not "%JFR_DURATION_LOCAL%"=="" (
@@ -204,7 +247,9 @@ if not "%JFR_DURATION_LOCAL%"=="" (
   echo [WARN] JFR enabled -- duration=%JFR_DURATION_LOCAL%  output=juno-!JFR_TS!.jfr
 )
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LOCAL% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %VERBOSE_FLAG%
+call :prepend_cuda_path
+
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LOCAL% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -224,6 +269,12 @@ if "%TOP_P%"==""       set "TOP_P=0.95"
 if "%HEAP%"==""        set "HEAP=4g"
 set "VERBOSE=false"
 set "JFR_DURATION_LORA="
+set "USE_GPU=true"
+if not "%USE_GPU_ENV%"=="" (
+  if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
+  if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
+  if /i "%USE_GPU_ENV%"=="no" set "USE_GPU=false"
+)
 
 :lora_parse
 if "%~1"=="" goto :lora_done
@@ -243,6 +294,8 @@ if /i "%~1"=="--pType"       ( shift & shift & goto :lora_parse )
 if /i "%~1"=="--ptype"       ( shift & shift & goto :lora_parse )
 if /i "%~1"=="--verbose" ( set "VERBOSE=true" & shift & goto :lora_parse )
 if /i "%~1"=="-v"        ( set "VERBOSE=true" & shift & goto :lora_parse )
+if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :lora_parse )
+if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :lora_parse )
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat lora --model-path PATH [flags]
@@ -272,6 +325,10 @@ if /i "%~1"=="--help" (
   echo     --heap SIZE             e.g. 4g 8g 16g  (default 4g)
   echo                             Use at least 2x the model file size.
   echo.
+  echo   Backend:
+  echo     --gpu                   use GPU when available (default)
+  echo     --cpu                   use CPU only
+  echo.
   echo   REPL commands:
   echo     /train ^<text^>          Fine-tune on inline text
   echo     /train-file ^<path^>     Fine-tune on a text file
@@ -282,7 +339,7 @@ if /i "%~1"=="--help" (
   echo     Regular input           Chat with adapter applied
   echo.
   echo   Env overrides: MODEL_PATH LORA_PATH LORA_RANK LORA_ALPHA LORA_LR LORA_STEPS
-  echo                  MAX_TOKENS TEMPERATURE TOP_K TOP_P HEAP
+  echo                  MAX_TOKENS TEMPERATURE TOP_K TOP_P HEAP USE_GPU
   echo.
   echo   Examples:
   echo     run.bat lora --model-path C:\models\tinyllama.gguf
@@ -309,13 +366,16 @@ if errorlevel 1 exit /b 1
 rem Default alpha = rank when not set
 if "%LORA_ALPHA%"=="" set "LORA_ALPHA=%LORA_RANK%"
 
-echo [INFO] Starting LoRA fine-tuning REPL  (rank=%LORA_RANK%  alpha=%LORA_ALPHA%  lr=%LORA_LR%  steps=%LORA_STEPS%  heap=%HEAP%)
+echo [INFO] Starting LoRA fine-tuning REPL  (rank=%LORA_RANK%  alpha=%LORA_ALPHA%  lr=%LORA_LR%  steps=%LORA_STEPS%  heap=%HEAP%  gpu=%USE_GPU%)
 if not "%LORA_PATH_VAL%"=="" echo [INFO] Adapter file: %LORA_PATH_VAL%
 if /i "%VERBOSE%"=="true" echo [WARN] Verbose mode ON
 echo.
 
 set "VERBOSE_FLAG="
 if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
+
+set "GPU_FLAG=--gpu"
+if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
 
 set "LORA_PATH_FLAG="
 if not "%LORA_PATH_VAL%"=="" set "LORA_PATH_FLAG=--lora-path %LORA_PATH_VAL%"
@@ -329,7 +389,9 @@ if not "%JFR_DURATION_LORA%"=="" (
   echo [WARN] After exit: open juno-!JFR_TS!.jfr in JDK Mission Control -^> Event Browser -^> juno.LoraTrainStep
 )
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-steps %LORA_STEPS% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %VERBOSE_FLAG%
+call :prepend_cuda_path
+
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-steps %LORA_STEPS% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -419,10 +481,14 @@ echo   run.bat --model-path PATH            cluster (default)
 echo   run.bat cluster --model-path PATH    3-node cluster + REPL
 echo   run.bat local   --model-path PATH    in-process REPL (single JVM)
 echo   run.bat lora    --model-path PATH    LoRA fine-tuning REPL (adapter kept separate)
-echo   run.bat test    --model-path PATH    6 smoke checks
+echo   run.bat test    --model-path PATH    8 smoke checks
+echo.
+echo   Backend flags (cluster/local/lora):
+echo     --gpu          use GPU when available (default)
+echo     --cpu          use CPU only
 echo.
 echo   Env overrides: MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES
-echo                  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS
+echo                  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS  USE_GPU
 echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h  (all commands)
 echo.
 goto :eof

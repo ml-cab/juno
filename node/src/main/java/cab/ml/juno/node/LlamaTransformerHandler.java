@@ -96,7 +96,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private static final int INITIAL_SEQ_CAPACITY = 64; // grows on demand
 
 	// ── MatVec backend (CPU or CUDA) ─────────────────────────────────────────
-	private final MatVecBackend backend;
+	private final GpuMatVec backend;
 
 	// ── Factory ───────────────────────────────────────────────────────────────
 
@@ -115,7 +115,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			LlamaConfig cfg = LlamaConfig.from(r);
 			log.info("Model: " + cfg);
-			return new LlamaTransformerHandler(r, cfg, context, CpuMatVecBackend.INSTANCE);
+			return new LlamaTransformerHandler(r, cfg, context, CpuMatVec.INSTANCE);
 		}
 	}
 
@@ -125,7 +125,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * @param backend {@link CpuMatVecBackend#INSTANCE} for CPU-only nodes,
 	 *                {@code new CudaMatVecBackend(ctx)} for GPU nodes
 	 */
-	public static LlamaTransformerHandler load(Path modelPath, ShardContext context, MatVecBackend backend)
+	public static LlamaTransformerHandler load(Path modelPath, ShardContext context, GpuMatVec backend)
 			throws IOException {
 		log.info("Loading GGUF shard: layers " + context.startLayer() + "–" + context.endLayer() + "  embd="
 				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection() + "  backend="
@@ -138,7 +138,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 	}
 
-	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVecBackend backend)
+	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, GpuMatVec backend)
 			throws IOException {
 		this.cfg = cfg;
 		this.backend = backend;

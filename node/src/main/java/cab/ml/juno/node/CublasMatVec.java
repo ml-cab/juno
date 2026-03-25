@@ -1,4 +1,7 @@
 /*
+ * Created by Yevhen Soldatov
+ * Initial implementation: 2026
+ *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,112 +20,202 @@ package cab.ml.juno.node;
 
 import java.util.logging.Logger;
 
-import jcuda.Pointer;
-import jcuda.Sizeof;
-import jcuda.jcublas.JCublas2;
-import jcuda.jcublas.cublasOperation;
-import jcuda.runtime.JCuda;
+import org.bytedeco.javacpp.FloatPointer;
+import org.bytedeco.javacpp.Pointer;
+import org.bytedeco.javacpp.PointerPointer;
+import org.bytedeco.cuda.global.cublas;
+import org.bytedeco.cuda.global.cudart;
 
 /**
  * GpuMatVec backed by cublasSgemv on an Nvidia GPU.
  *
- * Computes y[rows] = A[rows, cols] × x[cols] where A is row-major.
+ * Uses org.bytedeco (JavaCPP) cuda/cublas. Works with various NVIDIA GPUs
+ * (e.g. GTX 1080, T4, and newer).
+ *
+ * Computes y[rows] = A[rows, cols] x x[cols] where A is row-major.
  *
  * Row-major to cuBLAS mapping: cuBLAS is column-major. A row-major matrix
  * A[rows x cols] is identical in memory to the transpose of a column-major
- * matrix A^T[cols x rows]. To compute y = A * x using cuBLAS we therefore call
- * cublasSgemv with CUBLAS_OP_T (transpose), m=rows, n=cols, lda=cols. This asks
- * cuBLAS to compute y = (A^T)^T * x = A * x. No data is copied or reordered.
+ * matrix A^T[cols x rows]. To compute y = A * x using cuBLAS we call
+ * cublasSgemv with CUBLAS_OP_T, m=cols, n=rows, lda=cols.
  *
- * Memory management: Each sgemv call allocates device buffers, copies data,
- * executes, copies result back, and frees. This is correct and simple (KISS). A
- * future GpuMemoryPool optimisation can replace the per-call
- * cudaMalloc/cudaFree with slab allocation — the interface contract is
- * unchanged.
- *
- * Thread safety: cuBLAS handles are safe for concurrent calls from different
- * Java threads. Each call has its own device buffers so there is no shared
- * mutable state.
+ * Memory management:
+ *   - {@link #sgemv(float[], float[], int, int)} — full host path: allocates
+ *     device buffers for A, x, y each call (tests and legacy use).
+ *   - {@link #sgemv(DeviceFloatMatrix, float[])} — A stays on device; only x and y
+ *     use per-call device buffers. Thread-safe for concurrent calls.
+ *  
+ * @author Yevhen Soldatov    
  */
 public final class CublasMatVec implements GpuMatVec {
 
-	@SuppressWarnings("unused")
-	private static final Logger log = Logger.getLogger(CublasMatVec.class.getName());
+    @SuppressWarnings("unused")
+    private static final Logger log = Logger.getLogger(CublasMatVec.class.getName());
 
-	private static final Pointer ALPHA = Pointer.to(new float[] { 1.0f });
-	private static final Pointer BETA = Pointer.to(new float[] { 0.0f });
+    private static final int CUBLAS_OP_T = cublas.CUBLAS_OP_T;
+    private static final int H2D = cudart.cudaMemcpyHostToDevice;
+    private static final int D2H = cudart.cudaMemcpyDeviceToHost;
 
-	private final GpuContext ctx;
+    private final GpuContext ctx;
 
-	/**
-	 * @param ctx an open GpuContext — must outlive all sgemv calls on this instance
-	 */
-	public CublasMatVec(GpuContext ctx) {
-		if (ctx == null)
-			throw new IllegalArgumentException("ctx must not be null");
-		this.ctx = ctx;
-	}
+    /**
+     * @param ctx an open GpuContext — must outlive all sgemv calls on this instance
+     */
+    public CublasMatVec(GpuContext ctx) {
+        if (ctx == null)
+            throw new IllegalArgumentException("ctx must not be null");
+        this.ctx = ctx;
+    }
 
-	/**
-	 * Compute y = A * x on the GPU via cublasSgemv.
-	 *
-	 * <p>
-	 * Steps:
-	 * <ol>
-	 * <li>cudaMalloc device buffers for A, x, y</li>
-	 * <li>cudaMemcpy host → device for A and x</li>
-	 * <li>cublasSgemv_v2 with CUBLAS_OP_T</li>
-	 * <li>cudaMemcpy device → host for y</li>
-	 * <li>cudaFree all device buffers</li>
-	 * </ol>
-	 */
-	@Override
-	public float[] sgemv(float[] A, float[] x, int rows, int cols) {
-		if (A.length != (long) rows * cols)
-			throw new IllegalArgumentException("A.length=" + A.length + " != rows*cols=" + ((long) rows * cols));
-		if (x.length != cols)
-			throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
+    @Override
+    public float[] sgemv(float[] A, float[] x, int rows, int cols) {
+        if (A.length != (long) rows * cols)
+            throw new IllegalArgumentException("A.length=" + A.length + " != rows*cols=" + ((long) rows * cols));
+        if (x.length != cols)
+            throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
 
-		float[] y = new float[rows];
+        float[] y = new float[rows];
+        long bytesA = (long) rows * cols * 4;
+        long bytesX = (long) cols * 4;
+        long bytesY = (long) rows * 4;
 
-		// ── Allocate device memory ────────────────────────────────────────────
-		Pointer d_A = new Pointer();
-		Pointer d_x = new Pointer();
-		Pointer d_y = new Pointer();
+        PointerPointer pA = new PointerPointer(1);
+        PointerPointer pX = new PointerPointer(1);
+        PointerPointer pY = new PointerPointer(1);
+        try {
+            // CUDA device selection is thread-local; bind on every call.
+            int setDeviceRc = cudart.cudaSetDevice(ctx.deviceIndex());
+            checkCuda(setDeviceRc, "cudaSetDevice");
 
-		long bytesA = (long) rows * cols * Sizeof.FLOAT;
-		long bytesX = (long) cols * Sizeof.FLOAT;
-		long bytesY = (long) rows * Sizeof.FLOAT;
+            int rA = cudart.cudaMalloc(pA, bytesA);
+            int rX = cudart.cudaMalloc(pX, bytesX);
+            int rY = cudart.cudaMalloc(pY, bytesY);
+            if (rA != 0 || rX != 0 || rY != 0) {
+                if (rA == 0) cudart.cudaFree(pA.get(0));
+                if (rX == 0) cudart.cudaFree(pX.get(0));
+                if (rY == 0) cudart.cudaFree(pY.get(0));
+                throw new IllegalStateException("cudaMalloc failed: d_A=" + rA + " d_x=" + rX + " d_y=" + rY);
+            }
 
-		JCuda.cudaMalloc(d_A, bytesA);
-		JCuda.cudaMalloc(d_x, bytesX);
-		JCuda.cudaMalloc(d_y, bytesY);
+            Pointer d_A = pA.get(0);
+            Pointer d_x = pX.get(0);
+            Pointer d_y = pY.get(0);
 
-		try {
-			// ── Copy host → device ────────────────────────────────────────────
-			JCuda.cudaMemcpy(d_A, Pointer.to(A), bytesA, jcuda.runtime.cudaMemcpyKind.cudaMemcpyHostToDevice);
-			JCuda.cudaMemcpy(d_x, Pointer.to(x), bytesX, jcuda.runtime.cudaMemcpyKind.cudaMemcpyHostToDevice);
+            try (FloatPointer hA = new FloatPointer(A); FloatPointer hX = new FloatPointer(x)) {
+                checkCuda(cudart.cudaMemcpy(d_A, hA, bytesA, H2D), "cudaMemcpy(A H2D)");
+                checkCuda(cudart.cudaMemcpy(d_x, hX, bytesX, H2D), "cudaMemcpy(x H2D)");
+            }
 
-			// ── cublasSgemv ───────────────────────────────────────────────────
-			// Row-major A[rows x cols] is treated as column-major A^T[cols x rows].
-			// CUBLAS_OP_T transposes it back → op(A^T) = A, giving y = A * x.
-			// m = rows (output size), n = cols (input size), lda = cols.
-			JCublas2.cublasSgemv(ctx.handle(), cublasOperation.CUBLAS_OP_T, cols, // m — rows of the stored column-major
-																					// matrix
-					rows, // n — cols of the stored column-major matrix
-					ALPHA, d_A, cols, // lda = cols (leading dimension of row-major A)
-					d_x, 1, BETA, d_y, 1);
+            try (
+                FloatPointer alpha = new FloatPointer(1.0f);
+                FloatPointer beta = new FloatPointer(0.0f);
+                FloatPointer d_A_f = new FloatPointer(d_A);
+                FloatPointer d_x_f = new FloatPointer(d_x);
+                FloatPointer d_y_f = new FloatPointer(d_y);
+            ) {
+                int pointerModeRc = cublas.cublasSetPointerMode_v2(
+                    ctx.handle(), cublas.CUBLAS_POINTER_MODE_HOST);
+                if (pointerModeRc != 0)
+                    throw new IllegalStateException("cublasSetPointerMode failed: " + pointerModeRc);
 
-			// ── Copy device → host ────────────────────────────────────────────
-			JCuda.cudaMemcpy(Pointer.to(y), d_y, bytesY, jcuda.runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost);
+                int rc = cublas.cublasSgemv_v2(ctx.handle(), CUBLAS_OP_T,
+                    cols, rows,
+                    alpha, d_A_f, cols,
+                    d_x_f, 1,
+                    beta, d_y_f, 1);
+                if (rc != 0)
+                    throw new IllegalStateException("cublasSgemv failed: " + rc);
+            }
 
-		} finally {
-			// ── Free device memory (always, even on exception) ────────────────
-			JCuda.cudaFree(d_A);
-			JCuda.cudaFree(d_x);
-			JCuda.cudaFree(d_y);
-		}
+            try (FloatPointer hy = new FloatPointer(y)) {
+                checkCuda(cudart.cudaMemcpy(hy, d_y, bytesY, D2H), "cudaMemcpy(y D2H)");
+                // FloatPointer(y) is native memory initialized from y[]; copy back to heap array.
+                hy.get(y);
+            }
 
-		return y;
-	}
+            return y;
+        } finally {
+            cudart.cudaFree(pA.get(0));
+            cudart.cudaFree(pX.get(0));
+            cudart.cudaFree(pY.get(0));
+            pA.close();
+            pX.close();
+            pY.close();
+        }
+    }
+
+    @Override
+    public float[] sgemv(DeviceFloatMatrix A, float[] x) {
+        if (A == null)
+            throw new IllegalArgumentException("A must not be null");
+        if (A.isClosed())
+            throw new IllegalStateException("DeviceFloatMatrix is closed");
+        int rows = A.rows();
+        int cols = A.cols();
+        if (x.length != cols)
+            throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
+
+        float[] y = new float[rows];
+        long bytesX = (long) cols * 4;
+        long bytesY = (long) rows * 4;
+
+        PointerPointer pX = new PointerPointer(1);
+        PointerPointer pY = new PointerPointer(1);
+        try {
+            checkCuda(cudart.cudaSetDevice(ctx.deviceIndex()), "cudaSetDevice");
+
+            int rX = cudart.cudaMalloc(pX, bytesX);
+            int rY = cudart.cudaMalloc(pY, bytesY);
+            if (rX != 0 || rY != 0) {
+                if (rX == 0) cudart.cudaFree(pX.get(0));
+                if (rY == 0) cudart.cudaFree(pY.get(0));
+                throw new IllegalStateException("cudaMalloc failed: d_x=" + rX + " d_y=" + rY);
+            }
+
+            Pointer d_x = pX.get(0);
+            Pointer d_y = pY.get(0);
+            Pointer d_A = A.devicePointer();
+
+            try (FloatPointer hX = new FloatPointer(x)) {
+                checkCuda(cudart.cudaMemcpy(d_x, hX, bytesX, H2D), "cudaMemcpy(x H2D)");
+            }
+
+            try (
+                FloatPointer alpha = new FloatPointer(1.0f);
+                FloatPointer beta = new FloatPointer(0.0f);
+                FloatPointer d_A_f = new FloatPointer(d_A);
+                FloatPointer d_x_f = new FloatPointer(d_x);
+                FloatPointer d_y_f = new FloatPointer(d_y);
+            ) {
+                int pointerModeRc = cublas.cublasSetPointerMode_v2(
+                    ctx.handle(), cublas.CUBLAS_POINTER_MODE_HOST);
+                if (pointerModeRc != 0)
+                    throw new IllegalStateException("cublasSetPointerMode failed: " + pointerModeRc);
+
+                int rc = cublas.cublasSgemv_v2(ctx.handle(), CUBLAS_OP_T,
+                    cols, rows,
+                    alpha, d_A_f, cols,
+                    d_x_f, 1,
+                    beta, d_y_f, 1);
+                if (rc != 0)
+                    throw new IllegalStateException("cublasSgemv failed: " + rc);
+            }
+
+            try (FloatPointer hy = new FloatPointer(y)) {
+                checkCuda(cudart.cudaMemcpy(hy, d_y, bytesY, D2H), "cudaMemcpy(y D2H)");
+                hy.get(y);
+            }
+
+            return y;
+        } finally {
+            cudart.cudaFree(pX.get(0));
+            cudart.cudaFree(pY.get(0));
+            pX.close();
+            pY.close();
+        }
+    }
+
+    private static void checkCuda(int rc, String op) {
+        if (rc != 0) throw new IllegalStateException(op + " failed: " + rc);
+    }
 }

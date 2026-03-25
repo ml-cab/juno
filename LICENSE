@@ -5,6 +5,7 @@ Distributed Java-native LLM Inference Engine for commodity GPU clusters.
 
 This product includes software developed by:
 - Dmytro Soloviov (soulaway) - Project lead and core architecture
+- Yevhen Soldatov (yevhensoldatov) - Core maintainer
 - ml-cab collective - Contributions from community members
 
 =========================================================================
