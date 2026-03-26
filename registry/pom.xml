@@ -25,17 +25,12 @@
             <artifactId>hazelcast</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.jcuda</groupId>
-            <artifactId>jcuda</artifactId>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-stub</artifactId>
         </dependency>
         <dependency>
             <groupId>ai.djl</groupId>
             <artifactId>api</artifactId>
         </dependency>
-        <dependency>
-            <groupId>io.grpc</groupId>
-            <artifactId>grpc-stub</artifactId>
-        </dependency>
     </dependencies>
-
 </project>

@@ -25,10 +25,6 @@
 			<artifactId>hazelcast</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>org.jcuda</groupId>
-			<artifactId>jcuda</artifactId>
-		</dependency>
-		<dependency>
 			<groupId>com.github.ben-manes.caffeine</groupId>
 			<artifactId>caffeine</artifactId>
 		</dependency>

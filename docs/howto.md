@@ -40,12 +40,19 @@ Requires a JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--lora-path PATH` | `<model>.lora` | Adapter checkpoint file. Loaded automatically if it exists next to the model. |
+| `--gpu` | (default) | Use GPU when available |
+| `--cpu` | — | Use CPU only |
 | `--lora-rank N` | `8` | Low-rank bottleneck dimension. `4`=minimal, `8`=standard, `16`=expressive. |
 | `--lora-alpha F` | `= rank` | Scaling factor α. Effective scale = α/rank. |
 | `--lora-lr F` | `1e-4` | Adam learning rate for LoRA adapter parameters. |
 | `--lora-steps N` | `50` | Gradient steps applied per `/train` command. |
 
-**Environment overrides:** `MODEL_PATH`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`
+Without `--gpu` or `--cpu`, GPU is used by default. Use `--cpu` to force CPU.
+
+ For GPU cluster runs, either set `CUDA_PATH`/`CUDA_HOME` (or run `setenv.bat` / `source setenv.sh`), or on Windows use the single-DLL option: run `get-cudart.bat` and save the downloaded `cudart64_12.dll` to `%USERPROFILE%\.javacpp\cache\` (see https://www.dllme.com/dll/files/cudart64_12).
+ 
+**Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`
+
 
 ---
 
@@ -449,16 +456,29 @@ mvn clean package -DskipTests
 
 ### GPU testing
 
+GPU stack: org.bytedeco cuda-platform (cudart + cublas). Works with various
+NVIDIA GPUs (e.g. GTX 1080, T4). Requires NVIDIA driver; CUDA runtime is
+bundled in the cuda-platform dependency. On Windows ensure nvidia-smi shows
+your GPU; no extra PATH needed for tests (JavaCPP loads natives from the jar).
+
+Production GPU loads use `GpuForwardPassHandler.loadGpuResident`: each matmul
+weight matrix is uploaded once (`DeviceFloatMatrix`). Call
+`GpuForwardPassHandler.releaseGpuResources()` before closing `GpuContext`.
+`GpuForwardPassHandler.load` with host tensors remains for `CpuMatVec` and tests.
+
+
 GPU tests are tagged `@Tag("gpu")` and excluded from the default test run.
 A CUDA 12.x device and the JCuda native libs are required.
 
 ```bash
-# GPU unit tests — node module only, no model file needed
+# Run all tests including GPU-tagged (requires CUDA + Nvidia GPU, org.bytedeco cuda)
 mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
 
 # Skip GPU tests (default — works on any machine)
 mvn test -Dgroups='!gpu' -pl node
 ```
+GPU integration test — requires CUDA, Nvidia GPU, and a GGUF model file
+
 
 `CudaMatVecBackendTest` inherits all 17 contract tests from `MatVecBackendContractTest`
 and adds CUDA-specific numerical comparison and timing assertions.
@@ -475,7 +495,9 @@ MODEL_PATH=/path/to/model.gguf mvn verify -Pgpu -pl integration \
   --enable-native-access=ALL-UNNAMED
 ```
 
-`GpuForwardPassIT` is excluded from the default failsafe scan. The `-Pgpu` Maven
+`GpuForwardPassIT` is excluded from the default failsafe scan to prevent CUDA
+native libraries (bytedeco) from loading into the coordinator JVM and poisoning FD
+The `-Pgpu` Maven
 profile re-includes it and sets `-Djuno.gpu.test=true` — a guard checked in
 `@BeforeAll` before any JCuda class is loaded. This prevents the JCuda native
 library from loading into the coordinator JVM and poisoning FD inheritance into

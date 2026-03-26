@@ -263,7 +263,8 @@ mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl integration \
 - **LoRA fine-tuning without touching the base model.** `LoraTrainableHandler` wraps `LlamaTransformerHandler` and adds trainable low-rank adapters (A/B matrices, rank 4–16) on the Q and V projections. The frozen weights stay quantized at all times — backward passes dequantize one block per row via dedicated `transposedQ4K` / `transposedQ5K` / `transposedQ6K` scatter-reduce implementations. Adapters are persisted to a `.lora` binary checkpoint; the GGUF is never modified. See `docs/LoRA.md`.
 - **Custom JFR events for training observability.** `LoraTrainEvent` (type `juno.LoraTrainStep`) emits per-step timing breakdown (forwardMs / backwardMs / optimizerMs / loss) readable in JDK Mission Control. Activated with `--jfr DURATION` on the `lora` subcommand.
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
-- `MatVecBackend` interface decouples the matmul backend from the transformer logic.
+- `GpuMatVec` interface decouples the matmul backend from the transformer logic. `CublasMatVec` implements host `sgemv` (full H2D per call) and device `sgemv(DeviceFloatMatrix, x)` for resident weights. `CpuMatVec` as CPU fallback and test reference. Swappable without touching `GpuForwardPassHandler`.
+- GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent CUDA native libs (bytedeco) loading into the coordinator JVM and poisoning FD inheritance into forked node processes.
 - Stub mode — cluster boots in seconds without a model file; all integration tests run stub.
 
 ---
@@ -272,7 +273,7 @@ mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl integration \
 
 - JDK 25+
 - Maven 3.9+
-- CUDA 12.x (GPU nodes only — not required for CPU mode or any unit/integration tests)
+- CUDA / NVIDIA driver (GPU nodes only — not required for CPU mode or any unit/integration tests); Java bindings via org.bytedeco cuda-platform
 
 ---
 

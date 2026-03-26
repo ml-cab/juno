@@ -22,7 +22,7 @@ import java.util.Optional;
  * Single-tier KV cache contract.
  *
  * Implementations: CpuKVCache — Caffeine, bounded by JVM heap (-Xmx) GpuKVCache
- * — JCuda CudaBuffer, bounded by GPU VRAM
+ * — Cuda CudaBuffer, bounded by GPU VRAM
  *
  * All methods are thread-safe.
  */
