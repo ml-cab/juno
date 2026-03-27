@@ -2,7 +2,7 @@
   juno — Distributed Java LLM Inference Engine
   Full Architecture Design Document
   JDK 25 · Maven · Java-native · Commodity GPU Cluster
-  Last updated: 2026-03-20 (session 12)
+  Last updated: 2026-03-27 (session 15)
 ================================================================================
 
 
@@ -880,7 +880,7 @@ sampling:
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-13. BUILD STATUS (as of 2026-03-14, session 9)
+13. BUILD STATUS (as of 2026-03-27, session 15)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   juno   SUCCESS  (parent pom)
@@ -889,21 +889,39 @@ sampling:
                              ShardAssignment, SeedScorer, ModelDescriptor,
                              ModelRegistry, ModelStatus, NodeStatus, NodeConfig,
                              QuantizationType, InsufficientClusterVramException)
-  tokenizer        SUCCESS  (8 classes: Tokenizer, StubTokenizer, DJLTokenizer,
+  tokenizer        SUCCESS  (10 classes: Tokenizer, StubTokenizer, DJLTokenizer,
                              SimpleTokenizer, GgufTokenizer, ChatMessage,
-                             ChatTemplate, ChatTemplateFormatter)
+                             ChatTemplate, ChatTemplateFormatter,
+                             TokenizerEvent [juno.Tokenizer],
+                             TemplateFormatEvent [juno.TemplateFormat])
   sampler          SUCCESS  (9 classes: full pipeline — 8 steps, 3 preset profiles)
   kvcache          SUCCESS  (8 classes: KVCacheManager [+invalidatePrefix], GpuKVCache,
                              CpuKVCache, PrefixCache, KVBlock, KVKey, KVCache, LayerRange)
   health           SUCCESS  (6 classes: CircuitBreaker, CircuitState,
                              HealthEvaluator, HealthEvent, HealthThresholds,
                              NodeHealth)
-  node             SUCCESS  (13 classes: LlamaTransformerHandler [parallel matVec],
-                             GgufReader, LlamaConfig, LocalInferencePipeline,
-                             InferencePipeline, ForwardPassHandler,
-                             CyclicForwardPassHandler, ActivationCodec,
-                             ActivationDtype, ForwardRequest, ForwardResult,
-                             ShardContext, NodeConfig)
+  node             SUCCESS  (26 classes: LlamaTransformerHandler [+setKvAdapter, +evict,
+                               +newTestInstance, ForwardPassEvent],
+                             Phi3TransformerHandler [+setKvAdapter, +evict, ForwardPassEvent],
+                             NodeKVCacheAdapter,
+                             GgufReader, LlamaConfig [+synthetic()],
+                             LocalInferencePipeline, InferencePipeline,
+                             ForwardPassHandler,
+                             CyclicForwardPassHandler [ForwardPassEvent],
+                             CpuForwardPassHandler [ForwardPassEvent],
+                             GpuForwardPassHandler [ForwardPassEvent],
+                             ForwardPassHandlerLoader,
+                             ActivationCodec, ActivationDtype,
+                             ForwardRequest, ForwardResult, ShardContext,
+                             TensorShardContext, NodeConfig,
+                             CpuMatVec [MatVecEvent], CublasMatVec [MatVecEvent],
+                             MatVecBackend, CpuMatVecBackend, DeviceFloatMatrix,
+                             GpuContext, GpuMatVec, CudaAvailability,
+                             MatVecEvent [juno.MatVec],
+                             ForwardPassEvent [juno.ForwardPass],
+                             LoraAdapter, LoraAdapterSet, LoraAdamOptimizer,
+                             LoraTrainableHandler [ForwardPassEvent],
+                             LoraTrainEvent [juno.LoraTrainStep])
   coordinator      SUCCESS  (14 classes: GenerationLoop [session KV reuse + EOS filter],
                              RequestScheduler, InferenceApiServer,
                              SseTokenConsumer, BatchConfig, BatchEntry,
@@ -911,21 +929,19 @@ sampling:
                              PipelineUnavailableException, HealthReactor,
                              InferenceRequest [+sessionId, +ofSession, +kvCacheKey],
                              GenerationResult, TokenConsumer, RequestPriority)
-  player           SUCCESS  (6 main classes: ClusterHarness, EmbeddedNodeServer,
-                             NodeMain, ProcessPipelineClient,
-                             ChatHistory [+sessionId], ConsoleMain [+ofSession, +evictSession];
-                             1 test class: LoadShardsParallelTest)
+  player           SUCCESS  (6 main classes: ClusterHarness, NodeMain,
+                             EmbeddedNodeServer [wires NodeKVCacheAdapter into handler],
+                             ProcessPipelineClient, TensorParallelPipelineClient,
+                             ChatHistory [+sessionId], ConsoleMain [+lora subcommand])
                              Shade jar: player/target/player.jar  (main: ConsoleMain)
-  integration      SUCCESS  (ModelLiveRunner [standalone main, 6 checks, not JUnit];
-                             InProcessClusterIT + ThreeNodeClusterIT;
-                             depends on player module)
+  integration      SUCCESS  (ModelLiveRunner [8 checks]; InProcessClusterIT:6;
+                             ThreeNodeClusterIT:9; TensorParallelClusterIT:5;
+                             GpuForwardPassIT [gpu profile only])
                              Shade jar: integration/target/player.jar  (main: ModelLiveRunner)
 
-  Unit tests:    349  (across api/registry/coordinator/node/kvcache/tokenizer/
-                       sampler/health/player — all @Test methods in *Test.java files)
-                 +9   GenerationLoopSessionTest (session 9)
-  Integration:   15   (InProcessClusterIT:6 + ThreeNodeClusterIT:9)
-  Total @Test:   355
+  Unit tests:   ~455  (all @Test methods across all modules, session 14 baseline)
+              +  20   NodeKVCacheAdapterTest (13) + LlamaKvWiringTest (7)  [session 15]
+  Total @Test: ~475
   Failures:      0
   Errors:        0
 
@@ -3286,3 +3302,368 @@ All three commands build and pass the JFR flag to the JVM exec identically.
     → 50 steps, 7 tokens, ~2.2s/step, loss 6.97→3.62 in 99s
     /save → 44 adapters, 4401 KB
     Chat inference with saved adapter applies LoRA delta correctly.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+26. SESSION 15 CHANGES (2026-03-27) — KV CACHE WIRING + FULL JFR INSTRUMENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+26.1  Bug fix — NodeKVCacheAdapter.tryRestore() byte-order corruption
+-----------------------------------------------
+File: node/src/main/java/cab/ml/juno/node/NodeKVCacheAdapter.java
+
+Root cause:
+  tryRestore() called ByteBuffer.wrap(blk.data()).order(LE).asReadOnlyBuffer()
+  then used getFloat() on the read-only view. On HeapByteBuffer, asReadOnlyBuffer()
+  does NOT always propagate the byte order to the returned buffer in all JVM
+  builds, silently reverting to BIG_ENDIAN. The resulting float reads produced
+  values like 8.8E-44 instead of the stored 0.5 — a near-zero bit pattern that
+  happens to parse as a valid (tiny) float under big-endian interpretation.
+
+  Failing test:
+    NodeKVCacheAdapterTest.tryRestore_reconstructs_k_values_correctly:156
+    Expected 0.5f, actual 8.8E-44f.
+
+Fix:
+  Removed .asReadOnlyBuffer(). Read directly from the mutable ByteBuffer with
+  the explicitly set order:
+    ByteBuffer bb = ByteBuffer.wrap(blk.data()).order(ByteOrder.LITTLE_ENDIAN);
+    for (int i = 0; i < floatsPerSeq; i++) k[i] = bb.getFloat();
+
+  Same root cause pattern as transposedF32 in LoraTrainableHandler (session 14
+  §25.4) — never call asReadOnlyBuffer() on a HeapByteBuffer if byte order must
+  be preserved.
+
+26.2  KV cache structural fix — NodeKVCacheAdapter
+-----------------------------------------------
+Files:
+  node/src/main/java/cab/ml/juno/node/NodeKVCacheAdapter.java   (NEW)
+  node/src/test/java/cab/ml/juno/node/NodeKVCacheAdapterTest.java  (NEW, 13 tests)
+  node/src/test/java/cab/ml/juno/node/LlamaKvWiringTest.java       (NEW,  7 tests)
+
+PROBLEM (the structural issue):
+  KVCacheManager with GPU and CPU tiers (GpuKVCache, CpuKVCache, PrefixCache)
+  existed in the kvcache module, but LlamaTransformerHandler and
+  Phi3TransformerHandler each maintained their own private
+  Map<String, float[][]> kvCacheK / kvCacheV with no connection to the manager.
+  The comment in LlamaTransformerHandler was explicit:
+
+    "The simple HashMap-based cache here is safe for development; in production
+     the KVCacheManager from the coordinator module handles eviction and GPU offload."
+
+  That wiring was never done. Consequences:
+  - No eviction under real memory pressure at the node level.
+  - The GpuKVCache byte-budget LRU and Caffeine W-TinyLFU eviction were entirely
+    inert — the manager held zero blocks during actual inference.
+  - node/GpuKVCacheBackend.java (referenced in a comment as the real CUDA
+    implementation) did not exist.
+
+FIX — NodeKVCacheAdapter:
+  A new class that acts as the bridge between the handler's in-process float[][]
+  KV arrays and the KVCacheManager (GPU + CPU tiers).
+
+  Write-through (flush):
+    After each token position is written to the handler's local KV arrays,
+    NodeKVCacheAdapter.flush(requestId, absLayer, kData, vData, seqLen, kvDim)
+    is called. It serialises the K and V arrays into a KVBlock (float32 LE,
+    K first then V) and stores it via KVCacheManager.put(). GpuKVCache LRU
+    eviction fires here under VRAM budget pressure, demoting blocks to
+    CpuKVCache. Subsequent blocks promoted to GPU on next get().
+
+  Restore on local miss:
+    If the handler's local HashMap was cleared (entry evicted under JVM heap
+    pressure) and pos > 0, NodeKVCacheAdapter.tryRestore(requestId, absLayer,
+    kvDim) is called. KVCacheManager.get() checks GPU tier first, then CPU.
+    On any hit the serialized bytes are deserialised back to float[] K and V
+    arrays and copied into the local cache, restoring coherent attention state
+    without re-prefilling.
+
+  Eviction:
+    NodeKVCacheAdapter.evict(requestId) removes from KVCacheManager (both tiers)
+    in addition to the local HashMap removal. This is the single eviction
+    call-site — no more orphaned VRAM blocks after request completion.
+
+  KVBlock serialisation layout:
+    byte[0 .. seqLen*kvDim*4)          K values (float32 LE, row-major by pos)
+    byte[seqLen*kvDim*4 .. end)        V values (float32 LE, row-major by pos)
+
+  setKvAdapter() / evict() added to LlamaTransformerHandler and Phi3TransformerHandler:
+    - volatile NodeKVCacheAdapter kvAdapter field (null = dev/stub mode)
+    - setKvAdapter(adapter) — called by EmbeddedNodeServer after loadShard()
+    - evict(requestId) — removes from local HashMap and propagates to adapter
+
+  runLayers() updated in both handlers:
+    Before (dev/stub mode, unchanged behaviour when adapter == null):
+      kvCacheK.computeIfAbsent(requestId, ...)
+      for each layer: transformerLayer(...)
+      return x
+
+    After (production path when adapter != null):
+      boolean isNew = !kvCacheK.containsKey(requestId)
+      kvCacheK.computeIfAbsent(requestId, ...)
+      if (isNew && pos > 0 && adapter != null):
+        for each layer: adapter.tryRestore(requestId, absLayer, kvDim)
+          .ifPresent(pair -> copy pair.k() / pair.v() into local arrays)
+      ensureKvCapacity(...)
+      for each layer: transformerLayer(...)
+      if (adapter != null):
+        for each layer: adapter.flush(requestId, absLayer, kCache[li], vCache[li], pos+1, kvDim)
+      return x
+
+26.3  LlamaConfig.synthetic() — test factory
+-----------------------------------------------
+File: node/src/main/java/cab/ml/juno/node/LlamaConfig.java
+
+  Added package-private static factory:
+    static LlamaConfig synthetic(int vocabSize, int hiddenDim,
+                                  int numHeads, int numKvHeads, int numLayers)
+
+  Builds a LlamaConfig with reasonable defaults (rmsNormEps=1e-5,
+  ropeTheta=10000, architecture="llama", intermediateSize=hiddenDim*4)
+  without reading a GGUF file. Used by LlamaTransformerHandler.newTestInstance()
+  to build handlers with random F32 weights for unit tests.
+
+26.4  LlamaTransformerHandler.newTestInstance() — test factory
+-----------------------------------------------
+File: node/src/main/java/cab/ml/juno/node/LlamaTransformerHandler.java
+
+  Static package-private factory for unit tests — bypasses GGUF loading:
+    static LlamaTransformerHandler newTestInstance(
+        int vocabSize, int hiddenDim, int numHeads, int numKvHeads,
+        int numLayers, int startLayer, int endLayer,
+        boolean hasEmbd, boolean hasOutProj,
+        NodeKVCacheAdapter adapter)
+
+  Allocates random F32 QuantizedTensors (type=0) for all projection weights,
+  random float[] for norm weights. Uses CpuMatVec.INSTANCE. Sets kvAdapter
+  to the supplied value (null for dev/stub mode). Used by LlamaKvWiringTest.
+
+26.5  EmbeddedNodeServer wiring
+-----------------------------------------------
+File: player/src/main/java/cab/ml/juno/player/EmbeddedNodeServer.java
+
+  After loadShard() creates the KVCacheManager scoped to the shard's LayerRange,
+  a NodeKVCacheAdapter is constructed and injected into the handler:
+
+    NodeKVCacheAdapter adapter = new NodeKVCacheAdapter(newKvCache);
+    if (handler instanceof LlamaTransformerHandler lh)  lh.setKvAdapter(adapter);
+    else if (handler instanceof Phi3TransformerHandler ph) ph.setKvAdapter(adapter);
+
+  CyclicForwardPassHandler (stub mode) and GpuForwardPassHandler / CpuForwardPassHandler
+  (legacy paths) are not wired — they remain disconnected from the manager,
+  preserving backward compatibility and test isolation.
+
+  Added imports:
+    LlamaTransformerHandler, Phi3TransformerHandler, NodeKVCacheAdapter
+
+26.6  Full JFR instrumentation
+-----------------------------------------------
+Four new JFR event classes, all with @StackTrace(false) for low overhead.
+All events use begin() / commit() wrapping the actual work, so JFR duration
+equals the real wall time of the operation.
+
+26.6.1  MatVecEvent  (juno.MatVec)
+  File: node/src/main/java/cab/ml/juno/node/MatVecEvent.java
+  Category: Juno/MatVec
+  Fields:
+    backend  String   "cpu" | "cuda" | "cuda-resident"
+    rows     int      output dimension of A
+    cols     int      inner dimension (length of x)
+
+  Wired into:
+    CpuMatVec.sgemv(float[], float[], int, int)
+      → backend = "cpu"
+    CublasMatVec.sgemv(float[], float[], int, int)
+      → backend = "cuda"
+      → evt.begin() before device allocation; commit() in finally block
+        (always fires even on exception, after cudaFree)
+    CublasMatVec.sgemv(DeviceFloatMatrix, float[])
+      → backend = "cuda-resident"
+      → same begin()/finally pattern
+
+  Call rate: ~155 events per generated token for TinyLlama-1.1B (22 layers
+  × 7 projections/layer + 1 output projection). At FLOAT16, 4g heap, 3-node
+  CPU cluster, sort by duration descending to find the output projection
+  (32000 × 2048) as the hottest call consistently.
+
+26.6.2  ForwardPassEvent  (juno.ForwardPass)
+  File: node/src/main/java/cab/ml/juno/node/ForwardPassEvent.java
+  Category: Juno/Inference
+  Fields:
+    handlerType        String   "llama" | "phi3" | "cpu" | "gpu" | "cyclic" | "lora"
+    requestId          String   from ForwardRequest.requestId()
+    startPosition      int      sequence position (0 = first prefill token)
+    layerCount         int      layers executed by this shard
+    hasOutputProjection boolean  true for the last node in the pipeline
+
+  Wired into all six ForwardPassHandler.forward() implementations:
+    LlamaTransformerHandler   → handlerType = "llama"
+    Phi3TransformerHandler    → handlerType = "phi3"
+    CpuForwardPassHandler     → handlerType = "cpu"
+    GpuForwardPassHandler     → handlerType = "gpu"
+    CyclicForwardPassHandler  → handlerType = "cyclic"
+    LoraTrainableHandler      → handlerType = "lora"
+
+  Pattern in every handler:
+    ForwardPassEvent evt = new ForwardPassEvent();
+    evt.begin();
+    ... compute ...
+    evt.handlerType = "...";
+    evt.requestId = request.requestId();
+    evt.startPosition = request.startPosition();
+    evt.layerCount = endLayer - startLayer;
+    evt.hasOutputProjection = hasOutputProj;
+    evt.commit();
+
+  Use: filter startPosition = 0 to isolate prefill; group by handlerType to
+  compare pipeline vs LoRA inference overhead; correlate with juno.MatVec
+  at the same timestamp to decompose attention vs FFN time.
+
+26.6.3  TokenizerEvent  (juno.Tokenizer)
+  File: tokenizer/src/main/java/cab/ml/juno/tokenizer/TokenizerEvent.java
+  Category: Juno/Tokenizer
+  Fields:
+    tokenizerType  String   "gguf" | "djl" | "stub" | "simple"
+    operation      String   "encode" | "decode" | "decodeToken"
+    inputLength    int      chars for encode; token count for decode; always 1 for decodeToken
+    outputLength   int      token count for encode; char count for decode/decodeToken
+
+  Wired into all four Tokenizer implementations, all three methods each:
+    GgufTokenizer   — encode, decode, decodeToken
+    DJLTokenizer    — encode, decode, decodeToken
+    StubTokenizer   — encode, decode, decodeToken
+    SimpleTokenizer — encode, decode, decodeToken
+
+  Note on GgufTokenizer.decodeToken(): the existing early-return for OOV/control
+  tokens was refactored into an if-else block so the event fires on all paths
+  (including the empty-string return for BOS/EOS). inputLength is always 1;
+  outputLength is 0 for suppressed tokens.
+
+  Use: filter operation = "decodeToken" and aggregate total time to see streaming
+  decode overhead vs. actual matmul time. filter operation = "encode" to measure
+  SentencePiece BPE cost for long prompts.
+
+26.6.4  TemplateFormatEvent  (juno.TemplateFormat)
+  File: tokenizer/src/main/java/cab/ml/juno/tokenizer/TemplateFormatEvent.java
+  Category: Juno/Tokenizer
+  Fields:
+    modelType     String   "llama3" | "mistral" | "gemma" | "phi3" | "tinyllama" | "chatml" | …
+    messageCount  int      number of ChatMessage entries at format time
+    outputLength  int      character count of the formatted prompt string
+
+  Wired into ChatTemplateFormatter.format():
+    TemplateFormatEvent evt = new TemplateFormatEvent();
+    evt.begin();
+    String result = template.format(messages);
+    evt.modelType = template.modelType();
+    evt.messageCount = messages.size();
+    evt.outputLength = result.length();
+    evt.commit();
+
+  Use: in multi-turn sessions messageCount and outputLength grow with each turn.
+  Group by modelType to compare template overhead across model families. Duration
+  should be sub-millisecond; spikes indicate GC or unusual template complexity.
+
+26.7  Tests (session 15)
+-----------------------------------------------
+
+NodeKVCacheAdapterTest (node module) — 13 tests:
+  constructor_rejects_null_manager
+  manager_accessor_returns_wrapped_instance
+  flush_stores_block_retrievable_via_manager
+  flush_block_has_correct_sequence_length
+  flush_updates_block_on_second_call_with_longer_sequence
+  flush_different_layers_produce_distinct_blocks
+  tryRestore_returns_empty_when_no_block_exists
+  tryRestore_returns_kv_pair_after_flush
+  tryRestore_reconstructs_k_values_correctly          ← primary byte-order regression anchor
+  tryRestore_round_trips_zero_values
+  evict_removes_all_layers_for_request_from_manager
+  evict_does_not_remove_other_requests
+  evict_is_idempotent
+
+LlamaKvWiringTest (node module) — 7 tests:
+  Uses LlamaTransformerHandler.newTestInstance() with random F32 weights —
+  no GGUF file required.
+
+  evict_removes_local_kv_entry_and_propagates_to_manager
+  evict_without_prior_forward_does_not_throw
+  forward_stores_kv_block_in_manager_for_each_layer
+  second_forward_updates_block_sequence_length_in_manager
+  second_handler_instance_restores_kv_from_manager
+  handler_without_adapter_works_and_does_not_touch_manager
+
+26.8  Files changed in session 15
+-----------------------------------------------
+
+  node/src/main/java/.../node/
+    NodeKVCacheAdapter.java              NEW — flush / restore / evict bridge
+    MatVecEvent.java                     NEW — juno.MatVec JFR event
+    ForwardPassEvent.java                NEW — juno.ForwardPass JFR event
+    LlamaConfig.java                     + synthetic() test factory
+    LlamaTransformerHandler.java         + kvAdapter field, setKvAdapter(),
+                                           evict(), newTestInstance() factory,
+                                           direct constructor, ForwardPassEvent
+                                           wired into forward(); runLayers()
+                                           wired with flush/restore
+    Phi3TransformerHandler.java          + kvAdapter field, setKvAdapter(),
+                                           evict(), ForwardPassEvent wired into
+                                           forward(); runLayers() wired with
+                                           flush/restore
+    CpuForwardPassHandler.java           + ForwardPassEvent wired into forward()
+    GpuForwardPassHandler.java           + ForwardPassEvent wired into forward()
+    CyclicForwardPassHandler.java        + ForwardPassEvent wired into forward()
+    LoraTrainableHandler.java            + ForwardPassEvent wired into forward()
+    CpuMatVec.java                       + MatVecEvent wired into sgemv()
+    CublasMatVec.java                    + MatVecEvent wired into both sgemv()
+                                           overloads (host-A and device-resident)
+
+  tokenizer/src/main/java/.../tokenizer/
+    TokenizerEvent.java                  NEW — juno.Tokenizer JFR event
+    TemplateFormatEvent.java             NEW — juno.TemplateFormat JFR event
+    GgufTokenizer.java                   + TokenizerEvent in encode/decode/decodeToken
+    DJLTokenizer.java                    + TokenizerEvent in encode/decode/decodeToken
+    StubTokenizer.java                   + TokenizerEvent in encode/decode/decodeToken
+    SimpleTokenizer.java                 + TokenizerEvent in encode/decode/decodeToken
+    ChatTemplateFormatter.java           + TemplateFormatEvent in format()
+
+  player/src/main/java/.../player/
+    EmbeddedNodeServer.java              + NodeKVCacheAdapter wiring after loadShard()
+                                           + imports for LlamaTransformerHandler,
+                                             Phi3TransformerHandler, NodeKVCacheAdapter
+
+  node/src/test/java/.../node/
+    NodeKVCacheAdapterTest.java          NEW — 13 tests
+    LlamaKvWiringTest.java               NEW —  7 tests
+
+  README.md                              + Session 15 status, JFR Profiling section,
+                                           KV wiring in Architecture diagram,
+                                           updated Modules table and Key Design Decisions
+  docs/agent-arch.txt                    + Section 26 (this section)
+                                           + Updated header date and BUILD STATUS
+
+26.9  Build status (session 15)
+-----------------------------------------------
+  tokenizer   SUCCESS  (+ TokenizerEvent, TemplateFormatEvent; all 4 tokenizers
+                         and ChatTemplateFormatter instrumented)
+  node        SUCCESS  (+ NodeKVCacheAdapter, MatVecEvent, ForwardPassEvent;
+                         LlamaConfig + LlamaTransformerHandler + Phi3TransformerHandler
+                         wired; all 6 ForwardPassHandlers and both MatVec backends
+                         instrumented)
+  player      SUCCESS  (EmbeddedNodeServer: NodeKVCacheAdapter wired into loadShard())
+  All other modules unchanged.
+
+  New unit tests: 20 (NodeKVCacheAdapterTest:13 + LlamaKvWiringTest:7)
+  Previous total: ~455
+  New total:      ~475
+  Failures:       0
+  Errors:         0
+
+  JFR event summary:
+    juno.MatVec          — CpuMatVec, CublasMatVec (2 overloads)
+    juno.ForwardPass     — LlamaTransformerHandler, Phi3TransformerHandler,
+                           CpuForwardPassHandler, GpuForwardPassHandler,
+                           CyclicForwardPassHandler, LoraTrainableHandler
+    juno.Tokenizer       — GgufTokenizer, DJLTokenizer, StubTokenizer,
+                           SimpleTokenizer (encode/decode/decodeToken each)
+    juno.TemplateFormat  — ChatTemplateFormatter
+    juno.LoraTrainStep   — LoraTrainableHandler.trainStep() [session 14]

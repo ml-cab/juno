@@ -319,15 +319,28 @@ public final class GpuForwardPassHandler implements ForwardPassHandler {
     public ForwardResult forward(ForwardRequest request, ShardContext context) {
         long start = System.nanoTime();
 
+        ForwardPassEvent evt = new ForwardPassEvent();
+        evt.begin();
+
         float[] x = getInitialActivation(request);
         x = runLayers(x, request.requestId(), request.startPosition());
 
+        ForwardResult result;
         if (hasOutputProj) {
             float[] logits = outputProjection(x);
-            return ForwardResult.logits(request.requestId(), logits, System.nanoTime() - start);
+            result = ForwardResult.logits(request.requestId(), logits, System.nanoTime() - start);
         } else {
-            return ForwardResult.activations(request.requestId(), x, System.nanoTime() - start);
+            result = ForwardResult.activations(request.requestId(), x, System.nanoTime() - start);
         }
+
+        evt.handlerType = "gpu";
+        evt.requestId = request.requestId();
+        evt.startPosition = request.startPosition();
+        evt.layerCount = endLayer - startLayer;
+        evt.hasOutputProjection = hasOutputProj;
+        evt.commit();
+
+        return result;
     }
 
     @Override
@@ -354,8 +367,8 @@ public final class GpuForwardPassHandler implements ForwardPassHandler {
 
     private float[] runLayers(float[] x, String requestId, int pos) {
         int L = endLayer - startLayer;
-        kvCacheK.computeIfAbsent(requestId, _ -> new float[L][MAX_SEQ_LEN * cfg.kvDim()]);
-        kvCacheV.computeIfAbsent(requestId, _ -> new float[L][MAX_SEQ_LEN * cfg.kvDim()]);
+        kvCacheK.computeIfAbsent(requestId, k -> new float[L][MAX_SEQ_LEN * cfg.kvDim()]);
+        kvCacheV.computeIfAbsent(requestId, k -> new float[L][MAX_SEQ_LEN * cfg.kvDim()]);
 
         float[][] kCache = kvCacheK.get(requestId);
         float[][] vCache = kvCacheV.get(requestId);

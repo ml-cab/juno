@@ -98,6 +98,21 @@ public record LlamaConfig(int hiddenDim, // embedding / residual stream dimensio
 		return (v instanceof Object[] arr) ? arr.length : 0;
 	}
 
+	/**
+	 * Build a synthetic {@link LlamaConfig} for unit tests — no GGUF file needed.
+	 * Uses typical default values for rmsNormEps and ropeTheta.
+	 */
+	static LlamaConfig synthetic(int vocabSize, int hiddenDim,
+			int numHeads, int numKvHeads, int numLayers) {
+		int headDim           = hiddenDim / numHeads;
+		int intermediateSize  = hiddenDim * 4;           // rough default
+		float rmsNormEps      = 1e-5f;
+		float ropeTheta       = 10_000f;
+		String architecture   = "llama";
+		return new LlamaConfig(hiddenDim, numLayers, numHeads, numKvHeads,
+				headDim, intermediateSize, vocabSize, rmsNormEps, ropeTheta, architecture);
+	}
+
 	/** Grouped-query attention ratio: how many Q-heads share each KV head. */
 	public int gqaRatio() {
 		return numHeads / numKvHeads;

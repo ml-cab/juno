@@ -108,7 +108,7 @@ class TensorParallelClusterIT {
 				SamplingParams.defaults().withMaxTokens(maxTokens), RequestPriority.NORMAL);
 
 		List<String> pieces = new ArrayList<>();
-		GenerationResult result = generationLoop.generate(request, (piece, _, _) -> pieces.add(piece));
+		GenerationResult result = generationLoop.generate(request, (piece, tokenId, step) -> pieces.add(piece));
 
 		assertThat(result.generatedTokens()).as("at least one token generated").isGreaterThan(0)
 				.isLessThanOrEqualTo(maxTokens);

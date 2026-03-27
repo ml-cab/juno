@@ -139,8 +139,8 @@ class GenerationLoopBatchTest {
 		List<Integer> tokensForReq1 = new CopyOnWriteArrayList<>();
 		List<Integer> tokensForReq2 = new CopyOnWriteArrayList<>();
 
-		TokenConsumer c1 = (_, tokenId, _) -> tokensForReq1.add(tokenId);
-		TokenConsumer c2 = (_, tokenId, _) -> tokensForReq2.add(tokenId);
+		TokenConsumer c1 = (piece, tokenId, pos) -> tokensForReq1.add(tokenId);
+		TokenConsumer c2 = (piece, tokenId, pos) -> tokensForReq2.add(tokenId);
 
 		BatchEntry e1 = new BatchEntry(InferenceRequest.of("m", List.of(ChatMessage.user("a")),
 				SamplingParams.defaults().withMaxTokens(3), RequestPriority.NORMAL), c1);

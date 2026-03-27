@@ -219,7 +219,7 @@ public final class ModelLiveRunner {
 
 		try {
 			List<String> pieces = new ArrayList<>();
-			loop.generate(request("hello", 10), (piece, _, _) -> pieces.add(piece));
+			loop.generate(request("hello", 10), (piece, tokenId, step) -> pieces.add(piece));
 
 			for (String piece : pieces) {
 				if (piece.contains("\u2581")) {

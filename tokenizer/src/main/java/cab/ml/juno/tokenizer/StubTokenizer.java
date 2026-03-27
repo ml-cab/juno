@@ -78,11 +78,18 @@ public final class StubTokenizer implements Tokenizer {
 	public int[] encode(String text) {
 		if (text == null || text.isBlank())
 			return new int[0];
+		TokenizerEvent evt = new TokenizerEvent();
+		evt.begin();
 		String[] words = text.strip().split("\\s+");
 		int[] ids = new int[words.length];
 		for (int i = 0; i < words.length; i++) {
 			ids[i] = getOrCreate(words[i]);
 		}
+		evt.tokenizerType = "stub";
+		evt.operation = "encode";
+		evt.inputLength = text.length();
+		evt.outputLength = ids.length;
+		evt.commit();
 		return ids;
 	}
 
@@ -90,6 +97,8 @@ public final class StubTokenizer implements Tokenizer {
 	public String decode(int[] tokenIds) {
 		if (tokenIds == null || tokenIds.length == 0)
 			return "";
+		TokenizerEvent evt = new TokenizerEvent();
+		evt.begin();
 		List<String> parts = new ArrayList<>();
 		for (int id : tokenIds) {
 			String token = reverse.getOrDefault(id, "<unk>");
@@ -97,21 +106,37 @@ public final class StubTokenizer implements Tokenizer {
 				parts.add(token);
 			}
 		}
-		return String.join(" ", parts);
+		String result = String.join(" ", parts);
+		evt.tokenizerType = "stub";
+		evt.operation = "decode";
+		evt.inputLength = tokenIds.length;
+		evt.outputLength = result.length();
+		evt.commit();
+		return result;
 	}
 
 	@Override
 	public String decodeToken(int tokenId) {
+		TokenizerEvent evt = new TokenizerEvent();
+		evt.begin();
 		String token = reverse.get(tokenId);
+		String piece;
 		if (token == null) {
 			// Token not yet in vocab (e.g. stub winner from CyclicForwardPassHandler).
 			// Return a visible placeholder so streaming output is never invisible.
-			return "tok" + tokenId + " ";
+			piece = "tok" + tokenId + " ";
+		} else if (token.startsWith("<") && token.endsWith(">")) {
+			// suppress special tokens for streaming
+			piece = "";
+		} else {
+			piece = token + " ";
 		}
-		// suppress special tokens for streaming
-		if (token.startsWith("<") && token.endsWith(">"))
-			return "";
-		return token + " ";
+		evt.tokenizerType = "stub";
+		evt.operation = "decodeToken";
+		evt.inputLength = 1;
+		evt.outputLength = piece.length();
+		evt.commit();
+		return piece;
 	}
 
 	@Override

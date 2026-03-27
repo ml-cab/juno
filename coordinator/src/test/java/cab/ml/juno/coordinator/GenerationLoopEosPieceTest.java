@@ -124,7 +124,7 @@ class GenerationLoopEosPieceTest {
 
 		List<String> received = new ArrayList<>();
 		GenerationResult result = loopWith(stubTokenizer, pipeline).generate(req("hi"),
-				(piece, _, _) -> received.add(piece));
+				(piece, id, step) -> received.add(piece));
 
 		assertThat(received).isEmpty();
 		assertThat(result.text()).isEmpty();
@@ -155,7 +155,7 @@ class GenerationLoopEosPieceTest {
 		);
 
 		List<String> streamed = new ArrayList<>();
-		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, _, _) -> streamed.add(piece));
+		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, id, step) -> streamed.add(piece));
 
 		assertThat(streamed).as("</s> must not be streamed").doesNotContain("</s>");
 		assertThat(result.text()).as("</s> must not appear in text()").doesNotContain("</s>");
@@ -177,7 +177,7 @@ class GenerationLoopEosPieceTest {
 				StubInferencePipeline.DEFAULT_TOKEN);
 
 		List<String> streamed = new ArrayList<>();
-		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, _, _) -> streamed.add(piece));
+		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, id, step) -> streamed.add(piece));
 
 		assertThat(streamed).doesNotContain("<|endoftext|>");
 		assertThat(result.text()).doesNotContain("<|endoftext|>");
@@ -201,7 +201,7 @@ class GenerationLoopEosPieceTest {
 		);
 
 		List<String> streamed = new ArrayList<>();
-		loopWith(tok, pipeline).generate(req("hi"), (piece, _, _) -> streamed.add(piece));
+		loopWith(tok, pipeline).generate(req("hi"), (piece, id, step) -> streamed.add(piece));
 
 		assertThat(streamed).contains("3<x<7");
 	}

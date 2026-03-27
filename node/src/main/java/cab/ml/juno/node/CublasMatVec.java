@@ -74,6 +74,9 @@ public final class CublasMatVec implements GpuMatVec {
         if (x.length != cols)
             throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
 
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+
         float[] y = new float[rows];
         long bytesA = (long) rows * cols * 4;
         long bytesX = (long) cols * 4;
@@ -141,6 +144,10 @@ public final class CublasMatVec implements GpuMatVec {
             pA.close();
             pX.close();
             pY.close();
+            evt.backend = "cuda";
+            evt.rows = rows;
+            evt.cols = cols;
+            evt.commit();
         }
     }
 
@@ -154,6 +161,9 @@ public final class CublasMatVec implements GpuMatVec {
         int cols = A.cols();
         if (x.length != cols)
             throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
 
         float[] y = new float[rows];
         long bytesX = (long) cols * 4;
@@ -212,6 +222,10 @@ public final class CublasMatVec implements GpuMatVec {
             cudart.cudaFree(pY.get(0));
             pX.close();
             pY.close();
+            evt.backend = "cuda-resident";
+            evt.rows = rows;
+            evt.cols = cols;
+            evt.commit();
         }
     }
 

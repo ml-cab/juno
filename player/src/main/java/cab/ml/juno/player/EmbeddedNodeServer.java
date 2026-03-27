@@ -42,6 +42,9 @@ import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardResult;
 import cab.ml.juno.node.GpuContext;
 import cab.ml.juno.node.GpuForwardPassHandler;
+import cab.ml.juno.node.LlamaTransformerHandler;
+import cab.ml.juno.node.NodeKVCacheAdapter;
+import cab.ml.juno.node.Phi3TransformerHandler;
 import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.ShardAssignment;
 import io.grpc.Server;
@@ -244,8 +247,19 @@ public final class EmbeddedNodeServer {
 			context = newCtx;
 
 			LayerRange range = LayerRange.of(request.getStartLayer(), request.getEndLayer());
-			kvCache = new KVCacheManager(new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256), range);
+			KVCacheManager newKvCache = new KVCacheManager(
+					new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256), range);
+			kvCache = newKvCache;
 			log.info("Node [" + nodeId + "] KVCache scoped to " + range);
+
+			// Wire the adapter so the transformer handler writes through to the
+			// KVCacheManager (GPU + CPU tiers with eviction under budget pressure).
+			NodeKVCacheAdapter adapter = new NodeKVCacheAdapter(newKvCache);
+			if (handler instanceof LlamaTransformerHandler lh) {
+				lh.setKvAdapter(adapter);
+			} else if (handler instanceof Phi3TransformerHandler ph) {
+				ph.setKvAdapter(adapter);
+			}
 
 			responseObserver.onNext(LoadShardResponse.newBuilder().setSuccess(true).setMessage(msg).build());
 			responseObserver.onCompleted();

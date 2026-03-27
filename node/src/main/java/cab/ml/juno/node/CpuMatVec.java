@@ -38,6 +38,13 @@ public final class CpuMatVec implements GpuMatVec {
 			throw new IllegalArgumentException("A.length=" + A.length + " != rows*cols=" + ((long) rows * cols));
 		if (x.length != cols)
 			throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
-		return CpuForwardPassHandler.matVec(A, x, rows, cols);
+		MatVecEvent evt = new MatVecEvent();
+		evt.begin();
+		float[] result = CpuForwardPassHandler.matVec(A, x, rows, cols);
+		evt.backend = "cpu";
+		evt.rows = rows;
+		evt.cols = cols;
+		evt.commit();
+		return result;
 	}
 }

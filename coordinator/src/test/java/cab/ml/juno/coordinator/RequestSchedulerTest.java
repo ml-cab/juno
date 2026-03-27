@@ -45,7 +45,7 @@ class RequestSchedulerTest {
 	@Test
 	void async_submit_calls_consumer() throws InterruptedException {
 		CountDownLatch latch = new CountDownLatch(1);
-		TokenConsumer consumer = (_, _, pos) -> {
+		TokenConsumer consumer = (piece, tokenId, pos) -> {
 			if (pos == 0)
 				latch.countDown();
 		};

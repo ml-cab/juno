@@ -156,7 +156,7 @@ class RequestSchedulerBatchTest {
 		scheduler = new RequestScheduler(10, loop, BatchConfig.of(4, 50));
 
 		List<String> pieces = new java.util.concurrent.CopyOnWriteArrayList<>();
-		TokenConsumer consumer = (piece, _, _) -> pieces.add(piece);
+		TokenConsumer consumer = (piece, id, step) -> pieces.add(piece);
 
 		CompletableFuture<GenerationResult> future = scheduler.submit(req("stream"), consumer);
 		future.get(10, TimeUnit.SECONDS);

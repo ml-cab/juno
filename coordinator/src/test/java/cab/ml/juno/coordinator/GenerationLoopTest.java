@@ -122,7 +122,7 @@ class GenerationLoopTest {
 		GenerationLoop loop = loopWith(pipeline);
 
 		List<Integer> receivedTokens = new ArrayList<>();
-		TokenConsumer consumer = (_, tokenId, _) -> receivedTokens.add(tokenId);
+		TokenConsumer consumer = (piece, tokenId, pos) -> receivedTokens.add(tokenId);
 
 		loop.generate(requestFor("test"), consumer);
 
