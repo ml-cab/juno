@@ -17,16 +17,16 @@ import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
-import cab.ml.juno.tokenizer.StubTokenizer;
+import cab.ml.juno.tokenizer.SimpleTokenizer;
 
 class GenerationLoopBatchTest {
 
 	private GenerationLoop loop;
-	private StubTokenizer tokenizer;
+	private SimpleTokenizer tokenizer;
 
 	@BeforeEach
 	void setUp() {
-		tokenizer = new StubTokenizer();
+		tokenizer = new SimpleTokenizer();
 		loop = new GenerationLoop(tokenizer, Sampler.create(), new StubInferencePipeline(),
 				new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000)));
 	}

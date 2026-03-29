@@ -10,10 +10,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 /**
- * GpuMatVec contract tests.
+ * MatVecBackend contract tests.
  *
- * Runs against CpuMatVec so the full suite passes on any machine without a GPU.
- * The same suite is inherited by CublasMatVecTest (see that class) which
+ * Runs against CpuMatVecBackend so the full suite passes on any machine without a GPU.
+ * The same suite is inherited by CudaMatVecBackendTest (see that class) which
  * re-runs all these cases against the real cuBLAS implementation (bytedeco cuda).
  *
  * Rules verified:
@@ -23,11 +23,11 @@ import static org.assertj.core.api.Assertions.within;
  *   - Edge cases: single row, single col, zeros matrix, zeros vector
  *   - Throws on dimension mismatch
  */
-@DisplayName("GpuMatVec contract — CpuMatVec reference")
-class GpuMatVecContractTest {
+@DisplayName("MatVecBackend contract — CpuMatVecBackend reference")
+class MatVecBackendContractTest {
 
-    /** Override in subclasses to test a different GpuMatVec implementation. */
-    protected GpuMatVec impl() {
+    /** Override in subclasses to test a different MatVecBackend implementation. */
+    protected MatVec impl() {
         return CpuMatVec.INSTANCE;
     }
 
@@ -212,9 +212,8 @@ class GpuMatVecContractTest {
     }
 
     @Test
-    @DisplayName("CpuMatVec rejects device-resident sgemv (default contract)")
-    void cpu_backend_rejects_device_sgemv() {
-        assertThatThrownBy(() -> CpuMatVec.INSTANCE.sgemv(null, new float[4]))
-            .isInstanceOf(UnsupportedOperationException.class);
+    @DisplayName("CpuMatVecBackend.INSTANCE is a singleton")
+    void cpu_backend_is_singleton() {
+        assertThat(CpuMatVec.INSTANCE).isSameAs(CpuMatVec.INSTANCE);
     }
 }

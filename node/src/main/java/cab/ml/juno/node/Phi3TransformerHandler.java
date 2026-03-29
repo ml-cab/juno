@@ -130,6 +130,22 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 	}
 
+	/**
+	 * Load a Phi-3 shard with an explicit compute backend.
+	 *
+	 * <p>Phi3TransformerHandler uses lazy block-wise dequantisation via static
+	 * helpers in {@link LlamaTransformerHandler} and does not yet delegate to a
+	 * pluggable {@link MatVec}. The {@code backend} parameter is accepted
+	 * for API symmetry with {@link LlamaTransformerHandler#load(Path, ShardContext, MatVec)}
+	 * and logged; it is otherwise unused.
+	 */
+	public static Phi3TransformerHandler load(Path modelPath, ShardContext context,
+			@SuppressWarnings("unused") MatVec backend) throws IOException {
+		log.info("Phi3TransformerHandler: backend parameter accepted but unused ("
+				+ backend.getClass().getSimpleName() + "); Phi-3 always uses CPU static matVec.");
+		return load(modelPath, context);
+	}
+
 	private Phi3TransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx) throws IOException {
 		this.cfg = cfg;
 		this.startLayer = ctx.startLayer();

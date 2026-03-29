@@ -76,7 +76,7 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
   +-- kvcache/                  <- KVCacheManager, GpuKVCache, CpuKVCache,
   |                                PrefixCache, KVBlock, KVKey, KVCache,
   |                                LayerRange
-  +-- tokenizer/                <- Tokenizer, StubTokenizer, DJLTokenizer,
+  +-- tokenizer/                <- Tokenizer, SimpleTokenizer, DJLTokenizer,
   |                                GgufTokenizer (SentencePiece BPE from GGUF),
   |                                SimpleTokenizer,
   |                                ChatMessage, ChatTemplate,
@@ -510,7 +510,7 @@ Example metrics endpoint:
   batch (full decode()) paths — they must both replace ▁ independently.
 
   Performance             ~50k sentences/sec
-  Thread safety           StubTokenizer uses HashMap + unsynchronized nextId —
+  Thread safety           SimpleTokenizer uses HashMap + unsynchronized nextId —
                           NOT thread-safe for concurrent encode() calls with new
                           tokens. Pre-warm (or use GgufTokenizer) in production.
 
@@ -889,7 +889,7 @@ sampling:
                              ShardAssignment, SeedScorer, ModelDescriptor,
                              ModelRegistry, ModelStatus, NodeStatus, NodeConfig,
                              QuantizationType, InsufficientClusterVramException)
-  tokenizer        SUCCESS  (10 classes: Tokenizer, StubTokenizer, DJLTokenizer,
+  tokenizer        SUCCESS  (9 classes: Tokenizer, SimpleTokenizer, DJLTokenizer,
                              SimpleTokenizer, GgufTokenizer, ChatMessage,
                              ChatTemplate, ChatTemplateFormatter,
                              TokenizerEvent [juno.Tokenizer],
@@ -908,15 +908,12 @@ sampling:
                              LocalInferencePipeline, InferencePipeline,
                              ForwardPassHandler,
                              CyclicForwardPassHandler [ForwardPassEvent],
-                             CpuForwardPassHandler [ForwardPassEvent],
-                             GpuForwardPassHandler [ForwardPassEvent],
                              ForwardPassHandlerLoader,
                              ActivationCodec, ActivationDtype,
                              ForwardRequest, ForwardResult, ShardContext,
                              TensorShardContext, NodeConfig,
-                             CpuMatVec [MatVecEvent], CublasMatVec [MatVecEvent],
-                             MatVecBackend, CpuMatVecBackend, DeviceFloatMatrix,
-                             GpuContext, GpuMatVec, CudaAvailability,
+                             MatVec, CpuMatVec, CudaMatVec,
+                             DeviceFloatMatrix, GpuContext, CudaAvailability,
                              MatVecEvent [juno.MatVec],
                              ForwardPassEvent [juno.ForwardPass],
                              LoraAdapter, LoraAdapterSet, LoraAdamOptimizer,
@@ -1203,7 +1200,7 @@ Test results after fixes:
 
   Phase 1 — Foundation  [COMPLETE]
     [x] sampler     SamplingParams, Sampler, all 6 pipeline steps, 3 presets
-    [x] tokenizer   Tokenizer, StubTokenizer, DJLTokenizer,
+    [x] tokenizer   Tokenizer, SimpleTokenizer, DJLTokenizer,
                     ChatTemplateFormatter, ChatTemplate, ChatMessage
 
   Phase 2 — Core Infrastructure  [COMPLETE]
@@ -1664,7 +1661,7 @@ as the authoritative real-model test location.
 -----------------------------------------------
   [ ] Strip EOS token </s> (token ID 2) from displayed output in GenerationLoop.
       Currently the EOS token halts generation but its decoded piece (empty
-      string for StubTokenizer, "</s>" for GgufTokenizer) may appear in
+      string for SimpleTokenizer, "</s>" for GgufTokenizer) may appear in
       fullText. Cosmetic — does not affect generation correctness or token
       counts. Fix: break before appending the EOS piece.
 
@@ -1870,7 +1867,7 @@ MatVecParallelTest (node module) — 9 new tests:
   numerical equivalence.
 
 GenerationLoopEosPieceTest (coordinator module) — 4 new tests:
-  Uses DelegatingTokenizer (delegation wrapper over final StubTokenizer) to
+  Uses DelegatingTokenizer (delegation wrapper over final SimpleTokenizer) to
   inject custom piece strings for specific token IDs without subclassing.
 
   eos_token_id_stops_immediately_no_piece_streamed
@@ -2035,21 +2032,21 @@ The matVec call sites inside LlamaTransformerHandler total 7 per layer
 (wq, wk, wv, wo, wGate, wUp, wDown) plus the output projection. For a
 22-layer model that is 155 matVec calls per token.
 
-19.2  Design — MatVecBackend interface (was GpuMatVec, renamed session 12)
+19.2  Design — MatVec interface (was GpuMatVec, renamed session 12)
 -----------------------------------------------
 A single interface decouples the matmul backend from the transformer logic:
 
-  MatVecBackend
+  MatVec
     float[] sgemv(float[] A, float[] x, int rows, int cols)
 
 Implementations:
-  CpuMatVecBackend      — delegates to LlamaTransformerHandler.matVec()
+  CpuMatVec      — delegates to LlamaTransformerHandler.matVec()
                    (was CpuMatVec; renamed session 12)
-                   Singleton (CpuMatVecBackend.INSTANCE). Stateless, no resources.
+                   Singleton (CpuMatVec.INSTANCE). Stateless, no resources.
                    Used as CPU fallback and as the reference implementation
                    in all tests that do not require a GPU.
 
-  CudaMatVecBackend   — cublasSgemv_v2 via org.bytedeco cuda (cublas).
+  CudaMatVec   — cublasSgemv_v2 via org.bytedeco cuda (cublas).
                    Row-major to cuBLAS column-major mapping via CUBLAS_OP_T —
                    no data reordering, just a flag. See §19.3 for details.
                    One instance per GpuContext (one per node JVM).
@@ -2060,7 +2057,7 @@ Contract enforced by both:
   - Returns a new float[rows]
   - Thread-safe: each call is self-contained with its own device memory
 
-19.3  CudaMatVecBackend — row-major to cuBLAS mapping
+19.3  CudaMatVec — row-major to cuBLAS mapping
 -----------------------------------------------
 cuBLAS is column-major. A row-major matrix A[rows x cols] stored in memory
 is identical to a column-major A^T[cols x rows]. To compute y = A * x:
@@ -2096,7 +2093,7 @@ One GpuContext per node JVM. AutoCloseable.
   ctx.close()    — cublasDestroy(handle), idempotent
 
 cuBLAS handles are thread-safe for concurrent kernel submissions from
-multiple Java threads. All CudaMatVecBackend calls on the same GpuContext
+multiple Java threads. All CudaMatVec calls on the same GpuContext
 can run concurrently without additional synchronisation.
 
 19.5  CudaAvailability — safe detection
@@ -2140,46 +2137,44 @@ Structurally mirrors LlamaTransformerHandler. Identical:
     from LlamaTransformerHandler reused directly)
 
 Different:
-  - Constructor takes a MatVecBackend instance
+  - Constructor takes a MatVec instance
   - All 7 matVec calls per layer + output projection are routed through
     matVec.sgemv() instead of LlamaTransformerHandler.matVec()
 
-Factory: LlamaTransformerHandler.load(Path, ShardContext, MatVecBackend)
+Factory: LlamaTransformerHandler.load(Path, ShardContext, MatVec)
   Opens the GGUF file, reads LlamaConfig, loads all weight tensors for the
-  assigned layer range. Identical to CpuForwardPassHandler.load(). Matmul
-  weights stay on the host; each CublasMatVec.sgemv uploads A every call (tests,
-  CpuMatVec backend).
+  assigned layer range. Matmul weights stay raw (QuantizedTensor); lazy
+  dequantisation happens one 256-element block at a time inside matVec().
 
 Production GPU path — weights uploaded once:
   GpuContext ctx = GpuContext.init(0);
-  handler = GpuForwardPassHandler.loadGpuResident(modelPath, shardCtx, ctx);
-  // call handler.releaseGpuResources() before ctx.close()
+  handler = ForwardPassHandlerLoader.load(modelPath, shardCtx, new CudaMatVec(ctx));
 
 DeviceFloatMatrix — row-major GPU buffer for one weight matrix; created by
-  DeviceFloatMatrix.upload(GpuContext, float[] host, rows, cols). CublasMatVec
-  implements GpuMatVec.sgemv(DeviceFloatMatrix, float[]) — copies x and y only.
+  DeviceFloatMatrix.upload(GpuContext, float[] host, rows, cols). CudaMatVec
+  implements sgemv(DeviceFloatMatrix, float[]) — copies x and y only.
 
 CPU-only fallback (same class, different backend):
-  handler = LlamaTransformerHandler.load(modelPath, shardCtx, CpuMatVecBackend.INSTANCE);
+  handler = LlamaTransformerHandler.load(modelPath, shardCtx, CpuMatVec.INSTANCE);
 
 19.7  Node module — new classes summary
 -----------------------------------------------
-  MatVecBackend.java              Interface — sgemv contract
-  CpuMatVecBackend.java              MatVecBackend backed by LlamaTransformerHandler.matVec()
-  CublasMatVec.java           GpuMatVec backed by cublasSgemv_v2 (org.bytedeco cublas)
+  MatVec.java              Interface — sgemv contract
+  CpuMatVec.java              MatVec backed by LlamaTransformerHandler.matVec()
+  CudaMatVec.java      MatVec backed by cublasSgemv_v2 (org.bytedeco cublas)
   DeviceFloatMatrix.java      GPU-resident weight matrix (upload once)
   GpuContext.java             cuBLAS handle lifecycle, AutoCloseable
   CudaAvailability.java       Safe CUDA runtime detection, cached
-  LlamaTransformerHandler.java  ForwardPassHandler using MatVecBackend
+  LlamaTransformerHandler.java  ForwardPassHandler using MatVec
 
 Updated node module listing (full):
   ForwardPassHandler          Interface
   CyclicForwardPassHandler    Stub, deterministic, tests
   LlamaTransformerHandler       Real transformer, parallel CPU matVec
-  LlamaTransformerHandler       Real transformer, MatVecBackend backend  <- NEW
-  MatVecBackend                   Interface — matmul backend           <- NEW
-  CpuMatVecBackend                   CPU implementation of MatVecBackend      <- NEW
-  CudaMatVecBackend                cuBLAS implementation of MatVecBackend   <- NEW
+  LlamaTransformerHandler       Real transformer, MatVec backend  <- NEW
+  MatVec                   Interface — matmul backend           <- NEW
+  CpuMatVec                   CPU implementation of MatVec      <- NEW
+  CudaMatVec                cuBLAS implementation of MatVec   <- NEW
   GpuContext                  cuBLAS handle lifecycle               <- NEW
   CudaAvailability            CUDA runtime detection                <- NEW
   GgufReader                  GGUF v2/v3 binary parser
@@ -2195,9 +2190,9 @@ Updated node module listing (full):
 19.8  Test additions (session 10)
 -----------------------------------------------
 
-GpuMatVecContractTest (node module) — 17 tests, no GPU required:
+MatVecContractTest (node module) — 17 tests, no GPU required:
   Full contract suite runs against CpuMatVec.INSTANCE.
-  Extended by CublasMatVecTest which inherits all 17 tests.
+  Extended by CudaMatVecTest which inherits all 17 tests.
 
   Contract tests:
     output_length_is_rows
@@ -2218,7 +2213,7 @@ GpuMatVecContractTest (node module) — 17 tests, no GPU required:
     wrong_A_length_throws               IllegalArgumentException
     wrong_x_length_throws               IllegalArgumentException
 
-CublasMatVecTest (node module) — @Tag("gpu"), extends GpuMatVecContractTest:
+CudaMatVecTest (node module) — @Tag("gpu"), extends MatVecContractTest:
   Inherits all 18 contract tests, adds:
     device_matrix_sgemv_matches_host_path           DeviceFloatMatrix vs host A
     cublas_matches_cpu_reference_hidden_dim         2048 x 2048
@@ -2789,16 +2784,16 @@ backend — wrong mental model.
 -----------------------------------------------
   BEFORE                         AFTER
   ─────────────────────────────────────────────────────────
-  GpuMatVec              →  MatVecBackend          (interface)
-  CpuMatVec              →  CpuMatVecBackend       (parallel IntStream impl)
-  CublasMatVec           →  CudaMatVecBackend      (cublasSgemv impl)
+  GpuMatVec              →  MatVec          (interface)
+  CpuMatVec              →  CpuMatVec       (parallel IntStream impl)
+  CublasMatVec           →  CudaMatVec      (cublasSgemv impl)
   CpuForwardPassHandler  →  LlamaTransformerHandler (LLaMA-family arch, any backend)
   GpuForwardPassHandler  →  (eliminated — merged into LlamaTransformerHandler)
   PhiForwardPassHandler  →  Phi3TransformerHandler  (Phi-3 arch, any backend)
 
   Test files renamed to match:
-  GpuMatVecContractTest      → MatVecBackendContractTest
-  CublasMatVecTest           → CudaMatVecBackendTest
+  GpuMatVecContractTest      → MatVecContractTest
+  CublasMatVecTest           → CudaMatVecTest
   GpuForwardPassHandlerTest  → LlamaTransformerHandlerTest
   PhiHandlerQuantizedLoadTest → Phi3TransformerHandlerTest
 
@@ -2806,15 +2801,15 @@ backend — wrong mental model.
 -----------------------------------------------
 GpuForwardPassHandler was structurally identical to LlamaTransformerHandler
 (same weight loading, same attention math, same KV cache) with only the
-matVec calls different. That is exactly what the MatVecBackend field is for.
+matVec calls different. That is exactly what the MatVec field is for.
 
 Merged result:
-  LlamaTransformerHandler(MatVecBackend backend)
+  LlamaTransformerHandler(MatVec backend)
 
   CPU node:  LlamaTransformerHandler.load(path, ctx)
-               → uses CpuMatVecBackend.INSTANCE by default
+               → uses CpuMatVec.INSTANCE by default
 
-  GPU node:  LlamaTransformerHandler.load(path, ctx, new CudaMatVecBackend(ctx))
+  GPU node:  LlamaTransformerHandler.load(path, ctx, new CudaMatVec(ctx))
                → routes all matmul calls to cublasSgemv
 
 Two factory overloads preserve backward compatibility for callers that don't
@@ -2836,12 +2831,12 @@ implement ForwardPassHandler, not the other way around.
 -----------------------------------------------
   ForwardPassHandler          Interface — pipeline contract (unchanged)
   CyclicForwardPassHandler    Stub, deterministic, tests (unchanged)
-  LlamaTransformerHandler     LLaMA/Mistral/Gemma/TinyLlama + MatVecBackend
-  Phi3TransformerHandler      Phi-3 fused tensors + MatVecBackend
+  LlamaTransformerHandler     LLaMA/Mistral/Gemma/TinyLlama + MatVec
+  Phi3TransformerHandler      Phi-3 fused tensors + MatVec
   ForwardPassHandlerLoader    Architecture routing factory (unchanged name)
-  MatVecBackend               Interface — compute substrate contract
-  CpuMatVecBackend            Parallel IntStream implementation
-  CudaMatVecBackend           cublasSgemv_v2 via JCublas2
+  MatVec               Interface — compute substrate contract
+  CpuMatVec            Parallel IntStream implementation
+  CudaMatVec           cublasSgemv_v2 via JCublas2
   GpuContext                  cuBLAS handle lifecycle (unchanged)
   CudaAvailability            CUDA runtime detection (unchanged)
   GgufReader                  GGUF v2/v3 parser (unchanged)
@@ -3062,9 +3057,9 @@ Fix:
     tokenEmbd  — requires O(1) row-indexed embedding lookup
     attnNorm, ffnNorm, outputNorm  — tiny F32 scalars (< 1 MB each)
 
-  Note on MatVecBackend: the backend.sgemv(float[], ...) interface is now
+  Note on MatVec: the backend.sgemv(float[], ...) interface is now
   bypassed for all projection weights; the static matVec(QuantizedTensor, ...)
-  path is always used. CudaMatVecBackend remains wired for future use but
+  path is always used. CudaMatVec remains wired for future use but
   currently has no float[] weights to operate on. A future GPU quantised
   kernel (cublasSgemv variant for Q4_K) could be added here.
 
@@ -3448,9 +3443,8 @@ File: player/src/main/java/cab/ml/juno/player/EmbeddedNodeServer.java
     if (handler instanceof LlamaTransformerHandler lh)  lh.setKvAdapter(adapter);
     else if (handler instanceof Phi3TransformerHandler ph) ph.setKvAdapter(adapter);
 
-  CyclicForwardPassHandler (stub mode) and GpuForwardPassHandler / CpuForwardPassHandler
-  (legacy paths) are not wired — they remain disconnected from the manager,
-  preserving backward compatibility and test isolation.
+  CyclicForwardPassHandler (stub mode) is not wired — it remains disconnected
+  from the manager, preserving test isolation.
 
   Added imports:
     LlamaTransformerHandler, Phi3TransformerHandler, NodeKVCacheAdapter
@@ -3472,11 +3466,11 @@ equals the real wall time of the operation.
   Wired into:
     CpuMatVec.sgemv(float[], float[], int, int)
       → backend = "cpu"
-    CublasMatVec.sgemv(float[], float[], int, int)
+    CudaMatVec.sgemv(float[], float[], int, int)
       → backend = "cuda"
       → evt.begin() before device allocation; commit() in finally block
         (always fires even on exception, after cudaFree)
-    CublasMatVec.sgemv(DeviceFloatMatrix, float[])
+    CudaMatVec.sgemv(DeviceFloatMatrix, float[])
       → backend = "cuda-resident"
       → same begin()/finally pattern
 
@@ -3489,17 +3483,15 @@ equals the real wall time of the operation.
   File: node/src/main/java/cab/ml/juno/node/ForwardPassEvent.java
   Category: Juno/Inference
   Fields:
-    handlerType        String   "llama" | "phi3" | "cpu" | "gpu" | "cyclic" | "lora"
+    handlerType        String   "llama" | "phi3" | "cyclic" | "lora"
     requestId          String   from ForwardRequest.requestId()
     startPosition      int      sequence position (0 = first prefill token)
     layerCount         int      layers executed by this shard
     hasOutputProjection boolean  true for the last node in the pipeline
 
-  Wired into all six ForwardPassHandler.forward() implementations:
+  Wired into four ForwardPassHandler.forward() implementations:
     LlamaTransformerHandler   → handlerType = "llama"
     Phi3TransformerHandler    → handlerType = "phi3"
-    CpuForwardPassHandler     → handlerType = "cpu"
-    GpuForwardPassHandler     → handlerType = "gpu"
     CyclicForwardPassHandler  → handlerType = "cyclic"
     LoraTrainableHandler      → handlerType = "lora"
 
@@ -3530,7 +3522,6 @@ equals the real wall time of the operation.
   Wired into all four Tokenizer implementations, all three methods each:
     GgufTokenizer   — encode, decode, decodeToken
     DJLTokenizer    — encode, decode, decodeToken
-    StubTokenizer   — encode, decode, decodeToken
     SimpleTokenizer — encode, decode, decodeToken
 
   Note on GgufTokenizer.decodeToken(): the existing early-return for OOV/control
@@ -3609,12 +3600,10 @@ LlamaKvWiringTest (node module) — 7 tests:
                                            evict(), ForwardPassEvent wired into
                                            forward(); runLayers() wired with
                                            flush/restore
-    CpuForwardPassHandler.java           + ForwardPassEvent wired into forward()
-    GpuForwardPassHandler.java           + ForwardPassEvent wired into forward()
     CyclicForwardPassHandler.java        + ForwardPassEvent wired into forward()
     LoraTrainableHandler.java            + ForwardPassEvent wired into forward()
-    CpuMatVec.java                       + MatVecEvent wired into sgemv()
-    CublasMatVec.java                    + MatVecEvent wired into both sgemv()
+    CpuMatVec.java                + MatVecEvent wired into sgemv()
+    CudaMatVec.java               + MatVecEvent wired into both sgemv()
                                            overloads (host-A and device-resident)
 
   tokenizer/src/main/java/.../tokenizer/
@@ -3622,7 +3611,7 @@ LlamaKvWiringTest (node module) — 7 tests:
     TemplateFormatEvent.java             NEW — juno.TemplateFormat JFR event
     GgufTokenizer.java                   + TokenizerEvent in encode/decode/decodeToken
     DJLTokenizer.java                    + TokenizerEvent in encode/decode/decodeToken
-    StubTokenizer.java                   + TokenizerEvent in encode/decode/decodeToken
+    SimpleTokenizer.java                 + TokenizerEvent in encode/decode/decodeToken
     SimpleTokenizer.java                 + TokenizerEvent in encode/decode/decodeToken
     ChatTemplateFormatter.java           + TemplateFormatEvent in format()
 
@@ -3659,11 +3648,142 @@ LlamaKvWiringTest (node module) — 7 tests:
   Errors:         0
 
   JFR event summary:
-    juno.MatVec          — CpuMatVec, CublasMatVec (2 overloads)
+    juno.MatVec          — CpuMatVec, CudaMatVec (2 overloads)
     juno.ForwardPass     — LlamaTransformerHandler, Phi3TransformerHandler,
-                           CpuForwardPassHandler, GpuForwardPassHandler,
                            CyclicForwardPassHandler, LoraTrainableHandler
-    juno.Tokenizer       — GgufTokenizer, DJLTokenizer, StubTokenizer,
+    juno.Tokenizer       — GgufTokenizer, DJLTokenizer, SimpleTokenizer,
                            SimpleTokenizer (encode/decode/decodeToken each)
     juno.TemplateFormat  — ChatTemplateFormatter
     juno.LoraTrainStep   — LoraTrainableHandler.trainStep() [session 14]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+27. SESSION 16 CHANGES (2026-03-28) — NAMING CLEANUP: SESSION-12 RENAME APPLIED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Pure cleanup. No logic changes. All tests pass.
+
+27.1  Problem
+-----------------------------------------------
+Session 12 documented a rename in agent-arch.txt but never applied it to the
+source files. Two parallel class hierarchies existed simultaneously on disk:
+
+  OLD (stale on disk)              NEW (described in docs, partially created)
+  ───────────────────────────────────────────────────────────────────────────
+  GpuMatVec.java (interface)    →  MatVec.java (already existed ✓)
+  CpuMatVec.java                →  CpuMatVec.java (missing — now added)
+  CublasMatVec.java             →  CudaMatVec.java (missing — now added)
+  CpuForwardPassHandler.java    →  LlamaTransformerHandler.java (existed ✓)
+  GpuForwardPassHandler.java    →  (eliminated, was never removed)
+  StubTokenizer.java (src/main) →  SimpleTokenizer.java (existed alongside it)
+
+Additionally: GpuMatVecContractTest and CublasMatVecTest were the old test
+names; MatVecContractTest and CudaMatVecTest are the new names,
+but only the new names were described in docs — both pairs existed on disk.
+
+LlamaTransformerHandler itself still referenced GpuMatVec as its backend field
+type and CpuMatVec.INSTANCE in its factory methods, making it internally
+inconsistent with its own Javadoc.
+
+27.2  Files deleted
+-----------------------------------------------
+  node/src/main/java/.../node/
+    GpuMatVec.java                    old interface — replaced by MatVec
+    CpuMatVec.java                    old CPU impl  — replaced by CpuMatVec
+    CublasMatVec.java                 old CUDA impl — replaced by CudaMatVec
+    CpuForwardPassHandler.java        old handler   — replaced by LlamaTransformerHandler
+    GpuForwardPassHandler.java        old handler   — merged into LlamaTransformerHandler
+
+  tokenizer/src/main/java/.../tokenizer/
+    StubTokenizer.java                production stub — replaced by SimpleTokenizer
+
+  tokenizer/src/test/java/.../tokenizer/
+    StubTokenizerTest.java            replaced by SimpleTokenizerTest
+
+  node/src/test/java/.../node/
+    GpuMatVecContractTest.java        replaced by MatVecContractTest
+    CublasMatVecTest.java             replaced by CudaMatVecTest
+
+27.3  Files created
+-----------------------------------------------
+  node/src/main/java/.../node/
+    CpuMatVec.java             MatVec backed by LlamaTransformerHandler.matVec()
+    CudaMatVec.java            MatVec backed by cublasSgemv_v2 (JCublas2)
+
+  node/src/test/java/.../node/
+    MatVecContractTest.java    contract suite for MatVec
+    CudaMatVecTest.java        @Tag("gpu") suite extending above
+
+  tokenizer/src/test/java/.../tokenizer/
+    SimpleTokenizerTest.java          tests for SimpleTokenizer (was StubTokenizerTest)
+
+27.4  Production files updated
+-----------------------------------------------
+  node/LlamaTransformerHandler.java
+    backend field type: GpuMatVec → MatVec
+    load() no-backend overload: CpuMatVec.INSTANCE → CpuMatVec.INSTANCE
+    load(MatVec) signature: GpuMatVec → MatVec
+    package-private constructor: GpuMatVec → MatVec
+    newTestInstance() factory: CpuMatVec.INSTANCE → CpuMatVec.INSTANCE
+
+  node/ForwardPassHandlerLoader.java
+    + load(Path, ShardContext, MatVec) overload — routes to
+      LlamaTransformerHandler.load(path, ctx, backend) or
+      Phi3TransformerHandler.load(path, ctx, backend)
+
+  node/Phi3TransformerHandler.java
+    + load(Path, ShardContext, MatVec) overload — accepted for API
+      symmetry; Phi-3 always uses CPU static matVec (backend parameter logged,
+      not used)
+
+  player/EmbeddedNodeServer.java
+    GPU branch: GpuForwardPassHandler.loadGpuResident(path, ctx, gpuCtx)
+                → ForwardPassHandlerLoader.load(path, ctx, new CudaMatVec(gpuCtx))
+    CPU branch: CpuForwardPassHandler.load(path, ctx)
+                → ForwardPassHandlerLoader.load(path, ctx)
+    unloadShard: removed stale releaseGpuResources() call
+                (CudaMatVec uses per-call device memory; no persistent buffers)
+
+  player/ConsoleMain.java
+    GPU branch: GpuForwardPassHandler.loadGpuResident(path, ctx, gpuCtx)
+                → ForwardPassHandlerLoader.load(path, ctx, new CudaMatVec(gpuCtx))
+
+27.5  Test files updated
+-----------------------------------------------
+  node/MatVecParallelTest.java        CpuForwardPassHandler.matVec → LlamaTransformerHandler.matVec
+  node/PhiQuantizedMatVecTest.java    same substitution
+  integration/GpuForwardPassIT.java   CpuForwardPassHandler.load  → LlamaTransformerHandler.load
+                                      GpuForwardPassHandler.loadGpuResident
+                                        → LlamaTransformerHandler.load(…, new CudaMatVec(…))
+                                      releaseGpuResources() calls removed
+
+  All 11 coordinator + integration test files:
+    import StubTokenizer → import SimpleTokenizer
+    new StubTokenizer()  → new SimpleTokenizer()
+
+  node/MatVecContractTest.java
+    GpuMatVec impl() → MatVec impl()
+    CpuMatVec.INSTANCE → CpuMatVec.INSTANCE
+    stale device-sgemv test replaced with singleton test
+
+  node/CudaMatVecTest.java
+    GpuMatVec impl() → MatVec impl()
+    CublasMatVec → CudaMatVec throughout
+
+  coordinator/GenerationLoopEosPieceTest.java
+    DelegatingTokenizer inner class: StubTokenizer delegate → SimpleTokenizer delegate
+
+27.6  Javadoc and comments updated
+-----------------------------------------------
+  node/ForwardPassEvent.java      removed CpuForwardPassHandler / GpuForwardPassHandler
+                                  from handler-type list
+  node/MatVecEvent.java           CpuMatVec / CublasMatVec / GpuMatVec → new names
+  node/CudaAvailability.java      example code updated to ForwardPassHandlerLoader
+  node/GpuContext.java            example code updated to ForwardPassHandlerLoader
+  node/DeviceFloatMatrix.java     CublasMatVec → CudaMatVec in Javadoc
+
+27.7  Build status (session 16)
+-----------------------------------------------
+  All modules:  SUCCESS
+  All tests:    pass (count unchanged — deletions and additions cancel out)
+  Failures:     0
+  Errors:       0

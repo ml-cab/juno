@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Tests for CpuForwardPassHandler.matVec(QuantizedTensor, ...).
+ * Tests for LlamaTransformerHandler.matVec(QuantizedTensor, ...).
  *
  * These tests prove that doing a matVec directly on raw quantized bytes gives
  * the same numerical result as: load tensor → GgufReader dequantizes to float[]
@@ -47,10 +47,10 @@ class PhiQuantizedMatVecTest {
 		GgufReader.QuantizedTensor qt = new GgufReader.QuantizedTensor("m", 0 /* F32 */, rows * cols, raw);
 
 		// Old path: float[] matVec
-		float[] expected = CpuForwardPassHandler.matVec(matrix, x, rows, cols);
+		float[] expected = LlamaTransformerHandler.matVec(matrix, x, rows, cols);
 
 		// New path: QuantizedTensor matVec (full rows, no row range needed)
-		float[] actual = CpuForwardPassHandler.matVec(qt, x, 0, rows, cols);
+		float[] actual = LlamaTransformerHandler.matVec(qt, x, 0, rows, cols);
 
 		assertThat(actual).containsExactly(expected);
 	}
@@ -97,14 +97,14 @@ class PhiQuantizedMatVecTest {
 		float[] expected;
 		try (GgufReader r = GgufReader.open(gguf)) {
 			float[] deq = r.tensor("wq"); // 256 dequantized floats
-			expected = CpuForwardPassHandler.matVec(deq, x, 1, 256); // 1 row × 256 cols
+			expected = LlamaTransformerHandler.matVec(deq, x, 1, 256); // 1 row × 256 cols
 		}
 
 		// New path: raw bytes via GgufReader.tensorRaw() then quantized matVec
 		float[] actual;
 		try (GgufReader r = GgufReader.open(gguf)) {
 			GgufReader.QuantizedTensor qt = r.tensorRaw("wq");
-			actual = CpuForwardPassHandler.matVec(qt, x, 0, 1, 256); // row 0..0
+			actual = LlamaTransformerHandler.matVec(qt, x, 0, 1, 256); // row 0..0
 		}
 
 		assertThat(actual).hasSize(1);
@@ -142,17 +142,17 @@ class PhiQuantizedMatVecTest {
 
 			// Old path: manually slice row 0 only
 			float[] row0deq = java.util.Arrays.copyOfRange(deq, 0, 256);
-			float[] expectedRow0 = CpuForwardPassHandler.matVec(row0deq, x, 1, 256);
+			float[] expectedRow0 = LlamaTransformerHandler.matVec(row0deq, x, 1, 256);
 
 			float[] row1deq = java.util.Arrays.copyOfRange(deq, 256, 512);
-			float[] expectedRow1 = CpuForwardPassHandler.matVec(row1deq, x, 1, 256);
+			float[] expectedRow1 = LlamaTransformerHandler.matVec(row1deq, x, 1, 256);
 
 			GgufReader.QuantizedTensor qt = r.tensorRaw("qkv");
 
 			// New path: row-range matVec
-			float[] actualRow0 = CpuForwardPassHandler.matVec(qt, x, 0, 1, 256); // row 0 only
-			float[] actualRow1 = CpuForwardPassHandler.matVec(qt, x, 1, 2, 256); // row 1 only
-			float[] actualRows01 = CpuForwardPassHandler.matVec(qt, x, 0, 2, 256); // rows 0+1
+			float[] actualRow0 = LlamaTransformerHandler.matVec(qt, x, 0, 1, 256); // row 0 only
+			float[] actualRow1 = LlamaTransformerHandler.matVec(qt, x, 1, 2, 256); // row 1 only
+			float[] actualRows01 = LlamaTransformerHandler.matVec(qt, x, 0, 2, 256); // rows 0+1
 
 			// Row-range results must match element-wise dequant+matVec
 			assertThat(actualRow0[0]).isCloseTo(expectedRow0[0], within(1e-3f));
@@ -225,13 +225,13 @@ class PhiQuantizedMatVecTest {
 		float[] expected;
 		try (GgufReader r = GgufReader.open(gguf)) {
 			float[] deq = r.tensor("wq6k");
-			expected = CpuForwardPassHandler.matVec(deq, x, 1, 256);
+			expected = LlamaTransformerHandler.matVec(deq, x, 1, 256);
 		}
 		float[] actual;
 		try (GgufReader r = GgufReader.open(gguf)) {
 			GgufReader.QuantizedTensor qt = r.tensorRaw("wq6k");
 			assertThat(qt.type()).isEqualTo(14);
-			actual = CpuForwardPassHandler.matVec(qt, x, 0, 1, 256);
+			actual = LlamaTransformerHandler.matVec(qt, x, 0, 1, 256);
 		}
 		assertThat(actual).hasSize(1);
 		assertThat(actual[0]).isCloseTo(expected[0], within(1e-3f));
@@ -277,7 +277,7 @@ class PhiQuantizedMatVecTest {
 		float[] expected;
 		try (GgufReader r = GgufReader.open(gguf)) {
 			float[] deq = r.tensor("wq5k");
-			expected = CpuForwardPassHandler.matVec(deq, x, 1, 256);
+			expected = LlamaTransformerHandler.matVec(deq, x, 1, 256);
 		}
 
 		// New (quantized) path
@@ -285,7 +285,7 @@ class PhiQuantizedMatVecTest {
 		try (GgufReader r = GgufReader.open(gguf)) {
 			GgufReader.QuantizedTensor qt = r.tensorRaw("wq5k");
 			assertThat(qt.type()).isEqualTo(13); // must be Q5_K
-			actual = CpuForwardPassHandler.matVec(qt, x, 0, 1, 256);
+			actual = LlamaTransformerHandler.matVec(qt, x, 0, 1, 256);
 		}
 
 		assertThat(actual).hasSize(1);

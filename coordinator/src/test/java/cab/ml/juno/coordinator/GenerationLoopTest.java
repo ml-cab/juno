@@ -17,11 +17,11 @@ import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
 import cab.ml.juno.tokenizer.ChatTemplateFormatter;
-import cab.ml.juno.tokenizer.StubTokenizer;
+import cab.ml.juno.tokenizer.SimpleTokenizer;
 
 class GenerationLoopTest {
 
-	private StubTokenizer tokenizer;
+	private SimpleTokenizer tokenizer;
 	private Sampler sampler;
 	private KVCacheManager kvCache;
 	@SuppressWarnings("unused")
@@ -29,7 +29,7 @@ class GenerationLoopTest {
 
 	@BeforeEach
 	void setUp() {
-		tokenizer = new StubTokenizer();
+		tokenizer = new SimpleTokenizer();
 		sampler = Sampler.create();
 		kvCache = new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000));
 	}
@@ -68,7 +68,7 @@ class GenerationLoopTest {
 		//
 		// Prompt: modelId="llama3-8b" + ChatMessage.user("hi")
 		// Llama3 template → "<|begin_of_text|>...\n\nhi...\n\n"
-		// StubTokenizer (split on \\s+) → 2 tokens → 1 prefill call
+		// SimpleTokenizer (split on \s+) → 2 tokens → 1 prefill call
 		//
 		// Sequence index 0 is consumed by the prefill call (result discarded).
 		// Decode steps 0, 1, 2 see indices 1, 2, 3 → tokens 42, 43, EOS.

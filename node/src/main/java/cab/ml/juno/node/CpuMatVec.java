@@ -16,15 +16,19 @@
 package cab.ml.juno.node;
 
 /**
- * GpuMatVec backed by the CPU parallel matVec from CpuForwardPassHandler.
+ * {@link MatVec} backed by the CPU parallel matVec from
+ * {@link LlamaTransformerHandler}.
  *
- * Two uses: 1. CPU-only nodes — GpuForwardPassHandler falls back to this when
- * CudaAvailability.isAvailable() is false. 2. Tests — GpuMatVecContractTest
- * runs the full contract suite against this implementation without needing a
- * GPU, ensuring correctness of the contract itself before testing CublasMatVec
- * on AWS.
+ * <p>
+ * Two uses:
+ * <ol>
+ * <li>CPU-only nodes — default backend when CUDA is unavailable.
+ * <li>Tests — {@link MatVecBackendContractTest} runs the full contract suite
+ * against this implementation without needing a GPU, ensuring correctness of
+ * the contract itself before testing {@link CudaMatVec} on AWS.
+ * </ol>
  */
-public final class CpuMatVec implements GpuMatVec {
+public final class CpuMatVec implements MatVec {
 
 	/** Singleton — stateless, no resources to manage. */
 	public static final CpuMatVec INSTANCE = new CpuMatVec();
@@ -40,7 +44,7 @@ public final class CpuMatVec implements GpuMatVec {
 			throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
 		MatVecEvent evt = new MatVecEvent();
 		evt.begin();
-		float[] result = CpuForwardPassHandler.matVec(A, x, rows, cols);
+		float[] result = LlamaTransformerHandler.matVec(A, x, rows, cols);
 		evt.backend = "cpu";
 		evt.rows = rows;
 		evt.cols = cols;

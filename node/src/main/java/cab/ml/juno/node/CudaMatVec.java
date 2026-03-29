@@ -27,7 +27,7 @@ import org.bytedeco.cuda.global.cublas;
 import org.bytedeco.cuda.global.cudart;
 
 /**
- * GpuMatVec backed by cublasSgemv on an Nvidia GPU.
+ * MatVecBackend backed by cublasSgemv on an Nvidia GPU.
  *
  * Uses org.bytedeco (JavaCPP) cuda/cublas. Works with various NVIDIA GPUs
  * (e.g. GTX 1080, T4, and newer).
@@ -47,10 +47,10 @@ import org.bytedeco.cuda.global.cudart;
  *  
  * @author Yevhen Soldatov    
  */
-public final class CublasMatVec implements GpuMatVec {
+public final class CudaMatVec implements MatVec {
 
     @SuppressWarnings("unused")
-    private static final Logger log = Logger.getLogger(CublasMatVec.class.getName());
+    private static final Logger log = Logger.getLogger(CudaMatVec.class.getName());
 
     private static final int CUBLAS_OP_T = cublas.CUBLAS_OP_T;
     private static final int H2D = cudart.cudaMemcpyHostToDevice;
@@ -61,7 +61,7 @@ public final class CublasMatVec implements GpuMatVec {
     /**
      * @param ctx an open GpuContext — must outlive all sgemv calls on this instance
      */
-    public CublasMatVec(GpuContext ctx) {
+    public CudaMatVec(GpuContext ctx) {
         if (ctx == null)
             throw new IllegalArgumentException("ctx must not be null");
         this.ctx = ctx;

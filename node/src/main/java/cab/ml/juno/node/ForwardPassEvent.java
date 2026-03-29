@@ -29,8 +29,8 @@ import jdk.jfr.StackTrace;
  * <ul>
  *   <li>{@link LlamaTransformerHandler} — {@code handlerType = "llama"}
  *   <li>{@link Phi3TransformerHandler}  — {@code handlerType = "phi3"}
- *   <li>{@link CpuForwardPassHandler}   — {@code handlerType = "cpu"}
- *   <li>{@link GpuForwardPassHandler}   — {@code handlerType = "gpu"}
+ *   <li>(removed — merged into {@link LlamaTransformerHandler} with {@link CpuMatVec})
+ *   <li>(removed — merged into {@link LlamaTransformerHandler} with {@link CudaMatVec})
  *   <li>{@link CyclicForwardPassHandler}— {@code handlerType = "cyclic"}
  *   <li>{@link LoraTrainableHandler}    — {@code handlerType = "lora"}
  * </ul>

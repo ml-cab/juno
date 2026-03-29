@@ -37,10 +37,11 @@ import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.ActivationDtype;
 import cab.ml.juno.node.CudaAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
+import cab.ml.juno.node.CudaMatVec;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
-import cab.ml.juno.node.GpuForwardPassHandler;
+
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
 import cab.ml.juno.node.LoraAdamOptimizer;
@@ -816,7 +817,8 @@ public final class ConsoleMain {
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 			if (gpuCtx != null) {
-				handlers.add(GpuForwardPassHandler.loadGpuResident(Path.of(modelPath), context, gpuCtx));
+				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context,
+						new CudaMatVec(gpuCtx)));
 			} else {
 				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context));
 			}

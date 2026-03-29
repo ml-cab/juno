@@ -23,14 +23,14 @@ import java.util.Map;
 import java.util.logging.Logger;
 
 /**
- * LLaMA-family transformer forward pass with a pluggable {@link MatVecBackend}.
+ * LLaMA-family transformer forward pass with a pluggable {@link MatVec}.
  *
  * <p>
  * Handles all LLaMA-compatible architectures: LLaMA 2/3, TinyLlama, Mistral,
  * Gemma — any model whose GGUF {@code general.architecture} is not
  * {@code phi3}. The transformer math (RMS norm, RoPE, GQA, SwiGLU FFN) is
- * identical regardless of the backend. Swapping {@link CpuMatVecBackend} for
- * {@link CudaMatVecBackend} moves all matrix multiplies from CPU threads to
+ * identical regardless of the backend. Swapping {@link CpuMatVec} for
+ * {@link CudaMatVec} moves all matrix multiplies from CPU threads to
  * cublasSgemv on a GPU.
  *
  * Each node in the cluster owns a contiguous shard of transformer layers.
@@ -96,7 +96,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private static final int INITIAL_SEQ_CAPACITY = 64; // grows on demand
 
 	// ── MatVec backend (CPU or CUDA) ─────────────────────────────────────────
-	private final GpuMatVec backend;
+	private final MatVec backend;
 
 	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
 	// When non-null, every completed forward pass flushes key/value data into
@@ -127,12 +127,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * Load weights and wire a specific {@link MatVecBackend}.
+	 * Load weights and wire a specific {@link MatVec}.
 	 *
-	 * @param backend {@link CpuMatVecBackend#INSTANCE} for CPU-only nodes,
+	 * @param backend {@link CpuMatVec#INSTANCE} for CPU-only nodes,
 	 *                {@code new CudaMatVecBackend(ctx)} for GPU nodes
 	 */
-	public static LlamaTransformerHandler load(Path modelPath, ShardContext context, GpuMatVec backend)
+	public static LlamaTransformerHandler load(Path modelPath, ShardContext context, MatVec backend)
 			throws IOException {
 		log.info("Loading GGUF shard: layers " + context.startLayer() + "–" + context.endLayer() + "  embd="
 				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection() + "  backend="
@@ -160,7 +160,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			GgufReader.QuantizedTensor[] wGate,
 			GgufReader.QuantizedTensor[] wUp,
 			GgufReader.QuantizedTensor[] wDown,
-			GpuMatVec backend) {
+			MatVec backend) {
 		this.cfg          = cfg;
 		this.backend      = backend;
 		this.startLayer   = startLayer;
@@ -181,7 +181,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.wDown        = wDown;
 	}
 
-	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, GpuMatVec backend)
+	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend)
 			throws IOException {
 		this.cfg = cfg;
 		this.backend = backend;
@@ -663,10 +663,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private static float[] matVecF32raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
-		// Wrap once; random-access via absolute getFloat(offset) — position-state free.
-		java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-				.asReadOnlyBuffer();
+		// Wrap per-thread: ByteBuffer.wrap() is a view-only (no copy) operation, and
+		// asReadOnlyBuffer() does NOT reliably propagate byte order on HeapByteBuffer
+		// across all JVM builds — never use it when byte order matters.
 		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
 			float acc = 0f;
 			int base = (rowStart + r) * cols;
 			for (int c = 0; c < cols; c++)

@@ -32,10 +32,10 @@ package cab.ml.juno.node;
  * <p>
  * Implementations:
  * <ul>
- * <li>{@link CpuMatVecBackend} — parallel {@code IntStream} across
+ * <li>{@link CpuMatVec} — parallel {@code IntStream} across
  * {@code ForkJoinPool.commonPool()}; used on CPU-only nodes and as the
  * reference implementation in tests.
- * <li>{@link CudaMatVecBackend} — {@code cublasSgemv_v2} via JCublas2; used on
+ * <li>{@link CudaMatVec} — {@code cublasSgemv_v2} via JCublas2; used on
  * Nvidia GPU nodes (CUDA 12.x).
  * </ul>
  *
@@ -49,7 +49,7 @@ package cab.ml.juno.node;
  * requests (each call is self-contained with its own device memory).
  * </ul>
  */
-public interface MatVecBackend {
+public interface MatVec {
 
 	/**
 	 * Compute y = A * x.
@@ -61,4 +61,16 @@ public interface MatVecBackend {
 	 * @return new float[rows] — the result vector
 	 */
 	float[] sgemv(float[] A, float[] x, int rows, int cols);
+
+	/**
+     * Compute y = A * x with {@code A} already on the device (see
+     * {@link DeviceFloatMatrix}).
+     *
+     * @throws UnsupportedOperationException for backends that only support host
+     *                                       weights (e.g. {@link CpuMatVec})
+     */
+    default float[] sgemv(DeviceFloatMatrix A, float[] x) {
+        throw new UnsupportedOperationException(
+            "device-resident weights are not supported by this GpuMatVec implementation");
+    }
 }

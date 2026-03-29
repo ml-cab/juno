@@ -14,7 +14,7 @@ All modules build and all tests pass. Verified end-to-end with:
 - Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile
 - phi-3.5-mini-instruct.Q4_K_M.gguf on a 3-node CPU cluster
 
-**Session 15** — KV cache wiring + full JFR instrumentation.
+**Session 16** — naming cleanup: session-12 rename fully applied to source.
 
 The `KVCacheManager` (GPU + CPU tiers with LRU/W-TinyLFU eviction) was previously disconnected from the transformer handlers: `LlamaTransformerHandler` and `Phi3TransformerHandler` each maintained their own private `HashMap<String, float[][]>` with no eviction, making the entire `kvcache` module inert at the node level. This is now fixed.
 
@@ -22,9 +22,9 @@ The `KVCacheManager` (GPU + CPU tiers with LRU/W-TinyLFU eviction) was previousl
 
 Four custom JFR event classes cover every hot path. All are readable in JDK Mission Control under Event Browser. Use `--jfr DURATION` on any `juno` command to capture a recording:
 
-- `juno.MatVec` — emitted by `CpuMatVec.sgemv()` and both `CublasMatVec.sgemv()` overloads. Fields: `backend` (`cpu`/`cuda`/`cuda-resident`), `rows`, `cols`. ~155 events per generated token for TinyLlama.
+- `juno.MatVec` — emitted by `CpuMatVec.sgemv()` and both `CudaMatVec.sgemv()` overloads. Fields: `backend` (`cpu`/`cuda`/`cuda-resident`), `rows`, `cols`. ~155 events per generated token for TinyLlama.
 - `juno.ForwardPass` — emitted by all six `ForwardPassHandler.forward()` implementations. Fields: `handlerType` (`llama`/`phi3`/`cpu`/`gpu`/`cyclic`/`lora`), `requestId`, `startPosition`, `layerCount`, `hasOutputProjection`.
-- `juno.Tokenizer` — emitted by `GgufTokenizer`, `DJLTokenizer`, `StubTokenizer`, `SimpleTokenizer` for `encode`, `decode`, and `decodeToken`. Fields: `tokenizerType`, `operation`, `inputLength`, `outputLength`.
+- `juno.Tokenizer` — emitted by `GgufTokenizer`, `DJLTokenizer`, `SimpleTokenizer` for `encode`, `decode`, and `decodeToken`. Fields: `tokenizerType`, `operation`, `inputLength`, `outputLength`.
 - `juno.TemplateFormat` — emitted by `ChatTemplateFormatter.format()`. Fields: `modelType`, `messageCount`, `outputLength`.
 
 **Session 14** — LoRA fine-tuning + JFR profiling. `LoraTrainableHandler` implements parameter-efficient fine-tuning (LoRA) on top of frozen quantised weights. Adapters live in a separate `.lora` file — the base GGUF is never modified. `LoraAdapterSet` / `LoraAdamOptimizer` handle checkpoint I/O and gradient updates. `LoraTrainEvent` emits custom JFR events (`juno.LoraTrainStep`) with per-step timing breakdown (forward / backward / optimizer ms). `ConsoleMain` gains a `lora` subcommand with `/train`, `/train-file`, `/save`, `/status`, `/reset`, `/merge-hint` REPL commands. `--jfr DURATION` flag added to all three `run.sh` / `run.bat` commands (`cluster`, `local`, `lora`). Root bug fixed: `transposedMatVec` now covers Q5_K (type=13) and Q6_K (type=14) — without this, the output projection backward for TinyLlama Q4_K_M fell into an O(cols) loop that took hours per step.
@@ -123,9 +123,9 @@ ForwardPassHandlerLoader  <- reads general.architecture from GGUF
     phi3  -> Phi3TransformerHandler   (fused QKV + gate/up, quantized weights)
     *     -> LlamaTransformerHandler  (separate tensors, quantized weights)
 
-MatVecBackend (injected into handler):
-    CpuMatVecBackend    <- parallel IntStream
-    CudaMatVecBackend   <- cublasSgemv_v2 via JCublas2
+MatVec (injected into handler):
+    CpuMatVec    <- parallel IntStream
+    CudaMatVec   <- cublasSgemv_v2 via JCublas2
 
 KV cache wiring (per node, after loadShard()):
     NodeKVCacheAdapter  <- serialises float[][] K/V into KVBlock,
@@ -210,8 +210,8 @@ Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `MAX_TOKENS`, `TEMPERATUR
 | `registry` | `NodeDescriptor`, `ShardPlanner`, `ShardMap`, `ParallelismType`, `TensorShardAssignment`, `TensorShardPlanner` |
 | `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, Javalin REST, SSE |
 | `kvcache` | `KVCacheManager`, `GpuKVCache`, `CpuKVCache`, `PrefixCache` |
-| `tokenizer` | `GgufTokenizer` (SentencePiece BPE), `ChatTemplate`, `StubTokenizer`, `TokenizerEvent`, `TemplateFormatEvent` |
-| `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `NodeKVCacheAdapter`, `MatVecBackend`, `CpuMatVecBackend`, `CudaMatVecBackend`, `GgufReader`, `LlamaConfig`, `ActivationCodec`, `ShardContext`, `TensorShardContext`, `LoraAdapter`, `LoraAdapterSet`, `LoraAdamOptimizer`, `LoraTrainableHandler`, `MatVecEvent`, `ForwardPassEvent`, `LoraTrainEvent` |
+| `tokenizer` | `GgufTokenizer` (SentencePiece BPE), `ChatTemplate`, `SimpleTokenizer`, `TokenizerEvent`, `TemplateFormatEvent` |
+| `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `NodeKVCacheAdapter`, `MatVec`, `CpuMatVec`, `CudaMatVec`, `GgufReader`, `LlamaConfig`, `ActivationCodec`, `ShardContext`, `TensorShardContext`, `LoraAdapter`, `LoraAdapterSet`, `LoraAdamOptimizer`, `LoraTrainableHandler`, `MatVecEvent`, `ForwardPassEvent`, `LoraTrainEvent` |
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | Health monitor, circuit breakers (Resilience4j) |
 | `player` | `ConsoleMain` REPL (`cluster` / `local` / `lora` commands), `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `EmbeddedNodeServer` |
@@ -270,9 +270,9 @@ All `juno` commands accept `--jfr DURATION` which activates Java Flight Recordin
 
 | Event | Category | Key fields | Fired by |
 |-------|----------|------------|----------|
-| `juno.MatVec` | Juno/MatVec | `backend`, `rows`, `cols` | `CpuMatVec`, `CublasMatVec` (both overloads) |
+| `juno.MatVec` | Juno/MatVec | `backend`, `rows`, `cols` | `CpuMatVec`, `CudaMatVec` (both overloads) |
 | `juno.ForwardPass` | Juno/Inference | `handlerType`, `requestId`, `startPosition`, `layerCount`, `hasOutputProjection` | All 6 `ForwardPassHandler` implementations |
-| `juno.Tokenizer` | Juno/Tokenizer | `tokenizerType`, `operation`, `inputLength`, `outputLength` | `GgufTokenizer`, `DJLTokenizer`, `StubTokenizer`, `SimpleTokenizer` |
+| `juno.Tokenizer` | Juno/Tokenizer | `tokenizerType`, `operation`, `inputLength`, `outputLength` | `GgufTokenizer`, `DJLTokenizer`, `SimpleTokenizer` |
 | `juno.TemplateFormat` | Juno/Tokenizer | `modelType`, `messageCount`, `outputLength` | `ChatTemplateFormatter` |
 | `juno.LoraTrainStep` | Juno/LoRA | `step`, `loss`, `forwardMs`, `backwardMs`, `optimizerMs` | `LoraTrainableHandler.trainStep()` |
 
@@ -293,7 +293,7 @@ Useful analysis patterns:
 | 5 | Baseline (FLOAT32, serial matVec) | ~34,891 ms |
 | 6 | Parallel matVec + FLOAT16 default | ~3,802 ms (9x) |
 | 9 | Session KV cache — turn latency flat | ~7,000-8,000 ms / turn |
-| 10 | CudaMatVecBackend (cublasSgemv) | AWS benchmark pending |
+| 10 | CudaMatVec (cublasSgemv) | AWS benchmark pending |
 | 11 | Phi-3.5-mini on 3-node CPU cluster | ~38,420 ms / turn |
 | 13 | Tensor-parallel mode (pType=tensor) | same throughput per node; parallel decode step |
 
@@ -311,7 +311,7 @@ Useful analysis patterns:
 - **LoRA fine-tuning without touching the base model.** `LoraTrainableHandler` wraps `LlamaTransformerHandler` and adds trainable low-rank adapters (A/B matrices, rank 4–16) on the Q and V projections. The frozen weights stay quantized at all times — backward passes dequantize one block per row via dedicated `transposedQ4K` / `transposedQ5K` / `transposedQ6K` scatter-reduce implementations. Adapters are persisted to a `.lora` binary checkpoint; the GGUF is never modified.
 - **Full JFR instrumentation across every hot path.** Five custom event types — `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, `juno.LoraTrainStep` — make every layer of the stack observable in JDK Mission Control without any agent or bytecode manipulation. Activated with `--jfr DURATION` on any `juno` command.
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
-- `GpuMatVec` interface decouples the matmul backend from the transformer logic. `CublasMatVec` implements host `sgemv` (full H2D per call) and device `sgemv(DeviceFloatMatrix, x)` for resident weights. `CpuMatVec` as CPU fallback and test reference. Swappable without touching `GpuForwardPassHandler`.
+- `MatVec` interface decouples the matmul backend from the transformer logic. `CudaMatVec` implements host `sgemv` (full H2D per call) and device `sgemv(DeviceFloatMatrix, x)` for resident weights. `CpuMatVec` as CPU fallback and test reference. Injected into `LlamaTransformerHandler` and `Phi3TransformerHandler` at construction time via `ForwardPassHandlerLoader`; swapping backends changes where arithmetic runs without touching model logic.
 - GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent CUDA native libs (bytedeco) loading into the coordinator JVM and poisoning FD inheritance into forked node processes.
 - Stub mode — cluster boots in seconds without a model file; all integration tests run stub.
 

@@ -26,7 +26,7 @@ import jdk.jfr.StackTrace;
  * JFR event emitted once per matrix-vector multiply call.
  *
  * <p>Fired by {@link CpuMatVec#sgemv} and both overloads of
- * {@link CublasMatVec#sgemv} — the two concrete {@link GpuMatVec} backends.
+ * {@link CudaMatVec#sgemv} — the two concrete {@link MatVec} implementations.
  * The event duration covers the full sgemv computation including, for CUDA,
  * the host↔device transfers.
  *

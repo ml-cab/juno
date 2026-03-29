@@ -16,7 +16,7 @@ import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
-import cab.ml.juno.tokenizer.StubTokenizer;
+import cab.ml.juno.tokenizer.SimpleTokenizer;
 import cab.ml.juno.tokenizer.Tokenizer;
 
 /**
@@ -26,25 +26,25 @@ import cab.ml.juno.tokenizer.Tokenizer;
 @DisplayName("GenerationLoop — EOS piece suppression")
 class GenerationLoopEosPieceTest {
 
-	private StubTokenizer stubTokenizer;
+	private SimpleTokenizer stubTokenizer;
 	private Sampler sampler;
 	private KVCacheManager kvCache;
 
 	@BeforeEach
 	void setUp() {
-		stubTokenizer = new StubTokenizer();
+		stubTokenizer = new SimpleTokenizer();
 		sampler = Sampler.create();
 		kvCache = new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000));
 	}
 
-	// ── Delegating tokenizer — StubTokenizer is final so we can't subclass it.
+	// ── Delegating tokenizer — SimpleTokenizer is final; use delegation to override per-token decoding.
 	// Use a delegation wrapper so tests can override decodeToken() per-token-ID.
 
 	private static final class DelegatingTokenizer implements Tokenizer {
-		private final StubTokenizer delegate;
+		private final SimpleTokenizer delegate;
 		private final java.util.Map<Integer, String> overrides = new java.util.HashMap<>();
 
-		DelegatingTokenizer(StubTokenizer delegate) {
+		DelegatingTokenizer(SimpleTokenizer delegate) {
 			this.delegate = delegate;
 		}
 
@@ -204,5 +204,48 @@ class GenerationLoopEosPieceTest {
 		loopWith(tok, pipeline).generate(req("hi"), (piece, id, step) -> streamed.add(piece));
 
 		assertThat(streamed).contains("3<x<7");
+	}
+
+	// ── Test 5 ────────────────────────────────────────────────────────────────
+
+	/**
+	 * PRIMARY REGRESSION for multi-token EOS: model generates "</s>" as three
+	 * separate tokens ("</", "s", ">") rather than as EOS token ID or as a single
+	 * decoded piece. The suffix-based endsWithEosMarker() must catch this pattern
+	 * and stop generation before the model continues with chat-template scaffolding.
+	 *
+	 * FAILS if endsWithEosMarker() is absent, PASSES after.
+	 */
+	@Test
+	@DisplayName("Multi-token EOS pattern </s> across three pieces stops generation")
+	void multi_token_eos_across_three_pieces_stops_generation() {
+		int lessThanSlash = 300;  // decodes to "</"
+		int sToken = 301;         // decodes to "s"
+		int greaterThan = 302;    // decodes to ">"
+		int extraToken = 303;     // decodes to "extra" — must never appear
+
+		DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
+		tok.override(lessThanSlash, "</");
+		tok.override(sToken, "s");
+		tok.override(greaterThan, ">");
+		tok.override(extraToken, "extra");
+
+		StubInferencePipeline pipeline = new StubInferencePipeline(
+				StubInferencePipeline.DEFAULT_TOKEN, // prefill
+				lessThanSlash,  // decode step 0 → "</"
+				sToken,         // decode step 1 → "s"
+				greaterThan,    // decode step 2 → ">" — completes "</s>", must stop here
+				extraToken      // decode step 3 — must NEVER be reached
+		);
+
+		List<String> streamed = new ArrayList<>();
+		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"),
+				(piece, id, step) -> streamed.add(piece));
+
+		// The three partial pieces were streamed before the pattern was detected
+		assertThat(streamed).doesNotContain("extra");
+		// fullText must NOT contain the EOS marker (it was stripped)
+		assertThat(result.text()).doesNotContain("</s>");
+		assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
 	}
 }
