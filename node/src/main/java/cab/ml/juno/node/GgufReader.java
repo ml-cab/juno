@@ -740,7 +740,8 @@ public final class GgufReader implements AutoCloseable {
 			cd.position(cdPos + 46);
 			cd.get(fnBytes);
 			String filename = new String(fnBytes, StandardCharsets.UTF_8);
-			log.info("ZIP entry: " + filename + "  localHdr=" + localHdrOffset);
+			//2 annoying
+			//log.info("ZIP entry: " + filename + "  localHdr=" + localHdrOffset);
 
 			if (filename.endsWith(".gguf")) {
 				// ── Step 4: read local file header ───────────────────────────
