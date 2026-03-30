@@ -23,14 +23,14 @@ import java.util.Map;
 import java.util.logging.Logger;
 
 /**
- * LLaMA-family transformer forward pass with a pluggable {@link MatVecBackend}.
+ * LLaMA-family transformer forward pass with a pluggable {@link MatVec}.
  *
  * <p>
  * Handles all LLaMA-compatible architectures: LLaMA 2/3, TinyLlama, Mistral,
  * Gemma — any model whose GGUF {@code general.architecture} is not
  * {@code phi3}. The transformer math (RMS norm, RoPE, GQA, SwiGLU FFN) is
- * identical regardless of the backend. Swapping {@link CpuMatVecBackend} for
- * {@link CudaMatVecBackend} moves all matrix multiplies from CPU threads to
+ * identical regardless of the backend. Swapping {@link CpuMatVec} for
+ * {@link CudaMatVec} moves all matrix multiplies from CPU threads to
  * cublasSgemv on a GPU.
  *
  * Each node in the cluster owns a contiguous shard of transformer layers.
@@ -96,7 +96,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private static final int INITIAL_SEQ_CAPACITY = 64; // grows on demand
 
 	// ── MatVec backend (CPU or CUDA) ─────────────────────────────────────────
-	private final GpuMatVec backend;
+	private final MatVec backend;
+
+	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
+	// When non-null, every completed forward pass flushes key/value data into
+	// the KVCacheManager (GPU + CPU tiers). Eviction under real memory pressure
+	// is handled by the manager; local float[][] entries survive only as a
+	// hot-path shortcut for the current request.
+	private volatile NodeKVCacheAdapter kvAdapter;
 
 	// ── Factory ───────────────────────────────────────────────────────────────
 
@@ -120,12 +127,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * Load weights and wire a specific {@link MatVecBackend}.
+	 * Load weights and wire a specific {@link MatVec}.
 	 *
-	 * @param backend {@link CpuMatVecBackend#INSTANCE} for CPU-only nodes,
+	 * @param backend {@link CpuMatVec#INSTANCE} for CPU-only nodes,
 	 *                {@code new CudaMatVecBackend(ctx)} for GPU nodes
 	 */
-	public static LlamaTransformerHandler load(Path modelPath, ShardContext context, GpuMatVec backend)
+	public static LlamaTransformerHandler load(Path modelPath, ShardContext context, MatVec backend)
 			throws IOException {
 		log.info("Loading GGUF shard: layers " + context.startLayer() + "–" + context.endLayer() + "  embd="
 				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection() + "  backend="
@@ -138,7 +145,43 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 	}
 
-	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, GpuMatVec backend)
+	/** Direct constructor used by {@link #newTestInstance} — no GGUF I/O. */
+	@SuppressWarnings("java:S107") // many params intentional for test factory
+	private LlamaTransformerHandler(
+			LlamaConfig cfg, int startLayer, int endLayer,
+			boolean hasEmbeddings, boolean hasOutputProj,
+			float[] tokenEmbd, float[] outputNorm,
+			GgufReader.QuantizedTensor outputProj,
+			float[][] attnNorm, float[][] ffnNorm,
+			GgufReader.QuantizedTensor[] wq,
+			GgufReader.QuantizedTensor[] wk,
+			GgufReader.QuantizedTensor[] wv,
+			GgufReader.QuantizedTensor[] wo,
+			GgufReader.QuantizedTensor[] wGate,
+			GgufReader.QuantizedTensor[] wUp,
+			GgufReader.QuantizedTensor[] wDown,
+			MatVec backend) {
+		this.cfg          = cfg;
+		this.backend      = backend;
+		this.startLayer   = startLayer;
+		this.endLayer     = endLayer;
+		this.hasEmbeddings = hasEmbeddings;
+		this.hasOutputProj = hasOutputProj;
+		this.tokenEmbd    = tokenEmbd;
+		this.outputNorm   = outputNorm;
+		this.outputProj   = outputProj;
+		this.attnNorm     = attnNorm;
+		this.ffnNorm      = ffnNorm;
+		this.wq           = wq;
+		this.wk           = wk;
+		this.wv           = wv;
+		this.wo           = wo;
+		this.wGate        = wGate;
+		this.wUp          = wUp;
+		this.wDown        = wDown;
+	}
+
+	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend)
 			throws IOException {
 		this.cfg = cfg;
 		this.backend = backend;
@@ -199,21 +242,161 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return r.tensorRaw("token_embd.weight");
 	}
 
+	// ── KV adapter wiring ─────────────────────────────────────────────────────
+
+	/**
+	 * Wire the {@link NodeKVCacheAdapter} that bridges this handler's in-process
+	 * {@code float[][]} KV arrays with the cluster-level {@link cab.ml.juno.kvcache.KVCacheManager}.
+	 *
+	 * <p>Call this immediately after construction (e.g. in
+	 * {@link cab.ml.juno.player.EmbeddedNodeServer} after
+	 * {@code loadShard()}). When {@code null} (the default), the handler operates
+	 * in dev/stub mode: KV is kept only in the local HashMap with no eviction.
+	 *
+	 * @param adapter the adapter to use, or {@code null} to disable managed eviction
+	 */
+	public void setKvAdapter(NodeKVCacheAdapter adapter) {
+		this.kvAdapter = adapter;
+	}
+
+	/**
+	 * Evict all KV state for the given request from the local in-process map
+	 * <em>and</em> from the {@link NodeKVCacheAdapter}'s GPU/CPU tiers (if wired).
+	 *
+	 * <p>Call this when a request or session completes so VRAM and heap are freed.
+	 * Safe to call even if no KV data was ever stored for this request.
+	 *
+	 * @param requestId the request or session identifier
+	 */
+	public void evict(String requestId) {
+		kvCacheK.remove(requestId);
+		kvCacheV.remove(requestId);
+		NodeKVCacheAdapter a = kvAdapter;
+		if (a != null) {
+			a.evict(requestId);
+		}
+	}
+
+	/**
+	 * Build a minimal {@link LlamaTransformerHandler} with random F32 weights for
+	 * unit tests — bypasses GGUF loading entirely.
+	 *
+	 * <p>All projection matrices are stored as type-0 (F32) QuantizedTensors
+	 * with random values so the forward pass exercises real math paths without
+	 * requiring a model file.
+	 *
+	 * @param vocabSize    vocabulary size (output logit dimension)
+	 * @param hiddenDim    residual stream dimension
+	 * @param numHeads     number of query heads
+	 * @param numKvHeads   number of key/value heads
+	 * @param numLayers    total layers in the model (for config)
+	 * @param startLayer   first layer this shard owns (inclusive)
+	 * @param endLayer     last layer this shard owns (exclusive)
+	 * @param hasEmbd      whether this shard should include the embedding lookup
+	 * @param hasOutProj   whether this shard should include the output projection
+	 * @param adapter      optional {@link NodeKVCacheAdapter}; pass {@code null} for
+	 *                     dev/stub mode
+	 */
+	static LlamaTransformerHandler newTestInstance(
+			int vocabSize, int hiddenDim, int numHeads, int numKvHeads,
+			int numLayers, int startLayer, int endLayer,
+			boolean hasEmbd, boolean hasOutProj,
+			NodeKVCacheAdapter adapter) {
+
+		LlamaConfig cfg = LlamaConfig.synthetic(
+				vocabSize, hiddenDim, numHeads, numKvHeads, numLayers);
+
+		int L = endLayer - startLayer;
+		int H = hiddenDim;
+		int kvDim = (hiddenDim / numHeads) * numKvHeads;
+		int I = hiddenDim * 4; // typical intermediateSize ≈ 4×hiddenDim (rough)
+
+		java.util.Random rng = new java.util.Random(42);
+
+		// Embedding / output weights
+		float[] tokenEmbd   = hasEmbd     ? randF32(vocabSize * H, rng) : null;
+		float[] outputNorm  = hasOutProj  ? randF32(H, rng)             : null;
+		GgufReader.QuantizedTensor outputProj =
+				hasOutProj ? f32Tensor("output.weight", vocabSize, H, rng) : null;
+
+		// Per-layer weights
+		float[][] attnNorm = new float[L][];
+		float[][] ffnNorm  = new float[L][];
+		GgufReader.QuantizedTensor[] wq     = new GgufReader.QuantizedTensor[L];
+		GgufReader.QuantizedTensor[] wk     = new GgufReader.QuantizedTensor[L];
+		GgufReader.QuantizedTensor[] wv     = new GgufReader.QuantizedTensor[L];
+		GgufReader.QuantizedTensor[] wo     = new GgufReader.QuantizedTensor[L];
+		GgufReader.QuantizedTensor[] wGate  = new GgufReader.QuantizedTensor[L];
+		GgufReader.QuantizedTensor[] wUp    = new GgufReader.QuantizedTensor[L];
+		GgufReader.QuantizedTensor[] wDown  = new GgufReader.QuantizedTensor[L];
+
+		for (int li = 0; li < L; li++) {
+			attnNorm[li] = randF32(H, rng);
+			ffnNorm[li]  = randF32(H, rng);
+			wq[li]   = f32Tensor("wq."   + li, H,     H,    rng);
+			wk[li]   = f32Tensor("wk."   + li, kvDim, H,    rng);
+			wv[li]   = f32Tensor("wv."   + li, kvDim, H,    rng);
+			wo[li]   = f32Tensor("wo."   + li, H,     H,    rng);
+			wGate[li]= f32Tensor("wGate."+ li, I,     H,    rng);
+			wUp[li]  = f32Tensor("wUp."  + li, I,     H,    rng);
+			wDown[li]= f32Tensor("wDown."+ li, H,     I,    rng);
+		}
+
+		LlamaTransformerHandler h = new LlamaTransformerHandler(
+				cfg, startLayer, endLayer, hasEmbd, hasOutProj,
+				tokenEmbd, outputNorm, outputProj,
+				attnNorm, ffnNorm, wq, wk, wv, wo, wGate, wUp, wDown,
+				CpuMatVec.INSTANCE);
+		h.kvAdapter = adapter;
+		return h;
+	}
+
+	/** Random F32 float array. */
+	private static float[] randF32(int n, java.util.Random rng) {
+		float[] a = new float[n];
+		for (int i = 0; i < n; i++) a[i] = (rng.nextFloat() - 0.5f) * 0.02f;
+		return a;
+	}
+
+	/** Create a type-0 (F32) QuantizedTensor with random values, shape rows×cols. */
+	private static GgufReader.QuantizedTensor f32Tensor(String name, int rows, int cols,
+			java.util.Random rng) {
+		int n = rows * cols;
+		java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(n * 4)
+				.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+		for (int i = 0; i < n; i++)
+			bb.putFloat((rng.nextFloat() - 0.5f) * 0.02f);
+		return new GgufReader.QuantizedTensor(name, 0, n, bb.array());
+	}
+
 	// ── ForwardPassHandler ────────────────────────────────────────────────────
 
 	@Override
 	public ForwardResult forward(ForwardRequest request, ShardContext context) {
 		long start = System.nanoTime();
 
+		ForwardPassEvent evt = new ForwardPassEvent();
+		evt.begin();
+
 		float[] x = getInitialActivation(request);
 		x = runLayers(x, request.requestId(), request.startPosition());
 
+		ForwardResult result;
 		if (hasOutputProj) {
 			float[] logits = outputProjection(x);
-			return ForwardResult.logits(request.requestId(), logits, System.nanoTime() - start);
+			result = ForwardResult.logits(request.requestId(), logits, System.nanoTime() - start);
 		} else {
-			return ForwardResult.activations(request.requestId(), x, System.nanoTime() - start);
+			result = ForwardResult.activations(request.requestId(), x, System.nanoTime() - start);
 		}
+
+		evt.handlerType = "llama";
+		evt.requestId = request.requestId();
+		evt.startPosition = request.startPosition();
+		evt.layerCount = endLayer - startLayer;
+		evt.hasOutputProjection = hasOutputProj;
+		evt.commit();
+
+		return result;
 	}
 
 	@Override
@@ -252,11 +435,30 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int kvDim = cfg.kvDim();
 
 		// Lazy initial allocation — 64 slots, grows on demand.
-		kvCacheK.computeIfAbsent(requestId, _ -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-		kvCacheV.computeIfAbsent(requestId, _ -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		boolean isNew = !kvCacheK.containsKey(requestId);
+		kvCacheK.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
 
 		float[][] kCache = kvCacheK.get(requestId);
 		float[][] vCache = kvCacheV.get(requestId);
+
+		// If the local entry is fresh AND pos > 0, the in-process map was cleared
+		// (e.g. evicted under heap pressure) but the manager may still hold the
+		// data. Restore from GPU/CPU tiers before writing new data at pos.
+		NodeKVCacheAdapter a = kvAdapter;
+		if (isNew && pos > 0 && a != null) {
+			for (int li = 0; li < L; li++) {
+				int absLayer = startLayer + li;
+				final int i = li;
+				a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
+					// Grow local arrays to fit the restored sequence, then copy
+					ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
+					ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
+					System.arraycopy(pair.k(), 0, kCache[i], 0, pair.k().length);
+					System.arraycopy(pair.v(), 0, vCache[i], 0, pair.v().length);
+				});
+			}
+		}
 
 		// Grow before writing at pos
 		ensureKvCapacity(kCache, pos, kvDim);
@@ -265,6 +467,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		for (int li = 0; li < L; li++) {
 			x = transformerLayer(x, li, pos, kCache[li], vCache[li]);
 		}
+
+		// Write-through: flush updated KV into the manager (GPU→CPU tiers).
+		// This keeps budget accounting accurate and enables eviction under pressure.
+		if (a != null) {
+			int seqLen = pos + 1;
+			for (int li = 0; li < L; li++) {
+				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen, kvDim);
+			}
+		}
+
 		return x;
 	}
 
@@ -451,10 +663,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private static float[] matVecF32raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
-		// Wrap once; random-access via absolute getFloat(offset) — position-state free.
-		java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-				.asReadOnlyBuffer();
+		// Wrap per-thread: ByteBuffer.wrap() is a view-only (no copy) operation, and
+		// asReadOnlyBuffer() does NOT reliably propagate byte order on HeapByteBuffer
+		// across all JVM builds — never use it when byte order matters.
 		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
 			float acc = 0f;
 			int base = (rowStart + r) * cols;
 			for (int c = 0; c < cols; c++)
@@ -532,22 +745,6 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int v = (j < 4) ? raw[scBase + j + 4] & 0x3F
 				: (((raw[scBase + j + 4] & 0xFF) >> 4) | ((raw[scBase + j] & 0xC0) >> 2)) & 0x3F;
 		return v;
-	}
-
-	/**
-	 * @deprecated Used only by the old byte[]-based helpers; retained for test
-	 *             compatibility.
-	 */
-	private static float q4kScale(byte[] sc, int j) {
-		return q4kScaleRaw(sc, 0, j);
-	}
-
-	/**
-	 * @deprecated Used only by the old byte[]-based helpers; retained for test
-	 *             compatibility.
-	 */
-	private static float q4kMin(byte[] sc, int j) {
-		return q4kMinRaw(sc, 0, j);
 	}
 
 	// ── Q8_0 raw bytes matVec ─────────────────────────────────────────────────

@@ -9,7 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Correctness tests for CpuForwardPassHandler.matVec().
+ * Correctness tests for LlamaTransformerHandler.matVec().
  *
  * These tests act as a regression anchor: any change to the matVec
  * implementation (scalar → parallel streams, SIMD, etc.) must not change
@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
  * Run before and after parallelising matVec to confirm the optimisation is
  * numerically identical to the reference scalar implementation.
  */
-@DisplayName("CpuForwardPassHandler — matVec correctness")
+@DisplayName("LlamaTransformerHandler — matVec correctness")
 class MatVecParallelTest {
 
 	// ── Reference scalar implementation (copied from pre-optimisation code) ──
@@ -52,7 +52,7 @@ class MatVecParallelTest {
 
 	private void assertMatvecMatch(float[] A, float[] x, int rows, int cols) {
 		float[] expected = scalarMatVec(A, x, rows, cols);
-		float[] actual = CpuForwardPassHandler.matVec(A, x, rows, cols);
+		float[] actual = LlamaTransformerHandler.matVec(A, x, rows, cols);
 
 		assertThat(actual).hasSize(rows);
 		for (int i = 0; i < rows; i++) {
@@ -69,7 +69,7 @@ class MatVecParallelTest {
 		float[] A = { 1, 0, 0, 0, 1, 0 };
 		float[] x = { 3, 5, 7 };
 
-		float[] y = CpuForwardPassHandler.matVec(A, x, 2, 3);
+		float[] y = LlamaTransformerHandler.matVec(A, x, 2, 3);
 
 		assertThat(y).hasSize(2);
 		assertThat(y[0]).isCloseTo(3f, within(1e-6f));
@@ -82,7 +82,7 @@ class MatVecParallelTest {
 		float[] A = new float[64 * 64];
 		float[] x = randomVector(64, 1);
 
-		float[] y = CpuForwardPassHandler.matVec(A, x, 64, 64);
+		float[] y = LlamaTransformerHandler.matVec(A, x, 64, 64);
 
 		for (float v : y)
 			assertThat(v).isEqualTo(0f);
@@ -94,7 +94,7 @@ class MatVecParallelTest {
 		float[] A = randomMatrix(64, 64, 2);
 		float[] x = new float[64];
 
-		float[] y = CpuForwardPassHandler.matVec(A, x, 64, 64);
+		float[] y = LlamaTransformerHandler.matVec(A, x, 64, 64);
 
 		for (float v : y)
 			assertThat(v).isEqualTo(0f);

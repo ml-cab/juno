@@ -113,6 +113,9 @@ public final class GgufTokenizer implements Tokenizer {
 		if (text == null || text.isEmpty())
 			return new int[] { bosId };
 
+		TokenizerEvent evt = new TokenizerEvent();
+		evt.begin();
+
 		// SentencePiece normalisation: replace spaces with ▁, prefix the whole
 		// string with ▁ so the first word gets the same treatment as mid-sentence words
 		String normalised = SP + text.replace(' ', SP);
@@ -166,39 +169,67 @@ public final class GgufTokenizer implements Tokenizer {
 		result[0] = bosId;
 		for (int i = 0; i < syms.size(); i++)
 			result[i + 1] = syms.get(i).id;
+
+		evt.tokenizerType = "gguf";
+		evt.operation = "encode";
+		evt.inputLength = text.length();
+		evt.outputLength = result.length;
+		evt.commit();
+
 		return result;
 	}
 
 	@Override
 	public String decode(int[] tokenIds) {
+		TokenizerEvent evt = new TokenizerEvent();
+		evt.begin();
 		StringBuilder sb = new StringBuilder();
 		for (int id : tokenIds)
 			sb.append(decodeToken(id));
 		// decodeToken() already replaced ▁ with space; just strip the leading space
 		// that the first token's ▁ prefix would have introduced.
 		String result = sb.toString();
-		return result.startsWith(" ") ? result.substring(1) : result;
+		result = result.startsWith(" ") ? result.substring(1) : result;
+		evt.tokenizerType = "gguf";
+		evt.operation = "decode";
+		evt.inputLength = tokenIds.length;
+		evt.outputLength = result.length();
+		evt.commit();
+		return result;
 	}
 
 	@Override
 	public String decodeToken(int tokenId) {
-		if (tokenId < 0 || tokenId >= vocab.length)
-			return "";
-		// Skip BOS, EOS, and control tokens
-		int type = tokenId < tokenTypes.length ? tokenTypes[tokenId] : 1;
-		if (type == 3 /* control */ || tokenId == bosId || tokenId == eosId)
-			return "";
-		String piece = vocab[tokenId];
-		// Byte tokens like <0xHH> → actual byte
-		if (piece.matches("<0x[0-9A-Fa-f]{2}>")) {
-			int b = Integer.parseInt(piece.substring(3, 5), 16);
-			return new String(new byte[] { (byte) b }, java.nio.charset.StandardCharsets.UTF_8);
+		TokenizerEvent evt = new TokenizerEvent();
+		evt.begin();
+		String piece;
+		if (tokenId < 0 || tokenId >= vocab.length) {
+			piece = "";
+		} else {
+			// Skip BOS, EOS, and control tokens
+			int type = tokenId < tokenTypes.length ? tokenTypes[tokenId] : 1;
+			if (type == 3 /* control */ || tokenId == bosId || tokenId == eosId) {
+				piece = "";
+			} else {
+				String raw = vocab[tokenId];
+				// Byte tokens like <0xHH> → actual byte
+				if (raw.matches("<0x[0-9A-Fa-f]{2}>")) {
+					int b = Integer.parseInt(raw.substring(3, 5), 16);
+					raw = new String(new byte[] { (byte) b }, java.nio.charset.StandardCharsets.UTF_8);
+				}
+				// Replace SentencePiece space prefix (▁ U+2581) with a real space so that
+				// streaming callers (which receive one piece at a time) see correct whitespace.
+				// The full decode() path also does this replacement, but streaming builds
+				// fullText directly from decodeToken() pieces without going through decode().
+				piece = raw.replace(SP, ' ').replace(GP, ' ');
+			}
 		}
-		// Replace SentencePiece space prefix (▁ U+2581) with a real space so that
-		// streaming callers (which receive one piece at a time) see correct whitespace.
-		// The full decode() path also does this replacement, but streaming builds
-		// fullText directly from decodeToken() pieces without going through decode().
-		return piece.replace(SP, ' ').replace(GP, ' ');
+		evt.tokenizerType = "gguf";
+		evt.operation = "decodeToken";
+		evt.inputLength = 1;
+		evt.outputLength = piece.length();
+		evt.commit();
+		return piece;
 	}
 
 	@Override

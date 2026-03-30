@@ -147,8 +147,8 @@ public final class ModelLiveRunner {
 		try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
 			LlamaConfig cfg = LlamaConfig.from(cfgReader);
 			totalLayers = cfg.numLayers();
-			vocabSize   = cfg.vocabSize();       // actual vocab (e.g. 32064 for phi-3.5)
-			tokenizer   = GgufTokenizer.load(cfgReader);
+			vocabSize = cfg.vocabSize(); // actual vocab (e.g. 32064 for phi-3.5)
+			tokenizer = GgufTokenizer.load(cfgReader);
 		}
 
 		harness = ClusterHarness.threeNodes(modelPath, totalLayers);
@@ -219,7 +219,7 @@ public final class ModelLiveRunner {
 
 		try {
 			List<String> pieces = new ArrayList<>();
-			loop.generate(request("hello", 10), (piece, _, _) -> pieces.add(piece));
+			loop.generate(request("hello", 10), (piece, tokenId, step) -> pieces.add(piece));
 
 			for (String piece : pieces) {
 				if (piece.contains("\u2581")) {
@@ -317,8 +317,7 @@ public final class ModelLiveRunner {
 
 		ProcessPipelineClient f16Pipeline = null;
 		try {
-			f16Pipeline = new ProcessPipelineClient(harness.nodeAddresses(), vocabSize,
-					ActivationDtype.FLOAT16);
+			f16Pipeline = new ProcessPipelineClient(harness.nodeAddresses(), vocabSize, ActivationDtype.FLOAT16);
 			GenerationLoop f16Loop = new GenerationLoop(tokenizer, Sampler.create(), f16Pipeline,
 					new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(256)));
 
@@ -357,9 +356,9 @@ public final class ModelLiveRunner {
 	/**
 	 * Standalone lifecycle for the tensor-parallel check (Test 7).
 	 *
-	 * The pipeline cluster (Tests 1-6) is already stopped before this runs, so
-	 * the three node ports are free. A fresh 3-node tensor-parallel cluster is
-	 * started, one generation is verified, then the cluster is torn down.
+	 * The pipeline cluster (Tests 1-6) is already stopped before this runs, so the
+	 * three node ports are free. A fresh 3-node tensor-parallel cluster is started,
+	 * one generation is verified, then the cluster is torn down.
 	 */
 	private static void runTensorParallelTest() {
 		ClusterHarness tensorHarness = null;
@@ -372,17 +371,14 @@ public final class ModelLiveRunner {
 			try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
 				LlamaConfig cfg = LlamaConfig.from(cfgReader);
 				totalLayers = cfg.numLayers();
-				numHeads    = cfg.numHeads();
+				numHeads = cfg.numHeads();
 			}
 
 			tensorHarness = ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads);
 			tensorHarness.start();
 			System.out.println(GREEN + "OK" + RESET);
 
-			GenerationLoop tensorLoop = new GenerationLoop(
-					tokenizer,
-					Sampler.create(),
-					tensorHarness.pipeline(),
+			GenerationLoop tensorLoop = new GenerationLoop(tokenizer, Sampler.create(), tensorHarness.pipeline(),
 					new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096)));
 
 			testTensorParallelGeneration(tensorLoop);
@@ -390,7 +386,7 @@ public final class ModelLiveRunner {
 		} catch (Exception e) {
 			System.out.println(RED + "FAIL" + RESET + " (cluster startup: " + e.getMessage() + ")");
 			failures.add("Tensor-parallel cluster failed to start: " + e.getMessage());
-			totalTests += 2;   // count both skipped tests as failures
+			totalTests += 2; // count both skipped tests as failures
 		} finally {
 			if (tensorHarness != null) {
 				try {
@@ -409,10 +405,8 @@ public final class ModelLiveRunner {
 
 		try {
 			GenerationResult result = tensorLoop.generate(
-					InferenceRequest.of("tinyllama",
-							List.of(ChatMessage.user("hello")),
-							SamplingParams.defaults().withMaxTokens(10).withTemperature(0.7f),
-							RequestPriority.NORMAL),
+					InferenceRequest.of("tinyllama", List.of(ChatMessage.user("hello")),
+							SamplingParams.defaults().withMaxTokens(10).withTemperature(0.7f), RequestPriority.NORMAL),
 					TokenConsumer.discard());
 
 			if (result.generatedTokens() == 0) {
@@ -424,8 +418,7 @@ public final class ModelLiveRunner {
 				fail("Tensor-parallel response is empty after cleanup (raw: \"" + result.text() + "\")");
 				return;
 			}
-			System.out.println(GREEN + "PASS" + RESET
-					+ "  (" + result.generatedTokens() + " tokens via AllReduce)");
+			System.out.println(GREEN + "PASS" + RESET + "  (" + result.generatedTokens() + " tokens via AllReduce)");
 			passedTests++;
 		} catch (Exception e) {
 			fail("Exception: " + e.getMessage());
@@ -441,21 +434,14 @@ public final class ModelLiveRunner {
 		try {
 			SamplingParams greedy = SamplingParams.deterministic().withMaxTokens(8);
 
-			GenerationResult r1 = tensorLoop.generate(
-					InferenceRequest.of("tinyllama",
-							List.of(ChatMessage.user("hello")),
-							greedy, RequestPriority.NORMAL),
-					TokenConsumer.discard());
+			GenerationResult r1 = tensorLoop.generate(InferenceRequest.of("tinyllama",
+					List.of(ChatMessage.user("hello")), greedy, RequestPriority.NORMAL), TokenConsumer.discard());
 
-			GenerationResult r2 = tensorLoop.generate(
-					InferenceRequest.of("tinyllama",
-							List.of(ChatMessage.user("hello")),
-							greedy, RequestPriority.NORMAL),
-					TokenConsumer.discard());
+			GenerationResult r2 = tensorLoop.generate(InferenceRequest.of("tinyllama",
+					List.of(ChatMessage.user("hello")), greedy, RequestPriority.NORMAL), TokenConsumer.discard());
 
 			if (!r1.text().equals(r2.text())) {
-				fail("Tensor-parallel responses differ:\n  r1: \"" + r1.text()
-						+ "\"\n  r2: \"" + r2.text() + "\"");
+				fail("Tensor-parallel responses differ:\n  r1: \"" + r1.text() + "\"\n  r2: \"" + r2.text() + "\"");
 				return;
 			}
 			System.out.println(GREEN + "PASS" + RESET);

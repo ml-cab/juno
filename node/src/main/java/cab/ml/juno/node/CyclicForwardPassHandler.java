@@ -46,19 +46,32 @@ public final class CyclicForwardPassHandler implements ForwardPassHandler {
 		callCount.incrementAndGet();
 		long start = System.nanoTime();
 
+		ForwardPassEvent evt = new ForwardPassEvent();
+		evt.begin();
+
+		ForwardResult result;
 		if (context.hasOutputProjection()) {
 			// Last node — return logits
 			float[] logits = new float[context.vocabSize()];
 			logits[winnerToken] = 100.0f;
-			return ForwardResult.logits(request.requestId(), logits, System.nanoTime() - start);
+			result = ForwardResult.logits(request.requestId(), logits, System.nanoTime() - start);
 		} else {
 			// Intermediate node — return activations (deterministic pattern)
 			float[] activations = new float[context.hiddenDim()];
 			for (int i = 0; i < activations.length; i++) {
 				activations[i] = 0.01f * (i % 100);
 			}
-			return ForwardResult.activations(request.requestId(), activations, System.nanoTime() - start);
+			result = ForwardResult.activations(request.requestId(), activations, System.nanoTime() - start);
 		}
+
+		evt.handlerType = "cyclic";
+		evt.requestId = request.requestId();
+		evt.startPosition = request.startPosition();
+		evt.layerCount = context.endLayer() - context.startLayer();
+		evt.hasOutputProjection = context.hasOutputProjection();
+		evt.commit();
+
+		return result;
 	}
 
 	@Override

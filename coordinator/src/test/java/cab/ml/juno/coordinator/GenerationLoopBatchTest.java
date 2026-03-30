@@ -17,16 +17,16 @@ import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
-import cab.ml.juno.tokenizer.StubTokenizer;
+import cab.ml.juno.tokenizer.SimpleTokenizer;
 
 class GenerationLoopBatchTest {
 
 	private GenerationLoop loop;
-	private StubTokenizer tokenizer;
+	private SimpleTokenizer tokenizer;
 
 	@BeforeEach
 	void setUp() {
-		tokenizer = new StubTokenizer();
+		tokenizer = new SimpleTokenizer();
 		loop = new GenerationLoop(tokenizer, Sampler.create(), new StubInferencePipeline(),
 				new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000)));
 	}
@@ -139,8 +139,8 @@ class GenerationLoopBatchTest {
 		List<Integer> tokensForReq1 = new CopyOnWriteArrayList<>();
 		List<Integer> tokensForReq2 = new CopyOnWriteArrayList<>();
 
-		TokenConsumer c1 = (_, tokenId, _) -> tokensForReq1.add(tokenId);
-		TokenConsumer c2 = (_, tokenId, _) -> tokensForReq2.add(tokenId);
+		TokenConsumer c1 = (piece, tokenId, pos) -> tokensForReq1.add(tokenId);
+		TokenConsumer c2 = (piece, tokenId, pos) -> tokensForReq2.add(tokenId);
 
 		BatchEntry e1 = new BatchEntry(InferenceRequest.of("m", List.of(ChatMessage.user("a")),
 				SamplingParams.defaults().withMaxTokens(3), RequestPriority.NORMAL), c1);

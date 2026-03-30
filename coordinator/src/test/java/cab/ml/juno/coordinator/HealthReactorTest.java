@@ -16,7 +16,7 @@ import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.Sampler;
-import cab.ml.juno.tokenizer.StubTokenizer;
+import cab.ml.juno.tokenizer.SimpleTokenizer;
 
 class HealthReactorTest {
 
@@ -141,7 +141,7 @@ class HealthReactorTest {
 
 	@Test
 	void scheduler_shutdown_called_when_fully_unavailable() {
-		GenerationLoop loop = new GenerationLoop(new StubTokenizer(), Sampler.create(), pipeline,
+		GenerationLoop loop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), pipeline,
 				new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000)));
 		RequestScheduler scheduler = new RequestScheduler(10, loop);
 

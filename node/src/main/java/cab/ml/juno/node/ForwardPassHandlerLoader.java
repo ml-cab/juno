@@ -77,6 +77,42 @@ public final class ForwardPassHandlerLoader {
 		};
 	}
 
+	/**
+	 * Open the GGUF file, read {@code general.architecture}, and return the
+	 * appropriate handler wired with the specified {@link MatVec}.
+	 *
+	 * <p>Use this overload when the compute substrate differs from the default CPU
+	 * backend — for example, to use {@link CudaMatVec} on GPU nodes:
+	 *
+	 * <pre>{@code
+	 * GpuContext ctx = GpuContext.init(0);
+	 * ForwardPassHandler h = ForwardPassHandlerLoader.load(modelPath, shard, new CudaMatVecBackend(ctx));
+	 * }</pre>
+	 *
+	 * @param modelPath path to the GGUF file
+	 * @param context   shard assignment (layers, embedding flags)
+	 * @param backend   compute backend to inject into the handler
+	 * @return a ready-to-use {@link ForwardPassHandler}
+	 * @throws IOException if the file cannot be opened or a tensor is missing
+	 */
+	public static ForwardPassHandler load(Path modelPath, ShardContext context, MatVec backend)
+			throws IOException {
+		String arch = readArchitecture(modelPath);
+		log.info("Detected architecture: " + arch + "  backend=" + backend.getClass().getSimpleName()
+				+ "  file=" + modelPath);
+
+		return switch (arch) {
+		case "phi3" -> {
+			log.info("Routing to Phi3TransformerHandler (phi3 fused-QKV architecture)");
+			yield Phi3TransformerHandler.load(modelPath, context, backend);
+		}
+		default -> {
+			log.info("Routing to LlamaTransformerHandler (LLaMA-family architecture: " + arch + ")");
+			yield LlamaTransformerHandler.load(modelPath, context, backend);
+		}
+		};
+	}
+
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
 	/**

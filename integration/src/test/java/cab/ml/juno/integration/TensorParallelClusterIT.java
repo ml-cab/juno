@@ -30,7 +30,7 @@ import cab.ml.juno.registry.ParallelismType;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
-import cab.ml.juno.tokenizer.StubTokenizer;
+import cab.ml.juno.tokenizer.SimpleTokenizer;
 
 /**
  * Full multi-JVM 3-node tensor-parallel cluster integration test.
@@ -69,7 +69,7 @@ class TensorParallelClusterIT {
 		// pipeline() returns TensorParallelPipelineClient for TENSOR mode
 		pipeline = harness.pipeline();
 
-		generationLoop = new GenerationLoop(new StubTokenizer(), Sampler.create(), pipeline,
+		generationLoop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), pipeline,
 				new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096)));
 
 		scheduler = new RequestScheduler(100, generationLoop);
@@ -108,7 +108,7 @@ class TensorParallelClusterIT {
 				SamplingParams.defaults().withMaxTokens(maxTokens), RequestPriority.NORMAL);
 
 		List<String> pieces = new ArrayList<>();
-		GenerationResult result = generationLoop.generate(request, (piece, _, _) -> pieces.add(piece));
+		GenerationResult result = generationLoop.generate(request, (piece, tokenId, step) -> pieces.add(piece));
 
 		assertThat(result.generatedTokens()).as("at least one token generated").isGreaterThan(0)
 				.isLessThanOrEqualTo(maxTokens);

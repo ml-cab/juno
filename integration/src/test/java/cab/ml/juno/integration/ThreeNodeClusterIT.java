@@ -29,7 +29,7 @@ import cab.ml.juno.player.ProcessPipelineClient;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
-import cab.ml.juno.tokenizer.StubTokenizer;
+import cab.ml.juno.tokenizer.SimpleTokenizer;
 
 /**
  * Full multi-JVM 3-node cluster integration test.
@@ -60,7 +60,7 @@ class ThreeNodeClusterIT {
 
 		pipeline = harness.pipelineClient();
 
-		generationLoop = new GenerationLoop(new StubTokenizer(), Sampler.create(), pipeline,
+		generationLoop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), pipeline,
 				new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096)));
 		scheduler = new RequestScheduler(100, generationLoop);
 	}
@@ -95,7 +95,7 @@ class ThreeNodeClusterIT {
 				SamplingParams.defaults().withMaxTokens(maxTokens), RequestPriority.NORMAL);
 
 		List<String> pieces = new ArrayList<>();
-		GenerationResult result = generationLoop.generate(request, (piece, _, _) -> pieces.add(piece));
+		GenerationResult result = generationLoop.generate(request, (piece, tokenId, step) -> pieces.add(piece));
 
 		assertThat(result.generatedTokens()).isGreaterThan(0).isLessThanOrEqualTo(maxTokens);
 
@@ -214,7 +214,7 @@ class ThreeNodeClusterIT {
 		ProcessPipelineClient f16Pipeline = new ProcessPipelineClient(harness.nodeAddresses(),
 				EmbeddedNodeServer.VOCAB_SIZE, cab.ml.juno.node.ActivationDtype.FLOAT16);
 		try {
-			GenerationLoop f16Loop = new GenerationLoop(new StubTokenizer(), Sampler.create(), f16Pipeline,
+			GenerationLoop f16Loop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), f16Pipeline,
 					new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(256)));
 
 			InferenceRequest req = InferenceRequest.of("tinyllama", List.of(ChatMessage.user("Hello compressed world")),

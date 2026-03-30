@@ -36,12 +36,16 @@ import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.kvcache.LayerRange;
 import cab.ml.juno.node.ActivationCodec;
 import cab.ml.juno.node.CudaAvailability;
-import cab.ml.juno.node.CpuForwardPassHandler;
+
 import cab.ml.juno.node.CyclicForwardPassHandler;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardResult;
 import cab.ml.juno.node.GpuContext;
-import cab.ml.juno.node.GpuForwardPassHandler;
+import cab.ml.juno.node.CudaMatVec;
+import cab.ml.juno.node.ForwardPassHandlerLoader;
+import cab.ml.juno.node.LlamaTransformerHandler;
+import cab.ml.juno.node.NodeKVCacheAdapter;
+import cab.ml.juno.node.Phi3TransformerHandler;
 import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.ShardAssignment;
 import io.grpc.Server;
@@ -49,8 +53,8 @@ import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
 
 /**
- * gRPC NodeService backed by either GpuForwardPassHandler (GPU) or
- * CpuForwardPassHandler (CPU) depending on the {@code useGpu} flag.
+ * gRPC NodeService backed by LlamaTransformerHandler or Phi3TransformerHandler,
+ * with compute backend selected by the {@code useGpu} flag (CudaMatVecBackend or CpuMatVecBackend).
  *
  * Activation compression: Each ForwardRequest carries a dtype field that tells
  * this node how to decode the incoming activation bytes. The response
@@ -202,11 +206,8 @@ public final class EmbeddedNodeServer {
 			String msg;
 			if (modelPath != null) {
 				try {
-					// Release any existing GPU resources before reloading
+					// Close any existing GpuContext before reloading
 					if (gpuContext != null) {
-						if (handler instanceof GpuForwardPassHandler g) {
-							g.releaseGpuResources();
-						}
 						gpuContext.close();
 						gpuContext = null;
 					}
@@ -216,12 +217,13 @@ public final class EmbeddedNodeServer {
 							+ request.getHasOutputProjection());
 					if (useGpu && CudaAvailability.isAvailable()) {
 						gpuContext = GpuContext.init(0);
-						handler = GpuForwardPassHandler.loadGpuResident(Path.of(modelPath), newCtx, gpuContext);
-						msg = "Real shard loaded (GpuForwardPassHandler) layers " + request.getStartLayer() + "–"
+						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
+								new CudaMatVec(gpuContext));
+						msg = "Real shard loaded (GPU/CudaMatVec) layers " + request.getStartLayer() + "–"
 								+ request.getEndLayer();
 					} else {
-						handler = CpuForwardPassHandler.load(Path.of(modelPath), newCtx);
-						msg = "Real shard loaded (CpuForwardPassHandler) layers " + request.getStartLayer() + "–"
+						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx);
+						msg = "Real shard loaded (CPU/CpuMatVec) layers " + request.getStartLayer() + "–"
 								+ request.getEndLayer();
 					}
 					log.info(msg);
@@ -244,8 +246,19 @@ public final class EmbeddedNodeServer {
 			context = newCtx;
 
 			LayerRange range = LayerRange.of(request.getStartLayer(), request.getEndLayer());
-			kvCache = new KVCacheManager(new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256), range);
+			KVCacheManager newKvCache = new KVCacheManager(
+					new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256), range);
+			kvCache = newKvCache;
 			log.info("Node [" + nodeId + "] KVCache scoped to " + range);
+
+			// Wire the adapter so the transformer handler writes through to the
+			// KVCacheManager (GPU + CPU tiers with eviction under budget pressure).
+			NodeKVCacheAdapter adapter = new NodeKVCacheAdapter(newKvCache);
+			if (handler instanceof LlamaTransformerHandler lh) {
+				lh.setKvAdapter(adapter);
+			} else if (handler instanceof Phi3TransformerHandler ph) {
+				ph.setKvAdapter(adapter);
+			}
 
 			responseObserver.onNext(LoadShardResponse.newBuilder().setSuccess(true).setMessage(msg).build());
 			responseObserver.onCompleted();
@@ -253,9 +266,7 @@ public final class EmbeddedNodeServer {
 
 		@Override
 		public void unloadShard(UnloadShardRequest request, StreamObserver<UnloadShardResponse> responseObserver) {
-			if (handler instanceof GpuForwardPassHandler g) {
-				g.releaseGpuResources();
-			}
+			// CudaMatVecBackend uses per-call device memory; no persistent GPU buffers to release.
 			if (gpuContext != null) {
 				gpuContext.close();
 				gpuContext = null;

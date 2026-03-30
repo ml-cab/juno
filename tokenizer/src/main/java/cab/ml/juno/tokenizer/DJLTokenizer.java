@@ -87,11 +87,18 @@ public final class DJLTokenizer implements Tokenizer, AutoCloseable {
 		if (text == null || text.isEmpty())
 			return new int[0];
 
+		TokenizerEvent evt = new TokenizerEvent();
+		evt.begin();
 		List<String> pieces = sp.tokenize(text);
 		int[] ids = new int[pieces.size()];
 		for (int i = 0; i < pieces.size(); i++) {
 			ids[i] = (int) vocab.getIndex(pieces.get(i));
 		}
+		evt.tokenizerType = "djl";
+		evt.operation = "encode";
+		evt.inputLength = text.length();
+		evt.outputLength = ids.length;
+		evt.commit();
 		return ids;
 	}
 
@@ -100,6 +107,8 @@ public final class DJLTokenizer implements Tokenizer, AutoCloseable {
 		if (tokenIds == null || tokenIds.length == 0)
 			return "";
 
+		TokenizerEvent evt = new TokenizerEvent();
+		evt.begin();
 		StringBuilder sb = new StringBuilder();
 		for (int id : tokenIds) {
 			String piece = decodeToken(id);
@@ -107,19 +116,33 @@ public final class DJLTokenizer implements Tokenizer, AutoCloseable {
 				sb.append(piece);
 		}
 		// SentencePiece uses U+2581 as space prefix — replace with real space
-		return sb.toString().replace('\u2581', ' ').stripLeading();
+		String result = sb.toString().replace('\u2581', ' ').stripLeading();
+		evt.tokenizerType = "djl";
+		evt.operation = "decode";
+		evt.inputLength = tokenIds.length;
+		evt.outputLength = result.length();
+		evt.commit();
+		return result;
 	}
 
 	@Override
 	public String decodeToken(int tokenId) {
+		TokenizerEvent evt = new TokenizerEvent();
+		evt.begin();
+		String piece;
 		try {
-			String piece = vocab.getToken(tokenId);
+			piece = vocab.getToken(tokenId);
 			if (piece == null || isSpecialToken(piece))
-				return "";
-			return piece;
+				piece = "";
 		} catch (Exception e) {
-			return ""; // out-of-range or unknown — safe to skip
+			piece = ""; // out-of-range or unknown — safe to skip
 		}
+		evt.tokenizerType = "djl";
+		evt.operation = "decodeToken";
+		evt.inputLength = 1;
+		evt.outputLength = piece.length();
+		evt.commit();
+		return piece;
 	}
 
 	@Override
