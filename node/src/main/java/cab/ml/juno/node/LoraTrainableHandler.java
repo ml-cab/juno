@@ -23,6 +23,8 @@ import java.util.Map;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
+import cab.ml.juno.node.GgufReader.QuantizedTensor;
+
 /**
  * LLaMA-family transformer handler with LoRA fine-tuning support.
  *

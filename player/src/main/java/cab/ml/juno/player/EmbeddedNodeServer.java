@@ -47,6 +47,7 @@ import cab.ml.juno.node.LlamaTransformerHandler;
 import cab.ml.juno.node.NodeKVCacheAdapter;
 import cab.ml.juno.node.Phi3TransformerHandler;
 import cab.ml.juno.node.ShardContext;
+import cab.ml.juno.node.WeightDequantMode;
 import cab.ml.juno.registry.ShardAssignment;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
@@ -96,9 +97,25 @@ public final class EmbeddedNodeServer {
 	 * @param useGpu    when true use GPU if available; when false use CPU.
 	 */
 	public EmbeddedNodeServer(String nodeId, int port, String modelPath, boolean useGpu) {
+		this(nodeId, port, modelPath, useGpu, WeightDequantMode.EAGER);
+	}
+
+	/**
+	 * Real-model mode with explicit dequantization strategy.
+	 *
+	 * @param modelPath   path to a GGUF file, or null to fall back to stub mode.
+	 * @param useGpu      when true use GPU if available; when false use CPU.
+	 * @param dequantMode {@link WeightDequantMode#EAGER} (default) — upload
+	 *                    dequantized weights to GPU once at load time;
+	 *                    {@link WeightDequantMode#LAZY} — keep weights quantized
+	 *                    in heap, dequantize per block on CPU every decode step.
+	 */
+	public EmbeddedNodeServer(String nodeId, int port, String modelPath, boolean useGpu,
+			WeightDequantMode dequantMode) {
 		this.nodeId = nodeId;
 		this.port = port;
-		this.grpcServer = ServerBuilder.forPort(port).addService(new NodeServiceImpl(nodeId, modelPath, useGpu)).build();
+		this.grpcServer = ServerBuilder.forPort(port)
+				.addService(new NodeServiceImpl(nodeId, modelPath, useGpu, dequantMode)).build();
 	}
 
 	public void start() throws IOException {
@@ -132,16 +149,18 @@ public final class EmbeddedNodeServer {
 		private final String nodeId;
 		private final String modelPath; // null = stub mode
 		private final boolean useGpu;
+		private final WeightDequantMode dequantMode;
 		private volatile ForwardPassHandler handler;
 		private volatile ShardContext context;
 		private volatile GpuContext gpuContext; // non-null only when handler is GPU
 		@SuppressWarnings("unused")
 		private volatile KVCacheManager kvCache;
 
-		NodeServiceImpl(String nodeId, String modelPath, boolean useGpu) {
+		NodeServiceImpl(String nodeId, String modelPath, boolean useGpu, WeightDequantMode dequantMode) {
 			this.nodeId = nodeId;
 			this.modelPath = modelPath;
 			this.useGpu = useGpu;
+			this.dequantMode = dequantMode;
 			this.handler = new CyclicForwardPassHandler(); // replaced in loadShard() when real model
 			this.context = buildDefaultContext();
 			this.kvCache = new KVCacheManager(new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256));
@@ -211,16 +230,17 @@ public final class EmbeddedNodeServer {
 						gpuContext.close();
 						gpuContext = null;
 					}
-					log.info("Loading real model from: " + modelPath + " (useGpu=" + useGpu + ")");
+					log.info("Loading real model from: " + modelPath + " (useGpu=" + useGpu
+							+ "  dequant=" + dequantMode.name().toLowerCase() + ")");
 					log.info("Shard context: layers " + request.getStartLayer() + "-" + request.getEndLayer()
 							+ " embeddings=" + request.getHasEmbeddings() + " outputProj="
 							+ request.getHasOutputProjection());
 					if (useGpu && CudaAvailability.isAvailable()) {
 						gpuContext = GpuContext.init(0);
 						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
-								new CudaMatVec(gpuContext));
-						msg = "Real shard loaded (GPU/CudaMatVec) layers " + request.getStartLayer() + "–"
-								+ request.getEndLayer();
+								new CudaMatVec(gpuContext), dequantMode);
+						msg = "Real shard loaded (GPU/CudaMatVec  dequant=" + dequantMode.name().toLowerCase()
+								+ ") layers " + request.getStartLayer() + "–" + request.getEndLayer();
 					} else {
 						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx);
 						msg = "Real shard loaded (CPU/CpuMatVec) layers " + request.getStartLayer() + "–"
@@ -266,7 +286,8 @@ public final class EmbeddedNodeServer {
 
 		@Override
 		public void unloadShard(UnloadShardRequest request, StreamObserver<UnloadShardResponse> responseObserver) {
-			// CudaMatVecBackend uses per-call device memory; no persistent GPU buffers to release.
+			// Release GPU-resident weight buffers before closing the GpuContext.
+			if (handler instanceof LlamaTransformerHandler lh) lh.close();
 			if (gpuContext != null) {
 				gpuContext.close();
 				gpuContext = null;

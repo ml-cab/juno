@@ -81,13 +81,10 @@ public final class ForwardPassHandlerLoader {
 	 * Open the GGUF file, read {@code general.architecture}, and return the
 	 * appropriate handler wired with the specified {@link MatVec}.
 	 *
-	 * <p>Use this overload when the compute substrate differs from the default CPU
-	 * backend — for example, to use {@link CudaMatVec} on GPU nodes:
-	 *
-	 * <pre>{@code
-	 * GpuContext ctx = GpuContext.init(0);
-	 * ForwardPassHandler h = ForwardPassHandlerLoader.load(modelPath, shard, new CudaMatVecBackend(ctx));
-	 * }</pre>
+	 * <p>Uses {@link WeightDequantMode#EAGER} — weights are dequantized once and
+	 * uploaded to the GPU when backend is {@link CudaMatVec}. Prefer
+	 * {@link #load(Path, ShardContext, MatVec, WeightDequantMode)} to pass the mode
+	 * explicitly.
 	 *
 	 * @param modelPath path to the GGUF file
 	 * @param context   shard assignment (layers, embedding flags)
@@ -97,18 +94,44 @@ public final class ForwardPassHandlerLoader {
 	 */
 	public static ForwardPassHandler load(Path modelPath, ShardContext context, MatVec backend)
 			throws IOException {
+		return load(modelPath, context, backend, WeightDequantMode.EAGER);
+	}
+
+	/**
+	 * Open the GGUF file, read {@code general.architecture}, and return the
+	 * appropriate handler wired with the specified {@link MatVec} and
+	 * {@link WeightDequantMode}.
+	 *
+	 * <pre>{@code
+	 * GpuContext ctx = GpuContext.init(0);
+	 * ForwardPassHandler h = ForwardPassHandlerLoader.load(
+	 *     modelPath, shard, new CudaMatVec(ctx), WeightDequantMode.EAGER);
+	 * }</pre>
+	 *
+	 * @param modelPath path to the GGUF file
+	 * @param context   shard assignment (layers, embedding flags)
+	 * @param backend   compute backend to inject into the handler
+	 * @param mode      {@link WeightDequantMode#EAGER} = dequantize once, upload to
+	 *                  GPU; {@link WeightDequantMode#LAZY} = keep quantized, CPU
+	 *                  dequantize per block on every decode step
+	 * @return a ready-to-use {@link ForwardPassHandler}
+	 * @throws IOException if the file cannot be opened or a tensor is missing
+	 */
+	public static ForwardPassHandler load(Path modelPath, ShardContext context, MatVec backend,
+			WeightDequantMode mode) throws IOException {
 		String arch = readArchitecture(modelPath);
 		log.info("Detected architecture: " + arch + "  backend=" + backend.getClass().getSimpleName()
-				+ "  file=" + modelPath);
+				+ "  dequant=" + mode.name().toLowerCase() + "  file=" + modelPath);
 
 		return switch (arch) {
 		case "phi3" -> {
 			log.info("Routing to Phi3TransformerHandler (phi3 fused-QKV architecture)");
+			// Phi3 uses its own CPU static matVec; dequant mode is not applicable.
 			yield Phi3TransformerHandler.load(modelPath, context, backend);
 		}
 		default -> {
 			log.info("Routing to LlamaTransformerHandler (LLaMA-family architecture: " + arch + ")");
-			yield LlamaTransformerHandler.load(modelPath, context, backend);
+			yield LlamaTransformerHandler.load(modelPath, context, backend, mode);
 		}
 		};
 	}

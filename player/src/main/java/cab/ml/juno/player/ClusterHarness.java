@@ -358,6 +358,13 @@ public final class ClusterHarness implements AutoCloseable {
 		if (modelPath != null)
 			cmd.add(modelPath);
 
+		// Forward GPU and dequant settings from coordinator to each node JVM.
+		// These are set as -D flags so NodeMain can read them via System.getProperty.
+		String junoUseGpu = System.getProperty("JUNO_USE_GPU", "true");
+		String junoDequant = System.getProperty("JUNO_DEQUANT", "eager");
+		cmd.add(2, "-DJUNO_USE_GPU=" + junoUseGpu);
+		cmd.add(3, "-DJUNO_DEQUANT=" + junoDequant);
+
 		ProcessBuilder pb = new ProcessBuilder(cmd);
 		pb.redirectErrorStream(false);
 		if (verbose) {

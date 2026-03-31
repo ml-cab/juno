@@ -156,6 +156,7 @@ cmd_cluster() {
       *)             use_gpu="true"  ;;
     esac
   fi
+  local dequant="${JUNO_DEQUANT:-eager}"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -168,6 +169,7 @@ cmd_cluster() {
       --top-p)            top_p="$2";        shift 2 ;;
       --heap)             heap="$2";         shift 2 ;;
       --jfr)              jfr_duration="$2"; shift 2 ;;
+      --dequant)          dequant="$2";      shift 2 ;;
       --float16 | --fp16) dtype="FLOAT16";   shift   ;;
       --float32)          dtype="FLOAT32";   shift   ;;
       --int8)             dtype="INT8";      shift   ;;
@@ -208,6 +210,9 @@ cmd_cluster() {
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
         echo "    --cpu                      use CPU only"
+        echo "    --dequant eager|lazy        weight dequant strategy  (default eager)"
+        echo "                               eager = upload weights to GPU once (low latency, more VRAM)"
+        echo "                               lazy  = CPU dequant per block each step (low VRAM, high CPU)"
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE                JVM heap  e.g. 4g 8g 16g  (default 4g)"
@@ -219,7 +224,7 @@ cmd_cluster() {
         echo "    --verbose / -v             show gRPC and node logs"
         echo ""
         echo "  Environment overrides:"
-        echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
+        echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU  JUNO_DEQUANT"
         echo ""
         echo "  Examples:"
         echo "    $0 cluster --model-path /models/tiny.gguf"
@@ -238,7 +243,7 @@ cmd_cluster() {
   require_jar "$PLAYER_JAR" "player"
   check_java_version
 
-  warn "Starting 3-node cluster  (pType=${ptype}  dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
+  warn "Starting 3-node cluster  (pType=${ptype}  dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  gpu=${use_gpu}  dequant=${dequant}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   warn "Ctrl-C to stop all nodes and exit"
   echo ""
@@ -262,6 +267,7 @@ cmd_cluster() {
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
     "-Djuno.node.heap=${heap}" \
+    "-DJUNO_DEQUANT=${dequant}" \
     ${jfr_flag:+"$jfr_flag"} \
     -jar "$PLAYER_JAR" \
     --model-path "$model" \
@@ -271,6 +277,7 @@ cmd_cluster() {
     --top-k "$top_k" \
     --top-p "$top_p" \
     --pType "$ptype" \
+    --dequant "$dequant" \
     "$gpu_flag" \
     ${verbose_flag}
 }
@@ -297,6 +304,7 @@ cmd_local() {
       *)             use_gpu="true"  ;;
     esac
   fi
+  local dequant="${JUNO_DEQUANT:-eager}"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -309,6 +317,7 @@ cmd_local() {
       --heap)             heap="$2";         shift 2 ;;
       --nodes)            nodes="$2";        shift 2 ;;
       --jfr)              jfr_duration="$2"; shift 2 ;;
+      --dequant)          dequant="$2";      shift 2 ;;
       --float16 | --fp16) dtype="FLOAT16";   shift   ;;
       --float32)          dtype="FLOAT32";   shift   ;;
       --int8)             dtype="INT8";      shift   ;;
@@ -345,6 +354,9 @@ cmd_local() {
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
         echo "    --cpu                      use CPU only"
+        echo "    --dequant eager|lazy        weight dequant strategy  (default eager)"
+        echo "                               eager = upload weights to GPU once (low latency, more VRAM)"
+        echo "                               lazy  = CPU dequant per block each step (low VRAM, high CPU)"
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE                e.g. 4g 8g 16g               (default 4g)"
@@ -365,7 +377,7 @@ cmd_local() {
   require_jar "$PLAYER_JAR" "player"
   check_java_version
 
-  info "Starting local in-process REPL  (dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
+  info "Starting local in-process REPL  (dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  gpu=${use_gpu}  dequant=${dequant}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   echo ""
 
@@ -396,6 +408,7 @@ cmd_local() {
     --top-k "$top_k" \
     --top-p "$top_p" \
     --nodes "$nodes" \
+    --dequant "$dequant" \
     --local \
     "$gpu_flag" \
     ${verbose_flag}

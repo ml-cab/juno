@@ -3787,3 +3787,160 @@ inconsistent with its own Javadoc.
   All tests:    pass (count unchanged — deletions and additions cancel out)
   Failures:     0
   Errors:       0
+
+===============================================================================
+28.  --dequant eager|lazy  (Session 17)
+===============================================================================
+
+28.1  Problem
+-----------------------------------------------
+  Option A (eager GPU upload via GpuWeightShard) works correctly but doubles
+  VRAM consumption: a 637 MB Q4_K_M TinyLlama shard expands to ~2.4 GB after
+  full dequantisation to float32 DeviceFloatMatrix instances. On nodes with
+  limited VRAM (e.g. 2.1 GB cards) this overflows to CPU swapping, degrading
+  throughput worse than pure CPU inference.
+
+  A selection mechanism is needed so operators can choose:
+    - eager: low latency, higher VRAM (previous session A implementation)
+    - lazy:  minimal VRAM, higher CPU load (original QuantizedTensor path)
+
+28.2  Design
+-----------------------------------------------
+  New enum  WeightDequantMode { EAGER, LAZY }
+
+  Propagation path (all layers must agree):
+    run.sh / run.bat
+      --dequant eager|lazy
+      -DJUNO_DEQUANT=<value>        (JVM sys-prop forwarded to coordinator)
+      → ConsoleMain.parseArgs()
+      → System.setProperty("JUNO_DEQUANT", ...)
+      → ClusterHarness.launchNode() adds -DJUNO_DEQUANT=... to forked node cmd
+      → NodeMain reads System.getProperty("JUNO_DEQUANT", "eager")
+      → EmbeddedNodeServer(nodeId, port, modelPath, useGpu, dequantMode)
+      → NodeServiceImpl(nodeId, modelPath, useGpu, dequantMode)
+      → ForwardPassHandlerLoader.load(path, ctx, backend, dequantMode)
+      → LlamaTransformerHandler.load(path, ctx, backend, dequantMode)
+      → private constructor: gate GpuWeightShard on mode == EAGER
+
+  The lazy path is not new code: the existing QuantizedTensor static matVec
+  overloads (matVec(QuantizedTensor, x, rows, cols)) already do per-block CPU
+  dequantisation. All that changed is that this path is now reachable via a
+  command-line flag without recompiling.
+
+  Phi3TransformerHandler is unaffected — it always uses CPU static matVec and
+  its backend parameter is only logged, never dispatched.
+
+28.3  New files
+-----------------------------------------------
+  node/src/main/java/.../node/
+    WeightDequantMode.java     enum EAGER | LAZY with parse(String) helper
+
+  node/src/test/java/.../node/
+    WeightDequantModeTest.java 6 unit tests: null, blank, eager, LAZY, unknown
+
+  player/src/test/.../node/
+    GpuWeightShardTest.java    4 @Tag("gpu") tests (already created in session 16)
+
+28.4  Modified files
+-----------------------------------------------
+  node/LlamaTransformerHandler.java
+    load(Path, ShardContext)         — delegates to load(..., EAGER)
+    load(Path, ShardContext, MatVec) — delegates to load(..., mode=EAGER)
+    load(Path, ShardContext, MatVec, WeightDequantMode)   NEW overload
+    private constructor signature    — adds WeightDequantMode mode parameter
+    GpuWeightShard gate:
+      was:  (backend instanceof CudaMatVec cuda) ? GpuWeightShard.upload(...)
+      now:  (mode == EAGER && backend instanceof CudaMatVec cuda) ? ...
+
+  node/ForwardPassHandlerLoader.java
+    load(Path, ShardContext, MatVec) — delegates to load(..., EAGER)
+    load(Path, ShardContext, MatVec, WeightDequantMode)   NEW overload
+      routes phi3 → Phi3TransformerHandler.load (mode ignored)
+      routes *   → LlamaTransformerHandler.load(..., mode)
+
+  node/CudaMatVec.java
+    + ctx() accessor — exposes GpuContext to GpuWeightShard.upload()
+
+  player/EmbeddedNodeServer.java
+    + WeightDequantMode dequantMode field in NodeServiceImpl
+    EmbeddedNodeServer(nodeId, port, modelPath, useGpu)  — delegates to 5-arg ctor
+    EmbeddedNodeServer(nodeId, port, modelPath, useGpu, WeightDequantMode)  NEW
+    NodeServiceImpl ctor gains dequantMode param
+    loadShard() passes dequantMode to ForwardPassHandlerLoader.load()
+    log line updated to include dequant= value
+
+  player/NodeMain.java
+    reads JUNO_DEQUANT sys-prop, constructs WeightDequantMode, passes to server
+
+  player/ClusterHarness.java
+    launchNode() reads JUNO_USE_GPU + JUNO_DEQUANT from current JVM and forwards
+    them as -D flags to each forked node JVM
+
+  player/ConsoleMain.java
+    + dequantMode field (default EAGER)
+    parseArgs() handles --dequant eager|lazy
+    System.setProperty("JUNO_DEQUANT", ...) in main()
+    banner() shows dequant= in the info line
+    printHelp() documents --dequant
+
+  scripts/run.sh (cluster + local commands)
+    --dequant eager|lazy  flag + JUNO_DEQUANT env var default
+    -DJUNO_DEQUANT=       forwarded to coordinator JVM
+    --dequant             forwarded to player.jar args
+    warn/info line shows dequant= value
+
+  scripts/run.bat (cluster + local sections)
+    same as run.sh, Windows syntax
+
+  docs/howto.md
+    --dequant row in flags table
+    JUNO_DEQUANT in env-override line
+    "Weight dequantization strategy" explanation section with comparison table
+
+  docs/README.md
+    --dequant row in flags table
+    Key Design Decisions updated to describe both modes
+    VRAM trade-off table added
+
+28.5  Runtime behaviour
+-----------------------------------------------
+  EAGER (default):
+    At loadShard():
+      GpuWeightShard.upload() dequantizes each QuantizedTensor to float32,
+      calls DeviceFloatMatrix.upload(ctx, host, rows, cols) — one cudaMalloc
+      + cudaMemcpy H2D per weight matrix.
+    At each decode step:
+      backend.sgemv(DeviceFloatMatrix, x) — cuBLAS kernel only, no data copy.
+    VRAM per shard:  rows × cols × 4 bytes per matrix (float32).
+    KV cache also uses VRAM.
+
+  LAZY:
+    At loadShard():
+      Weights loaded as QuantizedTensor (raw bytes, GgufReader.tensorRaw()).
+      GpuWeightShard is null. No CUDA allocation for weights.
+    At each decode step:
+      matVec(QuantizedTensor, x, rows, cols) dispatches to
+      matVecQ4Kraw / matVecQ8_0raw / matVecQ5Kraw / matVecQ6Kraw etc.
+      One 256-element block dequantized at a time in parallel IntStream.
+      GPU not used for projection matmuls; all arithmetic on CPU.
+    VRAM per shard:  KV cache only.
+
+  Mode comparison (TinyLlama-1.1B Q4_K_M, 7-layer shard):
+    eager:  ~2.4 GB VRAM, ~2 s/token (GPU)
+    lazy:   ~138 MB VRAM (KV only), ~30 s/token (CPU, 8 cores)
+
+28.6  Test coverage
+-----------------------------------------------
+  WeightDequantModeTest          6 unit tests (no CUDA)
+  GpuWeightShardTest             4 @Tag("gpu") tests
+  LlamaTransformerHandlerTest    existing tests pass unchanged (use CpuMatVec,
+                                 mode=EAGER by default, gpuWeights=null)
+  Existing integration tests     unaffected — ClusterHarness passes JUNO_DEQUANT
+                                 from coordinator sys-prop; default is "eager"
+
+28.7  Build status (session 17)
+-----------------------------------------------
+  All modules:  SUCCESS
+  All tests:    pass
+  Failures:     0
+  Errors:       0

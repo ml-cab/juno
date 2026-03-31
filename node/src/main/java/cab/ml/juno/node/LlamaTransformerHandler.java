@@ -52,8 +52,11 @@ import java.util.logging.Logger;
  * (rope) - Grouped-query attention (gqa) - SwiGLU feed-forward network (ffn) -
  * Softmax (inplace, over a slice)
  *
- * All primitives are pure Java — no JNI, no GPU, no external dependencies. A
- * future CudaMatVecBackend routes matVec calls to cublasSgemv on a GPU.
+ * When constructed with a {@link CudaMatVec} backend, all projection weights
+ * are dequantized once at load time and uploaded to the GPU via
+ * {@link GpuWeightShard}. The hot-path {@code matVec} calls then dispatch to
+ * {@link CudaMatVec#sgemv(DeviceFloatMatrix, float[])} — no H2D copy of A per
+ * token. Call {@link #close()} when the shard is unloaded to free device memory.
  */
 public final class LlamaTransformerHandler implements ForwardPassHandler {
 
@@ -98,6 +101,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	// ── MatVec backend (CPU or CUDA) ─────────────────────────────────────────
 	private final MatVec backend;
 
+	// ── GPU-resident weights (non-null only when backend is CudaMatVec) ──────
+	// Dequantized once at load time and pinned on device. Eliminates the per-token
+	// H2D weight-matrix copy that was leaving GPU-Util at 0%.
+	private final GpuWeightShard gpuWeights;
+
 	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
 	// When non-null, every completed forward pass flushes key/value data into
 	// the KVCacheManager (GPU + CPU tiers). Eviction under real memory pressure
@@ -109,6 +117,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	/**
 	 * Load weights from a GGUF file for the given shard range.
+	 * Uses {@link WeightDequantMode#EAGER} and {@link CpuMatVec}.
 	 *
 	 * @param modelPath path to the GGUF file (e.g.
 	 *                  TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf)
@@ -122,26 +131,49 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			LlamaConfig cfg = LlamaConfig.from(r);
 			log.info("Model: " + cfg);
-			return new LlamaTransformerHandler(r, cfg, context, CpuMatVec.INSTANCE);
+			return new LlamaTransformerHandler(r, cfg, context, CpuMatVec.INSTANCE, WeightDequantMode.EAGER);
 		}
 	}
 
 	/**
 	 * Load weights and wire a specific {@link MatVec}.
 	 *
+	 * <p>Uses {@link WeightDequantMode#EAGER} — projection matrices are
+	 * dequantized once at load time and uploaded to the GPU when the backend is
+	 * {@link CudaMatVec}. Prefer
+	 * {@link #load(Path, ShardContext, MatVec, WeightDequantMode)} when the
+	 * caller controls the dequantization strategy.
+	 *
 	 * @param backend {@link CpuMatVec#INSTANCE} for CPU-only nodes,
-	 *                {@code new CudaMatVecBackend(ctx)} for GPU nodes
+	 *                {@code new CudaMatVec(ctx)} for GPU nodes
 	 */
 	public static LlamaTransformerHandler load(Path modelPath, ShardContext context, MatVec backend)
 			throws IOException {
+		return load(modelPath, context, backend, WeightDequantMode.EAGER);
+	}
+
+	/**
+	 * Load weights, wire a specific {@link MatVec}, and select the dequantization
+	 * strategy.
+	 *
+	 * @param backend {@link CpuMatVec#INSTANCE} for CPU-only nodes,
+	 *                {@code new CudaMatVec(ctx)} for GPU nodes
+	 * @param mode    {@link WeightDequantMode#EAGER} — dequantize once, upload to
+	 *                GPU (low latency, higher VRAM); {@link WeightDequantMode#LAZY}
+	 *                — keep weights quantized, dequantize per-block on CPU (minimal
+	 *                VRAM, higher CPU load)
+	 */
+	public static LlamaTransformerHandler load(Path modelPath, ShardContext context, MatVec backend,
+			WeightDequantMode mode) throws IOException {
 		log.info("Loading GGUF shard: layers " + context.startLayer() + "–" + context.endLayer() + "  embd="
 				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection() + "  backend="
-				+ backend.getClass().getSimpleName() + "  file=" + modelPath);
+				+ backend.getClass().getSimpleName() + "  dequant=" + mode.name().toLowerCase()
+				+ "  file=" + modelPath);
 
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			LlamaConfig cfg = LlamaConfig.from(r);
 			log.info("Model: " + cfg);
-			return new LlamaTransformerHandler(r, cfg, context, backend);
+			return new LlamaTransformerHandler(r, cfg, context, backend, mode);
 		}
 	}
 
@@ -179,10 +211,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.wGate        = wGate;
 		this.wUp          = wUp;
 		this.wDown        = wDown;
+		this.gpuWeights   = null; // test constructor — no GPU upload
 	}
 
-	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend)
-			throws IOException {
+	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend,
+			WeightDequantMode mode) throws IOException {
 		this.cfg = cfg;
 		this.backend = backend;
 		this.startLayer = ctx.startLayer();
@@ -226,6 +259,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		log.info("Shard loaded — " + L + " layers, " + (hasEmbeddings ? "with embeddings, " : "")
 				+ (hasOutputProj ? "with output projection" : "no output projection"));
+
+		// EAGER: dequantize all projection weights once and upload to GPU.
+		// LAZY:  skip upload; hot-path matVec calls fall through to the quantized
+		//        CPU overloads (QuantizedTensor) — no GPU used for projection matmuls.
+		this.gpuWeights = (mode == WeightDequantMode.EAGER && backend instanceof CudaMatVec cuda)
+				? GpuWeightShard.upload(r, cfg, startLayer, endLayer, hasOutputProj, cuda.ctx())
+				: null;
 	}
 
 	/**
@@ -275,6 +315,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		if (a != null) {
 			a.evict(requestId);
 		}
+	}
+
+	/**
+	 * Release GPU-resident weight buffers held by this shard.
+	 *
+	 * <p>Must be called when the shard is unloaded (e.g. in
+	 * {@link cab.ml.juno.player.EmbeddedNodeServer#unloadShard}) so that device
+	 * memory is freed before the {@link GpuContext} is closed. Safe to call when
+	 * the CPU backend is in use (no-op in that case).
+	 */
+	public void close() {
+		if (gpuWeights != null) gpuWeights.close();
 	}
 
 	/**
@@ -512,9 +564,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		float[] xNorm = rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
 
 		// Project to Q, K, V
-		float[] q = matVec(wq[li], xNorm, H, H);
-		float[] k = matVec(wk[li], xNorm, cfg.kvDim(), H);
-		float[] v = matVec(wv[li], xNorm, cfg.kvDim(), H);
+		float[] q = gpuWeights != null ? backend.sgemv(gpuWeights.wq(li), xNorm)
+				                       : matVec(wq[li], xNorm, H, H);
+		float[] k = gpuWeights != null ? backend.sgemv(gpuWeights.wk(li), xNorm)
+				                       : matVec(wk[li], xNorm, cfg.kvDim(), H);
+		float[] v = gpuWeights != null ? backend.sgemv(gpuWeights.wv(li), xNorm)
+				                       : matVec(wv[li], xNorm, cfg.kvDim(), H);
 
 		// Rotary position embeddings on Q and K
 		rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
@@ -528,7 +583,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		float[] attnOut = gqa(q, kCacheLayer, vCacheLayer, pos + 1);
 
 		// Output projection + residual
-		float[] attnProj = matVec(wo[li], attnOut, H, H);
+		float[] attnProj = gpuWeights != null ? backend.sgemv(gpuWeights.wo(li), attnOut)
+				                              : matVec(wo[li], attnOut, H, H);
 		float[] x2 = add(x, attnProj);
 
 		// ── FFN sub-layer ─────────────────────────────────────────────────────
@@ -541,19 +597,23 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private float[] ffn(float[] x, int li) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
-		float[] gate = matVec(wGate[li], x, I, H);
-		float[] up = matVec(wUp[li], x, I, H);
+		float[] gate = gpuWeights != null ? backend.sgemv(gpuWeights.wGate(li), x)
+				                          : matVec(wGate[li], x, I, H);
+		float[] up   = gpuWeights != null ? backend.sgemv(gpuWeights.wUp(li), x)
+				                          : matVec(wUp[li], x, I, H);
 		// SiLU(gate) * up
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
 			hidden[i] = silu(gate[i]) * up[i];
-		return matVec(wDown[li], hidden, H, I);
+		return gpuWeights != null ? backend.sgemv(gpuWeights.wDown(li), hidden)
+				                  : matVec(wDown[li], hidden, H, I);
 	}
 
 	/** Final RMS norm + output projection → float[vocabSize] logits. */
 	private float[] outputProjection(float[] x) {
 		float[] xNorm = rmsNorm(x, outputNorm, cfg.rmsNormEps());
-		return matVec(outputProj, xNorm, cfg.vocabSize(), cfg.hiddenDim());
+		return gpuWeights != null ? backend.sgemv(gpuWeights.outputProj(), xNorm)
+				                  : matVec(outputProj, xNorm, cfg.vocabSize(), cfg.hiddenDim());
 	}
 
 	// ── Math primitives ───────────────────────────────────────────────────────

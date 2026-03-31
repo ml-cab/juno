@@ -14,6 +14,8 @@ All modules build and all tests pass. Verified end-to-end with:
 - Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile
 - phi-3.5-mini-instruct.Q4_K_M.gguf on a 3-node CPU cluster
 
+**Session 17** — `--dequant eager|lazy` flag. `WeightDequantMode` enum propagates through the full stack: run scripts → ConsoleMain → ClusterHarness (forked JVMs via `-DJUNO_DEQUANT`) → NodeMain → EmbeddedNodeServer → ForwardPassHandlerLoader → LlamaTransformerHandler. In `eager` mode (default) `GpuWeightShard` dequantizes all projection weights once and pins them on the GPU; every decode step calls `CudaMatVec.sgemv(DeviceFloatMatrix, x)` with no per-token weight copy. In `lazy` mode weights stay as `QuantizedTensor` bytes in JVM heap and are dequantized one block at a time on the CPU, reducing per-node VRAM from ~2.4 GB to ~138 MB (KV cache only) for TinyLlama-1.1B.
+
 **Session 16** — naming cleanup: session-12 rename fully applied to source.
 
 The `KVCacheManager` (GPU + CPU tiers with LRU/W-TinyLFU eviction) was previously disconnected from the transformer handlers: `LlamaTransformerHandler` and `Phi3TransformerHandler` each maintained their own private `HashMap<String, float[][]>` with no eviction, making the entire `kvcache` module inert at the node level. This is now fixed.
@@ -158,6 +160,12 @@ mvn clean package -DskipTests
 # All layers in one JVM (fastest startup, no network)
 ./juno local --model-path /path/to/model.gguf --heap 4g
 
+# Low-VRAM GPU mode: weights stay quantized on CPU, only KV cache on GPU
+./juno --model-path /path/to/model.gguf --heap 4g --gpu --dequant lazy
+
+# Full GPU performance: weights dequantized once and pinned on device (default)
+./juno --model-path /path/to/model.gguf --heap 4g --gpu --dequant eager
+
 # LoRA fine-tuning REPL (adapter saved to <model>.lora)
 ./juno lora --model-path /path/to/model.gguf --heap 4g
 
@@ -187,6 +195,7 @@ mvn clean package -DskipTests
 | `--nodes N` | `3` | In-process shard count (`local` only) |
 | `--jfr DURATION` | — | Java Flight Recording for DURATION (e.g. `30s`, `5m`, `1h`). Writes `juno-<timestamp>.jfr`. Captures `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, and (for `lora`) `juno.LoraTrainStep` events. Open in JDK Mission Control. |
 | `--verbose` / `-v` | — | Show node startup, gRPC and shard loading logs |
+| `--dequant eager\|lazy` | `eager` | Weight dequantization strategy. `eager` = dequantize all projection weights once at load time and upload to GPU; low latency, higher VRAM (~2–4x compressed size per shard). `lazy` = keep weights quantized in JVM heap, dequantize one block at a time on CPU each decode step; minimal VRAM, higher CPU load. Set via `JUNO_DEQUANT` env var. |
 
 **LoRA flags** (`lora` command only):
 
@@ -198,7 +207,7 @@ mvn clean package -DskipTests
 | `--lora-lr F` | `1e-4` | Adam learning rate |
 | `--lora-steps N` | `50` | Gradient steps per `/train` command |
 
-Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `JAVA_HOME`
+Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JUNO_DEQUANT`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `JAVA_HOME`
 
 ---
 
@@ -211,7 +220,7 @@ Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `MAX_TOKENS`, `TEMPERATUR
 | `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, Javalin REST, SSE |
 | `kvcache` | `KVCacheManager`, `GpuKVCache`, `CpuKVCache`, `PrefixCache` |
 | `tokenizer` | `GgufTokenizer` (SentencePiece BPE), `ChatTemplate`, `SimpleTokenizer`, `TokenizerEvent`, `TemplateFormatEvent` |
-| `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `NodeKVCacheAdapter`, `MatVec`, `CpuMatVec`, `CudaMatVec`, `GgufReader`, `LlamaConfig`, `ActivationCodec`, `ShardContext`, `TensorShardContext`, `LoraAdapter`, `LoraAdapterSet`, `LoraAdamOptimizer`, `LoraTrainableHandler`, `MatVecEvent`, `ForwardPassEvent`, `LoraTrainEvent` |
+| `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `NodeKVCacheAdapter`, `MatVec`, `CpuMatVec`, `CudaMatVec`, `GpuWeightShard`, `DeviceFloatMatrix`, `WeightDequantMode`, `GgufReader`, `LlamaConfig`, `ActivationCodec`, `ShardContext`, `TensorShardContext`, `LoraAdapter`, `LoraAdapterSet`, `LoraAdamOptimizer`, `LoraTrainableHandler`, `MatVecEvent`, `ForwardPassEvent`, `LoraTrainEvent` |
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | Health monitor, circuit breakers (Resilience4j) |
 | `player` | `ConsoleMain` REPL (`cluster` / `local` / `lora` commands), `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `EmbeddedNodeServer` |
@@ -304,14 +313,15 @@ Useful analysis patterns:
 - No Python, no llama.cpp subprocess. JVM reads GGUF binary directly and runs the transformer end to end.
 - No Spring Boot. Javalin for REST.
 - Two parallelism modes: `pipeline` (LAN-friendly, sequential activation flow, vertical scaling) and `tensor` (parallel per-step AllReduce, horizontal scaling, higher throughput). Selected at startup with `--pType`.
-- **Lazy dequantization for large models.** Projection weights are kept as raw quantized bytes in `GgufReader.QuantizedTensor`. Dequantization runs one 256-element block at a time inside the matmul loop. Peak live float footprint per matmul is ~1 kB instead of ~65 MB, making it possible to run 3.8B models with `--heap 4g`.
+- **Two-mode weight dequantization (`--dequant eager|lazy`).** The `eager` mode (default) dequantizes all projection weight matrices once at shard load time and uploads them to the GPU as `DeviceFloatMatrix` instances inside a `GpuWeightShard`. Every decode step calls `CudaMatVec.sgemv(DeviceFloatMatrix, x)` — no H2D weight copy per token, GPU utilisation is high. Cost: ~2–4x the compressed file size in VRAM per shard.
+  The `lazy` mode keeps weights as raw `GgufReader.QuantizedTensor` bytes in JVM heap. Dequantization runs one 256-element block at a time inside the matmul loop on the CPU — peak live float footprint per matmul is ~1 kB, making it possible to run 3.8B models with `--heap 4g` even on low-VRAM nodes. The flag propagates through the full stack: run scripts → coordinator JVM → forked node JVMs via `JUNO_DEQUANT` system property.
 - **Architecture-aware handler routing.** `ForwardPassHandlerLoader` reads `general.architecture` from GGUF metadata and selects `Phi3TransformerHandler` for `phi3`, `LlamaTransformerHandler` for everything else.
 - **KV cache wired to the node-level manager.** `NodeKVCacheAdapter` connects `LlamaTransformerHandler` and `Phi3TransformerHandler` to the `KVCacheManager` (GPU byte-budget LRU + Caffeine W-TinyLFU CPU tier). Every forward pass flushes key/value data write-through into both tiers. If a local entry is evicted under heap pressure, the next forward pass at that position restores it from the manager transparently. `evict(requestId)` propagates to both the local HashMap and both cache tiers, closing the gap that previously made the entire `kvcache` module inert at the node level.
 - **Star AllReduce for tensor parallel.** No inter-node communication. The coordinator collects partial logit vectors from all N nodes and sums them in O(N × vocabSize). Simpler than ring-AllReduce and requires no InfiniBand.
 - **LoRA fine-tuning without touching the base model.** `LoraTrainableHandler` wraps `LlamaTransformerHandler` and adds trainable low-rank adapters (A/B matrices, rank 4–16) on the Q and V projections. The frozen weights stay quantized at all times — backward passes dequantize one block per row via dedicated `transposedQ4K` / `transposedQ5K` / `transposedQ6K` scatter-reduce implementations. Adapters are persisted to a `.lora` binary checkpoint; the GGUF is never modified.
 - **Full JFR instrumentation across every hot path.** Five custom event types — `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, `juno.LoraTrainStep` — make every layer of the stack observable in JDK Mission Control without any agent or bytecode manipulation. Activated with `--jfr DURATION` on any `juno` command.
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
-- `MatVec` interface decouples the matmul backend from the transformer logic. `CudaMatVec` implements host `sgemv` (full H2D per call) and device `sgemv(DeviceFloatMatrix, x)` for resident weights. `CpuMatVec` as CPU fallback and test reference. Injected into `LlamaTransformerHandler` and `Phi3TransformerHandler` at construction time via `ForwardPassHandlerLoader`; swapping backends changes where arithmetic runs without touching model logic.
+- `MatVec` interface decouples the matmul backend from the transformer logic. `CudaMatVec` implements host `sgemv` (full H2D per call) and device `sgemv(DeviceFloatMatrix, x)` for GPU-resident weights. `GpuWeightShard` dequantizes and uploads all projection matrices once at shard load time when `--dequant eager` (the default). `CpuMatVec` as CPU fallback and test reference. Injected into `LlamaTransformerHandler` and `Phi3TransformerHandler` at construction time via `ForwardPassHandlerLoader`; swapping backends or dequant modes changes where arithmetic runs without touching model logic.
 - GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent CUDA native libs (bytedeco) loading into the coordinator JVM and poisoning FD inheritance into forked node processes.
 - Stub mode — cluster boots in seconds without a model file; all integration tests run stub.
 
@@ -319,7 +329,7 @@ Useful analysis patterns:
 
 ## Requirements
 
-- JDK 25+
+- JDK 21+
 - Maven 3.9+
 - CUDA / NVIDIA driver (GPU nodes only — not required for CPU mode or any unit/integration tests); Java bindings via org.bytedeco cuda-platform
 

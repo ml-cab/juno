@@ -18,6 +18,8 @@ package cab.ml.juno.player;
 
 import java.util.logging.Logger;
 
+import cab.ml.juno.node.WeightDequantMode;
+
 /**
  * Entry point for a standalone node JVM process.
  *
@@ -48,8 +50,9 @@ public final class NodeMain {
 		int port = Integer.parseInt(args[1]);
 		String modelPath = args.length >= 3 ? args[2] : null;
 		boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "true"));
+		WeightDequantMode dequantMode = WeightDequantMode.parse(System.getProperty("JUNO_DEQUANT", "eager"));
 
-		EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu);
+		EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu, dequantMode);
 		server.start();
 
 		// Signal readiness to the parent process (ClusterHarness polls for this line)

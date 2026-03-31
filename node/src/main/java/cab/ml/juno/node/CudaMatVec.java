@@ -67,6 +67,11 @@ public final class CudaMatVec implements MatVec {
         this.ctx = ctx;
     }
 
+    /** The GPU context this backend is bound to. Used by {@link GpuWeightShard}. */
+    public GpuContext ctx() {
+        return ctx;
+    }
+
     @Override
     public float[] sgemv(float[] A, float[] x, int rows, int cols) {
         if (A.length != (long) rows * cols)
@@ -82,9 +87,9 @@ public final class CudaMatVec implements MatVec {
         long bytesX = (long) cols * 4;
         long bytesY = (long) rows * 4;
 
-        PointerPointer pA = new PointerPointer(1);
-        PointerPointer pX = new PointerPointer(1);
-        PointerPointer pY = new PointerPointer(1);
+        PointerPointer<Pointer> pA = new PointerPointer<>(1);
+        PointerPointer<Pointer> pX = new PointerPointer<>(1);
+        PointerPointer<Pointer> pY = new PointerPointer<>(1);
         try {
             // CUDA device selection is thread-local; bind on every call.
             int setDeviceRc = cudart.cudaSetDevice(ctx.deviceIndex());
@@ -169,8 +174,8 @@ public final class CudaMatVec implements MatVec {
         long bytesX = (long) cols * 4;
         long bytesY = (long) rows * 4;
 
-        PointerPointer pX = new PointerPointer(1);
-        PointerPointer pY = new PointerPointer(1);
+        PointerPointer<Pointer> pX = new PointerPointer<>(1);
+        PointerPointer<Pointer> pY = new PointerPointer<>(1);
         try {
             checkCuda(cudart.cudaSetDevice(ctx.deviceIndex()), "cudaSetDevice");
 

@@ -27,6 +27,7 @@ import java.util.Random;
 import java.util.logging.Logger;
 
 import cab.ml.juno.coordinator.GenerationLoop;
+import cab.ml.juno.node.WeightDequantMode;
 import cab.ml.juno.coordinator.GenerationResult;
 import cab.ml.juno.coordinator.InferenceRequest;
 import cab.ml.juno.coordinator.RequestPriority;
@@ -113,6 +114,7 @@ public final class ConsoleMain {
 	private static String jfrDuration = null;
 	// ── GPU arguments ─────────────────────────────────────────────────────────
 	private static boolean useGpu = true; // use CPU
+	private static WeightDequantMode dequantMode = WeightDequantMode.EAGER;
 	// ── LoRA arguments ────────────────────────────────────────────────────────
 	private static boolean loraMode = false;
 	private static String loraPath = null; // auto-derived if null
@@ -152,6 +154,7 @@ public final class ConsoleMain {
 		}
 
 		System.setProperty("JUNO_USE_GPU", String.valueOf(useGpu));
+		System.setProperty("JUNO_DEQUANT", dequantMode.name().toLowerCase());
 		System.setProperty("MODEL_PATH", modelPath);
 		System.setProperty("DTYPE", dtype.name());
 		System.setProperty("MAX_TOKENS", String.valueOf(maxTokens));
@@ -227,7 +230,12 @@ public final class ConsoleMain {
 				break;
 			case "--cpu":
 				useGpu = false;
-				// ── LoRA ──────────────────────────────────────────────────────────
+				break;
+			case "--dequant":
+				if (i + 1 < args.length)
+					dequantMode = WeightDequantMode.parse(args[++i]);
+				break;
+			// ── LoRA ──────────────────────────────────────────────────────────
 			case "--lora":
 				loraMode = true;
 				break;
@@ -286,6 +294,9 @@ public final class ConsoleMain {
 		System.out.println("Inference options:");
 		System.out.println("  --gpu                      Use GPU (default, no need to set)");
 		System.out.println("  --cpu                      Force to use CPU");
+		System.out.println("  --dequant eager|lazy        Weight dequant strategy (default: eager)");
+		System.out.println("                               eager = dequantize once, upload to GPU (low latency, higher VRAM)");
+		System.out.println("                               lazy  = CPU dequant per block each step (low VRAM, higher CPU)");
 		System.out.println("  --pType pipeline|tensor    Parallelism type (default: pipeline)");
 		System.out.println("  --dtype FLOAT32|FLOAT16    Activation wire format (default: FLOAT16)");
 		System.out.println("  --max-tokens N             Max generated tokens (default: 200)");
@@ -985,9 +996,9 @@ public final class ConsoleMain {
 					Color.PURPLE_BOLD, loraRank, loraAlpha, loraLr, loraSteps, Color.RESET));
 		} else {
 			System.out.println(String.format(
-					"  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
+					"  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · dequant=%s · %s nodes=%d%s%n",
 					Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP, localMode ? "local" : "cluster",
-					nodeCount, Color.RESET));
+					dequantMode.name().toLowerCase(), nodeCount, Color.RESET));
 		}
 		if (jfrDuration != null) {
 			System.out.println(

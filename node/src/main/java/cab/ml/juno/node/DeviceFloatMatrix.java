@@ -57,7 +57,7 @@ public final class DeviceFloatMatrix implements AutoCloseable {
             throw new IllegalArgumentException(
                 "host.length=" + host.length + " != rows*cols=" + ((long) rows * cols));
         long bytes = (long) rows * cols * 4;
-        PointerPointer pp = new PointerPointer(1);
+        PointerPointer<Pointer> pp = new PointerPointer<>(1);
         try {
             checkCuda(cudart.cudaSetDevice(ctx.deviceIndex()), "cudaSetDevice");
             int rc = cudart.cudaMalloc(pp, bytes);

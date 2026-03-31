@@ -14,13 +14,13 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import cab.ml.juno.node.LlamaTransformerHandler;
+import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.node.CudaAvailability;
+import cab.ml.juno.node.CudaMatVec;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardRequest;
 import cab.ml.juno.node.ForwardResult;
 import cab.ml.juno.node.GpuContext;
-import cab.ml.juno.node.CudaMatVec;
-import cab.ml.juno.node.ShardContext;
 
 /**
  * GPU forward pass integration test — requires CUDA 12.x + a GGUF model file.

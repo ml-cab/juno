@@ -34,6 +34,7 @@ Requires a JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
 | `--pType pipeline\|tensor` | `pipeline` | cluster, test | Parallelism type: `pipeline` = contiguous layer blocks; `tensor` = weight slices + AllReduce |
 | `--jfr DURATION` | — | cluster, local, lora | Java Flight Recording for DURATION (e.g. `30s`, `5m`, `1h`). Writes `juno-<timestamp>.jfr` on exit. For `lora`, event browser shows `juno.LoraTrainStep` events. |
 | `--verbose` / `-v` | — | cluster, local | Show node startup, gRPC, and shard loading logs |
+| `--dequant eager\|lazy` | `eager` | cluster, local | Weight dequantization strategy. `eager` = dequantize all projection weights once at shard load time and upload to GPU (`GpuWeightShard`). Low latency, higher VRAM (~2–4× compressed file size per shard). `lazy` = keep weights quantized in JVM heap; dequantize one block at a time on CPU each decode step. Minimal VRAM, highest CPU load. Phi-3 always uses CPU static matVec regardless. |
 
 **LoRA-specific flags** (`lora` command only):
 
@@ -49,9 +50,28 @@ Requires a JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
 
 Without `--gpu` or `--cpu`, GPU is used by default. Use `--cpu` to force CPU.
 
+#### Weight dequantization strategy (`--dequant`)
+
+Two strategies control when and where quantized projection weights are converted to float32:
+
+**`eager` (default)** — All projection matrices (Q, K, V, O, gate, up, down, lm_head) are dequantized to float32 once at shard load time and pinned on the GPU as `DeviceFloatMatrix` instances inside a `GpuWeightShard`. Every decode step dispatches to `CudaMatVec.sgemv(DeviceFloatMatrix, x)` with no per-token H2D weight copy. GPU utilisation is high.
+
+Cost: approximately 2–4× the compressed model file size in VRAM per shard. A 637 MB Q4_K_M TinyLlama shard occupies ~2.4 GB VRAM after eager upload.
+
+**`lazy`** — Weights remain in their original quantized encoding (Q4_K, Q8_0, etc.) in JVM heap memory throughout inference. Each matrix-vector multiply dequantizes one 256-element block at a time on the CPU using the static `matVec(QuantizedTensor, …)` methods in `LlamaTransformerHandler`. No extra GPU memory is used for projection weights; only the KV cache occupies VRAM.
+
+Cost: highest CPU usage and highest latency per token. Use when VRAM is the binding constraint.
+
+| Mode    | VRAM per shard      | Decode latency | CPU load |
+|---------|---------------------|----------------|----------|
+| `eager` | ~2–4× file size     | lowest (GPU)   | low      |
+| `lazy`  | ~0 (KV cache only)  | highest (CPU)  | high     |
+
+`--dequant` propagates automatically from the coordinator to all forked node JVMs via the `JUNO_DEQUANT` system property. It can also be set directly as an environment variable: `JUNO_DEQUANT=lazy ./juno cluster --model-path …`
+
  For GPU cluster runs, either set `CUDA_PATH`/`CUDA_HOME` (or run `setenv.bat` / `source setenv.sh`), or on Windows use the single-DLL option: run `get-cudart.bat` and save the downloaded `cudart64_12.dll` to `%USERPROFILE%\.javacpp\cache\` (see https://www.dllme.com/dll/files/cudart64_12).
  
-**Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`
+**Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `JUNO_DEQUANT`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`
 
 
 ---
