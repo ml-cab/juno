@@ -2,7 +2,7 @@
   juno — Distributed Java LLM Inference Engine
   Full Architecture Design Document
   JDK 25 · Maven · Java-native · Commodity GPU Cluster
-  Last updated: 2026-03-27 (session 15)
+  Last updated: 2026-04-03 (session 19)
 ================================================================================
 
 
@@ -77,7 +77,7 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
   |                                PrefixCache, KVBlock, KVKey, KVCache,
   |                                LayerRange
   +-- tokenizer/                <- Tokenizer, SimpleTokenizer, DJLTokenizer,
-  |                                GgufTokenizer (SentencePiece BPE from GGUF),
+  |                                GgufTokenizer (SentencePiece BPE + GPT-2 BPE),
   |                                SimpleTokenizer,
   |                                ChatMessage, ChatTemplate,
   |                                ChatTemplateFormatter
@@ -101,6 +101,12 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
   |   +-- ChatModelTypeTest     <- unit tests for ChatModelType (6 tests)
   |   Package: io.hyperstack4j.player
   |   Shade jar: player.jar  (main: ConsoleMain)
+  |
+  +-- metrics/                  <- JFR-based productivity metrics extractor
+  |                                (source dir: productivity/, artifact id: metrics)
+  |                                JfrMetricsExtractor, JfrModelMapper, JfrPercentiles,
+  |                                MetricsSnapshot, MetricsWriter,
+  |                                ModelsConfig, ModelsConfigLoader, ProductivityMain
   |
   +-- integration/              <- Multi-JVM cluster integration tests + live runner
       +-- ModelLiveRunner       <- standalone executable; runs 6 real-model checks;
@@ -3787,3 +3793,292 @@ inconsistent with its own Javadoc.
   All tests:    pass (count unchanged — deletions and additions cancel out)
   Failures:     0
   Errors:       0
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+28. SESSION 17 CHANGES (2026-04-03) — AWS INFRASTRUCTURE SCRIPTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+28.1  Problem
+-----------------------------------------------
+Provisioning a 3-node GPU cluster on AWS required a long manual sequence:
+requesting GPU quotas, creating a security group, launching EC2 instances,
+waiting for them to become ready, installing CUDA + JDK + Maven, downloading
+the model, and running tests. Teardown was equally manual. There was no cost
+guard, no live dashboard, and no way to pause/resume the cluster between test
+sessions — each run potentially wasting hours of Free Tier credits.
+
+28.2  Solution — scripts/aws/
+-----------------------------------------------
+Three scripts added under scripts/aws/:
+
+  launcher.sh
+    Credential wrapper. Sets AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and
+    AWS_DEFAULT_REGION from a single place, then delegates to the target script.
+    Usage: ./launcher.sh <script.sh> [args...]
+    Credentials are filled in once per environment; all other scripts are
+    invoked through this wrapper.
+
+  juno-infra.sh
+    Manages a 3-node GPU cluster: 3 x g4dn.xlarge (T4 16 GB VRAM, ~$0.526/hr
+    each, eu-north-1). Lifecycle commands: setup | start | stop | teardown.
+    On setup/start: holds the console and shows a live dashboard refreshed every
+    30 s — VRAM usage, cost accrued, and uptime per node. Ctrl+C or 'q'
+    auto-stops all instances before exit to prevent idle billing.
+    State (instance IDs, SG ID, setup timestamp) persisted to ~/.juno-aws-state.
+
+  juno-infra-ft.sh
+    Same lifecycle and dashboard as juno-infra.sh but targets a CPU fine-tuning
+    cluster instead of a GPU cluster.
+
+28.3  howto.md update
+-----------------------------------------------
+The AWS setup section in howto.md was replaced: the old 8-step manual sequence
+is now two lines per cluster type:
+
+  GPU cluster:  cd scripts/aws && ./launcher.sh juno-infra.sh <setup|start|stop|teardown>
+  CPU cluster:  cd scripts/aws && ./launcher.sh juno-infra-ft.sh <setup|start|stop|teardown>
+
+Full quota-request and billing guidance moved to docs/1buks-aws-vcpu-infra.md.
+
+28.4  Files added
+-----------------------------------------------
+  scripts/aws/launcher.sh        credential wrapper
+  scripts/aws/juno-infra.sh      3-node GPU cluster lifecycle + live dashboard
+  scripts/aws/juno-infra-ft.sh   CPU fine-tuning cluster lifecycle + live dashboard
+  docs/1buks-aws-vcpu-infra.md   quota request walkthrough, billing notes
+                                 ($100 Free Tier credits → ~95 hrs on 2×g4dn.xlarge)
+
+28.5  Files updated
+-----------------------------------------------
+  docs/howto.md                  AWS setup section replaced with launcher.sh invocation
+
+28.6  Build status (session 17)
+-----------------------------------------------
+  All modules: SUCCESS (no Java changes — shell scripts only)
+  All tests:   pass (unchanged)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+29. SESSION 18 CHANGES (2026-04-03) — META-LLAMA 3 TOKENIZER FIX (GPT-2 BPE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+29.1  Problem
+-----------------------------------------------
+Meta-Llama 3.x models use GPT-2 / tiktoken BPE, which represents leading
+spaces as Ġ (U+0120, referred to as GP in code) prepended to the first
+byte of each space-prefixed token. The previous GgufTokenizer assumed all
+models used SentencePiece BPE (Llama 1/2, TinyLlama, Mistral, Gemma, Phi-3),
+which uses ▁ (U+2581, SP) as a word-boundary prefix with a mandatory leading
+▁ before the first token of the sequence.
+
+When Meta-Llama-3.2-1B-Instruct-Q8_0.gguf was loaded, space normalisation was
+wrong: the encoder inserted ▁ prefixes where Ġ prefixes were required, and
+special control tokens like <|begin_of_text|>, <|eot_id|>, <|start_header_id|>,
+<|end_header_id|> were decomposed character-by-character instead of being
+emitted as single vocabulary IDs. The resulting token sequence was incorrect
+and generation was incoherent.
+
+29.2  BPE variant detection
+-----------------------------------------------
+GgufTokenizer.load() now reads the GGUF metadata key tokenizer.ggml.model.
+If the value is "gpt2" the tokenizer is GPT-2 BPE (Llama 3+); any other
+value (null / "llama" / "llama2") is SentencePiece BPE. The detected variant
+is stored in the isGpt2Bpe field and logged at load time:
+
+  Tokenizer loaded: vocabSize=128256 bos=128000 eos=128001 model=gpt2 [GPT-2 BPE]
+
+29.3  Special-token pre-splitting
+-----------------------------------------------
+A sortedSpecialPieces list is populated at construction time with all vocab
+entries whose token type is 3 (control) or 4 (user-defined) and whose piece
+string starts with "<|". The list is sorted longest-first. In encode(), the
+raw input text is split at these boundaries before BPE proceeds, so control
+tokens are always mapped to their single vocabulary IDs and never fragmented.
+
+29.4  Space normalisation in encode()
+-----------------------------------------------
+  GPT-2 BPE:      each token that represents a space-prefixed word already
+                  carries Ġ as its first character; no leading ▁ injected.
+  SentencePiece:  unchanged — ▁ prefix on first token, ▁ replaces every
+                  internal space exactly as before.
+
+The isGpt2Bpe flag gates the two paths inside encode(); all decode/decodeToken
+paths are unaffected.
+
+29.5  LlamaTransformerHandler — quantised matVec JFR fix
+-----------------------------------------------
+The static LlamaTransformerHandler.matVec(QuantizedTensor, …) used directly in
+normal inference was not emitting MatVecEvent. This is now fixed: the public
+method wraps a private matVecQuantizedNoEvent() and emits the event with a
+backend label derived from the GGML type (quantized-f32, quantized-q8_0,
+quantized-q4_k, quantized-q5_k, quantized-q6_k). MatVecEvent Javadoc updated
+to list this third firing site.
+
+29.6  ChatTemplateFormatter — TemplateFormatEvent fix
+-----------------------------------------------
+ChatTemplateFormatter.format() was not emitting TemplateFormatEvent despite the
+event class existing since session 15. The event is now correctly started,
+populated (modelType, messageCount, outputLength), and committed in format().
+
+29.7  Files updated
+-----------------------------------------------
+  tokenizer/src/main/java/.../tokenizer/
+    GgufTokenizer.java           + isGpt2Bpe field, sortedSpecialPieces list,
+                                   BPE-variant detection in load(),
+                                   special-token pre-split in encode(),
+                                   GPT-2 vs SentencePiece space normalisation
+    ChatTemplateFormatter.java   + TemplateFormatEvent wired into format()
+
+  node/src/main/java/.../node/
+    LlamaTransformerHandler.java + MatVecEvent emitted from quantised matVec path;
+                                   matVecQuantizedNoEvent() inner method extracted
+    MatVecEvent.java             + Javadoc updated (third firing site documented)
+
+29.8  Build status (session 18)
+-----------------------------------------------
+  tokenizer   SUCCESS
+  node        SUCCESS
+  All other modules unchanged.
+  All tests: pass
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+30. SESSION 19 CHANGES (2026-04-03) — METRICS MODULE (productivity → metrics)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+30.1  Problem
+-----------------------------------------------
+JFR recordings captured with --jfr were useful for manual inspection in JDK
+Mission Control but produced no automated summary. There was no way to compare
+throughput, latency percentiles, or event counts across models without opening
+each .jfr file by hand. Additionally, the JFR output filename was
+juno-YYYYMMDD-HHMMSS.jfr for all commands, making it impossible to associate
+a recording with a specific model when multiple files accumulated in the
+project root.
+
+30.2  JFR filename — model stem embedded
+-----------------------------------------------
+run.sh cmd_cluster(), cmd_local(), cmd_lora(), and cmd_test() all previously
+constructed the JFR filename as:
+
+  jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+
+All four functions now extract the model stem from the --model-path argument
+and produce:
+
+  jfr_file="juno-<modelStem>-$(date +%Y%m%d-%H%M%S).jfr"
+
+Example: --model-path /models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
+  →  juno-TinyLlama-1.1B-Chat-v1.0.Q4_K_M-20260403-142311.jfr
+
+This naming scheme is required by JfrModelMapper (see §30.3).
+
+30.3  New module: metrics (source dir: productivity/)
+-----------------------------------------------
+A new Maven module added to the root pom.xml. The source directory is named
+productivity/ and will be renamed to metrics/ by the maintainer. All Java
+classes live in package cab.ml.juno.productivity.
+
+  ProductivityMain
+    Entry point (main class). Scans the project root for *.jfr files, maps
+    each to a model entry via JfrModelMapper, extracts metrics, and writes
+    target/productivity/metrics.json. Prints a warning to stderr when a
+    recording has no juno.MatVec / juno.ForwardPass events (which happens
+    when ./juno cluster is used — JFR attaches to the coordinator only, not
+    the forked node JVMs where inference actually runs).
+
+  JfrModelMapper
+    Maps Path → ModelsConfig.ModelEntry by matching the model stem embedded
+    in the JFR filename (juno-<stem>-YYYYMMDD-HHMMSS.jfr) against the stems
+    in models.json. Unrecognised files are silently skipped.
+
+  JfrMetricsExtractor
+    Reads a single .jfr file using jdk.jfr.consumer.RecordingFile. Collects:
+      juno.MatVec      — count, total duration, per-backend breakdown
+      juno.ForwardPass — count, prefill count, decode count, durations
+      juno.Tokenizer   — encode / decode / decodeToken counts and durations
+      juno.TemplateFormat — count, duration
+      juno.LoraTrainStep  — count, forward/backward/optimizer ms percentiles
+    Computes p50/p95/p99 percentiles via JfrPercentiles. Returns a
+    MetricsSnapshot.ModelMetrics containing a flat Map<String, Double> of
+    all derived metric names, plus file size in bytes.
+
+  JfrPercentiles
+    Sorts a List<Long> nanosecond sample and returns p50/p95/p99 as doubles.
+
+  MetricsSnapshot / MetricsSnapshot.ModelMetrics
+    Immutable value object: name, path, jfrFileName, Map<String, Double> metrics.
+
+  MetricsWriter
+    Serialises a List<ModelMetrics> to JSON at the given output path.
+    Creates parent directories as needed.
+
+  ModelsConfig / ModelsConfig.ModelEntry
+    Typed view of models.json: { "models": [{ "name": "...", "path": "..." }] }.
+
+  ModelsConfigLoader
+    Loads and validates models.json. Rejects blank names or missing path.
+
+  models.json (src/main/resources/)
+    Default model catalogue:
+      { "name": "TinyLlama-1.1B-Chat-v1.0.Q4_K_M",
+        "path": "TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf" }
+    Add further entries for each model whose JFR files should be processed.
+
+30.4  Usage
+-----------------------------------------------
+  # Capture a recording (model stem embedded in filename automatically)
+  ./juno local --model-path /models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf --jfr 5m
+
+  # After the session ends a file like this appears in the project root:
+  #   juno-TinyLlama-1.1B-Chat-v1.0.Q4_K_M-20260403-142311.jfr
+
+  # Build and run the metrics extractor
+  mvn package -pl productivity -am -DskipTests
+  java -cp productivity/target/productivity-*.jar \
+       cab.ml.juno.productivity.ProductivityMain
+
+  # Output: target/productivity/metrics.json
+
+  NOTE: For full metrics (MatVec + ForwardPass events) use ./juno local, not
+  ./juno (cluster). In cluster mode JFR attaches to the coordinator JVM only;
+  inference runs in forked node JVMs whose events are invisible to it.
+
+30.5  Files added
+-----------------------------------------------
+  productivity/pom.xml
+  productivity/src/main/java/.../productivity/
+    ProductivityMain.java
+    JfrMetricsExtractor.java
+    JfrModelMapper.java
+    JfrPercentiles.java
+    MetricsSnapshot.java
+    MetricsWriter.java
+    ModelsConfig.java
+    ModelsConfigLoader.java
+  productivity/src/main/resources/models.json
+  productivity/src/test/java/.../productivity/
+    JfrModelMapperTest.java       (tests: stem matching, unrecognised files)
+    JfrPercentilesTest.java       (tests: empty list, single element, percentile correctness)
+    MetricsWriterTest.java        (tests: output path creation, JSON validity)
+    ModelsConfigLoaderTest.java   (tests: valid config, blank name, missing array)
+  productivity/src/test/resources/
+    models-valid.json
+    models-blank-name.json
+    models-missing-array.json
+    models.json
+
+30.6  Files updated
+-----------------------------------------------
+  pom.xml                        + <module>productivity</module>
+  scripts/run.sh                 JFR filename: juno-<stem>-YYYYMMDD-HHMMSS.jfr
+                                 (cmd_cluster, cmd_local, cmd_lora, cmd_test)
+  .gitignore                     + *.jfr  (recordings excluded from version control)
+
+30.7  Build status (session 19)
+-----------------------------------------------
+  productivity  SUCCESS
+  All other modules unchanged.
+  New unit tests: ~12 (JfrModelMapperTest + JfrPercentilesTest +
+                        MetricsWriterTest + ModelsConfigLoaderTest)
+  All tests: pass

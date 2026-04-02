@@ -960,3 +960,67 @@ lsof -i :19092,19093,19094
 # Kill
 kill <pid>
 ```
+---
+
+### Metrics — extracting productivity data from JFR recordings
+
+The `metrics` module (source dir: `productivity/`) reads JFR files produced by
+`--jfr` and writes a JSON summary to `target/productivity/metrics.json`.
+
+**Step 1 — capture a recording with the model stem in the filename.**
+The `--jfr` flag now automatically names the file
+`juno-<modelStem>-YYYYMMDD-HHMMSS.jfr`, so the extractor can correlate it with
+the right `models.json` entry:
+
+```bash
+./juno local --model-path /models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf --jfr 5m
+# produces: juno-TinyLlama-1.1B-Chat-v1.0.Q4_K_M-20260403-142311.jfr
+```
+
+Use `./juno local`, not `./juno` (cluster). In cluster mode JFR attaches to
+the coordinator JVM only; inference runs in forked node JVMs and their
+`juno.MatVec` / `juno.ForwardPass` events are not captured.
+
+**Step 2 — add the model to `productivity/src/main/resources/models.json`**
+if it is not already there:
+
+```json
+{
+  "models": [
+    { "name": "TinyLlama-1.1B-Chat-v1.0.Q4_K_M",
+      "path": "TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf" }
+  ]
+}
+```
+
+**Step 3 — build and run the extractor:**
+
+```bash
+mvn package -pl productivity -am -DskipTests
+java -cp productivity/target/productivity-*.jar \
+     cab.ml.juno.productivity.ProductivityMain
+# Output: target/productivity/metrics.json
+```
+
+The JSON contains counts, total durations, and p50/p95/p99 percentiles for
+every `juno.*` event type: `juno.MatVec`, `juno.ForwardPass`,
+`juno.Tokenizer`, `juno.TemplateFormat`, `juno.LoraTrainStep`.
+
+---
+
+### Llama 3 / Meta-Llama models — GPT-2 BPE tokenizer
+
+Llama 3.x models (e.g. `Meta-Llama-3.2-1B-Instruct-Q8_0`) use GPT-2 /
+tiktoken BPE, which is detected automatically from the GGUF metadata key
+`tokenizer.ggml.model == "gpt2"`. This is distinct from the SentencePiece BPE
+used by Llama 1/2, TinyLlama, Mistral, Gemma, and Phi-3.
+
+The tokenizer logs the detected variant on load:
+
+```
+Tokenizer loaded: vocabSize=128256 bos=128000 eos=128001 model=gpt2 [GPT-2 BPE]
+```
+
+No configuration is required. Control tokens such as `<|begin_of_text|>`,
+`<|eot_id|>`, `<|start_header_id|>`, and `<|end_header_id|>` are pre-split
+before BPE and mapped to their single vocabulary IDs.

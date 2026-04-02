@@ -14,6 +14,12 @@ All modules build and all tests pass. Verified end-to-end with:
 - Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile
 - phi-3.5-mini-instruct.Q4_K_M.gguf on a 3-node CPU cluster
 
+**Session 19** — metrics module, Meta-Llama 3 tokenizer fix, AWS infrastructure scripts.
+
+**Session 18** — `GgufTokenizer` now supports GPT-2 / tiktoken BPE (Llama 3+) in addition to SentencePiece BPE. BPE variant is auto-detected from `tokenizer.ggml.model` in GGUF metadata. Special control tokens (`<|begin_of_text|>`, `<|eot_id|>`, etc.) are pre-split before BPE and always map to single vocabulary IDs. `LlamaTransformerHandler.matVec()` (quantised path) now emits `juno.MatVec` events. `ChatTemplateFormatter.format()` now emits `juno.TemplateFormat` events (both were previously missing instrumentation).
+
+**Session 17** — AWS infrastructure scripts added under `scripts/aws/`: `launcher.sh` (credential wrapper), `juno-infra.sh` (3-node GPU cluster lifecycle with live VRAM/cost dashboard), `juno-infra-ft.sh` (CPU fine-tuning cluster). The `--jfr` flag now embeds the model stem in the recording filename (`juno-<modelStem>-YYYYMMDD-HHMMSS.jfr`).
+
 **Session 16** — naming cleanup: session-12 rename fully applied to source.
 
 The `KVCacheManager` (GPU + CPU tiers with LRU/W-TinyLFU eviction) was previously disconnected from the transformer handlers: `LlamaTransformerHandler` and `Phi3TransformerHandler` each maintained their own private `HashMap<String, float[][]>` with no eviction, making the entire `kvcache` module inert at the node level. This is now fixed.
@@ -166,8 +172,13 @@ mvn clean package -DskipTests
 
 # Profile with JFR — captures all five juno.* event types
 ./juno local --model-path /path/to/model.gguf --jfr 5m
-# Open juno-<timestamp>.jfr in JDK Mission Control
+# Open juno-<modelStem>-<timestamp>.jfr in JDK Mission Control
 # Event Browser: juno.MatVec / juno.ForwardPass / juno.Tokenizer / juno.TemplateFormat
+
+# Extract automated metrics summary (counts, durations, p50/p95/p99 per event type)
+mvn package -pl productivity -am -DskipTests
+java -cp productivity/target/productivity-*.jar cab.ml.juno.productivity.ProductivityMain
+# Output: target/productivity/metrics.json
 ```
 
 ---
@@ -185,7 +196,7 @@ mvn clean package -DskipTests
 | `--top-p F` | `0.95` | Nucleus sampling cutoff (0 = disabled) |
 | `--heap SIZE` | `4g` | JVM heap per node, e.g. `4g`, `8g` |
 | `--nodes N` | `3` | In-process shard count (`local` only) |
-| `--jfr DURATION` | — | Java Flight Recording for DURATION (e.g. `30s`, `5m`, `1h`). Writes `juno-<timestamp>.jfr`. Captures `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, and (for `lora`) `juno.LoraTrainStep` events. Open in JDK Mission Control. |
+| `--jfr DURATION` | — | Java Flight Recording for DURATION (e.g. `30s`, `5m`, `1h`). Writes `juno-<modelStem>-<timestamp>.jfr`. Captures `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, and (for `lora`) `juno.LoraTrainStep` events. Open in JDK Mission Control. Use `./juno local` for full event coverage — cluster mode captures coordinator JVM only. |
 | `--verbose` / `-v` | — | Show node startup, gRPC and shard loading logs |
 
 **LoRA flags** (`lora` command only):
@@ -210,12 +221,13 @@ Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `MAX_TOKENS`, `TEMPERATUR
 | `registry` | `NodeDescriptor`, `ShardPlanner`, `ShardMap`, `ParallelismType`, `TensorShardAssignment`, `TensorShardPlanner` |
 | `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, Javalin REST, SSE |
 | `kvcache` | `KVCacheManager`, `GpuKVCache`, `CpuKVCache`, `PrefixCache` |
-| `tokenizer` | `GgufTokenizer` (SentencePiece BPE), `ChatTemplate`, `SimpleTokenizer`, `TokenizerEvent`, `TemplateFormatEvent` |
+| `tokenizer` | `GgufTokenizer` (SentencePiece BPE + GPT-2 BPE; auto-detected), `ChatTemplate`, `SimpleTokenizer`, `TokenizerEvent`, `TemplateFormatEvent` |
 | `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `NodeKVCacheAdapter`, `MatVec`, `CpuMatVec`, `CudaMatVec`, `GgufReader`, `LlamaConfig`, `ActivationCodec`, `ShardContext`, `TensorShardContext`, `LoraAdapter`, `LoraAdapterSet`, `LoraAdamOptimizer`, `LoraTrainableHandler`, `MatVecEvent`, `ForwardPassEvent`, `LoraTrainEvent` |
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | Health monitor, circuit breakers (Resilience4j) |
 | `player` | `ConsoleMain` REPL (`cluster` / `local` / `lora` commands), `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `EmbeddedNodeServer` |
 | `integration` | `InProcessClusterIT`, `ThreeNodeClusterIT`, `TensorParallelClusterIT`, `ModelLiveRunner`, `GpuForwardPassIT` |
+| `metrics` | JFR-based productivity metrics extractor (source dir: `productivity/`). `JfrMetricsExtractor`, `JfrModelMapper`, `JfrPercentiles`, `MetricsSnapshot`, `MetricsWriter`, `ModelsConfig`, `ModelsConfigLoader`, `ProductivityMain` |
 
 ---
 
@@ -228,8 +240,8 @@ Any GGUF file with a LLaMA-compatible or Phi-3-compatible architecture. Tested:
 | TinyLlama-1.1B-Chat Q4_K_M | 637 MB | 2g |
 | phi-3.5-mini-instruct Q4_K_M | 2.4 GB | 4g |
 | Mistral-7B-Instruct Q4_K_M | 4.1 GB | 8g |
-| Llama-3.2-8B-Instruct Q4_K_M | 4.9 GB | 8g |
-| Llama-3.1-70B-Instruct Q4_K_M | 40 GB | 16 x 4 GB nodes |
+| Meta-Llama-3.2-1B-Instruct Q8_0 | 1.3 GB | 4g |
+| Meta-Llama-3.1-70B-Instruct Q4_K_M | 40 GB | 16 x 4 GB nodes |
 
 **Quantisation types:** F32, F16, BF16, Q8_0, Q4_0, Q4_K, Q5_K, Q6_K.
 
@@ -309,6 +321,9 @@ Useful analysis patterns:
 - **KV cache wired to the node-level manager.** `NodeKVCacheAdapter` connects `LlamaTransformerHandler` and `Phi3TransformerHandler` to the `KVCacheManager` (GPU byte-budget LRU + Caffeine W-TinyLFU CPU tier). Every forward pass flushes key/value data write-through into both tiers. If a local entry is evicted under heap pressure, the next forward pass at that position restores it from the manager transparently. `evict(requestId)` propagates to both the local HashMap and both cache tiers, closing the gap that previously made the entire `kvcache` module inert at the node level.
 - **Star AllReduce for tensor parallel.** No inter-node communication. The coordinator collects partial logit vectors from all N nodes and sums them in O(N × vocabSize). Simpler than ring-AllReduce and requires no InfiniBand.
 - **LoRA fine-tuning without touching the base model.** `LoraTrainableHandler` wraps `LlamaTransformerHandler` and adds trainable low-rank adapters (A/B matrices, rank 4–16) on the Q and V projections. The frozen weights stay quantized at all times — backward passes dequantize one block per row via dedicated `transposedQ4K` / `transposedQ5K` / `transposedQ6K` scatter-reduce implementations. Adapters are persisted to a `.lora` binary checkpoint; the GGUF is never modified.
+- **GPT-2 BPE and SentencePiece BPE both supported.** `GgufTokenizer` reads `tokenizer.ggml.model` from GGUF metadata. Value `"gpt2"` activates the GPT-2 / tiktoken path (Llama 3+): space-prefixed words use Ġ (U+0120), and special control tokens are pre-split longest-first before BPE. Any other value (null / `"llama"` / `"llama2"`) uses the SentencePiece path (Llama 1/2, TinyLlama, Mistral, Gemma, Phi-3). No configuration required — detection is automatic at load time.
+- **AWS infrastructure scripted.** `scripts/aws/launcher.sh` is a credential wrapper; `juno-infra.sh` manages a 3-node g4dn.xlarge GPU cluster (setup / start / stop / teardown) with a live VRAM + cost dashboard. `juno-infra-ft.sh` targets a CPU fine-tuning cluster. State is persisted to `~/.juno-aws-state`; Ctrl+C auto-stops instances before exit.
+- **JFR metrics extractor.** The `metrics` module (source dir: `productivity/`) scans the project root for `juno-<stem>-*.jfr` files, maps them to `models.json` entries, extracts counts / durations / p50/p95/p99 percentiles for all five `juno.*` event types, and writes `target/productivity/metrics.json`.
 - **Full JFR instrumentation across every hot path.** Five custom event types — `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, `juno.LoraTrainStep` — make every layer of the stack observable in JDK Mission Control without any agent or bytecode manipulation. Activated with `--jfr DURATION` on any `juno` command.
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
 - `MatVec` interface decouples the matmul backend from the transformer logic. `CudaMatVec` implements host `sgemv` (full H2D per call) and device `sgemv(DeviceFloatMatrix, x)` for resident weights. `CpuMatVec` as CPU fallback and test reference. Injected into `LlamaTransformerHandler` and `Phi3TransformerHandler` at construction time via `ForwardPassHandlerLoader`; swapping backends changes where arithmetic runs without touching model logic.
