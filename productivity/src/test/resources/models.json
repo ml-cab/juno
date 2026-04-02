@@ -1,0 +1,8 @@
+{
+  "models": [
+    {
+      "name": "TinyLlama-1.1B-Chat-v1.0.Q4_K_M",
+      "path": "TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
+    }
+  ]
+}

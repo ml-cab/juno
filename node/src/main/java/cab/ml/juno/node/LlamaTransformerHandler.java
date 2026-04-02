@@ -638,6 +638,33 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * @return y[rowEnd - rowStart] result vector
 	 */
 	static float[] matVec(GgufReader.QuantizedTensor A, float[] x, int rowStart, int rowEnd, int cols) {
+		MatVecEvent evt = new MatVecEvent();
+		evt.begin();
+		try {
+			float[] y = matVecQuantizedNoEvent(A, x, rowStart, rowEnd, cols);
+			evt.backend = matVecQuantBackendLabel(A.type());
+			evt.rows = rowEnd - rowStart;
+			evt.cols = cols;
+			return y;
+		} finally {
+			evt.commit();
+		}
+	}
+
+	private static String matVecQuantBackendLabel(int ggmlType) {
+		return switch (ggmlType) {
+		case 0 -> "quantized-f32";
+		case 8 -> "quantized-q8_0";
+		case 12 -> "quantized-q4_k";
+		case 13 -> "quantized-q5_k";
+		case 14 -> "quantized-q6_k";
+		default -> "quantized-unknown";
+		};
+	}
+
+	/** Quantized matVec without JFR (inner implementation for {@link #matVec(GgufReader.QuantizedTensor, float[], int, int, int)}). */
+	private static float[] matVecQuantizedNoEvent(GgufReader.QuantizedTensor A, float[] x, int rowStart, int rowEnd,
+			int cols) {
 		return switch (A.type()) {
 		case 0 -> matVecF32raw(A.data(), x, rowStart, rowEnd, cols);
 		case 8 -> matVecQ8_0raw(A.data(), x, rowStart, rowEnd, cols);
