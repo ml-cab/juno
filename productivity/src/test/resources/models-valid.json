@@ -1,6 +1,0 @@
-{
-  "models": [
-    { "name": "TinyLlama", "path": "models/tinyllama.gguf" },
-    { "name": "Phi3.5", "path": "/abs/phi-3.5-mini.gguf" }
-  ]
-}

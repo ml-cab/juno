@@ -21,7 +21,7 @@
 		<module>health</module>
 		<module>player</module>
 		<module>integration</module>
-		<module>productivity</module>
+		<module>metrics</module>
 	</modules>
 	<properties>
 		<!-- Java -->
