@@ -932,33 +932,19 @@ ForwardPassHandler h = Phi3TransformerHandler.load(modelPath, shardCtx, matVec);
 ### AWS setup for GPU testing (g4dn.xlarge — T4 16 GB VRAM, ~$0.50/hr)
 
 ```bash
-# 1. Install CUDA 12.x
-sudo apt update && sudo apt install -y nvidia-cuda-toolkit
-
-# 2. Verify GPU
-nvidia-smi
-
-# 3. Install JDK 25 and Maven
-sudo apt install -y openjdk-25-jdk maven
-
-# 4. Clone and build
-git clone https://github.com/ml-cab/juno
-cd juno
-mvn clean package -DskipTests
-
-# 5. Download a model
-wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
-
-# 6. GPU unit tests first (validates CUDA wiring, no model needed)
-mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
-
-# 7. GPU integration test
-mvn verify -Pgpu -Dit.model.path=$(pwd)/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf \
-  -pl integration --enable-native-access=ALL-UNNAMED
-
-# 8. Interactive session on GPU
-./juno local --model-path $(pwd)/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
+cd scripts/aws
+./launcher.sh juno-infra.sh <setup|start|stop|teardown>
 ```
+
+for more info see @docs/1buks-aws-vcpu-infra.md
+
+### AWS setup for CPU testing (g4dn.xlarge — T4 16 GB VRAM, ~$0.50/hr)
+
+```bash
+cd scripts/aws
+./launcher.sh juno-infra-ft.sh <setup|start|stop|teardown>
+```
+
 
 ---
 
