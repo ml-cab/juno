@@ -252,7 +252,10 @@ cmd_cluster() {
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
-    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    local model_name model_stem
+    model_name="$(basename "$model")"
+    model_stem="${model_name%.*}"
+    local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
     jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
     warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
   fi
@@ -378,7 +381,10 @@ cmd_local() {
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
-    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    local model_name model_stem
+    model_name="$(basename "$model")"
+    model_stem="${model_name%.*}"
+    local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
     jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
     warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
   fi
@@ -547,7 +553,10 @@ cmd_lora() {
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
-    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    local model_name model_stem
+    model_name="$(basename "$model")"
+    model_stem="${model_name%.*}"
+    local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
     jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
     warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
     warn "After exit: open ${jfr_file} in JDK Mission Control → Event Browser → juno.LoraTrainStep"
@@ -646,7 +655,10 @@ cmd_test() {
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
-    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    local model_name model_stem
+    model_name="$(basename "$model")"
+    model_stem="${model_name%.*}"
+    local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
     jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
     warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
   fi

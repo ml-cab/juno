@@ -26,7 +26,8 @@ import jdk.jfr.StackTrace;
  * JFR event emitted once per matrix-vector multiply call.
  *
  * <p>Fired by {@link CpuMatVec#sgemv} and both overloads of
- * {@link CudaMatVec#sgemv} — the two concrete {@link MatVec} implementations.
+ * {@link CudaMatVec#sgemv}, and by {@link LlamaTransformerHandler#matVec(GgufReader.QuantizedTensor, float[], int, int, int)}
+ * for quantised GGUF weights (the path used in normal inference).
  * The event duration covers the full sgemv computation including, for CUDA,
  * the host↔device transfers.
  *
