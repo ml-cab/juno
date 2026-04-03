@@ -56,25 +56,38 @@ public final class ForwardPassHandlerLoader {
 	 * Open the GGUF file, read {@code general.architecture}, and return the
 	 * appropriate handler with weights fully loaded for the given shard.
 	 *
+	 * <p>The compute backend is selected automatically:
+	 * <ul>
+	 * <li>If {@code JUNO_USE_GPU=true} (system property) <em>and</em> a CUDA
+	 *     device is present, a {@link CudaMatVec} backed by
+	 *     {@link GpuContext#init(int) GpuContext.init(0)} is used.
+	 * <li>Otherwise {@link CpuMatVec#INSTANCE} is used.
+	 * </ul>
+	 *
 	 * @param modelPath path to the GGUF file
 	 * @param context   shard assignment (layers, embedding flags)
 	 * @return a ready-to-use {@link ForwardPassHandler}
 	 * @throws IOException if the file cannot be opened or a tensor is missing
 	 */
 	public static ForwardPassHandler load(Path modelPath, ShardContext context) throws IOException {
-		String arch = readArchitecture(modelPath);
-		log.info("Detected architecture: " + arch + "  file=" + modelPath);
+		return load(modelPath, context, selectBackend());
+	}
 
-		return switch (arch) {
-		case "phi3" -> {
-			log.info("Routing to Phi3TransformerHandler (phi3 fused-QKV architecture)");
-			yield Phi3TransformerHandler.load(modelPath, context);
+	/**
+	 * Selects the compute backend based on the {@code JUNO_USE_GPU} system property
+	 * and runtime CUDA availability.
+	 *
+	 * <p>Returns {@link CudaMatVec} when {@code JUNO_USE_GPU=true} and at least one
+	 * CUDA device is detected; falls back to {@link CpuMatVec#INSTANCE} otherwise.
+	 */
+	static MatVec selectBackend() {
+		boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "false"));
+		if (useGpu && CudaAvailability.isAvailable()) {
+			log.info("JUNO_USE_GPU=true and CUDA detected — using CudaMatVec backend");
+			return new CudaMatVec(GpuContext.init(0));
 		}
-		default -> {
-			log.info("Routing to LlamaTransformerHandler (LLaMA-family architecture: " + arch + ")");
-			yield LlamaTransformerHandler.load(modelPath, context);
-		}
-		};
+		log.info("Using CpuMatVec backend (JUNO_USE_GPU=" + useGpu + ", CUDA=" + CudaAvailability.isAvailable() + ")");
+		return CpuMatVec.INSTANCE;
 	}
 
 	/**

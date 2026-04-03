@@ -67,6 +67,19 @@ public final class CudaMatVec implements MatVec {
         this.ctx = ctx;
     }
 
+    /**
+     * Allocates device memory and uploads {@code host} once (H2D).
+     *
+     * <p>Convenience factory so {@link LlamaTransformerHandler} can upload
+     * dequantized weight matrices without a direct reference to {@link GpuContext}.
+     *
+     * @param host row-major float weights, length {@code rows * cols}
+     * @return a {@link DeviceFloatMatrix} — must be closed when the handler shuts down
+     */
+    DeviceFloatMatrix upload(float[] host, int rows, int cols) {
+        return DeviceFloatMatrix.upload(ctx, host, rows, cols);
+    }
+
     @Override
     public float[] sgemv(float[] A, float[] x, int rows, int cols) {
         if (A.length != (long) rows * cols)
