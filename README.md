@@ -14,6 +14,13 @@ All modules build and all tests pass. Verified end-to-end with:
 - Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile
 - phi-3.5-mini-instruct.Q4_K_M.gguf on a 3-node CPU cluster
 
+**Session 20** — GPU inference actually wired end-to-end. Three bugs fixed:
+(1) `ForwardPassHandlerLoader.load(Path, ShardContext)` always hardcoded `CpuMatVec.INSTANCE` — a new `selectBackend()` method now reads `JUNO_USE_GPU` and calls `CudaAvailability.isAvailable()`, then delegates to the explicit-backend overload.
+(2) Even with `CudaMatVec` correctly injected into `LlamaTransformerHandler.backend`, the inference hot path never used it — `transformerLayer` called the static `matVec(QuantizedTensor, ...)` methods directly. Fix: weights are now dequantized and uploaded to `DeviceFloatMatrix` once at load time; a new `matVecLayer()` instance method dispatches through `backend.sgemv(DeviceFloatMatrix, x)` on the GPU path and falls back to the quantized CPU path otherwise. All 8 projection call sites updated.
+(3) `juno.MatVec.backend.cpu.count` was always 0 in JFR metrics because `matVecQuantBackendLabel()` returned `"quantized-q4_k"` etc. — all quantized static matVec ops are pure-Java CPU code, so the label is now `"cpu"` throughout, matching what `CpuMatVec.sgemv()` emits.
+`CudaMatVec.upload(float[], int, int)` added as a convenience factory.
+`ForwardPassHandlerLoaderSelectBackendTest` (5 tests) and `MatVecQuantizedBackendLabelTest` (3 JFR-event tests) added.
+
 **Session 19** — metrics module, Meta-Llama 3 tokenizer fix, AWS infrastructure scripts.
 
 **Session 18** — `GgufTokenizer` now supports GPT-2 / tiktoken BPE (Llama 3+) in addition to SentencePiece BPE. BPE variant is auto-detected from `tokenizer.ggml.model` in GGUF metadata. Special control tokens (`<|begin_of_text|>`, `<|eot_id|>`, etc.) are pre-split before BPE and always map to single vocabulary IDs. `LlamaTransformerHandler.matVec()` (quantised path) now emits `juno.MatVec` events. `ChatTemplateFormatter.format()` now emits `juno.TemplateFormat` events (both were previously missing instrumentation).
@@ -132,6 +139,8 @@ ForwardPassHandlerLoader  <- reads general.architecture from GGUF
 MatVec (injected into handler):
     CpuMatVec    <- parallel IntStream
     CudaMatVec   <- cublasSgemv_v2 via JCublas2
+                    weights uploaded once as DeviceFloatMatrix at load time;
+                    forward pass copies only x and y across the bus per call
 
 KV cache wiring (per node, after loadShard()):
     NodeKVCacheAdapter  <- serialises float[][] K/V into KVBlock,
@@ -316,7 +325,7 @@ Useful analysis patterns:
 - No Python, no llama.cpp subprocess. JVM reads GGUF binary directly and runs the transformer end to end.
 - No Spring Boot. Javalin for REST.
 - Two parallelism modes: `pipeline` (LAN-friendly, sequential activation flow, vertical scaling) and `tensor` (parallel per-step AllReduce, horizontal scaling, higher throughput). Selected at startup with `--pType`.
-- **Lazy dequantization for large models.** Projection weights are kept as raw quantized bytes in `GgufReader.QuantizedTensor`. Dequantization runs one 256-element block at a time inside the matmul loop. Peak live float footprint per matmul is ~1 kB instead of ~65 MB, making it possible to run 3.8B models with `--heap 4g`.
+- **Lazy dequantization on CPU; eager upload on GPU.** Projection weights are kept as raw quantized bytes in `GgufReader.QuantizedTensor`. On the CPU path, dequantization runs one 256-element block at a time inside the matmul loop (peak live float footprint ~1 kB instead of ~65 MB). On the GPU path (`CudaMatVec`), weights are dequantized to `float[]` once at load time and uploaded to `DeviceFloatMatrix` on the GPU; forward passes then copy only `x` and `y` across the bus, not the weight matrix.
 - **Architecture-aware handler routing.** `ForwardPassHandlerLoader` reads `general.architecture` from GGUF metadata and selects `Phi3TransformerHandler` for `phi3`, `LlamaTransformerHandler` for everything else.
 - **KV cache wired to the node-level manager.** `NodeKVCacheAdapter` connects `LlamaTransformerHandler` and `Phi3TransformerHandler` to the `KVCacheManager` (GPU byte-budget LRU + Caffeine W-TinyLFU CPU tier). Every forward pass flushes key/value data write-through into both tiers. If a local entry is evicted under heap pressure, the next forward pass at that position restores it from the manager transparently. `evict(requestId)` propagates to both the local HashMap and both cache tiers, closing the gap that previously made the entire `kvcache` module inert at the node level.
 - **Star AllReduce for tensor parallel.** No inter-node communication. The coordinator collects partial logit vectors from all N nodes and sums them in O(N × vocabSize). Simpler than ring-AllReduce and requires no InfiniBand.
@@ -326,7 +335,7 @@ Useful analysis patterns:
 - **JFR metrics extractor.** The `metrics` module (source dir: `productivity/`) scans the project root for `juno-<stem>-*.jfr` files, maps them to `models.json` entries, extracts counts / durations / p50/p95/p99 percentiles for all five `juno.*` event types, and writes `target/productivity/metrics.json`.
 - **Full JFR instrumentation across every hot path.** Five custom event types — `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, `juno.LoraTrainStep` — make every layer of the stack observable in JDK Mission Control without any agent or bytecode manipulation. Activated with `--jfr DURATION` on any `juno` command.
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
-- `MatVec` interface decouples the matmul backend from the transformer logic. `CudaMatVec` implements host `sgemv` (full H2D per call) and device `sgemv(DeviceFloatMatrix, x)` for resident weights. `CpuMatVec` as CPU fallback and test reference. Injected into `LlamaTransformerHandler` and `Phi3TransformerHandler` at construction time via `ForwardPassHandlerLoader`; swapping backends changes where arithmetic runs without touching model logic.
+- `MatVec` interface decouples the matmul backend from the transformer logic. `CudaMatVec` implements host `sgemv` (full H2D per call, for tests) and device `sgemv(DeviceFloatMatrix, x)` for resident weights (production path). `CpuMatVec` as CPU fallback and test reference. Backend selection is automatic via `ForwardPassHandlerLoader.selectBackend()` which reads `JUNO_USE_GPU` and calls `CudaAvailability.isAvailable()`. When `CudaMatVec` is selected, `LlamaTransformerHandler` dequantizes all projection weights to `float[]` and uploads them as `DeviceFloatMatrix` once at construction; the new `matVecLayer()` method dispatches through the GPU-resident path on each forward call.
 - GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent CUDA native libs (bytedeco) loading into the coordinator JVM and poisoning FD inheritance into forked node processes.
 - Stub mode — cluster boots in seconds without a model file; all integration tests run stub.
 

@@ -136,6 +136,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	// ── MatVec backend (CPU or CUDA) ─────────────────────────────────────────
 	private final MatVec backend;
 
+	// ── Device-resident weight matrices (non-null only when backend is CudaMatVec) ──
+	// Weights are dequantized to float32 once at load time and uploaded to GPU
+	// so every forward pass avoids per-call H2D weight transfers.
+	// null on all arrays when backend == CpuMatVec (default CPU path).
+	private final DeviceFloatMatrix[] wqDev;
+	private final DeviceFloatMatrix[] wkDev;
+	private final DeviceFloatMatrix[] wvDev;
+	private final DeviceFloatMatrix[] woDev;
+	private final DeviceFloatMatrix[] wGateDev;
+	private final DeviceFloatMatrix[] wUpDev;
+	private final DeviceFloatMatrix[] wDownDev;
+	private final DeviceFloatMatrix outputProjDev;
+
 	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
 	private volatile NodeKVCacheAdapter kvAdapter;
 
@@ -185,18 +198,22 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.endLayer      = endLayer;
 		this.hasEmbeddings = hasEmbeddings;
 		this.hasOutputProj = hasOutputProj;
-		this.tokenEmbd     = tokenEmbd;
-		this.outputNorm    = outputNorm;
-		this.outputProj    = outputProj;
-		this.attnNorm      = attnNorm;
-		this.ffnNorm       = ffnNorm;
-		this.wq            = wq;
-		this.wk            = wk;
-		this.wv            = wv;
-		this.wo            = wo;
-		this.wGate         = wGate;
-		this.wUp           = wUp;
-		this.wDown         = wDown;
+		this.tokenEmbd    = tokenEmbd;
+		this.outputNorm   = outputNorm;
+		this.outputProj   = outputProj;
+		this.attnNorm     = attnNorm;
+		this.ffnNorm      = ffnNorm;
+		this.wq           = wq;
+		this.wk           = wk;
+		this.wv           = wv;
+		this.wo           = wo;
+		this.wGate        = wGate;
+		this.wUp          = wUp;
+		this.wDown        = wDown;
+		// Direct (test) constructor: no GPU upload — device matrices are unused.
+		this.wqDev = this.wkDev = this.wvDev = this.woDev =
+				this.wGateDev = this.wUpDev = this.wDownDev = null;
+		this.outputProjDev = null;
 	}
 
 	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend)
@@ -240,6 +257,39 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		log.info("Shard loaded — " + L + " layers, " + (hasEmbeddings ? "with embeddings, " : "")
 				+ (hasOutputProj ? "with output projection" : "no output projection"));
+
+		// Upload dequantized weights to GPU when a CudaMatVec backend is provided.
+		// This happens once at load time so forward passes avoid per-call H2D transfers.
+		if (backend instanceof CudaMatVec cuda) {
+			log.info("Uploading dequantized weights to GPU (cuda-resident)...");
+			int H  = cfg.hiddenDim();
+			int KV = cfg.kvDim();
+			int I  = cfg.intermediateSize();
+			int V  = cfg.vocabSize();
+			wqDev    = new DeviceFloatMatrix[L];
+			wkDev    = new DeviceFloatMatrix[L];
+			wvDev    = new DeviceFloatMatrix[L];
+			woDev    = new DeviceFloatMatrix[L];
+			wGateDev = new DeviceFloatMatrix[L];
+			wUpDev   = new DeviceFloatMatrix[L];
+			wDownDev = new DeviceFloatMatrix[L];
+			for (int li = 0; li < L; li++) {
+				wqDev[li]    = cuda.upload(dequantize(wq[li],   H,  H), H,  H);
+				wkDev[li]    = cuda.upload(dequantize(wk[li],   KV, H), KV, H);
+				wvDev[li]    = cuda.upload(dequantize(wv[li],   KV, H), KV, H);
+				woDev[li]    = cuda.upload(dequantize(wo[li],   H,  H), H,  H);
+				wGateDev[li] = cuda.upload(dequantize(wGate[li], I, H), I,  H);
+				wUpDev[li]   = cuda.upload(dequantize(wUp[li],   I, H), I,  H);
+				wDownDev[li] = cuda.upload(dequantize(wDown[li], H, I), H,  I);
+			}
+			outputProjDev = (outputProj != null)
+					? cuda.upload(dequantize(outputProj, V, H), V, H)
+					: null;
+			log.info("GPU weight upload complete.");
+		} else {
+			wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
+			outputProjDev = null;
+		}
 	}
 
 	private static GgufReader.QuantizedTensor loadOutputProjection(GgufReader r) throws IOException {
@@ -442,9 +492,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		// ── Attention sub-layer ───────────────────────────────────────────────
 		float[] xNorm = rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
 
-		float[] q = matVec(wq[li], xNorm, H, H);
-		float[] k = matVec(wk[li], xNorm, cfg.kvDim(), H);
-		float[] v = matVec(wv[li], xNorm, cfg.kvDim(), H);
+		// Project to Q, K, V
+		float[] q = matVecLayer(wq[li], wqDev != null ? wqDev[li] : null, xNorm, H, H);
+		float[] k = matVecLayer(wk[li], wkDev != null ? wkDev[li] : null, xNorm, cfg.kvDim(), H);
+		float[] v = matVecLayer(wv[li], wvDev != null ? wvDev[li] : null, xNorm, cfg.kvDim(), H);
 
 		rope(q, pos, cfg.numHeads(),   cfg.headDim(), cfg.ropeTheta());
 		rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
@@ -452,9 +503,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		System.arraycopy(k, 0, kCacheLayer, pos * cfg.kvDim(), cfg.kvDim());
 		System.arraycopy(v, 0, vCacheLayer, pos * cfg.kvDim(), cfg.kvDim());
 
-		float[] attnOut  = gqa(q, kCacheLayer, vCacheLayer, pos + 1);
-		float[] attnProj = matVec(wo[li], attnOut, H, H);
-		float[] x2       = add(x, attnProj);
+		// Grouped-query attention
+		float[] attnOut = gqa(q, kCacheLayer, vCacheLayer, pos + 1);
+
+		// Output projection + residual
+		float[] attnProj = matVecLayer(wo[li], woDev != null ? woDev[li] : null, attnOut, H, H);
+		float[] x2 = add(x, attnProj);
 
 		// ── FFN sub-layer ─────────────────────────────────────────────────────
 		float[] xNorm2 = rmsNorm(x2, ffnNorm[li], cfg.rmsNormEps());
@@ -476,28 +530,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private float[] ffn(float[] x, int li) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
-		float[] gate = matVec(wGate[li], x, I, H);
-		float[] up   = matVec(wUp[li],   x, I, H);
-
-		// SiLU in-place on gate[] — Math.exp required, not vectorizable
-		for (int i = 0; i < I; i++) gate[i] = silu(gate[i]);
-
-		// gate * up → written into up[] with vector FMA; eliminates hidden[] allocation
-		int limit = F_SPECIES.loopBound(I);
-		int i = 0;
-		for (; i < limit; i += F_LEN) {
-			FloatVector.fromArray(F_SPECIES, gate, i)
-			           .mul(FloatVector.fromArray(F_SPECIES, up, i))
-			           .intoArray(up, i);
-		}
-		for (; i < I; i++) up[i] = gate[i] * up[i];
-
-		return matVec(wDown[li], up, H, I);
+		float[] gate = matVecLayer(wGate[li], wGateDev != null ? wGateDev[li] : null, x, I, H);
+		float[] up = matVecLayer(wUp[li], wUpDev != null ? wUpDev[li] : null, x, I, H);
+		// SiLU(gate) * up
+		float[] hidden = new float[I];
+		for (int i = 0; i < I; i++)
+			hidden[i] = silu(gate[i]) * up[i];
+		return matVecLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, hidden, H, I);
 	}
 
 	private float[] outputProjection(float[] x) {
 		float[] xNorm = rmsNorm(x, outputNorm, cfg.rmsNormEps());
-		return matVec(outputProj, xNorm, cfg.vocabSize(), cfg.hiddenDim());
+		return outputProjDev != null
+			? backend.sgemv(outputProjDev, xNorm)
+			: matVec(outputProj, xNorm, cfg.vocabSize(), cfg.hiddenDim());
 	}
 
 	// ── Math primitives ───────────────────────────────────────────────────────
@@ -539,6 +585,205 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			           .intoArray(out, i);
 		}
 		for (; i < n; i++) out[i] = w[i] * x[i] * scale;
+		return out;
+	}
+
+	// ── Backend dispatch ─────────────────────────────────────────────────────
+
+	/**
+	 * Route a matrix-vector multiply through the correct backend.
+	 *
+	 * <p>When {@code dev} is non-null (i.e. the backend is {@link CudaMatVec} and
+	 * the weights were uploaded at load time) the call goes through
+	 * {@link MatVec#sgemv(DeviceFloatMatrix, float[])} which uses the
+	 * device-resident weight matrix — no H2D transfer per call.
+	 *
+	 * <p>When {@code dev} is null (CPU path) the call falls through to the static
+	 * quantized matVec, which is the original behaviour.
+	 *
+	 * @param quant the quantized weight tensor (used on CPU path)
+	 * @param dev   the device-resident dequantized version, or {@code null} for CPU
+	 * @param x     input vector
+	 * @param rows  output dimension
+	 * @param cols  input dimension
+	 */
+	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceFloatMatrix dev,
+			float[] x, int rows, int cols) {
+		if (dev != null) {
+			return backend.sgemv(dev, x);
+		}
+		return matVec(quant, x, rows, cols);
+	}
+
+	/**
+	 * Dequantize a {@link GgufReader.QuantizedTensor} to a flat float[] array.
+	 *
+	 * <p>Used once per weight matrix at load time when {@link CudaMatVec} is the
+	 * backend. The returned array is immediately uploaded via
+	 * {@link CudaMatVec#upload} and then eligible for GC — it is never kept alive.
+	 *
+	 * @param t    quantized weight tensor
+	 * @param rows number of rows
+	 * @param cols number of columns
+	 * @return row-major float[rows * cols] with all values dequantized
+	 */
+	static float[] dequantize(GgufReader.QuantizedTensor t, int rows, int cols) {
+		return switch (t.type()) {
+		case 0  -> dequantizeF32(t.data(), rows, cols);
+		case 8  -> dequantizeQ8_0(t.data(), rows, cols);
+		case 12 -> dequantizeQ4K(t.data(), rows, cols);
+		case 13 -> dequantizeQ5K(t.data(), rows, cols);
+		case 14 -> dequantizeQ6K(t.data(), rows, cols);
+		default -> throw new UnsupportedOperationException(
+				"dequantize not implemented for GGML type " + t.type());
+		};
+	}
+
+	private static float[] dequantizeF32(byte[] raw, int rows, int cols) {
+		int n = rows * cols;
+		float[] out = new float[n];
+		java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+		for (int i = 0; i < n; i++) out[i] = bb.getFloat(i * 4);
+		return out;
+	}
+
+	private static float[] dequantizeQ8_0(byte[] raw, int rows, int cols) {
+		final int BLOCK_SIZE = 32;
+		final int BLOCK_BYTES = 34;
+		int n = rows * cols;
+		float[] out = new float[n];
+		int blocksPerRow = cols / BLOCK_SIZE;
+		int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		for (int r = 0; r < rows; r++) {
+			int rowOff = r * bytesPerRow;
+			for (int b = 0; b < blocksPerRow; b++) {
+				int bo = rowOff + b * BLOCK_BYTES;
+				float scale = GgufReader.f16ToF32(readLE16(raw, bo));
+				int outBase = r * cols + b * BLOCK_SIZE;
+				for (int i = 0; i < BLOCK_SIZE; i++)
+					out[outBase + i] = scale * raw[bo + 2 + i];
+			}
+		}
+		return out;
+	}
+
+	private static float[] dequantizeQ4K(byte[] raw, int rows, int cols) {
+		final int BLOCK_SIZE = 256;
+		final int BLOCK_BYTES = 144;
+		int n = rows * cols;
+		float[] out = new float[n];
+		int blocksPerRow = cols / BLOCK_SIZE;
+		int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		for (int r = 0; r < rows; r++) {
+			int rowByteOff = r * bytesPerRow;
+			int xBase = r * cols;
+			for (int b = 0; b < blocksPerRow; b++) {
+				int bo     = rowByteOff + b * BLOCK_BYTES;
+				int scBase = bo + 4;
+				int qsBase = bo + 16;
+				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
+				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
+				int qi = 0;
+				for (int g = 0; g < BLOCK_SIZE; g += 64) {
+					int s0 = g / 32, s1 = s0 + 1;
+					float scale0 = d    * q4kScaleRaw(raw, scBase, s0);
+					float min0   = dmin * q4kMinRaw  (raw, scBase, s0);
+					float scale1 = d    * q4kScaleRaw(raw, scBase, s1);
+					float min1   = dmin * q4kMinRaw  (raw, scBase, s1);
+					int outOff = xBase + b * BLOCK_SIZE + g;
+					for (int i = 0; i < 32; i++)
+						out[outOff + i]      = scale0 * (raw[qsBase + qi + i] & 0x0F) - min0;
+					for (int i = 0; i < 32; i++)
+						out[outOff + 32 + i] = scale1 * ((raw[qsBase + qi + i] >> 4) & 0x0F) - min1;
+					qi += 32;
+				}
+			}
+		}
+		return out;
+	}
+
+	private static float[] dequantizeQ5K(byte[] raw, int rows, int cols) {
+		final int BLOCK_SIZE = 256;
+		final int BLOCK_BYTES = 176;
+		int n = rows * cols;
+		float[] out = new float[n];
+		int blocksPerRow = cols / BLOCK_SIZE;
+		int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		for (int r = 0; r < rows; r++) {
+			int rowByteOff = r * bytesPerRow;
+			int xBase = r * cols;
+			for (int b = 0; b < blocksPerRow; b++) {
+				int bo     = rowByteOff + b * BLOCK_BYTES;
+				int scBase = bo + 4;
+				int qhBase = bo + 16;
+				int qsBase = bo + 48;
+				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
+				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
+				int qi = 0;
+				for (int g = 0; g < 4; g++) {
+					int s0 = g * 2, s1 = s0 + 1;
+					float scale0 = d    * q4kScaleRaw(raw, scBase, s0);
+					float min0   = dmin * q4kMinRaw  (raw, scBase, s0);
+					float scale1 = d    * q4kScaleRaw(raw, scBase, s1);
+					float min1   = dmin * q4kMinRaw  (raw, scBase, s1);
+					int hiBit0 = g * 2, hiBit1 = g * 2 + 1;
+					int outOff = xBase + b * BLOCK_SIZE + g * 64;
+					for (int l = 0; l < 32; l++) {
+						int lo = raw[qsBase + qi + l] & 0x0F;
+						int hi = (raw[qhBase + l] >>> hiBit0) & 1;
+						out[outOff + l] = scale0 * (lo | (hi << 4)) - min0;
+					}
+					for (int l = 0; l < 32; l++) {
+						int lo = (raw[qsBase + qi + l] >>> 4) & 0x0F;
+						int hi = (raw[qhBase + l] >>> hiBit1) & 1;
+						out[outOff + 32 + l] = scale1 * (lo | (hi << 4)) - min1;
+					}
+					qi += 32;
+				}
+			}
+		}
+		return out;
+	}
+
+	private static float[] dequantizeQ6K(byte[] raw, int rows, int cols) {
+		final int BLOCK_SIZE = 256;
+		final int BLOCK_BYTES = 210;
+		int n = rows * cols;
+		float[] out = new float[n];
+		int blocksPerRow = cols / BLOCK_SIZE;
+		int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		for (int r = 0; r < rows; r++) {
+			int rowByteOff = r * bytesPerRow;
+			int xBase = r * cols;
+			for (int b = 0; b < blocksPerRow; b++) {
+				int bo  = rowByteOff + b * BLOCK_BYTES;
+				float d = GgufReader.f16ToF32(readLE16(raw, bo + 208));
+				for (int half = 0; half < 2; half++) {
+					int qlOff = bo + half * 64;
+					int qhOff = bo + 128 + half * 32;
+					int scOff = bo + 192 + half * 8;
+					int xOff  = xBase + b * BLOCK_SIZE + half * 128;
+					for (int l = 0; l < 32; l++) {
+						int is   = l / 16;
+						int qlL  = raw[qlOff + l]      & 0xFF;
+						int qlL2 = raw[qlOff + l + 32] & 0xFF;
+						int qhL  = raw[qhOff + l]      & 0xFF;
+						int q1 = ((qlL  & 0x0F) | (((qhL >> 0) & 3) << 4)) - 32;
+						int q2 = ((qlL2 & 0x0F) | (((qhL >> 2) & 3) << 4)) - 32;
+						int q3 = ((qlL  >> 4)   | (((qhL >> 4) & 3) << 4)) - 32;
+						int q4 = ((qlL2 >> 4)   | (((qhL >> 6) & 3) << 4)) - 32;
+						float d1 = d * raw[scOff + is];
+						float d2 = d * raw[scOff + is + 2];
+						float d3 = d * raw[scOff + is + 4];
+						float d4 = d * raw[scOff + is + 6];
+						out[xOff + l]       = d1 * q1;
+						out[xOff + l + 32]  = d2 * q2;
+						out[xOff + l + 64]  = d3 * q3;
+						out[xOff + l + 96]  = d4 * q4;
+					}
+				}
+			}
+		}
 		return out;
 	}
 
@@ -796,15 +1041,21 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 	}
 
+	/**
+	 * Returns the JFR backend label for a quantized matVec call.
+	 *
+	 * <p>All quantized overloads (matVecQ4Kraw, matVecQ6Kraw, etc.)
+	 * are pure-Java CPU computations executed on
+	 * ForkJoinPool.commonPool(). They never touch a GPU, so they are labelled
+	 * "cpu" — the same label used by {@link CpuMatVec#sgemv}. This ensures
+	 * juno.MatVec.backend.cpu.count reflects the true number of CPU-side
+	 * matrix multiplies, including quantized ones.
+	 *
+	 * @param ggmlType GGML type ID (unused — kept for signature clarity)
+	 */
+	@SuppressWarnings("unused")
 	private static String matVecQuantBackendLabel(int ggmlType) {
-		return switch (ggmlType) {
-			case 0  -> "quantized-f32";
-			case 8  -> "quantized-q8_0";
-			case 12 -> "quantized-q4_k";
-			case 13 -> "quantized-q5_k";
-			case 14 -> "quantized-q6_k";
-			default -> "quantized-unknown";
-		};
+		return "cpu";
 	}
 
 	private static float[] matVecQuantizedNoEvent(GgufReader.QuantizedTensor A, float[] x,

@@ -48,7 +48,7 @@ public final class MetricsMain {
 
         warnIfClusterCoordinatorRecording(snapshots);
 
-        Path output = projectRoot.resolve("target").resolve("productivity").resolve("metrics.json");
+        Path output = projectRoot.resolve("target").resolve("metrics").resolve("metrics.json");
         MetricsWriter.write(output, snapshots);
 
         System.out.println("Wrote metrics to " + projectRoot.relativize(output));
@@ -56,7 +56,7 @@ public final class MetricsMain {
 
     private static ModelsConfig loadModelsConfig(Path projectRoot) throws IOException {
         Path[] candidates = new Path[] {
-                projectRoot.resolve("productivity/src/main/resources/models.json"),
+                projectRoot.resolve("metrics/src/main/resources/models.json"),
                 projectRoot.resolve("src/main/resources/models.json")
         };
         for (Path path : candidates) {
@@ -65,7 +65,7 @@ public final class MetricsMain {
             }
         }
         throw new IOException(
-                "models.json not found. Tried productivity/src/main/resources/models.json and src/main/resources/models.json under "
+                "models.json not found. Tried metrics/src/main/resources/models.json and src/main/resources/models.json under "
                         + projectRoot);
     }
 
@@ -92,7 +92,7 @@ public final class MetricsMain {
                 System.err.println(
                         "      With ./juno (cluster), JFR runs on the coordinator only; inference runs in separate node JVMs.");
                 System.err.println(
-                        "      For full productivity metrics use: ./juno local --model-path ... --jfr <duration>");
+                        "      For full metrics metrics use: ./juno local --model-path ... --jfr <duration>");
                 System.err.println(
                         "      (single JVM — all custom juno.* events appear in one .jfr file.)");
                 System.err.println();
