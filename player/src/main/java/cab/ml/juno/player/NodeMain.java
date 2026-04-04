@@ -18,6 +18,9 @@ package cab.ml.juno.player;
 
 import java.util.logging.Logger;
 
+import cab.ml.juno.node.ComputeBackendPolicy;
+import cab.ml.juno.node.ComputeBackendPreference;
+
 /**
  * Entry point for a standalone node JVM process.
  *
@@ -47,9 +50,10 @@ public final class NodeMain {
 		String nodeId = args[0];
 		int port = Integer.parseInt(args[1]);
 		String modelPath = args.length >= 3 ? args[2] : null;
-		boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "true"));
+		ComputeBackendPreference pref = ComputeBackendPolicy
+				.parsePreference(System.getProperty("JUNO_USE_GPU", ComputeBackendPreference.AUTO.toPropertyToken()));
 
-		EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu);
+		EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, pref);
 		server.start();
 
 		// Signal readiness to the parent process (ClusterHarness polls for this line)

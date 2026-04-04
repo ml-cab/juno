@@ -68,7 +68,7 @@ class LoadShardsParallelTest {
 						} catch (InterruptedException ignored) {
 						}
 					}
-					responseObserver.onNext(LoadShardResponse.newBuilder()
+					responseObserver.onNext(LoadShardResponse.newBuilder().setSuccess(true)
 							.setMessage("ok layers " + request.getStartLayer() + "-" + request.getEndLayer()).build());
 					responseObserver.onCompleted();
 				}

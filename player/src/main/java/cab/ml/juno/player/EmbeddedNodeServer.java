@@ -35,6 +35,8 @@ import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.kvcache.LayerRange;
 import cab.ml.juno.node.ActivationCodec;
+import cab.ml.juno.node.ComputeBackendPolicy;
+import cab.ml.juno.node.ComputeBackendPreference;
 import cab.ml.juno.node.CudaAvailability;
 
 import cab.ml.juno.node.CyclicForwardPassHandler;
@@ -54,7 +56,8 @@ import io.grpc.stub.StreamObserver;
 
 /**
  * gRPC NodeService backed by LlamaTransformerHandler or Phi3TransformerHandler,
- * with compute backend selected by the {@code useGpu} flag (CudaMatVecBackend or CpuMatVecBackend).
+ * with compute backend selected by {@link ComputeBackendPreference} (CUDA when
+ * allowed and available, else CPU).
  *
  * Activation compression: Each ForwardRequest carries a dtype field that tells
  * this node how to decode the incoming activation bytes. The response
@@ -77,28 +80,34 @@ public final class EmbeddedNodeServer {
 
 	/** Stub mode (no real model — used by integration tests). */
 	public EmbeddedNodeServer(String nodeId, int port) {
-		this(nodeId, port, null, true);
+		this(nodeId, port, null, ComputeBackendPreference.AUTO);
 	}
 
 	/**
-	 * Real-model mode (GPU by default).
+	 * Real-model mode (try CUDA when available).
 	 *
 	 * @param modelPath path to a GGUF file, or null to fall back to stub mode.
 	 */
 	public EmbeddedNodeServer(String nodeId, int port, String modelPath) {
-		this(nodeId, port, modelPath, true);
+		this(nodeId, port, modelPath, ComputeBackendPreference.AUTO);
 	}
 
 	/**
-	 * Real-model mode.
-	 *
-	 * @param modelPath path to a GGUF file, or null to fall back to stub mode.
-	 * @param useGpu    when true use GPU if available; when false use CPU.
+	 * Real-model mode (legacy boolean: {@code true} = {@link ComputeBackendPreference#AUTO},
+	 * {@code false} = {@link ComputeBackendPreference#DISABLE}).
 	 */
 	public EmbeddedNodeServer(String nodeId, int port, String modelPath, boolean useGpu) {
+		this(nodeId, port, modelPath, useGpu ? ComputeBackendPreference.AUTO : ComputeBackendPreference.DISABLE);
+	}
+
+	/**
+	 * @param computePreference AUTO (GPU if CUDA present), DISABLE (CPU only), or REQUIRE (fail load if no CUDA)
+	 */
+	public EmbeddedNodeServer(String nodeId, int port, String modelPath, ComputeBackendPreference computePreference) {
 		this.nodeId = nodeId;
 		this.port = port;
-		this.grpcServer = ServerBuilder.forPort(port).addService(new NodeServiceImpl(nodeId, modelPath, useGpu)).build();
+		this.grpcServer = ServerBuilder.forPort(port)
+				.addService(new NodeServiceImpl(nodeId, modelPath, computePreference)).build();
 	}
 
 	public void start() throws IOException {
@@ -131,17 +140,17 @@ public final class EmbeddedNodeServer {
 
 		private final String nodeId;
 		private final String modelPath; // null = stub mode
-		private final boolean useGpu;
+		private final ComputeBackendPreference computePreference;
 		private volatile ForwardPassHandler handler;
 		private volatile ShardContext context;
 		private volatile GpuContext gpuContext; // non-null only when handler is GPU
 		@SuppressWarnings("unused")
 		private volatile KVCacheManager kvCache;
 
-		NodeServiceImpl(String nodeId, String modelPath, boolean useGpu) {
+		NodeServiceImpl(String nodeId, String modelPath, ComputeBackendPreference computePreference) {
 			this.nodeId = nodeId;
 			this.modelPath = modelPath;
-			this.useGpu = useGpu;
+			this.computePreference = computePreference;
 			this.handler = new CyclicForwardPassHandler(); // replaced in loadShard() when real model
 			this.context = buildDefaultContext();
 			this.kvCache = new KVCacheManager(new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256));
@@ -202,23 +211,36 @@ public final class EmbeddedNodeServer {
 			ShardAssignment assignment = new ShardAssignment(nodeId, "localhost", 0, request.getStartLayer(),
 					request.getEndLayer(), request.getHasEmbeddings(), request.getHasOutputProjection());
 			ShardContext newCtx = ShardContext.from(assignment, VOCAB_SIZE, HIDDEN_DIM, NUM_HEADS);
+			int tensorWorldSize = request.getTensorWorldSize();
+			if (tensorWorldSize < 1)
+				tensorWorldSize = 1;
 
 			String msg;
 			if (modelPath != null) {
+				if (computePreference == ComputeBackendPreference.REQUIRE && !CudaAvailability.isAvailable()) {
+					msg = "CUDA required (JUNO_USE_GPU=require) but not available on this node";
+					log.severe(msg);
+					responseObserver.onNext(LoadShardResponse.newBuilder().setSuccess(false).setMessage(msg).build());
+					responseObserver.onCompleted();
+					return;
+				}
 				try {
 					// Close any existing GpuContext before reloading
 					if (gpuContext != null) {
+						releaseLlamaGpuWeights(handler);
 						gpuContext.close();
 						gpuContext = null;
 					}
-					log.info("Loading real model from: " + modelPath + " (useGpu=" + useGpu + ")");
+					boolean tryCuda = ComputeBackendPolicy.useCudaMatmul(computePreference);
+					log.info("Loading real model from: " + modelPath + " (computePreference=" + computePreference
+							+ " tryCuda=" + tryCuda + ")");
 					log.info("Shard context: layers " + request.getStartLayer() + "-" + request.getEndLayer()
 							+ " embeddings=" + request.getHasEmbeddings() + " outputProj="
 							+ request.getHasOutputProjection());
-					if (useGpu && CudaAvailability.isAvailable()) {
+					if (tryCuda) {
 						gpuContext = GpuContext.init(0);
 						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
-								new CudaMatVec(gpuContext));
+								new CudaMatVec(gpuContext), tensorWorldSize);
 						msg = "Real shard loaded (GPU/CudaMatVec) layers " + request.getStartLayer() + "–"
 								+ request.getEndLayer();
 					} else {
@@ -232,6 +254,7 @@ public final class EmbeddedNodeServer {
 					e.printStackTrace();
 					log.warning("Falling back to stub handler");
 					if (gpuContext != null) {
+						releaseLlamaGpuWeights(handler);
 						gpuContext.close();
 						gpuContext = null;
 					}
@@ -266,7 +289,7 @@ public final class EmbeddedNodeServer {
 
 		@Override
 		public void unloadShard(UnloadShardRequest request, StreamObserver<UnloadShardResponse> responseObserver) {
-			// CudaMatVecBackend uses per-call device memory; no persistent GPU buffers to release.
+			releaseLlamaGpuWeights(handler);
 			if (gpuContext != null) {
 				gpuContext.close();
 				gpuContext = null;
@@ -285,6 +308,11 @@ public final class EmbeddedNodeServer {
 		}
 
 		// ── helpers ───────────────────────────────────────────────────────────
+
+		private static void releaseLlamaGpuWeights(ForwardPassHandler h) {
+			if (h instanceof LlamaTransformerHandler lh)
+				lh.releaseGpuResources();
+		}
 
 		private static ShardContext buildDefaultContext() {
 			ShardAssignment full = new ShardAssignment("default", "localhost", 0, 0, TOTAL_LAYERS, true, true);

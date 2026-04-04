@@ -113,6 +113,30 @@ public final class ForwardPassHandlerLoader {
 		};
 	}
 
+	/**
+	 * Same as {@link #load(Path, ShardContext, MatVec)} with tensor-parallel world
+	 * size for Llama GPU residency policy (see
+	 * {@link LlamaTransformerHandler#load(Path, ShardContext, MatVec, int)}).
+	 * Phi-3 ignores {@code tensorWorldSize}.
+	 */
+	public static ForwardPassHandler load(Path modelPath, ShardContext context, MatVec backend, int tensorWorldSize)
+			throws IOException {
+		String arch = readArchitecture(modelPath);
+		log.info("Detected architecture: " + arch + "  backend=" + backend.getClass().getSimpleName()
+				+ "  tensorWorldSize=" + tensorWorldSize + "  file=" + modelPath);
+
+		return switch (arch) {
+		case "phi3" -> {
+			log.info("Routing to Phi3TransformerHandler (phi3 fused-QKV architecture)");
+			yield Phi3TransformerHandler.load(modelPath, context, backend);
+		}
+		default -> {
+			log.info("Routing to LlamaTransformerHandler (LLaMA-family architecture: " + arch + ")");
+			yield LlamaTransformerHandler.load(modelPath, context, backend, tensorWorldSize);
+		}
+		};
+	}
+
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
 	/**

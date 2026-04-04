@@ -93,8 +93,8 @@ JAVA="$(find_java)"
 # ── CUDA runtime on PATH (GPU mode) ─────────────────────────────────────────────
 # When using GPU, prepend CUDA toolkit bin so libcudart / jnicudart load.
 prepend_cuda_bin_to_path_if_gpu() {
-  local use_gpu="$1"
-  [[ "$use_gpu" == "true" ]] || return 0
+  local gpu_mode="$1"
+  [[ "$gpu_mode" == "cpu" ]] && return 0
   local cuda_bin=""
   if [[ -n "${CUDA_PATH:-}" && -d "${CUDA_PATH}/bin" ]]; then
     cuda_bin="${CUDA_PATH}/bin"
@@ -149,11 +149,12 @@ cmd_cluster() {
   local verbose="false"
   local ptype="pipeline"
   local jfr_duration=""
-  local use_gpu="true"
+  local gpu_mode="auto"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
-      false|0|no|NO) use_gpu="false" ;;
-      *)             use_gpu="true"  ;;
+      false|0|no|NO)              gpu_mode="cpu" ;;
+      require|REQUIRE|mandatory)  gpu_mode="require" ;;
+      *)                          gpu_mode="auto" ;;
     esac
   fi
 
@@ -171,8 +172,9 @@ cmd_cluster() {
       --float16 | --fp16) dtype="FLOAT16";   shift   ;;
       --float32)          dtype="FLOAT32";   shift   ;;
       --int8)             dtype="INT8";      shift   ;;
-      --gpu)              use_gpu="true";    shift   ;;
-      --cpu)              use_gpu="false";   shift   ;;
+      --gpu)              gpu_mode="auto";   shift   ;;
+      --cpu)              gpu_mode="cpu";    shift   ;;
+      --gpu-required)     gpu_mode="require"; shift  ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -206,8 +208,9 @@ cmd_cluster() {
         echo "    --top-p F                  top-p nucleus sampling    (default 0.95, 0=disabled)"
         echo ""
         echo "  Backend:"
-        echo "    --gpu                      use GPU when available (default)"
-        echo "    --cpu                      use CPU only"
+        echo "    --gpu                      use CUDA when available (default)"
+        echo "    --cpu                      CPU only"
+        echo "    --gpu-required             exit if CUDA is unavailable"
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE                JVM heap  e.g. 4g 8g 16g  (default 4g)"
@@ -220,6 +223,7 @@ cmd_cluster() {
         echo ""
         echo "  Environment overrides:"
         echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
+        echo "    USE_GPU: true|auto → try CUDA; false|no → CPU; require → must have CUDA"
         echo ""
         echo "  Examples:"
         echo "    $0 cluster --model-path /models/tiny.gguf"
@@ -238,7 +242,7 @@ cmd_cluster() {
   require_jar "$PLAYER_JAR" "player"
   check_java_version
 
-  warn "Starting 3-node cluster  (pType=${ptype}  dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
+  warn "Starting 3-node cluster  (pType=${ptype}  dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  gpu=${gpu_mode}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   warn "Ctrl-C to stop all nodes and exit"
   echo ""
@@ -247,8 +251,9 @@ cmd_cluster() {
   [[ "$verbose" == "true" ]] && verbose_flag="--verbose"
 
   local gpu_flag="--gpu"
-  [[ "$use_gpu" == "false" ]] && gpu_flag="--cpu"
-  prepend_cuda_bin_to_path_if_gpu "$use_gpu"
+  [[ "$gpu_mode" == "cpu" ]] && gpu_flag="--cpu"
+  [[ "$gpu_mode" == "require" ]] && gpu_flag="--gpu-required"
+  prepend_cuda_bin_to_path_if_gpu "$gpu_mode"
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
@@ -293,11 +298,12 @@ cmd_local() {
   local nodes="${NODES:-3}"
   local verbose="false"
   local jfr_duration=""
-  local use_gpu="true"
+  local gpu_mode="auto"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
-      false|0|no|NO) use_gpu="false" ;;
-      *)             use_gpu="true"  ;;
+      false|0|no|NO)              gpu_mode="cpu" ;;
+      require|REQUIRE|mandatory)  gpu_mode="require" ;;
+      *)                          gpu_mode="auto" ;;
     esac
   fi
 
@@ -315,8 +321,9 @@ cmd_local() {
       --float16 | --fp16) dtype="FLOAT16";   shift   ;;
       --float32)          dtype="FLOAT32";   shift   ;;
       --int8)             dtype="INT8";      shift   ;;
-      --gpu)              use_gpu="true";    shift   ;;
-      --cpu)              use_gpu="false";   shift   ;;
+      --gpu)              gpu_mode="auto";   shift   ;;
+      --cpu)              gpu_mode="cpu";    shift   ;;
+      --gpu-required)     gpu_mode="require"; shift  ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -346,8 +353,9 @@ cmd_local() {
         echo "    --nodes N                  number of in-process shards  (default 3)"
         echo ""
         echo "  Backend:"
-        echo "    --gpu                      use GPU when available (default)"
-        echo "    --cpu                      use CPU only"
+        echo "    --gpu                      use CUDA when available (default)"
+        echo "    --cpu                      CPU only"
+        echo "    --gpu-required             exit if CUDA is unavailable"
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE                e.g. 4g 8g 16g               (default 4g)"
@@ -368,7 +376,7 @@ cmd_local() {
   require_jar "$PLAYER_JAR" "player"
   check_java_version
 
-  info "Starting local in-process REPL  (dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
+  info "Starting local in-process REPL  (dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  gpu=${gpu_mode}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   echo ""
 
@@ -376,8 +384,9 @@ cmd_local() {
   [[ "$verbose" == "true" ]] && verbose_flag="--verbose"
 
   local gpu_flag="--gpu"
-  [[ "$use_gpu" == "false" ]] && gpu_flag="--cpu"
-  prepend_cuda_bin_to_path_if_gpu "$use_gpu"
+  [[ "$gpu_mode" == "cpu" ]] && gpu_flag="--cpu"
+  [[ "$gpu_mode" == "require" ]] && gpu_flag="--gpu-required"
+  prepend_cuda_bin_to_path_if_gpu "$gpu_mode"
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
@@ -428,11 +437,12 @@ cmd_lora() {
   local heap="${HEAP:-4g}"
   local verbose="false"
   local jfr_duration=""
-  local use_gpu="true"
+  local gpu_mode="auto"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
-      false|0|no|NO) use_gpu="false" ;;
-      *)             use_gpu="true"  ;;
+      false|0|no|NO)              gpu_mode="cpu" ;;
+      require|REQUIRE|mandatory)  gpu_mode="require" ;;
+      *)                          gpu_mode="auto" ;;
     esac
   fi
 
@@ -454,8 +464,9 @@ cmd_lora() {
       # --pType is accepted but ignored: lora always runs single in-process node
       --pType | --ptype) shift 2 ;;
       --jfr)          jfr_duration="$2"; shift 2 ;;
-      --gpu)          use_gpu="true";    shift   ;;
-      --cpu)          use_gpu="false";   shift   ;;
+      --gpu)          gpu_mode="auto";   shift   ;;
+      --cpu)          gpu_mode="cpu";    shift   ;;
+      --gpu-required) gpu_mode="require"; shift  ;;
       --verbose | -v) verbose="true";   shift   ;;
       --help)
         echo ""
@@ -486,8 +497,9 @@ cmd_lora() {
         echo "    --top-p F               (default 0.95)"
         echo ""
         echo "  Backend:"
-        echo "    --gpu                   use GPU when available (default)"
-        echo "    --cpu                   use CPU only"
+        echo "    --gpu                   use CUDA when available (default)"
+        echo "    --cpu                   CPU only"
+        echo "    --gpu-required          exit if CUDA is unavailable"
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE             e.g. 4g 8g 16g  (default 4g)"
@@ -536,7 +548,7 @@ cmd_lora() {
   # Default alpha = rank when not explicitly set
   [[ -n "$lora_alpha" ]] || lora_alpha="$lora_rank"
 
-  info "Starting LoRA fine-tuning REPL  (rank=${lora_rank}  alpha=${lora_alpha}  lr=${lora_lr}  steps=${lora_steps}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
+  info "Starting LoRA fine-tuning REPL  (rank=${lora_rank}  alpha=${lora_alpha}  lr=${lora_lr}  steps=${lora_steps}  heap=${heap}  gpu=${gpu_mode}  os=${OS})"
   [[ -n "$lora_path" ]] && info "Adapter file: ${lora_path}"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   echo ""
@@ -545,8 +557,9 @@ cmd_lora() {
   [[ "$verbose" == "true" ]] && verbose_flag="--verbose"
 
   local gpu_flag="--gpu"
-  [[ "$use_gpu" == "false" ]] && gpu_flag="--cpu"
-  prepend_cuda_bin_to_path_if_gpu "$use_gpu"
+  [[ "$gpu_mode" == "cpu" ]] && gpu_flag="--cpu"
+  [[ "$gpu_mode" == "require" ]] && gpu_flag="--gpu-required"
+  prepend_cuda_bin_to_path_if_gpu "$gpu_mode"
 
   local lora_path_flag=""
   [[ -n "$lora_path" ]] && lora_path_flag="--lora-path $lora_path"
@@ -684,7 +697,7 @@ usage() {
   echo ""
   echo "  Build jars first (one time):"
   echo "    mvn clean package -DskipTests"
-``  echo ""
+  echo ""
   echo -e "  ${GREEN}$0${NC} --model-path PATH           3-node cluster + REPL  ${DIM}(default, forked JVM nodes)${NC}"
   echo    "  $0 cluster --help                  all cluster flags  (cluster keyword still works)"
   echo ""
@@ -710,8 +723,9 @@ usage() {
   echo "    --top-p F                      top-p nucleus sampling    (default 0.95, 0=disabled)"
   echo "    --heap SIZE                    JVM heap e.g. 4g 8g      (default 4g)"
   echo "    --jfr DURATION                 Java Flight Recording     e.g. 5m 30s 1h"
-  echo "    --gpu                          use GPU when available (default)"
-  echo "    --cpu                          use CPU only"
+  echo "    --gpu                          use CUDA when available (default)"
+  echo "    --cpu                          CPU only"
+  echo "    --gpu-required                 exit if CUDA is unavailable"
   echo "    --verbose / -v                 show gRPC / node logs"
   echo ""
   echo "  local only:"

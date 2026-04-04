@@ -100,7 +100,7 @@ class GpuForwardPassIT {
 		ShardContext ctx = new ShardContext("gpu-it", 0, 11, true, false, 32000, 2048, 32);
 
 		ForwardPassHandler cpu = LlamaTransformerHandler.load(modelPath, ctx);
-		ForwardPassHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVec(gpuCtx));
+		LlamaTransformerHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVec(gpuCtx));
 		try {
 			ForwardRequest req = ForwardRequest.withTokens("it-req-1", new int[] { 1 }, 0);
 
@@ -113,7 +113,7 @@ class GpuForwardPassIT {
 			for (int i = 0; i < cpuAct.length; i++)
 				assertThat(gpuAct[i]).as("activation[%d]", i).isCloseTo(cpuAct[i], within(DELTA));
 		} finally {
-			// no releaseGpuResources — LlamaTransformerHandler uses lazy dequant, no device buffers to free
+			gpu.releaseGpuResources();
 		}
 	}
 
@@ -126,7 +126,7 @@ class GpuForwardPassIT {
 			fakeActivations[i] = (float) Math.sin(i * 0.01);
 
 		ForwardPassHandler cpu = LlamaTransformerHandler.load(modelPath, ctx);
-		ForwardPassHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVec(gpuCtx));
+		LlamaTransformerHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVec(gpuCtx));
 		try {
 			ForwardRequest req = ForwardRequest.withActivations("it-req-2", fakeActivations, 0);
 
@@ -139,7 +139,7 @@ class GpuForwardPassIT {
 			for (int i = 0; i < cpuLogits.length; i++)
 				assertThat(gpuLogits[i]).as("logit[%d]", i).isCloseTo(cpuLogits[i], within(DELTA));
 		} finally {
-			// no releaseGpuResources — LlamaTransformerHandler uses lazy dequant, no device buffers to free
+			gpu.releaseGpuResources();
 		}
 	}
 
@@ -149,7 +149,7 @@ class GpuForwardPassIT {
 		ShardContext ctx = new ShardContext("gpu-it", 0, 11, true, false, 32000, 2048, 32);
 
 		ForwardPassHandler cpu = LlamaTransformerHandler.load(modelPath, ctx);
-		ForwardPassHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVec(gpuCtx));
+		LlamaTransformerHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVec(gpuCtx));
 		try {
 			ForwardRequest req = ForwardRequest.withTokens("it-perf", new int[] { 42 }, 0);
 
@@ -174,7 +174,7 @@ class GpuForwardPassIT {
 
 			assertThat(gpuMs).isLessThan(cpuMs);
 		} finally {
-			// no releaseGpuResources — LlamaTransformerHandler uses lazy dequant, no device buffers to free
+			gpu.releaseGpuResources();
 		}
 	}
 
@@ -182,11 +182,11 @@ class GpuForwardPassIT {
 	@DisplayName("isReady() true after load on GPU node")
 	void is_ready_after_load() throws Exception {
 		ShardContext ctx = new ShardContext("gpu-it", 0, 11, true, false, 32000, 2048, 32);
-		ForwardPassHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVec(gpuCtx));
+		LlamaTransformerHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVec(gpuCtx));
 		try {
 			assertThat(gpu.isReady()).isTrue();
 		} finally {
-			// no releaseGpuResources — LlamaTransformerHandler uses lazy dequant, no device buffers to free
+			gpu.releaseGpuResources();
 		}
 	}
 }

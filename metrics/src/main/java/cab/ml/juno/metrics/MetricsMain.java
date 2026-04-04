@@ -56,6 +56,7 @@ public final class MetricsMain {
 
     private static ModelsConfig loadModelsConfig(Path projectRoot) throws IOException {
         Path[] candidates = new Path[] {
+                projectRoot.resolve("metrics/src/main/resources/models.json"),
                 projectRoot.resolve("productivity/src/main/resources/models.json"),
                 projectRoot.resolve("src/main/resources/models.json")
         };
@@ -65,7 +66,7 @@ public final class MetricsMain {
             }
         }
         throw new IOException(
-                "models.json not found. Tried productivity/src/main/resources/models.json and src/main/resources/models.json under "
+                "models.json not found. Tried metrics/, productivity/, and repo-root src/main/resources/ under "
                         + projectRoot);
     }
 

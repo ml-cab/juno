@@ -70,6 +70,8 @@ if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
   if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
   if /i "%USE_GPU_ENV%"=="no" set "USE_GPU=false"
+  if /i "%USE_GPU_ENV%"=="require" set "USE_GPU=require"
+  if /i "%USE_GPU_ENV%"=="mandatory" set "USE_GPU=require"
 )
 
 :cluster_parse
@@ -92,6 +94,7 @@ if /i "%~1"=="--verbose" ( set "VERBOSE=true"  & shift & goto :cluster_parse )
 if /i "%~1"=="-v"        ( set "VERBOSE=true"  & shift & goto :cluster_parse )
 if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :cluster_parse )
 if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :cluster_parse )
+if /i "%~1"=="--gpu-required" ( set "USE_GPU=require" & shift & goto :cluster_parse )
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat cluster --model-path PATH [flags]
@@ -110,8 +113,9 @@ if /i "%~1"=="--help" (
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
-  echo   --gpu             use GPU when available (default)
-  echo   --cpu             use CPU only
+  echo   --gpu             use CUDA when available (default)
+  echo   --cpu             CPU only
+  echo   --gpu-required    exit if CUDA is unavailable
   echo   --verbose / -v
   goto :eof
 )
@@ -140,6 +144,7 @@ if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
 
 set "GPU_FLAG=--gpu"
 if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
+if /i "%USE_GPU%"=="require" set "GPU_FLAG=--gpu-required"
 
 set "JFR_FLAG_CLUSTER="
 if not "%JFR_DURATION_CLUSTER%"=="" (
@@ -174,6 +179,8 @@ if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
   if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
   if /i "%USE_GPU_ENV%"=="no" set "USE_GPU=false"
+  if /i "%USE_GPU_ENV%"=="require" set "USE_GPU=require"
+  if /i "%USE_GPU_ENV%"=="mandatory" set "USE_GPU=require"
 )
 
 :local_parse
@@ -195,6 +202,7 @@ if /i "%~1"=="--verbose" ( set "VERBOSE=true"  & shift & goto :local_parse )
 if /i "%~1"=="-v"        ( set "VERBOSE=true"  & shift & goto :local_parse )
 if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :local_parse )
 if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :local_parse )
+if /i "%~1"=="--gpu-required" ( set "USE_GPU=require" & shift & goto :local_parse )
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat local --model-path PATH [flags]
@@ -209,8 +217,9 @@ if /i "%~1"=="--help" (
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
-  echo   --gpu             use GPU when available (default)
-  echo   --cpu             use CPU only
+  echo   --gpu             use CUDA when available (default)
+  echo   --cpu             CPU only
+  echo   --gpu-required    exit if CUDA is unavailable
   echo   --verbose / -v
   goto :eof
 )
@@ -238,6 +247,7 @@ if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
 
 set "GPU_FLAG=--gpu"
 if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
+if /i "%USE_GPU%"=="require" set "GPU_FLAG=--gpu-required"
 
 set "JFR_FLAG_LOCAL="
 if not "%JFR_DURATION_LOCAL%"=="" (
@@ -274,6 +284,8 @@ if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
   if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
   if /i "%USE_GPU_ENV%"=="no" set "USE_GPU=false"
+  if /i "%USE_GPU_ENV%"=="require" set "USE_GPU=require"
+  if /i "%USE_GPU_ENV%"=="mandatory" set "USE_GPU=require"
 )
 
 :lora_parse
@@ -296,6 +308,7 @@ if /i "%~1"=="--verbose" ( set "VERBOSE=true" & shift & goto :lora_parse )
 if /i "%~1"=="-v"        ( set "VERBOSE=true" & shift & goto :lora_parse )
 if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :lora_parse )
 if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :lora_parse )
+if /i "%~1"=="--gpu-required" ( set "USE_GPU=require" & shift & goto :lora_parse )
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat lora --model-path PATH [flags]
@@ -326,8 +339,9 @@ if /i "%~1"=="--help" (
   echo                             Use at least 2x the model file size.
   echo.
   echo   Backend:
-  echo     --gpu                   use GPU when available (default)
-  echo     --cpu                   use CPU only
+  echo     --gpu                   use CUDA when available (default)
+  echo     --cpu                   CPU only
+  echo     --gpu-required          exit if CUDA is unavailable
   echo.
   echo   REPL commands:
   echo     /train ^<text^>          Fine-tune on inline text
@@ -376,6 +390,7 @@ if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
 
 set "GPU_FLAG=--gpu"
 if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
+if /i "%USE_GPU%"=="require" set "GPU_FLAG=--gpu-required"
 
 set "LORA_PATH_FLAG="
 if not "%LORA_PATH_VAL%"=="" set "LORA_PATH_FLAG=--lora-path %LORA_PATH_VAL%"

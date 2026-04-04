@@ -145,6 +145,9 @@ public final class ProcessPipelineClient implements InferencePipeline {
 
 			futures.add(CompletableFuture.runAsync(() -> {
 				LoadShardResponse response = stubs.get(idx).blockingStub.loadShard(req);
+				if (!response.getSuccess())
+					throw new IllegalStateException(
+							"Node " + idx + " loadShard failed: " + response.getMessage());
 				log.info("Node " + idx + " shard load: " + response.getMessage());
 			}));
 		}

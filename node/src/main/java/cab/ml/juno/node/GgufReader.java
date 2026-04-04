@@ -282,6 +282,22 @@ public final class GgufReader implements AutoCloseable {
 		return data;
 	}
 
+	/**
+	 * Dequantizes to float[] without storing in this reader's in-memory cache.
+	 *
+	 * <p>
+	 * Use when the caller immediately uploads to the GPU and should not retain a
+	 * second full-precision copy on the heap alongside {@link #tensorRaw(String)}
+	 * quantized bytes.
+	 */
+	public float[] tensorEphemeral(String name) throws IOException {
+		TensorInfo info = tensors.get(name);
+		if (info == null)
+			throw new IllegalArgumentException(
+					"Tensor not found: " + name + "  (available: " + tensors.size() + " tensors)");
+		return loadTensor(info);
+	}
+
 	@Override
 	public void close() throws IOException {
 		channel.close();

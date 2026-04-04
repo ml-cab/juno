@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import cab.ml.juno.node.ComputeBackendPreference;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.node.LlamaConfig;
@@ -353,6 +354,8 @@ public final class ClusterHarness implements AutoCloseable {
 			}
 			cmd.add("-Djava.util.logging.config.file=" + q.getAbsolutePath());
 		}
+
+		cmd.add("-DJUNO_USE_GPU=" + System.getProperty("JUNO_USE_GPU", ComputeBackendPreference.AUTO.toPropertyToken()));
 
 		cmd.addAll(java.util.List.of("-cp", classpath, NodeMain.class.getName(), nodeId, String.valueOf(port)));
 		if (modelPath != null)

@@ -180,6 +180,9 @@ public final class TensorParallelPipelineClient implements InferencePipeline {
 
 			futures.add(CompletableFuture.runAsync(() -> {
 				LoadShardResponse response = stubs.get(idx).blockingStub.loadShard(req);
+				if (!response.getSuccess())
+					throw new IllegalStateException("Tensor-parallel node " + idx + " loadShard failed: "
+							+ response.getMessage());
 				log.info("Tensor-parallel node " + idx + " (rank=" + shard.tensorRank() + ") shard load: "
 						+ response.getMessage());
 			}));

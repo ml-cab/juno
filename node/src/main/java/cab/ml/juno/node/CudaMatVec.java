@@ -67,6 +67,11 @@ public final class CudaMatVec implements MatVec {
         this.ctx = ctx;
     }
 
+    /** CUDA device context bound to this backend (for uploading resident weights). */
+    public GpuContext context() {
+        return ctx;
+    }
+
     @Override
     public float[] sgemv(float[] A, float[] x, int rows, int cols) {
         if (A.length != (long) rows * cols)

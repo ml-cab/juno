@@ -35,6 +35,8 @@ import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.ActivationDtype;
+import cab.ml.juno.node.ComputeBackendPolicy;
+import cab.ml.juno.node.ComputeBackendPreference;
 import cab.ml.juno.node.CudaAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.CudaMatVec;
@@ -71,7 +73,7 @@ import cab.ml.juno.tokenizer.Tokenizer;
  * freely. Use /merge-hint in the REPL to see how to bake weights in.
  *
  * Command-line arguments: --model-path PATH Path to GGUF file (required) --cpu
- * Force computation on CPU --dtype FLOAT32|FLOAT16 Activation wire format
+ * Force CPU only --gpu-required Fail if CUDA is unavailable --dtype FLOAT32|FLOAT16 Activation wire format
  * (default: FLOAT16) --max-tokens N Max generated tokens (default: 200)
  * --temperature F Sampling temperature (default: 0.7) --local Use in-process
  * nodes instead of forking --nodes N Number of in-process nodes (default: 3)
@@ -111,8 +113,9 @@ public final class ConsoleMain {
 	private static boolean help = false;
 	private static ParallelismType pType = ParallelismType.PIPELINE;
 	private static String jfrDuration = null;
-	// ── GPU arguments ─────────────────────────────────────────────────────────
-	private static boolean useGpu = true; // use CPU
+	// ── Compute backend (CUDA vs CPU) ───────────────────────────────────────
+	private static ComputeBackendPreference backendPreference = ComputeBackendPreference.AUTO;
+	private static boolean backendPreferenceFromCli = false;
 	// ── LoRA arguments ────────────────────────────────────────────────────────
 	private static boolean loraMode = false;
 	private static String loraPath = null; // auto-derived if null
@@ -129,6 +132,15 @@ public final class ConsoleMain {
 		if (help) {
 			printHelp();
 			System.exit(0);
+		}
+
+		if (!backendPreferenceFromCli) {
+			String envGpu = System.getenv("JUNO_USE_GPU");
+			if (envGpu != null && !envGpu.isBlank())
+				backendPreference = ComputeBackendPolicy.parsePreference(envGpu);
+			else
+				backendPreference = ComputeBackendPolicy.parsePreference(System.getProperty("JUNO_USE_GPU",
+						ComputeBackendPreference.AUTO.toPropertyToken()));
 		}
 
 		if (modelPath == null) {
@@ -151,7 +163,13 @@ public final class ConsoleMain {
 				loraPath = deriveLoraPath(modelPath);
 		}
 
-		System.setProperty("JUNO_USE_GPU", String.valueOf(useGpu));
+		System.setProperty("JUNO_USE_GPU", backendPreference.toPropertyToken());
+		try {
+			ComputeBackendPolicy.validateRequireSatisfied(backendPreference);
+		} catch (IllegalStateException e) {
+			System.err.println("ERROR: " + e.getMessage());
+			System.exit(1);
+		}
 		System.setProperty("MODEL_PATH", modelPath);
 		System.setProperty("DTYPE", dtype.name());
 		System.setProperty("MAX_TOKENS", String.valueOf(maxTokens));
@@ -221,13 +239,19 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					nodeCount = parseInt(args[++i], 3);
 				break;
-			// ── GPU ──────────────────────────────────────────────────────────
+			// ── Compute backend ─────────────────────────────────────────────
 			case "--gpu":
-				useGpu = true;
+				backendPreference = ComputeBackendPreference.AUTO;
+				backendPreferenceFromCli = true;
 				break;
 			case "--cpu":
-				useGpu = false;
-				// ── LoRA ──────────────────────────────────────────────────────────
+				backendPreference = ComputeBackendPreference.DISABLE;
+				backendPreferenceFromCli = true;
+				break;
+			case "--gpu-required":
+				backendPreference = ComputeBackendPreference.REQUIRE;
+				backendPreferenceFromCli = true;
+				break;
 			case "--lora":
 				loraMode = true;
 				break;
@@ -284,8 +308,9 @@ public final class ConsoleMain {
 		System.out.println("  --model-path PATH          Path to GGUF model file");
 		System.out.println();
 		System.out.println("Inference options:");
-		System.out.println("  --gpu                      Use GPU (default, no need to set)");
-		System.out.println("  --cpu                      Force to use CPU");
+		System.out.println("  --gpu                      Use CUDA when available (default)");
+		System.out.println("  --cpu                      CPU only (never load CUDA for matmul)");
+		System.out.println("  --gpu-required             Exit if CUDA is not available");
 		System.out.println("  --pType pipeline|tensor    Parallelism type (default: pipeline)");
 		System.out.println("  --dtype FLOAT32|FLOAT16    Activation wire format (default: FLOAT16)");
 		System.out.println("  --max-tokens N             Max generated tokens (default: 200)");
@@ -818,7 +843,7 @@ public final class ConsoleMain {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 			if (gpuCtx != null) {
 				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context,
-						new CudaMatVec(gpuCtx)));
+						new CudaMatVec(gpuCtx), 1));
 			} else {
 				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context));
 			}
@@ -834,7 +859,7 @@ public final class ConsoleMain {
 
 	private static GpuContext prepareGpuContext() {
 		GpuContext gpuCtx = null;
-		if (useGpu && CudaAvailability.isAvailable())
+		if (ComputeBackendPolicy.useCudaMatmul(backendPreference))
 			gpuCtx = GpuContext.init(0);
 		else
 			return null;
