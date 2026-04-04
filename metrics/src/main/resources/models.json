@@ -2,7 +2,19 @@
   "models": [
     {
       "name": "TinyLlama-1.1B-Chat-v1.0.Q4_K_M",
-      "path": "../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
-    }
+      "path": "../models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
+    },
+	{
+	  "name": "TinyLlama-1.1B-Chat-v1.0.Q5_K_M",
+	  "path": "../models/TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile"
+	},
+	{
+	  "name": "phi-3.5-mini-instruct.Q4_K_M",
+	  "path": "../models/phi-3.5-mini-instruct.Q4_K_M.gguf"
+	}  ,
+  	{
+  	  "name": "Meta-Llama-3.2-1B-Instruct-Q8_0",
+  	  "path": "../models/Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile"
+  	}
   ]
 }

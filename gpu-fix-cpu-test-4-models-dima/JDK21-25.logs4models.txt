@@ -1,0 +1,414 @@
+==JDK25==
+robocop@robot:~/dev/juno$ ./juno local --model-path ../models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf --jfr 2m
+▶ Starting local in-process REPL  (dtype=FLOAT16  max_tokens=200  temperature=0.6  nodes=3  heap=4g  gpu=true  os=linux)
+
+⚠ JFR enabled — duration=2m  output=juno-TinyLlama-1.1B-Chat-v1.0.Q4_K_M-20260405-012006.jfr
+[0,495s][info][jfr,startup] Started recording 1. The result will be written to:
+[0,495s][info][jfr,startup] 
+[0,495s][info][jfr,startup] /home/robocop/dev/juno/juno-TinyLlama-1.1B-Chat-v1.0.Q4_K_M-20260405-012006.jfr
+  Juno interactive console  ·  model: TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
+
+░▀▀█░█░█
+░░░█░█░█
+░▀▀░░▀▀▀
+░█▀█░█▀█
+░█░█░█░█
+░▀░▀░▀▀▀
+
+  dtype=FLOAT16 · max_tokens=200 · temperature=0.60 · top_k=20 · top_p=0.95 · local nodes=3
+
+▶ Starting local in-process 3-node pipeline...
+Type your prompt and press Enter. Type 'exit' or Ctrl-C to quit.
+
+you> could you please write me a poem?
+bot> Absolutely! Here's a sample poem:
+
+In the stillness of dawn,
+I am awoken by the gentle rustle of leaves.
+The soft breeze carries the scent of blooming flowers,
+Whispers of nature's beauty and tranquility.
+
+A world of colors unfolds around me,
+From deep shades of red to pale pink,
+Each hue a masterpiece, a work of art,
+A reminder that life is fleeting but precious.
+
+Through the windowpane, I see the sun rise high,
+Emitting its golden light, warming my soul.
+I feel alive, in this moment, in this place,
+Where every day is filled with possibilities.
+
+So I let go of the past, embrace the present,
+And welcome the future, with open arms.
+For in each moment, there's a less
+     [200 tokens · 52759 ms · FLOAT16]
+
+you> exit
+
+bye.
+robocop@robot:~/dev/juno$ ./juno local --model-path ../models/TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile --jfr 2m
+▶ Starting local in-process REPL  (dtype=FLOAT16  max_tokens=200  temperature=0.6  nodes=3  heap=4g  gpu=true  os=linux)
+
+⚠ JFR enabled — duration=2m  output=juno-TinyLlama-1.1B-Chat-v1.0.Q5_K_M-20260405-012243.jfr
+[0,483s][info][jfr,startup] Started recording 1. The result will be written to:
+[0,483s][info][jfr,startup] 
+[0,483s][info][jfr,startup] /home/robocop/dev/juno/juno-TinyLlama-1.1B-Chat-v1.0.Q5_K_M-20260405-012243.jfr
+  Juno interactive console  ·  model: TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile
+
+░▀▀█░█░█
+░░░█░█░█
+░▀▀░░▀▀▀
+░█▀█░█▀█
+░█░█░█░█
+░▀░▀░▀▀▀
+
+  dtype=FLOAT16 · max_tokens=200 · temperature=0.60 · top_k=20 · top_p=0.95 · local nodes=3
+
+▶ Starting local in-process 3-node pipeline...
+Type your prompt and press Enter. Type 'exit' or Ctrl-C to quit.
+
+you> could you please write me a poem?
+bot> (prefilling 26 tokens…) 
+bot> Of course, I'd be happy to help! Here's a poem for you:
+
+In the quiet of night,
+The stars shine bright and clear.
+A world without endless darkness,
+Where every soul is free.
+
+The moonlight dances on the water,
+A serene symphony in motion.
+Nature's beauty, a sight so rare,
+That's why we must cherish it.
+
+Wildflowers bloom in fields of green,
+A tapestry of colors so fine.
+Their scent fills our senses with joy,
+A reminder that life is worth more.
+
+Birdsong echoes through the trees,
+A symphony that makes our hearts sing.
+The wind rustles through the leaves and boughs,
+A gentle lullaby that calms us all.
+
+The chirping of crickets in the grass,
+
+     [200 tokens · 58427 ms · FLOAT16]
+
+you> you> exit
+
+bye.
+robocop@robot:~/dev/juno$ ./juno local --model-path ../models/phi-3.5-mini-instruct.Q4_K_M.gguf --jfr 2m
+▶ Starting local in-process REPL  (dtype=FLOAT16  max_tokens=200  temperature=0.6  nodes=3  heap=4g  gpu=true  os=linux)
+
+⚠ JFR enabled — duration=2m  output=juno-phi-3.5-mini-instruct.Q4_K_M-20260405-012504.jfr
+[0,523s][info][jfr,startup] Started recording 1. The result will be written to:
+[0,523s][info][jfr,startup] 
+[0,523s][info][jfr,startup] /home/robocop/dev/juno/juno-phi-3.5-mini-instruct.Q4_K_M-20260405-012504.jfr
+  Juno interactive console  ·  model: phi-3.5-mini-instruct.Q4_K_M.gguf
+
+░▀▀█░█░█
+░░░█░█░█
+░▀▀░░▀▀▀
+░█▀█░█▀█
+░█░█░█░█
+░▀░▀░▀▀▀
+
+  dtype=FLOAT16 · max_tokens=200 · temperature=0.60 · top_k=20 · top_p=0.95 · local nodes=3
+
+▶ Starting local in-process 3-node pipeline...
+Type your prompt and press Enter. Type 'exit' or Ctrl-C to quit.
+
+you> could you please write me a poem?
+bot> (prefilling 18 tokens…) 
+bot> 
+
+
+Here is a simple poem about the beauty of nature's embrace with words, 
+a sonnet surety in verse:
+
+in style like this beautifully on that capture following poetry for an artwork  
+
+
+
+
+
+
+
+
+
+
+
+with heart within the love-of sun. I. Here where beneath under my, joy, just as If, sweet through–the rhance:
+b The
+
+The
+an amid
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ​ your to their i these b unne it take
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+textd yerise poet you poistry thee embans thy way text world by to shall 1 so tale bespo soon it so holds her they both sense— it dispthm seism its might we compose^C
+
+robocop@robot:~/dev/juno$ ./juno local --model-path ../models/Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile --jfr 2m
+▶ Starting local in-process REPL  (dtype=FLOAT16  max_tokens=200  temperature=0.6  nodes=3  heap=4g  gpu=true  os=linux)
+
+⚠ JFR enabled — duration=2m  output=juno-Meta-Llama-3.2-1B-Instruct-Q8_0-20260405-014356.jfr
+[0,532s][info][jfr,startup] Started recording 1. The result will be written to:
+[0,532s][info][jfr,startup] 
+[0,532s][info][jfr,startup] /home/robocop/dev/juno/juno-Meta-Llama-3.2-1B-Instruct-Q8_0-20260405-014356.jfr
+  Juno interactive console  ·  model: Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile
+
+░▀▀█░█░█
+░░░█░█░█
+░▀▀░░▀▀▀
+░█▀█░█▀█
+░█░█░█░█
+░▀░▀░▀▀▀
+
+  dtype=FLOAT16 · max_tokens=200 · temperature=0.60 · top_k=20 · top_p=0.95 · local nodes=3
+
+▶ Starting local in-process 3-node pipeline...
+Type your prompt and press Enter. Type 'exit' or Ctrl-C to quit.
+
+you> hello, could you write me a poem please?
+bot>  Ah, hello! I'd be delighted to write a poem just for you!
+
+Before I start, can you give me a sense of what kind of poem you're in the mood for? Do you have any specific themes, emotions, or ideas that you'd like me to explore?
+
+(And if you want something super short and sweet, I can definitely whip up a quick 8-line poem for you!)
+     [82 tokens · 19579 ms · FLOAT16]
+
+you> please do any
+bot>  I'd be happy to write a poem just for you!?!
+
+Here's a short and sweet one:
+
+Silent streams swirl silver shadows deep,
+A midnight sky with stars that softly creep.
+The world is hushed, in quiet sleep,
+As moonlight whispers secrets, soft and deep.
+
+In this peaceful scene, all worries fade,
+And in the stillness, love is made.
+
+How do you like it?
+     [83 tokens · 35531 ms · FLOAT16]
+
+you> exit
+
+bye.
+
+==JDK21==
+
+robocop@robot:~/dev/juno$ ./juno local --model-path ../models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf --jfr 2m
+▶ Starting local in-process REPL  (dtype=FLOAT16  max_tokens=200  temperature=0.6  nodes=3  heap=4g  gpu=true  os=linux)
+
+⚠ JFR enabled — duration=2m  output=juno-TinyLlama-1.1B-Chat-v1.0.Q4_K_M-20260405-013005.jfr
+[0,597s][info][jfr,startup] Started recording 1. The result will be written to:
+[0,597s][info][jfr,startup] 
+[0,597s][info][jfr,startup] /home/robocop/dev/juno/juno-TinyLlama-1.1B-Chat-v1.0.Q4_K_M-20260405-013005.jfr
+  Juno interactive console  ·  model: TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
+
+░▀▀█░█░█
+░░░█░█░█
+░▀▀░░▀▀▀
+░█▀█░█▀█
+░█░█░█░█
+░▀░▀░▀▀▀
+
+  dtype=FLOAT16 · max_tokens=200 · temperature=0.60 · top_k=20 · top_p=0.95 · local nodes=3
+
+▶ Starting local in-process 3-node pipeline...
+Type your prompt and press Enter. Type 'exit' or Ctrl-C to quit.
+
+you> hello, could you write me a poem please?
+bot> Sure, here's a poem for you:
+
+In the midst of life's wanderings,
+A moment of stillness is found.
+In the midst of chaos and noise,
+A silence that's both serene and bold.
+
+A pause in the rush of time,
+A moment to reflect on what we've done.
+A reminder that each step we take,
+Is a journey towards something greater.
+
+The world may move on, but our soul remains,
+A spark of hope within us all.
+For in this fleeting moment, we find peace,
+And our spirits lift high above the sands.
+
+So let us cherish every moment,
+As it brings us closer to our true home.
+For in this pause, we find our way,
+To a place where we can finally be free.
+     [184 tokens · 87307 ms · FLOAT16]
+
+you> exit
+
+bye.
+robocop@robot:~/dev/juno$ ./juno local --model-path ../models/TinyLlama-1.1B-Chat-v1.0.Q5 --jfr 2m
+✖ Model file not found: ../models/TinyLlama-1.1B-Chat-v1.0.Q5
+robocop@robot:~/dev/juno$ ./juno local --model-path ../models/TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile --jfr 2m
+▶ Starting local in-process REPL  (dtype=FLOAT16  max_tokens=200  temperature=0.6  nodes=3  heap=4g  gpu=true  os=linux)
+
+⚠ JFR enabled — duration=2m  output=juno-TinyLlama-1.1B-Chat-v1.0.Q5_K_M-20260405-013234.jfr
+[0,564s][info][jfr,startup] Started recording 1. The result will be written to:
+[0,564s][info][jfr,startup] 
+[0,564s][info][jfr,startup] /home/robocop/dev/juno/juno-TinyLlama-1.1B-Chat-v1.0.Q5_K_M-20260405-013234.jfr
+  Juno interactive console  ·  model: TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile
+
+░▀▀█░█░█
+░░░█░█░█
+░▀▀░░▀▀▀
+░█▀█░█▀█
+░█░█░█░█
+░▀░▀░▀▀▀
+
+  dtype=FLOAT16 · max_tokens=200 · temperature=0.60 · top_k=20 · top_p=0.95 · local nodes=3
+
+▶ Starting local in-process 3-node pipeline...
+Type your prompt and press Enter. Type 'exit' or Ctrl-C to quit.
+
+you> hello, could you write me a poem please?
+bot> Certainly! Here's a poem for you:
+
+In the morning, the air is crisp and clean
+With each breath, I feel renewed and ready to face the day ahead.
+The sun's warmth on my skin feels like a hug from above
+As it illuminates the world around me with its golden light.
+
+In the afternoon, the sky is painted in shades of blue and green
+A canvas for my imagination to paint its vivid masterpiece.
+I am free to roam and explore, feeling alive and invigorated
+As I breathe in the freshness of nature's beauty.
+
+At nightfall, the stars twinkle like diamonds in the heavens above
+And I am reminded of the vastness and mystery of the universe.
+My mind unfolds like a kaleidoscope, exploring new dimensions
+Of love, loss, hope, and
+     [200 tokens · 82888 ms · FLOAT16]
+
+you> exit
+
+bye.
+robocop@robot:~/dev/juno$ ./juno local --model-path ../models/phi-3.5-mini-instruct.Q4_K_M.gguf --jfr 2m
+▶ Starting local in-process REPL  (dtype=FLOAT16  max_tokens=200  temperature=0.6  nodes=3  heap=4g  gpu=true  os=linux)
+
+⚠ JFR enabled — duration=2m  output=juno-phi-3.5-mini-instruct.Q4_K_M-20260405-013504.jfr
+[0,547s][info][jfr,startup] Started recording 1. The result will be written to:
+[0,547s][info][jfr,startup] 
+[0,547s][info][jfr,startup] /home/robocop/dev/juno/juno-phi-3.5-mini-instruct.Q4_K_M-20260405-013504.jfr
+  Juno interactive console  ·  model: phi-3.5-mini-instruct.Q4_K_M.gguf
+
+░▀▀█░█░█
+░░░█░█░█
+░▀▀░░▀▀▀
+░█▀█░█▀█
+░█░█░█░█
+░▀░▀░▀▀▀
+
+  dtype=FLOAT16 · max_tokens=200 · temperature=0.60 · top_k=20 · top_p=0.95 · local nodes=3
+
+▶ Starting local in-process 3-node pipeline...
+Type your prompt and press Enter. Type 'exit' or Ctrl-C to quit.
+
+you> hello, could you write me a poem please?
+bot> (prefilling 20 tokens…) 
+Here's a short poem about the joy of nature, in this delightfulness and hereinspoken for me to write an AI am I will crafted with words- �big as follows below on following these heart:  
+about myheartlike beauty that insperwith sorrowing within under hope beneath amidmyd imagine.followthroughofmhereboverbebesunder,
+a
+
+thebelowwhasantobr
+
+
+
+
+
+
+
+
+
+
+wembence throughthis::craftled:thesnefromstudecyr12~unth our verse mightlysotryily,ast misp your lines midst uponour life charm you curtextedly byyou whon thy jo task hearts it they shall ye to be we one you b if at soon em it oided they both journeywords likerelysoftly dnposebyndned the embri somight cryhomdoeartid
+     [200 tokens · 286596 ms · FLOAT16]
+
+you> exit
+
+bye.
+robocop@robot:~/dev/juno$ ./juno local --model-path ../models/Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile --jfr 2m
+▶ Starting local in-process REPL  (dtype=FLOAT16  max_tokens=200  temperature=0.6  nodes=3  heap=4g  gpu=true  os=linux)
+
+⚠ JFR enabled — duration=2m  output=juno-Meta-Llama-3.2-1B-Instruct-Q8_0-20260405-014024.jfr
+[0,626s][info][jfr,startup] Started recording 1. The result will be written to:
+[0,626s][info][jfr,startup] 
+[0,626s][info][jfr,startup] /home/robocop/dev/juno/juno-Meta-Llama-3.2-1B-Instruct-Q8_0-20260405-014024.jfr
+  Juno interactive console  ·  model: Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile
+
+░▀▀█░█░█
+░░░█░█░█
+░▀▀░░▀▀▀
+░█▀█░█▀█
+░█░█░█░█
+░▀░▀░▀▀▀
+
+  dtype=FLOAT16 · max_tokens=200 · temperature=0.60 · top_k=20 · top_p=0.95 · local nodes=3
+
+▶ Starting local in-process 3-node pipeline...
+Type your prompt and press Enter. Type 'exit' or Ctrl-C to quit.
+
+you> hello, could you write me a poem please?
+bot>  Ah, hello! Of course, I'd be happy to write a poem for you! Here's a little something:
+
+In twilight's hush, where shadows play
+A midnight breeze whispers secrets away
+The stars above, like diamonds bright
+Twinkle and sparkle with all their might
+
+The world is quiet, still as stone
+As moonlight seeps into its throne
+The trees stand guard, with branches high
+Their leaves rustling softly in the sigh
+
+In this still moment, time stands still
+As nature's beauty begins to fill
+The heart beats slow, with wonder true
+As magic whispers, "I'm here for you"
+
+How do you like it? Would you like me to make any changes or try a different style of poem?
+     [153 tokens · 38377 ms · FLOAT16]
+
+you> exit     
+
+bye
