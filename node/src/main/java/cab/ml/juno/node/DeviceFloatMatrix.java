@@ -24,7 +24,7 @@ import org.bytedeco.cuda.global.cudart;
  * Row-major weight matrix resident on the GPU (single contiguous allocation).
  *
  * Created via {@link #upload}; released with {@link #close}. Used with
- * {@link CublasMatVec#sgemv(DeviceFloatMatrix, float[])} so each matmul avoids
+ * {@link CudaMatVec#sgemv(DeviceFloatMatrix, float[])} so each matmul avoids
  * re-uploading {@code A}.
  *   
  * @author Yevhen Soldatov

@@ -21,6 +21,7 @@
 		<module>health</module>
 		<module>player</module>
 		<module>integration</module>
+		<module>metrics</module>
 	</modules>
 	<properties>
 		<!-- Java -->
@@ -269,21 +270,11 @@
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-compiler-plugin</artifactId>
 					<version>${maven-compiler.version}</version>
-					<configuration>
-						<release>${maven.compiler.release}</release>
-						<compilerArgs>
-							<arg>--enable-preview</arg>
-						</compilerArgs>
-					</configuration>
 				</plugin>
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-surefire-plugin</artifactId>
 					<version>${maven-surefire.version}</version>
-					<configuration>
-						<argLine>--enable-preview
-							--enable-native-access=ALL-UNNAMED</argLine>
-					</configuration>
 				</plugin>
 				<!-- Protobuf / gRPC code generation -->
 				<plugin>

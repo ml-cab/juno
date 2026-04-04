@@ -94,7 +94,7 @@ public final class ModelRegistry {
 	 * confirm shard readiness. No-op if the model is not registered.
 	 */
 	public void markLoaded(String modelId) {
-		models.computeIfPresent(modelId, (_, m) -> m.withStatus(ModelStatus.LOADED));
+		models.computeIfPresent(modelId, (id, m) -> m.withStatus(ModelStatus.LOADED));
 	}
 
 	/**
@@ -104,7 +104,7 @@ public final class ModelRegistry {
 	 * @param reason human-readable reason for logging
 	 */
 	public void markError(String modelId, String reason) {
-		models.computeIfPresent(modelId, (_, m) -> m.withStatus(ModelStatus.ERROR));
+		models.computeIfPresent(modelId, (id, m) -> m.withStatus(ModelStatus.ERROR));
 		if (models.containsKey(modelId)) {
 			log.warning(String.format("Model '%s' entered ERROR state: %s", modelId, reason));
 		}

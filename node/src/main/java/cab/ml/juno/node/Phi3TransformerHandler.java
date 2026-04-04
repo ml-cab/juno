@@ -106,6 +106,9 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	private static final int MAX_SEQ_LEN = 2048;
 	private static final int INITIAL_SEQ_CAPACITY = 64; // grows on demand
 
+	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
+	private volatile NodeKVCacheAdapter kvAdapter;
+
 	// ── Factory ───────────────────────────────────────────────────────────────
 
 	/**
@@ -125,6 +128,22 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			log.info("Model: " + cfg);
 			return new Phi3TransformerHandler(r, cfg, context);
 		}
+	}
+
+	/**
+	 * Load a Phi-3 shard with an explicit compute backend.
+	 *
+	 * <p>Phi3TransformerHandler uses lazy block-wise dequantisation via static
+	 * helpers in {@link LlamaTransformerHandler} and does not yet delegate to a
+	 * pluggable {@link MatVec}. The {@code backend} parameter is accepted
+	 * for API symmetry with {@link LlamaTransformerHandler#load(Path, ShardContext, MatVec)}
+	 * and logged; it is otherwise unused.
+	 */
+	public static Phi3TransformerHandler load(Path modelPath, ShardContext context,
+			@SuppressWarnings("unused") MatVec backend) throws IOException {
+		log.info("Phi3TransformerHandler: backend parameter accepted but unused ("
+				+ backend.getClass().getSimpleName() + "); Phi-3 always uses CPU static matVec.");
+		return load(modelPath, context);
 	}
 
 	private Phi3TransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx) throws IOException {
@@ -206,15 +225,28 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	public ForwardResult forward(ForwardRequest request, ShardContext context) {
 		long start = System.nanoTime();
 
+		ForwardPassEvent evt = new ForwardPassEvent();
+		evt.begin();
+
 		float[] x = getInitialActivation(request);
 		x = runLayers(x, request.requestId(), request.startPosition());
 
+		ForwardResult result;
 		if (hasOutputProj) {
 			float[] logits = outputProjection(x);
-			return ForwardResult.logits(request.requestId(), logits, System.nanoTime() - start);
+			result = ForwardResult.logits(request.requestId(), logits, System.nanoTime() - start);
 		} else {
-			return ForwardResult.activations(request.requestId(), x, System.nanoTime() - start);
+			result = ForwardResult.activations(request.requestId(), x, System.nanoTime() - start);
 		}
+
+		evt.handlerType = "phi3";
+		evt.requestId = request.requestId();
+		evt.startPosition = request.startPosition();
+		evt.layerCount = endLayer - startLayer;
+		evt.hasOutputProjection = hasOutputProj;
+		evt.commit();
+
+		return result;
 	}
 
 	@Override
@@ -249,11 +281,28 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 		// Lazy initial allocation — 64 slots, grows on demand to avoid OOM.
 		// phi-3.5-mini: eager 2048 slots = 554 MB per request; lazy = 17 MB initially.
-		kvCacheK.computeIfAbsent(requestId, _ -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-		kvCacheV.computeIfAbsent(requestId, _ -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		boolean isNew = !kvCacheK.containsKey(requestId);
+		kvCacheK.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
 
 		float[][] kCache = kvCacheK.get(requestId);
 		float[][] vCache = kvCacheV.get(requestId);
+
+		// Restore from KVCacheManager when local entry was cleared (evicted under
+		// heap pressure) but the manager still holds the block.
+		NodeKVCacheAdapter a = kvAdapter;
+		if (isNew && pos > 0 && a != null) {
+			for (int li = 0; li < L; li++) {
+				int absLayer = startLayer + li;
+				final int i = li;
+				a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
+					ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
+					ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
+					System.arraycopy(pair.k(), 0, kCache[i], 0, pair.k().length);
+					System.arraycopy(pair.v(), 0, vCache[i], 0, pair.v().length);
+				});
+			}
+		}
 
 		// Grow before writing at pos — transformerLayer writes kCacheLayer[pos * kvDim]
 		ensureKvCapacity(kCache, pos, kvDim);
@@ -261,7 +310,41 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 		for (int li = 0; li < L; li++)
 			x = transformerLayer(x, li, pos, kCache[li], vCache[li]);
+
+		// Write-through: flush updated KV into the manager (GPU→CPU tiers).
+		if (a != null) {
+			int seqLen = pos + 1;
+			for (int li = 0; li < L; li++) {
+				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen, kvDim);
+			}
+		}
+
 		return x;
+	}
+
+	/**
+	 * Wire the {@link NodeKVCacheAdapter} that bridges this handler's in-process
+	 * KV arrays with the cluster-level {@link cab.ml.juno.kvcache.KVCacheManager}.
+	 *
+	 * @param adapter the adapter to use, or {@code null} to disable managed eviction
+	 */
+	public void setKvAdapter(NodeKVCacheAdapter adapter) {
+		this.kvAdapter = adapter;
+	}
+
+	/**
+	 * Evict all KV state for the given request from the local in-process map
+	 * and from the {@link NodeKVCacheAdapter}'s GPU/CPU tiers (if wired).
+	 *
+	 * @param requestId the request or session identifier
+	 */
+	public void evict(String requestId) {
+		kvCacheK.remove(requestId);
+		kvCacheV.remove(requestId);
+		NodeKVCacheAdapter a = kvAdapter;
+		if (a != null) {
+			a.evict(requestId);
+		}
 	}
 
 	/**

@@ -84,6 +84,7 @@ public final class AnsiSupport {
 		}
 	}
 
+	@SuppressWarnings("preview")
 	private static boolean tryEnableVtpWith(String dll, int stdHandleId) {
 		try {
 			Linker linker = Linker.nativeLinker();

@@ -58,7 +58,17 @@ public final class ChatTemplateFormatter {
 	public String format(List<ChatMessage> messages) {
 		if (messages == null || messages.isEmpty())
 			throw new IllegalArgumentException("messages must not be null or empty");
-		return template.format(messages);
+		TemplateFormatEvent evt = new TemplateFormatEvent();
+		evt.begin();
+		try {
+			String out = template.format(messages);
+			evt.modelType = template.modelType();
+			evt.messageCount = messages.size();
+			evt.outputLength = out.length();
+			return out;
+		} finally {
+			evt.commit();
+		}
 	}
 
 	public String modelType() {

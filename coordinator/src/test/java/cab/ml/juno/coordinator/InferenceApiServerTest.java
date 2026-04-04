@@ -27,7 +27,7 @@ import cab.ml.juno.registry.QuantizationType;
 import cab.ml.juno.registry.ShardMap;
 import cab.ml.juno.registry.ShardPlanner;
 import cab.ml.juno.sampler.Sampler;
-import cab.ml.juno.tokenizer.StubTokenizer;
+import cab.ml.juno.tokenizer.SimpleTokenizer;
 
 class InferenceApiServerTest {
 
@@ -58,7 +58,7 @@ class InferenceApiServerTest {
 
 		var kvCache = new KVCacheManager(new GpuKVCache(128L * 1024 * 1024), new CpuKVCache(256));
 
-		var loop = new GenerationLoop(new StubTokenizer(), Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), pipeline, kvCache);
 		var scheduler = new RequestScheduler(64, loop);
 
 		// Build a registry with tinyllama already loaded

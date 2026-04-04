@@ -17,7 +17,7 @@ import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
-import cab.ml.juno.tokenizer.StubTokenizer;
+import cab.ml.juno.tokenizer.SimpleTokenizer;
 
 class RequestSchedulerTest {
 
@@ -25,7 +25,7 @@ class RequestSchedulerTest {
 
 	@BeforeEach
 	void setUp() {
-		var loop = new GenerationLoop(new StubTokenizer(), Sampler.create(), new StubInferencePipeline(),
+		var loop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), new StubInferencePipeline(),
 				new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000)));
 		scheduler = new RequestScheduler(10, loop);
 	}
@@ -45,7 +45,7 @@ class RequestSchedulerTest {
 	@Test
 	void async_submit_calls_consumer() throws InterruptedException {
 		CountDownLatch latch = new CountDownLatch(1);
-		TokenConsumer consumer = (_, _, pos) -> {
+		TokenConsumer consumer = (piece, tokenId, pos) -> {
 			if (pos == 0)
 				latch.countDown();
 		};
@@ -58,7 +58,7 @@ class RequestSchedulerTest {
 	@Test
 	void throws_queue_full_exception_when_saturated() {
 		// Fill a tiny scheduler
-		var tinyLoop = new GenerationLoop(new StubTokenizer(), Sampler.create(),
+		var tinyLoop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(),
 				// slow pipeline — blocks long enough to fill queue
 				new InferencePipeline() {
 					@Override

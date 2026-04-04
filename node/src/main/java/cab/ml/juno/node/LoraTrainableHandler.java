@@ -179,13 +179,29 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	@Override
 	public ForwardResult forward(ForwardRequest request, ShardContext context) {
 		long t0 = System.nanoTime();
+
+		ForwardPassEvent evt = new ForwardPassEvent();
+		evt.begin();
+
 		float[] x = getInitialActivation(request);
 		x = runLayers(x, request.requestId(), request.startPosition());
+
+		ForwardResult result;
 		if (hasOutputProj) {
 			float[] logits = outputProjection(x);
-			return ForwardResult.logits(request.requestId(), logits, System.nanoTime() - t0);
+			result = ForwardResult.logits(request.requestId(), logits, System.nanoTime() - t0);
+		} else {
+			result = ForwardResult.activations(request.requestId(), x, System.nanoTime() - t0);
 		}
-		return ForwardResult.activations(request.requestId(), x, System.nanoTime() - t0);
+
+		evt.handlerType = "lora";
+		evt.requestId = request.requestId();
+		evt.startPosition = request.startPosition();
+		evt.layerCount = endLayer - startLayer;
+		evt.hasOutputProjection = hasOutputProj;
+		evt.commit();
+
+		return result;
 	}
 
 	@Override
@@ -311,8 +327,8 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	private float[] runLayers(float[] x, String requestId, int pos) {
 		int L = endLayer - startLayer;
 		int kvDim = cfg.kvDim();
-		kvCacheK.computeIfAbsent(requestId, _ -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-		kvCacheV.computeIfAbsent(requestId, _ -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		kvCacheK.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
 		float[][] kC = kvCacheK.get(requestId);
 		float[][] vC = kvCacheV.get(requestId);
 		ensureKvCapacity(kC, pos, kvDim);

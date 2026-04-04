@@ -25,14 +25,14 @@ import org.bytedeco.cuda.global.cudart;
  * cuBLAS context: device selection and handle lifecycle.
  *
  * One GpuContext per node JVM. Created once at startup, destroyed at shutdown.
- * The cublasContext it owns is shared across all CublasMatVec calls on that node
+ * The cublasContext it owns is shared across all CudaMatVecBackend calls on that node
  * — cuBLAS handles are thread-safe for concurrent kernel launches.
  *
  * Uses org.bytedeco (JavaCPP) cuda/cublas.
  *
  * Usage:
  *   try (GpuContext ctx = GpuContext.init(0)) {
- *       GpuForwardPassHandler handler = GpuForwardPassHandler.loadGpuResident(path, shard, ctx);
+ *       ForwardPassHandler handler = ForwardPassHandlerLoader.load(path, shard, new CudaMatVecBackend(ctx));
  *       ...
  *       handler.releaseGpuResources();
  *   }

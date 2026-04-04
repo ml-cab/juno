@@ -200,6 +200,12 @@ public final class GenerationLoop {
 						texts[i].append(piece);
 						generated[i].add(nextToken);
 						allTokens[i] = appendToken(allTokens[i], nextToken);
+						// Multi-token EOS suffix detection (mirrors generate() path)
+						if (endsWithEosMarker(texts[i])) {
+							stripEosMarkerSuffix(texts[i]);
+							reasons[i] = GenerationResult.StopReason.EOS_TOKEN;
+							active[i] = false;
+						}
 					}
 				}
 			}
@@ -343,6 +349,18 @@ public final class GenerationLoop {
 			fullText.append(piece);
 			generatedIds.add(nextToken);
 
+			// Step 7b: Multi-token EOS suffix detection.
+			// Some models (e.g. TinyLlama/Zephyr) generate EOS markers like "</s>"
+			// as two or three separate character-level tokens rather than the special
+			// EOS token ID. isEosMarker() above only catches single-piece matches.
+			// This check detects the completed pattern in the accumulated text and
+			// stops generation cleanly, stripping the EOS suffix from the result.
+			if (endsWithEosMarker(fullText)) {
+				stripEosMarkerSuffix(fullText);
+				stopReason = GenerationResult.StopReason.EOS_TOKEN;
+				break;
+			}
+
 			// Step 8: Extend token array for next iteration
 			allTokens = appendToken(allTokens, nextToken);
 		}
@@ -358,7 +376,7 @@ public final class GenerationLoop {
 			// Caching allTokens would be wrong: generated token IDs do not appear in
 			// the next turn's formatted prompt (the assistant text is re-encoded from
 			// its string representation at turn N+1, which may produce different IDs due
-			// to StubTokenizer round-trip behaviour and special-token boundaries). The
+			// to SimpleTokenizer round-trip behaviour and special-token boundaries). The
 			// trie leaf would be unreachable because the paths diverge before reaching
 			// it, and findLongestPrefix would return no hit.
 			kvCache.cachePrefix(promptIds, promptIds.length, kvKey);
@@ -404,11 +422,49 @@ public final class GenerationLoop {
 	 * Marker set: "</s>" (LLaMA/Mistral/TinyLlama), "<|endoftext|>" (GPT/Phi),
 	 * "<|eot_id|>" (LLaMA 3), "<end_of_turn>" (Gemma).
 	 */
+	/** EOS marker strings — checked both per-piece and as accumulated suffixes. */
+	private static final String[] EOS_MARKER_STRINGS =
+			{ "</s>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>" };
+
 	private static boolean isEosMarker(String piece) {
 		return switch (piece) {
 		case "</s>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>" -> true;
 		default -> false;
 		};
+	}
+
+	/**
+	 * Returns true if the accumulated text ends with any EOS marker string.
+	 *
+	 * <p>Some models (e.g. TinyLlama/Zephyr) generate EOS markers as multiple
+	 * character-level tokens — e.g. {@code "</"}, {@code "s"}, {@code ">"} — rather
+	 * than as the special EOS token ID. {@link #isEosMarker} catches the
+	 * single-token case; this method catches the multi-token case by checking the
+	 * tail of the accumulated text. Only the last {@value #EOS_SUFFIX_CHECK_LEN}
+	 * characters are examined to keep the per-token cost O(1).
+	 */
+	private static boolean endsWithEosMarker(StringBuilder sb) {
+		int len = sb.length();
+		if (len == 0) return false;
+		String tail = sb.substring(Math.max(0, len - EOS_SUFFIX_CHECK_LEN));
+		for (String marker : EOS_MARKER_STRINGS) {
+			if (tail.endsWith(marker)) return true;
+		}
+		return false;
+	}
+
+	/** Tail length examined by {@link #endsWithEosMarker} (> longest marker = 14 chars). */
+	private static final int EOS_SUFFIX_CHECK_LEN = 20;
+
+	/** Removes any trailing EOS marker suffix from {@code sb} in-place. */
+	private static void stripEosMarkerSuffix(StringBuilder sb) {
+		for (String marker : EOS_MARKER_STRINGS) {
+			int mLen = marker.length();
+			if (sb.length() >= mLen && sb.substring(sb.length() - mLen).equals(marker)) {
+				sb.setLength(sb.length() - mLen);
+				return;
+			}
+		}
 	}
 
 	private int[] appendToken(int[] tokens, int newToken) {

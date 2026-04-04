@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # juno — runtime launcher  (no Maven required)
 # Uses pre-built shade jars from target/.  Build first with:
-#   mvn clean package -DskipTests   or   ./hyper.sh build
+#   mvn clean package -DskipTests
 #
 # Requires: JDK 21+
 # Runs on:  Linux · macOS · Windows (Git Bash / WSL)
@@ -117,7 +117,7 @@ check_java_version() {
 require_jar() {
   local jar="$1" label="$2"
   if [[ ! -f "$jar" ]]; then
-    err "$label jar not found: $jar\n  Build first: mvn clean package -DskipTests\n           or: ./hyper.sh build"
+    err "$label jar not found: $jar\n  Build first: mvn clean package -DskipTests\n"
   fi
 }
 
@@ -126,6 +126,7 @@ require_jar() {
 JVM_BASE=(
   --enable-preview
   --enable-native-access=ALL-UNNAMED
+  --add-modules jdk.incubator.vector
   --add-opens java.base/java.lang=ALL-UNNAMED
   --add-opens java.base/java.nio=ALL-UNNAMED
   -XX:+UseG1GC
@@ -252,7 +253,10 @@ cmd_cluster() {
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
-    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    local model_name model_stem
+    model_name="$(basename "$model")"
+    model_stem="${model_name%.*}"
+    local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
     jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
     warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
   fi
@@ -378,7 +382,10 @@ cmd_local() {
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
-    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    local model_name model_stem
+    model_name="$(basename "$model")"
+    model_stem="${model_name%.*}"
+    local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
     jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
     warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
   fi
@@ -547,7 +554,10 @@ cmd_lora() {
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
-    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    local model_name model_stem
+    model_name="$(basename "$model")"
+    model_stem="${model_name%.*}"
+    local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
     jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
     warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
     warn "After exit: open ${jfr_file} in JDK Mission Control → Event Browser → juno.LoraTrainStep"
@@ -646,7 +656,10 @@ cmd_test() {
 
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
-    local jfr_file="juno-$(date +%Y%m%d-%H%M%S).jfr"
+    local model_name model_stem
+    model_name="$(basename "$model")"
+    model_stem="${model_name%.*}"
+    local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
     jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
     warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
   fi
@@ -672,14 +685,12 @@ usage() {
   echo ""
   echo "  Build jars first (one time):"
   echo "    mvn clean package -DskipTests"
-  echo "    ./hyper.sh build"
-  echo ""
+``  echo ""
   echo -e "  ${GREEN}$0${NC} --model-path PATH           3-node cluster + REPL  ${DIM}(default, forked JVM nodes)${NC}"
   echo    "  $0 cluster --help                  all cluster flags  (cluster keyword still works)"
   echo ""
   echo -e "  ${GREEN}$0 local${NC} --model-path PATH      in-process REPL  (single JVM, fast startup)"
   echo    "  $0 local --help                    all local flags"
-  echo ""
   echo -e "  ${GREEN}$0 lora${NC} --model-path PATH       LoRA fine-tuning REPL  (single JVM, adapter separate)"
   echo    "  $0 lora --help                     all lora flags + REPL command reference"
   echo ""

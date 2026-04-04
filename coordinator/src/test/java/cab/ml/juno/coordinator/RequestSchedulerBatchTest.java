@@ -19,7 +19,7 @@ import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
-import cab.ml.juno.tokenizer.StubTokenizer;
+import cab.ml.juno.tokenizer.SimpleTokenizer;
 
 class RequestSchedulerBatchTest {
 
@@ -28,7 +28,7 @@ class RequestSchedulerBatchTest {
 
 	@BeforeEach
 	void setUp() {
-		loop = new GenerationLoop(new StubTokenizer(), Sampler.create(), new StubInferencePipeline(),
+		loop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), new StubInferencePipeline(),
 				new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000)));
 	}
 
@@ -127,7 +127,7 @@ class RequestSchedulerBatchTest {
 			}
 		};
 
-		GenerationLoop batchLoop = new GenerationLoop(new StubTokenizer(), Sampler.create(), countingPipeline,
+		GenerationLoop batchLoop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), countingPipeline,
 				new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000)));
 
 		// Small window so requests group together; large enough batch size
@@ -156,7 +156,7 @@ class RequestSchedulerBatchTest {
 		scheduler = new RequestScheduler(10, loop, BatchConfig.of(4, 50));
 
 		List<String> pieces = new java.util.concurrent.CopyOnWriteArrayList<>();
-		TokenConsumer consumer = (piece, _, _) -> pieces.add(piece);
+		TokenConsumer consumer = (piece, id, step) -> pieces.add(piece);
 
 		CompletableFuture<GenerationResult> future = scheduler.submit(req("stream"), consumer);
 		future.get(10, TimeUnit.SECONDS);
@@ -192,7 +192,7 @@ class RequestSchedulerBatchTest {
 				return 1000;
 			}
 		};
-		GenerationLoop slowLoop = new GenerationLoop(new StubTokenizer(), Sampler.create(), slowPipeline,
+		GenerationLoop slowLoop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), slowPipeline,
 				new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000)));
 
 		// Large window so requests queue up before dispatch

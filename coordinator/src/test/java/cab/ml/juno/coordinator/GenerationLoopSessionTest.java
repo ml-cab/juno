@@ -32,7 +32,7 @@ import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
-import cab.ml.juno.tokenizer.StubTokenizer;
+import cab.ml.juno.tokenizer.SimpleTokenizer;
 
 /**
  * Tests for session-aware KV cache reuse in GenerationLoop.
@@ -44,13 +44,13 @@ import cab.ml.juno.tokenizer.StubTokenizer;
  */
 class GenerationLoopSessionTest {
 
-	private StubTokenizer tokenizer;
+	private SimpleTokenizer tokenizer;
 	private Sampler sampler;
 	private KVCacheManager kvCache;
 
 	@BeforeEach
 	void setUp() {
-		tokenizer = new StubTokenizer();
+		tokenizer = new SimpleTokenizer();
 		sampler = Sampler.create();
 		kvCache = new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000));
 	}

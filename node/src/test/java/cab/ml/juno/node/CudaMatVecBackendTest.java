@@ -11,14 +11,14 @@ import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * CublasMatVec tests — requires CUDA and an Nvidia GPU (org.bytedeco cuda).
+ * CudaMatVecBackend tests — requires CUDA and an Nvidia GPU (org.bytedeco cuda).
  *
- * Inherits the full GpuMatVecContractTest suite. Every contract test that
- * passes on CpuMatVec must also pass on CublasMatVec — numerically identical
+ * Inherits the full MatVecBackendContractTest suite. Every contract test that
+ * passes on CpuMatVecBackend must also pass on CudaMatVecBackend — numerically identical
  * output is the correctness requirement.
  *
  * Additionally tests:
- *   - cublasSgemv output matches CpuForwardPassHandler.matVec reference
+ *   - cublasSgemv output matches LlamaTransformerHandler.matVec reference
  *     (cross-impl numerical equivalence — the primary regression anchor)
  *   - Large matrix throughput is measurably faster than CPU (sanity check)
  *
@@ -32,18 +32,18 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  *   mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
  */
 @Tag("gpu")
-@DisplayName("CublasMatVec — cuBLAS cublasSgemv correctness (requires CUDA)")
-class CublasMatVecTest extends GpuMatVecContractTest {
+@DisplayName("CudaMatVecBackend — cuBLAS cublasSgemv correctness (requires CUDA)")
+class CudaMatVecBackendTest extends MatVecBackendContractTest {
 
     private static GpuContext ctx;
-    private static CublasMatVec cublasImpl;
+    private static CudaMatVec cudaImpl;
 
     @BeforeAll
     static void initCuda() {
         assumeTrue(CudaAvailability.isAvailable(),
-            "Skipping CublasMatVecTest — no CUDA device available");
+            "Skipping CudaMatVecBackendTest — no CUDA device available");
         ctx = GpuContext.init(0);
-        cublasImpl = new CublasMatVec(ctx);
+        cudaImpl = new CudaMatVec(ctx);
     }
 
     @AfterAll
@@ -51,13 +51,13 @@ class CublasMatVecTest extends GpuMatVecContractTest {
         if (ctx != null) ctx.close();
     }
 
-    /** Provide CublasMatVec to the inherited contract tests. */
+    /** Provide CudaMatVecBackend to the inherited contract tests. */
     @Override
-    protected GpuMatVec impl() {
-        return cublasImpl;
+    protected MatVec impl() {
+        return cudaImpl;
     }
 
-    // ── CublasMatVec-specific tests ───────────────────────────────────────────
+    // ── CudaMatVecBackend-specific tests ───────────────────────────────────────────
 
     @Test
     @DisplayName("sgemv(DeviceFloatMatrix, x) matches host sgemv — 2048×2048")
@@ -67,8 +67,8 @@ class CublasMatVecTest extends GpuMatVecContractTest {
         float[] x = randomVector(cols, 401);
         DeviceFloatMatrix d = DeviceFloatMatrix.upload(ctx, A, rows, cols);
         try {
-            float[] hostPath = cublasImpl.sgemv(A, x, rows, cols);
-            float[] devPath = cublasImpl.sgemv(d, x);
+            float[] hostPath = cudaImpl.sgemv(A, x, rows, cols);
+            float[] devPath = cudaImpl.sgemv(d, x);
             assertThat(devPath).hasSize(rows);
             for (int i = 0; i < rows; i++)
                 assertThat(devPath[i]).as("y[%d]", i).isCloseTo(hostPath[i], within(DELTA));
@@ -78,14 +78,14 @@ class CublasMatVecTest extends GpuMatVecContractTest {
     }
 
     @Test
-    @DisplayName("cublasSgemv matches CpuForwardPassHandler.matVec reference — 2048×2048")
+    @DisplayName("cublasSgemv matches LlamaTransformerHandler.matVec reference — 2048×2048")
     void cublas_matches_cpu_reference_hidden_dim() {
         int rows = 2048, cols = 2048;
         float[] A = randomMatrix(rows, cols, 100);
         float[] x = randomVector(cols, 101);
 
-        float[] cpuResult    = CpuForwardPassHandler.matVec(A, x, rows, cols);
-        float[] cublasResult = cublasImpl.sgemv(A, x, rows, cols);
+        float[] cpuResult    = LlamaTransformerHandler.matVec(A, x, rows, cols);
+        float[] cublasResult = cudaImpl.sgemv(A, x, rows, cols);
 
         assertThat(cublasResult).hasSize(rows);
         for (int i = 0; i < rows; i++)
@@ -101,8 +101,8 @@ class CublasMatVecTest extends GpuMatVecContractTest {
         float[] A = randomMatrix(rows, cols, 102);
         float[] x = randomVector(cols, 103);
 
-        float[] cpuResult    = CpuForwardPassHandler.matVec(A, x, rows, cols);
-        float[] cublasResult = cublasImpl.sgemv(A, x, rows, cols);
+        float[] cpuResult    = LlamaTransformerHandler.matVec(A, x, rows, cols);
+        float[] cublasResult = cudaImpl.sgemv(A, x, rows, cols);
 
         for (int i = 0; i < rows; i++)
             assertThat(cublasResult[i])
@@ -118,17 +118,17 @@ class CublasMatVecTest extends GpuMatVecContractTest {
         float[] x = randomVector(cols, 201);
 
         // Warm up both
-        CpuForwardPassHandler.matVec(A, x, rows, cols);
-        cublasImpl.sgemv(A, x, rows, cols);
+        LlamaTransformerHandler.matVec(A, x, rows, cols);
+        cudaImpl.sgemv(A, x, rows, cols);
 
         // CPU timing
         long cpuStart = System.nanoTime();
-        for (int i = 0; i < 5; i++) CpuForwardPassHandler.matVec(A, x, rows, cols);
+        for (int i = 0; i < 5; i++) LlamaTransformerHandler.matVec(A, x, rows, cols);
         long cpuMs = (System.nanoTime() - cpuStart) / 1_000_000;
 
         // GPU timing
         long gpuStart = System.nanoTime();
-        for (int i = 0; i < 5; i++) cublasImpl.sgemv(A, x, rows, cols);
+        for (int i = 0; i < 5; i++) cudaImpl.sgemv(A, x, rows, cols);
         long gpuMs = (System.nanoTime() - gpuStart) / 1_000_000;
 
         System.out.printf("32000×2048 sgemv — CPU: %dms  GPU: %dms  (5 runs each)%n",
@@ -152,7 +152,7 @@ class CublasMatVecTest extends GpuMatVecContractTest {
         for (int t = 0; t < threads; t++) {
             final int idx = t;
             workers[t] = new Thread(() ->
-                results[idx] = cublasImpl.sgemv(A, x, rows, cols));
+                results[idx] = cudaImpl.sgemv(A, x, rows, cols));
             workers[t].start();
         }
         for (Thread w : workers) w.join();
