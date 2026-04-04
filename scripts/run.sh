@@ -126,6 +126,7 @@ require_jar() {
 JVM_BASE=(
   --enable-preview
   --enable-native-access=ALL-UNNAMED
+  --add-modules jdk.incubator.vector
   --add-opens java.base/java.lang=ALL-UNNAMED
   --add-opens java.base/java.nio=ALL-UNNAMED
   -XX:+UseG1GC

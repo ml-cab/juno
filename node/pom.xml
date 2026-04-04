@@ -6,8 +6,8 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-	<groupId>cab.ml</groupId>
-	<artifactId>juno</artifactId>
+        <groupId>cab.ml</groupId>
+        <artifactId>juno</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
@@ -20,7 +20,7 @@
             <groupId>cab.ml</groupId>
             <artifactId>api</artifactId>
         </dependency>
-                <dependency>
+        <dependency>
             <groupId>cab.ml</groupId>
             <artifactId>registry</artifactId>
         </dependency>
@@ -61,5 +61,42 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Java Vector API (jdk.incubator.vector) is an incubating module.
+                 It requires explicit opt-in at both compile time and runtime.
+                 Without this, imports of jdk.incubator.vector.* will fail to compile
+                 and the static initializers for F_SPECIES / ADJACENT_SWAP will throw
+                 java.lang.module.FindException at startup. -->
+			<plugin>
+			    <groupId>org.apache.maven.plugins</groupId>
+			    <artifactId>maven-compiler-plugin</artifactId>
+			    <configuration>
+			        <!-- source/target instead of release: bypasses ct.sym,
+			             so the full live JDK API (including incubating modules)
+			             is visible to the compiler. Only safe when compile JDK
+			             == target JDK, which is true here. -->
+			        <source>${java.version}</source>
+			        <target>${maven.compiler.release}</target>
+			        <compilerArgs>
+			            <arg>--add-modules=jdk.incubator.vector</arg>
+			        </compilerArgs>
+			    </configuration>
+			</plugin>
+            <!-- Surefire needs the same add-modules flag so unit tests can load
+                 LlamaTransformerHandler (its static block references F_SPECIES). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>
+                        --add-modules jdk.incubator.vector
+                        --enable-native-access=ALL-UNNAMED
+                    </argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>
