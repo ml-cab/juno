@@ -2,7 +2,7 @@
   juno — Distributed Java LLM Inference Engine
   Full Architecture Design Document
   JDK 25 · Maven · Java-native · Commodity GPU Cluster
-  Last updated: 2026-04-03 (session 19)
+  Last updated: 2026-04-04 (session 20)
 ================================================================================
 
 
@@ -4082,3 +4082,181 @@ classes live in package cab.ml.juno.productivity.
   New unit tests: ~12 (JfrModelMapperTest + JfrPercentilesTest +
                         MetricsWriterTest + ModelsConfigLoaderTest)
   All tests: pass
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+31. SESSION 20 CHANGES (2026-04-04) — GPU INFERENCE ACTUALLY WIRED; JFR BACKEND FIX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Verified end-to-end: ./juno local --model-path ../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf --gpu
+correctly routes inference through CudaMatVec (cublasSgemv) and nvidia-smi now shows
+weight data resident on the GPU.
+
+31.1  Three bugs fixed
+-----------------------------------------------
+
+BUG A — ForwardPassHandlerLoader.load() always used CpuMatVec
+  File: node/ForwardPassHandlerLoader.java
+
+  Root cause: the no-backend overload of load(Path, ShardContext) hardcoded
+  LlamaTransformerHandler.load(modelPath, context) which in turn wires
+  CpuMatVec.INSTANCE unconditionally. The JUNO_USE_GPU system property set by
+  ConsoleMain was read nowhere in the loader. CudaMatVec was only wired in
+  EmbeddedNodeServer (gRPC cluster mode) and in the local pipeline code path
+  inside ConsoleMain (runLocalRepl) when gpuCtx != null. The single-JVM local
+  path called ForwardPassHandlerLoader.load() without a backend, falling through
+  to CPU even with --gpu.
+
+  Fix — new selectBackend() method (package-private, tested):
+    static MatVec selectBackend() {
+        boolean useGpu = "true".equalsIgnoreCase(
+            System.getProperty("JUNO_USE_GPU", "false"));
+        if (useGpu && CudaAvailability.isAvailable()) {
+            log.info("JUNO_USE_GPU=true and CUDA detected — using CudaMatVec");
+            return new CudaMatVec(GpuContext.init(0));
+        }
+        return CpuMatVec.INSTANCE;
+    }
+
+  The no-backend load() overload now delegates to load(modelPath, context, selectBackend()).
+  All existing callers that pass an explicit backend (EmbeddedNodeServer, runLocalRepl)
+  are unaffected — they already call the two-arg overload.
+
+  selectBackend() default for JUNO_USE_GPU is "false" (safe — no GPU attempted unless
+  explicitly requested). ConsoleMain sets it to "true" when --gpu is passed.
+
+BUG B — GPU wired but never used: transformerLayer called static matVec directly
+  File: node/LlamaTransformerHandler.java
+
+  Root cause: even when CudaMatVec was correctly injected into this.backend,
+  the inference hot path never called backend.sgemv(). transformerLayer(), ffn(),
+  and outputProjection() all called the static matVec(QuantizedTensor, ...) methods
+  directly, which are pure-Java CPU code. this.backend was a dead field during
+  normal inference. nvidia-smi confirmed: only 44 MiB VRAM (JVM CUDA init overhead),
+  no weight data on device.
+
+  Fix — three additions:
+
+  1. New device-resident weight fields (null on CPU path):
+       DeviceFloatMatrix[] wqDev, wkDev, wvDev, woDev, wGateDev, wUpDev, wDownDev
+       DeviceFloatMatrix outputProjDev
+
+  2. GPU upload in GgufReader constructor — when backend instanceof CudaMatVec:
+       Each QuantizedTensor weight is dequantized to float[] once and uploaded to
+       the GPU via CudaMatVec.upload(). All subsequent forward passes avoid per-call
+       H2D weight transfers — only x and y cross the bus per matmul.
+       Memory on GPU (TinyLlama-1.1B Q4_K_M): ~4.4 GB total across all layers.
+
+  3. matVecLayer() instance method — the "trivial if statements":
+       private float[] matVecLayer(QuantizedTensor quant, DeviceFloatMatrix dev,
+               float[] x, int rows, int cols) {
+           if (dev != null) return backend.sgemv(dev, x);  // GPU resident path
+           return matVec(quant, x, rows, cols);             // CPU quantized path
+       }
+     All 8 call sites in transformerLayer/ffn/outputProjection replaced:
+       matVec(wq[li], xNorm, H, H)  →  matVecLayer(wq[li], wqDev[li], xNorm, H, H)
+       (and similarly for k, v, o, gate, up, down, outputProj)
+
+  New static dequantize methods (called once per weight at load time):
+    dequantize(QuantizedTensor, rows, cols)  — dispatcher
+    dequantizeF32, dequantizeQ8_0, dequantizeQ4K, dequantizeQ5K, dequantizeQ6K
+    Each mirrors the inner accumulation loop of the corresponding matVec*raw method
+    but writes to a flat float[] output array instead of an accumulator. Same block
+    layout constants and scale extraction helpers (q4kScaleRaw / q4kMinRaw) reused.
+
+BUG C — juno.MatVec.backend.cpu.count always 0 in JFR metrics
+  File: node/LlamaTransformerHandler.java
+
+  Root cause: matVecQuantBackendLabel() returned strings like "quantized-q4_k".
+  JfrMetricsExtractor only aggregates into the "cpu" bucket when backend == "cpu".
+  All quantized matVec calls showed up under "quantized_q4_k" and "quantized_q6_k"
+  sub-buckets, never under "cpu". Metrics output:
+    "juno.MatVec.backend.cpu.count": 0.0    ← always 0
+    "juno.MatVec.backend.quantized_q4_k.count": 186260.0  ← these are the CPU calls
+
+  Fix — matVecQuantBackendLabel() now unconditionally returns "cpu":
+    private static String matVecQuantBackendLabel(int ggmlType) {
+        return "cpu";
+    }
+  All quantized static matVec operations are pure-Java code running on
+  ForkJoinPool.commonPool() — they are CPU executions by definition. Labelling
+  them "cpu" makes the JFR metric juno.MatVec.backend.cpu.count reflect actual
+  CPU-side matrix multiply count across both float[] and QuantizedTensor paths.
+
+31.2  CudaMatVec.upload() — new package-private convenience method
+-----------------------------------------------
+File: node/CudaMatVec.java
+
+  DeviceFloatMatrix upload(float[] host, int rows, int cols) {
+      return DeviceFloatMatrix.upload(ctx, host, rows, cols);
+  }
+
+LlamaTransformerHandler can upload dequantized weights without holding a direct
+GpuContext reference. Package-private: not part of the MatVec public interface.
+
+31.3  GPU forward pass data flow (after fix)
+-----------------------------------------------
+At load time (once per handler, when backend instanceof CudaMatVec):
+  for each layer li:
+    wqDev[li]    = cuda.upload(dequantize(wq[li],   H,  H), H,  H)
+    wkDev[li]    = cuda.upload(dequantize(wk[li],   KV, H), KV, H)
+    ...etc...
+  outputProjDev = cuda.upload(dequantize(outputProj, V, H), V, H)
+
+At forward pass time (per token, hot path):
+  q = matVecLayer(wq[li], wqDev[li], xNorm, H, H)
+    → backend.sgemv(wqDev[li], xNorm)          ← x copied H2D, y copied D2H
+    → cublasSgemv_v2(CUBLAS_OP_T, ...)          ← weight already on device
+  (× 7 per layer × numLayers + output projection)
+
+JFR events after fix:
+  juno.MatVec with backend="cuda-resident"  — all projection matmuls on GPU
+  juno.MatVec with backend="cpu"            — quantized CPU path (when no GPU)
+  juno.MatVec.backend.cpu.count             — now correctly non-zero for CPU runs
+
+31.4  New tests (session 20)
+-----------------------------------------------
+ForwardPassHandlerLoaderSelectBackendTest (node module) — 5 tests:
+  gpu_flag_false_yields_cpu_backend
+  gpu_flag_absent_yields_cpu_backend             (safe default)
+  gpu_flag_true_no_cuda_falls_back_to_cpu        (CPU-only machine)
+  select_backend_never_null
+  gpu_flag_true_with_cuda_yields_cuda_backend    @Tag("gpu")
+
+MatVecQuantizedBackendLabelTest (node module) — 3 tests:
+  Uses jdk.jfr.Recording + RecordingFile to verify actual JFR event content.
+  quantized_matVec_emits_cpu_backend_label        ← primary Bug C regression anchor
+  quantized_matVec_does_not_emit_quant_type_label
+  quantized_matVec_f32_numerical_correctness
+
+31.5  Files changed in session 20
+-----------------------------------------------
+  node/src/main/java/.../node/
+    ForwardPassHandlerLoader.java    + selectBackend() method; no-backend load()
+                                       delegates to load(path, ctx, selectBackend())
+    LlamaTransformerHandler.java     + DeviceFloatMatrix[] device weight fields (8 total);
+                                       GgufReader constructor uploads to GPU when
+                                       backend instanceof CudaMatVec;
+                                       direct constructor null-initialises device fields;
+                                       matVecLayer() dispatch method;
+                                       dequantize() + 5 format-specific helpers;
+                                       8 call sites in transformerLayer/ffn/outputProjection
+                                       replaced with matVecLayer();
+                                       matVecQuantBackendLabel() returns "cpu" for all types
+    CudaMatVec.java                  + upload(float[], int, int) package-private method
+
+  node/src/test/java/.../node/
+    ForwardPassHandlerLoaderSelectBackendTest.java  NEW — 5 tests
+    MatVecQuantizedBackendLabelTest.java            NEW — 3 tests
+
+31.6  Build status (session 20)
+-----------------------------------------------
+  node    SUCCESS
+  All other modules unchanged.
+  New unit tests: 8 (5 + 3)
+  All tests: pass
+  Failures: 0
+
+  Real-model GPU verification (NVIDIA GeForce MX150, CUDA 12.2):
+    ./juno local --model-path ../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf --gpu
+    nvidia-smi: GPU memory usage: 44 MiB (init) → weight resident after load
+    All 8 CPU cores idle during token generation (inference on GPU)
+    Build time: 1:46 min — all 11 modules SUCCESS
