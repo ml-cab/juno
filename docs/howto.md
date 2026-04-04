@@ -418,8 +418,8 @@ the node processes forked by `ClusterHarness`.
 
 Wiring a GPU node (code reference):
 ```java
-GpuContext ctx      = GpuContext.init(0);            // open cuBLAS handle
-MatVecBackend matVec = new CudaMatVecBackend(ctx);   // CUDA backend
+GpuContext ctx = GpuContext.init(0);
+MatVec matVec  = new CudaMatVec(ctx);
 ForwardPassHandler h = LlamaTransformerHandler.load(modelPath, shardCtx, matVec);
 // or for Phi-3:
 ForwardPassHandler h = Phi3TransformerHandler.load(modelPath, shardCtx, matVec);
@@ -497,12 +497,19 @@ the node processes forked by `ClusterHarness`.
 
 Wiring a GPU node (code reference):
 ```java
-GpuContext ctx      = GpuContext.init(0);            // open cuBLAS handle
-MatVecBackend matVec = new CudaMatVecBackend(ctx);   // CUDA backend
+GpuContext ctx = GpuContext.init(0);              // open cuBLAS handle
+MatVec matVec  = new CudaMatVec(ctx);             // CUDA backend
+// Weights are dequantized + uploaded to DeviceFloatMatrix at load time.
+// Forward passes copy only x and y across the bus, not the weight matrix.
 ForwardPassHandler h = LlamaTransformerHandler.load(modelPath, shardCtx, matVec);
 // or for Phi-3:
 ForwardPassHandler h = Phi3TransformerHandler.load(modelPath, shardCtx, matVec);
 ```
+
+For the local in-process pipeline, backend selection is automatic:
+`ForwardPassHandlerLoader.selectBackend()` reads the `JUNO_USE_GPU` system
+property and calls `CudaAvailability.isAvailable()`. Pass `--gpu` on the
+command line (or set `JUNO_USE_GPU=true`) to activate the GPU path.
 
 ---
 
