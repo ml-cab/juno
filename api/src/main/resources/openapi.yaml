@@ -411,7 +411,7 @@ components:
           enum: [defaults, deterministic, creative]
           description: |
             Named preset profile. If set, overrides individual fields
-            with the profile defaults defined in cluster-config.yaml.
+            with the profile defaults defined in cluster-config.yaml (TBD).
             deterministic -> temperature=0.1, greedy=true (code gen)
             creative      -> temperature=1.2, topK=100  (storytelling)
 

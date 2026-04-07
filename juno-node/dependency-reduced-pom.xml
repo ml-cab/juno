@@ -32,7 +32,7 @@
             <configuration>
               <transformers>
                 <transformer>
-                  <mainClass>cab.ml.juno.player.ConsoleMain</mainClass>
+                  <mainClass>cab.ml.juno.node.NodeMain</mainClass>
                 </transformer>
                 <transformer />
               </transformers>
@@ -47,7 +47,7 @@
                   </excludes>
                 </filter>
               </filters>
-              <finalName>node</finalName>
+              <finalName>juno-node</finalName>
             </configuration>
           </execution>
         </executions>

@@ -17,7 +17,6 @@ package cab.ml.juno.node;
 
 /**
  * Immutable configuration for an inference node. Loaded from
- * cluster-config.yaml on startup.
  */
 public record NodeConfig(String nodeId, String host, int grpcPort, int deviceId, // CUDA device index (0-based)
 		double vramHeadroomFraction // reserve this fraction of VRAM (default 0.10)

@@ -75,7 +75,7 @@
             <configuration>
               <transformers>
                 <transformer>
-                  <mainClass>cab.ml.juno.integration.CoordinatorMain</mainClass>
+                  <mainClass>cab.ml.juno.master.CoordinatorMain</mainClass>
                 </transformer>
                 <transformer />
               </transformers>

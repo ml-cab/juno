@@ -685,6 +685,14 @@ setup() {
   done
   [[ -z "$SUBNET_ID" ]] && die "No default subnet found for $INSTANCE_TYPE in $REGION."
 
+  # Resolve VPC CIDR so internal SG rules match whatever address space the VPC uses
+  # (default VPC is 172.31.0.0/16; custom VPCs are often 10.x or 192.168.x)
+  VPC_CIDR=$(aws ec2 describe-vpcs --region "$REGION" \
+    --vpc-ids "$VPC_ID" \
+    --query "Vpcs[0].CidrBlock" --output text 2>/dev/null)
+  [[ -z "$VPC_CIDR" || "$VPC_CIDR" == "None" ]] && VPC_CIDR="0.0.0.0/0"
+  log "  OK VPC CIDR: $VPC_CIDR"
+
   # ── Security group ───────────────────────────────────────────
   log "Creating security group…"
   local OLD_SG
@@ -708,9 +716,9 @@ setup() {
     --group-id "$SG_ID" --region "$REGION" \
     --ip-permissions \
       "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${MY_IP}/32,Description=SSH}]" \
-      "IpProtocol=tcp,FromPort=${GRPC_PORT},ToPort=$(( GRPC_PORT + NODE_COUNT + 1 )),IpRanges=[{CidrIp=10.0.0.0/8,Description=Juno-gRPC-internal}]" \
+      "IpProtocol=tcp,FromPort=${GRPC_PORT},ToPort=$(( GRPC_PORT + NODE_COUNT + 1 )),IpRanges=[{CidrIp=${VPC_CIDR},Description=Juno-gRPC-internal}]" \
       "IpProtocol=tcp,FromPort=${HTTP_PORT},ToPort=${HTTP_PORT},IpRanges=[{CidrIp=0.0.0.0/0,Description=Juno-REST}]" \
-      "IpProtocol=tcp,FromPort=5701,ToPort=5701,IpRanges=[{CidrIp=10.0.0.0/8,Description=Hazelcast}]" \
+      "IpProtocol=tcp,FromPort=5701,ToPort=5701,IpRanges=[{CidrIp=${VPC_CIDR},Description=Hazelcast}]" \
       &>/dev/null
   log "  OK Security group: $SG_ID  (SSH from ${MY_IP}, gRPC internal, REST public)"
 

@@ -35,7 +35,6 @@ package cab.ml.juno.registry;
  * decode throughput. Network pattern: one broadcast + N parallel gRPC calls per
  * decode step.
  *
- * Configured via cluster-config.yaml: node.pType: pipeline | tensor
  */
 public enum ParallelismType {
 
