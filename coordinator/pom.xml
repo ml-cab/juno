@@ -13,7 +13,7 @@
 
     <artifactId>coordinator</artifactId>
     <name>coordinator</name>
-    <description>Coordinator and Scheduler — continuous batching, leader election, gRPC streaming, Java 21 virtual threads</description>
+    <description>Coordinator and Scheduler — continuous batching, leader election, gRPC streaming, Java 25 virtual threads</description>
 
     <dependencies>
         <dependency>

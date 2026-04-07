@@ -3,15 +3,12 @@
 	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
 	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
-
-	<parent>
-	<groupId>cab.ml</groupId>
-	<artifactId>juno</artifactId>
-		<version>0.1.0-SNAPSHOT</version>
-	</parent>
-
-	<artifactId>player</artifactId>
-	<name>player</name>
+  <parent>
+    <groupId>cab.ml</groupId>
+    <artifactId>juno</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+  <artifactId>juno-node</artifactId>
 	<description>
 		Console player and cluster harness utilities used for manual runs.
 	</description>
@@ -51,11 +48,7 @@
 			<groupId>cab.ml</groupId>
 			<artifactId>health</artifactId>
 		</dependency>
-		<!-- for cluster local tests via player cluster-->
-		<dependency>
-			<groupId>cab.ml</groupId>
-			<artifactId>juno-node</artifactId>
-		</dependency>
+
 		<!-- gRPC runtime for node servers and pipeline client -->
 		<dependency>
 			<groupId>io.grpc</groupId>
@@ -116,7 +109,7 @@
 									</excludes>
 								</filter>
 							</filters>
-							<finalName>player</finalName>
+							<finalName>node</finalName>
 						</configuration>
 					</execution>
 				</executions>
@@ -125,4 +118,3 @@
 		</plugins>
 	</build>
 </project>
-

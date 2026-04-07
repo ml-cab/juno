@@ -1,4 +1,4 @@
-package cab.ml.juno.integration;
+package cab.ml.juno.master;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;

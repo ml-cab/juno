@@ -129,6 +129,19 @@ public final class ModelRegistry {
 		return m != null && m.status() == ModelStatus.LOADED;
 	}
 
+	/**
+	 * Register a model that is already fully loaded on remote nodes — bypasses
+	 * ShardPlanner. Used by CoordinatorMain after loadShards() completes so the
+	 * REST API can expose the model without re-running shard planning.
+	 */
+	public void putLoaded(ModelDescriptor descriptor) {
+		ModelDescriptor loaded = descriptor.status() == ModelStatus.LOADED
+				? descriptor
+				: descriptor.withStatus(ModelStatus.LOADED);
+		models.put(loaded.modelId(), loaded);
+		log.info("Model '" + loaded.modelId() + "' registered as LOADED (remote shards pre-wired)");
+	}
+
 	/** Snapshot of all registered models (any status). */
 	public List<ModelDescriptor> listModels() {
 		return new ArrayList<>(models.values());

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package cab.ml.juno.player;
+package cab.ml.juno.node;
 
 import java.util.logging.Logger;
 

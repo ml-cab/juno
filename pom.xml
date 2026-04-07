@@ -12,6 +12,7 @@
 	<url>https://github.com/ml-cab/juno</url>
 	<modules>
 		<module>api</module>
+		<!-- core libraries -->
 		<module>registry</module>
 		<module>coordinator</module>
 		<module>node</module>
@@ -19,9 +20,12 @@
 		<module>tokenizer</module>
 		<module>sampler</module>
 		<module>health</module>
-		<module>player</module>
-		<module>integration</module>
+		<!-- JFR instrumentation -->
 		<module>metrics</module>
+		<!-- executables -->
+		<module>player</module>
+		<module>juno-master</module>
+		<module>juno-node</module>
 	</modules>
 	<properties>
 		<!-- Java -->
@@ -103,6 +107,11 @@
 			<dependency>
 				<groupId>cab.ml</groupId>
 				<artifactId>health</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>juno-node</artifactId>
 				<version>${project.version}</version>
 			</dependency>
 			<dependency>

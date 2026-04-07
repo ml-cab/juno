@@ -1,4 +1,4 @@
-package cab.ml.juno.integration;
+package cab.ml.juno.master;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,8 +23,8 @@ import cab.ml.juno.coordinator.TokenConsumer;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
+import cab.ml.juno.node.EmbeddedNodeServer;
 import cab.ml.juno.player.ClusterHarness;
-import cab.ml.juno.player.EmbeddedNodeServer;
 import cab.ml.juno.player.ProcessPipelineClient;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;

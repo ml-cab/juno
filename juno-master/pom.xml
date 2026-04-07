@@ -10,10 +10,11 @@
 		<version>0.1.0-SNAPSHOT</version>
 	</parent>
 
-	<artifactId>integration</artifactId>
-	<name>integration</name>
+	<artifactId>juno-master</artifactId>
+	<name>juno-master</name>
 	<description>
-		Full-cluster integration tests.
+		Juno-master standalone coordinator entry point. 
+		Full-cluster tests.
 
 		Two test flavours:
 		InProcessClusterIT — 3 CyclicForwardPassHandlers chained via
@@ -23,6 +24,12 @@
 		ProcessBuilder,
 		each on a separate gRPC port, connected by a
 		ProcessPipelineClient that wires the coordinator to them.
+
+		ModelLiveRunnerIT — live model tests across all models listed in the
+		MODELS system property. Disabled by default; activate with -Pintegration.
+
+		Main class: CoordinatorMain — standalone distributed coordinator for
+		AWS deployment. Replaces player.jar in the coordinator systemd service.
 
 		Recommended model for real-weight testing (no GPU required for stubs):
 		TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf ~670 MB
@@ -54,7 +61,6 @@
 		<dependency>
 			<groupId>cab.ml</groupId>
 			<artifactId>node</artifactId>
-	<!--		<scope>provided</scope>-->
 		</dependency>
 		<dependency>
 			<groupId>cab.ml</groupId>
@@ -102,13 +108,14 @@
 					<argLine>--enable-preview --enable-native-access=ALL-UNNAMED</argLine>
 					<forkCount>1</forkCount>
 					<reuseForks>false</reuseForks>
-					<!-- Exclude GPU tests from the default run.
-					     GpuForwardPassIT loads Cuda native libs into the coordinator
-					     JVM. Those CUDA device FDs are inherited by the node JVMs
-					     forked by ClusterHarness, crashing them before READY is printed.
-					     Enable GPU tests with: mvn verify -Pgpu -Dit.model.path=... -->
+					<!--
+					  Default run: in-process and three-node cluster ITs only.
+					  GpuForwardPassIT: requires CUDA hardware, enabled via -Pgpu.
+					  ModelLiveRunnerIT: requires real model files, enabled via -Pintegration.
+					-->
 					<excludes>
 						<exclude>**/GpuForwardPassIT.java</exclude>
+						<exclude>**/ModelLiveRunnerIT.java</exclude>
 					</excludes>
 					<systemPropertyVariables>
 						<it.model.path>${it.model.path}</it.model.path>
@@ -138,8 +145,12 @@
 							<transformers>
 								<transformer
 									implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+									<!-- CoordinatorMain is the production entry point for the
+									     integration.jar used by the coordinator systemd service.
+									     juno-deploy.sh launches it with: java -jar integration.jar
+									     All configuration is read from environment variables. -->
 									<mainClass>
-										cab.ml.juno.integration.ModelLiveRunner</mainClass>
+										cab.ml.juno.integration.CoordinatorMain</mainClass>
 								</transformer>
 								<!-- Merge service files if any (gRPC uses them) -->
 								<transformer
@@ -156,7 +167,7 @@
 									</excludes>
 								</filter>
 							</filters>
-							<finalName>integration</finalName>
+							<finalName>juno-master</finalName>
 						</configuration>
 					</execution>
 				</executions>
@@ -169,12 +180,13 @@
 		</plugins>
 	</build>
 
-	<!-- ── GPU profile ──────────────────────────────────────────────────────────
-	     Activate with: mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf
-	     Requires: CUDA 12.x, Nvidia GPU, model file at it.model.path.
-	     Recommended instance: AWS g4dn.xlarge (T4, 16 GB VRAM).
-	-->
 	<profiles>
+
+		<!-- ── GPU profile ──────────────────────────────────────────────────────
+		     Activate with: mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf
+		     Requires: CUDA 12.x, Nvidia GPU, model file at it.model.path.
+		     Recommended instance: AWS g4dn.xlarge (T4, 16 GB VRAM).
+		-->
 		<profile>
 			<id>gpu</id>
 			<build>
@@ -202,6 +214,49 @@
 				</plugins>
 			</build>
 		</profile>
+
+		<!-- ── Integration profile ──────────────────────────────────────────────
+		     Runs ModelLiveRunnerIT against real model files.
+		     Disabled by default — not triggered by mvn clean package.
+
+		     Activate with:
+		       mvn verify -pl integration -Pintegration \
+		           -DMODELS=/data/model1.gguf,/data/model2.gguf
+
+		     MODELS — comma-separated list of absolute GGUF paths.
+		              Each model runs the full 8-test suite independently.
+		-->
+		<profile>
+			<id>integration</id>
+			<activation>
+				<activeByDefault>false</activeByDefault>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-failsafe-plugin</artifactId>
+						<configuration>
+							<argLine>--enable-preview --enable-native-access=ALL-UNNAMED</argLine>
+							<forkCount>1</forkCount>
+							<reuseForks>false</reuseForks>
+							<!-- Run only ModelLiveRunnerIT — not the stub-based ITs -->
+							<excludes/>
+							<includes>
+								<include>**/ModelLiveRunnerIT.java</include>
+							</includes>
+							<systemPropertyVariables>
+								<!-- Pass MODELS maven property through to the test JVM.
+								     Set on the command line: -DMODELS=/path/a.gguf,/path/b.gguf -->
+								<MODELS>${MODELS}</MODELS>
+								<it.timeout.ms>300000</it.timeout.ms>
+							</systemPropertyVariables>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+
 	</profiles>
 
 </project>

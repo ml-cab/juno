@@ -70,6 +70,9 @@ public final class InferenceApiServer {
 			config.showJavalinBanner = false;
 		});
 
+		// ── Web console ───────────────────────────────────────────────────────
+		app.get("/", this::handleConsole);
+
 		// ── Inference ─────────────────────────────────────────────────────────
 		app.post("/v1/inference", this::handleBlockingInference);
 		app.post("/v1/inference/stream", this::handleStreamingInference);
@@ -103,6 +106,415 @@ public final class InferenceApiServer {
 			log.info("InferenceApiServer stopped");
 		}
 	}
+
+	// ── Web console ───────────────────────────────────────────────────────────
+
+	private void handleConsole(Context ctx) {
+		ctx.contentType("text/html; charset=UTF-8").result(CONSOLE_HTML);
+	}
+
+	/**
+	 * Self-contained HTML5 chat console.
+	 *
+	 * Served at GET / — no external dependencies. Polls /v1/cluster/health every
+	 * 10 s; fetches /v1/models on load. Streams tokens via POST /v1/inference/stream
+	 * using the Fetch ReadableStream API to consume the SSE response body.
+	 *
+	 * SSE event shape (from SseTokenConsumer):
+	 *   data: {"requestId":"...","token":" hi","tokenId":1234,"isComplete":false}
+	 *   data: {"requestId":"...","token":"","tokenId":0,"isComplete":true,"finishReason":"stop"}
+	 */
+	private static final String CONSOLE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Juno Console</title>
+<style>
+:root{
+  --bg:#ffffff;--surface:#f8fafc;--border:#e2e8f0;
+  --text:#0f172a;--muted:#64748b;--accent:#6366f1;
+  --user-bg:#3b82f6;--user-text:#fff;
+  --bot-bg:#f1f5f9;--bot-text:#0f172a;
+  --ok:#22c55e;--warn:#f59e0b;--err:#ef4444;
+  --radius:12px;--hh:52px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#0d1117;--surface:#161b22;--border:#30363d;
+  --text:#e6edf3;--muted:#8b949e;
+  --bot-bg:#21262d;--bot-text:#e6edf3;
+}}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;font-size:14px;
+  background:var(--bg);color:var(--text);
+  display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+
+/* ── header ── */
+header{
+  height:var(--hh);min-height:var(--hh);
+  display:flex;align-items:center;gap:10px;padding:0 16px;
+  background:var(--surface);border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+.logo{font-family:monospace;font-weight:700;font-size:18px;
+  color:var(--accent);letter-spacing:-.5px;margin-right:4px}
+#model-select{
+  border:1px solid var(--border);border-radius:6px;
+  background:var(--bg);color:var(--text);
+  padding:4px 28px 4px 8px;font-size:13px;cursor:pointer;
+  appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%238b949e' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 6px center;
+}
+.health-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0}
+.health-dot.ok{background:var(--ok)}.health-dot.err{background:var(--err)}
+#health-text{font-size:12px;color:var(--muted)}
+.spacer{flex:1}
+#queue-badge{
+  font-size:11px;color:var(--muted);padding:2px 8px;
+  border:1px solid var(--border);border-radius:20px;white-space:nowrap
+}
+#nodes-badge{
+  font-size:11px;color:var(--muted);padding:2px 8px;
+  border:1px solid var(--border);border-radius:20px;white-space:nowrap
+}
+
+/* ── chat area ── */
+#chat{
+  flex:1;overflow-y:auto;padding:20px 16px;
+  display:flex;flex-direction:column;gap:16px;
+}
+.msg-row{display:flex;max-width:720px;margin:0 auto;width:100%}
+.msg-row.user{justify-content:flex-end}
+.msg-row.bot{justify-content:flex-start}
+.bubble{
+  padding:10px 14px;border-radius:var(--radius);
+  line-height:1.55;white-space:pre-wrap;word-break:break-word;
+  max-width:82%;font-size:14px;
+}
+.bubble.user{background:var(--user-bg);color:var(--user-text);border-bottom-right-radius:4px}
+.bubble.bot{background:var(--bot-bg);color:var(--bot-text);border-bottom-left-radius:4px}
+.bubble.streaming::after{
+  content:'▌';animation:blink .6s step-end infinite;display:inline
+}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+.meta{font-size:11px;color:var(--muted);margin-top:4px;text-align:right}
+.meta.bot{text-align:left}
+.empty-state{
+  flex:1;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;color:var(--muted);gap:8px;
+}
+.empty-state .icon{font-size:40px;opacity:.4}
+.empty-state p{font-size:13px}
+
+/* ── footer ── */
+footer{
+  background:var(--surface);border-top:1px solid var(--border);
+  padding:10px 16px 14px;display:flex;flex-direction:column;gap:8px;
+  flex-shrink:0;
+}
+
+/* params bar */
+#params-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.param-group{display:flex;align-items:center;gap:5px}
+.param-group label{font-size:11px;color:var(--muted);white-space:nowrap}
+.param-group input[type=range]{width:80px;accent-color:var(--accent)}
+.param-group input[type=number]{
+  width:60px;padding:2px 5px;border:1px solid var(--border);
+  border-radius:5px;background:var(--bg);color:var(--text);font-size:12px;
+}
+#val-temp,#val-top-p{font-size:11px;color:var(--accent);min-width:24px}
+.param-sep{width:1px;height:16px;background:var(--border)}
+
+/* input row */
+#input-row{display:flex;gap:8px;align-items:flex-end}
+#prompt{
+  flex:1;resize:none;border:1px solid var(--border);border-radius:10px;
+  padding:9px 12px;font-family:inherit;font-size:14px;line-height:1.45;
+  background:var(--bg);color:var(--text);outline:none;
+  max-height:160px;overflow-y:auto;
+  transition:border-color .15s;
+}
+#prompt:focus{border-color:var(--accent)}
+#send-btn{
+  padding:9px 18px;border-radius:10px;border:none;cursor:pointer;
+  background:var(--accent);color:#fff;font-size:14px;font-weight:500;
+  white-space:nowrap;flex-shrink:0;
+  transition:opacity .15s,background .15s;
+}
+#send-btn:disabled{opacity:.45;cursor:default}
+#send-btn.cancel{background:var(--err)}
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">juno</span>
+  <select id="model-select"><option value="">loading models…</option></select>
+  <div class="health-dot" id="hdot"></div>
+  <span id="health-text">–</span>
+  <div class="spacer"></div>
+  <span id="queue-badge">queue –/–</span>
+  <span id="nodes-badge">models –</span>
+</header>
+
+<div id="chat">
+  <div class="empty-state" id="empty">
+    <div class="icon">◈</div>
+    <p>Type a message to start a conversation</p>
+  </div>
+</div>
+
+<footer>
+  <div id="params-bar">
+    <div class="param-group">
+      <label>temp</label>
+      <input type="range" id="p-temp" min="0" max="2" step="0.05" value="0.7"
+             oninput="document.getElementById('val-temp').textContent=this.value">
+      <span id="val-temp">0.7</span>
+    </div>
+    <div class="param-sep"></div>
+    <div class="param-group">
+      <label>top-p</label>
+      <input type="range" id="p-topp" min="0" max="1" step="0.05" value="0.95"
+             oninput="document.getElementById('val-top-p').textContent=this.value">
+      <span id="val-top-p">0.95</span>
+    </div>
+    <div class="param-sep"></div>
+    <div class="param-group">
+      <label>top-k</label>
+      <input type="number" id="p-topk" value="20" min="0" max="200" style="width:52px">
+    </div>
+    <div class="param-sep"></div>
+    <div class="param-group">
+      <label>max tokens</label>
+      <input type="number" id="p-maxt" value="512" min="1" max="4096" style="width:62px">
+    </div>
+    <div class="param-sep"></div>
+    <div class="param-group">
+      <label>priority</label>
+      <select id="p-prio" style="font-size:12px;padding:2px 5px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text)">
+        <option>NORMAL</option><option>HIGH</option><option>LOW</option>
+      </select>
+    </div>
+  </div>
+  <div id="input-row">
+    <textarea id="prompt" rows="1" placeholder="Send a message…"></textarea>
+    <button id="send-btn" onclick="onSend()">Send</button>
+  </div>
+</footer>
+
+<script>
+const chat    = document.getElementById('chat');
+const empty   = document.getElementById('empty');
+const prompt  = document.getElementById('prompt');
+const sendBtn = document.getElementById('send-btn');
+const hdot    = document.getElementById('hdot');
+const htext   = document.getElementById('health-text');
+const qBadge  = document.getElementById('queue-badge');
+const nBadge  = document.getElementById('nodes-badge');
+const mSelect = document.getElementById('model-select');
+
+let history   = [];   // [{role,content}]
+let abortCtrl = null;
+let generating = false;
+let tokenCount = 0;
+let genStart   = 0;
+
+// ── auto-resize textarea ──────────────────────────────────────────────────────
+prompt.addEventListener('input', () => {
+  prompt.style.height = 'auto';
+  prompt.style.height = Math.min(prompt.scrollHeight, 160) + 'px';
+});
+prompt.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
+});
+
+// ── health polling ────────────────────────────────────────────────────────────
+async function fetchHealth() {
+  try {
+    const r = await fetch('/v1/cluster/health');
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    const ok = d.status === 'HEALTHY';
+    hdot.className = 'health-dot ' + (ok ? 'ok' : 'err');
+    htext.textContent = d.status;
+    htext.style.color = ok ? 'var(--ok)' : 'var(--err)';
+    qBadge.textContent = 'queue ' + d.queueDepth + '/' + d.maxQueue;
+    nBadge.textContent = 'models ' + d.loadedModels;
+  } catch {
+    hdot.className = 'health-dot err';
+    htext.textContent = 'UNREACHABLE';
+    htext.style.color = 'var(--err)';
+  }
+}
+
+// ── model list ────────────────────────────────────────────────────────────────
+async function fetchModels() {
+  try {
+    const r = await fetch('/v1/models');
+    if (!r.ok) return;
+    const d = await r.json();
+    const loaded = (d.models || []).filter(m => m.status === 'LOADED');
+    mSelect.innerHTML = '';
+    if (loaded.length === 0) {
+      mSelect.innerHTML = '<option value="">no models loaded</option>';
+      return;
+    }
+    for (const m of loaded) {
+      const o = document.createElement('option');
+      o.value = m.modelId;
+      o.textContent = m.modelId + '  (' + m.architecture + '  ' + m.quantization
+                    + '  layers=' + m.totalLayers + ')';
+      mSelect.appendChild(o);
+    }
+  } catch {
+    mSelect.innerHTML = '<option value="">error loading models</option>';
+  }
+}
+
+// ── chat helpers ──────────────────────────────────────────────────────────────
+function addBubble(role, text) {
+  empty.style.display = 'none';
+  const row = document.createElement('div');
+  row.className = 'msg-row ' + role;
+  const bub = document.createElement('div');
+  bub.className = 'bubble ' + role;
+  bub.textContent = text;
+  row.appendChild(bub);
+  chat.appendChild(row);
+  return bub;
+}
+
+function scrollBottom() {
+  chat.scrollTop = chat.scrollHeight;
+}
+
+// ── send ──────────────────────────────────────────────────────────────────────
+function onSend() {
+  if (generating) { cancelGen(); return; }
+  const text = prompt.value.trim();
+  if (!text) return;
+  prompt.value = '';
+  prompt.style.height = 'auto';
+  history.push({role:'user', content:text});
+  addBubble('user', text);
+  scrollBottom();
+  startGen();
+}
+
+async function startGen() {
+  generating = true;
+  tokenCount = 0;
+  genStart = Date.now();
+  sendBtn.textContent = 'Stop';
+  sendBtn.className = 'cancel';
+
+  const botBub = addBubble('bot', '');
+  botBub.classList.add('streaming');
+  scrollBottom();
+
+  const body = {
+    messages: history.slice(),
+    modelId: mSelect.value || undefined,
+    sampling: {
+      temperature: parseFloat(document.getElementById('p-temp').value),
+      topK:        parseInt(document.getElementById('p-topk').value)   || 20,
+      topP:        parseFloat(document.getElementById('p-topp').value),
+      maxTokens:   parseInt(document.getElementById('p-maxt').value)   || 512,
+      priority:    document.getElementById('p-prio').value,
+    }
+  };
+
+  abortCtrl = new AbortController();
+  let fullText = '';
+
+  try {
+    const resp = await fetch('/v1/inference/stream', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+      signal: abortCtrl.signal,
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({message:'HTTP ' + resp.status}));
+      botBub.textContent = '[error: ' + (err.message || resp.statusText) + ']';
+      botBub.style.color = 'var(--err)';
+      finishGen(botBub, fullText, 'error');
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const dec    = new TextDecoder();
+    let buf      = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      const parts = buf.split('\\n\\n');
+      buf = parts.pop();                // keep the trailing incomplete chunk
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith('data: ')) continue;
+        let evt;
+        try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+        if (evt.isComplete) {
+          finishGen(botBub, fullText, evt.finishReason);
+          return;
+        }
+        fullText += evt.token;
+        botBub.textContent = fullText;
+        tokenCount++;
+        scrollBottom();
+      }
+    }
+    // stream ended without isComplete event
+    finishGen(botBub, fullText, 'stop');
+
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      botBub.textContent = '[connection error: ' + e.message + ']';
+      botBub.style.color = 'var(--err)';
+    }
+    finishGen(botBub, fullText, 'cancelled');
+  }
+}
+
+function finishGen(bub, fullText, reason) {
+  bub.classList.remove('streaming');
+  if (fullText) history.push({role:'assistant', content: fullText});
+
+  const elapsed = ((Date.now() - genStart) / 1000).toFixed(1);
+  const tps     = tokenCount > 0 ? (tokenCount / (elapsed || 1)).toFixed(1) : '–';
+  const meta    = document.createElement('div');
+  meta.className = 'meta bot';
+  meta.textContent = tokenCount + ' tokens  ·  ' + elapsed + 's  ·  ' + tps + ' tok/s'
+                   + (reason && reason !== 'stop' ? '  ·  ' + reason : '');
+  bub.parentNode.appendChild(meta);
+
+  generating = false;
+  abortCtrl  = null;
+  sendBtn.textContent = 'Send';
+  sendBtn.className   = '';
+  prompt.focus();
+  fetchHealth();
+}
+
+function cancelGen() {
+  if (abortCtrl) abortCtrl.abort();
+}
+
+// ── init ──────────────────────────────────────────────────────────────────────
+fetchHealth();
+fetchModels();
+setInterval(fetchHealth, 10000);
+prompt.focus();
+</script>
+</body>
+</html>
+""";
 
 	// ── Route handlers ────────────────────────────────────────────────────────
 
@@ -246,6 +658,10 @@ public final class InferenceApiServer {
 			params = params.withMaxTokens(s.maxTokens());
 		if (s.temperature() != null)
 			params = params.withTemperature(s.temperature());
+		if (s.topK() != null)
+			params = params.withTopK(s.topK());
+		if (s.topP() != null)
+			params = params.withTopP(s.topP());
 		return params;
 	}
 
