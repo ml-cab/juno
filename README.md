@@ -14,6 +14,14 @@ All modules build and all tests pass. Verified end-to-end with:
 - Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile
 - phi-3.5-mini-instruct.Q4_K_M.gguf on a 3-node CPU cluster
 
+**Session 21** — Two new deployment fat-jar modules and a unified AWS script.
+
+`juno-node` — new module producing `juno-node.jar` (shade, main class `cab.ml.juno.node.NodeMain`). `NodeMain` and `EmbeddedNodeServer` moved from the `player` module into the `node` module (package `cab.ml.juno.node`). Configuration via system properties (`-Dnode.id`, `-Dnode.port`, `-Dmodel.path`, `-DJUNO_USE_GPU`); command-line args still accepted for backward compatibility. Prints `READY:<nodeId>:<port>` to stdout when the gRPC server is up so `ClusterHarness` can poll it.
+
+`integration` module renamed to `juno-master` — fat jar renamed `juno-master.jar` (main class `cab.ml.juno.master.CoordinatorMain`). `CoordinatorMain` is a new standalone coordinator entry point for remote deployment: reads node addresses from `JUNO_NODE_ADDRESSES`, model path from `JUNO_MODEL_PATH`, and other tuning from env vars (`JUNO_PTYPE`, `JUNO_HTTP_PORT`, `JUNO_DTYPE`, `JUNO_MAX_QUEUE`). No forking, no `ClusterHarness` — nodes must already be running via `NodeMain`. Wires `GenerationLoop`, `RequestScheduler`, `KVCacheManager`, and `InferenceApiServer` then blocks. All integration test classes moved to package `cab.ml.juno.master`; `ModelLiveRunner` promoted to `ModelLiveRunnerIT` and gated behind the `-Pintegration` Maven profile.
+
+`juno-deploy.sh` added under `scripts/aws/` — unified cluster lifecycle script replacing the separate `juno-infra.sh` (GPU) and `juno-infra-ft.sh` (CPU). Hardware auto-detected during bootstrap: GPU instances install CUDA and set `JUNO_USE_GPU=true`; CPU instances skip it. `juno-node.service` (systemd) launches `juno-node.jar` on every node; `juno-coordinator.service` launches `juno-master.jar` on the coordinator after `cluster-nodes.env` is written. Commands: `setup | start | stop | teardown | status | scan-regions`. Options: `--instance-type`, `--node-count`, `--coordinator node1|separate`, `--model-url`, `--ptype`, `--dtype`. State persisted to `~/.juno-deploy-state`. Verified end-to-end on a 3 × m7i-flex.large CPU cluster running TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile with the web console at `http://<coordinator>:8080`.
+
 **Session 20** — GPU inference actually wired end-to-end. Three bugs fixed:
 (1) `ForwardPassHandlerLoader.load(Path, ShardContext)` always hardcoded `CpuMatVec.INSTANCE` — a new `selectBackend()` method now reads `JUNO_USE_GPU` and calls `CudaAvailability.isAvailable()`, then delegates to the explicit-backend overload.
 (2) Even with `CudaMatVec` correctly injected into `LlamaTransformerHandler.backend`, the inference hot path never used it — `transformerLayer` called the static `matVec(QuantizedTensor, ...)` methods directly. Fix: weights are now dequantized and uploaded to `DeviceFloatMatrix` once at load time; a new `matVecLayer()` instance method dispatches through `backend.sgemv(DeviceFloatMatrix, x)` on the GPU path and falls back to the quantized CPU path otherwise. All 8 projection call sites updated.
@@ -231,11 +239,12 @@ Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `MAX_TOKENS`, `TEMPERATUR
 | `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, Javalin REST, SSE |
 | `kvcache` | `KVCacheManager`, `GpuKVCache`, `CpuKVCache`, `PrefixCache` |
 | `tokenizer` | `GgufTokenizer` (SentencePiece BPE + GPT-2 BPE; auto-detected), `ChatTemplate`, `SimpleTokenizer`, `TokenizerEvent`, `TemplateFormatEvent` |
-| `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `NodeKVCacheAdapter`, `MatVec`, `CpuMatVec`, `CudaMatVec`, `GgufReader`, `LlamaConfig`, `ActivationCodec`, `ShardContext`, `TensorShardContext`, `LoraAdapter`, `LoraAdapterSet`, `LoraAdamOptimizer`, `LoraTrainableHandler`, `MatVecEvent`, `ForwardPassEvent`, `LoraTrainEvent` |
+| `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `EmbeddedNodeServer`, `NodeKVCacheAdapter`, `MatVec`, `CpuMatVec`, `CudaMatVec`, `GgufReader`, `LlamaConfig`, `ActivationCodec`, `ShardContext`, `TensorShardContext`, `LoraAdapter`, `LoraAdapterSet`, `LoraAdamOptimizer`, `LoraTrainableHandler`, `MatVecEvent`, `ForwardPassEvent`, `LoraTrainEvent` |
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | Health monitor, circuit breakers (Resilience4j) |
-| `player` | `ConsoleMain` REPL (`cluster` / `local` / `lora` commands), `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `EmbeddedNodeServer` |
-| `integration` | `InProcessClusterIT`, `ThreeNodeClusterIT`, `TensorParallelClusterIT`, `ModelLiveRunner`, `GpuForwardPassIT` |
+| `player` | `ConsoleMain` REPL (`cluster` / `local` / `lora` commands), `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient` |
+| `juno-node` | Fat jar (`juno-node.jar`). `NodeMain` — standalone node entry point for remote deployment. Reads `-Dnode.id`, `-Dnode.port`, `-Dmodel.path`, `-DJUNO_USE_GPU` from system properties (command-line args still accepted). Prints `READY:<nodeId>:<port>` on startup. Launched by `juno-node.service` systemd unit on AWS nodes. |
+| `juno-master` | Fat jar (`juno-master.jar`; renamed from `integration`). `CoordinatorMain` — standalone coordinator entry point for remote deployment. Reads node addresses from `JUNO_NODE_ADDRESSES`, model from `JUNO_MODEL_PATH`, and tuning from `JUNO_PTYPE` / `JUNO_HTTP_PORT` / `JUNO_DTYPE` / `JUNO_MAX_QUEUE`. No forking, no `ClusterHarness`. Launched by `juno-coordinator.service` on the AWS coordinator host. Integration tests (`InProcessClusterIT`, `ThreeNodeClusterIT`, `TensorParallelClusterIT`, `GpuForwardPassIT`, `ModelLiveRunnerIT`) in package `cab.ml.juno.master`; `ModelLiveRunnerIT` gated behind `-Pintegration` Maven profile. |
 | `metrics` | JFR-based productivity metrics extractor (source dir: `productivity/`). `JfrMetricsExtractor`, `JfrModelMapper`, `JfrPercentiles`, `MetricsSnapshot`, `MetricsWriter`, `ModelsConfig`, `ModelsConfigLoader`, `ProductivityMain` |
 
 ---
@@ -267,9 +276,12 @@ mvn clean package -DskipTests          # build — produces shade jars
 mvn test -pl tokenizer,node,coordinator,sampler,kvcache,health,registry,player
                                        # unit tests — no model file, no GPU needed
 
-mvn verify -pl integration             # integration tests — forks 3 JVM nodes (stub mode)
+mvn verify -pl juno-master             # integration tests — forks 3 JVM nodes (stub mode)
                                        # includes ThreeNodeClusterIT (pipeline) and
                                        # TensorParallelClusterIT (tensor)
+
+mvn verify -pl juno-master -Pintegration -Dmodels=/path/to/models
+                                       # ModelLiveRunnerIT — requires real model files
 
 ./juno test --model-path /path/to/model.gguf   # real-model smoke test
 ```
@@ -331,13 +343,13 @@ Useful analysis patterns:
 - **Star AllReduce for tensor parallel.** No inter-node communication. The coordinator collects partial logit vectors from all N nodes and sums them in O(N × vocabSize). Simpler than ring-AllReduce and requires no InfiniBand.
 - **LoRA fine-tuning without touching the base model.** `LoraTrainableHandler` wraps `LlamaTransformerHandler` and adds trainable low-rank adapters (A/B matrices, rank 4–16) on the Q and V projections. The frozen weights stay quantized at all times — backward passes dequantize one block per row via dedicated `transposedQ4K` / `transposedQ5K` / `transposedQ6K` scatter-reduce implementations. Adapters are persisted to a `.lora` binary checkpoint; the GGUF is never modified.
 - **GPT-2 BPE and SentencePiece BPE both supported.** `GgufTokenizer` reads `tokenizer.ggml.model` from GGUF metadata. Value `"gpt2"` activates the GPT-2 / tiktoken path (Llama 3+): space-prefixed words use Ġ (U+0120), and special control tokens are pre-split longest-first before BPE. Any other value (null / `"llama"` / `"llama2"`) uses the SentencePiece path (Llama 1/2, TinyLlama, Mistral, Gemma, Phi-3). No configuration required — detection is automatic at load time.
-- **AWS infrastructure scripted.** `scripts/aws/launcher.sh` is a credential wrapper; `juno-infra.sh` manages a 3-node g4dn.xlarge GPU cluster (setup / start / stop / teardown) with a live VRAM + cost dashboard. `juno-infra-ft.sh` targets a CPU fine-tuning cluster. State is persisted to `~/.juno-aws-state`; Ctrl+C auto-stops instances before exit.
+- **AWS infrastructure scripted.** `scripts/aws/launcher.sh` is a credential wrapper. `juno-deploy.sh` is a unified cluster lifecycle script (replaces the earlier `juno-infra.sh` / `juno-infra-ft.sh`): hardware is auto-detected during bootstrap — GPU nodes install CUDA and set `JUNO_USE_GPU=true`, CPU nodes skip it. Commands: `setup | start | stop | teardown | status | scan-regions`. Coordinator can be co-located on node 1 (default, free) or launched as a separate t3.medium. State persisted to `~/.juno-deploy-state`; Ctrl+C auto-stops instances before exit. After `setup` the script bootstraps all nodes (~5 min), writes `cluster-nodes.env`, starts the coordinator, and enters the live cluster monitor showing per-node CPU / mem, health, and estimated cost. Web console served at `http://<coordinator>:8080` once cluster is healthy.
 - **JFR metrics extractor.** The `metrics` module (source dir: `productivity/`) scans the project root for `juno-<stem>-*.jfr` files, maps them to `models.json` entries, extracts counts / durations / p50/p95/p99 percentiles for all five `juno.*` event types, and writes `target/productivity/metrics.json`.
 - **Full JFR instrumentation across every hot path.** Five custom event types — `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, `juno.LoraTrainStep` — make every layer of the stack observable in JDK Mission Control without any agent or bytecode manipulation. Activated with `--jfr DURATION` on any `juno` command.
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
 - `MatVec` interface decouples the matmul backend from the transformer logic. `CudaMatVec` implements host `sgemv` (full H2D per call, for tests) and device `sgemv(DeviceFloatMatrix, x)` for resident weights (production path). `CpuMatVec` as CPU fallback and test reference. Backend selection is automatic via `ForwardPassHandlerLoader.selectBackend()` which reads `JUNO_USE_GPU` and calls `CudaAvailability.isAvailable()`. When `CudaMatVec` is selected, `LlamaTransformerHandler` dequantizes all projection weights to `float[]` and uploads them as `DeviceFloatMatrix` once at construction; the new `matVecLayer()` method dispatches through the GPU-resident path on each forward call.
 - GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent CUDA native libs (bytedeco) loading into the coordinator JVM and poisoning FD inheritance into forked node processes.
-- Stub mode — cluster boots in seconds without a model file; all integration tests run stub.
+- Stub mode — cluster boots in seconds without a model file; all integration tests run stub. Integration tests live in `juno-master` (package `cab.ml.juno.master`); `ModelLiveRunnerIT` requires a real model and is gated behind `-Pintegration`.
 
 ---
 

@@ -367,6 +367,53 @@ mvn clean package -DskipTests
 
 ---
 
+### Remote deployment fat jars
+
+Two fat jars are produced for deploying Juno to remote machines (AWS, bare-metal):
+
+**`juno-node/target/juno-node.jar`** — main class `cab.ml.juno.node.NodeMain`
+
+Standalone node process. Reads configuration from system properties:
+
+```
+-Dnode.id=<nodeId>          required — e.g. node-1
+-Dnode.port=<port>          required — gRPC port, e.g. 19092
+-Dmodel.path=<modelPath>    optional — if absent, runs with dummy handler
+-DJUNO_USE_GPU=<true|false> optional — defaults to true
+```
+
+Command-line args (`nodeId port [modelPath]`) are also accepted for backward compatibility; system properties take precedence.
+
+```bash
+java -Dnode.id=node-1 -Dnode.port=19092 -Dmodel.path=/models/TinyLlama.gguf \
+     -jar juno-node/target/juno-node.jar
+```
+
+Prints `READY:<nodeId>:<port>` to stdout when the gRPC server is up. On AWS, launched by `juno-node.service` (systemd).
+
+**`juno-master/target/juno-master.jar`** — main class `cab.ml.juno.master.CoordinatorMain`
+
+Standalone coordinator process. No forking, no `ClusterHarness` — nodes must already be running via `NodeMain`. Reads all configuration from environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JUNO_NODE_ADDRESSES` | — | Comma-separated `host:port` list, one per node (required) |
+| `JUNO_MODEL_PATH` | — | Local path to GGUF file for tokenizer + config (required) |
+| `JUNO_PTYPE` | `pipeline` | `pipeline` or `tensor` |
+| `JUNO_HTTP_PORT` | `8080` | REST / web console port |
+| `JUNO_DTYPE` | `FLOAT16` | Activation wire format |
+| `JUNO_MAX_QUEUE` | `1000` | Scheduler queue depth |
+
+```bash
+JUNO_NODE_ADDRESSES=10.0.0.1:19092,10.0.0.2:19093,10.0.0.3:19094 \
+JUNO_MODEL_PATH=/models/TinyLlama.gguf \
+java -jar juno-master/target/juno-master.jar
+```
+
+Prints `COORDINATOR_READY:<port>` to stdout when the REST server is accepting requests. On AWS, launched by `juno-coordinator.service` (systemd) after `juno-deploy.sh` writes `cluster-nodes.env`.
+
+---
+
 ### GPU testing
 
 GPU stack: org.bytedeco cuda-platform (cudart + cublas). Works with various
@@ -513,32 +560,113 @@ command line (or set `JUNO_USE_GPU=true`) to activate the GPU path.
 
 ---
 
-### AWS setup
+### AWS — cluster deployment (`juno-deploy.sh`)
 
-set your AWS access keys in front of `launcher.sh`
+`juno-deploy.sh` is the unified cluster lifecycle script. It replaces the earlier
+`juno-infra.sh` (GPU) and `juno-infra-ft.sh` (CPU). Hardware is auto-detected
+during bootstrap: GPU instances install CUDA and start with `JUNO_USE_GPU=true`;
+CPU instances skip CUDA entirely. Both cluster types use the same script and the
+same command surface.
 
-```bash
-cd scripts/aws
-nano launcher.sh
-```
-
-### AWS setup for GPU testing (g4dn.xlarge - T4 16 GB VRAM, 8 VCORES; ~$0.50/hr)
-
-```bash
-cd scripts/aws
-./launcher.sh juno-infra.sh <setup|start|stop|teardown>
-```
-NB non you have to switch your account off Free Tier,
-for more info see @docs/1buks-aws-vcpu-infra.md
-
-### AWS setup for CPU testing (m7i-flex.large - 8GB RAM, 2 cores)
+**One-time setup — fill in credentials:**
 
 ```bash
 cd scripts/aws
-./launcher.sh juno-infra-ft.sh <setup|start|stop|teardown>
+nano launcher.sh    # set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
 ```
 
-fully Free Tier compatible
+**Commands:**
+
+```
+./launcher.sh juno-deploy.sh setup      [options]   # provision + bootstrap + open web console
+./launcher.sh juno-deploy.sh start                  # start stopped instances
+./launcher.sh juno-deploy.sh stop                   # stop instances (EBS + key retained)
+./launcher.sh juno-deploy.sh teardown               # terminate everything — no lingering costs
+./launcher.sh juno-deploy.sh status                 # show instance states
+./launcher.sh juno-deploy.sh scan-regions           # find cheapest AZ for instance type
+```
+
+**Setup options (all optional):**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--instance-type TYPE` | `g4dn.xlarge` | GPU: `g4dn.xlarge/2xlarge/4xlarge`. CPU: `m7i-flex.large`, `c7i-flex.large`, `t3.medium` |
+| `--node-count N` | `3` | Number of inference nodes |
+| `--coordinator node1` | (default) | Co-locate coordinator JVM on node 1 (free) |
+| `--coordinator separate` | — | Launch extra t3.medium coordinator instance |
+| `--model-url URL` | TinyLlama Q4_K_M | Model to download during bootstrap |
+| `--ptype pipeline\|tensor` | `pipeline` | Parallelism type passed to nodes |
+| `--dtype FLOAT32\|FLOAT16` | `FLOAT16` | Activation wire format |
+
+**GPU cluster — 3 × g4dn.xlarge (T4 16 GB VRAM, ~$0.53/hr each):**
+
+```bash
+cd scripts/aws
+./launcher.sh juno-deploy.sh setup
+```
+
+NB: requires switching your AWS account off Free Tier.
+See `docs/1buks-aws-vcpu-infra.md` for quota-request and billing guidance.
+
+**CPU cluster — 3 × m7i-flex.large (8 GB RAM, 2 vCPUs, ~$0.048/hr each):**
+
+```bash
+cd scripts/aws
+./launcher.sh juno-deploy.sh setup \
+  --instance-type m7i-flex.large \
+  --model-url https://huggingface.co/jartine/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile
+```
+
+Free Tier compatible.
+
+**Teardown:**
+
+```bash
+./launcher.sh juno-deploy.sh teardown
+# [juno]   Terminating 3 instances…
+# [juno]   SG deleted / Key pair deleted / Local key removed
+# [juno]   Cluster fully torn down. No lingering AWS costs.
+```
+
+**What happens during `setup`:**
+
+1. Resolves Ubuntu 22.04 LTS AMI and cheapest AZ for the instance type.
+2. Creates key pair (saved to `~/.ssh/juno-deploy-key.pem`) and security group
+   (SSH from your IP, gRPC internal, REST public on port 8080).
+3. Launches N node instances. If `--coordinator separate`, also launches a t3.medium.
+4. Waits for instances to reach `running` state.
+5. Bootstraps all nodes in parallel (~5 min): installs JDK 25 + Maven, detects
+   GPU via `lspci` (installs CUDA if found), clones and builds juno, downloads model,
+   writes `/etc/juno/env`, starts `juno-node.service` via systemd.
+   Bootstrap log: `/var/log/juno-bootstrap.log` on each instance.
+6. SSHes into the coordinator host, writes `/opt/juno/cluster-nodes.env` with
+   private IPs of all nodes, then starts `juno-coordinator.service`.
+7. Waits for coordinator REST to respond on `http://<coordinator>:8080/v1/cluster/health`.
+8. Prints cluster summary and enters the live monitor (refreshed every 20 s).
+
+**Live monitor output (example — 3 × m7i-flex.large, pipeline):**
+
+```
+  Uptime      :  00:04:33
+  Est. cost   :  $0.0108  ($0.0479/hr × 3 instances)
+  Console     :  http://51.20.255.51:8080
+
+  Nodes:
+    node-1   51.20.255.51     sys:ok  ready:yes cpu:22% mem:3268/7780MB  coord:active
+    node-2   51.21.220.189    sys:ok  ready:yes cpu:18% mem:384/7780MB   coord:inactive
+    node-3   51.21.218.9      sys:ok  ready:yes cpu:17% mem:389/7780MB   coord:inactive
+```
+
+Ctrl+C auto-stops all instances before exit (EBS volumes and key pair retained
+for `start`). Use `teardown` to terminate everything.
+
+**State file:** `~/.juno-deploy-state` — persists instance IDs, SG ID, and setup
+parameters so `start / stop / teardown` work without repeating options.
+
+**Web console:** served at `http://<coordinator>:8080` once the cluster is healthy.
+Supports streaming chat, model selection, and displays per-request token counts,
+latency, and throughput. Verified working with TinyLlama-1.1B-Chat-v1.0.Q5_K_M
+on a 3-node CPU cluster.
 
 ---
 

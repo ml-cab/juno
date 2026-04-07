@@ -4260,3 +4260,129 @@ MatVecQuantizedBackendLabelTest (node module) — 3 tests:
     nvidia-smi: GPU memory usage: 44 MiB (init) → weight resident after load
     All 8 CPU cores idle during token generation (inference on GPU)
     Build time: 1:46 min — all 11 modules SUCCESS
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+32. SESSION 21 CHANGES (2026-04-08) — UNIFIED AWS DEPLOYMENT SCRIPT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+32.1  Problem
+-----------------------------------------------
+Two separate scripts existed for GPU and CPU cluster deployment (juno-infra.sh
+and juno-infra-ft.sh). Hardware type had to be chosen at script selection time.
+Neither script handled coordinator lifecycle: nodes were launched and accessed
+individually; there was no automated coordinator startup, no cluster-nodes.env
+wiring, and no web console wait. The live dashboard showed only VRAM metrics
+(GPU only) with no per-node CPU/mem or coordinator health indication.
+
+32.2  Solution — juno-deploy.sh
+-----------------------------------------------
+scripts/aws/juno-deploy.sh replaces both juno-infra.sh and juno-infra-ft.sh
+with a single unified script. Key properties:
+
+  Hardware auto-detection
+    Bootstrap detects GPU via lspci. GPU instances install CUDA and export
+    JUNO_USE_GPU=true in /etc/juno/env. CPU instances skip CUDA entirely.
+    Same --instance-type flag selects between GPU (g4dn.*) and CPU (m7i-flex.*,
+    c7i-flex.*, t3.*) instance families.
+
+  Coordinator lifecycle
+    Coordinator mode: "node1" (default — co-located JVM on node 1, free) or
+    "separate" (extra t3.medium instance). After all nodes bootstrap, the script
+    SSHes into the coordinator host, writes /opt/juno/cluster-nodes.env with the
+    private IPs of all nodes (format: node1=<ip>:19092,node2=<ip>:19093,...),
+    then executes: sudo systemctl start juno-coordinator.
+    The coordinator service polls cluster-nodes.env on startup; this design
+    avoids the need to pass private IPs as userdata (not available at launch).
+
+  Setup flow
+    1. Resolve Ubuntu 22.04 LTS AMI; resolve cheapest AZ via
+       describe-instance-type-offerings.
+    2. Create key pair → ~/.ssh/juno-deploy-key.pem (chmod 600).
+    3. Create security group: SSH from caller IP, gRPC internal (19092-19094),
+       REST public (8080).
+    4. Launch NODE_COUNT node instances with node-specific userdata.
+       If coordinator=separate, also launch t3.medium coordinator instance.
+    5. Wait for all instances to reach "running" state.
+    6. Poll each node for ~/.juno-ready sentinel (bootstrap complete, ~5 min).
+       Bootstrap log: /var/log/juno-bootstrap.log on each instance.
+    7. _write_cluster_env_and_start_coordinator — SSH into coordinator host;
+       write cluster-nodes.env; systemctl start juno-coordinator.
+    8. Poll http://<coordinator>:8080/v1/cluster/health until HTTP 200.
+    9. Print cluster summary; enter live monitor loop (20 s refresh).
+
+  State file
+    ~/.juno-deploy-state persists: INSTANCE_IDS, COORD_ID, SG_ID, KEY_NAME,
+    INSTANCE_TYPE, NODE_COUNT, COORDINATOR_MODE, COORD_HOST, HTTP_PORT.
+    stop / start / teardown / status load this file; no options need repeating.
+
+  Live cluster monitor (replaces VRAM dashboard)
+    Displays per node: public IP, sys:ok/err, ready:yes/no, cpu:%, mem:MB/MB,
+    node:active/inactive, coord:active/inactive. Also shows uptime and estimated
+    cost (instance price × node count × elapsed hours). Refreshes every 20 s.
+    Ctrl+C triggers auto-stop before exit.
+
+  Commands
+    setup        Provision + bootstrap + start coordinator + open web console
+    start        Start stopped instances
+    stop         Stop instances (EBS + key pair retained)
+    teardown     Terminate all instances; delete SG and key pair
+    status       Show current instance states from AWS API
+    scan-regions Find cheapest AZ for the selected instance type across regions
+
+  Setup options (setup only)
+    --instance-type TYPE     EC2 instance type (default: g4dn.xlarge)
+    --node-count N           Number of inference nodes (default: 3)
+    --coordinator node1      Co-locate coordinator on node 1 (default)
+    --coordinator separate   Launch extra t3.medium coordinator
+    --model-url URL          HuggingFace direct URL to GGUF/llamafile
+    --ptype pipeline|tensor  Parallelism type (default: pipeline)
+    --dtype FLOAT32|FLOAT16  Activation wire format (default: FLOAT16)
+
+32.3  Web console
+-----------------------------------------------
+InferenceApiServer now serves GET / → CONSOLE_HTML (a self-contained HTML5
+chat interface, no external dependencies). The console polls /v1/cluster/health
+every 10 s, fetches /v1/models on load, and streams tokens via POST
+/v1/inference/stream using the Fetch ReadableStream API. Per-message stats
+shown: token count, latency (ms), throughput (tok/s).
+
+Verified working with TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile on a
+3-node m7i-flex.large CPU cluster. Console header shows model name, quant,
+backend, layer count, and HEALTHY status. Multi-turn context is maintained
+across messages (session KV cache active).
+
+32.4  Verified deployment (session 21)
+-----------------------------------------------
+Setup command:
+  ./launcher.sh juno-deploy.sh setup \
+    --instance-type m7i-flex.large \
+    --model-url https://huggingface.co/jartine/TinyLlama-1.1B-Chat-v1.0-GGUF/\
+resolve/main/TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile
+
+Cluster (eu-north-1):
+  node-1  i-05662a22b9035abbb  51.20.255.51   (coordinator co-located)
+  node-2  i-03ef3cb3bec3e932f  51.21.220.189
+  node-3  i-02606c5ead43686d1  51.21.218.9
+  gRPC ports: 172.31.31.31:19092, 172.31.25.134:19093, 172.31.30.17:19094
+
+Monitor at steady state (pipeline, FLOAT16):
+  cpu: 22/18/17%   mem: 3268/384/389 MB of 7780 MB
+  Est. cost: $0.0108  ($0.0479/hr × 3)
+
+Web console chat confirmed: multi-turn memory intact across three exchanges.
+
+32.5  Files added
+-----------------------------------------------
+  scripts/aws/juno-deploy.sh     unified GPU+CPU cluster lifecycle script
+
+32.6  Files updated
+-----------------------------------------------
+  docs/howto.md                  AWS section replaced with juno-deploy.sh reference
+  README.md                      Session 21 status entry; Key Design Decisions updated
+  docs/agent-arch.txt            this section
+
+32.7  Build status (session 21)
+-----------------------------------------------
+  All Java modules: unchanged (shell scripts only)
+  All tests: pass (unchanged)
+  Deployment verified end-to-end on AWS eu-north-1.
