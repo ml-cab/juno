@@ -91,8 +91,7 @@
 							<transformers>
 								<transformer
 									implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-									<mainClass>
-										cab.ml.juno.player.ConsoleMain</mainClass>
+									<mainClass>cab.ml.juno.node.NodeMain</mainClass>
 								</transformer>
 								<!-- Merge service files if any (gRPC uses them) -->
 								<transformer
@@ -109,7 +108,7 @@
 									</excludes>
 								</filter>
 							</filters>
-							<finalName>node</finalName>
+							<finalName>juno-node</finalName>
 						</configuration>
 					</execution>
 				</executions>

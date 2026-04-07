@@ -445,13 +445,23 @@ _probe_node() {
     fi
   fi
 
-  # CPU fallback
+  # CPU fallback — includes service health + last journal lines on failure
   if OUT=$(ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o BatchMode=yes \
-               -i "$SSH_KEY_FILE" "ubuntu@$IP" \
-               "ready=\$([[ -f /opt/juno/.juno-ready ]] && echo yes || echo no);
-                cpu=\$(grep 'cpu ' /proc/stat | awk '{u=\$2+\$4;t=\$2+\$3+\$4+\$5;printf \"%.0f\",u/t*100}')%;
-                mem=\$(free -m | awk '/^Mem/{printf \"%d/%dMB\",\$3,\$2}');
-                echo \"ready:\$ready cpu:\$cpu mem:\$mem\"" 2>/dev/null); then
+             -i "$SSH_KEY_FILE" "ubuntu@$IP" \
+             "ready=\$([[ -f /opt/juno/.juno-ready ]] && echo yes || echo no);
+              cpu=\$(grep 'cpu ' /proc/stat | awk '{u=\$2+\$4;t=\$2+\$3+\$4+\$5;printf \"%.0f\",u/t*100}')%;
+              mem=\$(free -m | awk '/^Mem/{printf \"%d/%dMB\",\$3,\$2}');
+              svc_node=\$(systemctl is-active juno-node 2>/dev/null || echo unknown);
+              svc_coord=\$(systemctl is-active juno-coordinator 2>/dev/null || echo unknown);
+              echo \"ready:\$ready cpu:\$cpu mem:\$mem node:\$svc_node coord:\$svc_coord\";
+              if [[ \$svc_node != active ]]; then
+                echo '--- juno-node journal ---';
+                journalctl -u juno-node --no-pager -n 8 2>/dev/null | tail -8;
+              fi;
+              if [[ \$svc_coord != active ]]; then
+                echo '--- juno-coordinator journal ---';
+                journalctl -u juno-coordinator --no-pager -n 8 2>/dev/null | tail -8;
+              fi" 2>/dev/null); then
     echo "$OUT"
   else
     echo "unreachable"
@@ -930,8 +940,8 @@ ExecStart=/usr/bin/java \\
   -XX:+UseG1GC -XX:+AlwaysPreTouch \\
   -Xmx12g \\
   -DJUNO_USE_GPU=\${JUNO_USE_GPU} \\
-  -jar /opt/juno/player/target/player.jar \\
-  cab.ml.juno.player.NodeMain \${NODE_ID} \${JUNO_GRPC_PORT} \${JUNO_MODEL_PATH}
+  -jar /opt/juno/juno-node/target/juno-node.jar \\
+  cab.ml.juno.node.NodeMain \${NODE_ID} \${JUNO_GRPC_PORT} \${JUNO_MODEL_PATH}
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
@@ -969,7 +979,7 @@ ExecStart=/bin/sh -c 'tail -f /dev/null | /usr/bin/java \
   --add-opens java.base/java.nio=ALL-UNNAMED \
   -XX:+UseG1GC -XX:+AlwaysPreTouch \
   -Xmx4g \
-  -jar /opt/juno/player/target/player.jar \
+  -jar /opt/juno/juno-master/target/juno-master.jar \
   --model-path ${JUNO_MODEL_PATH} \
   --pType ${JUNO_PTYPE} \
   --dtype ${JUNO_DTYPE}'
