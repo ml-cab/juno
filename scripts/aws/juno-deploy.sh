@@ -940,8 +940,11 @@ ExecStart=/usr/bin/java \\
   -XX:+UseG1GC -XX:+AlwaysPreTouch \\
   -Xmx12g \\
   -DJUNO_USE_GPU=\${JUNO_USE_GPU} \\
+  -Dnode.id=\${NODE_ID} \\
+  -Dnode.port=\${JUNO_GRPC_PORT} \\
+  -Dmodel.path=\${JUNO_MODEL_PATH} \\
   -jar /opt/juno/juno-node/target/juno-node.jar \\
-  cab.ml.juno.node.NodeMain \${NODE_ID} \${JUNO_GRPC_PORT} \${JUNO_MODEL_PATH}
+  cab.ml.juno.node.NodeMain
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
@@ -1050,18 +1053,18 @@ Type=simple
 WorkingDirectory=/opt/juno
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 120); do [[ -f /etc/juno/cluster-nodes.env ]] && exit 0; sleep 5; done; exit 1'
 EnvironmentFile=/etc/juno/cluster-nodes.env
-ExecStart=/usr/bin/java \\
-  --enable-preview \\
-  --enable-native-access=ALL-UNNAMED \\
-  --add-opens java.base/java.lang=ALL-UNNAMED \\
-  --add-opens java.base/java.nio=ALL-UNNAMED \\
-  -XX:+UseG1GC -XX:+AlwaysPreTouch \\
-  -Xmx4g \\
-  -jar /opt/juno/player/target/player.jar \\
-  --model-path \${JUNO_MODEL_PATH} \\
-  --pType \${JUNO_PTYPE} \\
-  --dtype \${JUNO_DTYPE} \\
-  --http-port \${JUNO_HTTP_PORT}
+
+ExecStart=/bin/sh -c 'tail -f /dev/null | /usr/bin/java \
+  --enable-preview \
+  --enable-native-access=ALL-UNNAMED \
+  --add-opens java.base/java.lang=ALL-UNNAMED \
+  --add-opens java.base/java.nio=ALL-UNNAMED \
+  -XX:+UseG1GC -XX:+AlwaysPreTouch \
+  -Xmx4g \
+  -jar /opt/juno/juno-master/target/juno-master.jar \
+  --model-path ${JUNO_MODEL_PATH} \
+  --pType ${JUNO_PTYPE} \
+  --dtype ${JUNO_DTYPE}'
 Restart=on-failure
 RestartSec=15
 StandardOutput=journal

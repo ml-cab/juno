@@ -21,42 +21,69 @@ import java.util.logging.Logger;
 /**
  * Entry point for a standalone node JVM process.
  *
- * Launched by ClusterHarness via ProcessBuilder — one JVM per node. Listens on
- * the given gRPC port and serves NodeService via EmbeddedNodeServer.
+ * Configuration is read from system properties (no command-line arguments):
+ *   -Dnode.id=<nodeId>          required
+ *   -Dnode.port=<port>          required
+ *   -Dmodel.path=<modelPath>    optional (if missing, runs with dummy handler)
+ *   -DJUNO_USE_GPU=<true|false> optional, defaults to true
  *
- * Usage (ClusterHarness handles this automatically): java ...
- * cab.ml.juno.integration.NodeMain <nodeId> <port> [modelPath]
+ * Example:
+ *   java -Dnode.id=node-1 -Dnode.port=9092 -Dmodel.path=/models/model.gguf \
+ *        -jar juno-node.jar cab.ml.juno.node.NodeMain
  *
- * When modelPath is supplied, EmbeddedNodeServer uses LlamaTransformerHandler
- * (real transformer math) instead of CyclicForwardPassHandler.
- *
- * Manual launch for debugging: mvn exec:java -pl integration \
- * -Dexec.mainClass=cab.ml.juno.integration.NodeMain \ -Dexec.args="node-1 9092
- * /models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
+ * The old command-line signature (nodeId port modelPath) is still supported
+ * for backward compatibility, but system properties take precedence.
  */
 public final class NodeMain {
 
-	private static final Logger log = Logger.getLogger(NodeMain.class.getName());
+    private static final Logger log = Logger.getLogger(NodeMain.class.getName());
 
-	public static void main(String[] args) throws Exception {
-		if (args.length < 2) {
-			System.err.println("Usage: NodeMain <nodeId> <port> [modelPath]");
-			System.exit(1);
-		}
+    public static void main(String[] args) throws Exception {
+        // Try system properties first
+        String nodeId = System.getProperty("node.id");
+        String portStr = System.getProperty("node.port");
+        String modelPath = System.getProperty("model.path");
 
-		String nodeId = args[0];
-		int port = Integer.parseInt(args[1]);
-		String modelPath = args.length >= 3 ? args[2] : null;
-		boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "true"));
+        // Fallback to command-line arguments (backward compatibility)
+        if (nodeId == null && args.length >= 1) {
+            nodeId = args[0];
+        }
+        if (portStr == null && args.length >= 2) {
+            portStr = args[1];
+        }
+        if (modelPath == null && args.length >= 3) {
+            modelPath = args[2];
+        }
 
-		EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu);
-		server.start();
+        // Validate
+        if (nodeId == null || nodeId.isBlank()) {
+            System.err.println("Missing required property: -Dnode.id=<nodeId>");
+            System.exit(1);
+        }
+        if (portStr == null || portStr.isBlank()) {
+            System.err.println("Missing required property: -Dnode.port=<port>");
+            System.exit(1);
+        }
 
-		// Signal readiness to the parent process (ClusterHarness polls for this line)
-		System.out.println("READY:" + nodeId + ":" + port);
-		System.out.flush();
+        int port;
+        try {
+            port = Integer.parseInt(portStr);
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid port: " + portStr);
+            System.exit(1);
+            return;
+        }
 
-		log.info("Node [" + nodeId + "] running on port " + port + " — waiting for requests");
-		server.blockUntilShutdown();
-	}
+        boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "true"));
+
+        EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu);
+        server.start();
+
+        // Signal readiness to the parent process (ClusterHarness polls for this line)
+        System.out.println("READY:" + nodeId + ":" + port);
+        System.out.flush();
+
+        log.info("Node [" + nodeId + "] running on port " + port + " — waiting for requests");
+        server.blockUntilShutdown();
+    }
 }
