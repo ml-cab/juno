@@ -89,7 +89,19 @@ log()  { echo -e "${GREEN}[juno]${RESET} $*"; }
 warn() { echo -e "${YELLOW}[warn]${RESET} $*"; }
 die()  { echo -e "${RED}[error]${RESET} $*"; exit 1; }
 
-require_cmd() { command -v "$1" &>/dev/null || die "'$1' not found — run: $2"; }
+require_cmd() {
+  command -v "$1" &>/dev/null && return 0
+  local install_hint="$2"
+  if [[ "$install_hint" == apt:* ]]; then
+    local apt_pkg="${install_hint#apt:}"
+    warn "'$1' not found — auto-installing ${apt_pkg}…"
+    sudo apt-get update -qq && sudo apt-get install -y -qq "$apt_pkg" \
+      && log "  OK $apt_pkg installed" \
+      || die "Could not install $apt_pkg — run: sudo apt install $apt_pkg"
+  else
+    die "'$1' not found — run: $install_hint"
+  fi
+}
 
 # ── ARGUMENT PARSING ──────────────────────────────────────────
 parse_options() {
@@ -567,10 +579,10 @@ _on_exit() {
 # ── SETUP ─────────────────────────────────────────────────────
 setup() {
   require_cmd aws   "pip install awscli"
-  require_cmd jq    "sudo apt install jq"
-  require_cmd bc    "sudo apt install bc"
-  require_cmd ssh   "sudo apt install openssh-client"
-  require_cmd curl  "sudo apt install curl"
+  require_cmd jq    "apt:jq"
+  require_cmd bc    "apt:bc"
+  require_cmd ssh   "apt:openssh-client"
+  require_cmd curl  "apt:curl"
 
   # ── Resolve vCPU count for this instance type ────────────────
   local VCPUS_PER_NODE="${INSTANCE_VCPUS[$INSTANCE_TYPE]:-2}"
@@ -689,7 +701,7 @@ setup() {
   # (default VPC is 172.31.0.0/16; custom VPCs are often 10.x or 192.168.x)
   VPC_CIDR=$(aws ec2 describe-vpcs --region "$REGION" \
     --vpc-ids "$VPC_ID" \
-    --query "Vpcs[0].CidrBlock" --output text 2>/dev/null)
+    --query "Vpcs[0].CidrBlock" --output text 2>/dev/null || echo "")
   [[ -z "$VPC_CIDR" || "$VPC_CIDR" == "None" ]] && VPC_CIDR="0.0.0.0/0"
   log "  OK VPC CIDR: $VPC_CIDR"
 
