@@ -400,13 +400,16 @@ _fetch_ips_and_monitor() {
     local IDX=1
     for ID in "${INSTANCE_IDS[@]}"; do
       local IP="${INSTANCE_IPS[$ID]}"
-      local SYS_STATUS NODE_INFO
+      local SYS_STATUS NODE_INFO IS_COORD=false
+      # node1 is coordinator in co-located mode; separate mode uses COORDINATOR_INSTANCE_ID
+      [[ "$COORDINATOR_MODE" == "node1" && "$IDX" -eq 1 ]] && IS_COORD=true
+
       SYS_STATUS=$(aws ec2 describe-instance-status \
         --instance-ids "$ID" --region "$REGION" \
         --query "InstanceStatuses[0].InstanceStatus.Status" \
         --output text 2>/dev/null || echo "unknown")
 
-      NODE_INFO="$(_probe_node "$ID" "$IP" "$IDX")"
+      NODE_INFO="$(_probe_node "$ID" "$IP" "$IDX" "$IS_COORD")"
       printf "  ${CYAN}  node-%-2d${RESET}  %-22s  sys:%-10s  %s\n" \
         "$IDX" "$IP" "$SYS_STATUS" "$NODE_INFO"
       (( IDX++ ))
@@ -434,8 +437,9 @@ _fetch_ips_and_monitor() {
 }
 
 # Probe one node — GPU stats if available, otherwise CPU/RAM + ready state
+# $4 IS_COORD: true if this node also runs juno-coordinator (node1 in co-located mode)
 _probe_node() {
-  local ID="$1" IP="$2" IDX="$3"
+  local ID="$1" IP="$2" IDX="$3" IS_COORD="${4:-false}"
   local OUT
 
   if ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o BatchMode=yes \
@@ -463,14 +467,15 @@ _probe_node() {
              "ready=\$([[ -f /opt/juno/.juno-ready ]] && echo yes || echo no);
               cpu=\$(grep 'cpu ' /proc/stat | awk '{u=\$2+\$4;t=\$2+\$3+\$4+\$5;printf \"%.0f\",u/t*100}')%;
               mem=\$(free -m | awk '/^Mem/{printf \"%d/%dMB\",\$3,\$2}');
-              svc_node=\$(systemctl is-active juno-node 2>/dev/null || echo unknown);
-              svc_coord=\$(systemctl is-active juno-coordinator 2>/dev/null || echo unknown);
+              svc_node=\$(systemctl is-active juno-node 2>/dev/null); [[ -z \$svc_node ]] && svc_node=unknown;
+              svc_coord=\$(systemctl is-active juno-coordinator 2>/dev/null); [[ -z \$svc_coord ]] && svc_coord=unknown;
+              is_coord='${IS_COORD}';
               echo \"ready:\$ready cpu:\$cpu mem:\$mem node:\$svc_node coord:\$svc_coord\";
               if [[ \$svc_node != active ]]; then
                 echo '--- juno-node journal ---';
                 journalctl -u juno-node --no-pager -n 8 2>/dev/null | tail -8;
               fi;
-              if [[ \$svc_coord != active ]]; then
+              if [[ \$is_coord == true && \$svc_coord != active ]]; then
                 echo '--- juno-coordinator journal ---';
                 journalctl -u juno-coordinator --no-pager -n 8 2>/dev/null | tail -8;
               fi" 2>/dev/null); then
