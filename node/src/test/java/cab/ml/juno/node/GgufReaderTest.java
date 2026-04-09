@@ -135,6 +135,191 @@ class GgufReaderTest {
 		assertThat(out).hasSize(512);
 	}
 
+	// ── Q2_K ──────────────────────────────────────────────────────────────────
+
+	/**
+	 * Q2_K uniform test: sc=0x11 (scale=1, min=1), qs=0x55 (all 2-bit groups=1),
+	 * d=1.0, dmin=0.5 → every element = 1.0*1*1 - 0.5*1 = 0.5f.
+	 */
+	@Test
+	@DisplayName("Q2_K uniform quants produce expected constant output")
+	void q2k_uniform_quants(@TempDir Path tempDir) throws IOException {
+		byte[] sc = new byte[16];
+		java.util.Arrays.fill(sc, (byte) 0x11); // scale=1, min=1
+		byte[] qs = new byte[64];
+		java.util.Arrays.fill(qs, (byte) 0x55); // 2-bit groups all = 1
+		// d=1.0 (0x3C00), dmin=0.5 (0x3800)
+		short d16    = 0x3C00;
+		short dmin16 = 0x3800;
+
+		float[] out = readQ2kBlock(tempDir, sc, qs, d16, dmin16);
+
+		assertThat(out).hasSize(256);
+		for (float v : out) {
+			assertThat(v).isCloseTo(0.5f, within(0.001f));
+		}
+	}
+
+	/**
+	 * Q2_K zero quants: qs=0x00 (all 2-bit groups=0), sc=0x11, d=1.0, dmin=0.5
+	 * → every element = 1.0*1*0 - 0.5*1 = -0.5f.
+	 */
+	@Test
+	@DisplayName("Q2_K zero quants produce uniform negative-min output")
+	void q2k_zero_quants(@TempDir Path tempDir) throws IOException {
+		byte[] sc = new byte[16];
+		java.util.Arrays.fill(sc, (byte) 0x11); // scale=1, min=1
+		byte[] qs = new byte[64]; // all zeros
+		short d16    = 0x3C00; // 1.0
+		short dmin16 = 0x3800; // 0.5
+
+		float[] out = readQ2kBlock(tempDir, sc, qs, d16, dmin16);
+
+		assertThat(out).hasSize(256);
+		for (float v : out) {
+			assertThat(v).isCloseTo(-0.5f, within(0.001f));
+		}
+	}
+
+	/**
+	 * Q2_K max quants: qs=0xFF (all 2-bit groups=3), sc=0x01 (scale=1, min=0),
+	 * d=2.0, dmin=0.0 → every element = 2.0*1*3 - 0.0*0 = 6.0f.
+	 */
+	@Test
+	@DisplayName("Q2_K max quants with zero min produce d*scale*3")
+	void q2k_max_quants(@TempDir Path tempDir) throws IOException {
+		byte[] sc = new byte[16];
+		java.util.Arrays.fill(sc, (byte) 0x01); // scale=1, min=0
+		byte[] qs = new byte[64];
+		java.util.Arrays.fill(qs, (byte) 0xFF); // all 2-bit groups = 3
+		short d16    = 0x4000; // 2.0 in FP16
+		short dmin16 = 0x0000; // 0.0
+
+		float[] out = readQ2kBlock(tempDir, sc, qs, d16, dmin16);
+
+		assertThat(out).hasSize(256);
+		for (float v : out) {
+			assertThat(v).isCloseTo(6.0f, within(0.001f));
+		}
+	}
+
+	@Test
+	@DisplayName("Q2_K two-block tensor: output length = 2 × 256")
+	void q2k_two_blocks(@TempDir Path tempDir) throws IOException {
+		byte[] sc = new byte[16];
+		byte[] qs = new byte[64];
+		short d16    = 0x3C00;
+		short dmin16 = 0x0000;
+
+		// Build two-block data
+		byte[] blockData = new byte[168]; // 2 × 84
+		ByteBuffer bb = ByteBuffer.wrap(blockData).order(ByteOrder.LITTLE_ENDIAN);
+		bb.put(sc); bb.put(qs); bb.putShort(d16); bb.putShort(dmin16);
+		bb.put(sc); bb.put(qs); bb.putShort(d16); bb.putShort(dmin16);
+
+		Path gguf = buildMinimalGguf(tempDir, "q2k_two", 10 /* Q2_K */, 512, blockData);
+		try (GgufReader r = GgufReader.open(gguf)) {
+			assertThat(r.tensor("q2k_two")).hasSize(512);
+		}
+	}
+
+	/** Write a minimal GGUF with one Q2_K tensor of 256 elements, then dequantize. */
+	private float[] readQ2kBlock(Path dir, byte[] sc, byte[] qs, short d16, short dmin16) throws IOException {
+		// Q2_K block: [scales:16][qs:64][d:f16][dmin:f16] = 84 bytes
+		byte[] blockData = new byte[84];
+		ByteBuffer bb = ByteBuffer.wrap(blockData).order(ByteOrder.LITTLE_ENDIAN);
+		bb.put(sc);
+		bb.put(qs);
+		bb.putShort(d16);
+		bb.putShort(dmin16);
+
+		Path gguf = buildMinimalGguf(dir, "test_q2k", 10 /* GGML_TYPE_Q2_K */, 256, blockData);
+		try (GgufReader r = GgufReader.open(gguf)) {
+			return r.tensor("test_q2k");
+		}
+	}
+
+	// ── Q3_K ──────────────────────────────────────────────────────────────────
+
+	/**
+	 * Q3_K max-positive quants: hmask=0xFF (high bit=1), qs=0xFF (low2=3),
+	 * scale=1 for all groups, d=1.0 → q3=7, signed=3 → every element = 1.0*1*3 = 3.0f.
+	 *
+	 * scRaw encoding for all sc[i]=1: aux0=aux1=0x11111111, aux2=0xAAAAAAAA
+	 * (lower nibble of utmp byte = 1 from aux0/aux1, upper nibble = 0x2 from aux2 bits → 0x21 = 33, 33-32=1).
+	 */
+	@Test
+	@DisplayName("Q3_K max quants (hmask=FF, qs=FF) give d*scale*3")
+	void q3k_max_quants(@TempDir Path tempDir) throws IOException {
+		byte[] hmask = new byte[32]; java.util.Arrays.fill(hmask, (byte) 0xFF);
+		byte[] qs    = new byte[64]; java.util.Arrays.fill(qs,    (byte) 0xFF);
+		byte[] scRaw = new byte[12];
+		java.util.Arrays.fill(scRaw, 0, 8,  (byte) 0x11); // aux0 & aux1
+		java.util.Arrays.fill(scRaw, 8, 12, (byte) 0xAA); // aux2: supplies upper nibble bits → sc[i]=1
+		short d16 = 0x3C00; // 1.0 in FP16
+
+		float[] out = readQ3kBlock(tempDir, hmask, qs, scRaw, d16);
+
+		assertThat(out).hasSize(256);
+		for (float v : out) assertThat(v).isCloseTo(3.0f, within(0.001f));
+	}
+
+	/**
+	 * Q3_K zero quants: hmask=0, qs=0, scale=1, d=1.0
+	 * → q3=0, signed=-4 → every element = 1.0*1*(-4) = -4.0f.
+	 */
+	@Test
+	@DisplayName("Q3_K zero quants (hmask=0, qs=0) give d*scale*(-4)")
+	void q3k_zero_quants(@TempDir Path tempDir) throws IOException {
+		byte[] hmask = new byte[32]; // all zeros
+		byte[] qs    = new byte[64]; // all zeros
+		byte[] scRaw = new byte[12];
+		java.util.Arrays.fill(scRaw, 0, 8,  (byte) 0x11); // sc[i]=1
+		java.util.Arrays.fill(scRaw, 8, 12, (byte) 0xAA);
+		short d16 = 0x3C00; // 1.0
+
+		float[] out = readQ3kBlock(tempDir, hmask, qs, scRaw, d16);
+
+		assertThat(out).hasSize(256);
+		for (float v : out) assertThat(v).isCloseTo(-4.0f, within(0.001f));
+	}
+
+	@Test
+	@DisplayName("Q3_K two-block tensor: output length = 2 × 256")
+	void q3k_two_blocks(@TempDir Path tempDir) throws IOException {
+		byte[] hmask = new byte[32];
+		byte[] qs    = new byte[64];
+		byte[] scRaw = new byte[12];
+		java.util.Arrays.fill(scRaw, 8, 12, (byte) 0xAA);
+		short d16 = 0x3C00;
+
+		byte[] blockData = new byte[220]; // 2 × 110
+		ByteBuffer bb = ByteBuffer.wrap(blockData).order(ByteOrder.LITTLE_ENDIAN);
+		bb.put(hmask); bb.put(qs); bb.put(scRaw); bb.putShort(d16);
+		bb.put(hmask); bb.put(qs); bb.put(scRaw); bb.putShort(d16);
+
+		Path gguf = buildMinimalGguf(tempDir, "q3k_two", 11 /* Q3_K */, 512, blockData);
+		try (GgufReader r = GgufReader.open(gguf)) {
+			assertThat(r.tensor("q3k_two")).hasSize(512);
+		}
+	}
+
+	/** Write a minimal GGUF with one Q3_K tensor of 256 elements, then dequantize. */
+	private float[] readQ3kBlock(Path dir, byte[] hmask, byte[] qs, byte[] scRaw, short d16) throws IOException {
+		// Q3_K block: [hmask:32][qs:64][scales:12][d:f16] = 110 bytes
+		byte[] blockData = new byte[110];
+		ByteBuffer bb = ByteBuffer.wrap(blockData).order(ByteOrder.LITTLE_ENDIAN);
+		bb.put(hmask);
+		bb.put(qs);
+		bb.put(scRaw);
+		bb.putShort(d16);
+
+		Path gguf = buildMinimalGguf(dir, "test_q3k", 11 /* GGML_TYPE_Q3_K */, 256, blockData);
+		try (GgufReader r = GgufReader.open(gguf)) {
+			return r.tensor("test_q3k");
+		}
+	}
+
 	// ── Q4_K ──────────────────────────────────────────────────────────────────
 
 	/**

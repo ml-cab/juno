@@ -37,7 +37,9 @@ package cab.ml.juno.registry;
 public enum QuantizationType {
 
 	FP32("FP32", 4.000), BF16("BF16", 2.000), FP16("FP16", 2.000), INT8("INT8", 1.000), INT4("INT4", 0.500),
-	Q8_0("Q8_0", 1.000), Q4_K_M("Q4_K_M", 0.500), Q4_0("Q4_0", 0.500), Q5_K_M("Q5_K_M", 0.625), Q6_K("Q6_K", 0.750);
+	Q8_0("Q8_0", 1.000), Q4_K_M("Q4_K_M", 0.500), Q4_0("Q4_0", 0.500), Q5_K_M("Q5_K_M", 0.625), Q6_K("Q6_K", 0.750),
+	Q2_K("Q2_K", 0.328), // GGUF 2-bit k-quant: 84 bytes per 256 elements ≈ 0.328 bpp
+	Q3_K("Q3_K", 0.430); // GGUF 3-bit k-quant: 110 bytes per 256 elements ≈ 0.430 bpp
 
 	private final String displayName;
 	private final double bytesPerParam;

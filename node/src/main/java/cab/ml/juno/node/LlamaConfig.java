@@ -159,7 +159,9 @@ public record LlamaConfig(int hiddenDim, // embedding / residual stream dimensio
 				case  1 -> QuantizationType.FP16;
 				case  2 -> QuantizationType.Q4_0;
 				case  7 -> QuantizationType.Q8_0;
-				case 12, 15 -> QuantizationType.Q4_K_M;
+				case 10 -> QuantizationType.Q2_K;
+				case 11, 12, 13 -> QuantizationType.Q3_K;  // Q3_K_S / Q3_K_M / Q3_K_L
+				case 14, 15 -> QuantizationType.Q4_K_M;    // Q4_K_S / Q4_K_M
 				case 17 -> QuantizationType.Q5_K_M;
 				case 18 -> QuantizationType.Q6_K;
 				case 30 -> QuantizationType.BF16;
@@ -177,6 +179,8 @@ public record LlamaConfig(int hiddenDim, // embedding / residual stream dimensio
 	public static QuantizationType fromFilename(String filename) {
 		if (filename == null) return QuantizationType.Q4_K_M;
 		String u = filename.toUpperCase();
+		if (u.contains("Q2_K"))   return QuantizationType.Q2_K;
+		if (u.contains("Q3_K"))   return QuantizationType.Q3_K;
 		if (u.contains("Q4_K_M"))  return QuantizationType.Q4_K_M;
 		if (u.contains("Q5_K_M"))  return QuantizationType.Q5_K_M;
 		if (u.contains("Q6_K"))    return QuantizationType.Q6_K;

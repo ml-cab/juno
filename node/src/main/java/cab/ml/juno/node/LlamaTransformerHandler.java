@@ -669,6 +669,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return switch (t.type()) {
 		case 0  -> dequantizeF32(t.data(), rows, cols);
 		case 8  -> dequantizeQ8_0(t.data(), rows, cols);
+		case 10 -> dequantizeQ2K(t.data(), rows, cols);
+		case 11 -> dequantizeQ3K(t.data(), rows, cols);
 		case 12 -> dequantizeQ4K(t.data(), rows, cols);
 		case 13 -> dequantizeQ5K(t.data(), rows, cols);
 		case 14 -> dequantizeQ6K(t.data(), rows, cols);
@@ -700,6 +702,108 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				int outBase = r * cols + b * BLOCK_SIZE;
 				for (int i = 0; i < BLOCK_SIZE; i++)
 					out[outBase + i] = scale * raw[bo + 2 + i];
+			}
+		}
+		return out;
+	}
+
+	// Q2_K: [scales:16][qs:64][d:f16][dmin:f16] = 84 bytes per 256 elements
+	private static float[] dequantizeQ2K(byte[] raw, int rows, int cols) {
+		final int BLOCK_SIZE  = 256;
+		final int BLOCK_BYTES = 84;
+		float[] out = new float[rows * cols];
+		int blocksPerRow = cols / BLOCK_SIZE;
+		int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		for (int r = 0; r < rows; r++) {
+			int rowByteOff = r * bytesPerRow;
+			int outBase    = r * cols;
+			for (int b = 0; b < blocksPerRow; b++) {
+				int bo     = rowByteOff + b * BLOCK_BYTES;
+				int scBase = bo;       // 16 scale bytes
+				int qsBase = bo + 16;  // 64 qs bytes
+				float d    = GgufReader.f16ToF32(readLE16(raw, bo + 80));
+				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 82));
+				int oi = outBase + b * BLOCK_SIZE;
+				for (int half = 0; half < 2; half++) {
+					int sh = scBase + half * 8;
+					int qh = qsBase + half * 32;
+					for (int l = 0; l < 16; l++) {
+						int q0 = raw[qh + l]      & 0xFF;
+						int q1 = raw[qh + l + 16] & 0xFF;
+						out[oi + l +   0] = d * (raw[sh+0] & 0xF) * ( q0       & 3) - dmin * ((raw[sh+0] & 0xFF) >> 4);
+						out[oi + l +  16] = d * (raw[sh+1] & 0xF) * ( q1       & 3) - dmin * ((raw[sh+1] & 0xFF) >> 4);
+						out[oi + l +  32] = d * (raw[sh+2] & 0xF) * ((q0 >> 2) & 3) - dmin * ((raw[sh+2] & 0xFF) >> 4);
+						out[oi + l +  48] = d * (raw[sh+3] & 0xF) * ((q1 >> 2) & 3) - dmin * ((raw[sh+3] & 0xFF) >> 4);
+						out[oi + l +  64] = d * (raw[sh+4] & 0xF) * ((q0 >> 4) & 3) - dmin * ((raw[sh+4] & 0xFF) >> 4);
+						out[oi + l +  80] = d * (raw[sh+5] & 0xF) * ((q1 >> 4) & 3) - dmin * ((raw[sh+5] & 0xFF) >> 4);
+						out[oi + l +  96] = d * (raw[sh+6] & 0xF) * ((q0 >> 6) & 3) - dmin * ((raw[sh+6] & 0xFF) >> 4);
+						out[oi + l + 112] = d * (raw[sh+7] & 0xF) * ((q1 >> 6) & 3) - dmin * ((raw[sh+7] & 0xFF) >> 4);
+					}
+					oi += 128;
+				}
+			}
+		}
+		return out;
+	}
+
+	// Q3_K: [hmask:32][qs:64][scales:12][d:f16] = 110 bytes per 256 elements
+	private static float[] dequantizeQ3K(byte[] raw, int rows, int cols) {
+		final int BLOCK_SIZE  = 256;
+		final int BLOCK_BYTES = 110;
+		float[] out = new float[rows * cols];
+		int blocksPerRow = cols / BLOCK_SIZE;
+		int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		int[] sc = new int[16];
+		for (int r = 0; r < rows; r++) {
+			int rowByteOff = r * bytesPerRow;
+			int outBase    = r * cols;
+			for (int b = 0; b < blocksPerRow; b++) {
+				int bo     = rowByteOff + b * BLOCK_BYTES;
+				int hmBase = bo;        // 32 hmask bytes
+				int qsBase = bo + 32;   // 64 qs bytes
+				int scBase = bo + 96;   // 12 scale bytes
+				float d = GgufReader.f16ToF32(readLE16(raw, bo + 108));
+
+				// Unpack 16 × 6-bit signed scales from 12 bytes
+				int aux0 = (raw[scBase+ 0]&0xFF)|((raw[scBase+ 1]&0xFF)<<8)|((raw[scBase+ 2]&0xFF)<<16)|((raw[scBase+ 3]&0xFF)<<24);
+				int aux1 = (raw[scBase+ 4]&0xFF)|((raw[scBase+ 5]&0xFF)<<8)|((raw[scBase+ 6]&0xFF)<<16)|((raw[scBase+ 7]&0xFF)<<24);
+				int aux2 = (raw[scBase+ 8]&0xFF)|((raw[scBase+ 9]&0xFF)<<8)|((raw[scBase+10]&0xFF)<<16)|((raw[scBase+11]&0xFF)<<24);
+				int[] utmp = {
+					( aux0        & 0x0f0f0f0f) | (((aux2      ) & 0x03030303) << 4),
+					( aux1        & 0x0f0f0f0f) | (((aux2 >>> 2) & 0x03030303) << 4),
+					((aux0 >>> 4) & 0x0f0f0f0f) | (((aux2 >>> 4) & 0x03030303) << 4),
+					((aux1 >>> 4) & 0x0f0f0f0f) | (((aux2 >>> 6) & 0x03030303) << 4),
+				};
+				for (int k = 0; k < 4; k++) {
+					sc[k*4+0] = ( utmp[k]        & 0xFF) - 32;
+					sc[k*4+1] = ((utmp[k] >>>  8) & 0xFF) - 32;
+					sc[k*4+2] = ((utmp[k] >>> 16) & 0xFF) - 32;
+					sc[k*4+3] = ((utmp[k] >>> 24) & 0xFF) - 32;
+				}
+
+				int is  = 0;
+				int m   = 1;
+				int oi  = outBase + b * BLOCK_SIZE;
+				for (int half = 0; half < 2; half++) {
+					int qh    = qsBase + half * 32;
+					int shift = 0;
+					for (int j = 0; j < 4; j++) {
+						float dl0 = d * sc[is++];
+						for (int l = 0; l < 16; l++) {
+							int low2 = (raw[qh + l]      & 0xFF) >>> shift & 3;
+							int hi   = ((raw[hmBase + l]      & 0xFF) & m) != 0 ? 4 : 0;
+							out[oi++] = dl0 * (float) ((low2 | hi) - 4);
+						}
+						float dl1 = d * sc[is++];
+						for (int l = 0; l < 16; l++) {
+							int low2 = (raw[qh + l + 16] & 0xFF) >>> shift & 3;
+							int hi   = ((raw[hmBase + l + 16] & 0xFF) & m) != 0 ? 4 : 0;
+							out[oi++] = dl1 * (float) ((low2 | hi) - 4);
+						}
+						shift += 2;
+						m <<= 1;
+					}
+				}
 			}
 		}
 		return out;
@@ -923,8 +1027,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private static float[] matVecQuantizedNoEvent(GgufReader.QuantizedTensor A, float[] x, int rowStart, int rowEnd,
 			int cols) {
 		return switch (A.type()) {
-		case 0 -> matVecF32raw(A.data(), x, rowStart, rowEnd, cols);
-		case 8 -> matVecQ8_0raw(A.data(), x, rowStart, rowEnd, cols);
+		case 0  -> matVecF32raw(A.data(), x, rowStart, rowEnd, cols);
+		case 8  -> matVecQ8_0raw(A.data(), x, rowStart, rowEnd, cols);
+		case 10 -> matVecQ2Kraw(A.data(), x, rowStart, rowEnd, cols);
+		case 11 -> matVecQ3Kraw(A.data(), x, rowStart, rowEnd, cols);
 		case 12 -> matVecQ4Kraw(A.data(), x, rowStart, rowEnd, cols);
 		case 13 -> matVecQ5Kraw(A.data(), x, rowStart, rowEnd, cols);
 		case 14 -> matVecQ6Kraw(A.data(), x, rowStart, rowEnd, cols);
@@ -975,6 +1081,141 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * using offset arithmetic, eliminating the byte[] copies that would otherwise
 	 * produce ~140 B × rows of GC pressure per call.
 	 */
+	// ── Q2_K raw bytes matVec ─────────────────────────────────────────────────
+
+	/**
+	 * Q2_K block-wise matrix–vector multiply.
+	 *
+	 * Block layout: [scales:16][qs:64][d:f16][dmin:f16] = 84 bytes per 256 elements.
+	 * Two halves of 128 elements; 8 scale bytes per half encode a 4-bit scale
+	 * (lower nibble) and 4-bit min (upper nibble). 2-bit quants packed 4 per byte.
+	 * Mirrors llama.cpp dequantize_row_q2_K.
+	 */
+	private static float[] matVecQ2Kraw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
+		final int BLOCK_SIZE  = 256;
+		final int BLOCK_BYTES = 84; // 16 + 64 + 2 + 2
+		final int blocksPerRow = cols / BLOCK_SIZE;
+		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		int rows = rowEnd - rowStart;
+		float[] y = new float[rows];
+
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			int rowByteOffset = (rowStart + r) * bytesPerRow;
+			float acc = 0f;
+			int xBase = 0;
+
+			for (int b = 0; b < blocksPerRow; b++) {
+				int bo     = rowByteOffset + b * BLOCK_BYTES;
+				int scBase = bo;       // 16 scale bytes
+				int qsBase = bo + 16;  // 64 qs bytes
+				float d    = GgufReader.f16ToF32(readLE16(raw, bo + 80));
+				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 82));
+
+				// Two halves of 128 elements each
+				for (int half = 0; half < 2; half++) {
+					int sh = scBase + half * 8;
+					int qh = qsBase + half * 32;
+
+					for (int l = 0; l < 16; l++) {
+						int q0 = raw[qh + l]      & 0xFF;
+						int q1 = raw[qh + l + 16] & 0xFF;
+						acc += (d * (raw[sh + 0] & 0xF) * ( q0       & 3) - dmin * ((raw[sh + 0] & 0xFF) >> 4)) * x[xBase + l +   0];
+						acc += (d * (raw[sh + 1] & 0xF) * ( q1       & 3) - dmin * ((raw[sh + 1] & 0xFF) >> 4)) * x[xBase + l +  16];
+						acc += (d * (raw[sh + 2] & 0xF) * ((q0 >> 2) & 3) - dmin * ((raw[sh + 2] & 0xFF) >> 4)) * x[xBase + l +  32];
+						acc += (d * (raw[sh + 3] & 0xF) * ((q1 >> 2) & 3) - dmin * ((raw[sh + 3] & 0xFF) >> 4)) * x[xBase + l +  48];
+						acc += (d * (raw[sh + 4] & 0xF) * ((q0 >> 4) & 3) - dmin * ((raw[sh + 4] & 0xFF) >> 4)) * x[xBase + l +  64];
+						acc += (d * (raw[sh + 5] & 0xF) * ((q1 >> 4) & 3) - dmin * ((raw[sh + 5] & 0xFF) >> 4)) * x[xBase + l +  80];
+						acc += (d * (raw[sh + 6] & 0xF) * ((q0 >> 6) & 3) - dmin * ((raw[sh + 6] & 0xFF) >> 4)) * x[xBase + l +  96];
+						acc += (d * (raw[sh + 7] & 0xF) * ((q1 >> 6) & 3) - dmin * ((raw[sh + 7] & 0xFF) >> 4)) * x[xBase + l + 112];
+					}
+					xBase += 128;
+				}
+			}
+			y[r] = acc;
+		});
+		return y;
+	}
+
+	// ── Q3_K raw bytes matVec ─────────────────────────────────────────────────
+
+	/**
+	 * Q3_K block-wise matrix–vector multiply.
+	 *
+	 * Block layout: [hmask:32][qs:64][scales:12][d:f16] = 110 bytes per 256 elements.
+	 * 3-bit quants: 2 low bits from qs, 1 high bit from hmask. 16 groups of 16
+	 * elements, each with a signed 6-bit scale (stored biased +32).
+	 * Mirrors llama.cpp dequantize_row_q3_K.
+	 */
+	private static float[] matVecQ3Kraw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
+		final int BLOCK_SIZE  = 256;
+		final int BLOCK_BYTES = 110; // 32 + 64 + 12 + 2
+		final int blocksPerRow = cols / BLOCK_SIZE;
+		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		int rows = rowEnd - rowStart;
+		float[] y = new float[rows];
+
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			int rowByteOffset = (rowStart + r) * bytesPerRow;
+			float acc = 0f;
+			int   xBase = 0;
+			int[] sc = new int[16];
+
+			for (int b = 0; b < blocksPerRow; b++) {
+				int bo      = rowByteOffset + b * BLOCK_BYTES;
+				int hmBase  = bo;       // 32 hmask bytes
+				int qsBase  = bo + 32;  // 64 qs bytes
+				int scBase  = bo + 96;  // 12 scale bytes
+				float d = GgufReader.f16ToF32(readLE16(raw, bo + 108));
+
+				// Unpack 16 × 6-bit signed scales from 12 bytes — mirrors llama.cpp kmask logic
+				int aux0 = (raw[scBase+ 0]&0xFF)|((raw[scBase+ 1]&0xFF)<<8)|((raw[scBase+ 2]&0xFF)<<16)|((raw[scBase+ 3]&0xFF)<<24);
+				int aux1 = (raw[scBase+ 4]&0xFF)|((raw[scBase+ 5]&0xFF)<<8)|((raw[scBase+ 6]&0xFF)<<16)|((raw[scBase+ 7]&0xFF)<<24);
+				int aux2 = (raw[scBase+ 8]&0xFF)|((raw[scBase+ 9]&0xFF)<<8)|((raw[scBase+10]&0xFF)<<16)|((raw[scBase+11]&0xFF)<<24);
+				int[] utmp = {
+					( aux0        & 0x0f0f0f0f) | (((aux2      ) & 0x03030303) << 4),
+					( aux1        & 0x0f0f0f0f) | (((aux2 >>> 2) & 0x03030303) << 4),
+					((aux0 >>> 4) & 0x0f0f0f0f) | (((aux2 >>> 4) & 0x03030303) << 4),
+					((aux1 >>> 4) & 0x0f0f0f0f) | (((aux2 >>> 6) & 0x03030303) << 4),
+				};
+				for (int k = 0; k < 4; k++) {
+					sc[k*4+0] = ( utmp[k]        & 0xFF) - 32;
+					sc[k*4+1] = ((utmp[k] >>>  8) & 0xFF) - 32;
+					sc[k*4+2] = ((utmp[k] >>> 16) & 0xFF) - 32;
+					sc[k*4+3] = ((utmp[k] >>> 24) & 0xFF) - 32;
+				}
+
+				// hmask[0..15] carries the high bit for dl0 elements across both halves;
+				// hmask[16..31] does the same for dl1 elements. m advances as a bitmask.
+				int is    = 0;
+				int m     = 1;
+				for (int half = 0; half < 2; half++) {
+					int qh    = qsBase + half * 32;
+					int shift = 0;
+					for (int j = 0; j < 4; j++) {
+						float dl0 = d * sc[is++];
+						for (int l = 0; l < 16; l++) {
+							int low2 = (raw[qh + l]      & 0xFF) >>> shift & 3;
+							int hi   = ((raw[hmBase + l]      & 0xFF) & m) != 0 ? 4 : 0;
+							acc += dl0 * (float) ((low2 | hi) - 4) * x[xBase++];
+						}
+						float dl1 = d * sc[is++];
+						for (int l = 0; l < 16; l++) {
+							int low2 = (raw[qh + l + 16]  & 0xFF) >>> shift & 3;
+							int hi   = ((raw[hmBase + l + 16] & 0xFF) & m) != 0 ? 4 : 0;
+							acc += dl1 * (float) ((low2 | hi) - 4) * x[xBase++];
+						}
+						shift += 2;
+						m <<= 1;
+					}
+				}
+			}
+			y[r] = acc;
+		});
+		return y;
+	}
+
+	// ── Q4_K raw bytes matVec ─────────────────────────────────────────────────
+
 	private static float[] matVecQ4Kraw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
 		final int BLOCK_SIZE = 256;
 		final int BLOCK_BYTES = 144;

@@ -53,6 +53,8 @@ public final class GgufReader implements AutoCloseable {
 	private static final int GGML_TYPE_F32 = 0;
 	private static final int GGML_TYPE_F16 = 1;
 	private static final int GGML_TYPE_Q4_0 = 2;
+	private static final int GGML_TYPE_Q2_K = 10;
+	private static final int GGML_TYPE_Q3_K = 11;
 	private static final int GGML_TYPE_Q8_0 = 8;
 	private static final int GGML_TYPE_Q4_K = 12;
 	private static final int GGML_TYPE_Q6_K = 14;
@@ -256,6 +258,8 @@ public final class GgufReader implements AutoCloseable {
 		case GGML_TYPE_F16, GGML_TYPE_BF16 -> nelems * 2L;
 		case GGML_TYPE_Q8_0 -> (nelems / 32L) * 34L;
 		case GGML_TYPE_Q4_0 -> (nelems / 32L) * 18L;
+		case GGML_TYPE_Q2_K -> (nelems / 256L) * 84L;
+		case GGML_TYPE_Q3_K -> (nelems / 256L) * 110L;
 		case GGML_TYPE_Q4_K -> (nelems / 256L) * 144L;
 		case GGML_TYPE_Q5_K -> (nelems / 256L) * 176L;
 		case GGML_TYPE_Q6_K -> (nelems / 256L) * 210L;
@@ -296,6 +300,8 @@ public final class GgufReader implements AutoCloseable {
 		case GGML_TYPE_BF16 -> loadBF16(info);
 		case GGML_TYPE_Q8_0 -> loadQ8_0(info);
 		case GGML_TYPE_Q4_0 -> loadQ4_0(info);
+		case GGML_TYPE_Q2_K -> loadQ2_K(info);
+		case GGML_TYPE_Q3_K -> loadQ3_K(info);
 		case GGML_TYPE_Q4_K -> loadQ4_K(info);
 		case GGML_TYPE_Q5_K -> loadQ5_K(info);
 		case GGML_TYPE_Q6_K -> loadQ6_K(info);
@@ -367,6 +373,135 @@ public final class GgufReader implements AutoCloseable {
 				out[oi++] = scale * ((qs[i] & 0xF) - 8);
 			for (int i = 0; i < 16; i++)
 				out[oi++] = scale * ((qs[i] >> 4 & 0xF) - 8);
+		}
+		return out;
+	}
+
+	// Q2_K: superblocks of 256 elements
+	// [scales:16 bytes][qs:64 bytes][d:f16][dmin:f16] = 84 bytes per 256 elements
+	//
+	// Each superblock is split into two halves of 128 elements.
+	// Within each half, 8 scale bytes each encode a 4-bit scale (lower nibble)
+	// and a 4-bit min (upper nibble). The 32 qs bytes hold four 2-bit quant
+	// values per byte. Dequant formula (mirrors llama.cpp dequantize_row_q2_K):
+	//   out[l+ 0] = d*(sc[0]&0xF)*((q[l   ]>>0)&3) - dmin*(sc[0]>>4)
+	//   out[l+16] = d*(sc[1]&0xF)*((q[l   ]>>2)&3) - dmin*(sc[1]>>4)
+	//   out[l+32] = d*(sc[2]&0xF)*((q[l+16]>>0)&3) - dmin*(sc[2]>>4)
+	//   out[l+48] = d*(sc[3]&0xF)*((q[l+16]>>2)&3) - dmin*(sc[3]>>4)
+	//   out[l+64] = d*(sc[4]&0xF)*((q[l   ]>>4)&3) - dmin*(sc[4]>>4)
+	//   out[l+80] = d*(sc[5]&0xF)*((q[l   ]>>6)&3) - dmin*(sc[5]>>4)
+	//   out[l+96] = d*(sc[6]&0xF)*((q[l+16]>>4)&3) - dmin*(sc[6]>>4)
+	//   out[l+112]= d*(sc[7]&0xF)*((q[l+16]>>6)&3) - dmin*(sc[7]>>4)
+	//   for l in 0..15
+	private float[] loadQ2_K(TensorInfo info) throws IOException {
+		int n = (int) info.nelems;
+		int QK_K = 256;
+		int blockBytes = 84; // 16 + 64 + 2 + 2
+		int nBlocks = n / QK_K;
+		ByteBuffer buf = readBytes(info.offset, (long) nBlocks * blockBytes);
+		float[] out = new float[n];
+		int oi = 0;
+		byte[] sc = new byte[16];
+		byte[] qs = new byte[64];
+
+		for (int b = 0; b < nBlocks; b++) {
+			buf.get(sc);
+			buf.get(qs);
+			float d    = f16ToF32(buf.getShort());
+			float dmin = f16ToF32(buf.getShort());
+
+			// Two halves of 128 elements each
+			for (int half = 0; half < 2; half++) {
+				int scBase = half * 8;
+				int qBase  = half * 32;
+
+				for (int l = 0; l < 16; l++) {
+					out[oi + l +   0] = d * (sc[scBase + 0] & 0xF) * ((qs[qBase + l     ]     ) & 3) - dmin * ((sc[scBase + 0] & 0xFF) >> 4);
+					out[oi + l +  16] = d * (sc[scBase + 1] & 0xF) * ((qs[qBase + l + 16]     ) & 3) - dmin * ((sc[scBase + 1] & 0xFF) >> 4);
+					out[oi + l +  32] = d * (sc[scBase + 2] & 0xF) * ((qs[qBase + l     ] >> 2) & 3) - dmin * ((sc[scBase + 2] & 0xFF) >> 4);
+					out[oi + l +  48] = d * (sc[scBase + 3] & 0xF) * ((qs[qBase + l + 16] >> 2) & 3) - dmin * ((sc[scBase + 3] & 0xFF) >> 4);
+					out[oi + l +  64] = d * (sc[scBase + 4] & 0xF) * ((qs[qBase + l     ] >> 4) & 3) - dmin * ((sc[scBase + 4] & 0xFF) >> 4);
+					out[oi + l +  80] = d * (sc[scBase + 5] & 0xF) * ((qs[qBase + l + 16] >> 4) & 3) - dmin * ((sc[scBase + 5] & 0xFF) >> 4);
+					out[oi + l +  96] = d * (sc[scBase + 6] & 0xF) * ((qs[qBase + l     ] >> 6) & 3) - dmin * ((sc[scBase + 6] & 0xFF) >> 4);
+					out[oi + l + 112] = d * (sc[scBase + 7] & 0xF) * ((qs[qBase + l + 16] >> 6) & 3) - dmin * ((sc[scBase + 7] & 0xFF) >> 4);
+				}
+				oi += 128;
+			}
+		}
+		return out;
+	}
+
+	// Q3_K: superblocks of 256 elements
+	// [hmask:32 bytes][qs:64 bytes][scales:12 bytes][d:f16] = 110 bytes per 256 elements
+	//
+	// Each element uses 3 bits: 2 low bits from qs, 1 high bit from hmask.
+	// 16 groups of 16 elements, each with a signed 6-bit scale (stored biased +32).
+	//
+	// Loop mirrors llama.cpp dequantize_row_q3_K exactly:
+	//   two 128-element halves (qBase=0, qBase=32 in qs);
+	//   within each half, 4 bit-shift iterations (shift=0,2,4,6);
+	//   hmask bitmask m advances 1→2→4→8→16→32→64→128 across both halves.
+	//   signed quant = (low2 | (hmask_bit<<2)) - 4   →  -4..3
+	//   output = d * sc[is] * signed_quant
+	private float[] loadQ3_K(TensorInfo info) throws IOException {
+		int n = (int) info.nelems;
+		int QK_K = 256;
+		int blockBytes = 110; // 32 + 64 + 12 + 2
+		int nBlocks = n / QK_K;
+		ByteBuffer buf = readBytes(info.offset, (long) nBlocks * blockBytes);
+		float[] out = new float[n];
+		int oi = 0;
+		byte[] hmask = new byte[32];
+		byte[] qs    = new byte[64];
+		byte[] scRaw = new byte[12];
+		int[]  sc    = new int[16]; // signed scale values (biased -32 already applied)
+
+		for (int b = 0; b < nBlocks; b++) {
+			buf.get(hmask);
+			buf.get(qs);
+			buf.get(scRaw);
+			float d = f16ToF32(buf.getShort());
+
+			// Unpack 16 × 6-bit scales from 12 bytes — mirrors llama.cpp kmask1/kmask2 logic
+			int aux0 = (scRaw[ 0]&0xFF)|((scRaw[ 1]&0xFF)<<8)|((scRaw[ 2]&0xFF)<<16)|((scRaw[ 3]&0xFF)<<24);
+			int aux1 = (scRaw[ 4]&0xFF)|((scRaw[ 5]&0xFF)<<8)|((scRaw[ 6]&0xFF)<<16)|((scRaw[ 7]&0xFF)<<24);
+			int aux2 = (scRaw[ 8]&0xFF)|((scRaw[ 9]&0xFF)<<8)|((scRaw[10]&0xFF)<<16)|((scRaw[11]&0xFF)<<24);
+			int[] utmp = {
+				( aux0        & 0x0f0f0f0f) | (((aux2      ) & 0x03030303) << 4),
+				( aux1        & 0x0f0f0f0f) | (((aux2 >>> 2) & 0x03030303) << 4),
+				((aux0 >>> 4) & 0x0f0f0f0f) | (((aux2 >>> 4) & 0x03030303) << 4),
+				((aux1 >>> 4) & 0x0f0f0f0f) | (((aux2 >>> 6) & 0x03030303) << 4),
+			};
+			for (int k = 0; k < 4; k++) {
+				sc[k*4+0] = ( utmp[k]        & 0xFF) - 32;
+				sc[k*4+1] = ((utmp[k] >>>  8) & 0xFF) - 32;
+				sc[k*4+2] = ((utmp[k] >>> 16) & 0xFF) - 32;
+				sc[k*4+3] = ((utmp[k] >>> 24) & 0xFF) - 32;
+			}
+
+			// m is the bitmask into hmask bytes; advances 1,2,4,8,16,32,64,128 across both halves
+			int is = 0;
+			int m  = 1;
+			for (int half = 0; half < 2; half++) {
+				int qBase = half * 32;
+				int shift = 0;
+				for (int j = 0; j < 4; j++) {
+					float dl0 = d * sc[is++];
+					for (int l = 0; l < 16; l++) {
+						int low2 = (qs[qBase + l]      >>> shift) & 3;
+						int hi   = ((hmask[l]      & 0xFF) & m) != 0 ? 4 : 0;
+						out[oi++] = dl0 * (float) ((low2 | hi) - 4);
+					}
+					float dl1 = d * sc[is++];
+					for (int l = 0; l < 16; l++) {
+						int low2 = (qs[qBase + l + 16] >>> shift) & 3;
+						int hi   = ((hmask[l + 16] & 0xFF) & m) != 0 ? 4 : 0;
+						out[oi++] = dl1 * (float) ((low2 | hi) - 4);
+					}
+					shift += 2;
+					m <<= 1;
+				}
+			}
 		}
 		return out;
 	}
