@@ -99,7 +99,7 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
   |   +-- LoadShardsParallelTest<- unit tests for parallel shard loading (2 tests)
   |   +-- ChatHistoryTest       <- unit tests for ChatHistory (3 tests)
   |   +-- ChatModelTypeTest     <- unit tests for ChatModelType (6 tests)
-  |   Package: io.hyperstack4j.player
+  |   Package: cab.ml.juno.player
   |   Shade jar: player.jar  (main: ConsoleMain)
   |
   +-- metrics/                  <- JFR-based productivity metrics extractor
@@ -115,11 +115,11 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
       |                            juno-master/target/juno-master.jar (main class CoordinatorMain.java)
       +-- InProcessClusterIT    <- in-process 3-node test, zero network  (6 tests)
       +-- ThreeNodeClusterIT    <- full 3-JVM test over real sockets      (9 tests)
-      Package: io.hyperstack4j.integration
+      Package: cab.ml.juno.integration
       Shade jar: player.jar  (main: ModelLiveRunner)
       Depends on: player module (for ClusterHarness, ProcessPipelineClient, etc.)
 
-Group ID:    io.hyperstack4j
+Group ID:    cab.ml.juno
 Artifact ID: juno
 Version:     0.1.0-SNAPSHOT
 
@@ -191,7 +191,7 @@ REMOVED from original design (all caused transitive dependency failures):
           + kr.motd.maven:os-maven-plugin:1.7.1 (platform detection)
   Output: target/generated-sources/protobuf/java (messages)
           target/generated-sources/protobuf/grpc-java (service stubs)
-  Java package: io.hyperstack4j.api.grpc
+  Java package: cab.ml.juno.api.grpc
 
   Services:
     InferenceService   — client -> coordinator (Infer, InferStream)
@@ -616,7 +616,7 @@ ModelLiveRunnerIT.java class (cab.ml.juno.master).
 
     # Direct via Maven exec
     mvn exec:java -pl juno-master \
-      -Dexec.mainClass=io.hyperstack4j.integration.ModelLiveRunner \
+      -Dexec.mainClass=cab.ml.juno.integration.ModelLiveRunner \
       -Dexec.args=/path/to/model.gguf
 
     # Via shaded jar
@@ -1127,7 +1127,7 @@ Logger hierarchy in the config:
   io.grpc.netty.shaded                                    ERROR
   io.netty                                                ERROR
   io.grpc                                                 ERROR
-  root                                                    WARN   (io.hyperstack4j.* visible)
+  root                                                    WARN   (cab.ml.juno.* visible)
 
 The existing integration/src/test/resources/logback-test.xml is unchanged
 (governs JUnit test runs, already had io.grpc.netty.shaded at ERROR).
@@ -1286,7 +1286,7 @@ Test results after fixes:
   Phase 3 — Orchestration  [COMPLETE — module restructuring, session 7]
     [x] player      New module — model interaction layer extracted from integration
                     ClusterHarness, EmbeddedNodeServer, NodeMain,
-                    ProcessPipelineClient, ConsoleMain moved to io.hyperstack4j.player
+                    ProcessPipelineClient, ConsoleMain moved to cab.ml.juno.player
                     LoadShardsParallelTest moved to player (unit test)
                     Shade jar: player/target/player.jar (main: ConsoleMain)
     [x] integration Decoupled from player concerns — unit/IT tests only
@@ -1915,8 +1915,8 @@ LoadShardsParallelTest (integration module) — 2 new tests:
 -----------------------------------------------
 The codebase contains two enums named ActivationDtype:
 
-  io.hyperstack4j.api.grpc.ActivationDtype   — protobuf-generated
-  io.hyperstack4j.node.ActivationDtype       — domain enum
+  cab.ml.juno.api.grpc.ActivationDtype   — protobuf-generated
+  cab.ml.juno.node.ActivationDtype       — domain enum
 
 This is intentional. The protobuf enum exists purely for wire serialisation
 within the gRPC protocol. The domain enum is used throughout application code
