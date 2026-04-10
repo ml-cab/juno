@@ -59,7 +59,10 @@ Without `--gpu` or `--cpu`, GPU is used by default. Use `--cpu` to force CPU.
 ### Download a model
 
 ```bash
-# TinyLlama 1.1B — smallest, fastest, 637 MB, needs ~2g heap
+# TinyLlama 1.1B Q2_K — smallest footprint, 380 MB, needs ~2g heap
+wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q2_K.gguf
+
+# TinyLlama 1.1B Q4_K_M — recommended default, 637 MB, needs ~2g heap
 wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
 
 # Phi-3.5 Mini Instruct — 3.8B, good quality, 2.4 GB, needs 4g heap
@@ -337,6 +340,7 @@ Tensor-parallel cluster (tests 7-8, fresh 3-node cluster started after pipeline 
 
 | Model | Size GB | `--heap` |
 |-------|---------|----------|
+| TinyLlama-1.1B-Chat-v1.0.Q2_K.gguf | 0.38 | 2g |
 | TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf | 0.67 | 2g |
 | TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile | 0.97 | 2g |
 | Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile | 1.6 | 2g |
@@ -447,11 +451,11 @@ and adds CUDA-specific numerical comparison and timing assertions.
 
 ```bash
 # GPU integration test — requires CUDA 12.x, GPU, and a GGUF model file
-mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl integration \
+mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl juno-master \
   --enable-native-access=ALL-UNNAMED
 
 # Via env var
-MODEL_PATH=/path/to/model.gguf mvn verify -Pgpu -pl integration \
+MODEL_PATH=/path/to/model.gguf mvn verify -Pgpu -pl juno-master \
   --enable-native-access=ALL-UNNAMED
 ```
 
@@ -499,7 +503,7 @@ mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
 
 # 7. GPU integration test
 mvn verify -Pgpu -Dit.model.path=$(pwd)/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf \
-  -pl integration --enable-native-access=ALL-UNNAMED
+  -pl juno-master --enable-native-access=ALL-UNNAMED
 
 # 8. Interactive session on GPU
 ./juno local --model-path $(pwd)/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf

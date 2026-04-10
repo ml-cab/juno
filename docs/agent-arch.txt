@@ -107,11 +107,12 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
   |                                JfrMetricsExtractor, JfrModelMapper, JfrPercentiles,
   |                                MetricsSnapshot, MetricsWriter,
   |                                ModelsConfig, ModelsConfigLoader, ProductivityMain
-  |
-  +-- integration/              <- Multi-JVM cluster integration tests + live runner
+  +-- juno-node/                <- Fat jar, NodeMain, package cab.ml.juno.node
+  +-- juno-master/              <- Fat jar, CoordinatorMain and all the integration tests,
+      |                            package cab.ml.juno.master
       +-- ModelLiveRunner       <- standalone executable; runs 6 real-model checks;
       |                            replaces TinyLlamaLiveIT; entry point for
-      |                            integration/target/player.jar (main class)
+      |                            juno-master/target/juno-master.jar (main class CoordinatorMain.java)
       +-- InProcessClusterIT    <- in-process 3-node test, zero network  (6 tests)
       +-- ThreeNodeClusterIT    <- full 3-JVM test over real sockets      (9 tests)
       Package: io.hyperstack4j.integration
@@ -530,12 +531,11 @@ Example metrics endpoint:
 9. INTEGRATION TEST INFRASTRUCTURE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-The integration module provides two test suites, both run by maven-failsafe-plugin
+The juno-master module provides two test suites, both run by maven-failsafe-plugin
 under mvn verify.
 
 Real-model interaction (cluster harness, REPL, gRPC node server) lives in the
-player module (io.hyperstack4j.player). The integration module depends on player
-and uses its infrastructure for wiring tests.
+ModelLiveRunnerIT.java class (cab.ml.juno.master).
 
 9.1  InProcessClusterIT  (fast, zero network)
   Module: integration
@@ -571,7 +571,7 @@ and uses its infrastructure for wiring tests.
     vocab_size=32000, hidden_dim=2048, layers=22, heads=32, size=~670MB
     Layer split across 3 nodes: 8 / 7 / 7
 
-9.3  ModelLiveRunner  (real model, standalone executable — replaces TinyLlamaLiveIT)
+9.3  ModelLiveRunnerIT  (real model, disabled by default; activate with -Pintegration. — replaces TinyLlamaLiveIT)
   Location: integration/src/main/java/io/hyperstack4j/integration/ModelLiveRunner.java
   Main class for integration/target/player.jar (built by maven-shade-plugin).
   NOT a JUnit test class. Performs the same 6 real-model validation checks that
@@ -615,7 +615,7 @@ and uses its infrastructure for wiring tests.
     MODEL_PATH=/path/to/model.gguf ./hyper.sh integration-live
 
     # Direct via Maven exec
-    mvn exec:java -pl integration \
+    mvn exec:java -pl juno-master \
       -Dexec.mainClass=io.hyperstack4j.integration.ModelLiveRunner \
       -Dexec.args=/path/to/model.gguf
 
@@ -650,10 +650,10 @@ and uses its infrastructure for wiring tests.
 
 9.6  Run commands
   # Full suite — forks 3 JVM node processes (stub mode)
-  mvn verify -pl integration
+  mvn verify -pl juno-master
 
   # In-process only
-  mvn verify -pl integration -Dit.test=InProcessClusterIT
+  mvn verify -pl juno-master -Dit.test=InProcessClusterIT
 
   # Real model live runner (ModelLiveRunner, not a JUnit IT)
   java -jar integration/target/player.jar /path/to/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
@@ -1236,7 +1236,7 @@ Test results after fixes:
     [x] coordinator GenerationLoop prefill loop — feeds each prompt token individually
                     so all pipeline nodes fill their KV caches before decode begins
     [x] node        GgufReader — pure Java GGUF v2/v3 binary parser
-                    Supports: F32, F16, BF16, Q8_0, Q4_0, Q4_K (Q4_K_M), Q6_K
+                    Supports: F32, F16, BF16, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K (Q4_K_M), Q5_K, Q6_K
                     Q6_K bug fixed: two-halves×32 loop matches llama.cpp reference
                     No JNI, no external tools, no Python
     [x] node        LlamaConfig — extracts model hyperparams from GGUF metadata
@@ -1334,6 +1334,8 @@ and dequantises individual tensors on demand (cached after first access).
     GGML_TYPE_Q4_0 (2)  — symmetric, block-32, 2-byte f16 scale + 16 packed nibbles
     GGML_TYPE_Q4_K (12) — per-superblock scale+min (6-bit each), block-256, 144 bytes
     GGML_TYPE_Q6_K (14) — per-superblock scale (signed int8), block-256, 210 bytes
+    GGML_TYPE_Q2_K (10) — per-superblock scale+min (4-bit each), block-256, 84 bytes
+    GGML_TYPE_Q3_K (11) — per-superblock signed scale (6-bit), block-256, 110 bytes
 
   Q4_K dequantisation layout (144 bytes / 256 elements):
     [d: f16][dmin: f16][scales: 12 bytes][qs: 128 bytes]
@@ -2280,7 +2282,7 @@ New -Pgpu Maven profile:
   Activation: mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf
 
 Normal CI command is unchanged:
-  mvn verify -pl integration   <- ThreeNodeClusterIT passes, GPU test excluded
+  mvn verify -pl juno-master   <- ThreeNodeClusterIT passes, GPU test excluded
 
 19.10  AWS testing procedure
 -----------------------------------------------
@@ -2302,7 +2304,7 @@ GPU unit tests (no model file needed):
 
 GPU integration test (model file required):
   wget https://huggingface.co/.../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
-  mvn verify -Pgpu -Dit.model.path=$(pwd)/tinyllama.gguf -pl integration \
+  mvn verify -Pgpu -Dit.model.path=$(pwd)/tinyllama.gguf -pl juno-master \
     --enable-native-access=ALL-UNNAMED
 
 Port conflict check before running ThreeNodeClusterIT:
@@ -2977,7 +2979,7 @@ For a 70B model (vocabSize=128256, 8 nodes): ~1M additions — still < 1ms.
   registry    SUCCESS  (+ ParallelismType, TensorShardAssignment, TensorShardPlanner)
   node        SUCCESS  (+ TensorShardContext)
   player      SUCCESS  (+ TensorParallelPipelineClient; ClusterHarness updated)
-  integration SUCCESS  (+ TensorParallelClusterIT)
+  juno-master SUCCESS  (+ TensorParallelClusterIT)
   All others  unchanged
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -4386,3 +4388,4 @@ Web console chat confirmed: multi-turn memory intact across three exchanges.
   All Java modules: unchanged (shell scripts only)
   All tests: pass (unchanged)
   Deployment verified end-to-end on AWS eu-north-1.
+33. Q2_K AND Q3_K SUPPORT (session 22)

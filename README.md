@@ -11,8 +11,23 @@ Distributed Java-native LLM inference engine. Runs large language models across 
 All modules build and all tests pass. Verified end-to-end with:
 - TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
 - TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile
+- TinyLlama-1.1B-Chat-v1.0.Q2_K.gguf
 - Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile
 - phi-3.5-mini-instruct.Q4_K_M.gguf on a 3-node CPU cluster
+
+**Session 22** — Q2_K and Q3_K quantization support.
+
+`GgufReader` gains `loadQ2_K` and `loadQ3_K` — pure Java dequantizers for GGML_TYPE_Q2_K (type 10, 84 bytes / 256 elements) and GGML_TYPE_Q3_K (type 11, 110 bytes / 256 elements). Block layouts and bit-extraction logic mirror llama.cpp `dequantize_row_q2_K` / `dequantize_row_q3_K` exactly.
+
+`LlamaTransformerHandler` gains `matVecQ2Kraw` and `matVecQ3Kraw` for the CPU inference path, and `dequantizeQ2K` / `dequantizeQ3K` for the GPU upload path (`dequantize()` switch). Without these, the `dequantize()` switch threw `UnsupportedOperationException` for every Q2_K weight tensor, causing garbage output whenever `gpu=true`.
+
+`QuantizationType` gains `Q2_K` (0.328 bpp) and `Q3_K` (0.430 bpp) enum entries for VRAM estimation and model registration.
+
+`LlamaConfig.detectQuantization()` corrected: ftype 10 → Q2_K, 11/12/13 → Q3_K, 14/15 → Q4_K_M. The previous `case 12, 15` mapping was wrong — llama_ftype 12 is `MOSTLY_Q3_K_M`, not `Q4_K_S`. `fromFilename()` gains Q2_K and Q3_K substring checks ahead of Q4/Q5/Q6.
+
+Bug fixed in Q2_K dequantization (all three implementations — `loadQ2_K`, `matVecQ2Kraw`, `dequantizeQ2K`): output slots at offsets 16 and 80 within each 128-element half read from the wrong q-byte half. Correct pattern: `(q[l]>>0, q[l+16]>>0, q[l]>>2, q[l+16]>>2, q[l]>>4, q[l+16]>>4, q[l]>>6, q[l+16]>>6)`.
+
+Six new unit tests in `GgufReaderTest`: Q2_K uniform / zero / max-quants and two-block size; Q3_K max / zero-quants and two-block size.
 
 **Session 21** — Two new deployment fat-jar modules and a unified AWS script.
 
@@ -256,12 +271,13 @@ Any GGUF file with a LLaMA-compatible or Phi-3-compatible architecture. Tested:
 | Model | File size | Heap needed |
 |-------|-----------|-------------|
 | TinyLlama-1.1B-Chat Q4_K_M | 637 MB | 2g |
+| TinyLlama-1.1B-Chat Q2_K | 380 MB | 2g |
 | phi-3.5-mini-instruct Q4_K_M | 2.4 GB | 4g |
 | Mistral-7B-Instruct Q4_K_M | 4.1 GB | 8g |
 | Meta-Llama-3.2-1B-Instruct Q8_0 | 1.3 GB | 4g |
 | Meta-Llama-3.1-70B-Instruct Q4_K_M | 40 GB | 16 x 4 GB nodes |
 
-**Quantisation types:** F32, F16, BF16, Q8_0, Q4_0, Q4_K, Q5_K, Q6_K.
+**Quantisation types:** F32, F16, BF16, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K.
 
 **Chat templates:** `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml` (default), `phi3`.
 Template resolved from model type string via exact match then substring fallback.
@@ -291,7 +307,7 @@ mvn verify -pl juno-master -Pintegration -Dmodels=/path/to/models
 ```bash
 mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
 
-mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl integration \
+mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl juno-master \
   --enable-native-access=ALL-UNNAMED
 ```
 
