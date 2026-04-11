@@ -125,6 +125,8 @@ parse_options() {
 
   [[ "$COORDINATOR_MODE" =~ ^(node1|separate)$ ]] || \
     die "--coordinator must be 'node1' or 'separate', got: $COORDINATOR_MODE"
+  [[ "$PTYPE" =~ ^(pipeline|tensor)$ ]] || \
+    die "--ptype must be 'pipeline' or 'tensor', got: $PTYPE"
 }
 
 # ── STATE PERSISTENCE ─────────────────────────────────────────
@@ -393,7 +395,7 @@ _fetch_ips_and_monitor() {
     echo "  ╔════════════════════════════════════════════════════╗"
     echo "  ║              JUNO CLUSTER MONITOR                  ║"
     printf "  ║  %-50s║\n" "${INSTANCE_TYPE}  ×${NODE_COUNT}  ${PTYPE}  ${DTYPE}"
-    printf "  ║  %-50s║\n" git ref: "${GIT}"
+    printf "  ║  %-50s║\n" "git ref: ${GIT}"
     echo -e "  ╚════════════════════════════════════════════════════╝${RESET}"
     echo ""
     printf "  ${BOLD}Uptime      :${RESET}  %02d:%02d:%02d\n" $HOURS $MINS $SECS
@@ -1048,6 +1050,7 @@ _build_coordinator_userdata() {
   local DTYPE_VAL="$DTYPE"
   local MODEL_URL_VAL="$MODEL_URL"
   local MODEL_FILENAME_VAL="$MODEL_FILENAME"
+  local GIT_VAL="$GIT"
 
   cat <<ENDCOORD
 #!/bin/bash
@@ -1066,6 +1069,7 @@ apt-get install -y -qq openjdk-25-jdk maven git wget curl jq bc net-tools
 
 git clone https://github.com/ml-cab/juno /opt/juno
 cd /opt/juno
+git checkout ${GIT_VAL}
 mvn clean package -DskipTests -q
 echo "Build complete"
 
@@ -1077,7 +1081,9 @@ fi
 
 mkdir -p /etc/juno
 
-cat > /etc/systemd/system/juno-coordinator.service <<EOF
+# <<'EOF' keeps \${JUNO_PTYPE} etc. as literals in the service file;
+# systemd expands them at runtime via EnvironmentFile=/etc/juno/cluster-nodes.env.
+cat > /etc/systemd/system/juno-coordinator.service <<'EOF'
 [Unit]
 Description=Juno Coordinator (separate instance)
 After=network-online.target
@@ -1339,6 +1345,7 @@ case "$MODE" in
     echo "  Setup options:"
     echo "    --instance-type TYPE    g4dn.xlarge (default), m7i-flex.large, t3.medium, …"
     echo "    --node-count N          Number of inference nodes (default: 3)"
+    echo "    --git REF               Git branch, tag, or commit to deploy (default: main)"
     echo "    --coordinator node1     Co-locate coordinator on node 1 (default, free)"
     echo "    --coordinator separate  Extra t3.medium coordinator instance"
     echo "    --model-url URL         Model to download (default: TinyLlama Q4_K_M)"
