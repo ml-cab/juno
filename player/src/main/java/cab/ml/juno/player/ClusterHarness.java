@@ -346,6 +346,12 @@ public final class ClusterHarness implements AutoCloseable {
 		java.util.List<String> cmd = new java.util.ArrayList<>(java.util.List.of(javaExe, "--enable-preview",
 				"--enable-native-access=ALL-UNNAMED", "-Xms512m", "-Xmx" + nodeHeap, "-XX:+UseZGC"));
 
+		// Partition cores across node JVMs so they do not fight over ForkJoinPool.
+		// Without this, each JVM grabs availableProcessors()-1 threads, causing
+		// N_nodes × (cores-1) threads to contend for the same physical cores.
+		int coresPerNode = Math.max(1, Runtime.getRuntime().availableProcessors() / specs.size());
+		cmd.add("-Djava.util.concurrent.ForkJoinPool.common.parallelism=" + coresPerNode);
+
 		if (!verbose) {
 			java.io.File q = java.io.File.createTempFile("juno-quiet-", ".properties");
 			q.deleteOnExit();
