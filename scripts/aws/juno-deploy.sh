@@ -25,6 +25,7 @@
 #                             (default: TinyLlama Q4_K_M from HuggingFace)
 #    --ptype pipeline|tensor  Parallelism type passed to nodes (default: pipeline)
 #    --dtype FLOAT32|FLOAT16  Activation dtype (default: FLOAT16)
+#    --git git branch, tag or other reference
 #
 #  State is persisted to ~/.juno-deploy-state so stop/start/teardown
 #  can be called without repeating options.
@@ -41,6 +42,7 @@ export LC_NUMERIC=C
 REGION="${AWS_DEFAULT_REGION:-eu-north-1}"
 INSTANCE_TYPE="g4dn.xlarge"
 NODE_COUNT=3
+GIT=optim1
 COORDINATOR_MODE="node1"          # "node1" | "separate"
 MODEL_URL="https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
 MODEL_FILENAME="TinyLlama.gguf"
@@ -109,6 +111,7 @@ parse_options() {
     case "$1" in
       --instance-type)   INSTANCE_TYPE="$2";  shift 2 ;;
       --node-count)      NODE_COUNT="$2";     shift 2 ;;
+      --git)             GIT="$2";            shift 2 ;;
       --coordinator)     COORDINATOR_MODE="$2"; shift 2 ;;
       --model-url)       MODEL_URL="$2";
                          MODEL_FILENAME="$(basename "$MODEL_URL" | cut -d'?' -f1)"
@@ -131,6 +134,7 @@ save_state() {
     echo "SG_ID=\"$SG_ID\""
     echo "INSTANCE_TYPE=\"$INSTANCE_TYPE\""
     echo "NODE_COUNT=\"$NODE_COUNT\""
+    echo "GIT=\"$GIT\""
     echo "COORDINATOR_MODE=\"$COORDINATOR_MODE\""
     echo "COORDINATOR_INSTANCE_ID=\"${COORDINATOR_INSTANCE_ID:-}\""
     echo "PTYPE=\"$PTYPE\""
@@ -297,6 +301,7 @@ status() {
   log "═══════════════════════════════════════════"
   printf "  %-22s %s\n" "Instance type:"   "$INSTANCE_TYPE"
   printf "  %-22s %s\n" "Node count:"      "$NODE_COUNT"
+  printf "  %-22s %s\n" "Git reference:"   "$GIT"
   printf "  %-22s %s\n" "Coordinator:"     "$COORDINATOR_MODE"
   printf "  %-22s %s\n" "Parallelism:"     "$PTYPE"
   printf "  %-22s %s\n" "Dtype:"           "$DTYPE"
@@ -346,7 +351,7 @@ _fetch_ips_and_monitor() {
 
   log ""
   log "═══════════════════════════════════════════"
-  log "  Cluster is UP  [${INSTANCE_TYPE}  ×${NODE_COUNT}  ${PTYPE}]"
+  log "  Cluster is UP  [${INSTANCE_TYPE}  ×${NODE_COUNT}  ${PTYPE} git ref: ${GIT}]"
   for ID in "${INSTANCE_IDS[@]}"; do
     log "  • $ID  ${INSTANCE_IPS[$ID]}"
   done
@@ -388,6 +393,7 @@ _fetch_ips_and_monitor() {
     echo "  ╔════════════════════════════════════════════════════╗"
     echo "  ║              JUNO CLUSTER MONITOR                  ║"
     printf "  ║  %-50s║\n" "${INSTANCE_TYPE}  ×${NODE_COUNT}  ${PTYPE}  ${DTYPE}"
+    printf "  ║  %-50s║\n" git ref: "${GIT}"
     echo -e "  ╚════════════════════════════════════════════════════╝${RESET}"
     echo ""
     printf "  ${BOLD}Uptime      :${RESET}  %02d:%02d:%02d\n" $HOURS $MINS $SECS
@@ -876,6 +882,7 @@ _build_node_userdata() {
   local PTYPE_VAL="$PTYPE"
   local DTYPE_VAL="$DTYPE"
   local NODE_COUNT_VAL="$NODE_COUNT"
+  local GIT_VAL="$GIT"
 
   sed -e "s|__NODE_IDX__|${NODE_IDX_VAL}|g" \
       -e "s|__PORT__|${PORT_VAL}|g" \
@@ -884,6 +891,7 @@ _build_node_userdata() {
       -e "s|__PTYPE__|${PTYPE_VAL}|g" \
       -e "s|__DTYPE__|${DTYPE_VAL}|g" \
       -e "s|__NODE_COUNT__|${NODE_COUNT_VAL}|g" \
+      -e "s|__GIT__|${GIT_VAL}|g" \
       -e "s|__MODEL_FILENAME__|${MODEL_FILENAME_VAL}|g" \
       -e "s|__MODEL_URL__|${MODEL_URL_VAL}|g" \
       <<'EOF'
@@ -899,6 +907,7 @@ HTTP_PORT="__HTTP_PORT__"
 PTYPE="__PTYPE__"
 DTYPE="__DTYPE__"
 NODE_COUNT="__NODE_COUNT__"
+GIT="__GIT__"
 MODEL_PATH="/opt/juno/models/__MODEL_FILENAME__"
 
 echo "=== Bootstrap started $(date) ==="
@@ -927,6 +936,7 @@ fi
 
 git clone https://github.com/ml-cab/juno /opt/juno
 cd /opt/juno
+git checkout ${GIT}
 mvn clean package -DskipTests -q
 echo "Build complete"
 
