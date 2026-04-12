@@ -180,7 +180,7 @@ header{
   font-size:11px;color:var(--muted);padding:2px 8px;
   border:1px solid var(--border);border-radius:20px;white-space:nowrap
 }
-<span id=\"byte-order-badge\" style=\"font-size:11px;color:var(--muted);padding:2px 8px;border:1px solid var(--border);border-radius:20px;\">order –</span>
+
 /* ── chat area ── */
 #chat{
   flex:1;overflow-y:auto;padding:20px 16px;
@@ -258,6 +258,7 @@ footer{
   <div class="spacer"></div>
   <span id="queue-badge">queue –/–</span>
   <span id="nodes-badge">models –</span>
+  <span id="byte-order-badge" style="font-size:11px;color:var(--muted);padding:2px 8px;border:1px solid var(--border);border-radius:20px;\">order –</span>
 </header>
 
 <div id="chat">
