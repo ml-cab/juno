@@ -16,29 +16,32 @@
 
 package cab.ml.juno.node;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import java.util.stream.IntStream;
 
 /**
  * Encodes and decodes activation tensors (float[]) to/from compressed bytes.
  *
- * Used exclusively at the gRPC transport boundary: - compress before writing
- * {@code ForwardRequest.activation} - decompress after reading
- * {@code ForwardResponse.activation}
+ * Used exclusively at the gRPC transport boundary: compress before writing
+ * {@code ForwardRequest.activation}, decompress after reading
+ * {@code ForwardResponse.activation}.
  *
  * The rest of the pipeline (ForwardRequest record, ForwardResult record,
  * ForwardPassHandler) always works with float[] — compression is purely a
  * network-wire concern and is invisible to business logic.
  *
- * Wire layouts: FLOAT32 → big-endian IEEE 754 float, 4 bytes/element FLOAT16 →
- * big-endian IEEE 754 half-precision, 2 bytes/element INT8 → [scale:float32
- * big-endian (4 bytes)] [quantised:signed byte × N]
+ * Wire layouts (all little-endian):
+ *   FLOAT32 → IEEE 754 float,          4 bytes/element
+ *   FLOAT16 → IEEE 754 half-precision, 2 bytes/element
+ *   INT8    → [scale:float32 LE (4 bytes)] [quantised:signed byte × N]
+ *
+ * All encode/decode paths are parallelised with IntStream.parallel() and write
+ * directly to byte arrays — no ByteBuffer allocation, no byte-swapping on x86.
  *
  * Thread-safe: all methods are stateless.
  */
-public final class ActivationCodec {
+public final class ActivationLECodec {
 
-	private ActivationCodec() {
+	private ActivationLECodec() {
 	} // utility class — no instances
 
 	// ── Public API ────────────────────────────────────────────────────────────
@@ -82,37 +85,55 @@ public final class ActivationCodec {
 	// ── FLOAT32 ───────────────────────────────────────────────────────────────
 
 	private static byte[] encodeFloat32(float[] floats) {
-		ByteBuffer buf = ByteBuffer.allocate(floats.length * 4).order(ByteOrder.BIG_ENDIAN);
-		for (float f : floats)
-			buf.putFloat(f);
-		return buf.array();
+		byte[] out = new byte[floats.length * 4];
+		IntStream.range(0, floats.length).parallel().forEach(i -> {
+			int bits = Float.floatToRawIntBits(floats[i]);
+			int off = i * 4;
+			out[off]     = (byte) (bits         & 0xFF);
+			out[off + 1] = (byte) ((bits >>>  8) & 0xFF);
+			out[off + 2] = (byte) ((bits >>> 16) & 0xFF);
+			out[off + 3] = (byte) ((bits >>> 24) & 0xFF);
+		});
+		return out;
 	}
 
 	private static float[] decodeFloat32(byte[] bytes) {
-		ByteBuffer buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN);
 		float[] out = new float[bytes.length / 4];
-		for (int i = 0; i < out.length; i++)
-			out[i] = buf.getFloat();
+		IntStream.range(0, out.length).parallel().forEach(i -> {
+			int off = i * 4;
+			int bits = (bytes[off]     & 0xFF)
+					| ((bytes[off + 1] & 0xFF) <<  8)
+					| ((bytes[off + 2] & 0xFF) << 16)
+					| ((bytes[off + 3] & 0xFF) << 24);
+			out[i] = Float.intBitsToFloat(bits);
+		});
 		return out;
 	}
 
 	// ── FLOAT16 ───────────────────────────────────────────────────────────────
 
 	/**
-	 * Encode to IEEE 754 half-precision (FP16). 2 bytes per element, big-endian.
+	 * Encode to IEEE 754 half-precision (FP16). 2 bytes per element, little-endian.
+	 * Parallelised across ForkJoinPool.commonPool().
 	 */
 	private static byte[] encodeFloat16(float[] floats) {
-		ByteBuffer buf = ByteBuffer.allocate(floats.length * 2).order(ByteOrder.BIG_ENDIAN);
-		for (float f : floats)
-			buf.putShort(floatToHalf(f));
-		return buf.array();
+		byte[] out = new byte[floats.length * 2];
+		IntStream.range(0, floats.length).parallel().forEach(i -> {
+			short h = floatToHalf(floats[i]);
+			int off = i * 2;
+			out[off]     = (byte) (h         & 0xFF);
+			out[off + 1] = (byte) ((h >>> 8) & 0xFF);
+		});
+		return out;
 	}
 
 	private static float[] decodeFloat16(byte[] bytes) {
-		ByteBuffer buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN);
 		float[] out = new float[bytes.length / 2];
-		for (int i = 0; i < out.length; i++)
-			out[i] = halfToFloat(buf.getShort());
+		IntStream.range(0, out.length).parallel().forEach(i -> {
+			int off = i * 2;
+			short h = (short) ((bytes[off] & 0xFF) | ((bytes[off + 1] & 0xFF) << 8));
+			out[i] = halfToFloat(h);
+		});
 		return out;
 	}
 
@@ -181,11 +202,12 @@ public final class ActivationCodec {
 	 * Symmetric INT8 quantisation.
 	 *
 	 * Wire layout:
-	 * {@code [scale:float32 big-endian (4 bytes)][quantised:signed byte × N]}.
+	 * {@code [scale:float32 LE (4 bytes)][quantised:signed byte × N]}.
 	 *
 	 * Symmetric (not asymmetric) quantisation is used to keep the zero point at 0,
 	 * which preserves true-zero activations and simplifies reconstruction. Using
 	 * 127 (not 128) as the max avoids asymmetry of signed byte range.
+	 * The quantisation loop is parallelised; the max-abs reduction remains serial.
 	 */
 	private static byte[] encodeInt8(float[] floats) {
 		float maxAbs = 0f;
@@ -196,22 +218,32 @@ public final class ActivationCodec {
 		}
 		// Guard against all-zero arrays: use scale=1 so reconstruction returns 0
 		float scale = maxAbs == 0f ? 1f : maxAbs / 127f;
+		float invScale = 1f / scale;
 
-		ByteBuffer buf = ByteBuffer.allocate(4 + floats.length).order(ByteOrder.BIG_ENDIAN);
-		buf.putFloat(scale);
-		for (float f : floats) {
-			int q = Math.round(f / scale);
-			buf.put((byte) Math.max(-127, Math.min(127, q)));
-		}
-		return buf.array();
+		byte[] out = new byte[4 + floats.length];
+		int scaleBits = Float.floatToRawIntBits(scale);
+		out[0] = (byte) (scaleBits         & 0xFF);
+		out[1] = (byte) ((scaleBits >>>  8) & 0xFF);
+		out[2] = (byte) ((scaleBits >>> 16) & 0xFF);
+		out[3] = (byte) ((scaleBits >>> 24) & 0xFF);
+
+		IntStream.range(0, floats.length).parallel().forEach(i -> {
+			int q = Math.round(floats[i] * invScale);
+			out[4 + i] = (byte) Math.max(-127, Math.min(127, q));
+		});
+		return out;
 	}
 
 	private static float[] decodeInt8(byte[] bytes) {
-		ByteBuffer buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN);
-		float scale = buf.getFloat();
+		int scaleBits = (bytes[0] & 0xFF)
+				| ((bytes[1] & 0xFF) <<  8)
+				| ((bytes[2] & 0xFF) << 16)
+				| ((bytes[3] & 0xFF) << 24);
+		float scale = Float.intBitsToFloat(scaleBits);
 		float[] out = new float[bytes.length - 4];
-		for (int i = 0; i < out.length; i++)
-			out[i] = buf.get() * scale;
+		IntStream.range(0, out.length).parallel().forEach(i -> {
+			out[i] = bytes[4 + i] * scale;
+		});
 		return out;
 	}
 }

@@ -55,9 +55,9 @@ import java.util.logging.Logger;
  * All primitives are pure Java — no JNI, no GPU, no external dependencies. A
  * future CudaMatVecBackend routes matVec calls to cublasSgemv on a GPU.
  */
-public final class LlamaTransformerHandler implements ForwardPassHandler {
+public final class LlamaTransformerLEHandler implements ForwardPassHandler {
 
-	private static final Logger log = Logger.getLogger(LlamaTransformerHandler.class.getName());
+	private static final Logger log = Logger.getLogger(LlamaTransformerLEHandler.class.getName());
 
 	// ── Loaded weights ────────────────────────────────────────────────────────
 
@@ -128,14 +128,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * @param context   describes which layers/embeddings this node is responsible
 	 *                  for
 	 */
-	public static LlamaTransformerHandler load(Path modelPath, ShardContext context) throws IOException {
+	public static LlamaTransformerLEHandler load(Path modelPath, ShardContext context) throws IOException {
 		log.info("Loading GGUF shard: layers " + context.startLayer() + "–" + context.endLayer() + "  embd="
 				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection() + "  file=" + modelPath);
 
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			LlamaConfig cfg = LlamaConfig.from(r);
 			log.info("Model: " + cfg);
-			return new LlamaTransformerHandler(r, cfg, context, CpuMatVec.INSTANCE);
+			return new LlamaTransformerLEHandler(r, cfg, context, CpuMatVec.INSTANCE);
 		}
 	}
 
@@ -145,7 +145,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * @param backend {@link CpuMatVec#INSTANCE} for CPU-only nodes,
 	 *                {@code new CudaMatVecBackend(ctx)} for GPU nodes
 	 */
-	public static LlamaTransformerHandler load(Path modelPath, ShardContext context, MatVec backend)
+	public static LlamaTransformerLEHandler load(Path modelPath, ShardContext context, MatVec backend)
 			throws IOException {
 		log.info("Loading GGUF shard: layers " + context.startLayer() + "–" + context.endLayer() + "  embd="
 				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection() + "  backend="
@@ -154,13 +154,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			LlamaConfig cfg = LlamaConfig.from(r);
 			log.info("Model: " + cfg);
-			return new LlamaTransformerHandler(r, cfg, context, backend);
+			return new LlamaTransformerLEHandler(r, cfg, context, backend);
 		}
 	}
 
 	/** Direct constructor used by {@link #newTestInstance} — no GGUF I/O. */
 	@SuppressWarnings("java:S107") // many params intentional for test factory
-	private LlamaTransformerHandler(
+	private LlamaTransformerLEHandler(
 			LlamaConfig cfg, int startLayer, int endLayer,
 			boolean hasEmbeddings, boolean hasOutputProj,
 			float[] tokenEmbd, float[] outputNorm,
@@ -198,7 +198,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.outputProjDev = null;
 	}
 
-	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend)
+	private LlamaTransformerLEHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend)
 			throws IOException {
 		this.cfg = cfg;
 		this.backend = backend;
@@ -328,7 +328,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * Build a minimal {@link LlamaTransformerHandler} with random F32 weights for
+	 * Build a minimal {@link LlamaTransformerLEHandler} with random F32 weights for
 	 * unit tests — bypasses GGUF loading entirely.
 	 *
 	 * <p>All projection matrices are stored as type-0 (F32) QuantizedTensors
@@ -347,7 +347,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * @param adapter      optional {@link NodeKVCacheAdapter}; pass {@code null} for
 	 *                     dev/stub mode
 	 */
-	static LlamaTransformerHandler newTestInstance(
+	static LlamaTransformerLEHandler newTestInstance(
 			int vocabSize, int hiddenDim, int numHeads, int numKvHeads,
 			int numLayers, int startLayer, int endLayer,
 			boolean hasEmbd, boolean hasOutProj,
@@ -392,7 +392,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			wDown[li]= f32Tensor("wDown."+ li, H,     I,    rng);
 		}
 
-		LlamaTransformerHandler h = new LlamaTransformerHandler(
+		LlamaTransformerLEHandler h = new LlamaTransformerLEHandler(
 				cfg, startLayer, endLayer, hasEmbd, hasOutProj,
 				tokenEmbd, outputNorm, outputProj,
 				attnNorm, ffnNorm, wq, wk, wv, wo, wGate, wUp, wDown,
@@ -1053,15 +1053,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private static float[] matVecF32raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
-		// Wrap per-thread: ByteBuffer.wrap() is a view-only (no copy) operation, and
-		// asReadOnlyBuffer() does NOT reliably propagate byte order on HeapByteBuffer
-		// across all JVM builds — never use it when byte order matters.
+		// Read floats directly from the raw byte array using bit manipulation.
+		// Avoids allocating a ByteBuffer wrapper per row inside the parallel lambda
+		// (which caused 2048+ heap allocations per matVec call on large weight shapes).
 		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
-			java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
 			float acc = 0f;
-			int base = (rowStart + r) * cols;
-			for (int c = 0; c < cols; c++)
-				acc += bb.getFloat((base + c) * 4) * x[c];
+			int base = ((rowStart + r) * cols) * 4;
+			for (int c = 0; c < cols; c++, base += 4) {
+				int bits = (raw[base]     & 0xFF)
+						| ((raw[base + 1] & 0xFF) << 8)
+						| ((raw[base + 2] & 0xFF) << 16)
+						| ((raw[base + 3] & 0xFF) << 24);
+				acc += Float.intBitsToFloat(bits) * x[c];
+			}
 			y[r] = acc;
 		});
 		return y;
