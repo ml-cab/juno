@@ -649,20 +649,29 @@ _gather_jfr_metrics() {
   fi
   log "  Collected ${JFR_COUNT} JFR file(s) locally."
 
-  # Step 3 — SCP all .jfr files to coordinator /opt/juno/ (MetricsMain scans cwd)
+  # Step 3 — SCP all .jfr files to coordinator's home dir (ubuntu-writable; /opt/juno is root-owned)
+  local REMOTE_COLLECT="/home/ubuntu/jfr-collect"
   log "  Uploading JFR files to coordinator for extraction…"
-  scp $SSH_OPTS "$TMP_DIR"/*.jfr "ubuntu@${COORD_HOST}:/opt/juno/" 2>/dev/null \
+  ssh $SSH_OPTS "ubuntu@${COORD_HOST}" "mkdir -p ${REMOTE_COLLECT}" 2>/dev/null || true
+  scp $SSH_OPTS "$TMP_DIR"/*.jfr "ubuntu@${COORD_HOST}:${REMOTE_COLLECT}/" \
     || { warn "  Could not upload JFR files to coordinator."; return 0; }
 
-  # Step 4 — Run MetricsMain on coordinator
+  # Step 4 — Run MetricsMain on coordinator from the collect dir (scans cwd for *.jfr)
   log "  Running MetricsMain on coordinator…"
+  local MODEL_STEM="${MODEL_FILENAME%.*}"
   ssh $SSH_OPTS "ubuntu@${COORD_HOST}" \
-    "cd /opt/juno && java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain 2>&1" \
-    2>/dev/null || { warn "  MetricsMain failed on coordinator."; return 0; }
+    "cd ${REMOTE_COLLECT} && \
+     mkdir -p metrics/src/main/resources && \
+     jq --arg name '${MODEL_STEM}' --arg path '/opt/juno/models/${MODEL_FILENAME}' \
+       'if (.models | map(.name) | index(\$name)) == null then .models += [{\"name\":\$name,\"path\":\$path}] else . end' \
+       /opt/juno/metrics/src/main/resources/models.json \
+       > metrics/src/main/resources/models.json && \
+     java -cp /opt/juno/metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain 2>&1" \
+    || { warn "  MetricsMain failed on coordinator."; return 0; }
 
   # Step 5 — SCP metrics.json back and print
   local LOCAL_JSON="$TMP_DIR/metrics.json"
-  scp $SSH_OPTS "ubuntu@${COORD_HOST}:/opt/juno/target/metrics/metrics.json" "$LOCAL_JSON" 2>/dev/null \
+  scp $SSH_OPTS "ubuntu@${COORD_HOST}:${REMOTE_COLLECT}/target/metrics/metrics.json" "$LOCAL_JSON" \
     || { warn "  Could not retrieve metrics.json from coordinator."; return 0; }
 
   log ""
@@ -1064,12 +1073,14 @@ EOF2
 mkdir -p /opt/juno/scripts
 cat > /opt/juno/scripts/start-node.sh <<'EOF2'
 #!/bin/bash
+set -a   # auto-export every variable so exec'd java inherits them via System.getenv()
 source /etc/juno/node.env
+set +a
 JFR_OPT=""
 if [[ -n "${JUNO_JFR_DURATION:-}" ]]; then
   mkdir -p /opt/juno/jfr
   JFR_OPT="-XX:StartFlightRecording=duration=${JUNO_JFR_DURATION},\
-filename=/opt/juno/jfr/juno-${NODE_ID}-${JUNO_MODEL_STEM}.jfr,\
+filename=/opt/juno/jfr/juno-${JUNO_MODEL_STEM}-$(date +%Y%m%d)-$(date +%H%M%S).jfr,\
 settings=profile,dumponexit=true"
 fi
 exec /usr/bin/java \
@@ -1118,13 +1129,15 @@ if [[ "${IS_COORDINATOR}" == "true" ]]; then
 
   cat > /opt/juno/scripts/start-coordinator.sh <<'EOF2'
 #!/bin/bash
+set -a   # auto-export every variable so exec'd java inherits them via System.getenv()
 source /etc/juno/node.env
 source /etc/juno/cluster-nodes.env 2>/dev/null || true
+set +a
 JFR_OPT=""
 if [[ -n "${JUNO_JFR_DURATION:-}" ]]; then
   mkdir -p /opt/juno/jfr
   JFR_OPT="-XX:StartFlightRecording=duration=${JUNO_JFR_DURATION},\
-filename=/opt/juno/jfr/juno-coordinator-${JUNO_MODEL_STEM}.jfr,\
+filename=/opt/juno/jfr/juno-${JUNO_MODEL_STEM}-$(date +%Y%m%d)-$(date +%H%M%S).jfr,\
 settings=profile,dumponexit=true"
 fi
 exec /usr/bin/java \
@@ -1215,12 +1228,14 @@ mkdir -p /etc/juno /opt/juno/scripts
 
 cat > /opt/juno/scripts/start-coordinator.sh <<'EOF'
 #!/bin/bash
+set -a   # auto-export every variable so exec'd java inherits them via System.getenv()
 source /etc/juno/cluster-nodes.env 2>/dev/null || true
+set +a
 JFR_OPT=""
 if [[ -n "\${JUNO_JFR_DURATION:-}" ]]; then
   mkdir -p /opt/juno/jfr
   JFR_OPT="-XX:StartFlightRecording=duration=\${JUNO_JFR_DURATION},\
-filename=/opt/juno/jfr/juno-coordinator-\${JUNO_MODEL_STEM}.jfr,\
+filename=/opt/juno/jfr/juno-\${JUNO_MODEL_STEM}-\$(date +%Y%m%d)-\$(date +%H%M%S).jfr,\
 settings=profile,dumponexit=true"
 fi
 exec /usr/bin/java \
