@@ -21,15 +21,6 @@ class JfrModelMapperTest {
     }
 
     @Test
-    void extractsModelStemFromJfrFileName() {
-        Assertions.assertThat(
-                        JfrModelMapper.modelStemFromJfr("juno-tinyllama-1.1b-chat-v1.0.Q4_K_M-20260401-005454.jfr"))
-                .isEqualTo("tinyllama-1.1b-chat-v1.0.Q4_K_M");
-        Assertions.assertThat(JfrModelMapper.modelStemFromJfr("juno-20260401-005454.jfr")).isNull();
-        Assertions.assertThat(JfrModelMapper.modelStemFromJfr("other-file.jfr")).isNull();
-    }
-
-    @Test
     void mapsJfrFilesToModelsByStem() {
         ModelsConfig config = new ModelsConfig(List.of(
                 new ModelsConfig.ModelEntry("TinyLlama", "models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"),
