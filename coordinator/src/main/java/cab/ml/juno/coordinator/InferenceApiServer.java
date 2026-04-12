@@ -54,8 +54,10 @@ public final class InferenceApiServer {
 	private final RequestScheduler scheduler;
 	private final ModelRegistry modelRegistry;
 	private Javalin app;
+	private String byteOrder;
 
-	public InferenceApiServer(RequestScheduler scheduler, ModelRegistry modelRegistry) {
+	public InferenceApiServer(RequestScheduler scheduler, ModelRegistry modelRegistry, String byteOrder) {
+		this.byteOrder = byteOrder != null ? byteOrder : "BE";
 		if (scheduler == null)
 			throw new IllegalArgumentException("scheduler must not be null");
 		if (modelRegistry == null)
@@ -178,7 +180,7 @@ header{
   font-size:11px;color:var(--muted);padding:2px 8px;
   border:1px solid var(--border);border-radius:20px;white-space:nowrap
 }
-
+<span id=\"byte-order-badge\" style=\"font-size:11px;color:var(--muted);padding:2px 8px;border:1px solid var(--border);border-radius:20px;\">order –</span>
 /* ── chat area ── */
 #chat{
   flex:1;overflow-y:auto;padding:20px 16px;
@@ -342,6 +344,7 @@ async function fetchHealth() {
     htext.style.color = ok ? 'var(--ok)' : 'var(--err)';
     qBadge.textContent = 'queue ' + d.queueDepth + '/' + d.maxQueue;
     nBadge.textContent = 'models ' + d.loadedModels;
+    document.getElementById('byte-order-badge').textContent = 'byteOrder ' + (d.byteOrder || '–');
   } catch {
     hdot.className = 'health-dot err';
     htext.textContent = 'UNREACHABLE';
@@ -595,8 +598,13 @@ prompt.focus();
 	}
 
 	private void handleClusterHealth(Context ctx) {
-		ctx.json(Map.of("status", "HEALTHY", "queueDepth", scheduler.queueDepth(), "maxQueue",
-				scheduler.maxQueueDepth(), "loadedModels", modelRegistry.modelCount()));
+		ctx.json(Map.of(
+			    "status", "HEALTHY",
+			    "queueDepth", scheduler.queueDepth(),
+			    "maxQueue", scheduler.maxQueueDepth(),
+			    "loadedModels", modelRegistry.modelCount(),
+			    "byteOrder", byteOrder
+			));
 	}
 
 	// ── Request parsing ───────────────────────────────────────────────────────

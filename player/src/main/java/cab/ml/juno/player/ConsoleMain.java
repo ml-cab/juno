@@ -120,6 +120,9 @@ public final class ConsoleMain {
 	private static boolean help = false;
 	private static ParallelismType pType = ParallelismType.PIPELINE;
 	private static String jfrDuration = null;
+	// ── Byte-order argument ───────────────────────────────────────────────────
+	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
+	private static String byteOrder = "BE";
 	// ── GPU arguments ─────────────────────────────────────────────────────────
 	private static boolean useGpu = true; // use CPU
 	// ── LoRA arguments ────────────────────────────────────────────────────────
@@ -161,6 +164,7 @@ public final class ConsoleMain {
 		}
 
 		System.setProperty("JUNO_USE_GPU", String.valueOf(useGpu));
+		System.setProperty("juno.byteOrder", byteOrder);
 		System.setProperty("MODEL_PATH", modelPath);
 		System.setProperty("DTYPE", dtype.name());
 		System.setProperty("MAX_TOKENS", String.valueOf(maxTokens));
@@ -237,6 +241,15 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					nodeCount = parseInt(args[++i], 3);
 				break;
+			// ── Byte order ───────────────────────────────────────────────────────
+			case "--byteOrder":
+			case "--byte-order":
+			case "--byteorder":
+				if (i + 1 < args.length) {
+					String bo = args[++i].toUpperCase();
+					byteOrder = "LE".equals(bo) ? "LE" : "BE";
+				}
+				break;
 			// ── GPU ──────────────────────────────────────────────────────────
 			case "--gpu":
 				useGpu = true;
@@ -308,6 +321,9 @@ public final class ConsoleMain {
 		System.out.println("  --temperature F            Sampling temperature (default: 0.6)");
 		System.out.println("  --top-k N                  Top-K sampling cutoff (default: 20)");
 		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.95)");
+		System.out.println("  --byteOrder BE|LE          Activation codec byte order (default: BE)");
+		System.out.println("                             BE = big-endian (default, hardware-validated)");
+		System.out.println("                             LE = little-endian (native x86 order)");
 		System.out.println("  --local                    Use in-process nodes (no forking)");
 		System.out.println("  --nodes N                  Number of in-process nodes (default: 3)");
 		System.out.println();
@@ -1213,8 +1229,8 @@ public final class ConsoleMain {
 					Color.PURPLE_BOLD, loraRank, loraAlpha, loraLr, loraSteps, Color.RESET));
 		} else {
 			System.out.println(String.format(
-					"  %sdtype=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
-					Color.GREEN_BOLD_BRIGHT, dtype, maxTokens, temperature, topK, topP, localMode ? "local" : "cluster",
+					"  %sdtype=%s · byteOrder=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
+					Color.GREEN_BOLD_BRIGHT, dtype, byteOrder, maxTokens, temperature, topK, topP, localMode ? "local" : "cluster",
 					nodeCount, Color.RESET));
 		}
 		if (jfrDuration != null) {

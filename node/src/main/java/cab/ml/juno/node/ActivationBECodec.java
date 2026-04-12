@@ -214,4 +214,23 @@ public final class ActivationBECodec {
 			out[i] = buf.get() * scale;
 		return out;
 	}
+
+	// ── F32 raw bytes matVec ──────────────────────────────────────────────────
+
+	public static float[] matVecF32raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
+		int rows = rowEnd - rowStart;
+		float[] y = new float[rows];
+		// Wrap per-thread: ByteBuffer.wrap() is a view-only (no copy) operation, and
+		// asReadOnlyBuffer() does NOT reliably propagate byte order on HeapByteBuffer
+		// across all JVM builds — never use it when byte order matters.
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+			float acc = 0f;
+			int base = (rowStart + r) * cols;
+			for (int c = 0; c < cols; c++)
+				acc += bb.getFloat((base + c) * 4) * x[c];
+			y[r] = acc;
+		});
+		return y;
+	}
 }

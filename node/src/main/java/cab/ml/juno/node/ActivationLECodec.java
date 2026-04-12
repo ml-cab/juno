@@ -246,4 +246,27 @@ public final class ActivationLECodec {
 		});
 		return out;
 	}
+
+	// ── F32 raw bytes matVec ──────────────────────────────────────────────────
+
+	public static float[] matVecF32raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
+		int rows = rowEnd - rowStart;
+		float[] y = new float[rows];
+		// Read floats directly from the raw byte array using bit manipulation.
+		// Avoids allocating a ByteBuffer wrapper per row inside the parallel lambda
+		// (which caused 2048+ heap allocations per matVec call on large weight shapes).
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			float acc = 0f;
+			int base = ((rowStart + r) * cols) * 4;
+			for (int c = 0; c < cols; c++, base += 4) {
+				int bits = (raw[base]     & 0xFF)
+						| ((raw[base + 1] & 0xFF) << 8)
+						| ((raw[base + 2] & 0xFF) << 16)
+						| ((raw[base + 3] & 0xFF) << 24);
+				acc += Float.intBitsToFloat(bits) * x[c];
+			}
+			y[r] = acc;
+		});
+		return y;
+	}
 }

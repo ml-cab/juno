@@ -57,6 +57,7 @@ rem ============================================================================
 
 set "MODEL=%MODEL_PATH%"
 if "%DTYPE%"==""       set "DTYPE=FLOAT16"
+if "%BYTE_ORDER%"==""  set "BYTE_ORDER=BE"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.6"
 if "%TOP_K%"==""       set "TOP_K=20"
@@ -78,6 +79,9 @@ if /i "%~1"=="--model-path" ( set "MODEL=%~2" & shift & shift & goto :cluster_pa
 if /i "%~1"=="--pType"      ( set "PTYPE=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--ptype"      ( set "PTYPE=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--dtype"      ( set "DTYPE=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--byteOrder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--byteorder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--byte-order" ( set "BYTE_ORDER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--max-tokens" ( set "MAX_TOKENS=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--temperature"( set "TEMPERATURE=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--top-k"      ( set "TOP_K=%~2" & shift & shift & goto :cluster_parse )
@@ -103,6 +107,9 @@ if /i "%~1"=="--help" (
   echo               Constraint: numHeads %% 3 == 0
   echo   --dtype FLOAT32^|FLOAT16^|INT8  (default FLOAT16)
   echo   --float16 / --fp16 / --float32 / --int8
+  echo   --byteOrder BE^|LE    activation codec byte order (default BE)
+  echo                        BE=big-endian (hardware-validated default)
+  echo                        LE=little-endian (native x86 order)
   echo   --max-tokens N    (default 200)
   echo   --temperature F   (default 0.6)
   echo   --top-k N         (default 20)
@@ -130,7 +137,7 @@ if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
 call :require_jar "%PLAYER_JAR%" "player"
 if errorlevel 1 exit /b 1
 
-echo [WARN] Starting 3-node cluster  (pType=%PTYPE%  dtype=%DTYPE%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  heap=%HEAP%  gpu=%USE_GPU%)
+echo [WARN] Starting 3-node cluster  (pType=%PTYPE%  dtype=%DTYPE%  byteOrder=%BYTE_ORDER%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  heap=%HEAP%  gpu=%USE_GPU%)
 if /i "%VERBOSE%"=="true" echo [WARN] Verbose mode ON
 echo [WARN] Ctrl-C to stop all nodes and exit
 echo.
@@ -151,7 +158,7 @@ if not "%JFR_DURATION_CLUSTER%"=="" (
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -161,6 +168,7 @@ rem ============================================================================
 
 set "MODEL=%MODEL_PATH%"
 if "%DTYPE%"==""       set "DTYPE=FLOAT16"
+if "%BYTE_ORDER%"==""  set "BYTE_ORDER=BE"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.6"
 if "%TOP_K%"==""       set "TOP_K=20"
@@ -180,6 +188,9 @@ if not "%USE_GPU_ENV%"=="" (
 if "%~1"=="" goto :local_done
 if /i "%~1"=="--model-path" ( set "MODEL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--dtype"      ( set "DTYPE=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--byteOrder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--byteorder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--byte-order" ( set "BYTE_ORDER=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--max-tokens" ( set "MAX_TOKENS=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--temperature"( set "TEMPERATURE=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--top-k"      ( set "TOP_K=%~2" & shift & shift & goto :local_parse )
@@ -201,6 +212,9 @@ if /i "%~1"=="--help" (
   echo      or: set MODEL_PATH=PATH ^&^& run.bat local [flags]
   echo.
   echo   --dtype FLOAT32^|FLOAT16^|INT8  (default FLOAT16)
+  echo   --byteOrder BE^|LE    activation codec byte order (default BE)
+  echo                        BE=big-endian (hardware-validated default)
+  echo                        LE=little-endian (native x86 order)
   echo   --max-tokens N    (default 200)
   echo   --temperature F   (default 0.6)
   echo   --top-k N         (default 20)
@@ -229,7 +243,7 @@ if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
 call :require_jar "%PLAYER_JAR%" "player"
 if errorlevel 1 exit /b 1
 
-echo [INFO] Starting local in-process REPL  (dtype=%DTYPE%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  nodes=%NODES%  heap=%HEAP%  gpu=%USE_GPU%)
+echo [INFO] Starting local in-process REPL  (dtype=%DTYPE%  byteOrder=%BYTE_ORDER%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  nodes=%NODES%  heap=%HEAP%  gpu=%USE_GPU%)
 if /i "%VERBOSE%"=="true" echo [WARN] Verbose mode ON
 echo.
 
@@ -249,7 +263,7 @@ if not "%JFR_DURATION_LOCAL%"=="" (
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
