@@ -44,8 +44,27 @@ final class JfrMetricsExtractor {
     }
 
     static MetricsSnapshot.ModelMetrics extract(Path jfrFile, ModelsConfig.ModelEntry model) throws IOException {
-        String jfrName = jfrFile.getFileName().toString();
-        long fileBytes = Files.size(jfrFile);
+        return extractMerged(List.of(jfrFile), model);
+    }
+
+    /**
+     * Reads JFR events from every file in {@code jfrFiles} into shared lists, then
+     * computes percentiles once over the merged data.
+     *
+     * <p>This is the correct aggregation strategy for a cluster run where the coordinator
+     * records Tokenizer/TemplateFormat events and each node records MatVec/ForwardPass
+     * events — combining counts and percentiles before summarising gives accurate
+     * cross-JVM metrics rather than per-JVM snapshots.
+     *
+     * @param jfrFiles one or more JFR files (coordinator + node files); missing files are silently skipped
+     * @param model    model entry used for the output snapshot
+     */
+    static MetricsSnapshot.ModelMetrics extractMerged(List<Path> jfrFiles, ModelsConfig.ModelEntry model)
+            throws IOException {
+
+        // Use the first (coordinator) file's name for the snapshot label.
+        String jfrName = jfrFiles.isEmpty() ? "merged" : jfrFiles.get(0).getFileName().toString();
+        long totalFileBytes = 0;
 
         List<Long> matVecAll = new ArrayList<>();
         Map<String, List<Long>> matVecByBackend = new HashMap<>();
@@ -64,63 +83,63 @@ final class JfrMetricsExtractor {
         List<Long> loraOptimizerMs = new ArrayList<>();
         int loraStepCount = 0;
 
-        try (RecordingFile rf = new RecordingFile(jfrFile)) {
-            while (rf.hasMoreEvents()) {
-                RecordedEvent ev = rf.readEvent();
-                String type = ev.getEventType().getName();
-                long nano = ev.getDuration().toNanos();
+        for (Path jfrFile : jfrFiles) {
+            if (!Files.exists(jfrFile))
+                continue;
+            totalFileBytes += Files.size(jfrFile);
+            try (RecordingFile rf = new RecordingFile(jfrFile)) {
+                while (rf.hasMoreEvents()) {
+                    RecordedEvent ev = rf.readEvent();
+                    String type = ev.getEventType().getName();
+                    long nano = ev.getDuration().toNanos();
 
-                switch (type) {
-                    case MAT_VEC -> {
-                        matVecAll.add(nano);
-                        if (ev.hasField("backend")) {
-                            String b = sanitizeBackend(ev.getString("backend"));
-                            matVecByBackend.computeIfAbsent(b, k -> new ArrayList<>()).add(nano);
-                        }
-                    }
-                    case FORWARD -> {
-                        forwardAll.add(nano);
-                        if (ev.hasField("startPosition")) {
-                            int pos = ev.getInt("startPosition");
-                            if (pos == 0) {
-                                forwardPrefill.add(nano);
-                            } else {
-                                forwardDecode.add(nano);
+                    switch (type) {
+                        case MAT_VEC -> {
+                            matVecAll.add(nano);
+                            if (ev.hasField("backend")) {
+                                String b = sanitizeBackend(ev.getString("backend"));
+                                matVecByBackend.computeIfAbsent(b, k -> new ArrayList<>()).add(nano);
                             }
                         }
-                    }
-                    case TOKENIZER -> {
-                        if (ev.hasField("operation")) {
-                            String op = ev.getString("operation");
-                            if ("encode".equals(op)) {
-                                tokEncode.add(nano);
-                            } else if ("decodeToken".equals(op)) {
-                                tokDecodeToken.add(nano);
+                        case FORWARD -> {
+                            forwardAll.add(nano);
+                            if (ev.hasField("startPosition")) {
+                                int pos = ev.getInt("startPosition");
+                                if (pos == 0) {
+                                    forwardPrefill.add(nano);
+                                } else {
+                                    forwardDecode.add(nano);
+                                }
                             }
                         }
-                    }
-                    case TEMPLATE -> template.add(nano);
-                    case LORA_STEP -> {
-                        loraStepCount++;
-                        if (ev.hasField("forwardMs")) {
-                            loraForwardMs.add(ev.getLong("forwardMs"));
+                        case TOKENIZER -> {
+                            if (ev.hasField("operation")) {
+                                String op = ev.getString("operation");
+                                if ("encode".equals(op)) {
+                                    tokEncode.add(nano);
+                                } else if ("decodeToken".equals(op)) {
+                                    tokDecodeToken.add(nano);
+                                }
+                            }
                         }
-                        if (ev.hasField("backwardMs")) {
-                            loraBackwardMs.add(ev.getLong("backwardMs"));
+                        case TEMPLATE -> template.add(nano);
+                        case LORA_STEP -> {
+                            loraStepCount++;
+                            if (ev.hasField("forwardMs"))
+                                loraForwardMs.add(ev.getLong("forwardMs"));
+                            if (ev.hasField("backwardMs"))
+                                loraBackwardMs.add(ev.getLong("backwardMs"));
+                            if (ev.hasField("optimizerMs"))
+                                loraOptimizerMs.add(ev.getLong("optimizerMs"));
                         }
-                        if (ev.hasField("optimizerMs")) {
-                            loraOptimizerMs.add(ev.getLong("optimizerMs"));
-                        }
-                    }
-                    default -> {
-                        /* ignore JDK and other events */
+                        default -> { /* ignore JDK and other events */ }
                     }
                 }
             }
         }
 
         Map<String, Double> m = new LinkedHashMap<>();
-        m.put("jfr.file.bytes", (double) fileBytes);
+        m.put("jfr.file.bytes", (double) totalFileBytes);
 
         m.put("juno.MatVec.count", (double) matVecAll.size());
         m.put("juno.MatVec.duration.total_ms", JfrPercentiles.sumNanosToMs(matVecAll));
@@ -133,12 +152,10 @@ final class JfrMetricsExtractor {
             m.put("juno.MatVec.backend." + backend + ".p95_ms", JfrPercentiles.p95NanosToMs(list));
         }
         for (Map.Entry<String, List<Long>> e : matVecByBackend.entrySet()) {
-            if (legacyBackends.contains(e.getKey())) {
+            if (legacyBackends.contains(e.getKey()))
                 continue;
-            }
-            String key = e.getKey();
-            m.put("juno.MatVec.backend." + key + ".count", (double) e.getValue().size());
-            m.put("juno.MatVec.backend." + key + ".p95_ms", JfrPercentiles.p95NanosToMs(e.getValue()));
+            m.put("juno.MatVec.backend." + e.getKey() + ".count", (double) e.getValue().size());
+            m.put("juno.MatVec.backend." + e.getKey() + ".p95_ms", JfrPercentiles.p95NanosToMs(e.getValue()));
         }
 
         m.put("juno.ForwardPass.count", (double) forwardAll.size());

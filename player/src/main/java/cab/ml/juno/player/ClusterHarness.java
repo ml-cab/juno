@@ -81,6 +81,10 @@ public final class ClusterHarness implements AutoCloseable {
 
 	private static String modelPath;
 
+	/** Non-null when the caller wants JFR on every node JVM. */
+	private String jfrDuration;
+	private String jfrTimestamp;
+
 	private ClusterHarness(List<NodeSpec> specs) {
 		this(specs, null, ParallelismType.PIPELINE, TOTAL_LAYERS, NUM_HEADS);
 	}
@@ -310,6 +314,42 @@ public final class ClusterHarness implements AutoCloseable {
 		return parallelismType;
 	}
 
+	/**
+	 * Enables JFR on every forked node JVM.
+	 *
+	 * <p>Must be called before {@link #start()}. Each node is launched with
+	 * {@code -XX:StartFlightRecording=duration=<duration>,filename=juno-<nodeId>-<stem>-<timestamp>.jfr,
+	 * settings=profile,dumponexit=true} so its events are written when the process exits.
+	 *
+	 * @param duration  human-friendly duration string, e.g. {@code "2m"} or {@code "30s"}
+	 * @param timestamp shared timestamp string (yyyyMMdd-HHmmss) — keeps coordinator and node
+	 *                  filenames aligned for easy correlation
+	 */
+	public ClusterHarness withJfr(String duration, String timestamp) {
+		this.jfrDuration = duration;
+		this.jfrTimestamp = timestamp;
+		return this;
+	}
+
+	/**
+	 * Returns the expected JFR output paths for every node, in node order.
+	 * Only meaningful after {@link #withJfr(String, String)} has been called.
+	 */
+	public List<Path> nodeJfrFiles() {
+		if (jfrDuration == null)
+			return List.of();
+		String stem = modelPath != null ? stemOf(modelPath) : "model";
+		return specs.stream()
+				.map(s -> Path.of("juno-" + s.nodeId() + "-" + stem + "-" + jfrTimestamp + ".jfr"))
+				.toList();
+	}
+
+	private static String stemOf(String path) {
+		String name = Path.of(path).getFileName().toString();
+		int dot = name.lastIndexOf('.');
+		return dot > 0 ? name.substring(0, dot) : name;
+	}
+
 	// ── Teardown ──────────────────────────────────────────────────────────────
 
 	public void stop() throws InterruptedException {
@@ -351,6 +391,15 @@ public final class ClusterHarness implements AutoCloseable {
 		// N_nodes × (cores-1) threads to contend for the same physical cores.
 		int coresPerNode = Math.max(1, Runtime.getRuntime().availableProcessors() / specs.size());
 		cmd.add("-Djava.util.concurrent.ForkJoinPool.common.parallelism=" + coresPerNode);
+
+		// JFR on the node JVM — records MatVec / ForwardPass events that fire here.
+		if (jfrDuration != null && jfrTimestamp != null) {
+			String stem = modelPath != null ? stemOf(modelPath) : "model";
+			String nodeJfrFile = "juno-" + nodeId + "-" + stem + "-" + jfrTimestamp + ".jfr";
+			cmd.add("-XX:StartFlightRecording=duration=" + jfrDuration
+					+ ",filename=" + nodeJfrFile
+					+ ",settings=profile,dumponexit=true");
+		}
 
 		if (!verbose) {
 			java.io.File q = java.io.File.createTempFile("juno-quiet-", ".properties");

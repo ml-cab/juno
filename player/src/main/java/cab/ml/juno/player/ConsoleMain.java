@@ -858,54 +858,133 @@ public final class ConsoleMain {
 	}
 
 	/**
-	 * Starts a programmatic JFR recording, runs the cluster REPL, and once the
-	 * recording period expires automatically extracts and prints metrics JSON.
+	 * Starts a programmatic JFR recording on the coordinator, injects
+	 * {@code -XX:StartFlightRecording} into every forked node JVM via
+	 * {@link ClusterHarness#withJfr}, runs the cluster REPL, and on exit
+	 * aggregates all four JFR files (coordinator + 3 nodes) before printing
+	 * the merged metrics summary.
 	 *
-	 * <p>Mirrors {@link #startLocalJfr()} exactly — same {@code jdk.jfr.Recording}
-	 * lifecycle, same shutdown-hook extraction, same console output — the only
-	 * difference is that it delegates to {@link #runClusterRepl()} instead of
-	 * {@link #runLocalRepl()}.
+	 * <p>A <em>single</em> shutdown hook owns the full teardown sequence so that
+	 * ordering is guaranteed:
+	 * <ol>
+	 *   <li>Stop coordinator's {@link Recording} (flushes its JFR file).</li>
+	 *   <li>{@link ClusterHarness#stop()} — destroys node processes; their
+	 *       {@code dumponexit=true} flag writes each node's JFR file.</li>
+	 *   <li>Brief sleep to let OS flush all files to disk.</li>
+	 *   <li>Merge-extract from coordinator + node files → print JSON summary.</li>
+	 * </ol>
 	 */
 	private static void startClusterJfr() throws Exception {
 		String modelName = Path.of(modelPath).getFileName().toString();
 		String modelStem = modelName.contains(".") ? modelName.substring(0, modelName.lastIndexOf('.')) : modelName;
 		String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
-		String jfrFileName = "juno-" + modelStem + "-" + timestamp + ".jfr";
-		Path jfrFile = Path.of(jfrFileName);
+		String coordinatorJfrName = "juno-" + modelStem + "-" + timestamp + ".jfr";
+		Path coordinatorJfrFile = Path.of(coordinatorJfrName);
 
+		// ── Coordinator recording ─────────────────────────────────────────────
 		Duration duration = parseJfrDuration(jfrDuration);
-
 		Configuration cfg = Configuration.getConfiguration("profile");
 		Recording rec = new Recording(cfg);
 		rec.setDuration(duration);
-		rec.setDestination(jfrFile);
+		rec.setDestination(coordinatorJfrFile);
 		rec.start();
 
 		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration
-				+ "  output=" + jfrFileName + Color.RESET + "\n");
+				+ "  output=" + coordinatorJfrName + Color.RESET + "\n");
 
-		// Shutdown hook guarantees extraction runs even when runClusterRepl() calls System.exit(0).
+		// ── Cluster setup — nodes get their own JFR via withJfr() ─────────────
+		String modeLabel = pType == ParallelismType.TENSOR ? "tensor-parallel" : "pipeline-parallel";
+		print(Color.CYAN_BOLD + "▶ Starting 3-node " + modeLabel + " cluster (forked JVMs)..." + Color.RESET);
+
+		int totalLayers, numHeads, vocabSize;
+		try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
+			LlamaConfig cfg2 = LlamaConfig.from(cfgReader);
+			totalLayers = cfg2.numLayers();
+			numHeads = cfg2.numHeads();
+			vocabSize = cfg2.vocabSize();
+		}
+
+		ClusterHarness harness = ((pType == ParallelismType.TENSOR)
+				? ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads)
+				: ClusterHarness.threeNodes(modelPath, totalLayers))
+				.withJfr(jfrDuration, timestamp);
+
+		// ── Single combined shutdown hook — ordering matters ──────────────────
 		final Recording recRef = rec;
 		final String modelStemFinal = modelStem;
 		final String modelNameFinal = modelName;
+		final ClusterHarness harnessRef = harness;
+		final Path coordFile = coordinatorJfrFile;
 		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
+			// 1. Stop coordinator recording so its JFR file is fully written.
 			try {
-				if (recRef.getState() == RecordingState.RUNNING) {
+				if (recRef.getState() == RecordingState.RUNNING)
 					recRef.stop();
-				}
-				// Brief wait for the file to be fully written
-				Thread.sleep(500);
-				extractAndPrintJfrMetrics(jfrFile, modelStemFinal, modelNameFinal);
+			} catch (Exception ignored) {}
+
+			// 2. Stop cluster → destroys node processes → dumponexit fires on each node.
+			print("\n" + Color.YELLOW + "⏹ Shutting down cluster..." + Color.RESET);
+			try { harnessRef.stop(); } catch (Exception ignored) {}
+			print(Color.YELLOW + "✔ Cluster stopped." + Color.RESET);
+
+			// 3. Wait for coordinator + node JFR files to be fully flushed to disk.
+			try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+
+			// 4. Merge-extract from coordinator + all node files and print.
+			try {
+				recRef.close();
+				List<Path> allFiles = new ArrayList<>();
+				allFiles.add(coordFile);
+				allFiles.addAll(harnessRef.nodeJfrFiles());
+				extractAndPrintJfrMetricsMerged(allFiles, modelStemFinal, modelNameFinal);
 			} catch (Exception e) {
 				System.err.println("JFR metrics extraction failed: " + e.getMessage());
-			} finally {
-				recRef.close();
 			}
 		}));
 
-		runClusterRepl(); // calls System.exit(0) on quit — shutdown hook fires from there
+		harness.start();
+		print(Color.GREEN + "✔ Cluster ready  (" + modeLabel + "  " + dtype + " activations)" + Color.RESET + "\n");
+
+		var pipeline = (pType == ParallelismType.TENSOR)
+				? harness.pipeline()
+				: new ProcessPipelineClient(harness.nodeAddresses(), vocabSize, dtype);
+
+		Tokenizer tokenizer;
+		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
+			tokenizer = GgufTokenizer.load(reader);
+		}
+
+		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+
+		startRepl(loop, tokenizer); // calls System.exit(0) on quit — shutdown hook fires from there
 	}
 
+	/**
+	 * Merges the given JFR files (coordinator + node files), extracts metrics, and
+	 * prints the JSON summary to the console — same presentation as
+	 * {@link #extractAndPrintJfrMetrics} but across multiple files.
+	 *
+	 * <p>Files that do not exist (e.g. a node that crashed before dumping) are silently
+	 * skipped so a partial result is still reported.
+	 */
+	private static void extractAndPrintJfrMetricsMerged(List<Path> jfrFiles, String modelStem, String modelFilename) {
+		try {
+			List<Path> existing = jfrFiles.stream().filter(java.nio.file.Files::exists).toList();
+			print("\n" + Color.CYAN_BOLD + "  ┌─────────────────────────────────────────────────┐");
+			print("  │              JFR Metrics Summary                │");
+			print("  └─────────────────────────────────────────────────┘" + Color.RESET);
+			print(Color.GREEN + "  ✔ Metrics written → target/metrics/metrics.json" + Color.RESET);
+			for (Path f : existing) {
+				print(Color.DIM + "  JFR file         → " + f.toAbsolutePath() + Color.RESET);
+				String json = MetricsMain.extractToJson(f, modelStem, modelFilename);
+				print(Color.DIM + json + Color.RESET);
+			}
+			print("");
+		} catch (Exception e) {
+			print(Color.RED + "  ✘ Could not extract JFR metrics: " + e.getMessage() + Color.RESET);
+		}
+	}
 
 	private static Duration parseJfrDuration(String s) {
 		if (s == null || s.isBlank())

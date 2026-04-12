@@ -48,6 +48,28 @@ public final class MetricsMain {
         return Files.readString(output);
     }
 
+    /**
+     * Programmatic entry-point for cluster --jfr mode.
+     *
+     * <p>Merges JFR events from all {@code jfrFiles} (coordinator + node files) into a single
+     * set of lists before computing percentiles, so the summary reflects the full distributed
+     * run rather than only the coordinator process. Missing files are silently skipped.
+     *
+     * @param jfrFiles      coordinator JFR file followed by each node's JFR file, in node order
+     * @param modelStem     stem of the model filename (no extension, no timestamp)
+     * @param modelFilename full model filename (e.g. "tinyllama.gguf")
+     * @return the JSON content written to target/metrics/metrics.json
+     */
+    public static String extractToJsonMerged(List<Path> jfrFiles, String modelStem, String modelFilename)
+            throws Exception {
+        ModelsConfig.ModelEntry entry = new ModelsConfig.ModelEntry(modelStem, modelFilename);
+        MetricsSnapshot.ModelMetrics snapshot = JfrMetricsExtractor.extractMerged(jfrFiles, entry);
+        Path output = Path.of("target", "metrics", "metrics.json");
+        Files.createDirectories(output.getParent());
+        MetricsWriter.write(output, List.of(snapshot));
+        return Files.readString(output);
+    }
+
     public static void main(String[] args) throws Exception {
         Path projectRoot = Path.of(System.getProperty("user.dir"));
         ModelsConfig models = loadModelsConfig(projectRoot);
