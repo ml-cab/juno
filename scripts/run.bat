@@ -141,17 +141,17 @@ if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
 set "GPU_FLAG=--gpu"
 if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
 
-set "JFR_FLAG_CLUSTER="
+rem In cluster mode ConsoleMain manages JFR programmatically (startClusterJfr),
+rem exactly as in local mode.  Pass --jfr as an app arg, not a JVM flag.
+set "JFR_ARG_CLUSTER="
 if not "%JFR_DURATION_CLUSTER%"=="" (
-  for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
-  set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
-  set "JFR_FLAG_CLUSTER=-XX:StartFlightRecording=duration=%JFR_DURATION_CLUSTER%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
-  echo [WARN] JFR enabled -- duration=%JFR_DURATION_CLUSTER%  output=juno-!JFR_TS!.jfr
+  set "JFR_ARG_CLUSTER=--jfr %JFR_DURATION_CLUSTER%"
+  echo [WARN] JFR enabled -- duration=%JFR_DURATION_CLUSTER%  (programmatic recording, metrics auto-printed on exit)
 )
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" %JFR_FLAG_CLUSTER% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -239,17 +239,17 @@ if /i "%VERBOSE%"=="true" set "VERBOSE_FLAG=--verbose"
 set "GPU_FLAG=--gpu"
 if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
 
-set "JFR_FLAG_LOCAL="
+rem Local mode: pass --jfr as app arg so ConsoleMain.startLocalJfr() owns the
+rem recording lifecycle and auto-prints metrics on exit (mirrors run.sh local).
+set "JFR_ARG_LOCAL="
 if not "%JFR_DURATION_LOCAL%"=="" (
-  for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
-  set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
-  set "JFR_FLAG_LOCAL=-XX:StartFlightRecording=duration=%JFR_DURATION_LOCAL%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
-  echo [WARN] JFR enabled -- duration=%JFR_DURATION_LOCAL%  output=juno-!JFR_TS!.jfr
+  set "JFR_ARG_LOCAL=--jfr %JFR_DURATION_LOCAL%"
+  echo [WARN] JFR enabled -- duration=%JFR_DURATION_LOCAL%  (programmatic recording, metrics auto-printed on exit)
 )
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LOCAL% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================

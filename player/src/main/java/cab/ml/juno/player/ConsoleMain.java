@@ -169,10 +169,10 @@ public final class ConsoleMain {
 		System.setProperty("TOP_P", String.valueOf(topP));
 		if (verbose)
 			System.setProperty("JUNO_VERBOSE", "true");
-		// For cluster / lora modes, forward JFR duration as a JVM system property
-		// so run.sh's -XX:StartFlightRecording flag still works.
-		// For localMode, ConsoleMain manages JFR programmatically via startLocalJfr().
-		if (jfrDuration != null && !localMode)
+		// For lora mode the JFR lifecycle is delegated to the JVM flag set by run.sh.
+		// For local and cluster modes, ConsoleMain manages JFR programmatically via
+		// startLocalJfr() / startClusterJfr() — no JVM flag is involved.
+		if (jfrDuration != null && !localMode && loraMode)
 			System.setProperty("juno.jfr.duration", jfrDuration);
 
 		banner();
@@ -183,6 +183,8 @@ public final class ConsoleMain {
 			startLocalJfr();
 		} else if (localMode) {
 			runLocalRepl();
+		} else if (jfrDuration != null) {
+			startClusterJfr();
 		} else {
 			runClusterRepl();
 		}
@@ -856,9 +858,55 @@ public final class ConsoleMain {
 	}
 
 	/**
-	 * Parses human-friendly duration strings like {@code "5m"}, {@code "30s"},
-	 * {@code "1h"} into {@link Duration}.
+	 * Starts a programmatic JFR recording, runs the cluster REPL, and once the
+	 * recording period expires automatically extracts and prints metrics JSON.
+	 *
+	 * <p>Mirrors {@link #startLocalJfr()} exactly — same {@code jdk.jfr.Recording}
+	 * lifecycle, same shutdown-hook extraction, same console output — the only
+	 * difference is that it delegates to {@link #runClusterRepl()} instead of
+	 * {@link #runLocalRepl()}.
 	 */
+	private static void startClusterJfr() throws Exception {
+		String modelName = Path.of(modelPath).getFileName().toString();
+		String modelStem = modelName.contains(".") ? modelName.substring(0, modelName.lastIndexOf('.')) : modelName;
+		String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+		String jfrFileName = "juno-" + modelStem + "-" + timestamp + ".jfr";
+		Path jfrFile = Path.of(jfrFileName);
+
+		Duration duration = parseJfrDuration(jfrDuration);
+
+		Configuration cfg = Configuration.getConfiguration("profile");
+		Recording rec = new Recording(cfg);
+		rec.setDuration(duration);
+		rec.setDestination(jfrFile);
+		rec.start();
+
+		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration
+				+ "  output=" + jfrFileName + Color.RESET + "\n");
+
+		// Shutdown hook guarantees extraction runs even when runClusterRepl() calls System.exit(0).
+		final Recording recRef = rec;
+		final String modelStemFinal = modelStem;
+		final String modelNameFinal = modelName;
+		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
+			try {
+				if (recRef.getState() == RecordingState.RUNNING) {
+					recRef.stop();
+				}
+				// Brief wait for the file to be fully written
+				Thread.sleep(500);
+				extractAndPrintJfrMetrics(jfrFile, modelStemFinal, modelNameFinal);
+			} catch (Exception e) {
+				System.err.println("JFR metrics extraction failed: " + e.getMessage());
+			} finally {
+				recRef.close();
+			}
+		}));
+
+		runClusterRepl(); // calls System.exit(0) on quit — shutdown hook fires from there
+	}
+
+
 	private static Duration parseJfrDuration(String s) {
 		if (s == null || s.isBlank())
 			return Duration.ofMinutes(5);

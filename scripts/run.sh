@@ -250,22 +250,19 @@ cmd_cluster() {
   [[ "$use_gpu" == "false" ]] && gpu_flag="--cpu"
   prepend_cuda_bin_to_path_if_gpu "$use_gpu"
 
-  local jfr_flag=""
-  if [[ -n "$jfr_duration" ]]; then
-    local model_name model_stem
-    model_name="$(basename "$model")"
-    model_stem="${model_name%.*}"
-    local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
-    jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
-    warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
-  fi
+  # In cluster mode, ConsoleMain manages JFR programmatically via jdk.jfr.Recording,
+  # exactly as it does in local mode.  Forward --jfr DURATION as a ConsoleMain
+  # argument rather than a JVM flag so startClusterJfr() can own the lifecycle and
+  # auto-extract metrics on exit.
+  local jfr_arg=""
+  [[ -n "$jfr_duration" ]] && jfr_arg="--jfr $jfr_duration" && \
+    warn "JFR enabled — duration=${jfr_duration}  (programmatic recording, metrics auto-printed on exit)"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
     "-Djuno.node.heap=${heap}" \
-    ${jfr_flag:+"$jfr_flag"} \
     -jar "$PLAYER_JAR" \
     --model-path "$model" \
     --dtype "$dtype" \
@@ -275,6 +272,7 @@ cmd_cluster() {
     --top-p "$top_p" \
     --pType "$ptype" \
     "$gpu_flag" \
+    ${jfr_arg} \
     ${verbose_flag}
 }
 
