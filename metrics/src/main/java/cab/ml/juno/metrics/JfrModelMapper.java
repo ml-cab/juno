@@ -34,8 +34,16 @@ final class JfrModelMapper {
     /**
      * {@code juno-&lt;modelFileStem&gt;-YYYYMMDD-HHMMSS.jfr}
      */
+    /**
+     * Matches both naming conventions:
+     * <ul>
+     *   <li>{@code juno-<modelStem>-YYYYMMDD-HHMMSS.jfr} — local {@code run.sh} recordings</li>
+     *   <li>{@code <modelStem>-<nodeId>-YYYYMMDD-HHMMSS.jfr} — AWS deploy recordings (no prefix)</li>
+     * </ul>
+     * The {@code (?:juno-)?} makes the prefix optional so group 1 always captures just the model stem.
+     */
     private static final Pattern JFR_WITH_MODEL =
-            Pattern.compile("^juno-(.+)-(\\d{8})-(\\d{6})\\.jfr$");
+            Pattern.compile("^(?:juno-)?(.+)-(\\d{8})-(\\d{6})\\.jfr$");
 
     private JfrModelMapper() {
     }

@@ -25,6 +25,7 @@
 #                             (default: TinyLlama Q4_K_M from HuggingFace)
 #    --ptype pipeline|tensor  Parallelism type passed to nodes (default: pipeline)
 #    --dtype FLOAT32|FLOAT16  Activation dtype (default: FLOAT16)
+#    --git git branch, tag or other reference
 #
 #  State is persisted to ~/.juno-deploy-state so stop/start/teardown
 #  can be called without repeating options.
@@ -41,6 +42,7 @@ export LC_NUMERIC=C
 REGION="${AWS_DEFAULT_REGION:-eu-north-1}"
 INSTANCE_TYPE="g4dn.xlarge"
 NODE_COUNT=3
+GIT=optim1
 COORDINATOR_MODE="node1"          # "node1" | "separate"
 MODEL_URL="https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
 MODEL_FILENAME="TinyLlama.gguf"
@@ -48,6 +50,7 @@ PTYPE="pipeline"
 DTYPE="FLOAT16"
 KEY_NAME="juno-deploy-key"
 SG_NAME="juno-deploy-sg"
+JFR_DURATION=""
 STATE_FILE="${HOME}/.juno-deploy-state"
 SSH_KEY_FILE="${HOME}/.ssh/juno-deploy-key.pem"
 MONITOR_INTERVAL=20
@@ -109,6 +112,7 @@ parse_options() {
     case "$1" in
       --instance-type)   INSTANCE_TYPE="$2";  shift 2 ;;
       --node-count)      NODE_COUNT="$2";     shift 2 ;;
+      --git)             GIT="$2";            shift 2 ;;
       --coordinator)     COORDINATOR_MODE="$2"; shift 2 ;;
       --model-url)       MODEL_URL="$2";
                          MODEL_FILENAME="$(basename "$MODEL_URL" | cut -d'?' -f1)"
@@ -116,12 +120,15 @@ parse_options() {
       --ptype)           PTYPE="$2";          shift 2 ;;
       --dtype)           DTYPE="$2";          shift 2 ;;
       --region)          REGION="$2";         shift 2 ;;
+      --jfr)             JFR_DURATION="$2";   shift 2 ;;
       *)                 die "Unknown option: $1 (run without args for usage)" ;;
     esac
   done
 
   [[ "$COORDINATOR_MODE" =~ ^(node1|separate)$ ]] || \
     die "--coordinator must be 'node1' or 'separate', got: $COORDINATOR_MODE"
+  [[ "$PTYPE" =~ ^(pipeline|tensor)$ ]] || \
+    die "--ptype must be 'pipeline' or 'tensor', got: $PTYPE"
 }
 
 # ── STATE PERSISTENCE ─────────────────────────────────────────
@@ -131,12 +138,14 @@ save_state() {
     echo "SG_ID=\"$SG_ID\""
     echo "INSTANCE_TYPE=\"$INSTANCE_TYPE\""
     echo "NODE_COUNT=\"$NODE_COUNT\""
+    echo "GIT=\"$GIT\""
     echo "COORDINATOR_MODE=\"$COORDINATOR_MODE\""
     echo "COORDINATOR_INSTANCE_ID=\"${COORDINATOR_INSTANCE_ID:-}\""
     echo "PTYPE=\"$PTYPE\""
     echo "DTYPE=\"$DTYPE\""
     echo "MODEL_FILENAME=\"$MODEL_FILENAME\""
     echo "SETUP_TIME=\"$SETUP_TIME\""
+    echo "JFR_DURATION=\"${JFR_DURATION:-}\""
   } > "$STATE_FILE"
   log "State saved → $STATE_FILE"
 }
@@ -297,6 +306,7 @@ status() {
   log "═══════════════════════════════════════════"
   printf "  %-22s %s\n" "Instance type:"   "$INSTANCE_TYPE"
   printf "  %-22s %s\n" "Node count:"      "$NODE_COUNT"
+  printf "  %-22s %s\n" "Git reference:"   "$GIT"
   printf "  %-22s %s\n" "Coordinator:"     "$COORDINATOR_MODE"
   printf "  %-22s %s\n" "Parallelism:"     "$PTYPE"
   printf "  %-22s %s\n" "Dtype:"           "$DTYPE"
@@ -346,7 +356,7 @@ _fetch_ips_and_monitor() {
 
   log ""
   log "═══════════════════════════════════════════"
-  log "  Cluster is UP  [${INSTANCE_TYPE}  ×${NODE_COUNT}  ${PTYPE}]"
+  log "  Cluster is UP  [${INSTANCE_TYPE}  ×${NODE_COUNT}  ${PTYPE} git ref: ${GIT}]"
   for ID in "${INSTANCE_IDS[@]}"; do
     log "  • $ID  ${INSTANCE_IPS[$ID]}"
   done
@@ -387,7 +397,8 @@ _fetch_ips_and_monitor() {
     echo -e "${BOLD}${CYAN}"
     echo "  ╔════════════════════════════════════════════════════╗"
     echo "  ║              JUNO CLUSTER MONITOR                  ║"
-    printf "  ║  %-50s║\n" "${INSTANCE_TYPE}  ×${NODE_COUNT}  ${PTYPE}  ${DTYPE}"
+    printf "  ║  %-50s║\n" "${INSTANCE_TYPE}  ×${NODE_COUNT}  ${PTYPE}  ${DTYPE}${JFR_DURATION:+  JFR:${JFR_DURATION}}"
+    printf "  ║  %-50s║\n" "git ref: ${GIT}"
     echo -e "  ╚════════════════════════════════════════════════════╝${RESET}"
     echo ""
     printf "  ${BOLD}Uptime      :${RESET}  %02d:%02d:%02d\n" $HOURS $MINS $SECS
@@ -574,10 +585,109 @@ _wait_for_ready_and_open() {
   fi
 }
 
+# ── GATHER JFR METRICS ────────────────────────────────────────
+# Called from _on_exit before stop() when JFR_DURATION is set.
+# 1. SSH each node → SCP /opt/juno/jfr/*.jfr to a local temp dir
+# 2. SCP all JFRs to coordinator's /opt/juno/  (MetricsMain scan root)
+# 3. SSH coordinator → run MetricsMain jar to produce metrics.json
+# 4. SCP metrics.json back → print to stdout
+_gather_jfr_metrics() {
+  [[ -n "${JFR_DURATION:-}" ]] || return 0
+
+  log "Gathering JFR metrics from all nodes…"
+
+  local TMP_DIR
+  TMP_DIR=$(mktemp -d)
+  trap "rm -rf $TMP_DIR" RETURN
+
+  # Determine coordinator host
+  local COORD_HOST
+  if [[ "$COORDINATOR_MODE" == "separate" && -n "${COORDINATOR_INSTANCE_ID:-}" ]]; then
+    COORD_HOST="${INSTANCE_IPS[$COORDINATOR_INSTANCE_ID]}"
+  else
+    COORD_HOST="${INSTANCE_IPS[${INSTANCE_IDS[0]}]}"
+  fi
+
+  local SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes -i $SSH_KEY_FILE"
+
+  # Step 1 — stop services on each node so JFR files are flushed (dumponexit)
+  local IDX=1
+  for ID in "${INSTANCE_IDS[@]}"; do
+    local IP="${INSTANCE_IPS[$ID]}"
+    log "  Stopping juno-node on ${IP} to flush JFR…"
+    ssh $SSH_OPTS "ubuntu@${IP}" \
+      "sudo systemctl stop juno-node 2>/dev/null || true; sudo systemctl stop juno-coordinator 2>/dev/null || true" \
+      2>/dev/null || warn "  Could not stop services on ${IP} (continuing)"
+    (( IDX++ ))
+  done
+  # Also stop coordinator if separate
+  if [[ "$COORDINATOR_MODE" == "separate" && -n "${COORDINATOR_INSTANCE_ID:-}" ]]; then
+    ssh $SSH_OPTS "ubuntu@${COORD_HOST}" \
+      "sudo systemctl stop juno-coordinator 2>/dev/null || true" 2>/dev/null || true
+  fi
+
+  sleep 3   # brief pause to ensure dumponexit fires
+
+  # Step 2 — SCP .jfr files from each node to local temp dir
+  for ID in "${INSTANCE_IDS[@]}"; do
+    local IP="${INSTANCE_IPS[$ID]}"
+    log "  Fetching JFR files from node ${IP}…"
+    scp $SSH_OPTS -r "ubuntu@${IP}:/opt/juno/jfr/*.jfr" "$TMP_DIR/" 2>/dev/null \
+      || warn "  No JFR files found on ${IP}"
+  done
+  # Coordinator (separate mode) has its own recording
+  if [[ "$COORDINATOR_MODE" == "separate" && -n "${COORDINATOR_INSTANCE_ID:-}" ]]; then
+    scp $SSH_OPTS -r "ubuntu@${COORD_HOST}:/opt/juno/jfr/*.jfr" "$TMP_DIR/" 2>/dev/null \
+      || warn "  No JFR files found on coordinator ${COORD_HOST}"
+  fi
+
+  local JFR_COUNT
+  JFR_COUNT=$(find "$TMP_DIR" -name "*.jfr" | wc -l)
+  if [[ "$JFR_COUNT" -eq 0 ]]; then
+    warn "No JFR files collected — skipping metrics extraction."
+    return 0
+  fi
+  log "  Collected ${JFR_COUNT} JFR file(s) locally."
+
+  # Step 3 — SCP all .jfr files to coordinator's home dir (ubuntu-writable; /opt/juno is root-owned)
+  local REMOTE_COLLECT="/home/ubuntu/jfr-collect"
+  log "  Uploading JFR files to coordinator for extraction…"
+  ssh $SSH_OPTS "ubuntu@${COORD_HOST}" "mkdir -p ${REMOTE_COLLECT}" 2>/dev/null || true
+  scp $SSH_OPTS "$TMP_DIR"/*.jfr "ubuntu@${COORD_HOST}:${REMOTE_COLLECT}/" \
+    || { warn "  Could not upload JFR files to coordinator."; return 0; }
+
+  # Step 4 — Run MetricsMain on coordinator from the collect dir (scans cwd for *.jfr)
+  log "  Running MetricsMain on coordinator…"
+  local MODEL_STEM="${MODEL_FILENAME%.*}"
+  ssh $SSH_OPTS "ubuntu@${COORD_HOST}" \
+    "cd ${REMOTE_COLLECT} && \
+     mkdir -p metrics/src/main/resources && \
+     jq --arg name '${MODEL_STEM}' --arg path '/opt/juno/models/${MODEL_FILENAME}' \
+       'if (.models | map(.name) | index(\$name)) == null then .models += [{\"name\":\$name,\"path\":\$path}] else . end' \
+       /opt/juno/metrics/src/main/resources/models.json \
+       > metrics/src/main/resources/models.json && \
+     java -cp /opt/juno/metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain 2>&1" \
+    || { warn "  MetricsMain failed on coordinator."; return 0; }
+
+  # Step 5 — SCP metrics.json back and print
+  local LOCAL_JSON="$TMP_DIR/metrics.json"
+  scp $SSH_OPTS "ubuntu@${COORD_HOST}:${REMOTE_COLLECT}/target/metrics/metrics.json" "$LOCAL_JSON" \
+    || { warn "  Could not retrieve metrics.json from coordinator."; return 0; }
+
+  log ""
+  log "══════════════════════════════════════════════════════════"
+  log "  JFR Cluster Metrics"
+  log "══════════════════════════════════════════════════════════"
+  cat "$LOCAL_JSON"
+  log "══════════════════════════════════════════════════════════"
+  log ""
+}
+
 _on_exit() {
   echo ""
-  warn "Caught exit signal — stopping cluster (instances preserved)…"
+  warn "Caught exit signal — gathering metrics (if JFR enabled) then stopping…"
   trap - EXIT INT TERM
+  _gather_jfr_metrics
   stop
 }
 
@@ -869,6 +979,8 @@ _build_node_userdata() {
 
   local MODEL_URL_VAL="$MODEL_URL"
   local MODEL_FILENAME_VAL="$MODEL_FILENAME"
+  local MODEL_STEM_VAL="${MODEL_FILENAME%.*}"
+  local JFR_DURATION_VAL="${JFR_DURATION:-}"
   local NODE_IDX_VAL="$NODE_IDX"
   local PORT_VAL="$PORT"
   local IS_COORD_VAL="$IS_COORDINATOR"
@@ -876,6 +988,7 @@ _build_node_userdata() {
   local PTYPE_VAL="$PTYPE"
   local DTYPE_VAL="$DTYPE"
   local NODE_COUNT_VAL="$NODE_COUNT"
+  local GIT_VAL="$GIT"
 
   sed -e "s|__NODE_IDX__|${NODE_IDX_VAL}|g" \
       -e "s|__PORT__|${PORT_VAL}|g" \
@@ -884,7 +997,10 @@ _build_node_userdata() {
       -e "s|__PTYPE__|${PTYPE_VAL}|g" \
       -e "s|__DTYPE__|${DTYPE_VAL}|g" \
       -e "s|__NODE_COUNT__|${NODE_COUNT_VAL}|g" \
+      -e "s|__GIT__|${GIT_VAL}|g" \
       -e "s|__MODEL_FILENAME__|${MODEL_FILENAME_VAL}|g" \
+      -e "s|__MODEL_STEM__|${MODEL_STEM_VAL}|g" \
+      -e "s|__JFR_DURATION__|${JFR_DURATION_VAL}|g" \
       -e "s|__MODEL_URL__|${MODEL_URL_VAL}|g" \
       <<'EOF'
 #!/bin/bash
@@ -899,7 +1015,10 @@ HTTP_PORT="__HTTP_PORT__"
 PTYPE="__PTYPE__"
 DTYPE="__DTYPE__"
 NODE_COUNT="__NODE_COUNT__"
+GIT="__GIT__"
 MODEL_PATH="/opt/juno/models/__MODEL_FILENAME__"
+MODEL_STEM="__MODEL_STEM__"
+JFR_DURATION="__JFR_DURATION__"
 
 echo "=== Bootstrap started $(date) ==="
 
@@ -927,6 +1046,7 @@ fi
 
 git clone https://github.com/ml-cab/juno /opt/juno
 cd /opt/juno
+git checkout ${GIT}
 mvn clean package -DskipTests -q
 echo "Build complete"
 
@@ -945,7 +1065,38 @@ JUNO_USE_GPU=${USE_GPU}
 JUNO_MODEL_PATH=${MODEL_PATH}
 JUNO_GRPC_PORT=${GRPC_PORT}
 NODE_ID=${NODE_ID}
+JUNO_JFR_DURATION=${JFR_DURATION}
+JUNO_MODEL_STEM=${MODEL_STEM}
 EOF2
+
+# Wrapper script — conditionally adds -XX:StartFlightRecording when JFR is enabled
+mkdir -p /opt/juno/scripts
+cat > /opt/juno/scripts/start-node.sh <<'EOF2'
+#!/bin/bash
+set -a   # auto-export every variable so exec'd java inherits them via System.getenv()
+source /etc/juno/node.env
+set +a
+JFR_OPT=""
+if [[ -n "${JUNO_JFR_DURATION:-}" ]]; then
+  mkdir -p /opt/juno/jfr
+  JFR_OPT="-XX:StartFlightRecording=duration=${JUNO_JFR_DURATION},\
+filename=/opt/juno/jfr/juno-${JUNO_MODEL_STEM}-$(date +%Y%m%d)-$(date +%H%M%S).jfr,\
+settings=profile,dumponexit=true"
+fi
+exec /usr/bin/java \
+  --enable-preview --enable-native-access=ALL-UNNAMED \
+  --add-opens java.base/java.lang=ALL-UNNAMED \
+  --add-opens java.base/java.nio=ALL-UNNAMED \
+  -XX:+UseG1GC -XX:+AlwaysPreTouch -Xmx12g \
+  ${JFR_OPT:+$JFR_OPT} \
+  -DJUNO_USE_GPU=${JUNO_USE_GPU} \
+  -Dnode.id=${NODE_ID} \
+  -Dnode.port=${JUNO_GRPC_PORT} \
+  -Dmodel.path=${JUNO_MODEL_PATH} \
+  -jar /opt/juno/juno-node/target/juno-node.jar \
+  cab.ml.juno.node.NodeMain
+EOF2
+chmod +x /opt/juno/scripts/start-node.sh
 
 cat > /etc/systemd/system/juno-node.service <<EOF2
 [Unit]
@@ -957,19 +1108,7 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=/etc/juno/node.env
 WorkingDirectory=/opt/juno
-ExecStart=/usr/bin/java \\
-  --enable-preview \\
-  --enable-native-access=ALL-UNNAMED \\
-  --add-opens java.base/java.lang=ALL-UNNAMED \\
-  --add-opens java.base/java.nio=ALL-UNNAMED \\
-  -XX:+UseG1GC -XX:+AlwaysPreTouch \\
-  -Xmx12g \\
-  -DJUNO_USE_GPU=\${JUNO_USE_GPU} \\
-  -Dnode.id=\${NODE_ID} \\
-  -Dnode.port=\${JUNO_GRPC_PORT} \\
-  -Dmodel.path=\${JUNO_MODEL_PATH} \\
-  -jar /opt/juno/juno-node/target/juno-node.jar \\
-  cab.ml.juno.node.NodeMain
+ExecStart=/opt/juno/scripts/start-node.sh
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
@@ -988,6 +1127,32 @@ echo "juno-node.service started"
 if [[ "${IS_COORDINATOR}" == "true" ]]; then
   echo "Setting up coordinator service on this node…"
 
+  cat > /opt/juno/scripts/start-coordinator.sh <<'EOF2'
+#!/bin/bash
+set -a   # auto-export every variable so exec'd java inherits them via System.getenv()
+source /etc/juno/node.env
+source /etc/juno/cluster-nodes.env 2>/dev/null || true
+set +a
+JFR_OPT=""
+if [[ -n "${JUNO_JFR_DURATION:-}" ]]; then
+  mkdir -p /opt/juno/jfr
+  JFR_OPT="-XX:StartFlightRecording=duration=${JUNO_JFR_DURATION},\
+filename=/opt/juno/jfr/juno-${JUNO_MODEL_STEM}-$(date +%Y%m%d)-$(date +%H%M%S).jfr,\
+settings=profile,dumponexit=true"
+fi
+exec /usr/bin/java \
+  --enable-preview --enable-native-access=ALL-UNNAMED \
+  --add-opens java.base/java.lang=ALL-UNNAMED \
+  --add-opens java.base/java.nio=ALL-UNNAMED \
+  -XX:+UseG1GC -XX:+AlwaysPreTouch -Xmx4g \
+  ${JFR_OPT:+$JFR_OPT} \
+  -jar /opt/juno/juno-master/target/juno-master.jar \
+  --model-path ${JUNO_MODEL_PATH} \
+  --pType ${JUNO_PTYPE} \
+  --dtype ${JUNO_DTYPE}
+EOF2
+  chmod +x /opt/juno/scripts/start-coordinator.sh
+
   cat > /etc/systemd/system/juno-coordinator.service <<'EOF2'
 [Unit]
 Description=Juno Coordinator
@@ -998,19 +1163,7 @@ Requires=juno-node.service
 Type=simple
 WorkingDirectory=/opt/juno
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 120); do [[ -f /etc/juno/cluster-nodes.env ]] && exit 0; sleep 5; done; exit 1'
-EnvironmentFile=/etc/juno/node.env
-EnvironmentFile=/etc/juno/cluster-nodes.env
-ExecStart=/bin/sh -c 'tail -f /dev/null | /usr/bin/java \
-  --enable-preview \
-  --enable-native-access=ALL-UNNAMED \
-  --add-opens java.base/java.lang=ALL-UNNAMED \
-  --add-opens java.base/java.nio=ALL-UNNAMED \
-  -XX:+UseG1GC -XX:+AlwaysPreTouch \
-  -Xmx4g \
-  -jar /opt/juno/juno-master/target/juno-master.jar \
-  --model-path ${JUNO_MODEL_PATH} \
-  --pType ${JUNO_PTYPE} \
-  --dtype ${JUNO_DTYPE}'
+ExecStart=/opt/juno/scripts/start-coordinator.sh
 Restart=on-failure
 RestartSec=15
 StandardOutput=journal
@@ -1038,6 +1191,9 @@ _build_coordinator_userdata() {
   local DTYPE_VAL="$DTYPE"
   local MODEL_URL_VAL="$MODEL_URL"
   local MODEL_FILENAME_VAL="$MODEL_FILENAME"
+  local MODEL_STEM_VAL="${MODEL_FILENAME%.*}"
+  local JFR_DURATION_VAL="${JFR_DURATION:-}"
+  local GIT_VAL="$GIT"
 
   cat <<ENDCOORD
 #!/bin/bash
@@ -1048,6 +1204,8 @@ HTTP_PORT=${HTTP_PORT_VAL}
 PTYPE=${PTYPE_VAL}
 DTYPE=${DTYPE_VAL}
 MODEL_PATH="/opt/juno/models/${MODEL_FILENAME_VAL}"
+JUNO_JFR_DURATION="${JFR_DURATION_VAL}"
+JUNO_MODEL_STEM="${MODEL_STEM_VAL}"
 
 echo "=== Coordinator bootstrap started \$(date) ==="
 
@@ -1056,6 +1214,7 @@ apt-get install -y -qq openjdk-25-jdk maven git wget curl jq bc net-tools
 
 git clone https://github.com/ml-cab/juno /opt/juno
 cd /opt/juno
+git checkout ${GIT_VAL}
 mvn clean package -DskipTests -q
 echo "Build complete"
 
@@ -1065,9 +1224,34 @@ if [[ ! -f "\${MODEL_PATH}" ]]; then
   wget -q "${MODEL_URL_VAL}" -O "\${MODEL_PATH}"
 fi
 
-mkdir -p /etc/juno
+mkdir -p /etc/juno /opt/juno/scripts
 
-cat > /etc/systemd/system/juno-coordinator.service <<EOF
+cat > /opt/juno/scripts/start-coordinator.sh <<'EOF'
+#!/bin/bash
+set -a   # auto-export every variable so exec'd java inherits them via System.getenv()
+source /etc/juno/cluster-nodes.env 2>/dev/null || true
+set +a
+JFR_OPT=""
+if [[ -n "\${JUNO_JFR_DURATION:-}" ]]; then
+  mkdir -p /opt/juno/jfr
+  JFR_OPT="-XX:StartFlightRecording=duration=\${JUNO_JFR_DURATION},\
+filename=/opt/juno/jfr/juno-\${JUNO_MODEL_STEM}-\$(date +%Y%m%d)-\$(date +%H%M%S).jfr,\
+settings=profile,dumponexit=true"
+fi
+exec /usr/bin/java \
+  --enable-preview --enable-native-access=ALL-UNNAMED \
+  --add-opens java.base/java.lang=ALL-UNNAMED \
+  --add-opens java.base/java.nio=ALL-UNNAMED \
+  -XX:+UseG1GC -XX:+AlwaysPreTouch -Xmx4g \
+  \${JFR_OPT:+\$JFR_OPT} \
+  -jar /opt/juno/juno-master/target/juno-master.jar \
+  --model-path \${JUNO_MODEL_PATH} \
+  --pType \${JUNO_PTYPE} \
+  --dtype \${JUNO_DTYPE}
+EOF
+chmod +x /opt/juno/scripts/start-coordinator.sh
+
+cat > /etc/systemd/system/juno-coordinator.service <<'EOF'
 [Unit]
 Description=Juno Coordinator (separate instance)
 After=network-online.target
@@ -1077,19 +1261,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/juno
 ExecStartPre=/bin/bash -c 'for i in \$(seq 1 120); do [[ -f /etc/juno/cluster-nodes.env ]] && exit 0; sleep 5; done; exit 1'
-EnvironmentFile=/etc/juno/cluster-nodes.env
-
-ExecStart=/bin/sh -c 'tail -f /dev/null | /usr/bin/java \
-  --enable-preview \
-  --enable-native-access=ALL-UNNAMED \
-  --add-opens java.base/java.lang=ALL-UNNAMED \
-  --add-opens java.base/java.nio=ALL-UNNAMED \
-  -XX:+UseG1GC -XX:+AlwaysPreTouch \
-  -Xmx4g \
-  -jar /opt/juno/juno-master/target/juno-master.jar \
-  --model-path ${JUNO_MODEL_PATH} \
-  --pType ${JUNO_PTYPE} \
-  --dtype ${JUNO_DTYPE}'
+ExecStart=/opt/juno/scripts/start-coordinator.sh
 Restart=on-failure
 RestartSec=15
 StandardOutput=journal
@@ -1142,6 +1314,8 @@ JUNO_HTTP_PORT=${HTTP_PORT}
 JUNO_PTYPE=${PTYPE}
 JUNO_DTYPE=${DTYPE}
 JUNO_MAX_QUEUE=1000
+JUNO_JFR_DURATION=${JFR_DURATION:-}
+JUNO_MODEL_STEM=${MODEL_FILENAME%.*}
 EOF
 )
 
@@ -1329,11 +1503,14 @@ case "$MODE" in
     echo "  Setup options:"
     echo "    --instance-type TYPE    g4dn.xlarge (default), m7i-flex.large, t3.medium, …"
     echo "    --node-count N          Number of inference nodes (default: 3)"
+    echo "    --git REF               Git branch, tag, or commit to deploy (default: main)"
     echo "    --coordinator node1     Co-locate coordinator on node 1 (default, free)"
     echo "    --coordinator separate  Extra t3.medium coordinator instance"
     echo "    --model-url URL         Model to download (default: TinyLlama Q4_K_M)"
     echo "    --ptype pipeline|tensor Parallelism type (default: pipeline)"
     echo "    --dtype FLOAT16|FLOAT32 Activation dtype (default: FLOAT16)"
+    echo "    --jfr DURATION          Enable JFR on all nodes + coordinator (e.g. 5m 30s 1h)"
+    echo "                            Metrics are gathered and printed on Ctrl+C exit"
     echo ""
     echo "  Examples:"
     echo "    # 3-node GPU cluster, TinyLlama, coordinator on node1"

@@ -17,11 +17,13 @@
 	</description>
 
 	<dependencies>
-
-		<!-- Core modules used by the console and harness -->
 		<dependency>
 			<groupId>cab.ml</groupId>
 			<artifactId>api</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>metrics</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>cab.ml</groupId>
@@ -125,4 +127,3 @@
 		</plugins>
 	</build>
 </project>
-

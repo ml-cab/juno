@@ -20,11 +20,20 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import java.util.logging.Logger;
+
+import jdk.jfr.Configuration;
+import jdk.jfr.Recording;
+import jdk.jfr.RecordingState;
+
+import cab.ml.juno.metrics.MetricsMain;
 
 import cab.ml.juno.coordinator.GenerationLoop;
 import cab.ml.juno.coordinator.GenerationResult;
@@ -160,13 +169,18 @@ public final class ConsoleMain {
 		System.setProperty("TOP_P", String.valueOf(topP));
 		if (verbose)
 			System.setProperty("JUNO_VERBOSE", "true");
-		if (jfrDuration != null)
+		// For cluster / lora modes, forward JFR duration as a JVM system property
+		// so run.sh's -XX:StartFlightRecording flag still works.
+		// For localMode, ConsoleMain manages JFR programmatically via startLocalJfr().
+		if (jfrDuration != null && !localMode)
 			System.setProperty("juno.jfr.duration", jfrDuration);
 
 		banner();
 
 		if (loraMode) {
 			runLoraRepl();
+		} else if (localMode && jfrDuration != null) {
+			startLocalJfr();
 		} else if (localMode) {
 			runLocalRepl();
 		} else {
@@ -787,6 +801,93 @@ public final class ConsoleMain {
 		String stem = dot > 0 ? name.substring(0, dot) : name;
 		Path parent = p.getParent();
 		return (parent != null ? parent.resolve(stem) : Path.of(stem)) + ".lora";
+	}
+
+	// ── JFR local mode ────────────────────────────────────────────────────────
+
+	/**
+	 * Starts a programmatic JFR recording, runs the local REPL, and once the
+	 * recording period expires automatically extracts and prints metrics JSON.
+	 *
+	 * <p>Uses {@code jdk.jfr.Recording} so the JFR lifecycle is fully managed
+	 * in-process — no JVM flags required. A daemon virtual thread polls
+	 * {@code RecordingState}; when the state becomes {@code STOPPED} (duration
+	 * elapsed), {@link #extractAndPrintJfrMetrics(Path)} is called.
+	 */
+	private static void startLocalJfr() throws Exception {
+		String modelName = Path.of(modelPath).getFileName().toString();
+		String modelStem = modelName.contains(".") ? modelName.substring(0, modelName.lastIndexOf('.')) : modelName;
+		String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+		String jfrFileName = "juno-" + modelStem + "-" + timestamp + ".jfr";
+		Path jfrFile = Path.of(jfrFileName);
+
+		Duration duration = parseJfrDuration(jfrDuration);
+
+		Configuration cfg = Configuration.getConfiguration("profile");
+		Recording rec = new Recording(cfg);
+		rec.setDuration(duration);
+		rec.setDestination(jfrFile);
+		rec.start();
+
+		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration
+				+ "  output=" + jfrFileName + Color.RESET + "\n");
+
+		// Shutdown hook guarantees extraction runs even when startRepl() calls System.exit(0).
+		// We capture rec/jfrFile/modelStem/modelName in effectively-final locals.
+		final Recording recRef = rec;
+		final String modelStemFinal = modelStem;
+		final String modelNameFinal = modelName;
+		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
+			try {
+				if (recRef.getState() == RecordingState.RUNNING) {
+					recRef.stop();
+				}
+				// Brief wait for the file to be fully written
+				Thread.sleep(500);
+				extractAndPrintJfrMetrics(jfrFile, modelStemFinal, modelNameFinal);
+			} catch (Exception e) {
+				System.err.println("JFR metrics extraction failed: " + e.getMessage());
+			} finally {
+				recRef.close();
+			}
+		}));
+
+		runLocalRepl(); // calls System.exit(0) on quit — shutdown hook fires from there
+	}
+
+	/**
+	 * Parses human-friendly duration strings like {@code "5m"}, {@code "30s"},
+	 * {@code "1h"} into {@link Duration}.
+	 */
+	private static Duration parseJfrDuration(String s) {
+		if (s == null || s.isBlank())
+			return Duration.ofMinutes(5);
+		s = s.trim().toLowerCase();
+		if (s.endsWith("h"))
+			return Duration.ofHours(Long.parseLong(s.substring(0, s.length() - 1)));
+		if (s.endsWith("m"))
+			return Duration.ofMinutes(Long.parseLong(s.substring(0, s.length() - 1)));
+		if (s.endsWith("s"))
+			return Duration.ofSeconds(Long.parseLong(s.substring(0, s.length() - 1)));
+		return Duration.ofSeconds(Long.parseLong(s));
+	}
+
+	/**
+	 * Calls {@link MetricsMain#extractToJson} on the finished JFR file, then
+	 * prints the resulting JSON to the REPL console inside a highlighted box.
+	 */
+	private static void extractAndPrintJfrMetrics(Path jfrFile, String modelStem, String modelFilename) {
+		try {
+			print("\n" + Color.CYAN_BOLD + "  ┌─────────────────────────────────────────────────┐");
+			print("  │              JFR Metrics Summary                │");
+			print("  └─────────────────────────────────────────────────┘" + Color.RESET);
+			String json = MetricsMain.extractToJson(jfrFile, modelStem, modelFilename);
+			print(Color.DIM + json + Color.RESET);
+			print(Color.GREEN + "  ✔ Metrics written → target/metrics/metrics.json" + Color.RESET);
+			print(Color.DIM + "  JFR file         → " + jfrFile.toAbsolutePath() + Color.RESET + "\n");
+		} catch (Exception e) {
+			print(Color.RED + "  ✘ Could not extract JFR metrics: " + e.getMessage() + Color.RESET);
+		}
 	}
 
 	// ── Local mode (unchanged from original) ──────────────────────────────────

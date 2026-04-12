@@ -29,6 +29,25 @@ import java.util.Map;
 
 public final class MetricsMain {
 
+    /**
+     * Programmatic entry-point for the player module (local --jfr mode).
+     * Extracts metrics from a single JFR file without scanning the filesystem
+     * or reading models.json, writes metrics.json, and returns the JSON string.
+     *
+     * @param jfrFile       path to the .jfr file
+     * @param modelStem     stem of the model filename (no extension, no timestamp)
+     * @param modelFilename full model filename (e.g. "tinyllama.gguf")
+     * @return the JSON content written to target/metrics/metrics.json
+     */
+    public static String extractToJson(Path jfrFile, String modelStem, String modelFilename) throws Exception {
+        ModelsConfig.ModelEntry entry = new ModelsConfig.ModelEntry(modelStem, modelFilename);
+        MetricsSnapshot.ModelMetrics snapshot = JfrMetricsExtractor.extract(jfrFile, entry);
+        Path output = Path.of("target", "metrics", "metrics.json");
+        Files.createDirectories(output.getParent());
+        MetricsWriter.write(output, List.of(snapshot));
+        return Files.readString(output);
+    }
+
     public static void main(String[] args) throws Exception {
         Path projectRoot = Path.of(System.getProperty("user.dir"));
         ModelsConfig models = loadModelsConfig(projectRoot);
