@@ -41,8 +41,8 @@ import cab.ml.juno.tokenizer.SimpleTokenizer;
  * Memory budget for 16 GB host: 3 node JVMs × -Xmx4g = 12 GB coordinator JVM
  * -Xmx2g = 2 GB OS + overhead = 2 GB
  *
- * Run all ITs: mvn verify -pl integration Run only this: mvn verify -pl
- * integration -Dit.test=ThreeNodeClusterIT
+ * Run all ITs: mvn verify -pl juno-master Run only this: mvn verify -pl
+ * juno-master -Dit.test=ThreeNodeClusterIT
  */
 @DisplayName("Three-Node Cluster (3 forked JVMs)")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)

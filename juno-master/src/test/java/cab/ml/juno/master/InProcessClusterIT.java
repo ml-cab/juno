@@ -38,7 +38,7 @@ import cab.ml.juno.tokenizer.SimpleTokenizer;
  * Wires 3 CyclicForwardPassHandlers via LocalInferencePipeline, runs a full
  * GenerationLoop end-to-end, zero network.
  *
- * Run: mvn verify -pl integration -Dit.test=InProcessClusterIT
+ * Run: mvn verify -pl juno-master -Dit.test=InProcessClusterIT
  */
 @DisplayName("In-Process 3-Node Cluster")
 class InProcessClusterIT {

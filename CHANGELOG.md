@@ -7,6 +7,42 @@ All modules build and all tests pass. Verified end-to-end with:
 - Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile
 - phi-3.5-mini-instruct.Q4_K_M.gguf on a 3-node CPU cluster
 
+**Session 25** — Code quality: dead code removed, test helpers moved to test scope, docs fully updated.
+
+`CyclicForwardPassHandler` moved from `node/src/main` to `node/src/test`. It is a deterministic stub with no business value without a model; it belongs exclusively in the test compilation unit. `EmbeddedNodeServer` no longer imports it — the three call sites (pre-load placeholder, model-load-failure fallback, no-model stub mode) are now served by a new private `StubForwardPassHandler` inner class that returns zero-filled arrays of the correct shape with no test machinery. `node/pom.xml` gains a `maven-jar-plugin` `test-jar` execution so other modules can still import `CyclicForwardPassHandler`; `coordinator/pom.xml` and `juno-master/pom.xml` declare the `node:tests` classifier dependency.
+
+Documentation sweep — all stale names corrected across `docs/arch.txt`, `docs/howto.md`, and integration test Javadoc:
+
+- `io.hyperstack4j.*` package → `cab.ml.juno.*` (all occurrences in session history notes).
+- `integration` Maven module and module paths → `juno-master`.
+- `cab.ml.juno.integration` package → `cab.ml.juno.master`.
+- `productivity/`, `ProductivityMain`, `productivity-*.jar` → `metrics/`, `MetricsMain`, `metrics-*.jar`.
+- `target/productivity/metrics.json` → `target/metrics/metrics.json`.
+- `run-me.sh` / `hyper.sh` → `scripts/run.sh`.
+- `integration/target/player.jar (main: ModelLiveRunner)` → `juno-master/target/juno-master.jar (main: CoordinatorMain)`.
+- `GpuForwardPassHandler.loadGpuResident` / `releaseGpuResources` references in `docs/howto.md` replaced with the correct session-20 pattern using `LlamaTransformerHandler.load(..., new CudaMatVec(gpuCtx))`.
+- All `mvn verify -pl integration` commands in IT Javadoc → `-pl juno-master`.
+- `CyclicForwardPassHandler` listings in arch.txt annotated as `src/test only`.
+- `EmbeddedNodeServer` description updated to reference `StubForwardPassHandler`.
+
+`README.md` updated: `--byteOrder` flag added to the Flags table; `BYTE_ORDER` added to environment overrides; `node` module table entry updated to include `NodeMain`, `ActivationBECodec`, `ActivationLECodec`; `juno-master` entry updated with `JUNO_BYTE_ORDER`; configurable byte order added to Key Design Decisions; stub-mode note updated to describe `StubForwardPassHandler` vs `CyclicForwardPassHandler`.
+
+**Session 24** — Configurable activation byte order (`--byteOrder BE|LE`).
+
+`ActivationCodec` is rewritten from a self-contained little-endian implementation into a **zero-overhead static dispatcher**. It reads the JVM system property `juno.byteOrder` (`BE` or `LE`, default `BE`) exactly once in a `static {}` block and stores the result in a `private static final boolean USE_BE`. Every `encode()`, `decode()`, `matVecF32raw()`, `floatToHalf()`, and `halfToFloat()` call is a single branch with no string comparison, no reflection, and no allocation after class load. A new `byteOrder()` accessor returns the active label for logging and health responses.
+
+The two concrete codec classes are unchanged. `ActivationBECodec` (big-endian, `ByteBuffer`-based, validated by hard testing on production hardware) and `ActivationLECodec` (little-endian, direct bit-manipulation, zero `ByteBuffer` allocation, native x86 order) are now equally reachable. Default is `BE`; use `--byteOrder LE` on x86-native deployments where unaligned BE reads carry overhead.
+
+**Propagation chain** — the byte order is guaranteed consistent across every JVM in a cluster:
+- `run.sh` / `run.bat`: `--byteOrder` sets both `-Djuno.byteOrder` (JVM flag) and the `--byteOrder` app arg; `ConsoleMain.parseArgs()` calls `System.setProperty()` before any codec call.
+- `ClusterHarness.launchNode()`: reads `System.getProperty("juno.byteOrder")` from the coordinator JVM and injects `-Djuno.byteOrder=...` into every forked node JVM command.
+- `juno-deploy.sh`: `JUNO_BYTE_ORDER` is written into `/etc/juno/node.env` on every instance and passed as `-Djuno.byteOrder` to both node and coordinator JVMs via the generated `start-node.sh` / `start-coordinator.sh` wrappers.
+- `CoordinatorMain`: reads `JUNO_BYTE_ORDER` from the environment and calls `System.setProperty()` before any other work.
+
+`InferenceApiServer.handleClusterHealth()` now includes `"byteOrder": "BE"|"LE"` in its JSON response. The web console header displays a live `byteOrder` badge that refreshes every 10 seconds alongside the health indicator.
+
+`BYTE_ORDER` env var added as an override equivalent to `--byteOrder`. Documented in the Flags table, environment overrides line, `NodeMain` property list, `CoordinatorMain` env table, and AWS setup options table in both `README.md` and `docs/howto.md`. `docs/arch.txt` header date updated to 2026-04-13; section 35 appended with the full design rationale, propagation-chain analysis, file-change table, and build status.
+
 **Session 22** — Q2_K and Q3_K quantization support.
 
 `GgufReader` gains `loadQ2_K` and `loadQ3_K` — pure Java dequantizers for GGML_TYPE_Q2_K (type 10, 84 bytes / 256 elements) and GGML_TYPE_Q3_K (type 11, 110 bytes / 256 elements). Block layouts and bit-extraction logic mirror llama.cpp `dequantize_row_q2_K` / `dequantize_row_q3_K` exactly.
@@ -51,7 +87,7 @@ The `KVCacheManager` (GPU + CPU tiers with LRU/W-TinyLFU eviction) was previousl
 Four custom JFR event classes cover every hot path. All are readable in JDK Mission Control under Event Browser. Use `--jfr DURATION` on any `juno` command to capture a recording:
 
 - `juno.MatVec` — emitted by `CpuMatVec.sgemv()` and both `CudaMatVec.sgemv()` overloads. Fields: `backend` (`cpu`/`cuda`/`cuda-resident`), `rows`, `cols`. ~155 events per generated token for TinyLlama.
-- `juno.ForwardPass` — emitted by all six `ForwardPassHandler.forward()` implementations. Fields: `handlerType` (`llama`/`phi3`/`cpu`/`gpu`/`cyclic`/`lora`), `requestId`, `startPosition`, `layerCount`, `hasOutputProjection`.
+- `juno.ForwardPass` — emitted by all `ForwardPassHandler.forward()` implementations. Fields: `handlerType` (`llama`/`phi3`/`cyclic`/`lora`), `requestId`, `startPosition`, `layerCount`, `hasOutputProjection`.
 - `juno.Tokenizer` — emitted by `GgufTokenizer`, `DJLTokenizer`, `SimpleTokenizer` for `encode`, `decode`, and `decodeToken`. Fields: `tokenizerType`, `operation`, `inputLength`, `outputLength`.
 - `juno.TemplateFormat` — emitted by `ChatTemplateFormatter.format()`. Fields: `modelType`, `messageCount`, `outputLength`.
 

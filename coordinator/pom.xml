@@ -84,5 +84,13 @@
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
         </dependency>
+<!--
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>node</artifactId>
+			<classifier>tests</classifier>
+			<scope>test</scope>
+		</dependency>
+-->
     </dependencies>
 </project>

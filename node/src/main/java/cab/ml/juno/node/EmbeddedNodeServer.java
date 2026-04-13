@@ -110,6 +110,33 @@ public final class EmbeddedNodeServer {
 			grpcServer.awaitTermination();
 	}
 
+	// ── Stub handler (no model loaded) ───────────────────────────────────────
+
+	/**
+	 * Minimal no-op ForwardPassHandler used before a real shard is loaded and as
+	 * a safe fallback when model loading fails. Returns zero-filled arrays of the
+	 * correct shape; never produces meaningful output. Not for use in tests —
+	 * tests should use {@code CyclicForwardPassHandler} (node/src/test) which
+	 * provides deterministic, inspectable results.
+	 */
+	private static final class StubForwardPassHandler implements ForwardPassHandler {
+		@Override
+		public ForwardResult forward(ForwardRequest request, ShardContext context) {
+			long start = System.nanoTime();
+			if (context.hasOutputProjection()) {
+				return ForwardResult.logits(request.requestId(), new float[context.vocabSize()],
+						System.nanoTime() - start);
+			}
+			return ForwardResult.activations(request.requestId(), new float[context.hiddenDim()],
+					System.nanoTime() - start);
+		}
+
+		@Override
+		public boolean isReady() {
+			return true;
+		}
+	}
+
 	// ── gRPC service impl ─────────────────────────────────────────────────────
 
 	private static final class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
@@ -129,7 +156,7 @@ public final class EmbeddedNodeServer {
 			this.nodeId = nodeId;
 			this.modelPath = modelPath;
 			this.useGpu = useGpu;
-			this.handler = new CyclicForwardPassHandler(); // replaced in loadShard() when real model
+			this.handler = new StubForwardPassHandler(); // replaced in loadShard() when real model
 			this.context = buildDefaultContext();
 			this.kvCache = new KVCacheManager(new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256));
 		}
@@ -222,12 +249,12 @@ public final class EmbeddedNodeServer {
 						gpuContext.close();
 						gpuContext = null;
 					}
-					handler = new CyclicForwardPassHandler();
+					handler = new StubForwardPassHandler();
 					msg = "Stub shard (model load failed: " + e.getMessage() + ") layers " + request.getStartLayer()
 							+ "–" + request.getEndLayer();
 				}
 			} else {
-				handler = new CyclicForwardPassHandler();
+				handler = new StubForwardPassHandler();
 				msg = "Stub shard loaded layers " + request.getStartLayer() + "–" + request.getEndLayer();
 			}
 			context = newCtx;

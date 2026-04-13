@@ -50,7 +50,7 @@ import cab.ml.juno.tokenizer.SimpleTokenizer;
  * → node-2 → node-3 serially. This IT fans out to all 3 nodes in parallel and
  * reduces.
  *
- * Run: mvn verify -pl integration -Dit.test=TensorParallelClusterIT
+ * Run: mvn verify -pl juno-master -Dit.test=TensorParallelClusterIT
  */
 @DisplayName("Tensor-Parallel 3-Node Cluster (3 forked JVMs)")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)

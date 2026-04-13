@@ -57,8 +57,7 @@ public final class ActivationCodec {
 	static {
 		String prop = System.getProperty("juno.byteOrder", "BE").trim().toUpperCase();
 		USE_BE = !"LE".equals(prop); // anything other than explicit "LE" → BE
-		System.out.println("[ActivationCodec] byteOrder=" + (USE_BE ? "BE" : "LE")
-				+ "  (override with -Djuno.byteOrder=LE|BE)");
+		//System.out.println("[ActivationCodec] byteOrder=" + (USE_BE ? "BE" : "LE") + "  (override with -Djuno.byteOrder=LE|BE)");
 	}
 
 	/**
