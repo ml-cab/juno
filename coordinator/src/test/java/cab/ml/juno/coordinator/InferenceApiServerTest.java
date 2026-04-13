@@ -68,7 +68,7 @@ class InferenceApiServerTest {
 		registry.register(tinyllama, nodes);
 		registry.markLoaded("tinyllama");
 
-		server = new InferenceApiServer(scheduler, registry);
+		server = new InferenceApiServer(scheduler, registry, "BE");
 		server.start(PORT);
 	}
 

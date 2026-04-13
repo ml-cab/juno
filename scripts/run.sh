@@ -141,6 +141,7 @@ JVM_BASE=(
 cmd_cluster() {
   local model="${MODEL_PATH:-}"
   local dtype="${DTYPE:-FLOAT16}"
+  local byte_order="${BYTE_ORDER:-BE}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.6}"
   local top_k="${TOP_K:-20}"
@@ -162,6 +163,7 @@ cmd_cluster() {
       --model-path)       model="$2";        shift 2 ;;
       --pType | --ptype)  ptype="$2";        shift 2 ;;
       --dtype)            dtype="$2";        shift 2 ;;
+      --byteOrder | --byteorder | --byte-order) byte_order="${2^^}"; shift 2 ;;
       --max-tokens)       max_tokens="$2";   shift 2 ;;
       --temperature)      temperature="$2";  shift 2 ;;
       --top-k)            top_k="$2";        shift 2 ;;
@@ -238,7 +240,7 @@ cmd_cluster() {
   require_jar "$PLAYER_JAR" "player"
   check_java_version
 
-  warn "Starting 3-node cluster  (pType=${ptype}  dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
+  warn "Starting 3-node cluster  (pType=${ptype}  dtype=${dtype}  byteOrder=${byte_order}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   warn "Ctrl-C to stop all nodes and exit"
   echo ""
@@ -263,9 +265,11 @@ cmd_cluster() {
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
     "-Djuno.node.heap=${heap}" \
+    "-Djuno.byteOrder=${byte_order}" \
     -jar "$PLAYER_JAR" \
     --model-path "$model" \
     --dtype "$dtype" \
+    --byteOrder "$byte_order" \
     --max-tokens "$max_tokens" \
     --temperature "$temperature" \
     --top-k "$top_k" \
@@ -283,6 +287,7 @@ cmd_cluster() {
 cmd_local() {
   local model="${MODEL_PATH:-}"
   local dtype="${DTYPE:-FLOAT16}"
+  local byte_order="${BYTE_ORDER:-BE}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.6}"
   local heap="${HEAP:-4g}"
@@ -303,6 +308,7 @@ cmd_local() {
     case "$1" in
       --model-path)       model="$2";        shift 2 ;;
       --dtype)            dtype="$2";        shift 2 ;;
+      --byteOrder | --byteorder | --byte-order) byte_order="${2^^}"; shift 2 ;;
       --max-tokens)       max_tokens="$2";   shift 2 ;;
       --temperature)      temperature="$2";  shift 2 ;;
       --top-k)            top_k="$2";        shift 2 ;;
@@ -366,7 +372,7 @@ cmd_local() {
   require_jar "$PLAYER_JAR" "player"
   check_java_version
 
-  info "Starting local in-process REPL  (dtype=${dtype}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
+  info "Starting local in-process REPL  (dtype=${dtype}  byteOrder=${byte_order}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   echo ""
 
@@ -387,9 +393,11 @@ cmd_local() {
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
+    "-Djuno.byteOrder=${byte_order}" \
     -jar "$PLAYER_JAR" \
     --model-path "$model" \
     --dtype "$dtype" \
+    --byteOrder "$byte_order" \
     --max-tokens "$max_tokens" \
     --temperature "$temperature" \
     --top-k "$top_k" \
@@ -695,6 +703,7 @@ usage() {
   echo "  Flags common to default (cluster), local, and lora:"
   echo "    --pType pipeline|tensor        parallelism type         (default pipeline)"
   echo "    --dtype FLOAT32|FLOAT16|INT8   activation wire format   (default FLOAT16)"
+  echo "    --byteOrder BE|LE              activation codec endianness (default BE)"
   echo "    --float16 / --fp16             shorthand"
   echo "    --float32                      lossless reference / debug"
   echo "    --int8                         maximum compression"

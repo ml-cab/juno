@@ -378,6 +378,7 @@ public final class ClusterHarness implements AutoCloseable {
 
 		String classpath = System.getProperty("java.class.path");
 		boolean verbose = "true".equalsIgnoreCase(System.getProperty("JUNO_VERBOSE"));
+
 		// Inherit heap from coordinator via -Djuno.node.heap=<size>; default 4g.
 		// Large models (phi-3.5-mini, Llama-7B) need >=6g on node-0 which eagerly
 		// dequantises token_embd.weight to float[vocabSize * hiddenDim].
@@ -391,6 +392,10 @@ public final class ClusterHarness implements AutoCloseable {
 		// N_nodes × (cores-1) threads to contend for the same physical cores.
 		int coresPerNode = Math.max(1, Runtime.getRuntime().availableProcessors() / specs.size());
 		cmd.add("-Djava.util.concurrent.ForkJoinPool.common.parallelism=" + coresPerNode);
+
+		// Propagate byte-order to node JVMs so ActivationCodec selects the same impl.
+		String byteOrder = System.getProperty("juno.byteOrder", "BE");
+		cmd.add("-Djuno.byteOrder=" + byteOrder);
 
 		// JFR on the node JVM — records MatVec / ForwardPass events that fire here.
 		if (jfrDuration != null && jfrTimestamp != null) {

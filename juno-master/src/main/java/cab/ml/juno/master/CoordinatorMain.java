@@ -83,6 +83,8 @@ public final class CoordinatorMain {
         String ptypeStr     = env("JUNO_PTYPE", "pipeline");
         int    httpPort     = parseInt(env("JUNO_HTTP_PORT", "8080"), 8080);
         String dtypeStr     = env("JUNO_DTYPE", "FLOAT16");
+        String byteOrderStr = env("JUNO_BYTE_ORDER", "BE");
+        System.setProperty("juno.byteOrder", "LE".equalsIgnoreCase(byteOrderStr.strip()) ? "LE" : "BE");
         int    maxQueue     = parseInt(env("JUNO_MAX_QUEUE", "1000"), MAX_QUEUE_DEFAULT);
 
         // ── Validate ──────────────────────────────────────────────────────
@@ -132,7 +134,7 @@ public final class CoordinatorMain {
         ModelRegistry registry = buildRegistry(config, modelPath);
 
         // ── Start REST server ─────────────────────────────────────────────
-        InferenceApiServer apiServer = new InferenceApiServer(scheduler, registry);
+        InferenceApiServer apiServer = new InferenceApiServer(scheduler, registry, byteOrderStr);
         apiServer.start(httpPort);
         log.info("Coordinator REST server started on port " + httpPort);
         System.out.println("COORDINATOR_READY:" + httpPort);

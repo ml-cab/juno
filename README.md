@@ -121,15 +121,17 @@ mvn clean package -DskipTests
 # Real-model smoke test — 8 checks, exits 0/1
 ./juno test --model-path /path/to/model.gguf --heap 4g
 
-# Profile with JFR — captures all five juno.* event types
+# Profile with JFR — local mode: programmatic recording, metrics auto-printed on expiry
 ./juno local --model-path /path/to/model.gguf --jfr 5m
-# Open juno-<modelStem>-<timestamp>.jfr in JDK Mission Control
+# When the 5-minute period expires, metrics JSON is printed inline and written to
+# target/metrics/metrics.json — no manual step needed.
+# Open juno-<modelStem>-<timestamp>.jfr in JDK Mission Control for detailed inspection.
 # Event Browser: juno.MatVec / juno.ForwardPass / juno.Tokenizer / juno.TemplateFormat
 
-# Extract automated metrics summary (counts, durations, p50/p95/p99 per event type)
-mvn package -pl productivity -am -DskipTests
-java -cp productivity/target/productivity-*.jar cab.ml.juno.productivity.ProductivityMain
-# Output: target/productivity/metrics.json
+# Post-hoc extraction from any .jfr file (e.g. from lora or test runs):
+mvn package -pl metrics -am -DskipTests
+java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
+# Output: target/metrics/metrics.json
 ```
 
 ---
@@ -141,13 +143,14 @@ java -cp productivity/target/productivity-*.jar cab.ml.juno.productivity.Product
 | `--model-path PATH` | — | Path to GGUF file (required) |
 | `--pType pipeline\|tensor` | `pipeline` | Parallelism type: `pipeline` = contiguous layer blocks, serial activation flow (vertical scaling); `tensor` = weight-matrix slices, all nodes in parallel with AllReduce (horizontal scaling). Constraint for tensor: `numHeads % nodes == 0` |
 | `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | Activation wire format between nodes |
+| `--byteOrder BE\|LE` | `BE` | Byte order used by `ActivationCodec` when encoding/decoding activation tensors on the gRPC wire. `BE` (big-endian) is the default, validated by hard testing on production hardware. `LE` (little-endian) is the native x86 order and may be preferable on architectures where unaligned BE reads are expensive. The setting is propagated automatically to every forked node JVM (`-Djuno.byteOrder`) so all participants in a cluster always use the same encoding. |
 | `--max-tokens N` | `200` | Maximum tokens per response |
 | `--temperature F` | `0.6` | Sampling temperature (0.0 = deterministic) |
 | `--top-k N` | `20` | Top-K sampling cutoff (0 = disabled) |
 | `--top-p F` | `0.95` | Nucleus sampling cutoff (0 = disabled) |
 | `--heap SIZE` | `4g` | JVM heap per node, e.g. `4g`, `8g` |
 | `--nodes N` | `3` | In-process shard count (`local` only) |
-| `--jfr DURATION` | — | Java Flight Recording for DURATION (e.g. `30s`, `5m`, `1h`). Writes `juno-<modelStem>-<timestamp>.jfr`. Captures `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, and (for `lora`) `juno.LoraTrainStep` events. Open in JDK Mission Control. Use `./juno local` for full event coverage — cluster mode captures coordinator JVM only. |
+| `--jfr DURATION` | — | Java Flight Recording for DURATION (e.g. `30s`, `5m`, `1h`). Writes `juno-<modelStem>-<timestamp>.jfr`. Captures `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, and (for `lora`) `juno.LoraTrainStep` events. **`local` mode**: recording managed programmatically — metrics JSON is printed automatically when the period expires or the REPL exits. **`cluster` mode**: coordinator gets programmatic JFR; every forked node JVM is also instrumented so `juno.MatVec`/`juno.ForwardPass` events are captured from all nodes; all files are merged and metrics auto-printed on exit. **`lora`/`test` modes**: JVM flag only; open the resulting `.jfr` in JDK Mission Control or run `MetricsMain` manually. |
 | `--verbose` / `-v` | — | Show node startup, gRPC and shard loading logs |
 
 **LoRA flags** (`lora` command only):
@@ -160,7 +163,7 @@ java -cp productivity/target/productivity-*.jar cab.ml.juno.productivity.Product
 | `--lora-lr F` | `1e-4` | Adam learning rate |
 | `--lora-steps N` | `50` | Gradient steps per `/train` command |
 
-Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `JAVA_HOME`
+Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `BYTE_ORDER`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `JAVA_HOME`
 
 ---
 
@@ -177,9 +180,9 @@ Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `MAX_TOKENS`, `TEMPERATUR
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | Health monitor, circuit breakers (Resilience4j) |
 | `player` | `ConsoleMain` REPL (`cluster` / `local` / `lora` commands), `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient` |
-| `juno-node` | Fat jar (`juno-node.jar`). `NodeMain` — standalone node entry point for remote deployment. Reads `-Dnode.id`, `-Dnode.port`, `-Dmodel.path`, `-DJUNO_USE_GPU` from system properties (command-line args still accepted). Prints `READY:<nodeId>:<port>` on startup. Launched by `juno-node.service` systemd unit on AWS nodes. |
-| `juno-master` | Fat jar (`juno-master.jar`; renamed from `integration`). `CoordinatorMain` — standalone coordinator entry point for remote deployment. Reads node addresses from `JUNO_NODE_ADDRESSES`, model from `JUNO_MODEL_PATH`, and tuning from `JUNO_PTYPE` / `JUNO_HTTP_PORT` / `JUNO_DTYPE` / `JUNO_MAX_QUEUE`. No forking, no `ClusterHarness`. Launched by `juno-coordinator.service` on the AWS coordinator host. Integration tests (`InProcessClusterIT`, `ThreeNodeClusterIT`, `TensorParallelClusterIT`, `GpuForwardPassIT`, `ModelLiveRunnerIT`) in package `cab.ml.juno.master`; `ModelLiveRunnerIT` gated behind `-Pintegration` Maven profile. |
-| `metrics` | JFR-based productivity metrics extractor (source dir: `productivity/`). `JfrMetricsExtractor`, `JfrModelMapper`, `JfrPercentiles`, `MetricsSnapshot`, `MetricsWriter`, `ModelsConfig`, `ModelsConfigLoader`, `ProductivityMain` |
+| `juno-node` | Fat jar (`juno-node.jar`). `NodeMain` — standalone node entry point for remote deployment. Reads `-Dnode.id`, `-Dnode.port`, `-Dmodel.path`, `-DJUNO_USE_GPU`, `-Djuno.byteOrder` from system properties (command-line args still accepted). Prints `READY:<nodeId>:<port>` on startup. Launched by `juno-node.service` systemd unit on AWS nodes. |
+| `juno-master` | Fat jar (`juno-master.jar`; renamed from `integration`). `CoordinatorMain` — standalone coordinator entry point for remote deployment. Reads node addresses from `JUNO_NODE_ADDRESSES`, model from `JUNO_MODEL_PATH`, and tuning from `JUNO_PTYPE` / `JUNO_HTTP_PORT` / `JUNO_DTYPE` / `JUNO_BYTE_ORDER` / `JUNO_MAX_QUEUE`. No forking, no `ClusterHarness`. Launched by `juno-coordinator.service` on the AWS coordinator host. Integration tests (`InProcessClusterIT`, `ThreeNodeClusterIT`, `TensorParallelClusterIT`, `GpuForwardPassIT`, `ModelLiveRunnerIT`) in package `cab.ml.juno.master`; `ModelLiveRunnerIT` gated behind `-Pintegration` Maven profile. |
+| `metrics` | JFR-based metrics extractor. `JfrMetricsExtractor` (single-file and multi-file merge), `JfrModelMapper`, `JfrPercentiles`, `MetricsSnapshot`, `MetricsWriter`, `ModelsConfig`, `ModelsConfigLoader`, `MetricsMain` (standalone entry point + `extractToJson`/`extractToJsonMerged` facades for programmatic use) |
 
 ---
 
@@ -234,7 +237,7 @@ mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl juno-master \
 
 ## JFR Profiling
 
-All `juno` commands accept `--jfr DURATION` which activates Java Flight Recording and writes a `juno-<timestamp>.jfr` file on exit. Open it in JDK Mission Control. Five custom event types are available under Event Browser:
+All `juno` commands accept `--jfr DURATION` which activates Java Flight Recording and writes a `juno-<modelStem>-<timestamp>.jfr` file. Five custom event types are available under the JDK Mission Control Event Browser:
 
 | Event | Category | Key fields | Fired by |
 |-------|----------|------------|----------|
@@ -243,6 +246,12 @@ All `juno` commands accept `--jfr DURATION` which activates Java Flight Recordin
 | `juno.Tokenizer` | Juno/Tokenizer | `tokenizerType`, `operation`, `inputLength`, `outputLength` | `GgufTokenizer`, `DJLTokenizer`, `SimpleTokenizer` |
 | `juno.TemplateFormat` | Juno/Tokenizer | `modelType`, `messageCount`, `outputLength` | `ChatTemplateFormatter` |
 | `juno.LoraTrainStep` | Juno/LoRA | `step`, `loss`, `forwardMs`, `backwardMs`, `optimizerMs` | `LoraTrainableHandler.trainStep()` |
+
+**Per-mode behaviour:**
+
+- **`local` mode** (`./juno local --jfr DURATION`): JFR is managed programmatically via `jdk.jfr.Recording`. When the recording period expires, `MetricsMain.extractToJson()` is called from a shutdown hook — the metrics JSON is printed inline to the REPL console and written to `target/metrics/metrics.json`. The REPL stays open after extraction. All five event types are captured in the single JVM.
+- **`cluster` mode** (`./juno --jfr DURATION`): The coordinator JVM gets a programmatic `jdk.jfr.Recording`. Every forked node JVM is also instrumented via `ClusterHarness.withJfr()` which injects `-XX:StartFlightRecording=...,dumponexit=true` so each node's `.jfr` file is written on process exit. On shutdown, `MetricsMain.extractToJsonMerged()` merges coordinator + all node files into one snapshot before printing. Full event coverage: `juno.MatVec` and `juno.ForwardPass` come from node JVMs; `juno.Tokenizer` and `juno.TemplateFormat` from the coordinator.
+- **`lora` / `test` modes**: JVM flag only (`-XX:StartFlightRecording`). Open the resulting `.jfr` in JDK Mission Control or run `MetricsMain` manually.
 
 Useful analysis patterns:
 
@@ -279,8 +288,9 @@ Useful analysis patterns:
 - **LoRA fine-tuning without touching the base model.** `LoraTrainableHandler` wraps `LlamaTransformerHandler` and adds trainable low-rank adapters (A/B matrices, rank 4–16) on the Q and V projections. The frozen weights stay quantized at all times — backward passes dequantize one block per row via dedicated `transposedQ4K` / `transposedQ5K` / `transposedQ6K` scatter-reduce implementations. Adapters are persisted to a `.lora` binary checkpoint; the GGUF is never modified.
 - **GPT-2 BPE and SentencePiece BPE both supported.** `GgufTokenizer` reads `tokenizer.ggml.model` from GGUF metadata. Value `"gpt2"` activates the GPT-2 / tiktoken path (Llama 3+): space-prefixed words use Ġ (U+0120), and special control tokens are pre-split longest-first before BPE. Any other value (null / `"llama"` / `"llama2"`) uses the SentencePiece path (Llama 1/2, TinyLlama, Mistral, Gemma, Phi-3). No configuration required — detection is automatic at load time.
 - **AWS infrastructure scripted.** `scripts/aws/launcher.sh` is a credential wrapper. `juno-deploy.sh` is a unified cluster lifecycle script (replaces the earlier `juno-infra.sh` / `juno-infra-ft.sh`): hardware is auto-detected during bootstrap — GPU nodes install CUDA and set `JUNO_USE_GPU=true`, CPU nodes skip it. Commands: `setup | start | stop | teardown | status | scan-regions`. Coordinator can be co-located on node 1 (default, free) or launched as a separate t3.medium. State persisted to `~/.juno-deploy-state`; Ctrl+C auto-stops instances before exit. After `setup` the script bootstraps all nodes (~5 min), writes `cluster-nodes.env`, starts the coordinator, and enters the live cluster monitor showing per-node CPU / mem, health, and estimated cost. Web console served at `http://<coordinator>:8080` once cluster is healthy.
-- **JFR metrics extractor.** The `metrics` module (source dir: `productivity/`) scans the project root for `juno-<stem>-*.jfr` files, maps them to `models.json` entries, extracts counts / durations / p50/p95/p99 percentiles for all five `juno.*` event types, and writes `target/productivity/metrics.json`.
-- **Full JFR instrumentation across every hot path.** Five custom event types — `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, `juno.LoraTrainStep` — make every layer of the stack observable in JDK Mission Control without any agent or bytecode manipulation. Activated with `--jfr DURATION` on any `juno` command.
+- **Configurable activation byte order.** `ActivationCodec` is a static dispatcher: it reads the JVM property `juno.byteOrder` (`BE` or `LE`, default `BE`) once at class-load time and delegates every `encode`/`decode`/`matVecF32raw` call to either `ActivationBECodec` (big-endian, ByteBuffer-based, validated on production hardware) or `ActivationLECodec` (little-endian, manual bit-manipulation, zero ByteBuffer allocation, native x86 order). The selection happens once with zero ongoing overhead. In cluster and local modes the property is set from `--byteOrder` and automatically propagated as `-Djuno.byteOrder` to every forked node JVM by `ClusterHarness`, ensuring a consistent wire format across all participants. In AWS deployments `juno-deploy.sh` writes `JUNO_BYTE_ORDER` into `/etc/juno/node.env` and `/opt/juno/cluster-nodes.env` and passes `-Djuno.byteOrder=` to both node and coordinator JVMs.
+- **JFR metrics extractor.** The `metrics` module scans the project root for `juno-<stem>-*.jfr` files (the optional `juno-` prefix is also accepted for AWS node recordings), maps them to `models.json` entries, extracts counts / durations / p50/p95/p99 percentiles for all five `juno.*` event types, and writes `target/metrics/metrics.json`. For `local` and `cluster` modes this runs automatically on JFR period expiry or exit via `MetricsMain.extractToJson()` / `extractToJsonMerged()`; for `lora`/`test` runs it can be invoked manually with `java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain`.
+- **Full JFR instrumentation across every hot path.** Five custom event types — `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, `juno.LoraTrainStep` — make every layer of the stack observable in JDK Mission Control without any agent or bytecode manipulation. Activated with `--jfr DURATION` on any `juno` command. In `local` mode all events appear in one file; in `cluster` mode the coordinator and every forked node JVM each write their own `.jfr` file, which are then merged automatically by `MetricsMain.extractToJsonMerged()` on exit for a complete cross-JVM view.
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
 - `MatVec` interface decouples the matmul backend from the transformer logic. `CudaMatVec` implements host `sgemv` (full H2D per call, for tests) and device `sgemv(DeviceFloatMatrix, x)` for resident weights (production path). `CpuMatVec` as CPU fallback and test reference. Backend selection is automatic via `ForwardPassHandlerLoader.selectBackend()` which reads `JUNO_USE_GPU` and calls `CudaAvailability.isAvailable()`. When `CudaMatVec` is selected, `LlamaTransformerHandler` dequantizes all projection weights to `float[]` and uploads them as `DeviceFloatMatrix` once at construction; the new `matVecLayer()` method dispatches through the GPU-resident path on each forward call.
 - GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent CUDA native libs (bytedeco) loading into the coordinator JVM and poisoning FD inheritance into forked node processes.

@@ -16,23 +16,27 @@
 
 package cab.ml.juno.node;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-
 /**
- * Encodes and decodes activation tensors (float[]) to/from compressed bytes.
+ * Configurable activation codec — static switch between big-endian (BE) and
+ * little-endian (LE) wire formats.
  *
- * Used exclusively at the gRPC transport boundary: - compress before writing
- * {@code ForwardRequest.activation} - decompress after reading
- * {@code ForwardResponse.activation}
+ * Used exclusively at the gRPC transport boundary: compress before writing
+ * {@code ForwardRequest.activation}, decompress after reading
+ * {@code ForwardResponse.activation}.
  *
  * The rest of the pipeline (ForwardRequest record, ForwardResult record,
- * ForwardPassHandler) always works with float[] — compression is purely a
+ * ForwardPassHandler) always works with float[] — byte order is purely a
  * network-wire concern and is invisible to business logic.
  *
- * Wire layouts: FLOAT32 → big-endian IEEE 754 float, 4 bytes/element FLOAT16 →
- * big-endian IEEE 754 half-precision, 2 bytes/element INT8 → [scale:float32
- * big-endian (4 bytes)] [quantised:signed byte × N]
+ * Byte order is selected once at JVM startup via the system property
+ * {@code juno.byteOrder}:
+ * <pre>
+ *   -Djuno.byteOrder=BE   big-endian    (default — validated on real hardware)
+ *   -Djuno.byteOrder=LE   little-endian (native x86 order)
+ * </pre>
+ *
+ * All encode/decode calls delegate to either {@link ActivationBECodec} or
+ * {@link ActivationLECodec}. Both implementations are thread-safe and stateless.
  *
  * Thread-safe: all methods are stateless.
  */
@@ -41,28 +45,49 @@ public final class ActivationCodec {
 	private ActivationCodec() {
 	} // utility class — no instances
 
+	// ── Byte-order selection (resolved once at class-load time) ───────────────
+
+	/**
+	 * {@code true} → big-endian (ActivationBECodec), {@code false} → little-endian
+	 * (ActivationLECodec). Driven by {@code -Djuno.byteOrder=BE|LE}; defaults to
+	 * {@code BE} which has been validated by hard testing on production hardware.
+	 */
+	private static final boolean USE_BE;
+
+	static {
+		String prop = System.getProperty("juno.byteOrder", "BE").trim().toUpperCase();
+		USE_BE = !"LE".equals(prop); // anything other than explicit "LE" → BE
+		System.out.println("[ActivationCodec] byteOrder=" + (USE_BE ? "BE" : "LE")
+				+ "  (override with -Djuno.byteOrder=LE|BE)");
+	}
+
+	/**
+	 * Returns the active byte-order label: {@code "BE"} or {@code "LE"}.
+	 * Useful for logging and health-endpoint responses.
+	 */
+	public static String byteOrder() {
+		return USE_BE ? "BE" : "LE";
+	}
+
 	// ── Public API ────────────────────────────────────────────────────────────
 
 	/**
 	 * Encode {@code floats} into bytes using the requested dtype.
+	 * Byte order is determined by {@code juno.byteOrder} at startup.
 	 *
 	 * @param floats source activation tensor (may be empty, must not be null)
 	 * @param dtype  target wire format
 	 * @return compressed byte representation; length depends on dtype
 	 */
 	public static byte[] encode(float[] floats, ActivationDtype dtype) {
-		if (floats == null || floats.length == 0)
-			return new byte[0];
-		return switch (dtype) {
-		case FLOAT32 -> encodeFloat32(floats);
-		case FLOAT16 -> encodeFloat16(floats);
-		case INT8 -> encodeInt8(floats);
-		};
+		return USE_BE
+				? ActivationBECodec.encode(floats, dtype)
+				: ActivationLECodec.encode(floats, dtype);
 	}
 
 	/**
 	 * Decode {@code bytes} back to a float[]. Must be called with the same dtype
-	 * that was used for encoding.
+	 * and byte-order that was used for encoding.
 	 *
 	 * @param bytes encoded bytes (from {@link #encode}); null or empty returns
 	 *              float[0]
@@ -70,148 +95,40 @@ public final class ActivationCodec {
 	 * @return reconstructed float array
 	 */
 	public static float[] decode(byte[] bytes, ActivationDtype dtype) {
-		if (bytes == null || bytes.length == 0)
-			return new float[0];
-		return switch (dtype) {
-		case FLOAT32 -> decodeFloat32(bytes);
-		case FLOAT16 -> decodeFloat16(bytes);
-		case INT8 -> decodeInt8(bytes);
-		};
+		return USE_BE
+				? ActivationBECodec.decode(bytes, dtype)
+				: ActivationLECodec.decode(bytes, dtype);
 	}
 
-	// ── FLOAT32 ───────────────────────────────────────────────────────────────
-
-	private static byte[] encodeFloat32(float[] floats) {
-		ByteBuffer buf = ByteBuffer.allocate(floats.length * 4).order(ByteOrder.BIG_ENDIAN);
-		for (float f : floats)
-			buf.putFloat(f);
-		return buf.array();
-	}
-
-	private static float[] decodeFloat32(byte[] bytes) {
-		ByteBuffer buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN);
-		float[] out = new float[bytes.length / 4];
-		for (int i = 0; i < out.length; i++)
-			out[i] = buf.getFloat();
-		return out;
-	}
-
-	// ── FLOAT16 ───────────────────────────────────────────────────────────────
+	// ── F32 raw bytes matVec ──────────────────────────────────────────────────
 
 	/**
-	 * Encode to IEEE 754 half-precision (FP16). 2 bytes per element, big-endian.
+	 * Matrix-vector multiply directly on raw float32 bytes.
+	 * Delegates to the active byte-order implementation.
 	 */
-	private static byte[] encodeFloat16(float[] floats) {
-		ByteBuffer buf = ByteBuffer.allocate(floats.length * 2).order(ByteOrder.BIG_ENDIAN);
-		for (float f : floats)
-			buf.putShort(floatToHalf(f));
-		return buf.array();
+	public static float[] matVecF32raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
+		return USE_BE
+				? ActivationBECodec.matVecF32raw(raw, x, rowStart, rowEnd, cols)
+				: ActivationLECodec.matVecF32raw(raw, x, rowStart, rowEnd, cols);
 	}
 
-	private static float[] decodeFloat16(byte[] bytes) {
-		ByteBuffer buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN);
-		float[] out = new float[bytes.length / 2];
-		for (int i = 0; i < out.length; i++)
-			out[i] = halfToFloat(buf.getShort());
-		return out;
-	}
+	// ── Package-private helpers (forwarded to active impl, used by tests) ─────
 
 	/**
 	 * Convert IEEE 754 single-precision float to half-precision (16-bit).
-	 *
-	 * Bit layout (float32): s[1] e[8] m[23] Bit layout (float16): s[1] e[5] m[10]
-	 *
-	 * Handles: normals, subnormals, ±0, ±∞, NaN, overflow (→ ±∞), underflow (→ ±0).
-	 *
+	 * Delegates to the active byte-order implementation.
 	 * Package-private for unit testing.
 	 */
 	static short floatToHalf(float f) {
-		int bits = Float.floatToIntBits(f);
-		int sign = (bits >>> 16) & 0x8000;
-		int exp = ((bits >>> 23) & 0xFF) - 127 + 15; // rebias exponent
-		int mant = bits & 0x007FFFFF;
-
-		if (exp <= 0) {
-			// Subnormal or underflow to zero
-			if (exp < -10)
-				return (short) sign; // too small → ±0
-			// Shift mantissa into FP16 subnormal range
-			mant = (mant | 0x00800000) >> (1 - exp);
-			return (short) (sign | (mant >> 13));
-		}
-		if (exp >= 31) {
-			return (short) (sign | 0x7C00); // overflow → ±infinity
-		}
-		return (short) (sign | (exp << 10) | (mant >> 13));
+		return USE_BE ? ActivationBECodec.floatToHalf(f) : ActivationLECodec.floatToHalf(f);
 	}
 
 	/**
 	 * Convert IEEE 754 half-precision (16-bit) to single-precision float.
-	 *
+	 * Delegates to the active byte-order implementation.
 	 * Package-private for unit testing.
 	 */
 	static float halfToFloat(short half) {
-		int h = half & 0xFFFF;
-		int sign = (h & 0x8000) << 16;
-		int exp = (h >>> 10) & 0x1F;
-		int mant = h & 0x03FF;
-
-		if (exp == 0) {
-			if (mant == 0)
-				return Float.intBitsToFloat(sign); // ±0
-			// Subnormal FP16 → normalised float32
-			while ((mant & 0x0400) == 0) {
-				mant <<= 1;
-				exp--;
-			}
-			exp++;
-			mant &= 0x03FF;
-		} else if (exp == 31) {
-			// ±Infinity or NaN — propagate mantissa
-			return Float.intBitsToFloat(sign | 0x7F800000 | (mant << 13));
-		}
-		exp = (exp + 127 - 15) << 23; // rebias exponent
-		mant = mant << 13;
-		return Float.intBitsToFloat(sign | exp | mant);
-	}
-
-	// ── INT8 ──────────────────────────────────────────────────────────────────
-
-	/**
-	 * Symmetric INT8 quantisation.
-	 *
-	 * Wire layout:
-	 * {@code [scale:float32 big-endian (4 bytes)][quantised:signed byte × N]}.
-	 *
-	 * Symmetric (not asymmetric) quantisation is used to keep the zero point at 0,
-	 * which preserves true-zero activations and simplifies reconstruction. Using
-	 * 127 (not 128) as the max avoids asymmetry of signed byte range.
-	 */
-	private static byte[] encodeInt8(float[] floats) {
-		float maxAbs = 0f;
-		for (float f : floats) {
-			float abs = Math.abs(f);
-			if (abs > maxAbs)
-				maxAbs = abs;
-		}
-		// Guard against all-zero arrays: use scale=1 so reconstruction returns 0
-		float scale = maxAbs == 0f ? 1f : maxAbs / 127f;
-
-		ByteBuffer buf = ByteBuffer.allocate(4 + floats.length).order(ByteOrder.BIG_ENDIAN);
-		buf.putFloat(scale);
-		for (float f : floats) {
-			int q = Math.round(f / scale);
-			buf.put((byte) Math.max(-127, Math.min(127, q)));
-		}
-		return buf.array();
-	}
-
-	private static float[] decodeInt8(byte[] bytes) {
-		ByteBuffer buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN);
-		float scale = buf.getFloat();
-		float[] out = new float[bytes.length - 4];
-		for (int i = 0; i < out.length; i++)
-			out[i] = buf.get() * scale;
-		return out;
+		return USE_BE ? ActivationBECodec.halfToFloat(half) : ActivationLECodec.halfToFloat(half);
 	}
 }

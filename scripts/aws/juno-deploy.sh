@@ -48,6 +48,7 @@ MODEL_URL="https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve
 MODEL_FILENAME="TinyLlama.gguf"
 PTYPE="pipeline"
 DTYPE="FLOAT16"
+BYTE_ORDER="BE"
 KEY_NAME="juno-deploy-key"
 SG_NAME="juno-deploy-sg"
 JFR_DURATION=""
@@ -119,6 +120,7 @@ parse_options() {
                          shift 2 ;;
       --ptype)           PTYPE="$2";          shift 2 ;;
       --dtype)           DTYPE="$2";          shift 2 ;;
+      --byteOrder | --byte-order | --byteorder) BYTE_ORDER="${2^^}"; shift 2 ;;
       --region)          REGION="$2";         shift 2 ;;
       --jfr)             JFR_DURATION="$2";   shift 2 ;;
       *)                 die "Unknown option: $1 (run without args for usage)" ;;
@@ -143,6 +145,7 @@ save_state() {
     echo "COORDINATOR_INSTANCE_ID=\"${COORDINATOR_INSTANCE_ID:-}\""
     echo "PTYPE=\"$PTYPE\""
     echo "DTYPE=\"$DTYPE\""
+    echo "BYTE_ORDER=\"$BYTE_ORDER\""
     echo "MODEL_FILENAME=\"$MODEL_FILENAME\""
     echo "SETUP_TIME=\"$SETUP_TIME\""
     echo "JFR_DURATION=\"${JFR_DURATION:-}\""
@@ -996,6 +999,7 @@ _build_node_userdata() {
       -e "s|__HTTP_PORT__|${HTTP_PORT_VAL}|g" \
       -e "s|__PTYPE__|${PTYPE_VAL}|g" \
       -e "s|__DTYPE__|${DTYPE_VAL}|g" \
+      -e "s|__BYTE_ORDER__|${BYTE_ORDER}|g" \
       -e "s|__NODE_COUNT__|${NODE_COUNT_VAL}|g" \
       -e "s|__GIT__|${GIT_VAL}|g" \
       -e "s|__MODEL_FILENAME__|${MODEL_FILENAME_VAL}|g" \
@@ -1014,6 +1018,7 @@ IS_COORDINATOR="__IS_COORD__"
 HTTP_PORT="__HTTP_PORT__"
 PTYPE="__PTYPE__"
 DTYPE="__DTYPE__"
+BYTE_ORDER="__BYTE_ORDER__"
 NODE_COUNT="__NODE_COUNT__"
 GIT="__GIT__"
 MODEL_PATH="/opt/juno/models/__MODEL_FILENAME__"
@@ -1064,6 +1069,7 @@ cat > /etc/juno/node.env <<EOF2
 JUNO_USE_GPU=${USE_GPU}
 JUNO_MODEL_PATH=${MODEL_PATH}
 JUNO_GRPC_PORT=${GRPC_PORT}
+JUNO_BYTE_ORDER=${BYTE_ORDER}
 NODE_ID=${NODE_ID}
 JUNO_JFR_DURATION=${JFR_DURATION}
 JUNO_MODEL_STEM=${MODEL_STEM}
@@ -1090,6 +1096,7 @@ exec /usr/bin/java \
   -XX:+UseG1GC -XX:+AlwaysPreTouch -Xmx12g \
   ${JFR_OPT:+$JFR_OPT} \
   -DJUNO_USE_GPU=${JUNO_USE_GPU} \
+  -Djuno.byteOrder=${JUNO_BYTE_ORDER:-BE} \
   -Dnode.id=${NODE_ID} \
   -Dnode.port=${JUNO_GRPC_PORT} \
   -Dmodel.path=${JUNO_MODEL_PATH} \
@@ -1313,6 +1320,7 @@ JUNO_MODEL_PATH=/opt/juno/models/${MODEL_FILENAME}
 JUNO_HTTP_PORT=${HTTP_PORT}
 JUNO_PTYPE=${PTYPE}
 JUNO_DTYPE=${DTYPE}
+JUNO_BYTE_ORDER=${BYTE_ORDER}
 JUNO_MAX_QUEUE=1000
 JUNO_JFR_DURATION=${JFR_DURATION:-}
 JUNO_MODEL_STEM=${MODEL_FILENAME%.*}
