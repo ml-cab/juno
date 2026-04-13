@@ -25,6 +25,7 @@ Requires a JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
 |------|---------|----------|-------------|
 | `--model-path PATH` | — | all | Path to GGUF file (required) |
 | `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | cluster, local | Activation wire format between nodes |
+| `--byteOrder BE\|LE` | `BE` | cluster, local | Byte order used by `ActivationCodec` when encoding/decoding activations on the gRPC wire. `BE` (big-endian) is the default, validated by hard testing on production hardware. `LE` (little-endian) is the native x86 order. Propagated automatically to every forked node JVM so all cluster participants always use the same encoding. |
 | `--max-tokens N` | `200` | cluster, local, lora | Maximum tokens per response |
 | `--temperature F` | `0.6` | cluster, local, lora | Sampling temperature (0.0 = deterministic) |
 | `--top-k N` | `20` | cluster, local, lora | Top-K sampling cutoff (0 = disabled) |
@@ -51,7 +52,7 @@ Without `--gpu` or `--cpu`, GPU is used by default. Use `--cpu` to force CPU.
 
  For GPU cluster runs, either set `CUDA_PATH`/`CUDA_HOME` (or run `setenv.bat` / `source setenv.sh`), or on Windows use the single-DLL option: run `get-cudart.bat` and save the downloaded `cudart64_12.dll` to `%USERPROFILE%\.javacpp\cache\` (see https://www.dllme.com/dll/files/cudart64_12).
  
-**Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`
+**Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `DTYPE`, `BYTE_ORDER`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`
 
 
 ---
@@ -110,6 +111,10 @@ MODEL_PATH=/path/to/model.gguf ./juno local
 # Activation dtype
 ./juno local --model-path /path/to/model.gguf --dtype FLOAT32   # lossless debug
 ./juno local --model-path /path/to/model.gguf --dtype INT8      # max compression
+
+# Activation byte order (default BE — validated on production hardware)
+./juno local --model-path /path/to/model.gguf --byteOrder LE   # little-endian (native x86)
+./juno local --model-path /path/to/model.gguf --byteOrder BE   # big-endian (default)
 
 # Java Flight Recording — programmatic recording; metrics auto-printed when period expires
 ./juno local --model-path /path/to/model.gguf --jfr 5m
@@ -264,6 +269,10 @@ MODEL_PATH=/path/to/model.gguf PTYPE=tensor ./juno
 ./juno --model-path /path/to/model.gguf --float32      # lossless debug
 ./juno --model-path /path/to/model.gguf --int8         # max compression
 
+# Activation byte order — must be the same on all nodes (propagated automatically)
+./juno --model-path /path/to/model.gguf --byteOrder BE   # big-endian (default)
+./juno --model-path /path/to/model.gguf --byteOrder LE   # little-endian
+
 # Java Flight Recording — coordinator + all node JVMs instrumented; files merged on exit
 ./juno --model-path /path/to/model.gguf --jfr 5m
 ./juno --pType tensor --model-path /path/to/model.gguf --jfr 30s
@@ -282,11 +291,11 @@ MODEL_PATH=/path/to/model.gguf PTYPE=tensor ./juno
 ./juno --model-path /path/to/model.gguf -v
 
 # Everything combined — tensor-parallel
-./juno --pType tensor --model-path /path/to/model.gguf --dtype FLOAT16 \
+./juno --pType tensor --model-path /path/to/model.gguf --dtype FLOAT16 --byteOrder BE \
   --max-tokens 512 --temperature 0.5 --top-k 40 --top-p 0.9 --heap 4g -v
 
 # All via env vars
-MODEL_PATH=/path/to/model.gguf PTYPE=tensor DTYPE=FLOAT16 MAX_TOKENS=512 \
+MODEL_PATH=/path/to/model.gguf PTYPE=tensor DTYPE=FLOAT16 BYTE_ORDER=BE MAX_TOKENS=512 \
   TEMPERATURE=0.5 TOP_K=40 TOP_P=0.9 HEAP=4g ./juno
 
 # Custom JDK
@@ -387,6 +396,7 @@ Standalone node process. Reads configuration from system properties:
 -Dnode.port=<port>          required — gRPC port, e.g. 19092
 -Dmodel.path=<modelPath>    optional — if absent, runs with dummy handler
 -DJUNO_USE_GPU=<true|false> optional — defaults to true
+-Djuno.byteOrder=<BE|LE>    optional — defaults to BE; must match coordinator
 ```
 
 Command-line args (`nodeId port [modelPath]`) are also accepted for backward compatibility; system properties take precedence.
@@ -409,6 +419,7 @@ Standalone coordinator process. No forking, no `ClusterHarness` — nodes must a
 | `JUNO_PTYPE` | `pipeline` | `pipeline` or `tensor` |
 | `JUNO_HTTP_PORT` | `8080` | REST / web console port |
 | `JUNO_DTYPE` | `FLOAT16` | Activation wire format |
+| `JUNO_BYTE_ORDER` | `BE` | Activation codec byte order: `BE` (big-endian, default) or `LE` (little-endian). Must match the value used by all node JVMs. |
 | `JUNO_MAX_QUEUE` | `1000` | Scheduler queue depth |
 
 ```bash
@@ -604,6 +615,7 @@ nano launcher.sh    # set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_
 | `--model-url URL` | TinyLlama Q4_K_M | Model to download during bootstrap |
 | `--ptype pipeline\|tensor` | `pipeline` | Parallelism type passed to nodes |
 | `--dtype FLOAT32\|FLOAT16` | `FLOAT16` | Activation wire format |
+| `--byteOrder BE\|LE` | `BE` | Activation codec byte order. Written as `JUNO_BYTE_ORDER` into `/etc/juno/node.env` on every instance and passed as `-Djuno.byteOrder` to both node and coordinator JVMs. All nodes in the cluster must share the same value. |
 | `--jfr DURATION` | — | Enable JFR on all node + coordinator JVMs (e.g. `5m`, `30s`, `1h`). On Ctrl+C, recordings are collected from all instances, merged, and printed as metrics JSON before instances stop. |
 
 **GPU cluster — 3 × g4dn.xlarge (T4 16 GB VRAM, ~$0.53/hr each):**

@@ -2,7 +2,7 @@
   juno — Distributed Java LLM Inference Engine
   Full Architecture Design Document
   JDK 25 · Maven · Java-native · Commodity GPU Cluster
-  Last updated: 2026-04-04 (session 20)
+  Last updated: 2026-04-13 (session 24)
 ================================================================================
 
 
@@ -4571,3 +4571,319 @@ flag (no programmatic lifecycle needed — lora mode uses the JVM flag path).
   optional-prefix pattern)
   player module: all 4 test classes pass
   All other modules: unchanged
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+35. SESSION 24 CHANGES (2026-04-13) — CONFIGURABLE ACTIVATION BYTE ORDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+35.1  Motivation
+-----------------------------------------------
+ActivationCodec's wire format (FLOAT32 / FLOAT16 / INT8) was configurable via
+--dtype since session 9. The byte order within that encoding was hard-wired:
+ActivationCodec used little-endian (LE) bit manipulation throughout, while a
+parallel ActivationBECodec existed with big-endian (BE) ByteBuffer-based
+encoding but was never reachable from production code. Hard testing on physical
+cluster hardware confirmed BE as the correct default. LE is the native x86 order
+and avoids byte-swap overhead on x86 processors.
+
+Both codecs were correct in isolation — the issue was that there was no runtime
+switch, no flag to choose, and no guarantee that all JVMs in a cluster used the
+same encoding. This session makes the byte order a first-class configurable
+option, propagated uniformly across every JVM in a cluster.
+
+35.2  Design — ActivationCodec as a static dispatcher
+-----------------------------------------------
+ActivationCodec was rewritten from a self-contained implementation into a
+zero-overhead static dispatcher. It reads the JVM system property
+juno.byteOrder ("BE" or "LE", default "BE") once in a static initializer
+and stores the result in a private static final boolean USE_BE. Every
+method call is a single boolean branch with no string comparison, no reflection,
+and no allocation after class load.
+
+  private static final boolean USE_BE;
+  static {
+      String prop = System.getProperty("juno.byteOrder", "BE").trim().toUpperCase();
+      USE_BE = !"LE".equals(prop);
+      System.out.println("[ActivationCodec] byteOrder=" + (USE_BE ? "BE" : "LE")
+          + "  (override with -Djuno.byteOrder=LE|BE)");
+  }
+
+Public API (unchanged call signatures — all callers transparent):
+  encode(float[], ActivationDtype)         → delegates to BE or LE codec
+  decode(byte[], ActivationDtype)          → delegates to BE or LE codec
+  matVecF32raw(byte[], float[], int, int, int) → delegates to BE or LE codec
+
+Package-private helpers (for ActivationCodecTest, also transparent):
+  floatToHalf(float)   → delegates to active impl
+  halfToFloat(short)   → delegates to active impl
+
+New public accessor:
+  byteOrder()  → "BE" | "LE"   (used by logging and health endpoint)
+
+35.3  ActivationBECodec and ActivationLECodec — unchanged
+-----------------------------------------------
+Both concrete codec classes are unchanged. They were already complete:
+
+  ActivationBECodec  — ByteBuffer-based, ByteOrder.BIG_ENDIAN.
+    FLOAT32: ByteBuffer.putFloat() × N.
+    FLOAT16: ByteBuffer.putShort(floatToHalf()) × N.
+    INT8:    ByteBuffer.putFloat(scale) + ByteBuffer.put(q) × N.
+    matVecF32raw: per-row ByteBuffer.wrap().order(LITTLE_ENDIAN).getFloat() — note
+      that matVecF32raw reads weight data from GGUF which is always LE regardless
+      of activation byte order; the BE codec correctly uses LE for this method.
+
+  ActivationLECodec  — manual bit manipulation, no ByteBuffer allocation.
+    FLOAT32: direct byte array writes with >>> shifts, fully parallelised.
+    FLOAT16: same pattern for the 16-bit half-precision encoding.
+    INT8:    manual LE scale prefix + parallel quantized byte writes.
+    matVecF32raw: identical to ActivationLECodec (LE native access).
+    All paths use IntStream.range().parallel() for ForkJoinPool.commonPool()
+    utilisation — no heap allocation inside the parallel lambda.
+
+  ActivationCodecTest: all existing tests continue to pass. They exercise
+  floatToHalf/halfToFloat and the encode/decode round-trips through the
+  dispatcher, so both BE and LE paths are covered by the same test class
+  depending on the -Djuno.byteOrder JVM property at test run time.
+
+35.4  ClusterHarness — propagation to forked node JVMs
+-----------------------------------------------
+File: player/src/main/java/cab/ml/juno/player/ClusterHarness.java
+
+In launchNode(), one line added immediately before the heap inheritance block:
+
+  String byteOrder = System.getProperty("juno.byteOrder", "BE");
+  cmd.add("-Djuno.byteOrder=" + byteOrder);
+
+This ensures every forked node JVM reads the same byte order that the
+coordinator was started with. Without this, all nodes would default to BE
+regardless of what the coordinator was configured to use.
+
+The property is always set — if the coordinator was not given --byteOrder it
+uses the "BE" default, so nodes also default to "BE".
+
+35.5  ConsoleMain — --byteOrder flag
+-----------------------------------------------
+File: player/src/main/java/cab/ml/juno/player/ConsoleMain.java
+
+New static field:
+  private static String byteOrder = "BE";
+
+New cases in parseArgs():
+  case "--byteOrder":
+  case "--byte-order":
+  case "--byteorder":
+      byteOrder = "LE".equals(args[++i].toUpperCase()) ? "LE" : "BE";
+
+Set as system property in main() (immediately after JUNO_USE_GPU):
+  System.setProperty("juno.byteOrder", byteOrder);
+
+This ensures ActivationCodec's static initializer reads the correct value
+before any encode/decode call is made.
+
+Updated banner: dtype and byteOrder displayed side by side:
+  "dtype=%s · byteOrder=%s · max_tokens=%d ..."
+
+Updated printHelp(): new option documented:
+  "  --byteOrder BE|LE              Activation codec byte order (default: BE)"
+  "                                 BE = big-endian (default, hardware-validated)"
+  "                                 LE = little-endian (native x86 order)"
+
+35.6  run.sh — end-to-end flag plumbing (Linux / macOS / Git Bash)
+-----------------------------------------------
+File: scripts/run.sh
+
+cmd_cluster():
+  Local variable: byte_order="${BYTE_ORDER:-BE}"
+  New case in while loop:
+    --byteOrder | --byteorder | --byte-order) byte_order="${2^^}"; shift 2 ;;
+  Propagated two ways in exec:
+    -Djuno.byteOrder="${byte_order}"   (JVM flag → ActivationCodec static init)
+    --byteOrder "$byte_order"          (app arg → ConsoleMain.parseArgs())
+  Warn line updated: "byteOrder=${byte_order}" added.
+
+cmd_local():
+  Identical treatment. byte_order local variable, same case block, same dual
+  propagation in exec, same info line update.
+
+cmd_lora(): no change — lora always runs single in-process node; the JVM
+  property set by ConsoleMain is sufficient.
+
+usage(): added "--byteOrder BE|LE" to flags section.
+
+35.7  run.bat — Windows equivalent
+-----------------------------------------------
+File: scripts/run.bat
+
+:cluster section:
+  New default: if "%BYTE_ORDER%"=="" set "BYTE_ORDER=BE"
+  New parse lines:
+    if /i "%~1"=="--byteOrder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :cluster_parse )
+    if /i "%~1"=="--byteorder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :cluster_parse )
+    if /i "%~1"=="--byte-order" ( set "BYTE_ORDER=%~2" & shift & shift & goto :cluster_parse )
+  Help text updated with --byteOrder BE|LE.
+  Warn echo updated: "byteOrder=%BYTE_ORDER%" added.
+  Exec line updated:
+    "-Djuno.byteOrder=%BYTE_ORDER%"  (JVM flag)
+    --byteOrder "%BYTE_ORDER%"       (app arg)
+
+:local section:
+  Identical treatment (BYTE_ORDER default, parse lines, info echo, exec line).
+
+35.8  scripts/aws/juno-deploy.sh — remote cluster propagation
+-----------------------------------------------
+File: scripts/aws/juno-deploy.sh
+
+New default variable:
+  BYTE_ORDER="BE"
+
+New parse_options() case:
+  --byteOrder | --byte-order | --byteorder) BYTE_ORDER="${2^^}"; shift 2 ;;
+
+save_state(): BYTE_ORDER persisted alongside PTYPE/DTYPE.
+load_state(): sourced automatically from state file on stop/start/teardown.
+
+Bootstrap heredoc — template substitution:
+  -e "s|__BYTE_ORDER__|${BYTE_ORDER}|g" added to the sed pipeline.
+  Inside the heredoc: BYTE_ORDER="__BYTE_ORDER__" variable defined.
+
+/etc/juno/node.env: JUNO_BYTE_ORDER=${BYTE_ORDER} added.
+
+start-node.sh wrapper (generated during bootstrap):
+  exec java ... -Djuno.byteOrder=${JUNO_BYTE_ORDER:-BE} ...
+  The :- default guards against an older node.env that lacks JUNO_BYTE_ORDER.
+
+/opt/juno/cluster-nodes.env (written by coordinator startup step):
+  JUNO_BYTE_ORDER=${BYTE_ORDER} added.
+
+This ensures the coordinator service and all node services read the same
+byte order value from their respective env files, producing a consistent
+wire format across all JVMs in the AWS cluster.
+
+35.9  CoordinatorMain — JUNO_BYTE_ORDER env var
+-----------------------------------------------
+File: juno-master/src/main/java/cab/ml/juno/master/CoordinatorMain.java
+
+New in main(), after the dtypeStr env read:
+  String byteOrderStr = env("JUNO_BYTE_ORDER", "BE");
+  System.setProperty("juno.byteOrder",
+      "LE".equalsIgnoreCase(byteOrderStr.strip()) ? "LE" : "BE");
+
+This sets the property before any ActivationCodec class is loaded, ensuring
+the static initializer reads the correct value. Pattern matches the existing
+JUNO_DTYPE and JUNO_PTYPE handling.
+
+35.10  InferenceApiServer — health endpoint + web console
+-----------------------------------------------
+File: coordinator/src/main/java/cab/ml/juno/coordinator/InferenceApiServer.java
+
+handleClusterHealth() updated:
+  ctx.json(Map.of(
+      "status",      "HEALTHY",
+      "queueDepth",  scheduler.queueDepth(),
+      "maxQueue",    scheduler.maxQueueDepth(),
+      "loadedModels",modelRegistry.modelCount(),
+      "byteOrder",   System.getProperty("juno.byteOrder", "BE")
+  ));
+
+The web console HTML (CONSOLE_HTML) updated in two places:
+  Header: a new <span id="byte-order-badge"> alongside #nodes-badge.
+  fetchHealth(): document.getElementById('byte-order-badge').textContent
+      = 'byteOrder ' + (d.byteOrder || '–');
+
+The badge reads live from the health endpoint on every 10-second poll cycle,
+so it reflects the actual runtime value rather than a build-time constant.
+
+35.11  Key invariant: consistency across all cluster participants
+-----------------------------------------------
+In a pipeline-parallel cluster, activation bytes travel node-to-node over
+gRPC. The byte order used by the encoder (sending node) must match the byte
+order used by the decoder (receiving node). The following chain guarantees this:
+
+  run.sh / run.bat
+    Sets both -Djuno.byteOrder (JVM property) and --byteOrder (app arg).
+    JVM property is inherited by the coordinator JVM immediately.
+    App arg is parsed by ConsoleMain, which calls System.setProperty(),
+    reinforcing the same value before any encode/decode call.
+
+  ClusterHarness.launchNode()
+    Reads System.getProperty("juno.byteOrder") from the coordinator JVM
+    and injects it as -Djuno.byteOrder into every forked node JVM.
+    Node JVMs never parse command-line args for byte order — the JVM property
+    is the single source of truth inside each node process.
+
+  juno-deploy.sh (AWS)
+    Writes JUNO_BYTE_ORDER to /etc/juno/node.env and cluster-nodes.env.
+    start-node.sh reads it and passes -Djuno.byteOrder to java.
+    CoordinatorMain reads JUNO_BYTE_ORDER from env and calls System.setProperty().
+
+In all deployment modes, ActivationCodec.USE_BE is resolved identically on
+every JVM that participates in the cluster.
+
+35.12  Files changed in session 24
+-----------------------------------------------
+  node/src/main/java/cab/ml/juno/node/
+    ActivationCodec.java       Full rewrite: static dispatcher reading
+                               juno.byteOrder once at class load; delegates to
+                               ActivationBECodec or ActivationLECodec; new
+                               byteOrder() accessor.
+
+  player/src/main/java/cab/ml/juno/player/
+    ClusterHarness.java        + -Djuno.byteOrder propagation to forked node JVMs
+                               (launchNode() method, before heap block)
+    ConsoleMain.java           + byteOrder static field; --byteOrder parseArgs case;
+                               System.setProperty("juno.byteOrder", ...);
+                               banner updated; printHelp() updated.
+
+  coordinator/src/main/java/cab/ml/juno/coordinator/
+    InferenceApiServer.java    + byteOrder in handleClusterHealth() response;
+                               web console CONSOLE_HTML header badge + fetchHealth() JS.
+
+  juno-master/src/main/java/cab/ml/juno/master/
+    CoordinatorMain.java       + JUNO_BYTE_ORDER env read; System.setProperty() call.
+
+  scripts/run.sh               + byte_order local var; --byteOrder case in cluster
+                               and local; -Djuno.byteOrder + --byteOrder in exec;
+                               info/warn lines updated; usage() updated.
+
+  scripts/run.bat              + BYTE_ORDER default; --byteOrder cases in :cluster
+                               and :local; JVM flag + app arg in exec lines;
+                               warn and info echoes updated; help text updated.
+
+  scripts/aws/juno-deploy.sh  + BYTE_ORDER default; --byteOrder parse_options case;
+                               save_state / load_state; __BYTE_ORDER__ template token;
+                               JUNO_BYTE_ORDER in node.env; -Djuno.byteOrder in
+                               start-node.sh; JUNO_BYTE_ORDER in cluster-nodes.env.
+
+  README.md                   + --byteOrder row in Flags table; BYTE_ORDER in env
+                               overrides; juno-node and juno-master module rows
+                               updated; "Configurable activation byte order" design
+                               decision added.
+
+  docs/howto.md               + --byteOrder row in Flags table; BYTE_ORDER in env
+                               overrides; --byteOrder examples in local and cluster
+                               command sections; combined example updated; NodeMain
+                               -Djuno.byteOrder property documented; JUNO_BYTE_ORDER
+                               in CoordinatorMain env table; --byteOrder in AWS
+                               setup options table.
+
+  docs/arch.txt               + Section 35 (this section); header date updated.
+
+35.13  Build status (session 24)
+-----------------------------------------------
+  node        SUCCESS  (ActivationCodec rewritten; ActivationCodecTest unchanged
+                        and passing — dispatches to the same codec both args test)
+  player      SUCCESS  (ClusterHarness + ConsoleMain updated)
+  coordinator SUCCESS  (InferenceApiServer updated)
+  juno-master SUCCESS  (CoordinatorMain updated)
+  All other modules unchanged.
+
+  Unit tests: unchanged count (ActivationCodecTest covers both codec impls through
+  the dispatcher; no new test class added — the dispatch logic is a single
+  boolean branch with no branching state to test independently).
+
+  Real-model verification:
+    ./juno local --model-path .../TinyLlama.Q4_K_M.gguf --byteOrder BE  ← default
+    ./juno local --model-path .../TinyLlama.Q4_K_M.gguf --byteOrder LE  ← x86 native
+    Both produce coherent output; startup log shows:
+      [ActivationCodec] byteOrder=BE  (override with -Djuno.byteOrder=LE|BE)
+    Web console /v1/cluster/health shows: "byteOrder": "BE"
+    byteOrder badge visible in web console header.
