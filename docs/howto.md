@@ -32,7 +32,7 @@ Requires a JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
 | `--heap SIZE` | `4g` | all | JVM heap per node, e.g. `4g` for Phi-3, `8g` for 7B models |
 | `--nodes N` | `3` | local | Number of pipeline nodes (in-process only) |
 | `--pType pipeline\|tensor` | `pipeline` | cluster, test | Parallelism type: `pipeline` = contiguous layer blocks; `tensor` = weight slices + AllReduce |
-| `--jfr DURATION` | — | cluster, local, lora | Java Flight Recording for DURATION (e.g. `30s`, `5m`, `1h`). Writes `juno-<timestamp>.jfr` on exit. For `lora`, event browser shows `juno.LoraTrainStep` events. |
+| `--jfr DURATION` | — | cluster, local, lora | Java Flight Recording for DURATION (e.g. `30s`, `5m`, `1h`). Writes `juno-<modelStem>-<timestamp>.jfr`. **`local`**: programmatic recording — metrics JSON auto-printed when period expires or REPL exits. **`cluster`**: coordinator + all forked node JVMs instrumented; files merged and metrics auto-printed on exit. **`lora`/`test`**: JVM flag only; inspect with JDK Mission Control or run `MetricsMain` manually. |
 | `--verbose` / `-v` | — | cluster, local | Show node startup, gRPC, and shard loading logs |
 
 **LoRA-specific flags** (`lora` command only):
@@ -111,10 +111,11 @@ MODEL_PATH=/path/to/model.gguf ./juno local
 ./juno local --model-path /path/to/model.gguf --dtype FLOAT32   # lossless debug
 ./juno local --model-path /path/to/model.gguf --dtype INT8      # max compression
 
-# Java Flight Recording — profiles the JVM for DURATION then dumps on exit
+# Java Flight Recording — programmatic recording; metrics auto-printed when period expires
 ./juno local --model-path /path/to/model.gguf --jfr 5m
 ./juno local --model-path /path/to/model.gguf --jfr 30s
-# Open the resulting juno-<timestamp>.jfr in JDK Mission Control
+# When DURATION elapses, metrics JSON prints inline and is saved to target/metrics/metrics.json.
+# The REPL stays open. Also open juno-<modelStem>-<timestamp>.jfr in JDK Mission Control.
 
 # Verbose — shows shard loading, architecture detection, token timing
 ./juno local --model-path /path/to/model.gguf --verbose
@@ -155,8 +156,8 @@ the full design, gradient math, and checkpoint format.
 
 # With JFR — records juno.LoraTrainStep events for each gradient step
 ./juno lora --model-path /path/to/model.gguf --jfr 5m
-# After training: open juno-<timestamp>.jfr → Event Browser → juno.LoraTrainStep
-# Each event shows: step, numTokens, loss, forwardMs, backwardMs, optimizerMs, totalMs
+# After exit: open juno-<modelStem>-<timestamp>.jfr → Event Browser → juno.LoraTrainStep
+# Each event shows: step, loss, forwardMs, backwardMs, optimizerMs
 
 # Via env vars
 MODEL_PATH=/path/to/model.gguf LORA_RANK=8 LORA_LR=0.0001 LORA_STEPS=50 ./juno lora
@@ -221,9 +222,9 @@ bot> My name is Dima...
 # Inside the REPL:
 you > /train some training text
 # ... training runs ...
-# After exit, open juno-<timestamp>.jfr in JDK Mission Control
+# After exit, open juno-<modelStem>-<timestamp>.jfr in JDK Mission Control
 # Event Browser → juno.LoraTrainStep shows per-step timing breakdown:
-#   forwardMs / backwardMs / optimizerMs / totalMs / loss
+#   forwardMs / backwardMs / optimizerMs / loss
 ```
 
 **CPU performance note:** LoRA training on CPU runs the full forward+backward pass
@@ -263,9 +264,11 @@ MODEL_PATH=/path/to/model.gguf PTYPE=tensor ./juno
 ./juno --model-path /path/to/model.gguf --float32      # lossless debug
 ./juno --model-path /path/to/model.gguf --int8         # max compression
 
-# Java Flight Recording
+# Java Flight Recording — coordinator + all node JVMs instrumented; files merged on exit
 ./juno --model-path /path/to/model.gguf --jfr 5m
 ./juno --pType tensor --model-path /path/to/model.gguf --jfr 30s
+# On exit, metrics are merged across all JVMs and printed to stdout.
+# Individual .jfr files (coordinator + one per node) also available for JDK Mission Control.
 
 # Generation params
 ./juno --model-path /path/to/model.gguf --max-tokens 512
@@ -601,6 +604,7 @@ nano launcher.sh    # set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_
 | `--model-url URL` | TinyLlama Q4_K_M | Model to download during bootstrap |
 | `--ptype pipeline\|tensor` | `pipeline` | Parallelism type passed to nodes |
 | `--dtype FLOAT32\|FLOAT16` | `FLOAT16` | Activation wire format |
+| `--jfr DURATION` | — | Enable JFR on all node + coordinator JVMs (e.g. `5m`, `30s`, `1h`). On Ctrl+C, recordings are collected from all instances, merged, and printed as metrics JSON before instances stop. |
 
 **GPU cluster — 3 × g4dn.xlarge (T4 16 GB VRAM, ~$0.53/hr each):**
 
@@ -676,25 +680,23 @@ on a 3-node CPU cluster.
 
 ### Metrics — extracting metrics data from JFR recordings
 
-The `metrics` module reads JFR files produced by
-`--jfr` and writes a JSON summary to `target/metrics/metrics.json`.
+The `metrics` module reads JFR files produced by `--jfr` and writes a JSON summary to `target/metrics/metrics.json`.
+
+**Automatic extraction (local and cluster modes)**
+
+In `local` mode, metrics are extracted and printed automatically when the JFR period expires or the REPL exits — no manual step required. In `cluster` mode the same happens on exit, merging recordings from the coordinator JVM and all node JVMs into a single snapshot.
+
+**Manual extraction (lora, test, or any saved .jfr)**
 
 **Step 1 — capture a recording with the model stem in the filename.**
-The `--jfr` flag now automatically names the file
-`juno-<modelStem>-YYYYMMDD-HHMMSS.jfr`, so the extractor can correlate it with
-the right `models.json` entry:
+The `--jfr` flag names the file `juno-<modelStem>-YYYYMMDD-HHMMSS.jfr` so the extractor can correlate it with the right `models.json` entry:
 
 ```bash
-./juno local --model-path /models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf --jfr 5m
+./juno lora --model-path /models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf --jfr 5m
 # produces: juno-TinyLlama-1.1B-Chat-v1.0.Q4_K_M-20260403-142311.jfr
 ```
 
-Use `./juno local`, not `./juno` (cluster). In cluster mode JFR attaches to
-the coordinator JVM only; inference runs in forked node JVMs and their
-`juno.MatVec` / `juno.ForwardPass` events are not captured.
-
-**Step 2 — add the model to `metrics/src/main/resources/models.json`**
-if it is not already there:
+**Step 2 — ensure the model is in `metrics/src/main/resources/models.json`** (five common models are pre-populated; add entries as needed):
 
 ```json
 {
@@ -709,14 +711,21 @@ if it is not already there:
 
 ```bash
 mvn package -pl metrics -am -DskipTests
-java -cp metrics/target/metrics-*.jar \
-     cab.ml.juno.metrics.metricsMain
+java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 # Output: target/metrics/metrics.json
 ```
 
-The JSON contains counts, total durations, and p50/p95/p99 percentiles for
-every `juno.*` event type: `juno.MatVec`, `juno.ForwardPass`,
-`juno.Tokenizer`, `juno.TemplateFormat`, `juno.LoraTrainStep`.
+The JSON contains counts, total durations, and p50/p95/p99 percentiles for every `juno.*` event type: `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, `juno.LoraTrainStep`.
+
+**AWS cluster JFR (`--jfr` on `juno-deploy.sh setup`)**
+
+Pass `--jfr DURATION` to `setup` to instrument every remote JVM (all node instances + coordinator). On Ctrl+C, `juno-deploy.sh` stops each service to flush the recordings, SCPs all `.jfr` files to the coordinator, runs `MetricsMain` remotely, and prints the combined `metrics.json` before stopping instances:
+
+```bash
+./launcher.sh juno-deploy.sh setup --jfr 5m
+# ... cluster runs ...
+# ^C  → JFR files collected from all nodes → metrics printed → instances stopped
+```
 
 ---
 
