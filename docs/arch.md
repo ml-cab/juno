@@ -89,6 +89,7 @@ juno/                     ← parent POM
 │                           Phi3TransformerHandler, ForwardPassHandlerLoader,
 │                           GgufReader, LlamaConfig, ActivationCodec, ActivationDtype,
 │                           MatVec, CpuMatVec, CudaMatVec, GpuContext, CudaAvailability,
+│                           DeviceFloatMatrix, DeviceHalfMatrix,
 │                           NodeKVCacheAdapter, ForwardRequest, ForwardResult,
 │                           ShardContext, TensorShardContext, NodeConfig,
 │                           LoraAdapter, LoraAdapterSet, LoraAdamOptimizer,
@@ -108,7 +109,7 @@ juno/                     ← parent POM
 │                           MetricsSnapshot, MetricsWriter, ModelsConfig,
 │                           ModelsConfigLoader, MetricsMain
 ├── juno-node/            ← Fat jar (main: NodeMain)
-└── juno-master/          ← Fat jar (main: ModelLiveRunner) + all integration tests
+└── juno-master/          ← Fat jar (main: CoordinatorMain) + all integration tests
 ```
 
 ### Key Dependency Versions
@@ -594,10 +595,12 @@ Full LLaMA-family transformer, pure Java. Supports MatVec backend injection.
 
 | Type | Backend |
 |------|---------|
-| `instanceof CudaMatVec` | `DeviceFloatMatrix` (weights uploaded once at load time) |
+| `instanceof CudaMatVec` | `DeviceFloatMatrix` — weights dequantised to FP32 once, uploaded at load time |
 | CPU | `matVec(QuantizedTensor, ...)` — F32, Q8_0, Q4_K, Q5_K, Q6_K — all `IntStream.parallel()` |
 
-**GPU path:** weights dequantised to `float[]` once and uploaded via `CudaMatVec.upload()`. Per-token: only `x` and `y` cross the bus.
+**GPU path (Llama):** weights dequantised to `float[]` once and uploaded via `CudaMatVec.upload()` → `DeviceFloatMatrix`. Per-token: only `x` and `y` cross the PCIe bus (not `A`).
+
+**GPU path (Phi-3):** see [Section 17](#17-phi-3-family-support) — `DeviceHalfMatrix` + `cublasHSSgemvStridedBatched`; OOM during upload closes partial buffers and falls back to CPU quantised matmul for those projections.
 
 **`ForwardPassHandlerLoader.selectBackend()`:** reads `JUNO_USE_GPU` system property; if true and CUDA available → `new CudaMatVec(GpuContext.init(0))`, else `CpuMatVec.INSTANCE`.
 
@@ -628,15 +631,14 @@ Decode:   loop { forward → sample → stream } until EOS or maxTokens
 
 ### MatVec Interface
 
-```java
-interface MatVec {
-    float[] sgemv(float[] A, float[] x, int rows, int cols);
-}
-```
+**`MatVec`** declares **`sgemv(float[] A, float[] x, int rows, int cols)`** for full host matrices. A **`default`** **`sgemv(DeviceFloatMatrix A, float[] x)`** throws unless overridden — **`CudaMatVec`** implements it for resident FP32 weights. **`sgemv(DeviceHalfMatrix A, float[] x)`** exists only on **`CudaMatVec`** (Phi-3 FP16 resident path).
 
 **Implementations:**
 - `CpuMatVec` — `IntStream.range(0, rows).parallel()` for rows ≥ 256, plain loop below threshold
-- `CudaMatVec` — `cublasSgemv_v2` via org.bytedeco cublas. Row-major → column-major via `CUBLAS_OP_T`. Per-call: alloc, H2D, kernel, D2H, free. `sgemv(DeviceFloatMatrix, x)` overload skips H2D for weight.
+- `CudaMatVec` — org.bytedeco cuBLAS. Row-major `A[rows×cols]` maps to **`cublasSgemv_v2`** with **`CUBLAS_OP_T`**, **`m=cols`**, **`n=rows`**, **`lda=cols`** (same as a **`GEMV`** on the transpose in column-major layout).
+  - **Host weights:** per-call alloc, H2D full `A` + `x`, kernel, D2H `y`, free — used in tests and diagnostics.
+  - **`sgemv(DeviceFloatMatrix, x)`:** `A` stays on device (FP32); each call uploads `x`, allocates `y`, **`cublasSgemv_v2`**, D2H — JFR backend **`cuda-resident`**.
+  - **`sgemv(DeviceHalfMatrix, x)`:** `A` on device as IEEE FP16 (`DeviceHalfMatrix`); `x` converted to FP16 on the host, small H2D for `xh`; **`cublasHSSgemvStridedBatched`** (`batchCount=1`) with the **same `(trans, m, n, lda)`** as `Sgemv_v2` above; output FP32 — JFR backend **`cuda-resident-fp16`**. (Mixed **`cublasSgemmEx` / `cublasGemmEx`** FP16×FP32 paths are not relied on for portability.)
 
 ### cuBLAS Mapping
 
@@ -673,6 +675,10 @@ Identical to `LlamaTransformerHandler` in attention math, KV cache, and `MatVec`
 - Same treatment
 
 **phi-3.5-mini hyperparameters:** `arch=phi3 hidden=3072 layers=32 heads=32 kvHeads=32 headDim=96 ffn=8192 vocab=32064`
+
+### GPU weights (Phi-3 only, `CudaMatVec` backend)
+
+Fused QKV / gate+up / output-projection slices that are dequantised for matmul can be uploaded as **`DeviceHalfMatrix`** (~half the VRAM of **`DeviceFloatMatrix`**). Forward calls **`CudaMatVec.sgemv(DeviceHalfMatrix, x)`** (see [Section 16](#16-gpu-acceleration-layer)). If **`cudaMalloc`** or cuBLAS setup fails during upload, device buffers created so far are **`close()`**d and that slice uses the **CPU quantised** path (`LlamaTransformerHandler.matVec`-style reference) instead.
 
 ### ForwardPassHandlerLoader
 
@@ -776,7 +782,7 @@ Bridges handler-local `float[][]` KV arrays and `KVCacheManager`.
 
 | Event | Class | Key Fields |
 |-------|-------|------------|
-| `juno.MatVec` | `MatVecEvent` | `backend` ("cpu"\|"cuda"\|"cuda-resident"), `rows`, `cols` |
+| `juno.MatVec` | `MatVecEvent` | `backend` ("cpu"\|"cuda"\|"cuda-resident"\|"cuda-resident-fp16"), `rows`, `cols` |
 | `juno.ForwardPass` | `ForwardPassEvent` | `handlerType`, `requestId`, `startPosition`, `layerCount` |
 | `juno.Tokenizer` | `TokenizerEvent` | `tokenizerType`, `operation`, `inputLength`, `outputLength` |
 | `juno.TemplateFormat` | `TemplateFormatEvent` | `modelType`, `messageCount`, `outputLength` |
@@ -880,3 +886,6 @@ java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 | 21 | `juno-deploy.sh`: unified AWS lifecycle script, web console in `InferenceApiServer`, verified on eu-north-1 |
 | 22 | Q2_K + Q3_K quantisation support |
 | 23 | Programmatic JFR lifecycle in `ConsoleMain` (local + cluster); `ClusterHarness.withJfr()`; `MetricsMain.extractToJsonMerged()`; `juno-deploy.sh --jfr`; `models.json` fixed |
+| 24 | Configurable activation byte order (`--byteOrder` / `juno.byteOrder` / `JUNO_BYTE_ORDER`); `ActivationCodec` static dispatcher; health + web badge |
+| 25 | `StubForwardPassHandler`, `CyclicForwardPassHandler` → test jar; docs sweep; `node` test-jar for IT consumers |
+| 26 | Phi-3 GPU: `DeviceHalfMatrix` + `cublasHSSgemvStridedBatched`; VRAM OOM → CPU quant fallback; `ConsoleMain` `--cpu` fallthrough fix; shared `CudaMatVec` in `runLocalRepl`; `cuda-resident-fp16` JFR label |
