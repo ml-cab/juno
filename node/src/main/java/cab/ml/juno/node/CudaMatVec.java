@@ -18,8 +18,12 @@
  */
 package cab.ml.juno.node;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.logging.Logger;
 
+import org.bytedeco.cuda.cudart.__half;
+import org.bytedeco.javacpp.BytePointer;
 import org.bytedeco.javacpp.FloatPointer;
 import org.bytedeco.javacpp.Pointer;
 import org.bytedeco.javacpp.PointerPointer;
@@ -78,6 +82,13 @@ public final class CudaMatVec implements MatVec {
      */
     DeviceFloatMatrix upload(float[] host, int rows, int cols) {
         return DeviceFloatMatrix.upload(ctx, host, rows, cols);
+    }
+
+    /**
+     * Upload float32 host weights as FP16 on device (≈2× less VRAM than {@link #upload}).
+     */
+    DeviceHalfMatrix uploadHalf(float[] host, int rows, int cols) {
+        return DeviceHalfMatrix.uploadFromFloat32(ctx, host, rows, cols);
     }
 
     @Override
@@ -236,6 +247,100 @@ public final class CudaMatVec implements MatVec {
             pX.close();
             pY.close();
             evt.backend = "cuda-resident";
+            evt.rows = rows;
+            evt.cols = cols;
+            evt.commit();
+        }
+    }
+
+    /**
+     * {@code y = A × x} with row-major {@code A[rows, cols]} in FP16 on the device and
+     * {@code x} in FP32 — converts {@code x} to FP16 for the multiply, accumulates in FP32
+     * via {@code cublasHSSgemvStridedBatched} (same {@code trans, m, n, lda} contract as
+     * {@link #sgemv(DeviceFloatMatrix, float[])}).
+     */
+    public float[] sgemv(DeviceHalfMatrix A, float[] x) {
+        if (A == null)
+            throw new IllegalArgumentException("A must not be null");
+        if (A.isClosed())
+            throw new IllegalStateException("DeviceHalfMatrix is closed");
+        int rows = A.rows();
+        int cols = A.cols();
+        if (x.length != cols)
+            throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+
+        float[] y = new float[rows];
+        long bytesXh = (long) cols * 2;
+        long bytesY = (long) rows * 4;
+
+        PointerPointer pXh = new PointerPointer(1);
+        PointerPointer pY = new PointerPointer(1);
+        try {
+            checkCuda(cudart.cudaSetDevice(ctx.deviceIndex()), "cudaSetDevice");
+
+            int rXh = cudart.cudaMalloc(pXh, bytesXh);
+            int rY = cudart.cudaMalloc(pY, bytesY);
+            if (rXh != 0 || rY != 0) {
+                if (rXh == 0)
+                    cudart.cudaFree(pXh.get(0));
+                if (rY == 0)
+                    cudart.cudaFree(pY.get(0));
+                throw new IllegalStateException("cudaMalloc failed: d_xh=" + rXh + " d_y=" + rY);
+            }
+
+            Pointer d_xh = pXh.get(0);
+            Pointer d_y = pY.get(0);
+            Pointer d_A = A.devicePointer();
+
+            byte[] xHostHalf = new byte[(int) bytesXh];
+            ByteBuffer xbb = ByteBuffer.wrap(xHostHalf).order(ByteOrder.LITTLE_ENDIAN);
+            for (int j = 0; j < cols; j++)
+                xbb.putShort(j * 2, Float.floatToFloat16(x[j]));
+            try (BytePointer hXh = new BytePointer(xHostHalf)) {
+                checkCuda(cudart.cudaMemcpy(d_xh, hXh, bytesXh, H2D), "cudaMemcpy(xh H2D)");
+            }
+
+            try (
+                    FloatPointer alpha = new FloatPointer(1.0f);
+                    FloatPointer beta = new FloatPointer(0.0f);
+                    FloatPointer d_y_f = new FloatPointer(d_y);
+                    __half d_A_h = new __half(d_A);
+                    __half d_x_h = new __half(d_xh);
+            ) {
+                int pointerModeRc = cublas.cublasSetPointerMode_v2(
+                        ctx.handle(), cublas.CUBLAS_POINTER_MODE_HOST);
+                if (pointerModeRc != 0)
+                    throw new IllegalStateException("cublasSetPointerMode failed: " + pointerModeRc);
+
+                // Same (trans, m, n, lda) as cublasSgemv_v2 in sgemv(DeviceFloatMatrix, …).
+                long strideA = (long) cols * rows;
+                long strideX = cols;
+                long strideY = rows;
+                int rc = cublas.cublasHSSgemvStridedBatched(ctx.handle(), CUBLAS_OP_T,
+                        cols, rows,
+                        alpha, d_A_h, cols, strideA,
+                        d_x_h, 1, strideX,
+                        beta, d_y_f, 1, strideY,
+                        1);
+                if (rc != 0)
+                    throw new IllegalStateException("cublasHSSgemvStridedBatched failed: " + rc);
+            }
+
+            try (FloatPointer hy = new FloatPointer(y)) {
+                checkCuda(cudart.cudaMemcpy(hy, d_y, bytesY, D2H), "cudaMemcpy(y D2H)");
+                hy.get(y);
+            }
+
+            return y;
+        } finally {
+            cudart.cudaFree(pXh.get(0));
+            cudart.cudaFree(pY.get(0));
+            pXh.close();
+            pY.close();
+            evt.backend = "cuda-resident-fp16";
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();

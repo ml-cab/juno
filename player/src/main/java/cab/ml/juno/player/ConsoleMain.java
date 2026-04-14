@@ -256,6 +256,7 @@ public final class ConsoleMain {
 				break;
 			case "--cpu":
 				useGpu = false;
+				break;
 				// ── LoRA ──────────────────────────────────────────────────────────
 			case "--lora":
 				loraMode = true;
@@ -1058,14 +1059,14 @@ public final class ConsoleMain {
 
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		GpuContext gpuCtx = prepareGpuContext();
+		// One CudaMatVec per process — shares the same GpuContext / cuBLAS handle across shards.
+		CudaMatVec cudaMv = (gpuCtx != null) ? new CudaMatVec(gpuCtx) : null;
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
-			if (gpuCtx != null) {
-				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context,
-						new CudaMatVec(gpuCtx)));
-			} else {
+			if (cudaMv != null)
+				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context, cudaMv));
+			else
 				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context));
-			}
 		}
 
 		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
