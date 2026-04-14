@@ -120,6 +120,9 @@ public final class ConsoleMain {
 	private static boolean help = false;
 	private static ParallelismType pType = ParallelismType.PIPELINE;
 	private static String jfrDuration = null;
+	// ── Health server flag ────────────────────────────────────────────────────
+	/** When true, start the standalone health monitor instead of a REPL. */
+	private static boolean healthMode = true;
 	// ── Byte-order argument ───────────────────────────────────────────────────
 	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
 	private static String byteOrder = "BE";
@@ -141,6 +144,12 @@ public final class ConsoleMain {
 		if (help) {
 			printHelp();
 			System.exit(0);
+		}
+
+		// ── Health server mode — no model required ────────────────────────────
+		if (healthMode) {
+			cab.ml.juno.health.HealthMain.main(args);
+			return; // HealthMain.start() blocks; we never reach this
 		}
 
 		if (modelPath == null) {
@@ -297,6 +306,9 @@ public final class ConsoleMain {
 			case "-h":
 				help = true;
 				return;
+			case "--health":
+				healthMode = true;
+				break;
 			default:
 				System.err.println("Unknown option: " + args[i]);
 				help = true;
@@ -351,6 +363,12 @@ public final class ConsoleMain {
 		System.out.println("                           catastrophic overfitting. Set 0 to disable.");
 		System.out.println();
 		System.out.println("Other:");
+		System.out.println("  --health                   Start the standalone health-monitor HTTP server");
+		System.out.println("                             (no --model-path required)");
+		System.out.println("    --port N                   Listen port (default: 8081)");
+		System.out.println("    --stale-ms N               Node stale threshold in ms (default: 15000)");
+		System.out.println("    --warn F                   VRAM warning threshold 0.0-1.0 (default: 0.90)");
+		System.out.println("    --critical F               VRAM critical threshold 0.0-1.0 (default: 0.98)");
 		System.out.println("  --jfr DURATION             Java Flight Recording duration (e.g. 5m)");
 		System.out.println("  --verbose, -v              Show more logging");
 		System.out.println("  --help, -h                 Show this help");
