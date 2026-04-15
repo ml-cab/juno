@@ -13,6 +13,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 PLAYER_JAR="$DIR/player/target/player.jar"
 LIVE_JAR="$DIR/integration/target/integration.jar"
+HEALTH_JAR="$DIR/health/target/juno-health.jar"
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -675,6 +676,73 @@ cmd_test() {
     "$model"
 }
 
+# ── Health server ─────────────────────────────────────────────────────────────
+# health — standalone health-monitor HTTP server (no model required)
+# Accepts node health probes via POST /health/probe and exposes a cluster
+# overview via GET /health and per-node circuit states via GET /health/circuits.
+cmd_health() {
+  local port="${HEALTH_PORT:-8081}"
+  local stale_ms="${HEALTH_STALE_MS:-15000}"
+  local warn="${HEALTH_WARN:-0.90}"
+  local critical="${HEALTH_CRITICAL:-0.98}"
+  local heap="${HEAP:-512m}"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --port)       port="$2";     shift 2 ;;
+      --stale-ms)   stale_ms="$2"; shift 2 ;;
+      --warn)       warn="$2";     shift 2 ;;
+      --critical)   critical="$2"; shift 2 ;;
+      --heap)       heap="$2";     shift 2 ;;
+      --help)
+        echo ""
+        echo "  Usage: $0 health [flags]"
+        echo ""
+        echo "  Starts the Juno health-monitor HTTP server."
+        echo "  No model file required.  Nodes push probes; the coordinator polls."
+        echo ""
+        echo "  API:"
+        echo "    POST /health/probe           Accept a NodeHealth snapshot"
+        echo "    GET  /health                 Cluster overview (status + all nodes)"
+        echo "    GET  /health/nodes/{nodeId}  Single-node detail"
+        echo "    GET  /health/circuits        Per-node circuit-breaker states"
+        echo ""
+        echo "  Flags:"
+        echo "    --port N          HTTP listen port                (default: 8081)"
+        echo "    --stale-ms N      ms before a node is stale       (default: 15000)"
+        echo "    --warn F          VRAM warning threshold 0-1      (default: 0.90)"
+        echo "    --critical F      VRAM critical threshold 0-1     (default: 0.98)"
+        echo "    --heap SIZE       JVM heap e.g. 256m 512m 1g      (default: 512m)"
+        echo ""
+        echo "  Environment variable equivalents:"
+        echo "    HEALTH_PORT  HEALTH_STALE_MS  HEALTH_WARN  HEALTH_CRITICAL  HEAP"
+        echo ""
+        echo "  Examples:"
+        echo "    $0 health"
+        echo "    $0 health --port 9090 --stale-ms 30000"
+        echo "    HEALTH_PORT=9090 $0 health"
+        echo ""
+        exit 0 ;;
+      *) err "Unknown health flag: $1.  Run: $0 health --help" ;;
+    esac
+  done
+
+  require_jar "$HEALTH_JAR" "juno-health"
+  check_java_version
+
+  info "Starting Juno health server  (port=${port}  stale_ms=${stale_ms}  warn=${warn}  critical=${critical}  heap=${heap}  os=${OS})"
+  echo ""
+
+  exec "$JAVA" \
+    "${JVM_BASE[@]}" \
+    -Xms64m "-Xmx${heap}" \
+    -jar "$HEALTH_JAR" \
+    --port     "$port" \
+    --stale-ms "$stale_ms" \
+    --warn     "$warn" \
+    --critical "$critical"
+}
+
 # ── Usage ─────────────────────────────────────────────────────────────────────
 usage() {
   echo ""
@@ -683,6 +751,7 @@ usage() {
   echo -e "  Java:        ${DIM}${JAVA}${NC}"
   echo -e "  player jar:  ${DIM}${PLAYER_JAR}${NC}"
   echo -e "  live jar:    ${DIM}${LIVE_JAR}${NC}"
+  echo -e "  health jar:  ${DIM}${HEALTH_JAR}${NC}"
   echo ""
   echo "  Build jars first (one time):"
   echo "    mvn clean package -DskipTests"
@@ -699,6 +768,10 @@ usage() {
   echo    "  $0 test /path/to/model.gguf        model as positional arg"
   echo    "  $0 test --pType tensor             tensor-parallel checks only"
   echo    "  $0 test --help                     all test flags"
+  echo ""
+  echo -e "  ${GREEN}$0 health${NC}                        standalone health-monitor HTTP server"
+  echo    "  $0 health --port 9090              listen on a custom port (default 8081)"
+  echo    "  $0 health --help                   all health flags + API reference"
   echo ""
   echo "  Flags common to default (cluster), local, and lora:"
   echo "    --pType pipeline|tensor        parallelism type         (default pipeline)"
@@ -756,6 +829,7 @@ case "$CMD" in
   local)   cmd_local   "$@" ;;
   lora)    cmd_lora    "$@" ;;
   test)    cmd_test    "$@" ;;
+  health)  cmd_health  "$@" ;;
   cluster) cmd_cluster "$@" ;;
   *)       cmd_cluster ${CMD:+"$CMD"} "$@" ;;
 esac
