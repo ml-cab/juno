@@ -47,6 +47,7 @@ import cab.ml.juno.node.ActivationDtype;
 import cab.ml.juno.node.CudaAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.CudaMatVec;
+import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
@@ -128,6 +129,7 @@ public final class ConsoleMain {
 	// ── LoRA arguments ────────────────────────────────────────────────────────
 	private static boolean loraMode = false;
 	private static String loraPath = null; // auto-derived if null
+	private static String loraPlayPath = null; // --lora-play: apply .lora at inference in non-lora modes
 	private static int loraRank = 8;
 	private static float loraAlpha = -1f; // sentinel: default to loraRank
 	private static double loraLr = 1e-4;
@@ -264,6 +266,10 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					loraPath = args[++i];
 				break;
+			case "--lora-play":
+				if (i + 1 < args.length)
+					loraPlayPath = args[++i];
+				break;
 			case "--lora-rank":
 				if (i + 1 < args.length)
 					loraRank = parseInt(args[++i], 8);
@@ -330,6 +336,7 @@ public final class ConsoleMain {
 		System.out.println("LoRA fine-tuning (forces --local --nodes 1):");
 		System.out.println("  --lora                     Enable LoRA fine-tuning mode");
 		System.out.println("  --lora-path PATH           Adapter checkpoint file (default: <model>.lora)");
+		System.out.println("  --lora-play PATH           Apply a .lora file at inference in local/cluster mode (read-only, no training)");
 		System.out.println("  --lora-rank N              Low-rank bottleneck dimension (default: 8)");
 		System.out.println("  --lora-alpha F             Scale factor alpha (default: same as rank)");
 		System.out.println("  --lora-lr F                Adam learning rate (default: 1e-4)");
@@ -398,6 +405,15 @@ public final class ConsoleMain {
 		LoraTrainableHandler handler = LoraTrainableHandler.load(Path.of(modelPath), ctx, adapters);
 		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET + "\n");
 
+		// ── [TRACE] Model type detection ──────────────────────────────────────
+		String detectedModelType = ChatModelType.fromPath(modelPath);
+		print(Color.DIM + "  [TRACE] model type (chat template key) : " + detectedModelType + Color.RESET);
+		print(Color.DIM + "  [TRACE] model path                     : " + modelPath + Color.RESET);
+		print(Color.DIM + "  [TRACE] LoRA rank=" + loraRank + "  alpha=" + loraAlpha
+				+ "  lr=" + loraLr + "  steps/chunk=" + loraSteps
+				+ "  steps/qa=" + loraStepsQa + "  early-stop=" + loraEarlyStop + Color.RESET);
+		print("");
+
 		// Wrap in LocalInferencePipeline for standard inference path
 		var pipeline = LocalInferencePipeline.from(shardMap, List.of(handler), config.vocabSize(), config.hiddenDim(),
 				config.numHeads());
@@ -453,6 +469,10 @@ public final class ConsoleMain {
 			// ── Regular inference ──────────────────────────────────────────
 			history.addUser(line);
 			String modelType = ChatModelType.fromPath(modelPath);
+			// ── [TRACE] confirm the template key used for this inference request ──
+			if (verbose) {
+				print(Color.DIM + "  [TRACE] inference model type (chat template): " + modelType + Color.RESET);
+			}
 			InferenceRequest request = InferenceRequest.ofSession(history.sessionId(), modelType, history.getMessages(),
 					params, RequestPriority.NORMAL);
 
@@ -652,6 +672,24 @@ public final class ConsoleMain {
 		print(Color.DIM + "  steps/chunk=" + loraStepsQa + "  early-stop=" + loraEarlyStop
 				+ "  (tune with --lora-steps-qa N  --lora-early-stop F)" + Color.RESET);
 
+		// ── [TRACE] Show exact training text and tokenization ─────────────────
+		print(Color.DIM + "  [TRACE] ── formatted training text (repr) ──────────────────────" + Color.RESET);
+		// Print with escape sequences visible so whitespace/template issues are obvious
+		print(Color.DIM + "  " + trainingText.replace("\n", "↵\n  ") + Color.RESET);
+		print(Color.DIM + "  [TRACE] ── end training text ──────────────────────────────────" + Color.RESET);
+		int[] traceTokens = tokenizer.encode(trainingText);
+		print(Color.DIM + "  [TRACE] token count (excl. BOS): " + traceTokens.length + Color.RESET);
+		if (verbose) {
+			StringBuilder tokenDbg = new StringBuilder("  [TRACE] token IDs: [");
+			for (int i = 0; i < traceTokens.length; i++) {
+				if (i > 0) tokenDbg.append(", ");
+				tokenDbg.append(traceTokens[i]);
+			}
+			tokenDbg.append("]");
+			print(Color.DIM + tokenDbg.toString() + Color.RESET);
+		}
+		print("");
+
 		trainOnText(trainingText, adapters, optimizer, handler, tokenizer, totalSteps, dirty, loraStepsQa);
 	}
 
@@ -733,6 +771,12 @@ public final class ConsoleMain {
 					firstLoss = loss;
 				lastLoss = loss;
 				stepsDone++;
+
+				// ── [TRACE] per-step loss (always shown, raw values for diagnosis) ──
+				if (verbose) {
+					System.out.printf("%n  [TRACE] step=%d  loss=%.6f  chunk=%d/%d  ms=%d%n",
+							stepsDone, loss, chunks.indexOf(chunk) + 1, chunks.size(), stepMs);
+				}
 
 				// Early stop: loss below threshold → model has memorised the chunk.
 				// Continuing would drive loss toward 0 and destroy generalisation.
@@ -1058,14 +1102,20 @@ public final class ConsoleMain {
 
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		GpuContext gpuCtx = prepareGpuContext();
+
+		// Load .lora adapters for inference-only playback if --lora-play was given
+		LoraAdapterSet playAdapters = null;
+		if (loraPlayPath != null) {
+			print(Color.CYAN + "  ⚙ Loading LoRA adapters for inference: " + loraPlayPath + Color.RESET);
+			playAdapters = LoraAdapterSet.load(Path.of(loraPlayPath));
+			print(Color.GREEN + "  ✔ Loaded " + playAdapters.size() + " LoRA adapters  (inference-only, no training)"
+					+ Color.RESET);
+		}
+
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
-			if (gpuCtx != null) {
-				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context,
-						new CudaMatVec(gpuCtx)));
-			} else {
-				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context));
-			}
+			MatVec backend = gpuCtx != null ? new CudaMatVec(gpuCtx) : ForwardPassHandlerLoader.selectBackend();
+			handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context, backend, playAdapters));
 		}
 
 		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
