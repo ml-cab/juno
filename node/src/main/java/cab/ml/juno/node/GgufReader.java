@@ -202,6 +202,48 @@ public final class GgufReader implements AutoCloseable {
 		return java.util.Collections.unmodifiableMap(metadata);
 	}
 
+	/**
+	 * Absolute file offset (in bytes) where the raw data for the named tensor
+	 * begins. This is {@code dataOffset + info.offset} and is suitable for
+	 * in-place patching via a writable {@link FileChannel} opened on the same
+	 * file.
+	 *
+	 * @throws IllegalArgumentException if the tensor does not exist
+	 */
+	public long tensorAbsoluteOffset(String name) {
+		TensorInfo info = tensors.get(name);
+		if (info == null)
+			throw new IllegalArgumentException("Tensor not found: " + name);
+		return dataOffset + info.offset;
+	}
+
+	/**
+	 * GGML quantisation type ID for the named tensor (0=F32, 1=F16, 8=Q8_0,
+	 * 12=Q4_K, …). See the {@code GGML_TYPE_*} constants in this class.
+	 *
+	 * @throws IllegalArgumentException if the tensor does not exist
+	 */
+	public int tensorType(String name) {
+		TensorInfo info = tensors.get(name);
+		if (info == null)
+			throw new IllegalArgumentException("Tensor not found: " + name);
+		return info.type;
+	}
+
+	/**
+	 * Shape of the named tensor as a {@code long[]} in GGUF order (innermost
+	 * dimension first). For a weight matrix W of shape (outDim × inDim) GGUF
+	 * stores {@code [inDim, outDim]}.
+	 *
+	 * @throws IllegalArgumentException if the tensor does not exist
+	 */
+	public long[] tensorDims(String name) {
+		TensorInfo info = tensors.get(name);
+		if (info == null)
+			throw new IllegalArgumentException("Tensor not found: " + name);
+		return info.dims.clone();
+	}
+
 	// ── QuantizedTensor ───────────────────────────────────────────────────────
 
 	/**

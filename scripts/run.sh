@@ -150,6 +150,7 @@ cmd_cluster() {
   local verbose="false"
   local ptype="pipeline"
   local jfr_duration=""
+  local lora_play="${LORA_PLAY_PATH:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -170,6 +171,7 @@ cmd_cluster() {
       --top-p)            top_p="$2";        shift 2 ;;
       --heap)             heap="$2";         shift 2 ;;
       --jfr)              jfr_duration="$2"; shift 2 ;;
+      --lora-play)        lora_play="$2";    shift 2 ;;
       --float16 | --fp16) dtype="FLOAT16";   shift   ;;
       --float32)          dtype="FLOAT32";   shift   ;;
       --int8)             dtype="INT8";      shift   ;;
@@ -260,6 +262,9 @@ cmd_cluster() {
   [[ -n "$jfr_duration" ]] && jfr_arg="--jfr $jfr_duration" && \
     warn "JFR enabled — duration=${jfr_duration}  (programmatic recording, metrics auto-printed on exit)"
 
+  local lora_play_arg=""
+  [[ -n "$lora_play" ]] && { lora_play_arg="--lora-play $lora_play"; warn "LoRA inference overlay: ${lora_play}"; }
+
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
@@ -277,6 +282,7 @@ cmd_cluster() {
     --pType "$ptype" \
     "$gpu_flag" \
     ${jfr_arg} \
+    ${lora_play_arg} \
     ${verbose_flag}
 }
 
@@ -296,6 +302,7 @@ cmd_local() {
   local nodes="${NODES:-3}"
   local verbose="false"
   local jfr_duration=""
+  local lora_play="${LORA_PLAY_PATH:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -316,6 +323,7 @@ cmd_local() {
       --heap)             heap="$2";         shift 2 ;;
       --nodes)            nodes="$2";        shift 2 ;;
       --jfr)              jfr_duration="$2"; shift 2 ;;
+      --lora-play)        lora_play="$2";    shift 2 ;;
       --float16 | --fp16) dtype="FLOAT16";   shift   ;;
       --float32)          dtype="FLOAT32";   shift   ;;
       --int8)             dtype="INT8";      shift   ;;
@@ -361,6 +369,10 @@ cmd_local() {
         echo "  Logging:"
         echo "    --verbose / -v"
         echo ""
+        echo "  LoRA:"
+        echo "    --lora-play PATH           Apply a .lora file at inference (read-only, no training)"
+        echo "                               (or set LORA_PLAY_PATH env var)"
+        echo ""
         exit 0 ;;
       *) err "Unknown local flag: $1.  Run: $0 local --help" ;;
     esac
@@ -389,6 +401,9 @@ cmd_local() {
   [[ -n "$jfr_duration" ]] && jfr_arg="--jfr $jfr_duration" && \
     warn "JFR enabled — duration=${jfr_duration}  (programmatic recording, metrics auto-printed on exit)"
 
+  local lora_play_arg=""
+  [[ -n "$lora_play" ]] && { lora_play_arg="--lora-play $lora_play"; warn "LoRA inference overlay: ${lora_play}"; }
+
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
@@ -406,6 +421,7 @@ cmd_local() {
     --local \
     "$gpu_flag" \
     ${jfr_arg} \
+    ${lora_play_arg} \
     ${verbose_flag}
 }
 
@@ -748,6 +764,59 @@ usage() {
   echo ""
 }
 
+# ---------------------------------------------------------------------------
+# merge — bake a .lora adapter into a new standalone GGUF
+# ---------------------------------------------------------------------------
+cmd_merge() {
+  local model="${MODEL_PATH:-}"
+  local lora=""
+  local output=""
+  local heap="${HEAP:-4g}"
+  local use_gpu="${JUNO_USE_GPU:-false}"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --model-path) model="$2";  shift 2 ;;
+      --lora-path)  lora="$2";   shift 2 ;;
+      --output)     output="$2"; shift 2 ;;
+      --heap)       heap="$2";   shift 2 ;;
+      --help|-h)
+        echo ""
+        echo "  Usage: $0 merge --model-path /path/to/model.gguf [options]"
+        echo ""
+        echo "  Options:"
+        echo "    --model-path PATH    Source GGUF or llamafile (required)"
+        echo "    --lora-path PATH     Trained .lora checkpoint (default: <model>.lora)"
+        echo "    --output PATH        Output GGUF path (default: <model>-merged.gguf)"
+        echo "    --heap SIZE          JVM heap, e.g. 4g (default: 4g)"
+        echo ""
+        echo "  Example:"
+        echo "    $0 merge --model-path /models/tinyllama.gguf"
+        echo "    $0 merge --model-path /models/tinyllama.gguf --lora-path ./my.lora --output ./merged.gguf"
+        echo ""
+        return 0
+        ;;
+      *) err "Unknown merge flag: $1.  Run: $0 merge --help" ;;
+    esac
+  done
+
+  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 merge --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 merge"
+
+  local player_jar="$DIR/player/target/player.jar"
+  [[ -f "$player_jar" ]] || err "player.jar not found — build first with: mvn clean package -DskipTests"
+
+  prepend_cuda_bin_to_path_if_gpu "$use_gpu"
+
+  info "Starting LoRA merge  (heap=${heap})"
+
+  "$JAVA" -Xmx${heap} \
+    -cp "$player_jar" \
+    cab.ml.juno.player.LoraMergeMain \
+    ${model:+--model-path "$model"} \
+    ${lora:+--lora-path  "$lora"} \
+    ${output:+--output   "$output"}
+}
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 CMD="${1:-}"
 shift || true
@@ -755,6 +824,7 @@ shift || true
 case "$CMD" in
   local)   cmd_local   "$@" ;;
   lora)    cmd_lora    "$@" ;;
+  merge)   cmd_merge   "$@" ;;
   test)    cmd_test    "$@" ;;
   cluster) cmd_cluster "$@" ;;
   *)       cmd_cluster ${CMD:+"$CMD"} "$@" ;;

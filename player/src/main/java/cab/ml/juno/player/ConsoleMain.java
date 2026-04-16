@@ -47,6 +47,7 @@ import cab.ml.juno.node.ActivationDtype;
 import cab.ml.juno.node.CudaAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.CudaMatVec;
+import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
@@ -330,6 +331,7 @@ public final class ConsoleMain {
 		System.out.println("LoRA fine-tuning (forces --local --nodes 1):");
 		System.out.println("  --lora                     Enable LoRA fine-tuning mode");
 		System.out.println("  --lora-path PATH           Adapter checkpoint file (default: <model>.lora)");
+		System.out.println("  --lora-play PATH           Apply a .lora file at inference in local/cluster mode (read-only, no training)");
 		System.out.println("  --lora-rank N              Low-rank bottleneck dimension (default: 8)");
 		System.out.println("  --lora-alpha F             Scale factor alpha (default: same as rank)");
 		System.out.println("  --lora-lr F                Adam learning rate (default: 1e-4)");
@@ -398,6 +400,15 @@ public final class ConsoleMain {
 		LoraTrainableHandler handler = LoraTrainableHandler.load(Path.of(modelPath), ctx, adapters);
 		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET + "\n");
 
+		// ── [TRACE] Model type detection ──────────────────────────────────────
+		String detectedModelType = ChatModelType.fromPath(modelPath);
+		print(Color.DIM + "  [TRACE] model type (chat template key) : " + detectedModelType + Color.RESET);
+		print(Color.DIM + "  [TRACE] model path                     : " + modelPath + Color.RESET);
+		print(Color.DIM + "  [TRACE] LoRA rank=" + loraRank + "  alpha=" + loraAlpha
+				+ "  lr=" + loraLr + "  steps/chunk=" + loraSteps
+				+ "  steps/qa=" + loraStepsQa + "  early-stop=" + loraEarlyStop + Color.RESET);
+		print("");
+
 		// Wrap in LocalInferencePipeline for standard inference path
 		var pipeline = LocalInferencePipeline.from(shardMap, List.of(handler), config.vocabSize(), config.hiddenDim(),
 				config.numHeads());
@@ -453,6 +464,10 @@ public final class ConsoleMain {
 			// ── Regular inference ──────────────────────────────────────────
 			history.addUser(line);
 			String modelType = ChatModelType.fromPath(modelPath);
+			// ── [TRACE] confirm the template key used for this inference request ──
+			if (verbose) {
+				print(Color.DIM + "  [TRACE] inference model type (chat template): " + modelType + Color.RESET);
+			}
 			InferenceRequest request = InferenceRequest.ofSession(history.sessionId(), modelType, history.getMessages(),
 					params, RequestPriority.NORMAL);
 
@@ -566,19 +581,23 @@ public final class ConsoleMain {
 
 		case "/merge-hint" -> {
 			print("");
-			print(Color.CYAN_BOLD + "  Merging LoRA into base weights (offline)" + Color.RESET);
+			print(Color.CYAN_BOLD + "  Merging LoRA into base weights" + Color.RESET);
 			print("  ─────────────────────────────────────────────────────────────");
-			print("  Juno keeps adapters separate by design. The base GGUF is never");
-			print("  modified. To bake the adapter in (merged = W + scale·B·A):");
+			print("  Juno now includes a native merge tool. After /save, run:");
 			print("");
-			print("  1. Dequantize each projection weight W to float32.");
-			print("  2. For each LoRA adapter: W_eff = W + (alpha/rank) × B × A");
-			print("  3. Re-quantize W_eff back to the original format (Q4_K etc.).");
-			print("  4. Write a new GGUF file with the merged weights.");
+			print("    ./juno merge --model-path " + modelPath);
 			print("");
-			print("  This creates a standalone model that doesn't need the .lora file.");
-			print("  Juno doesn't include a merge tool yet — contributions welcome.");
-			print("  See LORA.md for the weight formula reference.");
+			print("  This copies the GGUF, bakes W_merged = W + (alpha/rank)·B·A");
+			print("  for every adapted projection, re-quantises to the original");
+			print("  format (Q4_K, Q8_0, F16, …), and writes a standalone GGUF");
+			print("  that needs no .lora sidecar at inference time.");
+			print("");
+			print("  Optional flags:");
+			print("    --lora-path PATH     (default: " + adapterFile + ")");
+			print("    --output PATH        (default: <model>-merged.gguf)");
+			print("    --heap SIZE          (default: 4g — match your model size)");
+			print("");
+			print("  Run merged model with:  ./juno local --model-path <model>-merged.gguf");
 			print("");
 		}
 
@@ -651,6 +670,24 @@ public final class ConsoleMain {
 				+ Color.RESET);
 		print(Color.DIM + "  steps/chunk=" + loraStepsQa + "  early-stop=" + loraEarlyStop
 				+ "  (tune with --lora-steps-qa N  --lora-early-stop F)" + Color.RESET);
+
+		// ── [TRACE] Show exact training text and tokenization ─────────────────
+		print(Color.DIM + "  [TRACE] ── formatted training text (repr) ──────────────────────" + Color.RESET);
+		// Print with escape sequences visible so whitespace/template issues are obvious
+		print(Color.DIM + "  " + trainingText.replace("\n", "↵\n  ") + Color.RESET);
+		print(Color.DIM + "  [TRACE] ── end training text ──────────────────────────────────" + Color.RESET);
+		int[] traceTokens = tokenizer.encode(trainingText);
+		print(Color.DIM + "  [TRACE] token count (excl. BOS): " + traceTokens.length + Color.RESET);
+		if (verbose) {
+			StringBuilder tokenDbg = new StringBuilder("  [TRACE] token IDs: [");
+			for (int i = 0; i < traceTokens.length; i++) {
+				if (i > 0) tokenDbg.append(", ");
+				tokenDbg.append(traceTokens[i]);
+			}
+			tokenDbg.append("]");
+			print(Color.DIM + tokenDbg.toString() + Color.RESET);
+		}
+		print("");
 
 		trainOnText(trainingText, adapters, optimizer, handler, tokenizer, totalSteps, dirty, loraStepsQa);
 	}
@@ -733,6 +770,12 @@ public final class ConsoleMain {
 					firstLoss = loss;
 				lastLoss = loss;
 				stepsDone++;
+
+				// ── [TRACE] per-step loss (always shown, raw values for diagnosis) ──
+				if (verbose) {
+					System.out.printf("%n  [TRACE] step=%d  loss=%.6f  chunk=%d/%d  ms=%d%n",
+							stepsDone, loss, chunks.indexOf(chunk) + 1, chunks.size(), stepMs);
+				}
 
 				// Early stop: loss below threshold → model has memorised the chunk.
 				// Continuing would drive loss toward 0 and destroy generalisation.
@@ -1058,14 +1101,11 @@ public final class ConsoleMain {
 
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		GpuContext gpuCtx = prepareGpuContext();
+
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
-			if (gpuCtx != null) {
-				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context,
-						new CudaMatVec(gpuCtx)));
-			} else {
-				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context));
-			}
+			MatVec backend = gpuCtx != null ? new CudaMatVec(gpuCtx) : ForwardPassHandlerLoader.selectBackend();
+			handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context, backend));
 		}
 
 		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),

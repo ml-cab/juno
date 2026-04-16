@@ -80,7 +80,7 @@ public final class ForwardPassHandlerLoader {
 	 * <p>Returns {@link CudaMatVec} when {@code JUNO_USE_GPU=true} and at least one
 	 * CUDA device is detected; falls back to {@link CpuMatVec#INSTANCE} otherwise.
 	 */
-	static MatVec selectBackend() {
+	public static MatVec selectBackend() {
 		boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "false"));
 		if (useGpu && CudaAvailability.isAvailable()) {
 			log.info("JUNO_USE_GPU=true and CUDA detected — using CudaMatVec backend");
