@@ -129,6 +129,7 @@ public final class ConsoleMain {
 	// ── LoRA arguments ────────────────────────────────────────────────────────
 	private static boolean loraMode = false;
 	private static String loraPath = null; // auto-derived if null
+	private static String loraPlayPath = null; // --lora-play: apply .lora at inference in non-lora modes
 	private static int loraRank = 8;
 	private static float loraAlpha = -1f; // sentinel: default to loraRank
 	private static double loraLr = 1e-4;
@@ -264,6 +265,10 @@ public final class ConsoleMain {
 			case "--lora-path":
 				if (i + 1 < args.length)
 					loraPath = args[++i];
+				break;
+			case "--lora-play":
+				if (i + 1 < args.length)
+					loraPlayPath = args[++i];
 				break;
 			case "--lora-rank":
 				if (i + 1 < args.length)
@@ -1101,6 +1106,15 @@ public final class ConsoleMain {
 
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		GpuContext gpuCtx = prepareGpuContext();
+
+		// Load .lora adapters for inference-only playback if --lora-play was given
+		LoraAdapterSet playAdapters = null;
+		if (loraPlayPath != null) {
+			print(Color.CYAN + "  ⚙ Loading LoRA adapters for inference: " + loraPlayPath + Color.RESET);
+			playAdapters = LoraAdapterSet.load(Path.of(loraPlayPath));
+			print(Color.GREEN + "  ✔ Loaded " + playAdapters.size() + " LoRA adapters  (inference-only, no training)"
+					+ Color.RESET);
+		}
 
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
