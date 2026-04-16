@@ -114,13 +114,13 @@ public final class HealthMain {
      */
     public static void startBackground(int port, HealthThresholds thresholds) {
         HealthMain server = new HealthMain(port, thresholds);
-        Thread t = Thread.ofVirtual()
+        // Virtual threads are always daemon threads — setDaemon() is illegal on them.
+        // The JVM stays alive as long as the main thread (REPL) is running, so this
+        // is fine; the shutdown hook in startBlocking() drains the server on exit.
+        Thread.ofVirtual()
                 .name("juno-health-server")
                 .start(server::startBlocking);
-        // Background — caller continues
         log.info("Health sidecar starting on :" + port + " (background)");
-        // Ensure the thread doesn't keep the JVM alive on its own
-        //t.setDaemon(false); // we want clean shutdown hooks to still fire
     }
 
     // ── server lifecycle ──────────────────────────────────────────────────────

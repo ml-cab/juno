@@ -35,8 +35,10 @@ import jdk.jfr.RecordingState;
 
 import cab.ml.juno.metrics.MetricsMain;
 
-import cab.ml.juno.coordinator.GenerationLoop;
-import cab.ml.juno.coordinator.GenerationResult;
+import cab.ml.juno.coordinator.GenerationLoop;import cab.ml.juno.coordinator.GenerationResult;
+import cab.ml.juno.health.HealthMain;
+import cab.ml.juno.health.HealthReporter;
+import cab.ml.juno.health.HealthThresholds;
 import cab.ml.juno.coordinator.InferenceRequest;
 import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.coordinator.TokenConsumer;
@@ -945,6 +947,10 @@ public final class ConsoleMain {
 				: ClusterHarness.threeNodes(modelPath, totalLayers))
 				.withJfr(jfrDuration, timestamp);
 
+		if (healthMode) {
+			harness.withHealthUrl("http://localhost:" + healthPort);
+		}
+
 		// ── Single combined shutdown hook — ordering matters ──────────────────
 		final Recording recRef = rec;
 		final String modelStemFinal = modelStem;
@@ -1093,6 +1099,22 @@ public final class ConsoleMain {
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
 
+		// ── Health reporters for in-process nodes ─────────────────────────────
+		// One reporter per shard node, each using JVM heap as a VRAM proxy so the
+		// dashboard shows a card per node even in single-JVM mode.
+		if (healthMode) {
+			String base = "http://localhost:" + healthPort;
+			List<HealthReporter> reporters = new ArrayList<>();
+			for (var assignment : shardMap.assignments()) {
+				HealthReporter r = new HealthReporter(assignment.nodeId(), base);
+				r.startBackground();
+				reporters.add(r);
+			}
+			Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
+				for (HealthReporter r : reporters) r.stop();
+			}));
+		}
+
 		startRepl(loop, tokenizer);
 	}
 
@@ -1128,6 +1150,10 @@ public final class ConsoleMain {
 		ClusterHarness harness = (pType == ParallelismType.TENSOR)
 				? ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads)
 				: ClusterHarness.threeNodes(modelPath, totalLayers);
+
+		if (healthMode) {
+			harness.withHealthUrl("http://localhost:" + healthPort);
+		}
 
 		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
 			print("\n" + Color.YELLOW + "⏹ Shutting down cluster..." + Color.RESET);

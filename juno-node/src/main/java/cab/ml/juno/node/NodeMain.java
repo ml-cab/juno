@@ -18,6 +18,7 @@ package cab.ml.juno.node;
 
 import java.util.logging.Logger;
 import cab.ml.juno.health.HealthMain;
+import cab.ml.juno.health.HealthReporter;
 import cab.ml.juno.health.HealthThresholds;
 
 /**
@@ -95,6 +96,19 @@ public final class NodeMain {
             HealthMain.startBackground(healthPort,
                 new HealthThresholds(healthWarn, healthCrit, healthStaleMs));
             log.info("Health sidecar started on :" + healthPort);
+        }
+
+        // ── Health reporter (optional) ────────────────────────────────────────
+        // When ClusterHarness passes -Djuno.health.url=http://host:port, this node
+        // pushes its own JVM heap stats to the health sidecar so the dashboard shows
+        // real per-node data. Works even without a GPU (heap = VRAM proxy).
+        String healthUrl = System.getProperty("juno.health.url");
+        if (healthUrl != null && !healthUrl.isBlank()) {
+            HealthReporter reporter = new HealthReporter(nodeId, healthUrl);
+            reporter.startBackground();
+            Runtime.getRuntime().addShutdownHook(
+                Thread.ofVirtual().unstarted(reporter::stop));
+            log.info("Health reporter started → " + healthUrl);
         }
 
         EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu);
