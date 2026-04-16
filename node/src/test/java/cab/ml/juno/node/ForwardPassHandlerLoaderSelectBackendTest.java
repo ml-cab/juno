@@ -96,4 +96,20 @@ class ForwardPassHandlerLoaderSelectBackendTest {
 
         assertThat(backend).isInstanceOf(CudaMatVec.class);
     }
+
+    @Test
+    @Tag("gpu")
+    @DisplayName("selectBackend() reuses process-wide GpuContext.shared(0)")
+    void select_backend_reuses_shared_gpu_context() {
+        assumeTrue(CudaAvailability.isAvailable(), "No CUDA device — skipping");
+        System.setProperty("JUNO_USE_GPU", "true");
+
+        MatVec a = ForwardPassHandlerLoader.selectBackend();
+        MatVec b = ForwardPassHandlerLoader.selectBackend();
+
+        assertThat(a).isInstanceOf(CudaMatVec.class);
+        assertThat(b).isInstanceOf(CudaMatVec.class);
+        assertThat(((CudaMatVec) a).gpuContext()).isSameAs(((CudaMatVec) b).gpuContext());
+        assertThat(((CudaMatVec) a).gpuContext().isProcessShared()).isTrue();
+    }
 }

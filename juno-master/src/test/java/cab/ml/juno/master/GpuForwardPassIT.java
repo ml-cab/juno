@@ -43,7 +43,8 @@ import cab.ml.juno.node.ShardContext;
 @DisplayName("LlamaTransformerHandler GPU — end-to-end integration (requires CUDA + model file)")
 class GpuForwardPassIT {
 
-	private static final float DELTA = 1e-3f; // float32 rounding across backends
+	/** Llama GPU path uses FP16 resident weights; allow wider tolerance vs CPU float matmul. */
+	private static final float DELTA = 3e-2f;
 
 	private static GpuContext gpuCtx;
 	private static Path modelPath;

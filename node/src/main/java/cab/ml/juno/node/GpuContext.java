@@ -1,4 +1,7 @@
 /*
+ * Created by Yevhen Soldatov
+ * Initial implementation: 2026
+ *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,15 +27,19 @@ import org.bytedeco.cuda.global.cudart;
 /**
  * cuBLAS context: device selection and handle lifecycle.
  *
- * One GpuContext per node JVM. Created once at startup, destroyed at shutdown.
- * The cublasContext it owns is shared across all CudaMatVecBackend calls on that node
- * — cuBLAS handles are thread-safe for concurrent kernel launches.
+ * Prefer {@link #shared(int)} for a process-wide handle on long-lived JVMs
+ * (embedded node, {@code ForwardPassHandlerLoader} default GPU path). Use
+ * {@link #init(int)} when tests or tools need an isolated handle they can
+ * {@link #close()} without affecting other code.
+ *
+ * The cublasContext is shared across all {@link CudaMatVec} calls using the same
+ * {@code GpuContext} — cuBLAS handles are thread-safe for concurrent kernel launches.
  *
  * Uses org.bytedeco (JavaCPP) cuda/cublas.
  *
  * Usage:
  *   try (GpuContext ctx = GpuContext.init(0)) {
- *       ForwardPassHandler handler = ForwardPassHandlerLoader.load(path, shard, new CudaMatVecBackend(ctx));
+ *       ForwardPassHandler handler = ForwardPassHandlerLoader.load(path, shard, new CudaMatVec(ctx));
  *       ...
  *       handler.releaseGpuResources();
  *   }
@@ -46,13 +53,41 @@ public final class GpuContext implements AutoCloseable {
 
     private static final Logger log = Logger.getLogger(GpuContext.class.getName());
 
+    /** Lazily created; {@link #close()} is a no-op on this instance. */
+    private static volatile GpuContext sharedDevice0;
+
     private final int deviceIndex;
     private final cublasContext handle;
+    private final boolean processShared;
     private volatile boolean closed = false;
 
-    private GpuContext(int deviceIndex, cublasContext handle) {
+    private GpuContext(int deviceIndex, cublasContext handle, boolean processShared) {
         this.deviceIndex = deviceIndex;
         this.handle = handle;
+        this.processShared = processShared;
+    }
+
+    /**
+     * Process-wide singleton for device {@code 0}: one cuBLAS handle for the JVM.
+     * {@link #close()} does nothing so embedded servers and {@code selectBackend()}
+     * paths do not tear down CUDA under other live handlers.
+     *
+     * @throws IllegalArgumentException if {@code deviceIndex != 0} (extend when needed)
+     */
+    public static GpuContext shared(int deviceIndex) {
+        if (deviceIndex != 0)
+            throw new IllegalArgumentException("GpuContext.shared currently supports device 0 only");
+        GpuContext existing = sharedDevice0;
+        if (existing != null && !existing.closed)
+            return existing;
+        synchronized (GpuContext.class) {
+            existing = sharedDevice0;
+            if (existing != null && !existing.closed)
+                return existing;
+            sharedDevice0 = create(deviceIndex, true);
+            log.info("GpuContext.shared(0) — installed process-wide GPU context");
+            return sharedDevice0;
+        }
     }
 
     /**
@@ -63,6 +98,10 @@ public final class GpuContext implements AutoCloseable {
      * @throws IllegalStateException if CUDA is not available or init fails
      */
     public static GpuContext init(int deviceIndex) {
+        return create(deviceIndex, false);
+    }
+
+    private static GpuContext create(int deviceIndex, boolean processShared) {
         if (!CudaAvailability.isAvailable()) {
             throw new IllegalStateException(
                 "CUDA not available — cannot create GpuContext on this node");
@@ -78,9 +117,10 @@ public final class GpuContext implements AutoCloseable {
 
         String name = CudaAvailability.deviceName(deviceIndex);
         long vram = CudaAvailability.vramBytes(deviceIndex);
-        log.info(String.format("GpuContext ready — device %d: %s, %.1f GB VRAM", deviceIndex, name, vram / 1e9));
+        log.info(String.format("GpuContext ready — device %d: %s, %.1f GB VRAM (shared=%b)",
+                deviceIndex, name, vram / 1e9, processShared));
 
-        return new GpuContext(deviceIndex, handle);
+        return new GpuContext(deviceIndex, handle, processShared);
     }
 
     /** The cuBLAS handle — valid until close(). */
@@ -99,9 +139,18 @@ public final class GpuContext implements AutoCloseable {
         return closed;
     }
 
+    /** Whether this is the JVM-wide singleton from {@link #shared(int)}. */
+    public boolean isProcessShared() {
+        return processShared;
+    }
+
     /** Destroy the cuBLAS handle and release device resources. */
     @Override
     public void close() {
+        if (processShared) {
+            log.fine("GpuContext.close ignored — process-shared instance (device " + deviceIndex + ")");
+            return;
+        }
         if (!closed) {
             closed = true;
             try {

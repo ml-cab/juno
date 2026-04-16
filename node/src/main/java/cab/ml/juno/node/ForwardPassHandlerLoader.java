@@ -60,7 +60,7 @@ public final class ForwardPassHandlerLoader {
 	 * <ul>
 	 * <li>If {@code JUNO_USE_GPU=true} (system property) <em>and</em> a CUDA
 	 *     device is present, a {@link CudaMatVec} backed by
-	 *     {@link GpuContext#init(int) GpuContext.init(0)} is used.
+	 *     {@link GpuContext#shared(int) GpuContext.shared(0)} is used.
 	 * <li>Otherwise {@link CpuMatVec#INSTANCE} is used.
 	 * </ul>
 	 *
@@ -84,7 +84,7 @@ public final class ForwardPassHandlerLoader {
 		boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "false"));
 		if (useGpu && CudaAvailability.isAvailable()) {
 			log.info("JUNO_USE_GPU=true and CUDA detected — using CudaMatVec backend");
-			return new CudaMatVec(GpuContext.init(0));
+			return new CudaMatVec(GpuContext.shared(0));
 		}
 		log.info("Using CpuMatVec backend (JUNO_USE_GPU=" + useGpu + ", CUDA=" + CudaAvailability.isAvailable() + ")");
 		return CpuMatVec.INSTANCE;
@@ -98,8 +98,8 @@ public final class ForwardPassHandlerLoader {
 	 * backend — for example, to use {@link CudaMatVec} on GPU nodes:
 	 *
 	 * <pre>{@code
-	 * GpuContext ctx = GpuContext.init(0);
-	 * ForwardPassHandler h = ForwardPassHandlerLoader.load(modelPath, shard, new CudaMatVecBackend(ctx));
+	 * GpuContext ctx = GpuContext.shared(0);
+	 * ForwardPassHandler h = ForwardPassHandlerLoader.load(modelPath, shard, new CudaMatVec(ctx));
 	 * }</pre>
 	 *
 	 * @param modelPath path to the GGUF file

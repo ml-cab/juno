@@ -46,8 +46,9 @@ import org.bytedeco.cuda.global.cudart;
  * Memory management:
  *   - {@link #sgemv(float[], float[], int, int)} — full host path: allocates
  *     device buffers for A, x, y each call (tests and legacy use).
- *   - {@link #sgemv(DeviceFloatMatrix, float[])} — A stays on device; only x and y
- *     use per-call device buffers. Thread-safe for concurrent calls.
+ *   - {@link #sgemv(DeviceFloatMatrix, float[])} / {@link #sgemv(DeviceHalfMatrix, float[])}
+ *     — {@code A} stays on device; per-thread scratch buffers for {@code x} and {@code y}
+ *     are grown as needed and reused to avoid per-call cudaMalloc/cudaFree.
  *  
  * @author Yevhen Soldatov    
  */
@@ -62,6 +63,130 @@ public final class CudaMatVec implements MatVec {
 
     private final GpuContext ctx;
 
+    /** Per-thread reusable device buffers for FP32 resident GEMV. */
+    private static final ThreadLocal<Fp32ResidentScratch> FP32_RESIDENT = ThreadLocal.withInitial(Fp32ResidentScratch::new);
+
+    /** Per-thread reusable buffers for FP16-weight GEMV (pinned host staging when possible). */
+    private static final ThreadLocal<Fp16ResidentScratch> FP16_RESIDENT = ThreadLocal.withInitial(Fp16ResidentScratch::new);
+
+    private static final class Fp32ResidentScratch {
+        Pointer dX;
+        Pointer dY;
+        long bytesXAlloc;
+        long bytesYAlloc;
+
+        void ensure(int deviceIndex, long bytesX, long bytesY) {
+            checkCuda(cudart.cudaSetDevice(deviceIndex), "cudaSetDevice");
+            if (bytesXAlloc < bytesX) {
+                if (dX != null)
+                    cudart.cudaFree(dX);
+                PointerPointer pp = new PointerPointer(1);
+                try {
+                    checkCuda(cudart.cudaMalloc(pp, bytesX), "cudaMalloc d_x");
+                    dX = pp.get(0);
+                    bytesXAlloc = bytesX;
+                } finally {
+                    pp.close();
+                }
+            }
+            if (bytesYAlloc < bytesY) {
+                if (dY != null)
+                    cudart.cudaFree(dY);
+                PointerPointer pp = new PointerPointer(1);
+                try {
+                    checkCuda(cudart.cudaMalloc(pp, bytesY), "cudaMalloc d_y");
+                    dY = pp.get(0);
+                    bytesYAlloc = bytesY;
+                } finally {
+                    pp.close();
+                }
+            }
+        }
+    }
+
+    private static final class Fp16ResidentScratch {
+        Pointer dXh;
+        Pointer dY;
+        long bytesXhAlloc;
+        long bytesYAlloc;
+        /** Reused pageable staging for FP16 x; avoids per-call allocation. */
+        byte[] halfBytes;
+        /** Pinned host buffer for xh when cudaMallocHost succeeds (faster H2D). */
+        Pointer pinnedHalf;
+        long pinnedBytesAlloc;
+
+        void ensureDevice(int deviceIndex, long bytesXh, long bytesY) {
+            checkCuda(cudart.cudaSetDevice(deviceIndex), "cudaSetDevice");
+            if (bytesXhAlloc < bytesXh) {
+                if (dXh != null)
+                    cudart.cudaFree(dXh);
+                PointerPointer pp = new PointerPointer(1);
+                try {
+                    checkCuda(cudart.cudaMalloc(pp, bytesXh), "cudaMalloc d_xh");
+                    dXh = pp.get(0);
+                    bytesXhAlloc = bytesXh;
+                } finally {
+                    pp.close();
+                }
+            }
+            if (bytesYAlloc < bytesY) {
+                if (dY != null)
+                    cudart.cudaFree(dY);
+                PointerPointer pp = new PointerPointer(1);
+                try {
+                    checkCuda(cudart.cudaMalloc(pp, bytesY), "cudaMalloc d_y");
+                    dY = pp.get(0);
+                    bytesYAlloc = bytesY;
+                } finally {
+                    pp.close();
+                }
+            }
+        }
+
+        void ensurePinnedHalf(int needBytes) {
+            if (pinnedBytesAlloc >= needBytes && pinnedHalf != null)
+                return;
+            if (pinnedHalf != null) {
+                cudart.cudaFreeHost(pinnedHalf);
+                pinnedHalf = null;
+                pinnedBytesAlloc = 0;
+            }
+            PointerPointer pp = new PointerPointer(1);
+            try {
+                if (cudart.cudaMallocHost(pp, needBytes) == 0) {
+                    pinnedHalf = pp.get(0);
+                    pinnedBytesAlloc = needBytes;
+                }
+            } finally {
+                pp.close();
+            }
+        }
+
+        /** Pack {@code x} as FP16 little-endian and H2D into {@code d_xh}. */
+        void packXHalfAndUpload(float[] x, int cols, Pointer d_xh, long bytesXh) {
+            int needBytes = cols * 2;
+            ensurePinnedHalf(needBytes);
+            if (pinnedHalf != null) {
+                try (BytePointer bp = new BytePointer(pinnedHalf).limit(needBytes)) {
+                    for (int j = 0; j < cols; j++)
+                        bp.putShort(j * 2, Float.floatToFloat16(x[j]));
+                }
+                try (BytePointer hXh = new BytePointer(pinnedHalf)) {
+                    checkCuda(cudart.cudaMemcpy(d_xh, hXh, bytesXh, H2D), "cudaMemcpy(xh H2D)");
+                }
+            } else {
+                if (halfBytes == null || halfBytes.length < needBytes)
+                    halfBytes = new byte[needBytes];
+                ByteBuffer bb = ByteBuffer.wrap(halfBytes).order(ByteOrder.LITTLE_ENDIAN);
+                for (int j = 0; j < cols; j++)
+                    bb.putShort(j * 2, Float.floatToFloat16(x[j]));
+                try (BytePointer hXh = new BytePointer(halfBytes)) {
+                    checkCuda(cudart.cudaMemcpy(d_xh, hXh, bytesXh, H2D), "cudaMemcpy(xh H2D)");
+                }
+            }
+        }
+    }
+
     /**
      * @param ctx an open GpuContext — must outlive all sgemv calls on this instance
      */
@@ -69,6 +194,11 @@ public final class CudaMatVec implements MatVec {
         if (ctx == null)
             throw new IllegalArgumentException("ctx must not be null");
         this.ctx = ctx;
+    }
+
+    /** The CUDA/cuBLAS context backing this backend (package scope for tests). */
+    GpuContext gpuContext() {
+        return ctx;
     }
 
     /**
@@ -193,21 +323,11 @@ public final class CudaMatVec implements MatVec {
         long bytesX = (long) cols * 4;
         long bytesY = (long) rows * 4;
 
-        PointerPointer pX = new PointerPointer(1);
-        PointerPointer pY = new PointerPointer(1);
+        Fp32ResidentScratch s = FP32_RESIDENT.get();
         try {
-            checkCuda(cudart.cudaSetDevice(ctx.deviceIndex()), "cudaSetDevice");
-
-            int rX = cudart.cudaMalloc(pX, bytesX);
-            int rY = cudart.cudaMalloc(pY, bytesY);
-            if (rX != 0 || rY != 0) {
-                if (rX == 0) cudart.cudaFree(pX.get(0));
-                if (rY == 0) cudart.cudaFree(pY.get(0));
-                throw new IllegalStateException("cudaMalloc failed: d_x=" + rX + " d_y=" + rY);
-            }
-
-            Pointer d_x = pX.get(0);
-            Pointer d_y = pY.get(0);
+            s.ensure(ctx.deviceIndex(), bytesX, bytesY);
+            Pointer d_x = s.dX;
+            Pointer d_y = s.dY;
             Pointer d_A = A.devicePointer();
 
             try (FloatPointer hX = new FloatPointer(x)) {
@@ -242,10 +362,6 @@ public final class CudaMatVec implements MatVec {
 
             return y;
         } finally {
-            cudart.cudaFree(pX.get(0));
-            cudart.cudaFree(pY.get(0));
-            pX.close();
-            pY.close();
             evt.backend = "cuda-resident";
             evt.rows = rows;
             evt.cols = cols;
@@ -259,6 +375,7 @@ public final class CudaMatVec implements MatVec {
      * via {@code cublasHSSgemvStridedBatched} (same {@code trans, m, n, lda} contract as
      * {@link #sgemv(DeviceFloatMatrix, float[])}).
      */
+    @Override
     public float[] sgemv(DeviceHalfMatrix A, float[] x) {
         if (A == null)
             throw new IllegalArgumentException("A must not be null");
@@ -276,32 +393,14 @@ public final class CudaMatVec implements MatVec {
         long bytesXh = (long) cols * 2;
         long bytesY = (long) rows * 4;
 
-        PointerPointer pXh = new PointerPointer(1);
-        PointerPointer pY = new PointerPointer(1);
+        Fp16ResidentScratch s = FP16_RESIDENT.get();
         try {
-            checkCuda(cudart.cudaSetDevice(ctx.deviceIndex()), "cudaSetDevice");
-
-            int rXh = cudart.cudaMalloc(pXh, bytesXh);
-            int rY = cudart.cudaMalloc(pY, bytesY);
-            if (rXh != 0 || rY != 0) {
-                if (rXh == 0)
-                    cudart.cudaFree(pXh.get(0));
-                if (rY == 0)
-                    cudart.cudaFree(pY.get(0));
-                throw new IllegalStateException("cudaMalloc failed: d_xh=" + rXh + " d_y=" + rY);
-            }
-
-            Pointer d_xh = pXh.get(0);
-            Pointer d_y = pY.get(0);
+            s.ensureDevice(ctx.deviceIndex(), bytesXh, bytesY);
+            Pointer d_xh = s.dXh;
+            Pointer d_y = s.dY;
             Pointer d_A = A.devicePointer();
 
-            byte[] xHostHalf = new byte[(int) bytesXh];
-            ByteBuffer xbb = ByteBuffer.wrap(xHostHalf).order(ByteOrder.LITTLE_ENDIAN);
-            for (int j = 0; j < cols; j++)
-                xbb.putShort(j * 2, Float.floatToFloat16(x[j]));
-            try (BytePointer hXh = new BytePointer(xHostHalf)) {
-                checkCuda(cudart.cudaMemcpy(d_xh, hXh, bytesXh, H2D), "cudaMemcpy(xh H2D)");
-            }
+            s.packXHalfAndUpload(x, cols, d_xh, bytesXh);
 
             try (
                     FloatPointer alpha = new FloatPointer(1.0f);
@@ -336,10 +435,6 @@ public final class CudaMatVec implements MatVec {
 
             return y;
         } finally {
-            cudart.cudaFree(pXh.get(0));
-            cudart.cudaFree(pY.get(0));
-            pXh.close();
-            pY.close();
             evt.backend = "cuda-resident-fp16";
             evt.rows = rows;
             evt.cols = cols;

@@ -310,7 +310,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	private float[] matVecFused(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev, float[] x, int rowStart,
 			int rowEnd, int cols) {
 		if (dev != null)
-			return ((CudaMatVec) backend).sgemv(dev, x);
+			return backend.sgemv(dev, x);
 		return LlamaTransformerHandler.matVec(quant, x, rowStart, rowEnd, cols);
 	}
 
@@ -535,7 +535,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	private float[] outputProjection(float[] x) {
 		float[] xNorm = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
 		if (outputProjDev != null)
-			return ((CudaMatVec) backend).sgemv(outputProjDev, xNorm);
+			return backend.sgemv(outputProjDev, xNorm);
 		// Use actual tensor dimensions, not cfg.vocabSize(). For phi3,
 		// cfg.vocabSize() may be the arch-metadata base count (32000) while
 		// outputProj.length encodes the full tokenizer vocab (32064), so using

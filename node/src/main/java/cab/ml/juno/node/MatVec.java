@@ -73,4 +73,14 @@ public interface MatVec {
         throw new UnsupportedOperationException(
             "device-resident weights are not supported by this GpuMatVec implementation");
     }
+
+    /**
+     * Compute y = A * x with {@code A} in FP16 on the device ({@link DeviceHalfMatrix}).
+     *
+     * @throws UnsupportedOperationException for backends that only support host weights
+     */
+    default float[] sgemv(DeviceHalfMatrix A, float[] x) {
+        throw new UnsupportedOperationException(
+                "FP16 device-resident weights are not supported by this MatVec implementation");
+    }
 }

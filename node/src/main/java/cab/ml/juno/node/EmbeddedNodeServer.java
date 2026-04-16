@@ -230,7 +230,7 @@ public final class EmbeddedNodeServer {
 							+ " embeddings=" + request.getHasEmbeddings() + " outputProj="
 							+ request.getHasOutputProjection());
 					if (useGpu && CudaAvailability.isAvailable()) {
-						gpuContext = GpuContext.init(0);
+						gpuContext = GpuContext.shared(0);
 						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
 								new CudaMatVec(gpuContext));
 						msg = "Real shard loaded (GPU/CudaMatVec) layers " + request.getStartLayer() + "–"
@@ -280,7 +280,7 @@ public final class EmbeddedNodeServer {
 
 		@Override
 		public void unloadShard(UnloadShardRequest request, StreamObserver<UnloadShardResponse> responseObserver) {
-			// CudaMatVecBackend uses per-call device memory; no persistent GPU buffers to release.
+			// GpuContext.shared(0) is not destroyed here; handler / weight buffers are GC-managed.
 			if (gpuContext != null) {
 				gpuContext.close();
 				gpuContext = null;
