@@ -41,7 +41,8 @@ import io.grpc.stub.StreamObserver;
 
 /**
  * gRPC NodeService backed by LlamaTransformerHandler or Phi3TransformerHandler,
- * with compute backend selected by the {@code useGpu} flag (CudaMatVecBackend or CpuMatVecBackend).
+ * with compute backend selected by the {@code useGpu} flag (CudaMatVecBackend
+ * or CpuMatVecBackend).
  *
  * Activation compression: Each ForwardRequest carries a dtype field that tells
  * this node how to decode the incoming activation bytes. The response
@@ -85,7 +86,8 @@ public final class EmbeddedNodeServer {
 	public EmbeddedNodeServer(String nodeId, int port, String modelPath, boolean useGpu) {
 		this.nodeId = nodeId;
 		this.port = port;
-		this.grpcServer = ServerBuilder.forPort(port).addService(new NodeServiceImpl(nodeId, modelPath, useGpu)).build();
+		this.grpcServer = ServerBuilder.forPort(port).addService(new NodeServiceImpl(nodeId, modelPath, useGpu))
+				.build();
 	}
 
 	public void start() throws IOException {
@@ -113,11 +115,11 @@ public final class EmbeddedNodeServer {
 	// ── Stub handler (no model loaded) ───────────────────────────────────────
 
 	/**
-	 * Minimal no-op ForwardPassHandler used before a real shard is loaded and as
-	 * a safe fallback when model loading fails. Returns zero-filled arrays of the
-	 * correct shape; never produces meaningful output. Not for use in tests —
-	 * tests should use {@code CyclicForwardPassHandler} (node/src/test) which
-	 * provides deterministic, inspectable results.
+	 * Minimal no-op ForwardPassHandler used before a real shard is loaded and as a
+	 * safe fallback when model loading fails. Returns zero-filled arrays of the
+	 * correct shape; never produces meaningful output. Not for use in tests — tests
+	 * should use {@code CyclicForwardPassHandler} (node/src/test) which provides
+	 * deterministic, inspectable results.
 	 */
 	private static final class StubForwardPassHandler implements ForwardPassHandler {
 		@Override
@@ -146,6 +148,7 @@ public final class EmbeddedNodeServer {
 		private final String nodeId;
 		private final String modelPath; // null = stub mode
 		private final boolean useGpu;
+		private final String loraPlayPath; // null = no LoRA adapter overlay at inference
 		private volatile ForwardPassHandler handler;
 		private volatile ShardContext context;
 		private volatile GpuContext gpuContext; // non-null only when handler is GPU
@@ -156,9 +159,12 @@ public final class EmbeddedNodeServer {
 			this.nodeId = nodeId;
 			this.modelPath = modelPath;
 			this.useGpu = useGpu;
+			this.loraPlayPath = System.getProperty("juno.lora.play.path");
 			this.handler = new StubForwardPassHandler(); // replaced in loadShard() when real model
 			this.context = buildDefaultContext();
 			this.kvCache = new KVCacheManager(new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256));
+			if (loraPlayPath != null)
+				log.info("LoRA play-back enabled — will apply adapters from: " + loraPlayPath);
 		}
 
 		@Override
@@ -229,16 +235,28 @@ public final class EmbeddedNodeServer {
 					log.info("Shard context: layers " + request.getStartLayer() + "-" + request.getEndLayer()
 							+ " embeddings=" + request.getHasEmbeddings() + " outputProj="
 							+ request.getHasOutputProjection());
+
+					// Load LoRA adapters if configured (read-only, inference-only)
+					LoraAdapterSet playAdapters = null;
+					if (loraPlayPath != null && !loraPlayPath.isBlank()) {
+						log.info("Loading LoRA adapters for inference: " + loraPlayPath);
+						playAdapters = LoraAdapterSet.load(Path.of(loraPlayPath));
+						log.info("Loaded " + playAdapters.size() + " LoRA adapters");
+					}
+
 					if (useGpu && CudaAvailability.isAvailable()) {
 						gpuContext = GpuContext.init(0);
-						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
-								new CudaMatVec(gpuContext));
+						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx, new CudaMatVec(gpuContext),
+								playAdapters);
 						msg = "Real shard loaded (GPU/CudaMatVec) layers " + request.getStartLayer() + "–"
-								+ request.getEndLayer();
+								+ request.getEndLayer()
+								+ (playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")" : "");
 					} else {
-						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx);
-						msg = "Real shard loaded (CPU/CpuMatVec) layers " + request.getStartLayer() + "–"
-								+ request.getEndLayer();
+						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
+								ForwardPassHandlerLoader.selectBackend(), playAdapters);
+						msg = "Shard loaded (CPU/CpuMatVec) layers " + request.getStartLayer() + "–"
+								+ request.getEndLayer() + playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")"
+										: "" + request.getEndLayer();
 					}
 					log.info(msg);
 				} catch (Exception e) {
@@ -260,8 +278,8 @@ public final class EmbeddedNodeServer {
 			context = newCtx;
 
 			LayerRange range = LayerRange.of(request.getStartLayer(), request.getEndLayer());
-			KVCacheManager newKvCache = new KVCacheManager(
-					new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256), range);
+			KVCacheManager newKvCache = new KVCacheManager(new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256),
+					range);
 			kvCache = newKvCache;
 			log.info("Node [" + nodeId + "] KVCache scoped to " + range);
 
@@ -280,7 +298,8 @@ public final class EmbeddedNodeServer {
 
 		@Override
 		public void unloadShard(UnloadShardRequest request, StreamObserver<UnloadShardResponse> responseObserver) {
-			// CudaMatVecBackend uses per-call device memory; no persistent GPU buffers to release.
+			// CudaMatVecBackend uses per-call device memory; no persistent GPU buffers to
+			// release.
 			if (gpuContext != null) {
 				gpuContext.close();
 				gpuContext = null;

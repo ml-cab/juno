@@ -52,6 +52,7 @@ BYTE_ORDER="BE"
 KEY_NAME="juno-deploy-key"
 SG_NAME="juno-deploy-sg"
 JFR_DURATION=""
+LORA_PLAY_PATH=""
 STATE_FILE="${HOME}/.juno-deploy-state"
 SSH_KEY_FILE="${HOME}/.ssh/juno-deploy-key.pem"
 MONITOR_INTERVAL=20
@@ -123,6 +124,7 @@ parse_options() {
       --byteOrder | --byte-order | --byteorder) BYTE_ORDER="${2^^}"; shift 2 ;;
       --region)          REGION="$2";         shift 2 ;;
       --jfr)             JFR_DURATION="$2";   shift 2 ;;
+      --lora-play)       LORA_PLAY_PATH="$2"; shift 2 ;;
       *)                 die "Unknown option: $1 (run without args for usage)" ;;
     esac
   done
@@ -149,6 +151,7 @@ save_state() {
     echo "MODEL_FILENAME=\"$MODEL_FILENAME\""
     echo "SETUP_TIME=\"$SETUP_TIME\""
     echo "JFR_DURATION=\"${JFR_DURATION:-}\""
+    echo "LORA_PLAY_PATH=\"${LORA_PLAY_PATH:-}\""
   } > "$STATE_FILE"
   log "State saved → $STATE_FILE"
 }
@@ -1005,6 +1008,7 @@ _build_node_userdata() {
       -e "s|__MODEL_FILENAME__|${MODEL_FILENAME_VAL}|g" \
       -e "s|__MODEL_STEM__|${MODEL_STEM_VAL}|g" \
       -e "s|__JFR_DURATION__|${JFR_DURATION_VAL}|g" \
+      -e "s|__LORA_PLAY_PATH__|${LORA_PLAY_PATH:-}|g" \
       -e "s|__MODEL_URL__|${MODEL_URL_VAL}|g" \
       <<'EOF'
 #!/bin/bash
@@ -1073,6 +1077,7 @@ JUNO_BYTE_ORDER=${BYTE_ORDER}
 NODE_ID=${NODE_ID}
 JUNO_JFR_DURATION=${JFR_DURATION}
 JUNO_MODEL_STEM=${MODEL_STEM}
+JUNO_LORA_PLAY_PATH=__LORA_PLAY_PATH__
 EOF2
 
 # Wrapper script — conditionally adds -XX:StartFlightRecording when JFR is enabled
@@ -1100,6 +1105,7 @@ exec /usr/bin/java \
   -Dnode.id=${NODE_ID} \
   -Dnode.port=${JUNO_GRPC_PORT} \
   -Dmodel.path=${JUNO_MODEL_PATH} \
+  ${JUNO_LORA_PLAY_PATH:+-Djuno.lora.play.path=${JUNO_LORA_PLAY_PATH}} \
   -jar /opt/juno/juno-node/target/juno-node.jar \
   cab.ml.juno.node.NodeMain
 EOF2
@@ -1324,6 +1330,7 @@ JUNO_BYTE_ORDER=${BYTE_ORDER}
 JUNO_MAX_QUEUE=1000
 JUNO_JFR_DURATION=${JFR_DURATION:-}
 JUNO_MODEL_STEM=${MODEL_FILENAME%.*}
+JUNO_LORA_PLAY_PATH=${LORA_PLAY_PATH:-}
 EOF
 )
 
@@ -1519,6 +1526,8 @@ case "$MODE" in
     echo "    --dtype FLOAT16|FLOAT32 Activation dtype (default: FLOAT16)"
     echo "    --jfr DURATION          Enable JFR on all nodes + coordinator (e.g. 5m 30s 1h)"
     echo "                            Metrics are gathered and printed on Ctrl+C exit"
+    echo "    --lora-play PATH        Apply a .lora adapter file at inference on every node"
+    echo "                            The file must exist at PATH on each node instance"
     echo ""
     echo "  Examples:"
     echo "    # 3-node GPU cluster, TinyLlama, coordinator on node1"
