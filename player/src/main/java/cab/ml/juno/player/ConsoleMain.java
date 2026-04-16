@@ -968,6 +968,7 @@ public final class ConsoleMain {
 				? ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads)
 				: ClusterHarness.threeNodes(modelPath, totalLayers))
 				.withJfr(jfrDuration, timestamp);
+
 		if (loraPlayPath != null && !loraPlayPath.isBlank()) {
 			harness.withLoraPlay(loraPlayPath);
 			print(Color.CYAN + "  ⚙ LoRA inference overlay will be applied on every node: "

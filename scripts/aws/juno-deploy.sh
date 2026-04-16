@@ -766,6 +766,8 @@ setup() {
   log "Account: $(aws sts get-caller-identity --query Arn --output text)"
   log "Region : $REGION"
   log "Nodes  : ${NODE_COUNT} × ${INSTANCE_TYPE}  coordinator=${COORDINATOR_MODE}"
+  [[ -n "${JFR_DURATION:-}"   ]] && log "JFR    : duration=${JFR_DURATION}"
+  [[ -n "${LORA_PLAY_PATH:-}" ]] && log "LoRA   : play-back=${LORA_PLAY_PATH}"
   echo ""
 
   # ── Resolve Ubuntu 22.04 LTS AMI ────────────────────────────
@@ -996,6 +998,12 @@ _build_node_userdata() {
   local NODE_COUNT_VAL="$NODE_COUNT"
   local GIT_VAL="$GIT"
 
+  # ── [TRACE] Show exactly what is being baked into the bootstrap script ──────
+  log "  [TRACE] node-${NODE_IDX_VAL} bootstrap params:"
+  log "          grpc_port=${PORT_VAL}  is_coordinator=${IS_COORD_VAL}  dtype=${DTYPE_VAL}"
+  log "          model=${MODEL_FILENAME_VAL}  git=${GIT_VAL}"
+  log "          jfr=${JFR_DURATION_VAL:-<none>}  lora_play=<will be deployed after bootstrap>"
+
   sed -e "s|__NODE_IDX__|${NODE_IDX_VAL}|g" \
       -e "s|__PORT__|${PORT_VAL}|g" \
       -e "s|__IS_COORD__|${IS_COORD_VAL}|g" \
@@ -1008,7 +1016,7 @@ _build_node_userdata() {
       -e "s|__MODEL_FILENAME__|${MODEL_FILENAME_VAL}|g" \
       -e "s|__MODEL_STEM__|${MODEL_STEM_VAL}|g" \
       -e "s|__JFR_DURATION__|${JFR_DURATION_VAL}|g" \
-      -e "s|__LORA_PLAY_PATH__|${LORA_PLAY_PATH:-}|g" \
+      -e "s|__LORA_PLAY_PATH__||g" \
       -e "s|__MODEL_URL__|${MODEL_URL_VAL}|g" \
       <<'EOF'
 #!/bin/bash
@@ -1341,9 +1349,75 @@ EOF
        echo 'coordinator started'" 2>/dev/null \
     && log "  ✅ Coordinator started (nodes: ${ADDRS})" \
     || warn "  Could not start coordinator — SSH into ${COORD_HOST} and run: sudo systemctl start juno-coordinator"
+
+  # ── [TRACE] Show the exact cluster-nodes.env written to the coordinator ────
+  log "  [TRACE] cluster-nodes.env written to ${COORD_HOST}:"
+  while IFS= read -r line; do
+    log "          ${line}"
+  done <<< "${ENV_CONTENT}"
 }
 
-# ── SCAN REGIONS ──────────────────────────────────────────────
+# ── SCP .LORA FILE TO ALL NODES ───────────────────────────────
+# Called after bootstrap completes and before the coordinator starts.
+# Copies the local .lora file to /opt/juno/models/ on every node, then
+# patches /etc/juno/node.env so JUNO_LORA_PLAY_PATH points to the correct
+# remote absolute path and restarts juno-node.service so the new value
+# takes effect before the coordinator sends any loadShard RPCs.
+_scp_lora_to_nodes() {
+  [[ -n "${LORA_PLAY_PATH:-}" ]] || return 0
+
+  if [[ ! -f "$LORA_PLAY_PATH" ]]; then
+    warn "  [TRACE] --lora-play '${LORA_PLAY_PATH}' not found locally — skipping SCP"
+    warn "          Nodes will fail to load adapters. Provide an existing local path."
+    return 0
+  fi
+
+  local LORA_BASENAME
+  LORA_BASENAME="$(basename "$LORA_PLAY_PATH")"
+  local REMOTE_LORA_PATH="/opt/juno/models/${LORA_BASENAME}"
+  local SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes -i $SSH_KEY_FILE"
+
+  log "  Deploying LoRA adapter to all nodes: ${LORA_BASENAME}"
+  log "  [TRACE] local source  : ${LORA_PLAY_PATH}"
+  log "  [TRACE] remote target : ${REMOTE_LORA_PATH}"
+
+  for ID in "${INSTANCE_IDS[@]}"; do
+    local IP="${INSTANCE_IPS[$ID]}"
+    log "  [TRACE] SCP → ${IP}:${REMOTE_LORA_PATH}"
+
+    # Upload
+    scp $SSH_OPTS "$LORA_PLAY_PATH" "ubuntu@${IP}:/tmp/${LORA_BASENAME}" 2>/dev/null \
+      || { warn "  SCP failed to ${IP} — node will run without LoRA"; continue; }
+
+    # Move into /opt/juno/models/ (root-owned) and patch node.env
+    ssh $SSH_OPTS "ubuntu@${IP}" "
+      sudo mv /tmp/${LORA_BASENAME} ${REMOTE_LORA_PATH}
+      sudo chmod 644 ${REMOTE_LORA_PATH}
+      # Patch or append JUNO_LORA_PLAY_PATH in node.env
+      if sudo grep -q '^JUNO_LORA_PLAY_PATH=' /etc/juno/node.env 2>/dev/null; then
+        sudo sed -i 's|^JUNO_LORA_PLAY_PATH=.*|JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}|' /etc/juno/node.env
+      else
+        echo 'JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}' | sudo tee -a /etc/juno/node.env > /dev/null
+      fi
+      echo '[TRACE] node.env after patch:'
+      sudo cat /etc/juno/node.env
+      # Restart juno-node so the new JUNO_LORA_PLAY_PATH is picked up
+      sudo systemctl restart juno-node
+      echo '[TRACE] juno-node restarted'
+    " 2>/dev/null \
+      && log "  ✅ LoRA deployed and juno-node restarted on ${IP}" \
+      || warn "  Could not patch node.env on ${IP}"
+  done
+
+  # Brief pause for nodes to finish restarting before coordinator sends loadShard
+  log "  Waiting 10s for juno-node services to restart…"
+  sleep 10
+  log "  ✅ LoRA deployment complete — remote path: ${REMOTE_LORA_PATH}"
+
+  # Export so _write_cluster_env_and_start_coordinator uses the remote path
+  LORA_PLAY_PATH="$REMOTE_LORA_PATH"
+  log "  [TRACE] LORA_PLAY_PATH updated to remote path for cluster-nodes.env: ${LORA_PLAY_PATH}"
+}
 scan_regions() {
   local VCPUS_PER_NODE="${INSTANCE_VCPUS[$INSTANCE_TYPE]:-2}"
   local VCPUS_NEEDED=$(( NODE_COUNT * VCPUS_PER_NODE ))
@@ -1440,6 +1514,9 @@ _wait_for_ready_and_open() {
     sleep 15
   done
   echo ""
+
+  # SCP .lora file to nodes and patch node.env (noop if --lora-play not set)
+  _scp_lora_to_nodes
 
   # Write cluster env + start coordinator
   _write_cluster_env_and_start_coordinator

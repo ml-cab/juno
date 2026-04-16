@@ -254,9 +254,9 @@ public final class EmbeddedNodeServer {
 					} else {
 						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
 								ForwardPassHandlerLoader.selectBackend(), playAdapters);
-						msg = "Shard loaded (CPU/CpuMatVec) layers " + request.getStartLayer() + "–"
-								+ request.getEndLayer() + playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")"
-										: "" + request.getEndLayer();
+						msg = "Shard loaded (CPU/CpuMatVec) layers " + request.getStartLayer() + "\u2013"
+								+ request.getEndLayer()
+								+ (playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")" : "");
 					}
 					log.info(msg);
 				} catch (Exception e) {
