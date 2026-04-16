@@ -151,6 +151,8 @@ cmd_cluster() {
   local verbose="false"
   local ptype="pipeline"
   local jfr_duration=""
+  local health="false"
+  local health_port="${HEALTH_PORT:-8081}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -176,6 +178,8 @@ cmd_cluster() {
       --int8)             dtype="INT8";      shift   ;;
       --gpu)              use_gpu="true";    shift   ;;
       --cpu)              use_gpu="false";   shift   ;;
+      --health)           health="true";     shift   ;;
+      --health-port)      health_port="$2";  shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -261,6 +265,12 @@ cmd_cluster() {
   [[ -n "$jfr_duration" ]] && jfr_arg="--jfr $jfr_duration" && \
     warn "JFR enabled — duration=${jfr_duration}  (programmatic recording, metrics auto-printed on exit)"
 
+  local health_flag=""
+  if [[ "$health" == "true" ]]; then
+    health_flag="--health"
+    warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
+  fi
+
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
@@ -278,6 +288,7 @@ cmd_cluster() {
     --pType "$ptype" \
     "$gpu_flag" \
     ${jfr_arg} \
+    ${health_flag} \
     ${verbose_flag}
 }
 
@@ -297,6 +308,8 @@ cmd_local() {
   local nodes="${NODES:-3}"
   local verbose="false"
   local jfr_duration=""
+  local health="false"
+  local health_port="${HEALTH_PORT:-8081}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -322,6 +335,8 @@ cmd_local() {
       --int8)             dtype="INT8";      shift   ;;
       --gpu)              use_gpu="true";    shift   ;;
       --cpu)              use_gpu="false";   shift   ;;
+      --health)           health="true";     shift   ;;
+      --health-port)      health_port="$2";  shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -390,6 +405,12 @@ cmd_local() {
   [[ -n "$jfr_duration" ]] && jfr_arg="--jfr $jfr_duration" && \
     warn "JFR enabled — duration=${jfr_duration}  (programmatic recording, metrics auto-printed on exit)"
 
+  local health_flag=""
+  if [[ "$health" == "true" ]]; then
+    health_flag="--health"
+    warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
+  fi
+
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
@@ -407,6 +428,7 @@ cmd_local() {
     --local \
     "$gpu_flag" \
     ${jfr_arg} \
+    ${health_flag} \
     ${verbose_flag}
 }
 
@@ -431,6 +453,8 @@ cmd_lora() {
   local heap="${HEAP:-4g}"
   local verbose="false"
   local jfr_duration=""
+  local health="false"
+  local health_port="${HEALTH_PORT:-8081}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -457,6 +481,8 @@ cmd_lora() {
       # --pType is accepted but ignored: lora always runs single in-process node
       --pType | --ptype) shift 2 ;;
       --jfr)          jfr_duration="$2"; shift 2 ;;
+      --health)       health="true";     shift   ;;
+      --health-port)  health_port="$2";  shift 2 ;;
       --gpu)          use_gpu="true";    shift   ;;
       --cpu)          use_gpu="false";   shift   ;;
       --verbose | -v) verbose="true";   shift   ;;
@@ -554,6 +580,12 @@ cmd_lora() {
   local lora_path_flag=""
   [[ -n "$lora_path" ]] && lora_path_flag="--lora-path $lora_path"
 
+  local health_flag=""
+  if [[ "$health" == "true" ]]; then
+    health_flag="--health"
+    warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
+  fi
+
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
     local model_name model_stem
@@ -585,6 +617,7 @@ cmd_lora() {
     --top-p "$top_p" \
     "$gpu_flag" \
     ${lora_path_flag} \
+    ${health_flag} \
     ${verbose_flag}
 }
 
@@ -815,6 +848,9 @@ usage() {
   echo "    MODEL_PATH=/models/tiny.gguf $0 lora --lora-path ./finetune.lora"
   echo "    MODEL_PATH=/models/tiny.gguf $0 test"
   echo "    $0 test /models/tiny.gguf --heap 8g"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 --health                    # cluster + health sidecar on :8081"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 local --health --health-port 9090"
+  echo "    $0 health --port 8081                                        # standalone health server"
   echo ""
   echo "  Custom Java:"
   echo "    JAVA_HOME=/path/to/jdk $0 cluster --model-path /models/tiny.gguf"

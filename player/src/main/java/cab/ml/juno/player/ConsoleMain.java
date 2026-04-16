@@ -121,8 +121,9 @@ public final class ConsoleMain {
 	private static ParallelismType pType = ParallelismType.PIPELINE;
 	private static String jfrDuration = null;
 	// ── Health server flag ────────────────────────────────────────────────────
-	/** When true, start the standalone health monitor instead of a REPL. */
-	private static boolean healthMode = true;
+	/** When true, start a health sidecar alongside the normal run mode. */
+	private static boolean healthMode = false;
+	private static int healthPort = cab.ml.juno.health.HealthMain.DEFAULT_PORT;
 	// ── Byte-order argument ───────────────────────────────────────────────────
 	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
 	private static String byteOrder = "BE";
@@ -146,10 +147,10 @@ public final class ConsoleMain {
 			System.exit(0);
 		}
 
-		// ── Health server mode — no model required ────────────────────────────
+		// ── Health sidecar — start in background then continue normally ──────
 		if (healthMode) {
-			cab.ml.juno.health.HealthMain.main(args);
-			return; // HealthMain.start() blocks; we never reach this
+			cab.ml.juno.health.HealthMain.startBackground(
+				healthPort, cab.ml.juno.health.HealthThresholds.defaults());
 		}
 
 		if (modelPath == null) {
@@ -265,7 +266,8 @@ public final class ConsoleMain {
 				break;
 			case "--cpu":
 				useGpu = false;
-				// ── LoRA ──────────────────────────────────────────────────────────
+				break;
+			// ── LoRA ──────────────────────────────────────────────────────────
 			case "--lora":
 				loraMode = true;
 				break;

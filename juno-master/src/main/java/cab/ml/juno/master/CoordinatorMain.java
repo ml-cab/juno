@@ -26,6 +26,8 @@ import cab.ml.juno.coordinator.BatchConfig;
 import cab.ml.juno.coordinator.GenerationLoop;
 import cab.ml.juno.coordinator.InferenceApiServer;
 import cab.ml.juno.coordinator.RequestScheduler;
+import cab.ml.juno.health.HealthMain;
+import cab.ml.juno.health.HealthThresholds;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
@@ -64,6 +66,13 @@ import cab.ml.juno.tokenizer.Tokenizer;
  *   JUNO_DTYPE            FLOAT32 | FLOAT16 | INT8  (default: FLOAT16)
  *   JUNO_MAX_QUEUE        max scheduler queue depth (default: 1000)
  *   JUNO_USE_GPU          "true" / "false" propagated to nodes via LoadShard
+ *
+ *   Health sidecar (optional — starts alongside the coordinator, not instead of it):
+ *   JUNO_HEALTH           "true" to enable the health HTTP sidecar (default: false)
+ *   JUNO_HEALTH_PORT      port for the health sidecar (default: 8081)
+ *   JUNO_HEALTH_STALE_MS  staleness threshold in ms (default: 15000)
+ *   JUNO_HEALTH_WARN      VRAM warning threshold 0.0-1.0 (default: 0.90)
+ *   JUNO_HEALTH_CRITICAL  VRAM critical threshold 0.0-1.0 (default: 0.98)
  * </pre>
  */
 public final class CoordinatorMain {
@@ -100,6 +109,17 @@ public final class CoordinatorMain {
 
         boolean tensorMode = "tensor".equalsIgnoreCase(ptypeStr.strip());
         ActivationDtype dtype = parseDtype(dtypeStr);
+
+        // ── Health sidecar (optional) ─────────────────────────────────────────
+        if ("true".equalsIgnoreCase(env("JUNO_HEALTH", "false"))) {
+            int    healthPort    = parseInt(env("JUNO_HEALTH_PORT",      "8081"),  8081);
+            long   healthStaleMs = parseLong(env("JUNO_HEALTH_STALE_MS", "15000"), 15_000L);
+            double healthWarn    = parseDouble(env("JUNO_HEALTH_WARN",   "0.90"),  0.90);
+            double healthCrit    = parseDouble(env("JUNO_HEALTH_CRITICAL","0.98"), 0.98);
+            HealthMain.startBackground(healthPort,
+                new HealthThresholds(healthWarn, healthCrit, healthStaleMs));
+            log.info("Health sidecar started on :" + healthPort);
+        }
 
         // ── Parse node addresses ──────────────────────────────────────────
         List<ProcessPipelineClient.NodeAddress> nodeAddrs = parseAddresses(rawAddresses);
@@ -308,6 +328,14 @@ public final class CoordinatorMain {
 
     private static int parseInt(String s, int def) {
         try { return Integer.parseInt(s.strip()); } catch (NumberFormatException e) { return def; }
+    }
+
+    private static long parseLong(String s, long def) {
+        try { return Long.parseLong(s.strip()); } catch (NumberFormatException e) { return def; }
+    }
+
+    private static double parseDouble(String s, double def) {
+        try { return Double.parseDouble(s.strip()); } catch (NumberFormatException e) { return def; }
     }
 
     private static void shutdownPipeline(cab.ml.juno.node.InferencePipeline pipeline) throws Exception {
