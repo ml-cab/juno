@@ -1,4 +1,7 @@
 /*
+ * Created by Yevhen Soldatov
+ * Initial implementation: 2026
+ *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,4 +41,15 @@ public interface ForwardPassHandler {
 
 	/** Whether this handler is ready to serve (shard loaded, GPU initialized). */
 	boolean isReady();
+
+	/**
+	 * Frees GPU-resident weight buffers ({@link DeviceHalfMatrix}, {@link DeviceFloatMatrix}, …)
+	 * held by this handler. Safe to call multiple times; default implementation is a no-op.
+	 *
+	 * <p>Call before discarding a handler (e.g. shard unload or reload) so VRAM is returned
+	 * promptly instead of waiting for GC/finalizers.
+	 */
+	default void releaseGpuResources() {
+		// no-op — LlamaTransformerHandler, Phi3TransformerHandler, etc. override when needed
+	}
 }

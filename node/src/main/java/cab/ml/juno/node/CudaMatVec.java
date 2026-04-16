@@ -22,6 +22,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.logging.Logger;
 
+import org.bytedeco.cuda.cudart.CUstream_st;
 import org.bytedeco.cuda.cudart.__half;
 import org.bytedeco.javacpp.BytePointer;
 import org.bytedeco.javacpp.FloatPointer;
@@ -49,6 +50,8 @@ import org.bytedeco.cuda.global.cudart;
  *   - {@link #sgemv(DeviceFloatMatrix, float[])} / {@link #sgemv(DeviceHalfMatrix, float[])}
  *     — {@code A} stays on device; per-thread scratch buffers for {@code x} and {@code y}
  *     are grown as needed and reused to avoid per-call cudaMalloc/cudaFree.
+ *     Each thread uses a private CUDA stream; {@link GpuContext#cublasSerializationLock()}
+ *     serializes stream binding + cuBLAS calls on a shared handle.
  *  
  * @author Yevhen Soldatov    
  */
@@ -60,6 +63,8 @@ public final class CudaMatVec implements MatVec {
     private static final int CUBLAS_OP_T = cublas.CUBLAS_OP_T;
     private static final int H2D = cudart.cudaMemcpyHostToDevice;
     private static final int D2H = cudart.cudaMemcpyDeviceToHost;
+    /** {@code cudaStreamNonBlocking} — launch work without implicit sync on legacy default stream. */
+    private static final int STREAM_NON_BLOCKING = 0x01;
 
     private final GpuContext ctx;
 
@@ -68,6 +73,22 @@ public final class CudaMatVec implements MatVec {
 
     /** Per-thread reusable buffers for FP16-weight GEMV (pinned host staging when possible). */
     private static final ThreadLocal<Fp16ResidentScratch> FP16_RESIDENT = ThreadLocal.withInitial(Fp16ResidentScratch::new);
+
+    /** Per-thread CUDA stream for async copies around cuBLAS on the shared handle. */
+    private static final ThreadLocal<CudaStreamScratch> CUDA_STREAM = ThreadLocal.withInitial(CudaStreamScratch::new);
+
+    private static final class CudaStreamScratch {
+        CUstream_st stream;
+
+        CUstream_st ensure(int deviceIndex) {
+            if (stream != null)
+                return stream;
+            checkCuda(cudart.cudaSetDevice(deviceIndex), "cudaSetDevice");
+            stream = new CUstream_st();
+            checkCuda(cudart.cudaStreamCreateWithFlags(stream, STREAM_NON_BLOCKING), "cudaStreamCreateWithFlags");
+            return stream;
+        }
+    }
 
     private static final class Fp32ResidentScratch {
         Pointer dX;
@@ -163,7 +184,7 @@ public final class CudaMatVec implements MatVec {
         }
 
         /** Pack {@code x} as FP16 little-endian and H2D into {@code d_xh}. */
-        void packXHalfAndUpload(float[] x, int cols, Pointer d_xh, long bytesXh) {
+        void packXHalfAndUpload(float[] x, int cols, Pointer d_xh, long bytesXh, CUstream_st stream) {
             int needBytes = cols * 2;
             ensurePinnedHalf(needBytes);
             if (pinnedHalf != null) {
@@ -172,7 +193,7 @@ public final class CudaMatVec implements MatVec {
                         bp.putShort(j * 2, Float.floatToFloat16(x[j]));
                 }
                 try (BytePointer hXh = new BytePointer(pinnedHalf)) {
-                    checkCuda(cudart.cudaMemcpy(d_xh, hXh, bytesXh, H2D), "cudaMemcpy(xh H2D)");
+                    checkCuda(cudart.cudaMemcpyAsync(d_xh, hXh, bytesXh, H2D, stream), "cudaMemcpyAsync(xh H2D)");
                 }
             } else {
                 if (halfBytes == null || halfBytes.length < needBytes)
@@ -181,7 +202,7 @@ public final class CudaMatVec implements MatVec {
                 for (int j = 0; j < cols; j++)
                     bb.putShort(j * 2, Float.floatToFloat16(x[j]));
                 try (BytePointer hXh = new BytePointer(halfBytes)) {
-                    checkCuda(cudart.cudaMemcpy(d_xh, hXh, bytesXh, H2D), "cudaMemcpy(xh H2D)");
+                    checkCuda(cudart.cudaMemcpyAsync(d_xh, hXh, bytesXh, H2D, stream), "cudaMemcpyAsync(xh H2D)");
                 }
             }
         }
@@ -240,6 +261,7 @@ public final class CudaMatVec implements MatVec {
         PointerPointer pX = new PointerPointer(1);
         PointerPointer pY = new PointerPointer(1);
         try {
+            synchronized (ctx.cublasSerializationLock()) {
             // CUDA device selection is thread-local; bind on every call.
             int setDeviceRc = cudart.cudaSetDevice(ctx.deviceIndex());
             checkCuda(setDeviceRc, "cudaSetDevice");
@@ -291,6 +313,7 @@ public final class CudaMatVec implements MatVec {
             }
 
             return y;
+            }
         } finally {
             cudart.cudaFree(pA.get(0));
             cudart.cudaFree(pX.get(0));
@@ -325,42 +348,51 @@ public final class CudaMatVec implements MatVec {
 
         Fp32ResidentScratch s = FP32_RESIDENT.get();
         try {
-            s.ensure(ctx.deviceIndex(), bytesX, bytesY);
-            Pointer d_x = s.dX;
-            Pointer d_y = s.dY;
-            Pointer d_A = A.devicePointer();
+            synchronized (ctx.cublasSerializationLock()) {
+                CUstream_st stream = CUDA_STREAM.get().ensure(ctx.deviceIndex());
+                checkCuda(cublas.cublasSetStream_v2(ctx.handle(), stream), "cublasSetStream_v2");
+                try {
+                    s.ensure(ctx.deviceIndex(), bytesX, bytesY);
+                    Pointer d_x = s.dX;
+                    Pointer d_y = s.dY;
+                    Pointer d_A = A.devicePointer();
 
-            try (FloatPointer hX = new FloatPointer(x)) {
-                checkCuda(cudart.cudaMemcpy(d_x, hX, bytesX, H2D), "cudaMemcpy(x H2D)");
+                    try (FloatPointer hX = new FloatPointer(x)) {
+                        checkCuda(cudart.cudaMemcpyAsync(d_x, hX, bytesX, H2D, stream), "cudaMemcpyAsync(x H2D)");
+                    }
+
+                    try (
+                        FloatPointer alpha = new FloatPointer(1.0f);
+                        FloatPointer beta = new FloatPointer(0.0f);
+                        FloatPointer d_A_f = new FloatPointer(d_A);
+                        FloatPointer d_x_f = new FloatPointer(d_x);
+                        FloatPointer d_y_f = new FloatPointer(d_y);
+                    ) {
+                        int pointerModeRc = cublas.cublasSetPointerMode_v2(
+                            ctx.handle(), cublas.CUBLAS_POINTER_MODE_HOST);
+                        if (pointerModeRc != 0)
+                            throw new IllegalStateException("cublasSetPointerMode failed: " + pointerModeRc);
+
+                        int rc = cublas.cublasSgemv_v2(ctx.handle(), CUBLAS_OP_T,
+                            cols, rows,
+                            alpha, d_A_f, cols,
+                            d_x_f, 1,
+                            beta, d_y_f, 1);
+                        if (rc != 0)
+                            throw new IllegalStateException("cublasSgemv failed: " + rc);
+                    }
+
+                    try (FloatPointer hy = new FloatPointer((long) rows)) {
+                        checkCuda(cudart.cudaMemcpyAsync(hy, d_y, bytesY, D2H, stream), "cudaMemcpyAsync(y D2H)");
+                        checkCuda(cudart.cudaStreamSynchronize(stream), "cudaStreamSynchronize");
+                        hy.get(y);
+                    }
+
+                    return y;
+                } finally {
+                    cublas.cublasSetStream_v2(ctx.handle(), new CUstream_st());
+                }
             }
-
-            try (
-                FloatPointer alpha = new FloatPointer(1.0f);
-                FloatPointer beta = new FloatPointer(0.0f);
-                FloatPointer d_A_f = new FloatPointer(d_A);
-                FloatPointer d_x_f = new FloatPointer(d_x);
-                FloatPointer d_y_f = new FloatPointer(d_y);
-            ) {
-                int pointerModeRc = cublas.cublasSetPointerMode_v2(
-                    ctx.handle(), cublas.CUBLAS_POINTER_MODE_HOST);
-                if (pointerModeRc != 0)
-                    throw new IllegalStateException("cublasSetPointerMode failed: " + pointerModeRc);
-
-                int rc = cublas.cublasSgemv_v2(ctx.handle(), CUBLAS_OP_T,
-                    cols, rows,
-                    alpha, d_A_f, cols,
-                    d_x_f, 1,
-                    beta, d_y_f, 1);
-                if (rc != 0)
-                    throw new IllegalStateException("cublasSgemv failed: " + rc);
-            }
-
-            try (FloatPointer hy = new FloatPointer(y)) {
-                checkCuda(cudart.cudaMemcpy(hy, d_y, bytesY, D2H), "cudaMemcpy(y D2H)");
-                hy.get(y);
-            }
-
-            return y;
         } finally {
             evt.backend = "cuda-resident";
             evt.rows = rows;
@@ -395,45 +427,54 @@ public final class CudaMatVec implements MatVec {
 
         Fp16ResidentScratch s = FP16_RESIDENT.get();
         try {
-            s.ensureDevice(ctx.deviceIndex(), bytesXh, bytesY);
-            Pointer d_xh = s.dXh;
-            Pointer d_y = s.dY;
-            Pointer d_A = A.devicePointer();
+            synchronized (ctx.cublasSerializationLock()) {
+                CUstream_st stream = CUDA_STREAM.get().ensure(ctx.deviceIndex());
+                checkCuda(cublas.cublasSetStream_v2(ctx.handle(), stream), "cublasSetStream_v2");
+                try {
+                    s.ensureDevice(ctx.deviceIndex(), bytesXh, bytesY);
+                    Pointer d_xh = s.dXh;
+                    Pointer d_y = s.dY;
+                    Pointer d_A = A.devicePointer();
 
-            s.packXHalfAndUpload(x, cols, d_xh, bytesXh);
+                    s.packXHalfAndUpload(x, cols, d_xh, bytesXh, stream);
 
-            try (
-                    FloatPointer alpha = new FloatPointer(1.0f);
-                    FloatPointer beta = new FloatPointer(0.0f);
-                    FloatPointer d_y_f = new FloatPointer(d_y);
-                    __half d_A_h = new __half(d_A);
-                    __half d_x_h = new __half(d_xh);
-            ) {
-                int pointerModeRc = cublas.cublasSetPointerMode_v2(
-                        ctx.handle(), cublas.CUBLAS_POINTER_MODE_HOST);
-                if (pointerModeRc != 0)
-                    throw new IllegalStateException("cublasSetPointerMode failed: " + pointerModeRc);
+                    try (
+                            FloatPointer alpha = new FloatPointer(1.0f);
+                            FloatPointer beta = new FloatPointer(0.0f);
+                            FloatPointer d_y_f = new FloatPointer(d_y);
+                            __half d_A_h = new __half(d_A);
+                            __half d_x_h = new __half(d_xh);
+                    ) {
+                        int pointerModeRc = cublas.cublasSetPointerMode_v2(
+                                ctx.handle(), cublas.CUBLAS_POINTER_MODE_HOST);
+                        if (pointerModeRc != 0)
+                            throw new IllegalStateException("cublasSetPointerMode failed: " + pointerModeRc);
 
-                // Same (trans, m, n, lda) as cublasSgemv_v2 in sgemv(DeviceFloatMatrix, …).
-                long strideA = (long) cols * rows;
-                long strideX = cols;
-                long strideY = rows;
-                int rc = cublas.cublasHSSgemvStridedBatched(ctx.handle(), CUBLAS_OP_T,
-                        cols, rows,
-                        alpha, d_A_h, cols, strideA,
-                        d_x_h, 1, strideX,
-                        beta, d_y_f, 1, strideY,
-                        1);
-                if (rc != 0)
-                    throw new IllegalStateException("cublasHSSgemvStridedBatched failed: " + rc);
+                        // Same (trans, m, n, lda) as cublasSgemv_v2 in sgemv(DeviceFloatMatrix, …).
+                        long strideA = (long) cols * rows;
+                        long strideX = cols;
+                        long strideY = rows;
+                        int rc = cublas.cublasHSSgemvStridedBatched(ctx.handle(), CUBLAS_OP_T,
+                                cols, rows,
+                                alpha, d_A_h, cols, strideA,
+                                d_x_h, 1, strideX,
+                                beta, d_y_f, 1, strideY,
+                                1);
+                        if (rc != 0)
+                            throw new IllegalStateException("cublasHSSgemvStridedBatched failed: " + rc);
+                    }
+
+                    try (FloatPointer hy = new FloatPointer((long) rows)) {
+                        checkCuda(cudart.cudaMemcpyAsync(hy, d_y, bytesY, D2H, stream), "cudaMemcpyAsync(y D2H)");
+                        checkCuda(cudart.cudaStreamSynchronize(stream), "cudaStreamSynchronize");
+                        hy.get(y);
+                    }
+
+                    return y;
+                } finally {
+                    cublas.cublasSetStream_v2(ctx.handle(), new CUstream_st());
+                }
             }
-
-            try (FloatPointer hy = new FloatPointer(y)) {
-                checkCuda(cudart.cudaMemcpy(hy, d_y, bytesY, D2H), "cudaMemcpy(y D2H)");
-                hy.get(y);
-            }
-
-            return y;
         } finally {
             evt.backend = "cuda-resident-fp16";
             evt.rows = rows;

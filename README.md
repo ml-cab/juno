@@ -80,10 +80,10 @@ ForwardPassHandlerLoader  <- reads general.architecture from GGUF
 
 MatVec (injected into handler):
     CpuMatVec    <- parallel IntStream
-    CudaMatVec   <- cublasSgemv_v2 (Llama: DeviceFloatMatrix) or
-                    cublasHSSgemvStridedBatched (Phi-3: DeviceHalfMatrix, ~2× VRAM savings);
-                    weights uploaded once at load time;
-                    forward pass copies only x (and FP16 x for Phi) and y per call
+    CudaMatVec   <- cublasSgemv_v2 (FP32 host path) / resident FP32 or FP16 weights:
+                    Llama + Phi-3 GPU use DeviceHalfMatrix + cublasHSSgemvStridedBatched;
+                    per-thread CUDA stream + async H2D/D2H around GEMV; GpuContext.shared(dev);
+                    weights uploaded once at load time; releaseGpuResources() frees VRAM on unload
 
 KV cache wiring (per node, after loadShard()):
     NodeKVCacheAdapter  <- serialises float[][] K/V into KVBlock,
@@ -165,7 +165,7 @@ java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 | `--lora-lr F` | `1e-4` | Adam learning rate |
 | `--lora-steps N` | `50` | Gradient steps per `/train` command |
 
-Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `BYTE_ORDER`, `JUNO_USE_GPU` (`true`|`false`, same effect as `--cpu` when `false`), `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `JAVA_HOME`
+Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `BYTE_ORDER`, `JUNO_USE_GPU` (`true`|`false`, same effect as `--cpu` when `false`), JVM flag `-Djuno.cuda.device=N` (CUDA device index for `GpuContext.shared(N)` / `NodeMain`), `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `JAVA_HOME`
 
 ---
 
@@ -258,7 +258,7 @@ All `juno` commands accept `--jfr DURATION` which activates Java Flight Recordin
 Useful analysis patterns:
 
 - Sort `juno.MatVec` by duration descending to find the most expensive multiply shape (typically the output projection at `32000 × 2048` for TinyLlama).
-- Filter `juno.MatVec` by `backend = "cuda-resident"` vs `"cuda-resident-fp16"` vs `"cuda"` to compare FP32-resident (Llama), FP16-resident (Phi-3 GPU), and full host-matrix upload paths.
+- Filter `juno.MatVec` by `backend = "cuda-resident"` vs `"cuda-resident-fp16"` vs `"cuda"` to compare FP32-resident matrices (tests / `DeviceFloatMatrix`), FP16-resident (Llama + Phi GPU), and full host-matrix upload paths.
 - Filter `juno.ForwardPass` by `startPosition = 0` to measure prefill latency separately from decode-step latency.
 - Aggregate `juno.Tokenizer` for `operation = "decodeToken"` to see streaming-decode overhead relative to total generation time.
 - Group `juno.TemplateFormat` by `modelType` to compare template cost across model families.
@@ -283,8 +283,9 @@ Useful analysis patterns:
 - No Python, no llama.cpp subprocess. JVM reads GGUF binary directly and runs the transformer end to end.
 - No Spring Boot. Javalin for REST.
 - Two parallelism modes: `pipeline` (LAN-friendly, sequential activation flow, vertical scaling) and `tensor` (parallel per-step AllReduce, horizontal scaling, higher throughput). Selected at startup with `--pType`.
-- **Lazy dequantization on CPU; eager upload on GPU.** Projection weights are kept as raw quantized bytes in `GgufReader.QuantizedTensor`. On the CPU path, dequantization runs one 256-element block at a time inside the matmul loop (peak live float footprint ~1 kB instead of ~65 MB). On the GPU path (`CudaMatVec`), **Llama** handlers dequantize once and upload to **`DeviceFloatMatrix`** (FP32 on device). **Phi-3** uploads the same slices as **`DeviceHalfMatrix`** (FP16 on device) to save VRAM; matmul uses **`cublasHSSgemvStridedBatched`**. If device allocation fails, Phi GPU setup falls back to the CPU quantised matmul for those weights. Forward passes copy only activation vectors (and small FP16 `x` buffers for Phi) plus `y`, not the full weight matrix.
-- **Architecture-aware handler routing.** `ForwardPassHandlerLoader` reads `general.architecture` from GGUF metadata and selects `Phi3TransformerHandler` for `phi3`, `LlamaTransformerHandler` for everything else. Backend selection is automatic via `selectBackend()` which reads `JUNO_USE_GPU` and calls `CudaAvailability.isAvailable()`.
+- **Lazy dequantization on CPU; eager upload on GPU.** Projection weights are kept as raw quantized bytes in `GgufReader.QuantizedTensor`. On the CPU path, dequantization runs one 256-element block at a time inside the matmul loop (peak live float footprint ~1 kB instead of ~65 MB). On the GPU path (`CudaMatVec`), **Llama** and **Phi-3** dequantize once and upload to **`DeviceHalfMatrix`** (FP16 on device, ~half the VRAM of FP32 storage); matmul uses **`cublasHSSgemvStridedBatched`**. If `cudaMalloc` fails during upload, **both** handlers close partial GPU buffers and fall back to CPU quantised matmul for those projections. Forward passes copy activations and small FP16 `x` staging plus `y`, not the full weight matrix.
+- **Explicit GPU weight lifecycle.** `ForwardPassHandler.releaseGpuResources()` closes all `DeviceHalfMatrix` / `DeviceFloatMatrix` buffers owned by a handler. `EmbeddedNodeServer` calls it on shard unload/reload and before swapping handlers so VRAM is freed without waiting for GC.
+- **Architecture-aware handler routing.** `ForwardPassHandlerLoader` reads `general.architecture` from GGUF metadata and selects `Phi3TransformerHandler` for `phi3`, `LlamaTransformerHandler` for everything else. Backend selection is automatic via `selectBackend()` which reads `JUNO_USE_GPU`, `CudaAvailability`, and `-Djuno.cuda.device` (defaults to `0`).
 - **Configurable activation byte order.** `ActivationCodec` is a zero-overhead static dispatcher: it reads `juno.byteOrder` once at class-load time and branches to either `ActivationBECodec` (big-endian, default) or `ActivationLECodec` (little-endian, native x86 order) for all encode/decode calls. The byte order is propagated consistently across every JVM in a cluster — `ClusterHarness` injects `-Djuno.byteOrder` into every forked node process; `juno-deploy.sh` writes it into `/etc/juno/node.env` for systemd-managed nodes. The cluster health endpoint reports the active byte order; the web console displays a live badge.
 - **KV cache wired to the node-level manager.** `NodeKVCacheAdapter` connects `LlamaTransformerHandler` and `Phi3TransformerHandler` to the `KVCacheManager` (GPU byte-budget LRU + Caffeine W-TinyLFU CPU tier). Every forward pass flushes key/value data write-through into both tiers. If a local entry is evicted under heap pressure, the next forward pass at that position restores it from the manager transparently. `evict(requestId)` propagates to both the local HashMap and both cache tiers, closing the gap that previously made the entire `kvcache` module inert at the node level.
 - **Star AllReduce for tensor parallel.** No inter-node communication. The coordinator collects partial logit vectors from all N nodes and sums them in O(N × vocabSize). Simpler than ring-AllReduce and requires no InfiniBand.
@@ -294,7 +295,7 @@ Useful analysis patterns:
 - **JFR metrics extractor.** The `metrics` module scans the project root for `juno-<stem>-*.jfr` files (the optional `juno-` prefix is also accepted for AWS node recordings), maps them to `models.json` entries, extracts counts / durations / p50/p95/p99 percentiles for all five `juno.*` event types, and writes `target/metrics/metrics.json`. For `local` and `cluster` modes this runs automatically on JFR period expiry or exit via `MetricsMain.extractToJson()` / `extractToJsonMerged()`; for `lora`/`test` runs it can be invoked manually with `java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain`.
 - **Full JFR instrumentation across every hot path.** Five custom event types — `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, `juno.LoraTrainStep` — make every layer of the stack observable in JDK Mission Control without any agent or bytecode manipulation. Activated with `--jfr DURATION` on any `juno` command. In `local` mode all events appear in one file; in `cluster` mode the coordinator and every forked node JVM each write their own `.jfr` file, which are then merged automatically by `MetricsMain.extractToJsonMerged()` on exit for a complete cross-JVM view.
 - GGUF tokenizer loaded from model metadata — no separate `tokenizer.model` file.
-- `MatVec` interface decouples the matmul backend from the transformer logic. `CudaMatVec` implements host `sgemv` (full H2D per call, for tests), `sgemv(DeviceFloatMatrix, x)` for Llama resident FP32 weights, and **`sgemv(DeviceHalfMatrix, x)`** for Phi resident FP16 weights. `CpuMatVec` as CPU fallback and test reference.
+- `MatVec` interface decouples the matmul backend from the transformer logic. `CudaMatVec` implements host `sgemv` (full H2D per call, for tests), **`sgemv(DeviceFloatMatrix, x)`** (FP32 resident, tests / legacy), and **`sgemv(DeviceHalfMatrix, x)`** for Llama + Phi GPU (FP16 weights, async copies + per-thread stream). `CpuMatVec` as CPU fallback and test reference.
 - GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent CUDA native libs (bytedeco) loading into the coordinator JVM and poisoning FD inheritance into forked node processes.
 - Stub mode — cluster boots in seconds without a model file; all integration tests run stub. Before a real shard is loaded, `EmbeddedNodeServer` uses an internal `StubForwardPassHandler` (zero-filled arrays, no test machinery). The test-only `CyclicForwardPassHandler` (deterministic fixed-pattern output, configurable winner token) lives in `node/src/test` and is shared with other modules via the `node:tests` classifier jar. Integration tests live in `juno-master` (package `cab.ml.juno.master`); `ModelLiveRunnerIT` requires a real model and is gated behind `-Pintegration`.
 

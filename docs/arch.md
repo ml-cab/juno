@@ -595,14 +595,14 @@ Full LLaMA-family transformer, pure Java. Supports MatVec backend injection.
 
 | Type | Backend |
 |------|---------|
-| `instanceof CudaMatVec` | `DeviceFloatMatrix` — weights dequantised to FP32 once, uploaded at load time |
+| `instanceof CudaMatVec` | `DeviceHalfMatrix` — weights dequantised to FP32 once, converted to FP16, uploaded at load time |
 | CPU | `matVec(QuantizedTensor, ...)` — F32, Q8_0, Q4_K, Q5_K, Q6_K — all `IntStream.parallel()` |
 
-**GPU path (Llama):** weights dequantised to `float[]` once and uploaded via `CudaMatVec.upload()` → `DeviceFloatMatrix`. Per-token: only `x` and `y` cross the PCIe bus (not `A`).
+**GPU path (Llama):** same as Phi-3: `DeviceHalfMatrix` + `cublasHSSgemvStridedBatched`; `cudaMalloc` OOM during upload closes partial buffers and falls back to CPU quantised matmul. **`ForwardPassHandler.releaseGpuResources()`** closes device matrices on shard unload.
 
 **GPU path (Phi-3):** see [Section 17](#17-phi-3-family-support) — `DeviceHalfMatrix` + `cublasHSSgemvStridedBatched`; OOM during upload closes partial buffers and falls back to CPU quantised matmul for those projections.
 
-**`ForwardPassHandlerLoader.selectBackend()`:** reads `JUNO_USE_GPU` system property; if true and CUDA available → `new CudaMatVec(GpuContext.init(0))`, else `CpuMatVec.INSTANCE`.
+**`ForwardPassHandlerLoader.selectBackend()`:** reads `JUNO_USE_GPU`; if true and CUDA available → `new CudaMatVec(GpuContext.shared(dev))` with `dev = Integer.getInteger("juno.cuda.device", 0)` (validated against `CudaAvailability.deviceCount()`), else `CpuMatVec.INSTANCE`.
 
 ### 15.4 GgufTokenizer
 
@@ -631,14 +631,14 @@ Decode:   loop { forward → sample → stream } until EOS or maxTokens
 
 ### MatVec Interface
 
-**`MatVec`** declares **`sgemv(float[] A, float[] x, int rows, int cols)`** for full host matrices. A **`default`** **`sgemv(DeviceFloatMatrix A, float[] x)`** throws unless overridden — **`CudaMatVec`** implements it for resident FP32 weights. **`sgemv(DeviceHalfMatrix A, float[] x)`** exists only on **`CudaMatVec`** (Phi-3 FP16 resident path).
+**`MatVec`** declares **`sgemv(float[] A, float[] x, int rows, int cols)`** for full host matrices. **`default`** **`sgemv(DeviceFloatMatrix A, float[] x)`** / **`sgemv(DeviceHalfMatrix A, float[] x)`** throw unless overridden — **`CudaMatVec`** implements both (FP32 and FP16 resident paths).
 
 **Implementations:**
 - `CpuMatVec` — `IntStream.range(0, rows).parallel()` for rows ≥ 256, plain loop below threshold
 - `CudaMatVec` — org.bytedeco cuBLAS. Row-major `A[rows×cols]` maps to **`cublasSgemv_v2`** with **`CUBLAS_OP_T`**, **`m=cols`**, **`n=rows`**, **`lda=cols`** (same as a **`GEMV`** on the transpose in column-major layout).
-  - **Host weights:** per-call alloc, H2D full `A` + `x`, kernel, D2H `y`, free — used in tests and diagnostics.
-  - **`sgemv(DeviceFloatMatrix, x)`:** `A` stays on device (FP32); each call uploads `x`, allocates `y`, **`cublasSgemv_v2`**, D2H — JFR backend **`cuda-resident`**.
-  - **`sgemv(DeviceHalfMatrix, x)`:** `A` on device as IEEE FP16 (`DeviceHalfMatrix`); `x` converted to FP16 on the host, small H2D for `xh`; **`cublasHSSgemvStridedBatched`** (`batchCount=1`) with the **same `(trans, m, n, lda)`** as `Sgemv_v2` above; output FP32 — JFR backend **`cuda-resident-fp16`**. (Mixed **`cublasSgemmEx` / `cublasGemmEx`** FP16×FP32 paths are not relied on for portability.)
+  - **Host weights:** per-call alloc, H2D full `A` + `x`, kernel, D2H `y`, free — used in tests and diagnostics (serialized on `GpuContext.cublasSerializationLock()`).
+  - **`sgemv(DeviceFloatMatrix, x)`:** `A` stays on device (FP32); **`cudaMemcpyAsync`** for `x` / `y`, **`cublasSetStream_v2`** + per-thread non-blocking CUDA stream, **`cudaStreamSynchronize`** before reading `y` — JFR **`cuda-resident`**.
+  - **`sgemv(DeviceHalfMatrix, x)`:** `A` on device as IEEE FP16; pinned or pageable FP16 staging for `x`; **`cublasHSSgemvStridedBatched`** (`batchCount=1`) with the **same `(trans, m, n, lda)`** as `Sgemv_v2`; async D2H — JFR **`cuda-resident-fp16`**.
 
 ### cuBLAS Mapping
 
@@ -650,7 +650,7 @@ Row-major A[rows×cols] stored in memory == column-major A^T[cols×rows]
 
 ### GpuContext
 
-One per node JVM. `AutoCloseable`. `GpuContext.init(deviceId)` → `cublasCreate(handle)`. cuBLAS handles are thread-safe.
+`GpuContext.init(deviceId)` — dedicated handle, **`close()`** destroys cuBLAS. **`GpuContext.shared(deviceId)`** — one lazily created handle **per device index** for the JVM; **`close()`** is a no-op so long-lived nodes do not tear down CUDA under other users. **`cublasSerializationLock()`** — intrinsic mutex; **`CudaMatVec`** must hold it while changing the handle’s CUDA stream or launching work. Multi-GPU: call **`shared(n)`** for each visible device (`CudaAvailability.deviceCount()`).
 
 ### CudaAvailability
 
@@ -678,7 +678,7 @@ Identical to `LlamaTransformerHandler` in attention math, KV cache, and `MatVec`
 
 ### GPU weights (Phi-3 only, `CudaMatVec` backend)
 
-Fused QKV / gate+up / output-projection slices that are dequantised for matmul can be uploaded as **`DeviceHalfMatrix`** (~half the VRAM of **`DeviceFloatMatrix`**). Forward calls **`CudaMatVec.sgemv(DeviceHalfMatrix, x)`** (see [Section 16](#16-gpu-acceleration-layer)). If **`cudaMalloc`** or cuBLAS setup fails during upload, device buffers created so far are **`close()`**d and that slice uses the **CPU quantised** path (`LlamaTransformerHandler.matVec`-style reference) instead.
+Fused QKV / gate+up / output-projection slices that are dequantised for matmul are uploaded as **`DeviceHalfMatrix`**. Forward calls **`CudaMatVec.sgemv(DeviceHalfMatrix, x)`** (see [Section 16](#16-gpu-acceleration-layer)). If **`cudaMalloc`** or cuBLAS setup fails during upload, device buffers created so far are **`close()`**d and that slice uses the **CPU quantised** path (`LlamaTransformerHandler.matVec`-style reference) instead. **`Phi3TransformerHandler.releaseGpuResources()`** frees device buffers on unload.
 
 ### ForwardPassHandlerLoader
 

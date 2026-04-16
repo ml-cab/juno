@@ -1,4 +1,7 @@
 /*
+ * Created by Yevhen Soldatov
+ * Initial implementation: 2026
+ *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,7 +63,8 @@ public final class ForwardPassHandlerLoader {
 	 * <ul>
 	 * <li>If {@code JUNO_USE_GPU=true} (system property) <em>and</em> a CUDA
 	 *     device is present, a {@link CudaMatVec} backed by
-	 *     {@link GpuContext#shared(int) GpuContext.shared(0)} is used.
+	 *     {@link GpuContext#shared(int) GpuContext.shared(dev)} is used with
+	 *     {@code dev = Integer.getInteger("juno.cuda.device", 0)}.
 	 * <li>Otherwise {@link CpuMatVec#INSTANCE} is used.
 	 * </ul>
 	 *
@@ -83,8 +87,13 @@ public final class ForwardPassHandlerLoader {
 	static MatVec selectBackend() {
 		boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "false"));
 		if (useGpu && CudaAvailability.isAvailable()) {
-			log.info("JUNO_USE_GPU=true and CUDA detected — using CudaMatVec backend");
-			return new CudaMatVec(GpuContext.shared(0));
+			int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
+			if (dev >= CudaAvailability.deviceCount()) {
+				log.warning("juno.cuda.device=" + dev + " out of range — using CpuMatVec");
+				return CpuMatVec.INSTANCE;
+			}
+			log.info("JUNO_USE_GPU=true and CUDA detected — using CudaMatVec backend (device " + dev + ")");
+			return new CudaMatVec(GpuContext.shared(dev));
 		}
 		log.info("Using CpuMatVec backend (JUNO_USE_GPU=" + useGpu + ", CUDA=" + CudaAvailability.isAvailable() + ")");
 		return CpuMatVec.INSTANCE;

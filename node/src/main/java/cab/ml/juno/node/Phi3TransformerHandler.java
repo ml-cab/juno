@@ -58,9 +58,9 @@ import java.util.logging.Logger;
  *
  * <p>When constructed with {@link CudaMatVec}, fused QKV and fused gate+up weights
  * are dequantised once at load time, split into logical row blocks, uploaded as
- * separate {@link DeviceFloatMatrix} slices, and every projection uses
- * {@link MatVec#sgemv(DeviceFloatMatrix, float[])} — same pattern as
- * {@link LlamaTransformerHandler}.
+ * separate {@link DeviceHalfMatrix} slices, and every projection uses
+ * {@link MatVec#sgemv(DeviceHalfMatrix, float[])} — same pattern as
+ * {@link LlamaTransformerHandler} on GPU.
  * 
  * <pre>
  *   Quantised weight memory (Q4_K, 4.5 bits/weight):
@@ -294,6 +294,22 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			if (m != null && !m.isClosed())
 				m.close();
 		}
+	}
+
+	@Override
+	public void releaseGpuResources() {
+		closeDeviceHalfMatrixArray(attnQDev);
+		closeDeviceHalfMatrixArray(attnKDev);
+		closeDeviceHalfMatrixArray(attnVDev);
+		closeDeviceHalfMatrixArray(woDev);
+		closeDeviceHalfMatrixArray(ffnGateDev);
+		closeDeviceHalfMatrixArray(ffnUpDev);
+		closeDeviceHalfMatrixArray(wDownDev);
+		attnQDev = attnKDev = attnVDev = null;
+		woDev = ffnGateDev = ffnUpDev = wDownDev = null;
+		if (outputProjDev != null && !outputProjDev.isClosed())
+			outputProjDev.close();
+		outputProjDev = null;
 	}
 
 	/** Contiguous row block {@code A[rowStart : rowStart+nRows, 0:cols]} in row-major {@code full}. */

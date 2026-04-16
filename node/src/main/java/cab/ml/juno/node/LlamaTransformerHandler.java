@@ -1,4 +1,7 @@
 /*
+ * Created by Yevhen Soldatov
+ * Initial implementation: 2026
+ *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -101,15 +104,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	// ── Device-resident weight matrices (non-null only when backend is CudaMatVec) ──
 	// Weights are dequantized to float32 once, converted to FP16, and uploaded to GPU
 	// so every forward pass avoids per-call H2D weight transfers (~half the VRAM of FP32).
-	// null on all arrays when backend == CpuMatVec (default CPU path).
-	private final DeviceHalfMatrix[] wqDev;
-	private final DeviceHalfMatrix[] wkDev;
-	private final DeviceHalfMatrix[] wvDev;
-	private final DeviceHalfMatrix[] woDev;
-	private final DeviceHalfMatrix[] wGateDev;
-	private final DeviceHalfMatrix[] wUpDev;
-	private final DeviceHalfMatrix[] wDownDev;
-	private final DeviceHalfMatrix outputProjDev;
+	// null on all arrays when backend == CpuMatVec (default CPU path). Mutable so OOM
+	// during upload can clear GPU path and so {@link #releaseGpuResources()} can free VRAM.
+	private DeviceHalfMatrix[] wqDev;
+	private DeviceHalfMatrix[] wkDev;
+	private DeviceHalfMatrix[] wvDev;
+	private DeviceHalfMatrix[] woDev;
+	private DeviceHalfMatrix[] wGateDev;
+	private DeviceHalfMatrix[] wUpDev;
+	private DeviceHalfMatrix[] wDownDev;
+	private DeviceHalfMatrix outputProjDev;
 
 	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
 	// When non-null, every completed forward pass flushes key/value data into
@@ -245,37 +249,86 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				+ (hasOutputProj ? "with output projection" : "no output projection"));
 
 		// Upload dequantized weights to GPU when a CudaMatVec backend is provided.
-		// This happens once at load time so forward passes avoid per-call H2D transfers.
+		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
+		outputProjDev = null;
 		if (backend instanceof CudaMatVec cuda) {
-			log.info("Uploading dequantized weights to GPU (FP16 cuda-resident)...");
+			log.info("Uploading dequantized weights to GPU (FP16 cuda-resident)…");
 			int H  = cfg.hiddenDim();
 			int KV = cfg.kvDim();
 			int I  = cfg.intermediateSize();
 			int V  = cfg.vocabSize();
-			wqDev    = new DeviceHalfMatrix[L];
-			wkDev    = new DeviceHalfMatrix[L];
-			wvDev    = new DeviceHalfMatrix[L];
-			woDev    = new DeviceHalfMatrix[L];
-			wGateDev = new DeviceHalfMatrix[L];
-			wUpDev   = new DeviceHalfMatrix[L];
-			wDownDev = new DeviceHalfMatrix[L];
-			for (int li = 0; li < L; li++) {
-				wqDev[li]    = cuda.uploadHalf(dequantize(wq[li],   H,  H), H,  H);
-				wkDev[li]    = cuda.uploadHalf(dequantize(wk[li],   KV, H), KV, H);
-				wvDev[li]    = cuda.uploadHalf(dequantize(wv[li],   KV, H), KV, H);
-				woDev[li]    = cuda.uploadHalf(dequantize(wo[li],   H,  H), H,  H);
-				wGateDev[li] = cuda.uploadHalf(dequantize(wGate[li], I, H), I,  H);
-				wUpDev[li]   = cuda.uploadHalf(dequantize(wUp[li],   I, H), I,  H);
-				wDownDev[li] = cuda.uploadHalf(dequantize(wDown[li], H, I), H,  I);
+			DeviceHalfMatrix[] wqD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wkD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wvD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] woD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wGateD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wUpD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wDownD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix outD = null;
+			try {
+				for (int li = 0; li < L; li++) {
+					wqD[li]    = cuda.uploadHalf(dequantize(wq[li],   H,  H), H,  H);
+					wkD[li]    = cuda.uploadHalf(dequantize(wk[li],   KV, H), KV, H);
+					wvD[li]    = cuda.uploadHalf(dequantize(wv[li],   KV, H), KV, H);
+					woD[li]    = cuda.uploadHalf(dequantize(wo[li],   H,  H), H,  H);
+					wGateD[li] = cuda.uploadHalf(dequantize(wGate[li], I, H), I,  H);
+					wUpD[li]   = cuda.uploadHalf(dequantize(wUp[li],   I, H), I,  H);
+					wDownD[li] = cuda.uploadHalf(dequantize(wDown[li], H, I), H,  I);
+				}
+				if (outputProj != null)
+					outD = cuda.uploadHalf(dequantize(outputProj, V, H), V, H);
+				this.wqDev = wqD;
+				this.wkDev = wkD;
+				this.wvDev = wvD;
+				this.woDev = woD;
+				this.wGateDev = wGateD;
+				this.wUpDev = wUpD;
+				this.wDownDev = wDownD;
+				this.outputProjDev = outD;
+				log.info("GPU weight upload complete (FP16).");
+			} catch (IllegalStateException ex) {
+				closeDeviceHalfMatrixArray(wqD);
+				closeDeviceHalfMatrixArray(wkD);
+				closeDeviceHalfMatrixArray(wvD);
+				closeDeviceHalfMatrixArray(woD);
+				closeDeviceHalfMatrixArray(wGateD);
+				closeDeviceHalfMatrixArray(wUpD);
+				closeDeviceHalfMatrixArray(wDownD);
+				if (outD != null)
+					outD.close();
+				String msg = ex.getMessage() == null ? "" : ex.getMessage();
+				if (msg.contains("cudaMalloc")) {
+					log.warning("Llama: insufficient GPU VRAM for FP16-resident weights (" + msg
+							+ "). Using CPU quantised matmul for projections.");
+				} else {
+					throw ex;
+				}
 			}
-			outputProjDev = (outputProj != null)
-					? cuda.uploadHalf(dequantize(outputProj, V, H), V, H)
-					: null;
-			log.info("GPU weight upload complete (FP16).");
-		} else {
-			wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
-			outputProjDev = null;
 		}
+	}
+
+	private static void closeDeviceHalfMatrixArray(DeviceHalfMatrix[] a) {
+		if (a == null)
+			return;
+		for (DeviceHalfMatrix m : a) {
+			if (m != null && !m.isClosed())
+				m.close();
+		}
+	}
+
+	@Override
+	public void releaseGpuResources() {
+		closeDeviceHalfMatrixArray(wqDev);
+		closeDeviceHalfMatrixArray(wkDev);
+		closeDeviceHalfMatrixArray(wvDev);
+		closeDeviceHalfMatrixArray(woDev);
+		closeDeviceHalfMatrixArray(wGateDev);
+		closeDeviceHalfMatrixArray(wUpDev);
+		closeDeviceHalfMatrixArray(wDownDev);
+		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
+		if (outputProjDev != null && !outputProjDev.isClosed())
+			outputProjDev.close();
+		outputProjDev = null;
 	}
 
 	/**

@@ -18,6 +18,8 @@
  */
 package cab.ml.juno.node;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.logging.Logger;
 
 import org.bytedeco.cuda.cublas.cublasContext;
@@ -33,7 +35,9 @@ import org.bytedeco.cuda.global.cudart;
  * {@link #close()} without affecting other code.
  *
  * The cublasContext is shared across all {@link CudaMatVec} calls using the same
- * {@code GpuContext} — cuBLAS handles are thread-safe for concurrent kernel launches.
+ * {@code GpuContext} — concurrent host launches still require external ordering:
+ * {@link #cublasSerializationLock()} is used by {@link CudaMatVec} to serialize
+ * stream binding and kernel execution per context.
  *
  * Uses org.bytedeco (JavaCPP) cuda/cublas.
  *
@@ -53,12 +57,14 @@ public final class GpuContext implements AutoCloseable {
 
     private static final Logger log = Logger.getLogger(GpuContext.class.getName());
 
-    /** Lazily created; {@link #close()} is a no-op on this instance. */
-    private static volatile GpuContext sharedDevice0;
+    /** One shared {@link GpuContext} per device index for the JVM lifetime. */
+    private static final Map<Integer, GpuContext> SHARED_INSTANCES = new HashMap<>();
+    private static final Object SHARED_LOCK = new Object();
 
     private final int deviceIndex;
     private final cublasContext handle;
     private final boolean processShared;
+    private final Object cublasSerialization = new Object();
     private volatile boolean closed = false;
 
     private GpuContext(int deviceIndex, cublasContext handle, boolean processShared) {
@@ -68,25 +74,31 @@ public final class GpuContext implements AutoCloseable {
     }
 
     /**
-     * Process-wide singleton for device {@code 0}: one cuBLAS handle for the JVM.
-     * {@link #close()} does nothing so embedded servers and {@code selectBackend()}
-     * paths do not tear down CUDA under other live handlers.
+     * Mutex for {@code cublasSetStream} / memcpy / GEMV sequences on this handle.
+     * cuBLAS associates a stream with the handle; concurrent threads must not interleave.
+     */
+    Object cublasSerializationLock() {
+        return cublasSerialization;
+    }
+
+    /**
+     * Process-wide singleton per CUDA device: one cuBLAS handle per {@code deviceIndex}.
+     * {@link #close()} does nothing on these instances so embedded servers and
+     * {@code selectBackend()} paths do not tear down CUDA under other live code.
      *
-     * @throws IllegalArgumentException if {@code deviceIndex != 0} (extend when needed)
+     * @param deviceIndex 0-based CUDA device (must be {@code < cudaGetDeviceCount()})
      */
     public static GpuContext shared(int deviceIndex) {
-        if (deviceIndex != 0)
-            throw new IllegalArgumentException("GpuContext.shared currently supports device 0 only");
-        GpuContext existing = sharedDevice0;
-        if (existing != null && !existing.closed)
-            return existing;
-        synchronized (GpuContext.class) {
-            existing = sharedDevice0;
+        if (deviceIndex < 0)
+            throw new IllegalArgumentException("deviceIndex must be non-negative: " + deviceIndex);
+        synchronized (SHARED_LOCK) {
+            GpuContext existing = SHARED_INSTANCES.get(deviceIndex);
             if (existing != null && !existing.closed)
                 return existing;
-            sharedDevice0 = create(deviceIndex, true);
-            log.info("GpuContext.shared(0) — installed process-wide GPU context");
-            return sharedDevice0;
+            GpuContext created = create(deviceIndex, true);
+            SHARED_INSTANCES.put(deviceIndex, created);
+            log.info("GpuContext.shared(" + deviceIndex + ") — installed process-wide GPU context");
+            return created;
         }
     }
 

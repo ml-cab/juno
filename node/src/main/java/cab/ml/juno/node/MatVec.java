@@ -1,4 +1,7 @@
 /*
+ * Created by Yevhen Soldatov
+ * Initial implementation: 2026
+ *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,7 +49,8 @@ package cab.ml.juno.node;
  * <li>Returns a new {@code float[]} of length {@code rows}.
  * <li>Throws {@link IllegalArgumentException} if dimensions are inconsistent.
  * <li>Thread-safe: implementations may be called concurrently for different
- * requests (each call is self-contained with its own device memory).
+ * requests. {@link CudaMatVec} uses per-thread device scratch and CUDA streams while
+ * serializing cuBLAS work on a shared {@link GpuContext} lock.
  * </ul>
  */
 public interface MatVec {

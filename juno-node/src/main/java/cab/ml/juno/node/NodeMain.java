@@ -26,6 +26,7 @@ import java.util.logging.Logger;
  *   -Dnode.port=<port>          required
  *   -Dmodel.path=<modelPath>    optional (if missing, runs with dummy handler)
  *   -DJUNO_USE_GPU=<true|false> optional, defaults to true
+ *   -Djuno.cuda.device=<0..N-1> optional CUDA device index for {@link cab.ml.juno.node.GpuContext#shared(int)}
  *
  * Example:
  *   java -Dnode.id=node-1 -Dnode.port=9092 -Dmodel.path=/models/model.gguf \

@@ -1,5 +1,13 @@
 ## Status
 
+**Session 27** — GPU lifecycle, multi-device shared contexts, CUDA streams, Llama VRAM fallback, docs.
+
+- **`ForwardPassHandler.releaseGpuResources()`** — default no-op; **`LlamaTransformerHandler`** and **`Phi3TransformerHandler`** close all **`DeviceHalfMatrix`** buffers. **`EmbeddedNodeServer`** invokes it on shard reload, load failure, and **`unloadShard`** (then swaps in **`StubForwardPassHandler`**).
+- **`GpuContext.shared(int)`** — one process-wide **`GpuContext`** per CUDA device index (map + lock); **`close()`** remains a no-op for shared instances. **`ForwardPassHandlerLoader.selectBackend()`** and **`EmbeddedNodeServer`** honour **`-Djuno.cuda.device=N`**, validated against **`CudaAvailability.deviceCount()`**.
+- **`CudaMatVec`** — per-thread **non-blocking CUDA stream**; **`cublasSetStream_v2`** + **`cudaMemcpyAsync`** for resident FP32/FP16 **`x`/`y`** transfers; **`synchronized(gpuContext.cublasSerializationLock())`** around stream binding and kernels. Host **`sgemv(float[],…)`** also runs under the same lock.
+- **Llama GPU OOM** — upload wrapped like Phi-3: on **`cudaMalloc`** failure, partial **`DeviceHalfMatrix`** buffers are **`close()`**d and inference falls back to **CPU quantised** matmul for those projections.
+- **Docs/tests:** **`README.md`**, **`docs/arch.md`**, **`GpuContextTest`** (multi-GPU assumption), **`NodeMain`** Javadoc for **`juno.cuda.device`**.
+
 All modules build and all tests pass. Verified end-to-end with:
 - TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
 - TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile
@@ -20,7 +28,7 @@ All modules build and all tests pass. Verified end-to-end with:
 
 **Tests:** `CudaMatVecBackendTest.device_half_matrix_sgemv_matches_host_path` (512×512) anchors FP16 resident correctness vs `LlamaTransformerHandler.matVec`.
 
-**JFR:** `MatVecEvent.backend` **`cuda-resident-fp16`** labels the Phi FP16 device path (distinct from **`cuda-resident`** FP32 weights on `LlamaTransformerHandler`).
+**JFR:** `MatVecEvent.backend` **`cuda-resident-fp16`** labels the Phi FP16 device path. (As of session 27, Llama GPU resident weights also use **`cuda-resident-fp16`**; **`cuda-resident`** remains for **`DeviceFloatMatrix`** / tests.)
 
 **Session 25** — Code quality: dead code removed, test helpers moved to test scope, docs fully updated.
 
