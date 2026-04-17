@@ -1,25 +1,20 @@
 # LoRA Fine-Tuning in Juno
 
-Parameter-Efficient Fine-Tuning for LLaMA-family models, implemented entirely in
-Java. No Python, no PEFT library, no separate training process — the same node
-that serves inference can be fine-tuned with a few API calls.
+Parameter-Efficient Fine-Tuning for LLaMA-family models, implemented entirely in Java. No Python, no PEFT library, no separate training process.
 
 ---
 
 ## How it works
 
-For each frozen weight matrix **W** (e.g. the query projection `wq`), LoRA
-inserts two small trainable matrices **A** (rank × inDim) and **B** (outDim × rank):
+For each frozen weight matrix **W**, LoRA inserts two small trainable matrices **A** (rank × inDim) and **B** (outDim × rank):
 
 ```
 W_effective = W + (alpha/rank) × B × A
 ```
 
-**A** is initialised ~N(0, 0.01). **B** starts at zero, so the adapter has zero
-effect at the beginning of training. Only **A** and **B** are trained; the frozen
-**W** weights are never modified.
+**A** is initialised ~N(0, 0.01). **B** starts at zero. Only **A** and **B** are trained; **W** is never modified.
 
-For `rank=8` applied to `wq` and `wv` across all 22 layers of TinyLlama-1.1B:
+For `rank=8` on `wq` and `wv` across all 22 layers of TinyLlama-1.1B:
 
 | | Frozen | LoRA |
 |---|---|---|
@@ -29,53 +24,108 @@ For `rank=8` applied to `wq` and `wv` across all 22 layers of TinyLlama-1.1B:
 
 ---
 
-## Quick start
+## Quick start — training
+
+```bash
+./juno lora --model-path /path/to/TinyLlama.Q4_K_M.gguf
+```
+
+**REPL commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/train <text>` | Fine-tune on inline text (freeform) |
+| `/train-file <path>` | Fine-tune on a text file (auto-chunked into ≤128-token pieces) |
+| `/train-qa <question> A: <answer>` | Train a single Q&A fact with auto-generated phrasings |
+| `/save` | Save adapter to `--lora-path` |
+| `/reset` | Reinitialise adapters to zero |
+| `/status` | Rank, α, steps trained, checkpoint path |
+| `/merge-hint` | Explain offline merge into GGUF |
+| `/help` | Command reference |
+
+**`/train-qa` — Q&A fact training:**
+
+The command is designed for single factual associations like name, role, or domain facts:
+
+```
+you > /train-qa What is my name? A: Dima
+```
+
+Auto-generates 4 phrasings and formats them with the correct chat template for the model:
+
+```
+[TRACE] ── formatted training text (repr) ─────────────────
+<|user|>↵
+What is my name?</s>↵
+<|assistant|>↵
+Dima</s>↵
+<|user|>↵
+What is my name?</s>↵     ← repeated for emphasis
+<|assistant|>↵
+Dima</s>↵
+<|user|>↵
+Can you tell me: What is my name?</s>↵
+<|assistant|>↵
+Dima</s>↵
+<|user|>↵
+Please answer: What is my name?</s>↵
+<|assistant|>↵
+Dima</s>↵
+[TRACE] ── end training text ───────────────────────────────
+[TRACE] token count (excl. BOS): 121
+```
+
+**Loss targets:** below ~0.5 for reliable recall; above ~1.5 the answer may be inconsistent. Run the same pair 2–3 times or increase `--lora-steps-qa` to drive loss lower.
+
+**Chat template must match.** The `[TRACE] model type (chat template key)` line at REPL startup shows which template was detected. The same key must appear at inference. If they differ, the model will not recall trained facts. Rename the model file to include the architecture keyword (`tinyllama`, `llama-3`, `mistral`, `phi-3`, `gemma`).
+
+---
+
+## Quick start — inference with a trained adapter
+
+Trained adapters can be applied in three modes without entering the training REPL:
+
+**`local` mode (single JVM):**
+```bash
+./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+```
+
+**`cluster` mode (forked JVMs, real gRPC):**
+```bash
+./juno --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+```
+
+**AWS deployed cluster:**
+```bash
+./launcher.sh juno-deploy.sh setup \
+  --lora-play /absolute/path/to/model.lora \
+  --model-url https://...
+```
+
+See `docs/howto.md` → AWS section for the full deployment flow.
+
+---
+
+## Programmatic API
 
 ```java
-// 1. Load the base model
-GgufReader r = GgufReader.open(Path.of("TinyLlama.Q4_K_M.gguf"));
-LlamaConfig cfg = LlamaConfig.from(r);
-ShardContext ctx = new ShardContext("node-1", 0, cfg.numLayers(),
-                                    true, true, cfg.vocabSize(),
-                                    cfg.hiddenDim(), cfg.numHeads());
-
-// 2. Create LoRA adapters (wq + wv on all layers, rank=8)
+// 1. Load base model
 LoraAdapterSet adapters = LoraAdapterSet.qv(cfg, 8, 8f, new Random(42));
-
-// 3. Load the handler
 LoraTrainableHandler handler = LoraTrainableHandler.load(
     Path.of("TinyLlama.Q4_K_M.gguf"), ctx, adapters);
 
-// 4. Training loop
+// 2. Train
 LoraAdamOptimizer opt = LoraAdamOptimizer.defaults(1e-4);
-
 for (int step = 0; step < 1000; step++) {
-    int[] tokens = tokenize(nextTrainingDoc());   // your tokeniser
     float loss = handler.trainStep(tokens, opt);
-    System.out.printf("step=%d  loss=%.4f%n", step, loss);
 }
 
-// 5. Save checkpoint
+// 3. Save
 adapters.save(Path.of("my-finetune.lora"));
-```
 
-### Resuming training
-
-```java
-// Load base model exactly as before, then load the saved adapter weights
-LoraAdapterSet adapters = LoraAdapterSet.load(Path.of("my-finetune.lora"));
-LoraTrainableHandler handler = LoraTrainableHandler.load(modelPath, ctx, adapters);
-LoraAdamOptimizer opt = LoraAdamOptimizer.defaults(1e-4);
-opt.reset();  // ← always reset after loading; clears stale momentum buffers
-```
-
-### Inference with a trained adapter
-
-```java
-// The handler implements ForwardPassHandler — just use it like any other handler
-ForwardRequest req = ForwardRequest.withTokens("req-1", new int[]{1, 2, 3}, 0);
-ForwardResult result = handler.forward(req, ctx);
-float[] logits = result.logits();
+// 4. Load for inference only (no optimizer needed)
+LoraAdapterSet playAdapters = LoraAdapterSet.load(Path.of("my-finetune.lora"));
+ForwardPassHandler h = ForwardPassHandlerLoader.load(modelPath, ctx, backend, playAdapters);
 ```
 
 ---
@@ -90,42 +140,31 @@ float[] logits = result.logits();
 | `LoraAdapterSet.java` | Collection indexed by (layer, projection), binary checkpoint format |
 | `LoraAdamOptimizer.java` | Per-adapter Adam with bias correction; weight decay on A only |
 | `LoraTrainableHandler.java` | Full training handler: frozen inference + training backward pass |
+| `ForwardPassHandlerLoader.java` | `load(..., LoraAdapterSet)` overload for inference-only adapter application |
 
-### Where to apply LoRA
+### How `--lora-play` routes through the stack
 
-The `qv()` factory applies LoRA to **wq** and **wv** — the standard configuration
-from the original paper (Hu et al. 2021). You can also add **wk** and **wo**:
-
-```java
-LoraAdapterSet adapters = new LoraAdapterSet();
-int rank = 8;
-float alpha = 8f;
-Random rng = new Random(42);
-for (int li = 0; li < cfg.numLayers(); li++) {
-    adapters.add(li, "wq", new LoraAdapter(rank, cfg.hiddenDim(), cfg.hiddenDim(), alpha, rng));
-    adapters.add(li, "wk", new LoraAdapter(rank, cfg.hiddenDim(), cfg.kvDim(),    alpha, rng));
-    adapters.add(li, "wv", new LoraAdapter(rank, cfg.hiddenDim(), cfg.kvDim(),    alpha, rng));
-    adapters.add(li, "wo", new LoraAdapter(rank, cfg.hiddenDim(), cfg.hiddenDim(), alpha, rng));
-}
 ```
-
-Adding wk and wo roughly doubles training parameters but rarely improves results
-significantly. Start with qv-only.
+ConsoleMain (--lora-play PATH)
+    │
+    ├── local mode: LoraAdapterSet.load(path)
+    │                    └── ForwardPassHandlerLoader.load(model, ctx, backend, adapters)
+    │                              └── LoraTrainableHandler (inference-only, no optimizer)
+    │
+    └── cluster mode: ClusterHarness.withLoraPlay(path)
+                           └── launchNode(): -Djuno.lora.play.path=PATH injected per JVM
+                                    └── EmbeddedNodeServer.loadShard()
+                                             └── LoraAdapterSet.load(Path.of(property))
+                                             └── ForwardPassHandlerLoader.load(..., adapters)
+```
 
 ### Rank selection
 
 | rank | Parameters (TinyLlama qv) | When to use |
 |---|---|---|
-| 4 | ~360K | Quick experiments, minimal regularisation |
-| 8 | ~720K | General fine-tuning (recommended default) |
+| 4 | ~360K | Quick experiments |
+| 8 | ~720K | General fine-tuning (recommended) |
 | 16 | ~1.4M | Complex style/domain adaptation |
-| 64 | ~5.8M | Approaches full fine-tuning; rarely needed |
-
-### Alpha and scale
-
-`scale = alpha / rank`. Common practice: set `alpha = rank` (gives scale = 1.0).
-Some implementations use `alpha = 2 × rank` (scale = 2.0) as a warm-start boost.
-The value matters much less than rank.
 
 ---
 
@@ -133,142 +172,42 @@ The value matters much less than rank.
 
 ### Truncated BPTT
 
-Gradients do NOT flow backward through the KV-cache entries from earlier sequence
-positions. This is intentional: it avoids O(seqLen²) backward work while having
-negligible effect on LoRA training quality in practice. For most fine-tuning tasks
-(instruction following, style adaptation, domain adaptation) truncated BPTT
-converges to the same loss as full BPTT.
-
-If you need full BPTT (e.g. training on very long documents where long-range
-context is critical), the architecture supports it — you would store the attention
-weights for ALL positions and sum gradients across them in `backwardLayer`. This
-is a known extension point.
+Gradients do not flow backward through KV-cache entries from earlier positions. This avoids O(seqLen²) backward work with negligible effect on LoRA quality for most tasks.
 
 ### Quantised frozen weights in backward
 
-The transpose matVec in `backwardLayer` dequantises the frozen weight matrices
-one row at a time. This means:
-
-- **Memory**: O(hiddenDim) extra temporary allocation per transpose call, not
-  O(model). A 22-layer TinyLlama fine-tune peak extra allocation is ~8MB.
-- **Speed**: Each backward pass dequantises ~7 matrices per layer, each O(H²) or
-  O(H×I). For TinyLlama at sequence length 16: ~300ms per step on a single CPU
-  core. With a GPU this drops to ~10ms.
-- **Correctness**: The same block-structure logic used in forward inference is used
-  in the transpose path. Adjointness tests verify they are consistent.
+The transpose matVec in `backwardLayer` dequantises frozen weights one row at a time: O(hiddenDim) peak extra allocation per layer, not O(model).
 
 ### Weight decay
 
-Weight decay (L2 regularisation) is applied only to **A**, not **B**. This is
-deliberate: B starts at zero and its gradient is proportional to the adapter's
-activation magnitude. Applying weight decay to B would counteract learning from
-scratch, which is especially harmful early in training.
-
----
-
-## Testing checklist
-
-Run these in order. Each one validates a prerequisite for the next.
-
-### ✅ 1. `LoraAdapterTest` — numerical gradient check
-
-The most important test in the suite. Verifies the backward pass is
-mathematically correct via finite differences.
-
-```
-mvn test -Dtest=LoraAdapterTest
-```
-
-**If gradA fails but gradB passes**: the outer-product term in gradA has an index
-transposition. Check `a[r * inDim + j]` vs `a[j * rank + r]`.
-
-**If all gradients are zero**: B is zero (expected at construction); use
-`makeNonZero()` pattern (set B to small random values before running gradient
-check).
-
-**If gradients are 2×**: `zeroGrad()` was not called before backward.
-
-### ✅ 2. `LoraAdapterSetTest` — round-trip serialisation
-
-Verifies that saving and loading a checkpoint preserves weights bit-exactly.
-
-```
-mvn test -Dtest=LoraAdapterSetTest
-```
-
-**Watch for**: endianness bugs in DataOutputStream/DataInputStream. A corrupt
-checkpoint will show float values that are garbage but not NaN (Java's endianness
-issues produce wrong-magnitude values, not exceptions).
-
-### ✅ 3. `LoraAdamOptimizerTest` — update direction and weight decay
-
-Verifies gradient descent direction and that weight decay doesn't affect B.
-
-```
-mvn test -Dtest=LoraAdamOptimizerTest
-```
-
-**Watch for**: if loss doesn't decrease during training, first check that
-parameters are moving in the correct direction (negative gradient direction). This
-test verifies that.
-
-### ✅ 4. `LoraTrainableHandlerTest` — transpose matVec and adjointness
-
-The **adjointness test** is the most useful test in this class:
-
-```
-dot(A × x, v) == dot(A^T × v, x)
-```
-
-This holds for any matrix regardless of quantisation format. If this fails, the
-block offsets in the transpose matVec implementation are wrong.
-
-### ✅ 5. End-to-end loss decrease (manual)
-
-After all unit tests pass, run a real fine-tune on a 16-token sequence for 50
-steps and verify loss decreases:
-
-```java
-// Expected: loss starts near log(vocabSize) ≈ 10.4 for TinyLlama
-// and decreases to < 5.0 within 50 steps on a repeated token sequence
-float[] losses = new float[50];
-for (int i = 0; i < 50; i++)
-    losses[i] = handler.trainStep(new int[]{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}, opt);
-assert losses[49] < losses[0] * 0.8f;
-```
-
-If loss is flat: check that the LoRA adapter's `b` matrix is non-zero (it starts
-at zero; it needs at least one gradient step to leave zero). After step 1, B will
-be non-zero and the loss should start decreasing.
-
-If loss diverges: learning rate is too high. Try 1e-5 instead of 1e-4.
+Applied only to **A**, not **B**. B starts at zero and applying decay to it would counteract learning from scratch.
 
 ---
 
 ## Common pitfalls
 
-### "`optimizer.step()` called but loss doesn't change"
+**`/train-qa` trains the typo.**
+If you type `whatos my name` the model learns that exact string. The model may still generalize (because 4 phrasings are generated), but clean spelling in the question gives more reliable results.
 
-`optimizer.step()` is called **inside** `trainStep()`. Do not call it again from
-outside — you would apply a second Adam step with zero gradients (because
-`zeroAllGrads` runs at the start of the next `trainStep`).
+**Loss > 1.5 after training.**
+Run the same `/train-qa` command 2–3 more times (adapters warm up across runs) or increase `--lora-steps-qa 50`.
 
-### "Loss is constant at log(vocabSize)"
+**Loss is constant at ~log(vocabSize).**
+B starts at zero so the LoRA delta is zero for the first forward pass. After the first backward + Adam step B becomes non-zero and loss will begin moving. If it's still constant after step 2, check `loraAdapters.get(li, proj)` is returning non-null.
 
-B starts at zero so the LoRA delta is exactly zero for the first forward pass.
-After the first backward + Adam step, B becomes non-zero and the loss will begin
-moving. If it's still constant after step 2, check that `loraAdapters.get(li, proj)`
-is returning non-null (the adapter is actually registered for that layer/proj).
+**`--lora-play` answered wrong.**
+Check `[TRACE] model type` at startup. If it shows `chatml` but your model is TinyLlama, the template mismatch means training and inference see different token sequences — the model literally cannot recall facts trained under a different template. Rename the file to include `tinyllama`.
 
-### "Memory grows during training"
+**Checkpoint loads but inference output is random.**
+After `LoraAdapterSet.load()`, always call `opt.reset()` before resuming training (clears stale momentum buffers). For inference-only use, no optimizer is attached at all.
 
-The training KV cache is a local variable inside `trainStep()` — it is allocated
-fresh each call and GC'd after. If memory grows, the inference KV cache is the
-likely culprit: it grows per request ID and is never evicted. For training-only
-usage, use a fixed request ID and the cache stays bounded.
+---
 
-### "Checkpoint loads but inference output is random"
+## Testing checklist
 
-After `LoraAdapterSet.load()`, the adapters have correct weights but
-`LoraAdamOptimizer.reset()` must be called before resuming training. For
-inference only, the optimizer state doesn't matter at all.
+```bash
+mvn test -Dtest=LoraAdapterTest          # numerical gradient check (most important)
+mvn test -Dtest=LoraAdapterSetTest       # round-trip serialisation
+mvn test -Dtest=LoraAdamOptimizerTest    # update direction + weight decay
+mvn test -Dtest=LoraTrainableHandlerTest # adjointness: dot(A×x,v) == dot(A^T×v,x)
+```

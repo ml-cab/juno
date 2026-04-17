@@ -124,7 +124,7 @@ parse_options() {
       --byteOrder | --byte-order | --byteorder) BYTE_ORDER="${2^^}"; shift 2 ;;
       --region)          REGION="$2";         shift 2 ;;
       --jfr)             JFR_DURATION="$2";   shift 2 ;;
-      --lora-play)       LORA_PLAY_PATH="$2"; shift 2 ;;
+      --lora-play)       LORA_PLAY_PATH=$(realpath "$2" 2>/dev/null || echo "$2"); shift 2 ;;
       *)                 die "Unknown option: $1 (run without args for usage)" ;;
     esac
   done
@@ -767,7 +767,12 @@ setup() {
   log "Region : $REGION"
   log "Nodes  : ${NODE_COUNT} × ${INSTANCE_TYPE}  coordinator=${COORDINATOR_MODE}"
   [[ -n "${JFR_DURATION:-}"   ]] && log "JFR    : duration=${JFR_DURATION}"
-  [[ -n "${LORA_PLAY_PATH:-}" ]] && log "LoRA   : play-back=${LORA_PLAY_PATH}"
+  if [[ -n "${LORA_PLAY_PATH:-}" ]]; then
+    if [[ ! -f "$LORA_PLAY_PATH" ]]; then
+      die "✖ --lora-play file not found: '${LORA_PLAY_PATH}'\n  Pass an absolute path or run the command from the directory containing the file."
+    fi
+    log "LoRA   : play-back=${LORA_PLAY_PATH}"
+  fi
   echo ""
 
   # ── Resolve Ubuntu 22.04 LTS AMI ────────────────────────────
@@ -887,10 +892,12 @@ _launch_nodes() {
 
     local USER_DATA
     USER_DATA=$(_build_node_userdata "$NODE_IDX" "$IS_COORDINATOR_NODE")
-    local USER_DATA_B64
-    USER_DATA_B64=$(printf '%s' "$USER_DATA" | base64 -w 0)
+    local USER_DATA_FILE
+    USER_DATA_FILE=$(mktemp /tmp/juno-userdata-XXXXXX.sh)
+    printf '%s' "$USER_DATA" > "$USER_DATA_FILE"
 
     log "  Launching node $i / ${NODE_COUNT}…"
+    log "  [TRACE] user-data size: $(wc -c < "$USER_DATA_FILE") bytes  first-line: $(head -1 "$USER_DATA_FILE")"
     local LAUNCH_ERR; LAUNCH_ERR=$(mktemp)
     local LAUNCH_OUT
     LAUNCH_OUT=$(aws ec2 run-instances \
@@ -901,7 +908,7 @@ _launch_nodes() {
       --subnet-id "$SUBNET_ID" \
       --security-group-ids "$SG_ID" \
       --associate-public-ip-address \
-      --user-data "$USER_DATA_B64" \
+      --user-data "file://${USER_DATA_FILE}" \
       --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=50,VolumeType=gp3,DeleteOnTermination=true}" \
       --tag-specifications \
         "ResourceType=instance,Tags=[{Key=Name,Value=juno-node-${i}},{Key=Project,Value=juno}]" \
@@ -916,9 +923,10 @@ _launch_nodes() {
           aws ec2 terminate-instances --instance-ids "${INSTANCE_IDS[@]}" \
             --region "$REGION" --output text &>/dev/null || true
         }
+        rm -f "$LAUNCH_ERR" "$USER_DATA_FILE"
         die "Launch aborted."
       }
-    rm -f "$LAUNCH_ERR"
+    rm -f "$LAUNCH_ERR" "$USER_DATA_FILE"
     local IID
     IID=$(echo "$LAUNCH_OUT" | jq -r '.Instances[0].InstanceId')
     INSTANCE_IDS+=("$IID")
@@ -935,8 +943,10 @@ _launch_coordinator_if_separate() {
   log "Launching coordinator (t3.medium)…"
   local COORD_USERDATA
   COORD_USERDATA=$(_build_coordinator_userdata)
-  local COORD_USERDATA_B64
-  COORD_USERDATA_B64=$(printf '%s' "$COORD_USERDATA" | base64 -w 0)
+  local COORD_USERDATA_FILE
+  COORD_USERDATA_FILE=$(mktemp /tmp/juno-userdata-coord-XXXXXX.sh)
+  printf '%s' "$COORD_USERDATA" > "$COORD_USERDATA_FILE"
+  log "  [TRACE] coordinator user-data size: $(wc -c < "$COORD_USERDATA_FILE") bytes"
 
   local LAUNCH_ERR; LAUNCH_ERR=$(mktemp)
   local LAUNCH_OUT
@@ -948,16 +958,17 @@ _launch_coordinator_if_separate() {
     --subnet-id "$SUBNET_ID" \
     --security-group-ids "$SG_ID" \
     --associate-public-ip-address \
-    --user-data "$COORD_USERDATA_B64" \
+    --user-data "file://${COORD_USERDATA_FILE}" \
     --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=20,VolumeType=gp3,DeleteOnTermination=true}" \
     --tag-specifications \
       "ResourceType=instance,Tags=[{Key=Name,Value=juno-coordinator},{Key=Project,Value=juno}]" \
     --region "$REGION" \
     --output json 2>"$LAUNCH_ERR") || {
       echo -e "${RED}  Coordinator launch FAILED:${RESET}"
-      cat "$LAUNCH_ERR" | sed 's/^/    /'; rm -f "$LAUNCH_ERR"
+      cat "$LAUNCH_ERR" | sed 's/^/    /'; rm -f "$LAUNCH_ERR" "$COORD_USERDATA_FILE"
       die "Coordinator launch aborted."
     }
+  rm -f "$LAUNCH_ERR" "$COORD_USERDATA_FILE"
   rm -f "$LAUNCH_ERR"
   COORDINATOR_INSTANCE_ID=$(echo "$LAUNCH_OUT" | jq -r '.Instances[0].InstanceId')
   log "  ✅ Coordinator: $COORDINATOR_INSTANCE_ID"
@@ -999,10 +1010,14 @@ _build_node_userdata() {
   local GIT_VAL="$GIT"
 
   # ── [TRACE] Show exactly what is being baked into the bootstrap script ──────
-  log "  [TRACE] node-${NODE_IDX_VAL} bootstrap params:"
-  log "          grpc_port=${PORT_VAL}  is_coordinator=${IS_COORD_VAL}  dtype=${DTYPE_VAL}"
-  log "          model=${MODEL_FILENAME_VAL}  git=${GIT_VAL}"
-  log "          jfr=${JFR_DURATION_VAL:-<none>}  lora_play=<will be deployed after bootstrap>"
+  # IMPORTANT: must go to stderr (>&2). This function is called as
+  # USER_DATA=$(_build_node_userdata ...) so stdout is captured verbatim as the
+  # cloud-init user-data script. Any log output on stdout would prepend before
+  # #!/bin/bash, causing cloud-init to reject the script as non-multipart.
+  log "  [TRACE] node-${NODE_IDX_VAL} bootstrap params:" >&2
+  log "          grpc_port=${PORT_VAL}  is_coordinator=${IS_COORD_VAL}  dtype=${DTYPE_VAL}" >&2
+  log "          model=${MODEL_FILENAME_VAL}  git=${GIT_VAL}" >&2
+  log "          jfr=${JFR_DURATION_VAL:-<none>}  lora_play=<will be deployed after bootstrap>" >&2
 
   sed -e "s|__NODE_IDX__|${NODE_IDX_VAL}|g" \
       -e "s|__PORT__|${PORT_VAL}|g" \
@@ -1367,56 +1382,66 @@ _scp_lora_to_nodes() {
   [[ -n "${LORA_PLAY_PATH:-}" ]] || return 0
 
   if [[ ! -f "$LORA_PLAY_PATH" ]]; then
-    warn "  [TRACE] --lora-play '${LORA_PLAY_PATH}' not found locally — skipping SCP"
-    warn "          Nodes will fail to load adapters. Provide an existing local path."
+    warn "  ✖ --lora-play file not found: '${LORA_PLAY_PATH}'"
+    warn "    (path is resolved at parse time relative to your working directory)"
+    warn "    Skipping LoRA deployment — nodes will run the base model."
     return 0
   fi
 
   local LORA_BASENAME
   LORA_BASENAME="$(basename "$LORA_PLAY_PATH")"
   local REMOTE_LORA_PATH="/opt/juno/models/${LORA_BASENAME}"
-  local SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes -i $SSH_KEY_FILE"
+  local SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes \
+-o ServerAliveInterval=10 -o ServerAliveCountMax=3 -i $SSH_KEY_FILE"
 
   log "  Deploying LoRA adapter to all nodes: ${LORA_BASENAME}"
   log "  [TRACE] local source  : ${LORA_PLAY_PATH}"
   log "  [TRACE] remote target : ${REMOTE_LORA_PATH}"
 
+  # ── Per node: SCP → stop juno-node → patch node.env → start juno-node ───────
+  # We stop BEFORE patching so the new start always picks up the correct env.
+  # juno-node starts in ~2s (gRPC bind only; model loads on the coordinator's
+  # loadShard RPC). So the synchronous stop+start completes quickly per node.
   for ID in "${INSTANCE_IDS[@]}"; do
     local IP="${INSTANCE_IPS[$ID]}"
-    log "  [TRACE] SCP → ${IP}:${REMOTE_LORA_PATH}"
+    log "  [TRACE] deploying to ${IP}"
 
-    # Upload
+    # 1. Upload .lora file
     scp $SSH_OPTS "$LORA_PLAY_PATH" "ubuntu@${IP}:/tmp/${LORA_BASENAME}" 2>/dev/null \
       || { warn "  SCP failed to ${IP} — node will run without LoRA"; continue; }
+    log "  [TRACE] ${IP}: SCP done"
 
-    # Move into /opt/juno/models/ (root-owned) and patch node.env
-    ssh $SSH_OPTS "ubuntu@${IP}" "
-      sudo mv /tmp/${LORA_BASENAME} ${REMOTE_LORA_PATH}
-      sudo chmod 644 ${REMOTE_LORA_PATH}
-      # Patch or append JUNO_LORA_PLAY_PATH in node.env
-      if sudo grep -q '^JUNO_LORA_PLAY_PATH=' /etc/juno/node.env 2>/dev/null; then
-        sudo sed -i 's|^JUNO_LORA_PLAY_PATH=.*|JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}|' /etc/juno/node.env
-      else
-        echo 'JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}' | sudo tee -a /etc/juno/node.env > /dev/null
-      fi
-      echo '[TRACE] node.env after patch:'
-      sudo cat /etc/juno/node.env
-      # Restart juno-node so the new JUNO_LORA_PLAY_PATH is picked up
-      sudo systemctl restart juno-node
-      echo '[TRACE] juno-node restarted'
-    " 2>/dev/null \
-      && log "  ✅ LoRA deployed and juno-node restarted on ${IP}" \
-      || warn "  Could not patch node.env on ${IP}"
+    # 2. Stop juno-node (synchronous — ensures old process is gone before we patch env)
+    ssh $SSH_OPTS "ubuntu@${IP}" "sudo systemctl stop juno-node" 2>/dev/null \
+      || warn "  [TRACE] ${IP}: juno-node was not running (ok for first deploy)"
+    log "  [TRACE] ${IP}: juno-node stopped"
+
+    # 3. Move .lora into place + patch node.env
+    ssh $SSH_OPTS "ubuntu@${IP}" \
+      "sudo mv /tmp/${LORA_BASENAME} ${REMOTE_LORA_PATH} \
+    && sudo chmod 644 ${REMOTE_LORA_PATH} \
+    && if sudo grep -q '^JUNO_LORA_PLAY_PATH=' /etc/juno/node.env 2>/dev/null; then \
+         sudo sed -i 's|^JUNO_LORA_PLAY_PATH=.*|JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}|' /etc/juno/node.env; \
+       else \
+         echo 'JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}' | sudo tee -a /etc/juno/node.env >/dev/null; \
+       fi \
+    && echo '[TRACE] node.env JUNO_LORA_PLAY_PATH line:' \
+    && sudo grep 'JUNO_LORA_PLAY_PATH' /etc/juno/node.env" \
+      2>/dev/null \
+      && log "  [TRACE] ${IP}: node.env patched" \
+      || { warn "  Could not patch node.env on ${IP}"; continue; }
+
+    # 4. Start juno-node (synchronous — returns once the service is active/failed)
+    ssh $SSH_OPTS "ubuntu@${IP}" "sudo systemctl start juno-node" 2>/dev/null \
+      && log "  ✅ ${IP}: juno-node started with LoRA" \
+      || warn "  ${IP}: juno-node start failed — check journalctl -u juno-node"
   done
 
-  # Brief pause for nodes to finish restarting before coordinator sends loadShard
-  log "  Waiting 10s for juno-node services to restart…"
-  sleep 10
   log "  ✅ LoRA deployment complete — remote path: ${REMOTE_LORA_PATH}"
+  log "  [TRACE] LORA_PLAY_PATH updated → ${REMOTE_LORA_PATH}"
 
-  # Export so _write_cluster_env_and_start_coordinator uses the remote path
+  # Update global so _write_cluster_env_and_start_coordinator writes the remote path
   LORA_PLAY_PATH="$REMOTE_LORA_PATH"
-  log "  [TRACE] LORA_PLAY_PATH updated to remote path for cluster-nodes.env: ${LORA_PLAY_PATH}"
 }
 scan_regions() {
   local VCPUS_PER_NODE="${INSTANCE_VCPUS[$INSTANCE_TYPE]:-2}"
