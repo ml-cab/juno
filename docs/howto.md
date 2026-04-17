@@ -16,6 +16,7 @@ Requires a JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
 |---------|-------------|
 | `local` | In-process REPL — all transformer shards in one JVM, no forking, no gRPC |
 | `lora` | LoRA fine-tuning REPL — single in-process JVM, adapter persisted to `.lora` file |
+| `merge` | Bake a trained `.lora` adapter into a new standalone GGUF — no sidecar needed at inference time |
 | *(no command)* | 3-node cluster — forked JVMs, real gRPC. Default `--pType pipeline`; use `--pType tensor` for AllReduce mode |
 | `test` | 8 automated real-model smoke checks (6 pipeline + 2 tensor), exits 0 (all pass) or 1 (any fail). Use `--pType pipeline\|tensor\|all` to filter |
 
@@ -175,7 +176,7 @@ MODEL_PATH=/path/to/model.gguf LORA_RANK=8 LORA_LR=0.0001 LORA_STEPS=50 ./juno l
 | `/save` | Save adapter checkpoint to `--lora-path` |
 | `/reset` | Reinitialise adapters to B=0 (clears all training) |
 | `/status` | Show adapter info: rank, α, parameter count, steps trained, checkpoint path |
-| `/merge-hint` | Explain how to bake adapters into a new GGUF (offline merge) |
+| `/merge-hint` | Show the `juno merge` command to bake adapter into a standalone GGUF |
 | `/help` | Show REPL command reference |
 | *(regular input)* | Chat inference with current adapter applied |
 
@@ -233,6 +234,64 @@ expect ~2–5 seconds per gradient step for short sequences (7–10 tokens). Lon
 sequences scale linearly with token count. Use `--lora-steps 5` for quick iteration
 and `--lora-steps 100` when convergence matters. GPU training (via `CudaMatVecBackend`)
 would be 20–50× faster.
+
+---
+
+### `merge` — bake a LoRA adapter into a standalone GGUF
+
+Writes a new GGUF where the LoRA-patched projection tensors (wq/wv on every
+layer) are stored as **F32** for full precision. All other tensors are copied
+verbatim in their original quantised encoding. The resulting file needs no
+`.lora` sidecar at inference time and loads with `./juno local` or `./juno`
+(cluster) like any other model.
+
+```bash
+# Default: reads <model>.lora, writes <model>-merged.gguf
+./juno merge --model-path /path/to/TinyLlama.Q4_K_M.gguf
+
+# Explicit paths
+./juno merge --model-path /path/to/model.gguf \
+             --lora-path  /adapters/my.lora   \
+             --output     /path/to/merged.gguf
+
+# Larger heap for big models (rule of thumb: 2× model file size)
+./juno merge --model-path /path/to/Mistral-7B.gguf --heap 12g
+```
+
+**Why the merged file is larger than the source:**
+
+The LoRA delta per element (~6×10⁻⁴) is smaller than Q4_K quantisation noise
+(~3×10⁻³). Re-quantising the merged weights back to Q4_K would erase the training
+entirely — the model would answer as if it had never been fine-tuned. F32 storage
+for the 44 patched tensors is the correct trade-off. For TinyLlama 1.1B Q4_K_M
+(667 MB), the merged file is approximately 1 GB.
+
+**Full workflow:**
+
+```bash
+# 1. Fine-tune
+./juno lora --model-path /models/tinyllama.gguf
+#   you > /train-qa "What is your name?" A: "Juno"
+#   you > /save
+#   ✔ Saved → /models/tinyllama.lora
+
+# 2. Merge (produces /models/tinyllama-merged.gguf, ~1 GB)
+./juno merge --model-path /models/tinyllama.gguf
+
+# 3. Run — no .lora file needed
+./juno local --model-path /models/tinyllama-merged.gguf
+#   you > what is your name?
+#   bot > Juno
+```
+
+**`merge` flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model-path PATH` | — | Source GGUF or llamafile (required) |
+| `--lora-path PATH` | `<model>.lora` | Trained adapter checkpoint |
+| `--output PATH` | `<model>-merged.gguf` | Output path (always plain GGUF, even if source is llamafile) |
+| `--heap SIZE` | `4g` | JVM heap — use at least 2× model file size |
 
 ---
 

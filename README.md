@@ -118,6 +118,10 @@ mvn clean package -DskipTests
 # LoRA fine-tuning REPL (adapter saved to <model>.lora)
 ./juno lora --model-path /path/to/model.gguf --heap 4g
 
+# Merge LoRA adapter into a standalone GGUF (no .lora sidecar needed at runtime)
+# Patched tensors are stored as F32 to preserve precision; output is ~1.5× larger.
+./juno merge --model-path /path/to/model.gguf --heap 4g
+
 # Real-model smoke test — 8 checks, exits 0/1
 ./juno test --model-path /path/to/model.gguf --heap 4g
 
@@ -163,6 +167,15 @@ java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 | `--lora-lr F` | `1e-4` | Adam learning rate |
 | `--lora-steps N` | `50` | Gradient steps per `/train` command |
 
+**`merge` flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model-path PATH` | — | Source GGUF or llamafile (required) |
+| `--lora-path PATH` | `<model>.lora` | Trained adapter checkpoint |
+| `--output PATH` | `<model>-merged.gguf` | Output file (always plain GGUF, even if source is llamafile) |
+| `--heap SIZE` | `4g` | JVM heap — use at least 2× the model file size |
+
 Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `BYTE_ORDER`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `JAVA_HOME`
 
 ---
@@ -179,7 +192,7 @@ Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `BYTE_ORDER`, `MAX_TOKENS
 | `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `EmbeddedNodeServer`, `NodeMain`, `NodeKVCacheAdapter`, `MatVec`, `CpuMatVec`, `CudaMatVec`, `GgufReader`, `LlamaConfig`, `ActivationCodec`, `ActivationBECodec`, `ActivationLECodec`, `ShardContext`, `TensorShardContext`, `LoraAdapter`, `LoraAdapterSet`, `LoraAdamOptimizer`, `LoraTrainableHandler`, `MatVecEvent`, `ForwardPassEvent`, `LoraTrainEvent` |
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | Health monitor, circuit breakers (Resilience4j) |
-| `player` | `ConsoleMain` REPL (`cluster` / `local` / `lora` commands), `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient` |
+| `player` | `ConsoleMain` REPL (`cluster` / `local` / `lora` / `merge` commands), `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `LoraMergeMain` |
 | `juno-node` | Fat jar (`juno-node.jar`). Entry point: `NodeMain` (`cab.ml.juno.node`). Reads `-Dnode.id`, `-Dnode.port`, `-Dmodel.path`, `-DJUNO_USE_GPU`, `-Djuno.byteOrder` from system properties (command-line args still accepted). Prints `READY:<nodeId>:<port>` on startup. Launched by `juno-node.service` systemd unit on AWS nodes. |
 | `juno-master` | Fat jar (`juno-master.jar`). Entry point: `CoordinatorMain` (`cab.ml.juno.master`) — standalone coordinator for remote deployment. Reads node addresses from `JUNO_NODE_ADDRESSES`, model from `JUNO_MODEL_PATH`, and tuning from `JUNO_PTYPE` / `JUNO_HTTP_PORT` / `JUNO_DTYPE` / `JUNO_MAX_QUEUE` / `JUNO_BYTE_ORDER`. No forking, no `ClusterHarness`. Launched by `juno-coordinator.service` on the AWS coordinator host. Integration tests (`InProcessClusterIT`, `ThreeNodeClusterIT`, `TensorParallelClusterIT`, `GpuForwardPassIT`, `ModelLiveRunnerIT`) in package `cab.ml.juno.master`; `ModelLiveRunnerIT` gated behind `-Pintegration` Maven profile. |
 | `metrics` | JFR-based metrics extractor. `JfrMetricsExtractor` (single-file and multi-file merge), `JfrModelMapper`, `JfrPercentiles`, `MetricsSnapshot`, `MetricsWriter`, `ModelsConfig`, `ModelsConfigLoader`, `MetricsMain` (standalone entry point + `extractToJson`/`extractToJsonMerged` facades for programmatic use) |
@@ -286,7 +299,8 @@ Useful analysis patterns:
 - **Configurable activation byte order.** `ActivationCodec` is a zero-overhead static dispatcher: it reads `juno.byteOrder` once at class-load time and branches to either `ActivationBECodec` (big-endian, default) or `ActivationLECodec` (little-endian, native x86 order) for all encode/decode calls. The byte order is propagated consistently across every JVM in a cluster — `ClusterHarness` injects `-Djuno.byteOrder` into every forked node process; `juno-deploy.sh` writes it into `/etc/juno/node.env` for systemd-managed nodes. The cluster health endpoint reports the active byte order; the web console displays a live badge.
 - **KV cache wired to the node-level manager.** `NodeKVCacheAdapter` connects `LlamaTransformerHandler` and `Phi3TransformerHandler` to the `KVCacheManager` (GPU byte-budget LRU + Caffeine W-TinyLFU CPU tier). Every forward pass flushes key/value data write-through into both tiers. If a local entry is evicted under heap pressure, the next forward pass at that position restores it from the manager transparently. `evict(requestId)` propagates to both the local HashMap and both cache tiers, closing the gap that previously made the entire `kvcache` module inert at the node level.
 - **Star AllReduce for tensor parallel.** No inter-node communication. The coordinator collects partial logit vectors from all N nodes and sums them in O(N × vocabSize). Simpler than ring-AllReduce and requires no InfiniBand.
-- **LoRA fine-tuning without touching the base model.** `LoraTrainableHandler` wraps `LlamaTransformerHandler` and adds trainable low-rank adapters (A/B matrices, rank 4–16) on the Q and V projections. The frozen weights stay quantized at all times — backward passes dequantize one block per row via dedicated `transposedQ4K` / `transposedQ5K` / `transposedQ6K` scatter-reduce implementations. Adapters are persisted to a `.lora` binary checkpoint; the GGUF is never modified.
+- **LoRA fine-tuning without touching the base model.** `LoraTrainableHandler` wraps `LlamaTransformerHandler` and adds trainable low-rank adapters (A/B matrices, rank 4–16) on the Q and V projections. The frozen weights stay quantized at all times — backward passes dequantize one block per row via dedicated `transposedQ4K` / `transposedQ5K` / `transposedQ6K` scatter-reduce implementations. Adapters are persisted to a `.lora` binary checkpoint; the GGUF is never modified. To produce a standalone merged model, use `./juno merge` — see **Merge** below.
+- **Native LoRA merge (`juno merge`).** `LoraMerge` writes a new GGUF where the 44 LoRA-patched projection tensors (wq/wv on every layer) are stored as **F32** instead of being re-quantised. This is essential: the typical LoRA delta (~6×10⁻⁴ per element) is smaller than Q4_K quantisation noise (~3×10⁻³), so re-quantising would erase all training. The F32 patched tensors are read by `GgufReader` and `LlamaTransformerHandler` identically to any other F32 tensor — no special-casing in inference. All other tensors (norms, FFN, embeddings, output projection) are copied verbatim in their original quantised form. The merged file is larger than the source (~1 GB for TinyLlama 1.1B Q4_K_M vs 667 MB) but requires no `.lora` sidecar at inference time.
 - **GPT-2 BPE and SentencePiece BPE both supported.** `GgufTokenizer` reads `tokenizer.ggml.model` from GGUF metadata. Value `"gpt2"` activates the GPT-2 / tiktoken path (Llama 3+): space-prefixed words use Ġ (U+0120), and special control tokens are pre-split longest-first before BPE. Any other value (null / `"llama"` / `"llama2"`) uses the SentencePiece path (Llama 1/2, TinyLlama, Mistral, Gemma, Phi-3). No configuration required — detection is automatic at load time.
 - **AWS infrastructure scripted.** `scripts/aws/launcher.sh` is a credential wrapper. `juno-deploy.sh` is a unified cluster lifecycle script (replaces the earlier `juno-infra.sh` / `juno-infra-ft.sh`): hardware is auto-detected during bootstrap — GPU nodes install CUDA and set `JUNO_USE_GPU=true`, CPU nodes skip it. Commands: `setup | start | stop | teardown | status | scan-regions`. Coordinator can be co-located on node 1 (default, free) or launched as a separate t3.medium. State persisted to `~/.juno-deploy-state`; Ctrl+C auto-stops instances before exit. After `setup` the script bootstraps all nodes (~5 min), writes `cluster-nodes.env`, starts the coordinator, and enters the live cluster monitor showing per-node CPU / mem, health, and estimated cost. Web console served at `http://<coordinator>:8080` once cluster is healthy.
 - **JFR metrics extractor.** The `metrics` module scans the project root for `juno-<stem>-*.jfr` files (the optional `juno-` prefix is also accepted for AWS node recordings), maps them to `models.json` entries, extracts counts / durations / p50/p95/p99 percentiles for all five `juno.*` event types, and writes `target/metrics/metrics.json`. For `local` and `cluster` modes this runs automatically on JFR period expiry or exit via `MetricsMain.extractToJson()` / `extractToJsonMerged()`; for `lora`/`test` runs it can be invoked manually with `java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain`.

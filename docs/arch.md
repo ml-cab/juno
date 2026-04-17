@@ -737,10 +737,12 @@ TinyLlama-1.1B wq+wv, rank=8: frozen 1.1B params vs LoRA 720K params.
 | Class | Description |
 |-------|-------------|
 | `LoraAdapter` | Core math unit: `forward(x)`, `backward(gradDelta, x)`, `zeroGrad()` |
-| `LoraAdapterSet` | Keyed by (layerIndex, projectionName). `save(Path)` / `load(Path)` binary checkpoint |
+| `LoraAdapterSet` | Keyed by (layerIndex, projectionName). `save(Path)` / `load(Path)` binary checkpoint. `asMap()` for iteration. |
 | `LoraAdamOptimizer` | Adam with bias correction. Weight decay on A only (not B) |
 | `LoraTrainableHandler` | `ForwardPassHandler` for inference + `trainStep()` for training |
 | `LoraTrainEvent` | JFR event `juno.LoraTrainStep`: step, loss, forward/backward/optimizer ms |
+| `LoraMerge` | GGUF writer: bakes adapter into a new standalone model file |
+| `LoraMergeMain` | CLI entry point for `juno merge` |
 
 **Checkpoint format:** magic `0x4C4F5241` ("LORA"), version 1, per-adapter: key, rank, inDim, outDim, alpha, A weights, B weights.
 
@@ -757,6 +759,38 @@ REPL commands: `/train <text>`, `/train-file <path>`, `/save`, `/reset`, `/statu
 ### transposedMatVec
 
 The backward pass requires `y = A^T × v`. All five quantisation types have parallel scatter-reduce implementations (`IntStream.range().parallel()` with thread-local accumulators). Bug: initial implementation lacked Q5_K/Q6_K cases; fallback was catastrophically slow (17+ hours for 6 tokens). Fixed by adding dedicated `transposedQ5K` / `transposedQ6K`.
+
+### Native Merge (`juno merge`)
+
+`LoraMerge.merge(modelPath, loraPath, outputPath)` produces a new GGUF file where the LoRA-patched projection tensors are stored as **F32** and all other tensors are copied verbatim.
+
+**Why F32 and not re-quantise?**
+
+| Metric | Value |
+|--------|-------|
+| Typical LoRA delta per element | ~6×10⁻⁴ |
+| Q4_K quantisation noise (half-step) | ~3.3×10⁻³ |
+| SNR if re-quantised | **0.18×** — delta erased |
+| F32 precision for same weights | ~10⁻⁷ (SNR ~6000×) |
+
+Re-quantising to Q4_K destroys the delta entirely; the merged model behaves identically to the base model. F32 preserves it. The trade-off is a larger file (~1 GB for TinyLlama 1.1B vs 667 MB Q4_K original).
+
+**GGUF writer flow (5 steps):**
+1. Copy header + KV section verbatim from source (`ggufFileOffset` → `metadataSectionEnd`).
+2. Write new tensor-info section — patched tensors get `type=F32`, others keep original type; all offsets recomputed.
+3. Write 32-byte alignment padding relative to output file position 0.
+4. Data section: patched tensors written as F32 (dequantise → apply delta → write); all others raw bytes transferred verbatim.
+
+Output is always a plain GGUF v3 even when source is a llamafile ZIP polyglot.
+
+**GgufReader additions** required by the writer:
+
+| Method | Description |
+|--------|-------------|
+| `ggufFileOffset()` | Byte position of GGUF header in source file (0 for `.gguf`, >0 for llamafile) |
+| `metadataSectionEnd()` | First byte after the last KV pair — start of tensor-info section |
+| `tensorOrder()` | Tensor names in file order (requires `LinkedHashMap` storage) |
+| `tensorNelems(name)` | Total element count for a tensor |
 
 ---
 
@@ -880,3 +914,6 @@ java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 | 21 | `juno-deploy.sh`: unified AWS lifecycle script, web console in `InferenceApiServer`, verified on eu-north-1 |
 | 22 | Q2_K + Q3_K quantisation support |
 | 23 | Programmatic JFR lifecycle in `ConsoleMain` (local + cluster); `ClusterHarness.withJfr()`; `MetricsMain.extractToJsonMerged()`; `juno-deploy.sh --jfr`; `models.json` fixed |
+| 24 | Configurable activation byte order (`--byteOrder BE\|LE`); `ActivationCodec` static dispatcher; `ActivationBECodec` / `ActivationLECodec`; byte order propagated through `ClusterHarness`, `juno-deploy.sh`, health endpoint |
+| 25 | Code quality: `CyclicForwardPassHandler` moved to test scope, `StubForwardPassHandler` inner class in `EmbeddedNodeServer`, docs sweep |
+| 26 | Native LoRA merge: `LoraMerge`, `LoraMergeMain`, `juno merge` subcommand. Patched tensors written as F32 (re-quantising to Q4_K erases deltas smaller than quantisation noise). `GgufReader` extended with `ggufFileOffset()`, `metadataSectionEnd()`, `tensorOrder()`, `tensorNelems()`, `LinkedHashMap` tensor storage. Three re-quantiser bugs fixed: Q4_K `d = maxRange/63` → `/(63×15)`, Q5_K `/(63×31)`, Q3_K scRaw packing rewritten. |
