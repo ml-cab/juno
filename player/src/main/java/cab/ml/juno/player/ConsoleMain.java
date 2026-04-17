@@ -1,3 +1,5 @@
+// Created by Yevhen Soldatov
+// Initial implementation: 2026
 /*
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
@@ -256,6 +258,7 @@ public final class ConsoleMain {
 				break;
 			case "--cpu":
 				useGpu = false;
+				break;
 				// ── LoRA ──────────────────────────────────────────────────────────
 			case "--lora":
 				loraMode = true;
@@ -1058,14 +1061,14 @@ public final class ConsoleMain {
 
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		GpuContext gpuCtx = prepareGpuContext();
+		// One CudaMatVec per process — shares the same GpuContext / cuBLAS handle across shards.
+		CudaMatVec cudaMv = (gpuCtx != null) ? new CudaMatVec(gpuCtx) : null;
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
-			if (gpuCtx != null) {
-				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context,
-						new CudaMatVec(gpuCtx)));
-			} else {
+			if (cudaMv != null)
+				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context, cudaMv));
+			else
 				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context));
-			}
 		}
 
 		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
@@ -1077,16 +1080,15 @@ public final class ConsoleMain {
 	}
 
 	private static GpuContext prepareGpuContext() {
-		GpuContext gpuCtx = null;
-		if (useGpu && CudaAvailability.isAvailable())
-			gpuCtx = GpuContext.init(0);
-		else
+		if (!useGpu || !CudaAvailability.isAvailable())
 			return null;
-		final GpuContext gpuCtxRef = gpuCtx;
-		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
-			if (gpuCtxRef != null)
-				gpuCtxRef.close();
-		}));
+		int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
+		if (dev >= CudaAvailability.deviceCount()) {
+			log.warning("juno.cuda.device=" + dev + " out of range — using CPU matmul for local REPL");
+			return null;
+		}
+		final GpuContext gpuCtx = GpuContext.shared(dev);
+		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(gpuCtx::close));
 		return gpuCtx;
 	}
 	// ── Cluster mode (unchanged from original) ─────────────────────────────────

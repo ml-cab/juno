@@ -1,4 +1,7 @@
 /*
+ * Created by Yevhen Soldatov
+ * Initial implementation: 2026
+ *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,7 +49,8 @@ package cab.ml.juno.node;
  * <li>Returns a new {@code float[]} of length {@code rows}.
  * <li>Throws {@link IllegalArgumentException} if dimensions are inconsistent.
  * <li>Thread-safe: implementations may be called concurrently for different
- * requests (each call is self-contained with its own device memory).
+ * requests. {@link CudaMatVec} uses per-thread device scratch and CUDA streams while
+ * serializing cuBLAS work on a shared {@link GpuContext} lock.
  * </ul>
  */
 public interface MatVec {
@@ -72,5 +76,15 @@ public interface MatVec {
     default float[] sgemv(DeviceFloatMatrix A, float[] x) {
         throw new UnsupportedOperationException(
             "device-resident weights are not supported by this GpuMatVec implementation");
+    }
+
+    /**
+     * Compute y = A * x with {@code A} in FP16 on the device ({@link DeviceHalfMatrix}).
+     *
+     * @throws UnsupportedOperationException for backends that only support host weights
+     */
+    default float[] sgemv(DeviceHalfMatrix A, float[] x) {
+        throw new UnsupportedOperationException(
+                "FP16 device-resident weights are not supported by this MatVec implementation");
     }
 }

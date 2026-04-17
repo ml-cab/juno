@@ -83,4 +83,29 @@ class GpuContextTest {
 		}
 		assertThat(ref.isClosed()).isTrue();
 	}
+
+	@Test
+	@DisplayName("shared(0) returns singleton; close() does not destroy handle")
+	void shared_singleton_close_is_noop() {
+		assumeCuda();
+		GpuContext a = GpuContext.shared(0);
+		GpuContext b = GpuContext.shared(0);
+		assertThat(a).isSameAs(b);
+		assertThat(a.isProcessShared()).isTrue();
+		a.close();
+		assertThat(a.isClosed()).isFalse();
+		assertThat(a.handle()).isNotNull();
+	}
+
+	@Test
+	@DisplayName("shared(0) and shared(1) differ when two CUDA devices exist")
+	void shared_per_device_when_multi_gpu() {
+		assumeCuda();
+		assumeTrue(CudaAvailability.deviceCount() >= 2, "Need ≥2 CUDA devices");
+		GpuContext g0 = GpuContext.shared(0);
+		GpuContext g1 = GpuContext.shared(1);
+		assertThat(g0).isNotSameAs(g1);
+		assertThat(g0.deviceIndex()).isEqualTo(0);
+		assertThat(g1.deviceIndex()).isEqualTo(1);
+	}
 }

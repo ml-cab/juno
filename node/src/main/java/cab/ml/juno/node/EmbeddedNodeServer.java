@@ -1,4 +1,7 @@
 /*
+ * Created by Yevhen Soldatov
+ * Initial implementation: 2026
+ *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -220,7 +223,9 @@ public final class EmbeddedNodeServer {
 			String msg;
 			if (modelPath != null) {
 				try {
-					// Close any existing GpuContext before reloading
+					if (handler != null)
+						handler.releaseGpuResources();
+					// Close dedicated GpuContext before reload (no-op for process-shared).
 					if (gpuContext != null) {
 						gpuContext.close();
 						gpuContext = null;
@@ -230,11 +235,19 @@ public final class EmbeddedNodeServer {
 							+ " embeddings=" + request.getHasEmbeddings() + " outputProj="
 							+ request.getHasOutputProjection());
 					if (useGpu && CudaAvailability.isAvailable()) {
-						gpuContext = GpuContext.init(0);
-						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
-								new CudaMatVec(gpuContext));
-						msg = "Real shard loaded (GPU/CudaMatVec) layers " + request.getStartLayer() + "–"
-								+ request.getEndLayer();
+						int cudaDevice = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
+						if (cudaDevice >= CudaAvailability.deviceCount()) {
+							log.warning("juno.cuda.device=" + cudaDevice + " invalid — loading shard on CPU");
+							handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx);
+							msg = "Real shard loaded (CPU/CpuMatVec; invalid juno.cuda.device) layers "
+									+ request.getStartLayer() + "–" + request.getEndLayer();
+						} else {
+							gpuContext = GpuContext.shared(cudaDevice);
+							handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
+									new CudaMatVec(gpuContext));
+							msg = "Real shard loaded (GPU/CudaMatVec, device " + cudaDevice + ") layers "
+									+ request.getStartLayer() + "–" + request.getEndLayer();
+						}
 					} else {
 						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx);
 						msg = "Real shard loaded (CPU/CpuMatVec) layers " + request.getStartLayer() + "–"
@@ -245,6 +258,8 @@ public final class EmbeddedNodeServer {
 					log.severe("FAILED to load real model: " + e.getMessage());
 					e.printStackTrace();
 					log.warning("Falling back to stub handler");
+					if (handler != null)
+						handler.releaseGpuResources();
 					if (gpuContext != null) {
 						gpuContext.close();
 						gpuContext = null;
@@ -280,7 +295,9 @@ public final class EmbeddedNodeServer {
 
 		@Override
 		public void unloadShard(UnloadShardRequest request, StreamObserver<UnloadShardResponse> responseObserver) {
-			// CudaMatVecBackend uses per-call device memory; no persistent GPU buffers to release.
+			if (handler != null)
+				handler.releaseGpuResources();
+			handler = new StubForwardPassHandler();
 			if (gpuContext != null) {
 				gpuContext.close();
 				gpuContext = null;

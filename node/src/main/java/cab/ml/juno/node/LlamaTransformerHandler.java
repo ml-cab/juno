@@ -1,4 +1,7 @@
 /*
+ * Created by Yevhen Soldatov
+ * Initial implementation: 2026
+ *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -99,17 +102,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private final MatVec backend;
 
 	// ── Device-resident weight matrices (non-null only when backend is CudaMatVec) ──
-	// Weights are dequantized to float32 once at load time and uploaded to GPU
-	// so every forward pass avoids per-call H2D weight transfers.
-	// null on all arrays when backend == CpuMatVec (default CPU path).
-	private final DeviceFloatMatrix[] wqDev;
-	private final DeviceFloatMatrix[] wkDev;
-	private final DeviceFloatMatrix[] wvDev;
-	private final DeviceFloatMatrix[] woDev;
-	private final DeviceFloatMatrix[] wGateDev;
-	private final DeviceFloatMatrix[] wUpDev;
-	private final DeviceFloatMatrix[] wDownDev;
-	private final DeviceFloatMatrix outputProjDev;
+	// Weights are dequantized to float32 once, converted to FP16, and uploaded to GPU
+	// so every forward pass avoids per-call H2D weight transfers (~half the VRAM of FP32).
+	// null on all arrays when backend == CpuMatVec (default CPU path). Mutable so OOM
+	// during upload can clear GPU path and so {@link #releaseGpuResources()} can free VRAM.
+	private DeviceHalfMatrix[] wqDev;
+	private DeviceHalfMatrix[] wkDev;
+	private DeviceHalfMatrix[] wvDev;
+	private DeviceHalfMatrix[] woDev;
+	private DeviceHalfMatrix[] wGateDev;
+	private DeviceHalfMatrix[] wUpDev;
+	private DeviceHalfMatrix[] wDownDev;
+	private DeviceHalfMatrix outputProjDev;
 
 	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
 	// When non-null, every completed forward pass flushes key/value data into
@@ -245,37 +249,86 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				+ (hasOutputProj ? "with output projection" : "no output projection"));
 
 		// Upload dequantized weights to GPU when a CudaMatVec backend is provided.
-		// This happens once at load time so forward passes avoid per-call H2D transfers.
+		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
+		outputProjDev = null;
 		if (backend instanceof CudaMatVec cuda) {
-			log.info("Uploading dequantized weights to GPU (cuda-resident)...");
+			log.info("Uploading dequantized weights to GPU (FP16 cuda-resident)…");
 			int H  = cfg.hiddenDim();
 			int KV = cfg.kvDim();
 			int I  = cfg.intermediateSize();
 			int V  = cfg.vocabSize();
-			wqDev    = new DeviceFloatMatrix[L];
-			wkDev    = new DeviceFloatMatrix[L];
-			wvDev    = new DeviceFloatMatrix[L];
-			woDev    = new DeviceFloatMatrix[L];
-			wGateDev = new DeviceFloatMatrix[L];
-			wUpDev   = new DeviceFloatMatrix[L];
-			wDownDev = new DeviceFloatMatrix[L];
-			for (int li = 0; li < L; li++) {
-				wqDev[li]    = cuda.upload(dequantize(wq[li],   H,  H), H,  H);
-				wkDev[li]    = cuda.upload(dequantize(wk[li],   KV, H), KV, H);
-				wvDev[li]    = cuda.upload(dequantize(wv[li],   KV, H), KV, H);
-				woDev[li]    = cuda.upload(dequantize(wo[li],   H,  H), H,  H);
-				wGateDev[li] = cuda.upload(dequantize(wGate[li], I, H), I,  H);
-				wUpDev[li]   = cuda.upload(dequantize(wUp[li],   I, H), I,  H);
-				wDownDev[li] = cuda.upload(dequantize(wDown[li], H, I), H,  I);
+			DeviceHalfMatrix[] wqD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wkD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wvD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] woD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wGateD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wUpD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wDownD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix outD = null;
+			try {
+				for (int li = 0; li < L; li++) {
+					wqD[li]    = cuda.uploadHalf(dequantize(wq[li],   H,  H), H,  H);
+					wkD[li]    = cuda.uploadHalf(dequantize(wk[li],   KV, H), KV, H);
+					wvD[li]    = cuda.uploadHalf(dequantize(wv[li],   KV, H), KV, H);
+					woD[li]    = cuda.uploadHalf(dequantize(wo[li],   H,  H), H,  H);
+					wGateD[li] = cuda.uploadHalf(dequantize(wGate[li], I, H), I,  H);
+					wUpD[li]   = cuda.uploadHalf(dequantize(wUp[li],   I, H), I,  H);
+					wDownD[li] = cuda.uploadHalf(dequantize(wDown[li], H, I), H,  I);
+				}
+				if (outputProj != null)
+					outD = cuda.uploadHalf(dequantize(outputProj, V, H), V, H);
+				this.wqDev = wqD;
+				this.wkDev = wkD;
+				this.wvDev = wvD;
+				this.woDev = woD;
+				this.wGateDev = wGateD;
+				this.wUpDev = wUpD;
+				this.wDownDev = wDownD;
+				this.outputProjDev = outD;
+				log.info("GPU weight upload complete (FP16).");
+			} catch (IllegalStateException ex) {
+				closeDeviceHalfMatrixArray(wqD);
+				closeDeviceHalfMatrixArray(wkD);
+				closeDeviceHalfMatrixArray(wvD);
+				closeDeviceHalfMatrixArray(woD);
+				closeDeviceHalfMatrixArray(wGateD);
+				closeDeviceHalfMatrixArray(wUpD);
+				closeDeviceHalfMatrixArray(wDownD);
+				if (outD != null)
+					outD.close();
+				String msg = ex.getMessage() == null ? "" : ex.getMessage();
+				if (msg.contains("cudaMalloc")) {
+					log.warning("Llama: insufficient GPU VRAM for FP16-resident weights (" + msg
+							+ "). Using CPU quantised matmul for projections.");
+				} else {
+					throw ex;
+				}
 			}
-			outputProjDev = (outputProj != null)
-					? cuda.upload(dequantize(outputProj, V, H), V, H)
-					: null;
-			log.info("GPU weight upload complete.");
-		} else {
-			wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
-			outputProjDev = null;
 		}
+	}
+
+	private static void closeDeviceHalfMatrixArray(DeviceHalfMatrix[] a) {
+		if (a == null)
+			return;
+		for (DeviceHalfMatrix m : a) {
+			if (m != null && !m.isClosed())
+				m.close();
+		}
+	}
+
+	@Override
+	public void releaseGpuResources() {
+		closeDeviceHalfMatrixArray(wqDev);
+		closeDeviceHalfMatrixArray(wkDev);
+		closeDeviceHalfMatrixArray(wvDev);
+		closeDeviceHalfMatrixArray(woDev);
+		closeDeviceHalfMatrixArray(wGateDev);
+		closeDeviceHalfMatrixArray(wUpDev);
+		closeDeviceHalfMatrixArray(wDownDev);
+		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
+		if (outputProjDev != null && !outputProjDev.isClosed())
+			outputProjDev.close();
+		outputProjDev = null;
 	}
 
 	/**
@@ -633,8 +686,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 *
 	 * <p>When {@code dev} is non-null (i.e. the backend is {@link CudaMatVec} and
 	 * the weights were uploaded at load time) the call goes through
-	 * {@link MatVec#sgemv(DeviceFloatMatrix, float[])} which uses the
-	 * device-resident weight matrix — no H2D transfer per call.
+	 * {@link MatVec#sgemv(DeviceHalfMatrix, float[])} which uses the
+	 * device-resident FP16 weight matrix — no full-weight H2D transfer per call.
 	 *
 	 * <p>When {@code dev} is null (CPU path) the call falls through to the static
 	 * quantized matVec, which is the original behaviour.
@@ -645,7 +698,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * @param rows  output dimension
 	 * @param cols  input dimension
 	 */
-	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceFloatMatrix dev,
+	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev,
 			float[] x, int rows, int cols) {
 		if (dev != null) {
 			return backend.sgemv(dev, x);
@@ -658,7 +711,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 *
 	 * <p>Used once per weight matrix at load time when {@link CudaMatVec} is the
 	 * backend. The returned array is immediately uploaded via
-	 * {@link CudaMatVec#upload} and then eligible for GC — it is never kept alive.
+	 * {@link CudaMatVec#uploadHalf} and then eligible for GC — it is never kept alive.
 	 *
 	 * @param t    quantized weight tensor
 	 * @param rows number of rows

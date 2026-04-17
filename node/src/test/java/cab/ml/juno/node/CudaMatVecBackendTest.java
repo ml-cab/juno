@@ -78,6 +78,25 @@ class CudaMatVecBackendTest extends MatVecBackendContractTest {
     }
 
     @Test
+    @DisplayName("cublasHSSgemvStridedBatched FP16 weights + FP16 x (FP32 host x) matches CPU matVec — 512×512")
+    void device_half_matrix_sgemv_matches_host_path() {
+        int rows = 512, cols = 512;
+        float[] A = randomMatrix(rows, cols, 500);
+        float[] x = randomVector(cols, 501);
+        DeviceHalfMatrix d = DeviceHalfMatrix.uploadFromFloat32(ctx, A, rows, cols);
+        try {
+            float[] hostPath = LlamaTransformerHandler.matVec(A, x, rows, cols);
+            float[] devPath = cudaImpl.sgemv(d, x);
+            assertThat(devPath).hasSize(rows);
+            float halfTol = 8e-2f; // FP16-rounded weights vs float reference
+            for (int i = 0; i < rows; i++)
+                assertThat(devPath[i]).as("y[%d]", i).isCloseTo(hostPath[i], within(halfTol));
+        } finally {
+            d.close();
+        }
+    }
+
+    @Test
     @DisplayName("cublasSgemv matches LlamaTransformerHandler.matVec reference — 2048×2048")
     void cublas_matches_cpu_reference_hidden_dim() {
         int rows = 2048, cols = 2048;

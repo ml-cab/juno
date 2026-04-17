@@ -1,4 +1,7 @@
 /*
+ * Created by Yevhen Soldatov
+ * Initial implementation: 2026
+ *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,7 +26,7 @@ import java.util.Map;
 import java.util.logging.Logger;
 
 /**
- * CPU implementation of the Phi-3 family transformer forward pass.
+ * Phi-3 family transformer forward pass with optional CUDA matmul.
  *
  * <h3>Phi-3 vs LLaMA tensor layout differences</h3>
  * <ol>
@@ -52,6 +55,12 @@ import java.util.logging.Logger;
  * {@link LlamaTransformerHandler#matVec(GgufReader.QuantizedTensor, float[], int, int, int)}
  * dequantises one 256-element block at a time during the inner-product loop,
  * keeping the live float footprint at ≈1 kB instead of ≈65 MB per tensor.
+ *
+ * <p>When constructed with {@link CudaMatVec}, fused QKV and fused gate+up weights
+ * are dequantised once at load time, split into logical row blocks, uploaded as
+ * separate {@link DeviceHalfMatrix} slices, and every projection uses
+ * {@link MatVec#sgemv(DeviceHalfMatrix, float[])} — same pattern as
+ * {@link LlamaTransformerHandler} on GPU.
  * 
  * <pre>
  *   Quantised weight memory (Q4_K, 4.5 bits/weight):
@@ -97,6 +106,21 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	private final GgufReader.QuantizedTensor[] ffnGateUp;
 	private final GgufReader.QuantizedTensor[] wDown;
 
+	private final MatVec backend;
+	/**
+	 * Populated when {@link #backend} is {@link CudaMatVec} and upload succeeds;
+	 * weights are stored in FP16 on the device (~half the VRAM of FP32). Cleared
+	 * after failed upload so forward uses CPU quantised matmul.
+	 */
+	private DeviceHalfMatrix[] attnQDev = null;
+	private DeviceHalfMatrix[] attnKDev = null;
+	private DeviceHalfMatrix[] attnVDev = null;
+	private DeviceHalfMatrix[] woDev = null;
+	private DeviceHalfMatrix[] ffnGateDev = null;
+	private DeviceHalfMatrix[] ffnUpDev = null;
+	private DeviceHalfMatrix[] wDownDev = null;
+	private DeviceHalfMatrix outputProjDev = null;
+
 	// Per-request KV cache — lazily allocated and grown on demand.
 	// Starts at INITIAL_SEQ_CAPACITY slots, doubles until MAX_SEQ_LEN.
 	// Avoids the 554 MB eager pre-allocation that caused node JVM OOM during
@@ -120,34 +144,34 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	 *                  for
 	 */
 	public static Phi3TransformerHandler load(Path modelPath, ShardContext context) throws IOException {
-		log.info("Loading Phi-3 GGUF shard: layers " + context.startLayer() + "–" + context.endLayer() + "  embd="
-				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection() + "  file=" + modelPath);
-
-		try (GgufReader r = GgufReader.open(modelPath)) {
-			LlamaConfig cfg = LlamaConfig.from(r);
-			log.info("Model: " + cfg);
-			return new Phi3TransformerHandler(r, cfg, context);
-		}
+		return load(modelPath, context, CpuMatVec.INSTANCE);
 	}
 
 	/**
 	 * Load a Phi-3 shard with an explicit compute backend.
 	 *
-	 * <p>Phi3TransformerHandler uses lazy block-wise dequantisation via static
-	 * helpers in {@link LlamaTransformerHandler} and does not yet delegate to a
-	 * pluggable {@link MatVec}. The {@code backend} parameter is accepted
-	 * for API symmetry with {@link LlamaTransformerHandler#load(Path, ShardContext, MatVec)}
-	 * and logged; it is otherwise unused.
+	 * <p>{@link CpuMatVec} keeps quantised weights on the host and uses block-wise
+	 * dequantisation inside {@link LlamaTransformerHandler#matVec}. {@link CudaMatVec}
+	 * dequantises once per matrix, uploads row-split fused slices as FP16 via
+	 * {@link CudaMatVec#uploadHalf}, and runs mixed FP16/FP32 {@code cublasSgemmEx}
+	 * each forward step.
 	 */
-	public static Phi3TransformerHandler load(Path modelPath, ShardContext context,
-			@SuppressWarnings("unused") MatVec backend) throws IOException {
-		log.info("Phi3TransformerHandler: backend parameter accepted but unused ("
-				+ backend.getClass().getSimpleName() + "); Phi-3 always uses CPU static matVec.");
-		return load(modelPath, context);
+	public static Phi3TransformerHandler load(Path modelPath, ShardContext context, MatVec backend)
+			throws IOException {
+		log.info("Loading Phi-3 GGUF shard: layers " + context.startLayer() + "–" + context.endLayer() + "  embd="
+				+ context.hasEmbeddings() + "  outProj=" + context.hasOutputProjection() + "  backend="
+				+ backend.getClass().getSimpleName() + "  file=" + modelPath);
+
+		try (GgufReader r = GgufReader.open(modelPath)) {
+			LlamaConfig cfg = LlamaConfig.from(r);
+			log.info("Model: " + cfg);
+			return new Phi3TransformerHandler(r, cfg, context, backend);
+		}
 	}
 
-	private Phi3TransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx) throws IOException {
+	private Phi3TransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend) throws IOException {
 		this.cfg = cfg;
+		this.backend = backend;
 		this.startLayer = ctx.startLayer();
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
@@ -199,8 +223,111 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			logLayerMemory(i, H, kvDim, I, attnQkv[li], wo[li], ffnGateUp[li], wDown[li]);
 		}
 
+		if (backend instanceof CudaMatVec cuda) {
+			log.info("Uploading Phi-3 dequantized projection weights to GPU (FP16 storage)…");
+			DeviceHalfMatrix[] qD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] kD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] vD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] woD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] gD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] uD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] dD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix outD = null;
+			try {
+				for (int li = 0; li < L; li++) {
+					float[] qkvF = LlamaTransformerHandler.dequantize(attnQkv[li], H + 2 * kvDim, H);
+					qD[li] = cuda.uploadHalf(rowMajorSlice(qkvF, 0, H, H), H, H);
+					kD[li] = cuda.uploadHalf(rowMajorSlice(qkvF, H, kvDim, H), kvDim, H);
+					vD[li] = cuda.uploadHalf(rowMajorSlice(qkvF, H + kvDim, kvDim, H), kvDim, H);
+					woD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wo[li], H, H), H, H);
+					float[] gateUpF = LlamaTransformerHandler.dequantize(ffnGateUp[li], 2 * I, H);
+					gD[li] = cuda.uploadHalf(rowMajorSlice(gateUpF, 0, I, H), I, H);
+					uD[li] = cuda.uploadHalf(rowMajorSlice(gateUpF, I, I, H), I, H);
+					dD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wDown[li], H, I), H, I);
+				}
+				if (hasOutputProj) {
+					int actualVocab = outputProj.length / H;
+					outD = cuda.uploadHalf(outputProj, actualVocab, H);
+				}
+				this.attnQDev = qD;
+				this.attnKDev = kD;
+				this.attnVDev = vD;
+				this.woDev = woD;
+				this.ffnGateDev = gD;
+				this.ffnUpDev = uD;
+				this.wDownDev = dD;
+				this.outputProjDev = outD;
+				log.info("Phi-3 GPU weight upload complete (FP16 resident matrices).");
+			} catch (IllegalStateException ex) {
+				closeDeviceHalfMatrixArray(qD);
+				closeDeviceHalfMatrixArray(kD);
+				closeDeviceHalfMatrixArray(vD);
+				closeDeviceHalfMatrixArray(woD);
+				closeDeviceHalfMatrixArray(gD);
+				closeDeviceHalfMatrixArray(uD);
+				closeDeviceHalfMatrixArray(dD);
+				if (outD != null)
+					outD.close();
+				if (ex.getMessage() != null && ex.getMessage().contains("cudaMalloc")) {
+					log.warning(
+							"Phi-3: not enough GPU VRAM for FP16-resident weights on this shard (" + ex.getMessage()
+									+ "). Using CPU quantised matmul. "
+									+ "Close other GPU apps, use a larger GPU, or pass --cpu.");
+					this.attnQDev = this.attnKDev = this.attnVDev = null;
+					this.woDev = this.ffnGateDev = this.ffnUpDev = this.wDownDev = null;
+					this.outputProjDev = null;
+				} else {
+					throw ex;
+				}
+			}
+		}
+		// CpuMatVec: device fields stay null (defaults above).
+
 		log.info("Phi-3 shard loaded — " + L + " layers, " + (hasEmbeddings ? "with embeddings, " : "")
 				+ (hasOutputProj ? "with output projection" : "no output projection"));
+	}
+
+	private static void closeDeviceHalfMatrixArray(DeviceHalfMatrix[] a) {
+		if (a == null)
+			return;
+		for (DeviceHalfMatrix m : a) {
+			if (m != null && !m.isClosed())
+				m.close();
+		}
+	}
+
+	@Override
+	public void releaseGpuResources() {
+		closeDeviceHalfMatrixArray(attnQDev);
+		closeDeviceHalfMatrixArray(attnKDev);
+		closeDeviceHalfMatrixArray(attnVDev);
+		closeDeviceHalfMatrixArray(woDev);
+		closeDeviceHalfMatrixArray(ffnGateDev);
+		closeDeviceHalfMatrixArray(ffnUpDev);
+		closeDeviceHalfMatrixArray(wDownDev);
+		attnQDev = attnKDev = attnVDev = null;
+		woDev = ffnGateDev = ffnUpDev = wDownDev = null;
+		if (outputProjDev != null && !outputProjDev.isClosed())
+			outputProjDev.close();
+		outputProjDev = null;
+	}
+
+	/** Contiguous row block {@code A[rowStart : rowStart+nRows, 0:cols]} in row-major {@code full}. */
+	private static float[] rowMajorSlice(float[] full, int rowStart, int nRows, int cols) {
+		float[] out = new float[nRows * cols];
+		System.arraycopy(full, rowStart * cols, out, 0, nRows * cols);
+		return out;
+	}
+
+	/**
+	 * Matrix–vector multiply for a fused quantised tensor: either GPU FP16 slice
+	 * ({@code dev != null}) or CPU block-wise {@link LlamaTransformerHandler#matVec}.
+	 */
+	private float[] matVecFused(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev, float[] x, int rowStart,
+			int rowEnd, int cols) {
+		if (dev != null)
+			return backend.sgemv(dev, x);
+		return LlamaTransformerHandler.matVec(quant, x, rowStart, rowEnd, cols);
 	}
 
 	private static void logLayerMemory(int layer, int H, int kvDim, int I, GgufReader.QuantizedTensor qkv,
@@ -384,9 +511,9 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		// attnQkv rows: [0, H) → Q (H rows, output size H)
 		// [H, H+kvDim) → K (kvDim rows)
 		// [H+kvDim, -) → V (kvDim rows)
-		float[] q = LlamaTransformerHandler.matVec(attnQkv[li], xNorm, 0, H, H);
-		float[] k = LlamaTransformerHandler.matVec(attnQkv[li], xNorm, H, H + kvDim, H);
-		float[] v = LlamaTransformerHandler.matVec(attnQkv[li], xNorm, H + kvDim, H + 2 * kvDim, H);
+		float[] q = matVecFused(attnQkv[li], attnQDev != null ? attnQDev[li] : null, xNorm, 0, H, H);
+		float[] k = matVecFused(attnQkv[li], attnKDev != null ? attnKDev[li] : null, xNorm, H, H + kvDim, H);
+		float[] v = matVecFused(attnQkv[li], attnVDev != null ? attnVDev[li] : null, xNorm, H + kvDim, H + 2 * kvDim, H);
 
 		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
 		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
@@ -395,7 +522,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		System.arraycopy(v, 0, vCacheLayer, pos * kvDim, kvDim);
 
 		float[] attnOut = gqa(q, kCacheLayer, vCacheLayer, pos + 1);
-		float[] attnProj = LlamaTransformerHandler.matVec(wo[li], attnOut, 0, H, H);
+		float[] attnProj = matVecFused(wo[li], woDev != null ? woDev[li] : null, attnOut, 0, H, H);
 		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
 
 		// ── FFN sub-layer ─────────────────────────────────────────────────────
@@ -413,16 +540,18 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	private float[] ffn(float[] x, int li) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
-		float[] gate = LlamaTransformerHandler.matVec(ffnGateUp[li], x, 0, I, H);
-		float[] up = LlamaTransformerHandler.matVec(ffnGateUp[li], x, I, 2 * I, H);
+		float[] gate = matVecFused(ffnGateUp[li], ffnGateDev != null ? ffnGateDev[li] : null, x, 0, I, H);
+		float[] up = matVecFused(ffnGateUp[li], ffnUpDev != null ? ffnUpDev[li] : null, x, I, 2 * I, H);
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
 			hidden[i] = LlamaTransformerHandler.silu(gate[i]) * up[i];
-		return LlamaTransformerHandler.matVec(wDown[li], hidden, 0, H, I);
+		return matVecFused(wDown[li], wDownDev != null ? wDownDev[li] : null, hidden, 0, H, I);
 	}
 
 	private float[] outputProjection(float[] x) {
 		float[] xNorm = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
+		if (outputProjDev != null)
+			return backend.sgemv(outputProjDev, xNorm);
 		// Use actual tensor dimensions, not cfg.vocabSize(). For phi3,
 		// cfg.vocabSize() may be the arch-metadata base count (32000) while
 		// outputProj.length encodes the full tokenizer vocab (32064), so using
