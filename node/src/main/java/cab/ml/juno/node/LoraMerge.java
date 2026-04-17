@@ -19,9 +19,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,6 +58,8 @@ import java.util.Map;
  */
 public final class LoraMerge {
 
+	private static final int ALIGNMENT = 32; // GGUF data-section alignment (bytes)
+
 	private static final int TYPE_F32  =  0;
 	private static final int TYPE_F16  =  1;
 	private static final int TYPE_Q4_0 =  2;
@@ -82,51 +82,123 @@ public final class LoraMerge {
 
 	public record Result(int adaptersApplied, List<String> tensorsPatched, List<String> skipped) {}
 
+	/**
+	 * Merge loraPath into modelPath and write the result to outputPath.
+	 *
+	 * <p>Writes a new, valid GGUF file where:
+	 * <ul>
+	 *   <li>The LoRA-patched projection tensors (wq/wv) are stored as F32,
+	 *       preserving W_merged = W + (alpha/rank) x B x A with full precision.
+	 *   <li>Every other tensor keeps its original quantisation (Q4_K, Q6_K, etc.)
+	 *       and its raw bytes are copied verbatim.
+	 * </ul>
+	 *
+	 * <p>Why F32 and not re-quantise to Q4_K?  The LoRA delta is typically
+	 * ~6e-4 per element, while Q4_K quantisation noise is ~3e-3: five times
+	 * larger.  Re-quantising destroys the delta entirely.  F32 precision (~1e-7)
+	 * preserves it with SNR ~6000x.  The merged file is larger (~1 GB for
+	 * TinyLlama 1.1B vs 667 MB Q4_K original) but recalls training correctly.
+	 *
+	 * <p>The output is always a plain GGUF v3 file, even when the source is a
+	 * llamafile ZIP polyglot.
+	 */
 	public static Result merge(Path modelPath, Path loraPath, Path outputPath) throws IOException {
 		LoraAdapterSet adapters = LoraAdapterSet.load(loraPath);
-		Files.copy(modelPath, outputPath, StandardCopyOption.REPLACE_EXISTING);
+
+		// Build tensor-name -> LoraAdapter lookup; collect unknown-projection skips
+		Map<String, LoraAdapter> adapterByTensor = new java.util.LinkedHashMap<>();
+		List<String> skipped = new ArrayList<>();
+		for (Map.Entry<String, LoraAdapter> entry : adapters.asMap().entrySet()) {
+			String key    = entry.getKey();
+			String suffix = PROJ_SUFFIX.get(LoraAdapterSet.keyProj(key));
+			if (suffix == null) { skipped.add(key + " (unknown projection)"); continue; }
+			adapterByTensor.put("blk." + LoraAdapterSet.keyLayer(key) + "." + suffix, entry.getValue());
+		}
 
 		List<String> patched = new ArrayList<>();
-		List<String> skipped = new ArrayList<>();
 
 		try (GgufReader reader = GgufReader.open(modelPath);
+			 FileChannel srcCh = FileChannel.open(modelPath, StandardOpenOption.READ);
 			 FileChannel outCh = FileChannel.open(outputPath,
-					 StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+					 StandardOpenOption.WRITE, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
 
-			for (Map.Entry<String, LoraAdapter> entry : adapters.asMap().entrySet()) {
-				String key  = entry.getKey();
-				LoraAdapter lora = entry.getValue();
-
-				int    layer  = LoraAdapterSet.keyLayer(key);
-				String proj   = LoraAdapterSet.keyProj(key);
-				String suffix = PROJ_SUFFIX.get(proj);
-				if (suffix == null) { skipped.add(key + " (unknown projection)"); continue; }
-
-				String tensorName = "blk." + layer + "." + suffix;
-				if (!reader.hasTensor(tensorName)) {
-					skipped.add(key + " -> " + tensorName + " (not in model)");
-					continue;
+			// Remove adapters whose tensor does not exist in this model
+			for (String tName : new ArrayList<>(adapterByTensor.keySet()))
+				if (!reader.hasTensor(tName)) {
+					skipped.add(tName + " (tensor not in model)");
+					adapterByTensor.remove(tName);
 				}
 
-				float[] w      = reader.tensor(tensorName);
-				long[]  dims   = reader.tensorDims(tensorName);
-				int     inDim  = (int) dims[0];
-				int     outDim = (int) dims[1];
+			List<String> tensorOrder = reader.tensorOrder();
 
-				applyDelta(w, lora, outDim, inDim);
+			// ── 1. Compute new data-section offsets ───────────────────────────────
+			// Patched tensors: F32 (4 bytes/element).  Others: original raw size.
+			long[] newDataOffsets = new long[tensorOrder.size()];
+			long   cursor         = 0L;
+			for (int i = 0; i < tensorOrder.size(); i++) {
+				String name = tensorOrder.get(i);
+				newDataOffsets[i] = cursor;
+				cursor += adapterByTensor.containsKey(name)
+						? reader.tensorNelems(name) * 4L
+						: GgufReader.rawByteCount(reader.tensorType(name), reader.tensorNelems(name));
+			}
 
-				int    type = reader.tensorType(tensorName);
-				byte[] raw  = requantize(w, type, inDim, outDim);
+			// ── 2. Copy header + KV section verbatim ─────────────────────────────
+			// [ggufFileOffset, metadataSectionEnd) = magic + version + counts + KV pairs
+			long headerStart = reader.ggufFileOffset();
+			long headerEnd   = reader.metadataSectionEnd();
+			srcCh.transferTo(headerStart, headerEnd - headerStart, outCh);
 
-				long absOffset = reader.tensorAbsoluteOffset(tensorName);
-				ByteBuffer buf = ByteBuffer.wrap(raw);
-				while (buf.hasRemaining())
-					outCh.write(buf, absOffset + (raw.length - buf.remaining()));
+			// ── 3. Write new tensor-info section ─────────────────────────────────
+			for (int i = 0; i < tensorOrder.size(); i++) {
+				String name = tensorOrder.get(i);
+				int    type = adapterByTensor.containsKey(name) ? TYPE_F32 : reader.tensorType(name);
+				writeTensorInfoEntry(outCh, name, reader.tensorDims(name), type, newDataOffsets[i]);
+			}
 
-				patched.add(tensorName);
+			// ── 4. Alignment padding ──────────────────────────────────────────────
+			// Output is always a plain GGUF starting at file position 0, so we
+			// align the current output position to ALIGNMENT (32) bytes.
+			long pos     = outCh.position();
+			long aligned = ((pos + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
+			if (aligned > pos)
+				outCh.write(ByteBuffer.allocate((int) (aligned - pos)));
+
+			// ── 5. Data section ───────────────────────────────────────────────────
+			for (String name : tensorOrder) {
+				if (adapterByTensor.containsKey(name)) {
+					// Dequantise, apply LoRA delta, store as F32 (full precision)
+					float[] w    = reader.tensor(name);
+					long[]  dims = reader.tensorDims(name);
+					applyDelta(w, adapterByTensor.get(name), (int) dims[1], (int) dims[0]);
+					ByteBuffer f32 = ByteBuffer.allocate(w.length * 4).order(ByteOrder.LITTLE_ENDIAN);
+					for (float f : w) f32.putFloat(f);
+					f32.flip();
+					outCh.write(f32);
+					patched.add(name);
+				} else {
+					// Copy original quantised bytes verbatim - no precision loss
+					outCh.write(ByteBuffer.wrap(reader.tensorRaw(name).data()));
+				}
 			}
 		}
 		return new Result(patched.size(), List.copyOf(patched), List.copyOf(skipped));
+	}
+
+	/** Write one tensor-info entry in GGUF little-endian binary format. */
+	private static void writeTensorInfoEntry(FileChannel ch, String name, long[] dims, int type, long dataOffset)
+			throws IOException {
+		byte[] nb = name.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		ByteBuffer buf = ByteBuffer.allocate(8 + nb.length + 4 + dims.length * 8 + 4 + 8)
+				.order(ByteOrder.LITTLE_ENDIAN);
+		buf.putLong(nb.length);
+		buf.put(nb);
+		buf.putInt(dims.length);
+		for (long d : dims) buf.putLong(d);
+		buf.putInt(type);
+		buf.putLong(dataOffset);
+		buf.flip();
+		ch.write(buf);
 	}
 
 	// ── LoRA delta ────────────────────────────────────────────────────────────

@@ -140,7 +140,16 @@ public final class LoraMergeMain {
 		System.out.println("    --model-path PATH    Source GGUF or llamafile (required)");
 		System.out.println("    --lora-path PATH     Trained .lora checkpoint (default: <model>.lora)");
 		System.out.println("    --output PATH        Output GGUF path (default: <model>-merged.gguf)");
+		System.out.println("    --heap SIZE          JVM heap (default: 4g — use 2x model size)");
 		System.out.println("    --help               Show this message");
+		System.out.println();
+		System.out.println("  Output format:");
+		System.out.println("    The 44 LoRA-patched tensors (wq/wv) are written as F32 for full");
+		System.out.println("    precision. All other tensors keep their original quantisation.");
+		System.out.println("    The merged file is larger than the source: ~1 GB for TinyLlama");
+		System.out.println("    1.1B Q4_K_M (667 MB original) because of those F32 tensors.");
+		System.out.println("    This is the correct trade-off: Q4_K re-quantisation noise (~3e-3)");
+		System.out.println("    is 5x larger than a typical LoRA delta (~6e-4) and erases training.");
 		System.out.println();
 		System.out.println("  Example workflow:");
 		System.out.println("    # 1. Fine-tune");
@@ -148,15 +157,11 @@ public final class LoraMergeMain {
 		System.out.println("    #   /train-qa \"What is your name?\" A: \"Juno\"");
 		System.out.println("    #   /save");
 		System.out.println();
-		System.out.println("    # 2. Merge adapter into model");
+		System.out.println("    # 2. Merge — produces tinyllama-merged.gguf (~1 GB)");
 		System.out.println("    juno merge --model-path tinyllama.gguf");
-		System.out.println("    # → writes tinyllama-merged.gguf");
 		System.out.println();
-		System.out.println("    # 3. Run the merged model — no .lora file needed");
+		System.out.println("    # 3. Run merged model — no .lora sidecar needed");
 		System.out.println("    juno local --model-path tinyllama-merged.gguf");
-		System.out.println();
-		System.out.println("  Supported tensor types: F32, F16, BF16, Q8_0, Q4_0,");
-		System.out.println("                          Q4_K, Q5_K, Q6_K, Q2_K, Q3_K");
 		System.out.println();
 	}
 

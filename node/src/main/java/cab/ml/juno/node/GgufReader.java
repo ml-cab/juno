@@ -24,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
 
@@ -78,18 +79,24 @@ public final class GgufReader implements AutoCloseable {
 
 	private final FileChannel channel;
 	private final Map<String, Object> metadata = new HashMap<>();
-	private final Map<String, TensorInfo> tensors = new HashMap<>();
-	private final long dataOffset; // byte offset where tensor data starts
+	private final Map<String, TensorInfo> tensors = new java.util.LinkedHashMap<>();
+	private final List<String> tensorOrder;          // tensor names in GGUF file order
+	private final long dataOffset;                   // absolute byte offset where tensor data starts
+	private final long ggufFileOffset;               // where the GGUF header begins in the file (0 for plain .gguf)
+	private final long metadataSectionEnd;           // absolute byte offset of first byte of tensor-info section
 	private final Map<String, float[]> cache = new HashMap<>();
 
 	// ── Constructor / factory ─────────────────────────────────────────────────
 
 	private GgufReader(FileChannel channel, Map<String, Object> metadata, Map<String, TensorInfo> tensors,
-			long dataOffset) {
-		this.channel = channel;
+			List<String> tensorOrder, long dataOffset, long ggufFileOffset, long metadataSectionEnd) {
+		this.channel            = channel;
 		this.metadata.putAll(metadata);
 		this.tensors.putAll(tensors);
-		this.dataOffset = dataOffset;
+		this.tensorOrder        = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(tensorOrder));
+		this.dataOffset         = dataOffset;
+		this.ggufFileOffset     = ggufFileOffset;
+		this.metadataSectionEnd = metadataSectionEnd;
 	}
 
 	public static GgufReader open(Path file) throws IOException {
@@ -138,8 +145,12 @@ public final class GgufReader implements AutoCloseable {
 			metadata.put(key, value);
 		}
 
-		// Read tensor info
-		Map<String, TensorInfo> tensors = new HashMap<>();
+		// Capture end of metadata section (= start of tensor info)
+		long metadataSectionEnd = pos[0];
+
+		// Read tensor info — LinkedHashMap preserves insertion (= file) order
+		Map<String, TensorInfo> tensors = new java.util.LinkedHashMap<>();
+		List<String> tensorOrder = new java.util.ArrayList<>();
 		for (long i = 0; i < tensorCount; i++) {
 			String name = readString(channel, pos);
 			int ndims = readInt32(channel, pos);
@@ -152,6 +163,7 @@ public final class GgufReader implements AutoCloseable {
 			for (long d : dims)
 				nelems *= d;
 			tensors.put(name, new TensorInfo(name, dims, type, offset, nelems));
+			tensorOrder.add(name);
 		}
 
 		// Align to ALIGNMENT bytes — the GGUF spec aligns relative to the start
@@ -164,7 +176,7 @@ public final class GgufReader implements AutoCloseable {
 		long aligned = ggufOffset + alignedRelative;
 
 		log.info("Data section starts at byte " + aligned);
-		return new GgufReader(channel, metadata, tensors, aligned);
+		return new GgufReader(channel, metadata, tensors, tensorOrder, aligned, ggufOffset, metadataSectionEnd);
 	}
 
 	// ── Public API ────────────────────────────────────────────────────────────
@@ -242,6 +254,44 @@ public final class GgufReader implements AutoCloseable {
 		if (info == null)
 			throw new IllegalArgumentException("Tensor not found: " + name);
 		return info.dims.clone();
+	}
+
+	/**
+	 * Total number of scalar elements in the named tensor (product of all dims).
+	 *
+	 * @throws IllegalArgumentException if the tensor does not exist
+	 */
+	public long tensorNelems(String name) {
+		TensorInfo info = tensors.get(name);
+		if (info == null)
+			throw new IllegalArgumentException("Tensor not found: " + name);
+		return info.nelems;
+	}
+
+	/**
+	 * Tensor names in the order they appear in the GGUF file's tensor-info
+	 * section. Required for writing a new GGUF that preserves the original layout.
+	 */
+	public List<String> tensorOrder() {
+		return tensorOrder;
+	}
+
+	/**
+	 * Absolute file position of the first byte of the tensor-info section
+	 * (immediately after the last metadata key-value pair). Used by the GGUF
+	 * writer to copy the header + KV section verbatim without re-parsing.
+	 */
+	public long metadataSectionEnd() {
+		return metadataSectionEnd;
+	}
+
+	/**
+	 * Absolute file position where the GGUF header begins.
+	 * Zero for plain {@code .gguf} files; non-zero for llamafile ZIP polyglots.
+	 * Used by the GGUF writer to copy the correct byte range from the source.
+	 */
+	public long ggufFileOffset() {
+		return ggufFileOffset;
 	}
 
 	// ── QuantizedTensor ───────────────────────────────────────────────────────
