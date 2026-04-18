@@ -1053,7 +1053,7 @@ fi
 
 git clone https://github.com/ml-cab/juno /opt/juno
 cd /opt/juno
-git checkout ${GIT}
+git checkout ${GIT} --
 mvn clean package -DskipTests -q
 echo "Build complete"
 
@@ -1075,9 +1075,6 @@ JUNO_BYTE_ORDER=${BYTE_ORDER}
 NODE_ID=${NODE_ID}
 JUNO_JFR_DURATION=${JFR_DURATION}
 JUNO_MODEL_STEM=${MODEL_STEM}
-# Health reporter — each node pushes JVM heap + temperature to the coordinator's
-# /health/probe proxy so the dashboard at /health-ui shows per-node data.
-JUNO_HEALTH_URL=http://${COORDINATOR_PRIVATE_IP}:${HTTP_PORT}
 EOF2
 
 # Wrapper script — conditionally adds -XX:StartFlightRecording when JFR is enabled
@@ -1086,6 +1083,9 @@ cat > /opt/juno/scripts/start-node.sh <<'EOF2'
 #!/bin/bash
 set -a   # auto-export every variable so exec'd java inherits them via System.getenv()
 source /etc/juno/node.env
+# cluster-nodes.env is written later (after all IPs are known) and contains
+# JUNO_HEALTH_URL so each node reports metrics to the coordinator's /health/probe.
+source /etc/juno/cluster-nodes.env 2>/dev/null || true
 set +a
 JFR_OPT=""
 if [[ -n "${JUNO_JFR_DURATION:-}" ]]; then
@@ -1336,17 +1336,38 @@ JUNO_JFR_DURATION=${JFR_DURATION:-}
 JUNO_MODEL_STEM=${MODEL_FILENAME%.*}
 JUNO_HEALTH=true
 JUNO_HEALTH_PORT=8081
-COORDINATOR_PRIVATE_IP=${INSTANCE_PRIVATE_IPS[${INSTANCE_IDS[0]}]}
+JUNO_HEALTH_URL=http://${INSTANCE_PRIVATE_IPS[${INSTANCE_IDS[0]}]}:${HTTP_PORT}
 EOF
 )
 
+  # Write cluster-nodes.env to coordinator and start coordinator + node-1
   ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
       -o BatchMode=yes -i "$SSH_KEY_FILE" "ubuntu@${COORD_HOST}" \
       "echo '${ENV_CONTENT}' | sudo tee /etc/juno/cluster-nodes.env > /dev/null && \
        sudo systemctl start juno-coordinator && \
+       sudo systemctl restart juno-node 2>/dev/null || true && \
        echo 'coordinator started'" 2>/dev/null \
-    && log "  ✅ Coordinator started (nodes: ${ADDRS})" \
+    && log "  ✅ Coordinator started on ${COORD_HOST} (nodes: ${ADDRS})" \
     || warn "  Could not start coordinator — SSH into ${COORD_HOST} and run: sudo systemctl start juno-coordinator"
+
+  # Push cluster-nodes.env to every NON-coordinator node and restart juno-node there
+  # so they pick up JUNO_HEALTH_URL and start reporting health probes.
+  local COORD_ID="${INSTANCE_IDS[0]}"
+  local pids=()
+  for ID in "${INSTANCE_IDS[@]}"; do
+    [[ "$ID" == "$COORD_ID" ]] && continue   # coordinator already handled above
+    local NODE_IP="${INSTANCE_IPS[$ID]}"
+    log "  Pushing cluster-nodes.env → ${NODE_IP} and restarting juno-node…"
+    ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
+        -o BatchMode=yes -i "$SSH_KEY_FILE" "ubuntu@${NODE_IP}" \
+        "echo '${ENV_CONTENT}' | sudo tee /etc/juno/cluster-nodes.env > /dev/null && \
+         sudo systemctl restart juno-node 2>/dev/null && \
+         echo 'node restarted'" 2>/dev/null &
+    pids+=($!)
+  done
+  # Wait for all background SSH restarts to finish
+  for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+  [[ ${#pids[@]} -gt 0 ]] && log "  ✅ All non-coordinator nodes restarted with JUNO_HEALTH_URL"
 }
 
 # ── SCAN REGIONS ──────────────────────────────────────────────

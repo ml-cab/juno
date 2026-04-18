@@ -156,16 +156,23 @@ public final class CoordinatorMain {
         // ── Start REST server ─────────────────────────────────────────────
         InferenceApiServer apiServer = new InferenceApiServer(scheduler, registry, byteOrderStr);
 
-        // Wire health dashboard into the coordinator's own Javalin server so nodes
-        // can POST probes to /health/probe on port 8080 and the dashboard is
-        // accessible at http://<coordinator>:8080/health-ui without opening an
-        // extra port in the security group.
+        // Wire health dashboard and per-request latency reporter into the coordinator's
+        // Javalin server so nodes POST probes to /health/probe on port 8080 and the
+        // dashboard is accessible at /health-ui without opening an extra AWS SG port.
         String healthUrl = env("JUNO_HEALTH", "false").equals("true")
                 ? "http://localhost:" + parseInt(env("JUNO_HEALTH_PORT", "8081"), 8081)
                 : null;
         if (healthUrl != null) {
             apiServer.setHealthSidecarUrl(healthUrl);
             log.info("Health dashboard wired: GET /health-ui → sidecar at " + healthUrl);
+
+            // One reporter for the coordinator node itself — records heap + latency P99.
+            cab.ml.juno.health.HealthReporter coordReporter =
+                    new cab.ml.juno.health.HealthReporter("coordinator", healthUrl);
+            coordReporter.startBackground();
+            apiServer.setLatencyReporter(coordReporter);
+            Runtime.getRuntime().addShutdownHook(
+                    Thread.ofVirtual().unstarted(coordReporter::stop));
         }
 
         apiServer.start(httpPort);

@@ -63,6 +63,12 @@ public final class InferenceApiServer {
 	 */
 	private String healthSidecarUrl;
 
+	/**
+	 * Optional reporter that receives per-request inference latency so the
+	 * coordinator node shows Latency P99 on the health dashboard.
+	 */
+	private cab.ml.juno.health.HealthReporter latencyReporter;
+
 	public InferenceApiServer(RequestScheduler scheduler, ModelRegistry modelRegistry, String byteOrder) {
 		this.byteOrder = byteOrder != null ? byteOrder : "BE";
 		if (scheduler == null)
@@ -132,6 +138,18 @@ public final class InferenceApiServer {
 	 */
 	public void setHealthSidecarUrl(String baseUrl) {
 		this.healthSidecarUrl = baseUrl != null ? baseUrl.replaceAll("/+$", "") : null;
+	}
+
+	/**
+	 * Wire a {@link cab.ml.juno.health.HealthReporter} that will have
+	 * {@code recordLatency(ms)} called after every completed inference request.
+	 * This populates the Latency P99 column in the health dashboard for the
+	 * coordinator node.
+	 *
+	 * @param reporter an already-started reporter (caller owns lifecycle)
+	 */
+	public void setLatencyReporter(cab.ml.juno.health.HealthReporter reporter) {
+		this.latencyReporter = reporter;
 	}
 
 	// ── Web console ───────────────────────────────────────────────────────────
@@ -740,9 +758,12 @@ prompt.focus();
 	private void handleBlockingInference(Context ctx) {
 		InferenceRequest request = parseRequest(ctx);
 		if (request == null)
-			return; // parseRequest already set error response
+			return;
 
+		long start = System.currentTimeMillis();
 		GenerationResult result = scheduler.submitAndWait(request);
+		if (latencyReporter != null)
+			latencyReporter.recordLatency(System.currentTimeMillis() - start);
 		ctx.json(toResponse(result, request.modelId()));
 	}
 
@@ -782,7 +803,10 @@ prompt.focus();
 		});
 
 		try {
+			long start = System.currentTimeMillis();
 			GenerationResult result = scheduler.submit(request, consumer).join();
+			if (latencyReporter != null)
+				latencyReporter.recordLatency(System.currentTimeMillis() - start);
 			String finishReason = toFinishReason(result.stopReason());
 			consumer.sendComplete(finishReason);
 			ctx.res().getWriter().flush();
