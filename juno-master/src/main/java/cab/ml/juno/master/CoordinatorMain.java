@@ -155,6 +155,19 @@ public final class CoordinatorMain {
 
         // ── Start REST server ─────────────────────────────────────────────
         InferenceApiServer apiServer = new InferenceApiServer(scheduler, registry, byteOrderStr);
+
+        // Wire health dashboard into the coordinator's own Javalin server so nodes
+        // can POST probes to /health/probe on port 8080 and the dashboard is
+        // accessible at http://<coordinator>:8080/health-ui without opening an
+        // extra port in the security group.
+        String healthUrl = env("JUNO_HEALTH", "false").equals("true")
+                ? "http://localhost:" + parseInt(env("JUNO_HEALTH_PORT", "8081"), 8081)
+                : null;
+        if (healthUrl != null) {
+            apiServer.setHealthSidecarUrl(healthUrl);
+            log.info("Health dashboard wired: GET /health-ui → sidecar at " + healthUrl);
+        }
+
         apiServer.start(httpPort);
         log.info("Coordinator REST server started on port " + httpPort);
         System.out.println("COORDINATOR_READY:" + httpPort);

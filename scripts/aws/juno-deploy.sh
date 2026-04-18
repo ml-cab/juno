@@ -576,7 +576,8 @@ _wait_for_ready_and_open() {
 
   log ""
   log "  ╔══════════════════════════════════════════════════════╗"
-  log "  ║  Web console: ${CONSOLE_URL}"
+  log "  ║  Web console  : ${CONSOLE_URL}"
+  log "  ║  Health dash  : ${CONSOLE_URL}/health-ui"
   log "  ╚══════════════════════════════════════════════════════╝"
   log ""
 
@@ -848,6 +849,7 @@ setup() {
       "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${MY_IP}/32,Description=SSH}]" \
       "IpProtocol=tcp,FromPort=${GRPC_PORT},ToPort=$(( GRPC_PORT + NODE_COUNT + 1 )),IpRanges=[{CidrIp=${VPC_CIDR},Description=Juno-gRPC-internal}]" \
       "IpProtocol=tcp,FromPort=${HTTP_PORT},ToPort=${HTTP_PORT},IpRanges=[{CidrIp=0.0.0.0/0,Description=Juno-REST}]" \
+      "IpProtocol=tcp,FromPort=8081,ToPort=8081,IpRanges=[{CidrIp=${VPC_CIDR},Description=Juno-health-sidecar-internal}]" \
       "IpProtocol=tcp,FromPort=5701,ToPort=5701,IpRanges=[{CidrIp=${VPC_CIDR},Description=Hazelcast}]" \
       &>/dev/null
   log "  OK Security group: $SG_ID  (SSH from ${MY_IP}, gRPC internal, REST public)"
@@ -1073,6 +1075,9 @@ JUNO_BYTE_ORDER=${BYTE_ORDER}
 NODE_ID=${NODE_ID}
 JUNO_JFR_DURATION=${JFR_DURATION}
 JUNO_MODEL_STEM=${MODEL_STEM}
+# Health reporter — each node pushes JVM heap + temperature to the coordinator's
+# /health/probe proxy so the dashboard at /health-ui shows per-node data.
+JUNO_HEALTH_URL=http://${COORDINATOR_PRIVATE_IP}:${HTTP_PORT}
 EOF2
 
 # Wrapper script — conditionally adds -XX:StartFlightRecording when JFR is enabled
@@ -1100,6 +1105,7 @@ exec /usr/bin/java \
   -Dnode.id=${NODE_ID} \
   -Dnode.port=${JUNO_GRPC_PORT} \
   -Dmodel.path=${JUNO_MODEL_PATH} \
+  ${JUNO_HEALTH_URL:+-Djuno.health.url=${JUNO_HEALTH_URL}} \
   -jar /opt/juno/juno-node/target/juno-node.jar \
   cab.ml.juno.node.NodeMain
 EOF2
@@ -1153,6 +1159,8 @@ exec /usr/bin/java \
   --add-opens java.base/java.nio=ALL-UNNAMED \
   -XX:+UseG1GC -XX:+AlwaysPreTouch -Xmx4g \
   ${JFR_OPT:+$JFR_OPT} \
+  -DJUNO_HEALTH=true \
+  -DJUNO_HEALTH_PORT=${JUNO_HEALTH_PORT:-8081} \
   -jar /opt/juno/juno-master/target/juno-master.jar \
   --model-path ${JUNO_MODEL_PATH} \
   --pType ${JUNO_PTYPE} \
@@ -1251,7 +1259,9 @@ exec /usr/bin/java \
   --add-opens java.base/java.nio=ALL-UNNAMED \
   -XX:+UseG1GC -XX:+AlwaysPreTouch -Xmx4g \
   \${JFR_OPT:+\$JFR_OPT} \
-  -jar /opt/juno/juno-master/target/juno-master.jar \
+  -DJUNO_HEALTH=true \\
+  -DJUNO_HEALTH_PORT=\${JUNO_HEALTH_PORT:-8081} \\
+  -jar /opt/juno/juno-master/target/juno-master.jar \\
   --model-path \${JUNO_MODEL_PATH} \
   --pType \${JUNO_PTYPE} \
   --dtype \${JUNO_DTYPE}
@@ -1324,6 +1334,9 @@ JUNO_BYTE_ORDER=${BYTE_ORDER}
 JUNO_MAX_QUEUE=1000
 JUNO_JFR_DURATION=${JFR_DURATION:-}
 JUNO_MODEL_STEM=${MODEL_FILENAME%.*}
+JUNO_HEALTH=true
+JUNO_HEALTH_PORT=8081
+COORDINATOR_PRIVATE_IP=${INSTANCE_PRIVATE_IPS[${INSTANCE_IDS[0]}]}
 EOF
 )
 

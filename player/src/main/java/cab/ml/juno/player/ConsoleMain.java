@@ -126,6 +126,8 @@ public final class ConsoleMain {
 	/** When true, start a health sidecar alongside the normal run mode. */
 	private static boolean healthMode = false;
 	private static int healthPort = cab.ml.juno.health.HealthMain.DEFAULT_PORT;
+	/** Active reporters — wired from runLocalRepl(); used to record per-inference latency. */
+	private static final java.util.List<HealthReporter> activeReporters = new java.util.ArrayList<>();
 	// ── Byte-order argument ───────────────────────────────────────────────────
 	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
 	private static String byteOrder = "BE";
@@ -491,6 +493,7 @@ public final class ConsoleMain {
 			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · LoRA rank=%d]" + Color.RESET + "%n",
 					result.generatedTokens(), elapsed, loraRank);
 			System.out.println();
+			activeReporters.forEach(r -> r.recordLatency(elapsed));
 		}
 
 		loop.evictSession(history.sessionId());
@@ -1100,8 +1103,6 @@ public final class ConsoleMain {
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
 
 		// ── Health reporters for in-process nodes ─────────────────────────────
-		// One reporter per shard node, each using JVM heap as a VRAM proxy so the
-		// dashboard shows a card per node even in single-JVM mode.
 		if (healthMode) {
 			String base = "http://localhost:" + healthPort;
 			List<HealthReporter> reporters = new ArrayList<>();
@@ -1110,6 +1111,7 @@ public final class ConsoleMain {
 				r.startBackground();
 				reporters.add(r);
 			}
+			activeReporters.addAll(reporters);
 			Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
 				for (HealthReporter r : reporters) r.stop();
 			}));
@@ -1226,6 +1228,7 @@ public final class ConsoleMain {
 			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · %s]" + Color.RESET + "%n",
 					result.generatedTokens(), elapsed, dtype);
 			System.out.println();
+			activeReporters.forEach(r -> r.recordLatency(elapsed));
 		}
 
 		loop.evictSession(history.sessionId());

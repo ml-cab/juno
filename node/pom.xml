@@ -11,8 +11,8 @@
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>node1</artifactId>
-    <name>node1</name>
+    <artifactId>node</artifactId>
+    <name>node</name>
     <description>Inference Node — runs on each GPU machine, cuBLAS SGEMM via bytedeco/cuda, pipeline forward pass, gRPC activation transfer</description>
 
     <dependencies>

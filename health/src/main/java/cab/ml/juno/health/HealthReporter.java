@@ -16,38 +16,43 @@
 
 package cab.ml.juno.health;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.logging.Logger;
 
 /**
  * Periodically POSTs {@code NodeHealth} snapshots to the local health sidecar.
  *
- * <h2>Why this exists</h2>
- * The health sidecar is a passive HTTP server — it only knows about a node when
- * that node pushes a probe to {@code POST /health/probe}. Without an active
- * reporter the dashboard stays empty. This class fills that gap.
+ * <h2>Metrics collected</h2>
+ * <ul>
+ *   <li><b>Heap pressure</b> — JVM {@code usedMemory / maxMemory} as VRAM proxy.
+ *   <li><b>Temperature</b> — reads {@code /sys/class/thermal/thermal_zone temp}
+ *       on Linux, preferring package-level sensors. Returns -1 on other platforms.
+ *   <li><b>Latency P99</b> — sliding window of the last 128 inference durations;
+ *       callers record each generation via {@link #recordLatency(long)}.
+ * </ul>
  *
- * <h2>In-process (local mode)</h2>
- * {@code ConsoleMain} creates one {@code HealthReporter} per virtual node and
- * calls {@link #startBackground}. Each reporter uses JVM heap occupancy as a
- * proxy for VRAM pressure (good enough when CUDA is not present).
+ * <h2>Usage (local mode)</h2>
+ * {@code ConsoleMain} starts one reporter per shard and calls
+ * {@link #recordLatency(long)} from the REPL after every generation. The
+ * returned P99 value shows up in the dashboard's "Latency P99" column.
  *
- * <h2>Forked cluster mode</h2>
- * {@code NodeMain} reads {@code -Djuno.health.url=http://host:port} and starts
- * a {@code HealthReporter} for the node's own ID. This way the forked process
- * pushes real per-JVM heap stats to the coordinator's sidecar.
- *
- * <h2>Thread model</h2>
- * A single daemon virtual-thread scheduled executor fires every
- * {@value #DEFAULT_INTERVAL_MS} ms. If the HTTP call fails the error is logged
- * at FINE level and the next cycle retries.
+ * <h2>Usage (cluster mode)</h2>
+ * {@code NodeMain} picks up {@code -Djuno.health.url=http://host:port} and
+ * starts a reporter inside each forked JVM so real per-node heap stats flow
+ * to the sidecar independently.
  */
 public final class HealthReporter {
 
@@ -55,55 +60,77 @@ public final class HealthReporter {
 
     public static final long DEFAULT_INTERVAL_MS = 5_000L;
 
+    /** Sliding window size for P99 latency. */
+    private static final int LATENCY_WINDOW = 128;
+
     private final String nodeId;
-    private final String healthUrl;   // e.g. "http://localhost:8081/health/probe"
-    private final long intervalMs;
+    private final String healthUrl;   // full probe URL, e.g. "http://localhost:8081/health/probe"
+    private final long   intervalMs;
 
     private final HttpClient http = HttpClient.newHttpClient();
     private ScheduledExecutorService scheduler;
+
+    // ── Latency sliding window ────────────────────────────────────────────────
+    private final AtomicLongArray latencyWindow = new AtomicLongArray(LATENCY_WINDOW);
+    private final AtomicLong      latencyIdx    = new AtomicLong(0);
+    private final AtomicLong      latencyCount  = new AtomicLong(0);
+
+    // ── Temperature cache ─────────────────────────────────────────────────────
+    private volatile Path    thermalPath   = null;
+    private volatile boolean thermalProbed = false;
+
+    // ── Constructor ───────────────────────────────────────────────────────────
 
     public HealthReporter(String nodeId, String healthBaseUrl) {
         this(nodeId, healthBaseUrl, DEFAULT_INTERVAL_MS);
     }
 
     public HealthReporter(String nodeId, String healthBaseUrl, long intervalMs) {
-        this.nodeId      = nodeId;
-        this.healthUrl   = healthBaseUrl.replaceAll("/+$", "") + "/health/probe";
-        this.intervalMs  = intervalMs;
+        this.nodeId     = nodeId;
+        this.healthUrl  = healthBaseUrl.replaceAll("/+$", "") + "/health/probe";
+        this.intervalMs = intervalMs;
     }
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * Start emitting probes in a background daemon thread.
-     * Returns immediately; call {@link #stop()} to shut down.
+     * Record one inference duration. Thread-safe; call from the REPL after each
+     * completed generation to populate the Latency P99 dashboard column.
+     *
+     * @param durationMs elapsed wall-clock time in milliseconds
      */
+    public void recordLatency(long durationMs) {
+        long idx = latencyIdx.getAndIncrement() % LATENCY_WINDOW;
+        latencyWindow.set((int) idx, durationMs);
+        latencyCount.incrementAndGet();
+    }
+
+    /** Start emitting probes every {@code intervalMs} ms on a background daemon thread. */
     public void startBackground() {
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = Thread.ofVirtual().name("juno-health-reporter[" + nodeId + "]").unstarted(r);
+            Thread t = Thread.ofVirtual()
+                    .name("juno-health-reporter[" + nodeId + "]")
+                    .unstarted(r);
             t.setDaemon(true);
             return t;
         });
         scheduler.scheduleAtFixedRate(this::pushProbe, 0, intervalMs, TimeUnit.MILLISECONDS);
-        log.info("HealthReporter started for node [" + nodeId + "] → " + healthUrl
-                + "  interval=" + intervalMs + "ms");
+        log.info("HealthReporter started for [" + nodeId + "] → " + healthUrl
+                + "  interval=" + intervalMs + " ms");
     }
 
-    /** Stop the background reporter. */
+    /** Stop the reporter. Safe to call multiple times. */
     public void stop() {
         if (scheduler != null) {
             scheduler.shutdownNow();
         }
     }
 
-    // ── Factory helpers ───────────────────────────────────────────────────────
+    // ── Factory ───────────────────────────────────────────────────────────────
 
     /**
-     * Convenience: create and start a reporter for one node, using JVM heap as
-     * the VRAM proxy. Returns immediately.
-     *
-     * @param nodeId       logical node ID (shown on the dashboard)
-     * @param healthBase   base URL of the health sidecar, e.g. {@code "http://localhost:8081"}
+     * Create, start and return a reporter. The caller should retain the reference
+     * to call {@link #recordLatency(long)} after each inference.
      */
     public static HealthReporter startForNode(String nodeId, String healthBase) {
         HealthReporter r = new HealthReporter(nodeId, healthBase);
@@ -111,7 +138,7 @@ public final class HealthReporter {
         return r;
     }
 
-    // ── Probe emission ────────────────────────────────────────────────────────
+    // ── Probe push ────────────────────────────────────────────────────────────
 
     private void pushProbe() {
         try {
@@ -132,39 +159,97 @@ public final class HealthReporter {
         }
     }
 
-    /**
-     * Build a JSON body for {@code POST /health/probe} using JVM heap stats as
-     * a VRAM proxy. Works even without a real GPU.
-     *
-     * <p>Mapping:
-     * <ul>
-     *   <li>{@code vramTotalBytes} = {@link Runtime#maxMemory()}
-     *   <li>{@code vramFreeBytes}  = max − (total − free)  (= truly available heap)
-     *   <li>{@code vramPressure}   = heap used / heap max  (0.0–1.0)
-     * </ul>
-     */
-    private String buildProbeJson() {
-        Runtime rt = Runtime.getRuntime();
-        long maxMem   = rt.maxMemory();
-        long totalMem = rt.totalMemory();
-        long freeMem  = rt.freeMemory();
-        long usedMem  = totalMem - freeMem;
-        long trueFree = Math.max(0L, maxMem - usedMem);
+    // ── Metric collection ─────────────────────────────────────────────────────
 
-        double pressure = maxMem > 0 ? (double) usedMem / maxMem : 0.0;
-        // Clamp to [0.0, 1.0] in case of edge cases
-        pressure = Math.min(1.0, Math.max(0.0, pressure));
+    private String buildProbeJson() {
+        // Heap / VRAM proxy
+        Runtime rt    = Runtime.getRuntime();
+        long maxMem   = rt.maxMemory();
+        long usedMem  = rt.totalMemory() - rt.freeMemory();
+        long trueFree = Math.max(0L, maxMem - usedMem);
+        double pressure = maxMem > 0
+                ? Math.min(1.0, Math.max(0.0, (double) usedMem / maxMem))
+                : 0.0;
+
+        double tempC = readTemperatureCelsius();
+        double p99   = computeP99();
 
         return "{"
-                + "\"nodeId\":\"" + escape(nodeId) + "\","
-                + "\"vramPressure\":" + String.format("%.6f", pressure) + ","
-                + "\"vramFreeBytes\":"  + trueFree + ","
-                + "\"vramTotalBytes\":" + maxMem + ","
-                + "\"temperatureCelsius\":-1.0,"
-                + "\"inferenceLatencyP99Ms\":-1.0,"
-                + "\"sampledAt\":\"" + Instant.now() + "\""
+                + "\"nodeId\":\""              + escape(nodeId)                      + "\","
+                + "\"vramPressure\":"           + String.format("%.6f", pressure)    + ","
+                + "\"vramFreeBytes\":"          + trueFree                           + ","
+                + "\"vramTotalBytes\":"         + maxMem                             + ","
+                + "\"temperatureCelsius\":"     + String.format("%.1f", tempC)       + ","
+                + "\"inferenceLatencyP99Ms\":"  + String.format("%.1f", p99)         + ","
+                + "\"sampledAt\":\""            + Instant.now()                      + "\""
                 + "}";
     }
+
+    // ── Temperature ───────────────────────────────────────────────────────────
+
+    /**
+     * Read CPU temperature from Linux sysfs thermal zones.
+     * Prefers zones whose {@code type} contains "x86_pkg" or "cpu" (package temp).
+     * Returns -1.0 on non-Linux platforms or if no readable sensor is found.
+     */
+    private double readTemperatureCelsius() {
+        if (!thermalProbed) {
+            thermalProbed = true;
+            thermalPath   = findThermalZone();
+        }
+        if (thermalPath == null) return -1.0;
+        try {
+            long milliC = Long.parseLong(Files.readString(thermalPath).trim());
+            return milliC / 1000.0;
+        } catch (IOException | NumberFormatException e) {
+            return -1.0;
+        }
+    }
+
+    private static Path findThermalZone() {
+        Path base = Path.of("/sys/class/thermal");
+        if (!Files.isDirectory(base)) return null;
+
+        Path fallback = null;
+        try (var ds = Files.newDirectoryStream(base, "thermal_zone*")) {
+            for (Path zone : ds) {
+                Path tempFile = zone.resolve("temp");
+                if (!Files.isReadable(tempFile)) continue;
+                if (fallback == null) fallback = tempFile;
+
+                Path typeFile = zone.resolve("type");
+                if (Files.isReadable(typeFile)) {
+                    String type = Files.readString(typeFile).trim().toLowerCase();
+                    if (type.contains("x86_pkg") || type.contains("pkg_temp")
+                            || type.contains("coretemp") || type.contains("cpu")) {
+                        return tempFile;
+                    }
+                }
+            }
+        } catch (IOException e) {
+            return null;
+        }
+        return fallback;
+    }
+
+    // ── Latency P99 ───────────────────────────────────────────────────────────
+
+    private double computeP99() {
+        long count = latencyCount.get();
+        if (count == 0) return -1.0;
+
+        int filled = (int) Math.min(count, LATENCY_WINDOW);
+        long[] samples = new long[filled];
+        for (int i = 0; i < filled; i++) {
+            samples[i] = latencyWindow.get(i);
+        }
+        Arrays.sort(samples);
+
+        int p99idx = Math.max(0, (int) Math.ceil(0.99 * filled) - 1);
+        return samples[Math.min(p99idx, filled - 1)];
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static String escape(String s) {
         return s.replace("\\", "\\\\").replace("\"", "\\\"");

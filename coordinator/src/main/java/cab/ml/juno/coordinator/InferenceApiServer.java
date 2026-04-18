@@ -56,6 +56,13 @@ public final class InferenceApiServer {
 	private Javalin app;
 	private String byteOrder;
 
+	/**
+	 * Optional health sidecar URL (e.g. "http://localhost:8081").
+	 * When set, /health/probe and /health-data are proxied to the sidecar so
+	 * the health dashboard can be served from the coordinator's own port.
+	 */
+	private String healthSidecarUrl;
+
 	public InferenceApiServer(RequestScheduler scheduler, ModelRegistry modelRegistry, String byteOrder) {
 		this.byteOrder = byteOrder != null ? byteOrder : "BE";
 		if (scheduler == null)
@@ -74,6 +81,14 @@ public final class InferenceApiServer {
 
 		// ── Web console ───────────────────────────────────────────────────────
 		app.get("/", this::handleConsole);
+		app.get("/health-ui", this::handleHealthDashboard);
+
+		// ── Health probe proxy — nodes POST here, dashboard polls GET /health-data ──
+		// The coordinator proxies probe storage to the sidecar when running on AWS.
+		// In standalone mode the sidecar runs on a separate port; /health-ui fetches
+		// from window.location.origin so routes live on the same :8080 host.
+		app.post("/health/probe",    this::handleHealthProbeProxy);
+		app.get ("/health-data",     this::handleHealthDataProxy);
 
 		// ── Inference ─────────────────────────────────────────────────────────
 		app.post("/v1/inference", this::handleBlockingInference);
@@ -109,10 +124,74 @@ public final class InferenceApiServer {
 		}
 	}
 
+	/**
+	 * Optionally wire a health sidecar so the coordinator proxies node health
+	 * probes and serves the dashboard at {@code GET /health-ui}.
+	 *
+	 * @param baseUrl base URL of the sidecar, e.g. {@code "http://localhost:8081"}
+	 */
+	public void setHealthSidecarUrl(String baseUrl) {
+		this.healthSidecarUrl = baseUrl != null ? baseUrl.replaceAll("/+$", "") : null;
+	}
+
 	// ── Web console ───────────────────────────────────────────────────────────
 
 	private void handleConsole(Context ctx) {
 		ctx.contentType("text/html; charset=UTF-8").result(CONSOLE_HTML);
+	}
+
+	private void handleHealthDashboard(Context ctx) {
+		ctx.contentType("text/html; charset=UTF-8").result(HEALTH_DASHBOARD_HTML);
+	}
+
+	/**
+	 * Proxy {@code POST /health/probe} → sidecar {@code POST /health/probe}.
+	 * Nodes deployed by juno-deploy.sh point {@code JUNO_HEALTH_URL} at the
+	 * coordinator (port 8080) so all health data flows through one endpoint.
+	 */
+	private void handleHealthProbeProxy(Context ctx) {
+		if (healthSidecarUrl == null) {
+			ctx.status(503).json(java.util.Map.of("error", "health sidecar not configured"));
+			return;
+		}
+		try {
+			java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
+			java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+					.uri(java.net.URI.create(healthSidecarUrl + "/health/probe"))
+					.header("Content-Type", "application/json")
+					.POST(java.net.http.HttpRequest.BodyPublishers.ofString(ctx.body()))
+					.build();
+			java.net.http.HttpResponse<String> resp =
+					http.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+			ctx.status(resp.statusCode()).contentType("application/json").result(resp.body());
+		} catch (Exception e) {
+			ctx.status(502).json(java.util.Map.of("error", "sidecar unreachable: " + e.getMessage()));
+		}
+	}
+
+	/**
+	 * Proxy {@code GET /health-data} → sidecar {@code GET /health}.
+	 * The health dashboard JavaScript fetches from the same origin (/health-data)
+	 * so CORS is never an issue regardless of which port the user connects to.
+	 */
+	private void handleHealthDataProxy(Context ctx) {
+		if (healthSidecarUrl == null) {
+			ctx.status(200).contentType("application/json")
+			   .result("{\"status\":\"HEALTHY\",\"nodeCount\":0,\"nodes\":[]}");
+			return;
+		}
+		try {
+			java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
+			java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+					.uri(java.net.URI.create(healthSidecarUrl + "/health"))
+					.GET().build();
+			java.net.http.HttpResponse<String> resp =
+					http.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+			ctx.status(resp.statusCode()).contentType("application/json").result(resp.body());
+		} catch (Exception e) {
+			ctx.status(200).contentType("application/json")
+			   .result("{\"status\":\"UNREACHABLE\",\"nodeCount\":0,\"nodes\":[]}");
+		}
 	}
 
 	/**
@@ -519,6 +598,142 @@ prompt.focus();
 </body>
 </html>
 """;
+
+	// ── Health dashboard HTML ─────────────────────────────────────────────────
+	// Served at GET /health-ui. Fetches data from /health-data (same-origin proxy
+	// to the sidecar) — no CORS issues, no extra port needed in AWS security groups.
+
+	private static final String HEALTH_DASHBOARD_HTML = """
+		<!DOCTYPE html>
+		<html lang="en">
+		<head>
+		  <meta charset="UTF-8">
+		  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+		  <title>Juno Health</title>
+		  <style>
+		    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+		    :root {
+		      --bg:#0d1117; --surface:#161b22; --border:#30363d; --text:#c9d1d9;
+		      --muted:#8b949e; --green:#3fb950; --yellow:#d29922; --red:#f85149;
+		      --blue:#58a6ff; --accent:#1f6feb;
+		    }
+		    body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui,sans-serif; min-height:100vh; }
+		    header { background:var(--surface); border-bottom:1px solid var(--border); padding:1rem 2rem; display:flex; align-items:center; gap:1rem; }
+		    header h1 { font-size:1.25rem; font-weight:600; }
+		    header a { margin-left:auto; font-size:.75rem; color:var(--blue); text-decoration:none; }
+		    header a:hover { text-decoration:underline; }
+		    .badge { display:inline-flex; align-items:center; gap:.4rem; padding:.25rem .75rem; border-radius:2rem; font-size:.75rem; font-weight:600; letter-spacing:.05em; }
+		    .badge.healthy  { background:#0d2a16; color:var(--green); border:1px solid var(--green); }
+		    .badge.degraded { background:#2a1f05; color:var(--yellow); border:1px solid var(--yellow); }
+		    .badge.down     { background:#2a0b0b; color:var(--red); border:1px solid var(--red); }
+		    .badge.unknown  { background:#1a1f27; color:var(--muted); border:1px solid var(--border); }
+		    .dot { width:7px; height:7px; border-radius:50%; background:currentColor; }
+		    main { padding:2rem; max-width:1200px; margin:0 auto; }
+		    .summary { display:flex; align-items:center; gap:1.5rem; margin-bottom:2rem; flex-wrap:wrap; }
+		    .stat { background:var(--surface); border:1px solid var(--border); border-radius:.5rem; padding:.75rem 1.25rem; }
+		    .stat .label { font-size:.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-bottom:.25rem; }
+		    .stat .value { font-size:1.5rem; font-weight:700; }
+		    .nodes { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:1rem; }
+		    .node-card { background:var(--surface); border:1px solid var(--border); border-radius:.75rem; padding:1.25rem; transition:border-color .15s; }
+		    .node-card:hover { border-color:var(--accent); }
+		    .node-card.circuit-OPEN      { border-color:var(--red); }
+		    .node-card.circuit-HALF_OPEN { border-color:var(--yellow); }
+		    .node-card-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:1rem; }
+		    .node-id { font-weight:600; font-size:.95rem; }
+		    .circuit-badge { font-size:.65rem; font-weight:700; padding:.2rem .5rem; border-radius:.25rem; letter-spacing:.06em; }
+		    .circuit-CLOSED    { background:#0d2a16; color:var(--green); }
+		    .circuit-OPEN      { background:#2a0b0b; color:var(--red); }
+		    .circuit-HALF_OPEN { background:#2a1f05; color:var(--yellow); }
+		    .metric-row { display:flex; justify-content:space-between; margin-bottom:.6rem; font-size:.83rem; }
+		    .metric-label { color:var(--muted); }
+		    .metric-value { font-weight:500; font-variant-numeric:tabular-nums; }
+		    .vram-bar-wrap { margin-top:.75rem; }
+		    .vram-bar-label { display:flex; justify-content:space-between; font-size:.72rem; color:var(--muted); margin-bottom:.3rem; }
+		    .vram-bar-bg { background:var(--border); border-radius:4px; height:6px; overflow:hidden; }
+		    .vram-bar-fill { height:100%; border-radius:4px; transition:width .4s ease; }
+		    .bar-ok   { background:var(--green); }
+		    .bar-warn { background:var(--yellow); }
+		    .bar-crit { background:var(--red); }
+		    .refresh-ticker { font-size:.72rem; color:var(--muted); display:flex; align-items:center; gap:.4rem; }
+		    .empty-state { text-align:center; padding:4rem 2rem; color:var(--muted); }
+		    footer { text-align:center; padding:2rem; font-size:.75rem; color:var(--muted); border-top:1px solid var(--border); margin-top:2rem; }
+		    footer a { color:var(--blue); text-decoration:none; }
+		  </style>
+		</head>
+		<body>
+		  <header>
+		    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style="flex-shrink:0">
+		      <rect x="2" y="2" width="20" height="20" rx="4" fill="#1f6feb" opacity=".15"/>
+		      <path d="M7 17l3-6 2 4 2-7 3 9" stroke="#58a6ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+		    </svg>
+		    <h1>Juno Health</h1>
+		    <div id="clusterBadge" class="badge unknown"><span class="dot"></span>LOADING</div>
+		    <div class="refresh-ticker"><span id="countdown">5</span>s</div>
+		    <a href="/">← Console</a>
+		  </header>
+		  <main>
+		    <div class="summary">
+		      <div class="stat"><div class="label">Nodes</div><div class="value" id="nodeCount">—</div></div>
+		      <div class="stat"><div class="label">Open Circuits</div><div class="value" id="openCount" style="color:var(--red)">—</div></div>
+		      <div class="stat"><div class="label">Avg VRAM</div><div class="value" id="avgVram">—</div></div>
+		    </div>
+		    <div id="nodeGrid" class="nodes"></div>
+		  </main>
+		  <footer>
+		    <a href="/health-data">/health-data</a> &nbsp;·&nbsp; POST /health/probe &nbsp;—&nbsp; Juno Health Monitor
+		  </footer>
+		  <script>
+		    let countdown = 5;
+		    const sc = s => s==='HEALTHY'?'healthy':s==='DEGRADED'?'degraded':s==='DOWN'?'down':'unknown';
+		    const bc = p => p>=0.98?'bar-crit':p>=0.90?'bar-warn':'bar-ok';
+		    const fb = b => b<=0?'—':b>=1e9?(b/1e9).toFixed(1)+' GB':(b/1e6).toFixed(0)+' MB';
+		    const fa = ms => ms<2000?ms+' ms':ms<60000?(ms/1000).toFixed(1)+' s':(ms/60000).toFixed(1)+' m';
+		    const ft = c => c>=0?c.toFixed(1)+' °C':'—';
+		    const fl = ms => ms>=0?ms.toFixed(0)+' ms':'—';
+		    async function refresh() {
+		      try {
+		        const r = await fetch('/health-data');
+		        if (!r.ok) throw new Error('HTTP '+r.status);
+		        const d = await r.json();
+		        const badge = document.getElementById('clusterBadge');
+		        badge.className = 'badge '+sc(d.status);
+		        badge.innerHTML = '<span class="dot"></span>'+(d.status||'UNKNOWN');
+		        document.getElementById('nodeCount').textContent = d.nodeCount??0;
+		        const nodes = d.nodes||[];
+		        document.getElementById('openCount').textContent = nodes.filter(n=>n.circuit==='OPEN').length;
+		        const avg = nodes.length?(nodes.reduce((s,n)=>s+(n.vramPressure||0),0)/nodes.length*100).toFixed(1)+'%':'—';
+		        document.getElementById('avgVram').textContent = avg;
+		        const grid = document.getElementById('nodeGrid');
+		        if (!nodes.length) {
+		          grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><h2>No nodes yet</h2><p>Nodes push probes to POST /health/probe</p></div>';
+		        } else {
+		          grid.innerHTML = nodes.map(n => {
+		            const pct = ((n.vramPressure||0)*100).toFixed(1);
+		            return '<div class="node-card circuit-'+n.circuit+'">'
+		              +'<div class="node-card-header"><div class="node-id">'+n.nodeId+'</div>'
+		              +'<span class="circuit-badge circuit-'+n.circuit+'">'+n.circuit+'</span></div>'
+		              +'<div class="metric-row"><span class="metric-label">VRAM free</span><span class="metric-value">'+fb(n.vramFreeBytes)+' / '+fb(n.vramTotalBytes)+'</span></div>'
+		              +'<div class="metric-row"><span class="metric-label">Temperature</span><span class="metric-value">'+ft(n.temperatureCelsius)+'</span></div>'
+		              +'<div class="metric-row"><span class="metric-label">Latency P99</span><span class="metric-value">'+fl(n.inferenceLatencyP99)+'</span></div>'
+		              +'<div class="metric-row"><span class="metric-label">Last seen</span>'
+		              +'<span class="metric-value" style="color:'+(n.ageMs>10000?'var(--red)':'var(--muted)')+'">'+fa(n.ageMs)+'</span></div>'
+		              +'<div class="vram-bar-wrap"><div class="vram-bar-label"><span>VRAM pressure</span><span>'+pct+'%</span></div>'
+		              +'<div class="vram-bar-bg"><div class="vram-bar-fill '+bc(n.vramPressure)+'" style="width:'+Math.min(100,pct)+'%"></div></div></div>'
+		              +'</div>';
+		          }).join('');
+		        }
+		      } catch(e) {
+		        const badge = document.getElementById('clusterBadge');
+		        badge.className = 'badge unknown';
+		        badge.innerHTML = '<span class="dot"></span>UNREACHABLE';
+		      }
+		    }
+		    refresh();
+		    setInterval(()=>{countdown--;if(countdown<=0){countdown=5;refresh();}document.getElementById('countdown').textContent=countdown;},1000);
+		  </script>
+		</body>
+		</html>
+		""";
 
 	// ── Route handlers ────────────────────────────────────────────────────────
 
