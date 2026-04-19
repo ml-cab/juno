@@ -52,6 +52,7 @@ BYTE_ORDER="BE"
 KEY_NAME="juno-deploy-key"
 SG_NAME="juno-deploy-sg"
 JFR_DURATION=""
+LORA_PLAY_PATH=""
 STATE_FILE="${HOME}/.juno-deploy-state"
 SSH_KEY_FILE="${HOME}/.ssh/juno-deploy-key.pem"
 MONITOR_INTERVAL=20
@@ -123,6 +124,7 @@ parse_options() {
       --byteOrder | --byte-order | --byteorder) BYTE_ORDER="${2^^}"; shift 2 ;;
       --region)          REGION="$2";         shift 2 ;;
       --jfr)             JFR_DURATION="$2";   shift 2 ;;
+      --lora-play)       LORA_PLAY_PATH=$(realpath "$2" 2>/dev/null || echo "$2"); shift 2 ;;
       *)                 die "Unknown option: $1 (run without args for usage)" ;;
     esac
   done
@@ -149,6 +151,7 @@ save_state() {
     echo "MODEL_FILENAME=\"$MODEL_FILENAME\""
     echo "SETUP_TIME=\"$SETUP_TIME\""
     echo "JFR_DURATION=\"${JFR_DURATION:-}\""
+    echo "LORA_PLAY_PATH=\"${LORA_PLAY_PATH:-}\""
   } > "$STATE_FILE"
   log "State saved → $STATE_FILE"
 }
@@ -763,6 +766,13 @@ setup() {
   log "Account: $(aws sts get-caller-identity --query Arn --output text)"
   log "Region : $REGION"
   log "Nodes  : ${NODE_COUNT} × ${INSTANCE_TYPE}  coordinator=${COORDINATOR_MODE}"
+  [[ -n "${JFR_DURATION:-}"   ]] && log "JFR    : duration=${JFR_DURATION}"
+  if [[ -n "${LORA_PLAY_PATH:-}" ]]; then
+    if [[ ! -f "$LORA_PLAY_PATH" ]]; then
+      die "✖ --lora-play file not found: '${LORA_PLAY_PATH}'\n  Pass an absolute path or run the command from the directory containing the file."
+    fi
+    log "LoRA   : play-back=${LORA_PLAY_PATH}"
+  fi
   echo ""
 
   # ── Resolve Ubuntu 22.04 LTS AMI ────────────────────────────
@@ -882,10 +892,12 @@ _launch_nodes() {
 
     local USER_DATA
     USER_DATA=$(_build_node_userdata "$NODE_IDX" "$IS_COORDINATOR_NODE")
-    local USER_DATA_B64
-    USER_DATA_B64=$(printf '%s' "$USER_DATA" | base64 -w 0)
+    local USER_DATA_FILE
+    USER_DATA_FILE=$(mktemp /tmp/juno-userdata-XXXXXX.sh)
+    printf '%s' "$USER_DATA" > "$USER_DATA_FILE"
 
     log "  Launching node $i / ${NODE_COUNT}…"
+    log "  [TRACE] user-data size: $(wc -c < "$USER_DATA_FILE") bytes  first-line: $(head -1 "$USER_DATA_FILE")"
     local LAUNCH_ERR; LAUNCH_ERR=$(mktemp)
     local LAUNCH_OUT
     LAUNCH_OUT=$(aws ec2 run-instances \
@@ -896,7 +908,7 @@ _launch_nodes() {
       --subnet-id "$SUBNET_ID" \
       --security-group-ids "$SG_ID" \
       --associate-public-ip-address \
-      --user-data "$USER_DATA_B64" \
+      --user-data "file://${USER_DATA_FILE}" \
       --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=50,VolumeType=gp3,DeleteOnTermination=true}" \
       --tag-specifications \
         "ResourceType=instance,Tags=[{Key=Name,Value=juno-node-${i}},{Key=Project,Value=juno}]" \
@@ -911,9 +923,10 @@ _launch_nodes() {
           aws ec2 terminate-instances --instance-ids "${INSTANCE_IDS[@]}" \
             --region "$REGION" --output text &>/dev/null || true
         }
+        rm -f "$LAUNCH_ERR" "$USER_DATA_FILE"
         die "Launch aborted."
       }
-    rm -f "$LAUNCH_ERR"
+    rm -f "$LAUNCH_ERR" "$USER_DATA_FILE"
     local IID
     IID=$(echo "$LAUNCH_OUT" | jq -r '.Instances[0].InstanceId')
     INSTANCE_IDS+=("$IID")
@@ -930,8 +943,10 @@ _launch_coordinator_if_separate() {
   log "Launching coordinator (t3.medium)…"
   local COORD_USERDATA
   COORD_USERDATA=$(_build_coordinator_userdata)
-  local COORD_USERDATA_B64
-  COORD_USERDATA_B64=$(printf '%s' "$COORD_USERDATA" | base64 -w 0)
+  local COORD_USERDATA_FILE
+  COORD_USERDATA_FILE=$(mktemp /tmp/juno-userdata-coord-XXXXXX.sh)
+  printf '%s' "$COORD_USERDATA" > "$COORD_USERDATA_FILE"
+  log "  [TRACE] coordinator user-data size: $(wc -c < "$COORD_USERDATA_FILE") bytes"
 
   local LAUNCH_ERR; LAUNCH_ERR=$(mktemp)
   local LAUNCH_OUT
@@ -943,16 +958,17 @@ _launch_coordinator_if_separate() {
     --subnet-id "$SUBNET_ID" \
     --security-group-ids "$SG_ID" \
     --associate-public-ip-address \
-    --user-data "$COORD_USERDATA_B64" \
+    --user-data "file://${COORD_USERDATA_FILE}" \
     --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=20,VolumeType=gp3,DeleteOnTermination=true}" \
     --tag-specifications \
       "ResourceType=instance,Tags=[{Key=Name,Value=juno-coordinator},{Key=Project,Value=juno}]" \
     --region "$REGION" \
     --output json 2>"$LAUNCH_ERR") || {
       echo -e "${RED}  Coordinator launch FAILED:${RESET}"
-      cat "$LAUNCH_ERR" | sed 's/^/    /'; rm -f "$LAUNCH_ERR"
+      cat "$LAUNCH_ERR" | sed 's/^/    /'; rm -f "$LAUNCH_ERR" "$COORD_USERDATA_FILE"
       die "Coordinator launch aborted."
     }
+  rm -f "$LAUNCH_ERR" "$COORD_USERDATA_FILE"
   rm -f "$LAUNCH_ERR"
   COORDINATOR_INSTANCE_ID=$(echo "$LAUNCH_OUT" | jq -r '.Instances[0].InstanceId')
   log "  ✅ Coordinator: $COORDINATOR_INSTANCE_ID"
@@ -993,6 +1009,16 @@ _build_node_userdata() {
   local NODE_COUNT_VAL="$NODE_COUNT"
   local GIT_VAL="$GIT"
 
+  # ── [TRACE] Show exactly what is being baked into the bootstrap script ──────
+  # IMPORTANT: must go to stderr (>&2). This function is called as
+  # USER_DATA=$(_build_node_userdata ...) so stdout is captured verbatim as the
+  # cloud-init user-data script. Any log output on stdout would prepend before
+  # #!/bin/bash, causing cloud-init to reject the script as non-multipart.
+  log "  [TRACE] node-${NODE_IDX_VAL} bootstrap params:" >&2
+  log "          grpc_port=${PORT_VAL}  is_coordinator=${IS_COORD_VAL}  dtype=${DTYPE_VAL}" >&2
+  log "          model=${MODEL_FILENAME_VAL}  git=${GIT_VAL}" >&2
+  log "          jfr=${JFR_DURATION_VAL:-<none>}  lora_play=<will be deployed after bootstrap>" >&2
+
   sed -e "s|__NODE_IDX__|${NODE_IDX_VAL}|g" \
       -e "s|__PORT__|${PORT_VAL}|g" \
       -e "s|__IS_COORD__|${IS_COORD_VAL}|g" \
@@ -1005,6 +1031,7 @@ _build_node_userdata() {
       -e "s|__MODEL_FILENAME__|${MODEL_FILENAME_VAL}|g" \
       -e "s|__MODEL_STEM__|${MODEL_STEM_VAL}|g" \
       -e "s|__JFR_DURATION__|${JFR_DURATION_VAL}|g" \
+      -e "s|__LORA_PLAY_PATH__||g" \
       -e "s|__MODEL_URL__|${MODEL_URL_VAL}|g" \
       <<'EOF'
 #!/bin/bash
@@ -1073,6 +1100,7 @@ JUNO_BYTE_ORDER=${BYTE_ORDER}
 NODE_ID=${NODE_ID}
 JUNO_JFR_DURATION=${JFR_DURATION}
 JUNO_MODEL_STEM=${MODEL_STEM}
+JUNO_LORA_PLAY_PATH=__LORA_PLAY_PATH__
 EOF2
 
 # Wrapper script — conditionally adds -XX:StartFlightRecording when JFR is enabled
@@ -1100,6 +1128,7 @@ exec /usr/bin/java \
   -Dnode.id=${NODE_ID} \
   -Dnode.port=${JUNO_GRPC_PORT} \
   -Dmodel.path=${JUNO_MODEL_PATH} \
+  ${JUNO_LORA_PLAY_PATH:+-Djuno.lora.play.path=${JUNO_LORA_PLAY_PATH}} \
   -jar /opt/juno/juno-node/target/juno-node.jar \
   cab.ml.juno.node.NodeMain
 EOF2
@@ -1324,6 +1353,7 @@ JUNO_BYTE_ORDER=${BYTE_ORDER}
 JUNO_MAX_QUEUE=1000
 JUNO_JFR_DURATION=${JFR_DURATION:-}
 JUNO_MODEL_STEM=${MODEL_FILENAME%.*}
+JUNO_LORA_PLAY_PATH=${LORA_PLAY_PATH:-}
 EOF
 )
 
@@ -1334,9 +1364,85 @@ EOF
        echo 'coordinator started'" 2>/dev/null \
     && log "  ✅ Coordinator started (nodes: ${ADDRS})" \
     || warn "  Could not start coordinator — SSH into ${COORD_HOST} and run: sudo systemctl start juno-coordinator"
+
+  # ── [TRACE] Show the exact cluster-nodes.env written to the coordinator ────
+  log "  [TRACE] cluster-nodes.env written to ${COORD_HOST}:"
+  while IFS= read -r line; do
+    log "          ${line}"
+  done <<< "${ENV_CONTENT}"
 }
 
-# ── SCAN REGIONS ──────────────────────────────────────────────
+# ── SCP .LORA FILE TO ALL NODES ───────────────────────────────
+# Called after bootstrap completes and before the coordinator starts.
+# Copies the local .lora file to /opt/juno/models/ on every node, then
+# patches /etc/juno/node.env so JUNO_LORA_PLAY_PATH points to the correct
+# remote absolute path and restarts juno-node.service so the new value
+# takes effect before the coordinator sends any loadShard RPCs.
+_scp_lora_to_nodes() {
+  [[ -n "${LORA_PLAY_PATH:-}" ]] || return 0
+
+  if [[ ! -f "$LORA_PLAY_PATH" ]]; then
+    warn "  ✖ --lora-play file not found: '${LORA_PLAY_PATH}'"
+    warn "    (path is resolved at parse time relative to your working directory)"
+    warn "    Skipping LoRA deployment — nodes will run the base model."
+    return 0
+  fi
+
+  local LORA_BASENAME
+  LORA_BASENAME="$(basename "$LORA_PLAY_PATH")"
+  local REMOTE_LORA_PATH="/opt/juno/models/${LORA_BASENAME}"
+  local SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes \
+-o ServerAliveInterval=10 -o ServerAliveCountMax=3 -i $SSH_KEY_FILE"
+
+  log "  Deploying LoRA adapter to all nodes: ${LORA_BASENAME}"
+  log "  [TRACE] local source  : ${LORA_PLAY_PATH}"
+  log "  [TRACE] remote target : ${REMOTE_LORA_PATH}"
+
+  # ── Per node: SCP → stop juno-node → patch node.env → start juno-node ───────
+  # We stop BEFORE patching so the new start always picks up the correct env.
+  # juno-node starts in ~2s (gRPC bind only; model loads on the coordinator's
+  # loadShard RPC). So the synchronous stop+start completes quickly per node.
+  for ID in "${INSTANCE_IDS[@]}"; do
+    local IP="${INSTANCE_IPS[$ID]}"
+    log "  [TRACE] deploying to ${IP}"
+
+    # 1. Upload .lora file
+    scp $SSH_OPTS "$LORA_PLAY_PATH" "ubuntu@${IP}:/tmp/${LORA_BASENAME}" 2>/dev/null \
+      || { warn "  SCP failed to ${IP} — node will run without LoRA"; continue; }
+    log "  [TRACE] ${IP}: SCP done"
+
+    # 2. Stop juno-node (synchronous — ensures old process is gone before we patch env)
+    ssh $SSH_OPTS "ubuntu@${IP}" "sudo systemctl stop juno-node" 2>/dev/null \
+      || warn "  [TRACE] ${IP}: juno-node was not running (ok for first deploy)"
+    log "  [TRACE] ${IP}: juno-node stopped"
+
+    # 3. Move .lora into place + patch node.env
+    ssh $SSH_OPTS "ubuntu@${IP}" \
+      "sudo mv /tmp/${LORA_BASENAME} ${REMOTE_LORA_PATH} \
+    && sudo chmod 644 ${REMOTE_LORA_PATH} \
+    && if sudo grep -q '^JUNO_LORA_PLAY_PATH=' /etc/juno/node.env 2>/dev/null; then \
+         sudo sed -i 's|^JUNO_LORA_PLAY_PATH=.*|JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}|' /etc/juno/node.env; \
+       else \
+         echo 'JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}' | sudo tee -a /etc/juno/node.env >/dev/null; \
+       fi \
+    && echo '[TRACE] node.env JUNO_LORA_PLAY_PATH line:' \
+    && sudo grep 'JUNO_LORA_PLAY_PATH' /etc/juno/node.env" \
+      2>/dev/null \
+      && log "  [TRACE] ${IP}: node.env patched" \
+      || { warn "  Could not patch node.env on ${IP}"; continue; }
+
+    # 4. Start juno-node (synchronous — returns once the service is active/failed)
+    ssh $SSH_OPTS "ubuntu@${IP}" "sudo systemctl start juno-node" 2>/dev/null \
+      && log "  ✅ ${IP}: juno-node started with LoRA" \
+      || warn "  ${IP}: juno-node start failed — check journalctl -u juno-node"
+  done
+
+  log "  ✅ LoRA deployment complete — remote path: ${REMOTE_LORA_PATH}"
+  log "  [TRACE] LORA_PLAY_PATH updated → ${REMOTE_LORA_PATH}"
+
+  # Update global so _write_cluster_env_and_start_coordinator writes the remote path
+  LORA_PLAY_PATH="$REMOTE_LORA_PATH"
+}
 scan_regions() {
   local VCPUS_PER_NODE="${INSTANCE_VCPUS[$INSTANCE_TYPE]:-2}"
   local VCPUS_NEEDED=$(( NODE_COUNT * VCPUS_PER_NODE ))
@@ -1434,6 +1540,9 @@ _wait_for_ready_and_open() {
   done
   echo ""
 
+  # SCP .lora file to nodes and patch node.env (noop if --lora-play not set)
+  _scp_lora_to_nodes
+
   # Write cluster env + start coordinator
   _write_cluster_env_and_start_coordinator
 
@@ -1519,6 +1628,8 @@ case "$MODE" in
     echo "    --dtype FLOAT16|FLOAT32 Activation dtype (default: FLOAT16)"
     echo "    --jfr DURATION          Enable JFR on all nodes + coordinator (e.g. 5m 30s 1h)"
     echo "                            Metrics are gathered and printed on Ctrl+C exit"
+    echo "    --lora-play PATH        Apply a .lora adapter file at inference on every node"
+    echo "                            The file must exist at PATH on each node instance"
     echo ""
     echo "  Examples:"
     echo "    # 3-node GPU cluster, TinyLlama, coordinator on node1"

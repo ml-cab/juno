@@ -77,6 +77,14 @@ public final class NodeMain {
 
         boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "true"));
 
+        // Forward JUNO_LORA_PLAY_PATH env var as system property so EmbeddedNodeServer
+        // can pick it up without requiring a JVM flag relaunch.
+        String loraPlayPath = System.getenv("JUNO_LORA_PLAY_PATH");
+        if (loraPlayPath != null && !loraPlayPath.isBlank()) {
+            System.setProperty("juno.lora.play.path", loraPlayPath);
+            log.info("LoRA inference overlay enabled: " + loraPlayPath);
+        }
+
         EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu);
         server.start();
 

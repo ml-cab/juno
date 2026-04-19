@@ -36,6 +36,7 @@ enabling larger models. N-1 sequential gRPC hops per decode step.
     |  L 0-7        L 8-14       L 15-21          |
     |  + embed                   + output proj    |
     |  NodeKVCacheAdapter wired into each handler |
+    |  LoraAdapterSet (optional, read-only)       |
     +--------------------------------------------+
 ```
 
@@ -78,6 +79,11 @@ ForwardPassHandlerLoader  <- reads general.architecture from GGUF
     phi3  -> Phi3TransformerHandler   (fused QKV + gate/up, quantized weights)
     *     -> LlamaTransformerHandler  (separate tensors, quantized weights)
 
+LoRA overlay (optional):
+    load(..., LoraAdapterSet)  <- wraps base handler in LoraTrainableHandler
+                                  adapters applied read-only during inference
+                                  base GGUF is never modified
+
 MatVec (injected into handler):
     CpuMatVec    <- parallel IntStream
     CudaMatVec   <- cublasSgemv_v2 (FP32 host path) / resident FP32 or FP16 weights:
@@ -119,10 +125,19 @@ mvn clean package -DskipTests
 # LoRA fine-tuning REPL (adapter saved to <model>.lora)
 ./juno lora --model-path /path/to/model.gguf --heap 4g
 
+# Apply a saved .lora adapter at inference — local mode
+./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+
+# Apply a saved .lora adapter at inference — cluster mode (forked JVMs)
+./juno --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+
 # Real-model smoke test — 8 checks, exits 0/1
 ./juno test --model-path /path/to/model.gguf --heap 4g
 
-# Profile with JFR — local mode: programmatic recording, metrics auto-printed on expiry
+# Apply a saved .lora adapter at inference — cluster mode (forked JVMs)
+./juno --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+
+# Profile with JFR
 ./juno local --model-path /path/to/model.gguf --jfr 5m
 # When the 5-minute period expires, metrics JSON is printed inline and written to
 # target/metrics/metrics.json — no manual step needed.
@@ -154,6 +169,7 @@ java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 | `--jfr DURATION` | — | Java Flight Recording for DURATION (e.g. `30s`, `5m`, `1h`). Writes `juno-<modelStem>-<timestamp>.jfr`. Captures `juno.MatVec`, `juno.ForwardPass`, `juno.Tokenizer`, `juno.TemplateFormat`, and (for `lora`) `juno.LoraTrainStep` events. **`local` mode**: recording managed programmatically — metrics JSON is printed automatically when the period expires or the REPL exits. **`cluster` mode**: coordinator gets programmatic JFR; every forked node JVM is also instrumented so `juno.MatVec`/`juno.ForwardPass` events are captured from all nodes; all files are merged and metrics auto-printed on exit. **`lora`/`test` modes**: JVM flag only; open the resulting `.jfr` in JDK Mission Control or run `MetricsMain` manually. |
 | `--verbose` / `-v` | — | Show node startup, gRPC and shard loading logs |
 | `--cpu` | — | Force CPU inference: sets `JUNO_USE_GPU=false` (cluster / local). Does not enable LoRA mode. |
+  `--lora-play PATH` | — | Apply a pre-trained `.lora` adapter at inference in `local` or `cluster` mode. Adapters are read-only — no training. The base GGUF is never modified. In cluster mode the adapter file is forwarded to every forked node JVM via `-Djuno.lora.play.path`. |
 
 **LoRA flags** (`lora` command only):
 
@@ -164,8 +180,13 @@ java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 | `--lora-alpha F` | `= rank` | Scaling factor α (effective scale = α/rank) |
 | `--lora-lr F` | `1e-4` | Adam learning rate |
 | `--lora-steps N` | `50` | Gradient steps per `/train` command |
+| `--lora-steps-qa N` | `10` | Gradient steps per `/train-qa` Q&A pair |
+| `--lora-early-stop F` | `0.25` | Stop early when loss delta < F |
 
-Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `BYTE_ORDER`, `JUNO_USE_GPU` (`true`|`false`, same effect as `--cpu` when `false`), JVM flag `-Djuno.cuda.device=N` (CUDA device index for `GpuContext.shared(N)` / `NodeMain`), `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `JAVA_HOME`
+Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `BYTE_ORDER`, 
+`MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, 
+`LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, 
+`LORA_STEPS`, `LORA_PLAY_PATH`, `JAVA_HOME`
 
 ---
 
@@ -237,6 +258,19 @@ mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl juno-master \
 
 ---
 
+## Key Design Decisions
+
+- **LoRA inference overlay (`--lora-play`).** Pre-trained `.lora` adapter files can be applied at inference time in any mode — `local`, `cluster` (forked JVMs), or AWS-deployed clusters — without entering the training REPL. `ForwardPassHandlerLoader.load(path, ctx, backend, adapters)` wraps the base handler in `LoraTrainableHandler` transparently; passing `null` gives the standard base-model path. The base GGUF is never modified. `ClusterHarness.withLoraPlay(path)` injects `-Djuno.lora.play.path` into every forked node JVM so each node reads the same adapter file. `NodeMain` forwards `JUNO_LORA_PLAY_PATH` from the environment as a system property for AWS/remote deployments.
+
+- **LoRA fine-tuning without touching the base model.** `LoraTrainableHandler` wraps `LlamaTransformerHandler` and adds trainable low-rank adapters (A/B matrices, rank 4–16) on the Q and V projections. The frozen weights stay quantized at all times. Adapters are persisted to a `.lora` binary checkpoint; the GGUF is never modified.
+
+- **Architecture-aware handler routing.** `ForwardPassHandlerLoader` reads `general.architecture` from GGUF metadata and selects `Phi3TransformerHandler` for `phi3`, `LlamaTransformerHandler` for everything else. When a `LoraAdapterSet` is provided, the selected handler is wrapped in `LoraTrainableHandler`. Backend selection via `selectBackend()`.
+
+- **AWS infrastructure scripted.** `juno-deploy.sh` is the unified cluster lifecycle script. `--lora-play PATH` accepts an absolute or relative path; it is resolved to absolute via `realpath` at parse time (relative paths are ambiguous when the script is called from a different directory). After bootstrap, `_scp_lora_to_nodes()` stops each `juno-node.service`, SCPs the file to `/opt/juno/models/`, patches `JUNO_LORA_PLAY_PATH` in `/etc/juno/node.env`, and restarts the service — all synchronously per node. Only after all nodes are confirmed active does the coordinator start, ensuring `loadShard` RPCs always find nodes with adapters loaded.
+
+- User-data scripts are passed to `aws ec2 run-instances` via `file://` (not pre-encoded base64), preventing double-encoding that caused cloud-init to reject the script as `text/x-not-multipart`.
+
+
 ## JFR Profiling
 
 All `juno` commands accept `--jfr DURATION` which activates Java Flight Recording and writes a `juno-<modelStem>-<timestamp>.jfr` file. Five custom event types are available under the JDK Mission Control Event Browser:
@@ -299,7 +333,7 @@ Useful analysis patterns:
 - GPU tests excluded from default CI by failsafe `<excludes>` and a `-Pgpu` profile. `GpuForwardPassIT` additionally guards with `-Djuno.gpu.test=true` to prevent CUDA native libs (bytedeco) loading into the coordinator JVM and poisoning FD inheritance into forked node processes.
 - Stub mode — cluster boots in seconds without a model file; all integration tests run stub. Before a real shard is loaded, `EmbeddedNodeServer` uses an internal `StubForwardPassHandler` (zero-filled arrays, no test machinery). The test-only `CyclicForwardPassHandler` (deterministic fixed-pattern output, configurable winner token) lives in `node/src/test` and is shared with other modules via the `node:tests` classifier jar. Integration tests live in `juno-master` (package `cab.ml.juno.master`); `ModelLiveRunnerIT` requires a real model and is gated behind `-Pintegration`.
 
----
+--
 
 ## Requirements
 

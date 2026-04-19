@@ -84,6 +84,7 @@ public final class ClusterHarness implements AutoCloseable {
 	/** Non-null when the caller wants JFR on every node JVM. */
 	private String jfrDuration;
 	private String jfrTimestamp;
+	private String loraPlayPath; // null = no LoRA adapter overlay on forked nodes
 
 	private ClusterHarness(List<NodeSpec> specs) {
 		this(specs, null, ParallelismType.PIPELINE, TOTAL_LAYERS, NUM_HEADS);
@@ -332,6 +333,22 @@ public final class ClusterHarness implements AutoCloseable {
 	}
 
 	/**
+	 * Apply a pre-trained {@code .lora} adapter file at inference on every forked
+	 * node JVM. The path is forwarded as {@code -Djuno.lora.play.path=PATH} so
+	 * that {@link EmbeddedNodeServer} picks it up when the shard loads. Adapters
+	 * are read-only — no optimizer is attached and training is not possible via
+	 * this path.
+	 *
+	 * @param path absolute or relative path to the {@code .lora} checkpoint;
+	 *             {@code null} or blank disables the overlay
+	 * @return this (fluent)
+	 */
+	public ClusterHarness withLoraPlay(String path) {
+		this.loraPlayPath = path;
+		return this;
+	}
+
+	/**
 	 * Returns the expected JFR output paths for every node, in node order.
 	 * Only meaningful after {@link #withJfr(String, String)} has been called.
 	 */
@@ -404,6 +421,13 @@ public final class ClusterHarness implements AutoCloseable {
 			cmd.add("-XX:StartFlightRecording=duration=" + jfrDuration
 					+ ",filename=" + nodeJfrFile
 					+ ",settings=profile,dumponexit=true");
+		}
+
+		// LoRA adapter overlay — propagate to node JVM so EmbeddedNodeServer loads the
+		// .lora file when building its ForwardPassHandler shard. Without this the
+		// forked JVM starts with loraPlayPath=null and runs the bare base model.
+		if (loraPlayPath != null && !loraPlayPath.isBlank()) {
+			cmd.add("-Djuno.lora.play.path=" + loraPlayPath);
 		}
 
 		if (!verbose) {

@@ -30,108 +30,122 @@ All modules build and all tests pass. Verified end-to-end with:
 
 **JFR:** `MatVecEvent.backend` **`cuda-resident-fp16`** labels the Phi FP16 device path. (As of session 27, Llama GPU resident weights also use **`cuda-resident-fp16`**; **`cuda-resident`** remains for **`DeviceFloatMatrix`** / tests.)
 
-**Session 25** — Code quality: dead code removed, test helpers moved to test scope, docs fully updated.
+---
 
-`CyclicForwardPassHandler` moved from `node/src/main` to `node/src/test`. It is a deterministic stub with no business value without a model; it belongs exclusively in the test compilation unit. `EmbeddedNodeServer` no longer imports it — the three call sites (pre-load placeholder, model-load-failure fallback, no-model stub mode) are now served by a new private `StubForwardPassHandler` inner class that returns zero-filled arrays of the correct shape with no test machinery. `node/pom.xml` gains a `maven-jar-plugin` `test-jar` execution so other modules can still import `CyclicForwardPassHandler`; `coordinator/pom.xml` and `juno-master/pom.xml` declare the `node:tests` classifier dependency.
+**Session 26** — LoRA inference overlay (`--lora-play`), Q&A training mode (`/train-qa`), diagnostic tracing, and AWS deploy hardening.
 
-Documentation sweep — all stale names corrected across `docs/arch.txt`, `docs/howto.md`, and integration test Javadoc:
+### `--lora-play PATH` — apply trained adapters at inference in any mode
 
-- `io.hyperstack4j.*` package → `cab.ml.juno.*` (all occurrences in session history notes).
-- `integration` Maven module and module paths → `juno-master`.
-- `cab.ml.juno.integration` package → `cab.ml.juno.master`.
-- `productivity/`, `ProductivityMain`, `productivity-*.jar` → `metrics/`, `MetricsMain`, `metrics-*.jar`.
-- `target/productivity/metrics.json` → `target/metrics/metrics.json`.
-- `run-me.sh` / `hyper.sh` → `scripts/run.sh`.
-- `integration/target/player.jar (main: ModelLiveRunner)` → `juno-master/target/juno-master.jar (main: CoordinatorMain)`.
-- `GpuForwardPassHandler.loadGpuResident` / `releaseGpuResources` references in `docs/howto.md` replaced with the correct session-20 pattern using `LlamaTransformerHandler.load(..., new CudaMatVec(gpuCtx))`.
-- All `mvn verify -pl integration` commands in IT Javadoc → `-pl juno-master`.
-- `CyclicForwardPassHandler` listings in arch.txt annotated as `src/test only`.
-- `EmbeddedNodeServer` description updated to reference `StubForwardPassHandler`.
+Pre-trained `.lora` checkpoint files can now be applied read-only at inference time without entering the `lora` REPL. Three modes are supported:
 
-`README.md` updated: `--byteOrder` flag added to the Flags table; `BYTE_ORDER` added to environment overrides; `node` module table entry updated to include `NodeMain`, `ActivationBECodec`, `ActivationLECodec`; `juno-master` entry updated with `JUNO_BYTE_ORDER`; configurable byte order added to Key Design Decisions; stub-mode note updated to describe `StubForwardPassHandler` vs `CyclicForwardPassHandler`.
-
-**Session 24** — Configurable activation byte order (`--byteOrder BE|LE`).
-
-`ActivationCodec` is rewritten from a self-contained little-endian implementation into a **zero-overhead static dispatcher**. It reads the JVM system property `juno.byteOrder` (`BE` or `LE`, default `BE`) exactly once in a `static {}` block and stores the result in a `private static final boolean USE_BE`. Every `encode()`, `decode()`, `matVecF32raw()`, `floatToHalf()`, and `halfToFloat()` call is a single branch with no string comparison, no reflection, and no allocation after class load. A new `byteOrder()` accessor returns the active label for logging and health responses.
-
-The two concrete codec classes are unchanged. `ActivationBECodec` (big-endian, `ByteBuffer`-based, validated by hard testing on production hardware) and `ActivationLECodec` (little-endian, direct bit-manipulation, zero `ByteBuffer` allocation, native x86 order) are now equally reachable. Default is `BE`; use `--byteOrder LE` on x86-native deployments where unaligned BE reads carry overhead.
-
-**Propagation chain** — the byte order is guaranteed consistent across every JVM in a cluster:
-- `run.sh` / `run.bat`: `--byteOrder` sets both `-Djuno.byteOrder` (JVM flag) and the `--byteOrder` app arg; `ConsoleMain.parseArgs()` calls `System.setProperty()` before any codec call.
-- `ClusterHarness.launchNode()`: reads `System.getProperty("juno.byteOrder")` from the coordinator JVM and injects `-Djuno.byteOrder=...` into every forked node JVM command.
-- `juno-deploy.sh`: `JUNO_BYTE_ORDER` is written into `/etc/juno/node.env` on every instance and passed as `-Djuno.byteOrder` to both node and coordinator JVMs via the generated `start-node.sh` / `start-coordinator.sh` wrappers.
-- `CoordinatorMain`: reads `JUNO_BYTE_ORDER` from the environment and calls `System.setProperty()` before any other work.
-
-`InferenceApiServer.handleClusterHealth()` now includes `"byteOrder": "BE"|"LE"` in its JSON response. The web console header displays a live `byteOrder` badge that refreshes every 10 seconds alongside the health indicator.
-
-`BYTE_ORDER` env var added as an override equivalent to `--byteOrder`. Documented in the Flags table, environment overrides line, `NodeMain` property list, `CoordinatorMain` env table, and AWS setup options table in both `README.md` and `docs/howto.md`. `docs/arch.txt` header date updated to 2026-04-13; section 35 appended with the full design rationale, propagation-chain analysis, file-change table, and build status.
-
-**Session 22** — Q2_K and Q3_K quantization support.
-
-`GgufReader` gains `loadQ2_K` and `loadQ3_K` — pure Java dequantizers for GGML_TYPE_Q2_K (type 10, 84 bytes / 256 elements) and GGML_TYPE_Q3_K (type 11, 110 bytes / 256 elements). Block layouts and bit-extraction logic mirror llama.cpp `dequantize_row_q2_K` / `dequantize_row_q3_K` exactly.
-
-`LlamaTransformerHandler` gains `matVecQ2Kraw` and `matVecQ3Kraw` for the CPU inference path, and `dequantizeQ2K` / `dequantizeQ3K` for the GPU upload path (`dequantize()` switch). Without these, the `dequantize()` switch threw `UnsupportedOperationException` for every Q2_K weight tensor, causing garbage output whenever `gpu=true`.
-
-`QuantizationType` gains `Q2_K` (0.328 bpp) and `Q3_K` (0.430 bpp) enum entries for VRAM estimation and model registration.
-
-`LlamaConfig.detectQuantization()` corrected: ftype 10 → Q2_K, 11/12/13 → Q3_K, 14/15 → Q4_K_M. The previous `case 12, 15` mapping was wrong — llama_ftype 12 is `MOSTLY_Q3_K_M`, not `Q4_K_S`. `fromFilename()` gains Q2_K and Q3_K substring checks ahead of Q4/Q5/Q6.
-
-Bug fixed in Q2_K dequantization (all three implementations — `loadQ2_K`, `matVecQ2Kraw`, `dequantizeQ2K`): output slots at offsets 16 and 80 within each 128-element half read from the wrong q-byte half. Correct pattern: `(q[l]>>0, q[l+16]>>0, q[l]>>2, q[l+16]>>2, q[l]>>4, q[l+16]>>4, q[l]>>6, q[l+16]>>6)`.
-
-Six new unit tests in `GgufReaderTest`: Q2_K uniform / zero / max-quants and two-block size; Q3_K max / zero-quants and two-block size.
-
-**Session 21** — Two new deployment fat-jar modules and a unified AWS script.
-
-`juno-node` — new module producing `juno-node.jar` (shade, main class `cab.ml.juno.node.NodeMain`). `NodeMain` and `EmbeddedNodeServer` moved from the `player` module into the `node` module (package `cab.ml.juno.node`). Configuration via system properties (`-Dnode.id`, `-Dnode.port`, `-Dmodel.path`, `-DJUNO_USE_GPU`); command-line args still accepted for backward compatibility. Prints `READY:<nodeId>:<port>` to stdout when the gRPC server is up so `ClusterHarness` can poll it.
-
-`integration` module renamed to `juno-master` — fat jar renamed `juno-master.jar` (main class `cab.ml.juno.master.CoordinatorMain`). `CoordinatorMain` is a new standalone coordinator entry point for remote deployment: reads node addresses from `JUNO_NODE_ADDRESSES`, model path from `JUNO_MODEL_PATH`, and other tuning from env vars (`JUNO_PTYPE`, `JUNO_HTTP_PORT`, `JUNO_DTYPE`, `JUNO_MAX_QUEUE`). No forking, no `ClusterHarness` — nodes must already be running via `NodeMain`. Wires `GenerationLoop`, `RequestScheduler`, `KVCacheManager`, and `InferenceApiServer` then blocks. All integration test classes moved to package `cab.ml.juno.master`; `ModelLiveRunner` promoted to `ModelLiveRunnerIT` and gated behind the `-Pintegration` Maven profile.
-
-`juno-deploy.sh` added under `scripts/aws/` — unified cluster lifecycle script replacing the separate `juno-infra.sh` (GPU) and `juno-infra-ft.sh` (CPU). Hardware auto-detected during bootstrap: GPU instances install CUDA and set `JUNO_USE_GPU=true`; CPU instances skip it. `juno-node.service` (systemd) launches `juno-node.jar` on every node; `juno-coordinator.service` launches `juno-master.jar` on the coordinator after `cluster-nodes.env` is written. Commands: `setup | start | stop | teardown | status | scan-regions`. Options: `--instance-type`, `--node-count`, `--coordinator node1|separate`, `--model-url`, `--ptype`, `--dtype`. State persisted to `~/.juno-deploy-state`. Verified end-to-end on a 3 × m7i-flex.large CPU cluster running TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile with the web console at `http://<coordinator>:8080`.
-
-**Session 20** — GPU inference actually wired end-to-end. Three bugs fixed:
-(1) `ForwardPassHandlerLoader.load(Path, ShardContext)` always hardcoded `CpuMatVec.INSTANCE` — a new `selectBackend()` method now reads `JUNO_USE_GPU` and calls `CudaAvailability.isAvailable()`, then delegates to the explicit-backend overload.
-(2) Even with `CudaMatVec` correctly injected into `LlamaTransformerHandler.backend`, the inference hot path never used it — `transformerLayer` called the static `matVec(QuantizedTensor, ...)` methods directly. Fix: weights are now dequantized and uploaded to `DeviceFloatMatrix` once at load time; a new `matVecLayer()` instance method dispatches through `backend.sgemv(DeviceFloatMatrix, x)` on the GPU path and falls back to the quantized CPU path otherwise. All 8 projection call sites updated.
-(3) `juno.MatVec.backend.cpu.count` was always 0 in JFR metrics because `matVecQuantBackendLabel()` returned `"quantized-q4_k"` etc. — all quantized static matVec ops are pure-Java CPU code, so the label is now `"cpu"` throughout, matching what `CpuMatVec.sgemv()` emits.
-`CudaMatVec.upload(float[], int, int)` added as a convenience factory.
-`ForwardPassHandlerLoaderSelectBackendTest` (5 tests) and `MatVecQuantizedBackendLabelTest` (3 JFR-event tests) added.
-
-**Session 19** — metrics module, Meta-Llama 3 tokenizer fix, AWS infrastructure scripts.
-
-**Session 18** — `GgufTokenizer` now supports GPT-2 / tiktoken BPE (Llama 3+) in addition to SentencePiece BPE. BPE variant is auto-detected from `tokenizer.ggml.model` in GGUF metadata. Special control tokens (`<|begin_of_text|>`, `<|eot_id|>`, etc.) are pre-split before BPE and always map to single vocabulary IDs. `LlamaTransformerHandler.matVec()` (quantised path) now emits `juno.MatVec` events. `ChatTemplateFormatter.format()` now emits `juno.TemplateFormat` events (both were previously missing instrumentation).
-
-**Session 17** — AWS infrastructure scripts added under `scripts/aws/`: `launcher.sh` (credential wrapper), `juno-infra.sh` (3-node GPU cluster lifecycle with live VRAM/cost dashboard), `juno-infra-ft.sh` (CPU fine-tuning cluster). The `--jfr` flag now embeds the model stem in the recording filename (`juno-<modelStem>-YYYYMMDD-HHMMSS.jfr`).
-
-**Session 16** — naming cleanup: session-12 rename fully applied to source.
-
-The `KVCacheManager` (GPU + CPU tiers with LRU/W-TinyLFU eviction) was previously disconnected from the transformer handlers: `LlamaTransformerHandler` and `Phi3TransformerHandler` each maintained their own private `HashMap<String, float[][]>` with no eviction, making the entire `kvcache` module inert at the node level. This is now fixed.
-
-`NodeKVCacheAdapter` bridges the in-process KV arrays and the cluster-level `KVCacheManager`. After each token position is written, the adapter serialises K and V data into a `KVBlock` and flushes it write-through into the manager's GPU tier (byte-budget LRU) and CPU tier (Caffeine W-TinyLFU). If a local HashMap entry is absent at position > 0 (evicted under JVM heap pressure), the adapter restores it from whichever tier still holds the block. `EmbeddedNodeServer.loadShard()` creates the adapter and wires it into every real handler via `setKvAdapter()`. `evict(requestId)` now propagates through both the local map and all manager tiers.
-
-Four custom JFR event classes cover every hot path. All are readable in JDK Mission Control under Event Browser. Use `--jfr DURATION` on any `juno` command to capture a recording:
-
-- `juno.MatVec` — emitted by `CpuMatVec.sgemv()` and both `CudaMatVec.sgemv()` overloads. Fields: `backend` (`cpu`/`cuda`/`cuda-resident`), `rows`, `cols`. ~155 events per generated token for TinyLlama.
-- `juno.ForwardPass` — emitted by all `ForwardPassHandler.forward()` implementations. Fields: `handlerType` (`llama`/`phi3`/`cyclic`/`lora`), `requestId`, `startPosition`, `layerCount`, `hasOutputProjection`.
-- `juno.Tokenizer` — emitted by `GgufTokenizer`, `DJLTokenizer`, `SimpleTokenizer` for `encode`, `decode`, and `decodeToken`. Fields: `tokenizerType`, `operation`, `inputLength`, `outputLength`.
-- `juno.TemplateFormat` — emitted by `ChatTemplateFormatter.format()`. Fields: `modelType`, `messageCount`, `outputLength`.
-
-**Session 14** — LoRA fine-tuning + JFR profiling. `LoraTrainableHandler` implements parameter-efficient fine-tuning (LoRA) on top of frozen quantised weights. Adapters live in a separate `.lora` file — the base GGUF is never modified. `LoraAdapterSet` / `LoraAdamOptimizer` handle checkpoint I/O and gradient updates. `LoraTrainEvent` emits custom JFR events (`juno.LoraTrainStep`) with per-step timing breakdown (forward / backward / optimizer ms). `ConsoleMain` gains a `lora` subcommand with `/train`, `/train-file`, `/save`, `/status`, `/reset`, `/merge-hint` REPL commands. `--jfr DURATION` flag added to all three `run.sh` / `run.bat` commands (`cluster`, `local`, `lora`). Root bug fixed: `transposedMatVec` now covers Q5_K (type=13) and Q6_K (type=14) — without this, the output projection backward for TinyLlama Q4_K_M fell into an O(cols) loop that took hours per step.
-
+**`local` mode:**
+```bash
+./juno local --model-path model.gguf --lora-play /path/to/model.lora
 ```
-you > /train My name is Dima. I am a Java engineer.
-  Training  rank=8 · lr=1.0E-4 · 50 steps · 1 chunk(s) · 10 tokens
-  step  50/50   loss=3.12  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 100%  2100ms/step  ETA 0s
-  ✔ done  loss=▼ 3.12 (−3.50)  105s total
+`ConsoleMain.runLocalRepl()` calls `LoraAdapterSet.load(Path.of(loraPlayPath))` before building the shard handlers and passes the result into `ForwardPassHandlerLoader.load(..., playAdapters)`.
 
-you*> /save
-  ✔ Saved → /path/to/model.lora  (44 adapters · 4401 KB · 50 steps trained)
+**`cluster` mode (forked JVMs):**
+```bash
+./juno --model-path model.gguf --lora-play /path/to/model.lora
+```
+`ClusterHarness.withLoraPlay(path)` injects `-Djuno.lora.play.path=PATH` into every forked node JVM command. `EmbeddedNodeServer.NodeServiceImpl` reads this property at construction and loads adapters inside `loadShard()` before the `ForwardPassHandlerLoader` call.
+
+**AWS deployed cluster:**
+```bash
+./launcher.sh juno-deploy.sh setup --lora-play /absolute/path/to/model.lora
+```
+See AWS section below.
+
+### `ForwardPassHandlerLoader` — new LoRA overload
+
+```java
+// New canonical overload — all others delegate to this
+public static ForwardPassHandler load(
+    Path modelPath, ShardContext context, MatVec backend,
+    LoraAdapterSet adapters) throws IOException
 ```
 
-```
-you> are you alive?
-bot> Yes, I'm here and ready to help! What do you need?
-     [19 tokens · 38420 ms · FLOAT16]   <- phi-3.5-mini, 3-node CPU cluster
+When `adapters != null`, the loader routes to `LoraTrainableHandler` (inference-only, no optimizer attached) instead of the architecture-specific handler. When `adapters == null` the existing `phi3` / `llama` dispatch is unchanged. `selectBackend()` promoted from package-private to `public` so player-module callers can reuse it.
 
-you> hello
-bot> Hey! Nice to meet you too.
-     [6 tokens · 2922 ms · FLOAT16]     <- TinyLlama, 3-node CPU cluster
+### `ClusterHarness` — `withLoraPlay()` fluent method
+
+```java
+harness.withLoraPlay("/path/to/model.lora");
 ```
+
+Stores the path and injects `-Djuno.lora.play.path=PATH` into the `launchNode()` JVM command, after the JFR flags. Without this, forked node JVMs start with `loraPlayPath=null` and run the base model regardless of what the coordinator is told.
+
+### `/train-qa` — conversational Q&A training
+
+New REPL command in `lora` mode for training single-fact associations:
+
+```
+you > /train-qa What is my name? A: Dima
+  Question: What is my name?
+  Answer  : Dima
+
+  Formatted as 4 Q&A pairs  ·  model type: tinyllama
+  Training  rank=8 · lr=1.0E-4 · 40 steps ...
+  ✔ done  loss=▼ 1.53 (−0.83)
+```
+
+The command auto-generates 4 phrasings of the question (exact, `Can you tell me: ...`, `Please answer: ...`, plus one repeat) to improve generalization. The chat template appropriate for the model type (detected from the model path) is applied to each pair. Flags `--lora-steps-qa N` and `--lora-early-stop F` control training depth.
+
+Separator syntax: `Q: <question> A: <answer>` or `<question> A: <answer>`.
+
+### Diagnostic tracing (`--verbose`)
+
+All tracing is prefixed `[TRACE]` for easy grep. Added to:
+
+| Location | What is shown |
+|----------|---------------|
+| LoRA REPL startup | Model type (chat template key), model path, all LoRA hyperparameters |
+| `/train-qa` | Exact formatted training text with `↵` for newlines, token count, token IDs (verbose only) |
+| Per training step (verbose) | `step=N loss=F chunk=M/T ms=D` |
+| Cluster inference (verbose) | Chat template key used for each inference request |
+| `juno-deploy.sh` bootstrap | Per-node params baked into user-data script |
+| `juno-deploy.sh` SCP | Local source, remote target, per-node `node.env` patch |
+| `juno-deploy.sh` coordinator env | Full `cluster-nodes.env` contents echoed after write |
+
+### AWS deploy hardening (`juno-deploy.sh`)
+
+Multiple bugs fixed during end-to-end AWS validation:
+
+**Double base64 encoding (cloud-init rejected user-data).** `--user-data` was passed as a pre-base64-encoded string. AWS CLI base64-encodes it again; cloud-init received double-encoded garbage and logged `Unhandled non-multipart (text/x-not-multipart) userdata`. Fix: write user-data to a temp file and pass `file:///tmp/juno-userdata-*.sh` — the CLI reads it raw and does single encoding. The `[TRACE]` size line now also prints `first-line: #!/bin/bash` so shebang presence is visible in the setup log.
+
+**TRACE logs contaminating user-data.** `_build_node_userdata` is called as `USER_DATA=$(_build_node_userdata ...)` which captures all stdout. The four `log` / `[TRACE]` calls inside the function were writing to stdout, prepending ANSI escape codes before `#!/bin/bash`. Cloud-init saw no shebang on line 1 and skipped execution. Fix: all `log` calls inside `_build_node_userdata` now redirect to stderr with `>&2`.
+
+**Relative `--lora-play` path not resolved.** When called from `scripts/aws/`, a path like `../models/model.lora` resolves to `scripts/models/model.lora` (which doesn't exist). `_scp_lora_to_nodes` hit the `[[ ! -f ]]` guard and returned silently, leaving `node.env` with empty `JUNO_LORA_PLAY_PATH`. Fix: `--lora-play` is resolved to absolute path at parse time via `realpath`. `setup()` also validates the file exists before any AWS spend.
+
+**Race condition: coordinator started before node restart completed.** `_scp_lora_to_nodes` previously used `systemctl restart --no-block` and polled `systemctl is-active` to detect readiness. The old instance remained `active` during shutdown so the poll returned immediately, `_write_cluster_env_and_start_coordinator` ran, and the coordinator sent `loadShard` to the old (no-LoRA) instance. The restarted instance came up 19 minutes later, too late. Fix: synchronous stop → patch → start per node: `systemctl stop juno-node` (synchronous, waits for JVM exit), `sed` patch of `node.env`, `systemctl start juno-node` (synchronous, returns once gRPC port is bound, ~2s). Coordinator only starts after all three nodes have confirmed `active` status with correct env.
+
+**Local relative path baked verbatim into `cluster-nodes.env`.** Even when SCP succeeded, the coordinator received `JUNO_LORA_PLAY_PATH=../models/...` (the pre-`realpath` value), causing `model load failed: ../models/...` on the nodes. Fix: `_scp_lora_to_nodes` updates the global `LORA_PLAY_PATH` to the remote absolute path (`/opt/juno/models/<basename>`) before returning, so `_write_cluster_env_and_start_coordinator` writes the correct value.
+
+**`_write_cluster_env_and_start_coordinator` missing closing brace.** The `}` was accidentally elided, causing `scan_regions()` to be parsed as part of the function body.
+
+**End-to-end verification:**
+```
+you> what is my name?
+bot> Dima
+```
+Confirmed working on 3 × m7i-flex.large AWS cluster (eu-north-1) with TinyLlama-1.1B-Chat-v1.0.Q4_K_M and a `.lora` adapter trained locally, SCPed and deployed via `juno-deploy.sh setup --lora-play`.
+
+---
+
+**Session 25** — Code quality, dead code removed, docs updated. *(unchanged)*
+
+**Session 24** — Configurable activation byte order (`--byteOrder BE|LE`). *(unchanged)*
+
+**Session 22** — Q2_K and Q3_K quantization support. *(unchanged)*
+
+**Session 21** — Two new deployment fat-jar modules and a unified AWS script. *(unchanged)*
+
+**Session 20** — GPU inference actually wired end-to-end. *(unchanged)*
+
+**Session 19** — metrics module, Meta-Llama 3 tokenizer fix, AWS infrastructure scripts. *(unchanged)*
+
+**Session 18** — GPT-2 BPE tokenizer, JFR instrumentation fixes. *(unchanged)*
+
+**Session 17** — AWS infrastructure scripts. *(unchanged)*
+
+**Session 14** — LoRA fine-tuning + JFR profiling. *(unchanged)*

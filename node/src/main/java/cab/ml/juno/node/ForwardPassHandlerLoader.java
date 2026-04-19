@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.logging.Logger;
 
+
 /**
  * Factory that selects the correct ForwardPassHandler implementation by reading
  * {@code general.architecture} from GGUF metadata.
@@ -84,7 +85,7 @@ public final class ForwardPassHandlerLoader {
 	 * <p>Returns {@link CudaMatVec} when {@code JUNO_USE_GPU=true} and at least one
 	 * CUDA device is detected; falls back to {@link CpuMatVec#INSTANCE} otherwise.
 	 */
-	static MatVec selectBackend() {
+	public static MatVec selectBackend() {
 		boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "false"));
 		if (useGpu && CudaAvailability.isAvailable()) {
 			int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
@@ -119,9 +120,37 @@ public final class ForwardPassHandlerLoader {
 	 */
 	public static ForwardPassHandler load(Path modelPath, ShardContext context, MatVec backend)
 			throws IOException {
+		return load(modelPath, context, backend, null);
+	}
+
+	/**
+	 * Load a handler with pre-trained LoRA adapters applied for inference.
+	 *
+	 * <p>When {@code adapters} is non-null the handler is always a
+	 * {@link LoraTrainableHandler} (which supports both inference and training).
+	 * The adapters are loaded read-only — no optimizer is attached, so calling
+	 * {@link LoraTrainableHandler#trainStep} on the result will throw unless an
+	 * optimizer is provided separately.
+	 *
+	 * <p>When {@code adapters} is {@code null} this method behaves identically to
+	 * {@link #load(Path, ShardContext, MatVec)}.
+	 *
+	 * @param modelPath path to the GGUF file
+	 * @param context   shard assignment
+	 * @param backend   compute backend
+	 * @param adapters  pre-loaded LoRA adapters, or {@code null} for base model
+	 * @return a ready-to-use {@link ForwardPassHandler}
+	 */
+	public static ForwardPassHandler load(Path modelPath, ShardContext context, MatVec backend,
+			LoraAdapterSet adapters) throws IOException {
 		String arch = readArchitecture(modelPath);
 		log.info("Detected architecture: " + arch + "  backend=" + backend.getClass().getSimpleName()
-				+ "  file=" + modelPath);
+				+ "  file=" + modelPath + "  lora=" + (adapters != null ? adapters.size() + " adapters" : "none"));
+
+		if (adapters != null) {
+			log.info("LoRA adapters present — routing to LoraTrainableHandler (inference-only mode)");
+			return LoraTrainableHandler.load(modelPath, context, adapters);
+		}
 
 		return switch (arch) {
 		case "phi3" -> {

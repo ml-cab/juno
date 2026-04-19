@@ -1,7 +1,4 @@
 /*
- * Created by Yevhen Soldatov
- * Initial implementation: 2026
- *
  * Copyright 2026 Dmytro Soloviov (soulaway)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -149,6 +146,7 @@ public final class EmbeddedNodeServer {
 		private final String nodeId;
 		private final String modelPath; // null = stub mode
 		private final boolean useGpu;
+		private final String loraPlayPath; // null = no LoRA adapter overlay at inference
 		private volatile ForwardPassHandler handler;
 		private volatile ShardContext context;
 		private volatile GpuContext gpuContext; // non-null only when handler is GPU
@@ -159,9 +157,12 @@ public final class EmbeddedNodeServer {
 			this.nodeId = nodeId;
 			this.modelPath = modelPath;
 			this.useGpu = useGpu;
+			this.loraPlayPath = System.getProperty("juno.lora.play.path");
 			this.handler = new StubForwardPassHandler(); // replaced in loadShard() when real model
 			this.context = buildDefaultContext();
 			this.kvCache = new KVCacheManager(new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256));
+			if (loraPlayPath != null)
+				log.info("LoRA play-back enabled — will apply adapters from: " + loraPlayPath);
 		}
 
 		@Override
@@ -234,24 +235,38 @@ public final class EmbeddedNodeServer {
 					log.info("Shard context: layers " + request.getStartLayer() + "-" + request.getEndLayer()
 							+ " embeddings=" + request.getHasEmbeddings() + " outputProj="
 							+ request.getHasOutputProjection());
+
+					// Load LoRA adapters if configured (read-only, inference-only)
+					LoraAdapterSet playAdapters = null;
+					if (loraPlayPath != null && !loraPlayPath.isBlank()) {
+						log.info("Loading LoRA adapters for inference: " + loraPlayPath);
+						playAdapters = LoraAdapterSet.load(Path.of(loraPlayPath));
+						log.info("Loaded " + playAdapters.size() + " LoRA adapters");
+					}
+
 					if (useGpu && CudaAvailability.isAvailable()) {
 						int cudaDevice = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
 						if (cudaDevice >= CudaAvailability.deviceCount()) {
 							log.warning("juno.cuda.device=" + cudaDevice + " invalid — loading shard on CPU");
-							handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx);
+							handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
+									ForwardPassHandlerLoader.selectBackend(), playAdapters);
 							msg = "Real shard loaded (CPU/CpuMatVec; invalid juno.cuda.device) layers "
-									+ request.getStartLayer() + "–" + request.getEndLayer();
+									+ request.getStartLayer() + "–" + request.getEndLayer()
+									+ (playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")" : "");
 						} else {
 							gpuContext = GpuContext.shared(cudaDevice);
 							handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
-									new CudaMatVec(gpuContext));
+									new CudaMatVec(gpuContext), playAdapters);
 							msg = "Real shard loaded (GPU/CudaMatVec, device " + cudaDevice + ") layers "
-									+ request.getStartLayer() + "–" + request.getEndLayer();
+									+ request.getStartLayer() + "–" + request.getEndLayer()
+									+ (playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")" : "");
 						}
 					} else {
-						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx);
+						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
+								ForwardPassHandlerLoader.selectBackend(), playAdapters);
 						msg = "Real shard loaded (CPU/CpuMatVec) layers " + request.getStartLayer() + "–"
-								+ request.getEndLayer();
+								+ request.getEndLayer()
+								+ (playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")" : "");
 					}
 					log.info(msg);
 				} catch (Exception e) {
