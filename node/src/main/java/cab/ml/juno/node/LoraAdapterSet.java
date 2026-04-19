@@ -104,6 +104,11 @@ public final class LoraAdapterSet {
 		return List.copyOf(adapters.values());
 	}
 
+	/** Read-only view of all adapters keyed by their {@code "layer:proj"} string. */
+	public Map<String, LoraAdapter> asMap() {
+		return java.util.Collections.unmodifiableMap(adapters);
+	}
+
 	/** Number of registered adapters. */
 	public int size() {
 		return adapters.size();

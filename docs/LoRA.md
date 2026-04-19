@@ -205,6 +205,63 @@ After `LoraAdapterSet.load()`, always call `opt.reset()` before resuming trainin
 
 ## Testing checklist
 
+After `LoraAdapterSet.load()`, the adapters have correct weights but
+`LoraAdamOptimizer.reset()` must be called before resuming training. For
+inference only, the optimizer state doesn't matter at all.
+
+---
+
+## Producing a standalone merged model (`juno merge`)
+
+Once training is complete and the adapter is saved, you can bake it into a new
+GGUF that loads without a `.lora` sidecar:
+
+```bash
+./juno merge --model-path TinyLlama.Q4_K_M.gguf
+# → writes TinyLlama.Q4_K_M-merged.gguf  (~1 GB for this model)
+
+./juno local --model-path TinyLlama.Q4_K_M-merged.gguf
+# you > what is your name?
+# bot > Dima                  ← training recalled correctly
+```
+
+### Why F32 for the patched tensors
+
+The LoRA delta per weight element is small — typically ~6×10⁻⁴ after 50 Adam
+steps at lr=1e-4. Q4_K quantisation noise (half-step) is ~3×10⁻³ — five times
+larger. Re-quantising the merged weights back to Q4_K destroys the delta
+completely; the model behaves identically to the unfine-tuned base.
+
+`LoraMerge` stores the 44 patched projection tensors (wq/wv) as **F32**
+(precision ~10⁻⁷, SNR ~6000×) and copies all other tensors verbatim. F32
+tensors are read by `LlamaTransformerHandler` identically to any other F32 — no
+special-casing in inference.
+
+### Programmatic API
+
+```java
+LoraMerge.Result r = LoraMerge.merge(
+    Path.of("TinyLlama.Q4_K_M.gguf"),
+    Path.of("TinyLlama.Q4_K_M.lora"),
+    Path.of("TinyLlama.Q4_K_M-merged.gguf"));
+
+System.out.println("Patched " + r.adaptersApplied() + " tensors");
+// Patched 44 tensors
+```
+
+### What the GGUF writer does
+
+The output is a valid GGUF v3 file produced in five steps:
+
+1. Copy header + KV metadata section verbatim from the source.
+2. Write a new tensor-info section: patched tensors get `type=F32`, all others keep their original type; all data-section offsets are recomputed.
+3. Write 32-byte alignment padding.
+4. Write the data section: patched tensors as F32 (dequantise → apply `W += scale × B × A` → write); all others as raw bytes transferred directly.
+
+The output is always a plain GGUF v3 even when the source is a llamafile ZIP polyglot.
+
+## Testing checklist
+
 ```bash
 mvn test -Dtest=LoraAdapterTest          # numerical gradient check (most important)
 mvn test -Dtest=LoraAdapterSetTest       # round-trip serialisation

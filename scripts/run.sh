@@ -764,6 +764,59 @@ usage() {
   echo ""
 }
 
+# ---------------------------------------------------------------------------
+# merge — bake a .lora adapter into a new standalone GGUF
+# ---------------------------------------------------------------------------
+cmd_merge() {
+  local model="${MODEL_PATH:-}"
+  local lora=""
+  local output=""
+  local heap="${HEAP:-4g}"
+  local use_gpu="${JUNO_USE_GPU:-false}"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --model-path) model="$2";  shift 2 ;;
+      --lora-path)  lora="$2";   shift 2 ;;
+      --output)     output="$2"; shift 2 ;;
+      --heap)       heap="$2";   shift 2 ;;
+      --help|-h)
+        echo ""
+        echo "  Usage: $0 merge --model-path /path/to/model.gguf [options]"
+        echo ""
+        echo "  Options:"
+        echo "    --model-path PATH    Source GGUF or llamafile (required)"
+        echo "    --lora-path PATH     Trained .lora checkpoint (default: <model>.lora)"
+        echo "    --output PATH        Output GGUF path (default: <model>-merged.gguf)"
+        echo "    --heap SIZE          JVM heap, e.g. 4g (default: 4g)"
+        echo ""
+        echo "  Example:"
+        echo "    $0 merge --model-path /models/tinyllama.gguf"
+        echo "    $0 merge --model-path /models/tinyllama.gguf --lora-path ./my.lora --output ./merged.gguf"
+        echo ""
+        return 0
+        ;;
+      *) err "Unknown merge flag: $1.  Run: $0 merge --help" ;;
+    esac
+  done
+
+  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 merge --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 merge"
+
+  local player_jar="$DIR/player/target/player.jar"
+  [[ -f "$player_jar" ]] || err "player.jar not found — build first with: mvn clean package -DskipTests"
+
+  prepend_cuda_bin_to_path_if_gpu "$use_gpu"
+
+  info "Starting LoRA merge  (heap=${heap})"
+
+  "$JAVA" -Xmx${heap} \
+    -cp "$player_jar" \
+    cab.ml.juno.player.LoraMergeMain \
+    ${model:+--model-path "$model"} \
+    ${lora:+--lora-path  "$lora"} \
+    ${output:+--output   "$output"}
+}
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 CMD="${1:-}"
 shift || true
@@ -771,6 +824,7 @@ shift || true
 case "$CMD" in
   local)   cmd_local   "$@" ;;
   lora)    cmd_lora    "$@" ;;
+  merge)   cmd_merge   "$@" ;;
   test)    cmd_test    "$@" ;;
   cluster) cmd_cluster "$@" ;;
   *)       cmd_cluster ${CMD:+"$CMD"} "$@" ;;

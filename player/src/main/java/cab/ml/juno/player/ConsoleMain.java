@@ -47,6 +47,7 @@ import cab.ml.juno.node.ActivationDtype;
 import cab.ml.juno.node.CudaAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.CudaMatVec;
+import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
@@ -587,19 +588,23 @@ public final class ConsoleMain {
 
 		case "/merge-hint" -> {
 			print("");
-			print(Color.CYAN_BOLD + "  Merging LoRA into base weights (offline)" + Color.RESET);
+			print(Color.CYAN_BOLD + "  Merging LoRA into base weights" + Color.RESET);
 			print("  ─────────────────────────────────────────────────────────────");
-			print("  Juno keeps adapters separate by design. The base GGUF is never");
-			print("  modified. To bake the adapter in (merged = W + scale·B·A):");
+			print("  Juno now includes a native merge tool. After /save, run:");
 			print("");
-			print("  1. Dequantize each projection weight W to float32.");
-			print("  2. For each LoRA adapter: W_eff = W + (alpha/rank) × B × A");
-			print("  3. Re-quantize W_eff back to the original format (Q4_K etc.).");
-			print("  4. Write a new GGUF file with the merged weights.");
+			print("    ./juno merge --model-path " + modelPath);
 			print("");
-			print("  This creates a standalone model that doesn't need the .lora file.");
-			print("  Juno doesn't include a merge tool yet — contributions welcome.");
-			print("  See LORA.md for the weight formula reference.");
+			print("  This copies the GGUF, bakes W_merged = W + (alpha/rank)·B·A");
+			print("  for every adapted projection, re-quantises to the original");
+			print("  format (Q4_K, Q8_0, F16, …), and writes a standalone GGUF");
+			print("  that needs no .lora sidecar at inference time.");
+			print("");
+			print("  Optional flags:");
+			print("    --lora-path PATH     (default: " + adapterFile + ")");
+			print("    --output PATH        (default: <model>-merged.gguf)");
+			print("    --heap SIZE          (default: 4g — match your model size)");
+			print("");
+			print("  Run merged model with:  ./juno local --model-path <model>-merged.gguf");
 			print("");
 		}
 

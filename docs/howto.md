@@ -19,6 +19,12 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 
 ---
 
+| `local` | In-process REPL — all transformer shards in one JVM, no forking, no gRPC |
+| `lora` | LoRA fine-tuning REPL — single in-process JVM, adapter persisted to `.lora` file |
+| `merge` | Bake a trained `.lora` adapter into a new standalone GGUF — no sidecar needed at inference time |
+| *(no command)* | 3-node cluster — forked JVMs, real gRPC. Default `--pType pipeline`; use `--pType tensor` for AllReduce mode |
+| `test` | 8 automated real-model smoke checks (6 pipeline + 2 tensor), exits 0 (all pass) or 1 (any fail). Use `--pType pipeline\|tensor\|all` to filter |
+
 ### Flags
 
 | Flag | Default | Commands | Description |
@@ -102,6 +108,15 @@ When `--lora-play` is given, the startup banner shows:
 | `/merge-hint` | Explain how to bake adapters into a new GGUF |
 | `/help` | Show command reference |
 
+| `/train <text>` | Fine-tune on inline text (`--lora-steps` gradient steps) |
+| `/train-file <path>` | Fine-tune on a text file (auto-chunked into ≤128-token pieces) |
+| `/save` | Save adapter checkpoint to `--lora-path` |
+| `/reset` | Reinitialise adapters to B=0 (clears all training) |
+| `/status` | Show adapter info: rank, α, parameter count, steps trained, checkpoint path |
+| `/merge-hint` | Show the `juno merge` command to bake adapter into a standalone GGUF |
+| `/help` | Show REPL command reference |
+| *(regular input)* | Chat inference with current adapter applied |
+
 **`/train-qa` — conversational fact training:**
 
 ```
@@ -133,6 +148,153 @@ The command auto-generates four phrasings of the question to aid generalization.
 
 # 3-node cluster with adapter on every node
 ./juno --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+
+# Explicit path
+./juno lora --model-path /path/to/model.gguf --lora-path /adapters/my.lora
+```
+
+**Comparing base vs adapted model (two terminals):**
+```bash
+# Terminal 1 — base model, no adapter
+./juno local --model-path /path/to/model.gguf --nodes 1
+
+# Terminal 2 — with your adapter
+./juno lora --model-path /path/to/model.gguf
+```
+
+**Profiling a slow training step:**
+```bash
+./juno lora --model-path /path/to/model.gguf --jfr 5m
+# Inside the REPL:
+you > /train some training text
+# ... training runs ...
+# After exit, open juno-<modelStem>-<timestamp>.jfr in JDK Mission Control
+# Event Browser → juno.LoraTrainStep shows per-step timing breakdown:
+#   forwardMs / backwardMs / optimizerMs / loss
+```
+
+**CPU performance note:** LoRA training on CPU runs the full forward+backward pass
+through all transformer layers. For TinyLlama Q4_K_M on a typical 8-core machine,
+expect ~2–5 seconds per gradient step for short sequences (7–10 tokens). Longer
+sequences scale linearly with token count. Use `--lora-steps 5` for quick iteration
+and `--lora-steps 100` when convergence matters. GPU training (via `CudaMatVecBackend`)
+would be 20–50× faster.
+
+---
+
+### `merge` — bake a LoRA adapter into a standalone GGUF
+
+Writes a new GGUF where the LoRA-patched projection tensors (wq/wv on every
+layer) are stored as **F32** for full precision. All other tensors are copied
+verbatim in their original quantised encoding. The resulting file needs no
+`.lora` sidecar at inference time and loads with `./juno local` or `./juno`
+(cluster) like any other model.
+
+```bash
+# Default: reads <model>.lora, writes <model>-merged.gguf
+./juno merge --model-path /path/to/TinyLlama.Q4_K_M.gguf
+
+# Explicit paths
+./juno merge --model-path /path/to/model.gguf \
+             --lora-path  /adapters/my.lora   \
+             --output     /path/to/merged.gguf
+
+# Larger heap for big models (rule of thumb: 2× model file size)
+./juno merge --model-path /path/to/Mistral-7B.gguf --heap 12g
+```
+
+**Why the merged file is larger than the source:**
+
+The LoRA delta per element (~6×10⁻⁴) is smaller than Q4_K quantisation noise
+(~3×10⁻³). Re-quantising the merged weights back to Q4_K would erase the training
+entirely — the model would answer as if it had never been fine-tuned. F32 storage
+for the 44 patched tensors is the correct trade-off. For TinyLlama 1.1B Q4_K_M
+(667 MB), the merged file is approximately 1 GB.
+
+**Full workflow:**
+
+```bash
+# 1. Fine-tune
+./juno lora --model-path /models/tinyllama.gguf
+#   you > /train-qa "What is your name?" A: "Juno"
+#   you > /save
+#   ✔ Saved → /models/tinyllama.lora
+
+# 2. Merge (produces /models/tinyllama-merged.gguf, ~1 GB)
+./juno merge --model-path /models/tinyllama.gguf
+
+# 3. Run — no .lora file needed
+./juno local --model-path /models/tinyllama-merged.gguf
+#   you > what is your name?
+#   bot > Juno
+```
+
+**`merge` flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model-path PATH` | — | Source GGUF or llamafile (required) |
+| `--lora-path PATH` | `<model>.lora` | Trained adapter checkpoint |
+| `--output PATH` | `<model>-merged.gguf` | Output path (always plain GGUF, even if source is llamafile) |
+| `--heap SIZE` | `4g` | JVM heap — use at least 2× model file size |
+
+---
+
+### *(no command)* — 3-node cluster (forked JVMs, real gRPC)
+
+Forks 3 separate JVM node processes. Each node loads its own shard of the model.
+`ForwardPassHandlerLoader` runs inside each node JVM. Supports two distribution
+strategies selected with `--pType`:
+
+- **`pipeline`** (default) — contiguous layer blocks, serial activation flow node-1→node-2→node-3
+- **`tensor`** — every node holds all layers but only a horizontal weight slice; coordinator broadcasts tokens to all nodes in parallel and reduces partial logit vectors (AllReduce)
+
+```bash
+# Minimal — pipeline-parallel (default)
+./juno --model-path /path/to/model.gguf
+
+# Tensor-parallel cluster
+./juno --pType tensor --model-path /path/to/model.gguf
+
+# Via env var
+MODEL_PATH=/path/to/model.gguf ./juno
+MODEL_PATH=/path/to/model.gguf PTYPE=tensor ./juno
+
+# Phi-3.5 Mini (2.4 GB model)
+./juno --model-path /path/to/phi-3.5-mini-instruct-Q4_K_M.gguf --heap 4g
+
+# Activation dtype between nodes
+./juno --model-path /path/to/model.gguf --float16      # default
+./juno --model-path /path/to/model.gguf --float32      # lossless debug
+./juno --model-path /path/to/model.gguf --int8         # max compression
+
+# Java Flight Recording — coordinator + all node JVMs instrumented; files merged on exit
+./juno --model-path /path/to/model.gguf --jfr 5m
+./juno --pType tensor --model-path /path/to/model.gguf --jfr 30s
+# On exit, metrics are merged across all JVMs and printed to stdout.
+# Individual .jfr files (coordinator + one per node) also available for JDK Mission Control.
+
+# Generation params
+./juno --model-path /path/to/model.gguf --max-tokens 512
+./juno --model-path /path/to/model.gguf --temperature 0.3
+./juno --model-path /path/to/model.gguf --top-k 40
+./juno --model-path /path/to/model.gguf --top-p 0.8
+./juno --model-path /path/to/model.gguf --top-k 0 --top-p 0    # disable both filters
+
+# Verbose — shows gRPC, shard assignments, node startup
+./juno --model-path /path/to/model.gguf --verbose
+./juno --model-path /path/to/model.gguf -v
+
+# Everything combined — tensor-parallel
+./juno --pType tensor --model-path /path/to/model.gguf --dtype FLOAT16 \
+  --max-tokens 512 --temperature 0.5 --top-k 40 --top-p 0.9 --heap 4g -v
+
+# All via env vars
+MODEL_PATH=/path/to/model.gguf PTYPE=tensor DTYPE=FLOAT16 MAX_TOKENS=512 \
+  TEMPERATURE=0.5 TOP_K=40 TOP_P=0.9 HEAP=4g ./juno
+
+# Custom JDK
+JAVA_HOME=/opt/jdk-25 ./juno --model-path /path/to/model.gguf
 ```
 
 ---

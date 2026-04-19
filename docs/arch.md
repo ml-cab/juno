@@ -438,8 +438,14 @@ TinyLlama-1.1B wq+wv, rank=8: frozen 1.1B params vs LoRA 720K params.
 | `LoraAdapter` | Core math: forward delta, backward gradient |
 | `LoraAdapterSet` | Keyed by (layerIndex, projectionName); `save()` / `load()` binary checkpoint |
 | `LoraAdamOptimizer` | Adam with bias correction; weight decay on A only |
+
+| `LoraAdapter` | Core math unit: `forward(x)`, `backward(gradDelta, x)`, `zeroGrad()` |
+| `LoraAdapterSet` | Keyed by (layerIndex, projectionName). `save(Path)` / `load(Path)` binary checkpoint. `asMap()` for iteration. |
+| `LoraAdamOptimizer` | Adam with bias correction. Weight decay on A only (not B) |
 | `LoraTrainableHandler` | `ForwardPassHandler` for inference + `trainStep()` for training |
 | `LoraTrainEvent` | JFR event `juno.LoraTrainStep`: step, loss, forward/backward/optimizer ms |
+| `LoraMerge` | GGUF writer: bakes adapter into a new standalone model file |
+| `LoraMergeMain` | CLI entry point for `juno merge` |
 
 ### ConsoleMain `/train-qa`
 
@@ -461,6 +467,38 @@ Generates: exact phrasing × 2 + `Can you tell me: ...` + `Please answer: ...`. 
 | `[TRACE] token IDs: [...]` | Raw token IDs (verbose only) |
 | `[TRACE] step=N loss=F chunk=M/T ms=D` | Per-step loss during training |
 | `[TRACE] inference model type` | Template at inference — must match training |
+
+### Native Merge (`juno merge`)
+
+`LoraMerge.merge(modelPath, loraPath, outputPath)` produces a new GGUF file where the LoRA-patched projection tensors are stored as **F32** and all other tensors are copied verbatim.
+
+**Why F32 and not re-quantise?**
+
+| Metric | Value |
+|--------|-------|
+| Typical LoRA delta per element | ~6×10⁻⁴ |
+| Q4_K quantisation noise (half-step) | ~3.3×10⁻³ |
+| SNR if re-quantised | **0.18×** — delta erased |
+| F32 precision for same weights | ~10⁻⁷ (SNR ~6000×) |
+
+Re-quantising to Q4_K destroys the delta entirely; the merged model behaves identically to the base model. F32 preserves it. The trade-off is a larger file (~1 GB for TinyLlama 1.1B vs 667 MB Q4_K original).
+
+**GGUF writer flow (5 steps):**
+1. Copy header + KV section verbatim from source (`ggufFileOffset` → `metadataSectionEnd`).
+2. Write new tensor-info section — patched tensors get `type=F32`, others keep original type; all offsets recomputed.
+3. Write 32-byte alignment padding relative to output file position 0.
+4. Data section: patched tensors written as F32 (dequantise → apply delta → write); all others raw bytes transferred verbatim.
+
+Output is always a plain GGUF v3 even when source is a llamafile ZIP polyglot.
+
+**GgufReader additions** required by the writer:
+
+| Method | Description |
+|--------|-------------|
+| `ggufFileOffset()` | Byte position of GGUF header in source file (0 for `.gguf`, >0 for llamafile) |
+| `metadataSectionEnd()` | First byte after the last KV pair — start of tensor-info section |
+| `tensorOrder()` | Tensor names in file order (requires `LinkedHashMap` storage) |
+| `tensorNelems(name)` | Total element count for a tensor |
 
 ---
 ## 20. KV Cache Wiring + JFR Instrumentation
@@ -622,3 +660,29 @@ The coordinator starts only after all nodes are confirmed active — loadShard R
 | cloud-init skips bootstrap script | Double base64 encoding via pre-encoded `--user-data` | Pass `file://` path to AWS CLI (Session 26) |
 | cloud-init sees ANSI codes before `#!/bin/bash` | `log()` calls in `_build_node_userdata` wrote to stdout | Redirect to stderr with `>&2` (Session 26) |
 
+| Session | Key Changes |
+|---------|-------------|
+| 1–3 | Foundation: sampler, tokenizer, registry, kvcache, coordinator stubs |
+| 4 | Real model: `GgufReader`, `LlamaConfig`, `LlamaTransformerHandler`, `GgufTokenizer`, prefill/decode split |
+| 5 | Bug fixes: TinyLlama template (ChatML→Zephyr), ▁ leak in streaming, Q6_K dequant loop |
+| 6 | Performance: parallel `matVec` (9× speedup), parallel shard loading, EOS piece suppression, FLOAT16 default |
+| 7 | Module restructure: `player` module extracted, `ModelLiveRunner` replaces `TinyLlamaLiveIT` |
+| 8 | `run.sh` / `run.bat` unified launcher, logback config, `ModelLiveRunner` all 6 tests green |
+| 9 | Session KV cache reuse (flat latency per turn), `InferenceRequest.sessionId`, `GenerationLoop.evictSession()` |
+| 10 | GPU acceleration: `MatVec` interface, `CudaMatVec` (cublasSgemv), `GpuContext`, `CudaAvailability`, `GpuForwardPassIT` |
+| 11 | Phi-3 family: `Phi3TransformerHandler` (fused QKV/FFN tensors), `ForwardPassHandlerLoader`, `QuantizedTensor` lazy dequant (OOM fix), vocab size fix, template routing fix |
+| 12 | Pure rename refactor: `GpuForwardPassHandler` merged into `LlamaTransformerHandler`, `CublasMatVec`→`CudaMatVec`, etc. |
+| 13 | Tensor parallel: `ParallelismType`, `TensorShardPlanner`, `TensorShardContext`, `TensorParallelPipelineClient`, `TensorParallelClusterIT`; `numHeads % 2 == 0` constraint (not worldSize); `LlamaTransformerHandler` OOM fix (lazy `QuantizedTensor` weights); ModelLiveRunner +2 tensor tests |
+| 14 | LoRA fine-tuning: `LoraAdapter`, `LoraAdapterSet`, `LoraAdamOptimizer`, `LoraTrainableHandler`; `transposedMatVec` Q5K/Q6K fix; ConsoleMain `lora` subcommand |
+| 15 | KV cache wired: `NodeKVCacheAdapter`, `EmbeddedNodeServer` wiring; JFR: `MatVecEvent`, `ForwardPassEvent`, `TokenizerEvent`, `TemplateFormatEvent`; `LlamaConfig.synthetic()` + `newTestInstance()` |
+| 16 | Naming cleanup applied to disk (session 12 renames actually executed, stale files deleted) |
+| 17 | AWS scripts: `scripts/aws/` with `launcher.sh`, `juno-infra.sh`, `juno-infra-ft.sh` |
+| 18 | Meta-Llama 3 GPT-2 BPE support in `GgufTokenizer`; `MatVecEvent` from quantised path; `TemplateFormatEvent` fix |
+| 19 | `metrics` module: `JfrMetricsExtractor`, `JfrModelMapper`, `MetricsMain`; JFR filename embeds model stem |
+| 20 | GPU inference actually wired end-to-end: `selectBackend()`, `DeviceFloatMatrix` device weights, `matVecLayer()` dispatch, JFR backend label fix (`"cpu"` for quantised path) |
+| 21 | `juno-deploy.sh`: unified AWS lifecycle script, web console in `InferenceApiServer`, verified on eu-north-1 |
+| 22 | Q2_K + Q3_K quantisation support |
+| 23 | Programmatic JFR lifecycle in `ConsoleMain` (local + cluster); `ClusterHarness.withJfr()`; `MetricsMain.extractToJsonMerged()`; `juno-deploy.sh --jfr`; `models.json` fixed |
+| 24 | Configurable activation byte order (`--byteOrder BE\|LE`); `ActivationCodec` static dispatcher; `ActivationBECodec` / `ActivationLECodec`; byte order propagated through `ClusterHarness`, `juno-deploy.sh`, health endpoint |
+| 25 | Code quality: `CyclicForwardPassHandler` moved to test scope, `StubForwardPassHandler` inner class in `EmbeddedNodeServer`, docs sweep |
+| 26 | Native LoRA merge: `LoraMerge`, `LoraMergeMain`, `juno merge` subcommand. Patched tensors written as F32 (re-quantising to Q4_K erases deltas smaller than quantisation noise). `GgufReader` extended with `ggufFileOffset()`, `metadataSectionEnd()`, `tensorOrder()`, `tensorNelems()`, `LinkedHashMap` tensor storage. Three re-quantiser bugs fixed: Q4_K `d = maxRange/63` → `/(63×15)`, Q5_K `/(63×31)`, Q3_K scRaw packing rewritten. |
