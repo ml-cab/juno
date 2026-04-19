@@ -56,6 +56,7 @@ import cab.ml.juno.node.LocalInferencePipeline;
 import cab.ml.juno.node.LoraAdamOptimizer;
 import cab.ml.juno.node.LoraAdapterSet;
 import cab.ml.juno.node.LoraTrainableHandler;
+import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.NodeDescriptor;
 import cab.ml.juno.registry.NodeStatus;
@@ -1115,14 +1116,11 @@ public final class ConsoleMain {
 		}
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		GpuContext gpuCtx = prepareGpuContext();
-		// One CudaMatVec per process — shares the same GpuContext / cuBLAS handle across shards.
-		CudaMatVec cudaMv = (gpuCtx != null) ? new CudaMatVec(gpuCtx) : null;
+		// One MatVec per process — shares the same GpuContext / cuBLAS handle across shards.
+		MatVec sharedBackend = (gpuCtx != null) ? new CudaMatVec(gpuCtx) : ForwardPassHandlerLoader.selectBackend();
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
-			if (cudaMv != null)
-				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context, cudaMv));
-			else
-				handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context));
+			handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context, sharedBackend, playAdapters));
 		}
 
 		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
