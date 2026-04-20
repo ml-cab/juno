@@ -1,0 +1,23 @@
+<configuration>
+
+	<appender name="STDOUT"
+		class="ch.qos.logback.core.ConsoleAppender">
+		<encoder>
+			<pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{30} - %msg%n
+			</pattern>
+		</encoder>
+	</appender>
+
+	<!-- Suppress Javalin / Jetty / Netty startup chatter -->
+	<logger name="io.javalin" level="WARN" />
+	<logger name="org.eclipse.jetty" level="WARN" />
+	<logger name="io.netty" level="WARN" />
+
+	<!-- Juno health package at INFO so probe events are visible -->
+	<logger name="cab.ml.juno.health" level="INFO" />
+
+	<root level="WARN">
+		<appender-ref ref="STDOUT" />
+	</root>
+
+</configuration>

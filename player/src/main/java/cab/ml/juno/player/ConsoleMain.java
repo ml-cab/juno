@@ -35,8 +35,10 @@ import jdk.jfr.RecordingState;
 
 import cab.ml.juno.metrics.MetricsMain;
 
-import cab.ml.juno.coordinator.GenerationLoop;
-import cab.ml.juno.coordinator.GenerationResult;
+import cab.ml.juno.coordinator.GenerationLoop;import cab.ml.juno.coordinator.GenerationResult;
+import cab.ml.juno.health.HealthMain;
+import cab.ml.juno.health.HealthReporter;
+import cab.ml.juno.health.HealthThresholds;
 import cab.ml.juno.coordinator.InferenceRequest;
 import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.coordinator.TokenConsumer;
@@ -122,6 +124,12 @@ public final class ConsoleMain {
 	private static boolean help = false;
 	private static ParallelismType pType = ParallelismType.PIPELINE;
 	private static String jfrDuration = null;
+	// ── Health server flag ────────────────────────────────────────────────────
+	/** When true, start a health sidecar alongside the normal run mode. */
+	private static boolean healthMode = false;
+	private static int healthPort = cab.ml.juno.health.HealthMain.DEFAULT_PORT;
+	/** Active reporters — wired from runLocalRepl(); used to record per-inference latency. */
+	private static final java.util.List<HealthReporter> activeReporters = new java.util.ArrayList<>();
 	// ── Byte-order argument ───────────────────────────────────────────────────
 	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
 	private static String byteOrder = "BE";
@@ -144,6 +152,12 @@ public final class ConsoleMain {
 		if (help) {
 			printHelp();
 			System.exit(0);
+		}
+
+		// ── Health sidecar — start in background then continue normally ──────
+		if (healthMode) {
+			cab.ml.juno.health.HealthMain.startBackground(
+				healthPort, cab.ml.juno.health.HealthThresholds.defaults());
 		}
 
 		if (modelPath == null) {
@@ -260,7 +274,7 @@ public final class ConsoleMain {
 			case "--cpu":
 				useGpu = false;
 				break;
-				// ── LoRA ──────────────────────────────────────────────────────────
+		// ── LoRA ──────────────────────────────────────────────────────────
 			case "--lora":
 				loraMode = true;
 				break;
@@ -305,6 +319,9 @@ public final class ConsoleMain {
 			case "-h":
 				help = true;
 				return;
+			case "--health":
+				healthMode = true;
+				break;
 			default:
 				System.err.println("Unknown option: " + args[i]);
 				help = true;
@@ -360,6 +377,12 @@ public final class ConsoleMain {
 		System.out.println("                           catastrophic overfitting. Set 0 to disable.");
 		System.out.println();
 		System.out.println("Other:");
+		System.out.println("  --health                   Start the standalone health-monitor HTTP server");
+		System.out.println("                             (no --model-path required)");
+		System.out.println("    --port N                   Listen port (default: 8081)");
+		System.out.println("    --stale-ms N               Node stale threshold in ms (default: 15000)");
+		System.out.println("    --warn F                   VRAM warning threshold 0.0-1.0 (default: 0.90)");
+		System.out.println("    --critical F               VRAM critical threshold 0.0-1.0 (default: 0.98)");
 		System.out.println("  --jfr DURATION             Java Flight Recording duration (e.g. 5m)");
 		System.out.println("  --verbose, -v              Show more logging");
 		System.out.println("  --help, -h                 Show this help");
@@ -491,6 +514,7 @@ public final class ConsoleMain {
 			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · LoRA rank=%d]" + Color.RESET + "%n",
 					result.generatedTokens(), elapsed, loraRank);
 			System.out.println();
+			activeReporters.forEach(r -> r.recordLatency(elapsed));
 		}
 
 		loop.evictSession(history.sessionId());
@@ -980,6 +1004,9 @@ public final class ConsoleMain {
 			print(Color.CYAN + "  ⚙ LoRA inference overlay will be applied on every node: "
 					+ loraPlayPath + Color.RESET);
 		}
+		if (healthMode) {
+			harness.withHealthUrl("http://localhost:" + healthPort);
+		}
 
 		// ── Single combined shutdown hook — ordering matters ──────────────────
 		final Recording recRef = rec;
@@ -1133,6 +1160,21 @@ public final class ConsoleMain {
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
 
+		// ── Health reporters for in-process nodes ─────────────────────────────
+		if (healthMode) {
+			String base = "http://localhost:" + healthPort;
+			List<HealthReporter> reporters = new ArrayList<>();
+			for (var assignment : shardMap.assignments()) {
+				HealthReporter r = new HealthReporter(assignment.nodeId(), base);
+				r.startBackground();
+				reporters.add(r);
+			}
+			activeReporters.addAll(reporters);
+			Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
+				for (HealthReporter r : reporters) r.stop();
+			}));
+		}
+
 		startRepl(loop, tokenizer);
 	}
 
@@ -1167,6 +1209,10 @@ public final class ConsoleMain {
 		ClusterHarness harness = (pType == ParallelismType.TENSOR)
 				? ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads)
 				: ClusterHarness.threeNodes(modelPath, totalLayers);
+
+		if (healthMode) {
+			harness.withHealthUrl("http://localhost:" + healthPort);
+		}
 
 		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
 			print("\n" + Color.YELLOW + "⏹ Shutting down cluster..." + Color.RESET);
@@ -1239,6 +1285,7 @@ public final class ConsoleMain {
 			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · %s]" + Color.RESET + "%n",
 					result.generatedTokens(), elapsed, dtype);
 			System.out.println();
+			activeReporters.forEach(r -> r.recordLatency(elapsed));
 		}
 
 		loop.evictSession(history.sessionId());

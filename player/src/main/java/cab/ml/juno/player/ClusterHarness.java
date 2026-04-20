@@ -86,6 +86,9 @@ public final class ClusterHarness implements AutoCloseable {
 	private String jfrTimestamp;
 	private String loraPlayPath; // null = no LoRA adapter overlay on forked nodes
 
+	/** Non-null when the caller wants each node JVM to push health probes. */
+	private String healthUrl;
+
 	private ClusterHarness(List<NodeSpec> specs) {
 		this(specs, null, ParallelismType.PIPELINE, TOTAL_LAYERS, NUM_HEADS);
 	}
@@ -349,6 +352,21 @@ public final class ClusterHarness implements AutoCloseable {
 	}
 
 	/**
+	 * Instructs each forked node JVM to push periodic health probes to the given
+	 * URL base (e.g. {@code "http://localhost:8081"}). The node ID and its JVM
+	 * heap stats are used as the payload, populating the health dashboard.
+	 *
+	 * <p>Must be called before {@link #start()}.
+	 *
+	 * @param baseUrl base URL of the health sidecar, without trailing slash
+	 * @return {@code this} for chaining
+	 */
+	public ClusterHarness withHealthUrl(String baseUrl) {
+		this.healthUrl = baseUrl;
+		return this;
+	}
+
+	/**
 	 * Returns the expected JFR output paths for every node, in node order.
 	 * Only meaningful after {@link #withJfr(String, String)} has been called.
 	 */
@@ -428,6 +446,11 @@ public final class ClusterHarness implements AutoCloseable {
 		// forked JVM starts with loraPlayPath=null and runs the bare base model.
 		if (loraPlayPath != null && !loraPlayPath.isBlank()) {
 			cmd.add("-Djuno.lora.play.path=" + loraPlayPath);
+		}
+
+		// Health reporter: each node JVM pushes its own heap stats to the sidecar.
+		if (healthUrl != null) {
+			cmd.add("-Djuno.health.url=" + healthUrl);
 		}
 
 		if (!verbose) {

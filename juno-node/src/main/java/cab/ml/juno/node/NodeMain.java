@@ -17,6 +17,9 @@
 package cab.ml.juno.node;
 
 import java.util.logging.Logger;
+import cab.ml.juno.health.HealthMain;
+import cab.ml.juno.health.HealthReporter;
+import cab.ml.juno.health.HealthThresholds;
 
 /**
  * Entry point for a standalone node JVM process.
@@ -28,9 +31,17 @@ import java.util.logging.Logger;
  *   -DJUNO_USE_GPU=<true|false> optional, defaults to true
  *   -Djuno.cuda.device=<0..N-1> optional CUDA device index for {@link cab.ml.juno.node.GpuContext#shared(int)}
  *
+ * Health sidecar (optional — starts alongside the node, does NOT replace it):
+ *   -Djuno.health=true          enable the health HTTP sidecar
+ *   -Djuno.health.port=8081     port for the health sidecar (default: 8081)
+ *   -Djuno.health.staleMs=15000 staleness threshold in ms (default: 15000)
+ *   -Djuno.health.warn=0.90     VRAM warning threshold (default: 0.90)
+ *   -Djuno.health.critical=0.98 VRAM critical threshold (default: 0.98)
+ *
  * Example:
  *   java -Dnode.id=node-1 -Dnode.port=9092 -Dmodel.path=/models/model.gguf \
- *        -jar juno-node.jar cab.ml.juno.node.NodeMain
+ *        -Djuno.health=true -Djuno.health.port=8082 \
+ *        -jar juno-node.jar
  *
  * The old command-line signature (nodeId port modelPath) is still supported
  * for backward compatibility, but system properties take precedence.
@@ -85,6 +96,30 @@ public final class NodeMain {
             log.info("LoRA inference overlay enabled: " + loraPlayPath);
         }
 
+        // ── Health sidecar (optional) ─────────────────────────────────────────
+        if ("true".equalsIgnoreCase(System.getProperty("juno.health", "false"))) {
+            int    healthPort    = parsePropInt   ("juno.health.port",     HealthMain.DEFAULT_PORT);
+            long   healthStaleMs = parsePropLong  ("juno.health.staleMs",  15_000L);
+            double healthWarn    = parsePropDouble("juno.health.warn",     0.90);
+            double healthCrit    = parsePropDouble("juno.health.critical", 0.98);
+            HealthMain.startBackground(healthPort,
+                new HealthThresholds(healthWarn, healthCrit, healthStaleMs));
+            log.info("Health sidecar started on :" + healthPort);
+        }
+
+        // ── Health reporter (optional) ────────────────────────────────────────
+        // When ClusterHarness passes -Djuno.health.url=http://host:port, this node
+        // pushes its own JVM heap stats to the health sidecar so the dashboard shows
+        // real per-node data. Works even without a GPU (heap = VRAM proxy).
+        String healthUrl = System.getProperty("juno.health.url");
+        if (healthUrl != null && !healthUrl.isBlank()) {
+            HealthReporter reporter = new HealthReporter(nodeId, healthUrl);
+            reporter.startBackground();
+            Runtime.getRuntime().addShutdownHook(
+                Thread.ofVirtual().unstarted(reporter::stop));
+            log.info("Health reporter started → " + healthUrl);
+        }
+
         EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu);
         server.start();
 
@@ -94,5 +129,25 @@ public final class NodeMain {
 
         log.info("Node [" + nodeId + "] running on port " + port + " — waiting for requests");
         server.blockUntilShutdown();
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static int parsePropInt(String key, int def) {
+        String v = System.getProperty(key);
+        if (v == null || v.isBlank()) return def;
+        try { return Integer.parseInt(v.trim()); } catch (NumberFormatException e) { return def; }
+    }
+
+    private static long parsePropLong(String key, long def) {
+        String v = System.getProperty(key);
+        if (v == null || v.isBlank()) return def;
+        try { return Long.parseLong(v.trim()); } catch (NumberFormatException e) { return def; }
+    }
+
+    private static double parsePropDouble(String key, double def) {
+        String v = System.getProperty(key);
+        if (v == null || v.isBlank()) return def;
+        try { return Double.parseDouble(v.trim()); } catch (NumberFormatException e) { return def; }
     }
 }

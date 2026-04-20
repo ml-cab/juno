@@ -42,7 +42,7 @@ export LC_NUMERIC=C
 REGION="${AWS_DEFAULT_REGION:-eu-north-1}"
 INSTANCE_TYPE="g4dn.xlarge"
 NODE_COUNT=3
-GIT=optim1
+GIT=main
 COORDINATOR_MODE="node1"          # "node1" | "separate"
 MODEL_URL="https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
 MODEL_FILENAME="TinyLlama.gguf"
@@ -579,7 +579,8 @@ _wait_for_ready_and_open() {
 
   log ""
   log "  ╔══════════════════════════════════════════════════════╗"
-  log "  ║  Web console: ${CONSOLE_URL}"
+  log "  ║  Web console  : ${CONSOLE_URL}"
+  log "  ║  Health dash  : ${CONSOLE_URL}/health-ui"
   log "  ╚══════════════════════════════════════════════════════╝"
   log ""
 
@@ -858,6 +859,7 @@ setup() {
       "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${MY_IP}/32,Description=SSH}]" \
       "IpProtocol=tcp,FromPort=${GRPC_PORT},ToPort=$(( GRPC_PORT + NODE_COUNT + 1 )),IpRanges=[{CidrIp=${VPC_CIDR},Description=Juno-gRPC-internal}]" \
       "IpProtocol=tcp,FromPort=${HTTP_PORT},ToPort=${HTTP_PORT},IpRanges=[{CidrIp=0.0.0.0/0,Description=Juno-REST}]" \
+      "IpProtocol=tcp,FromPort=8081,ToPort=8081,IpRanges=[{CidrIp=${VPC_CIDR},Description=Juno-health-sidecar-internal}]" \
       "IpProtocol=tcp,FromPort=5701,ToPort=5701,IpRanges=[{CidrIp=${VPC_CIDR},Description=Hazelcast}]" \
       &>/dev/null
   log "  OK Security group: $SG_ID  (SSH from ${MY_IP}, gRPC internal, REST public)"
@@ -885,13 +887,18 @@ _launch_nodes() {
   log "Launching ${NODE_COUNT} × ${INSTANCE_TYPE} node(s)…"
   INSTANCE_IDS=()
 
+  # Launch node-1 first so we can capture its private IP and bake
+  # JUNO_HEALTH_URL into every other node's node.env at creation time.
+  # No file writes, no restarts — coordinator URL is in RAM from first boot.
+  local COORD_PRIV_IP=""
+
   for (( i=1; i<=NODE_COUNT; i++ )); do
     local NODE_IDX=$i
     local IS_COORDINATOR_NODE=false
     [[ "$COORDINATOR_MODE" == "node1" && "$i" -eq 1 ]] && IS_COORDINATOR_NODE=true
 
     local USER_DATA
-    USER_DATA=$(_build_node_userdata "$NODE_IDX" "$IS_COORDINATOR_NODE")
+    USER_DATA=$(_build_node_userdata "$NODE_IDX" "$IS_COORDINATOR_NODE" "$COORD_PRIV_IP")
     local USER_DATA_FILE
     USER_DATA_FILE=$(mktemp /tmp/juno-userdata-XXXXXX.sh)
     printf '%s' "$USER_DATA" > "$USER_DATA_FILE"
@@ -931,6 +938,13 @@ _launch_nodes() {
     IID=$(echo "$LAUNCH_OUT" | jq -r '.Instances[0].InstanceId')
     INSTANCE_IDS+=("$IID")
     log "  OK node-${i}: $IID"
+
+    # After launching node-1, read its private IP immediately.
+    # AWS assigns it at creation — no need to wait for "running".
+    if [[ "$IS_COORDINATOR_NODE" == "true" && -z "$COORD_PRIV_IP" ]]; then
+      COORD_PRIV_IP=$(aws ec2 describe-instances         --instance-ids "$IID" --region "$REGION"         --query "Reservations[0].Instances[0].PrivateIpAddress"         --output text 2>/dev/null || echo "")
+      log "  OK coordinator private IP: ${COORD_PRIV_IP}"
+    fi
   done
   log "  ✅ All nodes launched: ${INSTANCE_IDS[*]}"
 }
@@ -994,6 +1008,7 @@ _launch_coordinator_if_separate() {
 _build_node_userdata() {
   local NODE_IDX="$1"
   local IS_COORDINATOR="$2"
+  local COORD_PRIV_IP_ARG="${3:-}"   # coordinator private IP; empty for node-1 (self-discovers)
   local PORT=$(( GRPC_PORT + NODE_IDX - 1 ))
 
   local MODEL_URL_VAL="$MODEL_URL"
@@ -1017,7 +1032,7 @@ _build_node_userdata() {
   log "  [TRACE] node-${NODE_IDX_VAL} bootstrap params:" >&2
   log "          grpc_port=${PORT_VAL}  is_coordinator=${IS_COORD_VAL}  dtype=${DTYPE_VAL}" >&2
   log "          model=${MODEL_FILENAME_VAL}  git=${GIT_VAL}" >&2
-  log "          jfr=${JFR_DURATION_VAL:-<none>}  lora_play=<will be deployed after bootstrap>" >&2
+  log "          jfr=${JFR_DURATION_VAL:-<none>}  coord_ip=${COORD_PRIV_IP_ARG:-self-discover}" >&2
 
   sed -e "s|__NODE_IDX__|${NODE_IDX_VAL}|g" \
       -e "s|__PORT__|${PORT_VAL}|g" \
@@ -1033,6 +1048,8 @@ _build_node_userdata() {
       -e "s|__JFR_DURATION__|${JFR_DURATION_VAL}|g" \
       -e "s|__LORA_PLAY_PATH__||g" \
       -e "s|__MODEL_URL__|${MODEL_URL_VAL}|g" \
+      -e "s|__COORDINATOR_PRIVATE_IP__|${COORD_PRIV_IP_ARG}|g" \
+      -e "s|__HTTP_PORT_VAL__|${HTTP_PORT_VAL}|g" \
       <<'EOF'
 #!/bin/bash
 exec > /var/log/juno-bootstrap.log 2>&1
@@ -1078,7 +1095,7 @@ fi
 
 git clone https://github.com/ml-cab/juno /opt/juno
 cd /opt/juno
-git checkout ${GIT}
+git checkout ${GIT} --
 mvn clean package -DskipTests -q
 echo "Build complete"
 
@@ -1092,6 +1109,14 @@ else
 fi
 
 mkdir -p /etc/juno
+# Coordinator private IP for health probes.
+# node-1 (IS_COORDINATOR=true) self-discovers its own private IP via EC2 metadata.
+# All other nodes have the coordinator IP embedded as __COORDINATOR_PRIVATE_IP__.
+if [[ "${IS_COORDINATOR}" == "true" ]]; then
+  _COORD_IP=$(curl -sf --retry 3 --retry-delay 1     http://169.254.169.254/latest/meta-data/local-ipv4 2>/dev/null || echo "127.0.0.1")
+else
+  _COORD_IP="__COORDINATOR_PRIVATE_IP__"
+fi
 cat > /etc/juno/node.env <<EOF2
 JUNO_USE_GPU=${USE_GPU}
 JUNO_MODEL_PATH=${MODEL_PATH}
@@ -1101,6 +1126,7 @@ NODE_ID=${NODE_ID}
 JUNO_JFR_DURATION=${JFR_DURATION}
 JUNO_MODEL_STEM=${MODEL_STEM}
 JUNO_LORA_PLAY_PATH=__LORA_PLAY_PATH__
+JUNO_HEALTH_URL=http://${_COORD_IP}:__HTTP_PORT_VAL__
 EOF2
 
 # Wrapper script — conditionally adds -XX:StartFlightRecording when JFR is enabled
@@ -1129,6 +1155,7 @@ exec /usr/bin/java \
   -Dnode.port=${JUNO_GRPC_PORT} \
   -Dmodel.path=${JUNO_MODEL_PATH} \
   ${JUNO_LORA_PLAY_PATH:+-Djuno.lora.play.path=${JUNO_LORA_PLAY_PATH}} \
+  ${JUNO_HEALTH_URL:+-Djuno.health.url=${JUNO_HEALTH_URL}} \
   -jar /opt/juno/juno-node/target/juno-node.jar \
   cab.ml.juno.node.NodeMain
 EOF2
@@ -1182,6 +1209,8 @@ exec /usr/bin/java \
   --add-opens java.base/java.nio=ALL-UNNAMED \
   -XX:+UseG1GC -XX:+AlwaysPreTouch -Xmx4g \
   ${JFR_OPT:+$JFR_OPT} \
+  -DJUNO_HEALTH=true \
+  -DJUNO_HEALTH_PORT=8081 \
   -jar /opt/juno/juno-master/target/juno-master.jar \
   --model-path ${JUNO_MODEL_PATH} \
   --pType ${JUNO_PTYPE} \
@@ -1360,7 +1389,7 @@ EOF
   ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
       -o BatchMode=yes -i "$SSH_KEY_FILE" "ubuntu@${COORD_HOST}" \
       "echo '${ENV_CONTENT}' | sudo tee /etc/juno/cluster-nodes.env > /dev/null && \
-       sudo systemctl start juno-coordinator && \
+       sudo systemctl restart juno-coordinator && \
        echo 'coordinator started'" 2>/dev/null \
     && log "  ✅ Coordinator started (nodes: ${ADDRS})" \
     || warn "  Could not start coordinator — SSH into ${COORD_HOST} and run: sudo systemctl start juno-coordinator"
@@ -1443,6 +1472,7 @@ _scp_lora_to_nodes() {
   # Update global so _write_cluster_env_and_start_coordinator writes the remote path
   LORA_PLAY_PATH="$REMOTE_LORA_PATH"
 }
+
 scan_regions() {
   local VCPUS_PER_NODE="${INSTANCE_VCPUS[$INSTANCE_TYPE]:-2}"
   local VCPUS_NEEDED=$(( NODE_COUNT * VCPUS_PER_NODE ))
@@ -1568,7 +1598,8 @@ _wait_for_ready_and_open() {
 
   log ""
   log "  ╔══════════════════════════════════════════════════════╗"
-  log "  ║  Web console: ${CONSOLE_URL}"
+  log "  ║  Web console  : ${CONSOLE_URL}"
+  log "  ║  Health dash  : ${CONSOLE_URL}/health-ui"
   log "  ╚══════════════════════════════════════════════════════╝"
   log ""
 

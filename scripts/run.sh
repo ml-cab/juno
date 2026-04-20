@@ -13,6 +13,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 PLAYER_JAR="$DIR/player/target/player.jar"
 LIVE_JAR="$DIR/integration/target/integration.jar"
+HEALTH_JAR="$DIR/health/target/juno-health.jar"
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -151,6 +152,8 @@ cmd_cluster() {
   local ptype="pipeline"
   local jfr_duration=""
   local lora_play="${LORA_PLAY_PATH:-}"
+  local health="false"
+  local health_port="${HEALTH_PORT:-8081}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -177,6 +180,8 @@ cmd_cluster() {
       --int8)             dtype="INT8";      shift   ;;
       --gpu)              use_gpu="true";    shift   ;;
       --cpu)              use_gpu="false";   shift   ;;
+      --health)           health="true";     shift   ;;
+      --health-port)      health_port="$2";  shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -264,6 +269,11 @@ cmd_cluster() {
 
   local lora_play_arg=""
   [[ -n "$lora_play" ]] && { lora_play_arg="--lora-play $lora_play"; warn "LoRA inference overlay: ${lora_play}"; }
+  local health_flag=""
+  if [[ "$health" == "true" ]]; then
+    health_flag="--health"
+    warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
+  fi
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -283,6 +293,7 @@ cmd_cluster() {
     "$gpu_flag" \
     ${jfr_arg} \
     ${lora_play_arg} \
+    ${health_flag} \
     ${verbose_flag}
 }
 
@@ -303,6 +314,8 @@ cmd_local() {
   local verbose="false"
   local jfr_duration=""
   local lora_play="${LORA_PLAY_PATH:-}"
+  local health="false"
+  local health_port="${HEALTH_PORT:-8081}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -329,6 +342,8 @@ cmd_local() {
       --int8)             dtype="INT8";      shift   ;;
       --gpu)              use_gpu="true";    shift   ;;
       --cpu)              use_gpu="false";   shift   ;;
+      --health)           health="true";     shift   ;;
+      --health-port)      health_port="$2";  shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -403,6 +418,11 @@ cmd_local() {
 
   local lora_play_arg=""
   [[ -n "$lora_play" ]] && { lora_play_arg="--lora-play $lora_play"; warn "LoRA inference overlay: ${lora_play}"; }
+  local health_flag=""
+  if [[ "$health" == "true" ]]; then
+    health_flag="--health"
+    warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
+  fi
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -422,6 +442,7 @@ cmd_local() {
     "$gpu_flag" \
     ${jfr_arg} \
     ${lora_play_arg} \
+    ${health_flag} \
     ${verbose_flag}
 }
 
@@ -446,6 +467,8 @@ cmd_lora() {
   local heap="${HEAP:-4g}"
   local verbose="false"
   local jfr_duration=""
+  local health="false"
+  local health_port="${HEALTH_PORT:-8081}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -472,6 +495,8 @@ cmd_lora() {
       # --pType is accepted but ignored: lora always runs single in-process node
       --pType | --ptype) shift 2 ;;
       --jfr)          jfr_duration="$2"; shift 2 ;;
+      --health)       health="true";     shift   ;;
+      --health-port)  health_port="$2";  shift 2 ;;
       --gpu)          use_gpu="true";    shift   ;;
       --cpu)          use_gpu="false";   shift   ;;
       --verbose | -v) verbose="true";   shift   ;;
@@ -569,6 +594,12 @@ cmd_lora() {
   local lora_path_flag=""
   [[ -n "$lora_path" ]] && lora_path_flag="--lora-path $lora_path"
 
+  local health_flag=""
+  if [[ "$health" == "true" ]]; then
+    health_flag="--health"
+    warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
+  fi
+
   local jfr_flag=""
   if [[ -n "$jfr_duration" ]]; then
     local model_name model_stem
@@ -600,6 +631,7 @@ cmd_lora() {
     --top-p "$top_p" \
     "$gpu_flag" \
     ${lora_path_flag} \
+    ${health_flag} \
     ${verbose_flag}
 }
 
@@ -691,6 +723,73 @@ cmd_test() {
     "$model"
 }
 
+# ── Health server ─────────────────────────────────────────────────────────────
+# health — standalone health-monitor HTTP server (no model required)
+# Accepts node health probes via POST /health/probe and exposes a cluster
+# overview via GET /health and per-node circuit states via GET /health/circuits.
+cmd_health() {
+  local port="${HEALTH_PORT:-8081}"
+  local stale_ms="${HEALTH_STALE_MS:-15000}"
+  local warn="${HEALTH_WARN:-0.90}"
+  local critical="${HEALTH_CRITICAL:-0.98}"
+  local heap="${HEAP:-512m}"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --port)       port="$2";     shift 2 ;;
+      --stale-ms)   stale_ms="$2"; shift 2 ;;
+      --warn)       warn="$2";     shift 2 ;;
+      --critical)   critical="$2"; shift 2 ;;
+      --heap)       heap="$2";     shift 2 ;;
+      --help)
+        echo ""
+        echo "  Usage: $0 health [flags]"
+        echo ""
+        echo "  Starts the Juno health-monitor HTTP server."
+        echo "  No model file required.  Nodes push probes; the coordinator polls."
+        echo ""
+        echo "  API:"
+        echo "    POST /health/probe           Accept a NodeHealth snapshot"
+        echo "    GET  /health                 Cluster overview (status + all nodes)"
+        echo "    GET  /health/nodes/{nodeId}  Single-node detail"
+        echo "    GET  /health/circuits        Per-node circuit-breaker states"
+        echo ""
+        echo "  Flags:"
+        echo "    --port N          HTTP listen port                (default: 8081)"
+        echo "    --stale-ms N      ms before a node is stale       (default: 15000)"
+        echo "    --warn F          VRAM warning threshold 0-1      (default: 0.90)"
+        echo "    --critical F      VRAM critical threshold 0-1     (default: 0.98)"
+        echo "    --heap SIZE       JVM heap e.g. 256m 512m 1g      (default: 512m)"
+        echo ""
+        echo "  Environment variable equivalents:"
+        echo "    HEALTH_PORT  HEALTH_STALE_MS  HEALTH_WARN  HEALTH_CRITICAL  HEAP"
+        echo ""
+        echo "  Examples:"
+        echo "    $0 health"
+        echo "    $0 health --port 9090 --stale-ms 30000"
+        echo "    HEALTH_PORT=9090 $0 health"
+        echo ""
+        exit 0 ;;
+      *) err "Unknown health flag: $1.  Run: $0 health --help" ;;
+    esac
+  done
+
+  require_jar "$HEALTH_JAR" "juno-health"
+  check_java_version
+
+  info "Starting Juno health server  (port=${port}  stale_ms=${stale_ms}  warn=${warn}  critical=${critical}  heap=${heap}  os=${OS})"
+  echo ""
+
+  exec "$JAVA" \
+    "${JVM_BASE[@]}" \
+    -Xms64m "-Xmx${heap}" \
+    -jar "$HEALTH_JAR" \
+    --port     "$port" \
+    --stale-ms "$stale_ms" \
+    --warn     "$warn" \
+    --critical "$critical"
+}
+
 # ── Usage ─────────────────────────────────────────────────────────────────────
 usage() {
   echo ""
@@ -699,6 +798,7 @@ usage() {
   echo -e "  Java:        ${DIM}${JAVA}${NC}"
   echo -e "  player jar:  ${DIM}${PLAYER_JAR}${NC}"
   echo -e "  live jar:    ${DIM}${LIVE_JAR}${NC}"
+  echo -e "  health jar:  ${DIM}${HEALTH_JAR}${NC}"
   echo ""
   echo "  Build jars first (one time):"
   echo "    mvn clean package -DskipTests"
@@ -715,6 +815,10 @@ usage() {
   echo    "  $0 test /path/to/model.gguf        model as positional arg"
   echo    "  $0 test --pType tensor             tensor-parallel checks only"
   echo    "  $0 test --help                     all test flags"
+  echo ""
+  echo -e "  ${GREEN}$0 health${NC}                        standalone health-monitor HTTP server"
+  echo    "  $0 health --port 9090              listen on a custom port (default 8081)"
+  echo    "  $0 health --help                   all health flags + API reference"
   echo ""
   echo "  Flags common to default (cluster), local, and lora:"
   echo "    --pType pipeline|tensor        parallelism type         (default pipeline)"
@@ -758,6 +862,9 @@ usage() {
   echo "    MODEL_PATH=/models/tiny.gguf $0 lora --lora-path ./finetune.lora"
   echo "    MODEL_PATH=/models/tiny.gguf $0 test"
   echo "    $0 test /models/tiny.gguf --heap 8g"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 --health                    # cluster + health sidecar on :8081"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 local --health --health-port 9090"
+  echo "    $0 health --port 8081                                        # standalone health server"
   echo ""
   echo "  Custom Java:"
   echo "    JAVA_HOME=/path/to/jdk $0 cluster --model-path /models/tiny.gguf"
@@ -826,6 +933,7 @@ case "$CMD" in
   lora)    cmd_lora    "$@" ;;
   merge)   cmd_merge   "$@" ;;
   test)    cmd_test    "$@" ;;
+  health)  cmd_health  "$@" ;;
   cluster) cmd_cluster "$@" ;;
   *)       cmd_cluster ${CMD:+"$CMD"} "$@" ;;
 esac
