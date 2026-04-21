@@ -18,7 +18,6 @@ package cab.ml.juno.node;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
@@ -89,10 +88,7 @@ public final class EmbeddedNodeServer {
 		this.nodeId = nodeId;
 		this.port = port;
 		this.serviceImpl = new NodeServiceImpl(nodeId, modelPath, useGpu);
-		this.grpcServer = ServerBuilder.forPort(port)
-				.executor(Executors.newVirtualThreadPerTaskExecutor())
-				.addService(serviceImpl)
-				.build();
+		this.grpcServer = ServerBuilder.forPort(port).addService(serviceImpl).build();
 	}
 
 	/**
