@@ -16,6 +16,7 @@
 
 package cab.ml.juno.health;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -175,12 +176,19 @@ public final class HealthReporter {
         // Previously used JVM heap (rt.maxMemory / rt.totalMemory) which reported the
         // configured -Xmx ceiling (e.g. 12.9 GB) rather than real host RAM (e.g. 7.7 GB),
         // making the dashboard numbers incomparable to OS-level monitoring tools.
-        var os        = (com.sun.management.OperatingSystemMXBean)
-                        java.lang.management.ManagementFactory.getOperatingSystemMXBean();
-        long maxMem   = os.getTotalMemorySize();
-        long freeMem  = os.getFreeMemorySize();
-        long usedMem  = maxMem - freeMem;
-        long trueFree = freeMem;
+        var os      = (com.sun.management.OperatingSystemMXBean)
+                      java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+        long maxMem = os.getTotalMemorySize();
+
+        // Use MemAvailable from /proc/meminfo rather than os.getFreeMemorySize() (MemFree).
+        // MemFree is raw unallocated pages only — it ignores the buff/cache that the kernel
+        // will reclaim on demand (typically 2–4 GB on an active node). This caused pressure
+        // to read ~5× higher than reality (50% vs 10%) and would have fired false circuit-
+        // breaker trips on nodes with large disk caches. MemAvailable is the kernel's own
+        // estimate of what is truly allocatable without swapping, and matches what
+        // `free -m`'s "available" column and `top`'s "avail Mem" show.
+        long trueFree = readMemAvailableBytes(maxMem);
+        long usedMem  = maxMem - trueFree;
         double pressure = maxMem > 0
                 ? Math.min(1.0, Math.max(0.0, (double) usedMem / maxMem))
                 : 0.0;
@@ -241,6 +249,47 @@ public final class HealthReporter {
                  java.lang.management.ManagementFactory.getOperatingSystemMXBean();
         double load = os.getCpuLoad();
         return load < 0 ? 0.0 : load;
+    }
+
+    // ── Memory available ─────────────────────────────────────────────────────────────
+
+    /**
+     * Return the kernel's {@code MemAvailable} figure from {@code /proc/meminfo} in bytes.
+     *
+     * <p>Why not {@code OperatingSystemMXBean.getFreeMemorySize()}?  That maps to Linux
+     * {@code MemFree} — raw unallocated pages only.  On a typical JVM node, 2–4 GB of
+     * buff/cache sits between {@code MemFree} and what the kernel would actually hand to
+     * a new allocation, making pressure appear 3–5× higher than reality and risking false
+     * circuit-breaker trips.
+     *
+     * <p>{@code MemAvailable} (added in Linux 3.14, available on all modern distributions)
+     * is the kernel's own estimate of what can be allocated without swapping.  It accounts
+     * for reclaimable cache and is identical to what {@code free -m}'s "available" column
+     * and {@code top}'s "avail Mem" field report.
+     *
+     * <p>Falls back to {@code OperatingSystemMXBean.getFreeMemorySize()} on non-Linux
+     * platforms (macOS, Windows) where {@code /proc/meminfo} does not exist.
+     *
+     * @param totalBytes total physical memory in bytes (used only for the fallback path)
+     * @return estimated allocatable bytes
+     */
+    private static long readMemAvailableBytes(long totalBytes) {
+        try (var br = new java.io.BufferedReader(new java.io.FileReader("/proc/meminfo"))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (line.startsWith("MemAvailable:")) {
+                    // Format: "MemAvailable:   6812340 kB"
+                    String[] parts = line.split("\\s+");
+                    return Long.parseLong(parts[1]) * 1024L;
+                }
+            }
+        } catch (Exception ignored) {
+            // /proc/meminfo not available (non-Linux); fall through to JVM API
+        }
+        // Fallback: MemFree from JVM — less accurate but universally available
+        var os = (com.sun.management.OperatingSystemMXBean)
+                 java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+        return os.getFreeMemorySize();
     }
 
     // ── Throughput ────────────────────────────────────────────────────────────
