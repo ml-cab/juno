@@ -95,13 +95,6 @@ public final class CoordinatorMain {
         String byteOrderStr = env("JUNO_BYTE_ORDER", "BE");
         System.setProperty("juno.byteOrder", "LE".equalsIgnoreCase(byteOrderStr.strip()) ? "LE" : "BE");
         int    maxQueue     = parseInt(env("JUNO_MAX_QUEUE", "1000"), MAX_QUEUE_DEFAULT);
-        String loraPlayPath = env("JUNO_LORA_PLAY_PATH", ""); // optional: .lora overlay on all nodes
-
-        // Forward loraPlayPath to node processes via system property if set
-        if (!loraPlayPath.isBlank()) {
-            System.setProperty("juno.lora.play.path", loraPlayPath);
-            log.info("LoRA play path configured: " + loraPlayPath);
-        }
 
         // ── Validate ──────────────────────────────────────────────────────
         if (rawAddresses.isBlank()) {
@@ -116,11 +109,6 @@ public final class CoordinatorMain {
 
         boolean tensorMode = "tensor".equalsIgnoreCase(ptypeStr.strip());
         ActivationDtype dtype = parseDtype(dtypeStr);
-
-        if (!loraPlayPath.isBlank()) {
-            log.info("LoRA inference overlay configured — nodes will load: " + loraPlayPath
-                    + "  (set via JUNO_LORA_PLAY_PATH)");
-        }
 
         // ── Health sidecar (optional) ─────────────────────────────────────────
         if ("true".equalsIgnoreCase(env("JUNO_HEALTH", "false"))) {
@@ -354,7 +342,10 @@ public final class CoordinatorMain {
     }
 
     private static String env(String key, String defaultValue) {
-        String v = System.getenv(key);
+        // Check JVM system property first (-Dkey=value), then OS env var.
+        // This lets both -DJUNO_HEALTH=true and JUNO_HEALTH=true in the shell work.
+        String v = System.getProperty(key);
+        if (v == null || v.isBlank()) v = System.getenv(key);
         return (v != null && !v.isBlank()) ? v : defaultValue;
     }
 
