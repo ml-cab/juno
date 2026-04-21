@@ -20,7 +20,7 @@ class HealthEvaluatorTest {
 
 	private NodeHealth health(String nodeId, double pressure, long ageMs) {
 		Instant sampledAt = Instant.now().minusMillis(ageMs);
-		return new NodeHealth(nodeId, pressure, 100_000L, 1_000_000L, 60.0, 50.0, sampledAt);
+		return new NodeHealth(nodeId, "node", pressure, 100_000L, 1_000_000L, 0.5, 50.0, -1.0, sampledAt);
 	}
 
 	private NodeHealth fresh(String nodeId, double pressure) {

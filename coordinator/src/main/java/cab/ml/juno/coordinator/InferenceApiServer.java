@@ -706,8 +706,9 @@ prompt.focus();
 		    const bc = p => p>=0.98?'bar-crit':p>=0.90?'bar-warn':'bar-ok';
 		    const fb = b => b<=0?'—':b>=1e9?(b/1e9).toFixed(1)+' GB':(b/1e6).toFixed(0)+' MB';
 		    const fa = ms => ms<2000?ms+' ms':ms<60000?(ms/1000).toFixed(1)+' s':(ms/60000).toFixed(1)+' m';
-		    const ft = c => c>=0?c.toFixed(1)+' °C':'—';
+		    const fc = v => v>=0?(v*100).toFixed(1)+' %':'—';
 		    const fl = ms => ms>=0?ms.toFixed(0)+' ms':'—';
+		    const fth = bps => bps>=0?(bps/1048576).toFixed(2)+' MB/s':'—';
 		    async function refresh() {
 		      try {
 		        const r = await fetch('/health-data');
@@ -731,8 +732,9 @@ prompt.focus();
 		              +'<div class="node-card-header"><div class="node-id">'+n.nodeId+'</div>'
 		              +'<span class="circuit-badge circuit-'+n.circuit+'">'+n.circuit+'</span></div>'
 		              +'<div class="metric-row"><span class="metric-label">VRAM free</span><span class="metric-value">'+fb(n.vramFreeBytes)+' / '+fb(n.vramTotalBytes)+'</span></div>'
-		              +'<div class="metric-row"><span class="metric-label">Temperature</span><span class="metric-value">'+ft(n.temperatureCelsius)+'</span></div>'
-		              +'<div class="metric-row"><span class="metric-label">Latency P99</span><span class="metric-value">'+fl(n.inferenceLatencyP99)+'</span></div>'
+		              +'<div class="metric-row"><span class="metric-label">CPU load</span><span class="metric-value">'+fc(n.cpuLoad)+'</span></div>'
+		              +'<div class="metric-row"><span class="metric-label">'+(n.nodeRole==='coordinator'?'Latency P99':'Throughput')+'</span>'
+		              +'<span class="metric-value">'+(n.nodeRole==='coordinator'?fl(n.inferenceLatencyP99):fth(n.throughputBytesPerSec))+'</span></div>'
 		              +'<div class="metric-row"><span class="metric-label">Last seen</span>'
 		              +'<span class="metric-value" style="color:'+(n.ageMs>10000?'var(--red)':'var(--muted)')+'">'+fa(n.ageMs)+'</span></div>'
 		              +'<div class="vram-bar-wrap"><div class="vram-bar-label"><span>VRAM pressure</span><span>'+pct+'%</span></div>'

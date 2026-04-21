@@ -41,7 +41,8 @@ import io.grpc.stub.StreamObserver;
 
 /**
  * gRPC NodeService backed by LlamaTransformerHandler or Phi3TransformerHandler,
- * with compute backend selected by the {@code useGpu} flag (CudaMatVecBackend or CpuMatVecBackend).
+ * with compute backend selected by the {@code useGpu} flag (CudaMatVecBackend
+ * or CpuMatVecBackend).
  *
  * Activation compression: Each ForwardRequest carries a dtype field that tells
  * this node how to decode the incoming activation bytes. The response
@@ -55,6 +56,7 @@ public final class EmbeddedNodeServer {
 	private final String nodeId;
 	private final int port;
 	private final Server grpcServer;
+	private final NodeServiceImpl serviceImpl; // retained so callers can wire optional extras
 
 	// TinyLlama-1.1B shape constants (used when no model file is supplied)
 	public static final int VOCAB_SIZE = 32_000;
@@ -85,7 +87,17 @@ public final class EmbeddedNodeServer {
 	public EmbeddedNodeServer(String nodeId, int port, String modelPath, boolean useGpu) {
 		this.nodeId = nodeId;
 		this.port = port;
-		this.grpcServer = ServerBuilder.forPort(port).addService(new NodeServiceImpl(nodeId, modelPath, useGpu)).build();
+		this.serviceImpl = new NodeServiceImpl(nodeId, modelPath, useGpu);
+		this.grpcServer = ServerBuilder.forPort(port).addService(serviceImpl).build();
+	}
+
+	/**
+	 * Wire a {@link cab.ml.juno.health.HealthReporter} so each gRPC forward-pass
+	 * response accumulates its encoded payload size for throughput reporting. Call
+	 * after {@link #start()} — thread-safe (volatile write).
+	 */
+	public void setHealthReporter(cab.ml.juno.health.HealthReporter reporter) {
+		serviceImpl.setHealthReporter(reporter);
 	}
 
 	public void start() throws IOException {
@@ -113,11 +125,11 @@ public final class EmbeddedNodeServer {
 	// ── Stub handler (no model loaded) ───────────────────────────────────────
 
 	/**
-	 * Minimal no-op ForwardPassHandler used before a real shard is loaded and as
-	 * a safe fallback when model loading fails. Returns zero-filled arrays of the
-	 * correct shape; never produces meaningful output. Not for use in tests —
-	 * tests should use {@code CyclicForwardPassHandler} (node/src/test) which
-	 * provides deterministic, inspectable results.
+	 * Minimal no-op ForwardPassHandler used before a real shard is loaded and as a
+	 * safe fallback when model loading fails. Returns zero-filled arrays of the
+	 * correct shape; never produces meaningful output. Not for use in tests — tests
+	 * should use {@code CyclicForwardPassHandler} (node/src/test) which provides
+	 * deterministic, inspectable results.
 	 */
 	private static final class StubForwardPassHandler implements ForwardPassHandler {
 		@Override
@@ -152,6 +164,15 @@ public final class EmbeddedNodeServer {
 		private volatile GpuContext gpuContext; // non-null only when handler is GPU
 		@SuppressWarnings("unused")
 		private volatile KVCacheManager kvCache;
+		private volatile cab.ml.juno.health.HealthReporter healthReporter; // optional, set post-construction
+
+		/**
+		 * Wire a reporter for activation-throughput accounting. Thread-safe (volatile
+		 * write).
+		 */
+		void setHealthReporter(cab.ml.juno.health.HealthReporter r) {
+			this.healthReporter = r;
+		}
 
 		NodeServiceImpl(String nodeId, String modelPath, boolean useGpu) {
 			this.nodeId = nodeId;
@@ -207,7 +228,10 @@ public final class EmbeddedNodeServer {
 
 				responseObserver.onNext(response);
 				responseObserver.onCompleted();
-
+				// Accumulate bytes sent for per-node throughput metric
+				cab.ml.juno.health.HealthReporter hr = healthReporter;
+				if (hr != null)
+					hr.recordBytes(encodedOutput.length);
 			} catch (Exception e) {
 				responseObserver.onNext(ForwardResponse.newBuilder().setRequestId(request.getRequestId())
 						.setError(e.getMessage() != null ? e.getMessage() : e.getClass().getName()).build());
@@ -290,8 +314,8 @@ public final class EmbeddedNodeServer {
 			context = newCtx;
 
 			LayerRange range = LayerRange.of(request.getStartLayer(), request.getEndLayer());
-			KVCacheManager newKvCache = new KVCacheManager(
-					new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256), range);
+			KVCacheManager newKvCache = new KVCacheManager(new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256),
+					range);
 			kvCache = newKvCache;
 			log.info("Node [" + nodeId + "] KVCache scoped to " + range);
 
