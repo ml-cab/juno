@@ -21,6 +21,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KVCacheManager;
@@ -127,20 +129,32 @@ public final class GenerationLoop {
 		}
 
 		// ── Step 1b: Prefill — populate KV cache for all uncached prompt tokens ─
-		// Each request gets its own prefill: walk positions startPos[i]..promptLen[i]-2
-		// so the KV cache is warm before the decode loop starts.
-		boolean[] hadCacheHit = new boolean[n]; // remember original hit status for later
-		for (int i = 0; i < n; i++) {
-			hadCacheHit[i] = (startPos[i] > 0);
-			int[] promptIds = Arrays.copyOfRange(allTokens[i], 0, promptLens[i]);
-			for (int p = startPos[i]; p < promptLens[i] - 1; p++) {
-				int[] prefillSlice = Arrays.copyOfRange(promptIds, 0, p + 1);
-				pipeline.forward(requestIds[i], prefillSlice, p); // KV stored; logits discarded
+		// Fan out all N prefills concurrently on virtual threads: each request's
+		// prompt tokens are independent, so there is no reason to wait for request i
+		// to finish before starting request i+1. Batch prefill latency becomes
+		// max(per-request prefill time) instead of Σ(per-request prefill time).
+		boolean[] hadCacheHit = new boolean[n];
+		var prefillExecutor = Executors.newVirtualThreadPerTaskExecutor();
+		try {
+			@SuppressWarnings("unchecked")
+			CompletableFuture<Void>[] prefills = new CompletableFuture[n];
+			for (int i = 0; i < n; i++) {
+				final int fi = i;
+				hadCacheHit[fi] = (startPos[fi] > 0);
+				prefills[fi] = CompletableFuture.runAsync(() -> {
+					int[] promptIds = Arrays.copyOfRange(allTokens[fi], 0, promptLens[fi]);
+					for (int p = startPos[fi]; p < promptLens[fi] - 1; p++) {
+						int[] prefillSlice = Arrays.copyOfRange(promptIds, 0, p + 1);
+						pipeline.forward(requestIds[fi], prefillSlice, p);
+					}
+					if (promptLens[fi] > 0) {
+						startPos[fi] = promptLens[fi] - 1;
+					}
+				}, prefillExecutor);
 			}
-			// Decode step 0 covers position promptLen-1 (last prompt token)
-			if (promptLens[i] > 0) {
-				startPos[i] = promptLens[i] - 1;
-			}
+			CompletableFuture.allOf(prefills).join();
+		} finally {
+			prefillExecutor.close();
 		}
 
 		// ── Steps 2–N: batched decode loop ────────────────────────────────────

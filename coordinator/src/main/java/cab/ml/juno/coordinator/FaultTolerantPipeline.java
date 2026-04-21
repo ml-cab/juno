@@ -17,7 +17,11 @@ package cab.ml.juno.coordinator;
  */
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
 import cab.ml.juno.health.CircuitBreaker;
@@ -107,83 +111,155 @@ public final class FaultTolerantPipeline implements InferencePipeline {
 	// ── InferencePipeline impl ────────────────────────────────────────────────
 
 	/**
-	 * Execute a single-request forward pass with circuit-breaker + retry.
+	 * Execute a single-request forward pass with circuit-breaker + scatter-gather.
 	 *
-	 * Tries nodes in order, skipping OPEN circuits. Retries up to
-	 * retryPolicy.maxAttempts() times across different nodes. Throws
-	 * PipelineUnavailableException if all attempts fail or all circuits are OPEN.
+	 * All permitted nodes are probed concurrently on virtual threads. The first
+	 * successful result is returned immediately; remaining in-flight calls are
+	 * cancelled via the shared executor shutdown. If every node fails the last
+	 * recorded exception is wrapped in {@link PipelineUnavailableException}.
+	 *
+	 * This replaces the old serial-with-sleep retry: failover latency is now
+	 * max(healthy-node latency) rather than dead-node-timeout + healthy-node latency.
 	 */
 	@Override
 	public float[] forward(String requestId, int[] tokens, int startPos) {
-		int tried = 0;
-		Exception lastCause = null;
+		List<NodePipeline> permitted = nodes.stream()
+				.filter(n -> n.circuitBreaker().isCallPermitted())
+				.toList();
 
-		for (NodePipeline node : nodes) {
-			if (tried >= retryPolicy.maxAttempts())
-				break;
-			if (!node.circuitBreaker().isCallPermitted())
-				continue;
+		if (permitted.isEmpty()) {
+			throw new PipelineUnavailableException(PipelineUnavailableException.Reason.CIRCUIT_OPEN, 0,
+					"all " + nodes.size() + " node circuit(s) are OPEN");
+		}
 
-			tried++;
+		if (permitted.size() == 1) {
+			// Fast path — no concurrency overhead for the common single-node case
+			NodePipeline node = permitted.get(0);
 			try {
 				float[] result = node.pipeline().forward(requestId, tokens, startPos);
 				node.circuitBreaker().recordSuccess();
 				return result;
 			} catch (Exception e) {
-				log.warning(
-						"forward() failed on node " + node.nodeId() + " (attempt " + tried + "): " + e.getMessage());
 				node.circuitBreaker().recordFailure();
-				lastCause = e;
-				sleepBackoff();
+				throw new PipelineUnavailableException(PipelineUnavailableException.Reason.RETRIES_EXHAUSTED, 1,
+						"node " + node.nodeId() + " failed: " + e.getMessage(), e);
 			}
 		}
 
-		if (tried == 0) {
-			throw new PipelineUnavailableException(PipelineUnavailableException.Reason.CIRCUIT_OPEN, 0,
-					"all " + nodes.size() + " node circuit(s) are OPEN");
+		// Multiple permitted nodes — scatter all calls, return on first success.
+		// A racing winner completes the resultHolder; losers' circuit outcomes are
+		// still recorded so the breaker state stays accurate.
+		AtomicReference<Throwable> lastFailure = new AtomicReference<>();
+		ExecutorService vte = Executors.newVirtualThreadPerTaskExecutor();
+		try {
+			CompletableFuture<float[]>[] futures = permitted.stream()
+					.map(node -> CompletableFuture.supplyAsync(() -> {
+						try {
+							float[] r = node.pipeline().forward(requestId, tokens, startPos);
+							node.circuitBreaker().recordSuccess();
+							return r;
+						} catch (Exception e) {
+							log.warning("forward() failed on node " + node.nodeId() + ": " + e.getMessage());
+							node.circuitBreaker().recordFailure();
+							lastFailure.set(e);
+							throw new java.util.concurrent.CompletionException(e);
+						}
+					}, vte))
+					.toArray(CompletableFuture[]::new);
+
+			// anyOf completes as soon as any future completes — success or failure.
+			// We poll until we get a successful result or exhaust all futures.
+			CompletableFuture<Object> race = CompletableFuture.anyOf(futures);
+			try {
+				return (float[]) race.join();
+			} catch (Exception firstEx) {
+				// The first to complete failed; wait for any remaining to succeed.
+				for (CompletableFuture<float[]> f : futures) {
+					try {
+						return f.join();
+					} catch (Exception ignored) {
+						// record already done inside the lambda above
+					}
+				}
+			}
+		} finally {
+			vte.close();
 		}
-		throw new PipelineUnavailableException(PipelineUnavailableException.Reason.RETRIES_EXHAUSTED, tried,
-				"all " + tried + " attempt(s) failed", lastCause);
+
+		Throwable cause = lastFailure.get();
+		throw new PipelineUnavailableException(PipelineUnavailableException.Reason.RETRIES_EXHAUSTED,
+				permitted.size(), "all " + permitted.size() + " node(s) failed",
+				cause instanceof Exception ex ? ex : null);
 	}
 
 	/**
-	 * Execute a batched forward pass with circuit-breaker + retry.
+	 * Execute a batched forward pass with circuit-breaker + scatter-gather.
 	 *
-	 * Routes the entire batch to the first permitted node. On failure the batch is
-	 * retried on the next permitted node. This keeps all requests in a batch on the
-	 * same node for consistent KV cache behaviour.
+	 * Same strategy as {@link #forward}: all permitted nodes are contacted
+	 * concurrently; the first successful result wins. Keeping the whole batch
+	 * on one node preserves consistent KV cache behaviour.
 	 */
 	@Override
 	public float[][] forwardBatch(List<String> requestIds, List<int[]> allTokens, List<Integer> startPositions) {
-		int tried = 0;
-		Exception lastCause = null;
+		List<NodePipeline> permitted = nodes.stream()
+				.filter(n -> n.circuitBreaker().isCallPermitted())
+				.toList();
 
-		for (NodePipeline node : nodes) {
-			if (tried >= retryPolicy.maxAttempts())
-				break;
-			if (!node.circuitBreaker().isCallPermitted())
-				continue;
+		if (permitted.isEmpty()) {
+			throw new PipelineUnavailableException(PipelineUnavailableException.Reason.CIRCUIT_OPEN, 0,
+					"all " + nodes.size() + " node circuit(s) are OPEN");
+		}
 
-			tried++;
+		if (permitted.size() == 1) {
+			NodePipeline node = permitted.get(0);
 			try {
 				float[][] result = node.pipeline().forwardBatch(requestIds, allTokens, startPositions);
 				node.circuitBreaker().recordSuccess();
 				return result;
 			} catch (Exception e) {
-				log.warning("forwardBatch() failed on node " + node.nodeId() + " (attempt " + tried + "): "
-						+ e.getMessage());
 				node.circuitBreaker().recordFailure();
-				lastCause = e;
-				sleepBackoff();
+				throw new PipelineUnavailableException(PipelineUnavailableException.Reason.RETRIES_EXHAUSTED, 1,
+						"node " + node.nodeId() + " batch failed: " + e.getMessage(), e);
 			}
 		}
 
-		if (tried == 0) {
-			throw new PipelineUnavailableException(PipelineUnavailableException.Reason.CIRCUIT_OPEN, 0,
-					"all " + nodes.size() + " node circuit(s) are OPEN");
+		AtomicReference<Throwable> lastFailure = new AtomicReference<>();
+		ExecutorService vte = Executors.newVirtualThreadPerTaskExecutor();
+		try {
+			CompletableFuture<float[][]>[] futures = permitted.stream()
+					.map(node -> CompletableFuture.supplyAsync(() -> {
+						try {
+							float[][] r = node.pipeline().forwardBatch(requestIds, allTokens, startPositions);
+							node.circuitBreaker().recordSuccess();
+							return r;
+						} catch (Exception e) {
+							log.warning("forwardBatch() failed on node " + node.nodeId() + ": " + e.getMessage());
+							node.circuitBreaker().recordFailure();
+							lastFailure.set(e);
+							throw new java.util.concurrent.CompletionException(e);
+						}
+					}, vte))
+					.toArray(CompletableFuture[]::new);
+
+			CompletableFuture<Object> race = CompletableFuture.anyOf(futures);
+			try {
+				return (float[][]) race.join();
+			} catch (Exception firstEx) {
+				for (CompletableFuture<float[][]> f : futures) {
+					try {
+						return f.join();
+					} catch (Exception ignored) {
+					}
+				}
+			}
+		} finally {
+			vte.close();
 		}
-		throw new PipelineUnavailableException(PipelineUnavailableException.Reason.RETRIES_EXHAUSTED, tried,
-				"all " + tried + " batch attempt(s) failed", lastCause);
+
+		Throwable cause = lastFailure.get();
+		throw new PipelineUnavailableException(PipelineUnavailableException.Reason.RETRIES_EXHAUSTED,
+				permitted.size(), "all " + permitted.size() + " node(s) failed on batch",
+				cause instanceof Exception ex ? ex : null);
 	}
 
 	/**
@@ -247,14 +323,4 @@ public final class FaultTolerantPipeline implements InferencePipeline {
 	}
 
 	// ── Private ───────────────────────────────────────────────────────────────
-
-	private void sleepBackoff() {
-		if (retryPolicy.backoffMs() <= 0)
-			return;
-		try {
-			Thread.sleep(retryPolicy.backoffMs());
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-		}
-	}
 }

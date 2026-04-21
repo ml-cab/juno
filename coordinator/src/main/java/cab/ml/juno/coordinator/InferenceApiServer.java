@@ -16,8 +16,12 @@
 
 package cab.ml.juno.coordinator;
 
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 
 import cab.ml.juno.registry.ModelDescriptor;
@@ -55,6 +59,16 @@ public final class InferenceApiServer {
 	private final ModelRegistry modelRegistry;
 	private Javalin app;
 	private String byteOrder;
+
+	/**
+	 * Shared HTTP client for health-sidecar proxy calls.
+	 * One instance per server — reuses connection pools across all proxy requests.
+	 * Internal async dispatch runs on virtual threads so no carrier thread is
+	 * pinned during the sidecar round-trip.
+	 */
+	private final HttpClient httpClient = HttpClient.newBuilder()
+			.executor(Executors.newVirtualThreadPerTaskExecutor())
+			.build();
 
 	/**
 	 * Optional health sidecar URL (e.g. "http://localhost:8081").
@@ -173,14 +187,13 @@ public final class InferenceApiServer {
 			return;
 		}
 		try {
-			java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
-			java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+			HttpRequest req = HttpRequest.newBuilder()
 					.uri(java.net.URI.create(healthSidecarUrl + "/health/probe"))
 					.header("Content-Type", "application/json")
-					.POST(java.net.http.HttpRequest.BodyPublishers.ofString(ctx.body()))
+					.POST(HttpRequest.BodyPublishers.ofString(ctx.body()))
 					.build();
-			java.net.http.HttpResponse<String> resp =
-					http.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> resp =
+					httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 			ctx.status(resp.statusCode()).contentType("application/json").result(resp.body());
 		} catch (Exception e) {
 			ctx.status(502).json(java.util.Map.of("error", "sidecar unreachable: " + e.getMessage()));
@@ -199,12 +212,11 @@ public final class InferenceApiServer {
 			return;
 		}
 		try {
-			java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
-			java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+			HttpRequest req = HttpRequest.newBuilder()
 					.uri(java.net.URI.create(healthSidecarUrl + "/health"))
 					.GET().build();
-			java.net.http.HttpResponse<String> resp =
-					http.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> resp =
+					httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 			ctx.status(resp.statusCode()).contentType("application/json").result(resp.body());
 		} catch (Exception e) {
 			ctx.status(200).contentType("application/json")

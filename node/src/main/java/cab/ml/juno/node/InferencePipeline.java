@@ -17,6 +17,9 @@
 package cab.ml.juno.node;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Contract for executing a forward pass through a pipeline of transformer
@@ -47,8 +50,12 @@ public interface InferencePipeline {
 	/**
 	 * Run a batched forward pass — N requests in, N logit arrays out.
 	 *
-	 * Default implementation calls forward() serially — correct but not fast.
-	 * Override in LlamaTransformerHandler for true CUDA batching.
+	 * Default implementation fans out each forward() call onto its own virtual
+	 * thread so all N gRPC round-trips are in-flight simultaneously. Batch
+	 * latency becomes max(per-node latency) instead of Σ(per-node latency).
+	 *
+	 * Implementations that can do true CUDA batching (e.g. LlamaTransformerHandler)
+	 * should override this to use a single batched kernel call instead.
 	 *
 	 * Contract: - requestIds.size() == allTokens.size() == startPositions.size() -
 	 * result[i] corresponds to requestIds.get(i) - All result arrays have length
@@ -61,11 +68,33 @@ public interface InferencePipeline {
 	 */
 	default float[][] forwardBatch(List<String> requestIds, List<int[]> allTokens, List<Integer> startPositions) {
 		int n = requestIds.size();
-		float[][] results = new float[n][];
-		for (int i = 0; i < n; i++) {
-			results[i] = forward(requestIds.get(i), allTokens.get(i), startPositions.get(i));
+		if (n == 1) {
+			// Fast path — skip task overhead for a single request
+			return new float[][] { forward(requestIds.get(0), allTokens.get(0), startPositions.get(0)) };
 		}
-		return results;
+
+		// One virtual thread per request — all gRPC round-trips in flight simultaneously.
+		// A shared executor is created here for the lifetime of this batch call; virtual
+		// threads are cheap enough that this is fine. Callers that override this method
+		// for CUDA batching never reach this code.
+		ExecutorService vte = Executors.newVirtualThreadPerTaskExecutor();
+		try {
+			@SuppressWarnings("unchecked")
+			CompletableFuture<float[]>[] futures = new CompletableFuture[n];
+			for (int i = 0; i < n; i++) {
+				final int idx = i;
+				futures[idx] = CompletableFuture.supplyAsync(
+						() -> forward(requestIds.get(idx), allTokens.get(idx), startPositions.get(idx)),
+						vte);
+			}
+			float[][] results = new float[n][];
+			for (int i = 0; i < n; i++) {
+				results[i] = futures[i].join();
+			}
+			return results;
+		} finally {
+			vte.close(); // virtual-thread executors: close() is shutdown + awaitTermination
+		}
 	}
 
 	/**
