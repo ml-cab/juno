@@ -482,7 +482,7 @@ _probe_node() {
   if OUT=$(ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o BatchMode=yes \
              -i "$SSH_KEY_FILE" "ubuntu@$IP" \
              "ready=\$([[ -f /opt/juno/.juno-ready ]] && echo yes || echo no);
-              cpu=\$(grep 'cpu ' /proc/stat | awk '{u=\$2+\$4;t=\$2+\$3+\$4+\$5;printf \"%.0f\",u/t*100}')%;
+              cpu=\$(awk '/^cpu /{print \$2,\$3,\$4,\$5,\$6; exit}' /proc/stat > /tmp/_juno_cpu1; sleep 1; awk '/^cpu /{print \$2,\$3,\$4,\$5,\$6; exit}' /proc/stat | awk 'NR==1{while((getline line < "/tmp/_juno_cpu1")>0){split(line,a); u1=a[1]+a[2]+a[3]; t1=a[1]+a[2]+a[3]+a[4]+a[5]}} {u2=\$1+\$2+\$3; t2=\$1+\$2+\$3+\$4+\$5; dt=t2-t1; printf \"%.0f\", (dt>0?(u2-u1)/dt*100:0)}')%;
               mem=\$(free -m | awk '/^Mem/{printf \"%d/%dMB\",\$3,\$2}');
               svc_node=\$(systemctl is-active juno-node 2>/dev/null); [[ -z \$svc_node ]] && svc_node=unknown;
               svc_coord=\$(systemctl is-active juno-coordinator 2>/dev/null); [[ -z \$svc_coord ]] && svc_coord=unknown;

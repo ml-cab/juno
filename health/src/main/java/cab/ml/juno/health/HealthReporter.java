@@ -16,7 +16,6 @@
 
 package cab.ml.juno.health;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -35,9 +34,15 @@ import java.util.logging.Logger;
  *
  * <h2>Metrics collected</h2>
  * <ul>
- *   <li><b>Heap pressure</b> — JVM {@code usedMemory / maxMemory} as VRAM proxy.
- *   <li><b>CPU load</b> — process CPU utilisation via {@code OperatingSystemMXBean},
- *       0.0–1.0. Available on all JVM platforms; no sysfs dependency.
+ *   <li><b>RAM pressure</b> — physical host memory ({@code usedPhysical / totalPhysical})
+ *       via {@code OperatingSystemMXBean}. Matches what {@code free -m} and {@code top}
+ *       report, and is consistent with what {@code juno-deploy.sh} displays. Exposed on
+ *       the dashboard as "VRAM" for forward-compatibility with GPU builds where it will
+ *       reflect actual device VRAM.
+ *   <li><b>CPU load</b> — system-wide CPU utilisation via
+ *       {@code OperatingSystemMXBean.getCpuLoad()}, 0.0–1.0. This is the whole-host
+ *       average across all cores, equivalent to the {@code us+sy} columns in {@code top}.
+ *       Available on all JVM platforms; no sysfs dependency.
  *   <li><b>Latency P99</b> — sliding window of the last 128 inference durations;
  *       callers record each generation via {@link #recordLatency(long)}.
  *       Meaningful only on the coordinator — nodes report throughput instead.
@@ -166,11 +171,16 @@ public final class HealthReporter {
     // ── Metric collection ─────────────────────────────────────────────────────
 
     private String buildProbeJson() {
-        // Heap / VRAM proxy
-        Runtime rt    = Runtime.getRuntime();
-        long maxMem   = rt.maxMemory();
-        long usedMem  = rt.totalMemory() - rt.freeMemory();
-        long trueFree = Math.max(0L, maxMem - usedMem);
+        // Physical host RAM — matches `free -m` / `top`, consistent with juno-deploy.sh output.
+        // Previously used JVM heap (rt.maxMemory / rt.totalMemory) which reported the
+        // configured -Xmx ceiling (e.g. 12.9 GB) rather than real host RAM (e.g. 7.7 GB),
+        // making the dashboard numbers incomparable to OS-level monitoring tools.
+        var os        = (com.sun.management.OperatingSystemMXBean)
+                        java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+        long maxMem   = os.getTotalMemorySize();
+        long freeMem  = os.getFreeMemorySize();
+        long usedMem  = maxMem - freeMem;
+        long trueFree = freeMem;
         double pressure = maxMem > 0
                 ? Math.min(1.0, Math.max(0.0, (double) usedMem / maxMem))
                 : 0.0;
@@ -216,9 +226,15 @@ public final class HealthReporter {
     // ── CPU load ──────────────────────────────────────────────────────────────
 
     /**
-     * Read process CPU utilisation via {@code OperatingSystemMXBean}.
-     * Returns 0.0–1.0; -1.0 only before the JVM has enough samples (first ~200ms).
-     * Works on all platforms — no sysfs dependency.
+     * Read system-wide CPU utilisation via {@code OperatingSystemMXBean.getCpuLoad()}.
+     * Returns 0.0–1.0 (whole-host average across all cores), equivalent to the
+     * {@code us+sy} percentage shown by {@code top}. Returns 0.0 instead of the
+     * transient -1.0 the JVM emits before its first sample (~200 ms after startup).
+     * Works on all platforms — no {@code /proc/stat} or sysfs dependency.
+     *
+     * <p><b>Note:</b> this is NOT per-process CPU ({@code getProcessCpuLoad()});
+     * it reflects total host load including all other processes, which is what an
+     * operator expects to see in the dashboard.
      */
     private static double readCpuLoad() {
         var os = (com.sun.management.OperatingSystemMXBean)
