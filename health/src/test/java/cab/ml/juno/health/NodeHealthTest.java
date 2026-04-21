@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 class NodeHealthTest {
 
 	private NodeHealth health(double pressure) {
-		return new NodeHealth("n1", pressure, 1_000_000L, 10_000_000L, 60.0, 50.0, Instant.now());
+		return new NodeHealth("n1", "node", pressure, 1_000_000L, 10_000_000L, 0.5, 50.0, -1.0, Instant.now());
 	}
 
 	@Test
@@ -32,9 +32,9 @@ class NodeHealthTest {
 
 	@Test
 	void rejects_pressure_out_of_range() {
-		assertThatThrownBy(() -> new NodeHealth("n1", 1.1, 0, 1, 60, 50, Instant.now()))
+		assertThatThrownBy(() -> new NodeHealth("n1", "node", 1.1, 0, 1, 0.5, 50, -1.0, Instant.now()))
 				.isInstanceOf(IllegalArgumentException.class);
-		assertThatThrownBy(() -> new NodeHealth("n1", -0.1, 0, 1, 60, 50, Instant.now()))
+		assertThatThrownBy(() -> new NodeHealth("n1", "node", -0.1, 0, 1, 0.5, 50, -1.0, Instant.now()))
 				.isInstanceOf(IllegalArgumentException.class);
 	}
 }

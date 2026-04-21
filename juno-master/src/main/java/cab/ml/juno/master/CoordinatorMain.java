@@ -168,7 +168,8 @@ public final class CoordinatorMain {
 
             // One reporter for the coordinator node itself — records heap + latency P99.
             cab.ml.juno.health.HealthReporter coordReporter =
-                    new cab.ml.juno.health.HealthReporter("coordinator", healthUrl);
+                    new cab.ml.juno.health.HealthReporter("coordinator", "coordinator", healthUrl,
+                            cab.ml.juno.health.HealthReporter.DEFAULT_INTERVAL_MS);
             coordReporter.startBackground();
             apiServer.setLatencyReporter(coordReporter);
             Runtime.getRuntime().addShutdownHook(

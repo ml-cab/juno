@@ -112,16 +112,23 @@ public final class NodeMain {
         // pushes its own JVM heap stats to the health sidecar so the dashboard shows
         // real per-node data. Works even without a GPU (heap = VRAM proxy).
         String healthUrl = System.getProperty("juno.health.url");
+        HealthReporter reporter = null;
         if (healthUrl != null && !healthUrl.isBlank()) {
-            HealthReporter reporter = new HealthReporter(nodeId, healthUrl);
+            reporter = new HealthReporter(nodeId, "node", healthUrl, HealthReporter.DEFAULT_INTERVAL_MS);
             reporter.startBackground();
+            final HealthReporter reporterRef = reporter;
             Runtime.getRuntime().addShutdownHook(
-                Thread.ofVirtual().unstarted(reporter::stop));
+                Thread.ofVirtual().unstarted(reporterRef::stop));
             log.info("Health reporter started → " + healthUrl);
         }
 
         EmbeddedNodeServer server = new EmbeddedNodeServer(nodeId, port, modelPath, useGpu);
         server.start();
+
+        // Wire throughput reporting into the gRPC handler after server is started
+        if (reporter != null) {
+            server.setHealthReporter(reporter);
+        }
 
         // Signal readiness to the parent process (ClusterHarness polls for this line)
         System.out.println("READY:" + nodeId + ":" + port);

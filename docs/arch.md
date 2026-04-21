@@ -206,10 +206,29 @@ See [Section 6](#6-kv-cache). `NodeKVCacheAdapter` bridges handler-local `float[
 | Setting | Value |
 |---------|-------|
 | Node liveness | Hazelcast `memberRemoved` event |
-| GPU health probe | CUDA every 5 s, published to Hazelcast `IMap` |
+| Health probe interval | Every 5 s — `HealthReporter` pushes `NodeHealth` snapshots via HTTP POST to sidecar |
 | VRAM warning | 90% → log only |
 | VRAM critical | 98% → circuit open → reshard |
 | Metrics | Micrometer + Prometheus via JDK `HttpServer` (port 9091) |
+
+**`NodeHealth` snapshot fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `nodeId` | String | Node identifier |
+| `nodeRole` | String | `"coordinator"` or `"node"` — controls which secondary metric the dashboard shows |
+| `vramPressure` | double | JVM heap `usedMemory / maxMemory` (0.0–1.0); proxy for VRAM on CPU-only nodes |
+| `vramFreeBytes` / `vramTotalBytes` | long | Absolute free/total from `Runtime.maxMemory()` |
+| `cpuLoad` | double | Process CPU utilisation from `OperatingSystemMXBean.getCpuLoad()` (0.0–1.0); replaces the previous `temperatureCelsius` field which was unavailable on EC2 VMs |
+| `inferenceLatencyP99Ms` | double | Sliding-window P99 of end-to-end generation latency; populated only on the **coordinator** via `HealthReporter.recordLatency()` |
+| `throughputBytesPerSec` | double | Activation bytes sent per second; populated only on **worker nodes** via `HealthReporter.recordBytes()` called from `EmbeddedNodeServer.forwardPass()` after each gRPC response |
+| `sampledAt` | Instant | Probe timestamp |
+
+**Dashboard card behaviour (role-conditional):**
+- **Coordinator card** — shows `Latency P99` (end-to-end response time)
+- **Node cards** — show `Throughput` (MB/s of activation tensors forwarded)
+
+Both cards always show `CPU load %` and `VRAM free / total`.
 
 **Fault Tolerance (three classes in coordinator):**
 
@@ -686,3 +705,5 @@ The coordinator starts only after all nodes are confirmed active — loadShard R
 | 24 | Configurable activation byte order (`--byteOrder BE\|LE`); `ActivationCodec` static dispatcher; `ActivationBECodec` / `ActivationLECodec`; byte order propagated through `ClusterHarness`, `juno-deploy.sh`, health endpoint |
 | 25 | Code quality: `CyclicForwardPassHandler` moved to test scope, `StubForwardPassHandler` inner class in `EmbeddedNodeServer`, docs sweep |
 | 26 | Native LoRA merge: `LoraMerge`, `LoraMergeMain`, `juno merge` subcommand. Patched tensors written as F32 (re-quantising to Q4_K erases deltas smaller than quantisation noise). `GgufReader` extended with `ggufFileOffset()`, `metadataSectionEnd()`, `tensorOrder()`, `tensorNelems()`, `LinkedHashMap` tensor storage. Three re-quantiser bugs fixed: Q4_K `d = maxRange/63` → `/(63×15)`, Q5_K `/(63×31)`, Q3_K scRaw packing rewritten. |
+| 27 | GPU lifecycle: `ForwardPassHandler.releaseGpuResources()`, `GpuContext.shared(int)` per-device singletons, per-thread non-blocking CUDA streams, Llama GPU OOM fallback to CPU quantised matmul. |
+| 28 | Health dashboard metrics: `temperatureCelsius` (unavailable on EC2 VMs) replaced by `cpuLoad` via `OperatingSystemMXBean`. `nodeRole` field added to `NodeHealth`; dashboard cards branch — coordinator shows `Latency P99`, worker nodes show `Throughput (MB/s)`. `HealthReporter.recordBytes()` + `drainThroughput()` wired from `EmbeddedNodeServer.forwardPass()`. `buildNodeDetail()` switched to `Map.ofEntries()` (>10 fields). |

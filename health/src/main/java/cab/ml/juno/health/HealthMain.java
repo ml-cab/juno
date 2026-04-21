@@ -267,17 +267,19 @@ public final class HealthMain {
 
     private Map<String, Object> buildNodeDetail(String nodeId, NodeHealth snap) {
         CircuitBreaker cb = circuits.computeIfAbsent(nodeId, CircuitBreaker::forNode);
-        return Map.of(
-            "nodeId",              nodeId,
-            "circuit",             cb.state().name(),
-            "callPermitted",       cb.isCallPermitted(),
-            "vramPressure",        snap.vramPressure(),
-            "vramFreeBytes",       snap.vramFreeBytes(),
-            "vramTotalBytes",      snap.vramTotalBytes(),
-            "temperatureCelsius",  snap.temperatureCelsius(),
-            "inferenceLatencyP99", snap.inferenceLatencyP99Ms(),
-            "ageMs",               snap.ageMillis(),
-            "sampledAt",           snap.sampledAt().toString()
+        return Map.ofEntries(
+            Map.entry("nodeId",                nodeId),
+            Map.entry("nodeRole",              snap.nodeRole()),
+            Map.entry("circuit",               cb.state().name()),
+            Map.entry("callPermitted",         cb.isCallPermitted()),
+            Map.entry("vramPressure",          snap.vramPressure()),
+            Map.entry("vramFreeBytes",         snap.vramFreeBytes()),
+            Map.entry("vramTotalBytes",        snap.vramTotalBytes()),
+            Map.entry("cpuLoad",               snap.cpuLoad()),
+            Map.entry("inferenceLatencyP99",   snap.inferenceLatencyP99Ms()),
+            Map.entry("throughputBytesPerSec", snap.throughputBytesPerSec()),
+            Map.entry("ageMs",                 snap.ageMillis()),
+            Map.entry("sampledAt",             snap.sampledAt().toString())
         );
     }
 
@@ -335,29 +337,35 @@ public final class HealthMain {
     public static final class NodeHealthDto {
 
         private String nodeId;
+        private String nodeRole              = "node";
         private double vramPressure;
         private long   vramFreeBytes;
         private long   vramTotalBytes;
-        private double temperatureCelsius    = -1.0;
+        private double cpuLoad               = -1.0;
         private double inferenceLatencyP99Ms = -1.0;
+        private double throughputBytesPerSec = -1.0;
         private String sampledAt; // ISO-8601; null → now
 
         public NodeHealthDto() {}
 
-        public String getNodeId()                        { return nodeId; }
-        public void   setNodeId(String v)                { this.nodeId = v; }
-        public double getVramPressure()                  { return vramPressure; }
-        public void   setVramPressure(double v)          { this.vramPressure = v; }
-        public long   getVramFreeBytes()                 { return vramFreeBytes; }
-        public void   setVramFreeBytes(long v)           { this.vramFreeBytes = v; }
-        public long   getVramTotalBytes()                { return vramTotalBytes; }
-        public void   setVramTotalBytes(long v)          { this.vramTotalBytes = v; }
-        public double getTemperatureCelsius()            { return temperatureCelsius; }
-        public void   setTemperatureCelsius(double v)    { this.temperatureCelsius = v; }
-        public double getInferenceLatencyP99Ms()         { return inferenceLatencyP99Ms; }
-        public void   setInferenceLatencyP99Ms(double v) { this.inferenceLatencyP99Ms = v; }
-        public String getSampledAt()                     { return sampledAt; }
-        public void   setSampledAt(String v)             { this.sampledAt = v; }
+        public String getNodeId()                           { return nodeId; }
+        public void   setNodeId(String v)                   { this.nodeId = v; }
+        public String getNodeRole()                         { return nodeRole; }
+        public void   setNodeRole(String v)                 { this.nodeRole = v; }
+        public double getVramPressure()                     { return vramPressure; }
+        public void   setVramPressure(double v)             { this.vramPressure = v; }
+        public long   getVramFreeBytes()                    { return vramFreeBytes; }
+        public void   setVramFreeBytes(long v)              { this.vramFreeBytes = v; }
+        public long   getVramTotalBytes()                   { return vramTotalBytes; }
+        public void   setVramTotalBytes(long v)             { this.vramTotalBytes = v; }
+        public double getCpuLoad()                          { return cpuLoad; }
+        public void   setCpuLoad(double v)                  { this.cpuLoad = v; }
+        public double getInferenceLatencyP99Ms()            { return inferenceLatencyP99Ms; }
+        public void   setInferenceLatencyP99Ms(double v)    { this.inferenceLatencyP99Ms = v; }
+        public double getThroughputBytesPerSec()            { return throughputBytesPerSec; }
+        public void   setThroughputBytesPerSec(double v)    { this.throughputBytesPerSec = v; }
+        public String getSampledAt()                        { return sampledAt; }
+        public void   setSampledAt(String v)                { this.sampledAt = v; }
 
         // package-private for handleProbe
         String nodeId()       { return nodeId; }
@@ -368,8 +376,8 @@ public final class HealthMain {
                 ? Instant.parse(sampledAt)
                 : Instant.now();
             return new NodeHealth(
-                nodeId, vramPressure, vramFreeBytes, vramTotalBytes,
-                temperatureCelsius, inferenceLatencyP99Ms, ts);
+                nodeId, nodeRole, vramPressure, vramFreeBytes, vramTotalBytes,
+                cpuLoad, inferenceLatencyP99Ms, throughputBytesPerSec, ts);
         }
     }
 
@@ -535,12 +543,16 @@ public final class HealthMain {
                           <span class="metric-value">${fmtBytes(n.vramFreeBytes)} / ${fmtBytes(n.vramTotalBytes)}</span>
                         </div>
                         <div class="metric-row">
-                          <span class="metric-label">Temperature</span>
-                          <span class="metric-value">${n.temperatureCelsius >= 0 ? n.temperatureCelsius.toFixed(1) + ' °C' : '—'}</span>
+                          <span class="metric-label">CPU load</span>
+                          <span class="metric-value">${n.cpuLoad >= 0 ? (n.cpuLoad * 100).toFixed(1) + ' %' : '—'}</span>
                         </div>
                         <div class="metric-row">
-                          <span class="metric-label">Latency P99</span>
-                          <span class="metric-value">${n.inferenceLatencyP99 >= 0 ? n.inferenceLatencyP99.toFixed(1) + ' ms' : '—'}</span>
+                          <span class="metric-label">${n.nodeRole === 'coordinator' ? 'Latency P99' : 'Throughput'}</span>
+                          <span class="metric-value">${
+                            n.nodeRole === 'coordinator'
+                              ? (n.inferenceLatencyP99 >= 0 ? n.inferenceLatencyP99.toFixed(1) + ' ms' : '—')
+                              : (n.throughputBytesPerSec >= 0 ? (n.throughputBytesPerSec / 1048576).toFixed(2) + ' MB/s' : '—')
+                          }</span>
                         </div>
                         <div class="metric-row">
                           <span class="metric-label">Last seen</span>
