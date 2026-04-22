@@ -1,0 +1,17 @@
+Juno multi-module Maven project (JDK 25).
+
+Module dependency (excerpt):
+  api, registry, tokenizer, sampler, kvcache, health, metrics — shared libraries
+  lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA)
+  node — GgufReader, LlamaTransformerHandler, Phi3TransformerHandler, MatVec
+        (CpuMatVec / CudaMatVec), LoraTrainableHandler, LoraMerge, LoraQvInitializer
+        node depends on lora
+  coordinator, player, juno-master, juno-node — assembly / REPL / services
+
+LoRA GPU defaults:
+  ForwardPassHandlerLoader.selectBackend() — JUNO_USE_GPU unset defaults to false (cluster/local).
+  ForwardPassHandlerLoader.selectLoraBackend() — unset defaults to true when CUDA exists.
+  LoraTrainableHandler.load(path, ctx, adapters) uses selectLoraBackend().
+  ForwardPassHandlerLoader.load(..., backend, adapters) passes backend into LoraTrainableHandler.
+
+See docs/howto.md, README.md, docs/arch.md, docs/LoRA.md for human-oriented detail.

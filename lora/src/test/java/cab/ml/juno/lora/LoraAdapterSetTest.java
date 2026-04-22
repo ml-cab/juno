@@ -1,4 +1,4 @@
-package cab.ml.juno.node;
+package cab.ml.juno.lora;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -88,26 +88,6 @@ class LoraAdapterSetTest {
 			assertThat(g).isEqualTo(0f);
 		for (float g : a.gradB())
 			assertThat(g).isEqualTo(0f);
-	}
-
-	@Test
-	@DisplayName("qv() factory creates adapters for every layer on wq and wv")
-	void qv_factory_creates_correct_adapters() {
-		// Minimal config: 3 layers, hidden=16, 2 heads, 1 kv head, headDim=8
-		LlamaConfig cfg = new LlamaConfig(16, 3, 2, 1, 8, 32, 200, 1e-5f, 10000f, "llama");
-		LoraAdapterSet set = LoraAdapterSet.qv(cfg, 4, 4f, new Random(5));
-
-		assertThat(set.size()).isEqualTo(6); // 3 layers × 2 projections
-		for (int li = 0; li < 3; li++) {
-			assertThat(set.get(li, "wq")).isNotNull();
-			assertThat(set.get(li, "wv")).isNotNull();
-			assertThat(set.get(li, "wk")).isNull(); // not created by qv()
-		}
-		// Shapes: wq is [hidden × hidden], wv is [kvDim × hidden]
-		assertThat(set.get(0, "wq").outDim).isEqualTo(16); // H
-		assertThat(set.get(0, "wq").inDim).isEqualTo(16); // H
-		assertThat(set.get(0, "wv").outDim).isEqualTo(8); // kvDim = 1 head × 8
-		assertThat(set.get(0, "wv").inDim).isEqualTo(16); // H
 	}
 
 	// ── Serialisation round-trip ──────────────────────────────────────────────

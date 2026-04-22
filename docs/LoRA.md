@@ -109,8 +109,11 @@ See `docs/howto.md` → AWS section for the full deployment flow.
 ## Programmatic API
 
 ```java
+import cab.ml.juno.lora.*;
+import cab.ml.juno.node.*;
+
 // 1. Load base model
-LoraAdapterSet adapters = LoraAdapterSet.qv(cfg, 8, 8f, new Random(42));
+LoraAdapterSet adapters = LoraQvInitializer.qv(cfg, 8, 8f, new Random(42));
 LoraTrainableHandler handler = LoraTrainableHandler.load(
     Path.of("TinyLlama.Q4_K_M.gguf"), ctx, adapters);
 

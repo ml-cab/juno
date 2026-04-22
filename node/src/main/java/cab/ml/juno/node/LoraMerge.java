@@ -15,6 +15,9 @@
  */
 package cab.ml.juno.node;
 
+import cab.ml.juno.lora.LoraAdapter;
+import cab.ml.juno.lora.LoraAdapterSet;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;

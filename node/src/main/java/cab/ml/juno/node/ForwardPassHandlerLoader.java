@@ -23,6 +23,8 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.logging.Logger;
 
+import cab.ml.juno.lora.LoraAdapterSet;
+
 
 /**
  * Factory that selects the correct ForwardPassHandler implementation by reading
@@ -87,16 +89,32 @@ public final class ForwardPassHandlerLoader {
 	 */
 	public static MatVec selectBackend() {
 		boolean useGpu = "true".equalsIgnoreCase(System.getProperty("JUNO_USE_GPU", "false"));
+		return pickMatVec(useGpu);
+	}
+
+	/**
+	 * Backend selection for LoRA training / inference when the caller does not pass
+	 * an explicit {@link MatVec}. Treats an unset {@code JUNO_USE_GPU} property as
+	 * {@code true} so GPU is used whenever CUDA is available (override with
+	 * {@code JUNO_USE_GPU=false} or {@code --cpu}).
+	 */
+	public static MatVec selectLoraBackend() {
+		String p = System.getProperty("JUNO_USE_GPU");
+		boolean useGpu = p == null || "true".equalsIgnoreCase(p);
+		return pickMatVec(useGpu);
+	}
+
+	private static MatVec pickMatVec(boolean useGpu) {
 		if (useGpu && CudaAvailability.isAvailable()) {
 			int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
 			if (dev >= CudaAvailability.deviceCount()) {
 				log.warning("juno.cuda.device=" + dev + " out of range — using CpuMatVec");
 				return CpuMatVec.INSTANCE;
 			}
-			log.info("JUNO_USE_GPU=true and CUDA detected — using CudaMatVec backend (device " + dev + ")");
+			log.info("CUDA detected — using CudaMatVec backend (device " + dev + ")");
 			return new CudaMatVec(GpuContext.shared(dev));
 		}
-		log.info("Using CpuMatVec backend (JUNO_USE_GPU=" + useGpu + ", CUDA=" + CudaAvailability.isAvailable() + ")");
+		log.info("Using CpuMatVec backend (useGpu=" + useGpu + ", CUDA=" + CudaAvailability.isAvailable() + ")");
 		return CpuMatVec.INSTANCE;
 	}
 
@@ -149,7 +167,7 @@ public final class ForwardPassHandlerLoader {
 
 		if (adapters != null) {
 			log.info("LoRA adapters present — routing to LoraTrainableHandler (inference-only mode)");
-			return LoraTrainableHandler.load(modelPath, context, adapters);
+			return LoraTrainableHandler.load(modelPath, context, adapters, backend);
 		}
 
 		return switch (arch) {

@@ -18,6 +18,10 @@
     <dependencies>
         <dependency>
             <groupId>cab.ml</groupId>
+            <artifactId>lora</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>cab.ml</groupId>
             <artifactId>api</artifactId>
         </dependency>
                 <dependency>
