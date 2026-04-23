@@ -122,7 +122,7 @@ parse_options() {
       --ptype)           PTYPE="$2";          shift 2 ;;
       --dtype)           DTYPE="$2";          shift 2 ;;
       --byteOrder | --byte-order | --byteorder) BYTE_ORDER="${2^^}"; shift 2 ;;
-      --region)          REGION="$2";         shift 2 ;;
+      --region)          REGION="$2"; export AWS_DEFAULT_REGION="$2"; shift 2 ;;
       --jfr)             JFR_DURATION="$2";   shift 2 ;;
       --lora-play)       LORA_PLAY_PATH=$(realpath "$2" 2>/dev/null || echo "$2"); shift 2 ;;
       *)                 die "Unknown option: $1 (run without args for usage)" ;;
@@ -521,76 +521,8 @@ _probe_coordinator() {
   fi
 }
 
-# ── WAIT FOR READY + OPEN BROWSER ─────────────────────────────
-_wait_for_ready_and_open() {
-  local CONSOLE_URL="$1"
-  local all_ids=("${INSTANCE_IDS[@]}")
-  [[ -n "${COORDINATOR_INSTANCE_ID:-}" ]] && all_ids+=("$COORDINATOR_INSTANCE_ID")
-
-  log "Waiting for bootstrap to complete on all instances (this takes ~5 min)…"
-  local DEADLINE=$(( $(date +%s) + 900 ))   # 15 min hard cap
-
-  while true; do
-    local all_ready=true
-    for ID in "${all_ids[@]}"; do
-      local IP="${INSTANCE_IPS[$ID]}"
-      local READY
-      READY=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes \
-                  -i "$SSH_KEY_FILE" "ubuntu@$IP" \
-                  "[[ -f /opt/juno/.juno-ready ]] && echo yes || echo no" \
-                  2>/dev/null || echo "no")
-      [[ "$READY" != "yes" ]] && all_ready=false && break
-    done
-
-    if $all_ready; then
-      log "  ✅ All instances ready"
-      break
-    fi
-
-    if [[ $(date +%s) -ge $DEADLINE ]]; then
-      warn "Bootstrap timed out. Check /var/log/juno-bootstrap.log on each node."
-      break
-    fi
-
-    printf "  ."
-    sleep 15
-  done
-  echo ""
-
-  # Wait for coordinator REST port to respond (max 60 s extra)
-  log "Waiting for coordinator REST server on ${CONSOLE_URL}/v1/cluster/health …"
-  local COORD_IP
-  if [[ "$COORDINATOR_MODE" == "separate" && -n "${COORDINATOR_INSTANCE_ID:-}" ]]; then
-    COORD_IP="${INSTANCE_IPS[$COORDINATOR_INSTANCE_ID]}"
-  else
-    COORD_IP="${INSTANCE_IPS[${INSTANCE_IDS[0]}]}"
-  fi
-
-  local HEALTH_DEADLINE=$(( $(date +%s) + 120 ))
-  while [[ $(date +%s) -lt $HEALTH_DEADLINE ]]; do
-    if curl -sf "http://${COORD_IP}:${HTTP_PORT}/v1/cluster/health" &>/dev/null; then
-      log "  ✅ Coordinator is healthy"
-      break
-    fi
-    printf "  ."
-    sleep 5
-  done
-  echo ""
-
-  log ""
-  log "  ╔══════════════════════════════════════════════════════╗"
-  log "  ║  Web console  : ${CONSOLE_URL}"
-  log "  ║  Health dash  : ${CONSOLE_URL}/health-ui"
-  log "  ╚══════════════════════════════════════════════════════╝"
-  log ""
-
-  # Try to open browser (best-effort, non-fatal)
-  if command -v xdg-open &>/dev/null; then
-    xdg-open "$CONSOLE_URL" &>/dev/null &
-  elif command -v open &>/dev/null; then
-    open "$CONSOLE_URL" &>/dev/null &
-  fi
-}
+# _wait_for_ready_and_open is defined below alongside
+# _write_cluster_env_and_start_coordinator (single canonical definition).
 
 # ── GATHER JFR METRICS ────────────────────────────────────────
 # Called from _on_exit before stop() when JFR_DURATION is set.
@@ -698,6 +630,55 @@ _on_exit() {
   stop
 }
 
+# ── AMI RESOLUTION ────────────────────────────────────────────
+# Checks if a Juno golden AMI already exists in the account for the given
+# base OS + instance type.  If found, sets AMI_ID and returns.
+# If not found, calls make-ami.sh to bake one (GPU bake takes ~30-40 min).
+#
+# The golden AMI has JDK 25, Maven, and (for GPU instances) CUDA 12.3 +
+# nvidia-open pre-installed, shaving ~15-20 min off every bootstrap.
+_resolve_ami() {
+  local BASE="Ubuntu 22.04 LTS"
+  local BASE_SLUG
+  BASE_SLUG=$(echo "$BASE" | sed 's/[ .]/-/g')
+  local AMI_NAME="Juno-golden-${BASE_SLUG}_${INSTANCE_TYPE}"
+
+  log "Checking for golden AMI: ${AMI_NAME}…"
+  AMI_ID=$(aws ec2 describe-images \
+    --region "$REGION" \
+    --owners self \
+    --filters "Name=name,Values=${AMI_NAME}" "Name=state,Values=available" \
+    --query "sort_by(Images, &CreationDate)[-1].ImageId" \
+    --output text 2>/dev/null || echo "")
+
+  if [[ -n "$AMI_ID" && "$AMI_ID" != "None" ]]; then
+    log "  OK Using golden AMI: $AMI_ID"
+    return 0
+  fi
+
+  log "  Golden AMI not found — invoking make-ami.sh…"
+  local IS_GPU=false
+  [[ "$INSTANCE_TYPE" =~ ^g[0-9]|^p[0-9] ]] && IS_GPU=true
+  if $IS_GPU; then
+    log "  GPU instance — AMI bake takes ~30-40 min (CUDA DKMS compilation included)"
+  fi
+
+  local MAKE_AMI
+  MAKE_AMI="$(dirname "${BASH_SOURCE[0]}")/make-ami.sh"
+  [[ -f "$MAKE_AMI" ]] || die "make-ami.sh not found at: $MAKE_AMI"
+
+  AMI_ID=$(bash "$MAKE_AMI" \
+    --base "$BASE" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name "$KEY_NAME" \
+    --key-file "$SSH_KEY_FILE" \
+    --region "$REGION") || die "make-ami.sh exited with error"
+
+  [[ -n "$AMI_ID" && "$AMI_ID" != "None" ]] || \
+    die "make-ami.sh returned an empty AMI ID"
+  log "  OK Golden AMI ready: $AMI_ID"
+}
+
 # ── SETUP ─────────────────────────────────────────────────────
 setup() {
   require_cmd aws   "pip install awscli"
@@ -776,19 +757,9 @@ setup() {
   fi
   echo ""
 
-  # ── Resolve Ubuntu 22.04 LTS AMI ────────────────────────────
-  log "Resolving Ubuntu 22.04 LTS AMI…"
-  AMI_ID=$(aws ec2 describe-images \
-    --region "$REGION" --owners 099720109477 \
-    --filters \
-      "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" \
-      "Name=state,Values=available" \
-    --query "sort_by(Images, &CreationDate)[-1].ImageId" \
-    --output text 2>/dev/null)
-  [[ -z "$AMI_ID" || "$AMI_ID" == "None" ]] && die "Could not resolve Ubuntu 22.04 AMI for $REGION"
-  log "  OK AMI: $AMI_ID"
-
   # ── Key pair ─────────────────────────────────────────────────
+  # Must be created before _resolve_ami so that make-ami.sh can reuse
+  # the deploy key for SSH access to the bake instance (enables tracing).
   log "Creating key pair…"
   mkdir -p "$(dirname "$SSH_KEY_FILE")"
   aws ec2 delete-key-pair --key-name "$KEY_NAME" --region "$REGION" &>/dev/null || true
@@ -797,9 +768,16 @@ setup() {
   chmod 600 "$SSH_KEY_FILE"
   log "  ✅ Key saved → $SSH_KEY_FILE"
 
+  # ── Resolve AMI: use golden AMI if available, bake one if not ──
+  _resolve_ami
+
   # ── Resolve subnet + VPC ─────────────────────────────────────
+  # Collect ALL AZ→subnet pairs so _launch_nodes can fall back to the
+  # next AZ on InsufficientInstanceCapacity instead of aborting.
   log "Resolving subnet for $INSTANCE_TYPE in $REGION…"
   SUBNET_ID="" VPC_ID="" CHOSEN_AZ=""
+  # Global ordered list of "SubnetId:AZ" pairs for AZ fallback during launch.
+  AZ_SUBNET_LIST=()
   local AZ_LIST
   AZ_LIST=$(aws ec2 describe-instance-type-offerings \
     --location-type availability-zone \
@@ -817,11 +795,16 @@ setup() {
     SN=$(awk '{print $1}' <<< "$ROW")
     VP=$(awk '{print $2}' <<< "$ROW")
     if [[ -n "$SN" && "$SN" != "None" ]]; then
-      SUBNET_ID="$SN"; VPC_ID="$VP"; CHOSEN_AZ="$AZ"
-      log "  OK Subnet: $SUBNET_ID  VPC: $VPC_ID  (AZ: $AZ)"
-      break
+      AZ_SUBNET_LIST+=("$SN:$AZ")
+      if [[ -z "$SUBNET_ID" ]]; then
+        # First hit — use this VPC for the security group
+        SUBNET_ID="$SN"; VPC_ID="$VP"; CHOSEN_AZ="$AZ"
+        log "  OK Subnet: $SUBNET_ID  VPC: $VPC_ID  (AZ: $AZ)"
+      else
+        log "  ALT Subnet: $SN  (AZ: $AZ) — fallback if primary AZ has no capacity"
+      fi
     else
-      warn "  No default subnet in $AZ — trying next…"
+      warn "  No default subnet in $AZ — skipping…"
     fi
   done
   [[ -z "$SUBNET_ID" ]] && die "No default subnet found for $INSTANCE_TYPE in $REGION."
@@ -905,34 +888,70 @@ _launch_nodes() {
 
     log "  Launching node $i / ${NODE_COUNT}…"
     log "  [TRACE] user-data size: $(wc -c < "$USER_DATA_FILE") bytes  first-line: $(head -1 "$USER_DATA_FILE")"
-    local LAUNCH_ERR; LAUNCH_ERR=$(mktemp)
-    local LAUNCH_OUT
-    LAUNCH_OUT=$(aws ec2 run-instances \
-      --image-id "$AMI_ID" \
-      --instance-type "$INSTANCE_TYPE" \
-      --count 1 \
-      --key-name "$KEY_NAME" \
-      --subnet-id "$SUBNET_ID" \
-      --security-group-ids "$SG_ID" \
-      --associate-public-ip-address \
-      --user-data "file://${USER_DATA_FILE}" \
-      --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=50,VolumeType=gp3,DeleteOnTermination=true}" \
-      --tag-specifications \
-        "ResourceType=instance,Tags=[{Key=Name,Value=juno-node-${i}},{Key=Project,Value=juno}]" \
-      --region "$REGION" \
-      --output json 2>"$LAUNCH_ERR") || {
-        echo ""
-        echo -e "${RED}  Node $i launch FAILED:${RESET}"
-        cat "$LAUNCH_ERR" | sed 's/^/    /'
-        rm -f "$LAUNCH_ERR"
-        [[ ${#INSTANCE_IDS[@]} -gt 0 ]] && {
-          warn "Terminating ${#INSTANCE_IDS[@]} already-launched node(s)…"
-          aws ec2 terminate-instances --instance-ids "${INSTANCE_IDS[@]}" \
-            --region "$REGION" --output text &>/dev/null || true
-        }
-        rm -f "$LAUNCH_ERR" "$USER_DATA_FILE"
-        die "Launch aborted."
+
+    # Try each AZ subnet in order; fall back on InsufficientInstanceCapacity.
+    local LAUNCH_OUT="" LAUNCH_ERR LAUNCH_OK=false LAUNCH_SUBNET=""
+    LAUNCH_ERR=$(mktemp)
+    for AZ_ENTRY in "${AZ_SUBNET_LIST[@]}"; do
+      LAUNCH_SUBNET="${AZ_ENTRY%%:*}"
+      local TRY_AZ="${AZ_ENTRY##*:}"
+      [[ "$LAUNCH_SUBNET" != "$SUBNET_ID" ]] &&         log "  [AZ-fallback] Retrying in $TRY_AZ (subnet $LAUNCH_SUBNET)…"
+      > "$LAUNCH_ERR"
+      LAUNCH_OUT=$(aws ec2 run-instances \
+        --image-id "$AMI_ID" \
+        --instance-type "$INSTANCE_TYPE" \
+        --count 1 \
+        --key-name "$KEY_NAME" \
+        --subnet-id "$LAUNCH_SUBNET" \
+        --security-group-ids "$SG_ID" \
+        --associate-public-ip-address \
+        --user-data "file://${USER_DATA_FILE}" \
+        --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=50,VolumeType=gp3,DeleteOnTermination=true}" \
+        --tag-specifications \
+          "ResourceType=instance,Tags=[{Key=Name,Value=juno-node-${i}},{Key=Project,Value=juno}]" \
+        --region "$REGION" \
+        --output json 2>"$LAUNCH_ERR") && { LAUNCH_OK=true; break; }
+      # If it is a capacity error, try the next AZ; otherwise abort immediately.
+      if grep -q "InsufficientInstanceCapacity" "$LAUNCH_ERR"; then
+        warn "  No capacity for $INSTANCE_TYPE in $TRY_AZ — trying next AZ…"
+      else
+        break   # Hard error — will be reported below
+      fi
+    done
+
+    # Last resort: all explicit AZ subnets were capacity-exhausted.
+    # Let AWS pick any AZ by omitting --subnet-id entirely (AWS recommendation).
+    if ! $LAUNCH_OK && grep -q "InsufficientInstanceCapacity" "$LAUNCH_ERR"; then
+      warn "  All AZs reported InsufficientInstanceCapacity — retrying with no AZ pin (AWS-managed placement)…"
+      > "$LAUNCH_ERR"
+      LAUNCH_OUT=$(aws ec2 run-instances \
+        --image-id "$AMI_ID" \
+        --instance-type "$INSTANCE_TYPE" \
+        --count 1 \
+        --key-name "$KEY_NAME" \
+        --security-group-ids "$SG_ID" \
+        --associate-public-ip-address \
+        --user-data "file://${USER_DATA_FILE}" \
+        --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=50,VolumeType=gp3,DeleteOnTermination=true}" \
+        --tag-specifications \
+          "ResourceType=instance,Tags=[{Key=Name,Value=juno-node-${i}},{Key=Project,Value=juno}]" \
+        --region "$REGION" \
+        --output json 2>"$LAUNCH_ERR") && LAUNCH_OK=true
+    fi
+
+    if ! $LAUNCH_OK; then
+      echo ""
+      echo -e "${RED}  Node $i launch FAILED:${RESET}"
+      cat "$LAUNCH_ERR" | sed 's/^/    /'
+      rm -f "$LAUNCH_ERR"
+      [[ ${#INSTANCE_IDS[@]} -gt 0 ]] && {
+        warn "Terminating ${#INSTANCE_IDS[@]} already-launched node(s)…"
+        aws ec2 terminate-instances --instance-ids "${INSTANCE_IDS[@]}" \
+          --region "$REGION" --output text &>/dev/null || true
       }
+      rm -f "$LAUNCH_ERR" "$USER_DATA_FILE"
+      die "Launch aborted."
+    fi
     rm -f "$LAUNCH_ERR" "$USER_DATA_FILE"
     local IID
     IID=$(echo "$LAUNCH_OUT" | jq -r '.Instances[0].InstanceId')
@@ -1054,6 +1073,21 @@ _build_node_userdata() {
 #!/bin/bash
 exec > /var/log/juno-bootstrap.log 2>&1
 set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# ── Prevent "held broken packages" on EC2 Ubuntu ──────────────
+# unattended-upgrades holds dpkg locks during boot; kill it before
+# any apt work so we never race against it.
+systemctl stop unattended-upgrades 2>/dev/null || true
+systemctl disable unattended-upgrades 2>/dev/null || true
+# Remove any stale lock files left by a previous or concurrent apt run.
+rm -f /var/lib/dpkg/lock-frontend \
+      /var/lib/dpkg/lock \
+      /var/cache/apt/archives/lock \
+      /var/lib/apt/lists/lock
+# Finish configuring any packages that were interrupted (e.g. by cloud-init).
+dpkg --configure -a 2>/dev/null || true
+# ──────────────────────────────────────────────────────────────
 
 NODE_IDX="__NODE_IDX__"
 NODE_ID="node-${NODE_IDX}"
@@ -1079,12 +1113,41 @@ apt-get install -y -qq \
 USE_GPU=false
 if lspci | grep -qi nvidia; then
   echo "GPU detected — installing CUDA…"
-  apt-get install -y -qq linux-headers-$(uname -r) software-properties-common
+  # Ubuntu kernel headers come in TWO packages that must both be installed
+  # for DKMS builds to succeed:
+  #   linux-headers-6.8.0-1051-aws   variant-specific (owns the build/ symlink)
+  #   linux-headers-6.8.0-1051       common arch headers referenced internally
+  # Installing only the first leaves a broken include chain; DKMS make then
+  # exits 2 — this is why both proprietary and open modules fail identically.
+  KVER=$(uname -r)                   # e.g. 6.8.0-1051-aws
+  KCOMMON="${KVER%-aws}"             # e.g. 6.8.0-1051  (strips the -aws suffix)
+  # The kernel was built with gcc-12; DKMS validates this exact compiler exists
+  # before building ("Failed CC sanity check").  Install gcc-12 first so that
+  # x86_64-linux-gnu-gcc-12 is present when DKMS runs.
+  apt-get install -y -qq gcc-12
+  apt-get install -y -qq \
+    "linux-headers-${KVER}" \
+    "linux-headers-${KCOMMON}" \
+    "linux-modules-extra-${KVER}" \
+    software-properties-common
   DISTRO="ubuntu2204"
   wget -q "https://developer.download.nvidia.com/compute/cuda/repos/${DISTRO}/x86_64/cuda-keyring_1.1-1_all.deb" -O /tmp/cuda-keyring.deb
   dpkg -i /tmp/cuda-keyring.deb
+  # Release any held packages before the CUDA install.
+  apt-mark unhold $(apt-mark showhold 2>/dev/null) 2>/dev/null || true
+  # Repair any broken dep state introduced by the keyring .deb itself.
+  apt-get -f install -y -qq
   apt-get update -qq
-  apt-get install -y -qq --no-install-recommends cuda-drivers nvidia-utils-535 cuda-toolkit-12-3
+  # nvidia-open uses the open-source kernel modules which are IBT-compatible
+  # with kernel 6.8 and avoid the proprietary DKMS build failures.
+  apt-get install -y -qq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    --no-install-recommends nvidia-open cuda-toolkit-12-3 || {
+    echo "=== DKMS make.log ==="
+    cat /var/lib/dkms/nvidia/*/build/make.log 2>/dev/null || echo "(no make.log found)"
+    exit 1
+  }
   echo "export PATH=/usr/local/cuda/bin:\$PATH" >> /etc/environment
   echo "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH" >> /etc/environment
   USE_GPU=true
@@ -1274,6 +1337,15 @@ JUNO_MODEL_STEM="${MODEL_STEM_VAL}"
 
 echo "=== Coordinator bootstrap started \$(date) ==="
 
+export DEBIAN_FRONTEND=noninteractive
+systemctl stop unattended-upgrades 2>/dev/null || true
+systemctl disable unattended-upgrades 2>/dev/null || true
+rm -f /var/lib/dpkg/lock-frontend \
+      /var/lib/dpkg/lock \
+      /var/cache/apt/archives/lock \
+      /var/lib/apt/lists/lock
+dpkg --configure -a 2>/dev/null || true
+
 apt-get update -qq
 apt-get install -y -qq openjdk-25-jdk maven git wget curl jq bc net-tools
 
@@ -1350,6 +1422,23 @@ ENDCOORD
 # Called from _wait_for_ready_and_open after all nodes are ready.
 # SSHes into the coordinator host and writes /etc/juno/cluster-nodes.env
 # with the private IPs of all nodes, then starts juno-coordinator.service.
+#
+# Design notes:
+#   • File content is passed via SSH stdin (heredoc), not via echo '...'
+#     inside a double-quoted remote command — avoids all shell-quoting
+#     pitfalls with multi-line strings and special characters.
+#   • systemctl start uses --no-block so the SSH session returns
+#     immediately after dispatching the start request; it does not block
+#     waiting for ExecStartPre (which itself polls for the file we just
+#     wrote — no circular dependency, but blocking would needlessly hold
+#     the SSH connection).
+#   • Retries up to 5 times with exponential back-off (5 s, 10 s, 20 s…)
+#     to handle transient SSH failures when the node is still under load
+#     from DKMS compilation at the moment the bootstrap timeout fires.
+#   • ConnectTimeout raised to 30 s; heavy DKMS builds saturate CPU/IO
+#     and the SSH handshake can be slow.
+#   • Errors are no longer swallowed via 2>/dev/null so failures are
+#     visible in the deploy log.
 _write_cluster_env_and_start_coordinator() {
   log "Writing cluster-nodes.env and starting coordinator…"
 
@@ -1386,19 +1475,52 @@ JUNO_LORA_PLAY_PATH=${LORA_PLAY_PATH:-}
 EOF
 )
 
-  ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
-      -o BatchMode=yes -i "$SSH_KEY_FILE" "ubuntu@${COORD_HOST}" \
-      "echo '${ENV_CONTENT}' | sudo tee /etc/juno/cluster-nodes.env > /dev/null && \
-       sudo systemctl restart juno-coordinator && \
-       echo 'coordinator started'" 2>/dev/null \
-    && log "  ✅ Coordinator started (nodes: ${ADDRS})" \
-    || warn "  Could not start coordinator — SSH into ${COORD_HOST} and run: sudo systemctl start juno-coordinator"
-
-  # ── [TRACE] Show the exact cluster-nodes.env written to the coordinator ────
-  log "  [TRACE] cluster-nodes.env written to ${COORD_HOST}:"
+  # [TRACE] Show exactly what will be written to the coordinator
+  log "  [TRACE] cluster-nodes.env to be written to ${COORD_HOST}:"
   while IFS= read -r line; do
     log "          ${line}"
   done <<< "${ENV_CONTENT}"
+
+  local SSH_OPTS="-o ConnectTimeout=30 -o StrictHostKeyChecking=no \
+-o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+-i ${SSH_KEY_FILE}"
+
+  local MAX_ATTEMPTS=5
+  local ATTEMPT=0
+  local BACKOFF=5
+
+  while (( ATTEMPT < MAX_ATTEMPTS )); do
+    # Use arithmetic assignment, not (( ATTEMPT++ )), because (( 0++ )) evaluates
+    # to 0 which makes bash exit with set -e on the very first iteration.
+    ATTEMPT=$(( ATTEMPT + 1 ))
+    [[ $ATTEMPT -gt 1 ]] && warn "  Retry ${ATTEMPT}/${MAX_ATTEMPTS} in ${BACKOFF}s…" && sleep "$BACKOFF"
+    BACKOFF=$(( BACKOFF * 2 ))
+
+    # Write the file via stdin — safe for multi-line content, no quoting issues.
+    # Then start the coordinator with --no-block so SSH returns immediately
+    # without waiting for ExecStartPre/ExecStart to complete.
+    if ssh $SSH_OPTS "ubuntu@${COORD_HOST}" \
+         "sudo mkdir -p /etc/juno && \
+          sudo tee /etc/juno/cluster-nodes.env > /dev/null && \
+          sudo systemctl start --no-block juno-coordinator && \
+          echo 'coordinator dispatched'" \
+         <<< "${ENV_CONTENT}"; then
+      log "  ✅ cluster-nodes.env written and coordinator started (nodes: ${ADDRS})"
+      return 0
+    fi
+
+    warn "  SSH attempt ${ATTEMPT} failed — coordinator host: ${COORD_HOST}"
+  done
+
+  warn "  ✖ Could not deliver cluster-nodes.env after ${MAX_ATTEMPTS} attempts."
+  warn "    SSH into ${COORD_HOST} and run:"
+  warn "      sudo mkdir -p /etc/juno"
+  warn "      sudo tee /etc/juno/cluster-nodes.env <<'EOF'"
+  while IFS= read -r line; do
+    warn "      ${line}"
+  done <<< "${ENV_CONTENT}"
+  warn "      EOF"
+  warn "      sudo systemctl start juno-coordinator"
 }
 
 # ── SCP .LORA FILE TO ALL NODES ───────────────────────────────
@@ -1535,22 +1657,27 @@ scan_regions() {
   echo ""
 }
 
-# ── OVERRIDE _wait_for_ready_and_open to also write cluster env ─
-# (patch in _write_cluster_env_and_start_coordinator call)
+# ── WAIT FOR READY + OPEN BROWSER ─────────────────────────────
+# Single canonical definition.  Waits for .juno-ready on every node,
+# then writes cluster-nodes.env and starts the coordinator.
+# Timeout is 1800 s (30 min) — GPU nodes with CUDA+DKMS regularly
+# take 17-20 min; 15 min was too short and caused the coordinator to
+# receive its env file while the instance was still compiling kernel
+# modules, making the SSH write unreliable.
 _wait_for_ready_and_open() {
   local CONSOLE_URL="$1"
   local all_ids=("${INSTANCE_IDS[@]}")
   [[ -n "${COORDINATOR_INSTANCE_ID:-}" ]] && all_ids+=("$COORDINATOR_INSTANCE_ID")
 
-  log "Waiting for bootstrap to complete on all instances (~5 min)…"
-  local DEADLINE=$(( $(date +%s) + 900 ))
+  log "Waiting for bootstrap to complete on all instances (~10-20 min for GPU nodes)…"
+  local DEADLINE=$(( $(date +%s) + 1800 ))   # 30 min — covers CUDA DKMS build time
 
   while true; do
     local all_ready=true
     for ID in "${all_ids[@]}"; do
       local IP="${INSTANCE_IPS[$ID]}"
       local READY
-      READY=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes \
+      READY=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes \
                   -i "$SSH_KEY_FILE" "ubuntu@$IP" \
                   "[[ -f /opt/juno/.juno-ready ]] && echo yes || echo no" \
                   2>/dev/null || echo "no")
@@ -1562,7 +1689,7 @@ _wait_for_ready_and_open() {
       break
     fi
     if [[ $(date +%s) -ge $DEADLINE ]]; then
-      warn "Bootstrap timed out. Check /var/log/juno-bootstrap.log on each node."
+      warn "Bootstrap timed out after 30 min. Check /var/log/juno-bootstrap.log on each node."
       break
     fi
     printf "  ."
@@ -1573,7 +1700,7 @@ _wait_for_ready_and_open() {
   # SCP .lora file to nodes and patch node.env (noop if --lora-play not set)
   _scp_lora_to_nodes
 
-  # Write cluster env + start coordinator
+  # Write cluster-nodes.env + start coordinator (retries on transient SSH failures)
   _write_cluster_env_and_start_coordinator
 
   # Wait for coordinator REST to respond
@@ -1585,7 +1712,7 @@ _wait_for_ready_and_open() {
     COORD_IP="${INSTANCE_IPS[${INSTANCE_IDS[0]}]}"
   fi
 
-  local HEALTH_DEADLINE=$(( $(date +%s) + 120 ))
+  local HEALTH_DEADLINE=$(( $(date +%s) + 180 ))
   while [[ $(date +%s) -lt $HEALTH_DEADLINE ]]; do
     if curl -sf "http://${COORD_IP}:${HTTP_PORT}/v1/cluster/health" &>/dev/null; then
       log "  ✅ Coordinator is healthy"
