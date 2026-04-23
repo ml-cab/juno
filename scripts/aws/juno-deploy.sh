@@ -461,7 +461,8 @@ _probe_node() {
 
   if ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o BatchMode=yes \
          -i "$SSH_KEY_FILE" "ubuntu@$IP" \
-         "nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu \
+         "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; \
+          nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu \
           --format=csv,noheader,nounits 2>/dev/null | head -1" \
          >/tmp/juno_probe_"$IDX".txt 2>/dev/null; then
 
@@ -481,7 +482,8 @@ _probe_node() {
   # CPU fallback — includes service health + last journal lines on failure
   if OUT=$(ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o BatchMode=yes \
              -i "$SSH_KEY_FILE" "ubuntu@$IP" \
-             "ready=\$([[ -f /opt/juno/.juno-ready ]] && echo yes || echo no);
+             "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;
+              ready=\$([[ -f /opt/juno/.juno-ready ]] && echo yes || echo no);
               cpu=\$(awk '/^cpu /{print \$2,\$3,\$4,\$5,\$6; exit}' /proc/stat > /tmp/_juno_cpu1; sleep 1; awk '/^cpu /{print \$2,\$3,\$4,\$5,\$6; exit}' /proc/stat | awk 'NR==1{while((getline line < "/tmp/_juno_cpu1")>0){split(line,a); u1=a[1]+a[2]+a[3]; t1=a[1]+a[2]+a[3]+a[4]+a[5]}} {u2=\$1+\$2+\$3; t2=\$1+\$2+\$3+\$4+\$5; dt=t2-t1; printf \"%.0f\", (dt>0?(u2-u1)/dt*100:0)}')%;
               mem=\$(free -m | awk '/^Mem/{printf \"%d/%dMB\",\$3,\$2}');
               svc_node=\$(systemctl is-active juno-node 2>/dev/null); [[ -z \$svc_node ]] && svc_node=unknown;
@@ -509,7 +511,8 @@ _probe_coordinator() {
 
   if STATUS=$(ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o BatchMode=yes \
                   -i "$SSH_KEY_FILE" "ubuntu@$IP" \
-                  "curl -sf http://localhost:${HTTP_PORT}/v1/cluster/health 2>/dev/null \
+                  "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; \
+                   curl -sf http://localhost:${HTTP_PORT}/v1/cluster/health 2>/dev/null \
                    | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d[\"status\"],\"q=\"+str(d[\"queueDepth\"]))' \
                    2>/dev/null || \
                    ([[ -f /opt/juno/.juno-ready ]] && echo 'ready (juno not started yet)' \
@@ -591,7 +594,7 @@ _gather_jfr_metrics() {
   # Step 3 — SCP all .jfr files to coordinator's home dir (ubuntu-writable; /opt/juno is root-owned)
   local REMOTE_COLLECT="/home/ubuntu/jfr-collect"
   log "  Uploading JFR files to coordinator for extraction…"
-  ssh $SSH_OPTS "ubuntu@${COORD_HOST}" "mkdir -p ${REMOTE_COLLECT}" 2>/dev/null || true
+  ssh $SSH_OPTS "ubuntu@${COORD_HOST}" "/bin/mkdir -p ${REMOTE_COLLECT}" 2>/dev/null || true
   scp $SSH_OPTS "$TMP_DIR"/*.jfr "ubuntu@${COORD_HOST}:${REMOTE_COLLECT}/" \
     || { warn "  Could not upload JFR files to coordinator."; return 0; }
 
@@ -600,12 +603,12 @@ _gather_jfr_metrics() {
   local MODEL_STEM="${MODEL_FILENAME%.*}"
   ssh $SSH_OPTS "ubuntu@${COORD_HOST}" \
     "cd ${REMOTE_COLLECT} && \
-     mkdir -p metrics/src/main/resources && \
-     jq --arg name '${MODEL_STEM}' --arg path '/opt/juno/models/${MODEL_FILENAME}' \
+     /bin/mkdir -p metrics/src/main/resources && \
+     /usr/bin/jq --arg name '${MODEL_STEM}' --arg path '/opt/juno/models/${MODEL_FILENAME}' \
        'if (.models | map(.name) | index(\$name)) == null then .models += [{\"name\":\$name,\"path\":\$path}] else . end' \
        /opt/juno/metrics/src/main/resources/models.json \
        > metrics/src/main/resources/models.json && \
-     java -cp /opt/juno/metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain 2>&1" \
+     /usr/bin/java -cp /opt/juno/metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain 2>&1" \
     || { warn "  MetricsMain failed on coordinator."; return 0; }
 
   # Step 5 — SCP metrics.json back and print
