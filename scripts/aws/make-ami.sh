@@ -395,8 +395,15 @@ inf "  AMI ID: ${CREATED_AMI} — waiting for available state (5-15 min)…"
 # ── WAIT FOR AMI AVAILABLE ────────────────────────────────────
 # aws ec2 wait image-available polls every 30 s up to 40 attempts (20 min).
 # GPU AMIs with large root volumes can take up to 15 min.
-aws ec2 wait image-available --image-ids "$CREATED_AMI" --region "$REGION" \
-  || die "AMI ${CREATED_AMI} did not reach 'available' within 20 min"
+AMI_DEADLINE=$(( $(date +%s) + 2700 ))  # 45 min
+while [[ $(date +%s) -lt $AMI_DEADLINE ]]; do
+  STATE=$(aws ec2 describe-images --image-ids "$CREATED_AMI" --region "$REGION" \
+    --query "Images[0].State" --output text 2>/dev/null || echo "pending")
+  [[ "$STATE" == "available" ]] && break
+  [[ "$STATE" == "failed" ]] && die "AMI ${CREATED_AMI} entered failed state"
+  sleep 30
+done
+[[ "$STATE" == "available" ]] || die "AMI ${CREATED_AMI} did not reach 'available' within 45 min"
 inf "  AMI available: ${CREATED_AMI}"
 
 # _cleanup runs via EXIT trap — terminates bake instance and deletes SG + key.

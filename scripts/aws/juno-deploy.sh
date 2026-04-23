@@ -555,14 +555,14 @@ _gather_jfr_metrics() {
     local IP="${INSTANCE_IPS[$ID]}"
     log "  Stopping juno-node on ${IP} to flush JFR…"
     ssh $SSH_OPTS "ubuntu@${IP}" \
-      "sudo systemctl stop juno-node 2>/dev/null || true; sudo systemctl stop juno-coordinator 2>/dev/null || true" \
+      "/bin/sudo /bin/systemctl stop juno-node 2>/dev/null || true; /bin/sudo /bin/systemctl stop juno-coordinator 2>/dev/null || true" \
       2>/dev/null || warn "  Could not stop services on ${IP} (continuing)"
     (( IDX++ ))
   done
   # Also stop coordinator if separate
   if [[ "$COORDINATOR_MODE" == "separate" && -n "${COORDINATOR_INSTANCE_ID:-}" ]]; then
     ssh $SSH_OPTS "ubuntu@${COORD_HOST}" \
-      "sudo systemctl stop juno-coordinator 2>/dev/null || true" 2>/dev/null || true
+      "/bin/sudo /bin/systemctl stop juno-coordinator 2>/dev/null || true" 2>/dev/null || true
   fi
 
   sleep 3   # brief pause to ensure dumponexit fires
@@ -1042,7 +1042,6 @@ _build_node_userdata() {
   local DTYPE_VAL="$DTYPE"
   local NODE_COUNT_VAL="$NODE_COUNT"
   local GIT_VAL="$GIT"
-
   # ── [TRACE] Show exactly what is being baked into the bootstrap script ──────
   # IMPORTANT: must go to stderr (>&2). This function is called as
   # USER_DATA=$(_build_node_userdata ...) so stdout is captured verbatim as the
@@ -1112,46 +1111,11 @@ apt-get install -y -qq \
 
 USE_GPU=false
 if lspci | grep -qi nvidia; then
-  echo "GPU detected — installing CUDA…"
-  # Ubuntu kernel headers come in TWO packages that must both be installed
-  # for DKMS builds to succeed:
-  #   linux-headers-6.8.0-1051-aws   variant-specific (owns the build/ symlink)
-  #   linux-headers-6.8.0-1051       common arch headers referenced internally
-  # Installing only the first leaves a broken include chain; DKMS make then
-  # exits 2 — this is why both proprietary and open modules fail identically.
-  KVER=$(uname -r)                   # e.g. 6.8.0-1051-aws
-  KCOMMON="${KVER%-aws}"             # e.g. 6.8.0-1051  (strips the -aws suffix)
-  # The kernel was built with gcc-12; DKMS validates this exact compiler exists
-  # before building ("Failed CC sanity check").  Install gcc-12 first so that
-  # x86_64-linux-gnu-gcc-12 is present when DKMS runs.
-  apt-get install -y -qq gcc-12
-  apt-get install -y -qq \
-    "linux-headers-${KVER}" \
-    "linux-headers-${KCOMMON}" \
-    "linux-modules-extra-${KVER}" \
-    software-properties-common
-  DISTRO="ubuntu2204"
-  wget -q "https://developer.download.nvidia.com/compute/cuda/repos/${DISTRO}/x86_64/cuda-keyring_1.1-1_all.deb" -O /tmp/cuda-keyring.deb
-  dpkg -i /tmp/cuda-keyring.deb
-  # Release any held packages before the CUDA install.
-  apt-mark unhold $(apt-mark showhold 2>/dev/null) 2>/dev/null || true
-  # Repair any broken dep state introduced by the keyring .deb itself.
-  apt-get -f install -y -qq
-  apt-get update -qq
-  # nvidia-open uses the open-source kernel modules which are IBT-compatible
-  # with kernel 6.8 and avoid the proprietary DKMS build failures.
-  apt-get install -y -qq \
-    -o Dpkg::Options::="--force-confdef" \
-    -o Dpkg::Options::="--force-confold" \
-    --no-install-recommends nvidia-open cuda-toolkit-12-3 || {
-    echo "=== DKMS make.log ==="
-    cat /var/lib/dkms/nvidia/*/build/make.log 2>/dev/null || echo "(no make.log found)"
-    exit 1
-  }
-  echo "export PATH=/usr/local/cuda/bin:\$PATH" >> /etc/environment
-  echo "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH" >> /etc/environment
+  # CUDA drivers and toolkit were pre-installed by make-ami.sh when the
+  # golden AMI was baked.  _resolve_ami() guarantees the golden AMI always
+  # exists before any instance is launched, so there is nothing to install.
+  echo "GPU detected — CUDA pre-installed in golden AMI"
   USE_GPU=true
-  echo "CUDA installed — USE_GPU=true"
 else
   echo "No GPU found — CPU-only mode"
 fi
@@ -1500,9 +1464,9 @@ EOF
     # Then start the coordinator with --no-block so SSH returns immediately
     # without waiting for ExecStartPre/ExecStart to complete.
     if ssh $SSH_OPTS "ubuntu@${COORD_HOST}" \
-         "sudo mkdir -p /etc/juno && \
-          sudo tee /etc/juno/cluster-nodes.env > /dev/null && \
-          sudo systemctl start --no-block juno-coordinator && \
+         "/bin/sudo /bin/mkdir -p /etc/juno && \
+          /bin/sudo /usr/bin/tee /etc/juno/cluster-nodes.env > /dev/null && \
+          /bin/sudo /bin/systemctl start --no-block juno-coordinator && \
           echo 'coordinator dispatched'" \
          <<< "${ENV_CONTENT}"; then
       log "  ✅ cluster-nodes.env written and coordinator started (nodes: ${ADDRS})"
@@ -1514,13 +1478,13 @@ EOF
 
   warn "  ✖ Could not deliver cluster-nodes.env after ${MAX_ATTEMPTS} attempts."
   warn "    SSH into ${COORD_HOST} and run:"
-  warn "      sudo mkdir -p /etc/juno"
-  warn "      sudo tee /etc/juno/cluster-nodes.env <<'EOF'"
+  warn "      /bin/sudo /bin/mkdir -p /etc/juno"
+  warn "      /bin/sudo /usr/bin/tee /etc/juno/cluster-nodes.env <<'EOF'"
   while IFS= read -r line; do
     warn "      ${line}"
   done <<< "${ENV_CONTENT}"
   warn "      EOF"
-  warn "      sudo systemctl start juno-coordinator"
+  warn "      /bin/sudo /bin/systemctl start juno-coordinator"
 }
 
 # ── SCP .LORA FILE TO ALL NODES ───────────────────────────────
@@ -1563,27 +1527,27 @@ _scp_lora_to_nodes() {
     log "  [TRACE] ${IP}: SCP done"
 
     # 2. Stop juno-node (synchronous — ensures old process is gone before we patch env)
-    ssh $SSH_OPTS "ubuntu@${IP}" "sudo systemctl stop juno-node" 2>/dev/null \
+    ssh $SSH_OPTS "ubuntu@${IP}" "/bin/sudo /bin/systemctl stop juno-node" 2>/dev/null \
       || warn "  [TRACE] ${IP}: juno-node was not running (ok for first deploy)"
     log "  [TRACE] ${IP}: juno-node stopped"
 
     # 3. Move .lora into place + patch node.env
     ssh $SSH_OPTS "ubuntu@${IP}" \
-      "sudo mv /tmp/${LORA_BASENAME} ${REMOTE_LORA_PATH} \
-    && sudo chmod 644 ${REMOTE_LORA_PATH} \
-    && if sudo grep -q '^JUNO_LORA_PLAY_PATH=' /etc/juno/node.env 2>/dev/null; then \
-         sudo sed -i 's|^JUNO_LORA_PLAY_PATH=.*|JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}|' /etc/juno/node.env; \
+      "/bin/sudo /bin/mv /tmp/${LORA_BASENAME} ${REMOTE_LORA_PATH} \
+    && /bin/sudo /bin/chmod 644 ${REMOTE_LORA_PATH} \
+    && if /bin/sudo /bin/grep -q '^JUNO_LORA_PLAY_PATH=' /etc/juno/node.env 2>/dev/null; then \
+         /bin/sudo /bin/sed -i 's|^JUNO_LORA_PLAY_PATH=.*|JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}|' /etc/juno/node.env; \
        else \
-         echo 'JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}' | sudo tee -a /etc/juno/node.env >/dev/null; \
+         echo 'JUNO_LORA_PLAY_PATH=${REMOTE_LORA_PATH}' | /bin/sudo /usr/bin/tee -a /etc/juno/node.env >/dev/null; \
        fi \
     && echo '[TRACE] node.env JUNO_LORA_PLAY_PATH line:' \
-    && sudo grep 'JUNO_LORA_PLAY_PATH' /etc/juno/node.env" \
+    && /bin/sudo /bin/grep 'JUNO_LORA_PLAY_PATH' /etc/juno/node.env" \
       2>/dev/null \
       && log "  [TRACE] ${IP}: node.env patched" \
       || { warn "  Could not patch node.env on ${IP}"; continue; }
 
     # 4. Start juno-node (synchronous — returns once the service is active/failed)
-    ssh $SSH_OPTS "ubuntu@${IP}" "sudo systemctl start juno-node" 2>/dev/null \
+    ssh $SSH_OPTS "ubuntu@${IP}" "/bin/sudo /bin/systemctl start juno-node" 2>/dev/null \
       && log "  ✅ ${IP}: juno-node started with LoRA" \
       || warn "  ${IP}: juno-node start failed — check journalctl -u juno-node"
   done
