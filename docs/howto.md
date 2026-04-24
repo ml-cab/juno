@@ -12,18 +12,35 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 
 | Command | Description |
 |---------|-------------|
-| `local` | In-process REPL — all shards in one JVM, no forking, no gRPC |
-| `lora` | LoRA fine-tuning REPL — single JVM, adapter persisted to `.lora` file |
-| *(no command)* | 3-node cluster — forked JVMs, real gRPC |
-| `test` | 8 automated real-model smoke checks, exits 0/1 |
-
----
-
 | `local` | In-process REPL — all transformer shards in one JVM, no forking, no gRPC |
 | `lora` | LoRA fine-tuning REPL — single in-process JVM, adapter persisted to `.lora` file |
 | `merge` | Bake a trained `.lora` adapter into a new standalone GGUF — no sidecar needed at inference time |
 | *(no command)* | 3-node cluster — forked JVMs, real gRPC. Default `--pType pipeline`; use `--pType tensor` for AllReduce mode |
-| `test` | 8 automated real-model smoke checks (6 pipeline + 2 tensor), exits 0 (all pass) or 1 (any fail). Use `--pType pipeline\|tensor\|all` to filter |
+| `test` | 8 automated real-model smoke checks (6 pipeline + 2 tensor), exits 0 or 1. Use `--pType pipeline\|tensor\|all` to filter |
+
+---
+
+### OpenAI-compatible HTTP API
+
+When the coordinator serves HTTP (default in `./juno` cluster mode and always for `juno-master` / `JunoApiServerMain`), the same Javalin app exposes **OpenAI-style** endpoints alongside the original Juno routes. Full contract, field mapping, `x_juno_*` extensions, and streaming behaviour are documented in **`juno-api.yaml`** at the repository root.
+
+| Method | Path | Role |
+|--------|------|------|
+| POST | `/v1/chat/completions` | Chat — set `"stream": true` for SSE chunks ending with `data: [DONE]` |
+| GET | `/v1/models` | Lists loaded models as `{ "object": "list", "data": [ ... ] }` with Juno metadata on `x_juno_*` keys |
+| GET | `/v1/models/{model}` | Single model metadata |
+
+Legacy Juno endpoints (`POST /v1/inference`, `POST /v1/inference/stream`, `GET /v1/cluster/health`, `DELETE /v1/models/{id}`) are unchanged. Point any OpenAI client at `http://<coordinator-host>:<JUNO_HTTP_PORT>` with path prefix `/v1` (same as OpenAI).
+
+Example (blocking chat; coordinator on localhost:8080):
+
+```bash
+curl -s http://localhost:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"<your-loaded-model-id>","messages":[{"role":"user","content":"Hello"}],"max_completion_tokens":32}'
+```
+
+The embedded browser console at `GET /` uses the OpenAI-shaped `/v1/models` response (`data` array, `x_juno_status` for LOADED).
 
 ### Flags
 
@@ -379,6 +396,8 @@ After all nodes finish bootstrap, and **before** starting the coordinator:
 This guarantees the coordinator's `loadShard` RPCs always find nodes with adapters loaded.
 
 **Note:** All SSH remote commands use absolute binary paths (`/bin/sudo`, `/bin/systemctl`, `/usr/bin/tee`, etc.) or prefix `export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`. EC2 non-login SSH shells do not inherit a usable `PATH`.
+
+**HTTP / OpenAI:** the coordinator process runs `JunoApiServerMain` (via `CoordinatorMain` in the shaded jar). Same port as the web console (`JUNO_HTTP_PORT`, default 8080) serves `juno-api.yaml` routes including `POST /v1/chat/completions`.
 
 **Expected coordinator log after correct deployment:**
 ```

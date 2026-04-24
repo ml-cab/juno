@@ -19,6 +19,7 @@ import cab.ml.juno.api.grpc.NodeStatusRequest;
 import cab.ml.juno.api.grpc.NodeStatusResponse;
 import cab.ml.juno.api.grpc.UnloadShardRequest;
 import cab.ml.juno.api.grpc.UnloadShardResponse;
+import cab.ml.juno.coordinator.ProcessPipelineClient;
 import cab.ml.juno.node.ActivationDtype;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;

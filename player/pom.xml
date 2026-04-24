@@ -35,6 +35,10 @@
 		</dependency>
 		<dependency>
 			<groupId>cab.ml</groupId>
+			<artifactId>juno-api-server</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
 			<artifactId>node</artifactId>
 		</dependency>
 		<dependency>

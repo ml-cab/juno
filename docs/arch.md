@@ -18,7 +18,7 @@ depth slice of the transformer. Adding nodes increases the total VRAM budget,
 enabling larger models. N-1 sequential gRPC hops per decode step.
 
 ```
-[Client]  REST (Javalin) / gRPC streaming
+[Client]  HTTP: OpenAI-compatible + Juno REST on Javalin; gRPC to nodes only
     |
 [Coordinator]
     |-- GgufTokenizer       (BPE from GGUF metadata)
@@ -211,15 +211,16 @@ Environment overrides: `MODEL_PATH`, `PTYPE`, `DTYPE`, `BYTE_ORDER`, `MAX_TOKENS
 |--------|----------|
 | `api` | OpenAPI 3.0 spec, JAX-RS interfaces, `inference.proto` |
 | `registry` | `NodeDescriptor`, `ShardPlanner`, `ShardMap`, `ParallelismType`, `TensorShardAssignment`, `TensorShardPlanner` |
-| `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, Javalin REST, SSE |
+| `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, inference DTOs (no embedded HTTP) |
+| `juno-api-server` | `InferenceApiServer`, `OpenAiChatHandler`, `JunoApiServerMain`; OpenAPI reference `juno-api.yaml` |
 | `kvcache` | `KVCacheManager`, `GpuKVCache`, `CpuKVCache`, `PrefixCache` |
 | `tokenizer` | `GgufTokenizer` (SentencePiece BPE + GPT-2 BPE; auto-detected), `ChatTemplate`, `SimpleTokenizer`, `TokenizerEvent`, `TemplateFormatEvent` |
 | `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `EmbeddedNodeServer`, `NodeMain`, `NodeKVCacheAdapter`, `MatVec`, `CpuMatVec`, `CudaMatVec`, `GpuContext`, `DeviceFloatMatrix`, `DeviceHalfMatrix`, `GgufReader`, `LlamaConfig`, `ActivationCodec`, `ActivationBECodec`, `ActivationLECodec`, `ShardContext`, `TensorShardContext`, `LoraAdapter`, `LoraAdapterSet`, `LoraAdamOptimizer`, `LoraTrainableHandler`, `MatVecEvent`, `ForwardPassEvent`, `LoraTrainEvent` |
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | `NodeHealth` record (`nodeId`, `nodeRole`, `vramPressure`, `cpuLoad`, `inferenceLatencyP99Ms`, `throughputBytesPerSec`), `HealthReporter` (pushes 5 s snapshots via HTTP; `recordLatency()` for coordinator, `recordBytes()` for nodes), `HealthMain` (Javalin sidecar: `/health-ui` dashboard, `/health/probe`, `/health/circuits`), `HealthEvaluator`, `CircuitBreaker` |
-| `player` | `ConsoleMain` REPL (`cluster` / `local` / `lora` / `merge` commands), `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `LoraMergeMain` |
+| `player` | `ConsoleMain` REPL (`cluster` / `local` / `lora` / `merge` commands), `ClusterHarness`, `LoraMergeMain` |
 | `juno-node` | Fat jar (`juno-node.jar`). Entry point: `NodeMain` (`cab.ml.juno.node`). Reads `-Dnode.id`, `-Dnode.port`, `-Dmodel.path`, `-DJUNO_USE_GPU`, `-Djuno.byteOrder` from system properties (command-line args still accepted). Prints `READY:<nodeId>:<port>` on startup. Launched by `juno-node.service` systemd unit on AWS nodes. |
-| `juno-master` | Fat jar (`juno-master.jar`). Entry point: `CoordinatorMain` (`cab.ml.juno.master`) — standalone coordinator for remote deployment. Reads node addresses from `JUNO_NODE_ADDRESSES`, model from `JUNO_MODEL_PATH`, and tuning from `JUNO_PTYPE` / `JUNO_HTTP_PORT` / `JUNO_DTYPE` / `JUNO_MAX_QUEUE` / `JUNO_BYTE_ORDER`. No forking, no `ClusterHarness`. Launched by `juno-coordinator.service` on the AWS coordinator host. Integration tests (`InProcessClusterIT`, `ThreeNodeClusterIT`, `TensorParallelClusterIT`, `GpuForwardPassIT`, `ModelLiveRunnerIT`) in package `cab.ml.juno.master`; `ModelLiveRunnerIT` gated behind `-Pintegration` Maven profile. |
+| `juno-master` | Fat jar (`juno-master.jar`). `CoordinatorMain` delegates to `JunoApiServerMain` for distributed coordinator + HTTP. Same env vars as README. Launched by `juno-coordinator.service`. Integration tests in `cab.ml.juno.master`; `ModelLiveRunnerIT` behind `-Pintegration`. |
 | `metrics` | JFR-based metrics extractor. `JfrMetricsExtractor` (single-file and multi-file merge), `JfrModelMapper`, `JfrPercentiles`, `MetricsSnapshot`, `MetricsWriter`, `ModelsConfig`, `ModelsConfigLoader`, `MetricsMain` (standalone entry point + `extractToJson`/`extractToJsonMerged` facades for programmatic use) |
 
 ---
@@ -249,7 +250,7 @@ Template resolved from model type string via exact match then substring fallback
 ```bash
 mvn clean package -DskipTests          # build — produces shade jars
 
-mvn test -pl tokenizer,node,coordinator,sampler,kvcache,health,registry,player
+mvn test -pl tokenizer,node,coordinator,juno-api-server,sampler,kvcache,health,registry,player
                                        # unit tests — no model file, no GPU needed
 
 mvn verify -pl juno-master             # integration tests — forks 3 JVM nodes (stub mode)
@@ -330,7 +331,8 @@ Useful analysis patterns:
 ## Key Design Decisions
 
 - No Python, no llama.cpp subprocess. JVM reads GGUF binary directly and runs the transformer end to end.
-- No Spring Boot. Javalin for REST.
+- No Spring Boot. Javalin for REST is in `juno-api-server`; coordinator module has no HTTP dependency.
+- **OpenAI-compatible HTTP** (`juno-api.yaml`): chat completions and models list on the coordinator port together with legacy Juno inference routes.
 - Two parallelism modes: `pipeline` (LAN-friendly, sequential activation flow, vertical scaling) and `tensor` (parallel per-step AllReduce, horizontal scaling, higher throughput). Selected at startup with `--pType`.
 - **Lazy dequantization on CPU; eager upload on GPU.** Projection weights are kept as raw quantized bytes in `GgufReader.QuantizedTensor`. On the CPU path, dequantization runs one 256-element block at a time inside the matmul loop (peak live float footprint ~1 kB instead of ~65 MB). On the GPU path (`CudaMatVec`), **Llama** and **Phi-3** dequantize once and upload to **`DeviceHalfMatrix`** (FP16 on device, ~half the VRAM of FP32 storage); matmul uses **`cublasHSSgemvStridedBatched`**. If `cudaMalloc` fails during upload, **both** handlers close partial GPU buffers and fall back to CPU quantised matmul for those projections. Forward passes copy activations and small FP16 `x` staging plus `y`, not the full weight matrix.
 - **Explicit GPU weight lifecycle.** `ForwardPassHandler.releaseGpuResources()` closes all `DeviceHalfMatrix` / `DeviceFloatMatrix` buffers owned by a handler. `EmbeddedNodeServer` calls it on shard unload/reload and before swapping handlers so VRAM is freed without waiting for GC.

@@ -1,4 +1,4 @@
-package cab.ml.juno.player;
+package cab.ml.juno.coordinator;
 
 import java.util.ArrayList;
 import java.util.List;

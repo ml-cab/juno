@@ -14,7 +14,14 @@
  * limitations under the License.
  */
 
-package cab.ml.juno.coordinator;
+package cab.ml.juno.apiserver;
+
+import cab.ml.juno.coordinator.GenerationResult;
+import cab.ml.juno.coordinator.InferenceRequest;
+import cab.ml.juno.coordinator.RequestPriority;
+import cab.ml.juno.coordinator.RequestScheduler;
+import cab.ml.juno.coordinator.SseTokenConsumer;
+import cab.ml.juno.coordinator.TokenConsumer;
 
 import java.util.List;
 import java.util.Map;
@@ -33,10 +40,11 @@ import io.javalin.http.Context;
  * Implements the OpenAPI spec at api/src/main/resources/openapi.yaml.
  *
  * Routes: POST /v1/inference — blocking, returns full InferenceResponse POST
- * /v1/inference/stream — SSE, streams TokenEvent per generated token GET
- * /v1/models — list all registered models GET /v1/models/{modelId} — get model
- * by ID DELETE /v1/models/{modelId} — unload model GET /v1/cluster/health —
- * cluster health overview
+ * /v1/inference/stream — SSE, streams TokenEvent per generated token POST
+ * /v1/chat/completions — OpenAI-compatible chat (blocking or SSE, see juno-api.yaml)
+ * GET /v1/models — OpenAI-compatible model list ({@code object: list, data: [...]})
+ * GET /v1/models/{modelId} — OpenAI-compatible model metadata DELETE
+ * /v1/models/{modelId} — unload model GET /v1/cluster/health — cluster health overview
  *
  * Thread model: Javalin uses Virtual Threads (configured via
  * VirtualThreadPool). Both blocking and SSE handlers call scheduler.submit()
@@ -53,6 +61,7 @@ public final class InferenceApiServer {
 
 	private final RequestScheduler scheduler;
 	private final ModelRegistry modelRegistry;
+	private final OpenAiChatHandler openAiChatHandler;
 	private Javalin app;
 	private String byteOrder;
 
@@ -77,6 +86,10 @@ public final class InferenceApiServer {
 			throw new IllegalArgumentException("modelRegistry must not be null");
 		this.scheduler = scheduler;
 		this.modelRegistry = modelRegistry;
+		this.openAiChatHandler = new OpenAiChatHandler(scheduler, modelRegistry, ms -> {
+			if (latencyReporter != null)
+				latencyReporter.recordLatency(ms);
+		});
 	}
 
 	public void start(int port) {
@@ -100,9 +113,12 @@ public final class InferenceApiServer {
 		app.post("/v1/inference", this::handleBlockingInference);
 		app.post("/v1/inference/stream", this::handleStreamingInference);
 
+		// ── OpenAI-compatible (juno-api.yaml) ─────────────────────────────────
+		app.post("/v1/chat/completions", openAiChatHandler::handleChatCompletion);
+
 		// ── Models ────────────────────────────────────────────────────────────
-		app.get("/v1/models", this::handleListModels);
-		app.get("/v1/models/{modelId}", this::handleGetModel);
+		app.get("/v1/models", openAiChatHandler::handleListModels);
+		app.get("/v1/models/{modelId}", openAiChatHandler::handleGetModel);
 		app.delete("/v1/models/{modelId}", this::handleUnloadModel);
 
 		// ── Cluster ───────────────────────────────────────────────────────────
@@ -456,7 +472,8 @@ async function fetchModels() {
     const r = await fetch('/v1/models');
     if (!r.ok) return;
     const d = await r.json();
-    const loaded = (d.models || []).filter(m => m.status === 'LOADED');
+    const list = d.data || [];
+    const loaded = list.filter(m => (m.x_juno_status || '') === 'LOADED');
     mSelect.innerHTML = '';
     if (loaded.length === 0) {
       mSelect.innerHTML = '<option value="">no models loaded</option>';
@@ -464,9 +481,9 @@ async function fetchModels() {
     }
     for (const m of loaded) {
       const o = document.createElement('option');
-      o.value = m.modelId;
-      o.textContent = m.modelId + '  (' + m.architecture + '  ' + m.quantization
-                    + '  layers=' + m.totalLayers + ')';
+      o.value = m.id;
+      o.textContent = m.id + '  (' + m.x_juno_architecture + '  ' + m.x_juno_quantization
+                    + '  layers=' + m.x_juno_total_layers + ')';
       mSelect.appendChild(o);
     }
   } catch {
@@ -818,17 +835,6 @@ prompt.focus();
 		}
 	}
 
-	private void handleListModels(Context ctx) {
-		List<ModelDescriptor> models = modelRegistry.listModels();
-		ctx.json(Map.of("models", models.stream().map(this::toModelResponse).toList(), "total", models.size()));
-	}
-
-	private void handleGetModel(Context ctx) {
-		String modelId = ctx.pathParam("modelId");
-		modelRegistry.getModel(modelId).ifPresentOrElse(m -> ctx.json(toModelResponse(m)),
-				() -> ctx.status(404).json(errorBody(404, "NOT_FOUND", "Model '" + modelId + "' not found")));
-	}
-
 	private void handleUnloadModel(Context ctx) {
 		String modelId = ctx.pathParam("modelId");
 		if (modelRegistry.getModel(modelId).isEmpty()) {
@@ -933,18 +939,8 @@ prompt.focus();
 				"modelId", modelId, "latencyMs", result.latency().toMillis());
 	}
 
-	private Map<String, Object> toModelResponse(ModelDescriptor m) {
-		return Map.of("modelId", m.modelId(), "architecture", m.architecture(), "quantization",
-				m.quantization().displayName(), "totalLayers", m.totalLayers(), "hiddenDim", m.hiddenDim(), "vocabSize",
-				m.vocabSize(), "status", m.status().name(), "estimatedVram", m.humanReadableSize());
-	}
-
 	private static String toFinishReason(GenerationResult.StopReason reason) {
-		return switch (reason) {
-		case EOS_TOKEN, STOP_TOKEN -> "stop";
-		case MAX_TOKENS -> "length";
-		case ERROR -> "error";
-		};
+		return OpenAiAdapter.toOpenAiFinishReason(reason);
 	}
 
 	private static Map<String, Object> errorBody(int code, String error, String message) {

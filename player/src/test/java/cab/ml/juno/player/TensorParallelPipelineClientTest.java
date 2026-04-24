@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import com.google.protobuf.ByteString;
 
 import cab.ml.juno.api.grpc.ActivationDtype;
+import cab.ml.juno.coordinator.TensorParallelPipelineClient;
 import cab.ml.juno.api.grpc.ForwardRequest;
 import cab.ml.juno.api.grpc.ForwardResponse;
 import cab.ml.juno.api.grpc.LoadShardRequest;

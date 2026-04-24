@@ -54,7 +54,7 @@ import java.util.logging.Logger;
  *
  * <h2>Usage (cluster mode)</h2>
  * Coordinator: constructed with {@code nodeRole="coordinator"}, wired to
- * {@code InferenceApiServer} via {@link #recordLatency(long)}.
+ * {@code cab.ml.juno.apiserver.InferenceApiServer} via {@link #recordLatency(long)}.
  * Worker nodes: constructed with {@code nodeRole="node"}, wired to
  * {@code EmbeddedNodeServer} via {@link #recordBytes(long)}.
  */

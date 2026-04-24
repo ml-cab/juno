@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import cab.ml.juno.coordinator.ProcessPipelineClient;
+import cab.ml.juno.coordinator.TensorParallelPipelineClient;
 import cab.ml.juno.node.EmbeddedNodeServer;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.InferencePipeline;

@@ -35,7 +35,12 @@ import jdk.jfr.RecordingState;
 
 import cab.ml.juno.metrics.MetricsMain;
 
-import cab.ml.juno.coordinator.GenerationLoop;import cab.ml.juno.coordinator.GenerationResult;
+import cab.ml.juno.coordinator.BatchConfig;
+import cab.ml.juno.coordinator.ProcessPipelineClient;
+import cab.ml.juno.coordinator.GenerationLoop;
+import cab.ml.juno.coordinator.GenerationResult;
+import cab.ml.juno.apiserver.InferenceApiServer;
+import cab.ml.juno.coordinator.RequestScheduler;
 import cab.ml.juno.health.HealthMain;
 import cab.ml.juno.health.HealthReporter;
 import cab.ml.juno.health.HealthThresholds;
@@ -61,9 +66,13 @@ import cab.ml.juno.node.LoraAdapterSet;
 import cab.ml.juno.node.LoraTrainableHandler;
 import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.ShardContext;
+import cab.ml.juno.registry.ModelDescriptor;
+import cab.ml.juno.registry.ModelRegistry;
+import cab.ml.juno.registry.ModelStatus;
 import cab.ml.juno.registry.NodeDescriptor;
 import cab.ml.juno.registry.NodeStatus;
 import cab.ml.juno.registry.ParallelismType;
+import cab.ml.juno.registry.QuantizationType;
 import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.registry.ShardMap;
 import cab.ml.juno.registry.ShardPlanner;
@@ -145,6 +154,13 @@ public final class ConsoleMain {
 	private static int loraSteps = 50; // steps per chunk for /train
 	private static int loraStepsQa = 10; // steps per chunk for /train-qa
 	private static float loraEarlyStop = 0.25f; // stop training when loss drops below this
+	/**
+	 * REST inference port ({@link InferenceApiServer} — /v1/inference, /v1/chat/completions, …).
+	 * Default {@code 8080} for local/cluster; {@code 0} disables. LoRA mode forces {@code 0}.
+	 * Override with {@code --http-port N} or {@code JUNO_HTTP_PORT}.
+	 */
+	private static int httpPort = 8080;
+	private static boolean httpPortFromCli = false;
 
 	public static void main(String[] args) throws Exception {
 		AnsiSupport.enable();
@@ -153,6 +169,9 @@ public final class ConsoleMain {
 			printHelp();
 			System.exit(0);
 		}
+		applyHttpPortFromEnv();
+		if (loraMode)
+			httpPort = 0;
 
 		// ── Health sidecar — start in background then continue normally ──────
 		if (healthMode) {
@@ -322,6 +341,12 @@ public final class ConsoleMain {
 			case "--health":
 				healthMode = true;
 				break;
+			case "--http-port":
+				if (i + 1 < args.length) {
+					httpPort = parseInt(args[++i], 8080);
+					httpPortFromCli = true;
+				}
+				break;
 			default:
 				System.err.println("Unknown option: " + args[i]);
 				help = true;
@@ -351,6 +376,8 @@ public final class ConsoleMain {
 		System.out.println("                             LE = little-endian (native x86 order)");
 		System.out.println("  --local                    Use in-process nodes (no forking)");
 		System.out.println("  --nodes N                  Number of in-process nodes (default: 3)");
+		System.out.println("  --http-port N              REST API port: /v1/chat/completions, /v1/inference, …");
+		System.out.println("                             (default: 8080; use 0 to disable). Env: JUNO_HTTP_PORT");
 		System.out.println();
 		System.out.println("LoRA fine-tuning (forces --local --nodes 1):");
 		System.out.println("  --lora                     Enable LoRA fine-tuning mode");
@@ -386,6 +413,61 @@ public final class ConsoleMain {
 		System.out.println("  --jfr DURATION             Java Flight Recording duration (e.g. 5m)");
 		System.out.println("  --verbose, -v              Show more logging");
 		System.out.println("  --help, -h                 Show this help");
+	}
+
+	private static void applyHttpPortFromEnv() {
+		if (httpPortFromCli)
+			return;
+		String e = System.getenv("JUNO_HTTP_PORT");
+		if (e != null && !e.isBlank())
+			httpPort = parseInt(e.strip(), 8080);
+	}
+
+	private static ModelRegistry buildLoadedModelRegistry(LlamaConfig config) throws java.io.IOException {
+		ModelRegistry registry = new ModelRegistry(ShardPlanner.create());
+		long vramPerLayer = 4L * config.hiddenDim() * config.hiddenDim() * 2;
+		String filename = Path.of(modelPath).getFileName().toString();
+		QuantizationType quant;
+		try (GgufReader r = GgufReader.open(Path.of(modelPath))) {
+			quant = LlamaConfig.detectQuantization(r, filename);
+		} catch (java.io.IOException e) {
+			quant = LlamaConfig.fromFilename(filename);
+		}
+		ModelDescriptor descriptor = new ModelDescriptor(filename, config.architecture(), config.numLayers(),
+				config.hiddenDim(), config.vocabSize(), config.numHeads(), vramPerLayer, quant, modelPath,
+				ModelStatus.LOADED, Instant.now());
+		registry.putLoaded(descriptor);
+		return registry;
+	}
+
+	/**
+	 * When {@link #httpPort} &gt; 0, starts {@link InferenceApiServer} on that port and returns a
+	 * {@link RequestScheduler} that must be used for REPL inference too (single generation entry point).
+	 */
+	private static RequestScheduler startOptionalHttpApi(LlamaConfig config, GenerationLoop loop) {
+		if (httpPort <= 0)
+			return null;
+		try {
+			ModelRegistry registry = buildLoadedModelRegistry(config);
+			var scheduler = new RequestScheduler(256, loop, BatchConfig.disabled());
+			InferenceApiServer api = new InferenceApiServer(scheduler, registry, byteOrder);
+			if (healthMode)
+				api.setHealthSidecarUrl("http://localhost:" + healthPort);
+			api.start(httpPort);
+			Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
+				try {
+					api.stop();
+				} catch (Exception ignored) {
+				}
+			}));
+			print(Color.GREEN + "  HTTP API  http://localhost:" + httpPort
+					+ "  (POST /v1/chat/completions, /v1/inference, GET /v1/models)" + Color.RESET);
+			return scheduler;
+		} catch (Exception e) {
+			print(Color.YELLOW + "  ⚠ Could not start HTTP API on port " + httpPort + ": " + e.getMessage()
+					+ Color.RESET);
+			return null;
+		}
 	}
 
 	// ── LoRA mode ─────────────────────────────────────────────────────────────
@@ -986,13 +1068,13 @@ public final class ConsoleMain {
 		String modeLabel = pType == ParallelismType.TENSOR ? "tensor-parallel" : "pipeline-parallel";
 		print(Color.CYAN_BOLD + "▶ Starting 3-node " + modeLabel + " cluster (forked JVMs)..." + Color.RESET);
 
-		int totalLayers, numHeads, vocabSize;
+		LlamaConfig modelConfig;
 		try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
-			LlamaConfig cfg2 = LlamaConfig.from(cfgReader);
-			totalLayers = cfg2.numLayers();
-			numHeads = cfg2.numHeads();
-			vocabSize = cfg2.vocabSize();
+			modelConfig = LlamaConfig.from(cfgReader);
 		}
+		int totalLayers = modelConfig.numLayers();
+		int numHeads = modelConfig.numHeads();
+		int vocabSize = modelConfig.vocabSize();
 
 		ClusterHarness harness = ((pType == ParallelismType.TENSOR)
 				? ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads)
@@ -1056,7 +1138,8 @@ public final class ConsoleMain {
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
 
-		startRepl(loop, tokenizer); // calls System.exit(0) on quit — shutdown hook fires from there
+		RequestScheduler httpScheduler = startOptionalHttpApi(modelConfig, loop);
+		startRepl(loop, tokenizer, httpScheduler); // calls System.exit(0) on quit — shutdown hook fires from there
 	}
 
 	/**
@@ -1175,7 +1258,8 @@ public final class ConsoleMain {
 			}));
 		}
 
-		startRepl(loop, tokenizer);
+		RequestScheduler httpScheduler = startOptionalHttpApi(config, loop);
+		startRepl(loop, tokenizer, httpScheduler);
 	}
 
 	private static GpuContext prepareGpuContext() {
@@ -1196,15 +1280,13 @@ public final class ConsoleMain {
 		String modeLabel = pType == ParallelismType.TENSOR ? "tensor-parallel" : "pipeline-parallel";
 		print(Color.CYAN_BOLD + "▶ Starting 3-node " + modeLabel + " cluster (forked JVMs)..." + Color.RESET);
 
-		int totalLayers;
-		int numHeads;
-		int vocabSize;
+		LlamaConfig modelConfig;
 		try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
-			LlamaConfig cfg = LlamaConfig.from(cfgReader);
-			totalLayers = cfg.numLayers();
-			numHeads = cfg.numHeads();
-			vocabSize = cfg.vocabSize();
+			modelConfig = LlamaConfig.from(cfgReader);
 		}
+		int totalLayers = modelConfig.numLayers();
+		int numHeads = modelConfig.numHeads();
+		int vocabSize = modelConfig.vocabSize();
 
 		ClusterHarness harness = (pType == ParallelismType.TENSOR)
 				? ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads)
@@ -1237,12 +1319,14 @@ public final class ConsoleMain {
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
 
-		startRepl(loop, tokenizer);
+		RequestScheduler httpScheduler = startOptionalHttpApi(modelConfig, loop);
+		startRepl(loop, tokenizer, httpScheduler);
 	}
 
 	// ── Standard REPL loop ────────────────────────────────────────────────────
 
-	private static void startRepl(GenerationLoop loop, Tokenizer tokenizer) throws IOException {
+	private static void startRepl(GenerationLoop loop, Tokenizer tokenizer, RequestScheduler httpScheduler)
+			throws IOException {
 		SamplingParams params = SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(temperature)
 				.withTopK(topK).withTopP(topP);
 
@@ -1277,7 +1361,9 @@ public final class ConsoleMain {
 
 			long start = System.currentTimeMillis();
 			var consumer = streamingConsumer(verbose);
-			GenerationResult result = loop.generate(request, consumer);
+			GenerationResult result = httpScheduler != null
+					? httpScheduler.submit(request, consumer).join()
+					: loop.generate(request, consumer);
 			history.addAssistant(result.text());
 
 			long elapsed = System.currentTimeMillis() - start;

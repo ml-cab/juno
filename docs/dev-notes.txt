@@ -63,8 +63,10 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
   |                                BatchConfig, BatchEntry,
   |                                FaultTolerantPipeline, RetryPolicy,
   |                                PipelineUnavailableException,
-  |                                HealthReactor, InferenceApiServer,
-  |                                SseTokenConsumer
+  |                                HealthReactor, ProcessPipelineClient,
+  |                                TensorParallelPipelineClient, SseTokenConsumer
+  +-- juno-api-server/          <- InferenceApiServer (Javalin),
+  |                                OpenAiChatHandler, JunoApiServerMain
   +-- node/                     <- InferencePipeline, LocalInferencePipeline,
   |                                ForwardPassHandler, CyclicForwardPassHandler,
   |                                LlamaTransformerHandler (real transformer math),
@@ -925,16 +927,18 @@ sampling:
                              LoraAdapter, LoraAdapterSet, LoraAdamOptimizer,
                              LoraTrainableHandler [ForwardPassEvent],
                              LoraTrainEvent [juno.LoraTrainStep])
-  coordinator      SUCCESS  (14 classes: GenerationLoop [session KV reuse + EOS filter],
-                             RequestScheduler, InferenceApiServer,
+  coordinator      SUCCESS  (GenerationLoop [session KV reuse + EOS filter],
+                             RequestScheduler, ProcessPipelineClient,
+                             TensorParallelPipelineClient,
                              SseTokenConsumer, BatchConfig, BatchEntry,
                              FaultTolerantPipeline, RetryPolicy,
                              PipelineUnavailableException, HealthReactor,
                              InferenceRequest [+sessionId, +ofSession, +kvCacheKey],
                              GenerationResult, TokenConsumer, RequestPriority)
-  player           SUCCESS  (6 main classes: ClusterHarness, NodeMain,
+  juno-api-server  SUCCESS  (InferenceApiServer, OpenAiChatHandler, OpenAiAdapter,
+                             JunoApiServerMain)
+  player           SUCCESS  (main classes: ClusterHarness, NodeMain,
                              EmbeddedNodeServer [wires NodeKVCacheAdapter into handler],
-                             ProcessPipelineClient, TensorParallelPipelineClient,
                              ChatHistory [+sessionId], ConsoleMain [+lora subcommand])
                              Shade jar: player/target/player.jar  (main: ConsoleMain)
   integration      SUCCESS  (ModelLiveRunner [8 checks]; InProcessClusterIT:6;
@@ -1224,7 +1228,7 @@ Test results after fixes:
                     ProcessPipelineClient, InProcessClusterIT, ThreeNodeClusterIT
 
   Phase 3 — Orchestration  [COMPLETE — real CPU impl, GPU impl pending]
-    [x] coordinator InferenceApiServer (Javalin REST, blocking + SSE streaming)
+    [x] juno-api-server InferenceApiServer (Javalin REST, blocking + SSE + OpenAI chat/models)
                     SseTokenConsumer (TokenConsumer → SSE events)
     [x] coordinator BatchConfig, BatchEntry
                     InferencePipeline.forwardBatch() default method (override seam)
@@ -4341,11 +4345,11 @@ with a single unified script. Key properties:
 
 32.3  Web console
 -----------------------------------------------
-InferenceApiServer now serves GET / → CONSOLE_HTML (a self-contained HTML5
+cab.ml.juno.apiserver.InferenceApiServer serves GET / → CONSOLE_HTML (a self-contained HTML5
 chat interface, no external dependencies). The console polls /v1/cluster/health
-every 10 s, fetches /v1/models on load, and streams tokens via POST
-/v1/inference/stream using the Fetch ReadableStream API. Per-message stats
-shown: token count, latency (ms), throughput (tok/s).
+every 10 s, fetches /v1/models on load (OpenAI list shape: data[], x_juno_status),
+and streams tokens via POST /v1/inference/stream or OpenAI POST /v1/chat/completions
+with stream:true. Per-message stats shown: token count, latency (ms), throughput (tok/s).
 
 Verified working with TinyLlama-1.1B-Chat-v1.0.Q5_K_M.llamafile on a
 3-node m7i-flex.large CPU cluster. Console header shows model name, quant,

@@ -1,5 +1,14 @@
 ## Status
 
+**Session 29** — `juno-api-server` module, OpenAI-compatible HTTP, coordinator split.
+
+- **New module `juno-api-server`** — `InferenceApiServer`, `OpenAiChatHandler`, `OpenAiAdapter`, and `JunoApiServerMain` live here with the Javalin dependency. `coordinator` no longer pulls Javalin.
+- **OpenAI wire compatibility** — `POST /v1/chat/completions` (blocking + SSE), `GET /v1/models`, `GET /v1/models/{model}` per **`juno-api.yaml`** at repo root. Legacy Juno routes unchanged on the same port.
+- **`CoordinatorMain`** — remains the shaded jar `Main-Class`; implementation delegates to **`JunoApiServerMain`**. Coordinator-side health reporter when `JUNO_HEALTH=true` is started from `JunoApiServerMain`.
+- **`ProcessPipelineClient` / `TensorParallelPipelineClient`** — packages moved from `player` to **`cab.ml.juno.coordinator`**; `player` depends on `juno-api-server` for `InferenceApiServer`.
+
+---
+
 **Session 28** — Health dashboard: CPU load metric, role-conditional secondary metric, node throughput.
 
 ### Health dashboard fixes

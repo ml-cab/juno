@@ -1,0 +1,61 @@
+Juno — agent-oriented architecture summary
+==========================================
+
+Purpose: quick map of modules and entry points for contributors and agents.
+Canonical user docs: README.md, docs/howto.md. OpenAPI: juno-api.yaml (root).
+
+Module layout (Maven reactor order)
+-----------------------------------
+
+api              OpenAPI/JAX-RS contracts, inference.proto
+registry         ShardPlanner, ModelRegistry, parallelism types
+coordinator      GenerationLoop, RequestScheduler, FaultTolerantPipeline,
+                 ProcessPipelineClient, TensorParallelPipelineClient,
+                 InferenceRequest / GenerationResult / scheduling types
+                 (no HTTP server — Javalin removed from this module)
+juno-api-server  InferenceApiServer (Javalin): legacy Juno REST + OpenAI-compatible
+                 routes; JunoApiServerMain (standalone coordinator + HTTP)
+node             transformers, gRPC node, GGUF, MatVec, GPU paths
+kvcache, tokenizer, sampler, health, metrics  — as named
+
+player           ConsoleMain (local / cluster / lora / merge / test), ClusterHarness
+juno-master      Shade jar; Main-Class CoordinatorMain → delegates to JunoApiServerMain
+juno-node        Worker JVM; NodeMain
+
+HTTP surface (cab.ml.juno.apiserver.InferenceApiServer)
+--------------------------------------------------------
+
+Base path examples on coordinator port (default 8080).
+
+Juno-native:
+  POST /v1/inference          blocking full response
+  POST /v1/inference/stream   SSE token stream
+  GET  /v1/cluster/health
+  DELETE /v1/models/{modelId}
+
+OpenAI-compatible (see juno-api.yaml for field mapping and extensions):
+  POST /v1/chat/completions   blocking JSON or SSE (stream: true)
+  GET  /v1/models             { object, data[] } with x_juno_* metadata
+  GET  /v1/models/{model}     single model object
+
+Embedded HTML console: GET / (uses /v1/models shape with data[] and x_juno_status).
+
+Remote coordinator env (JunoApiServerMain / CoordinatorMain)
+------------------------------------------------------------
+
+JUNO_NODE_ADDRESSES   host:port,host:port,...
+JUNO_MODEL_PATH       GGUF path on coordinator (tokenizer + config)
+JUNO_PTYPE            pipeline | tensor
+JUNO_HTTP_PORT        default 8080
+JUNO_DTYPE            FLOAT32 | FLOAT16 | INT8
+JUNO_MAX_QUEUE        scheduler depth, default 1000
+JUNO_BYTE_ORDER       BE | LE  → system property juno.byteOrder
+
+Optional health sidecar: JUNO_HEALTH=true, JUNO_HEALTH_PORT, thresholds as in CoordinatorMain Javadoc.
+When enabled, HealthReporter for role coordinator is started from JunoApiServerMain and wired to InferenceApiServer.
+
+In-process cluster (./juno with no subcommand)
+----------------------------------------------
+
+ConsoleMain wires the same InferenceApiServer from juno-api-server when HTTP port > 0.
+Pipeline clients run in coordinator module; player depends on juno-api-server.

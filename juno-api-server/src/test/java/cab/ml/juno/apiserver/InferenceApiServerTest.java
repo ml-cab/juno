@@ -1,6 +1,9 @@
-package cab.ml.juno.coordinator;
+package cab.ml.juno.apiserver;
 
 import static org.assertj.core.api.Assertions.assertThat;
+
+import cab.ml.juno.coordinator.GenerationLoop;
+import cab.ml.juno.coordinator.RequestScheduler;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -199,6 +202,56 @@ class InferenceApiServerTest {
 		assertThat(body).contains("\"isComplete\":true");
 	}
 
+	// ── POST /v1/chat/completions (OpenAI-compatible) ───────────────────────────
+
+	@Test
+	void openai_chat_completions_blocking_returns_chat_completion() throws Exception {
+		var response = post("/chat/completions", """
+				{
+				  "model": "tinyllama",
+				  "messages": [{"role":"user","content":"Hello"}],
+				  "max_completion_tokens": 3
+				}
+				""");
+
+		assertThat(response.statusCode()).isEqualTo(200);
+		assertThat(response.body()).contains("chatcmpl-");
+		assertThat(response.body()).contains("\"object\":\"chat.completion\"");
+		assertThat(response.body()).contains("\"finish_reason\"");
+		assertThat(response.body()).contains("usage");
+	}
+
+	@Test
+	void openai_chat_completions_n_greater_than_one_returns_400() throws Exception {
+		var response = post("/chat/completions", """
+				{
+				  "model": "tinyllama",
+				  "messages": [{"role":"user","content":"Hi"}],
+				  "n": 2
+				}
+				""");
+		assertThat(response.statusCode()).isEqualTo(400);
+		assertThat(response.body()).contains("invalid_request");
+	}
+
+	@Test
+	void openai_chat_completions_stream_returns_event_stream() throws Exception {
+		var request = HttpRequest.newBuilder().uri(URI.create(BASE + "/chat/completions"))
+				.header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString("""
+						{
+						  "model": "tinyllama",
+						  "messages": [{"role":"user","content":"Stream"}],
+						  "stream": true,
+						  "max_completion_tokens": 2
+						}
+						""")).build();
+		var response = http.send(request, HttpResponse.BodyHandlers.ofString());
+		assertThat(response.statusCode()).isEqualTo(200);
+		assertThat(response.headers().firstValue("Content-Type").orElse("")).contains("text/event-stream");
+		assertThat(response.body()).contains("chat.completion.chunk");
+		assertThat(response.body()).contains("data: [DONE]");
+	}
+
 	// ── GET /v1/models ────────────────────────────────────────────────────────
 
 	@Test
@@ -207,7 +260,8 @@ class InferenceApiServerTest {
 
 		assertThat(response.statusCode()).isEqualTo(200);
 		assertThat(response.body()).contains("tinyllama");
-		assertThat(response.body()).contains("total");
+		assertThat(response.body()).contains("\"object\":\"list\"");
+		assertThat(response.body()).contains("\"data\"");
 	}
 
 	// ── GET /v1/models/{modelId} ──────────────────────────────────────────────
@@ -219,6 +273,8 @@ class InferenceApiServerTest {
 		assertThat(response.statusCode()).isEqualTo(200);
 		assertThat(response.body()).contains("tinyllama");
 		assertThat(response.body()).contains("LOADED");
+		assertThat(response.body()).contains("\"object\":\"model\"");
+		assertThat(response.body()).contains("\"owned_by\":\"juno\"");
 	}
 
 	@Test

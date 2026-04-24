@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>cab.ml</groupId>
+		<artifactId>juno</artifactId>
+		<version>0.1.0-SNAPSHOT</version>
+	</parent>
+
+	<artifactId>juno-api-server</artifactId>
+	<name>juno-api-server</name>
+	<description>HTTP REST and OpenAI-compatible API (Javalin) for Juno coordinators</description>
+
+	<dependencies>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>api</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>registry</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>coordinator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>node</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>kvcache</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>tokenizer</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>sampler</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>health</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.javalin</groupId>
+			<artifactId>javalin</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-netty-shaded</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-protobuf</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-stub</artifactId>
+		</dependency>
+	</dependencies>
+</project>

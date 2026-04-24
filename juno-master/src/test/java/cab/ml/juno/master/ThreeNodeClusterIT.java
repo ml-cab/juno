@@ -25,7 +25,7 @@ import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.EmbeddedNodeServer;
 import cab.ml.juno.player.ClusterHarness;
-import cab.ml.juno.player.ProcessPipelineClient;
+import cab.ml.juno.coordinator.ProcessPipelineClient;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
