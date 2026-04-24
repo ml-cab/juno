@@ -602,7 +602,8 @@ _gather_jfr_metrics() {
   log "  Running MetricsMain on coordinator…"
   local MODEL_STEM="${MODEL_FILENAME%.*}"
   ssh $SSH_OPTS "ubuntu@${COORD_HOST}" \
-    "cd ${REMOTE_COLLECT} && \
+    "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; \
+     cd ${REMOTE_COLLECT} && \
      /bin/mkdir -p metrics/src/main/resources && \
      /usr/bin/jq --arg name '${MODEL_STEM}' --arg path '/opt/juno/models/${MODEL_FILENAME}' \
        'if (.models | map(.name) | index(\$name)) == null then .models += [{\"name\":\$name,\"path\":\$path}] else . end' \
@@ -713,9 +714,10 @@ setup() {
   EC2 → Running On-Demand G and VT instances (L-DB2E81BA)\n\
   Minimum needed: ${VCPUS_NEEDED} vCPUs"
       elif [[ "$QUOTA_INT" -lt "$VCPUS_NEEDED" ]]; then
-        local MAX_NODES=$(( QUOTA_INT / VCPUS_PER_NODE ))
-        warn "Quota ${QUOTA_INT} vCPUs — reducing NODE_COUNT: ${NODE_COUNT} → ${MAX_NODES}"
-        NODE_COUNT=$MAX_NODES
+        die "GPU quota too low: have ${QUOTA_INT} vCPUs, need ${VCPUS_NEEDED} (${NODE_COUNT} x ${VCPUS_PER_NODE} vCPUs for ${INSTANCE_TYPE}).\n\
+  Request an increase: https://console.aws.amazon.com/servicequotas/\n\
+  EC2 -> Running On-Demand G and VT instances (L-DB2E81BA)\n\
+  Target value: ${VCPUS_NEEDED} vCPUs"
       else
         log "  OK Quota: ${QUOTA_INT} vCPUs available for ${NODE_COUNT} nodes"
       fi
@@ -851,10 +853,11 @@ setup() {
   log "  OK Security group: $SG_ID  (SSH from ${MY_IP}, gRPC internal, REST public)"
 
   # ── Build bootstrap scripts ───────────────────────────────────
-  # NODE bootstrap: hardware-detected (GPU vs CPU), runs NodeMain via systemd
-  # COORDINATOR bootstrap: always CPU, runs CoordinatorMain via systemd after nodes ready
-  _launch_nodes
+  # In separate mode the coordinator must be launched FIRST so its private IP
+  # is known and can be baked into every node's JUNO_HEALTH_URL at creation
+  # time. In node1 mode the order is irrelevant (no separate coordinator).
   _launch_coordinator_if_separate
+  _launch_nodes
 
   SETUP_TIME=$(date +%s)
   save_state
@@ -876,7 +879,10 @@ _launch_nodes() {
   # Launch node-1 first so we can capture its private IP and bake
   # JUNO_HEALTH_URL into every other node's node.env at creation time.
   # No file writes, no restarts — coordinator URL is in RAM from first boot.
-  local COORD_PRIV_IP=""
+  # In separate mode the coordinator was already launched by _launch_coordinator_if_separate
+  # and its private IP stored in COORDINATOR_PRIVATE_IP.  Seed COORD_PRIV_IP with it so
+  # every node gets the correct JUNO_HEALTH_URL baked in from the start.
+  local COORD_PRIV_IP="${COORDINATOR_PRIVATE_IP:-}"
 
   for (( i=1; i<=NODE_COUNT; i++ )); do
     local NODE_IDX=$i
@@ -974,9 +980,8 @@ _launch_nodes() {
 # ── LAUNCH SEPARATE COORDINATOR INSTANCE ──────────────────────
 _launch_coordinator_if_separate() {
   COORDINATOR_INSTANCE_ID=""
+  COORDINATOR_PRIVATE_IP=""
   [[ "$COORDINATOR_MODE" != "separate" ]] && return 0
-
-  log "Launching coordinator (t3.medium)…"
   local COORD_USERDATA
   COORD_USERDATA=$(_build_coordinator_userdata)
   local COORD_USERDATA_FILE
@@ -995,7 +1000,7 @@ _launch_coordinator_if_separate() {
     --security-group-ids "$SG_ID" \
     --associate-public-ip-address \
     --user-data "file://${COORD_USERDATA_FILE}" \
-    --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=20,VolumeType=gp3,DeleteOnTermination=true}" \
+    --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=50,VolumeType=gp3,DeleteOnTermination=true}" \
     --tag-specifications \
       "ResourceType=instance,Tags=[{Key=Name,Value=juno-coordinator},{Key=Project,Value=juno}]" \
     --region "$REGION" \
@@ -1007,7 +1012,14 @@ _launch_coordinator_if_separate() {
   rm -f "$LAUNCH_ERR" "$COORD_USERDATA_FILE"
   rm -f "$LAUNCH_ERR"
   COORDINATOR_INSTANCE_ID=$(echo "$LAUNCH_OUT" | jq -r '.Instances[0].InstanceId')
-  log "  ✅ Coordinator: $COORDINATOR_INSTANCE_ID"
+  # Fetch the coordinator's private IP immediately — AWS assigns it at creation,
+  # no need to wait for "running". Stored in a global so _launch_nodes can bake
+  # it into every node's JUNO_HEALTH_URL via __COORDINATOR_PRIVATE_IP__.
+  COORDINATOR_PRIVATE_IP=$(aws ec2 describe-instances \
+    --instance-ids "$COORDINATOR_INSTANCE_ID" --region "$REGION" \
+    --query "Reservations[0].Instances[0].PrivateIpAddress" \
+    --output text 2>/dev/null || echo "")
+  log "  ✅ Coordinator: $COORDINATOR_INSTANCE_ID  private-ip: ${COORDINATOR_PRIVATE_IP}"
 }
 
 # ── NODE BOOTSTRAP SCRIPT ──────────────────────────────────────
@@ -1324,7 +1336,7 @@ echo "Build complete"
 
 mkdir -p /opt/juno/models
 if [[ ! -f "\${MODEL_PATH}" ]]; then
-  echo "Downloading model…"
+  echo "Downloading model from ${MODEL_URL_VAL}…"
   wget -q "${MODEL_URL_VAL}" -O "\${MODEL_PATH}"
 fi
 
@@ -1348,6 +1360,8 @@ exec /usr/bin/java \
   --add-opens java.base/java.nio=ALL-UNNAMED \
   -XX:+UseG1GC -XX:+AlwaysPreTouch -Xmx4g \
   \${JFR_OPT:+\$JFR_OPT} \
+  -DJUNO_HEALTH=true \
+  -DJUNO_HEALTH_PORT=8081 \
   -jar /opt/juno/juno-master/target/juno-master.jar \
   --model-path \${JUNO_MODEL_PATH} \
   --pType \${JUNO_PTYPE} \

@@ -339,6 +339,12 @@ When `--lora-play` is given, `ConsoleMain` calls `ClusterHarness.withLoraPlay(pa
 | `--jfr DURATION` | — | JFR on all JVMs (e.g. `5m`) |
 | `--lora-play PATH` | — | Local path to a `.lora` file. **Must be an absolute path or relative to your current working directory.** The path is resolved to absolute at parse time via `realpath`. After bootstrap, the file is SCPed to `/opt/juno/models/` on every node. |
 
+**GPU quota:** the script checks EC2 quota `L-DB2E81BA` (Running On-Demand G and VT instances) before launching. If the quota in vCPUs is less than `node-count × vCPUs-per-instance`, setup fails immediately with the shortfall and a link to the AWS Service Quotas console. It never silently reduces the node count.
+
+**Coordinator mode — `separate`:** the coordinator is launched *before* nodes so its private IP is known at node creation time and baked into each node's `JUNO_HEALTH_URL` in `/etc/juno/node.env`. This is required for health probes to reach the coordinator. The separate coordinator runs on a `t3.medium` and starts with `-DJUNO_HEALTH=true -DJUNO_HEALTH_PORT=8081` so the health sidecar is active and `POST /health/probe` from nodes is accepted.
+
+**CUDA on GPU instances:** CUDA drivers and toolkit are pre-installed in the golden AMI by `make-ami.sh`. Node bootstrap does not install CUDA — it only runs `lspci` to detect the GPU and sets `JUNO_USE_GPU=true`. This eliminates the 17-20 minute DKMS kernel module compilation that would otherwise block every launch.
+
 **LoRA deploy flow:**
 
 ```bash
@@ -362,15 +368,17 @@ After all nodes finish bootstrap, and **before** starting the coordinator:
 1. Validates the local file exists (fails fast at `setup()` start if not found).
 2. For each node — synchronously, in sequence:
    - `scp` the `.lora` file to `/tmp/<basename>` on the node
-   - `systemctl stop juno-node` — synchronous; waits for JVM to exit
-   - `sudo mv /tmp/<file> /opt/juno/models/<file>` + `chmod 644`
-   - `sed -i` patches `JUNO_LORA_PLAY_PATH=` in `/etc/juno/node.env`
-   - `systemctl start juno-node` — synchronous; waits until gRPC port is bound (~2s)
+   - `/bin/sudo /bin/systemctl stop juno-node` — synchronous; waits for JVM to exit
+   - `/bin/sudo /bin/mv /tmp/<file> /opt/juno/models/<file>` + `chmod 644`
+   - `/bin/sudo /bin/sed -i` patches `JUNO_LORA_PLAY_PATH=` in `/etc/juno/node.env`
+   - `/bin/sudo /bin/systemctl start juno-node` — synchronous; waits until gRPC port is bound (~2s)
 3. Logs `[TRACE]` of the patched `node.env` line for verification.
 4. Updates the global `LORA_PLAY_PATH` to the remote absolute path so `cluster-nodes.env` gets the correct value.
 5. Coordinator starts only after all nodes are confirmed active.
 
 This guarantees the coordinator's `loadShard` RPCs always find nodes with adapters loaded.
+
+**Note:** All SSH remote commands use absolute binary paths (`/bin/sudo`, `/bin/systemctl`, `/usr/bin/tee`, etc.) or prefix `export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`. EC2 non-login SSH shells do not inherit a usable `PATH`.
 
 **Expected coordinator log after correct deployment:**
 ```

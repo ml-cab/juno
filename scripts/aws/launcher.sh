@@ -7,7 +7,7 @@
 # ── JUNO-BOT CREDENTIALS — change these once per environment ─
 export AWS_ACCESS_KEY_ID= # NB !!! Please insert value from setup-IAM.sh  !!!
 export AWS_SECRET_ACCESS_KEY= # NB !!! Please insert value from setup-IAM.sh  !!!
-export AWS_DEFAULT_REGION="us-east-1" #"eu-north-1"
+export AWS_DEFAULT_REGION="eu-north-1" #"us-east-1"
 # ─────────────────────────────────────────────────────────────
 
 # Validate argument
