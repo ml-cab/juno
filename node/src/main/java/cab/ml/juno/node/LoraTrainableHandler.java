@@ -23,6 +23,10 @@ import java.util.Map;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
+import cab.ml.juno.lora.LoraAdapter;
+import cab.ml.juno.lora.LoraAdapterSet;
+import cab.ml.juno.lora.LoraAdamOptimizer;
+
 /**
  * LLaMA-family transformer handler with LoRA fine-tuning support.
  *
@@ -41,7 +45,7 @@ import java.util.stream.IntStream;
  * <h2>Training loop</h2>
  * 
  * <pre>
- * LoraAdapterSet adapters = LoraAdapterSet.qv(cfg, rank = 8, alpha = 8f, rng);
+ * LoraAdapterSet adapters = LoraQvInitializer.qv(cfg, rank = 8, alpha = 8f, rng);
  * LoraTrainableHandler handler = LoraTrainableHandler.load(modelPath, ctx, adapters);
  * LoraAdamOptimizer opt = LoraAdamOptimizer.defaults(1e-4);
  *
@@ -101,6 +105,16 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 
 	private final LoraAdapterSet loraAdapters;
 
+	private final MatVec backend;
+	private DeviceHalfMatrix[] wqDev;
+	private DeviceHalfMatrix[] wkDev;
+	private DeviceHalfMatrix[] wvDev;
+	private DeviceHalfMatrix[] woDev;
+	private DeviceHalfMatrix[] wGateDev;
+	private DeviceHalfMatrix[] wUpDev;
+	private DeviceHalfMatrix[] wDownDev;
+	private DeviceHalfMatrix outputProjDev;
+
 	// ── Inference KV cache ────────────────────────────────────────────────────
 
 	private final Map<String, float[][]> kvCacheK = new HashMap<>();
@@ -115,23 +129,32 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	 *
 	 * @param modelPath path to the GGUF file
 	 * @param context   which layers/embeddings this node is responsible for
-	 * @param adapters  LoRA adapters (typically created with
-	 *                  {@link LoraAdapterSet#qv})
+	 * @param adapters  LoRA adapters (typically created with {@link LoraQvInitializer#qv})
 	 */
 	public static LoraTrainableHandler load(Path modelPath, ShardContext context, LoraAdapterSet adapters)
 			throws IOException {
+		return load(modelPath, context, adapters, ForwardPassHandlerLoader.selectLoraBackend());
+	}
+
+	/**
+	 * Load with an explicit {@link MatVec} (matches {@link ForwardPassHandlerLoader#load}
+	 * when adapters are supplied for inference-only playback).
+	 */
+	public static LoraTrainableHandler load(Path modelPath, ShardContext context, LoraAdapterSet adapters,
+			MatVec backend) throws IOException {
 		log.info("Loading LoRA handler: layers " + context.startLayer() + "–" + context.endLayer() + "  adapters="
-				+ adapters.size() + "  file=" + modelPath);
+				+ adapters.size() + "  backend=" + backend.getClass().getSimpleName() + "  file=" + modelPath);
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			LlamaConfig cfg = LlamaConfig.from(r);
-			return new LoraTrainableHandler(r, cfg, context, adapters);
+			return new LoraTrainableHandler(r, cfg, context, adapters, backend);
 		}
 	}
 
-	private LoraTrainableHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, LoraAdapterSet adapters)
-			throws IOException {
+	private LoraTrainableHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, LoraAdapterSet adapters,
+			MatVec backend) throws IOException {
 		this.cfg = cfg;
 		this.loraAdapters = adapters;
+		this.backend = backend;
 		this.startLayer = ctx.startLayer();
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
@@ -165,6 +188,79 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 			wUp[li] = r.tensorRaw("blk." + i + ".ffn_up.weight");
 			wDown[li] = r.tensorRaw("blk." + i + ".ffn_down.weight");
 		}
+
+		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
+		outputProjDev = null;
+		if (backend instanceof CudaMatVec cuda) {
+			log.info("LoRA handler: uploading projection weights to GPU (FP16)…");
+			int H = cfg.hiddenDim();
+			int KV = cfg.kvDim();
+			int I = cfg.intermediateSize();
+			int V = cfg.vocabSize();
+			DeviceHalfMatrix[] wqD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wkD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wvD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] woD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wGateD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wUpD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix[] wDownD = new DeviceHalfMatrix[L];
+			DeviceHalfMatrix outD = null;
+			try {
+				for (int li = 0; li < L; li++) {
+					wqD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wq[li], H, H), H, H);
+					wkD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wk[li], KV, H), KV, H);
+					wvD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wv[li], KV, H), KV, H);
+					woD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wo[li], H, H), H, H);
+					wGateD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wGate[li], I, H), I, H);
+					wUpD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wUp[li], I, H), I, H);
+					wDownD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wDown[li], H, I), H, I);
+				}
+				if (outputProj != null)
+					outD = cuda.uploadHalf(LlamaTransformerHandler.dequantize(outputProj, V, H), V, H);
+				this.wqDev = wqD;
+				this.wkDev = wkD;
+				this.wvDev = wvD;
+				this.woDev = woD;
+				this.wGateDev = wGateD;
+				this.wUpDev = wUpD;
+				this.wDownDev = wDownD;
+				this.outputProjDev = outD;
+				log.info("LoRA handler: GPU weight upload complete.");
+			} catch (IllegalStateException ex) {
+				closeDeviceHalfMatrixArray(wqD);
+				closeDeviceHalfMatrixArray(wkD);
+				closeDeviceHalfMatrixArray(wvD);
+				closeDeviceHalfMatrixArray(woD);
+				closeDeviceHalfMatrixArray(wGateD);
+				closeDeviceHalfMatrixArray(wUpD);
+				closeDeviceHalfMatrixArray(wDownD);
+				if (outD != null)
+					outD.close();
+				String msg = ex.getMessage() == null ? "" : ex.getMessage();
+				if (msg.contains("cudaMalloc")) {
+					log.warning("LoRA: insufficient GPU VRAM for FP16-resident weights (" + msg
+							+ "). Using CPU quantised matmul.");
+				} else {
+					throw ex;
+				}
+			}
+		}
+	}
+
+	private static void closeDeviceHalfMatrixArray(DeviceHalfMatrix[] a) {
+		if (a == null)
+			return;
+		for (DeviceHalfMatrix m : a) {
+			if (m != null && !m.isClosed())
+				m.close();
+		}
+	}
+
+	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev, float[] x, int rows,
+			int cols) {
+		if (dev != null)
+			return backend.sgemv(dev, x);
+		return LlamaTransformerHandler.matVec(quant, x, rows, cols);
 	}
 
 	private static GgufReader.QuantizedTensor loadOutputProjection(GgufReader r) throws IOException {
@@ -207,6 +303,21 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	@Override
 	public boolean isReady() {
 		return true;
+	}
+
+	@Override
+	public void releaseGpuResources() {
+		closeDeviceHalfMatrixArray(wqDev);
+		closeDeviceHalfMatrixArray(wkDev);
+		closeDeviceHalfMatrixArray(wvDev);
+		closeDeviceHalfMatrixArray(woDev);
+		closeDeviceHalfMatrixArray(wGateDev);
+		closeDeviceHalfMatrixArray(wUpDev);
+		closeDeviceHalfMatrixArray(wDownDev);
+		if (outputProjDev != null && !outputProjDev.isClosed())
+			outputProjDev.close();
+		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
+		outputProjDev = null;
 	}
 
 	// ── Training step ─────────────────────────────────────────────────────────
@@ -258,7 +369,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 			if (hasOutputProj) {
 				allXFinal[pos] = x.clone();
 				allXNormFinal[pos] = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
-				float[] logits = LlamaTransformerHandler.matVec(outputProj, allXNormFinal[pos], cfg.vocabSize(), H);
+				float[] logits = matVecLayer(outputProj, outputProjDev, allXNormFinal[pos], cfg.vocabSize(), H);
 				allProbs[pos] = softmaxCopy(logits);
 			}
 		}
@@ -346,9 +457,9 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 
 		float[] xNorm1 = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
 
-		float[] q = LlamaTransformerHandler.matVec(wq[li], xNorm1, H, H);
-		float[] k = LlamaTransformerHandler.matVec(wk[li], xNorm1, kvDim, H);
-		float[] v = LlamaTransformerHandler.matVec(wv[li], xNorm1, kvDim, H);
+		float[] q = matVecLayer(wq[li], wqDev != null ? wqDev[li] : null, xNorm1, H, H);
+		float[] k = matVecLayer(wk[li], wkDev != null ? wkDev[li] : null, xNorm1, kvDim, H);
+		float[] v = matVecLayer(wv[li], wvDev != null ? wvDev[li] : null, xNorm1, kvDim, H);
 
 		// Apply LoRA deltas
 		applyLoraInPlace(q, li, "wq", xNorm1);
@@ -361,7 +472,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		System.arraycopy(v, 0, vCacheLayer, pos * kvDim, kvDim);
 
 		float[] attnOut = gqa(q, kCacheLayer, vCacheLayer, pos + 1);
-		float[] attnProj = LlamaTransformerHandler.matVec(wo[li], attnOut, H, H);
+		float[] attnProj = matVecLayer(wo[li], woDev != null ? woDev[li] : null, attnOut, H, H);
 		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
 
 		float[] xNorm2 = LlamaTransformerHandler.rmsNorm(x2, ffnNorm[li], cfg.rmsNormEps());
@@ -380,7 +491,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 
 	private float[] outputProjection(float[] x) {
 		float[] xn = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
-		return LlamaTransformerHandler.matVec(outputProj, xn, cfg.vocabSize(), cfg.hiddenDim());
+		return matVecLayer(outputProj, outputProjDev, xn, cfg.vocabSize(), cfg.hiddenDim());
 	}
 
 	// ── Training forward (with state capture) ─────────────────────────────────
@@ -407,9 +518,9 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 
 		float[] xNorm1 = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
 
-		float[] q = LlamaTransformerHandler.matVec(wq[li], xNorm1, H, H);
-		float[] k = LlamaTransformerHandler.matVec(wk[li], xNorm1, kvDim, H);
-		float[] v = LlamaTransformerHandler.matVec(wv[li], xNorm1, kvDim, H);
+		float[] q = matVecLayer(wq[li], wqDev != null ? wqDev[li] : null, xNorm1, H, H);
+		float[] k = matVecLayer(wk[li], wkDev != null ? wkDev[li] : null, xNorm1, kvDim, H);
+		float[] v = matVecLayer(wv[li], wvDev != null ? wvDev[li] : null, xNorm1, kvDim, H);
 
 		applyLoraInPlace(q, li, "wq", xNorm1);
 		applyLoraInPlace(v, li, "wv", xNorm1);
@@ -466,13 +577,13 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 			}
 		}
 
-		float[] attnProj = LlamaTransformerHandler.matVec(wo[li], attnOut, H, H);
+		float[] attnProj = matVecLayer(wo[li], woDev != null ? woDev[li] : null, attnOut, H, H);
 		float[] xRes2 = LlamaTransformerHandler.add(x, attnProj);
 		float[] xNorm2 = LlamaTransformerHandler.rmsNorm(xRes2, ffnNorm[li], cfg.rmsNormEps());
 
 		int I = cfg.intermediateSize();
-		float[] gate = LlamaTransformerHandler.matVec(wGate[li], xNorm2, I, H);
-		float[] up = LlamaTransformerHandler.matVec(wUp[li], xNorm2, I, H);
+		float[] gate = matVecLayer(wGate[li], wGateDev != null ? wGateDev[li] : null, xNorm2, I, H);
+		float[] up = matVecLayer(wUp[li], wUpDev != null ? wUpDev[li] : null, xNorm2, I, H);
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
 			hidden[i] = LlamaTransformerHandler.silu(gate[i]) * up[i];
@@ -483,7 +594,8 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	/** Compute the layer output from stored state (completes forwardLayerStore). */
 	private float[] computeLayerOutput(LayerState st, int li, float[] xIn) {
 		int H = cfg.hiddenDim();
-		float[] ffnOut = LlamaTransformerHandler.matVec(wDown[li], st.hiddenAct(), H, cfg.intermediateSize());
+		float[] ffnOut = matVecLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, st.hiddenAct(), H,
+				cfg.intermediateSize());
 		return LlamaTransformerHandler.add(st.xRes2(), ffnOut);
 	}
 
@@ -653,12 +765,12 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	private float[] ffn(float[] x, int li) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
-		float[] gate = LlamaTransformerHandler.matVec(wGate[li], x, I, H);
-		float[] up = LlamaTransformerHandler.matVec(wUp[li], x, I, H);
+		float[] gate = matVecLayer(wGate[li], wGateDev != null ? wGateDev[li] : null, x, I, H);
+		float[] up = matVecLayer(wUp[li], wUpDev != null ? wUpDev[li] : null, x, I, H);
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
 			hidden[i] = LlamaTransformerHandler.silu(gate[i]) * up[i];
-		return LlamaTransformerHandler.matVec(wDown[li], hidden, H, I);
+		return matVecLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, hidden, H, I);
 	}
 
 	/**

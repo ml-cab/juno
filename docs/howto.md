@@ -56,6 +56,8 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 
 **Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `DTYPE`, `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`, `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `LORA_PLAY_PATH`
 
+For the `lora` command (and any code path using `ForwardPassHandlerLoader.selectLoraBackend()` / `LoraTrainableHandler.load` without an explicit backend), **`JUNO_USE_GPU` unset means try CUDA** when a GPU is present. Set `JUNO_USE_GPU=false` or pass `--cpu` to force CPU matmul. Cluster and `local` modes still use `selectBackend()`, where an unset `JUNO_USE_GPU` defaults to CPU for a safe out-of-the-box experience.
+
 ---
 
 ### `local` — in-process REPL
@@ -173,12 +175,12 @@ you > /train some training text
 #   forwardMs / backwardMs / optimizerMs / loss
 ```
 
-**CPU performance note:** LoRA training on CPU runs the full forward+backward pass
-through all transformer layers. For TinyLlama Q4_K_M on a typical 8-core machine,
-expect ~2–5 seconds per gradient step for short sequences (7–10 tokens). Longer
-sequences scale linearly with token count. Use `--lora-steps 5` for quick iteration
-and `--lora-steps 100` when convergence matters. GPU training (via `CudaMatVecBackend`)
-would be 20–50× faster.
+**Performance note:** With a CUDA device and the default GPU path, frozen-weight
+forward matmuls in `LoraTrainableHandler` use the same FP16 resident-device path as
+`LlamaTransformerHandler` (cuBLAS). The backward pass still dequantises on CPU one row
+at a time. On CPU-only hosts, expect ~2–5 seconds per gradient step for TinyLlama
+Q4_K_M and short sequences (7–10 tokens). Use `--lora-steps 5` for quick iteration
+and `--lora-steps 100` when convergence matters.
 
 ---
 

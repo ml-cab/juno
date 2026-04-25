@@ -1,6 +1,10 @@
 package cab.ml.juno.node;
 
 import static org.assertj.core.api.Assertions.assertThat;
+
+import cab.ml.juno.lora.LoraAdapter;
+import cab.ml.juno.lora.LoraAdapterSet;
+import cab.ml.juno.lora.LoraAdamOptimizer;
 import static org.assertj.core.api.Assertions.within;
 
 import java.util.Random;

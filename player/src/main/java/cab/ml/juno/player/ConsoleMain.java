@@ -56,8 +56,9 @@ import cab.ml.juno.node.GpuContext;
 
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
-import cab.ml.juno.node.LoraAdamOptimizer;
-import cab.ml.juno.node.LoraAdapterSet;
+import cab.ml.juno.lora.LoraAdamOptimizer;
+import cab.ml.juno.lora.LoraAdapterSet;
+import cab.ml.juno.node.LoraQvInitializer;
 import cab.ml.juno.node.LoraTrainableHandler;
 import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.ShardContext;
@@ -415,7 +416,7 @@ public final class ConsoleMain {
 			print(Color.GREEN + "  ✔ Loaded checkpoint: " + adapters.size() + " adapters from " + loraPath
 					+ Color.RESET);
 		} else {
-			adapters = LoraAdapterSet.qv(config, loraRank, loraAlpha, new Random(42));
+			adapters = LoraQvInitializer.qv(config, loraRank, loraAlpha, new Random(42));
 			print(Color.YELLOW + "  ✦ New adapters initialised (" + adapters.size() + " total · /save to persist)"
 					+ Color.RESET);
 		}

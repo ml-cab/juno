@@ -15,6 +15,7 @@
 		<!-- core libraries -->
 		<module>registry</module>
 		<module>coordinator</module>
+		<module>lora</module>
 		<module>node</module>
 		<module>kvcache</module>
 		<module>tokenizer</module>
@@ -87,6 +88,11 @@
 			<dependency>
 				<groupId>cab.ml</groupId>
 				<artifactId>coordinator</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>lora</artifactId>
 				<version>${project.version}</version>
 			</dependency>
 			<dependency>

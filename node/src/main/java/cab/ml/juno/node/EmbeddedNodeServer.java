@@ -16,6 +16,8 @@
 
 package cab.ml.juno.node;
 
+import cab.ml.juno.lora.LoraAdapterSet;
+
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
