@@ -1,18 +1,21 @@
 # LoRA Fine-Tuning in Juno
 
-Parameter-Efficient Fine-Tuning for LLaMA-family models, implemented entirely in Java. No Python, no PEFT library, no separate training process.
+Parameter-efficient fine-tuning for LLaMA-family models, implemented entirely in Java.
+No Python, no PEFT library, no separate training process.
 
 ---
 
 ## How it works
 
-For each frozen weight matrix **W**, LoRA inserts two small trainable matrices **A** (rank × inDim) and **B** (outDim × rank):
+For each frozen weight matrix **W**, LoRA inserts two small trainable matrices **A** (rank x inDim)
+and **B** (outDim x rank):
 
 ```
-W_effective = W + (alpha/rank) × B × A
+W_effective = W + (alpha/rank) x B x A
 ```
 
-**A** is initialised ~N(0, 0.01). **B** starts at zero. Only **A** and **B** are trained; **W** is never modified.
+**A** is initialised ~N(0, 0.01). **B** starts at zero. Only **A** and **B** are trained;
+**W** is never modified.
 
 For `rank=8` on `wq` and `wv` across all 22 layers of TinyLlama-1.1B:
 
@@ -20,7 +23,7 @@ For `rank=8` on `wq` and `wv` across all 22 layers of TinyLlama-1.1B:
 |---|---|---|
 | Parameters | 1,100,048,000 | 720,896 |
 | Memory (F32) | ~4.3 GB | 2.8 MB |
-| Training target | ❌ | ✅ |
+| Training target | no | yes |
 
 ---
 
@@ -35,62 +38,60 @@ For `rank=8` on `wq` and `wv` across all 22 layers of TinyLlama-1.1B:
 | Command | Description |
 |---------|-------------|
 | `/train <text>` | Fine-tune on inline text (freeform) |
-| `/train-file <path>` | Fine-tune on a text file (auto-chunked into ≤128-token pieces) |
+| `/train-file <path>` | Fine-tune on a text file (auto-chunked into <= 128-token pieces) |
 | `/train-qa <question> A: <answer>` | Train a single Q&A fact with auto-generated phrasings |
 | `/save` | Save adapter to `--lora-path` |
-| `/reset` | Reinitialise adapters to zero |
-| `/status` | Rank, α, steps trained, checkpoint path |
-| `/merge-hint` | Explain offline merge into GGUF |
+| `/reset` | Reinitialise adapters to zero (clears all training) |
+| `/status` | Rank, alpha, steps trained, checkpoint path |
+| `/merge-hint` | Show the `juno merge` command to bake adapter into a standalone GGUF |
 | `/help` | Command reference |
+| *(regular input)* | Chat inference with current adapter applied |
 
 **`/train-qa` — Q&A fact training:**
 
-The command is designed for single factual associations like name, role, or domain facts:
+Designed for single factual associations (name, role, domain fact):
 
 ```
 you > /train-qa What is my name? A: Dima
+
+  Question: What is my name?
+  Answer  : Dima
+
+  [TRACE] -- formatted training text (repr) ------------------
+  <|user|>
+  What is my name?</s>
+  <|assistant|>
+  Dima</s>
+  ...
+  [TRACE] -- end training text --------------------------------
+  [TRACE] token count (excl. BOS): 121
+
+  Formatted as 4 Q&A pairs  .  model type: tinyllama
+  Training  rank=8 . lr=1.0E-4 . 40 steps . 4 chunk(s) . 122 tokens
+  done  loss=1.53 (-0.83)
 ```
 
-Auto-generates 4 phrasings and formats them with the correct chat template for the model:
+The command auto-generates four phrasings to improve generalisation. Loss below ~0.5 gives
+reliable recall; above ~1.5 the answer may be inconsistent. Run the same pair 2-3 times or
+increase `--lora-steps-qa` to drive loss lower.
 
-```
-[TRACE] ── formatted training text (repr) ─────────────────
-<|user|>↵
-What is my name?</s>↵
-<|assistant|>↵
-Dima</s>↵
-<|user|>↵
-What is my name?</s>↵     ← repeated for emphasis
-<|assistant|>↵
-Dima</s>↵
-<|user|>↵
-Can you tell me: What is my name?</s>↵
-<|assistant|>↵
-Dima</s>↵
-<|user|>↵
-Please answer: What is my name?</s>↵
-<|assistant|>↵
-Dima</s>↵
-[TRACE] ── end training text ───────────────────────────────
-[TRACE] token count (excl. BOS): 121
-```
-
-**Loss targets:** below ~0.5 for reliable recall; above ~1.5 the answer may be inconsistent. Run the same pair 2–3 times or increase `--lora-steps-qa` to drive loss lower.
-
-**Chat template must match.** The `[TRACE] model type (chat template key)` line at REPL startup shows which template was detected. The same key must appear at inference. If they differ, the model will not recall trained facts. Rename the model file to include the architecture keyword (`tinyllama`, `llama-3`, `mistral`, `phi-3`, `gemma`).
+**Chat template must match.** The `[TRACE] model type (chat template key)` line at REPL startup
+shows which template was detected. The same key must appear at inference. If they differ, the
+model will not recall trained facts. Rename the model file to include the architecture keyword
+(`tinyllama`, `llama-3`, `mistral`, `phi-3`, `gemma`).
 
 ---
 
 ## Quick start — inference with a trained adapter
 
-Trained adapters can be applied in three modes without entering the training REPL:
+Trained adapters can be applied in any mode without entering the training REPL.
 
-**`local` mode (single JVM):**
+**`local` mode:**
 ```bash
 ./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora
 ```
 
-**`cluster` mode (forked JVMs, real gRPC):**
+**`cluster` mode:**
 ```bash
 ./juno --model-path /path/to/model.gguf --lora-play /path/to/model.lora
 ```
@@ -102,7 +103,7 @@ Trained adapters can be applied in three modes without entering the training REP
   --model-url https://...
 ```
 
-See `docs/howto.md` → AWS section for the full deployment flow.
+See [howto.md](howto.md) for the full AWS deployment flow.
 
 ---
 
@@ -149,16 +150,16 @@ ForwardPassHandler h = ForwardPassHandlerLoader.load(modelPath, ctx, backend, pl
 
 ```
 ConsoleMain (--lora-play PATH)
-    │
-    ├── local mode: LoraAdapterSet.load(path)
-    │                    └── ForwardPassHandlerLoader.load(model, ctx, backend, adapters)
-    │                              └── LoraTrainableHandler (inference-only, no optimizer)
-    │
-    └── cluster mode: ClusterHarness.withLoraPlay(path)
-                           └── launchNode(): -Djuno.lora.play.path=PATH injected per JVM
-                                    └── EmbeddedNodeServer.loadShard()
-                                             └── LoraAdapterSet.load(Path.of(property))
-                                             └── ForwardPassHandlerLoader.load(..., adapters)
+    |
+    +-- local mode: LoraAdapterSet.load(path)
+    |                    +-- ForwardPassHandlerLoader.load(model, ctx, backend, adapters)
+    |                              +-- LoraTrainableHandler (inference-only, no optimizer)
+    |
+    +-- cluster mode: ClusterHarness.withLoraPlay(path)
+                           +-- launchNode(): -Djuno.lora.play.path=PATH injected per JVM
+                                    +-- EmbeddedNodeServer.loadShard()
+                                             +-- LoraAdapterSet.load(Path.of(property))
+                                             +-- ForwardPassHandlerLoader.load(..., adapters)
 ```
 
 ### Rank selection
@@ -173,72 +174,38 @@ ConsoleMain (--lora-play PATH)
 
 ## Training decisions
 
-### Truncated BPTT
+**Truncated BPTT.** Gradients do not flow backward through KV-cache entries from earlier
+positions. This avoids O(seqLen^2) backward work with negligible effect on LoRA quality.
 
-Gradients do not flow backward through KV-cache entries from earlier positions. This avoids O(seqLen²) backward work with negligible effect on LoRA quality for most tasks.
+**Quantized frozen weights in backward.** The transpose matVec in `backwardLayer` dequantizes
+frozen weights one row at a time: O(hiddenDim) peak extra allocation per layer, not O(model).
 
-### Quantised frozen weights in backward
-
-The transpose matVec in `backwardLayer` dequantises frozen weights one row at a time: O(hiddenDim) peak extra allocation per layer, not O(model).
-
-### Weight decay
-
-Applied only to **A**, not **B**. B starts at zero and applying decay to it would counteract learning from scratch.
-
----
-
-## Common pitfalls
-
-**`/train-qa` trains the typo.**
-If you type `whatos my name` the model learns that exact string. The model may still generalize (because 4 phrasings are generated), but clean spelling in the question gives more reliable results.
-
-**Loss > 1.5 after training.**
-Run the same `/train-qa` command 2–3 more times (adapters warm up across runs) or increase `--lora-steps-qa 50`.
-
-**Loss is constant at ~log(vocabSize).**
-B starts at zero so the LoRA delta is zero for the first forward pass. After the first backward + Adam step B becomes non-zero and loss will begin moving. If it's still constant after step 2, check `loraAdapters.get(li, proj)` is returning non-null.
-
-**`--lora-play` answered wrong.**
-Check `[TRACE] model type` at startup. If it shows `chatml` but your model is TinyLlama, the template mismatch means training and inference see different token sequences — the model literally cannot recall facts trained under a different template. Rename the file to include `tinyllama`.
-
-**Checkpoint loads but inference output is random.**
-After `LoraAdapterSet.load()`, always call `opt.reset()` before resuming training (clears stale momentum buffers). For inference-only use, no optimizer is attached at all.
-
----
-
-## Testing checklist
-
-After `LoraAdapterSet.load()`, the adapters have correct weights but
-`LoraAdamOptimizer.reset()` must be called before resuming training. For
-inference only, the optimizer state doesn't matter at all.
+**Weight decay.** Applied only to **A**, not **B**. B starts at zero; applying decay to it would
+counteract learning from scratch.
 
 ---
 
 ## Producing a standalone merged model (`juno merge`)
 
-Once training is complete and the adapter is saved, you can bake it into a new
-GGUF that loads without a `.lora` sidecar:
-
 ```bash
-./juno merge --model-path TinyLlama.Q4_K_M.gguf
-# → writes TinyLlama.Q4_K_M-merged.gguf  (~1 GB for this model)
+# 1. Fine-tune
+./juno lora --model-path /models/tinyllama.gguf
+#   you > /train-qa What is your name? A: Juno
+#   you > /save
 
-./juno local --model-path TinyLlama.Q4_K_M-merged.gguf
-# you > what is your name?
-# bot > Dima                  ← training recalled correctly
+# 2. Merge (produces /models/tinyllama-merged.gguf, ~1 GB)
+./juno merge --model-path /models/tinyllama.gguf
+
+# 3. Run -- no .lora file needed
+./juno local --model-path /models/tinyllama-merged.gguf
+#   you > what is your name?
+#   bot > Juno
 ```
 
-### Why F32 for the patched tensors
-
-The LoRA delta per weight element is small — typically ~6×10⁻⁴ after 50 Adam
-steps at lr=1e-4. Q4_K quantisation noise (half-step) is ~3×10⁻³ — five times
-larger. Re-quantising the merged weights back to Q4_K destroys the delta
-completely; the model behaves identically to the unfine-tuned base.
-
-`LoraMerge` stores the 44 patched projection tensors (wq/wv) as **F32**
-(precision ~10⁻⁷, SNR ~6000×) and copies all other tensors verbatim. F32
-tensors are read by `LlamaTransformerHandler` identically to any other F32 — no
-special-casing in inference.
+The LoRA delta per weight element (~6x10^-4) is smaller than Q4_K quantization noise (~3x10^-3).
+Re-quantizing the merged weights back to Q4_K destroys the delta entirely. `LoraMerge` stores the
+44 patched projection tensors (wq/wv) as F32 and copies all other tensors verbatim. The output is
+a valid GGUF v3 file.
 
 ### Programmatic API
 
@@ -252,16 +219,29 @@ System.out.println("Patched " + r.adaptersApplied() + " tensors");
 // Patched 44 tensors
 ```
 
-### What the GGUF writer does
+---
 
-The output is a valid GGUF v3 file produced in five steps:
+## Common pitfalls
 
-1. Copy header + KV metadata section verbatim from the source.
-2. Write a new tensor-info section: patched tensors get `type=F32`, all others keep their original type; all data-section offsets are recomputed.
-3. Write 32-byte alignment padding.
-4. Write the data section: patched tensors as F32 (dequantise → apply `W += scale × B × A` → write); all others as raw bytes transferred directly.
+**`/train-qa` trains the typo.** If you type `whatos my name` the model learns that exact
+string. Clean spelling in the question gives more reliable results.
 
-The output is always a plain GGUF v3 even when the source is a llamafile ZIP polyglot.
+**Loss > 1.5 after training.** Run the same `/train-qa` command 2-3 more times or increase
+`--lora-steps-qa 50`.
+
+**Loss is constant at ~log(vocabSize).** B starts at zero so the LoRA delta is zero for the
+first forward pass. After the first backward + Adam step B becomes non-zero and loss will begin
+moving. If it is still constant after step 2, check `loraAdapters.get(li, proj)` is non-null.
+
+**`--lora-play` answered wrong.** Check `[TRACE] model type` at startup. A template mismatch
+between training and inference means the model cannot recall trained facts. Rename the file to
+include the architecture keyword.
+
+**Checkpoint loads but inference output is random.** After `LoraAdapterSet.load()`, call
+`opt.reset()` before resuming training to clear stale momentum buffers. For inference-only use
+no optimizer is attached at all.
+
+---
 
 ## Testing checklist
 
@@ -269,5 +249,5 @@ The output is always a plain GGUF v3 even when the source is a llamafile ZIP pol
 mvn test -Dtest=LoraAdapterTest          # numerical gradient check (most important)
 mvn test -Dtest=LoraAdapterSetTest       # round-trip serialisation
 mvn test -Dtest=LoraAdamOptimizerTest    # update direction + weight decay
-mvn test -Dtest=LoraTrainableHandlerTest # adjointness: dot(A×x,v) == dot(A^T×v,x)
+mvn test -Dtest=LoraTrainableHandlerTest # adjointness: dot(A*x,v) == dot(A^T*v,x)
 ```

@@ -726,6 +726,21 @@ setup() {
 
   # ── Smart resume: check existing state ───────────────────────
   if [[ -f "$STATE_FILE" ]]; then
+    # Snapshot CLI-provided config before source overwrites them.
+    # source "$STATE_FILE" below clobbers every variable that was saved by a
+    # previous run.  For the stale-state path we do a fresh setup, so the
+    # CLI args must win — save them now and restore them if needed.
+    local _cli_instance_type="$INSTANCE_TYPE"
+    local _cli_node_count="$NODE_COUNT"
+    local _cli_git="$GIT"
+    local _cli_coordinator_mode="$COORDINATOR_MODE"
+    local _cli_model_url="${MODEL_URL:-}"
+    local _cli_model_filename="${MODEL_FILENAME:-}"
+    local _cli_ptype="$PTYPE"
+    local _cli_dtype="$DTYPE"
+    local _cli_byte_order="${BYTE_ORDER:-}"
+    local _cli_jfr_duration="${JFR_DURATION:-}"
+    local _cli_lora_play_path="${LORA_PLAY_PATH:-}"
     # shellcheck disable=SC1090
     source "$STATE_FILE"
     read -ra INSTANCE_IDS <<< "$INSTANCE_IDS"
@@ -748,6 +763,18 @@ setup() {
     fi
     warn "Stale state (inconsistent/terminated) — fresh setup…"
     rm -f "$STATE_FILE"; INSTANCE_IDS=(); SG_ID=""; COORDINATOR_INSTANCE_ID=""
+    # Restore CLI-provided config — stale state must not override CLI args.
+    INSTANCE_TYPE="$_cli_instance_type"
+    NODE_COUNT="$_cli_node_count"
+    GIT="$_cli_git"
+    COORDINATOR_MODE="$_cli_coordinator_mode"
+    MODEL_URL="$_cli_model_url"
+    MODEL_FILENAME="$_cli_model_filename"
+    PTYPE="$_cli_ptype"
+    DTYPE="$_cli_dtype"
+    BYTE_ORDER="$_cli_byte_order"
+    JFR_DURATION="$_cli_jfr_duration"
+    LORA_PLAY_PATH="$_cli_lora_play_path"
   fi
 
   log "Account: $(aws sts get-caller-identity --query Arn --output text)"

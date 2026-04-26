@@ -22,6 +22,7 @@ import jdk.jfr.consumer.RecordingFile;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -34,11 +35,12 @@ import java.util.Map;
 
 final class JfrMetricsExtractor {
 
-    private static final String MAT_VEC = "juno.MatVec";
-    private static final String FORWARD = "juno.ForwardPass";
-    private static final String TOKENIZER = "juno.Tokenizer";
-    private static final String TEMPLATE = "juno.TemplateFormat";
-    private static final String LORA_STEP = "juno.LoraTrainStep";
+    private static final String MAT_VEC      = "juno.MatVec";
+    private static final String FORWARD      = "juno.ForwardPass";
+    private static final String TOKENIZER    = "juno.Tokenizer";
+    private static final String TEMPLATE     = "juno.TemplateFormat";
+    private static final String LORA_STEP    = "juno.LoraTrainStep";
+    private static final String TOKEN_PRODUCED = "juno.TokenProduced";
 
     private JfrMetricsExtractor() {
     }
@@ -82,6 +84,12 @@ final class JfrMetricsExtractor {
         List<Long> loraBackwardMs = new ArrayList<>();
         List<Long> loraOptimizerMs = new ArrayList<>();
         int loraStepCount = 0;
+
+        // TokenProduced — coordinator-side delivery timestamps for TPS computation.
+        // These are instantaneous events; we only need the wall-clock span and count.
+        int tokenProducedCount = 0;
+        Instant tokenProducedFirst = null;
+        Instant tokenProducedLast  = null;
 
         for (Path jfrFile : jfrFiles) {
             if (!Files.exists(jfrFile))
@@ -132,6 +140,14 @@ final class JfrMetricsExtractor {
                             if (ev.hasField("optimizerMs"))
                                 loraOptimizerMs.add(ev.getLong("optimizerMs"));
                         }
+                        case TOKEN_PRODUCED -> {
+                            tokenProducedCount++;
+                            Instant ts = ev.getStartTime();
+                            if (tokenProducedFirst == null || ts.isBefore(tokenProducedFirst))
+                                tokenProducedFirst = ts;
+                            if (tokenProducedLast == null || ts.isAfter(tokenProducedLast))
+                                tokenProducedLast = ts;
+                        }
                         default -> { /* ignore JDK and other events */ }
                     }
                 }
@@ -176,6 +192,17 @@ final class JfrMetricsExtractor {
         m.put("juno.LoraTrainStep.forward_ms.p95", JfrPercentiles.p95LongMs(loraForwardMs));
         m.put("juno.LoraTrainStep.backward_ms.p95", JfrPercentiles.p95LongMs(loraBackwardMs));
         m.put("juno.LoraTrainStep.optimizer_ms.p95", JfrPercentiles.p95LongMs(loraOptimizerMs));
+
+        double elapsedSeconds = 0.0;
+        if (tokenProducedFirst != null && tokenProducedLast != null && tokenProducedCount > 1) {
+            java.time.Duration span = java.time.Duration.between(tokenProducedFirst, tokenProducedLast);
+            elapsedSeconds = span.toNanos() / 1_000_000_000.0;
+        }
+        double tps = (elapsedSeconds > 0) ? tokenProducedCount / elapsedSeconds : 0.0;
+
+        m.put("juno.TokenProduced.count",            (double) tokenProducedCount);
+        m.put("juno.TokenProduced.elapsed_seconds",  elapsedSeconds);
+        m.put("juno.TokenProduced.tps",              tps);
 
         return new MetricsSnapshot.ModelMetrics(model.getName(), model.getPath(), jfrName, m);
     }

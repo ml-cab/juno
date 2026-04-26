@@ -197,6 +197,10 @@ public final class GenerationLoop {
 						active[i] = false;
 					} else {
 						entries.get(i).consumer().onToken(piece, nextToken, generated[i].size());
+						TokenProducedEvent tpe = new TokenProducedEvent();
+						tpe.requestId = requestIds[i];
+						tpe.position  = generated[i].size();
+						tpe.commit();
 						texts[i].append(piece);
 						generated[i].add(nextToken);
 						allTokens[i] = appendToken(allTokens[i], nextToken);
@@ -346,6 +350,10 @@ public final class GenerationLoop {
 
 			// Step 7: Stream to client
 			consumer.onToken(piece, nextToken, step);
+			TokenProducedEvent tpe = new TokenProducedEvent();
+			tpe.requestId = kvKey;
+			tpe.position  = step;
+			tpe.commit();
 			fullText.append(piece);
 			generatedIds.add(nextToken);
 

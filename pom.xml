@@ -8,8 +8,8 @@
 	<version>0.1.0-SNAPSHOT</version>
 	<packaging>pom</packaging>
 	<name>Java Unified Neural Orchestration</name>
-	<description>Distributed LLM inference engine for JVM clusters</description>
-	<url>https://github.com/ml-cab/juno</url>
+	<description>Java Unified Neural Orchestration (Juno) -- distributed LLM inference and fine-tuning framework</description>
+	<url>https://ml.cab/juno.html</url>
 	<modules>
 		<module>api</module>
 		<!-- core libraries -->

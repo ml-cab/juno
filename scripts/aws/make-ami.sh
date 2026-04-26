@@ -260,7 +260,10 @@ ssh $SSH_OPTS "ubuntu@${BAKE_IP}" "true" || die "SSH did not become available wi
 if $IS_GPU; then
   inf "Installing JDK 25 + Maven + CUDA 12.3 on ${BAKE_IP} (~20-40 min — DKMS build)…"
   inf "  SSH access while baking: ssh -i ${BAKE_KEY_FILE} ubuntu@${BAKE_IP}"
-  ssh $SSH_OPTS "ubuntu@${BAKE_IP}" 'sudo bash -s' <<'INSTALL'
+  # Redirect to stderr: this heredoc's stdout would otherwise be captured by
+  # AMI_ID=$(bash make-ami.sh ...) in juno-deploy.sh, corrupting AMI_ID with
+  # the full bake log instead of just the bare ami-... id.
+  ssh $SSH_OPTS "ubuntu@${BAKE_IP}" 'sudo bash -s' >&2 <<'INSTALL'
 set -euo pipefail
 # Suppress perl/apt locale warnings caused by the client forwarding LC_* vars
 # (e.g. bg_BG.UTF-8) that are not installed on this Ubuntu server.
@@ -330,7 +333,7 @@ INSTALL
 
 else
   inf "Installing JDK 25 + Maven on ${BAKE_IP}…"
-  ssh $SSH_OPTS "ubuntu@${BAKE_IP}" 'sudo bash -s' <<'INSTALL'
+  ssh $SSH_OPTS "ubuntu@${BAKE_IP}" 'sudo bash -s' >&2 <<'INSTALL'
 set -euo pipefail
 export LC_ALL=C LANG=C LANGUAGE=C
 export DEBIAN_FRONTEND=noninteractive
