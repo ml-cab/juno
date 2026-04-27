@@ -1,5 +1,77 @@
 ## Status
 
+**Session 29** — OpenAI-compatible REST API (`POST /v1/chat/completions`, `GET /v1/models`).
+
+### OpenAI-compatible API
+
+Any client that speaks the OpenAI Chat Completions wire format — LangChain, LlamaIndex,
+LiteLLM, the OpenAI Python/Node SDKs, or any internal tool built against `openai.*` — works
+against Juno with a single base-URL change. No prompt reformatting, no adapter library, no
+glue code.
+
+**New classes (coordinator module):**
+
+- **`OpenAiAdapter`** — pure static mapping helpers between Juno internals and the OpenAI wire
+  format: `repetitionPenaltyFromFrequencyPenalty(float)` (OpenAI −2..2 range → Juno ≥1),
+  `validateCompletionsN(Integer)` (rejects n ≠ 1), `toOpenAiFinishReason(StopReason)` (`stop`
+  / `length` / `error`), and `chatCompletionId(String)` (`chatcmpl-` + compact UUID).
+- **`OpenAiChatHandler`** — Javalin handler class owning three endpoints:
+  - `POST /v1/chat/completions` — deserialises `OaiChatCompletionRequest` (Jackson,
+    `@JsonIgnoreProperties(ignoreUnknown = true)`), validates `n` and `messages`, builds an
+    `InferenceRequest` + `SamplingParams`, then dispatches to either
+    `scheduler.submitAndWait()` (blocking, returns `ChatCompletion` JSON) or
+    `scheduler.submit()` (streaming, writes `text/event-stream` chunks terminated by
+    `data: [DONE]`).
+  - `GET /v1/models` — filters `ModelRegistry` to `LOADED` status, wraps each
+    `ModelDescriptor` in an OpenAI `Model` object with `x_juno_*` extension fields.
+  - `GET /v1/models/{modelId}` — single-model lookup; 404 when absent.
+
+**Modified: `InferenceApiServer`** — constructs `OpenAiChatHandler` in the constructor
+(passing the latency callback so `HealthReporter` still records P99). Routes
+`POST /v1/chat/completions` and `GET /v1/models[/{modelId}]` to the handler.
+The existing `POST /v1/inference` and `POST /v1/inference/stream` endpoints are untouched.
+
+**Modified: `ConsoleMain`** (`player` module) — `--api-port N` flag starts a
+`RequestScheduler` + `InferenceApiServer` alongside the existing REPL in both `local` and
+cluster modes. A virtual-thread shutdown hook calls `apiServer.stop()` on JVM exit.
+`buildLocalModelRegistry()` populates a `ModelRegistry` from the in-process `LlamaConfig` so
+`GET /v1/models` returns the loaded model immediately.
+
+**Modified: `scripts/run.sh`** — `--api-port N` flag wired into both `cmd_local()` and
+`cmd_cluster()`. Environment override: `API_PORT`.
+
+**New file: `api/src/main/resources/juno-api.yaml`** — OpenAPI 3.0.3 spec for the public
+client-facing API. Documents all request fields with their Juno internal mappings, the SSE
+chunk event sequence, Juno extension fields (`x_juno_priority`, `x_juno_session_id`,
+`x_juno_top_k`, `x_juno_latency_ms`, `x_juno_retry_after_ms`, `x_juno_queue_depth`), and
+all error codes.
+
+**New test: `OpenAiAdapterTest`** — unit tests for all four mapping helpers.
+
+**Field mapping summary (request):**
+
+| OpenAI field | Juno internal | Notes |
+|---|---|---|
+| `model` | `modelId` | First loaded model if omitted |
+| `messages[].role` / `.content` | `ChatMessage` | Text only; images not supported |
+| `temperature` | `SamplingParams.temperature` | 0.0–2.0; default 0.7 |
+| `top_p` | `SamplingParams.topP` | 0.0–1.0; default 0.9 |
+| `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 512 |
+| `max_tokens` | `SamplingParams.maxTokens` | Deprecated alias |
+| `frequency_penalty` | `SamplingParams.repetitionPenalty` | `1 + max(0, fp/2)` |
+| `stream` | route selection | false → blocking JSON; true → SSE |
+| `n` | — | Only 1 is accepted; other values → 400 |
+| `stop`, `presence_penalty`, `logit_bias`, `user`, `seed` | — | Silently ignored |
+| `x_juno_priority` | `RequestPriority` | HIGH / NORMAL / LOW |
+| `x_juno_session_id` | `InferenceRequest.sessionId` | Enables KV-cache reuse across turns |
+| `x_juno_top_k` | `SamplingParams.topK` | 0 = disabled; default 50 |
+
+All modules compile. All existing tests pass. `OpenAiAdapterTest` (4 assertions) passes.
+
+---
+
+## Status
+
 **Session 28** — Health dashboard: CPU load metric, role-conditional secondary metric, node throughput.
 
 ### Health dashboard fixes

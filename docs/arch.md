@@ -77,6 +77,70 @@ collects and sums in O(N x vocabSize).
 
 ---
 
+## REST API Layer
+
+`InferenceApiServer` (Javalin) is the single HTTP entry point on the coordinator. It exposes
+two API surfaces that share the same underlying `RequestScheduler` and `GenerationLoop`.
+
+### Juno native API
+
+| Method | Path | Handler |
+|--------|------|---------|
+| `POST` | `/v1/inference` | `handleBlockingInference` — blocking, returns `GenerationResult` |
+| `POST` | `/v1/inference/stream` | `handleStreamingInference` — SSE, one event per token |
+| `GET` | `/v1/models` | `OpenAiChatHandler.handleListModels` |
+| `GET` | `/v1/models/{modelId}` | `OpenAiChatHandler.handleGetModel` |
+| `DELETE` | `/v1/models/{modelId}` | `handleUnloadModel` |
+
+### OpenAI-compatible API
+
+| Method | Path | Handler |
+|--------|------|---------|
+| `POST` | `/v1/chat/completions` | `OpenAiChatHandler.handleChatCompletion` |
+| `GET` | `/v1/models` | `OpenAiChatHandler.handleListModels` |
+| `GET` | `/v1/models/{model}` | `OpenAiChatHandler.handleGetModel` |
+
+Any client that speaks the OpenAI Chat Completions wire format works against Juno with only a
+base-URL change — no prompt reformatting, no adapter library, no glue code.
+
+```
+[OpenAI SDK / LangChain / LlamaIndex / curl]
+    |
+    | POST /v1/chat/completions  (JSON body, snake_case fields)
+    |
+[OpenAiChatHandler]
+    |-- deserialise OaiChatCompletionRequest   (Jackson, @JsonIgnoreProperties)
+    |-- validate n, messages
+    |-- build InferenceRequest + SamplingParams via OpenAiAdapter
+    |-- resolveModelId  (first loaded model if omitted)
+    |
+    +-- stream=false --> scheduler.submitAndWait()
+    |                        |
+    |                    GenerationResult
+    |                        |
+    |                    wrap as ChatCompletion JSON (OpenAI envelope)
+    |
+    +-- stream=true  --> scheduler.submit(request, TokenConsumer)
+                             |
+                         SSE chunks  (one per token, text/event-stream)
+                             |
+                         data: [DONE]
+```
+
+`OpenAiAdapter` is a pure static utility class with no state:
+
+- `repetitionPenaltyFromFrequencyPenalty(float)` — maps OpenAI's `frequency_penalty` (−2..2)
+  to Juno's `repetitionPenalty` (≥1) via `1 + max(0, fp/2)`.
+- `validateCompletionsN(Integer)` — returns an error message when `n ≠ 1`; null when valid.
+- `toOpenAiFinishReason(StopReason)` — `EOS_TOKEN`/`STOP_TOKEN` → `"stop"`;
+  `MAX_TOKENS` → `"length"`; `ERROR` → `"error"`.
+- `chatCompletionId(String)` — formats the completion ID as `chatcmpl-` + UUID without hyphens.
+
+No changes to `GenerationLoop`, `RequestScheduler`, the sampler, the tokenizer, or any node
+code are required by the OpenAI layer. It is a pure translation shim above the scheduler.
+
+---
+
 ## Handler Routing
 
 `ForwardPassHandlerLoader` reads `general.architecture` from GGUF metadata and dispatches:
@@ -97,6 +161,7 @@ MatVec (injected into handler):
     CudaMatVec   <- cublasSgemv_v2 (FP32 host path) / resident FP32 or FP16 weights:
                     Llama + Phi-3 GPU use DeviceHalfMatrix + cublasHSSgemvStridedBatched;
                     per-thread CUDA stream + async H2D/D2H around GEMV;
+                    synchronized(gpuContext.cublasSerializationLock());
                     GpuContext.shared(dev); weights uploaded once at load time;
                     releaseGpuResources() frees VRAM on unload
 
@@ -119,6 +184,12 @@ full transformer forward pass end to end.
 
 **No Spring Boot.** Javalin for REST. Virtual threads (`Executors.newVirtualThreadPerTaskExecutor()`)
 on the gRPC `ServerBuilder` — required to avoid OS-thread saturation under concurrent prefill sessions.
+
+**OpenAI wire compatibility without framework coupling.** `OpenAiChatHandler` and `OpenAiAdapter`
+are new classes added to the coordinator module. No existing classes were modified beyond
+`InferenceApiServer` wiring and `ConsoleMain` flag parsing. The existing `POST /v1/inference`
+and `POST /v1/inference/stream` endpoints are untouched. Adding new classes rather than
+extending `InferenceApiServer` keeps each concern isolated and the existing server stable.
 
 **Lazy dequantization on CPU; eager upload on GPU.** On the CPU path, dequantization runs
 one 256-element block at a time inside the matmul loop (peak live float footprint ~1 kB instead
