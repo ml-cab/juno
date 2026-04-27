@@ -30,105 +30,47 @@ a single launcher — with no external runtime dependencies.
 
 ## Architecture
 
-Two distribution strategies are supported, selected with `--pType`:
-
-### Pipeline parallel (default — `--pType pipeline`)
-
-Layers are split into contiguous blocks across nodes. The activation tensor flows
-`node-1 -> node-2 -> node-3` in serial. Each node computes a different depth slice of the
-transformer. Adding nodes increases total VRAM, enabling larger models.
-
-```
-[Client]  REST (Javalin) / gRPC streaming
-    |
-[Coordinator]
-    |-- GgufTokenizer       (BPE from GGUF metadata)
-    |-- ChatTemplateFormatter
-    |-- RequestScheduler    (virtual threads, CompletableFuture)
-    |-- Sampler             (temperature / top-k / top-p / rep. penalty)
-    |-- KVCacheManager      (GPU tier + CPU tier + PrefixCache trie)
-    +-- GenerationLoop      (prefill + decode + session KV reuse)
-              |
-              | gRPC activations (FLOAT16 / INT8 / FLOAT32, BE or LE wire order)
-              | serial: node-1 -> node-2 -> node-3
-              |
-    +--------------------------------------------+
-    |  Node 1       Node 2       Node 3  ...      |
-    |  L 0-7        L 8-14       L 15-21          |
-    |  + embed                   + output proj    |
-    |  NodeKVCacheAdapter wired into each handler |
-    |  LoraAdapterSet (optional, read-only)       |
-    +--------------------------------------------+
-```
-
-### Tensor parallel (`--pType tensor`)
-
-Every node holds all transformer layers but only a horizontal slice of weight matrices:
-attention heads `[headStart, headEnd)` and a proportional FFN width slice. The coordinator
-broadcasts input to all nodes simultaneously and reduces partial logit vectors with an
-element-wise sum (star AllReduce). Adding nodes increases throughput and reduces per-node
-memory pressure.
-
-```
-[Coordinator]
-    +-- GenerationLoop
-              |
-              | broadcast same tokens to all nodes (parallel)
-              |
-    +--------------------------------------------+
-    |  Node 1       Node 2       Node 3  ...      |
-    |  L 0-21       L 0-21       L 0-21           |
-    |  heads 0-10   heads 11-21  heads 22-32      |
-    |  rank=0       rank=1       rank=2            |
-    +--------------------------------------------+
-              |
-              | partial logits from each node (parallel)
-              |
-    [AllReduce: element-wise sum -> full logit vector]
-              |
-    [Sampler]
-```
-
-Constraint: `numHeads % nodeCount == 0`.
+Juno supports two distribution strategies: **pipeline-parallel** (contiguous layer shards flow
+serially node-1 → node-2 → node-3, pooling VRAM to enable larger models) and **tensor-parallel**
+(all nodes hold all layers but a horizontal weight slice; the coordinator broadcasts tokens and
+reduces partial logits via star AllReduce, increasing throughput). For full component diagrams,
+module dependency graph, handler routing, and key design decisions see [docs/arch.md](docs/arch.md).
 
 ---
 
 ## Quick Start
 
-```bash
-# Download a model (TinyLlama -- 637 MB, runs on any CPU)
-wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+Juno has two deployment modes:
 
-# Build
-mvn clean package -DskipTests
+- **Local** — single machine, via `scripts/run.sh` and the built-in `player` REPL
+- **AWS Cloud** — distributed cluster via `scripts/aws/juno-deploy.sh`, coordinated by `juno-master` with `juno-node` running on each inference node
 
-# Single-JVM local mode (fastest startup, no forking)
-./juno local --model-path /path/to/model.gguf
+**Steps:**
 
-# Local mode with OpenAI-compatible REST API on port 8080
-./juno local --model-path /path/to/model.gguf --api-port 8080
+1. **Build**
 
-# 3-node pipeline-parallel cluster
-./juno --model-path /path/to/model.gguf
+   ```bash
+   mvn clean package -DskipTests
+   ```
 
-# 3-node cluster with OpenAI-compatible REST API on port 8080
-./juno --model-path /path/to/model.gguf --api-port 8080
+2. **Run locally** — launch the interactive REPL or serve the OpenAI-compatible REST API:
 
-# 3-node tensor-parallel cluster
-./juno --pType tensor --model-path /path/to/model.gguf
+   ```bash
+   ./juno local --model-path /path/to/model.gguf
+   ./juno local --model-path /path/to/model.gguf --api-port 8080
+   ```
 
-# LoRA fine-tuning REPL
-./juno lora --model-path /path/to/model.gguf
+   See [docs/howto.md](docs/howto.md) for the full flag reference, cluster mode, LoRA inference, and more.
 
-# Apply a trained adapter at inference
-./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+3. **Deploy to AWS** — requires the AWS CLI installed and an IAM user with EC2/IAM permissions:
 
-# Real-model smoke test (8 checks, exits 0/1)
-./juno test --model-path /path/to/model.gguf
-```
+   ```bash
+   cd scripts/aws
+   ./launcher.sh juno-deploy.sh setup --instance-type g4dn.xlarge --node-count 3
+   ./launcher.sh juno-deploy.sh start
+   ```
 
-For all flags, environment overrides, `merge`, profiling, and AWS deployment see
-[docs/howto.md](docs/howto.md).
+   > Questions about cloud deployment? Reach us at [dev@ml.cab](mailto:dev@ml.cab) or join our Discord (link TBD).
 
 ---
 
@@ -189,28 +131,11 @@ The full OpenAPI 3.0 specification is in `api/src/main/resources/juno-api.yaml`.
 
 ## GPU Support
 
-GPU acceleration is provided via **CUDA/cuBLAS** (org.bytedeco cuda-platform, CUDA 12.x).
-Juno manages the GPU weight lifecycle explicitly:
-
-- Weights are dequantized once and uploaded as **FP16 (`DeviceHalfMatrix`)** on load. VRAM is
-  freed deterministically via `releaseGpuResources()` on shard unload or swap.
-- Matrix-vector multiplications use **`cublasHSSgemvStridedBatched`** for FP16-resident Llama and
-  Phi-3 weights. Per-thread CUDA streams keep host and device transfers async.
-- On `cudaMalloc` failure, partial device buffers are closed and the handler falls back silently
-  to CPU quantized matmul for those projections.
-- **Multi-device:** `GpuContext.shared(deviceIndex)` provides one process-wide context per CUDA
-  device, selected with `-Djuno.cuda.device=N` (default `0`).
-- **Cluster mode:** each forked node JVM owns its own GPU context; the coordinator allocates none.
-
-To force CPU inference: pass `--cpu` or set `JUNO_USE_GPU=false`.
-
-GPU tests require CUDA 12.x and an NVIDIA driver:
-
-```bash
-mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
-mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl juno-master \
-  --enable-native-access=ALL-UNNAMED
-```
+GPU acceleration is provided via **CUDA/cuBLAS** (CUDA 12.x). Weights are dequantized once and
+uploaded as FP16 on load; VRAM is freed deterministically on shard unload or swap. In cluster
+mode, each forked node JVM owns its own GPU context; the coordinator allocates none. Pass `--cpu`
+or set `JUNO_USE_GPU=false` to force CPU inference. See [docs/arch.md](docs/arch.md) for the full
+GPU weight lifecycle and multi-device details.
 
 ---
 
@@ -285,19 +210,16 @@ Template is resolved from the model path via exact match then substring fallback
 ## Build and Test
 
 ```bash
-mvn clean package -DskipTests          # build -- produces shade jars
+mvn clean package -DskipTests          # build — produces shade jars
 
 mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,player
-                                       # unit tests -- no model file, no GPU needed
+                                       # unit tests — no model file, no GPU needed
 
-mvn verify -pl juno-master             # integration tests -- forks 3 JVM nodes (stub mode)
-                                       # includes ThreeNodeClusterIT and TensorParallelClusterIT
-
-mvn verify -pl juno-master -Pintegration -Dmodels=/path/to/models
-                                       # ModelLiveRunnerIT -- requires real model files
-
-./juno test --model-path /path/to/model.gguf   # real-model smoke test (8 checks)
+mvn verify -pl juno-master             # integration tests (stub mode, no model/GPU)
 ```
+
+For model-file integration tests, GPU tests (requires CUDA 12.x and an NVIDIA GPU), and the
+full smoke-test reference see [docs/howto.md](docs/howto.md).
 
 ---
 

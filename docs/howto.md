@@ -455,3 +455,32 @@ AWS cluster JFR:
 ./launcher.sh juno-deploy.sh setup --jfr 2m ...
 # Ctrl+C -> recordings collected from all nodes -> metrics printed -> instances stopped
 ```
+---
+
+### Build and Test
+
+Requires JDK 25+ and Maven 3.9+.
+
+```bash
+mvn clean package -DskipTests          # build — produces shade jars
+
+mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,player
+                                       # unit tests — no model file, no GPU needed
+
+mvn verify -pl juno-master             # integration tests — forks 3 JVM nodes (stub mode)
+                                       # includes ThreeNodeClusterIT and TensorParallelClusterIT
+
+mvn verify -pl juno-master -Pintegration -Dmodels=/path/to/models
+                                       # ModelLiveRunnerIT — requires real model files
+
+./juno test --model-path /path/to/model.gguf   # real-model smoke test (8 checks, exits 0/1)
+```
+
+**GPU tests** (requires CUDA 12.x and an NVIDIA GPU):
+
+```bash
+mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
+
+mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl juno-master \
+  --enable-native-access=ALL-UNNAMED
+```
