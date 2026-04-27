@@ -65,6 +65,10 @@ import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.NodeDescriptor;
 import cab.ml.juno.registry.NodeStatus;
 import cab.ml.juno.registry.ParallelismType;
+import cab.ml.juno.registry.ModelDescriptor;
+import cab.ml.juno.registry.ModelRegistry;
+import cab.ml.juno.registry.ModelStatus;
+import cab.ml.juno.registry.QuantizationType;
 import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.registry.ShardMap;
 import cab.ml.juno.registry.ShardPlanner;
@@ -131,6 +135,8 @@ public final class ConsoleMain {
 	private static int healthPort = cab.ml.juno.health.HealthMain.DEFAULT_PORT;
 	/** Active reporters — wired from runLocalRepl(); used to record per-inference latency. */
 	private static final java.util.List<HealthReporter> activeReporters = new java.util.ArrayList<>();
+	/** Optional local REST API port (OpenAI-compatible endpoint included). */
+	private static int apiPort = -1;
 	// ── Byte-order argument ───────────────────────────────────────────────────
 	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
 	private static String byteOrder = "BE";
@@ -323,6 +329,10 @@ public final class ConsoleMain {
 			case "--health":
 				healthMode = true;
 				break;
+			case "--api-port":
+				if (i + 1 < args.length)
+					apiPort = parseInt(args[++i], -1);
+				break;
 			default:
 				System.err.println("Unknown option: " + args[i]);
 				help = true;
@@ -379,6 +389,7 @@ public final class ConsoleMain {
 		System.out.println();
 		System.out.println("Other:");
 		System.out.println("  --health                   Start the standalone health-monitor HTTP server");
+		System.out.println("  --api-port N               Start local REST API (includes /v1/chat/completions)");
 		System.out.println("                             (no --model-path required)");
 		System.out.println("    --port N                   Listen port (default: 8081)");
 		System.out.println("    --stale-ms N               Node stale threshold in ms (default: 15000)");
@@ -1160,6 +1171,16 @@ public final class ConsoleMain {
 				config.hiddenDim(), config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop,
+				cab.ml.juno.coordinator.BatchConfig.disabled());
+		if (apiPort > 0) {
+			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
+			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
+			apiServer.start(apiPort);
+			print(Color.GREEN + "  ✔ Local API server on http://localhost:" + apiPort
+					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);
+			Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(apiServer::stop));
+		}
 
 		// ── Health reporters for in-process nodes ─────────────────────────────
 		if (healthMode) {
@@ -1177,6 +1198,17 @@ public final class ConsoleMain {
 		}
 
 		startRepl(loop, tokenizer);
+	}
+
+	private static ModelRegistry buildLocalModelRegistry(LlamaConfig config, String modelPath) {
+		ModelRegistry registry = new ModelRegistry(ShardPlanner.create());
+		long vramPerLayer = 4L * config.hiddenDim() * config.hiddenDim() * 2;
+		String filename = Path.of(modelPath).getFileName().toString();
+		QuantizationType quant = LlamaConfig.fromFilename(filename);
+		ModelDescriptor descriptor = new ModelDescriptor(filename, config.architecture(), config.numLayers(), config.hiddenDim(),
+				config.vocabSize(), config.numHeads(), vramPerLayer, quant, modelPath, ModelStatus.LOADED, Instant.now());
+		registry.putLoaded(descriptor);
+		return registry;
 	}
 
 	private static GpuContext prepareGpuContext() {
@@ -1197,19 +1229,14 @@ public final class ConsoleMain {
 		String modeLabel = pType == ParallelismType.TENSOR ? "tensor-parallel" : "pipeline-parallel";
 		print(Color.CYAN_BOLD + "▶ Starting 3-node " + modeLabel + " cluster (forked JVMs)..." + Color.RESET);
 
-		int totalLayers;
-		int numHeads;
-		int vocabSize;
+		LlamaConfig config;
 		try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
-			LlamaConfig cfg = LlamaConfig.from(cfgReader);
-			totalLayers = cfg.numLayers();
-			numHeads = cfg.numHeads();
-			vocabSize = cfg.vocabSize();
+			config = LlamaConfig.from(cfgReader);
 		}
 
 		ClusterHarness harness = (pType == ParallelismType.TENSOR)
-				? ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads)
-				: ClusterHarness.threeNodes(modelPath, totalLayers);
+				? ClusterHarness.tensorNodes(modelPath, config.numLayers(), config.numHeads())
+				: ClusterHarness.threeNodes(modelPath, config.numLayers());
 
 		if (healthMode) {
 			harness.withHealthUrl("http://localhost:" + healthPort);
@@ -1228,7 +1255,7 @@ public final class ConsoleMain {
 		print(Color.GREEN + "✔ Cluster ready  (" + modeLabel + "  " + dtype + " activations)" + Color.RESET + "\n");
 
 		var pipeline = (pType == ParallelismType.TENSOR) ? harness.pipeline()
-				: new ProcessPipelineClient(harness.nodeAddresses(), vocabSize, dtype);
+				: new ProcessPipelineClient(harness.nodeAddresses(), config.vocabSize(), dtype);
 
 		Tokenizer tokenizer;
 		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
@@ -1237,6 +1264,16 @@ public final class ConsoleMain {
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop,
+				cab.ml.juno.coordinator.BatchConfig.disabled());
+		if (apiPort > 0) {
+			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
+			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
+			apiServer.start(apiPort);
+			print(Color.GREEN + "  ✔ Cluster API server on http://localhost:" + apiPort
+					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);
+			Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(apiServer::stop));
+		}
 
 		startRepl(loop, tokenizer);
 	}

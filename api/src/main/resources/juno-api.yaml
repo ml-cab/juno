@@ -1,0 +1,908 @@
+#
+# Copyright 2026 Dmytro Soloviov
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+openapi: 3.0.3
+
+info:
+  title: Juno OpenAI-Compatible API
+  description: |
+    Public client-facing REST API for the Java Unified Neural Orchestration, aka jUno.
+    Wire-compatible with the OpenAI Chat Completions API — any client that
+    works with OpenAI (LangChain, LlamaIndex, LiteLLM, OpenAI SDK) needs only
+    a base-URL change to use Juno.
+
+    ## Compatibility scope
+
+    | OpenAI endpoint                 | Juno support         |
+    |---------------------------------|----------------------|
+    | POST /v1/chat/completions       | Full (blocking + SSE)|
+    | GET  /v1/models                 | Full                 |
+    | GET  /v1/models/{model}         | Full                 |
+
+    ## Field mapping — request
+
+    | OpenAI field            | Juno internal field               | Notes                                   |
+    |-------------------------|-----------------------------------|-----------------------------------------|
+    | model                   | modelId                           | First loaded model if omitted           |
+    | messages[].role         | messages[].role                   | system / user / assistant               |
+    | messages[].content      | messages[].content                | Text only; image content is not supported |
+    | temperature             | sampling.temperature              | 0.0–2.0; default 0.7                    |
+    | top_p                   | sampling.topP                     | 0.0–1.0; default 0.9                    |
+    | max_tokens              | sampling.maxTokens                | Deprecated alias; use max_completion_tokens |
+    | max_completion_tokens   | sampling.maxTokens                | 1–32768; default 512                    |
+    | frequency_penalty       | sampling.repetitionPenalty        | OpenAI range −2..2; mapped: 1 + penalty/2 (0→1.0, 2→2.0) |
+    | stream                  | (route selection)                 | false → blocking JSON; true → SSE chunks|
+    | n                       | —                                 | Only n=1 is supported; other values are rejected with 400 |
+    | stop                    | —                                 | Not implemented; ignored with a warning  |
+    | presence_penalty        | —                                 | Not implemented; silently ignored        |
+    | logit_bias              | —                                 | Not implemented; silently ignored        |
+    | user                    | —                                 | Not implemented; silently ignored        |
+    | seed                    | —                                 | Not implemented; silently ignored        |
+
+    ## Field mapping — response
+
+    | OpenAI field                          | Juno internal field       |
+    |---------------------------------------|---------------------------|
+    | id                                    | "chatcmpl-" + requestId   |
+    | object                                | "chat.completion"         |
+    | created                               | Unix epoch (seconds)      |
+    | model                                 | modelId                   |
+    | choices[0].message.role               | "assistant"               |
+    | choices[0].message.content            | text (full generated text)|
+    | choices[0].finish_reason              | finishReason              |
+    | usage.prompt_tokens                   | promptTokenCount          |
+    | usage.completion_tokens               | tokenCount                |
+    | usage.total_tokens                    | promptTokenCount + tokenCount |
+    | x-juno-latency-ms (response header)   | latencyMs                 |
+
+    ## Juno extensions
+
+    Juno-specific fields in the request body are namespaced under `x_juno_*`
+    to avoid conflicts with OpenAI field names. They are all optional — omitting
+    them gives standard OpenAI-compatible behaviour.
+
+    | Extension field      | Type    | Description                                              |
+    |----------------------|---------|----------------------------------------------------------|
+    | x_juno_priority      | string  | HIGH / NORMAL (default) / LOW — scheduler queue priority |
+    | x_juno_session_id    | string  | Stable ID across turns; enables KV-cache reuse           |
+    | x_juno_top_k         | integer | Top-K sampling cutoff (0 = disabled; default 50)         |
+
+    ## Streaming (SSE)
+
+    With `"stream": true` the response is a sequence of `text/event-stream`
+    events. Each event contains a `ChatCompletionChunk` object. The final event
+    has `choices[0].finish_reason` set and `choices[0].delta.content` set to `""`.
+    The stream is terminated by `data: [DONE]` as per the OpenAI convention.
+
+    Chunk event shape:
+    ```
+    data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","created":1700000000,
+           "model":"llama3-8b","choices":[{"index":0,"delta":{"role":"assistant","content":" Hi"},
+           "finish_reason":null}]}
+
+    data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","created":1700000000,
+           "model":"llama3-8b","choices":[{"index":0,"delta":{"content":""},
+           "finish_reason":"stop"}]}
+
+    data: [DONE]
+    ```
+
+    ## Error codes
+
+    | HTTP | error code        | Cause                                        |
+    |------|-------------------|----------------------------------------------|
+    | 400  | invalid_request   | Missing/empty messages, n > 1                |
+    | 503  | service_unavailable | No model loaded or cluster unavailable      |
+    | 429  | rate_limit_exceeded | Scheduler queue full                        |
+    | 500  | internal_error    | Unexpected inference error                   |
+
+  version: 0.1.0-SNAPSHOT
+  contact:
+    name: jUno
+    url: https://ml.cab/juno
+
+servers:
+  - url: http://localhost:8080/v1
+    description: Local coordinator
+  - url: http://{coordinator_host}:8080/v1
+    description: Remote coordinator
+    variables:
+      coordinator_host:
+        default: localhost
+        description: Coordinator hostname or IP
+
+tags:
+  - name: chat
+    description: OpenAI-compatible chat completions
+  - name: models
+    description: Model discovery
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATHS
+# ─────────────────────────────────────────────────────────────────────────────
+
+paths:
+
+  # ── Chat Completions ────────────────────────────────────────────────────────
+
+  /chat/completions:
+    post:
+      tags: [chat]
+      operationId: createChatCompletion
+      summary: Create a chat completion
+      description: |
+        Wire-compatible with OpenAI's POST /v1/chat/completions.
+
+        When `stream` is false (default) the coordinator uses
+        `OpenAiChatHandler.handleChatCompletion` → `scheduler.submitAndWait()`
+        and returns a single `ChatCompletion` object.
+
+        When `stream` is true the handler switches to SSE and streams
+        `ChatCompletionChunk` events (first chunk after prefill via
+        `TokenConsumer.onPrefillComplete`), then `data: [DONE]`.
+
+        ## Implementation mapping
+
+        The coordinator's `/v1/chat/completions` handler (`OpenAiChatHandler`):
+        1. Deserialises the request body (Jackson, snake_case fields).
+        2. Translates it to an `InferenceRequest` (and `SamplingParams`).
+        3. Dispatches to `scheduler.submitAndWait()` (blocking) or
+           `scheduler.submit()` (streaming).
+        4. Wraps the `GenerationResult` or token stream in the OpenAI response envelope.
+
+        No changes to `GenerationLoop`, `RequestScheduler`, or any node code
+        are required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+            examples:
+              basic_blocking:
+                summary: Simple blocking request
+                value:
+                  model: llama3-8b
+                  messages:
+                    - role: system
+                      content: You are a helpful assistant.
+                    - role: user
+                      content: What is Java?
+                  temperature: 0.7
+                  max_completion_tokens: 512
+              streaming:
+                summary: Streaming request
+                value:
+                  model: llama3-8b
+                  messages:
+                    - role: user
+                      content: Tell me a joke.
+                  stream: true
+                  temperature: 0.9
+                  top_p: 0.95
+              juno_extensions:
+                summary: Request with Juno-specific extensions
+                value:
+                  model: llama3-8b
+                  messages:
+                    - role: user
+                      content: Continue our conversation.
+                  x_juno_session_id: "sess-550e8400-e29b-41d4-a716-446655440000"
+                  x_juno_priority: HIGH
+                  x_juno_top_k: 40
+      responses:
+        '200':
+          description: |
+            Successful completion.
+            - Content-Type `application/json` when `stream` is false.
+            - Content-Type `text/event-stream` when `stream` is true.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletion'
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionChunk'
+              example: |
+                data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1700000000,"model":"llama3-8b","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+                data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1700000000,"model":"llama3-8b","choices":[{"index":0,"delta":{"content":" Java"},"finish_reason":null}]}
+
+                data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1700000000,"model":"llama3-8b","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}
+
+                data: [DONE]
+        '400':
+          description: Invalid request (missing messages, n > 1, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  message: "messages must not be empty"
+                  type: invalid_request_error
+                  code: invalid_request
+        '429':
+          description: Scheduler queue full
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  message: "Request queue is full. Retry after 2500 ms."
+                  type: rate_limit_error
+                  code: rate_limit_exceeded
+        '503':
+          description: No model loaded or cluster unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  message: "No model is currently loaded"
+                  type: service_unavailable_error
+                  code: service_unavailable
+        '500':
+          description: Unexpected inference error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── Models ──────────────────────────────────────────────────────────────────
+
+  /models:
+    get:
+      tags: [models]
+      operationId: listModels
+      summary: List available models
+      description: |
+        Returns all models registered in the Juno cluster that are in LOADED
+        or READY status — the set of models that can be used in
+        `/v1/chat/completions`.
+
+        The response envelope matches the OpenAI `ListModels` format so that
+        existing SDK code like `client.models.list()` works without changes.
+
+        ## Implementation mapping
+
+        Calls `ModelRegistry.listModels()`, filters to status=LOADED,
+        and wraps each `ModelDescriptor` as an OpenAI `Model` object:
+        - `id` = modelId
+        - `object` = "model"
+        - `created` = epoch of `loadedAt` (or 0 if unavailable)
+        - `owned_by` = "juno"
+
+        Juno-specific fields (`architecture`, `quantization`, `totalLayers`,
+        `hiddenDim`, `vocabSize`) are exposed via `x_juno_*` extensions on
+        the `Model` schema.
+      responses:
+        '200':
+          description: List of available models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelList'
+              example:
+                object: list
+                data:
+                  - id: llama3-8b
+                    object: model
+                    created: 1700000000
+                    owned_by: juno
+                    x_juno_architecture: llama3
+                    x_juno_quantization: Q4_K_M
+                    x_juno_total_layers: 32
+                    x_juno_hidden_dim: 4096
+                    x_juno_vocab_size: 32000
+                    x_juno_status: LOADED
+
+  /models/{model}:
+    get:
+      tags: [models]
+      operationId: retrieveModel
+      summary: Retrieve a model
+      description: |
+        Returns metadata for a single model by ID. Returns 404 if the model
+        is not registered (regardless of load status).
+
+        Wire-compatible with OpenAI `GET /v1/models/{model}`.
+      parameters:
+        - name: model
+          in: path
+          required: true
+          schema:
+            type: string
+            example: llama3-8b
+      responses:
+        '200':
+          description: Model metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Model'
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  message: "Model 'llama3-8b' not found"
+                  type: invalid_request_error
+                  code: model_not_found
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPONENTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+components:
+
+  schemas:
+
+    # ── Request ───────────────────────────────────────────────────────────────
+
+    ChatCompletionRequest:
+      type: object
+      required: [messages]
+      properties:
+
+        model:
+          type: string
+          description: |
+            ID of the model to use. Must match a model registered in Juno
+            (`GET /v1/models`). If omitted, the first loaded model is used.
+          example: llama3-8b
+
+        messages:
+          type: array
+          minItems: 1
+          description: |
+            Conversation history. Each element is a chat message with a role
+            and text content. The coordinator passes this list directly to
+            `ChatTemplateFormatter` via the `InferenceRequest`.
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+
+        temperature:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 2.0
+          default: 0.7
+          description: |
+            Sampling temperature. Lower = more deterministic; higher = more
+            creative. 0.0 approaches greedy decoding.
+
+            Maps to: `SamplingParams.temperature`
+          example: 0.7
+
+        top_p:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          default: 0.9
+          description: |
+            Nucleus sampling: restrict the candidate set to the smallest subset
+            of tokens whose cumulative probability exceeds this value.
+            Set to 1.0 to disable (consider all tokens).
+
+            Maps to: `SamplingParams.topP`
+          example: 0.9
+
+        max_tokens:
+          type: integer
+          minimum: 1
+          maximum: 32768
+          deprecated: true
+          description: |
+            Deprecated alias for `max_completion_tokens`. Accepted for
+            compatibility. `max_completion_tokens` takes precedence if both
+            are present.
+
+            Maps to: `SamplingParams.maxTokens`
+
+        max_completion_tokens:
+          type: integer
+          minimum: 1
+          maximum: 32768
+          default: 512
+          description: |
+            Maximum number of tokens to generate. Generation stops at this
+            limit (finish_reason = "length") or at EOS, whichever comes first.
+
+            Maps to: `SamplingParams.maxTokens`
+          example: 512
+
+        stream:
+          type: boolean
+          default: false
+          description: |
+            If false (default), the response is a single `ChatCompletion` JSON
+            object returned after full generation completes.
+
+            If true, the response is a `text/event-stream` of
+            `ChatCompletionChunk` events, one per generated token, terminated
+            by `data: [DONE]`. This is lower latency for the user because
+            tokens appear as they are sampled.
+
+            Route selection in Juno:
+            - false → `OpenAiChatHandler` blocking path
+            - true  → `OpenAiChatHandler` SSE path
+
+        n:
+          type: integer
+          minimum: 1
+          maximum: 1
+          default: 1
+          description: |
+            Number of completions to generate. Juno only supports n=1. Any
+            value other than 1 results in a 400 error.
+
+        frequency_penalty:
+          type: number
+          format: float
+          minimum: -2.0
+          maximum: 2.0
+          default: 0.0
+          description: |
+            Penalises tokens proportionally to how often they have appeared
+            so far. Positive values reduce repetition; negative values
+            increase it.
+
+            Mapping to Juno: `repetitionPenalty = 1.0 + max(0, frequency_penalty / 2.0)`
+            - 0.0  → repetitionPenalty = 1.0 (disabled)
+            - 2.0  → repetitionPenalty = 2.0 (strong penalty)
+            - negative values → clamped to 0 (penalty disabled)
+
+            Note: OpenAI's frequency_penalty and Juno's repetitionPenalty are
+            not identical algorithms. The mapping preserves the direction and
+            approximate magnitude.
+
+        presence_penalty:
+          type: number
+          format: float
+          minimum: -2.0
+          maximum: 2.0
+          default: 0.0
+          description: |
+            Not implemented. Accepted and silently ignored for compatibility.
+
+        stop:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+              maxItems: 4
+          description: |
+            Not implemented. Accepted and silently ignored for compatibility.
+            Use `x_juno_*` extensions for stop-token control (coming in a
+            future release).
+
+        logit_bias:
+          type: object
+          additionalProperties:
+            type: number
+          description: |
+            Not implemented. Accepted and silently ignored for compatibility.
+
+        user:
+          type: string
+          description: |
+            Not implemented. Accepted and silently ignored for compatibility.
+
+        seed:
+          type: integer
+          description: |
+            Not implemented. Accepted and silently ignored for compatibility.
+
+        # ── Juno extensions ─────────────────────────────────────────────────
+
+        x_juno_priority:
+          type: string
+          enum: [HIGH, NORMAL, LOW]
+          default: NORMAL
+          description: |
+            Juno-specific. Request priority in the coordinator's
+            `PriorityBlockingQueue`. HIGH requests are dispatched before
+            NORMAL and LOW requests of the same arrival batch.
+
+            Maps to: `RequestPriority` enum, passed to `InferenceRequest.of()`
+          example: NORMAL
+
+        x_juno_session_id:
+          type: string
+          description: |
+            Juno-specific. When set, enables multi-turn KV-cache reuse.
+            Supply the same value across all turns of a conversation. The
+            coordinator will use this as the `sessionId` in `InferenceRequest`,
+            which maps to the KV-cache key via `InferenceRequest.kvCacheKey()`.
+
+            Omit for stateless single-turn requests (KV cache is discarded
+            after each response).
+
+            Call DELETE /v1/sessions/{session_id} (future endpoint) to
+            explicitly release KV memory when the conversation ends. Until
+            that endpoint exists, the KV cache entry is evicted automatically
+            under memory pressure.
+          example: "sess-550e8400-e29b-41d4-a716-446655440000"
+
+        x_juno_top_k:
+          type: integer
+          minimum: 0
+          default: 50
+          description: |
+            Juno-specific. Top-K sampling cutoff: at each step, restrict the
+            candidate set to the K most probable tokens before applying top_p
+            and temperature. 0 = disabled (all tokens are candidates).
+
+            Maps to: `SamplingParams.topK`
+          example: 50
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant]
+          description: |
+            Role of the message author. Passed directly to
+            `ChatTemplateFormatter` which formats it according to the model's
+            chat template (llama3, mistral, chatml, phi3, etc.).
+          example: user
+        content:
+          type: string
+          description: Text content of the message. Image content is not supported.
+          example: What is Java?
+
+    # ── Responses — blocking ─────────────────────────────────────────────────
+
+    ChatCompletion:
+      type: object
+      required: [id, object, created, model, choices, usage]
+      description: |
+        Full completion response returned when `stream` is false.
+        Wire-identical to the OpenAI `ChatCompletion` object.
+      properties:
+        id:
+          type: string
+          description: |
+            Unique identifier for this completion. Format: "chatcmpl-{requestId}"
+            where requestId is the UUID assigned by the coordinator.
+          example: chatcmpl-550e8400e29b41d4a716446655440000
+        object:
+          type: string
+          enum: [chat.completion]
+          example: chat.completion
+        created:
+          type: integer
+          format: int64
+          description: Unix timestamp (seconds) when the request was received.
+          example: 1700000000
+        model:
+          type: string
+          description: Model ID used for this completion.
+          example: llama3-8b
+        choices:
+          type: array
+          description: |
+            Always contains exactly one element (index 0) because Juno only
+            supports n=1.
+          items:
+            $ref: '#/components/schemas/ChatCompletionChoice'
+          minItems: 1
+          maxItems: 1
+        usage:
+          $ref: '#/components/schemas/CompletionUsage'
+        x_juno_latency_ms:
+          type: integer
+          description: |
+            Juno-specific. End-to-end inference latency in milliseconds,
+            measured on the coordinator from request receipt to last token.
+
+            Maps from: `GenerationResult.latency().toMillis()`
+          example: 843
+
+    ChatCompletionChoice:
+      type: object
+      required: [index, message, finish_reason]
+      properties:
+        index:
+          type: integer
+          enum: [0]
+          description: Always 0 (Juno only supports n=1).
+          example: 0
+        message:
+          $ref: '#/components/schemas/AssistantMessage'
+        finish_reason:
+          type: string
+          nullable: true
+          enum: [stop, length, error]
+          description: |
+            Reason generation ended.
+            - stop   → EOS token or natural end-of-generation
+                       (maps from `GenerationResult.StopReason.EOS_TOKEN` or `STOP_TOKEN`)
+            - length → `max_completion_tokens` limit reached
+                       (maps from `GenerationResult.StopReason.MAX_TOKENS`)
+            - error  → generation error occurred
+                       (maps from `GenerationResult.StopReason.ERROR`)
+          example: stop
+
+    AssistantMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [assistant]
+          example: assistant
+        content:
+          type: string
+          description: |
+            Full generated text. Maps from `GenerationResult.text()`.
+          example: "Java is a high-level, object-oriented programming language..."
+
+    CompletionUsage:
+      type: object
+      required: [prompt_tokens, completion_tokens, total_tokens]
+      properties:
+        prompt_tokens:
+          type: integer
+          description: |
+            Number of tokens in the input prompt (after chat-template formatting).
+            Maps from `GenerationResult.promptTokens()`.
+          example: 18
+        completion_tokens:
+          type: integer
+          description: |
+            Number of tokens generated.
+            Maps from `GenerationResult.generatedTokens()`.
+          example: 42
+        total_tokens:
+          type: integer
+          description: Sum of prompt_tokens and completion_tokens.
+          example: 60
+
+    # ── Responses — streaming ────────────────────────────────────────────────
+
+    ChatCompletionChunk:
+      type: object
+      required: [id, object, created, model, choices]
+      description: |
+        Single SSE event in a streaming response (`stream: true`).
+        Wire-identical to the OpenAI `ChatCompletionChunk` object.
+
+        Event sequence:
+        1. First chunk: delta contains `{"role": "assistant", "content": ""}`.
+        2. Token chunks: delta contains `{"content": "<token_text>"}`.
+           Maps from `TokenEvent` emitted by `SseTokenConsumer`.
+        3. Final chunk: delta contains `{"content": ""}` and
+           `finish_reason` is set. Maps from the final `isComplete=true`
+           event from `SseTokenConsumer.sendComplete()`.
+        4. After the final chunk: `data: [DONE]` terminates the stream.
+      properties:
+        id:
+          type: string
+          description: Same ID as the first chunk; all chunks share one completion ID.
+          example: chatcmpl-550e8400e29b41d4a716446655440000
+        object:
+          type: string
+          enum: [chat.completion.chunk]
+          example: chat.completion.chunk
+        created:
+          type: integer
+          format: int64
+          example: 1700000000
+        model:
+          type: string
+          example: llama3-8b
+        choices:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: '#/components/schemas/ChatCompletionChunkChoice'
+
+    ChatCompletionChunkChoice:
+      type: object
+      required: [index, delta]
+      properties:
+        index:
+          type: integer
+          enum: [0]
+          example: 0
+        delta:
+          $ref: '#/components/schemas/ChunkDelta'
+        finish_reason:
+          type: string
+          nullable: true
+          enum: [stop, length, error]
+          description: |
+            null on all chunks except the final one. On the final chunk,
+            set to the stop reason. Maps from `SseTokenConsumer.sendComplete(finishReason)`.
+          example: null
+
+    ChunkDelta:
+      type: object
+      description: |
+        Incremental message content for this chunk.
+        - First chunk only: `role` is present, `content` is "".
+        - Token chunks: only `content` is present (role is omitted).
+        - Final chunk: `content` is "" (no role).
+      properties:
+        role:
+          type: string
+          enum: [assistant]
+          description: Present only in the first chunk.
+          example: assistant
+        content:
+          type: string
+          description: |
+            Token text piece for this step.
+            Maps from `TokenEvent.token()` emitted by `SseTokenConsumer`.
+          example: " world"
+
+    # ── Models ───────────────────────────────────────────────────────────────
+
+    Model:
+      type: object
+      required: [id, object, created, owned_by]
+      description: |
+        OpenAI-compatible Model object. Juno-specific metadata is exposed
+        under `x_juno_*` fields.
+      properties:
+        id:
+          type: string
+          description: Model identifier. Maps from `ModelDescriptor.modelId()`.
+          example: llama3-8b
+        object:
+          type: string
+          enum: [model]
+          example: model
+        created:
+          type: integer
+          format: int64
+          description: |
+            Unix timestamp of when the model was loaded.
+            Maps from `ModelDescriptor.loadedAt()` converted to epoch seconds.
+            Returns 0 if the model has not been loaded yet.
+          example: 1700000000
+        owned_by:
+          type: string
+          description: Always "juno".
+          enum: [juno]
+          example: juno
+        x_juno_architecture:
+          type: string
+          description: |
+            Model architecture detected from GGUF metadata.
+            Maps from `ModelDescriptor.architecture()`.
+          example: llama3
+        x_juno_quantization:
+          type: string
+          description: |
+            Quantization format read from GGUF metadata.
+            Maps from `ModelDescriptor.quantization().displayName()`.
+          example: Q4_K_M
+        x_juno_total_layers:
+          type: integer
+          description: |
+            Total number of transformer layers.
+            Maps from `ModelDescriptor.totalLayers()`.
+          example: 32
+        x_juno_hidden_dim:
+          type: integer
+          description: |
+            Hidden dimension size (embedding dimension).
+            Maps from `ModelDescriptor.hiddenDim()`.
+          example: 4096
+        x_juno_vocab_size:
+          type: integer
+          description: |
+            Vocabulary size read from GGUF metadata.
+            Maps from `ModelDescriptor.vocabSize()`.
+          example: 32000
+        x_juno_status:
+          type: string
+          enum: [LOADING, LOADED, DEGRADED, UNLOADED]
+          description: |
+            Current model status across the cluster.
+            Maps from `ModelDescriptor.status().name()`.
+          example: LOADED
+
+    ModelList:
+      type: object
+      required: [object, data]
+      description: OpenAI-compatible list envelope for models.
+      properties:
+        object:
+          type: string
+          enum: [list]
+          example: list
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Model'
+
+    # ── Errors ───────────────────────────────────────────────────────────────
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      description: |
+        OpenAI-compatible error envelope. The outer object always has a single
+        `error` key so that existing error-handling code (e.g. the OpenAI
+        Python SDK) works without changes.
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+
+    ErrorDetail:
+      type: object
+      required: [message, type, code]
+      properties:
+        message:
+          type: string
+          description: Human-readable error description.
+          example: "messages must not be empty"
+        type:
+          type: string
+          enum:
+            - invalid_request_error
+            - rate_limit_error
+            - service_unavailable_error
+            - internal_error
+          description: Error category.
+          example: invalid_request_error
+        code:
+          type: string
+          enum:
+            - invalid_request
+            - rate_limit_exceeded
+            - service_unavailable
+            - model_not_found
+            - internal_error
+          description: Machine-readable error code.
+          example: invalid_request
+        param:
+          type: string
+          nullable: true
+          description: The request field that caused the error, if applicable.
+          example: messages
+        x_juno_retry_after_ms:
+          type: integer
+          description: |
+            Juno-specific. Only present on 429 responses. Estimated
+            milliseconds to wait before retrying. Maps from
+            `QueueFullException.retryAfterSeconds() * 1000`.
+          example: 2500
+        x_juno_queue_depth:
+          type: integer
+          description: |
+            Juno-specific. Only present on 429 responses. Current number of
+            requests waiting in the scheduler queue.
+          example: 47
