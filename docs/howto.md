@@ -38,6 +38,7 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 | `--verbose` / `-v` | — | cluster, local | Verbose logging |
 | `--cpu` | — | cluster, local | Force CPU inference: sets `JUNO_USE_GPU=false`. Does not enable LoRA mode. |
 | `--lora-play PATH` | — | cluster, local | Apply a pre-trained `.lora` adapter at inference (read-only, no training). In cluster mode the file is forwarded as `-Djuno.lora.play.path` to every forked node JVM. |
+| `--api-port N` | — | cluster, local | Start the OpenAI-compatible REST API server on port N alongside the REPL. Exposes `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{model}`. Environment override: `API_PORT`. |
 
 **LoRA-specific flags** (`lora` command only):
 
@@ -62,7 +63,7 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 
 **Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
 `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`,
-`LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `LORA_PLAY_PATH`
+`LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `LORA_PLAY_PATH`, `API_PORT`
 
 For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO_USE_GPU` unset
 means try CUDA when a GPU is present. Set `JUNO_USE_GPU=false` or pass `--cpu` to force CPU.
@@ -75,6 +76,9 @@ Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
 ```bash
 # Minimal
 ./juno local --model-path /path/to/model.gguf
+
+# With OpenAI-compatible REST API on port 8080
+./juno local --model-path /path/to/model.gguf --api-port 8080
 
 # With a pre-trained LoRA adapter applied at inference
 ./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora
@@ -93,6 +97,11 @@ When `--lora-play` is given, the startup banner shows:
 ```
   Loading LoRA adapters for inference: /path/to/model.lora
   Loaded 44 LoRA adapters  (inference-only, no training)
+```
+
+When `--api-port` is given, the startup banner shows:
+```
+  ✔ Local API server on http://localhost:8080 (OpenAI: /v1/chat/completions)
 ```
 
 ---
@@ -167,6 +176,9 @@ Two distribution strategies are available via `--pType`:
 # Pipeline-parallel (default)
 ./juno --model-path /path/to/model.gguf
 
+# With OpenAI-compatible REST API on port 8080
+./juno --model-path /path/to/model.gguf --api-port 8080
+
 # Tensor-parallel
 ./juno --pType tensor --model-path /path/to/model.gguf
 
@@ -194,6 +206,143 @@ MODEL_PATH=/path/to/model.gguf PTYPE=tensor ./juno
 When `--lora-play` is given, `ClusterHarness.withLoraPlay(path)` injects
 `-Djuno.lora.play.path=PATH` into every forked node JVM. Each node loads the adapter before
 building its `ForwardPassHandler`.
+
+---
+
+### OpenAI-compatible REST API (`--api-port`)
+
+Pass `--api-port N` to any `local` or cluster invocation to start an OpenAI wire-compatible
+REST server alongside the REPL. No changes are required to `GenerationLoop`, the scheduler, or
+any node code — the API layer is a pure translation shim above `RequestScheduler`.
+
+**Supported endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/v1/chat/completions` | Blocking or SSE streaming completion |
+| `GET` | `/v1/models` | List loaded models |
+| `GET` | `/v1/models/{model}` | Retrieve a single model |
+
+**Quick verification:**
+
+```bash
+# Start local mode with API
+./juno local --model-path /path/to/model.gguf --api-port 8080
+
+# Blocking completion
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+    "messages": [{"role": "user", "content": "What is Java?"}]
+  }'
+
+# Streaming completion
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+    "messages": [{"role": "user", "content": "Tell me a joke."}],
+    "stream": true
+  }'
+
+# List models
+curl http://localhost:8080/v1/models
+```
+
+**OpenAI SDK (Python):**
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="unused")
+
+# Blocking
+response = client.chat.completions.create(
+    model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+    messages=[{"role": "user", "content": "What is Java?"}],
+    temperature=0.7,
+    max_tokens=512,
+)
+print(response.choices[0].message.content)
+
+# Streaming
+stream = client.chat.completions.create(
+    model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+    messages=[{"role": "user", "content": "Write a haiku."}],
+    stream=True,
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```
+
+**LangChain:**
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="unused",
+    model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+)
+print(llm.invoke("What is Java?").content)
+```
+
+**Request field mapping:**
+
+| OpenAI field | Juno internal | Notes |
+|---|---|---|
+| `model` | `modelId` | First loaded model if omitted |
+| `messages[].role` | `ChatMessage.role` | `system` / `user` / `assistant` |
+| `messages[].content` | `ChatMessage.content` | Text only; image content not supported |
+| `temperature` | `SamplingParams.temperature` | 0.0–2.0; default 0.7 |
+| `top_p` | `SamplingParams.topP` | 0.0–1.0; default 0.9 |
+| `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 512 |
+| `max_tokens` | `SamplingParams.maxTokens` | Deprecated alias; `max_completion_tokens` takes precedence |
+| `frequency_penalty` | `SamplingParams.repetitionPenalty` | Mapped: `1 + max(0, fp/2)` |
+| `stream` | route selection | `false` → blocking JSON; `true` → SSE |
+| `n` | — | Only `1` accepted; other values → HTTP 400 |
+| `stop`, `presence_penalty`, `logit_bias`, `user`, `seed` | — | Silently ignored for client compatibility |
+
+**Juno request extensions** (namespaced under `x_juno_*` to avoid OpenAI field conflicts):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `x_juno_priority` | string | `NORMAL` | Scheduler priority: `HIGH` / `NORMAL` / `LOW` |
+| `x_juno_session_id` | string | — | Stable session ID; enables KV-cache reuse across turns |
+| `x_juno_top_k` | integer | `50` | Top-K sampling cutoff (0 = disabled) |
+
+**Multi-turn conversation with KV-cache reuse:**
+
+```python
+SESSION_ID = "sess-my-conversation-001"
+
+def chat(messages):
+    return client.chat.completions.create(
+        model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        messages=messages,
+        extra_body={"x_juno_session_id": SESSION_ID},
+    ).choices[0].message.content
+
+history = []
+for user_input in ["My name is Alice.", "What is my name?"]:
+    history.append({"role": "user", "content": user_input})
+    reply = chat(history)
+    history.append({"role": "assistant", "content": reply})
+    print(reply)
+```
+
+**Error responses** follow the OpenAI error envelope (`{"error": {"message": ..., "type": ..., "code": ...}}`):
+
+| HTTP | `code` | Cause |
+|------|--------|-------|
+| 400 | `invalid_request` | Missing/empty messages, `n` > 1, or invalid body |
+| 503 | `service_unavailable` | No model loaded or model not ready |
+| 429 | `rate_limit_exceeded` | Scheduler queue full; `Retry-After` header set |
+| 500 | `internal_error` | Unexpected inference error |
+
+The full OpenAPI 3.0 specification is at `api/src/main/resources/juno-api.yaml`.
 
 ---
 

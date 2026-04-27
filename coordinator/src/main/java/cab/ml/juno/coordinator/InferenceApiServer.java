@@ -53,6 +53,7 @@ public final class InferenceApiServer {
 
 	private final RequestScheduler scheduler;
 	private final ModelRegistry modelRegistry;
+	private final OpenAiChatHandler openAiChatHandler;
 	private Javalin app;
 	private String byteOrder;
 
@@ -77,6 +78,10 @@ public final class InferenceApiServer {
 			throw new IllegalArgumentException("modelRegistry must not be null");
 		this.scheduler = scheduler;
 		this.modelRegistry = modelRegistry;
+		this.openAiChatHandler = new OpenAiChatHandler(scheduler, modelRegistry, ms -> {
+			if (latencyReporter != null)
+				latencyReporter.recordLatency(ms);
+		});
 	}
 
 	public void start(int port) {
@@ -99,10 +104,11 @@ public final class InferenceApiServer {
 		// ── Inference ─────────────────────────────────────────────────────────
 		app.post("/v1/inference", this::handleBlockingInference);
 		app.post("/v1/inference/stream", this::handleStreamingInference);
+		app.post("/v1/chat/completions", openAiChatHandler::handleChatCompletion);
 
 		// ── Models ────────────────────────────────────────────────────────────
-		app.get("/v1/models", this::handleListModels);
-		app.get("/v1/models/{modelId}", this::handleGetModel);
+		app.get("/v1/models", openAiChatHandler::handleListModels);
+		app.get("/v1/models/{modelId}", openAiChatHandler::handleGetModel);
 		app.delete("/v1/models/{modelId}", this::handleUnloadModel);
 
 		// ── Cluster ───────────────────────────────────────────────────────────

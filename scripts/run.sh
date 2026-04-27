@@ -154,6 +154,7 @@ cmd_cluster() {
   local lora_play="${LORA_PLAY_PATH:-}"
   local health="false"
   local health_port="${HEALTH_PORT:-8081}"
+  local api_port="${API_PORT:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -182,6 +183,7 @@ cmd_cluster() {
       --cpu)              use_gpu="false";   shift   ;;
       --health)           health="true";     shift   ;;
       --health-port)      health_port="$2";  shift 2 ;;
+      --api-port)         api_port="$2";     shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -213,6 +215,8 @@ cmd_cluster() {
         echo "    --temperature F            sampling temperature       (default 0.6)"
         echo "    --top-k N                  top-K sampling cutoff     (default 20, 0=disabled)"
         echo "    --top-p F                  top-p nucleus sampling    (default 0.95, 0=disabled)"
+        echo "    --api-port N               start REST API server on port N"
+        echo "                               (includes OpenAI-compatible /v1/chat/completions)"
         echo ""
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
@@ -274,6 +278,8 @@ cmd_cluster() {
     health_flag="--health"
     warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
   fi
+  local api_port_arg=""
+  [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -293,6 +299,7 @@ cmd_cluster() {
     "$gpu_flag" \
     ${jfr_arg} \
     ${lora_play_arg} \
+    ${api_port_arg} \
     ${health_flag} \
     ${verbose_flag}
 }
@@ -316,6 +323,7 @@ cmd_local() {
   local lora_play="${LORA_PLAY_PATH:-}"
   local health="false"
   local health_port="${HEALTH_PORT:-8081}"
+  local api_port="${API_PORT:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -344,6 +352,7 @@ cmd_local() {
       --cpu)              use_gpu="false";   shift   ;;
       --health)           health="true";     shift   ;;
       --health-port)      health_port="$2";  shift 2 ;;
+      --api-port)         api_port="$2";     shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -371,6 +380,8 @@ cmd_local() {
         echo ""
         echo "  Pipeline:"
         echo "    --nodes N                  number of in-process shards  (default 3)"
+        echo "    --api-port N               start local REST API server on port N"
+        echo "                               (includes OpenAI-compatible /v1/chat/completions)"
         echo ""
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
@@ -423,6 +434,8 @@ cmd_local() {
     health_flag="--health"
     warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
   fi
+  local api_port_arg=""
+  [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -442,6 +455,7 @@ cmd_local() {
     "$gpu_flag" \
     ${jfr_arg} \
     ${lora_play_arg} \
+    ${api_port_arg} \
     ${health_flag} \
     ${verbose_flag}
 }

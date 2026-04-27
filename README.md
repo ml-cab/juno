@@ -19,6 +19,7 @@ a single launcher — with no external runtime dependencies.
 - **Distributed inference** — pipeline-parallel (layer sharding) or tensor-parallel (weight slicing) across N nodes
 - **GPU acceleration** — CUDA/cuBLAS with FP16 resident weights; graceful CPU fallback on OOM
 - **LoRA fine-tuning** — train, checkpoint, deploy, and merge adapters without modifying the base GGUF
+- **OpenAI-compatible REST API** — `POST /v1/chat/completions` and `GET /v1/models` speak the OpenAI wire format; any client that works with OpenAI needs only a base-URL change
 - **JFR instrumentation** — five custom event types covering every hot path, auto-merged across JVMs in cluster mode
 
 > **Full usage reference:** [docs/howto.md](docs/howto.md)
@@ -104,8 +105,14 @@ mvn clean package -DskipTests
 # Single-JVM local mode (fastest startup, no forking)
 ./juno local --model-path /path/to/model.gguf
 
+# Local mode with OpenAI-compatible REST API on port 8080
+./juno local --model-path /path/to/model.gguf --api-port 8080
+
 # 3-node pipeline-parallel cluster
 ./juno --model-path /path/to/model.gguf
+
+# 3-node cluster with OpenAI-compatible REST API on port 8080
+./juno --model-path /path/to/model.gguf --api-port 8080
 
 # 3-node tensor-parallel cluster
 ./juno --pType tensor --model-path /path/to/model.gguf
@@ -122,6 +129,61 @@ mvn clean package -DskipTests
 
 For all flags, environment overrides, `merge`, profiling, and AWS deployment see
 [docs/howto.md](docs/howto.md).
+
+---
+
+## OpenAI-Compatible REST API
+
+Pass `--api-port N` to any `local` or cluster invocation to start the REST API server. The
+coordinator exposes three endpoints wire-compatible with OpenAI:
+
+| Endpoint | OpenAI equivalent | Description |
+|---|---|---|
+| `POST /v1/chat/completions` | `POST /v1/chat/completions` | Blocking or SSE streaming completion |
+| `GET /v1/models` | `GET /v1/models` | List all loaded models |
+| `GET /v1/models/{model}` | `GET /v1/models/{model}` | Single model metadata |
+
+Any client already targeting the OpenAI API works without modification — change only the
+base URL:
+
+```python
+# Python openai SDK
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="unused")
+response = client.chat.completions.create(
+    model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+    messages=[{"role": "user", "content": "What is Java?"}],
+)
+print(response.choices[0].message.content)
+```
+
+```bash
+# curl — blocking
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"tinyllama","messages":[{"role":"user","content":"Hello"}]}'
+
+# curl — streaming
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"tinyllama","messages":[{"role":"user","content":"Hello"}],"stream":true}'
+```
+
+**Juno-specific request extensions** (all optional):
+
+| Field | Type | Description |
+|---|---|---|
+| `x_juno_priority` | string | `HIGH` / `NORMAL` / `LOW` — scheduler queue priority |
+| `x_juno_session_id` | string | Stable ID across turns; enables KV-cache reuse |
+| `x_juno_top_k` | integer | Top-K cutoff (0 = disabled; default 50) |
+
+**Supported fields:** `model`, `messages`, `temperature`, `top_p`, `max_completion_tokens`,
+`max_tokens` (deprecated alias), `frequency_penalty`, `stream`, `n` (only 1 accepted).
+
+**Silently ignored** (accepted for client compatibility): `stop`, `presence_penalty`,
+`logit_bias`, `user`, `seed`.
+
+The full OpenAPI 3.0 specification is in `api/src/main/resources/juno-api.yaml`.
 
 ---
 
@@ -184,9 +246,9 @@ java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 
 | Module | Contents |
 |--------|----------|
-| `api` | OpenAPI 3.0 spec, JAX-RS interfaces, `inference.proto` |
+| `api` | OpenAPI 3.0 spec (`juno-api.yaml` — OpenAI-compatible), legacy `openapi.yaml`, JAX-RS interfaces, `inference.proto` |
 | `registry` | `NodeDescriptor`, `ShardPlanner`, `ShardMap`, `ParallelismType`, `TensorShardAssignment`, `TensorShardPlanner` |
-| `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, Javalin REST, SSE |
+| `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, `OpenAiChatHandler`, `OpenAiAdapter`, Javalin REST, SSE |
 | `kvcache` | `KVCacheManager`, `GpuKVCache`, `CpuKVCache`, `PrefixCache` |
 | `tokenizer` | `GgufTokenizer` (SentencePiece BPE + GPT-2 BPE; auto-detected), `ChatTemplate`, `SimpleTokenizer` |
 | `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `EmbeddedNodeServer`, `NodeMain`, `NodeKVCacheAdapter`, `MatVec`, `CpuMatVec`, `CudaMatVec`, `GpuContext`, `DeviceFloatMatrix`, `DeviceHalfMatrix`, `GgufReader`, `ActivationCodec`, `ShardContext`, `TensorShardContext`, `LoraQvInitializer`, `LoraMerge`, `LoraTrainableHandler` |
