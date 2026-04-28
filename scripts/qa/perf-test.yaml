@@ -1,0 +1,889 @@
+# =============================================================================
+# Juno Performance Test Suite
+# Model: tinyllama-1.1b-chat-v1.0-q4_k_m
+# Generated: 2026-04-28
+# Reference: docs/howto.md, scripts/aws/juno-deploy.sh
+# =============================================================================
+#
+# USAGE
+#   Each suite is self-contained. Run in order or pick individually.
+#   Every suite documents the exact setup command and the request matrix to fire.
+#
+# CONSTRAINTS
+#   - GPU node count is capped at 1 (single g4dn.2xlarge available).
+#   - Tensor parallelism with node_count=1 is degenerate (single worker, no
+#     AllReduce); only meaningful at node_count >= 2. Marked [cpu_only] below.
+#   - --dtype INT8 is not accepted by juno-deploy.sh (FLOAT16|FLOAT32 only).
+#     INT8 is available via local mode only.
+#   - --byteOrder is a cluster-level flag; it must be uniform across all JVMs
+#     and is propagated automatically by juno-deploy.sh.
+#   - max_tokens, temperature, top_k, top_p, stream, x_juno_session_id are
+#     per-request REST API fields, not cluster setup flags.
+#   - LoRA suites require a pre-trained .lora adapter file present locally
+#     before running juno-deploy.sh setup. Train one with:
+#       ./juno lora --model-path /path/to/model.gguf --jfr 30m
+#       REPL> /train-qa What is Java? A: A programming language.
+#       REPL> /save
+# =============================================================================
+
+meta:
+  version: "1"
+  project: juno
+  author: perf
+  date: 2026-04-28
+
+# -----------------------------------------------------------------------------
+# SHARED CONSTANTS
+# -----------------------------------------------------------------------------
+
+constants:
+  model_url: "https://huggingface.co/hieupt/TinyLlama-1.1B-Chat-v1.0-Q4_K_M-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf"
+  model_name: tinyllama-1.1b-chat-v1.0-q4_k_m
+  jfr: 1h
+
+# -----------------------------------------------------------------------------
+# HARDWARE PROFILES
+# -----------------------------------------------------------------------------
+
+hardware:
+  cpu:
+    instance_type: m7i-flex.large
+    max_nodes: 7
+    gpu: false
+    max_tokens: 50             # kept low; CPU decode is slow
+    heap: 4g
+
+  gpu:
+    instance_type: g4dn.2xlarge
+    max_nodes: 1               # single GPU instance available
+    gpu: true
+    max_tokens: 500            # 10x CPU; GPU can sustain it
+    heap: 4g
+
+# -----------------------------------------------------------------------------
+# TEST SCENARIOS
+# -----------------------------------------------------------------------------
+
+scenarios:
+
+  s1_single_long:
+    id: s1
+    description: >
+      Single request, uncapped output. Stresses decode throughput and
+      tests token budget enforcement under max_tokens limit.
+    turns:
+      - role: user
+        content: "could you please write me a long poem about love and war, please be as robust as you can"
+    # No expected token count — bounded only by max_tokens.
+    note: "Use x_juno_priority: HIGH to avoid queue delay in concurrency tests."
+
+  s2_multi_turn_recall:
+    id: s2
+    description: >
+      Three-turn conversation. Turn 1 injects a name; turns 2-3 test recall.
+      Validates KV-cache reuse (x_juno_session_id) and context continuity.
+    turns:
+      - turn: 1
+        role: user
+        content: "Hello, my name is Viktor, please remember this!"
+        approx_user_tokens: 34
+        approx_reply_tokens: 26
+        expected_reply_fragment: "Viktor"
+      - turn: 2
+        role: user
+        content: "Could you please recall me what is my name?"
+        approx_user_tokens: 43
+        approx_reply_tokens: 20
+        expected_reply_fragment: "Viktor"
+      - turn: 3
+        role: user
+        content: "Thank you so mutch, have a nice day!"
+        approx_user_tokens: 30
+        approx_reply_tokens: 17
+
+# -----------------------------------------------------------------------------
+# SUITES
+# -----------------------------------------------------------------------------
+
+suites:
+
+  # ---------------------------------------------------------------------------
+  # SUITE 1 — BASELINE
+  # Replicate the 2026-04-26 runs exactly. Reference point for all other suites.
+  # ---------------------------------------------------------------------------
+  - id: baseline
+    description: >
+      Baseline replication. Pipeline, FLOAT16, BE, no LoRA, separate coordinator,
+      1 inference node, 9 concurrent sessions. Matches the April 26 benchmark runs.
+    hardware: [cpu, gpu]
+    node_count: 1
+    coordinator: separate
+    ptype: pipeline
+    dtype: FLOAT16
+    byte_order: BE
+    lora: false
+    sessions: [9]
+    scenarios: [s1, s2]
+    streaming: false
+    x_juno_session_id: false      # no KV-cache reuse; fresh context each turn
+
+    setup_template: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type {instance_type} \
+        --node-count 1 \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype FLOAT16 \
+        --byteOrder BE \
+        --jfr {jfr}
+
+    request_params:
+      max_tokens: "{hardware.max_tokens}"   # cpu=50, gpu=500
+      temperature: 0.6
+      top_k: 20
+      top_p: 0.95
+
+  # ---------------------------------------------------------------------------
+  # SUITE 2 — DTYPE SWEEP
+  # FLOAT16 (default) vs FLOAT32 (lossless, 2x wire bandwidth).
+  # INT8 excluded: juno-deploy.sh does not accept it; test locally if needed.
+  # ---------------------------------------------------------------------------
+  - id: dtype_sweep
+    description: >
+      Activation wire format impact. FLOAT32 doubles inter-node bandwidth;
+      measures MatVec p95 and decode p95 degradation vs FLOAT16.
+    hardware: [cpu, gpu]
+    node_count: 1
+    coordinator: separate
+    ptype: pipeline
+    dtype: [FLOAT16, FLOAT32]     # swept
+    byte_order: BE
+    lora: false
+    sessions: [1, 9]
+    scenarios: [s1]
+    streaming: false
+
+    setup_template: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type {instance_type} \
+        --node-count 1 \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype {dtype} \
+        --byteOrder BE \
+        --jfr {jfr}
+
+    request_params:
+      max_tokens: "{hardware.max_tokens}"
+      temperature: 0.6
+      top_k: 20
+      top_p: 0.95
+
+    note: >
+      INT8 local-only test (not in deploy):
+        ./juno local --model-path /path/to/model.gguf --dtype INT8 --max-tokens 50 --jfr 5m
+      Compare juno.MatVec.duration.total_ms across all three dtypes.
+
+  # ---------------------------------------------------------------------------
+  # SUITE 3 — BYTE ORDER SWEEP
+  # BE (default, big-endian) vs LE (little-endian, native on x86).
+  # Hypothesis: LE reduces byte-swap overhead on x86 nodes.
+  # ---------------------------------------------------------------------------
+  - id: byte_order_sweep
+    description: >
+      Activation byte-order impact. BE is default; LE is native on x86 (m7i, g4dn).
+      Both values are propagated uniformly by juno-deploy.sh to all JVMs.
+    hardware: [cpu, gpu]
+    node_count: 1
+    coordinator: separate
+    ptype: pipeline
+    dtype: FLOAT16
+    byte_order: [BE, LE]          # swept
+    lora: false
+    sessions: [1, 9]
+    scenarios: [s1]
+    streaming: false
+
+    setup_template: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type {instance_type} \
+        --node-count 1 \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype FLOAT16 \
+        --byteOrder {byte_order} \
+        --jfr {jfr}
+
+    request_params:
+      max_tokens: "{hardware.max_tokens}"
+      temperature: 0.6
+      top_k: 20
+      top_p: 0.95
+
+  # ---------------------------------------------------------------------------
+  # SUITE 4 — NODE SCALING (CPU ONLY)
+  # Pipeline-parallel: layers sharded across 1..7 inference nodes.
+  # Measures whether additional nodes reduce decode latency or add gRPC overhead.
+  # ---------------------------------------------------------------------------
+  - id: node_scaling_cpu
+    description: >
+      Pipeline node count scaling on CPU. TinyLlama 1.1B has 22 transformer
+      layers; diminishing returns expected beyond 3 nodes for this model size.
+      g4dn is excluded (single instance constraint).
+    hardware: [cpu]               # gpu excluded: max_nodes=1
+    node_count: [1, 2, 3, 5, 7]  # swept; 7 is CPU max per constraints
+    coordinator: separate
+    ptype: pipeline
+    dtype: FLOAT16
+    byte_order: BE
+    lora: false
+    sessions: [1, 9]
+    scenarios: [s1, s2]
+    streaming: false
+
+    setup_template: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type m7i-flex.large \
+        --node-count {node_count} \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype FLOAT16 \
+        --byteOrder BE \
+        --jfr {jfr}
+
+    request_params:
+      max_tokens: 50
+      temperature: 0.6
+      top_k: 20
+      top_p: 0.95
+
+  # ---------------------------------------------------------------------------
+  # SUITE 5 — PARALLELISM TYPE (CPU ONLY; node_count >= 2)
+  # Pipeline (serial layer flow) vs Tensor (AllReduce, all nodes hold all layers).
+  # Tensor requires node_count >= 2 to exercise the AllReduce path.
+  # ---------------------------------------------------------------------------
+  - id: ptype_sweep
+    description: >
+      Pipeline vs tensor parallelism. At node_count=1 tensor is degenerate
+      (no AllReduce). Tests start at node_count=2. GPU excluded (max_nodes=1).
+    hardware: [cpu]
+    node_count: [2, 3]            # tensor needs >= 2; 3 gives a useful data point
+    coordinator: separate
+    ptype: [pipeline, tensor]     # swept
+    dtype: FLOAT16
+    byte_order: BE
+    lora: false
+    sessions: [1, 9]
+    scenarios: [s1]
+    streaming: false
+
+    setup_template: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type m7i-flex.large \
+        --node-count {node_count} \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype {ptype} \
+        --dtype FLOAT16 \
+        --byteOrder BE \
+        --jfr {jfr}
+
+    request_params:
+      max_tokens: 50
+      temperature: 0.6
+      top_k: 20
+      top_p: 0.95
+
+    note: >
+      Tensor mode at node_count=1 (degenerate reference, GPU only possibility):
+        ./launcher.sh juno-deploy.sh setup \
+          --instance-type g4dn.2xlarge --node-count 1 \
+          --coordinator separate --ptype tensor --dtype FLOAT16 --jfr {jfr}
+      Expected: indistinguishable from pipeline at node_count=1.
+
+  # ---------------------------------------------------------------------------
+  # SUITE 6 — CONCURRENCY SCALING
+  # 1 session vs 9 sessions simultaneously. Measures scheduler and batch
+  # formation impact on per-session latency and aggregate throughput.
+  # ---------------------------------------------------------------------------
+  - id: concurrency_sweep
+    description: >
+      Session concurrency impact. 1 session is the single-request baseline;
+      9 sessions stress the GenerationLoop batch and RequestScheduler queue.
+    hardware: [cpu, gpu]
+    node_count: 1
+    coordinator: separate
+    ptype: pipeline
+    dtype: FLOAT16
+    byte_order: BE
+    lora: false
+    sessions: [1, 9]              # swept
+    scenarios: [s1, s2]
+    streaming: false
+
+    setup_template: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type {instance_type} \
+        --node-count 1 \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype FLOAT16 \
+        --byteOrder BE \
+        --jfr {jfr}
+
+    request_params:
+      max_tokens: "{hardware.max_tokens}"
+      temperature: 0.6
+      top_k: 20
+      top_p: 0.95
+
+  # ---------------------------------------------------------------------------
+  # SUITE 7 — COORDINATOR PLACEMENT
+  # node1 (co-located, coordinator shares CPU/memory with inference node) vs
+  # separate (dedicated t3.medium coordinator; isolation, extra cost).
+  # ---------------------------------------------------------------------------
+  - id: coordinator_placement
+    description: >
+      Coordinator co-location overhead. node1 mode puts coordinator on the
+      inference node, contending for CPU during tokenization and scheduling.
+      separate mode eliminates that contention at the cost of an extra instance.
+    hardware: [cpu, gpu]
+    node_count: 1
+    coordinator: [node1, separate]   # swept
+    ptype: pipeline
+    dtype: FLOAT16
+    byte_order: BE
+    lora: false
+    sessions: [1, 9]
+    scenarios: [s1]
+    streaming: false
+
+    setup_template: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type {instance_type} \
+        --node-count 1 \
+        --coordinator {coordinator} \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype FLOAT16 \
+        --byteOrder BE \
+        --jfr {jfr}
+
+    request_params:
+      max_tokens: "{hardware.max_tokens}"
+      temperature: 0.6
+      top_k: 20
+      top_p: 0.95
+
+    note: >
+      Watch juno.Tokenizer.encode.p95_ms in coordinator JFR — contention
+      under node1 mode will inflate it at high concurrency.
+
+  # ---------------------------------------------------------------------------
+  # SUITE 8 — LORA OVERLAY
+  # Measures forward-pass overhead of applying a LoRA adapter during inference.
+  # Requires a pre-trained .lora file (see top-of-file note).
+  # ---------------------------------------------------------------------------
+  - id: lora_overhead
+    description: >
+      LoRA inference overlay overhead. The adapter is applied at every
+      forward pass via LoraTrainableHandler. Expected overhead is proportional
+      to rank and the number of patched Q/V projection tensors (44 for TinyLlama).
+    hardware: [cpu, gpu]
+    node_count: 1
+    coordinator: separate
+    ptype: pipeline
+    dtype: FLOAT16
+    byte_order: BE
+    lora: [false, true]            # swept; true requires lora_play_path set
+    lora_play_path: /path/to/tinyllama-1.1b-chat-v1.0-q4_k_m.lora   # EDIT BEFORE RUN
+    sessions: [1, 9]
+    scenarios: [s1, s2]
+    streaming: false
+
+    setup_template_no_lora: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type {instance_type} \
+        --node-count 1 \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype FLOAT16 \
+        --byteOrder BE \
+        --jfr {jfr}
+
+    setup_template_with_lora: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type {instance_type} \
+        --node-count 1 \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype FLOAT16 \
+        --byteOrder BE \
+        --jfr {jfr} \
+        --lora-play {lora_play_path}
+
+    request_params:
+      max_tokens: "{hardware.max_tokens}"
+      temperature: 0.6
+      top_k: 20
+      top_p: 0.95
+
+    note: >
+      Compare juno.ForwardPass.decode.p95_ms with and without lora.
+      juno.LoraTrainStep events will NOT appear (inference-only mode);
+      overhead shows up solely in ForwardPass duration.
+
+  # ---------------------------------------------------------------------------
+  # SUITE 9 — KV-CACHE REUSE (SESSION ID)
+  # Multi-turn scenario S2 with and without x_juno_session_id.
+  # With session_id: KV cache is reused across turns; prefill on turns 2-3
+  # should be faster (cached prefix reused). Without: full prefill each turn.
+  # ---------------------------------------------------------------------------
+  - id: kv_cache_reuse
+    description: >
+      KV-cache reuse via x_juno_session_id. Scenario S2 only: turn 1 populates
+      the cache; turns 2-3 measure the speedup from prefix reuse vs cold prefill.
+    hardware: [cpu, gpu]
+    node_count: 1
+    coordinator: separate
+    ptype: pipeline
+    dtype: FLOAT16
+    byte_order: BE
+    lora: false
+    sessions: [1, 9]
+    scenarios: [s2]               # S2 only — multi-turn is required for this test
+    streaming: false
+
+    setup_template: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type {instance_type} \
+        --node-count 1 \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype FLOAT16 \
+        --byteOrder BE \
+        --jfr {jfr}
+
+    request_variants:
+      without_session_id:
+        max_tokens: "{hardware.max_tokens}"
+        temperature: 0.6
+        top_k: 20
+        top_p: 0.95
+        # x_juno_session_id: omitted — new KV state per turn
+
+      with_session_id:
+        max_tokens: "{hardware.max_tokens}"
+        temperature: 0.6
+        top_k: 20
+        top_p: 0.95
+        x_juno_session_id: "perf-kvcache-{session_index}"
+
+    note: >
+      Metric of interest: juno.ForwardPass.prefill.p95_ms for turns 2 and 3.
+      Without session_id: all turns have the same prefill cost.
+      With session_id: turns 2-3 prefill only the new delta tokens.
+
+  # ---------------------------------------------------------------------------
+  # SUITE 10 — STREAM MODE
+  # Blocking (full response JSON) vs SSE streaming (token-by-token).
+  # Streaming adds Javalin SSE overhead; measures TTFT and tail latency.
+  # ---------------------------------------------------------------------------
+  - id: stream_mode
+    description: >
+      REST API streaming vs blocking. Blocking returns the full completion in
+      one JSON response. Streaming emits token-by-token SSE chunks, exposing
+      TTFT (time-to-first-token) and per-chunk jitter.
+    hardware: [cpu, gpu]
+    node_count: 1
+    coordinator: separate
+    ptype: pipeline
+    dtype: FLOAT16
+    byte_order: BE
+    lora: false
+    sessions: [1, 9]
+    scenarios: [s1, s2]
+    streaming: [false, true]       # swept
+
+    setup_template: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type {instance_type} \
+        --node-count 1 \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype FLOAT16 \
+        --byteOrder BE \
+        --jfr {jfr}
+
+    request_params:
+      max_tokens: "{hardware.max_tokens}"
+      temperature: 0.6
+      top_k: 20
+      top_p: 0.95
+      stream: "{streaming}"
+
+    note: >
+      For streaming, measure TTFT (first SSE chunk timestamp minus request
+      timestamp) and total wall time. JFR does not capture HTTP-layer timing;
+      instrument client-side.
+
+  # ---------------------------------------------------------------------------
+  # SUITE 11 — SAMPLING PARAMS SWEEP
+  # Deterministic (temperature=0) vs default vs high-temperature stochastic.
+  # Top-K and Top-P boundary cases.
+  # ---------------------------------------------------------------------------
+  - id: sampling_params
+    description: >
+      Sampling parameter sensitivity. Temperature=0 is deterministic greedy
+      (reproducible output). High temperature increases entropy. Top-K=0 disables
+      truncation. Tests that sampler does not introduce latency variance.
+    hardware: [cpu, gpu]
+    node_count: 1
+    coordinator: separate
+    ptype: pipeline
+    dtype: FLOAT16
+    byte_order: BE
+    lora: false
+    sessions: [1]
+    scenarios: [s1]
+    streaming: false
+
+    setup_template: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type {instance_type} \
+        --node-count 1 \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype FLOAT16 \
+        --byteOrder BE \
+        --jfr {jfr}
+
+    request_variants:
+      deterministic:
+        max_tokens: "{hardware.max_tokens}"
+        temperature: 0.0
+        top_k: 0                  # disabled
+        top_p: 1.0                # disabled
+
+      default:
+        max_tokens: "{hardware.max_tokens}"
+        temperature: 0.6
+        top_k: 20
+        top_p: 0.95
+
+      high_entropy:
+        max_tokens: "{hardware.max_tokens}"
+        temperature: 1.5
+        top_k: 0                  # disabled; full distribution
+        top_p: 0.98
+
+      nucleus_only:
+        max_tokens: "{hardware.max_tokens}"
+        temperature: 0.7
+        top_k: 0                  # top-k disabled; top-p only
+        top_p: 0.9
+
+      topk_only:
+        max_tokens: "{hardware.max_tokens}"
+        temperature: 0.7
+        top_k: 50
+        top_p: 1.0                # top-p disabled
+
+    note: >
+      Sampler runs entirely on the coordinator (Java, no GPU). Its cost
+      should be negligible vs ForwardPass. If juno.Tokenizer.decodeToken.p95_ms
+      grows with top_k, the sampler is the bottleneck.
+
+  # ---------------------------------------------------------------------------
+  # SUITE 12 — SCHEDULER PRIORITY
+  # Tests HIGH/NORMAL/LOW priority queuing under concurrency.
+  # A mix of HIGH and LOW priority requests issued simultaneously.
+  # ---------------------------------------------------------------------------
+  - id: scheduler_priority
+    description: >
+      RequestScheduler priority ordering. Mix HIGH and LOW priority requests
+      under 9-session concurrency. LOW-priority requests should yield to HIGH.
+      Validates that x_juno_priority: HIGH requests complete first.
+    hardware: [cpu, gpu]
+    node_count: 1
+    coordinator: separate
+    ptype: pipeline
+    dtype: FLOAT16
+    byte_order: BE
+    lora: false
+    sessions: 9                   # mix of priorities (see request_variants)
+    scenarios: [s1]
+    streaming: false
+
+    setup_template: |
+      ./launcher.sh juno-deploy.sh setup \
+        --instance-type {instance_type} \
+        --node-count 1 \
+        --coordinator separate \
+        --model-url {model_url} \
+        --ptype pipeline \
+        --dtype FLOAT16 \
+        --byteOrder BE \
+        --jfr {jfr}
+
+    request_variants:
+      all_normal:
+        x_juno_priority: NORMAL
+        max_tokens: "{hardware.max_tokens}"
+        temperature: 0.6
+        top_k: 20
+        top_p: 0.95
+
+      mixed_3_high_6_low:
+        # Issue 3 HIGH and 6 LOW simultaneously; measure completion order.
+        sessions:
+          - count: 3
+            x_juno_priority: HIGH
+            max_tokens: "{hardware.max_tokens}"
+            temperature: 0.6
+            top_k: 20
+            top_p: 0.95
+          - count: 6
+            x_juno_priority: LOW
+            max_tokens: "{hardware.max_tokens}"
+            temperature: 0.6
+            top_k: 20
+            top_p: 0.95
+
+# -----------------------------------------------------------------------------
+# FULL TEST MATRIX SUMMARY
+# All unique cluster configurations required across suites.
+# Collapse setups that can share a running cluster before tearing down.
+# -----------------------------------------------------------------------------
+
+execution_plan:
+  note: >
+    Each distinct (instance_type, node_count, coordinator, ptype, dtype, byte_order, lora)
+    tuple requires its own ./launcher.sh juno-deploy.sh setup + teardown cycle.
+    Group suites that share the same tuple to minimise AWS cost.
+
+  cpu_clusters:
+    - label: cpu-1n-sep-pipe-f16-be-nolora
+      instance_type: m7i-flex.large
+      node_count: 1
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: BE
+      lora: false
+      used_by: [baseline, concurrency_sweep, coordinator_placement (separate variant),
+                kv_cache_reuse, stream_mode, sampling_params, scheduler_priority]
+
+    - label: cpu-1n-sep-pipe-f32-be-nolora
+      instance_type: m7i-flex.large
+      node_count: 1
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT32
+      byte_order: BE
+      lora: false
+      used_by: [dtype_sweep]
+
+    - label: cpu-1n-sep-pipe-f16-le-nolora
+      instance_type: m7i-flex.large
+      node_count: 1
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: LE
+      lora: false
+      used_by: [byte_order_sweep]
+
+    - label: cpu-1n-node1-pipe-f16-be-nolora
+      instance_type: m7i-flex.large
+      node_count: 1
+      coordinator: node1
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: BE
+      lora: false
+      used_by: [coordinator_placement (node1 variant)]
+
+    - label: cpu-1n-sep-pipe-f16-be-lora
+      instance_type: m7i-flex.large
+      node_count: 1
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: BE
+      lora: true
+      used_by: [lora_overhead]
+
+    - label: cpu-2n-sep-pipe-f16-be-nolora
+      instance_type: m7i-flex.large
+      node_count: 2
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: BE
+      lora: false
+      used_by: [node_scaling_cpu, ptype_sweep (pipeline 2-node)]
+
+    - label: cpu-2n-sep-tensor-f16-be-nolora
+      instance_type: m7i-flex.large
+      node_count: 2
+      coordinator: separate
+      ptype: tensor
+      dtype: FLOAT16
+      byte_order: BE
+      lora: false
+      used_by: [ptype_sweep (tensor 2-node)]
+
+    - label: cpu-3n-sep-pipe-f16-be-nolora
+      instance_type: m7i-flex.large
+      node_count: 3
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: BE
+      lora: false
+      used_by: [node_scaling_cpu]
+
+    - label: cpu-3n-sep-tensor-f16-be-nolora
+      instance_type: m7i-flex.large
+      node_count: 3
+      coordinator: separate
+      ptype: tensor
+      dtype: FLOAT16
+      byte_order: BE
+      lora: false
+      used_by: [ptype_sweep (tensor 3-node)]
+
+    - label: cpu-5n-sep-pipe-f16-be-nolora
+      instance_type: m7i-flex.large
+      node_count: 5
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: BE
+      lora: false
+      used_by: [node_scaling_cpu]
+
+    - label: cpu-7n-sep-pipe-f16-be-nolora
+      instance_type: m7i-flex.large
+      node_count: 7
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: BE
+      lora: false
+      used_by: [node_scaling_cpu]
+
+  gpu_clusters:
+    - label: gpu-1n-sep-pipe-f16-be-nolora
+      instance_type: g4dn.2xlarge
+      node_count: 1
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: BE
+      lora: false
+      used_by: [baseline, dtype_sweep, byte_order_sweep, concurrency_sweep,
+                coordinator_placement (separate variant), kv_cache_reuse,
+                stream_mode, sampling_params, scheduler_priority]
+
+    - label: gpu-1n-sep-pipe-f32-be-nolora
+      instance_type: g4dn.2xlarge
+      node_count: 1
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT32
+      byte_order: BE
+      lora: false
+      used_by: [dtype_sweep]
+
+    - label: gpu-1n-sep-pipe-f16-le-nolora
+      instance_type: g4dn.2xlarge
+      node_count: 1
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: LE
+      lora: false
+      used_by: [byte_order_sweep]
+
+    - label: gpu-1n-node1-pipe-f16-be-nolora
+      instance_type: g4dn.2xlarge
+      node_count: 1
+      coordinator: node1
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: BE
+      lora: false
+      used_by: [coordinator_placement (node1 variant)]
+
+    - label: gpu-1n-sep-pipe-f16-be-lora
+      instance_type: g4dn.2xlarge
+      node_count: 1
+      coordinator: separate
+      ptype: pipeline
+      dtype: FLOAT16
+      byte_order: BE
+      lora: true
+      used_by: [lora_overhead]
+
+    - label: gpu-1n-sep-tensor-f16-be-nolora
+      instance_type: g4dn.2xlarge
+      node_count: 1
+      coordinator: separate
+      ptype: tensor
+      dtype: FLOAT16
+      byte_order: BE
+      lora: false
+      used_by: [ptype_sweep (degenerate reference — single node tensor)]
+
+# -----------------------------------------------------------------------------
+# METRICS TO CAPTURE PER RUN
+# All sourced from target/metrics/metrics.json after JFR extraction.
+# -----------------------------------------------------------------------------
+
+metrics:
+  primary:
+    - juno.TokenProduced.count
+    - juno.TokenProduced.elapsed_seconds
+    - juno.TokenProduced.tps
+
+  forward_pass:
+    - juno.ForwardPass.count
+    - juno.ForwardPass.prefill.count
+    - juno.ForwardPass.decode.count
+    - juno.ForwardPass.prefill.p95_ms
+    - juno.ForwardPass.decode.p95_ms
+
+  matvec:
+    - juno.MatVec.count
+    - juno.MatVec.duration.total_ms
+    - juno.MatVec.duration.p95_ms
+    - juno.MatVec.backend.cpu.count
+    - juno.MatVec.backend.cpu.p95_ms
+    - juno.MatVec.backend.cuda_resident_fp16.count
+    - juno.MatVec.backend.cuda_resident_fp16.p95_ms
+
+  tokenizer:
+    - juno.Tokenizer.encode.count
+    - juno.Tokenizer.encode.p95_ms
+    - juno.Tokenizer.decodeToken.count
+    - juno.Tokenizer.decodeToken.p95_ms
+    - juno.TemplateFormat.count
+    - juno.TemplateFormat.p95_ms
+
+  lora:                           # non-zero only in lora_overhead suite
+    - juno.LoraTrainStep.count
+    - juno.LoraTrainStep.forward_ms.p95
+    - juno.LoraTrainStep.backward_ms.p95
+    - juno.LoraTrainStep.optimizer_ms.p95
