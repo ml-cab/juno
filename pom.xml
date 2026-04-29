@@ -10,6 +10,11 @@
 	<name>Java Unified Neural Orchestration</name>
 	<description>Java Unified Neural Orchestration (Juno) -- distributed LLM inference and fine-tuning framework</description>
 	<url>https://ml.cab/juno.html</url>
+	<scm>
+		<connection>scm:git:https://github.com/ml-cab/juno.git</connection>
+		<developerConnection>scm:git:git@github.com:ml-cab/juno.git</developerConnection>
+		<url>https://github.com/ml-cab/juno</url>
+	</scm>
 	<modules>
 		<module>api</module>
 		<!-- core libraries -->
@@ -339,6 +344,49 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
 			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-release-plugin</artifactId>
+				<version>3.1.1</version>
+				<configuration>
+					<tagNameFormat>v@{project.version}</tagNameFormat>
+					<autoVersionSubmodules>true</autoVersionSubmodules>
+					<pushChanges>false</pushChanges>
+					<checkModificationExcludes>
+						<checkModificationExclude>CLAUDE.md</checkModificationExclude>
+					</checkModificationExcludes>
+					<arguments>-DskipTests -DskipITs</arguments>
+					<goals>install</goals>
+				</configuration>
+			</plugin>
 		</plugins>
 	</build>
+	<profiles>
+		<!--
+		  Sign primary artifacts during verify (after shade repackage).
+		  mvn clean verify -DskipTests -Prelease-sign
+		  Requires a GPG secret key and (non-interactive) gpg-agent or -Dgpg.passphrase=...
+		-->
+		<profile>
+			<id>release-sign</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-gpg-plugin</artifactId>
+						<version>3.2.7</version>
+						<executions>
+							<execution>
+								<id>sign-release</id>
+								<phase>verify</phase>
+								<goals>
+									<goal>sign</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 </project>

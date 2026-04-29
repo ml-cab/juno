@@ -12,7 +12,7 @@ if "%DIR:~-1%"=="\" set "DIR=%DIR:~0,-1%"
 for %%I in ("%DIR%\..") do set "DIR=%%~fI"
 
 set "JUNO_PLAYER_JAR=%DIR%\juno-player\target\juno-player.jar"
-set "LIVE_JAR=%DIR%\integration\target\integration.jar"
+set "LIVE_JAR=%DIR%\juno-master\target\juno-master.jar"
 
 rem UTF-8 codepage + ANSI VTP for colours
 chcp 65001 >nul 2>&1
@@ -461,7 +461,7 @@ if "%MODEL%"=="" (
   exit /b 1
 )
 if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
-call :require_jar "%LIVE_JAR%" "integration"
+call :require_jar "%LIVE_JAR%" "juno-master"
 if errorlevel 1 exit /b 1
 
 echo [INFO] Running ModelLiveRunner  (pType=%PTYPE%  heap=%HEAP%)
@@ -486,7 +486,7 @@ echo.
 echo juno runtime launcher  (Windows, no Maven - uses pre-built jars)
 echo   Java:       %JAVA%
 echo   juno-player jar: %JUNO_PLAYER_JAR%
-echo   live jar:   %LIVE_JAR%
+echo   juno-master jar: %LIVE_JAR%
 echo.
 echo   Build first (one time):
 echo     mvn clean package -DskipTests

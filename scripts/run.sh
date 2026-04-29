@@ -12,7 +12,7 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 JUNO_PLAYER_JAR="$DIR/juno-player/target/juno-player.jar"
-LIVE_JAR="$DIR/integration/target/integration.jar"
+LIVE_JAR="$DIR/juno-master/target/juno-master.jar"
 HEALTH_JAR="$DIR/health/target/juno-health.jar"
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
@@ -711,7 +711,7 @@ cmd_test() {
   [[ -n "$model" ]] || err "Model path is required.\n  Usage: MODEL_PATH=/path/to/model.gguf $0 test\n     or: $0 test /path/to/model.gguf\n     or: $0 test --model-path /path/to/model.gguf"
   [[ -f "$model" ]] || err "Model file not found: $model"
 
-  require_jar "$LIVE_JAR" "integration"
+  require_jar "$LIVE_JAR" "juno-master"
   check_java_version
 
   info "Running ModelLiveRunner  (model=$(basename "$model")  pType=${ptype}  heap=${heap}  os=${OS})"
@@ -811,7 +811,7 @@ usage() {
   echo -e "  OS detected: ${DIM}${OS}${NC}"
   echo -e "  Java:        ${DIM}${JAVA}${NC}"
   echo -e "  juno-player jar:  ${DIM}${JUNO_PLAYER_JAR}${NC}"
-  echo -e "  live jar:    ${DIM}${LIVE_JAR}${NC}"
+  echo -e "  juno-master jar: ${DIM}${LIVE_JAR}${NC}"
   echo -e "  health jar:  ${DIM}${HEALTH_JAR}${NC}"
   echo ""
   echo "  Build jars first (one time):"
