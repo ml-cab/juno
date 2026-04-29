@@ -351,6 +351,8 @@
 					<tagNameFormat>v@{project.version}</tagNameFormat>
 					<autoVersionSubmodules>true</autoVersionSubmodules>
 					<pushChanges>false</pushChanges>
+					<!-- Tag may exist only locally until origin is pushed -->
+					<localCheckout>true</localCheckout>
 					<checkModificationExcludes>
 						<checkModificationExclude>CLAUDE.md</checkModificationExclude>
 					</checkModificationExcludes>
