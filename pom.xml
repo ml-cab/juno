@@ -24,7 +24,7 @@
 		<!-- JFR instrumentation -->
 		<module>metrics</module>
 		<!-- executables -->
-		<module>player</module>
+		<module>juno-player</module>
 		<module>juno-master</module>
 		<module>juno-node</module>
 	</modules>
@@ -127,7 +127,7 @@
 			</dependency>
 			<dependency>
 				<groupId>cab.ml</groupId>
-				<artifactId>player</artifactId>
+				<artifactId>juno-player</artifactId>
 				<version>${project.version}</version>
 			</dependency>
 			<!-- Hazelcast -->

@@ -343,7 +343,7 @@ public final class ConsoleMain {
 
 	private static void printHelp() {
 		System.out.println();
-		System.out.println("Usage: java -jar player.jar [options]");
+		System.out.println("Usage: java -jar juno-player.jar [options]");
 		System.out.println();
 		System.out.println("Required:");
 		System.out.println("  --model-path PATH          Path to GGUF model file");

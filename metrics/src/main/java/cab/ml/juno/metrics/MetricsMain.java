@@ -30,7 +30,7 @@ import java.util.Map;
 public final class MetricsMain {
 
     /**
-     * Programmatic entry-point for the player module (local --jfr mode).
+     * Programmatic entry-point for the juno-player module (local --jfr mode).
      * Extracts metrics from a single JFR file without scanning the filesystem
      * or reading models.json, writes metrics.json, and returns the JSON string.
      *

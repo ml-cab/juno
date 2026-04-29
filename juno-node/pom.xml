@@ -10,7 +10,7 @@
   </parent>
   <artifactId>juno-node</artifactId>
 	<description>
-		Console player and cluster harness utilities used for manual runs.
+		Juno node fat jar — NodeMain entry point for inference nodes.
 	</description>
 
 	<dependencies>

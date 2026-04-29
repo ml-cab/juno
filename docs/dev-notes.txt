@@ -87,7 +87,7 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
   |                                SampleStep
   +-- health/                   <- CircuitBreaker, CircuitState, HealthEvaluator,
   |                                HealthEvent, HealthThresholds, NodeHealth
-  +-- player/                   <- Model interaction layer; cluster harness + REPL
+  +-- juno-player/                   <- Model interaction layer; cluster harness + REPL
   |   +-- ClusterHarness        <- forks 3 node JVMs; accepts optional MODEL_PATH
   |   +-- EmbeddedNodeServer    <- gRPC NodeServiceImpl; uses LlamaTransformerHandler
   |   |                            when MODEL_PATH set, StubForwardPassHandler otherwise
@@ -100,7 +100,7 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
   |   +-- ChatHistoryTest       <- unit tests for ChatHistory (3 tests)
   |   +-- ChatModelTypeTest     <- unit tests for ChatModelType (6 tests)
   |   Package: cab.ml.juno.player
-  |   Shade jar: player.jar  (main: ConsoleMain)
+  |   Shade jar: juno-player.jar  (main: ConsoleMain)
   |
   +-- metrics/                  <- JFR-based productivity metrics extractor
   |                                (source dir: metrics/, artifact id: metrics)
@@ -116,8 +116,8 @@ Multi-module Maven project, JDK 25 throughout. All modules BUILD SUCCESS as of
       +-- InProcessClusterIT    <- in-process 3-node test, zero network  (6 tests)
       +-- ThreeNodeClusterIT    <- full 3-JVM test over real sockets      (9 tests)
       Package: cab.ml.juno.master
-      Shade jar: player/target/player.jar  (main: ConsoleMain)
-      Depends on: player module (for ClusterHarness, ProcessPipelineClient, etc.)
+      Shade jar: juno-player/target/juno-player.jar  (main: ConsoleMain)
+      Depends on: juno-player module (for ClusterHarness, ProcessPipelineClient, etc.)
 
 Group ID:    cab.ml.juno
 Artifact ID: juno
@@ -545,7 +545,7 @@ ModelLiveRunnerIT.java class (cab.ml.juno.master).
 
 9.2  ThreeNodeClusterIT  (real network, real JVMs)
   Module: integration
-  ClusterHarness (player module) forks 3 separate JVM processes via ProcessBuilder:
+  ClusterHarness (juno-player module) forks 3 separate JVM processes via ProcessBuilder:
 
     NodeMain JVM #1  (port 19092, -Xmx4g -XX:+UseZGC)
     NodeMain JVM #2  (port 19093, -Xmx4g -XX:+UseZGC)
@@ -622,8 +622,8 @@ ModelLiveRunnerIT.java class (cab.ml.juno.master).
     # Via shaded jar
     java -jar juno-master/target/juno-master.jar /path/to/model.gguf
 
-9.4  LoadShardsParallelTest  (unit tests in player module)
-  Module: player
+9.4  LoadShardsParallelTest  (unit tests in juno-player module)
+  Module: juno-player
   2 tests using lightweight in-process gRPC servers (TrackingNodeServer).
   No forked JVM processes.
 
@@ -661,8 +661,8 @@ ModelLiveRunnerIT.java class (cab.ml.juno.master).
   # Unit tests for tokenizer + node only (fast after bug-fix work)
   mvn test -pl tokenizer,node
 
-  # Unit tests for player module (LoadShardsParallelTest)
-  mvn test -pl player
+  # Unit tests for juno-player module (LoadShardsParallelTest)
+  mvn test -pl juno-player
 
   # Skip ITs
   mvn verify -DskipITs
@@ -932,11 +932,11 @@ sampling:
                              PipelineUnavailableException, HealthReactor,
                              InferenceRequest [+sessionId, +ofSession, +kvCacheKey],
                              GenerationResult, TokenConsumer, RequestPriority)
-  player           SUCCESS  (6 main classes: ClusterHarness, NodeMain,
+  juno-player      SUCCESS  (6 main classes: ClusterHarness, NodeMain,
                              EmbeddedNodeServer [wires NodeKVCacheAdapter into handler],
                              ProcessPipelineClient, TensorParallelPipelineClient,
                              ChatHistory [+sessionId], ConsoleMain [+lora subcommand])
-                             Shade jar: player/target/player.jar  (main: ConsoleMain)
+                             Shade jar: juno-player/target/juno-player.jar  (main: ConsoleMain)
   integration      SUCCESS  (ModelLiveRunner [8 checks]; InProcessClusterIT:6;
                              ThreeNodeClusterIT:9; TensorParallelClusterIT:5;
                              GpuForwardPassIT [gpu profile only])
@@ -1013,10 +1013,10 @@ Fix — 6 files:
   KVCacheManager (kvcache)
     Added invalidatePrefix(cacheKey) delegating to prefixCache.invalidate().
 
-  ChatHistory (player)
+  ChatHistory (juno-player)
     Added UUID sessionId field + sessionId() accessor.
 
-  ConsoleMain.startRepl() (player)
+  ConsoleMain.startRepl() (juno-player)
     InferenceRequest.of(...) → InferenceRequest.ofSession(history.sessionId(), ...)
     loop.evictSession(history.sessionId()) called before exit.
 
@@ -1100,14 +1100,14 @@ Environment overrides: MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  HEAP  NODES
 Custom JDK:            JAVA_HOME=/path/to/jdk ./run.sh cluster --model-path ...
 
 Jar paths (relative to project root):
-  player jar     player/target/player.jar    (main: ConsoleMain)
+  juno-player jar     juno-player/target/juno-player.jar    (main: ConsoleMain)
   live jar       juno-master/target/juno-master.jar  (main: ModelLiveRunner)
 
 
 19.2  Logback runtime config — Netty/gRPC noise suppressed
 -----------------------------------------------
 New files:
-  player/src/main/resources/logback.xml
+  juno-player/src/main/resources/logback.xml
   integration/src/main/resources/logback.xml
 
 Both modules previously had no runtime logback config, so logback defaulted to
@@ -1284,12 +1284,12 @@ Test results after fixes:
                     --skip-build/-B flag, --heap flag, Unsafe warning suppression
 
   Phase 3 — Orchestration  [COMPLETE — module restructuring, session 7]
-    [x] player      New module — model interaction layer extracted from integration
+    [x] juno-player      New module — model interaction layer extracted from integration
                     ClusterHarness, EmbeddedNodeServer, NodeMain,
                     ProcessPipelineClient, ConsoleMain moved to cab.ml.juno.player
-                    LoadShardsParallelTest moved to player (unit test)
-                    Shade jar: player/target/player.jar (main: ConsoleMain)
-    [x] integration Decoupled from player concerns — unit/IT tests only
+                    LoadShardsParallelTest moved to juno-player (unit test)
+                    Shade jar: juno-player/target/juno-player.jar (main: ConsoleMain)
+    [x] integration Decoupled from juno-player concerns — unit/IT tests only
                     TinyLlamaLiveIT (JUnit) replaced by ModelLiveRunner (main class)
                     ModelLiveRunner: same 6 checks, coloured output, exit code
                     Shade jar: juno-master/target/juno-master.jar (main: ModelLiveRunner)
@@ -1297,13 +1297,13 @@ Test results after fixes:
 
   Phase 3 — Orchestration  [COMPLETE — runtime launcher + test fixes, session 8]
     [x] run.sh/run.bat  Pure-Java launcher — no Maven required (scripts/)
-                    console command: java -jar player.jar --local (in-process REPL)
-                    cluster command: java -jar player.jar (forked JVM cluster)
+                    console command: java -jar juno-player.jar --local (in-process REPL)
+                    cluster command: java -jar juno-player.jar (forked JVM cluster)
                     live command:    java -jar juno-master/target/juno-master.jar
                     Unified entry point: juno (OS-detecting dispatcher at root)
                     OS auto-detect: linux | macos | windows (Git Bash / WSL)
                     JDK auto-detect: JAVA_HOME → PATH → Windows install locations
-    [x] logback     Runtime logback.xml added to player and integration modules
+    [x] logback     Runtime logback.xml added to juno-player and integration modules
                     NettyClientHandler / NettyServerHandler suppressed (OFF)
                     Bundled into shade jars via src/main/resources
     [x] ModelLiveRunner  All 6 tests green
@@ -1939,11 +1939,11 @@ same pattern used by Kafka (ConsumerRecord vs ProtoRecord), gRPC Java itself
 The dev runner script was renamed from scripts/run.sh to scripts/run.sh. All commands
 and flags are unchanged. References in documentation updated accordingly.
 
-18.2  player module introduced
+18.2  juno-player module introduced
 -----------------------------------------------
 The classes responsible for model interaction — spinning up node JVMs, serving
 gRPC, connecting the pipeline, and the interactive REPL — were extracted from
-the integration module into a new first-class module: player.
+the integration module into a new first-class module: juno-player.
 
 Motivation: integration was doing two unrelated things:
   1. Orchestrating cluster infrastructure (ClusterHarness, NodeMain,
@@ -1967,13 +1967,13 @@ module made it artificially hard to depend on.
       TinyLlamaLiveIT.java
 
   After:
-    player/src/main/java/cab/ml/juno/player/
+    juno-player/src/main/java/cab/ml/juno/player/
       ClusterHarness.java
       EmbeddedNodeServer.java
       NodeMain.java
       ProcessPipelineClient.java
       ConsoleMain.java
-    player/src/test/java/cab/ml/juno/player/
+    juno-player/src/test/java/cab/ml/juno/player/
       LoadShardsParallelTest.java
 
     juno-master/src/main/java/cab/ml/juno/master/
@@ -1982,7 +1982,7 @@ module made it artificially hard to depend on.
       InProcessClusterIT.java
       ThreeNodeClusterIT.java
 
-player shade jar:      player/target/player.jar        (main: ConsoleMain)
+juno-player shade jar:      juno-player/target/juno-player.jar        (main: ConsoleMain)
 integration shade jar: juno-master/target/juno-master.jar   (main: ModelLiveRunner)
 
 18.3  TinyLlamaLiveIT replaced by ModelLiveRunner
@@ -2014,10 +2014,10 @@ After the refactoring, the integration module's role is narrowly defined:
   - ThreeNodeClusterIT: full 3-JVM gRPC pipeline test (9 ITs)
   - ModelLiveRunner: real-model executable (not @Test, not run by failsafe)
 
-The integration module depends on player to get ClusterHarness,
+The integration module depends on juno-player to get ClusterHarness,
 ProcessPipelineClient, and the other infrastructure classes it needs for
 ThreeNodeClusterIT. This is a clean dependency direction: integration tests
-consume the player infrastructure but do not own it.
+consume the juno-player infrastructure but do not own it.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 19. GPU ACCELERATION LAYER (session 10, 2026-03-18)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2727,7 +2727,7 @@ ChatTemplateTest (tokenizer module) — 3 new tests:
   tokenizer/src/test/java/.../tokenizer/
     ChatTemplateTest.java           + 3 substring resolution regression tests
 
-  player/src/main/java/.../player/
+  juno-player/src/main/java/.../player/
     ConsoleMain.java                LlamaTransformerHandler.load → ForwardPassHandlerLoader.load
     EmbeddedNodeServer.java         LlamaTransformerHandler.load → ForwardPassHandlerLoader.load
 
@@ -2740,7 +2740,7 @@ ChatTemplateTest (tokenizer module) — 3 new tests:
                             GgufReader + LlamaTransformerHandler + LlamaConfig updated)
   tokenizer      SUCCESS  (ChatTemplate updated)
   coordinator    SUCCESS  (GenerationLoop updated)
-  player         SUCCESS  (ConsoleMain + EmbeddedNodeServer updated)
+  juno-player         SUCCESS  (ConsoleMain + EmbeddedNodeServer updated)
   All others     unchanged
 
   Unit tests (session 11 additions):
@@ -2928,7 +2928,7 @@ For a 70B model (vocabSize=128256, 8 nodes): ~1M additions — still < 1ms.
     TensorShardContext.java       runtime context: headsPerNode(), headStart(),
                                   headEnd(), headDim(), sliceDim()
 
-  player/
+  juno-player/
     TensorParallelPipelineClient.java
                                   InferencePipeline: parallel broadcast + AllReduce sum
                                   loadShards() sends tensorRank + tensorWorldSize
@@ -2940,7 +2940,7 @@ For a 70B model (vocabSize=128256, 8 nodes): ~1M additions — still < 1ms.
     LoadShardRequest: + tensor_rank (field 7), + tensor_world_size (field 8)
     Default = 0 / 1 → backward compatible with all existing pipeline-mode code.
 
-  player/ClusterHarness.java
+  juno-player/ClusterHarness.java
     + tensorNodes()  factory (stub mode)
     + tensorNodes(modelPath) factory
     + tensorNodes(modelPath, totalLayers, numHeads) factory
@@ -2978,7 +2978,7 @@ For a 70B model (vocabSize=128256, 8 nodes): ~1M additions — still < 1ms.
 
   registry    SUCCESS  (+ ParallelismType, TensorShardAssignment, TensorShardPlanner)
   node        SUCCESS  (+ TensorShardContext)
-  player      SUCCESS  (+ TensorParallelPipelineClient; ClusterHarness updated)
+  juno-player      SUCCESS  (+ TensorParallelPipelineClient; ClusterHarness updated)
   juno-master SUCCESS  (+ TensorParallelClusterIT)
   All others  unchanged
 
@@ -3004,7 +3004,7 @@ Fix:
   All three sites changed from numHeads % worldSize != 0 to numHeads % 2 != 0:
     registry/TensorShardPlanner.java
     node/TensorShardContext.java
-    player/ClusterHarness.java  (was numHeads % 3 != 0)
+    juno-player/ClusterHarness.java  (was numHeads % 3 != 0)
 
   The rejection test plan_rejects_numHeads_not_divisible_by_worldSize uses
   numHeads=31 (odd) and remains green. All three happy-path tests now pass.
@@ -3028,7 +3028,7 @@ Fix:
   LlamaConfig (one fast metadata-only open, no tensor loading).
 
   Files changed:
-    player/ClusterHarness.java
+    juno-player/ClusterHarness.java
       + configuredTotalLayers, configuredNumHeads fields
       + 5-arg private constructor
       + GgufReader, LlamaConfig imports
@@ -3110,7 +3110,7 @@ Fix:
   registry    SUCCESS  (TensorShardPlannerTest: 3 previously-failing tests now pass)
   node        SUCCESS  (TensorShardContextTest: 1 previously-failing test now pass;
                         LlamaTransformerHandler now uses lazy QuantizedTensor loading)
-  player      SUCCESS  (ClusterHarness: configuredTotalLayers/numHeads + node heap propagation)
+  juno-player      SUCCESS  (ClusterHarness: configuredTotalLayers/numHeads + node heap propagation)
   integration SUCCESS  (TensorParallelClusterIT: previously failing due to port conflicts
                         resolved by numHeads fix; ModelLiveRunner: +2 tensor tests)
 
@@ -3233,7 +3233,7 @@ Integer.parseInt (explicit little-endian bit shifts). All adjointness tests pass
 
 25.5  ConsoleMain — lora subcommand
 -----------------------------------------------
-New `lora` subcommand in ConsoleMain (player module):
+New `lora` subcommand in ConsoleMain (juno-player module):
   --lora                     activate LoRA mode (forces --nodes 1, single JVM)
   --lora-path PATH           checkpoint file (default: <model>.lora)
   --lora-rank N              rank (default: 8)
@@ -3290,7 +3290,7 @@ All three commands build and pass the JFR flag to the JVM exec identically.
   node    SUCCESS  (+4 new classes: LoraAdapter, LoraAdapterSet,
                     LoraAdamOptimizer, LoraTrainableHandler, LoraTrainEvent;
                     transposedMatVec switch extended for Q5_K/Q6_K)
-  player  SUCCESS  (ConsoleMain: lora subcommand + /train REPL)
+  juno-player  SUCCESS  (ConsoleMain: lora subcommand + /train REPL)
   All other modules unchanged.
 
   New unit tests: 47 (LoraAdapterTest:13 + LoraAdapterSetTest:10 +
@@ -3442,7 +3442,7 @@ File: node/src/main/java/cab/ml/juno/node/LlamaTransformerHandler.java
 
 26.5  EmbeddedNodeServer wiring
 -----------------------------------------------
-File: player/src/main/java/cab/ml/juno/player/EmbeddedNodeServer.java
+File: juno-player/src/main/java/cab/ml/juno/player/EmbeddedNodeServer.java
 
   After loadShard() creates the KVCacheManager scoped to the shard's LayerRange,
   a NodeKVCacheAdapter is constructed and injected into the handler:
@@ -3623,7 +3623,7 @@ LlamaKvWiringTest (node module) — 7 tests:
     SimpleTokenizer.java                 + TokenizerEvent in encode/decode/decodeToken
     ChatTemplateFormatter.java           + TemplateFormatEvent in format()
 
-  player/src/main/java/.../player/
+  juno-player/src/main/java/.../player/
     EmbeddedNodeServer.java              + NodeKVCacheAdapter wiring after loadShard()
                                            + imports for LlamaTransformerHandler,
                                              Phi3TransformerHandler, NodeKVCacheAdapter
@@ -3646,7 +3646,7 @@ LlamaKvWiringTest (node module) — 7 tests:
                          LlamaConfig + LlamaTransformerHandler + Phi3TransformerHandler
                          wired; all 6 ForwardPassHandlers and both MatVec backends
                          instrumented)
-  player      SUCCESS  (EmbeddedNodeServer: NodeKVCacheAdapter wired into loadShard())
+  juno-player      SUCCESS  (EmbeddedNodeServer: NodeKVCacheAdapter wired into loadShard())
   All other modules unchanged.
 
   New unit tests: 20 (NodeKVCacheAdapterTest:13 + LlamaKvWiringTest:7)
@@ -3743,7 +3743,7 @@ inconsistent with its own Javadoc.
       symmetry; Phi-3 always uses CPU static matVec (backend parameter logged,
       not used)
 
-  player/EmbeddedNodeServer.java
+  juno-player/EmbeddedNodeServer.java
     GPU branch: GpuForwardPassHandler.loadGpuResident(path, ctx, gpuCtx)
                 → ForwardPassHandlerLoader.load(path, ctx, new CudaMatVec(gpuCtx))
     CPU branch: CpuForwardPassHandler.load(path, ctx)
@@ -3751,7 +3751,7 @@ inconsistent with its own Javadoc.
     unloadShard: removed stale releaseGpuResources() call
                 (CudaMatVec uses per-call device memory; no persistent buffers)
 
-  player/ConsoleMain.java
+  juno-player/ConsoleMain.java
     GPU branch: GpuForwardPassHandler.loadGpuResident(path, ctx, gpuCtx)
                 → ForwardPassHandlerLoader.load(path, ctx, new CudaMatVec(gpuCtx))
 
@@ -4535,7 +4535,7 @@ flag (no programmatic lifecycle needed — lora mode uses the JVM flag path).
   metrics/src/main/resources/models.json
     Missing comma fixed; all 5 models present
 
-  player/src/main/java/cab/ml/juno/player/ConsoleMain.java
+  juno-player/src/main/java/cab/ml/juno/player/ConsoleMain.java
     + startLocalJfr()
     + startClusterJfr()
     + extractAndPrintJfrMetrics()
@@ -4543,12 +4543,12 @@ flag (no programmatic lifecycle needed — lora mode uses the JVM flag path).
     + parseJfrDuration()
     main() dispatch: routes to startLocalJfr/startClusterJfr when --jfr set
 
-  player/src/main/java/cab/ml/juno/player/ClusterHarness.java
+  juno-player/src/main/java/cab/ml/juno/player/ClusterHarness.java
     + withJfr(duration, timestamp)
     + nodeJfrFiles()
     buildNodeCommand(): conditionally adds -XX:StartFlightRecording per node
 
-  player/pom.xml
+  juno-player/pom.xml
     + <dependency> metrics (for MetricsMain programmatic call)
 
   scripts/run.sh
@@ -4568,5 +4568,5 @@ flag (no programmatic lifecycle needed — lora mode uses the JVM flag path).
 -----------------------------------------------
   metrics module: all 4 test classes pass (JfrModelMapperTest updated for
   optional-prefix pattern)
-  player module: all 4 test classes pass
+  juno-player module: all 4 test classes pass
   All other modules: unchanged

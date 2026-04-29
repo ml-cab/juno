@@ -6,8 +6,8 @@
     <version>0.1.0-SNAPSHOT</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
-  <artifactId>player</artifactId>
-  <name>player</name>
+  <artifactId>juno-player</artifactId>
+  <name>juno-player</name>
   <description>Console player and cluster harness utilities used for manual runs.</description>
   <build>
     <plugins>
@@ -48,7 +48,7 @@
                   </excludes>
                 </filter>
               </filters>
-              <finalName>player</finalName>
+              <finalName>juno-player</finalName>
             </configuration>
           </execution>
         </executions>

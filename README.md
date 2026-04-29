@@ -42,7 +42,7 @@ module dependency graph, handler routing, and key design decisions see [docs/arc
 
 Juno has two deployment modes:
 
-- **Local** — single machine, via `scripts/run.sh` and the built-in `player` REPL
+- **Local** — single machine, via `scripts/run.sh` and the built-in `juno-player` REPL
 - **AWS Cloud** — distributed cluster via `scripts/aws/juno-deploy.sh`, coordinated by `juno-master` with `juno-node` running on each inference node
 
 **Steps:**
@@ -181,7 +181,7 @@ java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | `NodeHealth`, `HealthReporter`, `HealthEvaluator`, `CircuitBreaker`, Javalin health sidecar (`/health-ui`, `/health/probe`, `/health/circuits`) |
 | `metrics` | JFR extractor: `JfrMetricsExtractor`, `JfrModelMapper`, `JfrPercentiles`, `MetricsSnapshot`, `MetricsWriter`, `MetricsMain` |
-| `player` | `ConsoleMain` REPL, `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `LoraMergeMain` |
+| `juno-player` | `ConsoleMain` REPL, `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `LoraMergeMain` |
 | `juno-node` | Fat jar (`juno-node.jar`). Entry point `NodeMain`. Launched by `juno-node.service` on AWS nodes. |
 | `juno-master` | Fat jar (`juno-master.jar`). Entry point `CoordinatorMain`. Standalone coordinator for remote deployment. |
 
@@ -212,7 +212,7 @@ Template is resolved from the model path via exact match then substring fallback
 ```bash
 mvn clean package -DskipTests          # build — produces shade jars
 
-mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,player
+mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
                                        # unit tests — no model file, no GPU needed
 
 mvn verify -pl juno-master             # integration tests (stub mode, no model/GPU)

@@ -31,7 +31,7 @@ glue code.
 `POST /v1/chat/completions` and `GET /v1/models[/{modelId}]` to the handler.
 The existing `POST /v1/inference` and `POST /v1/inference/stream` endpoints are untouched.
 
-**Modified: `ConsoleMain`** (`player` module) — `--api-port N` flag starts a
+**Modified: `ConsoleMain`** (`juno-player` module) — `--api-port N` flag starts a
 `RequestScheduler` + `InferenceApiServer` alongside the existing REPL in both `local` and
 cluster modes. A virtual-thread shutdown hook calls `apiServer.stop()` on JVM exit.
 `buildLocalModelRegistry()` populates a `ModelRegistry` from the in-process `LlamaConfig` so
@@ -128,7 +128,7 @@ All modules build and all tests pass. Verified end-to-end with:
 
 `GgufReader` gains five new public methods needed by the GGUF writer: `ggufFileOffset()`, `metadataSectionEnd()`, `tensorOrder()`, `tensorNelems(name)`, and keeps the existing `tensorAbsoluteOffset` / `tensorType` / `tensorDims`. Internal storage changed from `HashMap` to `LinkedHashMap` so `tensorOrder()` is stable. A `List<String> tensorOrder` field is added to preserve insertion order.
 
-`LoraMergeMain` (`player` module) — CLI entry point for `juno merge`. Reads `--model-path`, `--lora-path`, `--output`, `--heap`. Derives `<model>.lora` and `<model>-merged.gguf` as defaults.
+`LoraMergeMain` (`juno-player` module) — CLI entry point for `juno merge`. Reads `--model-path`, `--lora-path`, `--output`, `--heap`. Derives `<model>.lora` and `<model>-merged.gguf` as defaults.
 
 `run.sh` gains `cmd_merge()` and the `merge)` dispatch case.
 
@@ -189,7 +189,7 @@ public static ForwardPassHandler load(
     LoraAdapterSet adapters) throws IOException
 ```
 
-When `adapters != null`, the loader routes to `LoraTrainableHandler` (inference-only, no optimizer attached) instead of the architecture-specific handler. When `adapters == null` the existing `phi3` / `llama` dispatch is unchanged. `selectBackend()` promoted from package-private to `public` so player-module callers can reuse it.
+When `adapters != null`, the loader routes to `LoraTrainableHandler` (inference-only, no optimizer attached) instead of the architecture-specific handler. When `adapters == null` the existing `phi3` / `llama` dispatch is unchanged. `selectBackend()` promoted from package-private to `public` so juno-player-module callers can reuse it.
 
 ### `ClusterHarness` — `withLoraPlay()` fluent method
 

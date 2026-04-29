@@ -7,7 +7,7 @@
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>juno-node</artifactId>
-  <description>Console player and cluster harness utilities used for manual runs.</description>
+  <description>Juno node fat jar — NodeMain entry point for inference nodes.</description>
   <build>
     <plugins>
       <plugin>

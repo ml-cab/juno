@@ -29,7 +29,7 @@
 		MODELS system property. Disabled by default; activate with -Pintegration.
 
 		Main class: CoordinatorMain — standalone distributed coordinator for
-		AWS deployment. Replaces player.jar in the coordinator systemd service.
+		AWS deployment. Replaces juno-player.jar in the coordinator systemd service.
 
 		Recommended model for real-weight testing (no GPU required for stubs):
 		TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf ~670 MB
@@ -80,7 +80,7 @@
 		</dependency>
 		<dependency>
 			<groupId>cab.ml</groupId>
-			<artifactId>player</artifactId>
+			<artifactId>juno-player</artifactId>
 		</dependency>
 		<!-- gRPC for EmbeddedNodeServer + ProcessPipelineClient -->
 		<dependency>
