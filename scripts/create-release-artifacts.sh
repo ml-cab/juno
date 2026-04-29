@@ -7,7 +7,7 @@
 #   ./scripts/create-release-artifacts.sh 0.1.0
 #   ./scripts/create-release-artifacts.sh --checksums-only 0.1.0   # SHA-256 only (no GPG)
 #
-# GPG: requires a secret key and unlocked agent (or batch passphrase setup).
+# GPG: secret key + agent, or set JUNO_GPG_PASSPHRASE for loopback batch signing (see release.sh).
 set -euo pipefail
 
 CHECKSUMS_ONLY=0
@@ -50,14 +50,26 @@ if [[ "$CHECKSUMS_ONLY" -eq 1 ]]; then
 	exit 0
 fi
 
+# Optional batch passphrase (CI / release.sh); prefer gpg-agent for interactive use.
+gpg_sign_file() {
+	local out="$1"
+	local in="$2"
+	local -a gp=(gpg --batch --yes)
+	if [[ -n "${JUNO_GPG_PASSPHRASE:-}" ]]; then
+		gp+=(--pinentry-mode loopback --passphrase "$JUNO_GPG_PASSPHRASE")
+	fi
+	gp+=(--detach-sign --armor --output "$out" "$in")
+	"${gp[@]}"
+}
+
 SIGN_OK=1
 for j in *.jar; do
 	[[ -f "$j" ]] || continue
-	if ! gpg --batch --yes --detach-sign --armor --output "${j}.asc" "$j" 2>>SIGNING.log; then
+	if ! gpg_sign_file "${j}.asc" "$j" 2>>SIGNING.log; then
 		SIGN_OK=0
 	fi
 done
-if ! gpg --batch --yes --detach-sign --armor --output SHA256SUMS.asc SHA256SUMS 2>>SIGNING.log; then
+if ! gpg_sign_file SHA256SUMS.asc SHA256SUMS 2>>SIGNING.log; then
 	SIGN_OK=0
 fi
 
