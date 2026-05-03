@@ -24,7 +24,8 @@ set -uo pipefail
 export LC_NUMERIC=C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-QA_DIR="${SCRIPT_DIR}/../qa"
+QA_DIR="$SCRIPT_DIR"
+AWS_DIR="$(cd "${SCRIPT_DIR}/../aws" && pwd)"
 YAML_FILE="${QA_DIR}/perf-test.yaml"
 RUNNER="${QA_DIR}/perf-runner.sh"
 YAML_PARSER="${QA_DIR}/yaml-parse.sh"
@@ -240,6 +241,11 @@ init_hw_home() {
         cp "$real_key" "${hw_home}/.ssh/juno-deploy-key.pem" 2>/dev/null || true
         chmod 600 "${hw_home}/.ssh/juno-deploy-key.pem" 2>/dev/null || true
     fi
+    # Copy AWS credentials so the SDK finds them under the isolated HOME.
+    # Covers ~/.aws/credentials, ~/.aws/config, and SSO cache.
+    if [[ -d "${HOME}/.aws" ]]; then
+        cp -r "${HOME}/.aws" "${hw_home}/.aws" 2>/dev/null || true
+    fi
 }
 
 start_deploy_screen() {
@@ -256,10 +262,13 @@ start_deploy_screen() {
     cmd="export HOME='${hw_home}'
 export AWS_DEFAULT_REGION='${region}'
 export AWS_ACCESS_KEY_ID='${AWS_ACCESS_KEY_ID:-}'
-export AWS_SECRET_ACCESS_KEY='${AWS_SECRET_ACCESS_KEY:-}'
-cd '${SCRIPT_DIR}'
+export AWS_SECRET_ACCESS_KEY='${AWS_SECRET_ACCESS_KEY:-}'"
+    [[ -n "${AWS_SESSION_TOKEN:-}" ]] && cmd+=$'\nexport AWS_SESSION_TOKEN='"'${AWS_SESSION_TOKEN}'"
+    [[ -n "${AWS_PROFILE:-}"       ]] && cmd+=$'\nexport AWS_PROFILE='"'${AWS_PROFILE}'"
+    cmd+="
+cd '${AWS_DIR}'
 echo '[screen/${hw}] juno-deploy.sh setup starting in ${region}'
-./juno-deploy.sh setup ${setup_args} --region '${region}' 2>&1 | tee '${log_file}'
+./launcher.sh juno-deploy.sh setup ${setup_args} --region '${region}' 2>&1 | tee '${log_file}'
 echo '__SETUP_DONE__' | tee -a '${log_file}'"
 
     screen -dmS "$sname" bash -c "$cmd"
@@ -274,9 +283,18 @@ wait_setup_done() {
 
     log "Waiting for ${label} setup (timeout ${timeout}s)..."
     while [[ $elapsed -lt $timeout ]]; do
-        if grep -q '__SETUP_DONE__' "$log_file" 2>/dev/null; then
+        # Success: juno-deploy.sh reached _fetch_ips_and_monitor and logged the
+        # coordinator URL. On the success path the process never exits (monitor
+        # loop), so __SETUP_DONE__ is never written; Web console is the signal.
+        if grep -q 'Web console' "$log_file" 2>/dev/null; then
             log "${label} setup complete."
             return 0
+        fi
+        # Failure: juno-deploy.sh exited. It only exits on the error path;
+        # the success path loops forever in _fetch_ips_and_monitor.
+        if grep -q '__SETUP_DONE__' "$log_file" 2>/dev/null; then
+            warn "${label} setup exited unexpectedly — treating as failure."
+            return 1
         fi
         if grep -qE '^\[error\]|die |Insufficient quota|setup failed' "$log_file" 2>/dev/null; then
             warn "${label} setup log contains error — stopping wait early."
@@ -293,8 +311,24 @@ wait_setup_done() {
 get_coordinator_ip() {
     local hw_home="$1"
     local region="$2"
-    local state_file="${hw_home}/.juno-deploy-state"
+    local log_file="$3"
 
+    # Primary: extract from the "Web console" line logged by _fetch_ips_and_monitor
+    # before it enters the monitoring loop. The line format (with ANSI stripped) is:
+    #   [juno]   Web console   : http://<ip>:8080  (available once juno-ready)
+    # wait_setup_done already confirmed this line is present, so this always
+    # succeeds on the normal path without an extra AWS API call.
+    local ip_from_log
+    ip_from_log=$(grep 'Web console' "$log_file" 2>/dev/null \
+        | grep -o 'http://[0-9.]*' | sed 's|http://||' | head -1)
+    if [[ -n "$ip_from_log" && "$ip_from_log" != "None" ]]; then
+        echo "$ip_from_log"
+        return
+    fi
+
+    # Fallback: read state file and query AWS. Handles edge cases where the log
+    # line is absent (e.g. log rotation, truncation).
+    local state_file="${hw_home}/.juno-deploy-state"
     [[ -f "$state_file" ]] || { echo ""; return; }
 
     local coord_mode coord_id node_ids
@@ -355,8 +389,8 @@ teardown_deploy() {
         export AWS_DEFAULT_REGION="$region"
         export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
         export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}"
-        cd "$SCRIPT_DIR"
-        ./juno-deploy.sh teardown --region "$region" \
+        cd "$AWS_DIR"
+        ./launcher.sh juno-deploy.sh teardown --region "$region" \
             > "${LOG_BASE}/${hw}-teardown.log" 2>&1 || true
     )
     screen -S "juno-${hw}" -X quit 2>/dev/null || true
@@ -439,11 +473,26 @@ run_hw_target() {
     start_deploy_screen "$hw" "$setup_args" "$hw_home" "$region" "$log_file"
 
     if ! wait_setup_done "$log_file" "$hw"; then
-        printf '{"hw":"%s","region":"%s","error":"setup failed or timed out"}\n' \
-            "$hw" "$region" > "$result_file"; return; fi
+        # For GPU: retry once in the alternate region on quota / capacity errors.
+        # Each run_hw_target call is in its own subshell so this swap is local
+        # and does not affect the parallel CPU target.
+        if [[ "$hw" == "gpu" ]] && \
+           grep -qiE 'Insufficient|VcpuLimit|quota|capacity' "$log_file" 2>/dev/null && \
+           [[ -n "$CPU_REGION" && "$CPU_REGION" != "$region" ]]; then
+            warn "GPU quota/capacity failure in ${region} — retrying in ${CPU_REGION}."
+            region="$CPU_REGION"
+            log_file="${LOG_BASE}/${hw}-setup-retry.log"
+            start_deploy_screen "$hw" "$setup_args" "$hw_home" "$region" "$log_file"
+            if ! wait_setup_done "$log_file" "$hw"; then
+                printf '{"hw":"%s","region":"%s","error":"setup failed after region swap"}\n' \
+                    "$hw" "$region" > "$result_file"; return; fi
+        else
+            printf '{"hw":"%s","region":"%s","error":"setup failed or timed out"}\n' \
+                "$hw" "$region" > "$result_file"; return; fi
+    fi
 
     local coord_ip
-    coord_ip=$(get_coordinator_ip "$hw_home" "$region")
+    coord_ip=$(get_coordinator_ip "$hw_home" "$region" "$log_file")
     if [[ -z "$coord_ip" || "$coord_ip" == "None" ]]; then
         printf '{"hw":"%s","region":"%s","error":"coordinator IP unavailable"}\n' \
             "$hw" "$region" > "$result_file"; return; fi
@@ -641,7 +690,7 @@ run_suite() {
 
 usage() {
     cat <<USAGE
-Usage: ./launcher.sh perf-test.sh [options]
+Usage: ../aws/launcher.sh perf-test.sh [options]
 
 Options:
   --suite <id|number>   Run a specific suite by id or 1-based number
@@ -649,10 +698,10 @@ Options:
   --help                Show this help
 
 Examples:
-  ./launcher.sh perf-test.sh --list
-  ./launcher.sh perf-test.sh --suite 1
-  ./launcher.sh perf-test.sh --suite baseline
-  ./launcher.sh perf-test.sh --suite dtype_sweep
+  ../aws/launcher.sh perf-test.sh --list
+  ../aws/launcher.sh perf-test.sh --suite 1
+  ../aws/launcher.sh perf-test.sh --suite baseline
+  ../aws/launcher.sh perf-test.sh --suite dtype_sweep
 USAGE
 }
 

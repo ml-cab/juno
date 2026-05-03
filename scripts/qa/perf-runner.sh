@@ -531,7 +531,8 @@ cmd_run() {
     mkdir -p "$output_dir"
 
     local tmp_root; tmp_root=$(mktemp -d)
-    trap 'rm -rf "$tmp_root"' EXIT
+    # shellcheck disable=SC2064 — intentional early expansion while tmp_root is in scope
+    trap "rm -rf '$tmp_root'" EXIT
 
     local scenario_results_json="["
     local first_sr=1
@@ -613,6 +614,7 @@ cmd_run() {
 
             # Collect results
             local lat_file="${tmp_root}/latencies_${scenario}_${vi}.txt"
+            touch "$lat_file"
             local raw_results_json="["
             local first_r=1
             local total_tokens=0
@@ -744,7 +746,7 @@ _print_report() {
 
         # config fields
         local cfg_itype cfg_nodes cfg_ptype cfg_dtype cfg_border cfg_lora cfg_coord_mode
-        local cfg_block; cfg_block=$(printf '%s' "$run" | sed -n 's/.*"config"[[:space:]]*:{//{/;s/}.*//p' | head -1)
+        local cfg_block; cfg_block=$(printf '%s' "$run" | sed -n 's/.*"config"[[:space:]]*:{/{/;s/}.*//p' | head -1)
         cfg_itype=$(json_str "instance_type" "$cfg_block");   cfg_itype="${cfg_itype:-?}"
         cfg_nodes=$(json_val "node_count"    "$cfg_block");   cfg_nodes="${cfg_nodes:-?}"
         cfg_ptype=$(json_str "ptype"         "$cfg_block");   cfg_ptype="${cfg_ptype:-?}"

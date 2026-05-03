@@ -97,7 +97,7 @@ scenarios:
         expected_reply_fragment: "Viktor"
       - turn: 3
         role: user
-        content: "Thank you so mutch, have a nice day!"
+        content: "Thank you so much, have a nice day!"
         approx_user_tokens: 30
         approx_reply_tokens: 17
 
