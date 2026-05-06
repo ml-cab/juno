@@ -11,8 +11,8 @@ set "DIR=%~dp0"
 if "%DIR:~-1%"=="\" set "DIR=%DIR:~0,-1%"
 for %%I in ("%DIR%\..") do set "DIR=%%~fI"
 
-set "PLAYER_JAR=%DIR%\player\target\player.jar"
-set "LIVE_JAR=%DIR%\integration\target\integration.jar"
+set "JUNO_PLAYER_JAR=%DIR%\juno-player\target\juno-player.jar"
+set "LIVE_JAR=%DIR%\juno-master\target\juno-master.jar"
 
 rem UTF-8 codepage + ANSI VTP for colours
 chcp 65001 >nul 2>&1
@@ -134,7 +134,7 @@ if "%MODEL%"=="" (
   exit /b 1
 )
 if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
-call :require_jar "%PLAYER_JAR%" "player"
+call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
 echo [WARN] Starting 3-node cluster  (pType=%PTYPE%  dtype=%DTYPE%  byteOrder=%BYTE_ORDER%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  heap=%HEAP%  gpu=%USE_GPU%)
@@ -158,7 +158,7 @@ if not "%JFR_DURATION_CLUSTER%"=="" (
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -240,7 +240,7 @@ if "%MODEL%"=="" (
   exit /b 1
 )
 if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
-call :require_jar "%PLAYER_JAR%" "player"
+call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
 echo [INFO] Starting local in-process REPL  (dtype=%DTYPE%  byteOrder=%BYTE_ORDER%  max_tokens=%MAX_TOKENS%  temperature=%TEMPERATURE%  nodes=%NODES%  heap=%HEAP%  gpu=%USE_GPU%)
@@ -263,7 +263,7 @@ if not "%JFR_DURATION_LOCAL%"=="" (
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -374,7 +374,7 @@ if "%MODEL%"=="" (
   exit /b 1
 )
 if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
-call :require_jar "%PLAYER_JAR%" "player"
+call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
 rem Default alpha = rank when not set
@@ -405,7 +405,7 @@ if not "%JFR_DURATION_LORA%"=="" (
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-steps %LORA_STEPS% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-steps %LORA_STEPS% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -461,7 +461,7 @@ if "%MODEL%"=="" (
   exit /b 1
 )
 if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
-call :require_jar "%LIVE_JAR%" "integration"
+call :require_jar "%LIVE_JAR%" "juno-master"
 if errorlevel 1 exit /b 1
 
 echo [INFO] Running ModelLiveRunner  (pType=%PTYPE%  heap=%HEAP%)
@@ -485,8 +485,8 @@ rem ============================================================================
 echo.
 echo juno runtime launcher  (Windows, no Maven - uses pre-built jars)
 echo   Java:       %JAVA%
-echo   player jar: %PLAYER_JAR%
-echo   live jar:   %LIVE_JAR%
+echo   juno-player jar: %JUNO_PLAYER_JAR%
+echo   juno-master jar: %LIVE_JAR%
 echo.
 echo   Build first (one time):
 echo     mvn clean package -DskipTests

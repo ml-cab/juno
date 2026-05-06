@@ -8,8 +8,15 @@
 	<version>0.1.0-SNAPSHOT</version>
 	<packaging>pom</packaging>
 	<name>Java Unified Neural Orchestration</name>
-	<description>Java Unified Neural Orchestration (Juno) -- distributed LLM inference and fine-tuning framework</description>
+	<description>Java Unified Neural Orchestration (Juno) -- distributed LLM
+		inference and fine-tuning framework</description>
 	<url>https://ml.cab/juno.html</url>
+	<scm>
+		<connection>scm:git:https://github.com/ml-cab/juno.git</connection>
+		<developerConnection>scm:git:git@github.com:ml-cab/juno.git</developerConnection>
+		<url>https://github.com/ml-cab/juno</url>
+		<tag>v0.1.0</tag>
+	</scm>
 	<modules>
 		<module>api</module>
 		<!-- core libraries -->
@@ -24,7 +31,7 @@
 		<!-- JFR instrumentation -->
 		<module>metrics</module>
 		<!-- executables -->
-		<module>player</module>
+		<module>juno-player</module>
 		<module>juno-master</module>
 		<module>juno-node</module>
 	</modules>
@@ -39,7 +46,8 @@
 		<grpc.version>1.68.0</grpc.version>
 		<protobuf.version>3.25.3</protobuf.version>
 		<protobuf-plugin.version>3.11.4</protobuf-plugin.version>
-		<!-- GPU: org.bytedeco cuda (JavaCPP presets), works with various NVIDIA GPUs; 12.6 runtime compatible with driver 12.x/13.x -->
+		<!-- GPU: org.bytedeco cuda (JavaCPP presets), works with various NVIDIA
+		GPUs; 12.6 runtime compatible with driver 12.x/13.x -->
 		<bytedeco.cuda.version>12.6-9.5-1.5.11</bytedeco.cuda.version>
 		<!-- DJL / Tokenizer -->
 		<djl.version>0.27.0</djl.version>
@@ -127,7 +135,7 @@
 			</dependency>
 			<dependency>
 				<groupId>cab.ml</groupId>
-				<artifactId>player</artifactId>
+				<artifactId>juno-player</artifactId>
 				<version>${project.version}</version>
 			</dependency>
 			<!-- Hazelcast -->
@@ -158,22 +166,12 @@
 				<artifactId>protobuf-java</artifactId>
 				<version>${protobuf.version}</version>
 			</dependency>
-			<!-- CUDA via JavaCPP presets (org.bytedeco); includes cudart + cublas, platform natives -->
+			<!-- CUDA via JavaCPP presets (org.bytedeco); includes cudart +
+			cublas, platform natives -->
 			<dependency>
 				<groupId>org.bytedeco</groupId>
 				<artifactId>cuda-platform</artifactId>
 				<version>${bytedeco.cuda.version}</version>
-			</dependency>
-			<!-- DJL -->
-			<dependency>
-				<groupId>ai.djl</groupId>
-				<artifactId>api</artifactId>
-				<version>${djl.version}</version>
-			</dependency>
-			<dependency>
-				<groupId>ai.djl.sentencepiece</groupId>
-				<artifactId>sentencepiece</artifactId>
-				<version>${djl.version}</version>
 			</dependency>
 			<!-- chronicle-map off-heap cache -->
 			<dependency>
@@ -339,6 +337,52 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
 			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-release-plugin</artifactId>
+				<version>3.1.1</version>
+				<configuration>
+					<tagNameFormat>v@{project.version}</tagNameFormat>
+					<autoVersionSubmodules>true</autoVersionSubmodules>
+					<pushChanges>false</pushChanges>
+					<!-- Tag may exist only locally until origin is pushed -->
+					<localCheckout>true</localCheckout>
+					<checkModificationExcludes>
+						<checkModificationExclude>CLAUDE.md</checkModificationExclude>
+					</checkModificationExcludes>
+					<arguments>-DskipTests -DskipITs</arguments>
+					<goals>install</goals>
+				</configuration>
+			</plugin>
 		</plugins>
 	</build>
+	<profiles>
+		<!--
+		  Sign primary artifacts during verify (after shade repackage).
+		  mvn clean verify -DskipTests -Prelease-sign
+		  Requires a GPG secret key and (non-interactive) gpg-agent or
+		-Dgpg.passphrase=...
+		-->
+		<profile>
+			<id>release-sign</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-gpg-plugin</artifactId>
+						<version>3.2.7</version>
+						<executions>
+							<execution>
+								<id>sign-release</id>
+								<phase>verify</phase>
+								<goals>
+									<goal>sign</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 </project>

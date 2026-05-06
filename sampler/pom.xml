@@ -1,26 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-         http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
 
-    <parent>
-	<groupId>cab.ml</groupId>
-	<artifactId>juno</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
-    </parent>
+	<parent>
+		<groupId>cab.ml</groupId>
+		<artifactId>juno</artifactId>
+		<version>0.1.2</version>
+	</parent>
 
-    <artifactId>sampler</artifactId>
-    <name>sampler</name>
-    <description>Sampler — pure Java, zero external deps, temperature/top-k/top-p/repetition-penalty pipeline, configurable presets</description>
+	<artifactId>sampler</artifactId>
+	<name>sampler</name>
+	<description>Sampler — pure Java, zero external deps,
+		temperature/top-k/top-p/repetition-penalty pipeline, configurable
+		presets</description>
 
-    <dependencies>
-        <dependency>
-            <groupId>cab.ml</groupId>
-            <artifactId>api</artifactId>
-        </dependency>
-        <!-- Pure Java — no external deps beyond api and logging -->
-    </dependencies>
+	<dependencies>
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>api</artifactId>
+		</dependency>
+		<!-- Pure Java — no external deps beyond api and logging -->
+	</dependencies>
 
 </project>

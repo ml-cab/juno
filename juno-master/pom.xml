@@ -5,15 +5,15 @@
 	<modelVersion>4.0.0</modelVersion>
 
 	<parent>
-	<groupId>cab.ml</groupId>
-	<artifactId>juno</artifactId>
+		<groupId>cab.ml</groupId>
+		<artifactId>juno</artifactId>
 		<version>0.1.0-SNAPSHOT</version>
 	</parent>
 
 	<artifactId>juno-master</artifactId>
 	<name>juno-master</name>
 	<description>
-		Juno-master standalone coordinator entry point. 
+		Juno-master standalone coordinator entry point.
 		Full-cluster tests.
 
 		Two test flavours:
@@ -24,12 +24,13 @@
 		ProcessBuilder,
 		each on a separate gRPC port, connected by a
 		ProcessPipelineClient that wires the coordinator to them.
-
 		ModelLiveRunnerIT — live model tests across all models listed in the
-		MODELS system property. Disabled by default; activate with -Pintegration.
+		MODELS system property. Disabled by default; activate with
+		-Pintegration.
 
 		Main class: CoordinatorMain — standalone distributed coordinator for
-		AWS deployment. Replaces player.jar in the coordinator systemd service.
+		AWS deployment. Replaces juno-player.jar in the coordinator systemd
+		service.
 
 		Recommended model for real-weight testing (no GPU required for stubs):
 		TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf ~670 MB
@@ -80,7 +81,7 @@
 		</dependency>
 		<dependency>
 			<groupId>cab.ml</groupId>
-			<artifactId>player</artifactId>
+			<artifactId>juno-player</artifactId>
 		</dependency>
 		<!-- gRPC for EmbeddedNodeServer + ProcessPipelineClient -->
 		<dependency>
@@ -95,7 +96,7 @@
 			<groupId>io.grpc</groupId>
 			<artifactId>grpc-stub</artifactId>
 		</dependency>
-<!--
+		<!--
 		<dependency>
 			<groupId>cab.ml</groupId>
 			<artifactId>node</artifactId>
@@ -152,11 +153,13 @@
 							<transformers>
 								<transformer
 									implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-									<!-- CoordinatorMain is the production entry point for the
+									<!-- CoordinatorMain is the production entry
+									point for the
 									     integration.jar used by the coordinator systemd service.
 									     juno-deploy.sh launches it with: java -jar integration.jar
 									     All configuration is read from environment variables. -->
-									<mainClass>cab.ml.juno.master.CoordinatorMain</mainClass>
+									<mainClass>
+										cab.ml.juno.master.CoordinatorMain</mainClass>
 								</transformer>
 								<!-- Merge service files if any (gRPC uses them) -->
 								<transformer
@@ -188,7 +191,8 @@
 
 	<profiles>
 
-		<!-- ── GPU profile ──────────────────────────────────────────────────────
+		<!-- ── GPU profile
+		──────────────────────────────────────────────────────
 		     Activate with: mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf
 		     Requires: CUDA 12.x, Nvidia GPU, model file at it.model.path.
 		     Recommended instance: AWS g4dn.xlarge (T4, 16 GB VRAM).
@@ -201,11 +205,12 @@
 						<groupId>org.apache.maven.plugins</groupId>
 						<artifactId>maven-failsafe-plugin</artifactId>
 						<configuration>
-							<argLine>--enable-preview --enable-native-access=ALL-UNNAMED</argLine>
+							<argLine>--enable-preview
+								--enable-native-access=ALL-UNNAMED</argLine>
 							<forkCount>1</forkCount>
 							<reuseForks>false</reuseForks>
 							<!-- Include GPU tests when -Pgpu is active -->
-							<excludes/>
+							<excludes />
 							<includes>
 								<include>**/GpuForwardPassIT.java</include>
 							</includes>
@@ -221,7 +226,8 @@
 			</build>
 		</profile>
 
-		<!-- ── Integration profile ──────────────────────────────────────────────
+		<!-- ── Integration profile
+		──────────────────────────────────────────────
 		     Runs ModelLiveRunnerIT against real model files.
 		     Disabled by default — not triggered by mvn clean package.
 
@@ -243,16 +249,19 @@
 						<groupId>org.apache.maven.plugins</groupId>
 						<artifactId>maven-failsafe-plugin</artifactId>
 						<configuration>
-							<argLine>--enable-preview --enable-native-access=ALL-UNNAMED</argLine>
+							<argLine>--enable-preview
+								--enable-native-access=ALL-UNNAMED</argLine>
 							<forkCount>1</forkCount>
 							<reuseForks>false</reuseForks>
-							<!-- Run only ModelLiveRunnerIT — not the stub-based ITs -->
-							<excludes/>
+							<!-- Run only ModelLiveRunnerIT — not the stub-based
+							ITs -->
+							<excludes />
 							<includes>
 								<include>**/ModelLiveRunnerIT.java</include>
 							</includes>
 							<systemPropertyVariables>
-								<!-- Pass MODELS maven property through to the test JVM.
+								<!-- Pass MODELS maven property through to the
+								test JVM.
 								     Set on the command line: -DMODELS=/path/a.gguf,/path/b.gguf -->
 								<MODELS>${MODELS}</MODELS>
 								<it.timeout.ms>300000</it.timeout.ms>

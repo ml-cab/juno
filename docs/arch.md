@@ -258,7 +258,7 @@ no model file, no GPU, boots in seconds.
 
 ```
 juno-master (fat jar)
-    +-- player
+    +-- juno-player
     +-- coordinator
     +-- node
     |     +-- lora

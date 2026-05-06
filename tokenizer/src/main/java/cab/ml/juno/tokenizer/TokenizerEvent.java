@@ -28,8 +28,6 @@ import jdk.jfr.StackTrace;
  * <p>Fired by every concrete {@link Tokenizer} implementation:
  * <ul>
  *   <li>{@link GgufTokenizer}   — {@code tokenizerType = "gguf"}
- *   <li>{@link DJLTokenizer}    — {@code tokenizerType = "djl"}
- *   <li>{@link StubTokenizer}   — {@code tokenizerType = "stub"}
  *   <li>{@link SimpleTokenizer} — {@code tokenizerType = "simple"}
  * </ul>
  *

@@ -11,8 +11,8 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-PLAYER_JAR="$DIR/player/target/player.jar"
-LIVE_JAR="$DIR/integration/target/integration.jar"
+JUNO_PLAYER_JAR="$DIR/juno-player/target/juno-player.jar"
+LIVE_JAR="$DIR/juno-master/target/juno-master.jar"
 HEALTH_JAR="$DIR/health/target/juno-health.jar"
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
@@ -248,7 +248,7 @@ cmd_cluster() {
   [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 cluster --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 cluster"
   [[ -f "$model" ]] || err "Model file not found: $model"
 
-  require_jar "$PLAYER_JAR" "player"
+  require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
 
   warn "Starting 3-node cluster  (pType=${ptype}  dtype=${dtype}  byteOrder=${byte_order}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
@@ -287,7 +287,7 @@ cmd_cluster() {
     -Xms512m "-Xmx${heap}" \
     "-Djuno.node.heap=${heap}" \
     "-Djuno.byteOrder=${byte_order}" \
-    -jar "$PLAYER_JAR" \
+    -jar "$JUNO_PLAYER_JAR" \
     --model-path "$model" \
     --dtype "$dtype" \
     --byteOrder "$byte_order" \
@@ -407,7 +407,7 @@ cmd_local() {
   [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 local --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 local"
   [[ -f "$model" ]] || err "Model file not found: $model"
 
-  require_jar "$PLAYER_JAR" "player"
+  require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
 
   info "Starting local in-process REPL  (dtype=${dtype}  byteOrder=${byte_order}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
@@ -442,7 +442,7 @@ cmd_local() {
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
     "-Djuno.byteOrder=${byte_order}" \
-    -jar "$PLAYER_JAR" \
+    -jar "$JUNO_PLAYER_JAR" \
     --model-path "$model" \
     --dtype "$dtype" \
     --byteOrder "$byte_order" \
@@ -587,7 +587,7 @@ cmd_lora() {
   [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 lora --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 lora"
   [[ -f "$model" ]] || err "Model file not found: $model"
 
-  require_jar "$PLAYER_JAR" "player"
+  require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
 
   # Default alpha = rank when not explicitly set
@@ -630,7 +630,7 @@ cmd_lora() {
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
     ${jfr_flag:+"$jfr_flag"} \
-    -jar "$PLAYER_JAR" \
+    -jar "$JUNO_PLAYER_JAR" \
     --model-path "$model" \
     --lora \
     --lora-rank  "$lora_rank" \
@@ -711,7 +711,7 @@ cmd_test() {
   [[ -n "$model" ]] || err "Model path is required.\n  Usage: MODEL_PATH=/path/to/model.gguf $0 test\n     or: $0 test /path/to/model.gguf\n     or: $0 test --model-path /path/to/model.gguf"
   [[ -f "$model" ]] || err "Model file not found: $model"
 
-  require_jar "$LIVE_JAR" "integration"
+  require_jar "$LIVE_JAR" "juno-master"
   check_java_version
 
   info "Running ModelLiveRunner  (model=$(basename "$model")  pType=${ptype}  heap=${heap}  os=${OS})"
@@ -810,8 +810,8 @@ usage() {
   echo -e "${CYAN}juno runtime launcher${NC}  (no Maven — uses pre-built jars)"
   echo -e "  OS detected: ${DIM}${OS}${NC}"
   echo -e "  Java:        ${DIM}${JAVA}${NC}"
-  echo -e "  player jar:  ${DIM}${PLAYER_JAR}${NC}"
-  echo -e "  live jar:    ${DIM}${LIVE_JAR}${NC}"
+  echo -e "  juno-player jar:  ${DIM}${JUNO_PLAYER_JAR}${NC}"
+  echo -e "  juno-master jar: ${DIM}${LIVE_JAR}${NC}"
   echo -e "  health jar:  ${DIM}${HEALTH_JAR}${NC}"
   echo ""
   echo "  Build jars first (one time):"
@@ -923,15 +923,15 @@ cmd_merge() {
 
   [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 merge --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 merge"
 
-  local player_jar="$DIR/player/target/player.jar"
-  [[ -f "$player_jar" ]] || err "player.jar not found — build first with: mvn clean package -DskipTests"
+  local juno_player_jar="$DIR/juno-player/target/juno-player.jar"
+  [[ -f "$juno_player_jar" ]] || err "juno-player.jar not found — build first with: mvn clean package -DskipTests"
 
   prepend_cuda_bin_to_path_if_gpu "$use_gpu"
 
   info "Starting LoRA merge  (heap=${heap})"
 
   "$JAVA" -Xmx${heap} \
-    -cp "$player_jar" \
+    -cp "$juno_player_jar" \
     cab.ml.juno.player.LoraMergeMain \
     ${model:+--model-path "$model"} \
     ${lora:+--lora-path  "$lora"} \

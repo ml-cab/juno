@@ -464,7 +464,7 @@ Requires JDK 25+ and Maven 3.9+.
 ```bash
 mvn clean package -DskipTests          # build — produces shade jars
 
-mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,player
+mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
                                        # unit tests — no model file, no GPU needed
 
 mvn verify -pl juno-master             # integration tests — forks 3 JVM nodes (stub mode)
