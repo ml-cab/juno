@@ -109,7 +109,7 @@ info:
     | 429  | rate_limit_exceeded | Scheduler queue full                        |
     | 500  | internal_error    | Unexpected inference error                   |
 
-  version: 0.1.0-SNAPSHOT
+  version: 0.1.0
   contact:
     name: jUno
     url: https://ml.cab/juno

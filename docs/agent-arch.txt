@@ -14,4 +14,8 @@ LoRA GPU defaults:
   LoraTrainableHandler.load(path, ctx, adapters) uses selectLoraBackend().
   ForwardPassHandlerLoader.load(..., backend, adapters) passes backend into LoraTrainableHandler.
 
-See docs/howto.md, README.md, docs/arch.md, docs/LoRA.md for human-oriented detail.
+See README.md, docs/howto.md, docs/arch.md, docs/LoRA.md,
+  docs/integration-maven.md, docs/performance.md, docs/legal.md,
+  docs/juno_test_matrix.html,
+  docs/features/distributed-inference.md, openai-rest-api.md, lora-and-merge.md,
+  gpu-acceleration.md, jfr-metrics.md

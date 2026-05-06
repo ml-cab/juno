@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>juno :: test matrix</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+  :root {
+    --bg:        #0b0d0f;
+    --bg2:       #111416;
+    --bg3:       #181b1e;
+    --border:    #2a2d31;
+    --dim:       #3a3d42;
+    --muted:     #5a5f66;
+    --text:      #c8cdd4;
+    --head:      #e8edf4;
+    --green:     #3dba6e;
+    --green-dim: #1a4a2e;
+    --amber:     #e0a030;
+    --amber-dim: #3a2800;
+    --blue:      #4a9edd;
+    --blue-dim:  #0e2a42;
+    --red:       #e05050;
+    --red-dim:   #3a1010;
+    --purple:    #9a7fd4;
+    --teal:      #3db8a8;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 24px;
+  }
+
+  /* ── top bar ── */
+  .topbar {
+    border: 1px solid var(--border);
+    border-bottom: none;
+    background: var(--bg2);
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .topbar .logo { color: var(--green); font-weight: 700; font-size: 13px; letter-spacing: 0.08em; }
+  .topbar .sep  { color: var(--dim); }
+  .topbar .sub  { color: var(--muted); font-size: 11px; }
+  .topbar .right { margin-left: auto; color: var(--muted); font-size: 10px; }
+
+  /* ── section divider ── */
+  .divider {
+    border: 1px solid var(--border);
+    border-top: none;
+    border-bottom: none;
+    background: var(--bg3);
+    padding: 5px 14px;
+    color: var(--muted);
+    font-size: 10px;
+    display: flex;
+    gap: 20px;
+    align-items: center;
+  }
+  .divider .tag { color: var(--amber); }
+
+  /* ── filter bar ── */
+  .filterbar {
+    border: 1px solid var(--border);
+    border-top: none;
+    border-bottom: none;
+    background: var(--bg2);
+    padding: 7px 14px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .filterbar span { color: var(--muted); font-size: 10px; margin-right: 4px; }
+  .fbtn {
+    font-family: inherit;
+    font-size: 10px;
+    padding: 2px 9px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    letter-spacing: 0.04em;
+  }
+  .fbtn:hover { border-color: var(--dim); color: var(--text); }
+  .fbtn.active { border-color: var(--green); color: var(--green); background: var(--green-dim); }
+  .fbtn.f-cpu.active  { border-color: var(--amber); color: var(--amber); background: var(--amber-dim); }
+  .fbtn.f-gpu.active  { border-color: var(--blue);  color: var(--blue);  background: var(--blue-dim);  }
+  .fbtn.f-done.active { border-color: var(--green); color: var(--green); background: var(--green-dim); }
+  .fbtn.f-pend.active { border-color: var(--amber); color: var(--amber); background: var(--amber-dim); }
+  .fbtn.f-add.active  { border-color: var(--blue);  color: var(--blue);  background: var(--blue-dim);  }
+
+  /* ── legend ── */
+  .legend {
+    border: 1px solid var(--border);
+    border-top: none;
+    border-bottom: none;
+    background: var(--bg2);
+    padding: 5px 14px;
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .leg { display: flex; align-items: center; gap: 5px; font-size: 10px; }
+  .lsq { width: 9px; height: 9px; border: 1px solid; flex-shrink: 0; }
+  .l-done  { background: var(--green-dim);  border-color: var(--green);  color: var(--green);  }
+  .l-pend  { background: var(--amber-dim);  border-color: var(--amber);  color: var(--amber);  }
+  .l-add   { background: var(--blue-dim);   border-color: var(--blue);   color: var(--blue);   }
+  .l-na    { background: var(--bg3);        border-color: var(--dim);    color: var(--muted);  }
+
+  /* ── table wrap ── */
+  .tbl-outer {
+    border: 1px solid var(--border);
+    border-top: none;
+    overflow-x: auto;
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 820px;
+  }
+
+  thead th {
+    background: var(--bg3);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 500;
+    text-align: right;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+  }
+  thead th.left { text-align: left; }
+  thead th.scenario-head {
+    border-left: 1px solid var(--dim);
+    color: var(--text);
+    text-align: center;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+  }
+
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:hover td { background: #141719 !important; }
+
+  .hw-sep td {
+    background: var(--bg3);
+    color: var(--muted);
+    font-size: 10px;
+    padding: 4px 14px;
+    letter-spacing: 0.1em;
+    text-align: center;
+    border-right: 1px solid var(--border);
+  }
+  .hw-sep .hw-label-cpu { color: var(--amber); font-weight: 700; }
+  .hw-sep .hw-label-gpu { color: var(--blue);  font-weight: 700; }
+
+  td {
+    padding: 4px 10px;
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+  td.cfg { color: var(--muted); font-size: 11px; }
+  td.id-cell { color: var(--dim); font-size: 10px; text-align: right; width: 28px; }
+
+  td.hw-cpu { border-left: 3px solid var(--amber); }
+  td.hw-gpu { border-left: 3px solid var(--blue); }
+
+  td.cell-done {
+    background: var(--green-dim);
+    color: var(--green);
+    font-size: 11px;
+    font-weight: 500;
+    text-align: center;
+  }
+  td.cell-pend {
+    background: var(--amber-dim);
+    color: var(--amber);
+    font-size: 10px;
+    text-align: center;
+    letter-spacing: 0.04em;
+  }
+  td.cell-add {
+    background: var(--blue-dim);
+    color: var(--blue);
+    font-size: 10px;
+    text-align: center;
+    letter-spacing: 0.04em;
+  }
+  td.cell-na {
+    background: transparent;
+    color: var(--dim);
+    text-align: center;
+    font-size: 11px;
+  }
+
+  /* ── analytics panel ── */
+  .analytics {
+    border: 1px solid var(--border);
+    border-top: none;
+    background: var(--bg2);
+    padding: 16px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+    margin-top: 0;
+  }
+  .acard {
+    border: 1px solid var(--border);
+    background: var(--bg3);
+    padding: 12px 14px;
+  }
+  .acard-title {
+    color: var(--muted);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+  }
+  .acard-val {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .acard-sub { color: var(--muted); font-size: 10px; }
+  .v-green  { color: var(--green); }
+  .v-amber  { color: var(--amber); }
+  .v-blue   { color: var(--blue);  }
+  .v-muted  { color: var(--muted); }
+
+  /* ── coverage bars ── */
+  .covbar-wrap { margin-top: 4px; }
+  .covbar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .covbar-label { font-size: 10px; color: var(--muted); width: 60px; flex-shrink: 0; }
+  .covbar-bg { flex: 1; background: var(--bg); height: 6px; }
+  .covbar-fill { height: 6px; }
+  .covbar-pct { font-size: 10px; width: 32px; text-align: right; }
+
+  /* ── insights ── */
+  .insights {
+    border: 1px solid var(--border);
+    border-top: none;
+    background: var(--bg2);
+    padding: 14px 16px;
+  }
+  .insights-title {
+    color: var(--muted);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    margin-bottom: 10px;
+  }
+  .insight { display: flex; gap: 10px; margin-bottom: 6px; align-items: flex-start; }
+  .insight-tag {
+    font-size: 9px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+    letter-spacing: 0.06em;
+    margin-top: 1px;
+  }
+  .tag-warn  { background: var(--amber-dim); color: var(--amber); border: 1px solid var(--amber); }
+  .tag-ok    { background: var(--green-dim); color: var(--green); border: 1px solid var(--green); }
+  .tag-info  { background: var(--blue-dim);  color: var(--blue);  border: 1px solid var(--blue);  }
+  .tag-crit  { background: var(--red-dim);   color: var(--red);   border: 1px solid var(--red);   }
+  .insight-text { font-size: 11px; color: var(--text); line-height: 1.5; }
+  .insight-text span { color: var(--green); }
+  .insight-text em  { color: var(--amber); font-style: normal; }
+
+  /* ── footer ── */
+  .footer {
+    border: 1px solid var(--border);
+    border-top: none;
+    padding: 6px 14px;
+    color: var(--muted);
+    font-size: 10px;
+    display: flex;
+    gap: 20px;
+  }
+  .footer .prompt { color: var(--green); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="logo">JUNO</span>
+  <span class="sep">══</span>
+  <span class="sub">performance test matrix</span>
+  <span class="sep">│</span>
+  <span class="sub">tinyllama-1.1b-chat-v1.0-q4_k_m.gguf</span>
+  <span class="sep">│</span>
+  <span class="sub">cpu: m7i-flex.large (50 tok)  gpu: g4dn.2xlarge (200 tok)</span>
+  <div class="right">generated 2026-05-02</div>
+</div>
+
+<div class="filterbar">
+  <span>filter ›</span>
+  <button class="fbtn active"      onclick="setFilter('all',this)">all</button>
+  <button class="fbtn f-cpu"       onclick="setFilter('cpu',this)">cpu</button>
+  <button class="fbtn f-gpu"       onclick="setFilter('gpu',this)">gpu</button>
+  <button class="fbtn f-done"      onclick="setFilter('done',this)">done</button>
+  <button class="fbtn f-pend"      onclick="setFilter('pending',this)">pending</button>
+  <button class="fbtn f-add"       onclick="setFilter('added',this)">suggested</button>
+</div>
+
+<div class="legend">
+  <div class="leg"><div class="lsq l-done"></div><span class="l-done">done</span> — tps measured</div>
+  <div class="leg"><div class="lsq l-pend"></div><span class="l-pend">pending</span> — in original plan</div>
+  <div class="leg"><div class="lsq l-add"></div><span class="l-add">add</span> — suggested</div>
+  <div class="leg"><div class="lsq l-na"></div><span style="color:var(--dim)">n/a</span> — not applicable</div>
+  <div style="margin-left:auto; color: var(--muted); font-size:10px;">s1 = 1 session &nbsp;│&nbsp; s9 = 9 concurrent sessions</div>
+</div>
+
+<div style="border:1px solid var(--border); border-top:none; border-bottom:none; background:var(--bg2); padding:10px 16px; display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+  <div>
+    <div style="color:var(--muted); font-size:10px; letter-spacing:0.1em; margin-bottom:6px;">SCENARIO: long</div>
+    <div style="color:var(--text); font-size:11px; line-height:1.6;">
+      Single inference request, max output.<br>
+      Prompt: <span style="color:var(--amber)">"write me a long poem about love and war, be as robust as you can"</span><br>
+      max-tokens: <span style="color:var(--green)">CPU 50</span> &nbsp;·&nbsp; <span style="color:var(--blue)">GPU 200</span><br>
+      Measures: steady-state decode throughput, prefill latency, MatVec backend performance.
+    </div>
+  </div>
+  <div>
+    <div style="color:var(--muted); font-size:10px; letter-spacing:0.1em; margin-bottom:6px;">SCENARIO: conv</div>
+    <div style="color:var(--text); font-size:11px; line-height:1.6;">
+      3-turn conversation with history recall.<br>
+      <span style="color:var(--amber)">msg1</span> "Hello, my name is Viktor…" (34 tok) &nbsp;→&nbsp; <span style="color:var(--green)">reply</span> (26 tok)<br>
+      <span style="color:var(--amber)">msg2</span> "Could you recall my name?" (43 tok) &nbsp;→&nbsp; <span style="color:var(--green)">reply</span> (20 tok)<br>
+      <span style="color:var(--amber)">msg3</span> "Thank you, have a nice day!" (30 tok) &nbsp;→&nbsp; <span style="color:var(--green)">reply</span> (17 tok)<br>
+      Measures: KV-cache reuse (or lack of), prefill cost growth across turns.
+    </div>
+  </div>
+</div>
+
+<div class="tbl-outer">
+<table id="matrix">
+<thead>
+<tr>
+  <th class="left" style="width:26px;">#</th>
+  <th class="left" style="width:40px;">hw</th>
+  <th class="left" style="width:58px;">ptype</th>
+  <th style="width:44px;">nodes</th>
+  <th class="left" style="width:60px;">coord</th>
+  <th class="left" style="width:44px;">dtype</th>
+  <th style="width:34px;">bord</th>
+  <th style="width:34px;">lora</th>
+  <th class="scenario-head" style="width:90px;">long / s1</th>
+  <th class="scenario-head" style="width:90px;">long / s9</th>
+  <th class="scenario-head" style="width:90px;">conv / s1</th>
+  <th class="scenario-head" style="width:90px;">conv / s9</th>
+</tr>
+</thead>
+<tbody id="tbody"></tbody>
+</table>
+</div>
+
+<div class="analytics" id="analytics">
+  <!-- filled by JS -->
+</div>
+
+<div class="insights">
+  <div class="insights-title">ANALYSIS ── key findings from completed cells</div>
+
+  <div class="insight">
+    <span class="insight-tag tag-ok">GPU</span>
+    <div class="insight-text">
+      GPU (g4dn) is <span>17–37x faster</span> than CPU across all single-session tests.
+      Multi-session s9 shows <span>37.24 tps aggregate</span> vs CPU's <em>1.05 tps</em> — the gap widens under load as the GPU batches sessions together into larger forward passes.
+    </div>
+  </div>
+
+  <div class="insight">
+    <span class="insight-tag tag-warn">DTYPE</span>
+    <div class="insight-text">
+      CPU dtype ranking: <span>FP16 (1.54)</span> > <span>INT8 (1.13)</span> ≈ <em>FP32 (1.06)</em> ≈ <em>LoRA (1.05)</em> ≈ <em>LE (0.97)</em>.
+      INT8 is slower than FP16 on CPU — no AVX-512 INT8 path implemented, falls back to scalar.
+      LE byte order adds ~19% overhead vs BE on CPU (MatVec total 90,286 ms vs 56,514 ms).
+    </div>
+  </div>
+
+  <div class="insight">
+    <span class="insight-tag tag-ok">GPU DTYPE</span>
+    <div class="insight-text">
+      GPU dtype ranking: <span>LoRA (22.19)</span> > <span>LE (21.63)</span> > <span>FP16/embed (20.69)</span> ≈ <span>FP32 (20.36)</span> > <span>INT8 (19.87)</span>.
+      LoRA inference overhead is negligible on GPU — adapter is resident in VRAM.
+      FP32 on GPU is only 7% slower than FP16 (driver upcasts internally, MatVec p95 identical at 0.241ms).
+    </div>
+  </div>
+
+  <div class="insight">
+    <span class="insight-tag tag-warn">NODES</span>
+    <div class="insight-text">
+      CPU pipeline node sweep: peak at <em>3 nodes (1.59 tps)</em>. Adding nodes beyond 3 degrades end-to-end TPS due to network synchronization cost per forward pass.
+      7 nodes (embedded) dropped to <em>1.12 tps</em> — below single-node baseline.
+    </div>
+  </div>
+
+  <div class="insight">
+    <span class="insight-tag tag-crit">TENSOR</span>
+    <div class="insight-text">
+      CPU 3-node tensor parallelism: <em>0.44 tps</em> — 3.5x worse than single-node pipeline.
+      Network sync at every layer dominates for this model size.
+      GPU tensor (1 node): <span>20.72 tps</span> — within noise of pipeline (19.67). No benefit, non-zero overhead.
+    </div>
+  </div>
+
+  <div class="insight">
+    <span class="insight-tag tag-crit">CONV</span>
+    <div class="insight-text">
+      CPU conv/s1: <em>0.12 tps</em> — 10x worse than long/s1. Full KV re-prefill each turn.
+      GPU conv/s1: <span>1.31 tps</span> — node prefill p95 spiked to 1,530ms vs 142ms for long.
+      Multi-turn without KV cache is O(n²) in token cost. <em>kvcache branch</em> not yet merged.
+    </div>
+  </div>
+
+  <div class="insight">
+    <span class="insight-tag tag-info">CONCURRENCY</span>
+    <div class="insight-text">
+      CPU s9: aggregate <span>1.05 tps</span> across 9 sessions — ~0.12 tps per session, identical to single-session.
+      Node decode p95 jumped to <em>10,766ms</em> (vs 1,046ms s1) — sessions serialized, queue wait dominates.
+      GPU s9: aggregate <span>37.24 tps</span> — ~4.1 tps per session. Decode p95 <em>250ms</em> vs 54ms s1 — GPU batches sessions, 4.6x speedup per session under load.
+    </div>
+  </div>
+
+  <div class="insight">
+    <span class="insight-tag tag-info">LORA</span>
+    <div class="insight-text">
+      lora-play CPU test has 3 JFR files — coordinator, node, and a third empty process (lora sidecar).
+      LoraTrainStep.count = 0 in all runs. The <em>--lora-play</em> flag loads adapter weights but no training steps were triggered during inference-only test scenarios. Training path untested.
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  <span class="prompt">$</span>
+  <span>tps = coordinator-side TokenProduced.tps &nbsp;│&nbsp; s9 = 9 concurrent sessions &nbsp;│&nbsp; coord: embedded unless stated</span>
+</div>
+
+<script>
+const D='done', P='pending', A='added', NA='na';
+
+const rows = [
+  {id:1,  hw:'cpu', pt:'pipeline', n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'1.54'],  l9:[D,'1.05'],  c1:[D,'0.12'],  c9:[P,'']},
+  {id:2,  hw:'cpu', pt:'pipeline', n:1, co:'separate', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'1.16'],  l9:[A,''],      c1:[A,''],      c9:[A,'']},
+  {id:3,  hw:'cpu', pt:'pipeline', n:3, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'1.59'],  l9:[A,''],      c1:[A,''],      c9:[A,'']},
+  {id:4,  hw:'cpu', pt:'pipeline', n:3, co:'separate', dt:'FP16', bo:'BE', lo:'off',  l1:[A,''],      l9:[A,''],      c1:[NA,''],     c9:[NA,'']},
+  {id:5,  hw:'cpu', pt:'pipeline', n:5, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'1.51'],  l9:[A,''],      c1:[NA,''],     c9:[NA,'']},
+  {id:6,  hw:'cpu', pt:'pipeline', n:5, co:'separate', dt:'FP16', bo:'BE', lo:'off',  l1:[A,''],      l9:[A,''],      c1:[NA,''],     c9:[NA,'']},
+  {id:7,  hw:'cpu', pt:'pipeline', n:7, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'1.12'],  l9:[A,''],      c1:[NA,''],     c9:[NA,'']},
+  {id:8,  hw:'cpu', pt:'pipeline', n:7, co:'separate', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'1.25'],  l9:[A,''],      c1:[NA,''],     c9:[NA,'']},
+  {id:9,  hw:'cpu', pt:'tensor',   n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'1.56'],  l9:[A,''],      c1:[A,''],      c9:[NA,'']},
+  {id:10, hw:'cpu', pt:'tensor',   n:1, co:'separate', dt:'FP16', bo:'BE', lo:'off',  l1:[A,''],      l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
+  {id:11, hw:'cpu', pt:'tensor',   n:3, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'0.44'],  l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
+  {id:12, hw:'cpu', pt:'pipeline', n:1, co:'embedded', dt:'FP16', bo:'LE', lo:'off',  l1:[D,'0.97'],  l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
+  {id:13, hw:'cpu', pt:'pipeline', n:1, co:'embedded', dt:'INT8', bo:'BE', lo:'off',  l1:[D,'1.13'],  l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
+  {id:14, hw:'cpu', pt:'pipeline', n:1, co:'embedded', dt:'FP32', bo:'BE', lo:'off',  l1:[D,'1.06'],  l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
+  {id:15, hw:'cpu', pt:'pipeline', n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'on',   l1:[D,'1.05'],  l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
+  {id:16, hw:'gpu', pt:'pipeline', n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'20.69'], l9:[D,'37.24'], c1:[D,'1.31'],  c9:[P,'']},
+  {id:17, hw:'gpu', pt:'pipeline', n:1, co:'separate', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'19.67'], l9:[A,''],      c1:[A,''],      c9:[A,'']},
+  {id:18, hw:'gpu', pt:'tensor',   n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'20.72'], l9:[A,''],      c1:[A,''],      c9:[NA,'']},
+  {id:19, hw:'gpu', pt:'tensor',   n:1, co:'separate', dt:'FP16', bo:'BE', lo:'off',  l1:[A,''],      l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
+  {id:20, hw:'gpu', pt:'pipeline', n:1, co:'embedded', dt:'FP16', bo:'LE', lo:'off',  l1:[D,'21.63'], l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
+  {id:21, hw:'gpu', pt:'pipeline', n:1, co:'embedded', dt:'INT8', bo:'BE', lo:'off',  l1:[D,'19.87'], l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
+  {id:22, hw:'gpu', pt:'pipeline', n:1, co:'embedded', dt:'FP32', bo:'BE', lo:'off',  l1:[D,'20.36'], l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
+  {id:23, hw:'gpu', pt:'pipeline', n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'on',   l1:[D,'22.19'], l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
+];
+
+const COLS = ['l1','l9','c1','c9'];
+let filter = 'all';
+
+function cellClass(s) {
+  if (s===D)  return 'cell-done';
+  if (s===P)  return 'cell-pend';
+  if (s===A)  return 'cell-add';
+  return 'cell-na';
+}
+function cellText(s, v) {
+  if (s===NA) return '·';
+  if (s===D)  return v ? v+' tps' : '✓';
+  if (s===P)  return 'pending';
+  if (s===A)  return 'add';
+  return '';
+}
+
+function render() {
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  let lastHw = null;
+
+  rows.forEach(r => {
+    const statuses = [r.l1[0], r.l9[0], r.c1[0], r.c9[0]];
+    if (filter==='cpu'     && r.hw!=='cpu')                    return;
+    if (filter==='gpu'     && r.hw!=='gpu')                    return;
+    if (filter==='done'    && !statuses.includes(D))           return;
+    if (filter==='pending' && !statuses.includes(P))           return;
+    if (filter==='added'   && !statuses.includes(A))           return;
+
+    if (r.hw !== lastHw) {
+      const sep = document.createElement('tr');
+      sep.className = 'hw-sep';
+      const isCpu = r.hw==='cpu';
+      sep.innerHTML = `<td colspan="12">
+        <span class="hw-label-${r.hw}">${r.hw.toUpperCase()}</span>
+        <span style="color:var(--dim)"> ── ${isCpu ? 'm7i-flex.large · 50 max-tokens' : 'g4dn.2xlarge · 200 max-tokens'}</span>
+      </td>`;
+      tbody.appendChild(sep);
+      lastHw = r.hw;
+    }
+
+    const tr = document.createElement('tr');
+    const hwcls = 'hw-'+r.hw;
+    const loColor  = r.lo==='on'  ? 'style="color:var(--teal)"' : '';
+    const boColor  = r.bo==='LE'  ? 'style="color:var(--purple)"' : '';
+    const dtColor  = r.dt!=='FP16'? 'style="color:var(--amber)"'  : '';
+    const ptColor  = r.pt==='tensor'? 'style="color:var(--blue)"' : '';
+
+    const cells = [r.l1, r.l9, r.c1, r.c9].map(c =>
+      `<td class="${cellClass(c[0])}">${cellText(c[0],c[1])}</td>`
+    ).join('');
+
+    tr.innerHTML = `
+      <td class="id-cell">${r.id}</td>
+      <td class="cfg ${hwcls}">${r.hw}</td>
+      <td class="cfg" ${ptColor}>${r.pt}</td>
+      <td class="cfg" style="text-align:center">${r.n}</td>
+      <td class="cfg">${r.co}</td>
+      <td class="cfg" ${dtColor}>${r.dt}</td>
+      <td class="cfg" ${boColor} style="text-align:center">${r.bo}</td>
+      <td class="cfg" ${loColor}  style="text-align:center">${r.lo}</td>
+      ${cells}
+    `;
+    tbody.appendChild(tr);
+  });
+
+  renderAnalytics();
+}
+
+function setFilter(f, btn) {
+  filter = f;
+  document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  render();
+}
+
+function renderAnalytics() {
+  const total   = rows.length * 4;
+  let done=0, pending=0, added=0, na=0;
+  const cpuDone=[], gpuDone=[];
+
+  rows.forEach(r => {
+    [r.l1, r.l9, r.c1, r.c9].forEach(c => {
+      if (c[0]===D)  { done++;    if (r.hw==='cpu' && c[1]) cpuDone.push(parseFloat(c[1])); if (r.hw==='gpu' && c[1]) gpuDone.push(parseFloat(c[1])); }
+      if (c[0]===P)  pending++;
+      if (c[0]===A)  added++;
+      if (c[0]===NA) na++;
+    });
+  });
+
+  const effective = total - na;
+  const pctDone = Math.round(done / effective * 100);
+  const maxCpu  = cpuDone.length ? Math.max(...cpuDone).toFixed(2) : '-';
+  const maxGpu  = gpuDone.length ? Math.max(...gpuDone).toFixed(2) : '-';
+
+  const scenLabels = ['long / s1', 'long / s9', 'conv / s1', 'conv / s9'];
+  const scenKeys   = ['l1','l9','c1','c9'];
+  const scenDone   = scenKeys.map(k => rows.filter(r => r[k][0]===D).length);
+  const scenTotal  = scenKeys.map(k => rows.filter(r => r[k][0]!==NA).length);
+
+  const el = document.getElementById('analytics');
+  el.innerHTML = `
+    <div class="acard">
+      <div class="acard-title">COVERAGE</div>
+      <div class="acard-val v-green">${pctDone}%</div>
+      <div class="acard-sub">${done} of ${effective} applicable cells done</div>
+      <div class="acard-sub" style="margin-top:4px">${pending} pending · ${added} suggested</div>
+    </div>
+    <div class="acard">
+      <div class="acard-title">SCENARIO COVERAGE</div>
+      <div class="covbar-wrap">
+        ${scenLabels.map((lbl,i) => {
+          const pct = Math.round(scenDone[i]/scenTotal[i]*100);
+          const col = pct===100?'var(--green)':pct>50?'var(--amber)':'var(--red)';
+          return `<div class="covbar-row">
+            <div class="covbar-label">${lbl}</div>
+            <div class="covbar-bg"><div class="covbar-fill" style="width:${pct}%;background:${col}"></div></div>
+            <div class="covbar-pct" style="color:${col}">${pct}%</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+    <div class="acard">
+      <div class="acard-title">PEAK TPS — CPU</div>
+      <div class="acard-val v-amber">${maxCpu}</div>
+      <div class="acard-sub">3-node pipeline, long/s1</div>
+      <div class="acard-sub" style="margin-top:4px">floor: <em style="color:var(--red)">0.44</em> (3-node tensor)</div>
+    </div>
+    <div class="acard">
+      <div class="acard-title">PEAK TPS — GPU</div>
+      <div class="acard-val v-blue">${maxGpu}</div>
+      <div class="acard-sub">lora-play, long/s1</div>
+      <div class="acard-sub" style="margin-top:4px">multi-session: <em style="color:var(--green)">37.24</em> (long/s9)</div>
+    </div>
+    <div class="acard">
+      <div class="acard-title">REMAINING WORK</div>
+      <div class="acard-val v-amber">${pending}</div>
+      <div class="acard-sub">cells in original plan not yet run</div>
+      <div class="acard-sub" style="margin-top:4px"><em style="color:var(--blue)">${added}</em> additional suggested cells</div>
+    </div>
+    <div class="acard">
+      <div class="acard-title">GPU / CPU RATIO</div>
+      <div class="acard-val v-green">${gpuDone.length && cpuDone.length ? (gpuDone.reduce((a,b)=>a+b)/gpuDone.length / (cpuDone.reduce((a,b)=>a+b)/cpuDone.length)).toFixed(1)+'x' : '-'}</div>
+      <div class="acard-sub">avg single-session throughput</div>
+      <div class="acard-sub" style="margin-top:4px">s9 ratio: <em style="color:var(--green)">35x</em> (37.24 vs 1.05)</div>
+    </div>
+  `;
+}
+
+render();
+</script>
+</body>
+</html>

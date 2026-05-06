@@ -1,5 +1,7 @@
 ## Juno — complete how-to reference
 
+**Documentation map:** [README.md](../README.md) (overview), [arch.md](arch.md), [LoRA.md](LoRA.md), [integration-maven.md](integration-maven.md), [performance.md](performance.md), [legal.md](legal.md), [juno_test_matrix.html](juno_test_matrix.html), [features/](features/).
+
 ```
 ./juno
 ```
@@ -15,7 +17,7 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 | `local` | In-process REPL — all transformer shards in one JVM, no forking, no gRPC |
 | `lora` | LoRA fine-tuning REPL — single in-process JVM, adapter persisted to `.lora` file |
 | `merge` | Bake a trained `.lora` adapter into a new standalone GGUF — no sidecar needed at inference time |
-| *(no command)* | 3-node cluster — forked JVMs, real gRPC. Default `--pType pipeline`; use `--pType tensor` for AllReduce mode |
+| `cluster` | 3-node cluster (default command) — forked JVMs, real gRPC. Default `--pType pipeline`; use `--pType tensor` for AllReduce mode |
 | `test` | 8 automated real-model smoke checks (6 pipeline + 2 tensor), exits 0 (all pass) or 1 (any fail) |
 
 ---
@@ -249,46 +251,6 @@ curl http://localhost:8080/v1/chat/completions \
 # List models
 curl http://localhost:8080/v1/models
 ```
-
-**OpenAI SDK (Python):**
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:8080/v1", api_key="unused")
-
-# Blocking
-response = client.chat.completions.create(
-    model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-    messages=[{"role": "user", "content": "What is Java?"}],
-    temperature=0.7,
-    max_tokens=512,
-)
-print(response.choices[0].message.content)
-
-# Streaming
-stream = client.chat.completions.create(
-    model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-    messages=[{"role": "user", "content": "Write a haiku."}],
-    stream=True,
-)
-for chunk in stream:
-    print(chunk.choices[0].delta.content or "", end="", flush=True)
-```
-
-**LangChain:**
-
-```python
-from langchain_openai import ChatOpenAI
-
-llm = ChatOpenAI(
-    base_url="http://localhost:8080/v1",
-    api_key="unused",
-    model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-)
-print(llm.invoke("What is Java?").content)
-```
-
 **Request field mapping:**
 
 | OpenAI field | Juno internal | Notes |
@@ -413,7 +375,7 @@ INFO: Detected architecture: llama  backend=CpuMatVec  file=...  lora=44 adapter
 
 ### Diagnostics and tracing
 
-Run any command with `--verbose` to enable `[TRACE]` output:
+Run cluster command with `--verbose` to enable `[TRACE]` output:
 
 | Line | What it tells you |
 |------|-------------------|

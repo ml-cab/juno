@@ -5,12 +5,26 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>cab.ml</groupId>
 	<artifactId>juno</artifactId>
-	<version>0.1.0-SNAPSHOT</version>
+	<version>0.1.0</version>
 	<packaging>pom</packaging>
 	<name>Java Unified Neural Orchestration</name>
 	<description>Java Unified Neural Orchestration (Juno) -- distributed LLM
 		inference and fine-tuning framework</description>
 	<url>https://ml.cab/juno.html</url>
+	<licenses>
+		<license>
+			<name>Apache License, Version 2.0</name>
+			<url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+			<distribution>repo</distribution>
+		</license>
+	</licenses>
+	<developers>
+		<developer>
+			<name>ml.cab</name>
+			<organization>ml.cab</organization>
+			<organizationUrl>https://ml.cab</organizationUrl>
+		</developer>
+	</developers>
 	<scm>
 		<connection>scm:git:https://github.com/ml-cab/juno.git</connection>
 		<developerConnection>scm:git:git@github.com:ml-cab/juno.git</developerConnection>
@@ -380,6 +394,30 @@
 								</goals>
 							</execution>
 						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+		<!--
+		  Maven Central (Sonatype Central Portal). Attach sources+javadoc per jar module,
+		  then deploy:
+		  mvn clean deploy -Prelease-sign -Pcentral-publish -DskipTests
+		  settings.xml: server id "central" with portal token (Sonatype Central docs).
+		-->
+		<profile>
+			<id>central-publish</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.sonatype.central</groupId>
+						<artifactId>central-publishing-maven-plugin</artifactId>
+						<version>0.7.0</version>
+						<extensions>true</extensions>
+						<configuration>
+							<publishingServerId>central</publishingServerId>
+							<checksums>required</checksums>
+							<deploymentName>${project.groupId}:${project.artifactId}:${project.version}</deploymentName>
+						</configuration>
 					</plugin>
 				</plugins>
 			</build>

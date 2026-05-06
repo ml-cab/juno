@@ -1,6 +1,6 @@
 # Juno
 
-**Java Unified Neural Orchestration** — distributed LLM inference and fine-tuning framework.
+**Java Unified Neural Orchestration** — distributed LLM inference and fine-tuning.
 No Python, no GIL, no Spring.
 
 [![Java 25+](https://img.shields.io/badge/Java-25%2B-007396?logo=openjdk&logoColor=white)](https://openjdk.org/)
@@ -8,229 +8,102 @@ No Python, no GIL, no Spring.
 [![CUDA](https://img.shields.io/badge/GPU-CUDA%2012.x-76B900?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
 
----
+## 0. Features
 
-Juno reads GGUF model files directly, distributes transformer computation across nodes via gRPC,
-and exposes a REST/SSE inference API. It supports both **inference** and **LoRA fine-tuning** from
-a single launcher — with no external runtime dependencies.
+- Distributed inference — pipeline-parallel (layer shards) or tensor-parallel (weight slices) across nodes
+- GPU acceleration — CUDA/cuBLAS with FP16 resident weights; CPU fallback
+- LoRA — train, checkpoint, inference adapter; optional merge to standalone GGUF
+- OpenAI-compatible REST — `POST /v1/chat/completions`, `GET /v1/models`; swap base URL only
+- JFR metrics — custom flight-recorder events across hot paths; merged cluster snapshots
 
-**Core capabilities:**
+## 1. How to use
 
-- **Distributed inference** — pipeline-parallel (layer sharding) or tensor-parallel (weight slicing) across N nodes
-- **GPU acceleration** — CUDA/cuBLAS with FP16 resident weights; graceful CPU fallback on OOM
-- **LoRA fine-tuning** — train, checkpoint, deploy, and merge adapters without modifying the base GGUF
-- **OpenAI-compatible REST API** — `POST /v1/chat/completions` and `GET /v1/models` speak the OpenAI wire format; any client that works with OpenAI needs only a base-URL change
-- **JFR instrumentation** — five custom event types covering every hot path, auto-merged across JVMs in cluster mode
+### 1.1 Maven Central jars and docs (end-to-end)
 
-> **Full usage reference:** [docs/howto.md](docs/howto.md)
-> **LoRA training guide:** [docs/LoRA.md](docs/LoRA.md)
-> **Architecture deep-dive:** [docs/arch.md](docs/arch.md)
+Depend on **`cab.ml` artifacts at version `0.1.0`** from Maven Central ([search](https://central.sonatype.com/search?q=g:cab.ml+juno)); publisher is verified for **ml.cab**. Library modules plus shaded **`juno-player`**, **`juno-node`**, and **`juno-master`** jars are published from this reactor.
 
----
+Then follow **[docs/howto.md](docs/howto.md)** for `./juno` commands and **[docs/integration-maven.md](docs/integration-maven.md)** for dependency snippets and classpath notes.
 
-## Architecture
+Contributors can build from source: `mvn clean package -DskipTests`.
 
-Juno supports two distribution strategies: **pipeline-parallel** (contiguous layer shards flow
-serially node-1 → node-2 → node-3, pooling VRAM to enable larger models) and **tensor-parallel**
-(all nodes hold all layers but a horizontal weight slice; the coordinator broadcasts tokens and
-reduces partial logits via star AllReduce, increasing throughput). For full component diagrams,
-module dependency graph, handler routing, and key design decisions see [docs/arch.md](docs/arch.md).
+### 1.2 Local player and LoRA (including Hugging Face–origin weights)
 
----
+Download a GGUF locally (for example from Hugging Face) and pass **`--model-path`**. Interactive inference: `./juno local --model-path /path/to/model.gguf`. REST alongside REPL: add **`--api-port 8080`**. Training: `./juno lora --model-path ...` (see **[docs/LoRA.md](docs/LoRA.md)**).
 
-## Quick Start
+Optional **`./juno merge`** bakes a trained `.lora` into a new GGUF so inference needs no sidecar adapter (**[docs/howto.md](docs/howto.md)**).
 
-Juno has two deployment modes:
+#### 1.2.1 Merge legality
 
-- **Local** — single machine, via `scripts/run.sh` and the built-in `juno-player` REPL
-- **AWS Cloud** — distributed cluster via `scripts/aws/juno-deploy.sh`, coordinated by `juno-master` with `juno-node` running on each inference node
+Redistributing merged weights may trigger base-model and adapter license questions; Juno does not provide a legal determination — see **[docs/legal.md](docs/legal.md)**.
 
-**Steps:**
+### 1.3 On-prem orchestration
 
-1. **Build**
+Run **`juno-master`** as the coordinator and **`juno-node`** on each worker with gRPC between them (systemd or your own process manager). Parallelism modes and byte-order flags match local cluster harness behaviour described in **[docs/howto.md](docs/howto.md)**; topology and components are in **[docs/arch.md](docs/arch.md)**. AWS automation under **`scripts/aws/`** is optional cloud packaging of the same roles.
 
-   ```bash
-   mvn clean package -DskipTests
-   ```
+## 2. Feature details
 
-2. **Run locally** — launch the interactive REPL or serve the OpenAI-compatible REST API:
+| Topic | Doc |
+|-------|-----|
+| Distributed inference | [docs/features/distributed-inference.md](docs/features/distributed-inference.md) |
+| OpenAI REST API | [docs/features/openai-rest-api.md](docs/features/openai-rest-api.md) |
+| LoRA and merge | [docs/features/lora-and-merge.md](docs/features/lora-and-merge.md) |
+| GPU acceleration | [docs/features/gpu-acceleration.md](docs/features/gpu-acceleration.md) |
+| JFR and metrics | [docs/features/jfr-metrics.md](docs/features/jfr-metrics.md) |
 
-   ```bash
-   ./juno local --model-path /path/to/model.gguf
-   ./juno local --model-path /path/to/model.gguf --api-port 8080
-   ```
+## 3. Integrations
 
-   See [docs/howto.md](docs/howto.md) for the full flag reference, cluster mode, LoRA inference, and more.
+Copy-paste prompts for another agent:
 
-3. **Deploy to AWS** — requires the AWS CLI installed and an IAM user with EC2/IAM permissions:
+- **Maven:** “How do I add Juno `cab.ml` Maven Central jars at version `0.1.0` to my project so the Juno player or embedded inference runs end-to-end?” (start from **[docs/integration-maven.md](docs/integration-maven.md)** and **[docs/howto.md](docs/howto.md)**.)
 
-   ```bash
-   cd scripts/aws
-   ./launcher.sh juno-deploy.sh setup --instance-type g4dn.xlarge --node-count 3
-   ./launcher.sh juno-deploy.sh start
-   ```
+- **AWS:** “How do I run a Juno cluster on AWS using `scripts/aws`?” (see **[docs/howto.md](docs/howto.md)** and **[docs/aws-free-tier-billing.md](docs/aws-free-tier-billing.md)**.)
 
-   > Questions about cloud deployment? Reach us at [dev@ml.cab](mailto:dev@ml.cab) or join our Discord (link TBD).
+## 4. Stack
 
----
+Node coordination and inference RPCs use **gRPC** with **protobuf** contracts from the `api` module. GPU matmul uses **CUDA 12.x** and **cuBLAS** via ByteDeko/JavaCPP (`CudaMatVec`), with a CPU quantised path when GPU is off or unavailable. The coordinator HTTP surface (**REST** and **SSE**) is implemented with **Javalin**.
 
-## OpenAI-Compatible REST API
+## 5. Useful refs
 
-Pass `--api-port N` to any `local` or cluster invocation to start the REST API server. The
-coordinator exposes three endpoints wire-compatible with OpenAI:
-
-| Endpoint | OpenAI equivalent | Description |
-|---|---|---|
-| `POST /v1/chat/completions` | `POST /v1/chat/completions` | Blocking or SSE streaming completion |
-| `GET /v1/models` | `GET /v1/models` | List all loaded models |
-| `GET /v1/models/{model}` | `GET /v1/models/{model}` | Single model metadata |
-
-Any client already targeting the OpenAI API works without modification — change only the
-base URL:
-
-```python
-# Python openai SDK
-from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8080/v1", api_key="unused")
-response = client.chat.completions.create(
-    model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-    messages=[{"role": "user", "content": "What is Java?"}],
-)
-print(response.choices[0].message.content)
-```
-
-```bash
-# curl — blocking
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"tinyllama","messages":[{"role":"user","content":"Hello"}]}'
-
-# curl — streaming
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"tinyllama","messages":[{"role":"user","content":"Hello"}],"stream":true}'
-```
-
-**Juno-specific request extensions** (all optional):
-
-| Field | Type | Description |
-|---|---|---|
-| `x_juno_priority` | string | `HIGH` / `NORMAL` / `LOW` — scheduler queue priority |
-| `x_juno_session_id` | string | Stable ID across turns; enables KV-cache reuse |
-| `x_juno_top_k` | integer | Top-K cutoff (0 = disabled; default 50) |
-
-**Supported fields:** `model`, `messages`, `temperature`, `top_p`, `max_completion_tokens`,
-`max_tokens` (deprecated alias), `frequency_penalty`, `stream`, `n` (only 1 accepted).
-
-**Silently ignored** (accepted for client compatibility): `stop`, `presence_penalty`,
-`logit_bias`, `user`, `seed`.
-
-The full OpenAPI 3.0 specification is in `api/src/main/resources/juno-api.yaml`.
-
----
-
-## GPU Support
-
-GPU acceleration is provided via **CUDA/cuBLAS** (CUDA 12.x). Weights are dequantized once and
-uploaded as FP16 on load; VRAM is freed deterministically on shard unload or swap. In cluster
-mode, each forked node JVM owns its own GPU context; the coordinator allocates none. Pass `--cpu`
-or set `JUNO_USE_GPU=false` to force CPU inference. See [docs/arch.md](docs/arch.md) for the full
-GPU weight lifecycle and multi-device details.
-
----
-
-## JFR Instrumentation
-
-All `juno` commands accept `--jfr DURATION` (e.g. `--jfr 5m`), activating Java Flight Recording
-across the full stack. Six custom event types are available in JDK Mission Control:
-
-| Event | Category | Key fields |
-|-------|----------|------------|
-| `juno.MatVec` | Juno/MatVec | `backend`, `rows`, `cols` |
-| `juno.ForwardPass` | Juno/Inference | `handlerType`, `requestId`, `startPosition`, `layerCount` |
-| `juno.TokenProduced` | Juno/Inference | `requestId`, `position` |
-| `juno.Tokenizer` | Juno/Tokenizer | `tokenizerType`, `operation`, `inputLength`, `outputLength` |
-| `juno.TemplateFormat` | Juno/Tokenizer | `modelType`, `messageCount`, `outputLength` |
-| `juno.LoraTrainStep` | Juno/LoRA | `step`, `loss`, `forwardMs`, `backwardMs`, `optimizerMs` |
-
-In **cluster mode**, coordinator and every node JVM write their own `.jfr` file; on shutdown
-`MetricsMain.extractToJsonMerged()` merges all files into a single snapshot written to
-`target/metrics/metrics.json`. In **local mode**, extraction happens automatically on period
-expiry or REPL exit.
-
-Post-hoc extraction from any `.jfr` file:
-
-```bash
-mvn package -pl metrics -am -DskipTests
-java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
-```
-
----
-
-## Modules
-
-| Module | Contents |
-|--------|----------|
-| `api` | OpenAPI 3.0 spec (`juno-api.yaml` — OpenAI-compatible), legacy `openapi.yaml`, JAX-RS interfaces, `inference.proto` |
-| `registry` | `NodeDescriptor`, `ShardPlanner`, `ShardMap`, `ParallelismType`, `TensorShardAssignment`, `TensorShardPlanner` |
-| `coordinator` | `GenerationLoop`, `RequestScheduler`, `FaultTolerantPipeline`, `OpenAiChatHandler`, `OpenAiAdapter`, Javalin REST, SSE |
-| `kvcache` | `KVCacheManager`, `GpuKVCache`, `CpuKVCache`, `PrefixCache` |
-| `tokenizer` | `GgufTokenizer` (SentencePiece BPE + GPT-2 BPE; auto-detected), `ChatTemplate`, `SimpleTokenizer` |
-| `node` | `LlamaTransformerHandler`, `Phi3TransformerHandler`, `ForwardPassHandlerLoader`, `EmbeddedNodeServer`, `NodeMain`, `NodeKVCacheAdapter`, `MatVec`, `CpuMatVec`, `CudaMatVec`, `GpuContext`, `DeviceFloatMatrix`, `DeviceHalfMatrix`, `GgufReader`, `ActivationCodec`, `ShardContext`, `TensorShardContext`, `LoraQvInitializer`, `LoraMerge`, `LoraTrainableHandler` |
-| `lora` | `LoraAdapter`, `LoraAdapterSet` (checkpoint I/O), `LoraAdamOptimizer` — pure Java, no GGUF/CUDA |
-| `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
-| `health` | `NodeHealth`, `HealthReporter`, `HealthEvaluator`, `CircuitBreaker`, Javalin health sidecar (`/health-ui`, `/health/probe`, `/health/circuits`) |
-| `metrics` | JFR extractor: `JfrMetricsExtractor`, `JfrModelMapper`, `JfrPercentiles`, `MetricsSnapshot`, `MetricsWriter`, `MetricsMain` |
-| `juno-player` | `ConsoleMain` REPL, `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `LoraMergeMain` |
-| `juno-node` | Fat jar (`juno-node.jar`). Entry point `NodeMain`. Launched by `juno-node.service` on AWS nodes. |
-| `juno-master` | Fat jar (`juno-master.jar`). Entry point `CoordinatorMain`. Standalone coordinator for remote deployment. |
-
----
-
-## Supported Models
-
-Any GGUF file with a LLaMA-compatible or Phi-3-compatible architecture.
-
-| Model | File size | Heap needed |
-|-------|-----------|-------------|
-| TinyLlama-1.1B-Chat Q4_K_M | 637 MB | 2g |
-| TinyLlama-1.1B-Chat Q2_K | 380 MB | 2g |
-| phi-3.5-mini-instruct Q4_K_M | 2.4 GB | 4g |
-| Mistral-7B-Instruct Q4_K_M | 4.1 GB | 8g |
-| Meta-Llama-3.2-1B-Instruct Q8_0 | 1.3 GB | 4g |
-| Meta-Llama-3.1-70B-Instruct Q4_K_M | 40 GB | distributed across nodes |
-
-**Quantization types:** F32, F16, BF16, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K.
-
-**Chat templates:** `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml` (default), `phi3`.
-Template is resolved from the model path via exact match then substring fallback.
-
----
-
-## Build and Test
-
-```bash
-mvn clean package -DskipTests          # build — produces shade jars
-
-mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
-                                       # unit tests — no model file, no GPU needed
-
-mvn verify -pl juno-master             # integration tests (stub mode, no model/GPU)
-```
-
-For model-file integration tests, GPU tests (requires CUDA 12.x and an NVIDIA GPU), and the
-full smoke-test reference see [docs/howto.md](docs/howto.md).
+- Performance matrix: **[docs/juno_test_matrix.html](docs/juno_test_matrix.html)** — methodology companion **[docs/performance.md](docs/performance.md)**
+- Legal Q&A: **[docs/legal.md](docs/legal.md)**
 
 ---
 
 ## Requirements
 
-- JDK 25+
-- Maven 3.9+
-- CUDA 12.x + NVIDIA driver (GPU nodes only; not required for CPU mode or tests)
+JDK 25+, Maven 3.9+, CUDA 12.x + NVIDIA driver on GPU nodes (optional for CPU-only).
 
----
+## Build and test
+
+```bash
+mvn clean package -DskipTests
+
+mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
+
+mvn verify -pl juno-master
+```
+
+GPU or large-model checks: **[docs/howto.md](docs/howto.md)**.
+
+## Supported models
+
+GGUF with LLaMA-compatible or Phi-3-compatible architectures (quantizations include F32, F16, BF16, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K). Chat templates include `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml`, `phi3`. Examples (heap hints): TinyLlama Q4_K_M (~637 MB, `2g`), phi-3.5-mini Q4_K_M (~2.4 GB, `4g`), Mistral-7B Q4_K_M (~4.1 GB, `8g`), Llama-3.1-70B Q4_K_M distributed.
+
+## Modules (overview)
+
+| Module | Role |
+|--------|------|
+| `api` | OpenAPI spec, protobuf/gRPC API |
+| `registry` | Shard planning, model registry |
+| `coordinator` | Scheduler, generation loop, REST |
+| `node` | Transformer handlers, GGUF, CUDA matmul |
+| `lora` | Adapter tensors, optimizer |
+| `tokenizer`, `sampler`, `kvcache`, `health`, `metrics` | Shared infrastructure |
+| `juno-player` | CLI REPL and cluster harness |
+| `juno-node`, `juno-master` | Shaded deploy jars |
+
+Details: **[docs/arch.md](docs/arch.md)**.
 
 ## License
 
-Apache 2.0
+Apache 2.0 — see [LICENSE](LICENSE).

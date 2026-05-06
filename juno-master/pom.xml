@@ -7,7 +7,7 @@
 	<parent>
 		<groupId>cab.ml</groupId>
 		<artifactId>juno</artifactId>
-		<version>0.1.0-SNAPSHOT</version>
+		<version>0.1.0</version>
 	</parent>
 
 	<artifactId>juno-master</artifactId>
@@ -82,6 +82,15 @@
 		<dependency>
 			<groupId>cab.ml</groupId>
 			<artifactId>juno-player</artifactId>
+		</dependency>
+		<!--
+		  Explicit juno-node: ClusterHarness forks NodeMain using java.class.path;
+		  Maven can omit juno-node transitively when juno-player is shaded against an
+		  otherwise-complete upstream graph, which drops NodeMain from the IT classpath.
+		-->
+		<dependency>
+			<groupId>cab.ml</groupId>
+			<artifactId>juno-node</artifactId>
 		</dependency>
 		<!-- gRPC for EmbeddedNodeServer + ProcessPipelineClient -->
 		<dependency>
@@ -185,6 +194,41 @@
 				<groupId>org.codehaus.mojo</groupId>
 				<artifactId>exec-maven-plugin</artifactId>
 				<version>3.3.0</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-source-plugin</artifactId>
+				<version>3.3.1</version>
+				<executions>
+					<execution>
+						<id>attach-sources</id>
+						<phase>verify</phase>
+						<goals>
+							<goal>jar-no-fork</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-javadoc-plugin</artifactId>
+				<version>3.11.2</version>
+				<executions>
+					<execution>
+						<id>attach-javadocs</id>
+						<phase>verify</phase>
+						<goals>
+							<goal>jar</goal>
+						</goals>
+					</execution>
+				</executions>
+				<configuration>
+					<doclint>none</doclint>
+					<failOnError>false</failOnError>
+					<quiet>true</quiet>
+					<source>${java.version}</source>
+					<release>${java.version}</release>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>

@@ -21,7 +21,7 @@ info:
   description: |
     Client-facing REST API for the juno distributed Java LLM inference engine.
     Internal node-to-node communication uses gRPC (see inference.proto).
-  version: 0.1.0-SNAPSHOT
+  version: 0.1.0
   contact:
     name: juno
     url: https://github.com/ml-cab/juno
