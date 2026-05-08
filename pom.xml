@@ -18,6 +18,7 @@
 		<tag>v0.1.0</tag>
 	</scm>
 	<modules>
+		<module>juno-bom</module>
 		<module>api</module>
 		<!-- core libraries -->
 		<module>registry</module>
@@ -136,6 +137,11 @@
 			<dependency>
 				<groupId>cab.ml</groupId>
 				<artifactId>juno-player</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>juno-master</artifactId>
 				<version>${project.version}</version>
 			</dependency>
 			<!-- Hazelcast -->

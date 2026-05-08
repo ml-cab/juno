@@ -16,6 +16,7 @@
 package cab.ml.juno.node;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import cab.ml.juno.registry.ShardAssignment;
@@ -102,6 +103,37 @@ public final class LocalInferencePipeline implements InferencePipeline {
 	@Override
 	public int vocabSize() {
 		return vocabSize;
+	}
+
+	/**
+	 * Causal prefill over {@code promptTokens}: for each position, runs all pipeline
+	 * stages. Returns the RMS-normalized hidden vector at the final token (before the
+	 * LM head on the last shard).
+	 */
+	public float[] embedLastToken(String requestId, int[] promptTokens) {
+		if (promptTokens.length == 0)
+			throw new IllegalArgumentException("promptTokens must not be empty");
+		float[] last = null;
+		for (int pos = 0; pos < promptTokens.length; pos++) {
+			int[] prefix = Arrays.copyOf(promptTokens, pos + 1);
+			float[] activations = null;
+			for (int i = 0; i < stages.size(); i++) {
+				NodeStage stage = stages.get(i);
+				ForwardRequest req = (i == 0) ? ForwardRequest.withTokens(requestId, prefix, pos)
+						: ForwardRequest.withActivations(requestId, activations, pos);
+				boolean finalStage = (i == stages.size() - 1);
+				if (finalStage) {
+					last = stage.handler().lastRmsHiddenForEmbedding(req, stage.context()).orElseThrow(() -> new IllegalStateException(
+							"Final pipeline stage does not expose embeddings (missing output projection?)"));
+				} else {
+					ForwardResult result = stage.handler().forward(req, stage.context());
+					if (result.isFinalNode())
+						throw new IllegalStateException("Intermediate stage produced logits unexpectedly");
+					activations = result.activations();
+				}
+			}
+		}
+		return last;
 	}
 
 	public int stageCount() {

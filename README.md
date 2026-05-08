@@ -181,7 +181,8 @@ java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 | `sampler` | Temperature, top-k, top-p, repetition penalty — pure Java |
 | `health` | `NodeHealth`, `HealthReporter`, `HealthEvaluator`, `CircuitBreaker`, Javalin health sidecar (`/health-ui`, `/health/probe`, `/health/circuits`) |
 | `metrics` | JFR extractor: `JfrMetricsExtractor`, `JfrModelMapper`, `JfrPercentiles`, `MetricsSnapshot`, `MetricsWriter`, `MetricsMain` |
-| `juno-player` | `ConsoleMain` REPL, `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `LoraMergeMain` |
+| `juno-bom` | Maven BOM — import for aligned `cab.ml` dependency versions |
+| `juno-player` | `ConsoleMain` REPL, `JunoPlayer`, `LoraTrainer`, `JunoHttpClient`, `ClusterHarness`, `ProcessPipelineClient`, `TensorParallelPipelineClient`, `LoraMergeMain`; packages thin jar + `*-shaded.jar` |
 | `juno-node` | Fat jar (`juno-node.jar`). Entry point `NodeMain`. Launched by `juno-node.service` on AWS nodes. |
 | `juno-master` | Fat jar (`juno-master.jar`). Entry point `CoordinatorMain`. Standalone coordinator for remote deployment. |
 
@@ -210,7 +211,7 @@ Template is resolved from the model path via exact match then substring fallback
 ## Build and Test
 
 ```bash
-mvn clean package -DskipTests          # build — produces shade jars
+mvn clean package -DskipTests          # build — juno-player: thin library jar + shaded runnable `*-shaded.jar`
 
 mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
                                        # unit tests — no model file, no GPU needed
