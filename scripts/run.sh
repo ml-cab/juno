@@ -11,7 +11,16 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-JUNO_PLAYER_JAR="$DIR/juno-player/target/juno-player.jar"
+# Prefer shaded runnable (juno-player-*-shaded.jar); fall back to legacy juno-player.jar.
+shopt -s nullglob
+_JUNO_SHADED=( "$DIR/juno-player/target/"juno-player-*-shaded.jar )
+shopt -u nullglob
+if [[ ${#_JUNO_SHADED[@]} -gt 0 ]]; then
+  JUNO_PLAYER_JAR="${_JUNO_SHADED[0]}"
+else
+  JUNO_PLAYER_JAR="$DIR/juno-player/target/juno-player.jar"
+fi
+unset _JUNO_SHADED
 LIVE_JAR="$DIR/juno-master/target/juno-master.jar"
 HEALTH_JAR="$DIR/health/target/juno-health.jar"
 
@@ -923,8 +932,16 @@ cmd_merge() {
 
   [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 merge --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 merge"
 
-  local juno_player_jar="$DIR/juno-player/target/juno-player.jar"
-  [[ -f "$juno_player_jar" ]] || err "juno-player.jar not found — build first with: mvn clean package -DskipTests"
+  shopt -s nullglob
+  local candidates=( "$DIR/juno-player/target/"juno-player-*-shaded.jar "$DIR/juno-player/target/juno-player.jar" )
+  shopt -u nullglob
+  local juno_player_jar=""
+  for f in "${candidates[@]}"; do
+    [[ -f "$f" ]] || continue
+    juno_player_jar="$f"
+    break
+  done
+  [[ -n "$juno_player_jar" ]] || err "juno-player jar not found — build first with: mvn clean package -DskipTests"
 
   prepend_cuda_bin_to_path_if_gpu "$use_gpu"
 

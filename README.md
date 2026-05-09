@@ -79,6 +79,7 @@ JDK 25+, Maven 3.9+, CUDA 12.x + NVIDIA driver on GPU nodes (optional for CPU-on
 mvn clean package -DskipTests
 
 mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
+                                       # unit tests — no model file, no GPU needed
 
 mvn verify -pl juno-master
 ```

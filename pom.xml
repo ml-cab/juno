@@ -11,6 +11,7 @@
 	<description>Java Unified Neural Orchestration (Juno) -- distributed LLM
 		inference and fine-tuning framework</description>
 	<url>https://ml.cab/juno.html</url>
+
 	<licenses>
 		<license>
 			<name>Apache License, Version 2.0</name>
@@ -18,6 +19,7 @@
 			<distribution>repo</distribution>
 		</license>
 	</licenses>
+
 	<developers>
 		<developer>
 			<name>ml.cab</name>
@@ -25,13 +27,16 @@
 			<organizationUrl>https://ml.cab</organizationUrl>
 		</developer>
 	</developers>
+
 	<scm>
 		<connection>scm:git:https://github.com/ml-cab/juno.git</connection>
 		<developerConnection>scm:git:git@github.com:ml-cab/juno.git</developerConnection>
 		<url>https://github.com/ml-cab/juno</url>
 		<tag>v0.1.0</tag>
 	</scm>
+
 	<modules>
+		<module>juno-bom</module>
 		<module>api</module>
 		<!-- core libraries -->
 		<module>registry</module>
@@ -150,6 +155,11 @@
 			<dependency>
 				<groupId>cab.ml</groupId>
 				<artifactId>juno-player</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>juno-master</artifactId>
 				<version>${project.version}</version>
 			</dependency>
 			<!-- Hazelcast -->
