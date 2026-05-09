@@ -19,6 +19,8 @@
 
 package cab.ml.juno.node;
 
+import java.util.Optional;
+
 /**
  * Executes the transformer forward pass for this node's assigned layers.
  *
@@ -51,5 +53,18 @@ public interface ForwardPassHandler {
 	 */
 	default void releaseGpuResources() {
 		// no-op — LlamaTransformerHandler, Phi3TransformerHandler, etc. override when needed
+	}
+
+	/**
+	 * RMS-normalized final hidden state at the current position, immediately before
+	 * the LM head. Only the shard that owns the output projection returns a value;
+	 * intermediate shards return empty.
+	 *
+	 * <p>
+	 * Runs the same layer stack as {@link #forward} for this position (including KV
+	 * updates). Callers must not invoke both for the same position unless intentional.
+	 */
+	default Optional<float[]> lastRmsHiddenForEmbedding(ForwardRequest request, ShardContext context) {
+		return Optional.empty();
 	}
 }
