@@ -80,4 +80,16 @@ class LocalInferencePipelineTest {
 		assertThatThrownBy(() -> LocalInferencePipeline.from(twoNodeMap(), List.of(new CyclicForwardPassHandler()),
 				VOCAB, HIDDEN_DIM, NUM_HEADS)).isInstanceOf(IllegalArgumentException.class);
 	}
+
+	@Test
+	void embedLastToken_returns_hidden_vector_from_final_stage() {
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), new CyclicForwardPassHandler(),
+				VOCAB, HIDDEN_DIM, NUM_HEADS);
+
+		float[] emb = pipeline.embedLastToken("embed-req", new int[] { 10, 20, 30 });
+
+		assertThat(emb).hasSize(HIDDEN_DIM);
+		assertThat(emb[0]).isEqualTo(0.0f);
+		assertThat(emb[1]).isEqualTo(0.01f);
+	}
 }

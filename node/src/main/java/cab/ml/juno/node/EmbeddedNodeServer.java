@@ -20,6 +20,7 @@ import cab.ml.juno.lora.LoraAdapterSet;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
@@ -133,23 +134,30 @@ public final class EmbeddedNodeServer {
 	 * should use {@code CyclicForwardPassHandler} (node/src/test) which provides
 	 * deterministic, inspectable results.
 	 */
-	private static final class StubForwardPassHandler implements ForwardPassHandler {
-		@Override
-		public ForwardResult forward(ForwardRequest request, ShardContext context) {
-			long start = System.nanoTime();
-			if (context.hasOutputProjection()) {
-				return ForwardResult.logits(request.requestId(), new float[context.vocabSize()],
+		private static final class StubForwardPassHandler implements ForwardPassHandler {
+			@Override
+			public ForwardResult forward(ForwardRequest request, ShardContext context) {
+				long start = System.nanoTime();
+				if (context.hasOutputProjection()) {
+					return ForwardResult.logits(request.requestId(), new float[context.vocabSize()],
+							System.nanoTime() - start);
+				}
+				return ForwardResult.activations(request.requestId(), new float[context.hiddenDim()],
 						System.nanoTime() - start);
 			}
-			return ForwardResult.activations(request.requestId(), new float[context.hiddenDim()],
-					System.nanoTime() - start);
-		}
 
-		@Override
-		public boolean isReady() {
-			return true;
+			@Override
+			public Optional<float[]> lastRmsHiddenForEmbedding(ForwardRequest request, ShardContext context) {
+				if (!context.hasOutputProjection())
+					return Optional.empty();
+				return Optional.of(new float[context.hiddenDim()]);
+			}
+
+			@Override
+			public boolean isReady() {
+				return true;
+			}
 		}
-	}
 
 	// ── gRPC service impl ─────────────────────────────────────────────────────
 

@@ -1,10 +1,12 @@
 ## Juno — complete how-to reference
 
+**Documentation map:** [README.md](../README.md) (overview), [arch.md](arch.md), [LoRA.md](LoRA.md), [integration-maven.md](integration-maven.md), [performance.md](performance.md), [legal.md](legal.md), [juno_test_matrix.html](juno_test_matrix.html), [features/](features/).
+
 ```
 ./juno
 ```
 
-Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
+Unified stand-alone launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
 
 ---
 
@@ -12,10 +14,10 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 
 | Command | Description |
 |---------|-------------|
+| `cluster` | 3-node cluster (default command) — forked JVMs, real gRPC. Default `--pType pipeline`; use `--pType tensor` for AllReduce mode |
 | `local` | In-process REPL — all transformer shards in one JVM, no forking, no gRPC |
 | `lora` | LoRA fine-tuning REPL — single in-process JVM, adapter persisted to `.lora` file |
 | `merge` | Bake a trained `.lora` adapter into a new standalone GGUF — no sidecar needed at inference time |
-| *(no command)* | 3-node cluster — forked JVMs, real gRPC. Default `--pType pipeline`; use `--pType tensor` for AllReduce mode |
 | `test` | 8 automated real-model smoke checks (6 pipeline + 2 tensor), exits 0 (all pass) or 1 (any fail) |
 
 ---
@@ -40,7 +42,7 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 | `--lora-play PATH` | — | cluster, local | Apply a pre-trained `.lora` adapter at inference (read-only, no training). In cluster mode the file is forwarded as `-Djuno.lora.play.path` to every forked node JVM. |
 | `--api-port N` | — | cluster, local | Start the OpenAI-compatible REST API server on port N alongside the REPL. Exposes `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{model}`. Environment override: `API_PORT`. |
 
-**LoRA-specific flags** (`lora` command only):
+**LoRA specific flags** (`lora` command only):
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -52,7 +54,7 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 | `--lora-steps-qa N` | `10` | Gradient steps per `/train-qa` Q&A pair |
 | `--lora-early-stop F` | `0.25` | Stop chunk early when loss delta < F |
 
-**`merge` flags:**
+**`merge` specific flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -71,7 +73,7 @@ Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
 
 ---
 
-### `local` — in-process REPL
+### `local` — in-process REPL, fastest mode of juno-player console, operates within same JVM, GRPC off, uses LocalInferencePipeline.java instead
 
 ```bash
 # Minimal
@@ -94,76 +96,21 @@ LORA_PLAY_PATH=/path/to/model.lora MODEL_PATH=/path/to/model.gguf ./juno local
 ```
 
 When `--lora-play` is given, the startup banner shows:
+
 ```
   Loading LoRA adapters for inference: /path/to/model.lora
   Loaded 44 LoRA adapters  (inference-only, no training)
 ```
 
 When `--api-port` is given, the startup banner shows:
+
 ```
   ✔ Local API server on http://localhost:8080 (OpenAI: /v1/chat/completions)
 ```
 
 ---
 
-### `lora` — LoRA fine-tuning REPL
-
-```bash
-# Minimal -- auto-loads <model>.lora if it exists
-./juno lora --model-path /path/to/TinyLlama.Q4_K_M.gguf
-
-# With verbose tracing (recommended when debugging training)
-./juno lora --model-path /path/to/model.gguf --verbose
-```
-
-For a full LoRA training guide, REPL commands, rank selection, and common pitfalls see
-[LoRA.md](LoRA.md).
-
-**Using a trained adapter outside `lora` mode:**
-```bash
-# Chat with adapter, no training REPL overhead
-./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora
-
-# 3-node cluster with adapter on every node
-./juno --model-path /path/to/model.gguf --lora-play /path/to/model.lora
-```
-
-**Profiling a slow training step:**
-```bash
-./juno lora --model-path /path/to/model.gguf --jfr 5m
-# After exit, open juno-<modelStem>-<timestamp>.jfr in JDK Mission Control
-# Event Browser -> juno.LoraTrainStep: forwardMs / backwardMs / optimizerMs / loss
-```
-
----
-
-### `merge` — bake a LoRA adapter into a standalone GGUF
-
-Writes a new GGUF where LoRA-patched projection tensors (wq/wv on every layer) are stored as
-F32 for full precision. All other tensors are copied verbatim in their original quantized
-encoding. The resulting file loads with `./juno local` or `./juno` like any other model.
-
-```bash
-# Default: reads <model>.lora, writes <model>-merged.gguf
-./juno merge --model-path /path/to/TinyLlama.Q4_K_M.gguf
-
-# Explicit paths
-./juno merge --model-path /path/to/model.gguf \
-             --lora-path  /adapters/my.lora   \
-             --output     /path/to/merged.gguf
-
-# Larger heap for big models (rule of thumb: 2x model file size)
-./juno merge --model-path /path/to/Mistral-7B.gguf --heap 12g
-```
-
-The LoRA delta per element (~6x10^-4) is smaller than Q4_K quantization noise (~3x10^-3).
-Re-quantizing the merged weights back to Q4_K would erase the training entirely. F32 storage
-for the 44 patched tensors is the correct trade-off. For TinyLlama 1.1B Q4_K_M (667 MB), the
-merged file is approximately 1 GB.
-
----
-
-### *(no command)* — 3-node cluster (forked JVMs, real gRPC)
+### `cluster` — 3-node cluster, default command of juno-player console (forked JVMs, real gRPC)
 
 Forks 3 separate JVM node processes. Each node loads its own shard of the model.
 Two distribution strategies are available via `--pType`:
@@ -209,6 +156,65 @@ building its `ForwardPassHandler`.
 
 ---
 
+### `lora` — LoRA fine-tuning REPL
+
+```bash
+# Minimal -- auto-loads <model>.lora if it exists
+./juno lora --model-path /path/to/TinyLlama.Q4_K_M.gguf
+
+# With verbose tracing (recommended when debugging training)
+./juno lora --model-path /path/to/model.gguf --verbose
+```
+
+For a full LoRA training guide, REPL commands, rank selection, and common pitfalls see
+[LoRA.md](LoRA.md).
+
+**Using a trained adapter outside `lora` mode:**
+
+```bash
+# Chat with adapter, no training REPL overhead
+./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+
+# 3-node cluster with adapter on every node
+./juno --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+```
+
+**Profiling a slow training step:**
+
+```bash
+./juno lora --model-path /path/to/model.gguf --jfr 5m
+# After exit, open juno-<modelStem>-<timestamp>.jfr in JDK Mission Control
+# Event Browser -> juno.LoraTrainStep: forwardMs / backwardMs / optimizerMs / loss
+```
+
+---
+
+### `merge` — bake a LoRA adapter into a standalone GGUF
+
+Writes a new GGUF where LoRA-patched projection tensors (wq/wv on every layer) are stored as
+F32 for full precision. All other tensors are copied verbatim in their original quantized
+encoding. The resulting file loads with `./juno local` or `./juno` like any other model.
+
+```bash
+# Default: reads <model>.lora, writes <model>-merged.gguf
+./juno merge --model-path /path/to/TinyLlama.Q4_K_M.gguf
+
+# Explicit paths
+./juno merge --model-path /path/to/model.gguf \
+             --lora-path  /adapters/my.lora   \
+             --output     /path/to/merged.gguf
+
+# Larger heap for big models (rule of thumb: 2x model file size)
+./juno merge --model-path /path/to/Mistral-7B.gguf --heap 12g
+```
+
+The LoRA delta per element (~6x10^-4) is smaller than Q4_K quantization noise (~3x10^-3).
+Re-quantizing the merged weights back to Q4_K would erase the training entirely. F32 storage
+for the 44 patched tensors is the correct trade-off. For TinyLlama 1.1B Q4_K_M (667 MB), the
+merged file is approximately 1 GB.
+
+---
+
 ### OpenAI-compatible REST API (`--api-port`)
 
 Pass `--api-port N` to any `local` or cluster invocation to start an OpenAI wire-compatible
@@ -248,45 +254,6 @@ curl http://localhost:8080/v1/chat/completions \
 
 # List models
 curl http://localhost:8080/v1/models
-```
-
-**OpenAI SDK (Python):**
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:8080/v1", api_key="unused")
-
-# Blocking
-response = client.chat.completions.create(
-    model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-    messages=[{"role": "user", "content": "What is Java?"}],
-    temperature=0.7,
-    max_tokens=512,
-)
-print(response.choices[0].message.content)
-
-# Streaming
-stream = client.chat.completions.create(
-    model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-    messages=[{"role": "user", "content": "Write a haiku."}],
-    stream=True,
-)
-for chunk in stream:
-    print(chunk.choices[0].delta.content or "", end="", flush=True)
-```
-
-**LangChain:**
-
-```python
-from langchain_openai import ChatOpenAI
-
-llm = ChatOpenAI(
-    base_url="http://localhost:8080/v1",
-    api_key="unused",
-    model="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-)
-print(llm.invoke("What is Java?").content)
 ```
 
 **Request field mapping:**
@@ -344,6 +311,176 @@ for user_input in ["My name is Alice.", "What is my name?"]:
 
 The full OpenAPI 3.0 specification is at `api/src/main/resources/juno-api.yaml`.
 
+**Additional JVM-local endpoints** (same server as above):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/v1/inference` | Blocking JSON completion (`InferenceApiServer` native shape) |
+| `POST` | `/v1/inference/stream` | SSE stream; each `data:` line is JSON `{"token":"…","isComplete":false}` until terminal event |
+
+---
+
+### JVM integration — BOM, `JunoPlayer` facade, LoRA, embeddings, `Flow`, HTTP client
+
+#### Maven BOM (`juno-bom`)
+
+Import one POM so every `cab.ml` module shares the same version:
+
+```xml
+<dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>cab.ml</groupId>
+      <artifactId>juno-bom</artifactId>
+      <version>0.1.0</version>
+      <type>pom</type>
+      <scope>import</scope>
+    </dependency>
+  </dependencies>
+</dependencyManagement>
+
+<dependencies>
+  <dependency>
+    <groupId>cab.ml</groupId>
+    <artifactId>juno-player</artifactId>
+    <!-- version comes from juno-bom -->
+  </dependency>
+</dependencies>
+```
+
+#### Runnable jar versus library jar
+
+After `mvn package`, `juno-player/target/` contains:
+
+- `juno-player-0.1.0.jar` — normal thin classpath artifact for dependents (compose with BOM-managed modules).
+- `juno-player-0.1.0-shaded.jar` — fat jar with `Main-Class: cab.ml.juno.player.ConsoleMain`. The `./juno` launcher selects this shaded jar when present.
+
+#### In-process facade (`JunoPlayer`)
+
+Loads the GGUF, builds an in-process `LocalInferencePipeline`, `GenerationLoop`, and `RequestScheduler` (same wiring as `./juno local`):
+
+```java
+import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.Flow;
+
+import cab.ml.juno.player.JunoPlayer;
+import cab.ml.juno.sampler.SamplingParams;
+import cab.ml.juno.tokenizer.ChatMessage;
+
+try (JunoPlayer player = JunoPlayer.builder(Path.of("/path/to/model.gguf"))
+        .nodeCount(3)
+        .useGpu(true)
+        .samplingParams(SamplingParams.defaults().withMaxTokens(128).withTemperature(0.7f))
+        .build()) {
+
+    var messages = List.of(ChatMessage.user("Explain JDK virtual threads in one sentence."));
+    var result = player.chat(messages);
+    System.out.println(result.text());
+
+    Flow.Publisher<String> pieces = player.streamPublisher(messages);
+    pieces.subscribe(new Flow.Subscriber<>() {
+        Flow.Subscription s;
+        public void onSubscribe(Flow.Subscription s) {
+            this.s = s;
+            s.request(Long.MAX_VALUE);
+        }
+        public void onNext(String t) {
+            System.out.print(t);
+        }
+        public void onError(Throwable e) {
+            e.printStackTrace();
+        }
+        public void onComplete() {
+            System.out.println();
+        }
+    });
+
+    float[] vec = player.embed(messages); // length = model hidden dim (last RMS hidden before LM head)
+
+    // Optional OpenAI-compatible REST server on port 8080:
+    var api = player.startApiServer(8080);
+    Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(api::stop));
+}
+```
+
+#### Programmatic LoRA (`LoraTrainer`)
+
+Same single-shard layout as `./juno lora`; train from code then `save()`:
+
+```java
+import java.nio.file.Path;
+
+import cab.ml.juno.player.ChatModelType;
+import cab.ml.juno.player.LoraTrainer;
+
+Path model = Path.of("/path/to/model.gguf");
+Path adapter = Path.of("/path/to/model.lora");
+
+try (var trainer = LoraTrainer.open(model, adapter, /*rank*/ 8, /*alpha*/ 8f, /*lr*/ 1e-4)) {
+    float loss = trainer.trainRawText("Some prose to adapt style.", /*stepsPerChunk*/ 50, /*chunkTokens*/ 32);
+    String modelKey = ChatModelType.fromPath(model.toString());
+    trainer.trainQaPair("What is my favorite color?", "Blue.", modelKey, /*stepsPerChunk*/ 10);
+    trainer.save();
+}
+```
+
+For REPL semantics, flags, and pitfalls see [LoRA.md](LoRA.md).
+
+#### `Flow.Publisher` from `TokenConsumer` (`PublisherTokenConsumer`)
+
+For custom scheduling (not using `JunoPlayer.streamPublisher`), wrap any `RequestScheduler` submission:
+
+```java
+import java.util.List;
+import java.util.concurrent.Flow;
+
+import cab.ml.juno.coordinator.InferenceRequest;
+import cab.ml.juno.coordinator.PublisherTokenConsumer;
+import cab.ml.juno.coordinator.RequestPriority;
+import cab.ml.juno.coordinator.RequestScheduler;
+import cab.ml.juno.sampler.SamplingParams;
+import cab.ml.juno.tokenizer.ChatMessage;
+
+void stream(RequestScheduler scheduler, String modelId, SamplingParams params) {
+    InferenceRequest req = InferenceRequest.of(modelId,
+            List.of(ChatMessage.user("Hello")), params, RequestPriority.NORMAL);
+    PublisherTokenConsumer bridge = new PublisherTokenConsumer();
+    Flow.Publisher<String> pub = bridge.publisher();
+    scheduler.submit(req, bridge).whenComplete((r, e) -> bridge.finish());
+    // subscribe to pub …
+}
+```
+
+#### Java HTTP client (`JunoHttpClient`)
+
+Talk to a sidecar started with `./juno local … --api-port 8080` (or `JunoPlayer.startApiServer`):
+
+```java
+import java.net.URI;
+import java.util.List;
+import java.util.concurrent.Flow;
+
+import cab.ml.juno.player.JunoHttpClient;
+import cab.ml.juno.tokenizer.ChatMessage;
+
+var http = new JunoHttpClient(URI.create("http://localhost:8080"));
+
+// Native blocking inference (/v1/inference)
+String text = http.blockingInference("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        List.of(ChatMessage.user("Ping")), 64);
+
+// Native SSE (/v1/inference/stream) — publisher emits decoded token pieces from JSON events
+Flow.Publisher<String> nativeStream = http.streamingInference(null,
+        List.of(ChatMessage.user("Stream ping")), 32);
+
+// OpenAI-compatible blocking + SSE (/v1/chat/completions)
+String openAiText = http.blockingOpenAiChat("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        List.of(ChatMessage.user("Ping")), 64, 0.7f);
+Flow.Publisher<String> openAiSse = http.streamingOpenAiChat("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        List.of(ChatMessage.user("Stream")), 32, 0.7f);
+```
+
 ---
 
 ### AWS — cluster deployment (`juno-deploy.sh`)
@@ -399,12 +536,14 @@ stops each `juno-node.service` synchronously, SCPs the file to `/opt/juno/models
 starts after all nodes are confirmed active.
 
 **Expected coordinator log:**
+
 ```
 INFO: LoRA inference overlay configured -- nodes will load:
       /opt/juno/models/tinyllama-1.1b-chat-v1.0-q4_k_m.lora
 ```
 
 **Expected node log:**
+
 ```
 INFO: Detected architecture: llama  backend=CpuMatVec  file=...  lora=44 adapters
 ```
@@ -413,7 +552,7 @@ INFO: Detected architecture: llama  backend=CpuMatVec  file=...  lora=44 adapter
 
 ### Diagnostics and tracing
 
-Run any command with `--verbose` to enable `[TRACE]` output:
+Run cluster command with `--verbose` to enable `[TRACE]` output:
 
 | Line | What it tells you |
 |------|-------------------|
@@ -451,6 +590,7 @@ JFR file. These are the primary throughput metrics for performance comparison:
 | `juno.TokenProduced.tps` | Aggregate tokens per second (`count / elapsed_seconds`) |
 
 AWS cluster JFR:
+
 ```bash
 ./launcher.sh juno-deploy.sh setup --jfr 2m ...
 # Ctrl+C -> recordings collected from all nodes -> metrics printed -> instances stopped
@@ -462,7 +602,7 @@ AWS cluster JFR:
 Requires JDK 25+ and Maven 3.9+.
 
 ```bash
-mvn clean package -DskipTests          # build — produces shade jars
+mvn clean package -DskipTests          # build — juno-player emits thin jar + *-shaded.jar runnable
 
 mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
                                        # unit tests — no model file, no GPU needed

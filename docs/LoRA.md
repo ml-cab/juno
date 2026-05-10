@@ -3,6 +3,8 @@
 Parameter-efficient fine-tuning for LLaMA-family models, implemented entirely in Java.
 No Python, no PEFT library, no separate training process.
 
+See also the short feature overview [features/lora-and-merge.md](features/lora-and-merge.md) and [legal.md](legal.md) if you plan to merge or redistribute adapters.
+
 ---
 
 ## How it works

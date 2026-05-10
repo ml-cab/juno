@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.logging.Logger;
 
 /**
@@ -500,6 +501,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		evt.commit();
 
 		return result;
+	}
+
+	@Override
+	public Optional<float[]> lastRmsHiddenForEmbedding(ForwardRequest request, ShardContext context) {
+		if (!hasOutputProj)
+			return Optional.empty();
+		float[] x = getInitialActivation(request);
+		x = runLayers(x, request.requestId(), request.startPosition());
+		return Optional.of(rmsNorm(x, outputNorm, cfg.rmsNormEps()));
 	}
 
 	@Override

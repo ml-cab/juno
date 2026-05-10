@@ -16,6 +16,7 @@
 
 package cab.ml.juno.node;
 
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -72,6 +73,16 @@ public final class CyclicForwardPassHandler implements ForwardPassHandler {
 		evt.commit();
 
 		return result;
+	}
+
+	@Override
+	public Optional<float[]> lastRmsHiddenForEmbedding(ForwardRequest request, ShardContext context) {
+		if (!context.hasOutputProjection())
+			return Optional.empty();
+		float[] v = new float[context.hiddenDim()];
+		for (int i = 0; i < v.length; i++)
+			v[i] = 0.01f * (i % 100);
+		return Optional.of(v);
 	}
 
 	@Override
