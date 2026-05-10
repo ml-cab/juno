@@ -293,7 +293,7 @@ def chat(messages):
     ).choices[0].message.content
 
 history = []
-for user_input in ["My name is Alice.", "What is my name?"]:no commandno commandno commandno commandno command
+for user_input in ["My name is Alice.", "What is my name?"]:
     history.append({"role": "user", "content": user_input})
     reply = chat(history)
     history.append({"role": "assistant", "content": reply})
@@ -332,7 +332,7 @@ Import one POM so every `cab.ml` module shares the same version:
     <dependency>
       <groupId>cab.ml</groupId>
       <artifactId>juno-bom</artifactId>
-      <version>0.1.0-SNAPSHOT</version>
+      <version>0.1.0</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -352,8 +352,8 @@ Import one POM so every `cab.ml` module shares the same version:
 
 After `mvn package`, `juno-player/target/` contains:
 
-- `juno-player-0.1.0-SNAPSHOT.jar` — normal thin classpath artifact for dependents (compose with BOM-managed modules).
-- `juno-player-0.1.0-SNAPSHOT-shaded.jar` — fat jar with `Main-Class: cab.ml.juno.player.ConsoleMain`. The `./juno` launcher selects this shaded jar when present.
+- `juno-player-0.1.0.jar` — normal thin classpath artifact for dependents (compose with BOM-managed modules).
+- `juno-player-0.1.0-shaded.jar` — fat jar with `Main-Class: cab.ml.juno.player.ConsoleMain`. The `./juno` launcher selects this shaded jar when present.
 
 #### In-process facade (`JunoPlayer`)
 

@@ -11,7 +11,7 @@ No Python, no GIL, no Spring.
 [![CUDA](https://img.shields.io/badge/GPU-CUDA%2012.x-76B900?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
 
-## 0. Features
+## 1. Features
 
 - Playing open-source models, e.g. [huggingface](https://huggingface.co/);
 - Providing distributed inference - Layer Sharding (pipeline parallelism) or Weight Slices (tensor parallelism) using pure Java; 0 sidecar processes;
@@ -19,11 +19,13 @@ No Python, no GIL, no Spring.
 - LoRA (Low-Rank Adaptation) supported. Train your data arranged by checkpoints; persist LoRA inference adapter for future use;
 - OpenAI-compatible REST - `POST /v1/chat/completions`, `GET /v1/models`; swap the base URL only to integrate in your application;
 - JFR metrics under the hood - custom flight-recorder events across hot paths; instrumentation driven development;
-- EU AI Act friendly - redistributing merged weights may trigger base-model and adapter license questions; Juno does not (yet) provide a legal determination of points highlighted in EU AI Act research as `Compliance Gaps`. So please consider wait or implement yoursef those you are interested in.- see **[docs/EU-AI-Act-compliance.md](docs/EU-AI-Act-compliance.md)**.
 
-## 1. How to use
 
-### 1.1 JVM Integration
+Please see full feature list **[here](docs/features.md)**
+
+## 2. How to use
+
+### 2.1 JVM Integration
 
 Integrate on **`cab.ml` artifacts at version `0.1.0`** from Maven Central:
 
@@ -60,11 +62,11 @@ Then follow **[docs/howto.md](docs/howto.md)** `JVM integration` section or chec
 
 Maintainer - see **[docs/integration-maven.md](docs/integration-maven.md)**
 
-### 1.2 Local player and LoRA (including Hugging Face–origin weights)
+### 2.2 Local player and LoRA (including Hugging Face–origin weights)
 
 Contributors and enthusiasts can build from source: `mvn clean package -DskipTests`.
 
-Download a GGUF locally (please correct an URL) 
+Download a GGUF (replace the URL with your chosen model):
 
 ```
 cd juno/models
@@ -85,21 +87,11 @@ Optional **`./juno merge`** bakes a trained `.lora` into a new GGUF, so that inf
 
 More at **[howto.md](docs/howto.md)**.
 
-### 1.3 On-prem orchestration
+### 2.3 On-prem orchestration
 
 Run **`juno-master`** as the coordinator and **`juno-node`** on each worker with gRPC between them (systemd or your own process manager). Parallelism modes and byte-order flags match local cluster harness behaviour described in **[docs/howto.md](docs/howto.md)**; topology and components are in **[docs/arch.md](docs/arch.md)**. AWS automation under **`scripts/aws/`** is optional cloud packaging of the same roles.
 
-## 2. Feature details
-
-| Topic | Doc |
-|-------|-----|
-| Distributed inference | [docs/features/distributed-inference.md](docs/features/distributed-inference.md) |
-| OpenAI REST API | [docs/features/openai-rest-api.md](docs/features/openai-rest-api.md) |
-| LoRA and merge | [docs/features/lora-and-merge.md](docs/features/lora-and-merge.md) |
-| GPU acceleration | [docs/features/gpu-acceleration.md](docs/features/gpu-acceleration.md) |
-| JFR and metrics | [docs/features/jfr-metrics.md](docs/features/jfr-metrics.md) |
-
-## 3. Integrations
+## 3. Agent integration
 
 Copy-paste prompts for another agent:
 
@@ -143,6 +135,7 @@ GGUF with LLaMA-compatible or Phi-3-compatible architectures (quantizations incl
 
 | Module | Role |
 |--------|------|
+| `juno-bom` | Maven BOM — aligned versions for all `cab.ml` artifacts |
 | `api` | OpenAPI spec, protobuf/gRPC API |
 | `registry` | Shard planning, model registry |
 | `coordinator` | Scheduler, generation loop, REST |
