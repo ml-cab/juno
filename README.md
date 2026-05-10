@@ -1,6 +1,9 @@
-# Juno
+# jUno
 
-**Java Unified Neural Orchestration** — distributed LLM inference and fine-tuning.
+**Java Unified Neural Orchestration** 
+
+Distributed LLM inference and fine-tuning.
+
 No Python, no GIL, no Spring.
 
 [![Java 25+](https://img.shields.io/badge/Java-25%2B-007396?logo=openjdk&logoColor=white)](https://openjdk.org/)
@@ -10,31 +13,77 @@ No Python, no GIL, no Spring.
 
 ## 0. Features
 
-- Distributed inference — pipeline-parallel (layer shards) or tensor-parallel (weight slices) across nodes
-- GPU acceleration — CUDA/cuBLAS with FP16 resident weights; CPU fallback
-- LoRA — train, checkpoint, inference adapter; optional merge to standalone GGUF
-- OpenAI-compatible REST — `POST /v1/chat/completions`, `GET /v1/models`; swap base URL only
-- JFR metrics — custom flight-recorder events across hot paths; merged cluster snapshots
+- Playing open-source models, e.g. [huggingface](https://huggingface.co/);
+- Providing distributed inference - Layer Sharding (pipeline parallelism) or Weight Slices (tensor parallelism) using pure Java; 0 sidecar processes;
+- GPU acceleration supported - CUDA/cuBLAS with FP16 resident weights, CPU fallback in case of OOM;
+- LoRA (Low-Rank Adaptation) supported. Train your data arranged by checkpoints; persist LoRA inference adapter for future use;
+- OpenAI-compatible REST - `POST /v1/chat/completions`, `GET /v1/models`; swap the base URL only to integrate in your application;
+- JFR metrics under the hood - custom flight-recorder events across hot paths; instrumentation driven development;
+- EU AI Act friendly - redistributing merged weights may trigger base-model and adapter license questions; Juno does not (yet) provide a legal determination of points highlighted in EU AI Act research as `Compliance Gaps`. So please consider wait or implement yoursef those you are interested in.- see **[docs/EU-AI-Act-compliance.md](docs/EU-AI-Act-compliance.md)**.
 
 ## 1. How to use
 
-### 1.1 Maven Central jars and docs (end-to-end)
+### 1.1 JVM Integration
 
-Depend on **`cab.ml` artifacts at version `0.1.0`** from Maven Central ([search](https://central.sonatype.com/search?q=g:cab.ml+juno)); publisher is verified for **ml.cab**. Library modules plus shaded **`juno-player`**, **`juno-node`**, and **`juno-master`** jars are published from this reactor.
+Integrate on **`cab.ml` artifacts at version `0.1.0`** from Maven Central:
 
-Then follow **[docs/howto.md](docs/howto.md)** for `./juno` commands and **[docs/integration-maven.md](docs/integration-maven.md)** for dependency snippets and classpath notes.
+```
+	<dependencyManagement>
+	  <dependencies>
+	    <dependency>
+	      <groupId>cab.ml</groupId>
+	      <artifactId>juno-bom</artifactId>
+	      <version>0.1.0</version>
+	      <type>pom</type>
+	      <scope>import</scope>
+	    </dependency>
+	  </dependencies>
+	</dependencyManagement>
+```
 
-Contributors can build from source: `mvn clean package -DskipTests`.
+then use player all-in-one http endpoints:
+
+```
+	<!-- juno-player exposes JunoHttpClient (and JunoPlayer for in-process use). -->
+	<dependency>
+	    <groupId>cab.ml</groupId>
+	    <artifactId>juno-player</artifactId>
+	</dependency>
+	<!-- tokenizer provides cab.ml.juno.tokenizer.ChatMessage used by JunoHttpClient. -->
+	<dependency>
+	    <groupId>cab.ml</groupId>
+	    <artifactId>tokenizer</artifactId>
+	</dependency>
+```
+
+Then follow **[docs/howto.md](docs/howto.md)** `JVM integration` section or checkout the [spring-boot example](https://github.com/ml-cab/juno-spring-example/tree/master) for dependency and code snippets.
+
+Maintainer - see **[docs/integration-maven.md](docs/integration-maven.md)**
 
 ### 1.2 Local player and LoRA (including Hugging Face–origin weights)
 
-Download a GGUF locally (for example from Hugging Face) and pass **`--model-path`**. Interactive inference: `./juno local --model-path /path/to/model.gguf`. REST alongside REPL: add **`--api-port 8080`**. Training: `./juno lora --model-path ...` (see **[docs/LoRA.md](docs/LoRA.md)**).
+Contributors and enthusiasts can build from source: `mvn clean package -DskipTests`.
 
-Optional **`./juno merge`** bakes a trained `.lora` into a new GGUF so inference needs no sidecar adapter (**[docs/howto.md](docs/howto.md)**).
+Download a GGUF locally (please correct an URL) 
 
-#### 1.2.1 Merge legality
+```
+cd juno/models
+wget https://huggingface.co/.../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+```
 
-Redistributing merged weights may trigger base-model and adapter license questions; Juno does not provide a legal determination — see **[docs/legal.md](docs/legal.md)**.
+then run local jUno interactive console to try and train inference
+
+```
+./juno local --model-path models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+```
+
+**`--model-path`** is relative for juno project dir. REST alongside REPL: add **`--api-port 8080`**. 
+
+Training: `./juno lora --model-path ...` (see **[docs/LoRA.md](docs/LoRA.md)**).
+
+Optional **`./juno merge`** bakes a trained `.lora` into a new GGUF, so that inference needs no sidecar adapter 
+
+More at **[howto.md](docs/howto.md)**.
 
 ### 1.3 On-prem orchestration
 
@@ -64,7 +113,7 @@ Node coordination and inference RPCs use **gRPC** with **protobuf** contracts fr
 
 ## 5. Useful refs
 
-- Performance matrix: **[docs/juno_test_matrix.html](docs/juno_test_matrix.html)** — methodology companion **[docs/performance.md](docs/performance.md)**
+- Performance matrix: **[docs/juno_test_matrix.html](docs/juno_test_matrix.html)** - methodology companion **[docs/performance.md](docs/performance.md)**
 - Legal Q&A: **[docs/legal.md](docs/legal.md)**
 
 ---
@@ -79,7 +128,7 @@ JDK 25+, Maven 3.9+, CUDA 12.x + NVIDIA driver on GPU nodes (optional for CPU-on
 mvn clean package -DskipTests
 
 mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
-                                       # unit tests — no model file, no GPU needed
+                                       # unit tests - no model file, no GPU needed
 
 mvn verify -pl juno-master
 ```
@@ -107,4 +156,4 @@ Details: **[docs/arch.md](docs/arch.md)**.
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE).
+Apache 2.0 - see [LICENSE](LICENSE).

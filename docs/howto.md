@@ -6,7 +6,7 @@
 ./juno
 ```
 
-Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
+Unified stand-alone launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
 
 ---
 
@@ -14,10 +14,10 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 
 | Command | Description |
 |---------|-------------|
+| `cluster` | 3-node cluster (default command) — forked JVMs, real gRPC. Default `--pType pipeline`; use `--pType tensor` for AllReduce mode |
 | `local` | In-process REPL — all transformer shards in one JVM, no forking, no gRPC |
 | `lora` | LoRA fine-tuning REPL — single in-process JVM, adapter persisted to `.lora` file |
 | `merge` | Bake a trained `.lora` adapter into a new standalone GGUF — no sidecar needed at inference time |
-| `cluster` | 3-node cluster (default command) — forked JVMs, real gRPC. Default `--pType pipeline`; use `--pType tensor` for AllReduce mode |
 | `test` | 8 automated real-model smoke checks (6 pipeline + 2 tensor), exits 0 (all pass) or 1 (any fail) |
 
 ---
@@ -42,7 +42,7 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 | `--lora-play PATH` | — | cluster, local | Apply a pre-trained `.lora` adapter at inference (read-only, no training). In cluster mode the file is forwarded as `-Djuno.lora.play.path` to every forked node JVM. |
 | `--api-port N` | — | cluster, local | Start the OpenAI-compatible REST API server on port N alongside the REPL. Exposes `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{model}`. Environment override: `API_PORT`. |
 
-**LoRA-specific flags** (`lora` command only):
+**LoRA specific flags** (`lora` command only):
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -54,7 +54,7 @@ Unified launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn 
 | `--lora-steps-qa N` | `10` | Gradient steps per `/train-qa` Q&A pair |
 | `--lora-early-stop F` | `0.25` | Stop chunk early when loss delta < F |
 
-**`merge` flags:**
+**`merge` specific flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -73,7 +73,7 @@ Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
 
 ---
 
-### `local` — in-process REPL
+### `local` — in-process REPL, fastest mode of juno-player console, operates within same JVM, GRPC off, uses LocalInferencePipeline.java instead
 
 ```bash
 # Minimal
@@ -96,76 +96,21 @@ LORA_PLAY_PATH=/path/to/model.lora MODEL_PATH=/path/to/model.gguf ./juno local
 ```
 
 When `--lora-play` is given, the startup banner shows:
+
 ```
   Loading LoRA adapters for inference: /path/to/model.lora
   Loaded 44 LoRA adapters  (inference-only, no training)
 ```
 
 When `--api-port` is given, the startup banner shows:
+
 ```
   ✔ Local API server on http://localhost:8080 (OpenAI: /v1/chat/completions)
 ```
 
 ---
 
-### `lora` — LoRA fine-tuning REPL
-
-```bash
-# Minimal -- auto-loads <model>.lora if it exists
-./juno lora --model-path /path/to/TinyLlama.Q4_K_M.gguf
-
-# With verbose tracing (recommended when debugging training)
-./juno lora --model-path /path/to/model.gguf --verbose
-```
-
-For a full LoRA training guide, REPL commands, rank selection, and common pitfalls see
-[LoRA.md](LoRA.md).
-
-**Using a trained adapter outside `lora` mode:**
-```bash
-# Chat with adapter, no training REPL overhead
-./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora
-
-# 3-node cluster with adapter on every node
-./juno --model-path /path/to/model.gguf --lora-play /path/to/model.lora
-```
-
-**Profiling a slow training step:**
-```bash
-./juno lora --model-path /path/to/model.gguf --jfr 5m
-# After exit, open juno-<modelStem>-<timestamp>.jfr in JDK Mission Control
-# Event Browser -> juno.LoraTrainStep: forwardMs / backwardMs / optimizerMs / loss
-```
-
----
-
-### `merge` — bake a LoRA adapter into a standalone GGUF
-
-Writes a new GGUF where LoRA-patched projection tensors (wq/wv on every layer) are stored as
-F32 for full precision. All other tensors are copied verbatim in their original quantized
-encoding. The resulting file loads with `./juno local` or `./juno` like any other model.
-
-```bash
-# Default: reads <model>.lora, writes <model>-merged.gguf
-./juno merge --model-path /path/to/TinyLlama.Q4_K_M.gguf
-
-# Explicit paths
-./juno merge --model-path /path/to/model.gguf \
-             --lora-path  /adapters/my.lora   \
-             --output     /path/to/merged.gguf
-
-# Larger heap for big models (rule of thumb: 2x model file size)
-./juno merge --model-path /path/to/Mistral-7B.gguf --heap 12g
-```
-
-The LoRA delta per element (~6x10^-4) is smaller than Q4_K quantization noise (~3x10^-3).
-Re-quantizing the merged weights back to Q4_K would erase the training entirely. F32 storage
-for the 44 patched tensors is the correct trade-off. For TinyLlama 1.1B Q4_K_M (667 MB), the
-merged file is approximately 1 GB.
-
----
-
-### *(no command)* — 3-node cluster (forked JVMs, real gRPC)
+### `cluster` — 3-node cluster, default command of juno-player console (forked JVMs, real gRPC)
 
 Forks 3 separate JVM node processes. Each node loads its own shard of the model.
 Two distribution strategies are available via `--pType`:
@@ -211,6 +156,65 @@ building its `ForwardPassHandler`.
 
 ---
 
+### `lora` — LoRA fine-tuning REPL
+
+```bash
+# Minimal -- auto-loads <model>.lora if it exists
+./juno lora --model-path /path/to/TinyLlama.Q4_K_M.gguf
+
+# With verbose tracing (recommended when debugging training)
+./juno lora --model-path /path/to/model.gguf --verbose
+```
+
+For a full LoRA training guide, REPL commands, rank selection, and common pitfalls see
+[LoRA.md](LoRA.md).
+
+**Using a trained adapter outside `lora` mode:**
+
+```bash
+# Chat with adapter, no training REPL overhead
+./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+
+# 3-node cluster with adapter on every node
+./juno --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+```
+
+**Profiling a slow training step:**
+
+```bash
+./juno lora --model-path /path/to/model.gguf --jfr 5m
+# After exit, open juno-<modelStem>-<timestamp>.jfr in JDK Mission Control
+# Event Browser -> juno.LoraTrainStep: forwardMs / backwardMs / optimizerMs / loss
+```
+
+---
+
+### `merge` — bake a LoRA adapter into a standalone GGUF
+
+Writes a new GGUF where LoRA-patched projection tensors (wq/wv on every layer) are stored as
+F32 for full precision. All other tensors are copied verbatim in their original quantized
+encoding. The resulting file loads with `./juno local` or `./juno` like any other model.
+
+```bash
+# Default: reads <model>.lora, writes <model>-merged.gguf
+./juno merge --model-path /path/to/TinyLlama.Q4_K_M.gguf
+
+# Explicit paths
+./juno merge --model-path /path/to/model.gguf \
+             --lora-path  /adapters/my.lora   \
+             --output     /path/to/merged.gguf
+
+# Larger heap for big models (rule of thumb: 2x model file size)
+./juno merge --model-path /path/to/Mistral-7B.gguf --heap 12g
+```
+
+The LoRA delta per element (~6x10^-4) is smaller than Q4_K quantization noise (~3x10^-3).
+Re-quantizing the merged weights back to Q4_K would erase the training entirely. F32 storage
+for the 44 patched tensors is the correct trade-off. For TinyLlama 1.1B Q4_K_M (667 MB), the
+merged file is approximately 1 GB.
+
+---
+
 ### OpenAI-compatible REST API (`--api-port`)
 
 Pass `--api-port N` to any `local` or cluster invocation to start an OpenAI wire-compatible
@@ -251,6 +255,7 @@ curl http://localhost:8080/v1/chat/completions \
 # List models
 curl http://localhost:8080/v1/models
 ```
+
 **Request field mapping:**
 
 | OpenAI field | Juno internal | Notes |
@@ -288,7 +293,7 @@ def chat(messages):
     ).choices[0].message.content
 
 history = []
-for user_input in ["My name is Alice.", "What is my name?"]:
+for user_input in ["My name is Alice.", "What is my name?"]:no commandno commandno commandno commandno command
     history.append({"role": "user", "content": user_input})
     reply = chat(history)
     history.append({"role": "assistant", "content": reply})
@@ -531,12 +536,14 @@ stops each `juno-node.service` synchronously, SCPs the file to `/opt/juno/models
 starts after all nodes are confirmed active.
 
 **Expected coordinator log:**
+
 ```
 INFO: LoRA inference overlay configured -- nodes will load:
       /opt/juno/models/tinyllama-1.1b-chat-v1.0-q4_k_m.lora
 ```
 
 **Expected node log:**
+
 ```
 INFO: Detected architecture: llama  backend=CpuMatVec  file=...  lora=44 adapters
 ```
@@ -583,6 +590,7 @@ JFR file. These are the primary throughput metrics for performance comparison:
 | `juno.TokenProduced.tps` | Aggregate tokens per second (`count / elapsed_seconds`) |
 
 AWS cluster JFR:
+
 ```bash
 ./launcher.sh juno-deploy.sh setup --jfr 2m ...
 # Ctrl+C -> recordings collected from all nodes -> metrics printed -> instances stopped
