@@ -18,101 +18,92 @@
  */
 package cab.ml.juno.node;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 
-import org.bytedeco.javacpp.Pointer;
-import org.bytedeco.javacpp.PointerPointer;
-import org.bytedeco.cuda.global.cudart;
+import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 
 /**
  * Row-major FP16 (IEEE binary16) weight matrix on the GPU — half the VRAM of
  * {@link DeviceFloatMatrix} for the same logical shape.
  *
- * <p>Used with {@link CudaMatVec#sgemv(DeviceHalfMatrix, float[])} (mixed
+ * Float32 host weights are converted to FP16 in an off-heap confined arena
+ * before upload, avoiding any GC-visible byte array allocation for the staging
+ * buffer. The H2D transfer uses synchronous {@code cudaMemcpy}.
+ *
+ * Used with {@link CudaMatVec#sgemv(DeviceHalfMatrix, float[])} (mixed
  * FP16/FP32 cuBLAS path) so activations stay float32 while weights stay compact.
  */
 public final class DeviceHalfMatrix implements AutoCloseable {
 
-	private final GpuContext ctx;
-	private final Pointer dA;
-	private final int rows;
-	private final int cols;
-	private volatile boolean closed;
+    private final GpuContext    ctx;
+    /** Device pointer, sized to rows * cols * Short.BYTES. */
+    private final MemorySegment dA;
+    private final int           rows;
+    private final int           cols;
+    private volatile boolean    closed;
 
-	private DeviceHalfMatrix(GpuContext ctx, Pointer dA, int rows, int cols) {
-		this.ctx = ctx;
-		this.dA = dA;
-		this.rows = rows;
-		this.cols = cols;
-	}
+    private DeviceHalfMatrix(GpuContext ctx, MemorySegment dA, int rows, int cols) {
+        this.ctx  = ctx;
+        this.dA   = dA;
+        this.rows = rows;
+        this.cols = cols;
+    }
 
-	/**
-	 * Converts {@code host} float32 weights to FP16 and uploads row-major
-	 * {@code [rows × cols]} to the device.
-	 */
-	public static DeviceHalfMatrix uploadFromFloat32(GpuContext ctx, float[] host, int rows, int cols) {
-		if (ctx == null)
-			throw new IllegalArgumentException("ctx must not be null");
-		if (host.length != (long) rows * cols)
-			throw new IllegalArgumentException(
-					"host.length=" + host.length + " != rows*cols=" + ((long) rows * cols));
-		int n = rows * cols;
-		byte[] bytes = new byte[n * 2];
-		ByteBuffer bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
-		for (int i = 0; i < n; i++)
-			bb.putShort(i * 2, Float.floatToFloat16(host[i]));
-		long bytesTotal = (long) n * 2;
-		PointerPointer pp = new PointerPointer(1);
-		try {
-			checkCuda(cudart.cudaSetDevice(ctx.deviceIndex()), "cudaSetDevice");
-			int rc = cudart.cudaMalloc(pp, bytesTotal);
-			if (rc != 0)
-				throw new IllegalStateException("cudaMalloc failed: " + rc);
-			Pointer d = pp.get(0);
-			org.bytedeco.javacpp.BytePointer hp = new org.bytedeco.javacpp.BytePointer(bytes);
-			try {
-				checkCuda(cudart.cudaMemcpy(d, hp, bytesTotal, cudart.cudaMemcpyHostToDevice), "cudaMemcpy(A H2D)");
-			} finally {
-				hp.close();
-			}
-			return new DeviceHalfMatrix(ctx, d, rows, cols);
-		} finally {
-			pp.close();
-		}
-	}
+    /**
+     * Converts float32 host weights to FP16 (IEEE 754 binary16, little-endian)
+     * and uploads {@code rows × cols} to the device.
+     *
+     * Conversion and staging use a confined off-heap arena — no heap byte[]
+     * allocation. The staging segment is released immediately after transfer.
+     */
+    public static DeviceHalfMatrix uploadFromFloat32(GpuContext ctx, float[] host, int rows, int cols) {
+        if (ctx == null)
+            throw new IllegalArgumentException("ctx must not be null");
+        if (host.length != (long) rows * cols)
+            throw new IllegalArgumentException(
+                "host.length=" + host.length + " != rows*cols=" + ((long) rows * cols));
 
-	public int rows() {
-		return rows;
-	}
+        CudaBindings  cuda      = CudaBindings.instance();
+        int           n         = rows * cols;
+        long          halfBytes = (long) n * Short.BYTES;
+        MemorySegment dA        = cuda.deviceMalloc(ctx.deviceIndex(), halfBytes);
 
-	public int cols() {
-		return cols;
-	}
+        // Pack float32 → FP16 into off-heap staging; JAVA_SHORT has native byte order
+        // (little-endian on x86), matching CUDA's __half memory layout.
+        try (Arena staging = Arena.ofConfined()) {
+            MemorySegment stagingHost = staging.allocate(halfBytes);
+            for (int i = 0; i < n; i++)
+                stagingHost.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(host[i]));
 
-	Pointer devicePointer() {
-		if (closed)
-			throw new IllegalStateException("DeviceHalfMatrix already closed");
-		return dA;
-	}
+            CudaBindings.check(
+                CudaBindings.callInt(cuda.cudaMemcpy, dA, stagingHost, halfBytes, CudaBindings.H2D),
+                "cudaMemcpy(A FP16 H2D)");
+        }
 
-	public boolean isClosed() {
-		return closed;
-	}
+        return new DeviceHalfMatrix(ctx, dA, rows, cols);
+    }
 
-	@Override
-	public void close() {
-		if (!closed) {
-			closed = true;
-			if (dA != null) {
-				cudart.cudaSetDevice(ctx.deviceIndex());
-				cudart.cudaFree(dA);
-			}
-		}
-	}
+    public int rows() { return rows; }
+    public int cols() { return cols; }
 
-	private static void checkCuda(int rc, String op) {
-		if (rc != 0)
-			throw new IllegalStateException(op + " failed: " + rc);
-	}
+    /**
+     * Device-side {@link MemorySegment} for the FP16 weight matrix.
+     * Sized to {@code rows * cols * Short.BYTES}; valid until {@link #close()}.
+     */
+    MemorySegment devicePointer() {
+        if (closed) throw new IllegalStateException("DeviceHalfMatrix already closed");
+        return dA;
+    }
+
+    public boolean isClosed() { return closed; }
+
+    @Override
+    public void close() {
+        if (!closed) {
+            closed = true;
+            CudaBindings.callInt(CudaBindings.instance().cudaSetDevice, ctx.deviceIndex());
+            CudaBindings.instance().deviceFree(dA);
+        }
+    }
 }

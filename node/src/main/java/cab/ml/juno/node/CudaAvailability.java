@@ -15,45 +15,38 @@
  */
 package cab.ml.juno.node;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.util.logging.Logger;
 
-import org.bytedeco.javacpp.IntPointer;
-import org.bytedeco.cuda.cudart.cudaDeviceProp;
-import org.bytedeco.cuda.global.cudart;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * Safe CUDA runtime detection.
+ * Safe CUDA runtime detection via Panama FFI.
  *
- * Uses org.bytedeco (JavaCPP) cudart. Calling CUDA directly without checking
- * availability throws when the native library or driver is absent (e.g. CPU-only
- * CI, Intel integrated graphics). This class wraps all cudart calls in a single
- * try/catch so the rest of the codebase can branch on isAvailable() without
- * defensive exception handling everywhere.
+ * Delegates library availability to {@link CudaBindings#isAvailable()}.
+ * If the CUDA shared libraries (libcudart.so.12, libcublas.so.12) are not on
+ * LD_LIBRARY_PATH, {@link #isAvailable()} returns false without throwing.
  *
- * Usage:
- *   if (CudaAvailability.isAvailable()) {
- *       GpuForwardPassHandler h = GpuForwardPassHandler.loadGpuResident(path, shard, ctx);
- *   } else {
- *       CpuForwardPassHandler h = CpuForwardPassHandler.load(path, shard);
- *   }
- *   
- * @author Yevhen Soldatov
- * 
+ * {@link #deviceName} and {@link #vramBytes} allocate a single off-heap
+ * cudaDeviceProp struct via a confined arena, read the fields, then release
+ * immediately — zero heap allocation during the read.
+ *
+ * Struct field offsets ({@link CudaBindings#PROP_NAME_OFFSET},
+ * {@link CudaBindings#PROP_TOTAL_MEM_OFFSET}) are CUDA 12.x / Linux x86_64.
  */
-
 public final class CudaAvailability {
 
     private static final Logger log = Logger.getLogger(CudaAvailability.class.getName());
 
-    /** Cached result — detection runs once at class load time. */
     private static final boolean AVAILABLE = detect();
 
-    private CudaAvailability() {
-    }
+    private CudaAvailability() {}
 
     /**
-     * Returns true if at least one CUDA-capable device is present and initialised.
-     * False on any failure: missing driver, no GPU, wrong arch.
+     * Returns true if at least one CUDA-capable device is present and the
+     * CUDA libraries were resolved successfully.
      */
     public static boolean isAvailable() {
         return AVAILABLE;
@@ -64,51 +57,68 @@ public final class CudaAvailability {
      */
     public static int deviceCount() {
         if (!AVAILABLE) return 0;
-        try (IntPointer count = new IntPointer(1)) {
-            int rc = cudart.cudaGetDeviceCount(count);
-            return (rc == 0) ? count.get() : 0;
-        } catch (Exception e) {
+        CudaBindings cuda = CudaBindings.instance();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment countSeg = arena.allocate(JAVA_INT);
+            int rc = (int) cuda.cudaGetDeviceCount.invokeExact(countSeg);
+            return (rc == 0) ? countSeg.get(JAVA_INT, 0) : 0;
+        } catch (Throwable t) {
+            log.warning("cudaGetDeviceCount failed: " + t.getMessage());
             return 0;
         }
     }
 
     /**
-     * Returns a human-readable description of device {@code index}, or
-     * "unavailable" if CUDA is not present.
+     * Returns a human-readable name for device index, or "unknown" on failure.
      */
     public static String deviceName(int index) {
         if (!AVAILABLE) return "unavailable";
-        try (cudaDeviceProp prop = new cudaDeviceProp()) {
-            int rc = cudart.cudaGetDeviceProperties(prop, index);
-            if (rc != 0) return "unknown";
-            String n = prop.name().getString();
-            return n != null ? n.trim().replaceAll("\\0", "") : "unknown";
-        } catch (Exception e) {
-            return "unknown";
-        }
+        return withDeviceProp(index, prop -> {
+            String name = prop.getString(CudaBindings.PROP_NAME_OFFSET);
+            return (name != null) ? name.trim() : "unknown";
+        }, "unknown");
     }
 
     /**
-     * Returns total VRAM in bytes for device {@code index}, or 0 if unavailable.
+     * Returns total VRAM in bytes for device index, or 0 on failure.
      */
     public static long vramBytes(int index) {
         if (!AVAILABLE) return 0L;
-        try (cudaDeviceProp prop = new cudaDeviceProp()) {
-            int rc = cudart.cudaGetDeviceProperties(prop, index);
-            return (rc == 0) ? prop.totalGlobalMem() : 0L;
-        } catch (Exception e) {
-            return 0L;
+        return withDeviceProp(index,
+            prop -> prop.get(JAVA_LONG, CudaBindings.PROP_TOTAL_MEM_OFFSET),
+            0L);
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    @FunctionalInterface
+    private interface PropReader<T> {
+        T read(MemorySegment prop) throws Throwable;
+    }
+
+    private static <T> T withDeviceProp(int index, PropReader<T> reader, T fallback) {
+        CudaBindings cuda = CudaBindings.instance();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment prop = arena.allocate(CudaBindings.DEVICE_PROP_BYTES);
+            int rc = (int) cuda.cudaGetDeviceProperties.invokeExact(prop, index);
+            if (rc != 0) return fallback;
+            return reader.read(prop);
+        } catch (Throwable t) {
+            log.warning("cudaGetDeviceProperties failed: " + t.getMessage());
+            return fallback;
         }
     }
 
-    // ── Private ───────────────────────────────────────────────────────────────
-
     private static boolean detect() {
-        try {
-            IntPointer count = new IntPointer(1);
-            int rc = cudart.cudaGetDeviceCount(count);
-            int n = count.get();
-            count.close();
+        if (!CudaBindings.isAvailable()) {
+            log.info("CUDA not available — CudaBindings did not load");
+            return false;
+        }
+        CudaBindings cuda = CudaBindings.instance();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment countSeg = arena.allocate(JAVA_INT);
+            int rc = (int) cuda.cudaGetDeviceCount.invokeExact(countSeg);
+            int n  = countSeg.get(JAVA_INT, 0);
             boolean ok = (rc == 0 && n > 0);
             if (ok) {
                 log.info("CUDA available — " + n + " device(s)");
@@ -116,8 +126,8 @@ public final class CudaAvailability {
                 log.info("CUDA not available (rc=" + rc + ", devices=" + n + ")");
             }
             return ok;
-        } catch (UnsatisfiedLinkError | Exception e) {
-            log.info("CUDA not available — " + e.getMessage());
+        } catch (Throwable t) {
+            log.info("CUDA not available — " + t.getMessage());
             return false;
         }
     }
