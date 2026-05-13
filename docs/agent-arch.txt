@@ -4,10 +4,35 @@ Module dependency (excerpt):
   api, registry, tokenizer, sampler, kvcache, health, metrics — shared libraries
   lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA)
   node — GgufReader, LlamaTransformerHandler, Phi3TransformerHandler, MatVec
-        (CpuMatVec / CudaMatVec), LoraTrainableHandler, LoraMerge, LoraQvInitializer
+        (CpuMatVec / CudaMatVec), CudaBindings, CudaAvailability,
+        DeviceFloatMatrix, DeviceHalfMatrix, GpuContext,
+        LoraTrainableHandler, LoraMerge, LoraQvInitializer
         node depends on lora
-  coordinator, juno-player, juno-master, juno-node — assembly / REPL / services
+  coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline clients
+        ProcessPipelineClient, TensorParallelPipelineClient
+        coordinator depends on node
+  juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain
+        juno-player depends on coordinator (and transitively on node)
+  juno-master — CoordinatorMain standalone executable (production coordinator)
+        depends on coordinator, node, kvcache, tokenizer, sampler, health,
+        registry, api; does NOT depend on juno-player at compile/runtime
+  juno-node — NodeMain standalone executable
   juno-bom — Maven BOM (dependencyManagement for cab.ml artifacts)
+
+GPU FFI (node module — Panama project, JEP 454):
+  CudaBindings — Panama FFI downcall handles for libcudart.so.12 and libcublas.so.12.
+        Replaces the JavaCPP/bytedeco bridge entirely.
+        Resolved once at class-init via java.lang.foreign.Linker + SymbolLookup.
+        Singleton; thread-safe MethodHandle instances; zero per-call Java overhead.
+        Requires JVM flag: --enable-native-access=ALL-UNNAMED.
+        node/pom.xml maven-surefire-plugin injects this flag for all unit tests.
+  CudaAvailability — detection via CudaBindings.isAvailable(); zero heap allocation
+        (off-heap confined arena for cudaDeviceProp read, released immediately).
+  CudaMatVec — cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16);
+        per-thread CUDA stream + async H2D/D2H; synchronized on GpuContext lock.
+  DeviceFloatMatrix / DeviceHalfMatrix — VRAM buffer wrappers using CudaBindings
+        deviceMalloc / deviceFree; explicit lifecycle via releaseGpuResources().
+  GpuContext — shared cuBLAS handle + serialization lock per device index.
 
 Third-party JVM integration (juno-player module): JunoPlayer (facade), LoraTrainer,
 LocalInferencePipeline.embedLastToken, PublisherTokenConsumer → Flow.Publisher,

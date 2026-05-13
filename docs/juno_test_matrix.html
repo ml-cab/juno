@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>juno :: test matrix</title>
+<title>jUno - Juno performance report</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
 
@@ -297,12 +297,12 @@
 <div class="topbar">
   <span class="logo">JUNO</span>
   <span class="sep">══</span>
-  <span class="sub">performance test matrix</span>
+  <span class="sub">Juno performance report</span>
   <span class="sep">│</span>
   <span class="sub">tinyllama-1.1b-chat-v1.0-q4_k_m.gguf</span>
   <span class="sep">│</span>
   <span class="sub">cpu: m7i-flex.large (50 tok)  gpu: g4dn.2xlarge (200 tok)</span>
-  <div class="right">generated 2026-05-02</div>
+  <div class="right"><a href="juno.html" style="color:inherit;text-decoration:none;">← juno.html</a> &nbsp;·&nbsp; generated 2026-05-11</div>
 </div>
 
 <div class="filterbar">
@@ -316,10 +316,10 @@
 </div>
 
 <div class="legend">
-  <div class="leg"><div class="lsq l-done"></div><span class="l-done">done</span> — tps measured</div>
-  <div class="leg"><div class="lsq l-pend"></div><span class="l-pend">pending</span> — in original plan</div>
-  <div class="leg"><div class="lsq l-add"></div><span class="l-add">add</span> — suggested</div>
-  <div class="leg"><div class="lsq l-na"></div><span style="color:var(--dim)">n/a</span> — not applicable</div>
+  <div class="leg"><div class="lsq l-done"></div><span class="l-done">done</span> - tps measured</div>
+  <div class="leg"><div class="lsq l-pend"></div><span class="l-pend">pending</span> - in original plan</div>
+  <div class="leg"><div class="lsq l-add"></div><span class="l-add">add</span> - suggested</div>
+  <div class="leg"><div class="lsq l-na"></div><span style="color:var(--dim)">n/a</span> - not applicable</div>
   <div style="margin-left:auto; color: var(--muted); font-size:10px;">s1 = 1 session &nbsp;│&nbsp; s9 = 9 concurrent sessions</div>
 </div>
 
@@ -377,8 +377,9 @@
   <div class="insight">
     <span class="insight-tag tag-ok">GPU</span>
     <div class="insight-text">
-      GPU (g4dn) is <span>17–37x faster</span> than CPU across all single-session tests.
-      Multi-session s9 shows <span>37.24 tps aggregate</span> vs CPU's <em>1.05 tps</em> — the gap widens under load as the GPU batches sessions together into larger forward passes.
+      GPU (g4dn) is <span>15–50x faster</span> than CPU across all single-session tests.
+      Long/s9: GPU <span>52.30 tps</span> vs CPU <em>1.05 tps</em> - GPU batches forward passes across concurrent sessions.
+      Conv/s9: GPU <span>5.89 tps</span> vs CPU <em>0.28 tps</em> - 21x gap widens further as per-session history growth hits CPU prefill time harder.
     </div>
   </div>
 
@@ -386,7 +387,7 @@
     <span class="insight-tag tag-warn">DTYPE</span>
     <div class="insight-text">
       CPU dtype ranking: <span>FP16 (1.54)</span> > <span>INT8 (1.13)</span> ≈ <em>FP32 (1.06)</em> ≈ <em>LoRA (1.05)</em> ≈ <em>LE (0.97)</em>.
-      INT8 is slower than FP16 on CPU — no AVX-512 INT8 path implemented, falls back to scalar.
+      INT8 is slower than FP16 on CPU - no AVX-512 INT8 path implemented, falls back to scalar.
       LE byte order adds ~19% overhead vs BE on CPU (MatVec total 90,286 ms vs 56,514 ms).
     </div>
   </div>
@@ -394,8 +395,8 @@
   <div class="insight">
     <span class="insight-tag tag-ok">GPU DTYPE</span>
     <div class="insight-text">
-      GPU dtype ranking: <span>LoRA (22.19)</span> > <span>LE (21.63)</span> > <span>FP16/embed (20.69)</span> ≈ <span>FP32 (20.36)</span> > <span>INT8 (19.87)</span>.
-      LoRA inference overhead is negligible on GPU — adapter is resident in VRAM.
+      GPU dtype ranking: <span>FP16 (22.53)</span> > <span>LoRA (22.19)</span> > <span>LE (21.63)</span> ≈ <span>FP32 (20.36)</span> > <span>INT8 (19.87)</span>.
+      Panama FFI (java.lang.foreign) eliminated JavaCPP per-call overhead — FP16 pipeline overtook LoRA as peak.
       FP32 on GPU is only 7% slower than FP16 (driver upcasts internally, MatVec p95 identical at 0.241ms).
     </div>
   </div>
@@ -404,41 +405,43 @@
     <span class="insight-tag tag-warn">NODES</span>
     <div class="insight-text">
       CPU pipeline node sweep: peak at <em>3 nodes (1.59 tps)</em>. Adding nodes beyond 3 degrades end-to-end TPS due to network synchronization cost per forward pass.
-      7 nodes (embedded) dropped to <em>1.12 tps</em> — below single-node baseline.
+      7 nodes (embedded) dropped to <em>1.12 tps</em> - below single-node baseline.
     </div>
   </div>
 
   <div class="insight">
     <span class="insight-tag tag-crit">TENSOR</span>
     <div class="insight-text">
-      CPU 3-node tensor parallelism: <em>0.44 tps</em> — 3.5x worse than single-node pipeline.
+      CPU 3-node tensor parallelism: <em>0.44 tps</em> - 3.5x worse than single-node pipeline.
       Network sync at every layer dominates for this model size.
-      GPU tensor (1 node): <span>20.72 tps</span> — within noise of pipeline (19.67). No benefit, non-zero overhead.
+      GPU tensor (1 node): <span>20.72 tps</span> - within noise of pipeline (19.67). No benefit, non-zero overhead.
     </div>
   </div>
 
   <div class="insight">
     <span class="insight-tag tag-crit">CONV</span>
     <div class="insight-text">
-      CPU conv/s1: <em>0.12 tps</em> — 10x worse than long/s1. Full KV re-prefill each turn.
-      GPU conv/s1: <span>1.31 tps</span> — node prefill p95 spiked to 1,530ms vs 142ms for long.
+      CPU conv/s1: <em>0.12 tps</em> - 10x worse than long/s1. Full KV re-prefill each turn.
+      GPU conv/s1: <span>5.12 tps</span> - node prefill p95 912ms (was 1,530ms with bytedeco); Panama FFI stream latency reduction. Decode p95 58ms.
       Multi-turn without KV cache is O(n²) in token cost. <em>kvcache branch</em> not yet merged.
+      CPU conv/s9: <em>0.28 tps aggregate</em> (~0.031 tps/session) - 4x worse per session than s1 due to compounding prefill cost across 9 growing contexts.
+      GPU conv/s9: <span>7.92 tps aggregate</span> (~0.88 tps/session). Decode p95 140ms (vs 58ms s1); GPU batches concurrent sessions but prefill cost scales with history length.
     </div>
   </div>
 
   <div class="insight">
     <span class="insight-tag tag-info">CONCURRENCY</span>
     <div class="insight-text">
-      CPU s9: aggregate <span>1.05 tps</span> across 9 sessions — ~0.12 tps per session, identical to single-session.
-      Node decode p95 jumped to <em>10,766ms</em> (vs 1,046ms s1) — sessions serialized, queue wait dominates.
-      GPU s9: aggregate <span>37.24 tps</span> — ~4.1 tps per session. Decode p95 <em>250ms</em> vs 54ms s1 — GPU batches sessions, 4.6x speedup per session under load.
+      CPU s9: aggregate <span>1.05 tps</span> across 9 sessions - ~0.12 tps per session, identical to single-session.
+      Node decode p95 jumped to <em>10,766ms</em> (vs 1,046ms s1) - sessions serialized, queue wait dominates.
+      GPU s9: aggregate <span>52.30 tps</span> - ~5.8 tps per session. Decode p95 <em>163ms</em> vs 50ms s1 (Panama FFI) - GPU batches sessions, 4.5x speedup per session under load.
     </div>
   </div>
 
   <div class="insight">
     <span class="insight-tag tag-info">LORA</span>
     <div class="insight-text">
-      lora-play CPU test has 3 JFR files — coordinator, node, and a third empty process (lora sidecar).
+      lora-play CPU test has 3 JFR files - coordinator, node, and a third empty process (lora sidecar).
       LoraTrainStep.count = 0 in all runs. The <em>--lora-play</em> flag loads adapter weights but no training steps were triggered during inference-only test scenarios. Training path untested.
     </div>
   </div>
@@ -453,7 +456,7 @@
 const D='done', P='pending', A='added', NA='na';
 
 const rows = [
-  {id:1,  hw:'cpu', pt:'pipeline', n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'1.54'],  l9:[D,'1.05'],  c1:[D,'0.12'],  c9:[P,'']},
+  {id:1,  hw:'cpu', pt:'pipeline', n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'1.54'],  l9:[D,'1.05'],  c1:[D,'0.12'],  c9:[D,'0.28']},
   {id:2,  hw:'cpu', pt:'pipeline', n:1, co:'separate', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'1.16'],  l9:[A,''],      c1:[A,''],      c9:[A,'']},
   {id:3,  hw:'cpu', pt:'pipeline', n:3, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'1.59'],  l9:[A,''],      c1:[A,''],      c9:[A,'']},
   {id:4,  hw:'cpu', pt:'pipeline', n:3, co:'separate', dt:'FP16', bo:'BE', lo:'off',  l1:[A,''],      l9:[A,''],      c1:[NA,''],     c9:[NA,'']},
@@ -468,7 +471,7 @@ const rows = [
   {id:13, hw:'cpu', pt:'pipeline', n:1, co:'embedded', dt:'INT8', bo:'BE', lo:'off',  l1:[D,'1.13'],  l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
   {id:14, hw:'cpu', pt:'pipeline', n:1, co:'embedded', dt:'FP32', bo:'BE', lo:'off',  l1:[D,'1.06'],  l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
   {id:15, hw:'cpu', pt:'pipeline', n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'on',   l1:[D,'1.05'],  l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
-  {id:16, hw:'gpu', pt:'pipeline', n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'20.69'], l9:[D,'37.24'], c1:[D,'1.31'],  c9:[P,'']},
+  {id:16, hw:'gpu', pt:'pipeline', n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'22.53'], l9:[D,'52.30'], c1:[D,'5.12'],  c9:[D,'7.92']},
   {id:17, hw:'gpu', pt:'pipeline', n:1, co:'separate', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'19.67'], l9:[A,''],      c1:[A,''],      c9:[A,'']},
   {id:18, hw:'gpu', pt:'tensor',   n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'off',  l1:[D,'20.72'], l9:[A,''],      c1:[A,''],      c9:[NA,'']},
   {id:19, hw:'gpu', pt:'tensor',   n:1, co:'separate', dt:'FP16', bo:'BE', lo:'off',  l1:[A,''],      l9:[NA,''],     c1:[NA,''],     c9:[NA,'']},
@@ -602,13 +605,13 @@ function renderAnalytics() {
       </div>
     </div>
     <div class="acard">
-      <div class="acard-title">PEAK TPS — CPU</div>
+      <div class="acard-title">PEAK TPS - CPU</div>
       <div class="acard-val v-amber">${maxCpu}</div>
       <div class="acard-sub">3-node pipeline, long/s1</div>
       <div class="acard-sub" style="margin-top:4px">floor: <em style="color:var(--red)">0.44</em> (3-node tensor)</div>
     </div>
     <div class="acard">
-      <div class="acard-title">PEAK TPS — GPU</div>
+      <div class="acard-title">PEAK TPS - GPU</div>
       <div class="acard-val v-blue">${maxGpu}</div>
       <div class="acard-sub">lora-play, long/s1</div>
       <div class="acard-sub" style="margin-top:4px">multi-session: <em style="color:var(--green)">37.24</em> (long/s9)</div>

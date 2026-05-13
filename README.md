@@ -101,7 +101,7 @@ Copy-paste prompts for another agent:
 
 ## 4. Stack
 
-Node coordination and inference RPCs use **gRPC** with **protobuf** contracts from the `api` module. GPU matmul uses **CUDA 12.x** and **cuBLAS** via ByteDeko/JavaCPP (`CudaMatVec`), with a CPU quantised path when GPU is off or unavailable. The coordinator HTTP surface (**REST** and **SSE**) is implemented with **Javalin**.
+Node coordination and inference RPCs use **gRPC** with **protobuf** contracts from the `api` module. GPU matmul uses **CUDA 12.x** and **cuBLAS** via **Panama FFI** (`java.lang.foreign` — `CudaBindings` resolves `libcudart.so.12` and `libcublas.so.12` at class-init time; `CudaMatVec` owns all device memory and stream lifecycle), with a CPU quantised path when GPU is off or unavailable. The coordinator HTTP surface (**REST** and **SSE**) is implemented with **Javalin**.
 
 ## 5. Useful refs
 
