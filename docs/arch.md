@@ -163,7 +163,9 @@ MatVec (injected into handler):
                     per-thread CUDA stream + async H2D/D2H around GEMV;
                     synchronized(gpuContext.cublasSerializationLock());
                     GpuContext.shared(dev); weights uploaded once at load time;
-                    releaseGpuResources() frees VRAM on unload
+                    releaseGpuResources() frees VRAM on unload.
+                    All CUDA symbols accessed via CudaBindings (Panama FFI —
+                    java.lang.foreign.Linker; replaces JavaCPP/bytedeco entirely).
 
 KV cache wiring (per node, after loadShard()):
     NodeKVCacheAdapter  <- serialises float[][] K/V into KVBlock,
@@ -181,6 +183,14 @@ Backend selection is automatic via `selectBackend()`, which reads `JUNO_USE_GPU`
 
 **No Python, no subprocess.** The JVM reads GGUF binary directly via `GgufReader` and runs the
 full transformer forward pass end to end.
+
+**Panama FFI instead of JavaCPP/bytedeco.** `CudaBindings` resolves `libcudart.so.12` and
+`libcublas.so.12` once at class-init via `java.lang.foreign.Linker` and `SymbolLookup`. The
+resulting `MethodHandle` instances are thread-safe and carry zero per-call Java overhead (the JIT
+eliminates argument boxing for typed `invokeExact` call sites). The `bytedeco/cuda-platform`
+Maven dependency and its generated JNI wrappers are removed; the only requirement is
+`--enable-native-access=ALL-UNNAMED` on the JVM command line (injected automatically by
+`node/pom.xml` surefire config and by all launcher scripts).
 
 **No Spring Boot.** Javalin for REST. Virtual threads (`Executors.newVirtualThreadPerTaskExecutor()`)
 on the gRPC `ServerBuilder` — required to avoid OS-thread saturation under concurrent prefill sessions.

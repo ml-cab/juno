@@ -18,92 +18,93 @@
  */
 package cab.ml.juno.node;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Logger;
 
-import org.bytedeco.cuda.cublas.cublasContext;
-import org.bytedeco.cuda.global.cublas;
-import org.bytedeco.cuda.global.cudart;
+import static java.lang.foreign.ValueLayout.ADDRESS;
 
 /**
- * cuBLAS context: device selection and handle lifecycle.
+ * cuBLAS context: device selection and handle lifecycle, via Panama FFI.
+ *
+ * The cuBLAS handle is an opaque pointer ({@code cublasHandle_t}) stored as a
+ * {@link MemorySegment}. It is created by {@code cublasCreate_v2} and destroyed
+ * by {@code cublasDestroy_v2} — both resolved through {@link CudaBindings}.
  *
  * Prefer {@link #shared(int)} for a process-wide handle on long-lived JVMs
- * (embedded node, {@code ForwardPassHandlerLoader} default GPU path). Use
- * {@link #init(int)} when tests or tools need an isolated handle they can
- * {@link #close()} without affecting other code.
+ * (embedded node, ForwardPassHandlerLoader GPU path). Use {@link #init(int)}
+ * when tests or tools need an isolated handle they can {@link #close()} without
+ * affecting other code.
  *
- * The cublasContext is shared across all {@link CudaMatVec} calls using the same
- * {@code GpuContext} — concurrent host launches still require external ordering:
- * {@link #cublasSerializationLock()} is used by {@link CudaMatVec} to serialize
- * stream binding and kernel execution per context.
- *
- * Uses org.bytedeco (JavaCPP) cuda/cublas.
+ * The cublasHandle_t is shared across all {@link CudaMatVec} calls on the same
+ * GpuContext. {@link #cublasSerializationLock()} serializes stream binding and
+ * kernel execution. Replace with ReentrantLock when addressing Loom pinning
+ * (point 4 of the HPC audit).
  *
  * Usage:
  *   try (GpuContext ctx = GpuContext.init(0)) {
  *       ForwardPassHandler handler = ForwardPassHandlerLoader.load(path, shard, new CudaMatVec(ctx));
- *       ...
  *       handler.releaseGpuResources();
  *   }
  *
- * Throws IllegalStateException if CUDA is not available.
- *   
  * @author Yevhen Soldatov
- * 
  */
 public final class GpuContext implements AutoCloseable {
 
     private static final Logger log = Logger.getLogger(GpuContext.class.getName());
 
-    /** One shared {@link GpuContext} per device index for the JVM lifetime. */
-    private static final Map<Integer, GpuContext> SHARED_INSTANCES = new HashMap<>();
+    private static final Map<Integer, GpuContext> SHARED = new HashMap<>();
     private static final Object SHARED_LOCK = new Object();
 
-    private final int deviceIndex;
-    private final cublasContext handle;
-    private final boolean processShared;
-    private final Object cublasSerialization = new Object();
-    private volatile boolean closed = false;
+    private final int           deviceIndex;
+    /** Opaque cublasHandle_t returned by cublasCreate_v2. */
+    private final MemorySegment handle;
+    private final boolean       processShared;
+    private final Object        cublasSerialization = new Object();
+    private volatile boolean    closed = false;
 
-    private GpuContext(int deviceIndex, cublasContext handle, boolean processShared) {
-        this.deviceIndex = deviceIndex;
-        this.handle = handle;
+    private GpuContext(int deviceIndex, MemorySegment handle, boolean processShared) {
+        this.deviceIndex   = deviceIndex;
+        this.handle        = handle;
         this.processShared = processShared;
     }
 
     /**
-     * Mutex for {@code cublasSetStream} / memcpy / GEMV sequences on this handle.
-     * cuBLAS associates a stream with the handle; concurrent threads must not interleave.
+     * Mutex for cublasSetStream / memcpy / GEMV sequences on this handle.
+     * cuBLAS associates a stream with the handle; concurrent threads must not
+     * interleave these operations.
+     *
+     * Note: synchronized on this lock inside a virtual thread causes carrier
+     * pinning when the body makes Panama downcalls. Migrate to ReentrantLock
+     * when addressing Loom pinning (HPC audit point 4).
      */
     Object cublasSerializationLock() {
         return cublasSerialization;
     }
 
     /**
-     * Process-wide singleton per CUDA device: one cuBLAS handle per {@code deviceIndex}.
-     * {@link #close()} does nothing on these instances so embedded servers and
-     * {@code selectBackend()} paths do not tear down CUDA under other live code.
+     * Process-wide singleton per CUDA device. {@link #close()} is a no-op on
+     * these instances so embedded servers do not tear down CUDA under live code.
      *
-     * @param deviceIndex 0-based CUDA device (must be {@code < cudaGetDeviceCount()})
+     * @param deviceIndex 0-based CUDA device index
      */
     public static GpuContext shared(int deviceIndex) {
         if (deviceIndex < 0)
             throw new IllegalArgumentException("deviceIndex must be non-negative: " + deviceIndex);
         synchronized (SHARED_LOCK) {
-            GpuContext existing = SHARED_INSTANCES.get(deviceIndex);
-            if (existing != null && !existing.closed)
-                return existing;
+            GpuContext existing = SHARED.get(deviceIndex);
+            if (existing != null && !existing.closed) return existing;
             GpuContext created = create(deviceIndex, true);
-            SHARED_INSTANCES.put(deviceIndex, created);
-            log.info("GpuContext.shared(" + deviceIndex + ") — installed process-wide GPU context");
+            SHARED.put(deviceIndex, created);
+            log.info("GpuContext.shared(" + deviceIndex + ") — process-wide GPU context installed");
             return created;
         }
     }
 
     /**
-     * Initialise CUDA device {@code deviceIndex} and create a cuBLAS handle.
+     * Initialises CUDA device deviceIndex and creates a cuBLAS handle.
      *
      * @param deviceIndex 0-based GPU index (0 for single-GPU nodes)
      * @return a ready GpuContext — caller must close() when done
@@ -114,29 +115,35 @@ public final class GpuContext implements AutoCloseable {
     }
 
     private static GpuContext create(int deviceIndex, boolean processShared) {
-        if (!CudaAvailability.isAvailable()) {
-            throw new IllegalStateException(
-                "CUDA not available — cannot create GpuContext on this node");
-        }
+        if (!CudaAvailability.isAvailable())
+            throw new IllegalStateException("CUDA not available — cannot create GpuContext on this node");
 
-        cudart.cudaSetDevice(deviceIndex);
+        CudaBindings cuda = CudaBindings.instance();
+        CudaBindings.check(CudaBindings.callInt(cuda.cudaSetDevice, deviceIndex), "cudaSetDevice");
 
-        cublasContext handle = new cublasContext();
-        int rc = cublas.cublasCreate_v2(handle);
-        if (rc != 0) {
-            throw new IllegalStateException("cublasCreate failed: " + rc);
+        // cublasCreate_v2(cublasHandle_t *handle) — fills *handle with the opaque pointer.
+        MemorySegment handleValue;
+        try (Arena tmp = Arena.ofConfined()) {
+            MemorySegment slot = tmp.allocate(ADDRESS);
+            CudaBindings.check(CudaBindings.callInt(cuda.cublasCreate, slot), "cublasCreate_v2");
+            // Extract the opaque handle address; it lives until cublasDestroy_v2 is called.
+            handleValue = slot.get(ADDRESS, 0);
         }
 
         String name = CudaAvailability.deviceName(deviceIndex);
-        long vram = CudaAvailability.vramBytes(deviceIndex);
+        long   vram = CudaAvailability.vramBytes(deviceIndex);
         log.info(String.format("GpuContext ready — device %d: %s, %.1f GB VRAM (shared=%b)",
-                deviceIndex, name, vram / 1e9, processShared));
+            deviceIndex, name, vram / 1e9, processShared));
 
-        return new GpuContext(deviceIndex, handle, processShared);
+        return new GpuContext(deviceIndex, handleValue, processShared);
     }
 
-    /** The cuBLAS handle — valid until close(). */
-    public cublasContext handle() {
+    /**
+     * The cuBLAS handle (opaque pointer) — valid until close().
+     *
+     * Pass directly to cuBLAS Panama downcalls (ADDRESS-typed parameter).
+     */
+    public MemorySegment handle() {
         if (closed) throw new IllegalStateException("GpuContext already closed");
         return handle;
     }
@@ -156,7 +163,7 @@ public final class GpuContext implements AutoCloseable {
         return processShared;
     }
 
-    /** Destroy the cuBLAS handle and release device resources. */
+    /** Destroys the cuBLAS handle and releases device resources. */
     @Override
     public void close() {
         if (processShared) {
@@ -166,7 +173,7 @@ public final class GpuContext implements AutoCloseable {
         if (!closed) {
             closed = true;
             try {
-                cublas.cublasDestroy_v2(handle);
+                CudaBindings.callInt(CudaBindings.instance().cublasDestroy, handle);
                 log.info("GpuContext closed — device " + deviceIndex);
             } catch (Exception e) {
                 log.warning("Error closing GpuContext: " + e.getMessage());
