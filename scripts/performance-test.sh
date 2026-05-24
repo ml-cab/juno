@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # performance-test.sh — AWS perf runner and matrix generator
 #
-# No arguments: start detached worker via nohup. Each queue item (l1, l9, c1, c9)
-# gets its own deploy → HTTP test → SIGINT on deploy monitor → wait JFR → teardown.
+# No arguments: start detached worker in a screen session. Each queue item
+# (l1, l9, c1, c9) gets its own deploy → HTTP test → SIGINT/JFR → teardown.
 #
-#   ./scripts/performance-test.sh              # nohup worker (pending matrix cells)
+#   ./scripts/performance-test.sh              # screen worker (pending matrix cells)
 #   ./scripts/performance-test.sh --foreground # worker in foreground
+#   ./scripts/performance-test.sh --attach     # attach to running screen worker
 #   ./scripts/performance-test.sh --parse      # parse test-scenario.txt -> HTML matrix
-#   ./scripts/performance-test.sh --status     # tail nohup log / show worker pid
+#   ./scripts/performance-test.sh --status     # tail worker log / show screen session
 #
 # See performance.md and perf/scenarios.yaml.
 
@@ -20,6 +21,8 @@ HTML="${ROOT}/docs/juno_test_matrix.html"
 WORKDIR="${ROOT}/target/perf"
 RUN_DIR="${WORKDIR}/runs"
 NOHUP_LOG="${WORKDIR}/nohup.log"
+SCREEN_NAME="${PERF_SCREEN_NAME:-juno-perf}"
+SCREEN_SESSION_FILE="${WORKDIR}/screen.session"
 PID_FILE="${WORKDIR}/worker.pid"
 QUEUE_FILE="${WORKDIR}/queue.tsv"
 PARSED="${WORKDIR}/parsed.tsv"
@@ -38,10 +41,11 @@ usage() {
     cat <<EOF
 
 Usage:
-  $(basename "$0")                   Start nohup worker (default)
+  $(basename "$0")                   Start screen worker (default)
   $(basename "$0") --foreground       Run worker in foreground
+  $(basename "$0") --attach           Attach to running screen worker
   $(basename "$0") --parse             Parse test-scenario.txt, update HTML matrix
-  $(basename "$0") --status            Show worker pid and log tail
+  $(basename "$0") --status            Show screen session and log tail
   $(basename "$0") --row ID --col COL  Run one matrix cell (e.g. --row 1 --col l1)
 
 Options:
@@ -63,11 +67,26 @@ require_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+perf_screen_running() {
+    screen -list 2>/dev/null | grep -qE "[[:space:]][0-9]+\\.${SCREEN_NAME}[[:space:]]"
+}
+
+perf_worker_args() {
+    PERF_WORKER_ARGS=()
+    [[ -n "$ROW_FILTER" ]] && PERF_WORKER_ARGS+=(--row "$ROW_FILTER")
+    [[ -n "$COL_FILTER" ]] && PERF_WORKER_ARGS+=(--col "$COL_FILTER")
+    [[ -n "$PERF_GIT_REF" ]] && PERF_WORKER_ARGS+=(--git "$PERF_GIT_REF")
+    if [[ -n "${QUEUE_FILE:-}" && "$QUEUE_FILE" != "${WORKDIR}/queue.tsv" ]]; then
+        PERF_WORKER_ARGS+=(--queue "$QUEUE_FILE")
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --worker|--foreground) FOREGROUND=1; shift ;;
         --parse) MODE="parse"; shift ;;
         --status) MODE="status"; shift ;;
+        --attach) MODE="attach"; shift ;;
         --row) ROW_FILTER="$2"; shift 2 ;;
         --col) COL_FILTER="$2"; shift 2 ;;
         --matrix) MATRIX="$2"; shift 2 ;;
@@ -173,8 +192,13 @@ worker_main() {
     fi
 
     log "queue: ${count} test(s) -> ${QUEUE_FILE}"
-    log "nohup log: ${NOHUP_LOG}"
+    log "worker log: ${NOHUP_LOG}"
     log "run artifacts: ${RUN_DIR}"
+
+    # Job control + TTY (screen or foreground) lets deploy SIGINT reach juno-deploy.sh.
+    if [[ -t 0 || -n "${STY:-}" ]]; then
+        set -m
+    fi
 
     while IFS=$'\t' read -r row_id column; do
         [[ -z "$row_id" ]] && continue
@@ -186,43 +210,59 @@ worker_main() {
     done < "$QUEUE_FILE"
 
     log "worker finished ${count} queued test(s)"
-    rm -f "$PID_FILE"
+    rm -f "$PID_FILE" "$SCREEN_SESSION_FILE"
 }
 
-launch_nohup_worker() {
+launch_screen_worker() {
+    require_cmd screen
     mkdir -p "$WORKDIR"
+
+    if perf_screen_running; then
+        die "worker already running in screen session ${SCREEN_NAME}; attach: screen -r ${SCREEN_NAME}"
+    fi
     if [[ -f "$PID_FILE" ]]; then
         local old_pid
         old_pid="$(cat "$PID_FILE")"
         if kill -0 "$old_pid" 2>/dev/null; then
-            die "worker already running (pid ${old_pid}); see ${NOHUP_LOG}"
+            die "worker already running (pid ${old_pid}); stop it first or use --foreground"
         fi
         rm -f "$PID_FILE"
     fi
 
-    local extra=()
-    [[ -n "$ROW_FILTER" ]] && extra+=(--row "$ROW_FILTER")
-    [[ -n "$COL_FILTER" ]] && extra+=(--col "$COL_FILTER")
-    [[ -n "$PERF_GIT_REF" ]] && extra+=(--git "$PERF_GIT_REF")
-    [[ -n "${QUEUE_FILE:-}" && "$QUEUE_FILE" != "${WORKDIR}/queue.tsv" ]] && extra+=(--queue "$QUEUE_FILE")
+    perf_worker_args
+    local perf_script="${ROOT}/scripts/performance-test.sh"
+    local -a inner_cmd=("$perf_script" --foreground "${PERF_WORKER_ARGS[@]}")
+    local screen_cmd
+    screen_cmd="$(printf 'cd %q && exec ' "$ROOT")"
+    screen_cmd+=$(printf '%q ' "${inner_cmd[@]}")
+    screen_cmd+=$(printf '>> %q 2>&1' "$NOHUP_LOG")
 
-    nohup "$0" --foreground "${extra[@]}" >>"$NOHUP_LOG" 2>&1 &
-    echo $! > "$PID_FILE"
-    log "started worker pid $(cat "$PID_FILE")"
+    screen -dmS "$SCREEN_NAME" bash -lc "$screen_cmd"
+    sleep 0.3
+    if ! perf_screen_running; then
+        die "failed to start screen session ${SCREEN_NAME}"
+    fi
+
+    echo "$SCREEN_NAME" > "$SCREEN_SESSION_FILE"
+    log "started worker in screen session ${SCREEN_NAME}"
+    log "attach:  screen -r ${SCREEN_NAME}"
     log "monitor: tail -f ${NOHUP_LOG}"
 }
 
 show_status() {
-    if [[ -f "$PID_FILE" ]]; then
+    if perf_screen_running; then
+        log "worker running in screen session ${SCREEN_NAME}"
+        log "attach: screen -r ${SCREEN_NAME}"
+    elif [[ -f "$PID_FILE" ]]; then
         local pid
         pid="$(cat "$PID_FILE")"
         if kill -0 "$pid" 2>/dev/null; then
-            log "worker running pid ${pid}"
+            log "worker running pid ${pid} (no screen session)"
         else
             log "stale pid file (${pid} not running)"
         fi
     else
-        log "no worker pid file"
+        log "no worker screen session (${SCREEN_NAME})"
     fi
     if [[ -f "$NOHUP_LOG" ]]; then
         log "last 20 lines of ${NOHUP_LOG}:"
@@ -250,11 +290,16 @@ case "$MODE" in
     status)
         show_status
         ;;
+    attach)
+        require_cmd screen
+        perf_screen_running || die "no running screen session ${SCREEN_NAME} (try --status)"
+        exec screen -r "$SCREEN_NAME"
+        ;;
     run)
         if [[ "$FOREGROUND" -eq 1 ]]; then
             worker_main
         else
-            launch_nohup_worker
+            launch_screen_worker
         fi
         ;;
 esac

@@ -313,13 +313,16 @@ perf_resolve_deploy_pid() {
 # sleeping unless the whole process group is signaled (requires set -m at start).
 perf_signal_deploy() {
     local sig="$1"
-    local pid pgid child
+    local pid pgid child worker_pgid
 
     [[ -n "${DEPLOY_PID:-}" ]] || return 0
     pid="$(perf_resolve_deploy_pid)"
-    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    worker_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+    pgid="$(ps -o pgid= -p "$DEPLOY_PID" 2>/dev/null | tr -d ' ')"
 
-    if [[ -n "$pgid" && "$pgid" == "$pid" ]]; then
+    if [[ -n "$pgid" && "$pgid" != "$worker_pgid" ]]; then
+        kill "-$sig" "-$pgid" 2>/dev/null || true
+    elif [[ -n "$pgid" && "$pgid" == "$pid" ]]; then
         kill "-$sig" "-$pgid" 2>/dev/null || true
     else
         kill "-$sig" "$pid" 2>/dev/null || true
@@ -339,14 +342,16 @@ perf_start_deploy() {
     deploy_cmd=("$launcher" juno-deploy.sh "${DEPLOY_ARGS[@]}")
     log "deploy: ${deploy_cmd[*]}"
 
-    # Own process group so SIGINT reaches juno-deploy monitor, not the perf worker.
-    set -m
+    # Own process group (requires monitor mode) so SIGINT reaches juno-deploy monitor.
+    case $- in
+        *m*) ;;
+        *) [[ -t 0 || -n "${STY:-}" ]] && set -m ;;
+    esac
     (
         cd "${ROOT}/scripts/aws"
         exec "${deploy_cmd[@]}"
     ) >"$DEPLOY_LOG" 2>&1 &
     DEPLOY_PID=$!
-    set +m
 }
 
 perf_wait_for_deploy_exit() {
