@@ -22,12 +22,11 @@ import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 /**
  * Row-major FP32 weight matrix resident on the GPU.
  *
- * The device memory is allocated once via {@link CudaBindings#deviceMalloc} and
+ * The device memory is allocated once via {@link GpuBindings#deviceMalloc} and
  * freed by {@link #close}. The backing {@link MemorySegment} is sized to
  * {@code rows * cols * 4} bytes so bounds checks work at the Java level.
  *
- * Used with {@link CudaMatVec#sgemv(DeviceFloatMatrix, float[])} so each
- * matmul skips re-uploading A.
+ * Works with both CUDA and ROCm backends via {@link GpuBindings}.
  *
  * @author Yevhen Soldatov
  */
@@ -62,13 +61,13 @@ public final class DeviceFloatMatrix implements AutoCloseable {
             throw new IllegalArgumentException(
                 "host.length=" + host.length + " != rows*cols=" + ((long) rows * cols));
 
-        CudaBindings   cuda  = CudaBindings.instance();
+        GpuBindings    gpu   = ctx.bindings();
         long           bytes = (long) rows * cols * Float.BYTES;
-        MemorySegment  dA    = cuda.deviceMalloc(ctx.deviceIndex(), bytes);
+        MemorySegment  dA    = gpu.deviceMalloc(ctx.deviceIndex(), bytes);
 
         // MemorySegment.ofArray pins the heap array for the duration of the downcall.
-        CudaBindings.check(
-            CudaBindings.callInt(cuda.cudaMemcpy, dA, MemorySegment.ofArray(host), bytes, CudaBindings.H2D),
+        GpuBindings.check(
+            GpuBindings.callInt(gpu.cudaMemcpy, dA, MemorySegment.ofArray(host), bytes, GpuBindings.H2D),
             "cudaMemcpy(A H2D)");
 
         return new DeviceFloatMatrix(ctx, dA, rows, cols);
@@ -92,8 +91,9 @@ public final class DeviceFloatMatrix implements AutoCloseable {
     public void close() {
         if (!closed) {
             closed = true;
-            CudaBindings.callInt(CudaBindings.instance().cudaSetDevice, ctx.deviceIndex());
-            CudaBindings.instance().deviceFree(dA);
+            GpuBindings gpu = ctx.bindings();
+            GpuBindings.callInt(gpu.cudaSetDevice, ctx.deviceIndex());
+            gpu.deviceFree(dA);
         }
     }
 }

@@ -27,20 +27,22 @@ import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 
 /**
- * {@link MatVec} backed by {@code cublasSgemv_v2} on an Nvidia GPU, via Panama FFI.
+ * {@link MatVec} backed by BLAS GEMV on a GPU, via Panama FFI.
  *
- * <p>All JNI / JavaCPP (bytedeco) dependencies have been replaced with
- * {@link CudaBindings} downcall handles. Native memory is managed exclusively
- * through {@link MemorySegment} and {@link Arena}:
+ * <p>Vendor-neutral: runs on NVIDIA (cuBLAS, {@link CudaBindings}) or AMD
+ * (rocBLAS, {@link RocmBindings}). All operations are dispatched through
+ * {@link GpuBindings} obtained from {@link GpuContext#bindings()}.
+ *
+ * <p>Native memory is managed exclusively through {@link MemorySegment} and {@link Arena}:
  *
  * <ul>
  *   <li>Device weight matrices ({@link DeviceFloatMatrix}, {@link DeviceHalfMatrix})
  *       are uploaded once and held resident; their {@link MemorySegment} is passed
  *       directly to cuBLAS as an ADDRESS parameter — zero H2D copy per token.
  *   <li>Per-thread x and y scratch buffers on the device are grown lazily and
- *       reused across calls — one {@code cudaMalloc} per thread, per buffer.
+ *       reused across calls — one {@code hipMalloc}/{@code cudaMalloc} per thread, per buffer.
  *   <li>H2D upload of x uses {@code MemorySegment.ofArray(x)}: Panama pins the
- *       heap array for the duration of the downcall; CUDA copies to a driver
+ *       heap array for the duration of the downcall; the driver copies to a
  *       staging buffer before returning (pageable-host semantics).
  *   <li>D2H download of y uses a short-lived confined arena to avoid handing
  *       a GC-moveable address to an async CUDA stream.
@@ -50,7 +52,7 @@ import static java.lang.foreign.ValueLayout.JAVA_SHORT;
  *
  * <p>Concurrency: the {@link GpuContext#cublasSerializationLock()} {@code
  * synchronized} block serializes stream-binding and kernel submission on the
- * shared cuBLAS handle. This causes carrier-thread pinning when virtual threads
+ * shared BLAS handle. This causes carrier-thread pinning when virtual threads
  * are used. Migrate to {@code ReentrantLock} when addressing Loom pinning
  * (HPC audit point 4).
  *
@@ -63,10 +65,10 @@ public final class CudaMatVec implements MatVec {
     @SuppressWarnings("unused")
     private static final Logger log = Logger.getLogger(CudaMatVec.class.getName());
 
-    private static final int STREAM_NON_BLOCKING = CudaBindings.STREAM_NON_BLOCKING;
+    private static final int STREAM_NON_BLOCKING = GpuBindings.STREAM_NON_BLOCKING;
 
     private final GpuContext     ctx;
-    private final CudaBindings   cuda;
+    private final GpuBindings    cuda;
 
     // ── Per-thread device scratch (FP32 resident path) ────────────────────────
     private static final ThreadLocal<Fp32Scratch> FP32_SCRATCH =
@@ -104,7 +106,7 @@ public final class CudaMatVec implements MatVec {
     public CudaMatVec(GpuContext ctx) {
         if (ctx == null) throw new IllegalArgumentException("ctx must not be null");
         this.ctx  = ctx;
-        this.cuda = CudaBindings.instance();
+        this.cuda = ctx.bindings();
     }
 
     GpuContext gpuContext() { return ctx; }
@@ -149,20 +151,20 @@ public final class CudaMatVec implements MatVec {
         MemorySegment dX = cuda.deviceMalloc(ctx.deviceIndex(), bytesX);
         MemorySegment dY = cuda.deviceMalloc(ctx.deviceIndex(), bytesY);
         try {
-            // H2D — synchronous cudaMemcpy; Panama pins the heap arrays during the call.
-            CudaBindings.check(
-                CudaBindings.callInt(cuda.cudaMemcpy, dA, MemorySegment.ofArray(A), bytesA, CudaBindings.H2D),
+            // H2D — synchronous memcpy; Panama pins the heap arrays during the call.
+            GpuBindings.check(
+                GpuBindings.callInt(cuda.cudaMemcpy, dA, MemorySegment.ofArray(A), bytesA, GpuBindings.H2D),
                 "cudaMemcpy(A H2D)");
-            CudaBindings.check(
-                CudaBindings.callInt(cuda.cudaMemcpy, dX, MemorySegment.ofArray(x), bytesX, CudaBindings.H2D),
+            GpuBindings.check(
+                GpuBindings.callInt(cuda.cudaMemcpy, dX, MemorySegment.ofArray(x), bytesX, GpuBindings.H2D),
                 "cudaMemcpy(x H2D)");
 
             float[] y = new float[rows];
             synchronized (ctx.cublasSerializationLock()) {
                 callSgemvFp32(dA, cols, dX, dY, rows, cols);
-                // Synchronous D2H: heap array is safe here (cudaMemcpy blocks until done).
-                CudaBindings.check(
-                    CudaBindings.callInt(cuda.cudaMemcpy, MemorySegment.ofArray(y), dY, bytesY, CudaBindings.D2H),
+                // Synchronous D2H: heap array is safe here (memcpy blocks until done).
+                GpuBindings.check(
+                    GpuBindings.callInt(cuda.cudaMemcpy, MemorySegment.ofArray(y), dY, bytesY, GpuBindings.D2H),
                     "cudaMemcpy(y D2H)");
             }
             return y;
@@ -170,7 +172,7 @@ public final class CudaMatVec implements MatVec {
             cuda.deviceFree(dA);
             cuda.deviceFree(dX);
             cuda.deviceFree(dY);
-            evt.backend = "cuda";
+            evt.backend = cuda.backendLabel;
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
@@ -208,21 +210,21 @@ public final class CudaMatVec implements MatVec {
                     ensureFp32Scratch(scratch, bytesX, bytesY);
 
                     // H2D: Panama pins the heap array for the duration of this downcall.
-                    CudaBindings.check(
-                        CudaBindings.callInt(cuda.cudaMemcpyAsync,
-                            scratch.dX, MemorySegment.ofArray(x), bytesX, CudaBindings.H2D, stream),
+                    GpuBindings.check(
+                        GpuBindings.callInt(cuda.cudaMemcpyAsync,
+                            scratch.dX, MemorySegment.ofArray(x), bytesX, GpuBindings.H2D, stream),
                         "cudaMemcpyAsync(x H2D)");
 
                     callSgemvFp32(A.devicePointer(), cols, scratch.dX, scratch.dY, rows, cols);
 
                     // D2H into off-heap staging — the async copy must not target a moveable heap address.
                     MemorySegment stagingY = resultArena.allocate(bytesY);
-                    CudaBindings.check(
-                        CudaBindings.callInt(cuda.cudaMemcpyAsync,
-                            stagingY, scratch.dY, bytesY, CudaBindings.D2H, stream),
+                    GpuBindings.check(
+                        GpuBindings.callInt(cuda.cudaMemcpyAsync,
+                            stagingY, scratch.dY, bytesY, GpuBindings.D2H, stream),
                         "cudaMemcpyAsync(y D2H)");
-                    CudaBindings.check(
-                        CudaBindings.callInt(cuda.cudaStreamSynchronize, stream),
+                    GpuBindings.check(
+                        GpuBindings.callInt(cuda.cudaStreamSynchronize, stream),
                         "cudaStreamSynchronize");
 
                     float[] y = new float[rows];
@@ -233,7 +235,7 @@ public final class CudaMatVec implements MatVec {
                 }
             }
         } finally {
-            evt.backend = "cuda-resident";
+            evt.backend = cuda.backendLabel + "-resident";
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
@@ -275,20 +277,20 @@ public final class CudaMatVec implements MatVec {
                     for (int j = 0; j < cols; j++)
                         stagingXh.setAtIndex(JAVA_SHORT, j, Float.floatToFloat16(x[j]));
 
-                    CudaBindings.check(
-                        CudaBindings.callInt(cuda.cudaMemcpyAsync,
-                            scratch.dXh, stagingXh, bytesXh, CudaBindings.H2D, stream),
+                    GpuBindings.check(
+                        GpuBindings.callInt(cuda.cudaMemcpyAsync,
+                            scratch.dXh, stagingXh, bytesXh, GpuBindings.H2D, stream),
                         "cudaMemcpyAsync(xh H2D)");
 
                     callSgemvFp16(A.devicePointer(), cols, scratch.dXh, scratch.dY, rows, cols);
 
                     MemorySegment stagingY = callArena.allocate(bytesY);
-                    CudaBindings.check(
-                        CudaBindings.callInt(cuda.cudaMemcpyAsync,
-                            stagingY, scratch.dY, bytesY, CudaBindings.D2H, stream),
+                    GpuBindings.check(
+                        GpuBindings.callInt(cuda.cudaMemcpyAsync,
+                            stagingY, scratch.dY, bytesY, GpuBindings.D2H, stream),
                         "cudaMemcpyAsync(y D2H)");
-                    CudaBindings.check(
-                        CudaBindings.callInt(cuda.cudaStreamSynchronize, stream),
+                    GpuBindings.check(
+                        GpuBindings.callInt(cuda.cudaStreamSynchronize, stream),
                         "cudaStreamSynchronize");
 
                     float[] y = new float[rows];
@@ -299,7 +301,7 @@ public final class CudaMatVec implements MatVec {
                 }
             }
         } finally {
-            evt.backend = "cuda-resident-fp16";
+            evt.backend = cuda.backendLabel + "-resident-fp16";
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
@@ -321,17 +323,17 @@ public final class CudaMatVec implements MatVec {
         try (Arena scalars = Arena.ofConfined()) {
             MemorySegment alpha = scalars.allocateFrom(JAVA_FLOAT, 1.0f);
             MemorySegment beta  = scalars.allocateFrom(JAVA_FLOAT, 0.0f);
-            CudaBindings.check(
-                CudaBindings.callInt(cuda.cublasSetPointerMode, ctx.handle(), CudaBindings.CUBLAS_POINTER_MODE_HOST),
+            GpuBindings.check(
+                GpuBindings.callInt(cuda.cublasSetPointerMode, ctx.handle(), cuda.POINTER_MODE_HOST),
                 "cublasSetPointerMode");
-            CudaBindings.check(
-                CudaBindings.callInt(cuda.cublasSgemv,
-                    ctx.handle(), CudaBindings.CUBLAS_OP_T,
+            GpuBindings.check(
+                GpuBindings.callInt(cuda.cublasSgemv,
+                    ctx.handle(), cuda.OP_TRANSPOSE,
                     cols, rows,
                     alpha, dA, lda,
                     dX, 1,
                     beta, dY, 1),
-                "cublasSgemv_v2");
+                "sgemv");
         }
     }
 
@@ -349,34 +351,34 @@ public final class CudaMatVec implements MatVec {
         try (Arena scalars = Arena.ofConfined()) {
             MemorySegment alpha = scalars.allocateFrom(JAVA_FLOAT, 1.0f);
             MemorySegment beta  = scalars.allocateFrom(JAVA_FLOAT, 0.0f);
-            CudaBindings.check(
-                CudaBindings.callInt(cuda.cublasSetPointerMode, ctx.handle(), CudaBindings.CUBLAS_POINTER_MODE_HOST),
+            GpuBindings.check(
+                GpuBindings.callInt(cuda.cublasSetPointerMode, ctx.handle(), cuda.POINTER_MODE_HOST),
                 "cublasSetPointerMode");
-            CudaBindings.check(
-                CudaBindings.callInt(cuda.cublasHSSgemvStridedBatched,
-                    ctx.handle(), CudaBindings.CUBLAS_OP_T,
+            GpuBindings.check(
+                GpuBindings.callInt(cuda.cublasHSSgemvStridedBatched,
+                    ctx.handle(), cuda.OP_TRANSPOSE,
                     cols, rows,
                     alpha, dA, lda, strideA,
                     dXh, 1, strideX,
                     beta, dY, 1, strideY,
                     1),
-                "cublasHSSgemvStridedBatched");
+                "hssgemvStridedBatched");
         }
     }
 
     // ── Stream management ─────────────────────────────────────────────────────
 
-    /** Returns or lazily creates the per-thread non-blocking CUDA stream. */
+    /** Returns or lazily creates the per-thread non-blocking GPU stream. */
     private MemorySegment ensureStream() {
         MemorySegment stream = CUDA_STREAM.get();
         if (stream != null) return stream;
-        CudaBindings.check(
-            CudaBindings.callInt(cuda.cudaSetDevice, ctx.deviceIndex()),
+        GpuBindings.check(
+            GpuBindings.callInt(cuda.cudaSetDevice, ctx.deviceIndex()),
             "cudaSetDevice");
         try (Arena tmp = Arena.ofConfined()) {
             MemorySegment slot = tmp.allocate(ADDRESS);
-            CudaBindings.check(
-                CudaBindings.callInt(cuda.cudaStreamCreateWithFlags, slot, STREAM_NON_BLOCKING),
+            GpuBindings.check(
+                GpuBindings.callInt(cuda.cudaStreamCreateWithFlags, slot, STREAM_NON_BLOCKING),
                 "cudaStreamCreateWithFlags");
             stream = slot.get(ADDRESS, 0); // opaque 0-byte segment = stream handle
             CUDA_STREAM.set(stream);
@@ -385,14 +387,14 @@ public final class CudaMatVec implements MatVec {
     }
 
     private void bindStream(MemorySegment stream) {
-        CudaBindings.check(
-            CudaBindings.callInt(cuda.cublasSetStream, ctx.handle(), stream),
-            "cublasSetStream_v2");
+        GpuBindings.check(
+            GpuBindings.callInt(cuda.cublasSetStream, ctx.handle(), stream),
+            "blasSetStream");
     }
 
-    /** Restores the default stream (NULL) on the cuBLAS handle. */
+    /** Restores the default stream (NULL) on the BLAS handle. */
     private void unbindStream() {
-        CudaBindings.callInt(cuda.cublasSetStream, ctx.handle(), MemorySegment.NULL);
+        GpuBindings.callInt(cuda.cublasSetStream, ctx.handle(), MemorySegment.NULL);
     }
 
     // ── Scratch growth ────────────────────────────────────────────────────────
