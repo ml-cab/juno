@@ -53,7 +53,7 @@ public final class RocmAvailability {
         RocmBindings rocm = RocmBindings.instance();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment countSeg = arena.allocate(JAVA_INT);
-            int rc = (int) rocm.cudaGetDeviceCount.invokeExact(countSeg);
+            int rc = (int) rocm.cudaGetDeviceCount().invokeExact(countSeg);
             return (rc == 0) ? countSeg.get(JAVA_INT, 0) : 0;
         } catch (Throwable t) {
             log.warning("hipGetDeviceCount failed: " + t.getMessage());
@@ -69,7 +69,7 @@ public final class RocmAvailability {
         if (!AVAILABLE) return "unavailable";
         return withDeviceProp(index, prop -> {
             RocmBindings rocm = RocmBindings.instance();
-            String name = prop.getString(rocm.PROP_NAME_OFFSET);
+            String name = prop.getString(rocm.propNameOffset());
             return (name != null) ? name.trim() : "unknown";
         }, "unknown");
     }
@@ -80,7 +80,7 @@ public final class RocmAvailability {
     public static long vramBytes(int index) {
         if (!AVAILABLE) return 0L;
         return withDeviceProp(index,
-            prop -> prop.get(JAVA_LONG, RocmBindings.instance().PROP_TOTAL_MEM_OFFSET),
+            prop -> prop.get(JAVA_LONG, RocmBindings.instance().propTotalMemOffset()),
             0L);
     }
 
@@ -94,8 +94,8 @@ public final class RocmAvailability {
     private static <T> T withDeviceProp(int index, PropReader<T> reader, T fallback) {
         RocmBindings rocm = RocmBindings.instance();
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment prop = arena.allocate(rocm.DEVICE_PROP_BYTES);
-            int rc = (int) rocm.cudaGetDeviceProperties.invokeExact(prop, index);
+            MemorySegment prop = arena.allocate(rocm.devicePropBytes());
+            int rc = (int) rocm.cudaGetDeviceProperties().invokeExact(prop, index);
             if (rc != 0) return fallback;
             return reader.read(prop);
         } catch (Throwable t) {
@@ -112,7 +112,7 @@ public final class RocmAvailability {
         RocmBindings rocm = RocmBindings.instance();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment countSeg = arena.allocate(JAVA_INT);
-            int rc = (int) rocm.cudaGetDeviceCount.invokeExact(countSeg);
+            int rc = (int) rocm.cudaGetDeviceCount().invokeExact(countSeg);
             int n  = countSeg.get(JAVA_INT, 0);
             boolean ok = (rc == 0 && n > 0);
             if (ok) {

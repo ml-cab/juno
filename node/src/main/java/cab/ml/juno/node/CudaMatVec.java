@@ -153,10 +153,10 @@ public final class CudaMatVec implements MatVec {
         try {
             // H2D — synchronous memcpy; Panama pins the heap arrays during the call.
             GpuBindings.check(
-                GpuBindings.callInt(cuda.cudaMemcpy, dA, MemorySegment.ofArray(A), bytesA, GpuBindings.H2D),
+                GpuBindings.callInt(cuda.cudaMemcpy(), dA, MemorySegment.ofArray(A), bytesA, GpuBindings.H2D),
                 "cudaMemcpy(A H2D)");
             GpuBindings.check(
-                GpuBindings.callInt(cuda.cudaMemcpy, dX, MemorySegment.ofArray(x), bytesX, GpuBindings.H2D),
+                GpuBindings.callInt(cuda.cudaMemcpy(), dX, MemorySegment.ofArray(x), bytesX, GpuBindings.H2D),
                 "cudaMemcpy(x H2D)");
 
             float[] y = new float[rows];
@@ -164,7 +164,7 @@ public final class CudaMatVec implements MatVec {
                 callSgemvFp32(dA, cols, dX, dY, rows, cols);
                 // Synchronous D2H: heap array is safe here (memcpy blocks until done).
                 GpuBindings.check(
-                    GpuBindings.callInt(cuda.cudaMemcpy, MemorySegment.ofArray(y), dY, bytesY, GpuBindings.D2H),
+                    GpuBindings.callInt(cuda.cudaMemcpy(), MemorySegment.ofArray(y), dY, bytesY, GpuBindings.D2H),
                     "cudaMemcpy(y D2H)");
             }
             return y;
@@ -172,7 +172,7 @@ public final class CudaMatVec implements MatVec {
             cuda.deviceFree(dA);
             cuda.deviceFree(dX);
             cuda.deviceFree(dY);
-            evt.backend = cuda.backendLabel;
+            evt.backend = cuda.backendLabel();
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
@@ -211,7 +211,7 @@ public final class CudaMatVec implements MatVec {
 
                     // H2D: Panama pins the heap array for the duration of this downcall.
                     GpuBindings.check(
-                        GpuBindings.callInt(cuda.cudaMemcpyAsync,
+                        GpuBindings.callInt(cuda.cudaMemcpyAsync(),
                             scratch.dX, MemorySegment.ofArray(x), bytesX, GpuBindings.H2D, stream),
                         "cudaMemcpyAsync(x H2D)");
 
@@ -220,11 +220,11 @@ public final class CudaMatVec implements MatVec {
                     // D2H into off-heap staging — the async copy must not target a moveable heap address.
                     MemorySegment stagingY = resultArena.allocate(bytesY);
                     GpuBindings.check(
-                        GpuBindings.callInt(cuda.cudaMemcpyAsync,
+                        GpuBindings.callInt(cuda.cudaMemcpyAsync(),
                             stagingY, scratch.dY, bytesY, GpuBindings.D2H, stream),
                         "cudaMemcpyAsync(y D2H)");
                     GpuBindings.check(
-                        GpuBindings.callInt(cuda.cudaStreamSynchronize, stream),
+                        GpuBindings.callInt(cuda.cudaStreamSynchronize(), stream),
                         "cudaStreamSynchronize");
 
                     float[] y = new float[rows];
@@ -235,7 +235,7 @@ public final class CudaMatVec implements MatVec {
                 }
             }
         } finally {
-            evt.backend = cuda.backendLabel + "-resident";
+            evt.backend = cuda.backendLabel() + "-resident";
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
@@ -278,7 +278,7 @@ public final class CudaMatVec implements MatVec {
                         stagingXh.setAtIndex(JAVA_SHORT, j, Float.floatToFloat16(x[j]));
 
                     GpuBindings.check(
-                        GpuBindings.callInt(cuda.cudaMemcpyAsync,
+                        GpuBindings.callInt(cuda.cudaMemcpyAsync(),
                             scratch.dXh, stagingXh, bytesXh, GpuBindings.H2D, stream),
                         "cudaMemcpyAsync(xh H2D)");
 
@@ -286,11 +286,11 @@ public final class CudaMatVec implements MatVec {
 
                     MemorySegment stagingY = callArena.allocate(bytesY);
                     GpuBindings.check(
-                        GpuBindings.callInt(cuda.cudaMemcpyAsync,
+                        GpuBindings.callInt(cuda.cudaMemcpyAsync(),
                             stagingY, scratch.dY, bytesY, GpuBindings.D2H, stream),
                         "cudaMemcpyAsync(y D2H)");
                     GpuBindings.check(
-                        GpuBindings.callInt(cuda.cudaStreamSynchronize, stream),
+                        GpuBindings.callInt(cuda.cudaStreamSynchronize(), stream),
                         "cudaStreamSynchronize");
 
                     float[] y = new float[rows];
@@ -301,7 +301,7 @@ public final class CudaMatVec implements MatVec {
                 }
             }
         } finally {
-            evt.backend = cuda.backendLabel + "-resident-fp16";
+            evt.backend = cuda.backendLabel() + "-resident-fp16";
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
@@ -324,11 +324,11 @@ public final class CudaMatVec implements MatVec {
             MemorySegment alpha = scalars.allocateFrom(JAVA_FLOAT, 1.0f);
             MemorySegment beta  = scalars.allocateFrom(JAVA_FLOAT, 0.0f);
             GpuBindings.check(
-                GpuBindings.callInt(cuda.cublasSetPointerMode, ctx.handle(), cuda.POINTER_MODE_HOST),
+                GpuBindings.callInt(cuda.cublasSetPointerMode(), ctx.handle(), cuda.pointerModeHost()),
                 "cublasSetPointerMode");
             GpuBindings.check(
-                GpuBindings.callInt(cuda.cublasSgemv,
-                    ctx.handle(), cuda.OP_TRANSPOSE,
+                GpuBindings.callInt(cuda.cublasSgemv(),
+                    ctx.handle(), cuda.opTranspose(),
                     cols, rows,
                     alpha, dA, lda,
                     dX, 1,
@@ -352,11 +352,11 @@ public final class CudaMatVec implements MatVec {
             MemorySegment alpha = scalars.allocateFrom(JAVA_FLOAT, 1.0f);
             MemorySegment beta  = scalars.allocateFrom(JAVA_FLOAT, 0.0f);
             GpuBindings.check(
-                GpuBindings.callInt(cuda.cublasSetPointerMode, ctx.handle(), cuda.POINTER_MODE_HOST),
+                GpuBindings.callInt(cuda.cublasSetPointerMode(), ctx.handle(), cuda.pointerModeHost()),
                 "cublasSetPointerMode");
             GpuBindings.check(
-                GpuBindings.callInt(cuda.cublasHSSgemvStridedBatched,
-                    ctx.handle(), cuda.OP_TRANSPOSE,
+                GpuBindings.callInt(cuda.cublasHSSgemvStridedBatched(),
+                    ctx.handle(), cuda.opTranspose(),
                     cols, rows,
                     alpha, dA, lda, strideA,
                     dXh, 1, strideX,
@@ -373,12 +373,12 @@ public final class CudaMatVec implements MatVec {
         MemorySegment stream = CUDA_STREAM.get();
         if (stream != null) return stream;
         GpuBindings.check(
-            GpuBindings.callInt(cuda.cudaSetDevice, ctx.deviceIndex()),
+            GpuBindings.callInt(cuda.cudaSetDevice(), ctx.deviceIndex()),
             "cudaSetDevice");
         try (Arena tmp = Arena.ofConfined()) {
             MemorySegment slot = tmp.allocate(ADDRESS);
             GpuBindings.check(
-                GpuBindings.callInt(cuda.cudaStreamCreateWithFlags, slot, STREAM_NON_BLOCKING),
+                GpuBindings.callInt(cuda.cudaStreamCreateWithFlags(), slot, STREAM_NON_BLOCKING),
                 "cudaStreamCreateWithFlags");
             stream = slot.get(ADDRESS, 0); // opaque 0-byte segment = stream handle
             CUDA_STREAM.set(stream);
@@ -388,13 +388,13 @@ public final class CudaMatVec implements MatVec {
 
     private void bindStream(MemorySegment stream) {
         GpuBindings.check(
-            GpuBindings.callInt(cuda.cublasSetStream, ctx.handle(), stream),
+            GpuBindings.callInt(cuda.cublasSetStream(), ctx.handle(), stream),
             "blasSetStream");
     }
 
     /** Restores the default stream (NULL) on the BLAS handle. */
     private void unbindStream() {
-        GpuBindings.callInt(cuda.cublasSetStream, ctx.handle(), MemorySegment.NULL);
+        GpuBindings.callInt(cuda.cublasSetStream(), ctx.handle(), MemorySegment.NULL);
     }
 
     // ── Scratch growth ────────────────────────────────────────────────────────

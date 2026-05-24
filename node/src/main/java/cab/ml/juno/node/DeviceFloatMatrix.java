@@ -67,7 +67,7 @@ public final class DeviceFloatMatrix implements AutoCloseable {
 
         // MemorySegment.ofArray pins the heap array for the duration of the downcall.
         GpuBindings.check(
-            GpuBindings.callInt(gpu.cudaMemcpy, dA, MemorySegment.ofArray(host), bytes, GpuBindings.H2D),
+            GpuBindings.callInt(gpu.cudaMemcpy(), dA, MemorySegment.ofArray(host), bytes, GpuBindings.H2D),
             "cudaMemcpy(A H2D)");
 
         return new DeviceFloatMatrix(ctx, dA, rows, cols);
@@ -92,7 +92,7 @@ public final class DeviceFloatMatrix implements AutoCloseable {
         if (!closed) {
             closed = true;
             GpuBindings gpu = ctx.bindings();
-            GpuBindings.callInt(gpu.cudaSetDevice, ctx.deviceIndex());
+            GpuBindings.callInt(gpu.cudaSetDevice(), ctx.deviceIndex());
             gpu.deviceFree(dA);
         }
     }

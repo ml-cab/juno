@@ -70,18 +70,18 @@ class RocmBindingsTest {
     void hip_runtime_handles_non_null() {
         assumeTrue(RocmBindings.isAvailable(), "Skipping — no ROCm device");
         RocmBindings rocm = RocmBindings.instance();
-        assertThat(rocm.cudaGetDeviceCount).isNotNull();
-        assertThat(rocm.cudaGetDeviceProperties).isNotNull();
-        assertThat(rocm.cudaSetDevice).isNotNull();
-        assertThat(rocm.cudaMalloc).isNotNull();
-        assertThat(rocm.cudaFree).isNotNull();
-        assertThat(rocm.cudaMallocHost).isNotNull();
-        assertThat(rocm.cudaFreeHost).isNotNull();
-        assertThat(rocm.cudaMemcpy).isNotNull();
-        assertThat(rocm.cudaMemcpyAsync).isNotNull();
-        assertThat(rocm.cudaStreamCreateWithFlags).isNotNull();
-        assertThat(rocm.cudaStreamSynchronize).isNotNull();
-        assertThat(rocm.cudaStreamDestroy).isNotNull();
+        assertThat(rocm.cudaGetDeviceCount()).isNotNull();
+        assertThat(rocm.cudaGetDeviceProperties()).isNotNull();
+        assertThat(rocm.cudaSetDevice()).isNotNull();
+        assertThat(rocm.cudaMalloc()).isNotNull();
+        assertThat(rocm.cudaFree()).isNotNull();
+        assertThat(rocm.cudaMallocHost()).isNotNull();
+        assertThat(rocm.cudaFreeHost()).isNotNull();
+        assertThat(rocm.cudaMemcpy()).isNotNull();
+        assertThat(rocm.cudaMemcpyAsync()).isNotNull();
+        assertThat(rocm.cudaStreamCreateWithFlags()).isNotNull();
+        assertThat(rocm.cudaStreamSynchronize()).isNotNull();
+        assertThat(rocm.cudaStreamDestroy()).isNotNull();
     }
 
     @Test
@@ -90,12 +90,12 @@ class RocmBindingsTest {
     void rocblas_handles_non_null() {
         assumeTrue(RocmBindings.isAvailable(), "Skipping — no ROCm device");
         RocmBindings rocm = RocmBindings.instance();
-        assertThat(rocm.cublasCreate).isNotNull();
-        assertThat(rocm.cublasDestroy).isNotNull();
-        assertThat(rocm.cublasSetStream).isNotNull();
-        assertThat(rocm.cublasSetPointerMode).isNotNull();
-        assertThat(rocm.cublasSgemv).isNotNull();
-        assertThat(rocm.cublasHSSgemvStridedBatched).isNotNull();
+        assertThat(rocm.cublasCreate()).isNotNull();
+        assertThat(rocm.cublasDestroy()).isNotNull();
+        assertThat(rocm.cublasSetStream()).isNotNull();
+        assertThat(rocm.cublasSetPointerMode()).isNotNull();
+        assertThat(rocm.cublasSgemv()).isNotNull();
+        assertThat(rocm.cublasHSSgemvStridedBatched()).isNotNull();
     }
 
     @Test
@@ -103,7 +103,7 @@ class RocmBindingsTest {
     @DisplayName("OP_TRANSPOSE = 112 (rocblas_operation_transpose)")
     void op_transpose_is_rocblas_value() {
         assumeTrue(RocmBindings.isAvailable(), "Skipping — no ROCm device");
-        assertThat(RocmBindings.instance().OP_TRANSPOSE).isEqualTo(112);
+        assertThat(RocmBindings.instance().opTranspose()).isEqualTo(112);
     }
 
     @Test
@@ -111,7 +111,7 @@ class RocmBindingsTest {
     @DisplayName("POINTER_MODE_HOST = 0 (rocblas_pointer_mode_host)")
     void pointer_mode_host_is_zero() {
         assumeTrue(RocmBindings.isAvailable(), "Skipping — no ROCm device");
-        assertThat(RocmBindings.instance().POINTER_MODE_HOST).isEqualTo(0);
+        assertThat(RocmBindings.instance().pointerModeHost()).isEqualTo(0);
     }
 
     @Test
@@ -119,7 +119,7 @@ class RocmBindingsTest {
     @DisplayName("hipDeviceProp_t struct size matches ROCm 7.x headers (1472 bytes)")
     void hip_device_prop_size_correct() {
         assumeTrue(RocmBindings.isAvailable(), "Skipping — no ROCm device");
-        assertThat(RocmBindings.instance().DEVICE_PROP_BYTES).isEqualTo(1472);
+        assertThat(RocmBindings.instance().devicePropBytes()).isEqualTo(1472);
     }
 
     @Test
@@ -142,6 +142,6 @@ class RocmBindingsTest {
         assumeFalse(CudaBindings.isAvailable(), "Skipping — CUDA also present, CUDA wins in auto mode");
         GpuBindings bindings = GpuContext.selectBindings();
         assertThat(bindings).isInstanceOf(RocmBindings.class);
-        assertThat(bindings.backendLabel).isEqualTo("rocm");
+        assertThat(bindings.backendLabel()).isEqualTo("rocm");
     }
 }
