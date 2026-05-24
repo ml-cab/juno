@@ -31,4 +31,4 @@ echo "🌍 Region    : $AWS_DEFAULT_REGION"
 echo ""
 
 chmod +x "$TARGET_SCRIPT"
-bash "$TARGET_SCRIPT" "$@"
+exec bash "$TARGET_SCRIPT" "$@"

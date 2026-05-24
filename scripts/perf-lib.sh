@@ -75,6 +75,10 @@ perf_build_deploy_args() {
         DEPLOY_ARGS+=(--lora-play "$LORA_ADAPTER")
     fi
 
+    if [[ -n "${PERF_GIT_REF:-}" ]]; then
+        DEPLOY_ARGS+=(--git "$PERF_GIT_REF")
+    fi
+
     PERF_ROW_HW="$hw"
     PERF_ROW_ID="$id"
 }
@@ -225,25 +229,26 @@ perf_curl_chat_history() {
 
 perf_run_long_test() {
     local base="$1" max_tokens="$2" sessions="$3" outdir="$4"
-    local i timeout pids=()
+    local i timeout pids=() status=0
     timeout="$(perf_curl_timeout "$max_tokens" "$sessions")"
     mkdir -p "$outdir"
     log "curl timeout ${timeout}s per request (sessions=${sessions}, max_tokens=${max_tokens})"
     if [[ "$sessions" -eq 1 ]]; then
         perf_curl_chat "$base" "$max_tokens" "$LONG_PROMPT" "${outdir}/long.json" "$timeout"
-        return
+        return $?
     fi
     for i in $(seq 1 "$sessions"); do
         perf_curl_chat "$base" "$max_tokens" "$LONG_PROMPT" "${outdir}/long-${i}.json" "$timeout" &
         pids+=($!)
         log "started session ${i}/${sessions} (pid ${pids[-1]})"
     done
-    perf_wait_pids "${pids[@]}"
+    perf_wait_pids "${pids[@]}" || status=1
+    return "$status"
 }
 
 perf_run_conv_test() {
     local base="$1" max_tokens="$2" sessions="$3" outdir="$4"
-    local i t1 t2 t3 hist timeout pids=()
+    local i t1 t2 t3 hist timeout pids=() status=0
     timeout="$(perf_curl_timeout "$max_tokens" "$sessions")"
     mkdir -p "$outdir"
     log "curl timeout ${timeout}s per turn (sessions=${sessions}, max_tokens=${max_tokens})"
@@ -254,14 +259,14 @@ perf_run_conv_test() {
         t2="${outdir}/conv-${sid}-t2.json"
         t3="${outdir}/conv-${sid}-t3.json"
 
-        perf_curl_chat "$base" "$max_tokens" "$CONV_MSG1" "$t1" "$timeout"
+        perf_curl_chat "$base" "$max_tokens" "$CONV_MSG1" "$t1" "$timeout" || return 1
 
         hist="$(jq -nc \
             --arg u1 "$CONV_MSG1" \
             --arg a1 "$(jq -r '.choices[0].message.content // ""' "$t1")" \
             --arg u2 "$CONV_MSG2" \
             '[{role:"user",content:$u1},{role:"assistant",content:$a1},{role:"user",content:$u2}]')"
-        perf_curl_chat_history "$base" "$max_tokens" "$hist" "$t2" "$timeout"
+        perf_curl_chat_history "$base" "$max_tokens" "$hist" "$t2" "$timeout" || return 1
 
         hist="$(jq -nc \
             --arg u1 "$CONV_MSG1" \
@@ -270,19 +275,78 @@ perf_run_conv_test() {
             --arg a2 "$(jq -r '.choices[0].message.content // ""' "$t2")" \
             --arg u3 "$CONV_MSG3" \
             '[{role:"user",content:$u1},{role:"assistant",content:$a1},{role:"user",content:$u2},{role:"assistant",content:$a2},{role:"user",content:$u3}]')"
-        perf_curl_chat_history "$base" "$max_tokens" "$hist" "$t3" "$timeout"
+        perf_curl_chat_history "$base" "$max_tokens" "$hist" "$t3" "$timeout" || return 1
     }
 
     if [[ "$sessions" -eq 1 ]]; then
         run_one_conv 1
-        return
+        return $?
     fi
     for i in $(seq 1 "$sessions"); do
         run_one_conv "$i" &
         pids+=($!)
         log "started conv session ${i}/${sessions} (pid ${pids[-1]})"
     done
-    perf_wait_pids "${pids[@]}"
+    perf_wait_pids "${pids[@]}" || status=1
+    return "$status"
+}
+
+# Resolve the bash process running juno-deploy.sh (not the launcher wrapper).
+perf_resolve_deploy_pid() {
+    local pid="${DEPLOY_PID:-}" child
+    [[ -n "$pid" ]] || return 1
+
+    while child="$(pgrep -P "$pid" -f 'juno-deploy\.sh' 2>/dev/null | head -1)"; do
+        [[ -n "$child" ]] || break
+        pid="$child"
+    done
+
+    if ps -p "$pid" -o args= 2>/dev/null | grep -q 'juno-deploy\.sh'; then
+        printf '%s\n' "$pid"
+        return 0
+    fi
+
+    printf '%s\n' "${DEPLOY_PID}"
+}
+
+# Send a signal to deploy monitor. Background bash ignores direct SIGINT while
+# sleeping unless the whole process group is signaled (requires set -m at start).
+perf_signal_deploy() {
+    local sig="$1"
+    local pid pgid child
+
+    [[ -n "${DEPLOY_PID:-}" ]] || return 0
+    pid="$(perf_resolve_deploy_pid)"
+    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+
+    if [[ -n "$pgid" && "$pgid" == "$pid" ]]; then
+        kill "-$sig" "-$pgid" 2>/dev/null || true
+    else
+        kill "-$sig" "$pid" 2>/dev/null || true
+        kill "-$sig" "${DEPLOY_PID}" 2>/dev/null || true
+    fi
+
+    while read -r child; do
+        [[ -z "$child" ]] && continue
+        kill "-$sig" "$child" 2>/dev/null || true
+    done < <(pgrep -P "$pid" 2>/dev/null || true)
+}
+
+perf_start_deploy() {
+    local launcher="${ROOT}/scripts/aws/launcher.sh"
+    local -a deploy_cmd
+
+    deploy_cmd=("$launcher" juno-deploy.sh "${DEPLOY_ARGS[@]}")
+    log "deploy: ${deploy_cmd[*]}"
+
+    # Own process group so SIGINT reaches juno-deploy monitor, not the perf worker.
+    set -m
+    (
+        cd "${ROOT}/scripts/aws"
+        exec "${deploy_cmd[@]}"
+    ) >"$DEPLOY_LOG" 2>&1 &
+    DEPLOY_PID=$!
+    set +m
 }
 
 perf_wait_for_deploy_exit() {
@@ -294,7 +358,7 @@ perf_wait_for_deploy_exit() {
         now="$(date +%s)"
         if (( now - start >= timeout )); then
             warn "deploy pid ${DEPLOY_PID} still running after ${timeout}s — sending SIGKILL"
-            kill -KILL "$DEPLOY_PID" 2>/dev/null || true
+            perf_signal_deploy KILL
             wait "$DEPLOY_PID" 2>/dev/null || true
             DEPLOY_PID=""
             return 1
@@ -306,14 +370,17 @@ perf_wait_for_deploy_exit() {
 }
 
 perf_interrupt_deploy_for_jfr() {
+    local target_pid
     [[ -n "${DEPLOY_PID:-}" ]] || return 0
     if ! kill -0 "$DEPLOY_PID" 2>/dev/null; then
         DEPLOY_PID=""
         return 0
     fi
 
-    log "sending SIGINT (Ctrl+C) to deploy monitor pid ${DEPLOY_PID} to gather JFR…"
-    kill -INT "$DEPLOY_PID" 2>/dev/null || true
+    target_pid="$(perf_resolve_deploy_pid)"
+    pgid="$(ps -o pgid= -p "$target_pid" 2>/dev/null | tr -d ' ')"
+    log "sending SIGINT (Ctrl+C) to deploy monitor pgid=${pgid:-?} pid=${target_pid} to gather JFR…"
+    perf_signal_deploy INT
 
     if ! perf_wait_for_log_line "$DEPLOY_LOG" "JFR Cluster Metrics" 600; then
         warn "JFR Cluster Metrics not seen in ${DEPLOY_LOG} within 600s"
@@ -343,6 +410,23 @@ perf_teardown_cluster() {
         || warn "teardown failed or cluster already gone"
 }
 
+perf_stop_deploy_no_jfr() {
+    [[ -n "${DEPLOY_PID:-}" ]] || return 0
+    if ! kill -0 "$DEPLOY_PID" 2>/dev/null; then
+        DEPLOY_PID=""
+        return 0
+    fi
+    log "stopping deploy monitor without JFR collection…"
+    perf_signal_deploy KILL
+    wait "$DEPLOY_PID" 2>/dev/null || true
+    DEPLOY_PID=""
+}
+
+perf_abort_test_cycle() {
+    perf_stop_deploy_no_jfr
+    perf_teardown_cluster
+}
+
 perf_finish_test_cycle() {
     local row_id="$1" column="$2"
 
@@ -357,9 +441,25 @@ perf_finish_test_cycle() {
 
 perf_run_single_test() {
     local row_id="$1" column="$2"
-    local launcher="${ROOT}/scripts/aws/launcher.sh"
-    local workload sessions max_tokens console_url outdir
-    local -a deploy_cmd
+    local attempt max_attempts="${PERF_HTTP_MAX_ATTEMPTS:-3}"
+
+    for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+        if (( attempt > 1 )); then
+            log "retrying row=${row_id} column=${column} (${attempt}/${max_attempts}) after HTTP failure…"
+            sleep 10
+        fi
+        if perf_run_single_test_attempt "$row_id" "$column"; then
+            return 0
+        fi
+    done
+
+    warn "test failed after ${max_attempts} attempts: row=${row_id} column=${column}"
+    return 1
+}
+
+perf_run_single_test_attempt() {
+    local row_id="$1" column="$2"
+    local workload sessions max_tokens console_url outdir http_status=0
 
     perf_build_deploy_args "$row_id"
     workload="$(perf_column_workload "$column")"
@@ -370,49 +470,48 @@ perf_run_single_test() {
     outdir="${RUN_DIR}/http-${row_id}-${column}"
     DEPLOY_PID=""
     rm -f "$DEPLOY_LOG"
+    rm -rf "$outdir"
     mkdir -p "$outdir"
 
     log "=== independent test: row=${row_id} column=${column} hw=${PERF_ROW_HW} sessions=${sessions} workload=${workload} ==="
     log "deploy log: ${DEPLOY_LOG}"
 
-    deploy_cmd=("$launcher" juno-deploy.sh "${DEPLOY_ARGS[@]}")
-    log "deploy: ${deploy_cmd[*]}"
-
-    (
-        cd "${ROOT}/scripts/aws"
-        exec "${deploy_cmd[@]}"
-    ) >"$DEPLOY_LOG" 2>&1 &
-    DEPLOY_PID=$!
+    perf_start_deploy
 
     if ! perf_wait_for_log_line "$DEPLOY_LOG" "JUNO CLUSTER MONITOR" 5400; then
         warn "monitor banner not seen — checking deploy log tail"
         tail -n 30 "$DEPLOY_LOG" >&2 || true
-        perf_interrupt_deploy_for_jfr || true
-        perf_teardown_cluster
+        perf_abort_test_cycle
         return 1
     fi
 
     console_url="$(perf_extract_console_url "$DEPLOY_LOG")" \
-        || { perf_interrupt_deploy_for_jfr || true; perf_teardown_cluster; die "could not parse coordinator URL from ${DEPLOY_LOG}"; }
+        || { perf_abort_test_cycle; die "could not parse coordinator URL from ${DEPLOY_LOG}"; }
 
     log "cluster monitor up — console ${console_url}"
 
     if ! perf_wait_for_api "$console_url" 300; then
         warn "API health check timed out for ${console_url}"
-        perf_interrupt_deploy_for_jfr || true
-        perf_teardown_cluster
+        perf_abort_test_cycle
         return 1
     fi
 
     log "running HTTP workload (${workload}, sessions=${sessions})…"
     case "$workload" in
-        long) perf_run_long_test "$console_url" "$max_tokens" "$sessions" "$outdir" ;;
-        conv) perf_run_conv_test "$console_url" "$max_tokens" "$sessions" "$outdir" ;;
+        long) perf_run_long_test "$console_url" "$max_tokens" "$sessions" "$outdir" || http_status=1 ;;
+        conv) perf_run_conv_test "$console_url" "$max_tokens" "$sessions" "$outdir" || http_status=1 ;;
     esac
+
+    if (( http_status != 0 )); then
+        warn "HTTP workload failed — aborting without JFR collection"
+        perf_abort_test_cycle
+        return 1
+    fi
 
     log "HTTP test finished — responses in ${outdir}"
     log "Ctrl+C equivalent on deploy monitor → wait JFR → teardown"
 
     perf_finish_test_cycle "$row_id" "$column"
     log "=== test complete: row=${row_id} column=${column} (cluster torn down) ==="
+    return 0
 }

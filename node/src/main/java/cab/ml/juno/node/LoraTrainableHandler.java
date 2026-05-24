@@ -18,7 +18,7 @@ package cab.ml.juno.node;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Logger;
@@ -118,8 +118,8 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 
 	// ── Inference KV cache ────────────────────────────────────────────────────
 
-	private final Map<String, float[][]> kvCacheK = new HashMap<>();
-	private final Map<String, float[][]> kvCacheV = new HashMap<>();
+	private final Map<String, float[][]> kvCacheK = new ConcurrentHashMap<>();
+	private final Map<String, float[][]> kvCacheV = new ConcurrentHashMap<>();
 	private static final int MAX_SEQ_LEN = 2048;
 	private static final int INITIAL_SEQ_CAPACITY = 64;
 

@@ -30,6 +30,7 @@ MODE="run"
 FOREGROUND=0
 ROW_FILTER=""
 COL_FILTER=""
+PERF_GIT_REF=""
 QUEUE_EXPLICIT=0
 
 usage() {
@@ -48,6 +49,7 @@ Options:
   --scenario FILE   Scenario log for --parse (default: test-scenario.txt)
   --html FILE       Output HTML (default: docs/juno_test_matrix.html)
   --queue FILE      Explicit queue TSV: row_id<TAB>column
+  --git REF         Git branch, tag, or commit for juno-deploy.sh (default: main)
   -n, --dry-run     Parse mode only: preview HTML rows
   -h, --help        This help
 EOF
@@ -72,6 +74,7 @@ while [[ $# -gt 0 ]]; do
         --scenario) SCENARIO="$2"; shift 2 ;;
         --html) HTML="$2"; shift 2 ;;
         --queue) QUEUE_FILE="$2"; QUEUE_EXPLICIT=1; shift 2 ;;
+        --git) PERF_GIT_REF="$2"; shift 2 ;;
         -n|--dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (try --help)" ;;
@@ -200,6 +203,7 @@ launch_nohup_worker() {
     local extra=()
     [[ -n "$ROW_FILTER" ]] && extra+=(--row "$ROW_FILTER")
     [[ -n "$COL_FILTER" ]] && extra+=(--col "$COL_FILTER")
+    [[ -n "$PERF_GIT_REF" ]] && extra+=(--git "$PERF_GIT_REF")
     [[ -n "${QUEUE_FILE:-}" && "$QUEUE_FILE" != "${WORKDIR}/queue.tsv" ]] && extra+=(--queue "$QUEUE_FILE")
 
     nohup "$0" --foreground "${extra[@]}" >>"$NOHUP_LOG" 2>&1 &
