@@ -40,9 +40,9 @@ import static java.lang.foreign.ValueLayout.JAVA_SHORT;
  *       are uploaded once and held resident; their {@link MemorySegment} is passed
  *       directly to cuBLAS as an ADDRESS parameter — zero H2D copy per token.
  *   <li>Per-thread x and y scratch buffers on the device are grown lazily and
- *       reused across calls — one {@code hipMalloc}/{@code cudaMalloc} per thread, per buffer.
+ *       reused across calls — one {@code cudaMalloc} per thread, per buffer.
  *   <li>H2D upload of x uses {@code MemorySegment.ofArray(x)}: Panama pins the
- *       heap array for the duration of the downcall; the driver copies to a
+ *       heap array for the duration of the downcall; CUDA copies to a driver
  *       staging buffer before returning (pageable-host semantics).
  *   <li>D2H download of y uses a short-lived confined arena to avoid handing
  *       a GC-moveable address to an async CUDA stream.
@@ -52,7 +52,7 @@ import static java.lang.foreign.ValueLayout.JAVA_SHORT;
  *
  * <p>Concurrency: the {@link GpuContext#cublasSerializationLock()} {@code
  * synchronized} block serializes stream-binding and kernel submission on the
- * shared BLAS handle. This causes carrier-thread pinning when virtual threads
+ * shared cuBLAS handle. This causes carrier-thread pinning when virtual threads
  * are used. Migrate to {@code ReentrantLock} when addressing Loom pinning
  * (HPC audit point 4).
  *
@@ -151,7 +151,7 @@ public final class CudaMatVec implements MatVec {
         MemorySegment dX = cuda.deviceMalloc(ctx.deviceIndex(), bytesX);
         MemorySegment dY = cuda.deviceMalloc(ctx.deviceIndex(), bytesY);
         try {
-            // H2D — synchronous memcpy; Panama pins the heap arrays during the call.
+            // H2D — synchronous cudaMemcpy; Panama pins the heap arrays during the call.
             GpuBindings.check(
                 GpuBindings.callInt(cuda.cudaMemcpy(), dA, MemorySegment.ofArray(A), bytesA, GpuBindings.H2D),
                 "cudaMemcpy(A H2D)");
@@ -162,7 +162,7 @@ public final class CudaMatVec implements MatVec {
             float[] y = new float[rows];
             synchronized (ctx.cublasSerializationLock()) {
                 callSgemvFp32(dA, cols, dX, dY, rows, cols);
-                // Synchronous D2H: heap array is safe here (memcpy blocks until done).
+                // Synchronous D2H: heap array is safe here (cudaMemcpy blocks until done).
                 GpuBindings.check(
                     GpuBindings.callInt(cuda.cudaMemcpy(), MemorySegment.ofArray(y), dY, bytesY, GpuBindings.D2H),
                     "cudaMemcpy(y D2H)");
@@ -333,7 +333,7 @@ public final class CudaMatVec implements MatVec {
                     alpha, dA, lda,
                     dX, 1,
                     beta, dY, 1),
-                "sgemv");
+                "cublasSgemv_v2");
         }
     }
 
@@ -362,13 +362,13 @@ public final class CudaMatVec implements MatVec {
                     dXh, 1, strideX,
                     beta, dY, 1, strideY,
                     1),
-                "hssgemvStridedBatched");
+                "cublasHSSgemvStridedBatched");
         }
     }
 
     // ── Stream management ─────────────────────────────────────────────────────
 
-    /** Returns or lazily creates the per-thread non-blocking GPU stream. */
+    /** Returns or lazily creates the per-thread non-blocking CUDA stream. */
     private MemorySegment ensureStream() {
         MemorySegment stream = CUDA_STREAM.get();
         if (stream != null) return stream;
@@ -389,10 +389,10 @@ public final class CudaMatVec implements MatVec {
     private void bindStream(MemorySegment stream) {
         GpuBindings.check(
             GpuBindings.callInt(cuda.cublasSetStream(), ctx.handle(), stream),
-            "blasSetStream");
+            "cublasSetStream_v2");
     }
 
-    /** Restores the default stream (NULL) on the BLAS handle. */
+    /** Restores the default stream (NULL) on the cuBLAS handle. */
     private void unbindStream() {
         GpuBindings.callInt(cuda.cublasSetStream(), ctx.handle(), MemorySegment.NULL);
     }

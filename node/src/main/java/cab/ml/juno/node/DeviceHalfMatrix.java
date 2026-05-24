@@ -71,7 +71,7 @@ public final class DeviceHalfMatrix implements AutoCloseable {
         MemorySegment dA        = gpu.deviceMalloc(ctx.deviceIndex(), halfBytes);
 
         // Pack float32 → FP16 into off-heap staging; JAVA_SHORT has native byte order
-        // (little-endian on x86), matching CUDA __half / HIP __half memory layout.
+        // (little-endian on x86), matching CUDA's __half / HIP __half memory layout.
         try (Arena staging = Arena.ofConfined()) {
             MemorySegment stagingHost = staging.allocate(halfBytes);
             for (int i = 0; i < n; i++)

@@ -21,6 +21,7 @@ import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
+import java.util.Arrays;
 import java.util.logging.Logger;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
@@ -40,17 +41,17 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * {@code libcudart.so} and the cuBLAS equivalents. The CUDA installation must
  * be on {@code LD_LIBRARY_PATH} (or {@code CUDA_PATH/lib64} via the launcher).
  *
- * <p>Implements {@link GpuBindings} — accessor methods expose the existing
- * {@link MethodHandle} fields to vendor-neutral callers. No existing fields or
- * constants have been removed; only {@code implements GpuBindings} and the
- * corresponding {@code @Override} methods are new.
- *
  * <p>Requires JVM flag: {@code --enable-native-access=ALL-UNNAMED}.
  *
  * <p>Struct layout constants ({@link #DEVICE_PROP_BYTES}, {@link #PROP_NAME_OFFSET},
  * {@link #PROP_TOTAL_MEM_OFFSET}) reflect {@code cudaDeviceProp} as laid out
  * by CUDA 12.x on Linux x86_64. If the CUDA major version changes, verify
  * these offsets against the SDK headers.
+ *
+ * <p>Implements {@link GpuBindings} — accessor methods expose the existing
+ * {@link MethodHandle} fields to vendor-neutral callers. No existing fields or
+ * constants have been removed; only {@code implements GpuBindings} and the
+ * corresponding {@code @Override} methods are new.
  */
 final class CudaBindings implements GpuBindings {
 
@@ -70,14 +71,36 @@ final class CudaBindings implements GpuBindings {
     static final int STREAM_NON_BLOCKING = 0x01;
 
     // ── cudaDeviceProp layout (CUDA 12.x, Linux x86_64) ──────────────────────
-    /** {@code sizeof(cudaDeviceProp)} in bytes. */
+    /** {@code sizeof(cudaDeviceProp)} */
     static final int  DEVICE_PROP_BYTES     = 1512;
     /** Byte offset of {@code char name[256]} inside {@code cudaDeviceProp}. */
-    static final long PROP_NAME_OFFSET      = 0L;
+    static final long PROP_NAME_OFFSET      = 0;
     /** Byte offset of {@code size_t totalGlobalMem} inside {@code cudaDeviceProp}. */
-    static final long PROP_TOTAL_MEM_OFFSET = 288L;
+    static final long PROP_TOTAL_MEM_OFFSET = 288;
 
-    // ── Singleton ─────────────────────────────────────────────────────────────
+    // ── cudart handles ────────────────────────────────────────────────────────
+    final MethodHandle cudaGetDeviceCount;       // int (int*)
+    final MethodHandle cudaGetDeviceProperties;  // int (cudaDeviceProp*, int)
+    final MethodHandle cudaSetDevice;            // int (int)
+    final MethodHandle cudaMalloc;               // int (void**, size_t)
+    final MethodHandle cudaFree;                 // int (void*)
+    final MethodHandle cudaMallocHost;           // int (void**, size_t)
+    final MethodHandle cudaFreeHost;             // int (void*)
+    final MethodHandle cudaMemcpy;               // int (void*, const void*, size_t, int)
+    final MethodHandle cudaMemcpyAsync;          // int (void*, const void*, size_t, int, cudaStream_t)
+    final MethodHandle cudaStreamCreateWithFlags;// int (cudaStream_t*, unsigned int)
+    final MethodHandle cudaStreamSynchronize;    // int (cudaStream_t)
+    final MethodHandle cudaStreamDestroy;        // int (cudaStream_t)
+
+    // ── cuBLAS handles ────────────────────────────────────────────────────────
+    final MethodHandle cublasCreate;             // int (cublasHandle_t*)
+    final MethodHandle cublasDestroy;            // int (cublasHandle_t)
+    final MethodHandle cublasSetStream;          // int (cublasHandle_t, cudaStream_t)
+    final MethodHandle cublasSetPointerMode;     // int (cublasHandle_t, int)
+    final MethodHandle cublasSgemv;              // int (handle,op,m,n,*α,*A,lda,*x,incx,*β,*y,incy)
+    final MethodHandle cublasHSSgemvStridedBatched; // FP16 A+x, FP32 y, batched
+
+    // ── Singleton init ────────────────────────────────────────────────────────
     private static final CudaBindings INSTANCE;
     private static final Throwable    INIT_FAILURE;
 
@@ -94,11 +117,14 @@ final class CudaBindings implements GpuBindings {
         INIT_FAILURE = err;
     }
 
-    /** Returns {@code true} if CUDA and cuBLAS libraries were resolved successfully. */
-    static boolean isAvailable() { return INSTANCE != null; }
+    /** True if the CUDA and cuBLAS libraries were resolved successfully. */
+    static boolean isAvailable() {
+        return INSTANCE != null;
+    }
 
     /**
-     * Returns the singleton.
+     * Returns the singleton instance.
+     *
      * @throws IllegalStateException if CUDA libraries could not be loaded
      */
     static CudaBindings instance() {
@@ -108,110 +134,155 @@ final class CudaBindings implements GpuBindings {
         return INSTANCE;
     }
 
-    // ── cudart handles ────────────────────────────────────────────────────────
-    final MethodHandle cudaGetDeviceCount;        // int (int*)
-    final MethodHandle cudaGetDeviceProperties;   // int (cudaDeviceProp*, int)
-    final MethodHandle cudaSetDevice;             // int (int)
-    final MethodHandle cudaMalloc;                // int (void**, size_t)
-    final MethodHandle cudaFree;                  // int (void*)
-    final MethodHandle cudaMallocHost;            // int (void**, size_t)
-    final MethodHandle cudaFreeHost;              // int (void*)
-    final MethodHandle cudaMemcpy;                // int (void*, void*, size_t, int)
-    final MethodHandle cudaMemcpyAsync;           // int (void*, void*, size_t, int, cudaStream_t)
-    final MethodHandle cudaStreamCreateWithFlags; // int (cudaStream_t*, unsigned int)
-    final MethodHandle cudaStreamSynchronize;     // int (cudaStream_t)
-    final MethodHandle cudaStreamDestroy;         // int (cudaStream_t)
-
-    // ── cuBLAS handles ────────────────────────────────────────────────────────
-    final MethodHandle cublasCreate;              // int (cublasHandle_t*)
-    final MethodHandle cublasDestroy;             // int (cublasHandle_t)
-    final MethodHandle cublasSetStream;           // int (cublasHandle_t, cudaStream_t)
-    final MethodHandle cublasSetPointerMode;      // int (cublasHandle_t, int)
-    final MethodHandle cublasSgemv;               // FP32 GEMV
-    final MethodHandle cublasHSSgemvStridedBatched; // FP16 A+x, FP32 y, batched
-
-    // ── Construction ──────────────────────────────────────────────────────────
+    // ── Private construction ──────────────────────────────────────────────────
 
     private CudaBindings() {
-        Linker       l    = Linker.nativeLinker();
-        SymbolLookup rt   = GpuBindings.loadLibrary("libcudart.so.12", "libcudart.so");
-        SymbolLookup blas = GpuBindings.loadLibrary("libcublas.so.12", "libcublas.so");
+        Linker       linker = Linker.nativeLinker();
+        SymbolLookup cudart = loadLibrary("libcudart.so.12", "libcudart.so");
+        SymbolLookup cublas = loadLibrary("libcublas.so.12", "libcublas.so");
 
-        cudaGetDeviceCount        = GpuBindings.bind(l, rt,   "cudaGetDeviceCount",
+        cudaGetDeviceCount        = bind(linker, cudart, "cudaGetDeviceCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
-        cudaGetDeviceProperties   = GpuBindings.bind(l, rt,   "cudaGetDeviceProperties",
+        cudaGetDeviceProperties   = bind(linker, cudart, "cudaGetDeviceProperties",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
-        cudaSetDevice             = GpuBindings.bind(l, rt,   "cudaSetDevice",
+        cudaSetDevice             = bind(linker, cudart, "cudaSetDevice",
             FunctionDescriptor.of(JAVA_INT, JAVA_INT));
-        cudaMalloc                = GpuBindings.bind(l, rt,   "cudaMalloc",
+        cudaMalloc                = bind(linker, cudart, "cudaMalloc",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
-        cudaFree                  = GpuBindings.bind(l, rt,   "cudaFree",
+        cudaFree                  = bind(linker, cudart, "cudaFree",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
-        cudaMallocHost            = GpuBindings.bind(l, rt,   "cudaMallocHost",
+        cudaMallocHost            = bind(linker, cudart, "cudaMallocHost",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
-        cudaFreeHost              = GpuBindings.bind(l, rt,   "cudaFreeHost",
+        cudaFreeHost              = bind(linker, cudart, "cudaFreeHost",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
-        cudaMemcpy                = GpuBindings.bind(l, rt,   "cudaMemcpy",
+        cudaMemcpy                = bind(linker, cudart, "cudaMemcpy",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT));
-        cudaMemcpyAsync           = GpuBindings.bind(l, rt,   "cudaMemcpyAsync",
+        cudaMemcpyAsync           = bind(linker, cudart, "cudaMemcpyAsync",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS));
-        cudaStreamCreateWithFlags = GpuBindings.bind(l, rt,   "cudaStreamCreateWithFlags",
+        cudaStreamCreateWithFlags = bind(linker, cudart, "cudaStreamCreateWithFlags",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
-        cudaStreamSynchronize     = GpuBindings.bind(l, rt,   "cudaStreamSynchronize",
+        cudaStreamSynchronize     = bind(linker, cudart, "cudaStreamSynchronize",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
-        cudaStreamDestroy         = GpuBindings.bind(l, rt,   "cudaStreamDestroy",
+        cudaStreamDestroy         = bind(linker, cudart, "cudaStreamDestroy",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
-        cublasCreate              = GpuBindings.bind(l, blas,  "cublasCreate_v2",
+
+        cublasCreate              = bind(linker, cublas, "cublasCreate_v2",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
-        cublasDestroy             = GpuBindings.bind(l, blas,  "cublasDestroy_v2",
+        cublasDestroy             = bind(linker, cublas, "cublasDestroy_v2",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
-        cublasSetStream           = GpuBindings.bind(l, blas,  "cublasSetStream_v2",
+        cublasSetStream           = bind(linker, cublas, "cublasSetStream_v2",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
-        cublasSetPointerMode      = GpuBindings.bind(l, blas,  "cublasSetPointerMode_v2",
+        cublasSetPointerMode      = bind(linker, cublas, "cublasSetPointerMode_v2",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
-        cublasSgemv               = GpuBindings.bind(l, blas,  "cublasSgemv_v2",
+        cublasSgemv               = bind(linker, cublas, "cublasSgemv_v2",
             FunctionDescriptor.of(JAVA_INT,
-                ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT,
-                ADDRESS, ADDRESS, JAVA_INT,
-                ADDRESS, JAVA_INT,
-                ADDRESS, ADDRESS, JAVA_INT));
-        cublasHSSgemvStridedBatched = GpuBindings.bind(l, blas, "cublasHSSgemvStridedBatched",
+                ADDRESS,   // handle
+                JAVA_INT,  // trans
+                JAVA_INT,  // m
+                JAVA_INT,  // n
+                ADDRESS,   // *alpha
+                ADDRESS,   // *A
+                JAVA_INT,  // lda
+                ADDRESS,   // *x
+                JAVA_INT,  // incx
+                ADDRESS,   // *beta
+                ADDRESS,   // *y
+                JAVA_INT));// incy
+        cublasHSSgemvStridedBatched = bind(linker, cublas, "cublasHSSgemvStridedBatched",
             FunctionDescriptor.of(JAVA_INT,
-                ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT,
-                ADDRESS, ADDRESS, JAVA_INT, JAVA_LONG,
-                ADDRESS, JAVA_INT, JAVA_LONG,
-                ADDRESS, ADDRESS, JAVA_INT, JAVA_LONG,
-                JAVA_INT));
+                ADDRESS,   // handle
+                JAVA_INT,  // trans
+                JAVA_INT,  // m
+                JAVA_INT,  // n
+                ADDRESS,   // *alpha  (float)
+                ADDRESS,   // *A      (__half, device)
+                JAVA_INT,  // lda
+                JAVA_LONG, // strideA
+                ADDRESS,   // *x      (__half, device)
+                JAVA_INT,  // incx
+                JAVA_LONG, // strideX
+                ADDRESS,   // *beta   (float)
+                ADDRESS,   // *y      (float, device)
+                JAVA_INT,  // incy
+                JAVA_LONG, // strideY
+                JAVA_INT));// batchCount
+
         log.info("CudaBindings ready — Panama FFI (cudart + cublas)");
     }
 
-    // ── Static utilities (kept for backward compatibility) ────────────────────
+    // ── Device memory helpers (used by DeviceFloatMatrix, DeviceHalfMatrix, CudaMatVec) ──
 
-    /** @see GpuBindings#check(int, String) */
-    static void check(int rc, String op) { GpuBindings.check(rc, op); }
-
-    /** @see GpuBindings#callInt(MethodHandle, Object...) */
-    static int callInt(MethodHandle mh, Object... args) { return GpuBindings.callInt(mh, args); }
-
-    // ── Device memory ─────────────────────────────────────────────────────────
-
+    /**
+     * Calls {@code cudaMalloc} and returns a {@link MemorySegment} sized to
+     * {@code bytes} representing the device pointer.
+     *
+     * <p>The caller is responsible for freeing it via {@link #deviceFree}.
+     */
     @Override
     public MemorySegment deviceMalloc(int deviceIndex, long bytes) {
-        GpuBindings.check(GpuBindings.callInt(cudaSetDevice, deviceIndex), "cudaSetDevice");
+        check(callInt(cudaSetDevice, deviceIndex), "cudaSetDevice");
         try (Arena tmp = Arena.ofConfined()) {
             MemorySegment slot = tmp.allocate(ADDRESS);
-            GpuBindings.check(GpuBindings.callInt(cudaMalloc, slot, bytes), "cudaMalloc");
+            check(callInt(cudaMalloc, slot, bytes), "cudaMalloc");
+            // Extract the raw device address and annotate it with its byte size.
+            // reinterpret is safe here: we know the exact allocation size.
             return slot.get(ADDRESS, 0).reinterpret(bytes);
         }
     }
 
+    /**
+     * Calls {@code cudaFree} on a device segment returned by {@link #deviceMalloc}.
+     */
     @Override
     public void deviceFree(MemorySegment devicePtr) {
         if (devicePtr == null || devicePtr.equals(MemorySegment.NULL)) return;
-        GpuBindings.callInt(cudaFree, devicePtr);
+        callInt(cudaFree, devicePtr);
     }
 
-    // ── GpuBindings accessors ─────────────────────────────────────────────────
+    // ── Package-private static utilities ─────────────────────────────────────
+
+    /**
+     * Invokes a CUDA downcall that returns {@code int} and throws on non-zero.
+     */
+    static void check(int rc, String op) {
+        if (rc != 0)
+            throw new IllegalStateException(op + " failed: rc=" + rc);
+    }
+
+    /**
+     * Reflective invoke returning the {@code int} return value.
+     * Used for non-hot-path calls where exact type is unknown at the call site.
+     */
+    static int callInt(MethodHandle mh, Object... args) {
+        try {
+            return (int) mh.invokeWithArguments(args);
+        } catch (Throwable t) {
+            throw new IllegalStateException("CUDA downcall failed", t);
+        }
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    private static SymbolLookup loadLibrary(String... candidates) {
+        for (String name : candidates) {
+            try {
+                return SymbolLookup.libraryLookup(name, Arena.global());
+            } catch (IllegalArgumentException ignored) {
+                // try next candidate
+            }
+        }
+        throw new IllegalStateException(
+            "Could not load CUDA library — tried: " + Arrays.toString(candidates)
+            + ". Ensure CUDA 12.x is installed and libcudart.so.12 is on LD_LIBRARY_PATH.");
+    }
+
+    private static MethodHandle bind(Linker linker, SymbolLookup lib, String symbol, FunctionDescriptor desc) {
+        MemorySegment addr = lib.find(symbol)
+            .orElseThrow(() -> new IllegalStateException("CUDA symbol not found: " + symbol));
+        return linker.downcallHandle(addr, desc);
+    }
+
+    // ── GpuBindings accessors (new — no existing lines removed) ──────────────
 
     @Override public MethodHandle cudaGetDeviceCount()          { return cudaGetDeviceCount; }
     @Override public MethodHandle cudaGetDeviceProperties()     { return cudaGetDeviceProperties; }

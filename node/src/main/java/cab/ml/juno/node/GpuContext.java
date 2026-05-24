@@ -27,19 +27,31 @@ import java.util.logging.Logger;
 import static java.lang.foreign.ValueLayout.ADDRESS;
 
 /**
- * GPU context: device selection, BLAS handle lifecycle, vendor-neutral via {@link GpuBindings}.
+ * GPU context: device selection and BLAS handle lifecycle, via Panama FFI.
  *
- * <p>The BLAS handle is an opaque pointer stored as a {@link MemorySegment}.
- * For CUDA it is a {@code cublasHandle_t}; for ROCm it is a {@code rocblas_handle} —
- * both are opaque void pointers with identical Java-side representation.
+ * The BLAS handle is an opaque pointer ({@code cublasHandle_t} or
+ * {@code rocblas_handle}) stored as a {@link MemorySegment}. It is created by
+ * {@code cublasCreate_v2} / {@code rocblas_create_handle} and destroyed on
+ * {@link #close()}, both resolved through {@link GpuBindings}.
  *
- * <p>Backend auto-detection order in {@link #shared}/{@link #init}:
- * <ol>
- *   <li>CUDA — if {@code libcudart.so.12} + {@code libcublas.so.12} are present.
- *   <li>ROCm — if {@code libamdhip64.so} + {@code librocblas.so} are present.
- * </ol>
- * The first available backend wins. Override with system property
- * {@code juno.gpu.backend=cuda|rocm|auto} (default: {@code auto}).
+ * Prefer {@link #shared(int)} for a process-wide handle on long-lived JVMs
+ * (embedded node, ForwardPassHandlerLoader GPU path). Use {@link #init(int)}
+ * when tests or tools need an isolated handle they can {@link #close()} without
+ * affecting other code.
+ *
+ * The BLAS handle is shared across all {@link CudaMatVec} calls on the same
+ * GpuContext. {@link #cublasSerializationLock()} serializes stream binding and
+ * kernel execution. Replace with ReentrantLock when addressing Loom pinning
+ * (point 4 of the HPC audit).
+ *
+ * Backend auto-detection order: CUDA first, then ROCm. Override with system
+ * property {@code juno.gpu.backend=cuda|rocm|auto} (default: {@code auto}).
+ *
+ * Usage:
+ *   try (GpuContext ctx = GpuContext.init(0)) {
+ *       ForwardPassHandler handler = ForwardPassHandlerLoader.load(path, shard, new CudaMatVec(ctx));
+ *       handler.releaseGpuResources();
+ *   }
  *
  * @author Yevhen Soldatov
  */
@@ -55,7 +67,7 @@ public final class GpuContext implements AutoCloseable {
     /** Opaque BLAS handle (cublasHandle_t or rocblas_handle). */
     private final MemorySegment handle;
     private final boolean       processShared;
-    private final Object        blasSerialization = new Object();
+    private final Object        cublasSerialization = new Object();
     private volatile boolean    closed = false;
 
     private GpuContext(int deviceIndex, GpuBindings bindings,
@@ -68,7 +80,7 @@ public final class GpuContext implements AutoCloseable {
 
     /**
      * The vendor-neutral GPU bindings for this context.
-     * Use instead of {@code CudaBindings.instance()} in all device-memory code.
+     * Returns {@link CudaBindings} on NVIDIA or {@link RocmBindings} on AMD.
      */
     public GpuBindings bindings() {
         if (closed) throw new IllegalStateException("GpuContext already closed");
@@ -76,15 +88,21 @@ public final class GpuContext implements AutoCloseable {
     }
 
     /**
-     * Mutex for BLAS stream-binding / memcpy / GEMV sequences on this handle.
+     * Mutex for cublasSetStream / memcpy / GEMV sequences on this handle.
+     * cuBLAS associates a stream with the handle; concurrent threads must not
+     * interleave these operations.
+     *
+     * Note: synchronized on this lock inside a virtual thread causes carrier
+     * pinning when the body makes Panama downcalls. Migrate to ReentrantLock
+     * when addressing Loom pinning (HPC audit point 4).
      */
     Object cublasSerializationLock() {
-        return blasSerialization;
+        return cublasSerialization;
     }
 
     /**
-     * Process-wide singleton per device. {@link #close()} is a no-op so embedded
-     * servers do not tear down the GPU context under live code.
+     * Process-wide singleton per GPU device. {@link #close()} is a no-op on
+     * these instances so embedded servers do not tear down the GPU under live code.
      *
      * @param deviceIndex 0-based GPU device index
      */
@@ -104,9 +122,9 @@ public final class GpuContext implements AutoCloseable {
     /**
      * Initialises the GPU device and creates a BLAS handle.
      *
-     * @param deviceIndex 0-based GPU index
-     * @return a ready GpuContext — caller must {@link #close()} when done
-     * @throws IllegalStateException if no GPU backend is available
+     * @param deviceIndex 0-based GPU index (0 for single-GPU nodes)
+     * @return a ready GpuContext — caller must close() when done
+     * @throws IllegalStateException if no GPU backend is available or init fails
      */
     public static GpuContext init(int deviceIndex) {
         return create(deviceIndex, false);
@@ -122,10 +140,10 @@ public final class GpuContext implements AutoCloseable {
         try (Arena tmp = Arena.ofConfined()) {
             MemorySegment slot = tmp.allocate(ADDRESS);
             GpuBindings.check(GpuBindings.callInt(gpu.cublasCreate(), slot), "blasCreate");
+            // Extract the opaque handle address; it lives until blasDestroy is called.
             handleValue = slot.get(ADDRESS, 0);
         }
 
-        // Log device info
         String name = deviceName(gpu, deviceIndex);
         long   vram = deviceVram(gpu, deviceIndex);
         log.info(String.format("GpuContext ready — [%s] device %d: %s, %.1f GB VRAM (shared=%b)",
@@ -168,31 +186,35 @@ public final class GpuContext implements AutoCloseable {
         };
     }
 
-    // ── Accessors ─────────────────────────────────────────────────────────────
-
     /**
-     * The opaque BLAS handle ({@code cublasHandle_t} or {@code rocblas_handle}).
-     * Valid until {@link #close()}.
+     * The BLAS handle (opaque pointer) — valid until close().
+     *
+     * Pass directly to cuBLAS / rocBLAS Panama downcalls (ADDRESS-typed parameter).
      */
     public MemorySegment handle() {
         if (closed) throw new IllegalStateException("GpuContext already closed");
         return handle;
     }
 
-    /** 0-based GPU device index. */
-    public int deviceIndex() { return deviceIndex; }
+    /** The device index this context is bound to. */
+    public int deviceIndex() {
+        return deviceIndex;
+    }
 
     /** Whether this context has been closed. */
-    public boolean isClosed() { return closed; }
+    public boolean isClosed() {
+        return closed;
+    }
 
     /** Whether this is the JVM-wide singleton from {@link #shared(int)}. */
-    public boolean isProcessShared() { return processShared; }
+    public boolean isProcessShared() {
+        return processShared;
+    }
 
     /** Backend label: {@code "cuda"} or {@code "rocm"}. */
     public String backendLabel() { return bindings.backendLabel(); }
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
-
+    /** Destroys the BLAS handle and releases device resources. */
     @Override
     public void close() {
         if (processShared) {

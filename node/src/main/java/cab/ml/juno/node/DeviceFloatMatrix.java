@@ -27,6 +27,8 @@ import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
  * {@code rows * cols * 4} bytes so bounds checks work at the Java level.
  *
  * Works with both CUDA and ROCm backends via {@link GpuBindings}.
+ * Used with {@link CudaMatVec#sgemv(DeviceFloatMatrix, float[])} so each
+ * matmul skips re-uploading A.
  *
  * @author Yevhen Soldatov
  */
