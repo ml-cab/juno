@@ -1,0 +1,41 @@
+# Canonical performance scenarios (see test-scenario.txt for captured JFR results).
+# Parsed by scripts/performance-test.sh via scripts/parse-scenarios.awk.
+
+model: tinyllama-1.1b-chat-v1.0-q4_k_m.gguf
+model_url: https://huggingface.co/hieupt/TinyLlama-1.1B-Chat-v1.0-Q4_K_M-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf
+
+hardware:
+  cpu:
+    instance: m7i-flex.large
+    max_tokens: 50
+  gpu:
+    instance: g4dn.2xlarge
+    max_tokens: 200
+
+workloads:
+  long:
+    column: l1
+    prompt: "could you please write me a long poem about love and war, please be as robust as you can"
+    sessions: 1
+  long_s9:
+    column: l9
+    prompt: "could you please write me a long poem about love and war, please be as robust as you can"
+    sessions: 9
+  conv:
+    column: c1
+    turns:
+      - user: "Hello, my name is Viktor, please remember this!"
+      - user: "Could you please recall me what is my name?"
+      - user: "Thank you so much, have a nice day!"
+    sessions: 1
+  conv_s9:
+    column: c9
+    turns:
+      - user: "Hello, my name is Viktor, please remember this!"
+      - user: "Could you please recall me what is my name?"
+      - user: "Thank you so much, have a nice day!"
+    sessions: 9
+
+metric:
+  source: juno.TokenProduced.tps
+  jvm: coordinator
