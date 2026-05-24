@@ -1,3 +1,2 @@
 - Dmytro Soloviov (soulaway) - Project lead and core architecture
 - Yevhen Soldatov (yevhensoldatov) - Core maintainer
-- Andrii Peretiatko (1nk1) - ROCm/HIP backend for AMD GPUs (RDNA 2/3)
