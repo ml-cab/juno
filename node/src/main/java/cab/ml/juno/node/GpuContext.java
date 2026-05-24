@@ -214,6 +214,22 @@ public final class GpuContext implements AutoCloseable {
     /** Backend label: {@code "cuda"} or {@code "rocm"}. */
     public String backendLabel() { return bindings.backendLabel(); }
 
+    /**
+     * Creates the appropriate {@link MatVec} implementation for this GPU context.
+     *
+     * <ul>
+     *   <li>NVIDIA (CUDA) → {@link CudaMatVec}
+     *   <li>AMD (ROCm)    → {@link RocmMatVec}
+     * </ul>
+     *
+     * Prefer this factory over {@code new CudaMatVec(ctx)} so that GPU-vendor
+     * selection is transparent to callers.
+     */
+    public MatVec createMatVec() {
+        if (bindings instanceof RocmBindings) return new RocmMatVec(this);
+        return new CudaMatVec(this);
+    }
+
     /** Destroys the BLAS handle and releases device resources. */
     @Override
     public void close() {

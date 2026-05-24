@@ -22,11 +22,10 @@ import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 /**
  * Row-major FP32 weight matrix resident on the GPU.
  *
- * The device memory is allocated once via {@link GpuBindings#deviceMalloc} and
+ * The device memory is allocated once via {@link CudaBindings#deviceMalloc} and
  * freed by {@link #close}. The backing {@link MemorySegment} is sized to
  * {@code rows * cols * 4} bytes so bounds checks work at the Java level.
  *
- * Works with both CUDA and ROCm backends via {@link GpuBindings}.
  * Used with {@link CudaMatVec#sgemv(DeviceFloatMatrix, float[])} so each
  * matmul skips re-uploading A.
  *
@@ -63,13 +62,13 @@ public final class DeviceFloatMatrix implements AutoCloseable {
             throw new IllegalArgumentException(
                 "host.length=" + host.length + " != rows*cols=" + ((long) rows * cols));
 
-        GpuBindings    gpu   = ctx.bindings();
+        CudaBindings   cuda  = CudaBindings.instance();
         long           bytes = (long) rows * cols * Float.BYTES;
-        MemorySegment  dA    = gpu.deviceMalloc(ctx.deviceIndex(), bytes);
+        MemorySegment  dA    = cuda.deviceMalloc(ctx.deviceIndex(), bytes);
 
         // MemorySegment.ofArray pins the heap array for the duration of the downcall.
-        GpuBindings.check(
-            GpuBindings.callInt(gpu.cudaMemcpy(), dA, MemorySegment.ofArray(host), bytes, GpuBindings.H2D),
+        CudaBindings.check(
+            CudaBindings.callInt(cuda.cudaMemcpy, dA, MemorySegment.ofArray(host), bytes, CudaBindings.H2D),
             "cudaMemcpy(A H2D)");
 
         return new DeviceFloatMatrix(ctx, dA, rows, cols);
@@ -93,9 +92,8 @@ public final class DeviceFloatMatrix implements AutoCloseable {
     public void close() {
         if (!closed) {
             closed = true;
-            GpuBindings gpu = ctx.bindings();
-            GpuBindings.callInt(gpu.cudaSetDevice(), ctx.deviceIndex());
-            gpu.deviceFree(dA);
+            CudaBindings.callInt(CudaBindings.instance().cudaSetDevice, ctx.deviceIndex());
+            CudaBindings.instance().deviceFree(dA);
         }
     }
 }

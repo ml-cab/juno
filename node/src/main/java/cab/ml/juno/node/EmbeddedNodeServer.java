@@ -289,10 +289,10 @@ public final class EmbeddedNodeServer {
 									+ (playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")" : "");
 						} else {
 							gpuContext = GpuContext.shared(cudaDevice);
-							handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
-									new CudaMatVec(gpuContext), playAdapters);
-							msg = "Real shard loaded (GPU/CudaMatVec, device " + cudaDevice + ") layers "
-									+ request.getStartLayer() + "–" + request.getEndLayer()
+						gpuContext = GpuContext.shared(cudaDevice);
+						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
+								gpuContext.createMatVec(), playAdapters);
+						msg = "Real shard loaded (GPU/" + gpuContext.backendLabel() + ", device " + cudaDevice + ") layers "
 									+ (playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")" : "");
 						}
 					} else {

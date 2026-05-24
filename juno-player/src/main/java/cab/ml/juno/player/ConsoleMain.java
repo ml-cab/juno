@@ -1161,7 +1161,7 @@ public final class ConsoleMain {
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		GpuContext gpuCtx = prepareGpuContext();
 		// One MatVec per process — shares the same GpuContext / cuBLAS handle across shards.
-		MatVec sharedBackend = (gpuCtx != null) ? new CudaMatVec(gpuCtx) : ForwardPassHandlerLoader.selectBackend();
+		MatVec sharedBackend = (gpuCtx != null) ? gpuCtx.createMatVec() : ForwardPassHandlerLoader.selectBackend();
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 			handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context, sharedBackend, playAdapters));
