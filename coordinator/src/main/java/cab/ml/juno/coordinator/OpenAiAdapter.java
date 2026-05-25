@@ -50,7 +50,9 @@ public final class OpenAiAdapter {
 		};
 	}
 
-	/** OpenAI-style completion id: {@code chatcmpl-} + request UUID without hyphens. */
+	/**
+	 * OpenAI-style completion id: {@code chatcmpl-} + request UUID without hyphens.
+	 */
 	public static String chatCompletionId(String requestId) {
 		String compact = requestId.replace("-", "");
 		return "chatcmpl-" + compact;

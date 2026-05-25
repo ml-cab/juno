@@ -24,15 +24,14 @@ import java.time.Instant;
  * node's health reporter every 5s. Stored in Hazelcast IMap("node-health")
  * keyed by nodeId.
  *
- * <p>{@code nodeRole} is either {@code "coordinator"} or {@code "node"} and
- * controls which secondary metric is shown on the dashboard:
- * coordinators display Latency P99, worker nodes display activation throughput.
+ * <p>
+ * {@code nodeRole} is either {@code "coordinator"} or {@code "node"} and
+ * controls which secondary metric is shown on the dashboard: coordinators
+ * display Latency P99, worker nodes display activation throughput.
  */
-public record NodeHealth(String nodeId,
-		String nodeRole,              // "coordinator" | "node"
-		double vramPressure,          // 0.0 → 1.0
-		long vramFreeBytes, long vramTotalBytes,
-		double cpuLoad,               // 0.0 → 1.0  (-1.0 if unavailable)
+public record NodeHealth(String nodeId, String nodeRole, // "coordinator" | "node"
+		double vramPressure, // 0.0 → 1.0
+		long vramFreeBytes, long vramTotalBytes, double cpuLoad, // 0.0 → 1.0 (-1.0 if unavailable)
 		double inferenceLatencyP99Ms, // -1.0 if no data yet (coordinator only)
 		double throughputBytesPerSec, // -1.0 if no data yet (nodes only)
 		Instant sampledAt) implements Serializable {

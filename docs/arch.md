@@ -91,6 +91,16 @@ two API surfaces that share the same underlying `RequestScheduler` and `Generati
 | `GET` | `/v1/models` | `OpenAiChatHandler.handleListModels` |
 | `GET` | `/v1/models/{modelId}` | `OpenAiChatHandler.handleGetModel` |
 | `DELETE` | `/v1/models/{modelId}` | `handleUnloadModel` |
+| `GET` | `/v1/cluster/health` | `handleClusterHealth` — per-node health rollup |
+
+### Health and console
+
+| Method | Path | Handler |
+|--------|------|---------|
+| `GET` | `/` | `handleConsole` — embedded coordinator web console |
+| `GET` | `/health-ui` | `handleHealthDashboard` — node health dashboard HTML |
+| `POST` | `/health/probe` | `handleHealthProbeProxy` — proxies probe to `HealthReporter` |
+| `GET` | `/health-data` | `handleHealthDataProxy` — proxies health JSON from nodes |
 
 ### OpenAI-compatible API
 
@@ -258,9 +268,9 @@ the inference path is needed. The JSON report exposes `juno.TokenProduced.count`
 `juno.TokenProduced.elapsed_seconds`, and `juno.TokenProduced.tps`.
 
 **Stub mode.** `EmbeddedNodeServer` uses an internal `StubForwardPassHandler` (zero-filled arrays)
-before a shard is loaded. The test-only `CyclicForwardPassHandler` lives in `node/src/test` and
-is shared via the `node:tests` classifier jar. Integration tests in `juno-master` run stub mode —
-no model file, no GPU, boots in seconds.
+before a shard is loaded. `CyclicForwardPassHandler` lives in `node/src/main` and is shared with
+integration tests in `juno-master` via the `node:tests` classifier jar. Integration tests run stub
+mode — no model file, no GPU, boots in seconds.
 
 ---
 

@@ -23,8 +23,8 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.SubmissionPublisher;
 
 /**
- * Bridges {@link TokenConsumer} callbacks to a {@link Flow.Publisher} of decoded
- * token text pieces (JDK standard reactive API).
+ * Bridges {@link TokenConsumer} callbacks to a {@link Flow.Publisher} of
+ * decoded token text pieces (JDK standard reactive API).
  */
 public final class PublisherTokenConsumer implements TokenConsumer {
 

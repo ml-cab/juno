@@ -199,7 +199,7 @@ public final class GenerationLoop {
 						entries.get(i).consumer().onToken(piece, nextToken, generated[i].size());
 						TokenProducedEvent tpe = new TokenProducedEvent();
 						tpe.requestId = requestIds[i];
-						tpe.position  = generated[i].size();
+						tpe.position = generated[i].size();
 						tpe.commit();
 						texts[i].append(piece);
 						generated[i].add(nextToken);
@@ -352,7 +352,7 @@ public final class GenerationLoop {
 			consumer.onToken(piece, nextToken, step);
 			TokenProducedEvent tpe = new TokenProducedEvent();
 			tpe.requestId = kvKey;
-			tpe.position  = step;
+			tpe.position = step;
 			tpe.commit();
 			fullText.append(piece);
 			generatedIds.add(nextToken);
@@ -431,8 +431,7 @@ public final class GenerationLoop {
 	 * "<|eot_id|>" (LLaMA 3), "<end_of_turn>" (Gemma).
 	 */
 	/** EOS marker strings — checked both per-piece and as accumulated suffixes. */
-	private static final String[] EOS_MARKER_STRINGS =
-			{ "</s>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>" };
+	private static final String[] EOS_MARKER_STRINGS = { "</s>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>" };
 
 	private static boolean isEosMarker(String piece) {
 		return switch (piece) {
@@ -444,7 +443,8 @@ public final class GenerationLoop {
 	/**
 	 * Returns true if the accumulated text ends with any EOS marker string.
 	 *
-	 * <p>Some models (e.g. TinyLlama/Zephyr) generate EOS markers as multiple
+	 * <p>
+	 * Some models (e.g. TinyLlama/Zephyr) generate EOS markers as multiple
 	 * character-level tokens — e.g. {@code "</"}, {@code "s"}, {@code ">"} — rather
 	 * than as the special EOS token ID. {@link #isEosMarker} catches the
 	 * single-token case; this method catches the multi-token case by checking the
@@ -453,15 +453,20 @@ public final class GenerationLoop {
 	 */
 	private static boolean endsWithEosMarker(StringBuilder sb) {
 		int len = sb.length();
-		if (len == 0) return false;
+		if (len == 0)
+			return false;
 		String tail = sb.substring(Math.max(0, len - EOS_SUFFIX_CHECK_LEN));
 		for (String marker : EOS_MARKER_STRINGS) {
-			if (tail.endsWith(marker)) return true;
+			if (tail.endsWith(marker))
+				return true;
 		}
 		return false;
 	}
 
-	/** Tail length examined by {@link #endsWithEosMarker} (> longest marker = 14 chars). */
+	/**
+	 * Tail length examined by {@link #endsWithEosMarker} (> longest marker = 14
+	 * chars).
+	 */
 	private static final int EOS_SUFFIX_CHECK_LEN = 20;
 
 	/** Removes any trailing EOS marker suffix from {@code sb} in-place. */

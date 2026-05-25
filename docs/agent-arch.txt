@@ -8,14 +8,14 @@ Module dependency (excerpt):
         DeviceFloatMatrix, DeviceHalfMatrix, GpuContext,
         LoraTrainableHandler, LoraMerge, LoraQvInitializer
         node depends on lora
-  coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline clients
-        ProcessPipelineClient, TensorParallelPipelineClient
+  coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
         coordinator depends on node
-  juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain
+  juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,
+        ProcessPipelineClient, TensorParallelPipelineClient
         juno-player depends on coordinator (and transitively on node)
   juno-master — CoordinatorMain standalone executable (production coordinator)
-        depends on coordinator, node, kvcache, tokenizer, sampler, health,
-        registry, api; does NOT depend on juno-player at compile/runtime
+        depends on juno-player, coordinator, node, kvcache, tokenizer, sampler,
+        health, registry, api
   juno-node — NodeMain standalone executable
   juno-bom — Maven BOM (dependencyManagement for cab.ml artifacts)
 
@@ -46,6 +46,4 @@ LoRA GPU defaults:
 
 See README.md, docs/howto.md, docs/arch.md, docs/LoRA.md,
   docs/integration-maven.md, docs/performance.md, docs/legal.md,
-  docs/juno_test_matrix.html,
-  docs/features/distributed-inference.md, openai-rest-api.md, lora-and-merge.md,
-  gpu-acceleration.md, jfr-metrics.md
+  docs/juno_test_matrix.html, docs/features.md

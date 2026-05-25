@@ -12,7 +12,7 @@ Aggregate throughput can be read from `juno.TokenProduced` spans without extra c
 
 # GPU acceleration
 
-CUDA 12.x drives matrix work through cuBLAS-backed paths (`CudaMatVec`) using ByteDeko/JavaCPP presets; weights upload as FP16 on GPU load with deterministic release on shard unload. Pass `--cpu` or `JUNO_USE_GPU=false` to force CPU quantised matmul; cluster coordinators stay CPU-only while each node JVM owns its GPU context.
+CUDA 12.x drives matrix work through cuBLAS-backed paths (`CudaMatVec`) via Panama FFI (`java.lang.foreign.Linker` + `SymbolLookup` — JavaCPP/bytedeco is not used); weights upload as FP16 on GPU load with deterministic release on shard unload. Pass `--cpu` or `JUNO_USE_GPU=false` to force CPU quantised matmul; cluster coordinators stay CPU-only while each node JVM owns its GPU context.
 
 Lifecycle and handler routing are described under GPU sections of [arch.md](../arch.md). CPU vs GPU throughput snapshots appear in [juno_test_matrix.html](../juno_test_matrix.html).
 
@@ -52,4 +52,4 @@ Measurements tie back to JFR custom events (especially `juno.TokenProduced`, `ju
 
 # EU AI Act friendly 
 
-Redistributing merged weights may trigger base-model and adapter license questions; Juno does not (yet) provide a legal determination of points highlighted in EU AI Act **[research](docs/EU-AI-Act-compliance.md)** as `Compliance Gaps`. Please wait for those gaps to be addressed, contact us [via email](mailto:dev@ml.cab?subject=Help%20Request) or implement the ones you are interested in yourself.
+Redistributing merged weights may trigger base-model and adapter license questions; Juno does not (yet) provide a legal determination of points highlighted in EU AI Act **[research](EU-AI-Act-compliance.md)** as `Compliance Gaps`. Please wait for those gaps to be addressed, contact us [via email](mailto:dev@ml.cab?subject=Help%20Request) or implement the ones you are interested in yourself.

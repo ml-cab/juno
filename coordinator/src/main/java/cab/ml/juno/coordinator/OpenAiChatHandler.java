@@ -59,7 +59,8 @@ public final class OpenAiChatHandler {
 		try {
 			body = JSON.readValue(ctx.body(), OaiChatCompletionRequest.class);
 		} catch (Exception e) {
-			openAiError(ctx, 400, "invalid_request_error", "invalid_request", "Invalid request body: " + e.getMessage(), null);
+			openAiError(ctx, 400, "invalid_request_error", "invalid_request", "Invalid request body: " + e.getMessage(),
+					null);
 			return;
 		}
 
@@ -76,7 +77,8 @@ public final class OpenAiChatHandler {
 		List<ChatMessage> messages = new ArrayList<>();
 		for (OaiMessage m : body.messages()) {
 			if (m == null || m.role() == null || m.role().isBlank()) {
-				openAiError(ctx, 400, "invalid_request_error", "invalid_request", "each message needs a non-blank role", "messages");
+				openAiError(ctx, 400, "invalid_request_error", "invalid_request", "each message needs a non-blank role",
+						"messages");
 				return;
 			}
 			String text = extractTextContent(m.content());
@@ -90,11 +92,13 @@ public final class OpenAiChatHandler {
 
 		String modelId = resolveModelId(body.model());
 		if (modelId == null) {
-			openAiError(ctx, 503, "service_unavailable_error", "service_unavailable", "No model is currently loaded", null);
+			openAiError(ctx, 503, "service_unavailable_error", "service_unavailable", "No model is currently loaded",
+					null);
 			return;
 		}
 		if (!modelRegistry.isLoaded(modelId)) {
-			openAiError(ctx, 503, "service_unavailable_error", "service_unavailable", "Model '" + modelId + "' is not loaded", "model");
+			openAiError(ctx, 503, "service_unavailable_error", "service_unavailable",
+					"Model '" + modelId + "' is not loaded", "model");
 			return;
 		}
 
@@ -121,10 +125,10 @@ public final class OpenAiChatHandler {
 			long created = request.receivedAt().getEpochSecond();
 			String finish = OpenAiAdapter.toOpenAiFinishReason(result.stopReason());
 
-			Map<String, Object> choice = Map.of("index", 0, "message", Map.of("role", "assistant", "content", result.text()),
-					"finish_reason", finish);
-			Map<String, Object> usage = Map.of("prompt_tokens", result.promptTokens(), "completion_tokens", result.generatedTokens(),
-					"total_tokens", result.promptTokens() + result.generatedTokens());
+			Map<String, Object> choice = Map.of("index", 0, "message",
+					Map.of("role", "assistant", "content", result.text()), "finish_reason", finish);
+			Map<String, Object> usage = Map.of("prompt_tokens", result.promptTokens(), "completion_tokens",
+					result.generatedTokens(), "total_tokens", result.promptTokens() + result.generatedTokens());
 			Map<String, Object> root = new LinkedHashMap<>();
 			root.put("id", completionId);
 			root.put("object", "chat.completion");
@@ -139,7 +143,8 @@ public final class OpenAiChatHandler {
 		} catch (RequestScheduler.QueueFullException e) {
 			queueFull(ctx, e);
 		} catch (Exception e) {
-			openAiError(ctx, 500, "internal_error", "internal_error", e.getMessage() != null ? e.getMessage() : "Unexpected error", null);
+			openAiError(ctx, 500, "internal_error", "internal_error",
+					e.getMessage() != null ? e.getMessage() : "Unexpected error", null);
 		}
 	}
 
@@ -178,8 +183,8 @@ public final class OpenAiChatHandler {
 			GenerationResult result = scheduler.submit(request, consumer).join();
 			latencyCallback.accept(System.currentTimeMillis() - start);
 
-			writeSseChunk(writer, chunkRoot(completionId, created, modelId, List.of(chunkChoice(0, Map.of("content", ""),
-					OpenAiAdapter.toOpenAiFinishReason(result.stopReason())))));
+			writeSseChunk(writer, chunkRoot(completionId, created, modelId, List.of(
+					chunkChoice(0, Map.of("content", ""), OpenAiAdapter.toOpenAiFinishReason(result.stopReason())))));
 			writer.write("data: [DONE]\n\n");
 			writer.flush();
 		} catch (RequestScheduler.QueueFullException e) {
@@ -197,7 +202,8 @@ public final class OpenAiChatHandler {
 		}
 	}
 
-	private static Map<String, Object> chunkRoot(String id, long created, String modelId, List<Map<String, Object>> choices) {
+	private static Map<String, Object> chunkRoot(String id, long created, String modelId,
+			List<Map<String, Object>> choices) {
 		Map<String, Object> m = new LinkedHashMap<>();
 		m.put("id", id);
 		m.put("object", "chat.completion.chunk");
@@ -223,15 +229,15 @@ public final class OpenAiChatHandler {
 	}
 
 	public void handleListModels(Context ctx) {
-		List<Map<String, Object>> data = modelRegistry.listModels().stream().filter(m -> m.status() == ModelStatus.LOADED)
-				.map(this::toOpenAiModel).toList();
+		List<Map<String, Object>> data = modelRegistry.listModels().stream()
+				.filter(m -> m.status() == ModelStatus.LOADED).map(this::toOpenAiModel).toList();
 		ctx.json(Map.of("object", "list", "data", data));
 	}
 
 	public void handleGetModel(Context ctx) {
 		String modelId = ctx.pathParam("modelId");
-		modelRegistry.getModel(modelId).ifPresentOrElse(m -> ctx.json(toOpenAiModel(m)),
-				() -> openAiError(ctx, 404, "invalid_request_error", "model_not_found", "Model '" + modelId + "' not found", "model"));
+		modelRegistry.getModel(modelId).ifPresentOrElse(m -> ctx.json(toOpenAiModel(m)), () -> openAiError(ctx, 404,
+				"invalid_request_error", "model_not_found", "Model '" + modelId + "' not found", "model"));
 	}
 
 	private Map<String, Object> toOpenAiModel(ModelDescriptor m) {
@@ -252,8 +258,8 @@ public final class OpenAiChatHandler {
 	private String resolveModelId(String requested) {
 		if (requested != null && !requested.isBlank())
 			return requested.strip();
-		return modelRegistry.listModels().stream().filter(m -> modelRegistry.isLoaded(m.modelId())).map(ModelDescriptor::modelId)
-				.findFirst().orElse(null);
+		return modelRegistry.listModels().stream().filter(m -> modelRegistry.isLoaded(m.modelId()))
+				.map(ModelDescriptor::modelId).findFirst().orElse(null);
 	}
 
 	private static String extractTextContent(JsonNode content) {
@@ -274,7 +280,8 @@ public final class OpenAiChatHandler {
 		if (body.xJunoTopK() != null)
 			p = p.withTopK(body.xJunoTopK());
 		if (body.frequencyPenalty() != null)
-			p = p.withRepetitionPenalty(OpenAiAdapter.repetitionPenaltyFromFrequencyPenalty(body.frequencyPenalty().floatValue()));
+			p = p.withRepetitionPenalty(
+					OpenAiAdapter.repetitionPenaltyFromFrequencyPenalty(body.frequencyPenalty().floatValue()));
 		return p;
 	}
 
@@ -322,13 +329,13 @@ public final class OpenAiChatHandler {
 	}
 
 	@JsonIgnoreProperties(ignoreUnknown = true)
-	public record OaiChatCompletionRequest(@JsonProperty("model") String model, @JsonProperty("messages") List<OaiMessage> messages,
-			@JsonProperty("temperature") Double temperature, @JsonProperty("top_p") Double topP,
-			@JsonProperty("max_tokens") Integer maxTokens, @JsonProperty("max_completion_tokens") Integer maxCompletionTokens,
-			@JsonProperty("stream") Boolean stream, @JsonProperty("n") Integer n,
-			@JsonProperty("frequency_penalty") Double frequencyPenalty, @JsonProperty("stop") JsonNode stop,
-			@JsonProperty("x_juno_priority") String xJunoPriority, @JsonProperty("x_juno_session_id") String xJunoSessionId,
-			@JsonProperty("x_juno_top_k") Integer xJunoTopK) {
+	public record OaiChatCompletionRequest(@JsonProperty("model") String model,
+			@JsonProperty("messages") List<OaiMessage> messages, @JsonProperty("temperature") Double temperature,
+			@JsonProperty("top_p") Double topP, @JsonProperty("max_tokens") Integer maxTokens,
+			@JsonProperty("max_completion_tokens") Integer maxCompletionTokens, @JsonProperty("stream") Boolean stream,
+			@JsonProperty("n") Integer n, @JsonProperty("frequency_penalty") Double frequencyPenalty,
+			@JsonProperty("stop") JsonNode stop, @JsonProperty("x_juno_priority") String xJunoPriority,
+			@JsonProperty("x_juno_session_id") String xJunoSessionId, @JsonProperty("x_juno_top_k") Integer xJunoTopK) {
 	}
 
 	public record OaiMessage(@JsonProperty("role") String role, @JsonProperty("content") JsonNode content) {

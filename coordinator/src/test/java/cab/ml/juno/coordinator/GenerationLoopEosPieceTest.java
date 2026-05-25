@@ -37,7 +37,8 @@ class GenerationLoopEosPieceTest {
 		kvCache = new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000));
 	}
 
-	// ── Delegating tokenizer — SimpleTokenizer is final; use delegation to override per-token decoding.
+	// ── Delegating tokenizer — SimpleTokenizer is final; use delegation to
+	// override per-token decoding.
 	// Use a delegation wrapper so tests can override decodeToken() per-token-ID.
 
 	private static final class DelegatingTokenizer implements Tokenizer {
@@ -212,17 +213,18 @@ class GenerationLoopEosPieceTest {
 	 * PRIMARY REGRESSION for multi-token EOS: model generates "</s>" as three
 	 * separate tokens ("</", "s", ">") rather than as EOS token ID or as a single
 	 * decoded piece. The suffix-based endsWithEosMarker() must catch this pattern
-	 * and stop generation before the model continues with chat-template scaffolding.
+	 * and stop generation before the model continues with chat-template
+	 * scaffolding.
 	 *
 	 * FAILS if endsWithEosMarker() is absent, PASSES after.
 	 */
 	@Test
 	@DisplayName("Multi-token EOS pattern </s> across three pieces stops generation")
 	void multi_token_eos_across_three_pieces_stops_generation() {
-		int lessThanSlash = 300;  // decodes to "</"
-		int sToken = 301;         // decodes to "s"
-		int greaterThan = 302;    // decodes to ">"
-		int extraToken = 303;     // decodes to "extra" — must never appear
+		int lessThanSlash = 300; // decodes to "</"
+		int sToken = 301; // decodes to "s"
+		int greaterThan = 302; // decodes to ">"
+		int extraToken = 303; // decodes to "extra" — must never appear
 
 		DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
 		tok.override(lessThanSlash, "</");
@@ -230,17 +232,15 @@ class GenerationLoopEosPieceTest {
 		tok.override(greaterThan, ">");
 		tok.override(extraToken, "extra");
 
-		StubInferencePipeline pipeline = new StubInferencePipeline(
-				StubInferencePipeline.DEFAULT_TOKEN, // prefill
-				lessThanSlash,  // decode step 0 → "</"
-				sToken,         // decode step 1 → "s"
-				greaterThan,    // decode step 2 → ">" — completes "</s>", must stop here
-				extraToken      // decode step 3 — must NEVER be reached
+		StubInferencePipeline pipeline = new StubInferencePipeline(StubInferencePipeline.DEFAULT_TOKEN, // prefill
+				lessThanSlash, // decode step 0 → "</"
+				sToken, // decode step 1 → "s"
+				greaterThan, // decode step 2 → ">" — completes "</s>", must stop here
+				extraToken // decode step 3 — must NEVER be reached
 		);
 
 		List<String> streamed = new ArrayList<>();
-		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"),
-				(piece, id, step) -> streamed.add(piece));
+		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, id, step) -> streamed.add(piece));
 
 		// The three partial pieces were streamed before the pattern was detected
 		assertThat(streamed).doesNotContain("extra");
