@@ -1,2 +1,3 @@
-- Dmytro Soloviov (soulaway) - Project lead and core architecture
-- Yevhen Soldatov (yevhensoldatov) - Core maintainer
+- Dmytro Soloviov (soulaway)
+- Yevhen Soldatov (yevhensoldatov)
+- Andrii Peretiatko (1nk1)
