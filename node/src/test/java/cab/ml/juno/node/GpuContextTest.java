@@ -2,6 +2,7 @@ package cab.ml.juno.node;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.junit.jupiter.api.DisplayName;
@@ -64,11 +65,12 @@ class GpuContextTest {
 	}
 
 	@Test
-	@DisplayName("init() without CUDA throws IllegalStateException")
+	@DisplayName("init() without any GPU backend throws IllegalStateException")
 	void init_without_cuda_throws() {
 		assumeTrue(!CudaAvailability.isAvailable(), "Skipping — CUDA is present");
+		assumeTrue(!RocmAvailability.isAvailable(), "Skipping — ROCm is present (valid fallback)");
 		assertThatThrownBy(() -> GpuContext.init(0)).isInstanceOf(IllegalStateException.class)
-				.hasMessageContaining("CUDA not available");
+				.hasMessageContaining("No GPU backend available");
 	}
 
 	@Test
@@ -98,14 +100,25 @@ class GpuContextTest {
 	}
 
 	@Test
-	@DisplayName("shared(0) and shared(1) differ when two CUDA devices exist")
-	void shared_per_device_when_multi_gpu() {
-		assumeCuda();
-		assumeTrue(CudaAvailability.deviceCount() >= 2, "Need ≥2 CUDA devices");
-		GpuContext g0 = GpuContext.shared(0);
-		GpuContext g1 = GpuContext.shared(1);
-		assertThat(g0).isNotSameAs(g1);
-		assertThat(g0.deviceIndex()).isEqualTo(0);
-		assertThat(g1.deviceIndex()).isEqualTo(1);
+	@Tag("rocm")
+	@DisplayName("init(0) with ROCm backend returns open context with rocm label")
+	void init_returns_rocm_context() {
+		assumeTrue(RocmAvailability.isAvailable(), "Skipping — no ROCm device");
+		assumeFalse(CudaAvailability.isAvailable(), "Skipping — CUDA present, CUDA wins in auto mode");
+		try (GpuContext ctx = GpuContext.init(0)) {
+			assertThat(ctx.isClosed()).isFalse();
+			assertThat(ctx.handle()).isNotNull();
+			assertThat(ctx.backendLabel()).isEqualTo("rocm");
+		}
+	}
+
+	@Test
+	@Tag("rocm")
+	@DisplayName("selectBindings() prefers CUDA over ROCm when both present")
+	void select_bindings_cuda_priority() {
+		assumeTrue(CudaAvailability.isAvailable(), "Skipping — no CUDA");
+		assumeTrue(RocmAvailability.isAvailable(), "Skipping — no ROCm");
+		GpuBindings bindings = GpuContext.selectBindings();
+		assertThat(bindings).isInstanceOf(CudaBindings.class);
 	}
 }

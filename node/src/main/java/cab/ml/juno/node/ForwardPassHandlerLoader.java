@@ -112,7 +112,7 @@ public final class ForwardPassHandlerLoader {
 				return CpuMatVec.INSTANCE;
 			}
 			log.info("CUDA detected — using CudaMatVec backend (device " + dev + ")");
-			return new CudaMatVec(GpuContext.shared(dev));
+			return GpuContext.shared(dev).createMatVec();
 		}
 		log.info("Using CpuMatVec backend (useGpu=" + useGpu + ", CUDA=" + CudaAvailability.isAvailable() + ")");
 		return CpuMatVec.INSTANCE;

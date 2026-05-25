@@ -231,7 +231,7 @@ public final class JunoPlayer implements AutoCloseable {
 
 			List<ForwardPassHandler> handlers = new ArrayList<>();
 			GpuContext gpuCtx = prepareGpuContext(useGpu);
-			MatVec sharedBackend = (gpuCtx != null) ? new CudaMatVec(gpuCtx) : ForwardPassHandlerLoader.selectBackend();
+			MatVec sharedBackend = (gpuCtx != null) ? gpuCtx.createMatVec() : ForwardPassHandlerLoader.selectBackend();
 			for (var assignment : shardMap.assignments()) {
 				var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 				handlers.add(ForwardPassHandlerLoader.load(modelPath, context, sharedBackend, playAdapters));

@@ -23,70 +23,64 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * Safe CUDA runtime detection via Panama FFI.
+ * Safe HIP runtime detection via Panama FFI.
  *
- * Delegates library availability to {@link CudaBindings#isAvailable()}.
- * If the CUDA shared libraries (libcudart.so.12, libcublas.so.12) are not on
- * LD_LIBRARY_PATH, {@link #isAvailable()} returns false without throwing.
- *
- * {@link #deviceName} and {@link #vramBytes} allocate a single off-heap
- * cudaDeviceProp struct via a confined arena, read the fields, then release
- * immediately — zero heap allocation during the read.
- *
- * Struct field offsets are read from {@link GpuBindings#PROP_NAME_OFFSET} and
- * {@link GpuBindings#PROP_TOTAL_MEM_OFFSET} so they stay in sync with
- * {@link CudaBindings}.
+ * <p>Mirrors {@link CudaAvailability} in structure; delegates library availability
+ * to {@link RocmBindings#isAvailable()}. All struct-field offsets use the
+ * {@code hipDeviceProp_t} layout from ROCm 7.x headers (Linux x86_64).
  */
-public final class CudaAvailability {
+public final class RocmAvailability {
 
-    private static final Logger log = Logger.getLogger(CudaAvailability.class.getName());
+    private static final Logger log = Logger.getLogger(RocmAvailability.class.getName());
 
     private static final boolean AVAILABLE = detect();
 
-    private CudaAvailability() {}
+    private RocmAvailability() {}
 
     /**
-     * Returns true if at least one CUDA-capable device is present and the
-     * CUDA libraries were resolved successfully.
+     * Returns {@code true} if at least one HIP-capable device is present and
+     * ROCm libraries loaded successfully.
      */
     public static boolean isAvailable() {
         return AVAILABLE;
     }
 
     /**
-     * Returns the number of CUDA-capable devices, or 0 if CUDA is unavailable.
+     * Returns the number of HIP-capable devices, or 0 if ROCm is unavailable.
      */
     public static int deviceCount() {
         if (!AVAILABLE) return 0;
-        CudaBindings cuda = CudaBindings.instance();
+        RocmBindings rocm = RocmBindings.instance();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment countSeg = arena.allocate(JAVA_INT);
-            int rc = (int) cuda.cudaGetDeviceCount.invokeExact(countSeg);
+            int rc = (int) rocm.cudaGetDeviceCount().invokeExact(countSeg);
             return (rc == 0) ? countSeg.get(JAVA_INT, 0) : 0;
         } catch (Throwable t) {
-            log.warning("cudaGetDeviceCount failed: " + t.getMessage());
+            log.warning("hipGetDeviceCount failed: " + t.getMessage());
             return 0;
         }
     }
 
     /**
-     * Returns a human-readable name for device index, or "unknown" on failure.
+     * Returns a human-readable device name (from {@code hipDeviceProp_t.name}),
+     * or {@code "unavailable"} on failure.
      */
     public static String deviceName(int index) {
         if (!AVAILABLE) return "unavailable";
         return withDeviceProp(index, prop -> {
-            String name = prop.getString(CudaBindings.instance().PROP_NAME_OFFSET);
+            RocmBindings rocm = RocmBindings.instance();
+            String name = prop.getString(rocm.propNameOffset());
             return (name != null) ? name.trim() : "unknown";
         }, "unknown");
     }
 
     /**
-     * Returns total VRAM in bytes for device index, or 0 on failure.
+     * Returns total VRAM in bytes for device {@code index}, or 0 on failure.
      */
     public static long vramBytes(int index) {
         if (!AVAILABLE) return 0L;
         return withDeviceProp(index,
-            prop -> prop.get(JAVA_LONG, CudaBindings.instance().PROP_TOTAL_MEM_OFFSET),
+            prop -> prop.get(JAVA_LONG, RocmBindings.instance().propTotalMemOffset()),
             0L);
     }
 
@@ -98,37 +92,37 @@ public final class CudaAvailability {
     }
 
     private static <T> T withDeviceProp(int index, PropReader<T> reader, T fallback) {
-        CudaBindings cuda = CudaBindings.instance();
+        RocmBindings rocm = RocmBindings.instance();
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment prop = arena.allocate(cuda.DEVICE_PROP_BYTES);
-            int rc = (int) cuda.cudaGetDeviceProperties.invokeExact(prop, index);
+            MemorySegment prop = arena.allocate(rocm.devicePropBytes());
+            int rc = (int) rocm.cudaGetDeviceProperties().invokeExact(prop, index);
             if (rc != 0) return fallback;
             return reader.read(prop);
         } catch (Throwable t) {
-            log.warning("cudaGetDeviceProperties failed: " + t.getMessage());
+            log.warning("hipGetDevicePropertiesR0600 failed: " + t.getMessage());
             return fallback;
         }
     }
 
     private static boolean detect() {
-        if (!CudaBindings.isAvailable()) {
-            log.info("CUDA not available — CudaBindings did not load");
+        if (!RocmBindings.isAvailable()) {
+            log.info("ROCm not available — RocmBindings did not load");
             return false;
         }
-        CudaBindings cuda = CudaBindings.instance();
+        RocmBindings rocm = RocmBindings.instance();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment countSeg = arena.allocate(JAVA_INT);
-            int rc = (int) cuda.cudaGetDeviceCount.invokeExact(countSeg);
+            int rc = (int) rocm.cudaGetDeviceCount().invokeExact(countSeg);
             int n  = countSeg.get(JAVA_INT, 0);
             boolean ok = (rc == 0 && n > 0);
             if (ok) {
-                log.info("CUDA available — " + n + " device(s)");
+                log.info("ROCm available — " + n + " device(s)");
             } else {
-                log.info("CUDA not available (rc=" + rc + ", devices=" + n + ")");
+                log.info("ROCm not available (rc=" + rc + ", devices=" + n + ")");
             }
             return ok;
         } catch (Throwable t) {
-            log.info("CUDA not available — " + t.getMessage());
+            log.info("ROCm not available — " + t.getMessage());
             return false;
         }
     }

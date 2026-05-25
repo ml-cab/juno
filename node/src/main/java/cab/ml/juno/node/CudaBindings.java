@@ -47,8 +47,13 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * {@link #PROP_TOTAL_MEM_OFFSET}) reflect {@code cudaDeviceProp} as laid out
  * by CUDA 12.x on Linux x86_64. If the CUDA major version changes, verify
  * these offsets against the SDK headers.
+ *
+ * <p>Implements {@link GpuBindings} — accessor methods expose the existing
+ * {@link MethodHandle} fields to vendor-neutral callers. No existing fields or
+ * constants have been removed; only {@code implements GpuBindings} and the
+ * corresponding {@code @Override} methods are new.
  */
-final class CudaBindings {
+final class CudaBindings implements GpuBindings {
 
     private static final Logger log = Logger.getLogger(CudaBindings.class.getName());
 
@@ -213,7 +218,8 @@ final class CudaBindings {
      *
      * <p>The caller is responsible for freeing it via {@link #deviceFree}.
      */
-    MemorySegment deviceMalloc(int deviceIndex, long bytes) {
+    @Override
+    public MemorySegment deviceMalloc(int deviceIndex, long bytes) {
         check(callInt(cudaSetDevice, deviceIndex), "cudaSetDevice");
         try (Arena tmp = Arena.ofConfined()) {
             MemorySegment slot = tmp.allocate(ADDRESS);
@@ -227,7 +233,8 @@ final class CudaBindings {
     /**
      * Calls {@code cudaFree} on a device segment returned by {@link #deviceMalloc}.
      */
-    void deviceFree(MemorySegment devicePtr) {
+    @Override
+    public void deviceFree(MemorySegment devicePtr) {
         if (devicePtr == null || devicePtr.equals(MemorySegment.NULL)) return;
         callInt(cudaFree, devicePtr);
     }
@@ -274,4 +281,31 @@ final class CudaBindings {
             .orElseThrow(() -> new IllegalStateException("CUDA symbol not found: " + symbol));
         return linker.downcallHandle(addr, desc);
     }
+
+    // ── GpuBindings accessors (new — no existing lines removed) ──────────────
+
+    @Override public MethodHandle cudaGetDeviceCount()          { return cudaGetDeviceCount; }
+    @Override public MethodHandle cudaGetDeviceProperties()     { return cudaGetDeviceProperties; }
+    @Override public MethodHandle cudaSetDevice()               { return cudaSetDevice; }
+    @Override public MethodHandle cudaMalloc()                  { return cudaMalloc; }
+    @Override public MethodHandle cudaFree()                    { return cudaFree; }
+    @Override public MethodHandle cudaMallocHost()              { return cudaMallocHost; }
+    @Override public MethodHandle cudaFreeHost()                { return cudaFreeHost; }
+    @Override public MethodHandle cudaMemcpy()                  { return cudaMemcpy; }
+    @Override public MethodHandle cudaMemcpyAsync()             { return cudaMemcpyAsync; }
+    @Override public MethodHandle cudaStreamCreateWithFlags()   { return cudaStreamCreateWithFlags; }
+    @Override public MethodHandle cudaStreamSynchronize()       { return cudaStreamSynchronize; }
+    @Override public MethodHandle cudaStreamDestroy()           { return cudaStreamDestroy; }
+    @Override public MethodHandle cublasCreate()                { return cublasCreate; }
+    @Override public MethodHandle cublasDestroy()               { return cublasDestroy; }
+    @Override public MethodHandle cublasSetStream()             { return cublasSetStream; }
+    @Override public MethodHandle cublasSetPointerMode()        { return cublasSetPointerMode; }
+    @Override public MethodHandle cublasSgemv()                 { return cublasSgemv; }
+    @Override public MethodHandle cublasHSSgemvStridedBatched() { return cublasHSSgemvStridedBatched; }
+    @Override public int    opTranspose()       { return CUBLAS_OP_T; }
+    @Override public int    pointerModeHost()   { return CUBLAS_POINTER_MODE_HOST; }
+    @Override public int    devicePropBytes()   { return DEVICE_PROP_BYTES; }
+    @Override public long   propNameOffset()    { return PROP_NAME_OFFSET; }
+    @Override public long   propTotalMemOffset(){ return PROP_TOTAL_MEM_OFFSET; }
+    @Override public String backendLabel()      { return "cuda"; }
 }
