@@ -92,7 +92,7 @@ final class JfrMetricsExtractor {
         Instant tokenProducedLast  = null;
 
         for (Path jfrFile : jfrFiles) {
-            if (!Files.exists(jfrFile))
+            if (!Files.isRegularFile(jfrFile) || Files.size(jfrFile) == 0)
                 continue;
             totalFileBytes += Files.size(jfrFile);
             try (RecordingFile rf = new RecordingFile(jfrFile)) {

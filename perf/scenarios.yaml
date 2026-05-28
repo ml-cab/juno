@@ -20,7 +20,7 @@ workloads:
   long_s9:
     column: l9
     prompt: "could you please write me a long poem about love and war, please be as robust as you can"
-    sessions: 9
+    sessions: 8
   conv:
     column: c1
     turns:
@@ -34,7 +34,7 @@ workloads:
       - user: "Hello, my name is Viktor, please remember this!"
       - user: "Could you please recall me what is my name?"
       - user: "Thank you so much, have a nice day!"
-    sessions: 9
+    sessions: 8
 
 metric:
   source: juno.TokenProduced.tps

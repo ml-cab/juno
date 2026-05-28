@@ -11,8 +11,16 @@
 #    ./launcher.sh juno-deploy.sh start
 #    ./launcher.sh juno-deploy.sh stop
 #    ./launcher.sh juno-deploy.sh teardown
+#    ./launcher.sh juno-deploy.sh finish
 #    ./launcher.sh juno-deploy.sh status
 #    ./launcher.sh juno-deploy.sh scan-regions
+#
+#  Automation (setup):
+#    --no-browser   Skip opening the web console after health OK.
+#    --detach       After health OK, print JUNO_BASE_URL=… and exit (no monitor loop).
+#
+#  finish: gather JFR (if --jfr was set) then teardown. Set JUNO_DEPLOY_METRICS_OUT to
+#          copy metrics.json to a local path (used by scripts/performance-test.sh).
 #
 #  Core options (setup only):
 #    --instance-type TYPE     EC2 instance type (default: g4dn.xlarge)
@@ -58,6 +66,9 @@ SSH_KEY_FILE="${HOME}/.ssh/juno-deploy-key.pem"
 MONITOR_INTERVAL=20
 GRPC_PORT=19092
 HTTP_PORT=8080
+DEPLOY_URL_FILE="${HOME}/.juno-deploy-state.url"
+DEPLOY_NO_BROWSER=0
+DEPLOY_DETACH=0
 
 # ── INSTANCE PRICING TABLE (on-demand, eu-north-1) ────────────
 # Extend as needed; used only for the cost display in the dashboard.
@@ -125,6 +136,8 @@ parse_options() {
       --region)          REGION="$2"; export AWS_DEFAULT_REGION="$2"; shift 2 ;;
       --jfr)             JFR_DURATION="$2";   shift 2 ;;
       --lora-play)       LORA_PLAY_PATH=$(realpath "$2" 2>/dev/null || echo "$2"); shift 2 ;;
+      --no-browser)      DEPLOY_NO_BROWSER=1; shift ;;
+      --detach)          DEPLOY_DETACH=1;     shift ;;
       *)                 die "Unknown option: $1 (run without args for usage)" ;;
     esac
   done
@@ -152,6 +165,8 @@ save_state() {
     echo "SETUP_TIME=\"$SETUP_TIME\""
     echo "JFR_DURATION=\"${JFR_DURATION:-}\""
     echo "LORA_PLAY_PATH=\"${LORA_PLAY_PATH:-}\""
+    echo "DEPLOY_NO_BROWSER=\"${DEPLOY_NO_BROWSER:-0}\""
+    echo "DEPLOY_DETACH=\"${DEPLOY_DETACH:-0}\""
   } > "$STATE_FILE"
   log "State saved → $STATE_FILE"
 }
@@ -295,7 +310,7 @@ teardown() {
     && log "  ✅ Key pair deleted" || warn "  Key pair already gone"
 
   [[ -f "$SSH_KEY_FILE" ]] && rm -f "$SSH_KEY_FILE" && log "  ✅ Local key removed"
-  rm -f "$STATE_FILE"
+  rm -f "$STATE_FILE" "$DEPLOY_URL_FILE"
 
   log ""
   log "  ✅  Cluster fully torn down. No lingering AWS costs."
@@ -337,8 +352,8 @@ status() {
   echo ""
 }
 
-# ── MONITOR DASHBOARD ─────────────────────────────────────────
-_fetch_ips_and_monitor() {
+# ── INSTANCE IP MAP ─────────────────────────────────────────────
+_hydrate_instance_ips() {
   declare -gA INSTANCE_IPS
   declare -gA INSTANCE_PRIVATE_IPS
 
@@ -349,6 +364,11 @@ _fetch_ips_and_monitor() {
     INSTANCE_IPS[$ID]="$(public_ip "$ID")"
     INSTANCE_PRIVATE_IPS[$ID]="$(private_ip "$ID")"
   done
+}
+
+# ── MONITOR DASHBOARD ─────────────────────────────────────────
+_fetch_ips_and_monitor() {
+  _hydrate_instance_ips
 
   # Determine coordinator IP for web console URL
   local COORD_IP
@@ -379,6 +399,14 @@ _fetch_ips_and_monitor() {
 
   # ── Wait for all nodes to be juno-ready, then open browser ──
   _wait_for_ready_and_open "$CONSOLE_URL"
+
+  if [[ "${DEPLOY_DETACH:-0}" == "1" ]]; then
+    log "Detach mode — cluster left running (no monitor loop, no EXIT trap)."
+    printf '%s\n' "JUNO_BASE_URL=${CONSOLE_URL}"
+    printf '%s\n' "JUNO_BASE_URL=${CONSOLE_URL}" > "$DEPLOY_URL_FILE"
+    log "Wrote ${DEPLOY_URL_FILE}"
+    return 0
+  fi
 
   trap '_on_exit' EXIT INT TERM
   log "Entering monitoring dashboard (Ctrl+C to exit & auto-stop)…"
@@ -527,22 +555,62 @@ _probe_coordinator() {
 # _wait_for_ready_and_open is defined below alongside
 # _write_cluster_env_and_start_coordinator (single canonical definition).
 
+# SSH/SCP helpers for gather (quoted argv — avoids word-split on key path).
+_juno_deploy_ssh() {
+  ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+    -o StrictHostKeyChecking=no -o BatchMode=yes -i "$SSH_KEY_FILE" "$@"
+}
+
+_juno_deploy_scp() {
+  scp -o ConnectTimeout=30 -o StrictHostKeyChecking=no -o BatchMode=yes \
+    -i "$SSH_KEY_FILE" "$@"
+}
+
+# Stop JVMs so JFR dumponexit flushes; retries + SIGTERM fallback if systemctl SSH fails.
+_flush_jfr_on_host() {
+  local ip="$1"
+  local attempt errf rc=1
+  errf="$(mktemp)"
+  for attempt in 1 2 3 4 5; do
+    if _juno_deploy_ssh "ubuntu@${ip}" \
+        "/bin/sudo /bin/systemctl stop juno-node 2>/dev/null || true; \
+         /bin/sudo /bin/systemctl stop juno-coordinator 2>/dev/null || true" \
+        2>"$errf"; then
+      rc=0
+      break
+    fi
+    warn "  SSH stop attempt ${attempt}/5 failed on ${ip}: $(head -1 "$errf")"
+    sleep 5
+  done
+  if [[ "$rc" -ne 0 ]]; then
+    warn "  systemctl stop via SSH failed on ${ip} — trying SIGTERM on JVMs…"
+    _juno_deploy_ssh "ubuntu@${ip}" \
+      "/bin/sudo /usr/bin/pkill -TERM -f 'juno-node|juno-coordinator|juno-master' 2>/dev/null || true" \
+      2>/dev/null || true
+    sleep 5
+  fi
+  rm -f "$errf"
+}
+
+_prune_empty_jfr() {
+  local dir="$1"
+  find "$dir" -name '*.jfr' -size 0 -delete 2>/dev/null || true
+}
+
 # ── GATHER JFR METRICS ────────────────────────────────────────
-# Called from _on_exit before stop() when JFR_DURATION is set.
-# 1. SSH each node → SCP /opt/juno/jfr/*.jfr to a local temp dir
-# 2. SCP all JFRs to coordinator's /opt/juno/  (MetricsMain scan root)
-# 3. SSH coordinator → run MetricsMain jar to produce metrics.json
-# 4. SCP metrics.json back → print to stdout
+# Called from _on_exit / finish when JFR_DURATION is set.
 _gather_jfr_metrics() {
   [[ -n "${JFR_DURATION:-}" ]] || return 0
 
   log "Gathering JFR metrics from all nodes…"
+  sleep 2
+
+  _hydrate_instance_ips
 
   local TMP_DIR
   TMP_DIR=$(mktemp -d)
   trap "rm -rf $TMP_DIR" RETURN
 
-  # Determine coordinator host
   local COORD_HOST
   if [[ "$COORDINATOR_MODE" == "separate" && -n "${COORDINATOR_INSTANCE_ID:-}" ]]; then
     COORD_HOST="${INSTANCE_IPS[$COORDINATOR_INSTANCE_ID]}"
@@ -550,58 +618,52 @@ _gather_jfr_metrics() {
     COORD_HOST="${INSTANCE_IPS[${INSTANCE_IDS[0]}]}"
   fi
 
-  local SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes -i $SSH_KEY_FILE"
-
-  # Step 1 — stop services on each node so JFR files are flushed (dumponexit)
-  local IDX=1
+  local ID IP
   for ID in "${INSTANCE_IDS[@]}"; do
-    local IP="${INSTANCE_IPS[$ID]}"
+    IP="${INSTANCE_IPS[$ID]}"
     log "  Stopping juno-node on ${IP} to flush JFR…"
-    ssh $SSH_OPTS "ubuntu@${IP}" \
-      "/bin/sudo /bin/systemctl stop juno-node 2>/dev/null || true; /bin/sudo /bin/systemctl stop juno-coordinator 2>/dev/null || true" \
-      2>/dev/null || warn "  Could not stop services on ${IP} (continuing)"
-    (( IDX++ ))
+    _flush_jfr_on_host "$IP"
   done
-  # Also stop coordinator if separate
   if [[ "$COORDINATOR_MODE" == "separate" && -n "${COORDINATOR_INSTANCE_ID:-}" ]]; then
-    ssh $SSH_OPTS "ubuntu@${COORD_HOST}" \
-      "/bin/sudo /bin/systemctl stop juno-coordinator 2>/dev/null || true" 2>/dev/null || true
+    log "  Stopping juno-coordinator on ${COORD_HOST}…"
+    _flush_jfr_on_host "$COORD_HOST"
   fi
 
-  sleep 3   # brief pause to ensure dumponexit fires
+  sleep 5
 
-  # Step 2 — SCP .jfr files from each node to local temp dir
   for ID in "${INSTANCE_IDS[@]}"; do
-    local IP="${INSTANCE_IPS[$ID]}"
+    IP="${INSTANCE_IPS[$ID]}"
     log "  Fetching JFR files from node ${IP}…"
-    scp $SSH_OPTS -r "ubuntu@${IP}:/opt/juno/jfr/*.jfr" "$TMP_DIR/" 2>/dev/null \
+    _juno_deploy_scp -r "ubuntu@${IP}:/opt/juno/jfr/*.jfr" "$TMP_DIR/" 2>/dev/null \
       || warn "  No JFR files found on ${IP}"
   done
-  # Coordinator (separate mode) has its own recording
   if [[ "$COORDINATOR_MODE" == "separate" && -n "${COORDINATOR_INSTANCE_ID:-}" ]]; then
-    scp $SSH_OPTS -r "ubuntu@${COORD_HOST}:/opt/juno/jfr/*.jfr" "$TMP_DIR/" 2>/dev/null \
+    _juno_deploy_scp -r "ubuntu@${COORD_HOST}:/opt/juno/jfr/*.jfr" "$TMP_DIR/" 2>/dev/null \
       || warn "  No JFR files found on coordinator ${COORD_HOST}"
   fi
 
+  _prune_empty_jfr "$TMP_DIR"
+
   local JFR_COUNT
-  JFR_COUNT=$(find "$TMP_DIR" -name "*.jfr" | wc -l)
+  JFR_COUNT=$(find "$TMP_DIR" -name "*.jfr" -size +0 2>/dev/null | wc -l)
   if [[ "$JFR_COUNT" -eq 0 ]]; then
-    warn "No JFR files collected — skipping metrics extraction."
+    warn "No non-empty JFR files collected — skipping metrics extraction."
     return 0
   fi
-  log "  Collected ${JFR_COUNT} JFR file(s) locally."
+  log "  Collected ${JFR_COUNT} non-empty JFR file(s) locally."
 
-  # Step 3 — SCP all .jfr files to coordinator's home dir (ubuntu-writable; /opt/juno is root-owned)
   local REMOTE_COLLECT="/home/ubuntu/jfr-collect"
   log "  Uploading JFR files to coordinator for extraction…"
-  ssh $SSH_OPTS "ubuntu@${COORD_HOST}" "/bin/mkdir -p ${REMOTE_COLLECT}" 2>/dev/null || true
-  scp $SSH_OPTS "$TMP_DIR"/*.jfr "ubuntu@${COORD_HOST}:${REMOTE_COLLECT}/" \
+  _juno_deploy_ssh "ubuntu@${COORD_HOST}" "/bin/mkdir -p ${REMOTE_COLLECT}" 2>/dev/null || true
+  _juno_deploy_scp "$TMP_DIR"/*.jfr "ubuntu@${COORD_HOST}:${REMOTE_COLLECT}/" \
     || { warn "  Could not upload JFR files to coordinator."; return 0; }
 
-  # Step 4 — Run MetricsMain on coordinator from the collect dir (scans cwd for *.jfr)
+  _juno_deploy_ssh "ubuntu@${COORD_HOST}" \
+    "find ${REMOTE_COLLECT} -maxdepth 1 -name '*.jfr' -size 0 -delete 2>/dev/null || true"
+
   log "  Running MetricsMain on coordinator…"
   local MODEL_STEM="${MODEL_FILENAME%.*}"
-  ssh $SSH_OPTS "ubuntu@${COORD_HOST}" \
+  if ! _juno_deploy_ssh "ubuntu@${COORD_HOST}" \
     "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; \
      cd ${REMOTE_COLLECT} && \
      /bin/mkdir -p metrics/src/main/resources && \
@@ -609,13 +671,27 @@ _gather_jfr_metrics() {
        'if (.models | map(.name) | index(\$name)) == null then .models += [{\"name\":\$name,\"path\":\$path}] else . end' \
        /opt/juno/metrics/src/main/resources/models.json \
        > metrics/src/main/resources/models.json && \
-     /usr/bin/java -cp /opt/juno/metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain 2>&1" \
-    || { warn "  MetricsMain failed on coordinator."; return 0; }
+     /usr/bin/java -cp /opt/juno/metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain 2>&1"; then
+    warn "  MetricsMain failed on coordinator."
+    return 0
+  fi
 
-  # Step 5 — SCP metrics.json back and print
   local LOCAL_JSON="$TMP_DIR/metrics.json"
-  scp $SSH_OPTS "ubuntu@${COORD_HOST}:${REMOTE_COLLECT}/target/metrics/metrics.json" "$LOCAL_JSON" \
+  _juno_deploy_scp "ubuntu@${COORD_HOST}:${REMOTE_COLLECT}/target/metrics/metrics.json" "$LOCAL_JSON" \
     || { warn "  Could not retrieve metrics.json from coordinator."; return 0; }
+
+  local JUNO_ROOT
+  JUNO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  mkdir -p "${JUNO_ROOT}/target/metrics"
+  cp "$LOCAL_JSON" "${JUNO_ROOT}/target/metrics/metrics.json"
+  log "  Metrics saved locally: target/metrics/metrics.json"
+
+  if [[ -n "${JUNO_DEPLOY_METRICS_OUT:-}" && -f "$LOCAL_JSON" ]]; then
+    mkdir -p "$(dirname "$JUNO_DEPLOY_METRICS_OUT")" 2>/dev/null || true
+    cp -f "$LOCAL_JSON" "$JUNO_DEPLOY_METRICS_OUT" \
+      && log "  Metrics copied to ${JUNO_DEPLOY_METRICS_OUT}" \
+      || warn "  Could not copy metrics to ${JUNO_DEPLOY_METRICS_OUT}"
+  fi
 
   log ""
   log "══════════════════════════════════════════════════════════"
@@ -1738,11 +1814,24 @@ _wait_for_ready_and_open() {
   log "  ╚══════════════════════════════════════════════════════╝"
   log ""
 
-  if command -v xdg-open &>/dev/null; then
-    xdg-open "$CONSOLE_URL" &>/dev/null &
-  elif command -v open &>/dev/null; then
-    open "$CONSOLE_URL" &>/dev/null &
+  if [[ "${DEPLOY_NO_BROWSER:-0}" != "1" ]]; then
+    if command -v xdg-open &>/dev/null; then
+      xdg-open "$CONSOLE_URL" &>/dev/null &
+    elif command -v open &>/dev/null; then
+      open "$CONSOLE_URL" &>/dev/null &
+    fi
   fi
+}
+
+# ── FINISH (metrics + teardown) ───────────────────────────────
+finish() {
+  require_cmd ssh   "apt:openssh-client"
+  require_cmd scp   "apt:openssh-client"
+  require_cmd curl  "apt:curl"
+
+  load_state
+  _gather_jfr_metrics
+  teardown
 }
 
 # ── ENTRYPOINT ────────────────────────────────────────────────
@@ -1765,6 +1854,9 @@ case "$MODE" in
   teardown)
     teardown
     ;;
+  finish)
+    finish
+    ;;
   status)
     status
     ;;
@@ -1780,6 +1872,7 @@ case "$MODE" in
     echo "    start          Start a stopped cluster and re-enter dashboard"
     echo "    stop           Stop all instances (EBS + key pair retained)"
     echo "    teardown       Terminate everything — no lingering AWS costs"
+    echo "    finish         Gather JFR metrics (if enabled) then teardown"
     echo "    status         Show instance states and IPs without entering dashboard"
     echo "    scan-regions   List regions where the chosen instance type is available"
     echo ""
@@ -1794,6 +1887,8 @@ case "$MODE" in
     echo "    --dtype FLOAT16|FLOAT32 Activation dtype (default: FLOAT16)"
     echo "    --jfr DURATION          Enable JFR on all nodes + coordinator (e.g. 5m 30s 1h)"
     echo "                            Metrics are gathered and printed on Ctrl+C exit"
+    echo "    --no-browser            Do not open the web console after health OK"
+    echo "    --detach                Print JUNO_BASE_URL and exit (no monitor; use finish later)"
     echo "    --lora-play PATH        Apply a .lora adapter file at inference on every node"
     echo "                            The file must exist at PATH on each node instance"
     echo ""

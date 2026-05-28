@@ -79,6 +79,10 @@ perf_build_deploy_args() {
         DEPLOY_ARGS+=(--git "$PERF_GIT_REF")
     fi
 
+    if [[ "${PERF_USE_DEPLOY_DETACH:-1}" == "1" ]]; then
+        DEPLOY_ARGS+=(--detach --no-browser)
+    fi
+
     PERF_ROW_HW="$hw"
     PERF_ROW_ID="$id"
 }
@@ -101,6 +105,197 @@ perf_wait_for_log_line() {
         fi
         sleep 5
     done
+}
+
+PERF_DEPLOY_JFR_WAIT="${PERF_DEPLOY_JFR_WAIT:-600}"
+PERF_DEPLOY_EXIT_WAIT="${PERF_DEPLOY_EXIT_WAIT:-600}"
+PERF_PRE_SIGINT_WAIT="${PERF_PRE_SIGINT_WAIT:-90}"
+PERF_PRE_SIGINT_SETTLE_SEC="${PERF_PRE_SIGINT_SETTLE_SEC:-3}"
+# 1 = setup --detach --no-browser, then juno-deploy finish (no SIGINT on monitor loop)
+PERF_USE_DEPLOY_DETACH="${PERF_USE_DEPLOY_DETACH:-1}"
+
+# juno-deploy.sh: log "  JFR Cluster Metrics" → "[juno]   JFR Cluster Metrics" after ANSI strip.
+PERF_JFR_METRICS_BANNER_RE='\[juno\][[:space:]]+JFR Cluster Metrics'
+
+# Extract JSON printed by juno-deploy after "JFR Cluster Metrics" (deploy monitor stdout).
+perf_extract_jfr_json_from_deploy_log() {
+    local logfile="$1" outfile="$2"
+    perf_strip_ansi <"$logfile" | awk '
+        /JFR Cluster Metrics/ { want=1; next }
+        want && !json && /^=+/ { next }
+        want && !json && /^\{/ {
+            json=1
+            depth=0
+        }
+        json {
+            line=$0
+            print line
+            for (i = 1; i <= length(line); i++) {
+                c = substr(line, i, 1)
+                if (c == "{") depth++
+                if (c == "}") {
+                    depth--
+                    if (depth == 0) exit
+                }
+            }
+        }
+    ' >"$outfile"
+}
+
+perf_deploy_log_has_jfr_banner() {
+    local logfile="$1"
+    [[ -f "$logfile" ]] || return 1
+    perf_strip_ansi <"$logfile" | grep -qE "$PERF_JFR_METRICS_BANNER_RE"
+}
+
+perf_deploy_log_has_jfr_json() {
+    local logfile="$1" tmp
+    [[ -f "$logfile" ]] || return 1
+    perf_deploy_log_has_jfr_banner "$logfile" || return 1
+    tmp="$(mktemp)"
+    perf_extract_jfr_json_from_deploy_log "$logfile" "$tmp"
+    if [[ -s "$tmp" ]] && command -v jq >/dev/null 2>&1; then
+        jq -e '.models | length > 0' "$tmp" >/dev/null 2>&1
+    elif [[ -s "$tmp" ]]; then
+        grep -q '"models"' "$tmp"
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+    local rc=$?
+    rm -f "$tmp"
+    return "$rc"
+}
+
+perf_count_log_matches() {
+    local logfile="$1" pattern="$2"
+    grep -c "$pattern" "$logfile" 2>/dev/null || true
+}
+
+# Point 4: after HTTP, wait for a fresh monitor refresh line (sleep window, not mid-SSH probe) before SIGINT.
+perf_wait_for_monitor_idle_before_sigint() {
+    local logfile="$1" timeout="${2:-$PERF_PRE_SIGINT_WAIT}"
+    local pattern='Refreshing every 20s'
+    local start now baseline current
+
+    [[ -f "$logfile" ]] || return 1
+    baseline="$(perf_count_log_matches "$logfile" "$pattern")"
+    start="$(date +%s)"
+    log "waiting for monitor idle (${pattern}) before SIGINT (up to ${timeout}s)…"
+
+    while true; do
+        current="$(perf_count_log_matches "$logfile" "$pattern")"
+        if (( current > baseline )); then
+            log "monitor refresh seen — settling ${PERF_PRE_SIGINT_SETTLE_SEC}s before SIGINT"
+            sleep "$PERF_PRE_SIGINT_SETTLE_SEC"
+            return 0
+        fi
+        now="$(date +%s)"
+        if (( now - start >= timeout )); then
+            warn "timed out waiting for ${pattern} in ${logfile} — sending SIGINT anyway"
+            return 1
+        fi
+        if [[ -n "${DEPLOY_PID:-}" ]] && ! kill -0 "$DEPLOY_PID" 2>/dev/null; then
+            warn "deploy exited while waiting for monitor idle"
+            return 1
+        fi
+        sleep 2
+    done
+}
+
+# Wait for deploy log banner "[juno]   JFR Cluster Metrics" and valid JSON after SIGINT.
+perf_wait_for_deploy_jfr() {
+    local logfile="$1" timeout="${2:-$PERF_DEPLOY_JFR_WAIT}"
+    local start now grace=0
+    local -a fail_patterns=(
+        "MetricsMain failed"
+        "No JFR files collected"
+        "Not a valid Flight Recorder file"
+    )
+
+    start="$(date +%s)"
+    while true; do
+        if perf_deploy_log_has_jfr_json "$logfile"; then
+            log "saw [juno]   JFR Cluster Metrics banner and metrics JSON in ${logfile}"
+            return 0
+        fi
+
+        now="$(date +%s)"
+        if (( now - start >= timeout )); then
+            warn "timed out waiting for [juno]   JFR Cluster Metrics in ${logfile}"
+            return 1
+        fi
+
+        for p in "${fail_patterns[@]}"; do
+            if grep -q "$p" "$logfile" 2>/dev/null; then
+                warn "JFR gather failed (${p}) — see ${logfile}"
+                return 1
+            fi
+        done
+
+        if [[ -n "${DEPLOY_PID:-}" ]] && ! kill -0 "$DEPLOY_PID" 2>/dev/null; then
+            while (( grace < 60 )); do
+                if perf_deploy_log_has_jfr_json "$logfile"; then
+                    log "saw [juno]   JFR Cluster Metrics banner and metrics JSON in ${logfile}"
+                    return 0
+                fi
+                sleep 2
+                grace=$((grace + 2))
+            done
+            for p in "${fail_patterns[@]}"; do
+                if grep -q "$p" "$logfile" 2>/dev/null; then
+                    warn "JFR gather failed (${p}) — see ${logfile}"
+                    return 1
+                fi
+            done
+            if grep -q "Caught exit signal" "$logfile" 2>/dev/null; then
+                warn "deploy monitor exited without [juno]   JFR Cluster Metrics in ${logfile}"
+            else
+                warn "deploy exited before JFR gather started"
+            fi
+            return 1
+        fi
+
+        if grep -q "Gathering JFR metrics" "$logfile" 2>/dev/null \
+            && ! perf_deploy_log_has_jfr_banner "$logfile"; then
+            log "deploy monitor gathering JFR (waiting for [juno]   JFR Cluster Metrics in ${logfile})…"
+        fi
+        sleep 5
+    done
+}
+
+perf_collect_metrics_json() {
+    local row_id="$1" column="$2"
+    local dest="${RUN_DIR}/metrics-${row_id}-${column}.json"
+
+    if [[ ! -f "${DEPLOY_LOG:-}" ]]; then
+        warn "deploy log missing: ${DEPLOY_LOG:-?}"
+        return 1
+    fi
+
+    perf_extract_jfr_json_from_deploy_log "$DEPLOY_LOG" "$dest"
+    if [[ -s "$dest" ]] && command -v jq >/dev/null 2>&1 && jq -e '.models | length > 0' "$dest" >/dev/null 2>&1; then
+        log "metrics JSON: ${dest} (from deploy monitor console output)"
+        return 0
+    fi
+    if [[ -s "$dest" ]] && grep -q '"models"' "$dest"; then
+        log "metrics JSON: ${dest} (from deploy monitor console output)"
+        return 0
+    fi
+
+    rm -f "$dest"
+    warn "no [juno]   JFR Cluster Metrics JSON in ${DEPLOY_LOG}"
+    return 1
+}
+
+perf_log_deploy_jfr_tail() {
+    local logfile="$1"
+    [[ -f "$logfile" ]] || return 0
+    log "deploy log tail (JFR / exit):"
+    perf_strip_ansi <"$logfile" | awk '
+        /Caught exit signal|Gathering JFR|JFR Cluster Metrics|MetricsMain|Flight Recorder|No JFR files/ { show=1 }
+        show { print }
+    ' | tail -n 25
 }
 
 perf_strip_ansi() {
@@ -140,7 +335,7 @@ perf_wait_for_api() {
             return 1
         fi
         if (( (now - start) % 30 < 5 )); then
-            log "still waiting for API (${now - start}s)…"
+            log "still waiting for API ($(( now - start ))s)…"
         fi
         sleep 5
     done
@@ -384,26 +579,33 @@ perf_interrupt_deploy_for_jfr() {
 
     target_pid="$(perf_resolve_deploy_pid)"
     pgid="$(ps -o pgid= -p "$target_pid" 2>/dev/null | tr -d ' ')"
-    log "sending SIGINT (Ctrl+C) to deploy monitor pgid=${pgid:-?} pid=${target_pid} to gather JFR…"
+    log "sending SIGINT (Ctrl+C) to deploy monitor pgid=${pgid:-?} pid=${target_pid}…"
+    log "waiting for [juno]   JFR Cluster Metrics in ${DEPLOY_LOG} (deploy monitor console)"
     perf_signal_deploy INT
 
-    if ! perf_wait_for_log_line "$DEPLOY_LOG" "JFR Cluster Metrics" 600; then
-        warn "JFR Cluster Metrics not seen in ${DEPLOY_LOG} within 600s"
-        perf_wait_for_deploy_exit 120
-        return 1
+    if perf_wait_for_deploy_jfr "$DEPLOY_LOG" "$PERF_DEPLOY_JFR_WAIT"; then
+        log "[juno]   JFR Cluster Metrics captured from deploy monitor"
+        perf_wait_for_deploy_exit "$PERF_DEPLOY_EXIT_WAIT"
+        return 0
     fi
 
-    log "JFR metrics captured in deploy log"
-    perf_wait_for_deploy_exit 300
-    return 0
+    perf_log_deploy_jfr_tail "$DEPLOY_LOG"
+    warn "letting deploy monitor finish stop (up to ${PERF_DEPLOY_EXIT_WAIT}s)…"
+    perf_wait_for_deploy_exit "$PERF_DEPLOY_EXIT_WAIT"
+    return 1
 }
 
 perf_save_jfr_fragment() {
     local row_id="$1" column="$2"
-    [[ -f "${DEPLOY_LOG:-}" ]] || return 0
+    local metrics_file="${RUN_DIR}/metrics-${row_id}-${column}.json"
+
     {
         echo "===== row=${row_id} column=${column} hw=${PERF_ROW_HW} ====="
-        awk '/JFR Cluster Metrics/{show=1} show{print}' "$DEPLOY_LOG"
+        if [[ -f "$metrics_file" ]]; then
+            cat "$metrics_file"
+        elif [[ -f "${DEPLOY_LOG:-}" ]]; then
+            awk '/JFR Cluster Metrics/{show=1} show{print}' "$DEPLOY_LOG"
+        fi
         echo ""
     } >> "${RUN_DIR}/metrics-fragments.log"
 }
@@ -432,13 +634,58 @@ perf_abort_test_cycle() {
     perf_teardown_cluster
 }
 
+perf_run_deploy_finish() {
+    local metrics_out="$1"
+    local launcher="${ROOT}/scripts/aws/launcher.sh"
+    local rc=0
+
+    log "juno-deploy finish (JFR gather + teardown) → ${metrics_out}"
+    set +e
+    (
+        export JUNO_DEPLOY_METRICS_OUT="$metrics_out"
+        cd "${ROOT}/scripts/aws"
+        "$launcher" juno-deploy.sh finish
+    ) 2>&1 | tee -a "${DEPLOY_LOG:-/dev/null}"
+    rc="${PIPESTATUS[0]}"
+    set -e
+
+    if [[ "$rc" -ne 0 ]]; then
+        warn "juno-deploy finish exited with ${rc}"
+        return 1
+    fi
+    if [[ -s "$metrics_out" ]] && command -v jq >/dev/null 2>&1 \
+        && jq -e '.models | length > 0' "$metrics_out" >/dev/null 2>&1; then
+        log "[juno]   JFR Cluster Metrics captured via finish"
+        return 0
+    fi
+    if perf_deploy_log_has_jfr_json "${DEPLOY_LOG:-}"; then
+        log "[juno]   JFR Cluster Metrics captured via finish (deploy log)"
+        return 0
+    fi
+    warn "finish completed but metrics missing: ${metrics_out}"
+    return 1
+}
+
 perf_finish_test_cycle() {
     local row_id="$1" column="$2"
+    local metrics_dest="${RUN_DIR}/metrics-${row_id}-${column}.json"
+
+    if [[ "${PERF_USE_DEPLOY_DETACH:-1}" == "1" ]]; then
+        if perf_run_deploy_finish "$metrics_dest"; then
+            perf_save_jfr_fragment "$row_id" "$column"
+        else
+            warn "JFR gather incomplete for row=${row_id} column=${column}"
+            perf_teardown_cluster
+        fi
+        return
+    fi
 
     if ! perf_interrupt_deploy_for_jfr; then
         warn "JFR gather incomplete for row=${row_id} column=${column}"
-    else
+    elif perf_collect_metrics_json "$row_id" "$column"; then
         perf_save_jfr_fragment "$row_id" "$column"
+    else
+        warn "JFR metrics not saved for row=${row_id} column=${column}"
     fi
 
     perf_teardown_cluster
@@ -483,7 +730,19 @@ perf_run_single_test_attempt() {
 
     perf_start_deploy
 
-    if ! perf_wait_for_log_line "$DEPLOY_LOG" "JUNO CLUSTER MONITOR" 5400; then
+    if [[ "${PERF_USE_DEPLOY_DETACH:-1}" == "1" ]]; then
+        if ! perf_wait_for_log_line "$DEPLOY_LOG" "Coordinator is healthy" 5400; then
+            warn "coordinator health not seen — checking deploy log tail"
+            tail -n 30 "$DEPLOY_LOG" >&2 || true
+            perf_abort_test_cycle
+            return 1
+        fi
+        if ! perf_wait_for_deploy_exit 600; then
+            warn "deploy setup did not exit cleanly"
+            perf_abort_test_cycle
+            return 1
+        fi
+    elif ! perf_wait_for_log_line "$DEPLOY_LOG" "JUNO CLUSTER MONITOR" 5400; then
         warn "monitor banner not seen — checking deploy log tail"
         tail -n 30 "$DEPLOY_LOG" >&2 || true
         perf_abort_test_cycle
@@ -493,7 +752,11 @@ perf_run_single_test_attempt() {
     console_url="$(perf_extract_console_url "$DEPLOY_LOG")" \
         || { perf_abort_test_cycle; die "could not parse coordinator URL from ${DEPLOY_LOG}"; }
 
-    log "cluster monitor up — console ${console_url}"
+    if [[ "${PERF_USE_DEPLOY_DETACH:-1}" == "1" ]]; then
+        log "cluster ready (detach) — console ${console_url}"
+    else
+        log "cluster monitor up — console ${console_url}"
+    fi
 
     if ! perf_wait_for_api "$console_url" 300; then
         warn "API health check timed out for ${console_url}"
@@ -514,7 +777,14 @@ perf_run_single_test_attempt() {
     fi
 
     log "HTTP test finished — responses in ${outdir}"
-    log "Ctrl+C equivalent on deploy monitor → wait JFR → teardown"
+
+    if [[ "${PERF_USE_DEPLOY_DETACH:-1}" == "1" ]]; then
+        log "juno-deploy finish → wait for [juno]   JFR Cluster Metrics → teardown"
+    else
+        perf_wait_for_monitor_idle_before_sigint "$DEPLOY_LOG" "$PERF_PRE_SIGINT_WAIT" \
+            || warn "monitor idle wait incomplete — continuing with SIGINT"
+        log "Ctrl+C equivalent on deploy monitor → wait for [juno]   JFR Cluster Metrics → teardown"
+    fi
 
     perf_finish_test_cycle "$row_id" "$column"
     log "=== test complete: row=${row_id} column=${column} (cluster torn down) ==="

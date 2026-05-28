@@ -2,7 +2,7 @@
 # performance-test.sh — AWS perf runner and matrix generator
 #
 # No arguments: start detached worker in a screen session. Each queue item
-# (l1, l9, c1, c9) gets its own deploy → HTTP test → SIGINT/JFR → teardown.
+# (l1, l9, c1, c9) gets its own deploy (--detach) → HTTP test → finish (JFR + teardown).
 #
 #   ./scripts/performance-test.sh              # screen worker (pending matrix cells)
 #   ./scripts/performance-test.sh --foreground # worker in foreground
@@ -202,7 +202,7 @@ worker_main() {
 
     while IFS=$'\t' read -r row_id column; do
         [[ -z "$row_id" ]] && continue
-        log "queue item: row=${row_id} column=${column} (fresh deploy → test → SIGINT/JFR → teardown)"
+        log "queue item: row=${row_id} column=${column} (deploy --detach → test → finish)"
         if ! perf_run_single_test "$row_id" "$column"; then
             warn "test failed: row=${row_id} column=${column} (continuing queue)"
         fi
