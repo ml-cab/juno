@@ -36,12 +36,12 @@ import static java.lang.foreign.ValueLayout.JAVA_SHORT;
  * performs synchronous D2H copy of y; frees the temporary buffers.
  *
  * <p>Device-resident paths ({@link DeviceFloatMatrix}, {@link DeviceHalfMatrix})
- * are not yet supported — those classes internally call {@link CudaBindings} for
- * memory management. Use the host-weight path ({@code sgemv(float[], float[], int, int)})
- * or contribute {@code RocmDeviceFloatMatrix} / {@code RocmDeviceHalfMatrix} analogues.
+ * keep A on the GPU across calls; only x and y cross the bus per matmul. The
+ * device matrices allocate through the vendor-neutral {@link GpuBindings} from
+ * {@link GpuContext#bindings()}, so they work identically on AMD and NVIDIA.
  *
- * <p>Per-thread HIP streams are used for the resident-A async path (same
- * pattern as {@link CudaMatVec}). The serialization lock from
+ * <p>Per-thread HIP streams back the resident async path (same pattern as
+ * {@link CudaMatVec}). The serialization lock from
  * {@link GpuContext#cublasSerializationLock()} guards rocBLAS handle usage.
  *
  * <p>Requires JVM flag: {@code --enable-native-access=ALL-UNNAMED}.
@@ -49,7 +49,7 @@ import static java.lang.foreign.ValueLayout.JAVA_SHORT;
  * @see GpuContext#createMatVec()
  * @see RocmBindings
  */
-public final class RocmMatVec implements MatVec {
+public final class RocmMatVec implements GpuMatVec {
 
     @SuppressWarnings("unused")
     private static final Logger log = Logger.getLogger(RocmMatVec.class.getName());
@@ -60,20 +60,31 @@ public final class RocmMatVec implements MatVec {
     private final RocmBindings rocm;
 
     // ── Per-thread device scratch ─────────────────────────────────────────────
-    private static final ThreadLocal<Scratch> SCRATCH =
-        ThreadLocal.withInitial(Scratch::new);
+    // ── Per-thread device scratch (FP32 resident path) ────────────────────
+    private static final ThreadLocal<Fp32Scratch> FP32_SCRATCH =
+        ThreadLocal.withInitial(Fp32Scratch::new);
 
-    // ── Per-thread HIP stream ─────────────────────────────────────────────────
+    // ── Per-thread device scratch (FP16 resident path) ────────────────────
+    private static final ThreadLocal<Fp16Scratch> FP16_SCRATCH =
+        ThreadLocal.withInitial(Fp16Scratch::new);
+
+    // ── Per-thread HIP stream ───────────────────────────────────
     private static final ThreadLocal<MemorySegment> HIP_STREAM =
         ThreadLocal.withInitial(() -> null);
 
-    private static final class Scratch {
+    private static final class Fp32Scratch {
         MemorySegment dX;
         MemorySegment dY;
         long dXBytes;
         long dYBytes;
     }
 
+    private static final class Fp16Scratch {
+        MemorySegment dXh;  // device FP16 x, grown as needed
+        MemorySegment dY;   // device FP32 y, grown as needed
+        long dXhBytes;
+        long dYBytes;
+    }
     // ── Construction ──────────────────────────────────────────────────────────
 
     /**
@@ -93,6 +104,18 @@ public final class RocmMatVec implements MatVec {
     }
 
     GpuContext gpuContext() { return ctx; }
+
+    // ── Upload helpers (for transformer handlers) ───────────────────────
+
+    @Override
+    public DeviceFloatMatrix upload(float[] host, int rows, int cols) {
+        return DeviceFloatMatrix.upload(ctx, host, rows, cols);
+    }
+
+    @Override
+    public DeviceHalfMatrix uploadHalf(float[] host, int rows, int cols) {
+        return DeviceHalfMatrix.uploadFromFloat32(ctx, host, rows, cols);
+    }
 
     // ── MatVec ────────────────────────────────────────────────────────────────
 
@@ -164,32 +187,135 @@ public final class RocmMatVec implements MatVec {
     }
 
     /**
-     * Device-resident FP32 path — not yet supported on ROCm.
+     * Device-resident FP32 path: A stays on the device across calls.
      *
-     * {@link DeviceFloatMatrix} allocates memory via {@link CudaBindings} internally.
-     * Contribute {@code RocmDeviceFloatMatrix} to enable this path on AMD GPUs.
-     *
-     * @throws UnsupportedOperationException always
+     * Per-thread scratch buffers for x and y are grown lazily and reused. The
+     * D2H copy uses a confined off-heap arena so the async HIP stream never
+     * targets a GC-moveable heap address. Mirrors
+     * {@link CudaMatVec#sgemv(DeviceFloatMatrix, float[])}.
      */
     @Override
     public float[] sgemv(DeviceFloatMatrix A, float[] x) {
-        throw new UnsupportedOperationException(
-            "RocmMatVec: device-resident FP32 path not yet supported. " +
-            "DeviceFloatMatrix uses CudaBindings internally. " +
-            "See GpuContext.createMatVec() javadoc for the host-weight workaround.");
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        if (A.isClosed()) throw new IllegalStateException("DeviceFloatMatrix is closed");
+        int rows = A.rows(), cols = A.cols();
+        if (x.length != cols)
+            throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+
+        long bytesX = (long) cols * Float.BYTES;
+        long bytesY = (long) rows * Float.BYTES;
+
+        Fp32Scratch scratch = FP32_SCRATCH.get();
+
+        try (Arena callArena = Arena.ofConfined()) {
+            synchronized (ctx.cublasSerializationLock()) {
+                MemorySegment stream = ensureStream();
+                bindStream(stream);
+                try {
+                    ensureFp32Scratch(scratch, bytesX, bytesY);
+
+                    // H2D of x — stage heap→native first (Java 25 forbids heap segments in downcalls).
+                    MemorySegment stagingX = callArena.allocate(bytesX);
+                    stagingX.copyFrom(MemorySegment.ofArray(x));
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.cudaMemcpyAsync(),
+                            scratch.dX, stagingX, bytesX, GpuBindings.H2D, stream),
+                        "hipMemcpyAsync(x H2D)");
+
+                    callSgemvFp32(A.devicePointer(), cols, scratch.dX, scratch.dY, rows, cols);
+
+                    MemorySegment stagingY = callArena.allocate(bytesY);
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.cudaMemcpyAsync(),
+                            stagingY, scratch.dY, bytesY, GpuBindings.D2H, stream),
+                        "hipMemcpyAsync(y D2H)");
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.cudaStreamSynchronize(), stream),
+                        "hipStreamSynchronize");
+
+                    float[] y = new float[rows];
+                    MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
+                    return y;
+                } finally {
+                    unbindStream();
+                }
+            }
+        } finally {
+            evt.backend = "rocm-resident";
+            evt.rows = rows;
+            evt.cols = cols;
+            evt.commit();
+        }
     }
 
     /**
-     * Device-resident FP16 path — not yet supported on ROCm.
+     * Device-resident FP16 path: A is FP16 on the device; x is FP32 on the host.
      *
-     * @throws UnsupportedOperationException always
+     * x is converted to FP16 in a confined off-heap arena and uploaded; the
+     * {@code rocblas_hssgemv_strided_batched} kernel (batch=1) accumulates in
+     * FP32. Mirrors {@link CudaMatVec#sgemv(DeviceHalfMatrix, float[])}.
      */
     @Override
     public float[] sgemv(DeviceHalfMatrix A, float[] x) {
-        throw new UnsupportedOperationException(
-            "RocmMatVec: device-resident FP16 path not yet supported. " +
-            "DeviceHalfMatrix uses CudaBindings internally. " +
-            "See GpuContext.createMatVec() javadoc for the host-weight workaround.");
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        if (A.isClosed()) throw new IllegalStateException("DeviceHalfMatrix is closed");
+        int rows = A.rows(), cols = A.cols();
+        if (x.length != cols)
+            throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+
+        long bytesXh = (long) cols * Short.BYTES;  // FP16
+        long bytesY  = (long) rows * Float.BYTES;  // FP32
+
+        Fp16Scratch scratch = FP16_SCRATCH.get();
+
+        try (Arena callArena = Arena.ofConfined()) {
+            synchronized (ctx.cublasSerializationLock()) {
+                MemorySegment stream = ensureStream();
+                bindStream(stream);
+                try {
+                    ensureFp16Scratch(scratch, bytesXh, bytesY);
+
+                    // Pack x as FP16 into off-heap staging. JAVA_SHORT has native byte order
+                    // (little-endian on x86), matching HIP's __half layout.
+                    MemorySegment stagingXh = callArena.allocate(bytesXh);
+                    for (int j = 0; j < cols; j++)
+                        stagingXh.setAtIndex(JAVA_SHORT, j, Float.floatToFloat16(x[j]));
+
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.cudaMemcpyAsync(),
+                            scratch.dXh, stagingXh, bytesXh, GpuBindings.H2D, stream),
+                        "hipMemcpyAsync(xh H2D)");
+
+                    callSgemvFp16(A.devicePointer(), cols, scratch.dXh, scratch.dY, rows, cols);
+
+                    MemorySegment stagingY = callArena.allocate(bytesY);
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.cudaMemcpyAsync(),
+                            stagingY, scratch.dY, bytesY, GpuBindings.D2H, stream),
+                        "hipMemcpyAsync(y D2H)");
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.cudaStreamSynchronize(), stream),
+                        "hipStreamSynchronize");
+
+                    float[] y = new float[rows];
+                    MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
+                    return y;
+                } finally {
+                    unbindStream();
+                }
+            }
+        } finally {
+            evt.backend = "rocm-resident-fp16";
+            evt.rows = rows;
+            evt.cols = cols;
+            evt.commit();
+        }
     }
 
     // ── rocBLAS GEMV ──────────────────────────────────────────────────────────
@@ -219,6 +345,37 @@ public final class RocmMatVec implements MatVec {
                     dX, 1,
                     beta, dY, 1),
                 "rocblas_sgemv");
+        }
+    }
+
+    /**
+     * rocblas_hssgemv_strided_batched: y(FP32) = A(FP16) * x(FP16), batch=1.
+     *
+     * <p>Same (trans, m, n, lda) mapping as {@link #callSgemvFp32}; alpha/beta
+     * are FP32 (host pointer mode). This is the rocBLAS analogue of cuBLAS's
+     * {@code cublasHSSgemvStridedBatched}.
+     */
+    private void callSgemvFp16(MemorySegment dA, int lda,
+                                MemorySegment dXh, MemorySegment dY,
+                                int rows, int cols) {
+        long strideA = (long) cols * rows;
+        long strideX = cols;
+        long strideY = rows;
+        try (Arena scalars = Arena.ofConfined()) {
+            MemorySegment alpha = scalars.allocateFrom(JAVA_FLOAT, 1.0f);
+            MemorySegment beta  = scalars.allocateFrom(JAVA_FLOAT, 0.0f);
+            GpuBindings.check(
+                GpuBindings.callInt(rocm.cublasSetPointerMode(), ctx.handle(), rocm.pointerModeHost()),
+                "rocblas_set_pointer_mode");
+            GpuBindings.check(
+                GpuBindings.callInt(rocm.cublasHSSgemvStridedBatched(),
+                    ctx.handle(), rocm.opTranspose(),
+                    cols, rows,
+                    alpha, dA, lda, strideA,
+                    dXh, 1, strideX,
+                    beta, dY, 1, strideY,
+                    1),
+                "rocblas_hssgemv_strided_batched");
         }
     }
 
@@ -255,12 +412,26 @@ public final class RocmMatVec implements MatVec {
 
     // ── Scratch growth ────────────────────────────────────────────────────────
 
-    private void ensureScratch(Scratch s, long bytesX, long bytesY) {
+    private void ensureFp32Scratch(Fp32Scratch s, long bytesX, long bytesY) {
         int dev = ctx.deviceIndex();
         if (s.dXBytes < bytesX) {
             rocm.deviceFree(s.dX);
             s.dX     = rocm.deviceMalloc(dev, bytesX);
             s.dXBytes = bytesX;
+        }
+        if (s.dYBytes < bytesY) {
+            rocm.deviceFree(s.dY);
+            s.dY     = rocm.deviceMalloc(dev, bytesY);
+            s.dYBytes = bytesY;
+        }
+    }
+
+    private void ensureFp16Scratch(Fp16Scratch s, long bytesXh, long bytesY) {
+        int dev = ctx.deviceIndex();
+        if (s.dXhBytes < bytesXh) {
+            rocm.deviceFree(s.dXh);
+            s.dXh     = rocm.deviceMalloc(dev, bytesXh);
+            s.dXhBytes = bytesXh;
         }
         if (s.dYBytes < bytesY) {
             rocm.deviceFree(s.dY);

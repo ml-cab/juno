@@ -249,11 +249,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		log.info("Shard loaded — " + L + " layers, " + (hasEmbeddings ? "with embeddings, " : "")
 				+ (hasOutputProj ? "with output projection" : "no output projection"));
 
-		// Upload dequantized weights to GPU when a CudaMatVec backend is provided.
+		// Upload dequantized weights to GPU when a GPU backend is provided.
 		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
 		outputProjDev = null;
-		if (backend instanceof CudaMatVec cuda) {
-			log.info("Uploading dequantized weights to GPU (FP16 cuda-resident)…");
+		if (backend instanceof GpuMatVec cuda) {
+			log.info("Uploading dequantized weights to GPU (FP16 device-resident)…");
 			int H  = cfg.hiddenDim();
 			int KV = cfg.kvDim();
 			int I  = cfg.intermediateSize();
@@ -298,7 +298,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				if (outD != null)
 					outD.close();
 				String msg = ex.getMessage() == null ? "" : ex.getMessage();
-				if (msg.contains("cudaMalloc")) {
+				if (msg.contains("cudaMalloc") || msg.contains("hipMalloc")) {
 					log.warning("Llama: insufficient GPU VRAM for FP16-resident weights (" + msg
 							+ "). Using CPU quantised matmul for projections.");
 				} else {

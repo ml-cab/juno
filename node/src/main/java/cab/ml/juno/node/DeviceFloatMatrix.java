@@ -15,6 +15,7 @@
  */
 package cab.ml.juno.node;
 
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
@@ -22,11 +23,15 @@ import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 /**
  * Row-major FP32 weight matrix resident on the GPU.
  *
- * The device memory is allocated once via {@link CudaBindings#deviceMalloc} and
+ * The device memory is allocated once via {@link GpuBindings#deviceMalloc} and
  * freed by {@link #close}. The backing {@link MemorySegment} is sized to
  * {@code rows * cols * 4} bytes so bounds checks work at the Java level.
  *
- * Used with {@link CudaMatVec#sgemv(DeviceFloatMatrix, float[])} so each
+ * Vendor-neutral: all device operations go through the {@link GpuBindings}
+ * obtained from {@link GpuContext#bindings()} (captured at construction), so the
+ * same class serves both CUDA and ROCm backends.
+ *
+ * Used with {@link MatVec#sgemv(DeviceFloatMatrix, float[])} so each
  * matmul skips re-uploading A.
  *
  * @author Yevhen Soldatov
@@ -34,6 +39,7 @@ import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 public final class DeviceFloatMatrix implements AutoCloseable {
 
     private final GpuContext    ctx;
+    private final GpuBindings   gpu;
     /** Device pointer, sized to rows * cols * Float.BYTES. */
     private final MemorySegment dA;
     private final int           rows;
@@ -42,6 +48,7 @@ public final class DeviceFloatMatrix implements AutoCloseable {
 
     private DeviceFloatMatrix(GpuContext ctx, MemorySegment dA, int rows, int cols) {
         this.ctx  = ctx;
+        this.gpu  = ctx.bindings();
         this.dA   = dA;
         this.rows = rows;
         this.cols = cols;
@@ -62,14 +69,19 @@ public final class DeviceFloatMatrix implements AutoCloseable {
             throw new IllegalArgumentException(
                 "host.length=" + host.length + " != rows*cols=" + ((long) rows * cols));
 
-        CudaBindings   cuda  = CudaBindings.instance();
+        GpuBindings    gpu   = ctx.bindings();
         long           bytes = (long) rows * cols * Float.BYTES;
-        MemorySegment  dA    = cuda.deviceMalloc(ctx.deviceIndex(), bytes);
+        MemorySegment  dA    = gpu.deviceMalloc(ctx.deviceIndex(), bytes);
 
-        // MemorySegment.ofArray pins the heap array for the duration of the downcall.
-        CudaBindings.check(
-            CudaBindings.callInt(cuda.cudaMemcpy, dA, MemorySegment.ofArray(host), bytes, CudaBindings.H2D),
-            "cudaMemcpy(A H2D)");
+        // Stage the heap array into an off-heap (native) buffer first; Java 25
+        // Panama forbids passing heap-backed MemorySegments to native downcalls.
+        try (Arena staging = Arena.ofConfined()) {
+            MemorySegment nativeHost = staging.allocate(bytes);
+            nativeHost.copyFrom(MemorySegment.ofArray(host));
+            GpuBindings.check(
+                GpuBindings.callInt(gpu.cudaMemcpy(), dA, nativeHost, bytes, GpuBindings.H2D),
+                "memcpy(A H2D)");
+        }
 
         return new DeviceFloatMatrix(ctx, dA, rows, cols);
     }
@@ -92,8 +104,8 @@ public final class DeviceFloatMatrix implements AutoCloseable {
     public void close() {
         if (!closed) {
             closed = true;
-            CudaBindings.callInt(CudaBindings.instance().cudaSetDevice, ctx.deviceIndex());
-            CudaBindings.instance().deviceFree(dA);
+            GpuBindings.callInt(gpu.cudaSetDevice(), ctx.deviceIndex());
+            gpu.deviceFree(dA);
         }
     }
 }

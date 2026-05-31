@@ -126,22 +126,59 @@ class RocmMatVecTest extends MatVecBackendContractTest {
         assertThat(y[1]).isCloseTo(15.0f, within(1e-5f));
     }
 
-    // ── Unsupported device-resident paths ─────────────────────────────────────
+    // ── Device-resident paths (A held on the GPU across calls) ─────────────────
 
     @Test
-    @DisplayName("sgemv(DeviceFloatMatrix, x) throws UnsupportedOperationException")
-    void device_float_matrix_throws_unsupported() {
+    @DisplayName("sgemv(DeviceFloatMatrix, x) rejects a null matrix")
+    void device_float_matrix_rejects_null() {
         assertThatThrownBy(() -> rocmImpl.sgemv((DeviceFloatMatrix) null, new float[]{1f}))
-            .isInstanceOf(UnsupportedOperationException.class)
-            .hasMessageContaining("device-resident FP32 path not yet supported");
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("A must not be null");
     }
 
     @Test
-    @DisplayName("sgemv(DeviceHalfMatrix, x) throws UnsupportedOperationException")
-    void device_half_matrix_throws_unsupported() {
+    @DisplayName("sgemv(DeviceHalfMatrix, x) rejects a null matrix")
+    void device_half_matrix_rejects_null() {
         assertThatThrownBy(() -> rocmImpl.sgemv((DeviceHalfMatrix) null, new float[]{1f}))
-            .isInstanceOf(UnsupportedOperationException.class)
-            .hasMessageContaining("device-resident FP16 path not yet supported");
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("A must not be null");
+    }
+
+    @Test
+    @DisplayName("device-resident FP32 path matches CPU reference — 2048×2048")
+    void device_resident_fp32_matches_cpu_reference() {
+        int rows = 2048, cols = 2048;
+        float[] A = randomMatrix(rows, cols, 200);
+        float[] x = randomVector(cols, 201);
+
+        float[] cpuResult = LlamaTransformerHandler.matVec(A, x, rows, cols);
+        try (DeviceFloatMatrix dA = rocmImpl.upload(A, rows, cols)) {
+            float[] rocmResult = rocmImpl.sgemv(dA, x);
+            assertThat(rocmResult).hasSize(rows);
+            for (int i = 0; i < rows; i++)
+                assertThat(rocmResult[i])
+                    .as("y[%d]", i)
+                    .isCloseTo(cpuResult[i], within(DELTA));
+        }
+    }
+
+    @Test
+    @DisplayName("device-resident FP16 path matches CPU reference — 2048×2048 (FP16 tolerance)")
+    void device_resident_fp16_matches_cpu_reference() {
+        int rows = 2048, cols = 2048;
+        float[] A = randomMatrix(rows, cols, 210);
+        float[] x = randomVector(cols, 211);
+
+        float[] cpuResult = LlamaTransformerHandler.matVec(A, x, rows, cols);
+        try (DeviceHalfMatrix dA = rocmImpl.uploadHalf(A, rows, cols)) {
+            float[] rocmResult = rocmImpl.sgemv(dA, x);
+            assertThat(rocmResult).hasSize(rows);
+            // FP16 weights/activations: looser tolerance than the FP32 paths.
+            for (int i = 0; i < rows; i++)
+                assertThat(rocmResult[i])
+                    .as("y[%d]", i)
+                    .isCloseTo(cpuResult[i], within(1e-3f));
+        }
     }
 
     // ── Constructor validation ────────────────────────────────────────────────

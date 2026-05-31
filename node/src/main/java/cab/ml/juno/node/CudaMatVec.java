@@ -58,7 +58,7 @@ import static java.lang.foreign.ValueLayout.JAVA_SHORT;
  *
  * @author Yevhen Soldatov
  */
-public final class CudaMatVec implements MatVec {
+public final class CudaMatVec implements GpuMatVec {
 
     @SuppressWarnings("unused")
     private static final Logger log = Logger.getLogger(CudaMatVec.class.getName());
@@ -111,11 +111,13 @@ public final class CudaMatVec implements MatVec {
 
     // ── Upload helpers (for LlamaTransformerHandler / LoraTrainableHandler) ──
 
-    DeviceFloatMatrix upload(float[] host, int rows, int cols) {
+    @Override
+    public DeviceFloatMatrix upload(float[] host, int rows, int cols) {
         return DeviceFloatMatrix.upload(ctx, host, rows, cols);
     }
 
-    DeviceHalfMatrix uploadHalf(float[] host, int rows, int cols) {
+    @Override
+    public DeviceHalfMatrix uploadHalf(float[] host, int rows, int cols) {
         return DeviceHalfMatrix.uploadFromFloat32(ctx, host, rows, cols);
     }
 

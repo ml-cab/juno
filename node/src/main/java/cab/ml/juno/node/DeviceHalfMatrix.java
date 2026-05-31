@@ -31,12 +31,17 @@ import static java.lang.foreign.ValueLayout.JAVA_SHORT;
  * before upload, avoiding any GC-visible byte array allocation for the staging
  * buffer. The H2D transfer uses synchronous {@code cudaMemcpy}.
  *
- * Used with {@link CudaMatVec#sgemv(DeviceHalfMatrix, float[])} (mixed
- * FP16/FP32 cuBLAS path) so activations stay float32 while weights stay compact.
+ * Used with {@link MatVec#sgemv(DeviceHalfMatrix, float[])} (mixed
+ * FP16/FP32 BLAS path) so activations stay float32 while weights stay compact.
+ *
+ * Vendor-neutral: device operations go through the {@link GpuBindings} obtained
+ * from {@link GpuContext#bindings()} (captured at construction), so the same
+ * class serves both CUDA and ROCm backends.
  */
 public final class DeviceHalfMatrix implements AutoCloseable {
 
     private final GpuContext    ctx;
+    private final GpuBindings   gpu;
     /** Device pointer, sized to rows * cols * Short.BYTES. */
     private final MemorySegment dA;
     private final int           rows;
@@ -45,6 +50,7 @@ public final class DeviceHalfMatrix implements AutoCloseable {
 
     private DeviceHalfMatrix(GpuContext ctx, MemorySegment dA, int rows, int cols) {
         this.ctx  = ctx;
+        this.gpu  = ctx.bindings();
         this.dA   = dA;
         this.rows = rows;
         this.cols = cols;
@@ -64,21 +70,21 @@ public final class DeviceHalfMatrix implements AutoCloseable {
             throw new IllegalArgumentException(
                 "host.length=" + host.length + " != rows*cols=" + ((long) rows * cols));
 
-        CudaBindings  cuda      = CudaBindings.instance();
+        GpuBindings   gpu       = ctx.bindings();
         int           n         = rows * cols;
         long          halfBytes = (long) n * Short.BYTES;
-        MemorySegment dA        = cuda.deviceMalloc(ctx.deviceIndex(), halfBytes);
+        MemorySegment dA        = gpu.deviceMalloc(ctx.deviceIndex(), halfBytes);
 
         // Pack float32 → FP16 into off-heap staging; JAVA_SHORT has native byte order
-        // (little-endian on x86), matching CUDA's __half memory layout.
+        // (little-endian on x86), matching CUDA's __half / HIP's __half memory layout.
         try (Arena staging = Arena.ofConfined()) {
             MemorySegment stagingHost = staging.allocate(halfBytes);
             for (int i = 0; i < n; i++)
                 stagingHost.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(host[i]));
 
-            CudaBindings.check(
-                CudaBindings.callInt(cuda.cudaMemcpy, dA, stagingHost, halfBytes, CudaBindings.H2D),
-                "cudaMemcpy(A FP16 H2D)");
+            GpuBindings.check(
+                GpuBindings.callInt(gpu.cudaMemcpy(), dA, stagingHost, halfBytes, GpuBindings.H2D),
+                "memcpy(A FP16 H2D)");
         }
 
         return new DeviceHalfMatrix(ctx, dA, rows, cols);
@@ -102,8 +108,8 @@ public final class DeviceHalfMatrix implements AutoCloseable {
     public void close() {
         if (!closed) {
             closed = true;
-            CudaBindings.callInt(CudaBindings.instance().cudaSetDevice, ctx.deviceIndex());
-            CudaBindings.instance().deviceFree(dA);
+            GpuBindings.callInt(gpu.cudaSetDevice(), ctx.deviceIndex());
+            gpu.deviceFree(dA);
         }
     }
 }
