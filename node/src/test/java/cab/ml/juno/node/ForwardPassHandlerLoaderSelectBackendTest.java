@@ -66,6 +66,7 @@ class ForwardPassHandlerLoaderSelectBackendTest {
     @DisplayName("JUNO_USE_GPU=true on CPU-only machine → falls back to CpuMatVec")
     void gpu_flag_true_no_cuda_falls_back_to_cpu() {
         assumeFalse(CudaAvailability.isAvailable(), "Skipping — CUDA present on this machine");
+        assumeFalse(RocmAvailability.isAvailable(), "Skipping — ROCm present on this machine");
         System.setProperty("JUNO_USE_GPU", "true");
 
         MatVec backend = ForwardPassHandlerLoader.selectBackend();
@@ -111,5 +112,37 @@ class ForwardPassHandlerLoaderSelectBackendTest {
         assertThat(b).isInstanceOf(CudaMatVec.class);
         assertThat(((CudaMatVec) a).gpuContext()).isSameAs(((CudaMatVec) b).gpuContext());
         assertThat(((CudaMatVec) a).gpuContext().isProcessShared()).isTrue();
+    }
+
+    // ── ROCm-tagged (runs only on AMD ROCm nodes) ─────────────────────────────
+
+    @Test
+    @Tag("rocm")
+    @DisplayName("JUNO_USE_GPU=true on ROCm-only node → RocmMatVec")
+    void gpu_flag_true_with_rocm_yields_rocm_backend() {
+        assumeTrue(RocmAvailability.isAvailable(), "No ROCm device — skipping");
+        assumeFalse(CudaAvailability.isAvailable(), "CUDA also present — CUDA wins, skipping ROCm check");
+        System.setProperty("JUNO_USE_GPU", "true");
+
+        MatVec backend = ForwardPassHandlerLoader.selectBackend();
+
+        assertThat(backend).isInstanceOf(RocmMatVec.class);
+    }
+
+    @Test
+    @Tag("rocm")
+    @DisplayName("selectBackend() on ROCm node reuses process-wide GpuContext.shared(0)")
+    void select_backend_reuses_shared_gpu_context_on_rocm() {
+        assumeTrue(RocmAvailability.isAvailable(), "No ROCm device — skipping");
+        assumeFalse(CudaAvailability.isAvailable(), "CUDA also present — CUDA wins, skipping ROCm check");
+        System.setProperty("JUNO_USE_GPU", "true");
+
+        MatVec a = ForwardPassHandlerLoader.selectBackend();
+        MatVec b = ForwardPassHandlerLoader.selectBackend();
+
+        assertThat(a).isInstanceOf(RocmMatVec.class);
+        assertThat(b).isInstanceOf(RocmMatVec.class);
+        assertThat(((RocmMatVec) a).gpuContext()).isSameAs(((RocmMatVec) b).gpuContext());
+        assertThat(((RocmMatVec) a).gpuContext().isProcessShared()).isTrue();
     }
 }

@@ -37,6 +37,7 @@ import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.lora.LoraAdapterSet;
 import cab.ml.juno.node.CudaAvailability;
+import cab.ml.juno.node.RocmAvailability;
 import cab.ml.juno.node.CudaMatVec;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
@@ -264,10 +265,13 @@ public final class JunoPlayer implements AutoCloseable {
 		}
 
 		private static GpuContext prepareGpuContext(boolean useGpu) {
-			if (!useGpu || !CudaAvailability.isAvailable())
+			boolean gpuAvailable = CudaAvailability.isAvailable() || RocmAvailability.isAvailable();
+			if (!useGpu || !gpuAvailable)
 				return null;
 			int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
-			if (dev >= CudaAvailability.deviceCount())
+			int devCount = CudaAvailability.isAvailable()
+				? CudaAvailability.deviceCount() : RocmAvailability.deviceCount();
+			if (dev >= devCount)
 				return null;
 			return GpuContext.shared(dev);
 		}

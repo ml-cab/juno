@@ -123,23 +123,35 @@ public final class RocmMatVec implements MatVec {
         MemorySegment dX = rocm.deviceMalloc(ctx.deviceIndex(), bytesX);
         MemorySegment dY = rocm.deviceMalloc(ctx.deviceIndex(), bytesY);
         try {
-            // H2D — synchronous hipMemcpy; Panama pins the heap arrays during the call.
-            GpuBindings.check(
-                GpuBindings.callInt(rocm.cudaMemcpy(), dA, MemorySegment.ofArray(A), bytesA, GpuBindings.H2D),
-                "hipMemcpy(A H2D)");
-            GpuBindings.check(
-                GpuBindings.callInt(rocm.cudaMemcpy(), dX, MemorySegment.ofArray(x), bytesX, GpuBindings.H2D),
-                "hipMemcpy(x H2D)");
-
-            float[] y = new float[rows];
-            synchronized (ctx.cublasSerializationLock()) {
-                callSgemvFp32(dA, cols, dX, dY, rows, cols);
-                // Synchronous D2H: heap array is safe here (hipMemcpy blocks until done).
+            // H2D — copy Java heap arrays into native (off-heap) staging buffers first;
+            // Panama FFI (Java 25) forbids passing heap-backed MemorySegments directly
+            // to native downcalls ("Heap segment not allowed").
+            try (Arena hostArena = Arena.ofConfined()) {
+                MemorySegment nativeA = hostArena.allocate(bytesA);
+                MemorySegment nativeX = hostArena.allocate(bytesX);
+                nativeA.copyFrom(MemorySegment.ofArray(A)); // heap→native (Java copy, no FFI)
+                nativeX.copyFrom(MemorySegment.ofArray(x));
                 GpuBindings.check(
-                    GpuBindings.callInt(rocm.cudaMemcpy(), MemorySegment.ofArray(y), dY, bytesY, GpuBindings.D2H),
-                    "hipMemcpy(y D2H)");
+                    GpuBindings.callInt(rocm.cudaMemcpy(), dA, nativeA, bytesA, GpuBindings.H2D),
+                    "hipMemcpy(A H2D)");
+                GpuBindings.check(
+                    GpuBindings.callInt(rocm.cudaMemcpy(), dX, nativeX, bytesX, GpuBindings.H2D),
+                    "hipMemcpy(x H2D)");
             }
-            return y;
+
+            // D2H — similarly, copy into native staging first, then into Java array.
+            try (Arena resultArena = Arena.ofConfined()) {
+                MemorySegment stagingY = resultArena.allocate(bytesY);
+                synchronized (ctx.cublasSerializationLock()) {
+                    callSgemvFp32(dA, cols, dX, dY, rows, cols);
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.cudaMemcpy(), stagingY, dY, bytesY, GpuBindings.D2H),
+                        "hipMemcpy(y D2H)");
+                }
+                float[] y = new float[rows];
+                MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
+                return y;
+            }
         } finally {
             rocm.deviceFree(dA);
             rocm.deviceFree(dX);

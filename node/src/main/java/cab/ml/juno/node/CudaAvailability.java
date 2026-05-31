@@ -33,9 +33,10 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * cudaDeviceProp struct via a confined arena, read the fields, then release
  * immediately — zero heap allocation during the read.
  *
- * Struct field offsets are read from {@link GpuBindings#PROP_NAME_OFFSET} and
- * {@link GpuBindings#PROP_TOTAL_MEM_OFFSET} so they stay in sync with
- * {@link CudaBindings}.
+ * Struct field offsets ({@link CudaBindings#PROP_NAME_OFFSET},
+ * {@link CudaBindings#PROP_TOTAL_MEM_OFFSET}) are CUDA 12.x / Linux x86_64.
+ * Both are also accessible via {@link GpuBindings#propNameOffset()} and
+ * {@link GpuBindings#propTotalMemOffset()} for vendor-neutral callers.
  */
 public final class CudaAvailability {
 

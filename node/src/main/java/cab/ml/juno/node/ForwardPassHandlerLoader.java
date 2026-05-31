@@ -24,6 +24,7 @@ import java.nio.file.Path;
 import java.util.logging.Logger;
 
 import cab.ml.juno.lora.LoraAdapterSet;
+import cab.ml.juno.node.RocmAvailability;
 
 
 /**
@@ -105,16 +106,18 @@ public final class ForwardPassHandlerLoader {
 	}
 
 	private static MatVec pickMatVec(boolean useGpu) {
-		if (useGpu && CudaAvailability.isAvailable()) {
+		boolean gpuAvailable = CudaAvailability.isAvailable() || RocmAvailability.isAvailable();
+		if (useGpu && gpuAvailable) {
 			int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
-			if (dev >= CudaAvailability.deviceCount()) {
+			int devCount = CudaAvailability.isAvailable()
+				? CudaAvailability.deviceCount() : RocmAvailability.deviceCount();
+			if (dev >= devCount) {
 				log.warning("juno.cuda.device=" + dev + " out of range — using CpuMatVec");
 				return CpuMatVec.INSTANCE;
 			}
-			log.info("CUDA detected — using CudaMatVec backend (device " + dev + ")");
 			return GpuContext.shared(dev).createMatVec();
 		}
-		log.info("Using CpuMatVec backend (useGpu=" + useGpu + ", CUDA=" + CudaAvailability.isAvailable() + ")");
+		log.info("Using CpuMatVec backend (useGpu=" + useGpu + ", gpuAvailable=" + gpuAvailable + ")");
 		return CpuMatVec.INSTANCE;
 	}
 
