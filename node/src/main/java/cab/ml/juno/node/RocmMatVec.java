@@ -179,7 +179,7 @@ public final class RocmMatVec implements GpuMatVec {
             rocm.deviceFree(dA);
             rocm.deviceFree(dX);
             rocm.deviceFree(dY);
-            evt.backend = "rocm";
+            evt.backend(MatVecBackend.ROCM);
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
@@ -244,7 +244,7 @@ public final class RocmMatVec implements GpuMatVec {
                 }
             }
         } finally {
-            evt.backend = "rocm-resident";
+            evt.backend(MatVecBackend.ROCM_RESIDENT);
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
@@ -311,7 +311,7 @@ public final class RocmMatVec implements GpuMatVec {
                 }
             }
         } finally {
-            evt.backend = "rocm-resident-fp16";
+            evt.backend(MatVecBackend.ROCM_RESIDENT_FP16);
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();

@@ -51,9 +51,17 @@ import jdk.jfr.StackTrace;
 public final class MatVecEvent extends Event {
 
     @Label("Backend")
-    @Description("Compute backend: \"cpu\" (parallel IntStream), \"cuda\" (cublasSgemv host A), "
-            + "\"cuda-resident\" (cublasSgemv device A)")
+    @Description("Compute backend label — see MatVecBackend (e.g. \"cpu\", \"cuda\", "
+            + "\"cuda-resident\", \"rocm-resident-fp16\")")
     public String backend;
+
+    /**
+     * Sets the {@link #backend} JFR label from a typed {@link MatVecBackend},
+     * avoiding hand-written label strings at the call sites.
+     */
+    public void backend(MatVecBackend b) {
+        this.backend = b.label();
+    }
 
     @Label("Rows")
     @Description("Number of output elements (output dimension of A)")

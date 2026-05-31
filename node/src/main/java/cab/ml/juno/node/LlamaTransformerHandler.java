@@ -1060,7 +1060,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		evt.begin();
 		try {
 			float[] y = matVecQuantizedNoEvent(A, x, rowStart, rowEnd, cols);
-			evt.backend = matVecQuantBackendLabel(A.type());
+			evt.backend(matVecQuantBackend(A.type()));
 			evt.rows = rowEnd - rowStart;
 			evt.cols = cols;
 			return y;
@@ -1070,20 +1070,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * Returns the JFR backend label for a quantized matVec call.
+	 * Returns the JFR backend for a quantized matVec call.
 	 *
 	 * <p>All quantized overloads (matVecQ4Kraw, matVecQ6Kraw, etc.)
 	 * are pure-Java CPU computations executed on
 	 * ForkJoinPool.commonPool(). They never touch a GPU, so they are labelled
-	 * "cpu" — the same label used by {@link CpuMatVec#sgemv}. This ensures
-	 * juno.MatVec.backend.cpu.count reflects the true number of CPU-side
-	 * matrix multiplies, including quantized ones.
+	 * {@link MatVecBackend#CPU} — the same label used by {@link CpuMatVec#sgemv}.
+	 * This ensures juno.MatVec.backend.cpu.count reflects the true number of
+	 * CPU-side matrix multiplies, including quantized ones.
 	 *
 	 * @param ggmlType GGML type ID (unused — kept for signature clarity)
 	 */
 	@SuppressWarnings("unused")
-	private static String matVecQuantBackendLabel(int ggmlType) {
-		return "cpu";
+	private static MatVecBackend matVecQuantBackend(int ggmlType) {
+		return MatVecBackend.CPU;
 	}
 
 	/** Quantized matVec without JFR (inner implementation for {@link #matVec(GgufReader.QuantizedTensor, float[], int, int, int)}). */

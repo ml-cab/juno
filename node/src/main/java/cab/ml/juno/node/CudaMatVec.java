@@ -172,7 +172,7 @@ public final class CudaMatVec implements GpuMatVec {
             cuda.deviceFree(dA);
             cuda.deviceFree(dX);
             cuda.deviceFree(dY);
-            evt.backend = "cuda";
+            evt.backend(MatVecBackend.CUDA);
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
@@ -235,7 +235,7 @@ public final class CudaMatVec implements GpuMatVec {
                 }
             }
         } finally {
-            evt.backend = "cuda-resident";
+            evt.backend(MatVecBackend.CUDA_RESIDENT);
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
@@ -301,7 +301,7 @@ public final class CudaMatVec implements GpuMatVec {
                 }
             }
         } finally {
-            evt.backend = "cuda-resident-fp16";
+            evt.backend(MatVecBackend.CUDA_RESIDENT_FP16);
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
