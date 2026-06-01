@@ -1,7 +1,9 @@
-# perf-lib.sh — helpers for scripts/performance-test.sh (source, do not execute)
+# perf-lib.sh — helpers for scripts/performance-tests/performance-test.sh (source, do not execute)
+
+PERF_SCRIPTS="${PERF_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
 perf_load_scenarios() {
-    local scenarios="${ROOT}/perf/scenarios.yaml"
+    local scenarios="${PERF_SCRIPTS}/scenarios.yaml"
     local key val conv_n=0
     [[ -f "$scenarios" ]] || die "missing ${scenarios}"
 
@@ -18,7 +20,7 @@ perf_load_scenarios() {
                 printf -v "CONV_MSG${conv_n}" '%s' "$val"
                 ;;
         esac
-    done < <(awk -f "${ROOT}/scripts/read-scenarios.awk" "$scenarios")
+    done < <(awk -f "${PERF_SCRIPTS}/read-scenarios.awk" "$scenarios")
 
     : "${MODEL_ID:?MODEL_ID missing from scenarios.yaml}"
     : "${MODEL_URL:?MODEL_URL missing from scenarios.yaml}"
@@ -595,6 +597,105 @@ perf_interrupt_deploy_for_jfr() {
     return 1
 }
 
+perf_coordinator_tps_from_metrics() {
+    local metrics_file="$1"
+    jq -r '[.models[].metrics["juno.TokenProduced.tps"] // 0]
+        | map(select(. > 0))
+        | if length > 0 then max else empty end' "$metrics_file" 2>/dev/null
+}
+
+perf_update_matrix_cell() {
+    local row_id="$1" column="$2" tps="$3"
+    local tmp col_idx
+    case "$column" in
+        l1) col_idx=9 ;;
+        l9) col_idx=10 ;;
+        c1) col_idx=11 ;;
+        c9) col_idx=12 ;;
+        *) die "unknown column: ${column}" ;;
+    esac
+    tmp="$(mktemp)"
+    awk -F'\t' -v OFS='\t' -v id="$row_id" -v ci="$col_idx" -v tps="$tps" '
+        NR == 1 { print; next }
+        $1 == id { $(ci) = "D:" tps }
+        { print }
+    ' "$MATRIX" >"$tmp"
+    mv "$tmp" "$MATRIX"
+}
+
+patch_html() {
+    local src="${1:-$MATRIX}"
+    local generated tmp
+    generated="$(date +%Y-%m-%d)"
+
+    awk -f "${PERF_SCRIPTS}/render-matrix-js.awk" "$src" >"$ROWS_JS"
+
+    tmp="$(mktemp)"
+    awk -v gen="$generated" -v jsfile="$ROWS_JS" '
+      BEGIN {
+        while ((getline l < jsfile) > 0) js = js l "\n"
+        close(jsfile)
+      }
+      /^const rows = \[/ { print js; skip = 1; next }
+      skip && /^\];/ { skip = 0; next }
+      skip { next }
+      /generated [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {
+        sub(/generated [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/, "generated " gen)
+      }
+      { print }
+    ' "$HTML" >"$tmp"
+
+    if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+        log "dry-run: would write ${HTML}"
+        head -n 5 "$ROWS_JS" | sed 's/^/  /'
+        rm -f "$tmp"
+        return
+    fi
+
+    mv "$tmp" "$HTML"
+    log "updated ${HTML}"
+    if [[ "$src" != "$MATRIX" ]]; then
+        cp "$src" "$MATRIX"
+        log "updated ${MATRIX}"
+    fi
+}
+
+perf_open_matrix_html() {
+    [[ -f "$HTML" ]] || return 0
+    log "opening ${HTML} in default browser"
+    if command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$HTML" >/dev/null 2>&1 &
+    elif command -v open >/dev/null 2>&1; then
+        open "$HTML" >/dev/null 2>&1 &
+    else
+        warn "no xdg-open/open — open ${HTML} manually"
+    fi
+}
+
+perf_apply_run_metrics() {
+    local row_id="$1" column="$2"
+    local metrics_file="${RUN_DIR}/metrics-${row_id}-${column}.json"
+    local tps_raw tps_fmt
+
+    [[ -f "$metrics_file" ]] || { warn "no metrics file — skip matrix update"; return 1; }
+    command -v jq >/dev/null 2>&1 || { warn "jq missing — skip matrix update"; return 1; }
+
+    tps_raw="$(perf_coordinator_tps_from_metrics "$metrics_file")"
+    if [[ -z "$tps_raw" || "$tps_raw" == "null" ]]; then
+        warn "no juno.TokenProduced.tps in ${metrics_file} — skip matrix update"
+        return 1
+    fi
+
+    tps_fmt="$(printf '%.2f' "$tps_raw")"
+    log "coordinator juno.TokenProduced.tps: ${tps_fmt} (row=${row_id} column=${column})"
+
+    perf_update_matrix_cell "$row_id" "$column" "$tps_fmt"
+    log "updated ${MATRIX} cell row=${row_id} column=${column}"
+
+    patch_html
+    perf_open_matrix_html
+}
+
 perf_save_jfr_fragment() {
     local row_id="$1" column="$2"
     local metrics_file="${RUN_DIR}/metrics-${row_id}-${column}.json"
@@ -787,6 +888,9 @@ perf_run_single_test_attempt() {
     fi
 
     perf_finish_test_cycle "$row_id" "$column"
+    if ! perf_apply_run_metrics "$row_id" "$column"; then
+        warn "matrix HTML not updated for row=${row_id} column=${column}"
+    fi
     log "=== test complete: row=${row_id} column=${column} (cluster torn down) ==="
     return 0
 }

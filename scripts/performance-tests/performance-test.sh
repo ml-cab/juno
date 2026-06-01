@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
 # performance-test.sh — AWS perf runner and matrix generator
 #
-# No arguments: start detached worker in a screen session. Each queue item
-# (l1, l9, c1, c9) gets its own deploy (--detach) → HTTP test → finish (JFR + teardown).
+# Each matrix cell (l1, l9, c1, c9) runs: deploy (--detach) → HTTP test → finish (JFR + teardown).
+# Selection is read directly from scripts/performance-tests/matrix.tsv (no separate queue file).
 #
-#   ./scripts/performance-test.sh              # screen worker (pending matrix cells)
-#   ./scripts/performance-test.sh --foreground # worker in foreground
-#   ./scripts/performance-test.sh --attach     # attach to running screen worker
-#   ./scripts/performance-test.sh --parse      # parse test-scenario.txt -> HTML matrix
-#   ./scripts/performance-test.sh --status     # tail worker log / show screen session
+#   ./scripts/performance-tests/performance-test.sh --foreground --all
+#   ./scripts/performance-tests/performance-test.sh --foreground --row 2 --col l1
+#   ./scripts/performance-tests/performance-test.sh --foreground --from 1 --to 2 --all
+#   ./scripts/performance-tests/performance-test.sh --parse
+#   ./scripts/performance-tests/performance-test.sh --status
 #
-# See performance.md and perf/scenarios.yaml.
+# See docs/performance.md and scripts/performance-tests/scenarios.yaml.
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PERF_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${PERF_SCRIPTS}/../.." && pwd)"
 SCENARIO="${ROOT}/test-scenario.txt"
-MATRIX="${ROOT}/perf/matrix.tsv"
+MATRIX="${PERF_SCRIPTS}/matrix.tsv"
+SCENARIOS="${PERF_SCRIPTS}/scenarios.yaml"
 HTML="${ROOT}/docs/juno_test_matrix.html"
 WORKDIR="${ROOT}/target/perf"
 RUN_DIR="${WORKDIR}/runs"
@@ -24,7 +26,6 @@ NOHUP_LOG="${WORKDIR}/nohup.log"
 SCREEN_NAME="${PERF_SCREEN_NAME:-juno-perf}"
 SCREEN_SESSION_FILE="${WORKDIR}/screen.session"
 PID_FILE="${WORKDIR}/worker.pid"
-QUEUE_FILE="${WORKDIR}/queue.tsv"
 PARSED="${WORKDIR}/parsed.tsv"
 MERGED="${WORKDIR}/matrix.tsv"
 ROWS_JS="${WORKDIR}/rows.js"
@@ -33,26 +34,41 @@ MODE="run"
 FOREGROUND=0
 ROW_FILTER=""
 COL_FILTER=""
+ROW_FROM=""
+ROW_TO=""
 PERF_GIT_REF=""
-QUEUE_EXPLICIT=0
+PERF_ALL=0
+PERF_PENDING=0
 
 usage() {
     sed -n '2,14p' "$0" | sed 's/^# \?//'
     cat <<EOF
 
 Usage:
-  $(basename "$0")                   Start screen worker (default)
+  $(basename "$0")                   Start screen worker (pending cells, default)
   $(basename "$0") --foreground       Run worker in foreground
   $(basename "$0") --attach           Attach to running screen worker
   $(basename "$0") --parse             Parse test-scenario.txt, update HTML matrix
   $(basename "$0") --status            Show screen session and log tail
-  $(basename "$0") --row ID --col COL  Run one matrix cell (e.g. --row 1 --col l1)
+  $(basename "$0") --list              Print selected cells and exit
+
+Selection (from matrix.tsv in this directory; combine as needed):
+  --all                 Every applicable cell (non-NA), including done (D)
+  --pending             Only pending (P) or suggested (A) cells [default with no filter]
+  --row ID              Limit to matrix row id
+  --col COL             Limit to column: l1, l9, c1, c9
+  --from ID --to ID     Inclusive row id range
+
+Examples:
+  $(basename "$0") --foreground --all
+  $(basename "$0") --foreground --row 2 --col l1
+  $(basename "$0") --foreground --from 1 --to 2 --all
+  $(basename "$0") --list --from 1 --to 2 --all
 
 Options:
-  --matrix FILE     Matrix TSV (default: perf/matrix.tsv)
+  --matrix FILE     Matrix TSV (default: scripts/performance-tests/matrix.tsv)
   --scenario FILE   Scenario log for --parse (default: test-scenario.txt)
   --html FILE       Output HTML (default: docs/juno_test_matrix.html)
-  --queue FILE      Explicit queue TSV: row_id<TAB>column
   --git REF         Git branch, tag, or commit for juno-deploy.sh (default: main)
   -n, --dry-run     Parse mode only: preview HTML rows
   -h, --help        This help
@@ -72,13 +88,15 @@ perf_screen_running() {
 }
 
 perf_worker_args() {
-    PERF_WORKER_ARGS=()
+    PERF_WORKER_ARGS=(--foreground)
+    [[ "$PERF_ALL" -eq 1 ]] && PERF_WORKER_ARGS+=(--all)
+    [[ "$PERF_PENDING" -eq 1 ]] && PERF_WORKER_ARGS+=(--pending)
     [[ -n "$ROW_FILTER" ]] && PERF_WORKER_ARGS+=(--row "$ROW_FILTER")
     [[ -n "$COL_FILTER" ]] && PERF_WORKER_ARGS+=(--col "$COL_FILTER")
+    [[ -n "$ROW_FROM" ]] && PERF_WORKER_ARGS+=(--from "$ROW_FROM")
+    [[ -n "$ROW_TO" ]] && PERF_WORKER_ARGS+=(--to "$ROW_TO")
     [[ -n "$PERF_GIT_REF" ]] && PERF_WORKER_ARGS+=(--git "$PERF_GIT_REF")
-    if [[ -n "${QUEUE_FILE:-}" && "$QUEUE_FILE" != "${WORKDIR}/queue.tsv" ]]; then
-        PERF_WORKER_ARGS+=(--queue "$QUEUE_FILE")
-    fi
+    [[ "$MATRIX" != "${PERF_SCRIPTS}/matrix.tsv" ]] && PERF_WORKER_ARGS+=(--matrix "$MATRIX")
 }
 
 while [[ $# -gt 0 ]]; do
@@ -89,13 +107,18 @@ while [[ $# -gt 0 ]]; do
         --attach) MODE="attach"; shift ;;
         --row) ROW_FILTER="$2"; shift 2 ;;
         --col) COL_FILTER="$2"; shift 2 ;;
+        --from) ROW_FROM="$2"; shift 2 ;;
+        --to) ROW_TO="$2"; shift 2 ;;
+        --all) PERF_ALL=1; shift ;;
+        --pending) PERF_PENDING=1; shift ;;
+        --list) MODE="list"; shift ;;
         --matrix) MATRIX="$2"; shift 2 ;;
         --scenario) SCENARIO="$2"; shift 2 ;;
         --html) HTML="$2"; shift 2 ;;
-        --queue) QUEUE_FILE="$2"; QUEUE_EXPLICIT=1; shift 2 ;;
         --git) PERF_GIT_REF="$2"; shift 2 ;;
         -n|--dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
+        --queue) die "--queue removed; select cells from ${MATRIX} with --all, --row, --col, --from/--to" ;;
         *) die "unknown option: $1 (try --help)" ;;
     esac
 done
@@ -103,7 +126,7 @@ done
 DRY_RUN="${DRY_RUN:-0}"
 
 # shellcheck source=/dev/null
-source "${ROOT}/scripts/perf-lib.sh"
+source "${PERF_SCRIPTS}/perf-lib.sh"
 
 list_run_commands() {
     grep -E '^\s*\./launcher\.sh juno-deploy\.sh setup' "$SCENARIO" \
@@ -113,60 +136,83 @@ list_run_commands() {
 
 parse_and_merge() {
     log "parsing ${SCENARIO}..."
-    awk -f "${ROOT}/scripts/parse-scenarios.awk" "$SCENARIO" | sort -u > "$PARSED"
+    awk -f "${PERF_SCRIPTS}/parse-scenarios.awk" "$SCENARIO" | sort -u > "$PARSED"
     local count
     count="$(wc -l < "$PARSED" | tr -d ' ')"
     log "extracted ${count} coordinator TPS measurements"
     [[ "$count" -gt 0 ]] || die "no metrics parsed from ${SCENARIO}"
 
     log "merging into matrix..."
-    awk -f "${ROOT}/scripts/merge-matrix.awk" -v matrix="$MATRIX" "$PARSED" > "$MERGED"
+    awk -f "${PERF_SCRIPTS}/merge-matrix.awk" -v matrix="$MATRIX" "$PARSED" > "$MERGED"
 }
 
-patch_html() {
-    local generated tmp
-    generated="$(date +%Y-%m-%d)"
-
-    awk -f "${ROOT}/scripts/render-matrix-js.awk" "$MERGED" > "$ROWS_JS"
-
-    tmp="$(mktemp)"
-    awk -v gen="$generated" -v jsfile="$ROWS_JS" '
-      BEGIN {
-        while ((getline l < jsfile) > 0) js = js l "\n"
-        close(jsfile)
-      }
-      /^const rows = \[/ { print js; skip = 1; next }
-      skip && /^\];/ { skip = 0; next }
-      skip { next }
-      /generated [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {
-        sub(/generated [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/, "generated " gen)
-      }
-      { print }
-    ' "$HTML" > "$tmp"
-
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log "dry-run: would write ${HTML}"
-        head -n 5 "$ROWS_JS" | sed 's/^/  /'
-        rm -f "$tmp"
+perf_select_mode() {
+    if [[ "$PERF_ALL" -eq 1 && "$PERF_PENDING" -eq 1 ]]; then
+        die "use only one of --all or --pending"
+    fi
+    if [[ "$PERF_ALL" -eq 1 ]]; then
+        printf '%s' all
         return
     fi
-
-    mv "$tmp" "$HTML"
-    cp "$MERGED" "$MATRIX"
-    log "updated ${HTML}"
-    log "updated ${MATRIX}"
+    if [[ "$PERF_PENDING" -eq 1 ]]; then
+        printf '%s' pending
+        return
+    fi
+    if [[ -n "$ROW_FILTER" || -n "$ROW_FROM" || -n "$ROW_TO" || -n "$COL_FILTER" ]]; then
+        printf '%s' all
+        return
+    fi
+    printf '%s' pending
 }
 
-build_queue() {
-    if [[ -n "$ROW_FILTER" && -n "$COL_FILTER" ]]; then
-        printf '%s\t%s\n' "$ROW_FILTER" "$COL_FILTER" > "$QUEUE_FILE"
-        return
+perf_select_matrix_cells() {
+    local mode
+    mode="$(perf_select_mode)"
+    awk -f "${PERF_SCRIPTS}/select-matrix-cells.awk" \
+        -v mode="$mode" \
+        -v row="$ROW_FILTER" \
+        -v col="$COL_FILTER" \
+        -v from="$ROW_FROM" \
+        -v to="$ROW_TO" \
+        "$MATRIX"
+}
+
+perf_validate_selection_args() {
+    if [[ -n "$ROW_FROM" && -n "$ROW_FILTER" ]]; then
+        die "use --row or --from/--to, not both"
     fi
-    if [[ "$QUEUE_EXPLICIT" -eq 1 ]]; then
-        [[ -f "$QUEUE_FILE" ]] || die "queue file not found: $QUEUE_FILE"
-        return
+    if [[ -n "$ROW_FROM" && ! "$ROW_FROM" =~ ^[0-9]+$ ]]; then
+        die "--from must be a numeric row id"
     fi
-    awk -f "${ROOT}/scripts/perf-queue.awk" "$MATRIX" > "$QUEUE_FILE"
+    if [[ -n "$ROW_TO" && ! "$ROW_TO" =~ ^[0-9]+$ ]]; then
+        die "--to must be a numeric row id"
+    fi
+    if [[ -n "$ROW_FILTER" && ! "$ROW_FILTER" =~ ^[0-9]+$ ]]; then
+        die "--row must be a numeric row id"
+    fi
+    if [[ -n "$ROW_FROM" && -n "$ROW_TO" && "$ROW_FROM" -gt "$ROW_TO" ]]; then
+        die "--from must be <= --to"
+    fi
+    if [[ -n "$COL_FILTER" ]]; then
+        case "$COL_FILTER" in
+            l1|l9|c1|c9) ;;
+            *) die "unknown column: ${COL_FILTER} (use l1, l9, c1, c9)" ;;
+        esac
+    fi
+}
+
+list_selected_cells() {
+    perf_validate_selection_args
+    [[ -f "$MATRIX" ]] || die "matrix file not found: $MATRIX"
+    local mode line count=0
+    mode="$(perf_select_mode)"
+    log "selection from ${MATRIX} (mode=${mode})"
+    while IFS=$'\t' read -r line; do
+        [[ -z "$line" ]] && continue
+        printf '%s\n' "$line"
+        count=$((count + 1))
+    done < <(perf_select_matrix_cells)
+    log "${count} cell(s) selected"
 }
 
 worker_main() {
@@ -179,19 +225,23 @@ worker_main() {
     [[ -f "$MATRIX" ]] || die "matrix file not found: $MATRIX"
     [[ -x "${ROOT}/scripts/aws/launcher.sh" ]] || die "launcher not executable: scripts/aws/launcher.sh"
 
+    perf_validate_selection_args
     perf_load_scenarios
     mkdir -p "$RUN_DIR"
-    build_queue
 
-    local count row_id column
-    count="$(grep -cve '^[[:space:]]*$' "$QUEUE_FILE" 2>/dev/null || echo 0)"
+    local -a selected=()
+    local mode count row_id column
+    mode="$(perf_select_mode)"
+    mapfile -t selected < <(perf_select_matrix_cells)
+    count="${#selected[@]}"
+
     if [[ "$count" -eq 0 ]]; then
-        log "queue empty — no P/A cells in ${MATRIX}"
-        log "use --row ID --col COL to run a single test"
+        log "no cells selected from ${MATRIX} (mode=${mode})"
+        log "use --all for every non-NA cell, or --row / --from/--to to target specific rows"
         exit 0
     fi
 
-    log "queue: ${count} test(s) -> ${QUEUE_FILE}"
+    log "selected ${count} cell(s) from ${MATRIX} (mode=${mode})"
     log "worker log: ${NOHUP_LOG}"
     log "run artifacts: ${RUN_DIR}"
 
@@ -200,16 +250,17 @@ worker_main() {
         set -m
     fi
 
-    while IFS=$'\t' read -r row_id column; do
-        [[ -z "$row_id" ]] && continue
-        log "queue item: row=${row_id} column=${column} (deploy --detach → test → finish)"
+    for line in "${selected[@]}"; do
+        [[ -z "$line" ]] && continue
+        IFS=$'\t' read -r row_id column <<< "$line"
+        log "matrix cell: row=${row_id} column=${column} (deploy --detach → test → finish)"
         if ! perf_run_single_test "$row_id" "$column"; then
-            warn "test failed: row=${row_id} column=${column} (continuing queue)"
+            warn "test failed: row=${row_id} column=${column} (continuing)"
         fi
         sleep 5
-    done < "$QUEUE_FILE"
+    done
 
-    log "worker finished ${count} queued test(s)"
+    log "worker finished ${count} cell(s)"
     rm -f "$PID_FILE" "$SCREEN_SESSION_FILE"
 }
 
@@ -230,8 +281,8 @@ launch_screen_worker() {
     fi
 
     perf_worker_args
-    local perf_script="${ROOT}/scripts/performance-test.sh"
-    local -a inner_cmd=("$perf_script" --foreground "${PERF_WORKER_ARGS[@]}")
+    local perf_script="${PERF_SCRIPTS}/performance-test.sh"
+    local -a inner_cmd=("$perf_script" "${PERF_WORKER_ARGS[@]}")
     local screen_cmd
     screen_cmd="$(printf 'cd %q && exec ' "$ROOT")"
     screen_cmd+=$(printf '%q ' "${inner_cmd[@]}")
@@ -284,7 +335,7 @@ case "$MODE" in
         [[ -f "$HTML" ]] || die "html template not found: $HTML"
         mkdir -p "$WORKDIR"
         parse_and_merge
-        patch_html
+        patch_html "$MERGED"
         log "done"
         ;;
     status)
@@ -294,6 +345,9 @@ case "$MODE" in
         require_cmd screen
         perf_screen_running || die "no running screen session ${SCREEN_NAME} (try --status)"
         exec screen -r "$SCREEN_NAME"
+        ;;
+    list)
+        list_selected_cells
         ;;
     run)
         if [[ "$FOREGROUND" -eq 1 ]]; then

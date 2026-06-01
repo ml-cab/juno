@@ -1,5 +1,5 @@
 #!/usr/bin/awk -f
-# Merge perf/matrix.tsv with parsed scenario TSV (hw pt n co dt bo lo col tps).
+# Merge matrix.tsv with parsed scenario TSV (hw pt n co dt bo lo col tps).
 
 BEGIN {
     split("l1 l9 c1 c9", cols, " ")

@@ -1,5 +1,5 @@
 #!/usr/bin/awk -f
-# Render perf/matrix.tsv rows as JavaScript array entries for juno_test_matrix.html
+# Render matrix.tsv rows as JavaScript array entries for juno_test_matrix.html
 
 BEGIN {
     OFS = ""

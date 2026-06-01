@@ -13,8 +13,8 @@
 12	cpu	pipeline	1	embedded	FP16	LE	off	D:0.97	NA:	NA:	NA:
 13	cpu	pipeline	1	embedded	INT8	BE	off	D:1.13	NA:	NA:	NA:
 14	cpu	pipeline	1	embedded	FP32	BE	off	D:1.06	NA:	NA:	NA:
-15	cpu	pipeline	1	embedded	FP16	BE	on	D:1.05	NA:	NA:	NA:
-16	gpu	pipeline	1	embedded	FP16	BE	off	D:20.69	D:37.24	D:1.31	D:5.89
+15	cpu	pipeline	1	embedded	FP16	BE	on	D:0.95	NA:	NA:	NA:
+16	gpu	pipeline	1	embedded	FP16	BE	off	D:20.00	D:37.24	D:1.31	D:5.89
 17	gpu	pipeline	1	separate	FP16	BE	off	D:19.67	A:	A:	A:
 18	gpu	tensor	1	embedded	FP16	BE	off	D:20.72	A:	A:	NA:
 19	gpu	tensor	1	separate	FP16	BE	off	A:	NA:	NA:	NA:

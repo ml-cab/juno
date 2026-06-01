@@ -1,5 +1,5 @@
 #!/usr/bin/awk -f
-# Read perf/scenarios.yaml -> tab-separated key/value lines.
+# Read scenarios.yaml -> tab-separated key/value lines.
 
 BEGIN {
     ctx = ""

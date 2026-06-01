@@ -20,7 +20,7 @@
 #    --detach       After health OK, print JUNO_BASE_URL=… and exit (no monitor loop).
 #
 #  finish: gather JFR (if --jfr was set) then teardown. Set JUNO_DEPLOY_METRICS_OUT to
-#          copy metrics.json to a local path (used by scripts/performance-test.sh).
+#          copy metrics.json to a local path (used by scripts/performance-tests/performance-test.sh).
 #
 #  Core options (setup only):
 #    --instance-type TYPE     EC2 instance type (default: g4dn.xlarge)
