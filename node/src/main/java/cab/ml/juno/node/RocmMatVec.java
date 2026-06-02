@@ -69,6 +69,11 @@ public final class RocmMatVec implements GpuMatVec {
         ThreadLocal.withInitial(Fp16Scratch::new);
 
     // ── Per-thread HIP stream ───────────────────────────────────
+    // TODO(#streams-leak): HIP streams are created lazily per-thread and held for the
+    // thread's lifetime. On a Loom virtual-thread pool this is acceptable because
+    // carrier threads are pooled, but if worker threads are terminated between requests
+    // the HIP streams leak. The same issue exists in CudaMatVec.
+    // Track: https://github.com/ml-cab/juno/issues/35
     private static final ThreadLocal<MemorySegment> HIP_STREAM =
         ThreadLocal.withInitial(() -> null);
 
@@ -142,6 +147,9 @@ public final class RocmMatVec implements GpuMatVec {
         long bytesX = (long) cols  * Float.BYTES;
         long bytesY = (long) rows  * Float.BYTES;
 
+        // hipMalloc / hipFree interleaved with compute require serialization:
+        // hipSetDevice inside deviceMalloc is a per-device global state write.
+        synchronized (ctx.cublasSerializationLock()) {
         MemorySegment dA = rocm.deviceMalloc(ctx.deviceIndex(), bytesA);
         MemorySegment dX = rocm.deviceMalloc(ctx.deviceIndex(), bytesX);
         MemorySegment dY = rocm.deviceMalloc(ctx.deviceIndex(), bytesY);
@@ -155,22 +163,20 @@ public final class RocmMatVec implements GpuMatVec {
                 nativeA.copyFrom(MemorySegment.ofArray(A)); // heap→native (Java copy, no FFI)
                 nativeX.copyFrom(MemorySegment.ofArray(x));
                 GpuBindings.check(
-                    GpuBindings.callInt(rocm.cudaMemcpy(), dA, nativeA, bytesA, GpuBindings.H2D),
+                    GpuBindings.callInt(rocm.gpuMemcpy(), dA, nativeA, bytesA, GpuBindings.H2D),
                     "hipMemcpy(A H2D)");
                 GpuBindings.check(
-                    GpuBindings.callInt(rocm.cudaMemcpy(), dX, nativeX, bytesX, GpuBindings.H2D),
+                    GpuBindings.callInt(rocm.gpuMemcpy(), dX, nativeX, bytesX, GpuBindings.H2D),
                     "hipMemcpy(x H2D)");
             }
 
             // D2H — similarly, copy into native staging first, then into Java array.
             try (Arena resultArena = Arena.ofConfined()) {
                 MemorySegment stagingY = resultArena.allocate(bytesY);
-                synchronized (ctx.cublasSerializationLock()) {
-                    callSgemvFp32(dA, cols, dX, dY, rows, cols);
-                    GpuBindings.check(
-                        GpuBindings.callInt(rocm.cudaMemcpy(), stagingY, dY, bytesY, GpuBindings.D2H),
-                        "hipMemcpy(y D2H)");
-                }
+                callSgemvFp32(dA, cols, dX, dY, rows, cols);
+                GpuBindings.check(
+                    GpuBindings.callInt(rocm.gpuMemcpy(), stagingY, dY, bytesY, GpuBindings.D2H),
+                    "hipMemcpy(y D2H)");
                 float[] y = new float[rows];
                 MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
                 return y;
@@ -183,6 +189,7 @@ public final class RocmMatVec implements GpuMatVec {
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
+        }
         }
     }
 
@@ -221,7 +228,7 @@ public final class RocmMatVec implements GpuMatVec {
                     MemorySegment stagingX = callArena.allocate(bytesX);
                     stagingX.copyFrom(MemorySegment.ofArray(x));
                     GpuBindings.check(
-                        GpuBindings.callInt(rocm.cudaMemcpyAsync(),
+                        GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             scratch.dX, stagingX, bytesX, GpuBindings.H2D, stream),
                         "hipMemcpyAsync(x H2D)");
 
@@ -229,11 +236,11 @@ public final class RocmMatVec implements GpuMatVec {
 
                     MemorySegment stagingY = callArena.allocate(bytesY);
                     GpuBindings.check(
-                        GpuBindings.callInt(rocm.cudaMemcpyAsync(),
+                        GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             stagingY, scratch.dY, bytesY, GpuBindings.D2H, stream),
                         "hipMemcpyAsync(y D2H)");
                     GpuBindings.check(
-                        GpuBindings.callInt(rocm.cudaStreamSynchronize(), stream),
+                        GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
                         "hipStreamSynchronize");
 
                     float[] y = new float[rows];
@@ -288,7 +295,7 @@ public final class RocmMatVec implements GpuMatVec {
                         stagingXh.setAtIndex(JAVA_SHORT, j, Float.floatToFloat16(x[j]));
 
                     GpuBindings.check(
-                        GpuBindings.callInt(rocm.cudaMemcpyAsync(),
+                        GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             scratch.dXh, stagingXh, bytesXh, GpuBindings.H2D, stream),
                         "hipMemcpyAsync(xh H2D)");
 
@@ -296,11 +303,11 @@ public final class RocmMatVec implements GpuMatVec {
 
                     MemorySegment stagingY = callArena.allocate(bytesY);
                     GpuBindings.check(
-                        GpuBindings.callInt(rocm.cudaMemcpyAsync(),
+                        GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             stagingY, scratch.dY, bytesY, GpuBindings.D2H, stream),
                         "hipMemcpyAsync(y D2H)");
                     GpuBindings.check(
-                        GpuBindings.callInt(rocm.cudaStreamSynchronize(), stream),
+                        GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
                         "hipStreamSynchronize");
 
                     float[] y = new float[rows];
@@ -335,10 +342,10 @@ public final class RocmMatVec implements GpuMatVec {
             MemorySegment alpha = scalars.allocateFrom(JAVA_FLOAT, 1.0f);
             MemorySegment beta  = scalars.allocateFrom(JAVA_FLOAT, 0.0f);
             GpuBindings.check(
-                GpuBindings.callInt(rocm.cublasSetPointerMode(), ctx.handle(), rocm.pointerModeHost()),
+                GpuBindings.callInt(rocm.blasSetPointerMode(), ctx.handle(), rocm.pointerModeHost()),
                 "rocblas_set_pointer_mode");
             GpuBindings.check(
-                GpuBindings.callInt(rocm.cublasSgemv(),
+                GpuBindings.callInt(rocm.blasSgemv(),
                     ctx.handle(), rocm.opTranspose(),
                     cols, rows,
                     alpha, dA, lda,
@@ -365,10 +372,10 @@ public final class RocmMatVec implements GpuMatVec {
             MemorySegment alpha = scalars.allocateFrom(JAVA_FLOAT, 1.0f);
             MemorySegment beta  = scalars.allocateFrom(JAVA_FLOAT, 0.0f);
             GpuBindings.check(
-                GpuBindings.callInt(rocm.cublasSetPointerMode(), ctx.handle(), rocm.pointerModeHost()),
+                GpuBindings.callInt(rocm.blasSetPointerMode(), ctx.handle(), rocm.pointerModeHost()),
                 "rocblas_set_pointer_mode");
             GpuBindings.check(
-                GpuBindings.callInt(rocm.cublasHSSgemvStridedBatched(),
+                GpuBindings.callInt(rocm.blasHSSgemvStridedBatched(),
                     ctx.handle(), rocm.opTranspose(),
                     cols, rows,
                     alpha, dA, lda, strideA,
@@ -386,12 +393,12 @@ public final class RocmMatVec implements GpuMatVec {
         MemorySegment stream = HIP_STREAM.get();
         if (stream != null) return stream;
         GpuBindings.check(
-            GpuBindings.callInt(rocm.cudaSetDevice(), ctx.deviceIndex()),
+            GpuBindings.callInt(rocm.gpuSetDevice(), ctx.deviceIndex()),
             "hipSetDevice");
         try (Arena tmp = Arena.ofConfined()) {
             MemorySegment slot = tmp.allocate(ADDRESS);
             GpuBindings.check(
-                GpuBindings.callInt(rocm.cudaStreamCreateWithFlags(), slot, STREAM_NON_BLOCKING),
+                GpuBindings.callInt(rocm.gpuStreamCreateWithFlags(), slot, STREAM_NON_BLOCKING),
                 "hipStreamCreateWithFlags");
             stream = slot.get(ADDRESS, 0);
             HIP_STREAM.set(stream);
@@ -401,13 +408,13 @@ public final class RocmMatVec implements GpuMatVec {
 
     private void bindStream(MemorySegment stream) {
         GpuBindings.check(
-            GpuBindings.callInt(rocm.cublasSetStream(), ctx.handle(), stream),
+            GpuBindings.callInt(rocm.blasSetStream(), ctx.handle(), stream),
             "rocblas_set_stream");
     }
 
     /** Restores the default stream (NULL) on the rocBLAS handle. */
     private void unbindStream() {
-        GpuBindings.callInt(rocm.cublasSetStream(), ctx.handle(), MemorySegment.NULL);
+        GpuBindings.callInt(rocm.blasSetStream(), ctx.handle(), MemorySegment.NULL);
     }
 
     // ── Scratch growth ────────────────────────────────────────────────────────

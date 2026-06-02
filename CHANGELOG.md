@@ -1,5 +1,100 @@
 ## Status
 
+**Session 31** — ROCm/HIP backend for AMD GPU inference via Panama FFI.
+
+### AMD GPU support (ROCm/HIP + rocBLAS)
+
+Full first-class AMD GPU support alongside the existing NVIDIA CUDA backend. The GPU
+abstraction layer auto-selects CUDA > ROCm > CPU at startup with no configuration required.
+Tested on AMD Radeon RX 7900 XT (gfx1100, ROCm 7.2.x).
+
+**New production classes (`node` module):**
+
+- **`GpuBindings`** — vendor-neutral interface implemented by `CudaBindings` and `RocmBindings`.
+  Exposes all device runtime and BLAS handles as `MethodHandle` accessors, shared constants
+  (`H2D`, `D2H`, `STREAM_NON_BLOCKING`), and static helpers (`check`, `callInt`, `loadLibrary`,
+  `bind`). Static helpers eliminate per-implementation boilerplate.
+- **`GpuMatVec`** — sealed interface (`permits CudaMatVec, RocmMatVec`) extending `MatVec`.
+  Exposes `upload(float[], int, int)` and `uploadHalf(float[], int, int)` so transformer
+  handlers depend on the GPU abstraction rather than a concrete vendor class.
+- **`RocmBindings`** — Panama FFI downcall handles for `libamdhip64.so` and `librocblas.so`.
+  Pre-binds `hipHostMalloc flags=0` via `MethodHandles.insertArguments` to match the
+  `cudaMallocHost` arity visible to all callers. Key ROCm constants: `opTranspose()=112`
+  (`rocblas_operation_transpose`), `hipDeviceProp_t` sizeof=1472, name@0, totalGlobalMem@288
+  (measured from ROCm 7.2.x headers, Linux x86_64).
+- **`RocmAvailability`** — HIP device detection: `isAvailable()`, `deviceCount()`,
+  `deviceName(int)`, `vramBytes(int)`. Mirrors `CudaAvailability` in structure.
+- **`RocmMatVec`** — `MatVec` / `GpuMatVec` implementation backed by `rocblas_sgemv` (FP32)
+  and `rocblas_hssgemv_strided_batched` (FP16). Three compute paths:
+  - Host FP32: temporary device buffers per call; synchronous H2D → kernel → D2H.
+  - Device-resident FP32 (`DeviceFloatMatrix`): per-thread scratch for x/y; async stream copies.
+  - Device-resident FP16 (`DeviceHalfMatrix`): x converted FP16 in off-heap arena; FP32 accumulation.
+  Off-heap `Arena.ofConfined()` staging for all H2D/D2H copies — required by Java 25 Panama
+  (heap segments rejected by native downcalls).
+- **`MatVecBackend`** — enum replacing ad-hoc string literals for the `juno.MatVec.backend` JFR
+  dimension. Values: `CPU`, `CUDA`, `CUDA_RESIDENT`, `CUDA_RESIDENT_FP16`, `ROCM`,
+  `ROCM_RESIDENT`, `ROCM_RESIDENT_FP16`. Label strings are part of the JFR contract and unchanged.
+
+**Modified production classes:**
+
+- **`GpuContext`** — refactored from CUDA-only to backend-agnostic. Adds `GpuBindings bindings`
+  field, `bindings()` accessor, `selectBindings()` (CUDA → ROCm priority order with
+  `-Djuno.gpu.backend=cuda|rocm|auto` override), `createMatVec()` factory, `backendLabel()`
+  delegate. `close()` uses `bindings.cublasDestroy()` instead of hardcoded CUDA call.
+  Private `deviceName()` and `deviceVram()` helpers use `GpuBindings` struct-offset accessors.
+- **`CudaBindings`** — adds `implements GpuBindings`; 20 accessor methods expose the existing
+  `MethodHandle` fields to vendor-neutral callers. Zero existing fields or constants removed.
+- **`CudaAvailability`** — field-access calls updated to use `CudaBindings.instance()` accessor
+  methods (`PROP_NAME_OFFSET` → `instance().PROP_NAME_OFFSET`, etc.).
+- **`CudaMatVec`** — implements `GpuMatVec` (was `MatVec`); `upload` / `uploadHalf` made public
+  with `@Override`; backend labels replaced by `MatVecBackend` enum calls.
+- **`DeviceFloatMatrix` / `DeviceHalfMatrix`** — direct `CudaBindings.instance()` field access
+  replaced by `GpuContext#bindings()` method calls (`GpuBindings`). Both classes now work
+  identically on CUDA and ROCm. `DeviceHalfMatrix` caches `gpu = ctx.bindings()` at construction.
+- **`LlamaTransformerHandler`** — `instanceof CudaMatVec` → `instanceof GpuMatVec` for weight
+  upload gate; `cudaMalloc` OOM message check extended to also catch `hipMalloc`;
+  `matVecQuantBackendLabel(int)` → `matVecQuantBackend(int)` returns `MatVecBackend.CPU`.
+- **`Phi3TransformerHandler`** — same `instanceof` fix; OOM check extended to `hipMalloc`.
+- **`LoraTrainableHandler`** — same `instanceof` fix.
+- **`ForwardPassHandlerLoader`** — `pickMatVec` checks both `CudaAvailability` and
+  `RocmAvailability`; device count query reads from the available backend; `GpuContext.shared(dev).createMatVec()` replaces `new CudaMatVec(...)`.
+- **`EmbeddedNodeServer`** — uses `gpuContext.createMatVec()` and `gpuContext.backendLabel()`
+  for log messages.
+- **`ConsoleMain` / `JunoPlayer`** — `new CudaMatVec(gpuCtx)` → `gpuCtx.createMatVec()`.
+- **`MatVecEvent`** — adds `backend(MatVecBackend)` setter to avoid hand-written label strings
+  at call sites; public `String backend` field kept for JFR contract.
+
+**New tests (55 total, 0 failures on RX 7900 XT):**
+
+- `RocmMatVecTest` (30) — extends `MatVecBackendContractTest` for full API parity; correctness
+  vs CPU reference at 2048×2048, 5632×2048, 32000×2048; trivial known-value cases;
+  4-thread concurrent safety; throughput sanity.
+- `RocmAvailabilityTest` (8) — device detection present/absent; name format; VRAM bounds;
+  out-of-range index fallbacks.
+- `GpuContextTest` +5 `@Tag(rocm)` — ROCm context lifecycle, backend priority,
+  `createMatVec` factory, shared singleton, system-property override.
+- `ForwardPassHandlerLoaderSelectBackendTest` +2 `@Tag(rocm)` — `RocmMatVec` routing,
+  process-wide `GpuContext.shared(0)` reuse.
+- `ForwardPassHandlerLoaderSelectLoraBackendTest` +1 `@Tag(rocm)` — LoRA routing on ROCm.
+- `MatVecQuantizedBackendLabelTest` — updated to use `MatVecBackend` enum constants.
+
+Run ROCm-tagged tests:
+```bash
+mvn test -pl node -Dgroups=rocm
+```
+
+**Performance (RX 7900 XT, ROCm 7.2.x):**
+
+| Shape | Path | Time (5 runs) |
+|-------|------|--------------|
+| 32000×2048 | `rocblas_sgemv` host FP32 | 408 ms |
+
+All existing 194 unit tests pass unchanged.
+
+---
+
+## Status
+
 **Session 29** — OpenAI-compatible REST API (`POST /v1/chat/completions`, `GET /v1/models`).
 
 ### OpenAI-compatible API

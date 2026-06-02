@@ -46,6 +46,16 @@ import java.lang.invoke.MethodHandle;
  * <h3>Static utilities</h3>
  * {@link #check}, {@link #callInt}, {@link #loadLibrary}, {@link #bind} are
  * shared helpers available to all implementations and callers.
+ *
+ * <h3>Naming convention</h3>
+ * All accessor methods use vendor-neutral names (e.g. {@code gpuGetDeviceCount},
+ * {@code blasCreate}). Each implementation documents the underlying symbol it
+ * resolves (e.g. {@code cudaGetDeviceCount} or {@code hipGetDeviceCount}).
+ *
+ * <h3>MatVec factory</h3>
+ * {@link #createMatVec(GpuContext)} returns the correct {@link MatVec}
+ * implementation for each backend, keeping {@link GpuContext#createMatVec()}
+ * free of {@code instanceof} checks.
  */
 interface GpuBindings {
 
@@ -60,26 +70,44 @@ interface GpuBindings {
     int STREAM_NON_BLOCKING = 0x01;
 
     // ── Handle accessors (runtime) ────────────────────────────────────────────
-    MethodHandle cudaGetDeviceCount();
-    MethodHandle cudaGetDeviceProperties();
-    MethodHandle cudaSetDevice();
-    MethodHandle cudaMalloc();
-    MethodHandle cudaFree();
-    MethodHandle cudaMallocHost();
-    MethodHandle cudaFreeHost();
-    MethodHandle cudaMemcpy();
-    MethodHandle cudaMemcpyAsync();
-    MethodHandle cudaStreamCreateWithFlags();
-    MethodHandle cudaStreamSynchronize();
-    MethodHandle cudaStreamDestroy();
+    /** {@code cudaGetDeviceCount} / {@code hipGetDeviceCount}. */
+    MethodHandle gpuGetDeviceCount();
+    /** {@code cudaGetDeviceProperties} / {@code hipGetDevicePropertiesR0600}. */
+    MethodHandle gpuGetDeviceProperties();
+    /** {@code cudaSetDevice} / {@code hipSetDevice}. */
+    MethodHandle gpuSetDevice();
+    /** {@code cudaMalloc} / {@code hipMalloc}. */
+    MethodHandle gpuMalloc();
+    /** {@code cudaFree} / {@code hipFree}. */
+    MethodHandle gpuFree();
+    /** {@code cudaMallocHost} / {@code hipHostMalloc} (flags pre-bound to 0). */
+    MethodHandle gpuMallocHost();
+    /** {@code cudaFreeHost} / {@code hipHostFree}. */
+    MethodHandle gpuFreeHost();
+    /** {@code cudaMemcpy} / {@code hipMemcpy}. */
+    MethodHandle gpuMemcpy();
+    /** {@code cudaMemcpyAsync} / {@code hipMemcpyAsync}. */
+    MethodHandle gpuMemcpyAsync();
+    /** {@code cudaStreamCreateWithFlags} / {@code hipStreamCreateWithFlags}. */
+    MethodHandle gpuStreamCreateWithFlags();
+    /** {@code cudaStreamSynchronize} / {@code hipStreamSynchronize}. */
+    MethodHandle gpuStreamSynchronize();
+    /** {@code cudaStreamDestroy} / {@code hipStreamDestroy}. */
+    MethodHandle gpuStreamDestroy();
 
     // ── Handle accessors (BLAS) ───────────────────────────────────────────────
-    MethodHandle cublasCreate();
-    MethodHandle cublasDestroy();
-    MethodHandle cublasSetStream();
-    MethodHandle cublasSetPointerMode();
-    MethodHandle cublasSgemv();
-    MethodHandle cublasHSSgemvStridedBatched();
+    /** {@code cublasCreate_v2} / {@code rocblas_create_handle}. */
+    MethodHandle blasCreate();
+    /** {@code cublasDestroy_v2} / {@code rocblas_destroy_handle}. */
+    MethodHandle blasDestroy();
+    /** {@code cublasSetStream_v2} / {@code rocblas_set_stream}. */
+    MethodHandle blasSetStream();
+    /** {@code cublasSetPointerMode_v2} / {@code rocblas_set_pointer_mode}. */
+    MethodHandle blasSetPointerMode();
+    /** {@code cublasSgemv_v2} / {@code rocblas_sgemv}. */
+    MethodHandle blasSgemv();
+    /** {@code cublasHSSgemvStridedBatched} / {@code rocblas_hssgemv_strided_batched}. */
+    MethodHandle blasHSSgemvStridedBatched();
 
     // ── Vendor-specific constants ─────────────────────────────────────────────
     /**
@@ -121,6 +149,14 @@ interface GpuBindings {
      * Frees a device pointer previously returned by {@link #deviceMalloc}.
      */
     void deviceFree(MemorySegment devicePtr);
+
+    // ── MatVec factory ────────────────────────────────────────────────────────
+
+    /**
+     * Creates the {@link MatVec} implementation for this backend.
+     * Called by {@link GpuContext#createMatVec()}.
+     */
+    MatVec createMatVec(GpuContext ctx);
 
     // ── Static utilities ──────────────────────────────────────────────────────
 

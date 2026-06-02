@@ -83,7 +83,7 @@ public final class DeviceHalfMatrix implements AutoCloseable {
                 stagingHost.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(host[i]));
 
             GpuBindings.check(
-                GpuBindings.callInt(gpu.cudaMemcpy(), dA, stagingHost, halfBytes, GpuBindings.H2D),
+                GpuBindings.callInt(gpu.gpuMemcpy(), dA, stagingHost, halfBytes, GpuBindings.H2D),
                 "memcpy(A FP16 H2D)");
         }
 
@@ -108,7 +108,7 @@ public final class DeviceHalfMatrix implements AutoCloseable {
     public void close() {
         if (!closed) {
             closed = true;
-            GpuBindings.callInt(gpu.cudaSetDevice(), ctx.deviceIndex());
+            GpuBindings.callInt(gpu.gpuSetDevice(), ctx.deviceIndex());
             gpu.deviceFree(dA);
         }
     }

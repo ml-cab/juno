@@ -9,5 +9,5 @@ pom.xml.releaseBackup
 release.properties
 dist/
 .release-gpg/
-models/
+models/*
 *.gguf

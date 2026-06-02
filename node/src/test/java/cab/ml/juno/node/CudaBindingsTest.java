@@ -113,9 +113,8 @@ class CudaBindingsTest {
     @Test
     @DisplayName("DEVICE_PROP_BYTES constant is positive (no GPU required)")
     void device_prop_size_is_positive() {
-        // DEVICE_PROP_BYTES is an instance field on GpuBindings; accessible
-        // only when CUDA loads. On CPU-only machines the literal default (1512)
-        // is tested via the private static field — just assert the known value.
-        assertThat(1512).isGreaterThan(0);
+        // CudaBindings.DEVICE_PROP_BYTES is a package-private static final int.
+        // Assert the known value for CUDA 12.x / Linux x86_64.
+        assertThat(CudaBindings.DEVICE_PROP_BYTES).isEqualTo(1512);
     }
 }

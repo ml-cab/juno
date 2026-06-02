@@ -70,18 +70,18 @@ class RocmBindingsTest {
     void hip_runtime_handles_non_null() {
         assumeTrue(RocmBindings.isAvailable(), "Skipping — no ROCm device");
         RocmBindings rocm = RocmBindings.instance();
-        assertThat(rocm.cudaGetDeviceCount()).isNotNull();
-        assertThat(rocm.cudaGetDeviceProperties()).isNotNull();
-        assertThat(rocm.cudaSetDevice()).isNotNull();
-        assertThat(rocm.cudaMalloc()).isNotNull();
-        assertThat(rocm.cudaFree()).isNotNull();
-        assertThat(rocm.cudaMallocHost()).isNotNull();
-        assertThat(rocm.cudaFreeHost()).isNotNull();
-        assertThat(rocm.cudaMemcpy()).isNotNull();
-        assertThat(rocm.cudaMemcpyAsync()).isNotNull();
-        assertThat(rocm.cudaStreamCreateWithFlags()).isNotNull();
-        assertThat(rocm.cudaStreamSynchronize()).isNotNull();
-        assertThat(rocm.cudaStreamDestroy()).isNotNull();
+        assertThat(rocm.gpuGetDeviceCount()).isNotNull();
+        assertThat(rocm.gpuGetDeviceProperties()).isNotNull();
+        assertThat(rocm.gpuSetDevice()).isNotNull();
+        assertThat(rocm.gpuMalloc()).isNotNull();
+        assertThat(rocm.gpuFree()).isNotNull();
+        assertThat(rocm.gpuMallocHost()).isNotNull();
+        assertThat(rocm.gpuFreeHost()).isNotNull();
+        assertThat(rocm.gpuMemcpy()).isNotNull();
+        assertThat(rocm.gpuMemcpyAsync()).isNotNull();
+        assertThat(rocm.gpuStreamCreateWithFlags()).isNotNull();
+        assertThat(rocm.gpuStreamSynchronize()).isNotNull();
+        assertThat(rocm.gpuStreamDestroy()).isNotNull();
     }
 
     @Test
@@ -90,12 +90,12 @@ class RocmBindingsTest {
     void rocblas_handles_non_null() {
         assumeTrue(RocmBindings.isAvailable(), "Skipping — no ROCm device");
         RocmBindings rocm = RocmBindings.instance();
-        assertThat(rocm.cublasCreate()).isNotNull();
-        assertThat(rocm.cublasDestroy()).isNotNull();
-        assertThat(rocm.cublasSetStream()).isNotNull();
-        assertThat(rocm.cublasSetPointerMode()).isNotNull();
-        assertThat(rocm.cublasSgemv()).isNotNull();
-        assertThat(rocm.cublasHSSgemvStridedBatched()).isNotNull();
+        assertThat(rocm.blasCreate()).isNotNull();
+        assertThat(rocm.blasDestroy()).isNotNull();
+        assertThat(rocm.blasSetStream()).isNotNull();
+        assertThat(rocm.blasSetPointerMode()).isNotNull();
+        assertThat(rocm.blasSgemv()).isNotNull();
+        assertThat(rocm.blasHSSgemvStridedBatched()).isNotNull();
     }
 
     @Test

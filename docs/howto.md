@@ -68,8 +68,9 @@ Unified stand-alone launcher at the project root. Requires JDK 25+ and pre-built
 `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `LORA_PLAY_PATH`, `API_PORT`
 
 For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO_USE_GPU` unset
-means try CUDA when a GPU is present. Set `JUNO_USE_GPU=false` or pass `--cpu` to force CPU.
-Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for safety.
+means try GPU (CUDA first, then ROCm) when available. Set `JUNO_USE_GPU=false` or pass `--cpu`
+to force CPU. Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
+safety. Override the vendor with `-Djuno.gpu.backend=cuda|rocm|auto` (default: `auto`).
 
 ---
 
@@ -511,8 +512,7 @@ Flow.Publisher<String> openAiSse = http.streamingOpenAiChat("tinyllama-1.1b-chat
 is less than `node-count x vCPUs-per-instance`, setup fails immediately with the shortfall and
 a link to the Service Quotas console. It never silently reduces node count.
 
-**CUDA on GPU instances:** pre-installed in the golden AMI by `make-ami.sh`. Node bootstrap
-only runs `lspci` to detect the GPU and sets `JUNO_USE_GPU=true` — no DKMS compilation at boot.
+**GPU on AWS instances:** pre-installed in the golden AMI by `make-ami.sh` (CUDA for NVIDIA instances). Node bootstrap runs `lspci` to detect the GPU and sets `JUNO_USE_GPU=true` — no DKMS compilation at boot. On AMD GPU instances install ROCm 6+ separately and set `JUNO_USE_GPU=true`; backend auto-selection picks ROCm when CUDA libraries are absent.
 
 **LoRA deploy flow:**
 
@@ -616,11 +616,17 @@ mvn verify -pl juno-master -Pintegration -Dmodels=/path/to/models
 ./juno test --model-path /path/to/model.gguf   # real-model smoke test (8 checks, exits 0/1)
 ```
 
-**GPU tests** (requires CUDA 12.x and an NVIDIA GPU):
+**GPU tests** (NVIDIA — requires CUDA 12.x and an NVIDIA GPU):
 
 ```bash
 mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
 
 mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl juno-master \
   --enable-native-access=ALL-UNNAMED
+```
+
+**GPU tests** (AMD — requires ROCm 6+ and an AMD GPU):
+
+```bash
+mvn test -Dgroups=rocm -pl node --enable-native-access=ALL-UNNAMED
 ```

@@ -133,13 +133,13 @@ public final class GpuContext implements AutoCloseable {
     private static GpuContext create(int deviceIndex, boolean processShared) {
         GpuBindings gpu = selectBindings();
 
-        GpuBindings.check(GpuBindings.callInt(gpu.cudaSetDevice(), deviceIndex), "setDevice");
+        GpuBindings.check(GpuBindings.callInt(gpu.gpuSetDevice(), deviceIndex), "setDevice");
 
         // BLAS create handle: cublasCreate_v2 or rocblas_create_handle
         MemorySegment handleValue;
         try (Arena tmp = Arena.ofConfined()) {
             MemorySegment slot = tmp.allocate(ADDRESS);
-            GpuBindings.check(GpuBindings.callInt(gpu.cublasCreate(), slot), "blasCreate");
+            GpuBindings.check(GpuBindings.callInt(gpu.blasCreate(), slot), "blasCreate");
             // Extract the opaque handle address; it lives until blasDestroy is called.
             handleValue = slot.get(ADDRESS, 0);
         }
@@ -217,17 +217,11 @@ public final class GpuContext implements AutoCloseable {
     /**
      * Creates the appropriate {@link MatVec} implementation for this GPU context.
      *
-     * <ul>
-     *   <li>NVIDIA (CUDA) → {@link CudaMatVec}
-     *   <li>AMD (ROCm)    → {@link RocmMatVec}
-     * </ul>
-     *
-     * Prefer this factory over {@code new CudaMatVec(ctx)} so that GPU-vendor
-     * selection is transparent to callers.
+     * Delegates to {@link GpuBindings#createMatVec(GpuContext)} so that adding
+     * a new backend requires no changes here.
      */
     public MatVec createMatVec() {
-        if (bindings instanceof RocmBindings) return new RocmMatVec(this);
-        return new CudaMatVec(this);
+        return bindings.createMatVec(this);
     }
 
     /** Destroys the BLAS handle and releases device resources. */
@@ -240,7 +234,7 @@ public final class GpuContext implements AutoCloseable {
         if (!closed) {
             closed = true;
             try {
-                GpuBindings.callInt(bindings.cublasDestroy(), handle);
+                GpuBindings.callInt(bindings.blasDestroy(), handle);
                 log.info("GpuContext closed — device " + deviceIndex);
             } catch (Exception e) {
                 log.warning("Error closing GpuContext: " + e.getMessage());
@@ -253,7 +247,7 @@ public final class GpuContext implements AutoCloseable {
     private static String deviceName(GpuBindings gpu, int index) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment prop = arena.allocate(gpu.devicePropBytes());
-            int rc = (int) gpu.cudaGetDeviceProperties().invokeExact(prop, index);
+            int rc = (int) gpu.gpuGetDeviceProperties().invokeExact(prop, index);
             if (rc != 0) return "unknown";
             String name = prop.getString(gpu.propNameOffset());
             return name != null ? name.trim() : "unknown";
@@ -265,7 +259,7 @@ public final class GpuContext implements AutoCloseable {
     private static long deviceVram(GpuBindings gpu, int index) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment prop = arena.allocate(gpu.devicePropBytes());
-            int rc = (int) gpu.cudaGetDeviceProperties().invokeExact(prop, index);
+            int rc = (int) gpu.gpuGetDeviceProperties().invokeExact(prop, index);
             if (rc != 0) return 0L;
             return prop.get(java.lang.foreign.ValueLayout.JAVA_LONG, gpu.propTotalMemOffset());
         } catch (Throwable t) {

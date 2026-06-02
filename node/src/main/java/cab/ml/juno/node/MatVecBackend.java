@@ -33,7 +33,7 @@ package cab.ml.juno.node;
  *   <li>{@code <vendor>-resident-fp16} — A held resident as FP16</li>
  * </ul>
  */
-enum MatVecBackend {
+public enum MatVecBackend {
 
     /** Pure-Java parallel CPU path (also used by all quantized GGUF matVecs). */
     CPU("cpu"),
@@ -59,7 +59,7 @@ enum MatVecBackend {
     }
 
     /** Stable JFR label, e.g. {@code "rocm-resident-fp16"}. */
-    String label() {
+    public String label() {
         return label;
     }
 }

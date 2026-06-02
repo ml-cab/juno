@@ -108,11 +108,13 @@ public final class ForwardPassHandlerLoader {
 	private static MatVec pickMatVec(boolean useGpu) {
 		boolean gpuAvailable = CudaAvailability.isAvailable() || RocmAvailability.isAvailable();
 		if (useGpu && gpuAvailable) {
-			int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
+			// juno.gpu.device is the canonical property; juno.cuda.device is the legacy fallback.
+			int dev = Math.max(0, Integer.getInteger("juno.gpu.device",
+					Integer.getInteger("juno.cuda.device", 0)));
 			int devCount = CudaAvailability.isAvailable()
 				? CudaAvailability.deviceCount() : RocmAvailability.deviceCount();
 			if (dev >= devCount) {
-				log.warning("juno.cuda.device=" + dev + " out of range — using CpuMatVec");
+				log.warning("juno.gpu.device=" + dev + " out of range — using CpuMatVec");
 				return CpuMatVec.INSTANCE;
 			}
 			return GpuContext.shared(dev).createMatVec();

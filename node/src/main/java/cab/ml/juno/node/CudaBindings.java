@@ -282,30 +282,31 @@ final class CudaBindings implements GpuBindings {
         return linker.downcallHandle(addr, desc);
     }
 
-    // ── GpuBindings accessors (new — no existing lines removed) ──────────────
+    // ── GpuBindings accessors ─────────────────────────────────────────────────
 
-    @Override public MethodHandle cudaGetDeviceCount()          { return cudaGetDeviceCount; }
-    @Override public MethodHandle cudaGetDeviceProperties()     { return cudaGetDeviceProperties; }
-    @Override public MethodHandle cudaSetDevice()               { return cudaSetDevice; }
-    @Override public MethodHandle cudaMalloc()                  { return cudaMalloc; }
-    @Override public MethodHandle cudaFree()                    { return cudaFree; }
-    @Override public MethodHandle cudaMallocHost()              { return cudaMallocHost; }
-    @Override public MethodHandle cudaFreeHost()                { return cudaFreeHost; }
-    @Override public MethodHandle cudaMemcpy()                  { return cudaMemcpy; }
-    @Override public MethodHandle cudaMemcpyAsync()             { return cudaMemcpyAsync; }
-    @Override public MethodHandle cudaStreamCreateWithFlags()   { return cudaStreamCreateWithFlags; }
-    @Override public MethodHandle cudaStreamSynchronize()       { return cudaStreamSynchronize; }
-    @Override public MethodHandle cudaStreamDestroy()           { return cudaStreamDestroy; }
-    @Override public MethodHandle cublasCreate()                { return cublasCreate; }
-    @Override public MethodHandle cublasDestroy()               { return cublasDestroy; }
-    @Override public MethodHandle cublasSetStream()             { return cublasSetStream; }
-    @Override public MethodHandle cublasSetPointerMode()        { return cublasSetPointerMode; }
-    @Override public MethodHandle cublasSgemv()                 { return cublasSgemv; }
-    @Override public MethodHandle cublasHSSgemvStridedBatched() { return cublasHSSgemvStridedBatched; }
+    @Override public MethodHandle gpuGetDeviceCount()           { return cudaGetDeviceCount; }
+    @Override public MethodHandle gpuGetDeviceProperties()      { return cudaGetDeviceProperties; }
+    @Override public MethodHandle gpuSetDevice()                { return cudaSetDevice; }
+    @Override public MethodHandle gpuMalloc()                   { return cudaMalloc; }
+    @Override public MethodHandle gpuFree()                     { return cudaFree; }
+    @Override public MethodHandle gpuMallocHost()               { return cudaMallocHost; }
+    @Override public MethodHandle gpuFreeHost()                 { return cudaFreeHost; }
+    @Override public MethodHandle gpuMemcpy()                   { return cudaMemcpy; }
+    @Override public MethodHandle gpuMemcpyAsync()              { return cudaMemcpyAsync; }
+    @Override public MethodHandle gpuStreamCreateWithFlags()    { return cudaStreamCreateWithFlags; }
+    @Override public MethodHandle gpuStreamSynchronize()        { return cudaStreamSynchronize; }
+    @Override public MethodHandle gpuStreamDestroy()            { return cudaStreamDestroy; }
+    @Override public MethodHandle blasCreate()                  { return cublasCreate; }
+    @Override public MethodHandle blasDestroy()                 { return cublasDestroy; }
+    @Override public MethodHandle blasSetStream()               { return cublasSetStream; }
+    @Override public MethodHandle blasSetPointerMode()          { return cublasSetPointerMode; }
+    @Override public MethodHandle blasSgemv()                   { return cublasSgemv; }
+    @Override public MethodHandle blasHSSgemvStridedBatched()   { return cublasHSSgemvStridedBatched; }
     @Override public int    opTranspose()       { return CUBLAS_OP_T; }
     @Override public int    pointerModeHost()   { return CUBLAS_POINTER_MODE_HOST; }
     @Override public int    devicePropBytes()   { return DEVICE_PROP_BYTES; }
     @Override public long   propNameOffset()    { return PROP_NAME_OFFSET; }
     @Override public long   propTotalMemOffset(){ return PROP_TOTAL_MEM_OFFSET; }
     @Override public String backendLabel()      { return "cuda"; }
+    @Override public MatVec createMatVec(GpuContext ctx) { return new CudaMatVec(ctx); }
 }

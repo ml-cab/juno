@@ -205,28 +205,29 @@ final class RocmBindings implements GpuBindings {
 
     // ── GpuBindings accessors ─────────────────────────────────────────────────
 
-    @Override public MethodHandle cudaGetDeviceCount()          { return hipGetDeviceCount; }
-    @Override public MethodHandle cudaGetDeviceProperties()     { return hipGetDeviceProperties; }
-    @Override public MethodHandle cudaSetDevice()               { return hipSetDevice; }
-    @Override public MethodHandle cudaMalloc()                  { return hipMalloc; }
-    @Override public MethodHandle cudaFree()                    { return hipFree; }
-    @Override public MethodHandle cudaMallocHost()              { return hipHostMalloc; }
-    @Override public MethodHandle cudaFreeHost()                { return hipHostFree; }
-    @Override public MethodHandle cudaMemcpy()                  { return hipMemcpy; }
-    @Override public MethodHandle cudaMemcpyAsync()             { return hipMemcpyAsync; }
-    @Override public MethodHandle cudaStreamCreateWithFlags()   { return hipStreamCreateWithFlags; }
-    @Override public MethodHandle cudaStreamSynchronize()       { return hipStreamSynchronize; }
-    @Override public MethodHandle cudaStreamDestroy()           { return hipStreamDestroy; }
-    @Override public MethodHandle cublasCreate()                { return rocblasCreateHandle; }
-    @Override public MethodHandle cublasDestroy()               { return rocblasDestroyHandle; }
-    @Override public MethodHandle cublasSetStream()             { return rocblasSetStream; }
-    @Override public MethodHandle cublasSetPointerMode()        { return rocblasSetPointerMode; }
-    @Override public MethodHandle cublasSgemv()                 { return rocblasSgemv; }
-    @Override public MethodHandle cublasHSSgemvStridedBatched() { return rocblasHSSgemvStridedBatched; }
+    @Override public MethodHandle gpuGetDeviceCount()           { return hipGetDeviceCount; }
+    @Override public MethodHandle gpuGetDeviceProperties()      { return hipGetDeviceProperties; }
+    @Override public MethodHandle gpuSetDevice()                { return hipSetDevice; }
+    @Override public MethodHandle gpuMalloc()                   { return hipMalloc; }
+    @Override public MethodHandle gpuFree()                     { return hipFree; }
+    @Override public MethodHandle gpuMallocHost()               { return hipHostMalloc; }
+    @Override public MethodHandle gpuFreeHost()                 { return hipHostFree; }
+    @Override public MethodHandle gpuMemcpy()                   { return hipMemcpy; }
+    @Override public MethodHandle gpuMemcpyAsync()              { return hipMemcpyAsync; }
+    @Override public MethodHandle gpuStreamCreateWithFlags()    { return hipStreamCreateWithFlags; }
+    @Override public MethodHandle gpuStreamSynchronize()        { return hipStreamSynchronize; }
+    @Override public MethodHandle gpuStreamDestroy()            { return hipStreamDestroy; }
+    @Override public MethodHandle blasCreate()                  { return rocblasCreateHandle; }
+    @Override public MethodHandle blasDestroy()                 { return rocblasDestroyHandle; }
+    @Override public MethodHandle blasSetStream()               { return rocblasSetStream; }
+    @Override public MethodHandle blasSetPointerMode()          { return rocblasSetPointerMode; }
+    @Override public MethodHandle blasSgemv()                   { return rocblasSgemv; }
+    @Override public MethodHandle blasHSSgemvStridedBatched()   { return rocblasHSSgemvStridedBatched; }
     @Override public int    opTranspose()       { return 112; } // rocblas_operation_transpose
     @Override public int    pointerModeHost()   { return 0; }   // rocblas_pointer_mode_host
     @Override public int    devicePropBytes()   { return HIP_DEVICE_PROP_BYTES; }
     @Override public long   propNameOffset()    { return HIP_PROP_NAME_OFFSET; }
     @Override public long   propTotalMemOffset(){ return HIP_PROP_TOTAL_MEM_OFFSET; }
     @Override public String backendLabel()      { return "rocm"; }
+    @Override public MatVec createMatVec(GpuContext ctx) { return new RocmMatVec(ctx); }
 }

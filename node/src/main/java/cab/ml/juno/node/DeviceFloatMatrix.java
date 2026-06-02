@@ -79,7 +79,7 @@ public final class DeviceFloatMatrix implements AutoCloseable {
             MemorySegment nativeHost = staging.allocate(bytes);
             nativeHost.copyFrom(MemorySegment.ofArray(host));
             GpuBindings.check(
-                GpuBindings.callInt(gpu.cudaMemcpy(), dA, nativeHost, bytes, GpuBindings.H2D),
+                GpuBindings.callInt(gpu.gpuMemcpy(), dA, nativeHost, bytes, GpuBindings.H2D),
                 "memcpy(A H2D)");
         }
 
@@ -104,7 +104,7 @@ public final class DeviceFloatMatrix implements AutoCloseable {
     public void close() {
         if (!closed) {
             closed = true;
-            GpuBindings.callInt(gpu.cudaSetDevice(), ctx.deviceIndex());
+            GpuBindings.callInt(gpu.gpuSetDevice(), ctx.deviceIndex());
             gpu.deviceFree(dA);
         }
     }

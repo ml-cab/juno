@@ -9,7 +9,7 @@
 	<packaging>pom</packaging>
 	<name>Java Unified Neural Orchestration</name>
 	<description>Java Unified Neural Orchestration (Juno) -- distributed LLM
-		inference and fine-tuning framework</description>
+		inference and fine-tuning engine</description>
 	<url>https://ml.cab/juno.html</url>
 
 	<licenses>

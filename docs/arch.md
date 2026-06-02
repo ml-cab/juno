@@ -1,6 +1,6 @@
 # Juno — Architecture Reference
 
-**Java Unified Neural Orchestration** — distributed LLM inference and fine-tuning framework.
+**Java Unified Neural Orchestration** — distributed LLM inference and fine-tuning engine.
 
 This document describes the internal architecture of Juno. For usage instructions see
 [howto.md](howto.md). For LoRA see [LoRA.md](LoRA.md).
@@ -168,13 +168,20 @@ LoRA overlay (optional):
 
 MatVec (injected into handler):
     CpuMatVec    <- parallel IntStream
-    CudaMatVec   <- cublasSgemv_v2 (FP32 host path) / resident FP32 or FP16 weights:
-                    Llama + Phi-3 GPU use DeviceHalfMatrix + cublasHSSgemvStridedBatched;
-                    per-thread CUDA stream + async H2D/D2H around GEMV;
+    CudaMatVec   <- cublasSgemv_v2 (FP32 host) / resident FP32 or FP16:
+                    implements GpuMatVec; Llama + Phi-3 GPU use DeviceHalfMatrix +
+                    cublasHSSgemvStridedBatched; per-thread CUDA stream + async H2D/D2H;
                     synchronized(gpuContext.cublasSerializationLock());
                     GpuContext.shared(dev); weights uploaded once at load time;
                     releaseGpuResources() frees VRAM on unload.
-                    All CUDA symbols accessed via CudaBindings (Panama FFI —
+    RocmMatVec   <- rocblas_sgemv (FP32 host) / resident FP32 or FP16:
+                    implements GpuMatVec; same three compute paths as CudaMatVec;
+                    backed by RocmBindings (libamdhip64.so + librocblas.so).
+                    opTranspose=112 (rocblas_operation_transpose vs cuBLAS 1).
+    GpuBindings  <- vendor-neutral interface; both CudaBindings and RocmBindings implement it.
+    GpuMatVec    <- sealed interface (permits CudaMatVec, RocmMatVec); exposes upload/uploadHalf
+                    so transformer handlers route GPU weight upload on any GPU vendor.
+                    All CUDA/HIP symbols accessed via GpuBindings (Panama FFI —
                     java.lang.foreign.Linker; replaces JavaCPP/bytedeco entirely).
 
 KV cache wiring (per node, after loadShard()):
@@ -184,8 +191,9 @@ KV cache wiring (per node, after loadShard()):
                            propagates evict() to both stores
 ```
 
-Backend selection is automatic via `selectBackend()`, which reads `JUNO_USE_GPU`,
-`CudaAvailability`, and `-Djuno.cuda.device` (defaults to `0`).
+Backend selection is automatic via `selectBindings()` in `GpuContext`: CUDA first, then ROCm,
+then CPU. Override with `-Djuno.gpu.backend=cuda|rocm|auto`. `selectBackend()` in
+`ForwardPassHandlerLoader` reads `JUNO_USE_GPU` and `-Djuno.cuda.device` (defaults to `0`).
 
 ---
 
@@ -194,13 +202,14 @@ Backend selection is automatic via `selectBackend()`, which reads `JUNO_USE_GPU`
 **No Python, no subprocess.** The JVM reads GGUF binary directly via `GgufReader` and runs the
 full transformer forward pass end to end.
 
-**Panama FFI instead of JavaCPP/bytedeco.** `CudaBindings` resolves `libcudart.so.12` and
-`libcublas.so.12` once at class-init via `java.lang.foreign.Linker` and `SymbolLookup`. The
-resulting `MethodHandle` instances are thread-safe and carry zero per-call Java overhead (the JIT
-eliminates argument boxing for typed `invokeExact` call sites). The `bytedeco/cuda-platform`
-Maven dependency and its generated JNI wrappers are removed; the only requirement is
-`--enable-native-access=ALL-UNNAMED` on the JVM command line (injected automatically by
-`node/pom.xml` surefire config and by all launcher scripts).
+**Panama FFI instead of JavaCPP/bytedeco.** `GpuBindings` is a vendor-neutral interface
+resolved at class-init via `java.lang.foreign.Linker` and `SymbolLookup`. `CudaBindings`
+resolves `libcudart.so.12` + `libcublas.so.12`; `RocmBindings` resolves `libamdhip64.so` +
+`librocblas.so`. The resulting `MethodHandle` instances are thread-safe and carry zero per-call
+Java overhead (the JIT eliminates argument boxing for typed `invokeExact` call sites). The
+`bytedeco/cuda-platform` Maven dependency and its generated JNI wrappers are removed; the only
+requirement is `--enable-native-access=ALL-UNNAMED` on the JVM command line (injected
+automatically by `node/pom.xml` surefire config and by all launcher scripts).
 
 **No Spring Boot.** Javalin for REST. Virtual threads (`Executors.newVirtualThreadPerTaskExecutor()`)
 on the gRPC `ServerBuilder` — required to avoid OS-thread saturation under concurrent prefill sessions.
@@ -214,8 +223,10 @@ extending `InferenceApiServer` keeps each concern isolated and the existing serv
 **Lazy dequantization on CPU; eager upload on GPU.** On the CPU path, dequantization runs
 one 256-element block at a time inside the matmul loop (peak live float footprint ~1 kB instead
 of ~65 MB). On the GPU path, Llama and Phi-3 dequantize once on load and upload to
-`DeviceHalfMatrix` (FP16 on device). If `cudaMalloc` fails, both handlers close partial GPU
-buffers and fall back to CPU quantized matmul for those projections.
+`DeviceHalfMatrix` (FP16 on device) via `GpuMatVec.uploadHalf()`. Both `CudaMatVec` and
+`RocmMatVec` implement `GpuMatVec`; transformer handlers depend on the interface, not a vendor
+class. If `cudaMalloc` or `hipMalloc` fails, both handlers close partial GPU buffers and fall
+back to CPU quantized matmul for those projections.
 
 **Explicit GPU weight lifecycle.** `ForwardPassHandler.releaseGpuResources()` closes all
 `DeviceHalfMatrix` / `DeviceFloatMatrix` buffers. `EmbeddedNodeServer` calls it on shard

@@ -9,13 +9,14 @@ No Python, no GIL, no Spring.
 [![Java 25+](https://img.shields.io/badge/Java-25%2B-007396?logo=openjdk&logoColor=white)](https://openjdk.org/)
 [![Maven](https://img.shields.io/badge/Build-Maven%203.9%2B-C71A36?logo=apachemaven&logoColor=white)](https://maven.apache.org/)
 [![CUDA](https://img.shields.io/badge/GPU-CUDA%2012.x-76B900?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
+[![ROCm](https://img.shields.io/badge/GPU-ROCm%206%2B-ED1C24?logo=amd&logoColor=white)](https://rocm.docs.amd.com/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
 
 ## 1. Features
 
 - Playing open-source models, e.g. [huggingface](https://huggingface.co/);
 - Providing distributed inference - Layer Sharding (pipeline parallelism) or Weight Slices (tensor parallelism) using pure Java; 0 sidecar processes;
-- GPU acceleration supported - CUDA/cuBLAS with FP16 resident weights, CPU fallback in case of OOM;
+- GPU acceleration supported — NVIDIA CUDA/cuBLAS and AMD ROCm/rocBLAS, both with FP16 resident weights; CPU fallback on OOM; auto-detected at startup (CUDA preferred, then ROCm);
 - LoRA (Low-Rank Adaptation) supported. Train your data arranged by checkpoints; persist LoRA inference adapter for future use;
 - OpenAI-compatible REST - `POST /v1/chat/completions`, `GET /v1/models`; swap the base URL only to integrate in your application;
 - JFR metrics under the hood - custom flight-recorder events across hot paths; instrumentation driven development;
@@ -58,6 +59,29 @@ then use player all-in-one http endpoints:
 	</dependency>
 ```
 
+Then simply use LocalInferencePipelineExample.java if you are going to use only current JVM, reading a model:
+
+```
+	private static LocalInferencePipelineExample lip;
+
+	@BeforeAll
+	static void buildPipline() throws Exception {
+		lip = LocalInferencePipelineExample.builder(Path.of(MODEL_PATH)).nodeCount(1)
+				.useGpu(false)
+				.samplingParams(SamplingParams.defaults().withMaxTokens(64).withTemperature(0.7f)).build();
+	}
+
+
+	@Test
+	@DisplayName("multi-turn: model recalls a fact stated in a prior turn")
+	void multiTurnContextRecall() {
+		lip.resetHistory();
+		lip.chat("My name is Max. Please remember that.");
+		String reply = lip.chat("Recall me, what is my name?");
+		assertThat(reply.toLowerCase()).contains("max");
+	}
+
+```
 Then follow **[docs/howto.md](docs/howto.md)** `JVM integration` section or checkout the [spring-boot example](https://github.com/ml-cab/juno-spring-example/tree/master) for dependency and code snippets.
 
 Maintainer - see **[docs/integration-maven.md](docs/integration-maven.md)**
@@ -101,7 +125,12 @@ Copy-paste prompts for another agent:
 
 ## 4. Stack
 
-Node coordination and inference RPCs use **gRPC** with **protobuf** contracts from the `api` module. GPU matmul uses **CUDA 12.x** and **cuBLAS** via **Panama FFI** (`java.lang.foreign` — `CudaBindings` resolves `libcudart.so.12` and `libcublas.so.12` at class-init time; `CudaMatVec` owns all device memory and stream lifecycle), with a CPU quantised path when GPU is off or unavailable. The coordinator HTTP surface (**REST** and **SSE**) is implemented with **Javalin**.
+Node coordination and inference RPCs use **gRPC** with **protobuf** contracts from the `api` module. GPU matmul is backed by **Panama FFI** (`java.lang.foreign`) against two vendor libraries:
+
+- **NVIDIA:** CUDA 12.x + cuBLAS — `CudaBindings` resolves `libcudart.so.12` and `libcublas.so.12`; `CudaMatVec` owns all device memory and stream lifecycle.
+- **AMD:** ROCm 6+ + rocBLAS — `RocmBindings` resolves `libamdhip64.so` and `librocblas.so`; `RocmMatVec` mirrors the same device-resident FP32/FP16 paths.
+
+Backend is auto-selected at startup: CUDA first, then ROCm, then CPU. Override with `-Djuno.gpu.backend=cuda|rocm|auto`. A CPU quantised path is used when GPU is off or unavailable. The coordinator HTTP surface (**REST** and **SSE**) is implemented with **Javalin**.
 
 ## 5. Useful refs
 
@@ -112,7 +141,7 @@ Node coordination and inference RPCs use **gRPC** with **protobuf** contracts fr
 
 ## Requirements
 
-JDK 25+, Maven 3.9+, CUDA 12.x + NVIDIA driver on GPU nodes (optional for CPU-only).
+JDK 25+, Maven 3.9+. GPU nodes: CUDA 12.x + NVIDIA driver **or** ROCm 6+ + AMD driver (optional — CPU-only inference requires neither).
 
 ## Build and test
 
@@ -139,7 +168,7 @@ GGUF with LLaMA-compatible or Phi-3-compatible architectures (quantizations incl
 | `api` | OpenAPI spec, protobuf/gRPC API |
 | `registry` | Shard planning, model registry |
 | `coordinator` | Scheduler, generation loop, REST |
-| `node` | Transformer handlers, GGUF, CUDA matmul |
+| `node` | Transformer handlers, GGUF, GPU matmul (CUDA + ROCm via Panama FFI) |
 | `lora` | Adapter tensors, optimizer |
 | `tokenizer`, `sampler`, `kvcache`, `health`, `metrics` | Shared infrastructure |
 | `juno-player` | CLI REPL and cluster harness |

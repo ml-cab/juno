@@ -4,8 +4,9 @@ Module dependency (excerpt):
   api, registry, tokenizer, sampler, kvcache, health, metrics — shared libraries
   lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA)
   node — GgufReader, LlamaTransformerHandler, Phi3TransformerHandler, MatVec
-        (CpuMatVec / CudaMatVec), CudaBindings, CudaAvailability,
-        DeviceFloatMatrix, DeviceHalfMatrix, GpuContext,
+        (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,
+        CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
+        DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
         LoraTrainableHandler, LoraMerge, LoraQvInitializer
         node depends on lora
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
@@ -20,19 +21,37 @@ Module dependency (excerpt):
   juno-bom — Maven BOM (dependencyManagement for cab.ml artifacts)
 
 GPU FFI (node module — Panama project, JEP 454):
+  GpuBindings — vendor-neutral interface implemented by CudaBindings and RocmBindings.
+        All accessor methods use vendor-neutral names: gpuGetDeviceCount, gpuGetDeviceProperties,
+        gpuSetDevice, gpuMalloc, gpuFree, gpuMallocHost, gpuFreeHost, gpuMemcpy, gpuMemcpyAsync,
+        gpuStreamCreateWithFlags, gpuStreamSynchronize, gpuStreamDestroy, blasCreate, blasDestroy,
+        blasSetStream, blasSetPointerMode, blasSgemv, blasHSSgemvStridedBatched.
+        Each implementation documents the underlying vendor symbol it resolves.
+        createMatVec(GpuContext) factory method returns the correct MatVec per backend,
+        keeping GpuContext.createMatVec() free of instanceof checks.
   CudaBindings — Panama FFI downcall handles for libcudart.so.12 and libcublas.so.12.
-        Replaces the JavaCPP/bytedeco bridge entirely.
-        Resolved once at class-init via java.lang.foreign.Linker + SymbolLookup.
-        Singleton; thread-safe MethodHandle instances; zero per-call Java overhead.
+        Implements GpuBindings. Singleton; thread-safe; zero per-call Java overhead.
         Requires JVM flag: --enable-native-access=ALL-UNNAMED.
-        node/pom.xml maven-surefire-plugin injects this flag for all unit tests.
-  CudaAvailability — detection via CudaBindings.isAvailable(); zero heap allocation
-        (off-heap confined arena for cudaDeviceProp read, released immediately).
-  CudaMatVec — cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16);
+  RocmBindings — Panama FFI downcall handles for libamdhip64.so and librocblas.so.
+        Implements GpuBindings. Pre-binds hipHostMalloc flags=0 via MethodHandles.insertArguments.
+        opTranspose()=112 (rocblas_operation_transpose). hipDeviceProp_t: sizeof=1472, name@0,
+        totalGlobalMem@288 (ROCm 7.2.x, Linux x86_64).
+  CudaAvailability — detection via CudaBindings.isAvailable(); zero heap allocation.
+  RocmAvailability — detection via RocmBindings.isAvailable(); mirrors CudaAvailability.
+  GpuMatVec — sealed interface (permits CudaMatVec, RocmMatVec) extending MatVec.
+        Exposes upload(float[], int, int) and uploadHalf(float[], int, int).
+        Transformer handlers depend on GpuMatVec, not a concrete vendor class.
+  CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16);
         per-thread CUDA stream + async H2D/D2H; synchronized on GpuContext lock.
-  DeviceFloatMatrix / DeviceHalfMatrix — VRAM buffer wrappers using CudaBindings
+  RocmMatVec — implements GpuMatVec; rocblas_sgemv (FP32) / rocblas_hssgemv_strided_batched (FP16);
+        same three compute paths as CudaMatVec; per-thread HIP stream.
+  DeviceFloatMatrix / DeviceHalfMatrix — VRAM buffer wrappers using GpuBindings
         deviceMalloc / deviceFree; explicit lifecycle via releaseGpuResources().
-  GpuContext — shared cuBLAS handle + serialization lock per device index.
+        Vendor-neutral: work identically with CudaBindings and RocmBindings.
+  GpuContext — shared BLAS handle + serialization lock per device index.
+        selectBindings() auto-detects: CUDA first, then ROCm.
+        Override: -Djuno.gpu.backend=cuda|rocm|auto.
+        createMatVec() delegates to GpuBindings.createMatVec(GpuContext) — no instanceof checks.
 
 Third-party JVM integration (juno-player module): JunoPlayer (facade), LoraTrainer,
 LocalInferencePipeline.embedLastToken, PublisherTokenConsumer → Flow.Publisher,
@@ -40,9 +59,13 @@ JunoHttpClient (REST). Thin jar vs *-shaded.jar documented in docs/howto.md.
 
 LoRA GPU defaults:
   ForwardPassHandlerLoader.selectBackend() — JUNO_USE_GPU unset defaults to false (cluster/local).
-  ForwardPassHandlerLoader.selectLoraBackend() — unset defaults to true when CUDA exists.
+  ForwardPassHandlerLoader.selectLoraBackend() — unset defaults to true when any GPU (CUDA or ROCm) exists.
   LoraTrainableHandler.load(path, ctx, adapters) uses selectLoraBackend().
   ForwardPassHandlerLoader.load(..., backend, adapters) passes backend into LoraTrainableHandler.
+  GpuContext.selectBindings() — CUDA first, then ROCm; -Djuno.gpu.backend overrides.
+  GpuContext.createMatVec() — delegates to GpuBindings.createMatVec(GpuContext); no instanceof.
+  node module adds: GpuBindings, GpuMatVec, RocmBindings, RocmAvailability, RocmMatVec,
+                    MatVecBackend (public enum, stable JFR label strings via public label() method).
 
 See README.md, docs/howto.md, docs/arch.md, docs/LoRA.md,
   docs/integration-maven.md, docs/performance.md, docs/legal.md,
