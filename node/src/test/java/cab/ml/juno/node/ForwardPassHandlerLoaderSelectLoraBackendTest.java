@@ -41,9 +41,10 @@ class ForwardPassHandlerLoaderSelectLoraBackendTest {
 	}
 
 	@Test
-	@DisplayName("JUNO_USE_GPU absent and no CUDA → CpuMatVec")
+	@DisplayName("JUNO_USE_GPU absent and no GPU → CpuMatVec")
 	void absent_no_cuda_cpu() {
 		assumeFalse(CudaAvailability.isAvailable(), "CUDA present — skipping");
+		assumeFalse(RocmAvailability.isAvailable(), "ROCm present — skipping");
 		System.clearProperty("JUNO_USE_GPU");
 		assertThat(ForwardPassHandlerLoader.selectLoraBackend()).isInstanceOf(CpuMatVec.class);
 	}
@@ -55,5 +56,15 @@ class ForwardPassHandlerLoaderSelectLoraBackendTest {
 		assumeTrue(CudaAvailability.isAvailable(), "No CUDA — skipping");
 		System.clearProperty("JUNO_USE_GPU");
 		assertThat(ForwardPassHandlerLoader.selectLoraBackend()).isInstanceOf(CudaMatVec.class);
+	}
+
+	@Test
+	@Tag("rocm")
+	@DisplayName("JUNO_USE_GPU absent and ROCm available → RocmMatVec")
+	void absent_rocm_gpu() {
+		assumeTrue(RocmAvailability.isAvailable(), "No ROCm — skipping");
+		assumeFalse(CudaAvailability.isAvailable(), "CUDA present — CUDA wins, skipping ROCm check");
+		System.clearProperty("JUNO_USE_GPU");
+		assertThat(ForwardPassHandlerLoader.selectLoraBackend()).isInstanceOf(RocmMatVec.class);
 	}
 }

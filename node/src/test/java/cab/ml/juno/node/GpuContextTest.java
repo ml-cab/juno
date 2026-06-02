@@ -121,4 +121,48 @@ class GpuContextTest {
 		GpuBindings bindings = GpuContext.selectBindings();
 		assertThat(bindings).isInstanceOf(CudaBindings.class);
 	}
+
+	@Test
+	@Tag("rocm")
+	@DisplayName("createMatVec() returns RocmMatVec on AMD-only system")
+	void create_mat_vec_returns_rocm_mat_vec_on_amd() {
+		assumeTrue(RocmAvailability.isAvailable(), "Skipping — no ROCm device");
+		assumeFalse(CudaAvailability.isAvailable(), "Skipping — CUDA present, CUDA wins");
+		try (GpuContext ctx = GpuContext.init(0)) {
+			MatVec mv = ctx.createMatVec();
+			assertThat(mv).isInstanceOf(RocmMatVec.class);
+		}
+	}
+
+	@Test
+	@Tag("rocm")
+	@DisplayName("shared(0) is a singleton on ROCm system; close() is a no-op")
+	void shared_singleton_close_is_noop_on_rocm() {
+		assumeTrue(RocmAvailability.isAvailable(), "Skipping — no ROCm device");
+		assumeFalse(CudaAvailability.isAvailable(), "Skipping — CUDA present, CUDA wins");
+		GpuContext a = GpuContext.shared(0);
+		GpuContext b = GpuContext.shared(0);
+		assertThat(a).isSameAs(b);
+		assertThat(a.isProcessShared()).isTrue();
+		a.close();                         // must not actually close
+		assertThat(a.isClosed()).isFalse();
+		assertThat(a.handle()).isNotNull();
+	}
+
+	@Test
+	@Tag("rocm")
+	@DisplayName("selectBindings() with juno.gpu.backend=rocm returns RocmBindings")
+	void select_bindings_forced_rocm_returns_rocm_bindings() {
+		assumeTrue(RocmAvailability.isAvailable(), "Skipping — no ROCm device");
+		String prev = System.getProperty("juno.gpu.backend");
+		try {
+			System.setProperty("juno.gpu.backend", "rocm");
+			GpuBindings bindings = GpuContext.selectBindings();
+			assertThat(bindings).isInstanceOf(RocmBindings.class);
+			assertThat(bindings.backendLabel()).isEqualTo("rocm");
+		} finally {
+			if (prev == null) System.clearProperty("juno.gpu.backend");
+			else System.setProperty("juno.gpu.backend", prev);
+		}
+	}
 }

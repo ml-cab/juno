@@ -45,7 +45,7 @@ public final class CpuMatVec implements MatVec {
 		MatVecEvent evt = new MatVecEvent();
 		evt.begin();
 		float[] result = LlamaTransformerHandler.matVec(A, x, rows, cols);
-		evt.backend = "cpu";
+		evt.backend(MatVecBackend.CPU);
 		evt.rows = rows;
 		evt.cols = cols;
 		evt.commit();

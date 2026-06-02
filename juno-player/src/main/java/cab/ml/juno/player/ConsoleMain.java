@@ -47,6 +47,7 @@ import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.ActivationDtype;
 import cab.ml.juno.node.CudaAvailability;
+import cab.ml.juno.node.RocmAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.CudaMatVec;
 import cab.ml.juno.node.MatVec;
@@ -1212,10 +1213,13 @@ public final class ConsoleMain {
 	}
 
 	private static GpuContext prepareGpuContext() {
-		if (!useGpu || !CudaAvailability.isAvailable())
+		boolean gpuAvailable = CudaAvailability.isAvailable() || RocmAvailability.isAvailable();
+		if (!useGpu || !gpuAvailable)
 			return null;
 		int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
-		if (dev >= CudaAvailability.deviceCount()) {
+		int devCount = CudaAvailability.isAvailable()
+			? CudaAvailability.deviceCount() : RocmAvailability.deviceCount();
+		if (dev >= devCount) {
 			log.warning("juno.cuda.device=" + dev + " out of range — using CPU matmul for local REPL");
 			return null;
 		}
