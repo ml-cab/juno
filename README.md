@@ -4,11 +4,12 @@
 
 Distributed LLM inference and fine-tuning. Pure Java - No Python, no GIL, no Spring.
 
-[Java 25+](https://openjdk.org/)
-[Maven](https://maven.apache.org/)
-[CUDA](https://developer.nvidia.com/cuda-toolkit)
-[ROCm](https://rocm.docs.amd.com/)
-[License](LICENSE)
+[![Java 25+](https://img.shields.io/badge/Java-25%2B-007396?logo=openjdk&logoColor=white)](https://openjdk.org/)
+[![Maven](https://img.shields.io/badge/Build-Maven%203.9%2B-C71A36?logo=apachemaven&logoColor=white)](https://maven.apache.org/)
+[![CUDA](https://img.shields.io/badge/GPU-CUDA%2012.x-76B900?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
+[![ROCm](https://img.shields.io/badge/GPU-ROCm%206%2B-ED1C24?logo=amd&logoColor=white)](https://rocm.docs.amd.com/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
+
 
 ## 1. What is Juno
 
@@ -118,6 +119,8 @@ wget https://huggingface.co/.../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
 then run local Juno interactive console to try and train inference
 
 ```
+git clone https://github.com/ml-cab/juno.git && cd juno
+mvn clean package -DskipTests
 ./juno local --model-path models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
 ```
 
@@ -154,19 +157,6 @@ Backend is auto-selected at startup: CUDA first, then ROCm, then CPU. Override w
 ## Requirements
 
 JDK 25+, Maven 3.9+. GPU nodes: CUDA 12.x + NVIDIA driver **or** ROCm 6+ + AMD driver (optional — CPU-only inference requires neither).
-
-## Build and test
-
-```bash
-mvn clean package -DskipTests
-
-mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
-                                       # unit tests - no model file, no GPU needed
-
-mvn verify -pl juno-master
-```
-
-GPU or large-model checks: **[docs/howto.md](docs/howto.md)**.
 
 ## Supported models
 

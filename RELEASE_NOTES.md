@@ -62,11 +62,11 @@ CPU-only inference requires no GPU stack. The `./juno` launcher enforces JDK 25 
 
 ## Supported models
 
-GGUF with LLaMA-compatible or Phi-3-compatible architectures.
+GGUF with LLaMA-compatible
 
 Quantizations: F32, F16, BF16, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K.
 
-Chat templates: `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml`, `phi3`.
+Chat templates: `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml`.
 
 ---
 
