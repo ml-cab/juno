@@ -39,9 +39,10 @@ import static java.lang.foreign.ValueLayout.JAVA_SHORT;
  *       directly to cuBLAS as an ADDRESS parameter — zero H2D copy per token.
  *   <li>Per-thread x and y scratch buffers on the device are grown lazily and
  *       reused across calls — one {@code cudaMalloc} per thread, per buffer.
- *   <li>H2D upload of x uses {@code MemorySegment.ofArray(x)}: Panama pins the
- *       heap array for the duration of the downcall; CUDA copies to a driver
- *       staging buffer before returning (pageable-host semantics).
+ *   <li>H2D upload of x uses a short-lived confined {@link Arena}: x is copied
+ *       from the heap array into native memory with {@code copyFrom} (a pure Java
+ *       operation), then the native segment is passed to {@code cudaMemcpyAsync}.
+ *       Panama FFI (Java 25) rejects heap-backed segments in native downcalls.
  *   <li>D2H download of y uses a short-lived confined arena to avoid handing
  *       a GC-moveable address to an async CUDA stream.
  *   <li>FP16 x staging is packed with {@code Float.floatToFloat16} into a
@@ -126,11 +127,14 @@ public final class CudaMatVec implements GpuMatVec {
     /**
      * Full host path: A and x are on the host.
      *
-     * Allocates temporary device buffers for A, x, and y; performs a
-     * synchronous H2D copy of A and x; runs {@code cublasSgemv_v2}; performs
-     * a synchronous D2H copy of y; frees the temporary buffers.
+     * Copies A and x into confined off-heap staging arenas before the H2D
+     * {@code cudaMemcpy} calls. Panama FFI (Java 25) rejects heap-backed
+     * {@link MemorySegment}s in native downcalls; {@code MemorySegment.copyFrom}
+     * is a pure Java copy and is not subject to that restriction.
+     * The D2H result is likewise written into a staging segment and then
+     * copied into the returned heap array.
      *
-     * Intended for tests and the rare non-resident fallback. The hot inference
+     * Intended for the non-resident forward pass. The resident inference
      * path uses {@link #sgemv(DeviceFloatMatrix, float[])} with device-resident A.
      */
     @Override
@@ -151,21 +155,33 @@ public final class CudaMatVec implements GpuMatVec {
         MemorySegment dX = cuda.deviceMalloc(ctx.deviceIndex(), bytesX);
         MemorySegment dY = cuda.deviceMalloc(ctx.deviceIndex(), bytesY);
         try {
-            // H2D — synchronous cudaMemcpy; Panama pins the heap arrays during the call.
-            CudaBindings.check(
-                CudaBindings.callInt(cuda.cudaMemcpy, dA, MemorySegment.ofArray(A), bytesA, CudaBindings.H2D),
-                "cudaMemcpy(A H2D)");
-            CudaBindings.check(
-                CudaBindings.callInt(cuda.cudaMemcpy, dX, MemorySegment.ofArray(x), bytesX, CudaBindings.H2D),
-                "cudaMemcpy(x H2D)");
+            // H2D — copy heap arrays into confined off-heap staging first.
+            // Panama FFI (Java 25) rejects heap-backed MemorySegments in native downcalls;
+            // MemorySegment.copyFrom is a pure Java copy and is not subject to that restriction.
+            try (Arena h2dArena = Arena.ofConfined()) {
+                MemorySegment nativeA = h2dArena.allocate(bytesA);
+                MemorySegment nativeX = h2dArena.allocate(bytesX);
+                nativeA.copyFrom(MemorySegment.ofArray(A));
+                nativeX.copyFrom(MemorySegment.ofArray(x));
+                CudaBindings.check(
+                    CudaBindings.callInt(cuda.cudaMemcpy, dA, nativeA, bytesA, CudaBindings.H2D),
+                    "cudaMemcpy(A H2D)");
+                CudaBindings.check(
+                    CudaBindings.callInt(cuda.cudaMemcpy, dX, nativeX, bytesX, CudaBindings.H2D),
+                    "cudaMemcpy(x H2D)");
+            }
 
             float[] y = new float[rows];
             synchronized (ctx.cublasSerializationLock()) {
                 callSgemvFp32(dA, cols, dX, dY, rows, cols);
-                // Synchronous D2H: heap array is safe here (cudaMemcpy blocks until done).
-                CudaBindings.check(
-                    CudaBindings.callInt(cuda.cudaMemcpy, MemorySegment.ofArray(y), dY, bytesY, CudaBindings.D2H),
-                    "cudaMemcpy(y D2H)");
+                // D2H into off-heap staging; copy into the heap array afterwards.
+                try (Arena d2hArena = Arena.ofConfined()) {
+                    MemorySegment stagingY = d2hArena.allocate(bytesY);
+                    CudaBindings.check(
+                        CudaBindings.callInt(cuda.cudaMemcpy, stagingY, dY, bytesY, CudaBindings.D2H),
+                        "cudaMemcpy(y D2H)");
+                    MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
+                }
             }
             return y;
         } finally {
@@ -183,8 +199,11 @@ public final class CudaMatVec implements GpuMatVec {
      * Device-resident FP32 path: A stays on the device across calls.
      *
      * Per-thread scratch buffers for x and y are grown lazily and reused.
-     * The D2H copy uses a confined off-heap arena to avoid exposing a
-     * GC-moveable address to the async CUDA stream.
+     * x is staged through a short-lived confined arena before the H2D
+     * {@code cudaMemcpyAsync} — Panama FFI (Java 25) rejects heap-backed
+     * segments in native downcalls.
+     * The D2H copy targets {@code resultArena} (off-heap) and is copied into
+     * a heap array only after {@code cudaStreamSynchronize} returns.
      */
     @Override
     public float[] sgemv(DeviceFloatMatrix A, float[] x) {
@@ -209,11 +228,16 @@ public final class CudaMatVec implements GpuMatVec {
                 try {
                     ensureFp32Scratch(scratch, bytesX, bytesY);
 
-                    // H2D: Panama pins the heap array for the duration of this downcall.
-                    CudaBindings.check(
-                        CudaBindings.callInt(cuda.cudaMemcpyAsync,
-                            scratch.dX, MemorySegment.ofArray(x), bytesX, CudaBindings.H2D, stream),
-                        "cudaMemcpyAsync(x H2D)");
+                    // H2D: copy x into a confined off-heap staging segment before the downcall.
+                    // Panama FFI (Java 25) rejects heap-backed MemorySegments in native downcalls.
+                    try (Arena h2dArena = Arena.ofConfined()) {
+                        MemorySegment nativeX = h2dArena.allocate(bytesX);
+                        nativeX.copyFrom(MemorySegment.ofArray(x));
+                        CudaBindings.check(
+                            CudaBindings.callInt(cuda.cudaMemcpyAsync,
+                                scratch.dX, nativeX, bytesX, CudaBindings.H2D, stream),
+                            "cudaMemcpyAsync(x H2D)");
+                    }
 
                     callSgemvFp32(A.devicePointer(), cols, scratch.dX, scratch.dY, rows, cols);
 
