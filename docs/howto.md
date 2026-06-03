@@ -1,6 +1,6 @@
 ## Juno — complete how-to reference
 
-**Documentation map:** [README.md](../README.md) (overview), [arch.md](arch.md), [LoRA.md](LoRA.md), [integration-maven.md](integration-maven.md), [performance.md](performance.md), [legal.md](legal.md), [juno_test_matrix.html](juno_test_matrix.html), [features.md](features.md).
+**Documentation map:** [README.md](../README.md) (overview), [arch.md](arch.md), [LoRA.md](LoRA.md), [integration-maven.md](integration-maven.md), [performance.md](performance.md), [legal.md](legal.md), [juno_test_matrix.html](https://ml.cab/juno_test_matrix.html), [features.md](features.md).
 
 ```
 ./juno

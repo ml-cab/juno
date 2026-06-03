@@ -136,4 +136,4 @@ for this configuration.
 Send a Metrics summary to [dev@ml.cab](mailto:dev@ml.cab) with: GPU card details,
 juno startup command, conversation log, and the JFR Metrics Summary section. Include
 the `juno.TokenProduced.tps` value and `juno.ForwardPass` p95 decode latency.
-Results are incorporated into [juno_test_matrix.html](juno_test_matrix.html).
+Results are incorporated into [juno_test_matrix.html](https://ml.cab/juno_test_matrix.html).

@@ -1,7 +1,7 @@
 # Juno — EU AI Act Compliance Analysis
 
 **Regulation:** EU 2024/1689 (Artificial Intelligence Act), in force 1 August 2024
-**Subject:** jUno — Java Unified Neural Orchestration (distributed LLM inference and fine-tuning engine)
+**Subject:** Juno — Java Unified Neural Orchestration (distributed LLM inference and fine-tuning engine)
 **Codebase snapshot:** from 2026-05-05
 
 ---

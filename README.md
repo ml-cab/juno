@@ -1,10 +1,8 @@
-# jUno
+# Juno
 
 **Java Unified Neural Orchestration** 
 
-Distributed LLM inference and fine-tuning.
-
-No Python, no GIL, no Spring.
+Distributed LLM inference and fine-tuning. Pure Java - No Python, no GIL, no Spring.
 
 [![Java 25+](https://img.shields.io/badge/Java-25%2B-007396?logo=openjdk&logoColor=white)](https://openjdk.org/)
 [![Maven](https://img.shields.io/badge/Build-Maven%203.9%2B-C71A36?logo=apachemaven&logoColor=white)](https://maven.apache.org/)
@@ -12,11 +10,11 @@ No Python, no GIL, no Spring.
 [![ROCm](https://img.shields.io/badge/GPU-ROCm%206%2B-ED1C24?logo=amd&logoColor=white)](https://rocm.docs.amd.com/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
 
-## 1. Features
+## 1. What is Juno
 
-- Playing open-source models, e.g. [huggingface](https://huggingface.co/);
+- Playing large and tiny language models;
 - Providing distributed inference - Layer Sharding (pipeline parallelism) or Weight Slices (tensor parallelism) using pure Java; 0 sidecar processes;
-- GPU acceleration supported — NVIDIA CUDA/cuBLAS and AMD ROCm/rocBLAS, both with FP16 resident weights; CPU fallback on OOM; auto-detected at startup (CUDA preferred, then ROCm);
+- GPU acceleration supported — *NVIDIA CUDA/cuBLAS* and *AMD ROCm/rocBLAS*, both with FP16 resident weights; CPU fallback on OOM; auto-detected at startup;
 - LoRA (Low-Rank Adaptation) supported. Train your data arranged by checkpoints; persist LoRA inference adapter for future use;
 - OpenAI-compatible REST - `POST /v1/chat/completions`, `GET /v1/models`; swap the base URL only to integrate in your application;
 - JFR metrics under the hood - custom flight-recorder events across hot paths; instrumentation driven development;
@@ -44,47 +42,37 @@ Integrate on **`cab.ml` artifacts at version `0.1.0`** from Maven Central:
 	</dependencyManagement>
 ```
 
-then use player all-in-one http endpoints:
-
-```
-	<!-- juno-player exposes JunoHttpClient (and JunoPlayer for in-process use). -->
-	<dependency>
-	    <groupId>cab.ml</groupId>
-	    <artifactId>juno-player</artifactId>
-	</dependency>
-	<!-- tokenizer provides cab.ml.juno.tokenizer.ChatMessage used by JunoHttpClient. -->
-	<dependency>
-	    <groupId>cab.ml</groupId>
-	    <artifactId>tokenizer</artifactId>
-	</dependency>
-```
+for more info please refer to [Juno cookbook](https://github.com/ml-cab/juno-cookbook/tree/main)
 
 Then simply use LocalInferencePipelineExample.java if you are going to use only current JVM, reading a model:
 
 ```
-	private static LocalInferencePipelineExample lip;
+
+	private static LocalChat lc;
 
 	@BeforeAll
 	static void buildPipline() throws Exception {
-		lip = LocalInferencePipelineExample.builder(Path.of(MODEL_PATH)).nodeCount(1)
-				.useGpu(false)
+		lc = LocalChat.builder(Path.of(MODEL_PATH)).nodeCount(1).useGpu(false)
 				.samplingParams(SamplingParams.defaults().withMaxTokens(64).withTemperature(0.7f)).build();
 	}
 
+	@AfterAll
+	static void closePipeline() {
+		if (lc != null) {
+			lc.close();
+		}
+	}
 
 	@Test
-	@DisplayName("multi-turn: model recalls a fact stated in a prior turn")
-	void multiTurnContextRecall() {
-		lip.resetHistory();
-		lip.chat("My name is Max. Please remember that.");
-		String reply = lip.chat("Recall me, what is my name?");
-		assertThat(reply.toLowerCase()).contains("max");
+	@Order(1)
+	@DisplayName("single turn returns a non-empty reply")
+	void singleTurnReturnsNonEmptyReply() {
+		String reply = lc.chat("Hello, how are you?");
+		assertThat(reply).isNotBlank();
 	}
 
 ```
-Then follow **[docs/howto.md](docs/howto.md)** `JVM integration` section or checkout the [spring-boot example](https://github.com/ml-cab/juno-spring-example/tree/master) for dependency and code snippets.
-
-Maintainer - see **[docs/integration-maven.md](docs/integration-maven.md)**
+Then follow **[docs/howto.md](docs/howto.md)** `JVM integration` section.
 
 ### 2.2 Local player and LoRA (including Hugging Face–origin weights)
 
@@ -97,7 +85,7 @@ cd juno/models
 wget https://huggingface.co/.../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
 ```
 
-then run local jUno interactive console to try and train inference
+then run local Juno interactive console to try and train inference
 
 ```
 ./juno local --model-path models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
@@ -115,15 +103,7 @@ More at **[howto.md](docs/howto.md)**.
 
 Run **`juno-master`** as the coordinator and **`juno-node`** on each worker with gRPC between them (systemd or your own process manager). Parallelism modes and byte-order flags match local cluster harness behaviour described in **[docs/howto.md](docs/howto.md)**; topology and components are in **[docs/arch.md](docs/arch.md)**. AWS automation under **`scripts/aws/`** is optional cloud packaging of the same roles.
 
-## 3. Agent integration
-
-Copy-paste prompts for another agent:
-
-- **Maven:** “How do I add Juno `cab.ml` Maven Central jars at version `0.1.0` to my project so the Juno player or embedded inference runs end-to-end?” (start from **[docs/integration-maven.md](docs/integration-maven.md)** and **[docs/howto.md](docs/howto.md)**.)
-
-- **AWS:** “How do I run a Juno cluster on AWS using `scripts/aws`?” (see **[docs/howto.md](docs/howto.md)** and **[docs/aws-free-tier-billing.md](docs/aws-free-tier-billing.md)**.)
-
-## 4. Stack
+## 3. Stack
 
 Node coordination and inference RPCs use **gRPC** with **protobuf** contracts from the `api` module. GPU matmul is backed by **Panama FFI** (`java.lang.foreign`) against two vendor libraries:
 
@@ -132,9 +112,9 @@ Node coordination and inference RPCs use **gRPC** with **protobuf** contracts fr
 
 Backend is auto-selected at startup: CUDA first, then ROCm, then CPU. Override with `-Djuno.gpu.backend=cuda|rocm|auto`. A CPU quantised path is used when GPU is off or unavailable. The coordinator HTTP surface (**REST** and **SSE**) is implemented with **Javalin**.
 
-## 5. Useful refs
+## 4. Useful refs
 
-- Performance matrix: **[docs/juno_test_matrix.html](docs/juno_test_matrix.html)** - methodology companion **[docs/performance.md](docs/performance.md)**
+- Performance matrix: **[docs/juno_test_matrix.html](https://ml.cab/juno_test_matrix.html)** - methodology companion **[docs/performance.md](docs/performance.md)**
 - Legal Q&A: **[docs/legal.md](docs/legal.md)**
 
 ---
