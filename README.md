@@ -12,12 +12,42 @@ Distributed LLM inference and fine-tuning. Pure Java - No Python, no GIL, no Spr
 
 ## 1. What is Juno
 
-- Playing large and tiny language models;
-- Providing distributed inference - Layer Sharding (pipeline parallelism) or Weight Slices (tensor parallelism) using pure Java; 0 sidecar processes;
-- GPU acceleration supported — *NVIDIA CUDA/cuBLAS* and *AMD ROCm/rocBLAS*, both with FP16 resident weights; CPU fallback on OOM; auto-detected at startup;
-- LoRA (Low-Rank Adaptation) supported. Train your data arranged by checkpoints; persist LoRA inference adapter for future use;
-- OpenAI-compatible REST - `POST /v1/chat/completions`, `GET /v1/models`; swap the base URL only to integrate in your application;
-- JFR metrics under the hood - custom flight-recorder events across hot paths; instrumentation driven development;
+### Distributed inference
+
+- **Pipeline parallel** — contiguous layer blocks across JVM nodes; activations flow serially over gRPC.
+- **Tensor parallel** — full depth on each node with head/FFN slices; coordinator AllReduce on logits.
+- Zero sidecar processes: coordinator (**juno-master**) and workers (**juno-node**) are shaded JVM jars.
+
+### GPU acceleration
+
+- **NVIDIA CUDA 12.x / cuBLAS** and **AMD ROCm 6+ / rocBLAS** via Panama FFI (`java.lang.foreign`).
+- Auto-selection at startup: CUDA → ROCm → CPU. Override with `-Djuno.gpu.backend=cuda|rocm|auto`.
+- Device-resident FP16 weights; automatic CPU quantised fallback on VRAM OOM.
+
+### LoRA fine-tuning
+
+- In-process training REPL: `./juno lora`
+- Inference overlay: `--lora-play PATH` (local, cluster, AWS)
+- Native merge to standalone GGUF: `./juno merge` (patched tensors stored as F32)
+
+### OpenAI-compatible REST
+
+- `POST /v1/chat/completions` (blocking + SSE)
+- `GET /v1/models`, `GET /v1/models/{model}`
+- Enable with `--api-port N` on `./juno local` or cluster mode
+- Juno extensions: `x_juno_priority`, `x_juno_session_id`, `x_juno_top_k`
+
+### JVM integration
+
+- Maven BOM: `cab.ml:juno-bom:0.1.0`
+- Facade API: `JunoPlayer`, `LoraTrainer`, `JunoHttpClient`
+- See [docs/howto.md](docs/howto.md) JVM integration section
+
+### Observability
+
+- Custom JFR events across matmul, forward pass, token generation, LoRA training
+- Health dashboard with per-node CPU load, coordinator P99 latency, node throughput
+- Performance matrix: [docs/juno_test_matrix.html](https://ml.cab/juno_test_matrix.html)
 
 Please see full feature list **[here](docs/features.md)**
 
@@ -115,6 +145,7 @@ Backend is auto-selected at startup: CUDA first, then ROCm, then CPU. Override w
 ## 4. Useful refs
 
 - Release notes: **[RELEASE_NOTES.md](RELEASE_NOTES.md)**
+- Security: **[SECURITY.md](SECURITY.md)**
 - Performance matrix: **[docs/juno_test_matrix.html](https://ml.cab/juno_test_matrix.html)** - methodology companion **[docs/performance.md](docs/performance.md)**
 - Legal Q&A: **[docs/legal.md](docs/legal.md)**
 

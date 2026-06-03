@@ -129,6 +129,12 @@
 			</dependency>
 			<dependency>
 				<groupId>cab.ml</groupId>
+				<artifactId>node</artifactId>
+				<version>${project.version}</version>
+				<classifier>tests</classifier>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
 				<artifactId>kvcache</artifactId>
 				<version>${project.version}</version>
 			</dependency>

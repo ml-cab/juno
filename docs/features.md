@@ -58,8 +58,8 @@ The primary Juno performance artifact is the interactive HTML matrix **[juno_tes
 
 Measurements tie back to JFR custom events (especially `juno.TokenProduced`, `juno.MatVec`, `juno.ForwardPass`): extract `.jfr` snapshots with the metrics module as described in [howto.md](howto.md). Cluster runs merge per-JVM recordings via `cab.ml.juno.metrics.MetricsMain`.
 
-# EU AI Act known gaps 
+# EU AI Act known gaps
 
-Redistributing merged weights may raise questions regarding base-model and adapter licenses. Juno does not (yet) provide a legal determination for the points highlighted EU AI Act **[research](EU-AI-Act-compliance.md)** as `Compliance Gaps`. in the EU AI Act research. Please wait until those gaps are addressed, or contact us [via email](mailto:dev@ml.cab?subject=Help%20Request). 
+Redistributing merged weights may raise questions regarding base-model and adapter licenses. Juno does not yet provide a legal determination for the compliance gaps documented in [EU-AI-Act-compliance.md](EU-AI-Act-compliance.md). Wait until those gaps are addressed, or contact us [via email](mailto:dev@ml.cab?subject=Help%20Request).
 
 You are also welcome to submit a pull request once you have resolved the gaps.

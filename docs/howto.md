@@ -1,6 +1,6 @@
 ## Juno — complete how-to reference
 
-**Documentation map:** [README.md](../README.md) (overview), [arch.md](arch.md), [LoRA.md](LoRA.md), [integration-maven.md](integration-maven.md), [performance.md](performance.md), [legal.md](legal.md), [juno_test_matrix.html](https://ml.cab/juno_test_matrix.html), [features.md](features.md).
+**Documentation map:** [README.md](../README.md) (overview), [arch.md](arch.md), [LoRA.md](LoRA.md), [performance.md](performance.md), [legal.md](legal.md), [juno_test_matrix.html](https://ml.cab/juno_test_matrix.html), [features.md](features.md).
 
 ```
 ./juno
@@ -30,8 +30,8 @@ Unified stand-alone launcher at the project root. Requires JDK 25+ and pre-built
 | `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | cluster, local | Activation wire format |
 | `--byteOrder BE\|LE` | `BE` | cluster | Activation byte order. Must match across all JVMs — propagated automatically by `ClusterHarness` and `juno-deploy.sh`. |
 | `--max-tokens N` | `200` | cluster, local, lora | Maximum tokens per response |
-| `--temperature F` | `0.6` | all | Sampling temperature (0.0 = deterministic) |
-| `--top-k N` | `20` | all | Top-K sampling cutoff (0 = disabled) |
+| `--temperature F` | `0.7` | all | Sampling temperature (0.0 = deterministic) |
+| `--top-k N` | `50` | all | Top-K sampling cutoff (0 = disabled) |
 | `--top-p F` | `0.95` | all | Nucleus sampling cutoff (0 = disabled) |
 | `--heap SIZE` | `4g` | all | JVM heap per node, e.g. `4g`, `8g` |
 | `--nodes N` | `3` | local | Number of in-process shards |
@@ -266,7 +266,7 @@ curl http://localhost:8080/v1/models
 | `messages[].content` | `ChatMessage.content` | Text only; image content not supported |
 | `temperature` | `SamplingParams.temperature` | 0.0–2.0; default 0.7 |
 | `top_p` | `SamplingParams.topP` | 0.0–1.0; default 0.9 |
-| `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 512 |
+| `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 200 |
 | `max_tokens` | `SamplingParams.maxTokens` | Deprecated alias; `max_completion_tokens` takes precedence |
 | `frequency_penalty` | `SamplingParams.repetitionPenalty` | Mapped: `1 + max(0, fp/2)` |
 | `stream` | route selection | `false` → blocking JSON; `true` → SSE |

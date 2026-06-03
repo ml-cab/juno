@@ -68,5 +68,5 @@ LoRA GPU defaults:
                     MatVecBackend (public enum, stable JFR label strings via public label() method).
 
 See README.md, docs/howto.md, docs/arch.md, docs/LoRA.md,
-  docs/integration-maven.md, docs/performance.md, docs/legal.md,
+  docs/performance.md, docs/legal.md,
   docs/juno_test_matrix.html, docs/features.md

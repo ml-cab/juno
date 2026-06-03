@@ -387,12 +387,12 @@ public final class InferenceApiServer {
 			    <div class="param-sep"></div>
 			    <div class="param-group">
 			      <label>top-k</label>
-			      <input type="number" id="p-topk" value="20" min="0" max="200" style="width:52px">
+			      <input type="number" id="p-topk" value="50" min="0" max="200" style="width:52px">
 			    </div>
 			    <div class="param-sep"></div>
 			    <div class="param-group">
 			      <label>max tokens</label>
-			      <input type="number" id="p-maxt" value="512" min="1" max="4096" style="width:62px">
+			      <input type="number" id="p-maxt" value="200" min="1" max="4096" style="width:62px">
 			    </div>
 			    <div class="param-sep"></div>
 			    <div class="param-group">
@@ -524,9 +524,9 @@ public final class InferenceApiServer {
 			    modelId: mSelect.value || undefined,
 			    sampling: {
 			      temperature: parseFloat(document.getElementById('p-temp').value),
-			      topK:        parseInt(document.getElementById('p-topk').value)   || 20,
+			      topK:        parseInt(document.getElementById('p-topk').value)   || 50,
 			      topP:        parseFloat(document.getElementById('p-topp').value),
-			      maxTokens:   parseInt(document.getElementById('p-maxt').value)   || 512,
+			      maxTokens:   parseInt(document.getElementById('p-maxt').value)   || 200,
 			      priority:    document.getElementById('p-prio').value,
 			    }
 			  };

@@ -50,7 +50,7 @@ CPU-only inference requires no GPU stack. The `./juno` launcher enforces JDK 25 
 
 - Maven BOM: `cab.ml:juno-bom:0.1.0`
 - Facade API: `JunoPlayer`, `LoraTrainer`, `JunoHttpClient`
-- See [docs/howto.md](docs/howto.md) and [docs/integration-maven.md](docs/integration-maven.md)
+- See [docs/howto.md](docs/howto.md) JVM integration section
 
 ### Observability
 
@@ -92,7 +92,6 @@ Full reference: [docs/howto.md](docs/howto.md)
 - **OpenAI `n > 1`** — rejected with HTTP 400; only single completions.
 - **Partial OpenAI compatibility** — `stop`, `presence_penalty`, `logit_bias`, `user`, `seed` are ignored for client compatibility.
 - **No built-in auth or TLS** on the REST server; configure at the reverse proxy or network layer for production.
-- **CLI vs REST defaults differ** when sampling fields are omitted (CLI: temperature 0.6, top-k 20; REST: 0.7, top-k 50). See [docs/howto.md](docs/howto.md).
 - **LoRA merge / redistribution** may trigger model-license obligations; see [docs/legal.md](docs/legal.md).
 - **EU AI Act** — compliance-oriented features (AI disclosure, audit logging, auth) are not yet built in; see [docs/EU-AI-Act-compliance.md](docs/EU-AI-Act-compliance.md).
 
@@ -107,9 +106,9 @@ Full reference: [docs/howto.md](docs/howto.md)
 | [docs/arch.md](docs/arch.md) | Internal architecture |
 | [docs/features.md](docs/features.md) | Feature summary |
 | [docs/LoRA.md](docs/LoRA.md) | LoRA training and merge |
-| [docs/integration-maven.md](docs/integration-maven.md) | Maven coordinates and publish |
 | [docs/performance.md](docs/performance.md) | Benchmark methodology |
 | [docs/legal.md](docs/legal.md) | Model weights and merge Q&A |
+| [SECURITY.md](SECURITY.md) | Vulnerability reporting |
 | [api/src/main/resources/juno-api.yaml](api/src/main/resources/juno-api.yaml) | OpenAPI spec |
 
 Developer session history: [CHANGELOG.md](CHANGELOG.md)

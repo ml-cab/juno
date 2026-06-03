@@ -279,9 +279,9 @@ the inference path is needed. The JSON report exposes `juno.TokenProduced.count`
 `juno.TokenProduced.elapsed_seconds`, and `juno.TokenProduced.tps`.
 
 **Stub mode.** `EmbeddedNodeServer` uses an internal `StubForwardPassHandler` (zero-filled arrays)
-before a shard is loaded. `CyclicForwardPassHandler` lives in `node/src/main` and is shared with
-integration tests in `juno-master` via the `node:tests` classifier jar. Integration tests run stub
-mode — no model file, no GPU, boots in seconds.
+before a shard is loaded. `CyclicForwardPassHandler` lives in `node/src/test` and is shared with
+integration tests in `juno-master` and `coordinator` via the `node:tests` classifier jar. Integration
+tests run stub mode — no model file, no GPU, boots in seconds.
 
 ---
 

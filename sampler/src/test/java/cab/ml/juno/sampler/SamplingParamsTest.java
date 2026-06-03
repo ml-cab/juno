@@ -15,7 +15,7 @@ class SamplingParamsTest {
 		assertThat(p.topP()).isEqualTo(0.9f);
 		assertThat(p.repetitionPenalty()).isEqualTo(1.1f);
 		assertThat(p.greedy()).isFalse();
-		assertThat(p.maxTokens()).isEqualTo(512);
+		assertThat(p.maxTokens()).isEqualTo(200);
 	}
 
 	@Test

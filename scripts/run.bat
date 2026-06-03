@@ -59,8 +59,8 @@ set "MODEL=%MODEL_PATH%"
 if "%DTYPE%"==""       set "DTYPE=FLOAT16"
 if "%BYTE_ORDER%"==""  set "BYTE_ORDER=BE"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
-if "%TEMPERATURE%"=="" set "TEMPERATURE=0.6"
-if "%TOP_K%"==""       set "TOP_K=20"
+if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
+if "%TOP_K%"==""       set "TOP_K=50"
 if "%TOP_P%"==""       set "TOP_P=0.95"
 if "%HEAP%"==""        set "HEAP=4g"
 set "VERBOSE=false"
@@ -111,8 +111,8 @@ if /i "%~1"=="--help" (
   echo                        BE=big-endian (hardware-validated default)
   echo                        LE=little-endian (native x86 order)
   echo   --max-tokens N    (default 200)
-  echo   --temperature F   (default 0.6)
-  echo   --top-k N         (default 20)
+  echo   --temperature F   (default 0.7)
+  echo   --top-k N         (default 50)
   echo   --top-p F         (default 0.95)
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
@@ -170,8 +170,8 @@ set "MODEL=%MODEL_PATH%"
 if "%DTYPE%"==""       set "DTYPE=FLOAT16"
 if "%BYTE_ORDER%"==""  set "BYTE_ORDER=BE"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
-if "%TEMPERATURE%"=="" set "TEMPERATURE=0.6"
-if "%TOP_K%"==""       set "TOP_K=20"
+if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
+if "%TOP_K%"==""       set "TOP_K=50"
 if "%TOP_P%"==""       set "TOP_P=0.95"
 if "%HEAP%"==""        set "HEAP=4g"
 if "%NODES%"==""       set "NODES=3"
@@ -216,8 +216,8 @@ if /i "%~1"=="--help" (
   echo                        BE=big-endian (hardware-validated default)
   echo                        LE=little-endian (native x86 order)
   echo   --max-tokens N    (default 200)
-  echo   --temperature F   (default 0.6)
-  echo   --top-k N         (default 20)
+  echo   --temperature F   (default 0.7)
+  echo   --top-k N         (default 50)
   echo   --top-p F         (default 0.95)
   echo   --nodes N         (default 3)
   echo   --heap SIZE       (default 4g)
@@ -277,8 +277,8 @@ if "%LORA_RANK%"==""  set "LORA_RANK=8"
 if "%LORA_LR%"==""    set "LORA_LR=0.0001"
 if "%LORA_STEPS%"=="" set "LORA_STEPS=50"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
-if "%TEMPERATURE%"=="" set "TEMPERATURE=0.6"
-if "%TOP_K%"==""       set "TOP_K=20"
+if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
+if "%TOP_K%"==""       set "TOP_K=50"
 if "%TOP_P%"==""       set "TOP_P=0.95"
 if "%HEAP%"==""        set "HEAP=4g"
 set "VERBOSE=false"
@@ -331,8 +331,8 @@ if /i "%~1"=="--help" (
   echo.
   echo   Generation (used for inference):
   echo     --max-tokens N          (default 200)
-  echo     --temperature F         (default 0.6)
-  echo     --top-k N               (default 20)
+  echo     --temperature F         (default 0.7)
+  echo     --top-k N               (default 50)
   echo     --top-p F               (default 0.95)
   echo.
   echo   JVM:

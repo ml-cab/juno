@@ -121,8 +121,8 @@ public final class ConsoleMain {
 	private static String modelPath = null;
 	private static ActivationDtype dtype = ActivationDtype.FLOAT16;
 	private static int maxTokens = 200;
-	private static float temperature = 0.6f;
-	private static int topK = 20;
+	private static float temperature = 0.7f;
+	private static int topK = 50;
 	private static float topP = 0.95f;
 	private static boolean localMode = false;
 	private static int nodeCount = 3;
@@ -236,7 +236,7 @@ public final class ConsoleMain {
 				break;
 			case "--top-k":
 				if (i + 1 < args.length)
-					topK = parseInt(args[++i], 20);
+					topK = parseInt(args[++i], 50);
 				break;
 			case "--top-p":
 				if (i + 1 < args.length)
@@ -244,7 +244,7 @@ public final class ConsoleMain {
 				break;
 			case "--temperature":
 				if (i + 1 < args.length)
-					temperature = parseFloat(args[++i], 0.6f);
+					temperature = parseFloat(args[++i], 0.7f);
 				break;
 			case "--pType":
 			case "--ptype":
@@ -355,8 +355,8 @@ public final class ConsoleMain {
 		System.out.println("  --pType pipeline|tensor    Parallelism type (default: pipeline)");
 		System.out.println("  --dtype FLOAT32|FLOAT16    Activation wire format (default: FLOAT16)");
 		System.out.println("  --max-tokens N             Max generated tokens (default: 200)");
-		System.out.println("  --temperature F            Sampling temperature (default: 0.6)");
-		System.out.println("  --top-k N                  Top-K sampling cutoff (default: 20)");
+		System.out.println("  --temperature F            Sampling temperature (default: 0.7)");
+		System.out.println("  --top-k N                  Top-K sampling cutoff (default: 50)");
 		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.95)");
 		System.out.println("  --byteOrder BE|LE          Activation codec byte order (default: BE)");
 		System.out.println("                             BE = big-endian (default, hardware-validated)");

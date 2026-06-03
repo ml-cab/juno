@@ -396,7 +396,7 @@ components:
           type: integer
           minimum: 1
           maximum: 32768
-          default: 512
+          default: 200
           description: Maximum number of tokens to generate
           example: 512
         priority:

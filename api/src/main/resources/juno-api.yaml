@@ -42,7 +42,7 @@ info:
     | temperature             | sampling.temperature              | 0.0–2.0; default 0.7                    |
     | top_p                   | sampling.topP                     | 0.0–1.0; default 0.9                    |
     | max_tokens              | sampling.maxTokens                | Deprecated alias; use max_completion_tokens |
-    | max_completion_tokens   | sampling.maxTokens                | 1–32768; default 512                    |
+    | max_completion_tokens   | sampling.maxTokens                | 1–32768; default 200                    |
     | frequency_penalty       | sampling.repetitionPenalty        | OpenAI range −2..2; mapped: 1 + penalty/2 (0→1.0, 2→2.0) |
     | stream                  | (route selection)                 | false → blocking JSON; true → SSE chunks|
     | n                       | —                                 | Only n=1 is supported; other values are rejected with 400 |
@@ -428,7 +428,7 @@ components:
           type: integer
           minimum: 1
           maximum: 32768
-          default: 512
+          default: 200
           description: |
             Maximum number of tokens to generate. Generation stops at this
             limit (finish_reason = "length") or at EOS, whichever comes first.
