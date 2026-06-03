@@ -18,4 +18,4 @@ Open questions to resolve with counsel: stacking of **Llama / Mistral / Phi / co
 - Document adapter training sources if redistribution is planned.
 - Prefer serving merged models **on-prem** until compliance is explicit.
 
-See implementation pointers in [features/lora-and-merge.md](features/lora-and-merge.md) and [LoRA.md](LoRA.md).
+See the LoRA feature overview in [features.md](features.md) and the training guide in [LoRA.md](LoRA.md).

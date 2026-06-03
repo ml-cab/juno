@@ -2,13 +2,13 @@
 
 Train low-rank adapters in-process with `./juno lora`, persist checkpoints as `.lora`, apply them read-only at inference with `--lora-play`, or bake weights into a new GGUF using `./juno merge`. The base GGUF file is never modified during training; merge produces a standalone artifact for deployment without a sidecar adapter.
 
-Operational detail, REPL commands, and hyperparameters are in [LoRA.md](../LoRA.md). Redistributing merged models may interact with base-model and adapter licenses; see [legal.md](../legal.md).
+Operational detail, REPL commands, and hyperparameters are in [LoRA.md](LoRA.md). Redistributing merged models may interact with base-model and adapter licenses; see [legal.md](legal.md).
 
 # JFR and metrics
 
 Every launcher mode accepts `--jfr DURATION` to record Java Flight Recorder with custom events (`juno.MatVec`, `juno.ForwardPass`, `juno.TokenProduced`, tokenizer events, `juno.LoraTrainStep`). Coordinator and forked nodes each emit `.jfr` files in cluster runs; `MetricsMain.extractToJsonMerged()` merges them into `target/metrics/metrics.json`.
 
-Aggregate throughput can be read from `juno.TokenProduced` spans without extra counters; see [arch.md](../arch.md). Publishable scenario tables and CPU/GPU comparisons are in [juno_test_matrix.html](../juno_test_matrix.html); extraction CLI remains in [howto.md](../howto.md) and [performance.md](../performance.md).
+Aggregate throughput can be read from `juno.TokenProduced` spans without extra counters; see [arch.md](arch.md). Publishable scenario tables and CPU/GPU comparisons are in [juno_test_matrix.html](juno_test_matrix.html); extraction CLI remains in [howto.md](howto.md) and [performance.md](performance.md).
 
 # GPU acceleration
 
@@ -22,13 +22,13 @@ Both backends implement `GpuMatVec` (sealed interface). Transformer handlers (`L
 
 Pass `--cpu` or `JUNO_USE_GPU=false` to force CPU quantised matmul. Cluster coordinators stay CPU-only while each node JVM owns its GPU context.
 
-Lifecycle and handler routing are described under GPU sections of [arch.md](../arch.md). CPU vs GPU throughput snapshots appear in [juno_test_matrix.html](../juno_test_matrix.html).
+Lifecycle and handler routing are described under GPU sections of [arch.md](arch.md). CPU vs GPU throughput snapshots appear in [juno_test_matrix.html](juno_test_matrix.html).
 
 # Distributed inference
 
 Juno splits transformer work across JVM processes connected by gRPC. **Pipeline parallel** assigns contiguous layer ranges per node so activations flow serially and pooled VRAM fits larger models; **tensor parallel** keeps full depth on each node with head or FFN slices and combines partial logits at the coordinator via star AllReduce (constraint: head count divisible by node count).
 
-Use `./juno` with cluster defaults or explicit `--pType pipeline|tensor`; remote deployments pair **juno-master** (coordinator) with **juno-node** workers. Full diagrams, REST vs native routes, and KV wiring live in [arch.md](../arch.md). Command-line flags and smoke tests are in [howto.md](../howto.md).
+Use `./juno` with cluster defaults or explicit `--pType pipeline|tensor`; remote deployments pair **juno-master** (coordinator) with **juno-node** workers. Full diagrams, REST vs native routes, and KV wiring live in [arch.md](arch.md). Command-line flags and smoke tests are in [howto.md](howto.md).
 
 # OpenAI-compatible REST API
 
@@ -50,7 +50,7 @@ Optional extensions:
 
 **Supported fields:** `model`, `messages`, `temperature`, `top_p`, `max_completion_tokens`, `max_tokens` (deprecated alias), `frequency_penalty`, `stream`, `n` (only 1 accepted). **Ignored for compatibility:** `stop`, `presence_penalty`, `logit_bias`, `user`, `seed`.
 
-The coordinator still exposes Juno-native inference endpoints alongside this surface; behaviour is documented in [arch.md](../arch.md). The authoritative OpenAPI 3 spec is [`api/src/main/resources/juno-api.yaml`](../../api/src/main/resources/juno-api.yaml). Examples and flags are in [howto.md](../howto.md).
+The coordinator still exposes Juno-native inference endpoints alongside this surface; behaviour is documented in [arch.md](arch.md). The authoritative OpenAPI 3 spec is [`juno-api.yaml`](../api/src/main/resources/juno-api.yaml). Examples and flags are in [howto.md](howto.md).
 
 # Performance reporting
 

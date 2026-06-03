@@ -4,7 +4,7 @@
 # Uses pre-built shade jars from target/.  Build first with:
 #   mvn clean package -DskipTests
 #
-# Requires: JDK 21+
+# Requires: JDK 25+
 # Runs on:  Linux · macOS · Windows (Git Bash / WSL)
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -95,7 +95,7 @@ find_java() {
     done
   fi
 
-  err "JDK 21+ not found. Install from https://adoptium.net and set JAVA_HOME."
+  err "JDK 25+ not found. Install from https://adoptium.net and set JAVA_HOME."
 }
 
 JAVA="$(find_java)"
@@ -120,7 +120,7 @@ prepend_cuda_bin_to_path_if_gpu() {
 check_java_version() {
   local ver
   ver=$("$JAVA" -version 2>&1 | awk -F'"' '/version/{print $2}' | cut -d. -f1)
-  [[ "${ver:-0}" -ge 21 ]] || err "JDK 21+ required (found: $ver).  JAVA_HOME=$JAVA_HOME"
+  [[ "${ver:-0}" -ge 25 ]] || err "JDK 25+ required (found: $ver).  JAVA_HOME=$JAVA_HOME"
 }
 
 # ── Jar existence check ───────────────────────────────────────────────────────

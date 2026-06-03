@@ -4,7 +4,7 @@ setlocal EnableDelayedExpansion
 rem juno - Windows runtime launcher (no Maven required)
 rem Uses pre-built shade jars from target/.
 rem Build first: mvn clean package -DskipTests
-rem Requires: JDK 21+   Mirrors: scripts/run.sh
+rem Requires: JDK 25+   Mirrors: scripts/run.sh
 
 rem Step up from scripts\ to project root
 set "DIR=%~dp0"
@@ -540,8 +540,8 @@ set "JAVAVER=%JAVAVER_RAW:"=%"
 set "JAVAMAJOR="
 for /f "tokens=1 delims=." %%M in ("%JAVAVER%") do set "JAVAMAJOR=%%M"
 if "%JAVAMAJOR%"=="" ( echo [WARN] Unable to parse Java version. Continuing. & exit /b 0 )
-if %JAVAMAJOR% LSS 21 (
-  echo [ERR] JDK 21+ required (found: %JAVAVER%).
+if %JAVAMAJOR% LSS 25 (
+  echo [ERR] JDK 25+ required (found: %JAVAVER%).
   exit /b 1
 )
 exit /b 0
