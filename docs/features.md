@@ -6,7 +6,7 @@ Operational detail, REPL commands, and hyperparameters are in [LoRA.md](LoRA.md)
 
 # JFR and metrics
 
-Every launcher mode accepts `--jfr DURATION` to record Java Flight Recorder with custom events (`juno.MatVec`, `juno.ForwardPass`, `juno.TokenProduced`, tokenizer events, `juno.LoraTrainStep`). Coordinator and forked nodes each emit `.jfr` files in cluster runs; `MetricsMain.extractToJsonMerged()` merges them into `target/metrics/metrics.json`.
+Every launcher mode accepts `--jfr DURATION` to record Java Flight Recorder with custom events (`juno.MatVec`, `juno.ForwardPass`, `juno.TokenProduced`, tokenizer events, `juno.LoraTrainStep`). Coordinator and forked nodes each emit separate `.jfr` files in cluster runs; on exit the launcher extracts metrics per file via `MetricsMain.extractToJson()` (see [howto.md](howto.md)).
 
 Aggregate throughput can be read from `juno.TokenProduced` spans without extra counters; see [arch.md](arch.md). Publishable scenario tables and CPU/GPU comparisons are in [juno_test_matrix.html](juno_test_matrix.html); extraction CLI remains in [howto.md](howto.md) and [performance.md](performance.md).
 
@@ -18,7 +18,7 @@ Two GPU backends are supported via Panama FFI (`java.lang.foreign.Linker` + `Sym
 
 **AMD (ROCm 6+ / rocBLAS):** `RocmBindings` resolves `libamdhip64.so` + `librocblas.so`; `RocmMatVec` provides the same three compute paths via `rocblas_sgemv` / `rocblas_hssgemv_strided_batched`. Tested on AMD Radeon RX 7900 XT (gfx1100, ROCm 7.2.x).
 
-Both backends implement `GpuMatVec` (sealed interface). Transformer handlers (`LlamaTransformerHandler`, `Phi3TransformerHandler`, `LoraTrainableHandler`) depend on `GpuMatVec` — not a concrete vendor class — so device-resident weights are uploaded on any GPU.
+Both backends implement `GpuMatVec` (sealed interface). Transformer handlers (`LlamaTransformerHandler`, `Phi3TransformerHandler` — under development, `LoraTrainableHandler`) depend on `GpuMatVec` — not a concrete vendor class — so device-resident weights are uploaded on any GPU.
 
 Pass `--cpu` or `JUNO_USE_GPU=false` to force CPU quantised matmul. Cluster coordinators stay CPU-only while each node JVM owns its GPU context.
 
@@ -56,7 +56,7 @@ The coordinator still exposes Juno-native inference endpoints alongside this sur
 
 The primary Juno performance artifact is the interactive HTML matrix **[juno_test_matrix.html](juno_test_matrix.html)** (model, CPU vs GPU scenarios, throughput and latency insights). Open it from a checkout in a browser; refresh or regenerate the file when harness inputs or hardware baselines change.
 
-Measurements tie back to JFR custom events (especially `juno.TokenProduced`, `juno.MatVec`, `juno.ForwardPass`): extract `.jfr` snapshots with the metrics module as described in [howto.md](howto.md). Cluster runs merge per-JVM recordings via `cab.ml.juno.metrics.MetricsMain`.
+Measurements tie back to JFR custom events (especially `juno.TokenProduced`, `juno.MatVec`, `juno.ForwardPass`): extract `.jfr` snapshots with the metrics module as described in [howto.md](howto.md). Cluster runs produce one file per JVM; the launcher prints a per-file summary on exit. For combined percentile math across JVMs, use `MetricsMain.extractToJsonMerged()` programmatically.
 
 # EU AI Act known gaps
 

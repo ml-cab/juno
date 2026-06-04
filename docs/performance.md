@@ -14,7 +14,8 @@ a run, extract numbers from JFR, and interpret the matrix columns.
 | GPU | `g4dn.2xlarge` (AWS) | 8 vCPU, 32 GB RAM; NVIDIA T4 16 GB VRAM |
 
 All runs use `tinyllama-1.1b-chat-v1.0-q4_k_m.gguf` unless stated otherwise. TPS is
-coordinator-side `juno.TokenProduced.tps` extracted from the merged JFR file.
+coordinator-side `juno.TokenProduced.tps` extracted from the coordinator `.jfr` file
+(not node recordings).
 
 ---
 
@@ -52,20 +53,26 @@ JUNO_USE_GPU=true \
   --jfr 5m
 ```
 
-JFR files are written as `juno-<modelStem>-<timestamp>.jfr` in the project root.
-Cluster runs produce one file per JVM; pass all of them to the extractor.
+JFR files are written as `juno-<modelStem>-<timestamp>.jfr` (local/coordinator) or
+`juno-<nodeId>-<modelStem>-<timestamp>.jfr` (cluster nodes) in the project root.
+Cluster runs produce one file per JVM.
 
 ### 3. Extract metrics
 
 ```bash
-# Merge and extract to target/metrics/metrics.json
-java -cp juno-player/target/juno-player-*-shaded.jar \
-  cab.ml.juno.metrics.MetricsMain \
-  --merge \
-  juno-*.jfr
+# Build metrics module, then scan project-root *.jfr files
+mvn package -pl metrics -am -DskipTests
+java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 
 cat target/metrics/metrics.json
 ```
+
+The CLI maps each `juno-<modelStem>-*.jfr` in the project root to an entry in
+`metrics/src/main/resources/models.json` and writes one snapshot per matched file.
+After `./juno --jfr …` (cluster), the launcher already prints per-file summaries on exit;
+`metrics.json` reflects whichever file the launcher processed last. For TPS, read the
+coordinator recording. For programmatic cross-JVM percentile merge, call
+`MetricsMain.extractToJsonMerged(List<Path>, modelStem, modelFilename)` from Java.
 
 Key fields to record:
 

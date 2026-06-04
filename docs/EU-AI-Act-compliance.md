@@ -10,7 +10,7 @@
 
 The EU AI Act regulates **AI systems** and **General-Purpose AI (GPAI) models**. Classifying Juno correctly is the first and most consequential step.
 
-**Juno is an inference and fine-tuning infrastructure engine.** It reads third-party GGUF model files (LLaMA, Phi-3, Mistral, etc.), distributes transformer computation across JVM nodes via gRPC, and exposes an OpenAI-compatible REST API (`POST /v1/chat/completions`). It does not contain, produce, or distribute a GPAI model itself.
+**Juno is an inference and fine-tuning infrastructure engine.** It reads third-party GGUF model files (LLaMA, Mistral, etc.; Phi-3 support is under development), distributes transformer computation across JVM nodes via gRPC, and exposes an OpenAI-compatible REST API (`POST /v1/chat/completions`). It does not contain, produce, or distribute a GPAI model itself.
 
 Under Article 3 of the Act, an **AI system** is a machine-based system that infers outputs such as predictions, content, or recommendations from inputs. When Juno is running with a loaded model and a user sends a prompt, the resulting deployment is an AI system. Juno is the **runtime infrastructure** that makes that AI system operational.
 

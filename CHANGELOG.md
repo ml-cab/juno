@@ -151,7 +151,7 @@ all error codes.
 | `messages[].role` / `.content` | `ChatMessage` | Text only; images not supported |
 | `temperature` | `SamplingParams.temperature` | 0.0–2.0; default 0.7 |
 | `top_p` | `SamplingParams.topP` | 0.0–1.0; default 0.9 |
-| `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 512 |
+| `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 200 |
 | `max_tokens` | `SamplingParams.maxTokens` | Deprecated alias |
 | `frequency_penalty` | `SamplingParams.repetitionPenalty` | `1 + max(0, fp/2)` |
 | `stream` | route selection | false → blocking JSON; true → SSE |

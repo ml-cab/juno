@@ -61,7 +61,7 @@ if "%BYTE_ORDER%"==""  set "BYTE_ORDER=BE"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
-if "%TOP_P%"==""       set "TOP_P=0.95"
+if "%TOP_P%"==""       set "TOP_P=0.9"
 if "%HEAP%"==""        set "HEAP=4g"
 set "VERBOSE=false"
 if "%PTYPE%"=="" set "PTYPE=pipeline"
@@ -113,7 +113,7 @@ if /i "%~1"=="--help" (
   echo   --max-tokens N    (default 200)
   echo   --temperature F   (default 0.7)
   echo   --top-k N         (default 50)
-  echo   --top-p F         (default 0.95)
+  echo   --top-p F         (default 0.9)
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
@@ -172,7 +172,7 @@ if "%BYTE_ORDER%"==""  set "BYTE_ORDER=BE"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
-if "%TOP_P%"==""       set "TOP_P=0.95"
+if "%TOP_P%"==""       set "TOP_P=0.9"
 if "%HEAP%"==""        set "HEAP=4g"
 if "%NODES%"==""       set "NODES=3"
 set "VERBOSE=false"
@@ -218,7 +218,7 @@ if /i "%~1"=="--help" (
   echo   --max-tokens N    (default 200)
   echo   --temperature F   (default 0.7)
   echo   --top-k N         (default 50)
-  echo   --top-p F         (default 0.95)
+  echo   --top-p F         (default 0.9)
   echo   --nodes N         (default 3)
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
@@ -279,7 +279,7 @@ if "%LORA_STEPS%"=="" set "LORA_STEPS=50"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
-if "%TOP_P%"==""       set "TOP_P=0.95"
+if "%TOP_P%"==""       set "TOP_P=0.9"
 if "%HEAP%"==""        set "HEAP=4g"
 set "VERBOSE=false"
 set "JFR_DURATION_LORA="
@@ -333,7 +333,7 @@ if /i "%~1"=="--help" (
   echo     --max-tokens N          (default 200)
   echo     --temperature F         (default 0.7)
   echo     --top-k N               (default 50)
-  echo     --top-p F               (default 0.95)
+  echo     --top-p F               (default 0.9)
   echo.
   echo   JVM:
   echo     --heap SIZE             e.g. 4g 8g 16g  (default 4g)

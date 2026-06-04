@@ -182,7 +182,7 @@ paths:
                     - role: user
                       content: What is Java?
                   temperature: 0.7
-                  max_completion_tokens: 512
+                  max_completion_tokens: 200
               streaming:
                 summary: Streaming request
                 value:
@@ -192,7 +192,7 @@ paths:
                       content: Tell me a joke.
                   stream: true
                   temperature: 0.9
-                  top_p: 0.95
+                  top_p: 0.9
               juno_extensions:
                 summary: Request with Juno-specific extensions
                 value:
@@ -434,7 +434,7 @@ components:
             limit (finish_reason = "length") or at EOS, whichever comes first.
 
             Maps to: `SamplingParams.maxTokens`
-          example: 512
+          example: 200
 
         stream:
           type: boolean

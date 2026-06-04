@@ -29,10 +29,10 @@ Unified stand-alone launcher at the project root. Requires JDK 25+ and pre-built
 | `--model-path PATH` | — | all | Path to GGUF file (required) |
 | `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | cluster, local | Activation wire format |
 | `--byteOrder BE\|LE` | `BE` | cluster | Activation byte order. Must match across all JVMs — propagated automatically by `ClusterHarness` and `juno-deploy.sh`. |
-| `--max-tokens N` | `200` | cluster, local, lora | Maximum tokens per response |
+| `--max-tokens N` | `200` | cluster, local, lora | Maximum tokens per response. Same default as REST API and `SamplingParams.defaults()`. |
 | `--temperature F` | `0.7` | all | Sampling temperature (0.0 = deterministic) |
 | `--top-k N` | `50` | all | Top-K sampling cutoff (0 = disabled) |
-| `--top-p F` | `0.95` | all | Nucleus sampling cutoff (0 = disabled) |
+| `--top-p F` | `0.9` | all | Nucleus sampling cutoff (0 = disabled). Same default as REST API and `SamplingParams.defaults()`. |
 | `--heap SIZE` | `4g` | all | JVM heap per node, e.g. `4g`, `8g` |
 | `--nodes N` | `3` | local | Number of in-process shards |
 | `--pType pipeline\|tensor` | `pipeline` | cluster, test | Parallelism type |
@@ -138,7 +138,7 @@ MODEL_PATH=/path/to/model.gguf PTYPE=tensor ./juno
 ./juno --model-path /path/to/model.gguf --dtype FLOAT32    # lossless debug
 ./juno --model-path /path/to/model.gguf --dtype INT8       # max compression
 
-# With JFR -- coordinator + all node JVMs instrumented; files merged on exit
+# With JFR — coordinator + each node JVM writes its own .jfr file; metrics extracted per file on exit
 ./juno --model-path /path/to/model.gguf --jfr 5m
 
 # With pre-trained adapter on every node
@@ -564,20 +564,26 @@ Run cluster command with `--verbose` to enable `[TRACE]` output:
 
 If the template key at training and inference differ, the model will not recall trained facts.
 Rename the model file to include the architecture keyword (`tinyllama`, `llama-3`, `mistral`,
-`phi-3`, `gemma`) to ensure `ChatModelType.fromPath()` detects it correctly.
+`gemma`) to ensure `ChatModelType.fromPath()` detects it correctly. The `phi3` template and
+Phi-3 handler path are under development — prefer LLaMA-family models for training workflows today.
 
 ---
 
 ### Metrics
 
 ```bash
-# Automatic in local mode
+# Automatic in local mode (single JVM — all juno.* events in one .jfr file)
 ./juno local --model-path /path/to/model.gguf --jfr 5m
 
-# Manual extraction from any .jfr file
+# Cluster mode: coordinator + each node write separate .jfr files. On exit the launcher
+# calls MetricsMain.extractToJson() once per existing file and prints each summary;
+# target/metrics/metrics.json reflects the last processed file. For throughput (TPS),
+# use the coordinator recording (juno.TokenProduced lives on the coordinator JVM).
+
+# Manual extraction from .jfr files in the project root
 mvn package -pl metrics -am -DskipTests
 java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
-# Output: target/metrics/metrics.json
+# Output: target/metrics/metrics.json (one snapshot per mapped .jfr in project root)
 ```
 
 The JSON report includes the following `juno.TokenProduced` fields derived from the coordinator

@@ -158,7 +158,7 @@ code are required by the OpenAI layer. It is a pure translation shim above the s
 ```
 ForwardPassHandlerLoader
     |
-    phi3  -> Phi3TransformerHandler   (fused QKV + gate/up, quantized weights)
+    phi3  -> Phi3TransformerHandler   (fused QKV + gate/up — under development)
     *     -> LlamaTransformerHandler  (separate tensors, quantized weights)
 
 LoRA overlay (optional):
@@ -255,7 +255,8 @@ tensors are copied verbatim in their original quantized form.
 
 **GPT-2 BPE and SentencePiece BPE both supported.** `GgufTokenizer` reads
 `tokenizer.ggml.model` from GGUF metadata. Value `"gpt2"` activates the GPT-2 / tiktoken path
-(Llama 3+). Any other value uses SentencePiece (Llama 1/2, TinyLlama, Mistral, Gemma, Phi-3).
+(Llama 3+). Any other value uses SentencePiece (Llama 1/2, TinyLlama, Mistral, Gemma).
+Phi-3 uses a dedicated handler and `phi3` chat template; both are under development.
 Detection is automatic at load time — no configuration required.
 
 **AWS infrastructure fully scripted.** `juno-deploy.sh` is the unified cluster lifecycle script.
@@ -268,8 +269,13 @@ fail hard. State persisted to `~/.juno-deploy-state`.
 `juno.MatVec`, `juno.ForwardPass`, `juno.TokenProduced`, `juno.Tokenizer`,
 `juno.TemplateFormat`, `juno.LoraTrainStep` — make every layer of the stack observable in
 JDK Mission Control without any agent or bytecode manipulation. In cluster mode, coordinator
-and every forked node JVM each write their own `.jfr` file, merged automatically by
-`MetricsMain.extractToJsonMerged()` on exit.
+and every forked node JVM each write their own `.jfr` file. On exit, `ConsoleMain` collects
+coordinator + node paths and calls `MetricsMain.extractToJson()` once per existing file,
+printing a summary for each; `target/metrics/metrics.json` reflects the last processed file.
+Use `./juno local --jfr` when you need all custom events in a single recording. Throughput
+(TPS) metrics come from the coordinator file (`juno.TokenProduced`). The programmatic
+`MetricsMain.extractToJsonMerged()` API merges event lists across files for percentile math
+but is not invoked by the cluster shutdown hook today.
 
 `juno.TokenProduced` is a coordinator-side instantaneous event fired once per token delivered
 to a client after sampling and EOS checks. Because it lives in the coordinator JFR alongside

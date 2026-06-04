@@ -123,7 +123,7 @@ public final class ConsoleMain {
 	private static int maxTokens = 200;
 	private static float temperature = 0.7f;
 	private static int topK = 50;
-	private static float topP = 0.95f;
+	private static float topP = 0.9f;
 	private static boolean localMode = false;
 	private static int nodeCount = 3;
 	private static boolean verbose = false;
@@ -240,7 +240,7 @@ public final class ConsoleMain {
 				break;
 			case "--top-p":
 				if (i + 1 < args.length)
-					topP = parseFloat(args[++i], 0.95f);
+					topP = parseFloat(args[++i], 0.9f);
 				break;
 			case "--temperature":
 				if (i + 1 < args.length)
@@ -357,7 +357,7 @@ public final class ConsoleMain {
 		System.out.println("  --max-tokens N             Max generated tokens (default: 200)");
 		System.out.println("  --temperature F            Sampling temperature (default: 0.7)");
 		System.out.println("  --top-k N                  Top-K sampling cutoff (default: 50)");
-		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.95)");
+		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.9)");
 		System.out.println("  --byteOrder BE|LE          Activation codec byte order (default: BE)");
 		System.out.println("                             BE = big-endian (default, hardware-validated)");
 		System.out.println("                             LE = little-endian (native x86 order)");

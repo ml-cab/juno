@@ -109,6 +109,13 @@ Then follow **[docs/howto.md](docs/howto.md)** `JVM integration` section.
 
 Contributors and enthusiasts can build from source: `mvn clean package -DskipTests`.
 
+Clone the repo:
+
+```
+git clone https://github.com/ml-cab/juno.git && cd juno
+mvn clean package -DskipTests
+```
+
 Download a GGUF (replace the URL with your chosen model):
 
 ```
@@ -119,8 +126,6 @@ wget https://huggingface.co/.../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
 then run local Juno interactive console to try and train inference
 
 ```
-git clone https://github.com/ml-cab/juno.git && cd juno
-mvn clean package -DskipTests
 ./juno local --model-path models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
 ```
 
@@ -160,7 +165,7 @@ JDK 25+, Maven 3.9+. GPU nodes: CUDA 12.x + NVIDIA driver **or** ROCm 6+ + AMD d
 
 ## Supported models
 
-GGUF with LLaMA-compatible or Phi-3-compatible architectures (quantizations include F32, F16, BF16, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K). Chat templates include `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml`, `phi3`. Examples (heap hints): TinyLlama Q4_K_M (~~637 MB, `2g`), phi-3.5-mini Q4_K_M (~~2.4 GB, `4g`), Mistral-7B Q4_K_M (~4.1 GB, `8g`), Llama-3.1-70B Q4_K_M distributed.
+GGUF with LLaMA-compatible architectures (quantizations include F32, F16, BF16, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K). Chat templates: `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml`. **`phi3` is under development** (experimental Phi-3 handler and template). Examples (heap hints): TinyLlama Q4_K_M (~637 MB, `2g`), Mistral-7B Q4_K_M (~4.1 GB, `8g`), Llama-3.1-70B Q4_K_M distributed. 
 
 ## Modules (overview)
 
