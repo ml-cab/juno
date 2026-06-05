@@ -236,7 +236,7 @@ final class RocmBindings implements GpuBindings {
             return false;
         }
     }
-    }
+    
 
     // ── Device memory ─────────────────────────────────────────────────────────
 
