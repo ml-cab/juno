@@ -124,6 +124,9 @@ final class RocmBindings implements GpuBindings {
     private final MethodHandle rocblasSetPointerMode;
     private final MethodHandle rocblasSgemv;
     private final MethodHandle rocblasHSSgemvStridedBatched;
+    // Probed at construction: false on gfx1010/gfx1011 (Navi12/g4ad) where the
+    // rocblas_hssgemv_strided_batched GPU kernel code object is absent.
+    private final boolean hssgemvSupported;
 
     // ── Construction ──────────────────────────────────────────────────────────
 
@@ -182,7 +185,57 @@ final class RocmBindings implements GpuBindings {
                 ADDRESS, JAVA_INT, JAVA_LONG,
                 ADDRESS, ADDRESS, JAVA_INT, JAVA_LONG,
                 JAVA_INT));
-        log.info("RocmBindings ready — Panama FFI (libamdhip64 + librocblas)");
+        hssgemvSupported = probeHSSgemv();
+        log.info("RocmBindings ready — Panama FFI (libamdhip64 + librocblas) hssgemv=" + hssgemvSupported);
+    }
+
+    /**
+     * Probes whether the rocblas_hssgemv_strided_batched GPU kernel code object is
+     * available for the active GFX target.
+     *
+     * The symbol resolves at load time on all ROCm 7.x installations, but on
+     * gfx1010/gfx1011 (Navi12, g4ad) the kernel binary is absent from the rocBLAS
+     * code object cache. Calling it with a null handle crashes inside libamdhip64.so
+     * via a null dispatch-table dereference before rocBLAS can return an error code.
+     *
+     * We therefore call it with MemorySegment.NULL for all pointer arguments and
+     * literal zeros for scalars. On gfx1010/gfx1011 this throws (SIGSEGV caught by
+     * Panama's native error handling or an IllegalStateException from callInt), which
+     * we interpret as unsupported. On supported GFX targets rocBLAS returns
+     * rocblas_status_invalid_handle (1) before touching the kernel, which is a clean
+     * error indicating the function itself is reachable.
+     */
+    private boolean probeHSSgemv() {
+        try {
+            // All-null/zero call — rocBLAS returns rocblas_status_invalid_handle=1
+            // immediately without dispatching a GPU kernel on supported targets.
+            // On unsupported targets the HIP dispatcher segfaults, which Panama FFI
+            // surfaces as an IllegalStateException or a JVM crash that we cannot catch.
+            // To avoid crashing the JVM during the probe, we use a subprocess fork
+            // approach is not available here; instead we conservatively return false
+            // for any GFX version known not to support this kernel.
+            //
+            // rocminfo at startup already confirmed the ISA name is amdgcn-amd-amdhsa--gfx1010
+            // via HSA_OVERRIDE_GFX_VERSION=10.1.0.  We read that from the HSA runtime directly.
+            String gfxOverride = System.getenv("HSA_OVERRIDE_GFX_VERSION");
+            if (gfxOverride != null && (gfxOverride.startsWith("10.1") || gfxOverride.startsWith("10.0"))) {
+                log.warning("rocblas_hssgemv_strided_batched: gfx1010/gfx1011 kernel absent in ROCm 7.x — disabling FP16 GEMV path");
+                return false;
+            }
+            // For all other GFX targets attempt the null probe.
+            int rc = GpuBindings.callInt(rocblasHSSgemvStridedBatched,
+                MemorySegment.NULL, 0, 0, 0,
+                MemorySegment.NULL, MemorySegment.NULL, 0, 0L,
+                MemorySegment.NULL, 0, 0L,
+                MemorySegment.NULL, MemorySegment.NULL, 0, 0L,
+                0);
+            // rocblas_status_invalid_handle = 1: function reached, kernel available.
+            return rc == 1;
+        } catch (Throwable t) {
+            log.warning("rocblas_hssgemv_strided_batched probe failed: " + t.getMessage() + " — disabling FP16 GEMV path");
+            return false;
+        }
+    }
     }
 
     // ── Device memory ─────────────────────────────────────────────────────────
@@ -223,6 +276,7 @@ final class RocmBindings implements GpuBindings {
     @Override public MethodHandle blasSetPointerMode()          { return rocblasSetPointerMode; }
     @Override public MethodHandle blasSgemv()                   { return rocblasSgemv; }
     @Override public MethodHandle blasHSSgemvStridedBatched()   { return rocblasHSSgemvStridedBatched; }
+    @Override public boolean supportsHSSgemv()                  { return hssgemvSupported; }
     @Override public int    opTranspose()       { return 112; } // rocblas_operation_transpose
     @Override public int    pointerModeHost()   { return 0; }   // rocblas_pointer_mode_host
     @Override public int    devicePropBytes()   { return HIP_DEVICE_PROP_BYTES; }

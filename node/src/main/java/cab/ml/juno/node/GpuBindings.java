@@ -109,6 +109,22 @@ interface GpuBindings {
     /** {@code cublasHSSgemvStridedBatched} / {@code rocblas_hssgemv_strided_batched}. */
     MethodHandle blasHSSgemvStridedBatched();
 
+    /**
+     * Returns true if the backend's HSSgemv strided-batched kernel is available for the
+     * current device.
+     *
+     * On CUDA this is always true (cuBLAS ships fp16 kernels for all supported GPUs).
+     * On ROCm this requires a runtime probe: rocblas_hssgemv_strided_batched resolves at
+     * symbol load time but its GPU kernel code object may be absent for the active GFX
+     * target (e.g. gfx1010/gfx1011 on Navi12/g4ad). RocmBindings probes by calling the
+     * function with null arguments and checking whether the return code is the expected
+     * rocblas_status_invalid_handle (1) rather than a segfault.
+     *
+     * Callers that use DeviceHalfMatrix must check this before invoking
+     * blasHSSgemvStridedBatched and fall back to blasSgemv (FP32) if false.
+     */
+    boolean supportsHSSgemv();
+
     // ── Vendor-specific constants ─────────────────────────────────────────────
     /**
      * Operation "transpose" for the BLAS GEMV call.

@@ -54,4 +54,17 @@ sealed interface GpuMatVec extends MatVec permits CudaMatVec, RocmMatVec {
      * @param host row-major A (FP32 source), length {@code rows * cols}
      */
     DeviceHalfMatrix uploadHalf(float[] host, int rows, int cols);
+
+    /**
+     * Returns true if this backend supports FP16 device-resident weight matrices
+     * via {@link #sgemv(DeviceHalfMatrix, float[])}.
+     *
+     * CUDA (cuBLAS): always true — cublasHSSgemvStridedBatched ships kernels for
+     * all supported NVIDIA GPUs.
+     * ROCm: false on gfx1010/gfx1011 (Navi12, g4ad) where
+     * rocblas_hssgemv_strided_batched has no GPU kernel code object in ROCm 7.x.
+     * When false, callers must use {@link #upload} + {@link #sgemv(DeviceFloatMatrix, float[])}
+     * (FP32 resident, twice the VRAM but functionally correct).
+     */
+    default boolean supportsHalfResident() { return true; }
 }

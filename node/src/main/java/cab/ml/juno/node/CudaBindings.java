@@ -302,6 +302,7 @@ final class CudaBindings implements GpuBindings {
     @Override public MethodHandle blasSetPointerMode()          { return cublasSetPointerMode; }
     @Override public MethodHandle blasSgemv()                   { return cublasSgemv; }
     @Override public MethodHandle blasHSSgemvStridedBatched()   { return cublasHSSgemvStridedBatched; }
+    @Override public boolean supportsHSSgemv()                  { return true; }
     @Override public int    opTranspose()       { return CUBLAS_OP_T; }
     @Override public int    pointerModeHost()   { return CUBLAS_POINTER_MODE_HOST; }
     @Override public int    devicePropBytes()   { return DEVICE_PROP_BYTES; }
