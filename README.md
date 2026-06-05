@@ -169,7 +169,6 @@ GGUF with LLaMA-compatible architectures (quantizations include F32, F16, BF16, 
 
 ## Modules (overview)
 
-
 | Module                                                 | Role                                                                |
 | ------------------------------------------------------ | ------------------------------------------------------------------- |
 | `juno-bom`                                             | Maven BOM — aligned versions for all `cab.ml` artifacts             |

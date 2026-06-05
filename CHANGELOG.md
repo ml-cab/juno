@@ -1,6 +1,6 @@
 ## Status
 
-**Session 31** — ROCm/HIP backend for AMD GPU inference via Panama FFI.
+**Session 32** — ROCm/HIP backend for AMD GPU inference via Panama FFI.
 
 ### AMD GPU support (ROCm/HIP + rocBLAS)
 
@@ -90,6 +90,88 @@ mvn test -pl node -Dgroups=rocm
 | 32000×2048 | `rocblas_sgemv` host FP32 | 408 ms |
 
 All existing 194 unit tests pass unchanged.
+
+---
+
+## Status
+
+**Session 31** — Panama FFI for Juno math: JavaCPP / bytedeco removed, CUDA bindings rewritten with `java.lang.foreign`.
+
+### Panama FFI GPU bindings (`node` module)
+
+The entire CUDA bridge has been rewritten using the Java 25 Panama Foreign Function & Memory API
+(`java.lang.foreign.Linker`, `SymbolLookup`, `MemorySegment`, `Arena`). The `org.bytedeco:cuda-platform`
+dependency has been removed from `node/pom.xml`.
+
+**New production class:**
+
+- **`CudaBindings`** — Panama FFI downcall handles for `libcudart.so.12` and `libcublas.so.12`.
+  Resolves all CUDA Runtime and cuBLAS symbols once at class-init time via `Linker` and
+  `SymbolLookup`; resulting `MethodHandle` instances are thread-safe with zero per-call Java overhead.
+  Exposes: `cudaGetDeviceCount`, `cudaGetDeviceProperties`, `cudaSetDevice`, `cudaMalloc`,
+  `cudaFree`, `cudaMallocHost`, `cudaFreeHost`, `cudaMemcpy`, `cudaMemcpyAsync`,
+  `cudaStreamCreateWithFlags`, `cudaStreamSynchronize`, `cudaStreamDestroy`,
+  `cublasCreate`, `cublasDestroy`, `cublasSetStream`, `cublasSetPointerMode`,
+  `cublasSgemv`, `cublasHSSgemvStridedBatched`.
+  `cudaDeviceProp` struct-offset constants (`DEVICE_PROP_BYTES=1512`, `PROP_NAME_OFFSET=0`,
+  `PROP_TOTAL_MEM_OFFSET=288`) measured from CUDA 12.x headers on Linux x86_64.
+  Singleton init: `CudaBindings.instance()` / `CudaBindings.isAvailable()`.
+
+**Modified production classes:**
+
+- **`CudaMatVec`** — all JNI / JavaCPP call sites replaced with `CudaBindings` downcall handles.
+  Native memory managed exclusively via `MemorySegment` and `Arena`. Device weight matrices
+  (`DeviceFloatMatrix`, `DeviceHalfMatrix`) held resident; `MemorySegment` passed directly to
+  cuBLAS as `ADDRESS` — zero H2D copy per token. Per-thread `Fp32Scratch` / `Fp16Scratch`
+  scratch on device grown lazily and reused. FP16 x staging packed with `Float.floatToFloat16`
+  into a confined off-heap arena in the hot path.
+- **`GpuContext`** — cuBLAS handle stored as `MemorySegment` (opaque `cublasHandle_t`); created
+  and destroyed via `CudaBindings`. `cublasSerializationLock()` serializes stream-binding and
+  kernel submission on the shared handle. `shared(int)` returns a process-wide singleton per
+  device index.
+- **`DeviceFloatMatrix`** — device memory allocated via `CudaBindings.deviceMalloc`; backing
+  `MemorySegment` sized to `rows * cols * 4` bytes; H2D via synchronous `cudaMemcpy`.
+- **`DeviceHalfMatrix`** — same pattern; FP16 x staging via confined arena; `MemorySegment.ofArray`
+  pins heap array for duration of downcall.
+- **`CudaAvailability`** — device detection updated to use `CudaBindings` downcall handles.
+
+**`node/pom.xml`:** `org.bytedeco:cuda-platform` dependency removed.
+`maven-surefire-plugin` `argLine` updated: `--enable-native-access=ALL-UNNAMED`,
+`--add-opens java.base/java.lang=ALL-UNNAMED`, `--add-opens java.base/java.nio=ALL-UNNAMED`.
+
+**New test: `CudaBindingsTest`** — two scenarios:
+- CUDA present (`@Tag("gpu")`): every `MethodHandle` non-null, singleton loads cleanly.
+- CUDA absent (CPU-only CI): `isAvailable()` returns false, `instance()` throws `IllegalStateException`.
+
+Run GPU-tagged tests: `mvn test -Dgroups=gpu -pl node`
+
+All existing tests pass unchanged.
+
+---
+
+## Status
+
+**Session 30** — Maven Central publish configuration.
+
+### Maven Central publish (`pom.xml`, all module POMs)
+
+All modules configured for publishing to `central.sonatype.org` via the Central Portal publisher.
+Version set to `0.1.0-RC` across root POM and `juno-bom`.
+
+**Changes:**
+
+- **`maven-source-plugin 3.3.1`** — `attach-sources` execution at `verify` phase; produces `-sources.jar`
+  required by Maven Central.
+- **`maven-javadoc-plugin 3.11.2`** — `attach-javadocs` execution at `verify` phase; `doclint=none`,
+  `failOnError=false`; produces `-javadoc.jar` required by Maven Central.
+- **`maven-gpg-plugin`** — `sign-release` execution moved from `verify` to `install` phase so
+  sources and Javadoc jars are already attached before signing. `--pinentry-mode loopback`
+  added to `gpgArguments` to allow `-Dgpg.passphrase=...` without a GUI pinentry agent.
+- **`distributionManagement`** — `<repository>` and `<snapshotRepository>` wired to
+  `central.sonatype.org` Central Portal publisher endpoint.
+- **Developer / SCM metadata** — `<organization>Machine Learning Cabinet</organization>`,
+  `<organizationUrl>https://ml.cab/</organizationUrl>`, SCM tag updated to `v0.1.0-RC`.
+- **All module POMs** — publish config consolidated into root POM; per-module boilerplate removed.
 
 ---
 

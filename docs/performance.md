@@ -7,8 +7,7 @@ a run, extract numbers from JFR, and interpret the matrix columns.
 ---
 
 ## Baseline hardware
-
-| Role | Instance | Notes |
+| Role | Instance | Parameters | Notes |
 |------|----------|-------|
 | CPU | `m7i-flex.large` (AWS) | 2 vCPU, 8 GB RAM; no GPU |
 | GPU | `g4dn.2xlarge` (AWS) | 8 vCPU, 32 GB RAM; NVIDIA T4 16 GB VRAM |

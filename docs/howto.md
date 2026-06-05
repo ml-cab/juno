@@ -512,7 +512,10 @@ Flow.Publisher<String> openAiSse = http.streamingOpenAiChat("tinyllama-1.1b-chat
 is less than `node-count x vCPUs-per-instance`, setup fails immediately with the shortfall and
 a link to the Service Quotas console. It never silently reduces node count.
 
-**GPU on AWS instances:** pre-installed in the golden AMI by `make-ami.sh` (CUDA for NVIDIA instances). Node bootstrap runs `lspci` to detect the GPU and sets `JUNO_USE_GPU=true` — no DKMS compilation at boot. On AMD GPU instances install ROCm 6+ separately and set `JUNO_USE_GPU=true`; backend auto-selection picks ROCm when CUDA libraries are absent.
+**GPU on AWS instances:** pre-installed in the golden AMI by `make-ami.sh`. Node bootstrap runs `lspci` to detect the GPU vendor and sets `JUNO_USE_GPU=true` — no DKMS compilation at boot.
+
+- **NVIDIA (g4dn, g5, g6, p\*):** CUDA 12.3 + nvidia-open. Backend auto-selects CUDA.
+- **AMD Radeon (g4ad):** ROCm 7.2.4 + amdgpu-dkms. The AMI sets `HSA_OVERRIDE_GFX_VERSION=10.1.0` in `/etc/environment` to work around the missing gfx1011 rocBLAS kernels on the Radeon Pro V520 (upstream issue ROCm/rocm-libraries#4347); rocBLAS uses the gfx1010 dispatch path which runs correctly on Navi12 silicon. Backend auto-selects ROCm when CUDA libraries are absent.
 
 **LoRA deploy flow:**
 

@@ -2,9 +2,17 @@
 # =============================================================
 #  make-ami.sh — Build a Juno golden AMI for a given base OS + instance type.
 #
-#  The resulting AMI has JDK 25, Maven, and (for GPU instances) CUDA 12.3 +
-#  nvidia-open drivers pre-installed.  Every juno-deploy.sh bootstrap that uses
-#  a golden AMI skips ~15-20 min of package installation and DKMS compilation.
+#  The resulting AMI has JDK 25, Maven, and (for GPU instances) either:
+#    - NVIDIA: CUDA 12.3 + nvidia-open drivers (g4dn.*, g5.*, g6.*, p3.*, p4d.*, p5.*)
+#    - AMD:    ROCm 7.2.4 + amdgpu-dkms (g4ad.*)
+#  pre-installed.  Every juno-deploy.sh bootstrap that uses a golden AMI skips
+#  ~15-20 min of package installation and DKMS compilation.
+#
+#  NOTE on g4ad (AMD Radeon Pro V520, gfx1011 / Navi12):
+#    rocBLAS official packages do not ship gfx1011 kernels (ROCm upstream issue
+#    ROCm/rocm-libraries#4347).  The AMI sets HSA_OVERRIDE_GFX_VERSION=10.1.0 in
+#    /etc/environment so rocBLAS uses the closest gfx1010 dispatch kernels, which
+#    run correctly on Navi12 silicon.
 #
 #  Usage:
 #    ./launcher.sh make-ami.sh --instance-type TYPE [--base "Ubuntu 22.04 LTS"] [--region REGION]
@@ -62,25 +70,34 @@ AMI_NAME="Juno-golden-${BASE_SLUG}_${INSTANCE_TYPE}"
 IS_GPU=false
 [[ "$INSTANCE_TYPE" =~ ^g[0-9]|^p[0-9] ]] && IS_GPU=true
 
+# GPU vendor: g4ad.* use AMD Radeon Pro V520 (ROCm); all other G/P families use NVIDIA (CUDA).
+IS_AMD_GPU=false
+[[ "$INSTANCE_TYPE" =~ ^g4ad\. ]] && IS_AMD_GPU=true
+
 # For GPU baking we launch the smallest instance of the same family so the
-# DKMS kernel modules and CUDA toolkit are built on matching silicon and kernel.
-# A g4dn.xlarge AMI boots cleanly on g4dn.2xlarge / g4dn.4xlarge etc.
+# DKMS kernel modules and ROCm/CUDA toolkits are built on matching silicon and kernel.
+# A g4ad.xlarge AMI boots cleanly on g4ad.2xlarge etc.
 _smallest_in_family() {
   case "${1%%.*}" in
-    g4dn) echo "g4dn.xlarge" ;;
-    g5)   echo "g5.xlarge"   ;;
-    g6)   echo "g6.xlarge"   ;;
-    g6e)  echo "g6e.xlarge"  ;;
-    p3)   echo "p3.2xlarge"  ;;
-    p4d)  echo "p4d.24xlarge";;
-    p5)   echo "p5.48xlarge" ;;
-    *)    echo "$1"           ;;
+    g4ad) echo "g4ad.xlarge"  ;;
+    g4dn) echo "g4dn.xlarge"  ;;
+    g5)   echo "g5.xlarge"    ;;
+    g6)   echo "g6.xlarge"    ;;
+    g6e)  echo "g6e.xlarge"   ;;
+    p3)   echo "p3.2xlarge"   ;;
+    p4d)  echo "p4d.24xlarge" ;;
+    p5)   echo "p5.48xlarge"  ;;
+    *)    echo "$1"            ;;
   esac
 }
 
 if $IS_GPU; then
   BAKE_INSTANCE="$(_smallest_in_family "$INSTANCE_TYPE")"
-  inf "GPU instance family — baking on ${BAKE_INSTANCE} (smallest in family)"
+  if $IS_AMD_GPU; then
+    inf "AMD GPU instance family (g4ad) — baking on ${BAKE_INSTANCE} (smallest in family)"
+  else
+    inf "NVIDIA GPU instance family — baking on ${BAKE_INSTANCE} (smallest in family)"
+  fi
 else
   BAKE_INSTANCE="t3.medium"
   inf "CPU instance — baking on ${BAKE_INSTANCE}"
@@ -257,7 +274,86 @@ echo "" >&2
 ssh $SSH_OPTS "ubuntu@${BAKE_IP}" "true" || die "SSH did not become available within 5 min"
 
 # ── INSTALLATION ──────────────────────────────────────────────
-if $IS_GPU; then
+if $IS_AMD_GPU; then
+  # ── AMD / ROCm path (g4ad.*) ─────────────────────────────────
+  # GPU: AMD Radeon Pro V520 (NAVI 12, gfx1011 / gfx1010 depending on ROCm version).
+  # ROCm version: 7.2.4 (latest as of 2025-Q2).
+  # amdgpu-install --usecase=rocm installs: amdgpu-dkms, HIP runtime, rocBLAS, rocRAND.
+  #
+  # rocBLAS upstream does not ship gfx1011 dispatch kernels (ROCm/rocm-libraries#4347).
+  # Workaround: HSA_OVERRIDE_GFX_VERSION=10.1.0 makes the HIP runtime present the device
+  # as gfx1010, which has rocBLAS kernels, and they run correctly on Navi12 silicon.
+  # This env var is written to /etc/environment so every Juno JVM picks it up automatically.
+  inf "Installing JDK 25 + Maven + ROCm 7.2.4 on ${BAKE_IP} (~25-40 min — amdgpu-dkms build)…"
+  inf "  SSH access while baking: ssh -i ${BAKE_KEY_FILE} ubuntu@${BAKE_IP}"
+  # Redirect to stderr: same reason as NVIDIA path below.
+  ssh $SSH_OPTS "ubuntu@${BAKE_IP}" 'sudo bash -s' >&2 <<'INSTALL'
+set -euo pipefail
+export LC_ALL=C LANG=C LANGUAGE=C
+export DEBIAN_FRONTEND=noninteractive
+
+echo "[bake] Waiting for cloud-init to finish…"
+cloud-init status --wait 2>/dev/null || true
+
+systemctl kill --signal=SIGKILL unattended-upgrades 2>/dev/null || true
+systemctl disable unattended-upgrades 2>/dev/null || true
+rm -f /var/lib/dpkg/lock-frontend \
+      /var/lib/dpkg/lock \
+      /var/cache/apt/archives/lock \
+      /var/lib/apt/lists/lock
+dpkg --configure -a 2>/dev/null || true
+
+echo "[bake] Installing base packages…"
+apt-get update -qq
+apt-get install -y -qq \
+  openjdk-25-jdk maven git wget curl jq bc \
+  numactl net-tools htop pciutils lsof
+
+# ── amdgpu-dkms kernel prerequisites ────────────────────────
+KVER=$(uname -r)
+echo "[bake] Kernel: ${KVER}"
+# linux-modules-extra-aws provides the kernel source stubs needed by DKMS
+# on AWS-flavoured kernels.  Without it amdgpu-dkms fails to compile.
+apt-get install -y -qq \
+  "linux-headers-${KVER}" \
+  "linux-modules-extra-${KVER}" \
+  software-properties-common
+
+# ── amdgpu-install 7.2.4 ────────────────────────────────────
+AMDGPU_DEB="amdgpu-install_7.2.4.70204-1_all.deb"
+wget -q "https://repo.radeon.com/amdgpu-install/7.2.4/ubuntu/jammy/${AMDGPU_DEB}" \
+  -O "/tmp/${AMDGPU_DEB}"
+apt-get install -y -qq "/tmp/${AMDGPU_DEB}"
+apt-get update -qq
+
+# rocmdev usecase: amdgpu-dkms + HIP runtime + rocBLAS + rocRAND.
+# DKMS compilation takes 25-40 min — run without -qq so output proves progress.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
+echo "[bake] Starting amdgpu-dkms + ROCm install — takes 25-40 min, do not interrupt…"
+amdgpu-install -y --usecase=rocm || {
+  echo "=== DKMS make.log ===" >&2
+  cat /var/lib/dkms/amdgpu/*/build/make.log 2>/dev/null >&2 || true
+  exit 1
+}
+
+# Add the ubuntu user to the render and video groups required for GPU access.
+usermod -a -G render,video ubuntu
+
+# ── gfx1011 rocBLAS workaround ──────────────────────────────
+# The Radeon Pro V520 reports itself as gfx1011 (NAVI12).  ROCm ships rocBLAS
+# kernels for gfx1010 but not gfx1011 (upstream issue ROCm/rocm-libraries#4347).
+# HSA_OVERRIDE_GFX_VERSION=10.1.0 makes the runtime treat this device as gfx1010,
+# enabling the rocBLAS dispatch path without recompiling from source.
+echo "HSA_OVERRIDE_GFX_VERSION=10.1.0" >> /etc/environment
+echo "export PATH=/opt/rocm/bin:\$PATH" >> /etc/environment
+echo "export LD_LIBRARY_PATH=/opt/rocm/lib:\$LD_LIBRARY_PATH" >> /etc/environment
+echo "[bake] ROCm install complete."
+INSTALL
+
+elif $IS_GPU; then
+  # ── NVIDIA / CUDA path (g4dn.*, g5.*, g6.*, p3.*, p4d.*, p5.*) ──────────────
   inf "Installing JDK 25 + Maven + CUDA 12.3 on ${BAKE_IP} (~20-40 min — DKMS build)…"
   inf "  SSH access while baking: ssh -i ${BAKE_KEY_FILE} ubuntu@${BAKE_IP}"
   # Redirect to stderr: this heredoc's stdout would otherwise be captured by
@@ -364,14 +460,23 @@ fi
 # Explicitly set a full PATH and use awk instead of head (head -1 is the
 # command that was not found, which caused the EXIT trap to fire before
 # create-image was ever called — the root cause of "AMI never recorded").
-_RENV='export LC_ALL=C LANG=C PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+_RENV='export LC_ALL=C LANG=C PATH=/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 inf "Verifying installation…"
 JAVA_VER=$(ssh $SSH_OPTS "ubuntu@${BAKE_IP}" "${_RENV}; java -version 2>&1 | awk 'NR==1'")
 MVN_VER=$(ssh  $SSH_OPTS "ubuntu@${BAKE_IP}" "${_RENV}; mvn  -version 2>&1 | awk 'NR==1'")
 inf "  java : ${JAVA_VER}"
 inf "  mvn  : ${MVN_VER}"
 
-if $IS_GPU; then
+if $IS_AMD_GPU; then
+  # rocminfo enumerates HSA agents; we check that the Radeon Pro V520 appears.
+  # modprobe amdgpu loads the DKMS module built above.
+  ROCM_OUT=$(ssh $SSH_OPTS "ubuntu@${BAKE_IP}" \
+    "${_RENV}; sudo modprobe amdgpu 2>/dev/null || true; HSA_OVERRIDE_GFX_VERSION=10.1.0 rocminfo 2>&1 | grep -A2 'Marketing Name'")
+  inf "  rocminfo: ${ROCM_OUT}"
+  # Fail fast if the Radeon Pro V520 is not visible — the AMI would be unusable.
+  echo "$ROCM_OUT" | grep -qi "radeon\|v520\|gfx10" || \
+    die "rocminfo did not report an AMD GPU — ROCm install may have failed"
+elif $IS_GPU; then
   # nvidia-smi requires the kernel modules to be loaded; they auto-load on
   # first use after DKMS install.  A brief modprobe ensures they are present.
   NVID_OUT=$(ssh $SSH_OPTS "ubuntu@${BAKE_IP}" \
@@ -385,7 +490,11 @@ fi
 # ── CREATE AMI ────────────────────────────────────────────────
 inf "Creating AMI: ${AMI_NAME}…"
 GPU_SUFFIX=""
-$IS_GPU && GPU_SUFFIX=" + CUDA 12.3 + nvidia-open"
+if $IS_AMD_GPU; then
+  GPU_SUFFIX=" + ROCm 7.2.4 + amdgpu-dkms"
+elif $IS_GPU; then
+  GPU_SUFFIX=" + CUDA 12.3 + nvidia-open"
+fi
 CREATED_AMI=$(aws ec2 create-image \
   --instance-id "$BAKE_INSTANCE_ID" \
   --name "$AMI_NAME" \
