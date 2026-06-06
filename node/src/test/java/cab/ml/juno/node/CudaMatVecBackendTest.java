@@ -130,31 +130,36 @@ class CudaMatVecBackendTest extends MatVecBackendContractTest {
     }
 
     @Test
-    @DisplayName("GPU path stays within reasonable overhead for large matrix (32000×2048)")
+    @DisplayName("GPU resident path stays within reasonable overhead for large matrix (32000×2048)")
     void gpu_path_has_reasonable_overhead_for_large_matrix() {
         int rows = 32000, cols = 2048;
         float[] A = randomMatrix(rows, cols, 200);
         float[] x = randomVector(cols, 201);
 
-        // Warm up both
-        LlamaTransformerHandler.matVec(A, x, rows, cols);
-        cudaImpl.sgemv(A, x, rows, cols);
+        // Upload A once — this is the resident path; A is not copied per call.
+        DeviceFloatMatrix dA = DeviceFloatMatrix.upload(ctx, A, rows, cols);
+        try {
+            // Warm up both
+            LlamaTransformerHandler.matVec(A, x, rows, cols);
+            cudaImpl.sgemv(dA, x);
 
-        // CPU timing
-        long cpuStart = System.nanoTime();
-        for (int i = 0; i < 5; i++) LlamaTransformerHandler.matVec(A, x, rows, cols);
-        long cpuMs = (System.nanoTime() - cpuStart) / 1_000_000;
+            // CPU timing
+            long cpuStart = System.nanoTime();
+            for (int i = 0; i < 5; i++) LlamaTransformerHandler.matVec(A, x, rows, cols);
+            long cpuMs = (System.nanoTime() - cpuStart) / 1_000_000;
 
-        // GPU timing
-        long gpuStart = System.nanoTime();
-        for (int i = 0; i < 5; i++) cudaImpl.sgemv(A, x, rows, cols);
-        long gpuMs = (System.nanoTime() - gpuStart) / 1_000_000;
+            // GPU timing — only x is copied per call (~8 KB), not A (~250 MB)
+            long gpuStart = System.nanoTime();
+            for (int i = 0; i < 5; i++) cudaImpl.sgemv(dA, x);
+            long gpuMs = (System.nanoTime() - gpuStart) / 1_000_000;
 
-        System.out.printf("32000×2048 sgemv — CPU: %dms  GPU: %dms  (5 runs each)%n",
-            cpuMs, gpuMs);
+            System.out.printf("32000×2048 sgemv — CPU: %dms  GPU (resident): %dms  (5 runs each)%n",
+                cpuMs, gpuMs);
 
-        // Host-path sgemv still copies A each call; keep a coarse upper bound for CI variance.
-        assertThat(gpuMs).isLessThan(3_000L);
+            assertThat(gpuMs).isLessThan(3_000L);
+        } finally {
+            dA.close();
+        }
     }
 
     @Test

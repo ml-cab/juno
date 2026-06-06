@@ -192,7 +192,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 
 		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
 		outputProjDev = null;
-		if (backend instanceof CudaMatVec cuda) {
+		if (backend instanceof GpuMatVec cuda) {
 			log.info("LoRA handler: uploading projection weights to GPU (FP16)…");
 			int H = cfg.hiddenDim();
 			int KV = cfg.kvDim();
@@ -238,7 +238,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 				if (outD != null)
 					outD.close();
 				String msg = ex.getMessage() == null ? "" : ex.getMessage();
-				if (msg.contains("cudaMalloc")) {
+				if (msg.contains("cudaMalloc") || msg.contains("hipMalloc")) {
 					log.warning("LoRA: insufficient GPU VRAM for FP16-resident weights (" + msg
 							+ "). Using CPU quantised matmul.");
 				} else {

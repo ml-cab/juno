@@ -224,7 +224,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			logLayerMemory(i, H, kvDim, I, attnQkv[li], wo[li], ffnGateUp[li], wDown[li]);
 		}
 
-		if (backend instanceof CudaMatVec cuda) {
+		if (backend instanceof GpuMatVec cuda) {
 			log.info("Uploading Phi-3 dequantized projection weights to GPU (FP16 storage)…");
 			DeviceHalfMatrix[] qD = new DeviceHalfMatrix[L];
 			DeviceHalfMatrix[] kD = new DeviceHalfMatrix[L];
@@ -269,7 +269,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 				closeDeviceHalfMatrixArray(dD);
 				if (outD != null)
 					outD.close();
-				if (ex.getMessage() != null && ex.getMessage().contains("cudaMalloc")) {
+				if (ex.getMessage() != null && (ex.getMessage().contains("cudaMalloc") || ex.getMessage().contains("hipMalloc"))) {
 					log.warning(
 							"Phi-3: not enough GPU VRAM for FP16-resident weights on this shard (" + ex.getMessage()
 									+ "). Using CPU quantised matmul. "

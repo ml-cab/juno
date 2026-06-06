@@ -20,7 +20,7 @@ package cab.ml.juno.player;
  * Chat-template formatting for supervised LoRA training text (must match
  * {@link cab.ml.juno.tokenizer.ChatTemplateFormatter} at inference).
  */
-final class ChatTrainingFormats {
+public final class ChatTrainingFormats {
 
 	private ChatTrainingFormats() {
 	}

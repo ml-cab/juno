@@ -4,7 +4,7 @@
 # Uses pre-built shade jars from target/.  Build first with:
 #   mvn clean package -DskipTests
 #
-# Requires: JDK 21+
+# Requires: JDK 25+
 # Runs on:  Linux · macOS · Windows (Git Bash / WSL)
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -95,7 +95,7 @@ find_java() {
     done
   fi
 
-  err "JDK 21+ not found. Install from https://adoptium.net and set JAVA_HOME."
+  err "JDK 25+ not found. Install from https://adoptium.net and set JAVA_HOME."
 }
 
 JAVA="$(find_java)"
@@ -120,7 +120,7 @@ prepend_cuda_bin_to_path_if_gpu() {
 check_java_version() {
   local ver
   ver=$("$JAVA" -version 2>&1 | awk -F'"' '/version/{print $2}' | cut -d. -f1)
-  [[ "${ver:-0}" -ge 21 ]] || err "JDK 21+ required (found: $ver).  JAVA_HOME=$JAVA_HOME"
+  [[ "${ver:-0}" -ge 25 ]] || err "JDK 25+ required (found: $ver).  JAVA_HOME=$JAVA_HOME"
 }
 
 # ── Jar existence check ───────────────────────────────────────────────────────
@@ -153,9 +153,9 @@ cmd_cluster() {
   local dtype="${DTYPE:-FLOAT16}"
   local byte_order="${BYTE_ORDER:-BE}"
   local max_tokens="${MAX_TOKENS:-200}"
-  local temperature="${TEMPERATURE:-0.6}"
-  local top_k="${TOP_K:-20}"
-  local top_p="${TOP_P:-0.95}"
+  local temperature="${TEMPERATURE:-0.7}"
+  local top_k="${TOP_K:-50}"
+  local top_p="${TOP_P:-0.9}"
   local heap="${HEAP:-4g}"
   local verbose="false"
   local ptype="pipeline"
@@ -221,9 +221,9 @@ cmd_cluster() {
         echo ""
         echo "  Generation:"
         echo "    --max-tokens N             max tokens per response   (default 200)"
-        echo "    --temperature F            sampling temperature       (default 0.6)"
-        echo "    --top-k N                  top-K sampling cutoff     (default 20, 0=disabled)"
-        echo "    --top-p F                  top-p nucleus sampling    (default 0.95, 0=disabled)"
+        echo "    --temperature F            sampling temperature       (default 0.7)"
+        echo "    --top-k N                  top-K sampling cutoff     (default 50, 0=disabled)"
+        echo "    --top-p F                  top-p nucleus sampling    (default 0.9, 0=disabled)"
         echo "    --api-port N               start REST API server on port N"
         echo "                               (includes OpenAI-compatible /v1/chat/completions)"
         echo ""
@@ -322,10 +322,10 @@ cmd_local() {
   local dtype="${DTYPE:-FLOAT16}"
   local byte_order="${BYTE_ORDER:-BE}"
   local max_tokens="${MAX_TOKENS:-200}"
-  local temperature="${TEMPERATURE:-0.6}"
+  local temperature="${TEMPERATURE:-0.7}"
   local heap="${HEAP:-4g}"
-  local top_k="${TOP_K:-20}"
-  local top_p="${TOP_P:-0.95}"
+  local top_k="${TOP_K:-50}"
+  local top_p="${TOP_P:-0.9}"
   local nodes="${NODES:-3}"
   local verbose="false"
   local jfr_duration=""
@@ -383,9 +383,9 @@ cmd_local() {
         echo ""
         echo "  Generation:"
         echo "    --max-tokens N             (default 200)"
-        echo "    --temperature F            (default 0.6)"
-        echo "    --top-k N                  top-K sampling cutoff     (default 20, 0=disabled)"
-        echo "    --top-p F                  top-p nucleus sampling    (default 0.95, 0=disabled)"
+        echo "    --temperature F            (default 0.7)"
+        echo "    --top-k N                  top-K sampling cutoff     (default 50, 0=disabled)"
+        echo "    --top-p F                  top-p nucleus sampling    (default 0.9, 0=disabled)"
         echo ""
         echo "  Pipeline:"
         echo "    --nodes N                  number of in-process shards  (default 3)"
@@ -484,9 +484,9 @@ cmd_lora() {
   local lora_steps_qa="${LORA_STEPS_QA:-10}"
   local lora_early_stop="${LORA_EARLY_STOP:-0.25}"
   local max_tokens="${MAX_TOKENS:-200}"
-  local temperature="${TEMPERATURE:-0.6}"
-  local top_k="${TOP_K:-20}"
-  local top_p="${TOP_P:-0.95}"
+  local temperature="${TEMPERATURE:-0.7}"
+  local top_k="${TOP_K:-50}"
+  local top_p="${TOP_P:-0.9}"
   local heap="${HEAP:-4g}"
   local verbose="false"
   local jfr_duration=""
@@ -547,9 +547,9 @@ cmd_lora() {
         echo ""
         echo "  Generation (used for chat inference):"
         echo "    --max-tokens N          (default 200)"
-        echo "    --temperature F         (default 0.6)"
-        echo "    --top-k N               (default 20)"
-        echo "    --top-p F               (default 0.95)"
+        echo "    --temperature F         (default 0.7)"
+        echo "    --top-k N               (default 50)"
+        echo "    --top-p F               (default 0.9)"
         echo ""
         echo "  Backend:"
         echo "    --gpu                   use GPU when available (default)"
@@ -851,9 +851,9 @@ usage() {
   echo "    --float32                      lossless reference / debug"
   echo "    --int8                         maximum compression"
   echo "    --max-tokens N                 max tokens per response  (default 200)"
-  echo "    --temperature F                sampling temperature      (default 0.6)"
-  echo "    --top-k N                      top-K sampling cutoff     (default 20, 0=disabled)"
-  echo "    --top-p F                      top-p nucleus sampling    (default 0.95, 0=disabled)"
+  echo "    --temperature F                sampling temperature      (default 0.7)"
+  echo "    --top-k N                      top-K sampling cutoff     (default 50, 0=disabled)"
+  echo "    --top-p F                      top-p nucleus sampling    (default 0.9, 0=disabled)"
   echo "    --heap SIZE                    JVM heap e.g. 4g 8g      (default 4g)"
   echo "    --jfr DURATION                 Java Flight Recording     e.g. 5m 30s 1h"
   echo "    --gpu                          use GPU when available (default)"

@@ -52,20 +52,26 @@ JUNO_USE_GPU=true \
   --jfr 5m
 ```
 
-JFR files are written as `juno-<modelStem>-<timestamp>.jfr` in the project root.
-Cluster runs produce one file per JVM; pass all of them to the extractor.
+JFR files are written as `juno-<modelStem>-<timestamp>.jfr` (local/coordinator) or
+`juno-<nodeId>-<modelStem>-<timestamp>.jfr` (cluster nodes) in the project root.
+Cluster runs produce one file per JVM.
 
 ### 3. Extract metrics
 
 ```bash
-# Merge and extract to target/metrics/metrics.json
-java -cp juno-player/target/juno-player-*-shaded.jar \
-  cab.ml.juno.metrics.MetricsMain \
-  --merge \
-  juno-*.jfr
+# Build metrics module, then scan project-root *.jfr files
+mvn package -pl metrics -am -DskipTests
+java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 
 cat target/metrics/metrics.json
 ```
+
+The CLI maps each `juno-<modelStem>-*.jfr` in the project root to an entry in
+`metrics/src/main/resources/models.json` and writes one snapshot per matched file.
+After `./juno --jfr …` (cluster), the launcher already prints per-file summaries on exit;
+`metrics.json` reflects whichever file the launcher processed last. For TPS, read the
+coordinator recording. For programmatic cross-JVM percentile merge, call
+`MetricsMain.extractToJsonMerged(List<Path>, modelStem, modelFilename)` from Java.
 
 Key fields to record:
 

@@ -47,6 +47,7 @@ import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.ActivationDtype;
 import cab.ml.juno.node.CudaAvailability;
+import cab.ml.juno.node.RocmAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.CudaMatVec;
 import cab.ml.juno.node.MatVec;
@@ -120,9 +121,9 @@ public final class ConsoleMain {
 	private static String modelPath = null;
 	private static ActivationDtype dtype = ActivationDtype.FLOAT16;
 	private static int maxTokens = 200;
-	private static float temperature = 0.6f;
-	private static int topK = 20;
-	private static float topP = 0.95f;
+	private static float temperature = 0.7f;
+	private static int topK = 50;
+	private static float topP = 0.9f;
 	private static boolean localMode = false;
 	private static int nodeCount = 3;
 	private static boolean verbose = false;
@@ -235,15 +236,15 @@ public final class ConsoleMain {
 				break;
 			case "--top-k":
 				if (i + 1 < args.length)
-					topK = parseInt(args[++i], 20);
+					topK = parseInt(args[++i], 50);
 				break;
 			case "--top-p":
 				if (i + 1 < args.length)
-					topP = parseFloat(args[++i], 0.95f);
+					topP = parseFloat(args[++i], 0.9f);
 				break;
 			case "--temperature":
 				if (i + 1 < args.length)
-					temperature = parseFloat(args[++i], 0.6f);
+					temperature = parseFloat(args[++i], 0.7f);
 				break;
 			case "--pType":
 			case "--ptype":
@@ -354,9 +355,9 @@ public final class ConsoleMain {
 		System.out.println("  --pType pipeline|tensor    Parallelism type (default: pipeline)");
 		System.out.println("  --dtype FLOAT32|FLOAT16    Activation wire format (default: FLOAT16)");
 		System.out.println("  --max-tokens N             Max generated tokens (default: 200)");
-		System.out.println("  --temperature F            Sampling temperature (default: 0.6)");
-		System.out.println("  --top-k N                  Top-K sampling cutoff (default: 20)");
-		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.95)");
+		System.out.println("  --temperature F            Sampling temperature (default: 0.7)");
+		System.out.println("  --top-k N                  Top-K sampling cutoff (default: 50)");
+		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.9)");
 		System.out.println("  --byteOrder BE|LE          Activation codec byte order (default: BE)");
 		System.out.println("                             BE = big-endian (default, hardware-validated)");
 		System.out.println("                             LE = little-endian (native x86 order)");
@@ -1161,7 +1162,7 @@ public final class ConsoleMain {
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		GpuContext gpuCtx = prepareGpuContext();
 		// One MatVec per process — shares the same GpuContext / cuBLAS handle across shards.
-		MatVec sharedBackend = (gpuCtx != null) ? new CudaMatVec(gpuCtx) : ForwardPassHandlerLoader.selectBackend();
+		MatVec sharedBackend = (gpuCtx != null) ? gpuCtx.createMatVec() : ForwardPassHandlerLoader.selectBackend();
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 			handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context, sharedBackend, playAdapters));
@@ -1212,10 +1213,13 @@ public final class ConsoleMain {
 	}
 
 	private static GpuContext prepareGpuContext() {
-		if (!useGpu || !CudaAvailability.isAvailable())
+		boolean gpuAvailable = CudaAvailability.isAvailable() || RocmAvailability.isAvailable();
+		if (!useGpu || !gpuAvailable)
 			return null;
 		int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
-		if (dev >= CudaAvailability.deviceCount()) {
+		int devCount = CudaAvailability.isAvailable()
+			? CudaAvailability.deviceCount() : RocmAvailability.deviceCount();
+		if (dev >= devCount) {
 			log.warning("juno.cuda.device=" + dev + " out of range — using CPU matmul for local REPL");
 			return null;
 		}

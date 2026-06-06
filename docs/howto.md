@@ -1,6 +1,6 @@
 ## Juno — complete how-to reference
 
-**Documentation map:** [README.md](../README.md) (overview), [arch.md](arch.md), [LoRA.md](LoRA.md), [integration-maven.md](integration-maven.md), [performance.md](performance.md), [legal.md](legal.md), [juno_test_matrix.html](juno_test_matrix.html), [features/](features/).
+**Documentation map:** [README.md](../README.md) (overview), [arch.md](arch.md), [LoRA.md](LoRA.md), [performance.md](performance.md), [legal.md](legal.md), [juno_test_matrix.html](https://ml.cab/juno_test_matrix.html), [features.md](features.md).
 
 ```
 ./juno
@@ -29,10 +29,10 @@ Unified stand-alone launcher at the project root. Requires JDK 25+ and pre-built
 | `--model-path PATH` | — | all | Path to GGUF file (required) |
 | `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | cluster, local | Activation wire format |
 | `--byteOrder BE\|LE` | `BE` | cluster | Activation byte order. Must match across all JVMs — propagated automatically by `ClusterHarness` and `juno-deploy.sh`. |
-| `--max-tokens N` | `200` | cluster, local, lora | Maximum tokens per response |
-| `--temperature F` | `0.6` | all | Sampling temperature (0.0 = deterministic) |
-| `--top-k N` | `20` | all | Top-K sampling cutoff (0 = disabled) |
-| `--top-p F` | `0.95` | all | Nucleus sampling cutoff (0 = disabled) |
+| `--max-tokens N` | `200` | cluster, local, lora | Maximum tokens per response. Same default as REST API and `SamplingParams.defaults()`. |
+| `--temperature F` | `0.7` | all | Sampling temperature (0.0 = deterministic) |
+| `--top-k N` | `50` | all | Top-K sampling cutoff (0 = disabled) |
+| `--top-p F` | `0.9` | all | Nucleus sampling cutoff (0 = disabled). Same default as REST API and `SamplingParams.defaults()`. |
 | `--heap SIZE` | `4g` | all | JVM heap per node, e.g. `4g`, `8g` |
 | `--nodes N` | `3` | local | Number of in-process shards |
 | `--pType pipeline\|tensor` | `pipeline` | cluster, test | Parallelism type |
@@ -68,8 +68,9 @@ Unified stand-alone launcher at the project root. Requires JDK 25+ and pre-built
 `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `LORA_PLAY_PATH`, `API_PORT`
 
 For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO_USE_GPU` unset
-means try CUDA when a GPU is present. Set `JUNO_USE_GPU=false` or pass `--cpu` to force CPU.
-Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for safety.
+means try GPU (CUDA first, then ROCm) when available. Set `JUNO_USE_GPU=false` or pass `--cpu`
+to force CPU. Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
+safety. Override the vendor with `-Djuno.gpu.backend=cuda|rocm|auto` (default: `auto`).
 
 ---
 
@@ -137,7 +138,7 @@ MODEL_PATH=/path/to/model.gguf PTYPE=tensor ./juno
 ./juno --model-path /path/to/model.gguf --dtype FLOAT32    # lossless debug
 ./juno --model-path /path/to/model.gguf --dtype INT8       # max compression
 
-# With JFR -- coordinator + all node JVMs instrumented; files merged on exit
+# With JFR — coordinator + each node JVM writes its own .jfr file; metrics extracted per file on exit
 ./juno --model-path /path/to/model.gguf --jfr 5m
 
 # With pre-trained adapter on every node
@@ -265,7 +266,7 @@ curl http://localhost:8080/v1/models
 | `messages[].content` | `ChatMessage.content` | Text only; image content not supported |
 | `temperature` | `SamplingParams.temperature` | 0.0–2.0; default 0.7 |
 | `top_p` | `SamplingParams.topP` | 0.0–1.0; default 0.9 |
-| `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 512 |
+| `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 200 |
 | `max_tokens` | `SamplingParams.maxTokens` | Deprecated alias; `max_completion_tokens` takes precedence |
 | `frequency_penalty` | `SamplingParams.repetitionPenalty` | Mapped: `1 + max(0, fp/2)` |
 | `stream` | route selection | `false` → blocking JSON; `true` → SSE |
@@ -511,8 +512,10 @@ Flow.Publisher<String> openAiSse = http.streamingOpenAiChat("tinyllama-1.1b-chat
 is less than `node-count x vCPUs-per-instance`, setup fails immediately with the shortfall and
 a link to the Service Quotas console. It never silently reduces node count.
 
-**CUDA on GPU instances:** pre-installed in the golden AMI by `make-ami.sh`. Node bootstrap
-only runs `lspci` to detect the GPU and sets `JUNO_USE_GPU=true` — no DKMS compilation at boot.
+**GPU on AWS instances:** pre-installed in the golden AMI by `make-ami.sh`. Node bootstrap runs `lspci` to detect the GPU vendor and sets `JUNO_USE_GPU=true` — no DKMS compilation at boot.
+
+- **NVIDIA (g4dn, g5, g6, p\*):** CUDA 12.3 + nvidia-open. Backend auto-selects CUDA.
+- **AMD Radeon (g4ad):** ROCm 7.2.4 + amdgpu-dkms. The AMI sets `HSA_OVERRIDE_GFX_VERSION=10.1.0` in `/etc/environment` to work around the missing gfx1011 rocBLAS kernels on the Radeon Pro V520 (upstream issue ROCm/rocm-libraries#4347); rocBLAS uses the gfx1010 dispatch path which runs correctly on Navi12 silicon. Backend auto-selects ROCm when CUDA libraries are absent.
 
 **LoRA deploy flow:**
 
@@ -564,20 +567,26 @@ Run cluster command with `--verbose` to enable `[TRACE]` output:
 
 If the template key at training and inference differ, the model will not recall trained facts.
 Rename the model file to include the architecture keyword (`tinyllama`, `llama-3`, `mistral`,
-`phi-3`, `gemma`) to ensure `ChatModelType.fromPath()` detects it correctly.
+`gemma`) to ensure `ChatModelType.fromPath()` detects it correctly. The `phi3` template and
+Phi-3 handler path are under development — prefer LLaMA-family models for training workflows today.
 
 ---
 
 ### Metrics
 
 ```bash
-# Automatic in local mode
+# Automatic in local mode (single JVM — all juno.* events in one .jfr file)
 ./juno local --model-path /path/to/model.gguf --jfr 5m
 
-# Manual extraction from any .jfr file
+# Cluster mode: coordinator + each node write separate .jfr files. On exit the launcher
+# calls MetricsMain.extractToJson() once per existing file and prints each summary;
+# target/metrics/metrics.json reflects the last processed file. For throughput (TPS),
+# use the coordinator recording (juno.TokenProduced lives on the coordinator JVM).
+
+# Manual extraction from .jfr files in the project root
 mvn package -pl metrics -am -DskipTests
 java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
-# Output: target/metrics/metrics.json
+# Output: target/metrics/metrics.json (one snapshot per mapped .jfr in project root)
 ```
 
 The JSON report includes the following `juno.TokenProduced` fields derived from the coordinator
@@ -616,11 +625,17 @@ mvn verify -pl juno-master -Pintegration -Dmodels=/path/to/models
 ./juno test --model-path /path/to/model.gguf   # real-model smoke test (8 checks, exits 0/1)
 ```
 
-**GPU tests** (requires CUDA 12.x and an NVIDIA GPU):
+**GPU tests** (NVIDIA — requires CUDA 12.x and an NVIDIA GPU):
 
 ```bash
 mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
 
 mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl juno-master \
   --enable-native-access=ALL-UNNAMED
+```
+
+**GPU tests** (AMD — requires ROCm 6+ and an AMD GPU):
+
+```bash
+mvn test -Dgroups=rocm -pl node --enable-native-access=ALL-UNNAMED
 ```

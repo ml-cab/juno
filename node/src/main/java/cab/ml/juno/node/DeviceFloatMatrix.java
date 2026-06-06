@@ -15,40 +15,52 @@
  */
 package cab.ml.juno.node;
 
-import org.bytedeco.javacpp.FloatPointer;
-import org.bytedeco.javacpp.Pointer;
-import org.bytedeco.javacpp.PointerPointer;
-import org.bytedeco.cuda.global.cudart;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+
+import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 
 /**
- * Row-major weight matrix resident on the GPU (single contiguous allocation).
+ * Row-major FP32 weight matrix resident on the GPU.
  *
- * Created via {@link #upload}; released with {@link #close}. Used with
- * {@link CudaMatVec#sgemv(DeviceFloatMatrix, float[])} so each matmul avoids
- * re-uploading {@code A}.
- *   
+ * The device memory is allocated once via {@link GpuBindings#deviceMalloc} and
+ * freed by {@link #close}. The backing {@link MemorySegment} is sized to
+ * {@code rows * cols * 4} bytes so bounds checks work at the Java level.
+ *
+ * Vendor-neutral: all device operations go through the {@link GpuBindings}
+ * obtained from {@link GpuContext#bindings()} (captured at construction), so the
+ * same class serves both CUDA and ROCm backends.
+ *
+ * Used with {@link MatVec#sgemv(DeviceFloatMatrix, float[])} so each
+ * matmul skips re-uploading A.
+ *
  * @author Yevhen Soldatov
- * 
  */
 public final class DeviceFloatMatrix implements AutoCloseable {
 
-    private final GpuContext ctx;
-    private final Pointer dA;
-    private final int rows;
-    private final int cols;
-    private volatile boolean closed;
+    private final GpuContext    ctx;
+    private final GpuBindings   gpu;
+    /** Device pointer, sized to rows * cols * Float.BYTES. */
+    private final MemorySegment dA;
+    private final int           rows;
+    private final int           cols;
+    private volatile boolean    closed;
 
-    private DeviceFloatMatrix(GpuContext ctx, Pointer dA, int rows, int cols) {
-        this.ctx = ctx;
-        this.dA = dA;
+    private DeviceFloatMatrix(GpuContext ctx, MemorySegment dA, int rows, int cols) {
+        this.ctx  = ctx;
+        this.gpu  = ctx.bindings();
+        this.dA   = dA;
         this.rows = rows;
         this.cols = cols;
     }
 
     /**
-     * Allocates device memory and copies {@code host} once (H2D).
+     * Allocates device memory and copies host float32 weights once (H2D).
      *
-     * @param host row-major {@code A}, length {@code rows * cols}
+     * The H2D transfer uses synchronous {@code cudaMemcpy}; the method returns
+     * only after the data is on the device.
+     *
+     * @param host row-major A, length {@code rows * cols}
      */
     public static DeviceFloatMatrix upload(GpuContext ctx, float[] host, int rows, int cols) {
         if (ctx == null)
@@ -56,57 +68,44 @@ public final class DeviceFloatMatrix implements AutoCloseable {
         if (host.length != (long) rows * cols)
             throw new IllegalArgumentException(
                 "host.length=" + host.length + " != rows*cols=" + ((long) rows * cols));
-        long bytes = (long) rows * cols * 4;
-        PointerPointer pp = new PointerPointer(1);
-        try {
-            checkCuda(cudart.cudaSetDevice(ctx.deviceIndex()), "cudaSetDevice");
-            int rc = cudart.cudaMalloc(pp, bytes);
-            if (rc != 0)
-                throw new IllegalStateException("cudaMalloc failed: " + rc);
-            Pointer d = pp.get(0);
-            try (FloatPointer h = new FloatPointer(host)) {
-                checkCuda(
-                    cudart.cudaMemcpy(d, h, bytes, cudart.cudaMemcpyHostToDevice),
-                    "cudaMemcpy(A H2D)");
-            }
-            return new DeviceFloatMatrix(ctx, d, rows, cols);
-        } finally {
-            pp.close();
+
+        GpuBindings    gpu   = ctx.bindings();
+        long           bytes = (long) rows * cols * Float.BYTES;
+        MemorySegment  dA    = gpu.deviceMalloc(ctx.deviceIndex(), bytes);
+
+        // Stage the heap array into an off-heap (native) buffer first; Java 25
+        // Panama forbids passing heap-backed MemorySegments to native downcalls.
+        try (Arena staging = Arena.ofConfined()) {
+            MemorySegment nativeHost = staging.allocate(bytes);
+            nativeHost.copyFrom(MemorySegment.ofArray(host));
+            GpuBindings.check(
+                GpuBindings.callInt(gpu.gpuMemcpy(), dA, nativeHost, bytes, GpuBindings.H2D),
+                "memcpy(A H2D)");
         }
+
+        return new DeviceFloatMatrix(ctx, dA, rows, cols);
     }
 
-    public int rows() {
-        return rows;
-    }
+    public int rows() { return rows; }
+    public int cols() { return cols; }
 
-    public int cols() {
-        return cols;
-    }
-
-    /** Device pointer; valid until {@link #close()}. */
-    Pointer devicePointer() {
-        if (closed)
-            throw new IllegalStateException("DeviceFloatMatrix already closed");
+    /**
+     * Device-side {@link MemorySegment} for the weight matrix.
+     * Sized to {@code rows * cols * Float.BYTES}; valid until {@link #close()}.
+     */
+    MemorySegment devicePointer() {
+        if (closed) throw new IllegalStateException("DeviceFloatMatrix already closed");
         return dA;
     }
 
-    public boolean isClosed() {
-        return closed;
-    }
+    public boolean isClosed() { return closed; }
 
     @Override
     public void close() {
         if (!closed) {
             closed = true;
-            if (dA != null) {
-                cudart.cudaSetDevice(ctx.deviceIndex());
-                cudart.cudaFree(dA);
-            }
+            GpuBindings.callInt(gpu.gpuSetDevice(), ctx.deviceIndex());
+            gpu.deviceFree(dA);
         }
-    }
-
-    private static void checkCuda(int rc, String op) {
-        if (rc != 0)
-            throw new IllegalStateException(op + " failed: " + rc);
     }
 }

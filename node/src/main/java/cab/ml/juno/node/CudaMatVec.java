@@ -18,230 +18,125 @@
  */
 package cab.ml.juno.node;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.util.logging.Logger;
 
-import org.bytedeco.cuda.cudart.CUstream_st;
-import org.bytedeco.cuda.cudart.__half;
-import org.bytedeco.javacpp.BytePointer;
-import org.bytedeco.javacpp.FloatPointer;
-import org.bytedeco.javacpp.Pointer;
-import org.bytedeco.javacpp.PointerPointer;
-import org.bytedeco.cuda.global.cublas;
-import org.bytedeco.cuda.global.cudart;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
+import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 
 /**
- * MatVecBackend backed by cublasSgemv on an Nvidia GPU.
+ * {@link MatVec} backed by {@code cublasSgemv_v2} on an Nvidia GPU, via Panama FFI.
  *
- * Uses org.bytedeco (JavaCPP) cuda/cublas. Works with various NVIDIA GPUs
- * (e.g. GTX 1080, T4, and newer).
+ * <p>All JNI / JavaCPP (bytedeco) dependencies have been replaced with
+ * {@link CudaBindings} downcall handles. Native memory is managed exclusively
+ * through {@link MemorySegment} and {@link Arena}:
  *
- * Computes y[rows] = A[rows, cols] x x[cols] where A is row-major.
+ * <ul>
+ *   <li>Device weight matrices ({@link DeviceFloatMatrix}, {@link DeviceHalfMatrix})
+ *       are uploaded once and held resident; their {@link MemorySegment} is passed
+ *       directly to cuBLAS as an ADDRESS parameter — zero H2D copy per token.
+ *   <li>Per-thread x and y scratch buffers on the device are grown lazily and
+ *       reused across calls — one {@code cudaMalloc} per thread, per buffer.
+ *   <li>H2D upload of x uses a short-lived confined {@link Arena}: x is copied
+ *       from the heap array into native memory with {@code copyFrom} (a pure Java
+ *       operation), then the native segment is passed to {@code cudaMemcpyAsync}.
+ *       Panama FFI (Java 25) rejects heap-backed segments in native downcalls.
+ *   <li>D2H download of y uses a short-lived confined arena to avoid handing
+ *       a GC-moveable address to an async CUDA stream.
+ *   <li>FP16 x staging is packed with {@code Float.floatToFloat16} into a
+ *       confined off-heap arena — no heap byte[] allocation in the hot path.
+ * </ul>
  *
- * Row-major to cuBLAS mapping: cuBLAS is column-major. A row-major matrix
- * A[rows x cols] is identical in memory to the transpose of a column-major
- * matrix A^T[cols x rows]. To compute y = A * x using cuBLAS we call
- * cublasSgemv with CUBLAS_OP_T, m=cols, n=rows, lda=cols.
+ * <p>Concurrency: the {@link GpuContext#cublasSerializationLock()} {@code
+ * synchronized} block serializes stream-binding and kernel submission on the
+ * shared cuBLAS handle. This causes carrier-thread pinning when virtual threads
+ * are used. Migrate to {@code ReentrantLock} when addressing Loom pinning
+ * (HPC audit point 4).
  *
- * Memory management:
- *   - {@link #sgemv(float[], float[], int, int)} — full host path: allocates
- *     device buffers for A, x, y each call (tests and legacy use).
- *   - {@link #sgemv(DeviceFloatMatrix, float[])} / {@link #sgemv(DeviceHalfMatrix, float[])}
- *     — {@code A} stays on device; per-thread scratch buffers for {@code x} and {@code y}
- *     are grown as needed and reused to avoid per-call cudaMalloc/cudaFree.
- *     Each thread uses a private CUDA stream; {@link GpuContext#cublasSerializationLock()}
- *     serializes stream binding + cuBLAS calls on a shared handle.
- *  
- * @author Yevhen Soldatov    
+ * <p>Requires JVM flag: {@code --enable-native-access=ALL-UNNAMED}.
+ *
+ * @author Yevhen Soldatov
  */
-public final class CudaMatVec implements MatVec {
+public final class CudaMatVec implements GpuMatVec {
 
     @SuppressWarnings("unused")
     private static final Logger log = Logger.getLogger(CudaMatVec.class.getName());
 
-    private static final int CUBLAS_OP_T = cublas.CUBLAS_OP_T;
-    private static final int H2D = cudart.cudaMemcpyHostToDevice;
-    private static final int D2H = cudart.cudaMemcpyDeviceToHost;
-    /** {@code cudaStreamNonBlocking} — launch work without implicit sync on legacy default stream. */
-    private static final int STREAM_NON_BLOCKING = 0x01;
+    private static final int STREAM_NON_BLOCKING = CudaBindings.STREAM_NON_BLOCKING;
 
-    private final GpuContext ctx;
+    private final GpuContext     ctx;
+    private final CudaBindings   cuda;
 
-    /** Per-thread reusable device buffers for FP32 resident GEMV. */
-    private static final ThreadLocal<Fp32ResidentScratch> FP32_RESIDENT = ThreadLocal.withInitial(Fp32ResidentScratch::new);
+    // ── Per-thread device scratch (FP32 resident path) ────────────────────────
+    private static final ThreadLocal<Fp32Scratch> FP32_SCRATCH =
+        ThreadLocal.withInitial(Fp32Scratch::new);
 
-    /** Per-thread reusable buffers for FP16-weight GEMV (pinned host staging when possible). */
-    private static final ThreadLocal<Fp16ResidentScratch> FP16_RESIDENT = ThreadLocal.withInitial(Fp16ResidentScratch::new);
+    // ── Per-thread device scratch (FP16 resident path) ────────────────────────
+    private static final ThreadLocal<Fp16Scratch> FP16_SCRATCH =
+        ThreadLocal.withInitial(Fp16Scratch::new);
 
-    /** Per-thread CUDA stream for async copies around cuBLAS on the shared handle. */
-    private static final ThreadLocal<CudaStreamScratch> CUDA_STREAM = ThreadLocal.withInitial(CudaStreamScratch::new);
+    // ── Per-thread CUDA stream ────────────────────────────────────────────────
+    private static final ThreadLocal<MemorySegment> CUDA_STREAM =
+        ThreadLocal.withInitial(() -> null);
 
-    private static final class CudaStreamScratch {
-        CUstream_st stream;
+    // ── Scratch containers ────────────────────────────────────────────────────
 
-        CUstream_st ensure(int deviceIndex) {
-            if (stream != null)
-                return stream;
-            checkCuda(cudart.cudaSetDevice(deviceIndex), "cudaSetDevice");
-            stream = new CUstream_st();
-            checkCuda(cudart.cudaStreamCreateWithFlags(stream, STREAM_NON_BLOCKING), "cudaStreamCreateWithFlags");
-            return stream;
-        }
+    private static final class Fp32Scratch {
+        MemorySegment dX;   // device, grown as needed
+        MemorySegment dY;   // device, grown as needed
+        long dXBytes;
+        long dYBytes;
     }
 
-    private static final class Fp32ResidentScratch {
-        Pointer dX;
-        Pointer dY;
-        long bytesXAlloc;
-        long bytesYAlloc;
-
-        void ensure(int deviceIndex, long bytesX, long bytesY) {
-            checkCuda(cudart.cudaSetDevice(deviceIndex), "cudaSetDevice");
-            if (bytesXAlloc < bytesX) {
-                if (dX != null)
-                    cudart.cudaFree(dX);
-                PointerPointer pp = new PointerPointer(1);
-                try {
-                    checkCuda(cudart.cudaMalloc(pp, bytesX), "cudaMalloc d_x");
-                    dX = pp.get(0);
-                    bytesXAlloc = bytesX;
-                } finally {
-                    pp.close();
-                }
-            }
-            if (bytesYAlloc < bytesY) {
-                if (dY != null)
-                    cudart.cudaFree(dY);
-                PointerPointer pp = new PointerPointer(1);
-                try {
-                    checkCuda(cudart.cudaMalloc(pp, bytesY), "cudaMalloc d_y");
-                    dY = pp.get(0);
-                    bytesYAlloc = bytesY;
-                } finally {
-                    pp.close();
-                }
-            }
-        }
+    private static final class Fp16Scratch {
+        MemorySegment dXh;  // device FP16 x, grown as needed
+        MemorySegment dY;   // device FP32 y, grown as needed
+        long dXhBytes;
+        long dYBytes;
     }
 
-    private static final class Fp16ResidentScratch {
-        Pointer dXh;
-        Pointer dY;
-        long bytesXhAlloc;
-        long bytesYAlloc;
-        /** Reused pageable staging for FP16 x; avoids per-call allocation. */
-        byte[] halfBytes;
-        /** Pinned host buffer for xh when cudaMallocHost succeeds (faster H2D). */
-        Pointer pinnedHalf;
-        long pinnedBytesAlloc;
-
-        void ensureDevice(int deviceIndex, long bytesXh, long bytesY) {
-            checkCuda(cudart.cudaSetDevice(deviceIndex), "cudaSetDevice");
-            if (bytesXhAlloc < bytesXh) {
-                if (dXh != null)
-                    cudart.cudaFree(dXh);
-                PointerPointer pp = new PointerPointer(1);
-                try {
-                    checkCuda(cudart.cudaMalloc(pp, bytesXh), "cudaMalloc d_xh");
-                    dXh = pp.get(0);
-                    bytesXhAlloc = bytesXh;
-                } finally {
-                    pp.close();
-                }
-            }
-            if (bytesYAlloc < bytesY) {
-                if (dY != null)
-                    cudart.cudaFree(dY);
-                PointerPointer pp = new PointerPointer(1);
-                try {
-                    checkCuda(cudart.cudaMalloc(pp, bytesY), "cudaMalloc d_y");
-                    dY = pp.get(0);
-                    bytesYAlloc = bytesY;
-                } finally {
-                    pp.close();
-                }
-            }
-        }
-
-        void ensurePinnedHalf(int needBytes) {
-            if (pinnedBytesAlloc >= needBytes && pinnedHalf != null)
-                return;
-            if (pinnedHalf != null) {
-                cudart.cudaFreeHost(pinnedHalf);
-                pinnedHalf = null;
-                pinnedBytesAlloc = 0;
-            }
-            PointerPointer pp = new PointerPointer(1);
-            try {
-                if (cudart.cudaMallocHost(pp, needBytes) == 0) {
-                    pinnedHalf = pp.get(0);
-                    pinnedBytesAlloc = needBytes;
-                }
-            } finally {
-                pp.close();
-            }
-        }
-
-        /** Pack {@code x} as FP16 little-endian and H2D into {@code d_xh}. */
-        void packXHalfAndUpload(float[] x, int cols, Pointer d_xh, long bytesXh, CUstream_st stream) {
-            int needBytes = cols * 2;
-            ensurePinnedHalf(needBytes);
-            if (pinnedHalf != null) {
-                try (BytePointer bp = new BytePointer(pinnedHalf).limit(needBytes)) {
-                    for (int j = 0; j < cols; j++)
-                        bp.putShort(j * 2, Float.floatToFloat16(x[j]));
-                }
-                try (BytePointer hXh = new BytePointer(pinnedHalf)) {
-                    checkCuda(cudart.cudaMemcpyAsync(d_xh, hXh, bytesXh, H2D, stream), "cudaMemcpyAsync(xh H2D)");
-                }
-            } else {
-                if (halfBytes == null || halfBytes.length < needBytes)
-                    halfBytes = new byte[needBytes];
-                ByteBuffer bb = ByteBuffer.wrap(halfBytes).order(ByteOrder.LITTLE_ENDIAN);
-                for (int j = 0; j < cols; j++)
-                    bb.putShort(j * 2, Float.floatToFloat16(x[j]));
-                try (BytePointer hXh = new BytePointer(halfBytes)) {
-                    checkCuda(cudart.cudaMemcpyAsync(d_xh, hXh, bytesXh, H2D, stream), "cudaMemcpyAsync(xh H2D)");
-                }
-            }
-        }
-    }
+    // ── Construction ──────────────────────────────────────────────────────────
 
     /**
      * @param ctx an open GpuContext — must outlive all sgemv calls on this instance
      */
     public CudaMatVec(GpuContext ctx) {
-        if (ctx == null)
-            throw new IllegalArgumentException("ctx must not be null");
-        this.ctx = ctx;
+        if (ctx == null) throw new IllegalArgumentException("ctx must not be null");
+        this.ctx  = ctx;
+        this.cuda = CudaBindings.instance();
     }
 
-    /** The CUDA/cuBLAS context backing this backend (package scope for tests). */
-    GpuContext gpuContext() {
-        return ctx;
-    }
+    GpuContext gpuContext() { return ctx; }
 
-    /**
-     * Allocates device memory and uploads {@code host} once (H2D).
-     *
-     * <p>Convenience factory so {@link LlamaTransformerHandler} can upload
-     * dequantized weight matrices without a direct reference to {@link GpuContext}.
-     *
-     * @param host row-major float weights, length {@code rows * cols}
-     * @return a {@link DeviceFloatMatrix} — must be closed when the handler shuts down
-     */
-    DeviceFloatMatrix upload(float[] host, int rows, int cols) {
+    // ── Upload helpers (for LlamaTransformerHandler / LoraTrainableHandler) ──
+
+    @Override
+    public DeviceFloatMatrix upload(float[] host, int rows, int cols) {
         return DeviceFloatMatrix.upload(ctx, host, rows, cols);
     }
 
-    /**
-     * Upload float32 host weights as FP16 on device (≈2× less VRAM than {@link #upload}).
-     */
-    DeviceHalfMatrix uploadHalf(float[] host, int rows, int cols) {
+    @Override
+    public DeviceHalfMatrix uploadHalf(float[] host, int rows, int cols) {
         return DeviceHalfMatrix.uploadFromFloat32(ctx, host, rows, cols);
     }
 
+    // ── MatVec ────────────────────────────────────────────────────────────────
+
+    /**
+     * Full host path: A and x are on the host.
+     *
+     * Copies A and x into confined off-heap staging arenas before the H2D
+     * {@code cudaMemcpy} calls. Panama FFI (Java 25) rejects heap-backed
+     * {@link MemorySegment}s in native downcalls; {@code MemorySegment.copyFrom}
+     * is a pure Java copy and is not subject to that restriction.
+     * The D2H result is likewise written into a staging segment and then
+     * copied into the returned heap array.
+     *
+     * Intended for the non-resident forward pass. The resident inference
+     * path uses {@link #sgemv(DeviceFloatMatrix, float[])} with device-resident A.
+     */
     @Override
     public float[] sgemv(float[] A, float[] x, int rows, int cols) {
         if (A.length != (long) rows * cols)
@@ -252,149 +147,48 @@ public final class CudaMatVec implements MatVec {
         MatVecEvent evt = new MatVecEvent();
         evt.begin();
 
-        float[] y = new float[rows];
-        long bytesA = (long) rows * cols * 4;
-        long bytesX = (long) cols * 4;
-        long bytesY = (long) rows * 4;
+        long bytesA = (long) rows * cols * Float.BYTES;
+        long bytesX = (long) cols  * Float.BYTES;
+        long bytesY = (long) rows  * Float.BYTES;
 
-        PointerPointer pA = new PointerPointer(1);
-        PointerPointer pX = new PointerPointer(1);
-        PointerPointer pY = new PointerPointer(1);
+        MemorySegment dA = cuda.deviceMalloc(ctx.deviceIndex(), bytesA);
+        MemorySegment dX = cuda.deviceMalloc(ctx.deviceIndex(), bytesX);
+        MemorySegment dY = cuda.deviceMalloc(ctx.deviceIndex(), bytesY);
         try {
+            // H2D — copy heap arrays into confined off-heap staging first.
+            // Panama FFI (Java 25) rejects heap-backed MemorySegments in native downcalls;
+            // MemorySegment.copyFrom is a pure Java copy and is not subject to that restriction.
+            try (Arena h2dArena = Arena.ofConfined()) {
+                MemorySegment nativeA = h2dArena.allocate(bytesA);
+                MemorySegment nativeX = h2dArena.allocate(bytesX);
+                nativeA.copyFrom(MemorySegment.ofArray(A));
+                nativeX.copyFrom(MemorySegment.ofArray(x));
+                CudaBindings.check(
+                    CudaBindings.callInt(cuda.cudaMemcpy, dA, nativeA, bytesA, CudaBindings.H2D),
+                    "cudaMemcpy(A H2D)");
+                CudaBindings.check(
+                    CudaBindings.callInt(cuda.cudaMemcpy, dX, nativeX, bytesX, CudaBindings.H2D),
+                    "cudaMemcpy(x H2D)");
+            }
+
+            float[] y = new float[rows];
             synchronized (ctx.cublasSerializationLock()) {
-            // CUDA device selection is thread-local; bind on every call.
-            int setDeviceRc = cudart.cudaSetDevice(ctx.deviceIndex());
-            checkCuda(setDeviceRc, "cudaSetDevice");
-
-            int rA = cudart.cudaMalloc(pA, bytesA);
-            int rX = cudart.cudaMalloc(pX, bytesX);
-            int rY = cudart.cudaMalloc(pY, bytesY);
-            if (rA != 0 || rX != 0 || rY != 0) {
-                if (rA == 0) cudart.cudaFree(pA.get(0));
-                if (rX == 0) cudart.cudaFree(pX.get(0));
-                if (rY == 0) cudart.cudaFree(pY.get(0));
-                throw new IllegalStateException("cudaMalloc failed: d_A=" + rA + " d_x=" + rX + " d_y=" + rY);
-            }
-
-            Pointer d_A = pA.get(0);
-            Pointer d_x = pX.get(0);
-            Pointer d_y = pY.get(0);
-
-            try (FloatPointer hA = new FloatPointer(A); FloatPointer hX = new FloatPointer(x)) {
-                checkCuda(cudart.cudaMemcpy(d_A, hA, bytesA, H2D), "cudaMemcpy(A H2D)");
-                checkCuda(cudart.cudaMemcpy(d_x, hX, bytesX, H2D), "cudaMemcpy(x H2D)");
-            }
-
-            try (
-                FloatPointer alpha = new FloatPointer(1.0f);
-                FloatPointer beta = new FloatPointer(0.0f);
-                FloatPointer d_A_f = new FloatPointer(d_A);
-                FloatPointer d_x_f = new FloatPointer(d_x);
-                FloatPointer d_y_f = new FloatPointer(d_y);
-            ) {
-                int pointerModeRc = cublas.cublasSetPointerMode_v2(
-                    ctx.handle(), cublas.CUBLAS_POINTER_MODE_HOST);
-                if (pointerModeRc != 0)
-                    throw new IllegalStateException("cublasSetPointerMode failed: " + pointerModeRc);
-
-                int rc = cublas.cublasSgemv_v2(ctx.handle(), CUBLAS_OP_T,
-                    cols, rows,
-                    alpha, d_A_f, cols,
-                    d_x_f, 1,
-                    beta, d_y_f, 1);
-                if (rc != 0)
-                    throw new IllegalStateException("cublasSgemv failed: " + rc);
-            }
-
-            try (FloatPointer hy = new FloatPointer(y)) {
-                checkCuda(cudart.cudaMemcpy(hy, d_y, bytesY, D2H), "cudaMemcpy(y D2H)");
-                // FloatPointer(y) is native memory initialized from y[]; copy back to heap array.
-                hy.get(y);
-            }
-
-            return y;
-            }
-        } finally {
-            cudart.cudaFree(pA.get(0));
-            cudart.cudaFree(pX.get(0));
-            cudart.cudaFree(pY.get(0));
-            pA.close();
-            pX.close();
-            pY.close();
-            evt.backend = "cuda";
-            evt.rows = rows;
-            evt.cols = cols;
-            evt.commit();
-        }
-    }
-
-    @Override
-    public float[] sgemv(DeviceFloatMatrix A, float[] x) {
-        if (A == null)
-            throw new IllegalArgumentException("A must not be null");
-        if (A.isClosed())
-            throw new IllegalStateException("DeviceFloatMatrix is closed");
-        int rows = A.rows();
-        int cols = A.cols();
-        if (x.length != cols)
-            throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
-
-        MatVecEvent evt = new MatVecEvent();
-        evt.begin();
-
-        float[] y = new float[rows];
-        long bytesX = (long) cols * 4;
-        long bytesY = (long) rows * 4;
-
-        Fp32ResidentScratch s = FP32_RESIDENT.get();
-        try {
-            synchronized (ctx.cublasSerializationLock()) {
-                CUstream_st stream = CUDA_STREAM.get().ensure(ctx.deviceIndex());
-                checkCuda(cublas.cublasSetStream_v2(ctx.handle(), stream), "cublasSetStream_v2");
-                try {
-                    s.ensure(ctx.deviceIndex(), bytesX, bytesY);
-                    Pointer d_x = s.dX;
-                    Pointer d_y = s.dY;
-                    Pointer d_A = A.devicePointer();
-
-                    try (FloatPointer hX = new FloatPointer(x)) {
-                        checkCuda(cudart.cudaMemcpyAsync(d_x, hX, bytesX, H2D, stream), "cudaMemcpyAsync(x H2D)");
-                    }
-
-                    try (
-                        FloatPointer alpha = new FloatPointer(1.0f);
-                        FloatPointer beta = new FloatPointer(0.0f);
-                        FloatPointer d_A_f = new FloatPointer(d_A);
-                        FloatPointer d_x_f = new FloatPointer(d_x);
-                        FloatPointer d_y_f = new FloatPointer(d_y);
-                    ) {
-                        int pointerModeRc = cublas.cublasSetPointerMode_v2(
-                            ctx.handle(), cublas.CUBLAS_POINTER_MODE_HOST);
-                        if (pointerModeRc != 0)
-                            throw new IllegalStateException("cublasSetPointerMode failed: " + pointerModeRc);
-
-                        int rc = cublas.cublasSgemv_v2(ctx.handle(), CUBLAS_OP_T,
-                            cols, rows,
-                            alpha, d_A_f, cols,
-                            d_x_f, 1,
-                            beta, d_y_f, 1);
-                        if (rc != 0)
-                            throw new IllegalStateException("cublasSgemv failed: " + rc);
-                    }
-
-                    try (FloatPointer hy = new FloatPointer((long) rows)) {
-                        checkCuda(cudart.cudaMemcpyAsync(hy, d_y, bytesY, D2H, stream), "cudaMemcpyAsync(y D2H)");
-                        checkCuda(cudart.cudaStreamSynchronize(stream), "cudaStreamSynchronize");
-                        hy.get(y);
-                    }
-
-                    return y;
-                } finally {
-                    cublas.cublasSetStream_v2(ctx.handle(), new CUstream_st());
+                callSgemvFp32(dA, cols, dX, dY, rows, cols);
+                // D2H into off-heap staging; copy into the heap array afterwards.
+                try (Arena d2hArena = Arena.ofConfined()) {
+                    MemorySegment stagingY = d2hArena.allocate(bytesY);
+                    CudaBindings.check(
+                        CudaBindings.callInt(cuda.cudaMemcpy, stagingY, dY, bytesY, CudaBindings.D2H),
+                        "cudaMemcpy(y D2H)");
+                    MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
                 }
             }
+            return y;
         } finally {
-            evt.backend = "cuda-resident";
+            cuda.deviceFree(dA);
+            cuda.deviceFree(dX);
+            cuda.deviceFree(dY);
+            evt.backend(MatVecBackend.CUDA);
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
@@ -402,88 +196,258 @@ public final class CudaMatVec implements MatVec {
     }
 
     /**
-     * {@code y = A × x} with row-major {@code A[rows, cols]} in FP16 on the device and
-     * {@code x} in FP32 — converts {@code x} to FP16 for the multiply, accumulates in FP32
-     * via {@code cublasHSSgemvStridedBatched} (same {@code trans, m, n, lda} contract as
-     * {@link #sgemv(DeviceFloatMatrix, float[])}).
+     * Device-resident FP32 path: A stays on the device across calls.
+     *
+     * Per-thread scratch buffers for x and y are grown lazily and reused.
+     * x is staged through a short-lived confined arena before the H2D
+     * {@code cudaMemcpyAsync} — Panama FFI (Java 25) rejects heap-backed
+     * segments in native downcalls.
+     * The D2H copy targets {@code resultArena} (off-heap) and is copied into
+     * a heap array only after {@code cudaStreamSynchronize} returns.
      */
     @Override
-    public float[] sgemv(DeviceHalfMatrix A, float[] x) {
-        if (A == null)
-            throw new IllegalArgumentException("A must not be null");
-        if (A.isClosed())
-            throw new IllegalStateException("DeviceHalfMatrix is closed");
-        int rows = A.rows();
-        int cols = A.cols();
+    public float[] sgemv(DeviceFloatMatrix A, float[] x) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        if (A.isClosed()) throw new IllegalStateException("DeviceFloatMatrix is closed");
+        int rows = A.rows(), cols = A.cols();
         if (x.length != cols)
             throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
 
         MatVecEvent evt = new MatVecEvent();
         evt.begin();
 
-        float[] y = new float[rows];
-        long bytesXh = (long) cols * 2;
-        long bytesY = (long) rows * 4;
+        long bytesX = (long) cols * Float.BYTES;
+        long bytesY = (long) rows * Float.BYTES;
 
-        Fp16ResidentScratch s = FP16_RESIDENT.get();
-        try {
+        Fp32Scratch scratch = FP32_SCRATCH.get();
+
+        try (Arena resultArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
-                CUstream_st stream = CUDA_STREAM.get().ensure(ctx.deviceIndex());
-                checkCuda(cublas.cublasSetStream_v2(ctx.handle(), stream), "cublasSetStream_v2");
+                MemorySegment stream = ensureStream();
+                bindStream(stream);
                 try {
-                    s.ensureDevice(ctx.deviceIndex(), bytesXh, bytesY);
-                    Pointer d_xh = s.dXh;
-                    Pointer d_y = s.dY;
-                    Pointer d_A = A.devicePointer();
+                    ensureFp32Scratch(scratch, bytesX, bytesY);
 
-                    s.packXHalfAndUpload(x, cols, d_xh, bytesXh, stream);
-
-                    try (
-                            FloatPointer alpha = new FloatPointer(1.0f);
-                            FloatPointer beta = new FloatPointer(0.0f);
-                            FloatPointer d_y_f = new FloatPointer(d_y);
-                            __half d_A_h = new __half(d_A);
-                            __half d_x_h = new __half(d_xh);
-                    ) {
-                        int pointerModeRc = cublas.cublasSetPointerMode_v2(
-                                ctx.handle(), cublas.CUBLAS_POINTER_MODE_HOST);
-                        if (pointerModeRc != 0)
-                            throw new IllegalStateException("cublasSetPointerMode failed: " + pointerModeRc);
-
-                        // Same (trans, m, n, lda) as cublasSgemv_v2 in sgemv(DeviceFloatMatrix, …).
-                        long strideA = (long) cols * rows;
-                        long strideX = cols;
-                        long strideY = rows;
-                        int rc = cublas.cublasHSSgemvStridedBatched(ctx.handle(), CUBLAS_OP_T,
-                                cols, rows,
-                                alpha, d_A_h, cols, strideA,
-                                d_x_h, 1, strideX,
-                                beta, d_y_f, 1, strideY,
-                                1);
-                        if (rc != 0)
-                            throw new IllegalStateException("cublasHSSgemvStridedBatched failed: " + rc);
+                    // H2D: copy x into a confined off-heap staging segment before the downcall.
+                    // Panama FFI (Java 25) rejects heap-backed MemorySegments in native downcalls.
+                    try (Arena h2dArena = Arena.ofConfined()) {
+                        MemorySegment nativeX = h2dArena.allocate(bytesX);
+                        nativeX.copyFrom(MemorySegment.ofArray(x));
+                        CudaBindings.check(
+                            CudaBindings.callInt(cuda.cudaMemcpyAsync,
+                                scratch.dX, nativeX, bytesX, CudaBindings.H2D, stream),
+                            "cudaMemcpyAsync(x H2D)");
                     }
 
-                    try (FloatPointer hy = new FloatPointer((long) rows)) {
-                        checkCuda(cudart.cudaMemcpyAsync(hy, d_y, bytesY, D2H, stream), "cudaMemcpyAsync(y D2H)");
-                        checkCuda(cudart.cudaStreamSynchronize(stream), "cudaStreamSynchronize");
-                        hy.get(y);
-                    }
+                    callSgemvFp32(A.devicePointer(), cols, scratch.dX, scratch.dY, rows, cols);
 
+                    // D2H into off-heap staging — the async copy must not target a moveable heap address.
+                    MemorySegment stagingY = resultArena.allocate(bytesY);
+                    CudaBindings.check(
+                        CudaBindings.callInt(cuda.cudaMemcpyAsync,
+                            stagingY, scratch.dY, bytesY, CudaBindings.D2H, stream),
+                        "cudaMemcpyAsync(y D2H)");
+                    CudaBindings.check(
+                        CudaBindings.callInt(cuda.cudaStreamSynchronize, stream),
+                        "cudaStreamSynchronize");
+
+                    float[] y = new float[rows];
+                    MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
                     return y;
                 } finally {
-                    cublas.cublasSetStream_v2(ctx.handle(), new CUstream_st());
+                    unbindStream();
                 }
             }
         } finally {
-            evt.backend = "cuda-resident-fp16";
+            evt.backend(MatVecBackend.CUDA_RESIDENT);
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
         }
     }
 
-    private static void checkCuda(int rc, String op) {
-        if (rc != 0) throw new IllegalStateException(op + " failed: " + rc);
+    /**
+     * Device-resident FP16 path: A is FP16 on the device; x is FP32 on the host.
+     *
+     * x is converted to FP16 in a confined off-heap arena and uploaded; the
+     * cuBLAS mixed-precision kernel accumulates in FP32.
+     */
+    @Override
+    public float[] sgemv(DeviceHalfMatrix A, float[] x) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        if (A.isClosed()) throw new IllegalStateException("DeviceHalfMatrix is closed");
+        int rows = A.rows(), cols = A.cols();
+        if (x.length != cols)
+            throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+
+        long bytesXh = (long) cols * Short.BYTES;  // FP16
+        long bytesY  = (long) rows * Float.BYTES;  // FP32
+
+        Fp16Scratch scratch = FP16_SCRATCH.get();
+
+        try (Arena callArena = Arena.ofConfined()) {
+            synchronized (ctx.cublasSerializationLock()) {
+                MemorySegment stream = ensureStream();
+                bindStream(stream);
+                try {
+                    ensureFp16Scratch(scratch, bytesXh, bytesY);
+
+                    // Pack x as FP16 into off-heap staging. JAVA_SHORT has native byte order
+                    // (little-endian on x86), matching CUDA __half layout.
+                    MemorySegment stagingXh = callArena.allocate(bytesXh);
+                    for (int j = 0; j < cols; j++)
+                        stagingXh.setAtIndex(JAVA_SHORT, j, Float.floatToFloat16(x[j]));
+
+                    CudaBindings.check(
+                        CudaBindings.callInt(cuda.cudaMemcpyAsync,
+                            scratch.dXh, stagingXh, bytesXh, CudaBindings.H2D, stream),
+                        "cudaMemcpyAsync(xh H2D)");
+
+                    callSgemvFp16(A.devicePointer(), cols, scratch.dXh, scratch.dY, rows, cols);
+
+                    MemorySegment stagingY = callArena.allocate(bytesY);
+                    CudaBindings.check(
+                        CudaBindings.callInt(cuda.cudaMemcpyAsync,
+                            stagingY, scratch.dY, bytesY, CudaBindings.D2H, stream),
+                        "cudaMemcpyAsync(y D2H)");
+                    CudaBindings.check(
+                        CudaBindings.callInt(cuda.cudaStreamSynchronize, stream),
+                        "cudaStreamSynchronize");
+
+                    float[] y = new float[rows];
+                    MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
+                    return y;
+                } finally {
+                    unbindStream();
+                }
+            }
+        } finally {
+            evt.backend(MatVecBackend.CUDA_RESIDENT_FP16);
+            evt.rows = rows;
+            evt.cols = cols;
+            evt.commit();
+        }
+    }
+
+    // ── cuBLAS kernel dispatchers ─────────────────────────────────────────────
+
+    /**
+     * cublasSgemv_v2: y = A * x, row-major A[rows×cols].
+     *
+     * cuBLAS is column-major. A row-major A[rows×cols] equals the transpose of
+     * a column-major A^T[cols×rows]. Calling with CUBLAS_OP_T, m=cols, n=rows,
+     * lda=cols computes y = A * x correctly.
+     */
+    private void callSgemvFp32(MemorySegment dA, int lda,
+                                MemorySegment dX, MemorySegment dY,
+                                int rows, int cols) {
+        try (Arena scalars = Arena.ofConfined()) {
+            MemorySegment alpha = scalars.allocateFrom(JAVA_FLOAT, 1.0f);
+            MemorySegment beta  = scalars.allocateFrom(JAVA_FLOAT, 0.0f);
+            CudaBindings.check(
+                CudaBindings.callInt(cuda.cublasSetPointerMode, ctx.handle(), CudaBindings.CUBLAS_POINTER_MODE_HOST),
+                "cublasSetPointerMode");
+            CudaBindings.check(
+                CudaBindings.callInt(cuda.cublasSgemv,
+                    ctx.handle(), CudaBindings.CUBLAS_OP_T,
+                    cols, rows,
+                    alpha, dA, lda,
+                    dX, 1,
+                    beta, dY, 1),
+                "cublasSgemv_v2");
+        }
+    }
+
+    /**
+     * cublasHSSgemvStridedBatched: y(FP32) = A(FP16) * x(FP16), batched=1.
+     *
+     * Same (trans, m, n, lda) mapping as {@link #callSgemvFp32}.
+     */
+    private void callSgemvFp16(MemorySegment dA, int lda,
+                                MemorySegment dXh, MemorySegment dY,
+                                int rows, int cols) {
+        long strideA = (long) cols * rows;
+        long strideX = cols;
+        long strideY = rows;
+        try (Arena scalars = Arena.ofConfined()) {
+            MemorySegment alpha = scalars.allocateFrom(JAVA_FLOAT, 1.0f);
+            MemorySegment beta  = scalars.allocateFrom(JAVA_FLOAT, 0.0f);
+            CudaBindings.check(
+                CudaBindings.callInt(cuda.cublasSetPointerMode, ctx.handle(), CudaBindings.CUBLAS_POINTER_MODE_HOST),
+                "cublasSetPointerMode");
+            CudaBindings.check(
+                CudaBindings.callInt(cuda.cublasHSSgemvStridedBatched,
+                    ctx.handle(), CudaBindings.CUBLAS_OP_T,
+                    cols, rows,
+                    alpha, dA, lda, strideA,
+                    dXh, 1, strideX,
+                    beta, dY, 1, strideY,
+                    1),
+                "cublasHSSgemvStridedBatched");
+        }
+    }
+
+    // ── Stream management ─────────────────────────────────────────────────────
+
+    /** Returns or lazily creates the per-thread non-blocking CUDA stream. */
+    private MemorySegment ensureStream() {
+        MemorySegment stream = CUDA_STREAM.get();
+        if (stream != null) return stream;
+        CudaBindings.check(
+            CudaBindings.callInt(cuda.cudaSetDevice, ctx.deviceIndex()),
+            "cudaSetDevice");
+        try (Arena tmp = Arena.ofConfined()) {
+            MemorySegment slot = tmp.allocate(ADDRESS);
+            CudaBindings.check(
+                CudaBindings.callInt(cuda.cudaStreamCreateWithFlags, slot, STREAM_NON_BLOCKING),
+                "cudaStreamCreateWithFlags");
+            stream = slot.get(ADDRESS, 0); // opaque 0-byte segment = stream handle
+            CUDA_STREAM.set(stream);
+            return stream;
+        }
+    }
+
+    private void bindStream(MemorySegment stream) {
+        CudaBindings.check(
+            CudaBindings.callInt(cuda.cublasSetStream, ctx.handle(), stream),
+            "cublasSetStream_v2");
+    }
+
+    /** Restores the default stream (NULL) on the cuBLAS handle. */
+    private void unbindStream() {
+        CudaBindings.callInt(cuda.cublasSetStream, ctx.handle(), MemorySegment.NULL);
+    }
+
+    // ── Scratch growth ────────────────────────────────────────────────────────
+
+    private void ensureFp32Scratch(Fp32Scratch s, long bytesX, long bytesY) {
+        int dev = ctx.deviceIndex();
+        if (s.dXBytes < bytesX) {
+            cuda.deviceFree(s.dX);
+            s.dX     = cuda.deviceMalloc(dev, bytesX);
+            s.dXBytes = bytesX;
+        }
+        if (s.dYBytes < bytesY) {
+            cuda.deviceFree(s.dY);
+            s.dY     = cuda.deviceMalloc(dev, bytesY);
+            s.dYBytes = bytesY;
+        }
+    }
+
+    private void ensureFp16Scratch(Fp16Scratch s, long bytesXh, long bytesY) {
+        int dev = ctx.deviceIndex();
+        if (s.dXhBytes < bytesXh) {
+            cuda.deviceFree(s.dXh);
+            s.dXh     = cuda.deviceMalloc(dev, bytesXh);
+            s.dXhBytes = bytesXh;
+        }
+        if (s.dYBytes < bytesY) {
+            cuda.deviceFree(s.dY);
+            s.dY     = cuda.deviceMalloc(dev, bytesY);
+            s.dYBytes = bytesY;
+        }
     }
 }

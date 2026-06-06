@@ -18,125 +18,180 @@
  */
 package cab.ml.juno.node;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Logger;
 
-import org.bytedeco.cuda.cublas.cublasContext;
-import org.bytedeco.cuda.global.cublas;
-import org.bytedeco.cuda.global.cudart;
+import static java.lang.foreign.ValueLayout.ADDRESS;
 
 /**
- * cuBLAS context: device selection and handle lifecycle.
+ * GPU context: device selection and BLAS handle lifecycle, via Panama FFI.
+ *
+ * The BLAS handle is an opaque pointer ({@code cublasHandle_t} or
+ * {@code rocblas_handle}) stored as a {@link MemorySegment}. It is created by
+ * {@code cublasCreate_v2} / {@code rocblas_create_handle} and destroyed on
+ * {@link #close()}, both resolved through {@link GpuBindings}.
  *
  * Prefer {@link #shared(int)} for a process-wide handle on long-lived JVMs
- * (embedded node, {@code ForwardPassHandlerLoader} default GPU path). Use
- * {@link #init(int)} when tests or tools need an isolated handle they can
- * {@link #close()} without affecting other code.
+ * (embedded node, ForwardPassHandlerLoader GPU path). Use {@link #init(int)}
+ * when tests or tools need an isolated handle they can {@link #close()} without
+ * affecting other code.
  *
- * The cublasContext is shared across all {@link CudaMatVec} calls using the same
- * {@code GpuContext} — concurrent host launches still require external ordering:
- * {@link #cublasSerializationLock()} is used by {@link CudaMatVec} to serialize
- * stream binding and kernel execution per context.
+ * The BLAS handle is shared across all {@link CudaMatVec} calls on the same
+ * GpuContext. {@link #cublasSerializationLock()} serializes stream binding and
+ * kernel execution. Replace with ReentrantLock when addressing Loom pinning
+ * (point 4 of the HPC audit).
  *
- * Uses org.bytedeco (JavaCPP) cuda/cublas.
+ * Backend auto-detection order: CUDA first, then ROCm. Override with system
+ * property {@code juno.gpu.backend=cuda|rocm|auto} (default: {@code auto}).
  *
  * Usage:
  *   try (GpuContext ctx = GpuContext.init(0)) {
  *       ForwardPassHandler handler = ForwardPassHandlerLoader.load(path, shard, new CudaMatVec(ctx));
- *       ...
  *       handler.releaseGpuResources();
  *   }
  *
- * Throws IllegalStateException if CUDA is not available.
- *   
  * @author Yevhen Soldatov
- * 
  */
 public final class GpuContext implements AutoCloseable {
 
     private static final Logger log = Logger.getLogger(GpuContext.class.getName());
 
-    /** One shared {@link GpuContext} per device index for the JVM lifetime. */
-    private static final Map<Integer, GpuContext> SHARED_INSTANCES = new HashMap<>();
+    private static final Map<Integer, GpuContext> SHARED = new HashMap<>();
     private static final Object SHARED_LOCK = new Object();
 
-    private final int deviceIndex;
-    private final cublasContext handle;
-    private final boolean processShared;
-    private final Object cublasSerialization = new Object();
-    private volatile boolean closed = false;
+    private final int           deviceIndex;
+    private final GpuBindings   bindings;
+    /** Opaque BLAS handle (cublasHandle_t or rocblas_handle). */
+    private final MemorySegment handle;
+    private final boolean       processShared;
+    private final Object        cublasSerialization = new Object();
+    private volatile boolean    closed = false;
 
-    private GpuContext(int deviceIndex, cublasContext handle, boolean processShared) {
-        this.deviceIndex = deviceIndex;
-        this.handle = handle;
+    private GpuContext(int deviceIndex, GpuBindings bindings,
+                       MemorySegment handle, boolean processShared) {
+        this.deviceIndex   = deviceIndex;
+        this.bindings      = bindings;
+        this.handle        = handle;
         this.processShared = processShared;
     }
 
     /**
-     * Mutex for {@code cublasSetStream} / memcpy / GEMV sequences on this handle.
-     * cuBLAS associates a stream with the handle; concurrent threads must not interleave.
+     * The vendor-neutral GPU bindings for this context.
+     * Returns {@link CudaBindings} on NVIDIA or {@link RocmBindings} on AMD.
+     */
+    public GpuBindings bindings() {
+        if (closed) throw new IllegalStateException("GpuContext already closed");
+        return bindings;
+    }
+
+    /**
+     * Mutex for cublasSetStream / memcpy / GEMV sequences on this handle.
+     * cuBLAS associates a stream with the handle; concurrent threads must not
+     * interleave these operations.
+     *
+     * Note: synchronized on this lock inside a virtual thread causes carrier
+     * pinning when the body makes Panama downcalls. Migrate to ReentrantLock
+     * when addressing Loom pinning (HPC audit point 4).
      */
     Object cublasSerializationLock() {
         return cublasSerialization;
     }
 
     /**
-     * Process-wide singleton per CUDA device: one cuBLAS handle per {@code deviceIndex}.
-     * {@link #close()} does nothing on these instances so embedded servers and
-     * {@code selectBackend()} paths do not tear down CUDA under other live code.
+     * Process-wide singleton per GPU device. {@link #close()} is a no-op on
+     * these instances so embedded servers do not tear down the GPU under live code.
      *
-     * @param deviceIndex 0-based CUDA device (must be {@code < cudaGetDeviceCount()})
+     * @param deviceIndex 0-based GPU device index
      */
     public static GpuContext shared(int deviceIndex) {
         if (deviceIndex < 0)
             throw new IllegalArgumentException("deviceIndex must be non-negative: " + deviceIndex);
         synchronized (SHARED_LOCK) {
-            GpuContext existing = SHARED_INSTANCES.get(deviceIndex);
-            if (existing != null && !existing.closed)
-                return existing;
+            GpuContext existing = SHARED.get(deviceIndex);
+            if (existing != null && !existing.closed) return existing;
             GpuContext created = create(deviceIndex, true);
-            SHARED_INSTANCES.put(deviceIndex, created);
-            log.info("GpuContext.shared(" + deviceIndex + ") — installed process-wide GPU context");
+            SHARED.put(deviceIndex, created);
+            log.info("GpuContext.shared(" + deviceIndex + ") — process-wide GPU context installed");
             return created;
         }
     }
 
     /**
-     * Initialise CUDA device {@code deviceIndex} and create a cuBLAS handle.
+     * Initialises the GPU device and creates a BLAS handle.
      *
      * @param deviceIndex 0-based GPU index (0 for single-GPU nodes)
      * @return a ready GpuContext — caller must close() when done
-     * @throws IllegalStateException if CUDA is not available or init fails
+     * @throws IllegalStateException if no GPU backend is available or init fails
      */
     public static GpuContext init(int deviceIndex) {
         return create(deviceIndex, false);
     }
 
     private static GpuContext create(int deviceIndex, boolean processShared) {
-        if (!CudaAvailability.isAvailable()) {
-            throw new IllegalStateException(
-                "CUDA not available — cannot create GpuContext on this node");
+        GpuBindings gpu = selectBindings();
+
+        GpuBindings.check(GpuBindings.callInt(gpu.gpuSetDevice(), deviceIndex), "setDevice");
+
+        // BLAS create handle: cublasCreate_v2 or rocblas_create_handle
+        MemorySegment handleValue;
+        try (Arena tmp = Arena.ofConfined()) {
+            MemorySegment slot = tmp.allocate(ADDRESS);
+            GpuBindings.check(GpuBindings.callInt(gpu.blasCreate(), slot), "blasCreate");
+            // Extract the opaque handle address; it lives until blasDestroy is called.
+            handleValue = slot.get(ADDRESS, 0);
         }
 
-        cudart.cudaSetDevice(deviceIndex);
+        String name = deviceName(gpu, deviceIndex);
+        long   vram = deviceVram(gpu, deviceIndex);
+        log.info(String.format("GpuContext ready — [%s] device %d: %s, %.1f GB VRAM (shared=%b)",
+            gpu.backendLabel(), deviceIndex, name, vram / 1e9, processShared));
 
-        cublasContext handle = new cublasContext();
-        int rc = cublas.cublasCreate_v2(handle);
-        if (rc != 0) {
-            throw new IllegalStateException("cublasCreate failed: " + rc);
-        }
-
-        String name = CudaAvailability.deviceName(deviceIndex);
-        long vram = CudaAvailability.vramBytes(deviceIndex);
-        log.info(String.format("GpuContext ready — device %d: %s, %.1f GB VRAM (shared=%b)",
-                deviceIndex, name, vram / 1e9, processShared));
-
-        return new GpuContext(deviceIndex, handle, processShared);
+        return new GpuContext(deviceIndex, gpu, handleValue, processShared);
     }
 
-    /** The cuBLAS handle — valid until close(). */
-    public cublasContext handle() {
+    /**
+     * Selects the GPU binding backend based on the {@code juno.gpu.backend}
+     * system property (default {@code auto}).
+     *
+     * <ul>
+     *   <li>{@code cuda} — force CUDA
+     *   <li>{@code rocm} — force ROCm
+     *   <li>{@code auto} — try CUDA first, then ROCm
+     * </ul>
+     *
+     * @throws IllegalStateException if no usable GPU backend is found
+     */
+    static GpuBindings selectBindings() {
+        String pref = System.getProperty("juno.gpu.backend", "auto").toLowerCase();
+        return switch (pref) {
+            case "cuda" -> {
+                if (!CudaBindings.isAvailable())
+                    throw new IllegalStateException("juno.gpu.backend=cuda but CUDA not available");
+                yield CudaBindings.instance();
+            }
+            case "rocm" -> {
+                if (!RocmBindings.isAvailable())
+                    throw new IllegalStateException("juno.gpu.backend=rocm but ROCm not available");
+                yield RocmBindings.instance();
+            }
+            default -> {
+                if (CudaBindings.isAvailable()) yield CudaBindings.instance();
+                if (RocmBindings.isAvailable()) yield RocmBindings.instance();
+                throw new IllegalStateException(
+                    "No GPU backend available — CUDA and ROCm libraries not found");
+            }
+        };
+    }
+
+    /**
+     * The BLAS handle (opaque pointer) — valid until close().
+     *
+     * Pass directly to cuBLAS / rocBLAS Panama downcalls (ADDRESS-typed parameter).
+     */
+    public MemorySegment handle() {
         if (closed) throw new IllegalStateException("GpuContext already closed");
         return handle;
     }
@@ -156,7 +211,20 @@ public final class GpuContext implements AutoCloseable {
         return processShared;
     }
 
-    /** Destroy the cuBLAS handle and release device resources. */
+    /** Backend label: {@code "cuda"} or {@code "rocm"}. */
+    public String backendLabel() { return bindings.backendLabel(); }
+
+    /**
+     * Creates the appropriate {@link MatVec} implementation for this GPU context.
+     *
+     * Delegates to {@link GpuBindings#createMatVec(GpuContext)} so that adding
+     * a new backend requires no changes here.
+     */
+    public MatVec createMatVec() {
+        return bindings.createMatVec(this);
+    }
+
+    /** Destroys the BLAS handle and releases device resources. */
     @Override
     public void close() {
         if (processShared) {
@@ -166,11 +234,36 @@ public final class GpuContext implements AutoCloseable {
         if (!closed) {
             closed = true;
             try {
-                cublas.cublasDestroy_v2(handle);
+                GpuBindings.callInt(bindings.blasDestroy(), handle);
                 log.info("GpuContext closed — device " + deviceIndex);
             } catch (Exception e) {
                 log.warning("Error closing GpuContext: " + e.getMessage());
             }
+        }
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    private static String deviceName(GpuBindings gpu, int index) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment prop = arena.allocate(gpu.devicePropBytes());
+            int rc = (int) gpu.gpuGetDeviceProperties().invokeExact(prop, index);
+            if (rc != 0) return "unknown";
+            String name = prop.getString(gpu.propNameOffset());
+            return name != null ? name.trim() : "unknown";
+        } catch (Throwable t) {
+            return "unknown";
+        }
+    }
+
+    private static long deviceVram(GpuBindings gpu, int index) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment prop = arena.allocate(gpu.devicePropBytes());
+            int rc = (int) gpu.gpuGetDeviceProperties().invokeExact(prop, index);
+            if (rc != 0) return 0L;
+            return prop.get(java.lang.foreign.ValueLayout.JAVA_LONG, gpu.propTotalMemOffset());
+        } catch (Throwable t) {
+            return 0L;
         }
     }
 }

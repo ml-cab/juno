@@ -37,6 +37,7 @@ import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.lora.LoraAdapterSet;
 import cab.ml.juno.node.CudaAvailability;
+import cab.ml.juno.node.RocmAvailability;
 import cab.ml.juno.node.CudaMatVec;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
@@ -231,7 +232,7 @@ public final class JunoPlayer implements AutoCloseable {
 
 			List<ForwardPassHandler> handlers = new ArrayList<>();
 			GpuContext gpuCtx = prepareGpuContext(useGpu);
-			MatVec sharedBackend = (gpuCtx != null) ? new CudaMatVec(gpuCtx) : ForwardPassHandlerLoader.selectBackend();
+			MatVec sharedBackend = (gpuCtx != null) ? gpuCtx.createMatVec() : ForwardPassHandlerLoader.selectBackend();
 			for (var assignment : shardMap.assignments()) {
 				var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 				handlers.add(ForwardPassHandlerLoader.load(modelPath, context, sharedBackend, playAdapters));
@@ -264,10 +265,13 @@ public final class JunoPlayer implements AutoCloseable {
 		}
 
 		private static GpuContext prepareGpuContext(boolean useGpu) {
-			if (!useGpu || !CudaAvailability.isAvailable())
+			boolean gpuAvailable = CudaAvailability.isAvailable() || RocmAvailability.isAvailable();
+			if (!useGpu || !gpuAvailable)
 				return null;
 			int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
-			if (dev >= CudaAvailability.deviceCount())
+			int devCount = CudaAvailability.isAvailable()
+				? CudaAvailability.deviceCount() : RocmAvailability.deviceCount();
+			if (dev >= devCount)
 				return null;
 			return GpuContext.shared(dev);
 		}

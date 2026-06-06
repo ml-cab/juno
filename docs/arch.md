@@ -1,6 +1,6 @@
 # Juno — Architecture Reference
 
-**Java Unified Neural Orchestration** — distributed LLM inference and fine-tuning framework.
+**Java Unified Neural Orchestration** — distributed LLM inference and fine-tuning engine.
 
 This document describes the internal architecture of Juno. For usage instructions see
 [howto.md](howto.md). For LoRA see [LoRA.md](LoRA.md).
@@ -91,6 +91,16 @@ two API surfaces that share the same underlying `RequestScheduler` and `Generati
 | `GET` | `/v1/models` | `OpenAiChatHandler.handleListModels` |
 | `GET` | `/v1/models/{modelId}` | `OpenAiChatHandler.handleGetModel` |
 | `DELETE` | `/v1/models/{modelId}` | `handleUnloadModel` |
+| `GET` | `/v1/cluster/health` | `handleClusterHealth` — per-node health rollup |
+
+### Health and console
+
+| Method | Path | Handler |
+|--------|------|---------|
+| `GET` | `/` | `handleConsole` — embedded coordinator web console |
+| `GET` | `/health-ui` | `handleHealthDashboard` — node health dashboard HTML |
+| `POST` | `/health/probe` | `handleHealthProbeProxy` — proxies probe to `HealthReporter` |
+| `GET` | `/health-data` | `handleHealthDataProxy` — proxies health JSON from nodes |
 
 ### OpenAI-compatible API
 
@@ -148,7 +158,7 @@ code are required by the OpenAI layer. It is a pure translation shim above the s
 ```
 ForwardPassHandlerLoader
     |
-    phi3  -> Phi3TransformerHandler   (fused QKV + gate/up, quantized weights)
+    phi3  -> Phi3TransformerHandler   (fused QKV + gate/up — under development)
     *     -> LlamaTransformerHandler  (separate tensors, quantized weights)
 
 LoRA overlay (optional):
@@ -158,12 +168,21 @@ LoRA overlay (optional):
 
 MatVec (injected into handler):
     CpuMatVec    <- parallel IntStream
-    CudaMatVec   <- cublasSgemv_v2 (FP32 host path) / resident FP32 or FP16 weights:
-                    Llama + Phi-3 GPU use DeviceHalfMatrix + cublasHSSgemvStridedBatched;
-                    per-thread CUDA stream + async H2D/D2H around GEMV;
+    CudaMatVec   <- cublasSgemv_v2 (FP32 host) / resident FP32 or FP16:
+                    implements GpuMatVec; Llama + Phi-3 GPU use DeviceHalfMatrix +
+                    cublasHSSgemvStridedBatched; per-thread CUDA stream + async H2D/D2H;
                     synchronized(gpuContext.cublasSerializationLock());
                     GpuContext.shared(dev); weights uploaded once at load time;
-                    releaseGpuResources() frees VRAM on unload
+                    releaseGpuResources() frees VRAM on unload.
+    RocmMatVec   <- rocblas_sgemv (FP32 host) / resident FP32 or FP16:
+                    implements GpuMatVec; same three compute paths as CudaMatVec;
+                    backed by RocmBindings (libamdhip64.so + librocblas.so).
+                    opTranspose=112 (rocblas_operation_transpose vs cuBLAS 1).
+    GpuBindings  <- vendor-neutral interface; both CudaBindings and RocmBindings implement it.
+    GpuMatVec    <- sealed interface (permits CudaMatVec, RocmMatVec); exposes upload/uploadHalf
+                    so transformer handlers route GPU weight upload on any GPU vendor.
+                    All CUDA/HIP symbols accessed via GpuBindings (Panama FFI —
+                    java.lang.foreign.Linker; replaces JavaCPP/bytedeco entirely).
 
 KV cache wiring (per node, after loadShard()):
     NodeKVCacheAdapter  <- serialises float[][] K/V into KVBlock,
@@ -172,8 +191,9 @@ KV cache wiring (per node, after loadShard()):
                            propagates evict() to both stores
 ```
 
-Backend selection is automatic via `selectBackend()`, which reads `JUNO_USE_GPU`,
-`CudaAvailability`, and `-Djuno.cuda.device` (defaults to `0`).
+Backend selection is automatic via `selectBindings()` in `GpuContext`: CUDA first, then ROCm,
+then CPU. Override with `-Djuno.gpu.backend=cuda|rocm|auto`. `selectBackend()` in
+`ForwardPassHandlerLoader` reads `JUNO_USE_GPU` and `-Djuno.cuda.device` (defaults to `0`).
 
 ---
 
@@ -181,6 +201,15 @@ Backend selection is automatic via `selectBackend()`, which reads `JUNO_USE_GPU`
 
 **No Python, no subprocess.** The JVM reads GGUF binary directly via `GgufReader` and runs the
 full transformer forward pass end to end.
+
+**Panama FFI instead of JavaCPP/bytedeco.** `GpuBindings` is a vendor-neutral interface
+resolved at class-init via `java.lang.foreign.Linker` and `SymbolLookup`. `CudaBindings`
+resolves `libcudart.so.12` + `libcublas.so.12`; `RocmBindings` resolves `libamdhip64.so` +
+`librocblas.so`. The resulting `MethodHandle` instances are thread-safe and carry zero per-call
+Java overhead (the JIT eliminates argument boxing for typed `invokeExact` call sites). The
+`bytedeco/cuda-platform` Maven dependency and its generated JNI wrappers are removed; the only
+requirement is `--enable-native-access=ALL-UNNAMED` on the JVM command line (injected
+automatically by `node/pom.xml` surefire config and by all launcher scripts).
 
 **No Spring Boot.** Javalin for REST. Virtual threads (`Executors.newVirtualThreadPerTaskExecutor()`)
 on the gRPC `ServerBuilder` — required to avoid OS-thread saturation under concurrent prefill sessions.
@@ -194,8 +223,10 @@ extending `InferenceApiServer` keeps each concern isolated and the existing serv
 **Lazy dequantization on CPU; eager upload on GPU.** On the CPU path, dequantization runs
 one 256-element block at a time inside the matmul loop (peak live float footprint ~1 kB instead
 of ~65 MB). On the GPU path, Llama and Phi-3 dequantize once on load and upload to
-`DeviceHalfMatrix` (FP16 on device). If `cudaMalloc` fails, both handlers close partial GPU
-buffers and fall back to CPU quantized matmul for those projections.
+`DeviceHalfMatrix` (FP16 on device) via `GpuMatVec.uploadHalf()`. Both `CudaMatVec` and
+`RocmMatVec` implement `GpuMatVec`; transformer handlers depend on the interface, not a vendor
+class. If `cudaMalloc` or `hipMalloc` fails, both handlers close partial GPU buffers and fall
+back to CPU quantized matmul for those projections.
 
 **Explicit GPU weight lifecycle.** `ForwardPassHandler.releaseGpuResources()` closes all
 `DeviceHalfMatrix` / `DeviceFloatMatrix` buffers. `EmbeddedNodeServer` calls it on shard
@@ -224,7 +255,8 @@ tensors are copied verbatim in their original quantized form.
 
 **GPT-2 BPE and SentencePiece BPE both supported.** `GgufTokenizer` reads
 `tokenizer.ggml.model` from GGUF metadata. Value `"gpt2"` activates the GPT-2 / tiktoken path
-(Llama 3+). Any other value uses SentencePiece (Llama 1/2, TinyLlama, Mistral, Gemma, Phi-3).
+(Llama 3+). Any other value uses SentencePiece (Llama 1/2, TinyLlama, Mistral, Gemma).
+Phi-3 uses a dedicated handler and `phi3` chat template; both are under development.
 Detection is automatic at load time — no configuration required.
 
 **AWS infrastructure fully scripted.** `juno-deploy.sh` is the unified cluster lifecycle script.
@@ -237,8 +269,13 @@ fail hard. State persisted to `~/.juno-deploy-state`.
 `juno.MatVec`, `juno.ForwardPass`, `juno.TokenProduced`, `juno.Tokenizer`,
 `juno.TemplateFormat`, `juno.LoraTrainStep` — make every layer of the stack observable in
 JDK Mission Control without any agent or bytecode manipulation. In cluster mode, coordinator
-and every forked node JVM each write their own `.jfr` file, merged automatically by
-`MetricsMain.extractToJsonMerged()` on exit.
+and every forked node JVM each write their own `.jfr` file. On exit, `ConsoleMain` collects
+coordinator + node paths and calls `MetricsMain.extractToJson()` once per existing file,
+printing a summary for each; `target/metrics/metrics.json` reflects the last processed file.
+Use `./juno local --jfr` when you need all custom events in a single recording. Throughput
+(TPS) metrics come from the coordinator file (`juno.TokenProduced`). The programmatic
+`MetricsMain.extractToJsonMerged()` API merges event lists across files for percentile math
+but is not invoked by the cluster shutdown hook today.
 
 `juno.TokenProduced` is a coordinator-side instantaneous event fired once per token delivered
 to a client after sampling and EOS checks. Because it lives in the coordinator JFR alongside
@@ -248,9 +285,9 @@ the inference path is needed. The JSON report exposes `juno.TokenProduced.count`
 `juno.TokenProduced.elapsed_seconds`, and `juno.TokenProduced.tps`.
 
 **Stub mode.** `EmbeddedNodeServer` uses an internal `StubForwardPassHandler` (zero-filled arrays)
-before a shard is loaded. The test-only `CyclicForwardPassHandler` lives in `node/src/test` and
-is shared via the `node:tests` classifier jar. Integration tests in `juno-master` run stub mode —
-no model file, no GPU, boots in seconds.
+before a shard is loaded. `CyclicForwardPassHandler` lives in `node/src/test` and is shared with
+integration tests in `juno-master` and `coordinator` via the `node:tests` classifier jar. Integration
+tests run stub mode — no model file, no GPU, boots in seconds.
 
 ---
 

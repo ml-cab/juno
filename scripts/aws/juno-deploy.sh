@@ -24,7 +24,8 @@
 #
 #  Core options (setup only):
 #    --instance-type TYPE     EC2 instance type (default: g4dn.xlarge)
-#                             GPU examples : g4dn.xlarge  g4dn.2xlarge  g4dn.4xlarge
+#                             NVIDIA GPU examples : g4dn.xlarge  g4dn.2xlarge  g4dn.4xlarge
+#                             AMD GPU examples   : g4ad.xlarge  g4ad.2xlarge
 #                             CPU examples : m7i-flex.large  c7i-flex.large  t3.medium
 #    --node-count N           Number of inference nodes (default: 3)
 #    --coordinator separate   Extra t3.medium coordinator instance  (nodeCount+1 total)
@@ -73,6 +74,11 @@ DEPLOY_DETACH=0
 # ── INSTANCE PRICING TABLE (on-demand, eu-north-1) ────────────
 # Extend as needed; used only for the cost display in the dashboard.
 declare -A INSTANCE_PRICE=(
+  [g4ad.xlarge]=0.378
+  [g4ad.2xlarge]=0.756
+  [g4ad.4xlarge]=1.212
+  [g4ad.8xlarge]=2.424
+  [g4ad.16xlarge]=4.848
   [g4dn.xlarge]=0.526
   [g4dn.2xlarge]=1.052
   [g4dn.4xlarge]=1.686
@@ -85,6 +91,11 @@ declare -A INSTANCE_PRICE=(
   [t3.large]=0.0832
 )
 declare -A INSTANCE_VCPUS=(
+  [g4ad.xlarge]=4
+  [g4ad.2xlarge]=8
+  [g4ad.4xlarge]=16
+  [g4ad.8xlarge]=32
+  [g4ad.16xlarge]=64
   [g4dn.xlarge]=4
   [g4dn.2xlarge]=8
   [g4dn.4xlarge]=16
@@ -713,10 +724,12 @@ _on_exit() {
 # ── AMI RESOLUTION ────────────────────────────────────────────
 # Checks if a Juno golden AMI already exists in the account for the given
 # base OS + instance type.  If found, sets AMI_ID and returns.
-# If not found, calls make-ami.sh to bake one (GPU bake takes ~30-40 min).
+# If not found, calls make-ami.sh to bake one (GPU bake takes ~25-40 min).
 #
-# The golden AMI has JDK 25, Maven, and (for GPU instances) CUDA 12.3 +
-# nvidia-open pre-installed, shaving ~15-20 min off every bootstrap.
+# The golden AMI has JDK 25, Maven, and for GPU instances:
+#   NVIDIA (g4dn, g5, g6, p*): CUDA 12.3 + nvidia-open
+#   AMD    (g4ad):              ROCm 7.2.4 + amdgpu-dkms
+# pre-installed, shaving ~15-20 min off every bootstrap.
 _resolve_ami() {
   local BASE="Ubuntu 22.04 LTS"
   local BASE_SLUG
@@ -739,8 +752,10 @@ _resolve_ami() {
   log "  Golden AMI not found — invoking make-ami.sh…"
   local IS_GPU=false
   [[ "$INSTANCE_TYPE" =~ ^g[0-9]|^p[0-9] ]] && IS_GPU=true
-  if $IS_GPU; then
-    log "  GPU instance — AMI bake takes ~30-40 min (CUDA DKMS compilation included)"
+  if [[ "$INSTANCE_TYPE" =~ ^g4ad\. ]]; then
+    log "  AMD GPU instance (g4ad) — AMI bake takes ~25-40 min (amdgpu-dkms + ROCm 7.2.4)"
+  elif $IS_GPU; then
+    log "  NVIDIA GPU instance — AMI bake takes ~30-40 min (CUDA DKMS compilation included)"
   fi
 
   local MAKE_AMI
@@ -1229,10 +1244,14 @@ apt-get install -y -qq \
 
 USE_GPU=false
 if lspci | grep -qi nvidia; then
-  # CUDA drivers and toolkit were pre-installed by make-ami.sh when the
-  # golden AMI was baked.  _resolve_ami() guarantees the golden AMI always
-  # exists before any instance is launched, so there is nothing to install.
-  echo "GPU detected — CUDA pre-installed in golden AMI"
+  # NVIDIA GPU — CUDA drivers and toolkit were pre-installed by make-ami.sh.
+  echo "NVIDIA GPU detected — CUDA pre-installed in golden AMI"
+  USE_GPU=true
+elif lspci | grep -qi "radeon\|amdgpu\|advanced micro devices.*display\|amd.*vga"; then
+  # AMD Radeon GPU — ROCm + amdgpu-dkms were pre-installed by make-ami.sh.
+  # HSA_OVERRIDE_GFX_VERSION=10.1.0 is also set in /etc/environment by make-ami.sh
+  # to work around the missing gfx1011 rocBLAS kernels on the Radeon Pro V520.
+  echo "AMD Radeon GPU detected — ROCm pre-installed in golden AMI"
   USE_GPU=true
 else
   echo "No GPU found — CPU-only mode"
@@ -1273,6 +1292,17 @@ JUNO_MODEL_STEM=${MODEL_STEM}
 JUNO_LORA_PLAY_PATH=__LORA_PLAY_PATH__
 JUNO_HEALTH_URL=http://${_COORD_IP}:__HTTP_PORT_VAL__
 EOF2
+
+# ROCm requires LD_LIBRARY_PATH and HSA_OVERRIDE_GFX_VERSION to be visible to the
+# JVM process.  systemd EnvironmentFile does not source /etc/environment, so we
+# inject these vars directly into node.env when an AMD GPU is present.
+# HSA_OVERRIDE_GFX_VERSION=10.1.0 is the gfx1011 rocBLAS workaround (Navi12 / g4ad).
+if lspci | grep -qi "radeon\|amdgpu\|advanced micro devices.*display\|amd.*vga"; then
+  cat >> /etc/juno/node.env <<EOF2
+LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64
+HSA_OVERRIDE_GFX_VERSION=10.1.0
+EOF2
+fi
 
 # Wrapper script — conditionally adds -XX:StartFlightRecording when JFR is enabled
 mkdir -p /opt/juno/scripts

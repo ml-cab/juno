@@ -3,7 +3,7 @@
 Parameter-efficient fine-tuning for LLaMA-family models, implemented entirely in Java.
 No Python, no PEFT library, no separate training process.
 
-See also the short feature overview [features/lora-and-merge.md](features/lora-and-merge.md) and [legal.md](legal.md) if you plan to merge or redistribute adapters.
+See also the feature overview in [features.md](features.md) and [legal.md](legal.md) if you plan to merge or redistribute adapters.
 
 ---
 
@@ -80,7 +80,7 @@ increase `--lora-steps-qa` to drive loss lower.
 **Chat template must match.** The `[TRACE] model type (chat template key)` line at REPL startup
 shows which template was detected. The same key must appear at inference. If they differ, the
 model will not recall trained facts. Rename the model file to include the architecture keyword
-(`tinyllama`, `llama-3`, `mistral`, `phi-3`, `gemma`).
+(`tinyllama`, `llama-3`, `mistral`, `gemma`). The `phi3` template is under development.
 
 ---
 

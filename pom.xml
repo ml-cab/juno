@@ -5,11 +5,11 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>cab.ml</groupId>
 	<artifactId>juno</artifactId>
-	<version>0.1.0</version>
+	<version>0.1.0-RC</version>
 	<packaging>pom</packaging>
 	<name>Java Unified Neural Orchestration</name>
 	<description>Java Unified Neural Orchestration (Juno) -- distributed LLM
-		inference and fine-tuning framework</description>
+		inference and fine-tuning engine</description>
 	<url>https://ml.cab/juno.html</url>
 
 	<licenses>
@@ -22,9 +22,9 @@
 
 	<developers>
 		<developer>
-			<name>ml.cab</name>
-			<organization>ml.cab</organization>
-			<organizationUrl>https://ml.cab</organizationUrl>
+			<name>Juno Team</name>
+			<organization>Machine Learning Cabinet</organization>
+			<organizationUrl>https://ml.cab/</organizationUrl>
 		</developer>
 	</developers>
 
@@ -32,7 +32,7 @@
 		<connection>scm:git:https://github.com/ml-cab/juno.git</connection>
 		<developerConnection>scm:git:git@github.com:ml-cab/juno.git</developerConnection>
 		<url>https://github.com/ml-cab/juno</url>
-		<tag>v0.1.0</tag>
+		<tag>v0.1.0-RC</tag>
 	</scm>
 
 	<modules>
@@ -126,6 +126,12 @@
 				<groupId>cab.ml</groupId>
 				<artifactId>node</artifactId>
 				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>node</artifactId>
+				<version>${project.version}</version>
+				<classifier>tests</classifier>
 			</dependency>
 			<dependency>
 				<groupId>cab.ml</groupId>
@@ -318,6 +324,42 @@
 					<artifactId>maven-surefire-plugin</artifactId>
 					<version>${maven-surefire.version}</version>
 				</plugin>
+				<!-- Sources and Javadoc — required by Maven Central -->
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-source-plugin</artifactId>
+					<version>3.3.1</version>
+					<executions>
+						<execution>
+							<id>attach-sources</id>
+							<phase>verify</phase>
+							<goals>
+								<goal>jar-no-fork</goal>
+							</goals>
+						</execution>
+					</executions>
+				</plugin>
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-javadoc-plugin</artifactId>
+					<version>3.11.2</version>
+					<executions>
+						<execution>
+							<id>attach-javadocs</id>
+							<phase>verify</phase>
+							<goals>
+								<goal>jar</goal>
+							</goals>
+						</execution>
+					</executions>
+					<configuration>
+						<doclint>none</doclint>
+						<failOnError>false</failOnError>
+						<quiet>true</quiet>
+						<source>${java.version}</source>
+						<release>${java.version}</release>
+					</configuration>
+				</plugin>
 				<!-- Protobuf / gRPC code generation -->
 				<plugin>
 					<groupId>com.github.os72</groupId>
@@ -398,10 +440,19 @@
 						<executions>
 							<execution>
 								<id>sign-release</id>
-								<phase>verify</phase>
+								<!-- install phase: runs after verify, so sources+javadoc jars
+								     produced at verify are already attached and get signed too -->
+								<phase>install</phase>
 								<goals>
 									<goal>sign</goal>
 								</goals>
+								<configuration>
+									<!-- loopback: allows -Dgpg.passphrase=... without a GUI pinentry -->
+									<gpgArguments>
+										<arg>--pinentry-mode</arg>
+										<arg>loopback</arg>
+									</gpgArguments>
+								</configuration>
 							</execution>
 						</executions>
 					</plugin>

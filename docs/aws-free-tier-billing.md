@@ -2,18 +2,54 @@
 
 `g4dn.xlarge` is Nvidia's 4 vCPUs, 16 GiB, for tests lets take 2 of them.
 
-The AWS Free Plan (the one from July 2025) explicitly restricts high-performance instances. High-spec instance types like `g4dn.xlarge` are not eligible for the free plan. 
+The AWS Free Plan (the one from July 2025) explicitly restricts high-performance instances. High-spec instance types like `g4dn.xlarge` or `g4ad.2xlarge` are not eligible for the free plan. 
 
 So that we need to request some quotas!
+
+For Nvidia hardware `g4dn.xlarge`:
 
 ```
 aws service-quotas request-service-quota-increase   --service-code ec2   --quota-code L-DB2E81BA   --desired-value 12   --region eu-north-1
 ```
 
-verify Quota:
+For Radeon hardware `g4ad.2xlarge`:
+
+```
+aws service-quotas request-service-quota-increase   --service-code ec2   --quota-code L-1216C47A   --desired-value 60   --region eu-north-1
+```
+
+The responce is like:
+
+```
+{
+    "RequestedQuota": {
+        "Id": "1234567890abcdefghijklmnopqrstuvwxyz0987",
+        "ServiceCode": "ec2",
+        "ServiceName": "Amazon Elastic Compute Cloud (Amazon EC2)",
+        "QuotaCode": "L-1216C47A",
+        "QuotaName": "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances",
+        "DesiredValue": 60.0,
+        "Status": "PENDING",
+        "Created": "2026-06-04T22:17:29.313000+03:00",
+        "Requester": "{\"accountId\":\"123456789098\",\"callerArn\":\"arn:aws:iam::123456789098:user/ml.cab.admin\"}",
+        "QuotaArn": "arn:aws:servicequotas:eu-north-1:123456789098:ec2/L-1216C47A",
+        "GlobalQuota": false,
+        "Unit": "None",
+        "QuotaRequestedAtLevel": "ACCOUNT"
+    }
+}
+
+```
+
+To verify Nvidia Quotas later:
 
 ```
 aws service-quotas list-requested-service-quota-change-history --service-code ec2 --region eu-north-1 --query "RequestedQuotas[?QuotaCode=='L-DB2E81BA'].[Status,DesiredValue,Created]" --output table
+```
+
+Or verify Radeon Quotas please do:
+```
+aws service-quotas list-requested-service-quota-change-history --service-code ec2 --region eu-north-1 --query "RequestedQuotas[?QuotaCode=='L-1216C47A'].[Status,DesiredValue,Created]" --output table
 ```
 
 outputs:

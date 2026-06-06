@@ -1,7 +1,7 @@
 # Juno — EU AI Act Compliance Analysis
 
 **Regulation:** EU 2024/1689 (Artificial Intelligence Act), in force 1 August 2024
-**Subject:** jUno — Java Unified Neural Orchestration (distributed LLM inference and fine-tuning framework)
+**Subject:** Juno — Java Unified Neural Orchestration (distributed LLM inference and fine-tuning engine)
 **Codebase snapshot:** from 2026-05-05
 
 ---
@@ -10,7 +10,7 @@
 
 The EU AI Act regulates **AI systems** and **General-Purpose AI (GPAI) models**. Classifying Juno correctly is the first and most consequential step.
 
-**Juno is an inference and fine-tuning infrastructure framework.** It reads third-party GGUF model files (LLaMA, Phi-3, Mistral, etc.), distributes transformer computation across JVM nodes via gRPC, and exposes an OpenAI-compatible REST API (`POST /v1/chat/completions`). It does not contain, produce, or distribute a GPAI model itself.
+**Juno is an inference and fine-tuning infrastructure engine.** It reads third-party GGUF model files (LLaMA, Mistral, etc.; Phi-3 support is under development), distributes transformer computation across JVM nodes via gRPC, and exposes an OpenAI-compatible REST API (`POST /v1/chat/completions`). It does not contain, produce, or distribute a GPAI model itself.
 
 Under Article 3 of the Act, an **AI system** is a machine-based system that infers outputs such as predictions, content, or recommendations from inputs. When Juno is running with a loaded model and a user sends a prompt, the resulting deployment is an AI system. Juno is the **runtime infrastructure** that makes that AI system operational.
 
@@ -52,7 +52,7 @@ The Act uses a four-tier risk model. The applicable tier depends entirely on the
 
 ## 3. Compliance Gap Analysis and steps to improve
 
-The analysis below evaluates the current Juno codebase against the obligations that the Juno **operator** (AI system provider/deployer) must satisfy, and which the Juno **framework** should ideally support.
+The analysis below evaluates the current Juno codebase against the obligations that the Juno **operator** (AI system provider/deployer) must satisfy, and which the Juno **engine** should ideally support.
 
 ### 3.1 Article 50 — Transparency to Users (Limited-Risk, MANDATORY)
 
@@ -84,7 +84,7 @@ The analysis below evaluates the current Juno codebase against the obligations t
 
 **Current state:** Not present. Juno has a `CircuitBreaker` and `HealthReactor` for operational fault tolerance and a `FaultTolerantPipeline` for node failure recovery. These are infrastructure resilience features, not risk management in the regulatory sense. There is no risk register, no risk assessment documentation, no process for evaluating misuse scenarios.
 
-**Gap: HIGH** for high-risk deployments. Operators must build and maintain this entirely outside the framework.
+**Gap: HIGH** for high-risk deployments. Operators must build and maintain this entirely outside the engine.
 
 **What is needed:** This is primarily a process/documentation obligation, not a code obligation. However, Juno could provide: (a) an operator-facing risk documentation template as part of its release artifacts, (b) a configurable allowed-use-case declaration at startup that rejects requests outside declared scope, (c) hooks for operator-supplied content filtering before and after generation.
 
@@ -135,7 +135,7 @@ The analysis below evaluates the current Juno codebase against the obligations t
 - If an operator uses Juno's LoRA facility to substantially fine-tune a base model and then distributes that fine-tuned model (e.g. via the `merge` command producing a new GGUF), the operator may become a GPAI model provider under the Act if the resulting model has general-purpose capability.
 - The base models Juno supports (LLaMA 3, Mistral 7B, Phi-3.5) are GPAI models whose providers (Meta, Mistral AI, Microsoft) already carry these obligations. Juno's documentation should clarify this chain.
 
-**Gap: LOW** for Juno itself; the framework correctly positions itself as infrastructure. **MEDIUM** for operators who fine-tune and redistribute merged models — they may inadvertently become GPAI providers without realising it.
+**Gap: LOW** for Juno itself; the engine correctly positions itself as infrastructure. **MEDIUM** for operators who fine-tune and redistribute merged models — they may inadvertently become GPAI providers without realising it.
 
 **What is needed:** Clear operator guidance in the documentation: fine-tuned and merged models may trigger GPAI obligations. The `merge` command should emit a warning when producing a new GGUF.
 
@@ -161,7 +161,7 @@ The analysis below evaluates the current Juno codebase against the obligations t
 
 - **Robustness:** The `FaultTolerantPipeline` handles node failure and retry. The `HealthReactor`/`CircuitBreaker` handles node health degradation. These are solid operational features.
 - **Accuracy:** No accuracy benchmarks, evaluation pipelines, or performance declarations exist in the codebase.
-- **Cybersecurity:** Juno exposes an unauthenticated HTTP API by default. `InferenceApiServer` (Javalin) has no authentication, rate limiting beyond the `RequestScheduler` queue, input sanitisation, or TLS configuration built in. The deployment scripts (`juno-deploy.sh`) handle AWS security group configuration externally, but the framework itself has no security layer.
+- **Cybersecurity:** Juno exposes an unauthenticated HTTP API by default. `InferenceApiServer` (Javalin) has no authentication, rate limiting beyond the `RequestScheduler` queue, input sanitisation, or TLS configuration built in. The deployment scripts (`juno-deploy.sh`) handle AWS security group configuration externally, but the engine itself has no security layer.
 
 **Gap: MEDIUM–HIGH.** Operational resilience is good; security posture is weak for regulated deployment.
 
@@ -225,10 +225,10 @@ Expose a review-queue mode in `RequestScheduler` for operators who need to inter
 
 ## 7. Conclusion
 
-Juno, as an open-source LLM inference framework, does not itself constitute an AI system or GPAI model under the EU AI Act. The regulatory obligations fall on the entity that operates Juno in production to serve end users or downstream systems.
+Juno, as an open-source LLM inference engine, does not itself constitute an AI system or GPAI model under the EU AI Act. The regulatory obligations fall on the entity that operates Juno in production to serve end users or downstream systems.
 
-The framework is technically sophisticated and operationally well-designed. Its fault tolerance, observability, and structured API make it a credible foundation for compliant deployments. However, the codebase currently provides no compliance-oriented features: no AI disclosure, no audit logging, no authentication, no human oversight hooks, and no data governance for the LoRA training pipeline.
+The engine is technically sophisticated and operationally well-designed. Its fault tolerance, observability, and structured API make it a credible foundation for compliant deployments. However, the codebase currently provides no compliance-oriented features: no AI disclosure, no audit logging, no authentication, no human oversight hooks, and no data governance for the LoRA training pipeline.
 
-An operator deploying Juno in a limited-risk context (general chat assistant) faces one critical gap: Article 50 AI disclosure, which is trivially fixable. An operator deploying Juno in a high-risk context (employment screening, credit, healthcare triage, etc.) would face the full Chapter III obligation set and would need to build substantial compliance infrastructure on top of the current framework.
+An operator deploying Juno in a limited-risk context (general chat assistant) faces one critical gap: Article 50 AI disclosure, which is trivially fixable. An operator deploying Juno in a high-risk context (employment screening, credit, healthcare triage, etc.) would face the full Chapter III obligation set and would need to build substantial compliance infrastructure on top of the current engine.
 
 The most impactful near-term investment for the Juno project is: Article 50 disclosure in the API response, structured audit logging, and API authentication — three changes that collectively address the most urgent regulatory exposure across all deployment contexts.

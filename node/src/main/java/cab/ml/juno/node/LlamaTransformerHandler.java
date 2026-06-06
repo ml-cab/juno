@@ -115,6 +115,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private DeviceHalfMatrix[] wDownDev;
 	private DeviceHalfMatrix outputProjDev;
 
+	// FP32 resident alternatives — used when the backend reports !supportsHalfResident()
+	// (e.g. ROCm on gfx1010/gfx1011 where rocblas_hssgemv_strided_batched is absent).
+	// Exactly one of (wqDev / wqDevFp32) is non-null when the GPU path is active.
+	private DeviceFloatMatrix[] wqDevFp32;
+	private DeviceFloatMatrix[] wkDevFp32;
+	private DeviceFloatMatrix[] wvDevFp32;
+	private DeviceFloatMatrix[] woDevFp32;
+	private DeviceFloatMatrix[] wGateDevFp32;
+	private DeviceFloatMatrix[] wUpDevFp32;
+	private DeviceFloatMatrix[] wDownDevFp32;
+	private DeviceFloatMatrix   outputProjDevFp32;
+
 	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
 	// When non-null, every completed forward pass flushes key/value data into
 	// the KVCacheManager (GPU + CPU tiers). Eviction under real memory pressure
@@ -248,61 +260,126 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		log.info("Shard loaded — " + L + " layers, " + (hasEmbeddings ? "with embeddings, " : "")
 				+ (hasOutputProj ? "with output projection" : "no output projection"));
 
-		// Upload dequantized weights to GPU when a CudaMatVec backend is provided.
+		// Upload dequantized weights to GPU when a GPU backend is provided.
 		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
 		outputProjDev = null;
-		if (backend instanceof CudaMatVec cuda) {
-			log.info("Uploading dequantized weights to GPU (FP16 cuda-resident)…");
-			int H  = cfg.hiddenDim();
-			int KV = cfg.kvDim();
-			int I  = cfg.intermediateSize();
-			int V  = cfg.vocabSize();
-			DeviceHalfMatrix[] wqD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] wkD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] wvD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] woD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] wGateD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] wUpD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] wDownD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix outD = null;
-			try {
-				for (int li = 0; li < L; li++) {
-					wqD[li]    = cuda.uploadHalf(dequantize(wq[li],   H,  H), H,  H);
-					wkD[li]    = cuda.uploadHalf(dequantize(wk[li],   KV, H), KV, H);
-					wvD[li]    = cuda.uploadHalf(dequantize(wv[li],   KV, H), KV, H);
-					woD[li]    = cuda.uploadHalf(dequantize(wo[li],   H,  H), H,  H);
-					wGateD[li] = cuda.uploadHalf(dequantize(wGate[li], I, H), I,  H);
-					wUpD[li]   = cuda.uploadHalf(dequantize(wUp[li],   I, H), I,  H);
-					wDownD[li] = cuda.uploadHalf(dequantize(wDown[li], H, I), H,  I);
-				}
-				if (outputProj != null)
-					outD = cuda.uploadHalf(dequantize(outputProj, V, H), V, H);
-				this.wqDev = wqD;
-				this.wkDev = wkD;
-				this.wvDev = wvD;
-				this.woDev = woD;
-				this.wGateDev = wGateD;
-				this.wUpDev = wUpD;
-				this.wDownDev = wDownD;
-				this.outputProjDev = outD;
-				log.info("GPU weight upload complete (FP16).");
-			} catch (IllegalStateException ex) {
-				closeDeviceHalfMatrixArray(wqD);
-				closeDeviceHalfMatrixArray(wkD);
-				closeDeviceHalfMatrixArray(wvD);
-				closeDeviceHalfMatrixArray(woD);
-				closeDeviceHalfMatrixArray(wGateD);
-				closeDeviceHalfMatrixArray(wUpD);
-				closeDeviceHalfMatrixArray(wDownD);
-				if (outD != null)
-					outD.close();
-				String msg = ex.getMessage() == null ? "" : ex.getMessage();
-				if (msg.contains("cudaMalloc")) {
-					log.warning("Llama: insufficient GPU VRAM for FP16-resident weights (" + msg
-							+ "). Using CPU quantised matmul for projections.");
-				} else {
-					throw ex;
-				}
+		wqDevFp32 = wkDevFp32 = wvDevFp32 = woDevFp32 = wGateDevFp32 = wUpDevFp32 = wDownDevFp32 = null;
+		outputProjDevFp32 = null;
+		if (backend instanceof GpuMatVec cuda) {
+			if (cuda.supportsHalfResident()) {
+				uploadFp16Resident(cuda, L);
+			} else {
+				uploadFp32Resident(cuda, L);
+			}
+		}
+	}
+
+	private void uploadFp16Resident(GpuMatVec cuda, int L) {
+		log.info("Uploading dequantized weights to GPU (FP16 device-resident)…");
+		int H  = cfg.hiddenDim();
+		int KV = cfg.kvDim();
+		int I  = cfg.intermediateSize();
+		int V  = cfg.vocabSize();
+		DeviceHalfMatrix[] wqD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] wkD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] wvD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] woD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] wGateD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] wUpD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] wDownD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix outD = null;
+		try {
+			for (int li = 0; li < L; li++) {
+				wqD[li]    = cuda.uploadHalf(dequantize(wq[li],   H,  H), H,  H);
+				wkD[li]    = cuda.uploadHalf(dequantize(wk[li],   KV, H), KV, H);
+				wvD[li]    = cuda.uploadHalf(dequantize(wv[li],   KV, H), KV, H);
+				woD[li]    = cuda.uploadHalf(dequantize(wo[li],   H,  H), H,  H);
+				wGateD[li] = cuda.uploadHalf(dequantize(wGate[li], I, H), I,  H);
+				wUpD[li]   = cuda.uploadHalf(dequantize(wUp[li],   I, H), I,  H);
+				wDownD[li] = cuda.uploadHalf(dequantize(wDown[li], H, I), H,  I);
+			}
+			if (outputProj != null)
+				outD = cuda.uploadHalf(dequantize(outputProj, V, H), V, H);
+			this.wqDev = wqD;
+			this.wkDev = wkD;
+			this.wvDev = wvD;
+			this.woDev = woD;
+			this.wGateDev = wGateD;
+			this.wUpDev = wUpD;
+			this.wDownDev = wDownD;
+			this.outputProjDev = outD;
+			log.info("GPU weight upload complete (FP16).");
+		} catch (IllegalStateException ex) {
+			closeDeviceHalfMatrixArray(wqD);
+			closeDeviceHalfMatrixArray(wkD);
+			closeDeviceHalfMatrixArray(wvD);
+			closeDeviceHalfMatrixArray(woD);
+			closeDeviceHalfMatrixArray(wGateD);
+			closeDeviceHalfMatrixArray(wUpD);
+			closeDeviceHalfMatrixArray(wDownD);
+			if (outD != null)
+				outD.close();
+			String msg = ex.getMessage() == null ? "" : ex.getMessage();
+			if (msg.contains("cudaMalloc") || msg.contains("hipMalloc")) {
+				log.warning("Llama: insufficient GPU VRAM for FP16-resident weights (" + msg
+						+ "). Using CPU quantised matmul for projections.");
+			} else {
+				throw ex;
+			}
+		}
+	}
+
+	private void uploadFp32Resident(GpuMatVec cuda, int L) {
+		log.info("Uploading dequantized weights to GPU (FP32 device-resident — FP16 GEMV unsupported on this GFX target)…");
+		int H  = cfg.hiddenDim();
+		int KV = cfg.kvDim();
+		int I  = cfg.intermediateSize();
+		int V  = cfg.vocabSize();
+		DeviceFloatMatrix[] wqD = new DeviceFloatMatrix[L];
+		DeviceFloatMatrix[] wkD = new DeviceFloatMatrix[L];
+		DeviceFloatMatrix[] wvD = new DeviceFloatMatrix[L];
+		DeviceFloatMatrix[] woD = new DeviceFloatMatrix[L];
+		DeviceFloatMatrix[] wGateD = new DeviceFloatMatrix[L];
+		DeviceFloatMatrix[] wUpD = new DeviceFloatMatrix[L];
+		DeviceFloatMatrix[] wDownD = new DeviceFloatMatrix[L];
+		DeviceFloatMatrix outD = null;
+		try {
+			for (int li = 0; li < L; li++) {
+				wqD[li]    = cuda.upload(dequantize(wq[li],   H,  H), H,  H);
+				wkD[li]    = cuda.upload(dequantize(wk[li],   KV, H), KV, H);
+				wvD[li]    = cuda.upload(dequantize(wv[li],   KV, H), KV, H);
+				woD[li]    = cuda.upload(dequantize(wo[li],   H,  H), H,  H);
+				wGateD[li] = cuda.upload(dequantize(wGate[li], I, H), I,  H);
+				wUpD[li]   = cuda.upload(dequantize(wUp[li],   I, H), I,  H);
+				wDownD[li] = cuda.upload(dequantize(wDown[li], H, I), H,  I);
+			}
+			if (outputProj != null)
+				outD = cuda.upload(dequantize(outputProj, V, H), V, H);
+			this.wqDevFp32 = wqD;
+			this.wkDevFp32 = wkD;
+			this.wvDevFp32 = wvD;
+			this.woDevFp32 = woD;
+			this.wGateDevFp32 = wGateD;
+			this.wUpDevFp32 = wUpD;
+			this.wDownDevFp32 = wDownD;
+			this.outputProjDevFp32 = outD;
+			log.info("GPU weight upload complete (FP32).");
+		} catch (IllegalStateException ex) {
+			closeDeviceFloatMatrixArray(wqD);
+			closeDeviceFloatMatrixArray(wkD);
+			closeDeviceFloatMatrixArray(wvD);
+			closeDeviceFloatMatrixArray(woD);
+			closeDeviceFloatMatrixArray(wGateD);
+			closeDeviceFloatMatrixArray(wUpD);
+			closeDeviceFloatMatrixArray(wDownD);
+			if (outD != null)
+				outD.close();
+			String msg = ex.getMessage() == null ? "" : ex.getMessage();
+			if (msg.contains("hipMalloc")) {
+				log.warning("Llama: insufficient GPU VRAM for FP32-resident weights (" + msg
+						+ "). Using CPU quantised matmul for projections.");
+			} else {
+				throw ex;
 			}
 		}
 	}
@@ -329,6 +406,25 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		if (outputProjDev != null && !outputProjDev.isClosed())
 			outputProjDev.close();
 		outputProjDev = null;
+		closeDeviceFloatMatrixArray(wqDevFp32);
+		closeDeviceFloatMatrixArray(wkDevFp32);
+		closeDeviceFloatMatrixArray(wvDevFp32);
+		closeDeviceFloatMatrixArray(woDevFp32);
+		closeDeviceFloatMatrixArray(wGateDevFp32);
+		closeDeviceFloatMatrixArray(wUpDevFp32);
+		closeDeviceFloatMatrixArray(wDownDevFp32);
+		wqDevFp32 = wkDevFp32 = wvDevFp32 = woDevFp32 = wGateDevFp32 = wUpDevFp32 = wDownDevFp32 = null;
+		if (outputProjDevFp32 != null && !outputProjDevFp32.isClosed())
+			outputProjDevFp32.close();
+		outputProjDevFp32 = null;
+	}
+
+	private static void closeDeviceFloatMatrixArray(DeviceFloatMatrix[] a) {
+		if (a == null) return;
+		for (DeviceFloatMatrix m : a) {
+			if (m != null && !m.isClosed())
+				m.close();
+		}
 	}
 
 	/**
@@ -623,9 +719,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		float[] xNorm = rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
 
 		// Project to Q, K, V
-		float[] q = matVecLayer(wq[li], wqDev != null ? wqDev[li] : null, xNorm, H, H);
-		float[] k = matVecLayer(wk[li], wkDev != null ? wkDev[li] : null, xNorm, cfg.kvDim(), H);
-		float[] v = matVecLayer(wv[li], wvDev != null ? wvDev[li] : null, xNorm, cfg.kvDim(), H);
+		float[] q = wqDev     != null ? matVecLayer(wq[li], wqDev[li],     xNorm, H, H)
+		          : matVecLayer(wq[li], wqDevFp32 != null ? wqDevFp32[li] : null, xNorm, H, H);
+		float[] k = wkDev     != null ? matVecLayer(wk[li], wkDev[li],     xNorm, cfg.kvDim(), H)
+		          : matVecLayer(wk[li], wkDevFp32 != null ? wkDevFp32[li] : null, xNorm, cfg.kvDim(), H);
+		float[] v = wvDev     != null ? matVecLayer(wv[li], wvDev[li],     xNorm, cfg.kvDim(), H)
+		          : matVecLayer(wv[li], wvDevFp32 != null ? wvDevFp32[li] : null, xNorm, cfg.kvDim(), H);
 
 		// Rotary position embeddings on Q and K
 		rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
@@ -639,7 +738,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		float[] attnOut = gqa(q, kCacheLayer, vCacheLayer, pos + 1);
 
 		// Output projection + residual
-		float[] attnProj = matVecLayer(wo[li], woDev != null ? woDev[li] : null, attnOut, H, H);
+		float[] attnProj = woDev     != null ? matVecLayer(wo[li], woDev[li],     attnOut, H, H)
+		                 : matVecLayer(wo[li], woDevFp32 != null ? woDevFp32[li] : null, attnOut, H, H);
 		float[] x2 = add(x, attnProj);
 
 		// ── FFN sub-layer ─────────────────────────────────────────────────────
@@ -652,21 +752,26 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private float[] ffn(float[] x, int li) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
-		float[] gate = matVecLayer(wGate[li], wGateDev != null ? wGateDev[li] : null, x, I, H);
-		float[] up = matVecLayer(wUp[li], wUpDev != null ? wUpDev[li] : null, x, I, H);
+		float[] gate = wGateDev   != null ? matVecLayer(wGate[li], wGateDev[li],   x, I, H)
+		             : matVecLayer(wGate[li], wGateDevFp32 != null ? wGateDevFp32[li] : null, x, I, H);
+		float[] up   = wUpDev     != null ? matVecLayer(wUp[li],   wUpDev[li],     x, I, H)
+		             : matVecLayer(wUp[li],   wUpDevFp32 != null ? wUpDevFp32[li] : null, x, I, H);
 		// SiLU(gate) * up
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
 			hidden[i] = silu(gate[i]) * up[i];
-		return matVecLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, hidden, H, I);
+		return wDownDev   != null ? matVecLayer(wDown[li], wDownDev[li],   hidden, H, I)
+		     : matVecLayer(wDown[li], wDownDevFp32 != null ? wDownDevFp32[li] : null, hidden, H, I);
 	}
 
 	/** Final RMS norm + output projection → float[vocabSize] logits. */
 	private float[] outputProjection(float[] x) {
 		float[] xNorm = rmsNorm(x, outputNorm, cfg.rmsNormEps());
-		return outputProjDev != null
-			? backend.sgemv(outputProjDev, xNorm)
-			: matVec(outputProj, xNorm, cfg.vocabSize(), cfg.hiddenDim());
+		if (outputProjDev != null)
+			return backend.sgemv(outputProjDev, xNorm);
+		if (outputProjDevFp32 != null)
+			return backend.sgemv(outputProjDevFp32, xNorm);
+		return matVec(outputProj, xNorm, cfg.vocabSize(), cfg.hiddenDim());
 	}
 
 	// ── Math primitives ───────────────────────────────────────────────────────
@@ -690,27 +795,31 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	// ── Backend dispatch ─────────────────────────────────────────────────────
 
 	/**
-	 * Route a matrix-vector multiply through the correct backend.
+	 * Route a matrix-vector multiply through the correct backend (FP16 resident path).
 	 *
-	 * <p>When {@code dev} is non-null (i.e. the backend is {@link CudaMatVec} and
-	 * the weights were uploaded at load time) the call goes through
-	 * {@link MatVec#sgemv(DeviceHalfMatrix, float[])} which uses the
-	 * device-resident FP16 weight matrix — no full-weight H2D transfer per call.
-	 *
-	 * <p>When {@code dev} is null (CPU path) the call falls through to the static
-	 * quantized matVec, which is the original behaviour.
-	 *
-	 * @param quant the quantized weight tensor (used on CPU path)
-	 * @param dev   the device-resident dequantized version, or {@code null} for CPU
-	 * @param x     input vector
-	 * @param rows  output dimension
-	 * @param cols  input dimension
+	 * When {@code dev} is non-null the call goes through
+	 * {@link MatVec#sgemv(DeviceHalfMatrix, float[])} — no H2D transfer per call.
+	 * When null, falls through to the quantized CPU matVec.
 	 */
 	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev,
 			float[] x, int rows, int cols) {
-		if (dev != null) {
+		if (dev != null)
 			return backend.sgemv(dev, x);
-		}
+		return matVec(quant, x, rows, cols);
+	}
+
+	/**
+	 * Route a matrix-vector multiply through the correct backend (FP32 resident path).
+	 *
+	 * Used when the backend does not support FP16 resident GEMV (e.g. ROCm on gfx1010).
+	 * When {@code dev} is non-null the call goes through
+	 * {@link MatVec#sgemv(DeviceFloatMatrix, float[])} — no H2D transfer per call.
+	 * When null, falls through to the quantized CPU matVec.
+	 */
+	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceFloatMatrix dev,
+			float[] x, int rows, int cols) {
+		if (dev != null)
+			return backend.sgemv(dev, x);
 		return matVec(quant, x, rows, cols);
 	}
 
@@ -1058,7 +1167,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		evt.begin();
 		try {
 			float[] y = matVecQuantizedNoEvent(A, x, rowStart, rowEnd, cols);
-			evt.backend = matVecQuantBackendLabel(A.type());
+			evt.backend(matVecQuantBackend(A.type()));
 			evt.rows = rowEnd - rowStart;
 			evt.cols = cols;
 			return y;
@@ -1068,20 +1177,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * Returns the JFR backend label for a quantized matVec call.
+	 * Returns the JFR backend for a quantized matVec call.
 	 *
 	 * <p>All quantized overloads (matVecQ4Kraw, matVecQ6Kraw, etc.)
 	 * are pure-Java CPU computations executed on
 	 * ForkJoinPool.commonPool(). They never touch a GPU, so they are labelled
-	 * "cpu" — the same label used by {@link CpuMatVec#sgemv}. This ensures
-	 * juno.MatVec.backend.cpu.count reflects the true number of CPU-side
-	 * matrix multiplies, including quantized ones.
+	 * {@link MatVecBackend#CPU} — the same label used by {@link CpuMatVec#sgemv}.
+	 * This ensures juno.MatVec.backend.cpu.count reflects the true number of
+	 * CPU-side matrix multiplies, including quantized ones.
 	 *
 	 * @param ggmlType GGML type ID (unused — kept for signature clarity)
 	 */
 	@SuppressWarnings("unused")
-	private static String matVecQuantBackendLabel(int ggmlType) {
-		return "cpu";
+	private static MatVecBackend matVecQuantBackend(int ggmlType) {
+		return MatVecBackend.CPU;
 	}
 
 	/** Quantized matVec without JFR (inner implementation for {@link #matVec(GgufReader.QuantizedTensor, float[], int, int, int)}). */

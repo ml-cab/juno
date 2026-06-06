@@ -4,8 +4,10 @@ target/
 .classpath
 *.jfr
 /bin/
-dependency-reduced-pom.xml
+*ependency-reduced-pom.xml
 pom.xml.releaseBackup
 release.properties
 dist/
 .release-gpg/
+models/*
+*.gguf

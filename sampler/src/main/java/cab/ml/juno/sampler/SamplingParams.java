@@ -43,10 +43,10 @@ public record SamplingParams(float temperature, int topK, float topP, float repe
 
 	/**
 	 * Balanced defaults — suitable for general chat. temperature=0.7, topK=50,
-	 * topP=0.9, penalty=1.1
+	 * topP=0.9, penalty=1.1, maxTokens=200
 	 */
 	public static SamplingParams defaults() {
-		return new SamplingParams(0.7f, 50, 0.9f, 1.1f, false, 512, new int[0]);
+		return new SamplingParams(0.7f, 50, 0.9f, 1.1f, false, 200, new int[0]);
 	}
 
 	/**
