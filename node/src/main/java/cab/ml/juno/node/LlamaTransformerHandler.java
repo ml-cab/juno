@@ -21,7 +21,7 @@ package cab.ml.juno.node;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Logger;
@@ -43,9 +43,8 @@ import java.util.logging.Logger;
  * hasOutputProjection → run RMS norm + output projection after last layer
  *
  * KV cache: Stored in-process as float[][layer][pos * kvDim + dim]. One entry
- * per (requestId, layer, position). The simple HashMap-based cache here is safe
- * for development; in production the KVCacheManager from the coordinator module
- * handles eviction and GPU offload.
+ * per (requestId, layer, position). {@link ConcurrentHashMap} allows distinct
+ * requestIds to allocate and evict KV entries concurrently on one node.
  *
  * Thread safety: Each request uses an isolated KV cache entry keyed by
  * requestId. Multiple threads may call forward() concurrently for distinct
@@ -94,8 +93,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	// Per-request KV cache — lazily allocated and grown on demand.
 	// Starts at INITIAL_SEQ_CAPACITY slots, doubles until MAX_SEQ_LEN.
-	private final Map<String, float[][]> kvCacheK = new HashMap<>();
-	private final Map<String, float[][]> kvCacheV = new HashMap<>();
+	private final Map<String, float[][]> kvCacheK = new ConcurrentHashMap<>();
+	private final Map<String, float[][]> kvCacheV = new ConcurrentHashMap<>();
 	private static final int MAX_SEQ_LEN = 2048;
 	private static final int INITIAL_SEQ_CAPACITY = 64; // grows on demand
 
@@ -451,7 +450,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * <p>Call this immediately after construction (e.g. in
 	 * {@link cab.ml.juno.player.EmbeddedNodeServer} after
 	 * {@code loadShard()}). When {@code null} (the default), the handler operates
-	 * in dev/stub mode: KV is kept only in the local HashMap with no eviction.
+	 * in dev/stub mode: KV is kept only in the local concurrent map with no eviction.
 	 *
 	 * @param adapter the adapter to use, or {@code null} to disable managed eviction
 	 */
@@ -644,8 +643,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int kvDim = cfg.kvDim();
 
 		// Lazy initial allocation — 64 slots, grows on demand.
-		boolean isNew = !kvCacheK.containsKey(requestId);
-		kvCacheK.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
 		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
 
 		float[][] kCache = kvCacheK.get(requestId);

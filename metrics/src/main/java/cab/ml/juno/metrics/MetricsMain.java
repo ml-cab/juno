@@ -113,7 +113,15 @@ public final class MetricsMain {
     private static List<Path> listJfrFiles(Path root) throws IOException {
         List<Path> result = new ArrayList<>();
         try (var stream = Files.list(root)) {
-            stream.filter(p -> p.getFileName().toString().endsWith(".jfr")).forEach(result::add);
+            stream.filter(p -> {
+                if (!p.getFileName().toString().endsWith(".jfr"))
+                    return false;
+                try {
+                    return Files.isRegularFile(p) && Files.size(p) > 0;
+                } catch (IOException e) {
+                    return false;
+                }
+            }).forEach(result::add);
         }
         return result;
     }

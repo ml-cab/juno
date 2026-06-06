@@ -21,7 +21,7 @@ package cab.ml.juno.node;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Logger;
@@ -126,8 +126,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	// Starts at INITIAL_SEQ_CAPACITY slots, doubles until MAX_SEQ_LEN.
 	// Avoids the 554 MB eager pre-allocation that caused node JVM OOM during
 	// multi-test runs against phi-3.5-mini with --heap 4g.
-	private final Map<String, float[][]> kvCacheK = new HashMap<>();
-	private final Map<String, float[][]> kvCacheV = new HashMap<>();
+	private final Map<String, float[][]> kvCacheK = new ConcurrentHashMap<>();
+	private final Map<String, float[][]> kvCacheV = new ConcurrentHashMap<>();
 	private static final int MAX_SEQ_LEN = 2048;
 	private static final int INITIAL_SEQ_CAPACITY = 64; // grows on demand
 
@@ -418,8 +418,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 		// Lazy initial allocation — 64 slots, grows on demand to avoid OOM.
 		// phi-3.5-mini: eager 2048 slots = 554 MB per request; lazy = 17 MB initially.
-		boolean isNew = !kvCacheK.containsKey(requestId);
-		kvCacheK.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
 		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
 
 		float[][] kCache = kvCacheK.get(requestId);
@@ -487,7 +486,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	/**
 	 * Grows KV cache arrays to accommodate {@code pos}. Uses doubling growth,
 	 * capped at {@link #MAX_SEQ_LEN}. Modifies the array slots in-place so the
-	 * HashMap entry is updated automatically.
+	 * map entry is updated automatically.
 	 */
 	private static void ensureKvCapacity(float[][] cache, int pos, int kvDim) {
 		int required = (pos + 1) * kvDim;
