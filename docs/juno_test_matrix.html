@@ -406,7 +406,7 @@
     <span class="insight-tag tag-warn">NODES</span>
     <div class="insight-text">
       CPU pipeline node sweep: peak at <em>3 nodes (1.59 tps)</em>. Adding nodes beyond 3 degrades end-to-end TPS due to network synchronization cost per forward pass.
-      7 nodes (embedded) dropped to <em>1.12 tps</em> - below single-node baseline.
+      6 nodes (embedded) dropped to <em>1.12 tps</em> - below single-node baseline.
     </div>
   </div>
 
@@ -463,8 +463,8 @@ const rows = [
   {id:4, hw:'cpu', pt:'pipeline', n:3, co:'separate', dt:'FP16', bo:'BE', lo:'off', l1:[A,''],  l9:[A,''],  c1:[NA,''],  c9:[NA,'']},
   {id:5, hw:'cpu', pt:'pipeline', n:5, co:'embedded', dt:'FP16', bo:'BE', lo:'off', l1:[D,'1.51'],  l9:[A,''],  c1:[NA,''],  c9:[NA,'']},
   {id:6, hw:'cpu', pt:'pipeline', n:5, co:'separate', dt:'FP16', bo:'BE', lo:'off', l1:[A,''],  l9:[A,''],  c1:[NA,''],  c9:[NA,'']},
-  {id:7, hw:'cpu', pt:'pipeline', n:7, co:'embedded', dt:'FP16', bo:'BE', lo:'off', l1:[D,'1.12'],  l9:[A,''],  c1:[NA,''],  c9:[NA,'']},
-  {id:8, hw:'cpu', pt:'pipeline', n:7, co:'separate', dt:'FP16', bo:'BE', lo:'off', l1:[D,'1.25'],  l9:[A,''],  c1:[NA,''],  c9:[NA,'']},
+  {id:7, hw:'cpu', pt:'pipeline', n:6, co:'embedded', dt:'FP16', bo:'BE', lo:'off', l1:[D,'1.12'],  l9:[A,''],  c1:[NA,''],  c9:[NA,'']},
+  {id:8, hw:'cpu', pt:'pipeline', n:6, co:'separate', dt:'FP16', bo:'BE', lo:'off', l1:[D,'1.25'],  l9:[A,''],  c1:[NA,''],  c9:[NA,'']},
   {id:9, hw:'cpu', pt:'tensor', n:1, co:'embedded', dt:'FP16', bo:'BE', lo:'off', l1:[D,'1.56'],  l9:[A,''],  c1:[A,''],  c9:[NA,'']},
   {id:10, hw:'cpu', pt:'tensor', n:1, co:'separate', dt:'FP16', bo:'BE', lo:'off', l1:[A,''],  l9:[NA,''],  c1:[NA,''],  c9:[NA,'']},
   {id:11, hw:'cpu', pt:'tensor', n:3, co:'embedded', dt:'FP16', bo:'BE', lo:'off', l1:[D,'0.44'],  l9:[NA,''],  c1:[NA,''],  c9:[NA,'']},

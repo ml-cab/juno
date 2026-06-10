@@ -1071,9 +1071,11 @@ _launch_nodes() {
       echo -e "${RED}  Node $i launch FAILED:${RESET}"
       cat "$LAUNCH_ERR" | sed 's/^/    /'
       rm -f "$LAUNCH_ERR"
-      [[ ${#INSTANCE_IDS[@]} -gt 0 ]] && {
-        warn "Terminating ${#INSTANCE_IDS[@]} already-launched node(s)…"
-        aws ec2 terminate-instances --instance-ids "${INSTANCE_IDS[@]}" \
+      local abort_ids=("${INSTANCE_IDS[@]}")
+      [[ -n "${COORDINATOR_INSTANCE_ID:-}" ]] && abort_ids+=("$COORDINATOR_INSTANCE_ID")
+      [[ ${#abort_ids[@]} -gt 0 ]] && {
+        warn "Terminating ${#abort_ids[@]} already-launched node(s)…"
+        aws ec2 terminate-instances --instance-ids "${abort_ids[@]}" \
           --region "$REGION" --output text &>/dev/null || true
       }
       rm -f "$LAUNCH_ERR" "$USER_DATA_FILE"

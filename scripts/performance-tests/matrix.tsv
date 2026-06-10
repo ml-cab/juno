@@ -5,8 +5,8 @@
 4	cpu	pipeline	3	separate	FP16	BE	off	A:	A:	NA:	NA:
 5	cpu	pipeline	5	embedded	FP16	BE	off	D:1.51	A:	NA:	NA:
 6	cpu	pipeline	5	separate	FP16	BE	off	A:	A:	NA:	NA:
-7	cpu	pipeline	7	embedded	FP16	BE	off	D:1.12	A:	NA:	NA:
-8	cpu	pipeline	7	separate	FP16	BE	off	D:1.25	A:	NA:	NA:
+7	cpu	pipeline	6	embedded	FP16	BE	off	D:1.12	A:	NA:	NA:
+8	cpu	pipeline	6	separate	FP16	BE	off	D:1.25	A:	NA:	NA:
 9	cpu	tensor	1	embedded	FP16	BE	off	D:1.56	A:	A:	NA:
 10	cpu	tensor	1	separate	FP16	BE	off	A:	NA:	NA:	NA:
 11	cpu	tensor	3	embedded	FP16	BE	off	D:0.44	NA:	NA:	NA:
