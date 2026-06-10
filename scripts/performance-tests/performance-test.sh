@@ -37,6 +37,7 @@ COL_FILTER=""
 ROW_FROM=""
 ROW_TO=""
 PERF_GIT_REF=""
+PERF_LORA_PLAY=""
 PERF_ALL=0
 PERF_PENDING=0
 
@@ -70,6 +71,7 @@ Options:
   --scenario FILE   Scenario log for --parse (default: test-scenario.txt)
   --html FILE       Output HTML (default: docs/juno_test_matrix.html)
   --git REF         Git branch, tag, or commit for juno-deploy.sh (default: main)
+  --lora-play PATH  LoRA adapter for matrix rows with lo=on (default: models/...lora)
   -n, --dry-run     Parse mode only: preview HTML rows
   -h, --help        This help
 EOF
@@ -96,6 +98,7 @@ perf_worker_args() {
     [[ -n "$ROW_FROM" ]] && PERF_WORKER_ARGS+=(--from "$ROW_FROM")
     [[ -n "$ROW_TO" ]] && PERF_WORKER_ARGS+=(--to "$ROW_TO")
     [[ -n "$PERF_GIT_REF" ]] && PERF_WORKER_ARGS+=(--git "$PERF_GIT_REF")
+    [[ -n "$PERF_LORA_PLAY" ]] && PERF_WORKER_ARGS+=(--lora-play "$PERF_LORA_PLAY")
     [[ "$MATRIX" != "${PERF_SCRIPTS}/matrix.tsv" ]] && PERF_WORKER_ARGS+=(--matrix "$MATRIX")
 }
 
@@ -116,6 +119,7 @@ while [[ $# -gt 0 ]]; do
         --scenario) SCENARIO="$2"; shift 2 ;;
         --html) HTML="$2"; shift 2 ;;
         --git) PERF_GIT_REF="$2"; shift 2 ;;
+        --lora-play) PERF_LORA_PLAY="$2"; shift 2 ;;
         -n|--dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         --queue) die "--queue removed; select cells from ${MATRIX} with --all, --row, --col, --from/--to" ;;

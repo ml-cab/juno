@@ -30,7 +30,7 @@ perf_load_scenarios() {
     : "${CONV_MSG1:?CONV_MSG1 missing from scenarios.yaml}"
     : "${CONV_MSG2:?CONV_MSG2 missing from scenarios.yaml}"
     : "${CONV_MSG3:?CONV_MSG3 missing from scenarios.yaml}"
-    LORA_ADAPTER="${ROOT}/models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.lora"
+    LORA_ADAPTER="${PERF_LORA_PLAY:-${ROOT}/models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.lora}"
 }
 
 perf_matrix_row() {

@@ -192,6 +192,7 @@ If you set **`--row`**, **`--col`**, or **`--from` / `--to`**, mode defaults to 
 | Flag | Description |
 |------|-------------|
 | `--git REF` | Branch, tag, or commit for `juno-deploy.sh` on EC2 (default: `main`) |
+| `--lora-play PATH` | LoRA adapter for matrix rows with `lo=on` (default: `models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.lora`) |
 | `--scenario FILE` | Input for `--parse` (default: `test-scenario.txt`) |
 | `--html FILE` | HTML output (default: `docs/juno_test_matrix.html`) |
 | `-n`, `--dry-run` | `--parse` only: preview HTML rows, do not write |
