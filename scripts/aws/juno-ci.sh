@@ -772,9 +772,9 @@ _startup() {
   if [[ -n "$LORA_PLAY_LOCAL" ]]; then
     [[ -f "$LORA_PLAY_LOCAL" ]] \
       || die "--lora-play: file not found: ${LORA_PLAY_LOCAL}"
-    local LORA_REMOTE="/var/lib/jenkins/juno/models/$(basename "${LORA_PLAY_LOCAL}")"
+    local LORA_REMOTE="/var/lib/jenkins/models/$(basename "${LORA_PLAY_LOCAL}")"
     inf "Uploading LoRA adapter to CI instance: $(basename "${LORA_PLAY_LOCAL}")..."
-    _ssh "sudo mkdir -p /var/lib/jenkins/juno/models && sudo chown jenkins:jenkins /var/lib/jenkins/juno/models"
+    _ssh "sudo mkdir -p /var/lib/jenkins/models && sudo chown jenkins:jenkins /var/lib/jenkins/models"
     _scp "$LORA_PLAY_LOCAL" "ubuntu@${CI_IP}:/tmp/$(basename "${LORA_PLAY_LOCAL}")"
     _ssh "sudo mv /tmp/$(basename "${LORA_PLAY_LOCAL}") ${LORA_REMOTE} && sudo chown jenkins:jenkins ${LORA_REMOTE}"
     inf "  LoRA adapter uploaded: ${LORA_REMOTE}"
