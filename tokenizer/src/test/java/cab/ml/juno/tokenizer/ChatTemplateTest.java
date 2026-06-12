@@ -114,6 +114,11 @@ class ChatTemplateTest {
 		assertThat(t.modelType()).isEqualTo("chatml");
 	}
 
+	@Test
+	void qwen25_filename_resolves_to_chatml() {
+		assertThat(ChatTemplate.forModelType("qwen2.5-3b-instruct-q4_k_m.gguf").modelType()).isEqualTo("chatml");
+	}
+
 	// ── Substring-match regression tests ─────────────────────────────────────
 
 	/**

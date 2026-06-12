@@ -186,6 +186,26 @@ class GenerationLoopEosPieceTest {
 	}
 
 	@Test
+	@DisplayName("Non-EOS token that decodes to ChatML im_end must not appear in output")
+	void chatml_im_end_string_piece_from_non_eos_token_suppressed() {
+		int suspiciousToken = 103;
+		assertThat(suspiciousToken).isNotEqualTo(stubTokenizer.eosTokenId());
+
+		DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
+		tok.override(suspiciousToken, "<|" + "im_end|>");
+
+		StubInferencePipeline pipeline = new StubInferencePipeline(StubInferencePipeline.DEFAULT_TOKEN, suspiciousToken,
+				StubInferencePipeline.DEFAULT_TOKEN);
+
+		List<String> streamed = new ArrayList<>();
+		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, id, step) -> streamed.add(piece));
+
+		assertThat(streamed).doesNotContain("<|" + "im_end|>");
+		assertThat(result.text()).doesNotContain("<|" + "im_end|>");
+		assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
+	}
+
+	@Test
 	@DisplayName("Non-EOS token that decodes to \"<|endoftext|>\" must not appear in output")
 	void endoftext_string_piece_from_non_eos_token_suppressed() {
 		int suspiciousToken = 101;

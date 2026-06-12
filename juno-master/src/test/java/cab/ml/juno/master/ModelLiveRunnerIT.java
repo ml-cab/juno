@@ -58,7 +58,7 @@ import cab.ml.juno.tokenizer.GgufTokenizer;
  *
  * <pre>
  *   mvn verify -pl integration -Pintegration \
- *       -DMODELS=/data/tinyllama.Q4_K_M.gguf,/data/phi-3.5.Q4_K_M.gguf
+ *       -DMODELS=/data/tinyllama.Q4_K_M.gguf,/data/phi-3.5.Q4_K_M.gguf,/data/qwen2.5-3b-instruct-q4_k_m.gguf
  * </pre>
  *
  * <p>Each model gets its own cluster lifecycle (start / run 8 tests / stop) so

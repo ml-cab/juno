@@ -49,6 +49,8 @@ public final class GgufTokenizer implements Tokenizer {
 	private static final char SP = '\u2581';
 	// U+0120 LATIN SMALL LETTER G WITH CEDILLA — BPE (GPT-2/Llama-3) space prefix
 	private static final char GP = '\u0120';
+	// U+010A LATIN CAPITAL LETTER C WITH DOT ABOVE — GPT-2 BPE newline (Ċ)
+	private static final char NL = '\u010A';
 
 	private final String[] vocab; // token ID → piece string
 	private final float[] scores; // token ID → BPE score
@@ -74,6 +76,9 @@ public final class GgufTokenizer implements Tokenizer {
 	 * mandatory leading ▁ before the first token.
 	 */
 	private final boolean isGpt2Bpe;
+
+	/** GPT-2 merge-pair ranks from {@code tokenizer.ggml.merges} (Qwen2, etc.). */
+	private final Map<String, Float> gpt2MergePairScores;
 
 	/**
 	 * Special-token pieces sorted longest-first. Used in {@link #encode} to
@@ -121,11 +126,33 @@ public final class GgufTokenizer implements Tokenizer {
 		String ggmlModel = r.metaString("tokenizer.ggml.model");
 		boolean isGpt2Bpe = "gpt2".equals(ggmlModel);
 		boolean addBosToken = metaBool(r, "tokenizer.ggml.add_bos_token", true);
+		Map<String, Float> gpt2MergePairScores = buildGpt2MergePairScores(r, isGpt2Bpe);
 
 		log.info("Tokenizer loaded: vocabSize=" + V + " bos=" + bosId + " eos=" + eosId + " addBos=" + addBosToken
 				+ " model=" + (ggmlModel != null ? ggmlModel : "llama(default)")
-				+ (isGpt2Bpe ? " [GPT-2 BPE]" : " [SentencePiece]"));
-		return new GgufTokenizer(vocab, scores, tokenTypes, bosId, eosId, padId, unkId, isGpt2Bpe, addBosToken);
+				+ (isGpt2Bpe ? " [GPT-2 BPE" + (gpt2MergePairScores.isEmpty() ? "" : ", merges=" + gpt2MergePairScores.size())
+						+ "]"
+				: " [SentencePiece]"));
+		return new GgufTokenizer(vocab, scores, tokenTypes, bosId, eosId, padId, unkId, isGpt2Bpe, addBosToken,
+				gpt2MergePairScores);
+	}
+
+	private static Map<String, Float> buildGpt2MergePairScores(GgufReader r, boolean isGpt2Bpe) {
+		if (!isGpt2Bpe)
+			return Map.of();
+		Object[] mergesRaw = (Object[]) r.meta("tokenizer.ggml.merges");
+		if (mergesRaw == null || mergesRaw.length == 0)
+			return Map.of();
+		Map<String, Float> ranks = new HashMap<>(mergesRaw.length * 2);
+		for (int i = 0; i < mergesRaw.length; i++) {
+			String line = (String) mergesRaw[i];
+			int sp = line.indexOf(' ');
+			if (sp <= 0 || sp >= line.length() - 1)
+				continue;
+			String pair = line.substring(0, sp) + line.substring(sp + 1);
+			ranks.put(pair, (float) (mergesRaw.length - i));
+		}
+		return ranks;
 	}
 
 	private static boolean metaBool(GgufReader r, String key, boolean def) {
@@ -134,7 +161,7 @@ public final class GgufTokenizer implements Tokenizer {
 	}
 
 	private GgufTokenizer(String[] vocab, float[] scores, int[] tokenTypes, int bosId, int eosId, int padId,
-			int unkId, boolean isGpt2Bpe, boolean addBosToken) {
+			int unkId, boolean isGpt2Bpe, boolean addBosToken, Map<String, Float> gpt2MergePairScores) {
 		this.vocab = vocab;
 		this.scores = scores;
 		this.tokenTypes = tokenTypes;
@@ -143,6 +170,7 @@ public final class GgufTokenizer implements Tokenizer {
 		this.padId = padId;
 		this.unkId = unkId;
 		this.isGpt2Bpe = isGpt2Bpe;
+		this.gpt2MergePairScores = gpt2MergePairScores;
 		this.addBosToken = addBosToken;
 
 		pieceToId = new HashMap<>(vocab.length * 2);
@@ -208,7 +236,7 @@ public final class GgufTokenizer implements Tokenizer {
 				//   The leading-space prefix logic that SentencePiece needs is baked into
 				//   the token strings themselves (e.g. "Ġhello" means " hello").
 				String normalised = isGpt2Bpe
-						? segment.replace(' ', GP)
+						? segment.replace(' ', GP).replace("\n", String.valueOf(NL))
 						: SP + segment.replace(' ', SP);
 
 				for (int cp : (Iterable<Integer>) normalised.codePoints()::iterator) {
@@ -243,8 +271,9 @@ public final class GgufTokenizer implements Tokenizer {
 			for (int i = 0; i < syms.size() - 1; i++) {
 				String pair = syms.get(i).piece + syms.get(i + 1).piece;
 				Integer id = pieceToId.get(pair);
-				if (id != null && scores[id] > bestScore) {
-					bestScore = scores[id];
+				float pairScore = scorePair(pair, id);
+				if (id != null && pairScore > bestScore) {
+					bestScore = pairScore;
 					bestIdx = i;
 					bestId = id;
 				}
@@ -281,6 +310,15 @@ public final class GgufTokenizer implements Tokenizer {
 		return result;
 	}
 
+	private float scorePair(String pair, Integer mergedId) {
+		Float mergeRank = gpt2MergePairScores.get(pair);
+		if (mergeRank != null)
+			return mergeRank;
+		if (mergedId != null && mergedId < scores.length)
+			return scores[mergedId];
+		return Float.NEGATIVE_INFINITY;
+	}
+
 	/**
 	 * Splits {@code text} into alternating runs of special-token pieces and plain
 	 * text, using {@link #sortedSpecialPieces} as the delimiter set.
@@ -296,7 +334,7 @@ public final class GgufTokenizer implements Tokenizer {
 	 */
 	private static boolean isEogVocabPiece(String piece) {
 		return switch (piece) {
-		case "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>" -> true;
+		case "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>", "<|im_end|>" -> true;
 		default -> false;
 		};
 	}

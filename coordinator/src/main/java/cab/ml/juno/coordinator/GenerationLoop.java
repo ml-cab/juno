@@ -432,11 +432,11 @@ public final class GenerationLoop {
 	 */
 	/** EOS marker strings — checked both per-piece and as accumulated suffixes. */
 	private static final String[] EOS_MARKER_STRINGS = { "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>",
-			"<end_of_turn>" };
+			"<end_of_turn>", "<|im_end|>" };
 
 	private static boolean isEosMarker(String piece) {
 		return switch (piece) {
-		case "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>" -> true;
+		case "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>", "<|im_end|>" -> true;
 		default -> false;
 		};
 	}

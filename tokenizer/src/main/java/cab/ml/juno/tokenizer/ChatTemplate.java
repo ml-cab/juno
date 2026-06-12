@@ -226,10 +226,19 @@ public interface ChatTemplate {
 	// ── Registry ─────────────────────────────────────────────────────────────
 
 	/** All built-in templates keyed by modelType. */
-	Map<String, ChatTemplate> BUILT_IN = Map.of("llama3", llama3(), "mistral", mistral(), "gemma", gemma(), "chatml",
-			chatml(), "tinyllama", tinyllama(), "zephyr", tinyllama(), // same format, alternate lookup key
-			"phi3", phi3(), "phi-3", phi3() // hyphenated form used in raw file paths
-	);
+	Map<String, ChatTemplate> BUILT_IN = Map.ofEntries(
+			Map.entry("llama3", llama3()),
+			Map.entry("mistral", mistral()),
+			Map.entry("gemma", gemma()),
+			Map.entry("chatml", chatml()),
+			Map.entry("tinyllama", tinyllama()),
+			Map.entry("zephyr", tinyllama()),
+			Map.entry("phi3", phi3()),
+			Map.entry("phi-3", phi3()),
+			Map.entry("qwen", chatml()),
+			Map.entry("qwen2", chatml()),
+			Map.entry("qwen2.5", chatml()),
+			Map.entry("qwen3", chatml()));
 
 	/**
 	 * Resolve a template by model type string. Falls back to ChatML for unknown

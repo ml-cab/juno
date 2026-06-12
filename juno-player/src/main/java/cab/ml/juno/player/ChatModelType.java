@@ -45,6 +45,8 @@ public final class ChatModelType {
 			return "gemma";
 		if (lower.contains("phi-3") || lower.contains("phi3") || lower.contains("phi_3"))
 			return "phi3";
+		if (lower.contains("qwen"))
+			return "chatml";
 		return "chatml";
 	}
 }

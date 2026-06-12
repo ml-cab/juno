@@ -91,6 +91,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private final GgufReader.QuantizedTensor[] wUp; // [L][intermediateSize × hiddenDim]
 	private final GgufReader.QuantizedTensor[] wDown; // [L][hiddenDim × intermediateSize]
 
+	/** Optional Q/K/V attention biases (Qwen2+). Null when the GGUF has no bias tensors. */
+	private final float[][] bq; // [L][hiddenDim]
+	private final float[][] bk; // [L][kvDim]
+	private final float[][] bv; // [L][kvDim]
+
 	// Per-request KV cache — lazily allocated and grown on demand.
 	// Starts at INITIAL_SEQ_CAPACITY slots, doubles until MAX_SEQ_LEN.
 	private final Map<String, float[][]> kvCacheK = new ConcurrentHashMap<>();
@@ -189,6 +194,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			GgufReader.QuantizedTensor[] wGate,
 			GgufReader.QuantizedTensor[] wUp,
 			GgufReader.QuantizedTensor[] wDown,
+			float[][] bq, float[][] bk, float[][] bv,
 			MatVec backend) {
 		this.cfg          = cfg;
 		this.backend      = backend;
@@ -208,6 +214,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.wGate        = wGate;
 		this.wUp          = wUp;
 		this.wDown        = wDown;
+		this.bq           = bq;
+		this.bk           = bk;
+		this.bv           = bv;
 		// Direct (test) constructor: no GPU upload — device matrices are unused.
 		this.wqDev = this.wkDev = this.wvDev = this.woDev =
 				this.wGateDev = this.wUpDev = this.wDownDev = null;
@@ -243,6 +252,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		wUp = new GgufReader.QuantizedTensor[L];
 		wDown = new GgufReader.QuantizedTensor[L];
 
+		float[][] bqLocal = null;
+		float[][] bkLocal = null;
+		float[][] bvLocal = null;
+		if (L > 0 && r.hasTensor("blk." + startLayer + ".attn_q.bias")) {
+			bqLocal = new float[L][];
+			bkLocal = new float[L][];
+			bvLocal = new float[L][];
+		}
+
 		for (int li = 0; li < L; li++) {
 			int i = li + startLayer;
 			log.fine("Loading layer " + i + " weights...");
@@ -255,10 +273,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			wGate[li] = r.tensorRaw("blk." + i + ".ffn_gate.weight");
 			wUp[li] = r.tensorRaw("blk." + i + ".ffn_up.weight");
 			wDown[li] = r.tensorRaw("blk." + i + ".ffn_down.weight");
+			if (bqLocal != null) {
+				bqLocal[li] = r.tensor("blk." + i + ".attn_q.bias");
+				bkLocal[li] = r.tensor("blk." + i + ".attn_k.bias");
+				bvLocal[li] = r.tensor("blk." + i + ".attn_v.bias");
+			}
 		}
 
+		this.bq = bqLocal;
+		this.bk = bkLocal;
+		this.bv = bvLocal;
+
 		log.info("Shard loaded — " + L + " layers, " + (hasEmbeddings ? "with embeddings, " : "")
-				+ (hasOutputProj ? "with output projection" : "no output projection"));
+				+ (hasOutputProj ? "with output projection" : "no output projection")
+				+ (bqLocal != null ? ", QKV biases (Qwen2-style)" : ""));
 
 		// Upload dequantized weights to GPU when a GPU backend is provided.
 		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
@@ -545,6 +573,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				cfg, startLayer, endLayer, hasEmbd, hasOutProj,
 				tokenEmbd, outputNorm, outputProj,
 				attnNorm, ffnNorm, wq, wk, wv, wo, wGate, wUp, wDown,
+				null, null, null,
 				CpuMatVec.INSTANCE);
 		h.kvAdapter = adapter;
 		return h;
@@ -725,6 +754,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		          : matVecLayer(wk[li], wkDevFp32 != null ? wkDevFp32[li] : null, xNorm, cfg.kvDim(), H);
 		float[] v = wvDev     != null ? matVecLayer(wv[li], wvDev[li],     xNorm, cfg.kvDim(), H)
 		          : matVecLayer(wv[li], wvDevFp32 != null ? wvDevFp32[li] : null, xNorm, cfg.kvDim(), H);
+
+		if (bq != null) {
+			addInPlace(q, bq[li]);
+			addInPlace(k, bk[li]);
+			addInPlace(v, bv[li]);
+		}
 
 		// Rotary position embeddings on Q and K
 		rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
@@ -1600,6 +1635,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			y[r] = acc;
 		});
 		return y;
+	}
+
+	/** Element-wise add {@code bias} into {@code x} when bias is non-null (Qwen2 QKV bias). */
+	private static void addInPlace(float[] x, float[] bias) {
+		if (bias == null)
+			return;
+		for (int i = 0; i < x.length; i++)
+			x[i] += bias[i];
 	}
 
 	/**
