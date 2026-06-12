@@ -83,6 +83,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	// ── Loaded weights ────────────────────────────────────────────────────────
 
 	private final LlamaConfig cfg;
+	private final Phi3RopeConfig ropeCfg;
 	private final int startLayer;
 	private final int endLayer;
 	private final boolean hasEmbeddings;
@@ -172,6 +173,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 	private Phi3TransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend) throws IOException {
 		this.cfg = cfg;
+		this.ropeCfg = Phi3RopeConfig.from(r, cfg);
 		this.backend = backend;
 		this.startLayer = ctx.startLayer();
 		this.endLayer = ctx.endLayer();
@@ -524,8 +526,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		float[] k = matVecFused(attnQkv[li], attnKDev != null ? attnKDev[li] : null, xNorm, H, H + kvDim, H);
 		float[] v = matVecFused(attnQkv[li], attnVDev != null ? attnVDev[li] : null, xNorm, H + kvDim, H + 2 * kvDim, H);
 
-		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
-		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+		Phi3Rope.ropeExt(q, pos, cfg.numHeads(), cfg.headDim(), ropeCfg);
+		Phi3Rope.ropeExt(k, pos, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
 
 		System.arraycopy(k, 0, kCacheLayer, pos * kvDim, kvDim);
 		System.arraycopy(v, 0, vCacheLayer, pos * kvDim, kvDim);

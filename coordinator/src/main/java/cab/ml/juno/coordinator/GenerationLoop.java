@@ -428,14 +428,15 @@ public final class GenerationLoop {
 	 * Treating these as EOS prevents them leaking into the generated text.
 	 *
 	 * Marker set: "</s>" (LLaMA/Mistral/TinyLlama), "<|endoftext|>" (GPT/Phi),
-	 * "<|eot_id|>" (LLaMA 3), "<end_of_turn>" (Gemma).
+	 * "<|end|>" (Phi-3 turn end), "<|eot_id|>" (LLaMA 3), "<end_of_turn>" (Gemma).
 	 */
 	/** EOS marker strings — checked both per-piece and as accumulated suffixes. */
-	private static final String[] EOS_MARKER_STRINGS = { "</s>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>" };
+	private static final String[] EOS_MARKER_STRINGS = { "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>",
+			"<end_of_turn>" };
 
 	private static boolean isEosMarker(String piece) {
 		return switch (piece) {
-		case "</s>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>" -> true;
+		case "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>" -> true;
 		default -> false;
 		};
 	}

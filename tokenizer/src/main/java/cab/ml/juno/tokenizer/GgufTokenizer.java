@@ -59,6 +59,8 @@ public final class GgufTokenizer implements Tokenizer {
 	private final int eosId;
 	private final int padId;
 	private final int unkId;
+	/** When false, {@link #encode} does not prepend {@link #bosId} (per GGUF metadata). */
+	private final boolean addBosToken;
 
 	/**
 	 * True for GPT-2/tiktoken BPE models (e.g. Llama 3+), false for SentencePiece
@@ -118,15 +120,21 @@ public final class GgufTokenizer implements Tokenizer {
 		// "llama", "llama2") = SentencePiece BPE.
 		String ggmlModel = r.metaString("tokenizer.ggml.model");
 		boolean isGpt2Bpe = "gpt2".equals(ggmlModel);
+		boolean addBosToken = metaBool(r, "tokenizer.ggml.add_bos_token", true);
 
-		log.info("Tokenizer loaded: vocabSize=" + V + " bos=" + bosId + " eos=" + eosId
+		log.info("Tokenizer loaded: vocabSize=" + V + " bos=" + bosId + " eos=" + eosId + " addBos=" + addBosToken
 				+ " model=" + (ggmlModel != null ? ggmlModel : "llama(default)")
 				+ (isGpt2Bpe ? " [GPT-2 BPE]" : " [SentencePiece]"));
-		return new GgufTokenizer(vocab, scores, tokenTypes, bosId, eosId, padId, unkId, isGpt2Bpe);
+		return new GgufTokenizer(vocab, scores, tokenTypes, bosId, eosId, padId, unkId, isGpt2Bpe, addBosToken);
+	}
+
+	private static boolean metaBool(GgufReader r, String key, boolean def) {
+		Object v = r.meta(key);
+		return v instanceof Boolean b ? b : def;
 	}
 
 	private GgufTokenizer(String[] vocab, float[] scores, int[] tokenTypes, int bosId, int eosId, int padId,
-			int unkId, boolean isGpt2Bpe) {
+			int unkId, boolean isGpt2Bpe, boolean addBosToken) {
 		this.vocab = vocab;
 		this.scores = scores;
 		this.tokenTypes = tokenTypes;
@@ -135,6 +143,7 @@ public final class GgufTokenizer implements Tokenizer {
 		this.padId = padId;
 		this.unkId = unkId;
 		this.isGpt2Bpe = isGpt2Bpe;
+		this.addBosToken = addBosToken;
 
 		pieceToId = new HashMap<>(vocab.length * 2);
 		for (int i = 0; i < vocab.length; i++)
@@ -158,7 +167,7 @@ public final class GgufTokenizer implements Tokenizer {
 	@Override
 	public int[] encode(String text) {
 		if (text == null || text.isEmpty())
-			return new int[] { bosId };
+			return addBosToken ? new int[] { bosId } : new int[0];
 
 		TokenizerEvent evt = new TokenizerEvent();
 		evt.begin();
@@ -249,16 +258,16 @@ public final class GgufTokenizer implements Tokenizer {
 			}
 		}
 
-		// Prepend BOS token — but only if the text didn't already start with one.
+		// Prepend BOS when tokenizer.ggml.add_bos_token is true (default) and the
+		// encoded text does not already begin with bosId. Phi-3 sets add_bos_token
+		// false — prepending <s> shifts KV positions and causes garbage output.
 		// GPT-2 BPE chat templates (e.g. Llama 3) inject <|begin_of_text|> as the
 		// very first special token; prepending bosId again would produce a double-BOS
 		// sequence that causes the model to emit EOS immediately on the first turn.
-		// SentencePiece models never include BOS in the formatted text, so the guard
-		// is a no-op for them.
 		boolean startsWithBos = !syms.isEmpty() && syms.get(0).id == bosId;
-		int offset = startsWithBos ? 0 : 1;
+		int offset = (addBosToken && !startsWithBos) ? 1 : 0;
 		int[] result = new int[syms.size() + offset];
-		if (!startsWithBos)
+		if (addBosToken && !startsWithBos)
 			result[0] = bosId;
 		for (int i = 0; i < syms.size(); i++)
 			result[i + offset] = syms.get(i).id;
@@ -285,6 +294,13 @@ public final class GgufTokenizer implements Tokenizer {
 	 * Example (Llama 3): {@code "<|begin_of_text|>hello<|eot_id|>"} →
 	 * {@code ["<|begin_of_text|>", "hello", "<|eot_id|>"]}
 	 */
+	private static boolean isEogVocabPiece(String piece) {
+		return switch (piece) {
+		case "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>" -> true;
+		default -> false;
+		};
+	}
+
 	private List<String> splitOnSpecialTokens(String text) {
 		if (sortedSpecialPieces.isEmpty())
 			return List.of(text);
@@ -341,12 +357,15 @@ public final class GgufTokenizer implements Tokenizer {
 		if (tokenId < 0 || tokenId >= vocab.length) {
 			piece = "";
 		} else {
-			// Skip BOS, EOS, and control tokens
 			int type = tokenId < tokenTypes.length ? tokenTypes[tokenId] : 1;
-			if (type == 3 /* control */ || tokenId == bosId || tokenId == eosId) {
+			String raw = vocab[tokenId];
+			// EOG control tokens must decode to their piece so GenerationLoop can stop
+			// on <|end|> (Phi-3), <|endoftext|>, etc. Other control tokens stay silent.
+			if (type == 3 && isEogVocabPiece(raw)) {
+				piece = raw;
+			} else if (type == 3 || tokenId == bosId || tokenId == eosId) {
 				piece = "";
 			} else {
-				String raw = vocab[tokenId];
 				// Byte tokens like <0xHH> → actual byte
 				if (raw.matches("<0x[0-9A-Fa-f]{2}>")) {
 					int b = Integer.parseInt(raw.substring(3, 5), 16);
