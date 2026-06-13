@@ -567,8 +567,9 @@ Run cluster command with `--verbose` to enable `[TRACE]` output:
 
 If the template key at training and inference differ, the model will not recall trained facts.
 Rename the model file to include the architecture keyword (`tinyllama`, `llama-3`, `mistral`,
-`gemma`) to ensure `ChatModelType.fromPath()` detects it correctly. The `phi3` template and
-Phi-3 handler path are under development — prefer LLaMA-family models for training workflows today.
+`phi3`) to ensure `ChatModelType.fromPath()` detects it correctly. Gemma, Qwen 2 / Qwen3 /
+Qwen3.5 paths are under development — prefer LLaMA-family or Phi-3 models for LoRA
+training workflows today.
 
 ---
 

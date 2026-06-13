@@ -108,6 +108,18 @@ class ChatTemplateTest {
 	}
 
 	@Test
+	void qwen3_uses_chatml_with_empty_think_block() {
+		String prompt = ChatTemplate.qwen3().format(List.of(ChatMessage.user("Hello")));
+
+		assertThat(prompt).contains("<|im_start|>user");
+		assertThat(prompt).contains("<|" + "im_end|>");
+		assertThat(prompt).contains("<think>");
+		assertThat(prompt).contains("</think>");
+		assertThat(prompt).endsWith("<think>" + "\n\n</think>" + "\n\n");
+		assertThat(ChatTemplate.forModelType("qwen3").modelType()).isEqualTo("qwen3");
+	}
+
+	@Test
 	void qwen_uses_chatml_template() {
 		ChatTemplate t = ChatTemplate.forModelType("qwen");
 

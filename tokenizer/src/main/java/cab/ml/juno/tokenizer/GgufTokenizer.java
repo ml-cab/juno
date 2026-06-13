@@ -15,6 +15,8 @@
  */
 package cab.ml.juno.tokenizer;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -88,8 +90,8 @@ public final class GgufTokenizer implements Tokenizer {
 	 * character.
 	 *
 	 * Contains all vocab entries whose token type is 3 (control) or 4
-	 * (user-defined) and whose piece string starts with {@code <|} (to avoid
-	 * including single-byte or generic control pieces).
+	 * (user-defined) and whose piece is an atomic special string: {@code <|...|>}
+	 * chat control tokens, or Qwen3 {@code <think>} markers.
 	 */
 	private final List<String> sortedSpecialPieces;
 
@@ -183,7 +185,7 @@ public final class GgufTokenizer implements Tokenizer {
 		List<String> specials = new ArrayList<>();
 		for (int i = 0; i < vocab.length; i++) {
 			int t = tokenTypes[i];
-			if ((t == 3 || t == 4) && vocab[i].startsWith("<|") && vocab[i].endsWith("|>"))
+			if ((t == 3 || t == 4) && isAtomicSpecialPiece(vocab[i]))
 				specials.add(vocab[i]);
 		}
 		specials.sort(Comparator.comparingInt(String::length).reversed());
@@ -215,36 +217,27 @@ public final class GgufTokenizer implements Tokenizer {
 		List<Sym> syms = new ArrayList<>();
 		for (String segment : splitOnSpecialTokens(text)) {
 			Integer specialId = pieceToId.get(segment);
-			boolean isSpecial = specialId != null
-					&& specialId < tokenTypes.length
-					&& (tokenTypes[specialId] == 3 || tokenTypes[specialId] == 4)
-					&& segment.startsWith("<|") && segment.endsWith("|>");
+			boolean isSpecial = isAtomicSpecialSegment(segment, specialId);
 			if (isSpecial) {
 				// Emit the control token directly — no BPE, no normalisation.
 				syms.add(new Sym(segment, specialId, scores[specialId < scores.length ? specialId : 0]));
 			} else {
-				// Plain-text segment: apply model-appropriate space normalisation, then
-				// decompose into initial symbols for BPE.
-				//
-				// SentencePiece (Llama 1/2, TinyLlama, Mistral, Phi-3):
-				//   Prepend ▁ to the segment so the first word is treated identically to
-				//   mid-sentence words. Spaces → ▁.
-				//
-				// GPT-2 BPE (Llama 3+):
-				//   Do NOT prepend anything — GPT-2 tokens carry Ġ (U+0120) at their
-				//   OWN start when they begin a new word. Spaces → Ġ.
-				//   The leading-space prefix logic that SentencePiece needs is baked into
-				//   the token strings themselves (e.g. "Ġhello" means " hello").
+				// GPT-2 BPE: UTF-8 bytes → byte-to-unicode chars, then merge.
+				// SentencePiece: ▁-normalised per-character symbols.
 				String normalised = isGpt2Bpe
-						? segment.replace(' ', GP).replace("\n", String.valueOf(NL))
+						? Gpt2ByteCodec.textToBpeChars(segment)
 						: SP + segment.replace(' ', SP);
 
 				for (int cp : (Iterable<Integer>) normalised.codePoints()::iterator) {
 					String piece = new String(Character.toChars(cp));
 					Integer id = pieceToId.get(piece);
 					if (id == null) {
-						// OOV character: fall back to byte tokens <0xHH>
-						byte[] bytes = piece.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+						if (isGpt2Bpe) {
+							syms.add(new Sym(piece, unkId, scores[unkId < scores.length ? unkId : 0]));
+							continue;
+						}
+						// SentencePiece OOV: fall back to byte tokens <0xHH>
+						byte[] bytes = piece.getBytes(StandardCharsets.UTF_8);
 						for (byte b : bytes) {
 							String byteKey = String.format("<0x%02X>", b & 0xFF);
 							id = pieceToId.getOrDefault(byteKey, unkId);
@@ -332,6 +325,22 @@ public final class GgufTokenizer implements Tokenizer {
 	 * Example (Llama 3): {@code "<|begin_of_text|>hello<|eot_id|>"} →
 	 * {@code ["<|begin_of_text|>", "hello", "<|eot_id|>"]}
 	 */
+	private static boolean isQwenThinkingMarker(String piece) {
+		return "<think>".equals(piece) || "</think>".equals(piece);
+	}
+
+	/** Control / user-defined tokens emitted as a single vocab ID (not BPE-split). */
+	private static boolean isAtomicSpecialPiece(String piece) {
+		return (piece.startsWith("<|") && piece.endsWith("|>")) || isQwenThinkingMarker(piece);
+	}
+
+	private boolean isAtomicSpecialSegment(String segment, Integer id) {
+		if (id == null || id < 0 || id >= tokenTypes.length)
+			return false;
+		int t = tokenTypes[id];
+		return (t == 3 || t == 4) && isAtomicSpecialPiece(segment);
+	}
+
 	private static boolean isEogVocabPiece(String piece) {
 		return switch (piece) {
 		case "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>", "<|im_end|>" -> true;
@@ -372,19 +381,49 @@ public final class GgufTokenizer implements Tokenizer {
 	public String decode(int[] tokenIds) {
 		TokenizerEvent evt = new TokenizerEvent();
 		evt.begin();
-		StringBuilder sb = new StringBuilder();
-		for (int id : tokenIds)
-			sb.append(decodeToken(id));
-		// decodeToken() already replaced ▁ with space; just strip the leading space
-		// that the first token's ▁ prefix would have introduced.
-		String result = sb.toString();
-		result = result.startsWith(" ") ? result.substring(1) : result;
+		String result;
+		if (isGpt2Bpe) {
+			ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+			for (int id : tokenIds) {
+				String raw = vocabPieceForDecode(id);
+				if (!raw.isEmpty())
+					Gpt2ByteCodec.appendPieceBytes(raw, bytes);
+			}
+			result = Gpt2ByteCodec.decodeBytes(bytes.toByteArray());
+			if (result.startsWith(" "))
+				result = result.substring(1);
+		} else {
+			StringBuilder sb = new StringBuilder();
+			for (int id : tokenIds)
+				sb.append(decodeToken(id));
+			result = sb.toString();
+			result = result.startsWith(" ") ? result.substring(1) : result;
+		}
 		evt.tokenizerType = "gguf";
 		evt.operation = "decode";
 		evt.inputLength = tokenIds.length;
 		evt.outputLength = result.length();
 		evt.commit();
 		return result;
+	}
+
+	@Override
+	public StreamContext openStreamContext() {
+		if (!isGpt2Bpe)
+			return Tokenizer.super.openStreamContext();
+		Gpt2ByteCodec.Stream stream = new Gpt2ByteCodec.Stream();
+		return new StreamContext() {
+			@Override
+			public String append(int tokenId) {
+				String raw = vocabPieceForDecode(tokenId);
+				return raw.isEmpty() ? "" : stream.appendPiece(raw);
+			}
+
+			@Override
+			public String flush() {
+				return stream.flush();
+			}
+		};
 	}
 
 	@Override
@@ -395,26 +434,20 @@ public final class GgufTokenizer implements Tokenizer {
 		if (tokenId < 0 || tokenId >= vocab.length) {
 			piece = "";
 		} else {
-			int type = tokenId < tokenTypes.length ? tokenTypes[tokenId] : 1;
-			String raw = vocab[tokenId];
-			// EOG control tokens must decode to their piece so GenerationLoop can stop
-			// on <|end|> (Phi-3), <|endoftext|>, etc. Other control tokens stay silent.
-			if (type == 3 && isEogVocabPiece(raw)) {
-				piece = raw;
-			} else if (type == 3 || tokenId == bosId || tokenId == eosId) {
+			String raw = vocabPieceForDecode(tokenId);
+			if (raw.isEmpty()) {
 				piece = "";
+			} else if (isGpt2Bpe) {
+				ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+				Gpt2ByteCodec.appendPieceBytes(raw, bytes);
+				piece = Gpt2ByteCodec.decodeBytes(bytes.toByteArray());
 			} else {
-				// Byte tokens like <0xHH> → actual byte
 				if (raw.matches("<0x[0-9A-Fa-f]{2}>")) {
 					int b = Integer.parseInt(raw.substring(3, 5), 16);
-					raw = new String(new byte[] { (byte) b }, java.nio.charset.StandardCharsets.UTF_8);
+					piece = new String(new byte[] { (byte) b }, StandardCharsets.UTF_8);
+				} else {
+					piece = raw.replace(SP, ' ').replace(GP, ' ').replace('Ċ', '\n');
 				}
-				// Replace SentencePiece space prefix (▁ U+2581) with a real space so that
-				// streaming callers (which receive one piece at a time) see correct whitespace.
-				// The full decode() path also does this replacement, but streaming builds
-				// fullText directly from decodeToken() pieces without going through decode().
-				// Ċ (U+010A) is GPT-2 BPE's representation of newline (\n).
-				piece = raw.replace(SP, ' ').replace(GP, ' ').replace('Ċ', '\n');
 			}
 		}
 		evt.tokenizerType = "gguf";
@@ -423,6 +456,21 @@ public final class GgufTokenizer implements Tokenizer {
 		evt.outputLength = piece.length();
 		evt.commit();
 		return piece;
+	}
+
+	/** Vocab piece for decode, or empty for silent control / think tokens. */
+	private String vocabPieceForDecode(int tokenId) {
+		if (tokenId < 0 || tokenId >= vocab.length)
+			return "";
+		int type = tokenId < tokenTypes.length ? tokenTypes[tokenId] : 1;
+		String raw = vocab[tokenId];
+		if (type == 3 && isEogVocabPiece(raw))
+			return raw;
+		if (type == 3 || tokenId == bosId || tokenId == eosId)
+			return "";
+		if (isQwenThinkingMarker(raw))
+			return "";
+		return raw;
 	}
 
 	@Override

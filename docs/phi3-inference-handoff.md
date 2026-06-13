@@ -1,6 +1,6 @@
 # Phi-3.5-mini inference — agent handoff context
 
-**Status:** **CPU/local greedy Hello fixed** (2026-06-11) via Phi-3 extended NeoX RoPE. EOS stop after `?` still open; cluster path needs re-verify.
+**Status:** **Supported** — Phi-3 / Phi-3.5 inference via `Phi3TransformerHandler` (local + cluster). This doc retains debug handoff notes from the initial bring-up (2026-06-11).
 **Model:** `models/Phi-3.5-mini-instruct-Q4_K_M.gguf` (same as `phi-3.5-mini-instruct-q4_k_m.gguf`)
 
 ---
@@ -162,7 +162,7 @@ REPL (ConsoleMain)
        → Sampler → EOS / <|end|> checks   ← stop fix here
 ```
 
-**Handler:** `node/.../Phi3TransformerHandler.java` (marked under development in `docs/arch.md`).  
+**Handler:** `node/.../Phi3TransformerHandler.java` (supported; see `docs/arch.md`).  
 **Loader:** `ForwardPassHandlerLoader` dispatches `general.architecture=phi3` → `Phi3TransformerHandler`.
 
 ---
@@ -221,6 +221,6 @@ Manual: `compare-phi3-llama.sh` + cluster REPL "Hello" + local REPL "Hello" all 
 ## Related docs / history
 
 - `docs/dev-notes.txt` §21 (Phi-3 support, vocab 32064 fix, template routing)
-- `docs/arch.md` — Phi3 handler under development
+- `docs/arch.md` — Phi3 handler (supported); Qwen under development
 - `node/src/test/java/cab/ml/juno/node/Phi3TransformerHandlerTest.java` — vocab/EOS regression tests
 - Prior chat: llama.cpp comparison proved tokenizer BOS bug; inference divergence remains

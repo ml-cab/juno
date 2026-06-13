@@ -158,8 +158,10 @@ code are required by the OpenAI layer. It is a pure translation shim above the s
 ```
 ForwardPassHandlerLoader
     |
-    phi3  -> Phi3TransformerHandler   (fused QKV + gate/up — under development)
-    *     -> LlamaTransformerHandler  (separate tensors, quantized weights)
+    phi3      -> Phi3TransformerHandler   (fused QKV + gate/up; Phi-3 / Phi-3.5 — supported)
+    qwen3     -> Qwen3TransformerHandler  (Q/K norms, dense SwiGLU — under development)
+    qwen3moe  -> Qwen3MoeTransformerHandler (Q/K norms, MoE FFN, YaRN RoPE — under development)
+    *         -> LlamaTransformerHandler  (separate tensors, quantized weights; llama, mistral, tinyllama supported; gemma, qwen2 under development)
 
 LoRA overlay (optional):
     load(..., LoraAdapterSet)  <- wraps base handler in LoraTrainableHandler
@@ -255,8 +257,9 @@ tensors are copied verbatim in their original quantized form.
 
 **GPT-2 BPE and SentencePiece BPE both supported.** `GgufTokenizer` reads
 `tokenizer.ggml.model` from GGUF metadata. Value `"gpt2"` activates the GPT-2 / tiktoken path
-(Llama 3+). Any other value uses SentencePiece (Llama 1/2, TinyLlama, Mistral, Gemma).
-Phi-3 uses a dedicated handler and `phi3` chat template; both are under development.
+(Llama 3+). Any other value uses SentencePiece (Llama 1/2, TinyLlama, Mistral). Gemma uses the same SentencePiece path via `LlamaTransformerHandler` but is under development.
+Phi-3 uses a dedicated handler and `phi3` chat template (supported). Gemma, Qwen 2, Qwen3, and Qwen3.5
+use family-specific templates with validation in progress — treat as under development.
 Detection is automatic at load time — no configuration required.
 
 **AWS infrastructure fully scripted.** `juno-deploy.sh` is the unified cluster lifecycle script.

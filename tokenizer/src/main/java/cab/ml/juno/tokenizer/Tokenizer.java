@@ -41,8 +41,31 @@ public interface Tokenizer {
 	 * Decode a single token ID to its text piece. Used for real-time streaming —
 	 * called once per generated token. May return empty string for special tokens
 	 * (BOS, EOS, padding).
+	 *
+	 * <p>
+	 * For GPT-2 BPE models (Qwen, Llama 3+), prefer {@link #openStreamContext()}
+	 * which buffers bytes across tokens for correct UTF-8 streaming.
 	 */
 	String decodeToken(int tokenId);
+
+	/**
+	 * Per-generation streaming decode state. Call {@link StreamContext#append(int)}
+	 * once per generated token; call {@link StreamContext#flush()} at end of
+	 * generation to emit any trailing bytes.
+	 */
+	default StreamContext openStreamContext() {
+		return tokenId -> decodeToken(tokenId);
+	}
+
+	/** Incremental decode session — not thread-safe; one instance per generation. */
+	@FunctionalInterface
+	interface StreamContext {
+		String append(int tokenId);
+
+		default String flush() {
+			return "";
+		}
+	}
 
 	/** Beginning-of-sequence token ID. */
 	int bosTokenId();

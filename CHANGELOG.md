@@ -1,5 +1,35 @@
 ## Status
 
+**Session 33** — Model support documentation: Phi-3 supported; Gemma, Qwen 2 / Qwen3 / Qwen3.5 under development.
+
+### Supported model status (docs)
+
+User-facing docs now state a single, consistent model-support policy:
+
+| Family | `general.architecture` | Status |
+|--------|------------------------|--------|
+| LLaMA, Mistral, TinyLlama, … | `llama`, `mistral`, … | Supported via `LlamaTransformerHandler` |
+| Phi-3 / Phi-3.5 | `phi3` | **Supported** via `Phi3TransformerHandler` |
+| Gemma | `gemma` | **Under development** (`LlamaTransformerHandler` + `gemma` template) |
+| Qwen 2 / 2.5 | `qwen2` | **Under development** (Llama handler + QKV bias groundwork) |
+| Qwen3 dense | `qwen3` | **Under development** (`Qwen3TransformerHandler` in progress) |
+| Qwen3-MoE | `qwen3moe` | **Under development** (`Qwen3MoeTransformerHandler` in progress) |
+| Qwen3.5 | `qwen35` | **Under development** (hybrid DeltaNet; separate handler) |
+
+**Updated files:**
+
+- **`README.md`**, **`RELEASE_NOTES.md`** — Supported models section
+- **`docs/arch.md`** — handler routing and tokenizer notes
+- **`docs/features.md`**, **`docs/howto.md`**, **`docs/LoRA.md`** — Phi-3 OK for inference; Gemma and Qwen paths not production-ready; LoRA still LLaMA-family (+ Phi-3 template detection)
+- **`docs/phi3-inference-handoff.md`** — status set to supported (retains debug handoff notes)
+- **`docs/model_support_summary_972ab30f.plan.md`** — roadmap, dispatch table, chat matrix, gaps, decisions log
+
+**Policy:** Phi-3 is production-ready in docs and validation (local + cluster). Gemma and all Qwen families remain under development until dedicated validation lands.
+
+---
+
+## Status
+
 **Session 32** — ROCm/HIP backend for AMD GPU inference via Panama FFI.
 
 ### AMD GPU support (ROCm/HIP + rocBLAS)
