@@ -165,7 +165,7 @@ JDK 25+, Maven 3.9+. GPU nodes: CUDA 12.x + NVIDIA driver **or** ROCm 6+ + AMD d
 
 ## Supported models
 
-GGUF with LLaMA-compatible architectures (quantizations include F32, F16, BF16, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K). Chat templates: `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml`. **`phi3` is under development** (experimental Phi-3 handler and template). Examples (heap hints): TinyLlama Q4_K_M (~637 MB, `2g`), Mistral-7B Q4_K_M (~4.1 GB, `8g`), Llama-3.1-70B Q4_K_M distributed. 
+GGUF with LLaMA-compatible architectures (quantizations include F32, F16, BF16, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K). Chat templates: `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml`, `phi3`. **`phi3`** (Phi-3 / Phi-3.5) is supported via a dedicated handler and template. **Gemma**, **Qwen 2, Qwen3, and Qwen3.5** (`gemma`, `qwen2`, `qwen3`, `qwen3moe`, `qwen35`) are **under development** — template and handler groundwork exists for some paths; end-to-end validation is in progress (no LoRA on Gemma/Qwen). Examples (heap hints): TinyLlama Q4_K_M (~637 MB, `2g`), Mistral-7B Q4_K_M (~4.1 GB, `8g`), Phi-3.5-mini Q4_K_M (~2.2 GB, `4g`), Llama-3.1-70B Q4_K_M distributed. 
 
 ## Modules (overview)
 

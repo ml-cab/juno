@@ -108,10 +108,27 @@ class ChatTemplateTest {
 	}
 
 	@Test
+	void qwen3_uses_chatml_with_empty_think_block() {
+		String prompt = ChatTemplate.qwen3().format(List.of(ChatMessage.user("Hello")));
+
+		assertThat(prompt).contains("<|im_start|>user");
+		assertThat(prompt).contains("<|" + "im_end|>");
+		assertThat(prompt).contains("<think>");
+		assertThat(prompt).contains("</think>");
+		assertThat(prompt).endsWith("<think>" + "\n\n</think>" + "\n\n");
+		assertThat(ChatTemplate.forModelType("qwen3").modelType()).isEqualTo("qwen3");
+	}
+
+	@Test
 	void qwen_uses_chatml_template() {
 		ChatTemplate t = ChatTemplate.forModelType("qwen");
 
 		assertThat(t.modelType()).isEqualTo("chatml");
+	}
+
+	@Test
+	void qwen25_filename_resolves_to_chatml() {
+		assertThat(ChatTemplate.forModelType("qwen2.5-3b-instruct-q4_k_m.gguf").modelType()).isEqualTo("chatml");
 	}
 
 	// ── Substring-match regression tests ─────────────────────────────────────

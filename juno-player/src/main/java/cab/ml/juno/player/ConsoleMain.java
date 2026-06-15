@@ -154,6 +154,12 @@ public final class ConsoleMain {
 	private static int loraStepsQa = 10; // steps per chunk for /train-qa
 	private static float loraEarlyStop = 0.25f; // stop training when loss drops below this
 
+	private static SamplingParams samplingParamsFromCli() {
+		SamplingParams params = SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(temperature)
+				.withTopK(topK).withTopP(topP);
+		return temperature < 1e-6f ? params.withGreedy(true) : params;
+	}
+
 	public static void main(String[] args) throws Exception {
 		AnsiSupport.enable();
 		parseArgs(args);
@@ -462,8 +468,7 @@ public final class ConsoleMain {
 		int[] totalStepsTrained = { 0 };
 		boolean[] dirty = { false }; // unsaved changes?
 
-		SamplingParams params = SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(temperature)
-				.withTopK(topK).withTopP(topP);
+		SamplingParams params = samplingParamsFromCli();
 
 		ChatHistory history = new ChatHistory();
 
@@ -1285,8 +1290,7 @@ public final class ConsoleMain {
 	// ── Standard REPL loop ────────────────────────────────────────────────────
 
 	private static void startRepl(GenerationLoop loop, Tokenizer tokenizer) throws IOException {
-		SamplingParams params = SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(temperature)
-				.withTopK(topK).withTopP(topP);
+		SamplingParams params = samplingParamsFromCli();
 
 		ChatHistory history = new ChatHistory();
 

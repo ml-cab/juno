@@ -144,6 +144,10 @@ public final class GenerationLoop {
 		}
 
 		// ── Steps 2–N: batched decode loop ────────────────────────────────────
+		Tokenizer.StreamContext[] streams = new Tokenizer.StreamContext[n];
+		for (int i = 0; i < n; i++)
+			streams[i] = tokenizer.openStreamContext();
+
 		int globalMaxTokens = 0;
 		for (int mt : maxTokens)
 			globalMaxTokens = Math.max(globalMaxTokens, mt);
@@ -191,7 +195,7 @@ public final class GenerationLoop {
 					reasons[i] = GenerationResult.StopReason.STOP_TOKEN;
 					active[i] = false;
 				} else {
-					String piece = tokenizer.decodeToken(nextToken);
+					String piece = streams[i].append(nextToken);
 					if (isEosMarker(piece)) {
 						reasons[i] = GenerationResult.StopReason.EOS_TOKEN;
 						active[i] = false;
@@ -218,6 +222,9 @@ public final class GenerationLoop {
 		// ── Build results + cleanup ───────────────────────────────────────────
 		List<GenerationResult> results = new ArrayList<>(n);
 		for (int i = 0; i < n; i++) {
+			String tail = streams[i].flush();
+			if (!tail.isEmpty())
+				texts[i].append(tail);
 
 			// Cache prompt prefix for future requests
 			if (!hadCacheHit[i] && promptLens[i] > 0) {
@@ -318,6 +325,7 @@ public final class GenerationLoop {
 
 		// ── Steps 3–8: Autoregressive decode loop ─────────────────────────────
 		int maxTokens = request.samplingParams().maxTokens();
+		Tokenizer.StreamContext stream = tokenizer.openStreamContext();
 
 		for (int step = 0; step < maxTokens; step++) {
 
@@ -340,7 +348,7 @@ public final class GenerationLoop {
 			}
 
 			// Step 6: Decode token piece
-			String piece = tokenizer.decodeToken(nextToken);
+			String piece = stream.append(nextToken);
 
 			// Step 5b: Defensive EOS-string filter (GgufTokenizer quirk — see isEosMarker).
 			if (isEosMarker(piece)) {
@@ -396,6 +404,10 @@ public final class GenerationLoop {
 			kvCache.evict(kvKey);
 		}
 
+		String tail = stream.flush();
+		if (!tail.isEmpty())
+			fullText.append(tail);
+
 		return new GenerationResult(kvKey, fullText.toString(), generatedIds, promptIds.length, generatedIds.size(),
 				stopReason, Instant.now(), Duration.between(start, Instant.now()));
 	}
@@ -428,14 +440,15 @@ public final class GenerationLoop {
 	 * Treating these as EOS prevents them leaking into the generated text.
 	 *
 	 * Marker set: "</s>" (LLaMA/Mistral/TinyLlama), "<|endoftext|>" (GPT/Phi),
-	 * "<|eot_id|>" (LLaMA 3), "<end_of_turn>" (Gemma).
+	 * "<|end|>" (Phi-3 turn end), "<|eot_id|>" (LLaMA 3), "<end_of_turn>" (Gemma).
 	 */
 	/** EOS marker strings — checked both per-piece and as accumulated suffixes. */
-	private static final String[] EOS_MARKER_STRINGS = { "</s>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>" };
+	private static final String[] EOS_MARKER_STRINGS = { "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>",
+			"<end_of_turn>", "<|im_end|>" };
 
 	private static boolean isEosMarker(String piece) {
 		return switch (piece) {
-		case "</s>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>" -> true;
+		case "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>", "<|im_end|>" -> true;
 		default -> false;
 		};
 	}

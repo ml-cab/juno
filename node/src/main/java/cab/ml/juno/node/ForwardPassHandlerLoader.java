@@ -35,6 +35,8 @@ import cab.ml.juno.node.RocmAvailability;
  * Architecture dispatch table:
  * <ul>
  * <li>{@code phi3} → {@link Phi3TransformerHandler}
+ * <li>{@code qwen3} → {@link Qwen3TransformerHandler}
+ * <li>{@code qwen3moe} → {@link Qwen3MoeTransformerHandler}
  * <li>everything else → {@link LlamaTransformerHandler}
  * </ul>
  *
@@ -179,6 +181,14 @@ public final class ForwardPassHandlerLoader {
 		case "phi3" -> {
 			log.info("Routing to Phi3TransformerHandler (phi3 fused-QKV architecture)");
 			yield Phi3TransformerHandler.load(modelPath, context, backend);
+		}
+		case "qwen3" -> {
+			log.info("Routing to Qwen3TransformerHandler (qwen3 dense architecture)");
+			yield Qwen3TransformerHandler.load(modelPath, context, backend);
+		}
+		case "qwen3moe" -> {
+			log.info("Routing to Qwen3MoeTransformerHandler (qwen3moe MoE architecture)");
+			yield Qwen3MoeTransformerHandler.load(modelPath, context, backend);
 		}
 		default -> {
 			log.info("Routing to LlamaTransformerHandler (LLaMA-family architecture: " + arch + ")");

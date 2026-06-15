@@ -15,6 +15,8 @@
  */
 package cab.ml.juno.tokenizer;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -49,6 +51,8 @@ public final class GgufTokenizer implements Tokenizer {
 	private static final char SP = '\u2581';
 	// U+0120 LATIN SMALL LETTER G WITH CEDILLA — BPE (GPT-2/Llama-3) space prefix
 	private static final char GP = '\u0120';
+	// U+010A LATIN CAPITAL LETTER C WITH DOT ABOVE — GPT-2 BPE newline (Ċ)
+	private static final char NL = '\u010A';
 
 	private final String[] vocab; // token ID → piece string
 	private final float[] scores; // token ID → BPE score
@@ -59,6 +63,8 @@ public final class GgufTokenizer implements Tokenizer {
 	private final int eosId;
 	private final int padId;
 	private final int unkId;
+	/** When false, {@link #encode} does not prepend {@link #bosId} (per GGUF metadata). */
+	private final boolean addBosToken;
 
 	/**
 	 * True for GPT-2/tiktoken BPE models (e.g. Llama 3+), false for SentencePiece
@@ -73,6 +79,9 @@ public final class GgufTokenizer implements Tokenizer {
 	 */
 	private final boolean isGpt2Bpe;
 
+	/** GPT-2 merge-pair ranks from {@code tokenizer.ggml.merges} (Qwen2, etc.). */
+	private final Map<String, Float> gpt2MergePairScores;
+
 	/**
 	 * Special-token pieces sorted longest-first. Used in {@link #encode} to
 	 * pre-split the input text at special-token boundaries before BPE so that
@@ -81,8 +90,8 @@ public final class GgufTokenizer implements Tokenizer {
 	 * character.
 	 *
 	 * Contains all vocab entries whose token type is 3 (control) or 4
-	 * (user-defined) and whose piece string starts with {@code <|} (to avoid
-	 * including single-byte or generic control pieces).
+	 * (user-defined) and whose piece is an atomic special string: {@code <|...|>}
+	 * chat control tokens, or Qwen3 {@code <think>} markers.
 	 */
 	private final List<String> sortedSpecialPieces;
 
@@ -118,15 +127,43 @@ public final class GgufTokenizer implements Tokenizer {
 		// "llama", "llama2") = SentencePiece BPE.
 		String ggmlModel = r.metaString("tokenizer.ggml.model");
 		boolean isGpt2Bpe = "gpt2".equals(ggmlModel);
+		boolean addBosToken = metaBool(r, "tokenizer.ggml.add_bos_token", true);
+		Map<String, Float> gpt2MergePairScores = buildGpt2MergePairScores(r, isGpt2Bpe);
 
-		log.info("Tokenizer loaded: vocabSize=" + V + " bos=" + bosId + " eos=" + eosId
+		log.info("Tokenizer loaded: vocabSize=" + V + " bos=" + bosId + " eos=" + eosId + " addBos=" + addBosToken
 				+ " model=" + (ggmlModel != null ? ggmlModel : "llama(default)")
-				+ (isGpt2Bpe ? " [GPT-2 BPE]" : " [SentencePiece]"));
-		return new GgufTokenizer(vocab, scores, tokenTypes, bosId, eosId, padId, unkId, isGpt2Bpe);
+				+ (isGpt2Bpe ? " [GPT-2 BPE" + (gpt2MergePairScores.isEmpty() ? "" : ", merges=" + gpt2MergePairScores.size())
+						+ "]"
+				: " [SentencePiece]"));
+		return new GgufTokenizer(vocab, scores, tokenTypes, bosId, eosId, padId, unkId, isGpt2Bpe, addBosToken,
+				gpt2MergePairScores);
+	}
+
+	private static Map<String, Float> buildGpt2MergePairScores(GgufReader r, boolean isGpt2Bpe) {
+		if (!isGpt2Bpe)
+			return Map.of();
+		Object[] mergesRaw = (Object[]) r.meta("tokenizer.ggml.merges");
+		if (mergesRaw == null || mergesRaw.length == 0)
+			return Map.of();
+		Map<String, Float> ranks = new HashMap<>(mergesRaw.length * 2);
+		for (int i = 0; i < mergesRaw.length; i++) {
+			String line = (String) mergesRaw[i];
+			int sp = line.indexOf(' ');
+			if (sp <= 0 || sp >= line.length() - 1)
+				continue;
+			String pair = line.substring(0, sp) + line.substring(sp + 1);
+			ranks.put(pair, (float) (mergesRaw.length - i));
+		}
+		return ranks;
+	}
+
+	private static boolean metaBool(GgufReader r, String key, boolean def) {
+		Object v = r.meta(key);
+		return v instanceof Boolean b ? b : def;
 	}
 
 	private GgufTokenizer(String[] vocab, float[] scores, int[] tokenTypes, int bosId, int eosId, int padId,
-			int unkId, boolean isGpt2Bpe) {
+			int unkId, boolean isGpt2Bpe, boolean addBosToken, Map<String, Float> gpt2MergePairScores) {
 		this.vocab = vocab;
 		this.scores = scores;
 		this.tokenTypes = tokenTypes;
@@ -135,6 +172,8 @@ public final class GgufTokenizer implements Tokenizer {
 		this.padId = padId;
 		this.unkId = unkId;
 		this.isGpt2Bpe = isGpt2Bpe;
+		this.gpt2MergePairScores = gpt2MergePairScores;
+		this.addBosToken = addBosToken;
 
 		pieceToId = new HashMap<>(vocab.length * 2);
 		for (int i = 0; i < vocab.length; i++)
@@ -146,7 +185,7 @@ public final class GgufTokenizer implements Tokenizer {
 		List<String> specials = new ArrayList<>();
 		for (int i = 0; i < vocab.length; i++) {
 			int t = tokenTypes[i];
-			if ((t == 3 || t == 4) && vocab[i].startsWith("<|") && vocab[i].endsWith("|>"))
+			if ((t == 3 || t == 4) && isAtomicSpecialPiece(vocab[i]))
 				specials.add(vocab[i]);
 		}
 		specials.sort(Comparator.comparingInt(String::length).reversed());
@@ -158,7 +197,7 @@ public final class GgufTokenizer implements Tokenizer {
 	@Override
 	public int[] encode(String text) {
 		if (text == null || text.isEmpty())
-			return new int[] { bosId };
+			return addBosToken ? new int[] { bosId } : new int[0];
 
 		TokenizerEvent evt = new TokenizerEvent();
 		evt.begin();
@@ -178,36 +217,27 @@ public final class GgufTokenizer implements Tokenizer {
 		List<Sym> syms = new ArrayList<>();
 		for (String segment : splitOnSpecialTokens(text)) {
 			Integer specialId = pieceToId.get(segment);
-			boolean isSpecial = specialId != null
-					&& specialId < tokenTypes.length
-					&& (tokenTypes[specialId] == 3 || tokenTypes[specialId] == 4)
-					&& segment.startsWith("<|") && segment.endsWith("|>");
+			boolean isSpecial = isAtomicSpecialSegment(segment, specialId);
 			if (isSpecial) {
 				// Emit the control token directly — no BPE, no normalisation.
 				syms.add(new Sym(segment, specialId, scores[specialId < scores.length ? specialId : 0]));
 			} else {
-				// Plain-text segment: apply model-appropriate space normalisation, then
-				// decompose into initial symbols for BPE.
-				//
-				// SentencePiece (Llama 1/2, TinyLlama, Mistral, Phi-3):
-				//   Prepend ▁ to the segment so the first word is treated identically to
-				//   mid-sentence words. Spaces → ▁.
-				//
-				// GPT-2 BPE (Llama 3+):
-				//   Do NOT prepend anything — GPT-2 tokens carry Ġ (U+0120) at their
-				//   OWN start when they begin a new word. Spaces → Ġ.
-				//   The leading-space prefix logic that SentencePiece needs is baked into
-				//   the token strings themselves (e.g. "Ġhello" means " hello").
+				// GPT-2 BPE: UTF-8 bytes → byte-to-unicode chars, then merge.
+				// SentencePiece: ▁-normalised per-character symbols.
 				String normalised = isGpt2Bpe
-						? segment.replace(' ', GP)
+						? Gpt2ByteCodec.textToBpeChars(segment)
 						: SP + segment.replace(' ', SP);
 
 				for (int cp : (Iterable<Integer>) normalised.codePoints()::iterator) {
 					String piece = new String(Character.toChars(cp));
 					Integer id = pieceToId.get(piece);
 					if (id == null) {
-						// OOV character: fall back to byte tokens <0xHH>
-						byte[] bytes = piece.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+						if (isGpt2Bpe) {
+							syms.add(new Sym(piece, unkId, scores[unkId < scores.length ? unkId : 0]));
+							continue;
+						}
+						// SentencePiece OOV: fall back to byte tokens <0xHH>
+						byte[] bytes = piece.getBytes(StandardCharsets.UTF_8);
 						for (byte b : bytes) {
 							String byteKey = String.format("<0x%02X>", b & 0xFF);
 							id = pieceToId.getOrDefault(byteKey, unkId);
@@ -234,8 +264,9 @@ public final class GgufTokenizer implements Tokenizer {
 			for (int i = 0; i < syms.size() - 1; i++) {
 				String pair = syms.get(i).piece + syms.get(i + 1).piece;
 				Integer id = pieceToId.get(pair);
-				if (id != null && scores[id] > bestScore) {
-					bestScore = scores[id];
+				float pairScore = scorePair(pair, id);
+				if (id != null && pairScore > bestScore) {
+					bestScore = pairScore;
 					bestIdx = i;
 					bestId = id;
 				}
@@ -249,16 +280,16 @@ public final class GgufTokenizer implements Tokenizer {
 			}
 		}
 
-		// Prepend BOS token — but only if the text didn't already start with one.
+		// Prepend BOS when tokenizer.ggml.add_bos_token is true (default) and the
+		// encoded text does not already begin with bosId. Phi-3 sets add_bos_token
+		// false — prepending <s> shifts KV positions and causes garbage output.
 		// GPT-2 BPE chat templates (e.g. Llama 3) inject <|begin_of_text|> as the
 		// very first special token; prepending bosId again would produce a double-BOS
 		// sequence that causes the model to emit EOS immediately on the first turn.
-		// SentencePiece models never include BOS in the formatted text, so the guard
-		// is a no-op for them.
 		boolean startsWithBos = !syms.isEmpty() && syms.get(0).id == bosId;
-		int offset = startsWithBos ? 0 : 1;
+		int offset = (addBosToken && !startsWithBos) ? 1 : 0;
 		int[] result = new int[syms.size() + offset];
-		if (!startsWithBos)
+		if (addBosToken && !startsWithBos)
 			result[0] = bosId;
 		for (int i = 0; i < syms.size(); i++)
 			result[i + offset] = syms.get(i).id;
@@ -270,6 +301,15 @@ public final class GgufTokenizer implements Tokenizer {
 		evt.commit();
 
 		return result;
+	}
+
+	private float scorePair(String pair, Integer mergedId) {
+		Float mergeRank = gpt2MergePairScores.get(pair);
+		if (mergeRank != null)
+			return mergeRank;
+		if (mergedId != null && mergedId < scores.length)
+			return scores[mergedId];
+		return Float.NEGATIVE_INFINITY;
 	}
 
 	/**
@@ -285,6 +325,29 @@ public final class GgufTokenizer implements Tokenizer {
 	 * Example (Llama 3): {@code "<|begin_of_text|>hello<|eot_id|>"} →
 	 * {@code ["<|begin_of_text|>", "hello", "<|eot_id|>"]}
 	 */
+	private static boolean isQwenThinkingMarker(String piece) {
+		return "<think>".equals(piece) || "</think>".equals(piece);
+	}
+
+	/** Control / user-defined tokens emitted as a single vocab ID (not BPE-split). */
+	private static boolean isAtomicSpecialPiece(String piece) {
+		return (piece.startsWith("<|") && piece.endsWith("|>")) || isQwenThinkingMarker(piece);
+	}
+
+	private boolean isAtomicSpecialSegment(String segment, Integer id) {
+		if (id == null || id < 0 || id >= tokenTypes.length)
+			return false;
+		int t = tokenTypes[id];
+		return (t == 3 || t == 4) && isAtomicSpecialPiece(segment);
+	}
+
+	private static boolean isEogVocabPiece(String piece) {
+		return switch (piece) {
+		case "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>", "<|im_end|>" -> true;
+		default -> false;
+		};
+	}
+
 	private List<String> splitOnSpecialTokens(String text) {
 		if (sortedSpecialPieces.isEmpty())
 			return List.of(text);
@@ -318,19 +381,49 @@ public final class GgufTokenizer implements Tokenizer {
 	public String decode(int[] tokenIds) {
 		TokenizerEvent evt = new TokenizerEvent();
 		evt.begin();
-		StringBuilder sb = new StringBuilder();
-		for (int id : tokenIds)
-			sb.append(decodeToken(id));
-		// decodeToken() already replaced ▁ with space; just strip the leading space
-		// that the first token's ▁ prefix would have introduced.
-		String result = sb.toString();
-		result = result.startsWith(" ") ? result.substring(1) : result;
+		String result;
+		if (isGpt2Bpe) {
+			ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+			for (int id : tokenIds) {
+				String raw = vocabPieceForDecode(id);
+				if (!raw.isEmpty())
+					Gpt2ByteCodec.appendPieceBytes(raw, bytes);
+			}
+			result = Gpt2ByteCodec.decodeBytes(bytes.toByteArray());
+			if (result.startsWith(" "))
+				result = result.substring(1);
+		} else {
+			StringBuilder sb = new StringBuilder();
+			for (int id : tokenIds)
+				sb.append(decodeToken(id));
+			result = sb.toString();
+			result = result.startsWith(" ") ? result.substring(1) : result;
+		}
 		evt.tokenizerType = "gguf";
 		evt.operation = "decode";
 		evt.inputLength = tokenIds.length;
 		evt.outputLength = result.length();
 		evt.commit();
 		return result;
+	}
+
+	@Override
+	public StreamContext openStreamContext() {
+		if (!isGpt2Bpe)
+			return Tokenizer.super.openStreamContext();
+		Gpt2ByteCodec.Stream stream = new Gpt2ByteCodec.Stream();
+		return new StreamContext() {
+			@Override
+			public String append(int tokenId) {
+				String raw = vocabPieceForDecode(tokenId);
+				return raw.isEmpty() ? "" : stream.appendPiece(raw);
+			}
+
+			@Override
+			public String flush() {
+				return stream.flush();
+			}
+		};
 	}
 
 	@Override
@@ -341,23 +434,20 @@ public final class GgufTokenizer implements Tokenizer {
 		if (tokenId < 0 || tokenId >= vocab.length) {
 			piece = "";
 		} else {
-			// Skip BOS, EOS, and control tokens
-			int type = tokenId < tokenTypes.length ? tokenTypes[tokenId] : 1;
-			if (type == 3 /* control */ || tokenId == bosId || tokenId == eosId) {
+			String raw = vocabPieceForDecode(tokenId);
+			if (raw.isEmpty()) {
 				piece = "";
+			} else if (isGpt2Bpe) {
+				ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+				Gpt2ByteCodec.appendPieceBytes(raw, bytes);
+				piece = Gpt2ByteCodec.decodeBytes(bytes.toByteArray());
 			} else {
-				String raw = vocab[tokenId];
-				// Byte tokens like <0xHH> → actual byte
 				if (raw.matches("<0x[0-9A-Fa-f]{2}>")) {
 					int b = Integer.parseInt(raw.substring(3, 5), 16);
-					raw = new String(new byte[] { (byte) b }, java.nio.charset.StandardCharsets.UTF_8);
+					piece = new String(new byte[] { (byte) b }, StandardCharsets.UTF_8);
+				} else {
+					piece = raw.replace(SP, ' ').replace(GP, ' ').replace('Ċ', '\n');
 				}
-				// Replace SentencePiece space prefix (▁ U+2581) with a real space so that
-				// streaming callers (which receive one piece at a time) see correct whitespace.
-				// The full decode() path also does this replacement, but streaming builds
-				// fullText directly from decodeToken() pieces without going through decode().
-				// Ċ (U+010A) is GPT-2 BPE's representation of newline (\n).
-				piece = raw.replace(SP, ' ').replace(GP, ' ').replace('Ċ', '\n');
 			}
 		}
 		evt.tokenizerType = "gguf";
@@ -366,6 +456,21 @@ public final class GgufTokenizer implements Tokenizer {
 		evt.outputLength = piece.length();
 		evt.commit();
 		return piece;
+	}
+
+	/** Vocab piece for decode, or empty for silent control / think tokens. */
+	private String vocabPieceForDecode(int tokenId) {
+		if (tokenId < 0 || tokenId >= vocab.length)
+			return "";
+		int type = tokenId < tokenTypes.length ? tokenTypes[tokenId] : 1;
+		String raw = vocab[tokenId];
+		if (type == 3 && isEogVocabPiece(raw))
+			return raw;
+		if (type == 3 || tokenId == bosId || tokenId == eosId)
+			return "";
+		if (isQwenThinkingMarker(raw))
+			return "";
+		return raw;
 	}
 
 	@Override

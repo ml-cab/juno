@@ -80,7 +80,7 @@ increase `--lora-steps-qa` to drive loss lower.
 **Chat template must match.** The `[TRACE] model type (chat template key)` line at REPL startup
 shows which template was detected. The same key must appear at inference. If they differ, the
 model will not recall trained facts. Rename the model file to include the architecture keyword
-(`tinyllama`, `llama-3`, `mistral`, `gemma`). The `phi3` template is under development.
+(`tinyllama`, `llama-3`, `mistral`, `phi3`). Gemma and Qwen 2 / Qwen3 / Qwen3.5 paths are under development.
 
 ---
 

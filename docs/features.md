@@ -18,7 +18,7 @@ Two GPU backends are supported via Panama FFI (`java.lang.foreign.Linker` + `Sym
 
 **AMD (ROCm 6+ / rocBLAS):** `RocmBindings` resolves `libamdhip64.so` + `librocblas.so`; `RocmMatVec` provides the same three compute paths via `rocblas_sgemv` / `rocblas_hssgemv_strided_batched`. Tested on AMD Radeon RX 7900 XT (gfx1100, ROCm 7.2.x).
 
-Both backends implement `GpuMatVec` (sealed interface). Transformer handlers (`LlamaTransformerHandler`, `Phi3TransformerHandler` — under development, `LoraTrainableHandler`) depend on `GpuMatVec` — not a concrete vendor class — so device-resident weights are uploaded on any GPU.
+Both backends implement `GpuMatVec` (sealed interface). Transformer handlers (`LlamaTransformerHandler`, `Phi3TransformerHandler`, `Qwen3TransformerHandler`, `Qwen3MoeTransformerHandler`, `LoraTrainableHandler`) depend on `GpuMatVec` — not a concrete vendor class — so device-resident weights are uploaded on any GPU. Phi-3 is supported; Gemma and Qwen 2 / Qwen3 / Qwen3.5 inference paths are under development.
 
 Pass `--cpu` or `JUNO_USE_GPU=false` to force CPU quantised matmul. Cluster coordinators stay CPU-only while each node JVM owns its GPU context.
 

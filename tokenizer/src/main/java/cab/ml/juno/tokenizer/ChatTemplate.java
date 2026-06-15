@@ -163,7 +163,41 @@ public interface ChatTemplate {
 	}
 
 	/**
-	 * ChatML template — used by Qwen, OpenHermes, and as default fallback.
+	 * Qwen3 ChatML with {@code enable_thinking=false} — appends an empty closed
+	 * {@code <think>} block on every assistant turn so the model skips
+	 * chain-of-thought and replies directly (matches HuggingFace / llama.cpp Qwen3
+	 * template behaviour).
+	 */
+	static ChatTemplate qwen3() {
+		return new ChatTemplate() {
+			private static final String IM_END = "<|" + "im_end|>";
+			private static final String THINK_OPEN = "<think>";
+			private static final String THINK_CLOSE = "</think>";
+			/** enable_thinking=false — empty closed think block before assistant text. */
+			private static final String THINK_OFF = THINK_OPEN + "\n\n" + THINK_CLOSE + "\n\n";
+
+			@Override
+			public String format(List<ChatMessage> messages) {
+				StringBuilder sb = new StringBuilder();
+				for (ChatMessage msg : messages) {
+					sb.append("<|im_start|>").append(msg.role()).append("\n");
+					if (msg.isAssistant())
+						sb.append(THINK_OFF);
+					sb.append(msg.content()).append(IM_END).append("\n");
+				}
+				sb.append("<|im_start|>assistant\n").append(THINK_OFF);
+				return sb.toString();
+			}
+
+			@Override
+			public String modelType() {
+				return "qwen3";
+			}
+		};
+	}
+
+	/**
+	 * ChatML template — used by Qwen2, OpenHermes, and as default fallback.
 	 * <|im_start|>role\n{content}<|im_end|>\n
 	 */
 	static ChatTemplate chatml() {
@@ -226,10 +260,19 @@ public interface ChatTemplate {
 	// ── Registry ─────────────────────────────────────────────────────────────
 
 	/** All built-in templates keyed by modelType. */
-	Map<String, ChatTemplate> BUILT_IN = Map.of("llama3", llama3(), "mistral", mistral(), "gemma", gemma(), "chatml",
-			chatml(), "tinyllama", tinyllama(), "zephyr", tinyllama(), // same format, alternate lookup key
-			"phi3", phi3(), "phi-3", phi3() // hyphenated form used in raw file paths
-	);
+	Map<String, ChatTemplate> BUILT_IN = Map.ofEntries(
+			Map.entry("llama3", llama3()),
+			Map.entry("mistral", mistral()),
+			Map.entry("gemma", gemma()),
+			Map.entry("chatml", chatml()),
+			Map.entry("tinyllama", tinyllama()),
+			Map.entry("zephyr", tinyllama()),
+			Map.entry("phi3", phi3()),
+			Map.entry("phi-3", phi3()),
+			Map.entry("qwen", chatml()),
+			Map.entry("qwen2", chatml()),
+			Map.entry("qwen2.5", chatml()),
+			Map.entry("qwen3", qwen3()));
 
 	/**
 	 * Resolve a template by model type string. Falls back to ChatML for unknown

@@ -66,7 +66,7 @@ GGUF with LLaMA-compatible architectures.
 
 Quantizations: F32, F16, BF16, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K.
 
-Chat templates: `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml`. **`phi3` is under development** (experimental Phi-3 handler and template; not recommended for production yet).
+Chat templates: `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml`, `phi3`. **`phi3`** (Phi-3 / Phi-3.5) is supported via a dedicated handler and template. **Gemma**, **Qwen 2, Qwen3, and Qwen3.5** (`gemma`, `qwen2`, `qwen3`, `qwen3moe`, `qwen35`) are **under development** — template and handler groundwork exists for some paths; end-to-end validation is in progress. Limitations for work in flight: no LoRA on Gemma/Qwen, no thinking-mode template, no fused QKV GGUFs on Qwen.
 
 ---
 

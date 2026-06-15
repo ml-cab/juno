@@ -52,6 +52,19 @@ class ChatModelTypeTest {
 	}
 
 	@Test
+	@DisplayName("path containing qwen3 returns qwen3")
+	void qwen3() {
+		assertThat(ChatModelType.fromPath("/models/qwen3-4b-instruct-q4_k_m.gguf")).isEqualTo("qwen3");
+		assertThat(ChatModelType.fromPath("/models/Qwen3-30B-A3B-Q4_K_M.gguf")).isEqualTo("qwen3");
+	}
+
+	@Test
+	@DisplayName("path containing qwen (not qwen3) returns chatml")
+	void qwenLegacy() {
+		assertThat(ChatModelType.fromPath("/models/qwen2.5-3b-instruct-q4_k_m.gguf")).isEqualTo("chatml");
+	}
+
+	@Test
 	@DisplayName("unknown path returns chatml")
 	void unknownPath() {
 		assertThat(ChatModelType.fromPath("/models/foo.gguf")).isEqualTo("chatml");
