@@ -12,7 +12,7 @@ If you discover a security issue in Juno, please report it privately. Do not ope
 
 **Email:** [dev@ml.cab](mailto:dev@ml.cab?subject=Juno%20Security%20Report)
 
-**Discord:** [https://discord.gg/VaXKz9sE](https://discord.gg/VaXKz9sE)
+**Discord:** [https://discord.gg/vYSQhyssVH](https://discord.gg/vYSQhyssVH)
 
 Include:
 

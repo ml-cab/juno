@@ -956,19 +956,21 @@ setup() {
     --region "$REGION" \
     --query "GroupId" --output text)
 
-  local MY_IP
-  MY_IP=$(curl -sf https://checkip.amazonaws.com)
-
+  # SSH ingress must match the VPC CIDR, not the caller's public IP: juno-deploy.sh
+  # SSHes into nodes from the CI instance (finish/_gather_jfr_metrics, stop, teardown),
+  # and that traffic is intra-VPC, so security groups see the CI instance's *private*
+  # IP as the source, never its public IP. A /32 public-IP rule never matches and SSH
+  # from the CI box to the node times out (see docs/agent-arch.txt for the incident).
   aws ec2 authorize-security-group-ingress \
     --group-id "$SG_ID" --region "$REGION" \
     --ip-permissions \
-      "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${MY_IP}/32,Description=SSH}]" \
+      "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${VPC_CIDR},Description=SSH}]" \
       "IpProtocol=tcp,FromPort=${GRPC_PORT},ToPort=$(( GRPC_PORT + NODE_COUNT + 1 )),IpRanges=[{CidrIp=${VPC_CIDR},Description=Juno-gRPC-internal}]" \
       "IpProtocol=tcp,FromPort=${HTTP_PORT},ToPort=${HTTP_PORT},IpRanges=[{CidrIp=0.0.0.0/0,Description=Juno-REST}]" \
       "IpProtocol=tcp,FromPort=8081,ToPort=8081,IpRanges=[{CidrIp=${VPC_CIDR},Description=Juno-health-sidecar-internal}]" \
       "IpProtocol=tcp,FromPort=5701,ToPort=5701,IpRanges=[{CidrIp=${VPC_CIDR},Description=Hazelcast}]" \
       &>/dev/null
-  log "  OK Security group: $SG_ID  (SSH from ${MY_IP}, gRPC internal, REST public)"
+  log "  OK Security group: $SG_ID  (SSH internal (VPC), gRPC internal, REST public)"
 
   # ── Build bootstrap scripts ───────────────────────────────────
   # In separate mode the coordinator must be launched FIRST so its private IP
