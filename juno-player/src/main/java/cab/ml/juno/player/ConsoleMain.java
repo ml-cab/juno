@@ -16,7 +16,9 @@
 package cab.ml.juno.player;
 
 import java.io.BufferedReader;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -26,49 +28,42 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.MissingResourceException;
+import java.util.Properties;
 import java.util.Random;
 import java.util.logging.Logger;
 
-import jdk.jfr.Configuration;
-import jdk.jfr.Recording;
-import jdk.jfr.RecordingState;
-
-import cab.ml.juno.metrics.MetricsMain;
-
-import cab.ml.juno.coordinator.GenerationLoop;import cab.ml.juno.coordinator.GenerationResult;
-import cab.ml.juno.health.HealthMain;
-import cab.ml.juno.health.HealthReporter;
-import cab.ml.juno.health.HealthThresholds;
+import cab.ml.juno.coordinator.GenerationLoop;
+import cab.ml.juno.coordinator.GenerationResult;
 import cab.ml.juno.coordinator.InferenceRequest;
 import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.coordinator.TokenConsumer;
+import cab.ml.juno.health.HealthReporter;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
+import cab.ml.juno.lora.LoraAdamOptimizer;
+import cab.ml.juno.lora.LoraAdapterSet;
+import cab.ml.juno.metrics.MetricsMain;
 import cab.ml.juno.node.ActivationDtype;
 import cab.ml.juno.node.CudaAvailability;
-import cab.ml.juno.node.RocmAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
-import cab.ml.juno.node.CudaMatVec;
-import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
-
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
-import cab.ml.juno.lora.LoraAdamOptimizer;
-import cab.ml.juno.lora.LoraAdapterSet;
 import cab.ml.juno.node.LoraQvInitializer;
 import cab.ml.juno.node.LoraTrainableHandler;
 import cab.ml.juno.node.MatVec;
+import cab.ml.juno.node.RocmAvailability;
 import cab.ml.juno.node.ShardContext;
-import cab.ml.juno.registry.NodeDescriptor;
-import cab.ml.juno.registry.NodeStatus;
-import cab.ml.juno.registry.ParallelismType;
 import cab.ml.juno.registry.ModelDescriptor;
 import cab.ml.juno.registry.ModelRegistry;
 import cab.ml.juno.registry.ModelStatus;
+import cab.ml.juno.registry.NodeDescriptor;
+import cab.ml.juno.registry.NodeStatus;
+import cab.ml.juno.registry.ParallelismType;
 import cab.ml.juno.registry.QuantizationType;
 import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.registry.ShardMap;
@@ -77,6 +72,9 @@ import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.GgufTokenizer;
 import cab.ml.juno.tokenizer.Tokenizer;
+import jdk.jfr.Configuration;
+import jdk.jfr.Recording;
+import jdk.jfr.RecordingState;
 
 /**
  * Interactive REPL that runs a model using the Juno engine.
@@ -116,43 +114,43 @@ public final class ConsoleMain {
 			}
 		}
 	}
-
+	private static JunoProperties props = new JunoProperties(JunoProperties.loadProperties());
 	// ── Standard arguments ────────────────────────────────────────────────────
-	private static String modelPath = null;
-	private static ActivationDtype dtype = ActivationDtype.FLOAT16;
-	private static int maxTokens = 200;
-	private static float temperature = 0.7f;
-	private static int topK = 50;
-	private static float topP = 0.9f;
-	private static boolean localMode = false;
-	private static int nodeCount = 3;
-	private static boolean verbose = false;
+	private static String modelPath = props.getProperty("model.path");
+	private static ActivationDtype dtype = props.getDType();
+	private static int maxTokens = props.getInt("inference.max_tokens");
+	private static float temperature = props.getFloat("inference.temperature");
+	private static int topK = props.getInt("inference.top_k");
+	private static float topP = props.getFloat("inference.top_p");
+	private static boolean localMode = "local".equals(props.getProperty("mode"));
+	private static int nodeCount = props.getInt("cluster.nodes");
+	private static boolean verbose = props.getBoolean("verbose");
 	private static boolean help = false;
-	private static ParallelismType pType = ParallelismType.PIPELINE;
-	private static String jfrDuration = null;
+	private static ParallelismType pType = props.getPType();
+	private static String jfrDuration = props.getProperty("jfr.duration");
 	// ── Health server flag ────────────────────────────────────────────────────
 	/** When true, start a health sidecar alongside the normal run mode. */
-	private static boolean healthMode = false;
-	private static int healthPort = cab.ml.juno.health.HealthMain.DEFAULT_PORT;
+	private static boolean healthMode = props.getBoolean("health.enabled");
+	private static int healthPort = props.getInt("health.port");
 	/** Active reporters — wired from runLocalRepl(); used to record per-inference latency. */
 	private static final java.util.List<HealthReporter> activeReporters = new java.util.ArrayList<>();
 	/** Optional local REST API port (OpenAI-compatible endpoint included). */
-	private static int apiPort = -1;
+	private static int apiPort = props.getInt("api.http.port");
 	// ── Byte-order argument ───────────────────────────────────────────────────
 	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
-	private static String byteOrder = "BE";
+	private static String byteOrder = props.getProperty("cluster.byte_order");
 	// ── GPU arguments ─────────────────────────────────────────────────────────
-	private static boolean useGpu = true; // use CPU
+	private static boolean useGpu = props.getBoolean("compute.use_gpu");
 	// ── LoRA arguments ────────────────────────────────────────────────────────
-	private static boolean loraMode = false;
+	private static boolean loraMode = "lora".equals(props.getProperty("mode"));
 	private static String loraPath = null; // auto-derived if null
 	private static String loraPlayPath = null; // --lora-play: apply .lora at inference in non-lora modes
-	private static int loraRank = 8;
-	private static float loraAlpha = -1f; // sentinel: default to loraRank
-	private static double loraLr = 1e-4;
-	private static int loraSteps = 50; // steps per chunk for /train
-	private static int loraStepsQa = 10; // steps per chunk for /train-qa
-	private static float loraEarlyStop = 0.25f; // stop training when loss drops below this
+	private static int loraRank = props.getInt("lora.rank");
+	private static float loraAlpha = props.getFloat("lora.alpha"); // sentinel: default to loraRank
+	private static double loraLr = props.getDouble("lora.lr");
+	private static int loraSteps = props.getInt("lora.steps"); // steps per chunk for /train
+	private static int loraStepsQa = props.getInt("lora.steps_qa"); // steps per chunk for /train-qa
+	private static float loraEarlyStop = props.getFloat("lora.early_stop"); // stop training when loss drops below this
 
 	private static SamplingParams samplingParamsFromCli() {
 		SamplingParams params = SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(temperature)

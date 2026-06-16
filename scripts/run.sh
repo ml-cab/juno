@@ -254,8 +254,7 @@ cmd_cluster() {
     esac
   done
 
-  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 cluster --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 cluster"
-  [[ -f "$model" ]] || err "Model file not found: $model"
+  [[ -z "$model" || -f "$model" ]] || err "Model file not found: $model"
 
   require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
@@ -289,6 +288,8 @@ cmd_cluster() {
   fi
   local api_port_arg=""
   [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
+  local model_arg=""
+  [[ -n "$model" ]] && model_arg="--model-path $model"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -297,7 +298,7 @@ cmd_cluster() {
     "-Djuno.node.heap=${heap}" \
     "-Djuno.byteOrder=${byte_order}" \
     -jar "$JUNO_PLAYER_JAR" \
-    --model-path "$model" \
+    ${model_arg} \
     --dtype "$dtype" \
     --byteOrder "$byte_order" \
     --max-tokens "$max_tokens" \
@@ -413,8 +414,7 @@ cmd_local() {
     esac
   done
 
-  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 local --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 local"
-  [[ -f "$model" ]] || err "Model file not found: $model"
+  [[ -z "$model" || -f "$model" ]] || err "Model file not found: $model"
 
   require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
@@ -445,6 +445,8 @@ cmd_local() {
   fi
   local api_port_arg=""
   [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
+  local model_arg=""
+  [[ -n "$model" ]] && model_arg="--model-path $model"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -452,7 +454,7 @@ cmd_local() {
     -Xms512m "-Xmx${heap}" \
     "-Djuno.byteOrder=${byte_order}" \
     -jar "$JUNO_PLAYER_JAR" \
-    --model-path "$model" \
+    ${model_arg} \
     --dtype "$dtype" \
     --byteOrder "$byte_order" \
     --max-tokens "$max_tokens" \
@@ -593,8 +595,7 @@ cmd_lora() {
     esac
   done
 
-  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 lora --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 lora"
-  [[ -f "$model" ]] || err "Model file not found: $model"
+  [[ -z "$model" || -f "$model" ]] || err "Model file not found: $model"
 
   require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
