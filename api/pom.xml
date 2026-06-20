@@ -7,7 +7,7 @@
 	<parent>
 		<groupId>cab.ml</groupId>
 		<artifactId>juno</artifactId>
-		<version>0.1.0-RC</version>
+		<version>0.1.0</version>
 	</parent>
 
 	<artifactId>api</artifactId>
@@ -51,13 +51,11 @@
 			<artifactId>protobuf-java</artifactId>
 		</dependency>
 		<!-- jakarta.annotation — @Generated used in generated models -->
-
 		<dependency>
 			<groupId>jakarta.annotation</groupId>
 			<artifactId>jakarta.annotation-api</artifactId>
 			<version>2.1.1</version>
 		</dependency>
-
 		<!-- swagger-annotations — @ApiModel @ApiModelProperty -->
 		<dependency>
 			<groupId>io.swagger</groupId>

@@ -5,7 +5,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>cab.ml</groupId>
 	<artifactId>juno</artifactId>
-	<version>0.1.0-RC</version>
+	<version>0.1.0</version>
 	<packaging>pom</packaging>
 	<name>Java Unified Neural Orchestration</name>
 	<description>Java Unified Neural Orchestration (Juno) -- distributed LLM
@@ -32,7 +32,7 @@
 		<connection>scm:git:https://github.com/ml-cab/juno.git</connection>
 		<developerConnection>scm:git:git@github.com:ml-cab/juno.git</developerConnection>
 		<url>https://github.com/ml-cab/juno</url>
-		<tag>v0.1.0-RC</tag>
+		<tag>v0.1.0</tag>
 	</scm>
 
 	<modules>
