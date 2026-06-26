@@ -58,15 +58,9 @@ their contributions but no longer have write access.
 ---
 
 ## Releases
-
-Releases are tagged on the `main` branch by a maintainer. The release process is:
-
-1. Update CHANGELOG.md and RELEASE_NOTES.md.
-2. Confirm all tests pass on CI.
-3. Tag the commit with `vMAJOR.MINOR.PATCH`.
-4. Publish to Maven Central via the `scripts/release/` workflow.
-5. Post a release announcement to the project Discord.
-
+ 
+The full release and branching workflow is documented in [contributing.md](contributing.md).
+ 
 ---
 
 ## Code of Conduct
