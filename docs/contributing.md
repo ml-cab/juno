@@ -28,7 +28,7 @@ git pull origin release-0.1.1
 
 ### 2. Create a feature branch
 
-Branch names follow the pattern `NNN-short-description`, where `NNN` is the issue number from the tracker.
+Branch names follow the pattern `NNN-short-description`, where `NNN` is the issue number from the [project tracker](https://github.com/orgs/ml-cab/projects/1/views/1).
 
 ```bash
 git checkout -b 43-fix-windows-startup release-0.1.1
@@ -44,7 +44,7 @@ git push origin 43-fix-windows-startup
 
 ### 4. Open a merge request
 
-Open an MR from `43-fix-windows-startup` into the active release branch (e.g. `release-0.1.1`) via the Git UI.
+Open an MR from `43-fix-windows-startup` into the active release branch (e.g. `release-0.1.1`) via the [branch comparison page](https://github.com/ml-cab/juno/compare) — click the green `Create pull request` button after selecting branches.
 
 - The feature must be reviewed by at least one maintainer.
 - The feature branch is squash-merged (preserving the issue number) and then deleted.
@@ -57,7 +57,7 @@ Releases are cut from the release branch into `main` by a maintainer.
 
 ### Step 1. Merge the release branch into `main`
 
-Open an MR from `release-0.1.0` into `main` via the Git UI. After review, merge and run a smoke test.
+Open an MR from `release-0.1.0` into `main` via the [branch comparison page](https://github.com/ml-cab/juno/compare). After review, merge and run a smoke test.
 
 ### Step 2. Publish to Maven Central
 
