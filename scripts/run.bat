@@ -8,11 +8,20 @@ rem Requires: JDK 25+   Mirrors: scripts/run.sh
 
 rem Step up from scripts\ to project root
 set "DIR=%~dp0"
+echo [DBG] DIR raw dp0: !DIR!
 if "%DIR:~-1%"=="\" set "DIR=%DIR:~0,-1%"
+echo [DBG] DIR after strip trailing backslash: !DIR!
 for %%I in ("%DIR%\..") do set "DIR=%%~fI"
+echo [DBG] DIR resolved to project root: !DIR!
 
-set "JUNO_PLAYER_JAR=%DIR%\juno-player\target\juno-player.jar"
-set "LIVE_JAR=%DIR%\juno-master\target\juno-master.jar"
+rem Read project version from root pom.xml
+set "JUNO_VERSION="
+for /f "usebackq tokens=3 delims=<>" %%V in (`findstr /r "<version>[0-9]" "%DIR%\pom.xml"`) do if not defined JUNO_VERSION set "JUNO_VERSION=%%V"
+if "%JUNO_VERSION%"=="" set "JUNO_VERSION=0.1.0"
+set "JUNO_PLAYER_JAR=%DIR%\juno-player\target\juno-player-%JUNO_VERSION%-shaded.jar"
+set "LIVE_JAR=%DIR%\juno-master\target\juno-master-%JUNO_VERSION%.jar"
+echo [DBG] JUNO_PLAYER_JAR=!JUNO_PLAYER_JAR!
+echo [DBG] LIVE_JAR=!LIVE_JAR!
 
 rem UTF-8 codepage + ANSI VTP for colours
 chcp 65001 >nul 2>&1
@@ -22,17 +31,19 @@ call :find_java
 if errorlevel 1 exit /b 1
 
 call :check_java_version
+echo [DBG] back from check_java_version errorlevel=!ERRORLEVEL!
 if errorlevel 1 exit /b 1
-
+echo [DBG] past errorlevel check
 set "JVM_BASE=--enable-preview --enable-native-access=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED -XX:+UseG1GC -XX:+AlwaysPreTouch -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"
-
-rem Dispatch: peek at %~1 without consuming it.
-rem Only shift if it is a known subcommand, otherwise fall into cluster as-is.
+echo [DBG] JVM_BASE set
+echo [DBG] arg1=%~1
 if "%~1"=="" goto :usage
+echo [DBG] dispatching subcommand
 if /i "%~1"=="cluster" ( shift & goto :cluster )
 if /i "%~1"=="local"   ( shift & goto :local )
 if /i "%~1"=="lora"    ( shift & goto :lora )
 if /i "%~1"=="test"    ( shift & goto :test )
+echo [DBG] no subcommand matched falling to cluster
 goto :cluster
 
 rem ============================================================================
@@ -122,7 +133,7 @@ if /i "%~1"=="--help" (
   echo   --verbose / -v
   goto :eof
 )
-if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :cluster_parse )
+if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :cluster_parse )
 echo [ERR] Unknown cluster flag: %~1
 echo       Run: run.bat cluster --help
 exit /b 1
@@ -228,7 +239,7 @@ if /i "%~1"=="--help" (
   echo   --verbose / -v
   goto :eof
 )
-if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :local_parse )
+if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :local_parse )
 echo [ERR] Unknown local flag: %~1
 echo       Run: run.bat local --help
 exit /b 1
@@ -362,7 +373,7 @@ if /i "%~1"=="--help" (
   echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat lora
   goto :eof
 )
-if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :lora_parse )
+if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :lora_parse )
 echo [ERR] Unknown lora flag: %~1
 echo       Run: run.bat lora --help
 exit /b 1
@@ -395,13 +406,13 @@ set "LORA_PATH_FLAG="
 if not "%LORA_PATH_VAL%"=="" set "LORA_PATH_FLAG=--lora-path %LORA_PATH_VAL%"
 
 set "JFR_FLAG_LORA="
-if not "%JFR_DURATION_LORA%"=="" (
-  for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
-  set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
-  set "JFR_FLAG_LORA=-XX:StartFlightRecording=duration=%JFR_DURATION_LORA%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
-  echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  output=juno-!JFR_TS!.jfr
-  echo [WARN] After exit: open juno-!JFR_TS!.jfr in JDK Mission Control -^> Event Browser -^> juno.LoraTrainStep
-)
+if "%JFR_DURATION_LORA%"=="" goto :lora_jfr_skip
+for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
+set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
+set "JFR_FLAG_LORA=-XX:StartFlightRecording=duration=%JFR_DURATION_LORA%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
+echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  output=juno-!JFR_TS!.jfr
+echo [WARN] After exit: open juno-!JFR_TS!.jfr in JDK Mission Control -^> Event Browser -^> juno.LoraTrainStep
+:lora_jfr_skip
 
 call :prepend_cuda_path
 
@@ -449,7 +460,7 @@ if /i "%~1"=="--help" (
   echo                                  Records from start, writes juno-^<timestamp^>.jfr on exit
   goto :eof
 )
-if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :test_parse )
+if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :test_parse )
 echo [ERR] Unknown test flag: %~1
 echo       Run: run.bat test --help
 exit /b 1
@@ -468,12 +479,12 @@ echo [INFO] Running ModelLiveRunner  (pType=%PTYPE%  heap=%HEAP%)
 echo.
 
 set "JFR_FLAG_TEST="
-if not "%JFR_DURATION_TEST%"=="" (
-  for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
-  set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
-  set "JFR_FLAG_TEST=-XX:StartFlightRecording=duration=%JFR_DURATION_TEST%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
-  echo [WARN] JFR enabled -- duration=%JFR_DURATION_TEST%  output=juno-!JFR_TS!.jfr
-)
+if "%JFR_DURATION_TEST%"=="" goto :test_jfr_skip
+for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
+set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
+set "JFR_FLAG_TEST=-XX:StartFlightRecording=duration=%JFR_DURATION_TEST%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
+echo [WARN] JFR enabled -- duration=%JFR_DURATION_TEST%  output=juno-!JFR_TS!.jfr
+:test_jfr_skip
 
 "%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-DpType=%PTYPE%" "-Djuno.node.heap=%HEAP%" %JFR_FLAG_TEST% -jar "%LIVE_JAR%" "%MODEL%"
 goto :eof
@@ -512,15 +523,18 @@ rem  Helpers
 rem ============================================================================
 
 :find_java
-if not "%JAVA_HOME%"=="" (
-  if exist "%JAVA_HOME%\bin\java.exe" (
-    set "JAVA=%JAVA_HOME%\bin\java.exe"
-    exit /b 0
-  )
-)
+echo [DBG] find_java: JAVA_HOME=!JAVA_HOME!
+if "%JAVA_HOME%"=="" goto :find_java_where
+echo [DBG] checking JAVA_HOME path: !JAVA_HOME!\bin\java.exe
+if not exist "%JAVA_HOME%\bin\java.exe" goto :find_java_where
+set "JAVA=%JAVA_HOME%\bin\java.exe"
+echo [DBG] found via JAVA_HOME: !JAVA!
+exit /b 0
+:find_java_where
 for /f "usebackq tokens=* delims=" %%J in (`where java 2^>nul`) do (
   if not defined JAVA set "JAVA=%%J"
 )
+echo [DBG] JAVA after where: !JAVA!
 if not defined JAVA (
   echo [ERR] JDK not found. Install from https://adoptium.net and set JAVA_HOME.
   exit /b 1
@@ -528,23 +542,30 @@ if not defined JAVA (
 exit /b 0
 
 :check_java_version
+echo [DBG] check_java_version: JAVA=!JAVA!
 set "JAVAVER_RAW="
-for /f "usebackq tokens=3 delims= " %%V in (`"%JAVA%" -version 2^>^&1 ^| findstr /i "version"`) do (
-  if not defined JAVAVER_RAW set "JAVAVER_RAW=%%V"
-)
-if not defined JAVAVER_RAW (
-  echo [WARN] Unable to determine Java version. Continuing.
-  exit /b 0
-)
+set "_JVER_OUT=%TEMP%\juno_jver_%RANDOM%.txt"
+echo [DBG] version output temp file: !_JVER_OUT!
+"%JAVA%" -version 2>"%_JVER_OUT%"
+echo [DBG] java -version exit code: !ERRORLEVEL!
+for /f "usebackq tokens=3 delims= " %%V in ("%_JVER_OUT%") do if not defined JAVAVER_RAW set "JAVAVER_RAW=%%V"
+del /f /q "%_JVER_OUT%" >nul 2>&1
+echo [DBG] JAVAVER_RAW=!JAVAVER_RAW!
+if not defined JAVAVER_RAW goto :java_ver_unknown
 set "JAVAVER=%JAVAVER_RAW:"=%"
 set "JAVAMAJOR="
 for /f "tokens=1 delims=." %%M in ("%JAVAVER%") do set "JAVAMAJOR=%%M"
-if "%JAVAMAJOR%"=="" ( echo [WARN] Unable to parse Java version. Continuing. & exit /b 0 )
-if %JAVAMAJOR% LSS 25 (
-  echo [ERR] JDK 25+ required (found: %JAVAVER%).
-  exit /b 1
-)
+echo [DBG] JAVAVER=!JAVAVER! JAVAMAJOR=!JAVAMAJOR!
+if "%JAVAMAJOR%"=="" goto :java_ver_unknown
+if %JAVAMAJOR% LSS 25 goto :java_ver_old
+echo [DBG] Java version OK
 exit /b 0
+:java_ver_unknown
+echo [WARN] Unable to determine Java version. Continuing.
+exit /b 0
+:java_ver_old
+echo [ERR] JDK 25+ required.
+exit /b 1
 
 :require_jar
 if not exist %1 (
