@@ -2,11 +2,19 @@
 
 **Documentation map:** [README.md](../README.md) (overview), [arch.md](arch.md), [LoRA.md](LoRA.md), [performance.md](performance.md), [legal.md](legal.md), [juno_test_matrix.html](https://ml.cab/juno_test_matrix.html), [features.md](features.md).
 
+**Linux / macOS:**
 ```
 ./juno
 ```
 
-Unified stand-alone launcher at the project root. Requires JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
+**Windows:**
+```
+juno.bat
+```
+
+Unified stand-alone launchers at the project root. `juno.bat` delegates to `scripts\run.bat`. Requires JDK 25+ and pre-built jars (`mvn clean package -DskipTests`).
+
+> **Windows note:** All examples below use `./juno`. Replace with `juno.bat` on Windows and use backslashes for paths (e.g. `--model-path models\model.gguf`). All flags, environment variables, and subcommands are identical across platforms.
 
 ---
 
@@ -96,6 +104,21 @@ LORA_PLAY_PATH=/path/to/model.lora MODEL_PATH=/path/to/model.gguf ./juno local
 ./juno local --model-path /path/to/model.gguf --verbose
 ```
 
+**Windows (Command Prompt):**
+```bat
+juno.bat local --model-path models\tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+
+juno.bat local --model-path models\model.gguf --api-port 8080
+
+juno.bat local --model-path models\model.gguf --lora-play adapters\model.lora
+
+rem Via environment variable
+set MODEL_PATH=C:\models\model.gguf
+juno.bat local
+
+juno.bat local --model-path models\model.gguf --jfr 5m
+```
+
 When `--lora-play` is given, the startup banner shows:
 
 ```
@@ -151,6 +174,26 @@ MODEL_PATH=/path/to/model.gguf PTYPE=tensor ./juno
 ./juno --model-path /path/to/model.gguf --verbose
 ```
 
+**Windows (Command Prompt):**
+```bat
+juno.bat --model-path models\model.gguf
+
+juno.bat --model-path models\model.gguf --api-port 8080
+
+juno.bat --pType tensor --model-path models\model.gguf
+
+rem Via environment variable
+set MODEL_PATH=C:\models\model.gguf
+set PTYPE=tensor
+juno.bat
+
+juno.bat --model-path models\model.gguf --jfr 5m
+
+juno.bat --model-path models\model.gguf --lora-play adapters\model.lora
+
+juno.bat --model-path models\model.gguf --max-tokens 512 --temperature 0.3
+```
+
 When `--lora-play` is given, `ClusterHarness.withLoraPlay(path)` injects
 `-Djuno.lora.play.path=PATH` into every forked node JVM. Each node loads the adapter before
 building its `ForwardPassHandler`.
@@ -167,6 +210,13 @@ building its `ForwardPassHandler`.
 ./juno lora --model-path /path/to/model.gguf --verbose
 ```
 
+**Windows (Command Prompt):**
+```bat
+juno.bat lora --model-path models\TinyLlama.Q4_K_M.gguf
+
+juno.bat lora --model-path models\model.gguf --verbose
+```
+
 For a full LoRA training guide, REPL commands, rank selection, and common pitfalls see
 [LoRA.md](LoRA.md).
 
@@ -180,12 +230,23 @@ For a full LoRA training guide, REPL commands, rank selection, and common pitfal
 ./juno --model-path /path/to/model.gguf --lora-play /path/to/model.lora
 ```
 
+**Windows:**
+```bat
+juno.bat local --model-path models\model.gguf --lora-play adapters\model.lora
+juno.bat --model-path models\model.gguf --lora-play adapters\model.lora
+```
+
 **Profiling a slow training step:**
 
 ```bash
 ./juno lora --model-path /path/to/model.gguf --jfr 5m
 # After exit, open juno-<modelStem>-<timestamp>.jfr in JDK Mission Control
 # Event Browser -> juno.LoraTrainStep: forwardMs / backwardMs / optimizerMs / loss
+```
+
+**Windows:**
+```bat
+juno.bat lora --model-path models\model.gguf --jfr 5m
 ```
 
 ---
@@ -207,6 +268,17 @@ encoding. The resulting file loads with `./juno local` or `./juno` like any othe
 
 # Larger heap for big models (rule of thumb: 2x model file size)
 ./juno merge --model-path /path/to/Mistral-7B.gguf --heap 12g
+```
+
+**Windows (Command Prompt):**
+```bat
+juno.bat merge --model-path models\TinyLlama.Q4_K_M.gguf
+
+juno.bat merge --model-path models\model.gguf ^
+               --lora-path adapters\my.lora ^
+               --output merged\merged.gguf
+
+juno.bat merge --model-path models\Mistral-7B.gguf --heap 12g
 ```
 
 The LoRA delta per element (~6x10^-4) is smaller than Q4_K quantization noise (~3x10^-3).
@@ -626,6 +698,19 @@ mvn verify -pl juno-master -Pintegration -Dmodels=/path/to/models
 ./juno test --model-path /path/to/model.gguf   # real-model smoke test (8 checks, exits 0/1)
 ```
 
+**Windows (Command Prompt):**
+```bat
+mvn clean package -DskipTests
+
+mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
+
+mvn verify -pl juno-master
+
+mvn verify -pl juno-master -Pintegration -Dmodels=C:\models
+
+juno.bat test --model-path models\model.gguf
+```
+
 **GPU tests** (NVIDIA — requires CUDA 12.x and an NVIDIA GPU):
 
 ```bash
@@ -635,8 +720,18 @@ mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl juno-master \
   --enable-native-access=ALL-UNNAMED
 ```
 
+**Windows (NVIDIA GPU tests):**
+```bat
+mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED
+
+mvn verify -Pgpu -Dit.model.path=C:\models\model.gguf -pl juno-master ^
+  --enable-native-access=ALL-UNNAMED
+```
+
 **GPU tests** (AMD — requires ROCm 6+ and an AMD GPU):
 
 ```bash
 mvn test -Dgroups=rocm -pl node --enable-native-access=ALL-UNNAMED
 ```
+
+> **Note:** ROCm is Linux-only. AMD GPU tests are not supported on Windows.

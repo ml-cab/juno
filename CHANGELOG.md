@@ -1,5 +1,32 @@
 ## Status
 
+**Session 34** — Windows launcher fixed: `run.bat` and `juno.bat` fully functional on Windows.
+
+### Windows launcher (`scripts/run.bat`, `juno.bat`)
+
+All subcommands (`cluster`, `local`, `lora`, `merge`, `test`) and flags are now working on Windows.
+
+**Root cause fixes:**
+
+- **JAR name mismatch.** `run.bat` referenced `juno-player.jar` and `juno-master.jar` — names that Maven never produces. The actual artifacts are `juno-player-<version>-shaded.jar` and `juno-master-<version>.jar`. Fixed by reading the project version from `pom.xml` at startup using `findstr` and constructing the correct paths dynamically.
+
+- **Java version detection hang.** CMD cannot redirect `stderr` in a pipeline (`2>&1`) reliably inside a `for /f` loop when delayed expansion is active. `java -version` writes to stderr and the output was silently lost, leaving `JAVAVER_RAW` undefined. Fixed by capturing `java -version 2> tmpfile` to a temp file and reading the file with `for /f`.
+
+- **`find_java` nested-if failure.** Nested `if ... (if ... (...))` blocks are not reliable in CMD with `setlocal enabledelayedexpansion`. Replaced with a flat goto-based structure (`find_java_where` label).
+
+- **Infinite loop on empty argument.** In argument-parsing loops, `if exist "%~1"` on an empty `%~1` expands to `if exist ""` which matches the current directory (always true), causing an infinite loop. Fixed by guarding with `if not "%~1"==""` before the `if exist` check in the `cluster`, `local`, `lora`, and `test` parsers.
+
+- **JFR block inside `if not ... (for ...)` silently skipped.** CMD does not support a `for` command inside an `if` parenthesized block when delayed expansion is on. Replaced with a goto-based pattern (`lora_jfr_skip` / `test_jfr_skip` labels).
+
+**Documentation updated:**
+
+- `README.md` — Windows launcher note in section 2.2, Windows requirements paragraph, `juno.bat` references for `merge`.
+- `docs/howto.md` — Windows note at top; Windows command-prompt examples added to every subcommand section (`local`, `cluster`, `lora`, `merge`) and Build and Test.
+
+---
+
+## Status
+
 **Session 33** — Model support documentation: Phi-3 supported; Gemma, Qwen 2 / Qwen3 / Qwen3.5 under development.
 
 ### Supported model status (docs)
@@ -463,7 +490,9 @@ Confirmed working on 3 × m7i-flex.large AWS cluster (eu-north-1) with TinyLlama
 
 ---
 
-**Session 25** — Code quality, dead code removed, docs updated. *(unchanged)*
+**Session 34** — Windows launcher fixed: `run.bat`/`juno.bat` fully functional; docs updated with Windows examples. *(this session)*
+
+**Session 33** — Model support documentation: Phi-3 supported; Gemma, Qwen 2 / Qwen3 / Qwen3.5 under development. *(unchanged)*
 
 **Session 24** — Configurable activation byte order (`--byteOrder BE|LE`). *(unchanged)*
 

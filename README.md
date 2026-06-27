@@ -125,15 +125,21 @@ wget https://huggingface.co/.../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
 
 then run local Juno interactive console to try and train inference
 
+**Linux / macOS:**
 ```
 ./juno local --model-path models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
 ```
 
-`**--model-path**` is relative for juno project dir. REST alongside REPL: add `**--api-port 8080**`. 
+**Windows:**
+```
+juno.bat local --model-path models\tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+```
 
-Training: `./juno lora --model-path ...` (see **[docs/LoRA.md](docs/LoRA.md)**).
+`--model-path` is relative to the juno project dir. REST alongside REPL: add `--api-port 8080`.
 
-Optional `**./juno merge`** bakes a trained `.lora` into a new GGUF, so that inference needs no sidecar adapter 
+Training: `./juno lora --model-path ...` on Linux/macOS, `juno.bat lora --model-path ...` on Windows (see **[docs/LoRA.md](docs/LoRA.md)**).
+
+Optional `./juno merge` (or `juno.bat merge` on Windows) bakes a trained `.lora` into a new GGUF, so that inference needs no sidecar adapter.
 
 More at **[howto.md](docs/howto.md)**.
 
@@ -162,6 +168,8 @@ Backend is auto-selected at startup: CUDA first, then ROCm, then CPU. Override w
 ## Requirements
 
 JDK 25+, Maven 3.9+. GPU nodes: CUDA 12.x + NVIDIA driver **or** ROCm 6+ + AMD driver (optional — CPU-only inference requires neither).
+
+**Windows:** `juno.bat` at the project root delegates to `scripts\run.bat`. Requires JDK 25+ on `PATH` or `JAVA_HOME` set. CUDA GPU acceleration is supported (NVIDIA only — ROCm is Linux-only). All flags and environment overrides documented in [docs/howto.md](docs/howto.md) apply equally on Windows.
 
 ## Supported models
 
