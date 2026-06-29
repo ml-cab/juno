@@ -158,6 +158,7 @@ Backend is auto-selected at startup: CUDA first, then ROCm, then CPU. Override w
 
 ## 4. Useful refs
 
+- Contributing and release workflow: **[docs/contributing.md](docs/contributing.md)**
 - Release notes: **[RELEASE_NOTES.md](RELEASE_NOTES.md)**
 - Security: **[SECURITY.md](SECURITY.md)**
 - Performance matrix: **[docs/juno_test_matrix.html](https://ml.cab/juno_test_matrix.html)** - methodology companion **[docs/performance.md](docs/performance.md)**

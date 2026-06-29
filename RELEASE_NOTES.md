@@ -1,4 +1,4 @@
-# Juno 0.1.0 — Release Notes
+# Juno 0.1.1 — Release Notes
 
 **Java Unified Neural Orchestration** — distributed LLM inference and fine-tuning in pure Java.
 
