@@ -29,46 +29,39 @@ import java.util.List;
 import java.util.Random;
 import java.util.logging.Logger;
 
-import jdk.jfr.Configuration;
-import jdk.jfr.Recording;
-import jdk.jfr.RecordingState;
+import cab.ml.juno.coordinator.GenerationLoop;
 
-import cab.ml.juno.metrics.MetricsMain;
-
-import cab.ml.juno.coordinator.GenerationLoop;import cab.ml.juno.coordinator.GenerationResult;
-import cab.ml.juno.health.HealthMain;
-import cab.ml.juno.health.HealthReporter;
-import cab.ml.juno.health.HealthThresholds;
+import cab.ml.juno.coordinator.GenerationResult;
 import cab.ml.juno.coordinator.InferenceRequest;
 import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.coordinator.TokenConsumer;
+import cab.ml.juno.health.HealthReporter;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
+import cab.ml.juno.lora.LoraAdamOptimizer;
+import cab.ml.juno.lora.LoraAdapterSet;
+import cab.ml.juno.metrics.MetricsMain;
 import cab.ml.juno.node.ActivationDtype;
 import cab.ml.juno.node.CudaAvailability;
-import cab.ml.juno.node.RocmAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
-import cab.ml.juno.node.CudaMatVec;
-import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
 
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
-import cab.ml.juno.lora.LoraAdamOptimizer;
-import cab.ml.juno.lora.LoraAdapterSet;
 import cab.ml.juno.node.LoraQvInitializer;
 import cab.ml.juno.node.LoraTrainableHandler;
 import cab.ml.juno.node.MatVec;
+import cab.ml.juno.node.RocmAvailability;
 import cab.ml.juno.node.ShardContext;
-import cab.ml.juno.registry.NodeDescriptor;
-import cab.ml.juno.registry.NodeStatus;
-import cab.ml.juno.registry.ParallelismType;
 import cab.ml.juno.registry.ModelDescriptor;
 import cab.ml.juno.registry.ModelRegistry;
 import cab.ml.juno.registry.ModelStatus;
+import cab.ml.juno.registry.NodeDescriptor;
+import cab.ml.juno.registry.NodeStatus;
+import cab.ml.juno.registry.ParallelismType;
 import cab.ml.juno.registry.QuantizationType;
 import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.registry.ShardMap;
@@ -77,6 +70,10 @@ import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.GgufTokenizer;
 import cab.ml.juno.tokenizer.Tokenizer;
+import cab.ml.juno.vision.LlavaHandlerFactory;
+import jdk.jfr.Configuration;
+import jdk.jfr.Recording;
+import jdk.jfr.RecordingState;
 
 /**
  * Interactive REPL that runs a model using the Juno engine.
@@ -134,7 +131,10 @@ public final class ConsoleMain {
 	/** When true, start a health sidecar alongside the normal run mode. */
 	private static boolean healthMode = false;
 	private static int healthPort = cab.ml.juno.health.HealthMain.DEFAULT_PORT;
-	/** Active reporters — wired from runLocalRepl(); used to record per-inference latency. */
+	/**
+	 * Active reporters — wired from runLocalRepl(); used to record per-inference
+	 * latency.
+	 */
 	private static final java.util.List<HealthReporter> activeReporters = new java.util.ArrayList<>();
 	/** Optional local REST API port (OpenAI-compatible endpoint included). */
 	private static int apiPort = -1;
@@ -170,8 +170,7 @@ public final class ConsoleMain {
 
 		// ── Health sidecar — start in background then continue normally ──────
 		if (healthMode) {
-			cab.ml.juno.health.HealthMain.startBackground(
-				healthPort, cab.ml.juno.health.HealthThresholds.defaults());
+			cab.ml.juno.health.HealthMain.startBackground(healthPort, cab.ml.juno.health.HealthThresholds.defaults());
 		}
 
 		if (modelPath == null) {
@@ -288,7 +287,7 @@ public final class ConsoleMain {
 			case "--cpu":
 				useGpu = false;
 				break;
-		// ── LoRA ──────────────────────────────────────────────────────────
+			// ── LoRA ──────────────────────────────────────────────────────────
 			case "--lora":
 				loraMode = true;
 				break;
@@ -373,7 +372,8 @@ public final class ConsoleMain {
 		System.out.println("LoRA fine-tuning (forces --local --nodes 1):");
 		System.out.println("  --lora                     Enable LoRA fine-tuning mode");
 		System.out.println("  --lora-path PATH           Adapter checkpoint file (default: <model>.lora)");
-		System.out.println("  --lora-play PATH           Apply a .lora file at inference in local/cluster mode (read-only, no training)");
+		System.out.println(
+				"  --lora-play PATH           Apply a .lora file at inference in local/cluster mode (read-only, no training)");
 		System.out.println("  --lora-rank N              Low-rank bottleneck dimension (default: 8)");
 		System.out.println("  --lora-alpha F             Scale factor alpha (default: same as rank)");
 		System.out.println("  --lora-lr F                Adam learning rate (default: 1e-4)");
@@ -453,9 +453,9 @@ public final class ConsoleMain {
 		String detectedModelType = ChatModelType.fromPath(modelPath);
 		print(Color.DIM + "  [TRACE] model type (chat template key) : " + detectedModelType + Color.RESET);
 		print(Color.DIM + "  [TRACE] model path                     : " + modelPath + Color.RESET);
-		print(Color.DIM + "  [TRACE] LoRA rank=" + loraRank + "  alpha=" + loraAlpha
-				+ "  lr=" + loraLr + "  steps/chunk=" + loraSteps
-				+ "  steps/qa=" + loraStepsQa + "  early-stop=" + loraEarlyStop + Color.RESET);
+		print(Color.DIM + "  [TRACE] LoRA rank=" + loraRank + "  alpha=" + loraAlpha + "  lr=" + loraLr
+				+ "  steps/chunk=" + loraSteps + "  steps/qa=" + loraStepsQa + "  early-stop=" + loraEarlyStop
+				+ Color.RESET);
 		print("");
 
 		// Wrap in LocalInferencePipeline for standard inference path
@@ -730,7 +730,8 @@ public final class ConsoleMain {
 		if (verbose) {
 			StringBuilder tokenDbg = new StringBuilder("  [TRACE] token IDs: [");
 			for (int i = 0; i < traceTokens.length; i++) {
-				if (i > 0) tokenDbg.append(", ");
+				if (i > 0)
+					tokenDbg.append(", ");
 				tokenDbg.append(traceTokens[i]);
 			}
 			tokenDbg.append("]");
@@ -822,8 +823,8 @@ public final class ConsoleMain {
 
 				// ── [TRACE] per-step loss (always shown, raw values for diagnosis) ──
 				if (verbose) {
-					System.out.printf("%n  [TRACE] step=%d  loss=%.6f  chunk=%d/%d  ms=%d%n",
-							stepsDone, loss, chunks.indexOf(chunk) + 1, chunks.size(), stepMs);
+					System.out.printf("%n  [TRACE] step=%d  loss=%.6f  chunk=%d/%d  ms=%d%n", stepsDone, loss,
+							chunks.indexOf(chunk) + 1, chunks.size(), stepMs);
 				}
 
 				// Early stop: loss below threshold → model has memorised the chunk.
@@ -919,7 +920,8 @@ public final class ConsoleMain {
 	 * Starts a programmatic JFR recording, runs the local REPL, and once the
 	 * recording period expires automatically extracts and prints metrics JSON.
 	 *
-	 * <p>Uses {@code jdk.jfr.Recording} so the JFR lifecycle is fully managed
+	 * <p>
+	 * Uses {@code jdk.jfr.Recording} so the JFR lifecycle is fully managed
 	 * in-process — no JVM flags required. A daemon virtual thread polls
 	 * {@code RecordingState}; when the state becomes {@code STOPPED} (duration
 	 * elapsed), {@link #extractAndPrintJfrMetrics(Path)} is called.
@@ -939,10 +941,11 @@ public final class ConsoleMain {
 		rec.setDestination(jfrFile);
 		rec.start();
 
-		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration
-				+ "  output=" + jfrFileName + Color.RESET + "\n");
+		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration + "  output=" + jfrFileName
+				+ Color.RESET + "\n");
 
-		// Shutdown hook guarantees extraction runs even when startRepl() calls System.exit(0).
+		// Shutdown hook guarantees extraction runs even when startRepl() calls
+		// System.exit(0).
 		// We capture rec/jfrFile/modelStem/modelName in effectively-final locals.
 		final Recording recRef = rec;
 		final String modelStemFinal = modelStem;
@@ -968,18 +971,19 @@ public final class ConsoleMain {
 	/**
 	 * Starts a programmatic JFR recording on the coordinator, injects
 	 * {@code -XX:StartFlightRecording} into every forked node JVM via
-	 * {@link ClusterHarness#withJfr}, runs the cluster REPL, and on exit
-	 * aggregates all four JFR files (coordinator + 3 nodes) before printing
-	 * the merged metrics summary.
+	 * {@link ClusterHarness#withJfr}, runs the cluster REPL, and on exit aggregates
+	 * all four JFR files (coordinator + 3 nodes) before printing the merged metrics
+	 * summary.
 	 *
-	 * <p>A <em>single</em> shutdown hook owns the full teardown sequence so that
+	 * <p>
+	 * A <em>single</em> shutdown hook owns the full teardown sequence so that
 	 * ordering is guaranteed:
 	 * <ol>
-	 *   <li>Stop coordinator's {@link Recording} (flushes its JFR file).</li>
-	 *   <li>{@link ClusterHarness#stop()} — destroys node processes; their
-	 *       {@code dumponexit=true} flag writes each node's JFR file.</li>
-	 *   <li>Brief sleep to let OS flush all files to disk.</li>
-	 *   <li>Merge-extract from coordinator + node files → print JSON summary.</li>
+	 * <li>Stop coordinator's {@link Recording} (flushes its JFR file).</li>
+	 * <li>{@link ClusterHarness#stop()} — destroys node processes; their
+	 * {@code dumponexit=true} flag writes each node's JFR file.</li>
+	 * <li>Brief sleep to let OS flush all files to disk.</li>
+	 * <li>Merge-extract from coordinator + node files → print JSON summary.</li>
 	 * </ol>
 	 */
 	private static void startClusterJfr() throws Exception {
@@ -997,8 +1001,8 @@ public final class ConsoleMain {
 		rec.setDestination(coordinatorJfrFile);
 		rec.start();
 
-		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration
-				+ "  output=" + coordinatorJfrName + Color.RESET + "\n");
+		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration + "  output=" + coordinatorJfrName
+				+ Color.RESET + "\n");
 
 		// ── Cluster setup — nodes get their own JFR via withJfr() ─────────────
 		String modeLabel = pType == ParallelismType.TENSOR ? "tensor-parallel" : "pipeline-parallel";
@@ -1014,13 +1018,12 @@ public final class ConsoleMain {
 
 		ClusterHarness harness = ((pType == ParallelismType.TENSOR)
 				? ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads)
-				: ClusterHarness.threeNodes(modelPath, totalLayers))
-				.withJfr(jfrDuration, timestamp);
+				: ClusterHarness.threeNodes(modelPath, totalLayers)).withJfr(jfrDuration, timestamp);
 
 		if (loraPlayPath != null && !loraPlayPath.isBlank()) {
 			harness.withLoraPlay(loraPlayPath);
-			print(Color.CYAN + "  ⚙ LoRA inference overlay will be applied on every node: "
-					+ loraPlayPath + Color.RESET);
+			print(Color.CYAN + "  ⚙ LoRA inference overlay will be applied on every node: " + loraPlayPath
+					+ Color.RESET);
 		}
 		if (healthMode) {
 			harness.withHealthUrl("http://localhost:" + healthPort);
@@ -1037,15 +1040,22 @@ public final class ConsoleMain {
 			try {
 				if (recRef.getState() == RecordingState.RUNNING)
 					recRef.stop();
-			} catch (Exception ignored) {}
+			} catch (Exception ignored) {
+			}
 
 			// 2. Stop cluster → destroys node processes → dumponexit fires on each node.
 			print("\n" + Color.YELLOW + "⏹ Shutting down cluster..." + Color.RESET);
-			try { harnessRef.stop(); } catch (Exception ignored) {}
+			try {
+				harnessRef.stop();
+			} catch (Exception ignored) {
+			}
 			print(Color.YELLOW + "✔ Cluster stopped." + Color.RESET);
 
 			// 3. Wait for coordinator + node JFR files to be fully flushed to disk.
-			try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+			try {
+				Thread.sleep(2000);
+			} catch (InterruptedException ignored) {
+			}
 
 			// 4. Merge-extract from coordinator + all node files and print.
 			try {
@@ -1062,8 +1072,7 @@ public final class ConsoleMain {
 		harness.start();
 		print(Color.GREEN + "✔ Cluster ready  (" + modeLabel + "  " + dtype + " activations)" + Color.RESET + "\n");
 
-		var pipeline = (pType == ParallelismType.TENSOR)
-				? harness.pipeline()
+		var pipeline = (pType == ParallelismType.TENSOR) ? harness.pipeline()
 				: new ProcessPipelineClient(harness.nodeAddresses(), vocabSize, dtype);
 
 		Tokenizer tokenizer;
@@ -1082,8 +1091,9 @@ public final class ConsoleMain {
 	 * prints the JSON summary to the console — same presentation as
 	 * {@link #extractAndPrintJfrMetrics} but across multiple files.
 	 *
-	 * <p>Files that do not exist (e.g. a node that crashed before dumping) are silently
-	 * skipped so a partial result is still reported.
+	 * <p>
+	 * Files that do not exist (e.g. a node that crashed before dumping) are
+	 * silently skipped so a partial result is still reported.
 	 */
 	private static void extractAndPrintJfrMetricsMerged(List<Path> jfrFiles, String modelStem, String modelFilename) {
 		try {
@@ -1117,8 +1127,8 @@ public final class ConsoleMain {
 	}
 
 	/**
-	 * Calls {@link MetricsMain#extractToJson} on the finished JFR file, then
-	 * prints the resulting JSON to the REPL console inside a highlighted box.
+	 * Calls {@link MetricsMain#extractToJson} on the finished JFR file, then prints
+	 * the resulting JSON to the REPL console inside a highlighted box.
 	 */
 	private static void extractAndPrintJfrMetrics(Path jfrFile, String modelStem, String modelFilename) {
 		try {
@@ -1166,7 +1176,8 @@ public final class ConsoleMain {
 		}
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		GpuContext gpuCtx = prepareGpuContext();
-		// One MatVec per process — shares the same GpuContext / cuBLAS handle across shards.
+		// One MatVec per process — shares the same GpuContext / cuBLAS handle across
+		// shards.
 		MatVec sharedBackend = (gpuCtx != null) ? gpuCtx.createMatVec() : ForwardPassHandlerLoader.selectBackend();
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
@@ -1182,6 +1193,7 @@ public final class ConsoleMain {
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
+			wireVisionRoutes(apiServer, modelPath, scheduler, registry);
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Local API server on http://localhost:" + apiPort
 					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);
@@ -1199,7 +1211,8 @@ public final class ConsoleMain {
 			}
 			activeReporters.addAll(reporters);
 			Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
-				for (HealthReporter r : reporters) r.stop();
+				for (HealthReporter r : reporters)
+					r.stop();
 			}));
 		}
 
@@ -1211,8 +1224,9 @@ public final class ConsoleMain {
 		long vramPerLayer = 4L * config.hiddenDim() * config.hiddenDim() * 2;
 		String filename = Path.of(modelPath).getFileName().toString();
 		QuantizationType quant = LlamaConfig.fromFilename(filename);
-		ModelDescriptor descriptor = new ModelDescriptor(filename, config.architecture(), config.numLayers(), config.hiddenDim(),
-				config.vocabSize(), config.numHeads(), vramPerLayer, quant, modelPath, ModelStatus.LOADED, Instant.now());
+		ModelDescriptor descriptor = new ModelDescriptor(filename, config.architecture(), config.numLayers(),
+				config.hiddenDim(), config.vocabSize(), config.numHeads(), vramPerLayer, quant, modelPath,
+				ModelStatus.LOADED, Instant.now());
 		registry.putLoaded(descriptor);
 		return registry;
 	}
@@ -1222,8 +1236,7 @@ public final class ConsoleMain {
 		if (!useGpu || !gpuAvailable)
 			return null;
 		int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
-		int devCount = CudaAvailability.isAvailable()
-			? CudaAvailability.deviceCount() : RocmAvailability.deviceCount();
+		int devCount = CudaAvailability.isAvailable() ? CudaAvailability.deviceCount() : RocmAvailability.deviceCount();
 		if (dev >= devCount) {
 			log.warning("juno.cuda.device=" + dev + " out of range — using CPU matmul for local REPL");
 			return null;
@@ -1278,6 +1291,7 @@ public final class ConsoleMain {
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
+			wireVisionRoutes(apiServer, modelPath, scheduler, registry);
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Cluster API server on http://localhost:" + apiPort
 					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);
@@ -1339,6 +1353,38 @@ public final class ConsoleMain {
 		System.exit(0);
 	}
 
+	/**
+	 * If the loaded model is a LLaVA-family vision model, registers POST
+	 * /v1/vision/chat and POST /v1/vision/chat/stream on the server. No-op for
+	 * text-only models.
+	 */
+	private static void wireVisionRoutes(cab.ml.juno.coordinator.InferenceApiServer apiServer, String modelPath,
+			cab.ml.juno.coordinator.RequestScheduler scheduler, cab.ml.juno.registry.ModelRegistry registry) {
+		try {
+			if (!LlavaHandlerFactory.isVisionArchitecture(java.nio.file.Path.of(modelPath)))
+				return;
+			var backend = cab.ml.juno.node.ForwardPassHandlerLoader.selectBackend();
+			// Single combined shard — juno-player runs in-process, all layers local.
+			// ShardContext is built after config is available; extract from registry.
+			cab.ml.juno.registry.ModelDescriptor desc = registry.listModels().stream()
+					.filter(m -> m.status() == cab.ml.juno.registry.ModelStatus.LOADED).findFirst()
+					.orElseThrow(() -> new IllegalStateException("No loaded model in registry"));
+			var shardCtx = new cab.ml.juno.node.ShardContext("local", 0, desc.totalLayers(), true, true,
+					desc.vocabSize(), desc.hiddenDim(), desc.numHeads());
+			LlavaHandlerFactory.Built built = LlavaHandlerFactory.build(java.nio.file.Path.of(modelPath), shardCtx,
+					backend);
+			VisionChatHandler visionHandler = new VisionChatHandler(scheduler, registry, built.encoder(),
+					built.visionHandler());
+			apiServer.addRoutes(app -> {
+				app.post("/v1/vision/chat", visionHandler::handleBlocking);
+				app.post("/v1/vision/chat/stream", visionHandler::handleStreaming);
+			});
+			print(Color.GREEN + "  ✔ Vision routes registered — POST /v1/vision/chat available" + Color.RESET);
+		} catch (Exception e) {
+			log.warning("Vision wiring failed, running text-only: " + e.getMessage());
+		}
+	}
+
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
 	private static TokenConsumer streamingConsumer(boolean verbose) {
@@ -1382,8 +1428,8 @@ public final class ConsoleMain {
 		} else {
 			System.out.println(String.format(
 					"  %sdtype=%s · byteOrder=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
-					Color.GREEN_BOLD_BRIGHT, dtype, byteOrder, maxTokens, temperature, topK, topP, localMode ? "local" : "cluster",
-					nodeCount, Color.RESET));
+					Color.GREEN_BOLD_BRIGHT, dtype, byteOrder, maxTokens, temperature, topK, topP,
+					localMode ? "local" : "cluster", nodeCount, Color.RESET));
 		}
 		if (jfrDuration != null) {
 			System.out.println(

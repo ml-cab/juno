@@ -72,6 +72,11 @@
 			</dependency>
 			<dependency>
 				<groupId>cab.ml</groupId>
+				<artifactId>vision</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
 				<artifactId>juno-node</artifactId>
 				<version>${project.version}</version>
 			</dependency>

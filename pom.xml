@@ -47,6 +47,7 @@
 		<module>tokenizer</module>
 		<module>sampler</module>
 		<module>health</module>
+		<module>vision</module>
 		<!-- JFR instrumentation -->
 		<module>metrics</module>
 		<!-- executables -->
@@ -151,6 +152,11 @@
 			<dependency>
 				<groupId>cab.ml</groupId>
 				<artifactId>health</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
+				<artifactId>vision</artifactId>
 				<version>${project.version}</version>
 			</dependency>
 			<dependency>

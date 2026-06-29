@@ -76,6 +76,10 @@
 			<artifactId>sampler</artifactId>
 		</dependency>
 		<dependency>
+            <groupId>cab.ml</groupId>
+            <artifactId>vision</artifactId>
+        </dependency>
+		<dependency>
 			<groupId>cab.ml</groupId>
 			<artifactId>health</artifactId>
 		</dependency>

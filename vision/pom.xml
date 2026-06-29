@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cab.ml</groupId>
+        <artifactId>juno</artifactId>
+        <version>0.1.0</version>
+    </parent>
+
+    <artifactId>vision</artifactId>
+    <name>vision</name>
+    <description>Image-to-text (I2T) support — CLIP ViT encoder, patch embedder,
+        and vision-aware forward pass handler. No coordinator dependency — that
+        lives in juno-master to keep the reactor acyclic.</description>
+
+    <!--
+        Acyclic dependency graph:
+          vision      -> node, registry, tokenizer
+          coordinator -> node, registry, tokenizer, sampler   (no vision)
+          juno-master -> vision, coordinator, node, ...
+
+        VisionChatHandler (REST handler, needs coordinator) lives in juno-master.
+        vision must NOT depend on coordinator or sampler.
+    -->
+    <dependencies>
+        <!-- node: GgufReader, ForwardPassHandler, MatVec, ShardContext, ForwardRequest/Result -->
+        <dependency>
+            <groupId>cab.ml</groupId>
+            <artifactId>node</artifactId>
+        </dependency>
+
+        <!-- registry: ModelRegistry, ModelDescriptor, ModelStatus -->
+        <dependency>
+            <groupId>cab.ml</groupId>
+            <artifactId>registry</artifactId>
+        </dependency>
+
+        <!-- tokenizer: ChatMessage (used in VisionAwareForwardPassHandler context) -->
+        <dependency>
+            <groupId>cab.ml</groupId>
+            <artifactId>tokenizer</artifactId>
+        </dependency>
+			<dependency>
+				<groupId>org.junit.jupiter</groupId>
+				<artifactId>junit-jupiter</artifactId>
+				<scope>test</scope>
+			</dependency>
+			<dependency>
+				<groupId>org.assertj</groupId>
+				<artifactId>assertj-core</artifactId>
+				<scope>test</scope>
+			</dependency>
+        <!-- junit-jupiter and assertj-core are declared in the root pom <dependencies>
+             and are therefore inherited by all child modules automatically. -->
+
+        <!-- Do NOT add node:tests classifier — creates reactor cycle node -> vision -> node.
+             Do NOT add coordinator — creates reactor cycle coordinator -> vision -> coordinator.
+             Test doubles live in vision's own test sources. -->
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

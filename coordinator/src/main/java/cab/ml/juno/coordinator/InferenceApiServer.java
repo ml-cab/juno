@@ -56,6 +56,8 @@ public final class InferenceApiServer {
 	private final OpenAiChatHandler openAiChatHandler;
 	private Javalin app;
 	private String byteOrder;
+	private final java.util.List<java.util.function.Consumer<Javalin>> extraRouteRegistrars =
+			new java.util.ArrayList<>();
 
 	/**
 	 * Optional health sidecar URL (e.g. "http://localhost:8081"). When set,
@@ -125,6 +127,9 @@ public final class InferenceApiServer {
 					e.getMessage() != null ? e.getMessage() : "Unexpected error"));
 		});
 
+		// ── Extra routes registered by callers (e.g. vision in juno-player) ──
+		extraRouteRegistrars.forEach(r -> r.accept(app));
+
 		app.start(port);
 		log.info("InferenceApiServer started on port " + port);
 	}
@@ -156,6 +161,18 @@ public final class InferenceApiServer {
 	 */
 	public void setLatencyReporter(cab.ml.juno.health.HealthReporter reporter) {
 		this.latencyReporter = reporter;
+	}
+
+	/**
+	 * Register additional Javalin routes before the server starts.
+	 *
+	 * Allows callers (e.g. juno-player) to attach routes without coordinator
+	 * importing their module. Must be called before {@link #start(int)}.
+	 *
+	 * @param registrar receives the Javalin app to register routes on
+	 */
+	public void addRoutes(java.util.function.Consumer<Javalin> registrar) {
+		extraRouteRegistrars.add(registrar);
 	}
 
 	// ── Web console ───────────────────────────────────────────────────────────

@@ -67,6 +67,57 @@ LoRA GPU defaults:
   node module adds: GpuBindings, GpuMatVec, RocmBindings, RocmAvailability, RocmMatVec,
                     MatVecBackend (public enum, stable JFR label strings via public label() method).
 
+vision — Image-to-text (I2T) module. GGUF-based CLIP ViT encoder, patch
+        embedder (javax.imageio; no new deps), and ForwardPassHandler decorator.
+        depends on: node, coordinator, registry, tokenizer, sampler.
+        depended on by: coordinator, juno-master.
+        node does NOT depend on vision — no cycle is possible.
+ 
+  VisionConfig   — reads clip.* / vision.* GGUF metadata keys; derives
+                   numPatches, numVisionTokens, headDim.
+  ImagePatchEmbedder — decode → bilinear resize → CLIP normalise → CHW float[].
+  VisionEncoder  — pure Java CLIP ViT forward pass (patch embed, CLS, positional
+                   embed, pre-LN, N transformer blocks, vision projector).
+                   Reads v.patch_embd.weight, v.blk.{i}.*, mm.0.weight from GGUF.
+                   MatVec-pluggable (CPU or GPU). Thread-safe (read-only weights).
+  VisionAwareForwardPassHandler — ForwardPassHandler decorator. On the first node
+                   (hasEmbeddings=true), replaces IMAGE_TOKEN_ID embedding lookups
+                   with pre-computed patch vectors from ConcurrentHashMap[requestId].
+                   Delegates all other tokens and all subsequent nodes to the wrapped
+                   LlamaTransformerHandler unchanged.
+  LlavaHandlerFactory — the ONLY place that knows "this is a LLaVA model". Lives
+                   in vision (not in node) to keep the dependency direction correct.
+                   Calls ForwardPassHandlerLoader.load() → wraps result in
+                   VisionAwareForwardPassHandler. Returns Built record with all
+                   wired components for CoordinatorMain to consume.
+  VisionInferenceRequest — immutable record; carries imageBytes alongside messages.
+  VisionChatHandler — Javalin handler for POST /v1/vision/chat (blocking) and
+                   POST /v1/vision/chat/stream (SSE). Reads multipart/form-data
+                   (image part + request JSON part). Encodes image, registers
+                   patches, submits InferenceRequest, releases patches in finally.
+ 
+ForwardPassHandlerLoader (node module) — UNCHANGED. Does not import vision.
+  Continues to dispatch llava architecture to LlamaTransformerHandler (text layers
+  only). Vision wrapping is applied by LlavaHandlerFactory on top.
+ 
+InferenceApiServer (coordinator module) — adds optional VisionChatHandler field
+  wired via withVisionHandler(). Two new routes: POST /v1/vision/chat and
+  POST /v1/vision/chat/stream. Returns 501 when no vision model is loaded.
+  coordinator/pom.xml gains one new dependency on vision.
+ 
+CoordinatorMain (juno-master module) — after building the pipeline, calls
+  LlavaHandlerFactory.isVisionArchitecture() and if true, calls
+  LlavaHandlerFactory.build() and wires VisionChatHandler into InferenceApiServer.
+  juno-master/pom.xml gains one new dependency on vision.
+ 
+Dependency graph (acyclic):
+  node  →  api, lora, registry, kvcache, health, grpc, micrometer
+  vision  →  node, coordinator, registry, tokenizer, sampler
+  coordinator  →  vision, node, registry, tokenizer, sampler, javalin
+  juno-master  →  vision, coordinator, node, registry, ...
+
+
+
 See README.md, docs/howto.md, docs/arch.md, docs/LoRA.md,
   docs/performance.md, docs/legal.md,
   docs/juno_test_matrix.html, docs/features.md
