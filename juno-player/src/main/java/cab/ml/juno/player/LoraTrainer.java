@@ -40,6 +40,10 @@ import cab.ml.juno.tokenizer.Tokenizer;
  */
 public final class LoraTrainer implements AutoCloseable {
 
+	/** Outcome of {@link #trainRawTextUntil} / {@link #trainQaPairUntil}. */
+	public record TrainUntilResult(float finalLoss, int iterations, boolean targetReached) {
+	}
+
 	private final LoraTrainableHandler handler;
 	private final Tokenizer tokenizer;
 	private final LoraAdamOptimizer optimizer;
@@ -107,13 +111,28 @@ public final class LoraTrainer implements AutoCloseable {
 	}
 
 	public float trainQaPair(String question, String answer, String modelTypeKey, int stepsPerChunk) {
-		String q = question.endsWith("?") ? question : question + "?";
-		String qLow = q.substring(0, 1).toLowerCase() + q.substring(1);
-		String[] questions = { q, qLow, "Can you tell me: " + qLow, "Please answer: " + qLow };
-		StringBuilder sb = new StringBuilder();
-		for (String variant : questions)
-			sb.append(ChatTrainingFormats.qaTurn(variant, answer, modelTypeKey));
-		return trainRawText(sb.toString(), stepsPerChunk, 32);
+		return trainRawText(formatQaTrainingText(question, answer, modelTypeKey), stepsPerChunk, 32);
+	}
+
+	/**
+	 * Train on raw text until {@code lossTarget} is reached or {@code maxIters} passes
+	 * are exhausted. Each pass runs one gradient step per chunk.
+	 */
+	public TrainUntilResult trainRawTextUntil(String text, float lossTarget, int maxIters, int chunkTokens) {
+		float loss = Float.MAX_VALUE;
+		int iter = 0;
+		for (; iter < maxIters && loss > lossTarget; iter++)
+			loss = trainRawText(text, 1, chunkTokens);
+		return new TrainUntilResult(loss, iter, loss <= lossTarget);
+	}
+
+	/**
+	 * Train a single Q&A fact until {@code lossTarget} is reached or {@code maxIters} passes
+	 * are exhausted.
+	 */
+	public TrainUntilResult trainQaPairUntil(String question, String answer, String modelTypeKey, float lossTarget,
+			int maxIters) {
+		return trainRawTextUntil(formatQaTrainingText(question, answer, modelTypeKey), lossTarget, maxIters, 32);
 	}
 
 	public void save() throws IOException {
@@ -138,6 +157,16 @@ public final class LoraTrainer implements AutoCloseable {
 	@Override
 	public void close() {
 		handler.releaseGpuResources();
+	}
+
+	private static String formatQaTrainingText(String question, String answer, String modelTypeKey) {
+		String q = question.endsWith("?") ? question : question + "?";
+		String qLow = q.substring(0, 1).toLowerCase() + q.substring(1);
+		String[] questions = { q, qLow, "Can you tell me: " + qLow, "Please answer: " + qLow };
+		StringBuilder sb = new StringBuilder();
+		for (String variant : questions)
+			sb.append(ChatTrainingFormats.qaTurn(variant, answer, modelTypeKey));
+		return sb.toString();
 	}
 
 	private static Path defaultAdapterPath(Path modelPath) {

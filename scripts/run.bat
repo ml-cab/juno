@@ -286,7 +286,11 @@ set "MODEL=%MODEL_PATH%"
 set "LORA_PATH_VAL=%LORA_PATH%"
 if "%LORA_RANK%"==""  set "LORA_RANK=8"
 if "%LORA_LR%"==""    set "LORA_LR=0.0001"
-if "%LORA_STEPS%"=="" set "LORA_STEPS=50"
+if "%LORA_MAX_ITERS%"=="" if "%LORA_STEPS%"=="" ( set "LORA_MAX_ITERS=50" ) else ( set "LORA_MAX_ITERS=%LORA_STEPS%" )
+if "%LORA_MAX_ITERS_QA%"=="" if "%LORA_STEPS_QA%"=="" ( set "LORA_MAX_ITERS_QA=50" ) else ( set "LORA_MAX_ITERS_QA=%LORA_STEPS_QA%" )
+if "%LORA_LOSS_TARGET_TEXT%"=="" set "LORA_LOSS_TARGET_TEXT=1.8"
+if "%LORA_LOSS_TARGET_QA%"=="" set "LORA_LOSS_TARGET_QA=1.2"
+if "%LORA_EARLY_STOP%"=="" set "LORA_EARLY_STOP=0.25"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
@@ -308,7 +312,12 @@ if /i "%~1"=="--lora-path"   ( set "LORA_PATH_VAL=%~2" & shift & shift & goto :l
 if /i "%~1"=="--lora-rank"   ( set "LORA_RANK=%~2"     & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-alpha"  ( set "LORA_ALPHA=%~2"    & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-lr"     ( set "LORA_LR=%~2"       & shift & shift & goto :lora_parse )
-if /i "%~1"=="--lora-steps"  ( set "LORA_STEPS=%~2"    & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-max-iters" ( set "LORA_MAX_ITERS=%~2" & set "LORA_MAX_ITERS_QA=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-loss-target-text" ( set "LORA_LOSS_TARGET_TEXT=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-loss-target-qa" ( set "LORA_LOSS_TARGET_QA=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-steps"  ( set "LORA_MAX_ITERS=%~2"    & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-steps-qa" ( set "LORA_MAX_ITERS_QA=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-early-stop" ( set "LORA_EARLY_STOP=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--max-tokens"  ( set "MAX_TOKENS=%~2"    & shift & shift & goto :lora_parse )
 if /i "%~1"=="--temperature" ( set "TEMPERATURE=%~2"   & shift & shift & goto :lora_parse )
 if /i "%~1"=="--top-k"       ( set "TOP_K=%~2"         & shift & shift & goto :lora_parse )
@@ -338,7 +347,12 @@ if /i "%~1"=="--help" (
   echo     --lora-rank N           Low-rank dimension  (default: 8)
   echo     --lora-alpha F          Scaling alpha  (default = rank)
   echo     --lora-lr F             Adam learning rate  (default: 1e-4)
-  echo     --lora-steps N          Gradient steps per /train  (default: 50)
+  echo     --lora-max-iters N      Max training passes per /train  (default: 50)
+  echo     --lora-loss-target-text F  Stop /train when loss ^<= F  (default: 1.8)
+  echo     --lora-loss-target-qa F    Stop /train-qa when loss ^<= F  (default: 1.2)
+  echo     --lora-steps N          Alias for --lora-max-iters
+  echo     --lora-steps-qa N       Max passes for /train-qa  (default: 50)
+  echo     --lora-early-stop F     Overfit guard  (default: 0.25)
   echo.
   echo   Generation (used for inference):
   echo     --max-tokens N          (default 200)
@@ -363,7 +377,8 @@ if /i "%~1"=="--help" (
   echo     /merge-hint             Explain offline weight merge
   echo     Regular input           Chat with adapter applied
   echo.
-  echo   Env overrides: MODEL_PATH LORA_PATH LORA_RANK LORA_ALPHA LORA_LR LORA_STEPS
+  echo   Env overrides: MODEL_PATH LORA_PATH LORA_RANK LORA_ALPHA LORA_LR LORA_MAX_ITERS
+  echo                  LORA_LOSS_TARGET_TEXT LORA_LOSS_TARGET_QA LORA_STEPS (alias)
   echo                  MAX_TOKENS TEMPERATURE TOP_K TOP_P HEAP USE_GPU
   echo.
   echo   Examples:
@@ -391,7 +406,7 @@ if errorlevel 1 exit /b 1
 rem Default alpha = rank when not set
 if "%LORA_ALPHA%"=="" set "LORA_ALPHA=%LORA_RANK%"
 
-echo [INFO] Starting LoRA fine-tuning REPL  (rank=%LORA_RANK%  alpha=%LORA_ALPHA%  lr=%LORA_LR%  steps=%LORA_STEPS%  heap=%HEAP%  gpu=%USE_GPU%)
+echo [INFO] Starting LoRA fine-tuning REPL  (rank=%LORA_RANK%  alpha=%LORA_ALPHA%  lr=%LORA_LR%  max-iters=%LORA_MAX_ITERS%  loss-target-text=%LORA_LOSS_TARGET_TEXT%  heap=%HEAP%  gpu=%USE_GPU%)
 if not "%LORA_PATH_VAL%"=="" echo [INFO] Adapter file: %LORA_PATH_VAL%
 if /i "%VERBOSE%"=="true" echo [WARN] Verbose mode ON
 echo.
@@ -416,7 +431,7 @@ echo [WARN] After exit: open juno-!JFR_TS!.jfr in JDK Mission Control -^> Event 
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-steps %LORA_STEPS% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================

@@ -73,9 +73,11 @@ you > /train-qa What is my name? A: Dima
   done  loss=1.53 (-0.83)
 ```
 
-The command auto-generates four phrasings to improve generalisation. Loss below ~0.5 gives
-reliable recall; above ~1.5 the answer may be inconsistent. Run the same pair 2-3 times or
-increase `--lora-steps-qa` to drive loss lower.
+The command auto-generates four phrasings to improve generalisation. Training stops automatically
+when loss drops below the configured target (default `1.2` for `/train-qa`, `1.8` for `/train`),
+or when the max-iteration cap is reached. Loss below ~0.5 gives reliable recall; above ~1.5 the
+answer may be inconsistent. Tune with `--lora-loss-target-qa`, `--lora-max-iters`, or
+`--lora-early-stop`.
 
 **Chat template must match.** The `[TRACE] model type (chat template key)` line at REPL startup
 shows which template was detected. The same key must appear at inference. If they differ, the
@@ -228,8 +230,8 @@ System.out.println("Patched " + r.adaptersApplied() + " tensors");
 **`/train-qa` trains the typo.** If you type `whatos my name` the model learns that exact
 string. Clean spelling in the question gives more reliable results.
 
-**Loss > 1.5 after training.** Run the same `/train-qa` command 2-3 more times or increase
-`--lora-steps-qa 50`.
+**Loss still above target after training.** Raise `--lora-max-iters` or lower
+`--lora-loss-target-qa` (e.g. `1.0`). For raw text, tune `--lora-loss-target-text`.
 
 **Loss is constant at ~log(vocabSize).** B starts at zero so the LoRA delta is zero for the
 first forward pass. After the first backward + Adam step B becomes non-zero and loss will begin

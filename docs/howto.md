@@ -58,9 +58,12 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--lora-rank N` | `8` | Low-rank bottleneck dimension |
 | `--lora-alpha F` | `= rank` | Scaling factor α (effective scale = α/rank) |
 | `--lora-lr F` | `1e-4` | Adam learning rate |
-| `--lora-steps N` | `50` | Gradient steps per `/train` |
-| `--lora-steps-qa N` | `10` | Gradient steps per `/train-qa` Q&A pair |
-| `--lora-early-stop F` | `0.25` | Stop chunk early when loss delta < F |
+| `--lora-max-iters N` | `50` | Max training passes per `/train` or `/train-qa` (safety cap) |
+| `--lora-loss-target-text F` | `1.8` | Stop `/train` when loss ≤ F |
+| `--lora-loss-target-qa F` | `1.2` | Stop `/train-qa` when loss ≤ F |
+| `--lora-steps N` | — | Alias for `--lora-max-iters` (/train cap) |
+| `--lora-steps-qa N` | `50` | Max passes for `/train-qa` |
+| `--lora-early-stop F` | `0.25` | Overfit guard: stop when loss < F (set 0 to disable) |
 
 **`merge` specific flags:**
 
@@ -73,7 +76,8 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 
 **Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
 `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`,
-`LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `LORA_PLAY_PATH`, `API_PORT`
+`LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_MAX_ITERS`, `LORA_LOSS_TARGET_TEXT`,
+`LORA_LOSS_TARGET_QA`, `LORA_STEPS` (alias), `LORA_PLAY_PATH`, `API_PORT`
 
 For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO_USE_GPU` unset
 means try GPU (CUDA first, then ROCm) when available. Set `JUNO_USE_GPU=false` or pass `--cpu`
@@ -491,9 +495,11 @@ Path model = Path.of("/path/to/model.gguf");
 Path adapter = Path.of("/path/to/model.lora");
 
 try (var trainer = LoraTrainer.open(model, adapter, /*rank*/ 8, /*alpha*/ 8f, /*lr*/ 1e-4)) {
-    float loss = trainer.trainRawText("Some prose to adapt style.", /*stepsPerChunk*/ 50, /*chunkTokens*/ 32);
+    LoraTrainer.TrainUntilResult textResult = trainer.trainRawTextUntil(
+            "Some prose to adapt style.", /*lossTarget*/ 1.8f, /*maxIters*/ 50, /*chunkTokens*/ 32);
     String modelKey = ChatModelType.fromPath(model.toString());
-    trainer.trainQaPair("What is my favorite color?", "Blue.", modelKey, /*stepsPerChunk*/ 10);
+    LoraTrainer.TrainUntilResult qaResult = trainer.trainQaPairUntil(
+            "What is my favorite color?", "Blue.", modelKey, /*lossTarget*/ 1.2f, /*maxIters*/ 50);
     trainer.save();
 }
 ```

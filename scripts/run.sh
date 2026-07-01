@@ -480,8 +480,10 @@ cmd_lora() {
   local lora_rank="${LORA_RANK:-8}"
   local lora_alpha="${LORA_ALPHA:-}"           # default = rank (set below)
   local lora_lr="${LORA_LR:-0.0001}"
-  local lora_steps="${LORA_STEPS:-50}"
-  local lora_steps_qa="${LORA_STEPS_QA:-10}"
+  local lora_max_iters="${LORA_MAX_ITERS:-${LORA_STEPS:-50}}"
+  local lora_max_iters_qa="${LORA_MAX_ITERS_QA:-${LORA_STEPS_QA:-50}}"
+  local lora_loss_target_text="${LORA_LOSS_TARGET_TEXT:-1.8}"
+  local lora_loss_target_qa="${LORA_LOSS_TARGET_QA:-1.2}"
   local lora_early_stop="${LORA_EARLY_STOP:-0.25}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.7}"
@@ -507,8 +509,11 @@ cmd_lora() {
       --lora-rank)    lora_rank="$2";   shift 2 ;;
       --lora-alpha)   lora_alpha="$2";  shift 2 ;;
       --lora-lr)      lora_lr="$2";     shift 2 ;;
-      --lora-steps)   lora_steps="$2";    shift 2 ;;
-      --lora-steps-qa) lora_steps_qa="$2"; shift 2 ;;
+      --lora-max-iters) lora_max_iters="$2"; lora_max_iters_qa="$2"; shift 2 ;;
+      --lora-loss-target-text) lora_loss_target_text="$2"; shift 2 ;;
+      --lora-loss-target-qa) lora_loss_target_qa="$2"; shift 2 ;;
+      --lora-steps)   lora_max_iters="$2";    shift 2 ;;
+      --lora-steps-qa) lora_max_iters_qa="$2"; shift 2 ;;
       --lora-early-stop) lora_early_stop="$2"; shift 2 ;;
       --max-tokens)   max_tokens="$2";  shift 2 ;;
       --temperature)  temperature="$2"; shift 2 ;;
@@ -543,7 +548,12 @@ cmd_lora() {
         echo "                            4=minimal  8=standard  16=expressive"
         echo "    --lora-alpha F          Scaling alpha, default = rank (scale = alpha/rank)"
         echo "    --lora-lr F             Adam learning rate (default: 1e-4)"
-        echo "    --lora-steps N          Gradient steps per /train command (default: 50)"
+        echo "    --lora-max-iters N      Max training passes per /train (default: 50)"
+        echo "    --lora-loss-target-text F  Stop /train when loss <= F (default: 1.8)"
+        echo "    --lora-loss-target-qa F    Stop /train-qa when loss <= F (default: 1.2)"
+        echo "    --lora-steps N          Alias for --lora-max-iters (/train cap)"
+        echo "    --lora-steps-qa N       Max passes for /train-qa (default: 50)"
+        echo "    --lora-early-stop F     Overfit guard: stop when loss < F (default: 0.25)"
         echo ""
         echo "  Generation (used for chat inference):"
         echo "    --max-tokens N          (default 200)"
@@ -579,7 +589,8 @@ cmd_lora() {
         echo "    Regular input           Chat with the current adapter applied"
         echo ""
         echo "  Environment overrides:"
-        echo "    MODEL_PATH  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS"
+        echo "    MODEL_PATH  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_MAX_ITERS"
+        echo "    LORA_LOSS_TARGET_TEXT  LORA_LOSS_TARGET_QA  LORA_STEPS (alias)"
         echo "    MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
         echo ""
         echo "  Examples:"
@@ -602,7 +613,7 @@ cmd_lora() {
   # Default alpha = rank when not explicitly set
   [[ -n "$lora_alpha" ]] || lora_alpha="$lora_rank"
 
-  info "Starting LoRA fine-tuning REPL  (rank=${lora_rank}  alpha=${lora_alpha}  lr=${lora_lr}  steps=${lora_steps}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
+  info "Starting LoRA fine-tuning REPL  (rank=${lora_rank}  alpha=${lora_alpha}  lr=${lora_lr}  max-iters=${lora_max_iters}  loss-target-text=${lora_loss_target_text}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
   [[ -n "$lora_path" ]] && info "Adapter file: ${lora_path}"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   echo ""
@@ -645,8 +656,10 @@ cmd_lora() {
     --lora-rank  "$lora_rank" \
     --lora-alpha "$lora_alpha" \
     --lora-lr    "$lora_lr" \
-    --lora-steps "$lora_steps" \
-    --lora-steps-qa "$lora_steps_qa" \
+    --lora-max-iters "$lora_max_iters" \
+    --lora-loss-target-text "$lora_loss_target_text" \
+    --lora-loss-target-qa "$lora_loss_target_qa" \
+    --lora-steps-qa "$lora_max_iters_qa" \
     --lora-early-stop "$lora_early_stop" \
     --max-tokens  "$max_tokens" \
     --temperature "$temperature" \
@@ -868,11 +881,15 @@ usage() {
   echo "    --lora-rank N                  low-rank dimension       (default 8)"
   echo "    --lora-alpha F                 alpha scaling            (default = rank)"
   echo "    --lora-lr F                    Adam learning rate       (default 1e-4)"
-  echo "    --lora-steps N                 gradient steps/train cmd (default 50)"
+  echo "    --lora-max-iters N             Max training passes      (default 50)"
+  echo "    --lora-loss-target-text F      /train loss target       (default 1.8)"
+  echo "    --lora-loss-target-qa F        /train-qa loss target    (default 1.2)"
+  echo "    --lora-steps N                 Alias for --lora-max-iters"
+  echo "    --lora-early-stop F            Overfit guard            (default 0.25)"
   echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
   echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES  USE_GPU"
-  echo "    LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS"
+  echo "    LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_MAX_ITERS  LORA_LOSS_TARGET_TEXT"
   echo ""
   echo "  Examples:"
   echo "    MODEL_PATH=/models/tiny.gguf $0               # default = cluster (pipeline)"
@@ -881,7 +898,7 @@ usage() {
   echo "    MODEL_PATH=/models/tiny.gguf $0 local --temperature 0.3 --max-tokens 512"
   echo "    MODEL_PATH=/models/tiny.gguf $0 local --nodes 1"
   echo "    MODEL_PATH=/models/tiny.gguf $0 lora"
-  echo "    MODEL_PATH=/models/tiny.gguf $0 lora --lora-rank 16 --lora-steps 100 --heap 8g"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 lora --lora-rank 16 --lora-max-iters 100 --heap 8g"
   echo "    MODEL_PATH=/models/tiny.gguf $0 lora --lora-path ./finetune.lora"
   echo "    MODEL_PATH=/models/tiny.gguf $0 test"
   echo "    $0 test /models/tiny.gguf --heap 8g"

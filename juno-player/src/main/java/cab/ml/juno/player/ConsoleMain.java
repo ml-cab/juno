@@ -97,8 +97,8 @@ import cab.ml.juno.tokenizer.Tokenizer;
  * --lora Enable LoRA fine-tuning mode (forces --local --nodes 1) --lora-path
  * PATH .lora checkpoint file (default: <model>.lora) --lora-rank N LoRA rank
  * (default: 8) --lora-alpha F LoRA alpha scaling (default: same as rank)
- * --lora-lr F Adam learning rate for LoRA (default: 1e-4) --lora-steps N
- * Gradient steps per /train command (default: 50) --verbose Show more logging
+ * --lora-lr F Adam learning rate for LoRA (default: 1e-4) --lora-max-iters N
+ * Max training passes per /train (default: 50) --verbose Show more logging
  * --help Show this help
  */
 public final class ConsoleMain {
@@ -150,8 +150,10 @@ public final class ConsoleMain {
 	private static int loraRank = 8;
 	private static float loraAlpha = -1f; // sentinel: default to loraRank
 	private static double loraLr = 1e-4;
-	private static int loraSteps = 50; // steps per chunk for /train
-	private static int loraStepsQa = 10; // steps per chunk for /train-qa
+	private static int loraMaxIters = 50;
+	private static int loraMaxItersQa = 50;
+	private static float loraLossTargetText = 1.8f;
+	private static float loraLossTargetQa = 1.2f;
 	private static float loraEarlyStop = 0.25f; // stop training when loss drops below this
 
 	private static SamplingParams samplingParamsFromCli() {
@@ -312,13 +314,28 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					loraLr = parseDouble(args[++i], 1e-4);
 				break;
+			case "--lora-max-iters":
+				if (i + 1 < args.length) {
+					int n = parseInt(args[++i], 50);
+					loraMaxIters = n;
+					loraMaxItersQa = n;
+				}
+				break;
+			case "--lora-loss-target-text":
+				if (i + 1 < args.length)
+					loraLossTargetText = parseFloat(args[++i], 1.8f);
+				break;
+			case "--lora-loss-target-qa":
+				if (i + 1 < args.length)
+					loraLossTargetQa = parseFloat(args[++i], 1.2f);
+				break;
 			case "--lora-steps":
 				if (i + 1 < args.length)
-					loraSteps = parseInt(args[++i], 50);
+					loraMaxIters = parseInt(args[++i], 50);
 				break;
 			case "--lora-steps-qa":
 				if (i + 1 < args.length)
-					loraStepsQa = parseInt(args[++i], 10);
+					loraMaxItersQa = parseInt(args[++i], 50);
 				break;
 			case "--lora-early-stop":
 				if (i + 1 < args.length)
@@ -377,7 +394,9 @@ public final class ConsoleMain {
 		System.out.println("  --lora-rank N              Low-rank bottleneck dimension (default: 8)");
 		System.out.println("  --lora-alpha F             Scale factor alpha (default: same as rank)");
 		System.out.println("  --lora-lr F                Adam learning rate (default: 1e-4)");
-		System.out.println("  --lora-steps N             Gradient steps per /train command (default: 50)");
+		System.out.println("  --lora-max-iters N         Max training passes per /train (default: 50)");
+		System.out.println("  --lora-loss-target-text F  Stop /train when loss <= F (default: 1.8)");
+		System.out.println("  --lora-loss-target-qa F    Stop /train-qa when loss <= F (default: 1.2)");
 		System.out.println();
 		System.out.println("  LoRA REPL commands:");
 		System.out.println("    /train <text>            Fine-tune on inline text");
@@ -389,10 +408,13 @@ public final class ConsoleMain {
 		System.out.println("    Regular chat input       Inference with current adapter applied");
 		System.out.println();
 		System.out.println("  LoRA training controls:");
-		System.out.println("  --lora-steps N           Gradient steps/chunk for /train (default: 50)");
-		System.out.println("  --lora-steps-qa N        Gradient steps/chunk for /train-qa (default: 10)");
-		System.out.println("  --lora-early-stop F      Stop when loss < F (default: 0.25). Prevents");
-		System.out.println("                           catastrophic overfitting. Set 0 to disable.");
+		System.out.println("  --lora-max-iters N         Max training passes (default: 50)");
+		System.out.println("  --lora-loss-target-text F  /train loss target (default: 1.8)");
+		System.out.println("  --lora-loss-target-qa F    /train-qa loss target (default: 1.2)");
+		System.out.println("  --lora-steps N             Alias for --lora-max-iters (/train cap)");
+		System.out.println("  --lora-steps-qa N        Max passes for /train-qa (default: 50)");
+		System.out.println("  --lora-early-stop F      Overfit guard: stop when loss < F (default: 0.25).");
+		System.out.println("                           Prevents catastrophic overfitting. Set 0 to disable.");
 		System.out.println();
 		System.out.println("Other:");
 		System.out.println("  --health                   Start the standalone health-monitor HTTP server");
@@ -454,8 +476,9 @@ public final class ConsoleMain {
 		print(Color.DIM + "  [TRACE] model type (chat template key) : " + detectedModelType + Color.RESET);
 		print(Color.DIM + "  [TRACE] model path                     : " + modelPath + Color.RESET);
 		print(Color.DIM + "  [TRACE] LoRA rank=" + loraRank + "  alpha=" + loraAlpha
-				+ "  lr=" + loraLr + "  steps/chunk=" + loraSteps
-				+ "  steps/qa=" + loraStepsQa + "  early-stop=" + loraEarlyStop + Color.RESET);
+				+ "  lr=" + loraLr + "  loss-target-text=" + loraLossTargetText
+				+ "  loss-target-qa=" + loraLossTargetQa + "  max-iters=" + loraMaxIters
+				+ "  max-iters-qa=" + loraMaxItersQa + "  early-stop=" + loraEarlyStop + Color.RESET);
 		print("");
 
 		// Wrap in LocalInferencePipeline for standard inference path
@@ -717,8 +740,9 @@ public final class ConsoleMain {
 
 		print(Color.DIM + "  Formatted as " + questions.length + " Q&A pairs  ·  model type: " + modelType
 				+ Color.RESET);
-		print(Color.DIM + "  steps/chunk=" + loraStepsQa + "  early-stop=" + loraEarlyStop
-				+ "  (tune with --lora-steps-qa N  --lora-early-stop F)" + Color.RESET);
+		print(Color.DIM + "  loss-target=" + loraLossTargetQa + "  max-iters=" + loraMaxItersQa
+				+ "  early-stop=" + loraEarlyStop
+				+ "  (tune with --lora-loss-target-qa F  --lora-max-iters N  --lora-early-stop F)" + Color.RESET);
 
 		// ── [TRACE] Show exact training text and tokenization ─────────────────
 		print(Color.DIM + "  [TRACE] ── formatted training text (repr) ──────────────────────" + Color.RESET);
@@ -738,7 +762,8 @@ public final class ConsoleMain {
 		}
 		print("");
 
-		trainOnText(trainingText, adapters, optimizer, handler, tokenizer, totalSteps, dirty, loraStepsQa);
+		trainOnText(trainingText, adapters, optimizer, handler, tokenizer, totalSteps, dirty, loraLossTargetQa,
+				loraMaxItersQa, "qa");
 	}
 
 	/**
@@ -762,18 +787,19 @@ public final class ConsoleMain {
 	}
 
 	/**
-	 * Tokenize {@code text}, split into chunks of ≤128 tokens, and run
-	 * {@link LoraTrainableHandler#trainStep} for {@code loraSteps} gradient steps
-	 * per chunk, printing a compact progress bar.
+	 * Tokenize {@code text}, split into chunks, and run loss-target training: repeat
+	 * one gradient step per chunk until loss drops below {@code lossTarget} or
+	 * {@code maxIters} passes are exhausted.
 	 */
 	private static void trainOnText(String text, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
 			LoraTrainableHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty) throws Exception {
-		trainOnText(text, adapters, optimizer, handler, tokenizer, totalSteps, dirty, loraSteps);
+		trainOnText(text, adapters, optimizer, handler, tokenizer, totalSteps, dirty, loraLossTargetText,
+				loraMaxIters, "text");
 	}
 
 	private static void trainOnText(String text, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
-			LoraTrainableHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty, int stepsPerChunk)
-			throws Exception {
+			LoraTrainableHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty, float lossTarget,
+			int maxIters, String logLabel) throws Exception {
 
 		int[] allTokens = tokenizer.encode(text);
 		if (allTokens.length < 2) {
@@ -798,19 +824,24 @@ public final class ConsoleMain {
 			chunks.add(chunk);
 		}
 
-		int totalGradSteps = chunks.size() * stepsPerChunk;
 		print("");
-		System.out.printf("  %sTraining%s  rank=%d · lr=%s · %d steps · %d chunk(s) · %d tokens%n", Color.CYAN_BOLD,
-				Color.RESET, loraRank, loraLr, totalGradSteps, chunks.size(), withBos.length);
+		System.out.printf("  %sTraining%s  rank=%d · lr=%s · target=%.2f · max %d pass(es) · %d chunk(s) · %d tokens%n",
+				Color.CYAN_BOLD, Color.RESET, loraRank, loraLr, lossTarget, maxIters, chunks.size(),
+				withBos.length);
 		print("  " + "─".repeat(62));
 
-		float firstLoss = Float.NaN, lastLoss = Float.NaN;
+		float firstLoss = Float.NaN;
+		float lastLoss = Float.MAX_VALUE;
 		int stepsDone = 0;
+		int iterations = 0;
 		long trainStart = System.currentTimeMillis();
+		boolean targetReached = false;
 		boolean stoppedEarly = false;
 
-		outer: for (int[] chunk : chunks) {
-			for (int s = 0; s < stepsPerChunk; s++) {
+		outer: for (int iter = 1; iter <= maxIters && lastLoss > lossTarget; iter++) {
+			iterations = iter;
+			for (int ci = 0; ci < chunks.size(); ci++) {
+				int[] chunk = chunks.get(ci);
 				long stepStart = System.currentTimeMillis();
 				float loss = handler.trainStep(chunk, optimizer);
 				long stepMs = System.currentTimeMillis() - stepStart;
@@ -820,69 +851,51 @@ public final class ConsoleMain {
 				lastLoss = loss;
 				stepsDone++;
 
-				// ── [TRACE] per-step loss (always shown, raw values for diagnosis) ──
 				if (verbose) {
-					System.out.printf("%n  [TRACE] step=%d  loss=%.6f  chunk=%d/%d  ms=%d%n",
-							stepsDone, loss, chunks.indexOf(chunk) + 1, chunks.size(), stepMs);
+					System.out.printf("%n  [TRACE] iter=%d  step=%d  loss=%.6f  chunk=%d/%d  ms=%d%n", iter,
+							stepsDone, loss, ci + 1, chunks.size(), stepMs);
 				}
 
-				// Early stop: loss below threshold → model has memorised the chunk.
-				// Continuing would drive loss toward 0 and destroy generalisation.
 				if (loraEarlyStop > 0 && loss < loraEarlyStop) {
-					int pct = (int) (100.0 * stepsDone / totalGradSteps);
-					int bars = Math.min(20, pct / 5);
-					String bar = Color.GREEN + "▓".repeat(bars) + Color.DIM + "░".repeat(20 - bars) + Color.RESET;
-					System.out.printf("\r  step %3d/%-3d  loss=%.4f  %s %3d%%  %4dms/step  ETA %-8s", stepsDone,
-							totalGradSteps, loss, bar, pct, stepMs, "0s");
-					System.out.flush();
-					System.out.println();
-					System.out.printf("  %s⚠ Early stop%s  loss=%.4f < threshold=%.2f%n", Color.YELLOW, Color.RESET,
-							loss, loraEarlyStop);
 					stoppedEarly = true;
 					break outer;
 				}
-
-				// Overfitting warning: loss < 0.5 but early stop not triggered
-				// (user set loraEarlyStop=0 or threshold is very low)
-				if (loss < 0.5f && loraEarlyStop == 0) {
-					System.out.printf(
-							"\r  %s⚠ loss=%.4f — risk of overfitting. "
-									+ "Consider stopping soon or lowering --lora-steps-qa.%s%n",
-							Color.YELLOW, loss, Color.RESET);
-				}
-
-				// ETA based on rolling average of all steps so far
-				long elapsed = System.currentTimeMillis() - trainStart;
-				long msPerStep = elapsed / stepsDone;
-				long etaMs = msPerStep * (totalGradSteps - stepsDone);
-				String eta = etaMs > 60_000 ? String.format("%dm%02ds", etaMs / 60_000, (etaMs % 60_000) / 1000)
-						: String.format("%ds", etaMs / 1000);
-
-				int pct = (int) (100.0 * stepsDone / totalGradSteps);
-				int bars = pct / 5;
-				String bar = Color.GREEN + "▓".repeat(bars) + Color.DIM + "░".repeat(20 - bars) + Color.RESET;
-				System.out.printf("\r  step %3d/%-3d  loss=%.4f  %s %3d%%  %4dms/step  ETA %-8s", stepsDone,
-						totalGradSteps, loss, bar, pct, stepMs, eta);
-				System.out.flush();
 			}
+
+			System.out.printf("  [train-%s] iter=%2d  loss=%.4f  target=%.2f%n", logLabel, iter, lastLoss,
+					lossTarget);
+
+			if (lastLoss <= lossTarget)
+				targetReached = true;
 		}
 
-		System.out.println();
 		long totalMs = System.currentTimeMillis() - trainStart;
 		float delta = Float.isNaN(firstLoss) ? 0f : lastLoss - firstLoss;
 		String trend = delta < 0 ? Color.GREEN + String.format("▼ %.4f (−%.4f)", lastLoss, -delta) + Color.RESET
 				: Color.YELLOW + String.format("▲ %.4f (+%.4f)", lastLoss, delta) + Color.RESET;
-		String doneLabel = stoppedEarly ? Color.YELLOW + "⚠ stopped early" + Color.RESET
-				: Color.GREEN + "✔ done" + Color.RESET;
-		System.out.printf("  %s  loss=%s  %ds total  · /save to persist%n", doneLabel, trend, totalMs / 1000);
+		String doneLabel;
+		if (stoppedEarly) {
+			doneLabel = Color.YELLOW + "⚠ stopped early (overfit guard)" + Color.RESET;
+			System.out.printf("  %s⚠ Early stop%s  loss=%.4f < threshold=%.2f%n", Color.YELLOW, Color.RESET,
+					lastLoss, loraEarlyStop);
+		} else if (targetReached) {
+			doneLabel = Color.GREEN + "✔ target reached" + Color.RESET;
+		} else {
+			doneLabel = Color.YELLOW + "⚠ max iters reached" + Color.RESET;
+		}
+		System.out.printf("  %s  loss=%s  %d pass(es)  %ds total  · /save to persist%n", doneLabel, trend,
+				iterations, totalMs / 1000);
 		if (lastLoss < 0.1f) {
 			System.out.printf("  %s⚠ WARNING: loss=%.4f — adapter is severely overfit.%s%n", Color.RED, lastLoss,
 					Color.RESET);
 			System.out.printf("  %s  The model will generate garbage until you /reset adapters.%s%n%n", Color.RED,
 					Color.RESET);
 		} else if (lastLoss < 0.5f && !stoppedEarly) {
-			System.out.printf("  %s⚠ loss < 0.5 — consider stopping here. " + "More steps risk overfitting.%s%n%n",
+			System.out.printf("  %s⚠ loss < 0.5 — consider stopping here. More passes risk overfitting.%s%n%n",
 					Color.YELLOW, Color.RESET);
+		} else if (!targetReached && !stoppedEarly) {
+			System.out.printf("  %s⚠ loss=%.4f still above target=%.2f — raise --lora-max-iters or lower target.%s%n%n",
+					Color.YELLOW, lastLoss, lossTarget, Color.RESET);
 		} else {
 			System.out.println();
 		}
@@ -1377,8 +1390,8 @@ public final class ConsoleMain {
 		System.out.println(Color.BLUE + "░▀░▀" + Color.YELLOW + "░▀▀▀" + Color.RESET + "\n");
 
 		if (loraMode) {
-			System.out.println(String.format("  %s⚙ LoRA mode  ·  rank=%d  α=%.1f  lr=%s  steps=%d%s%n",
-					Color.PURPLE_BOLD, loraRank, loraAlpha, loraLr, loraSteps, Color.RESET));
+			System.out.println(String.format("  %s⚙ LoRA mode  ·  rank=%d  α=%.1f  lr=%s  loss-target=%.1f  max-iters=%d%s%n",
+					Color.PURPLE_BOLD, loraRank, loraAlpha, loraLr, loraLossTargetText, loraMaxIters, Color.RESET));
 		} else {
 			System.out.println(String.format(
 					"  %sdtype=%s · byteOrder=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
