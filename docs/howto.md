@@ -35,6 +35,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | Flag | Default | Commands | Description |
 |------|---------|----------|-------------|
 | `--model-path PATH` | — | all | Path to GGUF file (required) |
+| `--mmproj-path PATH` | — | local | Path to a separate mmproj GGUF holding the CLIP vision encoder. Required for `/v1/vision/chat` to be registered — real LLaVA/Qwen-VL/SmolVLM GGUF releases keep the vision encoder in a file separate from the base LLM; see `docs/Vision-I2T.md`. Environment override: `MMPROJ_PATH`. |
 | `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | cluster, local | Activation wire format |
 | `--byteOrder BE\|LE` | `BE` | cluster | Activation byte order. Must match across all JVMs — propagated automatically by `ClusterHarness` and `juno-deploy.sh`. |
 | `--max-tokens N` | `200` | cluster, local, lora | Maximum tokens per response. Same default as REST API and `SamplingParams.defaults()`. |
@@ -117,6 +118,8 @@ set MODEL_PATH=C:\models\model.gguf
 juno.bat local
 
 juno.bat local --model-path models\model.gguf --jfr 5m
+
+juno.bat local --model-path models\llava-v1.5-7b-Q4_K_M.gguf --mmproj-path models\mmproj-model-f16.gguf --nodes 1 --api-port 8081
 ```
 
 When `--lora-play` is given, the startup banner shows:

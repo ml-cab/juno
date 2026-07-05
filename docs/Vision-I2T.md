@@ -8,47 +8,78 @@ module.  Tested architectures: LLaVA-1.5 (LLaMA-2 backbone), LLaVA-1.6
 
 ## Model requirements
 
-The model must be a GGUF file whose `general.architecture` is `llava`,
-`llava-1.5`, or `llava-qwen2`, and must contain both the LLM weights and
-the CLIP vision encoder weights in the same file (the standard llama.cpp
-mmproj-merged format).
+Detection is based on the presence of the CLIP patch-embedding tensor
+`v.patch_embd.weight`, not on `general.architecture` — LLaVA-family models
+report `general.architecture=llama` (or `qwen2`, `phi3`, ...) because that is
+the text backbone; checking the architecture string alone will never find a
+vision model.
 
-Compatible models from Hugging Face (run through `llama.cpp convert` to GGUF):
+**The CLIP vision encoder lives in a separate GGUF file.** Every known public
+llama.cpp-format multimodal release (LLaVA, LLaVA-NeXT, Qwen-VL, SmolVLM,
+Gemma-3 vision, MiniCPM-V, ...) ships the CLIP encoder in a distinct file,
+conventionally named `mmproj-*.gguf`, loaded alongside the base LLM. A single
+merged GGUF containing both the LLM and the vision encoder is not how any
+current public model is distributed — pointing Juno at the base LLM file
+alone (`--model-path`) will always report the model as text-only, even for a
+genuine I2T model, because `v.patch_embd.weight` only exists in the mmproj
+file.
 
-| Model | Architecture key |
-|---|---|
-| llava-v1.5-7b-Q4_K_M.gguf | `llava` |
-| llava-v1.6-mistral-7b.Q4_K_M.gguf | `llava-1.5` |
+Pass the mmproj file explicitly:
+
+```bash
+./juno local --model-path ../models/llava-v1.5-7b-Q4_K_M.gguf \
+             --mmproj-path ../models/mmproj-model-f16.gguf \
+             --api-port 8081
+```
+
+Compatible models from Hugging Face (base model + matching mmproj file):
+
+| Model | Base file | mmproj file |
+|---|---|---|
+| llava-v1.5-7b | `llava-v1.5-7b-Q4_K_M.gguf` | `mmproj-model-f16.gguf` |
+| llava-v1.6-mistral-7b | `llava-v1.6-mistral-7b.Q4_K_M.gguf` | `mmproj-model-f16.gguf` |
+
+If `--mmproj-path` is omitted, Juno falls back to probing `--model-path`
+itself for `v.patch_embd.weight` — this only succeeds for a hypothetical
+merged-file GGUF and will report "not a vision model" for every real
+downloaded release. Check the startup log line
+`[vision] isVisionArchitecture check` to confirm which file was probed.
 
 ---
 
 ## Loading
 
-`ForwardPassHandlerLoader.load()` detects the `llava` architecture and
-automatically wraps the LLaMA text handler with `VisionAwareForwardPassHandler`.
-No code change is needed in `CoordinatorMain`.
+`ConsoleMain.wireVisionRoutes()` (juno-player, `--local` mode) checks
+`LlavaHandlerFactory.isVisionArchitecture(modelPath, mmprojPath)` once the
+text pipeline has finished loading. If it returns true, it calls
+`LlavaHandlerFactory.buildFromHandlers()`, which reads only the CLIP
+encoder tensors from the resolved vision-weights file (the mmproj file when
+`--mmproj-path` is given) and wraps the first loaded text handler in a
+`VisionAwareForwardPassHandler`. The `/v1/vision/chat` and
+`/v1/vision/chat/stream` routes are then registered on the same
+`InferenceApiServer` used for text chat.
 
 ```bash
-# same launch command as text-only — the handler is selected from GGUF metadata
-./juno serve --model /path/to/llava-v1.5-7b-Q4_K_M.gguf
+./juno local --model-path ../models/llava-v1.5-7b-Q4_K_M.gguf \
+             --mmproj-path ../models/mmproj-model-f16.gguf \
+             --nodes 1 --api-port 8081 --verbose
 ```
 
-Wire the `VisionChatHandler` into `InferenceApiServer` once the model is loaded:
-
-```java
-VisionConfig vCfg   = VisionConfig.from(ggufReader);
-VisionEncoder enc   = VisionEncoder.load(modelPath, backend);
-int imgTokenId      = Integer.getInteger("juno.vision.image_token_id", 32000);
-var visionHandler   = new VisionAwareForwardPassHandler(textHandler, imgTokenId, vCfg.projectionDim());
-var visionChatHndlr = new VisionChatHandler(scheduler, registry, enc, visionHandler);
-server.withVisionHandler(visionChatHndlr);
-```
+No code change is needed to use a new LLaVA-family checkpoint — only a
+correct `--mmproj-path` pointing at that checkpoint's own mmproj file.
+Mixing mmproj files across unrelated models fails with an embedding-dimension
+mismatch when `VisionAwareForwardPassHandler` is constructed.
 
 Override the image token ID via system property when using a non-LLaVA model:
 
 ```bash
 -Djuno.vision.image_token_id=32044    # Phi-3 Vision
 ```
+
+**Known limitation**: only `--local` mode wires vision routes today.
+`runClusterRepl()` (`--cluster` mode) does not call `wireVisionRoutes()`, so
+`/v1/vision/chat` is not registered when forking separate node JVMs — use
+`--local --nodes 1` for vision models.
 
 ---
 
@@ -148,6 +179,7 @@ VisionChatHandler
 vision/
   src/main/java/cab/ml/juno/vision/
     VisionConfig.java                 GGUF metadata → encoder shape
+    VisionModelPaths.java             resolves base-model vs mmproj file for vision tensors
     ImagePatchEmbedder.java           raw bytes → float[3*H*W] CHW tensor
     VisionEncoder.java                CLIP ViT forward pass (pure Java)
     VisionAwareForwardPassHandler.java  ForwardPassHandler decorator
@@ -155,6 +187,7 @@ vision/
     VisionChatHandler.java            Javalin route handler
   src/test/java/cab/ml/juno/vision/
     VisionConfigTest.java
+    VisionModelPathsTest.java
     ImagePatchEmbedderTest.java
     VisionEncoderTest.java
     VisionAwareForwardPassHandlerTest.java

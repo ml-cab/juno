@@ -1,6 +1,84 @@
 ## Status
 
-**Session 34** — Windows launcher fixed: `run.bat` and `juno.bat` fully functional on Windows.
+**Session 35** — `--local` mode: fixed `--verbose` no-op and vision models never being detected.
+
+### `--verbose` was a no-op in `--local` mode
+
+`ConsoleMain` silenced `java.util.logging` in a `static { }` initializer, which
+runs at class-load time — before `main()` calls `parseArgs()`. It always
+observed `verbose=false` regardless of the CLI flag, so `--local --verbose`
+produced no log output. `--cluster --verbose` happened to work because its
+verbosity check lives in `ClusterHarness`, read at fork time, well after
+`parseArgs()` has already run.
+
+**Fix:** moved the logging setup out of the static initializer into a new
+`configureLogging()` private static method, called explicitly from `main()`
+immediately after `parseArgs()` returns.
+
+Regression test: `ConsoleMainLoggingTest` (drives `configureLogging()` via
+reflection and asserts on `LogManager` state).
+
+### Vision models (`/v1/vision/chat`) never detected against real downloaded GGUFs
+
+`LlavaHandlerFactory.isVisionArchitecture()` only ever probed
+`--model-path` for the CLIP tensor `v.patch_embd.weight`. Every known public
+LLaVA/Qwen-VL/SmolVLM/MiniCPM-V GGUF release ships the CLIP vision encoder in
+a **separate** `mmproj-*.gguf` file — the base LLM file never contains
+`v.patch_embd.weight`. As a result every real downloaded I2T model was
+classified as text-only and `/v1/vision/chat` was never registered, even
+though `docs/Vision-I2T.md` assumed (incorrectly) that a single merged GGUF
+was the standard format.
+
+**Fix:**
+
+- New `--mmproj-path PATH` CLI flag (`ConsoleMain`, `scripts/run.sh` `local`
+  command; `MMPROJ_PATH` env var override).
+- Windows parity: `scripts/run.bat` `local` command gains `--mmproj-path`
+  (`MMPROJ_PATH` env var) and — a prerequisite discovered while adding
+  it — `--api-port` (`API_PORT` env var). `run.bat local` had never
+  supported `--api-port` at all; `docs/howto.md` documented a
+  `juno.bat local --api-port 8080` example that did not actually work.
+  `run.bat cluster` and `run.bat lora` still lack `--api-port` /
+  `--mmproj-path`; out of scope here since vision routes are `--local`-only
+  (see known limitation below).
+- New `VisionModelPaths` record (vision module) resolving which file to open
+  for vision tensors: the mmproj file when given, else the model file
+  (merged-file fallback). Pure logic, no I/O — unit-tested directly.
+- `LlavaHandlerFactory.isVisionArchitecture(Path, Path)` and
+  `buildFromHandlers(Path, Path, List, LlamaConfig)` now take an optional
+  mmproj path; the old single-argument overloads are kept for backward
+  compatibility and delegate with `mmprojPath=null`.
+- `docs/Vision-I2T.md`, `docs/agent-arch.txt`, `docs/howto.md`, `README.md`
+  updated to describe the two-file reality and the new flag, and to note
+  that `--cluster` mode does not yet wire vision routes (`--local` only).
+
+Regression test: `VisionModelPathsTest`.
+
+### `--dtype` silently accepted invalid values (discovered while live-testing the fix above)
+
+`parseDtype()`'s `switch` had no explicit `FLOAT32` case — both an explicit
+`--dtype FLOAT32` and any unrecognized garbage (a typo, or an unsupported
+quantization label like `INT4`) fell into the same `default` branch, so
+`--dtype INT4` was silently coerced to `FLOAT32` with zero feedback. The
+startup banner's first line echoes the raw CLI string, so `INT4` appeared to
+"work" right up until the second banner line (parsed
+`ActivationDtype.toString()`) silently showed `FLOAT32` instead.
+
+Note: `--dtype` only controls the wire format for activations shipped
+*between* pipeline nodes — it is unrelated to a GGUF's own weight
+quantization, so a `Q4_K`/int4-quantized base model paired with an F16
+mmproj file (the normal case for every public LLaVA release) is not a
+problem to worry about.
+
+**Fix:** added an explicit `FLOAT32`/`F32`/`FP32` case, and the `default`
+branch now prints a `WARNING` to stderr naming the rejected value before
+falling back to `FLOAT32`.
+
+Regression test: `ConsoleMainDtypeTest`.
+
+---
+
+
 
 ### Windows launcher (`scripts/run.bat`, `juno.bat`)
 

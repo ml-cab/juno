@@ -38,6 +38,14 @@ Distributed LLM inference and fine-tuning. Pure Java - No Python, no GIL, no Spr
 - Enable with `--api-port N` on `./juno local` or cluster mode
 - Juno extensions: `x_juno_priority`, `x_juno_session_id`, `x_juno_top_k`
 
+### Vision (image-to-text)
+
+- `POST /v1/vision/chat` (blocking + SSE), registered automatically on
+  `./juno local --api-port N` when the loaded model is a LLaVA-family model
+- Requires `--mmproj-path PATH` pointing at the model's separate mmproj GGUF
+  (real GGUF releases never merge the CLIP encoder into the base LLM file)
+- See [docs/Vision-I2T.md](docs/Vision-I2T.md)
+
 ### JVM integration
 
 - Maven BOM: `cab.ml:juno-bom:0.1.0`

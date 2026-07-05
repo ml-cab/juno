@@ -30,7 +30,6 @@ import java.util.Random;
 import java.util.logging.Logger;
 
 import cab.ml.juno.coordinator.GenerationLoop;
-
 import cab.ml.juno.coordinator.GenerationResult;
 import cab.ml.juno.coordinator.InferenceRequest;
 import cab.ml.juno.coordinator.RequestPriority;
@@ -48,7 +47,6 @@ import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
-
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
 import cab.ml.juno.node.LoraQvInitializer;
@@ -86,7 +84,9 @@ import jdk.jfr.RecordingState;
  * into the GGUF. This keeps the base model untouched and lets you swap adapters
  * freely. Use /merge-hint in the REPL to see how to bake weights in.
  *
- * Command-line arguments: --model-path PATH Path to GGUF file (required) --cpu
+ * Command-line arguments: --model-path PATH Path to GGUF file (required)
+ * --mmproj-path PATH Separate mmproj GGUF holding the CLIP vision encoder
+ * (required for /v1/vision/chat on real LLaVA/Qwen-VL/SmolVLM releases) --cpu
  * Force computation on CPU --dtype FLOAT32|FLOAT16 Activation wire format
  * (default: FLOAT16) --max-tokens N Max generated tokens (default: 200)
  * --temperature F Sampling temperature (default: 0.7) --local Use in-process
@@ -103,9 +103,23 @@ public final class ConsoleMain {
 	@SuppressWarnings("unused")
 	private static final Logger log = Logger.getLogger(ConsoleMain.class.getName());
 
-	static {
-		boolean verbose = Boolean.getBoolean("JUNO_VERBOSE") || "true".equalsIgnoreCase(System.getenv("JUNO_VERBOSE"));
-		if (!verbose) {
+	/**
+	 * Configures java.util.logging verbosity for this JVM.
+	 *
+	 * Must be called from {@link #main(String[])} AFTER {@link #parseArgs(String[])}
+	 * has run, never from a static initializer. A static initializer executes at
+	 * class-load time, which is before main()'s body — including before
+	 * parseArgs() has parsed --verbose and before JUNO_VERBOSE would be set as a
+	 * system property — so it would always observe verbose=false regardless of
+	 * the CLI flag. That ordering bug previously made --verbose a no-op in
+	 * --local mode (single in-process JVM), while cluster mode happened to work
+	 * because verbosity there is read by {@link ClusterHarness} at fork time,
+	 * well after parseArgs() has already run.
+	 */
+	private static void configureLogging() {
+		boolean effectiveVerbose = verbose || Boolean.getBoolean("JUNO_VERBOSE")
+				|| "true".equalsIgnoreCase(System.getenv("JUNO_VERBOSE"));
+		if (!effectiveVerbose) {
 			java.util.logging.LogManager.getLogManager().reset();
 			java.util.logging.Logger.getLogger("").setLevel(java.util.logging.Level.OFF);
 			for (String ns : new String[] { "io.grpc", "io.netty", "cab.ml.juno", "com.google", "org.slf4j", "" }) {
@@ -116,6 +130,15 @@ public final class ConsoleMain {
 
 	// ── Standard arguments ────────────────────────────────────────────────────
 	private static String modelPath = null;
+	/**
+	 * Path to a separate mmproj GGUF holding the CLIP vision encoder (see
+	 * {@link cab.ml.juno.vision.VisionModelPaths}). Real-world multimodal GGUF
+	 * releases (LLaVA, Qwen-VL, SmolVLM, ...) never merge the vision encoder
+	 * into the base LLM file; without this path {@code --api-port} vision
+	 * routes are never registered for those models, even though
+	 * {@code --model-path} points at a genuine I2T model.
+	 */
+	private static String mmprojPath = null;
 	private static ActivationDtype dtype = ActivationDtype.FLOAT16;
 	private static int maxTokens = 200;
 	private static float temperature = 0.7f;
@@ -167,6 +190,7 @@ public final class ConsoleMain {
 			printHelp();
 			System.exit(0);
 		}
+		configureLogging();
 
 		// ── Health sidecar — start in background then continue normally ──────
 		if (healthMode) {
@@ -180,6 +204,10 @@ public final class ConsoleMain {
 		}
 		if (!Path.of(modelPath).toFile().exists()) {
 			System.err.println("ERROR: Model file not found: " + modelPath);
+			System.exit(1);
+		}
+		if (mmprojPath != null && !Path.of(mmprojPath).toFile().exists()) {
+			System.err.println("ERROR: mmproj file not found: " + mmprojPath);
 			System.exit(1);
 		}
 
@@ -230,6 +258,10 @@ public final class ConsoleMain {
 			case "--model-path":
 				if (i + 1 < args.length)
 					modelPath = args[++i];
+				break;
+			case "--mmproj-path":
+				if (i + 1 < args.length)
+					mmprojPath = args[++i];
 				break;
 			case "--dtype":
 				if (i + 1 < args.length)
@@ -353,6 +385,12 @@ public final class ConsoleMain {
 		System.out.println();
 		System.out.println("Required:");
 		System.out.println("  --model-path PATH          Path to GGUF model file");
+		System.out.println();
+		System.out.println("Vision (image-to-text) models:");
+		System.out.println("  --mmproj-path PATH         Path to a separate mmproj GGUF holding the CLIP");
+		System.out.println("                             vision encoder. Required for /v1/vision/chat —");
+		System.out.println("                             real LLaVA/Qwen-VL/SmolVLM GGUF releases keep the");
+		System.out.println("                             vision encoder in a separate file from the base LLM.");
 		System.out.println();
 		System.out.println("Inference options:");
 		System.out.println("  --gpu                      Use GPU (default, no need to set)");
@@ -1193,7 +1231,7 @@ public final class ConsoleMain {
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
-			wireVisionRoutes(apiServer, modelPath, scheduler, registry);
+			wireVisionRoutes(apiServer, modelPath, mmprojPath, scheduler, registry, handlers, shardMap, config);
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Local API server on http://localhost:" + apiPort
 					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);
@@ -1217,6 +1255,39 @@ public final class ConsoleMain {
 		}
 
 		startRepl(loop, tokenizer);
+	}
+
+	private static void wireVisionRoutes(cab.ml.juno.coordinator.InferenceApiServer apiServer, String modelPath,
+			String mmprojPath, cab.ml.juno.coordinator.RequestScheduler scheduler, ModelRegistry registry,
+			List<ForwardPassHandler> handlers, ShardMap shardMap, LlamaConfig config) {
+		log.info("[vision] wireVisionRoutes — modelPath=" + modelPath + "  mmprojPath=" + mmprojPath + "  handlers="
+				+ (handlers == null ? "null" : handlers.size()));
+		try {
+			Path mmproj = mmprojPath != null ? Path.of(mmprojPath) : null;
+			boolean isVision = LlavaHandlerFactory.isVisionArchitecture(Path.of(modelPath), mmproj);
+			log.info("[vision] isVisionArchitecture=" + isVision);
+			if (!isVision) {
+				log.info("[vision] Not a vision model — skipping route registration"
+						+ (mmproj == null ? " (no --mmproj-path given; pass one if this is a known I2T model)" : ""));
+				return;
+			}
+			log.info("[vision] Building vision handler from " + handlers.size() + " loaded handler(s)");
+			LlavaHandlerFactory.Built built = LlavaHandlerFactory.buildFromHandlers(Path.of(modelPath), mmproj,
+					handlers, config);
+			log.info("[vision] Built — encoder patches=" + built.config().numPatches() + "  projDim="
+					+ built.config().projectionDim() + "  imageTokenId=" + built.imageTokenId());
+			VisionChatHandler visionChatHandler = new VisionChatHandler(scheduler, registry, built.encoder(),
+					built.visionHandler());
+			apiServer.addRoutes(app -> {
+				app.post("/v1/vision/chat", visionChatHandler::handleBlocking);
+				app.post("/v1/vision/chat/stream", visionChatHandler::handleStreaming);
+				log.info("[vision] Routes registered: POST /v1/vision/chat  POST /v1/vision/chat/stream");
+			});
+			print(Color.GREEN + "  ✔ Vision routes registered (POST /v1/vision/chat)" + Color.RESET);
+		} catch (Exception e) {
+			log.severe("[vision] wireVisionRoutes FAILED: " + e.getClass().getName() + ": " + e.getMessage());
+			java.util.Arrays.stream(e.getStackTrace()).limit(8).forEach(f -> log.severe("[vision]   at " + f));
+		}
 	}
 
 	private static ModelRegistry buildLocalModelRegistry(LlamaConfig config, String modelPath) {
@@ -1291,7 +1362,6 @@ public final class ConsoleMain {
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
-			wireVisionRoutes(apiServer, modelPath, scheduler, registry);
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Cluster API server on http://localhost:" + apiPort
 					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);
@@ -1351,38 +1421,6 @@ public final class ConsoleMain {
 		loop.evictSession(history.sessionId());
 		print(Color.YELLOW + "\nbye." + Color.RESET);
 		System.exit(0);
-	}
-
-	/**
-	 * If the loaded model is a LLaVA-family vision model, registers POST
-	 * /v1/vision/chat and POST /v1/vision/chat/stream on the server. No-op for
-	 * text-only models.
-	 */
-	private static void wireVisionRoutes(cab.ml.juno.coordinator.InferenceApiServer apiServer, String modelPath,
-			cab.ml.juno.coordinator.RequestScheduler scheduler, cab.ml.juno.registry.ModelRegistry registry) {
-		try {
-			if (!LlavaHandlerFactory.isVisionArchitecture(java.nio.file.Path.of(modelPath)))
-				return;
-			var backend = cab.ml.juno.node.ForwardPassHandlerLoader.selectBackend();
-			// Single combined shard — juno-player runs in-process, all layers local.
-			// ShardContext is built after config is available; extract from registry.
-			cab.ml.juno.registry.ModelDescriptor desc = registry.listModels().stream()
-					.filter(m -> m.status() == cab.ml.juno.registry.ModelStatus.LOADED).findFirst()
-					.orElseThrow(() -> new IllegalStateException("No loaded model in registry"));
-			var shardCtx = new cab.ml.juno.node.ShardContext("local", 0, desc.totalLayers(), true, true,
-					desc.vocabSize(), desc.hiddenDim(), desc.numHeads());
-			LlavaHandlerFactory.Built built = LlavaHandlerFactory.build(java.nio.file.Path.of(modelPath), shardCtx,
-					backend);
-			VisionChatHandler visionHandler = new VisionChatHandler(scheduler, registry, built.encoder(),
-					built.visionHandler());
-			apiServer.addRoutes(app -> {
-				app.post("/v1/vision/chat", visionHandler::handleBlocking);
-				app.post("/v1/vision/chat/stream", visionHandler::handleStreaming);
-			});
-			print(Color.GREEN + "  ✔ Vision routes registered — POST /v1/vision/chat available" + Color.RESET);
-		} catch (Exception e) {
-			log.warning("Vision wiring failed, running text-only: " + e.getMessage());
-		}
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────────
@@ -1446,9 +1484,14 @@ public final class ConsoleMain {
 		if (s == null)
 			return ActivationDtype.FLOAT16;
 		return switch (s.toUpperCase()) {
+		case "FLOAT32", "F32", "FP32" -> ActivationDtype.FLOAT32;
 		case "FLOAT16", "F16", "FP16" -> ActivationDtype.FLOAT16;
 		case "INT8", "I8" -> ActivationDtype.INT8;
-		default -> ActivationDtype.FLOAT32;
+		default -> {
+			System.err.println("WARNING: Unrecognized --dtype '" + s
+					+ "' (expected FLOAT32|FLOAT16|INT8) — falling back to FLOAT32");
+			yield ActivationDtype.FLOAT32;
+		}
 		};
 	}
 

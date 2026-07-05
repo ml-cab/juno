@@ -178,6 +178,8 @@ rem ============================================================================
 :local
 
 set "MODEL=%MODEL_PATH%"
+set "MMPROJ=%MMPROJ_PATH%"
+set "API_PORT_VAL=%API_PORT%"
 if "%DTYPE%"==""       set "DTYPE=FLOAT16"
 if "%BYTE_ORDER%"==""  set "BYTE_ORDER=BE"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
@@ -198,6 +200,8 @@ if not "%USE_GPU_ENV%"=="" (
 :local_parse
 if "%~1"=="" goto :local_done
 if /i "%~1"=="--model-path" ( set "MODEL=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--mmproj-path"( set "MMPROJ=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--api-port"   ( set "API_PORT_VAL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--dtype"      ( set "DTYPE=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--byteOrder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--byteorder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :local_parse )
@@ -237,6 +241,13 @@ if /i "%~1"=="--help" (
   echo   --gpu             use GPU when available (default)
   echo   --cpu             use CPU only
   echo   --verbose / -v
+  echo.
+  echo   --api-port N         start local REST API server on port N
+  echo                        (includes OpenAI-compatible /v1/chat/completions)
+  echo   --mmproj-path PATH   Path to a separate mmproj GGUF holding the CLIP
+  echo                        vision encoder. Required for /v1/vision/chat --
+  echo                        real LLaVA/Qwen-VL/SmolVLM releases keep the
+  echo                        vision encoder in a file separate from the base LLM.
   goto :eof
 )
 if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :local_parse )
@@ -251,6 +262,7 @@ if "%MODEL%"=="" (
   exit /b 1
 )
 if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
+if not "%MMPROJ%"=="" if not exist "%MMPROJ%" ( echo [ERR] mmproj file not found: "%MMPROJ%" & exit /b 1 )
 call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
@@ -272,9 +284,18 @@ if not "%JFR_DURATION_LOCAL%"=="" (
   echo [WARN] JFR enabled -- duration=%JFR_DURATION_LOCAL%  (programmatic recording, metrics auto-printed on exit)
 )
 
+set "API_PORT_ARG="
+if not "%API_PORT_VAL%"=="" set "API_PORT_ARG=--api-port %API_PORT_VAL%"
+
+set "MMPROJ_ARG="
+if not "%MMPROJ%"=="" (
+  set "MMPROJ_ARG=--mmproj-path %MMPROJ%"
+  echo [INFO] Vision mmproj: %MMPROJ%
+)
+
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %MMPROJ_ARG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================

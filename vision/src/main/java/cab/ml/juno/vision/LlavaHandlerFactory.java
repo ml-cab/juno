@@ -35,21 +35,24 @@ import cab.ml.juno.node.ShardContext;
  *
  * Dependency graph (no cycle):
  * <pre>
- *   vision  →  node        (VisionEncoder, VisionAwareForwardPassHandler use node APIs)
- *   vision  →  coordinator (VisionChatHandler uses RequestScheduler)
- *   juno-master  →  vision (CoordinatorMain calls LlavaHandlerFactory.build())
- *   node    →  (nothing in vision)
+ *   vision      →  node, registry, tokenizer   (no coordinator)
+ *   coordinator →  node, registry, ...          (no vision)
+ *   juno-player →  vision + coordinator + node  (only module touching both)
+ *   node        →  (nothing in vision)
  * </pre>
  *
- * Usage (in CoordinatorMain, after GGUF architecture has been detected):
+ * Usage (in ConsoleMain / wireVisionRoutes, after the pipeline is wired):
  * <pre>{@code
- * if (LlavaHandlerFactory.isVisionArchitecture(modelPath)) {
- *     LlavaHandlerFactory.Built built = LlavaHandlerFactory.build(modelPath, shardContext);
- *     apiServer.withVisionHandler(new VisionChatHandler(
- *             scheduler, registry, built.encoder(), built.visionHandler()));
- *     // built.textHandler() is already wrapped inside built.visionHandler()
- *     // — do NOT pass it separately to LocalInferencePipeline
- *     pipeline = new LocalInferencePipeline(built.visionHandler(), ...);
+ * Path mmproj = mmprojPath != null ? Path.of(mmprojPath) : null;
+ * if (LlavaHandlerFactory.isVisionArchitecture(Path.of(modelPath), mmproj)) {
+ *     LlavaHandlerFactory.Built built = LlavaHandlerFactory.buildFromHandlers(
+ *             Path.of(modelPath), mmproj, handlers, config);
+ *     VisionChatHandler handler = new VisionChatHandler(
+ *             scheduler, registry, built.encoder(), built.visionHandler());
+ *     apiServer.addRoutes(app -> {
+ *         app.post("/v1/vision/chat",        handler::handleBlocking);
+ *         app.post("/v1/vision/chat/stream", handler::handleStreaming);
+ *     });
  * }
  * }</pre>
  */
@@ -57,15 +60,10 @@ public final class LlavaHandlerFactory {
 
     private static final Logger log = Logger.getLogger(LlavaHandlerFactory.class.getName());
 
-    /** GGUF architecture strings that indicate a multimodal LLaVA model. */
-    private static final java.util.Set<String> VISION_ARCHS = java.util.Set.of(
-            "llava", "llava-1.5", "llava-qwen2");
-
     private LlavaHandlerFactory() {}
 
     /**
-     * Return value of {@link #build}: the wrapped handler, the raw text handler
-     * it delegates to, and the vision encoder needed by @see VisionChatHandler.
+     * Return value of {@link #build}: all wired components needed by VisionChatHandler.
      */
     public record Built(
             VisionAwareForwardPassHandler visionHandler,
@@ -76,37 +74,126 @@ public final class LlavaHandlerFactory {
     ) {}
 
     /**
-     * True when the GGUF file's {@code general.architecture} is a known vision
-     * architecture. Call this before {@link #build} to decide whether vision
-     * wiring is needed.
+     * True when the resolved vision-weights file (see {@link VisionModelPaths})
+     * contains a CLIP vision encoder, indicating a multimodal LLaVA-family
+     * model.
+     *
+     * Detection is based on the presence of the vision patch embedding tensor
+     * {@code v.patch_embd.weight}, NOT on {@code general.architecture}.
+     * LLaVA-1.5 (and variants) store {@code general.architecture = "llama"}
+     * because the backbone is LLaMA — checking the architecture string always
+     * returns false for these models.
+     *
+     * <p>Real GGUF releases of multimodal models split the CLIP encoder into
+     * a separate {@code mmproj-*.gguf} file (see {@link VisionModelPaths}).
+     * Pass that file as {@code mmprojPath} — checking the base model file
+     * alone will always return {@code false} for these models.
+     *
+     * @param modelPath  path to the base LLM GGUF
+     * @param mmprojPath path to a separate mmproj GGUF, or {@code null} if the
+     *                   caller believes vision tensors are merged into
+     *                   {@code modelPath} itself
      */
-    public static boolean isVisionArchitecture(Path modelPath) throws IOException {
-        try (GgufReader r = GgufReader.open(modelPath)) {
+    public static boolean isVisionArchitecture(Path modelPath, Path mmprojPath) throws IOException {
+        VisionModelPaths paths = VisionModelPaths.of(modelPath, mmprojPath);
+        try (GgufReader r = GgufReader.open(paths.visionWeightsPath())) {
             String arch = r.metaString("general.architecture");
-            return arch != null && VISION_ARCHS.contains(arch.toLowerCase().strip());
+            boolean hasPatchEmbd = r.hasTensor("v.patch_embd.weight");
+            log.info("[vision] isVisionArchitecture check — general.architecture=\"" + arch
+                    + "\"  hasTensor(v.patch_embd.weight)=" + hasPatchEmbd
+                    + "  visionWeightsPath=" + paths.visionWeightsPath()
+                    + "  usesSeparateMmproj=" + paths.usesSeparateMmproj());
+            return hasPatchEmbd;
         }
     }
 
     /**
-     * Build the vision-capable forward pass handler for a LLaVA model.
+     * Backward-compatible overload: probes {@code modelPath} itself for vision
+     * tensors (merged-file assumption). Prefer
+     * {@link #isVisionArchitecture(Path, Path)} — real GGUF releases keep the
+     * CLIP encoder in a separate mmproj file, which this overload cannot see.
+     */
+    public static boolean isVisionArchitecture(Path modelPath) throws IOException {
+        return isVisionArchitecture(modelPath, null);
+    }
+
+    /**
+     * Build a vision-capable handler by wrapping already-loaded text handlers.
      *
-     * Internally:
-     * <ol>
-     *   <li>Delegates to {@link ForwardPassHandlerLoader#load} to get the LLaMA
-     *       text handler (loads all text-layer weights for the given shard).
-     *   <li>Opens the GGUF a second time to load CLIP vision encoder weights.
-     *   <li>Wraps the text handler in {@link VisionAwareForwardPassHandler}.
-     * </ol>
+     * This is the correct entry point for juno-player, where
+     * {@code ForwardPassHandlerLoader} has already loaded the LLaMA text layers
+     * into the pipeline. Wrapping those handlers avoids loading the multi-GB
+     * GGUF a second time and ensures the {@link VisionAwareForwardPassHandler}
+     * that receives inference requests is the same instance the
+     * {@link cab.ml.juno.node.LocalInferencePipeline} uses.
      *
-     * The {@code imageTokenId} is read from the system property
-     * {@code juno.vision.image_token_id} (default 32000 for LLaVA-1.5).
-     * Override for Phi-3 Vision: {@code -Djuno.vision.image_token_id=32044}.
+     * Only the CLIP vision encoder weights are read from disk — from
+     * {@code mmprojPath} when given (the real-world case for every known
+     * public LLaVA/Qwen-VL/SmolVLM GGUF release), or from {@code modelPath}
+     * otherwise. Either way this is a small fraction of the file: only the
+     * {@code v.*} and {@code mm.*} tensors are loaded.
      *
-     * @param modelPath path to the GGUF file
-     * @param context   shard assignment for this node
-     * @param backend   compute backend (CPU or GPU MatVec)
-     * @return {@link Built} containing all wired components
-     * @throws IOException if the file cannot be opened or a required tensor is missing
+     * @param modelPath  path to the base LLM GGUF (for CLIP encoder weights
+     *                   only when {@code mmprojPath} is {@code null})
+     * @param mmprojPath path to a separate mmproj GGUF holding the CLIP vision
+     *                   encoder, or {@code null} to probe {@code modelPath}
+     *                   itself (merged-file fallback)
+     * @param handlers   the already-loaded {@link ForwardPassHandler} list from
+     *                   {@code runLocalRepl} — the first handler is wrapped
+     * @param config     parsed LlamaConfig (for projectionDim cross-check)
+     */
+    public static Built buildFromHandlers(Path modelPath, Path mmprojPath,
+                                          java.util.List<ForwardPassHandler> handlers,
+                                          cab.ml.juno.node.LlamaConfig config) throws IOException {
+        VisionModelPaths paths = VisionModelPaths.of(modelPath, mmprojPath);
+        log.info("[vision] buildFromHandlers — visionWeightsPath=" + paths.visionWeightsPath()
+                + "  usesSeparateMmproj=" + paths.usesSeparateMmproj()
+                + "  handlers=" + (handlers == null ? "null" : handlers.size()));
+        if (handlers == null || handlers.isEmpty())
+            throw new IllegalArgumentException("handlers must not be empty");
+
+        ForwardPassHandler textHandler = handlers.get(0);
+        log.info("[vision] textHandler type=" + textHandler.getClass().getName());
+
+        VisionConfig vCfg;
+        VisionEncoder encoder;
+        try (GgufReader r = GgufReader.open(paths.visionWeightsPath())) {
+            vCfg    = VisionConfig.from(r);
+            log.info("[vision] VisionConfig=" + vCfg);
+            encoder = VisionEncoder.load(r, vCfg, cab.ml.juno.node.CpuMatVec.INSTANCE);
+            log.info("[vision] VisionEncoder loaded");
+        }
+
+        int imageTokenId = Integer.getInteger("juno.vision.image_token_id", 32000);
+        VisionAwareForwardPassHandler visionHandler =
+                new VisionAwareForwardPassHandler(textHandler, imageTokenId, vCfg.projectionDim());
+
+        // Replace handlers[0] with the vision-aware wrapper so the pipeline uses it
+        handlers.set(0, visionHandler);
+        log.info("[vision] handlers[0] replaced with VisionAwareForwardPassHandler"
+                + "  imageTokenId=" + imageTokenId
+                + "  patches=" + vCfg.numPatches()
+                + "  projDim=" + vCfg.projectionDim());
+
+        return new Built(visionHandler, textHandler, encoder, vCfg, imageTokenId);
+    }
+
+    /**
+     * Backward-compatible overload: reads vision weights from {@code modelPath}
+     * itself (merged-file assumption). Prefer
+     * {@link #buildFromHandlers(Path, Path, java.util.List, cab.ml.juno.node.LlamaConfig)}
+     * with an explicit mmproj path — real GGUF releases keep the CLIP encoder
+     * in a separate file.
+     */
+    public static Built buildFromHandlers(Path modelPath,
+                                          java.util.List<ForwardPassHandler> handlers,
+                                          cab.ml.juno.node.LlamaConfig config) throws IOException {
+        return buildFromHandlers(modelPath, null, handlers, config);
+    }
+
+    /**
+     * Build by loading a fresh set of text handlers from disk.
+     * Use {@link #buildFromHandlers} in juno-player where handlers are already loaded.
      */
     public static Built build(Path modelPath, ShardContext context, MatVec backend) throws IOException {
         log.info("Building vision-aware handler for LLaVA model: " + modelPath);

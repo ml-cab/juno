@@ -70,11 +70,18 @@ LoRA GPU defaults:
 vision — Image-to-text (I2T) module. GGUF-based CLIP ViT encoder, patch
         embedder (javax.imageio; no new deps), and ForwardPassHandler decorator.
         depends on: node, coordinator, registry, tokenizer, sampler.
-        depended on by: coordinator, juno-master.
+        depended on by: juno-player, juno-master.
         node does NOT depend on vision — no cycle is possible.
  
   VisionConfig   — reads clip.* / vision.* GGUF metadata keys; derives
                    numPatches, numVisionTokens, headDim.
+  VisionModelPaths — resolves which GGUF file to probe/load CLIP vision
+                   tensors from: the separate mmproj file when one is given,
+                   else the base model file (merged-file fallback). Real
+                   public LLaVA/Qwen-VL/SmolVLM GGUF releases always use a
+                   separate mmproj file — the base LLM GGUF never contains
+                   v.patch_embd.weight. Pure logic, no I/O; unit-tested
+                   directly without a GGUF fixture.
   ImagePatchEmbedder — decode → bilinear resize → CLIP normalise → CHW float[].
   VisionEncoder  — pure Java CLIP ViT forward pass (patch embed, CLS, positional
                    embed, pre-LN, N transformer blocks, vision projector).
@@ -87,9 +94,12 @@ vision — Image-to-text (I2T) module. GGUF-based CLIP ViT encoder, patch
                    LlamaTransformerHandler unchanged.
   LlavaHandlerFactory — the ONLY place that knows "this is a LLaVA model". Lives
                    in vision (not in node) to keep the dependency direction correct.
-                   Calls ForwardPassHandlerLoader.load() → wraps result in
+                   isVisionArchitecture(modelPath, mmprojPath) and
+                   buildFromHandlers(modelPath, mmprojPath, handlers, config) both
+                   resolve the vision-weights file via VisionModelPaths before
+                   opening a GgufReader. Wraps handlers.get(0) in
                    VisionAwareForwardPassHandler. Returns Built record with all
-                   wired components for CoordinatorMain to consume.
+                   wired components for ConsoleMain to consume.
   VisionInferenceRequest — immutable record; carries imageBytes alongside messages.
   VisionChatHandler — Javalin handler for POST /v1/vision/chat (blocking) and
                    POST /v1/vision/chat/stream (SSE). Reads multipart/form-data
@@ -100,21 +110,28 @@ ForwardPassHandlerLoader (node module) — UNCHANGED. Does not import vision.
   Continues to dispatch llava architecture to LlamaTransformerHandler (text layers
   only). Vision wrapping is applied by LlavaHandlerFactory on top.
  
-InferenceApiServer (coordinator module) — adds optional VisionChatHandler field
-  wired via withVisionHandler(). Two new routes: POST /v1/vision/chat and
-  POST /v1/vision/chat/stream. Returns 501 when no vision model is loaded.
-  coordinator/pom.xml gains one new dependency on vision.
+InferenceApiServer (coordinator module) — addRoutes(Consumer<Javalin>) is the
+  generic extension point used to attach the vision routes; there is no
+  vision-specific method on this class.
  
-CoordinatorMain (juno-master module) — after building the pipeline, calls
-  LlavaHandlerFactory.isVisionArchitecture() and if true, calls
-  LlavaHandlerFactory.build() and wires VisionChatHandler into InferenceApiServer.
-  juno-master/pom.xml gains one new dependency on vision.
+ConsoleMain (juno-player module) — runLocalRepl() (--local mode only) calls
+  wireVisionRoutes() after the text pipeline is loaded, which calls
+  LlavaHandlerFactory.isVisionArchitecture()/buildFromHandlers() and, if the
+  resolved vision-weights file has v.patch_embd.weight, registers
+  /v1/vision/chat and /v1/vision/chat/stream via InferenceApiServer.addRoutes().
+  --mmproj-path PATH is the CLI flag carrying the separate mmproj file through
+  to wireVisionRoutes(); without it, isVisionArchitecture() probes
+  --model-path itself and returns false for every real (two-file) I2T model.
+  KNOWN LIMITATION: runClusterRepl() (--cluster mode) does not call
+  wireVisionRoutes() — vision routes are --local mode only.
  
 Dependency graph (acyclic):
   node  →  api, lora, registry, kvcache, health, grpc, micrometer
   vision  →  node, coordinator, registry, tokenizer, sampler
-  coordinator  →  vision, node, registry, tokenizer, sampler, javalin
-  juno-master  →  vision, coordinator, node, registry, ...
+  juno-player  →  vision, coordinator, node, registry, ...
+  juno-master  →  vision, coordinator, node, registry, ...  (pom dependency;
+                   no juno-master code references vision today — CoordinatorMain
+                   was superseded by ConsoleMain/wireVisionRoutes in juno-player)
 
 
 

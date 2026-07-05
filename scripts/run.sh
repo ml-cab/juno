@@ -319,6 +319,7 @@ cmd_cluster() {
 # ---------------------------------------------------------------------------
 cmd_local() {
   local model="${MODEL_PATH:-}"
+  local mmproj="${MMPROJ_PATH:-}"
   local dtype="${DTYPE:-FLOAT16}"
   local byte_order="${BYTE_ORDER:-BE}"
   local max_tokens="${MAX_TOKENS:-200}"
@@ -344,6 +345,7 @@ cmd_local() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --model-path)       model="$2";        shift 2 ;;
+      --mmproj-path)      mmproj="$2";       shift 2 ;;
       --dtype)            dtype="$2";        shift 2 ;;
       --byteOrder | --byteorder | --byte-order) byte_order="${2^^}"; shift 2 ;;
       --max-tokens)       max_tokens="$2";   shift 2 ;;
@@ -374,6 +376,13 @@ cmd_local() {
         echo "  Required:"
         echo "    --model-path PATH          Path to a GGUF model file"
         echo "                               (or set MODEL_PATH env var)"
+        echo ""
+        echo "  Vision (image-to-text) models:"
+        echo "    --mmproj-path PATH         Path to a separate mmproj GGUF holding the CLIP"
+        echo "                               vision encoder. Required for /v1/vision/chat —"
+        echo "                               real LLaVA/Qwen-VL/SmolVLM releases keep the"
+        echo "                               vision encoder in a separate file from the base LLM."
+        echo "                               (or set MMPROJ_PATH env var)"
         echo ""
         echo "  Activation dtype:"
         echo "    --dtype FLOAT32|FLOAT16|INT8  (default FLOAT16)"
@@ -415,6 +424,7 @@ cmd_local() {
 
   [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 local --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 local"
   [[ -f "$model" ]] || err "Model file not found: $model"
+  [[ -z "$mmproj" || -f "$mmproj" ]] || err "mmproj file not found: $mmproj"
 
   require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
@@ -445,6 +455,8 @@ cmd_local() {
   fi
   local api_port_arg=""
   [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
+  local mmproj_arg=""
+  [[ -n "$mmproj" ]] && { mmproj_arg="--mmproj-path $mmproj"; info "Vision mmproj: ${mmproj}"; }
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -465,6 +477,7 @@ cmd_local() {
     ${jfr_arg} \
     ${lora_play_arg} \
     ${api_port_arg} \
+    ${mmproj_arg} \
     ${health_flag} \
     ${verbose_flag}
 }
