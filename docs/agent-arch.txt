@@ -87,6 +87,20 @@ vision — Image-to-text (I2T) module. GGUF-based CLIP ViT encoder, patch
                    embed, pre-LN, N transformer blocks, vision projector).
                    Reads v.patch_embd.weight, v.blk.{i}.*, mm.0.weight from GGUF.
                    MatVec-pluggable (CPU or GPU). Thread-safe (read-only weights).
+                   Per-block FFN loading (loadFfn/resolveFfnOrientation) does NOT
+                   trust the ffn_up/ffn_down tensor names to indicate direction —
+                   some mmproj exports (e.g. llava-phi-3-mini) have them reversed.
+                   Direction is instead read from each tensor's own GgufReader.
+                   tensorDims() output dimension; a mismatch on both orientations
+                   throws IllegalStateException at load time instead of an opaque
+                   ArrayIndexOutOfBoundsException mid-request. Likewise
+                   outputDim()/resolveProjectorOutputDim() does NOT trust
+                   clip.vision.projection_dim metadata for the projector's real
+                   output width — some files (same llava-phi-3-mini) declare a
+                   value there that doesn't match mm.0.weight's own GGUF shape.
+                   Every caller needing the true patch-vector width (project(),
+                   LlavaHandlerFactory's VisionAwareForwardPassHandler sizing)
+                   uses outputDim(), never config().projectionDim().
   VisionAwareForwardPassHandler — ForwardPassHandler decorator. On the first node
                    (hasEmbeddings=true), replaces IMAGE_TOKEN_ID embedding lookups
                    with pre-computed patch vectors from ConcurrentHashMap[requestId].
@@ -125,6 +139,24 @@ ConsoleMain (juno-player module) — runLocalRepl() (--local mode only) calls
   KNOWN LIMITATION: runClusterRepl() (--cluster mode) does not call
   wireVisionRoutes() — vision routes are --local mode only.
  
+ModelIdResolver (registry module, cab.ml.juno.registry) — shared by
+  VisionChatHandler (juno-player), OpenAiChatHandler and InferenceApiServer
+  (coordinator): resolves a client-supplied "model" field against
+  ModelRegistry with one rule all three previously implemented separately
+  (and inconsistently): blank/absent -> the loaded model; exact match ->
+  that model; mismatch -> error listing loaded ids, UNLESS the caller opted
+  into FallbackPolicy.SINGLE_MODEL_FALLBACK and exactly one model is loaded,
+  in which case it falls back to that model and logs a WARNING (was a hard
+  503 before, for every caller, regardless of how many models were loaded).
+  VisionChatHandler and OpenAiChatHandler opt into SINGLE_MODEL_FALLBACK
+  (the user-facing REST surfaces where a copy-pasted/wrong model name is
+  common); InferenceApiServer's native /v1/inference API keeps
+  FallbackPolicy.STRICT (the resolve(registry, requested) 2-arg overload's
+  default) — pinned by InferenceApiServerTest, which expects an explicitly
+  wrong model id to always 503 even with one model loaded. Pure logic over
+  ModelRegistry's public API, no I/O — unit-tested directly
+  (ModelIdResolverTest, covers both policies).
+
 Dependency graph (acyclic):
   node  →  api, lora, registry, kvcache, health, grpc, micrometer
   vision  →  node, coordinator, registry, tokenizer, sampler

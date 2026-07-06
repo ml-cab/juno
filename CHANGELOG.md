@@ -76,6 +76,178 @@ falling back to `FLOAT32`.
 
 Regression test: `ConsoleMainDtypeTest`.
 
+### Any model-name mismatch was a hard 503, even with only one model loaded
+
+Reported while live-testing the vision fix above: `curl .../v1/vision/chat`
+with `"model":"llava-v1.5-7b"` (copied from a generic example) returned
+`{"error":{"code":"service_unavailable","message":"Model 'llava-v1.5-7b' is
+not loaded"}}` even though a model *was* loaded — just under a different id
+(the loaded GGUF's filename, e.g. `llava-phi-3-mini-int4.gguf`). The same
+exact-match-or-503 logic was independently duplicated three times
+(`VisionChatHandler.resolveModel`, `OpenAiChatHandler.resolveModelId`,
+`InferenceApiServer.resolveModelId`), so every REST entry point had this trap
+in --local mode, where exactly one model is ever loaded and the requested
+name can therefore never be ambiguous.
+
+**Fix:** new shared `ModelIdResolver` (registry module):
+
+- no model loaded at all → error, unchanged
+- blank/absent `"model"` → resolves to the loaded model, unchanged
+- exact match → resolves silently, unchanged
+- mismatch with **exactly one** model loaded → falls back to it and logs a
+  `WARNING` naming both the requested and actual id (new — this is the fix)
+- mismatch with **multiple** models loaded → still an error, now listing the
+  loaded ids so the client can self-correct (previously named only the
+  rejected id)
+
+All three call sites now delegate to `ModelIdResolver`; each keeps its own
+response format (OpenAI-style JSON, the native API's JSON, and the vision
+handler's JSON respectively) but shares the same resolution/fallback
+decision.
+
+**Correction after this broke `InferenceApiServerTest.blocking_inference_unknown_model_returns_503`:**
+that test pins a deliberate, different contract for the native
+`/v1/inference` API — an explicitly-requested nonexistent model id is always
+an error there, even with exactly one model loaded, because that endpoint is
+typically driven by generated clients rather than hand-typed `curl`, so a
+mismatch is more likely a real bug than a typo. Universally applying the
+single-model fallback was wrong. Fixed by making it opt-in per call site via
+`ModelIdResolver.FallbackPolicy`:
+
+- `InferenceApiServer.resolveModelId` → `FallbackPolicy.STRICT` (the
+  2-argument `resolve(registry, requested)` overload defaults to this, so no
+  code change was needed there beyond making the choice explicit)
+- `OpenAiChatHandler.resolveModelId`, `VisionChatHandler.resolveModel` →
+  `FallbackPolicy.SINGLE_MODEL_FALLBACK`
+
+Regression test: `ModelIdResolverTest` (registry module, exercises the real
+in-memory `ModelRegistry` — no mocking needed). Now covers both policies
+explicitly, including a test pinning the exact `InferenceApiServerTest`
+scenario (one model loaded, nonexistent id requested, `STRICT` → error).
+
+### `/v1/vision/chat` crashed mid-request: `ArrayIndexOutOfBoundsException: Index 1024 out of bounds for length 1024`
+
+Reported against a real llava-phi-3-mini mmproj file, once the two fixes
+above got the request that far. The exception's shape (flat JSON matching
+`InferenceApiServer`'s *global* Javalin error handler, not `VisionChatHandler`'s
+own nested error format) showed it was escaping uncaught from image/vision
+encoding, before inference began — narrowing the search to
+`ImagePatchEmbedder`, `VisionEncoder`, `CpuMatVec`, and `GgufReader`'s
+tensor loaders. None showed an off-by-one on static review.
+
+**Diagnostic gap fixed first:** `InferenceApiServer`'s global exception
+handler only ever logged `e.getMessage()`, never the stack trace, so there
+was no way to localize the crash to a specific line without one. Now logs the
+full trace via `log.log(Level.WARNING, ..., e)`. This produced the trace
+pinpointing `VisionEncoder.mlp():376`.
+
+**Root cause:** `VisionEncoder`'s constructor trusted the GGUF tensor names
+`ffn_up`/`ffn_down` to mean "H→I expansion" / "I→H contraction" respectively,
+and sized the corresponding bias arrays accordingly (`intermediateSize` and
+`hiddenSize`). For this particular mmproj file, `v.blk.{i}.ffn_up.bias` is
+actually shaped for the *contraction* direction (length `hiddenSize`=1024,
+not `intermediateSize`=4096) — the naming convention is not universally
+consistent across mmproj GGUF exports in the wild. `mlp()` then indexed that
+1024-length array up to `intermediateSize`=4096, crashing at the boundary.
+
+**Fix:** rather than assume any particular naming convention (unverifiable
+without the file, and a wrong guess would just move the bug), `VisionEncoder`
+now determines each FFN linear layer's actual direction from its own
+GGUF-declared output dimension (`GgufReader.tensorDims`), via a new pure,
+I/O-free `resolveFfnOrientation()` — used regardless of which literal tensor
+name holds which real shape. Throws a clear, descriptive
+`IllegalStateException` at model-load time (not a cryptic mid-request crash)
+if neither orientation matches the configured `intermediateSize`/`hiddenSize`
+at all.
+
+Regression test: `VisionEncoderTest` (new `resolveFfnOrientation` cases,
+including the exact llava-phi-3-mini shape pairing that crashed).
+
+### Same model, next crash: `IllegalArgumentException: A.length=3145728 != rows*cols=786432`
+
+Reported immediately after the FFN fix above got the same request further —
+the vision encoder now ran for ~35s (all 23 CLIP blocks) before failing in
+the final projector step, `VisionEncoder.project()`.
+
+**Root cause:** same class of bug as the FFN fix, one layer up. `VisionConfig`
+read `clip.vision.projection_dim` metadata as 768 and used it to size the
+`mm.0.weight` projector matmul (768×1024=786,432 expected elements). The
+tensor's own GGUF shape is actually `[1024, 3072]` — 3072 being the LLM's
+real hidden dimension (`LlamaConfig.hidden=3072` in the same model), the
+width the projector must actually produce so patch embeddings can be spliced
+into the LLM's embedding space (786,432 vs the real 3,145,728 = 3072×1024).
+The `clip.vision.projection_dim` metadata field is evidently not reliable for
+determining the actual mm-projector output width across mmproj exports —
+consistent with the FFN naming bug above being a symptom of the same
+underlying issue: metadata fields describing this file's architecture can't
+be trusted at face value, only the tensors' own shapes can.
+
+**Fix:** new `VisionEncoder.outputDim()`, derived from `mm.0.weight`'s own
+measured GGUF shape via a new pure `resolveProjectorOutputDim()` (same
+shape-over-metadata approach as `resolveFfnOrientation`), replacing
+`VisionConfig.projectionDim()` everywhere a caller needs the projector's real
+output width: `VisionEncoder.project()` itself, and both
+`LlavaHandlerFactory.buildFromHandlers`/`build()` call sites that construct
+`VisionAwareForwardPassHandler` (previously sized from the same unreliable
+metadata value). Throws a clear `IllegalStateException` at load time if the
+tensor's own shape is inconsistent with `hiddenSize` at all, rather than a
+cryptic crash mid-request; logs (not errors on) any metadata/tensor-shape
+disagreement, since the tensor always wins.
+
+Regression test: `VisionEncoderTest` (new `resolveProjectorOutputDim` cases,
+including the exact 768-vs-3072 mismatch that crashed).
+
+---
+
+## Status (continued)
+
+**Session 36** — F16-weighted GGUF models failed every inference request:
+`UnsupportedOperationException: Quantized matVec not implemented for GGML
+type 1`.
+
+Reported against `llava-phi-3-mini-f16.gguf` (an F16, i.e. entirely
+unquantized, weight file) once vision loading itself succeeded — the crash
+happened on the very first LLM forward pass (prefill step 0), so this is a
+core `node` module bug, unrelated to the vision fixes above; it would affect
+any F16 model's text generation too, image or no image.
+
+**Root cause:** `LlamaTransformerHandler` has two dispatches over
+`GgufReader.QuantizedTensor.type()` (the GGML type ID) used when a weight is
+kept in raw/quantized form rather than eagerly materialized as `float[]`:
+`matVecQuantizedNoEvent` (the CPU compute path) and `dequantize` (used once
+per weight when uploading to the CUDA backend). Both handled GGML types 0
+(F32), 8 (Q8_0), and 10–14 (Q2_K..Q6_K) — but neither had a case for type 1
+(F16), despite F16 being one of the most common, standard GGUF weight
+formats, not an exotic one. Any F16 tensor reaching either dispatch hit the
+`default` branch's `UnsupportedOperationException`.
+
+**Fix:** added the missing `case 1` branch to both switches:
+
+- `matVecF16raw` (new) for the CPU path, mirroring `matVecF32raw`'s exact
+  style (manual little-endian byte assembly per row inside a parallel
+  `IntStream`, no per-row `ByteBuffer` allocation)
+- `dequantizeF16` (new) for the CUDA upload path, mirroring `dequantizeF32`
+
+Both reuse the existing `GgufReader.f16ToF32` half-to-float conversion —
+the same one `GgufReader.loadF16` already uses for eager dequantization — so
+a weight kept in raw form now produces bit-identical results to one eagerly
+converted via `GgufReader.tensor()`. Byte order is fixed little-endian in
+both (matching every other raw matVec in this file): GGUF tensor bytes are
+always little-endian regardless of the cluster's `--byteOrder` flag, which
+only governs inter-node *activation* serialization, never model weight
+bytes — an unrelated concern.
+
+A third dispatch, `LoraTrainableHandler.transposedMatVec`, was already safe:
+its `default` branch (`transposedFallback`) logs a warning and reuses
+`LlamaTransformerHandler.matVec` internally rather than throwing, so it is
+automatically fixed as a side effect of the primary fix above — no separate
+change was needed there.
+
+Regression test: `LlamaTransformerHandlerF16MatVecTest` (new — constructs a
+synthetic F16 `QuantizedTensor` directly, no GGUF file needed; covers both
+`matVec` and `dequantize`, including a numerical-correctness check against a
+plain-float reference dot product).
+
 ---
 
 

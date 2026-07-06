@@ -44,7 +44,11 @@ import cab.ml.juno.node.MatVec;
  *   v.blk.{i}.ln2.weight / .bias
  *   v.blk.{i}.ffn_up.weight / .bias
  *   v.blk.{i}.ffn_down.weight / .bias
- *   mm.0.weight / mm.0.bias      [projectionDim, hiddenSize]  — vision projector
+ *   mm.0.weight / mm.0.bias      [outputDim, hiddenSize]  — vision projector.
+ *                                outputDim is read from this tensor's own
+ *                                shape, NOT from the (unreliable, see
+ *                                {@link #outputDim()}) clip.vision.projection_dim
+ *                                metadata field.
  * </pre>
  *
  * Forward pass:
@@ -55,8 +59,8 @@ import cab.ml.juno.node.MatVec;
  *   <li>Pre-encoder layer norm.
  *   <li>N CLIP transformer blocks (LayerNorm → self-attention → LayerNorm → MLP).
  *   <li>Vision projector (single linear, GELU optional): maps hiddenSize →
- *       projectionDim (= LLM hiddenDim).
- *   <li>Return patch embeddings excluding CLS (shape: numPatches × projectionDim).
+ *       outputDim (= LLM hiddenDim).
+ *   <li>Return patch embeddings excluding CLS (shape: numPatches × outputDim).
  * </ol>
  *
  * The output float[][] is directly consumed by {@link VisionAwareForwardPassHandler}
@@ -100,8 +104,9 @@ public final class VisionEncoder {
     private final float[][] bffnDown;       // [L][hiddenSize]
 
     // ── Vision projector ──────────────────────────────────────────────────
-    private final float[] projWeight;       // [projectionDim * hiddenSize]
-    private final float[] projBias;         // [projectionDim]  — null when absent
+    private final float[] projWeight;       // [outputDim * hiddenSize]
+    private final float[] projBias;         // [outputDim]  — null when absent
+    private final int outputDim;            // actual projector output width (see #outputDim())
 
     // ── Factory ──────────────────────────────────────────────────────────
 
@@ -136,7 +141,6 @@ public final class VisionEncoder {
         int L = cfg.numLayers();
         int H = cfg.hiddenSize();
         int I = cfg.intermediateSize();
-        int P = cfg.projectionDim();
         int patchElems = 3 * cfg.patchSize() * cfg.patchSize();
 
         patchEmbdWeight = r.tensor("v.patch_embd.weight");   // H × patchElems
@@ -173,17 +177,175 @@ public final class VisionEncoder {
             bv[i]   = r.hasTensor(p + "attn_v.bias")   ? r.tensor(p + "attn_v.bias")   : new float[H];
             wOut[i] = r.tensor(p + "attn_out.weight");
             bOut[i] = r.hasTensor(p + "attn_out.bias") ? r.tensor(p + "attn_out.bias") : new float[H];
-            ffnUp[i]   = r.tensor(p + "ffn_up.weight");
-            bffnUp[i]  = r.hasTensor(p + "ffn_up.bias")   ? r.tensor(p + "ffn_up.bias")   : new float[I];
-            ffnDown[i] = r.tensor(p + "ffn_down.weight");
-            bffnDown[i]= r.hasTensor(p + "ffn_down.bias") ? r.tensor(p + "ffn_down.bias") : new float[H];
+            loadFfn(r, p, i, H, I);
         }
 
-        projWeight = r.tensor("mm.0.weight");              // P × H
-        projBias   = r.hasTensor("mm.0.bias") ? r.tensor("mm.0.bias") : null;
+        projWeight = r.tensor("mm.0.weight");
+        // clip.vision.projection_dim metadata is not reliable across mmproj exports
+        // (same lesson as loadFfn): this file declares 768 but the tensor's own
+        // shape is actually [hiddenSize, 3072] — 3072 being the LLM's own hidden
+        // dimension, the real width the projector must produce to be spliced into
+        // the LLM's embedding space. Derive it from the tensor itself, not metadata.
+        long[] projDims = r.tensorDims("mm.0.weight");
+        this.outputDim = resolveProjectorOutputDim(projDims[0], projDims[projDims.length - 1], H,
+                projWeight.length, cfg.projectionDim());
+
+        projBias = r.hasTensor("mm.0.bias") ? r.tensor("mm.0.bias") : null;
+        if (projBias != null && projBias.length != this.outputDim) {
+            throw new IllegalStateException("Vision projector mm.0.bias has length " + projBias.length
+                    + ", expected outputDim=" + this.outputDim);
+        }
 
         log.info("Vision encoder loaded — " + L + " blocks, hidden=" + H
-                + " patches=" + cfg.numPatches() + " proj=" + P);
+                + " patches=" + cfg.numPatches() + " outputDim=" + this.outputDim);
+    }
+
+    /**
+     * Actual width of the vision projector's output — i.e. the dimension of
+     * each patch vector returned by {@link #encode}.
+     *
+     * This is derived from {@code mm.0.weight}'s own GGUF shape, NOT from
+     * {@link VisionConfig#projectionDim()}: {@code clip.vision.projection_dim}
+     * metadata is not reliable across mmproj exports (some files, including
+     * llava-phi-3-mini's, declare CLIP's own native projection width there
+     * rather than the actual mm-projector output width used to splice into
+     * the LLM's embedding space). Callers that need the dimension patch
+     * vectors will actually have — e.g. to size
+     * {@code VisionAwareForwardPassHandler}'s {@code hiddenDim} — must use
+     * this method, not {@code config().projectionDim()}.
+     */
+    public int outputDim() {
+        return outputDim;
+    }
+
+    /**
+     * Pure decision logic (no I/O): validates {@code mm.0.weight}'s own
+     * measured shape against {@code hiddenSize} and returns the real output
+     * dimension, logging a warning (not an error — the tensor shape, not the
+     * metadata, wins) if it disagrees with the unreliable
+     * {@code clip.vision.projection_dim} metadata value.
+     *
+     * Package-private and static so it is directly unit-testable without
+     * constructing a synthetic GGUF file.
+     *
+     * @param inDim              mm.0.weight's declared input dimension (first GGUF dim)
+     * @param outDim             mm.0.weight's declared output dimension (last GGUF dim)
+     * @param hiddenSize         the vision encoder's hidden size (expected inDim)
+     * @param weightLength       mm.0.weight's actual flattened element count
+     * @param metadataProjection {@code clip.vision.projection_dim} as read from GGUF metadata
+     * @throws IllegalStateException if inDim doesn't match hiddenSize, or the
+     *         flattened weight length doesn't match outDim * hiddenSize
+     */
+    static int resolveProjectorOutputDim(long inDim, long outDim, int hiddenSize, long weightLength,
+            int metadataProjection) {
+        if (inDim != hiddenSize) {
+            throw new IllegalStateException("Vision projector mm.0.weight has inDim=" + inDim
+                    + ", expected hiddenSize=" + hiddenSize + " — check clip.vision.embedding_length metadata.");
+        }
+        int resolvedOutputDim = Math.toIntExact(outDim);
+        if ((long) resolvedOutputDim * hiddenSize != weightLength) {
+            throw new IllegalStateException("Vision projector mm.0.weight has " + weightLength
+                    + " elements, expected outputDim(" + resolvedOutputDim + ") * hiddenSize(" + hiddenSize + ")="
+                    + ((long) resolvedOutputDim * hiddenSize));
+        }
+        if (resolvedOutputDim != metadataProjection) {
+            log.warning("Vision projector's actual output dim (" + resolvedOutputDim
+                    + ", from mm.0.weight's own shape) does not match clip.vision.projection_dim metadata ("
+                    + metadataProjection + ") — using the tensor's own shape.");
+        }
+        return resolvedOutputDim;
+    }
+
+    /**
+     * Loads the two FFN linear layers for block {@code li}, determining which
+     * of the two GGUF tensors (named {@code ffn_up}/{@code ffn_down} by
+     * convention) is actually the H→I expansion versus the I→H contraction by
+     * its own declared output dimension — not by trusting the name.
+     *
+     * This matters because the {@code ffn_up}/{@code ffn_down} naming
+     * convention is not consistently applied across every mmproj GGUF export
+     * in the wild: some files' "ffn_up" tensor is in fact the contraction
+     * layer. Trusting the name blindly loads a bias vector of the wrong
+     * length into the wrong slot, which does not fail until deep in a forward
+     * pass — as an opaque {@code ArrayIndexOutOfBoundsException} with no
+     * indication of which tensor or model was at fault. Reading each tensor's
+     * own {@link GgufReader#tensorDims} up front turns that into an immediate,
+     * descriptive failure at load time instead.
+     */
+    private void loadFfn(GgufReader r, String p, int li, int H, int I) throws IOException {
+        String upWeightName = p + "ffn_up.weight";
+        String downWeightName = p + "ffn_down.weight";
+        float[] upWeight = r.tensor(upWeightName);
+        float[] downWeight = r.tensor(downWeightName);
+
+        // GGUF stores 2D weights as [inDim, outDim] (innermost dim first) —
+        // see GgufReader.tensorDims javadoc. outDim is the last entry.
+        long[] upDims = r.tensorDims(upWeightName);
+        long[] downDims = r.tensorDims(downWeightName);
+        long upOutDim = upDims[upDims.length - 1];
+        long downOutDim = downDims[downDims.length - 1];
+
+        FfnOrientation orientation = resolveFfnOrientation(li, upWeightName, downWeightName, upOutDim, downOutDim, I,
+                H);
+
+        float[] expandWeight = orientation == FfnOrientation.NORMAL ? upWeight : downWeight;
+        float[] contractWeight = orientation == FfnOrientation.NORMAL ? downWeight : upWeight;
+        String expandBiasName = orientation == FfnOrientation.NORMAL ? p + "ffn_up.bias" : p + "ffn_down.bias";
+        String contractBiasName = orientation == FfnOrientation.NORMAL ? p + "ffn_down.bias" : p + "ffn_up.bias";
+
+        if (orientation == FfnOrientation.SWAPPED) {
+            log.warning("Vision encoder block " + li + ": ffn_up/ffn_down tensor names are reversed relative to "
+                    + "the usual expand/contract convention in this mmproj file (ffn_up outDim=" + upOutDim
+                    + ", expected I=" + I + ") — using each tensor's own shape rather than its name.");
+        }
+
+        ffnUp[li]    = expandWeight;
+        bffnUp[li]   = r.hasTensor(expandBiasName) ? r.tensor(expandBiasName) : new float[I];
+        ffnDown[li]  = contractWeight;
+        bffnDown[li] = r.hasTensor(contractBiasName) ? r.tensor(contractBiasName) : new float[H];
+
+        if (bffnUp[li].length != I)
+            throw new IllegalStateException("Vision encoder block " + li + ": " + expandBiasName + " has length "
+                    + bffnUp[li].length + ", expected intermediateSize=" + I);
+        if (bffnDown[li].length != H)
+            throw new IllegalStateException("Vision encoder block " + li + ": " + contractBiasName + " has length "
+                    + bffnDown[li].length + ", expected hiddenSize=" + H);
+    }
+
+    /** Which of the two named FFN tensors is actually the H→I expansion. */
+    enum FfnOrientation {
+        /** {@code ffn_up} is the H→I expansion, {@code ffn_down} is the I→H contraction (the usual case). */
+        NORMAL,
+        /** Reversed: {@code ffn_up} is actually I→H and {@code ffn_down} is actually H→I. */
+        SWAPPED
+    }
+
+    /**
+     * Pure decision logic (no I/O): given each FFN weight tensor's measured
+     * output dimension, determines whether the file follows the usual
+     * ffn_up=expand/ffn_down=contract naming or has it reversed, or throws if
+     * neither orientation is consistent with the configured intermediateSize
+     * (I) / hiddenSize (H) — i.e. the file's actual architecture does not
+     * match the VisionConfig read from its metadata.
+     *
+     * Package-private and static so it is directly unit-testable without
+     * constructing a synthetic GGUF file.
+     */
+    static FfnOrientation resolveFfnOrientation(int li, String upWeightName, String downWeightName, long upOutDim,
+            long downOutDim, int intermediateSize, int hiddenSize) {
+        boolean namesMatchConvention = upOutDim == intermediateSize && downOutDim == hiddenSize;
+        boolean namesAreSwapped = upOutDim == hiddenSize && downOutDim == intermediateSize;
+
+        if (namesMatchConvention)
+            return FfnOrientation.NORMAL;
+        if (namesAreSwapped)
+            return FfnOrientation.SWAPPED;
+
+        throw new IllegalStateException("Vision encoder block " + li + ": FFN tensor shapes do not match "
+                + "either orientation of intermediateSize=" + intermediateSize + " / hiddenSize=" + hiddenSize
+                + " — " + upWeightName + " outDim=" + upOutDim + ", " + downWeightName + " outDim=" + downOutDim
+                + ". This mmproj file's architecture does not match the VisionConfig read from its metadata; "
+                + "check clip.vision.feed_forward_length / clip.vision.embedding_length.");
     }
 
     // ── Public API ────────────────────────────────────────────────────────
@@ -197,7 +359,7 @@ public final class VisionEncoder {
      * Encode pixel tensor to patch embeddings in LLM token space.
      *
      * @param pixelTensor float[3 * imageSize * imageSize] CHW, CLIP-normalised
-     * @return float[numPatches][projectionDim] — one embedding per image patch
+     * @return float[numPatches][outputDim()] — one embedding per image patch
      *         in raster order (left-to-right, top-to-bottom); CLS excluded.
      */
     public float[][] encode(float[] pixelTensor) {
@@ -383,11 +545,10 @@ public final class VisionEncoder {
     // ── Vision projector (single linear: hiddenSize → projectionDim) ──────
 
     private float[] project(float[] x) {
-        int P = cfg.projectionDim();
         int H = cfg.hiddenSize();
-        float[] out = backend.sgemv(projWeight, x, P, H);
+        float[] out = backend.sgemv(projWeight, x, outputDim, H);
         if (projBias != null)
-            for (int i = 0; i < P; i++)
+            for (int i = 0; i < outputDim; i++)
                 out[i] += projBias[i];
         return out;
     }

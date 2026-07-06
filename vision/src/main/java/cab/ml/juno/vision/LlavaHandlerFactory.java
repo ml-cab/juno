@@ -165,15 +165,18 @@ public final class LlavaHandlerFactory {
         }
 
         int imageTokenId = Integer.getInteger("juno.vision.image_token_id", 32000);
+        // Use encoder.outputDim() — derived from mm.0.weight's own GGUF shape —
+        // not vCfg.projectionDim() (clip.vision.projection_dim metadata), which
+        // is not reliable across mmproj exports; see VisionEncoder.outputDim().
         VisionAwareForwardPassHandler visionHandler =
-                new VisionAwareForwardPassHandler(textHandler, imageTokenId, vCfg.projectionDim());
+                new VisionAwareForwardPassHandler(textHandler, imageTokenId, encoder.outputDim());
 
         // Replace handlers[0] with the vision-aware wrapper so the pipeline uses it
         handlers.set(0, visionHandler);
         log.info("[vision] handlers[0] replaced with VisionAwareForwardPassHandler"
                 + "  imageTokenId=" + imageTokenId
                 + "  patches=" + vCfg.numPatches()
-                + "  projDim=" + vCfg.projectionDim());
+                + "  outputDim=" + encoder.outputDim());
 
         return new Built(visionHandler, textHandler, encoder, vCfg, imageTokenId);
     }
@@ -212,12 +215,14 @@ public final class LlavaHandlerFactory {
 
         // Step 3: wrap the text handler with the vision embedding injector.
         int imageTokenId = Integer.getInteger("juno.vision.image_token_id", 32000);
+        // encoder.outputDim() (from mm.0.weight's own shape), not
+        // vCfg.projectionDim() (unreliable metadata) — see VisionEncoder.outputDim().
         VisionAwareForwardPassHandler visionHandler =
-                new VisionAwareForwardPassHandler(textHandler, imageTokenId, vCfg.projectionDim());
+                new VisionAwareForwardPassHandler(textHandler, imageTokenId, encoder.outputDim());
 
         log.info("Vision handler ready — imageTokenId=" + imageTokenId
                 + "  patches=" + vCfg.numPatches()
-                + "  projDim=" + vCfg.projectionDim());
+                + "  outputDim=" + encoder.outputDim());
 
         return new Built(visionHandler, textHandler, encoder, vCfg, imageTokenId);
     }

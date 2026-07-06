@@ -873,6 +873,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	static float[] dequantize(GgufReader.QuantizedTensor t, int rows, int cols) {
 		return switch (t.type()) {
 		case 0  -> dequantizeF32(t.data(), rows, cols);
+		case 1  -> dequantizeF16(t.data(), rows, cols);
 		case 8  -> dequantizeQ8_0(t.data(), rows, cols);
 		case 10 -> dequantizeQ2K(t.data(), rows, cols);
 		case 11 -> dequantizeQ3K(t.data(), rows, cols);
@@ -889,6 +890,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		float[] out = new float[n];
 		java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
 		for (int i = 0; i < n; i++) out[i] = bb.getFloat(i * 4);
+		return out;
+	}
+
+	/** GGML type 1 (F16): plain 2-byte half-floats, no block scaling. */
+	private static float[] dequantizeF16(byte[] raw, int rows, int cols) {
+		int n = rows * cols;
+		float[] out = new float[n];
+		java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+		for (int i = 0; i < n; i++) out[i] = GgufReader.f16ToF32(bb.getShort(i * 2));
 		return out;
 	}
 
@@ -1233,6 +1243,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			int cols) {
 		return switch (A.type()) {
 		case 0  -> ActivationCodec.matVecF32raw(A.data(), x, rowStart, rowEnd, cols);
+		case 1  -> matVecF16raw(A.data(), x, rowStart, rowEnd, cols);
 		case 8  -> matVecQ8_0raw(A.data(), x, rowStart, rowEnd, cols);
 		case 10 -> matVecQ2Kraw(A.data(), x, rowStart, rowEnd, cols);
 		case 11 -> matVecQ3Kraw(A.data(), x, rowStart, rowEnd, cols);
@@ -1270,6 +1281,35 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 						| ((raw[base + 2] & 0xFF) << 16)
 						| ((raw[base + 3] & 0xFF) << 24);
 				acc += Float.intBitsToFloat(bits) * x[c];
+			}
+			y[r] = acc;
+		});
+		return y;
+	}
+
+	/**
+	 * GGML type 1 (F16) raw-bytes matVec. F16 is a plain, unquantized 2-byte
+	 * half-float per element — no block scaling, unlike the Q*_K/Q8_0 types
+	 * below. GGUF tensor bytes are always little-endian regardless of the
+	 * cluster's {@code --byteOrder} activation-wire setting (that flag only
+	 * governs inter-node activation serialization, never model weight bytes),
+	 * so the byte assembly here is fixed little-endian, matching
+	 * {@link #matVecF32raw} and every other raw matVec in this file.
+	 *
+	 * <p>Uses the same {@link GgufReader#f16ToF32} conversion as
+	 * {@code GgufReader.loadF16} so a weight kept in raw/quantized form here
+	 * produces bit-identical results to one eagerly dequantized via
+	 * {@code GgufReader.tensor()}.
+	 */
+	private static float[] matVecF16raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
+		int rows = rowEnd - rowStart;
+		float[] y = new float[rows];
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			float acc = 0f;
+			int base = ((rowStart + r) * cols) * 2;
+			for (int c = 0; c < cols; c++, base += 2) {
+				short bits = (short) ((raw[base] & 0xFF) | ((raw[base + 1] & 0xFF) << 8));
+				acc += GgufReader.f16ToF32(bits) * x[c];
 			}
 			y[r] = acc;
 		});

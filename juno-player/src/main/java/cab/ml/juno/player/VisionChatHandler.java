@@ -32,8 +32,8 @@ import cab.ml.juno.coordinator.InferenceRequest;
 import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.coordinator.RequestScheduler;
 import cab.ml.juno.coordinator.TokenConsumer;
+import cab.ml.juno.registry.ModelIdResolver;
 import cab.ml.juno.registry.ModelRegistry;
-import cab.ml.juno.registry.ModelStatus;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
 import cab.ml.juno.vision.ImagePatchEmbedder;
@@ -267,22 +267,16 @@ public final class VisionChatHandler {
     }
 
     private String resolveModel(Context ctx, String requested) {
-        if (requested != null && !requested.isBlank()) {
-            if (!registry.isLoaded(requested)) {
-                error(ctx, 503, "service_unavailable", "Model '" + requested + "' is not loaded");
-                return null;
-            }
-            return requested;
+        ModelIdResolver.Resolution res = ModelIdResolver.resolve(registry, requested,
+                ModelIdResolver.FallbackPolicy.SINGLE_MODEL_FALLBACK);
+        if (res.isError()) {
+            error(ctx, 503, "service_unavailable", res.errorMessage());
+            return null;
         }
-        // Fall back to the first model in LOADED status
-        return registry.listModels().stream()
-                .filter(m -> m.status() == ModelStatus.LOADED)
-                .map(m -> m.modelId())
-                .findFirst()
-                .orElseGet(() -> {
-                    error(ctx, 503, "service_unavailable", "No model is currently loaded");
-                    return null;
-                });
+        if (res.warning() != null) {
+            log.warning("[vision] " + res.warning());
+        }
+        return res.modelId();
     }
 
     private SamplingParams buildSampling(VisionChatRequest req) {

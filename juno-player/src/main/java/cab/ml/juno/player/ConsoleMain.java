@@ -1274,8 +1274,8 @@ public final class ConsoleMain {
 			log.info("[vision] Building vision handler from " + handlers.size() + " loaded handler(s)");
 			LlavaHandlerFactory.Built built = LlavaHandlerFactory.buildFromHandlers(Path.of(modelPath), mmproj,
 					handlers, config);
-			log.info("[vision] Built — encoder patches=" + built.config().numPatches() + "  projDim="
-					+ built.config().projectionDim() + "  imageTokenId=" + built.imageTokenId());
+			log.info("[vision] Built — encoder patches=" + built.config().numPatches() + "  outputDim="
+					+ built.encoder().outputDim() + "  imageTokenId=" + built.imageTokenId());
 			VisionChatHandler visionChatHandler = new VisionChatHandler(scheduler, registry, built.encoder(),
 					built.visionHandler());
 			apiServer.addRoutes(app -> {

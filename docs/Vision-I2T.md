@@ -98,7 +98,7 @@ Request: `multipart/form-data` with two parts.
 
 ```json
 {
-  "model": "llava-v1.5-7b",
+  "model": "llava-v1.5-7b-Q4_K_M.gguf",
   "messages": [
     {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user",   "content": "Describe this image in detail."}
@@ -108,13 +108,20 @@ Request: `multipart/form-data` with two parts.
 }
 ```
 
+`"model"` must be the loaded GGUF's exact filename — in `--local` mode that
+is `Path.of(modelPath).getFileName()`, printed at startup as
+`Model 'X' registered as LOADED`. It is **not** a friendly display name and
+is unrelated to the mmproj filename. Simplest: omit `"model"` entirely —
+`--local` mode only ever loads one model, so it resolves unambiguously
+without it. See "Model id resolution" below.
+
 Response (HTTP 200):
 
 ```json
 {
   "id": "vizcmpl-...",
   "object": "vision.completion",
-  "model": "llava-v1.5-7b",
+  "model": "llava-v1.5-7b-Q4_K_M.gguf",
   "choices": [{
     "index": 0,
     "message": {"role": "assistant", "content": "The image shows..."},
@@ -131,6 +138,22 @@ Same multipart request format as blocking.  Response is a stream of
 `text/event-stream` chunks, one token piece per chunk, terminated by
 `data: [DONE]`.
 
+### Model id resolution
+
+`"model"` is resolved by the shared `cab.ml.juno.registry.ModelIdResolver`
+using `FallbackPolicy.SINGLE_MODEL_FALLBACK` (also used by
+`/v1/chat/completions`; the lower-level native `/v1/inference` API opts into
+the stricter `FallbackPolicy.STRICT` instead, since it is typically driven by
+generated clients rather than hand-typed `curl`):
+
+- absent/blank → the loaded model (unambiguous with a single `--local` model)
+- exact match → that model
+- mismatch, exactly one model loaded → falls back to it, with a `WARNING`
+  logged naming both the requested and actual id — check the server log if
+  a response looks like it came from the wrong model
+- mismatch, multiple models loaded → `503 service_unavailable`, listing the
+  loaded ids
+
 ### Error responses
 
 | HTTP | code | Cause |
@@ -139,7 +162,7 @@ Same multipart request format as blocking.  Response is a stream of
 | 400 | `invalid_image` | ImageIO cannot decode the supplied bytes |
 | 429 | `rate_limit_exceeded` | Scheduler queue full |
 | 501 | `not_implemented` | No vision model loaded |
-| 503 | `service_unavailable` | Requested model not loaded |
+| 503 | `service_unavailable` | No model loaded, or requested model name is ambiguous among several loaded models |
 
 ---
 
@@ -148,7 +171,16 @@ Same multipart request format as blocking.  Response is a stream of
 ```bash
 curl -X POST http://localhost:8080/v1/vision/chat \
   -F "image=@/path/to/photo.jpg" \
-  -F 'request={"model":"llava-v1.5-7b","messages":[{"role":"user","content":"What is in this image?"}],"max_tokens":256}'
+  -F 'request={"messages":[{"role":"user","content":"What is in this image?"}],"max_tokens":256}'
+```
+
+`"model"` is omitted above — safe and unambiguous in `--local` mode. To be
+explicit, use the loaded GGUF's exact filename:
+
+```bash
+curl -X POST http://localhost:8080/v1/vision/chat \
+  -F "image=@/path/to/photo.jpg" \
+  -F 'request={"model":"llava-v1.5-7b-Q4_K_M.gguf","messages":[{"role":"user","content":"What is in this image?"}],"max_tokens":256}'
 ```
 
 ---

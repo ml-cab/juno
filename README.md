@@ -44,6 +44,8 @@ Distributed LLM inference and fine-tuning. Pure Java - No Python, no GIL, no Spr
   `./juno local --api-port N` when the loaded model is a LLaVA-family model
 - Requires `--mmproj-path PATH` pointing at the model's separate mmproj GGUF
   (real GGUF releases never merge the CLIP encoder into the base LLM file)
+- `"model"` in the request body can be omitted — `--local` mode only ever
+  loads one model, so it resolves unambiguously without it
 - See [docs/Vision-I2T.md](docs/Vision-I2T.md)
 
 ### JVM integration
