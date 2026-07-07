@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.within;
  *
  * Runs against CpuMatVecBackend so the full suite passes on any machine without a GPU.
  * The same suite is inherited by CudaMatVecBackendTest (see that class) which
- * re-runs all these cases against the real cuBLAS implementation (bytedeco cuda).
+ * re-runs all these cases against the real Panama FFI implementation.
  *
  * Rules verified:
  *   - Output shape is always float[rows]

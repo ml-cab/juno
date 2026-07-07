@@ -25,8 +25,7 @@ import java.util.Optional;
  * Executes the transformer forward pass for this node's assigned layers.
  *
  * Implementations: CyclicForwardPassHandler — deterministic fake, used in tests
- * + integration tests LlamaTransformerHandler — Cuda/org.bytedeco cublas
- * implementation (GPU required)
+ * + integration tests LlamaTransformerHandler
  *
  * Thread-safe — may be called concurrently for different requests in a batch.
  */

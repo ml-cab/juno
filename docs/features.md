@@ -12,7 +12,7 @@ Aggregate throughput can be read from `juno.TokenProduced` spans without extra c
 
 # GPU acceleration
 
-Two GPU backends are supported via Panama FFI (`java.lang.foreign.Linker` + `SymbolLookup` — JavaCPP/bytedeco is not used). Backend is auto-detected at startup: CUDA preferred, then ROCm, then CPU. Override with `-Djuno.gpu.backend=cuda|rocm|auto`.
+Two GPU backends are supported via Panama FFI (`java.lang.foreign.Linker` + `SymbolLookup`). Backend is auto-detected at startup: CUDA preferred, then ROCm, then CPU. Override with `-Djuno.gpu.backend=cuda|rocm|auto`.
 
 **NVIDIA (CUDA 12.x / cuBLAS):** `CudaBindings` resolves `libcudart.so.12` + `libcublas.so.12`; `CudaMatVec` provides FP32 host path and device-resident FP32/FP16 paths via `cublasSgemv_v2` / `cublasHSSgemvStridedBatched`. Weights upload as `DeviceHalfMatrix` on load with deterministic release on shard unload.
 

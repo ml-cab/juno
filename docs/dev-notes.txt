@@ -1,4 +1,12 @@
 ================================================================================
+--------------------------------------------------------------------------------
+NB!
+Attention!
+This document is out of date.
+It is no longer updated and is being kept for historical purposes.
+Please disregard it if it has no historical value to you.
+--------------------------------------------------------------------------------
+================================================================================
   juno — Distributed Java LLM Inference Engine
   Full Architecture Design Document
   JDK 25 · Maven · Java-native · Commodity GPU Cluster
@@ -128,7 +136,6 @@ Key dependency versions:
   hazelcast.version             5.4.0
   grpc.version                  1.63.0
   protobuf.version              3.25.3
-  bytedeco.cuda.version         12.6-9.5-1.5.11   <- org.bytedeco cuda-platform (cudart + cublas)
   djl.version                   0.27.0
   caffeine.version              3.1.8        <- ONLY cache library (see §6)
   resilience4j.version          2.2.0
@@ -144,6 +151,14 @@ Key dependency versions:
   assertj.version               3.26.0
 
 REMOVED from original design (all caused transitive dependency failures):
+
+<!-- GPU: org.bytedeco cuda (JavaCPP presets), works with various NVIDIA
+	GPUs; 12.6 runtime compatible with driver 12.x/13.x
+	<groupId>org.bytedeco</groupId>
+	<artifactId>cuda-platform</artifactId>
+	<version>${bytedeco.cuda.version}</version> -->
+
+  bytedeco.cuda.version         12.6-9.5-1.5.11   <- org.bytedeco cuda-platform (cudart + cublas)
   spring-boot.version           REMOVED — no Spring Boot, no Spring anything
   ohc.version                   REMOVED — abandoned, dead NetBeans repo
   ehcache.version               REMOVED — JAXB transitive mess
