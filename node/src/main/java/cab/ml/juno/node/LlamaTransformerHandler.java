@@ -641,6 +641,210 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return true;
 	}
 
+	/**
+	 * Batched prefill forward pass: processes a window of new prompt tokens in one
+	 * call, issuing one GEMM per weight matrix per layer instead of one GEMV per
+	 * token per weight matrix. Attention remains per-token (causal mask, growing KV
+	 * cache) — only the ~7 linear projections per layer are batched.
+	 *
+	 * <p>For intermediate nodes the result carries all window activations flattened
+	 * as {@code float[windowSize * hiddenDim]}. For the final node only the
+	 * last-position logits are returned.
+	 */
+	@Override
+	public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+		long start = System.nanoTime();
+		int W = request.windowSize();
+		int H = cfg.hiddenDim();
+
+		float[][] x;
+		if (hasEmbeddings) {
+			// Embedding lookup for each token in the window
+			x = new float[W][H];
+			for (int b = 0; b < W; b++) {
+				int tokenId = request.tokenIds()[b];
+				tokenId = Math.max(0, Math.min(tokenId, cfg.vocabSize() - 1));
+				System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+			}
+		} else {
+			// Unflatten incoming activations: float[windowSize * H] → float[W][H]
+			x = new float[W][H];
+			float[] flat = request.activations();
+			for (int b = 0; b < W; b++) {
+				System.arraycopy(flat, b * H, x[b], 0, H);
+			}
+		}
+
+		x = runLayersBatch(x, request.requestId(), request.startPosition());
+
+		if (hasOutputProj) {
+			// Only the last position's logits are needed after prefill
+			float[] lastX = x[W - 1];
+			float[] logits = outputProjection(lastX);
+			return new BatchForwardResult(request.requestId(), null, logits, W, System.nanoTime() - start);
+		}
+
+		// Flatten activations back to float[W * H] for the next node
+		float[] flat = new float[W * H];
+		for (int b = 0; b < W; b++) System.arraycopy(x[b], 0, flat, b * H, H);
+		return new BatchForwardResult(request.requestId(), flat, null, W, System.nanoTime() - start);
+	}
+
+	/**
+	 * Run all assigned transformer layers in batch mode, processing {@code W}
+	 * positions in one pass. KV cache is grown to accommodate
+	 * {@code startPos + W - 1} before any write.
+	 */
+	private float[][] runLayersBatch(float[][] x, String requestId, int startPos) {
+		int W = x.length;
+		int L = endLayer - startLayer;
+		int kvDim = cfg.kvDim();
+		int lastPos = startPos + W - 1;
+
+		boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
+		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+
+		float[][] kCache = kvCacheK.get(requestId);
+		float[][] vCache = kvCacheV.get(requestId);
+
+		NodeKVCacheAdapter a = kvAdapter;
+		if (isNew && startPos > 0 && a != null) {
+			for (int li = 0; li < L; li++) {
+				int absLayer = startLayer + li;
+				final int i = li;
+				a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
+					ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
+					ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
+					System.arraycopy(pair.k(), 0, kCache[i], 0, pair.k().length);
+					System.arraycopy(pair.v(), 0, vCache[i], 0, pair.v().length);
+				});
+			}
+		}
+
+		ensureKvCapacity(kCache, lastPos, kvDim);
+		ensureKvCapacity(vCache, lastPos, kvDim);
+
+		for (int li = 0; li < L; li++) {
+			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li]);
+		}
+
+		if (a != null) {
+			int seqLen = lastPos + 1;
+			for (int li = 0; li < L; li++) {
+				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen, kvDim);
+			}
+		}
+
+		return x;
+	}
+
+	/**
+	 * Single transformer layer executed over a batch of {@code W} positions.
+	 * Linear projections (Q, K, V, attn-out, gate, up, down) use batched matmul
+	 * via {@link #sgemmLayerHalf}/{@link #sgemmLayerFp32}; attention stays
+	 * per-token (each position attends to a different-length KV prefix).
+	 */
+	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
+			float[] kCacheLayer, float[] vCacheLayer) {
+		int W = x.length;
+		int H = cfg.hiddenDim();
+		int I = cfg.intermediateSize();
+		int kvDim = cfg.kvDim();
+
+		// ── RMS norm each row independently ──────────────────────────────────
+		float[][] xNorm = new float[W][];
+		for (int b = 0; b < W; b++) xNorm[b] = rmsNorm(x[b], attnNorm[li], cfg.rmsNormEps());
+
+		// ── QKV projections — one GEMM per weight matrix for the whole window ─
+		float[][] Q = sgemmLayer(wq[li], wqDev, wqDevFp32, li, xNorm, H, H);
+		float[][] K = sgemmLayer(wk[li], wkDev, wkDevFp32, li, xNorm, kvDim, H);
+		float[][] V = sgemmLayer(wv[li], wvDev, wvDevFp32, li, xNorm, kvDim, H);
+
+		// Optional Qwen2 attention biases
+		if (bq != null) {
+			for (int b = 0; b < W; b++) {
+				addInPlace(Q[b], bq[li]);
+				addInPlace(K[b], bk[li]);
+				addInPlace(V[b], bv[li]);
+			}
+		}
+
+		// ── RoPE per-token (positions differ; must stay serial) ───────────────
+		for (int b = 0; b < W; b++) {
+			rope(Q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
+			rope(K[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+		}
+
+		// ── Write K, V into cache at their respective positions ───────────────
+		for (int b = 0; b < W; b++) {
+			System.arraycopy(K[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
+			System.arraycopy(V[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
+		}
+
+		// ── Causal attention per-token — each sees its own KV prefix length ───
+		float[][] attnOut = new float[W][];
+		for (int b = 0; b < W; b++) {
+			attnOut[b] = gqa(Q[b], kCacheLayer, vCacheLayer, startPos + b + 1);
+		}
+
+		// ── Attention output projection — GEMM ────────────────────────────────
+		float[][] attnProj = sgemmLayer(wo[li], woDev, woDevFp32, li, attnOut, H, H);
+
+		// Residual
+		float[][] x2 = new float[W][H];
+		for (int b = 0; b < W; b++) {
+			for (int d = 0; d < H; d++) x2[b][d] = x[b][d] + attnProj[b][d];
+		}
+
+		// ── FFN sub-layer ─────────────────────────────────────────────────────
+		float[][] xNorm2 = new float[W][];
+		for (int b = 0; b < W; b++) xNorm2[b] = rmsNorm(x2[b], ffnNorm[li], cfg.rmsNormEps());
+
+		float[][] gate = sgemmLayer(wGate[li], wGateDev, wGateDevFp32, li, xNorm2, I, H);
+		float[][] up   = sgemmLayer(wUp[li],   wUpDev,   wUpDevFp32,   li, xNorm2, I, H);
+
+		// SwiGLU activation per-token
+		float[][] hidden = new float[W][I];
+		for (int b = 0; b < W; b++) {
+			for (int i = 0; i < I; i++) hidden[b][i] = silu(gate[b][i]) * up[b][i];
+		}
+
+		float[][] ffnOut = sgemmLayer(wDown[li], wDownDev, wDownDevFp32, li, hidden, H, I);
+
+		// Residual
+		float[][] x3 = new float[W][H];
+		for (int b = 0; b < W; b++) {
+			for (int d = 0; d < H; d++) x3[b][d] = x2[b][d] + ffnOut[b][d];
+		}
+		return x3;
+	}
+
+	/**
+	 * Dispatch a batched weight-matrix multiply for a layer: FP16 GPU first,
+	 * then FP32 GPU, then CPU quantized (B sequential matVec calls — correctness
+	 * preserved, weight-stationary speedup on CPU deferred to a separate pass).
+	 *
+	 * @param quant    quantized CPU weight tensor (used only when both dev arrays
+	 *                 are null)
+	 * @param devHalf  FP16 device-resident arrays per layer (may be null)
+	 * @param devFp32  FP32 device-resident arrays per layer (may be null)
+	 * @param li       layer index within the shard (0-based)
+	 * @param X        input batch: X[b] is the input vector for position b
+	 * @param rows     output size
+	 * @param cols     input size
+	 */
+	private float[][] sgemmLayer(GgufReader.QuantizedTensor quant,
+			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32,
+			int li, float[][] X, int rows, int cols) {
+		if (devHalf != null) return backend.sgemm(devHalf[li], X);
+		if (devFp32 != null) return backend.sgemm(devFp32[li], X);
+		// CPU quantized: B sequential matVecs over the same weight bytes
+		int B = X.length;
+		float[][] Y = new float[B][];
+		for (int b = 0; b < B; b++) Y[b] = matVec(quant, X[b], rows, cols);
+		return Y;
+	}
+
 	// ── Transformer forward pass ──────────────────────────────────────────────
 
 	/**

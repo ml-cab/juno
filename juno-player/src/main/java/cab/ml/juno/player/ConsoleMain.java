@@ -161,6 +161,8 @@ public final class ConsoleMain {
 	private static final java.util.List<HealthReporter> activeReporters = new java.util.ArrayList<>();
 	/** Optional local REST API port (OpenAI-compatible endpoint included). */
 	private static int apiPort = -1;
+	/** Prefill strategy: batched (default) or single (legacy sequential loop). */
+	private static cab.ml.juno.coordinator.PrefillMode prefillMode = cab.ml.juno.coordinator.PrefillMode.BATCHED;
 	// ── Byte-order argument ───────────────────────────────────────────────────
 	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
 	private static String byteOrder = "BE";
@@ -262,6 +264,10 @@ public final class ConsoleMain {
 			case "--mmproj-path":
 				if (i + 1 < args.length)
 					mmprojPath = args[++i];
+				break;
+			case "--prefill":
+				if (i + 1 < args.length)
+					prefillMode = parsePrefillMode(args[++i]);
 				break;
 			case "--dtype":
 				if (i + 1 < args.length)
@@ -392,6 +398,11 @@ public final class ConsoleMain {
 		System.out.println("                             real LLaVA/Qwen-VL/SmolVLM GGUF releases keep the");
 		System.out.println("                             vision encoder in a separate file from the base LLM.");
 		System.out.println();
+		System.out.println("Prefill strategy:");
+		System.out.println("  --prefill single|batched   Prefill strategy (default: batched)");
+		System.out.println("                             batched: windowed GEMM — fixes vision 10-min stall");
+		System.out.println("                             single:  original per-token loop (escape hatch)");
+		System.out.println();
 		System.out.println("Inference options:");
 		System.out.println("  --gpu                      Use GPU (default, no need to set)");
 		System.out.println("  --cpu                      Force to use CPU");
@@ -500,7 +511,7 @@ public final class ConsoleMain {
 		var pipeline = LocalInferencePipeline.from(shardMap, List.of(handler), config.vocabSize(), config.hiddenDim(),
 				config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
 
 		LoraAdamOptimizer optimizer = LoraAdamOptimizer.defaults(loraLr);
 		int[] totalStepsTrained = { 0 };
@@ -1119,7 +1130,7 @@ public final class ConsoleMain {
 		}
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
 
 		startRepl(loop, tokenizer); // calls System.exit(0) on quit — shutdown hook fires from there
 	}
@@ -1225,7 +1236,7 @@ public final class ConsoleMain {
 		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
 				config.hiddenDim(), config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop,
 				cab.ml.juno.coordinator.BatchConfig.disabled());
 		if (apiPort > 0) {
@@ -1356,7 +1367,7 @@ public final class ConsoleMain {
 		}
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop,
 				cab.ml.juno.coordinator.BatchConfig.disabled());
 		if (apiPort > 0) {
@@ -1493,6 +1504,15 @@ public final class ConsoleMain {
 			yield ActivationDtype.FLOAT32;
 		}
 		};
+	}
+
+	private static cab.ml.juno.coordinator.PrefillMode parsePrefillMode(String s) {
+		try {
+			return cab.ml.juno.coordinator.PrefillMode.parse(s);
+		} catch (IllegalArgumentException e) {
+			System.err.println("WARNING: " + e.getMessage() + " — defaulting to 'batched'");
+			return cab.ml.juno.coordinator.PrefillMode.BATCHED;
+		}
 	}
 
 	private static ParallelismType parseParallelismType(String s) {

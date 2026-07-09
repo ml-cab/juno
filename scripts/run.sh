@@ -164,6 +164,7 @@ cmd_cluster() {
   local health="false"
   local health_port="${HEALTH_PORT:-8081}"
   local api_port="${API_PORT:-}"
+  local prefill_mode="${PREFILL_MODE:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -193,6 +194,7 @@ cmd_cluster() {
       --health)           health="true";     shift   ;;
       --health-port)      health_port="$2";  shift 2 ;;
       --api-port)         api_port="$2";     shift 2 ;;
+      --prefill)          prefill_mode="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -289,6 +291,8 @@ cmd_cluster() {
   fi
   local api_port_arg=""
   [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
+  local prefill_mode_arg=""
+  [[ -n "$prefill_mode" ]] && prefill_mode_arg="--prefill $prefill_mode"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -309,6 +313,7 @@ cmd_cluster() {
     ${jfr_arg} \
     ${lora_play_arg} \
     ${api_port_arg} \
+    ${prefill_mode_arg} \
     ${health_flag} \
     ${verbose_flag}
 }
@@ -334,6 +339,7 @@ cmd_local() {
   local health="false"
   local health_port="${HEALTH_PORT:-8081}"
   local api_port="${API_PORT:-}"
+  local prefill_mode="${PREFILL_MODE:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -364,6 +370,7 @@ cmd_local() {
       --health)           health="true";     shift   ;;
       --health-port)      health_port="$2";  shift 2 ;;
       --api-port)         api_port="$2";     shift 2 ;;
+      --prefill)          prefill_mode="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -455,6 +462,8 @@ cmd_local() {
   fi
   local api_port_arg=""
   [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
+  local prefill_mode_arg=""
+  [[ -n "$prefill_mode" ]] && prefill_mode_arg="--prefill $prefill_mode"
   local mmproj_arg=""
   [[ -n "$mmproj" ]] && { mmproj_arg="--mmproj-path $mmproj"; info "Vision mmproj: ${mmproj}"; }
 
@@ -477,6 +486,7 @@ cmd_local() {
     ${jfr_arg} \
     ${lora_play_arg} \
     ${api_port_arg} \
+    ${prefill_mode_arg} \
     ${mmproj_arg} \
     ${health_flag} \
     ${verbose_flag}

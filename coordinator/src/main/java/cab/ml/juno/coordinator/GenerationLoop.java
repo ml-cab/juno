@@ -49,12 +49,31 @@ public final class GenerationLoop {
 	private final Sampler sampler;
 	private final InferencePipeline pipeline;
 	private final KVCacheManager kvCache;
+	private final PrefillMode prefillMode;
 
+	/**
+	 * Construct a generation loop with the default prefill mode ({@link PrefillMode#BATCHED}).
+	 * Existing callers (tests and production code that does not yet pass a mode)
+	 * are unchanged.
+	 */
 	public GenerationLoop(Tokenizer tokenizer, Sampler sampler, InferencePipeline pipeline, KVCacheManager kvCache) {
+		this(tokenizer, sampler, pipeline, kvCache, PrefillMode.BATCHED);
+	}
+
+	/**
+	 * Construct a generation loop with an explicit prefill mode.
+	 *
+	 * @param prefillMode {@link PrefillMode#BATCHED} (default) for windowed GEMM
+	 *                    prefill; {@link PrefillMode#SINGLE} for the original
+	 *                    sequential one-token loop (escape hatch / bisection).
+	 */
+	public GenerationLoop(Tokenizer tokenizer, Sampler sampler, InferencePipeline pipeline, KVCacheManager kvCache,
+			PrefillMode prefillMode) {
 		this.tokenizer = tokenizer;
 		this.sampler = sampler;
 		this.pipeline = pipeline;
 		this.kvCache = kvCache;
+		this.prefillMode = prefillMode;
 	}
 
 	/**
@@ -127,15 +146,24 @@ public final class GenerationLoop {
 		}
 
 		// ── Step 1b: Prefill — populate KV cache for all uncached prompt tokens ─
-		// Each request gets its own prefill: walk positions startPos[i]..promptLen[i]-2
+		// Each request gets its own prefill: positions startPos[i]..promptLen[i]-2
 		// so the KV cache is warm before the decode loop starts.
 		boolean[] hadCacheHit = new boolean[n]; // remember original hit status for later
 		for (int i = 0; i < n; i++) {
 			hadCacheHit[i] = (startPos[i] > 0);
 			int[] promptIds = Arrays.copyOfRange(allTokens[i], 0, promptLens[i]);
-			for (int p = startPos[i]; p < promptLens[i] - 1; p++) {
-				int[] prefillSlice = Arrays.copyOfRange(promptIds, 0, p + 1);
-				pipeline.forward(requestIds[i], prefillSlice, p); // KV stored; logits discarded
+			int windowSize = promptLens[i] - 1 - startPos[i];
+			if (windowSize > 0) {
+				if (prefillMode == PrefillMode.BATCHED) {
+					int[] window = Arrays.copyOfRange(promptIds, startPos[i], promptLens[i] - 1);
+					pipeline.prefillBatch(requestIds[i], window, startPos[i]);
+				} else {
+					// PrefillMode.SINGLE — original sequential loop, kept verbatim
+					for (int p = startPos[i]; p < promptLens[i] - 1; p++) {
+						int[] prefillSlice = Arrays.copyOfRange(promptIds, 0, p + 1);
+						pipeline.forward(requestIds[i], prefillSlice, p);
+					}
+				}
 			}
 			// Decode step 0 covers position promptLen-1 (last prompt token)
 			if (promptLens[i] > 0) {
@@ -306,11 +334,17 @@ public final class GenerationLoop {
 		int prefillSteps = promptIds.length - 1 - startPos;
 		if (prefillSteps > 0) {
 			log.info("Prefill: " + prefillSteps + " steps for prompt of " + promptIds.length + " tokens (kvKey=" + kvKey
-					+ ")");
+					+ "  mode=" + prefillMode + ")");
 			consumer.onPrefillStart(promptIds.length);
-			for (int p = startPos; p < promptIds.length - 1; p++) {
-				int[] prefillSlice = Arrays.copyOfRange(promptIds, 0, p + 1);
-				pipeline.forward(kvKey, prefillSlice, p); // KV stored under kvKey; logits discarded
+			if (prefillMode == PrefillMode.BATCHED) {
+				int[] window = Arrays.copyOfRange(promptIds, startPos, promptIds.length - 1);
+				pipeline.prefillBatch(kvKey, window, startPos);
+			} else {
+				// PrefillMode.SINGLE — original sequential loop, kept verbatim
+				for (int p = startPos; p < promptIds.length - 1; p++) {
+					int[] prefillSlice = Arrays.copyOfRange(promptIds, 0, p + 1);
+					pipeline.forward(kvKey, prefillSlice, p); // KV stored under kvKey; logits discarded
+				}
 			}
 			consumer.onPrefillComplete();
 			log.info("Prefill complete. Decode starts at position " + (promptIds.length - 1));

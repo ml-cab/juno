@@ -393,6 +393,159 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		return true;
 	}
 
+	/**
+	 * Batched prefill forward pass for Phi-3 family models. Processes a window of
+	 * new prompt tokens in one call, using GEMM for linear projections and the
+	 * extended-RoPE per-token (positions differ; cannot be batched).
+	 */
+	@Override
+	public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+		long start = System.nanoTime();
+		int W = request.windowSize();
+		int H = cfg.hiddenDim();
+
+		float[][] x;
+		if (hasEmbeddings) {
+			x = new float[W][H];
+			int actualVocab = tokenEmbd.length / H;
+			for (int b = 0; b < W; b++) {
+				int tokenId = request.tokenIds()[b];
+				tokenId = Math.max(0, Math.min(tokenId, actualVocab - 1));
+				System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+			}
+		} else {
+			x = new float[W][H];
+			float[] flat = request.activations();
+			for (int b = 0; b < W; b++) System.arraycopy(flat, b * H, x[b], 0, H);
+		}
+
+		x = runLayersBatch(x, request.requestId(), request.startPosition());
+
+		if (hasOutputProj) {
+			float[] lastX = x[W - 1];
+			float[] logits = outputProjection(lastX);
+			return new BatchForwardResult(request.requestId(), null, logits, W, System.nanoTime() - start);
+		}
+
+		float[] flat = new float[W * H];
+		for (int b = 0; b < W; b++) System.arraycopy(x[b], 0, flat, b * H, H);
+		return new BatchForwardResult(request.requestId(), flat, null, W, System.nanoTime() - start);
+	}
+
+	private float[][] runLayersBatch(float[][] x, String requestId, int startPos) {
+		int W = x.length;
+		int L = endLayer - startLayer;
+		int kvDim = cfg.kvDim();
+		int lastPos = startPos + W - 1;
+
+		boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
+		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+
+		float[][] kCache = kvCacheK.get(requestId);
+		float[][] vCache = kvCacheV.get(requestId);
+
+		NodeKVCacheAdapter a = kvAdapter;
+		if (isNew && startPos > 0 && a != null) {
+			for (int li = 0; li < L; li++) {
+				int absLayer = startLayer + li;
+				final int i = li;
+				a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
+					ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
+					ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
+					System.arraycopy(pair.k(), 0, kCache[i], 0, pair.k().length);
+					System.arraycopy(pair.v(), 0, vCache[i], 0, pair.v().length);
+				});
+			}
+		}
+
+		ensureKvCapacity(kCache, lastPos, kvDim);
+		ensureKvCapacity(vCache, lastPos, kvDim);
+
+		for (int li = 0; li < L; li++) {
+			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li]);
+		}
+
+		if (a != null) {
+			int seqLen = lastPos + 1;
+			for (int li = 0; li < L; li++) {
+				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen, kvDim);
+			}
+		}
+		return x;
+	}
+
+	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
+			float[] kCacheLayer, float[] vCacheLayer) {
+		int W = x.length;
+		int H = cfg.hiddenDim();
+		int kvDim = cfg.kvDim();
+		int I = cfg.intermediateSize();
+
+		// RMS norm each row
+		float[][] xNorm = new float[W][];
+		for (int b = 0; b < W; b++)
+			xNorm[b] = LlamaTransformerHandler.rmsNorm(x[b], attnNorm[li], cfg.rmsNormEps());
+
+		// QKV via row-range matmul on fused tensor
+		float[][] Q = sgemmFused(attnQkv[li], attnQDev != null ? attnQDev[li] : null, xNorm, 0,     H,           H);
+		float[][] K = sgemmFused(attnQkv[li], attnKDev != null ? attnKDev[li] : null, xNorm, H,     H + kvDim,   H);
+		float[][] V = sgemmFused(attnQkv[li], attnVDev != null ? attnVDev[li] : null, xNorm, H + kvDim, H + 2 * kvDim, H);
+
+		// Extended RoPE per-token (Phi-3 uses long-context NTK scaling)
+		for (int b = 0; b < W; b++) {
+			Phi3Rope.ropeExt(Q[b], startPos + b, cfg.numHeads(), cfg.headDim(), ropeCfg);
+			Phi3Rope.ropeExt(K[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
+		}
+
+		// Write K, V to cache
+		for (int b = 0; b < W; b++) {
+			System.arraycopy(K[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
+			System.arraycopy(V[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
+		}
+
+		// Causal attention per-token
+		float[][] attnOut = new float[W][];
+		for (int b = 0; b < W; b++)
+			attnOut[b] = gqa(Q[b], kCacheLayer, vCacheLayer, startPos + b + 1);
+
+		// Attention output projection
+		float[][] attnProj = sgemmFused(wo[li], woDev != null ? woDev[li] : null, attnOut, 0, H, H);
+
+		float[][] x2 = new float[W][H];
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x2[b][d] = x[b][d] + attnProj[b][d];
+
+		// FFN
+		float[][] xNorm2 = new float[W][];
+		for (int b = 0; b < W; b++)
+			xNorm2[b] = LlamaTransformerHandler.rmsNorm(x2[b], ffnNorm[li], cfg.rmsNormEps());
+
+		float[][] gate = sgemmFused(ffnGateUp[li], ffnGateDev != null ? ffnGateDev[li] : null, xNorm2, 0,  I,      H);
+		float[][] up   = sgemmFused(ffnGateUp[li], ffnUpDev   != null ? ffnUpDev[li]   : null, xNorm2, I,  2 * I,  H);
+
+		float[][] hidden = new float[W][I];
+		for (int b = 0; b < W; b++)
+			for (int i = 0; i < I; i++) hidden[b][i] = LlamaTransformerHandler.silu(gate[b][i]) * up[b][i];
+
+		float[][] ffnOut = sgemmFused(wDown[li], wDownDev != null ? wDownDev[li] : null, hidden, 0, H, I);
+
+		float[][] x3 = new float[W][H];
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x3[b][d] = x2[b][d] + ffnOut[b][d];
+		return x3;
+	}
+
+	/**
+	 * Batched version of {@link #matVecFused}: GPU (DeviceHalfMatrix) if available,
+	 * otherwise CPU row-range quantized matVec called B times.
+	 */
+	private float[][] sgemmFused(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev,
+			float[][] X, int rowStart, int rowEnd, int cols) {
+		if (dev != null) return backend.sgemm(dev, X);
+		int B = X.length;
+		float[][] Y = new float[B][];
+		for (int b = 0; b < B; b++) Y[b] = LlamaTransformerHandler.matVec(quant, X[b], rowStart, rowEnd, cols);
+		return Y;
+	}
+
 	// ── Transformer forward pass ──────────────────────────────────────────────
 
 	private float[] getInitialActivation(ForwardRequest request) {

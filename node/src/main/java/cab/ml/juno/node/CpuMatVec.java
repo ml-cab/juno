@@ -33,7 +33,7 @@ public final class CpuMatVec implements MatVec {
 	/** Singleton — stateless, no resources to manage. */
 	public static final CpuMatVec INSTANCE = new CpuMatVec();
 
-	private CpuMatVec() {
+	CpuMatVec() {
 	}
 
 	@Override
@@ -50,5 +50,42 @@ public final class CpuMatVec implements MatVec {
 		evt.cols = cols;
 		evt.commit();
 		return result;
+	}
+
+	/**
+	 * Batched Y = A * X, weight-stationary: each row of {@code A} is loaded once
+	 * and dot-producted against all {@code B} input columns before advancing to the
+	 * next row. Compared to calling {@link #sgemv} B times (which re-streams the
+	 * full weight matrix from memory B times), this halves memory bandwidth for
+	 * {@code B &ge; 2} and scales near-linearly with B on DRAM-bound workloads.
+	 *
+	 * <p>Row parallelism: {@code IntStream.parallel()} over rows via
+	 * {@code ForkJoinPool.commonPool()} — same pool as {@link LlamaTransformerHandler#matVec}.
+	 * Each parallel task now does {@code cols * B} multiply-adds instead of {@code cols},
+	 * improving the compute-per-task-dispatch ratio.
+	 */
+	@Override
+	public float[][] sgemm(float[] A, float[][] X, int rows, int cols) {
+		if (A.length != (long) rows * cols)
+			throw new IllegalArgumentException("A.length=" + A.length + " != rows*cols=" + ((long) rows * cols));
+		int B = X.length;
+		if (B == 0) return new float[0][];
+		for (int b = 0; b < B; b++) {
+			if (X[b].length != cols)
+				throw new IllegalArgumentException("X[" + b + "].length=" + X[b].length + " != cols=" + cols);
+		}
+		float[][] Y = new float[B][rows];
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			int base = r * cols;
+			for (int b = 0; b < B; b++) {
+				float acc = 0f;
+				float[] xb = X[b];
+				for (int c = 0; c < cols; c++) {
+					acc += A[base + c] * xb[c];
+				}
+				Y[b][r] = acc;
+			}
+		});
+		return Y;
 	}
 }

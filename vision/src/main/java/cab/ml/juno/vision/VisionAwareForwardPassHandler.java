@@ -19,6 +19,8 @@ package cab.ml.juno.vision;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
+import cab.ml.juno.node.BatchForwardRequest;
+import cab.ml.juno.node.BatchForwardResult;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardRequest;
 import cab.ml.juno.node.ForwardResult;
@@ -113,6 +115,61 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
     }
 
     // ── ForwardPassHandler ────────────────────────────────────────────────
+
+    /**
+     * Batched prefill: build the initial activation matrix for the whole window
+     * with vision patch vectors spliced in for image-token positions, then delegate
+     * the full batch to the wrapped handler in one call.
+     *
+     * <p>Building the activation matrix is O(windowSize * hiddenDim) — negligible
+     * next to the transformer matmuls that follow. The key benefit is that the
+     * wrapped handler receives a single {@link BatchForwardRequest} for the entire
+     * window instead of being called once per token as in the old loop.
+     */
+    @Override
+    public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+        if (!context.hasEmbeddings()) {
+            return textHandler.forwardBatch(request, context);
+        }
+
+        float[][] patches = patchEmbeddings.get(request.requestId());
+        if (patches == null) {
+            return textHandler.forwardBatch(request, context);
+        }
+
+        int W = request.windowSize();
+        int[] tokenIds = request.tokenIds();
+        float[] flatActivations = buildWindowActivationsWithVision(tokenIds, patches, W);
+
+        BatchForwardRequest activationsReq = BatchForwardRequest.withActivations(
+                request.requestId(), flatActivations, W, request.startPosition());
+
+        return textHandler.forwardBatch(activationsReq, context);
+    }
+
+    /**
+     * Build a flattened {@code float[windowSize * hiddenDim]} activation matrix.
+     * Image-token positions use the pre-computed patch vector; text-token positions
+     * use a zero vector (the wrapped handler's embedding lookup is bypassed).
+     */
+    private float[] buildWindowActivationsWithVision(int[] tokenIds, float[][] patches, int W) {
+        float[] flat = new float[W * hiddenDim];
+        int patchIdx = 0;
+        for (int b = 0; b < W; b++) {
+            if (tokenIds[b] == imageTokenId) {
+                if (patchIdx < patches.length) {
+                    float[] patch = patches[patchIdx++];
+                    if (patch.length != hiddenDim)
+                        throw new IllegalStateException("Patch embedding dim " + patch.length
+                                + " does not match hiddenDim " + hiddenDim);
+                    System.arraycopy(patch, 0, flat, b * hiddenDim, hiddenDim);
+                }
+                // else: more image tokens than patches — leave zero (safety guard)
+            }
+            // text token: zero-vector (flat already zero-initialized)
+        }
+        return flat;
+    }
 
     @Override
     public ForwardResult forward(ForwardRequest request, ShardContext context) {

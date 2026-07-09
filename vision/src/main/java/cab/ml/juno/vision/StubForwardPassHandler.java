@@ -18,7 +18,7 @@ import cab.ml.juno.node.ShardContext;
  * zero-filled activations result for intermediate nodes and a logits
  * result with full mass on {@code winnerToken} for the last node.
  */
-final class StubForwardPassHandler implements ForwardPassHandler {
+class StubForwardPassHandler implements ForwardPassHandler {
 
     ForwardRequest lastRequest;
     ShardContext lastContext;

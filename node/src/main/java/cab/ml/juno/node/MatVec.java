@@ -87,4 +87,57 @@ public interface MatVec {
         throw new UnsupportedOperationException(
                 "FP16 device-resident weights are not supported by this MatVec implementation");
     }
+
+    /**
+     * Compute Y = A * X for a batch of B input columns in one call.
+     * A: [rows, cols] row-major (unchanged from sgemv). X: [B][cols].
+     * Returns Y: [B][rows].
+     *
+     * <p>Weight-stationary default: implementations that override this should load
+     * each weight row once and multiply it against all B columns before advancing
+     * to the next row, maximising weight reuse — the actual performance win over
+     * calling {@link #sgemv} B times, which re-streams the full weight matrix from
+     * memory B times.
+     *
+     * <p>Default (correctness-preserving): B calls to {@link #sgemv}. Every existing
+     * {@link MatVec} implementation is correct by construction; only
+     * {@link CpuMatVec} overrides for speed.
+     *
+     * @param A    weight matrix, row-major, length rows * cols
+     * @param X    batch of input vectors, X[b] has length cols
+     * @param rows number of output elements per vector
+     * @param cols number of input elements (inner dimension)
+     * @return Y[b] = A * X[b] for each b in 0..X.length
+     */
+    default float[][] sgemm(float[] A, float[][] X, int rows, int cols) {
+        float[][] Y = new float[X.length][];
+        for (int b = 0; b < X.length; b++) Y[b] = sgemv(A, X[b], rows, cols);
+        return Y;
+    }
+
+    /**
+     * Compute Y = A * X with {@code A} already on the device as FP32
+     * ({@link DeviceFloatMatrix}).
+     *
+     * <p>Default: B calls to {@link #sgemv(DeviceFloatMatrix, float[])}. GPU backends
+     * may override with a single batched BLAS SGEMM call.
+     */
+    default float[][] sgemm(DeviceFloatMatrix A, float[][] X) {
+        float[][] Y = new float[X.length][];
+        for (int b = 0; b < X.length; b++) Y[b] = sgemv(A, X[b]);
+        return Y;
+    }
+
+    /**
+     * Compute Y = A * X with {@code A} in FP16 on the device
+     * ({@link DeviceHalfMatrix}).
+     *
+     * <p>Default: B calls to {@link #sgemv(DeviceHalfMatrix, float[])}. GPU backends
+     * may override with a single batched BLAS SGEMM call.
+     */
+    default float[][] sgemm(DeviceHalfMatrix A, float[][] X) {
+        float[][] Y = new float[X.length][];
+        for (int b = 0; b < X.length; b++) Y[b] = sgemv(A, X[b]);
+        return Y;
+    }
 }

@@ -202,6 +202,7 @@ if "%~1"=="" goto :local_done
 if /i "%~1"=="--model-path" ( set "MODEL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--mmproj-path"( set "MMPROJ=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--api-port"   ( set "API_PORT_VAL=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--prefill"    ( set "PREFILL_MODE_VAL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--dtype"      ( set "DTYPE=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--byteOrder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--byteorder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :local_parse )
@@ -244,6 +245,9 @@ if /i "%~1"=="--help" (
   echo.
   echo   --api-port N         start local REST API server on port N
   echo                        (includes OpenAI-compatible /v1/chat/completions)
+  echo   --prefill single^|batched  Prefill strategy (default: batched)
+  echo                        batched: windowed GEMM -- fixes vision 10-min stall
+  echo                        single:  original per-token loop (escape hatch)
   echo   --mmproj-path PATH   Path to a separate mmproj GGUF holding the CLIP
   echo                        vision encoder. Required for /v1/vision/chat --
   echo                        real LLaVA/Qwen-VL/SmolVLM releases keep the
@@ -287,6 +291,9 @@ if not "%JFR_DURATION_LOCAL%"=="" (
 set "API_PORT_ARG="
 if not "%API_PORT_VAL%"=="" set "API_PORT_ARG=--api-port %API_PORT_VAL%"
 
+set "PREFILL_MODE_ARG="
+if not "%PREFILL_MODE_VAL%"=="" set "PREFILL_MODE_ARG=--prefill %PREFILL_MODE_VAL%"
+
 set "MMPROJ_ARG="
 if not "%MMPROJ%"=="" (
   set "MMPROJ_ARG=--mmproj-path %MMPROJ%"
@@ -295,7 +302,7 @@ if not "%MMPROJ%"=="" (
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %MMPROJ_ARG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
