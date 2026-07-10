@@ -724,8 +724,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		ensureKvCapacity(kCache, lastPos, kvDim);
 		ensureKvCapacity(vCache, lastPos, kvDim);
 
+		// Allocate workspace once — reused across all L layers to avoid ~167 MB of
+		// per-layer temporary float[][] allocation (GC source during decode).
+		BatchWorkspace ws = new BatchWorkspace(W, cfg.hiddenDim(), cfg.intermediateSize(),
+				kvDim, cfg.numHeads(), lastPos + 1);
+
 		for (int li = 0; li < L; li++) {
-			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li]);
+			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws);
 		}
 
 		if (a != null) {
@@ -738,100 +743,155 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return x;
 	}
 
+
 	/**
-	 * Single transformer layer executed over a batch of {@code W} positions.
-	 * Linear projections (Q, K, V, attn-out, gate, up, down) use batched matmul
-	 * via {@link #sgemmLayerHalf}/{@link #sgemmLayerFp32}; attention stays
-	 * per-token (each position attends to a different-length KV prefix).
+	 * Pre-allocated scratch buffers for one batched-prefill call, reused across
+	 * all L transformer layers. Allocating once here instead of per-layer reduces
+	 * per-prefill temporary allocation from ~167 MB (22 layers × 7.6 MB/layer) to
+	 * ~5 MB (one workspace), eliminating the GC pressure that was inflating
+	 * decode-phase p95 latency.
+	 */
+	private static final class BatchWorkspace {
+		final float[][] norm1, norm2, q, k, v, attnOut, attnProj, gate, up, hidden, ffnOut;
+		final float[] scores; // gqa attention-score scratch: [numHeads × maxSeqLen]
+
+		BatchWorkspace(int W, int H, int I, int kvDim, int numHeads, int maxSeqLen) {
+			norm1    = new float[W][H];
+			norm2    = new float[W][H];
+			q        = new float[W][H];
+			k        = new float[W][kvDim];
+			v        = new float[W][kvDim];
+			attnOut  = new float[W][H];
+			attnProj = new float[W][H];
+			gate     = new float[W][I];
+			up       = new float[W][I];
+			hidden   = new float[W][I];
+			ffnOut   = new float[W][H];
+			scores   = new float[numHeads * maxSeqLen];
+		}
+	}
+
+	/**
+	 * Single transformer layer executed over a batch of {@code W} positions using
+	 * pre-allocated workspace buffers. All intermediate results write into
+	 * {@code ws}; residual connections are in-place on {@code x}. Zero heap
+	 * allocation on the CPU Q4_K / Q8_0 path.
 	 */
 	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
-			float[] kCacheLayer, float[] vCacheLayer) {
-		int W = x.length;
-		int H = cfg.hiddenDim();
-		int I = cfg.intermediateSize();
+			float[] kCacheLayer, float[] vCacheLayer, BatchWorkspace ws) {
+		int W    = x.length;
+		int H    = cfg.hiddenDim();
+		int I    = cfg.intermediateSize();
 		int kvDim = cfg.kvDim();
 
-		// ── RMS norm each row independently ──────────────────────────────────
-		float[][] xNorm = new float[W][];
-		for (int b = 0; b < W; b++) xNorm[b] = rmsNorm(x[b], attnNorm[li], cfg.rmsNormEps());
+		for (int b = 0; b < W; b++) rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
 
-		// ── QKV projections — one GEMM per weight matrix for the whole window ─
-		float[][] Q = sgemmLayer(wq[li], wqDev, wqDevFp32, li, xNorm, H, H);
-		float[][] K = sgemmLayer(wk[li], wkDev, wkDevFp32, li, xNorm, kvDim, H);
-		float[][] V = sgemmLayer(wv[li], wvDev, wvDevFp32, li, xNorm, kvDim, H);
+		sgemmLayerInto(wq[li], wqDev, wqDevFp32, li, ws.norm1, ws.q,    H,     H);
+		sgemmLayerInto(wk[li], wkDev, wkDevFp32, li, ws.norm1, ws.k,    kvDim, H);
+		sgemmLayerInto(wv[li], wvDev, wvDevFp32, li, ws.norm1, ws.v,    kvDim, H);
 
-		// Optional Qwen2 attention biases
 		if (bq != null) {
 			for (int b = 0; b < W; b++) {
-				addInPlace(Q[b], bq[li]);
-				addInPlace(K[b], bk[li]);
-				addInPlace(V[b], bv[li]);
+				addInPlace(ws.q[b], bq[li]);
+				addInPlace(ws.k[b], bk[li]);
+				addInPlace(ws.v[b], bv[li]);
 			}
 		}
 
-		// ── RoPE per-token (positions differ; must stay serial) ───────────────
 		for (int b = 0; b < W; b++) {
-			rope(Q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
-			rope(K[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+			rope(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
+			rope(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
 		}
 
-		// ── Write K, V into cache at their respective positions ───────────────
 		for (int b = 0; b < W; b++) {
-			System.arraycopy(K[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
-			System.arraycopy(V[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
+			System.arraycopy(ws.k[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
+			System.arraycopy(ws.v[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
 		}
 
-		// ── Causal attention per-token — each sees its own KV prefix length ───
-		float[][] attnOut = new float[W][];
 		for (int b = 0; b < W; b++) {
-			attnOut[b] = gqa(Q[b], kCacheLayer, vCacheLayer, startPos + b + 1);
+			gqaInto(ws.q[b], kCacheLayer, vCacheLayer, startPos + b + 1, ws.attnOut[b], ws.scores);
 		}
 
-		// ── Attention output projection — GEMM ────────────────────────────────
-		float[][] attnProj = sgemmLayer(wo[li], woDev, woDevFp32, li, attnOut, H, H);
+		sgemmLayerInto(wo[li], woDev, woDevFp32, li, ws.attnOut, ws.attnProj, H, H);
 
-		// Residual
-		float[][] x2 = new float[W][H];
-		for (int b = 0; b < W; b++) {
-			for (int d = 0; d < H; d++) x2[b][d] = x[b][d] + attnProj[b][d];
+		// First residual — in-place (eliminates x2 allocation)
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.attnProj[b][d];
+
+		for (int b = 0; b < W; b++) rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
+
+		sgemmLayerInto(wGate[li], wGateDev, wGateDevFp32, li, ws.norm2, ws.gate, I, H);
+		sgemmLayerInto(wUp[li],   wUpDev,   wUpDevFp32,   li, ws.norm2, ws.up,   I, H);
+
+		for (int b = 0; b < W; b++)
+			for (int i = 0; i < I; i++) ws.hidden[b][i] = silu(ws.gate[b][i]) * ws.up[b][i];
+
+		sgemmLayerInto(wDown[li], wDownDev, wDownDevFp32, li, ws.hidden, ws.ffnOut, H, I);
+
+		// Second residual — in-place (eliminates x3 allocation)
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.ffnOut[b][d];
+
+		return x;
+	}
+
+	/**
+	 * Zero-allocation grouped-query attention. Writes output into the pre-allocated
+	 * {@code out} buffer; reuses the shared {@code scores} scratch array.
+	 */
+	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen,
+			float[] out, float[] scores) {
+		int H    = cfg.numHeads();
+		int Hd   = cfg.headDim();
+		int gqaR = cfg.gqaRatio();
+		float scale = (float) (1.0 / Math.sqrt(Hd));
+		java.util.Arrays.fill(out, 0f);
+
+		for (int h = 0; h < H; h++) {
+			int kvHead = h / gqaR;
+			int qBase  = h * Hd;
+			int kBase  = kvHead * Hd;
+
+			for (int t = 0; t < seqLen; t++) {
+				float dot = 0f;
+				int kOffset = t * cfg.kvDim() + kBase;
+				for (int d = 0; d < Hd; d++) dot += q[qBase + d] * kCache[kOffset + d];
+				scores[t] = dot * scale;
+			}
+			softmax(scores, seqLen);
+
+			int outBase = h * Hd;
+			for (int t = 0; t < seqLen; t++) {
+				int vOffset = t * cfg.kvDim() + kBase;
+				float w = scores[t];
+				for (int d = 0; d < Hd; d++) out[outBase + d] += w * vCache[vOffset + d];
+			}
 		}
+	}
 
-		// ── FFN sub-layer ─────────────────────────────────────────────────────
-		float[][] xNorm2 = new float[W][];
-		for (int b = 0; b < W; b++) xNorm2[b] = rmsNorm(x2[b], ffnNorm[li], cfg.rmsNormEps());
-
-		float[][] gate = sgemmLayer(wGate[li], wGateDev, wGateDevFp32, li, xNorm2, I, H);
-		float[][] up   = sgemmLayer(wUp[li],   wUpDev,   wUpDevFp32,   li, xNorm2, I, H);
-
-		// SwiGLU activation per-token
-		float[][] hidden = new float[W][I];
-		for (int b = 0; b < W; b++) {
-			for (int i = 0; i < I; i++) hidden[b][i] = silu(gate[b][i]) * up[b][i];
+	/**
+	 * Write Y = A * X for a batch directly into pre-allocated rows {@code Y[b]}.
+	 * CPU Q4_K / Q8_0: zero allocation per row via {@link #matVecInto}.
+	 * GPU paths: copy from sgemm result (GPU is fast; copy is negligible).
+	 */
+	private void sgemmLayerInto(GgufReader.QuantizedTensor quant,
+			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32,
+			int li, float[][] X, float[][] Y, int rows, int cols) {
+		if (devHalf != null) {
+			float[][] tmp = backend.sgemm(devHalf[li], X);
+			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			return;
 		}
-
-		float[][] ffnOut = sgemmLayer(wDown[li], wDownDev, wDownDevFp32, li, hidden, H, I);
-
-		// Residual
-		float[][] x3 = new float[W][H];
-		for (int b = 0; b < W; b++) {
-			for (int d = 0; d < H; d++) x3[b][d] = x2[b][d] + ffnOut[b][d];
+		if (devFp32 != null) {
+			float[][] tmp = backend.sgemm(devFp32[li], X);
+			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			return;
 		}
-		return x3;
+		for (int b = 0; b < X.length; b++) matVecInto(quant, X[b], Y[b], rows, cols);
 	}
 
 	/**
 	 * Dispatch a batched weight-matrix multiply for a layer: FP16 GPU first,
-	 * then FP32 GPU, then CPU quantized (B sequential matVec calls — correctness
-	 * preserved, weight-stationary speedup on CPU deferred to a separate pass).
-	 *
-	 * @param quant    quantized CPU weight tensor (used only when both dev arrays
-	 *                 are null)
-	 * @param devHalf  FP16 device-resident arrays per layer (may be null)
-	 * @param devFp32  FP32 device-resident arrays per layer (may be null)
-	 * @param li       layer index within the shard (0-based)
-	 * @param X        input batch: X[b] is the input vector for position b
-	 * @param rows     output size
-	 * @param cols     input size
+	 * then FP32 GPU, then CPU quantized. Returns allocated output — use
+	 * {@link #sgemmLayerInto} in hot paths to avoid per-layer allocation.
 	 */
 	private float[][] sgemmLayer(GgufReader.QuantizedTensor quant,
 			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32,
@@ -1031,6 +1091,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return out;
 	}
 
+	/**
+	 * Zero-allocation variant of {@link #rmsNorm}: writes into {@code out} instead
+	 * of allocating. Used by {@link #transformerLayerBatch} to reuse workspace rows.
+	 */
+	static void rmsNormInto(float[] x, float[] w, float eps, float[] out) {
+		int n = x.length;
+		float ss = 0f;
+		for (float v : x) ss += v * v;
+		float scale = 1f / (float) Math.sqrt(ss / n + eps);
+		for (int i = 0; i < n; i++) out[i] = w[i] * x[i] * scale;
+	}
+
 	// ── Backend dispatch ─────────────────────────────────────────────────────
 
 	/**
@@ -1045,6 +1117,38 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		if (dev != null)
 			return backend.sgemv(dev, x);
 		return matVec(quant, x, rows, cols);
+	}
+
+	/**
+	 * Zero-allocation matrix-vector multiply into a caller-provided buffer.
+	 * Fast paths for Q4_K (type 12) and Q8_0 (type 8) — no heap allocation.
+	 * Allocate-and-copy fallback for other quantisation types.
+	 *
+	 * <p>Used by {@link #sgemmLayerInto} to eliminate per-matVec allocation in
+	 * the CPU quantized batched-prefill path.
+	 */
+	static void matVecInto(GgufReader.QuantizedTensor A, float[] x, float[] out, int rows, int cols) {
+		switch (A.type()) {
+		case 12 -> matVecQ4KrawInto(A.data(), x, 0, rows, out, cols);
+		case 8  -> matVecQ8_0rawInto(A.data(), x, 0, rows, out, cols);
+		default -> {
+			float[] tmp = matVec(A, x, rows, cols);
+			System.arraycopy(tmp, 0, out, 0, rows);
+		}
+		}
+	}
+
+	/** Row-range variant of {@link #matVecInto} — used by Phi3 fused-tensor paths. */
+	static void matVecInto(GgufReader.QuantizedTensor A, float[] x, float[] out,
+			int rowStart, int rowEnd, int cols) {
+		switch (A.type()) {
+		case 12 -> matVecQ4KrawInto(A.data(), x, rowStart, rowEnd, out, cols);
+		case 8  -> matVecQ8_0rawInto(A.data(), x, rowStart, rowEnd, out, cols);
+		default -> {
+			float[] tmp = matVecQuantizedNoEvent(A, x, rowStart, rowEnd, cols);
+			System.arraycopy(tmp, 0, out, 0, rowEnd - rowStart);
+		}
+		}
 	}
 
 	/**
@@ -1676,17 +1780,32 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
+		matVecQ4KrawInto(raw, x, rowStart, rowEnd, y, cols);
+		return y;
+	}
 
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+	/**
+	 * Zero-allocation Q4_K matVec: writes into caller-provided {@code y[0..rows)}.
+	 * Same inner loop as {@link #matVecQ4Kraw} — same numerical result, no heap
+	 * allocation.
+	 */
+	private static void matVecQ4KrawInto(byte[] raw, float[] x, int rowStart, int rowEnd,
+			float[] y, int cols) {
+		final int BLOCK_SIZE = 256;
+		final int BLOCK_BYTES = 144;
+		final int blocksPerRow = cols / BLOCK_SIZE;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
+
+		java.util.stream.IntStream.range(0, rowEnd - rowStart).parallel().forEach(r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			float acc = 0f;
 			int xBase = 0;
 
 			for (int b = 0; b < blocksPerRow; b++) {
-				int bo = rowByteOffset + b * BLOCK_BYTES;
-				int scBase = bo + 4; // 12 scale bytes at [bo+4, bo+15]
-				int qsBase = bo + 16; // 128 nibble bytes at [bo+16, bo+143]
-				float d = GgufReader.f16ToF32(readLE16(raw, bo));
+				int bo     = rowByteOffset + b * BLOCK_BYTES;
+				int scBase = bo + 4;
+				int qsBase = bo + 16;
+				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
 				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
 
 				int qi = 0;
@@ -1694,21 +1813,21 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					int s0 = g / 32;
 					int s1 = s0 + 1;
 					float scale0 = d * q4kScaleRaw(raw, scBase, s0);
-					float min0 = dmin * q4kMinRaw(raw, scBase, s0);
+					float min0   = dmin * q4kMinRaw(raw, scBase, s0);
 					float scale1 = d * q4kScaleRaw(raw, scBase, s1);
-					float min1 = dmin * q4kMinRaw(raw, scBase, s1);
+					float min1   = dmin * q4kMinRaw(raw, scBase, s1);
 
 					for (int i = 0; i < 32; i++)
 						acc += (scale0 * (raw[qsBase + qi + i] & 0x0F) - min0) * x[xBase + g + i];
 					for (int i = 0; i < 32; i++)
-						acc += (scale1 * ((raw[qsBase + qi + i] >> 4) & 0x0F) - min1) * x[xBase + g + 32 + i];
+						acc += (scale1 * ((raw[qsBase + qi + i] >> 4) & 0x0F) - min1)
+								* x[xBase + g + 32 + i];
 					qi += 32;
 				}
 				xBase += BLOCK_SIZE;
 			}
 			y[r] = acc;
 		});
-		return y;
 	}
 
 	/** Q4_K scale[j]: reads 6-bit packed value directly from raw[] at scBase. */
@@ -1734,8 +1853,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
+		matVecQ8_0rawInto(raw, x, rowStart, rowEnd, y, cols);
+		return y;
+	}
 
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+	/** Zero-allocation Q8_0 matVec: writes into {@code y[0..rows)}. */
+	private static void matVecQ8_0rawInto(byte[] raw, float[] x, int rowStart, int rowEnd,
+			float[] y, int cols) {
+		final int BLOCK_SIZE = 32;
+		final int BLOCK_BYTES = 34;
+		final int blocksPerRow = cols / BLOCK_SIZE;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
+
+		java.util.stream.IntStream.range(0, rowEnd - rowStart).parallel().forEach(r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			float acc = 0f;
 			int xBase = 0;
@@ -1748,7 +1878,6 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			}
 			y[r] = acc;
 		});
-		return y;
 	}
 
 	/** Read a little-endian signed 16-bit value from raw bytes at offset. */

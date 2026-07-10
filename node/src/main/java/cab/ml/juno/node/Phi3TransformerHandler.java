@@ -461,8 +461,11 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		ensureKvCapacity(kCache, lastPos, kvDim);
 		ensureKvCapacity(vCache, lastPos, kvDim);
 
+		BatchWorkspace ws = new BatchWorkspace(W, cfg.hiddenDim(), cfg.intermediateSize(),
+				kvDim, cfg.numHeads(), lastPos + 1);
+
 		for (int li = 0; li < L; li++) {
-			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li]);
+			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws);
 		}
 
 		if (a != null) {
@@ -474,63 +477,116 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		return x;
 	}
 
+	/** Pre-allocated workspace for Phi-3 batched-prefill layers. Same purpose as
+	 *  LlamaTransformerHandler.BatchWorkspace — eliminates per-layer allocation. */
+	private static final class BatchWorkspace {
+		final float[][] norm1, norm2, q, k, v, attnOut, attnProj, gate, up, hidden, ffnOut;
+		final float[] scores;
+
+		BatchWorkspace(int W, int H, int I, int kvDim, int numHeads, int maxSeqLen) {
+			norm1    = new float[W][H];
+			norm2    = new float[W][H];
+			q        = new float[W][H];
+			k        = new float[W][kvDim];
+			v        = new float[W][kvDim];
+			attnOut  = new float[W][H];
+			attnProj = new float[W][H];
+			gate     = new float[W][I];
+			up       = new float[W][I];
+			hidden   = new float[W][I];
+			ffnOut   = new float[W][H];
+			scores   = new float[numHeads * maxSeqLen];
+		}
+	}
+
 	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
-			float[] kCacheLayer, float[] vCacheLayer) {
-		int W = x.length;
-		int H = cfg.hiddenDim();
+			float[] kCacheLayer, float[] vCacheLayer, BatchWorkspace ws) {
+		int W    = x.length;
+		int H    = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
-		int I = cfg.intermediateSize();
+		int I    = cfg.intermediateSize();
 
-		// RMS norm each row
-		float[][] xNorm = new float[W][];
 		for (int b = 0; b < W; b++)
-			xNorm[b] = LlamaTransformerHandler.rmsNorm(x[b], attnNorm[li], cfg.rmsNormEps());
+			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
 
-		// QKV via row-range matmul on fused tensor
-		float[][] Q = sgemmFused(attnQkv[li], attnQDev != null ? attnQDev[li] : null, xNorm, 0,     H,           H);
-		float[][] K = sgemmFused(attnQkv[li], attnKDev != null ? attnKDev[li] : null, xNorm, H,     H + kvDim,   H);
-		float[][] V = sgemmFused(attnQkv[li], attnVDev != null ? attnVDev[li] : null, xNorm, H + kvDim, H + 2 * kvDim, H);
+		sgemmFusedInto(attnQkv[li], attnQDev != null ? attnQDev[li] : null, ws.norm1, ws.q,    0,           H,           H);
+		sgemmFusedInto(attnQkv[li], attnKDev != null ? attnKDev[li] : null, ws.norm1, ws.k,    H,           H + kvDim,   H);
+		sgemmFusedInto(attnQkv[li], attnVDev != null ? attnVDev[li] : null, ws.norm1, ws.v,    H + kvDim,   H + 2*kvDim, H);
 
-		// Extended RoPE per-token (Phi-3 uses long-context NTK scaling)
 		for (int b = 0; b < W; b++) {
-			Phi3Rope.ropeExt(Q[b], startPos + b, cfg.numHeads(), cfg.headDim(), ropeCfg);
-			Phi3Rope.ropeExt(K[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
+			Phi3Rope.ropeExt(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), ropeCfg);
+			Phi3Rope.ropeExt(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
 		}
 
-		// Write K, V to cache
 		for (int b = 0; b < W; b++) {
-			System.arraycopy(K[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
-			System.arraycopy(V[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
+			System.arraycopy(ws.k[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
+			System.arraycopy(ws.v[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
 		}
 
-		// Causal attention per-token
-		float[][] attnOut = new float[W][];
 		for (int b = 0; b < W; b++)
-			attnOut[b] = gqa(Q[b], kCacheLayer, vCacheLayer, startPos + b + 1);
+			gqaInto(ws.q[b], kCacheLayer, vCacheLayer, startPos + b + 1, ws.attnOut[b], ws.scores);
 
-		// Attention output projection
-		float[][] attnProj = sgemmFused(wo[li], woDev != null ? woDev[li] : null, attnOut, 0, H, H);
+		sgemmFusedInto(wo[li], woDev != null ? woDev[li] : null, ws.attnOut, ws.attnProj, 0, H, H);
 
-		float[][] x2 = new float[W][H];
-		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x2[b][d] = x[b][d] + attnProj[b][d];
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.attnProj[b][d];
 
-		// FFN
-		float[][] xNorm2 = new float[W][];
 		for (int b = 0; b < W; b++)
-			xNorm2[b] = LlamaTransformerHandler.rmsNorm(x2[b], ffnNorm[li], cfg.rmsNormEps());
+			LlamaTransformerHandler.rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
 
-		float[][] gate = sgemmFused(ffnGateUp[li], ffnGateDev != null ? ffnGateDev[li] : null, xNorm2, 0,  I,      H);
-		float[][] up   = sgemmFused(ffnGateUp[li], ffnUpDev   != null ? ffnUpDev[li]   : null, xNorm2, I,  2 * I,  H);
+		sgemmFusedInto(ffnGateUp[li], ffnGateDev != null ? ffnGateDev[li] : null, ws.norm2, ws.gate, 0, I,     H);
+		sgemmFusedInto(ffnGateUp[li], ffnUpDev   != null ? ffnUpDev[li]   : null, ws.norm2, ws.up,   I, 2 * I, H);
 
-		float[][] hidden = new float[W][I];
 		for (int b = 0; b < W; b++)
-			for (int i = 0; i < I; i++) hidden[b][i] = LlamaTransformerHandler.silu(gate[b][i]) * up[b][i];
+			for (int i = 0; i < I; i++) ws.hidden[b][i] = LlamaTransformerHandler.silu(ws.gate[b][i]) * ws.up[b][i];
 
-		float[][] ffnOut = sgemmFused(wDown[li], wDownDev != null ? wDownDev[li] : null, hidden, 0, H, I);
+		sgemmFusedInto(wDown[li], wDownDev != null ? wDownDev[li] : null, ws.hidden, ws.ffnOut, 0, H, I);
 
-		float[][] x3 = new float[W][H];
-		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x3[b][d] = x2[b][d] + ffnOut[b][d];
-		return x3;
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.ffnOut[b][d];
+		return x;
+	}
+
+	/** Zero-allocation gqa: writes into pre-allocated out[] using shared scores scratch. */
+	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen,
+			float[] out, float[] scores) {
+		int H    = cfg.numHeads();
+		int Hd   = cfg.headDim();
+		int gqaR = cfg.gqaRatio();
+		float scale = (float) (1.0 / Math.sqrt(Hd));
+		java.util.Arrays.fill(out, 0f);
+
+		for (int h = 0; h < H; h++) {
+			int kvHead = h / gqaR;
+			int qBase  = h * Hd;
+			int kBase  = kvHead * Hd;
+
+			for (int t = 0; t < seqLen; t++) {
+				float dot = 0f;
+				int kOffset = t * cfg.kvDim() + kBase;
+				for (int d = 0; d < Hd; d++) dot += q[qBase + d] * kCache[kOffset + d];
+				scores[t] = dot * scale;
+			}
+			LlamaTransformerHandler.softmax(scores, seqLen);
+
+			int outBase = h * Hd;
+			for (int t = 0; t < seqLen; t++) {
+				int vOffset = t * cfg.kvDim() + kBase;
+				float w = scores[t];
+				for (int d = 0; d < Hd; d++) out[outBase + d] += w * vCache[vOffset + d];
+			}
+		}
+	}
+
+	/** Zero-allocation sgemmFused: writes into pre-allocated rows Y[b]. */
+	private void sgemmFusedInto(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev,
+			float[][] X, float[][] Y, int rowStart, int rowEnd, int cols) {
+		if (dev != null) {
+			float[][] tmp = backend.sgemm(dev, X);
+			int rows = rowEnd - rowStart;
+			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			return;
+		}
+		for (int b = 0; b < X.length; b++)
+			LlamaTransformerHandler.matVecInto(quant, X[b], Y[b], rowStart, rowEnd, cols);
 	}
 
 	/**
