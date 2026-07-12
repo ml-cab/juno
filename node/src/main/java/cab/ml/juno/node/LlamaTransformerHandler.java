@@ -651,6 +651,24 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * as {@code float[windowSize * hiddenDim]}. For the final node only the
 	 * last-position logits are returned.
 	 */
+	/**
+	 * See {@link ForwardPassHandler#embedToken(int)}. Throws if this shard
+	 * doesn't own the embedding table — mirrors the existing hasEmbeddings
+	 * guard used by {@link #forwardBatch} and {@link #getInitialActivation}.
+	 */
+	@Override
+	public float[] embedToken(int tokenId) {
+		if (!hasEmbeddings) {
+			throw new UnsupportedOperationException(
+					"embedToken() called on a shard with hasEmbeddings=false (this node does not own the embedding table)");
+		}
+		int H = cfg.hiddenDim();
+		int clamped = Math.max(0, Math.min(tokenId, cfg.vocabSize() - 1));
+		float[] x = new float[H];
+		System.arraycopy(tokenEmbd, clamped * H, x, 0, H);
+		return x;
+	}
+
 	@Override
 	public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
 		long start = System.nanoTime();

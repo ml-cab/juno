@@ -29,8 +29,9 @@ import cab.ml.juno.node.ShardContext;
 /**
  * Verifies that {@link VisionAwareForwardPassHandler#forwardBatch} passes a
  * correctly-spliced activation matrix to the wrapped handler: image-token
- * positions contain the pre-registered patch vectors; all other positions are
- * zero (text tokens are handled downstream by the embedded text handler).
+ * positions contain the pre-registered patch vectors; text-token positions
+ * contain the wrapped handler's real embedding-table row
+ * ({@link cab.ml.juno.node.ForwardPassHandler#embedToken(int)}).
  *
  * <p>
  * Parity check: for a window containing a mix of image and text tokens, the
@@ -87,11 +88,13 @@ class VisionAwareForwardPassHandlerBatchTest {
 	}
 
 	@Test
-	@DisplayName("text-only window: text-token positions produce zero activations when patches are registered")
-	void text_only_window_rows_are_zero() {
+	@DisplayName("text-only window: text-token positions use the real embedding, not zero "
+			+ "(regression test for the 2026-07-12 zero-vector text-token bug)")
+	void text_only_window_rows_use_real_embedding() {
 		// Register 1 patch so the vision path is entered (patches != null).
 		// The window contains only text tokens, so none hit the IMAGE_TOKEN_ID branch
-		// inside buildWindowActivationsWithVision — all rows stay zero-initialised.
+		// inside buildWindowActivationsWithVision — every row must be the token's
+		// real embedding (textHandler.embedToken()), NOT a zero vector.
 		handler.registerVisionEmbeddings("req2", buildPatches(1, HIDDEN_DIM));
 		int W = 3;
 		int[] tokenIds = { TEXT_TOKEN_ID, TEXT_TOKEN_ID, TEXT_TOKEN_ID };
@@ -100,13 +103,17 @@ class VisionAwareForwardPassHandlerBatchTest {
 		handler.forwardBatch(req, FIRST_NODE_CTX);
 
 		float[] flat = inner.lastBatchRequest.activations();
-		for (float v : flat)
-			assertThat(v).as("text tokens produce zero activation").isEqualTo(0f);
+		float[] expected = expectedTextEmbedding(TEXT_TOKEN_ID, HIDDEN_DIM);
+		for (int b = 0; b < W; b++) {
+			for (int d = 0; d < HIDDEN_DIM; d++) {
+				assertThat(flat[b * HIDDEN_DIM + d]).as("row %d col %d", b, d).isEqualTo(expected[d]);
+			}
+		}
 	}
 
 	@Test
-	@DisplayName("mixed image+text window: image rows have patch vectors, text rows are zero")
-	void mixed_window_image_rows_have_patch_text_rows_are_zero() {
+	@DisplayName("mixed image+text window: image rows have patch vectors, text rows have real embeddings")
+	void mixed_window_image_rows_have_patch_text_rows_have_real_embedding() {
 		int numPatches = 2;
 		float[][] patches = buildPatches(numPatches, HIDDEN_DIM);
 		handler.registerVisionEmbeddings("req3", patches);
@@ -119,18 +126,19 @@ class VisionAwareForwardPassHandlerBatchTest {
 		handler.forwardBatch(req, FIRST_NODE_CTX);
 
 		float[] flat = inner.lastBatchRequest.activations();
+		float[] expectedText = expectedTextEmbedding(TEXT_TOKEN_ID, HIDDEN_DIM);
 
-		// row 0 (TEXT) → zero
+		// row 0 (TEXT) → real embedding
 		for (int d = 0; d < HIDDEN_DIM; d++)
-			assertThat(flat[d]).as("row 0 (text), col %d", d).isEqualTo(0f);
+			assertThat(flat[d]).as("row 0 (text), col %d", d).isEqualTo(expectedText[d]);
 
 		// row 1 (IMAGE, patch 0)
 		for (int d = 0; d < HIDDEN_DIM; d++)
 			assertThat(flat[HIDDEN_DIM + d]).as("row 1 (image), col %d", d).isEqualTo(patches[0][d]);
 
-		// row 2 (TEXT) → zero
+		// row 2 (TEXT) → real embedding
 		for (int d = 0; d < HIDDEN_DIM; d++)
-			assertThat(flat[2 * HIDDEN_DIM + d]).as("row 2 (text), col %d", d).isEqualTo(0f);
+			assertThat(flat[2 * HIDDEN_DIM + d]).as("row 2 (text), col %d", d).isEqualTo(expectedText[d]);
 
 		// row 3 (IMAGE, patch 1)
 		for (int d = 0; d < HIDDEN_DIM; d++)
@@ -187,6 +195,16 @@ class VisionAwareForwardPassHandlerBatchTest {
 		return patches;
 	}
 
+	/** Mirrors ActivationCapturingHandler.embedToken() so tests can assert
+	 * against the expected real (non-zero) text embedding. */
+	private static float[] expectedTextEmbedding(int tokenId, int hiddenDim) {
+		float[] emb = new float[hiddenDim];
+		for (int d = 0; d < hiddenDim; d++) {
+			emb[d] = tokenId * 1000f + d;
+		}
+		return emb;
+	}
+
 	/**
 	 * ForwardPassHandler test double that captures the most recent
 	 * {@link BatchForwardRequest} and {@link ForwardRequest} for assertion.
@@ -212,6 +230,17 @@ class VisionAwareForwardPassHandlerBatchTest {
 			}
 			float[] acts = new float[W * hiddenDim];
 			return new BatchForwardResult(request.requestId(), acts, null, W, 0L);
+		}
+
+		/** Deterministic fake embedding so tests can assert the real per-token
+		 * value was used (instead of the pre-fix zero vector). */
+		@Override
+		public float[] embedToken(int tokenId) {
+			float[] emb = new float[hiddenDim];
+			for (int d = 0; d < hiddenDim; d++) {
+				emb[d] = tokenId * 1000f + d;
+			}
+			return emb;
 		}
 	}
 }

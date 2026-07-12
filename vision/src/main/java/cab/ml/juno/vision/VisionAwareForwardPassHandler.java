@@ -149,8 +149,12 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
 
     /**
      * Build a flattened {@code float[windowSize * hiddenDim]} activation matrix.
-     * Image-token positions use the pre-computed patch vector; text-token positions
-     * use a zero vector (the wrapped handler's embedding lookup is bypassed).
+     * Image-token positions use the pre-computed patch vector; text-token
+     * positions use the wrapped handler's real embedding-table row via
+     * {@link ForwardPassHandler#embedToken(int)} — NOT a zero vector. (Prior to
+     * 2026-07-12 this used a zero vector for every text token, which silently
+     * fed the model 600+ meaningless positions and produced incoherent output
+     * even once the image itself was correctly seen.)
      */
     private float[] buildWindowActivationsWithVision(int[] tokenIds, float[][] patches, int W) {
         float[] flat = new float[W * hiddenDim];
@@ -165,8 +169,13 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
                     System.arraycopy(patch, 0, flat, b * hiddenDim, hiddenDim);
                 }
                 // else: more image tokens than patches — leave zero (safety guard)
+            } else {
+                float[] textEmbedding = textHandler.embedToken(tokenIds[b]);
+                if (textEmbedding.length != hiddenDim)
+                    throw new IllegalStateException("Text embedding dim " + textEmbedding.length
+                            + " does not match hiddenDim " + hiddenDim);
+                System.arraycopy(textEmbedding, 0, flat, b * hiddenDim, hiddenDim);
             }
-            // text token: zero-vector (flat already zero-initialized)
         }
         return flat;
     }
@@ -212,38 +221,20 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
     // ── Private helpers ───────────────────────────────────────────────────
 
     /**
-     * Build the initial hidden-state vector for the first node.
+     * Build the initial hidden-state vector for the first node, for a single
+     * token position (used by {@code PrefillMode.SINGLE} and — for the very
+     * last prompt token that starts decode — by every prefill mode).
      *
-     * For text tokens the embedding lookup is delegated to the text handler.
-     * For image tokens (ID == imageTokenId) the pre-computed patch vector is
-     * used directly.
-     *
-     * Since the text handler owns the token embedding table (it is loaded as
-     * part of the GGUF shard), we reconstruct the text embedding by running a
-     * minimal single-token prefill on the text handler and extracting the last
-     * RMS hidden state.  However, this would require an extra forward pass.
-     *
-     * Simpler and correct: the last token in the sequence is the one the
-     * generation loop asks us to score.  If it is an image token, return its
-     * patch vector directly.  If it is a text token, forward to the text handler
-     * (which will do the embedding lookup) — and never reach this branch.
-     *
-     * The generation loop always calls forward() with the full token sequence
-     * but only the last token matters for each decode step.  For the prefill
-     * phase the loop walks positions individually; vision tokens appear as a
-     * contiguous run of IMAGE_TOKEN_ID at known positions.
+     * Image tokens (ID == imageTokenId) use the pre-computed patch vector.
+     * Text tokens use the wrapped handler's real embedding-table row via
+     * {@link ForwardPassHandler#embedToken(int)} — NOT a zero vector, matching
+     * the fix applied to {@link #buildWindowActivationsWithVision}.
      */
     private float[] buildActivationWithVision(int[] tokenIds, float[][] patches) {
         int lastToken = tokenIds[tokenIds.length - 1];
 
         if (lastToken != imageTokenId) {
-            // Text token at this position — we cannot build the embedding here because
-            // the embedding table lives inside the text handler.  Return a zero vector;
-            // the caller (GenerationLoop) re-routes through the text handler's own
-            // getInitialActivation() on the next pass.  In practice the generation
-            // loop only calls VisionAwareForwardPassHandler at image-token positions
-            // during prefill; this path is a safety guard.
-            return new float[hiddenDim];
+            return textHandler.embedToken(lastToken);
         }
 
         // Count how many IMAGE_TOKEN_IDs appear before this position — that is the

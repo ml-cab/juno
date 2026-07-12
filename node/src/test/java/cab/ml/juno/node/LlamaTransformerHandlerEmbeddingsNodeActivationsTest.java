@@ -18,6 +18,7 @@ package cab.ml.juno.node;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -146,6 +147,50 @@ class LlamaTransformerHandlerEmbeddingsNodeActivationsTest {
 		assertThat(result.windowSize()).isEqualTo(window);
 		assertThat(result.activations()).isNotNull();
 		assertThat(result.activations()).hasSize(window * HIDDEN_DIM);
+	}
+
+	// ── embedToken() — used by VisionAwareForwardPassHandler for text tokens ───
+
+	@Test
+	@DisplayName("embedToken(): on the embeddings node, returns the real embedding-table row")
+	void embedToken_onEmbeddingsNode_returnsRealRow() {
+		LlamaTransformerHandler handler = embeddingsNodeHandler();
+
+		float[] emb = handler.embedToken(5);
+
+		assertThat(emb).hasSize(HIDDEN_DIM);
+	}
+
+	@Test
+	@DisplayName("embedToken(): same token ID always returns the same embedding")
+	void embedToken_isDeterministic() {
+		LlamaTransformerHandler handler = embeddingsNodeHandler();
+
+		float[] a = handler.embedToken(7);
+		float[] b = handler.embedToken(7);
+
+		assertThat(a).isEqualTo(b);
+	}
+
+	@Test
+	@DisplayName("embedToken(): different token IDs return different embeddings")
+	void embedToken_differsAcrossTokens() {
+		LlamaTransformerHandler handler = embeddingsNodeHandler();
+
+		float[] a = handler.embedToken(3);
+		float[] b = handler.embedToken(4);
+
+		assertThat(a).isNotEqualTo(b);
+	}
+
+	@Test
+	@DisplayName("embedToken(): on a non-embeddings node, throws UnsupportedOperationException")
+	void embedToken_onNonEmbeddingsNode_throws() {
+		LlamaTransformerHandler handler = LlamaTransformerHandler.newTestInstance(VOCAB_SIZE, HIDDEN_DIM, NUM_HEADS,
+				NUM_KV_HEADS, NUM_LAYERS, 0, NUM_LAYERS, /* hasEmbd */ false, /* hasOutProj */ true, /* adapter */
+				null);
+
+		assertThatThrownBy(() -> handler.embedToken(1)).isInstanceOf(UnsupportedOperationException.class);
 	}
 
 	// ── Ordinary text path is unaffected ────────────────────────────────────────

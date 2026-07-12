@@ -68,6 +68,24 @@ public interface ForwardPassHandler {
 	}
 
 	/**
+	 * Look up the raw embedding-table row for a single token ID.
+	 *
+	 * <p>Only meaningful on the node that owns the embedding table
+	 * ({@code ShardContext#hasEmbeddings()} true). Exists so decorators that
+	 * intercept the embedding step for <em>some</em> token positions — e.g. a
+	 * vision-aware wrapper that splices in patch vectors at image-token
+	 * positions — can still get the real text embedding for every other
+	 * position, instead of falling back to a placeholder value.
+	 *
+	 * @throws UnsupportedOperationException if this handler does not own an
+	 *         embedding table (default implementation)
+	 */
+	default float[] embedToken(int tokenId) {
+		throw new UnsupportedOperationException(
+				getClass().getSimpleName() + " does not implement embedToken() (no embedding table on this shard)");
+	}
+
+	/**
 	 * Execute a batched forward pass over a contiguous window of new prompt tokens.
 	 *
 	 * <p>This is the prefill batching entry point: instead of calling

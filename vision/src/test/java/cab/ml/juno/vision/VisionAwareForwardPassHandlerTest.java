@@ -202,6 +202,30 @@ class VisionAwareForwardPassHandlerTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    @DisplayName("text token at last position: inner handler receives the real embedding, not zero "
+            + "(regression test for the 2026-07-12 zero-vector text-token bug)")
+    void text_token_at_last_position_uses_real_embedding() {
+        StubForwardPassHandler embeddingAwareInner = new StubForwardPassHandler(0, HIDDEN_DIM);
+        VisionAwareForwardPassHandler h = new VisionAwareForwardPassHandler(embeddingAwareInner, IMAGE_TOKEN_ID,
+                HIDDEN_DIM);
+        float[][] patches = buildPatches(1, HIDDEN_DIM);
+        h.registerVisionEmbeddings("req-text-last", patches);
+
+        int textTokenId = 42;
+        // Sequence: [IMAGE_TOKEN_ID, textTokenId] → last token is text
+        ForwardRequest req = ForwardRequest.withTokens("req-text-last", new int[] { IMAGE_TOKEN_ID, textTokenId },
+                1);
+
+        h.forward(req, FIRST_NODE_CTX);
+
+        assertThat(embeddingAwareInner.lastRequest.isFirstNode()).isFalse();
+        float[] act = embeddingAwareInner.lastRequest.activations();
+        for (int d = 0; d < HIDDEN_DIM; d++) {
+            assertThat(act[d]).as("col %d", d).isEqualTo(textTokenId * 1000f + d);
+        }
+    }
+
     // ── Helper ────────────────────────────────────────────────────────────────
 
     private static float[][] buildPatches(int count, int dim) {

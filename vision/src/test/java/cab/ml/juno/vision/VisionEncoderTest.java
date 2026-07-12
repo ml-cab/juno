@@ -232,4 +232,84 @@ class VisionEncoderTest {
                 .hasMessageContaining("12345")
                 .hasMessageContaining("786432");
     }
+
+    // ── applyProjector: math correctness for a possible future 2-layer projector ─
+    //
+    // NOTE (2026-07-12): applying mm.2 in production was tried and reverted —
+    // it caused a confirmed regression (degenerate repeating-token output), so
+    // VisionEncoder.project() currently calls applyProjector with w2=null,b2=null
+    // regardless of whether mm.2 exists in the file. These tests still verify
+    // applyProjector's own math is correct in isolation (useful if/when the
+    // real root cause of the regression is found and this gets re-enabled) —
+    // they are NOT evidence that re-enabling mm.2 in production is safe.
+
+    private static final cab.ml.juno.node.MatVec CPU = cab.ml.juno.node.CpuMatVec.INSTANCE;
+
+    @Test
+    @DisplayName("applyProjector: with no mm.2 weight, output is just mm.0 (single-layer fallback, unchanged "
+            + "behavior for mmproj files that genuinely only have one projector layer)")
+    void applyProjector_singleLayer_whenNoSecondWeight() {
+        int hiddenSize = 2;
+        int outputDim = 3;
+        float[] x = { 1f, 2f };
+        // w1: outputDim x hiddenSize, row-major
+        float[] w1 = { 1f, 0f, 0f, 1f, 1f, 1f }; // rows: [1,0] [0,1] [1,1]
+        float[] b1 = { 0.5f, 0.5f, 0.5f };
+
+        float[] out = VisionEncoder.applyProjector(CPU, x, w1, b1, null, null, hiddenSize, outputDim);
+
+        // row0: 1*1+2*0+0.5=1.5  row1: 1*0+2*1+0.5=2.5  row2: 1*1+2*1+0.5=3.5
+        assertThat(out).containsExactly(1.5f, 2.5f, 3.5f);
+    }
+
+    @Test
+    @DisplayName("applyProjector: with mm.2 present, GELU is applied between the two linear layers "
+            + "(NOT a plain second linear pass)")
+    void applyProjector_twoLayer_appliesGeluBetweenLayers() {
+        int hiddenSize = 2;
+        int outputDim = 2;
+        float[] x = { 1f, 1f };
+        float[] w1 = { 1f, 0f, 0f, 1f }; // identity → mm.0 output = [1, 1] before bias
+        float[] w2 = { 1f, 0f, 0f, 1f }; // identity → mm.2 output = GELU(mm.0 output)
+
+        float[] out = VisionEncoder.applyProjector(CPU, x, w1, null, w2, null, hiddenSize, outputDim);
+
+        float expected = VisionEncoder.gelu(1f);
+        assertThat(out).containsExactly(expected, expected);
+        // Sanity: this must NOT equal the raw (non-GELU'd) mm.0 output — if it
+        // did, that would mean the fix regressed back to "just two linear passes".
+        assertThat(out).isNotEqualTo(new float[] { 1f, 1f });
+    }
+
+    @Test
+    @DisplayName("applyProjector: mm.2 bias is applied after the second linear layer")
+    void applyProjector_twoLayer_appliesSecondBias() {
+        int hiddenSize = 1;
+        int outputDim = 1;
+        float[] x = { 0f }; // mm.0(0) + b1 = b1; GELU(b1) fed into mm.2
+        float[] w1 = { 1f };
+        float[] b1 = { 0f }; // mm.0 output = 0, GELU(0) = 0
+        float[] w2 = { 1f };
+        float[] b2 = { 10f };
+
+        float[] out = VisionEncoder.applyProjector(CPU, x, w1, b1, w2, b2, hiddenSize, outputDim);
+
+        assertThat(out).containsExactly(10f); // 0 (mm.2 linear on GELU(0)=0) + b2=10
+    }
+
+    @Test
+    @DisplayName("applyProjector: 2-layer output differs from what single-layer-only would have produced "
+            + "for the same input (this is the actual defect the fix closes)")
+    void applyProjector_twoLayer_differsFromSingleLayerFallback() {
+        int hiddenSize = 3;
+        int outputDim = 3;
+        float[] x = { 0.3f, -0.7f, 1.2f };
+        float[] w1 = { 1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f }; // identity
+        float[] w2 = { 2f, 0f, 0f, 0f, 2f, 0f, 0f, 0f, 2f }; // 2x scale
+
+        float[] singleLayerOnly = VisionEncoder.applyProjector(CPU, x, w1, null, null, null, hiddenSize, outputDim);
+        float[] fullTwoLayer = VisionEncoder.applyProjector(CPU, x, w1, null, w2, null, hiddenSize, outputDim);
+
+        assertThat(fullTwoLayer).isNotEqualTo(singleLayerOnly);
+    }
 }

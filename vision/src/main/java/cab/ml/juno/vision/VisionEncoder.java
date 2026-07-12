@@ -18,6 +18,7 @@ package cab.ml.juno.vision;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.logging.Logger;
 
 import cab.ml.juno.node.GgufReader;
@@ -48,7 +49,15 @@ import cab.ml.juno.node.MatVec;
  *                                outputDim is read from this tensor's own
  *                                shape, NOT from the (unreliable, see
  *                                {@link #outputDim()}) clip.vision.projection_dim
- *                                metadata field.
+ *                                metadata field. This is the ONLY projector
+ *                                layer actually applied (see below).
+ *   mm.2.weight / mm.2.bias      [outputDim, outputDim]   — detected and
+ *                                loaded for diagnostic logging only. Applying
+ *                                it (GELU between mm.0 and mm.2) was tried and
+ *                                reverted 2026-07-12: it caused a confirmed
+ *                                regression (degenerate repeating-token output)
+ *                                rather than an improvement. Do not re-enable
+ *                                without new evidence of the actual root cause.
  * </pre>
  *
  * Forward pass:
@@ -58,8 +67,9 @@ import cab.ml.juno.node.MatVec;
  *   <li>Add position embeddings.
  *   <li>Pre-encoder layer norm.
  *   <li>N CLIP transformer blocks (LayerNorm → self-attention → LayerNorm → MLP).
- *   <li>Vision projector (single linear, GELU optional): maps hiddenSize →
- *       outputDim (= LLM hiddenDim).
+ *   <li>Vision projector: mm.0 only (hiddenSize → outputDim). mm.2, when
+ *       present in the file, is loaded and logged but intentionally not
+ *       applied — see the mm.2 note above.
  *   <li>Return patch embeddings excluding CLS (shape: numPatches × outputDim).
  * </ol>
  *
@@ -104,8 +114,10 @@ public final class VisionEncoder {
     private final float[][] bffnDown;       // [L][hiddenSize]
 
     // ── Vision projector ──────────────────────────────────────────────────
-    private final float[] projWeight;       // [outputDim * hiddenSize]
+    private final float[] projWeight;       // [outputDim * hiddenSize]  mm.0
     private final float[] projBias;         // [outputDim]  — null when absent
+    private final float[] projWeight2;      // [outputDim * outputDim]  mm.2 — null for single-layer projectors
+    private final float[] projBias2;        // [outputDim]  — null when mm.2 absent or has no bias
     private final int outputDim;            // actual projector output width (see #outputDim())
 
     // ── Factory ──────────────────────────────────────────────────────────
@@ -194,6 +206,43 @@ public final class VisionEncoder {
         if (projBias != null && projBias.length != this.outputDim) {
             throw new IllegalStateException("Vision projector mm.0.bias has length " + projBias.length
                     + ", expected outputDim=" + this.outputDim);
+        }
+
+        // LLaVA-1.5's standard mm_projector_type is "mlp2x_gelu": mm.0 (hiddenSize→
+        // outputDim) → GELU → mm.2 (outputDim→outputDim). llama.cpp mmproj GGUF
+        // files name the layers mm.0/mm.2 (mm.1 is the implicit, weight-less GELU).
+        //
+        // 2026-07-12 UPDATE: mm.2 IS present in this specific mmproj file and WAS
+        // wired up to apply GELU→mm.2 after mm.0, on the theory that a single
+        // mm.0 linear layer alone is not what llava-v1.5-7b was trained with.
+        // That theory is WRONG, or at least this implementation of it is: it was
+        // confirmed by the user to be a regression — output degenerated from
+        // "coherent but hallucinated" to a repeating <image>-token loop with no
+        // real content, which is the signature of a numerically broken embedding
+        // rather than merely an incomplete transform. mm.2 is still loaded and
+        // validated here (so this diagnostic information stays visible in the
+        // log) but is deliberately NOT applied in project() below. Root cause of
+        // why applying it corrupts the output is not yet understood — do not
+        // re-enable without new evidence (e.g. dumping actual patch-vector
+        // magnitudes/NaN checks before vs after the mm.2 step). See CHANGELOG.
+        if (r.hasTensor("mm.2.weight")) {
+            long[] proj2Dims = r.tensorDims("mm.2.weight");
+            if (proj2Dims[0] != this.outputDim || proj2Dims[proj2Dims.length - 1] != this.outputDim) {
+                throw new IllegalStateException("Vision projector mm.2.weight has shape " + Arrays.toString(proj2Dims)
+                        + ", expected [" + this.outputDim + ", " + this.outputDim + "] (outputDim → outputDim)");
+            }
+            projWeight2 = r.tensor("mm.2.weight");
+            projBias2 = r.hasTensor("mm.2.bias") ? r.tensor("mm.2.bias") : null;
+            if (projBias2 != null && projBias2.length != this.outputDim) {
+                throw new IllegalStateException("Vision projector mm.2.bias has length " + projBias2.length
+                        + ", expected outputDim=" + this.outputDim);
+            }
+            log.info("Vision projector: mm.2.weight IS present (outputDim=" + this.outputDim + ") but is NOT "
+                    + "applied — 2026-07-12 regression, see VisionEncoder javadoc/CHANGELOG. Using mm.0 only.");
+        } else {
+            projWeight2 = null;
+            projBias2 = null;
+            log.info("Vision projector: mm.2.weight not found. Using mm.0 only (single linear layer).");
         }
 
         log.info("Vision encoder loaded — " + L + " blocks, hidden=" + H
@@ -542,15 +591,60 @@ public final class VisionEncoder {
         return out;
     }
 
-    // ── Vision projector (single linear: hiddenSize → projectionDim) ──────
+    // ── Vision projector: mm.0 -> [GELU -> mm.2] ───────────────────────────
 
     private float[] project(float[] x) {
-        int H = cfg.hiddenSize();
-        float[] out = backend.sgemv(projWeight, x, outputDim, H);
-        if (projBias != null)
+        // REVERTED 2026-07-12: applying mm.2 (see load() below) caused a confirmed
+        // regression — output degenerated from "coherent but wrong content" to a
+        // repeating <image>-token loop (finish_reason=length, no real content at
+        // all). That is the signature of a numerically broken embedding, not a
+        // "half-applied projector" being merely wrong — something in this specific
+        // mm.2 application is actively corrupting the patch vectors, not just
+        // failing to complete the intended transform. Root cause not yet found;
+        // reverting to the single-linear mm.0-only behavior that was confirmed
+        // to at least produce grammatically coherent (if hallucinated) output.
+        // See CHANGELOG. projWeight2/projBias2 are intentionally NOT passed here.
+        return applyProjector(backend, x, projWeight, projBias, null, null, cfg.hiddenSize(), outputDim);
+    }
+
+    /**
+     * Pure projector math (no field access): mm.0 linear, then — when
+     * {@code w2} is non-null — GELU followed by mm.2 linear.
+     *
+     * Package-private and static so it is directly unit-testable without
+     * constructing a full VisionEncoder from a synthetic GGUF file (same
+     * pattern as {@link #resolveProjectorOutputDim}).
+     *
+     * @param backend    MatVec implementation to multiply with
+     * @param x          input vector, length hiddenSize
+     * @param w1         mm.0.weight, length outputDim*hiddenSize
+     * @param b1         mm.0.bias, length outputDim, or null
+     * @param w2         mm.2.weight, length outputDim*outputDim, or null for a
+     *                   single-layer projector
+     * @param b2         mm.2.bias, length outputDim, or null
+     * @param hiddenSize vision encoder hidden size (mm.0's input width)
+     * @param outputDim  projector output width (mm.0's output width, and
+     *                   mm.2's input/output width when present)
+     */
+    static float[] applyProjector(MatVec backend, float[] x, float[] w1, float[] b1, float[] w2, float[] b2,
+            int hiddenSize, int outputDim) {
+        float[] out = backend.sgemv(w1, x, outputDim, hiddenSize);
+        if (b1 != null)
             for (int i = 0; i < outputDim; i++)
-                out[i] += projBias[i];
-        return out;
+                out[i] += b1[i];
+
+        if (w2 == null) {
+            return out; // single-layer projector (non-standard for llava-v1.5, see load())
+        }
+
+        for (int i = 0; i < outputDim; i++)
+            out[i] = gelu(out[i]);
+
+        float[] out2 = backend.sgemv(w2, out, outputDim, outputDim);
+        if (b2 != null)
+            for (int i = 0; i < outputDim; i++)
+                out2[i] += b2[i];
+        return out2;
     }
 
     // ── Math primitives ───────────────────────────────────────────────────
