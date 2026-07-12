@@ -103,7 +103,15 @@ vision — Image-to-text (I2T) module. GGUF-based CLIP ViT encoder, patch
                    uses outputDim(), never config().projectionDim().
   VisionAwareForwardPassHandler — ForwardPassHandler decorator. On the first node
                    (hasEmbeddings=true), replaces IMAGE_TOKEN_ID embedding lookups
-                   with pre-computed patch vectors from ConcurrentHashMap[requestId].
+                   with pre-computed patch vectors from ConcurrentHashMap[requestId],
+                   then delegates to the wrapped LlamaTransformerHandler via a
+                   withActivations(...) request (tokenIds=null). The wrapped
+                   handler's forward()/forwardBatch() decide token-lookup vs.
+                   activations by request.isFirstNode() (tokenIds != null), NOT
+                   by hasEmbeddings alone — hasEmbeddings only means this node
+                   is capable of a lookup, not that this specific request wants
+                   one (2026-07-12 fix: the old hasEmbeddings-only check NPE'd
+                   on tokenIds()[b] whenever a request carried activations here).
                    Delegates all other tokens and all subsequent nodes to the wrapped
                    LlamaTransformerHandler unchanged.
   LlavaHandlerFactory — the ONLY place that knows "this is a LLaVA model". Lives
@@ -129,15 +137,23 @@ InferenceApiServer (coordinator module) — addRoutes(Consumer<Javalin>) is the
   vision-specific method on this class.
  
 ConsoleMain (juno-player module) — runLocalRepl() (--local mode only) calls
-  wireVisionRoutes() after the text pipeline is loaded, which calls
+  prepareVisionHandler() BEFORE LocalInferencePipeline.from(), which calls
   LlavaHandlerFactory.isVisionArchitecture()/buildFromHandlers() and, if the
-  resolved vision-weights file has v.patch_embd.weight, registers
-  /v1/vision/chat and /v1/vision/chat/stream via InferenceApiServer.addRoutes().
+  resolved vision-weights file has v.patch_embd.weight, wraps handlers.get(0)
+  in place with VisionAwareForwardPassHandler. This ordering is load-bearing:
+  LocalInferencePipeline.from() snapshots each handler reference into its
+  NodeStage list at construction time and never re-reads the handlers list
+  afterwards, so the wrap MUST land before that call or the pipeline silently
+  keeps using the unwrapped text handler forever (2026-07-12 bug: this used to
+  be called wireVisionRoutes() and ran after pipeline construction — see
+  CHANGELOG). Once apiServer exists, registerVisionRoutes() separately
+  registers /v1/vision/chat and /v1/vision/chat/stream via
+  InferenceApiServer.addRoutes() using the already-built Built record.
   --mmproj-path PATH is the CLI flag carrying the separate mmproj file through
-  to wireVisionRoutes(); without it, isVisionArchitecture() probes
+  to prepareVisionHandler(); without it, isVisionArchitecture() probes
   --model-path itself and returns false for every real (two-file) I2T model.
   KNOWN LIMITATION: runClusterRepl() (--cluster mode) does not call
-  wireVisionRoutes() — vision routes are --local mode only.
+  prepareVisionHandler() — vision routes are --local mode only.
  
 ModelIdResolver (registry module, cab.ml.juno.registry) — shared by
   VisionChatHandler (juno-player), OpenAiChatHandler and InferenceApiServer

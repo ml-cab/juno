@@ -41,12 +41,24 @@ import cab.ml.juno.node.ShardContext;
  *   node        →  (nothing in vision)
  * </pre>
  *
- * Usage (in ConsoleMain / wireVisionRoutes, after the pipeline is wired):
+ * Usage (in ConsoleMain.prepareVisionHandler(), BEFORE LocalInferencePipeline
+ * is built — see that method's javadoc for why the ordering matters):
  * <pre>{@code
  * Path mmproj = mmprojPath != null ? Path.of(mmprojPath) : null;
+ * LlavaHandlerFactory.Built built = null;
  * if (LlavaHandlerFactory.isVisionArchitecture(Path.of(modelPath), mmproj)) {
- *     LlavaHandlerFactory.Built built = LlavaHandlerFactory.buildFromHandlers(
+ *     // buildFromHandlers() replaces handlers.get(0) in place with a
+ *     // vision-aware wrapper. This MUST happen before
+ *     // LocalInferencePipeline.from(shardMap, handlers, ...) reads the list,
+ *     // since that call snapshots each handler reference at construction time
+ *     // and never re-reads the list afterwards.
+ *     built = LlavaHandlerFactory.buildFromHandlers(
  *             Path.of(modelPath), mmproj, handlers, config);
+ * }
+ * var pipeline = LocalInferencePipeline.from(shardMap, handlers, ...); // sees the wrap
+ * ...
+ * // Later, once apiServer exists, register the routes:
+ * if (built != null) {
  *     VisionChatHandler handler = new VisionChatHandler(
  *             scheduler, registry, built.encoder(), built.visionHandler());
  *     apiServer.addRoutes(app -> {

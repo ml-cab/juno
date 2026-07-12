@@ -656,9 +656,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		long start = System.nanoTime();
 		int W = request.windowSize();
 		int H = cfg.hiddenDim();
+		boolean usingActivations = !(hasEmbeddings && request.isFirstNode());
+		log.info("[prefill] forwardBatch ENTER requestId=" + request.requestId() + " W=" + W
+				+ " startPos=" + request.startPosition() + " hasEmbeddings=" + hasEmbeddings
+				+ " isFirstNode=" + request.isFirstNode() + " usingActivations=" + usingActivations
+				+ " hasOutputProj=" + hasOutputProj);
 
 		float[][] x;
-		if (hasEmbeddings) {
+		// See getInitialActivation() for why this checks request.isFirstNode()
+		// rather than relying on hasEmbeddings alone: node 0 may still receive
+		// an activations-based window (vision patches spliced in by
+		// VisionAwareForwardPassHandler) instead of raw token IDs.
+		if (hasEmbeddings && request.isFirstNode()) {
 			// Embedding lookup for each token in the window
 			x = new float[W][H];
 			for (int b = 0; b < W; b++) {
@@ -679,14 +688,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		if (hasOutputProj) {
 			// Only the last position's logits are needed after prefill
+			long projStart = System.nanoTime();
 			float[] lastX = x[W - 1];
 			float[] logits = outputProjection(lastX);
+			log.info("[prefill] forwardBatch EXIT (final node) requestId=" + request.requestId() + " outputProjMs="
+					+ ms(projStart, System.nanoTime()) + " totalMs=" + ms(start, System.nanoTime()));
 			return new BatchForwardResult(request.requestId(), null, logits, W, System.nanoTime() - start);
 		}
 
 		// Flatten activations back to float[W * H] for the next node
 		float[] flat = new float[W * H];
 		for (int b = 0; b < W; b++) System.arraycopy(x[b], 0, flat, b * H, H);
+		log.info("[prefill] forwardBatch EXIT (intermediate node) requestId=" + request.requestId() + " totalMs="
+				+ ms(start, System.nanoTime()));
 		return new BatchForwardResult(request.requestId(), flat, null, W, System.nanoTime() - start);
 	}
 
@@ -729,9 +743,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		BatchWorkspace ws = new BatchWorkspace(W, cfg.hiddenDim(), cfg.intermediateSize(),
 				kvDim, cfg.numHeads(), lastPos + 1);
 
+		log.info("[prefill] runLayersBatch START requestId=" + requestId + " W=" + W + " L=" + L
+				+ " startPos=" + startPos + " lastPos=" + lastPos + " kvDim=" + kvDim);
+		long layersStart = System.nanoTime();
 		for (int li = 0; li < L; li++) {
+			long layerStart = System.nanoTime();
 			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws);
+			double layerMs = (System.nanoTime() - layerStart) / 1_000_000.0;
+			log.info("[prefill] layer " + (li + 1) + "/" + L + " done in " + String.format("%.1f", layerMs)
+					+ "ms  requestId=" + requestId);
 		}
+		log.info("[prefill] runLayersBatch DONE requestId=" + requestId + " totalMs="
+				+ String.format("%.1f", (System.nanoTime() - layersStart) / 1_000_000.0));
 
 		if (a != null) {
 			int seqLen = lastPos + 1;
@@ -784,6 +807,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int I    = cfg.intermediateSize();
 		int kvDim = cfg.kvDim();
 
+		long t0 = System.nanoTime();
+
 		for (int b = 0; b < W; b++) rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
 
 		sgemmLayerInto(wq[li], wqDev, wqDevFp32, li, ws.norm1, ws.q,    H,     H);
@@ -798,6 +823,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			}
 		}
 
+		long t1 = System.nanoTime(); // qkv projection done
+
 		for (int b = 0; b < W; b++) {
 			rope(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
 			rope(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
@@ -808,9 +835,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			System.arraycopy(ws.v[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
 		}
 
+		long t2 = System.nanoTime(); // rope + cache write done
+
 		for (int b = 0; b < W; b++) {
 			gqaInto(ws.q[b], kCacheLayer, vCacheLayer, startPos + b + 1, ws.attnOut[b], ws.scores);
 		}
+
+		long t3 = System.nanoTime(); // attention (gqaInto over all W positions) done
 
 		sgemmLayerInto(wo[li], woDev, woDevFp32, li, ws.attnOut, ws.attnProj, H, H);
 
@@ -830,7 +861,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		// Second residual — in-place (eliminates x3 allocation)
 		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.ffnOut[b][d];
 
+		long t4 = System.nanoTime(); // wo-proj + residual + ffn + residual done
+
+		log.info("[prefill]   layer " + li + " breakdown (ms): qkvProj=" + ms(t0, t1) + " rope+cacheWrite="
+				+ ms(t1, t2) + " attention(gqa,W=" + W + ")=" + ms(t2, t3) + " woProj+ffn+residuals=" + ms(t3, t4));
+
 		return x;
+	}
+
+	private static double ms(long fromNanos, long toNanos) {
+		return (toNanos - fromNanos) / 1_000_000.0;
 	}
 
 	/**
@@ -869,8 +909,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	/**
 	 * Write Y = A * X for a batch directly into pre-allocated rows {@code Y[b]}.
-	 * CPU Q4_K / Q8_0: zero allocation per row via {@link #matVecInto}.
-	 * GPU paths: copy from sgemm result (GPU is fast; copy is negligible).
+	 *
+	 * <p>CPU Q4_K / Q8_0 path: true weight-stationary GEMM. Each quantized
+	 * weight block is dequantised <em>once</em>, dot-producted against all B
+	 * input vectors while the block is still in L1/L2 cache, then discarded.
+	 * This reduces DRAM weight reads from B × weight_bytes to 1 × weight_bytes —
+	 * the actual compute speedup for prefill on bandwidth-bound CPU hardware.
+	 *
+	 * <p>GPU paths: copy from sgemm result (GPU is fast; copy is negligible).
 	 */
 	private void sgemmLayerInto(GgufReader.QuantizedTensor quant,
 			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32,
@@ -885,7 +931,110 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
 			return;
 		}
-		for (int b = 0; b < X.length; b++) matVecInto(quant, X[b], Y[b], rows, cols);
+		switch (quant.type()) {
+		case 12 -> sgemmQ4KWeightStationary(quant.data(), X, Y, 0, rows, cols);
+		case 8  -> sgemmQ8_0WeightStationary(quant.data(), X, Y, 0, rows, cols);
+		default -> { for (int b = 0; b < X.length; b++) matVecInto(quant, X[b], Y[b], rows, cols); }
+		}
+	}
+
+	/**
+	 * True weight-stationary batched Q4_K matmul: reads each 256-element
+	 * quantised block once, dequantises it into a 1 KB float[] that fits in L1
+	 * cache, then accumulates dot products against all B input vectors before
+	 * advancing to the next block. Rows are processed in parallel via
+	 * ForkJoinPool.commonPool().
+	 *
+	 * <p>Memory bandwidth: B × weight_bytes (old) → weight_bytes + B × input_bytes
+	 * (new). For B=416, H=2048, that is a ~100× reduction in DRAM weight reads.
+	 */
+	private static void sgemmQ4KWeightStationary(byte[] raw, float[][] X, float[][] Y,
+			int rowStart, int rowEnd, int cols) {
+		final int BLOCK_SIZE  = 256;
+		final int BLOCK_BYTES = 144;
+		final int blocksPerRow = cols / BLOCK_SIZE;
+		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int B = X.length;
+		final int rows = rowEnd - rowStart;
+
+		// Zero the output rows before accumulating
+		for (int b = 0; b < B; b++) java.util.Arrays.fill(Y[b], 0, rows, 0f);
+
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			int rowByteOffset = (rowStart + r) * bytesPerRow;
+			// Per-row dequant scratch: reused across all blocks in this row.
+			// 256 floats = 1 KB — stays in L1 cache while multiplied against B inputs.
+			float[] dq = new float[BLOCK_SIZE];
+
+			for (int blk = 0; blk < blocksPerRow; blk++) {
+				int bo     = rowByteOffset + blk * BLOCK_BYTES;
+				int scBase = bo + 4;
+				int qsBase = bo + 16;
+				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
+				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
+
+				// Dequantise 256 nibbles into dq[] — done once per block
+				int qi = 0;
+				for (int g = 0; g < BLOCK_SIZE; g += 64) {
+					int s0 = g / 32;
+					int s1 = s0 + 1;
+					float scale0 = d * q4kScaleRaw(raw, scBase, s0);
+					float min0   = dmin * q4kMinRaw(raw, scBase, s0);
+					float scale1 = d * q4kScaleRaw(raw, scBase, s1);
+					float min1   = dmin * q4kMinRaw(raw, scBase, s1);
+					for (int i = 0; i < 32; i++) {
+						dq[g + i]      = scale0 * (raw[qsBase + qi + i] & 0x0F) - min0;
+						dq[g + 32 + i] = scale1 * ((raw[qsBase + qi + i] >> 4) & 0x0F) - min1;
+					}
+					qi += 32;
+				}
+
+				// Multiply dq[] against all B input vectors while it is in L1 cache
+				int xBase = blk * BLOCK_SIZE;
+				for (int p = 0; p < B; p++) {
+					float acc = 0f;
+					float[] xp = X[p];
+					for (int i = 0; i < BLOCK_SIZE; i++) acc += dq[i] * xp[xBase + i];
+					Y[p][r] += acc;
+				}
+			}
+		});
+	}
+
+	/**
+	 * True weight-stationary batched Q8_0 matmul: reads each 32-element
+	 * quantised block once, scales it to floats, dot-products against all B
+	 * inputs, then advances. Same principle as {@link #sgemmQ4KWeightStationary}.
+	 */
+	private static void sgemmQ8_0WeightStationary(byte[] raw, float[][] X, float[][] Y,
+			int rowStart, int rowEnd, int cols) {
+		final int BLOCK_SIZE  = 32;
+		final int BLOCK_BYTES = 34;
+		final int blocksPerRow = cols / BLOCK_SIZE;
+		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int B = X.length;
+		final int rows = rowEnd - rowStart;
+
+		for (int b = 0; b < B; b++) java.util.Arrays.fill(Y[b], 0, rows, 0f);
+
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			int rowByteOffset = (rowStart + r) * bytesPerRow;
+			float[] dq = new float[BLOCK_SIZE]; // 32 floats = 128 B, always in L1
+
+			for (int blk = 0; blk < blocksPerRow; blk++) {
+				int bo    = rowByteOffset + blk * BLOCK_BYTES;
+				float sc  = GgufReader.f16ToF32(readLE16(raw, bo));
+				for (int i = 0; i < BLOCK_SIZE; i++) dq[i] = sc * raw[bo + 2 + i];
+
+				int xBase = blk * BLOCK_SIZE;
+				for (int p = 0; p < B; p++) {
+					float acc = 0f;
+					float[] xp = X[p];
+					for (int i = 0; i < BLOCK_SIZE; i++) acc += dq[i] * xp[xBase + i];
+					Y[p][r] += acc;
+				}
+			}
+		});
 	}
 
 	/**
@@ -913,7 +1062,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * directly
 	 */
 	private float[] getInitialActivation(ForwardRequest request) {
-		if (hasEmbeddings) {
+		// hasEmbeddings alone is not sufficient: this node is *capable* of an
+		// embedding lookup, but a caller (e.g. VisionAwareForwardPassHandler
+		// splicing in CLIP patch vectors for image tokens) may still hand node 0
+		// a pre-computed activations request instead of raw token IDs.
+		// request.isFirstNode() (tokenIds != null) is the authoritative signal
+		// for which payload this specific request actually carries.
+		if (hasEmbeddings && request.isFirstNode()) {
 			// Use the last token in the sequence (we process one token at a time)
 			int[] tokenIds = request.tokenIds();
 			int tokenId = tokenIds[tokenIds.length - 1];
@@ -986,11 +1141,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	private static void ensureKvCapacity(float[][] cache, int pos, int kvDim) {
 		int required = (pos + 1) * kvDim;
+		int cap = MAX_SEQ_LEN * kvDim;
+		if (required > cap) {
+			// Without this guard, the doubling loop below spins forever: once
+			// newLen is clamped to `cap`, `newLen < required` stays true and the
+			// loop never terminates. Fail loudly instead of hanging.
+			throw new IllegalStateException("KV cache position " + pos + " exceeds MAX_SEQ_LEN=" + MAX_SEQ_LEN
+					+ " (required=" + required + " floats, cap=" + cap + "). Prompt/window too long for this build.");
+		}
 		for (int li = 0; li < cache.length; li++) {
 			if (cache[li].length < required) {
 				int newLen = cache[li].length;
 				while (newLen < required)
-					newLen = Math.min(newLen * 2, MAX_SEQ_LEN * kvDim);
+					newLen = Math.min(newLen * 2, cap);
 				cache[li] = java.util.Arrays.copyOf(cache[li], newLen);
 			}
 		}

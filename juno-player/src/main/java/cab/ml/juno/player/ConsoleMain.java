@@ -1233,6 +1233,15 @@ public final class ConsoleMain {
 			handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context, sharedBackend, playAdapters));
 		}
 
+		// MUST run before LocalInferencePipeline.from() below: prepareVisionHandler()
+		// replaces handlers.get(0) in place with a VisionAwareForwardPassHandler when
+		// the loaded model is vision-capable. LocalInferencePipeline.from() captures a
+		// direct reference to each handler into its NodeStage list at construction
+		// time — if the wrap happens after that call, the pipeline keeps using the
+		// unwrapped text handler forever and vision requests silently never reach the
+		// vision-aware code path (see CHANGELOG "vision handler wiring order").
+		LlavaHandlerFactory.Built visionBuilt = prepareVisionHandler(modelPath, mmprojPath, handlers, config);
+
 		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
 				config.hiddenDim(), config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
@@ -1242,7 +1251,7 @@ public final class ConsoleMain {
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
-			wireVisionRoutes(apiServer, modelPath, mmprojPath, scheduler, registry, handlers, shardMap, config);
+			registerVisionRoutes(apiServer, scheduler, registry, visionBuilt);
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Local API server on http://localhost:" + apiPort
 					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);
@@ -1268,37 +1277,70 @@ public final class ConsoleMain {
 		startRepl(loop, tokenizer);
 	}
 
-	private static void wireVisionRoutes(cab.ml.juno.coordinator.InferenceApiServer apiServer, String modelPath,
-			String mmprojPath, cab.ml.juno.coordinator.RequestScheduler scheduler, ModelRegistry registry,
-			List<ForwardPassHandler> handlers, ShardMap shardMap, LlamaConfig config) {
-		log.info("[vision] wireVisionRoutes — modelPath=" + modelPath + "  mmprojPath=" + mmprojPath + "  handlers="
-				+ (handlers == null ? "null" : handlers.size()));
+	/**
+	 * Detects a vision-capable model and, if found, wraps {@code handlers.get(0)}
+	 * in place with a {@link VisionAwareForwardPassHandler}.
+	 *
+	 * <p><b>Call this BEFORE {@link LocalInferencePipeline#from}.</b>
+	 * {@code LocalInferencePipeline.from()} reads {@code handlers.get(i)} once,
+	 * at construction time, and stores that exact reference in each
+	 * {@code NodeStage} — it never re-reads the list afterwards. Mutating
+	 * {@code handlers} after the pipeline is built has no effect on the
+	 * already-constructed pipeline, which then keeps calling the unwrapped text
+	 * handler for the lifetime of the process; vision requests never reach
+	 * {@link VisionAwareForwardPassHandler}, and image patches registered by
+	 * {@code VisionChatHandler} are silently never looked up.
+	 *
+	 * @return the wired vision components, or {@code null} if the loaded model
+	 *         is not vision-capable (nothing was wrapped)
+	 */
+	private static LlavaHandlerFactory.Built prepareVisionHandler(String modelPath, String mmprojPath,
+			List<ForwardPassHandler> handlers, LlamaConfig config) {
+		log.info("[vision] prepareVisionHandler — modelPath=" + modelPath + "  mmprojPath=" + mmprojPath
+				+ "  handlers=" + (handlers == null ? "null" : handlers.size()));
 		try {
 			Path mmproj = mmprojPath != null ? Path.of(mmprojPath) : null;
 			boolean isVision = LlavaHandlerFactory.isVisionArchitecture(Path.of(modelPath), mmproj);
 			log.info("[vision] isVisionArchitecture=" + isVision);
 			if (!isVision) {
-				log.info("[vision] Not a vision model — skipping route registration"
+				log.info("[vision] Not a vision model — skipping handler wrap"
 						+ (mmproj == null ? " (no --mmproj-path given; pass one if this is a known I2T model)" : ""));
-				return;
+				return null;
 			}
 			log.info("[vision] Building vision handler from " + handlers.size() + " loaded handler(s)");
 			LlavaHandlerFactory.Built built = LlavaHandlerFactory.buildFromHandlers(Path.of(modelPath), mmproj,
 					handlers, config);
 			log.info("[vision] Built — encoder patches=" + built.config().numPatches() + "  outputDim="
-					+ built.encoder().outputDim() + "  imageTokenId=" + built.imageTokenId());
-			VisionChatHandler visionChatHandler = new VisionChatHandler(scheduler, registry, built.encoder(),
-					built.visionHandler());
-			apiServer.addRoutes(app -> {
-				app.post("/v1/vision/chat", visionChatHandler::handleBlocking);
-				app.post("/v1/vision/chat/stream", visionChatHandler::handleStreaming);
-				log.info("[vision] Routes registered: POST /v1/vision/chat  POST /v1/vision/chat/stream");
-			});
-			print(Color.GREEN + "  ✔ Vision routes registered (POST /v1/vision/chat)" + Color.RESET);
+					+ built.encoder().outputDim() + "  imageTokenId=" + built.imageTokenId()
+					+ "  handlers.get(0) now=" + handlers.get(0).getClass().getName());
+			return built;
 		} catch (Exception e) {
-			log.severe("[vision] wireVisionRoutes FAILED: " + e.getClass().getName() + ": " + e.getMessage());
+			log.severe("[vision] prepareVisionHandler FAILED: " + e.getClass().getName() + ": " + e.getMessage());
 			java.util.Arrays.stream(e.getStackTrace()).limit(8).forEach(f -> log.severe("[vision]   at " + f));
+			return null;
 		}
+	}
+
+	/**
+	 * Registers {@code POST /v1/vision/chat} and {@code /v1/vision/chat/stream}
+	 * on {@code apiServer} when {@code built} is non-null. Call this AFTER
+	 * {@code apiServer} exists; the handler wrap itself must already have
+	 * happened via {@link #prepareVisionHandler}, before the pipeline was built.
+	 */
+	private static void registerVisionRoutes(cab.ml.juno.coordinator.InferenceApiServer apiServer,
+			cab.ml.juno.coordinator.RequestScheduler scheduler, ModelRegistry registry,
+			LlavaHandlerFactory.Built built) {
+		if (built == null) {
+			return;
+		}
+		VisionChatHandler visionChatHandler = new VisionChatHandler(scheduler, registry, built.encoder(),
+				built.visionHandler());
+		apiServer.addRoutes(app -> {
+			app.post("/v1/vision/chat", visionChatHandler::handleBlocking);
+			app.post("/v1/vision/chat/stream", visionChatHandler::handleStreaming);
+			log.info("[vision] Routes registered: POST /v1/vision/chat  POST /v1/vision/chat/stream");
+		});
+		print(Color.GREEN + "  ✔ Vision routes registered (POST /v1/vision/chat)" + Color.RESET);
 	}
 
 	private static ModelRegistry buildLocalModelRegistry(LlamaConfig config, String modelPath) {

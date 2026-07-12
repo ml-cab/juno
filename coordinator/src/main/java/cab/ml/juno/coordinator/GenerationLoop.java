@@ -336,18 +336,25 @@ public final class GenerationLoop {
 			log.info("Prefill: " + prefillSteps + " steps for prompt of " + promptIds.length + " tokens (kvKey=" + kvKey
 					+ "  mode=" + prefillMode + ")");
 			consumer.onPrefillStart(promptIds.length);
+			long prefillCallStart = System.nanoTime();
 			if (prefillMode == PrefillMode.BATCHED) {
 				int[] window = Arrays.copyOfRange(promptIds, startPos, promptIds.length - 1);
+				log.info("Prefill: calling pipeline.prefillBatch() kvKey=" + kvKey + " windowSize=" + window.length
+						+ " startPos=" + startPos + " ... (this call blocks until the whole window is processed)");
 				pipeline.prefillBatch(kvKey, window, startPos);
+				log.info("Prefill: pipeline.prefillBatch() RETURNED kvKey=" + kvKey + " elapsedMs="
+						+ (System.nanoTime() - prefillCallStart) / 1_000_000.0);
 			} else {
 				// PrefillMode.SINGLE — original sequential loop, kept verbatim
 				for (int p = startPos; p < promptIds.length - 1; p++) {
 					int[] prefillSlice = Arrays.copyOfRange(promptIds, 0, p + 1);
 					pipeline.forward(kvKey, prefillSlice, p); // KV stored under kvKey; logits discarded
 				}
+				log.info("Prefill: SINGLE-mode loop RETURNED kvKey=" + kvKey + " elapsedMs="
+						+ (System.nanoTime() - prefillCallStart) / 1_000_000.0);
 			}
 			consumer.onPrefillComplete();
-			log.info("Prefill complete. Decode starts at position " + (promptIds.length - 1));
+			log.info("Prefill complete. Decode starts at position " + (promptIds.length - 1) + " kvKey=" + kvKey);
 		}
 		// Advance startPos so the decode loop runs at the correct sequence positions:
 		// step 0 → position promptLen-1 (last prompt token, yields first-token logits)
@@ -360,12 +367,15 @@ public final class GenerationLoop {
 		// ── Steps 3–8: Autoregressive decode loop ─────────────────────────────
 		int maxTokens = request.samplingParams().maxTokens();
 		Tokenizer.StreamContext stream = tokenizer.openStreamContext();
+		log.info("Decode: starting loop kvKey=" + kvKey + " maxTokens=" + maxTokens + " startPos=" + startPos);
 
 		for (int step = 0; step < maxTokens; step++) {
 
+			long stepStart = System.nanoTime();
 			// Step 3: Forward pass — always under kvKey so the pipeline reuses its
 			// internal KV matrices for this session.
 			float[] logits = pipeline.forward(kvKey, allTokens, startPos + step);
+			double forwardMs = (System.nanoTime() - stepStart) / 1_000_000.0;
 
 			// Step 4: Sample next token
 			int[] historyArr = generatedIds.stream().mapToInt(Integer::intValue).toArray();
@@ -374,10 +384,12 @@ public final class GenerationLoop {
 			// Step 5: Check stop conditions by token ID
 			if (nextToken == tokenizer.eosTokenId()) {
 				stopReason = GenerationResult.StopReason.EOS_TOKEN;
+				log.info("Decode: step " + step + " EOS_TOKEN kvKey=" + kvKey + " forwardMs=" + forwardMs);
 				break;
 			}
 			if (sampler.isStopToken(nextToken, request.samplingParams())) {
 				stopReason = GenerationResult.StopReason.STOP_TOKEN;
+				log.info("Decode: step " + step + " STOP_TOKEN kvKey=" + kvKey + " forwardMs=" + forwardMs);
 				break;
 			}
 
@@ -387,6 +399,7 @@ public final class GenerationLoop {
 			// Step 5b: Defensive EOS-string filter (GgufTokenizer quirk — see isEosMarker).
 			if (isEosMarker(piece)) {
 				stopReason = GenerationResult.StopReason.EOS_TOKEN;
+				log.info("Decode: step " + step + " EOS_MARKER kvKey=" + kvKey + " forwardMs=" + forwardMs);
 				break;
 			}
 
@@ -399,6 +412,9 @@ public final class GenerationLoop {
 			fullText.append(piece);
 			generatedIds.add(nextToken);
 
+			log.info("Decode: step " + step + " token=" + nextToken + " piece=" + escapeForLog(piece) + " kvKey="
+					+ kvKey + " forwardMs=" + forwardMs);
+
 			// Step 7b: Multi-token EOS suffix detection.
 			// Some models (e.g. TinyLlama/Zephyr) generate EOS markers like "</s>"
 			// as two or three separate character-level tokens rather than the special
@@ -408,12 +424,15 @@ public final class GenerationLoop {
 			if (endsWithEosMarker(fullText)) {
 				stripEosMarkerSuffix(fullText);
 				stopReason = GenerationResult.StopReason.EOS_TOKEN;
+				log.info("Decode: step " + step + " EOS_SUFFIX_MATCH kvKey=" + kvKey);
 				break;
 			}
 
 			// Step 8: Extend token array for next iteration
 			allTokens = appendToken(allTokens, nextToken);
 		}
+		log.info("Decode: loop EXITED kvKey=" + kvKey + " tokensGenerated=" + generatedIds.size() + " stopReason="
+				+ stopReason);
 
 		// ── Post-generation: cache or evict ───────────────────────────────────
 		if (hasSession) {
@@ -442,8 +461,17 @@ public final class GenerationLoop {
 		if (!tail.isEmpty())
 			fullText.append(tail);
 
-		return new GenerationResult(kvKey, fullText.toString(), generatedIds, promptIds.length, generatedIds.size(),
-				stopReason, Instant.now(), Duration.between(start, Instant.now()));
+		GenerationResult result = new GenerationResult(kvKey, fullText.toString(), generatedIds, promptIds.length,
+				generatedIds.size(), stopReason, Instant.now(), Duration.between(start, Instant.now()));
+		log.info("generate() RETURNING kvKey=" + kvKey + " stopReason=" + stopReason + " tokensGenerated="
+				+ generatedIds.size() + " totalDurationMs=" + result.latency().toMillis() + " textLength="
+				+ result.text().length());
+		return result;
+	}
+
+	/** Collapses newlines/control chars so one log line per decode step stays one line. */
+	private static String escapeForLog(String s) {
+		return s.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
 	}
 
 	/**

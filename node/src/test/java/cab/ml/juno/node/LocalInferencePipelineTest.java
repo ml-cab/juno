@@ -92,4 +92,52 @@ class LocalInferencePipelineTest {
 		assertThat(emb[0]).isEqualTo(0.0f);
 		assertThat(emb[1]).isEqualTo(0.01f);
 	}
+
+	// ── Handler-list snapshot timing (root cause of the 2026-07-12 vision hang) ─
+	//
+	// LocalInferencePipeline.from(shardMap, handlers, ...) reads handlers.get(i)
+	// once, at construction time, and stores that exact reference into each
+	// NodeStage — it never re-reads the list afterwards. ConsoleMain used to call
+	// LlavaHandlerFactory.buildFromHandlers(..., handlers, ...) (which replaces
+	// handlers.get(0) with a vision-aware wrapper) AFTER building the pipeline
+	// from a defensive copy of that same list, so the wrap silently never took
+	// effect and vision requests were routed straight to the plain text handler.
+	// These tests pin down the exact ordering contract the fix relies on.
+
+	@Test
+	void mutating_handlers_list_after_pipeline_construction_has_no_effect() {
+		List<ForwardPassHandler> handlers = new java.util.ArrayList<>(
+				List.of(new CyclicForwardPassHandler(11), new CyclicForwardPassHandler(22)));
+
+		// Mirrors the buggy ConsoleMain ordering: build from a defensive copy first...
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), new java.util.ArrayList<>(handlers),
+				VOCAB, HIDDEN_DIM, NUM_HEADS);
+
+		// ...then swap in a "vision-aware" stand-in for stage 0, too late.
+		CyclicForwardPassHandler lateSwap = new CyclicForwardPassHandler(99);
+		handlers.set(0, lateSwap);
+
+		pipeline.forward("req-late-swap", new int[] { 1, 2, 3 }, 0);
+
+		// The pipeline never saw the swap: the "vision-aware" stand-in was never invoked.
+		assertThat(lateSwap.callCount()).isEqualTo(0);
+	}
+
+	@Test
+	void mutating_handlers_list_before_pipeline_construction_is_picked_up() {
+		List<ForwardPassHandler> handlers = new java.util.ArrayList<>(
+				List.of(new CyclicForwardPassHandler(11), new CyclicForwardPassHandler(22)));
+
+		// Fixed ConsoleMain ordering: wrap/swap stage 0 first...
+		CyclicForwardPassHandler earlySwap = new CyclicForwardPassHandler(99);
+		handlers.set(0, earlySwap);
+
+		// ...then build the pipeline, which now captures the swapped handler.
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), new java.util.ArrayList<>(handlers),
+				VOCAB, HIDDEN_DIM, NUM_HEADS);
+
+		pipeline.forward("req-early-swap", new int[] { 1, 2, 3 }, 0);
+
+		assertThat(earlySwap.callCount()).isEqualTo(1);
+	}
 }
