@@ -23,6 +23,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 
 /**
  * Indexed collection of {@link LoraAdapter}s keyed by (layerIndex, projectionName).
@@ -63,6 +64,26 @@ public final class LoraAdapterSet {
 	public void zeroAllGrads() {
 		for (LoraAdapter a : adapters.values())
 			a.zeroGrad();
+	}
+
+	/**
+	 * Reinitialize every adapter in this set. Keys present in {@code fresh} copy
+	 * those weights; any extra keys (e.g. leftover projections) are reinitialized
+	 * locally so ΔW returns to zero.
+	 *
+	 * @return number of adapters reset
+	 */
+	public int resetFrom(LoraAdapterSet fresh, Random rng) {
+		int n = 0;
+		for (var entry : adapters.entrySet()) {
+			LoraAdapter src = fresh.adapters.get(entry.getKey());
+			if (src != null)
+				entry.getValue().copyWeightsFrom(src);
+			else
+				entry.getValue().reinitialize(rng);
+			n++;
+		}
+		return n;
 	}
 
 	public void save(Path path) throws IOException {

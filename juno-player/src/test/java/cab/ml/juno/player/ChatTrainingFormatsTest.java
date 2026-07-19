@@ -11,5 +11,7 @@ class ChatTrainingFormatsTest {
 		String s = ChatTrainingFormats.qaTurn("What?", "Because.", "tinyllama");
 		assertThat(s).contains("<|assistant|>");
 		assertThat(s).contains("Because.");
+		assertThat(s).isEqualTo(ChatTrainingFormats.qaPrefix("What?", "tinyllama")
+				+ ChatTrainingFormats.qaCompletion("Because.", "tinyllama"));
 	}
 }

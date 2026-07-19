@@ -7,7 +7,7 @@ Module dependency (excerpt):
         (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,
         CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
         DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
-        LoraTrainableHandler, LoraMerge, LoraQvInitializer
+        LoraTrainableHandler, LoraMerge, LoraInitializer, LoraProjection, LoraQvInitializer
         node depends on lora
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
         coordinator depends on node

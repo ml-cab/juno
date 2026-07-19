@@ -173,7 +173,8 @@ public final class ForwardPassHandlerLoader {
 				+ "  file=" + modelPath + "  lora=" + (adapters != null ? adapters.size() + " adapters" : "none"));
 
 		if (adapters != null) {
-			log.info("LoRA adapters present — routing to LoraTrainableHandler (inference-only mode)");
+			requireLoraCompatibleArchitecture(arch);
+			log.info("LoRA adapters present — routing to LoraTrainableHandler");
 			return LoraTrainableHandler.load(modelPath, context, adapters, backend);
 		}
 
@@ -209,6 +210,23 @@ public final class ForwardPassHandlerLoader {
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			String arch = r.metaString("general.architecture");
 			return arch != null ? arch.toLowerCase().strip() : "llama";
+		}
+	}
+
+	/**
+	 * LoRA training and playback require dense LLaMA-family tensors
+	 * ({@code attn_q}/{@code attn_k}/{@code attn_v} separate). Fused-QKV and MoE
+	 * layouts are rejected explicitly.
+	 */
+	static void requireLoraCompatibleArchitecture(String arch) {
+		String a = arch == null ? "llama" : arch.toLowerCase().strip();
+		switch (a) {
+		case "phi3", "qwen3", "qwen3moe" -> throw new IllegalArgumentException(
+				"LoRA is not supported for architecture '" + a
+						+ "'; require a dense LLaMA-family GGUF with separate attn_q/k/v tensors");
+		default -> {
+			/* llama, mistral, gemma, … */
+		}
 		}
 	}
 }

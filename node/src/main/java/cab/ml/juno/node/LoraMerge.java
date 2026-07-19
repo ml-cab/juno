@@ -48,10 +48,13 @@ import java.util.Map;
  *
  * <h3>Projection name mapping (LoRA key to GGUF tensor name)</h3>
  * <pre>
- *   "L:wq" to blk.L.attn_q.weight
- *   "L:wk" to blk.L.attn_k.weight
- *   "L:wv" to blk.L.attn_v.weight
- *   "L:wo" to blk.L.attn_output.weight
+ *   "L:wq"    to blk.L.attn_q.weight
+ *   "L:wk"    to blk.L.attn_k.weight
+ *   "L:wv"    to blk.L.attn_v.weight
+ *   "L:wo"    to blk.L.attn_output.weight
+ *   "L:wgate" to blk.L.ffn_gate.weight
+ *   "L:wup"   to blk.L.ffn_up.weight
+ *   "L:wdown" to blk.L.ffn_down.weight
  * </pre>
  *
  * <h3>Strategy</h3>
@@ -74,13 +77,6 @@ public final class LoraMerge {
 	private static final int TYPE_Q6_K = 14;
 	private static final int TYPE_BF16 = 30;
 
-	private static final Map<String, String> PROJ_SUFFIX = Map.of(
-			"wq", "attn_q.weight",
-			"wk", "attn_k.weight",
-			"wv", "attn_v.weight",
-			"wo", "attn_output.weight"
-	);
-
 	private LoraMerge() {}
 
 	public record Result(int adaptersApplied, List<String> tensorsPatched, List<String> skipped) {}
@@ -90,7 +86,7 @@ public final class LoraMerge {
 	 *
 	 * <p>Writes a new, valid GGUF file where:
 	 * <ul>
-	 *   <li>The LoRA-patched projection tensors (wq/wv) are stored as F32,
+	 *   <li>The LoRA-patched projection tensors are stored as F32,
 	 *       preserving W_merged = W + (alpha/rank) x B x A with full precision.
 	 *   <li>Every other tensor keeps its original quantisation (Q4_K, Q6_K, etc.)
 	 *       and its raw bytes are copied verbatim.
@@ -99,8 +95,8 @@ public final class LoraMerge {
 	 * <p>Why F32 and not re-quantise to Q4_K?  The LoRA delta is typically
 	 * ~6e-4 per element, while Q4_K quantisation noise is ~3e-3: five times
 	 * larger.  Re-quantising destroys the delta entirely.  F32 precision (~1e-7)
-	 * preserves it with SNR ~6000x.  The merged file is larger (~1 GB for
-	 * TinyLlama 1.1B vs 667 MB Q4_K original) but recalls training correctly.
+	 * preserves it with SNR ~6000x.  All-linear merges increase output size
+	 * substantially because every adapted projection becomes F32.
 	 *
 	 * <p>The output is always a plain GGUF v3 file, even when the source is a
 	 * llamafile ZIP polyglot.
@@ -108,14 +104,14 @@ public final class LoraMerge {
 	public static Result merge(Path modelPath, Path loraPath, Path outputPath) throws IOException {
 		LoraAdapterSet adapters = LoraAdapterSet.load(loraPath);
 
-		// Build tensor-name -> LoraAdapter lookup; collect unknown-projection skips
+		// Build tensor-name -> LoraAdapter lookup via LoraProjection metadata
 		Map<String, LoraAdapter> adapterByTensor = new java.util.LinkedHashMap<>();
 		List<String> skipped = new ArrayList<>();
 		for (Map.Entry<String, LoraAdapter> entry : adapters.asMap().entrySet()) {
-			String key    = entry.getKey();
-			String suffix = PROJ_SUFFIX.get(LoraAdapterSet.keyProj(key));
-			if (suffix == null) { skipped.add(key + " (unknown projection)"); continue; }
-			adapterByTensor.put("blk." + LoraAdapterSet.keyLayer(key) + "." + suffix, entry.getValue());
+			String key = entry.getKey();
+			int layer = LoraAdapterSet.keyLayer(key);
+			LoraProjection proj = LoraProjection.fromKey(LoraAdapterSet.keyProj(key));
+			adapterByTensor.put(proj.ggufTensorName(layer), entry.getValue());
 		}
 
 		List<String> patched = new ArrayList<>();

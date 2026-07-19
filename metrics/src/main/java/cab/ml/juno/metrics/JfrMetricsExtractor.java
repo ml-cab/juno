@@ -139,6 +139,8 @@ final class JfrMetricsExtractor {
                                 loraBackwardMs.add(ev.getLong("backwardMs"));
                             if (ev.hasField("optimizerMs"))
                                 loraOptimizerMs.add(ev.getLong("optimizerMs"));
+                            // Newer recordings may also carry chunkCount / predictionCount /
+                            // globalGradNorm / clipScale / clipped; ignore if absent.
                         }
                         case TOKEN_PRODUCED -> {
                             tokenProducedCount++;

@@ -90,6 +90,26 @@ class LoraAdapterSetTest {
 			assertThat(g).isEqualTo(0f);
 	}
 
+	@Test
+	@DisplayName("resetFrom() restores B=0 and copies matching keys")
+	void reset_from_zeros_delta() {
+		LoraAdapterSet live = new LoraAdapterSet();
+		LoraAdapter poisoned = makeNonZero(4, 8, 16, 4f, new Random(1));
+		live.add(0, "wq", poisoned);
+		LoraAdapter orphan = makeNonZero(4, 8, 16, 4f, new Random(2));
+		live.add(0, "wv", orphan); // not in fresh → reinitialize
+
+		LoraAdapterSet fresh = new LoraAdapterSet();
+		LoraAdapter clean = new LoraAdapter(4, 8, 16, 4f, new Random(42));
+		fresh.add(0, "wq", clean);
+
+		int n = live.resetFrom(fresh, new Random(7));
+		assertThat(n).isEqualTo(2);
+		assertThat(live.get(0, "wq").a()).containsExactly(clean.a());
+		assertThat(live.get(0, "wq").b()).containsOnly(0f);
+		assertThat(live.get(0, "wv").b()).containsOnly(0f);
+	}
+
 	// ── Serialisation round-trip ──────────────────────────────────────────────
 
 	@Test

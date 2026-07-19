@@ -19,23 +19,43 @@ package cab.ml.juno.player;
 /**
  * Chat-template formatting for supervised LoRA training text (must match
  * {@link cab.ml.juno.tokenizer.ChatTemplateFormatter} at inference).
+ *
+ * <p>
+ * Splits each turn into {@linkplain #qaPrefix prefix} (user + assistant header)
+ * and {@linkplain #qaCompletion completion} (answer + end) so training can apply
+ * completion-only loss masks.
  */
 public final class ChatTrainingFormats {
 
 	private ChatTrainingFormats() {
 	}
 
-	static String qaTurn(String question, String answer, String modelType) {
+	/** User turn through the assistant header (no answer tokens). */
+	static String qaPrefix(String question, String modelType) {
 		return switch (modelType) {
-		case "tinyllama", "zephyr" -> "<|user|>\n" + question + "</s>\n<|assistant|>\n" + answer + "</s>\n";
-		case "phi3", "phi-3" -> "<|user|>\n" + question + "<|end|>\n<|assistant|>\n" + answer + "<|end|>\n";
+		case "tinyllama", "zephyr" -> "<|user|>\n" + question + "</s>\n<|assistant|>\n";
+		case "phi3", "phi-3" -> "<|user|>\n" + question + "<|end|>\n<|assistant|>\n";
 		case "llama3" -> "<|start_header_id|>user<|end_header_id|>\n\n" + question
-				+ "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n" + answer + "<|eot_id|>";
-		case "mistral" -> "[INST] " + question + " [/INST] " + answer + "</s>";
-		case "gemma" -> "<start_of_turn>user\n" + question + "<end_of_turn>\n" + "<start_of_turn>model\n" + answer
-				+ "<end_of_turn>\n";
-		default -> "<|im_start|>user\n" + question + "<|im_end|>\n" + "<|im_start|>assistant\n" + answer
-				+ "<|im_end|>\n";
+				+ "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
+		case "mistral" -> "[INST] " + question + " [/INST] ";
+		case "gemma" -> "<start_of_turn>user\n" + question + "<end_of_turn>\n" + "<start_of_turn>model\n";
+		default -> "<|im_start|>user\n" + question + "<|im_end|>\n" + "<|im_start|>assistant\n";
 		};
+	}
+
+	/** Answer body plus the turn-terminating special token(s). */
+	static String qaCompletion(String answer, String modelType) {
+		return switch (modelType) {
+		case "tinyllama", "zephyr" -> answer + "</s>\n";
+		case "phi3", "phi-3" -> answer + "<|end|>\n";
+		case "llama3" -> answer + "<|eot_id|>";
+		case "mistral" -> answer + "</s>";
+		case "gemma" -> answer + "<end_of_turn>\n";
+		default -> answer + "<|im_end|>\n";
+		};
+	}
+
+	static String qaTurn(String question, String answer, String modelType) {
+		return qaPrefix(question, modelType) + qaCompletion(answer, modelType);
 	}
 }

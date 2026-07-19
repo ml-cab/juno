@@ -1,5 +1,23 @@
 ## Status
 
+**Session 35** — LoRA Tier 1: projection coverage, token-weighted accumulation, and clipping.
+
+### LoRA correctness foundation (Tier 1)
+
+- Configurable projection targets: `qv` (default), `all` / `all-linear`, or comma-separated keys (`wq,wk,wv,wo,wgate,wup,wdown`).
+- Complete forward/backward for all seven dense linear projections, including current-position K and inverse-RoPE on Q and K.
+- `computeGradients` separated from optimizer updates; token-weighted gradient accumulation across chunks.
+- Global L2 gradient clipping after prediction-count normalization (`--lora-max-grad-norm`; `0` disables clip).
+- Builder-based `LoraTrainingConfig` and `LoraTrainer.open(..., config)`; legacy overload keeps qv, accum=1, clipping off.
+- Architecture gate: Phi-3 / Qwen3 / Qwen3-MoE rejected for LoRA (dense LLaMA-family required).
+- `/reset` reinitialises A and B from the selected target config (not B-only zeroing).
+- Merge maps all seven projections via `LoraProjection`; adapted tensors remain F32.
+- Terminology: LoRA on a quantized GGUF base (not QLoRA).
+
+---
+
+## Status
+
 **Session 34** — Windows launcher fixed: `run.bat` and `juno.bat` fully functional on Windows.
 
 ### Windows launcher (`scripts/run.bat`, `juno.bat`)

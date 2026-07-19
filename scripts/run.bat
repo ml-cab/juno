@@ -70,6 +70,8 @@ set "MODEL=%MODEL_PATH%"
 if "%DTYPE%"==""       set "DTYPE=FLOAT16"
 if "%BYTE_ORDER%"==""  set "BYTE_ORDER=BE"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
+set "TEMPERATURE_EXPLICIT=false"
+if not "%TEMPERATURE%"=="" set "TEMPERATURE_EXPLICIT=true"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
 if "%TOP_P%"==""       set "TOP_P=0.9"
@@ -188,6 +190,7 @@ if "%HEAP%"==""        set "HEAP=4g"
 if "%NODES%"==""       set "NODES=3"
 set "VERBOSE=false"
 set "JFR_DURATION_LOCAL="
+set "LORA_PLAY=%LORA_PLAY_PATH%"
 set "USE_GPU=true"
 if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
@@ -203,12 +206,13 @@ if /i "%~1"=="--byteOrder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :local
 if /i "%~1"=="--byteorder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--byte-order" ( set "BYTE_ORDER=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--max-tokens" ( set "MAX_TOKENS=%~2" & shift & shift & goto :local_parse )
-if /i "%~1"=="--temperature"( set "TEMPERATURE=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--temperature"( set "TEMPERATURE=%~2" & set "TEMPERATURE_EXPLICIT=true" & shift & shift & goto :local_parse )
 if /i "%~1"=="--top-k"      ( set "TOP_K=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--top-p"      ( set "TOP_P=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--nodes"      ( set "NODES=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_LOCAL=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--lora-play"  ( set "LORA_PLAY=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :local_parse )
@@ -227,7 +231,7 @@ if /i "%~1"=="--help" (
   echo                        BE=big-endian (hardware-validated default)
   echo                        LE=little-endian (native x86 order)
   echo   --max-tokens N    (default 200)
-  echo   --temperature F   (default 0.7)
+  echo   --temperature F   (default 0.7; 0 with --lora-play)
   echo   --top-k N         (default 50)
   echo   --top-p F         (default 0.9)
   echo   --nodes N         (default 3)
@@ -237,6 +241,7 @@ if /i "%~1"=="--help" (
   echo   --gpu             use GPU when available (default)
   echo   --cpu             use CPU only
   echo   --verbose / -v
+  echo   --lora-play PATH  apply a .lora file at inference
   goto :eof
 )
 if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :local_parse )
@@ -251,6 +256,7 @@ if "%MODEL%"=="" (
   exit /b 1
 )
 if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
+if not "%LORA_PLAY%"=="" if /i "%TEMPERATURE_EXPLICIT%"=="false" set "TEMPERATURE=0"
 call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
@@ -272,9 +278,15 @@ if not "%JFR_DURATION_LOCAL%"=="" (
   echo [WARN] JFR enabled -- duration=%JFR_DURATION_LOCAL%  (programmatic recording, metrics auto-printed on exit)
 )
 
+set "LORA_PLAY_ARG="
+if not "%LORA_PLAY%"=="" (
+  set "LORA_PLAY_ARG=--lora-play %LORA_PLAY%"
+  echo [WARN] LoRA inference overlay: %LORA_PLAY%
+)
+
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %LORA_PLAY_ARG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -291,6 +303,9 @@ if "%LORA_MAX_ITERS_QA%"=="" if "%LORA_STEPS_QA%"=="" ( set "LORA_MAX_ITERS_QA=5
 if "%LORA_LOSS_TARGET_TEXT%"=="" set "LORA_LOSS_TARGET_TEXT=1.8"
 if "%LORA_LOSS_TARGET_QA%"=="" set "LORA_LOSS_TARGET_QA=1.2"
 if "%LORA_EARLY_STOP%"=="" set "LORA_EARLY_STOP=0.25"
+if "%LORA_TARGETS%"=="" set "LORA_TARGETS=qv"
+if "%LORA_GRADIENT_ACCUMULATION%"=="" set "LORA_GRADIENT_ACCUMULATION=1"
+if "%LORA_MAX_GRAD_NORM%"=="" set "LORA_MAX_GRAD_NORM=1.0"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
@@ -318,6 +333,9 @@ if /i "%~1"=="--lora-loss-target-qa" ( set "LORA_LOSS_TARGET_QA=%~2" & shift & s
 if /i "%~1"=="--lora-steps"  ( set "LORA_MAX_ITERS=%~2"    & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-steps-qa" ( set "LORA_MAX_ITERS_QA=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-early-stop" ( set "LORA_EARLY_STOP=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-targets" ( set "LORA_TARGETS=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-gradient-accumulation" ( set "LORA_GRADIENT_ACCUMULATION=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-max-grad-norm" ( set "LORA_MAX_GRAD_NORM=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--max-tokens"  ( set "MAX_TOKENS=%~2"    & shift & shift & goto :lora_parse )
 if /i "%~1"=="--temperature" ( set "TEMPERATURE=%~2"   & shift & shift & goto :lora_parse )
 if /i "%~1"=="--top-k"       ( set "TOP_K=%~2"         & shift & shift & goto :lora_parse )
@@ -431,7 +449,7 @@ echo [WARN] After exit: open juno-!JFR_TS!.jfr in JDK Mission Control -^> Event 
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================

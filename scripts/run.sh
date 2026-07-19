@@ -323,6 +323,8 @@ cmd_local() {
   local byte_order="${BYTE_ORDER:-BE}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.7}"
+  local temperature_explicit="false"
+  [[ -n "${TEMPERATURE+x}" ]] && temperature_explicit="true"
   local heap="${HEAP:-4g}"
   local top_k="${TOP_K:-50}"
   local top_p="${TOP_P:-0.9}"
@@ -347,7 +349,7 @@ cmd_local() {
       --dtype)            dtype="$2";        shift 2 ;;
       --byteOrder | --byteorder | --byte-order) byte_order="${2^^}"; shift 2 ;;
       --max-tokens)       max_tokens="$2";   shift 2 ;;
-      --temperature)      temperature="$2";  shift 2 ;;
+      --temperature)      temperature="$2"; temperature_explicit="true"; shift 2 ;;
       --top-k)            top_k="$2";        shift 2 ;;
       --top-p)            top_p="$2";        shift 2 ;;
       --heap)             heap="$2";         shift 2 ;;
@@ -383,7 +385,7 @@ cmd_local() {
         echo ""
         echo "  Generation:"
         echo "    --max-tokens N             (default 200)"
-        echo "    --temperature F            (default 0.7)"
+        echo "    --temperature F            (default 0.7; 0 with --lora-play)"
         echo "    --top-k N                  top-K sampling cutoff     (default 50, 0=disabled)"
         echo "    --top-p F                  top-p nucleus sampling    (default 0.9, 0=disabled)"
         echo ""
@@ -415,6 +417,13 @@ cmd_local() {
 
   [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 local --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 local"
   [[ -f "$model" ]] || err "Model file not found: $model"
+
+  # Factual LoRA playback should be reproducible. Sampling at the normal 0.7
+  # default can select a nearby base-model continuation even when the trained
+  # answer is the top token. Preserve an explicit CLI/env temperature.
+  if [[ -n "$lora_play" && "$temperature_explicit" == "false" ]]; then
+    temperature="0"
+  fi
 
   require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
@@ -485,6 +494,9 @@ cmd_lora() {
   local lora_loss_target_text="${LORA_LOSS_TARGET_TEXT:-1.8}"
   local lora_loss_target_qa="${LORA_LOSS_TARGET_QA:-1.2}"
   local lora_early_stop="${LORA_EARLY_STOP:-0.25}"
+  local lora_targets="${LORA_TARGETS:-qv}"
+  local lora_grad_accum="${LORA_GRADIENT_ACCUMULATION:-1}"
+  local lora_max_grad_norm="${LORA_MAX_GRAD_NORM:-1.0}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.7}"
   local top_k="${TOP_K:-50}"
@@ -515,6 +527,9 @@ cmd_lora() {
       --lora-steps)   lora_max_iters="$2";    shift 2 ;;
       --lora-steps-qa) lora_max_iters_qa="$2"; shift 2 ;;
       --lora-early-stop) lora_early_stop="$2"; shift 2 ;;
+      --lora-targets) lora_targets="$2"; shift 2 ;;
+      --lora-gradient-accumulation) lora_grad_accum="$2"; shift 2 ;;
+      --lora-max-grad-norm) lora_max_grad_norm="$2"; shift 2 ;;
       --max-tokens)   max_tokens="$2";  shift 2 ;;
       --temperature)  temperature="$2"; shift 2 ;;
       --top-k)        top_k="$2";       shift 2 ;;
@@ -554,6 +569,9 @@ cmd_lora() {
         echo "    --lora-steps N          Alias for --lora-max-iters (/train cap)"
         echo "    --lora-steps-qa N       Max passes for /train-qa (default: 50)"
         echo "    --lora-early-stop F     Overfit guard: stop when loss < F (default: 0.25)"
+        echo "    --lora-targets SPEC     qv | all | comma keys (default: qv)"
+        echo "    --lora-gradient-accumulation N  Chunks per optimizer update (default: 1)"
+        echo "    --lora-max-grad-norm F  Global grad clip; 0=off (default: 1.0)"
         echo ""
         echo "  Generation (used for chat inference):"
         echo "    --max-tokens N          (default 200)"
@@ -591,6 +609,7 @@ cmd_lora() {
         echo "  Environment overrides:"
         echo "    MODEL_PATH  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_MAX_ITERS"
         echo "    LORA_LOSS_TARGET_TEXT  LORA_LOSS_TARGET_QA  LORA_STEPS (alias)"
+        echo "    LORA_TARGETS  LORA_GRADIENT_ACCUMULATION  LORA_MAX_GRAD_NORM"
         echo "    MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
         echo ""
         echo "  Examples:"
@@ -661,6 +680,9 @@ cmd_lora() {
     --lora-loss-target-qa "$lora_loss_target_qa" \
     --lora-steps-qa "$lora_max_iters_qa" \
     --lora-early-stop "$lora_early_stop" \
+    --lora-targets "$lora_targets" \
+    --lora-gradient-accumulation "$lora_grad_accum" \
+    --lora-max-grad-norm "$lora_max_grad_norm" \
     --max-tokens  "$max_tokens" \
     --temperature "$temperature" \
     --top-k "$top_k" \
@@ -886,10 +908,14 @@ usage() {
   echo "    --lora-loss-target-qa F        /train-qa loss target    (default 1.2)"
   echo "    --lora-steps N                 Alias for --lora-max-iters"
   echo "    --lora-early-stop F            Overfit guard            (default 0.25)"
+  echo "    --lora-targets SPEC            qv | all | comma keys    (default qv)"
+  echo "    --lora-gradient-accumulation N chunks per update        (default 1)"
+  echo "    --lora-max-grad-norm F         global grad clip         (default 1.0)"
   echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
   echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES  USE_GPU"
   echo "    LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_MAX_ITERS  LORA_LOSS_TARGET_TEXT"
+  echo "    LORA_TARGETS  LORA_GRADIENT_ACCUMULATION  LORA_MAX_GRAD_NORM"
   echo ""
   echo "  Examples:"
   echo "    MODEL_PATH=/models/tiny.gguf $0               # default = cluster (pipeline)"

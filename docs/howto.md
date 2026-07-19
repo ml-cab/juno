@@ -64,6 +64,9 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--lora-steps N` | — | Alias for `--lora-max-iters` (/train cap) |
 | `--lora-steps-qa N` | `50` | Max passes for `/train-qa` |
 | `--lora-early-stop F` | `0.25` | Overfit guard: stop when loss < F (set 0 to disable) |
+| `--lora-targets SPEC` | `qv` | `qv`, `all` / `all-linear`, or comma keys (`wq,wk,wv,wo,wgate,wup,wdown`) |
+| `--lora-gradient-accumulation N` | `1` | Chunks accumulated per optimizer update (token-weighted) |
+| `--lora-max-grad-norm F` | `1.0` | Global L2 clip after token normalization; `0` disables clipping |
 
 **`merge` specific flags:**
 
@@ -77,7 +80,8 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 **Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
 `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`,
 `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_MAX_ITERS`, `LORA_LOSS_TARGET_TEXT`,
-`LORA_LOSS_TARGET_QA`, `LORA_STEPS` (alias), `LORA_PLAY_PATH`, `API_PORT`
+`LORA_LOSS_TARGET_QA`, `LORA_STEPS` (alias), `LORA_PLAY_PATH`, `LORA_TARGETS`,
+`LORA_GRADIENT_ACCUMULATION`, `LORA_MAX_GRAD_NORM`, `API_PORT`
 
 For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO_USE_GPU` unset
 means try GPU (CUDA first, then ROCm) when available. Set `JUNO_USE_GPU=false` or pass `--cpu`

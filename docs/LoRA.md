@@ -1,6 +1,8 @@
 # LoRA Fine-Tuning in Juno
 
-Parameter-efficient fine-tuning for LLaMA-family models, implemented entirely in Java.
+Parameter-efficient fine-tuning for LLaMA-family models on a **quantized GGUF base**,
+implemented entirely in Java. This is not QLoRA (no NF4 / double-quant / paged Adam).
+
 No Python, no PEFT library, no separate training process.
 
 See also the feature overview in [features.md](features.md) and [legal.md](legal.md) if you plan to merge or redistribute adapters.
@@ -19,6 +21,10 @@ W_effective = W + (alpha/rank) x B x A
 **A** is initialised ~N(0, 0.01). **B** starts at zero. Only **A** and **B** are trained;
 **W** is never modified.
 
+Default targets are `wq` and `wv`. Use `--lora-targets all` for all seven dense linear
+projections (`wq,wk,wv,wo,wgate,wup,wdown`). All-linear training and F32 merge increase
+adapter count and merged GGUF size substantially.
+
 For `rank=8` on `wq` and `wv` across all 22 layers of TinyLlama-1.1B:
 
 | | Frozen | LoRA |
@@ -27,12 +33,21 @@ For `rank=8` on `wq` and `wv` across all 22 layers of TinyLlama-1.1B:
 | Memory (F32) | ~4.3 GB | 2.8 MB |
 | Training target | no | yes |
 
+**Architecture restriction.** LoRA requires a dense LLaMA-family GGUF with separate
+`attn_q` / `attn_k` / `attn_v` tensors. Phi-3 (fused QKV), Qwen3, and Qwen3-MoE are rejected.
+
+**Training loop.** Gradients are summed over chunks, then divided by total prediction tokens,
+optionally clipped by global L2 norm (`--lora-max-grad-norm`), then Adam steps once per
+accumulation group (`--lora-gradient-accumulation`). Reported loss is token-weighted, not the
+last chunk's mean. JFR `juno.LoraTrainStep` fires once per optimizer update.
+
 ---
 
 ## Quick start — training
 
 ```bash
 ./juno lora --model-path /path/to/TinyLlama.Q4_K_M.gguf
+# optional: --lora-targets all --lora-gradient-accumulation 4 --lora-max-grad-norm 1.0
 ```
 
 **REPL commands:**
@@ -43,8 +58,8 @@ For `rank=8` on `wq` and `wv` across all 22 layers of TinyLlama-1.1B:
 | `/train-file <path>` | Fine-tune on a text file (auto-chunked into <= 128-token pieces) |
 | `/train-qa <question> A: <answer>` | Train a single Q&A fact with auto-generated phrasings |
 | `/save` | Save adapter to `--lora-path` |
-| `/reset` | Reinitialise adapters to zero (clears all training) |
-| `/status` | Rank, alpha, steps trained, checkpoint path |
+| `/reset` | Reinitialize A/B **and overwrite** the `.lora` checkpoint on disk |
+| `/status` | Rank, alpha, optimizer updates, checkpoint path |
 | `/merge-hint` | Show the `juno merge` command to bake adapter into a standalone GGUF |
 | `/help` | Command reference |
 | *(regular input)* | Chat inference with current adapter applied |
@@ -73,11 +88,14 @@ you > /train-qa What is my name? A: Dima
   done  loss=1.53 (-0.83)
 ```
 
-The command auto-generates four phrasings to improve generalisation. Training stops automatically
-when loss drops below the configured target (default `1.2` for `/train-qa`, `1.8` for `/train`),
-or when the max-iteration cap is reached. Loss below ~0.5 gives reliable recall; above ~1.5 the
-answer may be inconsistent. Tune with `--lora-loss-target-qa`, `--lora-max-iters`, or
-`--lora-early-stop`.
+The command auto-generates four phrasings to improve generalisation. Loss is **completion-only**:
+gradients update only on the answer tokens (not the user prompt), which prevents the classic
+failure mode where LoRA collapses and replies with the memorized answer for every prompt.
+Training stops automatically when loss drops below the configured target (default `1.2` for
+`/train-qa`, `1.8` for `/train`), or when the max-iteration cap is reached. If a loaded
+checkpoint is already at the target, updates are skipped — run `/reset` before training a new
+fact on a stuck adapter. Loss below ~0.5 gives reliable recall; above ~1.5 the answer may be
+inconsistent. Tune with `--lora-loss-target-qa`, `--lora-max-iters`, or `--lora-early-stop`.
 
 **Chat template must match.** The `[TRACE] model type (chat template key)` line at REPL startup
 shows which template was detected. The same key must appear at inference. If they differ, the
@@ -94,6 +112,11 @@ Trained adapters can be applied in any mode without entering the training REPL.
 ```bash
 ./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora
 ```
+
+`--lora-play` uses greedy decoding (`temperature=0`) by default so factual recall
+is deterministic. Pass `--temperature F` explicitly if you want sampled/creative
+alternatives; at higher temperatures a nearby base-model continuation may be
+selected instead of the memorized answer.
 
 **`cluster` mode:**
 ```bash
@@ -116,24 +139,28 @@ See [howto.md](howto.md) for the full AWS deployment flow.
 ```java
 import cab.ml.juno.lora.*;
 import cab.ml.juno.node.*;
+import cab.ml.juno.player.LoraTrainer;
+import cab.ml.juno.player.LoraTrainingConfig;
 
-// 1. Load base model
-LoraAdapterSet adapters = LoraQvInitializer.qv(cfg, 8, 8f, new Random(42));
-LoraTrainableHandler handler = LoraTrainableHandler.load(
-    Path.of("TinyLlama.Q4_K_M.gguf"), ctx, adapters);
-
-// 2. Train
-LoraAdamOptimizer opt = LoraAdamOptimizer.defaults(1e-4);
-for (int step = 0; step < 1000; step++) {
-    float loss = handler.trainStep(tokens, opt);
+// Preferred: config-based open (targets, accumulation, clipping)
+LoraTrainingConfig cfg = LoraTrainingConfig.builder()
+    .rank(8).alpha(8f).learningRate(1e-4)
+    .targets("qv")
+    .gradientAccumulationSteps(4)
+    .maxGradNorm(1.0f)
+    .build();
+try (LoraTrainer trainer = LoraTrainer.open(modelPath, adapterPath, cfg)) {
+    trainer.trainQaPairUntil("What is my name?", "Dima", "tinyllama", 1.2f, 50);
+    trainer.save();
 }
 
-// 3. Save
-adapters.save(Path.of("my-finetune.lora"));
-
-// 4. Load for inference only (no optimizer needed)
-LoraAdapterSet playAdapters = LoraAdapterSet.load(Path.of("my-finetune.lora"));
-ForwardPassHandler h = ForwardPassHandlerLoader.load(modelPath, ctx, backend, playAdapters);
+// Low-level: computeGradients + prepare + step (legacy trainStep still available)
+LoraAdapterSet adapters = LoraInitializer.create(llamaCfg, LoraProjection.qv(), 8, 8f, new Random(42));
+LoraTrainableHandler handler = LoraTrainableHandler.load(modelPath, ctx, adapters);
+adapters.zeroAllGrads();
+LoraGradientResult r = handler.computeGradients(tokens);
+LoraGradients.prepare(adapters, r.predictionCount(), 1.0f);
+LoraAdamOptimizer.defaults(1e-4).step(adapters);
 ```
 
 ---
@@ -207,8 +234,9 @@ counteract learning from scratch.
 ```
 
 The LoRA delta per weight element (~6x10^-4) is smaller than Q4_K quantization noise (~3x10^-3).
-Re-quantizing the merged weights back to Q4_K destroys the delta entirely. `LoraMerge` stores the
-44 patched projection tensors (wq/wv) as F32 and copies all other tensors verbatim. The output is
+Re-quantizing the merged weights back to Q4_K destroys the delta entirely. `LoraMerge` stores
+patched projection tensors (any of the seven supported keys) as F32 and copies all other tensors
+verbatim. All-linear merges expand file size substantially. The output is
 a valid GGUF v3 file.
 
 ### Programmatic API

@@ -15,26 +15,14 @@
  */
 package cab.ml.juno.node;
 
-import java.util.Random;
-
-import cab.ml.juno.lora.LoraAdapterSet;
-
 /**
- * Builds a standard query/value LoRA adapter set from model dimensions.
+ * Result of a single forward/backward gradient computation over one token
+ * sequence (no optimizer step).
  *
- * <p>
- * Compatibility facade over {@link LoraInitializer}; prefer
- * {@link LoraInitializer#create} for new call sites.
+ * @param lossSum          sum of per-prediction cross-entropy (nats), not mean
+ * @param predictionCount  number of prediction positions ({@code tokens.length - 1})
+ * @param forwardMs        wall time of the forward pass
+ * @param backwardMs       wall time of the backward pass
  */
-public final class LoraQvInitializer {
-
-	private LoraQvInitializer() {
-	}
-
-	/**
-	 * Create adapters on {@code wq} and {@code wv} for every layer.
-	 */
-	public static LoraAdapterSet qv(LlamaConfig cfg, int rank, float alpha, Random rng) {
-		return LoraInitializer.create(cfg, LoraProjection.qv(), rank, alpha, rng);
-	}
+public record LoraGradientResult(float lossSum, int predictionCount, long forwardMs, long backwardMs) {
 }

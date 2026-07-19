@@ -142,6 +142,26 @@ public final class LoraAdapter {
 		Arrays.fill(gradB, 0f);
 	}
 
+	/**
+	 * Restore post-construction init: A ~ N(0, 0.01), B = 0, grads cleared.
+	 * Makes {@code ΔW = 0} again so inference matches the base model.
+	 */
+	public void reinitialize(Random rng) {
+		for (int i = 0; i < a.length; i++)
+			a[i] = (float) (rng.nextGaussian() * INIT_STD);
+		Arrays.fill(b, 0f);
+		zeroGrad();
+	}
+
+	/** Copy A/B weights from {@code src} (same shape required). */
+	public void copyWeightsFrom(LoraAdapter src) {
+		if (src.rank != rank || src.inDim != inDim || src.outDim != outDim)
+			throw new IllegalArgumentException("adapter shape mismatch");
+		System.arraycopy(src.a, 0, a, 0, a.length);
+		System.arraycopy(src.b, 0, b, 0, b.length);
+		zeroGrad();
+	}
+
 	public float[] a() {
 		return a;
 	}
