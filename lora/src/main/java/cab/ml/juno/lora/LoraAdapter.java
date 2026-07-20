@@ -77,6 +77,60 @@ public final class LoraAdapter {
 	}
 
 	public float[] forward(float[] x) {
+		return forwardFromInput(x);
+	}
+
+	/**
+	 * Training forward with deterministic inverted dropout on the LoRA branch
+	 * input. Rate {@code 0} is a bitwise-compatible fast path through
+	 * {@link #forward(float[])}.
+	 */
+	public float[] forwardTrain(float[] x, float dropoutRate, long rootSeed, int optimizerUpdate, int chunkOrdinal,
+			int tokenPosition, int absoluteLayer, int projectionOrdinal) {
+		if (dropoutRate == 0f)
+			return forward(x);
+		return forwardFromInput(
+				maskedInput(x, dropoutRate, rootSeed, optimizerUpdate, chunkOrdinal, tokenPosition, absoluteLayer,
+						projectionOrdinal));
+	}
+
+	public float[] backward(float[] gradDelta, float[] x) {
+		return backwardFromInput(gradDelta, x, null, 1f);
+	}
+
+	/**
+	 * Training backward matching {@link #forwardTrain}. Regenerates the same mask
+	 * from the hash indices; dropped coordinates contribute zero input gradient.
+	 */
+	public float[] backwardTrain(float[] gradDelta, float[] x, float dropoutRate, long rootSeed, int optimizerUpdate,
+			int chunkOrdinal, int tokenPosition, int absoluteLayer, int projectionOrdinal) {
+		if (dropoutRate == 0f)
+			return backward(gradDelta, x);
+		float invScale = LoraDropout.invertedScale(dropoutRate);
+		boolean[] keep = new boolean[inDim];
+		float[] xd = new float[inDim];
+		for (int j = 0; j < inDim; j++) {
+			keep[j] = LoraDropout.keep(rootSeed, optimizerUpdate, chunkOrdinal, tokenPosition, absoluteLayer,
+					projectionOrdinal, j, dropoutRate);
+			if (keep[j])
+				xd[j] = x[j] * invScale;
+		}
+		return backwardFromInput(gradDelta, xd, keep, invScale);
+	}
+
+	private float[] maskedInput(float[] x, float dropoutRate, long rootSeed, int optimizerUpdate, int chunkOrdinal,
+			int tokenPosition, int absoluteLayer, int projectionOrdinal) {
+		float invScale = LoraDropout.invertedScale(dropoutRate);
+		float[] xd = new float[inDim];
+		for (int j = 0; j < inDim; j++) {
+			if (LoraDropout.keep(rootSeed, optimizerUpdate, chunkOrdinal, tokenPosition, absoluteLayer,
+					projectionOrdinal, j, dropoutRate))
+				xd[j] = x[j] * invScale;
+		}
+		return xd;
+	}
+
+	private float[] forwardFromInput(float[] x) {
 		float[] h = new float[rank];
 		for (int r = 0; r < rank; r++) {
 			float acc = 0f;
@@ -97,7 +151,11 @@ public final class LoraAdapter {
 		return delta;
 	}
 
-	public float[] backward(float[] gradDelta, float[] x) {
+	/**
+	 * @param keepMask when non-null, {@code gradX[j]} is zero when {@code !keepMask[j]},
+	 *                 otherwise scaled by {@code gradXScale}
+	 */
+	private float[] backwardFromInput(float[] gradDelta, float[] x, boolean[] keepMask, float gradXScale) {
 		float[] h = new float[rank];
 		for (int r = 0; r < rank; r++) {
 			int base = r * inDim;
@@ -129,10 +187,12 @@ public final class LoraAdapter {
 
 		float[] gradX = new float[inDim];
 		for (int j = 0; j < inDim; j++) {
+			if (keepMask != null && !keepMask[j])
+				continue;
 			float acc = 0f;
 			for (int r = 0; r < rank; r++)
 				acc += a[r * inDim + j] * gradH[r];
-			gradX[j] = acc;
+			gradX[j] = keepMask == null ? acc : acc * gradXScale;
 		}
 		return gradX;
 	}

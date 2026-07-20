@@ -1,5 +1,21 @@
 ## Status
 
+**Session 36** — LoRA Tier 2: schedules, AdamW, dropout, validation, and LoRA+.
+
+### LoRA training quality (Tier 2)
+
+- Warmup/cosine and constant learning-rate schedules (`--lora-lr-schedule`, `--lora-warmup-steps`, `--lora-min-lr`).
+- True A-only decoupled AdamW (`--lora-weight-decay`); moments see raw gradients only. Numerical trajectories change vs coupled L2; checkpoints remain compatible.
+- LoRA+ parameter groups: A uses scheduled LR, B uses `LR * --lora-plus-ratio` (default `1.0` = ordinary behavior).
+- Deterministic train-only inverted dropout (`--lora-dropout`, `--lora-seed`); inference and validation stay dropout-free.
+- Forward-only `evaluateLoss`; held-out validation split with patience/min-delta and best-weight restore (`--lora-validation-*`).
+- Shared `LoraTrainingLoop` orchestration for REPL and `LoraTrainer`; Q&A variants are hold-out units.
+- JFR `LoraTrainStep` carries A/B LR, LoRA+ ratio, and dropout; optional `LoraValidation` event.
+
+---
+
+## Status
+
 **Session 35** — LoRA Tier 1: projection coverage, token-weighted accumulation, and clipping.
 
 ### LoRA correctness foundation (Tier 1)

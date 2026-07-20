@@ -58,4 +58,14 @@ public final class ChatTrainingFormats {
 	static String qaTurn(String question, String answer, String modelType) {
 		return qaPrefix(question, modelType) + qaCompletion(answer, modelType);
 	}
+
+	/**
+	 * Four complete Q&amp;A phrasings used by {@code /train-qa}. Hold out whole
+	 * variants for validation rather than splitting inside a turn.
+	 */
+	public static String[] qaQuestionVariants(String question) {
+		String q = question.endsWith("?") ? question : question + "?";
+		String qLow = q.substring(0, 1).toLowerCase() + q.substring(1);
+		return new String[] { q, qLow, "Can you tell me: " + qLow, "Please answer: " + qLow };
+	}
 }

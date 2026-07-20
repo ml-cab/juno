@@ -7,6 +7,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import cab.ml.juno.node.LoraProjection;
+import cab.ml.juno.lora.LoraLearningRateSchedule;
 
 @DisplayName("LoraCliOptions")
 class LoraCliOptionsTest {
@@ -54,5 +55,31 @@ class LoraCliOptionsTest {
 		assertThat(c.gradientAccumulationSteps()).isEqualTo(2);
 		assertThat(c.maxGradNorm()).isEqualTo(1.5f);
 		assertThat(c.targets()).containsExactly(LoraProjection.WQ, LoraProjection.WV, LoraProjection.WO);
+	}
+
+	@Test
+	@DisplayName("parses Tier-2 schedule and LoRA+ flags")
+	void parses_tier2_flags() {
+		LoraCliOptions o = new LoraCliOptions();
+		String[] args = { "--lora-lr-schedule", "cosine", "--lora-warmup-steps", "10", "--lora-min-lr", "1e-6",
+				"--lora-weight-decay", "0.05", "--lora-plus-ratio", "4", "--lora-dropout", "0.1", "--lora-seed", "7",
+				"--lora-validation-split", "0.25", "--lora-validation-patience", "3", "--lora-validation-min-delta",
+				"0.01" };
+		for (int i = 0; i < args.length;) {
+			int n = o.applyFlag(args, i);
+			assertThat(n).isGreaterThan(i);
+			i = n + 1;
+		}
+		LoraTrainingConfig c = o.toTrainingConfig();
+		assertThat(c.lrSchedule()).isEqualTo(LoraLearningRateSchedule.Mode.COSINE);
+		assertThat(c.warmupUpdates()).isEqualTo(10);
+		assertThat(c.minLearningRate()).isEqualTo(1e-6);
+		assertThat(c.weightDecay()).isEqualTo(0.05);
+		assertThat(c.loraPlusRatio()).isEqualTo(4.0);
+		assertThat(c.dropout()).isEqualTo(0.1f);
+		assertThat(c.seed()).isEqualTo(7L);
+		assertThat(c.validationSplit()).isEqualTo(0.25f);
+		assertThat(c.validationPatience()).isEqualTo(3);
+		assertThat(c.validationMinDelta()).isEqualTo(0.01f);
 	}
 }

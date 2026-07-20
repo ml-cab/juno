@@ -57,7 +57,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--lora-path PATH` | `<model>.lora` | Adapter checkpoint (auto-loaded if exists) |
 | `--lora-rank N` | `8` | Low-rank bottleneck dimension |
 | `--lora-alpha F` | `= rank` | Scaling factor α (effective scale = α/rank) |
-| `--lora-lr F` | `1e-4` | Adam learning rate |
+| `--lora-lr F` | `1e-4` | Peak / base AdamW learning rate |
 | `--lora-max-iters N` | `50` | Max training passes per `/train` or `/train-qa` (safety cap) |
 | `--lora-loss-target-text F` | `1.8` | Stop `/train` when loss ≤ F |
 | `--lora-loss-target-qa F` | `1.2` | Stop `/train-qa` when loss ≤ F |
@@ -67,6 +67,16 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--lora-targets SPEC` | `qv` | `qv`, `all` / `all-linear`, or comma keys (`wq,wk,wv,wo,wgate,wup,wdown`) |
 | `--lora-gradient-accumulation N` | `1` | Chunks accumulated per optimizer update (token-weighted) |
 | `--lora-max-grad-norm F` | `1.0` | Global L2 clip after token normalization; `0` disables clipping |
+| `--lora-lr-schedule M` | `constant` | `constant` or `cosine` (warmup then cosine decay) |
+| `--lora-warmup-steps N` | `0` | Warmup optimizer updates for cosine schedule |
+| `--lora-min-lr F` | `0` | Cosine floor learning rate |
+| `--lora-weight-decay F` | `0.01` | Decoupled AdamW decay on A only |
+| `--lora-plus-ratio F` | `1.0` | B/A learning-rate ratio (`1.0` = ordinary LoRA) |
+| `--lora-dropout F` | `0` | Train-only inverted dropout on LoRA branch input |
+| `--lora-seed N` | `42` | Seed for init, validation split, and dropout masks |
+| `--lora-validation-split F` | `0` | Fraction of units held out (`0` disables) |
+| `--lora-validation-patience N` | `0` | Validation checks without improvement before stop |
+| `--lora-validation-min-delta F` | `0` | Minimum validation improvement to reset patience |
 
 **`merge` specific flags:**
 

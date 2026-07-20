@@ -16,7 +16,9 @@
 package cab.ml.juno.player;
 
 import java.util.List;
+import java.util.Locale;
 
+import cab.ml.juno.lora.LoraLearningRateSchedule;
 import cab.ml.juno.node.LoraProjection;
 
 /**
@@ -37,6 +39,16 @@ public final class LoraCliOptions {
 	public String targets = "qv";
 	public int gradientAccumulation = 1;
 	public float maxGradNorm = 1.0f;
+	public String lrSchedule = "constant";
+	public int warmupSteps = 0;
+	public double minLr = 0.0;
+	public double weightDecay = 0.01;
+	public double loraPlusRatio = 1.0;
+	public float dropout = 0f;
+	public long seed = 42L;
+	public float validationSplit = 0f;
+	public int validationPatience = 0;
+	public float validationMinDelta = 0f;
 
 	public float resolvedAlpha() {
 		return alpha < 0f ? rank : alpha;
@@ -46,9 +58,22 @@ public final class LoraCliOptions {
 		return LoraProjection.parseTargets(targets);
 	}
 
+	public LoraLearningRateSchedule.Mode parsedLrSchedule() {
+		return switch (lrSchedule.strip().toLowerCase(Locale.ROOT)) {
+		case "constant" -> LoraLearningRateSchedule.Mode.CONSTANT;
+		case "cosine" -> LoraLearningRateSchedule.Mode.COSINE;
+		default -> throw new IllegalArgumentException(
+				"--lora-lr-schedule must be constant|cosine (got " + lrSchedule + ")");
+		};
+	}
+
 	public LoraTrainingConfig toTrainingConfig() {
 		return LoraTrainingConfig.builder().rank(rank).alpha(resolvedAlpha()).learningRate(lr).targets(parsedTargets())
-				.gradientAccumulationSteps(gradientAccumulation).maxGradNorm(maxGradNorm).build();
+				.gradientAccumulationSteps(gradientAccumulation).maxGradNorm(maxGradNorm)
+				.lrSchedule(parsedLrSchedule()).minLearningRate(minLr).warmupUpdates(warmupSteps)
+				.weightDecay(weightDecay).loraPlusRatio(loraPlusRatio).dropout(dropout).seed(seed)
+				.validationSplit(validationSplit).validationPatience(validationPatience)
+				.validationMinDelta(validationMinDelta).build();
 	}
 
 	/**
@@ -137,22 +162,100 @@ public final class LoraCliOptions {
 				throw new IllegalArgumentException("--lora-max-grad-norm must be >= 0");
 			yield i + 1;
 		}
+		case "--lora-lr-schedule" -> {
+			requireValue(args, i, flag);
+			lrSchedule = args[i + 1];
+			parsedLrSchedule();
+			yield i + 1;
+		}
+		case "--lora-warmup-steps" -> {
+			requireValue(args, i, flag);
+			warmupSteps = Integer.parseInt(args[i + 1]);
+			if (warmupSteps < 0)
+				throw new IllegalArgumentException("--lora-warmup-steps must be >= 0");
+			yield i + 1;
+		}
+		case "--lora-min-lr" -> {
+			requireValue(args, i, flag);
+			minLr = Double.parseDouble(args[i + 1]);
+			if (!Double.isFinite(minLr) || minLr < 0)
+				throw new IllegalArgumentException("--lora-min-lr must be finite and >= 0");
+			yield i + 1;
+		}
+		case "--lora-weight-decay" -> {
+			requireValue(args, i, flag);
+			weightDecay = Double.parseDouble(args[i + 1]);
+			if (!Double.isFinite(weightDecay) || weightDecay < 0)
+				throw new IllegalArgumentException("--lora-weight-decay must be finite and >= 0");
+			yield i + 1;
+		}
+		case "--lora-plus-ratio" -> {
+			requireValue(args, i, flag);
+			loraPlusRatio = Double.parseDouble(args[i + 1]);
+			if (!Double.isFinite(loraPlusRatio) || loraPlusRatio <= 0)
+				throw new IllegalArgumentException("--lora-plus-ratio must be finite and > 0");
+			yield i + 1;
+		}
+		case "--lora-dropout" -> {
+			requireValue(args, i, flag);
+			dropout = Float.parseFloat(args[i + 1]);
+			cab.ml.juno.lora.LoraDropout.validateRate(dropout);
+			yield i + 1;
+		}
+		case "--lora-seed" -> {
+			requireValue(args, i, flag);
+			seed = Long.parseLong(args[i + 1]);
+			yield i + 1;
+		}
+		case "--lora-validation-split" -> {
+			requireValue(args, i, flag);
+			validationSplit = Float.parseFloat(args[i + 1]);
+			if (!Float.isFinite(validationSplit) || validationSplit < 0f || validationSplit >= 1f)
+				throw new IllegalArgumentException("--lora-validation-split must be in [0, 1)");
+			yield i + 1;
+		}
+		case "--lora-validation-patience" -> {
+			requireValue(args, i, flag);
+			validationPatience = Integer.parseInt(args[i + 1]);
+			if (validationPatience < 0)
+				throw new IllegalArgumentException("--lora-validation-patience must be >= 0");
+			yield i + 1;
+		}
+		case "--lora-validation-min-delta" -> {
+			requireValue(args, i, flag);
+			validationMinDelta = Float.parseFloat(args[i + 1]);
+			if (!Float.isFinite(validationMinDelta) || validationMinDelta < 0f)
+				throw new IllegalArgumentException("--lora-validation-min-delta must be finite and >= 0");
+			yield i + 1;
+		}
 		default -> -1;
 		};
 	}
 
 	public static LoraCliOptions fromEnvDefaults() {
 		LoraCliOptions o = new LoraCliOptions();
-		String t = System.getenv("LORA_TARGETS");
-		if (t != null && !t.isBlank())
-			o.targets = t;
-		String ga = System.getenv("LORA_GRADIENT_ACCUMULATION");
-		if (ga != null && !ga.isBlank())
-			o.gradientAccumulation = Integer.parseInt(ga);
-		String mn = System.getenv("LORA_MAX_GRAD_NORM");
-		if (mn != null && !mn.isBlank())
-			o.maxGradNorm = Float.parseFloat(mn);
+		applyEnv(o, "LORA_TARGETS", v -> o.targets = v);
+		applyEnv(o, "LORA_GRADIENT_ACCUMULATION", v -> o.gradientAccumulation = Integer.parseInt(v));
+		applyEnv(o, "LORA_MAX_GRAD_NORM", v -> o.maxGradNorm = Float.parseFloat(v));
+		applyEnv(o, "LORA_LR_SCHEDULE", v -> o.lrSchedule = v);
+		applyEnv(o, "LORA_WARMUP_STEPS", v -> o.warmupSteps = Integer.parseInt(v));
+		applyEnv(o, "LORA_MIN_LR", v -> o.minLr = Double.parseDouble(v));
+		applyEnv(o, "LORA_WEIGHT_DECAY", v -> o.weightDecay = Double.parseDouble(v));
+		applyEnv(o, "LORA_PLUS_RATIO", v -> o.loraPlusRatio = Double.parseDouble(v));
+		applyEnv(o, "LORA_DROPOUT", v -> o.dropout = Float.parseFloat(v));
+		applyEnv(o, "LORA_SEED", v -> o.seed = Long.parseLong(v));
+		applyEnv(o, "LORA_VALIDATION_SPLIT", v -> o.validationSplit = Float.parseFloat(v));
+		applyEnv(o, "LORA_VALIDATION_PATIENCE", v -> o.validationPatience = Integer.parseInt(v));
+		applyEnv(o, "LORA_VALIDATION_MIN_DELTA", v -> o.validationMinDelta = Float.parseFloat(v));
+		o.parsedLrSchedule();
+		cab.ml.juno.lora.LoraDropout.validateRate(o.dropout);
 		return o;
+	}
+
+	private static void applyEnv(LoraCliOptions o, String name, java.util.function.Consumer<String> setter) {
+		String v = System.getenv(name);
+		if (v != null && !v.isBlank())
+			setter.accept(v);
 	}
 
 	private static void requireValue(String[] args, int i, String flag) {

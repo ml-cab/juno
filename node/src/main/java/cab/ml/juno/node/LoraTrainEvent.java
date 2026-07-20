@@ -86,4 +86,20 @@ public final class LoraTrainEvent extends Event {
 	@Label("Total ms")
 	@Description("Total wall time for this optimizer update (ms)")
 	public long totalMs;
+
+	@Label("Learning Rate A")
+	@Description("Scheduled learning rate applied to LoRA A matrices")
+	public float learningRateA;
+
+	@Label("Learning Rate B")
+	@Description("Scheduled learning rate applied to LoRA B matrices (includes LoRA+ ratio)")
+	public float learningRateB;
+
+	@Label("LoRA Plus Ratio")
+	@Description("B/A learning-rate ratio (1.0 = ordinary non-LoRA+ behavior)")
+	public float loraPlusRatio;
+
+	@Label("Dropout")
+	@Description("Train-only LoRA dropout rate used for this update (0 = disabled)")
+	public float dropout;
 }

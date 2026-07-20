@@ -497,6 +497,16 @@ cmd_lora() {
   local lora_targets="${LORA_TARGETS:-qv}"
   local lora_grad_accum="${LORA_GRADIENT_ACCUMULATION:-1}"
   local lora_max_grad_norm="${LORA_MAX_GRAD_NORM:-1.0}"
+  local lora_lr_schedule="${LORA_LR_SCHEDULE:-constant}"
+  local lora_warmup_steps="${LORA_WARMUP_STEPS:-0}"
+  local lora_min_lr="${LORA_MIN_LR:-0}"
+  local lora_weight_decay="${LORA_WEIGHT_DECAY:-0.01}"
+  local lora_plus_ratio="${LORA_PLUS_RATIO:-1.0}"
+  local lora_dropout="${LORA_DROPOUT:-0}"
+  local lora_seed="${LORA_SEED:-42}"
+  local lora_validation_split="${LORA_VALIDATION_SPLIT:-0}"
+  local lora_validation_patience="${LORA_VALIDATION_PATIENCE:-0}"
+  local lora_validation_min_delta="${LORA_VALIDATION_MIN_DELTA:-0}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.7}"
   local top_k="${TOP_K:-50}"
@@ -530,6 +540,16 @@ cmd_lora() {
       --lora-targets) lora_targets="$2"; shift 2 ;;
       --lora-gradient-accumulation) lora_grad_accum="$2"; shift 2 ;;
       --lora-max-grad-norm) lora_max_grad_norm="$2"; shift 2 ;;
+      --lora-lr-schedule) lora_lr_schedule="$2"; shift 2 ;;
+      --lora-warmup-steps) lora_warmup_steps="$2"; shift 2 ;;
+      --lora-min-lr) lora_min_lr="$2"; shift 2 ;;
+      --lora-weight-decay) lora_weight_decay="$2"; shift 2 ;;
+      --lora-plus-ratio) lora_plus_ratio="$2"; shift 2 ;;
+      --lora-dropout) lora_dropout="$2"; shift 2 ;;
+      --lora-seed) lora_seed="$2"; shift 2 ;;
+      --lora-validation-split) lora_validation_split="$2"; shift 2 ;;
+      --lora-validation-patience) lora_validation_patience="$2"; shift 2 ;;
+      --lora-validation-min-delta) lora_validation_min_delta="$2"; shift 2 ;;
       --max-tokens)   max_tokens="$2";  shift 2 ;;
       --temperature)  temperature="$2"; shift 2 ;;
       --top-k)        top_k="$2";       shift 2 ;;
@@ -572,6 +592,16 @@ cmd_lora() {
         echo "    --lora-targets SPEC     qv | all | comma keys (default: qv)"
         echo "    --lora-gradient-accumulation N  Chunks per optimizer update (default: 1)"
         echo "    --lora-max-grad-norm F  Global grad clip; 0=off (default: 1.0)"
+        echo "    --lora-lr-schedule M    constant|cosine (default: constant)"
+        echo "    --lora-warmup-steps N   Cosine warmup updates (default: 0)"
+        echo "    --lora-min-lr F         Cosine floor LR (default: 0)"
+        echo "    --lora-weight-decay F   AdamW A-only decay (default: 0.01)"
+        echo "    --lora-plus-ratio F     B/A LR ratio; 1=off (default: 1.0)"
+        echo "    --lora-dropout F        Train-only dropout in [0,1) (default: 0)"
+        echo "    --lora-seed N           RNG seed for init/split/dropout (default: 42)"
+        echo "    --lora-validation-split F  Held-out unit fraction (default: 0)"
+        echo "    --lora-validation-patience N  Early-stop patience (default: 0=off)"
+        echo "    --lora-validation-min-delta F  Min val improvement (default: 0)"
         echo ""
         echo "  Generation (used for chat inference):"
         echo "    --max-tokens N          (default 200)"
@@ -610,6 +640,9 @@ cmd_lora() {
         echo "    MODEL_PATH  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_MAX_ITERS"
         echo "    LORA_LOSS_TARGET_TEXT  LORA_LOSS_TARGET_QA  LORA_STEPS (alias)"
         echo "    LORA_TARGETS  LORA_GRADIENT_ACCUMULATION  LORA_MAX_GRAD_NORM"
+        echo "    LORA_LR_SCHEDULE  LORA_WARMUP_STEPS  LORA_MIN_LR  LORA_WEIGHT_DECAY"
+        echo "    LORA_PLUS_RATIO  LORA_DROPOUT  LORA_SEED  LORA_VALIDATION_SPLIT"
+        echo "    LORA_VALIDATION_PATIENCE  LORA_VALIDATION_MIN_DELTA"
         echo "    MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
         echo ""
         echo "  Examples:"
@@ -683,6 +716,16 @@ cmd_lora() {
     --lora-targets "$lora_targets" \
     --lora-gradient-accumulation "$lora_grad_accum" \
     --lora-max-grad-norm "$lora_max_grad_norm" \
+    --lora-lr-schedule "$lora_lr_schedule" \
+    --lora-warmup-steps "$lora_warmup_steps" \
+    --lora-min-lr "$lora_min_lr" \
+    --lora-weight-decay "$lora_weight_decay" \
+    --lora-plus-ratio "$lora_plus_ratio" \
+    --lora-dropout "$lora_dropout" \
+    --lora-seed "$lora_seed" \
+    --lora-validation-split "$lora_validation_split" \
+    --lora-validation-patience "$lora_validation_patience" \
+    --lora-validation-min-delta "$lora_validation_min_delta" \
     --max-tokens  "$max_tokens" \
     --temperature "$temperature" \
     --top-k "$top_k" \
@@ -911,6 +954,16 @@ usage() {
   echo "    --lora-targets SPEC            qv | all | comma keys    (default qv)"
   echo "    --lora-gradient-accumulation N chunks per update        (default 1)"
   echo "    --lora-max-grad-norm F         global grad clip         (default 1.0)"
+  echo "    --lora-lr-schedule M           constant|cosine          (default constant)"
+  echo "    --lora-warmup-steps N          cosine warmup updates    (default 0)"
+  echo "    --lora-min-lr F                cosine floor LR          (default 0)"
+  echo "    --lora-weight-decay F          AdamW A-only decay       (default 0.01)"
+  echo "    --lora-plus-ratio F            B/A LR ratio             (default 1.0)"
+  echo "    --lora-dropout F               train-only dropout       (default 0)"
+  echo "    --lora-seed N                  RNG seed                 (default 42)"
+  echo "    --lora-validation-split F      held-out fraction        (default 0)"
+  echo "    --lora-validation-patience N   early-stop patience      (default 0)"
+  echo "    --lora-validation-min-delta F  min val improvement      (default 0)"
   echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
   echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES  USE_GPU"

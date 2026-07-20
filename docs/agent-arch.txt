@@ -2,7 +2,7 @@ Juno multi-module Maven project (JDK 25).
 
 Module dependency (excerpt):
   api, registry, tokenizer, sampler, kvcache, health, metrics — shared libraries
-  lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA)
+  lora — LoRA adapter tensors, .lora checkpoint format, AdamW + LoRA+ (no GGUF, no CUDA)
   node — GgufReader, LlamaTransformerHandler, Phi3TransformerHandler, MatVec
         (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,
         CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,

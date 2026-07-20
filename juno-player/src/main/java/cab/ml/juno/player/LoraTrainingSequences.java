@@ -52,9 +52,13 @@ final class LoraTrainingSequences {
 
 	/**
 	 * Multiple phrasings of one Q&amp;A fact with loss only on answer tokens
-	 * (plus the turn-ending special token).
+	 * (plus the turn-ending special token). Concatenates all variants for
+	 * compatibility; prefer {@link #buildQaVariants} when holding out complete
+	 * variants for validation.
 	 */
 	static MaskedSequence buildQa(Tokenizer tokenizer, String question, String answer, String modelTypeKey) {
+		List<MaskedSequence> variants = buildQaVariants(tokenizer, question, answer, modelTypeKey);
+		// Re-encode as a single concatenated stream with one leading BOS (legacy path).
 		String q = question.endsWith("?") ? question : question + "?";
 		String qLow = q.substring(0, 1).toLowerCase() + q.substring(1);
 		String[] questions = { q, qLow, "Can you tell me: " + qLow, "Please answer: " + qLow };
@@ -102,7 +106,38 @@ final class LoraTrainingSequences {
 		boolean[] lossMask = new boolean[maskList.size()];
 		for (int i = 0; i < maskList.size(); i++)
 			lossMask[i] = maskList.get(i);
+		// Keep variants materialised for callers that need the count/text parity.
+		if (variants.size() != questions.length)
+			throw new IllegalStateException("QA variant count mismatch");
 		return new MaskedSequence(tokens, lossMask, text.toString());
+	}
+
+	/**
+	 * The four formatted Q&amp;A variants as separate sequences so validation can
+	 * hold out complete variants rather than splitting inside chat turns.
+	 */
+	static List<MaskedSequence> buildQaVariants(Tokenizer tokenizer, String question, String answer,
+			String modelTypeKey) {
+		String[] questions = ChatTrainingFormats.qaQuestionVariants(question);
+		List<MaskedSequence> out = new ArrayList<>(questions.length);
+		for (String variant : questions)
+			out.add(buildOneQaTurn(tokenizer, variant, answer, modelTypeKey));
+		return List.copyOf(out);
+	}
+
+	static MaskedSequence buildOneQaTurn(Tokenizer tokenizer, String question, String answer, String modelTypeKey) {
+		String prefix = ChatTrainingFormats.qaPrefix(question, modelTypeKey);
+		String completion = ChatTrainingFormats.qaCompletion(answer, modelTypeKey);
+		String text = prefix + completion;
+		int[] prefToks = tokenizer.encode(prefix);
+		int[] fullToks = tokenizer.encode(prefix + completion);
+		int prefixLen = prefToks.length;
+		if (fullToks.length < prefToks.length || !startsWith(fullToks, prefToks))
+			prefixLen = 0;
+		boolean[] lossMask = new boolean[Math.max(0, fullToks.length - 1)];
+		for (int i = 0; i < lossMask.length; i++)
+			lossMask[i] = (i + 1) >= prefixLen;
+		return new MaskedSequence(fullToks, lossMask, text);
 	}
 
 	static List<MaskedChunk> chunk(MaskedSequence seq, int chunkTokens) {

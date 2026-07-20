@@ -26,6 +26,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 import java.util.logging.Logger;
 
@@ -163,7 +164,31 @@ public final class ConsoleMain {
 	private static String loraTargets = "qv";
 	private static int loraGradientAccumulation = 1;
 	private static float loraMaxGradNorm = 1.0f;
+	private static String loraLrSchedule = "constant";
+	private static int loraWarmupSteps = 0;
+	private static double loraMinLr = 0.0;
+	private static double loraWeightDecay = 0.01;
+	private static double loraPlusRatio = 1.0;
+	private static float loraDropout = 0f;
+	private static long loraSeed = 42L;
+	private static float loraValidationSplit = 0f;
+	private static int loraValidationPatience = 0;
+	private static float loraValidationMinDelta = 0f;
 	private static LlamaConfig loraModelConfig; // set in runLoraRepl for /reset
+
+	private static LoraTrainingConfig currentTrainingConfig() {
+		return LoraTrainingConfig.builder().rank(loraRank).alpha(loraAlpha < 0 ? loraRank : loraAlpha)
+				.learningRate(loraLr).targets(loraTargets).gradientAccumulationSteps(loraGradientAccumulation)
+				.maxGradNorm(loraMaxGradNorm)
+				.lrSchedule(switch (loraLrSchedule.strip().toLowerCase(Locale.ROOT)) {
+				case "constant" -> cab.ml.juno.lora.LoraLearningRateSchedule.Mode.CONSTANT;
+				case "cosine" -> cab.ml.juno.lora.LoraLearningRateSchedule.Mode.COSINE;
+				default -> throw new IllegalArgumentException("bad lr schedule: " + loraLrSchedule);
+				}).minLearningRate(loraMinLr).warmupUpdates(loraWarmupSteps).weightDecay(loraWeightDecay)
+				.loraPlusRatio(loraPlusRatio).dropout(loraDropout).seed(loraSeed)
+				.validationSplit(loraValidationSplit).validationPatience(loraValidationPatience)
+				.validationMinDelta(loraValidationMinDelta).build();
+	}
 
 	private static SamplingParams samplingParamsFromCli() {
 		SamplingParams params = SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(temperature)
@@ -238,15 +263,20 @@ public final class ConsoleMain {
 	}
 
 	private static void applyLoraEnvDefaults() {
-		String t = System.getenv("LORA_TARGETS");
-		if (t != null && !t.isBlank())
-			loraTargets = t;
-		String ga = System.getenv("LORA_GRADIENT_ACCUMULATION");
-		if (ga != null && !ga.isBlank())
-			loraGradientAccumulation = Integer.parseInt(ga);
-		String mn = System.getenv("LORA_MAX_GRAD_NORM");
-		if (mn != null && !mn.isBlank())
-			loraMaxGradNorm = Float.parseFloat(mn);
+		LoraCliOptions env = LoraCliOptions.fromEnvDefaults();
+		loraTargets = env.targets;
+		loraGradientAccumulation = env.gradientAccumulation;
+		loraMaxGradNorm = env.maxGradNorm;
+		loraLrSchedule = env.lrSchedule;
+		loraWarmupSteps = env.warmupSteps;
+		loraMinLr = env.minLr;
+		loraWeightDecay = env.weightDecay;
+		loraPlusRatio = env.loraPlusRatio;
+		loraDropout = env.dropout;
+		loraSeed = env.seed;
+		loraValidationSplit = env.validationSplit;
+		loraValidationPatience = env.validationPatience;
+		loraValidationMinDelta = env.validationMinDelta;
 	}
 
 	private static void parseArgs(String[] args) {
@@ -383,6 +413,48 @@ public final class ConsoleMain {
 						throw new IllegalArgumentException("--lora-max-grad-norm must be >= 0");
 				}
 				break;
+			case "--lora-lr-schedule":
+				if (i + 1 < args.length) {
+					loraLrSchedule = args[++i];
+					currentTrainingConfig(); // validate
+				}
+				break;
+			case "--lora-warmup-steps":
+				if (i + 1 < args.length)
+					loraWarmupSteps = parseInt(args[++i], 0);
+				break;
+			case "--lora-min-lr":
+				if (i + 1 < args.length)
+					loraMinLr = parseDouble(args[++i], 0.0);
+				break;
+			case "--lora-weight-decay":
+				if (i + 1 < args.length)
+					loraWeightDecay = parseDouble(args[++i], 0.01);
+				break;
+			case "--lora-plus-ratio":
+				if (i + 1 < args.length)
+					loraPlusRatio = parseDouble(args[++i], 1.0);
+				break;
+			case "--lora-dropout":
+				if (i + 1 < args.length)
+					loraDropout = parseFloat(args[++i], 0f);
+				break;
+			case "--lora-seed":
+				if (i + 1 < args.length)
+					loraSeed = Long.parseLong(args[++i]);
+				break;
+			case "--lora-validation-split":
+				if (i + 1 < args.length)
+					loraValidationSplit = parseFloat(args[++i], 0f);
+				break;
+			case "--lora-validation-patience":
+				if (i + 1 < args.length)
+					loraValidationPatience = parseInt(args[++i], 0);
+				break;
+			case "--lora-validation-min-delta":
+				if (i + 1 < args.length)
+					loraValidationMinDelta = parseFloat(args[++i], 0f);
+				break;
 			// ─────────────────────────────────────────────────────────────────
 			case "--verbose":
 			case "-v":
@@ -460,6 +532,16 @@ public final class ConsoleMain {
 		System.out.println("  --lora-targets SPEC      qv | all | comma keys (default: qv)");
 		System.out.println("  --lora-gradient-accumulation N  Chunks per optimizer update (default: 1)");
 		System.out.println("  --lora-max-grad-norm F   Global grad clip; 0=off (default: 1.0)");
+		System.out.println("  --lora-lr-schedule M     constant|cosine (default: constant)");
+		System.out.println("  --lora-warmup-steps N    Cosine warmup updates (default: 0)");
+		System.out.println("  --lora-min-lr F          Cosine floor LR (default: 0)");
+		System.out.println("  --lora-weight-decay F    AdamW A-only decay (default: 0.01)");
+		System.out.println("  --lora-plus-ratio F      B/A LR ratio; 1=off (default: 1.0)");
+		System.out.println("  --lora-dropout F         Train-only dropout [0,1) (default: 0)");
+		System.out.println("  --lora-seed N            RNG seed (default: 42)");
+		System.out.println("  --lora-validation-split F  Held-out unit fraction (default: 0)");
+		System.out.println("  --lora-validation-patience N  Early-stop patience (default: 0=off)");
+		System.out.println("  --lora-validation-min-delta F  Min val improvement (default: 0)");
 		System.out.println();
 		System.out.println("Other:");
 		System.out.println("  --health                   Start the standalone health-monitor HTTP server");
@@ -507,7 +589,7 @@ public final class ConsoleMain {
 					+ Color.RESET);
 		} else {
 			adapters = LoraInitializer.create(config, LoraProjection.parseTargets(loraTargets), loraRank, loraAlpha,
-					new Random(42));
+					new Random(loraSeed));
 			print(Color.YELLOW + "  ✦ New adapters initialised (" + adapters.size() + " total · targets=" + loraTargets
 					+ " · /save to persist)" + Color.RESET);
 		}
@@ -539,7 +621,7 @@ public final class ConsoleMain {
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
 
-		LoraAdamOptimizer optimizer = LoraAdamOptimizer.defaults(loraLr);
+		LoraAdamOptimizer optimizer = new LoraAdamOptimizer(loraLr, 0.9, 0.999, 1e-8, loraWeightDecay, loraPlusRatio);
 		int[] totalStepsTrained = { 0 };
 		boolean[] dirty = { false }; // unsaved changes?
 
@@ -791,7 +873,7 @@ public final class ConsoleMain {
 		int answerPreds = seq.predictionCount();
 		int totalPreds = Math.max(0, seq.tokens().length - 1);
 
-		print(Color.DIM + "  Formatted as 4 Q&A pairs  ·  model type: " + modelType
+		print(Color.DIM + "  Formatted as 4 Q&A variants  ·  model type: " + modelType
 				+ "  ·  completion-only loss (" + answerPreds + "/" + totalPreds + " positions)" + Color.RESET);
 		print(Color.DIM + "  loss-target=" + loraLossTargetQa + "  max-iters=" + loraMaxItersQa
 				+ "  early-stop=" + loraEarlyStop
@@ -814,7 +896,11 @@ public final class ConsoleMain {
 		}
 		print("");
 
-		trainOnMasked(seq, adapters, optimizer, handler, totalSteps, dirty, loraLossTargetQa, loraMaxItersQa, "qa");
+		List<LoraTrainingLoop.TrainUnit> units = new ArrayList<>();
+		for (var v : LoraTrainingSequences.buildQaVariants(tokenizer, question, answer, modelType))
+			units.add(new LoraTrainingLoop.TrainUnit(v.tokens(), v.lossMask()));
+		trainOnUnits(units, adapters, optimizer, handler, totalSteps, dirty, loraLossTargetQa, loraMaxItersQa, "qa",
+				32);
 	}
 
 		/**
@@ -852,31 +938,45 @@ public final class ConsoleMain {
 	private static void trainOnMasked(LoraTrainingSequences.MaskedSequence seq, LoraAdapterSet adapters,
 			LoraAdamOptimizer optimizer, LoraTrainableHandler handler, int[] totalSteps, boolean[] dirty,
 			float lossTarget, int maxIters, String logLabel) throws Exception {
-
 		final int CHUNK = 32;
 		List<LoraTrainingSequences.MaskedChunk> chunks = LoraTrainingSequences.chunk(seq, CHUNK);
 		if (chunks.isEmpty()) {
 			print(Color.YELLOW + "  No trainable (completion) tokens in this example." + Color.RESET);
 			return;
 		}
+		List<LoraTrainingLoop.TrainUnit> units = new ArrayList<>();
+		for (var c : chunks)
+			units.add(new LoraTrainingLoop.TrainUnit(c.tokens(), c.lossMask()));
+		trainOnUnits(units, adapters, optimizer, handler, totalSteps, dirty, lossTarget, maxIters, logLabel, CHUNK);
+	}
+
+	private static void trainOnUnits(List<LoraTrainingLoop.TrainUnit> units, LoraAdapterSet adapters,
+			LoraAdamOptimizer optimizer, LoraTrainableHandler handler, int[] totalSteps, boolean[] dirty,
+			float lossTarget, int maxIters, String logLabel, int chunkTokens) throws Exception {
+		LoraTrainingConfig cfg = currentTrainingConfig();
+		int predCount = 0;
+		int tokenCount = 0;
+		for (var u : units) {
+			tokenCount += u.tokens().length;
+			for (boolean m : u.lossMask())
+				if (m)
+					predCount++;
+		}
 
 		print("");
 		System.out.printf(
-				"  %sTraining%s  rank=%d · lr=%s · targets=%s · accum=%d · max-norm=%s · target=%.2f · max %d pass(es) · %d chunk(s) · %d tokens · %d supervised%n",
-				Color.CYAN_BOLD, Color.RESET, loraRank, loraLr, loraTargets, loraGradientAccumulation, loraMaxGradNorm,
-				lossTarget, maxIters, chunks.size(), seq.tokens().length, seq.predictionCount());
+				"  %sTraining%s  rank=%d · lr=%s · schedule=%s · dropout=%s · plus=%s · decay=%s · targets=%s · accum=%d · max-norm=%s · target=%.2f · max %d pass(es) · %d unit(s) · %d tokens · %d supervised%n",
+				Color.CYAN_BOLD, Color.RESET, loraRank, loraLr, loraLrSchedule, loraDropout, loraPlusRatio,
+				loraWeightDecay, loraTargets, loraGradientAccumulation, loraMaxGradNorm, lossTarget, maxIters,
+				units.size(), tokenCount, predCount);
 		print("  " + "─".repeat(62));
 
-		// Probe loss without keeping gradients — skip updates if already at target.
-		adapters.zeroAllGrads();
-		LoraGradientBatch probe = new LoraGradientBatch();
-		for (var chunk : chunks)
-			probe.add(handler.computeGradients(chunk.tokens(), chunk.lossMask()));
-		adapters.zeroAllGrads();
-		float probeLoss = probe.meanLoss();
+		// Probe with forward-only eval — skip updates if already at target.
+		float probeLoss = LoraTrainingLoop.evaluateUnits(units, (tokens, mask) -> handler.evaluateLoss(tokens, mask),
+				chunkTokens);
 		if (!Float.isNaN(probeLoss) && probeLoss <= lossTarget) {
 			System.out.printf(
-					"  %s⚠ Already at target%s  loss=%.4f ≤ %.2f on current adapters — skipped updates.%n",
+					"  %sAlready at target%s  loss=%.4f ≤ %.2f on current adapters — skipped updates.%n",
 					Color.YELLOW, Color.RESET, probeLoss, lossTarget);
 			System.out.printf(
 					"  %s  If every chat reply is the same memorized answer, run /reset then /train-qa again.%s%n%n",
@@ -884,97 +984,61 @@ public final class ConsoleMain {
 			return;
 		}
 
-		float firstLoss = Float.NaN;
-		float lastLoss = Float.MAX_VALUE;
-		int stepsDone = 0;
-		int iterations = 0;
+		int stepsBefore = optimizer.step();
 		long trainStart = System.currentTimeMillis();
-		boolean targetReached = false;
-		boolean stoppedEarly = false;
-
-		outer: for (int iter = 1; iter <= maxIters && lastLoss > lossTarget; iter++) {
-			iterations = iter;
-			LoraGradientBatch batch = new LoraGradientBatch();
-			int predSum = 0;
-			adapters.zeroAllGrads();
-
-			for (int ci = 0; ci < chunks.size(); ci++) {
-				var chunk = chunks.get(ci);
-				long stepStart = System.currentTimeMillis();
-				LoraGradientResult r = handler.computeGradients(chunk.tokens(), chunk.lossMask());
-				batch.add(r);
-				predSum += r.predictionCount();
-				long stepMs = System.currentTimeMillis() - stepStart;
-
-				boolean groupFull = batch.chunkCount() >= loraGradientAccumulation;
-				boolean lastChunk = ci == chunks.size() - 1;
-				if (groupFull || lastChunk) {
-					if (batch.predictionCount() == 0) {
-						batch.clear();
-						predSum = 0;
-						continue;
-					}
-					float loss = applyLoraOptimizerUpdate(adapters, optimizer, batch, predSum);
-					if (Float.isNaN(firstLoss))
-						firstLoss = loss;
-					lastLoss = loss;
-					stepsDone++;
-					batch.clear();
-					predSum = 0;
-					if (!lastChunk)
-						adapters.zeroAllGrads();
-
-					if (verbose) {
-						System.out.printf("%n  [TRACE] iter=%d  update=%d  loss=%.6f  chunk=%d/%d  ms=%d%n", iter,
-								stepsDone, loss, ci + 1, chunks.size(), stepMs);
-					}
-
-					if (loraEarlyStop > 0 && loss < loraEarlyStop) {
-						stoppedEarly = true;
-						break outer;
-					}
-				}
-			}
-
-			System.out.printf("  [train-%s] iter=%2d  loss=%.4f  target=%.2f%n", logLabel, iter, lastLoss, lossTarget);
-
-			if (lastLoss <= lossTarget)
-				targetReached = true;
-		}
-
+		LoraTrainingLoop.TrainingResult result = LoraTrainingLoop.train(units, cfg, adapters, optimizer,
+				(tokens, mask, ctx) -> handler.computeGradients(tokens, mask, ctx),
+				(tokens, mask) -> handler.evaluateLoss(tokens, mask), lossTarget, maxIters, loraEarlyStop, chunkTokens,
+				(pass, trainLoss, valLoss, optUpdates) -> {
+					if (Float.isFinite(valLoss))
+						System.out.printf("  [train-%s] iter=%2d  loss=%.4f  val=%.4f  target=%.2f  updates=%d%n",
+								logLabel, pass, trainLoss, valLoss, lossTarget, optUpdates);
+					else
+						System.out.printf("  [train-%s] iter=%2d  loss=%.4f  target=%.2f%n", logLabel, pass, trainLoss,
+								lossTarget);
+				});
 		long totalMs = System.currentTimeMillis() - trainStart;
-		float delta = Float.isNaN(firstLoss) ? 0f : lastLoss - firstLoss;
-		String trend = delta < 0 ? Color.GREEN + String.format("▼ %.4f (−%.4f)", lastLoss, -delta) + Color.RESET
-				: Color.YELLOW + String.format("▲ %.4f (+%.4f)", lastLoss, delta) + Color.RESET;
-		String doneLabel;
-		if (stoppedEarly) {
-			doneLabel = Color.YELLOW + "⚠ stopped early (overfit guard)" + Color.RESET;
-			System.out.printf("  %s⚠ Early stop%s  loss=%.4f < threshold=%.2f%n", Color.YELLOW, Color.RESET, lastLoss,
-					loraEarlyStop);
-		} else if (targetReached) {
-			doneLabel = Color.GREEN + "✔ target reached" + Color.RESET;
-		} else {
-			doneLabel = Color.YELLOW + "⚠ max iters reached" + Color.RESET;
-		}
-		System.out.printf("  %s  loss=%s  %d pass(es)  %ds total  · /save to persist%n", doneLabel, trend, iterations,
+
+		float lastLoss = result.finalTrainLoss();
+		String doneLabel = switch (result.stopReason()) {
+		case TARGET_REACHED -> Color.GREEN + "target reached" + Color.RESET;
+		case PATIENCE_EXHAUSTED -> Color.YELLOW + "validation patience exhausted" + Color.RESET;
+		case LOW_LOSS_GUARD -> Color.YELLOW + "stopped early (overfit guard)" + Color.RESET;
+		case MAX_ITERATIONS -> Color.YELLOW + "max iters reached" + Color.RESET;
+		default -> Color.YELLOW + result.stopReason().name() + Color.RESET;
+		};
+		System.out.printf(
+				"  %s  train-loss=%.4f  val-loss=%s  best-pass=%s  passes=%d  opt-updates=%d  lrA=%s  lrB=%s  %ds total  · /save to persist%n",
+				doneLabel, lastLoss,
+				Float.isFinite(result.finalValidationLoss()) ? String.format("%.4f", result.finalValidationLoss()) : "n/a",
+				result.bestPass() >= 0 ? Integer.toString(result.bestPass()) : "n/a", result.passCount(),
+				result.optimizerUpdateCount(),
+				Double.isFinite(optimizer.lastLearningRateA()) ? String.format("%.2e", optimizer.lastLearningRateA())
+						: "n/a",
+				Double.isFinite(optimizer.lastLearningRateB()) ? String.format("%.2e", optimizer.lastLearningRateB())
+						: "n/a",
 				totalMs / 1000);
-		if (lastLoss < 0.1f) {
-			System.out.printf("  %s⚠ WARNING: loss=%.4f — adapter is severely overfit.%s%n", Color.RED, lastLoss,
+		if (result.validationWarning() != null)
+			print(Color.YELLOW + "  " + result.validationWarning() + Color.RESET);
+		if (Float.isFinite(lastLoss) && lastLoss < 0.1f) {
+			System.out.printf("  %sWARNING: loss=%.4f — adapter is severely overfit.%s%n", Color.RED, lastLoss,
 					Color.RESET);
 			System.out.printf("  %s  The model will generate garbage until you /reset adapters.%s%n%n", Color.RED,
 					Color.RESET);
-		} else if (lastLoss < 0.5f && !stoppedEarly) {
-			System.out.printf("  %s⚠ loss < 0.5 — consider stopping here. More passes risk overfitting.%s%n%n",
+		} else if (Float.isFinite(lastLoss) && lastLoss < 0.5f
+				&& result.stopReason() != LoraTrainingLoop.StopReason.LOW_LOSS_GUARD) {
+			System.out.printf("  %sloss < 0.5 — consider stopping here. More passes risk overfitting.%s%n%n",
 					Color.YELLOW, Color.RESET);
-		} else if (!targetReached && !stoppedEarly) {
-			System.out.printf("  %s⚠ loss=%.4f still above target=%.2f — raise --lora-max-iters or lower target.%s%n%n",
+		} else if (result.stopReason() == LoraTrainingLoop.StopReason.MAX_ITERATIONS) {
+			System.out.printf("  %sloss=%.4f still above target=%.2f — raise --lora-max-iters or lower target.%s%n%n",
 					Color.YELLOW, lastLoss, lossTarget, Color.RESET);
 		} else {
 			System.out.println();
 		}
 
-		totalSteps[0] += stepsDone;
-		dirty[0] = true;
+		totalSteps[0] += Math.max(0, result.optimizerUpdateCount() - stepsBefore);
+		if (result.passCount() > 0)
+			dirty[0] = true;
 	}
 
 	/** Normalize, clip, Adam-step, and emit one JFR event for an accumulation group. */

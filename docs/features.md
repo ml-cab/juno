@@ -1,6 +1,9 @@
 # LoRA training, inference, and merge
 
 Train low-rank adapters in-process with `./juno lora` on a quantized GGUF base (not QLoRA),
+with configurable projection targets, token-weighted accumulation, gradient clipping,
+warmup/cosine schedules, A-only AdamW, optional LoRA+, train-only dropout, and held-out
+validation early stopping.
 persist checkpoints as `.lora`, apply them read-only at inference with `--lora-play`, or bake
 weights into a new GGUF using `./juno merge`. Targets default to `qv`; use `--lora-targets all`
 for all-linear. Token-weighted gradient accumulation and global grad clipping are supported.

@@ -37,9 +37,15 @@ For `rank=8` on `wq` and `wv` across all 22 layers of TinyLlama-1.1B:
 `attn_q` / `attn_k` / `attn_v` tensors. Phi-3 (fused QKV), Qwen3, and Qwen3-MoE are rejected.
 
 **Training loop.** Gradients are summed over chunks, then divided by total prediction tokens,
-optionally clipped by global L2 norm (`--lora-max-grad-norm`), then Adam steps once per
+optionally clipped by global L2 norm (`--lora-max-grad-norm`), then AdamW steps once per
 accumulation group (`--lora-gradient-accumulation`). Reported loss is token-weighted, not the
-last chunk's mean. JFR `juno.LoraTrainStep` fires once per optimizer update.
+last chunk's mean. Optimizer updates use a scheduled learning rate (constant or warmup-cosine).
+Weight decay is decoupled AdamW on A only; B is never decayed. LoRA+ scales B's learning rate
+by `--lora-plus-ratio` (default `1.0`). Train-only deterministic dropout may mask the LoRA
+branch input; inference and validation never apply dropout. With `--lora-validation-split`
+and `--lora-validation-patience`, complete units (Q&A variants or text chunks) are held out;
+best A/B weights are restored on exit and the optimizer is reset. JFR `juno.LoraTrainStep`
+fires once per optimizer update (includes A/B LR, LoRA+ ratio, dropout).
 
 ---
 
@@ -48,6 +54,8 @@ last chunk's mean. JFR `juno.LoraTrainStep` fires once per optimizer update.
 ```bash
 ./juno lora --model-path /path/to/TinyLlama.Q4_K_M.gguf
 # optional: --lora-targets all --lora-gradient-accumulation 4 --lora-max-grad-norm 1.0
+# optional: --lora-lr-schedule cosine --lora-warmup-steps 20 --lora-plus-ratio 4 --lora-dropout 0.05
+# optional: --lora-validation-split 0.25 --lora-validation-patience 3 --lora-seed 42
 ```
 
 **REPL commands:**

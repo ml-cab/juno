@@ -306,6 +306,16 @@ if "%LORA_EARLY_STOP%"=="" set "LORA_EARLY_STOP=0.25"
 if "%LORA_TARGETS%"=="" set "LORA_TARGETS=qv"
 if "%LORA_GRADIENT_ACCUMULATION%"=="" set "LORA_GRADIENT_ACCUMULATION=1"
 if "%LORA_MAX_GRAD_NORM%"=="" set "LORA_MAX_GRAD_NORM=1.0"
+if "%LORA_LR_SCHEDULE%"=="" set "LORA_LR_SCHEDULE=constant"
+if "%LORA_WARMUP_STEPS%"=="" set "LORA_WARMUP_STEPS=0"
+if "%LORA_MIN_LR%"=="" set "LORA_MIN_LR=0"
+if "%LORA_WEIGHT_DECAY%"=="" set "LORA_WEIGHT_DECAY=0.01"
+if "%LORA_PLUS_RATIO%"=="" set "LORA_PLUS_RATIO=1.0"
+if "%LORA_DROPOUT%"=="" set "LORA_DROPOUT=0"
+if "%LORA_SEED%"=="" set "LORA_SEED=42"
+if "%LORA_VALIDATION_SPLIT%"=="" set "LORA_VALIDATION_SPLIT=0"
+if "%LORA_VALIDATION_PATIENCE%"=="" set "LORA_VALIDATION_PATIENCE=0"
+if "%LORA_VALIDATION_MIN_DELTA%"=="" set "LORA_VALIDATION_MIN_DELTA=0"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
@@ -336,6 +346,16 @@ if /i "%~1"=="--lora-early-stop" ( set "LORA_EARLY_STOP=%~2" & shift & shift & g
 if /i "%~1"=="--lora-targets" ( set "LORA_TARGETS=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-gradient-accumulation" ( set "LORA_GRADIENT_ACCUMULATION=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-max-grad-norm" ( set "LORA_MAX_GRAD_NORM=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-lr-schedule" ( set "LORA_LR_SCHEDULE=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-warmup-steps" ( set "LORA_WARMUP_STEPS=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-min-lr" ( set "LORA_MIN_LR=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-weight-decay" ( set "LORA_WEIGHT_DECAY=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-plus-ratio" ( set "LORA_PLUS_RATIO=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-dropout" ( set "LORA_DROPOUT=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-seed" ( set "LORA_SEED=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-validation-split" ( set "LORA_VALIDATION_SPLIT=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-validation-patience" ( set "LORA_VALIDATION_PATIENCE=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-validation-min-delta" ( set "LORA_VALIDATION_MIN_DELTA=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--max-tokens"  ( set "MAX_TOKENS=%~2"    & shift & shift & goto :lora_parse )
 if /i "%~1"=="--temperature" ( set "TEMPERATURE=%~2"   & shift & shift & goto :lora_parse )
 if /i "%~1"=="--top-k"       ( set "TOP_K=%~2"         & shift & shift & goto :lora_parse )
@@ -449,7 +469,7 @@ echo [WARN] After exit: open juno-!JFR_TS!.jfr in JDK Mission Control -^> Event 
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
