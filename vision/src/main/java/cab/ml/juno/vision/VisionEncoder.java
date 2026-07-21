@@ -444,7 +444,50 @@ public final class VisionEncoder {
         for (int i = 0; i < nP; i++)
             out[i] = project(withCls[i + 1]);
 
+        logPatchEmbeddingStats(out);
+
         return out;
+    }
+
+    /**
+     * Diagnostic-only: logs min/max/mean/L2-norm across all projected patch
+     * embeddings. Added 2026-07-13 to check whether patch embeddings have a
+     * wildly different magnitude than real LLM token embeddings — a scale
+     * mismatch here would make the transformer's residual stream effectively
+     * ignore the image (falling back to language-model priors), which would
+     * explain plausible-but-generic captions without any shape-level bug.
+     * Compare these numbers against the equivalent stats logged for a real
+     * text-token embedding in VisionAwareForwardPassHandler.
+     */
+    private void logPatchEmbeddingStats(float[][] patches) {
+        float min = Float.POSITIVE_INFINITY, max = Float.NEGATIVE_INFINITY;
+        double sum = 0, sumSq = 0;
+        long count = 0;
+        double normSum = 0;
+        float minNorm = Float.POSITIVE_INFINITY, maxNorm = Float.NEGATIVE_INFINITY;
+        for (float[] patch : patches) {
+            double normSq = 0;
+            for (float v : patch) {
+                if (v < min) min = v;
+                if (v > max) max = v;
+                sum += v;
+                sumSq += (double) v * v;
+                normSq += (double) v * v;
+                count++;
+            }
+            float norm = (float) Math.sqrt(normSq);
+            normSum += norm;
+            if (norm < minNorm) minNorm = norm;
+            if (norm > maxNorm) maxNorm = norm;
+        }
+        double mean = sum / count;
+        double std = Math.sqrt(sumSq / count - mean * mean);
+        double meanNorm = normSum / patches.length;
+        log.info(String.format(
+                "Vision patch embeddings stats (numPatches=%d, dim=%d): min=%.4f max=%.4f mean=%.4f std=%.4f "
+                        + "| per-patch L2 norm: min=%.4f mean=%.4f max=%.4f",
+                patches.length, patches.length > 0 ? patches[0].length : 0, min, max, mean, std, minNorm, meanNorm,
+                maxNorm));
     }
 
     // ── Patch embedding ───────────────────────────────────────────────────
@@ -577,18 +620,43 @@ public final class VisionEncoder {
         return out;
     }
 
-    // ── MLP (GELU activation) ─────────────────────────────────────────────
+    // ── MLP (activation per clip.use_gelu — see VisionConfig.useGelu) ──────
 
     private float[] mlp(float[] x, int li) {
         int I = cfg.intermediateSize();
         int H = cfg.hiddenSize();
         float[] hidden = backend.sgemv(ffnUp[li], x, I, H);
         for (int i = 0; i < I; i++)
-            hidden[i] = gelu(hidden[i] + bffnUp[li][i]);
+            hidden[i] = activation(hidden[i] + bffnUp[li][i]);
         float[] out = backend.sgemv(ffnDown[li], hidden, H, I);
         for (int d = 0; d < H; d++)
             out[d] += bffnDown[li][d];
         return out;
+    }
+
+    /**
+     * Dispatches to the activation this specific file was actually exported
+     * with. {@code clip.use_gelu=true} → standard tanh-approx GELU.
+     * {@code clip.use_gelu=false} → quick_gelu (OpenAI CLIP's original
+     * activation, {@code x * sigmoid(1.702x)}).
+     *
+     * <p>2026-07-20: before this method existed, every call site here used
+     * {@link #gelu} unconditionally, regardless of what the file declared.
+     * Found via {@code ./juno gguf-info} that
+     * llava-v1.5-7b-mmproj-Q4_0.gguf declares {@code clip.use_gelu=false} —
+     * meaning every one of the 23 transformer blocks was silently using the
+     * wrong activation function this entire session. Shape-valid, numerically
+     * stable (both formulas are smooth and bounded), which is exactly why
+     * this produced coherent-but-wrong output rather than an outright crash
+     * or the degenerate collapse seen from the unrelated mm.2 regression.
+     */
+    private float activation(float x) {
+        return cfg.useGelu() ? gelu(x) : quickGelu(x);
+    }
+
+    /** OpenAI CLIP's original activation: x * sigmoid(1.702x). */
+    static float quickGelu(float x) {
+        return x / (1f + (float) Math.exp(-1.702 * x));
     }
 
     // ── Vision projector: mm.0 -> [GELU -> mm.2] ───────────────────────────

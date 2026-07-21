@@ -113,6 +113,53 @@ class VisionEncoderTest {
         assertThat(VisionEncoder.gelu(-3f)).isGreaterThan(VisionEncoder.gelu(-1f));
     }
 
+    // ── quick_gelu (clip.use_gelu=false) — 2026-07-20 fix ───────────────────────
+    //
+    // llava-v1.5-7b-mmproj-Q4_0.gguf declares clip.use_gelu=false (confirmed via
+    // ./juno gguf-info), meaning the ViT transformer blocks' FFN activation
+    // should be quick_gelu (x * sigmoid(1.702x), OpenAI CLIP's original
+    // activation) — NOT the standard tanh-approx gelu() that every call site
+    // used unconditionally before this fix.
+
+    @Test
+    @DisplayName("quickGelu(0) = 0")
+    void quickGelu_zero() {
+        assertThat(VisionEncoder.quickGelu(0f)).isCloseTo(0f, within(1e-6f));
+    }
+
+    @Test
+    @DisplayName("quickGelu(x) ≈ x for large positive x")
+    void quickGelu_large_positive_approx_identity() {
+        assertThat(VisionEncoder.quickGelu(10f)).isCloseTo(10f, within(0.001f));
+    }
+
+    @Test
+    @DisplayName("quickGelu(x) ≈ 0 for large negative x")
+    void quickGelu_large_negative_near_zero() {
+        assertThat(VisionEncoder.quickGelu(-10f)).isCloseTo(0f, within(0.001f));
+    }
+
+    @Test
+    @DisplayName("quickGelu shape: trough near x=-0.75, monotone increasing for x > -0.75")
+    void quickGelu_shape() {
+        // Like gelu, quick_gelu is not globally monotone for negative x — it has
+        // a local minimum around x ≈ -0.75 (quick_gelu ≈ -0.164), then rises
+        // back toward 0 as x decreases further.
+        assertThat(VisionEncoder.quickGelu(-2f)).isGreaterThan(VisionEncoder.quickGelu(-0.75f));
+        assertThat(VisionEncoder.quickGelu(-0.75f)).isLessThan(VisionEncoder.quickGelu(0f));
+        assertThat(VisionEncoder.quickGelu(0f)).isLessThan(VisionEncoder.quickGelu(1f));
+        assertThat(VisionEncoder.quickGelu(1f)).isLessThan(VisionEncoder.quickGelu(2f));
+        assertThat(VisionEncoder.quickGelu(-3f)).isGreaterThan(VisionEncoder.quickGelu(-0.75f));
+    }
+
+    @Test
+    @DisplayName("quickGelu differs measurably from gelu — the fix must actually change behavior, "
+            + "not silently compute the same thing under a new name")
+    void quickGelu_differsFromStandardGelu() {
+        assertThat(VisionEncoder.quickGelu(-2f)).isNotCloseTo(VisionEncoder.gelu(-2f), within(0.01f));
+        assertThat(VisionEncoder.quickGelu(1f)).isNotCloseTo(VisionEncoder.gelu(1f), within(0.001f));
+    }
+
     // ── VisionConfig integration ──────────────────────────────────────────────
 
     @Test

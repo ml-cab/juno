@@ -18,6 +18,7 @@ package cab.ml.juno.vision;
 
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
 
 import cab.ml.juno.node.BatchForwardRequest;
 import cab.ml.juno.node.BatchForwardResult;
@@ -59,6 +60,8 @@ import cab.ml.juno.node.ShardContext;
  * Thread-safe: the patch embedding map is a {@link ConcurrentHashMap}.
  */
 public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
+
+    private static final Logger log = Logger.getLogger(VisionAwareForwardPassHandler.class.getName());
 
     private final ForwardPassHandler textHandler;
     private final int imageTokenId;
@@ -128,12 +131,27 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
      */
     @Override
     public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+        // Unconditional — proves this exact class/build actually executed for this
+        // request, regardless of anything downstream. If you don't see this line
+        // in the log immediately after "Prefill: calling pipeline.prefillBatch()",
+        // the running jar does NOT contain this build; stop and rebuild before
+        // trusting anything else in the log. (Added 2026-07-20 after the
+        // text-embedding-stats line silently never appeared across two full runs
+        // due to a stale build — this line cannot have the same failure mode,
+        // since it has no condition gating it at all.)
+        log.info("[vision] forwardBatch ENTER requestId=" + request.requestId() + " windowSize="
+                + request.windowSize() + " hasEmbeddings=" + context.hasEmbeddings());
+
         if (!context.hasEmbeddings()) {
+            log.info("[vision] forwardBatch PASSTHROUGH (not the embeddings node) requestId="
+                    + request.requestId());
             return textHandler.forwardBatch(request, context);
         }
 
         float[][] patches = patchEmbeddings.get(request.requestId());
         if (patches == null) {
+            log.info("[vision] forwardBatch PASSTHROUGH (no patches registered for this requestId — "
+                    + "plain text request) requestId=" + request.requestId());
             return textHandler.forwardBatch(request, context);
         }
 
@@ -144,6 +162,8 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
         BatchForwardRequest activationsReq = BatchForwardRequest.withActivations(
                 request.requestId(), flatActivations, W, request.startPosition());
 
+        log.info("[vision] forwardBatch delegating to wrapped text handler requestId=" + request.requestId()
+                + " windowSize=" + W);
         return textHandler.forwardBatch(activationsReq, context);
     }
 
@@ -155,12 +175,26 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
      * 2026-07-12 this used a zero vector for every text token, which silently
      * fed the model 600+ meaningless positions and produced incoherent output
      * even once the image itself was correctly seen.)
+     *
+     * <p>Logs an unconditional, per-call aggregate of every real text-token
+     * embedding encountered (min/max/mean/std/L2 norm, plus image- vs
+     * text-token counts) — directly comparable to {@code VisionEncoder}'s own
+     * per-request patch-embedding stats log. Unconditional (not gated behind
+     * a "log once" flag) specifically so it cannot silently fail to appear.
      */
     private float[] buildWindowActivationsWithVision(int[] tokenIds, float[][] patches, int W) {
         float[] flat = new float[W * hiddenDim];
         int patchIdx = 0;
+        int textTokenCount = 0;
+        int imageTokenCount = 0;
+        float min = Float.POSITIVE_INFINITY, max = Float.NEGATIVE_INFINITY;
+        double sum = 0, sumSq = 0;
+        double normSum = 0;
+        float minNorm = Float.POSITIVE_INFINITY, maxNorm = Float.NEGATIVE_INFINITY;
+
         for (int b = 0; b < W; b++) {
             if (tokenIds[b] == imageTokenId) {
+                imageTokenCount++;
                 if (patchIdx < patches.length) {
                     float[] patch = patches[patchIdx++];
                     if (patch.length != hiddenDim)
@@ -170,18 +204,57 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
                 }
                 // else: more image tokens than patches — leave zero (safety guard)
             } else {
+                textTokenCount++;
                 float[] textEmbedding = textHandler.embedToken(tokenIds[b]);
                 if (textEmbedding.length != hiddenDim)
                     throw new IllegalStateException("Text embedding dim " + textEmbedding.length
                             + " does not match hiddenDim " + hiddenDim);
+
+                double normSq = 0;
+                for (float v : textEmbedding) {
+                    if (v < min) min = v;
+                    if (v > max) max = v;
+                    sum += v;
+                    sumSq += (double) v * v;
+                    normSq += (double) v * v;
+                }
+                float norm = (float) Math.sqrt(normSq);
+                normSum += norm;
+                if (norm < minNorm) minNorm = norm;
+                if (norm > maxNorm) maxNorm = norm;
+
                 System.arraycopy(textEmbedding, 0, flat, b * hiddenDim, hiddenDim);
             }
         }
+
+        if (textTokenCount > 0) {
+            long totalElems = (long) textTokenCount * hiddenDim;
+            double mean = sum / totalElems;
+            double std = Math.sqrt(sumSq / totalElems - mean * mean);
+            double meanNorm = normSum / textTokenCount;
+            log.info(String.format(
+                    "[vision] Real text-token embeddings stats (ALL %d text tokens in this window, dim=%d): "
+                            + "min=%.4f max=%.4f mean=%.4f std=%.4f | per-token L2 norm: min=%.4f mean=%.4f "
+                            + "max=%.4f  <-- compare against VisionEncoder's per-patch L2 norm log for this "
+                            + "same request",
+                    textTokenCount, hiddenDim, min, max, mean, std, minNorm, meanNorm, maxNorm));
+        } else {
+            log.warning("[vision] Window contains ZERO text tokens (all " + imageTokenCount
+                    + " positions are image tokens) — no comparison stats available. This would be unusual "
+                    + "for a real chat prompt and is worth double-checking if seen.");
+        }
+        log.info("[vision] Window token composition: imageTokens=" + imageTokenCount + " textTokens="
+                + textTokenCount + " totalWindow=" + W + " patchesAvailable=" + patches.length
+                + " patchesConsumed=" + patchIdx);
+
         return flat;
     }
 
     @Override
     public ForwardResult forward(ForwardRequest request, ShardContext context) {
+        log.info("[vision] forward ENTER requestId=" + request.requestId() + " hasEmbeddings="
+                + context.hasEmbeddings());
+
         if (!context.hasEmbeddings()) {
             // Intermediate or last node: pass straight through — no embedding lookup here.
             return textHandler.forward(request, context);

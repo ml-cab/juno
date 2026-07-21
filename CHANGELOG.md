@@ -1,5 +1,376 @@
 ## Status
 
+**Session 42** — two things, both aimed at not wasting another ~25-minute
+cycle on ambiguous results: (1) a real, previously-unchecked bug found and
+fixed in image loading, (2) logging made unconditional/comprehensive enough
+that the next run's log is self-diagnosing.
+
+**Found and fixed: EXIF orientation was never applied.** `ImagePatchEmbedder`
+called `ImageIO.read()` directly and fed the result straight to the encoder.
+`ImageIO.read()` does NOT apply EXIF orientation correction — it returns raw
+sensor-orientation pixels as-is. Phone/camera photos routinely carry an EXIF
+Orientation tag (portrait shots are commonly stored as landscape pixel data
++ orientation=6); a synthetic image (the pixel-art JUNO logo used in earlier
+sessions) essentially never does. This means every real-photo test this
+session could have been feeding the model a sideways or upside-down image
+regardless of any other fix — a confound that was never isolated because
+only the synthetic image was tested until Session 40.
+
+**Fix:** added a self-contained JPEG APP1/Exif segment parser
+(`readExifOrientation`) and the standard 8-case EXIF orientation transform
+(`applyExifOrientation`) to `ImagePatchEmbedder`. Runs before resize/
+normalize, fails safe (any parse issue → orientation=1 → no-op, never
+applies a wrong rotation). Logs raw vs EXIF-corrected dimensions per image.
+Added tests for the byte-level parser (no-EXIF JPEG, non-JPEG, garbage
+bytes, synthetic little/big-endian TIFF segments, all 8 orientation values)
+and for the transform (dimension swap/preserve per orientation family, a
+180°-twice-is-identity invariant, and a corner-pixel placement check —
+deliberately avoiding hand-derived CW/CCW pixel assertions, since getting
+those backwards in the test would give false confidence either way).
+**Not yet run** — same standing caveat as every fix this session.
+
+**Logging made unconditional and comprehensive**, specifically to remove the
+ambiguity that cost two prior sessions:
+- `ConsoleMain.prepareVisionHandler()` now logs an explicit build/version
+  marker as its very first line — fires in under a second, so a stale build
+  (we hit this twice: `StubForwardPassHandler`'s missing constructor, and
+  the now-removed single-sample text-embedding log never appearing) is
+  caught before the ~25-minute prefill, not after.
+- `VisionAwareForwardPassHandler.forwardBatch()` and `.forward()` now log an
+  **unconditional** entry line — no branch, no flag, nothing that can
+  silently fail to fire — proving this exact code executed for this exact
+  request. This directly replaces the previous single-sample
+  `compareAndSet`-gated text-embedding-stats log, which — despite being
+  logically correct (verified twice by re-reading the code) — never once
+  appeared across two full runs, almost certainly because of a stale build
+  rather than a logic bug, but there was no way to tell the difference from
+  the log alone. There now is.
+- The text-embedding-stats comparison itself is now an **aggregate over
+  every text token in the window** (previously just the first one
+  encountered), logged unconditionally once per `forwardBatch` call, plus an
+  explicit image-token-vs-text-token count. More statistically meaningful
+  than a single sample, and — critically — not gated behind any condition
+  that could fail to trigger.
+
+---
+
+## Status
+
+**Session 41** — used the new `./juno gguf-info` tool (Session 40) against the
+real llava-v1.5-7b files for the first time. Found one concrete, provable bug
+and confirmed several previously-uncertain code paths are actually correct.
+
+**Found and fixed: wrong GELU variant in every ViT transformer block.**
+The mmproj file's metadata explicitly declares `clip.use_gelu = false` — this
+is llama.cpp's own flag distinguishing standard (tanh-approx) GELU from
+`quick_gelu` (`x * sigmoid(1.702x)`, OpenAI CLIP's original activation).
+`VisionEncoder`'s FFN (`mlp()`) called `gelu()` unconditionally at every one
+of the 23 transformer blocks, regardless of what the file declared — this
+metadata key was never read anywhere in the codebase before this session.
+Both activation functions are smooth and bounded, so this was never going to
+crash or produce NaNs — it would silently distort every patch's features in
+a way fully consistent with the "coherent but semantically wrong" output
+we've been chasing since Session 38.
+
+**Fix:** added `VisionConfig.useGelu` (read from `clip.use_gelu`, default
+`true` for files that don't declare it — preserves prior behavior for any
+mmproj without this key) and `GgufReader.metaBool()` (new, mirrors
+`metaInt`/`metaFloat`). `VisionEncoder.mlp()` now calls a new `activation()`
+dispatcher instead of `gelu()` directly. Added direct unit tests for
+`quickGelu()` (zero, asymptotic behavior, shape, and an explicit
+"differs from standard gelu" test so the fix can't silently regress into a
+no-op). **Not yet confirmed by an actual rerun** — same caveat as always:
+this is evidence-backed, not guessed, but it hasn't been run yet.
+
+**Confirmed correct (ruling these out for good, not just "looks fine"):**
+using the *real* declared tensor shapes from `gguf-info` output rather than
+assumption:
+- `v.patch_embd.weight`'s real shape `[14, 14, 3, 1024]` and `patchEmbed()`'s
+  flat indexing order (`dx` fastest, then `dy`, then `c`) match exactly, once
+  accounting for GGUF's standard PyTorch-axis-reversal convention.
+- `v.position_embd.weight`'s real shape `[1024, 577]` and the `posEmbd[i * H
+  + d]` indexing in `encode()` match exactly (position slow-varying, hidden
+  dim fast-varying, as declared).
+- The `ffn_up`/`ffn_down` name-swap warning logged at every startup is now
+  directly confirmed, not inferred: `v.blk.N.ffn_down.weight` really does
+  have shape `[1024, 4096]` (an expand/up shape) and `v.blk.N.ffn_up.weight`
+  really does have shape `[4096, 1024]` (a contract/down shape) — the
+  existing shape-based correction in `loadFfn()` is necessary and correct,
+  not a guess.
+- `mm.2.weight` really exists with shape `[4096, 4096]` (the expected
+  outputDim→outputDim shape for a 2-layer `mlp2x_gelu` projector) — the
+  Session 38 hypothesis about projector shape was right; Session 39's
+  revert was about applying it, not about whether it exists. Still not
+  re-enabled — the earlier regression (degenerate repeating-token output)
+  needs its own root cause before touching that code path again, and
+  nothing in this session's findings explains *that specific* failure mode.
+
+---
+
+## Status
+
+**Session 40** — investigating why image content is still wrong even after
+Session 39's revert (output is coherent, varies between requests, but never
+describes the actual image — a pixel-art "JUNO" logo). No code fix in this
+session; code review + diagnostic instrumentation only.
+
+**Code paths reviewed and confirmed correct** (ruling these out as the
+cause): `ImagePatchEmbedder` (CLIP mean/std, RGB bit-shifts, CHW layout —
+all correct), `VisionEncoder.patchEmbed()` (raster-order patch extraction,
+correct CHW flattening matching `patch_embd.weight`'s documented shape),
+`VisionEncoder.selfAttention()` (genuinely full bidirectional attention, no
+causal mask — confirmed by reading the code, not just the comment),
+`resolveFfnOrientation()` (shape-verified against measured tensor
+dimensions, not a blind guess — a real transpose bug here would produce
+gibberish, not coherent generic captions, which is inconsistent with what
+we're seeing).
+
+**Two live hypotheses, not yet distinguished:**
+1. **Scale/magnitude mismatch.** If the projector's output magnitude is very
+   different from a real LLM token embedding's magnitude, the transformer's
+   residual stream could effectively drown out the (much smaller, or much
+   larger) image signal, causing the model to fall back on language-model
+   priors — which look exactly like "plausible, generic, wrong" captions.
+2. **Model/architecture limitation, not a bug.** LLaVA-1.5-7B is
+   well-documented to perform poorly on non-photographic imagery — pixel
+   art, UI screenshots, diagrams, text-heavy graphics — because its training
+   distribution (COCO-style captioning/VQA data) is dominated by natural
+   photographs. A blocky, abstract, colorful logo is far outside that
+   distribution. Both observed captions ("room with a doorway and a cat",
+   "man standing in front of a camera") independently describe an indoor
+   scene with a person — consistent with the model falling back to its most
+   common training-data pattern when given a weak or out-of-distribution
+   visual signal, which is also consistent with hypothesis 1.
+
+**Added (diagnostic only, zero behavior change):** `VisionEncoder` now logs
+min/max/mean/std and per-patch L2 norm across all projected patch embeddings
+once per request. `VisionAwareForwardPassHandler` now logs the same stats
+for one real text-token embedding, once per process, explicitly labeled for
+comparison against the patch-embedding log line above it. Next run's log
+will show whether the two are in the same ballpark (pointing at hypothesis
+2 / model limitation) or wildly different (pointing at hypothesis 1 / a
+real scale bug still to be found).
+
+**Suggested next step to disambiguate independent of these logs:** run the
+same request against an actual photograph (not pixel art) instead of the
+JUNO logo. If the model correctly describes a real photo, that's strong
+evidence for hypothesis 2 (model capability limitation, not a pipeline bug)
+and further code changes are probably not the right lever. If it still
+produces a generically wrong caption for a real photo too, that confirms a
+remaining pipeline bug and rules out hypothesis 2.
+
+---
+
+## Status
+
+**Session 39** — REVERT of Session 38's mm.2 projector change. Confirmed by
+the user to be a regression, not a fix: output went from "coherent English
+describing the wrong thing" (Session 38's starting point) to a fully
+degenerate repeating `<image>` token loop (`finish_reason: length`, zero real
+content) — a materially worse failure mode.
+
+Applying `GELU(mm.0(x))` then `mm.2` produced numerically broken patch
+embeddings for this specific mmproj file. The exact root cause is not
+understood — the shape checks passed (mm.2.weight really is `[outputDim,
+outputDim]`), so this is not a simple dimension-mismatch bug; it's either a
+data-layout mismatch specific to this tensor, a wrong assumption about what
+`mm.2` actually represents in this particular export, or something else not
+yet identified.
+
+**Reverted:** `VisionEncoder.project()` now always calls `applyProjector`
+with `w2=null, b2=null` — i.e. mm.0 only, unconditionally — regardless of
+whether `mm.2.weight` is present in the file. `mm.2` is still detected,
+loaded, and shape-validated at load time purely for diagnostic logging (zero
+effect on the actual data path); the log line makes clear it is present but
+NOT applied. The `applyProjector` unit tests are unchanged (they test the
+utility function's math in isolation) but are now explicitly annotated as
+not being evidence that re-enabling mm.2 is safe.
+
+**Do not re-enable mm.2 without new evidence.** If picked up again, the
+right next step is dumping actual intermediate values (min/max/mean/NaN
+count of the patch vectors immediately after `mm.0`+GELU, and again after
+`mm.2`) for a real request, rather than another shape-level guess — this
+failure mode (shape-valid, numerically degenerate) is exactly the kind of
+bug that unit tests with small synthetic matrices cannot catch and that
+needs runtime inspection of real quantized weights.
+
+---
+
+## Status
+
+**Session 38** — vision output is now grammatically coherent (Session 37's
+zero-vector-text-token fix confirmed working by the user's own log/curl
+output) but describes the wrong image content ("a room with a doorway and a
+cat" for a pixel-art logo). Root cause found by code inspection + comparison
+against the standard llava-v1.5 architecture — **NOT yet confirmed by the
+user re-running it.**
+
+`VisionEncoder`'s projector (`mm.0.weight`/`mm.0.bias`) was a single linear
+layer only. LLaVA-1.5's actual `mm_projector_type` is `mlp2x_gelu`: mm.0 →
+GELU → mm.2 (a second `outputDim × outputDim` linear layer; llama.cpp mmproj
+GGUF files name it `mm.2` because `mm.1` is the implicit, weight-less GELU).
+The code never checked for `mm.2.weight` at all — it applied only half the
+learned projector, which produces a shape-valid (so no crash, no shape
+warnings) but semantically arbitrary vector for each image patch. That
+explains the failure mode precisely: fluent English (text tokens are correct
+after Session 37's fix) describing a plausible but unrelated scene (the image
+tokens carry no real signal from the picture).
+
+**Proposed fix (tried, then reverted — see Session 39 above):** `VisionEncoder`
+checked `hasTensor("mm.2.weight")` at load time and, when present, loaded
+`mm.2.weight`/`mm.2.bias` and applied the full `mm.0 → GELU → mm.2` chain.
+This was confirmed by the user to be a regression, not a fix — see Session 39.
+
+**This was a hypothesis about this specific failure mode that turned out to
+be wrong (or at least this implementation of it was) — see Session 39 for
+the confirmed outcome.**
+
+---
+
+## Status
+
+**Session 37** — the vision pipeline wiring/hang fixes from Session 36 were
+confirmed working end-to-end by the user (full log from `Prefill:` through
+`generate() RETURNING`, 32/32 layers completed, curl returned a response).
+Output was grammatically coherent but semantically incoherent ("
+работаonc анаási tienenпозиступа...") — traced to a second, independent bug:
+
+`VisionAwareForwardPassHandler.buildWindowActivationsWithVision()` (and the
+single-token `buildActivationWithVision()`) spliced real CLIP patch vectors
+into image-token positions but left every **text**-token position as an
+all-zero vector — meaning the entire prompt text (chat template, the actual
+question, BOS) was invisible to the model; only the image patches carried any
+signal.
+
+**Fix:** added `ForwardPassHandler.embedToken(int)` (default: throws
+`UnsupportedOperationException`) so a decorator can ask the wrapped handler
+for a single token's real embedding-table row. Implemented in
+`LlamaTransformerHandler.embedToken()`, reusing the existing clamping logic.
+Both vision-splicing methods now call `textHandler.embedToken(tokenId)` for
+non-image positions instead of leaving zero. **Confirmed fixed** by the user:
+rerunning the same curl produced grammatically fluent, on-topic English
+output for the first time (see Session 38 above for the next bug this
+uncovered — content was fluent but still hallucinated, unrelated to the
+projector fix below it in this file).
+
+Updated the two existing `VisionAwareForwardPassHandlerBatchTest` cases that
+had asserted the *old, buggy* zero-vector behavior (they'd now be actively
+wrong), added a new single-token-path regression test, and added direct
+`embedToken()` tests to `LlamaTransformerHandlerEmbeddingsNodeActivationsTest`.
+The shared `StubForwardPassHandler` test double (lives in
+`vision/src/main/java`, not `test` — pre-existing structure, not something
+introduced here) gained a configurable deterministic fake embedding.
+
+---
+
+## Status
+
+**Session 36** — `--local` mode with `--mmproj-path`: fixed the vision request
+hang/never-replies bug (two stacked bugs, both traced via JFR thread dumps,
+not guessed). LoRA (`--lora-play`) hang reported by the same user is still
+**unresolved** — no reproducing JFR capture was available to trace it; see
+"Still open" below.
+
+### Vision requests via `--mmproj-path` never replied — root cause traced via JFR
+
+Symptom: `POST /v1/vision/chat` against a LLaVA model loaded with
+`--mmproj-path` never returned, even for a tiny image, and looked like an
+infinite loop from the outside (`curl` just hangs).
+
+A previous debugging session (see `bug-trace.txt`) worked through several
+hypotheses by reading code alone and could not confirm a root cause. This
+session captured a JFR recording of an actual hung request
+(`juno-llava-v1.5-7b-Q4_K-*.jfr`) and used `jdk.jfr.consumer.RecordingFile`
+(no `jfr` CLI available in this environment) to read the embedded
+`jdk.ThreadDump` events. The live stack trace showed the request thread
+executing straight through `LocalInferencePipeline.prefillBatch() →
+LlamaTransformerHandler.forwardBatch() → runLayersBatch() →
+transformerLayerBatch() → gqaInto()` — **with no
+`VisionAwareForwardPassHandler` frame anywhere in the stack.** That pointed
+directly at two independent, stacked bugs:
+
+**Bug 1 — vision handler wrap discarded (`ConsoleMain.runLocalRepl()`).**
+`wireVisionRoutes()` (which wraps `handlers.get(0)` with
+`VisionAwareForwardPassHandler` via `LlavaHandlerFactory.buildFromHandlers()`)
+was called *after* `LocalInferencePipeline.from(shardMap, new
+ArrayList<>(handlers), ...)`. `LocalInferencePipeline.from()` reads
+`handlers.get(i)` once, at construction, and stores that exact reference in
+each `NodeStage` — it never re-reads the list. Wrapping `handlers.get(0)`
+afterwards therefore had no effect on the already-built pipeline: every
+request silently ran through the plain-text `LlamaTransformerHandler`, which
+has no knowledge of the CLIP patch vectors `VisionChatHandler` registered.
+576 `<image>` placeholder tokens were looked up as ordinary (meaningless)
+vocabulary rows and batched through a full `W=1187`-wide prefill on a 7B
+model, purely on CPU (weight-stationary Q4_K GEMM, no SIMD/GPU) — tens of
+trillions of MACs, genuinely finite but so slow it looked exactly like a
+hang. Even had it returned, the reply would never have described the image.
+
+**Fix:** split `wireVisionRoutes()` into `prepareVisionHandler()` (wraps
+`handlers.get(0)` — now called *before* `LocalInferencePipeline.from()`) and
+`registerVisionRoutes()` (registers the two HTTP routes once `apiServer`
+exists, unchanged timing). `LlavaHandlerFactory`'s class-level javadoc, which
+documented the old (buggy) call order as the correct usage, is corrected.
+
+**Bug 2 — `LlamaTransformerHandler` branched on the wrong flag (would have
+crashed once Bug 1 was fixed).** Both `getInitialActivation()` (the
+single-token `forward()` path) and `forwardBatch()` decided whether to read
+`request.tokenIds()` or `request.activations()` using the handler's own fixed
+`hasEmbeddings` field (always `true` for node 0) instead of asking the
+request what it actually carries. `VisionAwareForwardPassHandler` correctly
+builds an activations-based request for node 0 (`withActivations(...)`,
+which sets `tokenIds = null`) — but `LlamaTransformerHandler` would still try
+`request.tokenIds()[b]` and throw `NullPointerException`. This bug was
+latent/unreachable while Bug 1 stood (node 0 never received an activations
+request in the first place), which is why the symptom was "hang", not
+"crash" — fixing Bug 1 alone would have turned the hang into an NPE.
+
+**Fix:** both call sites now check `hasEmbeddings && request.isFirstNode()`
+(`ForwardRequest`/`BatchForwardRequest` already exposed `isFirstNode()` —
+`tokenIds() != null` — for exactly this purpose; it just wasn't being
+consulted). Behaviourally identical to before for ordinary text requests,
+since a real first-node request always has non-null `tokenIds`.
+
+Regression tests:
+- `LocalInferencePipelineTest` — two new tests
+  (`mutating_handlers_list_after_pipeline_construction_has_no_effect`,
+  `...before_pipeline_construction_is_picked_up`) pin down the exact
+  handler-list snapshot-timing contract that Bug 1 violated, without needing
+  real GGUF fixtures.
+- `LlamaTransformerHandlerEmbeddingsNodeActivationsTest` (new file) — covers
+  Bug 2 for both `forward()` and `forwardBatch()`: activations-based requests
+  on the embeddings node no longer throw, produce correctly shaped output,
+  and diverge from a token-embedding lookup; ordinary token-based requests on
+  the same node are asserted unchanged.
+
+**Tracing method for future reference:** this environment ships a JRE with
+the `jdk.jfr` module but no `jfr` CLI tool and no `javac`. `java
+SomeTool.java recording.jfr` (JDK 11+ single-file source launch) using
+`jdk.jfr.consumer.RecordingFile` to iterate `RecordedEvent`s — filtering on
+`jdk.ThreadDump` for stack traces, or on the project's custom `juno.*` events
+(`juno.ForwardPass`, `juno.MatVec`, `juno.LoraTrainStep`) for progress
+counters — is enough to distinguish "genuinely stuck/deadlocked" (identical
+stack across dumps, thread parked/blocked) from "just very slow" (stack
+advances, CPU time and event counters keep climbing) without needing to
+attach a debugger or reproduce interactively.
+
+**Still open — `--lora-play` hang on ordinary (non-vision) handlers.** The
+user also reported that LoRA adapter playback hangs. None of the JFR
+recordings included in this session's evidence contain a
+`juno.LoraTrainStep` event or a `handlerType=lora` `juno.ForwardPass` event,
+so there is no captured stack trace of an actual LoRA hang to trace — every
+available recording is either a plain `llama` run or vision-related. Per
+CLAUDE.md ("don't guess"), no root cause is claimed here. A quick source
+check shows `LoraTrainableHandler` does *not* share the `VisionAwareForwardPassHandler`
+wiring path (vision only ever wraps `handlers.get(0)`; LoRA is unrelated to
+that code path), so Bug 1/Bug 2 above are unlikely to be the same root
+cause — but this needs its own JFR capture of a real hang to confirm.
+**Next step:** reproduce with `--local ... --lora-play PATH --jfr 5m` (the
+existing `--jfr DURATION` flag ConsoleMain already supports, e.g.
+`startLocalJfr()`) while a LoRA request is hung, then read the resulting
+`juno-<model>-<timestamp>.jfr` the same way described above.
+
+---
+
 **Session 35** — `--local` mode: fixed `--verbose` no-op and vision models never being detected.
 
 ### `--verbose` was a no-op in `--local` mode

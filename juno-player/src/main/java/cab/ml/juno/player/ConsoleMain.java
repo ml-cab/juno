@@ -1296,6 +1296,17 @@ public final class ConsoleMain {
 	 */
 	private static LlavaHandlerFactory.Built prepareVisionHandler(String modelPath, String mmprojPath,
 			List<ForwardPassHandler> handlers, LlamaConfig config) {
+		// Build/version marker — fires in under a second, long before the prefill
+		// that follows. If this string doesn't match what you expect from the
+		// latest delivered files, the running jar is STALE — stop here and
+		// rebuild rather than spending 20-30 minutes on a prefill whose result
+		// you won't be able to trust. Added 2026-07-20 after two separate stale
+		// -build incidents this session (StubForwardPassHandler missing a
+		// constructor; the text-embedding-stats log line never appearing) each
+		// cost a full ~25-minute cycle to even notice.
+		log.info("[vision] BUILD MARKER: session42-2026-07-20 "
+				+ "(includes: quick_gelu dispatch, EXIF orientation correction, "
+				+ "unconditional forwardBatch/forward entry logging, per-window text-embedding-stats aggregate)");
 		log.info("[vision] prepareVisionHandler — modelPath=" + modelPath + "  mmprojPath=" + mmprojPath
 				+ "  handlers=" + (handlers == null ? "null" : handlers.size()));
 		try {

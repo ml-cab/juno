@@ -26,6 +26,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `local` | In-process REPL — all transformer shards in one JVM, no forking, no gRPC |
 | `lora` | LoRA fine-tuning REPL — single in-process JVM, adapter persisted to `.lora` file |
 | `merge` | Bake a trained `.lora` adapter into a new standalone GGUF — no sidecar needed at inference time |
+| `gguf-info` | Dump a GGUF's full metadata + tensor layout (name/shape/quant type) as plain text — for architecture review without guessing |
 | `test` | 8 automated real-model smoke checks (6 pipeline + 2 tensor), exits 0 (all pass) or 1 (any fail) |
 
 ---
@@ -288,6 +289,31 @@ The LoRA delta per element (~6x10^-4) is smaller than Q4_K quantization noise (~
 Re-quantizing the merged weights back to Q4_K would erase the training entirely. F32 storage
 for the 44 patched tensors is the correct trade-off. For TinyLlama 1.1B Q4_K_M (667 MB), the
 merged file is approximately 1 GB.
+
+---
+
+### `gguf-info` — dump a GGUF's full metadata and tensor layout
+
+Prints every metadata key/value (alphabetical) and every tensor's name, shape, and
+quantization type (declaration order) as plain text. Read-only; does not load tensor data,
+so it's fast even on large files.
+
+Use this instead of guessing a model's architecture from a Hugging Face model card or from
+partial log lines — for I2T (image-to-text) models in particular, the mmproj file's actual
+tensor names (e.g. whether `mm.2.weight` exists at all, and its real shape) are ground truth
+that no amount of reading the base architecture's paper or README can substitute for.
+
+```bash
+./juno gguf-info --model-path /path/to/llava-v1.5-7b-Q4_K.gguf \
+                  --mmproj-path /path/to/llava-v1.5-7b-mmproj-Q4_0.gguf
+
+# Positional args also work
+./juno gguf-info /path/to/model.gguf /path/to/mmproj.gguf
+```
+
+Linux/macOS only for now — `scripts/run.bat` does not currently wire up `gguf-info` (it only
+implements `cluster`/`local`/`lora`/`test`; note `merge`, just above, has the same pre-existing
+gap despite the Windows example below it).
 
 ---
 

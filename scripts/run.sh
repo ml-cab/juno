@@ -769,6 +769,63 @@ cmd_test() {
     "$model"
 }
 
+# ---------------------------------------------------------------------------
+# gguf-info — dump a GGUF file's full metadata and tensor layout
+#             Use this to see a model/mmproj's real architecture (projector
+#             type, tensor names/shapes, quantisation) instead of guessing
+#             from partial log lines or a Hugging Face model card.
+# ---------------------------------------------------------------------------
+cmd_gguf_info() {
+  local model=""
+  local mmproj=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --model-path)  model="$2";  shift 2 ;;
+      --mmproj-path) mmproj="$2"; shift 2 ;;
+      --help|-h)
+        echo ""
+        echo "  Usage: $0 gguf-info --model-path /path/to/model.gguf [--mmproj-path /path/to/mmproj.gguf]"
+        echo "     or: $0 gguf-info /path/to/model.gguf [/path/to/mmproj.gguf]"
+        echo ""
+        echo "  Dumps a GGUF file's full metadata (all keys, alphabetical) and full"
+        echo "  tensor list (name, shape, quantisation type, declaration order) as"
+        echo "  plain text — paste the output directly for architecture review."
+        echo ""
+        echo "  Example:"
+        echo "    $0 gguf-info --model-path /models/llava-v1.5-7b-Q4_K.gguf \\"
+        echo "                 --mmproj-path /models/llava-v1.5-7b-mmproj-Q4_0.gguf"
+        echo ""
+        exit 0 ;;
+      *)
+        if [[ -z "$model" ]]; then
+          model="$1"; shift
+        elif [[ -z "$mmproj" ]]; then
+          mmproj="$1"; shift
+        else
+          err "Unknown gguf-info argument: $1.  Run: $0 gguf-info --help"
+        fi ;;
+    esac
+  done
+
+  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 gguf-info --model-path /path/to/model.gguf [--mmproj-path /path/to/mmproj.gguf]"
+  [[ -f "$model" ]] || err "Model file not found: $model"
+  [[ -z "$mmproj" || -f "$mmproj" ]] || err "mmproj file not found: $mmproj"
+
+  shopt -s nullglob
+  local candidates=( "$DIR/juno-player/target/"juno-player-*-shaded.jar "$DIR/juno-player/target/juno-player.jar" )
+  shopt -u nullglob
+  local juno_player_jar=""
+  for f in "${candidates[@]}"; do
+    [[ -f "$f" ]] || continue
+    juno_player_jar="$f"
+    break
+  done
+  [[ -n "$juno_player_jar" ]] || err "juno-player jar not found — build first with: mvn clean package -DskipTests"
+
+  "$JAVA" -cp "$juno_player_jar" cab.ml.juno.player.GgufInfoMain "$model" ${mmproj:+"$mmproj"}
+}
+
 # ── Health server ─────────────────────────────────────────────────────────────
 # health — standalone health-monitor HTTP server (no model required)
 # Accepts node health probes via POST /health/probe and exposes a cluster
@@ -865,6 +922,9 @@ usage() {
   echo -e "  ${GREEN}$0 health${NC}                        standalone health-monitor HTTP server"
   echo    "  $0 health --port 9090              listen on a custom port (default 8081)"
   echo    "  $0 health --help                   all health flags + API reference"
+  echo ""
+  echo -e "  ${GREEN}$0 gguf-info${NC} --model-path PATH   dump a GGUF's full metadata + tensor layout"
+  echo    "  $0 gguf-info model.gguf mmproj.gguf   positional args also work"
   echo ""
   echo "  Flags common to default (cluster), local, and lora:"
   echo "    --pType pipeline|tensor        parallelism type         (default pipeline)"
@@ -983,11 +1043,12 @@ CMD="${1:-}"
 shift || true
 
 case "$CMD" in
-  local)   cmd_local   "$@" ;;
-  lora)    cmd_lora    "$@" ;;
-  merge)   cmd_merge   "$@" ;;
-  test)    cmd_test    "$@" ;;
-  health)  cmd_health  "$@" ;;
-  cluster) cmd_cluster "$@" ;;
-  *)       cmd_cluster ${CMD:+"$CMD"} "$@" ;;
+  local)     cmd_local     "$@" ;;
+  lora)      cmd_lora      "$@" ;;
+  merge)     cmd_merge     "$@" ;;
+  gguf-info) cmd_gguf_info "$@" ;;
+  test)      cmd_test      "$@" ;;
+  health)    cmd_health    "$@" ;;
+  cluster)   cmd_cluster   "$@" ;;
+  *)         cmd_cluster ${CMD:+"$CMD"} "$@" ;;
 esac

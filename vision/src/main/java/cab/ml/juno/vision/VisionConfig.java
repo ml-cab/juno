@@ -45,7 +45,15 @@ public record VisionConfig(
         int numHeads,       // number of CLIP attention heads
         int intermediateSize, // CLIP FFN intermediate dimension
         int projectionDim,  // output dimension of the vision projector (= LLM hiddenDim)
-        float layerNormEps  // layer-norm epsilon for the CLIP encoder
+        float layerNormEps, // layer-norm epsilon for the CLIP encoder
+        boolean useGelu     // true: standard (tanh-approx) GELU. false: quick_gelu
+                             // (x * sigmoid(1.702x), OpenAI CLIP's original activation).
+                             // Read from clip.use_gelu — llama.cpp's own flag for exactly
+                             // this distinction. 2026-07-20: found via ./juno gguf-info
+                             // that llava-v1.5-7b-mmproj-Q4_0.gguf declares this false;
+                             // VisionEncoder previously always used standard GELU
+                             // regardless, silently using the wrong activation in every
+                             // one of the 23 transformer blocks. See CHANGELOG.
 ) {
 
     /**
@@ -72,9 +80,12 @@ public record VisionConfig(
                               r.metaInt("vision.projection_dim",   4096));
         float eps           = r.metaFloat("clip.vision.attention.layer_norm_epsilon",
                               r.metaFloat("vision.attention.layer_norm_epsilon", 1e-5f));
+        // Default true (standard GELU) when the key is absent, matching this
+        // codebase's prior unconditional behavior for files that don't declare it.
+        boolean useGelu      = r.metaBool("clip.use_gelu", true);
 
         return new VisionConfig(imageSize, patchSize, hiddenSize, numLayers,
-                numHeads, intermediateSize, projectionDim, eps);
+                numHeads, intermediateSize, projectionDim, eps, useGelu);
     }
 
     /**
@@ -102,20 +113,28 @@ public record VisionConfig(
 
     /**
      * Build a synthetic config for unit tests — no GGUF file needed.
+     * useGelu defaults to true (standard GELU), matching this class's
+     * pre-2026-07-20 behavior, so existing test call sites are unaffected.
      */
     static VisionConfig synthetic(int imageSize, int patchSize, int hiddenSize,
                                    int numLayers, int numHeads, int projectionDim) {
+        return synthetic(imageSize, patchSize, hiddenSize, numLayers, numHeads, projectionDim, true);
+    }
+
+    /** Same as {@link #synthetic(int, int, int, int, int, int)} with an explicit useGelu. */
+    static VisionConfig synthetic(int imageSize, int patchSize, int hiddenSize,
+                                   int numLayers, int numHeads, int projectionDim, boolean useGelu) {
         int intermediateSize = hiddenSize * 4;
         float eps = 1e-5f;
         return new VisionConfig(imageSize, patchSize, hiddenSize, numLayers,
-                numHeads, intermediateSize, projectionDim, eps);
+                numHeads, intermediateSize, projectionDim, eps, useGelu);
     }
 
     @Override
     public String toString() {
         return String.format(
-                "VisionConfig{image=%d patch=%d hidden=%d layers=%d heads=%d ffn=%d proj=%d eps=%.1e}",
+                "VisionConfig{image=%d patch=%d hidden=%d layers=%d heads=%d ffn=%d proj=%d eps=%.1e useGelu=%b}",
                 imageSize, patchSize, hiddenSize, numLayers, numHeads,
-                intermediateSize, projectionDim, layerNormEps);
+                intermediateSize, projectionDim, layerNormEps, useGelu);
     }
 }

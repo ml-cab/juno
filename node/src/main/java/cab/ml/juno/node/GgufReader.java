@@ -206,12 +206,27 @@ public final class GgufReader implements AutoCloseable {
 		return v instanceof Number n ? n.floatValue() : def;
 	}
 
+	public boolean metaBool(String key, boolean def) {
+		Object v = metadata.get(key);
+		return v instanceof Boolean b ? b : def;
+	}
+
 	public boolean hasTensor(String name) {
 		return tensors.containsKey(name);
 	}
 
 	public Map<String, Object> allMetadata() {
 		return java.util.Collections.unmodifiableMap(metadata);
+	}
+
+	/**
+	 * All tensor names in this file, in GGUF declaration order. Combine with
+	 * {@link #tensorDims}/{@link #tensorType} to inspect a file's full tensor
+	 * layout without loading tensor data — see {@code GgufInfoMain} in the
+	 * juno-player module for a ready-made dump tool.
+	 */
+	public java.util.List<String> tensorNames() {
+		return java.util.List.copyOf(tensors.keySet());
 	}
 
 	/**
