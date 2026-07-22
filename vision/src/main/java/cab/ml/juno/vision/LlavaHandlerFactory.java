@@ -18,11 +18,14 @@ package cab.ml.juno.vision;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Optional;
 import java.util.logging.Logger;
 
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
+import cab.ml.juno.node.LlamafileGgufIndex;
 import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.ShardContext;
 
@@ -115,8 +118,24 @@ public final class LlavaHandlerFactory {
                     + "\"  hasTensor(v.patch_embd.weight)=" + hasPatchEmbd
                     + "  visionWeightsPath=" + paths.visionWeightsPath()
                     + "  usesSeparateMmproj=" + paths.usesSeparateMmproj());
-            return hasPatchEmbd;
+            if (hasPatchEmbd)
+                return true;
         }
+        // When no separate mmproj is provided, visionWeightsPath equals modelPath and
+        // GgufReader.open() returns the FIRST GGUF in the ZIP (the text model), which
+        // never contains v.patch_embd.weight.  Scan the ZIP for additional GGUF entries
+        // — a llamafile such as moondream2 may bundle the vision encoder as a second entry.
+        if (!paths.usesSeparateMmproj()) {
+            Optional<LlamafileGgufIndex.Entry> embedded =
+                    findEmbeddedVisionEntry(paths.textModelPath());
+            if (embedded.isPresent()) {
+                log.info("[vision] Found embedded vision GGUF inside llamafile: \"" + embedded.get().name()
+                        + "\"  dataOffset=" + embedded.get().dataOffset()
+                        + " — isVisionArchitecture=true");
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -169,7 +188,7 @@ public final class LlavaHandlerFactory {
 
         VisionConfig vCfg;
         VisionEncoder encoder;
-        try (GgufReader r = GgufReader.open(paths.visionWeightsPath())) {
+        try (GgufReader r = resolveVisionReader(paths)) {
             vCfg    = VisionConfig.from(r);
             log.info("[vision] VisionConfig=" + vCfg);
             encoder = VisionEncoder.load(r, vCfg, cab.ml.juno.node.CpuMatVec.INSTANCE);
@@ -237,5 +256,73 @@ public final class LlavaHandlerFactory {
                 + "  outputDim=" + encoder.outputDim());
 
         return new Built(visionHandler, textHandler, encoder, vCfg, imageTokenId);
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    /**
+     * Open a {@link GgufReader} positioned at the vision encoder GGUF for
+     * {@code paths}.
+     *
+     * <ol>
+     *   <li>If a separate mmproj file was given, open it with
+     *       {@link GgufReader#open(Path)} (standard two-file case).
+     *   <li>Otherwise, scan the model file (or llamafile) for an embedded GGUF
+     *       whose data contains {@code v.patch_embd.weight}. When found, use
+     *       {@link GgufReader#openAtDataOffset(Path, long)} to reach it.
+     *   <li>Fall back to {@link GgufReader#open(Path)} on the model file itself
+     *       (single merged-GGUF fallback; succeeds only if the text model and
+     *       vision encoder happen to be in the same GGUF).
+     * </ol>
+     *
+     * Caller is responsible for closing the returned reader.
+     */
+    private static GgufReader resolveVisionReader(VisionModelPaths paths) throws IOException {
+        if (paths.usesSeparateMmproj()) {
+            log.info("[vision] resolveVisionReader — using separate mmproj: " + paths.visionWeightsPath());
+            return GgufReader.open(paths.visionWeightsPath());
+        }
+        // No separate mmproj — try embedded GGUF entries in the llamafile.
+        Optional<LlamafileGgufIndex.Entry> embedded =
+                findEmbeddedVisionEntry(paths.textModelPath());
+        if (embedded.isPresent()) {
+            log.info("[vision] resolveVisionReader — opening embedded vision GGUF: \"" + embedded.get().name()
+                    + "\"  dataOffset=" + embedded.get().dataOffset());
+            return GgufReader.openAtDataOffset(paths.textModelPath(), embedded.get().dataOffset());
+        }
+        // Merged-file fallback: open the model file itself and hope vision tensors are there.
+        log.info("[vision] resolveVisionReader — no embedded vision GGUF found, trying merged-file open");
+        return GgufReader.open(paths.visionWeightsPath());
+    }
+
+    /**
+     * Scan {@code modelPath} for all GGUF entries (via {@link LlamafileGgufIndex}),
+     * then open each entry beyond the first with
+     * {@link GgufReader#openAtDataOffset} to check for {@code v.patch_embd.weight}.
+     *
+     * <p>The first entry is the text model — already opened by
+     * {@link GgufReader#open(Path)} — so it is skipped.
+     *
+     * @return the first non-text GGUF entry that contains the vision patch
+     *         embedding tensor, or {@link Optional#empty()} if none found
+     */
+    private static Optional<LlamafileGgufIndex.Entry> findEmbeddedVisionEntry(Path modelPath)
+            throws IOException {
+        List<LlamafileGgufIndex.Entry> entries = LlamafileGgufIndex.scanAll(modelPath);
+        if (entries.size() <= 1) {
+            log.fine("[vision] findEmbeddedVisionEntry — " + entries.size() + " GGUF entries, no additional entry to probe");
+            return Optional.empty();
+        }
+        // Skip index 0 (the text model, already handled by GgufReader.open).
+        for (LlamafileGgufIndex.Entry entry : entries.subList(1, entries.size())) {
+            try (GgufReader r = GgufReader.openAtDataOffset(modelPath, entry.dataOffset())) {
+                if (r.hasTensor("v.patch_embd.weight")) {
+                    log.info("[vision] findEmbeddedVisionEntry — vision encoder found: \"" + entry.name()
+                            + "\"  dataOffset=" + entry.dataOffset());
+                    return Optional.of(entry);
+                }
+            }
+        }
+        return Optional.empty();
     }
 }

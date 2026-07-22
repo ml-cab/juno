@@ -8,23 +8,17 @@ module.  Tested architectures: LLaVA-1.5 (LLaMA-2 backbone), LLaVA-1.6
 
 ## Model requirements
 
-Detection is based on the presence of the CLIP patch-embedding tensor
+Detection is based on the presence of the CLIP/SigLIP patch-embedding tensor
 `v.patch_embd.weight`, not on `general.architecture` — LLaVA-family models
 report `general.architecture=llama` (or `qwen2`, `phi3`, ...) because that is
 the text backbone; checking the architecture string alone will never find a
 vision model.
 
-**The CLIP vision encoder lives in a separate GGUF file.** Every known public
-llama.cpp-format multimodal release (LLaVA, LLaVA-NeXT, Qwen-VL, SmolVLM,
-Gemma-3 vision, MiniCPM-V, ...) ships the CLIP encoder in a distinct file,
-conventionally named `mmproj-*.gguf`, loaded alongside the base LLM. A single
-merged GGUF containing both the LLM and the vision encoder is not how any
-current public model is distributed — pointing Juno at the base LLM file
-alone (`--model-path`) will always report the model as text-only, even for a
-genuine I2T model, because `v.patch_embd.weight` only exists in the mmproj
-file.
+### Two-file models (LLaVA, Qwen-VL, SmolVLM, ...)
 
-Pass the mmproj file explicitly:
+Most public llama.cpp-format multimodal releases ship the vision encoder in a
+**separate** GGUF file, conventionally named `mmproj-*.gguf`. Pass it
+explicitly:
 
 ```bash
 ./juno local --model-path ../models/llava-v1.5-7b-Q4_K_M.gguf \
@@ -32,18 +26,41 @@ Pass the mmproj file explicitly:
              --api-port 8081
 ```
 
-Compatible models from Hugging Face (base model + matching mmproj file):
-
 | Model | Base file | mmproj file |
 |---|---|---|
 | llava-v1.5-7b | `llava-v1.5-7b-Q4_K_M.gguf` | `mmproj-model-f16.gguf` |
 | llava-v1.6-mistral-7b | `llava-v1.6-mistral-7b.Q4_K_M.gguf` | `mmproj-model-f16.gguf` |
 
-If `--mmproj-path` is omitted, Juno falls back to probing `--model-path`
-itself for `v.patch_embd.weight` — this only succeeds for a hypothetical
-merged-file GGUF and will report "not a vision model" for every real
-downloaded release. Check the startup log line
-`[vision] isVisionArchitecture check` to confirm which file was probed.
+### Embedded-GGUF models (moondream2 llamafile)
+
+Some llamafiles bundle **both** the LLM and the vision encoder as two separate
+GGUF entries inside the same ZIP. moondream2 is the primary example: its
+`.llamafile` contains a phi-2 text model (first entry) and a SigLIP vision
+encoder (second entry).
+
+Juno detects this automatically via `LlamafileGgufIndex`. No `--mmproj-path`
+is needed — just point at the llamafile:
+
+```bash
+./juno local --model-path ../models/moondream2-q5_k.llamafile --api-port 8081
+```
+
+At startup you will see:
+
+```
+[vision] Found embedded vision GGUF inside llamafile: "mmproj.gguf"  dataOffset=...
+[vision] isVisionArchitecture=true
+```
+
+The image token ID for moondream2 defaults to `32000` (same system property as
+LLaVA). Override if needed:
+
+```bash
+-Djuno.vision.image_token_id=<ID>
+```
+
+Check the startup log line `[vision] isVisionArchitecture check` to confirm
+which file was probed.
 
 ---
 
