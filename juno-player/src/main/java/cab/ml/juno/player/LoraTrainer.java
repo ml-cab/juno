@@ -23,9 +23,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import cab.ml.juno.lora.LoraAdapterConfig;
 import cab.ml.juno.lora.LoraAdapterSet;
 import cab.ml.juno.lora.LoraAdamOptimizer;
 import cab.ml.juno.lora.LoraLearningRateSchedule;
+import cab.ml.juno.lora.LoraMode;
+import cab.ml.juno.node.DoraInitializer;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LoraInitializer;
@@ -50,44 +53,52 @@ public final class LoraTrainer implements AutoCloseable {
 	private final LoraAdamOptimizer optimizer;
 	private final LoraAdapterSet adapters;
 	private final Path adapterPath;
+	private final Path modelPath;
 	private final LoraTrainingConfig config;
 	private final LlamaConfig modelConfig;
 
 	private LoraTrainer(LoraTrainableHandler handler, Tokenizer tokenizer, LoraAdamOptimizer optimizer,
-			LoraAdapterSet adapters, Path adapterPath, LoraTrainingConfig config, LlamaConfig modelConfig) {
+			LoraAdapterSet adapters, Path adapterPath, Path modelPath, LoraTrainingConfig config,
+			LlamaConfig modelConfig) {
 		this.handler = handler;
 		this.tokenizer = tokenizer;
 		this.optimizer = optimizer;
 		this.adapters = adapters;
 		this.adapterPath = adapterPath;
+		this.modelPath = modelPath;
 		this.config = config;
 		this.modelConfig = modelConfig;
 	}
 
 	/**
-	 * Legacy open: qv targets, accumulation 1, clipping disabled.
+	 * Legacy open: qv targets, accumulation 1, clipping disabled, legacy-normal init.
 	 */
 	public static LoraTrainer open(Path modelPath, Path adapterPath, int rank, float alpha, double lr)
 			throws IOException {
-		return open(modelPath, adapterPath, LoraTrainingConfig.builder().rank(rank).alpha(alpha).learningRate(lr)
-				.targets("qv").gradientAccumulationSteps(1).maxGradNorm(0f).build());
+		return open(modelPath, adapterPath, LoraTrainingConfig.builder().adapterConfig(LoraAdapterConfig.legacy(rank, alpha))
+				.learningRate(lr).targets("qv").gradientAccumulationSteps(1).maxGradNorm(0f).build());
 	}
 
 	public static LoraTrainer open(Path modelPath, Path adapterPath, LoraTrainingConfig config) throws IOException {
 		LlamaConfig cfg;
 		Tokenizer tokenizer;
+		LoraAdapterSet adapters;
+		Path ap = adapterPath != null ? adapterPath : defaultAdapterPath(modelPath);
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			cfg = LlamaConfig.from(r);
 			tokenizer = GgufTokenizer.load(r);
-		}
-		Path ap = adapterPath != null ? adapterPath : defaultAdapterPath(modelPath);
-		LoraAdapterSet adapters;
-		if (Files.exists(ap)) {
-			adapters = LoraAdapterSet.load(ap);
-			LoraInitializer.validate(adapters, cfg);
-		} else {
-			adapters = LoraInitializer.create(cfg, config.targets(), config.rank(), config.alpha(),
-					new Random(config.seed()));
+			if (Files.exists(ap)) {
+				adapters = LoraAdapterSet.load(ap);
+				LoraInitializer.validate(adapters, cfg);
+				DoraInitializer.verifyFingerprints(r, adapters);
+				DoraInitializer.attachMissingDoraState(r, cfg, adapters);
+			} else if (config.mode() == LoraMode.DORA) {
+				adapters = DoraInitializer.create(r, cfg, config.targets(), config.adapterConfig(),
+						new Random(config.seed()));
+			} else {
+				adapters = LoraInitializer.create(cfg, config.targets(), config.adapterConfig(),
+						new Random(config.seed()));
+			}
 		}
 
 		ShardAssignment assignment = new ShardAssignment("lora-node", "localhost", 0, 0, cfg.numLayers(), true, true);
@@ -95,7 +106,7 @@ public final class LoraTrainer implements AutoCloseable {
 		LoraTrainableHandler handler = LoraTrainableHandler.load(modelPath, ctx, adapters);
 		LoraAdamOptimizer optimizer = new LoraAdamOptimizer(config.learningRate(), 0.9, 0.999, 1e-8,
 				config.weightDecay(), config.loraPlusRatio());
-		return new LoraTrainer(handler, tokenizer, optimizer, adapters, ap, config, cfg);
+		return new LoraTrainer(handler, tokenizer, optimizer, adapters, ap, modelPath, config, cfg);
 	}
 
 	/**
@@ -180,11 +191,19 @@ public final class LoraTrainer implements AutoCloseable {
 
 	/**
 	 * Recreate adapters from the training config (full reinitialization of A and B)
-	 * and persist them so the next open does not reload stale weights.
+	 * and persist them so the next open does not reload stale weights. DoRA also
+	 * rereads base row norms and fingerprints.
 	 */
 	public void resetAdapters() throws IOException {
-		LoraAdapterSet fresh = LoraInitializer.create(modelConfig, config.targets(), config.rank(), config.alpha(),
-				new Random(config.seed()));
+		LoraAdapterSet fresh;
+		try (GgufReader r = GgufReader.open(modelPath)) {
+			if (config.mode() == LoraMode.DORA)
+				fresh = DoraInitializer.create(r, modelConfig, config.targets(), config.adapterConfig(),
+						new Random(config.seed()));
+			else
+				fresh = LoraInitializer.create(modelConfig, config.targets(), config.adapterConfig(),
+						new Random(config.seed()));
+		}
 		adapters.resetFrom(fresh, new Random(config.seed()));
 		optimizer.reset();
 		save();

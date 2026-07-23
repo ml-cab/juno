@@ -1,5 +1,21 @@
 ## Status
 
+**Session 37** — LoRA Tier 3 (phase 1–2): rsLoRA, Kaiming, checkpoint v2, DoRA.
+
+### LoRA advanced adapters (Tier 3)
+
+- Explicit adapter metadata: `LoraAdapterConfig` with `LoraScaling`, `LoraInitialization`, `LoraMode`.
+- rsLoRA scale `alpha/√rank`; PEFT-compatible Kaiming-uniform A init (legacy-normal retained for compatibility overloads).
+- Checkpoint version 2 (length-delimited) with declared alpha, scaling, init, mode, optional DoRA magnitude and base-tensor fingerprints; v1 still loads.
+- Canonical detached-norm DoRA (`DoraMagnitude`, `DoraProjection`); magnitude is an AdamW parameter group with decay off.
+- `DoraInitializer` builds magnitudes/fingerprints from GGUF dequant; merge applies LoRA/rsLoRA/DoRA formulas to F32.
+- CLI/env: `--lora-mode`, `--lora-scaling`, `--lora-init` (`LORA_MODE`, `LORA_SCALING`, `LORA_INIT`).
+- DoRA norm-refresh cost is not yet production-gated; treat DoRA as correctness-complete pending the Tier 3 benchmark gate.
+
+---
+
+## Status
+
 **Session 36** — LoRA Tier 2: schedules, AdamW, dropout, validation, and LoRA+.
 
 ### LoRA training quality (Tier 2)

@@ -17,8 +17,12 @@ package cab.ml.juno.player;
 
 import java.util.List;
 
+import cab.ml.juno.lora.LoraAdapterConfig;
 import cab.ml.juno.lora.LoraDropout;
+import cab.ml.juno.lora.LoraInitialization;
 import cab.ml.juno.lora.LoraLearningRateSchedule;
+import cab.ml.juno.lora.LoraMode;
+import cab.ml.juno.lora.LoraScaling;
 import cab.ml.juno.node.LoraProjection;
 
 /**
@@ -27,18 +31,17 @@ import cab.ml.juno.node.LoraProjection;
  * <p>
  * Tier 1 fields: projection targets, learning rate, gradient accumulation, and
  * max gradient norm. Tier 2 adds schedule, AdamW decay, LoRA+, dropout, seed,
- * and validation early-stopping. Later tiers extend this builder rather than
- * adding competing {@code LoraTrainer.open} overloads.
+ * and validation early-stopping. Tier 3 adds {@link LoraAdapterConfig} (scaling,
+ * initialization, mode) while retaining rank/alpha accessors.
  *
  * <p>
- * Rank and alpha live here until Tier 3 introduces {@code LoraAdapterConfig};
- * keep them separable from algorithm-mode metadata.
+ * Later tiers extend this builder rather than adding competing
+ * {@code LoraTrainer.open} overloads.
  */
 public final class LoraTrainingConfig {
 
 	private final List<LoraProjection> targets;
-	private final int rank;
-	private final float alpha;
+	private final LoraAdapterConfig adapterConfig;
 	private final double learningRate;
 	private final int gradientAccumulationSteps;
 	private final float maxGradNorm;
@@ -56,8 +59,7 @@ public final class LoraTrainingConfig {
 
 	private LoraTrainingConfig(Builder b) {
 		this.targets = List.copyOf(b.targets);
-		this.rank = b.rank;
-		this.alpha = b.alpha;
+		this.adapterConfig = b.adapterConfig;
 		this.learningRate = b.learningRate;
 		this.gradientAccumulationSteps = b.gradientAccumulationSteps;
 		this.maxGradNorm = b.maxGradNorm;
@@ -78,12 +80,28 @@ public final class LoraTrainingConfig {
 		return targets;
 	}
 
+	public LoraAdapterConfig adapterConfig() {
+		return adapterConfig;
+	}
+
 	public int rank() {
-		return rank;
+		return adapterConfig.rank();
 	}
 
 	public float alpha() {
-		return alpha;
+		return adapterConfig.alpha();
+	}
+
+	public LoraScaling scaling() {
+		return adapterConfig.scaling();
+	}
+
+	public LoraInitialization initialization() {
+		return adapterConfig.initialization();
+	}
+
+	public LoraMode mode() {
+		return adapterConfig.mode();
 	}
 
 	public double learningRate() {
@@ -150,6 +168,10 @@ public final class LoraTrainingConfig {
 		private List<LoraProjection> targets = LoraProjection.qv();
 		private int rank = 8;
 		private float alpha = 8f;
+		private LoraScaling scaling = LoraScaling.STANDARD;
+		private LoraInitialization initialization = LoraInitialization.KAIMING_UNIFORM;
+		private LoraMode mode = LoraMode.LORA;
+		private LoraAdapterConfig adapterConfig;
 		private double learningRate = 1e-4;
 		private int gradientAccumulationSteps = 1;
 		private float maxGradNorm = 1.0f;
@@ -185,6 +207,33 @@ public final class LoraTrainingConfig {
 
 		public Builder alpha(float alpha) {
 			this.alpha = alpha;
+			return this;
+		}
+
+		public Builder scaling(LoraScaling scaling) {
+			if (scaling == null)
+				throw new IllegalArgumentException("scaling must not be null");
+			this.scaling = scaling;
+			return this;
+		}
+
+		public Builder initialization(LoraInitialization initialization) {
+			if (initialization == null)
+				throw new IllegalArgumentException("initialization must not be null");
+			this.initialization = initialization;
+			return this;
+		}
+
+		public Builder mode(LoraMode mode) {
+			if (mode == null)
+				throw new IllegalArgumentException("mode must not be null");
+			this.mode = mode;
+			return this;
+		}
+
+		/** Override rank/alpha/scaling/init/mode with an explicit adapter config. */
+		public Builder adapterConfig(LoraAdapterConfig adapterConfig) {
+			this.adapterConfig = adapterConfig;
 			return this;
 		}
 
@@ -286,6 +335,15 @@ public final class LoraTrainingConfig {
 				alpha = rank;
 			if (minLearningRate > learningRate)
 				throw new IllegalArgumentException("minLearningRate must be <= learningRate");
+			if (adapterConfig == null)
+				adapterConfig = LoraAdapterConfig.of(rank, alpha, scaling, initialization, mode);
+			else {
+				this.rank = adapterConfig.rank();
+				this.alpha = adapterConfig.alpha();
+				this.scaling = adapterConfig.scaling();
+				this.initialization = adapterConfig.initialization();
+				this.mode = adapterConfig.mode();
+			}
 			return new LoraTrainingConfig(this);
 		}
 	}

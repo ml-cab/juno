@@ -507,6 +507,9 @@ cmd_lora() {
   local lora_validation_split="${LORA_VALIDATION_SPLIT:-0}"
   local lora_validation_patience="${LORA_VALIDATION_PATIENCE:-0}"
   local lora_validation_min_delta="${LORA_VALIDATION_MIN_DELTA:-0}"
+  local lora_mode="${LORA_MODE:-lora}"
+  local lora_scaling="${LORA_SCALING:-standard}"
+  local lora_init="${LORA_INIT:-kaiming-uniform}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.7}"
   local top_k="${TOP_K:-50}"
@@ -550,6 +553,9 @@ cmd_lora() {
       --lora-validation-split) lora_validation_split="$2"; shift 2 ;;
       --lora-validation-patience) lora_validation_patience="$2"; shift 2 ;;
       --lora-validation-min-delta) lora_validation_min_delta="$2"; shift 2 ;;
+      --lora-mode) lora_mode="$2"; shift 2 ;;
+      --lora-scaling) lora_scaling="$2"; shift 2 ;;
+      --lora-init) lora_init="$2"; shift 2 ;;
       --max-tokens)   max_tokens="$2";  shift 2 ;;
       --temperature)  temperature="$2"; shift 2 ;;
       --top-k)        top_k="$2";       shift 2 ;;
@@ -602,6 +608,9 @@ cmd_lora() {
         echo "    --lora-validation-split F  Held-out unit fraction (default: 0)"
         echo "    --lora-validation-patience N  Early-stop patience (default: 0=off)"
         echo "    --lora-validation-min-delta F  Min val improvement (default: 0)"
+        echo "    --lora-mode lora|dora       Adapter algorithm (default: lora)"
+        echo "    --lora-scaling standard|rslora  Scale formula (default: standard)"
+        echo "    --lora-init kaiming-uniform|legacy-normal  A init (default: kaiming-uniform)"
         echo ""
         echo "  Generation (used for chat inference):"
         echo "    --max-tokens N          (default 200)"
@@ -643,6 +652,7 @@ cmd_lora() {
         echo "    LORA_LR_SCHEDULE  LORA_WARMUP_STEPS  LORA_MIN_LR  LORA_WEIGHT_DECAY"
         echo "    LORA_PLUS_RATIO  LORA_DROPOUT  LORA_SEED  LORA_VALIDATION_SPLIT"
         echo "    LORA_VALIDATION_PATIENCE  LORA_VALIDATION_MIN_DELTA"
+        echo "    LORA_MODE  LORA_SCALING  LORA_INIT"
         echo "    MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
         echo ""
         echo "  Examples:"
@@ -726,6 +736,9 @@ cmd_lora() {
     --lora-validation-split "$lora_validation_split" \
     --lora-validation-patience "$lora_validation_patience" \
     --lora-validation-min-delta "$lora_validation_min_delta" \
+    --lora-mode "$lora_mode" \
+    --lora-scaling "$lora_scaling" \
+    --lora-init "$lora_init" \
     --max-tokens  "$max_tokens" \
     --temperature "$temperature" \
     --top-k "$top_k" \

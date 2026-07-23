@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Random;
 
 import cab.ml.juno.lora.LoraAdapter;
+import cab.ml.juno.lora.LoraAdapterConfig;
 import cab.ml.juno.lora.LoraAdapterSet;
 
 /**
@@ -34,20 +35,26 @@ public final class LoraInitializer {
 	/**
 	 * Create adapters for every layer and every projection in {@code targets},
 	 * ordered by increasing layer index then {@link LoraProjection} enum order.
+	 * Uses legacy-normal standard LoRA (compatibility overload).
 	 */
 	public static LoraAdapterSet create(LlamaConfig cfg, Collection<LoraProjection> targets, int rank, float alpha,
+			Random rng) {
+		return create(cfg, targets, LoraAdapterConfig.legacy(rank, alpha), rng);
+	}
+
+	/** Create adapters from explicit {@link LoraAdapterConfig}. */
+	public static LoraAdapterSet create(LlamaConfig cfg, Collection<LoraProjection> targets, LoraAdapterConfig config,
 			Random rng) {
 		List<LoraProjection> ordered = LoraProjection.sortedUnique(targets);
 		if (ordered.isEmpty())
 			throw new IllegalArgumentException("targets must not be empty");
-		if (rank < 1)
-			throw new IllegalArgumentException("rank must be >= 1");
+		if (config.mode() == cab.ml.juno.lora.LoraMode.DORA)
+			throw new IllegalArgumentException("DoRA requires DoraInitializer.create (needs GGUF tensors)");
 
 		LoraAdapterSet set = new LoraAdapterSet();
 		for (int li = 0; li < cfg.numLayers(); li++) {
 			for (LoraProjection proj : ordered) {
-				set.add(li, proj.key(),
-						new LoraAdapter(rank, proj.inDim(cfg), proj.outDim(cfg), alpha, rng));
+				set.add(li, proj.key(), new LoraAdapter(config, proj.inDim(cfg), proj.outDim(cfg), rng));
 			}
 		}
 		return set;

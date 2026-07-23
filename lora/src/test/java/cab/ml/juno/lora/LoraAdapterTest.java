@@ -203,6 +203,123 @@ class LoraAdapterTest {
 			assertThat(loraScale2.gradA()[i]).isCloseTo(loraScale1.gradA()[i] * 2f, within(1e-5f));
 	}
 
+	@Test
+	@DisplayName("legacy ctor keeps standard scale and legacy-normal init")
+	void legacy_ctor_metadata() {
+		LoraAdapter a = new LoraAdapter(4, 8, 16, 8f, rng);
+		assertThat(a.scale).isEqualTo(2f);
+		assertThat(a.alpha).isEqualTo(8f);
+		assertThat(a.scaling).isEqualTo(LoraScaling.STANDARD);
+		assertThat(a.initialization).isEqualTo(LoraInitialization.LEGACY_NORMAL);
+		assertThat(a.mode).isEqualTo(LoraMode.LORA);
+	}
+
+	@Nested
+	@DisplayName("rsLoRA and Kaiming")
+	class RsLoraAndKaiming {
+
+		@Test
+		@DisplayName("rsLoRA scale is alpha/sqrt(rank) and drives forward/backward")
+		void rslora_scale_and_gradients() {
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(4, 8f, LoraScaling.RANK_STABILIZED,
+					LoraInitialization.LEGACY_NORMAL, LoraMode.LORA);
+			assertThat(cfg.effectiveScale()).isCloseTo(4f, within(1e-6f));
+
+			LoraAdapter rs = makeNonZero(cfg, 8, 16);
+			LoraAdapter std = LoraAdapter.fromWeights(
+					LoraAdapterConfig.legacy(4, 16f), // scale = 4 under standard
+					8, 16, rs.a().clone(), rs.b().clone());
+			assertThat(rs.scale).isCloseTo(std.scale, within(1e-6f));
+
+			float[] x = randomVec(8, 70);
+			float[] g = randomVec(16, 71);
+			assertThat(rs.forward(x)).containsExactly(std.forward(x));
+			rs.backward(g, x);
+			std.backward(g, x);
+			assertThat(rs.gradA()).containsExactly(std.gradA());
+			assertThat(rs.gradB()).containsExactly(std.gradB());
+		}
+
+		@Test
+		@DisplayName("rsLoRA finite-difference gradients match analytical")
+		void rslora_finite_differences() {
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(4, 8f, LoraScaling.RANK_STABILIZED,
+					LoraInitialization.LEGACY_NORMAL, LoraMode.LORA);
+			LoraAdapter lora = makeNonZero(cfg, 8, 16);
+			float[] x = randomVec(8, 72);
+			float[] g = randomVec(16, 73);
+			checkGradA(lora, x, g, TOL);
+			checkGradB(lora, x, g, TOL);
+			checkGradX(lora, x, g, TOL);
+		}
+
+		@Test
+		@DisplayName("Kaiming-uniform A is in [-1/sqrt(in), +1/sqrt(in)] and B is zero")
+		void kaiming_bounds_and_zero_b() {
+			int in = 64;
+			float bound = 1f / (float) Math.sqrt(in);
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(8, 8f, LoraScaling.STANDARD,
+					LoraInitialization.KAIMING_UNIFORM, LoraMode.LORA);
+			LoraAdapter a = new LoraAdapter(cfg, in, 32, new Random(123));
+			for (float v : a.a())
+				assertThat(v).isBetween(-bound, bound);
+			assertThat(a.b()).containsOnly(0f);
+		}
+
+		@Test
+		@DisplayName("Kaiming init is deterministic for a fixed seed")
+		void kaiming_deterministic() {
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(4, 4f);
+			LoraAdapter a = new LoraAdapter(cfg, 16, 8, new Random(99));
+			LoraAdapter b = new LoraAdapter(cfg, 16, 8, new Random(99));
+			assertThat(a.a()).containsExactly(b.a());
+		}
+
+		@Test
+		@DisplayName("Kaiming samples cover both signs with mean near zero")
+		void kaiming_statistics() {
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(16, 16f);
+			LoraAdapter a = new LoraAdapter(cfg, 128, 64, new Random(7));
+			double sum = 0;
+			int neg = 0, pos = 0;
+			for (float v : a.a()) {
+				sum += v;
+				if (v < 0)
+					neg++;
+				else if (v > 0)
+					pos++;
+			}
+			assertThat(neg).isGreaterThan(100);
+			assertThat(pos).isGreaterThan(100);
+			assertThat(sum / a.a().length).isCloseTo(0.0, within(0.05));
+		}
+
+		@Test
+		@DisplayName("fromWeights does not randomize — loads A/B directly")
+		void from_weights_direct_load() {
+			float[] a = new float[] { 1f, 2f, 3f, 4f };
+			float[] b = new float[] { 5f, 6f, 7f, 8f };
+			LoraAdapter loaded = LoraAdapter.fromWeights(2, 2, 2, 2f, a, b);
+			assertThat(loaded.a()).containsExactly(1f, 2f, 3f, 4f);
+			assertThat(loaded.b()).containsExactly(5f, 6f, 7f, 8f);
+			assertThat(loaded.initialization).isEqualTo(LoraInitialization.LEGACY_NORMAL);
+		}
+
+		@Test
+		@DisplayName("reinitialize respects Kaiming mode")
+		void reinitialize_kaiming() {
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(4, 4f);
+			LoraAdapter a = new LoraAdapter(cfg, 16, 8, new Random(1));
+			for (int i = 0; i < a.b().length; i++)
+				a.b()[i] = 1f;
+			a.reinitialize(new Random(2));
+			float bound = 1f / (float) Math.sqrt(16);
+			for (float v : a.a())
+				assertThat(v).isBetween(-bound, bound);
+			assertThat(a.b()).containsOnly(0f);
+		}
+	}
+
 	// ── Deterministic train-only dropout ──────────────────────────────────────
 
 	@Nested
@@ -354,9 +471,11 @@ class LoraAdapterTest {
 	 * non-trivial paths through B.
 	 */
 	private LoraAdapter makeNonZero(int rank, int inDim, int outDim, float alpha) {
-		LoraAdapter lora = new LoraAdapter(rank, inDim, outDim, alpha, rng);
-		// B starts at zero; initialise with small random values so the backward
-		// path through B is exercised
+		return makeNonZero(LoraAdapterConfig.legacy(rank, alpha), inDim, outDim);
+	}
+
+	private LoraAdapter makeNonZero(LoraAdapterConfig config, int inDim, int outDim) {
+		LoraAdapter lora = new LoraAdapter(config, inDim, outDim, rng);
 		Random b = new Random(99);
 		for (int i = 0; i < lora.b().length; i++)
 			lora.b()[i] = (float) (b.nextGaussian() * 0.02);

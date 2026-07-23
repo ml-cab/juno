@@ -15,8 +15,11 @@
  */
 package cab.ml.juno.node;
 
+import cab.ml.juno.lora.DoraMagnitude;
+import cab.ml.juno.lora.DoraProjection;
 import cab.ml.juno.lora.LoraAdapter;
 import cab.ml.juno.lora.LoraAdapterSet;
+import cab.ml.juno.lora.LoraMode;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -104,14 +107,14 @@ public final class LoraMerge {
 	public static Result merge(Path modelPath, Path loraPath, Path outputPath) throws IOException {
 		LoraAdapterSet adapters = LoraAdapterSet.load(loraPath);
 
-		// Build tensor-name -> LoraAdapter lookup via LoraProjection metadata
-		Map<String, LoraAdapter> adapterByTensor = new java.util.LinkedHashMap<>();
+		// Build tensor-name -> adapter key lookup via LoraProjection metadata
+		Map<String, String> keyByTensor = new java.util.LinkedHashMap<>();
 		List<String> skipped = new ArrayList<>();
 		for (Map.Entry<String, LoraAdapter> entry : adapters.asMap().entrySet()) {
 			String key = entry.getKey();
 			int layer = LoraAdapterSet.keyLayer(key);
 			LoraProjection proj = LoraProjection.fromKey(LoraAdapterSet.keyProj(key));
-			adapterByTensor.put(proj.ggufTensorName(layer), entry.getValue());
+			keyByTensor.put(proj.ggufTensorName(layer), key);
 		}
 
 		List<String> patched = new ArrayList<>();
@@ -121,11 +124,13 @@ public final class LoraMerge {
 			 FileChannel outCh = FileChannel.open(outputPath,
 					 StandardOpenOption.WRITE, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
 
+			DoraInitializer.verifyFingerprints(reader, adapters);
+
 			// Remove adapters whose tensor does not exist in this model
-			for (String tName : new ArrayList<>(adapterByTensor.keySet()))
+			for (String tName : new ArrayList<>(keyByTensor.keySet()))
 				if (!reader.hasTensor(tName)) {
 					skipped.add(tName + " (tensor not in model)");
-					adapterByTensor.remove(tName);
+					keyByTensor.remove(tName);
 				}
 
 			List<String> tensorOrder = reader.tensorOrder();
@@ -137,7 +142,7 @@ public final class LoraMerge {
 			for (int i = 0; i < tensorOrder.size(); i++) {
 				String name = tensorOrder.get(i);
 				newDataOffsets[i] = cursor;
-				cursor += adapterByTensor.containsKey(name)
+				cursor += keyByTensor.containsKey(name)
 						? reader.tensorNelems(name) * 4L
 						: GgufReader.rawByteCount(reader.tensorType(name), reader.tensorNelems(name));
 			}
@@ -151,7 +156,7 @@ public final class LoraMerge {
 			// ── 3. Write new tensor-info section ─────────────────────────────────
 			for (int i = 0; i < tensorOrder.size(); i++) {
 				String name = tensorOrder.get(i);
-				int    type = adapterByTensor.containsKey(name) ? TYPE_F32 : reader.tensorType(name);
+				int    type = keyByTensor.containsKey(name) ? TYPE_F32 : reader.tensorType(name);
 				writeTensorInfoEntry(outCh, name, reader.tensorDims(name), type, newDataOffsets[i]);
 			}
 
@@ -165,11 +170,16 @@ public final class LoraMerge {
 
 			// ── 5. Data section ───────────────────────────────────────────────────
 			for (String name : tensorOrder) {
-				if (adapterByTensor.containsKey(name)) {
-					// Dequantise, apply LoRA delta, store as F32 (full precision)
+				if (keyByTensor.containsKey(name)) {
+					String key = keyByTensor.get(name);
+					LoraAdapter lora = adapters.asMap().get(key);
 					float[] w    = reader.tensor(name);
 					long[]  dims = reader.tensorDims(name);
-					applyDelta(w, adapterByTensor.get(name), (int) dims[1], (int) dims[0]);
+					int outDim = (int) dims[1];
+					int inDim = (int) dims[0];
+					int layer = LoraAdapterSet.keyLayer(key);
+					String proj = LoraAdapterSet.keyProj(key);
+					applyAdapter(w, lora, adapters.getMagnitude(layer, proj), outDim, inDim);
 					ByteBuffer f32 = ByteBuffer.allocate(w.length * 4).order(ByteOrder.LITTLE_ENDIAN);
 					for (float f : w) f32.putFloat(f);
 					f32.flip();
@@ -200,7 +210,42 @@ public final class LoraMerge {
 		ch.write(buf);
 	}
 
-	// ── LoRA delta ────────────────────────────────────────────────────────────
+	// ── LoRA / rsLoRA / DoRA merge formulas ───────────────────────────────────
+
+	/**
+	 * Apply adapter to dense {@code w} (row-major out×in) in place.
+	 * <ul>
+	 * <li>LoRA/rsLoRA: {@code W += scale·B·A}
+	 * <li>DoRA: {@code W ← (magnitude/‖direction‖) ⊙ direction} with
+	 * {@code direction = W + scale·B·A}
+	 * </ul>
+	 */
+	static void applyAdapter(float[] w, LoraAdapter lora, DoraMagnitude magnitude, int outDim, int inDim) {
+		if (lora.outDim != outDim || lora.inDim != inDim)
+			throw new IllegalArgumentException("adapter/tensor dimension mismatch");
+		applyDelta(w, lora, outDim, inDim);
+		if (lora.mode != LoraMode.DORA)
+			return;
+		if (magnitude == null)
+			throw new IllegalArgumentException("DoRA merge requires magnitude");
+		if (magnitude.length() != outDim)
+			throw new IllegalArgumentException("DoRA magnitude length mismatch");
+		float[] mag = magnitude.values();
+		for (int r = 0; r < outDim; r++) {
+			int base = r * inDim;
+			double sumSq = 0;
+			for (int c = 0; c < inDim; c++) {
+				float v = w[base + c];
+				sumSq += (double) v * v;
+			}
+			float norm = (float) Math.sqrt(sumSq);
+			float coeff = mag[r] / Math.max(norm, DoraProjection.EPS);
+			if (!Float.isFinite(coeff))
+				throw new IllegalArgumentException("non-finite DoRA merge coefficient at row " + r);
+			for (int c = 0; c < inDim; c++)
+				w[base + c] *= coeff;
+		}
+	}
 
 	static void applyDelta(float[] w, LoraAdapter lora, int outDim, int inDim) {
 		float[] a = lora.a(), b = lora.b();

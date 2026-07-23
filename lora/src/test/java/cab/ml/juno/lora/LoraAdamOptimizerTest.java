@@ -368,6 +368,75 @@ class LoraAdamOptimizerTest {
 		assertThat(avMoved).isTrue();
 	}
 
+	@Test
+	@DisplayName("DoRA magnitude updates with independent moments and no weight decay")
+	void magnitude_update_no_decay() {
+		LoraAdapterSet set = new LoraAdapterSet();
+		LoraAdapter a = new LoraAdapter(
+				LoraAdapterConfig.of(2, 2f, LoraScaling.STANDARD, LoraInitialization.LEGACY_NORMAL, LoraMode.DORA), 4, 3,
+				new Random(1));
+		set.add(0, "wq", a);
+		DoraMagnitude mag = DoraMagnitude.fromValues(new float[] { 1f, 2f, 3f });
+		set.add(0, "wq", a);
+		set.putMagnitude(0, "wq", mag);
+		for (int i = 0; i < mag.grad().length; i++)
+			mag.grad()[i] = 0.5f;
+		float[] before = mag.values().clone();
+		long gen = set.doraGeneration();
+
+		LoraAdamOptimizer opt = new LoraAdamOptimizer(1e-2, 0.9, 0.999, 1e-8, 0.5); // heavy decay on A only
+		opt.step(set);
+
+		for (int i = 0; i < before.length; i++)
+			assertThat(mag.values()[i]).isLessThan(before[i]);
+		// With positive grad and no decay, update matches decay=0 reference
+		LoraAdapterSet set2 = new LoraAdapterSet();
+		LoraAdapter a2 = new LoraAdapter(
+				LoraAdapterConfig.of(2, 2f, LoraScaling.STANDARD, LoraInitialization.LEGACY_NORMAL, LoraMode.DORA), 4, 3,
+				new Random(1));
+		set2.add(0, "wq", a2);
+		DoraMagnitude mag2 = DoraMagnitude.fromValues(new float[] { 1f, 2f, 3f });
+		set2.putMagnitude(0, "wq", mag2);
+		for (int i = 0; i < mag2.grad().length; i++)
+			mag2.grad()[i] = 0.5f;
+		LoraAdamOptimizer opt2 = new LoraAdamOptimizer(1e-2, 0.9, 0.999, 1e-8, 0.0);
+		opt2.step(set2);
+		assertThat(mag.values()).containsExactly(mag2.values());
+		assertThat(set.doraGeneration()).isEqualTo(gen + 1);
+	}
+
+	@Test
+	@DisplayName("reset() clears magnitude moments")
+	void reset_clears_magnitude_moments() {
+		LoraAdapterSet set = new LoraAdapterSet();
+		LoraAdapter a = new LoraAdapter(
+				LoraAdapterConfig.of(2, 2f, LoraScaling.STANDARD, LoraInitialization.LEGACY_NORMAL, LoraMode.DORA), 4, 2,
+				new Random(2));
+		set.add(0, "wv", a);
+		DoraMagnitude mag = DoraMagnitude.fromValues(new float[] { 1f, 1f });
+		set.putMagnitude(0, "wv", mag);
+		mag.grad()[0] = 1f;
+		LoraAdamOptimizer opt = LoraAdamOptimizer.defaults(1e-2);
+		opt.step(set);
+		float afterFirst = mag.values()[0];
+		opt.reset();
+		mag.values()[0] = 1f;
+		mag.grad()[0] = 1f;
+		opt.step(set);
+		// Fresh moments → same first-step magnitude as an untouched optimizer
+		LoraAdamOptimizer fresh = LoraAdamOptimizer.defaults(1e-2);
+		DoraMagnitude magFresh = DoraMagnitude.fromValues(new float[] { 1f, 1f });
+		LoraAdapterSet setFresh = new LoraAdapterSet();
+		setFresh.add(0, "wv", new LoraAdapter(
+				LoraAdapterConfig.of(2, 2f, LoraScaling.STANDARD, LoraInitialization.LEGACY_NORMAL, LoraMode.DORA), 4, 2,
+				new Random(2)));
+		setFresh.putMagnitude(0, "wv", magFresh);
+		magFresh.grad()[0] = 1f;
+		fresh.step(setFresh);
+		assertThat(mag.values()[0]).isEqualTo(magFresh.values()[0]);
+		assertThat(afterFirst).isEqualTo(magFresh.values()[0]);
+	}
+
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
 	private LoraAdapter makeNonZero(int rank, int in, int out, float alpha) {

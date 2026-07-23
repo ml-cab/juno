@@ -56,7 +56,10 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 |------|---------|-------------|
 | `--lora-path PATH` | `<model>.lora` | Adapter checkpoint (auto-loaded if exists) |
 | `--lora-rank N` | `8` | Low-rank bottleneck dimension |
-| `--lora-alpha F` | `= rank` | Scaling factor α (effective scale = α/rank) |
+| `--lora-alpha F` | `= rank` | Declared α (standard scale = α/rank; rsLoRA = α/√rank) |
+| `--lora-mode` | `lora` | `lora` or `dora` |
+| `--lora-scaling` | `standard` | `standard` or `rslora` |
+| `--lora-init` | `kaiming-uniform` | `kaiming-uniform` or `legacy-normal` |
 | `--lora-lr F` | `1e-4` | Peak / base AdamW learning rate |
 | `--lora-max-iters N` | `50` | Max training passes per `/train` or `/train-qa` (safety cap) |
 | `--lora-loss-target-text F` | `1.8` | Stop `/train` when loss ≤ F |

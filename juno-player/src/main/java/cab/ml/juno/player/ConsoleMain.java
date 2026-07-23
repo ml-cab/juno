@@ -53,6 +53,7 @@ import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.CudaMatVec;
 import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
+import cab.ml.juno.node.DoraInitializer;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
 
@@ -174,20 +175,33 @@ public final class ConsoleMain {
 	private static float loraValidationSplit = 0f;
 	private static int loraValidationPatience = 0;
 	private static float loraValidationMinDelta = 0f;
+	private static String loraAdapterMode = "lora";
+	private static String loraScaling = "standard";
+	private static String loraInit = "kaiming-uniform";
 	private static LlamaConfig loraModelConfig; // set in runLoraRepl for /reset
 
 	private static LoraTrainingConfig currentTrainingConfig() {
-		return LoraTrainingConfig.builder().rank(loraRank).alpha(loraAlpha < 0 ? loraRank : loraAlpha)
-				.learningRate(loraLr).targets(loraTargets).gradientAccumulationSteps(loraGradientAccumulation)
-				.maxGradNorm(loraMaxGradNorm)
-				.lrSchedule(switch (loraLrSchedule.strip().toLowerCase(Locale.ROOT)) {
-				case "constant" -> cab.ml.juno.lora.LoraLearningRateSchedule.Mode.CONSTANT;
-				case "cosine" -> cab.ml.juno.lora.LoraLearningRateSchedule.Mode.COSINE;
-				default -> throw new IllegalArgumentException("bad lr schedule: " + loraLrSchedule);
-				}).minLearningRate(loraMinLr).warmupUpdates(loraWarmupSteps).weightDecay(loraWeightDecay)
-				.loraPlusRatio(loraPlusRatio).dropout(loraDropout).seed(loraSeed)
-				.validationSplit(loraValidationSplit).validationPatience(loraValidationPatience)
-				.validationMinDelta(loraValidationMinDelta).build();
+		LoraCliOptions o = new LoraCliOptions();
+		o.rank = loraRank;
+		o.alpha = loraAlpha;
+		o.lr = loraLr;
+		o.targets = loraTargets;
+		o.gradientAccumulation = loraGradientAccumulation;
+		o.maxGradNorm = loraMaxGradNorm;
+		o.lrSchedule = loraLrSchedule;
+		o.warmupSteps = loraWarmupSteps;
+		o.minLr = loraMinLr;
+		o.weightDecay = loraWeightDecay;
+		o.loraPlusRatio = loraPlusRatio;
+		o.dropout = loraDropout;
+		o.seed = loraSeed;
+		o.validationSplit = loraValidationSplit;
+		o.validationPatience = loraValidationPatience;
+		o.validationMinDelta = loraValidationMinDelta;
+		o.mode = loraAdapterMode;
+		o.scaling = loraScaling;
+		o.init = loraInit;
+		return o.toTrainingConfig();
 	}
 
 	private static SamplingParams samplingParamsFromCli() {
@@ -277,6 +291,9 @@ public final class ConsoleMain {
 		loraValidationSplit = env.validationSplit;
 		loraValidationPatience = env.validationPatience;
 		loraValidationMinDelta = env.validationMinDelta;
+		loraAdapterMode = env.mode;
+		loraScaling = env.scaling;
+		loraInit = env.init;
 	}
 
 	private static void parseArgs(String[] args) {
@@ -455,6 +472,18 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					loraValidationMinDelta = parseFloat(args[++i], 0f);
 				break;
+			case "--lora-mode":
+				if (i + 1 < args.length)
+					loraAdapterMode = args[++i];
+				break;
+			case "--lora-scaling":
+				if (i + 1 < args.length)
+					loraScaling = args[++i];
+				break;
+			case "--lora-init":
+				if (i + 1 < args.length)
+					loraInit = args[++i];
+				break;
 			// ─────────────────────────────────────────────────────────────────
 			case "--verbose":
 			case "-v":
@@ -507,6 +536,9 @@ public final class ConsoleMain {
 		System.out.println("  --lora-play PATH           Apply a .lora file at inference in local/cluster mode (read-only, no training)");
 		System.out.println("  --lora-rank N              Low-rank bottleneck dimension (default: 8)");
 		System.out.println("  --lora-alpha F             Scale factor alpha (default: same as rank)");
+		System.out.println("  --lora-mode lora|dora      Adapter algorithm (default: lora)");
+		System.out.println("  --lora-scaling standard|rslora  Scale formula (default: standard)");
+		System.out.println("  --lora-init kaiming-uniform|legacy-normal  A init (default: kaiming-uniform)");
 		System.out.println("  --lora-lr F                Adam learning rate (default: 1e-4)");
 		System.out.println("  --lora-max-iters N         Max training passes per /train (default: 50)");
 		System.out.println("  --lora-loss-target-text F  Stop /train when loss <= F (default: 1.8)");
@@ -570,29 +602,39 @@ public final class ConsoleMain {
 
 		LlamaConfig config;
 		Tokenizer tokenizer;
+		LoraAdapterSet adapters;
+		Path adapterFile = Path.of(loraPath);
+		LoraTrainingConfig trainCfg = currentTrainingConfig();
 		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
 			config = LlamaConfig.from(reader);
 			tokenizer = GgufTokenizer.load(reader);
+			if (Files.exists(adapterFile)) {
+				adapters = LoraAdapterSet.load(adapterFile);
+				LoraInitializer.validate(adapters, config);
+				DoraInitializer.verifyFingerprints(reader, adapters);
+				DoraInitializer.attachMissingDoraState(reader, config, adapters);
+				print(Color.GREEN + "  ✔ Loaded checkpoint: " + adapters.size() + " adapters from " + loraPath
+						+ Color.RESET);
+				var sample = adapters.all().get(0);
+				print(Color.DIM + "  checkpoint mode=" + sample.mode + " scaling=" + sample.scaling + " init="
+						+ sample.initialization + " alpha=" + sample.alpha + " scale=" + sample.scale + Color.RESET);
+				print(Color.YELLOW
+						+ "  ⚠ Continuing on prior weights. If every reply is the same answer, run /reset before /train-qa."
+						+ Color.RESET);
+			} else if (trainCfg.mode() == cab.ml.juno.lora.LoraMode.DORA) {
+				adapters = DoraInitializer.create(reader, config, trainCfg.targets(), trainCfg.adapterConfig(),
+						new Random(loraSeed));
+				print(Color.YELLOW + "  ✦ New DoRA adapters initialised (" + adapters.size() + " total · targets="
+						+ loraTargets + " · /save to persist)" + Color.RESET);
+			} else {
+				adapters = LoraInitializer.create(config, trainCfg.targets(), trainCfg.adapterConfig(),
+						new Random(loraSeed));
+				print(Color.YELLOW + "  ✦ New adapters initialised (" + adapters.size() + " total · targets="
+						+ loraTargets + " scaling=" + trainCfg.scaling() + " init=" + trainCfg.initialization()
+						+ " · /save to persist)" + Color.RESET);
+			}
 		}
 		loraModelConfig = config;
-
-		// Load or create adapter set
-		LoraAdapterSet adapters;
-		Path adapterFile = Path.of(loraPath);
-		if (Files.exists(adapterFile)) {
-			adapters = LoraAdapterSet.load(adapterFile);
-			LoraInitializer.validate(adapters, config);
-			print(Color.GREEN + "  ✔ Loaded checkpoint: " + adapters.size() + " adapters from " + loraPath
-					+ Color.RESET);
-			print(Color.YELLOW
-					+ "  ⚠ Continuing on prior weights. If every reply is the same answer, run /reset before /train-qa."
-					+ Color.RESET);
-		} else {
-			adapters = LoraInitializer.create(config, LoraProjection.parseTargets(loraTargets), loraRank, loraAlpha,
-					new Random(loraSeed));
-			print(Color.YELLOW + "  ✦ New adapters initialised (" + adapters.size() + " total · targets=" + loraTargets
-					+ " · /save to persist)" + Color.RESET);
-		}
 
 		// Single-node ShardContext covering the full model
 		ShardAssignment assignment = new ShardAssignment("lora-node", "localhost", 0, 0, config.numLayers(), true,
@@ -762,9 +804,17 @@ public final class ConsoleMain {
 			System.out.flush();
 			String yn = new BufferedReader(new InputStreamReader(System.in)).readLine();
 			if (yn != null && yn.strip().equalsIgnoreCase("y")) {
-				LoraAdapterSet fresh = LoraInitializer.create(loraModelConfig,
-						LoraProjection.parseTargets(loraTargets), loraRank, loraAlpha, new Random(42));
-				int n = adapters.resetFrom(fresh, new Random(42));
+				LoraTrainingConfig cfg = currentTrainingConfig();
+				LoraAdapterSet fresh;
+				try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
+					if (cfg.mode() == cab.ml.juno.lora.LoraMode.DORA)
+						fresh = DoraInitializer.create(reader, loraModelConfig, cfg.targets(), cfg.adapterConfig(),
+								new Random(loraSeed));
+					else
+						fresh = LoraInitializer.create(loraModelConfig, cfg.targets(), cfg.adapterConfig(),
+								new Random(loraSeed));
+				}
+				int n = adapters.resetFrom(fresh, new Random(loraSeed));
 				optimizer.reset();
 				totalSteps[0] = 0;
 				try {
@@ -784,12 +834,20 @@ public final class ConsoleMain {
 
 		case "/status" -> {
 			long adapterBytes = adapters.all().stream().mapToLong(a -> (a.a().length + a.b().length) * 4L).sum();
+			var sample = adapters.all().isEmpty() ? null : adapters.all().get(0);
 			print("");
 			print(Color.CYAN_BOLD + "  LoRA status" + Color.RESET);
 			print("  ─────────────────────────────────");
 			print("  adapters  : " + adapters.size() + "  (targets=" + loraTargets + ")");
-			print("  rank      : " + loraRank);
-			print("  alpha     : " + loraAlpha + "  (scale = " + (loraAlpha / loraRank) + ")");
+			if (sample != null) {
+				print("  mode      : " + sample.mode + "  ·  scaling=" + sample.scaling + "  ·  init="
+						+ sample.initialization);
+				print("  rank      : " + sample.rank);
+				print("  alpha     : " + sample.alpha + "  (effective scale = " + sample.scale + ")");
+			} else {
+				print("  rank      : " + loraRank);
+				print("  alpha     : " + loraAlpha);
+			}
 			print("  accum     : " + loraGradientAccumulation + "  ·  max-grad-norm=" + loraMaxGradNorm);
 			print("  parameters: " + (adapterBytes / 4) + "  (" + (adapterBytes / 1024) + " KB)");
 			print("  trained   : " + totalSteps[0] + " optimizer updates");

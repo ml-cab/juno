@@ -69,6 +69,8 @@ public final class LoraGradients {
 			sumSq = accumulateSq(adapter.gradA(), sumSq);
 			sumSq = accumulateSq(adapter.gradB(), sumSq);
 		}
+		for (DoraMagnitude mag : adapters.magnitudes().values())
+			sumSq = accumulateSq(mag.grad(), sumSq);
 
 		double rawNorm = Math.sqrt(sumSq);
 		double globalNorm = rawNorm / predictionCount;
@@ -85,6 +87,8 @@ public final class LoraGradients {
 				scaleInPlace(adapter.gradA(), scale);
 				scaleInPlace(adapter.gradB(), scale);
 			}
+			for (DoraMagnitude mag : adapters.magnitudes().values())
+				scaleInPlace(mag.grad(), scale);
 		}
 
 		return new PrepResult(globalNorm, scale, clipped);

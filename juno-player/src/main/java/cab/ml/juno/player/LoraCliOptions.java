@@ -50,6 +50,10 @@ public final class LoraCliOptions {
 	public int validationPatience = 0;
 	public float validationMinDelta = 0f;
 
+	public String mode = "lora";
+	public String scaling = "standard";
+	public String init = "kaiming-uniform";
+
 	public float resolvedAlpha() {
 		return alpha < 0f ? rank : alpha;
 	}
@@ -67,8 +71,35 @@ public final class LoraCliOptions {
 		};
 	}
 
+	public cab.ml.juno.lora.LoraMode parsedMode() {
+		return switch (mode.strip().toLowerCase(Locale.ROOT)) {
+		case "lora" -> cab.ml.juno.lora.LoraMode.LORA;
+		case "dora" -> cab.ml.juno.lora.LoraMode.DORA;
+		default -> throw new IllegalArgumentException("--lora-mode must be lora|dora (got " + mode + ")");
+		};
+	}
+
+	public cab.ml.juno.lora.LoraScaling parsedScaling() {
+		return switch (scaling.strip().toLowerCase(Locale.ROOT)) {
+		case "standard" -> cab.ml.juno.lora.LoraScaling.STANDARD;
+		case "rslora" -> cab.ml.juno.lora.LoraScaling.RANK_STABILIZED;
+		default -> throw new IllegalArgumentException(
+				"--lora-scaling must be standard|rslora (got " + scaling + ")");
+		};
+	}
+
+	public cab.ml.juno.lora.LoraInitialization parsedInit() {
+		return switch (init.strip().toLowerCase(Locale.ROOT)) {
+		case "kaiming-uniform" -> cab.ml.juno.lora.LoraInitialization.KAIMING_UNIFORM;
+		case "legacy-normal" -> cab.ml.juno.lora.LoraInitialization.LEGACY_NORMAL;
+		default -> throw new IllegalArgumentException(
+				"--lora-init must be kaiming-uniform|legacy-normal (got " + init + ")");
+		};
+	}
+
 	public LoraTrainingConfig toTrainingConfig() {
-		return LoraTrainingConfig.builder().rank(rank).alpha(resolvedAlpha()).learningRate(lr).targets(parsedTargets())
+		return LoraTrainingConfig.builder().rank(rank).alpha(resolvedAlpha()).scaling(parsedScaling())
+				.initialization(parsedInit()).mode(parsedMode()).learningRate(lr).targets(parsedTargets())
 				.gradientAccumulationSteps(gradientAccumulation).maxGradNorm(maxGradNorm)
 				.lrSchedule(parsedLrSchedule()).minLearningRate(minLr).warmupUpdates(warmupSteps)
 				.weightDecay(weightDecay).loraPlusRatio(loraPlusRatio).dropout(dropout).seed(seed)
@@ -228,6 +259,24 @@ public final class LoraCliOptions {
 				throw new IllegalArgumentException("--lora-validation-min-delta must be finite and >= 0");
 			yield i + 1;
 		}
+		case "--lora-mode" -> {
+			requireValue(args, i, flag);
+			mode = args[i + 1];
+			parsedMode();
+			yield i + 1;
+		}
+		case "--lora-scaling" -> {
+			requireValue(args, i, flag);
+			scaling = args[i + 1];
+			parsedScaling();
+			yield i + 1;
+		}
+		case "--lora-init" -> {
+			requireValue(args, i, flag);
+			init = args[i + 1];
+			parsedInit();
+			yield i + 1;
+		}
 		default -> -1;
 		};
 	}
@@ -247,7 +296,13 @@ public final class LoraCliOptions {
 		applyEnv(o, "LORA_VALIDATION_SPLIT", v -> o.validationSplit = Float.parseFloat(v));
 		applyEnv(o, "LORA_VALIDATION_PATIENCE", v -> o.validationPatience = Integer.parseInt(v));
 		applyEnv(o, "LORA_VALIDATION_MIN_DELTA", v -> o.validationMinDelta = Float.parseFloat(v));
+		applyEnv(o, "LORA_MODE", v -> o.mode = v);
+		applyEnv(o, "LORA_SCALING", v -> o.scaling = v);
+		applyEnv(o, "LORA_INIT", v -> o.init = v);
 		o.parsedLrSchedule();
+		o.parsedMode();
+		o.parsedScaling();
+		o.parsedInit();
 		cab.ml.juno.lora.LoraDropout.validateRate(o.dropout);
 		return o;
 	}

@@ -15,11 +15,16 @@ For each frozen weight matrix **W**, LoRA inserts two small trainable matrices *
 and **B** (outDim x rank):
 
 ```
-W_effective = W + (alpha/rank) x B x A
+W_effective = W + scale × B × A
 ```
 
-**A** is initialised ~N(0, 0.01). **B** starts at zero. Only **A** and **B** are trained;
-**W** is never modified.
+where `scale = alpha/rank` (standard) or `alpha/√rank` (rsLoRA via `--lora-scaling rslora`).
+New adapters default to Kaiming-uniform A init (`--lora-init kaiming-uniform`); use
+`legacy-normal` for the historical `N(0, 0.01)` path. **B** starts at zero.
+
+Canonical DoRA (`--lora-mode dora`) further rescales each output row:
+`y = (magnitude / ‖W+Δ‖) ⊙ (W·x + Δ)` with the row norm detached from gradients.
+Checkpoints are version 2 (v1 still loads as standard + legacy-normal + LoRA).
 
 Default targets are `wq` and `wv`. Use `--lora-targets all` for all seven dense linear
 projections (`wq,wk,wv,wo,wgate,wup,wdown`). All-linear training and F32 merge increase
