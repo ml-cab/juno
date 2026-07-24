@@ -62,6 +62,7 @@ final class CudaBindings implements GpuBindings {
     static final int D2H = 2; // cudaMemcpyDeviceToHost
 
     // ── cublasOperation_t ─────────────────────────────────────────────────────
+    static final int CUBLAS_OP_N = 0;
     static final int CUBLAS_OP_T = 1;
 
     // ── cublasPointerMode_t ───────────────────────────────────────────────────
@@ -303,6 +304,7 @@ final class CudaBindings implements GpuBindings {
     @Override public MethodHandle blasSgemv()                   { return cublasSgemv; }
     @Override public MethodHandle blasHSSgemvStridedBatched()   { return cublasHSSgemvStridedBatched; }
     @Override public boolean supportsHSSgemv()                  { return true; }
+    @Override public int    opNoTranspose()     { return CUBLAS_OP_N; }
     @Override public int    opTranspose()       { return CUBLAS_OP_T; }
     @Override public int    pointerModeHost()   { return CUBLAS_POINTER_MODE_HOST; }
     @Override public int    devicePropBytes()   { return DEVICE_PROP_BYTES; }

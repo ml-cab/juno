@@ -71,7 +71,7 @@ fires once per optimizer update (includes A/B LR, LoRA+ ratio, dropout).
 | `/train-file <path>` | Fine-tune on a text file (auto-chunked into <= 128-token pieces) |
 | `/train-qa <question> A: <answer>` | Train a single Q&A fact with auto-generated phrasings |
 | `/save` | Save adapter to `--lora-path` |
-| `/reset` | Reinitialize A/B **and overwrite** the `.lora` checkpoint on disk |
+| `/reset` | Reinitialize A/B (and DoRA magnitudes), **clear chat history**, and overwrite the `.lora` checkpoint |
 | `/status` | Rank, alpha, optimizer updates, checkpoint path |
 | `/merge-hint` | Show the `juno merge` command to bake adapter into a standalone GGUF |
 | `/help` | Command reference |
@@ -221,8 +221,11 @@ ConsoleMain (--lora-play PATH)
 **Truncated BPTT.** Gradients do not flow backward through KV-cache entries from earlier
 positions. This avoids O(seqLen^2) backward work with negligible effect on LoRA quality.
 
-**Quantized frozen weights in backward.** The transpose matVec in `backwardLayer` dequantizes
-frozen weights one row at a time: O(hiddenDim) peak extra allocation per layer, not O(model).
+**Frozen weights in backward.** When a GPU backend is active and resident weights fit,
+`LoraTrainableHandler` reuses the same device matrices for forward `W*x` and transpose
+`W^T*g` (`GpuMatVec.sgemvTranspose`). Otherwise the transpose matVec dequantizes frozen
+weights one row at a time on CPU: O(hiddenDim) peak extra allocation per layer, not O(model).
+Tier 4 does not yet claim production “GPU LoRA training”; see `docs/performance.md`.
 
 **Weight decay.** Applied only to **A**, not **B**. B starts at zero; applying decay to it would
 counteract learning from scratch.

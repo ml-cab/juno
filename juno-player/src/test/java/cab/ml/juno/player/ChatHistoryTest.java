@@ -45,4 +45,20 @@ class ChatHistoryTest {
 		assertThat(first).isNotSameAs(second);
 		assertThat(first).isEqualTo(second);
 	}
+
+	@Test
+	@DisplayName("clear() drops messages and rotates sessionId")
+	void clearResetsConversation() {
+		ChatHistory history = new ChatHistory();
+		String oldSession = history.sessionId();
+		history.addUser("What is my name?");
+		history.addAssistant("Johnatan");
+		assertThat(history.size()).isEqualTo(2);
+
+		String returned = history.clear();
+		assertThat(returned).isEqualTo(oldSession);
+		assertThat(history.getMessages()).isEmpty();
+		assertThat(history.size()).isZero();
+		assertThat(history.sessionId()).isNotEqualTo(oldSession);
+	}
 }

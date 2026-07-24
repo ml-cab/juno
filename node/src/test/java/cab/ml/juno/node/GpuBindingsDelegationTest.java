@@ -21,6 +21,13 @@ class GpuBindingsDelegationTest {
     // ── CPU-only: constant accessors accessible without GPU ───────────────────
 
     @Test
+    @DisplayName("CudaBindings.CUBLAS_OP_N is 0 and CUBLAS_OP_T is 1")
+    void cuda_blas_op_constants() {
+        assertThat(CudaBindings.CUBLAS_OP_N).isEqualTo(0);
+        assertThat(CudaBindings.CUBLAS_OP_T).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("CudaBindings.DEVICE_PROP_BYTES matches CUDA 12.x struct size")
     void cuda_device_prop_bytes_matches_known_value() {
         assertThat(CudaBindings.DEVICE_PROP_BYTES).isEqualTo(1512);
@@ -116,8 +123,12 @@ class GpuBindingsDelegationTest {
         assertThat(MatVecBackend.CUDA.label()).isEqualTo("cuda");
         assertThat(MatVecBackend.CUDA_RESIDENT.label()).isEqualTo("cuda-resident");
         assertThat(MatVecBackend.CUDA_RESIDENT_FP16.label()).isEqualTo("cuda-resident-fp16");
+        assertThat(MatVecBackend.CUDA_RESIDENT_TRANSPOSE.label()).isEqualTo("cuda-resident-transpose");
+        assertThat(MatVecBackend.CUDA_RESIDENT_FP16_TRANSPOSE.label()).isEqualTo("cuda-resident-fp16-transpose");
         assertThat(MatVecBackend.ROCM.label()).isEqualTo("rocm");
         assertThat(MatVecBackend.ROCM_RESIDENT.label()).isEqualTo("rocm-resident");
         assertThat(MatVecBackend.ROCM_RESIDENT_FP16.label()).isEqualTo("rocm-resident-fp16");
+        assertThat(MatVecBackend.ROCM_RESIDENT_TRANSPOSE.label()).isEqualTo("rocm-resident-transpose");
+        assertThat(MatVecBackend.ROCM_RESIDENT_FP16_TRANSPOSE.label()).isEqualTo("rocm-resident-fp16-transpose");
     }
 }

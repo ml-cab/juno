@@ -113,6 +113,30 @@ class LoraAdapterSetTest {
 		assertThat(live.get(0, "wv").b()).containsOnly(0f);
 	}
 
+	@Test
+	@DisplayName("resetFrom() bumps doraGeneration and restores DoRA magnitudes")
+	void reset_from_invalidates_dora_and_copies_magnitude() {
+		LoraAdapterConfig cfg = LoraAdapterConfig.of(2, 2f, LoraScaling.STANDARD,
+				LoraInitialization.KAIMING_UNIFORM, LoraMode.DORA);
+
+		LoraAdapterSet live = new LoraAdapterSet();
+		LoraAdapter trained = makeNonZero(cfg, 4, 3, new Random(1));
+		live.add(0, "wq", trained);
+		live.putMagnitude(0, "wq", DoraMagnitude.fromValues(new float[] { 9f, 8f, 7f }));
+		long genBefore = live.doraGeneration();
+
+		LoraAdapterSet fresh = new LoraAdapterSet();
+		LoraAdapter clean = new LoraAdapter(cfg, 4, 3, new Random(42));
+		fresh.add(0, "wq", clean);
+		fresh.putMagnitude(0, "wq", DoraMagnitude.fromValues(new float[] { 1f, 2f, 3f }));
+
+		live.resetFrom(fresh, new Random(7));
+
+		assertThat(live.doraGeneration()).isEqualTo(genBefore + 1);
+		assertThat(live.get(0, "wq").b()).containsOnly(0f);
+		assertThat(live.getMagnitude(0, "wq").values()).containsExactly(1f, 2f, 3f);
+	}
+
 	// ── Serialisation round-trip ──────────────────────────────────────────────
 
 	@Test

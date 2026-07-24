@@ -67,4 +67,21 @@ sealed interface GpuMatVec extends MatVec permits CudaMatVec, RocmMatVec {
      * (FP32 resident, twice the VRAM but functionally correct).
      */
     default boolean supportsHalfResident() { return true; }
+
+    /**
+     * Resident frozen backward: {@code z = W^T * g} for row-major
+     * {@code W[rows,cols]} already on device.
+     *
+     * <p>{@code g} has length {@code rows} (gradient w.r.t. forward output);
+     * result has length {@code cols} (gradient w.r.t. forward input). Uses the
+     * same device buffer as {@link #sgemv(DeviceFloatMatrix, float[])} with BLAS
+     * no-transpose mode (see {@link GpuBindings#opNoTranspose()}).
+     */
+    float[] sgemvTranspose(DeviceFloatMatrix W, float[] g);
+
+    /**
+     * FP16-resident variant of {@link #sgemvTranspose(DeviceFloatMatrix, float[])}.
+     * Activations stay FP32 on the host; the BLAS kernel accumulates in FP32.
+     */
+    float[] sgemvTranspose(DeviceHalfMatrix W, float[] g);
 }

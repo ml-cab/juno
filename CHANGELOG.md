@@ -1,5 +1,24 @@
 ## Status
 
+**Session 38** — LoRA Tier 4 (start): resident transpose primitives and baseline instrumentation.
+
+### LoRA GPU training foundations (Tier 4)
+
+- Vendor-neutral `GpuBindings.opNoTranspose()` (CUDA `CUBLAS_OP_N=0`, ROCm `rocblas_operation_none=111`).
+- `GpuMatVec.sgemvTranspose` for resident FP32/FP16 `W^T * g` (same row-major buffer as forward `OP_T`).
+- `ResidentWeightMatrix` + `LoraTrainableHandler` routes frozen forward and transpose backward through resident GPU weights when uploaded (`supportsHalfResident` FP16 or FP32 fallback).
+- JFR backend labels: `*-resident-transpose` / `*-resident-fp16-transpose`.
+- `LoraTrainEvent` fields for frozen forward/transpose, attention/nonlinear, adapter backward, and transfer (filled when finer instrumentation lands).
+- GPU adjoint tests: `CudaMatVecTransposeTest`, `RocmMatVecTransposeTest` (`GpuMatVecTransposeContractTest`).
+- Baseline section in `docs/performance.md` — hybrid path is not yet marketed as production GPU training.
+- `--lora-train-device` CLI and CPU/GPU gradient parity IT remain next.
+- Fix: `LoraAdapterSet.resetFrom` (REPL `/reset`) bumps DoRA cache generation so inference drops trained magnitude coefficients.
+- Fix: `/reset` also clears REPL chat history and rotates the session id — otherwise multi-turn context still contains the memorized answers.
+
+---
+
+## Status
+
 **Session 37** — LoRA Tier 3 (phase 1–2): rsLoRA, Kaiming, checkpoint v2, DoRA.
 
 ### LoRA advanced adapters (Tier 3)

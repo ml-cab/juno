@@ -100,6 +100,14 @@ class RocmBindingsTest {
 
     @Test
     @Tag("rocm")
+    @DisplayName("OP_NONE = 111 (rocblas_operation_none)")
+    void op_no_transpose_is_rocblas_value() {
+        assumeTrue(RocmBindings.isAvailable(), "Skipping — no ROCm device");
+        assertThat(RocmBindings.instance().opNoTranspose()).isEqualTo(111);
+    }
+
+    @Test
+    @Tag("rocm")
     @DisplayName("OP_TRANSPOSE = 112 (rocblas_operation_transpose)")
     void op_transpose_is_rocblas_value() {
         assumeTrue(RocmBindings.isAvailable(), "Skipping — no ROCm device");

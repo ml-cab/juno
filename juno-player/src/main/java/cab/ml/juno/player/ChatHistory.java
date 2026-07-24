@@ -32,11 +32,12 @@ import cab.ml.juno.tokenizer.ChatMessage;
  */
 public final class ChatHistory {
 
-	private final String sessionId = UUID.randomUUID().toString();
+	private String sessionId = UUID.randomUUID().toString();
 	private final List<ChatMessage> messages = new ArrayList<>();
 
 	/**
 	 * Stable session identifier — share this across all turns of the conversation.
+	 * Changes when {@link #clear()} starts a fresh conversation.
 	 */
 	public String sessionId() {
 		return sessionId;
@@ -50,6 +51,23 @@ public final class ChatHistory {
 	/** Appends an assistant message. */
 	public void addAssistant(String content) {
 		messages.add(ChatMessage.assistant(content));
+	}
+
+	/**
+	 * Drop all turns and rotate {@link #sessionId()} so the next request cannot
+	 * reuse KV-cache blocks from the previous conversation. Returns the old
+	 * session id for {@code GenerationLoop#evictSession}.
+	 */
+	public String clear() {
+		String old = sessionId;
+		messages.clear();
+		sessionId = UUID.randomUUID().toString();
+		return old;
+	}
+
+	/** Number of stored messages (user + assistant). */
+	public int size() {
+		return messages.size();
 	}
 
 	/**

@@ -132,7 +132,8 @@ public final class LoraAdapterSet {
 	 * Reinitialize every adapter in this set. Keys present in {@code fresh} copy
 	 * those weights; any extra keys (e.g. leftover projections) are reinitialized
 	 * locally so ΔW returns to zero. Magnitudes/fingerprints for matching keys are
-	 * copied when present in {@code fresh}.
+	 * copied when present in {@code fresh}. Always bumps
+	 * {@link #doraGeneration()} so DoRA projection coefficient caches refresh.
 	 *
 	 * @return number of adapters reset
 	 */
@@ -159,6 +160,9 @@ public final class LoraAdapterSet {
 				fingerprints.put(k, fp);
 			n++;
 		}
+		// DoRA keeps row coefficients in DoraProjection until generation bumps;
+		// without this, /reset leaves trained magnitude scaling in effect.
+		invalidateDoraCaches();
 		return n;
 	}
 

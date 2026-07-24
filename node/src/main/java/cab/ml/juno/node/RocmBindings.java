@@ -277,6 +277,7 @@ final class RocmBindings implements GpuBindings {
     @Override public MethodHandle blasSgemv()                   { return rocblasSgemv; }
     @Override public MethodHandle blasHSSgemvStridedBatched()   { return rocblasHSSgemvStridedBatched; }
     @Override public boolean supportsHSSgemv()                  { return hssgemvSupported; }
+    @Override public int    opNoTranspose()     { return 111; } // rocblas_operation_none
     @Override public int    opTranspose()       { return 112; } // rocblas_operation_transpose
     @Override public int    pointerModeHost()   { return 0; }   // rocblas_pointer_mode_host
     @Override public int    devicePropBytes()   { return HIP_DEVICE_PROP_BYTES; }

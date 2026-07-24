@@ -36,7 +36,8 @@ import jdk.jfr.RecordingState;
 
 import cab.ml.juno.metrics.MetricsMain;
 
-import cab.ml.juno.coordinator.GenerationLoop;import cab.ml.juno.coordinator.GenerationResult;
+import cab.ml.juno.coordinator.GenerationLoop;
+import cab.ml.juno.coordinator.GenerationResult;
 import cab.ml.juno.health.HealthMain;
 import cab.ml.juno.health.HealthReporter;
 import cab.ml.juno.health.HealthThresholds;
@@ -691,7 +692,8 @@ public final class ConsoleMain {
 
 			// ── LoRA commands ──────────────────────────────────────────────
 			if (line.startsWith("/")) {
-				handleLoraCommand(line, adapters, optimizer, handler, tokenizer, adapterFile, totalStepsTrained, dirty);
+				handleLoraCommand(line, adapters, optimizer, handler, tokenizer, adapterFile, totalStepsTrained, dirty,
+						history, loop);
 				continue;
 			}
 
@@ -740,8 +742,8 @@ public final class ConsoleMain {
 	}
 
 	private static void handleLoraCommand(String line, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
-			LoraTrainableHandler handler, Tokenizer tokenizer, Path adapterFile, int[] totalSteps, boolean[] dirty)
-			throws Exception {
+			LoraTrainableHandler handler, Tokenizer tokenizer, Path adapterFile, int[] totalSteps, boolean[] dirty,
+			ChatHistory history, GenerationLoop loop) throws Exception {
 
 		String[] parts = line.split("\\s+", 2);
 		String cmd = parts[0].toLowerCase();
@@ -817,11 +819,16 @@ public final class ConsoleMain {
 				int n = adapters.resetFrom(fresh, new Random(loraSeed));
 				optimizer.reset();
 				totalSteps[0] = 0;
+				// Drop prior chat turns + KV blocks; otherwise the model echoes
+				// memorized answers still present in the conversation context.
+				String oldSession = history.clear();
+				loop.evictSession(oldSession);
 				try {
 					adapters.save(adapterFile);
 					dirty[0] = false;
 					print(Color.GREEN + "  ✔ Adapters reinitialised (" + n + " · targets=" + loraTargets
 							+ ") and saved → " + adapterFile + Color.RESET);
+					print(Color.DIM + "  Chat history cleared (fresh session)." + Color.RESET);
 				} catch (IOException e) {
 					dirty[0] = true;
 					print(Color.RED + "  ✔ Memory reset, but failed to overwrite " + adapterFile + ": " + e.getMessage()
@@ -885,7 +892,7 @@ public final class ConsoleMain {
 			print("  /train <text>          Fine-tune on raw text (no chat template applied)");
 			print("  /train-file <path>     Fine-tune on a text file (chunks of ~128 tokens)");
 			print("  /save                  Save adapter to " + adapterFile);
-			print("  /reset                 Reinitialise adapters and overwrite checkpoint on disk");
+			print("  /reset                 Reinitialise adapters, clear chat history, overwrite checkpoint");
 			print("  /status                Show adapter info and training statistics");
 			print("  /merge-hint            Explain how to bake adapters into model weights");
 			print("  Regular input          Chat using the current adapter for inference");
