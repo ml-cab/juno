@@ -98,9 +98,14 @@ public record VisionConfig(
     }
 
     /**
-     * Number of tokens passed to the LLM: numPatches + 1 CLS token.
-     * Some models strip the CLS token before projection; this value is the
-     * upper bound. {@link VisionEncoder} documents whether CLS is retained.
+     * {@code numPatches() + 1} — the sequence length used by CLIP-style encoders
+     * that prepend a CLS token ({@code v.class_embd} present).
+     *
+     * <p>For SigLIP-style encoders (e.g. moondream2) that have no CLS token,
+     * the actual sequence length is {@link #numPatches()} and this method over-
+     * counts by one. Prefer {@link VisionEncoder#encode}'s internal logic over
+     * calling this method directly when sizing buffers — {@link VisionEncoder}
+     * derives sequence length from whether {@code v.class_embd} was loaded.
      */
     public int numVisionTokens() {
         return numPatches() + 1;

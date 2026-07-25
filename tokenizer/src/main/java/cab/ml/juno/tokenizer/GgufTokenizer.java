@@ -329,9 +329,37 @@ public final class GgufTokenizer implements Tokenizer {
 		return "<think>".equals(piece) || "</think>".equals(piece);
 	}
 
-	/** Control / user-defined tokens emitted as a single vocab ID (not BPE-split). */
+	/**
+	 * Control / user-defined tokens emitted as a single vocab ID (not BPE-split).
+	 *
+	 * <p>Three families are recognised:
+	 * <ul>
+	 *   <li>{@code <|...|>} — Llama 3+, Qwen2, Phi-3 chat control tokens.</li>
+	 *   <li>Qwen3 thinking markers ({@code <think>}, {@code </think>}).</li>
+	 *   <li>Vision/media placeholder tokens: {@code <image>}, {@code <video>},
+	 *       {@code <audio>}, {@code <pad>}, etc. These are added as type-3
+	 *       (control) tokens by multimodal models such as moondream2, LLaVA,
+	 *       and SmolVLM. The caller already filters on type 3 or 4 — this guard
+	 *       ensures the piece matches a well-formed angle-bracket identifier
+	 *       rather than a BPE merge artefact or a byte token ({@code <0xHH>}).
+	 *   </li>
+	 * </ul>
+	 */
 	private static boolean isAtomicSpecialPiece(String piece) {
-		return (piece.startsWith("<|") && piece.endsWith("|>")) || isQwenThinkingMarker(piece);
+		// <|...|> family
+		if (piece.startsWith("<|") && piece.endsWith("|>")) return true;
+		// Qwen3 thinking markers
+		if (isQwenThinkingMarker(piece)) return true;
+		// Vision/media placeholder tokens: <image>, <video>, <audio>, <pad>, etc.
+		// <0xHH> byte tokens are excluded by the "0x" prefix check.
+		// <|...|> is already handled above and excluded here by the "|" check.
+		if (piece.length() >= 3 && piece.startsWith("<") && piece.endsWith(">")) {
+			String inner = piece.substring(1, piece.length() - 1);
+			if (!inner.isEmpty() && !inner.contains("|") && !inner.contains(" ")
+					&& !inner.contains("\n") && !inner.startsWith("0x"))
+				return true;
+		}
+		return false;
 	}
 
 	private boolean isAtomicSpecialSegment(String segment, Integer id) {

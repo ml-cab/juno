@@ -303,7 +303,7 @@ class VisionEncoderTest {
         float[] w1 = { 1f, 0f, 0f, 1f, 1f, 1f }; // rows: [1,0] [0,1] [1,1]
         float[] b1 = { 0.5f, 0.5f, 0.5f };
 
-        float[] out = VisionEncoder.applyProjector(CPU, x, w1, b1, null, null, hiddenSize, outputDim);
+        float[] out = VisionEncoder.applyProjector(CPU, x, w1, b1, null, null, hiddenSize, outputDim, outputDim);
 
         // row0: 1*1+2*0+0.5=1.5  row1: 1*0+2*1+0.5=2.5  row2: 1*1+2*1+0.5=3.5
         assertThat(out).containsExactly(1.5f, 2.5f, 3.5f);
@@ -319,7 +319,7 @@ class VisionEncoderTest {
         float[] w1 = { 1f, 0f, 0f, 1f }; // identity → mm.0 output = [1, 1] before bias
         float[] w2 = { 1f, 0f, 0f, 1f }; // identity → mm.2 output = GELU(mm.0 output)
 
-        float[] out = VisionEncoder.applyProjector(CPU, x, w1, null, w2, null, hiddenSize, outputDim);
+        float[] out = VisionEncoder.applyProjector(CPU, x, w1, null, w2, null, hiddenSize, outputDim, outputDim);
 
         float expected = VisionEncoder.gelu(1f);
         assertThat(out).containsExactly(expected, expected);
@@ -339,7 +339,7 @@ class VisionEncoderTest {
         float[] w2 = { 1f };
         float[] b2 = { 10f };
 
-        float[] out = VisionEncoder.applyProjector(CPU, x, w1, b1, w2, b2, hiddenSize, outputDim);
+        float[] out = VisionEncoder.applyProjector(CPU, x, w1, b1, w2, b2, hiddenSize, outputDim, outputDim);
 
         assertThat(out).containsExactly(10f); // 0 (mm.2 linear on GELU(0)=0) + b2=10
     }
@@ -354,9 +354,92 @@ class VisionEncoderTest {
         float[] w1 = { 1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f }; // identity
         float[] w2 = { 2f, 0f, 0f, 0f, 2f, 0f, 0f, 0f, 2f }; // 2x scale
 
-        float[] singleLayerOnly = VisionEncoder.applyProjector(CPU, x, w1, null, null, null, hiddenSize, outputDim);
-        float[] fullTwoLayer = VisionEncoder.applyProjector(CPU, x, w1, null, w2, null, hiddenSize, outputDim);
+        float[] singleLayerOnly = VisionEncoder.applyProjector(CPU, x, w1, null, null, null, hiddenSize, outputDim, outputDim);
+        float[] fullTwoLayer = VisionEncoder.applyProjector(CPU, x, w1, null, w2, null, hiddenSize, outputDim, outputDim);
 
         assertThat(fullTwoLayer).isNotEqualTo(singleLayerOnly);
+    }
+
+    @Test
+    @DisplayName("applyProjector: non-square mm.2 (moondream2 pattern: expand then contract) "
+            + "produces finalOutDim-sized output, not mm0OutDim-sized")
+    void applyProjector_nonSquareTwoLayer_producesCorrectFinalDim() {
+        // Simulates moondream2: hidden=2 → mm0OutDim=4 (expand) → finalOutDim=3 (contract)
+        int hiddenSize  = 2;
+        int mm0OutDim   = 4;
+        int finalOutDim = 3;
+        float[] x  = { 1f, 1f };
+        // mm.0: 4-row × 2-col identity-like expand (rows: [1,0] [0,1] [1,1] [0,0])
+        float[] w1 = { 1f, 0f,  0f, 1f,  1f, 1f,  0f, 0f };
+        // mm.2: 3-row × 4-col contract (rows: [1,0,0,0] [0,1,0,0] [0,0,1,0])
+        float[] w2 = { 1f, 0f, 0f, 0f,   0f, 1f, 0f, 0f,   0f, 0f, 1f, 0f };
+
+        float[] out = VisionEncoder.applyProjector(CPU, x, w1, null, w2, null, hiddenSize, mm0OutDim, finalOutDim);
+
+        assertThat(out).hasSize(finalOutDim);
+        // mm.0 output (before GELU): [1,1,2,0]. After GELU: [g(1), g(1), g(2), g(0)=0].
+        // mm.2 contracts first 3 of the 4 mm.0 values (last row of w2 zeros out dim 4).
+        float g1 = VisionEncoder.gelu(1f);
+        float g2 = VisionEncoder.gelu(2f);
+        assertThat(out).containsExactly(g1, g1, g2);
+    }
+
+    // ── buildSequence: CLS-optional sequence construction ─────────────────────
+    // These tests cover the SigLIP (no-CLS) path introduced 2026-07-22 to
+    // support moondream2, whose vision GGUF lacks v.class_embd.
+
+    @Test
+    @DisplayName("buildSequence: null classEmbd returns patches as-is (SigLIP / no-CLS path)")
+    void buildSequence_nullCls_returnsPatchesUnmodified() {
+        float[][] patches = { { 1f, 2f }, { 3f, 4f }, { 5f, 6f } };
+
+        float[][] seq = VisionEncoder.buildSequence(patches, null);
+
+        assertThat(seq).isSameAs(patches); // identical reference — no allocation
+        assertThat(seq.length).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("buildSequence: non-null classEmbd prepends CLS at index 0 (CLIP path)")
+    void buildSequence_nonNullCls_prependsClsToken() {
+        float[][] patches = { { 1f, 2f }, { 3f, 4f } };
+        float[]   cls     = { 9f, 8f };
+
+        float[][] seq = VisionEncoder.buildSequence(patches, cls);
+
+        assertThat(seq.length).isEqualTo(3);
+        // CLS is at position 0, values copied from classEmbd
+        assertThat(seq[0]).containsExactly(9f, 8f);
+        // Original patch arrays are referenced at positions 1..nP
+        assertThat(seq[1]).isSameAs(patches[0]);
+        assertThat(seq[2]).isSameAs(patches[1]);
+    }
+
+    @Test
+    @DisplayName("buildSequence: CLS row is a distinct array — mutating patches[0] does not affect seq[0]")
+    void buildSequence_clsRow_isIsolatedFromCls() {
+        float[][] patches = { { 0f, 0f } };
+        float[]   cls     = { 7f, 7f };
+
+        float[][] seq = VisionEncoder.buildSequence(patches, cls);
+        cls[0] = 0f; // mutate original cls after buildSequence
+
+        assertThat(seq[0][0]).isEqualTo(7f); // seq[0] was copied, not aliased
+    }
+
+    @Test
+    @DisplayName("buildSequence: patchStart = N - nP is 0 without CLS (SigLIP) and 1 with CLS (CLIP)")
+    void buildSequence_patchStartIndex_noClsIsZeroClsIsOne() {
+        int nP = 4;
+        float[][] patches = new float[nP][2];
+
+        float[][] seqNoCls = VisionEncoder.buildSequence(patches, null);
+        float[][] seqCls   = VisionEncoder.buildSequence(patches, new float[2]);
+
+        int patchStartNoCls = seqNoCls.length - nP; // N - nP = nP - nP = 0
+        int patchStartCls   = seqCls.length   - nP; // N - nP = (nP+1) - nP = 1
+
+        assertThat(patchStartNoCls).isZero();
+        assertThat(patchStartCls).isEqualTo(1);
     }
 }

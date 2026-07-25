@@ -195,7 +195,7 @@ public final class LlavaHandlerFactory {
             log.info("[vision] VisionEncoder loaded");
         }
 
-        int imageTokenId = Integer.getInteger("juno.vision.image_token_id", 32000);
+        int imageTokenId = resolveImageTokenId(paths.textModelPath());
         // Use encoder.outputDim() — derived from mm.0.weight's own GGUF shape —
         // not vCfg.projectionDim() (clip.vision.projection_dim metadata), which
         // is not reliable across mmproj exports; see VisionEncoder.outputDim().
@@ -245,7 +245,7 @@ public final class LlavaHandlerFactory {
         }
 
         // Step 3: wrap the text handler with the vision embedding injector.
-        int imageTokenId = Integer.getInteger("juno.vision.image_token_id", 32000);
+        int imageTokenId = resolveImageTokenId(modelPath);
         // encoder.outputDim() (from mm.0.weight's own shape), not
         // vCfg.projectionDim() (unreliable metadata) — see VisionEncoder.outputDim().
         VisionAwareForwardPassHandler visionHandler =
@@ -293,6 +293,56 @@ public final class LlavaHandlerFactory {
         // Merged-file fallback: open the model file itself and hope vision tensors are there.
         log.info("[vision] resolveVisionReader — no embedded vision GGUF found, trying merged-file open");
         return GgufReader.open(paths.visionWeightsPath());
+    }
+
+    /**
+     * Derive the image placeholder token ID for the loaded model.
+     *
+     * <p>Resolution order:
+     * <ol>
+     *   <li>System property {@code juno.vision.image_token_id} — explicit override, always wins.</li>
+     *   <li>Scan {@code tokenizer.ggml.tokens} in the text-model GGUF for the string
+     *       {@code "<image>"}. This covers moondream2 (phi-2 tokenizer, {@code <image>}
+     *       at a model-specific ID well above 32 000) and any future model that registers
+     *       a literal {@code <image>} special token.</li>
+     *   <li>Fallback: {@code 32000} — the LLaVA-1.5 / LLaMA convention, where the
+     *       {@code <image>} token was appended immediately after the 32 000-token LLaMA
+     *       base vocabulary.</li>
+     * </ol>
+     *
+     * <p>This method pairs with the fix to
+     * {@link cab.ml.juno.tokenizer.GgufTokenizer#isAtomicSpecialPiece}, which ensures
+     * that the tokenizer encodes the string {@code "<image>"} as the single special
+     * token ID returned here (rather than BPE-decomposing it into 2–3 sub-tokens).
+     */
+    private static int resolveImageTokenId(Path modelPath) {
+        int fromProp = Integer.getInteger("juno.vision.image_token_id", -1);
+        if (fromProp >= 0) {
+            log.info("[vision] imageTokenId=" + fromProp + " (system property juno.vision.image_token_id)");
+            return fromProp;
+        }
+        // Scan the text-model GGUF tokenizer vocab for "<image>".
+        try (GgufReader r = GgufReader.open(modelPath)) {
+            Object rawTokens = r.meta("tokenizer.ggml.tokens");
+            if (rawTokens instanceof Object[]) {
+                Object[] tokens = (Object[]) rawTokens;
+                for (int i = 0; i < tokens.length; i++) {
+                    if ("<image>".equals(tokens[i])) {
+                        log.info("[vision] imageTokenId=" + i
+                                + " (found <image> at index " + i
+                                + " in tokenizer.ggml.tokens of " + modelPath.getFileName() + ")");
+                        return i;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warning("[vision] resolveImageTokenId: could not scan tokenizer vocab in "
+                    + modelPath.getFileName() + ": " + e.getMessage());
+        }
+        // LLaVA-1.5 / LLaMA default.
+        log.info("[vision] imageTokenId=32000 (LLaVA/LLaMA default;"
+                + " override with -Djuno.vision.image_token_id=<id>)");
+        return 32000;
     }
 
     /**
