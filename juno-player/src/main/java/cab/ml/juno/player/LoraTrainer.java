@@ -33,6 +33,7 @@ import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LoraInitializer;
 import cab.ml.juno.node.LoraTrainableHandler;
+import cab.ml.juno.node.QaLoraInitializer;
 import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.tokenizer.GgufTokenizer;
@@ -92,9 +93,13 @@ public final class LoraTrainer implements AutoCloseable {
 				LoraInitializer.validate(adapters, cfg);
 				DoraInitializer.verifyFingerprints(r, adapters);
 				DoraInitializer.attachMissingDoraState(r, cfg, adapters);
+				QaLoraInitializer.verifyFingerprints(r, adapters);
 			} else if (config.mode() == LoraMode.DORA) {
 				adapters = DoraInitializer.create(r, cfg, config.targets(), config.adapterConfig(),
 						new Random(config.seed()));
+			} else if (config.mode() == LoraMode.QA_LORA) {
+				adapters = QaLoraInitializer.create(r, cfg, config.targets(), config.adapterConfig(),
+						new Random(config.seed()), config.groupWidth(), config.mergeCapability());
 			} else {
 				adapters = LoraInitializer.create(cfg, config.targets(), config.adapterConfig(),
 						new Random(config.seed()));
@@ -106,7 +111,24 @@ public final class LoraTrainer implements AutoCloseable {
 		LoraTrainableHandler handler = LoraTrainableHandler.load(modelPath, ctx, adapters);
 		LoraAdamOptimizer optimizer = new LoraAdamOptimizer(config.learningRate(), 0.9, 0.999, 1e-8,
 				config.weightDecay(), config.loraPlusRatio());
-		return new LoraTrainer(handler, tokenizer, optimizer, adapters, ap, modelPath, config, cfg);
+		LoraTrainingConfig enriched = enrichMetricsLabels(config, cfg.architecture());
+		return new LoraTrainer(handler, tokenizer, optimizer, adapters, ap, modelPath, enriched, cfg);
+	}
+
+	/** Fill architecture for JFR identity when the caller left it blank. */
+	static LoraTrainingConfig enrichMetricsLabels(LoraTrainingConfig config, String architecture) {
+		if (config.architecture() != null && !config.architecture().isBlank())
+			return config;
+		return LoraTrainingConfig.builder().adapterConfig(config.adapterConfig()).targets(config.targets())
+				.learningRate(config.learningRate()).gradientAccumulationSteps(config.gradientAccumulationSteps())
+				.maxGradNorm(config.maxGradNorm()).lrSchedule(config.lrSchedule())
+				.minLearningRate(config.minLearningRate()).warmupUpdates(config.warmupUpdates())
+				.weightDecay(config.weightDecay()).loraPlusRatio(config.loraPlusRatio()).dropout(config.dropout())
+				.seed(config.seed()).validationSplit(config.validationSplit())
+				.validationPatience(config.validationPatience()).validationMinDelta(config.validationMinDelta())
+				.restoreBest(config.restoreBest()).groupWidth(config.groupWidth())
+				.mergeCapability(config.mergeCapability()).architecture(architecture != null ? architecture : "")
+				.trainDevice(config.trainDevice()).build();
 	}
 
 	/**
@@ -200,6 +222,9 @@ public final class LoraTrainer implements AutoCloseable {
 			if (config.mode() == LoraMode.DORA)
 				fresh = DoraInitializer.create(r, modelConfig, config.targets(), config.adapterConfig(),
 						new Random(config.seed()));
+			else if (config.mode() == LoraMode.QA_LORA)
+				fresh = QaLoraInitializer.create(r, modelConfig, config.targets(), config.adapterConfig(),
+						new Random(config.seed()), config.groupWidth(), config.mergeCapability());
 			else
 				fresh = LoraInitializer.create(modelConfig, config.targets(), config.adapterConfig(),
 						new Random(config.seed()));

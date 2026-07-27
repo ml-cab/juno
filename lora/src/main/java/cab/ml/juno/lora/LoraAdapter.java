@@ -94,6 +94,8 @@ public final class LoraAdapter {
 		this.scaling = config.scaling();
 		this.initialization = config.initialization();
 		this.mode = config.mode();
+		if (this.mode == LoraMode.QA_LORA)
+			throw new IllegalArgumentException("use QaLoraAdapter for LoraMode.QA_LORA");
 		this.scale = config.effectiveScale();
 
 		this.a = new float[rank * inDim];

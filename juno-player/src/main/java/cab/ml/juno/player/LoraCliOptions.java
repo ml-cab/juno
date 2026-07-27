@@ -53,6 +53,10 @@ public final class LoraCliOptions {
 	public String mode = "lora";
 	public String scaling = "standard";
 	public String init = "kaiming-uniform";
+	public int groupWidth = 0;
+	public String mergeCapability = "f32-preserve";
+	public String architecture = "";
+	public String trainDevice = "cpu";
 
 	public float resolvedAlpha() {
 		return alpha < 0f ? rank : alpha;
@@ -75,7 +79,20 @@ public final class LoraCliOptions {
 		return switch (mode.strip().toLowerCase(Locale.ROOT)) {
 		case "lora" -> cab.ml.juno.lora.LoraMode.LORA;
 		case "dora" -> cab.ml.juno.lora.LoraMode.DORA;
-		default -> throw new IllegalArgumentException("--lora-mode must be lora|dora (got " + mode + ")");
+		case "qa-lora", "qalora" -> cab.ml.juno.lora.LoraMode.QA_LORA;
+		default -> throw new IllegalArgumentException("--lora-mode must be lora|dora|qa-lora (got " + mode + ")");
+		};
+	}
+
+	public cab.ml.juno.lora.MergeCapability parsedMergeCapability() {
+		return switch (mergeCapability.strip().toLowerCase(Locale.ROOT)) {
+		case "sidecar-only", "sidecar" -> cab.ml.juno.lora.MergeCapability.SIDECAR_ONLY;
+		case "f32-preserve", "f32" -> cab.ml.juno.lora.MergeCapability.F32_PRESERVE;
+		case "source-type-projected", "projected" -> cab.ml.juno.lora.MergeCapability.SOURCE_TYPE_PROJECTED;
+		case "exact-affine" -> throw new IllegalArgumentException(
+				"EXACT_AFFINE is unavailable for GGUF K-quants");
+		default -> throw new IllegalArgumentException(
+				"--lora-merge must be f32-preserve|source-type-projected|sidecar-only (got " + mergeCapability + ")");
 		};
 	}
 
@@ -104,7 +121,8 @@ public final class LoraCliOptions {
 				.lrSchedule(parsedLrSchedule()).minLearningRate(minLr).warmupUpdates(warmupSteps)
 				.weightDecay(weightDecay).loraPlusRatio(loraPlusRatio).dropout(dropout).seed(seed)
 				.validationSplit(validationSplit).validationPatience(validationPatience)
-				.validationMinDelta(validationMinDelta).build();
+				.validationMinDelta(validationMinDelta).groupWidth(groupWidth)
+				.mergeCapability(parsedMergeCapability()).architecture(architecture).trainDevice(trainDevice).build();
 	}
 
 	/**
@@ -275,6 +293,17 @@ public final class LoraCliOptions {
 			requireValue(args, i, flag);
 			init = args[i + 1];
 			parsedInit();
+			yield i + 1;
+		}
+		case "--lora-group-width" -> {
+			requireValue(args, i, flag);
+			groupWidth = Integer.parseInt(args[i + 1]);
+			yield i + 1;
+		}
+		case "--lora-merge" -> {
+			requireValue(args, i, flag);
+			mergeCapability = args[i + 1];
+			parsedMergeCapability();
 			yield i + 1;
 		}
 		default -> -1;

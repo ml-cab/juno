@@ -32,6 +32,7 @@ import cab.ml.juno.lora.LoraAdamOptimizer;
 import cab.ml.juno.lora.LoraGradients;
 import cab.ml.juno.lora.LoraMode;
 import cab.ml.juno.lora.LoraTrainContext;
+import cab.ml.juno.lora.QaLoraAdapter;
 
 /**
  * LLaMA-family transformer handler with LoRA fine-tuning support.
@@ -214,6 +215,21 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 
 		this.doraByKey = buildDoraProjections(r, adapters, startLayer, endLayer);
 		this.doraSeenGeneration = adapters.doraGeneration();
+		if (!doraByKey.isEmpty()) {
+			long t0 = System.currentTimeMillis();
+			for (DoraProjection d : doraByKey.values())
+				d.refresh();
+			LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(adapters, cfg.architecture(),
+					LoraMetricsIdentity.resolveTrainDevice(true));
+			LoraNormRefreshEvent nr = new LoraNormRefreshEvent();
+			nr.begin();
+			identity.apply(nr);
+			nr.projectionCount = doraByKey.size();
+			nr.layerCount = endLayer - startLayer;
+			nr.durationMs = System.currentTimeMillis() - t0;
+			nr.reason = "load";
+			nr.commit();
+		}
 	}
 
 	private void uploadResidentWeights(GpuMatVec gpu, int L) {
@@ -550,8 +566,11 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	public float trainStep(int[] tokens, LoraAdamOptimizer optimizer) {
 		loraAdapters.zeroAllGrads();
 
+		LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(loraAdapters, cfg.architecture(),
+				LoraMetricsIdentity.resolveTrainDevice(true));
 		LoraTrainEvent event = new LoraTrainEvent();
 		event.begin();
+		identity.apply(event);
 		event.step = optimizer.step() + 1;
 		event.numTokens = tokens.length;
 		event.chunkCount = 1;
@@ -574,6 +593,17 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		event.loss = meanLoss;
 		event.totalMs = event.forwardMs + event.backwardMs + event.optimizerMs;
 		event.commit();
+
+		if (!doraByKey.isEmpty()) {
+			LoraNormRefreshEvent nr = new LoraNormRefreshEvent();
+			nr.begin();
+			identity.apply(nr);
+			nr.projectionCount = doraByKey.size();
+			nr.layerCount = endLayer - startLayer;
+			nr.durationMs = 0;
+			nr.reason = "post-step";
+			nr.commit();
+		}
 
 		return meanLoss;
 	}
@@ -647,20 +677,34 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	}
 
 	private void applyLoraInPlace(float[] out, int li, String proj, float[] input) {
-		LoraAdapter lora = loraAdapters.get(li + startLayer, proj);
+		int absLayer = li + startLayer;
+		QaLoraAdapter qa = loraAdapters.getQa(absLayer, proj);
+		if (qa != null) {
+			float[] delta;
+			if (trainCtx.dropoutEnabled()) {
+				int projOrd = LoraProjection.fromKey(proj).ordinal();
+				delta = qa.forwardTrain(input, trainCtx.dropoutRate(), trainCtx.rootSeed(), trainCtx.optimizerUpdate(),
+						trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
+			} else {
+				delta = qa.forward(input);
+			}
+			for (int i = 0; i < out.length; i++)
+				out[i] += delta[i];
+			return;
+		}
+		LoraAdapter lora = loraAdapters.get(absLayer, proj);
 		if (lora == null)
 			return;
 		refreshDoraIfNeeded();
 		float[] delta;
 		if (trainCtx.dropoutEnabled()) {
-			int absLayer = li + startLayer;
 			int projOrd = LoraProjection.fromKey(proj).ordinal();
 			delta = lora.forwardTrain(input, trainCtx.dropoutRate(), trainCtx.rootSeed(), trainCtx.optimizerUpdate(),
 					trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
 		} else {
 			delta = lora.forward(input);
 		}
-		DoraProjection dora = doraByKey.get((li + startLayer) + ":" + proj);
+		DoraProjection dora = doraByKey.get(absLayer + ":" + proj);
 		if (dora == null) {
 			for (int i = 0; i < out.length; i++)
 				out[i] += delta[i];
@@ -685,12 +729,29 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		return dora.scaleGradient(gradOut);
 	}
 
-	private float[] loraBackward(LoraAdapter lora, float[] gradDelta, float[] input, int absLayer, String proj) {
+	private float[] loraBackward(int absLayer, String proj, float[] gradDelta, float[] input) {
+		QaLoraAdapter qa = loraAdapters.getQa(absLayer, proj);
+		if (qa != null) {
+			if (!trainCtx.dropoutEnabled())
+				return qa.backward(gradDelta, input);
+			int projOrd = LoraProjection.fromKey(proj).ordinal();
+			return qa.backwardTrain(gradDelta, input, trainCtx.dropoutRate(), trainCtx.rootSeed(),
+					trainCtx.optimizerUpdate(), trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
+		}
+		LoraAdapter lora = loraAdapters.get(absLayer, proj);
+		if (lora == null)
+			return null;
 		if (!trainCtx.dropoutEnabled())
 			return lora.backward(gradDelta, input);
 		int projOrd = LoraProjection.fromKey(proj).ordinal();
 		return lora.backwardTrain(gradDelta, input, trainCtx.dropoutRate(), trainCtx.rootSeed(),
 				trainCtx.optimizerUpdate(), trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
+	}
+
+	private void addLoraBackward(float[] dest, int absLayer, String proj, float[] gradDelta, float[] input) {
+		float[] g = loraBackward(absLayer, proj, gradDelta, input);
+		if (g != null)
+			addInPlace(dest, g);
 	}
 
 	private void refreshDoraIfNeeded() {
@@ -867,9 +928,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		float[] gradFfnScaled = maybeScaleDoraGrad(absLayer, "wdown", gradFfnOut);
 		float[] gradHidden = transposedMatVecLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, gradFfnScaled, H,
 				I);
-		LoraAdapter loraDown = loraAdapters.get(absLayer, "wdown");
-		if (loraDown != null)
-			addInPlace(gradHidden, loraBackward(loraDown, gradFfnScaled, st.hiddenAct(), absLayer, "wdown"));
+		addLoraBackward(gradHidden, absLayer, "wdown", gradFfnScaled, st.hiddenAct());
 
 		// Backward through SwiGLU: hiddenAct[i] = silu(gate[i]) * up[i]
 		float[] gradGate = new float[I];
@@ -887,12 +946,8 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		float[] gradXNorm2 = add(
 				transposedMatVecLayer(wGate[li], wGateDev != null ? wGateDev[li] : null, gradGateScaled, I, H),
 				transposedMatVecLayer(wUp[li], wUpDev != null ? wUpDev[li] : null, gradUpScaled, I, H));
-		LoraAdapter loraGate = loraAdapters.get(absLayer, "wgate");
-		if (loraGate != null)
-			addInPlace(gradXNorm2, loraBackward(loraGate, gradGateScaled, st.xNorm2(), absLayer, "wgate"));
-		LoraAdapter loraUp = loraAdapters.get(absLayer, "wup");
-		if (loraUp != null)
-			addInPlace(gradXNorm2, loraBackward(loraUp, gradUpScaled, st.xNorm2(), absLayer, "wup"));
+		addLoraBackward(gradXNorm2, absLayer, "wgate", gradGateScaled, st.xNorm2());
+		addLoraBackward(gradXNorm2, absLayer, "wup", gradUpScaled, st.xNorm2());
 
 		// Backward through rmsNorm2
 		addInPlace(gradXRes2, rmsNormBackward(st.xRes2(), ffnNorm[li], gradXNorm2, cfg.rmsNormEps()));
@@ -904,9 +959,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		// Backward through wo: attnProj = wo × attnOut + lora_o(attnOut)
 		float[] gradAttnScaled = maybeScaleDoraGrad(absLayer, "wo", gradAttnProj);
 		float[] gradAttnOut = transposedMatVecLayer(wo[li], woDev != null ? woDev[li] : null, gradAttnScaled, H, H);
-		LoraAdapter loraO = loraAdapters.get(absLayer, "wo");
-		if (loraO != null)
-			addInPlace(gradAttnOut, loraBackward(loraO, gradAttnScaled, st.attnOut(), absLayer, "wo"));
+		addLoraBackward(gradAttnOut, absLayer, "wo", gradAttnScaled, st.attnOut());
 
 		// ── Attention backward ────────────────────────────────────────────────
 		float scale = (float) (1.0 / Math.sqrt(Hd));
@@ -967,22 +1020,16 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		// ── LoRA / frozen projection backward into xNorm1 ─────────────────────
 		float[] gradQScaled = maybeScaleDoraGrad(absLayer, "wq", gradQ);
 		float[] gradXNorm1 = transposedMatVecLayer(wq[li], wqDev != null ? wqDev[li] : null, gradQScaled, H, H);
-		LoraAdapter loraQ = loraAdapters.get(absLayer, "wq");
-		if (loraQ != null)
-			addInPlace(gradXNorm1, loraBackward(loraQ, gradQScaled, st.xNorm1(), absLayer, "wq"));
+		addLoraBackward(gradXNorm1, absLayer, "wq", gradQScaled, st.xNorm1());
 
 		float[] gradKScaled = maybeScaleDoraGrad(absLayer, "wk", gradK);
 		float[] gradXNorm1_k = transposedMatVecLayer(wk[li], wkDev != null ? wkDev[li] : null, gradKScaled, kvDim, H);
-		LoraAdapter loraK = loraAdapters.get(absLayer, "wk");
-		if (loraK != null)
-			addInPlace(gradXNorm1_k, loraBackward(loraK, gradKScaled, st.xNorm1(), absLayer, "wk"));
+		addLoraBackward(gradXNorm1_k, absLayer, "wk", gradKScaled, st.xNorm1());
 		addInPlace(gradXNorm1, gradXNorm1_k);
 
 		float[] gradVScaled = maybeScaleDoraGrad(absLayer, "wv", gradV);
 		float[] gradXNorm1_v = transposedMatVecLayer(wv[li], wvDev != null ? wvDev[li] : null, gradVScaled, kvDim, H);
-		LoraAdapter loraV = loraAdapters.get(absLayer, "wv");
-		if (loraV != null)
-			addInPlace(gradXNorm1_v, loraBackward(loraV, gradVScaled, st.xNorm1(), absLayer, "wv"));
+		addLoraBackward(gradXNorm1_v, absLayer, "wv", gradVScaled, st.xNorm1());
 		addInPlace(gradXNorm1, gradXNorm1_v);
 
 		// Backward through rmsNorm1

@@ -345,6 +345,10 @@ public final class GgufReader implements AutoCloseable {
 	 * @param nelems number of logical scalar elements
 	 */
 	public static long rawByteCount(int type, long nelems) {
+		QuantizationLayout k = QuantizationLayout.forType(type);
+		if (k != null) {
+			return k.encodedBytes(nelems);
+		}
 		return switch (type) {
 		case GGML_TYPE_F32 -> nelems * 4L;
 		case GGML_TYPE_F16, GGML_TYPE_BF16 -> nelems * 2L;
@@ -352,9 +356,6 @@ public final class GgufReader implements AutoCloseable {
 		case GGML_TYPE_Q4_0 -> (nelems / 32L) * 18L;
 		case GGML_TYPE_Q2_K -> (nelems / 256L) * 84L;
 		case GGML_TYPE_Q3_K -> (nelems / 256L) * 110L;
-		case GGML_TYPE_Q4_K -> (nelems / 256L) * 144L;
-		case GGML_TYPE_Q5_K -> (nelems / 256L) * 176L;
-		case GGML_TYPE_Q6_K -> (nelems / 256L) * 210L;
 		default -> throw new UnsupportedOperationException("No byte-size formula for GGML type " + type);
 		};
 	}
@@ -598,196 +599,27 @@ public final class GgufReader implements AutoCloseable {
 		return out;
 	}
 
-	// Q4_K: superblocks of 256 elements
-	// [d:f16][dmin:f16][scales:12 bytes][qs:128 bytes] = 144 bytes per 256 elements
+	// Q4_K / Q5_K / Q6_K: decode via shared GgufKQuantCodec (Tier-5 Gate A).
 	private float[] loadQ4_K(TensorInfo info) throws IOException {
-		int n = (int) info.nelems;
-		int QK_K = 256;
-		int blockBytes = 144;
-		int nBlocks = n / QK_K;
-		ByteBuffer buf = readBytes(info.offset, (long) nBlocks * blockBytes);
-		float[] out = new float[n];
-		int oi = 0;
-		byte[] qs = new byte[128];
-		byte[] sc = new byte[12];
-
-		for (int b = 0; b < nBlocks; b++) {
-			float d = f16ToF32(buf.getShort());
-			float dmin = f16ToF32(buf.getShort());
-			buf.get(sc);
-			buf.get(qs);
-
-			// 8 sub-blocks of 32 elements each, grouped as 4 pairs of 64
-			int qi = 0;
-			for (int g = 0; g < QK_K; g += 64) {
-				// pair index within the 8 sub-blocks (g/32 and g/32+1)
-				int s0 = g / 32;
-				int s1 = s0 + 1;
-				float scale0 = d * getScale4K(sc, s0);
-				float min0 = dmin * getMin4K(sc, s0);
-				float scale1 = d * getScale4K(sc, s1);
-				float min1 = dmin * getMin4K(sc, s1);
-
-				// First 32: low nibbles of qs[qi..qi+32)
-				for (int i = 0; i < 32; i++)
-					out[oi++] = scale0 * (qs[qi + i] & 0x0F) - min0;
-				// Second 32: high nibbles of qs[qi..qi+32)
-				for (int i = 0; i < 32; i++)
-					out[oi++] = scale1 * ((qs[qi + i] >> 4) & 0x0F) - min1;
-				qi += 32;
-			}
-		}
-		return out;
+		return loadKQuant(info, QuantizationLayout.Q4_K);
 	}
 
-	// Q5_K: superblocks of 256 elements
-	// [d:f16][dmin:f16][scales:12 bytes][qh:32 bytes][qs:128 bytes] = 176 bytes per
-	// 256 elements
-	//
-	// Layout mirrors Q4_K's grouped nibble scheme (not interleaved):
-	// 4 groups of 64 elements, each group split into two sub-blocks of 32.
-	// For group g (0..3), the 32 qs bytes at offset g*32 serve BOTH sub-blocks:
-	// sub-block 2g+0 (first 32): low nibbles of qs[g*32 .. g*32+32)
-	// sub-block 2g+1 (second 32): high nibbles of the same qs bytes
-	// The qh byte array is 32 bytes; each byte provides one bit per element l
-	// (0..31):
-	// sub-block 2g+0 uses bit (2*g) of qh[l]
-	// sub-block 2g+1 uses bit (2*g+1) of qh[l]
-	// This matches llama.cpp: m1=1,m2=2 shifted left by 2 each group iteration.
 	private float[] loadQ5_K(TensorInfo info) throws IOException {
-		int n = (int) info.nelems;
-		int QK_K = 256;
-		int blockBytes = 176; // 2+2+12+32+128
-		int nBlocks = n / QK_K;
-		ByteBuffer buf = readBytes(info.offset, (long) nBlocks * blockBytes);
-		float[] out = new float[n];
-		int oi = 0;
-		byte[] sc = new byte[12];
-		byte[] qh = new byte[32];
-		byte[] qs = new byte[128];
-
-		for (int b = 0; b < nBlocks; b++) {
-			float d = f16ToF32(buf.getShort());
-			float dmin = f16ToF32(buf.getShort());
-			buf.get(sc);
-			buf.get(qh);
-			buf.get(qs);
-
-			int qi = 0; // index into qs, advances by 32 per group
-			for (int g = 0; g < 4; g++) {
-				int s0 = g * 2;
-				int s1 = s0 + 1;
-				float scale0 = d * getScale4K(sc, s0);
-				float min0 = dmin * getMin4K(sc, s0);
-				float scale1 = d * getScale4K(sc, s1);
-				float min1 = dmin * getMin4K(sc, s1);
-				int hiBit0 = g * 2; // bit within qh[l] for first 32
-				int hiBit1 = g * 2 + 1; // bit within qh[l] for second 32
-
-				// First 32 of group: low nibbles, qh bit hiBit0
-				for (int l = 0; l < 32; l++) {
-					int lo = qs[qi + l] & 0x0F;
-					int hi = (qh[l] >>> hiBit0) & 1;
-					out[oi++] = scale0 * (lo | (hi << 4)) - min0;
-				}
-				// Second 32 of group: high nibbles of same qs bytes, qh bit hiBit1
-				for (int l = 0; l < 32; l++) {
-					int lo = (qs[qi + l] >>> 4) & 0x0F;
-					int hi = (qh[l] >>> hiBit1) & 1;
-					out[oi++] = scale1 * (lo | (hi << 4)) - min1;
-				}
-				qi += 32;
-			}
-		}
-		return out;
+		return loadKQuant(info, QuantizationLayout.Q5_K);
 	}
 
-	/**
-	 * (12 bytes, 8 scales + 8 mins each 6-bit).
-	 */
-	private static int getScale4K(byte[] sc, int j) {
-		if (j < 4)
-			return sc[j] & 0x3F;
-		return ((sc[j + 4] & 0x0F) | ((sc[j - 4] & 0xC0) >> 2)) & 0x3F;
-	}
-
-	/** Extract 6-bit min[j] from Q4_K scales block. */
-	private static int getMin4K(byte[] sc, int j) {
-		if (j < 4)
-			return sc[j + 4] & 0x3F;
-		// sc bytes are signed in Java — mask with 0xFF before >> 4 to prevent
-		// arithmetic sign-extension corrupting the upper bits of the result.
-		return (((sc[j + 4] & 0xFF) >> 4) | ((sc[j] & 0xC0) >> 2)) & 0x3F;
-	}
-
-	// Q6_K: superblocks of 256 elements
-	// [ql:128 bytes][qh:64 bytes][scales:16 bytes][d:f16] = 210 bytes per 256
-	// elements
 	private float[] loadQ6_K(TensorInfo info) throws IOException {
+		return loadKQuant(info, QuantizationLayout.Q6_K);
+	}
+
+	private float[] loadKQuant(TensorInfo info, QuantizationLayout layout) throws IOException {
 		int n = (int) info.nelems;
-		int QK_K = 256;
-		int blockBytes = 210;
-		int nBlocks = n / QK_K;
-		ByteBuffer buf = readBytes(info.offset, (long) nBlocks * blockBytes);
-		float[] out = new float[n];
-		int oi = 0;
-		byte[] ql = new byte[128];
-		byte[] qh = new byte[64];
-		byte[] sc = new byte[16];
-
-		for (int b = 0; b < nBlocks; b++) {
-			buf.get(ql);
-			buf.get(qh);
-			buf.get(sc);
-			float d = f16ToF32(buf.getShort());
-
-			// Port of llama.cpp dequantize_row_q6_K.
-			// Each 256-element block is split into two halves of 128 elements.
-			// Within each half, l iterates 0..31 and produces four outputs:
-			// out[l+ 0] ← ql[qlBase+l] low nibble | qh[qhBase+l] bits 1:0 → sub-block
-			// sc[scBase + l/16]
-			// out[l+ 32] ← ql[qlBase+l+32] low nibble | qh[qhBase+l] bits 3:2 → sc[scBase +
-			// l/16 + 2]
-			// out[l+ 64] ← ql[qlBase+l] high nibble | qh[qhBase+l] bits 5:4 → sc[scBase +
-			// l/16 + 4]
-			// out[l+ 96] ← ql[qlBase+l+32] high nibble | qh[qhBase+l] bits 7:6 → sc[scBase
-			// + l/16 + 6]
-			// All four share the SAME qh byte qh[qhBase+l]; the earlier flat loop
-			// used hi=i/4 which is wrong for outputs at l+32, l+64, l+96.
-			for (int half = 0; half < 2; half++) {
-				int qlBase = half * 64;
-				int qhBase = half * 32;
-				int scBase = half * 8;
-				for (int l = 0; l < 32; l++) {
-					int is = l / 16;
-					int qlL = ql[qlBase + l] & 0xFF;
-					int qlL2 = ql[qlBase + l + 32] & 0xFF;
-					int qhL = qh[qhBase + l] & 0xFF;
-
-					int q1 = (qlL & 0x0F) | (((qhL >> 0) & 3) << 4);
-					q1 -= 32;
-					int q2 = (qlL2 & 0x0F) | (((qhL >> 2) & 3) << 4);
-					q2 -= 32;
-					int q3 = (qlL >> 4) | (((qhL >> 4) & 3) << 4);
-					q3 -= 32;
-					int q4 = (qlL2 >> 4) | (((qhL >> 6) & 3) << 4);
-					q4 -= 32;
-
-					// sc[] is int8 — Java bytes are signed, which is what we want.
-					float d1 = d * sc[scBase + is];
-					float d2 = d * sc[scBase + is + 2];
-					float d3 = d * sc[scBase + is + 4];
-					float d4 = d * sc[scBase + is + 6];
-
-					out[oi + l] = d1 * q1;
-					out[oi + l + 32] = d2 * q2;
-					out[oi + l + 64] = d3 * q3;
-					out[oi + l + 96] = d4 * q4;
-				}
-				oi += 128;
-			}
-		}
-		return out;
+		layout.validateElementCount(n);
+		long nbytes = layout.encodedBytes(n);
+		ByteBuffer buf = readBytes(info.offset, nbytes);
+		byte[] raw = new byte[(int) nbytes];
+		buf.get(raw);
+		return GgufKQuantCodec.decode(raw, layout.typeId());
 	}
 
 	// ── Llamafile / ZIP polyglot support ─────────────────────────────────────

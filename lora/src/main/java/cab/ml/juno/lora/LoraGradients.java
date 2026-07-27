@@ -69,6 +69,10 @@ public final class LoraGradients {
 			sumSq = accumulateSq(adapter.gradA(), sumSq);
 			sumSq = accumulateSq(adapter.gradB(), sumSq);
 		}
+		for (QaLoraAdapter adapter : adapters.allQa()) {
+			sumSq = accumulateSq(adapter.gradA(), sumSq);
+			sumSq = accumulateSq(adapter.gradB(), sumSq);
+		}
 		for (DoraMagnitude mag : adapters.magnitudes().values())
 			sumSq = accumulateSq(mag.grad(), sumSq);
 
@@ -84,6 +88,10 @@ public final class LoraGradients {
 
 		if (scale != 1f) {
 			for (LoraAdapter adapter : adapters.all()) {
+				scaleInPlace(adapter.gradA(), scale);
+				scaleInPlace(adapter.gradB(), scale);
+			}
+			for (QaLoraAdapter adapter : adapters.allQa()) {
 				scaleInPlace(adapter.gradA(), scale);
 				scaleInPlace(adapter.gradB(), scale);
 			}

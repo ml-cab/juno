@@ -23,42 +23,14 @@ import jdk.jfr.Name;
 import jdk.jfr.StackTrace;
 
 /**
- * JFR event emitted once per held-out validation evaluation.
+ * JFR event emitted once per {@code juno merge} / {@link LoraMerge} completion.
  */
-@Name("juno.LoraValidation")
-@Label("LoRA Validation")
-@Description("Held-out validation loss for LoRA fine-tuning")
+@Name("juno.LoraMerge")
+@Label("LoRA Merge")
+@Description("Adapter merge into GGUF (F32 preserve or projected requantization)")
 @Category({ "Juno", "LoRA" })
 @StackTrace(false)
-public final class LoraValidationEvent extends Event {
-
-	@Label("Loss")
-	@Description("Token-weighted mean validation loss (nats)")
-	public float loss;
-
-	@Label("Prediction Count")
-	@Description("Number of validation prediction tokens")
-	public int predictionCount;
-
-	@Label("Duration ms")
-	@Description("Wall time of the validation evaluation (ms)")
-	public long durationMs;
-
-	@Label("Best So Far")
-	@Description("Whether this validation loss improved the best-so-far")
-	public boolean bestSoFar;
-
-	@Label("Pass Index")
-	@Description("1-based training pass index when known; 0 otherwise")
-	public int passIndex;
-
-	@Label("Optimizer Step")
-	@Description("Optimizer update count at evaluation time")
-	public int optimizerStep;
-
-	@Label("Train Loss At Eval")
-	@Description("Most recent train loss at evaluation; NaN when unknown")
-	public float trainLossAtEval = Float.NaN;
+public final class LoraMergeEvent extends Event {
 
 	@Label("Algorithm")
 	public String algorithm = "";
@@ -89,4 +61,44 @@ public final class LoraValidationEvent extends Event {
 
 	@Label("Group Width")
 	public int groupWidth;
+
+	@Label("Merge Capability")
+	@Description("CLI merge policy: f32-preserve | source-type-projected | sidecar-only | …")
+	public String mergeCapability = "";
+
+	@Label("Tensors Patched")
+	public int tensorsPatched;
+
+	@Label("Bytes Written")
+	public long bytesWritten;
+
+	@Label("Duration ms")
+	public long durationMs;
+
+	@Label("RMSE")
+	@Description("Projected-merge reconstruction RMSE; 0 when not applicable")
+	public float rmse;
+
+	@Label("Max Abs Error")
+	public float maxAbsError;
+
+	@Label("Changed Blocks")
+	public long changedBlocks;
+
+	@Label("Total Blocks")
+	public long totalBlocks;
+
+	@Label("Saturation Rate")
+	public float saturationRate;
+
+	@Label("Delta Retention")
+	@Description("Projected-merge delta retention; 0 when not applicable")
+	public float deltaRetention;
+
+	@Label("Success")
+	public boolean success = true;
+
+	@Label("Error")
+	@Description("Short failure label; empty on success (no stack traces)")
+	public String error = "";
 }

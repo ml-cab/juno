@@ -629,9 +629,9 @@ cmd_lora() {
         echo ""
         echo "  Profiling:"
         echo "    --jfr DURATION          Java Flight Recording e.g. 30s 5m 1h"
-        echo "                            Writes juno-<timestamp>.jfr on exit."
-        echo "                            Open in JDK Mission Control, search for"
-        echo "                            juno.LoraTrainStep to see per-step breakdown."
+        echo "                            Programmatic recording (parity with local mode)."
+        echo "                            On exit: extracts target/metrics/metrics.json and"
+        echo "                            prints a JFR Metrics Summary (LoraTrainStep, …)."
         echo ""
         echo "  Logging:"
         echo "    --verbose / -v"
@@ -696,22 +696,16 @@ cmd_lora() {
     warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
   fi
 
-  local jfr_flag=""
+  local jfr_arg=""
   if [[ -n "$jfr_duration" ]]; then
-    local model_name model_stem
-    model_name="$(basename "$model")"
-    model_stem="${model_name%.*}"
-    local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
-    jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
-    warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
-    warn "After exit: open ${jfr_file} in JDK Mission Control → Event Browser → juno.LoraTrainStep"
+    jfr_arg="--jfr $jfr_duration"
+    warn "JFR enabled — duration=${jfr_duration}  (programmatic recording, metrics auto-printed on exit)"
   fi
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
-    ${jfr_flag:+"$jfr_flag"} \
     -jar "$JUNO_PLAYER_JAR" \
     --model-path "$model" \
     --lora \
@@ -744,6 +738,7 @@ cmd_lora() {
     --top-k "$top_k" \
     --top-p "$top_p" \
     "$gpu_flag" \
+    ${jfr_arg} \
     ${lora_path_flag} \
     ${health_flag} \
     ${verbose_flag}

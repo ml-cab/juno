@@ -50,6 +50,8 @@ public final class LoraInitializer {
 			throw new IllegalArgumentException("targets must not be empty");
 		if (config.mode() == cab.ml.juno.lora.LoraMode.DORA)
 			throw new IllegalArgumentException("DoRA requires DoraInitializer.create (needs GGUF tensors)");
+		if (config.mode() == cab.ml.juno.lora.LoraMode.QA_LORA)
+			throw new IllegalArgumentException("QA-LoRA requires QaLoraInitializer.create (needs GGUF tensors)");
 
 		LoraAdapterSet set = new LoraAdapterSet();
 		for (int li = 0; li < cfg.numLayers(); li++) {
@@ -95,6 +97,20 @@ public final class LoraInitializer {
 			if (a.inDim != expectIn || a.outDim != expectOut)
 				throw new IllegalArgumentException("adapter " + key + " shape " + a.outDim + "×" + a.inDim
 						+ " does not match model " + expectOut + "×" + expectIn);
+		}
+		for (var entry : adapters.asQaMap().entrySet()) {
+			String key = entry.getKey();
+			int layer = LoraAdapterSet.keyLayer(key);
+			String projKey = LoraAdapterSet.keyProj(key);
+			if (layer < 0 || layer >= cfg.numLayers())
+				throw new IllegalArgumentException(
+						"QA adapter layer " + layer + " out of range [0," + cfg.numLayers() + ")");
+			LoraProjection proj = LoraProjection.fromKey(projKey);
+			var a = entry.getValue();
+			if (a.inDim != proj.inDim(cfg) || a.outDim != proj.outDim(cfg))
+				throw new IllegalArgumentException("QA adapter " + key + " shape mismatch");
+			if (a.inDim % a.groupWidth != 0)
+				throw new IllegalArgumentException("QA adapter " + key + " groupWidth misaligned");
 		}
 	}
 }

@@ -56,6 +56,17 @@ JFR files are written as `juno-<modelStem>-<timestamp>.jfr` (local/coordinator) 
 `juno-<nodeId>-<modelStem>-<timestamp>.jfr` (cluster nodes) in the project root.
 Cluster runs produce one file per JVM.
 
+LoRA training uses the same programmatic `--jfr` path:
+
+```bash
+./juno lora --model-path models/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf --jfr 1m
+```
+
+On exit, ConsoleMain extracts `target/metrics/metrics.json` and prints the summary
+banner (parity with local mode). See `docs/LoRA.md` for the LoRA event catalog and
+JSON key contract (`LoraTrainStep`, `LoraValidation`, `LoraMerge`, `LoraNormRefresh`,
+`LoraPlayback`, `LoraCheckpoint`).
+
 ### 3. Extract metrics
 
 ```bash

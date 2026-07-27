@@ -46,6 +46,7 @@ public final class LoraAdamOptimizer {
 	private double lastLrB = Double.NaN;
 
 	private final Map<LoraAdapter, float[][]> state = new IdentityHashMap<>();
+	private final Map<QaLoraAdapter, float[][]> qaState = new IdentityHashMap<>();
 	private final Map<DoraMagnitude, float[][]> magState = new IdentityHashMap<>();
 
 	public LoraAdamOptimizer(double lr, double beta1, double beta2, double eps, double weightDecay) {
@@ -107,6 +108,12 @@ public final class LoraAdamOptimizer {
 			if (adapter.mode == LoraMode.DORA)
 				touchedDora = true;
 		}
+		for (QaLoraAdapter adapter : adapters.allQa()) {
+			float[][] buf = qaState.computeIfAbsent(adapter, a -> new float[][] { new float[a.a.length],
+					new float[a.a.length], new float[a.b.length], new float[a.b.length] });
+			updateParams(adapter.a(), adapter.gradA(), buf[0], buf[1], bc1, bc2, lrA, true);
+			updateParams(adapter.b(), adapter.gradB(), buf[2], buf[3], bc1, bc2, lrB, false);
+		}
 		for (DoraMagnitude mag : adapters.magnitudes().values()) {
 			float[][] buf = magState.computeIfAbsent(mag,
 					m -> new float[][] { new float[m.length()], new float[m.length()] });
@@ -162,6 +169,7 @@ public final class LoraAdamOptimizer {
 		lastLrA = Double.NaN;
 		lastLrB = Double.NaN;
 		state.clear();
+		qaState.clear();
 		magState.clear();
 	}
 

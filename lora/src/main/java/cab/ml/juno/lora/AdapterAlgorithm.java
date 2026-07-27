@@ -16,22 +16,26 @@
 package cab.ml.juno.lora;
 
 /**
- * Adapter algorithm mode.
- *
- * <ul>
- * <li>{@link #LORA} — plain LoRA / rsLoRA (scaling selected separately).
- * <li>{@link #DORA} — canonical detached-norm DoRA over a LoRA direction.
- * <li>{@link #QA_LORA} — grouped input-pooling QA-LoRA (not QLoRA).
- * </ul>
+ * Algorithm identity for checkpoint / merge metadata. Distinct from QLoRA.
  */
-public enum LoraMode {
+public enum AdapterAlgorithm {
 
-	LORA, DORA, QA_LORA;
+	LORA,
+	DORA,
+	QA_LORA;
 
-	static LoraMode fromId(int id) {
-		LoraMode[] values = values();
+	public static AdapterAlgorithm fromId(int id) {
+		AdapterAlgorithm[] values = values();
 		if (id < 0 || id >= values.length)
-			throw new IllegalArgumentException("unknown LoraMode id: " + id);
+			throw new IllegalArgumentException("unknown AdapterAlgorithm id: " + id);
 		return values[id];
+	}
+
+	public static AdapterAlgorithm fromMode(LoraMode mode) {
+		return switch (mode) {
+			case LORA -> LORA;
+			case DORA -> DORA;
+			case QA_LORA -> QA_LORA;
+		};
 	}
 }

@@ -56,6 +56,13 @@ public final class LoraTrainingConfig {
 	private final int validationPatience;
 	private final float validationMinDelta;
 	private final boolean restoreBest;
+	/** {@code <= 0} = auto from tensor layout (QA-LoRA only). */
+	private final int groupWidth;
+	private final cab.ml.juno.lora.MergeCapability mergeCapability;
+	/** GGUF {@code general.architecture} label for JFR identity; empty when unknown. */
+	private final String architecture;
+	/** Coarse train-device label for JFR: {@code cpu|cuda|rocm|auto}. */
+	private final String trainDevice;
 
 	private LoraTrainingConfig(Builder b) {
 		this.targets = List.copyOf(b.targets);
@@ -74,6 +81,10 @@ public final class LoraTrainingConfig {
 		this.validationPatience = b.validationPatience;
 		this.validationMinDelta = b.validationMinDelta;
 		this.restoreBest = b.restoreBest;
+		this.groupWidth = b.groupWidth;
+		this.mergeCapability = b.mergeCapability;
+		this.architecture = b.architecture;
+		this.trainDevice = b.trainDevice;
 	}
 
 	public List<LoraProjection> targets() {
@@ -102,6 +113,29 @@ public final class LoraTrainingConfig {
 
 	public LoraMode mode() {
 		return adapterConfig.mode();
+	}
+
+	/** QA-LoRA group width override; {@code <= 0} means auto from GGML layout. */
+	public int groupWidth() {
+		return groupWidth;
+	}
+
+	public cab.ml.juno.lora.MergeCapability mergeCapability() {
+		return mergeCapability;
+	}
+
+	public String architecture() {
+		return architecture;
+	}
+
+	public String trainDevice() {
+		return trainDevice;
+	}
+
+	/** Stable JFR identity tags for train / validation / operation events. */
+	public cab.ml.juno.node.LoraMetricsIdentity metricsIdentity() {
+		return cab.ml.juno.node.LoraMetricsIdentity.of(mode(), scaling(), initialization(), architecture, trainDevice,
+				rank(), alpha(), targets, groupWidth, mergeCapability);
 	}
 
 	public double learningRate() {
@@ -186,6 +220,10 @@ public final class LoraTrainingConfig {
 		private int validationPatience = 0;
 		private float validationMinDelta = 0f;
 		private boolean restoreBest = true;
+		private int groupWidth = 0;
+		private cab.ml.juno.lora.MergeCapability mergeCapability = cab.ml.juno.lora.MergeCapability.F32_PRESERVE;
+		private String architecture = "";
+		private String trainDevice = "cpu";
 
 		public Builder targets(List<LoraProjection> targets) {
 			if (targets == null || targets.isEmpty())
@@ -327,6 +365,31 @@ public final class LoraTrainingConfig {
 
 		public Builder restoreBest(boolean restoreBest) {
 			this.restoreBest = restoreBest;
+			return this;
+		}
+
+		/** QA-LoRA group width; {@code <= 0} auto-selects from tensor GGML layout. */
+		public Builder groupWidth(int groupWidth) {
+			this.groupWidth = groupWidth;
+			return this;
+		}
+
+		public Builder mergeCapability(cab.ml.juno.lora.MergeCapability mergeCapability) {
+			if (mergeCapability == null)
+				throw new IllegalArgumentException("mergeCapability must not be null");
+			if (mergeCapability == cab.ml.juno.lora.MergeCapability.EXACT_AFFINE)
+				throw new IllegalArgumentException("EXACT_AFFINE unavailable for GGUF K-quants");
+			this.mergeCapability = mergeCapability;
+			return this;
+		}
+
+		public Builder architecture(String architecture) {
+			this.architecture = architecture != null ? architecture : "";
+			return this;
+		}
+
+		public Builder trainDevice(String trainDevice) {
+			this.trainDevice = trainDevice != null && !trainDevice.isBlank() ? trainDevice : "cpu";
 			return this;
 		}
 

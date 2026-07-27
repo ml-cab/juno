@@ -63,13 +63,17 @@ import cab.ml.juno.node.LocalInferencePipeline;
 import cab.ml.juno.lora.LoraAdamOptimizer;
 import cab.ml.juno.lora.LoraAdapterSet;
 import cab.ml.juno.lora.LoraGradients;
+import cab.ml.juno.node.LoraCheckpointEvent;
 import cab.ml.juno.node.LoraGradientBatch;
 import cab.ml.juno.node.LoraGradientResult;
 import cab.ml.juno.node.LoraInitializer;
+import cab.ml.juno.node.LoraMetricsIdentity;
+import cab.ml.juno.node.LoraPlaybackEvent;
 import cab.ml.juno.node.LoraProjection;
 import cab.ml.juno.node.LoraTrainEvent;
 import cab.ml.juno.node.LoraTrainableHandler;
 import cab.ml.juno.node.MatVec;
+import cab.ml.juno.node.QaLoraInitializer;
 import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.NodeDescriptor;
 import cab.ml.juno.registry.NodeStatus;
@@ -181,6 +185,13 @@ public final class ConsoleMain {
 	private static String loraInit = "kaiming-uniform";
 	private static LlamaConfig loraModelConfig; // set in runLoraRepl for /reset
 
+	/** Active programmatic JFR session (local / lora); stopped and extracted on exit. */
+	private static volatile Recording activeJfrRecording;
+	private static volatile Path activeJfrFile;
+	private static volatile String activeJfrModelStem;
+	private static volatile String activeJfrModelFilename;
+	private static final Object jfrLock = new Object();
+	private static volatile boolean jfrExtracted;
 	private static LoraTrainingConfig currentTrainingConfig() {
 		LoraCliOptions o = new LoraCliOptions();
 		o.rank = loraRank;
@@ -202,6 +213,8 @@ public final class ConsoleMain {
 		o.mode = loraAdapterMode;
 		o.scaling = loraScaling;
 		o.init = loraInit;
+		o.architecture = loraModelConfig != null ? loraModelConfig.architecture() : "";
+		o.trainDevice = cab.ml.juno.node.LoraMetricsIdentity.resolveTrainDevice(useGpu);
 		return o.toTrainingConfig();
 	}
 
@@ -256,15 +269,16 @@ public final class ConsoleMain {
 		System.setProperty("TOP_P", String.valueOf(topP));
 		if (verbose)
 			System.setProperty("JUNO_VERBOSE", "true");
-		// For lora mode the JFR lifecycle is delegated to the JVM flag set by run.sh.
-		// For local and cluster modes, ConsoleMain manages JFR programmatically via
-		// startLocalJfr() / startClusterJfr() — no JVM flag is involved.
-		if (jfrDuration != null && !localMode && loraMode)
+		// For local, cluster, and lora modes, ConsoleMain manages JFR programmatically via
+		// startLocalJfr() / startClusterJfr() / startLoraJfr() — no JVM flag is involved.
+		if (jfrDuration != null && !localMode && !loraMode)
 			System.setProperty("juno.jfr.duration", jfrDuration);
 
 		banner();
 
-		if (loraMode) {
+		if (loraMode && jfrDuration != null) {
+			startLoraJfr();
+		} else if (loraMode) {
 			runLoraRepl();
 		} else if (localMode && jfrDuration != null) {
 			startLocalJfr();
@@ -537,7 +551,9 @@ public final class ConsoleMain {
 		System.out.println("  --lora-play PATH           Apply a .lora file at inference in local/cluster mode (read-only, no training)");
 		System.out.println("  --lora-rank N              Low-rank bottleneck dimension (default: 8)");
 		System.out.println("  --lora-alpha F             Scale factor alpha (default: same as rank)");
-		System.out.println("  --lora-mode lora|dora      Adapter algorithm (default: lora)");
+		System.out.println("  --lora-mode lora|dora|qa-lora  Adapter algorithm (default: lora)");
+		System.out.println("  --lora-group-width N   QA-LoRA group width (0=auto from Q4_K/Q5_K=32, Q6_K=16)");
+		System.out.println("  --lora-merge f32-preserve|source-type-projected|sidecar-only");
 		System.out.println("  --lora-scaling standard|rslora  Scale formula (default: standard)");
 		System.out.println("  --lora-init kaiming-uniform|legacy-normal  A init (default: kaiming-uniform)");
 		System.out.println("  --lora-lr F                Adam learning rate (default: 1e-4)");
@@ -585,6 +601,8 @@ public final class ConsoleMain {
 		System.out.println("    --warn F                   VRAM warning threshold 0.0-1.0 (default: 0.90)");
 		System.out.println("    --critical F               VRAM critical threshold 0.0-1.0 (default: 0.98)");
 		System.out.println("  --jfr DURATION             Java Flight Recording duration (e.g. 5m)");
+		System.out.println("                             Programmatic recording; on exit extracts");
+		System.out.println("                             target/metrics/metrics.json (local/lora/cluster)");
 		System.out.println("  --verbose, -v              Show more logging");
 		System.out.println("  --help, -h                 Show this help");
 	}
@@ -608,17 +626,29 @@ public final class ConsoleMain {
 		LoraTrainingConfig trainCfg = currentTrainingConfig();
 		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
 			config = LlamaConfig.from(reader);
+			loraModelConfig = config;
 			tokenizer = GgufTokenizer.load(reader);
 			if (Files.exists(adapterFile)) {
+				long tLoad = System.currentTimeMillis();
 				adapters = LoraAdapterSet.load(adapterFile);
+				long loadMs = System.currentTimeMillis() - tLoad;
 				LoraInitializer.validate(adapters, config);
 				DoraInitializer.verifyFingerprints(reader, adapters);
 				DoraInitializer.attachMissingDoraState(reader, config, adapters);
+				QaLoraInitializer.verifyFingerprints(reader, adapters);
+				commitCheckpointEvent(adapters, "load", 2, adapters.size(), loadMs, Files.size(adapterFile));
 				print(Color.GREEN + "  ✔ Loaded checkpoint: " + adapters.size() + " adapters from " + loraPath
 						+ Color.RESET);
-				var sample = adapters.all().get(0);
-				print(Color.DIM + "  checkpoint mode=" + sample.mode + " scaling=" + sample.scaling + " init="
-						+ sample.initialization + " alpha=" + sample.alpha + " scale=" + sample.scale + Color.RESET);
+				if (!adapters.all().isEmpty()) {
+					var sample = adapters.all().get(0);
+					print(Color.DIM + "  checkpoint mode=" + sample.mode + " scaling=" + sample.scaling + " init="
+							+ sample.initialization + " alpha=" + sample.alpha + " scale=" + sample.scale
+							+ Color.RESET);
+				} else if (!adapters.allQa().isEmpty()) {
+					var sample = adapters.allQa().get(0);
+					print(Color.DIM + "  checkpoint mode=QA_LORA groupWidth=" + sample.groupWidth + " groups="
+							+ sample.groupCount + " alpha=" + sample.alpha + " scale=" + sample.scale + Color.RESET);
+				}
 				print(Color.YELLOW
 						+ "  ⚠ Continuing on prior weights. If every reply is the same answer, run /reset before /train-qa."
 						+ Color.RESET);
@@ -627,6 +657,11 @@ public final class ConsoleMain {
 						new Random(loraSeed));
 				print(Color.YELLOW + "  ✦ New DoRA adapters initialised (" + adapters.size() + " total · targets="
 						+ loraTargets + " · /save to persist)" + Color.RESET);
+			} else if (trainCfg.mode() == cab.ml.juno.lora.LoraMode.QA_LORA) {
+				adapters = QaLoraInitializer.create(reader, config, trainCfg.targets(), trainCfg.adapterConfig(),
+						new Random(loraSeed), trainCfg.groupWidth(), trainCfg.mergeCapability());
+				print(Color.YELLOW + "  ✦ New QA-LoRA adapters initialised (" + adapters.size()
+						+ " total · targets=" + loraTargets + " · /save to persist)" + Color.RESET);
 			} else {
 				adapters = LoraInitializer.create(config, trainCfg.targets(), trainCfg.adapterConfig(),
 						new Random(loraSeed));
@@ -738,6 +773,7 @@ public final class ConsoleMain {
 
 		loop.evictSession(history.sessionId());
 		print(Color.YELLOW + "\nbye." + Color.RESET);
+		stopAndExtractActiveJfr();
 		System.exit(0);
 	}
 
@@ -812,6 +848,9 @@ public final class ConsoleMain {
 					if (cfg.mode() == cab.ml.juno.lora.LoraMode.DORA)
 						fresh = DoraInitializer.create(reader, loraModelConfig, cfg.targets(), cfg.adapterConfig(),
 								new Random(loraSeed));
+					else if (cfg.mode() == cab.ml.juno.lora.LoraMode.QA_LORA)
+						fresh = QaLoraInitializer.create(reader, loraModelConfig, cfg.targets(), cfg.adapterConfig(),
+								new Random(loraSeed), cfg.groupWidth(), cfg.mergeCapability());
 					else
 						fresh = LoraInitializer.create(loraModelConfig, cfg.targets(), cfg.adapterConfig(),
 								new Random(loraSeed));
@@ -1109,8 +1148,10 @@ public final class ConsoleMain {
 	/** Normalize, clip, Adam-step, and emit one JFR event for an accumulation group. */
 	private static float applyLoraOptimizerUpdate(LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
 			LoraGradientBatch batch, int numTokens) {
+		LoraMetricsIdentity identity = currentTrainingConfig().metricsIdentity();
 		LoraTrainEvent event = new LoraTrainEvent();
 		event.begin();
+		identity.apply(event);
 		event.step = optimizer.step() + 1;
 		event.numTokens = numTokens;
 		event.chunkCount = batch.chunkCount();
@@ -1131,19 +1172,55 @@ public final class ConsoleMain {
 		event.loss = mean;
 		event.totalMs = event.forwardMs + event.backwardMs + event.optimizerMs;
 		event.commit();
+
+		if (identity.algorithm.equals("dora"))
+			LoraTrainingLoop.commitNormRefresh(identity, adapters, "post-step", 0L);
+
 		return mean;
 	}
 
 	private static void saveAdapters(LoraAdapterSet adapters, Path path, int stepsTrained) {
 		try {
 			Files.createDirectories(path.getParent() != null ? path.getParent() : Path.of("."));
+			long t0 = System.currentTimeMillis();
 			adapters.save(path);
-			long kb = Files.size(path) / 1024;
+			long ms = System.currentTimeMillis() - t0;
+			long bytes = Files.size(path);
+			commitCheckpointEvent(adapters, "save", 2, adapters.size(), ms, bytes);
+			long kb = bytes / 1024;
 			print(Color.GREEN + "  ✔ Saved → " + path + "  (" + adapters.size() + " adapters · " + kb + " KB" + "  · "
 					+ stepsTrained + " steps trained)" + Color.RESET);
 		} catch (IOException e) {
 			print(Color.RED + "  ✘ Save failed: " + e.getMessage() + Color.RESET);
 		}
+	}
+
+	private static void commitCheckpointEvent(LoraAdapterSet adapters, String operation, int version, int entryCount,
+			long durationMs, long bytes) {
+		LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(adapters,
+				loraModelConfig != null ? loraModelConfig.architecture() : "",
+				LoraMetricsIdentity.resolveTrainDevice(useGpu));
+		LoraCheckpointEvent ev = new LoraCheckpointEvent();
+		ev.begin();
+		identity.apply(ev);
+		ev.operation = operation;
+		ev.version = version;
+		ev.entryCount = entryCount;
+		ev.durationMs = durationMs;
+		ev.bytes = bytes;
+		ev.commit();
+	}
+
+	private static void commitPlaybackEvent(LoraAdapterSet adapters, long loadMs) {
+		LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(adapters,
+				loraModelConfig != null ? loraModelConfig.architecture() : "",
+				LoraMetricsIdentity.resolveTrainDevice(useGpu));
+		LoraPlaybackEvent ev = new LoraPlaybackEvent();
+		ev.begin();
+		identity.apply(ev);
+		ev.adapterCount = adapters != null ? adapters.size() : 0;
+		ev.loadMs = loadMs;
+		ev.commit();
 	}
 
 	/** Derive a .lora path from the model path (same dir, same stem). */
@@ -1159,15 +1236,28 @@ public final class ConsoleMain {
 	// ── JFR local mode ────────────────────────────────────────────────────────
 
 	/**
+	 * Starts a programmatic JFR recording for LoRA mode (parity with
+	 * {@link #startLocalJfr}), runs the LoRA REPL, and extracts metrics on exit.
+	 */
+	private static void startLoraJfr() throws Exception {
+		startProgrammaticJfr();
+		runLoraRepl(); // extracts via stopAndExtractActiveJfr() before System.exit
+	}
+
+	/**
 	 * Starts a programmatic JFR recording, runs the local REPL, and once the
 	 * recording period expires automatically extracts and prints metrics JSON.
 	 *
 	 * <p>Uses {@code jdk.jfr.Recording} so the JFR lifecycle is fully managed
-	 * in-process — no JVM flags required. A daemon virtual thread polls
-	 * {@code RecordingState}; when the state becomes {@code STOPPED} (duration
-	 * elapsed), {@link #extractAndPrintJfrMetrics(Path)} is called.
+	 * in-process — no JVM flags required. Metrics are extracted synchronously on
+	 * REPL quit; a platform-thread shutdown hook covers Ctrl-C / abrupt exit.
 	 */
 	private static void startLocalJfr() throws Exception {
+		startProgrammaticJfr();
+		runLocalRepl(); // extracts via stopAndExtractActiveJfr() before System.exit
+	}
+
+	private static void startProgrammaticJfr() throws Exception {
 		String modelName = Path.of(modelPath).getFileName().toString();
 		String modelStem = modelName.contains(".") ? modelName.substring(0, modelName.lastIndexOf('.')) : modelName;
 		String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
@@ -1175,37 +1265,64 @@ public final class ConsoleMain {
 		Path jfrFile = Path.of(jfrFileName);
 
 		Duration duration = parseJfrDuration(jfrDuration);
-
 		Configuration cfg = Configuration.getConfiguration("profile");
 		Recording rec = new Recording(cfg);
 		rec.setDuration(duration);
 		rec.setDestination(jfrFile);
 		rec.start();
 
+		activeJfrRecording = rec;
+		activeJfrFile = jfrFile;
+		activeJfrModelStem = modelStem;
+		activeJfrModelFilename = modelName;
+		jfrExtracted = false;
+
 		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration
 				+ "  output=" + jfrFileName + Color.RESET + "\n");
 
-		// Shutdown hook guarantees extraction runs even when startRepl() calls System.exit(0).
-		// We capture rec/jfrFile/modelStem/modelName in effectively-final locals.
-		final Recording recRef = rec;
-		final String modelStemFinal = modelStem;
-		final String modelNameFinal = modelName;
-		Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
+		// Platform thread: virtual-thread shutdown hooks can be skipped during JVM teardown.
+		Runtime.getRuntime().addShutdownHook(new Thread(() -> stopAndExtractActiveJfr(), "juno-jfr-extract"));
+	}
+
+	/**
+	 * Stop the active recording (if any), dump the file, and print metrics once.
+	 * Safe to call from the REPL quit path and from a shutdown hook.
+	 */
+	private static void stopAndExtractActiveJfr() {
+		synchronized (jfrLock) {
+			if (jfrExtracted)
+				return;
+			Recording rec = activeJfrRecording;
+			Path jfrFile = activeJfrFile;
+			String stem = activeJfrModelStem;
+			String filename = activeJfrModelFilename;
+			if (rec == null || jfrFile == null)
+				return;
+			jfrExtracted = true;
 			try {
-				if (recRef.getState() == RecordingState.RUNNING) {
-					recRef.stop();
-				}
-				// Brief wait for the file to be fully written
-				Thread.sleep(500);
-				extractAndPrintJfrMetrics(jfrFile, modelStemFinal, modelNameFinal);
+				if (rec.getState() == RecordingState.RUNNING)
+					rec.stop();
+			} catch (Exception e) {
+				System.err.println("JFR stop failed: " + e.getMessage());
+			}
+			try {
+				Thread.sleep(200);
+			} catch (InterruptedException ignored) {
+				Thread.currentThread().interrupt();
+			}
+			try {
+				extractAndPrintJfrMetrics(jfrFile, stem != null ? stem : "model",
+						filename != null ? filename : "model.gguf");
 			} catch (Exception e) {
 				System.err.println("JFR metrics extraction failed: " + e.getMessage());
 			} finally {
-				recRef.close();
+				try {
+					rec.close();
+				} catch (Exception ignored) {
+				}
+				activeJfrRecording = null;
 			}
-		}));
-
-		runLocalRepl(); // calls System.exit(0) on quit — shutdown hook fires from there
+		}
 	}
 
 	/**
@@ -1403,7 +1520,9 @@ public final class ConsoleMain {
 		LoraAdapterSet playAdapters = null;
 		if (loraPlayPath != null) {
 			print(Color.CYAN + "  ⚙ Loading LoRA adapters for inference: " + loraPlayPath + Color.RESET);
+			long t0 = System.currentTimeMillis();
 			playAdapters = LoraAdapterSet.load(Path.of(loraPlayPath));
+			commitPlaybackEvent(playAdapters, System.currentTimeMillis() - t0);
 			print(Color.GREEN + "  ✔ Loaded " + playAdapters.size() + " LoRA adapters  (inference-only, no training)"
 					+ Color.RESET);
 		}
@@ -1579,6 +1698,7 @@ public final class ConsoleMain {
 
 		loop.evictSession(history.sessionId());
 		print(Color.YELLOW + "\nbye." + Color.RESET);
+		stopAndExtractActiveJfr();
 		System.exit(0);
 	}
 

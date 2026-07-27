@@ -124,4 +124,42 @@ public final class LoraTrainEvent extends Event {
 	@Label("Dropout")
 	@Description("Train-only LoRA dropout rate used for this update (0 = disabled)")
 	public float dropout;
+
+	@Label("Algorithm")
+	@Description("Adapter algorithm: lora | dora | qa-lora")
+	public String algorithm = "";
+
+	@Label("Scaling")
+	@Description("Delta scaling: standard | rslora")
+	public String scaling = "";
+
+	@Label("Initialization")
+	@Description("A-matrix init: kaiming-uniform | legacy-normal")
+	public String initialization = "";
+
+	@Label("Architecture")
+	@Description("GGUF general.architecture label when known")
+	public String architecture = "";
+
+	@Label("Train Device")
+	@Description("cpu | cuda | rocm | auto")
+	public String trainDevice = "";
+
+	@Label("Rank")
+	public int rank;
+
+	@Label("Alpha")
+	public float alpha;
+
+	@Label("Effective Scale")
+	@Description("Resolved scale applied to B×A (alpha/rank or alpha/√rank)")
+	public float effectiveScale;
+
+	@Label("Targets")
+	@Description("Comma-separated logical projection keys")
+	public String targets = "";
+
+	@Label("Group Width")
+	@Description("QA-LoRA group width; 0 otherwise")
+	public int groupWidth;
 }

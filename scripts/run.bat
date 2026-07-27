@@ -464,18 +464,15 @@ if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
 set "LORA_PATH_FLAG="
 if not "%LORA_PATH_VAL%"=="" set "LORA_PATH_FLAG=--lora-path %LORA_PATH_VAL%"
 
-set "JFR_FLAG_LORA="
+set "JFR_ARG_LORA="
 if "%JFR_DURATION_LORA%"=="" goto :lora_jfr_skip
-for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
-set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
-set "JFR_FLAG_LORA=-XX:StartFlightRecording=duration=%JFR_DURATION_LORA%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
-echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  output=juno-!JFR_TS!.jfr
-echo [WARN] After exit: open juno-!JFR_TS!.jfr in JDK Mission Control -^> Event Browser -^> juno.LoraTrainStep
+set "JFR_ARG_LORA=--jfr %JFR_DURATION_LORA%"
+echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  (programmatic recording, metrics auto-printed on exit)
 :lora_jfr_skip
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --lora-mode %LORA_MODE% --lora-scaling %LORA_SCALING% --lora-init %LORA_INIT% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --lora-mode %LORA_MODE% --lora-scaling %LORA_SCALING% --lora-init %LORA_INIT% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %JFR_ARG_LORA% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================

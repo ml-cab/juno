@@ -50,7 +50,27 @@ by `--lora-plus-ratio` (default `1.0`). Train-only deterministic dropout may mas
 branch input; inference and validation never apply dropout. With `--lora-validation-split`
 and `--lora-validation-patience`, complete units (Q&A variants or text chunks) are held out;
 best A/B weights are restored on exit and the optimizer is reset. JFR `juno.LoraTrainStep`
-fires once per optimizer update (includes A/B LR, LoRA+ ratio, dropout).
+fires once per optimizer update (includes A/B LR, LoRA+ ratio, dropout, and mode-identity
+fields: algorithm / scaling / init / architecture / trainDevice / rank / alpha / targets /
+groupWidth). Held-out evals emit `juno.LoraValidation`. DoRA also emits
+`juno.LoraNormRefresh`; merge emits `juno.LoraMerge`; `--lora-play` load emits
+`juno.LoraPlayback`; save/load emit `juno.LoraCheckpoint`.
+
+### Profiling with `--jfr`
+
+```bash
+./juno lora --model-path /path/to/model.gguf --jfr 1m --lora-mode dora
+# train, then quit → prints JFR Metrics Summary and writes target/metrics/metrics.json
+```
+
+LoRA `--jfr` uses the same programmatic recording as `./juno local --jfr` (not a JVM
+`-XX:StartFlightRecording` flag). Metrics JSON keys include
+`juno.LoraTrainStep.*.p95`, `juno.LoraTrainStep.by_algorithm.<algo>.*`,
+`juno.LoraValidation.*`, `juno.LoraMerge.rmse.last`, `juno.LoraNormRefresh.count`, and
+`juno.LoraPlayback.load_ms.p95`. Missing series are `0` (never NaN). Projected-merge
+RMSE / delta-retention are approximate requantization quality, not exact QA-LoRA
+closure proofs. Tier-4 timing subsets (`frozen_forward_ms`, `frozen_transpose_ms`, …)
+may be zero on CPU-only runs.
 
 ---
 
@@ -254,6 +274,22 @@ Re-quantizing the merged weights back to Q4_K destroys the delta entirely. `Lora
 patched projection tensors (any of the seven supported keys) as F32 and copies all other tensors
 verbatim. All-linear merges expand file size substantially. The output is
 a valid GGUF v3 file.
+
+Tier 5 Gate A extracted shared Q4_K / Q5_K / Q6_K codecs (`GgufQuantCodec`, encoder id
+`juno-kquant-v1`). Tier 5 also adds **QA-LoRA** (`--lora-mode qa-lora`): sum-pooled input
+groups with A shaped `rank × groupCount` (group width auto from tensor type: 32 for Q4_K/Q5_K,
+16 for Q6_K). This is not QLoRA.
+
+Merge policies (`--lora-merge`):
+
+| Policy | Behaviour |
+|--------|-----------|
+| `f32-preserve` (default) | Adapted tensors written as F32 |
+| `source-type-projected` | Decode → add delta → encode with `juno-kquant-v1` (approximate requantization; reports delta retention / RMSE) |
+| `sidecar-only` | Forbids bake-in merge; use overlay playback |
+
+Exact QA-LoRA zero-point merge into K-quants is **not** supported. Overlay (sidecar) and F32
+preserve remain the safe production paths.
 
 ### Programmatic API
 

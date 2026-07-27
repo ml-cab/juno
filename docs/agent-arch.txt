@@ -2,16 +2,20 @@ Juno multi-module Maven project (JDK 25).
 
 Module dependency (excerpt):
   api, registry, tokenizer, sampler, kvcache, health, metrics — shared libraries
-  lora — LoRA/rsLoRA/DoRA adapters, .lora checkpoint v1+v2, AdamW + LoRA+ (no GGUF, no CUDA)
-  node — GgufReader, LlamaTransformerHandler, Phi3TransformerHandler, MatVec
+  lora — LoRA/rsLoRA/DoRA/QA-LoRA adapters, .lora checkpoint v1+v2, AdamW + LoRA+ (no GGUF, no CUDA)
+  node — GgufReader, GgufQuantCodec, GgufKQuantCodec, QuantizationLayout,
+        QuantizedMergeMetrics, QaLoraInitializer, LlamaTransformerHandler, Phi3TransformerHandler, MatVec
         (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,
         CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
         DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
-        LoraTrainableHandler, LoraMerge, LoraInitializer, LoraProjection, LoraQvInitializer
+        LoraTrainableHandler, LoraMerge, LoraInitializer, LoraProjection, LoraQvInitializer,
+        LoraMetricsIdentity, LoraTrainEvent, LoraValidationEvent,
+        LoraNormRefreshEvent, LoraMergeEvent, LoraPlaybackEvent, LoraCheckpointEvent
         node depends on lora
+  metrics — JfrMetricsExtractor (MatVec/ForwardPass + full LoRA event catalog), MetricsMain
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
         coordinator depends on node
-  juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,
+  juno-player — ConsoleMain REPL (local/cluster/lora programmatic --jfr), ClusterHarness, LoraMergeMain,
         ProcessPipelineClient, TensorParallelPipelineClient
         juno-player depends on coordinator (and transitively on node)
   juno-master — CoordinatorMain standalone executable (production coordinator)

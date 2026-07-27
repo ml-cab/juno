@@ -1,5 +1,51 @@
 ## Status
 
+**Session 41** — LoRA Tier 7 (start): JFR metrics for all adapter modes and operations.
+
+### LoRA JFR metrics (Tier 7)
+
+- Programmatic LoRA `--jfr` lifecycle matches local mode (`jdk.jfr.Recording` + auto-extract `target/metrics/metrics.json` on exit). Launchers pass `--jfr` as an app arg (no `-XX:StartFlightRecording` for LoRA).
+- `LoraMetricsIdentity` — CLI vocabulary tags (`lora` / `rslora` / `dora` / `qa-lora`) on train, validation, merge, norm-refresh, playback, and checkpoint events.
+- New events: `juno.LoraNormRefresh`, `juno.LoraMerge`, `juno.LoraPlayback`, `juno.LoraCheckpoint`.
+- `JfrMetricsExtractor` aggregates train/validation/merge/DoRA-refresh/playback series with guarded field reads (older recordings still extract).
+
+---
+
+## Status
+
+**Session 40** — LoRA Tier 5 (complete implementation): QA-LoRA + merge policies.
+
+### LoRA QA-LoRA and quantized merge (Tier 5)
+
+- Gate A codecs retained: `QuantizationLayout`, `GgufQuantCodec` / `GgufKQuantCodec` (`juno-kquant-v1`), `QuantizedMergeMetrics`.
+- `QaLoraAdapter` — sum-pool grouped A (`rank×groupCount`) + B; dense-expansion oracle and finite-difference tests.
+- `AdapterAlgorithm`, `MergeCapability` (`SIDECAR_ONLY` / `F32_PRESERVE` / `SOURCE_TYPE_PROJECTED`; `EXACT_AFFINE` rejected for K-quants).
+- Checkpoint v2: QA entries store `groupWidth` before A, Tier-5 extension blob (algorithm, pooling, ggml type, encoder id, merge policy); v1 export rejected for QA-LoRA.
+- `QaLoraInitializer` — group width from actual tensor GGML type (Q4_K/Q5_K→32, Q6_K→16); fingerprints verified on load.
+- Training/playback: `LoraTrainableHandler`, Adam, gradients, CLI `--lora-mode qa-lora`, `--lora-group-width`, `--lora-merge`.
+- `LoraMerge` — F32 preserve (default) and explicit `SOURCE_TYPE_PROJECTED` requantization with per-tensor metrics; zero-delta copies raw bytes; never silent exact→projected fallback.
+- Exact K-quant QA-LoRA zero-point merge remains **no-go**. Full held-out experiment matrix / deployment quality gates are research follow-ups; sidecar + F32 stay production-safe.
+
+---
+
+## Status
+
+**Session 39** — LoRA Tier 5 (Gate A start): shared GGUF K-quant codec layer.
+
+### LoRA QA-LoRA / quantized merge foundations (Tier 5 Gate A)
+
+- `QuantizationLayout` — Q4_K / Q5_K / Q6_K geometry (block/sub-block width, affine vs symmetric).
+- `GgufKQuantCodec` / `GgufQuantCodec` — versioned encoder id `juno-kquant-v1`; decode matches llama.cpp goldens; encode moved out of `LoraMerge`.
+- `QuantizedMergeMetrics` — RMSE, max error, delta-retention helpers for projected merge.
+- `GgufReader` and `LlamaTransformerHandler.dequantize` delegate K-quant decode to the shared codec; fused matVec paths unchanged for performance.
+- No-op path: `copyRawUnchanged` — decode/re-encode must not be used for byte-identical preservation.
+- Non-closure tests: Q6_K additive shift and Q4_K nested-scale offset are not exact (exact K-merge remains no-go).
+- Next: grouped QA-LoRA math (Gate B), merge capability policy, then projected merge experiments.
+
+---
+
+## Status
+
 **Session 38** — LoRA Tier 4 (start): resident transpose primitives and baseline instrumentation.
 
 ### LoRA GPU training foundations (Tier 4)

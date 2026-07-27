@@ -50,6 +50,10 @@ public final class LoraAdapterSet {
 	private static final char KEY_SEP = ':';
 
 	private final Map<String, LoraAdapter> adapters = new LinkedHashMap<>();
+	/** Grouped QA-LoRA adapters (mutually exclusive keys with {@link #adapters}). */
+	private final Map<String, QaLoraAdapter> qaAdapters = new LinkedHashMap<>();
+	/** Per-key Tier-5 merge / layout metadata for QA entries. */
+	private final Map<String, QaLoraEntryMeta> qaMeta = new LinkedHashMap<>();
 	/** Optional DoRA magnitude vectors keyed identically to adapters. */
 	private final Map<String, DoraMagnitude> magnitudes = new LinkedHashMap<>();
 	/** Optional adapted-base tensor fingerprints for DoRA entries. */
@@ -58,18 +62,43 @@ public final class LoraAdapterSet {
 	private long doraGeneration = 0;
 
 	public void add(int layer, String proj, LoraAdapter adapter) {
-		adapters.put(key(layer, proj), adapter);
+		String k = key(layer, proj);
+		if (qaAdapters.containsKey(k))
+			throw new IllegalArgumentException("key already has QA-LoRA adapter: " + k);
+		if (adapter.mode == LoraMode.QA_LORA)
+			throw new IllegalArgumentException("use addQa for QA_LORA adapters");
+		adapters.put(k, adapter);
+	}
+
+	public void addQa(int layer, String proj, QaLoraAdapter adapter, QaLoraEntryMeta meta) {
+		String k = key(layer, proj);
+		if (adapters.containsKey(k))
+			throw new IllegalArgumentException("key already has dense LoRA adapter: " + k);
+		Objects.requireNonNull(adapter, "adapter");
+		Objects.requireNonNull(meta, "meta");
+		if (meta.groupWidth() != adapter.groupWidth)
+			throw new IllegalArgumentException("meta groupWidth mismatch");
+		qaAdapters.put(k, adapter);
+		qaMeta.put(k, meta);
 	}
 
 	public LoraAdapter get(int layer, String proj) {
 		return adapters.get(key(layer, proj));
 	}
 
+	public QaLoraAdapter getQa(int layer, String proj) {
+		return qaAdapters.get(key(layer, proj));
+	}
+
+	public QaLoraEntryMeta getQaMeta(int layer, String proj) {
+		return qaMeta.get(key(layer, proj));
+	}
+
 	public void putMagnitude(int layer, String proj, DoraMagnitude magnitude) {
 		String k = key(layer, proj);
 		LoraAdapter adapter = adapters.get(k);
 		if (adapter == null)
-			throw new IllegalArgumentException("magnitude requires matching adapter: " + k);
+			throw new IllegalArgumentException("magnitude requires matching dense adapter: " + k);
 		Objects.requireNonNull(magnitude, "magnitude");
 		if (magnitude.length() != adapter.outDim)
 			throw new IllegalArgumentException(
@@ -83,7 +112,7 @@ public final class LoraAdapterSet {
 
 	public void putFingerprint(int layer, String proj, BaseTensorFingerprint fingerprint) {
 		String k = key(layer, proj);
-		if (!adapters.containsKey(k))
+		if (!adapters.containsKey(k) && !qaAdapters.containsKey(k))
 			throw new IllegalArgumentException("fingerprint requires matching adapter: " + k);
 		fingerprints.put(k, Objects.requireNonNull(fingerprint, "fingerprint"));
 	}
@@ -96,8 +125,20 @@ public final class LoraAdapterSet {
 		return List.copyOf(adapters.values());
 	}
 
+	public List<QaLoraAdapter> allQa() {
+		return List.copyOf(qaAdapters.values());
+	}
+
 	public Map<String, LoraAdapter> asMap() {
 		return java.util.Collections.unmodifiableMap(adapters);
+	}
+
+	public Map<String, QaLoraAdapter> asQaMap() {
+		return java.util.Collections.unmodifiableMap(qaAdapters);
+	}
+
+	public Map<String, QaLoraEntryMeta> qaMeta() {
+		return java.util.Collections.unmodifiableMap(qaMeta);
 	}
 
 	public Map<String, DoraMagnitude> magnitudes() {
@@ -118,11 +159,13 @@ public final class LoraAdapterSet {
 	}
 
 	public int size() {
-		return adapters.size();
+		return adapters.size() + qaAdapters.size();
 	}
 
 	public void zeroAllGrads() {
 		for (LoraAdapter a : adapters.values())
+			a.zeroGrad();
+		for (QaLoraAdapter a : qaAdapters.values())
 			a.zeroGrad();
 		for (DoraMagnitude m : magnitudes.values())
 			m.zeroGrad();
@@ -160,8 +203,21 @@ public final class LoraAdapterSet {
 				fingerprints.put(k, fp);
 			n++;
 		}
-		// DoRA keeps row coefficients in DoraProjection until generation bumps;
-		// without this, /reset leaves trained magnitude scaling in effect.
+		for (var entry : qaAdapters.entrySet()) {
+			String k = entry.getKey();
+			QaLoraAdapter src = fresh.qaAdapters.get(k);
+			if (src != null)
+				entry.getValue().copyWeightsFrom(src);
+			else
+				entry.getValue().reinitialize(rng);
+			QaLoraEntryMeta meta = fresh.qaMeta.get(k);
+			if (meta != null)
+				qaMeta.put(k, meta);
+			BaseTensorFingerprint fp = fresh.fingerprints.get(k);
+			if (fp != null)
+				fingerprints.put(k, fp);
+			n++;
+		}
 		invalidateDoraCaches();
 		return n;
 	}
@@ -182,6 +238,8 @@ public final class LoraAdapterSet {
 			if (a.mode == LoraMode.DORA)
 				throw new IllegalStateException("cannot export DoRA adapters as legacy v1");
 		}
+		if (!qaAdapters.isEmpty())
+			throw new IllegalStateException("cannot export QA-LoRA adapters as legacy v1");
 		try (var out = new DataOutputStream(Files.newOutputStream(path))) {
 			out.writeInt(MAGIC);
 			out.writeInt(VERSION_V1);
@@ -208,9 +266,14 @@ public final class LoraAdapterSet {
 		try (var out = new DataOutputStream(Files.newOutputStream(path))) {
 			out.writeInt(MAGIC);
 			out.writeInt(VERSION_V2);
-			out.writeInt(adapters.size());
+			out.writeInt(adapters.size() + qaAdapters.size());
 			for (var entry : adapters.entrySet()) {
 				byte[] payload = encodeV2Entry(entry.getKey(), entry.getValue());
+				out.writeInt(payload.length);
+				out.write(payload);
+			}
+			for (var entry : qaAdapters.entrySet()) {
+				byte[] payload = encodeV2QaEntry(entry.getKey(), entry.getValue(), qaMeta.get(entry.getKey()));
 				out.writeInt(payload.length);
 				out.write(payload);
 			}
@@ -249,8 +312,58 @@ public final class LoraAdapterSet {
 			if (hasFp)
 				fp.write(out);
 
-			// Reserved length-delimited extension for Tier 5 metadata.
-			out.writeInt(0);
+			out.writeInt(0); // no Tier-5 extension for dense LoRA/DoRA
+		}
+		return bos.toByteArray();
+	}
+
+	private byte[] encodeV2QaEntry(String key, QaLoraAdapter a, QaLoraEntryMeta meta) throws IOException {
+		Objects.requireNonNull(meta, "qa meta for " + key);
+		ByteArrayOutputStream bos = new ByteArrayOutputStream();
+		try (DataOutputStream out = new DataOutputStream(bos)) {
+			byte[] keyBytes = key.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			out.writeInt(keyBytes.length);
+			out.write(keyBytes);
+			out.writeInt(a.rank);
+			out.writeInt(a.inDim);
+			out.writeInt(a.outDim);
+			out.writeFloat(a.alpha);
+			out.writeInt(a.scaling.ordinal());
+			out.writeInt(a.initialization.ordinal());
+			out.writeInt(LoraMode.QA_LORA.ordinal());
+			out.writeInt(a.groupWidth); // mode-conditional: sizes A
+			for (float f : a.a())
+				out.writeFloat(f);
+			for (float f : a.b())
+				out.writeFloat(f);
+
+			out.writeBoolean(false); // no DoRA magnitude
+			BaseTensorFingerprint fp = fingerprints.get(key);
+			boolean hasFp = fp != null;
+			out.writeBoolean(hasFp);
+			if (hasFp)
+				fp.write(out);
+
+			byte[] ext = encodeQaExtension(meta);
+			out.writeInt(ext.length);
+			out.write(ext);
+		}
+		return bos.toByteArray();
+	}
+
+	private static byte[] encodeQaExtension(QaLoraEntryMeta meta) throws IOException {
+		ByteArrayOutputStream bos = new ByteArrayOutputStream();
+		try (DataOutputStream out = new DataOutputStream(bos)) {
+			out.writeInt(1); // extVersion
+			out.writeInt(AdapterAlgorithm.QA_LORA.ordinal());
+			out.writeInt(meta.pooling().ordinal());
+			out.writeInt(meta.groupWidth());
+			out.writeInt(meta.groupCount());
+			out.writeInt(meta.ggmlType());
+			byte[] enc = meta.encoderId().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			out.writeInt(enc.length);
+			out.write(enc);
+			out.writeInt(meta.mergeCapability().ordinal());
 		}
 		return bos.toByteArray();
 	}
@@ -315,7 +428,7 @@ public final class LoraAdapterSet {
 	private static void decodeV2Entry(LoraAdapterSet set, byte[] payload) throws IOException {
 		try (DataInputStream in = new DataInputStream(new java.io.ByteArrayInputStream(payload))) {
 			String key = readKey(in);
-			if (set.adapters.containsKey(key))
+			if (set.adapters.containsKey(key) || set.qaAdapters.containsKey(key))
 				throw new IOException("Duplicate adapter key: " + key);
 
 			int rank = in.readInt();
@@ -327,44 +440,109 @@ public final class LoraAdapterSet {
 			LoraMode mode = LoraMode.fromId(in.readInt());
 			validateDims(rank, inDim, outDim, alpha);
 
-			int aLen = Math.multiplyExact(rank, inDim);
-			int bLen = Math.multiplyExact(outDim, rank);
-			float[] aArr = readFloats(in, aLen);
-			float[] bArr = readFloats(in, bLen);
-			requireFinite(aArr, "A");
-			requireFinite(bArr, "B");
+			if (mode == LoraMode.QA_LORA) {
+				int groupWidth = in.readInt();
+				if (groupWidth < 1 || inDim % groupWidth != 0)
+					throw new IOException("Invalid QA-LoRA groupWidth=" + groupWidth + " for inDim=" + inDim);
+				int groupCount = inDim / groupWidth;
+				int aLen = Math.multiplyExact(rank, groupCount);
+				int bLen = Math.multiplyExact(outDim, rank);
+				float[] aArr = readFloats(in, aLen);
+				float[] bArr = readFloats(in, bLen);
+				requireFinite(aArr, "A");
+				requireFinite(bArr, "B");
 
-			LoraAdapterConfig config = LoraAdapterConfig.of(rank, alpha, scaling, initialization, mode);
-			LoraAdapter adapter = LoraAdapter.fromWeights(config, inDim, outDim, aArr, bArr);
-			set.adapters.put(key, adapter);
+				boolean hasMag = in.readBoolean();
+				if (hasMag)
+					throw new IOException("QA-LoRA entry must not carry DoRA magnitude: " + key);
 
-			boolean hasMag = in.readBoolean();
-			if (hasMag) {
-				float[] mag = readFloats(in, outDim);
-				requireFinite(mag, "magnitude");
-				set.magnitudes.put(key, DoraMagnitude.fromValues(mag));
-			} else if (mode == LoraMode.DORA) {
-				throw new IOException("DoRA entry missing magnitude: " + key);
-			}
+				boolean hasFp = in.readBoolean();
+				if (hasFp)
+					set.fingerprints.put(key, BaseTensorFingerprint.read(in));
 
-			boolean hasFp = in.readBoolean();
-			if (hasFp)
-				set.fingerprints.put(key, BaseTensorFingerprint.read(in));
-
-			int extLen = in.readInt();
-			if (extLen < 0)
-				throw new IOException("Negative extension length: " + extLen);
-			if (extLen > 0) {
+				int extLen = in.readInt();
+				if (extLen < 0)
+					throw new IOException("Negative extension length: " + extLen);
+				if (extLen == 0)
+					throw new IOException("QA-LoRA entry missing Tier-5 extension: " + key);
 				byte[] ext = in.readNBytes(extLen);
 				if (ext.length != extLen)
 					throw new EOFException("Truncated extension block");
-				// Reserved for Tier 5 — ignore unknown extensions for forward compat.
+				QaLoraEntryMeta meta = decodeQaExtension(ext, groupWidth, groupCount);
+
+				LoraAdapterConfig config = LoraAdapterConfig.of(rank, alpha, scaling, initialization, mode);
+				QaLoraAdapter adapter = QaLoraAdapter.fromWeights(config, inDim, outDim, groupWidth, aArr, bArr);
+				set.qaAdapters.put(key, adapter);
+				set.qaMeta.put(key, meta);
+			} else {
+				int aLen = Math.multiplyExact(rank, inDim);
+				int bLen = Math.multiplyExact(outDim, rank);
+				float[] aArr = readFloats(in, aLen);
+				float[] bArr = readFloats(in, bLen);
+				requireFinite(aArr, "A");
+				requireFinite(bArr, "B");
+
+				LoraAdapterConfig config = LoraAdapterConfig.of(rank, alpha, scaling, initialization, mode);
+				LoraAdapter adapter = LoraAdapter.fromWeights(config, inDim, outDim, aArr, bArr);
+				set.adapters.put(key, adapter);
+
+				boolean hasMag = in.readBoolean();
+				if (hasMag) {
+					float[] mag = readFloats(in, outDim);
+					requireFinite(mag, "magnitude");
+					set.magnitudes.put(key, DoraMagnitude.fromValues(mag));
+				} else if (mode == LoraMode.DORA) {
+					throw new IOException("DoRA entry missing magnitude: " + key);
+				}
+
+				boolean hasFp = in.readBoolean();
+				if (hasFp)
+					set.fingerprints.put(key, BaseTensorFingerprint.read(in));
+
+				int extLen = in.readInt();
+				if (extLen < 0)
+					throw new IOException("Negative extension length: " + extLen);
+				if (extLen > 0) {
+					byte[] ext = in.readNBytes(extLen);
+					if (ext.length != extLen)
+						throw new EOFException("Truncated extension block");
+					// Unknown dense extensions ignored for forward compat.
+				}
 			}
 
 			if (in.read() != -1)
 				throw new IOException("Trailing bytes inside LoRA entry: " + key);
 		} catch (IllegalArgumentException e) {
 			throw new IOException("Corrupt LoRA entry: " + e.getMessage(), e);
+		}
+	}
+
+	private static QaLoraEntryMeta decodeQaExtension(byte[] ext, int groupWidth, int groupCount) throws IOException {
+		try (DataInputStream in = new DataInputStream(new java.io.ByteArrayInputStream(ext))) {
+			int extVersion = in.readInt();
+			if (extVersion != 1)
+				throw new IOException("Unsupported QA extension version: " + extVersion);
+			AdapterAlgorithm algo = AdapterAlgorithm.fromId(in.readInt());
+			if (algo != AdapterAlgorithm.QA_LORA)
+				throw new IOException("Expected QA_LORA algorithm, got " + algo);
+			QaLoraAdapter.PoolingOp pooling = QaLoraAdapter.PoolingOp.fromId(in.readInt());
+			int gw = in.readInt();
+			int gc = in.readInt();
+			if (gw != groupWidth || gc != groupCount)
+				throw new IOException("QA extension group mismatch: " + gw + "x" + gc + " vs " + groupWidth + "x"
+						+ groupCount);
+			int ggmlType = in.readInt();
+			int encLen = in.readInt();
+			if (encLen < 1 || encLen > 1024)
+				throw new IOException("Invalid encoder id length: " + encLen);
+			byte[] encBytes = in.readNBytes(encLen);
+			if (encBytes.length != encLen)
+				throw new EOFException("Truncated encoder id");
+			String encoderId = new String(encBytes, java.nio.charset.StandardCharsets.UTF_8);
+			MergeCapability merge = MergeCapability.fromId(in.readInt());
+			if (in.read() != -1)
+				throw new IOException("Trailing bytes in QA extension");
+			return new QaLoraEntryMeta(gw, gc, ggmlType, encoderId, merge, pooling);
 		}
 	}
 

@@ -16,22 +16,25 @@
 package cab.ml.juno.lora;
 
 /**
- * Adapter algorithm mode.
+ * Explicit merge output policy for LoRA / QA-LoRA checkpoints.
  *
- * <ul>
- * <li>{@link #LORA} — plain LoRA / rsLoRA (scaling selected separately).
- * <li>{@link #DORA} — canonical detached-norm DoRA over a LoRA direction.
- * <li>{@link #QA_LORA} — grouped input-pooling QA-LoRA (not QLoRA).
- * </ul>
+ * <p>Never silently fall back from {@link #EXACT_AFFINE} to
+ * {@link #SOURCE_TYPE_PROJECTED}. {@link #F32_PRESERVE} is the product default.
+ * {@link #SOURCE_TYPE_PROJECTED} is approximate requantization, not exact
+ * QA-LoRA zero-point merge.
  */
-public enum LoraMode {
+public enum MergeCapability {
 
-	LORA, DORA, QA_LORA;
+	SIDECAR_ONLY,
+	F32_PRESERVE,
+	SOURCE_TYPE_PROJECTED,
+	EXACT_AFFINE,
+	UNSUPPORTED;
 
-	static LoraMode fromId(int id) {
-		LoraMode[] values = values();
+	public static MergeCapability fromId(int id) {
+		MergeCapability[] values = values();
 		if (id < 0 || id >= values.length)
-			throw new IllegalArgumentException("unknown LoraMode id: " + id);
+			throw new IllegalArgumentException("unknown MergeCapability id: " + id);
 		return values[id];
 	}
 }

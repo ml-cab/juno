@@ -23,42 +23,15 @@ import jdk.jfr.Name;
 import jdk.jfr.StackTrace;
 
 /**
- * JFR event emitted once per held-out validation evaluation.
+ * Low-frequency session summary when LoRA adapters are loaded for inference
+ * ({@code --lora-play}). Per-token timing remains {@code juno.ForwardPass}.
  */
-@Name("juno.LoraValidation")
-@Label("LoRA Validation")
-@Description("Held-out validation loss for LoRA fine-tuning")
+@Name("juno.LoraPlayback")
+@Label("LoRA Playback")
+@Description("Sidecar adapter load / playback session summary")
 @Category({ "Juno", "LoRA" })
 @StackTrace(false)
-public final class LoraValidationEvent extends Event {
-
-	@Label("Loss")
-	@Description("Token-weighted mean validation loss (nats)")
-	public float loss;
-
-	@Label("Prediction Count")
-	@Description("Number of validation prediction tokens")
-	public int predictionCount;
-
-	@Label("Duration ms")
-	@Description("Wall time of the validation evaluation (ms)")
-	public long durationMs;
-
-	@Label("Best So Far")
-	@Description("Whether this validation loss improved the best-so-far")
-	public boolean bestSoFar;
-
-	@Label("Pass Index")
-	@Description("1-based training pass index when known; 0 otherwise")
-	public int passIndex;
-
-	@Label("Optimizer Step")
-	@Description("Optimizer update count at evaluation time")
-	public int optimizerStep;
-
-	@Label("Train Loss At Eval")
-	@Description("Most recent train loss at evaluation; NaN when unknown")
-	public float trainLossAtEval = Float.NaN;
+public final class LoraPlaybackEvent extends Event {
 
 	@Label("Algorithm")
 	public String algorithm = "";
@@ -89,4 +62,18 @@ public final class LoraValidationEvent extends Event {
 
 	@Label("Group Width")
 	public int groupWidth;
+
+	@Label("Adapter Count")
+	public int adapterCount;
+
+	@Label("Load ms")
+	public long loadMs;
+
+	@Label("Forward Count")
+	@Description("Optional session forward count; 0 when not attributed")
+	public int forwardCount;
+
+	@Label("Tokens Generated")
+	@Description("Optional session token count; 0 when not attributed")
+	public int tokensGenerated;
 }

@@ -23,42 +23,14 @@ import jdk.jfr.Name;
 import jdk.jfr.StackTrace;
 
 /**
- * JFR event emitted once per held-out validation evaluation.
+ * JFR event emitted once per DoRA norm-cache refresh (full or partial batch).
  */
-@Name("juno.LoraValidation")
-@Label("LoRA Validation")
-@Description("Held-out validation loss for LoRA fine-tuning")
+@Name("juno.LoraNormRefresh")
+@Label("LoRA Norm Refresh")
+@Description("DoRA row-norm / coefficient cache refresh")
 @Category({ "Juno", "LoRA" })
 @StackTrace(false)
-public final class LoraValidationEvent extends Event {
-
-	@Label("Loss")
-	@Description("Token-weighted mean validation loss (nats)")
-	public float loss;
-
-	@Label("Prediction Count")
-	@Description("Number of validation prediction tokens")
-	public int predictionCount;
-
-	@Label("Duration ms")
-	@Description("Wall time of the validation evaluation (ms)")
-	public long durationMs;
-
-	@Label("Best So Far")
-	@Description("Whether this validation loss improved the best-so-far")
-	public boolean bestSoFar;
-
-	@Label("Pass Index")
-	@Description("1-based training pass index when known; 0 otherwise")
-	public int passIndex;
-
-	@Label("Optimizer Step")
-	@Description("Optimizer update count at evaluation time")
-	public int optimizerStep;
-
-	@Label("Train Loss At Eval")
-	@Description("Most recent train loss at evaluation; NaN when unknown")
-	public float trainLossAtEval = Float.NaN;
+public final class LoraNormRefreshEvent extends Event {
 
 	@Label("Algorithm")
 	public String algorithm = "";
@@ -89,4 +61,23 @@ public final class LoraValidationEvent extends Event {
 
 	@Label("Group Width")
 	public int groupWidth;
+
+	@Label("Layer Count")
+	@Description("Distinct layers touched by this refresh")
+	public int layerCount;
+
+	@Label("Projection Count")
+	@Description("Number of DoRA projections refreshed")
+	public int projectionCount;
+
+	@Label("Duration ms")
+	public long durationMs;
+
+	@Label("Bytes Touched")
+	@Description("Optional estimate of bytes read/written; 0 when unknown")
+	public long bytesTouched;
+
+	@Label("Reason")
+	@Description("load | post-step | reset | explicit")
+	public String reason = "";
 }

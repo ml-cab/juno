@@ -27,9 +27,12 @@ import cab.ml.juno.lora.LoraAdapterSet;
 import cab.ml.juno.lora.LoraAdamOptimizer;
 import cab.ml.juno.lora.LoraGradients;
 import cab.ml.juno.lora.LoraLearningRateSchedule;
+import cab.ml.juno.lora.LoraMode;
 import cab.ml.juno.lora.LoraTrainContext;
 import cab.ml.juno.node.LoraGradientBatch;
 import cab.ml.juno.node.LoraGradientResult;
+import cab.ml.juno.node.LoraMetricsIdentity;
+import cab.ml.juno.node.LoraNormRefreshEvent;
 import cab.ml.juno.node.LoraTrainEvent;
 import cab.ml.juno.node.LoraTrainableHandler;
 import cab.ml.juno.node.LoraValidationEvent;
@@ -158,7 +161,7 @@ public final class LoraTrainingLoop {
 		int planned = plannedUpdates(trainChunks.size(), config.gradientAccumulationSteps(), maxPasses);
 		LoraLearningRateSchedule schedule = buildSchedule(config, planned);
 
-		Map<LoraAdapter, float[][]> bestWeights = null;
+		WeightSnapshot bestWeights = null;
 		float bestVal = Float.POSITIVE_INFINITY;
 		int bestPass = -1;
 		int badChecks = 0;
@@ -173,13 +176,14 @@ public final class LoraTrainingLoop {
 				long t0 = System.currentTimeMillis();
 				lastVal = evaluateUnits(valUnits, evaluator, chunkTokens);
 				boolean best = lastVal + config.validationMinDelta() < bestVal;
-				commitValidation(lastVal, 0, System.currentTimeMillis() - t0, best);
+				commitValidation(config.metricsIdentity(), lastVal, 0, System.currentTimeMillis() - t0, best,
+						pass + 1, optimizer.step(), lastTrain);
 				if (best) {
 					bestVal = lastVal;
 					bestPass = pass;
 					badChecks = 0;
 					if (config.restoreBest())
-						bestWeights = snapshot(adapters);
+						bestWeights = snapshotAll(adapters);
 				} else {
 					badChecks++;
 				}
@@ -206,7 +210,7 @@ public final class LoraTrainingLoop {
 
 		int updateCount = optimizer.step();
 		if (config.restoreBest() && bestWeights != null) {
-			restore(adapters, bestWeights);
+			restoreAll(adapters, bestWeights);
 			optimizer.reset();
 		}
 
@@ -271,8 +275,10 @@ public final class LoraTrainingLoop {
 
 	private static float stepOptimizer(LoraAdapterSet adapters, LoraAdamOptimizer optimizer, LoraGradientBatch batch,
 			int numTokens, LoraTrainingConfig config, LoraLearningRateSchedule schedule) {
+		LoraMetricsIdentity identity = config.metricsIdentity();
 		LoraTrainEvent event = new LoraTrainEvent();
 		event.begin();
+		identity.apply(event);
 		event.step = optimizer.step() + 1;
 		event.numTokens = numTokens;
 		event.chunkCount = batch.chunkCount();
@@ -298,6 +304,10 @@ public final class LoraTrainingLoop {
 		event.loss = mean;
 		event.totalMs = event.forwardMs + event.backwardMs + event.optimizerMs;
 		event.commit();
+
+		if (config.mode() == LoraMode.DORA)
+			commitNormRefresh(identity, adapters, "post-step", 0L);
+
 		return mean;
 	}
 
@@ -315,9 +325,29 @@ public final class LoraTrainingLoop {
 		return out;
 	}
 
+	private record WeightSnapshot(Map<LoraAdapter, float[][]> dense,
+			Map<cab.ml.juno.lora.QaLoraAdapter, float[][]> qa) {
+	}
+
+	private static WeightSnapshot snapshotAll(LoraAdapterSet adapters) {
+		return new WeightSnapshot(snapshot(adapters), snapshotQa(adapters));
+	}
+
+	private static void restoreAll(LoraAdapterSet adapters, WeightSnapshot snap) {
+		restore(adapters, snap.dense());
+		restoreQa(adapters, snap.qa());
+	}
+
 	private static Map<LoraAdapter, float[][]> snapshot(LoraAdapterSet adapters) {
 		Map<LoraAdapter, float[][]> snap = new IdentityHashMap<>();
 		for (LoraAdapter a : adapters.all())
+			snap.put(a, new float[][] { a.a().clone(), a.b().clone() });
+		return snap;
+	}
+
+	private static Map<cab.ml.juno.lora.QaLoraAdapter, float[][]> snapshotQa(LoraAdapterSet adapters) {
+		Map<cab.ml.juno.lora.QaLoraAdapter, float[][]> snap = new IdentityHashMap<>();
+		for (cab.ml.juno.lora.QaLoraAdapter a : adapters.allQa())
 			snap.put(a, new float[][] { a.a().clone(), a.b().clone() });
 		return snap;
 	}
@@ -333,14 +363,59 @@ public final class LoraTrainingLoop {
 		}
 	}
 
+	private static void restoreQa(LoraAdapterSet adapters, Map<cab.ml.juno.lora.QaLoraAdapter, float[][]> snap) {
+		for (cab.ml.juno.lora.QaLoraAdapter a : adapters.allQa()) {
+			float[][] w = snap.get(a);
+			if (w == null)
+				continue;
+			System.arraycopy(w[0], 0, a.a(), 0, a.a().length);
+			System.arraycopy(w[1], 0, a.b(), 0, a.b().length);
+			a.zeroGrad();
+		}
+	}
+
 	/** Emit a validation JFR event (optional observability). */
 	public static void commitValidation(float loss, int predictions, long durationMs, boolean bestSoFar) {
+		commitValidation(null, loss, predictions, durationMs, bestSoFar, 0, 0, Float.NaN);
+	}
+
+	public static void commitValidation(LoraMetricsIdentity identity, float loss, int predictions, long durationMs,
+			boolean bestSoFar, int passIndex, int optimizerStep, float trainLossAtEval) {
 		LoraValidationEvent ev = new LoraValidationEvent();
 		ev.begin();
+		if (identity != null)
+			identity.apply(ev);
 		ev.loss = loss;
 		ev.predictionCount = predictions;
 		ev.durationMs = durationMs;
 		ev.bestSoFar = bestSoFar;
+		ev.passIndex = passIndex;
+		ev.optimizerStep = optimizerStep;
+		ev.trainLossAtEval = trainLossAtEval;
+		ev.commit();
+	}
+
+	/** Emit a DoRA norm-refresh JFR event; no-op when there are no magnitudes. */
+	public static void commitNormRefresh(LoraMetricsIdentity identity, LoraAdapterSet adapters, String reason,
+			long durationMs) {
+		int projections = adapters != null ? adapters.magnitudes().size() : 0;
+		if (projections == 0)
+			return;
+		int layers = 0;
+		if (adapters != null) {
+			java.util.HashSet<Integer> layerSet = new java.util.HashSet<>();
+			for (String key : adapters.magnitudes().keySet())
+				layerSet.add(LoraAdapterSet.keyLayer(key));
+			layers = layerSet.size();
+		}
+		LoraNormRefreshEvent ev = new LoraNormRefreshEvent();
+		ev.begin();
+		if (identity != null)
+			identity.apply(ev);
+		ev.layerCount = layers;
+		ev.projectionCount = projections;
+		ev.durationMs = durationMs;
+		ev.reason = reason != null ? reason : "";
 		ev.commit();
 	}
 }
