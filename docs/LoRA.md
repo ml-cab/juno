@@ -91,7 +91,7 @@ may be zero on CPU-only runs.
 | `/train-file <path>` | Fine-tune on a text file (auto-chunked into <= 128-token pieces) |
 | `/train-qa <question> A: <answer>` | Train a single Q&A fact with auto-generated phrasings |
 | `/save` | Save adapter to `--lora-path` |
-| `/reset` | Reinitialize A/B (and DoRA magnitudes), **clear chat history**, and overwrite the `.lora` checkpoint |
+| `/reset` | Reinitialize A/B (and DoRA magnitudes), **clear chat history**, and **delete** the `.lora` checkpoint |
 | `/status` | Rank, alpha, optimizer updates, checkpoint path |
 | `/merge-hint` | Show the `juno merge` command to bake adapter into a standalone GGUF |
 | `/help` | Command reference |

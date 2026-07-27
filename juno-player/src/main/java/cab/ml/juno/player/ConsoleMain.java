@@ -565,7 +565,7 @@ public final class ConsoleMain {
 		System.out.println("    /train <text>            Fine-tune on inline text");
 		System.out.println("    /train-file <path>       Fine-tune on a text file (splits into chunks)");
 		System.out.println("    /save                    Save adapter checkpoint to --lora-path");
-		System.out.println("    /reset                   Reinitialize adapters (loses training)");
+		System.out.println("    /reset                   Reinitialize adapters and delete .lora checkpoint");
 		System.out.println("    /status                  Show adapter info and training stats");
 		System.out.println("    /merge-hint              Explain how to bake LoRA into GGUF weights");
 		System.out.println("    Regular chat input       Inference with current adapter applied");
@@ -603,7 +603,7 @@ public final class ConsoleMain {
 		System.out.println("  --jfr DURATION             Java Flight Recording duration (e.g. 5m)");
 		System.out.println("                             Programmatic recording; on exit extracts");
 		System.out.println("                             target/metrics/metrics.json (local/lora/cluster)");
-		System.out.println("  --verbose, -v              Show more logging");
+		System.out.println("  --verbose, -v              Full LoRA/train traces (default: progress bar)");
 		System.out.println("  --help, -h                 Show this help");
 	}
 
@@ -682,16 +682,18 @@ public final class ConsoleMain {
 		LoraTrainableHandler handler = LoraTrainableHandler.load(Path.of(modelPath), ctx, adapters);
 		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET + "\n");
 
-		// ── [TRACE] Model type detection ──────────────────────────────────────
-		String detectedModelType = ChatModelType.fromPath(modelPath);
-		print(Color.DIM + "  [TRACE] model type (chat template key) : " + detectedModelType + Color.RESET);
-		print(Color.DIM + "  [TRACE] model path                     : " + modelPath + Color.RESET);
-		print(Color.DIM + "  [TRACE] LoRA rank=" + loraRank + "  alpha=" + loraAlpha
-				+ "  lr=" + loraLr + "  targets=" + loraTargets + "  accum=" + loraGradientAccumulation
-				+ "  max-grad-norm=" + loraMaxGradNorm + "  loss-target-text=" + loraLossTargetText
-				+ "  loss-target-qa=" + loraLossTargetQa + "  max-iters=" + loraMaxIters
-				+ "  max-iters-qa=" + loraMaxItersQa + "  early-stop=" + loraEarlyStop + Color.RESET);
-		print("");
+		if (verbose) {
+			String detectedModelType = ChatModelType.fromPath(modelPath);
+			print(Color.DIM + "  [TRACE] model type (chat template key) : " + detectedModelType + Color.RESET);
+			print(Color.DIM + "  [TRACE] model path                     : " + modelPath + Color.RESET);
+			print(Color.DIM + "  [TRACE] LoRA rank=" + loraRank + "  alpha=" + loraAlpha
+					+ "  lr=" + loraLr + "  targets=" + loraTargets + "  accum=" + loraGradientAccumulation
+					+ "  max-grad-norm=" + loraMaxGradNorm + "  loss-target-text=" + loraLossTargetText
+					+ "  loss-target-qa=" + loraLossTargetQa + "  max-iters=" + loraMaxIters
+					+ "  max-iters-qa=" + loraMaxItersQa + "  early-stop=" + loraEarlyStop
+					+ "  temperature=" + temperature + Color.RESET);
+			print("");
+		}
 
 		// Wrap in LocalInferencePipeline for standard inference path
 		var pipeline = LocalInferencePipeline.from(shardMap, List.of(handler), config.vocabSize(), config.hiddenDim(),
@@ -765,8 +767,9 @@ public final class ConsoleMain {
 
 			long elapsed = System.currentTimeMillis() - start;
 			System.out.println();
-			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · LoRA rank=%d]" + Color.RESET + "%n",
-					result.generatedTokens(), elapsed, loraRank);
+			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · LoRA rank=%d · temperature=%.2f]" + Color.RESET
+							+ "%n",
+					result.generatedTokens(), elapsed, loraRank, temperature);
 			System.out.println();
 			activeReporters.forEach(r -> r.recordLatency(elapsed));
 		}
@@ -837,7 +840,7 @@ public final class ConsoleMain {
 
 		case "/reset" -> {
 			System.out.print(Color.YELLOW
-					+ "  Reset adapters and overwrite checkpoint on disk? All training will be lost. [y/N] "
+					+ "  Reset adapters and delete checkpoint on disk? All training will be lost. [y/N] "
 					+ Color.RESET);
 			System.out.flush();
 			String yn = new BufferedReader(new InputStreamReader(System.in)).readLine();
@@ -862,19 +865,24 @@ public final class ConsoleMain {
 				// memorized answers still present in the conversation context.
 				String oldSession = history.clear();
 				loop.evictSession(oldSession);
+				dirty[0] = false;
+				boolean deleted = false;
 				try {
-					adapters.save(adapterFile);
-					dirty[0] = false;
-					print(Color.GREEN + "  ✔ Adapters reinitialised (" + n + " · targets=" + loraTargets
-							+ ") and saved → " + adapterFile + Color.RESET);
-					print(Color.DIM + "  Chat history cleared (fresh session)." + Color.RESET);
+					deleted = Files.deleteIfExists(adapterFile);
 				} catch (IOException e) {
-					dirty[0] = true;
-					print(Color.RED + "  ✔ Memory reset, but failed to overwrite " + adapterFile + ": " + e.getMessage()
+					print(Color.RED + "  ✔ Memory reset, but failed to delete " + adapterFile + ": " + e.getMessage()
 							+ Color.RESET);
-					print(Color.YELLOW + "  Run /save before exit or the old checkpoint will reload next time."
+					print(Color.YELLOW + "  Remove the file manually or the old checkpoint will reload next time."
 							+ Color.RESET);
 				}
+				print(Color.GREEN + "  ✔ Adapters reinitialised (" + n + " · targets=" + loraTargets + ")"
+						+ Color.RESET);
+				if (deleted)
+					print(Color.DIM + "  Deleted checkpoint: " + adapterFile + Color.RESET);
+				else if (!Files.exists(adapterFile))
+					print(Color.DIM + "  No checkpoint file to delete." + Color.RESET);
+				print(Color.DIM + "  Chat history cleared (fresh session). Use /save to write a new checkpoint."
+						+ Color.RESET);
 			}
 		}
 
@@ -931,7 +939,7 @@ public final class ConsoleMain {
 			print("  /train <text>          Fine-tune on raw text (no chat template applied)");
 			print("  /train-file <path>     Fine-tune on a text file (chunks of ~128 tokens)");
 			print("  /save                  Save adapter to " + adapterFile);
-			print("  /reset                 Reinitialise adapters, clear chat history, overwrite checkpoint");
+			print("  /reset                 Reinitialise adapters, clear chat history, delete checkpoint");
 			print("  /status                Show adapter info and training statistics");
 			print("  /merge-hint            Explain how to bake adapters into model weights");
 			print("  Regular input          Chat using the current adapter for inference");
@@ -979,16 +987,15 @@ public final class ConsoleMain {
 
 		print(Color.DIM + "  Formatted as 4 Q&A variants  ·  model type: " + modelType
 				+ "  ·  completion-only loss (" + answerPreds + "/" + totalPreds + " positions)" + Color.RESET);
-		print(Color.DIM + "  loss-target=" + loraLossTargetQa + "  max-iters=" + loraMaxItersQa
-				+ "  early-stop=" + loraEarlyStop
-				+ "  (tune with --lora-loss-target-qa F  --lora-max-iters N  --lora-early-stop F)" + Color.RESET);
-
-		// ── [TRACE] Show exact training text and tokenization ─────────────────
-		print(Color.DIM + "  [TRACE] ── formatted training text (repr) ──────────────────────" + Color.RESET);
-		print(Color.DIM + "  " + seq.text().replace("\n", "↵\n  ") + Color.RESET);
-		print(Color.DIM + "  [TRACE] ── end training text ──────────────────────────────────" + Color.RESET);
-		print(Color.DIM + "  [TRACE] token count (incl. BOS if add_bos): " + seq.tokens().length + Color.RESET);
 		if (verbose) {
+			print(Color.DIM + "  loss-target=" + loraLossTargetQa + "  max-iters=" + loraMaxItersQa
+					+ "  early-stop=" + loraEarlyStop
+					+ "  (tune with --lora-loss-target-qa F  --lora-max-iters N  --lora-early-stop F)" + Color.RESET);
+
+			print(Color.DIM + "  [TRACE] ── formatted training text (repr) ──────────────────────" + Color.RESET);
+			print(Color.DIM + "  " + seq.text().replace("\n", "↵\n  ") + Color.RESET);
+			print(Color.DIM + "  [TRACE] ── end training text ──────────────────────────────────" + Color.RESET);
+			print(Color.DIM + "  [TRACE] token count (incl. BOS if add_bos): " + seq.tokens().length + Color.RESET);
 			StringBuilder tokenDbg = new StringBuilder("  [TRACE] token IDs: [");
 			int[] traceTokens = seq.tokens();
 			for (int i = 0; i < traceTokens.length; i++) {
@@ -1090,18 +1097,39 @@ public final class ConsoleMain {
 
 		int stepsBefore = optimizer.step();
 		long trainStart = System.currentTimeMillis();
+		long[] lastPassAt = { trainStart };
 		LoraTrainingLoop.TrainingResult result = LoraTrainingLoop.train(units, cfg, adapters, optimizer,
 				(tokens, mask, ctx) -> handler.computeGradients(tokens, mask, ctx),
 				(tokens, mask) -> handler.evaluateLoss(tokens, mask), lossTarget, maxIters, loraEarlyStop, chunkTokens,
 				(pass, trainLoss, valLoss, optUpdates) -> {
-					if (Float.isFinite(valLoss))
-						System.out.printf("  [train-%s] iter=%2d  loss=%.4f  val=%.4f  target=%.2f  updates=%d%n",
-								logLabel, pass, trainLoss, valLoss, lossTarget, optUpdates);
-					else
-						System.out.printf("  [train-%s] iter=%2d  loss=%.4f  target=%.2f%n", logLabel, pass, trainLoss,
-								lossTarget);
+					long now = System.currentTimeMillis();
+					long passMs = Math.max(1L, now - lastPassAt[0]);
+					lastPassAt[0] = now;
+					if (verbose) {
+						if (Float.isFinite(valLoss))
+							System.out.printf(
+									"  [train-%s] iter=%2d  loss=%.4f  val=%.4f  target=%.2f  updates=%d  %dms%n",
+									logLabel, pass, trainLoss, valLoss, lossTarget, optUpdates, passMs);
+						else
+							System.out.printf("  [train-%s] iter=%2d  loss=%.4f  target=%.2f  updates=%d  %dms%n",
+									logLabel, pass, trainLoss, lossTarget, optUpdates, passMs);
+						return;
+					}
+					long elapsed = Math.max(1L, now - trainStart);
+					long etaMs = pass < maxIters ? (elapsed / pass) * (maxIters - pass) : 0L;
+					String eta = etaMs > 60_000
+							? String.format("%dm%02ds", etaMs / 60_000, (etaMs % 60_000) / 1000)
+							: String.format("%ds", etaMs / 1000);
+					int pct = (int) (100.0 * pass / maxIters);
+					int bars = Math.min(20, pct / 5);
+					String bar = Color.GREEN + "▓".repeat(bars) + Color.DIM + "░".repeat(20 - bars) + Color.RESET;
+					System.out.printf("\r  pass %3d/%-3d  loss=%.4f  %s %3d%%  %4dms/pass  ETA %-8s", pass, maxIters,
+							trainLoss, bar, pct, passMs, eta);
+					System.out.flush();
 				});
 		long totalMs = System.currentTimeMillis() - trainStart;
+		if (!verbose)
+			System.out.println();
 
 		float lastLoss = result.finalTrainLoss();
 		String doneLabel = switch (result.stopReason()) {
@@ -1741,8 +1769,10 @@ public final class ConsoleMain {
 		System.out.println(Color.BLUE + "░▀░▀" + Color.YELLOW + "░▀▀▀" + Color.RESET + "\n");
 
 		if (loraMode) {
-			System.out.println(String.format("  %s⚙ LoRA mode  ·  rank=%d  α=%.1f  lr=%s  loss-target=%.1f  max-iters=%d%s%n",
-					Color.PURPLE_BOLD, loraRank, loraAlpha, loraLr, loraLossTargetText, loraMaxIters, Color.RESET));
+			System.out.println(String.format(
+					"  %s⚙ LoRA mode  ·  rank=%d  α=%.1f  lr=%s  loss-target=%.1f  max-iters=%d  ·  max_tokens=%d  ·  temperature=%.2f  ·  top_k=%d  ·  top_p=%.2f%s%n",
+					Color.PURPLE_BOLD, loraRank, loraAlpha, loraLr, loraLossTargetText, loraMaxIters, maxTokens,
+					temperature, topK, topP, Color.RESET));
 		} else {
 			System.out.println(String.format(
 					"  %sdtype=%s · byteOrder=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",

@@ -207,7 +207,8 @@ class InferenceApiServerTest {
 
 		assertThat(response.statusCode()).isEqualTo(200);
 		assertThat(response.body()).contains("tinyllama");
-		assertThat(response.body()).contains("total");
+		assertThat(response.body()).contains("\"object\"");
+		assertThat(response.body()).contains("\"data\"");
 	}
 
 	// ── GET /v1/models/{modelId} ──────────────────────────────────────────────

@@ -1,5 +1,16 @@
 ## Status
 
+**Session 42** — LoRA REPL UX + WebUI model dropdown.
+
+- `/reset` deletes the `.lora` checkpoint (no overwrite save); memory reset + chat history clear unchanged.
+- LoRA banner and chat footer show sampling `temperature` (and top-k / top-p on the banner).
+- Default LoRA training log is a compact progress bar; `--verbose` / `-v` restores full `[TRACE]` / per-pass lines.
+- WebUI model dropdown parses OpenAI `GET /v1/models` (`data` / `id` / `x_juno_*`) so names appear again.
+
+---
+
+## Status
+
 **Session 41** — LoRA Tier 7 (start): JFR metrics for all adapter modes and operations.
 
 ### LoRA JFR metrics (Tier 7)

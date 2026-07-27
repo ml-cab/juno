@@ -45,7 +45,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--nodes N` | `3` | local | Number of in-process shards |
 | `--pType pipeline\|tensor` | `pipeline` | cluster, test | Parallelism type |
 | `--jfr DURATION` | — | cluster, local, lora | Java Flight Recording (e.g. `30s`, `5m`) |
-| `--verbose` / `-v` | — | cluster, local | Verbose logging |
+| `--verbose` / `-v` | — | cluster, local, lora | Full logging; LoRA default is a progress bar |
 | `--cpu` | — | cluster, local | Force CPU inference: sets `JUNO_USE_GPU=false`. Does not enable LoRA mode. |
 | `--lora-play PATH` | — | cluster, local | Apply a pre-trained `.lora` adapter at inference (read-only, no training). In cluster mode the file is forwarded as `-Djuno.lora.play.path` to every forked node JVM. |
 | `--api-port N` | — | cluster, local | Start the OpenAI-compatible REST API server on port N alongside the REPL. Exposes `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{model}`. Environment override: `API_PORT`. |
@@ -650,14 +650,15 @@ INFO: Detected architecture: llama  backend=CpuMatVec  file=...  lora=44 adapter
 
 ### Diagnostics and tracing
 
-Run cluster command with `--verbose` to enable `[TRACE]` output:
+Without `--verbose`, LoRA training prints a single-line progress bar (`pass N/M · loss · ETA`).
+Pass `--verbose` / `-v` for full `[TRACE]` output:
 
 | Line | What it tells you |
 |------|-------------------|
 | `[TRACE] model type (chat template key) : tinyllama` | Whether the template matches the model |
 | `[TRACE] formatted training text (repr)` | Exact token sequence sent to the model during training |
 | `[TRACE] token count (excl. BOS): N` | How many tokens are in the training sequence |
-| `[TRACE] step=N loss=F chunk=M/T ms=D` | Per-step loss during training |
+| `[train-qa] iter=N loss=…` | Per-pass loss during training |
 | `[TRACE] inference model type: tinyllama` | Template key at inference — must match training |
 
 If the template key at training and inference differ, the model will not recall trained facts.

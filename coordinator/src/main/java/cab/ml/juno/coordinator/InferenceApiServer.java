@@ -454,23 +454,31 @@ public final class InferenceApiServer {
 			  }
 			}
 
-			// ── model list ────────────────────────────────────────────────────────────────
+			// ── model list (OpenAI GET /v1/models shape) ───────────────────────────────
 			async function fetchModels() {
 			  try {
 			    const r = await fetch('/v1/models');
 			    if (!r.ok) return;
 			    const d = await r.json();
-			    const loaded = (d.models || []).filter(m => m.status === 'LOADED');
+			    const raw = d.data || d.models || [];
+			    const loaded = raw.filter(m => {
+			      const status = m.x_juno_status || m.status;
+			      return !status || status === 'LOADED';
+			    });
 			    mSelect.innerHTML = '';
 			    if (loaded.length === 0) {
 			      mSelect.innerHTML = '<option value="">no models loaded</option>';
 			      return;
 			    }
 			    for (const m of loaded) {
+			      const id = m.id || m.modelId || '';
+			      const arch = m.x_juno_architecture || m.architecture || '?';
+			      const quant = m.x_juno_quantization || m.quantization || '?';
+			      const layers = m.x_juno_total_layers != null ? m.x_juno_total_layers : m.totalLayers;
 			      const o = document.createElement('option');
-			      o.value = m.modelId;
-			      o.textContent = m.modelId + '  (' + m.architecture + '  ' + m.quantization
-			                    + '  layers=' + m.totalLayers + ')';
+			      o.value = id;
+			      o.textContent = id + '  (' + arch + '  ' + quant
+			                    + (layers != null ? '  layers=' + layers : '') + ')';
 			      mSelect.appendChild(o);
 			    }
 			  } catch {
