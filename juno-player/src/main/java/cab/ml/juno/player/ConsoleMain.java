@@ -71,7 +71,8 @@ import cab.ml.juno.node.LoraMetricsIdentity;
 import cab.ml.juno.node.LoraPlaybackEvent;
 import cab.ml.juno.node.LoraProjection;
 import cab.ml.juno.node.LoraTrainEvent;
-import cab.ml.juno.node.LoraTrainableHandler;
+import cab.ml.juno.node.LoraTrainingHandler;
+import cab.ml.juno.node.LoraTrainingHandlerFactory;
 import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.QaLoraInitializer;
 import cab.ml.juno.node.ShardContext;
@@ -610,7 +611,7 @@ public final class ConsoleMain {
 	// ── LoRA mode ─────────────────────────────────────────────────────────────
 
 	/**
-	 * LoRA fine-tuning REPL. Runs a single in-process LoraTrainableHandler that
+	 * LoRA fine-tuning REPL. Runs a single in-process LoraTrainingHandler that
 	 * serves both inference (with LoRA delta) and training (/train commands).
 	 *
 	 * Adapters are persisted in a separate .lora file alongside the model. The base
@@ -679,7 +680,7 @@ public final class ConsoleMain {
 		ShardContext ctx = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 
 		print(Color.DIM + "  Loading model weights…" + Color.RESET);
-		LoraTrainableHandler handler = LoraTrainableHandler.load(Path.of(modelPath), ctx, adapters);
+		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(Path.of(modelPath), ctx, adapters);
 		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET + "\n");
 
 		if (verbose) {
@@ -781,7 +782,7 @@ public final class ConsoleMain {
 	}
 
 	private static void handleLoraCommand(String line, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
-			LoraTrainableHandler handler, Tokenizer tokenizer, Path adapterFile, int[] totalSteps, boolean[] dirty,
+			LoraTrainingHandler handler, Tokenizer tokenizer, Path adapterFile, int[] totalSteps, boolean[] dirty,
 			ChatHistory history, GenerationLoop loop) throws Exception {
 
 		String[] parts = line.split("\\s+", 2);
@@ -970,7 +971,7 @@ public final class ConsoleMain {
 	 * overfitting to a single exact wording.
 	 */
 	private static void trainOnQA(String question, String answer, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
-			LoraTrainableHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty, String modelType)
+			LoraTrainingHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty, String modelType)
 			throws Exception {
 
 		// Echo the parsed question and answer BEFORE training starts — catches typos.
@@ -1020,13 +1021,13 @@ public final class ConsoleMain {
 	 * {@code maxIters} passes are exhausted.
 	 */
 	private static void trainOnText(String text, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
-			LoraTrainableHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty) throws Exception {
+			LoraTrainingHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty) throws Exception {
 		trainOnText(text, adapters, optimizer, handler, tokenizer, totalSteps, dirty, loraLossTargetText,
 				loraMaxIters, "text");
 	}
 
 	private static void trainOnText(String text, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
-			LoraTrainableHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty, float lossTarget,
+			LoraTrainingHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty, float lossTarget,
 			int maxIters, String logLabel) throws Exception {
 
 		// encode() already prepends BOS when the GGUF says so — do not prepend again.
@@ -1047,7 +1048,7 @@ public final class ConsoleMain {
 	 * deepens mode collapse).
 	 */
 	private static void trainOnMasked(LoraTrainingSequences.MaskedSequence seq, LoraAdapterSet adapters,
-			LoraAdamOptimizer optimizer, LoraTrainableHandler handler, int[] totalSteps, boolean[] dirty,
+			LoraAdamOptimizer optimizer, LoraTrainingHandler handler, int[] totalSteps, boolean[] dirty,
 			float lossTarget, int maxIters, String logLabel) throws Exception {
 		final int CHUNK = 32;
 		List<LoraTrainingSequences.MaskedChunk> chunks = LoraTrainingSequences.chunk(seq, CHUNK);
@@ -1062,7 +1063,7 @@ public final class ConsoleMain {
 	}
 
 	private static void trainOnUnits(List<LoraTrainingLoop.TrainUnit> units, LoraAdapterSet adapters,
-			LoraAdamOptimizer optimizer, LoraTrainableHandler handler, int[] totalSteps, boolean[] dirty,
+			LoraAdamOptimizer optimizer, LoraTrainingHandler handler, int[] totalSteps, boolean[] dirty,
 			float lossTarget, int maxIters, String logLabel, int chunkTokens) throws Exception {
 		LoraTrainingConfig cfg = currentTrainingConfig();
 		int predCount = 0;

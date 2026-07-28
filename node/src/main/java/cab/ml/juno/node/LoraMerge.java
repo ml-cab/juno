@@ -185,23 +185,18 @@ public final class LoraMerge {
 		ev.totalBlocks = projected;
 	}
 
+	/**
+	 * Slot binding a single logical LoRA key to a row range of a physical GGUF
+	 * tensor. For architectures with separate tensors (LLaMA, Qwen2, Qwen3) the
+	 * row range spans the full tensor ({@code rowOffset=0}). For Phi-3 fused
+	 * layouts, multiple slots may share one physical tensor at distinct offsets.
+	 */
+	private record AdapterSlot(String loraKey, int rowOffset, int rowCount, int outDim, int inDim) {}
+
 	private static Result mergeLoaded(Path modelPath, LoraAdapterSet adapters, Path outputPath,
 			MergeCapability capabilityOverride) throws IOException {
-		Map<String, String> keyByTensor = new java.util.LinkedHashMap<>();
-		List<String> skipped = new ArrayList<>();
-		for (Map.Entry<String, LoraAdapter> entry : adapters.asMap().entrySet()) {
-			String key = entry.getKey();
-			int layer = LoraAdapterSet.keyLayer(key);
-			LoraProjection proj = LoraProjection.fromKey(LoraAdapterSet.keyProj(key));
-			keyByTensor.put(proj.ggufTensorName(layer), key);
-		}
-		for (Map.Entry<String, QaLoraAdapter> entry : adapters.asQaMap().entrySet()) {
-			String key = entry.getKey();
-			int layer = LoraAdapterSet.keyLayer(key);
-			LoraProjection proj = LoraProjection.fromKey(LoraAdapterSet.keyProj(key));
-			keyByTensor.put(proj.ggufTensorName(layer), key);
-		}
 
+		List<String> skipped = new ArrayList<>();
 		List<String> patched = new ArrayList<>();
 		List<TensorMergeReport> reports = new ArrayList<>();
 
@@ -213,16 +208,40 @@ public final class LoraMerge {
 			DoraInitializer.verifyFingerprints(reader, adapters);
 			QaLoraInitializer.verifyFingerprints(reader, adapters);
 
-			for (String tName : new ArrayList<>(keyByTensor.keySet()))
-				if (!reader.hasTensor(tName)) {
-					skipped.add(tName + " (tensor not in model)");
-					keyByTensor.remove(tName);
-				}
+			// ── Build layout-aware adapter → physical tensor mapping ───────────
+			String arch = normalizeArch(reader.metaString("general.architecture"));
+			LoraModelLayout modelLayout = tryBuildLayout(arch, reader);
 
-			// Resolve per-tensor merge policy up front
+			// physicalTensor → ordered list of slots (one slot per logical key)
+			Map<String, List<AdapterSlot>> adaptersByPhysical = new java.util.LinkedHashMap<>();
+
+			for (Map.Entry<String, LoraAdapter> entry : adapters.asMap().entrySet()) {
+				String key = entry.getKey();
+				int layer = LoraAdapterSet.keyLayer(key);
+				LoraProjection proj = LoraProjection.fromKey(LoraAdapterSet.keyProj(key));
+				addAdapterSlot(adaptersByPhysical, key, layer, proj, modelLayout, reader);
+			}
+			for (Map.Entry<String, QaLoraAdapter> entry : adapters.asQaMap().entrySet()) {
+				String key = entry.getKey();
+				int layer = LoraAdapterSet.keyLayer(key);
+				LoraProjection proj = LoraProjection.fromKey(LoraAdapterSet.keyProj(key));
+				addAdapterSlot(adaptersByPhysical, key, layer, proj, modelLayout, reader);
+			}
+
+			// Remove tensors absent from the model
+			for (String tName : new ArrayList<>(adaptersByPhysical.keySet())) {
+				if (!reader.hasTensor(tName)) {
+					List<AdapterSlot> slots = adaptersByPhysical.remove(tName);
+					for (AdapterSlot s : slots)
+						skipped.add(tName + " (tensor not in model, key=" + s.loraKey() + ")");
+				}
+			}
+
+			// Resolve per-physical-tensor merge policy (use first slot's key)
 			Map<String, MergeCapability> policyByTensor = new java.util.LinkedHashMap<>();
-			for (var e : keyByTensor.entrySet()) {
-				MergeCapability pol = resolvePolicy(adapters, e.getValue(), capabilityOverride);
+			for (var e : adaptersByPhysical.entrySet()) {
+				String firstKey = e.getValue().get(0).loraKey();
+				MergeCapability pol = resolvePolicy(adapters, firstKey, capabilityOverride);
 				if (pol == MergeCapability.SIDECAR_ONLY)
 					throw new IllegalArgumentException(
 							"SIDECAR_ONLY forbids merge for " + e.getKey() + "; use overlay playback");
@@ -241,7 +260,7 @@ public final class LoraMerge {
 			for (int i = 0; i < tensorOrder.size(); i++) {
 				String name = tensorOrder.get(i);
 				newDataOffsets[i] = cursor;
-				if (!keyByTensor.containsKey(name)) {
+				if (!adaptersByPhysical.containsKey(name)) {
 					cursor += GgufReader.rawByteCount(reader.tensorType(name), reader.tensorNelems(name));
 				} else if (policyByTensor.get(name) == MergeCapability.SOURCE_TYPE_PROJECTED) {
 					cursor += GgufReader.rawByteCount(reader.tensorType(name), reader.tensorNelems(name));
@@ -257,7 +276,7 @@ public final class LoraMerge {
 			for (int i = 0; i < tensorOrder.size(); i++) {
 				String name = tensorOrder.get(i);
 				int type;
-				if (!keyByTensor.containsKey(name))
+				if (!adaptersByPhysical.containsKey(name))
 					type = reader.tensorType(name);
 				else if (policyByTensor.get(name) == MergeCapability.SOURCE_TYPE_PROJECTED)
 					type = reader.tensorType(name);
@@ -272,30 +291,39 @@ public final class LoraMerge {
 				outCh.write(ByteBuffer.allocate((int) (aligned - pos)));
 
 			for (String name : tensorOrder) {
-				if (!keyByTensor.containsKey(name)) {
+				if (!adaptersByPhysical.containsKey(name)) {
 					outCh.write(ByteBuffer.wrap(reader.tensorRaw(name).data()));
 					continue;
 				}
-				String key = keyByTensor.get(name);
+
+				List<AdapterSlot> slots = adaptersByPhysical.get(name);
 				MergeCapability pol = policyByTensor.get(name);
 				int sourceType = reader.tensorType(name);
 				byte[] rawOriginal = reader.tensorRaw(name).data();
 				float[] w = reader.tensor(name);
-				long[] dims = reader.tensorDims(name);
-				int outDim = (int) dims[1];
-				int inDim = (int) dims[0];
-				int layer = LoraAdapterSet.keyLayer(key);
-				String proj = LoraAdapterSet.keyProj(key);
-
 				float[] before = w.clone();
-				LoraAdapter dense = adapters.asMap().get(key);
-				QaLoraAdapter qa = adapters.asQaMap().get(key);
-				if (dense != null)
-					applyAdapter(w, dense, adapters.getMagnitude(layer, proj), outDim, inDim);
-				else if (qa != null)
-					applyQaDelta(w, qa, outDim, inDim);
-				else
-					throw new IllegalStateException("missing adapter for " + key);
+
+				// Apply all logical adapter slots to their respective row ranges
+				for (AdapterSlot slot : slots) {
+					String key = slot.loraKey();
+					int slotLayer = LoraAdapterSet.keyLayer(key);
+					String slotProj = LoraAdapterSet.keyProj(key);
+					int rowOffset = slot.rowOffset();
+					int rowCount = slot.rowCount();
+					int slotOutDim = slot.outDim();
+					int slotInDim = slot.inDim();
+
+					float[] slice = extractRows(w, rowOffset, rowCount, slotInDim);
+					LoraAdapter dense = adapters.asMap().get(key);
+					QaLoraAdapter qa = adapters.asQaMap().get(key);
+					if (dense != null)
+						applyAdapter(slice, dense, adapters.getMagnitude(slotLayer, slotProj), slotOutDim, slotInDim);
+					else if (qa != null)
+						applyQaDelta(slice, qa, slotOutDim, slotInDim);
+					else
+						throw new IllegalStateException("missing adapter for " + key);
+					putRows(w, slice, rowOffset, rowCount, slotInDim);
+				}
 
 				float[] targetDelta = new float[w.length];
 				double targetNormSq = 0;
@@ -316,7 +344,6 @@ public final class LoraMerge {
 						throw new IllegalArgumentException(
 								"SOURCE_TYPE_PROJECTED requires Q4_K/Q5_K/Q6_K for " + name + ", got type "
 										+ sourceType);
-					// Zero conceptual delta → byte-identical copy (no decode/re-encode).
 					if (targetDeltaNorm == 0.0) {
 						outCh.write(ByteBuffer.wrap(GgufQuantCodec.copyRawUnchanged(rawOriginal)));
 						reports.add(new TensorMergeReport(name, sourceType, sourceType, true, 0, 1.0, 0, 0, 0));
@@ -329,8 +356,8 @@ public final class LoraMerge {
 							retainedDelta[i] = roundTrip[i] - before[i];
 						double retention = QuantizedMergeMetrics.deltaRetention(targetDelta, retainedDelta);
 						long changed = 0;
-						QuantizationLayout layout = QuantizationLayout.require(sourceType);
-						int bb = layout.blockBytes();
+						QuantizationLayout qLayout = QuantizationLayout.require(sourceType);
+						int bb = qLayout.blockBytes();
 						for (int off = 0; off < encoded.length; off += bb) {
 							boolean diff = false;
 							for (int j = 0; j < bb; j++) {
@@ -352,6 +379,65 @@ public final class LoraMerge {
 			}
 		}
 		return new Result(patched.size(), List.copyOf(patched), List.copyOf(skipped), List.copyOf(reports));
+	}
+
+	/**
+	 * Adds one logical adapter slot to {@code adaptersByPhysical}. Uses the
+	 * {@link LoraModelLayout} when available (phi3 fused tensors); otherwise falls
+	 * back to {@link LoraProjection#ggufTensorName} with full-tensor dims from the
+	 * reader.
+	 */
+	private static void addAdapterSlot(Map<String, List<AdapterSlot>> adaptersByPhysical,
+			String key, int layer, LoraProjection proj,
+			LoraModelLayout modelLayout, GgufReader reader) throws IOException {
+		if (modelLayout != null) {
+			try {
+				LoraProjectionBinding binding = modelLayout.binding(layer, proj);
+				String physName = binding.physicalName();
+				AdapterSlot slot = new AdapterSlot(key,
+						binding.rowOffset(), binding.rowCount(),
+						binding.outDim(), binding.inDim());
+				adaptersByPhysical.computeIfAbsent(physName, k -> new ArrayList<>()).add(slot);
+				return;
+			} catch (IllegalArgumentException ignored) {
+				// layer out of range in layout — fall through to legacy path
+			}
+		}
+		// Legacy fallback: separate tensor per logical projection
+		String physName = proj.ggufTensorName(layer);
+		long[] dims = reader.hasTensor(physName) ? reader.tensorDims(physName) : new long[]{0L, 0L};
+		int outDim = (int) dims[1];
+		int inDim = (int) dims[0];
+		AdapterSlot slot = new AdapterSlot(key, 0, outDim, outDim, inDim);
+		adaptersByPhysical.computeIfAbsent(physName, k -> new ArrayList<>()).add(slot);
+	}
+
+	private static String normalizeArch(String raw) {
+		if (raw == null || raw.isBlank()) return "llama";
+		return raw.toLowerCase(java.util.Locale.ROOT).strip();
+	}
+
+	private static LoraModelLayout tryBuildLayout(String arch, GgufReader reader) {
+		if (!LoraTrainingHandlerFactory.isSupported(arch))
+			return null;
+		try {
+			LlamaConfig cfg = LlamaConfig.from(reader);
+			return LoraModelLayout.forArchitecture(arch, cfg);
+		} catch (Exception ignored) {
+			return null;
+		}
+	}
+
+	/** Extract a contiguous row block from a row-major float matrix. */
+	static float[] extractRows(float[] full, int rowOffset, int rowCount, int cols) {
+		float[] slice = new float[rowCount * cols];
+		System.arraycopy(full, rowOffset * cols, slice, 0, rowCount * cols);
+		return slice;
+	}
+
+	/** Write a row block back into a row-major float matrix. */
+	static void putRows(float[] full, float[] slice, int rowOffset, int rowCount, int cols) {
+		System.arraycopy(slice, 0, full, rowOffset * cols, rowCount * cols);
 	}
 
 	private static MergeCapability resolvePolicy(LoraAdapterSet adapters, String key, MergeCapability override) {

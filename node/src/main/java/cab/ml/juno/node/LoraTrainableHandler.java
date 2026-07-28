@@ -75,7 +75,7 @@ import cab.ml.juno.lora.QaLoraAdapter;
  * distinct request IDs. {@link #trainStep} is NOT thread-safe — it mutates
  * gradient accumulators.
  */
-public final class LoraTrainableHandler implements ForwardPassHandler {
+public final class LoraTrainableHandler implements LoraTrainingHandler {
 
 	private static final Logger log = Logger.getLogger(LoraTrainableHandler.class.getName());
 
@@ -108,6 +108,9 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	private final float[][] ffnNorm; // [L][hiddenDim]
 	private final GgufReader.QuantizedTensor[] wq, wk, wv, wo;
 	private final GgufReader.QuantizedTensor[] wGate, wUp, wDown;
+
+	/** Optional Qwen2-style Q/K/V biases; null when the GGUF has no bias tensors. */
+	private final float[][] bq, bk, bv;
 
 	// ── LoRA adapters ─────────────────────────────────────────────────────────
 
@@ -194,6 +197,15 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		wUp = new GgufReader.QuantizedTensor[L];
 		wDown = new GgufReader.QuantizedTensor[L];
 
+		float[][] bqLocal = null;
+		float[][] bkLocal = null;
+		float[][] bvLocal = null;
+		if (L > 0 && r.hasTensor("blk." + startLayer + ".attn_q.bias")) {
+			bqLocal = new float[L][];
+			bkLocal = new float[L][];
+			bvLocal = new float[L][];
+		}
+
 		for (int li = 0; li < L; li++) {
 			int i = li + startLayer;
 			attnNorm[li] = r.tensor("blk." + i + ".attn_norm.weight");
@@ -205,7 +217,17 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 			wGate[li] = r.tensorRaw("blk." + i + ".ffn_gate.weight");
 			wUp[li] = r.tensorRaw("blk." + i + ".ffn_up.weight");
 			wDown[li] = r.tensorRaw("blk." + i + ".ffn_down.weight");
+			if (bqLocal != null) {
+				bqLocal[li] = r.tensor("blk." + i + ".attn_q.bias");
+				bkLocal[li] = r.tensor("blk." + i + ".attn_k.bias");
+				bvLocal[li] = r.tensor("blk." + i + ".attn_v.bias");
+			}
 		}
+		this.bq = bqLocal;
+		this.bk = bkLocal;
+		this.bv = bvLocal;
+		if (bqLocal != null)
+			log.info("LoRA handler: loaded QKV biases (Qwen2-style)");
 
 		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
 		outputProjDev = null;
@@ -397,6 +419,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	 * @param tokens input token sequence, length ≥ 2
 	 * @return summed loss and prediction count for token-weighted aggregation
 	 */
+	@Override
 	public LoraGradientResult computeGradients(int[] tokens) {
 		return computeGradients(tokens, null, LoraTrainContext.disabled());
 	}
@@ -414,6 +437,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	 * @param tokens   input token sequence, length ≥ 2
 	 * @param lossMask length {@code tokens.length - 1}, or {@code null} for all-true
 	 */
+	@Override
 	public LoraGradientResult computeGradients(int[] tokens, boolean[] lossMask) {
 		return computeGradients(tokens, lossMask, LoraTrainContext.disabled());
 	}
@@ -421,6 +445,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	/**
 	 * Gradient computation with optional deterministic train-only dropout context.
 	 */
+	@Override
 	public LoraGradientResult computeGradients(int[] tokens, boolean[] lossMask, LoraTrainContext ctx) {
 		if (tokens.length < 2)
 			throw new IllegalArgumentException("tokens.length must be >= 2 (need at least one prediction pair)");
@@ -510,10 +535,12 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	 *
 	 * @return token-weighted loss sum and prediction count
 	 */
+	@Override
 	public LoraGradientResult evaluateLoss(int[] tokens) {
 		return evaluateLoss(tokens, null);
 	}
 
+	@Override
 	public LoraGradientResult evaluateLoss(int[] tokens, boolean[] lossMask) {
 		if (tokens.length < 2)
 			throw new IllegalArgumentException("tokens.length must be >= 2 (need at least one prediction pair)");
@@ -609,8 +636,19 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	}
 
 	/** Expose adapters for orchestration (accumulation / clipping outside the handler). */
+	@Override
 	public LoraAdapterSet adapters() {
 		return loraAdapters;
+	}
+
+	@Override
+	public String architecture() {
+		return cfg.architecture();
+	}
+
+	@Override
+	public LoraModelLayout layout() {
+		return LoraModelLayout.forArchitecture(cfg.architecture(), cfg);
 	}
 
 	public LlamaConfig config() {
@@ -659,6 +697,9 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		applyLoraInPlace(q, li, "wq", xNorm1);
 		applyLoraInPlace(k, li, "wk", xNorm1);
 		applyLoraInPlace(v, li, "wv", xNorm1);
+		addBiasInPlace(q, bq, li);
+		addBiasInPlace(k, bk, li);
+		addBiasInPlace(v, bv, li);
 
 		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
 		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
@@ -674,6 +715,15 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		float[] xNorm2 = LlamaTransformerHandler.rmsNorm(x2, ffnNorm[li], cfg.rmsNormEps());
 		float[] ffnOut = ffn(xNorm2, li);
 		return LlamaTransformerHandler.add(x2, ffnOut);
+	}
+
+	/** Frozen QKV bias add (Qwen2); no-op when biases are absent. */
+	private static void addBiasInPlace(float[] x, float[][] biases, int li) {
+		if (biases == null)
+			return;
+		float[] b = biases[li];
+		for (int i = 0; i < x.length; i++)
+			x[i] += b[i];
 	}
 
 	private void applyLoraInPlace(float[] out, int li, String proj, float[] input) {
@@ -823,6 +873,9 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		applyLoraInPlace(q, li, "wq", xNorm1);
 		applyLoraInPlace(k, li, "wk", xNorm1);
 		applyLoraInPlace(v, li, "wv", xNorm1);
+		addBiasInPlace(q, bq, li);
+		addBiasInPlace(k, bk, li);
+		addBiasInPlace(v, bv, li);
 
 		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), Hd, cfg.ropeTheta());
 		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), Hd, cfg.ropeTheta());
@@ -1099,54 +1152,17 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * RMSNorm backward.
-	 * 
-	 * <pre>
-	 *   y_i = w_i * x_i * scale,  scale = 1/sqrt(mean(x^2) + eps)
-	 *   dL/dx_j = w_j * scale * gradOut_j
-	 *           - x_j * (scale^3 / n) * sum_i(gradOut_i * w_i * x_i)
-	 * </pre>
+	 * RMSNorm backward — delegates to {@link LoraTrainingMath}.
 	 */
 	static float[] rmsNormBackward(float[] x, float[] w, float[] gradOut, float eps) {
-		int n = x.length;
-		float ss = 0f;
-		for (float v : x)
-			ss += v * v;
-		float normSq = ss / n + eps;
-		float scale = (float) (1.0 / Math.sqrt(normSq)); // 1 / rms
-
-		// sum_i(gradOut_i * w_i * x_i)
-		float dot = 0f;
-		for (int i = 0; i < n; i++)
-			dot += gradOut[i] * w[i] * x[i];
-
-		float s3OverN = (scale * scale * scale) / n;
-		float[] gradX = new float[n];
-		for (int i = 0; i < n; i++)
-			gradX[i] = w[i] * scale * gradOut[i] - x[i] * s3OverN * dot;
-		return gradX;
+		return LoraTrainingMath.rmsNormBackward(x, w, gradOut, eps);
 	}
 
 	/**
-	 * Inverse RoPE rotation: R(-angle) applied in-place to gradients.
-	 * Mathematically: R^T is the rotation by -angle, same formula as forward but
-	 * with negated sin.
+	 * Inverse LLaMA adjacent-pair RoPE — delegates to {@link LoraTrainingMath}.
 	 */
 	static void ropeBackward(float[] g, int pos, int nHeads, int headDim, float ropeTheta) {
-		for (int h = 0; h < nHeads; h++) {
-			int base = h * headDim;
-			for (int i = 0; i < headDim / 2; i++) {
-				double freq = 1.0 / Math.pow(ropeTheta, (2.0 * i) / headDim);
-				double angle = pos * freq;
-				float cosA = (float) Math.cos(angle);
-				float sinA = (float) Math.sin(angle);
-				float g0 = g[base + 2 * i];
-				float g1 = g[base + 2 * i + 1];
-				// Inverse rotation R^T: [[cos, sin], [-sin, cos]]
-				g[base + 2 * i] = g0 * cosA + g1 * sinA;
-				g[base + 2 * i + 1] = -g0 * sinA + g1 * cosA;
-			}
-		}
+		LoraTrainingMath.ropeBackward(g, pos, nHeads, headDim, ropeTheta);
 	}
 
 	/**

@@ -130,7 +130,8 @@ flowchart LR
 | Live tests gated on GGUF files in `models/` | Open |
 | Real forked-JVM cluster tests for Qwen (only `LocalInferencePipeline` today) | Open |
 | `compare-phi3-llama.sh` / `compare-qwen-llama.sh` not in repo | Open |
-| LoRA still LLaMA-family only | By design |
+| LoRA trainable (Tier 6) | `llama` / `mistral` / `tinyllama`, `qwen2` / `qwen2.5`, `phi3`, dense `qwen3` | Done via `LoraTrainingHandlerFactory` |
+| LoRA rejected | `qwen3moe`, `qwen35`, `gemma`, unknown | Explicit allowlist |
 | Thinking mode (Qwen3 / Qwen3.5) | Not started |
 
 ---

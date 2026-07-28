@@ -663,9 +663,10 @@ Pass `--verbose` / `-v` for full `[TRACE]` output:
 
 If the template key at training and inference differ, the model will not recall trained facts.
 Rename the model file to include the architecture keyword (`tinyllama`, `llama-3`, `mistral`,
-`phi3`) to ensure `ChatModelType.fromPath()` detects it correctly. Gemma, Qwen 2 / Qwen3 /
-Qwen3.5 paths are under development — prefer LLaMA-family or Phi-3 models for LoRA
-training workflows today.
+`phi3`, `qwen3`) so `ChatModelType.fromPath()` picks the matching chat template. Qwen2/2.5 use
+ChatML; Qwen3 training uses the empty `<think>` block. LoRA training supports those dense
+architectures via `LoraTrainingHandlerFactory`; Gemma, Qwen3-MoE, and Qwen3.5 LoRA remain
+unsupported.
 
 ---
 

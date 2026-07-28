@@ -25,4 +25,11 @@ package cab.ml.juno.node;
  * @param backwardMs       wall time of the backward pass
  */
 public record LoraGradientResult(float lossSum, int predictionCount, long forwardMs, long backwardMs) {
+
+	/** Token-weighted mean loss over the predictions; {@link Float#NaN} when empty. */
+	public float meanLoss() {
+		if (predictionCount == 0)
+			return Float.NaN;
+		return lossSum / predictionCount;
+	}
 }

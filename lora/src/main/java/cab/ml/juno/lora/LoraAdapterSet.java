@@ -172,6 +172,15 @@ public final class LoraAdapterSet {
 	}
 
 	/**
+	 * Normalize accumulated gradients by {@code predictionCount} and optionally
+	 * apply global L2 clipping. Convenience wrapper around
+	 * {@link LoraGradients#prepare(LoraAdapterSet, int, float)}.
+	 */
+	public LoraGradients.PrepResult prepareGradientsForOptimizer(int predictionCount, float maxGradNorm) {
+		return LoraGradients.prepare(this, predictionCount, maxGradNorm);
+	}
+
+	/**
 	 * Reinitialize every adapter in this set. Keys present in {@code fresh} copy
 	 * those weights; any extra keys (e.g. leftover projections) are reinitialized
 	 * locally so ΔW returns to zero. Magnitudes/fingerprints for matching keys are

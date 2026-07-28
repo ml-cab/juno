@@ -38,8 +38,21 @@ For `rank=8` on `wq` and `wv` across all 22 layers of TinyLlama-1.1B:
 | Memory (F32) | ~4.3 GB | 2.8 MB |
 | Training target | no | yes |
 
-**Architecture restriction.** LoRA requires a dense LLaMA-family GGUF with separate
-`attn_q` / `attn_k` / `attn_v` tensors. Phi-3 (fused QKV), Qwen3, and Qwen3-MoE are rejected.
+**Architecture support (Tier 6).** LoRA training and `--lora-play` are routed by
+`LoraTrainingHandlerFactory` from GGUF `general.architecture`:
+
+| Architecture | Handler | Notes |
+|---|---|---|
+| `llama`, `mistral`, `tinyllama` | `LoraTrainableHandler` | Separate Q/K/V/FFN tensors |
+| `qwen2`, `qwen2.5` | `Qwen2LoraTrainableHandler` | Same dense layout + frozen QKV biases |
+| `phi3` | `Phi3LoraTrainableHandler` | Fused `attn_qkv` / `ffn_up`; NeoX RoPE; fused-slice F32 merge |
+| `qwen3` (dense) | `Qwen3LoraTrainableHandler` | Per-head Q/K RMSNorm; `qDim` may differ from `hiddenDim` |
+| `qwen3moe`, `qwen35`, `gemma`, unknown | **Rejected** | Explicit allowlist error |
+
+Checkpoint keys stay logical (`wq,wk,wv,wo,wgate,wup,wdown`). Physical GGUF names and
+row slices are resolved at load/merge via `LoraModelLayout`. Qwen3 `/train-qa` text must
+include the closed empty `<think>` block to match inference (`ChatTrainingFormats` /
+`ChatTemplate.qwen3`).
 
 **Training loop.** Gradients are summed over chunks, then divided by total prediction tokens,
 optionally clipped by global L2 norm (`--lora-max-grad-norm`), then AdamW steps once per
@@ -133,7 +146,9 @@ inconsistent. Tune with `--lora-loss-target-qa`, `--lora-max-iters`, or `--lora-
 **Chat template must match.** The `[TRACE] model type (chat template key)` line at REPL startup
 shows which template was detected. The same key must appear at inference. If they differ, the
 model will not recall trained facts. Rename the model file to include the architecture keyword
-(`tinyllama`, `llama-3`, `mistral`, `phi3`). Gemma and Qwen 2 / Qwen3 / Qwen3.5 paths are under development.
+(`tinyllama`, `llama-3`, `mistral`, `phi3`, `qwen3`). Qwen2/2.5 paths use ChatML; Qwen3
+training uses the empty `<think>` block. Gemma LoRA and Qwen3-MoE / Qwen3.5 training are not
+supported.
 
 ---
 

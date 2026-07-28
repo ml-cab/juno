@@ -25,7 +25,7 @@ import cab.ml.juno.lora.LoraAdapterSet;
 
 /**
  * Creates LoRA adapters in stable layer/projection order and validates loaded
- * checkpoints against model dimensions.
+ * checkpoints against model dimensions via {@link LoraModelLayout}.
  */
 public final class LoraInitializer {
 
@@ -45,6 +45,12 @@ public final class LoraInitializer {
 	/** Create adapters from explicit {@link LoraAdapterConfig}. */
 	public static LoraAdapterSet create(LlamaConfig cfg, Collection<LoraProjection> targets, LoraAdapterConfig config,
 			Random rng) {
+		return create(LoraModelLayout.forArchitecture(cfg.architecture(), cfg), targets, config, rng);
+	}
+
+	/** Create adapters using an explicit architecture layout. */
+	public static LoraAdapterSet create(LoraModelLayout layout, Collection<LoraProjection> targets,
+			LoraAdapterConfig config, Random rng) {
 		List<LoraProjection> ordered = LoraProjection.sortedUnique(targets);
 		if (ordered.isEmpty())
 			throw new IllegalArgumentException("targets must not be empty");
@@ -54,9 +60,10 @@ public final class LoraInitializer {
 			throw new IllegalArgumentException("QA-LoRA requires QaLoraInitializer.create (needs GGUF tensors)");
 
 		LoraAdapterSet set = new LoraAdapterSet();
-		for (int li = 0; li < cfg.numLayers(); li++) {
+		for (int li = 0; li < layout.numLayers(); li++) {
 			for (LoraProjection proj : ordered) {
-				set.add(li, proj.key(), new LoraAdapter(config, proj.inDim(cfg), proj.outDim(cfg), rng));
+				LoraProjectionBinding b = layout.binding(li, proj);
+				set.add(li, proj.key(), new LoraAdapter(config, b.inDim(), b.outDim(), rng));
 			}
 		}
 		return set;
@@ -73,6 +80,11 @@ public final class LoraInitializer {
 	 * @throws IllegalArgumentException on mismatch or unknown projection
 	 */
 	public static void validate(LoraAdapterSet adapters, LlamaConfig cfg) {
+		validate(adapters, LoraModelLayout.forArchitecture(cfg.architecture(), cfg));
+	}
+
+	/** Validate against an explicit layout (required for Qwen3 {@code qDim} shapes). */
+	public static void validate(LoraAdapterSet adapters, LoraModelLayout layout) {
 		if (adapters == null || adapters.size() == 0)
 			throw new IllegalArgumentException("adapter set is empty");
 
@@ -86,28 +98,28 @@ public final class LoraInitializer {
 			} catch (RuntimeException e) {
 				throw new IllegalArgumentException("invalid adapter key: " + key, e);
 			}
-			if (layer < 0 || layer >= cfg.numLayers())
+			if (layer < 0 || layer >= layout.numLayers())
 				throw new IllegalArgumentException(
-						"adapter layer " + layer + " out of range [0," + cfg.numLayers() + ")");
+						"adapter layer " + layer + " out of range [0," + layout.numLayers() + ")");
 
 			LoraProjection proj = LoraProjection.fromKey(projKey);
 			LoraAdapter a = entry.getValue();
-			int expectIn = proj.inDim(cfg);
-			int expectOut = proj.outDim(cfg);
-			if (a.inDim != expectIn || a.outDim != expectOut)
+			LoraProjectionBinding b = layout.binding(layer, proj);
+			if (a.inDim != b.inDim() || a.outDim != b.outDim())
 				throw new IllegalArgumentException("adapter " + key + " shape " + a.outDim + "×" + a.inDim
-						+ " does not match model " + expectOut + "×" + expectIn);
+						+ " does not match model " + b.outDim() + "×" + b.inDim());
 		}
 		for (var entry : adapters.asQaMap().entrySet()) {
 			String key = entry.getKey();
 			int layer = LoraAdapterSet.keyLayer(key);
 			String projKey = LoraAdapterSet.keyProj(key);
-			if (layer < 0 || layer >= cfg.numLayers())
+			if (layer < 0 || layer >= layout.numLayers())
 				throw new IllegalArgumentException(
-						"QA adapter layer " + layer + " out of range [0," + cfg.numLayers() + ")");
+						"QA adapter layer " + layer + " out of range [0," + layout.numLayers() + ")");
 			LoraProjection proj = LoraProjection.fromKey(projKey);
 			var a = entry.getValue();
-			if (a.inDim != proj.inDim(cfg) || a.outDim != proj.outDim(cfg))
+			LoraProjectionBinding b = layout.binding(layer, proj);
+			if (a.inDim != b.inDim() || a.outDim != b.outDim())
 				throw new IllegalArgumentException("QA adapter " + key + " shape mismatch");
 			if (a.inDim % a.groupWidth != 0)
 				throw new IllegalArgumentException("QA adapter " + key + " groupWidth misaligned");

@@ -1,5 +1,22 @@
 ## Status
 
+**Session 43** — LoRA Tier 6: multi-architecture training (CPU oracle).
+
+### LoRA multi-architecture (Tier 6)
+
+- `LoraTrainingHandler` / `LoraTrainingHandlerFactory` — explicit allowlist by `general.architecture`.
+- `LoraModelLayout` / `LoraProjectionBinding` — logical keys → physical GGUF tensors (Phi fused slices).
+- Handlers: LLaMA-family (`LoraTrainableHandler`), `Qwen2LoraTrainableHandler` (frozen QKV biases),
+  `Phi3LoraTrainableHandler` (fused QKV/gate-up + NeoX RoPE), `Qwen3LoraTrainableHandler`
+  (per-head Q/K RMSNorm, `qDim`).
+- `LoraMerge` layout-aware multi-adapter fused-slice F32 patching for Phi-3.
+- Rejected for LoRA: `qwen3moe`, `qwen35`, `gemma`, unknown.
+- Qwen3 `/train-qa` template parity with empty `<think>` block.
+
+---
+
+## Status
+
 **Session 42** — LoRA REPL UX + WebUI model dropdown.
 
 - `/reset` deletes the `.lora` checkpoint (no overwrite save); memory reset + chat history clear unchanged.

@@ -10,22 +10,25 @@ import org.junit.jupiter.api.Test;
 class ForwardPassHandlerLoaderLoraArchTest {
 
 	@Test
-	@DisplayName("rejects fused/MoE architectures")
+	@DisplayName("rejects MoE, gemma, and unknown")
 	void rejects_incompatible() {
-		assertThatThrownBy(() -> ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("phi3"))
-				.isInstanceOf(IllegalArgumentException.class).hasMessageContaining("phi3");
-		assertThatThrownBy(() -> ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("qwen3"))
-				.isInstanceOf(IllegalArgumentException.class);
 		assertThatThrownBy(() -> ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("qwen3moe"))
+				.isInstanceOf(IllegalArgumentException.class).hasMessageContaining("qwen3moe");
+		assertThatThrownBy(() -> ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("gemma"))
+				.isInstanceOf(IllegalArgumentException.class).hasMessageContaining("gemma");
+		assertThatThrownBy(() -> ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("qwen35"))
 				.isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test
-	@DisplayName("allows dense LLaMA-family architectures")
-	void allows_llama_family() {
+	@DisplayName("allows Tier 6 dense architectures including phi3 and qwen3")
+	void allows_tier6() {
 		ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("llama");
 		ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("mistral");
-		ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("gemma");
+		ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("qwen2");
+		ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("qwen2.5");
+		ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("phi3");
+		ForwardPassHandlerLoader.requireLoraCompatibleArchitecture("qwen3");
 		assertThat(true).isTrue();
 	}
 }

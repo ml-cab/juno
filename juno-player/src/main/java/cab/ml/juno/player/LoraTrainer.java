@@ -32,7 +32,8 @@ import cab.ml.juno.node.DoraInitializer;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LoraInitializer;
-import cab.ml.juno.node.LoraTrainableHandler;
+import cab.ml.juno.node.LoraTrainingHandler;
+import cab.ml.juno.node.LoraTrainingHandlerFactory;
 import cab.ml.juno.node.QaLoraInitializer;
 import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.ShardAssignment;
@@ -49,7 +50,7 @@ public final class LoraTrainer implements AutoCloseable {
 	public record TrainUntilResult(float finalLoss, int iterations, boolean targetReached) {
 	}
 
-	private final LoraTrainableHandler handler;
+	private final LoraTrainingHandler handler;
 	private final Tokenizer tokenizer;
 	private final LoraAdamOptimizer optimizer;
 	private final LoraAdapterSet adapters;
@@ -58,7 +59,7 @@ public final class LoraTrainer implements AutoCloseable {
 	private final LoraTrainingConfig config;
 	private final LlamaConfig modelConfig;
 
-	private LoraTrainer(LoraTrainableHandler handler, Tokenizer tokenizer, LoraAdamOptimizer optimizer,
+	private LoraTrainer(LoraTrainingHandler handler, Tokenizer tokenizer, LoraAdamOptimizer optimizer,
 			LoraAdapterSet adapters, Path adapterPath, Path modelPath, LoraTrainingConfig config,
 			LlamaConfig modelConfig) {
 		this.handler = handler;
@@ -108,7 +109,7 @@ public final class LoraTrainer implements AutoCloseable {
 
 		ShardAssignment assignment = new ShardAssignment("lora-node", "localhost", 0, 0, cfg.numLayers(), true, true);
 		ShardContext ctx = ShardContext.from(assignment, cfg.vocabSize(), cfg.hiddenDim(), cfg.numHeads());
-		LoraTrainableHandler handler = LoraTrainableHandler.load(modelPath, ctx, adapters);
+		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(modelPath, ctx, adapters);
 		LoraAdamOptimizer optimizer = new LoraAdamOptimizer(config.learningRate(), 0.9, 0.999, 1e-8,
 				config.weightDecay(), config.loraPlusRatio());
 		LoraTrainingConfig enriched = enrichMetricsLabels(config, cfg.architecture());
@@ -241,7 +242,7 @@ public final class LoraTrainer implements AutoCloseable {
 		adapters.save(adapterPath);
 	}
 
-	public LoraTrainableHandler handler() {
+	public LoraTrainingHandler handler() {
 		return handler;
 	}
 

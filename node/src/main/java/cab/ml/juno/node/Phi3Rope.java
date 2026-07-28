@@ -38,18 +38,46 @@ final class Phi3Rope {
 	 * @param cfg     rope parameters loaded from GGUF
 	 */
 	static void ropeExt(float[] x, int pos, int nHeads, int headDim, Phi3RopeConfig cfg) {
+		float[] cache = buildCache(pos, headDim, cfg);
+		applyNeoxRotations(x, nHeads, headDim, cache);
+	}
+
+	/**
+	 * Exact adjoint of {@link #ropeExt}: NeoX split-half inverse rotation using the
+	 * same cos/sin cache (including {@code attnFactor}).
+	 *
+	 * <pre>
+	 *   dx0 = cos*g0 + sin*g1
+	 *   dx1 = -sin*g0 + cos*g1
+	 * </pre>
+	 */
+	static void ropeExtBackward(float[] g, int pos, int nHeads, int headDim, Phi3RopeConfig cfg) {
+		float[] cache = buildCache(pos, headDim, cfg);
+		int half = headDim / 2;
+		for (int h = 0; h < nHeads; h++) {
+			int base = h * headDim;
+			for (int i0 = 0; i0 < headDim; i0 += 2) {
+				float cosA = cache[i0];
+				float sinA = cache[i0 + 1];
+				int ic = i0 / 2;
+				float g0 = g[base + ic];
+				float g1 = g[base + ic + half];
+				g[base + ic] = cosA * g0 + sinA * g1;
+				g[base + ic + half] = -sinA * g0 + cosA * g1;
+			}
+		}
+	}
+
+	private static float[] buildCache(int pos, int headDim, Phi3RopeConfig cfg) {
 		float[] freqFactors = cfg.selectFactors();
 		float thetaScale = (float) Math.pow(cfg.freqBase(), -2.0 / headDim);
 		float[] corrDims = new float[2];
 		ropeYarnCorrDims(headDim, cfg.originalContextLength(), cfg.freqBase(), 1.0f, 1.0f, corrDims);
-
-		// Phi-3 linear scaling: ext_factor = 0 (not YARN)
 		float extFactor = 0.0f;
 		float[] cache = new float[headDim];
 		ropeCacheInit(pos, cfg.freqScale(), freqFactors, corrDims, headDim, extFactor, cfg.attnFactor(), 1.0f,
 				thetaScale, cache);
-
-		applyNeoxRotations(x, nHeads, headDim, cache);
+		return cache;
 	}
 
 	/** GGML_ROPE_TYPE_NEOX — split-half pairing within each head. */

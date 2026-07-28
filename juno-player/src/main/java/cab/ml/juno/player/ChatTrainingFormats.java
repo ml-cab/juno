@@ -39,6 +39,9 @@ public final class ChatTrainingFormats {
 				+ "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
 		case "mistral" -> "[INST] " + question + " [/INST] ";
 		case "gemma" -> "<start_of_turn>user\n" + question + "<end_of_turn>\n" + "<start_of_turn>model\n";
+		// Qwen3 enable_thinking=false: empty closed <think> before assistant text.
+		case "qwen3" -> "<|im_start|>user\n" + question + "<|im_end|>\n" + "<|im_start|>assistant\n"
+				+ "<think>\n\n</think>\n\n";
 		default -> "<|im_start|>user\n" + question + "<|im_end|>\n" + "<|im_start|>assistant\n";
 		};
 	}
@@ -51,6 +54,7 @@ public final class ChatTrainingFormats {
 		case "llama3" -> answer + "<|eot_id|>";
 		case "mistral" -> answer + "</s>";
 		case "gemma" -> answer + "<end_of_turn>\n";
+		case "qwen3" -> answer + "<|im_end|>\n";
 		default -> answer + "<|im_end|>\n";
 		};
 	}

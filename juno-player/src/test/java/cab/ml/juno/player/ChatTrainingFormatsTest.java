@@ -14,4 +14,15 @@ class ChatTrainingFormatsTest {
 		assertThat(s).isEqualTo(ChatTrainingFormats.qaPrefix("What?", "tinyllama")
 				+ ChatTrainingFormats.qaCompletion("Because.", "tinyllama"));
 	}
+
+	@Test
+	void qwen3_qa_includes_empty_think_block() {
+		String prefix = ChatTrainingFormats.qaPrefix("Hello?", "qwen3");
+		assertThat(prefix).contains("<|im_start|>user");
+		assertThat(prefix).contains("<think>");
+		assertThat(prefix).contains("</think>");
+		assertThat(prefix).endsWith("<think>\n\n</think>\n\n");
+		String turn = ChatTrainingFormats.qaTurn("Hello?", "World.", "qwen3");
+		assertThat(turn).isEqualTo(prefix + ChatTrainingFormats.qaCompletion("World.", "qwen3"));
+	}
 }

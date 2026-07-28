@@ -33,7 +33,30 @@ final class Qwen3Rope {
 		}
 	}
 
+	/**
+	 * Adjoint of {@link #apply}: R(-angle) applied in-place using the exact same
+	 * cos/sin cache (including any YaRN {@code attnFactor} scaling).
+	 *
+	 * <pre>
+	 *   dx0 =  cos*g0 + sin*g1
+	 *   dx1 = -sin*g0 + cos*g1
+	 * </pre>
+	 */
+	static void applyBackward(float[] g, int pos, int nHeads, int headDim, Qwen3RopeConfig cfg) {
+		if (cfg.yarn()) {
+			float[] cache = buildYarnCache(pos, headDim, cfg);
+			backwardAdjacentRotations(g, nHeads, headDim, cache);
+		} else {
+			LoraTrainingMath.ropeBackward(g, pos, nHeads, headDim, cfg.freqBase());
+		}
+	}
+
 	private static void ropeYarn(float[] x, int pos, int nHeads, int headDim, Qwen3RopeConfig cfg) {
+		float[] cache = buildYarnCache(pos, headDim, cfg);
+		applyAdjacentRotations(x, nHeads, headDim, cache);
+	}
+
+	private static float[] buildYarnCache(int pos, int headDim, Qwen3RopeConfig cfg) {
 		float thetaScale = (float) Math.pow(cfg.freqBase(), -2.0 / headDim);
 		float[] corrDims = new float[2];
 		ropeYarnCorrDims(headDim, cfg.originalContextLength(), cfg.freqBase(), 1.0f, 1.0f, corrDims);
@@ -41,7 +64,21 @@ final class Qwen3Rope {
 		float[] cache = new float[headDim];
 		ropeCacheInit(pos, cfg.freqScale(), null, corrDims, headDim, extFactor, cfg.attnFactor(), 1.0f, thetaScale,
 				cache);
-		applyAdjacentRotations(x, nHeads, headDim, cache);
+		return cache;
+	}
+
+	private static void backwardAdjacentRotations(float[] g, int nHeads, int headDim, float[] cache) {
+		for (int h = 0; h < nHeads; h++) {
+			int base = h * headDim;
+			for (int i = 0; i < headDim / 2; i++) {
+				float cosA = cache[2 * i];
+				float sinA = cache[2 * i + 1];
+				float g0 = g[base + 2 * i];
+				float g1 = g[base + 2 * i + 1];
+				g[base + 2 * i] = cosA * g0 + sinA * g1;
+				g[base + 2 * i + 1] = -sinA * g0 + cosA * g1;
+			}
+		}
 	}
 
 	/** LLaMA-style adjacent-pair rotation within each head. */
