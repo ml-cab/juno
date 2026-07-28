@@ -650,7 +650,8 @@ INFO: Detected architecture: llama  backend=CpuMatVec  file=...  lora=44 adapter
 
 ### Diagnostics and tracing
 
-Without `--verbose`, LoRA training prints a single-line progress bar (`pass N/M · loss · ETA`).
+Without `--verbose`, LoRA training prints a single-line progress bar (`pass N · loss · bar · % · ETA`).
+Percent is loss progress from the pass-2 baseline toward the loss target (not `pass/max-iters`).
 Pass `--verbose` / `-v` for full `[TRACE]` output:
 
 | Line | What it tells you |

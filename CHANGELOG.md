@@ -1,5 +1,14 @@
 ## Status
 
+**Session 44** — LoRA training progress bar (loss → target).
+
+- `LoraTrainProgressBar` — percent from pass-2 baseline loss toward `--lora-loss-target-*`; max-iters not used.
+- ETA from loss-improvement rate since baseline; final frame ETA `0s` when the run ends.
+
+---
+
+## Status
+
 **Session 43** — LoRA Tier 6: multi-architecture training (CPU oracle).
 
 ### LoRA multi-architecture (Tier 6)

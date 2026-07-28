@@ -1099,6 +1099,8 @@ public final class ConsoleMain {
 		int stepsBefore = optimizer.step();
 		long trainStart = System.currentTimeMillis();
 		long[] lastPassAt = { trainStart };
+		float[] baselineLoss = { Float.NaN };
+		long[] baselineAtMs = { 0L };
 		LoraTrainingLoop.TrainingResult result = LoraTrainingLoop.train(units, cfg, adapters, optimizer,
 				(tokens, mask, ctx) -> handler.computeGradients(tokens, mask, ctx),
 				(tokens, mask) -> handler.evaluateLoss(tokens, mask), lossTarget, maxIters, loraEarlyStop, chunkTokens,
@@ -1116,21 +1118,27 @@ public final class ConsoleMain {
 									logLabel, pass, trainLoss, lossTarget, optUpdates, passMs);
 						return;
 					}
-					long elapsed = Math.max(1L, now - trainStart);
-					long etaMs = pass < maxIters ? (elapsed / pass) * (maxIters - pass) : 0L;
-					String eta = etaMs > 60_000
-							? String.format("%dm%02ds", etaMs / 60_000, (etaMs % 60_000) / 1000)
-							: String.format("%ds", etaMs / 1000);
-					int pct = (int) (100.0 * pass / maxIters);
-					int bars = Math.min(20, pct / 5);
-					String bar = Color.GREEN + "▓".repeat(bars) + Color.DIM + "░".repeat(20 - bars) + Color.RESET;
-					System.out.printf("\r  pass %3d/%-3d  loss=%.4f  %s %3d%%  %4dms/pass  ETA %-8s", pass, maxIters,
-							trainLoss, bar, pct, passMs, eta);
+					if (pass == LoraTrainProgressBar.BASELINE_PASS && Float.isFinite(trainLoss)
+							&& !Float.isFinite(baselineLoss[0])) {
+						baselineLoss[0] = trainLoss;
+						baselineAtMs[0] = now;
+					}
+					long sinceBaseline = baselineAtMs[0] > 0L ? Math.max(0L, now - baselineAtMs[0]) : 0L;
+					System.out.print(LoraTrainProgressBar.render(pass, trainLoss, lossTarget, baselineLoss[0], passMs,
+							sinceBaseline));
 					System.out.flush();
 				});
 		long totalMs = System.currentTimeMillis() - trainStart;
-		if (!verbose)
+		if (!verbose) {
+			if (result.passCount() > 0) {
+				long avgPassMs = Math.max(1L, totalMs / Math.max(1, result.passCount()));
+				float base = Float.isFinite(baselineLoss[0]) ? baselineLoss[0] : result.finalTrainLoss();
+				// Training finished: ETA 0; percent from loss vs target (100% when target met).
+				System.out.print(LoraTrainProgressBar.render(result.passCount(), result.finalTrainLoss(), lossTarget,
+						base, avgPassMs, 0L));
+			}
 			System.out.println();
+		}
 
 		float lastLoss = result.finalTrainLoss();
 		String doneLabel = switch (result.stopReason()) {

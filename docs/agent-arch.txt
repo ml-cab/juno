@@ -17,7 +17,8 @@ Module dependency (excerpt):
   metrics — JfrMetricsExtractor (MatVec/ForwardPass + full LoRA event catalog), MetricsMain
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
         coordinator depends on node
-  juno-player — ConsoleMain REPL (local/cluster/lora programmatic --jfr), ClusterHarness, LoraMergeMain,
+  juno-player — ConsoleMain REPL (local/cluster/lora programmatic --jfr), LoraTrainProgressBar,
+                ClusterHarness, LoraMergeMain,
         ProcessPipelineClient, TensorParallelPipelineClient
         juno-player depends on coordinator (and transitively on node)
   juno-master — CoordinatorMain standalone executable (production coordinator)
