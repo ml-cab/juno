@@ -38,6 +38,8 @@ CPU-only inference requires no GPU stack. The `./juno` launcher enforces JDK 25 
 - In-process training REPL: `./juno lora`
 - Inference overlay: `--lora-play PATH` (local, cluster, AWS)
 - Native merge to standalone GGUF: `./juno merge` (patched tensors stored as F32)
+- Train-file scheduling: `--lora-chunk-tokens` (default 32; recommend 128 for files),
+  `--lora-max-train-tokens` seeded corpus caps
 
 ### OpenAI-compatible REST
 

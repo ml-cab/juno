@@ -57,4 +57,22 @@ class LoraTrainingSequencesTest {
 				assertThat(c.predictionCount()).isGreaterThan(0);
 		}
 	}
+
+	@Test
+	void chunkInvariantsHoldForCommonSizes() {
+		int[] tokens = new int[200];
+		for (int i = 0; i < tokens.length; i++)
+			tokens[i] = i + 1;
+		boolean[] mask = LoraTrainingSequences.allTrueMask(tokens.length);
+		for (int chunkTokens : new int[] { 32, 64, 128 }) {
+			var chunks = LoraTrainingSequences.chunk(tokens, mask, chunkTokens);
+			assertThat(chunks).isNotEmpty();
+			for (var c : chunks) {
+				assertThat(c.tokens().length).isGreaterThanOrEqualTo(2);
+				assertThat(c.tokens().length).isLessThanOrEqualTo(chunkTokens + 1);
+				assertThat(c.lossMask()).hasSize(c.tokens().length - 1);
+				assertThat(c.predictionCount()).isGreaterThan(0);
+			}
+		}
+	}
 }

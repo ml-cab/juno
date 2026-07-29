@@ -57,11 +57,17 @@ include the closed empty `<think>` block to match inference (`ChatTrainingFormat
 **Training loop.** Gradients are summed over chunks, then divided by total prediction tokens,
 optionally clipped by global L2 norm (`--lora-max-grad-norm`), then AdamW steps once per
 accumulation group (`--lora-gradient-accumulation`). Reported loss is token-weighted, not the
-last chunk's mean. Optimizer updates use a scheduled learning rate (constant or warmup-cosine).
+last chunk's mean. Truncated-BPTT window size is `--lora-chunk-tokens` (default **32** for
+reproducibility; recommend **128** for large `/train-file`). `/train` and `/train-file` keep
+one document-level unit and chunk inside the loop; `--lora-max-train-tokens` (default `0` =
+unlimited) applies a seeded whole-chunk subsample of supervised prediction tokens for epoch
+sizing without changing CE on included tokens. Optimizer updates use a scheduled learning rate
+(constant or warmup-cosine).
 Weight decay is decoupled AdamW on A only; B is never decayed. LoRA+ scales B's learning rate
 by `--lora-plus-ratio` (default `1.0`). Train-only deterministic dropout may mask the LoRA
 branch input; inference and validation never apply dropout. With `--lora-validation-split`
-and `--lora-validation-patience`, complete units (Q&A variants or text chunks) are held out;
+and `--lora-validation-patience`, complete units (Q&A variants or text documents / capped
+chunk windows) are held out;
 best A/B weights are restored on exit and the optimizer is reset. JFR `juno.LoraTrainStep`
 fires once per optimizer update (includes A/B LR, LoRA+ ratio, dropout, and mode-identity
 fields: algorithm / scaling / init / architecture / trainDevice / rank / alpha / targets /
@@ -94,6 +100,7 @@ may be zero on CPU-only runs.
 # optional: --lora-targets all --lora-gradient-accumulation 4 --lora-max-grad-norm 1.0
 # optional: --lora-lr-schedule cosine --lora-warmup-steps 20 --lora-plus-ratio 4 --lora-dropout 0.05
 # optional: --lora-validation-split 0.25 --lora-validation-patience 3 --lora-seed 42
+# optional: --lora-chunk-tokens 128 --lora-max-train-tokens 2048
 ```
 
 **REPL commands:**
@@ -101,7 +108,7 @@ may be zero on CPU-only runs.
 | Command | Description |
 |---------|-------------|
 | `/train <text>` | Fine-tune on inline text (freeform) |
-| `/train-file <path>` | Fine-tune on a text file (auto-chunked into <= 128-token pieces) |
+| `/train-file <path>` | Fine-tune on a text file (document-level unit; truncated BPTT chunk default **32**, recommend **128**) |
 | `/train-qa <question> A: <answer>` | Train a single Q&A fact with auto-generated phrasings |
 | `/save` | Save adapter to `--lora-path` |
 | `/reset` | Reinitialize A/B (and DoRA magnitudes), **clear chat history**, and **delete** the `.lora` checkpoint |

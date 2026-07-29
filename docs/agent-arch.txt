@@ -65,8 +65,9 @@ GPU FFI (node module — Panama project, JEP 454):
         createMatVec() delegates to GpuBindings.createMatVec(GpuContext) — no instanceof checks.
 
 Third-party JVM integration (juno-player module): JunoPlayer (facade), LoraTrainer,
-LocalInferencePipeline.embedLastToken, PublisherTokenConsumer → Flow.Publisher,
-JunoHttpClient (REST). Thin jar vs *-shaded.jar documented in docs/howto.md.
+LoraCorpusLimit (chunk / max-train-tokens epoch sizing), LocalInferencePipeline.embedLastToken,
+PublisherTokenConsumer → Flow.Publisher, JunoHttpClient (REST). Thin jar vs *-shaded.jar
+documented in docs/howto.md.
 
 LoRA GPU defaults:
   ForwardPassHandlerLoader.selectBackend() — JUNO_USE_GPU unset defaults to false (cluster/local).

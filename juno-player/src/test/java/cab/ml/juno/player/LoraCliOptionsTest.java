@@ -82,4 +82,42 @@ class LoraCliOptionsTest {
 		assertThat(c.validationPatience()).isEqualTo(3);
 		assertThat(c.validationMinDelta()).isEqualTo(0.01f);
 	}
+
+	@Test
+	@DisplayName("parses Tier-8 chunk and corpus-cap flags")
+	void parses_tier8_flags() {
+		LoraCliOptions o = new LoraCliOptions();
+		String[] args = { "--lora-chunk-tokens", "128", "--lora-max-train-tokens", "2048" };
+		for (int i = 0; i < args.length;) {
+			int n = o.applyFlag(args, i);
+			assertThat(n).isGreaterThan(i);
+			i = n + 1;
+		}
+		assertThat(o.chunkTokens).isEqualTo(128);
+		assertThat(o.maxTrainTokens).isEqualTo(2048);
+		LoraTrainingConfig c = o.toTrainingConfig();
+		assertThat(c.chunkTokens()).isEqualTo(128);
+		assertThat(c.maxTrainTokens()).isEqualTo(2048);
+	}
+
+	@Test
+	@DisplayName("rejects invalid Tier-8 chunk and corpus-cap values")
+	void rejects_bad_tier8_bounds() {
+		LoraCliOptions o = new LoraCliOptions();
+		assertThatThrownBy(() -> o.applyFlag(new String[] { "--lora-chunk-tokens", "0" }, 0))
+				.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> o.applyFlag(new String[] { "--lora-chunk-tokens", "8193" }, 0))
+				.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> o.applyFlag(new String[] { "--lora-max-train-tokens", "-1" }, 0))
+				.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	@DisplayName("Tier-8 defaults are 32 chunk and unlimited tokens")
+	void tier8_defaults() {
+		LoraCliOptions o = new LoraCliOptions();
+		LoraTrainingConfig c = o.toTrainingConfig();
+		assertThat(c.chunkTokens()).isEqualTo(32);
+		assertThat(c.maxTrainTokens()).isEqualTo(0);
+	}
 }

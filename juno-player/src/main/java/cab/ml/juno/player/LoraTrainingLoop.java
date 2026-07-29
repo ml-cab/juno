@@ -136,7 +136,7 @@ public final class LoraTrainingLoop {
 			LoraAdamOptimizer optimizer, GradientComputer gradients, LossEvaluator evaluator, float lossTarget,
 			int maxPasses, float earlyStopGuard) {
 		return train(units, config, adapters, optimizer, gradients, evaluator, lossTarget, maxPasses, earlyStopGuard,
-				32, null);
+				config.chunkTokens(), null);
 	}
 
 	public static TrainingResult train(List<TrainUnit> units, LoraTrainingConfig config, LoraAdapterSet adapters,

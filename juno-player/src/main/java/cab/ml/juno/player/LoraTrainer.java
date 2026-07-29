@@ -129,7 +129,8 @@ public final class LoraTrainer implements AutoCloseable {
 				.validationPatience(config.validationPatience()).validationMinDelta(config.validationMinDelta())
 				.restoreBest(config.restoreBest()).groupWidth(config.groupWidth())
 				.mergeCapability(config.mergeCapability()).architecture(architecture != null ? architecture : "")
-				.trainDevice(config.trainDevice()).build();
+				.trainDevice(config.trainDevice()).chunkTokens(config.chunkTokens())
+				.maxTrainTokens(config.maxTrainTokens()).build();
 	}
 
 	/**
@@ -156,7 +157,7 @@ public final class LoraTrainer implements AutoCloseable {
 		List<LoraTrainingLoop.TrainUnit> units = qaUnits(question, answer, modelTypeKey);
 		List<LoraTrainingSequences.MaskedChunk> chunks = new ArrayList<>();
 		for (var u : units)
-			chunks.addAll(LoraTrainingSequences.chunk(u.tokens(), u.lossMask(), 32));
+			chunks.addAll(LoraTrainingSequences.chunk(u.tokens(), u.lossMask(), config.chunkTokens()));
 		LoraLearningRateSchedule schedule = LoraTrainingLoop.buildSchedule(config,
 				LoraTrainingLoop.plannedUpdates(chunks.size(), config.gradientAccumulationSteps(), stepsPerChunk));
 		float lastLoss = Float.NaN;

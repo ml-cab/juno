@@ -1,5 +1,18 @@
 ## Status
 
+**Session 45** — LoRA Tier 8: train-file scheduling and corpus caps.
+
+### LoRA train-file scheduling (Tier 8)
+
+- `--lora-chunk-tokens` / `LORA_CHUNK_TOKENS` (default **32**; recommend **128** for large `/train-file`).
+- `--lora-max-train-tokens` / `LORA_MAX_TRAIN_TOKENS` (`0` = unlimited): seeded whole-chunk subsample of supervised prediction tokens.
+- `/train` and `/train-file` use document-level `TrainUnit`s; chunking happens inside `LoraTrainingLoop`.
+- `LoraCorpusLimit` helper; docs/help no longer claim a silent 128 default.
+
+---
+
+## Status
+
 **Session 44** — LoRA training progress bar (loss → target).
 
 - `LoraTrainProgressBar` — percent from pass-2 baseline loss toward `--lora-loss-target-*`; max-iters not used.

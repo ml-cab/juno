@@ -57,6 +57,8 @@ public final class LoraCliOptions {
 	public String mergeCapability = "f32-preserve";
 	public String architecture = "";
 	public String trainDevice = "cpu";
+	public int chunkTokens = LoraCorpusLimit.DEFAULT_CHUNK_TOKENS;
+	public int maxTrainTokens = 0;
 
 	public float resolvedAlpha() {
 		return alpha < 0f ? rank : alpha;
@@ -122,7 +124,8 @@ public final class LoraCliOptions {
 				.weightDecay(weightDecay).loraPlusRatio(loraPlusRatio).dropout(dropout).seed(seed)
 				.validationSplit(validationSplit).validationPatience(validationPatience)
 				.validationMinDelta(validationMinDelta).groupWidth(groupWidth)
-				.mergeCapability(parsedMergeCapability()).architecture(architecture).trainDevice(trainDevice).build();
+				.mergeCapability(parsedMergeCapability()).architecture(architecture).trainDevice(trainDevice)
+				.chunkTokens(chunkTokens).maxTrainTokens(maxTrainTokens).build();
 	}
 
 	/**
@@ -306,6 +309,18 @@ public final class LoraCliOptions {
 			parsedMergeCapability();
 			yield i + 1;
 		}
+		case "--lora-chunk-tokens" -> {
+			requireValue(args, i, flag);
+			chunkTokens = Integer.parseInt(args[i + 1]);
+			LoraCorpusLimit.validateChunkTokens(chunkTokens);
+			yield i + 1;
+		}
+		case "--lora-max-train-tokens" -> {
+			requireValue(args, i, flag);
+			maxTrainTokens = Integer.parseInt(args[i + 1]);
+			LoraCorpusLimit.validateMaxTrainTokens(maxTrainTokens);
+			yield i + 1;
+		}
 		default -> -1;
 		};
 	}
@@ -328,10 +343,14 @@ public final class LoraCliOptions {
 		applyEnv(o, "LORA_MODE", v -> o.mode = v);
 		applyEnv(o, "LORA_SCALING", v -> o.scaling = v);
 		applyEnv(o, "LORA_INIT", v -> o.init = v);
+		applyEnv(o, "LORA_CHUNK_TOKENS", v -> o.chunkTokens = Integer.parseInt(v));
+		applyEnv(o, "LORA_MAX_TRAIN_TOKENS", v -> o.maxTrainTokens = Integer.parseInt(v));
 		o.parsedLrSchedule();
 		o.parsedMode();
 		o.parsedScaling();
 		o.parsedInit();
+		LoraCorpusLimit.validateChunkTokens(o.chunkTokens);
+		LoraCorpusLimit.validateMaxTrainTokens(o.maxTrainTokens);
 		cab.ml.juno.lora.LoraDropout.validateRate(o.dropout);
 		return o;
 	}

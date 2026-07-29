@@ -76,10 +76,12 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--lora-weight-decay F` | `0.01` | Decoupled AdamW decay on A only |
 | `--lora-plus-ratio F` | `1.0` | B/A learning-rate ratio (`1.0` = ordinary LoRA) |
 | `--lora-dropout F` | `0` | Train-only inverted dropout on LoRA branch input |
-| `--lora-seed N` | `42` | Seed for init, validation split, and dropout masks |
+| `--lora-seed N` | `42` | Seed for init, validation split, dropout masks, and corpus caps |
 | `--lora-validation-split F` | `0` | Fraction of units held out (`0` disables) |
 | `--lora-validation-patience N` | `0` | Validation checks without improvement before stop |
 | `--lora-validation-min-delta F` | `0` | Minimum validation improvement to reset patience |
+| `--lora-chunk-tokens N` | `32` | Truncated-BPTT window size; recommend `128` for large `/train-file` |
+| `--lora-max-train-tokens N` | `0` | Cap supervised prediction tokens per train (`0` = unlimited); seeded whole-chunk subsample |
 
 **`merge` specific flags:**
 
@@ -94,7 +96,8 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`,
 `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_MAX_ITERS`, `LORA_LOSS_TARGET_TEXT`,
 `LORA_LOSS_TARGET_QA`, `LORA_STEPS` (alias), `LORA_PLAY_PATH`, `LORA_TARGETS`,
-`LORA_GRADIENT_ACCUMULATION`, `LORA_MAX_GRAD_NORM`, `API_PORT`
+`LORA_GRADIENT_ACCUMULATION`, `LORA_MAX_GRAD_NORM`, `LORA_CHUNK_TOKENS`,
+`LORA_MAX_TRAIN_TOKENS`, `API_PORT`
 
 For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO_USE_GPU` unset
 means try GPU (CUDA first, then ROCm) when available. Set `JUNO_USE_GPU=false` or pass `--cpu`

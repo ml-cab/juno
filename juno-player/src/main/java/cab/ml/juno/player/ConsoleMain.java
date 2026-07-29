@@ -184,6 +184,8 @@ public final class ConsoleMain {
 	private static String loraAdapterMode = "lora";
 	private static String loraScaling = "standard";
 	private static String loraInit = "kaiming-uniform";
+	private static int loraChunkTokens = LoraCorpusLimit.DEFAULT_CHUNK_TOKENS;
+	private static int loraMaxTrainTokens = 0;
 	private static LlamaConfig loraModelConfig; // set in runLoraRepl for /reset
 
 	/** Active programmatic JFR session (local / lora); stopped and extracted on exit. */
@@ -214,6 +216,8 @@ public final class ConsoleMain {
 		o.mode = loraAdapterMode;
 		o.scaling = loraScaling;
 		o.init = loraInit;
+		o.chunkTokens = loraChunkTokens;
+		o.maxTrainTokens = loraMaxTrainTokens;
 		o.architecture = loraModelConfig != null ? loraModelConfig.architecture() : "";
 		o.trainDevice = cab.ml.juno.node.LoraMetricsIdentity.resolveTrainDevice(useGpu);
 		return o.toTrainingConfig();
@@ -310,6 +314,8 @@ public final class ConsoleMain {
 		loraAdapterMode = env.mode;
 		loraScaling = env.scaling;
 		loraInit = env.init;
+		loraChunkTokens = env.chunkTokens;
+		loraMaxTrainTokens = env.maxTrainTokens;
 	}
 
 	private static void parseArgs(String[] args) {
@@ -500,6 +506,18 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					loraInit = args[++i];
 				break;
+			case "--lora-chunk-tokens":
+				if (i + 1 < args.length) {
+					loraChunkTokens = parseInt(args[++i], LoraCorpusLimit.DEFAULT_CHUNK_TOKENS);
+					LoraCorpusLimit.validateChunkTokens(loraChunkTokens);
+				}
+				break;
+			case "--lora-max-train-tokens":
+				if (i + 1 < args.length) {
+					loraMaxTrainTokens = parseInt(args[++i], 0);
+					LoraCorpusLimit.validateMaxTrainTokens(loraMaxTrainTokens);
+				}
+				break;
 			// ─────────────────────────────────────────────────────────────────
 			case "--verbose":
 			case "-v":
@@ -564,7 +582,7 @@ public final class ConsoleMain {
 		System.out.println();
 		System.out.println("  LoRA REPL commands:");
 		System.out.println("    /train <text>            Fine-tune on inline text");
-		System.out.println("    /train-file <path>       Fine-tune on a text file (splits into chunks)");
+		System.out.println("    /train-file <path>       Fine-tune on a text file (default chunk 32; recommend 128)");
 		System.out.println("    /save                    Save adapter checkpoint to --lora-path");
 		System.out.println("    /reset                   Reinitialize adapters and delete .lora checkpoint");
 		System.out.println("    /status                  Show adapter info and training stats");
@@ -592,6 +610,8 @@ public final class ConsoleMain {
 		System.out.println("  --lora-validation-split F  Held-out unit fraction (default: 0)");
 		System.out.println("  --lora-validation-patience N  Early-stop patience (default: 0=off)");
 		System.out.println("  --lora-validation-min-delta F  Min val improvement (default: 0)");
+		System.out.println("  --lora-chunk-tokens N     Truncated-BPTT window (default: 32; recommend 128 for /train-file)");
+		System.out.println("  --lora-max-train-tokens N Cap supervised tokens per train; 0=unlimited (default: 0)");
 		System.out.println();
 		System.out.println("Other:");
 		System.out.println("  --health                   Start the standalone health-monitor HTTP server");
@@ -689,7 +709,8 @@ public final class ConsoleMain {
 			print(Color.DIM + "  [TRACE] model path                     : " + modelPath + Color.RESET);
 			print(Color.DIM + "  [TRACE] LoRA rank=" + loraRank + "  alpha=" + loraAlpha
 					+ "  lr=" + loraLr + "  targets=" + loraTargets + "  accum=" + loraGradientAccumulation
-					+ "  max-grad-norm=" + loraMaxGradNorm + "  loss-target-text=" + loraLossTargetText
+					+ "  max-grad-norm=" + loraMaxGradNorm + "  chunk-tokens=" + loraChunkTokens
+					+ "  max-train-tokens=" + loraMaxTrainTokens + "  loss-target-text=" + loraLossTargetText
 					+ "  loss-target-qa=" + loraLossTargetQa + "  max-iters=" + loraMaxIters
 					+ "  max-iters-qa=" + loraMaxItersQa + "  early-stop=" + loraEarlyStop
 					+ "  temperature=" + temperature + Color.RESET);
@@ -938,7 +959,7 @@ public final class ConsoleMain {
 			print(Color.CYAN_BOLD + "  LoRA REPL commands" + Color.RESET);
 			print("  /train-qa <q> A: <a>  Fine-tune on a Q&A pair in the correct chat format  ← USE THIS");
 			print("  /train <text>          Fine-tune on raw text (no chat template applied)");
-			print("  /train-file <path>     Fine-tune on a text file (chunks of ~128 tokens)");
+			print("  /train-file <path>     Fine-tune on a text file (default chunk 32; recommend --lora-chunk-tokens 128)");
 			print("  /save                  Save adapter to " + adapterFile);
 			print("  /reset                 Reinitialise adapters, clear chat history, delete checkpoint");
 			print("  /status                Show adapter info and training statistics");
@@ -1012,7 +1033,7 @@ public final class ConsoleMain {
 		for (var v : LoraTrainingSequences.buildQaVariants(tokenizer, question, answer, modelType))
 			units.add(new LoraTrainingLoop.TrainUnit(v.tokens(), v.lossMask()));
 		trainOnUnits(units, adapters, optimizer, handler, totalSteps, dirty, loraLossTargetQa, loraMaxItersQa, "qa",
-				32);
+				loraChunkTokens);
 	}
 
 		/**
@@ -1043,23 +1064,30 @@ public final class ConsoleMain {
 	}
 
 	/**
-	 * Chunk a masked sequence and run loss-target training with optional skip when
-	 * the loaded adapters are already at the target (avoids one more Adam step that
-	 * deepens mode collapse).
+	 * Build a document-level unit (optionally corpus-capped) and run loss-target
+	 * training with optional skip when the loaded adapters are already at the
+	 * target (avoids one more Adam step that deepens mode collapse).
 	 */
 	private static void trainOnMasked(LoraTrainingSequences.MaskedSequence seq, LoraAdapterSet adapters,
 			LoraAdamOptimizer optimizer, LoraTrainingHandler handler, int[] totalSteps, boolean[] dirty,
 			float lossTarget, int maxIters, String logLabel) throws Exception {
-		final int CHUNK = 32;
-		List<LoraTrainingSequences.MaskedChunk> chunks = LoraTrainingSequences.chunk(seq, CHUNK);
-		if (chunks.isEmpty()) {
+		List<LoraTrainingLoop.TrainUnit> units = LoraCorpusLimit.limitDocument(seq.tokens(), seq.lossMask(),
+				loraChunkTokens, loraMaxTrainTokens, loraSeed);
+		if (units.isEmpty()) {
 			print(Color.YELLOW + "  No trainable (completion) tokens in this example." + Color.RESET);
 			return;
 		}
-		List<LoraTrainingLoop.TrainUnit> units = new ArrayList<>();
-		for (var c : chunks)
-			units.add(new LoraTrainingLoop.TrainUnit(c.tokens(), c.lossMask()));
-		trainOnUnits(units, adapters, optimizer, handler, totalSteps, dirty, lossTarget, maxIters, logLabel, CHUNK);
+		if (loraMaxTrainTokens > 0 && units.size() > 1) {
+			int cappedPred = 0;
+			for (var u : units)
+				for (boolean m : u.lossMask())
+					if (m)
+						cappedPred++;
+			print(Color.DIM + "  Corpus cap: max-train-tokens=" + loraMaxTrainTokens + " → " + units.size()
+					+ " chunk unit(s), " + cappedPred + " supervised (seed=" + loraSeed + ")" + Color.RESET);
+		}
+		trainOnUnits(units, adapters, optimizer, handler, totalSteps, dirty, lossTarget, maxIters, logLabel,
+				loraChunkTokens);
 	}
 
 	private static void trainOnUnits(List<LoraTrainingLoop.TrainUnit> units, LoraAdapterSet adapters,
@@ -1077,10 +1105,10 @@ public final class ConsoleMain {
 
 		print("");
 		System.out.printf(
-				"  %sTraining%s  rank=%d · lr=%s · schedule=%s · dropout=%s · plus=%s · decay=%s · targets=%s · accum=%d · max-norm=%s · target=%.2f · max %d pass(es) · %d unit(s) · %d tokens · %d supervised%n",
+				"  %sTraining%s  rank=%d · lr=%s · schedule=%s · dropout=%s · plus=%s · decay=%s · targets=%s · accum=%d · max-norm=%s · chunk=%d · target=%.2f · max %d pass(es) · %d unit(s) · %d tokens · %d supervised%n",
 				Color.CYAN_BOLD, Color.RESET, loraRank, loraLr, loraLrSchedule, loraDropout, loraPlusRatio,
-				loraWeightDecay, loraTargets, loraGradientAccumulation, loraMaxGradNorm, lossTarget, maxIters,
-				units.size(), tokenCount, predCount);
+				loraWeightDecay, loraTargets, loraGradientAccumulation, loraMaxGradNorm, chunkTokens, lossTarget,
+				maxIters, units.size(), tokenCount, predCount);
 		print("  " + "─".repeat(62));
 
 		// Probe with forward-only eval — skip updates if already at target.
