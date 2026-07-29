@@ -45,8 +45,13 @@ import java.util.logging.Logger;
  * <li><b>GELU FFN (no gate)</b>: only {@code ffn_up} and {@code ffn_down}
  *     tensors; no {@code ffn_gate}. Activation is GELU, not SiLU.
  *     Both projections carry bias vectors.
- * <li><b>Partial RoPE</b>: rotates only the first {@code phi2.rope.dimension_count}
- *     (typically 32) dimensions of each head; the remaining dims are unchanged.
+ * <li><b>Partial RoPE, NeoX split-half pairing</b>: rotates only the first
+ *     {@code phi2.rope.dimension_count} (typically 32) dimensions of each head,
+ *     pairing dimension {@code i} with {@code i + ropeDim/2} (GPT-NeoX / HF
+ *     {@code rotate_half} convention, same family as {@link Phi3Rope}) rather
+ *     than the adjacent-pair {@code (2i, 2i+1)} convention used by
+ *     {@link LlamaTransformerHandler}. See {@link Phi2Rope}. The remaining
+ *     {@code headDim - ropeDim} dims are unchanged.
  * <li><b>Output projection bias</b>: {@code output.bias [vocabSize]}.
  * <li><b>Output LayerNorm bias</b>: {@code output_norm.bias [hiddenDim]}.
  * </ol>
@@ -336,6 +341,8 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         ensureKvCapacity(kCache, pos, kvDim);
         ensureKvCapacity(vCache, pos, kvDim);
 
+        if (pos <= 1 || pos == 729 || pos == 730)
+            log.info("[phi2-trace] runLayers pos=" + pos + " initial-x: " + stats(x, cfg.hiddenDim()));
         for (int li = 0; li < L; li++)
             x = transformerLayer(x, li, pos, kCache[li], vCache[li]);
 
@@ -395,8 +402,9 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         }
 
         // Partial RoPE: only the first ropeDim dims of each head are rotated.
-        ropePartial(q, pos, cfg.numHeads(),   cfg.headDim(), ropeDim, cfg.ropeTheta());
-        ropePartial(k, pos, cfg.numKvHeads(), cfg.headDim(), ropeDim, cfg.ropeTheta());
+        // NeoX split-half pairing — see Phi2Rope for why adjacent-pair is wrong here.
+        Phi2Rope.ropePartial(q, pos, cfg.numHeads(),   cfg.headDim(), ropeDim, cfg.ropeTheta());
+        Phi2Rope.ropePartial(k, pos, cfg.numKvHeads(), cfg.headDim(), ropeDim, cfg.ropeTheta());
 
         System.arraycopy(k, 0, kCacheLayer, pos * kvDim, kvDim);
         System.arraycopy(v, 0, vCacheLayer, pos * kvDim, kvDim);
@@ -413,6 +421,21 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         float[] result = new float[H];
         for (int i = 0; i < H; i++)
             result[i] = x[i] + attnProj[i] + ffnOut[i];
+
+        // Layer-0 trace: log activation stats at key points. Pos derived from kCache length.
+        if (li == 0) {
+            int curPos = kCacheLayer.length / cfg.kvDim() - 1;
+            if (curPos <= 1 || curPos == 729 || curPos == 730) {
+                log.info("[phi2-trace] layer=0 pos=" + curPos
+                    + "\n  x:         " + stats(x, H)
+                    + "\n  xNorm:     " + stats(xNorm, H)
+                    + "\n  q:         " + stats(q, H)
+                    + "\n  k:         " + stats(k, cfg.kvDim())
+                    + "\n  attnProj:  " + stats(attnProj, H)
+                    + "\n  ffnOut:    " + stats(ffnOut, H)
+                    + "\n  result:    " + stats(result, H));
+            }
+        }
         return result;
     }
 
@@ -516,36 +539,6 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
     }
 
     /**
-     * Partial RoPE for Phi-2: rotates only the first {@code ropeDim} dimensions
-     * of each head; the remaining {@code headDim - ropeDim} dimensions are unchanged.
-     *
-     * <p>Uses adjacent-pair convention {@code (x[2i], x[2i+1])} — the same as
-     * {@link LlamaTransformerHandler#rope} — since llama.cpp's converter pre-permutes
-     * both LLaMA and Phi-2 weights to this layout.
-     *
-     * <p>Frequencies are computed with {@code ropeDim} as the denominator (not
-     * {@code headDim}), matching llama.cpp's {@code ggml_rope_ext} for phi2.
-     */
-    static void ropePartial(float[] x, int pos, int nHeads, int headDim,
-                             int ropeDim, float ropeTheta) {
-        int halfRope = ropeDim / 2;
-        for (int h = 0; h < nHeads; h++) {
-            int base = h * headDim;
-            for (int i = 0; i < halfRope; i++) {
-                double freq  = 1.0 / Math.pow(ropeTheta, (2.0 * i) / ropeDim);
-                double angle = pos * freq;
-                float  cosA  = (float) Math.cos(angle);
-                float  sinA  = (float) Math.sin(angle);
-                float  x0    = x[base + 2*i];
-                float  x1    = x[base + 2*i + 1];
-                x[base + 2*i]     = x0 * cosA - x1 * sinA;
-                x[base + 2*i + 1] = x0 * sinA + x1 * cosA;
-            }
-            // Dims [ropeDim .. headDim-1] are intentionally left unchanged.
-        }
-    }
-
-    /**
      * GELU activation used by Phi-2's FFN.
      *
      * <p>Uses the standard tanh approximation:
@@ -556,5 +549,16 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         double xd = x;
         return (float)(0.5 * xd * (1.0 + Math.tanh(
                 Math.sqrt(2.0 / Math.PI) * (xd + 0.044715 * xd * xd * xd))));
+    }
+
+    /** Compact activation stats for trace logging: min/max/mean/l2. */
+    private static String stats(float[] v, int n) {
+        if (n <= 0) return "(empty)";
+        float mn = v[0], mx = v[0], sum = 0f; double sq = 0;
+        for (int i = 0; i < n; i++) {
+            if (v[i] < mn) mn = v[i]; if (v[i] > mx) mx = v[i];
+            sum += v[i]; sq += (double) v[i] * v[i];
+        }
+        return String.format("min=%.3f max=%.3f mean=%.4f l2=%.2f", mn, mx, sum / n, Math.sqrt(sq));
     }
 }

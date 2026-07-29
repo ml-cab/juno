@@ -39,7 +39,7 @@ class VisionAwareForwardPassHandlerTest {
     @BeforeEach
     void setup() {
         inner   = new StubForwardPassHandler();
-        handler = new VisionAwareForwardPassHandler(inner, IMAGE_TOKEN_ID, HIDDEN_DIM);
+        handler = new VisionAwareForwardPassHandler(inner, IMAGE_TOKEN_ID, HIDDEN_DIM, "<image>");
     }
 
     // ── Text-only pass-through ────────────────────────────────────────────────
@@ -174,7 +174,7 @@ class VisionAwareForwardPassHandlerTest {
     @Test
     @DisplayName("null textHandler throws IllegalArgumentException")
     void null_text_handler_rejected() {
-        assertThatThrownBy(() -> new VisionAwareForwardPassHandler(null, IMAGE_TOKEN_ID, HIDDEN_DIM))
+        assertThatThrownBy(() -> new VisionAwareForwardPassHandler(null, IMAGE_TOKEN_ID, HIDDEN_DIM, "<image>"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("textHandler");
     }
@@ -182,7 +182,7 @@ class VisionAwareForwardPassHandlerTest {
     @Test
     @DisplayName("hiddenDim < 1 throws IllegalArgumentException")
     void invalid_hidden_dim_rejected() {
-        assertThatThrownBy(() -> new VisionAwareForwardPassHandler(inner, IMAGE_TOKEN_ID, 0))
+        assertThatThrownBy(() -> new VisionAwareForwardPassHandler(inner, IMAGE_TOKEN_ID, 0, "<image>"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("hiddenDim");
     }
@@ -208,7 +208,7 @@ class VisionAwareForwardPassHandlerTest {
     void text_token_at_last_position_uses_real_embedding() {
         StubForwardPassHandler embeddingAwareInner = new StubForwardPassHandler(0, HIDDEN_DIM);
         VisionAwareForwardPassHandler h = new VisionAwareForwardPassHandler(embeddingAwareInner, IMAGE_TOKEN_ID,
-                HIDDEN_DIM);
+                HIDDEN_DIM, "<image>");
         float[][] patches = buildPatches(1, HIDDEN_DIM);
         h.registerVisionEmbeddings("req-text-last", patches);
 

@@ -260,3 +260,73 @@ mvn test -pl vision
 ```
 
 No model file, no GPU, no network required.
+
+---
+
+## Known issues / fixes
+
+### FIXED — moondream2 (phi2) produces grammatically-plausible but incoherent output
+
+**Symptom:** vision pipeline loads and runs end to end (patch injection, prefill,
+decode all complete without exception), but `/v1/vision/chat` returns word-salad,
+e.g. real English words in implausible order, no coherent description of the image.
+Confirmed on CPU, single node, `--local` mode. llama.cpp / llamafile against the
+same `.gguf` and the same photo produces a correct, coherent caption.
+
+**Root cause:** `Phi2TransformerHandler` rotated Q/K with adjacent-pair RoPE
+(`(x[2i], x[2i+1])`, the LLaMA/original-rope convention), but Phi-2's GGUF
+tensor layout requires GPT-NeoX split-half pairing (`(x[i], x[i+ropeDim/2])`,
+HF `rotate_half` convention) — the same distinction already identified and
+fixed for `Phi3TransformerHandler` on 2026-06-11 (see
+`docs/phi3-inference-handoff.md`, section C). Because RoPE runs on every
+position (both the 729 image-patch tokens and the text tokens), the wrong
+pairing corrupts positional information for the whole sequence: per-token
+processing (embedding lookup, LayerNorm, FFN, detokenization) stays intact
+enough to emit real vocabulary, but attention no longer attends coherently
+across positions, producing exactly this word-salad-with-real-words pattern.
+Vision-specific stages (patch embedding, SigLIP encoder, projector, image
+token injection) were verified correct and are not the cause.
+
+**Fix:** new `Phi2Rope` class implementing NeoX split-half partial rotary
+(frequency formula unchanged; only the dimension pairing differs).
+`Phi2TransformerHandler` calls `Phi2Rope.ropePartial` instead of its own
+adjacent-pair `ropePartial`.
+
+**Files:** `Phi2Rope.java` (new), `Phi2TransformerHandler.java`.
+**Test:** `Phi2RopeTest.java` (new) — pos=0 identity, pass-through of dims
+beyond `ropeDim`, norm preservation, and an explicit split-half-vs-adjacent-pair
+worked example.
+
+### FIXED — moondream2 output coherent but visually wrong (after the RoPE fix)
+
+**Symptom:** after fixing the RoPE pairing above, `/v1/vision/chat` returns
+grammatical, on-topic-sounding English (a real sentence, correct EOS
+stopping) but describing content not actually in the image, e.g. "a wooden
+stick and brush" for a photo of a family in front of a lit Christmas tree.
+llama.cpp / llamafile against the same GGUF and photo correctly describes the
+scene (people, Christmas lights, a building).
+
+**Root cause:** `ImagePatchEmbedder` hardcoded the OpenAI CLIP pixel
+normalisation constants (`mean=[0.4815,0.4578,0.4082]`,
+`std=[0.2686,0.2613,0.2758]`) for every model. moondream2's vision encoder is
+SigLIP, and SigLIP is trained with `image_mean=image_std=[0.5,0.5,0.5]`
+(HF `SiglipImageProcessor` defaults). Every pixel handed to the SigLIP
+encoder was on the wrong scale, so `VisionEncoder` was computing patch
+embeddings from systematically mis-normalised input: attention (already
+fixed above) now works correctly, but it is now correctly attending to
+wrong/distorted visual features.
+
+**Fix:** `VisionConfig` gained `imageMean`/`imageStd`, resolved in
+`VisionConfig.from(GgufReader)` with the same priority order llama.cpp's own
+`clip.cpp` uses: prefer the GGUF's own `clip.vision.image_mean` /
+`clip.vision.image_std` metadata arrays when the file declares them (new
+`GgufReader.metaFloatArray`), else default by encoder family using the
+existing CLS-token detection (`v.class_embd` present -> CLIP defaults;
+absent -> SigLIP defaults). `ImagePatchEmbedder` now normalises with the
+resolved per-model values instead of the hardcoded CLIP constants.
+
+**Files:** `GgufReader.java` (new `metaFloatArray`), `VisionConfig.java`,
+`ImagePatchEmbedder.java`.
+**Tests:** `GgufReaderMetaFloatArrayTest.java` (new),
+`VisionConfigNormalizationTest.java` (new) — covers the CLS-token default
+selection both ways and explicit-metadata override taking priority.

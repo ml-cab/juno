@@ -42,29 +42,38 @@ import javax.imageio.ImageIO;
  *       2026-07-20 after a real camera photo produced badly wrong vision
  *       output under conditions where a synthetic test image had not.
  *   <li>Resize to {@code imageSize × imageSize} using bilinear interpolation.
- *   <li>Normalise each channel with the CLIP standard mean/std:
- *       mean = {0.48145466, 0.4578275, 0.40821073},
- *       std  = {0.26862954, 0.26130258, 0.27577711}.
+ *   <li>Normalise each channel with the encoder's own mean/std
+ *       ({@link VisionConfig#imageMean()} / {@link VisionConfig#imageStd()}) —
+ *       these differ between CLIP-family and SigLIP-family encoders; see
+ *       {@link VisionConfig#from}.
  *   <li>Lay out as {@code float[3 * imageSize * imageSize]} in CHW order
  *       (channel-first): all R pixels, then all G, then all B.
  * </ol>
  *
- * Thread-safe: stateless, all parameters come from the constructor.
+ * Thread-safe: immutable, all fields (including per-model mean/std) are
+ * fixed at construction time from the {@link VisionConfig} passed in.
  */
 public final class ImagePatchEmbedder {
 
     private static final Logger log = Logger.getLogger(ImagePatchEmbedder.class.getName());
 
-    // CLIP normalisation constants (ImageNet-derived, used by CLIP and variants)
+    // OpenAI CLIP normalisation constants (ImageNet-derived). Retained as the
+    // historical default for callers/tests that do not supply a VisionConfig
+    // with its own imageMean/imageStd. Actual normalisation uses the instance
+    // fields below, resolved per-model in the constructor.
     static final float[] MEAN = {0.48145466f, 0.4578275f, 0.40821073f};
     static final float[] STD  = {0.26862954f, 0.26130258f, 0.27577711f};
 
     private final int imageSize;  // target square resolution (e.g. 336 for LLaVA)
     private final int patchSize;  // patch edge length in pixels
+    private final float[] mean;   // per-channel normalisation mean, this model's own values
+    private final float[] std;    // per-channel normalisation std, this model's own values
 
     public ImagePatchEmbedder(VisionConfig cfg) {
         this.imageSize = cfg.imageSize();
         this.patchSize = cfg.patchSize();
+        this.mean = cfg.imageMean();
+        this.std  = cfg.imageStd();
     }
 
     /**
@@ -277,11 +286,11 @@ public final class ImagePatchEmbedder {
 
     /**
      * Convert a {@code TYPE_INT_RGB} BufferedImage to a CHW float tensor
-     * normalised with CLIP mean/std.
+     * normalised with this encoder's own mean/std.
      *
      * Layout: out[c * H * W + y * W + x]  where c=0 R, c=1 G, c=2 B.
      */
-    private static float[] normalise(BufferedImage img) {
+    private float[] normalise(BufferedImage img) {
         int w = img.getWidth();
         int h = img.getHeight();
         float[] out = new float[3 * h * w];
@@ -295,9 +304,9 @@ public final class ImagePatchEmbedder {
                 float b = ( rgb        & 0xFF) / 255.0f;
 
                 int pix = y * w + x;
-                out[pix]              = (r - MEAN[0]) / STD[0];
-                out[planeSize + pix]  = (g - MEAN[1]) / STD[1];
-                out[2 * planeSize + pix] = (b - MEAN[2]) / STD[2];
+                out[pix]              = (r - mean[0]) / std[0];
+                out[planeSize + pix]  = (g - mean[1]) / std[1];
+                out[2 * planeSize + pix] = (b - mean[2]) / std[2];
             }
         }
         return out;

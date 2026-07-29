@@ -68,10 +68,14 @@ import io.javalin.http.Context;
  *   <li>Returns an OpenAI-compatible JSON response body.
  * </ol>
  *
- * Image tokens are represented in the text as a run of {@code <image>}
- * placeholder strings that the tokenizer will encode to the model-specific
- * image token ID.  The exact number of placeholders equals
- * {@code VisionConfig.numPatches()}.
+ * Image tokens are represented in the text as a run of model-specific
+ * placeholder strings (one per patch) obtained from
+ * {@link VisionAwareForwardPassHandler#imagePlaceholderString()}.  For LLaVA-style
+ * models (LLaMA tokenizer) this is {@code "<image>"} (token 32000); for
+ * phi-2 / moondream2 it is {@code "<|endoftext|>"} (token 50256), which is the
+ * only single-token string guaranteed to exist in every GPT-2 BPE vocab.
+ * {@link VisionAwareForwardPassHandler} replaces each placeholder token's
+ * embedding with the corresponding patch vector before the transformer sees it.
  *
  * Thread-safe: stateless except for the shared {@link VisionAwareForwardPassHandler}
  * and {@link VisionEncoder}, both of which are themselves thread-safe.
@@ -219,8 +223,12 @@ public final class VisionChatHandler {
             }
         }
 
-        // Build image placeholder string: one <image> token per patch
-        String imagePlaceholder = "<image>".repeat(numPatches);
+        // Build image placeholder string: one placeholder token per patch.
+        // The exact string depends on the model's tokenizer — visionHandler resolves
+        // it at load time to a string that encodes to exactly one token of
+        // the model's imageTokenId.  For phi-2/moondream2 this is "<|endoftext|>"
+        // (token 50256); for LLaVA/LLaMA it is "<image>" (token 32000).
+        String imagePlaceholder = visionHandler.imagePlaceholderString().repeat(numPatches);
 
         // Prepend image placeholder to user message
         String userText = "";
@@ -232,7 +240,16 @@ public final class VisionChatHandler {
                 }
             }
         }
-        out.add(ChatMessage.user(imagePlaceholder + "\n" + userText));
+        // moondream2 / phi-2: use the Q&A format the model was fine-tuned on.
+        // The chat template for these models ("moondream" or "phi2" in ChatTemplate)
+        // detects the trailing "\n\nAnswer:" and emits the content verbatim — no
+        // role markers are added.  For LLaVA / other models, fall through to the
+        // standard single-newline separator and let the chat template add role markers.
+        if ("<|endoftext|>".equals(visionHandler.imagePlaceholderString())) {
+            out.add(ChatMessage.user(imagePlaceholder + "\n\nQuestion: " + userText + "\n\nAnswer:"));
+        } else {
+            out.add(ChatMessage.user(imagePlaceholder + "\n" + userText));
+        }
         return out;
     }
 

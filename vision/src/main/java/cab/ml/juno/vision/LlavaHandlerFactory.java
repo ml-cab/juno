@@ -196,11 +196,13 @@ public final class LlavaHandlerFactory {
         }
 
         int imageTokenId = resolveImageTokenId(paths.textModelPath());
+        String imagePlaceholder = resolveImagePlaceholderString(imageTokenId);
         // Use encoder.outputDim() — derived from mm.0.weight's own GGUF shape —
         // not vCfg.projectionDim() (clip.vision.projection_dim metadata), which
         // is not reliable across mmproj exports; see VisionEncoder.outputDim().
         VisionAwareForwardPassHandler visionHandler =
-                new VisionAwareForwardPassHandler(textHandler, imageTokenId, encoder.outputDim());
+                new VisionAwareForwardPassHandler(textHandler, imageTokenId,
+                        encoder.outputDim(), imagePlaceholder);
 
         // Replace handlers[0] with the vision-aware wrapper so the pipeline uses it
         handlers.set(0, visionHandler);
@@ -246,10 +248,12 @@ public final class LlavaHandlerFactory {
 
         // Step 3: wrap the text handler with the vision embedding injector.
         int imageTokenId = resolveImageTokenId(modelPath);
+        String imagePlaceholder = resolveImagePlaceholderString(imageTokenId);
         // encoder.outputDim() (from mm.0.weight's own shape), not
         // vCfg.projectionDim() (unreliable metadata) — see VisionEncoder.outputDim().
         VisionAwareForwardPassHandler visionHandler =
-                new VisionAwareForwardPassHandler(textHandler, imageTokenId, encoder.outputDim());
+                new VisionAwareForwardPassHandler(textHandler, imageTokenId,
+                        encoder.outputDim(), imagePlaceholder);
 
         log.info("Vision handler ready — imageTokenId=" + imageTokenId
                 + "  patches=" + vCfg.numPatches()
@@ -302,18 +306,18 @@ public final class LlavaHandlerFactory {
      * <ol>
      *   <li>System property {@code juno.vision.image_token_id} — explicit override, always wins.</li>
      *   <li>Scan {@code tokenizer.ggml.tokens} in the text-model GGUF for the string
-     *       {@code "<image>"}. This covers moondream2 (phi-2 tokenizer, {@code <image>}
-     *       at a model-specific ID well above 32 000) and any future model that registers
-     *       a literal {@code <image>} special token.</li>
-     *   <li>Fallback: {@code 32000} — the LLaVA-1.5 / LLaMA convention, where the
-     *       {@code <image>} token was appended immediately after the 32 000-token LLaMA
-     *       base vocabulary.</li>
+     *       {@code "<image>"}. Succeeds for LLaVA-style models (LLaMA tokenizer) where
+     *       {@code <image>} is a named special token.</li>
+     *   <li>Fall back to the model's own EOS token ID (read from
+     *       {@code tokenizer.ggml.eos_token_id}). For phi-2 / moondream2 this is 50256
+     *       ({@code <|endoftext|>}), which is a single-token string already in every
+     *       GPT-2 BPE vocab. {@link cab.ml.juno.vision.VisionAwareForwardPassHandler}
+     *       replaces the embedding at each image-token position with the patch vector
+     *       before the transformer layer sees it, so the semantic meaning of the
+     *       placeholder token does not matter — only that it encodes to exactly
+     *       one token per patch.</li>
+     *   <li>Last resort: {@code 32000} (LLaVA-1.5 / LLaMA convention).</li>
      * </ol>
-     *
-     * <p>This method pairs with the fix to
-     * {@link cab.ml.juno.tokenizer.GgufTokenizer#isAtomicSpecialPiece}, which ensures
-     * that the tokenizer encodes the string {@code "<image>"} as the single special
-     * token ID returned here (rather than BPE-decomposing it into 2–3 sub-tokens).
      */
     private static int resolveImageTokenId(Path modelPath) {
         int fromProp = Integer.getInteger("juno.vision.image_token_id", -1);
@@ -321,28 +325,61 @@ public final class LlavaHandlerFactory {
             log.info("[vision] imageTokenId=" + fromProp + " (system property juno.vision.image_token_id)");
             return fromProp;
         }
-        // Scan the text-model GGUF tokenizer vocab for "<image>".
         try (GgufReader r = GgufReader.open(modelPath)) {
+            // Step 1: scan tokenizer vocab for a named <image> token.
             Object rawTokens = r.meta("tokenizer.ggml.tokens");
             if (rawTokens instanceof Object[]) {
                 Object[] tokens = (Object[]) rawTokens;
                 for (int i = 0; i < tokens.length; i++) {
                     if ("<image>".equals(tokens[i])) {
                         log.info("[vision] imageTokenId=" + i
-                                + " (found <image> at index " + i
-                                + " in tokenizer.ggml.tokens of " + modelPath.getFileName() + ")");
+                                + " (found <image> in tokenizer.ggml.tokens of " + modelPath.getFileName() + ")");
                         return i;
                     }
                 }
             }
+            // Step 2: no <image> token — use the model's EOS token as structural placeholder.
+            // VisionAwareForwardPassHandler replaces its embedding with the patch vector,
+            // so the model never sees the EOS embedding at those positions.
+            Object rawEos = r.meta("tokenizer.ggml.eos_token_id");
+            if (rawEos instanceof Number) {
+                int eosId = ((Number) rawEos).intValue();
+                log.info("[vision] imageTokenId=" + eosId
+                        + " (<image> absent from vocab; using EOS token as single-token placeholder"
+                        + " — embedding replaced by patch vector before transformer)");
+                return eosId;
+            }
         } catch (Exception e) {
-            log.warning("[vision] resolveImageTokenId: could not scan tokenizer vocab in "
+            log.warning("[vision] resolveImageTokenId: could not scan tokenizer in "
                     + modelPath.getFileName() + ": " + e.getMessage());
         }
-        // LLaVA-1.5 / LLaMA default.
-        log.info("[vision] imageTokenId=32000 (LLaVA/LLaMA default;"
-                + " override with -Djuno.vision.image_token_id=<id>)");
+        log.info("[vision] imageTokenId=32000 (LLaVA/LLaMA last-resort default)");
         return 32000;
+    }
+
+    /**
+     * Return the string that the model's tokenizer encodes to exactly one token of
+     * {@code imageTokenId}.  This string is repeated {@code numPatches} times by
+     * {@link cab.ml.juno.player.VisionChatHandler} to build the prompt's image section.
+     *
+     * <p>Known mappings:
+     * <ul>
+     *   <li>{@code 50256} → {@code "<|endoftext|>"} — phi-2 / moondream2 EOS/BOS token;
+     *       every GPT-2 BPE tokenizer recognises it as a single special token.</li>
+     *   <li>{@code 32000} → {@code "<image>"} — LLaVA-1.5 / LLaMA convention where
+     *       {@code <image>} is a named special token added beyond the 32 000-token base.</li>
+     *   <li>Any other ID found in the vocab scan → {@code "<image>"} as a best-effort
+     *       guess (the scan succeeded, so the model DOES have {@code <image>} in its
+     *       tokenizer and the string will tokenise correctly).</li>
+     * </ul>
+     */
+    private static String resolveImagePlaceholderString(int imageTokenId) {
+        if (imageTokenId == 50256) {
+            return "<|endoftext|>";
+        }
+        // For any other ID (including 32000 LLaVA default and any model-specific
+        // <image> token found by vocab scan), the placeholder string is "<image>".
+        return "<image>";
     }
 
     /**

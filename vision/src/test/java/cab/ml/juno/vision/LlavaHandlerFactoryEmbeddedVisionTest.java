@@ -188,4 +188,36 @@ class LlavaHandlerFactoryEmbeddedVisionTest {
 
         assertThat(LlavaHandlerFactory.isVisionArchitecture(modelPath, mmprojPath)).isTrue();
     }
+
+    // ── resolveImagePlaceholderString / resolveImageTokenId ───────────────────
+
+    @Test
+    @DisplayName("resolveImagePlaceholderString: token 50256 maps to <|endoftext|> (phi-2/moondream2 EOS)")
+    void resolveImagePlaceholderString_50256_isEndOfText() throws Exception {
+        java.lang.reflect.Method m = LlavaHandlerFactory.class
+                .getDeclaredMethod("resolveImagePlaceholderString", int.class);
+        m.setAccessible(true);
+        String result = (String) m.invoke(null, 50256);
+        assertThat(result).isEqualTo("<|endoftext|>");
+    }
+
+    @Test
+    @DisplayName("resolveImagePlaceholderString: token 32000 maps to <image> (LLaVA/LLaMA default)")
+    void resolveImagePlaceholderString_32000_isImage() throws Exception {
+        java.lang.reflect.Method m = LlavaHandlerFactory.class
+                .getDeclaredMethod("resolveImagePlaceholderString", int.class);
+        m.setAccessible(true);
+        String result = (String) m.invoke(null, 32000);
+        assertThat(result).isEqualTo("<image>");
+    }
+
+    @Test
+    @DisplayName("resolveImagePlaceholderString: any other token ID falls back to <image>")
+    void resolveImagePlaceholderString_otherIds_fallbackToImage() throws Exception {
+        java.lang.reflect.Method m = LlavaHandlerFactory.class
+                .getDeclaredMethod("resolveImagePlaceholderString", int.class);
+        m.setAccessible(true);
+        assertThat((String) m.invoke(null, 12345)).isEqualTo("<image>");
+        assertThat((String) m.invoke(null, 50257)).isEqualTo("<image>");
+    }
 }

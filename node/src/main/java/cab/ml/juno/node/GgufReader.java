@@ -239,6 +239,23 @@ public final class GgufReader implements AutoCloseable {
 		return v instanceof Boolean b ? b : def;
 	}
 
+	/**
+	 * Read a float array metadata value (e.g. {@code clip.vision.image_mean}),
+	 * returning {@code def} if the key is absent or is not a numeric array.
+	 */
+	public float[] metaFloatArray(String key, float[] def) {
+		Object v = metadata.get(key);
+		if (!(v instanceof Object[] arr) || arr.length == 0)
+			return def;
+		float[] out = new float[arr.length];
+		for (int i = 0; i < arr.length; i++) {
+			if (!(arr[i] instanceof Number n))
+				return def;
+			out[i] = n.floatValue();
+		}
+		return out;
+	}
+
 	public boolean hasTensor(String name) {
 		return tensors.containsKey(name);
 	}

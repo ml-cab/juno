@@ -59,7 +59,7 @@ class VisionAwareForwardPassHandlerBatchTest {
 	@BeforeEach
 	void setup() {
 		inner = new ActivationCapturingHandler(HIDDEN_DIM, VOCAB_SIZE);
-		handler = new VisionAwareForwardPassHandler(inner, IMAGE_TOKEN_ID, HIDDEN_DIM);
+		handler = new VisionAwareForwardPassHandler(inner, IMAGE_TOKEN_ID, HIDDEN_DIM, "<image>");
 	}
 
 	@Test

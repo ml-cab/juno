@@ -46,7 +46,7 @@ public record VisionConfig(
         int intermediateSize, // CLIP FFN intermediate dimension
         int projectionDim,  // output dimension of the vision projector (= LLM hiddenDim)
         float layerNormEps, // layer-norm epsilon for the CLIP encoder
-        boolean useGelu     // true: standard (tanh-approx) GELU. false: quick_gelu
+        boolean useGelu,    // true: standard (tanh-approx) GELU. false: quick_gelu
                              // (x * sigmoid(1.702x), OpenAI CLIP's original activation).
                              // Read from clip.use_gelu — llama.cpp's own flag for exactly
                              // this distinction. 2026-07-20: found via ./juno gguf-info
@@ -54,7 +54,27 @@ public record VisionConfig(
                              // VisionEncoder previously always used standard GELU
                              // regardless, silently using the wrong activation in every
                              // one of the 23 transformer blocks. See CHANGELOG.
+        float[] imageMean,  // per-channel pixel normalisation mean (RGB order)
+        float[] imageStd    // per-channel pixel normalisation std (RGB order)
+                             // 2026-07-29: ImagePatchEmbedder previously hardcoded the
+                             // OpenAI CLIP constants (0.4815/0.4578/0.4082,
+                             // 0.2686/0.2613/0.2758) for every model. SigLIP-family
+                             // encoders (moondream2's mmproj) are trained with
+                             // image_mean=image_std=[0.5,0.5,0.5] instead; using the
+                             // CLIP constants silently mis-scales every pixel fed to a
+                             // SigLIP encoder. Resolved here from clip.vision.image_mean
+                             // / image_std when the GGUF declares them, else defaulted
+                             // by encoder family (CLS token present → CLIP; absent →
+                             // SigLIP), matching VisionEncoder's own CLS-token detection.
 ) {
+
+    /** OpenAI CLIP normalisation constants (ImageNet-derived). */
+    static final float[] OPENAI_CLIP_MEAN = {0.48145466f, 0.4578275f, 0.40821073f};
+    static final float[] OPENAI_CLIP_STD  = {0.26862954f, 0.26130258f, 0.27577711f};
+
+    /** SigLIP / "imagenet standard" normalisation constants. */
+    static final float[] SIGLIP_MEAN = {0.5f, 0.5f, 0.5f};
+    static final float[] SIGLIP_STD  = {0.5f, 0.5f, 0.5f};
 
     /**
      * Derive from an open {@link GgufReader}.
@@ -84,8 +104,18 @@ public record VisionConfig(
         // codebase's prior unconditional behavior for files that don't declare it.
         boolean useGelu      = r.metaBool("clip.use_gelu", true);
 
+        // CLS-token presence distinguishes CLIP-style (has v.class_embd) from
+        // SigLIP-style (no CLS token) encoders — same signal VisionEncoder
+        // itself uses. Each family trains with different normalisation
+        // constants; the GGUF's own declared values (when present) always win.
+        boolean hasClsToken = r.hasTensor("v.class_embd");
+        float[] defaultMean = hasClsToken ? OPENAI_CLIP_MEAN : SIGLIP_MEAN;
+        float[] defaultStd  = hasClsToken ? OPENAI_CLIP_STD  : SIGLIP_STD;
+        float[] imageMean   = r.metaFloatArray("clip.vision.image_mean", defaultMean);
+        float[] imageStd    = r.metaFloatArray("clip.vision.image_std", defaultStd);
+
         return new VisionConfig(imageSize, patchSize, hiddenSize, numLayers,
-                numHeads, intermediateSize, projectionDim, eps, useGelu);
+                numHeads, intermediateSize, projectionDim, eps, useGelu, imageMean, imageStd);
     }
 
     /**
@@ -120,6 +150,9 @@ public record VisionConfig(
      * Build a synthetic config for unit tests — no GGUF file needed.
      * useGelu defaults to true (standard GELU), matching this class's
      * pre-2026-07-20 behavior, so existing test call sites are unaffected.
+     * imageMean/imageStd default to the OpenAI CLIP constants, matching this
+     * class's pre-2026-07-29 behavior, so existing test call sites are
+     * unaffected.
      */
     static VisionConfig synthetic(int imageSize, int patchSize, int hiddenSize,
                                    int numLayers, int numHeads, int projectionDim) {
@@ -129,17 +162,27 @@ public record VisionConfig(
     /** Same as {@link #synthetic(int, int, int, int, int, int)} with an explicit useGelu. */
     static VisionConfig synthetic(int imageSize, int patchSize, int hiddenSize,
                                    int numLayers, int numHeads, int projectionDim, boolean useGelu) {
+        return synthetic(imageSize, patchSize, hiddenSize, numLayers, numHeads, projectionDim, useGelu,
+                OPENAI_CLIP_MEAN, OPENAI_CLIP_STD);
+    }
+
+    /** Same as {@link #synthetic(int, int, int, int, int, int, boolean)} with explicit normalisation. */
+    static VisionConfig synthetic(int imageSize, int patchSize, int hiddenSize,
+                                   int numLayers, int numHeads, int projectionDim, boolean useGelu,
+                                   float[] imageMean, float[] imageStd) {
         int intermediateSize = hiddenSize * 4;
         float eps = 1e-5f;
         return new VisionConfig(imageSize, patchSize, hiddenSize, numLayers,
-                numHeads, intermediateSize, projectionDim, eps, useGelu);
+                numHeads, intermediateSize, projectionDim, eps, useGelu, imageMean, imageStd);
     }
 
     @Override
     public String toString() {
         return String.format(
-                "VisionConfig{image=%d patch=%d hidden=%d layers=%d heads=%d ffn=%d proj=%d eps=%.1e useGelu=%b}",
+                "VisionConfig{image=%d patch=%d hidden=%d layers=%d heads=%d ffn=%d proj=%d eps=%.1e useGelu=%b "
+                        + "mean=[%.4f,%.4f,%.4f] std=[%.4f,%.4f,%.4f]}",
                 imageSize, patchSize, hiddenSize, numLayers, numHeads,
-                intermediateSize, projectionDim, layerNormEps, useGelu);
+                intermediateSize, projectionDim, layerNormEps, useGelu,
+                imageMean[0], imageMean[1], imageMean[2], imageStd[0], imageStd[1], imageStd[2]);
     }
 }
