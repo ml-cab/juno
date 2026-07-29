@@ -64,4 +64,97 @@ final class JfrPercentiles {
         }
         return sum / 1_000_000.0;
     }
+
+    /** Mean of float samples; empty → 0 (never NaN in metrics JSON). */
+    static double meanFloat(List<Float> values) {
+        if (values == null || values.isEmpty()) {
+            return 0.0;
+        }
+        double sum = 0.0;
+        int n = 0;
+        for (Float v : values) {
+            if (v == null || !Float.isFinite(v)) {
+                continue;
+            }
+            sum += v;
+            n++;
+        }
+        return n == 0 ? 0.0 : sum / n;
+    }
+
+    /** Last finite float sample; empty → 0. */
+    static double lastFloat(List<Float> values) {
+        if (values == null || values.isEmpty()) {
+            return 0.0;
+        }
+        for (int i = values.size() - 1; i >= 0; i--) {
+            Float v = values.get(i);
+            if (v != null && Float.isFinite(v)) {
+                return v.doubleValue();
+            }
+        }
+        return 0.0;
+    }
+
+    /** Minimum finite float sample; empty → 0. */
+    static double minFloat(List<Float> values) {
+        if (values == null || values.isEmpty()) {
+            return 0.0;
+        }
+        double min = Double.POSITIVE_INFINITY;
+        for (Float v : values) {
+            if (v == null || !Float.isFinite(v)) {
+                continue;
+            }
+            if (v < min) {
+                min = v;
+            }
+        }
+        return Double.isInfinite(min) ? 0.0 : min;
+    }
+
+    static double p95Float(List<Float> values) {
+        if (values == null || values.isEmpty()) {
+            return 0.0;
+        }
+        List<Float> finite = new ArrayList<>();
+        for (Float v : values) {
+            if (v != null && Float.isFinite(v)) {
+                finite.add(v);
+            }
+        }
+        if (finite.isEmpty()) {
+            return 0.0;
+        }
+        Collections.sort(finite);
+        int idx = (int) Math.ceil(0.95 * finite.size()) - 1;
+        idx = Math.max(0, Math.min(idx, finite.size() - 1));
+        return finite.get(idx).doubleValue();
+    }
+
+    static double sumLong(List<Long> values) {
+        if (values == null || values.isEmpty()) {
+            return 0.0;
+        }
+        long sum = 0L;
+        for (Long v : values) {
+            if (v != null) {
+                sum += v;
+            }
+        }
+        return (double) sum;
+    }
+
+    static double sumInt(List<Integer> values) {
+        if (values == null || values.isEmpty()) {
+            return 0.0;
+        }
+        long sum = 0L;
+        for (Integer v : values) {
+            if (v != null) {
+                sum += v;
+            }
+        }
+        return (double) sum;
+    }
 }

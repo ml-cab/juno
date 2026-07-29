@@ -127,9 +127,21 @@ interface GpuBindings {
 
     // ── Vendor-specific constants ─────────────────────────────────────────────
     /**
+     * Operation "no transpose" for the BLAS GEMV call.
+     * CUDA cuBLAS: {@code CUBLAS_OP_N = 0}.
+     * AMD rocBLAS: {@code rocblas_operation_none = 111}.
+     *
+     * <p>Used for resident frozen backward {@code W^T * g} on a row-major
+     * {@code W[rows,cols]} buffer (same storage as forward {@link #opTranspose()}).
+     */
+    int opNoTranspose();
+
+    /**
      * Operation "transpose" for the BLAS GEMV call.
      * CUDA cuBLAS: {@code CUBLAS_OP_T = 1}.
      * AMD rocBLAS: {@code rocblas_operation_transpose = 112}.
+     *
+     * <p>Used for resident forward {@code W * x} on row-major storage.
      */
     int opTranspose();
 

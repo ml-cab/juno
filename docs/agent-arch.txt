@@ -2,16 +2,23 @@ Juno multi-module Maven project (JDK 25).
 
 Module dependency (excerpt):
   api, registry, tokenizer, sampler, kvcache, health, metrics — shared libraries
-  lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA)
-  node — GgufReader, LlamaTransformerHandler, Phi3TransformerHandler, MatVec
+  lora — LoRA/rsLoRA/DoRA/QA-LoRA adapters, .lora checkpoint v1+v2, AdamW + LoRA+ (no GGUF, no CUDA)
+  node — GgufReader, GgufQuantCodec, GgufKQuantCodec, QuantizationLayout,
+        QuantizedMergeMetrics, QaLoraInitializer, LlamaTransformerHandler, Phi3TransformerHandler, MatVec
         (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,
         CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
         DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
-        LoraTrainableHandler, LoraMerge, LoraQvInitializer
+        LoraTrainableHandler, Qwen2LoraTrainableHandler, Phi3LoraTrainableHandler,
+        Qwen3LoraTrainableHandler, LoraTrainingHandlerFactory, LoraModelLayout,
+        LoraMerge, LoraInitializer, LoraProjection, LoraQvInitializer,
+        LoraMetricsIdentity, LoraTrainEvent, LoraValidationEvent,
+        LoraNormRefreshEvent, LoraMergeEvent, LoraPlaybackEvent, LoraCheckpointEvent
         node depends on lora
+  metrics — JfrMetricsExtractor (MatVec/ForwardPass + full LoRA event catalog), MetricsMain
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
         coordinator depends on node
-  juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,
+  juno-player — ConsoleMain REPL (local/cluster/lora programmatic --jfr), LoraTrainProgressBar,
+                ClusterHarness, LoraMergeMain,
         ProcessPipelineClient, TensorParallelPipelineClient
         juno-player depends on coordinator (and transitively on node)
   juno-master — CoordinatorMain standalone executable (production coordinator)
@@ -32,19 +39,23 @@ GPU FFI (node module — Panama project, JEP 454):
   CudaBindings — Panama FFI downcall handles for libcudart.so.12 and libcublas.so.12.
         Implements GpuBindings. Singleton; thread-safe; zero per-call Java overhead.
         Requires JVM flag: --enable-native-access=ALL-UNNAMED.
+        opNoTranspose()=0 (CUBLAS_OP_N); opTranspose()=1 (CUBLAS_OP_T).
   RocmBindings — Panama FFI downcall handles for libamdhip64.so and librocblas.so.
         Implements GpuBindings. Pre-binds hipHostMalloc flags=0 via MethodHandles.insertArguments.
-        opTranspose()=112 (rocblas_operation_transpose). hipDeviceProp_t: sizeof=1472, name@0,
-        totalGlobalMem@288 (ROCm 7.2.x, Linux x86_64).
+        opNoTranspose()=111 (rocblas_operation_none); opTranspose()=112 (rocblas_operation_transpose).
+        hipDeviceProp_t: sizeof=1472, name@0, totalGlobalMem@288 (ROCm 7.2.x, Linux x86_64).
   CudaAvailability — detection via CudaBindings.isAvailable(); zero heap allocation.
   RocmAvailability — detection via RocmBindings.isAvailable(); mirrors CudaAvailability.
   GpuMatVec — sealed interface (permits CudaMatVec, RocmMatVec) extending MatVec.
-        Exposes upload(float[], int, int) and uploadHalf(float[], int, int).
+        Exposes upload / uploadHalf and sgemvTranspose (resident W^T*g) for FP32/FP16.
         Transformer handlers depend on GpuMatVec, not a concrete vendor class.
+  ResidentWeightMatrix — FP16-or-FP32 resident projection used by LoraTrainableHandler
+        for forward and transpose backward without dual call-site arrays.
   CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16);
+        forward uses OP_T; resident transpose backward uses OP_N on the same buffer;
         per-thread CUDA stream + async H2D/D2H; synchronized on GpuContext lock.
   RocmMatVec — implements GpuMatVec; rocblas_sgemv (FP32) / rocblas_hssgemv_strided_batched (FP16);
-        same three compute paths as CudaMatVec; per-thread HIP stream.
+        same OP_T forward / OP_N transpose contract as CudaMatVec; per-thread HIP stream.
   DeviceFloatMatrix / DeviceHalfMatrix — VRAM buffer wrappers using GpuBindings
         deviceMalloc / deviceFree; explicit lifecycle via releaseGpuResources().
         Vendor-neutral: work identically with CudaBindings and RocmBindings.

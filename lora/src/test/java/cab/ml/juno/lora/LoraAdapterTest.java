@@ -1,6 +1,7 @@
 package cab.ml.juno.lora;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import java.util.Random;
@@ -202,6 +203,267 @@ class LoraAdapterTest {
 			assertThat(loraScale2.gradA()[i]).isCloseTo(loraScale1.gradA()[i] * 2f, within(1e-5f));
 	}
 
+	@Test
+	@DisplayName("legacy ctor keeps standard scale and legacy-normal init")
+	void legacy_ctor_metadata() {
+		LoraAdapter a = new LoraAdapter(4, 8, 16, 8f, rng);
+		assertThat(a.scale).isEqualTo(2f);
+		assertThat(a.alpha).isEqualTo(8f);
+		assertThat(a.scaling).isEqualTo(LoraScaling.STANDARD);
+		assertThat(a.initialization).isEqualTo(LoraInitialization.LEGACY_NORMAL);
+		assertThat(a.mode).isEqualTo(LoraMode.LORA);
+	}
+
+	@Nested
+	@DisplayName("rsLoRA and Kaiming")
+	class RsLoraAndKaiming {
+
+		@Test
+		@DisplayName("rsLoRA scale is alpha/sqrt(rank) and drives forward/backward")
+		void rslora_scale_and_gradients() {
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(4, 8f, LoraScaling.RANK_STABILIZED,
+					LoraInitialization.LEGACY_NORMAL, LoraMode.LORA);
+			assertThat(cfg.effectiveScale()).isCloseTo(4f, within(1e-6f));
+
+			LoraAdapter rs = makeNonZero(cfg, 8, 16);
+			LoraAdapter std = LoraAdapter.fromWeights(
+					LoraAdapterConfig.legacy(4, 16f), // scale = 4 under standard
+					8, 16, rs.a().clone(), rs.b().clone());
+			assertThat(rs.scale).isCloseTo(std.scale, within(1e-6f));
+
+			float[] x = randomVec(8, 70);
+			float[] g = randomVec(16, 71);
+			assertThat(rs.forward(x)).containsExactly(std.forward(x));
+			rs.backward(g, x);
+			std.backward(g, x);
+			assertThat(rs.gradA()).containsExactly(std.gradA());
+			assertThat(rs.gradB()).containsExactly(std.gradB());
+		}
+
+		@Test
+		@DisplayName("rsLoRA finite-difference gradients match analytical")
+		void rslora_finite_differences() {
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(4, 8f, LoraScaling.RANK_STABILIZED,
+					LoraInitialization.LEGACY_NORMAL, LoraMode.LORA);
+			LoraAdapter lora = makeNonZero(cfg, 8, 16);
+			float[] x = randomVec(8, 72);
+			float[] g = randomVec(16, 73);
+			checkGradA(lora, x, g, TOL);
+			checkGradB(lora, x, g, TOL);
+			checkGradX(lora, x, g, TOL);
+		}
+
+		@Test
+		@DisplayName("Kaiming-uniform A is in [-1/sqrt(in), +1/sqrt(in)] and B is zero")
+		void kaiming_bounds_and_zero_b() {
+			int in = 64;
+			float bound = 1f / (float) Math.sqrt(in);
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(8, 8f, LoraScaling.STANDARD,
+					LoraInitialization.KAIMING_UNIFORM, LoraMode.LORA);
+			LoraAdapter a = new LoraAdapter(cfg, in, 32, new Random(123));
+			for (float v : a.a())
+				assertThat(v).isBetween(-bound, bound);
+			assertThat(a.b()).containsOnly(0f);
+		}
+
+		@Test
+		@DisplayName("Kaiming init is deterministic for a fixed seed")
+		void kaiming_deterministic() {
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(4, 4f);
+			LoraAdapter a = new LoraAdapter(cfg, 16, 8, new Random(99));
+			LoraAdapter b = new LoraAdapter(cfg, 16, 8, new Random(99));
+			assertThat(a.a()).containsExactly(b.a());
+		}
+
+		@Test
+		@DisplayName("Kaiming samples cover both signs with mean near zero")
+		void kaiming_statistics() {
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(16, 16f);
+			LoraAdapter a = new LoraAdapter(cfg, 128, 64, new Random(7));
+			double sum = 0;
+			int neg = 0, pos = 0;
+			for (float v : a.a()) {
+				sum += v;
+				if (v < 0)
+					neg++;
+				else if (v > 0)
+					pos++;
+			}
+			assertThat(neg).isGreaterThan(100);
+			assertThat(pos).isGreaterThan(100);
+			assertThat(sum / a.a().length).isCloseTo(0.0, within(0.05));
+		}
+
+		@Test
+		@DisplayName("fromWeights does not randomize — loads A/B directly")
+		void from_weights_direct_load() {
+			float[] a = new float[] { 1f, 2f, 3f, 4f };
+			float[] b = new float[] { 5f, 6f, 7f, 8f };
+			LoraAdapter loaded = LoraAdapter.fromWeights(2, 2, 2, 2f, a, b);
+			assertThat(loaded.a()).containsExactly(1f, 2f, 3f, 4f);
+			assertThat(loaded.b()).containsExactly(5f, 6f, 7f, 8f);
+			assertThat(loaded.initialization).isEqualTo(LoraInitialization.LEGACY_NORMAL);
+		}
+
+		@Test
+		@DisplayName("reinitialize respects Kaiming mode")
+		void reinitialize_kaiming() {
+			LoraAdapterConfig cfg = LoraAdapterConfig.of(4, 4f);
+			LoraAdapter a = new LoraAdapter(cfg, 16, 8, new Random(1));
+			for (int i = 0; i < a.b().length; i++)
+				a.b()[i] = 1f;
+			a.reinitialize(new Random(2));
+			float bound = 1f / (float) Math.sqrt(16);
+			for (float v : a.a())
+				assertThat(v).isBetween(-bound, bound);
+			assertThat(a.b()).containsOnly(0f);
+		}
+	}
+
+	// ── Deterministic train-only dropout ──────────────────────────────────────
+
+	@Nested
+	@DisplayName("Train dropout")
+	class TrainDropout {
+
+		@Test
+		@DisplayName("dropout rate 0 matches inference forward/backward")
+		void dropout_zero_equivalence() {
+			LoraAdapter a = makeNonZero(4, 8, 16, 4f);
+			LoraAdapter b = LoraAdapter.fromWeights(4, 8, 16, 4f, a.a().clone(), a.b().clone());
+			float[] x = randomVec(8, 40);
+			float[] g = randomVec(16, 41);
+
+			float[] d0 = a.forward(x);
+			float[] d1 = b.forwardTrain(x, 0f, 1L, 1, 0, 0, 0, 0);
+			assertThat(d1).containsExactly(d0);
+
+			float[] gx0 = a.backward(g, x);
+			float[] gx1 = b.backwardTrain(g, x, 0f, 1L, 1, 0, 0, 0, 0);
+			assertThat(gx1).containsExactly(gx0);
+			assertThat(b.gradA()).containsExactly(a.gradA());
+			assertThat(b.gradB()).containsExactly(a.gradB());
+		}
+
+		@Test
+		@DisplayName("same seed regenerates identical masks; different seeds diverge")
+		void same_and_different_seeds() {
+			LoraAdapter a = makeNonZero(4, 8, 16, 4f);
+			float[] x = randomVec(8, 42);
+			float rate = 0.3f;
+			float[] d1 = a.forwardTrain(x, rate, 99L, 2, 1, 3, 0, 0);
+			float[] d2 = a.forwardTrain(x, rate, 99L, 2, 1, 3, 0, 0);
+			float[] d3 = a.forwardTrain(x, rate, 100L, 2, 1, 3, 0, 0);
+			assertThat(d2).containsExactly(d1);
+			boolean differ = false;
+			for (int i = 0; i < d1.length; i++)
+				if (d1[i] != d3[i]) {
+					differ = true;
+					break;
+				}
+			assertThat(differ).isTrue();
+		}
+
+		@Test
+		@DisplayName("different chunk ordinals produce different masks at the same token position")
+		void different_chunks_differ() {
+			LoraAdapter a = makeNonZero(4, 8, 16, 4f);
+			float[] x = randomVec(8, 43);
+			float[] d0 = a.forwardTrain(x, 0.4f, 7L, 1, 0, 5, 0, 0);
+			float[] d1 = a.forwardTrain(x, 0.4f, 7L, 1, 1, 5, 0, 0);
+			boolean differ = false;
+			for (int i = 0; i < d0.length; i++)
+				if (d0[i] != d1[i]) {
+					differ = true;
+					break;
+				}
+			assertThat(differ).isTrue();
+		}
+
+		@Test
+		@DisplayName("kept coordinates match inverted-scale expectation over masks")
+		void mask_expectation() {
+			float rate = 0.25f;
+			int kept = 0;
+			int n = 2000;
+			for (int j = 0; j < n; j++)
+				if (LoraDropout.keep(123L, 1, 0, 0, 0, 0, j, rate))
+					kept++;
+			double frac = kept / (double) n;
+			assertThat(frac).isCloseTo(1.0 - rate, within(0.05));
+			assertThat(LoraDropout.invertedScale(rate)).isCloseTo(1f / (1f - rate), within(1e-6f));
+		}
+
+		@Test
+		@DisplayName("fixed-mask finite differences match A/B/X training grads")
+		void fixed_mask_finite_differences() {
+			LoraAdapter lora = makeNonZero(4, 8, 16, 4f);
+			float[] x = randomVec(8, 50);
+			float[] gradDelta = randomVec(16, 51);
+			float rate = 0.35f;
+			long seed = 55L;
+			int update = 3, chunk = 2, pos = 4, layer = 1, proj = 0;
+
+			lora.zeroGrad();
+			float[] analyticX = lora.backwardTrain(gradDelta, x, rate, seed, update, chunk, pos, layer, proj);
+			float[] analyticA = lora.gradA().clone();
+			float[] analyticB = lora.gradB().clone();
+
+			for (int i = 0; i < lora.a().length; i++) {
+				float orig = lora.a()[i];
+				lora.a()[i] = orig + FD_H;
+				float hi = dot(gradDelta, lora.forwardTrain(x, rate, seed, update, chunk, pos, layer, proj));
+				lora.a()[i] = orig - FD_H;
+				float lo = dot(gradDelta, lora.forwardTrain(x, rate, seed, update, chunk, pos, layer, proj));
+				lora.a()[i] = orig;
+				assertCloseEnough("gradA[" + i + "]", analyticA[i], (hi - lo) / (2 * FD_H), TOL);
+			}
+			for (int i = 0; i < lora.b().length; i++) {
+				float orig = lora.b()[i];
+				lora.b()[i] = orig + FD_H;
+				float hi = dot(gradDelta, lora.forwardTrain(x, rate, seed, update, chunk, pos, layer, proj));
+				lora.b()[i] = orig - FD_H;
+				float lo = dot(gradDelta, lora.forwardTrain(x, rate, seed, update, chunk, pos, layer, proj));
+				lora.b()[i] = orig;
+				assertCloseEnough("gradB[" + i + "]", analyticB[i], (hi - lo) / (2 * FD_H), TOL);
+			}
+			for (int i = 0; i < x.length; i++) {
+				float orig = x[i];
+				x[i] = orig + FD_H;
+				float hi = dot(gradDelta, lora.forwardTrain(x, rate, seed, update, chunk, pos, layer, proj));
+				x[i] = orig - FD_H;
+				float lo = dot(gradDelta, lora.forwardTrain(x, rate, seed, update, chunk, pos, layer, proj));
+				x[i] = orig;
+				assertCloseEnough("gradX[" + i + "]", analyticX[i], (hi - lo) / (2 * FD_H), TOL);
+			}
+		}
+
+		@Test
+		@DisplayName("dropped coordinates have zero input gradient")
+		void dropped_coordinate_gradX_zero() {
+			LoraAdapter lora = makeNonZero(4, 8, 16, 4f);
+			float[] x = randomVec(8, 60);
+			float[] g = randomVec(16, 61);
+			float rate = 0.5f;
+			long seed = 9L;
+			float[] gradX = lora.backwardTrain(g, x, rate, seed, 1, 0, 0, 0, 0);
+			for (int j = 0; j < x.length; j++) {
+				if (!LoraDropout.keep(seed, 1, 0, 0, 0, 0, j, rate))
+					assertThat(gradX[j]).isEqualTo(0f);
+			}
+		}
+
+		@Test
+		@DisplayName("invalid dropout rates are rejected")
+		void invalid_rates() {
+			assertThatThrownBy(() -> LoraDropout.validateRate(-0.1f))
+					.isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> LoraDropout.validateRate(1f)).isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> LoraDropout.validateRate(Float.NaN))
+					.isInstanceOf(IllegalArgumentException.class);
+		}
+	}
+
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
 	/**
@@ -209,9 +471,11 @@ class LoraAdapterTest {
 	 * non-trivial paths through B.
 	 */
 	private LoraAdapter makeNonZero(int rank, int inDim, int outDim, float alpha) {
-		LoraAdapter lora = new LoraAdapter(rank, inDim, outDim, alpha, rng);
-		// B starts at zero; initialise with small random values so the backward
-		// path through B is exercised
+		return makeNonZero(LoraAdapterConfig.legacy(rank, alpha), inDim, outDim);
+	}
+
+	private LoraAdapter makeNonZero(LoraAdapterConfig config, int inDim, int outDim) {
+		LoraAdapter lora = new LoraAdapter(config, inDim, outDim, rng);
 		Random b = new Random(99);
 		for (int i = 0; i < lora.b().length; i++)
 			lora.b()[i] = (float) (b.nextGaussian() * 0.02);

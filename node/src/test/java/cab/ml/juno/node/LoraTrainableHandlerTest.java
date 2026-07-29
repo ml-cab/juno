@@ -216,7 +216,7 @@ class LoraTrainableHandlerTest {
 			float[] gO = randomVec(8, 32); // upstream gradient
 
 			// Analytical gradient
-			float[] analytic = LoraTrainableHandler.rmsNormBackward(x, w, gO);
+			float[] analytic = LoraTrainableHandler.rmsNormBackward(x, w, gO, 1e-5f);
 
 			// Loss = sum(gO * rmsNorm(x, w))
 			// dL/dx_j via finite difference
@@ -236,7 +236,8 @@ class LoraTrainableHandlerTest {
 		@Test
 		@DisplayName("Output has same length as input")
 		void output_shape() {
-			assertThat(LoraTrainableHandler.rmsNormBackward(new float[16], new float[16], new float[16])).hasSize(16);
+			assertThat(LoraTrainableHandler.rmsNormBackward(new float[16], new float[16], new float[16], 1e-5f))
+					.hasSize(16);
 		}
 	}
 

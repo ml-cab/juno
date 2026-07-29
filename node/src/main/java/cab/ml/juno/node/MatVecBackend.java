@@ -44,13 +44,21 @@ public enum MatVecBackend {
     CUDA_RESIDENT("cuda-resident"),
     /** cuBLAS {@code cublasHSSgemvStridedBatched} with device-resident FP16 A. */
     CUDA_RESIDENT_FP16("cuda-resident-fp16"),
+    /** cuBLAS resident FP32 transpose backward {@code W^T * g}. */
+    CUDA_RESIDENT_TRANSPOSE("cuda-resident-transpose"),
+    /** cuBLAS resident FP16 transpose backward {@code W^T * g}. */
+    CUDA_RESIDENT_FP16_TRANSPOSE("cuda-resident-fp16-transpose"),
 
     /** rocBLAS {@code rocblas_sgemv}, A and x copied host→device per call. */
     ROCM("rocm"),
     /** rocBLAS {@code rocblas_sgemv} with device-resident FP32 A. */
     ROCM_RESIDENT("rocm-resident"),
     /** rocBLAS {@code rocblas_hssgemv_strided_batched} with device-resident FP16 A. */
-    ROCM_RESIDENT_FP16("rocm-resident-fp16");
+    ROCM_RESIDENT_FP16("rocm-resident-fp16"),
+    /** rocBLAS resident FP32 transpose backward {@code W^T * g}. */
+    ROCM_RESIDENT_TRANSPOSE("rocm-resident-transpose"),
+    /** rocBLAS resident FP16 transpose backward {@code W^T * g}. */
+    ROCM_RESIDENT_FP16_TRANSPOSE("rocm-resident-fp16-transpose");
 
     private final String label;
 

@@ -1,5 +1,157 @@
 ## Status
 
+**Session 44** — LoRA training progress bar (loss → target).
+
+- `LoraTrainProgressBar` — percent from pass-2 baseline loss toward `--lora-loss-target-*`; max-iters not used.
+- ETA from loss-improvement rate since baseline; final frame ETA `0s` when the run ends.
+
+---
+
+## Status
+
+**Session 43** — LoRA Tier 6: multi-architecture training (CPU oracle).
+
+### LoRA multi-architecture (Tier 6)
+
+- `LoraTrainingHandler` / `LoraTrainingHandlerFactory` — explicit allowlist by `general.architecture`.
+- `LoraModelLayout` / `LoraProjectionBinding` — logical keys → physical GGUF tensors (Phi fused slices).
+- Handlers: LLaMA-family (`LoraTrainableHandler`), `Qwen2LoraTrainableHandler` (frozen QKV biases),
+  `Phi3LoraTrainableHandler` (fused QKV/gate-up + NeoX RoPE), `Qwen3LoraTrainableHandler`
+  (per-head Q/K RMSNorm, `qDim`).
+- `LoraMerge` layout-aware multi-adapter fused-slice F32 patching for Phi-3.
+- Rejected for LoRA: `qwen3moe`, `qwen35`, `gemma`, unknown.
+- Qwen3 `/train-qa` template parity with empty `<think>` block.
+
+---
+
+## Status
+
+**Session 42** — LoRA REPL UX + WebUI model dropdown.
+
+- `/reset` deletes the `.lora` checkpoint (no overwrite save); memory reset + chat history clear unchanged.
+- LoRA banner and chat footer show sampling `temperature` (and top-k / top-p on the banner).
+- Default LoRA training log is a compact progress bar; `--verbose` / `-v` restores full `[TRACE]` / per-pass lines.
+- WebUI model dropdown parses OpenAI `GET /v1/models` (`data` / `id` / `x_juno_*`) so names appear again.
+
+---
+
+## Status
+
+**Session 41** — LoRA Tier 7 (start): JFR metrics for all adapter modes and operations.
+
+### LoRA JFR metrics (Tier 7)
+
+- Programmatic LoRA `--jfr` lifecycle matches local mode (`jdk.jfr.Recording` + auto-extract `target/metrics/metrics.json` on exit). Launchers pass `--jfr` as an app arg (no `-XX:StartFlightRecording` for LoRA).
+- `LoraMetricsIdentity` — CLI vocabulary tags (`lora` / `rslora` / `dora` / `qa-lora`) on train, validation, merge, norm-refresh, playback, and checkpoint events.
+- New events: `juno.LoraNormRefresh`, `juno.LoraMerge`, `juno.LoraPlayback`, `juno.LoraCheckpoint`.
+- `JfrMetricsExtractor` aggregates train/validation/merge/DoRA-refresh/playback series with guarded field reads (older recordings still extract).
+
+---
+
+## Status
+
+**Session 40** — LoRA Tier 5 (complete implementation): QA-LoRA + merge policies.
+
+### LoRA QA-LoRA and quantized merge (Tier 5)
+
+- Gate A codecs retained: `QuantizationLayout`, `GgufQuantCodec` / `GgufKQuantCodec` (`juno-kquant-v1`), `QuantizedMergeMetrics`.
+- `QaLoraAdapter` — sum-pool grouped A (`rank×groupCount`) + B; dense-expansion oracle and finite-difference tests.
+- `AdapterAlgorithm`, `MergeCapability` (`SIDECAR_ONLY` / `F32_PRESERVE` / `SOURCE_TYPE_PROJECTED`; `EXACT_AFFINE` rejected for K-quants).
+- Checkpoint v2: QA entries store `groupWidth` before A, Tier-5 extension blob (algorithm, pooling, ggml type, encoder id, merge policy); v1 export rejected for QA-LoRA.
+- `QaLoraInitializer` — group width from actual tensor GGML type (Q4_K/Q5_K→32, Q6_K→16); fingerprints verified on load.
+- Training/playback: `LoraTrainableHandler`, Adam, gradients, CLI `--lora-mode qa-lora`, `--lora-group-width`, `--lora-merge`.
+- `LoraMerge` — F32 preserve (default) and explicit `SOURCE_TYPE_PROJECTED` requantization with per-tensor metrics; zero-delta copies raw bytes; never silent exact→projected fallback.
+- Exact K-quant QA-LoRA zero-point merge remains **no-go**. Full held-out experiment matrix / deployment quality gates are research follow-ups; sidecar + F32 stay production-safe.
+
+---
+
+## Status
+
+**Session 39** — LoRA Tier 5 (Gate A start): shared GGUF K-quant codec layer.
+
+### LoRA QA-LoRA / quantized merge foundations (Tier 5 Gate A)
+
+- `QuantizationLayout` — Q4_K / Q5_K / Q6_K geometry (block/sub-block width, affine vs symmetric).
+- `GgufKQuantCodec` / `GgufQuantCodec` — versioned encoder id `juno-kquant-v1`; decode matches llama.cpp goldens; encode moved out of `LoraMerge`.
+- `QuantizedMergeMetrics` — RMSE, max error, delta-retention helpers for projected merge.
+- `GgufReader` and `LlamaTransformerHandler.dequantize` delegate K-quant decode to the shared codec; fused matVec paths unchanged for performance.
+- No-op path: `copyRawUnchanged` — decode/re-encode must not be used for byte-identical preservation.
+- Non-closure tests: Q6_K additive shift and Q4_K nested-scale offset are not exact (exact K-merge remains no-go).
+- Next: grouped QA-LoRA math (Gate B), merge capability policy, then projected merge experiments.
+
+---
+
+## Status
+
+**Session 38** — LoRA Tier 4 (start): resident transpose primitives and baseline instrumentation.
+
+### LoRA GPU training foundations (Tier 4)
+
+- Vendor-neutral `GpuBindings.opNoTranspose()` (CUDA `CUBLAS_OP_N=0`, ROCm `rocblas_operation_none=111`).
+- `GpuMatVec.sgemvTranspose` for resident FP32/FP16 `W^T * g` (same row-major buffer as forward `OP_T`).
+- `ResidentWeightMatrix` + `LoraTrainableHandler` routes frozen forward and transpose backward through resident GPU weights when uploaded (`supportsHalfResident` FP16 or FP32 fallback).
+- JFR backend labels: `*-resident-transpose` / `*-resident-fp16-transpose`.
+- `LoraTrainEvent` fields for frozen forward/transpose, attention/nonlinear, adapter backward, and transfer (filled when finer instrumentation lands).
+- GPU adjoint tests: `CudaMatVecTransposeTest`, `RocmMatVecTransposeTest` (`GpuMatVecTransposeContractTest`).
+- Baseline section in `docs/performance.md` — hybrid path is not yet marketed as production GPU training.
+- `--lora-train-device` CLI and CPU/GPU gradient parity IT remain next.
+- Fix: `LoraAdapterSet.resetFrom` (REPL `/reset`) bumps DoRA cache generation so inference drops trained magnitude coefficients.
+- Fix: `/reset` also clears REPL chat history and rotates the session id — otherwise multi-turn context still contains the memorized answers.
+
+---
+
+## Status
+
+**Session 37** — LoRA Tier 3 (phase 1–2): rsLoRA, Kaiming, checkpoint v2, DoRA.
+
+### LoRA advanced adapters (Tier 3)
+
+- Explicit adapter metadata: `LoraAdapterConfig` with `LoraScaling`, `LoraInitialization`, `LoraMode`.
+- rsLoRA scale `alpha/√rank`; PEFT-compatible Kaiming-uniform A init (legacy-normal retained for compatibility overloads).
+- Checkpoint version 2 (length-delimited) with declared alpha, scaling, init, mode, optional DoRA magnitude and base-tensor fingerprints; v1 still loads.
+- Canonical detached-norm DoRA (`DoraMagnitude`, `DoraProjection`); magnitude is an AdamW parameter group with decay off.
+- `DoraInitializer` builds magnitudes/fingerprints from GGUF dequant; merge applies LoRA/rsLoRA/DoRA formulas to F32.
+- CLI/env: `--lora-mode`, `--lora-scaling`, `--lora-init` (`LORA_MODE`, `LORA_SCALING`, `LORA_INIT`).
+- DoRA norm-refresh cost is not yet production-gated; treat DoRA as correctness-complete pending the Tier 3 benchmark gate.
+
+---
+
+## Status
+
+**Session 36** — LoRA Tier 2: schedules, AdamW, dropout, validation, and LoRA+.
+
+### LoRA training quality (Tier 2)
+
+- Warmup/cosine and constant learning-rate schedules (`--lora-lr-schedule`, `--lora-warmup-steps`, `--lora-min-lr`).
+- True A-only decoupled AdamW (`--lora-weight-decay`); moments see raw gradients only. Numerical trajectories change vs coupled L2; checkpoints remain compatible.
+- LoRA+ parameter groups: A uses scheduled LR, B uses `LR * --lora-plus-ratio` (default `1.0` = ordinary behavior).
+- Deterministic train-only inverted dropout (`--lora-dropout`, `--lora-seed`); inference and validation stay dropout-free.
+- Forward-only `evaluateLoss`; held-out validation split with patience/min-delta and best-weight restore (`--lora-validation-*`).
+- Shared `LoraTrainingLoop` orchestration for REPL and `LoraTrainer`; Q&A variants are hold-out units.
+- JFR `LoraTrainStep` carries A/B LR, LoRA+ ratio, and dropout; optional `LoraValidation` event.
+
+---
+
+## Status
+
+**Session 35** — LoRA Tier 1: projection coverage, token-weighted accumulation, and clipping.
+
+### LoRA correctness foundation (Tier 1)
+
+- Configurable projection targets: `qv` (default), `all` / `all-linear`, or comma-separated keys (`wq,wk,wv,wo,wgate,wup,wdown`).
+- Complete forward/backward for all seven dense linear projections, including current-position K and inverse-RoPE on Q and K.
+- `computeGradients` separated from optimizer updates; token-weighted gradient accumulation across chunks.
+- Global L2 gradient clipping after prediction-count normalization (`--lora-max-grad-norm`; `0` disables clip).
+- Builder-based `LoraTrainingConfig` and `LoraTrainer.open(..., config)`; legacy overload keeps qv, accum=1, clipping off.
+- Architecture gate: Phi-3 / Qwen3 / Qwen3-MoE rejected for LoRA (dense LLaMA-family required).
+- `/reset` reinitialises A and B from the selected target config (not B-only zeroing).
+- Merge maps all seven projections via `LoraProjection`; adapted tensors remain F32.
+- Terminology: LoRA on a quantized GGUF base (not QLoRA).
+
+---
+
+## Status
+
 **Session 34** — Windows launcher fixed: `run.bat` and `juno.bat` fully functional on Windows.
 
 ### Windows launcher (`scripts/run.bat`, `juno.bat`)

@@ -27,7 +27,9 @@ Distributed LLM inference and fine-tuning. Pure Java - No Python, no GIL, no Spr
 
 ### LoRA fine-tuning
 
-- In-process training REPL: `./juno lora`
+- In-process training REPL: `./juno lora` (LoRA on quantized GGUF base; not QLoRA)
+- AdamW schedules, LoRA+, deterministic dropout, and held-out validation (see `docs/LoRA.md`)
+- Targets: `qv` (default), `all`, or explicit projection keys; accumulation + grad clipping
 - Inference overlay: `--lora-play PATH` (local, cluster, AWS)
 - Native merge to standalone GGUF: `./juno merge` (patched tensors stored as F32)
 

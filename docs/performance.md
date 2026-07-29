@@ -56,6 +56,17 @@ JFR files are written as `juno-<modelStem>-<timestamp>.jfr` (local/coordinator) 
 `juno-<nodeId>-<modelStem>-<timestamp>.jfr` (cluster nodes) in the project root.
 Cluster runs produce one file per JVM.
 
+LoRA training uses the same programmatic `--jfr` path:
+
+```bash
+./juno lora --model-path models/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf --jfr 1m
+```
+
+On exit, ConsoleMain extracts `target/metrics/metrics.json` and prints the summary
+banner (parity with local mode). See `docs/LoRA.md` for the LoRA event catalog and
+JSON key contract (`LoraTrainStep`, `LoraValidation`, `LoraMerge`, `LoraNormRefresh`,
+`LoraPlayback`, `LoraCheckpoint`).
+
 ### 3. Extract metrics
 
 ```bash
@@ -254,3 +265,39 @@ Regenerate the matrix from a captured scenario log (manual / legacy path):
 ```
 
 Automated AWS runs update the matrix and HTML after each cell; `--parse` is only needed when ingesting pasted JFR output into `test-scenario.txt`.
+
+---
+
+## LoRA training GPU baseline (Tier 4)
+
+Status: **instrumentation and resident transpose primitives only**. Do not treat the
+current hybrid path (GPU frozen forward + CPU quantized transpose backward) as
+production GPU training.
+
+Reference configuration (to fill when Milestone 1 gates are measured):
+
+| Item | Value |
+|------|-------|
+| Model | TinyLlama Q4_K_M |
+| Sequence length | 64 / 128 |
+| Rank | 8 |
+| Targets | `qv` and `all-linear` |
+| Warm-up / measured updates | 10 / ≥20 |
+| Hardware | NVIDIA (g4dn) and AMD reference |
+
+Record per path (CPU; GPU-forward/CPU-backward; GPU forward+transpose when ready):
+
+- tokens/s
+- `forwardMs`, `frozenForwardMs`, `attentionNonlinearMs`
+- `backwardMs`, `frozenTransposeBackwardMs`, `adapterBackwardMs`, `transferMs`
+- `optimizerMs`
+- H2D/D2H bytes (when transfer counters are wired)
+- peak heap and peak VRAM
+
+JFR labels for resident transpose (not yet advertised as training):
+
+- `cuda-resident-transpose` / `cuda-resident-fp16-transpose`
+- `rocm-resident-transpose` / `rocm-resident-fp16-transpose`
+
+Adjoint gate: `dot(W*x, g) == dot(x, W^T*g)` via `CudaMatVecTransposeTest` /
+`RocmMatVecTransposeTest` (`-Dgroups=gpu` / `-Dgroups=rocm`).

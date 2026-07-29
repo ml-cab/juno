@@ -45,7 +45,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--nodes N` | `3` | local | Number of in-process shards |
 | `--pType pipeline\|tensor` | `pipeline` | cluster, test | Parallelism type |
 | `--jfr DURATION` | — | cluster, local, lora | Java Flight Recording (e.g. `30s`, `5m`) |
-| `--verbose` / `-v` | — | cluster, local | Verbose logging |
+| `--verbose` / `-v` | — | cluster, local, lora | Full logging; LoRA default is a progress bar |
 | `--cpu` | — | cluster, local | Force CPU inference: sets `JUNO_USE_GPU=false`. Does not enable LoRA mode. |
 | `--lora-play PATH` | — | cluster, local | Apply a pre-trained `.lora` adapter at inference (read-only, no training). In cluster mode the file is forwarded as `-Djuno.lora.play.path` to every forked node JVM. |
 | `--api-port N` | — | cluster, local | Start the OpenAI-compatible REST API server on port N alongside the REPL. Exposes `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{model}`. Environment override: `API_PORT`. |
@@ -56,11 +56,30 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 |------|---------|-------------|
 | `--lora-path PATH` | `<model>.lora` | Adapter checkpoint (auto-loaded if exists) |
 | `--lora-rank N` | `8` | Low-rank bottleneck dimension |
-| `--lora-alpha F` | `= rank` | Scaling factor α (effective scale = α/rank) |
-| `--lora-lr F` | `1e-4` | Adam learning rate |
-| `--lora-steps N` | `50` | Gradient steps per `/train` |
-| `--lora-steps-qa N` | `10` | Gradient steps per `/train-qa` Q&A pair |
-| `--lora-early-stop F` | `0.25` | Stop chunk early when loss delta < F |
+| `--lora-alpha F` | `= rank` | Declared α (standard scale = α/rank; rsLoRA = α/√rank) |
+| `--lora-mode` | `lora` | `lora` or `dora` |
+| `--lora-scaling` | `standard` | `standard` or `rslora` |
+| `--lora-init` | `kaiming-uniform` | `kaiming-uniform` or `legacy-normal` |
+| `--lora-lr F` | `1e-4` | Peak / base AdamW learning rate |
+| `--lora-max-iters N` | `50` | Max training passes per `/train` or `/train-qa` (safety cap) |
+| `--lora-loss-target-text F` | `1.8` | Stop `/train` when loss ≤ F |
+| `--lora-loss-target-qa F` | `1.2` | Stop `/train-qa` when loss ≤ F |
+| `--lora-steps N` | — | Alias for `--lora-max-iters` (/train cap) |
+| `--lora-steps-qa N` | `50` | Max passes for `/train-qa` |
+| `--lora-early-stop F` | `0.25` | Overfit guard: stop when loss < F (set 0 to disable) |
+| `--lora-targets SPEC` | `qv` | `qv`, `all` / `all-linear`, or comma keys (`wq,wk,wv,wo,wgate,wup,wdown`) |
+| `--lora-gradient-accumulation N` | `1` | Chunks accumulated per optimizer update (token-weighted) |
+| `--lora-max-grad-norm F` | `1.0` | Global L2 clip after token normalization; `0` disables clipping |
+| `--lora-lr-schedule M` | `constant` | `constant` or `cosine` (warmup then cosine decay) |
+| `--lora-warmup-steps N` | `0` | Warmup optimizer updates for cosine schedule |
+| `--lora-min-lr F` | `0` | Cosine floor learning rate |
+| `--lora-weight-decay F` | `0.01` | Decoupled AdamW decay on A only |
+| `--lora-plus-ratio F` | `1.0` | B/A learning-rate ratio (`1.0` = ordinary LoRA) |
+| `--lora-dropout F` | `0` | Train-only inverted dropout on LoRA branch input |
+| `--lora-seed N` | `42` | Seed for init, validation split, and dropout masks |
+| `--lora-validation-split F` | `0` | Fraction of units held out (`0` disables) |
+| `--lora-validation-patience N` | `0` | Validation checks without improvement before stop |
+| `--lora-validation-min-delta F` | `0` | Minimum validation improvement to reset patience |
 
 **`merge` specific flags:**
 
@@ -73,7 +92,9 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 
 **Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
 `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`,
-`LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `LORA_PLAY_PATH`, `API_PORT`
+`LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_MAX_ITERS`, `LORA_LOSS_TARGET_TEXT`,
+`LORA_LOSS_TARGET_QA`, `LORA_STEPS` (alias), `LORA_PLAY_PATH`, `LORA_TARGETS`,
+`LORA_GRADIENT_ACCUMULATION`, `LORA_MAX_GRAD_NORM`, `API_PORT`
 
 For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO_USE_GPU` unset
 means try GPU (CUDA first, then ROCm) when available. Set `JUNO_USE_GPU=false` or pass `--cpu`
@@ -491,9 +512,11 @@ Path model = Path.of("/path/to/model.gguf");
 Path adapter = Path.of("/path/to/model.lora");
 
 try (var trainer = LoraTrainer.open(model, adapter, /*rank*/ 8, /*alpha*/ 8f, /*lr*/ 1e-4)) {
-    float loss = trainer.trainRawText("Some prose to adapt style.", /*stepsPerChunk*/ 50, /*chunkTokens*/ 32);
+    LoraTrainer.TrainUntilResult textResult = trainer.trainRawTextUntil(
+            "Some prose to adapt style.", /*lossTarget*/ 1.8f, /*maxIters*/ 50, /*chunkTokens*/ 32);
     String modelKey = ChatModelType.fromPath(model.toString());
-    trainer.trainQaPair("What is my favorite color?", "Blue.", modelKey, /*stepsPerChunk*/ 10);
+    LoraTrainer.TrainUntilResult qaResult = trainer.trainQaPairUntil(
+            "What is my favorite color?", "Blue.", modelKey, /*lossTarget*/ 1.2f, /*maxIters*/ 50);
     trainer.save();
 }
 ```
@@ -627,21 +650,24 @@ INFO: Detected architecture: llama  backend=CpuMatVec  file=...  lora=44 adapter
 
 ### Diagnostics and tracing
 
-Run cluster command with `--verbose` to enable `[TRACE]` output:
+Without `--verbose`, LoRA training prints a single-line progress bar (`pass N · loss · bar · % · ETA`).
+Percent is loss progress from the pass-2 baseline toward the loss target (not `pass/max-iters`).
+Pass `--verbose` / `-v` for full `[TRACE]` output:
 
 | Line | What it tells you |
 |------|-------------------|
 | `[TRACE] model type (chat template key) : tinyllama` | Whether the template matches the model |
 | `[TRACE] formatted training text (repr)` | Exact token sequence sent to the model during training |
 | `[TRACE] token count (excl. BOS): N` | How many tokens are in the training sequence |
-| `[TRACE] step=N loss=F chunk=M/T ms=D` | Per-step loss during training |
+| `[train-qa] iter=N loss=…` | Per-pass loss during training |
 | `[TRACE] inference model type: tinyllama` | Template key at inference — must match training |
 
 If the template key at training and inference differ, the model will not recall trained facts.
 Rename the model file to include the architecture keyword (`tinyllama`, `llama-3`, `mistral`,
-`phi3`) to ensure `ChatModelType.fromPath()` detects it correctly. Gemma, Qwen 2 / Qwen3 /
-Qwen3.5 paths are under development — prefer LLaMA-family or Phi-3 models for LoRA
-training workflows today.
+`phi3`, `qwen3`) so `ChatModelType.fromPath()` picks the matching chat template. Qwen2/2.5 use
+ChatML; Qwen3 training uses the empty `<think>` block. LoRA training supports those dense
+architectures via `LoraTrainingHandlerFactory`; Gemma, Qwen3-MoE, and Qwen3.5 LoRA remain
+unsupported.
 
 ---
 

@@ -151,20 +151,12 @@ public final class ForwardPassHandlerLoader {
 	/**
 	 * Load a handler with pre-trained LoRA adapters applied for inference.
 	 *
-	 * <p>When {@code adapters} is non-null the handler is always a
-	 * {@link LoraTrainableHandler} (which supports both inference and training).
-	 * The adapters are loaded read-only — no optimizer is attached, so calling
-	 * {@link LoraTrainableHandler#trainStep} on the result will throw unless an
-	 * optimizer is provided separately.
+	 * <p>When {@code adapters} is non-null the handler is selected by
+	 * {@link LoraTrainingHandlerFactory} (architecture allowlist). The adapters
+	 * are loaded read-only — no optimizer is attached.
 	 *
 	 * <p>When {@code adapters} is {@code null} this method behaves identically to
 	 * {@link #load(Path, ShardContext, MatVec)}.
-	 *
-	 * @param modelPath path to the GGUF file
-	 * @param context   shard assignment
-	 * @param backend   compute backend
-	 * @param adapters  pre-loaded LoRA adapters, or {@code null} for base model
-	 * @return a ready-to-use {@link ForwardPassHandler}
 	 */
 	public static ForwardPassHandler load(Path modelPath, ShardContext context, MatVec backend,
 			LoraAdapterSet adapters) throws IOException {
@@ -173,8 +165,8 @@ public final class ForwardPassHandlerLoader {
 				+ "  file=" + modelPath + "  lora=" + (adapters != null ? adapters.size() + " adapters" : "none"));
 
 		if (adapters != null) {
-			log.info("LoRA adapters present — routing to LoraTrainableHandler (inference-only mode)");
-			return LoraTrainableHandler.load(modelPath, context, adapters, backend);
+			log.info("LoRA adapters present — routing via LoraTrainingHandlerFactory");
+			return LoraTrainingHandlerFactory.create(modelPath, context, adapters, backend);
 		}
 
 		return switch (arch) {
@@ -210,5 +202,13 @@ public final class ForwardPassHandlerLoader {
 			String arch = r.metaString("general.architecture");
 			return arch != null ? arch.toLowerCase().strip() : "llama";
 		}
+	}
+
+	/**
+	 * LoRA training/playback architecture gate — delegates to
+	 * {@link LoraTrainingHandlerFactory#requireSupported(String)}.
+	 */
+	static void requireLoraCompatibleArchitecture(String arch) {
+		LoraTrainingHandlerFactory.requireSupported(arch);
 	}
 }

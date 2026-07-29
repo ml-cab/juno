@@ -17,11 +17,14 @@ package cab.ml.juno.node;
 
 import java.util.Random;
 
-import cab.ml.juno.lora.LoraAdapter;
 import cab.ml.juno.lora.LoraAdapterSet;
 
 /**
  * Builds a standard query/value LoRA adapter set from model dimensions.
+ *
+ * <p>
+ * Compatibility facade over {@link LoraInitializer}; prefer
+ * {@link LoraInitializer#create} for new call sites.
  */
 public final class LoraQvInitializer {
 
@@ -32,11 +35,6 @@ public final class LoraQvInitializer {
 	 * Create adapters on {@code wq} and {@code wv} for every layer.
 	 */
 	public static LoraAdapterSet qv(LlamaConfig cfg, int rank, float alpha, Random rng) {
-		LoraAdapterSet set = new LoraAdapterSet();
-		for (int li = 0; li < cfg.numLayers(); li++) {
-			set.add(li, "wq", new LoraAdapter(rank, cfg.hiddenDim(), cfg.hiddenDim(), alpha, rng));
-			set.add(li, "wv", new LoraAdapter(rank, cfg.hiddenDim(), cfg.kvDim(), alpha, rng));
-		}
-		return set;
+		return LoraInitializer.create(cfg, LoraProjection.qv(), rank, alpha, rng);
 	}
 }

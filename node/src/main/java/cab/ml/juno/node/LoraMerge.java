@@ -15,8 +15,14 @@
  */
 package cab.ml.juno.node;
 
+import cab.ml.juno.lora.DoraMagnitude;
+import cab.ml.juno.lora.DoraProjection;
 import cab.ml.juno.lora.LoraAdapter;
 import cab.ml.juno.lora.LoraAdapterSet;
+import cab.ml.juno.lora.LoraMode;
+import cab.ml.juno.lora.MergeCapability;
+import cab.ml.juno.lora.QaLoraAdapter;
+import cab.ml.juno.lora.QaLoraEntryMeta;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -48,10 +54,13 @@ import java.util.Map;
  *
  * <h3>Projection name mapping (LoRA key to GGUF tensor name)</h3>
  * <pre>
- *   "L:wq" to blk.L.attn_q.weight
- *   "L:wk" to blk.L.attn_k.weight
- *   "L:wv" to blk.L.attn_v.weight
- *   "L:wo" to blk.L.attn_output.weight
+ *   "L:wq"    to blk.L.attn_q.weight
+ *   "L:wk"    to blk.L.attn_k.weight
+ *   "L:wv"    to blk.L.attn_v.weight
+ *   "L:wo"    to blk.L.attn_output.weight
+ *   "L:wgate" to blk.L.ffn_gate.weight
+ *   "L:wup"   to blk.L.ffn_up.weight
+ *   "L:wdown" to blk.L.ffn_down.weight
  * </pre>
  *
  * <h3>Strategy</h3>
@@ -74,118 +83,378 @@ public final class LoraMerge {
 	private static final int TYPE_Q6_K = 14;
 	private static final int TYPE_BF16 = 30;
 
-	private static final Map<String, String> PROJ_SUFFIX = Map.of(
-			"wq", "attn_q.weight",
-			"wk", "attn_k.weight",
-			"wv", "attn_v.weight",
-			"wo", "attn_output.weight"
-	);
-
 	private LoraMerge() {}
 
-	public record Result(int adaptersApplied, List<String> tensorsPatched, List<String> skipped) {}
+	public record Result(int adaptersApplied, List<String> tensorsPatched, List<String> skipped,
+			List<TensorMergeReport> reports) {}
 
 	/**
-	 * Merge loraPath into modelPath and write the result to outputPath.
+	 * Per-tensor report for projected / F32 merge paths.
 	 *
-	 * <p>Writes a new, valid GGUF file where:
-	 * <ul>
-	 *   <li>The LoRA-patched projection tensors (wq/wv) are stored as F32,
-	 *       preserving W_merged = W + (alpha/rank) x B x A with full precision.
-	 *   <li>Every other tensor keeps its original quantisation (Q4_K, Q6_K, etc.)
-	 *       and its raw bytes are copied verbatim.
-	 * </ul>
-	 *
-	 * <p>Why F32 and not re-quantise to Q4_K?  The LoRA delta is typically
-	 * ~6e-4 per element, while Q4_K quantisation noise is ~3e-3: five times
-	 * larger.  Re-quantising destroys the delta entirely.  F32 precision (~1e-7)
-	 * preserves it with SNR ~6000x.  The merged file is larger (~1 GB for
-	 * TinyLlama 1.1B vs 667 MB Q4_K original) but recalls training correctly.
-	 *
-	 * <p>The output is always a plain GGUF v3 file, even when the source is a
-	 * llamafile ZIP polyglot.
+	 * @param requantization true when {@link MergeCapability#SOURCE_TYPE_PROJECTED}
+	 */
+	public record TensorMergeReport(String tensorName, int sourceType, int destType, boolean requantization,
+			double targetDeltaNorm, double deltaRetention, double rmse, double maxAbsError, long changedBlocks) {}
+
+	/**
+	 * Merge with default {@link MergeCapability#F32_PRESERVE} (or per-adapter QA meta).
 	 */
 	public static Result merge(Path modelPath, Path loraPath, Path outputPath) throws IOException {
+		return merge(modelPath, loraPath, outputPath, null);
+	}
+
+	/**
+	 * @param capabilityOverride when non-null, forces this policy for all adapters;
+	 *                           otherwise dense LoRA uses F32_PRESERVE and QA uses
+	 *                           each entry's stored {@link MergeCapability}
+	 */
+	public static Result merge(Path modelPath, Path loraPath, Path outputPath, MergeCapability capabilityOverride)
+			throws IOException {
+		long t0 = System.currentTimeMillis();
 		LoraAdapterSet adapters = LoraAdapterSet.load(loraPath);
-
-		// Build tensor-name -> LoraAdapter lookup; collect unknown-projection skips
-		Map<String, LoraAdapter> adapterByTensor = new java.util.LinkedHashMap<>();
-		List<String> skipped = new ArrayList<>();
-		for (Map.Entry<String, LoraAdapter> entry : adapters.asMap().entrySet()) {
-			String key    = entry.getKey();
-			String suffix = PROJ_SUFFIX.get(LoraAdapterSet.keyProj(key));
-			if (suffix == null) { skipped.add(key + " (unknown projection)"); continue; }
-			adapterByTensor.put("blk." + LoraAdapterSet.keyLayer(key) + "." + suffix, entry.getValue());
+		LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(adapters, "", "cpu");
+		try {
+			Result result = mergeLoaded(modelPath, adapters, outputPath, capabilityOverride);
+			commitMergeEvent(identity, capabilityOverride, result, outputPath, System.currentTimeMillis() - t0, true,
+					"");
+			return result;
+		} catch (IOException | RuntimeException ex) {
+			commitMergeEvent(identity, capabilityOverride, null, outputPath, System.currentTimeMillis() - t0, false,
+					shortError(ex));
+			throw ex;
 		}
+	}
 
+	private static String shortError(Throwable ex) {
+		String msg = ex.getMessage();
+		if (msg == null || msg.isBlank())
+			msg = ex.getClass().getSimpleName();
+		return msg.length() > 120 ? msg.substring(0, 117) + "..." : msg;
+	}
+
+	private static void commitMergeEvent(LoraMetricsIdentity identity, MergeCapability override, Result result,
+			Path outputPath, long durationMs, boolean success, String error) {
+		LoraMergeEvent ev = new LoraMergeEvent();
+		ev.begin();
+		if (identity != null) {
+			identity.apply(ev);
+			if (override != null)
+				ev.mergeCapability = LoraMetricsIdentity.mergeCapabilityLabel(override);
+		}
+		ev.durationMs = durationMs;
+		ev.success = success;
+		ev.error = error != null ? error : "";
+		if (result != null) {
+			ev.tensorsPatched = result.tensorsPatched().size();
+			try {
+				if (outputPath != null && java.nio.file.Files.isRegularFile(outputPath))
+					ev.bytesWritten = java.nio.file.Files.size(outputPath);
+			} catch (IOException ignored) {
+			}
+			aggregateProjectedMetrics(ev, result.reports());
+		}
+		ev.commit();
+	}
+
+	private static void aggregateProjectedMetrics(LoraMergeEvent ev, List<TensorMergeReport> reports) {
+		if (reports == null || reports.isEmpty())
+			return;
+		double sumRmse = 0;
+		double maxAbs = 0;
+		double sumRetention = 0;
+		long changed = 0;
+		int n = 0;
+		int projected = 0;
+		for (TensorMergeReport r : reports) {
+			if (!r.requantization())
+				continue;
+			projected++;
+			sumRmse += r.rmse();
+			if (r.maxAbsError() > maxAbs)
+				maxAbs = r.maxAbsError();
+			sumRetention += r.deltaRetention();
+			changed += r.changedBlocks();
+			n++;
+		}
+		if (n == 0)
+			return;
+		ev.rmse = (float) (sumRmse / n);
+		ev.maxAbsError = (float) maxAbs;
+		ev.deltaRetention = (float) (sumRetention / n);
+		ev.changedBlocks = changed;
+		ev.totalBlocks = projected;
+	}
+
+	/**
+	 * Slot binding a single logical LoRA key to a row range of a physical GGUF
+	 * tensor. For architectures with separate tensors (LLaMA, Qwen2, Qwen3) the
+	 * row range spans the full tensor ({@code rowOffset=0}). For Phi-3 fused
+	 * layouts, multiple slots may share one physical tensor at distinct offsets.
+	 */
+	private record AdapterSlot(String loraKey, int rowOffset, int rowCount, int outDim, int inDim) {}
+
+	private static Result mergeLoaded(Path modelPath, LoraAdapterSet adapters, Path outputPath,
+			MergeCapability capabilityOverride) throws IOException {
+
+		List<String> skipped = new ArrayList<>();
 		List<String> patched = new ArrayList<>();
+		List<TensorMergeReport> reports = new ArrayList<>();
 
 		try (GgufReader reader = GgufReader.open(modelPath);
 			 FileChannel srcCh = FileChannel.open(modelPath, StandardOpenOption.READ);
 			 FileChannel outCh = FileChannel.open(outputPath,
 					 StandardOpenOption.WRITE, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
 
-			// Remove adapters whose tensor does not exist in this model
-			for (String tName : new ArrayList<>(adapterByTensor.keySet()))
+			DoraInitializer.verifyFingerprints(reader, adapters);
+			QaLoraInitializer.verifyFingerprints(reader, adapters);
+
+			// ── Build layout-aware adapter → physical tensor mapping ───────────
+			String arch = normalizeArch(reader.metaString("general.architecture"));
+			LoraModelLayout modelLayout = tryBuildLayout(arch, reader);
+
+			// physicalTensor → ordered list of slots (one slot per logical key)
+			Map<String, List<AdapterSlot>> adaptersByPhysical = new java.util.LinkedHashMap<>();
+
+			for (Map.Entry<String, LoraAdapter> entry : adapters.asMap().entrySet()) {
+				String key = entry.getKey();
+				int layer = LoraAdapterSet.keyLayer(key);
+				LoraProjection proj = LoraProjection.fromKey(LoraAdapterSet.keyProj(key));
+				addAdapterSlot(adaptersByPhysical, key, layer, proj, modelLayout, reader);
+			}
+			for (Map.Entry<String, QaLoraAdapter> entry : adapters.asQaMap().entrySet()) {
+				String key = entry.getKey();
+				int layer = LoraAdapterSet.keyLayer(key);
+				LoraProjection proj = LoraProjection.fromKey(LoraAdapterSet.keyProj(key));
+				addAdapterSlot(adaptersByPhysical, key, layer, proj, modelLayout, reader);
+			}
+
+			// Remove tensors absent from the model
+			for (String tName : new ArrayList<>(adaptersByPhysical.keySet())) {
 				if (!reader.hasTensor(tName)) {
-					skipped.add(tName + " (tensor not in model)");
-					adapterByTensor.remove(tName);
+					List<AdapterSlot> slots = adaptersByPhysical.remove(tName);
+					for (AdapterSlot s : slots)
+						skipped.add(tName + " (tensor not in model, key=" + s.loraKey() + ")");
 				}
+			}
+
+			// Resolve per-physical-tensor merge policy (use first slot's key)
+			Map<String, MergeCapability> policyByTensor = new java.util.LinkedHashMap<>();
+			for (var e : adaptersByPhysical.entrySet()) {
+				String firstKey = e.getValue().get(0).loraKey();
+				MergeCapability pol = resolvePolicy(adapters, firstKey, capabilityOverride);
+				if (pol == MergeCapability.SIDECAR_ONLY)
+					throw new IllegalArgumentException(
+							"SIDECAR_ONLY forbids merge for " + e.getKey() + "; use overlay playback");
+				if (pol == MergeCapability.EXACT_AFFINE)
+					throw new IllegalArgumentException(
+							"EXACT_AFFINE is unavailable for GGUF K-quants (" + e.getKey() + ")");
+				if (pol == MergeCapability.UNSUPPORTED)
+					throw new IllegalArgumentException("UNSUPPORTED merge for " + e.getKey());
+				policyByTensor.put(e.getKey(), pol);
+			}
 
 			List<String> tensorOrder = reader.tensorOrder();
 
-			// ── 1. Compute new data-section offsets ───────────────────────────────
-			// Patched tensors: F32 (4 bytes/element).  Others: original raw size.
 			long[] newDataOffsets = new long[tensorOrder.size()];
-			long   cursor         = 0L;
+			long cursor = 0L;
 			for (int i = 0; i < tensorOrder.size(); i++) {
 				String name = tensorOrder.get(i);
 				newDataOffsets[i] = cursor;
-				cursor += adapterByTensor.containsKey(name)
-						? reader.tensorNelems(name) * 4L
-						: GgufReader.rawByteCount(reader.tensorType(name), reader.tensorNelems(name));
+				if (!adaptersByPhysical.containsKey(name)) {
+					cursor += GgufReader.rawByteCount(reader.tensorType(name), reader.tensorNelems(name));
+				} else if (policyByTensor.get(name) == MergeCapability.SOURCE_TYPE_PROJECTED) {
+					cursor += GgufReader.rawByteCount(reader.tensorType(name), reader.tensorNelems(name));
+				} else {
+					cursor += reader.tensorNelems(name) * 4L;
+				}
 			}
 
-			// ── 2. Copy header + KV section verbatim ─────────────────────────────
-			// [ggufFileOffset, metadataSectionEnd) = magic + version + counts + KV pairs
 			long headerStart = reader.ggufFileOffset();
-			long headerEnd   = reader.metadataSectionEnd();
+			long headerEnd = reader.metadataSectionEnd();
 			srcCh.transferTo(headerStart, headerEnd - headerStart, outCh);
 
-			// ── 3. Write new tensor-info section ─────────────────────────────────
 			for (int i = 0; i < tensorOrder.size(); i++) {
 				String name = tensorOrder.get(i);
-				int    type = adapterByTensor.containsKey(name) ? TYPE_F32 : reader.tensorType(name);
+				int type;
+				if (!adaptersByPhysical.containsKey(name))
+					type = reader.tensorType(name);
+				else if (policyByTensor.get(name) == MergeCapability.SOURCE_TYPE_PROJECTED)
+					type = reader.tensorType(name);
+				else
+					type = TYPE_F32;
 				writeTensorInfoEntry(outCh, name, reader.tensorDims(name), type, newDataOffsets[i]);
 			}
 
-			// ── 4. Alignment padding ──────────────────────────────────────────────
-			// Output is always a plain GGUF starting at file position 0, so we
-			// align the current output position to ALIGNMENT (32) bytes.
-			long pos     = outCh.position();
+			long pos = outCh.position();
 			long aligned = ((pos + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
 			if (aligned > pos)
 				outCh.write(ByteBuffer.allocate((int) (aligned - pos)));
 
-			// ── 5. Data section ───────────────────────────────────────────────────
 			for (String name : tensorOrder) {
-				if (adapterByTensor.containsKey(name)) {
-					// Dequantise, apply LoRA delta, store as F32 (full precision)
-					float[] w    = reader.tensor(name);
-					long[]  dims = reader.tensorDims(name);
-					applyDelta(w, adapterByTensor.get(name), (int) dims[1], (int) dims[0]);
+				if (!adaptersByPhysical.containsKey(name)) {
+					outCh.write(ByteBuffer.wrap(reader.tensorRaw(name).data()));
+					continue;
+				}
+
+				List<AdapterSlot> slots = adaptersByPhysical.get(name);
+				MergeCapability pol = policyByTensor.get(name);
+				int sourceType = reader.tensorType(name);
+				byte[] rawOriginal = reader.tensorRaw(name).data();
+				float[] w = reader.tensor(name);
+				float[] before = w.clone();
+
+				// Apply all logical adapter slots to their respective row ranges
+				for (AdapterSlot slot : slots) {
+					String key = slot.loraKey();
+					int slotLayer = LoraAdapterSet.keyLayer(key);
+					String slotProj = LoraAdapterSet.keyProj(key);
+					int rowOffset = slot.rowOffset();
+					int rowCount = slot.rowCount();
+					int slotOutDim = slot.outDim();
+					int slotInDim = slot.inDim();
+
+					float[] slice = extractRows(w, rowOffset, rowCount, slotInDim);
+					LoraAdapter dense = adapters.asMap().get(key);
+					QaLoraAdapter qa = adapters.asQaMap().get(key);
+					if (dense != null)
+						applyAdapter(slice, dense, adapters.getMagnitude(slotLayer, slotProj), slotOutDim, slotInDim);
+					else if (qa != null)
+						applyQaDelta(slice, qa, slotOutDim, slotInDim);
+					else
+						throw new IllegalStateException("missing adapter for " + key);
+					putRows(w, slice, rowOffset, rowCount, slotInDim);
+				}
+
+				float[] targetDelta = new float[w.length];
+				double targetNormSq = 0;
+				for (int i = 0; i < w.length; i++) {
+					targetDelta[i] = w[i] - before[i];
+					targetNormSq += (double) targetDelta[i] * targetDelta[i];
+				}
+				double targetDeltaNorm = Math.sqrt(targetNormSq);
+
+				if (pol == MergeCapability.F32_PRESERVE) {
 					ByteBuffer f32 = ByteBuffer.allocate(w.length * 4).order(ByteOrder.LITTLE_ENDIAN);
 					for (float f : w) f32.putFloat(f);
 					f32.flip();
 					outCh.write(f32);
-					patched.add(name);
+					reports.add(new TensorMergeReport(name, sourceType, TYPE_F32, false, targetDeltaNorm, 1.0, 0, 0, 0));
+				} else if (pol == MergeCapability.SOURCE_TYPE_PROJECTED) {
+					if (QuantizationLayout.forType(sourceType) == null)
+						throw new IllegalArgumentException(
+								"SOURCE_TYPE_PROJECTED requires Q4_K/Q5_K/Q6_K for " + name + ", got type "
+										+ sourceType);
+					if (targetDeltaNorm == 0.0) {
+						outCh.write(ByteBuffer.wrap(GgufQuantCodec.copyRawUnchanged(rawOriginal)));
+						reports.add(new TensorMergeReport(name, sourceType, sourceType, true, 0, 1.0, 0, 0, 0));
+					} else {
+						byte[] encoded = GgufQuantCodec.encode(w, sourceType);
+						float[] roundTrip = GgufQuantCodec.decode(encoded, sourceType);
+						QuantizedMergeMetrics recon = QuantizedMergeMetrics.ofReconstruction(w, roundTrip);
+						float[] retainedDelta = new float[w.length];
+						for (int i = 0; i < w.length; i++)
+							retainedDelta[i] = roundTrip[i] - before[i];
+						double retention = QuantizedMergeMetrics.deltaRetention(targetDelta, retainedDelta);
+						long changed = 0;
+						QuantizationLayout qLayout = QuantizationLayout.require(sourceType);
+						int bb = qLayout.blockBytes();
+						for (int off = 0; off < encoded.length; off += bb) {
+							boolean diff = false;
+							for (int j = 0; j < bb; j++) {
+								if (encoded[off + j] != rawOriginal[off + j]) {
+									diff = true;
+									break;
+								}
+							}
+							if (diff) changed++;
+						}
+						outCh.write(ByteBuffer.wrap(encoded));
+						reports.add(new TensorMergeReport(name, sourceType, sourceType, true, targetDeltaNorm,
+								retention, recon.rmse(), recon.maxAbsError(), changed));
+					}
 				} else {
-					// Copy original quantised bytes verbatim - no precision loss
-					outCh.write(ByteBuffer.wrap(reader.tensorRaw(name).data()));
+					throw new IllegalStateException("unhandled merge policy " + pol);
 				}
+				patched.add(name);
 			}
 		}
-		return new Result(patched.size(), List.copyOf(patched), List.copyOf(skipped));
+		return new Result(patched.size(), List.copyOf(patched), List.copyOf(skipped), List.copyOf(reports));
+	}
+
+	/**
+	 * Adds one logical adapter slot to {@code adaptersByPhysical}. Uses the
+	 * {@link LoraModelLayout} when available (phi3 fused tensors); otherwise falls
+	 * back to {@link LoraProjection#ggufTensorName} with full-tensor dims from the
+	 * reader.
+	 */
+	private static void addAdapterSlot(Map<String, List<AdapterSlot>> adaptersByPhysical,
+			String key, int layer, LoraProjection proj,
+			LoraModelLayout modelLayout, GgufReader reader) throws IOException {
+		if (modelLayout != null) {
+			try {
+				LoraProjectionBinding binding = modelLayout.binding(layer, proj);
+				String physName = binding.physicalName();
+				AdapterSlot slot = new AdapterSlot(key,
+						binding.rowOffset(), binding.rowCount(),
+						binding.outDim(), binding.inDim());
+				adaptersByPhysical.computeIfAbsent(physName, k -> new ArrayList<>()).add(slot);
+				return;
+			} catch (IllegalArgumentException ignored) {
+				// layer out of range in layout — fall through to legacy path
+			}
+		}
+		// Legacy fallback: separate tensor per logical projection
+		String physName = proj.ggufTensorName(layer);
+		long[] dims = reader.hasTensor(physName) ? reader.tensorDims(physName) : new long[]{0L, 0L};
+		int outDim = (int) dims[1];
+		int inDim = (int) dims[0];
+		AdapterSlot slot = new AdapterSlot(key, 0, outDim, outDim, inDim);
+		adaptersByPhysical.computeIfAbsent(physName, k -> new ArrayList<>()).add(slot);
+	}
+
+	private static String normalizeArch(String raw) {
+		if (raw == null || raw.isBlank()) return "llama";
+		return raw.toLowerCase(java.util.Locale.ROOT).strip();
+	}
+
+	private static LoraModelLayout tryBuildLayout(String arch, GgufReader reader) {
+		if (!LoraTrainingHandlerFactory.isSupported(arch))
+			return null;
+		try {
+			LlamaConfig cfg = LlamaConfig.from(reader);
+			return LoraModelLayout.forArchitecture(arch, cfg);
+		} catch (Exception ignored) {
+			return null;
+		}
+	}
+
+	/** Extract a contiguous row block from a row-major float matrix. */
+	static float[] extractRows(float[] full, int rowOffset, int rowCount, int cols) {
+		float[] slice = new float[rowCount * cols];
+		System.arraycopy(full, rowOffset * cols, slice, 0, rowCount * cols);
+		return slice;
+	}
+
+	/** Write a row block back into a row-major float matrix. */
+	static void putRows(float[] full, float[] slice, int rowOffset, int rowCount, int cols) {
+		System.arraycopy(slice, 0, full, rowOffset * cols, rowCount * cols);
+	}
+
+	private static MergeCapability resolvePolicy(LoraAdapterSet adapters, String key, MergeCapability override) {
+		if (override != null)
+			return override;
+		QaLoraEntryMeta meta = adapters.qaMeta().get(key);
+		if (meta != null)
+			return meta.mergeCapability();
+		return MergeCapability.F32_PRESERVE;
+	}
+
+	static void applyQaDelta(float[] w, QaLoraAdapter qa, int outDim, int inDim) {
+		if (qa.outDim != outDim || qa.inDim != inDim)
+			throw new IllegalArgumentException("QA adapter/tensor dimension mismatch");
+		float[] deltaW = qa.expandDenseDelta();
+		for (int i = 0; i < w.length; i++)
+			w[i] += deltaW[i];
 	}
 
 	/** Write one tensor-info entry in GGUF little-endian binary format. */
@@ -204,7 +473,42 @@ public final class LoraMerge {
 		ch.write(buf);
 	}
 
-	// ── LoRA delta ────────────────────────────────────────────────────────────
+	// ── LoRA / rsLoRA / DoRA merge formulas ───────────────────────────────────
+
+	/**
+	 * Apply adapter to dense {@code w} (row-major out×in) in place.
+	 * <ul>
+	 * <li>LoRA/rsLoRA: {@code W += scale·B·A}
+	 * <li>DoRA: {@code W ← (magnitude/‖direction‖) ⊙ direction} with
+	 * {@code direction = W + scale·B·A}
+	 * </ul>
+	 */
+	static void applyAdapter(float[] w, LoraAdapter lora, DoraMagnitude magnitude, int outDim, int inDim) {
+		if (lora.outDim != outDim || lora.inDim != inDim)
+			throw new IllegalArgumentException("adapter/tensor dimension mismatch");
+		applyDelta(w, lora, outDim, inDim);
+		if (lora.mode != LoraMode.DORA)
+			return;
+		if (magnitude == null)
+			throw new IllegalArgumentException("DoRA merge requires magnitude");
+		if (magnitude.length() != outDim)
+			throw new IllegalArgumentException("DoRA magnitude length mismatch");
+		float[] mag = magnitude.values();
+		for (int r = 0; r < outDim; r++) {
+			int base = r * inDim;
+			double sumSq = 0;
+			for (int c = 0; c < inDim; c++) {
+				float v = w[base + c];
+				sumSq += (double) v * v;
+			}
+			float norm = (float) Math.sqrt(sumSq);
+			float coeff = mag[r] / Math.max(norm, DoraProjection.EPS);
+			if (!Float.isFinite(coeff))
+				throw new IllegalArgumentException("non-finite DoRA merge coefficient at row " + r);
+			for (int c = 0; c < inDim; c++)
+				w[base + c] *= coeff;
+		}
+	}
 
 	static void applyDelta(float[] w, LoraAdapter lora, int outDim, int inDim) {
 		float[] a = lora.a(), b = lora.b();
@@ -231,9 +535,9 @@ public final class LoraMerge {
 			case TYPE_BF16 -> quantizeBF16(data);
 			case TYPE_Q8_0 -> quantizeQ8_0(data, n);
 			case TYPE_Q4_0 -> quantizeQ4_0(data, n);
-			case TYPE_Q4_K -> quantizeQ4_K(data, n);
-			case TYPE_Q5_K -> quantizeQ5_K(data, n);
-			case TYPE_Q6_K -> quantizeQ6_K(data, n);
+			case TYPE_Q4_K -> GgufKQuantCodec.encodeQ4K(data);
+			case TYPE_Q5_K -> GgufKQuantCodec.encodeQ5K(data);
+			case TYPE_Q6_K -> GgufKQuantCodec.encodeQ6K(data);
 			case TYPE_Q2_K -> quantizeQ2_K(data, n);
 			case TYPE_Q3_K -> quantizeQ3_K(data, n);
 			default -> throw new UnsupportedOperationException("Re-quantisation not implemented for GGML type " + type);
@@ -298,175 +602,7 @@ public final class LoraMerge {
 		return buf.array();
 	}
 
-	// ── Q4_K: superblock=256, [d:f16][dmin:f16][scales:12][qs:128] = 144 bytes
-	//
-	// FIX: d = maxRange / (63 * 15)  — NOT maxRange/63
-	//
-	// The 6-bit subscale ls[s] encodes the sub-block range relative to d:
-	//   d * ls[s] * 15 ≈ ranges[s]     (effective range for 4-bit quant)
-	//   ls[s] = round(63 * ranges[s] / maxRange)  in [0..63]
-	// Storing d = maxRange/63 (the previous bug) made d*ls[s] ≈ ranges[s],
-	// so (x - min) / (d*ls[s]) ∈ [0..1] and all quants collapsed to {0,1}.
-
-	private static byte[] quantizeQ4_K(float[] data, int n) {
-		int QK_K = 256, nBlocks = n / QK_K;
-		ByteBuffer buf = ByteBuffer.allocate(nBlocks * 144).order(ByteOrder.LITTLE_ENDIAN);
-
-		for (int b = 0; b < nBlocks; b++) {
-			int base = b * QK_K;
-			float[] mins = new float[8], ranges = new float[8];
-			for (int s = 0; s < 8; s++) {
-				float mn = Float.MAX_VALUE, mx = -Float.MAX_VALUE;
-				for (int i = 0; i < 32; i++) { float v = data[base + s*32 + i]; if (v < mn) mn = v; if (v > mx) mx = v; }
-				if (mn > mx) { mn = 0f; mx = 0f; }
-				mins[s] = mn; ranges[s] = mx - mn;
-			}
-			float maxRange = 0f, maxAbsMin = 0f;
-			for (int s = 0; s < 8; s++) { if (ranges[s] > maxRange) maxRange = ranges[s]; float am = -mins[s]; if (am > maxAbsMin) maxAbsMin = am; }
-
-			// CORRECT: d * ls_max * 15 = maxRange  =>  d = maxRange / (63 * 15)
-			float d    = maxRange  > 0f ? maxRange  / (63f * 15f) : 0f;
-			float dmin = maxAbsMin > 0f ? maxAbsMin / 63f          : 0f;
-
-			int[] ls = new int[8], lm = new int[8];
-			for (int s = 0; s < 8; s++) {
-				ls[s] = maxRange  > 0f ? clamp6(Math.round(ranges[s] * 63f / maxRange))  : 0;
-				lm[s] = maxAbsMin > 0f ? clamp6(Math.round(-mins[s]  * 63f / maxAbsMin)) : 0;
-			}
-
-			buf.putShort(f32ToF16(d));
-			buf.putShort(f32ToF16(dmin));
-
-			// 12-byte subscale/submin pack (getScale4K / getMin4K round-trip)
-			byte[] sc = new byte[12];
-			for (int j = 0; j < 4; j++) {
-				sc[j]     = (byte) ((ls[j]     & 0x3F) | ((ls[j+4] & 0x30) << 2));
-				sc[j + 4] = (byte) ((lm[j]     & 0x3F) | ((lm[j+4] & 0x30) << 2));
-				sc[j + 8] = (byte) ((ls[j+4]   & 0x0F) | ((lm[j+4] & 0x0F) << 4));
-			}
-			buf.put(sc);
-
-			// 4-bit nibbles: 4 groups, each = 2 sub-blocks of 32 elements
-			// low nibble = first sub-block (s0), high nibble = second (s1)
-			byte[] qs = new byte[128];
-			for (int g = 0; g < 4; g++) {
-				int s0 = g*2, s1 = s0+1;
-				float sc0 = d * ls[s0], mn0 = dmin * lm[s0];
-				float sc1 = d * ls[s1], mn1 = dmin * lm[s1];
-				int qi = g * 32;
-				for (int i = 0; i < 32; i++) {
-					int q0 = sc0 > 0f ? clamp(Math.round((data[base + s0*32 + i] + mn0) / sc0), 0, 15) : 0;
-					int q1 = sc1 > 0f ? clamp(Math.round((data[base + s1*32 + i] + mn1) / sc1), 0, 15) : 0;
-					qs[qi + i] = (byte) (q0 | (q1 << 4));
-				}
-			}
-			buf.put(qs);
-		}
-		return buf.array();
-	}
-
-	// ── Q5_K: superblock=256, [d:f16][dmin:f16][scales:12][qh:32][qs:128] = 176 bytes
-	//
-	// FIX: d = maxRange / (63 * 31)  — NOT maxRange/63
-	//
-	// Same subscale structure as Q4_K; quant is 5-bit [0..31].
-	//   d * ls[s] * 31 ≈ ranges[s]
-	// 5-bit q split: low 4 bits into qs nibble, bit 4 into qh.
-
-	private static byte[] quantizeQ5_K(float[] data, int n) {
-		int QK_K = 256, nBlocks = n / QK_K;
-		ByteBuffer buf = ByteBuffer.allocate(nBlocks * 176).order(ByteOrder.LITTLE_ENDIAN);
-
-		for (int b = 0; b < nBlocks; b++) {
-			int base = b * QK_K;
-			float[] mins = new float[8], ranges = new float[8];
-			for (int s = 0; s < 8; s++) {
-				float mn = Float.MAX_VALUE, mx = -Float.MAX_VALUE;
-				for (int i = 0; i < 32; i++) { float v = data[base + s*32 + i]; if (v < mn) mn = v; if (v > mx) mx = v; }
-				if (mn > mx) { mn = 0f; mx = 0f; }
-				mins[s] = mn; ranges[s] = mx - mn;
-			}
-			float maxRange = 0f, maxAbsMin = 0f;
-			for (int s = 0; s < 8; s++) { if (ranges[s] > maxRange) maxRange = ranges[s]; float am = -mins[s]; if (am > maxAbsMin) maxAbsMin = am; }
-
-			// CORRECT: d * ls_max * 31 = maxRange  =>  d = maxRange / (63 * 31)
-			float d    = maxRange  > 0f ? maxRange  / (63f * 31f) : 0f;
-			float dmin = maxAbsMin > 0f ? maxAbsMin / 63f          : 0f;
-
-			int[] ls = new int[8], lm = new int[8];
-			for (int s = 0; s < 8; s++) {
-				ls[s] = maxRange  > 0f ? clamp6(Math.round(ranges[s] * 63f / maxRange))  : 0;
-				lm[s] = maxAbsMin > 0f ? clamp6(Math.round(-mins[s]  * 63f / maxAbsMin)) : 0;
-			}
-
-			buf.putShort(f32ToF16(d));
-			buf.putShort(f32ToF16(dmin));
-
-			byte[] sc = new byte[12];
-			for (int j = 0; j < 4; j++) {
-				sc[j]     = (byte) ((ls[j]   & 0x3F) | ((ls[j+4] & 0x30) << 2));
-				sc[j + 4] = (byte) ((lm[j]   & 0x3F) | ((lm[j+4] & 0x30) << 2));
-				sc[j + 8] = (byte) ((ls[j+4] & 0x0F) | ((lm[j+4] & 0x0F) << 4));
-			}
-			buf.put(sc);
-
-			byte[] qh = new byte[32], qs = new byte[128];
-			for (int g = 0; g < 4; g++) {
-				int s0 = g*2, s1 = s0+1;
-				float sc0 = d * ls[s0], mn0 = dmin * lm[s0];
-				float sc1 = d * ls[s1], mn1 = dmin * lm[s1];
-				int qi = g * 32, hiBit0 = g*2, hiBit1 = g*2+1;
-				for (int l = 0; l < 32; l++) {
-					int q0 = sc0 > 0f ? clamp(Math.round((data[base + s0*32 + l] + mn0) / sc0), 0, 31) : 0;
-					int q1 = sc1 > 0f ? clamp(Math.round((data[base + s1*32 + l] + mn1) / sc1), 0, 31) : 0;
-					qs[qi + l] = (byte) ((q0 & 0x0F) | ((q1 & 0x0F) << 4));
-					qh[l] |= (byte) (((q0 >> 4) & 1) << hiBit0);
-					qh[l] |= (byte) (((q1 >> 4) & 1) << hiBit1);
-				}
-			}
-			buf.put(qh);
-			buf.put(qs);
-		}
-		return buf.array();
-	}
-
-	// ── Q6_K: superblock=256, [ql:128][qh:64][scales:16][d:f16] = 210 bytes
-	// 16 sub-blocks of 16 elements; 6-bit signed quant [-32..31]; int8 per-subblock scale.
-	//   d * sc8[s] * 32 ≈ subMax[s]   =>   d = globalMax / (127 * 32)
-
-	private static byte[] quantizeQ6_K(float[] data, int n) {
-		int QK_K = 256, nBlocks = n / QK_K;
-		ByteBuffer buf = ByteBuffer.allocate(nBlocks * 210).order(ByteOrder.LITTLE_ENDIAN);
-		for (int b = 0; b < nBlocks; b++) {
-			int base = b * QK_K;
-			float[] subMax = new float[16];
-			for (int s = 0; s < 16; s++) { float m = 0f; for (int i = 0; i < 16; i++) m = Math.max(m, Math.abs(data[base + s*16 + i])); subMax[s] = m; }
-			float globalMax = 0f;
-			for (float m : subMax) if (m > globalMax) globalMax = m;
-
-			float d    = globalMax > 0f ? globalMax / (127f * 32f) : 0f;
-			float invD = d > 0f ? 1f / d : 0f;
-			byte[] sc = new byte[16];
-			for (int s = 0; s < 16; s++) sc[s] = (byte) (d > 0f ? clamp(Math.round(subMax[s] * invD / 32f), -127, 127) : 0);
-
-			byte[] ql = new byte[128], qh = new byte[64];
-			for (int p = 0; p < QK_K; p++) {
-				int half = p/128, lp = p%128, quad = lp/32, l = lp%32;
-				int sub = half*8 + (l/16) + quad*2;
-				float effScale = d * sc[sub];
-				int q6 = effScale != 0f ? clamp(Math.round(data[base + p] / effScale), -32, 31) : 0;
-				int unsigned = q6 + 32;
-				int qlBase = half*64, qhBase = half*32;
-				int qlIdx = qlBase + l + ((quad%2 == 1) ? 32 : 0);
-				if (quad < 2) ql[qlIdx] = (byte) ((ql[qlIdx] & 0xF0) | (unsigned & 0x0F));
-				else          ql[qlIdx] = (byte) ((ql[qlIdx] & 0x0F) | ((unsigned & 0x0F) << 4));
-				int shift = quad * 2;
-				qh[qhBase + l] = (byte) ((qh[qhBase + l] & ~(0x3 << shift)) | (((unsigned >> 4) & 0x3) << shift));
-			}
-			buf.put(ql); buf.put(qh); buf.put(sc); buf.putShort(f32ToF16(d));
-		}
-		return buf.array();
-	}
+	// Q4_K / Q5_K / Q6_K encode: see GgufKQuantCodec (encoder id juno-kquant-v1).
 
 	// ── Q2_K: superblock=256, [scales:16][qs:64][d:f16][dmin:f16] = 84 bytes
 	// 16 sub-blocks of 16 elements; 4-bit subscale [0..15]; 2-bit quant [0..3].
@@ -606,5 +742,4 @@ public final class LoraMerge {
 
 	private static int clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 	private static int clamp4(int v) { return clamp(v, 0, 15); }
-	private static int clamp6(int v) { return clamp(v, 0, 63); }
 }
