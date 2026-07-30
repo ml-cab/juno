@@ -49,6 +49,18 @@ import cab.ml.juno.node.MatVec;
  *   v.blk.{i}.ln2.weight / .bias
  *   v.blk.{i}.ffn_up.weight / .bias
  *   v.blk.{i}.ffn_down.weight / .bias
+ *   v.post_ln.weight / .bias     [hiddenSize]   OPTIONAL — absent for CLIP/LLaVA
+ *                                mmproj files (CLIP's post_layernorm applies only
+ *                                to the pooled CLS output, which LLaVA-style callers
+ *                                never use). Present for SigLIP models (moondream2):
+ *                                HF SiglipVisionTransformer applies this to the full
+ *                                last_hidden_state before any downstream use, so it
+ *                                is structurally required there. 2026-07-29: this
+ *                                encoder omitted the step entirely for every
+ *                                architecture; moondream2's patch embeddings were the
+ *                                raw, un-normalised final transformer-block residual
+ *                                stream (L2 norm up to ~70000) instead of LayerNorm'd
+ *                                features. See docs/Vision-I2T.md.
  *   mm.0.weight / mm.0.bias      [hiddenSize, mm0OutDim] — first projector layer.
  *                                mm0OutDim is read from the tensor's own shape
  *                                (NOT from clip.vision.projection_dim metadata,
@@ -69,6 +81,8 @@ import cab.ml.juno.node.MatVec;
  *   <li>Add position embeddings (length matches the actual sequence length).
  *   <li>Pre-encoder layer norm.
  *   <li>N transformer blocks (LayerNorm → self-attention → LayerNorm → MLP).
+ *   <li>Post-encoder layer norm, only when {@code v.post_ln} is present
+ *       (SigLIP / moondream2; skipped entirely for CLIP / LLaVA).
  *   <li>Vision projector: mm.0 (hiddenSize → mm0OutDim), then GELU + mm.2
  *       (mm0OutDim → finalOutDim) when structurally necessary (non-square).
  *       Square mm.2 is NOT applied — 2026-07-12 regression; see {@link #project()}.
@@ -97,6 +111,15 @@ public final class VisionEncoder {
     // ── Pre-encoder layer norm ─────────────────────────────────────────────
     private final float[] preLnWeight;      // [hiddenSize]
     private final float[] preLnBias;        // [hiddenSize]
+
+    // ── Post-encoder layer norm ─────────────────────────────────────────────
+    // TRUE optional, unlike preLn above: absence means skip the operation
+    // entirely (not identity-affine LayerNorm, which would still normalise
+    // mean/variance). CLIP/LLaVA mmproj files that don't declare v.post_ln
+    // must see zero behavior change. See docs/Vision-I2T.md.
+    private final boolean hasPostLn;
+    private final float[] postLnWeight;     // [hiddenSize], null when hasPostLn is false
+    private final float[] postLnBias;       // [hiddenSize], null when hasPostLn is false
 
     // ── Per-layer weights (L layers) ───────────────────────────────────────
     private final float[][] ln1Weight;      // [L][hiddenSize]
@@ -168,6 +191,15 @@ public final class VisionEncoder {
 
         preLnWeight = r.hasTensor("v.pre_ln.weight") ? r.tensor("v.pre_ln.weight") : onesF(H);
         preLnBias   = r.hasTensor("v.pre_ln.bias")   ? r.tensor("v.pre_ln.bias")   : new float[H];
+
+        hasPostLn   = r.hasTensor("v.post_ln.weight");
+        postLnWeight = hasPostLn ? r.tensor("v.post_ln.weight") : null;
+        postLnBias   = hasPostLn
+                     ? (r.hasTensor("v.post_ln.bias") ? r.tensor("v.post_ln.bias") : new float[H])
+                     : null;
+        if (hasPostLn)
+            log.info("Vision encoder: v.post_ln present — applying post-encoder LayerNorm "
+                    + "before the projector (SigLIP-style, e.g. moondream2).");
 
         ln1Weight = new float[L][];
         ln1Bias   = new float[L][];
@@ -448,6 +480,17 @@ public final class VisionEncoder {
         // Step 5 — transformer blocks
         for (int li = 0; li < cfg.numLayers(); li++)
             seq = transformerBlock(seq, li, N, H);
+
+        // Step 5b — post-encoder layer norm, only when the GGUF declares it
+        // (v.post_ln). SigLIP's HF reference (SiglipVisionTransformer) applies
+        // this to the full last_hidden_state before any downstream use; CLIP's
+        // reference applies it only to the pooled CLS output, which LLaVA-style
+        // callers never touch, so CLIP mmproj files legitimately lack this
+        // tensor and must see no behavior change here. See docs/Vision-I2T.md.
+        if (hasPostLn) {
+            for (int i = 0; i < N; i++)
+                seq[i] = layerNorm(seq[i], postLnWeight, postLnBias, cfg.layerNormEps());
+        }
 
         // Step 6 — vision projector on patch tokens only (CLS position skipped when present)
         float[][] out = new float[nP][];

@@ -72,6 +72,39 @@ class VisionEncoderTest {
         assertThat(VisionEncoder.layerNorm(x, w, b, 1e-5f)).hasSize(5);
     }
 
+    @Test
+    @DisplayName("layerNorm: collapses an unnormalised final-transformer-block-scale vector "
+            + "to a bounded, unit-variance-ish scale (regression for the missing v.post_ln bug)")
+    void layer_norm_collapses_unnormalised_transformer_output() {
+        // Mirrors the actual magnitudes logged in production for moondream2's
+        // final transformer block, before v.post_ln existed in this encoder:
+        // "Vision patch embeddings stats ... per-patch L2 norm: min=353 mean=9272
+        // max=69715". A patch embedding with an L2 norm in the tens of thousands,
+        // handed directly to the projector with no normalisation, silently
+        // dwarfs any real signal. LayerNorm with identity weight/bias must bring
+        // that down to order-of-sqrt(dim), regardless of the input's raw scale.
+        int dim = 64;
+        float[] huge = new float[dim];
+        java.util.Random rnd = new java.util.Random(42);
+        for (int i = 0; i < dim; i++)
+            huge[i] = (float) (rnd.nextGaussian() * 9000.0); // ~ the logged per-patch scale
+        float[] w = new float[dim];
+        java.util.Arrays.fill(w, 1f);
+        float[] b = new float[dim];
+
+        float[] out = VisionEncoder.layerNorm(huge, w, b, 1e-5f);
+
+        double outNorm = 0;
+        for (float v : out) outNorm += (double) v * v;
+        outNorm = Math.sqrt(outNorm);
+
+        // Unit-variance-per-dim vector has L2 norm ~= sqrt(dim) = 8 here.
+        // The pre-fix bug fed the projector norms in the tens of thousands
+        // regardless of dim; post-fix must land within a small constant
+        // factor of sqrt(dim), independent of the huge input scale.
+        assertThat(outNorm).isLessThan(5.0 * Math.sqrt(dim));
+    }
+
     // ── GELU ─────────────────────────────────────────────────────────────────
 
     @Test

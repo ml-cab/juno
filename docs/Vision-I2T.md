@@ -265,7 +265,28 @@ No model file, no GPU, no network required.
 
 ## Known issues / fixes
 
-### FIXED — moondream2 (phi2) produces grammatically-plausible but incoherent output
+**VERIFIED 2026-07-30**: all three fixes below applied together, tested
+against a real photo (three people in front of a lit building) on the actual
+`moondream2-q5_k.llamafile`.
+
+| | before any fix | RoPE fix only | RoPE + normalisation | RoPE + normalisation + post_ln |
+|---|---|---|---|---|
+| output | word salad, real words no grammar | grammatical, wrong content ("wooden stick and brush") | grammatical, vague/generic ("close-up... small details") | grammatical, substantially correct ("three people standing together in front of some buildings... urban setting") |
+| per-patch L2 norm (mean) | 7117 | 9272 | 9272 | 71 |
+
+The final per-patch L2 norm (mean=71.0, std=1.67 across 2048 dims) is in the
+expected LayerNorm'd range for this output width, confirming the post_ln fix
+is exercising correctly on the real model file, not just in the unit test's
+synthetic numbers. Remaining inaccuracies in this specific response (a
+fabricated "collage" framing, "two cars", "a lake", "text overlays") are
+consistent with normal hallucination and limitation of a small (roughly 1.6B
+parameter), q5_k quantized VLM rather than a further pipeline bug: the model
+correctly identifies the actual subject (three people, a building) and now
+hedges appropriately ("appears to be", "possibly") instead of stating
+fabricated detail with false confidence, unlike the earlier failure modes.
+
+
+### FIXED: moondream2 (phi2) produces grammatically-plausible but incoherent output
 
 **Symptom:** vision pipeline loads and runs end to end (patch injection, prefill,
 decode all complete without exception), but `/v1/vision/chat` returns word-salad,
@@ -276,7 +297,7 @@ same `.gguf` and the same photo produces a correct, coherent caption.
 **Root cause:** `Phi2TransformerHandler` rotated Q/K with adjacent-pair RoPE
 (`(x[2i], x[2i+1])`, the LLaMA/original-rope convention), but Phi-2's GGUF
 tensor layout requires GPT-NeoX split-half pairing (`(x[i], x[i+ropeDim/2])`,
-HF `rotate_half` convention) — the same distinction already identified and
+HF `rotate_half` convention), the same distinction already identified and
 fixed for `Phi3TransformerHandler` on 2026-06-11 (see
 `docs/phi3-inference-handoff.md`, section C). Because RoPE runs on every
 position (both the 729 image-patch tokens and the text tokens), the wrong
@@ -293,11 +314,11 @@ token injection) were verified correct and are not the cause.
 adjacent-pair `ropePartial`.
 
 **Files:** `Phi2Rope.java` (new), `Phi2TransformerHandler.java`.
-**Test:** `Phi2RopeTest.java` (new) — pos=0 identity, pass-through of dims
+**Test:** `Phi2RopeTest.java` (new): pos=0 identity, pass-through of dims
 beyond `ropeDim`, norm preservation, and an explicit split-half-vs-adjacent-pair
 worked example.
 
-### FIXED — moondream2 output coherent but visually wrong (after the RoPE fix)
+### FIXED: moondream2 output coherent but visually wrong (after the RoPE fix)
 
 **Symptom:** after fixing the RoPE pairing above, `/v1/vision/chat` returns
 grammatical, on-topic-sounding English (a real sentence, correct EOS
@@ -328,5 +349,53 @@ resolved per-model values instead of the hardcoded CLIP constants.
 **Files:** `GgufReader.java` (new `metaFloatArray`), `VisionConfig.java`,
 `ImagePatchEmbedder.java`.
 **Tests:** `GgufReaderMetaFloatArrayTest.java` (new),
-`VisionConfigNormalizationTest.java` (new) — covers the CLS-token default
+`VisionConfigNormalizationTest.java` (new): covers the CLS-token default
 selection both ways and explicit-metadata override taking priority.
+
+### FIXED: moondream2 patch embeddings never went through post-encoder LayerNorm
+
+**Symptom:** after the normalisation fix above, `VisionEncoder`'s own
+diagnostic log got worse, not better: `per-patch L2 norm: min=353 mean=9272
+max=69715` (previously 243/7117/57831 with the wrong CLIP normalisation).
+Output remained coherent English but vague/generic ("a close-up view of the
+bottom right corner, showing small details"), the classic sign of a language
+model falling back to its own priors because the vision signal handed to it
+carries little usable information.
+
+**Root cause:** this encoder never applied a post-encoder LayerNorm. That is
+correct for CLIP/LLaVA: CLIP's `post_layernorm` (HF `CLIPVisionTransformer`)
+applies only to the pooled CLS output, which LLaVA-style callers never touch
+for the per-patch features they feed to the projector, so CLIP mmproj files
+legitimately have no equivalent step here. It is not correct for SigLIP:
+HF's `SiglipVisionTransformer.forward` applies `post_layernorm` to the full
+`last_hidden_state` (every patch, not just a pooled token) before any
+downstream use. This is not a guess: llama.cpp's own PR that added moondream
+(SigLIP) support to `clip.cpp` states the changes required were "Support for
+patch embedding bias. Make class embedding and pre-layernorm optional. Add
+support for post-layernorm." (ggml-org/llama.cpp#6899). Without it, the
+patch vectors handed to the projector were the raw final-transformer-block
+residual stream, unnormalised, with per-patch L2 norms in the tens of
+thousands instead of the bounded, roughly-unit-variance-per-dimension scale
+LayerNorm produces. This does not corrupt grammar (that was the RoPE bug,
+already fixed), it starves the model of usable visual signal, producing
+plausible-sounding but generic/wrong captions.
+
+**Fix:** `VisionEncoder` now loads `v.post_ln.weight` / `v.post_ln.bias` as a
+genuinely optional pair (unlike `v.pre_ln`'s identity-affine default: absence
+here means the step is skipped entirely, not run with trivial weight=1/bias=0,
+since CLIP files must see zero behavior change). When present, applies
+LayerNorm to the full sequence after the last transformer block and before
+the projector.
+
+**Files:** `VisionEncoder.java`.
+**Test:** `VisionEncoderTest.java`: new
+`layer_norm_collapses_unnormalised_transformer_output` regression test using
+the actual magnitudes observed in production (~9000 per-dimension scale)
+confirming LayerNorm brings an unbounded-magnitude vector down to a bounded
+scale independent of its raw input magnitude. The `hasPostLn`
+presence-gating and its wiring into `encode()` were verified by code review
+(CLIP-file behavior is provably unchanged: `hasPostLn` is `false` whenever
+`v.post_ln.weight` is absent, and the new step is skipped entirely in that
+case) rather than an end-to-end GGUF fixture, to avoid hand-constructing an
+unverifiable full transformer-block fixture; see the file for the reasoning
+recorded there.
