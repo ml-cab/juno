@@ -41,6 +41,8 @@ CPU-only inference requires no GPU stack. The `./juno` launcher enforces JDK 25 
 - Train-file scheduling: `--lora-chunk-tokens` (default 32; recommend 128 for files),
   `--lora-max-train-tokens` seeded corpus caps
 - Train device: `--lora-train-device auto|gpu|cpu` (`gpu` fails closed if unavailable)
+- Multi-arch resident GPU transpose: LLaMA-family, Qwen2, Phi-3 (fused physical), dense Qwen3
+  via shared `LoraResidentWeights` (CPU fallback on VRAM OOM)
 
 ### OpenAI-compatible REST
 

@@ -268,11 +268,15 @@ Automated AWS runs update the matrix and HTML after each cell; `--parse` is only
 
 ---
 
-## LoRA training GPU baseline (Tier 4)
+## LoRA training GPU baseline (Tier 4 / 9 / 10)
 
-Status: **instrumentation and resident transpose primitives only**. Do not treat the
-current hybrid path (GPU frozen forward + CPU quantized transpose backward) as
-production GPU training.
+Status: **resident forward + transpose** on LLaMA-family, Qwen2, Phi-3 (physical fused),
+and dense Qwen3 via `LoraResidentWeights` / `--lora-train-device`. Microbatch and published
+2× / 1.5× speed gates remain open (Tier 9) — do not claim production “GPU LoRA training”
+until those numbers are recorded below.
+
+DoRA exact norm refresh is correctness-complete but **not** production-perf-gated; prefer
+LoRA/rsLoRA for large all-linear jobs until a refresh time/heap budget is published here.
 
 Reference configuration (to fill when Milestone 1 gates are measured):
 
@@ -294,7 +298,7 @@ Record per path (CPU; GPU-forward/CPU-backward; GPU forward+transpose when ready
 - H2D/D2H bytes (when transfer counters are wired)
 - peak heap and peak VRAM
 
-JFR labels for resident transpose (not yet advertised as training):
+JFR labels for resident transpose (not yet advertised as production training):
 
 - `cuda-resident-transpose` / `cuda-resident-fp16-transpose`
 - `rocm-resident-transpose` / `rocm-resident-fp16-transpose`

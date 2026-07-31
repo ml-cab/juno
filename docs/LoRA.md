@@ -147,6 +147,8 @@ you > /train-qa What is my name? A: Dima
 The command auto-generates four phrasings to improve generalisation. Loss is **completion-only**:
 gradients update only on the answer tokens (not the user prompt), which prevents the classic
 failure mode where LoRA collapses and replies with the memorized answer for every prompt.
+Training completions include the template turn-end token (e.g. `</s>`, `<|end|>`, `<|im_end|>`);
+`GenerationLoop` strips those markers from streamed and final text so they do not appear in replies.
 Training stops automatically when loss drops below the configured target (default `1.2` for
 `/train-qa`, `1.8` for `/train`), or when the max-iteration cap is reached. If a loaded
 checkpoint is already at the target, updates are skipped — run `/reset` before training a new
@@ -267,13 +269,21 @@ ConsoleMain (--lora-play PATH)
 positions. This avoids O(seqLen^2) backward work with negligible effect on LoRA quality.
 
 **Frozen weights in backward.** When a GPU backend is active and resident weights fit,
-`LoraTrainableHandler` reuses the same device matrices for forward `W*x` and transpose
-`W^T*g` (`GpuMatVec.sgemvTranspose`). Otherwise the transpose matVec dequantizes frozen
-weights one row at a time on CPU: O(hiddenDim) peak extra allocation per layer, not O(model).
-Tier 4 does not yet claim production “GPU LoRA training”; see `docs/performance.md`.
+`LoraTrainableHandler`, `Phi3LoraTrainableHandler`, and `Qwen3LoraTrainableHandler` reuse
+device matrices (via shared `LoraResidentWeights`) for forward `W*x` and transpose `W^T*g`
+(`GpuMatVec.sgemvTranspose`). Phi-3 uploads **physical** fused QKV / gate-up tensors; Qwen3
+preserves `qDim` vs `hiddenDim` and keeps per-head Q/K RMSNorm on host. Otherwise the
+transpose matVec dequantizes frozen weights one row at a time on CPU: O(hiddenDim) peak
+extra allocation per layer, not O(model). Tier 9 microbatch / published speed gates are still
+open before claiming production “GPU LoRA training”; see `docs/performance.md`.
 
-**Weight decay.** Applied only to **A**, not **B**. B starts at zero; applying decay to it would
-counteract learning from scratch.
+**DoRA.** Canonical detached-norm DoRA is correctness-complete (train / save / playback / F32
+merge). Exact norm refresh is **not** production-perf-gated; prefer standard LoRA or rsLoRA for
+large all-linear jobs until a measured refresh budget is published.
+
+**QA-LoRA (Tier 5).** Codec + grouped adapter + projected merge metrics are implemented. The
+held-out quality experiment matrix remains deferred; exact K-quant affine merge is unsupported.
+Sidecar adapters and F32 merge remain the safe production paths.
 
 ---
 
@@ -313,8 +323,9 @@ Merge policies (`--lora-merge`):
 | `source-type-projected` | Decode → add delta → encode with `juno-kquant-v1` (approximate requantization; reports delta retention / RMSE) |
 | `sidecar-only` | Forbids bake-in merge; use overlay playback |
 
-Exact QA-LoRA zero-point merge into K-quants is **not** supported. Overlay (sidecar) and F32
-preserve remain the safe production paths.
+Exact QA-LoRA zero-point merge into K-quants is **not** supported. The held-out quality
+experiment matrix is deferred. Overlay (sidecar) and F32 preserve remain the safe production
+paths.
 
 ### Programmatic API
 

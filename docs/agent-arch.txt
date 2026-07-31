@@ -10,7 +10,8 @@ Module dependency (excerpt):
         DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
         LoraTrainableHandler, Qwen2LoraTrainableHandler, Phi3LoraTrainableHandler,
         Qwen3LoraTrainableHandler, LoraTrainingHandlerFactory, LoraModelLayout,
-        LoraMerge, LoraInitializer, LoraProjection, LoraQvInitializer,
+        LoraResidentWeights, ResidentWeightMatrix, LoraMerge, LoraInitializer,
+        LoraProjection, LoraQvInitializer,
         LoraMetricsIdentity, LoraTrainEvent, LoraValidationEvent,
         LoraNormRefreshEvent, LoraMergeEvent, LoraPlaybackEvent, LoraCheckpointEvent
         node depends on lora
@@ -49,8 +50,10 @@ GPU FFI (node module — Panama project, JEP 454):
   GpuMatVec — sealed interface (permits CudaMatVec, RocmMatVec) extending MatVec.
         Exposes upload / uploadHalf and sgemvTranspose (resident W^T*g) for FP32/FP16.
         Transformer handlers depend on GpuMatVec, not a concrete vendor class.
-  ResidentWeightMatrix — FP16-or-FP32 resident projection used by LoraTrainableHandler
+  ResidentWeightMatrix — FP16-or-FP32 resident projection used by LoRA handlers
         for forward and transpose backward without dual call-site arrays.
+  LoraResidentWeights — shared upload / close / VRAM-OOM fallback / matVec routing for
+        LLaMA, Qwen2, Phi-3 (physical fused), and dense Qwen3 LoRA handlers.
   CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16);
         forward uses OP_T; resident transpose backward uses OP_N on the same buffer;
         per-thread CUDA stream + async H2D/D2H; synchronized on GpuContext lock.

@@ -1,5 +1,24 @@
 ## Status
 
+**Session 47** — LoRA Tier 10 (start): multi-arch GPU residency + production gates.
+
+### LoRA multi-arch GPU residency (Tier 10)
+
+- `LoraResidentWeights` — shared upload / close / VRAM-OOM fallback / matVec+transpose routing.
+- `LoraTrainableHandler` refactored onto the helper (LLaMA-family / Qwen2 unchanged behavior).
+- `Phi3LoraTrainableHandler` / `Qwen3LoraTrainableHandler` upload physical fused (Phi) or dense
+  (Qwen3) projections when `--lora-train-device` resolves to a `GpuMatVec`; CPU fallback preserved.
+- Gated live LoRA smokes (`LoraLiveSmokeTest`) for TinyLlama / Qwen2.5 / Phi-3.5 / dense Qwen3 fixtures.
+- `EosOutputFilter` — hold back / strip turn-end markers (`</s>`, `<|end|>`, `<|im_end|>`, …) so
+  `/train-qa` completions never stream into REPL or `GenerationResult` text (all LoRA chat templates).
+- DoRA: correctness-complete, **not** production-perf-gated (prefer LoRA/rsLoRA for large all-linear jobs).
+- Tier 7 JFR metrics marked **complete** (programmatic `--jfr`, mode identity, extractor, docs).
+- Tier 5 held-out research / quality matrix remains **deferred**; exact K-quant QA-LoRA merge unsupported.
+
+---
+
+## Status
+
 **Session 46** — LoRA Tier 9 (start): `--lora-train-device` productization.
 
 ### LoRA GPU train-device (Tier 9)
@@ -65,7 +84,7 @@
 
 ## Status
 
-**Session 41** — LoRA Tier 7 (start): JFR metrics for all adapter modes and operations.
+**Session 41** — LoRA Tier 7 (complete): JFR metrics for all adapter modes and operations.
 
 ### LoRA JFR metrics (Tier 7)
 
@@ -140,7 +159,8 @@
 - Canonical detached-norm DoRA (`DoraMagnitude`, `DoraProjection`); magnitude is an AdamW parameter group with decay off.
 - `DoraInitializer` builds magnitudes/fingerprints from GGUF dequant; merge applies LoRA/rsLoRA/DoRA formulas to F32.
 - CLI/env: `--lora-mode`, `--lora-scaling`, `--lora-init` (`LORA_MODE`, `LORA_SCALING`, `LORA_INIT`).
-- DoRA norm-refresh cost is not yet production-gated; treat DoRA as correctness-complete pending the Tier 3 benchmark gate.
+- DoRA norm-refresh is correctness-complete but **not** production-perf-gated; prefer standard
+  LoRA/rsLoRA for large all-linear jobs until a measured refresh budget exists (Tier 10).
 
 ---
 

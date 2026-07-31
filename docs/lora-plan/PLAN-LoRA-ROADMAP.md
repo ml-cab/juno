@@ -12,8 +12,8 @@ This file is the authoritative execution order for the LoRA improvement plans:
 6. `PLAN-LoRA-Tier6.md` — multi-architecture LoRA training: Qwen2/2.5, Phi-3, dense Qwen3. **CPU mostly done**; live smokes / GPU parity via Tier 10.
 7. `PLAN-LoRA-Tier7.md` — JFR metrics for all LoRA adapter modes and operations. **Mostly done**; confirm via Tier 10.
 8. `PLAN-LoRA-Tier8.md` — `/train-file` scheduling: chunk CLI, corpus caps, document-level units. **Done.**
-9. `PLAN-LoRA-Tier9.md` — GPU LoRA productization and microbatching (complete Tier 4 gates). **In progress** (`--lora-train-device` + timing subsets).
-10. `PLAN-LoRA-Tier10.md` — multi-arch GPU residency parity, gated live smokes, DoRA/Tier 7/5 doc gates.
+9. `PLAN-LoRA-Tier9.md` — GPU LoRA productization and microbatching (complete Tier 4 gates). **In progress** (`--lora-train-device` + timing subsets; microbatch / speed gates open).
+10. `PLAN-LoRA-Tier10.md` — multi-arch GPU residency parity, gated live smokes, DoRA/Tier 7/5 doc gates. **In progress** (shared `LoraResidentWeights` + Phi-3/Qwen3 upload).
 
 Read and follow `models/CLAUDE.md` before implementing any tier. Each tier is test-first and must pass its gate before the next dependent tier begins.
 

@@ -275,19 +275,19 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		ResidentWeightMatrix[] wGateD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] wUpD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] wDownD = new ResidentWeightMatrix[L];
-		ResidentWeightMatrix outD = null;
+		ResidentWeightMatrix[] outHolder = new ResidentWeightMatrix[1];
 		try {
 			for (int li = 0; li < L; li++) {
-				wqD[li] = uploadOne(gpu, half, LlamaTransformerHandler.dequantize(wq[li], H, H), H, H);
-				wkD[li] = uploadOne(gpu, half, LlamaTransformerHandler.dequantize(wk[li], KV, H), KV, H);
-				wvD[li] = uploadOne(gpu, half, LlamaTransformerHandler.dequantize(wv[li], KV, H), KV, H);
-				woD[li] = uploadOne(gpu, half, LlamaTransformerHandler.dequantize(wo[li], H, H), H, H);
-				wGateD[li] = uploadOne(gpu, half, LlamaTransformerHandler.dequantize(wGate[li], I, H), I, H);
-				wUpD[li] = uploadOne(gpu, half, LlamaTransformerHandler.dequantize(wUp[li], I, H), I, H);
-				wDownD[li] = uploadOne(gpu, half, LlamaTransformerHandler.dequantize(wDown[li], H, I), H, I);
+				wqD[li] = LoraResidentWeights.uploadQuant(gpu, wq[li], H, H);
+				wkD[li] = LoraResidentWeights.uploadQuant(gpu, wk[li], KV, H);
+				wvD[li] = LoraResidentWeights.uploadQuant(gpu, wv[li], KV, H);
+				woD[li] = LoraResidentWeights.uploadQuant(gpu, wo[li], H, H);
+				wGateD[li] = LoraResidentWeights.uploadQuant(gpu, wGate[li], I, H);
+				wUpD[li] = LoraResidentWeights.uploadQuant(gpu, wUp[li], I, H);
+				wDownD[li] = LoraResidentWeights.uploadQuant(gpu, wDown[li], H, I);
 			}
 			if (outputProj != null)
-				outD = uploadOne(gpu, half, LlamaTransformerHandler.dequantize(outputProj, V, H), V, H);
+				outHolder[0] = LoraResidentWeights.uploadQuant(gpu, outputProj, V, H);
 			this.wqDev = wqD;
 			this.wkDev = wkD;
 			this.wvDev = wvD;
@@ -295,55 +295,28 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			this.wGateDev = wGateD;
 			this.wUpDev = wUpD;
 			this.wDownDev = wDownD;
-			this.outputProjDev = outD;
+			this.outputProjDev = outHolder[0];
 			log.info("LoRA handler: GPU weight upload complete (" + (half ? "FP16" : "FP32") + ").");
 		} catch (IllegalStateException ex) {
-			closeResidentArray(wqD);
-			closeResidentArray(wkD);
-			closeResidentArray(wvD);
-			closeResidentArray(woD);
-			closeResidentArray(wGateD);
-			closeResidentArray(wUpD);
-			closeResidentArray(wDownD);
-			if (outD != null)
-				outD.close();
-			String msg = ex.getMessage() == null ? "" : ex.getMessage();
-			if (msg.contains("cudaMalloc") || msg.contains("hipMalloc")) {
-				if (LoraTrainDevice.requireResident(System.getProperty("juno.lora.train.device", LoraTrainDevice.AUTO))) {
-					throw new IllegalStateException(
-							"--lora-train-device=gpu: insufficient GPU VRAM for resident weights (" + msg + ")", ex);
-				}
-				log.warning("LoRA: insufficient GPU VRAM for resident weights (" + msg
-						+ "). Using CPU quantised matmul.");
-			} else {
-				throw ex;
-			}
-		}
-	}
-
-	private static ResidentWeightMatrix uploadOne(GpuMatVec gpu, boolean half, float[] host, int rows, int cols) {
-		return half ? ResidentWeightMatrix.uploadHalf(gpu, host, rows, cols)
-				: ResidentWeightMatrix.uploadFp32(gpu, host, rows, cols);
-	}
-
-	private static void closeResidentArray(ResidentWeightMatrix[] a) {
-		if (a == null)
-			return;
-		for (ResidentWeightMatrix m : a) {
-			if (m != null && !m.isClosed())
-				m.close();
+			LoraResidentWeights.tryRecoverFromUploadOom(ex, log, () -> {
+				LoraResidentWeights.closeArray(wqD);
+				LoraResidentWeights.closeArray(wkD);
+				LoraResidentWeights.closeArray(wvD);
+				LoraResidentWeights.closeArray(woD);
+				LoraResidentWeights.closeArray(wGateD);
+				LoraResidentWeights.closeArray(wUpD);
+				LoraResidentWeights.closeArray(wDownD);
+				LoraResidentWeights.closeQuietly(outHolder[0]);
+			});
 		}
 	}
 
 	private float[] matVecLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] x, int rows,
 			int cols) {
-		if (!timingActive) {
-			if (dev != null)
-				return dev.sgemv(x);
-			return LlamaTransformerHandler.matVec(quant, x, rows, cols);
-		}
+		if (!timingActive)
+			return LoraResidentWeights.matVec(quant, dev, x, rows, cols);
 		long t0 = System.nanoTime();
-		float[] y = dev != null ? dev.sgemv(x) : LlamaTransformerHandler.matVec(quant, x, rows, cols);
+		float[] y = LoraResidentWeights.matVec(quant, dev, x, rows, cols);
 		accFrozenForwardNs += System.nanoTime() - t0;
 		return y;
 	}
@@ -354,13 +327,10 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	 */
 	private float[] transposedMatVecLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] g,
 			int rows, int cols) {
-		if (!timingActive) {
-			if (dev != null)
-				return dev.sgemvTranspose(g);
-			return transposedMatVec(quant, g, rows, cols);
-		}
+		if (!timingActive)
+			return LoraResidentWeights.transposedMatVec(quant, dev, g, rows, cols);
 		long t0 = System.nanoTime();
-		float[] y = dev != null ? dev.sgemvTranspose(g) : transposedMatVec(quant, g, rows, cols);
+		float[] y = LoraResidentWeights.transposedMatVec(quant, dev, g, rows, cols);
 		accFrozenTransposeNs += System.nanoTime() - t0;
 		return y;
 	}
@@ -439,15 +409,14 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 
 	@Override
 	public void releaseGpuResources() {
-		closeResidentArray(wqDev);
-		closeResidentArray(wkDev);
-		closeResidentArray(wvDev);
-		closeResidentArray(woDev);
-		closeResidentArray(wGateDev);
-		closeResidentArray(wUpDev);
-		closeResidentArray(wDownDev);
-		if (outputProjDev != null && !outputProjDev.isClosed())
-			outputProjDev.close();
+		LoraResidentWeights.closeArray(wqDev);
+		LoraResidentWeights.closeArray(wkDev);
+		LoraResidentWeights.closeArray(wvDev);
+		LoraResidentWeights.closeArray(woDev);
+		LoraResidentWeights.closeArray(wGateDev);
+		LoraResidentWeights.closeArray(wUpDev);
+		LoraResidentWeights.closeArray(wDownDev);
+		LoraResidentWeights.closeQuietly(outputProjDev);
 		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
 		outputProjDev = null;
 	}
