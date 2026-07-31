@@ -1,5 +1,20 @@
 ## Status
 
+**Session 46** — LoRA Tier 9 (start): `--lora-train-device` productization.
+
+### LoRA GPU train-device (Tier 9)
+
+- `--lora-train-device auto|gpu|cpu` / `LORA_TRAIN_DEVICE` (default **auto**).
+- `LoraTrainDevice` — MatVec selection; `gpu` fails closed without CUDA/ROCm; `cpu` forces `CpuMatVec`.
+- `LoraTrainer` / LoRA REPL honor the mode; JFR `trainDevice` is the resolved label (`cpu`/`cuda`/`rocm`).
+- `LoraStepTiming` — fills `frozenForwardMs` / `frozenTransposeBackwardMs` / `adapterBackwardMs` /
+  `attentionNonlinearMs` on `juno.LoraTrainStep` from LLaMA/Qwen2 handler instrumentation (`transferMs` still 0 until H2D counters).
+- Microbatch (`GpuBlasOps`), parity IT, and published speed gates remain open.
+
+---
+
+## Status
+
 **Session 45** — LoRA Tier 8: train-file scheduling and corpus caps.
 
 ### LoRA train-file scheduling (Tier 8)
@@ -107,7 +122,7 @@
 - `LoraTrainEvent` fields for frozen forward/transpose, attention/nonlinear, adapter backward, and transfer (filled when finer instrumentation lands).
 - GPU adjoint tests: `CudaMatVecTransposeTest`, `RocmMatVecTransposeTest` (`GpuMatVecTransposeContractTest`).
 - Baseline section in `docs/performance.md` — hybrid path is not yet marketed as production GPU training.
-- `--lora-train-device` CLI and CPU/GPU gradient parity IT remain next.
+- `--lora-train-device` shipped in Session 46; CPU/GPU gradient parity IT and speed gates remain open.
 - Fix: `LoraAdapterSet.resetFrom` (REPL `/reset`) bumps DoRA cache generation so inference drops trained magnitude coefficients.
 - Fix: `/reset` also clears REPL chat history and rotates the session id — otherwise multi-turn context still contains the memorized answers.
 

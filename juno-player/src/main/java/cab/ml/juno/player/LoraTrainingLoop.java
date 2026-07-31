@@ -285,6 +285,7 @@ public final class LoraTrainingLoop {
 		event.predictionCount = batch.predictionCount();
 		event.forwardMs = batch.forwardMs();
 		event.backwardMs = batch.backwardMs();
+		batch.timing().apply(event);
 		event.dropout = config.dropout();
 		event.loraPlusRatio = (float) config.loraPlusRatio();
 

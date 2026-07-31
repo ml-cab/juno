@@ -243,7 +243,7 @@ public final class LoraTrainingConfig {
 		private int groupWidth = 0;
 		private cab.ml.juno.lora.MergeCapability mergeCapability = cab.ml.juno.lora.MergeCapability.F32_PRESERVE;
 		private String architecture = "";
-		private String trainDevice = "cpu";
+		private String trainDevice = cab.ml.juno.node.LoraTrainDevice.AUTO;
 		private int chunkTokens = LoraCorpusLimit.DEFAULT_CHUNK_TOKENS;
 		private int maxTrainTokens = 0;
 
@@ -411,7 +411,9 @@ public final class LoraTrainingConfig {
 		}
 
 		public Builder trainDevice(String trainDevice) {
-			this.trainDevice = trainDevice != null && !trainDevice.isBlank() ? trainDevice : "cpu";
+			// Mode (auto|gpu|cpu) from CLI, or resolved label (cpu|cuda|rocm) after open.
+			this.trainDevice = trainDevice != null && !trainDevice.isBlank() ? trainDevice.strip()
+					: cab.ml.juno.node.LoraTrainDevice.AUTO;
 			return this;
 		}
 

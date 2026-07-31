@@ -97,11 +97,13 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_MAX_ITERS`, `LORA_LOSS_TARGET_TEXT`,
 `LORA_LOSS_TARGET_QA`, `LORA_STEPS` (alias), `LORA_PLAY_PATH`, `LORA_TARGETS`,
 `LORA_GRADIENT_ACCUMULATION`, `LORA_MAX_GRAD_NORM`, `LORA_CHUNK_TOKENS`,
-`LORA_MAX_TRAIN_TOKENS`, `API_PORT`
+`LORA_MAX_TRAIN_TOKENS`, `LORA_TRAIN_DEVICE`, `API_PORT`
 
 For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO_USE_GPU` unset
 means try GPU (CUDA first, then ROCm) when available. Set `JUNO_USE_GPU=false` or pass `--cpu`
-to force CPU. Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
+to force CPU under `--lora-train-device=auto` (default). Use `--lora-train-device=gpu` to fail
+closed when CUDA/ROCm is unavailable, or `--lora-train-device=cpu` to force CPU MatVec for LoRA
+regardless of `--gpu`. Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
 safety. Override the vendor with `-Djuno.gpu.backend=cuda|rocm|auto` (default: `auto`).
 
 ---

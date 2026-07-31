@@ -34,6 +34,8 @@ import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LoraInitializer;
 import cab.ml.juno.node.LoraTrainingHandler;
 import cab.ml.juno.node.LoraTrainingHandlerFactory;
+import cab.ml.juno.node.LoraTrainDevice;
+import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.QaLoraInitializer;
 import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.ShardAssignment;
@@ -109,16 +111,27 @@ public final class LoraTrainer implements AutoCloseable {
 
 		ShardAssignment assignment = new ShardAssignment("lora-node", "localhost", 0, 0, cfg.numLayers(), true, true);
 		ShardContext ctx = ShardContext.from(assignment, cfg.vocabSize(), cfg.hiddenDim(), cfg.numHeads());
-		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(modelPath, ctx, adapters);
+		MatVec backend = LoraTrainDevice.selectBackend(config.trainDevice());
+		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(modelPath, ctx, adapters, backend);
 		LoraAdamOptimizer optimizer = new LoraAdamOptimizer(config.learningRate(), 0.9, 0.999, 1e-8,
 				config.weightDecay(), config.loraPlusRatio());
-		LoraTrainingConfig enriched = enrichMetricsLabels(config, cfg.architecture());
+		LoraTrainingConfig enriched = enrichMetricsLabels(config, cfg.architecture(),
+				LoraTrainDevice.labelFor(backend));
 		return new LoraTrainer(handler, tokenizer, optimizer, adapters, ap, modelPath, enriched, cfg);
 	}
 
-	/** Fill architecture for JFR identity when the caller left it blank. */
+	/** Fill architecture / resolved train-device for JFR identity when blank. */
 	static LoraTrainingConfig enrichMetricsLabels(LoraTrainingConfig config, String architecture) {
-		if (config.architecture() != null && !config.architecture().isBlank())
+		return enrichMetricsLabels(config, architecture, config.trainDevice());
+	}
+
+	static LoraTrainingConfig enrichMetricsLabels(LoraTrainingConfig config, String architecture,
+			String resolvedTrainDevice) {
+		String arch = config.architecture() != null && !config.architecture().isBlank() ? config.architecture()
+				: (architecture != null ? architecture : "");
+		String device = resolvedTrainDevice != null && !resolvedTrainDevice.isBlank() ? resolvedTrainDevice
+				: config.trainDevice();
+		if (arch.equals(config.architecture()) && device.equals(config.trainDevice()))
 			return config;
 		return LoraTrainingConfig.builder().adapterConfig(config.adapterConfig()).targets(config.targets())
 				.learningRate(config.learningRate()).gradientAccumulationSteps(config.gradientAccumulationSteps())
@@ -128,9 +141,8 @@ public final class LoraTrainer implements AutoCloseable {
 				.seed(config.seed()).validationSplit(config.validationSplit())
 				.validationPatience(config.validationPatience()).validationMinDelta(config.validationMinDelta())
 				.restoreBest(config.restoreBest()).groupWidth(config.groupWidth())
-				.mergeCapability(config.mergeCapability()).architecture(architecture != null ? architecture : "")
-				.trainDevice(config.trainDevice()).chunkTokens(config.chunkTokens())
-				.maxTrainTokens(config.maxTrainTokens()).build();
+				.mergeCapability(config.mergeCapability()).architecture(arch).trainDevice(device)
+				.chunkTokens(config.chunkTokens()).maxTrainTokens(config.maxTrainTokens()).build();
 	}
 
 	/**

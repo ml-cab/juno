@@ -56,7 +56,8 @@ public final class LoraCliOptions {
 	public int groupWidth = 0;
 	public String mergeCapability = "f32-preserve";
 	public String architecture = "";
-	public String trainDevice = "cpu";
+	/** CLI mode {@code auto|gpu|cpu}; resolved to {@code cpu|cuda|rocm} after open. */
+	public String trainDevice = cab.ml.juno.node.LoraTrainDevice.AUTO;
 	public int chunkTokens = LoraCorpusLimit.DEFAULT_CHUNK_TOKENS;
 	public int maxTrainTokens = 0;
 
@@ -321,6 +322,11 @@ public final class LoraCliOptions {
 			LoraCorpusLimit.validateMaxTrainTokens(maxTrainTokens);
 			yield i + 1;
 		}
+		case "--lora-train-device" -> {
+			requireValue(args, i, flag);
+			trainDevice = cab.ml.juno.node.LoraTrainDevice.normalize(args[i + 1]);
+			yield i + 1;
+		}
 		default -> -1;
 		};
 	}
@@ -345,10 +351,12 @@ public final class LoraCliOptions {
 		applyEnv(o, "LORA_INIT", v -> o.init = v);
 		applyEnv(o, "LORA_CHUNK_TOKENS", v -> o.chunkTokens = Integer.parseInt(v));
 		applyEnv(o, "LORA_MAX_TRAIN_TOKENS", v -> o.maxTrainTokens = Integer.parseInt(v));
+		applyEnv(o, "LORA_TRAIN_DEVICE", v -> o.trainDevice = cab.ml.juno.node.LoraTrainDevice.normalize(v));
 		o.parsedLrSchedule();
 		o.parsedMode();
 		o.parsedScaling();
 		o.parsedInit();
+		o.trainDevice = cab.ml.juno.node.LoraTrainDevice.normalize(o.trainDevice);
 		LoraCorpusLimit.validateChunkTokens(o.chunkTokens);
 		LoraCorpusLimit.validateMaxTrainTokens(o.maxTrainTokens);
 		cab.ml.juno.lora.LoraDropout.validateRate(o.dropout);

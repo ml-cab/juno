@@ -134,6 +134,12 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private ResidentWeightMatrix[] wDownDev;
 	private ResidentWeightMatrix outputProjDev;
 
+	/** Nanosecond accumulators for Tier-9 train-step timing subsets (reset per chunk). */
+	private long accFrozenForwardNs;
+	private long accFrozenTransposeNs;
+	private long accAdapterBackwardNs;
+	private boolean timingActive;
+
 	// ── Inference KV cache ────────────────────────────────────────────────────
 
 	private final Map<String, float[][]> kvCacheK = new ConcurrentHashMap<>();
@@ -303,6 +309,10 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 				outD.close();
 			String msg = ex.getMessage() == null ? "" : ex.getMessage();
 			if (msg.contains("cudaMalloc") || msg.contains("hipMalloc")) {
+				if (LoraTrainDevice.requireResident(System.getProperty("juno.lora.train.device", LoraTrainDevice.AUTO))) {
+					throw new IllegalStateException(
+							"--lora-train-device=gpu: insufficient GPU VRAM for resident weights (" + msg + ")", ex);
+				}
 				log.warning("LoRA: insufficient GPU VRAM for resident weights (" + msg
 						+ "). Using CPU quantised matmul.");
 			} else {
@@ -327,9 +337,15 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 
 	private float[] matVecLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] x, int rows,
 			int cols) {
-		if (dev != null)
-			return dev.sgemv(x);
-		return LlamaTransformerHandler.matVec(quant, x, rows, cols);
+		if (!timingActive) {
+			if (dev != null)
+				return dev.sgemv(x);
+			return LlamaTransformerHandler.matVec(quant, x, rows, cols);
+		}
+		long t0 = System.nanoTime();
+		float[] y = dev != null ? dev.sgemv(x) : LlamaTransformerHandler.matVec(quant, x, rows, cols);
+		accFrozenForwardNs += System.nanoTime() - t0;
+		return y;
 	}
 
 	/**
@@ -338,9 +354,36 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	 */
 	private float[] transposedMatVecLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] g,
 			int rows, int cols) {
-		if (dev != null)
-			return dev.sgemvTranspose(g);
-		return transposedMatVec(quant, g, rows, cols);
+		if (!timingActive) {
+			if (dev != null)
+				return dev.sgemvTranspose(g);
+			return transposedMatVec(quant, g, rows, cols);
+		}
+		long t0 = System.nanoTime();
+		float[] y = dev != null ? dev.sgemvTranspose(g) : transposedMatVec(quant, g, rows, cols);
+		accFrozenTransposeNs += System.nanoTime() - t0;
+		return y;
+	}
+
+	private void resetStepTiming() {
+		accFrozenForwardNs = 0L;
+		accFrozenTransposeNs = 0L;
+		accAdapterBackwardNs = 0L;
+	}
+
+	private LoraStepTiming finishStepTiming(long forwardMs, long backwardMs) {
+		LoraStepTiming t = new LoraStepTiming();
+		t.frozenForwardMs = nsToMs(accFrozenForwardNs);
+		t.frozenTransposeBackwardMs = nsToMs(accFrozenTransposeNs);
+		t.adapterBackwardMs = nsToMs(accAdapterBackwardNs);
+		long accounted = t.frozenForwardMs + t.frozenTransposeBackwardMs + t.adapterBackwardMs;
+		t.attentionNonlinearMs = Math.max(0L, forwardMs + backwardMs - accounted);
+		t.transferMs = 0L; // populated when H2D/D2H counters exist
+		return t;
+	}
+
+	private static long nsToMs(long ns) {
+		return ns / 1_000_000L;
 	}
 
 	private static GgufReader.QuantizedTensor loadOutputProjection(GgufReader r) throws IOException {
@@ -455,6 +498,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 					"lossMask.length must equal tokens.length - 1 (got " + lossMask.length + " vs " + T + ")");
 
 		trainCtx = ctx != null ? ctx : LoraTrainContext.disabled();
+		resetStepTiming();
+		timingActive = true;
 		try {
 			int L = endLayer - startLayer;
 			int H = cfg.hiddenDim();
@@ -522,8 +567,9 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			}
 			long backwardMs = System.currentTimeMillis() - t1;
 
-			return new LoraGradientResult(lossSum, predictionCount, forwardMs, backwardMs);
+			return new LoraGradientResult(lossSum, predictionCount, forwardMs, backwardMs, finishStepTiming(forwardMs, backwardMs));
 		} finally {
+			timingActive = false;
 			trainCtx = LoraTrainContext.disabled();
 		}
 	}
@@ -605,6 +651,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		LoraGradientResult r = computeGradients(tokens);
 		event.forwardMs = r.forwardMs();
 		event.backwardMs = r.backwardMs();
+		r.timing().apply(event);
 		event.predictionCount = r.predictionCount();
 
 		LoraGradients.PrepResult prep = LoraGradients.prepare(loraAdapters, r.predictionCount(), 0f);
@@ -780,22 +827,32 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	}
 
 	private float[] loraBackward(int absLayer, String proj, float[] gradDelta, float[] input) {
+		long t0 = timingActive ? System.nanoTime() : 0L;
+		float[] result;
 		QaLoraAdapter qa = loraAdapters.getQa(absLayer, proj);
 		if (qa != null) {
 			if (!trainCtx.dropoutEnabled())
-				return qa.backward(gradDelta, input);
-			int projOrd = LoraProjection.fromKey(proj).ordinal();
-			return qa.backwardTrain(gradDelta, input, trainCtx.dropoutRate(), trainCtx.rootSeed(),
-					trainCtx.optimizerUpdate(), trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
+				result = qa.backward(gradDelta, input);
+			else {
+				int projOrd = LoraProjection.fromKey(proj).ordinal();
+				result = qa.backwardTrain(gradDelta, input, trainCtx.dropoutRate(), trainCtx.rootSeed(),
+						trainCtx.optimizerUpdate(), trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
+			}
+		} else {
+			LoraAdapter lora = loraAdapters.get(absLayer, proj);
+			if (lora == null)
+				return null;
+			if (!trainCtx.dropoutEnabled())
+				result = lora.backward(gradDelta, input);
+			else {
+				int projOrd = LoraProjection.fromKey(proj).ordinal();
+				result = lora.backwardTrain(gradDelta, input, trainCtx.dropoutRate(), trainCtx.rootSeed(),
+						trainCtx.optimizerUpdate(), trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
+			}
 		}
-		LoraAdapter lora = loraAdapters.get(absLayer, proj);
-		if (lora == null)
-			return null;
-		if (!trainCtx.dropoutEnabled())
-			return lora.backward(gradDelta, input);
-		int projOrd = LoraProjection.fromKey(proj).ordinal();
-		return lora.backwardTrain(gradDelta, input, trainCtx.dropoutRate(), trainCtx.rootSeed(),
-				trainCtx.optimizerUpdate(), trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
+		if (timingActive)
+			accAdapterBackwardNs += System.nanoTime() - t0;
+		return result;
 	}
 
 	private void addLoraBackward(float[] dest, int absLayer, String proj, float[] gradDelta, float[] input) {

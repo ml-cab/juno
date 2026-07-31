@@ -186,6 +186,9 @@ public final class ConsoleMain {
 	private static String loraInit = "kaiming-uniform";
 	private static int loraChunkTokens = LoraCorpusLimit.DEFAULT_CHUNK_TOKENS;
 	private static int loraMaxTrainTokens = 0;
+	private static String loraTrainDevice = cab.ml.juno.node.LoraTrainDevice.AUTO;
+	/** Resolved after handler open: cpu|cuda|rocm (for JFR identity). */
+	private static String loraResolvedTrainDevice = "cpu";
 	private static LlamaConfig loraModelConfig; // set in runLoraRepl for /reset
 
 	/** Active programmatic JFR session (local / lora); stopped and extracted on exit. */
@@ -219,7 +222,9 @@ public final class ConsoleMain {
 		o.chunkTokens = loraChunkTokens;
 		o.maxTrainTokens = loraMaxTrainTokens;
 		o.architecture = loraModelConfig != null ? loraModelConfig.architecture() : "";
-		o.trainDevice = cab.ml.juno.node.LoraMetricsIdentity.resolveTrainDevice(useGpu);
+		o.trainDevice = loraResolvedTrainDevice != null && !loraResolvedTrainDevice.isBlank()
+				? loraResolvedTrainDevice
+				: loraTrainDevice;
 		return o.toTrainingConfig();
 	}
 
@@ -316,6 +321,7 @@ public final class ConsoleMain {
 		loraInit = env.init;
 		loraChunkTokens = env.chunkTokens;
 		loraMaxTrainTokens = env.maxTrainTokens;
+		loraTrainDevice = env.trainDevice;
 	}
 
 	private static void parseArgs(String[] args) {
@@ -518,6 +524,10 @@ public final class ConsoleMain {
 					LoraCorpusLimit.validateMaxTrainTokens(loraMaxTrainTokens);
 				}
 				break;
+			case "--lora-train-device":
+				if (i + 1 < args.length)
+					loraTrainDevice = cab.ml.juno.node.LoraTrainDevice.normalize(args[++i]);
+				break;
 			// ─────────────────────────────────────────────────────────────────
 			case "--verbose":
 			case "-v":
@@ -612,6 +622,7 @@ public final class ConsoleMain {
 		System.out.println("  --lora-validation-min-delta F  Min val improvement (default: 0)");
 		System.out.println("  --lora-chunk-tokens N     Truncated-BPTT window (default: 32; recommend 128 for /train-file)");
 		System.out.println("  --lora-max-train-tokens N Cap supervised tokens per train; 0=unlimited (default: 0)");
+		System.out.println("  --lora-train-device M    auto|gpu|cpu (default: auto; gpu fails closed if unavailable)");
 		System.out.println();
 		System.out.println("Other:");
 		System.out.println("  --health                   Start the standalone health-monitor HTTP server");
@@ -700,8 +711,11 @@ public final class ConsoleMain {
 		ShardContext ctx = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 
 		print(Color.DIM + "  Loading model weights…" + Color.RESET);
-		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(Path.of(modelPath), ctx, adapters);
-		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET + "\n");
+		cab.ml.juno.node.MatVec loraBackend = cab.ml.juno.node.LoraTrainDevice.selectBackend(loraTrainDevice);
+		loraResolvedTrainDevice = cab.ml.juno.node.LoraTrainDevice.labelFor(loraBackend);
+		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(Path.of(modelPath), ctx, adapters, loraBackend);
+		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET);
+		print(Color.DIM + "  train-device=" + loraTrainDevice + " → " + loraResolvedTrainDevice + Color.RESET + "\n");
 
 		if (verbose) {
 			String detectedModelType = ChatModelType.fromPath(modelPath);
@@ -1223,6 +1237,7 @@ public final class ConsoleMain {
 		event.predictionCount = batch.predictionCount();
 		event.forwardMs = batch.forwardMs();
 		event.backwardMs = batch.backwardMs();
+		batch.timing().apply(event);
 
 		LoraGradients.PrepResult prep = LoraGradients.prepare(adapters, batch.predictionCount(), loraMaxGradNorm);
 		event.globalGradNorm = (float) prep.globalNorm();
@@ -1264,7 +1279,7 @@ public final class ConsoleMain {
 			long durationMs, long bytes) {
 		LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(adapters,
 				loraModelConfig != null ? loraModelConfig.architecture() : "",
-				LoraMetricsIdentity.resolveTrainDevice(useGpu));
+				loraResolvedTrainDevice);
 		LoraCheckpointEvent ev = new LoraCheckpointEvent();
 		ev.begin();
 		identity.apply(ev);
@@ -1279,7 +1294,7 @@ public final class ConsoleMain {
 	private static void commitPlaybackEvent(LoraAdapterSet adapters, long loadMs) {
 		LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(adapters,
 				loraModelConfig != null ? loraModelConfig.architecture() : "",
-				LoraMetricsIdentity.resolveTrainDevice(useGpu));
+				loraResolvedTrainDevice);
 		LoraPlaybackEvent ev = new LoraPlaybackEvent();
 		ev.begin();
 		identity.apply(ev);

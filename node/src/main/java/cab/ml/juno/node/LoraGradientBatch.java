@@ -25,6 +25,7 @@ public final class LoraGradientBatch {
 	private int chunkCount;
 	private long forwardMs;
 	private long backwardMs;
+	private final LoraStepTiming timing = new LoraStepTiming();
 
 	public void add(LoraGradientResult r) {
 		lossSum += r.lossSum();
@@ -32,6 +33,7 @@ public final class LoraGradientBatch {
 		chunkCount++;
 		forwardMs += r.forwardMs();
 		backwardMs += r.backwardMs();
+		timing.add(r.timing());
 	}
 
 	public float lossSum() {
@@ -54,6 +56,10 @@ public final class LoraGradientBatch {
 		return backwardMs;
 	}
 
+	public LoraStepTiming timing() {
+		return timing;
+	}
+
 	/** Token-weighted mean loss across the batch; {@link Float#NaN} if empty. */
 	public float meanLoss() {
 		if (predictionCount == 0)
@@ -67,6 +73,7 @@ public final class LoraGradientBatch {
 		chunkCount = 0;
 		forwardMs = 0L;
 		backwardMs = 0L;
+		timing.clear();
 	}
 
 	public boolean isEmpty() {

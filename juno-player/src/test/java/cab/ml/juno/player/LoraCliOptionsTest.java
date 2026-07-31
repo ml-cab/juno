@@ -113,11 +113,25 @@ class LoraCliOptionsTest {
 	}
 
 	@Test
+	@DisplayName("parses Tier-9 train-device flag")
+	void parses_tier9_train_device() {
+		LoraCliOptions o = new LoraCliOptions();
+		assertThat(o.trainDevice).isEqualTo("auto");
+		int n = o.applyFlag(new String[] { "--lora-train-device", "cpu" }, 0);
+		assertThat(n).isEqualTo(1);
+		assertThat(o.trainDevice).isEqualTo("cpu");
+		assertThat(o.toTrainingConfig().trainDevice()).isEqualTo("cpu");
+		assertThatThrownBy(() -> o.applyFlag(new String[] { "--lora-train-device", "tpu" }, 0))
+				.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
 	@DisplayName("Tier-8 defaults are 32 chunk and unlimited tokens")
 	void tier8_defaults() {
 		LoraCliOptions o = new LoraCliOptions();
 		LoraTrainingConfig c = o.toTrainingConfig();
 		assertThat(c.chunkTokens()).isEqualTo(32);
 		assertThat(c.maxTrainTokens()).isEqualTo(0);
+		assertThat(c.trainDevice()).isEqualTo("auto");
 	}
 }

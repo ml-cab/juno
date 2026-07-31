@@ -100,11 +100,39 @@ public final class ForwardPassHandlerLoader {
 	 * an explicit {@link MatVec}. Treats an unset {@code JUNO_USE_GPU} property as
 	 * {@code true} so GPU is used whenever CUDA is available (override with
 	 * {@code JUNO_USE_GPU=false} or {@code --cpu}).
+	 *
+	 * <p>Prefer {@link LoraTrainDevice#selectBackend(String)} when
+	 * {@code --lora-train-device} is available.
 	 */
 	public static MatVec selectLoraBackend() {
-		String p = System.getProperty("JUNO_USE_GPU");
-		boolean useGpu = p == null || "true".equalsIgnoreCase(p);
-		return pickMatVec(useGpu);
+		return LoraTrainDevice.selectBackend(LoraTrainDevice.AUTO);
+	}
+
+	/**
+	 * Fail-closed GPU MatVec for {@code --lora-train-device=gpu}. Does not fall back
+	 * to CPU when bindings are missing or the device index is out of range.
+	 */
+	public static MatVec requireGpuLoraBackend() {
+		boolean gpuAvailable = CudaAvailability.isAvailable() || RocmAvailability.isAvailable();
+		if (!gpuAvailable) {
+			throw new IllegalStateException(
+					"--lora-train-device=gpu requires a CUDA or ROCm device, but none is available. "
+							+ "Use --lora-train-device=auto to fall back, or --lora-train-device=cpu.");
+		}
+		int dev = Math.max(0, Integer.getInteger("juno.gpu.device", Integer.getInteger("juno.cuda.device", 0)));
+		int devCount = CudaAvailability.isAvailable() ? CudaAvailability.deviceCount()
+				: RocmAvailability.deviceCount();
+		if (dev >= devCount) {
+			throw new IllegalStateException("--lora-train-device=gpu: juno.gpu.device=" + dev
+					+ " is out of range (deviceCount=" + devCount + ").");
+		}
+		MatVec mv = GpuContext.shared(dev).createMatVec();
+		if (!(mv instanceof GpuMatVec)) {
+			throw new IllegalStateException(
+					"--lora-train-device=gpu could not create a GPU MatVec (got "
+							+ mv.getClass().getSimpleName() + ").");
+		}
+		return mv;
 	}
 
 	private static MatVec pickMatVec(boolean useGpu) {
@@ -123,6 +151,13 @@ public final class ForwardPassHandlerLoader {
 		}
 		log.info("Using CpuMatVec backend (useGpu=" + useGpu + ", gpuAvailable=" + gpuAvailable + ")");
 		return CpuMatVec.INSTANCE;
+	}
+
+	/** Package-visible for {@link LoraTrainDevice#selectBackend} auto path. */
+	static MatVec selectLoraBackendAuto() {
+		String p = System.getProperty("JUNO_USE_GPU");
+		boolean useGpu = p == null || "true".equalsIgnoreCase(p);
+		return pickMatVec(useGpu);
 	}
 
 	/**

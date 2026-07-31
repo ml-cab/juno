@@ -72,7 +72,9 @@ documented in docs/howto.md.
 LoRA GPU defaults:
   ForwardPassHandlerLoader.selectBackend() — JUNO_USE_GPU unset defaults to false (cluster/local).
   ForwardPassHandlerLoader.selectLoraBackend() — unset defaults to true when any GPU (CUDA or ROCm) exists.
-  LoraTrainableHandler.load(path, ctx, adapters) uses selectLoraBackend().
+  LoraTrainDevice — --lora-train-device auto|gpu|cpu (LORA_TRAIN_DEVICE); gpu fails closed; cpu forces CpuMatVec.
+  LoraStepTiming — Tier-9 subset fields on juno.LoraTrainStep (frozen forward/transpose, adapter backward, residual attention/nonlinear).
+  LoraTrainableHandler.load(path, ctx, adapters) uses selectLoraBackend() / LoraTrainDevice.selectBackend.
   ForwardPassHandlerLoader.load(..., backend, adapters) passes backend into LoraTrainableHandler.
   GpuContext.selectBindings() — CUDA first, then ROCm; -Djuno.gpu.backend overrides.
   GpuContext.createMatVec() — delegates to GpuBindings.createMatVec(GpuContext); no instanceof.

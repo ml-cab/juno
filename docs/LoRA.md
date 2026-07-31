@@ -62,7 +62,10 @@ reproducibility; recommend **128** for large `/train-file`). `/train` and `/trai
 one document-level unit and chunk inside the loop; `--lora-max-train-tokens` (default `0` =
 unlimited) applies a seeded whole-chunk subsample of supervised prediction tokens for epoch
 sizing without changing CE on included tokens. Optimizer updates use a scheduled learning rate
-(constant or warmup-cosine).
+(constant or warmup-cosine). `--lora-train-device auto|gpu|cpu` (default `auto`) selects the
+LoRA MatVec: `gpu` fails closed without CUDA/ROCm (and on resident-weight OOM); `cpu` forces
+host matmul; `auto` tries GPU when available and may fall back. JFR `trainDevice` records the
+resolved label (`cpu` / `cuda` / `rocm`).
 Weight decay is decoupled AdamW on A only; B is never decayed. LoRA+ scales B's learning rate
 by `--lora-plus-ratio` (default `1.0`). Train-only deterministic dropout may mask the LoRA
 branch input; inference and validation never apply dropout. With `--lora-validation-split`

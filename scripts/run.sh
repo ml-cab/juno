@@ -512,6 +512,7 @@ cmd_lora() {
   local lora_init="${LORA_INIT:-kaiming-uniform}"
   local lora_chunk_tokens="${LORA_CHUNK_TOKENS:-32}"
   local lora_max_train_tokens="${LORA_MAX_TRAIN_TOKENS:-0}"
+  local lora_train_device="${LORA_TRAIN_DEVICE:-auto}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.7}"
   local top_k="${TOP_K:-50}"
@@ -560,6 +561,7 @@ cmd_lora() {
       --lora-init) lora_init="$2"; shift 2 ;;
       --lora-chunk-tokens) lora_chunk_tokens="$2"; shift 2 ;;
       --lora-max-train-tokens) lora_max_train_tokens="$2"; shift 2 ;;
+      --lora-train-device) lora_train_device="$2"; shift 2 ;;
       --max-tokens)   max_tokens="$2";  shift 2 ;;
       --temperature)  temperature="$2"; shift 2 ;;
       --top-k)        top_k="$2";       shift 2 ;;
@@ -617,6 +619,7 @@ cmd_lora() {
         echo "    --lora-init kaiming-uniform|legacy-normal  A init (default: kaiming-uniform)"
         echo "    --lora-chunk-tokens N   Truncated-BPTT window (default: 32; recommend 128 for /train-file)"
         echo "    --lora-max-train-tokens N  Cap supervised tokens; 0=unlimited (default: 0)"
+        echo "    --lora-train-device M   auto|gpu|cpu (default: auto; gpu fails closed)"
         echo ""
         echo "  Generation (used for chat inference):"
         echo "    --max-tokens N          (default 200)"
@@ -659,6 +662,7 @@ cmd_lora() {
         echo "    LORA_PLUS_RATIO  LORA_DROPOUT  LORA_SEED  LORA_VALIDATION_SPLIT"
         echo "    LORA_VALIDATION_PATIENCE  LORA_VALIDATION_MIN_DELTA"
         echo "    LORA_MODE  LORA_SCALING  LORA_INIT  LORA_CHUNK_TOKENS  LORA_MAX_TRAIN_TOKENS"
+        echo "    LORA_TRAIN_DEVICE"
         echo "    MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
         echo ""
         echo "  Examples:"
@@ -741,6 +745,7 @@ cmd_lora() {
     --lora-init "$lora_init" \
     --lora-chunk-tokens "$lora_chunk_tokens" \
     --lora-max-train-tokens "$lora_max_train_tokens" \
+    --lora-train-device "$lora_train_device" \
     --max-tokens  "$max_tokens" \
     --temperature "$temperature" \
     --top-k "$top_k" \
@@ -982,6 +987,7 @@ usage() {
   echo "    --lora-validation-min-delta F  min val improvement      (default 0)"
   echo "    --lora-chunk-tokens N          BPTT window              (default 32; recommend 128 for files)"
   echo "    --lora-max-train-tokens N      supervised token cap     (default 0=unlimited)"
+  echo "    --lora-train-device auto|gpu|cpu  LoRA MatVec            (default auto; gpu fails closed)"
   echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
   echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES  USE_GPU"
