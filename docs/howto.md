@@ -97,14 +97,16 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_MAX_ITERS`, `LORA_LOSS_TARGET_TEXT`,
 `LORA_LOSS_TARGET_QA`, `LORA_STEPS` (alias), `LORA_PLAY_PATH`, `LORA_TARGETS`,
 `LORA_GRADIENT_ACCUMULATION`, `LORA_MAX_GRAD_NORM`, `LORA_CHUNK_TOKENS`,
-`LORA_MAX_TRAIN_TOKENS`, `LORA_TRAIN_DEVICE`, `API_PORT`
+`LORA_MAX_TRAIN_TOKENS`, `LORA_TRAIN_DEVICE`, `LORA_MICROBATCH`, `API_PORT`
 
 For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO_USE_GPU` unset
 means try GPU (CUDA first, then ROCm) when available. Set `JUNO_USE_GPU=false` or pass `--cpu`
 to force CPU under `--lora-train-device=auto` (default). Use `--lora-train-device=gpu` to fail
 closed when CUDA/ROCm is unavailable, or `--lora-train-device=cpu` to force CPU MatVec for LoRA
-regardless of `--gpu`. With GPU LoRA, default microbatch 8 (`-Djuno.lora.microbatch=N`) uses FP32
-resident GEMM for frozen linears; set `1` for sequential GEMV (optional FP16 residency).
+regardless of `--gpu`. With GPU LoRA, default `--lora-microbatch 8` (`LORA_MICROBATCH`) uses
+FP32 resident GEMM for frozen linears; set `1` for sequential GEMV / FP16 residency (or let
+VRAM OOM auto-retry drop to 1). Phi-3.5 on ~8 GB cards should use `--lora-microbatch 1` rather
+than `JAVA_TOOL_OPTIONS=-Djuno.lora.microbatch=1`.
 Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
 safety. Override the vendor with `-Djuno.gpu.backend=cuda|rocm|auto` (default: `auto`).
 

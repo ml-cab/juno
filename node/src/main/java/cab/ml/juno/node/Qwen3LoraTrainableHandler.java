@@ -181,9 +181,6 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 	}
 
 	private void uploadResidentWeights(GpuMatVec gpu, int L) {
-		boolean half = gpu.supportsHalfResident();
-		log.info("Qwen3 LoRA: uploading projection weights to GPU ("
-				+ (half ? "FP16" : "FP32") + ")…");
 		int H = cfg.hiddenDim();
 		int qDim = cfg.qDim();
 		int kvDim = cfg.kvDim();
@@ -196,7 +193,23 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		ResidentWeightMatrix[] upD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] downD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] outHolder = new ResidentWeightMatrix[1];
-		try {
+		LoraResidentUpload.run(gpu, log, () -> {
+			LoraResidentWeights.closeArray(qD);
+			LoraResidentWeights.closeArray(kD);
+			LoraResidentWeights.closeArray(vD);
+			LoraResidentWeights.closeArray(woD);
+			LoraResidentWeights.closeArray(gateD);
+			LoraResidentWeights.closeArray(upD);
+			LoraResidentWeights.closeArray(downD);
+			LoraResidentWeights.closeQuietly(outHolder[0]);
+			outHolder[0] = null;
+		}, () -> {
+			boolean microbatch = LoraMicrobatch.current() > 1;
+			boolean half = !microbatch && gpu.supportsHalfResident();
+			log.info("Qwen3 LoRA: uploading projection weights to GPU ("
+					+ (half ? "FP16" : "FP32")
+					+ (microbatch ? ", microbatch=" + LoraMicrobatch.current() : "")
+					+ ")…");
 			for (int li = 0; li < L; li++) {
 				qD[li] = LoraResidentWeights.uploadQuant(gpu, attnQ[li], qDim, H);
 				kD[li] = LoraResidentWeights.uploadQuant(gpu, attnK[li], kvDim, H);
@@ -219,18 +232,7 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 			this.wDownDev = downD;
 			this.outputProjDev = outHolder[0];
 			log.info("Qwen3 LoRA: GPU weight upload complete (" + (half ? "FP16" : "FP32") + ").");
-		} catch (IllegalStateException ex) {
-			LoraResidentWeights.tryRecoverFromUploadOom(ex, log, () -> {
-				LoraResidentWeights.closeArray(qD);
-				LoraResidentWeights.closeArray(kD);
-				LoraResidentWeights.closeArray(vD);
-				LoraResidentWeights.closeArray(woD);
-				LoraResidentWeights.closeArray(gateD);
-				LoraResidentWeights.closeArray(upD);
-				LoraResidentWeights.closeArray(downD);
-				LoraResidentWeights.closeQuietly(outHolder[0]);
-			});
-		}
+		});
 	}
 
 	private static float[] loadOutputProjection(GgufReader r) throws IOException {

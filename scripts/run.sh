@@ -513,6 +513,7 @@ cmd_lora() {
   local lora_chunk_tokens="${LORA_CHUNK_TOKENS:-32}"
   local lora_max_train_tokens="${LORA_MAX_TRAIN_TOKENS:-0}"
   local lora_train_device="${LORA_TRAIN_DEVICE:-auto}"
+  local lora_microbatch="${LORA_MICROBATCH:-8}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.7}"
   local top_k="${TOP_K:-50}"
@@ -562,6 +563,7 @@ cmd_lora() {
       --lora-chunk-tokens) lora_chunk_tokens="$2"; shift 2 ;;
       --lora-max-train-tokens) lora_max_train_tokens="$2"; shift 2 ;;
       --lora-train-device) lora_train_device="$2"; shift 2 ;;
+      --lora-microbatch) lora_microbatch="$2"; shift 2 ;;
       --max-tokens)   max_tokens="$2";  shift 2 ;;
       --temperature)  temperature="$2"; shift 2 ;;
       --top-k)        top_k="$2";       shift 2 ;;
@@ -620,6 +622,7 @@ cmd_lora() {
         echo "    --lora-chunk-tokens N   Truncated-BPTT window (default: 32; recommend 128 for /train-file)"
         echo "    --lora-max-train-tokens N  Cap supervised tokens; 0=unlimited (default: 0)"
         echo "    --lora-train-device M   auto|gpu|cpu (default: auto; gpu fails closed)"
+        echo "    --lora-microbatch N    Frozen GEMM width 1..128 (default: 8; 1=FP16 sequential)"
         echo ""
         echo "  Generation (used for chat inference):"
         echo "    --max-tokens N          (default 200)"
@@ -662,7 +665,7 @@ cmd_lora() {
         echo "    LORA_PLUS_RATIO  LORA_DROPOUT  LORA_SEED  LORA_VALIDATION_SPLIT"
         echo "    LORA_VALIDATION_PATIENCE  LORA_VALIDATION_MIN_DELTA"
         echo "    LORA_MODE  LORA_SCALING  LORA_INIT  LORA_CHUNK_TOKENS  LORA_MAX_TRAIN_TOKENS"
-        echo "    LORA_TRAIN_DEVICE"
+        echo "    LORA_TRAIN_DEVICE  LORA_MICROBATCH"
         echo "    MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
         echo ""
         echo "  Examples:"
@@ -746,6 +749,7 @@ cmd_lora() {
     --lora-chunk-tokens "$lora_chunk_tokens" \
     --lora-max-train-tokens "$lora_max_train_tokens" \
     --lora-train-device "$lora_train_device" \
+    --lora-microbatch "$lora_microbatch" \
     --max-tokens  "$max_tokens" \
     --temperature "$temperature" \
     --top-k "$top_k" \
@@ -988,6 +992,7 @@ usage() {
   echo "    --lora-chunk-tokens N          BPTT window              (default 32; recommend 128 for files)"
   echo "    --lora-max-train-tokens N      supervised token cap     (default 0=unlimited)"
   echo "    --lora-train-device auto|gpu|cpu  LoRA MatVec            (default auto; gpu fails closed)"
+  echo "    --lora-microbatch N            frozen GEMM width 1..128 (default 8; 1=FP16 sequential)"
   echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
   echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES  USE_GPU"

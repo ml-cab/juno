@@ -11,7 +11,8 @@ Module dependency (excerpt):
         GpuBlasOps, DeviceActivationBatch, CpuFrozenBatchOps,
         LoraTrainableHandler, Qwen2LoraTrainableHandler, Phi3LoraTrainableHandler,
         Qwen3LoraTrainableHandler, LoraTrainingHandlerFactory, LoraModelLayout,
-        LoraResidentWeights, ResidentWeightMatrix, LoraMerge, LoraInitializer,
+        LoraResidentWeights, LoraResidentUpload, LoraMicrobatch, ResidentWeightMatrix,
+        LoraMerge, LoraInitializer,
         LoraProjection, LoraQvInitializer,
         LoraMetricsIdentity, LoraTrainEvent, LoraValidationEvent,
         LoraNormRefreshEvent, LoraMergeEvent, LoraPlaybackEvent, LoraCheckpointEvent
@@ -56,6 +57,10 @@ GPU FFI (node module — Panama project, JEP 454):
   LoraResidentWeights — shared upload / close / VRAM-OOM fallback / matVec routing for
         LLaMA, Qwen2, Phi-3 (physical fused), and dense Qwen3 LoRA handlers.
         microbatchSize()>1 prefers FP32 upload for GpuBlasOps GEMM.
+  LoraResidentUpload — FP32 microbatch VRAM OOM → apply microbatch=1 (FP16) once →
+        tryRecoverFromUploadOom (CPU under auto / fail-closed under gpu).
+  LoraMicrobatch — --lora-microbatch N / LORA_MICROBATCH (default 8, max 128); sets
+        juno.lora.microbatch before resident upload.
   GpuBlasOps / DeviceActivationBatch — FP32 cublasSgemm_v2 / rocblas_sgemm microbatch
         for frozen LoRA forward/transpose (Tier 9); CpuFrozenBatchOps is the host oracle.
   CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16);
@@ -81,7 +86,8 @@ LoRA GPU defaults:
   ForwardPassHandlerLoader.selectLoraBackend() — unset defaults to true when any GPU (CUDA or ROCm) exists.
   LoraTrainDevice — --lora-train-device auto|gpu|cpu (LORA_TRAIN_DEVICE); gpu fails closed; cpu forces CpuMatVec.
   LoraStepTiming — Tier-9 subset fields on juno.LoraTrainStep (frozen forward/transpose, adapter backward, residual attention/nonlinear).
-  juno.lora.microbatch — default 8; FP32 resident GEMM across positions; 1 = sequential GEMV / optional FP16.
+  LoraMicrobatch / juno.lora.microbatch — default 8; FP32 resident GEMM across positions; 1 = sequential GEMV / optional FP16;
+        VRAM OOM auto-retries FP16 then CPU under auto (Tier 11).
   Production path: frozen batched GPU + host adapters/Adam (see docs/performance.md TinyLlama gates).
   LoraTrainableHandler.load(path, ctx, adapters) uses selectLoraBackend() / LoraTrainDevice.selectBackend.
   ForwardPassHandlerLoader.load(..., backend, adapters) passes backend into LoraTrainableHandler.

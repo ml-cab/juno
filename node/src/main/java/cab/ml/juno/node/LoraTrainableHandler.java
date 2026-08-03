@@ -263,12 +263,6 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	}
 
 	private void uploadResidentWeights(GpuMatVec gpu, int L) {
-		boolean microbatch = LoraResidentWeights.microbatchSize() > 1;
-		boolean half = !microbatch && gpu.supportsHalfResident();
-		log.info("LoRA handler: uploading projection weights to GPU ("
-				+ (half ? "FP16" : "FP32")
-				+ (microbatch ? ", microbatch=" + LoraResidentWeights.microbatchSize() : "")
-				+ ")…");
 		int H = cfg.hiddenDim();
 		int KV = cfg.kvDim();
 		int I = cfg.intermediateSize();
@@ -281,8 +275,28 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		ResidentWeightMatrix[] wUpD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] wDownD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] outHolder = new ResidentWeightMatrix[1];
-		GpuBlasOps ops = null;
-		try {
+		GpuBlasOps[] opsHolder = new GpuBlasOps[1];
+		LoraResidentUpload.run(gpu, log, () -> {
+			if (opsHolder[0] != null) {
+				opsHolder[0].close();
+				opsHolder[0] = null;
+			}
+			LoraResidentWeights.closeArray(wqD);
+			LoraResidentWeights.closeArray(wkD);
+			LoraResidentWeights.closeArray(wvD);
+			LoraResidentWeights.closeArray(woD);
+			LoraResidentWeights.closeArray(wGateD);
+			LoraResidentWeights.closeArray(wUpD);
+			LoraResidentWeights.closeArray(wDownD);
+			LoraResidentWeights.closeQuietly(outHolder[0]);
+			outHolder[0] = null;
+		}, () -> {
+			boolean microbatch = LoraMicrobatch.current() > 1;
+			boolean half = !microbatch && gpu.supportsHalfResident();
+			log.info("LoRA handler: uploading projection weights to GPU ("
+					+ (half ? "FP16" : "FP32")
+					+ (microbatch ? ", microbatch=" + LoraMicrobatch.current() : "")
+					+ ")…");
 			for (int li = 0; li < L; li++) {
 				wqD[li] = LoraResidentWeights.uploadQuant(gpu, wq[li], H, H);
 				wkD[li] = LoraResidentWeights.uploadQuant(gpu, wk[li], KV, H);
@@ -295,7 +309,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			if (outputProj != null)
 				outHolder[0] = LoraResidentWeights.uploadQuant(gpu, outputProj, V, H);
 			if (microbatch)
-				ops = GpuBlasOps.of(gpu);
+				opsHolder[0] = GpuBlasOps.of(gpu);
 			this.wqDev = wqD;
 			this.wkDev = wkD;
 			this.wvDev = wvD;
@@ -304,22 +318,9 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			this.wUpDev = wUpD;
 			this.wDownDev = wDownD;
 			this.outputProjDev = outHolder[0];
-			this.blasOps = ops;
+			this.blasOps = opsHolder[0];
 			log.info("LoRA handler: GPU weight upload complete (" + (half ? "FP16" : "FP32") + ").");
-		} catch (IllegalStateException ex) {
-			if (ops != null)
-				ops.close();
-			LoraResidentWeights.tryRecoverFromUploadOom(ex, log, () -> {
-				LoraResidentWeights.closeArray(wqD);
-				LoraResidentWeights.closeArray(wkD);
-				LoraResidentWeights.closeArray(wvD);
-				LoraResidentWeights.closeArray(woD);
-				LoraResidentWeights.closeArray(wGateD);
-				LoraResidentWeights.closeArray(wUpD);
-				LoraResidentWeights.closeArray(wDownD);
-				LoraResidentWeights.closeQuietly(outHolder[0]);
-			});
-		}
+		});
 	}
 
 	private float[] matVecLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] x, int rows,

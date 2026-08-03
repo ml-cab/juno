@@ -268,14 +268,14 @@ Automated AWS runs update the matrix and HTML after each cell; `--parse` is only
 
 ---
 
-## LoRA training GPU baseline (Tier 4 / 9 / 10)
+## LoRA training GPU baseline (Tier 4 / 9 / 10 / 11)
 
 Status: **production GPU LoRA training** on LLaMA-family / Qwen2 via resident FP32 forward +
 transpose + microbatched GEMM (`GpuBlasOps` / `DeviceActivationBatch`, default
-`juno.lora.microbatch=8`). Path is **frozen batched GPU + host adapters / Adam** (device
-adapters deferred — host adapter intensity is not the bottleneck after microbatch).
-Phi-3 / dense Qwen3 share `LoraResidentWeights` residency (Tier 10); microbatch wiring is
-LLaMA/Qwen2-first.
+`--lora-microbatch 8` / `LORA_MICROBATCH`). Path is **frozen batched GPU + host adapters / Adam**
+(device adapters deferred — host adapter intensity is not the bottleneck after microbatch).
+Phi-3 / dense Qwen3 share `LoraResidentWeights` residency (Tier 10); VRAM OOM auto-fallback
+retries FP16 at microbatch 1 then CPU under `auto` (Tier 11).
 
 DoRA exact norm refresh is correctness-complete but **not** production-perf-gated; prefer
 LoRA/rsLoRA for large all-linear jobs until a refresh time/heap budget is published here.
@@ -301,12 +301,13 @@ Reference configuration:
 | Sequence length | 64 (gate); 128 recommended for `/train-file` |
 | Rank | 8 |
 | Targets | `qv` (gate); `all-linear` increases VRAM |
-| Microbatch | 8 (`-Djuno.lora.microbatch=N`, `1` = sequential GEMV) |
+| Microbatch | 8 (`--lora-microbatch N` / `LORA_MICROBATCH`; `1` = sequential GEMV / FP16) |
 | Warm-up / measured | 1 warm-up + 3 measured updates in the gated test |
 | Hardware | NVIDIA GTX 1080 (above); AMD ROCm adjoint via `-Dgroups=rocm` |
 
 `transferMs` remains 0 until H2D/D2H counters are wired. Peak VRAM for TinyLlama qv FP32
-resident upload fits in ~8 GB class cards; all-linear needs more headroom.
+resident upload fits in ~8 GB class cards; all-linear and Phi-3.5 may need `--lora-microbatch 1`
+or rely on FP32→FP16→CPU auto-fallback under `--lora-train-device=auto`.
 
 JFR labels for resident transpose:
 

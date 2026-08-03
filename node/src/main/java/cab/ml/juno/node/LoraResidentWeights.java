@@ -27,22 +27,22 @@ import java.util.logging.Logger;
  * <p>When {@link #microbatchSize()} {@code > 1}, uploads prefer FP32 so
  * {@link GpuBlasOps} microbatched GEMM can run. Honors {@code juno.lora.train.device}:
  * {@code gpu} fails closed on upload OOM; {@code auto} logs and falls back to CPU.
+ * VRAM OOM while microbatching retries FP16 via {@link LoraResidentUpload}.
  */
 final class LoraResidentWeights {
 
-	/** Default microbatch width for frozen GEMM (Tier 9). Override with {@code juno.lora.microbatch}. */
-	static final int DEFAULT_MICROBATCH = 8;
+	/** @see LoraMicrobatch#DEFAULT */
+	static final int DEFAULT_MICROBATCH = LoraMicrobatch.DEFAULT;
 
 	private LoraResidentWeights() {
 	}
 
 	/**
 	 * Microbatch size for frozen linears. {@code 1} disables GEMM batching
-	 * (sequential GEMV). Default {@value #DEFAULT_MICROBATCH}.
+	 * (sequential GEMV). Default {@link LoraMicrobatch#DEFAULT}.
 	 */
 	static int microbatchSize() {
-		int n = Integer.getInteger("juno.lora.microbatch", DEFAULT_MICROBATCH);
-		return Math.max(1, n);
+		return LoraMicrobatch.current();
 	}
 
 	/** Upload host row-major matrix; FP32 when microbatching, else FP16 when supported. */

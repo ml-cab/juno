@@ -14,7 +14,7 @@ This file is the authoritative execution order for the LoRA improvement plans:
 8. `PLAN-LoRA-Tier8.md` — `/train-file` scheduling: chunk CLI, corpus caps, document-level units. **Done.**
 9. `PLAN-LoRA-Tier9.md` — GPU LoRA productization and microbatching (complete Tier 4 gates). **Done.**
 10. `PLAN-LoRA-Tier10.md` — multi-arch GPU residency parity, gated live smokes, DoRA/Tier 7/5 doc gates. **Done.**
-11. `PLAN-LoRA-Tier11.md` — `--lora-microbatch` CLI/env + VRAM OOM auto-fallback (FP32 → FP16 → CPU). **Pending.**
+11. `PLAN-LoRA-Tier11.md` — `--lora-microbatch` CLI/env + VRAM OOM auto-fallback (FP32 → FP16 → CPU). **Done.**
 
 Read and follow `models/CLAUDE.md` before implementing any tier. Each tier is test-first and must pass its gate before the next dependent tier begins.
 
@@ -109,6 +109,7 @@ Tier 8 depends only on Tiers 1–2 and may ship before Tier 9. Tier 9 completes 
 - Tier 8 owns train corpus scheduling fields on `LoraTrainingConfig`: `chunkTokens`, `maxTrainTokens`.
 - Tier 9 owns `--lora-train-device` resolution and microbatch device execution contracts.
 - Tier 10 owns shared multi-arch residency helpers and gated live LoRA smoke ownership.
+- Tier 11 owns `--lora-microbatch` / `LORA_MICROBATCH` and VRAM OOM FP32→FP16→CPU ladder.
 
 ## Tier summaries and exit gates
 
@@ -232,6 +233,13 @@ Port resident GPU transpose to Phi-3 and dense Qwen3 via a shared helper; add ga
 
 Exit only when the architecture GPU matrix and documentation gates in `PLAN-LoRA-Tier10.md` pass.
 
+### Tier 11 — microbatch CLI and VRAM auto-fallback
+
+Expose `--lora-microbatch` / `LORA_MICROBATCH` and retry FP16 at microbatch 1 on FP32 upload
+OOM before the existing CPU / fail-closed policy.
+
+Exit only when the gates in `PLAN-LoRA-Tier11.md` pass.
+
 ## Recommended execution
 
 Historical (complete):
@@ -243,12 +251,9 @@ Historical (complete):
 5. Tier 4 primitives (resident transpose); Tier 5 code; Tier 7 complete.
 6. Tier 8 train-file scheduling; Tier 10 multi-arch residency + live smokes.
 7. Tier 9 GPU productization: `--lora-train-device`, microbatch GEMM, parity IT, published speed gates.
+8. Tier 11 — `--lora-microbatch` CLI/env + VRAM OOM auto-fallback (FP32 → FP16 → CPU under `auto`).
 
-Forward:
-
-1. **Tier 11** — `--lora-microbatch` CLI/env + VRAM OOM auto-fallback (FP32 → FP16 → CPU under `auto`).
-
-Tiers 1–10 are complete for their committed scopes. Deferred items remain in **Explicit deferrals**
+Tiers 1–11 are complete for their committed scopes. Deferred items remain in **Explicit deferrals**
 below (device adapters optional follow-up only if a new workload shows host adapters dominate
 after microbatch).
 

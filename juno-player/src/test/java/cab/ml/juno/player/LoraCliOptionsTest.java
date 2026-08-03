@@ -126,6 +126,21 @@ class LoraCliOptionsTest {
 	}
 
 	@Test
+	@DisplayName("parses Tier-11 microbatch flag")
+	void parses_tier11_microbatch() {
+		LoraCliOptions o = new LoraCliOptions();
+		assertThat(o.microbatch).isEqualTo(8);
+		int n = o.applyFlag(new String[] { "--lora-microbatch", "1" }, 0);
+		assertThat(n).isEqualTo(1);
+		assertThat(o.microbatch).isEqualTo(1);
+		assertThat(o.toTrainingConfig().microbatch()).isEqualTo(1);
+		assertThatThrownBy(() -> o.applyFlag(new String[] { "--lora-microbatch", "0" }, 0))
+				.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> o.applyFlag(new String[] { "--lora-microbatch", "129" }, 0))
+				.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
 	@DisplayName("Tier-8 defaults are 32 chunk and unlimited tokens")
 	void tier8_defaults() {
 		LoraCliOptions o = new LoraCliOptions();
@@ -133,5 +148,6 @@ class LoraCliOptionsTest {
 		assertThat(c.chunkTokens()).isEqualTo(32);
 		assertThat(c.maxTrainTokens()).isEqualTo(0);
 		assertThat(c.trainDevice()).isEqualTo("auto");
+		assertThat(c.microbatch()).isEqualTo(8);
 	}
 }

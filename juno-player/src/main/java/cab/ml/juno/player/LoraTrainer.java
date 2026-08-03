@@ -34,6 +34,7 @@ import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LoraInitializer;
 import cab.ml.juno.node.LoraTrainingHandler;
 import cab.ml.juno.node.LoraTrainingHandlerFactory;
+import cab.ml.juno.node.LoraMicrobatch;
 import cab.ml.juno.node.LoraTrainDevice;
 import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.QaLoraInitializer;
@@ -111,6 +112,7 @@ public final class LoraTrainer implements AutoCloseable {
 
 		ShardAssignment assignment = new ShardAssignment("lora-node", "localhost", 0, 0, cfg.numLayers(), true, true);
 		ShardContext ctx = ShardContext.from(assignment, cfg.vocabSize(), cfg.hiddenDim(), cfg.numHeads());
+		LoraMicrobatch.apply(config.microbatch());
 		MatVec backend = LoraTrainDevice.selectBackend(config.trainDevice());
 		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(modelPath, ctx, adapters, backend);
 		LoraAdamOptimizer optimizer = new LoraAdamOptimizer(config.learningRate(), 0.9, 0.999, 1e-8,
@@ -142,7 +144,8 @@ public final class LoraTrainer implements AutoCloseable {
 				.validationPatience(config.validationPatience()).validationMinDelta(config.validationMinDelta())
 				.restoreBest(config.restoreBest()).groupWidth(config.groupWidth())
 				.mergeCapability(config.mergeCapability()).architecture(arch).trainDevice(device)
-				.chunkTokens(config.chunkTokens()).maxTrainTokens(config.maxTrainTokens()).build();
+				.microbatch(config.microbatch()).chunkTokens(config.chunkTokens())
+				.maxTrainTokens(config.maxTrainTokens()).build();
 	}
 
 	/**

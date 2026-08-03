@@ -322,6 +322,7 @@ if "%LORA_INIT%"=="" set "LORA_INIT=kaiming-uniform"
 if "%LORA_CHUNK_TOKENS%"=="" set "LORA_CHUNK_TOKENS=32"
 if "%LORA_MAX_TRAIN_TOKENS%"=="" set "LORA_MAX_TRAIN_TOKENS=0"
 if "%LORA_TRAIN_DEVICE%"=="" set "LORA_TRAIN_DEVICE=auto"
+if "%LORA_MICROBATCH%"=="" set "LORA_MICROBATCH=8"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
@@ -368,6 +369,7 @@ if /i "%~1"=="--lora-init" ( set "LORA_INIT=%~2" & shift & shift & goto :lora_pa
 if /i "%~1"=="--lora-chunk-tokens" ( set "LORA_CHUNK_TOKENS=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-max-train-tokens" ( set "LORA_MAX_TRAIN_TOKENS=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-train-device" ( set "LORA_TRAIN_DEVICE=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-microbatch" ( set "LORA_MICROBATCH=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--max-tokens"  ( set "MAX_TOKENS=%~2"    & shift & shift & goto :lora_parse )
 if /i "%~1"=="--temperature" ( set "TEMPERATURE=%~2"   & shift & shift & goto :lora_parse )
 if /i "%~1"=="--top-k"       ( set "TOP_K=%~2"         & shift & shift & goto :lora_parse )
@@ -417,6 +419,8 @@ if /i "%~1"=="--help" (
   echo   Backend:
   echo     --gpu                   use GPU when available (default)
   echo     --cpu                   use CPU only
+  echo     --lora-train-device M   auto^|gpu^|cpu (default: auto)
+  echo     --lora-microbatch N     frozen GEMM width 1..128 (default: 8)
   echo.
   echo   REPL commands:
   echo     /train ^<text^>          Fine-tune on inline text
@@ -429,6 +433,7 @@ if /i "%~1"=="--help" (
   echo.
   echo   Env overrides: MODEL_PATH LORA_PATH LORA_RANK LORA_ALPHA LORA_LR LORA_MAX_ITERS
   echo                  LORA_LOSS_TARGET_TEXT LORA_LOSS_TARGET_QA LORA_STEPS (alias)
+  echo                  LORA_TRAIN_DEVICE LORA_MICROBATCH
   echo                  MAX_TOKENS TEMPERATURE TOP_K TOP_P HEAP USE_GPU
   echo.
   echo   Examples:
@@ -478,7 +483,7 @@ echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  (programmatic recording
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --lora-mode %LORA_MODE% --lora-scaling %LORA_SCALING% --lora-init %LORA_INIT% --lora-chunk-tokens %LORA_CHUNK_TOKENS% --lora-max-train-tokens %LORA_MAX_TRAIN_TOKENS% --lora-train-device %LORA_TRAIN_DEVICE% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %JFR_ARG_LORA% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --lora-mode %LORA_MODE% --lora-scaling %LORA_SCALING% --lora-init %LORA_INIT% --lora-chunk-tokens %LORA_CHUNK_TOKENS% --lora-max-train-tokens %LORA_MAX_TRAIN_TOKENS% --lora-train-device %LORA_TRAIN_DEVICE% --lora-microbatch %LORA_MICROBATCH% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %JFR_ARG_LORA% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================

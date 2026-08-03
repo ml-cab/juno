@@ -64,6 +64,8 @@ public final class LoraTrainingConfig {
 	private final String architecture;
 	/** Coarse train-device label for JFR: {@code cpu|cuda|rocm|auto}. */
 	private final String trainDevice;
+	/** Frozen GEMM microbatch width (default 8; 1 = sequential GEMV / FP16). */
+	private final int microbatch;
 	/** Prediction positions per truncated-BPTT window (default 32). */
 	private final int chunkTokens;
 	/** Cap on supervised prediction tokens; {@code 0} = unlimited. */
@@ -90,6 +92,7 @@ public final class LoraTrainingConfig {
 		this.mergeCapability = b.mergeCapability;
 		this.architecture = b.architecture;
 		this.trainDevice = b.trainDevice;
+		this.microbatch = b.microbatch;
 		this.chunkTokens = b.chunkTokens;
 		this.maxTrainTokens = b.maxTrainTokens;
 	}
@@ -137,6 +140,10 @@ public final class LoraTrainingConfig {
 
 	public String trainDevice() {
 		return trainDevice;
+	}
+
+	public int microbatch() {
+		return microbatch;
 	}
 
 	/** Stable JFR identity tags for train / validation / operation events. */
@@ -244,6 +251,7 @@ public final class LoraTrainingConfig {
 		private cab.ml.juno.lora.MergeCapability mergeCapability = cab.ml.juno.lora.MergeCapability.F32_PRESERVE;
 		private String architecture = "";
 		private String trainDevice = cab.ml.juno.node.LoraTrainDevice.AUTO;
+		private int microbatch = cab.ml.juno.node.LoraMicrobatch.DEFAULT;
 		private int chunkTokens = LoraCorpusLimit.DEFAULT_CHUNK_TOKENS;
 		private int maxTrainTokens = 0;
 
@@ -414,6 +422,11 @@ public final class LoraTrainingConfig {
 			// Mode (auto|gpu|cpu) from CLI, or resolved label (cpu|cuda|rocm) after open.
 			this.trainDevice = trainDevice != null && !trainDevice.isBlank() ? trainDevice.strip()
 					: cab.ml.juno.node.LoraTrainDevice.AUTO;
+			return this;
+		}
+
+		public Builder microbatch(int microbatch) {
+			this.microbatch = cab.ml.juno.node.LoraMicrobatch.validate(microbatch);
 			return this;
 		}
 

@@ -64,8 +64,11 @@ unlimited) applies a seeded whole-chunk subsample of supervised prediction token
 sizing without changing CE on included tokens. Optimizer updates use a scheduled learning rate
 (constant or warmup-cosine). `--lora-train-device auto|gpu|cpu` (default `auto`) selects the
 LoRA MatVec: `gpu` fails closed without CUDA/ROCm (and on resident-weight OOM); `cpu` forces
-host matmul; `auto` tries GPU when available and may fall back. JFR `trainDevice` records the
-resolved label (`cpu` / `cuda` / `rocm`).
+host matmul; `auto` tries GPU when available and may fall back. `--lora-microbatch N`
+(default **8**, range 1..128; env `LORA_MICROBATCH`) sets frozen GEMM width: `N>1` uploads
+FP32 for batched GEMM; `1` starts on FP16 sequential GEMV. On FP32 VRAM OOM with half
+support, Juno retries once at microbatch 1; further OOM under `auto` falls back to CPU
+(`gpu` fails closed). JFR `trainDevice` records the resolved label (`cpu` / `cuda` / `rocm`).
 Weight decay is decoupled AdamW on A only; B is never decayed. LoRA+ scales B's learning rate
 by `--lora-plus-ratio` (default `1.0`). Train-only deterministic dropout may mask the LoRA
 branch input; inference and validation never apply dropout. With `--lora-validation-split`
@@ -270,10 +273,12 @@ positions. This avoids O(seqLen^2) backward work with negligible effect on LoRA 
 
 **Frozen weights in backward.** When a GPU backend is active and resident weights fit,
 `LoraTrainableHandler`, `Phi3LoraTrainableHandler`, and `Qwen3LoraTrainableHandler` reuse
-device matrices (via shared `LoraResidentWeights`) for forward `W*x` and transpose `W^T*g`
-(`GpuMatVec.sgemvTranspose`). On LLaMA/Qwen2 with default microbatch 8, training uploads
-**FP32** resident weights and uses `GpuBlasOps` (`cublasSgemm_v2` / `rocblas_sgemm`) to
-microbatch frozen linears across token positions; adapters and Adam stay on the host.
+device matrices (via shared `LoraResidentWeights` / `LoraResidentUpload`) for forward `W*x`
+and transpose `W^T*g` (`GpuMatVec.sgemvTranspose`). On LLaMA/Qwen2 with default
+`--lora-microbatch 8`, training uploads **FP32** resident weights and uses `GpuBlasOps`
+(`cublasSgemm_v2` / `rocblas_sgemm`) to microbatch frozen linears across token positions;
+adapters and Adam stay on the host. VRAM-tight cards (e.g. Phi-3.5 on ~8 GB) can pass
+`--lora-microbatch 1` for FP16, or rely on auto-fallback (FP32 → FP16 → CPU under `auto`).
 Phi-3 uploads **physical** fused QKV / gate-up tensors; Qwen3 preserves `qDim` vs
 `hiddenDim` and keeps per-head Q/K RMSNorm on host. Otherwise the transpose matVec
 dequantizes frozen weights one row at a time on CPU: O(hiddenDim) peak extra allocation

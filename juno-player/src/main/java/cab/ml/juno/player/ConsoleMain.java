@@ -187,6 +187,7 @@ public final class ConsoleMain {
 	private static int loraChunkTokens = LoraCorpusLimit.DEFAULT_CHUNK_TOKENS;
 	private static int loraMaxTrainTokens = 0;
 	private static String loraTrainDevice = cab.ml.juno.node.LoraTrainDevice.AUTO;
+	private static int loraMicrobatch = cab.ml.juno.node.LoraMicrobatch.DEFAULT;
 	/** Resolved after handler open: cpu|cuda|rocm (for JFR identity). */
 	private static String loraResolvedTrainDevice = "cpu";
 	private static LlamaConfig loraModelConfig; // set in runLoraRepl for /reset
@@ -225,6 +226,7 @@ public final class ConsoleMain {
 		o.trainDevice = loraResolvedTrainDevice != null && !loraResolvedTrainDevice.isBlank()
 				? loraResolvedTrainDevice
 				: loraTrainDevice;
+		o.microbatch = loraMicrobatch;
 		return o.toTrainingConfig();
 	}
 
@@ -322,6 +324,7 @@ public final class ConsoleMain {
 		loraChunkTokens = env.chunkTokens;
 		loraMaxTrainTokens = env.maxTrainTokens;
 		loraTrainDevice = env.trainDevice;
+		loraMicrobatch = env.microbatch;
 	}
 
 	private static void parseArgs(String[] args) {
@@ -528,6 +531,10 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					loraTrainDevice = cab.ml.juno.node.LoraTrainDevice.normalize(args[++i]);
 				break;
+			case "--lora-microbatch":
+				if (i + 1 < args.length)
+					loraMicrobatch = cab.ml.juno.node.LoraMicrobatch.normalize(args[++i]);
+				break;
 			// ─────────────────────────────────────────────────────────────────
 			case "--verbose":
 			case "-v":
@@ -623,6 +630,7 @@ public final class ConsoleMain {
 		System.out.println("  --lora-chunk-tokens N     Truncated-BPTT window (default: 32; recommend 128 for /train-file)");
 		System.out.println("  --lora-max-train-tokens N Cap supervised tokens per train; 0=unlimited (default: 0)");
 		System.out.println("  --lora-train-device M    auto|gpu|cpu (default: auto; gpu fails closed if unavailable)");
+		System.out.println("  --lora-microbatch N     Frozen GEMM width 1..128 (default: 8; 1=FP16 sequential)");
 		System.out.println();
 		System.out.println("Other:");
 		System.out.println("  --health                   Start the standalone health-monitor HTTP server");
@@ -711,11 +719,13 @@ public final class ConsoleMain {
 		ShardContext ctx = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 
 		print(Color.DIM + "  Loading model weights…" + Color.RESET);
+		cab.ml.juno.node.LoraMicrobatch.apply(loraMicrobatch);
 		cab.ml.juno.node.MatVec loraBackend = cab.ml.juno.node.LoraTrainDevice.selectBackend(loraTrainDevice);
 		loraResolvedTrainDevice = cab.ml.juno.node.LoraTrainDevice.labelFor(loraBackend);
 		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(Path.of(modelPath), ctx, adapters, loraBackend);
 		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET);
-		print(Color.DIM + "  train-device=" + loraTrainDevice + " → " + loraResolvedTrainDevice + Color.RESET + "\n");
+		print(Color.DIM + "  train-device=" + loraTrainDevice + " → " + loraResolvedTrainDevice
+				+ "  microbatch=" + cab.ml.juno.node.LoraMicrobatch.current() + Color.RESET + "\n");
 
 		if (verbose) {
 			String detectedModelType = ChatModelType.fromPath(modelPath);

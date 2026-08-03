@@ -1,5 +1,21 @@
 ## Status
 
+**Session 49** — LoRA Tier 11 (complete): `--lora-microbatch` CLI/env + VRAM OOM auto-fallback.
+
+### LoRA microbatch CLI and VRAM ladder (Tier 11)
+
+- `LoraMicrobatch` — `--lora-microbatch N` / `LORA_MICROBATCH` (default 8, range 1..128);
+  applies `juno.lora.microbatch` before resident upload (no `JAVA_TOOL_OPTIONS` required).
+- `LoraResidentUpload` — on FP32 microbatch VRAM OOM with half support: close, set
+  microbatch=1, retry FP16 once; further OOM uses existing auto→CPU / gpu fail-closed policy.
+- Wired through `LoraCliOptions`, `LoraTrainingConfig`, `ConsoleMain`, `LoraTrainer`,
+  `scripts/run.sh` / `run.bat`, and all three LoRA training handlers.
+- Docs: `docs/LoRA.md`, `docs/howto.md`, `docs/performance.md`, `docs/agent-arch.txt`.
+
+---
+
+## Status
+
 **Session 48** — LoRA Tier 9 (complete): microbatch GEMM + published GPU speed gates.
 
 ### LoRA GPU microbatch and product gates (Tier 9)
