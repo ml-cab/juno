@@ -719,13 +719,21 @@ public final class ConsoleMain {
 		ShardContext ctx = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 
 		print(Color.DIM + "  Loading model weights…" + Color.RESET);
+		cab.ml.juno.node.LoraTrainNotices.clear();
 		cab.ml.juno.node.LoraMicrobatch.apply(loraMicrobatch);
 		cab.ml.juno.node.MatVec loraBackend = cab.ml.juno.node.LoraTrainDevice.selectBackend(loraTrainDevice);
 		loraResolvedTrainDevice = cab.ml.juno.node.LoraTrainDevice.labelFor(loraBackend);
+		if (cab.ml.juno.node.LoraTrainDevice.AUTO.equals(loraTrainDevice)
+				&& "cpu".equals(loraResolvedTrainDevice))
+			cab.ml.juno.node.LoraTrainNotices.add(autoCpuFallbackNotice());
 		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(Path.of(modelPath), ctx, adapters, loraBackend);
 		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET);
-		print(Color.DIM + "  train-device=" + loraTrainDevice + " → " + loraResolvedTrainDevice
-				+ "  microbatch=" + cab.ml.juno.node.LoraMicrobatch.current() + Color.RESET + "\n");
+		print(Color.DIM + "  " + formatLoraTrainStatus(loraTrainDevice, loraResolvedTrainDevice,
+				cab.ml.juno.node.LoraMicrobatch.current()) + Color.RESET);
+		for (String notice : cab.ml.juno.node.LoraTrainNotices.drain()) {
+			print(Color.YELLOW + "  ⚠ " + notice + Color.RESET);
+		}
+		print("");
 
 		if (verbose) {
 			String detectedModelType = ChatModelType.fromPath(modelPath);
@@ -1321,6 +1329,32 @@ public final class ConsoleMain {
 		String stem = dot > 0 ? name.substring(0, dot) : name;
 		Path parent = p.getParent();
 		return (parent != null ? parent.resolve(stem) : Path.of(stem)) + ".lora";
+	}
+
+	/** Plain-language LoRA train device / microbatch status after weight load. */
+	static String formatLoraTrainStatus(String requested, String resolved, int microbatch) {
+		String deviceLabel = switch (resolved) {
+		case "cuda" -> "CUDA";
+		case "rocm" -> "ROCm";
+		default -> "CPU";
+		};
+		String autoNote = cab.ml.juno.node.LoraTrainDevice.AUTO.equals(requested) ? " (auto-selected)" : "";
+		return "Training on " + deviceLabel + autoNote + " · microbatch size " + microbatch;
+	}
+
+	/** Why {@code --lora-train-device=auto} resolved to CPU, plus the speed consequence. */
+	private static String autoCpuFallbackNotice() {
+		if (!useGpu)
+			return cab.ml.juno.node.LoraTrainNotices.AUTO_CPU_DISABLED;
+		boolean gpuAvailable = CudaAvailability.isAvailable() || RocmAvailability.isAvailable();
+		if (!gpuAvailable)
+			return cab.ml.juno.node.LoraTrainNotices.AUTO_CPU_UNAVAILABLE;
+		int dev = Math.max(0, Integer.getInteger("juno.gpu.device", Integer.getInteger("juno.cuda.device", 0)));
+		int devCount = CudaAvailability.isAvailable() ? CudaAvailability.deviceCount()
+				: RocmAvailability.deviceCount();
+		if (dev >= devCount)
+			return cab.ml.juno.node.LoraTrainNotices.AUTO_CPU_BAD_DEVICE;
+		return cab.ml.juno.node.LoraTrainNotices.AUTO_CPU_UNAVAILABLE;
 	}
 
 	// ── JFR local mode ────────────────────────────────────────────────────────

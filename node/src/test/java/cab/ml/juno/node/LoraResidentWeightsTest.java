@@ -20,10 +20,12 @@ class LoraResidentWeightsTest {
 	@BeforeEach
 	void saveDevice() {
 		originalDevice = System.getProperty("juno.lora.train.device");
+		LoraTrainNotices.clear();
 	}
 
 	@AfterEach
 	void restoreDevice() {
+		LoraTrainNotices.clear();
 		if (originalDevice == null)
 			System.clearProperty("juno.lora.train.device");
 		else
@@ -103,6 +105,7 @@ class LoraResidentWeightsTest {
 				() -> closed.set(true));
 		assertThat(ok).isTrue();
 		assertThat(closed).isTrue();
+		assertThat(LoraTrainNotices.drain()).containsExactly(LoraTrainNotices.CPU_RESIDENT);
 	}
 
 	@Test
@@ -118,6 +121,7 @@ class LoraResidentWeightsTest {
 				.hasMessageContaining("--lora-train-device=gpu")
 				.hasMessageContaining("VRAM");
 		assertThat(closed).isTrue();
+		assertThat(LoraTrainNotices.drain()).isEmpty();
 	}
 
 	@Test

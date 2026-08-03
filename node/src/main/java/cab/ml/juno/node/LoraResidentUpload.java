@@ -53,6 +53,7 @@ final class LoraResidentUpload {
 				closer.run();
 				log.warning("LoRA: insufficient GPU VRAM for FP32 microbatch residency (" + ex.getMessage()
 						+ "). Retrying with --lora-microbatch 1 (FP16 GEMV).");
+				LoraTrainNotices.add(LoraTrainNotices.FP16_MICROBATCH);
 				LoraMicrobatch.apply(1);
 				try {
 					uploadAttempt.run();

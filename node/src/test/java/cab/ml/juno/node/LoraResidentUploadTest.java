@@ -45,10 +45,12 @@ class LoraResidentUploadTest {
 		prevDevice = System.getProperty("juno.lora.train.device");
 		LoraMicrobatch.apply(8);
 		System.setProperty("juno.lora.train.device", LoraTrainDevice.AUTO);
+		LoraTrainNotices.clear();
 	}
 
 	@AfterEach
 	void restore() {
+		LoraTrainNotices.clear();
 		if (prevMicrobatch == null)
 			System.clearProperty(LoraMicrobatch.PROPERTY);
 		else
@@ -71,6 +73,7 @@ class LoraResidentUploadTest {
 		assertThat(attempts.get()).isEqualTo(2);
 		assertThat(closes).containsExactly("close");
 		assertThat(LoraMicrobatch.current()).isEqualTo(1);
+		assertThat(LoraTrainNotices.drain()).containsExactly(LoraTrainNotices.FP16_MICROBATCH);
 	}
 
 	@Test
@@ -85,6 +88,8 @@ class LoraResidentUploadTest {
 		assertThat(attempts.get()).isEqualTo(2);
 		assertThat(closes.get()).isEqualTo(2); // retry closer + recover closer
 		assertThat(LoraMicrobatch.current()).isEqualTo(1);
+		assertThat(LoraTrainNotices.drain()).containsExactly(
+				LoraTrainNotices.FP16_MICROBATCH, LoraTrainNotices.CPU_RESIDENT);
 	}
 
 	@Test
@@ -96,6 +101,7 @@ class LoraResidentUploadTest {
 			throw new IllegalStateException("cudaMalloc failed: out of memory");
 		})).isInstanceOf(IllegalStateException.class).hasMessageContaining("--lora-train-device=gpu");
 		assertThat(LoraMicrobatch.current()).isEqualTo(1);
+		assertThat(LoraTrainNotices.drain()).containsExactly(LoraTrainNotices.FP16_MICROBATCH);
 	}
 
 	@Test
@@ -109,6 +115,7 @@ class LoraResidentUploadTest {
 			throw new IllegalStateException("cudaMalloc failed: out of memory");
 		});
 		assertThat(attempts.get()).isEqualTo(1);
+		assertThat(LoraTrainNotices.drain()).containsExactly(LoraTrainNotices.CPU_RESIDENT);
 	}
 
 	@Test
@@ -122,6 +129,7 @@ class LoraResidentUploadTest {
 		});
 		assertThat(attempts.get()).isEqualTo(1);
 		assertThat(LoraMicrobatch.current()).isEqualTo(8);
+		assertThat(LoraTrainNotices.drain()).containsExactly(LoraTrainNotices.CPU_RESIDENT);
 	}
 
 	@Test
@@ -135,5 +143,6 @@ class LoraResidentUploadTest {
 		})).isInstanceOf(IllegalStateException.class).hasMessageContaining("cublasCreate");
 		assertThat(attempts.get()).isEqualTo(1);
 		assertThat(LoraMicrobatch.current()).isEqualTo(8);
+		assertThat(LoraTrainNotices.drain()).isEmpty();
 	}
 }

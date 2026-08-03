@@ -150,4 +150,17 @@ class LoraCliOptionsTest {
 		assertThat(c.trainDevice()).isEqualTo("auto");
 		assertThat(c.microbatch()).isEqualTo(8);
 	}
+
+	@Test
+	@DisplayName("formats friendly LoRA train status line")
+	void formats_lora_train_status() {
+		assertThat(ConsoleMain.formatLoraTrainStatus("auto", "cuda", 1))
+				.isEqualTo("Training on CUDA (auto-selected) · microbatch size 1");
+		assertThat(ConsoleMain.formatLoraTrainStatus("gpu", "cuda", 8))
+				.isEqualTo("Training on CUDA · microbatch size 8");
+		assertThat(ConsoleMain.formatLoraTrainStatus("cpu", "cpu", 8))
+				.isEqualTo("Training on CPU · microbatch size 8");
+		assertThat(ConsoleMain.formatLoraTrainStatus("auto", "rocm", 8))
+				.isEqualTo("Training on ROCm (auto-selected) · microbatch size 8");
+	}
 }

@@ -95,6 +95,7 @@ final class LoraResidentWeights {
 		}
 		log.warning("LoRA: insufficient GPU VRAM for resident weights (" + ex.getMessage()
 				+ "). Using CPU quantised matmul.");
+		LoraTrainNotices.add(LoraTrainNotices.CPU_RESIDENT);
 		return true;
 	}
 
