@@ -270,38 +270,48 @@ Automated AWS runs update the matrix and HTML after each cell; `--parse` is only
 
 ## LoRA training GPU baseline (Tier 4 / 9 / 10)
 
-Status: **resident forward + transpose** on LLaMA-family, Qwen2, Phi-3 (physical fused),
-and dense Qwen3 via `LoraResidentWeights` / `--lora-train-device`. Microbatch and published
-2× / 1.5× speed gates remain open (Tier 9) — do not claim production “GPU LoRA training”
-until those numbers are recorded below.
+Status: **production GPU LoRA training** on LLaMA-family / Qwen2 via resident FP32 forward +
+transpose + microbatched GEMM (`GpuBlasOps` / `DeviceActivationBatch`, default
+`juno.lora.microbatch=8`). Path is **frozen batched GPU + host adapters / Adam** (device
+adapters deferred — host adapter intensity is not the bottleneck after microbatch).
+Phi-3 / dense Qwen3 share `LoraResidentWeights` residency (Tier 10); microbatch wiring is
+LLaMA/Qwen2-first.
 
 DoRA exact norm refresh is correctness-complete but **not** production-perf-gated; prefer
 LoRA/rsLoRA for large all-linear jobs until a refresh time/heap budget is published here.
 
-Reference configuration (to fill when Milestone 1 gates are measured):
+### Measured gates (TinyLlama Q4_K_M, qv, rank 8, seq 64, microbatch 8)
+
+Hardware: NVIDIA GeForce GTX 1080 (8.5 GB), CUDA 12 / Panama FFI.
+Reproduce: `mvn test -Dgroups=gpu -pl node -Dtest=LoraTrainableHandlerGpuBackwardTest#speed_gates_qv`
+
+| Path | e2e ms / step | backward ms | Speedup vs CPU |
+|------|---------------|-------------|----------------|
+| CPU quantized (oracle) | ~47907 | ~26663 | 1.0× |
+| GPU FP32 resident + microbatch 8 | ~3433 | ~2457 | **e2e 14.0×**, **backward 10.9×** |
+
+Gates: backward ≥ 2× and e2e ≥ 1.5× — **passed**. CPU↔GPU loss / A/B grad parity:
+`LoraTrainableHandlerGpuBackwardTest#cpu_gpu_grad_parity_qv`.
+
+Reference configuration:
 
 | Item | Value |
 |------|-------|
 | Model | TinyLlama Q4_K_M |
-| Sequence length | 64 / 128 |
+| Sequence length | 64 (gate); 128 recommended for `/train-file` |
 | Rank | 8 |
-| Targets | `qv` and `all-linear` |
-| Warm-up / measured updates | 10 / ≥20 |
-| Hardware | NVIDIA (g4dn) and AMD reference |
+| Targets | `qv` (gate); `all-linear` increases VRAM |
+| Microbatch | 8 (`-Djuno.lora.microbatch=N`, `1` = sequential GEMV) |
+| Warm-up / measured | 1 warm-up + 3 measured updates in the gated test |
+| Hardware | NVIDIA GTX 1080 (above); AMD ROCm adjoint via `-Dgroups=rocm` |
 
-Record per path (CPU; GPU-forward/CPU-backward; GPU forward+transpose when ready):
+`transferMs` remains 0 until H2D/D2H counters are wired. Peak VRAM for TinyLlama qv FP32
+resident upload fits in ~8 GB class cards; all-linear needs more headroom.
 
-- tokens/s
-- `forwardMs`, `frozenForwardMs`, `attentionNonlinearMs`
-- `backwardMs`, `frozenTransposeBackwardMs`, `adapterBackwardMs`, `transferMs`
-- `optimizerMs`
-- H2D/D2H bytes (when transfer counters are wired)
-- peak heap and peak VRAM
+JFR labels for resident transpose:
 
-JFR labels for resident transpose (not yet advertised as production training):
-
-- `cuda-resident-transpose` / `cuda-resident-fp16-transpose`
+- `cuda-resident-transpose` / `cuda-resident-fp16-transpose` (FP16 when microbatch=1)
 - `rocm-resident-transpose` / `rocm-resident-fp16-transpose`
 
 Adjoint gate: `dot(W*x, g) == dot(x, W^T*g)` via `CudaMatVecTransposeTest` /
-`RocmMatVecTransposeTest` (`-Dgroups=gpu` / `-Dgroups=rocm`).
+`RocmMatVecTransposeTest`. Microbatch GEMM parity: `GpuBlasOpsTest`.

@@ -108,7 +108,8 @@ public final class CudaMatVec implements GpuMatVec {
         this.cuda = CudaBindings.instance();
     }
 
-    GpuContext gpuContext() { return ctx; }
+    @Override
+    public GpuContext gpuContext() { return ctx; }
 
     // ── Upload helpers (for LlamaTransformerHandler / LoraTrainableHandler) ──
 

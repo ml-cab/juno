@@ -37,6 +37,9 @@ package cab.ml.juno.node;
  */
 sealed interface GpuMatVec extends MatVec permits CudaMatVec, RocmMatVec {
 
+    /** Open {@link GpuContext} that owns this backend's BLAS handle. */
+    GpuContext gpuContext();
+
     /**
      * Uploads a row-major FP32 weight matrix to device memory, held resident
      * across subsequent {@link #sgemv(DeviceFloatMatrix, float[])} calls.

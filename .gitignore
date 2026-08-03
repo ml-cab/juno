@@ -11,3 +11,4 @@ dist/
 .release-gpg/
 models/*
 *.gguf
+.cursor/

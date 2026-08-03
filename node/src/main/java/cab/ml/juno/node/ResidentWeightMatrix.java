@@ -21,6 +21,9 @@ package cab.ml.juno.node;
  * <p>Holds either FP16 or FP32 device storage (exactly one). Used by
  * {@link LoraTrainableHandler} for both forward {@code W*x} and transpose
  * backward {@code W^T*g} without duplicating half/float call sites.
+ *
+ * <p>Microbatched GEMM ({@link #sgemmBatch} / {@link #sgemmTransposeBatch})
+ * requires FP32 residency; FP16 falls back to sequential GEMV.
  */
 final class ResidentWeightMatrix implements AutoCloseable {
 
@@ -51,6 +54,40 @@ final class ResidentWeightMatrix implements AutoCloseable {
 	float[] sgemvTranspose(float[] g) {
 		ensureOpen();
 		return half != null ? gpu.sgemvTranspose(half, g) : gpu.sgemvTranspose(fp32, g);
+	}
+
+	/** True when microbatched FP32 GEMM is available (not FP16-resident). */
+	boolean supportsBatchedSgemm() {
+		return fp32 != null;
+	}
+
+	/**
+	 * Microbatched forward {@code Y[b] = W * X[b]}. Uses {@link GpuBlasOps} when
+	 * FP32-resident and {@code batch > 1}; otherwise sequential {@link #sgemv}.
+	 */
+	float[][] sgemmBatch(GpuBlasOps ops, float[][] X, int batch) {
+		ensureOpen();
+		if (fp32 != null && ops != null && batch > 1)
+			return ops.forward(fp32, X, batch);
+		float[][] Y = new float[batch][];
+		for (int b = 0; b < batch; b++)
+			Y[b] = sgemv(X[b]);
+		return Y;
+	}
+
+	/**
+	 * Microbatched transpose {@code dX[b] = W^T * G[b]}. Uses {@link GpuBlasOps}
+	 * when FP32-resident and {@code batch > 1}; otherwise sequential
+	 * {@link #sgemvTranspose}.
+	 */
+	float[][] sgemmTransposeBatch(GpuBlasOps ops, float[][] G, int batch) {
+		ensureOpen();
+		if (fp32 != null && ops != null && batch > 1)
+			return ops.transpose(fp32, G, batch);
+		float[][] dX = new float[batch][];
+		for (int b = 0; b < batch; b++)
+			dX[b] = sgemvTranspose(G[b]);
+		return dX;
 	}
 
 	@Override

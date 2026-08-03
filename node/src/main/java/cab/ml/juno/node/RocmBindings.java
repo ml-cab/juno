@@ -123,6 +123,7 @@ final class RocmBindings implements GpuBindings {
     private final MethodHandle rocblasSetStream;
     private final MethodHandle rocblasSetPointerMode;
     private final MethodHandle rocblasSgemv;
+    private final MethodHandle rocblasSgemm;
     private final MethodHandle rocblasHSSgemvStridedBatched;
     // Probed at construction: false on gfx1010/gfx1011 (Navi12/g4ad) where the
     // rocblas_hssgemv_strided_batched GPU kernel code object is absent.
@@ -175,6 +176,13 @@ final class RocmBindings implements GpuBindings {
         rocblasSgemv             = GpuBindings.bind(l, rb, "rocblas_sgemv",
             FunctionDescriptor.of(JAVA_INT,
                 ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT,
+                ADDRESS, ADDRESS, JAVA_INT,
+                ADDRESS, JAVA_INT,
+                ADDRESS, ADDRESS, JAVA_INT));
+        rocblasSgemm             = GpuBindings.bind(l, rb, "rocblas_sgemm",
+            FunctionDescriptor.of(JAVA_INT,
+                ADDRESS, JAVA_INT, JAVA_INT,
+                JAVA_INT, JAVA_INT, JAVA_INT,
                 ADDRESS, ADDRESS, JAVA_INT,
                 ADDRESS, JAVA_INT,
                 ADDRESS, ADDRESS, JAVA_INT));
@@ -275,6 +283,7 @@ final class RocmBindings implements GpuBindings {
     @Override public MethodHandle blasSetStream()               { return rocblasSetStream; }
     @Override public MethodHandle blasSetPointerMode()          { return rocblasSetPointerMode; }
     @Override public MethodHandle blasSgemv()                   { return rocblasSgemv; }
+    @Override public MethodHandle blasSgemm()                   { return rocblasSgemm; }
     @Override public MethodHandle blasHSSgemvStridedBatched()   { return rocblasHSSgemvStridedBatched; }
     @Override public boolean supportsHSSgemv()                  { return hssgemvSupported; }
     @Override public int    opNoTranspose()     { return 111; } // rocblas_operation_none

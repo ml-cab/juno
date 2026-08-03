@@ -31,6 +31,25 @@ class LoraResidentWeightsTest {
 	}
 
 	@Test
+	@DisplayName("microbatchSize defaults to 8 and rejects values below 1")
+	void microbatchSize_default() {
+		String prev = System.getProperty("juno.lora.microbatch");
+		try {
+			System.clearProperty("juno.lora.microbatch");
+			assertThat(LoraResidentWeights.microbatchSize()).isEqualTo(8);
+			System.setProperty("juno.lora.microbatch", "1");
+			assertThat(LoraResidentWeights.microbatchSize()).isEqualTo(1);
+			System.setProperty("juno.lora.microbatch", "0");
+			assertThat(LoraResidentWeights.microbatchSize()).isEqualTo(1);
+		} finally {
+			if (prev == null)
+				System.clearProperty("juno.lora.microbatch");
+			else
+				System.setProperty("juno.lora.microbatch", prev);
+		}
+	}
+
+	@Test
 	@DisplayName("closeArray is null-safe and closes non-null entries")
 	void closeArray_nullSafe() {
 		LoraResidentWeights.closeArray(null);

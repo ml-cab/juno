@@ -103,7 +103,9 @@ For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO
 means try GPU (CUDA first, then ROCm) when available. Set `JUNO_USE_GPU=false` or pass `--cpu`
 to force CPU under `--lora-train-device=auto` (default). Use `--lora-train-device=gpu` to fail
 closed when CUDA/ROCm is unavailable, or `--lora-train-device=cpu` to force CPU MatVec for LoRA
-regardless of `--gpu`. Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
+regardless of `--gpu`. With GPU LoRA, default microbatch 8 (`-Djuno.lora.microbatch=N`) uses FP32
+resident GEMM for frozen linears; set `1` for sequential GEMV (optional FP16 residency).
+Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
 safety. Override the vendor with `-Djuno.gpu.backend=cuda|rocm|auto` (default: `auto`).
 
 ---

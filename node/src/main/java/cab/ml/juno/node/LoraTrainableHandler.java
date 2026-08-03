@@ -133,6 +133,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private ResidentWeightMatrix[] wUpDev;
 	private ResidentWeightMatrix[] wDownDev;
 	private ResidentWeightMatrix outputProjDev;
+	/** Tier-9 microbatched GEMM scratch; non-null when resident FP32 weights are uploaded. */
+	private GpuBlasOps blasOps;
 
 	/** Nanosecond accumulators for Tier-9 train-step timing subsets (reset per chunk). */
 	private long accFrozenForwardNs;
@@ -261,9 +263,12 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	}
 
 	private void uploadResidentWeights(GpuMatVec gpu, int L) {
-		boolean half = gpu.supportsHalfResident();
+		boolean microbatch = LoraResidentWeights.microbatchSize() > 1;
+		boolean half = !microbatch && gpu.supportsHalfResident();
 		log.info("LoRA handler: uploading projection weights to GPU ("
-				+ (half ? "FP16" : "FP32") + ")…");
+				+ (half ? "FP16" : "FP32")
+				+ (microbatch ? ", microbatch=" + LoraResidentWeights.microbatchSize() : "")
+				+ ")…");
 		int H = cfg.hiddenDim();
 		int KV = cfg.kvDim();
 		int I = cfg.intermediateSize();
@@ -276,6 +281,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		ResidentWeightMatrix[] wUpD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] wDownD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] outHolder = new ResidentWeightMatrix[1];
+		GpuBlasOps ops = null;
 		try {
 			for (int li = 0; li < L; li++) {
 				wqD[li] = LoraResidentWeights.uploadQuant(gpu, wq[li], H, H);
@@ -288,6 +294,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			}
 			if (outputProj != null)
 				outHolder[0] = LoraResidentWeights.uploadQuant(gpu, outputProj, V, H);
+			if (microbatch)
+				ops = GpuBlasOps.of(gpu);
 			this.wqDev = wqD;
 			this.wkDev = wkD;
 			this.wvDev = wvD;
@@ -296,8 +304,11 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			this.wUpDev = wUpD;
 			this.wDownDev = wDownD;
 			this.outputProjDev = outHolder[0];
+			this.blasOps = ops;
 			log.info("LoRA handler: GPU weight upload complete (" + (half ? "FP16" : "FP32") + ").");
 		} catch (IllegalStateException ex) {
+			if (ops != null)
+				ops.close();
 			LoraResidentWeights.tryRecoverFromUploadOom(ex, log, () -> {
 				LoraResidentWeights.closeArray(wqD);
 				LoraResidentWeights.closeArray(wkD);
@@ -321,6 +332,16 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		return y;
 	}
 
+	private float[][] matVecBatchLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[][] X,
+			int batch, int rows, int cols) {
+		if (!timingActive)
+			return LoraResidentWeights.matVecBatch(quant, dev, blasOps, X, batch, rows, cols);
+		long t0 = System.nanoTime();
+		float[][] y = LoraResidentWeights.matVecBatch(quant, dev, blasOps, X, batch, rows, cols);
+		accFrozenForwardNs += System.nanoTime() - t0;
+		return y;
+	}
+
 	/**
 	 * Frozen transpose {@code W^T * g}: uses resident GPU matrices when uploaded,
 	 * otherwise the quantized CPU path.
@@ -331,6 +352,16 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			return LoraResidentWeights.transposedMatVec(quant, dev, g, rows, cols);
 		long t0 = System.nanoTime();
 		float[] y = LoraResidentWeights.transposedMatVec(quant, dev, g, rows, cols);
+		accFrozenTransposeNs += System.nanoTime() - t0;
+		return y;
+	}
+
+	private float[][] transposedMatVecBatchLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev,
+			float[][] G, int batch, int rows, int cols) {
+		if (!timingActive)
+			return LoraResidentWeights.transposedMatVecBatch(quant, dev, blasOps, G, batch, rows, cols);
+		long t0 = System.nanoTime();
+		float[][] y = LoraResidentWeights.transposedMatVecBatch(quant, dev, blasOps, G, batch, rows, cols);
 		accFrozenTransposeNs += System.nanoTime() - t0;
 		return y;
 	}
@@ -409,6 +440,10 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 
 	@Override
 	public void releaseGpuResources() {
+		if (blasOps != null) {
+			blasOps.close();
+			blasOps = null;
+		}
 		LoraResidentWeights.closeArray(wqDev);
 		LoraResidentWeights.closeArray(wkDev);
 		LoraResidentWeights.closeArray(wvDev);
@@ -483,19 +518,131 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			float[][] vCache = new float[L][T * kvDim];
 
 			long t0 = System.currentTimeMillis();
-			for (int pos = 0; pos < T; pos++) {
-				trainTokenPos = pos;
-				float[] x = embedding(tokens[pos]);
-				for (int li = 0; li < L; li++) {
-					allStates[pos][li] = forwardLayerStore(x, li, pos, kCache[li], vCache[li]);
-					x = computeLayerOutput(allStates[pos][li], li, x);
+			float[][] xCur = new float[T][];
+			for (int pos = 0; pos < T; pos++)
+				xCur[pos] = embedding(tokens[pos]);
+
+			// Per-layer microbatched frozen linears across positions (Tier 9).
+			for (int li = 0; li < L; li++) {
+				int I = cfg.intermediateSize();
+				int Hd = cfg.headDim();
+				int NH = cfg.numHeads();
+				int mb = LoraResidentWeights.microbatchSize();
+				for (int start = 0; start < T; start += mb) {
+					int n = Math.min(mb, T - start);
+					float[][] xNorm1 = new float[n][];
+					for (int i = 0; i < n; i++) {
+						trainTokenPos = start + i;
+						xNorm1[i] = LlamaTransformerHandler.rmsNorm(xCur[start + i], attnNorm[li], cfg.rmsNormEps());
+					}
+					float[][] qB = matVecBatchLayer(wq[li], wqDev != null ? wqDev[li] : null, xNorm1, n, H, H);
+					float[][] kB = matVecBatchLayer(wk[li], wkDev != null ? wkDev[li] : null, xNorm1, n, kvDim, H);
+					float[][] vB = matVecBatchLayer(wv[li], wvDev != null ? wvDev[li] : null, xNorm1, n, kvDim, H);
+
+					float[][] attnOutB = new float[n][];
+					float[][][] attnWB = new float[n][][];
+					float[][] qPostRopeB = new float[n][];
+					for (int i = 0; i < n; i++) {
+						int pos = start + i;
+						trainTokenPos = pos;
+						float[] q = qB[i];
+						float[] k = kB[i];
+						float[] v = vB[i];
+						applyLoraInPlace(q, li, "wq", xNorm1[i]);
+						applyLoraInPlace(k, li, "wk", xNorm1[i]);
+						applyLoraInPlace(v, li, "wv", xNorm1[i]);
+						addBiasInPlace(q, bq, li);
+						addBiasInPlace(k, bk, li);
+						addBiasInPlace(v, bv, li);
+						LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), Hd, cfg.ropeTheta());
+						LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), Hd, cfg.ropeTheta());
+						qPostRopeB[i] = q.clone();
+						System.arraycopy(k, 0, kCache[li], pos * kvDim, kvDim);
+						System.arraycopy(v, 0, vCache[li], pos * kvDim, kvDim);
+
+						int seqLen = pos + 1;
+						float scale = (float) (1.0 / Math.sqrt(Hd));
+						float[] attnOut = new float[H];
+						float[][] attnW = new float[NH][seqLen];
+						float[] scores = new float[seqLen];
+						int gqaR = cfg.gqaRatio();
+						for (int h = 0; h < NH; h++) {
+							int kvHead = h / gqaR;
+							int qBase = h * Hd;
+							int kBase = kvHead * Hd;
+							for (int t = 0; t < seqLen; t++) {
+								float dot = 0f;
+								int kOff = t * kvDim + kBase;
+								for (int d = 0; d < Hd; d++)
+									dot += q[qBase + d] * kCache[li][kOff + d];
+								scores[t] = dot * scale;
+							}
+							float max = Float.NEGATIVE_INFINITY;
+							for (int t = 0; t < seqLen; t++)
+								if (scores[t] > max)
+									max = scores[t];
+							float sum = 0f;
+							for (int t = 0; t < seqLen; t++) {
+								scores[t] = (float) Math.exp(scores[t] - max);
+								sum += scores[t];
+							}
+							for (int t = 0; t < seqLen; t++) {
+								scores[t] /= sum;
+								attnW[h][t] = scores[t];
+							}
+							int outBase = h * Hd;
+							for (int t = 0; t < seqLen; t++) {
+								int vOff = t * kvDim + kBase;
+								float w = scores[t];
+								for (int d = 0; d < Hd; d++)
+									attnOut[outBase + d] += w * vCache[li][vOff + d];
+							}
+						}
+						attnOutB[i] = attnOut;
+						attnWB[i] = attnW;
+					}
+
+					float[][] attnProjB = matVecBatchLayer(wo[li], woDev != null ? woDev[li] : null, attnOutB, n, H, H);
+					float[][] xRes2B = new float[n][];
+					float[][] xNorm2B = new float[n][];
+					for (int i = 0; i < n; i++) {
+						trainTokenPos = start + i;
+						applyLoraInPlace(attnProjB[i], li, "wo", attnOutB[i]);
+						xRes2B[i] = LlamaTransformerHandler.add(xCur[start + i], attnProjB[i]);
+						xNorm2B[i] = LlamaTransformerHandler.rmsNorm(xRes2B[i], ffnNorm[li], cfg.rmsNormEps());
+					}
+					float[][] gateB = matVecBatchLayer(wGate[li], wGateDev != null ? wGateDev[li] : null, xNorm2B, n, I, H);
+					float[][] upB = matVecBatchLayer(wUp[li], wUpDev != null ? wUpDev[li] : null, xNorm2B, n, I, H);
+					float[][] hiddenB = new float[n][];
+					for (int i = 0; i < n; i++) {
+						trainTokenPos = start + i;
+						applyLoraInPlace(gateB[i], li, "wgate", xNorm2B[i]);
+						applyLoraInPlace(upB[i], li, "wup", xNorm2B[i]);
+						float[] hidden = new float[I];
+						for (int j = 0; j < I; j++)
+							hidden[j] = LlamaTransformerHandler.silu(gateB[i][j]) * upB[i][j];
+						hiddenB[i] = hidden;
+					}
+					float[][] ffnOutB = matVecBatchLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, hiddenB, n, H, I);
+					for (int i = 0; i < n; i++) {
+						int pos = start + i;
+						trainTokenPos = pos;
+						applyLoraInPlace(ffnOutB[i], li, "wdown", hiddenB[i]);
+						allStates[pos][li] = new LayerState(xCur[pos].clone(), xNorm1[i], qPostRopeB[i], attnWB[i],
+								attnOutB[i], xRes2B[i], xNorm2B[i], gateB[i], upB[i], hiddenB[i]);
+						xCur[pos] = LlamaTransformerHandler.add(xRes2B[i], ffnOutB[i]);
+					}
 				}
-				if (hasOutputProj) {
-					allXFinal[pos] = x.clone();
-					allXNormFinal[pos] = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
-					float[] logits = matVecLayer(outputProj, outputProjDev, allXNormFinal[pos], cfg.vocabSize(), H);
-					allProbs[pos] = softmaxCopy(logits);
+			}
+
+			if (hasOutputProj) {
+				for (int pos = 0; pos < T; pos++) {
+					allXFinal[pos] = xCur[pos].clone();
+					allXNormFinal[pos] = LlamaTransformerHandler.rmsNorm(xCur[pos], outputNorm, cfg.rmsNormEps());
 				}
+				float[][] logitsB = matVecBatchLayer(outputProj, outputProjDev, allXNormFinal, T, cfg.vocabSize(), H);
+				for (int pos = 0; pos < T; pos++)
+					allProbs[pos] = softmaxCopy(logitsB[pos]);
 			}
 			long forwardMs = System.currentTimeMillis() - t0;
 
@@ -511,25 +658,34 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			}
 
 			long t1 = System.currentTimeMillis();
+			// Collect loss positions for microbatched output transpose.
+			int[] lossPos = new int[predictionCount];
+			int lp = 0;
 			for (int pos = 0; pos < T; pos++) {
 				if (lossMask != null && !lossMask[pos])
 					continue;
-				trainTokenPos = pos;
-				int target = tokens[pos + 1];
-
-				float[] gradX;
-				if (hasOutputProj) {
+				lossPos[lp++] = pos;
+			}
+			float[][] gradXByPos = new float[T][];
+			if (hasOutputProj && predictionCount > 0) {
+				float[][] gradLogitsB = new float[predictionCount][];
+				for (int i = 0; i < predictionCount; i++) {
+					int pos = lossPos[i];
 					float[] gradLogits = allProbs[pos].clone();
-					gradLogits[target] -= 1.0f;
-					// Unnormalized: accumulate summed CE gradients across positions/chunks
-
-					float[] gradXNormFinal = transposedMatVecLayer(outputProj, outputProjDev, gradLogits,
-							cfg.vocabSize(), H);
-					gradX = rmsNormBackward(allXFinal[pos], outputNorm, gradXNormFinal, cfg.rmsNormEps());
-				} else {
-					gradX = new float[H];
+					gradLogits[tokens[pos + 1]] -= 1.0f;
+					gradLogitsB[i] = gradLogits;
 				}
-
+				float[][] gradXNormB = transposedMatVecBatchLayer(outputProj, outputProjDev, gradLogitsB,
+						predictionCount, cfg.vocabSize(), H);
+				for (int i = 0; i < predictionCount; i++) {
+					int pos = lossPos[i];
+					gradXByPos[pos] = rmsNormBackward(allXFinal[pos], outputNorm, gradXNormB[i], cfg.rmsNormEps());
+				}
+			}
+			for (int i = 0; i < predictionCount; i++) {
+				int pos = lossPos[i];
+				trainTokenPos = pos;
+				float[] gradX = hasOutputProj ? gradXByPos[pos] : new float[H];
 				for (int li = L - 1; li >= 0; li--) {
 					gradX = backwardLayer(gradX, li, pos, allStates[pos][li], kCache[li], vCache[li], pos + 1);
 				}

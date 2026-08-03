@@ -8,6 +8,7 @@ Module dependency (excerpt):
         (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,
         CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
         DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
+        GpuBlasOps, DeviceActivationBatch, CpuFrozenBatchOps,
         LoraTrainableHandler, Qwen2LoraTrainableHandler, Phi3LoraTrainableHandler,
         Qwen3LoraTrainableHandler, LoraTrainingHandlerFactory, LoraModelLayout,
         LoraResidentWeights, ResidentWeightMatrix, LoraMerge, LoraInitializer,
@@ -54,6 +55,9 @@ GPU FFI (node module — Panama project, JEP 454):
         for forward and transpose backward without dual call-site arrays.
   LoraResidentWeights — shared upload / close / VRAM-OOM fallback / matVec routing for
         LLaMA, Qwen2, Phi-3 (physical fused), and dense Qwen3 LoRA handlers.
+        microbatchSize()>1 prefers FP32 upload for GpuBlasOps GEMM.
+  GpuBlasOps / DeviceActivationBatch — FP32 cublasSgemm_v2 / rocblas_sgemm microbatch
+        for frozen LoRA forward/transpose (Tier 9); CpuFrozenBatchOps is the host oracle.
   CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16);
         forward uses OP_T; resident transpose backward uses OP_N on the same buffer;
         per-thread CUDA stream + async H2D/D2H; synchronized on GpuContext lock.
@@ -77,6 +81,8 @@ LoRA GPU defaults:
   ForwardPassHandlerLoader.selectLoraBackend() — unset defaults to true when any GPU (CUDA or ROCm) exists.
   LoraTrainDevice — --lora-train-device auto|gpu|cpu (LORA_TRAIN_DEVICE); gpu fails closed; cpu forces CpuMatVec.
   LoraStepTiming — Tier-9 subset fields on juno.LoraTrainStep (frozen forward/transpose, adapter backward, residual attention/nonlinear).
+  juno.lora.microbatch — default 8; FP32 resident GEMM across positions; 1 = sequential GEMV / optional FP16.
+  Production path: frozen batched GPU + host adapters/Adam (see docs/performance.md TinyLlama gates).
   LoraTrainableHandler.load(path, ctx, adapters) uses selectLoraBackend() / LoraTrainDevice.selectBackend.
   ForwardPassHandlerLoader.load(..., backend, adapters) passes backend into LoraTrainableHandler.
   GpuContext.selectBindings() — CUDA first, then ROCm; -Djuno.gpu.backend overrides.

@@ -6,14 +6,15 @@ This file is the authoritative execution order for the LoRA improvement plans:
 
 1. `PLAN-LoRA-Tier1.md` — correctness, projection coverage, accumulation, clipping. **Done.**
 2. `PLAN-LoRA-Tier2.md` — training orchestration, AdamW, scheduling, dropout, validation, LoRA+. **Done.**
-3. `PLAN-LoRA-Tier3.md` — adapter metadata, Kaiming initialization, rsLoRA, DoRA. **Mostly done** (DoRA refresh perf gate open; see Tier 10).
-4. `PLAN-LoRA-Tier4.md` — GPU training design: resident transpose, batching, adapter residency. **Primitives started**; finish via Tier 9.
+3. `PLAN-LoRA-Tier3.md` — adapter metadata, Kaiming initialization, rsLoRA, DoRA. **Done** (DoRA correctness-only; not production-perf-gated).
+4. `PLAN-LoRA-Tier4.md` — GPU training design: resident transpose, batching, adapter residency. **Done** (via Tier 9).
 5. `PLAN-LoRA-Tier5.md` — QA-LoRA research and quantization-preserving merge. **Code done**; research matrix deferred.
-6. `PLAN-LoRA-Tier6.md` — multi-architecture LoRA training: Qwen2/2.5, Phi-3, dense Qwen3. **CPU mostly done**; live smokes / GPU parity via Tier 10.
-7. `PLAN-LoRA-Tier7.md` — JFR metrics for all LoRA adapter modes and operations. **Mostly done**; confirm via Tier 10.
+6. `PLAN-LoRA-Tier6.md` — multi-architecture LoRA training: Qwen2/2.5, Phi-3, dense Qwen3. **Done** (CPU oracle + Tier 10 residency/smokes).
+7. `PLAN-LoRA-Tier7.md` — JFR metrics for all LoRA adapter modes and operations. **Done.**
 8. `PLAN-LoRA-Tier8.md` — `/train-file` scheduling: chunk CLI, corpus caps, document-level units. **Done.**
-9. `PLAN-LoRA-Tier9.md` — GPU LoRA productization and microbatching (complete Tier 4 gates). **In progress** (`--lora-train-device` + timing subsets; microbatch / speed gates open).
-10. `PLAN-LoRA-Tier10.md` — multi-arch GPU residency parity, gated live smokes, DoRA/Tier 7/5 doc gates. **In progress** (shared `LoraResidentWeights` + Phi-3/Qwen3 upload).
+9. `PLAN-LoRA-Tier9.md` — GPU LoRA productization and microbatching (complete Tier 4 gates). **Done.**
+10. `PLAN-LoRA-Tier10.md` — multi-arch GPU residency parity, gated live smokes, DoRA/Tier 7/5 doc gates. **Done.**
+11. `PLAN-LoRA-Tier11.md` — `--lora-microbatch` CLI/env + VRAM OOM auto-fallback (FP32 → FP16 → CPU). **Pending.**
 
 Read and follow `models/CLAUDE.md` before implementing any tier. Each tier is test-first and must pass its gate before the next dependent tier begins.
 
@@ -233,20 +234,23 @@ Exit only when the architecture GPU matrix and documentation gates in `PLAN-LoRA
 
 ## Recommended execution
 
-Historical (complete or in progress):
+Historical (complete):
 
 1. Tier 1 completely — CPU reference correctness.
 2. Tier 2, including LoRA+.
-3. Tier 3: rsLoRA/Kaiming/checkpoint v2, then DoRA (perf gate left to Tier 10).
+3. Tier 3: rsLoRA/Kaiming/checkpoint v2, then DoRA (correctness-only; not production-perf-gated).
 4. Tier 6 architecture handlers on the CPU oracle.
-5. Tier 4 primitives (resident transpose) started; Tier 5 code; Tier 7 mostly done.
+5. Tier 4 primitives (resident transpose); Tier 5 code; Tier 7 complete.
+6. Tier 8 train-file scheduling; Tier 10 multi-arch residency + live smokes.
+7. Tier 9 GPU productization: `--lora-train-device`, microbatch GEMM, parity IT, published speed gates.
 
-Forward (agent execution order):
+Forward:
 
-1. **Tier 9** — finish Tier 4 productization and microbatching (benefit from Tier 8 longer chunks).
-2. **Tier 10** — Phi-3/Qwen3 GPU residency, live smokes, DoRA/Tier 7/5 doc gates.
+1. **Tier 11** — `--lora-microbatch` CLI/env + VRAM OOM auto-fallback (FP32 → FP16 → CPU under `auto`).
 
-Tier 8 is complete. Tier 10 should follow Tier 9 Milestone 1 residency contracts so handlers share one upload/transpose helper.
+Tiers 1–10 are complete for their committed scopes. Deferred items remain in **Explicit deferrals**
+below (device adapters optional follow-up only if a new workload shows host adapters dominate
+after microbatch).
 
 ## Explicit deferrals
 

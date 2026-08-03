@@ -1,6 +1,24 @@
 ## Status
 
-**Session 47** — LoRA Tier 10 (start): multi-arch GPU residency + production gates.
+**Session 48** — LoRA Tier 9 (complete): microbatch GEMM + published GPU speed gates.
+
+### LoRA GPU microbatch and product gates (Tier 9)
+
+- `GpuBlasOps` / `DeviceActivationBatch` — FP32 `cublasSgemm_v2` / `rocblas_sgemm` microbatch
+  for frozen forward and transpose; CPU oracle `CpuFrozenBatchOps`.
+- Default `juno.lora.microbatch=8` uploads FP32 resident weights and batches linears across
+  positions in `LoraTrainableHandler.computeGradients` (host adapters / Adam unchanged).
+- `LoraTrainableHandlerGpuBackwardTest` — CPU↔GPU loss/grad parity + TinyLlama speed gates
+  (GTX 1080: **~14× e2e**, **~11× backward** vs CPU).
+- Docs may describe production **GPU LoRA training** as frozen batched GPU + host adapters;
+  device-resident adapters / GPU Adam remain deferred (not required after intensity proof).
+- `--lora-train-device` and LLaMA/Qwen2 timing subsets remain as in Session 46 (`transferMs` still 0).
+
+---
+
+## Status
+
+**Session 47** — LoRA Tier 10 (complete): multi-arch GPU residency + production gates.
 
 ### LoRA multi-arch GPU residency (Tier 10)
 
@@ -19,7 +37,7 @@
 
 ## Status
 
-**Session 46** — LoRA Tier 9 (start): `--lora-train-device` productization.
+**Session 46** — LoRA Tier 9 (start → completed in Session 48): `--lora-train-device` productization.
 
 ### LoRA GPU train-device (Tier 9)
 
@@ -28,7 +46,7 @@
 - `LoraTrainer` / LoRA REPL honor the mode; JFR `trainDevice` is the resolved label (`cpu`/`cuda`/`rocm`).
 - `LoraStepTiming` — fills `frozenForwardMs` / `frozenTransposeBackwardMs` / `adapterBackwardMs` /
   `attentionNonlinearMs` on `juno.LoraTrainStep` from LLaMA/Qwen2 handler instrumentation (`transferMs` still 0 until H2D counters).
-- Microbatch (`GpuBlasOps`), parity IT, and published speed gates remain open.
+- Microbatch / parity IT / speed gates: completed in Session 48.
 
 ---
 

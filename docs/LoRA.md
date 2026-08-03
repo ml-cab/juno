@@ -271,11 +271,14 @@ positions. This avoids O(seqLen^2) backward work with negligible effect on LoRA 
 **Frozen weights in backward.** When a GPU backend is active and resident weights fit,
 `LoraTrainableHandler`, `Phi3LoraTrainableHandler`, and `Qwen3LoraTrainableHandler` reuse
 device matrices (via shared `LoraResidentWeights`) for forward `W*x` and transpose `W^T*g`
-(`GpuMatVec.sgemvTranspose`). Phi-3 uploads **physical** fused QKV / gate-up tensors; Qwen3
-preserves `qDim` vs `hiddenDim` and keeps per-head Q/K RMSNorm on host. Otherwise the
-transpose matVec dequantizes frozen weights one row at a time on CPU: O(hiddenDim) peak
-extra allocation per layer, not O(model). Tier 9 microbatch / published speed gates are still
-open before claiming production “GPU LoRA training”; see `docs/performance.md`.
+(`GpuMatVec.sgemvTranspose`). On LLaMA/Qwen2 with default microbatch 8, training uploads
+**FP32** resident weights and uses `GpuBlasOps` (`cublasSgemm_v2` / `rocblas_sgemm`) to
+microbatch frozen linears across token positions; adapters and Adam stay on the host.
+Phi-3 uploads **physical** fused QKV / gate-up tensors; Qwen3 preserves `qDim` vs
+`hiddenDim` and keeps per-head Q/K RMSNorm on host. Otherwise the transpose matVec
+dequantizes frozen weights one row at a time on CPU: O(hiddenDim) peak extra allocation
+per layer, not O(model). Measured TinyLlama GPU training speedups are in
+`docs/performance.md` (production “GPU LoRA training” = frozen batched GPU + host adapters).
 
 **DoRA.** Canonical detached-norm DoRA is correctness-complete (train / save / playback / F32
 merge). Exact norm refresh is **not** production-perf-gated; prefer standard LoRA or rsLoRA for
