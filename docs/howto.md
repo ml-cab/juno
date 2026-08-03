@@ -61,11 +61,11 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--lora-scaling` | `standard` | `standard` or `rslora` |
 | `--lora-init` | `kaiming-uniform` | `kaiming-uniform` or `legacy-normal` |
 | `--lora-lr F` | `1e-4` | Peak / base AdamW learning rate |
-| `--lora-max-iters N` | `50` | Max training passes per `/train` or `/train-qa` (safety cap) |
+| `--lora-max-iters N` | `50` | Max training passes per `/train`, `/train-qa`, or `/train-file-qa` (safety cap) |
 | `--lora-loss-target-text F` | `1.8` | Stop `/train` when loss ≤ F |
-| `--lora-loss-target-qa F` | `1.2` | Stop `/train-qa` when loss ≤ F |
+| `--lora-loss-target-qa F` | `1.2` | Stop `/train-qa` / `/train-file-qa` when loss ≤ F |
 | `--lora-steps N` | — | Alias for `--lora-max-iters` (/train cap) |
-| `--lora-steps-qa N` | `50` | Max passes for `/train-qa` |
+| `--lora-steps-qa N` | `50` | Max passes for `/train-qa` / `/train-file-qa` |
 | `--lora-early-stop F` | `0.25` | Overfit guard: stop when loss < F (set 0 to disable) |
 | `--lora-targets SPEC` | `qv` | `qv`, `all` / `all-linear`, or comma keys (`wq,wk,wv,wo,wgate,wup,wdown`) |
 | `--lora-gradient-accumulation N` | `1` | Chunks accumulated per optimizer update (token-weighted) |
@@ -248,7 +248,9 @@ juno.bat lora --model-path models\model.gguf --verbose
 ```
 
 For a full LoRA training guide, REPL commands, rank selection, and common pitfalls see
-[LoRA.md](LoRA.md).
+[LoRA.md](LoRA.md). Multi-fact Q&A: `/train-file-qa facts.json` with a JSON array of
+`{"Q":"...","A":"..."}` objects (one training loop). With `--api-port N` the same JSON can be
+posted via curl to `POST /v1/lora/train-file-qa` (then `POST /v1/lora/save`).
 
 **Using a trained adapter outside `lora` mode:**
 
@@ -666,8 +668,6 @@ Pass `--verbose` / `-v` for full `[TRACE]` output:
 | Line | What it tells you |
 |------|-------------------|
 | `[TRACE] model type (chat template key) : tinyllama` | Whether the template matches the model |
-| `[TRACE] formatted training text (repr)` | Exact token sequence sent to the model during training |
-| `[TRACE] token count (excl. BOS): N` | How many tokens are in the training sequence |
 | `[train-qa] iter=N loss=…` | Per-pass loss during training |
 | `[TRACE] inference model type: tinyllama` | Template key at inference — must match training |
 

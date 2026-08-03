@@ -221,6 +221,21 @@ public final class LoraTrainer implements AutoCloseable {
 				(tokens, mask) -> handler.evaluateLoss(tokens, mask), lossTarget, maxIters, earlyStopGuard);
 	}
 
+	/**
+	 * Train many Q&amp;A facts in one loop until {@code lossTarget} or {@code maxIters}.
+	 * Each pair expands to the same four chat-templated variants as
+	 * {@link #trainQaPairUntilResult}.
+	 */
+	public LoraTrainingLoop.TrainingResult trainQaPairsUntilResult(List<LoraQaFile.Pair> pairs, String modelTypeKey,
+			float lossTarget, int maxIters, float earlyStopGuard) {
+		List<LoraTrainingLoop.TrainUnit> units = new ArrayList<>();
+		for (LoraQaFile.Pair pair : pairs)
+			units.addAll(qaUnits(pair.q(), pair.a(), modelTypeKey));
+		return LoraTrainingLoop.train(units, config, adapters, optimizer,
+				(tokens, mask, ctx) -> handler.computeGradients(tokens, mask, ctx),
+				(tokens, mask) -> handler.evaluateLoss(tokens, mask), lossTarget, maxIters, earlyStopGuard);
+	}
+
 	private List<LoraTrainingLoop.TrainUnit> qaUnits(String question, String answer, String modelTypeKey) {
 		List<LoraTrainingLoop.TrainUnit> units = new ArrayList<>();
 		for (var seq : LoraTrainingSequences.buildQaVariants(tokenizer, question, answer, modelTypeKey))

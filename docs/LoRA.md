@@ -116,6 +116,7 @@ may be zero on CPU-only runs.
 | `/train <text>` | Fine-tune on inline text (freeform) |
 | `/train-file <path>` | Fine-tune on a text file (document-level unit; truncated BPTT chunk default **32**, recommend **128**) |
 | `/train-qa <question> A: <answer>` | Train a single Q&A fact with auto-generated phrasings |
+| `/train-file-qa <path.json>` | Train many Q&A facts from a JSON array in one loop |
 | `/save` | Save adapter to `--lora-path` |
 | `/reset` | Reinitialize A/B (and DoRA magnitudes), **clear chat history**, and **delete** the `.lora` checkpoint |
 | `/status` | Rank, alpha, optimizer updates, checkpoint path |
@@ -130,20 +131,11 @@ Designed for single factual associations (name, role, domain fact):
 ```
 you > /train-qa What is my name? A: Dima
 
-  Question: What is my name?
-  Answer  : Dima
+  [1] Q: What is my name?
+      A: Dima
 
-  [TRACE] -- formatted training text (repr) ------------------
-  <|user|>
-  What is my name?</s>
-  <|assistant|>
-  Dima</s>
-  ...
-  [TRACE] -- end training text --------------------------------
-  [TRACE] token count (excl. BOS): 121
-
-  Formatted as 4 Q&A pairs  .  model type: tinyllama
-  Training  rank=8 . lr=1.0E-4 . 40 steps . 4 chunk(s) . 122 tokens
+  Formatted as 4 Q&A variant(s) from 1 pair(s)  ·  model type: tinyllama  ·  completion-only loss …
+  Training  rank=8 · lr=1.0E-4 · …
   done  loss=1.53 (-0.83)
 ```
 
@@ -157,6 +149,46 @@ Training stops automatically when loss drops below the configured target (defaul
 checkpoint is already at the target, updates are skipped — run `/reset` before training a new
 fact on a stuck adapter. Loss below ~0.5 gives reliable recall; above ~1.5 the answer may be
 inconsistent. Tune with `--lora-loss-target-qa`, `--lora-max-iters`, or `--lora-early-stop`.
+
+**`/train-file-qa` — multi-fact Q&A from JSON:**
+
+Same chat templates, completion-only masks, and loss targets as `/train-qa`, but all pairs
+train in **one** loop. File must be a `.json` array of objects with `Q` and `A` string fields:
+
+```json
+[
+  {"Q": "What is my name?", "A": "Dima"},
+  {"Q": "Where do I live?", "A": "Kyiv"}
+]
+```
+
+```
+you > /train-file-qa facts.json
+```
+
+Each pair expands to four phrasings (4N units for N pairs). Empty arrays, missing keys, or
+non-`.json` paths are rejected before training starts.
+
+**HTTP (curl) — same JSON body:**
+
+Start the LoRA REPL with an API port (training stays in-process; not available on cluster
+inference API):
+
+```bash
+./juno lora --model-path models/mistral-7b-instruct-v0.1-q4_k_m.gguf --heap 12g --api-port 8080
+```
+
+```bash
+curl -s http://localhost:8080/v1/lora/train-file-qa \
+  -H 'Content-Type: application/json' \
+  --data-binary @facts.json
+
+curl -s -X POST http://localhost:8080/v1/lora/save
+```
+
+`POST /v1/lora/train-file-qa` returns `pairCount`, `unitCount`, `finalTrainLoss`, `passCount`,
+`optimizerUpdateCount`, `stopReason`, and `targetReached`. Uses the same QA loss target /
+max-iters as `/train-file-qa`. `POST /v1/lora/save` writes the `.lora` checkpoint.
 
 **Chat template must match.** The `[TRACE] model type (chat template key)` line at REPL startup
 shows which template was detected. The same key must appear at inference. If they differ, the

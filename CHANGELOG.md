@@ -1,5 +1,22 @@
 ## Status
 
+**Session 50** — `/train-file-qa`: multi-fact Q&A from a JSON file in one training loop; HTTP API.
+
+### `/train-file-qa`
+
+- REPL command loads a `.json` array of `{"Q","A"}` objects via `LoraQaFile`.
+- Each pair expands to the same four chat-templated variants as `/train-qa`; all units
+  train in one `trainOnUnits` pass with QA loss targets.
+- `LoraTrainer.trainQaPairsUntilResult` for the programmatic multi-pair path.
+- `LoraApiServer` — with `./juno lora --api-port N`: `POST /v1/lora/train-file-qa`
+  (JSON body) and `POST /v1/lora/save` for curl workflows.
+- Dropped verbose `[TRACE]` dump of formatted training text / token IDs on `/train-qa`.
+- Docs: `docs/LoRA.md`, `docs/howto.md`.
+
+---
+
+## Status
+
 **Session 49** — LoRA Tier 11 (complete): `--lora-microbatch` CLI/env + VRAM OOM auto-fallback.
 
 ### LoRA microbatch CLI and VRAM ladder (Tier 11)
