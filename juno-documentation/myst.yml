@@ -1,0 +1,44 @@
+version: 1
+project:
+  title: "Juno Documentation"
+  subtitle: "Distributed LLM inference and fine-tuning in pure Java. Architecture, operations, LoRA engineering, governance."
+  authors:
+    - name: "Dmytry Soloviev, Eugen Soldatov"
+      url: "https://ml.cab"
+  github: "https://github.com/ml-cab/juno"
+  toc:
+    - file: index.md
+    - title: "Getting Started: Running and Integrating Juno"
+      children:
+        - file: part1/01-what-is-juno.md
+        - file: part1/02-architecture-reference.md
+        - file: part1/03-commands-and-flags.md
+        - file: part1/04-running-modes.md
+        - file: part1/05-openai-compatible-api.md
+        - file: part1/06-jvm-integration.md
+        - file: part1/07-aws-deployment.md
+    - title: "LoRA Fine-Tuning"
+      children:
+        - file: part2/08-lora-fundamentals.md
+        - file: part2/09-lora-training-and-inference.md
+        - file: part2/10-lora-merge.md
+    - title: "Model Support and Performance"
+      children:
+        - file: part3/11-model-support-matrix.md
+        - file: part3/12-phi3-inference-case-study.md
+        - file: part3/13-performance-methodology.md
+    - title: "Governance, Legal, and Compliance"
+      children:
+        - file: part4/14-governance.md
+        - file: part4/15-contributing-and-releases.md
+        - file: part4/16-contributor-license-agreement.md
+        - file: part4/17-legal-reference.md
+        - file: part4/18-commercial-services.md
+        - file: part4/19-eu-ai-act-compliance.md
+site:
+  template: book-theme
+  options:
+    logo_text: "Machine Learning Cabinet"
+    logo_url: /
+  parts:
+    primary_sidebar_footer: empty-footer.md
