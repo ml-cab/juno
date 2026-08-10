@@ -12,3 +12,4 @@ dist/
 models/*
 *.gguf
 .cursor/
+docs/.internal/
