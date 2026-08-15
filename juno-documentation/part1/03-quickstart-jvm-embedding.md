@@ -148,7 +148,7 @@ Flow.Publisher<String> openAiSse = http.streamingOpenAiChat("tinyllama-1.1b-chat
 ## See also
 
 - [Chapter 4.6 -- Programmatic API](#ch-4-6)
-- [Chapter 5.1 -- OpenAI-Compatible API](#ch-5-1)
+- [Chapter 5.2 -- OpenAI-Compatible API](#ch-5-2)
 - [Chapter 1.2 -- Quickstart: Local Player](#ch-1-2)
 
 ---

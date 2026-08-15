@@ -13,12 +13,12 @@ separate Python training step to shell out to.
 
 ```mermaid
 flowchart LR
-    X["Input activation\nx"] --> Frozen["Frozen weight W\n(large, quantized, unchanged)"]
-    X --> A["Trainable A\n(rank x inDim, small)"]
-    A --> B["Trainable B\n(outDim x rank, small)"]
+    X["Input activation x"] --> Frozen["Frozen weight W (large, quantized, unchanged)"]
+    X --> A["Trainable A (rank x inDim, small)"]
+    A --> B["Trainable B (outDim x rank, small)"]
     Frozen --> Sum(("+"))
     B -->|"* scale"| Sum
-    Sum --> Y["Output\nW·x + scale · B·A·x"]
+    Sum --> Y["Output: W·x + scale · B·A·x"]
 ```
 
 For each frozen weight matrix **W**, LoRA inserts two small trainable matrices **A** (rank x inDim)
@@ -59,12 +59,12 @@ flowchart LR
     A2["A (trained)"]
     B2["B (trained)"]
     Scale2["× scale"]
-    Delta["LoRA delta\nscale·B·A·x"]
-    Dir["direction =\nW + scale·B·A"]
-    Norm["norm(direction)\nper row (detached)"]
-    Mag["magnitude\n(separate AdamW group,\ndecay off)"]
+    Delta["LoRA delta, scale·B·A·x"]
+    Dir["direction = W + scale·B·A"]
+    Norm["norm(direction) per row (detached)"]
+    Mag["magnitude (separate AdamW group, decay off)"]
     Div["magnitude / norm(direction)"]
-    Out2["output =\n(mag / norm) · (W·x + delta)"]
+    Out2["output = (mag / norm) · (W·x + delta)"]
 
     Input2 --> W2 --> Out2
     Input2 --> A2 --> B2 --> Scale2 --> Delta --> Out2

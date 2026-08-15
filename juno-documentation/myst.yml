@@ -44,8 +44,8 @@ project:
         - file: part4/08-testing-checklist.md
     - title: "5. REST API"
       children:
-        - file: part5/01-openai-compatible-api.md
-        - file: part5/02-juno-native-api.md
+        - file: part5/01-juno-native-api.md
+        - file: part5/02-openai-compatible-api.md
         - file: part5/03-error-handling.md
         - file: part5/04-openapi-spec.md
     - title: "6. Deployment"

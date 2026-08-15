@@ -32,8 +32,8 @@ chapter back to its source.
 | 4.6 Programmatic API | `docs/04-lora-fine-tuning/programmatic-api.md` |
 | 4.7 Common Pitfalls | `docs/04-lora-fine-tuning/common-pitfalls.md` |
 | 4.8 Testing Checklist | `docs/04-lora-fine-tuning/testing-checklist.md` |
-| 5.1 OpenAI-Compatible API | `docs/05-rest-api/openai-compatible-api.md` |
-| 5.2 Juno Native API | `docs/05-rest-api/juno-native-api.md` |
+| 5.1 Juno Native API | `docs/05-rest-api/juno-native-api.md` |
+| 5.2 OpenAI-Compatible API | `docs/05-rest-api/openai-compatible-api.md` |
 | 5.3 Error Handling | `docs/05-rest-api/error-handling.md` |
 | 5.4 OpenAPI Spec | `docs/05-rest-api/openapi-spec.md` |
 | 6.1 On-Prem Cluster | `docs/06-deployment/on-prem-cluster.md` |

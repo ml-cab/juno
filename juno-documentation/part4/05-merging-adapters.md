@@ -3,9 +3,9 @@
 
 ```mermaid
 flowchart LR
-    Base["Base GGUF\n(frozen, quantized)"] --> Merge["juno merge"]
-    Adapter[".lora adapter\n(A/B matrices)"] --> Merge
-    Merge --> Out["Merged GGUF\n(standalone, no sidecar needed)"]
+    Base["Base GGUF (frozen, quantized)"] --> Merge["juno merge"]
+    Adapter[".lora adapter (A/B matrices)"] --> Merge
+    Merge --> Out["Merged GGUF (standalone, no sidecar needed)"]
 ```
 
 Merging bakes a trained adapter's effect directly into a copy of the base model's weights, so

@@ -2,7 +2,7 @@
 # 7.3. Performance Report
 
 The primary Juno performance artifact is the interactive HTML matrix
-[juno_test_matrix.html](https://github.com/ml-cab/juno/blob/main/docs/assets/juno_test_matrix.html) (model, CPU vs GPU scenarios, throughput
+[juno_test_matrix.html](https://ml.cab/juno_test_matrix.html) (model, CPU vs GPU scenarios, throughput
 and latency data). Open it from a checkout in a browser; refresh or regenerate the file when
 harness inputs or hardware baselines change.
 

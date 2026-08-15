@@ -38,6 +38,13 @@ stateDiagram-v2
 
 ## AWS hardware quotas
 
+AWS accounts start with conservative default vCPU limits for On-Demand instances. GPU instance
+families (`g4dn`, `g4ad`, `g5`, `p3`) consume vCPUs against these per-region quotas, not against
+general-purpose ones. A default account is typically capped at 0 or 32 running GPU vCPUs, which
+is not enough to provision even a single-node `g4dn.xlarge` cluster (4 vCPUs each). Without a
+quota increase the `setup` command will fail with `InsufficientInstanceCapacity` or
+`VcpuLimitExceeded` errors at launch time. Request the increase before running `setup`; approval
+usually takes a few minutes to a few hours.
 
 For Nvidia hardware `g4dn.xlarge`:
 

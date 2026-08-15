@@ -58,7 +58,7 @@ When `--api-port` is given, the startup banner shows:
 
 - [Chapter 3.2 -- Flags](#ch-3-2)
 - [Chapter 3.4 -- Cluster Mode](#ch-3-4)
-- [Chapter 5.1 -- OpenAI-Compatible API](#ch-5-1)
+- [Chapter 5.2 -- OpenAI-Compatible API](#ch-5-2)
 
 ---
 

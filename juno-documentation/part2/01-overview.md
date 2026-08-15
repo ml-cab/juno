@@ -13,12 +13,12 @@ and [LoRA fine-tuning](#ch-4-1) sections instead.
 
 ```mermaid
 flowchart LR
-    Client["Client\n(chat app, script, curl)"] -->|"REST or gRPC"| Coordinator
+    Client["Client (chat app, script, curl)"] -->|"REST or gRPC"| Coordinator
 
     subgraph Coordinator["Coordinator JVM"]
         direction TB
-        API["REST API\n(native + OpenAI-compatible)"]
-        Sched["Scheduler and\ngeneration loop"]
+        API["REST API (native + OpenAI-compatible)"]
+        Sched["Scheduler and generation loop"]
         API --> Sched
     end
 
@@ -26,9 +26,9 @@ flowchart LR
 
     subgraph Nodes["Node JVMs (1 or more)"]
         direction LR
-        N1["Node 1\nmodel shard + GPU/CPU matmul"]
-        N2["Node 2\nmodel shard"]
-        N3["Node 3 ...\nmodel shard"]
+        N1["Node 1, model shard + GPU/CPU matmul"]
+        N2["Node 2, model shard"]
+        N3["Node 3 ..., model shard"]
     end
 
     Nodes -->|"logits"| Coordinator

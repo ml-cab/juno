@@ -31,8 +31,8 @@ flowchart TD
     Start["JVM startup"]
     CheckCUDA{{"CUDA available? (CudaAvailability.isAvailable())"}}
     CheckROCm{{"ROCm available? (RocmAvailability.isAvailable())"}}
-    UseCUDA["Use CudaMatVec (CudaBindings → libcudart.so.12\n+ libcublas.so.12)"]
-    UseROCm["Use RocmMatVec (RocmBindings → libamdhip64.so\n+ librocblas.so)"]
+    UseCUDA["Use CudaMatVec (CudaBindings → libcudart.so.12 + libcublas.so.12)"]
+    UseROCm["Use RocmMatVec (RocmBindings → libamdhip64.so + librocblas.so)"]
     UseCPU["Use CpuMatVec (parallel IntStream, quantized)"]
     Override["juno.gpu.backend=cuda|rocm|auto OR JUNO_USE_GPU=false OR --cpu"]
 

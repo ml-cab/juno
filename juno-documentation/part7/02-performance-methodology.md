@@ -1,7 +1,7 @@
 (ch-7-2)=
 # 7.2. Performance Methodology
 
-Companion to [juno_test_matrix.html](https://github.com/ml-cab/juno/blob/main/docs/assets/juno_test_matrix.html). That file contains the
+Companion to [juno_test_matrix.html](https://ml.cab/juno_test_matrix.html). That file contains the
 interactive results table and scenario narratives; this document covers how to reproduce
 a run, extract numbers from JFR, and interpret the matrix columns.
 
@@ -159,7 +159,7 @@ HTTP prompts, session counts, and token limits come from [scenarios.yaml](https:
 
 ## AWS performance runner (`scripts/performance-tests/performance-test.sh`)
 
-`scripts/performance-tests/matrix.tsv` is the **single source of truth** for which configurations exist and what has been measured. The runner selects cells directly from that file (no separate queue file). After each successful cell it writes coordinator `juno.TokenProduced.tps` into the matrix and regenerates [juno_test_matrix.html](https://github.com/ml-cab/juno/blob/main/docs/assets/juno_test_matrix.html).
+`scripts/performance-tests/matrix.tsv` is the **single source of truth** for which configurations exist and what has been measured. The runner selects cells directly from that file (no separate queue file). After each successful cell it writes coordinator `juno.TokenProduced.tps` into the matrix and regenerates [juno_test_matrix.html](https://ml.cab/juno_test_matrix.html).
 
 ### Per-cell lifecycle
 
@@ -203,7 +203,7 @@ If you set **`--row`**, **`--col`**, or **`--from` / `--to`**, mode defaults to 
 
 > **Note:** the script's default `--html` output path (`docs/juno_test_matrix.html`) and the
 > default matrix path predate this documentation restructure. The generated report now lives at
-> [`docs/assets/juno_test_matrix.html`](https://github.com/ml-cab/juno/blob/main/docs/assets/juno_test_matrix.html); update
+> `docs/assets/juno_test_matrix.html`; update
 > `scripts/performance-tests/performance-test.sh`'s default `--html` value to match, or continue
 > passing `--html docs/assets/juno_test_matrix.html` explicitly until it is updated.
 

@@ -71,8 +71,8 @@ in any viewer that supports it, rather than as fixed-width ASCII art.
 
 **Part 5. REST API**
 
-- **5.1.** [OpenAI-Compatible API](part5/01-openai-compatible-api.md)
-- **5.2.** [Juno Native API](part5/02-juno-native-api.md)
+- **5.1.** [Juno Native API](part5/01-juno-native-api.md)
+- **5.2.** [OpenAI-Compatible API](part5/02-openai-compatible-api.md)
 - **5.3.** [Error Handling](part5/03-error-handling.md)
 - **5.4.** [OpenAPI Spec](part5/04-openapi-spec.md)
 

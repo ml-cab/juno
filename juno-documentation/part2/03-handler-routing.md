@@ -6,11 +6,11 @@ matching transformer handler:
 
 ```mermaid
 flowchart LR
-    GGUF["GGUF file\ngeneral.architecture"] --> Loader["ForwardPassHandlerLoader"]
-    Loader -->|"phi3"| Phi3["Phi3TransformerHandler\nfused QKV + gate/up\nsupported"]
-    Loader -->|"qwen3"| Q3["Qwen3TransformerHandler\ndense SwiGLU\nunder development"]
-    Loader -->|"qwen3moe"| Q3M["Qwen3MoeTransformerHandler\nMoE FFN, YaRN RoPE\nunder development"]
-    Loader -->|"llama, mistral,\ntinyllama, gemma, qwen2"| Llama["LlamaTransformerHandler\nllama/mistral/tinyllama supported\ngemma/qwen2 under development"]
+    GGUF["GGUF file, general.architecture"] --> Loader["ForwardPassHandlerLoader"]
+    Loader -->|"phi3"| Phi3["Phi3TransformerHandler, fused QKV + gate/up, supported"]
+    Loader -->|"qwen3"| Q3["Qwen3TransformerHandler, dense SwiGLU, under development"]
+    Loader -->|"qwen3moe"| Q3M["Qwen3MoeTransformerHandler, MoE FFN, YaRN RoPE, under development"]
+    Loader -->|"llama, mistral, tinyllama, gemma, qwen2"| Llama["LlamaTransformerHandler, llama/mistral/tinyllama supported, gemma/qwen2 under development"]
 ```
 
 If a `.lora` adapter is attached, `load()` wraps whichever handler was selected in
@@ -22,11 +22,11 @@ implementation, chosen independently of architecture routing:
 
 ```mermaid
 flowchart LR
-    Handler["Transformer handler\n(any architecture)"] --> MV{"MatVec\nimplementation"}
-    MV -->|CPU| Cpu["CpuMatVec\nparallel IntStream"]
-    MV -->|"NVIDIA GPU"| Cuda["CudaMatVec\ncublasSgemv_v2 / cublasHSSgemvStridedBatched"]
-    MV -->|"AMD GPU"| Rocm["RocmMatVec\nrocblas_sgemv / rocblas_hssgemv_strided_batched"]
-    Cuda --> Bindings["GpuBindings\n(vendor-neutral, Panama FFI)"]
+    Handler["Transformer handler (any architecture)"] --> MV{"MatVec implementation"}
+    MV -->|CPU| Cpu["CpuMatVec, parallel IntStream"]
+    MV -->|"NVIDIA GPU"| Cuda["CudaMatVec, cublasSgemv_v2 / cublasHSSgemvStridedBatched"]
+    MV -->|"AMD GPU"| Rocm["RocmMatVec, rocblas_sgemv / rocblas_hssgemv_strided_batched"]
+    Cuda --> Bindings["GpuBindings (vendor-neutral, Panama FFI)"]
     Rocm --> Bindings
 ```
 
@@ -40,10 +40,10 @@ After `loadShard()`, every node also wires its handler into the KV cache:
 ```mermaid
 flowchart LR
     Handler["Transformer handler"] --> Adapter["NodeKVCacheAdapter"]
-    Adapter -->|"serialise float[][] K/V\ninto KVBlock"| Manager["KVCacheManager"]
+    Adapter -->|"serialise float[][] K/V into KVBlock"| Manager["KVCacheManager"]
     Manager --> GpuTier["GPU tier"]
-    Manager --> CpuTier["CPU tier\n(Caffeine W-TinyLFU)"]
-    Manager -.->|"restore on\nlocal cache miss"| Adapter
+    Manager --> CpuTier["CPU tier (Caffeine W-TinyLFU)"]
+    Manager -.->|"restore on local cache miss"| Adapter
     Adapter -.->|"evict(requestId)"| Manager
 ```
 

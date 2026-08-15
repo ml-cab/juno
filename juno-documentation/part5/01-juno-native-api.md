@@ -1,8 +1,8 @@
-(ch-5-2)=
-# 5.2. Juno Native API
+(ch-5-1)=
+# 5.1. Juno Native API
 
 `InferenceApiServer` (Javalin) is the single HTTP entry point on the coordinator. It exposes the
-Juno-native surface below alongside the [OpenAI-compatible API](#ch-5-1). Both
+Juno-native surface below alongside the [OpenAI-compatible API](#ch-5-2). Both
 surfaces share the same underlying `RequestScheduler` and `GenerationLoop`, so behavior and
 performance are identical regardless of which surface a client uses.
 
@@ -28,10 +28,10 @@ performance are identical regardless of which surface a client uses.
 
 ## See also
 
-- [Chapter 5.1 -- OpenAI-Compatible API](#ch-5-1)
+- [Chapter 5.2 -- OpenAI-Compatible API](#ch-5-2)
 - [Chapter 5.3 -- Error Handling](#ch-5-3)
 - [Chapter 5.4 -- OpenAPI Spec](#ch-5-4)
 
 ---
 
-[<- 5.1 OpenAI-Compatible API](#ch-5-1) &nbsp;|&nbsp; [Table of Contents](../index.md) &nbsp;|&nbsp; [5.3 Error Handling ->](#ch-5-3)
+[<- 4.8 Testing Checklist](#ch-4-8) &nbsp;|&nbsp; [Table of Contents](../index.md) &nbsp;|&nbsp; [5.2 OpenAI-Compatible API ->](#ch-5-2)

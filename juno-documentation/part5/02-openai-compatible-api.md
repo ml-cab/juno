@@ -1,5 +1,5 @@
-(ch-5-1)=
-# 5.1. OpenAI-Compatible API
+(ch-5-2)=
+# 5.2. OpenAI-Compatible API
 
 Pass `--api-port N` to any `local` or cluster invocation to start an OpenAI wire-compatible REST
 server alongside the REPL. No changes are required to `GenerationLoop`, the scheduler, or any
@@ -121,10 +121,10 @@ for user_input in ["My name is Alice.", "What is my name?"]:
 
 ## See also
 
-- [Chapter 5.2 -- Juno Native API](#ch-5-2)
+- [Chapter 5.1 -- Juno Native API](#ch-5-1)
 - [Chapter 5.3 -- Error Handling](#ch-5-3)
 - [Chapter 5.4 -- OpenAPI Spec](#ch-5-4)
 
 ---
 
-[<- 4.8 Testing Checklist](#ch-4-8) &nbsp;|&nbsp; [Table of Contents](../index.md) &nbsp;|&nbsp; [5.2 Juno Native API ->](#ch-5-2)
+[<- 5.1 Juno Native API](#ch-5-1) &nbsp;|&nbsp; [Table of Contents](../index.md) &nbsp;|&nbsp; [5.3 Error Handling ->](#ch-5-3)

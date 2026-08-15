@@ -12,12 +12,12 @@ Use it to:
 
 The Juno-native endpoints (`/v1/inference`, `/v1/inference/stream`, `/v1/cluster/health`, and the
 health/console routes) are not part of this OpenAPI document. See
-[Juno native API](#ch-5-2) for those.
+[Juno native API](#ch-5-1) for those.
 
 ## See also
 
-- [Chapter 5.1 -- OpenAI-Compatible API](#ch-5-1)
-- [Chapter 5.2 -- Juno Native API](#ch-5-2)
+- [Chapter 5.1 -- Juno Native API](#ch-5-1)
+- [Chapter 5.2 -- OpenAI-Compatible API](#ch-5-2)
 
 ---
 

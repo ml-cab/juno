@@ -3,6 +3,25 @@
 
 ## Status
 
+**Session 51**: Documentation update: `docs/` folder restructured as `juno-documentation` MyST Jupyter Book.
+
+### `juno-documentation`
+
+- The flat `docs/` folder has been restructured into `juno-documentation/`, a standalone
+  [MyST-MD](https://mystmd.org/) Jupyter Book configured via `myst.yml`.
+- Content is organised into 11 parts and 54 chapters, each in its own `.md` file under
+  `part1/` through `part11/`. Navigation links (`<-` / `->`) and a full Table of Contents in
+  `index.md` cross-link every chapter.
+- All Mermaid diagrams are declared with the MyST `{mermaid}` directive where applicable and
+  render natively in the built book and in any Mermaid-aware viewer.
+- A `references.md` back-matter table maps every chapter back to the originating file in `docs/`.
+- `build.sh` provides a one-command build (`./build.sh`); `README.md` documents prerequisites
+  and the local preview workflow.
+
+---
+
+## Status
+
 **Session 50**: `/train-file-qa`: multi-fact Q&A from a JSON file in one training loop; HTTP API.
 
 ### `/train-file-qa`

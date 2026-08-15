@@ -21,4 +21,4 @@ mvn test -pl node -Dgroups=rocm                    # GPU adjoint, parity (AMD)
 
 ---
 
-[<- 4.7 Common Pitfalls](#ch-4-7) &nbsp;|&nbsp; [Table of Contents](../index.md) &nbsp;|&nbsp; [5.1 OpenAI-Compatible API ->](#ch-5-1)
+[<- 4.7 Common Pitfalls](#ch-4-7) &nbsp;|&nbsp; [Table of Contents](../index.md) &nbsp;|&nbsp; [5.1 Juno Native API ->](#ch-5-1)

@@ -68,13 +68,13 @@ to fit training in aavaliable resources.
 ```{mermaid}
 flowchart TD
     Start["Start GPU LoRA --lora-train-device auto; FP32 weights; microbatch 8; cublas|rocblas sgemm"]
-    OOM1{{"cudaMalloc / hipMalloc\nOOM?"}}
-    FP16["Retry: FP16 resident weights\nmicrobatch = 1\nsequential GEMV\ncublasHSSgemvStridedBatched"]
+    OOM1{{"cudaMalloc / hipMalloc OOM?"}}
+    FP16["Retry: FP16 resident weights, microbatch = 1, sequential GEMV, cublasHSSgemvStridedBatched"]
     OOM2{{"Still OOM?"}}
     Auto{{"--lora-train-device = auto?"}}
-    CPU["Fall back to CPU quantized\n(CpuMatVec, IntStream)"]
-    Fail["Fail closed\n(exit with error)\n--lora-train-device=gpu"]
-    Success["Training proceeds on GPU\nfrozen forward + transpose on device\nAdapters (A/B) + Adam on host"]
+    CPU["Fall back to CPU quantized (CpuMatVec, IntStream)"]
+    Fail["Fail closed (exit with error), --lora-train-device=gpu"]
+    Success["Training proceeds on GPU, frozen forward + transpose on device, Adapters (A/B) + Adam on host"]
 
     Start --> OOM1
     OOM1 -->|"No"| Success

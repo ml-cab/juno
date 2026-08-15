@@ -13,3 +13,4 @@ models/*
 *.gguf
 .cursor/
 docs/.internal/
+juno-documentation/_build/

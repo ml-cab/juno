@@ -16,9 +16,9 @@ Error responses from the OpenAI-compatible API follow the OpenAI error envelope:
 
 ## See also
 
-- [Chapter 5.1 -- OpenAI-Compatible API](#ch-5-1)
-- [Chapter 5.2 -- Juno Native API](#ch-5-2)
+- [Chapter 5.1 -- Juno Native API](#ch-5-1)
+- [Chapter 5.2 -- OpenAI-Compatible API](#ch-5-2)
 
 ---
 
-[<- 5.2 Juno Native API](#ch-5-2) &nbsp;|&nbsp; [Table of Contents](../index.md) &nbsp;|&nbsp; [5.4 OpenAPI Spec ->](#ch-5-4)
+[<- 5.2 OpenAI-Compatible API](#ch-5-2) &nbsp;|&nbsp; [Table of Contents](../index.md) &nbsp;|&nbsp; [5.4 OpenAPI Spec ->](#ch-5-4)
