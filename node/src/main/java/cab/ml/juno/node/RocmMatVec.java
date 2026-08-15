@@ -108,7 +108,8 @@ public final class RocmMatVec implements GpuMatVec {
         this.rocm = (RocmBindings) b;
     }
 
-    GpuContext gpuContext() { return ctx; }
+    @Override
+    public GpuContext gpuContext() { return ctx; }
 
     @Override
     public boolean supportsHalfResident() { return rocm.supportsHSSgemv(); }

@@ -23,8 +23,20 @@ package cab.ml.juno.node;
  * @param predictionCount  number of prediction positions ({@code tokens.length - 1})
  * @param forwardMs        wall time of the forward pass
  * @param backwardMs       wall time of the backward pass
+ * @param timing           Tier-4/9 subset timings (never null)
  */
-public record LoraGradientResult(float lossSum, int predictionCount, long forwardMs, long backwardMs) {
+public record LoraGradientResult(float lossSum, int predictionCount, long forwardMs, long backwardMs,
+		LoraStepTiming timing) {
+
+	public LoraGradientResult {
+		if (timing == null)
+			timing = LoraStepTiming.zero();
+	}
+
+	/** Compatibility constructor: zero subset timings. */
+	public LoraGradientResult(float lossSum, int predictionCount, long forwardMs, long backwardMs) {
+		this(lossSum, predictionCount, forwardMs, backwardMs, LoraStepTiming.zero());
+	}
 
 	/** Token-weighted mean loss over the predictions; {@link Float#NaN} when empty. */
 	public float meanLoss() {

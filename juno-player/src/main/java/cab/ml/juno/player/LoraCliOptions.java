@@ -56,7 +56,12 @@ public final class LoraCliOptions {
 	public int groupWidth = 0;
 	public String mergeCapability = "f32-preserve";
 	public String architecture = "";
-	public String trainDevice = "cpu";
+	/** CLI mode {@code auto|gpu|cpu}; resolved to {@code cpu|cuda|rocm} after open. */
+	public String trainDevice = cab.ml.juno.node.LoraTrainDevice.AUTO;
+	/** Frozen GEMM microbatch width (default 8; 1 = sequential GEMV). */
+	public int microbatch = cab.ml.juno.node.LoraMicrobatch.DEFAULT;
+	public int chunkTokens = LoraCorpusLimit.DEFAULT_CHUNK_TOKENS;
+	public int maxTrainTokens = 0;
 
 	public float resolvedAlpha() {
 		return alpha < 0f ? rank : alpha;
@@ -122,7 +127,8 @@ public final class LoraCliOptions {
 				.weightDecay(weightDecay).loraPlusRatio(loraPlusRatio).dropout(dropout).seed(seed)
 				.validationSplit(validationSplit).validationPatience(validationPatience)
 				.validationMinDelta(validationMinDelta).groupWidth(groupWidth)
-				.mergeCapability(parsedMergeCapability()).architecture(architecture).trainDevice(trainDevice).build();
+				.mergeCapability(parsedMergeCapability()).architecture(architecture).trainDevice(trainDevice)
+				.microbatch(microbatch).chunkTokens(chunkTokens).maxTrainTokens(maxTrainTokens).build();
 	}
 
 	/**
@@ -306,6 +312,28 @@ public final class LoraCliOptions {
 			parsedMergeCapability();
 			yield i + 1;
 		}
+		case "--lora-chunk-tokens" -> {
+			requireValue(args, i, flag);
+			chunkTokens = Integer.parseInt(args[i + 1]);
+			LoraCorpusLimit.validateChunkTokens(chunkTokens);
+			yield i + 1;
+		}
+		case "--lora-max-train-tokens" -> {
+			requireValue(args, i, flag);
+			maxTrainTokens = Integer.parseInt(args[i + 1]);
+			LoraCorpusLimit.validateMaxTrainTokens(maxTrainTokens);
+			yield i + 1;
+		}
+		case "--lora-train-device" -> {
+			requireValue(args, i, flag);
+			trainDevice = cab.ml.juno.node.LoraTrainDevice.normalize(args[i + 1]);
+			yield i + 1;
+		}
+		case "--lora-microbatch" -> {
+			requireValue(args, i, flag);
+			microbatch = cab.ml.juno.node.LoraMicrobatch.normalize(args[i + 1]);
+			yield i + 1;
+		}
 		default -> -1;
 		};
 	}
@@ -328,10 +356,18 @@ public final class LoraCliOptions {
 		applyEnv(o, "LORA_MODE", v -> o.mode = v);
 		applyEnv(o, "LORA_SCALING", v -> o.scaling = v);
 		applyEnv(o, "LORA_INIT", v -> o.init = v);
+		applyEnv(o, "LORA_CHUNK_TOKENS", v -> o.chunkTokens = Integer.parseInt(v));
+		applyEnv(o, "LORA_MAX_TRAIN_TOKENS", v -> o.maxTrainTokens = Integer.parseInt(v));
+		applyEnv(o, "LORA_TRAIN_DEVICE", v -> o.trainDevice = cab.ml.juno.node.LoraTrainDevice.normalize(v));
+		applyEnv(o, "LORA_MICROBATCH", v -> o.microbatch = cab.ml.juno.node.LoraMicrobatch.normalize(v));
 		o.parsedLrSchedule();
 		o.parsedMode();
 		o.parsedScaling();
 		o.parsedInit();
+		o.trainDevice = cab.ml.juno.node.LoraTrainDevice.normalize(o.trainDevice);
+		o.microbatch = cab.ml.juno.node.LoraMicrobatch.validate(o.microbatch);
+		LoraCorpusLimit.validateChunkTokens(o.chunkTokens);
+		LoraCorpusLimit.validateMaxTrainTokens(o.maxTrainTokens);
 		cab.ml.juno.lora.LoraDropout.validateRate(o.dropout);
 		return o;
 	}

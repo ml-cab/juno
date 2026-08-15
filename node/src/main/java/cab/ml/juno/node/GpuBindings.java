@@ -106,6 +106,13 @@ interface GpuBindings {
     MethodHandle blasSetPointerMode();
     /** {@code cublasSgemv_v2} / {@code rocblas_sgemv}. */
     MethodHandle blasSgemv();
+    /**
+     * {@code cublasSgemm_v2} / {@code rocblas_sgemm}.
+     *
+     * <p>Signature (both vendors):
+     * {@code (handle, transa, transb, m, n, k, *alpha, *A, lda, *B, ldb, *beta, *C, ldc) → int}.
+     */
+    MethodHandle blasSgemm();
     /** {@code cublasHSSgemvStridedBatched} / {@code rocblas_hssgemv_strided_batched}. */
     MethodHandle blasHSSgemvStridedBatched();
 

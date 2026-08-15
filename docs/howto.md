@@ -61,11 +61,11 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--lora-scaling` | `standard` | `standard` or `rslora` |
 | `--lora-init` | `kaiming-uniform` | `kaiming-uniform` or `legacy-normal` |
 | `--lora-lr F` | `1e-4` | Peak / base AdamW learning rate |
-| `--lora-max-iters N` | `50` | Max training passes per `/train` or `/train-qa` (safety cap) |
+| `--lora-max-iters N` | `50` | Max training passes per `/train`, `/train-qa`, or `/train-file-qa` (safety cap) |
 | `--lora-loss-target-text F` | `1.8` | Stop `/train` when loss ≤ F |
-| `--lora-loss-target-qa F` | `1.2` | Stop `/train-qa` when loss ≤ F |
+| `--lora-loss-target-qa F` | `1.2` | Stop `/train-qa` / `/train-file-qa` when loss ≤ F |
 | `--lora-steps N` | — | Alias for `--lora-max-iters` (/train cap) |
-| `--lora-steps-qa N` | `50` | Max passes for `/train-qa` |
+| `--lora-steps-qa N` | `50` | Max passes for `/train-qa` / `/train-file-qa` |
 | `--lora-early-stop F` | `0.25` | Overfit guard: stop when loss < F (set 0 to disable) |
 | `--lora-targets SPEC` | `qv` | `qv`, `all` / `all-linear`, or comma keys (`wq,wk,wv,wo,wgate,wup,wdown`) |
 | `--lora-gradient-accumulation N` | `1` | Chunks accumulated per optimizer update (token-weighted) |
@@ -76,10 +76,12 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--lora-weight-decay F` | `0.01` | Decoupled AdamW decay on A only |
 | `--lora-plus-ratio F` | `1.0` | B/A learning-rate ratio (`1.0` = ordinary LoRA) |
 | `--lora-dropout F` | `0` | Train-only inverted dropout on LoRA branch input |
-| `--lora-seed N` | `42` | Seed for init, validation split, and dropout masks |
+| `--lora-seed N` | `42` | Seed for init, validation split, dropout masks, and corpus caps |
 | `--lora-validation-split F` | `0` | Fraction of units held out (`0` disables) |
 | `--lora-validation-patience N` | `0` | Validation checks without improvement before stop |
 | `--lora-validation-min-delta F` | `0` | Minimum validation improvement to reset patience |
+| `--lora-chunk-tokens N` | `32` | Truncated-BPTT window size; recommend `128` for large `/train-file` |
+| `--lora-max-train-tokens N` | `0` | Cap supervised prediction tokens per train (`0` = unlimited); seeded whole-chunk subsample |
 
 **`merge` specific flags:**
 
@@ -94,11 +96,18 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`,
 `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_MAX_ITERS`, `LORA_LOSS_TARGET_TEXT`,
 `LORA_LOSS_TARGET_QA`, `LORA_STEPS` (alias), `LORA_PLAY_PATH`, `LORA_TARGETS`,
-`LORA_GRADIENT_ACCUMULATION`, `LORA_MAX_GRAD_NORM`, `API_PORT`
+`LORA_GRADIENT_ACCUMULATION`, `LORA_MAX_GRAD_NORM`, `LORA_CHUNK_TOKENS`,
+`LORA_MAX_TRAIN_TOKENS`, `LORA_TRAIN_DEVICE`, `LORA_MICROBATCH`, `API_PORT`
 
 For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO_USE_GPU` unset
 means try GPU (CUDA first, then ROCm) when available. Set `JUNO_USE_GPU=false` or pass `--cpu`
-to force CPU. Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
+to force CPU under `--lora-train-device=auto` (default). Use `--lora-train-device=gpu` to fail
+closed when CUDA/ROCm is unavailable, or `--lora-train-device=cpu` to force CPU MatVec for LoRA
+regardless of `--gpu`. With GPU LoRA, default `--lora-microbatch 8` (`LORA_MICROBATCH`) uses
+FP32 resident GEMM for frozen linears; set `1` for sequential GEMV / FP16 residency (or let
+VRAM OOM auto-retry drop to 1). Phi-3.5 on ~8 GB cards should use `--lora-microbatch 1` rather
+than `JAVA_TOOL_OPTIONS=-Djuno.lora.microbatch=1`.
+Cluster and `local` modes use `selectBackend()`, where unset defaults to CPU for
 safety. Override the vendor with `-Djuno.gpu.backend=cuda|rocm|auto` (default: `auto`).
 
 ---
@@ -239,7 +248,9 @@ juno.bat lora --model-path models\model.gguf --verbose
 ```
 
 For a full LoRA training guide, REPL commands, rank selection, and common pitfalls see
-[LoRA.md](LoRA.md).
+[LoRA.md](LoRA.md). Multi-fact Q&A: `/train-file-qa facts.json` with a JSON array of
+`{"Q":"...","A":"..."}` objects (one training loop). With `--api-port N` the same JSON can be
+posted via curl to `POST /v1/lora/train-file-qa` (then `POST /v1/lora/save`).
 
 **Using a trained adapter outside `lora` mode:**
 
@@ -657,8 +668,6 @@ Pass `--verbose` / `-v` for full `[TRACE]` output:
 | Line | What it tells you |
 |------|-------------------|
 | `[TRACE] model type (chat template key) : tinyllama` | Whether the template matches the model |
-| `[TRACE] formatted training text (repr)` | Exact token sequence sent to the model during training |
-| `[TRACE] token count (excl. BOS): N` | How many tokens are in the training sequence |
 | `[train-qa] iter=N loss=…` | Per-pass loss during training |
 | `[TRACE] inference model type: tinyllama` | Template key at inference — must match training |
 

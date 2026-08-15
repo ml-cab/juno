@@ -94,7 +94,7 @@ public final class GenerationLoop {
 		int[] startPos = new int[n]; // KV cache offset per request
 		int[] maxTokens = new int[n];
 		List<Integer>[] generated = new List[n];
-		StringBuilder[] texts = new StringBuilder[n];
+		EosOutputFilter[] eosFilters = new EosOutputFilter[n];
 		GenerationResult.StopReason[] reasons = new GenerationResult.StopReason[n];
 		boolean[] active = new boolean[n];
 		Instant[] starts = new Instant[n];
@@ -121,7 +121,7 @@ public final class GenerationLoop {
 			promptLens[i] = promptIds.length;
 			maxTokens[i] = req.samplingParams().maxTokens();
 			generated[i] = new ArrayList<>();
-			texts[i] = new StringBuilder();
+			eosFilters[i] = new EosOutputFilter();
 			reasons[i] = GenerationResult.StopReason.MAX_TOKENS;
 			active[i] = true;
 		}
@@ -189,31 +189,29 @@ public final class GenerationLoop {
 				int nextToken = sampler.sample(logits, req.samplingParams(), historyArr);
 
 				if (nextToken == tokenizer.eosTokenId()) {
+					eosFilters[i].discardHeld();
 					reasons[i] = GenerationResult.StopReason.EOS_TOKEN;
 					active[i] = false;
 				} else if (sampler.isStopToken(nextToken, req.samplingParams())) {
+					eosFilters[i].discardHeld();
 					reasons[i] = GenerationResult.StopReason.STOP_TOKEN;
 					active[i] = false;
 				} else {
 					String piece = streams[i].append(nextToken);
-					if (isEosMarker(piece)) {
-						reasons[i] = GenerationResult.StopReason.EOS_TOKEN;
-						active[i] = false;
-					} else {
-						entries.get(i).consumer().onToken(piece, nextToken, generated[i].size());
+					EosOutputFilter.Outcome outcome = eosFilters[i].accept(piece);
+					if (!outcome.emit().isEmpty()) {
+						entries.get(i).consumer().onToken(outcome.emit(), nextToken, generated[i].size());
 						TokenProducedEvent tpe = new TokenProducedEvent();
 						tpe.requestId = requestIds[i];
 						tpe.position = generated[i].size();
 						tpe.commit();
-						texts[i].append(piece);
+					}
+					if (outcome.stop()) {
+						reasons[i] = GenerationResult.StopReason.EOS_TOKEN;
+						active[i] = false;
+					} else {
 						generated[i].add(nextToken);
 						allTokens[i] = appendToken(allTokens[i], nextToken);
-						// Multi-token EOS suffix detection (mirrors generate() path)
-						if (endsWithEosMarker(texts[i])) {
-							stripEosMarkerSuffix(texts[i]);
-							reasons[i] = GenerationResult.StopReason.EOS_TOKEN;
-							active[i] = false;
-						}
 					}
 				}
 			}
@@ -222,9 +220,12 @@ public final class GenerationLoop {
 		// ── Build results + cleanup ───────────────────────────────────────────
 		List<GenerationResult> results = new ArrayList<>(n);
 		for (int i = 0; i < n; i++) {
-			String tail = streams[i].flush();
-			if (!tail.isEmpty())
-				texts[i].append(tail);
+			EosOutputFilter.Outcome flushed = eosFilters[i].finish(streams[i].flush());
+			if (!flushed.emit().isEmpty()) {
+				entries.get(i).consumer().onToken(flushed.emit(), -1, generated[i].size());
+			}
+			if (flushed.stop())
+				reasons[i] = GenerationResult.StopReason.EOS_TOKEN;
 
 			// Cache prompt prefix for future requests
 			if (!hadCacheHit[i] && promptLens[i] > 0) {
@@ -234,7 +235,7 @@ public final class GenerationLoop {
 			}
 			kvCache.evict(requestIds[i]);
 
-			results.add(new GenerationResult(requestIds[i], texts[i].toString(), generated[i], promptLens[i],
+			results.add(new GenerationResult(requestIds[i], eosFilters[i].text(), generated[i], promptLens[i],
 					generated[i].size(), reasons[i], Instant.now(), Duration.between(starts[i], Instant.now())));
 		}
 		return results;
@@ -296,7 +297,7 @@ public final class GenerationLoop {
 		// Build working token array (prompt IDs only at first)
 		int[] allTokens = promptIds.clone();
 		List<Integer> generatedIds = new ArrayList<>();
-		StringBuilder fullText = new StringBuilder();
+		EosOutputFilter eosFilter = new EosOutputFilter();
 		GenerationResult.StopReason stopReason = GenerationResult.StopReason.MAX_TOKENS;
 
 		// ── Step 2b: Prefill — populate KV cache for uncached prompt tokens ──
@@ -339,45 +340,35 @@ public final class GenerationLoop {
 
 			// Step 5: Check stop conditions by token ID
 			if (nextToken == tokenizer.eosTokenId()) {
+				eosFilter.discardHeld();
 				stopReason = GenerationResult.StopReason.EOS_TOKEN;
 				break;
 			}
 			if (sampler.isStopToken(nextToken, request.samplingParams())) {
+				eosFilter.discardHeld();
 				stopReason = GenerationResult.StopReason.STOP_TOKEN;
 				break;
 			}
 
-			// Step 6: Decode token piece
+			// Step 6–7: Decode and stream through EosOutputFilter.
+			// Holds back partial turn-end markers (e.g. "</"+"s"+">") and strips
+			// complete markers for every supported chat template so /train-qa
+			// completions never leak "</s>", "<|end|>", "<|im_end|>", etc.
 			String piece = stream.append(nextToken);
-
-			// Step 5b: Defensive EOS-string filter (GgufTokenizer quirk — see isEosMarker).
-			if (isEosMarker(piece)) {
+			EosOutputFilter.Outcome outcome = eosFilter.accept(piece);
+			if (!outcome.emit().isEmpty()) {
+				consumer.onToken(outcome.emit(), nextToken, step);
+				TokenProducedEvent tpe = new TokenProducedEvent();
+				tpe.requestId = kvKey;
+				tpe.position = step;
+				tpe.commit();
+			}
+			if (outcome.stop()) {
 				stopReason = GenerationResult.StopReason.EOS_TOKEN;
 				break;
 			}
 
-			// Step 7: Stream to client
-			consumer.onToken(piece, nextToken, step);
-			TokenProducedEvent tpe = new TokenProducedEvent();
-			tpe.requestId = kvKey;
-			tpe.position = step;
-			tpe.commit();
-			fullText.append(piece);
 			generatedIds.add(nextToken);
-
-			// Step 7b: Multi-token EOS suffix detection.
-			// Some models (e.g. TinyLlama/Zephyr) generate EOS markers like "</s>"
-			// as two or three separate character-level tokens rather than the special
-			// EOS token ID. isEosMarker() above only catches single-piece matches.
-			// This check detects the completed pattern in the accumulated text and
-			// stops generation cleanly, stripping the EOS suffix from the result.
-			if (endsWithEosMarker(fullText)) {
-				stripEosMarkerSuffix(fullText);
-				stopReason = GenerationResult.StopReason.EOS_TOKEN;
-				break;
-			}
-
-			// Step 8: Extend token array for next iteration
 			allTokens = appendToken(allTokens, nextToken);
 		}
 
@@ -404,11 +395,13 @@ public final class GenerationLoop {
 			kvCache.evict(kvKey);
 		}
 
-		String tail = stream.flush();
-		if (!tail.isEmpty())
-			fullText.append(tail);
+		EosOutputFilter.Outcome flushed = eosFilter.finish(stream.flush());
+		if (!flushed.emit().isEmpty())
+			consumer.onToken(flushed.emit(), -1, generatedIds.size());
+		if (flushed.stop())
+			stopReason = GenerationResult.StopReason.EOS_TOKEN;
 
-		return new GenerationResult(kvKey, fullText.toString(), generatedIds, promptIds.length, generatedIds.size(),
+		return new GenerationResult(kvKey, eosFilter.text(), generatedIds, promptIds.length, generatedIds.size(),
 				stopReason, Instant.now(), Duration.between(start, Instant.now()));
 	}
 
@@ -431,67 +424,6 @@ public final class GenerationLoop {
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────────
-
-	/**
-	 * Returns true if a decoded piece string is a known EOS marker.
-	 *
-	 * GgufTokenizer quirk: some models have EOS strings like "</s>" stored as
-	 * regular vocabulary entries at token IDs that differ from the special EOS ID.
-	 * Treating these as EOS prevents them leaking into the generated text.
-	 *
-	 * Marker set: "</s>" (LLaMA/Mistral/TinyLlama), "<|endoftext|>" (GPT/Phi),
-	 * "<|end|>" (Phi-3 turn end), "<|eot_id|>" (LLaMA 3), "<end_of_turn>" (Gemma).
-	 */
-	/** EOS marker strings — checked both per-piece and as accumulated suffixes. */
-	private static final String[] EOS_MARKER_STRINGS = { "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>",
-			"<end_of_turn>", "<|im_end|>" };
-
-	private static boolean isEosMarker(String piece) {
-		return switch (piece) {
-		case "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>", "<|im_end|>" -> true;
-		default -> false;
-		};
-	}
-
-	/**
-	 * Returns true if the accumulated text ends with any EOS marker string.
-	 *
-	 * <p>
-	 * Some models (e.g. TinyLlama/Zephyr) generate EOS markers as multiple
-	 * character-level tokens — e.g. {@code "</"}, {@code "s"}, {@code ">"} — rather
-	 * than as the special EOS token ID. {@link #isEosMarker} catches the
-	 * single-token case; this method catches the multi-token case by checking the
-	 * tail of the accumulated text. Only the last {@value #EOS_SUFFIX_CHECK_LEN}
-	 * characters are examined to keep the per-token cost O(1).
-	 */
-	private static boolean endsWithEosMarker(StringBuilder sb) {
-		int len = sb.length();
-		if (len == 0)
-			return false;
-		String tail = sb.substring(Math.max(0, len - EOS_SUFFIX_CHECK_LEN));
-		for (String marker : EOS_MARKER_STRINGS) {
-			if (tail.endsWith(marker))
-				return true;
-		}
-		return false;
-	}
-
-	/**
-	 * Tail length examined by {@link #endsWithEosMarker} (> longest marker = 14
-	 * chars).
-	 */
-	private static final int EOS_SUFFIX_CHECK_LEN = 20;
-
-	/** Removes any trailing EOS marker suffix from {@code sb} in-place. */
-	private static void stripEosMarkerSuffix(StringBuilder sb) {
-		for (String marker : EOS_MARKER_STRINGS) {
-			int mLen = marker.length();
-			if (sb.length() >= mLen && sb.substring(sb.length() - mLen).equals(marker)) {
-				sb.setLength(sb.length() - mLen);
-				return;
-			}
-		}
-	}
 
 	private int[] appendToken(int[] tokens, int newToken) {
 		int[] next = new int[tokens.length + 1];

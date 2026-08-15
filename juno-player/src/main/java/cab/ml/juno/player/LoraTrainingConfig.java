@@ -32,7 +32,8 @@ import cab.ml.juno.node.LoraProjection;
  * Tier 1 fields: projection targets, learning rate, gradient accumulation, and
  * max gradient norm. Tier 2 adds schedule, AdamW decay, LoRA+, dropout, seed,
  * and validation early-stopping. Tier 3 adds {@link LoraAdapterConfig} (scaling,
- * initialization, mode) while retaining rank/alpha accessors.
+ * initialization, mode) while retaining rank/alpha accessors. Tier 8 adds
+ * {@code chunkTokens} and {@code maxTrainTokens} for train-file scheduling.
  *
  * <p>
  * Later tiers extend this builder rather than adding competing
@@ -63,6 +64,12 @@ public final class LoraTrainingConfig {
 	private final String architecture;
 	/** Coarse train-device label for JFR: {@code cpu|cuda|rocm|auto}. */
 	private final String trainDevice;
+	/** Frozen GEMM microbatch width (default 8; 1 = sequential GEMV / FP16). */
+	private final int microbatch;
+	/** Prediction positions per truncated-BPTT window (default 32). */
+	private final int chunkTokens;
+	/** Cap on supervised prediction tokens; {@code 0} = unlimited. */
+	private final int maxTrainTokens;
 
 	private LoraTrainingConfig(Builder b) {
 		this.targets = List.copyOf(b.targets);
@@ -85,6 +92,9 @@ public final class LoraTrainingConfig {
 		this.mergeCapability = b.mergeCapability;
 		this.architecture = b.architecture;
 		this.trainDevice = b.trainDevice;
+		this.microbatch = b.microbatch;
+		this.chunkTokens = b.chunkTokens;
+		this.maxTrainTokens = b.maxTrainTokens;
 	}
 
 	public List<LoraProjection> targets() {
@@ -130,6 +140,10 @@ public final class LoraTrainingConfig {
 
 	public String trainDevice() {
 		return trainDevice;
+	}
+
+	public int microbatch() {
+		return microbatch;
 	}
 
 	/** Stable JFR identity tags for train / validation / operation events. */
@@ -194,6 +208,19 @@ public final class LoraTrainingConfig {
 		return restoreBest;
 	}
 
+	/** Prediction positions per truncated-BPTT window (historical default 32). */
+	public int chunkTokens() {
+		return chunkTokens;
+	}
+
+	/**
+	 * Cap on supervised prediction tokens for epoch sizing; {@code 0} means no
+	 * corpus cap.
+	 */
+	public int maxTrainTokens() {
+		return maxTrainTokens;
+	}
+
 	public static Builder builder() {
 		return new Builder();
 	}
@@ -223,7 +250,10 @@ public final class LoraTrainingConfig {
 		private int groupWidth = 0;
 		private cab.ml.juno.lora.MergeCapability mergeCapability = cab.ml.juno.lora.MergeCapability.F32_PRESERVE;
 		private String architecture = "";
-		private String trainDevice = "cpu";
+		private String trainDevice = cab.ml.juno.node.LoraTrainDevice.AUTO;
+		private int microbatch = cab.ml.juno.node.LoraMicrobatch.DEFAULT;
+		private int chunkTokens = LoraCorpusLimit.DEFAULT_CHUNK_TOKENS;
+		private int maxTrainTokens = 0;
 
 		public Builder targets(List<LoraProjection> targets) {
 			if (targets == null || targets.isEmpty())
@@ -389,7 +419,24 @@ public final class LoraTrainingConfig {
 		}
 
 		public Builder trainDevice(String trainDevice) {
-			this.trainDevice = trainDevice != null && !trainDevice.isBlank() ? trainDevice : "cpu";
+			// Mode (auto|gpu|cpu) from CLI, or resolved label (cpu|cuda|rocm) after open.
+			this.trainDevice = trainDevice != null && !trainDevice.isBlank() ? trainDevice.strip()
+					: cab.ml.juno.node.LoraTrainDevice.AUTO;
+			return this;
+		}
+
+		public Builder microbatch(int microbatch) {
+			this.microbatch = cab.ml.juno.node.LoraMicrobatch.validate(microbatch);
+			return this;
+		}
+
+		public Builder chunkTokens(int chunkTokens) {
+			this.chunkTokens = LoraCorpusLimit.validateChunkTokens(chunkTokens);
+			return this;
+		}
+
+		public Builder maxTrainTokens(int maxTrainTokens) {
+			this.maxTrainTokens = LoraCorpusLimit.validateMaxTrainTokens(maxTrainTokens);
 			return this;
 		}
 

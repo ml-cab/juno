@@ -29,6 +29,8 @@ Distributed LLM inference and fine-tuning. Pure Java - No Python, no GIL, no Spr
 
 - In-process training REPL: `./juno lora` (LoRA on quantized GGUF base; not QLoRA)
 - AdamW schedules, LoRA+, deterministic dropout, and held-out validation (see `docs/LoRA.md`)
+- GPU training: `--lora-train-device auto|gpu|cpu` with `--lora-microbatch` (default 8;
+  VRAM OOM auto-fallback FP32→FP16→CPU); measured TinyLlama speedups in `docs/performance.md`
 - Targets: `qv` (default), `all`, or explicit projection keys; accumulation + grad clipping
 - Inference overlay: `--lora-play PATH` (local, cluster, AWS)
 - Native merge to standalone GGUF: `./juno merge` (patched tensors stored as F32)

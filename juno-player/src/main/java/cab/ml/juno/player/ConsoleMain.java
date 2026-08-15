@@ -184,6 +184,12 @@ public final class ConsoleMain {
 	private static String loraAdapterMode = "lora";
 	private static String loraScaling = "standard";
 	private static String loraInit = "kaiming-uniform";
+	private static int loraChunkTokens = LoraCorpusLimit.DEFAULT_CHUNK_TOKENS;
+	private static int loraMaxTrainTokens = 0;
+	private static String loraTrainDevice = cab.ml.juno.node.LoraTrainDevice.AUTO;
+	private static int loraMicrobatch = cab.ml.juno.node.LoraMicrobatch.DEFAULT;
+	/** Resolved after handler open: cpu|cuda|rocm (for JFR identity). */
+	private static String loraResolvedTrainDevice = "cpu";
 	private static LlamaConfig loraModelConfig; // set in runLoraRepl for /reset
 
 	/** Active programmatic JFR session (local / lora); stopped and extracted on exit. */
@@ -214,8 +220,13 @@ public final class ConsoleMain {
 		o.mode = loraAdapterMode;
 		o.scaling = loraScaling;
 		o.init = loraInit;
+		o.chunkTokens = loraChunkTokens;
+		o.maxTrainTokens = loraMaxTrainTokens;
 		o.architecture = loraModelConfig != null ? loraModelConfig.architecture() : "";
-		o.trainDevice = cab.ml.juno.node.LoraMetricsIdentity.resolveTrainDevice(useGpu);
+		o.trainDevice = loraResolvedTrainDevice != null && !loraResolvedTrainDevice.isBlank()
+				? loraResolvedTrainDevice
+				: loraTrainDevice;
+		o.microbatch = loraMicrobatch;
 		return o.toTrainingConfig();
 	}
 
@@ -310,6 +321,10 @@ public final class ConsoleMain {
 		loraAdapterMode = env.mode;
 		loraScaling = env.scaling;
 		loraInit = env.init;
+		loraChunkTokens = env.chunkTokens;
+		loraMaxTrainTokens = env.maxTrainTokens;
+		loraTrainDevice = env.trainDevice;
+		loraMicrobatch = env.microbatch;
 	}
 
 	private static void parseArgs(String[] args) {
@@ -500,6 +515,26 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					loraInit = args[++i];
 				break;
+			case "--lora-chunk-tokens":
+				if (i + 1 < args.length) {
+					loraChunkTokens = parseInt(args[++i], LoraCorpusLimit.DEFAULT_CHUNK_TOKENS);
+					LoraCorpusLimit.validateChunkTokens(loraChunkTokens);
+				}
+				break;
+			case "--lora-max-train-tokens":
+				if (i + 1 < args.length) {
+					loraMaxTrainTokens = parseInt(args[++i], 0);
+					LoraCorpusLimit.validateMaxTrainTokens(loraMaxTrainTokens);
+				}
+				break;
+			case "--lora-train-device":
+				if (i + 1 < args.length)
+					loraTrainDevice = cab.ml.juno.node.LoraTrainDevice.normalize(args[++i]);
+				break;
+			case "--lora-microbatch":
+				if (i + 1 < args.length)
+					loraMicrobatch = cab.ml.juno.node.LoraMicrobatch.normalize(args[++i]);
+				break;
 			// ─────────────────────────────────────────────────────────────────
 			case "--verbose":
 			case "-v":
@@ -564,7 +599,9 @@ public final class ConsoleMain {
 		System.out.println();
 		System.out.println("  LoRA REPL commands:");
 		System.out.println("    /train <text>            Fine-tune on inline text");
-		System.out.println("    /train-file <path>       Fine-tune on a text file (splits into chunks)");
+		System.out.println("    /train-file <path>       Fine-tune on a text file (default chunk 32; recommend 128)");
+		System.out.println("    /train-qa <q> A: <a>     Fine-tune on one Q&A fact (chat template)");
+		System.out.println("    /train-file-qa <path.json>  Fine-tune on JSON array of {\"Q\",\"A\"} pairs");
 		System.out.println("    /save                    Save adapter checkpoint to --lora-path");
 		System.out.println("    /reset                   Reinitialize adapters and delete .lora checkpoint");
 		System.out.println("    /status                  Show adapter info and training stats");
@@ -592,12 +629,16 @@ public final class ConsoleMain {
 		System.out.println("  --lora-validation-split F  Held-out unit fraction (default: 0)");
 		System.out.println("  --lora-validation-patience N  Early-stop patience (default: 0=off)");
 		System.out.println("  --lora-validation-min-delta F  Min val improvement (default: 0)");
+		System.out.println("  --lora-chunk-tokens N     Truncated-BPTT window (default: 32; recommend 128 for /train-file)");
+		System.out.println("  --lora-max-train-tokens N Cap supervised tokens per train; 0=unlimited (default: 0)");
+		System.out.println("  --lora-train-device M    auto|gpu|cpu (default: auto; gpu fails closed if unavailable)");
+		System.out.println("  --lora-microbatch N     Frozen GEMM width 1..128 (default: 8; 1=FP16 sequential)");
 		System.out.println();
 		System.out.println("Other:");
 		System.out.println("  --health                   Start the standalone health-monitor HTTP server");
-		System.out.println("  --api-port N               Start local REST API (includes /v1/chat/completions)");
-		System.out.println("                             (no --model-path required)");
-		System.out.println("    --port N                   Listen port (default: 8081)");
+		System.out.println("  --api-port N               Start REST API (local/cluster: chat; lora: train-file-qa)");
+		System.out.println("                             lora: POST /v1/lora/train-file-qa , POST /v1/lora/save");
+		System.out.println("    --port N                   Health listen port (default: 8081)");
 		System.out.println("    --stale-ms N               Node stale threshold in ms (default: 15000)");
 		System.out.println("    --warn F                   VRAM warning threshold 0.0-1.0 (default: 0.90)");
 		System.out.println("    --critical F               VRAM critical threshold 0.0-1.0 (default: 0.98)");
@@ -680,8 +721,21 @@ public final class ConsoleMain {
 		ShardContext ctx = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 
 		print(Color.DIM + "  Loading model weights…" + Color.RESET);
-		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(Path.of(modelPath), ctx, adapters);
-		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET + "\n");
+		cab.ml.juno.node.LoraTrainNotices.clear();
+		cab.ml.juno.node.LoraMicrobatch.apply(loraMicrobatch);
+		cab.ml.juno.node.MatVec loraBackend = cab.ml.juno.node.LoraTrainDevice.selectBackend(loraTrainDevice);
+		loraResolvedTrainDevice = cab.ml.juno.node.LoraTrainDevice.labelFor(loraBackend);
+		if (cab.ml.juno.node.LoraTrainDevice.AUTO.equals(loraTrainDevice)
+				&& "cpu".equals(loraResolvedTrainDevice))
+			cab.ml.juno.node.LoraTrainNotices.add(autoCpuFallbackNotice());
+		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(Path.of(modelPath), ctx, adapters, loraBackend);
+		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET);
+		print(Color.DIM + "  " + formatLoraTrainStatus(loraTrainDevice, loraResolvedTrainDevice,
+				cab.ml.juno.node.LoraMicrobatch.current()) + Color.RESET);
+		for (String notice : cab.ml.juno.node.LoraTrainNotices.drain()) {
+			print(Color.YELLOW + "  ⚠ " + notice + Color.RESET);
+		}
+		print("");
 
 		if (verbose) {
 			String detectedModelType = ChatModelType.fromPath(modelPath);
@@ -689,7 +743,8 @@ public final class ConsoleMain {
 			print(Color.DIM + "  [TRACE] model path                     : " + modelPath + Color.RESET);
 			print(Color.DIM + "  [TRACE] LoRA rank=" + loraRank + "  alpha=" + loraAlpha
 					+ "  lr=" + loraLr + "  targets=" + loraTargets + "  accum=" + loraGradientAccumulation
-					+ "  max-grad-norm=" + loraMaxGradNorm + "  loss-target-text=" + loraLossTargetText
+					+ "  max-grad-norm=" + loraMaxGradNorm + "  chunk-tokens=" + loraChunkTokens
+					+ "  max-train-tokens=" + loraMaxTrainTokens + "  loss-target-text=" + loraLossTargetText
 					+ "  loss-target-qa=" + loraLossTargetQa + "  max-iters=" + loraMaxIters
 					+ "  max-iters-qa=" + loraMaxItersQa + "  early-stop=" + loraEarlyStop
 					+ "  temperature=" + temperature + Color.RESET);
@@ -705,10 +760,52 @@ public final class ConsoleMain {
 		LoraAdamOptimizer optimizer = new LoraAdamOptimizer(loraLr, 0.9, 0.999, 1e-8, loraWeightDecay, loraPlusRatio);
 		int[] totalStepsTrained = { 0 };
 		boolean[] dirty = { false }; // unsaved changes?
+		final Object trainLock = new Object();
 
 		SamplingParams params = samplingParamsFromCli();
 
 		ChatHistory history = new ChatHistory();
+
+		LoraApiServer loraApi = null;
+		if (apiPort > 0) {
+			String modelTypeKey = ChatModelType.fromPath(modelPath);
+			loraApi = new LoraApiServer(new LoraApiServer.Backend() {
+				@Override
+				public LoraTrainingLoop.TrainingResult trainFileQa(List<LoraQaFile.Pair> pairs) throws Exception {
+					synchronized (trainLock) {
+						List<LoraTrainingLoop.TrainUnit> units = new ArrayList<>();
+						for (LoraQaFile.Pair pair : pairs) {
+							for (var v : LoraTrainingSequences.buildQaVariants(tokenizer, pair.q(), pair.a(),
+									modelTypeKey))
+								units.add(new LoraTrainingLoop.TrainUnit(v.tokens(), v.lossMask()));
+						}
+						int stepsBefore = optimizer.step();
+						LoraTrainingConfig cfg = currentTrainingConfig();
+						LoraTrainingLoop.TrainingResult result = LoraTrainingLoop.train(units, cfg, adapters, optimizer,
+								(tokens, mask, tctx) -> handler.computeGradients(tokens, mask, tctx),
+								(tokens, mask) -> handler.evaluateLoss(tokens, mask), loraLossTargetQa, loraMaxItersQa,
+								loraEarlyStop, loraChunkTokens);
+						int updates = optimizer.step() - stepsBefore;
+						totalStepsTrained[0] += updates;
+						if (updates > 0)
+							dirty[0] = true;
+						return result;
+					}
+				}
+
+				@Override
+				public Path save() {
+					synchronized (trainLock) {
+						saveAdapters(adapters, adapterFile, totalStepsTrained[0]);
+						dirty[0] = false;
+						return adapterFile.toAbsolutePath();
+					}
+				}
+			});
+			loraApi.start(apiPort);
+			print(Color.GREEN + "  LoRA API on http://localhost:" + apiPort
+					+ "  (POST /v1/lora/train-file-qa , POST /v1/lora/save)" + Color.RESET);
+		}
 
 		print(Color.DIM + "Type to chat, or use /train <text>  /save  /status  /help" + Color.RESET);
 		print("");
@@ -730,8 +827,10 @@ public final class ConsoleMain {
 
 			// ── LoRA commands ──────────────────────────────────────────────
 			if (line.startsWith("/")) {
-				handleLoraCommand(line, adapters, optimizer, handler, tokenizer, adapterFile, totalStepsTrained, dirty,
-						history, loop);
+				synchronized (trainLock) {
+					handleLoraCommand(line, adapters, optimizer, handler, tokenizer, adapterFile, totalStepsTrained,
+							dirty, history, loop);
+				}
 				continue;
 			}
 
@@ -742,7 +841,10 @@ public final class ConsoleMain {
 					System.out.flush();
 					String yn = stdin.readLine();
 					if (yn != null && yn.strip().equalsIgnoreCase("y")) {
-						saveAdapters(adapters, adapterFile, totalStepsTrained[0]);
+						synchronized (trainLock) {
+							saveAdapters(adapters, adapterFile, totalStepsTrained[0]);
+							dirty[0] = false;
+						}
 					}
 				}
 				break;
@@ -775,6 +877,8 @@ public final class ConsoleMain {
 			activeReporters.forEach(r -> r.recordLatency(elapsed));
 		}
 
+		if (loraApi != null)
+			loraApi.stop();
 		loop.evictSession(history.sessionId());
 		print(Color.YELLOW + "\nbye." + Color.RESET);
 		stopAndExtractActiveJfr();
@@ -835,6 +939,26 @@ public final class ConsoleMain {
 			String text = Files.readString(p);
 			print(Color.DIM + "  Loaded: " + p.getFileName() + "  (" + text.length() + " chars)" + Color.RESET);
 			trainOnText(text, adapters, optimizer, handler, tokenizer, totalSteps, dirty);
+		}
+
+		case "/train-file-qa" -> {
+			if (parts.length < 2 || parts[1].isBlank()) {
+				print(Color.RED + "  Usage: /train-file-qa <path.json>" + Color.RESET);
+				print(Color.RED + "  JSON array of {\"Q\":\"...\",\"A\":\"...\"} objects" + Color.RESET);
+				return;
+			}
+			Path p = Path.of(parts[1].strip());
+			List<LoraQaFile.Pair> pairs;
+			try {
+				pairs = LoraQaFile.load(p);
+			} catch (IllegalArgumentException e) {
+				print(Color.RED + "  " + e.getMessage() + Color.RESET);
+				return;
+			}
+			print(Color.DIM + "  Loaded: " + p.getFileName() + "  (" + pairs.size() + " Q&A pair(s))"
+					+ Color.RESET);
+			trainOnQaPairs(pairs, adapters, optimizer, handler, tokenizer, totalSteps, dirty,
+					ChatModelType.fromPath(modelPath));
 		}
 
 		case "/save" -> saveAdapters(adapters, adapterFile, totalSteps[0]);
@@ -937,8 +1061,9 @@ public final class ConsoleMain {
 			print("");
 			print(Color.CYAN_BOLD + "  LoRA REPL commands" + Color.RESET);
 			print("  /train-qa <q> A: <a>  Fine-tune on a Q&A pair in the correct chat format  ← USE THIS");
+			print("  /train-file-qa <path.json>  Fine-tune on many Q&A pairs from a JSON file (one loop)");
 			print("  /train <text>          Fine-tune on raw text (no chat template applied)");
-			print("  /train-file <path>     Fine-tune on a text file (chunks of ~128 tokens)");
+			print("  /train-file <path>     Fine-tune on a text file (default chunk 32; recommend --lora-chunk-tokens 128)");
 			print("  /save                  Save adapter to " + adapterFile);
 			print("  /reset                 Reinitialise adapters, clear chat history, delete checkpoint");
 			print("  /status                Show adapter info and training statistics");
@@ -946,7 +1071,7 @@ public final class ConsoleMain {
 			print("  Regular input          Chat using the current adapter for inference");
 			print("");
 			print("  " + Color.YELLOW + "TIP:" + Color.RESET
-					+ " Use /train-qa for factual recall (names, dates, preferences).");
+					+ " Use /train-qa or /train-file-qa for factual recall (names, dates, preferences).");
 			print("       /train is for style/vocabulary adaptation.");
 			print("");
 		}
@@ -973,46 +1098,54 @@ public final class ConsoleMain {
 	private static void trainOnQA(String question, String answer, LoraAdapterSet adapters, LoraAdamOptimizer optimizer,
 			LoraTrainingHandler handler, Tokenizer tokenizer, int[] totalSteps, boolean[] dirty, String modelType)
 			throws Exception {
+		trainOnQaPairs(List.of(new LoraQaFile.Pair(question, answer)), adapters, optimizer, handler, tokenizer,
+				totalSteps, dirty, modelType);
+	}
 
-		// Echo the parsed question and answer BEFORE training starts — catches typos.
-		// "mt" vs "my" won't be caught by the model; it must be caught by the human.
+	/**
+	 * Fine-tune on one or more Q&amp;A pairs in a single training loop. Each pair is
+	 * expanded to four chat-templated phrasings with completion-only loss.
+	 */
+	private static void trainOnQaPairs(List<LoraQaFile.Pair> pairs, LoraAdapterSet adapters,
+			LoraAdamOptimizer optimizer, LoraTrainingHandler handler, Tokenizer tokenizer, int[] totalSteps,
+			boolean[] dirty, String modelType) throws Exception {
+		if (pairs == null || pairs.isEmpty()) {
+			print(Color.YELLOW + "  No Q&A pairs to train." + Color.RESET);
+			return;
+		}
+
+		// Echo pairs BEFORE training starts — catches typos.
 		print("");
-		print(Color.CYAN_BOLD + "  Question: " + Color.RESET + question);
-		print(Color.CYAN_BOLD + "  Answer  : " + Color.RESET + answer);
+		for (int i = 0; i < pairs.size(); i++) {
+			LoraQaFile.Pair p = pairs.get(i);
+			print(Color.CYAN_BOLD + "  [" + (i + 1) + "] Q: " + Color.RESET + p.q());
+			print(Color.CYAN_BOLD + "      A: " + Color.RESET + p.a());
+		}
 		print(Color.DIM + "  (check spelling above — typos in Q won't match inference phrasing)" + Color.RESET);
 		print("");
 
-		var seq = LoraTrainingSequences.buildQa(tokenizer, question, answer, modelType);
-		int answerPreds = seq.predictionCount();
-		int totalPreds = Math.max(0, seq.tokens().length - 1);
+		var first = LoraTrainingSequences.buildQa(tokenizer, pairs.get(0).q(), pairs.get(0).a(), modelType);
+		int answerPreds = first.predictionCount();
+		int totalPreds = Math.max(0, first.tokens().length - 1);
+		int variantCount = pairs.size() * 4;
 
-		print(Color.DIM + "  Formatted as 4 Q&A variants  ·  model type: " + modelType
-				+ "  ·  completion-only loss (" + answerPreds + "/" + totalPreds + " positions)" + Color.RESET);
+		print(Color.DIM + "  Formatted as " + variantCount + " Q&A variant(s) from " + pairs.size()
+				+ " pair(s)  ·  model type: " + modelType + "  ·  completion-only loss (sample "
+				+ answerPreds + "/" + totalPreds + " positions)" + Color.RESET);
 		if (verbose) {
 			print(Color.DIM + "  loss-target=" + loraLossTargetQa + "  max-iters=" + loraMaxItersQa
 					+ "  early-stop=" + loraEarlyStop
 					+ "  (tune with --lora-loss-target-qa F  --lora-max-iters N  --lora-early-stop F)" + Color.RESET);
-
-			print(Color.DIM + "  [TRACE] ── formatted training text (repr) ──────────────────────" + Color.RESET);
-			print(Color.DIM + "  " + seq.text().replace("\n", "↵\n  ") + Color.RESET);
-			print(Color.DIM + "  [TRACE] ── end training text ──────────────────────────────────" + Color.RESET);
-			print(Color.DIM + "  [TRACE] token count (incl. BOS if add_bos): " + seq.tokens().length + Color.RESET);
-			StringBuilder tokenDbg = new StringBuilder("  [TRACE] token IDs: [");
-			int[] traceTokens = seq.tokens();
-			for (int i = 0; i < traceTokens.length; i++) {
-				if (i > 0) tokenDbg.append(", ");
-				tokenDbg.append(traceTokens[i]);
-			}
-			tokenDbg.append("]");
-			print(Color.DIM + tokenDbg.toString() + Color.RESET);
 		}
 		print("");
 
 		List<LoraTrainingLoop.TrainUnit> units = new ArrayList<>();
-		for (var v : LoraTrainingSequences.buildQaVariants(tokenizer, question, answer, modelType))
-			units.add(new LoraTrainingLoop.TrainUnit(v.tokens(), v.lossMask()));
+		for (LoraQaFile.Pair pair : pairs) {
+			for (var v : LoraTrainingSequences.buildQaVariants(tokenizer, pair.q(), pair.a(), modelType))
+				units.add(new LoraTrainingLoop.TrainUnit(v.tokens(), v.lossMask()));
+		}
 		trainOnUnits(units, adapters, optimizer, handler, totalSteps, dirty, loraLossTargetQa, loraMaxItersQa, "qa",
-				32);
+				loraChunkTokens);
 	}
 
 		/**
@@ -1043,23 +1176,30 @@ public final class ConsoleMain {
 	}
 
 	/**
-	 * Chunk a masked sequence and run loss-target training with optional skip when
-	 * the loaded adapters are already at the target (avoids one more Adam step that
-	 * deepens mode collapse).
+	 * Build a document-level unit (optionally corpus-capped) and run loss-target
+	 * training with optional skip when the loaded adapters are already at the
+	 * target (avoids one more Adam step that deepens mode collapse).
 	 */
 	private static void trainOnMasked(LoraTrainingSequences.MaskedSequence seq, LoraAdapterSet adapters,
 			LoraAdamOptimizer optimizer, LoraTrainingHandler handler, int[] totalSteps, boolean[] dirty,
 			float lossTarget, int maxIters, String logLabel) throws Exception {
-		final int CHUNK = 32;
-		List<LoraTrainingSequences.MaskedChunk> chunks = LoraTrainingSequences.chunk(seq, CHUNK);
-		if (chunks.isEmpty()) {
+		List<LoraTrainingLoop.TrainUnit> units = LoraCorpusLimit.limitDocument(seq.tokens(), seq.lossMask(),
+				loraChunkTokens, loraMaxTrainTokens, loraSeed);
+		if (units.isEmpty()) {
 			print(Color.YELLOW + "  No trainable (completion) tokens in this example." + Color.RESET);
 			return;
 		}
-		List<LoraTrainingLoop.TrainUnit> units = new ArrayList<>();
-		for (var c : chunks)
-			units.add(new LoraTrainingLoop.TrainUnit(c.tokens(), c.lossMask()));
-		trainOnUnits(units, adapters, optimizer, handler, totalSteps, dirty, lossTarget, maxIters, logLabel, CHUNK);
+		if (loraMaxTrainTokens > 0 && units.size() > 1) {
+			int cappedPred = 0;
+			for (var u : units)
+				for (boolean m : u.lossMask())
+					if (m)
+						cappedPred++;
+			print(Color.DIM + "  Corpus cap: max-train-tokens=" + loraMaxTrainTokens + " → " + units.size()
+					+ " chunk unit(s), " + cappedPred + " supervised (seed=" + loraSeed + ")" + Color.RESET);
+		}
+		trainOnUnits(units, adapters, optimizer, handler, totalSteps, dirty, lossTarget, maxIters, logLabel,
+				loraChunkTokens);
 	}
 
 	private static void trainOnUnits(List<LoraTrainingLoop.TrainUnit> units, LoraAdapterSet adapters,
@@ -1077,10 +1217,10 @@ public final class ConsoleMain {
 
 		print("");
 		System.out.printf(
-				"  %sTraining%s  rank=%d · lr=%s · schedule=%s · dropout=%s · plus=%s · decay=%s · targets=%s · accum=%d · max-norm=%s · target=%.2f · max %d pass(es) · %d unit(s) · %d tokens · %d supervised%n",
+				"  %sTraining%s  rank=%d · lr=%s · schedule=%s · dropout=%s · plus=%s · decay=%s · targets=%s · accum=%d · max-norm=%s · chunk=%d · target=%.2f · max %d pass(es) · %d unit(s) · %d tokens · %d supervised%n",
 				Color.CYAN_BOLD, Color.RESET, loraRank, loraLr, loraLrSchedule, loraDropout, loraPlusRatio,
-				loraWeightDecay, loraTargets, loraGradientAccumulation, loraMaxGradNorm, lossTarget, maxIters,
-				units.size(), tokenCount, predCount);
+				loraWeightDecay, loraTargets, loraGradientAccumulation, loraMaxGradNorm, chunkTokens, lossTarget,
+				maxIters, units.size(), tokenCount, predCount);
 		print("  " + "─".repeat(62));
 
 		// Probe with forward-only eval — skip updates if already at target.
@@ -1195,6 +1335,7 @@ public final class ConsoleMain {
 		event.predictionCount = batch.predictionCount();
 		event.forwardMs = batch.forwardMs();
 		event.backwardMs = batch.backwardMs();
+		batch.timing().apply(event);
 
 		LoraGradients.PrepResult prep = LoraGradients.prepare(adapters, batch.predictionCount(), loraMaxGradNorm);
 		event.globalGradNorm = (float) prep.globalNorm();
@@ -1236,7 +1377,7 @@ public final class ConsoleMain {
 			long durationMs, long bytes) {
 		LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(adapters,
 				loraModelConfig != null ? loraModelConfig.architecture() : "",
-				LoraMetricsIdentity.resolveTrainDevice(useGpu));
+				loraResolvedTrainDevice);
 		LoraCheckpointEvent ev = new LoraCheckpointEvent();
 		ev.begin();
 		identity.apply(ev);
@@ -1251,7 +1392,7 @@ public final class ConsoleMain {
 	private static void commitPlaybackEvent(LoraAdapterSet adapters, long loadMs) {
 		LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(adapters,
 				loraModelConfig != null ? loraModelConfig.architecture() : "",
-				LoraMetricsIdentity.resolveTrainDevice(useGpu));
+				loraResolvedTrainDevice);
 		LoraPlaybackEvent ev = new LoraPlaybackEvent();
 		ev.begin();
 		identity.apply(ev);
@@ -1268,6 +1409,32 @@ public final class ConsoleMain {
 		String stem = dot > 0 ? name.substring(0, dot) : name;
 		Path parent = p.getParent();
 		return (parent != null ? parent.resolve(stem) : Path.of(stem)) + ".lora";
+	}
+
+	/** Plain-language LoRA train device / microbatch status after weight load. */
+	static String formatLoraTrainStatus(String requested, String resolved, int microbatch) {
+		String deviceLabel = switch (resolved) {
+		case "cuda" -> "CUDA";
+		case "rocm" -> "ROCm";
+		default -> "CPU";
+		};
+		String autoNote = cab.ml.juno.node.LoraTrainDevice.AUTO.equals(requested) ? " (auto-selected)" : "";
+		return "Training on " + deviceLabel + autoNote + " · microbatch size " + microbatch;
+	}
+
+	/** Why {@code --lora-train-device=auto} resolved to CPU, plus the speed consequence. */
+	private static String autoCpuFallbackNotice() {
+		if (!useGpu)
+			return cab.ml.juno.node.LoraTrainNotices.AUTO_CPU_DISABLED;
+		boolean gpuAvailable = CudaAvailability.isAvailable() || RocmAvailability.isAvailable();
+		if (!gpuAvailable)
+			return cab.ml.juno.node.LoraTrainNotices.AUTO_CPU_UNAVAILABLE;
+		int dev = Math.max(0, Integer.getInteger("juno.gpu.device", Integer.getInteger("juno.cuda.device", 0)));
+		int devCount = CudaAvailability.isAvailable() ? CudaAvailability.deviceCount()
+				: RocmAvailability.deviceCount();
+		if (dev >= devCount)
+			return cab.ml.juno.node.LoraTrainNotices.AUTO_CPU_BAD_DEVICE;
+		return cab.ml.juno.node.LoraTrainNotices.AUTO_CPU_UNAVAILABLE;
 	}
 
 	// ── JFR local mode ────────────────────────────────────────────────────────

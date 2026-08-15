@@ -36,6 +36,9 @@ import cab.ml.juno.lora.QaLoraAdapter;
  * applied before RoPE, and either standard adjacent-pair RoPE or YaRN scaling
  * ({@link Qwen3Rope}). MoE and grouped-expert routing are out of scope; use
  * {@link LoraTrainingHandlerFactory} to reject the {@code qwen3moe} arch.
+ *
+ * <p>When the MatVec backend is a {@link GpuMatVec}, dense projections are
+ * uploaded via {@link LoraResidentWeights} for resident forward and transpose.
  */
 public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 
@@ -82,6 +85,15 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 	private final GgufReader.QuantizedTensor[] ffnUp;   // [I, H]
 	private final GgufReader.QuantizedTensor[] wDown;   // [H, I]
 
+	private ResidentWeightMatrix[] attnQDev;
+	private ResidentWeightMatrix[] attnKDev;
+	private ResidentWeightMatrix[] attnVDev;
+	private ResidentWeightMatrix[] woDev;
+	private ResidentWeightMatrix[] ffnGateDev;
+	private ResidentWeightMatrix[] ffnUpDev;
+	private ResidentWeightMatrix[] wDownDev;
+	private ResidentWeightMatrix outputProjDev;
+
 	private final LoraAdapterSet loraAdapters;
 	private LoraTrainContext trainCtx = LoraTrainContext.disabled();
 	private int trainTokenPos;
@@ -95,28 +107,28 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 
 	public static Qwen3LoraTrainableHandler load(Path modelPath, ShardContext context, LoraAdapterSet adapters)
 			throws IOException {
-		return load(modelPath, context, adapters, CpuMatVec.INSTANCE);
+		return load(modelPath, context, adapters, ForwardPassHandlerLoader.selectLoraBackend());
 	}
 
 	/**
-	 * Load a Qwen3 shard with LoRA adapters. The {@code backend} argument is
-	 * accepted for signature symmetry with {@link LoraTrainingHandlerFactory};
-	 * this Tier 6 implementation always runs CPU quantised matmul.
+	 * Load a Qwen3 shard with LoRA adapters. GPU backends upload dense projections
+	 * via {@link LoraResidentWeights}; CPU keeps quantised matmul.
 	 */
 	public static Qwen3LoraTrainableHandler load(Path modelPath, ShardContext context, LoraAdapterSet adapters,
 			MatVec backend) throws IOException {
 		log.info("Loading Qwen3 LoRA handler: layers " + context.startLayer() + "-" + context.endLayer()
-				+ "  adapters=" + adapters.size() + "  file=" + modelPath);
+				+ "  adapters=" + adapters.size() + "  backend=" + backend.getClass().getSimpleName()
+				+ "  file=" + modelPath);
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			Qwen3Config cfg = Qwen3Config.from(r);
 			LoraModelLayout layout = LoraModelLayout.qwen3(cfg);
 			LoraInitializer.validate(adapters, layout);
-			return new Qwen3LoraTrainableHandler(r, cfg, context, adapters);
+			return new Qwen3LoraTrainableHandler(r, cfg, context, adapters, backend);
 		}
 	}
 
-	private Qwen3LoraTrainableHandler(GgufReader r, Qwen3Config cfg, ShardContext ctx, LoraAdapterSet adapters)
-			throws IOException {
+	private Qwen3LoraTrainableHandler(GgufReader r, Qwen3Config cfg, ShardContext ctx, LoraAdapterSet adapters,
+			MatVec backend) throws IOException {
 		this.cfg = cfg;
 		this.loraAdapters = adapters;
 		this.startLayer = ctx.startLayer();
@@ -161,6 +173,66 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 			ffnUp[li] = r.tensorRaw("blk." + i + ".ffn_up.weight");
 			wDown[li] = r.tensorRaw("blk." + i + ".ffn_down.weight");
 		}
+
+		attnQDev = attnKDev = attnVDev = woDev = ffnGateDev = ffnUpDev = wDownDev = null;
+		outputProjDev = null;
+		if (backend instanceof GpuMatVec gpu)
+			uploadResidentWeights(gpu, L);
+	}
+
+	private void uploadResidentWeights(GpuMatVec gpu, int L) {
+		int H = cfg.hiddenDim();
+		int qDim = cfg.qDim();
+		int kvDim = cfg.kvDim();
+		int I = cfg.intermediateSize();
+		ResidentWeightMatrix[] qD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] kD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] vD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] woD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] gateD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] upD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] downD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] outHolder = new ResidentWeightMatrix[1];
+		LoraResidentUpload.run(gpu, log, () -> {
+			LoraResidentWeights.closeArray(qD);
+			LoraResidentWeights.closeArray(kD);
+			LoraResidentWeights.closeArray(vD);
+			LoraResidentWeights.closeArray(woD);
+			LoraResidentWeights.closeArray(gateD);
+			LoraResidentWeights.closeArray(upD);
+			LoraResidentWeights.closeArray(downD);
+			LoraResidentWeights.closeQuietly(outHolder[0]);
+			outHolder[0] = null;
+		}, () -> {
+			boolean microbatch = LoraMicrobatch.current() > 1;
+			boolean half = !microbatch && gpu.supportsHalfResident();
+			log.info("Qwen3 LoRA: uploading projection weights to GPU ("
+					+ (half ? "FP16" : "FP32")
+					+ (microbatch ? ", microbatch=" + LoraMicrobatch.current() : "")
+					+ ")…");
+			for (int li = 0; li < L; li++) {
+				qD[li] = LoraResidentWeights.uploadQuant(gpu, attnQ[li], qDim, H);
+				kD[li] = LoraResidentWeights.uploadQuant(gpu, attnK[li], kvDim, H);
+				vD[li] = LoraResidentWeights.uploadQuant(gpu, attnV[li], kvDim, H);
+				woD[li] = LoraResidentWeights.uploadQuant(gpu, wo[li], H, qDim);
+				gateD[li] = LoraResidentWeights.uploadQuant(gpu, ffnGate[li], I, H);
+				upD[li] = LoraResidentWeights.uploadQuant(gpu, ffnUp[li], I, H);
+				downD[li] = LoraResidentWeights.uploadQuant(gpu, wDown[li], H, I);
+			}
+			if (outputProj != null) {
+				int V = outputProj.length / H;
+				outHolder[0] = LoraResidentWeights.upload(gpu, outputProj, V, H);
+			}
+			this.attnQDev = qD;
+			this.attnKDev = kD;
+			this.attnVDev = vD;
+			this.woDev = woD;
+			this.ffnGateDev = gateD;
+			this.ffnUpDev = upD;
+			this.wDownDev = downD;
+			this.outputProjDev = outHolder[0];
+			log.info("Qwen3 LoRA: GPU weight upload complete (" + (half ? "FP16" : "FP32") + ").");
+		});
 	}
 
 	private static float[] loadOutputProjection(GgufReader r) throws IOException {
@@ -214,7 +286,16 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 
 	@Override
 	public void releaseGpuResources() {
-		// CPU-only Tier 6 implementation.
+		LoraResidentWeights.closeArray(attnQDev);
+		LoraResidentWeights.closeArray(attnKDev);
+		LoraResidentWeights.closeArray(attnVDev);
+		LoraResidentWeights.closeArray(woDev);
+		LoraResidentWeights.closeArray(ffnGateDev);
+		LoraResidentWeights.closeArray(ffnUpDev);
+		LoraResidentWeights.closeArray(wDownDev);
+		LoraResidentWeights.closeQuietly(outputProjDev);
+		attnQDev = attnKDev = attnVDev = woDev = ffnGateDev = ffnUpDev = wDownDev = null;
+		outputProjDev = null;
 	}
 
 	private float[] getInitialActivation(ForwardRequest req) {
@@ -250,9 +331,9 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 
 		float[] xNorm1 = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
 
-		float[] q = LlamaTransformerHandler.matVec(attnQ[li], xNorm1, qDim, H);
-		float[] k = LlamaTransformerHandler.matVec(attnK[li], xNorm1, kvDim, H);
-		float[] v = LlamaTransformerHandler.matVec(attnV[li], xNorm1, kvDim, H);
+		float[] q = LoraResidentWeights.matVec(attnQ[li], attnQDev != null ? attnQDev[li] : null, xNorm1, qDim, H);
+		float[] k = LoraResidentWeights.matVec(attnK[li], attnKDev != null ? attnKDev[li] : null, xNorm1, kvDim, H);
+		float[] v = LoraResidentWeights.matVec(attnV[li], attnVDev != null ? attnVDev[li] : null, xNorm1, kvDim, H);
 
 		applyLoraInPlace(q, li, "wq", xNorm1);
 		applyLoraInPlace(k, li, "wk", xNorm1);
@@ -268,7 +349,7 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		System.arraycopy(v, 0, vCacheLayer, pos * kvDim, kvDim);
 
 		float[] attnOut = Qwen3TransformerHandler.gqa(cfg, q, kCacheLayer, vCacheLayer, pos + 1);
-		float[] attnProj = LlamaTransformerHandler.matVec(wo[li], attnOut, H, qDim);
+		float[] attnProj = LoraResidentWeights.matVec(wo[li], woDev != null ? woDev[li] : null, attnOut, H, qDim);
 		applyLoraInPlace(attnProj, li, "wo", attnOut);
 		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
 
@@ -280,20 +361,21 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 	private float[] outputProjection(float[] x) {
 		float[] xn = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
 		int actualVocab = outputProj.length / cfg.hiddenDim();
-		return LlamaTransformerHandler.matVec(outputProj, xn, actualVocab, cfg.hiddenDim());
+		return LoraResidentWeights.matVecDense(outputProj, outputProjDev, xn, actualVocab, cfg.hiddenDim());
 	}
 
 	private float[] ffn(float[] xNorm2, int li) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
-		float[] gate = LlamaTransformerHandler.matVec(ffnGate[li], xNorm2, I, H);
-		float[] up = LlamaTransformerHandler.matVec(ffnUp[li], xNorm2, I, H);
+		float[] gate = LoraResidentWeights.matVec(ffnGate[li], ffnGateDev != null ? ffnGateDev[li] : null, xNorm2, I,
+				H);
+		float[] up = LoraResidentWeights.matVec(ffnUp[li], ffnUpDev != null ? ffnUpDev[li] : null, xNorm2, I, H);
 		applyLoraInPlace(gate, li, "wgate", xNorm2);
 		applyLoraInPlace(up, li, "wup", xNorm2);
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
 			hidden[i] = LlamaTransformerHandler.silu(gate[i]) * up[i];
-		float[] down = LlamaTransformerHandler.matVec(wDown[li], hidden, H, I);
+		float[] down = LoraResidentWeights.matVec(wDown[li], wDownDev != null ? wDownDev[li] : null, hidden, H, I);
 		applyLoraInPlace(down, li, "wdown", hidden);
 		return down;
 	}
@@ -344,7 +426,8 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 					allXFinal[pos] = x.clone();
 					allXNormFinal[pos] = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
 					int actualVocab = outputProj.length / H;
-					float[] logits = LlamaTransformerHandler.matVec(outputProj, allXNormFinal[pos], actualVocab, H);
+					float[] logits = LoraResidentWeights.matVecDense(outputProj, outputProjDev, allXNormFinal[pos],
+							actualVocab, H);
 					allProbs[pos] = softmaxCopy(logits);
 				}
 			}
@@ -373,8 +456,7 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 				if (hasOutputProj) {
 					float[] gradLogits = allProbs[pos].clone();
 					gradLogits[target] -= 1.0f;
-					float[] gradXNormFinal = LoraTrainingMath.transposedMatVec(
-							new GgufReader.QuantizedTensor("output", 0, actualVocab * H, floatBytes(outputProj)),
+					float[] gradXNormFinal = LoraResidentWeights.transposedMatVecDense(outputProj, outputProjDev,
 							gradLogits, actualVocab, H);
 					gradX = LoraTrainingMath.rmsNormBackward(allXFinal[pos], outputNorm, gradXNormFinal,
 							cfg.rmsNormEps());
@@ -426,7 +508,7 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 			if (hasOutputProj) {
 				float[] xn = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
 				int actualVocab = outputProj.length / H;
-				float[] logits = LlamaTransformerHandler.matVec(outputProj, xn, actualVocab, H);
+				float[] logits = LoraResidentWeights.matVecDense(outputProj, outputProjDev, xn, actualVocab, H);
 				float[] probs = softmaxCopy(logits);
 				lossSum -= (float) Math.log(Math.max(probs[tokens[pos + 1]], 1e-9f));
 			}
@@ -478,9 +560,9 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 
 		float[] xNorm1 = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
 
-		float[] q = LlamaTransformerHandler.matVec(attnQ[li], xNorm1, qDim, H);
-		float[] k = LlamaTransformerHandler.matVec(attnK[li], xNorm1, kvDim, H);
-		float[] v = LlamaTransformerHandler.matVec(attnV[li], xNorm1, kvDim, H);
+		float[] q = LoraResidentWeights.matVec(attnQ[li], attnQDev != null ? attnQDev[li] : null, xNorm1, qDim, H);
+		float[] k = LoraResidentWeights.matVec(attnK[li], attnKDev != null ? attnKDev[li] : null, xNorm1, kvDim, H);
+		float[] v = LoraResidentWeights.matVec(attnV[li], attnVDev != null ? attnVDev[li] : null, xNorm1, kvDim, H);
 
 		applyLoraInPlace(q, li, "wq", xNorm1);
 		applyLoraInPlace(k, li, "wk", xNorm1);
@@ -539,14 +621,15 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 			}
 		}
 
-		float[] attnProj = LlamaTransformerHandler.matVec(wo[li], attnOut, H, qDim);
+		float[] attnProj = LoraResidentWeights.matVec(wo[li], woDev != null ? woDev[li] : null, attnOut, H, qDim);
 		applyLoraInPlace(attnProj, li, "wo", attnOut);
 		float[] xRes2 = LlamaTransformerHandler.add(x, attnProj);
 		float[] xNorm2 = LlamaTransformerHandler.rmsNorm(xRes2, ffnNorm[li], cfg.rmsNormEps());
 
 		int I = cfg.intermediateSize();
-		float[] gate = LlamaTransformerHandler.matVec(ffnGate[li], xNorm2, I, H);
-		float[] up = LlamaTransformerHandler.matVec(ffnUp[li], xNorm2, I, H);
+		float[] gate = LoraResidentWeights.matVec(ffnGate[li], ffnGateDev != null ? ffnGateDev[li] : null, xNorm2, I,
+				H);
+		float[] up = LoraResidentWeights.matVec(ffnUp[li], ffnUpDev != null ? ffnUpDev[li] : null, xNorm2, I, H);
 		applyLoraInPlace(gate, li, "wgate", xNorm2);
 		applyLoraInPlace(up, li, "wup", xNorm2);
 		float[] hidden = new float[I];
@@ -559,7 +642,8 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 
 	private float[] computeLayerOutput(LayerState st, int li) {
 		int H = cfg.hiddenDim();
-		float[] ffnOut = LlamaTransformerHandler.matVec(wDown[li], st.hiddenAct(), H, cfg.intermediateSize());
+		float[] ffnOut = LoraResidentWeights.matVec(wDown[li], wDownDev != null ? wDownDev[li] : null, st.hiddenAct(),
+				H, cfg.intermediateSize());
 		applyLoraInPlace(ffnOut, li, "wdown", st.hiddenAct());
 		return LlamaTransformerHandler.add(st.xRes2(), ffnOut);
 	}
@@ -582,7 +666,8 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		float[] gradXRes2 = gradOut.clone();
 		float[] gradFfnOut = gradOut;
 
-		float[] gradHidden = LoraTrainingMath.transposedMatVec(wDown[li], gradFfnOut, H, I);
+		float[] gradHidden = LoraResidentWeights.transposedMatVec(wDown[li],
+				wDownDev != null ? wDownDev[li] : null, gradFfnOut, H, I);
 		addLoraBackward(gradHidden, absLayer, "wdown", gradFfnOut, st.hiddenAct());
 
 		float[] gradGate = new float[I];
@@ -595,8 +680,9 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		}
 
 		float[] gradXNorm2 = add(
-				LoraTrainingMath.transposedMatVec(ffnGate[li], gradGate, I, H),
-				LoraTrainingMath.transposedMatVec(ffnUp[li], gradUp, I, H));
+				LoraResidentWeights.transposedMatVec(ffnGate[li], ffnGateDev != null ? ffnGateDev[li] : null, gradGate,
+						I, H),
+				LoraResidentWeights.transposedMatVec(ffnUp[li], ffnUpDev != null ? ffnUpDev[li] : null, gradUp, I, H));
 		addLoraBackward(gradXNorm2, absLayer, "wgate", gradGate, st.xNorm2());
 		addLoraBackward(gradXNorm2, absLayer, "wup", gradUp, st.xNorm2());
 
@@ -606,7 +692,8 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		float[] gradXIn = gradXRes2.clone();
 		float[] gradAttnProj = gradXRes2;
 
-		float[] gradAttnOut = LoraTrainingMath.transposedMatVec(wo[li], gradAttnProj, H, qDim);
+		float[] gradAttnOut = LoraResidentWeights.transposedMatVec(wo[li], woDev != null ? woDev[li] : null,
+				gradAttnProj, H, qDim);
 		addLoraBackward(gradAttnOut, absLayer, "wo", gradAttnProj, st.attnOut());
 
 		// ── Attention backward ────────────────────────────────────────────────
@@ -665,14 +752,17 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		float[] gradKPre = LoraTrainingMath.perHeadRmsNormBackward(st.kPreNorm(), kNorm[li], gradK, NKV, Hd,
 				cfg.rmsNormEps());
 
-		float[] gradXNorm1 = LoraTrainingMath.transposedMatVec(attnQ[li], gradQ, qDim, H);
+		float[] gradXNorm1 = LoraResidentWeights.transposedMatVec(attnQ[li],
+				attnQDev != null ? attnQDev[li] : null, gradQ, qDim, H);
 		addLoraBackward(gradXNorm1, absLayer, "wq", gradQ, st.xNorm1());
 
-		float[] gradXNorm1_k = LoraTrainingMath.transposedMatVec(attnK[li], gradKPre, kvDim, H);
+		float[] gradXNorm1_k = LoraResidentWeights.transposedMatVec(attnK[li],
+				attnKDev != null ? attnKDev[li] : null, gradKPre, kvDim, H);
 		addLoraBackward(gradXNorm1_k, absLayer, "wk", gradKPre, st.xNorm1());
 		addInPlace(gradXNorm1, gradXNorm1_k);
 
-		float[] gradXNorm1_v = LoraTrainingMath.transposedMatVec(attnV[li], gradV, kvDim, H);
+		float[] gradXNorm1_v = LoraResidentWeights.transposedMatVec(attnV[li],
+				attnVDev != null ? attnVDev[li] : null, gradV, kvDim, H);
 		addLoraBackward(gradXNorm1_v, absLayer, "wv", gradV, st.xNorm1());
 		addInPlace(gradXNorm1, gradXNorm1_v);
 
@@ -759,13 +849,6 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 	private static void addInPlace(float[] dst, float[] src) {
 		for (int i = 0; i < dst.length; i++)
 			dst[i] += src[i];
-	}
-
-	private static byte[] floatBytes(float[] data) {
-		java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(data.length * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-		for (float f : data)
-			buf.putFloat(f);
-		return buf.array();
 	}
 
 	private static void ensureKvCapacity(float[][] cache, int pos, int kvDim) {

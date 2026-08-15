@@ -38,6 +38,15 @@ CPU-only inference requires no GPU stack. The `./juno` launcher enforces JDK 25 
 - In-process training REPL: `./juno lora`
 - Inference overlay: `--lora-play PATH` (local, cluster, AWS)
 - Native merge to standalone GGUF: `./juno merge` (patched tensors stored as F32)
+- Train-file scheduling: `--lora-chunk-tokens` (default 32; recommend 128 for files),
+  `--lora-max-train-tokens` seeded corpus caps
+- Train device: `--lora-train-device auto|gpu|cpu` (`gpu` fails closed if unavailable)
+- Microbatch: `--lora-microbatch N` / `LORA_MICROBATCH` (default 8; `1` = FP16 sequential);
+  VRAM OOM auto-retries FP16 then CPU under `auto`
+- **GPU LoRA training** (LLaMA/Qwen2): resident FP32 forward/transpose + microbatched GEMM
+  (default batch 8); adapters/Adam on host. See [docs/performance.md](docs/performance.md).
+- Multi-arch resident GPU transpose: LLaMA-family, Qwen2, Phi-3 (fused physical), dense Qwen3
+  via shared `LoraResidentWeights` (FP32→FP16→CPU VRAM ladder under `auto`)
 
 ### OpenAI-compatible REST
 

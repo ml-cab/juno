@@ -1,5 +1,103 @@
 ## Status
 
+**Session 50** — `/train-file-qa`: multi-fact Q&A from a JSON file in one training loop; HTTP API.
+
+### `/train-file-qa`
+
+- REPL command loads a `.json` array of `{"Q","A"}` objects via `LoraQaFile`.
+- Each pair expands to the same four chat-templated variants as `/train-qa`; all units
+  train in one `trainOnUnits` pass with QA loss targets.
+- `LoraTrainer.trainQaPairsUntilResult` for the programmatic multi-pair path.
+- `LoraApiServer` — with `./juno lora --api-port N`: `POST /v1/lora/train-file-qa`
+  (JSON body) and `POST /v1/lora/save` for curl workflows.
+- Dropped verbose `[TRACE]` dump of formatted training text / token IDs on `/train-qa`.
+- Docs: `docs/LoRA.md`, `docs/howto.md`.
+
+---
+
+## Status
+
+**Session 49** — LoRA Tier 11 (complete): `--lora-microbatch` CLI/env + VRAM OOM auto-fallback.
+
+### LoRA microbatch CLI and VRAM ladder (Tier 11)
+
+- `LoraMicrobatch` — `--lora-microbatch N` / `LORA_MICROBATCH` (default 8, range 1..128);
+  applies `juno.lora.microbatch` before resident upload (no `JAVA_TOOL_OPTIONS` required).
+- `LoraResidentUpload` — on FP32 microbatch VRAM OOM with half support: close, set
+  microbatch=1, retry FP16 once; further OOM uses existing auto→CPU / gpu fail-closed policy.
+- Wired through `LoraCliOptions`, `LoraTrainingConfig`, `ConsoleMain`, `LoraTrainer`,
+  `scripts/run.sh` / `run.bat`, and all three LoRA training handlers.
+- Docs: `docs/LoRA.md`, `docs/howto.md`, `docs/performance.md`, `docs/agent-arch.txt`.
+
+---
+
+## Status
+
+**Session 48** — LoRA Tier 9 (complete): microbatch GEMM + published GPU speed gates.
+
+### LoRA GPU microbatch and product gates (Tier 9)
+
+- `GpuBlasOps` / `DeviceActivationBatch` — FP32 `cublasSgemm_v2` / `rocblas_sgemm` microbatch
+  for frozen forward and transpose; CPU oracle `CpuFrozenBatchOps`.
+- Default `juno.lora.microbatch=8` uploads FP32 resident weights and batches linears across
+  positions in `LoraTrainableHandler.computeGradients` (host adapters / Adam unchanged).
+- `LoraTrainableHandlerGpuBackwardTest` — CPU↔GPU loss/grad parity + TinyLlama speed gates
+  (GTX 1080: **~14× e2e**, **~11× backward** vs CPU).
+- Docs may describe production **GPU LoRA training** as frozen batched GPU + host adapters;
+  device-resident adapters / GPU Adam remain deferred (not required after intensity proof).
+- `--lora-train-device` and LLaMA/Qwen2 timing subsets remain as in Session 46 (`transferMs` still 0).
+
+---
+
+## Status
+
+**Session 47** — LoRA Tier 10 (complete): multi-arch GPU residency + production gates.
+
+### LoRA multi-arch GPU residency (Tier 10)
+
+- `LoraResidentWeights` — shared upload / close / VRAM-OOM fallback / matVec+transpose routing.
+- `LoraTrainableHandler` refactored onto the helper (LLaMA-family / Qwen2 unchanged behavior).
+- `Phi3LoraTrainableHandler` / `Qwen3LoraTrainableHandler` upload physical fused (Phi) or dense
+  (Qwen3) projections when `--lora-train-device` resolves to a `GpuMatVec`; CPU fallback preserved.
+- Gated live LoRA smokes (`LoraLiveSmokeTest`) for TinyLlama / Qwen2.5 / Phi-3.5 / dense Qwen3 fixtures.
+- `EosOutputFilter` — hold back / strip turn-end markers (`</s>`, `<|end|>`, `<|im_end|>`, …) so
+  `/train-qa` completions never stream into REPL or `GenerationResult` text (all LoRA chat templates).
+- DoRA: correctness-complete, **not** production-perf-gated (prefer LoRA/rsLoRA for large all-linear jobs).
+- Tier 7 JFR metrics marked **complete** (programmatic `--jfr`, mode identity, extractor, docs).
+- Tier 5 held-out research / quality matrix remains **deferred**; exact K-quant QA-LoRA merge unsupported.
+
+---
+
+## Status
+
+**Session 46** — LoRA Tier 9 (start → completed in Session 48): `--lora-train-device` productization.
+
+### LoRA GPU train-device (Tier 9)
+
+- `--lora-train-device auto|gpu|cpu` / `LORA_TRAIN_DEVICE` (default **auto**).
+- `LoraTrainDevice` — MatVec selection; `gpu` fails closed without CUDA/ROCm; `cpu` forces `CpuMatVec`.
+- `LoraTrainer` / LoRA REPL honor the mode; JFR `trainDevice` is the resolved label (`cpu`/`cuda`/`rocm`).
+- `LoraStepTiming` — fills `frozenForwardMs` / `frozenTransposeBackwardMs` / `adapterBackwardMs` /
+  `attentionNonlinearMs` on `juno.LoraTrainStep` from LLaMA/Qwen2 handler instrumentation (`transferMs` still 0 until H2D counters).
+- Microbatch / parity IT / speed gates: completed in Session 48.
+
+---
+
+## Status
+
+**Session 45** — LoRA Tier 8: train-file scheduling and corpus caps.
+
+### LoRA train-file scheduling (Tier 8)
+
+- `--lora-chunk-tokens` / `LORA_CHUNK_TOKENS` (default **32**; recommend **128** for large `/train-file`).
+- `--lora-max-train-tokens` / `LORA_MAX_TRAIN_TOKENS` (`0` = unlimited): seeded whole-chunk subsample of supervised prediction tokens.
+- `/train` and `/train-file` use document-level `TrainUnit`s; chunking happens inside `LoraTrainingLoop`.
+- `LoraCorpusLimit` helper; docs/help no longer claim a silent 128 default.
+
+---
+
+## Status
+
 **Session 44** — LoRA training progress bar (loss → target).
 
 - `LoraTrainProgressBar` — percent from pass-2 baseline loss toward `--lora-loss-target-*`; max-iters not used.
@@ -37,7 +135,7 @@
 
 ## Status
 
-**Session 41** — LoRA Tier 7 (start): JFR metrics for all adapter modes and operations.
+**Session 41** — LoRA Tier 7 (complete): JFR metrics for all adapter modes and operations.
 
 ### LoRA JFR metrics (Tier 7)
 
@@ -94,7 +192,7 @@
 - `LoraTrainEvent` fields for frozen forward/transpose, attention/nonlinear, adapter backward, and transfer (filled when finer instrumentation lands).
 - GPU adjoint tests: `CudaMatVecTransposeTest`, `RocmMatVecTransposeTest` (`GpuMatVecTransposeContractTest`).
 - Baseline section in `docs/performance.md` — hybrid path is not yet marketed as production GPU training.
-- `--lora-train-device` CLI and CPU/GPU gradient parity IT remain next.
+- `--lora-train-device` shipped in Session 46; CPU/GPU gradient parity IT and speed gates remain open.
 - Fix: `LoraAdapterSet.resetFrom` (REPL `/reset`) bumps DoRA cache generation so inference drops trained magnitude coefficients.
 - Fix: `/reset` also clears REPL chat history and rotates the session id — otherwise multi-turn context still contains the memorized answers.
 
@@ -112,7 +210,8 @@
 - Canonical detached-norm DoRA (`DoraMagnitude`, `DoraProjection`); magnitude is an AdamW parameter group with decay off.
 - `DoraInitializer` builds magnitudes/fingerprints from GGUF dequant; merge applies LoRA/rsLoRA/DoRA formulas to F32.
 - CLI/env: `--lora-mode`, `--lora-scaling`, `--lora-init` (`LORA_MODE`, `LORA_SCALING`, `LORA_INIT`).
-- DoRA norm-refresh cost is not yet production-gated; treat DoRA as correctness-complete pending the Tier 3 benchmark gate.
+- DoRA norm-refresh is correctness-complete but **not** production-perf-gated; prefer standard
+  LoRA/rsLoRA for large all-linear jobs until a measured refresh budget exists (Tier 10).
 
 ---
 
