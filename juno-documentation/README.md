@@ -1,55 +1,66 @@
 # Juno Documentation
 
-A 19-chapter reference, built as a [Jupyter Book](https://jupyterbook.org) (MyST Document
-Engine) static site, restructuring the Juno project's `docs/` folder into a single cross-linked
-book.
+A 54-chapter reference, built as a [Jupyter Book](https://jupyterbook.org) (MyST Document
+Engine) static site, presenting the Juno project's restructured `docs/` folder as a single
+cross-linked book organized by reader intent (getting started, architecture, guides, LoRA
+fine-tuning, REST API, deployment, observability, testing, legal, project, releases).
 
 ## Structure
 
 ```
 juno-documentation/
-├── myst.yml              # project config + table of contents (chapter order)
-├── index.md              # front matter, "how to read this book", full TOC
-├── references.md         # back matter - which original docs/ file each chapter came from
-├── part1/                 # Getting Started:                chapters 1-7
-├── part2/                 # LoRA Fine-Tuning:                chapters 8-10
-├── part3/                 # Model Support and Performance:   chapters 11-13
-├── part4/                 # Governance, Legal, and Compliance: chapters 14-19
-├── assets/                 # images referenced by chapters (e.g. AWS deployment screenshot)
-└── build.sh                # checks/installs the myst CLI and builds static HTML
+|-- myst.yml              # project config + table of contents (chapter order)
+|-- index.md               # front matter, "how to read this book", full TOC
+|-- references.md          # back matter: which docs/ source file each chapter came from
+|-- part1/                 # Getting Started:                1.1-1.4
+|-- part2/                 # Architecture:                   2.1-2.6
+|-- part3/                 # CLI Reference:                  3.1-3.8
+|-- part4/                 # LoRA Fine-Tuning:                4.1-4.8
+|-- part5/                 # REST API:                        5.1-5.4
+|-- part6/                 # Deployment:                      6.1-6.3
+|-- part7/                 # Observability and Performance:   7.1-7.3
+|-- part8/                 # Testing:                          8.1-8.2
+|-- part9/                 # Legal and Compliance:             9.1-9.8
+|-- part10/                # Community and Project:            10.1-10.6
+|-- part11/                # Releases:                          11.1-11.2
+`-- build.sh                # checks/installs the myst CLI and builds static HTML
 ```
 
-Each chapter is its own Markdown file, named `NN-slug.md` (e.g.
-`part1/02-architecture-reference.md`).
+Each chapter is its own Markdown file, named `NN-slug.md` within its part folder (for example
+`part4/03-training-guide.md` is chapter 4.3). The file's local number within its part folder
+matches the chapter's displayed decimal number.
 
 ## Cross-references (automatic, reorder-safe)
 
-- Every chapter starts with a MyST label: `(ch-02)=`
-- Every in-text mention of "Chapter N" / "Chapters N-M" is a link to that label, e.g.
-  `[Chapter 2](#ch-02)`. MyST resolves these project-wide, from any file, regardless of chapter
-  order — so nothing breaks if you reorder or insert chapters.
-- Each chapter ends with a Previous / Table of Contents / Next navigation footer.
+- Every chapter starts with a MyST label matching its decimal chapter number, for example
+  `(ch-4-3)=` for chapter 4.3.
+- In-text mentions of other chapters link to that label, for example `[Chapter 4.3](#ch-4-3)`.
+  MyST resolves these project-wide, from any file, regardless of chapter order, so nothing
+  breaks if you reorder or insert chapters.
+- Each chapter ends with a "See also" list of related chapters and a Previous / Table of
+  Contents / Next navigation footer.
 
 ## Inserting a new chapter
 
-1. Add a new file, e.g. `part3/13b-my-new-topic.md`, starting with a unique label:
+1. Add a new file inside the right part folder, for example `part7/04-my-new-topic.md`,
+   starting with a unique label matching its intended decimal number:
    ```markdown
-   (ch-13b)=
-   # 13b. My New Topic
+   (ch-7-4)=
+   # 7.4. My New Topic
    ...
    ```
 2. Add it to `myst.yml` under the right part's `children:` list, in the position you want.
-3. (Optional) Update the neighboring chapters' nav footers and `index.md`'s TOC if you want
-   them to mention it by number.
+3. Update the neighboring chapters' nav footers and `index.md`'s TOC to reference it by number.
 4. Rebuild: `./build.sh`
 
-Existing cross-references to other chapters keep working untouched — labels aren't positional,
+Existing cross-references to other chapters keep working untouched; labels are not positional,
 so nothing needs renumbering.
 
 ## Diagrams
 
-Mermaid diagrams (` ```mermaid ` fenced code blocks) are used throughout for architecture and
-data-flow diagrams, and render natively in the built site.
+Mermaid diagrams (fenced ` ```mermaid ` code blocks) are used throughout for architecture,
+data-flow, and lifecycle diagrams, and render natively in the built site. Fixed-width ASCII art
+is not used for structural or architectural diagrams in this book.
 
 ## Building
 
@@ -65,7 +76,7 @@ manual Node.js setup required in the common case).
 
 ## Publishing
 
-`_build/html` is a complete static site — deploy it anywhere:
+`_build/html` is a complete static site; deploy it anywhere:
 
 - **GitHub Pages**: `myst init --gh-pages` generates a ready-to-use GitHub Actions workflow.
 - **Any static host** (Netlify, Cloudflare Pages, S3, nginx): upload the contents of
@@ -75,6 +86,6 @@ No reader accounts, no paywalls, no server required.
 
 ## Relationship to the Juno source tree
 
-This project is a documentation build only — it does not contain or depend on the Juno engine
+This project is a documentation build only; it does not contain or depend on the Juno engine
 source code. See [references.md](references.md) for a chapter-by-chapter map back to the
 original files in Juno's `docs/` folder.

@@ -1,0 +1,65 @@
+(ch-3-3)=
+# 3.3. Local Mode
+
+`./juno local` runs an in-process REPL: all transformer shards run in one JVM, with no forking
+and no gRPC (it uses `LocalInferencePipeline` instead). This is the fastest way to run Juno on a
+single machine.
+
+```bash
+# Minimal
+./juno local --model-path /path/to/model.gguf
+
+# With OpenAI-compatible REST API on port 8080
+./juno local --model-path /path/to/model.gguf --api-port 8080
+
+# With a pre-trained LoRA adapter applied at inference
+./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora
+
+# Via env var
+LORA_PLAY_PATH=/path/to/model.lora MODEL_PATH=/path/to/model.gguf ./juno local
+
+# With JFR (metrics printed on exit)
+./juno local --model-path /path/to/model.gguf --jfr 5m
+
+# Verbose
+./juno local --model-path /path/to/model.gguf --verbose
+```
+
+**Windows (Command Prompt):**
+
+```bat
+juno.bat local --model-path models\tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+
+juno.bat local --model-path models\model.gguf --api-port 8080
+
+juno.bat local --model-path models\model.gguf --lora-play adapters\model.lora
+
+rem Via environment variable
+set MODEL_PATH=C:\models\model.gguf
+juno.bat local
+
+juno.bat local --model-path models\model.gguf --jfr 5m
+```
+
+When `--lora-play` is given, the startup banner shows:
+
+```
+  Loading LoRA adapters for inference: /path/to/model.lora
+  Loaded 44 LoRA adapters  (inference-only, no training)
+```
+
+When `--api-port` is given, the startup banner shows:
+
+```
+  Local API server on http://localhost:8080 (OpenAI: /v1/chat/completions)
+```
+
+## See also
+
+- [Chapter 3.2 -- Flags](#ch-3-2)
+- [Chapter 3.4 -- Cluster Mode](#ch-3-4)
+- [Chapter 5.1 -- OpenAI-Compatible API](#ch-5-1)
+
+---
+
+[<- 3.2 Flags](#ch-3-2) &nbsp;|&nbsp; [Table of Contents](../index.md) &nbsp;|&nbsp; [3.4 Cluster Mode ->](#ch-3-4)
