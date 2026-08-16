@@ -148,6 +148,10 @@ INFO: LoRA inference overlay configured -- nodes will load:
 INFO: Detected architecture: llama  backend=CpuMatVec  file=...  lora=44 adapters
 ```
 
+![A Juno REPL chat session running against a deployed AWS cluster, showing the coordinator answering a user prompt.](images/aws-chat-deployed.png)
+
+*A cluster deployed with `juno-deploy.sh setup`, answering a chat prompt through the REPL client.*
+
 ## AWS cluster JFR
 
 ```bash

@@ -12,6 +12,8 @@ Distributed LLM inference and fine-tuning. Pure Java. No Python, no GIL, no Spri
 
 Full documentation: **[ml.cab/juno-documentation](https://ml.cab/juno-documentation)**
 
+![Juno local console running TinyLlama-1.1B, with CPU and memory usage shown alongside](assets/juno-local-demo.gif)
+
 ## 1. What is Juno
 
 Juno runs distributed LLM inference and LoRA fine-tuning on the JVM with CUDA and ROCm GPU
