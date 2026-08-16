@@ -406,6 +406,7 @@ public final class InferenceApiServer {
 			    <textarea id="prompt" rows="1" placeholder="Send a message…"></textarea>
 			    <button id="send-btn" onclick="onSend()">Send</button>
 			  </div>
+			  <div id="ai-disclosure" style="font-size:10px;color:var(--muted);text-align:center;padding-top:2px">{{AI_DISCLOSURE_TEXT}}</div>
 			</footer>
 
 			<script>
@@ -603,7 +604,7 @@ public final class InferenceApiServer {
 			  const tps     = tokenCount > 0 ? (tokenCount / (elapsed || 1)).toFixed(1) : '–';
 			  const meta    = document.createElement('div');
 			  meta.className = 'meta bot';
-			  meta.textContent = tokenCount + ' tokens  ·  ' + elapsed + 's  ·  ' + tps + ' tok/s'
+			  meta.textContent = 'Generated ' + tokenCount + ' tokens  ·  ' + elapsed + 's  ·  ' + tps + ' tok/s'
 			                   + (reason && reason !== 'stop' ? '  ·  ' + reason : '');
 			  bub.parentNode.appendChild(meta);
 
@@ -627,7 +628,7 @@ public final class InferenceApiServer {
 			</script>
 			</body>
 			</html>
-			""";
+			""".replace("{{AI_DISCLOSURE_TEXT}}", AiDisclosure.DISCLOSURE_TEXT);
 
 	// ── Health dashboard HTML ─────────────────────────────────────────────────
 	// Served at GET /health-ui. Fetches data from /health-data (same-origin proxy
@@ -938,7 +939,8 @@ public final class InferenceApiServer {
 	private Map<String, Object> toResponse(GenerationResult result, String modelId) {
 		return Map.of("requestId", result.requestId(), "text", result.text(), "tokenCount", result.generatedTokens(),
 				"promptTokenCount", result.promptTokens(), "finishReason", toFinishReason(result.stopReason()),
-				"modelId", modelId, "latencyMs", result.latency().toMillis());
+				"modelId", modelId, "latencyMs", result.latency().toMillis(), AiDisclosure.FIELD_NAME,
+				AiDisclosure.DISCLOSURE_TEXT);
 	}
 
 	private Map<String, Object> toModelResponse(ModelDescriptor m) {

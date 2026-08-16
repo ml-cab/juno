@@ -10,7 +10,7 @@ performance are identical regardless of which surface a client uses.
 
 | Method | Path | Handler |
 |--------|------|---------|
-| `POST` | `/v1/inference` | `handleBlockingInference`: blocking, returns `GenerationResult` |
+| `POST` | `/v1/inference` | `handleBlockingInference`: blocking, returns `GenerationResult`. Response includes `x_juno_ai_disclosure` (EU AI Act Article 50 transparency notice, see [Chapter 9.7](#ch-9-7)) |
 | `POST` | `/v1/inference/stream` | `handleStreamingInference`: SSE, one event per token |
 | `GET` | `/v1/models` | `OpenAiChatHandler.handleListModels` |
 | `GET` | `/v1/models/{modelId}` | `OpenAiChatHandler.handleGetModel` |
@@ -25,6 +25,9 @@ performance are identical regardless of which surface a client uses.
 | `GET` | `/health-ui` | `handleHealthDashboard`: node health dashboard HTML |
 | `POST` | `/health/probe` | `handleHealthProbeProxy`: proxies probe to `HealthReporter` |
 | `GET` | `/health-data` | `handleHealthDataProxy`: proxies health JSON from nodes |
+
+`/v1/inference/stream` does not currently include the disclosure field; see
+[Chapter 9.7](#ch-9-7) for the residual-scope note.
 
 ## See also
 

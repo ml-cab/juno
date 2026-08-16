@@ -1,15 +1,17 @@
-# Juno 0.1.1 — Release Notes
+# Juno 0.1.1 Release Notes
 
-**Java Unified Neural Orchestration** — distributed LLM inference and fine-tuning in pure Java.
+**Java Unified Neural Orchestration.** Distributed LLM inference and fine-tuning in pure Java.
 
 License: [Apache 2.0](LICENSE)
+
+Full documentation: **[ml.cab/juno-documentation](https://ml.cab/juno-documentation)**
 
 ---
 
 ## Requirements
 
 | Component | Version |
-|-----------|---------|
+|---|---|
 | JDK | 25+ |
 | Maven (build from source) | 3.9+ |
 | NVIDIA GPU (optional) | CUDA 12.x + driver |
@@ -17,65 +19,19 @@ License: [Apache 2.0](LICENSE)
 
 CPU-only inference requires no GPU stack. The `./juno` launcher enforces JDK 25 at startup.
 
----
-
-## Highlights
-
-### Distributed inference
-
-- **Pipeline parallel** — contiguous layer blocks across JVM nodes; activations flow serially over gRPC.
-- **Tensor parallel** — full depth on each node with head/FFN slices; coordinator AllReduce on logits.
-- Zero sidecar processes: coordinator (**juno-master**) and workers (**juno-node**) are shaded JVM jars.
-
-### GPU acceleration
-
-- **NVIDIA CUDA 12.x / cuBLAS** and **AMD ROCm 6+ / rocBLAS** via Panama FFI (`java.lang.foreign`).
-- Auto-selection at startup: CUDA → ROCm → CPU. Override with `-Djuno.gpu.backend=cuda|rocm|auto`.
-- Device-resident FP16 weights; automatic CPU quantised fallback on VRAM OOM.
-
-### LoRA fine-tuning
-
-- In-process training REPL: `./juno lora`
-- Inference overlay: `--lora-play PATH` (local, cluster, AWS)
-- Native merge to standalone GGUF: `./juno merge` (patched tensors stored as F32)
-- Train-file scheduling: `--lora-chunk-tokens` (default 32; recommend 128 for files),
-  `--lora-max-train-tokens` seeded corpus caps
-- Train device: `--lora-train-device auto|gpu|cpu` (`gpu` fails closed if unavailable)
-- Microbatch: `--lora-microbatch N` / `LORA_MICROBATCH` (default 8; `1` = FP16 sequential);
-  VRAM OOM auto-retries FP16 then CPU under `auto`
-- **GPU LoRA training** (LLaMA/Qwen2): resident FP32 forward/transpose + microbatched GEMM
-  (default batch 8); adapters/Adam on host. See [docs/performance.md](docs/performance.md).
-- Multi-arch resident GPU transpose: LLaMA-family, Qwen2, Phi-3 (fused physical), dense Qwen3
-  via shared `LoraResidentWeights` (FP32→FP16→CPU VRAM ladder under `auto`)
-
-### OpenAI-compatible REST
-
-- `POST /v1/chat/completions` (blocking + SSE)
-- `GET /v1/models`, `GET /v1/models/{model}`
-- Enable with `--api-port N` on `./juno local` or cluster mode
-- Juno extensions: `x_juno_priority`, `x_juno_session_id`, `x_juno_top_k`
-
-### JVM integration
-
-- Maven BOM: `cab.ml:juno-bom:0.1.0`
-- Facade API: `JunoPlayer`, `LoraTrainer`, `JunoHttpClient`
-- See [docs/howto.md](docs/howto.md) JVM integration section
-
-### Observability
-
-- Custom JFR events across matmul, forward pass, token generation, LoRA training
-- Health dashboard with per-node CPU load, coordinator P99 latency, node throughput
-- Performance matrix: [docs/juno_test_matrix.html](docs/juno_test_matrix.html)
+Full requirements: [1.1 Requirements](https://ml.cab/juno-documentation/requirements/).
 
 ---
 
-## Supported models
+## What is in this release
 
-GGUF with LLaMA-compatible architectures.
-
-Quantizations: F32, F16, BF16, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K.
-
-Chat templates: `llama3`, `mistral`, `gemma`, `tinyllama`/`zephyr`, `chatml`, `phi3`. **`phi3`** (Phi-3 / Phi-3.5) is supported via a dedicated handler and template. **Gemma**, **Qwen 2, Qwen3, and Qwen3.5** (`gemma`, `qwen2`, `qwen3`, `qwen3moe`, `qwen35`) are **under development** — template and handler groundwork exists for some paths; end-to-end validation is in progress. Limitations for work in flight: no LoRA on Gemma/Qwen, no thinking-mode template, no fused QKV GGUFs on Qwen.
+| Area | Documentation |
+|---|---|
+| Distributed inference, GPU acceleration, architecture | [Part 2. Architecture](https://ml.cab/juno-documentation/overview/) |
+| LoRA fine-tuning, GPU training, DoRA, GGUF merge | [Part 4. LoRA Fine-Tuning](https://ml.cab/juno-documentation/concepts/) |
+| OpenAI-compatible and Juno-native REST API | [Part 5. REST API](https://ml.cab/juno-documentation/juno-native-api/) |
+| JFR events, health dashboard, performance matrix | [Part 7. Observability and Performance](https://ml.cab/juno-documentation/jfr-and-metrics/) |
+| Supported models and quantizations | [1.4 Supported Models](https://ml.cab/juno-documentation/supported-models/) |
 
 ---
 
@@ -91,36 +47,43 @@ mvn clean package -DskipTests
 ./juno local --model-path models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf --api-port 8080
 ```
 
-Full reference: [docs/howto.md](docs/howto.md)
+See [1.2 Quickstart: Local](https://ml.cab/juno-documentation/quickstart-local/)
+and [Part 3. CLI Reference](https://ml.cab/juno-documentation/commands/).
 
 ---
 
 ## Known limitations (0.1.0)
 
-- **Text only** — image or multimodal message content is not supported.
-- **OpenAI `n > 1`** — rejected with HTTP 400; only single completions.
-- **Partial OpenAI compatibility** — `stop`, `presence_penalty`, `logit_bias`, `user`, `seed` are ignored for client compatibility.
-- **No built-in auth or TLS** on the REST server; configure at the reverse proxy or network layer for production.
-- **LoRA merge / redistribution** may trigger model-license obligations; see [docs/legal.md](docs/legal.md).
-- **EU AI Act** — compliance-oriented features (AI disclosure, audit logging, auth) are not yet built in; see [docs/EU-AI-Act-compliance.md](docs/EU-AI-Act-compliance.md).
+- **Text only**: image or multimodal message content is not supported.
+- **OpenAI `n > 1`**: rejected with HTTP 400; only single completions.
+- **Partial OpenAI compatibility**: `stop`, `presence_penalty`, `logit_bias`, `user`, `seed` are
+  ignored for client compatibility.
+- **No built-in auth or TLS** on the REST server; configure at the reverse proxy or network layer
+  for production.
+- **LoRA merge / redistribution** may trigger model-license obligations; see
+  [9.3 LoRA and Merge Licensing](https://ml.cab/juno-documentation/lora-and-merge-licensing/).
+- **EU AI Act**: compliance-oriented features (AI disclosure, audit logging, auth) are not yet
+  built in; see [9.7 EU AI Act Compliance](https://ml.cab/juno-documentation/eu-ai-act-compliance/).
 
 ---
 
-## Documentation map
+## Documentation
 
-| Document | Purpose |
-|----------|---------|
-| [README.md](README.md) | Overview and entry points |
-| [docs/howto.md](docs/howto.md) | CLI, REST, JVM API, AWS, tests |
-| [docs/arch.md](docs/arch.md) | Internal architecture |
-| [docs/features.md](docs/features.md) | Feature summary |
-| [docs/LoRA.md](docs/LoRA.md) | LoRA training and merge |
-| [docs/performance.md](docs/performance.md) | Benchmark methodology |
-| [docs/legal.md](docs/legal.md) | Model weights and merge Q&A |
-| [SECURITY.md](SECURITY.md) | Vulnerability reporting |
-| [api/src/main/resources/juno-api.yaml](api/src/main/resources/juno-api.yaml) | OpenAPI spec |
+Full reference: **[ml.cab/juno-documentation](https://ml.cab/juno-documentation)**
 
-Developer session history: [CHANGELOG.md](CHANGELOG.md)
+| Topic | Page |
+|---|---|
+| Architecture | [Part 2. Architecture](https://ml.cab/juno-documentation/overview/) |
+| CLI reference | [Part 3. CLI Reference](https://ml.cab/juno-documentation/commands/) |
+| LoRA fine-tuning | [Part 4. LoRA Fine-Tuning](https://ml.cab/juno-documentation/concepts/) |
+| REST API | [Part 5. REST API](https://ml.cab/juno-documentation/juno-native-api/) |
+| Deployment | [Part 6. Deployment](https://ml.cab/juno-documentation/on-prem-cluster/) |
+| Observability and performance | [Part 7. Observability and Performance](https://ml.cab/juno-documentation/jfr-and-metrics/) |
+| Legal and compliance | [Part 9. Legal and Compliance](https://ml.cab/juno-documentation/license-and-patents/) |
+| Contributing | [10.1 Contributing](https://ml.cab/juno-documentation/contributing/) |
+| Security | [10.3 Security Policy](https://ml.cab/juno-documentation/security-policy/) |
+| OpenAPI spec | [5.4 OpenAPI Spec](https://ml.cab/juno-documentation/openapi-spec/) |
+| Changelog | [11.2 Changelog](https://ml.cab/juno-documentation/changelog/) |
 
 ---
 

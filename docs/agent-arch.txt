@@ -19,8 +19,11 @@ Module dependency (excerpt):
         node depends on lora
   metrics — JfrMetricsExtractor (MatVec/ForwardPass + full LoRA event catalog), MetricsMain
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
+        AiDisclosure: EU AI Act Article 50 transparency, disclosure field name/text,
+              request-level opt-out resolution; shared by OpenAiChatHandler and InferenceApiServer
         coordinator depends on node
-  juno-player — ConsoleMain REPL (local/cluster/lora programmatic --jfr), LoraTrainProgressBar,
+  juno-player — ConsoleMain REPL (local/cluster/lora programmatic --jfr; banner() prints
+              AiDisclosure.DISCLOSURE_TEXT once for local and cluster modes), LoraTrainProgressBar,
                 ClusterHarness, LoraMergeMain,
         ProcessPipelineClient, TensorParallelPipelineClient
         juno-player depends on coordinator (and transitively on node)
