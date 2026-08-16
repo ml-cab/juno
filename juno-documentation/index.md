@@ -117,7 +117,3 @@ in any viewer that supports it, rather than as fixed-width ASCII art.
 
 - **11.1.** [Release Notes](part11/01-release-notes.md)
 - **11.2.** [Changelog](part11/02-changelog.md)
-
-**Back matter**
-
-- [References](references.md) -- which original Juno `docs/` file each chapter is built from
