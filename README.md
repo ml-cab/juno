@@ -51,7 +51,7 @@ Add the BOM from Maven Central at version `0.1.0`:
 </dependencyManagement>
 ```
 
-Single-JVM quickstart with `LocalChat`:
+Single-JVM quickstart with `juno-cookbook` [LocalChat](https://github.com/ml-cab/juno-cookbook/blob/main/src/main/java/cab/ml/juno/cookbook/LocalChat.java#L80):
 
 ```java
 lc = LocalChat.builder(Path.of(MODEL_PATH)).nodeCount(1).useGpu(false)
