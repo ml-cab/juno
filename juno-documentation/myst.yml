@@ -1,0 +1,93 @@
+version: 1
+project:
+  title: "Juno Documentation"
+  subtitle: "Distributed LLM inference and fine-tuning. Architecture, operations, LoRA engineering, governance."
+  authors:
+    - name: "Dmytro Soloviov, Yevhen Soldatov"
+      url: "https://ml.cab"
+  github: "https://github.com/ml-cab/juno"
+  toc:
+    - file: index.md
+    - title: "1. Getting Started"
+      children:
+        - file: part1/01-requirements.md
+        - file: part1/02-quickstart-local.md
+        - file: part1/03-quickstart-jvm-embedding.md
+        - file: part1/04-supported-models.md
+    - title: "2. Architecture"
+      children:
+        - file: part2/01-overview.md
+        - file: part2/02-distributed-inference.md
+        - file: part2/03-handler-routing.md
+        - file: part2/04-gpu-acceleration.md
+        - file: part2/05-key-design-decisions.md
+        - file: part2/06-module-map.md
+    - title: "3. CLI Reference"
+      children:
+        - file: part3/01-commands.md
+        - file: part3/02-flags.md
+        - file: part3/03-local-mode.md
+        - file: part3/04-cluster-mode.md
+        - file: part3/05-lora-mode.md
+        - file: part3/06-merge-mode.md
+        - file: part3/07-test-mode.md
+        - file: part3/08-diagnostics-and-tracing.md
+    - title: "4. LoRA Fine-Tuning"
+      children:
+        - file: part4/01-concepts.md
+        - file: part4/02-architecture-support.md
+        - file: part4/03-training-guide.md
+        - file: part4/04-inference-with-adapter.md
+        - file: part4/05-merging-adapters.md
+        - file: part4/06-programmatic-api.md
+        - file: part4/07-common-pitfalls.md
+        - file: part4/08-testing-checklist.md
+    - title: "5. REST API"
+      children:
+        - file: part5/01-juno-native-api.md
+        - file: part5/02-openai-compatible-api.md
+        - file: part5/03-error-handling.md
+        - file: part5/04-openapi-spec.md
+    - title: "6. Deployment"
+      children:
+        - file: part6/01-on-prem-cluster.md
+        - file: part6/02-aws-deployment.md
+        - file: part6/03-windows.md
+    - title: "7. Observability and Performance"
+      children:
+        - file: part7/01-jfr-and-metrics.md
+        - file: part7/02-performance-methodology.md
+        - file: part7/03-performance-report.md
+    - title: "8. Testing"
+      children:
+        - file: part8/01-build-and-test.md
+        - file: part8/02-gpu-tests.md
+    - title: "9. Legal and Compliance"
+      children:
+        - file: part9/01-license-and-patents.md
+        - file: part9/02-third-party-models.md
+        - file: part9/03-lora-and-merge-licensing.md
+        - file: part9/04-contributor-license-agreement.md
+        - file: part9/05-trademark.md
+        - file: part9/06-export-control.md
+        - file: part9/07-eu-ai-act-compliance.md
+        - file: part9/08-disclaimer.md
+    - title: "10. Community and Project"
+      children:
+        - file: part10/01-contributing.md
+        - file: part10/02-governance.md
+        - file: part10/03-security-policy.md
+        - file: part10/04-funding.md
+        - file: part10/05-commercial-services.md
+        - file: part10/06-contributors.md
+    - title: "11. Releases"
+      children:
+        - file: part11/01-release-notes.md
+        - file: part11/02-changelog.md
+site:
+  template: book-theme
+  options:
+    logo_text: "Machine Learning Cabinet"
+    logo_url: /
+  parts:
+    primary_sidebar_footer: empty-footer.md
