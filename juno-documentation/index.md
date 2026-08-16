@@ -4,9 +4,9 @@
 
 ---
 
-**How to read this book**
+**Welcome to Juno - java native inference and fine-tuning engine**
 
-This is the `docs/` folder of the [Juno](https://github.com/ml-cab/juno) project, structured
+This is an official documentation of the [Juno](https://github.com/ml-cab/juno) project, structured
 as a single, cross-linked reference organized around what a reader is trying to do: get
 started, understand a concept, complete a task, or look something up.
 
