@@ -292,6 +292,49 @@ before a shard is loaded. `CyclicForwardPassHandler` lives in `node/src/test` an
 integration tests in `juno-master` and `coordinator` via the `node:tests` classifier jar. Integration
 tests run stub mode — no model file, no GPU, boots in seconds.
 
+**Resident-weight GPU path for LoRA training.** LoRA training on GPU does not reuse the plain
+inference `MatVec` path unmodified: `ResidentWeightMatrix` (`node` module) is an FP16-or-FP32
+resident projection used specifically by the LoRA handlers, giving both forward and transpose
+backward passes without keeping two separate call-site arrays. `LoraResidentWeights` owns the
+shared upload/close/VRAM-OOM-fallback/matVec-routing logic across the LLaMA, Qwen2, Phi-3
+(physical fused), and dense Qwen3 LoRA handlers; `LoraResidentUpload` handles the VRAM-OOM
+recovery ladder itself — an FP32 microbatch OOM first retries at microbatch=1 in FP16, and only
+then falls back to CPU (under `auto`) or fails closed (under `gpu`). `GpuBlasOps` and
+`DeviceActivationBatch` implement the FP32 batched GEMM (`cublasSgemm_v2` / `rocblas_sgemm`) used
+for frozen LoRA forward/transpose; `CpuFrozenBatchOps` is the CPU host oracle the GPU path is
+checked against. `LoraMicrobatch` governs the batch width for this path: `--lora-microbatch` /
+`LORA_MICROBATCH` (system property `juno.lora.microbatch`), default 8, clamped to `[1, 128]` —
+1 falls back to sequential GEMV.
+
+**GPU LoRA training defaults differ from inference GPU defaults.**
+`ForwardPassHandlerLoader.selectBackend()` (plain inference) defaults `JUNO_USE_GPU` to `false`
+when unset — CPU unless a caller opts in. `ForwardPassHandlerLoader.selectLoraBackend()`
+(training) inverts this default: with `JUNO_USE_GPU` unset it delegates to
+`LoraTrainDevice.selectBackend(AUTO)`, which prefers GPU automatically whenever a CUDA or ROCm
+device is available. `--lora-train-device` / `LORA_TRAIN_DEVICE` (`LoraTrainDevice`) overrides
+this explicitly: `gpu` fails closed if no GPU is present, `cpu` forces `CpuMatVec` regardless of
+GPU availability, `auto` is the default probing behavior described above.
+
+**Programmatic JVM embedding facade.** Everything above this line describes the REST/gRPC
+surface; Juno is also embeddable directly as a JVM library without going through HTTP.
+`juno-player` exposes a facade layer for that: `JunoPlayer` wraps `GenerationLoop`,
+`RequestScheduler`, and `LocalInferencePipeline` behind blocking and streaming call shapes;
+`LoraTrainer` and `LoraCorpusLimit` expose the LoRA training loop and its
+chunk/max-train-tokens epoch sizing programmatically, without the REPL or the LoRA HTTP API;
+`JunoHttpClient` is a thin Java client for the REST surface described above, for callers that
+still prefer HTTP but want a typed Java API over raw JSON. Streaming results are exposed as a
+standard JDK `java.util.concurrent.Flow.Publisher` via `PublisherTokenConsumer` — defined in the
+`coordinator` module (it implements `TokenConsumer`) but consumed by `JunoPlayer` as its
+reactive-streams entry point, so callers already on `Flow`/`Reactor`/RxJava adapters don't need
+a Juno-specific callback type. `LocalInferencePipeline.embedLastToken(requestId, promptTokens)`
+exposes raw embedding-layer output for a prompt without running a full generation, for callers
+that only need the embedding vector.
+
+`juno-player` builds two artifacts from the same module: a thin jar (default, dependencies
+resolved normally by the caller's own classpath) and a `*-shaded.jar` classifier (all
+dependencies relocated and bundled) — the facade classes above are usable from either;
+the REPL (`ConsoleMain`) is only shipped in the shaded jar.
+
 ---
 
 ## Module Dependencies
@@ -316,4 +359,7 @@ juno-node (fat jar)
 ```
 
 All modules share a common parent POM (`cab.ml:juno`) that manages dependency versions,
-compiler settings, and plugin configuration.
+compiler settings, and plugin configuration. A dedicated `juno-bom` module provides the
+`dependencyManagement`-only BOM published for `cab.ml` artifacts, so downstream JVM-embedding
+consumers (see the programmatic facade above) can import one BOM instead of pinning each
+module's version individually.

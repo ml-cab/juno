@@ -98,6 +98,7 @@ curl http://localhost:8080/v1/models
 | `x_juno_priority` | string | `NORMAL` | Scheduler priority: `HIGH` / `NORMAL` / `LOW` |
 | `x_juno_session_id` | string | none | Stable session ID; enables KV-cache reuse across turns |
 | `x_juno_top_k` | integer | `50` | Top-K sampling cutoff (0 = disabled) |
+| `x_juno_disclosure` | boolean | `true` | EU AI Act Article 50 opt-out. `true` includes `x_juno_ai_disclosure` in the response; `false` omits it. Set `false` only for API-to-API integrations with no human end-user present. See [Chapter 9.7](#ch-9-7) |
 
 **Multi-turn conversation with KV-cache reuse:**
 
@@ -119,11 +120,18 @@ for user_input in ["My name is Alice.", "What is my name?"]:
     print(reply)
 ```
 
+**Response extension:** every response (blocking, and the first SSE chunk of a streaming
+response) includes `x_juno_ai_disclosure`, a short text notice, unless the request set
+`x_juno_disclosure` to `false`. This satisfies the EU AI Act Article 50 transparency
+obligation: natural persons must be notified they are interacting with an AI system. See
+[Chapter 9.7 -- EU AI Act Compliance](#ch-9-7) for the full analysis.
+
 ## See also
 
 - [Chapter 5.1 -- Juno Native API](#ch-5-1)
 - [Chapter 5.3 -- Error Handling](#ch-5-3)
 - [Chapter 5.4 -- OpenAPI Spec](#ch-5-4)
+- [Chapter 9.7 -- EU AI Act Compliance](#ch-9-7)
 
 ---
 

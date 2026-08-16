@@ -36,6 +36,7 @@ import jdk.jfr.RecordingState;
 
 import cab.ml.juno.metrics.MetricsMain;
 
+import cab.ml.juno.coordinator.AiDisclosure;
 import cab.ml.juno.coordinator.GenerationLoop;
 import cab.ml.juno.coordinator.GenerationResult;
 import cab.ml.juno.health.HealthMain;
@@ -1859,7 +1860,7 @@ public final class ConsoleMain {
 		SamplingParams params = samplingParamsFromCli();
 
 		ChatHistory history = new ChatHistory();
-
+		print("");
 		print(Color.DIM + "Type your prompt and press Enter. Type 'exit' or Ctrl-C to quit." + Color.RESET);
 		print("");
 
@@ -1894,7 +1895,7 @@ public final class ConsoleMain {
 
 			long elapsed = System.currentTimeMillis() - start;
 			System.out.println();
-			System.out.printf(Color.GREEN + "     [%d tokens · %d ms · %s]" + Color.RESET + "%n",
+			System.out.printf(Color.GREEN + "     Generated [%d tokens · %d ms · %s]" + Color.RESET + "%n",
 					result.generatedTokens(), elapsed, dtype);
 			System.out.println();
 			activeReporters.forEach(r -> r.recordLatency(elapsed));
@@ -1959,6 +1960,9 @@ public final class ConsoleMain {
 			System.out.println(
 					String.format("  %s⏱ JFR active · duration=%s%s%n", Color.YELLOW, jfrDuration, Color.RESET));
 		}
+		print("");
+		print(Color.YELLOW_BOLD + AiDisclosure.DISCLOSURE_TEXT + Color.RESET);
+		print("");
 	}
 
 	private static void print(String msg) {

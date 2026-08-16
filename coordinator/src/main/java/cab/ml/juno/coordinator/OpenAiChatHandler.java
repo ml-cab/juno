@@ -108,14 +108,17 @@ public final class OpenAiChatHandler {
 				? InferenceRequest.ofSession(body.xJunoSessionId().strip(), modelId, messages, sampling, priority)
 				: InferenceRequest.of(modelId, messages, sampling, priority);
 
+		boolean disclosureEnabled = AiDisclosure.isEnabled(body.xJunoDisclosure());
+
 		if (Boolean.TRUE.equals(body.stream())) {
-			handleStreamingChat(ctx, request, modelId);
+			handleStreamingChat(ctx, request, modelId, disclosureEnabled);
 		} else {
-			handleBlockingChat(ctx, request, modelId);
+			handleBlockingChat(ctx, request, modelId, disclosureEnabled);
 		}
 	}
 
-	private void handleBlockingChat(Context ctx, InferenceRequest request, String modelId) {
+	private void handleBlockingChat(Context ctx, InferenceRequest request, String modelId,
+			boolean disclosureEnabled) {
 		try {
 			long start = System.currentTimeMillis();
 			GenerationResult result = scheduler.submitAndWait(request);
@@ -137,6 +140,9 @@ public final class OpenAiChatHandler {
 			root.put("choices", List.of(choice));
 			root.put("usage", usage);
 			root.put("x_juno_latency_ms", result.latency().toMillis());
+			if (disclosureEnabled) {
+				root.put(AiDisclosure.FIELD_NAME, AiDisclosure.DISCLOSURE_TEXT);
+			}
 
 			ctx.header("X-Juno-Latency-Ms", Long.toString(result.latency().toMillis()));
 			ctx.status(200).json(root);
@@ -148,7 +154,8 @@ public final class OpenAiChatHandler {
 		}
 	}
 
-	private void handleStreamingChat(Context ctx, InferenceRequest request, String modelId) {
+	private void handleStreamingChat(Context ctx, InferenceRequest request, String modelId,
+			boolean disclosureEnabled) {
 		String completionId = OpenAiAdapter.chatCompletionId(request.requestId());
 		long created = request.receivedAt().getEpochSecond();
 		ctx.res().setContentType("text/event-stream");
@@ -168,8 +175,12 @@ public final class OpenAiChatHandler {
 			TokenConsumer consumer = new TokenConsumer() {
 				@Override
 				public void onPrefillComplete() {
-					writeChunkQuietly(writer, chunkRoot(completionId, created, modelId,
-							List.of(chunkChoice(0, Map.of("role", "assistant", "content", ""), null))));
+					Map<String, Object> firstChunk = chunkRoot(completionId, created, modelId,
+							List.of(chunkChoice(0, Map.of("role", "assistant", "content", ""), null)));
+					if (disclosureEnabled) {
+						firstChunk.put(AiDisclosure.FIELD_NAME, AiDisclosure.DISCLOSURE_TEXT);
+					}
+					writeChunkQuietly(writer, firstChunk);
 				}
 
 				@Override
@@ -335,7 +346,8 @@ public final class OpenAiChatHandler {
 			@JsonProperty("max_completion_tokens") Integer maxCompletionTokens, @JsonProperty("stream") Boolean stream,
 			@JsonProperty("n") Integer n, @JsonProperty("frequency_penalty") Double frequencyPenalty,
 			@JsonProperty("stop") JsonNode stop, @JsonProperty("x_juno_priority") String xJunoPriority,
-			@JsonProperty("x_juno_session_id") String xJunoSessionId, @JsonProperty("x_juno_top_k") Integer xJunoTopK) {
+			@JsonProperty("x_juno_session_id") String xJunoSessionId, @JsonProperty("x_juno_top_k") Integer xJunoTopK,
+			@JsonProperty("x_juno_disclosure") Boolean xJunoDisclosure) {
 	}
 
 	public record OaiMessage(@JsonProperty("role") String role, @JsonProperty("content") JsonNode content) {
