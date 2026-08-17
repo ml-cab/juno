@@ -12,8 +12,6 @@ Distributed LLM inference and fine-tuning. Pure Java. No Python, no GIL, no Spri
 
 Full documentation: **[ml.cab/juno-documentation](https://ml.cab/juno-documentation)**
 
-![Juno local console running TinyLlama-1.1B, with CPU and memory usage shown alongside](assets/juno-local-demo.gif)
-
 ## 1. What is Juno
 
 Juno runs distributed LLM inference and LoRA fine-tuning on the JVM with CUDA and ROCm GPU
@@ -51,7 +49,7 @@ Add the BOM from Maven Central at version `0.1.0`:
 </dependencyManagement>
 ```
 
-Single-JVM quickstart with `LocalChat`:
+Single-JVM quickstart with `juno-cookbook` [LocalChat](https://github.com/ml-cab/juno-cookbook/blob/main/src/main/java/cab/ml/juno/cookbook/LocalChat.java#L80):
 
 ```java
 lc = LocalChat.builder(Path.of(MODEL_PATH)).nodeCount(1).useGpu(false)
@@ -87,6 +85,7 @@ juno.bat local --model-path models\tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
 # Merge a trained adapter into a standalone GGUF:
 ./juno merge
 ```
+![Juno local console running TinyLlama-1.1B, with CPU and memory usage shown alongside](assets/juno-local-demo.gif)
 
 See [1.2 Quickstart: Local](https://ml.cab/juno-documentation/quickstart-local/),
 [Part 3. CLI Reference](https://ml.cab/juno-documentation/commands/),
