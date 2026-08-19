@@ -79,6 +79,7 @@ if "%HEAP%"==""        set "HEAP=4g"
 set "VERBOSE=false"
 if "%PTYPE%"=="" set "PTYPE=pipeline"
 set "JFR_DURATION_CLUSTER="
+set "API_PORT_CLUSTER=%API_PORT%"
 set "USE_GPU=true"
 if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
@@ -101,6 +102,7 @@ if /i "%~1"=="--top-k"      ( set "TOP_K=%~2" & shift & shift & goto :cluster_pa
 if /i "%~1"=="--top-p"      ( set "TOP_P=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--api-port"   ( set "API_PORT_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :cluster_parse )
@@ -127,6 +129,8 @@ if /i "%~1"=="--help" (
   echo   --temperature F   (default 0.7)
   echo   --top-k N         (default 50)
   echo   --top-p F         (default 0.9)
+  echo   --api-port N      start REST API server on port N
+  echo                     (includes OpenAI-compatible /v1/chat/completions)
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
@@ -169,9 +173,12 @@ if not "%JFR_DURATION_CLUSTER%"=="" (
   echo [WARN] JFR enabled -- duration=%JFR_DURATION_CLUSTER%  (programmatic recording, metrics auto-printed on exit)
 )
 
+set "API_PORT_ARG_CLUSTER="
+if not "%API_PORT_CLUSTER%"=="" set "API_PORT_ARG_CLUSTER=--api-port %API_PORT_CLUSTER%"
+
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -190,6 +197,7 @@ if "%HEAP%"==""        set "HEAP=4g"
 if "%NODES%"==""       set "NODES=3"
 set "VERBOSE=false"
 set "JFR_DURATION_LOCAL="
+set "API_PORT_LOCAL=%API_PORT%"
 set "LORA_PLAY=%LORA_PLAY_PATH%"
 set "USE_GPU=true"
 if not "%USE_GPU_ENV%"=="" (
@@ -212,6 +220,7 @@ if /i "%~1"=="--top-p"      ( set "TOP_P=%~2" & shift & shift & goto :local_pars
 if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--nodes"      ( set "NODES=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_LOCAL=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--api-port"   ( set "API_PORT_LOCAL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--lora-play"  ( set "LORA_PLAY=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
@@ -235,6 +244,8 @@ if /i "%~1"=="--help" (
   echo   --top-k N         (default 50)
   echo   --top-p F         (default 0.9)
   echo   --nodes N         (default 3)
+  echo   --api-port N      start local REST API server on port N
+  echo                     (includes OpenAI-compatible /v1/chat/completions)
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
@@ -284,9 +295,12 @@ if not "%LORA_PLAY%"=="" (
   echo [WARN] LoRA inference overlay: %LORA_PLAY%
 )
 
+set "API_PORT_ARG_LOCAL="
+if not "%API_PORT_LOCAL%"=="" set "API_PORT_ARG_LOCAL=--api-port %API_PORT_LOCAL%"
+
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %LORA_PLAY_ARG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %LORA_PLAY_ARG% %API_PORT_ARG_LOCAL% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -580,8 +594,9 @@ echo     --gpu          use GPU when available (default)
 echo     --cpu          use CPU only
 echo.
 echo   Env overrides: MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES
-echo                  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS  USE_GPU
+echo                  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS  USE_GPU  API_PORT
 echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h  (all commands)
+echo   --api-port N      start REST API server on port N  (cluster, local)
 echo.
 goto :eof
 
