@@ -5,6 +5,12 @@ rem juno - Windows runtime launcher (no Maven required)
 rem Uses pre-built shade jars from target/.
 rem Build first: mvn clean package -DskipTests
 rem Requires: JDK 25+   Mirrors: scripts/run.sh
+rem
+rem NOTE (health mode): the health sidecar / juno-health.jar is intentionally
+rem NOT exposed here. It's a real-network concern (multi-node deployments)
+rem and belongs only in scripts/aws/juno-deploy.sh. Do not re-add a `health`
+rem subcommand or --health / --health-port flags to standalone runners
+rem (run.bat / run.sh) without explicit instruction.
 
 rem Step up from scripts\ to project root
 set "DIR=%~dp0"
@@ -43,6 +49,7 @@ if /i "%~1"=="cluster" ( shift & goto :cluster )
 if /i "%~1"=="local"   ( shift & goto :local )
 if /i "%~1"=="lora"    ( shift & goto :lora )
 if /i "%~1"=="test"    ( shift & goto :test )
+if /i "%~1"=="merge"   ( shift & goto :merge )
 echo [DBG] no subcommand matched falling to cluster
 goto :cluster
 
@@ -80,6 +87,7 @@ set "VERBOSE=false"
 if "%PTYPE%"=="" set "PTYPE=pipeline"
 set "JFR_DURATION_CLUSTER="
 set "API_PORT_CLUSTER=%API_PORT%"
+set "LORA_PLAY_CLUSTER=%LORA_PLAY_PATH%"
 set "USE_GPU=true"
 if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
@@ -103,6 +111,7 @@ if /i "%~1"=="--top-p"      ( set "TOP_P=%~2" & shift & shift & goto :cluster_pa
 if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--api-port"   ( set "API_PORT_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--lora-play"  ( set "LORA_PLAY_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :cluster_parse )
@@ -131,6 +140,7 @@ if /i "%~1"=="--help" (
   echo   --top-p F         (default 0.9)
   echo   --api-port N      start REST API server on port N
   echo                     (includes OpenAI-compatible /v1/chat/completions)
+  echo   --lora-play PATH  apply a .lora file at inference
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
@@ -176,9 +186,15 @@ if not "%JFR_DURATION_CLUSTER%"=="" (
 set "API_PORT_ARG_CLUSTER="
 if not "%API_PORT_CLUSTER%"=="" set "API_PORT_ARG_CLUSTER=--api-port %API_PORT_CLUSTER%"
 
+set "LORA_PLAY_ARG_CLUSTER="
+if not "%LORA_PLAY_CLUSTER%"=="" (
+  set "LORA_PLAY_ARG_CLUSTER=--lora-play %LORA_PLAY_CLUSTER%"
+  echo [WARN] LoRA inference overlay: %LORA_PLAY_CLUSTER%
+)
+
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -571,6 +587,66 @@ echo [WARN] JFR enabled -- duration=%JFR_DURATION_TEST%  output=juno-!JFR_TS!.jf
 goto :eof
 
 rem ============================================================================
+rem  merge — bake a .lora adapter into a new standalone GGUF
+rem ============================================================================
+:merge
+
+set "MODEL=%MODEL_PATH%"
+set "LORA_PATH_VAL="
+set "OUTPUT="
+if "%HEAP%"=="" set "HEAP=4g"
+set "USE_GPU=false"
+
+:merge_parse
+if "%~1"=="" goto :merge_done
+if /i "%~1"=="--model-path" ( set "MODEL=%~2"         & shift & shift & goto :merge_parse )
+if /i "%~1"=="--lora-path"  ( set "LORA_PATH_VAL=%~2" & shift & shift & goto :merge_parse )
+if /i "%~1"=="--output"     ( set "OUTPUT=%~2"        & shift & shift & goto :merge_parse )
+if /i "%~1"=="--heap"       ( set "HEAP=%~2"          & shift & shift & goto :merge_parse )
+if /i "%~1"=="--help" ( goto :merge_help )
+if /i "%~1"=="-h"     ( goto :merge_help )
+echo [ERR] Unknown merge flag: %~1
+echo       Run: run.bat merge --help
+exit /b 1
+
+:merge_help
+echo.
+echo   Usage: run.bat merge --model-path PATH [options]
+echo.
+echo   Options:
+echo     --model-path PATH    Source GGUF or llamafile (required)
+echo     --lora-path PATH     Trained .lora checkpoint (default: ^<model^>.lora)
+echo     --output PATH        Output GGUF path (default: ^<model^>-merged.gguf)
+echo     --heap SIZE          JVM heap, e.g. 4g (default: 4g)
+echo.
+echo   Example:
+echo     run.bat merge --model-path C:\models\tinyllama.gguf
+echo     run.bat merge --model-path C:\models\tinyllama.gguf --lora-path my.lora --output merged.gguf
+echo.
+goto :eof
+
+:merge_done
+if "%MODEL%"=="" (
+  echo [ERR] Model path is required.
+  echo       Usage: run.bat merge --model-path PATH
+  exit /b 1
+)
+call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
+if errorlevel 1 exit /b 1
+
+echo [INFO] Starting LoRA merge  (heap=%HEAP%)
+
+set "LORA_PATH_FLAG_MERGE="
+if not "%LORA_PATH_VAL%"=="" set "LORA_PATH_FLAG_MERGE=--lora-path %LORA_PATH_VAL%"
+set "OUTPUT_FLAG_MERGE="
+if not "%OUTPUT%"=="" set "OUTPUT_FLAG_MERGE=--output %OUTPUT%"
+
+call :prepend_cuda_path
+
+"%JAVA%" "-Xmx%HEAP%" -cp "%JUNO_PLAYER_JAR%" cab.ml.juno.player.LoraMergeMain --model-path "%MODEL%" %LORA_PATH_FLAG_MERGE% %OUTPUT_FLAG_MERGE%
+goto :eof
+
+rem ============================================================================
 rem  Usage
 rem ============================================================================
 :usage
@@ -588,6 +664,7 @@ echo   run.bat cluster --model-path PATH    3-node cluster + REPL
 echo   run.bat local   --model-path PATH    in-process REPL (single JVM)
 echo   run.bat lora    --model-path PATH    LoRA fine-tuning REPL (adapter kept separate)
 echo   run.bat test    --model-path PATH    8 smoke checks
+echo   run.bat merge   --model-path PATH    bake a .lora adapter into a new GGUF
 echo.
 echo   Backend flags (cluster/local/lora):
 echo     --gpu          use GPU when available (default)
@@ -597,6 +674,8 @@ echo   Env overrides: MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  
 echo                  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS  USE_GPU  API_PORT
 echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h  (all commands)
 echo   --api-port N      start REST API server on port N  (cluster, local)
+echo.
+echo   Run 'run.bat ^<command^> --help' for all flags of that command.
 echo.
 goto :eof
 
