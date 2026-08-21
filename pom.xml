@@ -324,7 +324,19 @@
 					<artifactId>maven-surefire-plugin</artifactId>
 					<version>${maven-surefire.version}</version>
 				</plugin>
-				<!-- Sources and Javadoc — required by Maven Central -->
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-clean-plugin</artifactId>
+					<version>3.4.0</version>
+					<configuration>
+						<filesets>
+							<fileset>
+								<directory>juno-documentation/_build</directory>
+								<followSymlinks>false</followSymlinks>
+							</fileset>
+						</filesets>
+					</configuration>
+				</plugin>
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-source-plugin</artifactId>
@@ -440,14 +452,16 @@
 						<executions>
 							<execution>
 								<id>sign-release</id>
-								<!-- install phase: runs after verify, so sources+javadoc jars
+								<!-- install phase: runs after verify, so
+								sources+javadoc jars
 								     produced at verify are already attached and get signed too -->
 								<phase>install</phase>
 								<goals>
 									<goal>sign</goal>
 								</goals>
 								<configuration>
-									<!-- loopback: allows -Dgpg.passphrase=... without a GUI pinentry -->
+									<!-- loopback: allows -Dgpg.passphrase=...
+									without a GUI pinentry -->
 									<gpgArguments>
 										<arg>--pinentry-mode</arg>
 										<arg>loopback</arg>
@@ -477,7 +491,8 @@
 						<configuration>
 							<publishingServerId>central</publishingServerId>
 							<checksums>required</checksums>
-							<deploymentName>${project.groupId}:${project.artifactId}:${project.version}</deploymentName>
+							<deploymentName>
+								${project.groupId}:${project.artifactId}:${project.version}</deploymentName>
 						</configuration>
 					</plugin>
 				</plugins>
