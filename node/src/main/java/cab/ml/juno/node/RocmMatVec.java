@@ -108,7 +108,8 @@ public final class RocmMatVec implements GpuMatVec {
         this.rocm = (RocmBindings) b;
     }
 
-    GpuContext gpuContext() { return ctx; }
+    @Override
+    public GpuContext gpuContext() { return ctx; }
 
     @Override
     public boolean supportsHalfResident() { return rocm.supportsHSSgemv(); }
@@ -176,7 +177,7 @@ public final class RocmMatVec implements GpuMatVec {
             // D2H — similarly, copy into native staging first, then into Java array.
             try (Arena resultArena = Arena.ofConfined()) {
                 MemorySegment stagingY = resultArena.allocate(bytesY);
-                callSgemvFp32(dA, cols, dX, dY, rows, cols);
+                callSgemvFp32(rocm.opTranspose(), dA, cols, dX, dY, rows, cols);
                 GpuBindings.check(
                     GpuBindings.callInt(rocm.gpuMemcpy(), stagingY, dY, bytesY, GpuBindings.D2H),
                     "hipMemcpy(y D2H)");
@@ -235,7 +236,7 @@ public final class RocmMatVec implements GpuMatVec {
                             scratch.dX, stagingX, bytesX, GpuBindings.H2D, stream),
                         "hipMemcpyAsync(x H2D)");
 
-                    callSgemvFp32(A.devicePointer(), cols, scratch.dX, scratch.dY, rows, cols);
+                    callSgemvFp32(rocm.opTranspose(), A.devicePointer(), cols, scratch.dX, scratch.dY, rows, cols);
 
                     MemorySegment stagingY = callArena.allocate(bytesY);
                     GpuBindings.check(
@@ -302,7 +303,7 @@ public final class RocmMatVec implements GpuMatVec {
                             scratch.dXh, stagingXh, bytesXh, GpuBindings.H2D, stream),
                         "hipMemcpyAsync(xh H2D)");
 
-                    callSgemvFp16(A.devicePointer(), cols, scratch.dXh, scratch.dY, rows, cols);
+                    callSgemvFp16(rocm.opTranspose(), A.devicePointer(), cols, scratch.dXh, scratch.dY, rows, cols);
 
                     MemorySegment stagingY = callArena.allocate(bytesY);
                     GpuBindings.check(
@@ -321,9 +322,130 @@ public final class RocmMatVec implements GpuMatVec {
                 }
             }
         } finally {
-            evt.backend(MatVecBackend.ROCM_RESIDENT_FP16);
-            evt.rows = rows;
-            evt.cols = cols;
+            evt.commit();
+        }
+    }
+
+    /**
+     * Device-resident FP32 transpose: {@code z = W^T * g} for row-major
+     * {@code W[rows×cols]}. Uses {@link GpuBindings#opNoTranspose()}.
+     */
+    @Override
+    public float[] sgemvTranspose(DeviceFloatMatrix W, float[] g) {
+        if (W == null) throw new IllegalArgumentException("W must not be null");
+        if (W.isClosed()) throw new IllegalStateException("DeviceFloatMatrix is closed");
+        int rows = W.rows(), cols = W.cols();
+        if (g.length != rows)
+            throw new IllegalArgumentException("g.length=" + g.length + " != rows=" + rows);
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+
+        long bytesG = (long) rows * Float.BYTES;
+        long bytesZ = (long) cols * Float.BYTES;
+
+        Fp32Scratch scratch = FP32_SCRATCH.get();
+
+        try (Arena callArena = Arena.ofConfined()) {
+            synchronized (ctx.cublasSerializationLock()) {
+                MemorySegment stream = ensureStream();
+                bindStream(stream);
+                try {
+                    ensureFp32Scratch(scratch, bytesG, bytesZ);
+
+                    MemorySegment stagingG = callArena.allocate(bytesG);
+                    stagingG.copyFrom(MemorySegment.ofArray(g));
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.gpuMemcpyAsync(),
+                            scratch.dX, stagingG, bytesG, GpuBindings.H2D, stream),
+                        "hipMemcpyAsync(g H2D)");
+
+                    callSgemvFp32(rocm.opNoTranspose(), W.devicePointer(), cols,
+                            scratch.dX, scratch.dY, rows, cols);
+
+                    MemorySegment stagingZ = callArena.allocate(bytesZ);
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.gpuMemcpyAsync(),
+                            stagingZ, scratch.dY, bytesZ, GpuBindings.D2H, stream),
+                        "hipMemcpyAsync(z D2H)");
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
+                        "hipStreamSynchronize");
+
+                    float[] z = new float[cols];
+                    MemorySegment.copy(stagingZ, JAVA_FLOAT, 0, z, 0, cols);
+                    return z;
+                } finally {
+                    unbindStream();
+                }
+            }
+        } finally {
+            evt.backend(MatVecBackend.ROCM_RESIDENT_TRANSPOSE);
+            evt.rows = cols;
+            evt.cols = rows;
+            evt.commit();
+        }
+    }
+
+    /**
+     * Device-resident FP16 transpose. Same layout contract as
+     * {@link #sgemvTranspose(DeviceFloatMatrix, float[])}.
+     */
+    @Override
+    public float[] sgemvTranspose(DeviceHalfMatrix W, float[] g) {
+        if (W == null) throw new IllegalArgumentException("W must not be null");
+        if (W.isClosed()) throw new IllegalStateException("DeviceHalfMatrix is closed");
+        int rows = W.rows(), cols = W.cols();
+        if (g.length != rows)
+            throw new IllegalArgumentException("g.length=" + g.length + " != rows=" + rows);
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+
+        long bytesGh = (long) rows * Short.BYTES;
+        long bytesZ  = (long) cols * Float.BYTES;
+
+        Fp16Scratch scratch = FP16_SCRATCH.get();
+
+        try (Arena callArena = Arena.ofConfined()) {
+            synchronized (ctx.cublasSerializationLock()) {
+                MemorySegment stream = ensureStream();
+                bindStream(stream);
+                try {
+                    ensureFp16Scratch(scratch, bytesGh, bytesZ);
+
+                    MemorySegment stagingGh = callArena.allocate(bytesGh);
+                    for (int r = 0; r < rows; r++)
+                        stagingGh.setAtIndex(JAVA_SHORT, r, Float.floatToFloat16(g[r]));
+
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.gpuMemcpyAsync(),
+                            scratch.dXh, stagingGh, bytesGh, GpuBindings.H2D, stream),
+                        "hipMemcpyAsync(gh H2D)");
+
+                    callSgemvFp16(rocm.opNoTranspose(), W.devicePointer(), cols,
+                            scratch.dXh, scratch.dY, rows, cols);
+
+                    MemorySegment stagingZ = callArena.allocate(bytesZ);
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.gpuMemcpyAsync(),
+                            stagingZ, scratch.dY, bytesZ, GpuBindings.D2H, stream),
+                        "hipMemcpyAsync(z D2H)");
+                    GpuBindings.check(
+                        GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
+                        "hipStreamSynchronize");
+
+                    float[] z = new float[cols];
+                    MemorySegment.copy(stagingZ, JAVA_FLOAT, 0, z, 0, cols);
+                    return z;
+                } finally {
+                    unbindStream();
+                }
+            }
+        } finally {
+            evt.backend(MatVecBackend.ROCM_RESIDENT_FP16_TRANSPOSE);
+            evt.rows = cols;
+            evt.cols = rows;
             evt.commit();
         }
     }
@@ -331,14 +453,14 @@ public final class RocmMatVec implements GpuMatVec {
     // ── rocBLAS GEMV ──────────────────────────────────────────────────────────
 
     /**
-     * rocblas_sgemv: y(FP32) = A(FP32) * x(FP32).
+     * rocblas_sgemv on row-major {@code W[rows×cols]}.
      *
-     * <p>Uses {@code rocblas_operation_transpose} (op=112) because A is stored
-     * row-major [rows×cols] but rocBLAS expects column-major, so we pass
-     * op=T and swap (m, n) → (cols, rows), lda=cols. This is identical to
-     * the cuBLAS transpose trick in {@link CudaMatVec}.
+     * <p>Same {@code (m,n,lda)} mapping as {@link CudaMatVec}:
+     * {@code m=cols}, {@code n=rows}, {@code lda=cols}.
+     * {@link GpuBindings#opTranspose()} → forward; {@link GpuBindings#opNoTranspose()} →
+     * transpose backward.
      */
-    private void callSgemvFp32(MemorySegment dA, int lda,
+    private void callSgemvFp32(int op, MemorySegment dA, int lda,
                                 MemorySegment dX, MemorySegment dY,
                                 int rows, int cols) {
         try (Arena scalars = Arena.ofConfined()) {
@@ -349,7 +471,7 @@ public final class RocmMatVec implements GpuMatVec {
                 "rocblas_set_pointer_mode");
             GpuBindings.check(
                 GpuBindings.callInt(rocm.blasSgemv(),
-                    ctx.handle(), rocm.opTranspose(),
+                    ctx.handle(), op,
                     cols, rows,
                     alpha, dA, lda,
                     dX, 1,
@@ -359,18 +481,15 @@ public final class RocmMatVec implements GpuMatVec {
     }
 
     /**
-     * rocblas_hssgemv_strided_batched: y(FP32) = A(FP16) * x(FP16), batch=1.
-     *
-     * <p>Same (trans, m, n, lda) mapping as {@link #callSgemvFp32}; alpha/beta
-     * are FP32 (host pointer mode). This is the rocBLAS analogue of cuBLAS's
-     * {@code cublasHSSgemvStridedBatched}.
+     * rocblas_hssgemv_strided_batched: same {@code (op, m, n, lda)} mapping as
+     * {@link #callSgemvFp32}.
      */
-    private void callSgemvFp16(MemorySegment dA, int lda,
+    private void callSgemvFp16(int op, MemorySegment dA, int lda,
                                 MemorySegment dXh, MemorySegment dY,
                                 int rows, int cols) {
         long strideA = (long) cols * rows;
-        long strideX = cols;
-        long strideY = rows;
+        long strideX = (op == rocm.opNoTranspose()) ? rows : cols;
+        long strideY = (op == rocm.opNoTranspose()) ? cols : rows;
         try (Arena scalars = Arena.ofConfined()) {
             MemorySegment alpha = scalars.allocateFrom(JAVA_FLOAT, 1.0f);
             MemorySegment beta  = scalars.allocateFrom(JAVA_FLOAT, 0.0f);
@@ -379,7 +498,7 @@ public final class RocmMatVec implements GpuMatVec {
                 "rocblas_set_pointer_mode");
             GpuBindings.check(
                 GpuBindings.callInt(rocm.blasHSSgemvStridedBatched(),
-                    ctx.handle(), rocm.opTranspose(),
+                    ctx.handle(), op,
                     cols, rows,
                     alpha, dA, lda, strideA,
                     dXh, 1, strideX,

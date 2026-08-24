@@ -5,14 +5,29 @@ rem juno - Windows runtime launcher (no Maven required)
 rem Uses pre-built shade jars from target/.
 rem Build first: mvn clean package -DskipTests
 rem Requires: JDK 25+   Mirrors: scripts/run.sh
+rem
+rem NOTE (health mode): the health sidecar / juno-health.jar is intentionally
+rem NOT exposed here. It's a real-network concern (multi-node deployments)
+rem and belongs only in scripts/aws/juno-deploy.sh. Do not re-add a `health`
+rem subcommand or --health / --health-port flags to standalone runners
+rem (run.bat / run.sh) without explicit instruction.
 
 rem Step up from scripts\ to project root
 set "DIR=%~dp0"
+echo [DBG] DIR raw dp0: !DIR!
 if "%DIR:~-1%"=="\" set "DIR=%DIR:~0,-1%"
+echo [DBG] DIR after strip trailing backslash: !DIR!
 for %%I in ("%DIR%\..") do set "DIR=%%~fI"
+echo [DBG] DIR resolved to project root: !DIR!
 
-set "JUNO_PLAYER_JAR=%DIR%\juno-player\target\juno-player.jar"
-set "LIVE_JAR=%DIR%\juno-master\target\juno-master.jar"
+rem Read project version from root pom.xml
+set "JUNO_VERSION="
+for /f "usebackq tokens=3 delims=<>" %%V in (`findstr /r "<version>[0-9]" "%DIR%\pom.xml"`) do if not defined JUNO_VERSION set "JUNO_VERSION=%%V"
+if "%JUNO_VERSION%"=="" set "JUNO_VERSION=0.1.0"
+set "JUNO_PLAYER_JAR=%DIR%\juno-player\target\juno-player-%JUNO_VERSION%-shaded.jar"
+set "LIVE_JAR=%DIR%\juno-master\target\juno-master-%JUNO_VERSION%.jar"
+echo [DBG] JUNO_PLAYER_JAR=!JUNO_PLAYER_JAR!
+echo [DBG] LIVE_JAR=!LIVE_JAR!
 
 rem UTF-8 codepage + ANSI VTP for colours
 chcp 65001 >nul 2>&1
@@ -22,17 +37,20 @@ call :find_java
 if errorlevel 1 exit /b 1
 
 call :check_java_version
+echo [DBG] back from check_java_version errorlevel=!ERRORLEVEL!
 if errorlevel 1 exit /b 1
-
+echo [DBG] past errorlevel check
 set "JVM_BASE=--enable-preview --enable-native-access=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED -XX:+UseG1GC -XX:+AlwaysPreTouch -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"
-
-rem Dispatch: peek at %~1 without consuming it.
-rem Only shift if it is a known subcommand, otherwise fall into cluster as-is.
+echo [DBG] JVM_BASE set
+echo [DBG] arg1=%~1
 if "%~1"=="" goto :usage
+echo [DBG] dispatching subcommand
 if /i "%~1"=="cluster" ( shift & goto :cluster )
 if /i "%~1"=="local"   ( shift & goto :local )
 if /i "%~1"=="lora"    ( shift & goto :lora )
 if /i "%~1"=="test"    ( shift & goto :test )
+if /i "%~1"=="merge"   ( shift & goto :merge )
+echo [DBG] no subcommand matched falling to cluster
 goto :cluster
 
 rem ============================================================================
@@ -59,6 +77,8 @@ set "MODEL=%MODEL_PATH%"
 if "%DTYPE%"==""       set "DTYPE=FLOAT16"
 if "%BYTE_ORDER%"==""  set "BYTE_ORDER=BE"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
+set "TEMPERATURE_EXPLICIT=false"
+if not "%TEMPERATURE%"=="" set "TEMPERATURE_EXPLICIT=true"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
 if "%TOP_P%"==""       set "TOP_P=0.9"
@@ -66,6 +86,8 @@ if "%HEAP%"==""        set "HEAP=4g"
 set "VERBOSE=false"
 if "%PTYPE%"=="" set "PTYPE=pipeline"
 set "JFR_DURATION_CLUSTER="
+set "API_PORT_CLUSTER=%API_PORT%"
+set "LORA_PLAY_CLUSTER=%LORA_PLAY_PATH%"
 set "USE_GPU=true"
 if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
@@ -88,6 +110,8 @@ if /i "%~1"=="--top-k"      ( set "TOP_K=%~2" & shift & shift & goto :cluster_pa
 if /i "%~1"=="--top-p"      ( set "TOP_P=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--api-port"   ( set "API_PORT_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--lora-play"  ( set "LORA_PLAY_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :cluster_parse )
@@ -114,6 +138,9 @@ if /i "%~1"=="--help" (
   echo   --temperature F   (default 0.7)
   echo   --top-k N         (default 50)
   echo   --top-p F         (default 0.9)
+  echo   --api-port N      start REST API server on port N
+  echo                     (includes OpenAI-compatible /v1/chat/completions)
+  echo   --lora-play PATH  apply a .lora file at inference
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
@@ -122,7 +149,7 @@ if /i "%~1"=="--help" (
   echo   --verbose / -v
   goto :eof
 )
-if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :cluster_parse )
+if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :cluster_parse )
 echo [ERR] Unknown cluster flag: %~1
 echo       Run: run.bat cluster --help
 exit /b 1
@@ -156,9 +183,18 @@ if not "%JFR_DURATION_CLUSTER%"=="" (
   echo [WARN] JFR enabled -- duration=%JFR_DURATION_CLUSTER%  (programmatic recording, metrics auto-printed on exit)
 )
 
+set "API_PORT_ARG_CLUSTER="
+if not "%API_PORT_CLUSTER%"=="" set "API_PORT_ARG_CLUSTER=--api-port %API_PORT_CLUSTER%"
+
+set "LORA_PLAY_ARG_CLUSTER="
+if not "%LORA_PLAY_CLUSTER%"=="" (
+  set "LORA_PLAY_ARG_CLUSTER=--lora-play %LORA_PLAY_CLUSTER%"
+  echo [WARN] LoRA inference overlay: %LORA_PLAY_CLUSTER%
+)
+
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -177,6 +213,8 @@ if "%HEAP%"==""        set "HEAP=4g"
 if "%NODES%"==""       set "NODES=3"
 set "VERBOSE=false"
 set "JFR_DURATION_LOCAL="
+set "API_PORT_LOCAL=%API_PORT%"
+set "LORA_PLAY=%LORA_PLAY_PATH%"
 set "USE_GPU=true"
 if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
@@ -192,12 +230,14 @@ if /i "%~1"=="--byteOrder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :local
 if /i "%~1"=="--byteorder"  ( set "BYTE_ORDER=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--byte-order" ( set "BYTE_ORDER=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--max-tokens" ( set "MAX_TOKENS=%~2" & shift & shift & goto :local_parse )
-if /i "%~1"=="--temperature"( set "TEMPERATURE=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--temperature"( set "TEMPERATURE=%~2" & set "TEMPERATURE_EXPLICIT=true" & shift & shift & goto :local_parse )
 if /i "%~1"=="--top-k"      ( set "TOP_K=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--top-p"      ( set "TOP_P=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--nodes"      ( set "NODES=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_LOCAL=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--api-port"   ( set "API_PORT_LOCAL=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--lora-play"  ( set "LORA_PLAY=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :local_parse )
@@ -216,19 +256,22 @@ if /i "%~1"=="--help" (
   echo                        BE=big-endian (hardware-validated default)
   echo                        LE=little-endian (native x86 order)
   echo   --max-tokens N    (default 200)
-  echo   --temperature F   (default 0.7)
+  echo   --temperature F   (default 0.7; 0 with --lora-play)
   echo   --top-k N         (default 50)
   echo   --top-p F         (default 0.9)
   echo   --nodes N         (default 3)
+  echo   --api-port N      start local REST API server on port N
+  echo                     (includes OpenAI-compatible /v1/chat/completions)
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
   echo   --gpu             use GPU when available (default)
   echo   --cpu             use CPU only
   echo   --verbose / -v
+  echo   --lora-play PATH  apply a .lora file at inference
   goto :eof
 )
-if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :local_parse )
+if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :local_parse )
 echo [ERR] Unknown local flag: %~1
 echo       Run: run.bat local --help
 exit /b 1
@@ -240,6 +283,7 @@ if "%MODEL%"=="" (
   exit /b 1
 )
 if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
+if not "%LORA_PLAY%"=="" if /i "%TEMPERATURE_EXPLICIT%"=="false" set "TEMPERATURE=0"
 call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
@@ -261,9 +305,18 @@ if not "%JFR_DURATION_LOCAL%"=="" (
   echo [WARN] JFR enabled -- duration=%JFR_DURATION_LOCAL%  (programmatic recording, metrics auto-printed on exit)
 )
 
+set "LORA_PLAY_ARG="
+if not "%LORA_PLAY%"=="" (
+  set "LORA_PLAY_ARG=--lora-play %LORA_PLAY%"
+  echo [WARN] LoRA inference overlay: %LORA_PLAY%
+)
+
+set "API_PORT_ARG_LOCAL="
+if not "%API_PORT_LOCAL%"=="" set "API_PORT_ARG_LOCAL=--api-port %API_PORT_LOCAL%"
+
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %LORA_PLAY_ARG% %API_PORT_ARG_LOCAL% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -275,7 +328,31 @@ set "MODEL=%MODEL_PATH%"
 set "LORA_PATH_VAL=%LORA_PATH%"
 if "%LORA_RANK%"==""  set "LORA_RANK=8"
 if "%LORA_LR%"==""    set "LORA_LR=0.0001"
-if "%LORA_STEPS%"=="" set "LORA_STEPS=50"
+if "%LORA_MAX_ITERS%"=="" if "%LORA_STEPS%"=="" ( set "LORA_MAX_ITERS=50" ) else ( set "LORA_MAX_ITERS=%LORA_STEPS%" )
+if "%LORA_MAX_ITERS_QA%"=="" if "%LORA_STEPS_QA%"=="" ( set "LORA_MAX_ITERS_QA=50" ) else ( set "LORA_MAX_ITERS_QA=%LORA_STEPS_QA%" )
+if "%LORA_LOSS_TARGET_TEXT%"=="" set "LORA_LOSS_TARGET_TEXT=1.8"
+if "%LORA_LOSS_TARGET_QA%"=="" set "LORA_LOSS_TARGET_QA=1.2"
+if "%LORA_EARLY_STOP%"=="" set "LORA_EARLY_STOP=0.25"
+if "%LORA_TARGETS%"=="" set "LORA_TARGETS=qv"
+if "%LORA_GRADIENT_ACCUMULATION%"=="" set "LORA_GRADIENT_ACCUMULATION=1"
+if "%LORA_MAX_GRAD_NORM%"=="" set "LORA_MAX_GRAD_NORM=1.0"
+if "%LORA_LR_SCHEDULE%"=="" set "LORA_LR_SCHEDULE=constant"
+if "%LORA_WARMUP_STEPS%"=="" set "LORA_WARMUP_STEPS=0"
+if "%LORA_MIN_LR%"=="" set "LORA_MIN_LR=0"
+if "%LORA_WEIGHT_DECAY%"=="" set "LORA_WEIGHT_DECAY=0.01"
+if "%LORA_PLUS_RATIO%"=="" set "LORA_PLUS_RATIO=1.0"
+if "%LORA_DROPOUT%"=="" set "LORA_DROPOUT=0"
+if "%LORA_SEED%"=="" set "LORA_SEED=42"
+if "%LORA_VALIDATION_SPLIT%"=="" set "LORA_VALIDATION_SPLIT=0"
+if "%LORA_VALIDATION_PATIENCE%"=="" set "LORA_VALIDATION_PATIENCE=0"
+if "%LORA_VALIDATION_MIN_DELTA%"=="" set "LORA_VALIDATION_MIN_DELTA=0"
+if "%LORA_MODE%"=="" set "LORA_MODE=lora"
+if "%LORA_SCALING%"=="" set "LORA_SCALING=standard"
+if "%LORA_INIT%"=="" set "LORA_INIT=kaiming-uniform"
+if "%LORA_CHUNK_TOKENS%"=="" set "LORA_CHUNK_TOKENS=32"
+if "%LORA_MAX_TRAIN_TOKENS%"=="" set "LORA_MAX_TRAIN_TOKENS=0"
+if "%LORA_TRAIN_DEVICE%"=="" set "LORA_TRAIN_DEVICE=auto"
+if "%LORA_MICROBATCH%"=="" set "LORA_MICROBATCH=8"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
@@ -297,7 +374,32 @@ if /i "%~1"=="--lora-path"   ( set "LORA_PATH_VAL=%~2" & shift & shift & goto :l
 if /i "%~1"=="--lora-rank"   ( set "LORA_RANK=%~2"     & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-alpha"  ( set "LORA_ALPHA=%~2"    & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-lr"     ( set "LORA_LR=%~2"       & shift & shift & goto :lora_parse )
-if /i "%~1"=="--lora-steps"  ( set "LORA_STEPS=%~2"    & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-max-iters" ( set "LORA_MAX_ITERS=%~2" & set "LORA_MAX_ITERS_QA=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-loss-target-text" ( set "LORA_LOSS_TARGET_TEXT=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-loss-target-qa" ( set "LORA_LOSS_TARGET_QA=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-steps"  ( set "LORA_MAX_ITERS=%~2"    & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-steps-qa" ( set "LORA_MAX_ITERS_QA=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-early-stop" ( set "LORA_EARLY_STOP=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-targets" ( set "LORA_TARGETS=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-gradient-accumulation" ( set "LORA_GRADIENT_ACCUMULATION=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-max-grad-norm" ( set "LORA_MAX_GRAD_NORM=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-lr-schedule" ( set "LORA_LR_SCHEDULE=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-warmup-steps" ( set "LORA_WARMUP_STEPS=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-min-lr" ( set "LORA_MIN_LR=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-weight-decay" ( set "LORA_WEIGHT_DECAY=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-plus-ratio" ( set "LORA_PLUS_RATIO=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-dropout" ( set "LORA_DROPOUT=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-seed" ( set "LORA_SEED=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-validation-split" ( set "LORA_VALIDATION_SPLIT=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-validation-patience" ( set "LORA_VALIDATION_PATIENCE=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-validation-min-delta" ( set "LORA_VALIDATION_MIN_DELTA=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-mode" ( set "LORA_MODE=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-scaling" ( set "LORA_SCALING=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-init" ( set "LORA_INIT=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-chunk-tokens" ( set "LORA_CHUNK_TOKENS=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-max-train-tokens" ( set "LORA_MAX_TRAIN_TOKENS=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-train-device" ( set "LORA_TRAIN_DEVICE=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--lora-microbatch" ( set "LORA_MICROBATCH=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--max-tokens"  ( set "MAX_TOKENS=%~2"    & shift & shift & goto :lora_parse )
 if /i "%~1"=="--temperature" ( set "TEMPERATURE=%~2"   & shift & shift & goto :lora_parse )
 if /i "%~1"=="--top-k"       ( set "TOP_K=%~2"         & shift & shift & goto :lora_parse )
@@ -327,7 +429,12 @@ if /i "%~1"=="--help" (
   echo     --lora-rank N           Low-rank dimension  (default: 8)
   echo     --lora-alpha F          Scaling alpha  (default = rank)
   echo     --lora-lr F             Adam learning rate  (default: 1e-4)
-  echo     --lora-steps N          Gradient steps per /train  (default: 50)
+  echo     --lora-max-iters N      Max training passes per /train  (default: 50)
+  echo     --lora-loss-target-text F  Stop /train when loss ^<= F  (default: 1.8)
+  echo     --lora-loss-target-qa F    Stop /train-qa when loss ^<= F  (default: 1.2)
+  echo     --lora-steps N          Alias for --lora-max-iters
+  echo     --lora-steps-qa N       Max passes for /train-qa  (default: 50)
+  echo     --lora-early-stop F     Overfit guard  (default: 0.25)
   echo.
   echo   Generation (used for inference):
   echo     --max-tokens N          (default 200)
@@ -342,6 +449,8 @@ if /i "%~1"=="--help" (
   echo   Backend:
   echo     --gpu                   use GPU when available (default)
   echo     --cpu                   use CPU only
+  echo     --lora-train-device M   auto^|gpu^|cpu (default: auto)
+  echo     --lora-microbatch N     frozen GEMM width 1..128 (default: 8)
   echo.
   echo   REPL commands:
   echo     /train ^<text^>          Fine-tune on inline text
@@ -352,7 +461,9 @@ if /i "%~1"=="--help" (
   echo     /merge-hint             Explain offline weight merge
   echo     Regular input           Chat with adapter applied
   echo.
-  echo   Env overrides: MODEL_PATH LORA_PATH LORA_RANK LORA_ALPHA LORA_LR LORA_STEPS
+  echo   Env overrides: MODEL_PATH LORA_PATH LORA_RANK LORA_ALPHA LORA_LR LORA_MAX_ITERS
+  echo                  LORA_LOSS_TARGET_TEXT LORA_LOSS_TARGET_QA LORA_STEPS (alias)
+  echo                  LORA_TRAIN_DEVICE LORA_MICROBATCH
   echo                  MAX_TOKENS TEMPERATURE TOP_K TOP_P HEAP USE_GPU
   echo.
   echo   Examples:
@@ -362,7 +473,7 @@ if /i "%~1"=="--help" (
   echo     set MODEL_PATH=C:\models\tiny.gguf ^&^& run.bat lora
   goto :eof
 )
-if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :lora_parse )
+if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :lora_parse )
 echo [ERR] Unknown lora flag: %~1
 echo       Run: run.bat lora --help
 exit /b 1
@@ -380,7 +491,7 @@ if errorlevel 1 exit /b 1
 rem Default alpha = rank when not set
 if "%LORA_ALPHA%"=="" set "LORA_ALPHA=%LORA_RANK%"
 
-echo [INFO] Starting LoRA fine-tuning REPL  (rank=%LORA_RANK%  alpha=%LORA_ALPHA%  lr=%LORA_LR%  steps=%LORA_STEPS%  heap=%HEAP%  gpu=%USE_GPU%)
+echo [INFO] Starting LoRA fine-tuning REPL  (rank=%LORA_RANK%  alpha=%LORA_ALPHA%  lr=%LORA_LR%  max-iters=%LORA_MAX_ITERS%  loss-target-text=%LORA_LOSS_TARGET_TEXT%  heap=%HEAP%  gpu=%USE_GPU%)
 if not "%LORA_PATH_VAL%"=="" echo [INFO] Adapter file: %LORA_PATH_VAL%
 if /i "%VERBOSE%"=="true" echo [WARN] Verbose mode ON
 echo.
@@ -394,18 +505,15 @@ if /i "%USE_GPU%"=="false" set "GPU_FLAG=--cpu"
 set "LORA_PATH_FLAG="
 if not "%LORA_PATH_VAL%"=="" set "LORA_PATH_FLAG=--lora-path %LORA_PATH_VAL%"
 
-set "JFR_FLAG_LORA="
-if not "%JFR_DURATION_LORA%"=="" (
-  for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
-  set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
-  set "JFR_FLAG_LORA=-XX:StartFlightRecording=duration=%JFR_DURATION_LORA%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
-  echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  output=juno-!JFR_TS!.jfr
-  echo [WARN] After exit: open juno-!JFR_TS!.jfr in JDK Mission Control -^> Event Browser -^> juno.LoraTrainStep
-)
+set "JFR_ARG_LORA="
+if "%JFR_DURATION_LORA%"=="" goto :lora_jfr_skip
+set "JFR_ARG_LORA=--jfr %JFR_DURATION_LORA%"
+echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  (programmatic recording, metrics auto-printed on exit)
+:lora_jfr_skip
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" %JFR_FLAG_LORA% -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-steps %LORA_STEPS% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --lora-mode %LORA_MODE% --lora-scaling %LORA_SCALING% --lora-init %LORA_INIT% --lora-chunk-tokens %LORA_CHUNK_TOKENS% --lora-max-train-tokens %LORA_MAX_TRAIN_TOKENS% --lora-train-device %LORA_TRAIN_DEVICE% --lora-microbatch %LORA_MICROBATCH% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %JFR_ARG_LORA% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -449,7 +557,7 @@ if /i "%~1"=="--help" (
   echo                                  Records from start, writes juno-^<timestamp^>.jfr on exit
   goto :eof
 )
-if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :test_parse )
+if not "%~1"=="" if "%MODEL%"=="" if exist "%~1" ( set "MODEL=%~1" & shift & goto :test_parse )
 echo [ERR] Unknown test flag: %~1
 echo       Run: run.bat test --help
 exit /b 1
@@ -468,14 +576,74 @@ echo [INFO] Running ModelLiveRunner  (pType=%PTYPE%  heap=%HEAP%)
 echo.
 
 set "JFR_FLAG_TEST="
-if not "%JFR_DURATION_TEST%"=="" (
-  for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
-  set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
-  set "JFR_FLAG_TEST=-XX:StartFlightRecording=duration=%JFR_DURATION_TEST%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
-  echo [WARN] JFR enabled -- duration=%JFR_DURATION_TEST%  output=juno-!JFR_TS!.jfr
-)
+if "%JFR_DURATION_TEST%"=="" goto :test_jfr_skip
+for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
+set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
+set "JFR_FLAG_TEST=-XX:StartFlightRecording=duration=%JFR_DURATION_TEST%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
+echo [WARN] JFR enabled -- duration=%JFR_DURATION_TEST%  output=juno-!JFR_TS!.jfr
+:test_jfr_skip
 
 "%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-DpType=%PTYPE%" "-Djuno.node.heap=%HEAP%" %JFR_FLAG_TEST% -jar "%LIVE_JAR%" "%MODEL%"
+goto :eof
+
+rem ============================================================================
+rem  merge — bake a .lora adapter into a new standalone GGUF
+rem ============================================================================
+:merge
+
+set "MODEL=%MODEL_PATH%"
+set "LORA_PATH_VAL="
+set "OUTPUT="
+if "%HEAP%"=="" set "HEAP=4g"
+set "USE_GPU=false"
+
+:merge_parse
+if "%~1"=="" goto :merge_done
+if /i "%~1"=="--model-path" ( set "MODEL=%~2"         & shift & shift & goto :merge_parse )
+if /i "%~1"=="--lora-path"  ( set "LORA_PATH_VAL=%~2" & shift & shift & goto :merge_parse )
+if /i "%~1"=="--output"     ( set "OUTPUT=%~2"        & shift & shift & goto :merge_parse )
+if /i "%~1"=="--heap"       ( set "HEAP=%~2"          & shift & shift & goto :merge_parse )
+if /i "%~1"=="--help" ( goto :merge_help )
+if /i "%~1"=="-h"     ( goto :merge_help )
+echo [ERR] Unknown merge flag: %~1
+echo       Run: run.bat merge --help
+exit /b 1
+
+:merge_help
+echo.
+echo   Usage: run.bat merge --model-path PATH [options]
+echo.
+echo   Options:
+echo     --model-path PATH    Source GGUF or llamafile (required)
+echo     --lora-path PATH     Trained .lora checkpoint (default: ^<model^>.lora)
+echo     --output PATH        Output GGUF path (default: ^<model^>-merged.gguf)
+echo     --heap SIZE          JVM heap, e.g. 4g (default: 4g)
+echo.
+echo   Example:
+echo     run.bat merge --model-path C:\models\tinyllama.gguf
+echo     run.bat merge --model-path C:\models\tinyllama.gguf --lora-path my.lora --output merged.gguf
+echo.
+goto :eof
+
+:merge_done
+if "%MODEL%"=="" (
+  echo [ERR] Model path is required.
+  echo       Usage: run.bat merge --model-path PATH
+  exit /b 1
+)
+call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
+if errorlevel 1 exit /b 1
+
+echo [INFO] Starting LoRA merge  (heap=%HEAP%)
+
+set "LORA_PATH_FLAG_MERGE="
+if not "%LORA_PATH_VAL%"=="" set "LORA_PATH_FLAG_MERGE=--lora-path %LORA_PATH_VAL%"
+set "OUTPUT_FLAG_MERGE="
+if not "%OUTPUT%"=="" set "OUTPUT_FLAG_MERGE=--output %OUTPUT%"
+
+call :prepend_cuda_path
+
+"%JAVA%" "-Xmx%HEAP%" -cp "%JUNO_PLAYER_JAR%" cab.ml.juno.player.LoraMergeMain --model-path "%MODEL%" %LORA_PATH_FLAG_MERGE% %OUTPUT_FLAG_MERGE%
 goto :eof
 
 rem ============================================================================
@@ -496,14 +664,18 @@ echo   run.bat cluster --model-path PATH    3-node cluster + REPL
 echo   run.bat local   --model-path PATH    in-process REPL (single JVM)
 echo   run.bat lora    --model-path PATH    LoRA fine-tuning REPL (adapter kept separate)
 echo   run.bat test    --model-path PATH    8 smoke checks
+echo   run.bat merge   --model-path PATH    bake a .lora adapter into a new GGUF
 echo.
 echo   Backend flags (cluster/local/lora):
 echo     --gpu          use GPU when available (default)
 echo     --cpu          use CPU only
 echo.
 echo   Env overrides: MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES
-echo                  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS  USE_GPU
+echo                  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS  USE_GPU  API_PORT
 echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h  (all commands)
+echo   --api-port N      start REST API server on port N  (cluster, local)
+echo.
+echo   Run 'run.bat ^<command^> --help' for all flags of that command.
 echo.
 goto :eof
 
@@ -512,15 +684,18 @@ rem  Helpers
 rem ============================================================================
 
 :find_java
-if not "%JAVA_HOME%"=="" (
-  if exist "%JAVA_HOME%\bin\java.exe" (
-    set "JAVA=%JAVA_HOME%\bin\java.exe"
-    exit /b 0
-  )
-)
+echo [DBG] find_java: JAVA_HOME=!JAVA_HOME!
+if "%JAVA_HOME%"=="" goto :find_java_where
+echo [DBG] checking JAVA_HOME path: !JAVA_HOME!\bin\java.exe
+if not exist "%JAVA_HOME%\bin\java.exe" goto :find_java_where
+set "JAVA=%JAVA_HOME%\bin\java.exe"
+echo [DBG] found via JAVA_HOME: !JAVA!
+exit /b 0
+:find_java_where
 for /f "usebackq tokens=* delims=" %%J in (`where java 2^>nul`) do (
   if not defined JAVA set "JAVA=%%J"
 )
+echo [DBG] JAVA after where: !JAVA!
 if not defined JAVA (
   echo [ERR] JDK not found. Install from https://adoptium.net and set JAVA_HOME.
   exit /b 1
@@ -528,23 +703,30 @@ if not defined JAVA (
 exit /b 0
 
 :check_java_version
+echo [DBG] check_java_version: JAVA=!JAVA!
 set "JAVAVER_RAW="
-for /f "usebackq tokens=3 delims= " %%V in (`"%JAVA%" -version 2^>^&1 ^| findstr /i "version"`) do (
-  if not defined JAVAVER_RAW set "JAVAVER_RAW=%%V"
-)
-if not defined JAVAVER_RAW (
-  echo [WARN] Unable to determine Java version. Continuing.
-  exit /b 0
-)
+set "_JVER_OUT=%TEMP%\juno_jver_%RANDOM%.txt"
+echo [DBG] version output temp file: !_JVER_OUT!
+"%JAVA%" -version 2>"%_JVER_OUT%"
+echo [DBG] java -version exit code: !ERRORLEVEL!
+for /f "usebackq tokens=3 delims= " %%V in ("%_JVER_OUT%") do if not defined JAVAVER_RAW set "JAVAVER_RAW=%%V"
+del /f /q "%_JVER_OUT%" >nul 2>&1
+echo [DBG] JAVAVER_RAW=!JAVAVER_RAW!
+if not defined JAVAVER_RAW goto :java_ver_unknown
 set "JAVAVER=%JAVAVER_RAW:"=%"
 set "JAVAMAJOR="
 for /f "tokens=1 delims=." %%M in ("%JAVAVER%") do set "JAVAMAJOR=%%M"
-if "%JAVAMAJOR%"=="" ( echo [WARN] Unable to parse Java version. Continuing. & exit /b 0 )
-if %JAVAMAJOR% LSS 25 (
-  echo [ERR] JDK 25+ required (found: %JAVAVER%).
-  exit /b 1
-)
+echo [DBG] JAVAVER=!JAVAVER! JAVAMAJOR=!JAVAMAJOR!
+if "%JAVAMAJOR%"=="" goto :java_ver_unknown
+if %JAVAMAJOR% LSS 25 goto :java_ver_old
+echo [DBG] Java version OK
 exit /b 0
+:java_ver_unknown
+echo [WARN] Unable to determine Java version. Continuing.
+exit /b 0
+:java_ver_old
+echo [ERR] JDK 25+ required.
+exit /b 1
 
 :require_jar
 if not exist %1 (

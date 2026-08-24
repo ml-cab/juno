@@ -106,6 +106,13 @@ interface GpuBindings {
     MethodHandle blasSetPointerMode();
     /** {@code cublasSgemv_v2} / {@code rocblas_sgemv}. */
     MethodHandle blasSgemv();
+    /**
+     * {@code cublasSgemm_v2} / {@code rocblas_sgemm}.
+     *
+     * <p>Signature (both vendors):
+     * {@code (handle, transa, transb, m, n, k, *alpha, *A, lda, *B, ldb, *beta, *C, ldc) → int}.
+     */
+    MethodHandle blasSgemm();
     /** {@code cublasHSSgemvStridedBatched} / {@code rocblas_hssgemv_strided_batched}. */
     MethodHandle blasHSSgemvStridedBatched();
 
@@ -127,9 +134,21 @@ interface GpuBindings {
 
     // ── Vendor-specific constants ─────────────────────────────────────────────
     /**
+     * Operation "no transpose" for the BLAS GEMV call.
+     * CUDA cuBLAS: {@code CUBLAS_OP_N = 0}.
+     * AMD rocBLAS: {@code rocblas_operation_none = 111}.
+     *
+     * <p>Used for resident frozen backward {@code W^T * g} on a row-major
+     * {@code W[rows,cols]} buffer (same storage as forward {@link #opTranspose()}).
+     */
+    int opNoTranspose();
+
+    /**
      * Operation "transpose" for the BLAS GEMV call.
      * CUDA cuBLAS: {@code CUBLAS_OP_T = 1}.
      * AMD rocBLAS: {@code rocblas_operation_transpose = 112}.
+     *
+     * <p>Used for resident forward {@code W * x} on row-major storage.
      */
     int opTranspose();
 

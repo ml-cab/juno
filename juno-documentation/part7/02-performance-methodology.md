@@ -1,0 +1,329 @@
+(ch-7-2)=
+# 7.2. Performance Methodology
+
+Companion to [juno_test_matrix.html](https://ml.cab/juno_test_matrix.html). That file contains the
+interactive results table and scenario narratives; this document covers how to reproduce
+a run, extract numbers from JFR, and interpret the matrix columns.
+
+---
+
+## Baseline hardware
+
+| Role | Instance | Notes |
+|------|----------|-------|
+| CPU | `m7i-flex.large` (AWS) | 2 vCPU, 8 GB RAM; no GPU |
+| GPU | `g4dn.2xlarge` (AWS) | 8 vCPU, 32 GB RAM; NVIDIA T4 16 GB VRAM |
+
+All runs use `tinyllama-1.1b-chat-v1.0-q4_k_m.gguf` unless stated otherwise. TPS is
+coordinator-side `juno.TokenProduced.tps` extracted from the merged JFR file.
+
+---
+
+## Reproducing a run
+
+### 1. Build
+
+```bash
+mvn clean package -DskipTests
+```
+
+### 2. Run with JFR enabled
+
+```bash
+# CPU single-node, pipeline, FP16, 50 tokens: matches matrix row id:1
+./juno local \
+  --model-path models/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf \
+  --dtype FLOAT16 \
+  --max-tokens 50 \
+  --jfr 5m
+
+# 3-node CPU cluster: matches matrix row id:3
+./juno \
+  --model-path models/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf \
+  --pType pipeline --nodes 3 \
+  --max-tokens 50 \
+  --jfr 5m
+
+# GPU single-node, pipeline, FP16, 200 tokens: matches matrix row id:16
+JUNO_USE_GPU=true \
+./juno local \
+  --model-path models/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf \
+  --dtype FLOAT16 \
+  --max-tokens 200 \
+  --jfr 5m
+```
+
+JFR files are written as `juno-<modelStem>-<timestamp>.jfr` (local/coordinator) or
+`juno-<nodeId>-<modelStem>-<timestamp>.jfr` (cluster nodes) in the project root.
+Cluster runs produce one file per JVM.
+
+LoRA training uses the same programmatic `--jfr` path:
+
+```bash
+./juno lora --model-path models/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf --jfr 1m
+```
+
+On exit, ConsoleMain extracts `target/metrics/metrics.json` and prints the summary
+banner (parity with local mode). See `docs/LoRA.md` for the LoRA event catalog and
+JSON key contract (`LoraTrainStep`, `LoraValidation`, `LoraMerge`, `LoraNormRefresh`,
+`LoraPlayback`, `LoraCheckpoint`).
+
+### 3. Extract metrics
+
+```bash
+# Build metrics module, then scan project-root *.jfr files
+mvn package -pl metrics -am -DskipTests
+java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
+
+cat target/metrics/metrics.json
+```
+
+The CLI maps each `juno-<modelStem>-*.jfr` in the project root to an entry in
+`metrics/src/main/resources/models.json` and writes one snapshot per matched file.
+After `./juno --jfr …` (cluster), the launcher already prints per-file summaries on exit;
+`metrics.json` reflects whichever file the launcher processed last. For TPS, read the
+coordinator recording. For programmatic cross-JVM percentile merge, call
+`MetricsMain.extractToJsonMerged(List<Path>, modelStem, modelFilename)` from Java.
+
+Key fields to record:
+
+| JFR event | Field | Matrix column |
+|-----------|-------|---------------|
+| `juno.TokenProduced` | `tps` | TPS value |
+| `juno.ForwardPass` | `durationMs` p95 | Node decode p95 |
+| `juno.ForwardPass` | `prefillMs` p95 | Node prefill p95 |
+| `juno.MatVec` | `durationMs` p99 | MatVec hot-path overhead |
+
+---
+
+## Concurrent session tests (s9)
+
+The `s9` columns measure aggregate TPS across 9 simultaneous sessions. Reproduce with
+`ClusterHarness` or the `test` command:
+
+```bash
+./juno test \
+  --model-path models/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf \
+  --jfr 5m
+```
+
+The `test` command runs 6 pipeline and 2 tensor smoke checks and exits 0 on all-pass.
+For a raw s9 load, open 9 concurrent REST connections to `POST /v1/chat/completions`
+with `--api-port 8080` active:
+
+```bash
+./juno local \
+  --model-path models/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf \
+  --api-port 8080 \
+  --jfr 5m &
+
+# in a separate shell, send 9 concurrent requests
+for i in $(seq 1 9); do
+  curl -s -X POST http://localhost:8080/v1/chat/completions \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"tinyllama","messages":[{"role":"user","content":"count to 50"}],"max_tokens":50}' &
+done
+wait
+```
+
+---
+
+## Matrix column definitions
+
+| Column | Meaning |
+|--------|---------|
+| `hw` | `cpu` or `gpu` |
+| `pt` | Parallelism type: `pipeline` or `tensor` |
+| `n` | Number of transformer nodes |
+| `co` | Coordinator placement: `embedded` (same JVM as node-1) or `separate` |
+| `dt` | Activation wire dtype: `FP16`, `FP32`, or `INT8` |
+| `bo` | Byte order: `BE` (big-endian) or `LE` (little-endian) |
+| `lo` | LoRA adapter overlay: `off` or adapter rank |
+| `l1` | Long-form / single session TPS |
+| `l9` | Long-form / 9 concurrent sessions aggregate TPS |
+| `c1` | Conversational (growing KV context) / single session TPS |
+| `c9` | Conversational / 9 concurrent sessions aggregate TPS |
+
+Cell status in `scripts/performance-tests/matrix.tsv` (prefix before `:`):
+
+| Code | Meaning |
+|------|---------|
+| `D` | Done: TPS measured (value after `:`) |
+| `P` | Pending: planned, not yet run |
+| `A` | Added: suggested extra cell |
+| `NA` | Not applicable for this row |
+
+HTTP prompts, session counts, and token limits come from [scenarios.yaml](https://github.com/ml-cab/juno/blob/main/scripts/performance-tests/scenarios.yaml).
+
+---
+
+## AWS performance runner (`scripts/performance-tests/performance-test.sh`)
+
+`scripts/performance-tests/matrix.tsv` is the **single source of truth** for which configurations exist and what has been measured. The runner selects cells directly from that file (no separate queue file). After each successful cell it writes coordinator `juno.TokenProduced.tps` into the matrix and regenerates [juno_test_matrix.html](https://ml.cab/juno_test_matrix.html).
+
+### Per-cell lifecycle
+
+Each selected cell (`l1`, `l9`, `c1`, `c9`) runs one full AWS cycle:
+
+1. `juno-deploy.sh setup --detach --no-browser` (exits after coordinator healthy)
+2. HTTP workload via `POST /v1/chat/completions` (from `scripts/performance-tests/scenarios.yaml`)
+3. `juno-deploy.sh finish`: JFR gather + cluster teardown
+4. Metrics JSON → `target/perf/runs/metrics-<row>-<col>.json`
+5. Update `scripts/performance-tests/matrix.tsv` and `docs/juno_test_matrix.html`; open matrix in browser
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `./scripts/performance-tests/performance-test.sh` | Screen worker: run selection in background (`juno-perf` session) |
+| `./scripts/performance-tests/performance-test.sh --foreground` | Same worker, log to terminal |
+| `./scripts/performance-tests/performance-test.sh --attach` | Attach to screen session |
+| `./scripts/performance-tests/performance-test.sh --status` | Screen session + tail `target/perf/nohup.log` |
+| `./scripts/performance-tests/performance-test.sh --list` | Print selected `row_id` + column, then exit |
+| `./scripts/performance-tests/performance-test.sh --parse` | Parse `test-scenario.txt` → matrix + HTML |
+
+### Selection flags
+
+All selection is from `scripts/performance-tests/matrix.tsv` (override path with `--matrix FILE`).
+
+| Flag | Description |
+|------|-------------|
+| `--all` | Every applicable cell (not `NA`), including already measured (`D:`) |
+| `--pending` | Only `P:` or `A:` cells |
+| `--row ID` | Limit to one matrix row id |
+| `--col COL` | Limit to one column: `l1`, `l9`, `c1`, `c9` |
+| `--from ID` | Inclusive row id range start (use with `--to`) |
+| `--to ID` | Inclusive row id range end |
+
+**Default mode** when no selection flags are given: `--pending` (unfinished cells only).
+
+If you set **`--row`**, **`--col`**, or **`--from` / `--to`**, mode defaults to **`all`** for matching non-`NA` cells so you can re-run measured cells without also passing `--all`. Use `--pending` with a range to restrict to unfinished cells only.
+
+### Other options
+
+> **Note:** the script's default `--html` output path (`docs/juno_test_matrix.html`) and the
+> default matrix path predate this documentation restructure. The generated report now lives at
+> `docs/assets/juno_test_matrix.html`; update
+> `scripts/performance-tests/performance-test.sh`'s default `--html` value to match, or continue
+> passing `--html docs/assets/juno_test_matrix.html` explicitly until it is updated.
+
+| Flag | Description |
+|------|-------------|
+| `--git REF` | Branch, tag, or commit for `juno-deploy.sh` on EC2 (default: `main`) |
+| `--scenario FILE` | Input for `--parse` (default: `test-scenario.txt`) |
+| `--html FILE` | HTML output (default: `docs/juno_test_matrix.html`) |
+| `-n`, `--dry-run` | `--parse` only: preview HTML rows, do not write |
+| `-h`, `--help` | Full usage |
+
+`--queue` was removed; use matrix selection flags instead.
+
+### Examples
+
+```bash
+# Preview: all non-NA cells in the matrix
+./scripts/performance-tests/performance-test.sh --list --all
+
+# Run every applicable cell (23 rows × up to 4 columns)
+./scripts/performance-tests/performance-test.sh --foreground --all --git perftest
+
+# Run only unfinished cells (default mode)
+./scripts/performance-tests/performance-test.sh --foreground --git perftest
+
+# One cell: GPU pipeline long/s1 (row 16)
+./scripts/performance-tests/performance-test.sh --foreground --row 16 --col l1 --git perftest
+
+# Inclusive row range, all columns per row
+./scripts/performance-tests/performance-test.sh --foreground --from 15 --to 16 --git perftest
+
+# Same range but only pending/suggested cells
+./scripts/performance-tests/performance-test.sh --foreground --from 15 --to 23 --pending --git perftest
+
+# One row, one scenario column
+./scripts/performance-tests/performance-test.sh --foreground --row 16 --col l9 --git perftest
+
+# Background worker (long runs)
+./scripts/performance-tests/performance-test.sh --all --git perftest
+./scripts/performance-tests/performance-test.sh --attach
+```
+
+### Artifacts
+
+| Path | Content |
+|------|---------|
+| `target/perf/nohup.log` | Worker log (screen mode) |
+| `target/perf/runs/deploy-<row>-<col>.log` | Deploy + JFR console |
+| `target/perf/runs/http-<row>-<col>/` | Chat completion JSON responses |
+| `target/perf/runs/metrics-<row>-<col>.json` | Merged JFR metrics |
+| `scripts/performance-tests/matrix.tsv` | Updated TPS per cell after each run |
+
+---
+
+## Submitting results
+
+Send a Metrics summary to [dev@ml.cab](mailto:dev@ml.cab) with: GPU card details,
+juno startup command, conversation log, and the JFR Metrics Summary section. Include
+the `juno.TokenProduced.tps` value and `juno.ForwardPass` p95 decode latency.
+
+Regenerate the matrix from a captured scenario log (manual / legacy path):
+
+```bash
+./scripts/performance-tests/performance-test.sh --parse
+# reads test-scenario.txt, writes docs/juno_test_matrix.html and scripts/performance-tests/matrix.tsv
+```
+
+Automated AWS runs update the matrix and HTML after each cell; `--parse` is only needed when ingesting pasted JFR output into `test-scenario.txt`.
+
+---
+
+## LoRA training GPU baseline (Tier 4 / 9 / 10 / 11)
+
+Status: **production GPU LoRA training** on LLaMA-family / Qwen2 via resident FP32 forward +
+transpose + microbatched GEMM (`GpuBlasOps` / `DeviceActivationBatch`, default
+`--lora-microbatch 8` / `LORA_MICROBATCH`). Path is **frozen batched GPU + host adapters / Adam**
+(device adapters deferred: host adapter intensity is not the bottleneck after microbatch).
+Phi-3 / dense Qwen3 share `LoraResidentWeights` residency (Tier 10); VRAM OOM auto-fallback
+retries FP16 at microbatch 1 then CPU under `auto` (Tier 11).
+
+DoRA exact norm refresh is correctness-complete but **not** production-perf-gated; prefer
+LoRA/rsLoRA for large all-linear jobs until a refresh time/heap budget is published here.
+
+### Measured gates (TinyLlama Q4_K_M, qv, rank 8, seq 64, microbatch 8)
+
+Hardware: NVIDIA GeForce GTX 1080 (8.5 GB), CUDA 12 / Panama FFI.
+Reproduce: `mvn test -Dgroups=gpu -pl node -Dtest=LoraTrainableHandlerGpuBackwardTest#speed_gates_qv`
+
+| Path | e2e ms / step | backward ms | Speedup vs CPU |
+|------|---------------|-------------|----------------|
+| CPU quantized (oracle) | ~47907 | ~26663 | 1.0× |
+| GPU FP32 resident + microbatch 8 | ~3433 | ~2457 | **e2e 14.0×**, **backward 10.9×** |
+
+Gates: backward ≥ 2× and e2e ≥ 1.5×: **passed**. CPU↔GPU loss / A/B grad parity:
+`LoraTrainableHandlerGpuBackwardTest#cpu_gpu_grad_parity_qv`.
+
+Reference configuration:
+
+| Item | Value |
+|------|-------|
+| Model | TinyLlama Q4_K_M |
+| Sequence length | 64 (gate); 128 recommended for `/train-file` |
+| Rank | 8 |
+| Targets | `qv` (gate); `all-linear` increases VRAM |
+| Microbatch | 8 (`--lora-microbatch N` / `LORA_MICROBATCH`; `1` = sequential GEMV / FP16) |
+| Warm-up / measured | 1 warm-up + 3 measured updates in the gated test |
+| Hardware | NVIDIA GTX 1080 (above); AMD ROCm adjoint via `-Dgroups=rocm` |
+
+`transferMs` remains 0 until H2D/D2H counters are wired. Peak VRAM for TinyLlama qv FP32
+resident upload fits in ~8 GB class cards; all-linear and Phi-3.5 may need `--lora-microbatch 1`
+or rely on FP32→FP16→CPU auto-fallback under `--lora-train-device=auto`.
+
+JFR labels for resident transpose:
+
+- `cuda-resident-transpose` / `cuda-resident-fp16-transpose` (FP16 when microbatch=1)
+- `rocm-resident-transpose` / `rocm-resident-fp16-transpose`
+
+Adjoint gate: `dot(W*x, g) == dot(x, W^T*g)` via `CudaMatVecTransposeTest` /
+`RocmMatVecTransposeTest`. Microbatch GEMM parity: `GpuBlasOpsTest`.
+
+---
+
+[<- 7.1 JFR and Metrics](#ch-7-1) &nbsp;|&nbsp; [Table of Contents](../index.md) &nbsp;|&nbsp; [7.3 Performance Report ->](#ch-7-3)

@@ -259,6 +259,24 @@ class GenerationLoopEosPieceTest {
 	 * FAILS if endsWithEosMarker() is absent, PASSES after.
 	 */
 	@Test
+	@DisplayName("Answer glued to </s> in one piece streams only the answer")
+	void answer_glued_to_eos_marker_in_one_piece() {
+		int glued = 304;
+		DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
+		tok.override(glued, "Johnatan</s>");
+
+		StubInferencePipeline pipeline = new StubInferencePipeline(StubInferencePipeline.DEFAULT_TOKEN, glued,
+				StubInferencePipeline.DEFAULT_TOKEN);
+
+		List<String> streamed = new ArrayList<>();
+		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, id, step) -> streamed.add(piece));
+
+		assertThat(String.join("", streamed)).isEqualTo("Johnatan");
+		assertThat(result.text()).isEqualTo("Johnatan");
+		assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
+	}
+
+	@Test
 	@DisplayName("Multi-token EOS pattern </s> across three pieces stops generation")
 	void multi_token_eos_across_three_pieces_stops_generation() {
 		int lessThanSlash = 300; // decodes to "</"
@@ -282,9 +300,9 @@ class GenerationLoopEosPieceTest {
 		List<String> streamed = new ArrayList<>();
 		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, id, step) -> streamed.add(piece));
 
-		// The three partial pieces were streamed before the pattern was detected
+		// Partial pieces must not reach the consumer (hold-back until marker completes)
+		assertThat(String.join("", streamed)).doesNotContain("</s>");
 		assertThat(streamed).doesNotContain("extra");
-		// fullText must NOT contain the EOS marker (it was stripped)
 		assertThat(result.text()).doesNotContain("</s>");
 		assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
 	}

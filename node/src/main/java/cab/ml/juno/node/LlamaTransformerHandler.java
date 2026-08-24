@@ -876,9 +876,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		case 8  -> dequantizeQ8_0(t.data(), rows, cols);
 		case 10 -> dequantizeQ2K(t.data(), rows, cols);
 		case 11 -> dequantizeQ3K(t.data(), rows, cols);
-		case 12 -> dequantizeQ4K(t.data(), rows, cols);
-		case 13 -> dequantizeQ5K(t.data(), rows, cols);
-		case 14 -> dequantizeQ6K(t.data(), rows, cols);
+		case 12 -> GgufKQuantCodec.decodeQ4KRows(t.data(), rows, cols);
+		case 13 -> GgufKQuantCodec.decodeQ5KRows(t.data(), rows, cols);
+		case 14 -> GgufKQuantCodec.decodeQ6KRows(t.data(), rows, cols);
 		default -> throw new UnsupportedOperationException(
 				"dequantize not implemented for GGML type " + t.type());
 		};
@@ -1007,126 +1007,6 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 						}
 						shift += 2;
 						m <<= 1;
-					}
-				}
-			}
-		}
-		return out;
-	}
-
-	private static float[] dequantizeQ4K(byte[] raw, int rows, int cols) {
-		final int BLOCK_SIZE = 256;
-		final int BLOCK_BYTES = 144;
-		int n = rows * cols;
-		float[] out = new float[n];
-		int blocksPerRow = cols / BLOCK_SIZE;
-		int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
-		for (int r = 0; r < rows; r++) {
-			int rowByteOff = r * bytesPerRow;
-			int xBase = r * cols;
-			for (int b = 0; b < blocksPerRow; b++) {
-				int bo     = rowByteOff + b * BLOCK_BYTES;
-				int scBase = bo + 4;
-				int qsBase = bo + 16;
-				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
-				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
-				int qi = 0;
-				for (int g = 0; g < BLOCK_SIZE; g += 64) {
-					int s0 = g / 32, s1 = s0 + 1;
-					float scale0 = d    * q4kScaleRaw(raw, scBase, s0);
-					float min0   = dmin * q4kMinRaw  (raw, scBase, s0);
-					float scale1 = d    * q4kScaleRaw(raw, scBase, s1);
-					float min1   = dmin * q4kMinRaw  (raw, scBase, s1);
-					int outOff = xBase + b * BLOCK_SIZE + g;
-					for (int i = 0; i < 32; i++)
-						out[outOff + i]      = scale0 * (raw[qsBase + qi + i] & 0x0F) - min0;
-					for (int i = 0; i < 32; i++)
-						out[outOff + 32 + i] = scale1 * ((raw[qsBase + qi + i] >> 4) & 0x0F) - min1;
-					qi += 32;
-				}
-			}
-		}
-		return out;
-	}
-
-	private static float[] dequantizeQ5K(byte[] raw, int rows, int cols) {
-		final int BLOCK_SIZE = 256;
-		final int BLOCK_BYTES = 176;
-		int n = rows * cols;
-		float[] out = new float[n];
-		int blocksPerRow = cols / BLOCK_SIZE;
-		int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
-		for (int r = 0; r < rows; r++) {
-			int rowByteOff = r * bytesPerRow;
-			int xBase = r * cols;
-			for (int b = 0; b < blocksPerRow; b++) {
-				int bo     = rowByteOff + b * BLOCK_BYTES;
-				int scBase = bo + 4;
-				int qhBase = bo + 16;
-				int qsBase = bo + 48;
-				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
-				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
-				int qi = 0;
-				for (int g = 0; g < 4; g++) {
-					int s0 = g * 2, s1 = s0 + 1;
-					float scale0 = d    * q4kScaleRaw(raw, scBase, s0);
-					float min0   = dmin * q4kMinRaw  (raw, scBase, s0);
-					float scale1 = d    * q4kScaleRaw(raw, scBase, s1);
-					float min1   = dmin * q4kMinRaw  (raw, scBase, s1);
-					int hiBit0 = g * 2, hiBit1 = g * 2 + 1;
-					int outOff = xBase + b * BLOCK_SIZE + g * 64;
-					for (int l = 0; l < 32; l++) {
-						int lo = raw[qsBase + qi + l] & 0x0F;
-						int hi = (raw[qhBase + l] >>> hiBit0) & 1;
-						out[outOff + l] = scale0 * (lo | (hi << 4)) - min0;
-					}
-					for (int l = 0; l < 32; l++) {
-						int lo = (raw[qsBase + qi + l] >>> 4) & 0x0F;
-						int hi = (raw[qhBase + l] >>> hiBit1) & 1;
-						out[outOff + 32 + l] = scale1 * (lo | (hi << 4)) - min1;
-					}
-					qi += 32;
-				}
-			}
-		}
-		return out;
-	}
-
-	private static float[] dequantizeQ6K(byte[] raw, int rows, int cols) {
-		final int BLOCK_SIZE = 256;
-		final int BLOCK_BYTES = 210;
-		int n = rows * cols;
-		float[] out = new float[n];
-		int blocksPerRow = cols / BLOCK_SIZE;
-		int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
-		for (int r = 0; r < rows; r++) {
-			int rowByteOff = r * bytesPerRow;
-			int xBase = r * cols;
-			for (int b = 0; b < blocksPerRow; b++) {
-				int bo  = rowByteOff + b * BLOCK_BYTES;
-				float d = GgufReader.f16ToF32(readLE16(raw, bo + 208));
-				for (int half = 0; half < 2; half++) {
-					int qlOff = bo + half * 64;
-					int qhOff = bo + 128 + half * 32;
-					int scOff = bo + 192 + half * 8;
-					int xOff  = xBase + b * BLOCK_SIZE + half * 128;
-					for (int l = 0; l < 32; l++) {
-						int is   = l / 16;
-						int qlL  = raw[qlOff + l]      & 0xFF;
-						int qlL2 = raw[qlOff + l + 32] & 0xFF;
-						int qhL  = raw[qhOff + l]      & 0xFF;
-						int q1 = ((qlL  & 0x0F) | (((qhL >> 0) & 3) << 4)) - 32;
-						int q2 = ((qlL2 & 0x0F) | (((qhL >> 2) & 3) << 4)) - 32;
-						int q3 = ((qlL  >> 4)   | (((qhL >> 4) & 3) << 4)) - 32;
-						int q4 = ((qlL2 >> 4)   | (((qhL >> 6) & 3) << 4)) - 32;
-						float d1 = d * raw[scOff + is];
-						float d2 = d * raw[scOff + is + 2];
-						float d3 = d * raw[scOff + is + 4];
-						float d4 = d * raw[scOff + is + 6];
-						out[xOff + l]       = d1 * q1;
-						out[xOff + l + 32]  = d2 * q2;
-						out[xOff + l + 64]  = d3 * q3;
-						out[xOff + l + 96]  = d4 * q4;
 					}
 				}
 			}

@@ -121,23 +121,48 @@ class LoraAdamOptimizerTest {
 	// ── Weight decay ─────────────────────────────────────────────────────────
 
 	@Test
-	@DisplayName("Weight decay shrinks A parameters (L2 regularisation)")
+	@DisplayName("Decoupled AdamW shrinks A with zero gradient (moments stay raw-grad only)")
 	void weight_decay_shrinks_A() {
 		LoraAdapterSet set = new LoraAdapterSet();
 		LoraAdapter a = makeNonZero(4, 8, 16, 4f);
 		set.add(0, "wq", a);
 
 		float[] aBefore = a.a().clone();
-		// gradients = 0 so only weight decay acts.
-		// lr=1e-4 ensures Adam's effective step (≈lr) is << typical |param| (≈0.003),
-		// so parameters shrink toward zero without overshooting.
-		LoraAdamOptimizer opt = new LoraAdamOptimizer(1e-4, 0.9, 0.999, 1e-8, 0.1);
+		// gradients = 0 so only decoupled decay acts: p *= (1 - lr * wd)
+		LoraAdamOptimizer opt = new LoraAdamOptimizer(1e-2, 0.9, 0.999, 1e-8, 0.1);
 		opt.step(set);
 
-		// Each a[i] should be slightly smaller in magnitude
 		for (int i = 0; i < a.a().length; i++) {
-			if (Math.abs(aBefore[i]) > 5e-4f) // skip near-zero params
-				assertThat(Math.abs(a.a()[i])).isLessThan(Math.abs(aBefore[i]));
+			if (Math.abs(aBefore[i]) > 5e-4f)
+				assertThat(a.a()[i]).isCloseTo(aBefore[i] * (1f - 1e-2f * 0.1f), within(1e-6f));
+		}
+	}
+
+	@Test
+	@DisplayName("Decoupled decay does not enter Adam moments")
+	void moments_unaffected_by_decay() {
+		LoraAdapterSet set = new LoraAdapterSet();
+		LoraAdapter a = makeNonZero(4, 8, 16, 4f);
+		set.add(0, "wq", a);
+		for (int i = 0; i < a.gradA().length; i++)
+			a.gradA()[i] = 0.2f;
+		float[] aWithDecay = a.a().clone();
+		float[] grad = a.gradA().clone();
+
+		LoraAdamOptimizer withDecay = new LoraAdamOptimizer(1e-3, 0.9, 0.999, 1e-8, 0.5);
+		withDecay.step(set);
+		float[] afterDecay = a.a().clone();
+
+		System.arraycopy(aWithDecay, 0, a.a(), 0, a.a().length);
+		System.arraycopy(grad, 0, a.gradA(), 0, a.gradA().length);
+		LoraAdamOptimizer noDecay = new LoraAdamOptimizer(1e-3, 0.9, 0.999, 1e-8, 0.0);
+		noDecay.step(set);
+		float[] afterNoDecay = a.a().clone();
+
+		// Difference must equal the explicit decoupled term only (same Adam step).
+		for (int i = 0; i < a.a().length; i++) {
+			float expected = afterNoDecay[i] - (float) (1e-3 * 0.5 * aWithDecay[i]);
+			assertThat(afterDecay[i]).isCloseTo(expected, within(1e-5f));
 		}
 	}
 
@@ -160,6 +185,102 @@ class LoraAdamOptimizerTest {
 		// B should be unchanged (zero gradient + no weight decay on B)
 		for (int i = 0; i < a.b().length; i++)
 			assertThat(a.b()[i]).isCloseTo(bBefore[i], within(1e-5f));
+	}
+
+	@Test
+	@DisplayName("Scheduled LR scales the AdamW update")
+	void scheduled_lr_scales_update() {
+		LoraAdapterSet set = new LoraAdapterSet();
+		LoraAdapter a = makeNonZero(4, 8, 16, 4f);
+		set.add(0, "wq", a);
+		for (int i = 0; i < a.gradA().length; i++)
+			a.gradA()[i] = 0.1f;
+		float[] before = a.a().clone();
+		float[] grad = a.gradA().clone();
+
+		LoraAdamOptimizer opt = new LoraAdamOptimizer(1e-2, 0.9, 0.999, 1e-8, 0.0);
+		opt.step(set, 1e-2);
+		float deltaFull = before[0] - a.a()[0];
+
+		System.arraycopy(before, 0, a.a(), 0, a.a().length);
+		System.arraycopy(grad, 0, a.gradA(), 0, a.gradA().length);
+		opt.reset();
+		opt.step(set, 5e-3);
+		float deltaHalf = before[0] - a.a()[0];
+		assertThat(deltaHalf).isCloseTo(deltaFull * 0.5f, within(1e-6f));
+		assertThat(opt.lastLearningRateA()).isEqualTo(5e-3);
+		assertThat(opt.lastLearningRateB()).isEqualTo(5e-3);
+	}
+
+	@Test
+	@DisplayName("LoRA+ ratio 1.0 matches ordinary optimizer behavior")
+	void lora_plus_ratio_one_equivalence() {
+		LoraAdapterSet setA = new LoraAdapterSet();
+		LoraAdapterSet setB = new LoraAdapterSet();
+		LoraAdapter a1 = makeNonZero(4, 8, 16, 4f);
+		LoraAdapter a2 = LoraAdapter.fromWeights(4, 8, 16, 4f, a1.a().clone(), a1.b().clone());
+		for (int i = 0; i < a1.b().length; i++) {
+			a1.b()[i] = 0.3f;
+			a2.b()[i] = 0.3f;
+		}
+		setA.add(0, "wq", a1);
+		setB.add(0, "wq", a2);
+		for (int i = 0; i < a1.gradA().length; i++) {
+			a1.gradA()[i] = 0.05f;
+			a2.gradA()[i] = 0.05f;
+		}
+		for (int i = 0; i < a1.gradB().length; i++) {
+			a1.gradB()[i] = 0.02f;
+			a2.gradB()[i] = 0.02f;
+		}
+
+		new LoraAdamOptimizer(1e-2, 0.9, 0.999, 1e-8, 0.01, 1.0).step(setA, 1e-2);
+		new LoraAdamOptimizer(1e-2, 0.9, 0.999, 1e-8, 0.01).step(setB, 1e-2);
+
+		for (int i = 0; i < a1.a().length; i++)
+			assertThat(a1.a()[i]).isCloseTo(a2.a()[i], within(1e-7f));
+		for (int i = 0; i < a1.b().length; i++)
+			assertThat(a1.b()[i]).isCloseTo(a2.b()[i], within(1e-7f));
+	}
+
+	@Test
+	@DisplayName("LoRA+ scales only B learning rate")
+	void lora_plus_scales_B_only() {
+		LoraAdapterSet set = new LoraAdapterSet();
+		LoraAdapter a = makeNonZero(4, 8, 16, 4f);
+		for (int i = 0; i < a.b().length; i++)
+			a.b()[i] = 0.4f;
+		set.add(0, "wq", a);
+		for (int i = 0; i < a.gradB().length; i++)
+			a.gradB()[i] = 0.1f;
+		float[] bBefore = a.b().clone();
+
+		LoraAdamOptimizer opt = new LoraAdamOptimizer(1e-2, 0.9, 0.999, 1e-8, 0.0, 4.0);
+		opt.step(set, 1e-2);
+		assertThat(opt.lastLearningRateA()).isEqualTo(1e-2);
+		assertThat(opt.lastLearningRateB()).isEqualTo(4e-2);
+		boolean moved = false;
+		for (int i = 0; i < bBefore.length; i++)
+			if (a.b()[i] != bBefore[i]) {
+				moved = true;
+				break;
+			}
+		assertThat(moved).isTrue();
+	}
+
+	@Test
+	@DisplayName("rejects invalid eps, decay, and LoRA+ ratio")
+	void validation() {
+		assertThatThrownBy(() -> new LoraAdamOptimizer(1e-4, 0.9, 0.999, 0, 0.01))
+				.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> new LoraAdamOptimizer(1e-4, 0.9, 0.999, 1e-8, -0.1))
+				.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> new LoraAdamOptimizer(1e-4, 0.9, 0.999, 1e-8, 0.01, 0))
+				.isInstanceOf(IllegalArgumentException.class);
+		LoraAdamOptimizer opt = LoraAdamOptimizer.defaults(1e-4);
+		LoraAdapterSet set = new LoraAdapterSet();
+		set.add(0, "wq", makeNonZero(2, 4, 4, 2f));
+		assertThatThrownBy(() -> opt.step(set, Double.NaN)).isInstanceOf(IllegalArgumentException.class);
 	}
 
 	// ── Step counter ──────────────────────────────────────────────────────────
@@ -245,6 +366,75 @@ class LoraAdamOptimizerTest {
 			}
 		assertThat(aqMoved).isTrue();
 		assertThat(avMoved).isTrue();
+	}
+
+	@Test
+	@DisplayName("DoRA magnitude updates with independent moments and no weight decay")
+	void magnitude_update_no_decay() {
+		LoraAdapterSet set = new LoraAdapterSet();
+		LoraAdapter a = new LoraAdapter(
+				LoraAdapterConfig.of(2, 2f, LoraScaling.STANDARD, LoraInitialization.LEGACY_NORMAL, LoraMode.DORA), 4, 3,
+				new Random(1));
+		set.add(0, "wq", a);
+		DoraMagnitude mag = DoraMagnitude.fromValues(new float[] { 1f, 2f, 3f });
+		set.add(0, "wq", a);
+		set.putMagnitude(0, "wq", mag);
+		for (int i = 0; i < mag.grad().length; i++)
+			mag.grad()[i] = 0.5f;
+		float[] before = mag.values().clone();
+		long gen = set.doraGeneration();
+
+		LoraAdamOptimizer opt = new LoraAdamOptimizer(1e-2, 0.9, 0.999, 1e-8, 0.5); // heavy decay on A only
+		opt.step(set);
+
+		for (int i = 0; i < before.length; i++)
+			assertThat(mag.values()[i]).isLessThan(before[i]);
+		// With positive grad and no decay, update matches decay=0 reference
+		LoraAdapterSet set2 = new LoraAdapterSet();
+		LoraAdapter a2 = new LoraAdapter(
+				LoraAdapterConfig.of(2, 2f, LoraScaling.STANDARD, LoraInitialization.LEGACY_NORMAL, LoraMode.DORA), 4, 3,
+				new Random(1));
+		set2.add(0, "wq", a2);
+		DoraMagnitude mag2 = DoraMagnitude.fromValues(new float[] { 1f, 2f, 3f });
+		set2.putMagnitude(0, "wq", mag2);
+		for (int i = 0; i < mag2.grad().length; i++)
+			mag2.grad()[i] = 0.5f;
+		LoraAdamOptimizer opt2 = new LoraAdamOptimizer(1e-2, 0.9, 0.999, 1e-8, 0.0);
+		opt2.step(set2);
+		assertThat(mag.values()).containsExactly(mag2.values());
+		assertThat(set.doraGeneration()).isEqualTo(gen + 1);
+	}
+
+	@Test
+	@DisplayName("reset() clears magnitude moments")
+	void reset_clears_magnitude_moments() {
+		LoraAdapterSet set = new LoraAdapterSet();
+		LoraAdapter a = new LoraAdapter(
+				LoraAdapterConfig.of(2, 2f, LoraScaling.STANDARD, LoraInitialization.LEGACY_NORMAL, LoraMode.DORA), 4, 2,
+				new Random(2));
+		set.add(0, "wv", a);
+		DoraMagnitude mag = DoraMagnitude.fromValues(new float[] { 1f, 1f });
+		set.putMagnitude(0, "wv", mag);
+		mag.grad()[0] = 1f;
+		LoraAdamOptimizer opt = LoraAdamOptimizer.defaults(1e-2);
+		opt.step(set);
+		float afterFirst = mag.values()[0];
+		opt.reset();
+		mag.values()[0] = 1f;
+		mag.grad()[0] = 1f;
+		opt.step(set);
+		// Fresh moments → same first-step magnitude as an untouched optimizer
+		LoraAdamOptimizer fresh = LoraAdamOptimizer.defaults(1e-2);
+		DoraMagnitude magFresh = DoraMagnitude.fromValues(new float[] { 1f, 1f });
+		LoraAdapterSet setFresh = new LoraAdapterSet();
+		setFresh.add(0, "wv", new LoraAdapter(
+				LoraAdapterConfig.of(2, 2f, LoraScaling.STANDARD, LoraInitialization.LEGACY_NORMAL, LoraMode.DORA), 4, 2,
+				new Random(2)));
+		setFresh.putMagnitude(0, "wv", magFresh);
+		magFresh.grad()[0] = 1f;
+		fresh.step(setFresh);
+		assertThat(mag.values()[0]).isEqualTo(magFresh.values()[0]);
+		assertThat(afterFirst).isEqualTo(magFresh.values()[0]);
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────────

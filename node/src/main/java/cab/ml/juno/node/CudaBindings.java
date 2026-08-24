@@ -62,6 +62,7 @@ final class CudaBindings implements GpuBindings {
     static final int D2H = 2; // cudaMemcpyDeviceToHost
 
     // ── cublasOperation_t ─────────────────────────────────────────────────────
+    static final int CUBLAS_OP_N = 0;
     static final int CUBLAS_OP_T = 1;
 
     // ── cublasPointerMode_t ───────────────────────────────────────────────────
@@ -98,6 +99,7 @@ final class CudaBindings implements GpuBindings {
     final MethodHandle cublasSetStream;          // int (cublasHandle_t, cudaStream_t)
     final MethodHandle cublasSetPointerMode;     // int (cublasHandle_t, int)
     final MethodHandle cublasSgemv;              // int (handle,op,m,n,*α,*A,lda,*x,incx,*β,*y,incy)
+    final MethodHandle cublasSgemm;              // int (handle,ta,tb,m,n,k,*α,*A,lda,*B,ldb,*β,*C,ldc)
     final MethodHandle cublasHSSgemvStridedBatched; // FP16 A+x, FP32 y, batched
 
     // ── Singleton init ────────────────────────────────────────────────────────
@@ -188,6 +190,22 @@ final class CudaBindings implements GpuBindings {
                 ADDRESS,   // *beta
                 ADDRESS,   // *y
                 JAVA_INT));// incy
+        cublasSgemm               = bind(linker, cublas, "cublasSgemm_v2",
+            FunctionDescriptor.of(JAVA_INT,
+                ADDRESS,   // handle
+                JAVA_INT,  // transa
+                JAVA_INT,  // transb
+                JAVA_INT,  // m
+                JAVA_INT,  // n
+                JAVA_INT,  // k
+                ADDRESS,   // *alpha
+                ADDRESS,   // *A
+                JAVA_INT,  // lda
+                ADDRESS,   // *B
+                JAVA_INT,  // ldb
+                ADDRESS,   // *beta
+                ADDRESS,   // *C
+                JAVA_INT));// ldc
         cublasHSSgemvStridedBatched = bind(linker, cublas, "cublasHSSgemvStridedBatched",
             FunctionDescriptor.of(JAVA_INT,
                 ADDRESS,   // handle
@@ -301,8 +319,10 @@ final class CudaBindings implements GpuBindings {
     @Override public MethodHandle blasSetStream()               { return cublasSetStream; }
     @Override public MethodHandle blasSetPointerMode()          { return cublasSetPointerMode; }
     @Override public MethodHandle blasSgemv()                   { return cublasSgemv; }
+    @Override public MethodHandle blasSgemm()                   { return cublasSgemm; }
     @Override public MethodHandle blasHSSgemvStridedBatched()   { return cublasHSSgemvStridedBatched; }
     @Override public boolean supportsHSSgemv()                  { return true; }
+    @Override public int    opNoTranspose()     { return CUBLAS_OP_N; }
     @Override public int    opTranspose()       { return CUBLAS_OP_T; }
     @Override public int    pointerModeHost()   { return CUBLAS_POINTER_MODE_HOST; }
     @Override public int    devicePropBytes()   { return DEVICE_PROP_BYTES; }

@@ -1,3 +1,5 @@
 - Dmytro Soloviov (soulaway)
 - Yevhen Soldatov (yevhensoldatov)
 - Andrii Peretiatko (1nk1)
+- Jose Arbizu Rendon (Sh1ng0)
+- David Babkov (Davez2)

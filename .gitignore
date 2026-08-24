@@ -11,3 +11,5 @@ dist/
 .release-gpg/
 models/*
 *.gguf
+.cursor/
+juno-documentation/_build/

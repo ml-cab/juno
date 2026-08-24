@@ -323,6 +323,8 @@ cmd_local() {
   local byte_order="${BYTE_ORDER:-BE}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.7}"
+  local temperature_explicit="false"
+  [[ -n "${TEMPERATURE+x}" ]] && temperature_explicit="true"
   local heap="${HEAP:-4g}"
   local top_k="${TOP_K:-50}"
   local top_p="${TOP_P:-0.9}"
@@ -347,7 +349,7 @@ cmd_local() {
       --dtype)            dtype="$2";        shift 2 ;;
       --byteOrder | --byteorder | --byte-order) byte_order="${2^^}"; shift 2 ;;
       --max-tokens)       max_tokens="$2";   shift 2 ;;
-      --temperature)      temperature="$2";  shift 2 ;;
+      --temperature)      temperature="$2"; temperature_explicit="true"; shift 2 ;;
       --top-k)            top_k="$2";        shift 2 ;;
       --top-p)            top_p="$2";        shift 2 ;;
       --heap)             heap="$2";         shift 2 ;;
@@ -383,7 +385,7 @@ cmd_local() {
         echo ""
         echo "  Generation:"
         echo "    --max-tokens N             (default 200)"
-        echo "    --temperature F            (default 0.7)"
+        echo "    --temperature F            (default 0.7; 0 with --lora-play)"
         echo "    --top-k N                  top-K sampling cutoff     (default 50, 0=disabled)"
         echo "    --top-p F                  top-p nucleus sampling    (default 0.9, 0=disabled)"
         echo ""
@@ -415,6 +417,13 @@ cmd_local() {
 
   [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 local --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 local"
   [[ -f "$model" ]] || err "Model file not found: $model"
+
+  # Factual LoRA playback should be reproducible. Sampling at the normal 0.7
+  # default can select a nearby base-model continuation even when the trained
+  # answer is the top token. Preserve an explicit CLI/env temperature.
+  if [[ -n "$lora_play" && "$temperature_explicit" == "false" ]]; then
+    temperature="0"
+  fi
 
   require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
@@ -480,9 +489,31 @@ cmd_lora() {
   local lora_rank="${LORA_RANK:-8}"
   local lora_alpha="${LORA_ALPHA:-}"           # default = rank (set below)
   local lora_lr="${LORA_LR:-0.0001}"
-  local lora_steps="${LORA_STEPS:-50}"
-  local lora_steps_qa="${LORA_STEPS_QA:-10}"
+  local lora_max_iters="${LORA_MAX_ITERS:-${LORA_STEPS:-50}}"
+  local lora_max_iters_qa="${LORA_MAX_ITERS_QA:-${LORA_STEPS_QA:-50}}"
+  local lora_loss_target_text="${LORA_LOSS_TARGET_TEXT:-1.8}"
+  local lora_loss_target_qa="${LORA_LOSS_TARGET_QA:-1.2}"
   local lora_early_stop="${LORA_EARLY_STOP:-0.25}"
+  local lora_targets="${LORA_TARGETS:-qv}"
+  local lora_grad_accum="${LORA_GRADIENT_ACCUMULATION:-1}"
+  local lora_max_grad_norm="${LORA_MAX_GRAD_NORM:-1.0}"
+  local lora_lr_schedule="${LORA_LR_SCHEDULE:-constant}"
+  local lora_warmup_steps="${LORA_WARMUP_STEPS:-0}"
+  local lora_min_lr="${LORA_MIN_LR:-0}"
+  local lora_weight_decay="${LORA_WEIGHT_DECAY:-0.01}"
+  local lora_plus_ratio="${LORA_PLUS_RATIO:-1.0}"
+  local lora_dropout="${LORA_DROPOUT:-0}"
+  local lora_seed="${LORA_SEED:-42}"
+  local lora_validation_split="${LORA_VALIDATION_SPLIT:-0}"
+  local lora_validation_patience="${LORA_VALIDATION_PATIENCE:-0}"
+  local lora_validation_min_delta="${LORA_VALIDATION_MIN_DELTA:-0}"
+  local lora_mode="${LORA_MODE:-lora}"
+  local lora_scaling="${LORA_SCALING:-standard}"
+  local lora_init="${LORA_INIT:-kaiming-uniform}"
+  local lora_chunk_tokens="${LORA_CHUNK_TOKENS:-32}"
+  local lora_max_train_tokens="${LORA_MAX_TRAIN_TOKENS:-0}"
+  local lora_train_device="${LORA_TRAIN_DEVICE:-auto}"
+  local lora_microbatch="${LORA_MICROBATCH:-8}"
   local max_tokens="${MAX_TOKENS:-200}"
   local temperature="${TEMPERATURE:-0.7}"
   local top_k="${TOP_K:-50}"
@@ -507,9 +538,32 @@ cmd_lora() {
       --lora-rank)    lora_rank="$2";   shift 2 ;;
       --lora-alpha)   lora_alpha="$2";  shift 2 ;;
       --lora-lr)      lora_lr="$2";     shift 2 ;;
-      --lora-steps)   lora_steps="$2";    shift 2 ;;
-      --lora-steps-qa) lora_steps_qa="$2"; shift 2 ;;
+      --lora-max-iters) lora_max_iters="$2"; lora_max_iters_qa="$2"; shift 2 ;;
+      --lora-loss-target-text) lora_loss_target_text="$2"; shift 2 ;;
+      --lora-loss-target-qa) lora_loss_target_qa="$2"; shift 2 ;;
+      --lora-steps)   lora_max_iters="$2";    shift 2 ;;
+      --lora-steps-qa) lora_max_iters_qa="$2"; shift 2 ;;
       --lora-early-stop) lora_early_stop="$2"; shift 2 ;;
+      --lora-targets) lora_targets="$2"; shift 2 ;;
+      --lora-gradient-accumulation) lora_grad_accum="$2"; shift 2 ;;
+      --lora-max-grad-norm) lora_max_grad_norm="$2"; shift 2 ;;
+      --lora-lr-schedule) lora_lr_schedule="$2"; shift 2 ;;
+      --lora-warmup-steps) lora_warmup_steps="$2"; shift 2 ;;
+      --lora-min-lr) lora_min_lr="$2"; shift 2 ;;
+      --lora-weight-decay) lora_weight_decay="$2"; shift 2 ;;
+      --lora-plus-ratio) lora_plus_ratio="$2"; shift 2 ;;
+      --lora-dropout) lora_dropout="$2"; shift 2 ;;
+      --lora-seed) lora_seed="$2"; shift 2 ;;
+      --lora-validation-split) lora_validation_split="$2"; shift 2 ;;
+      --lora-validation-patience) lora_validation_patience="$2"; shift 2 ;;
+      --lora-validation-min-delta) lora_validation_min_delta="$2"; shift 2 ;;
+      --lora-mode) lora_mode="$2"; shift 2 ;;
+      --lora-scaling) lora_scaling="$2"; shift 2 ;;
+      --lora-init) lora_init="$2"; shift 2 ;;
+      --lora-chunk-tokens) lora_chunk_tokens="$2"; shift 2 ;;
+      --lora-max-train-tokens) lora_max_train_tokens="$2"; shift 2 ;;
+      --lora-train-device) lora_train_device="$2"; shift 2 ;;
+      --lora-microbatch) lora_microbatch="$2"; shift 2 ;;
       --max-tokens)   max_tokens="$2";  shift 2 ;;
       --temperature)  temperature="$2"; shift 2 ;;
       --top-k)        top_k="$2";       shift 2 ;;
@@ -543,7 +597,32 @@ cmd_lora() {
         echo "                            4=minimal  8=standard  16=expressive"
         echo "    --lora-alpha F          Scaling alpha, default = rank (scale = alpha/rank)"
         echo "    --lora-lr F             Adam learning rate (default: 1e-4)"
-        echo "    --lora-steps N          Gradient steps per /train command (default: 50)"
+        echo "    --lora-max-iters N      Max training passes per /train (default: 50)"
+        echo "    --lora-loss-target-text F  Stop /train when loss <= F (default: 1.8)"
+        echo "    --lora-loss-target-qa F    Stop /train-qa when loss <= F (default: 1.2)"
+        echo "    --lora-steps N          Alias for --lora-max-iters (/train cap)"
+        echo "    --lora-steps-qa N       Max passes for /train-qa (default: 50)"
+        echo "    --lora-early-stop F     Overfit guard: stop when loss < F (default: 0.25)"
+        echo "    --lora-targets SPEC     qv | all | comma keys (default: qv)"
+        echo "    --lora-gradient-accumulation N  Chunks per optimizer update (default: 1)"
+        echo "    --lora-max-grad-norm F  Global grad clip; 0=off (default: 1.0)"
+        echo "    --lora-lr-schedule M    constant|cosine (default: constant)"
+        echo "    --lora-warmup-steps N   Cosine warmup updates (default: 0)"
+        echo "    --lora-min-lr F         Cosine floor LR (default: 0)"
+        echo "    --lora-weight-decay F   AdamW A-only decay (default: 0.01)"
+        echo "    --lora-plus-ratio F     B/A LR ratio; 1=off (default: 1.0)"
+        echo "    --lora-dropout F        Train-only dropout in [0,1) (default: 0)"
+        echo "    --lora-seed N           RNG seed for init/split/dropout (default: 42)"
+        echo "    --lora-validation-split F  Held-out unit fraction (default: 0)"
+        echo "    --lora-validation-patience N  Early-stop patience (default: 0=off)"
+        echo "    --lora-validation-min-delta F  Min val improvement (default: 0)"
+        echo "    --lora-mode lora|dora       Adapter algorithm (default: lora)"
+        echo "    --lora-scaling standard|rslora  Scale formula (default: standard)"
+        echo "    --lora-init kaiming-uniform|legacy-normal  A init (default: kaiming-uniform)"
+        echo "    --lora-chunk-tokens N   Truncated-BPTT window (default: 32; recommend 128 for /train-file)"
+        echo "    --lora-max-train-tokens N  Cap supervised tokens; 0=unlimited (default: 0)"
+        echo "    --lora-train-device M   auto|gpu|cpu (default: auto; gpu fails closed)"
+        echo "    --lora-microbatch N    Frozen GEMM width 1..128 (default: 8; 1=FP16 sequential)"
         echo ""
         echo "  Generation (used for chat inference):"
         echo "    --max-tokens N          (default 200)"
@@ -562,16 +641,16 @@ cmd_lora() {
         echo ""
         echo "  Profiling:"
         echo "    --jfr DURATION          Java Flight Recording e.g. 30s 5m 1h"
-        echo "                            Writes juno-<timestamp>.jfr on exit."
-        echo "                            Open in JDK Mission Control, search for"
-        echo "                            juno.LoraTrainStep to see per-step breakdown."
+        echo "                            Programmatic recording (parity with local mode)."
+        echo "                            On exit: extracts target/metrics/metrics.json and"
+        echo "                            prints a JFR Metrics Summary (LoraTrainStep, …)."
         echo ""
         echo "  Logging:"
         echo "    --verbose / -v"
         echo ""
         echo "  REPL commands once inside:"
         echo "    /train <text>           Fine-tune on inline text"
-        echo "    /train-file <path>      Fine-tune on a text file (auto-chunked)"
+        echo "    /train-file <path>      Fine-tune on a text file (default chunk 32; recommend 128)"
         echo "    /save                   Save adapter to --lora-path"
         echo "    /reset                  Reinitialise adapters (clears training)"
         echo "    /status                 Show adapter info and training stats"
@@ -579,7 +658,14 @@ cmd_lora() {
         echo "    Regular input           Chat with the current adapter applied"
         echo ""
         echo "  Environment overrides:"
-        echo "    MODEL_PATH  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS"
+        echo "    MODEL_PATH  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_MAX_ITERS"
+        echo "    LORA_LOSS_TARGET_TEXT  LORA_LOSS_TARGET_QA  LORA_STEPS (alias)"
+        echo "    LORA_TARGETS  LORA_GRADIENT_ACCUMULATION  LORA_MAX_GRAD_NORM"
+        echo "    LORA_LR_SCHEDULE  LORA_WARMUP_STEPS  LORA_MIN_LR  LORA_WEIGHT_DECAY"
+        echo "    LORA_PLUS_RATIO  LORA_DROPOUT  LORA_SEED  LORA_VALIDATION_SPLIT"
+        echo "    LORA_VALIDATION_PATIENCE  LORA_VALIDATION_MIN_DELTA"
+        echo "    LORA_MODE  LORA_SCALING  LORA_INIT  LORA_CHUNK_TOKENS  LORA_MAX_TRAIN_TOKENS"
+        echo "    LORA_TRAIN_DEVICE  LORA_MICROBATCH"
         echo "    MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
         echo ""
         echo "  Examples:"
@@ -602,7 +688,7 @@ cmd_lora() {
   # Default alpha = rank when not explicitly set
   [[ -n "$lora_alpha" ]] || lora_alpha="$lora_rank"
 
-  info "Starting LoRA fine-tuning REPL  (rank=${lora_rank}  alpha=${lora_alpha}  lr=${lora_lr}  steps=${lora_steps}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
+  info "Starting LoRA fine-tuning REPL  (rank=${lora_rank}  alpha=${lora_alpha}  lr=${lora_lr}  max-iters=${lora_max_iters}  loss-target-text=${lora_loss_target_text}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
   [[ -n "$lora_path" ]] && info "Adapter file: ${lora_path}"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   echo ""
@@ -623,36 +709,53 @@ cmd_lora() {
     warn "Health sidecar enabled on :${health_port} — dashboard at http://localhost:${health_port}/"
   fi
 
-  local jfr_flag=""
+  local jfr_arg=""
   if [[ -n "$jfr_duration" ]]; then
-    local model_name model_stem
-    model_name="$(basename "$model")"
-    model_stem="${model_name%.*}"
-    local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
-    jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
-    warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
-    warn "After exit: open ${jfr_file} in JDK Mission Control → Event Browser → juno.LoraTrainStep"
+    jfr_arg="--jfr $jfr_duration"
+    warn "JFR enabled — duration=${jfr_duration}  (programmatic recording, metrics auto-printed on exit)"
   fi
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
-    ${jfr_flag:+"$jfr_flag"} \
     -jar "$JUNO_PLAYER_JAR" \
     --model-path "$model" \
     --lora \
     --lora-rank  "$lora_rank" \
     --lora-alpha "$lora_alpha" \
     --lora-lr    "$lora_lr" \
-    --lora-steps "$lora_steps" \
-    --lora-steps-qa "$lora_steps_qa" \
+    --lora-max-iters "$lora_max_iters" \
+    --lora-loss-target-text "$lora_loss_target_text" \
+    --lora-loss-target-qa "$lora_loss_target_qa" \
+    --lora-steps-qa "$lora_max_iters_qa" \
     --lora-early-stop "$lora_early_stop" \
+    --lora-targets "$lora_targets" \
+    --lora-gradient-accumulation "$lora_grad_accum" \
+    --lora-max-grad-norm "$lora_max_grad_norm" \
+    --lora-lr-schedule "$lora_lr_schedule" \
+    --lora-warmup-steps "$lora_warmup_steps" \
+    --lora-min-lr "$lora_min_lr" \
+    --lora-weight-decay "$lora_weight_decay" \
+    --lora-plus-ratio "$lora_plus_ratio" \
+    --lora-dropout "$lora_dropout" \
+    --lora-seed "$lora_seed" \
+    --lora-validation-split "$lora_validation_split" \
+    --lora-validation-patience "$lora_validation_patience" \
+    --lora-validation-min-delta "$lora_validation_min_delta" \
+    --lora-mode "$lora_mode" \
+    --lora-scaling "$lora_scaling" \
+    --lora-init "$lora_init" \
+    --lora-chunk-tokens "$lora_chunk_tokens" \
+    --lora-max-train-tokens "$lora_max_train_tokens" \
+    --lora-train-device "$lora_train_device" \
+    --lora-microbatch "$lora_microbatch" \
     --max-tokens  "$max_tokens" \
     --temperature "$temperature" \
     --top-k "$top_k" \
     --top-p "$top_p" \
     "$gpu_flag" \
+    ${jfr_arg} \
     ${lora_path_flag} \
     ${health_flag} \
     ${verbose_flag}
@@ -868,11 +971,33 @@ usage() {
   echo "    --lora-rank N                  low-rank dimension       (default 8)"
   echo "    --lora-alpha F                 alpha scaling            (default = rank)"
   echo "    --lora-lr F                    Adam learning rate       (default 1e-4)"
-  echo "    --lora-steps N                 gradient steps/train cmd (default 50)"
+  echo "    --lora-max-iters N             Max training passes      (default 50)"
+  echo "    --lora-loss-target-text F      /train loss target       (default 1.8)"
+  echo "    --lora-loss-target-qa F        /train-qa loss target    (default 1.2)"
+  echo "    --lora-steps N                 Alias for --lora-max-iters"
+  echo "    --lora-early-stop F            Overfit guard            (default 0.25)"
+  echo "    --lora-targets SPEC            qv | all | comma keys    (default qv)"
+  echo "    --lora-gradient-accumulation N chunks per update        (default 1)"
+  echo "    --lora-max-grad-norm F         global grad clip         (default 1.0)"
+  echo "    --lora-lr-schedule M           constant|cosine          (default constant)"
+  echo "    --lora-warmup-steps N          cosine warmup updates    (default 0)"
+  echo "    --lora-min-lr F                cosine floor LR          (default 0)"
+  echo "    --lora-weight-decay F          AdamW A-only decay       (default 0.01)"
+  echo "    --lora-plus-ratio F            B/A LR ratio             (default 1.0)"
+  echo "    --lora-dropout F               train-only dropout       (default 0)"
+  echo "    --lora-seed N                  RNG seed                 (default 42)"
+  echo "    --lora-validation-split F      held-out fraction        (default 0)"
+  echo "    --lora-validation-patience N   early-stop patience      (default 0)"
+  echo "    --lora-validation-min-delta F  min val improvement      (default 0)"
+  echo "    --lora-chunk-tokens N          BPTT window              (default 32; recommend 128 for files)"
+  echo "    --lora-max-train-tokens N      supervised token cap     (default 0=unlimited)"
+  echo "    --lora-train-device auto|gpu|cpu  LoRA MatVec            (default auto; gpu fails closed)"
+  echo "    --lora-microbatch N            frozen GEMM width 1..128 (default 8; 1=FP16 sequential)"
   echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
   echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES  USE_GPU"
-  echo "    LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS"
+  echo "    LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_MAX_ITERS  LORA_LOSS_TARGET_TEXT"
+  echo "    LORA_TARGETS  LORA_GRADIENT_ACCUMULATION  LORA_MAX_GRAD_NORM"
   echo ""
   echo "  Examples:"
   echo "    MODEL_PATH=/models/tiny.gguf $0               # default = cluster (pipeline)"
@@ -881,7 +1006,7 @@ usage() {
   echo "    MODEL_PATH=/models/tiny.gguf $0 local --temperature 0.3 --max-tokens 512"
   echo "    MODEL_PATH=/models/tiny.gguf $0 local --nodes 1"
   echo "    MODEL_PATH=/models/tiny.gguf $0 lora"
-  echo "    MODEL_PATH=/models/tiny.gguf $0 lora --lora-rank 16 --lora-steps 100 --heap 8g"
+  echo "    MODEL_PATH=/models/tiny.gguf $0 lora --lora-rank 16 --lora-max-iters 100 --heap 8g"
   echo "    MODEL_PATH=/models/tiny.gguf $0 lora --lora-path ./finetune.lora"
   echo "    MODEL_PATH=/models/tiny.gguf $0 test"
   echo "    $0 test /models/tiny.gguf --heap 8g"

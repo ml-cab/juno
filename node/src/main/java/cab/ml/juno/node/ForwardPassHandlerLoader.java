@@ -100,11 +100,39 @@ public final class ForwardPassHandlerLoader {
 	 * an explicit {@link MatVec}. Treats an unset {@code JUNO_USE_GPU} property as
 	 * {@code true} so GPU is used whenever CUDA is available (override with
 	 * {@code JUNO_USE_GPU=false} or {@code --cpu}).
+	 *
+	 * <p>Prefer {@link LoraTrainDevice#selectBackend(String)} when
+	 * {@code --lora-train-device} is available.
 	 */
 	public static MatVec selectLoraBackend() {
-		String p = System.getProperty("JUNO_USE_GPU");
-		boolean useGpu = p == null || "true".equalsIgnoreCase(p);
-		return pickMatVec(useGpu);
+		return LoraTrainDevice.selectBackend(LoraTrainDevice.AUTO);
+	}
+
+	/**
+	 * Fail-closed GPU MatVec for {@code --lora-train-device=gpu}. Does not fall back
+	 * to CPU when bindings are missing or the device index is out of range.
+	 */
+	public static MatVec requireGpuLoraBackend() {
+		boolean gpuAvailable = CudaAvailability.isAvailable() || RocmAvailability.isAvailable();
+		if (!gpuAvailable) {
+			throw new IllegalStateException(
+					"--lora-train-device=gpu requires a CUDA or ROCm device, but none is available. "
+							+ "Use --lora-train-device=auto to fall back, or --lora-train-device=cpu.");
+		}
+		int dev = Math.max(0, Integer.getInteger("juno.gpu.device", Integer.getInteger("juno.cuda.device", 0)));
+		int devCount = CudaAvailability.isAvailable() ? CudaAvailability.deviceCount()
+				: RocmAvailability.deviceCount();
+		if (dev >= devCount) {
+			throw new IllegalStateException("--lora-train-device=gpu: juno.gpu.device=" + dev
+					+ " is out of range (deviceCount=" + devCount + ").");
+		}
+		MatVec mv = GpuContext.shared(dev).createMatVec();
+		if (!(mv instanceof GpuMatVec)) {
+			throw new IllegalStateException(
+					"--lora-train-device=gpu could not create a GPU MatVec (got "
+							+ mv.getClass().getSimpleName() + ").");
+		}
+		return mv;
 	}
 
 	private static MatVec pickMatVec(boolean useGpu) {
@@ -123,6 +151,13 @@ public final class ForwardPassHandlerLoader {
 		}
 		log.info("Using CpuMatVec backend (useGpu=" + useGpu + ", gpuAvailable=" + gpuAvailable + ")");
 		return CpuMatVec.INSTANCE;
+	}
+
+	/** Package-visible for {@link LoraTrainDevice#selectBackend} auto path. */
+	static MatVec selectLoraBackendAuto() {
+		String p = System.getProperty("JUNO_USE_GPU");
+		boolean useGpu = p == null || "true".equalsIgnoreCase(p);
+		return pickMatVec(useGpu);
 	}
 
 	/**
@@ -151,20 +186,12 @@ public final class ForwardPassHandlerLoader {
 	/**
 	 * Load a handler with pre-trained LoRA adapters applied for inference.
 	 *
-	 * <p>When {@code adapters} is non-null the handler is always a
-	 * {@link LoraTrainableHandler} (which supports both inference and training).
-	 * The adapters are loaded read-only — no optimizer is attached, so calling
-	 * {@link LoraTrainableHandler#trainStep} on the result will throw unless an
-	 * optimizer is provided separately.
+	 * <p>When {@code adapters} is non-null the handler is selected by
+	 * {@link LoraTrainingHandlerFactory} (architecture allowlist). The adapters
+	 * are loaded read-only — no optimizer is attached.
 	 *
 	 * <p>When {@code adapters} is {@code null} this method behaves identically to
 	 * {@link #load(Path, ShardContext, MatVec)}.
-	 *
-	 * @param modelPath path to the GGUF file
-	 * @param context   shard assignment
-	 * @param backend   compute backend
-	 * @param adapters  pre-loaded LoRA adapters, or {@code null} for base model
-	 * @return a ready-to-use {@link ForwardPassHandler}
 	 */
 	public static ForwardPassHandler load(Path modelPath, ShardContext context, MatVec backend,
 			LoraAdapterSet adapters) throws IOException {
@@ -173,8 +200,8 @@ public final class ForwardPassHandlerLoader {
 				+ "  file=" + modelPath + "  lora=" + (adapters != null ? adapters.size() + " adapters" : "none"));
 
 		if (adapters != null) {
-			log.info("LoRA adapters present — routing to LoraTrainableHandler (inference-only mode)");
-			return LoraTrainableHandler.load(modelPath, context, adapters, backend);
+			log.info("LoRA adapters present — routing via LoraTrainingHandlerFactory");
+			return LoraTrainingHandlerFactory.create(modelPath, context, adapters, backend);
 		}
 
 		return switch (arch) {
@@ -210,5 +237,13 @@ public final class ForwardPassHandlerLoader {
 			String arch = r.metaString("general.architecture");
 			return arch != null ? arch.toLowerCase().strip() : "llama";
 		}
+	}
+
+	/**
+	 * LoRA training/playback architecture gate — delegates to
+	 * {@link LoraTrainingHandlerFactory#requireSupported(String)}.
+	 */
+	static void requireLoraCompatibleArchitecture(String arch) {
+		LoraTrainingHandlerFactory.requireSupported(arch);
 	}
 }

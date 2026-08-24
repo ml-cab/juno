@@ -24,9 +24,15 @@ import java.util.Optional;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
+import cab.ml.juno.lora.DoraMagnitude;
+import cab.ml.juno.lora.DoraProjection;
 import cab.ml.juno.lora.LoraAdapter;
 import cab.ml.juno.lora.LoraAdapterSet;
 import cab.ml.juno.lora.LoraAdamOptimizer;
+import cab.ml.juno.lora.LoraGradients;
+import cab.ml.juno.lora.LoraMode;
+import cab.ml.juno.lora.LoraTrainContext;
+import cab.ml.juno.lora.QaLoraAdapter;
 
 /**
  * LLaMA-family transformer handler with LoRA fine-tuning support.
@@ -69,7 +75,7 @@ import cab.ml.juno.lora.LoraAdamOptimizer;
  * distinct request IDs. {@link #trainStep} is NOT thread-safe — it mutates
  * gradient accumulators.
  */
-public final class LoraTrainableHandler implements ForwardPassHandler {
+public final class LoraTrainableHandler implements LoraTrainingHandler {
 
 	private static final Logger log = Logger.getLogger(LoraTrainableHandler.class.getName());
 
@@ -77,8 +83,9 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 
 	private record LayerState(float[] xIn, // residual stream before this layer [H]
 			float[] xNorm1, // after pre-attention rmsNorm [H]
-			float[] qPreRope, // Q projection before RoPE [numHeads*headDim]
+			float[] qPostRope, // Q after RoPE [numHeads*headDim]
 			float[][] attnW, // attention weights per head [numHeads][seqLen]
+			float[] attnOut, // attention output before wo [H]
 			float[] xRes2, // after attention residual (= xIn + attnProj) [H]
 			float[] xNorm2, // after pre-FFN rmsNorm [H]
 			float[] gate, // FFN gate output [I]
@@ -102,19 +109,38 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	private final GgufReader.QuantizedTensor[] wq, wk, wv, wo;
 	private final GgufReader.QuantizedTensor[] wGate, wUp, wDown;
 
+	/** Optional Qwen2-style Q/K/V biases; null when the GGUF has no bias tensors. */
+	private final float[][] bq, bk, bv;
+
 	// ── LoRA adapters ─────────────────────────────────────────────────────────
 
 	private final LoraAdapterSet loraAdapters;
+	/** DoRA projections keyed by absolute {@code layer:proj}; empty when unused. */
+	private final Map<String, DoraProjection> doraByKey;
+	private long doraSeenGeneration = -1;
+
+	/** Active training dropout context; disabled during inference and evaluation. */
+	private LoraTrainContext trainCtx = LoraTrainContext.disabled();
+	/** Token position for the active training forward/backward step. */
+	private int trainTokenPos;
 
 	private final MatVec backend;
-	private DeviceHalfMatrix[] wqDev;
-	private DeviceHalfMatrix[] wkDev;
-	private DeviceHalfMatrix[] wvDev;
-	private DeviceHalfMatrix[] woDev;
-	private DeviceHalfMatrix[] wGateDev;
-	private DeviceHalfMatrix[] wUpDev;
-	private DeviceHalfMatrix[] wDownDev;
-	private DeviceHalfMatrix outputProjDev;
+	private ResidentWeightMatrix[] wqDev;
+	private ResidentWeightMatrix[] wkDev;
+	private ResidentWeightMatrix[] wvDev;
+	private ResidentWeightMatrix[] woDev;
+	private ResidentWeightMatrix[] wGateDev;
+	private ResidentWeightMatrix[] wUpDev;
+	private ResidentWeightMatrix[] wDownDev;
+	private ResidentWeightMatrix outputProjDev;
+	/** Tier-9 microbatched GEMM scratch; non-null when resident FP32 weights are uploaded. */
+	private GpuBlasOps blasOps;
+
+	/** Nanosecond accumulators for Tier-9 train-step timing subsets (reset per chunk). */
+	private long accFrozenForwardNs;
+	private long accFrozenTransposeNs;
+	private long accAdapterBackwardNs;
+	private boolean timingActive;
 
 	// ── Inference KV cache ────────────────────────────────────────────────────
 
@@ -147,6 +173,8 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 				+ adapters.size() + "  backend=" + backend.getClass().getSimpleName() + "  file=" + modelPath);
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			LlamaConfig cfg = LlamaConfig.from(r);
+			LoraInitializer.validate(adapters, cfg);
+			DoraInitializer.verifyFingerprints(r, adapters);
 			return new LoraTrainableHandler(r, cfg, context, adapters, backend);
 		}
 	}
@@ -177,6 +205,15 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		wUp = new GgufReader.QuantizedTensor[L];
 		wDown = new GgufReader.QuantizedTensor[L];
 
+		float[][] bqLocal = null;
+		float[][] bkLocal = null;
+		float[][] bvLocal = null;
+		if (L > 0 && r.hasTensor("blk." + startLayer + ".attn_q.bias")) {
+			bqLocal = new float[L][];
+			bkLocal = new float[L][];
+			bvLocal = new float[L][];
+		}
+
 		for (int li = 0; li < L; li++) {
 			int i = li + startLayer;
 			attnNorm[li] = r.tensor("blk." + i + ".attn_norm.weight");
@@ -188,80 +225,167 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 			wGate[li] = r.tensorRaw("blk." + i + ".ffn_gate.weight");
 			wUp[li] = r.tensorRaw("blk." + i + ".ffn_up.weight");
 			wDown[li] = r.tensorRaw("blk." + i + ".ffn_down.weight");
+			if (bqLocal != null) {
+				bqLocal[li] = r.tensor("blk." + i + ".attn_q.bias");
+				bkLocal[li] = r.tensor("blk." + i + ".attn_k.bias");
+				bvLocal[li] = r.tensor("blk." + i + ".attn_v.bias");
+			}
 		}
+		this.bq = bqLocal;
+		this.bk = bkLocal;
+		this.bv = bvLocal;
+		if (bqLocal != null)
+			log.info("LoRA handler: loaded QKV biases (Qwen2-style)");
 
 		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
 		outputProjDev = null;
-		if (backend instanceof GpuMatVec cuda) {
-			log.info("LoRA handler: uploading projection weights to GPU (FP16)…");
-			int H = cfg.hiddenDim();
-			int KV = cfg.kvDim();
-			int I = cfg.intermediateSize();
-			int V = cfg.vocabSize();
-			DeviceHalfMatrix[] wqD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] wkD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] wvD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] woD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] wGateD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] wUpD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] wDownD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix outD = null;
-			try {
-				for (int li = 0; li < L; li++) {
-					wqD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wq[li], H, H), H, H);
-					wkD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wk[li], KV, H), KV, H);
-					wvD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wv[li], KV, H), KV, H);
-					woD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wo[li], H, H), H, H);
-					wGateD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wGate[li], I, H), I, H);
-					wUpD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wUp[li], I, H), I, H);
-					wDownD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wDown[li], H, I), H, I);
-				}
-				if (outputProj != null)
-					outD = cuda.uploadHalf(LlamaTransformerHandler.dequantize(outputProj, V, H), V, H);
-				this.wqDev = wqD;
-				this.wkDev = wkD;
-				this.wvDev = wvD;
-				this.woDev = woD;
-				this.wGateDev = wGateD;
-				this.wUpDev = wUpD;
-				this.wDownDev = wDownD;
-				this.outputProjDev = outD;
-				log.info("LoRA handler: GPU weight upload complete.");
-			} catch (IllegalStateException ex) {
-				closeDeviceHalfMatrixArray(wqD);
-				closeDeviceHalfMatrixArray(wkD);
-				closeDeviceHalfMatrixArray(wvD);
-				closeDeviceHalfMatrixArray(woD);
-				closeDeviceHalfMatrixArray(wGateD);
-				closeDeviceHalfMatrixArray(wUpD);
-				closeDeviceHalfMatrixArray(wDownD);
-				if (outD != null)
-					outD.close();
-				String msg = ex.getMessage() == null ? "" : ex.getMessage();
-				if (msg.contains("cudaMalloc") || msg.contains("hipMalloc")) {
-					log.warning("LoRA: insufficient GPU VRAM for FP16-resident weights (" + msg
-							+ "). Using CPU quantised matmul.");
-				} else {
-					throw ex;
-				}
+		if (backend instanceof GpuMatVec gpu) {
+			uploadResidentWeights(gpu, L);
+		}
+
+		this.doraByKey = buildDoraProjections(r, adapters, startLayer, endLayer);
+		this.doraSeenGeneration = adapters.doraGeneration();
+		if (!doraByKey.isEmpty()) {
+			long t0 = System.currentTimeMillis();
+			for (DoraProjection d : doraByKey.values())
+				d.refresh();
+			LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(adapters, cfg.architecture(),
+					LoraMetricsIdentity.resolveTrainDevice(true));
+			LoraNormRefreshEvent nr = new LoraNormRefreshEvent();
+			nr.begin();
+			identity.apply(nr);
+			nr.projectionCount = doraByKey.size();
+			nr.layerCount = endLayer - startLayer;
+			nr.durationMs = System.currentTimeMillis() - t0;
+			nr.reason = "load";
+			nr.commit();
+		}
+	}
+
+	private void uploadResidentWeights(GpuMatVec gpu, int L) {
+		int H = cfg.hiddenDim();
+		int KV = cfg.kvDim();
+		int I = cfg.intermediateSize();
+		int V = cfg.vocabSize();
+		ResidentWeightMatrix[] wqD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] wkD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] wvD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] woD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] wGateD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] wUpD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] wDownD = new ResidentWeightMatrix[L];
+		ResidentWeightMatrix[] outHolder = new ResidentWeightMatrix[1];
+		GpuBlasOps[] opsHolder = new GpuBlasOps[1];
+		LoraResidentUpload.run(gpu, log, () -> {
+			if (opsHolder[0] != null) {
+				opsHolder[0].close();
+				opsHolder[0] = null;
 			}
-		}
+			LoraResidentWeights.closeArray(wqD);
+			LoraResidentWeights.closeArray(wkD);
+			LoraResidentWeights.closeArray(wvD);
+			LoraResidentWeights.closeArray(woD);
+			LoraResidentWeights.closeArray(wGateD);
+			LoraResidentWeights.closeArray(wUpD);
+			LoraResidentWeights.closeArray(wDownD);
+			LoraResidentWeights.closeQuietly(outHolder[0]);
+			outHolder[0] = null;
+		}, () -> {
+			boolean microbatch = LoraMicrobatch.current() > 1;
+			boolean half = !microbatch && gpu.supportsHalfResident();
+			log.info("LoRA handler: uploading projection weights to GPU ("
+					+ (half ? "FP16" : "FP32")
+					+ (microbatch ? ", microbatch=" + LoraMicrobatch.current() : "")
+					+ ")…");
+			for (int li = 0; li < L; li++) {
+				wqD[li] = LoraResidentWeights.uploadQuant(gpu, wq[li], H, H);
+				wkD[li] = LoraResidentWeights.uploadQuant(gpu, wk[li], KV, H);
+				wvD[li] = LoraResidentWeights.uploadQuant(gpu, wv[li], KV, H);
+				woD[li] = LoraResidentWeights.uploadQuant(gpu, wo[li], H, H);
+				wGateD[li] = LoraResidentWeights.uploadQuant(gpu, wGate[li], I, H);
+				wUpD[li] = LoraResidentWeights.uploadQuant(gpu, wUp[li], I, H);
+				wDownD[li] = LoraResidentWeights.uploadQuant(gpu, wDown[li], H, I);
+			}
+			if (outputProj != null)
+				outHolder[0] = LoraResidentWeights.uploadQuant(gpu, outputProj, V, H);
+			if (microbatch)
+				opsHolder[0] = GpuBlasOps.of(gpu);
+			this.wqDev = wqD;
+			this.wkDev = wkD;
+			this.wvDev = wvD;
+			this.woDev = woD;
+			this.wGateDev = wGateD;
+			this.wUpDev = wUpD;
+			this.wDownDev = wDownD;
+			this.outputProjDev = outHolder[0];
+			this.blasOps = opsHolder[0];
+			log.info("LoRA handler: GPU weight upload complete (" + (half ? "FP16" : "FP32") + ").");
+		});
 	}
 
-	private static void closeDeviceHalfMatrixArray(DeviceHalfMatrix[] a) {
-		if (a == null)
-			return;
-		for (DeviceHalfMatrix m : a) {
-			if (m != null && !m.isClosed())
-				m.close();
-		}
-	}
-
-	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev, float[] x, int rows,
+	private float[] matVecLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] x, int rows,
 			int cols) {
-		if (dev != null)
-			return backend.sgemv(dev, x);
-		return LlamaTransformerHandler.matVec(quant, x, rows, cols);
+		if (!timingActive)
+			return LoraResidentWeights.matVec(quant, dev, x, rows, cols);
+		long t0 = System.nanoTime();
+		float[] y = LoraResidentWeights.matVec(quant, dev, x, rows, cols);
+		accFrozenForwardNs += System.nanoTime() - t0;
+		return y;
+	}
+
+	private float[][] matVecBatchLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[][] X,
+			int batch, int rows, int cols) {
+		if (!timingActive)
+			return LoraResidentWeights.matVecBatch(quant, dev, blasOps, X, batch, rows, cols);
+		long t0 = System.nanoTime();
+		float[][] y = LoraResidentWeights.matVecBatch(quant, dev, blasOps, X, batch, rows, cols);
+		accFrozenForwardNs += System.nanoTime() - t0;
+		return y;
+	}
+
+	/**
+	 * Frozen transpose {@code W^T * g}: uses resident GPU matrices when uploaded,
+	 * otherwise the quantized CPU path.
+	 */
+	private float[] transposedMatVecLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] g,
+			int rows, int cols) {
+		if (!timingActive)
+			return LoraResidentWeights.transposedMatVec(quant, dev, g, rows, cols);
+		long t0 = System.nanoTime();
+		float[] y = LoraResidentWeights.transposedMatVec(quant, dev, g, rows, cols);
+		accFrozenTransposeNs += System.nanoTime() - t0;
+		return y;
+	}
+
+	private float[][] transposedMatVecBatchLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev,
+			float[][] G, int batch, int rows, int cols) {
+		if (!timingActive)
+			return LoraResidentWeights.transposedMatVecBatch(quant, dev, blasOps, G, batch, rows, cols);
+		long t0 = System.nanoTime();
+		float[][] y = LoraResidentWeights.transposedMatVecBatch(quant, dev, blasOps, G, batch, rows, cols);
+		accFrozenTransposeNs += System.nanoTime() - t0;
+		return y;
+	}
+
+	private void resetStepTiming() {
+		accFrozenForwardNs = 0L;
+		accFrozenTransposeNs = 0L;
+		accAdapterBackwardNs = 0L;
+	}
+
+	private LoraStepTiming finishStepTiming(long forwardMs, long backwardMs) {
+		LoraStepTiming t = new LoraStepTiming();
+		t.frozenForwardMs = nsToMs(accFrozenForwardNs);
+		t.frozenTransposeBackwardMs = nsToMs(accFrozenTransposeNs);
+		t.adapterBackwardMs = nsToMs(accAdapterBackwardNs);
+		long accounted = t.frozenForwardMs + t.frozenTransposeBackwardMs + t.adapterBackwardMs;
+		t.attentionNonlinearMs = Math.max(0L, forwardMs + backwardMs - accounted);
+		t.transferMs = 0L; // populated when H2D/D2H counters exist
+		return t;
+	}
+
+	private static long nsToMs(long ns) {
+		return ns / 1_000_000L;
 	}
 
 	private static GgufReader.QuantizedTensor loadOutputProjection(GgufReader r) throws IOException {
@@ -317,15 +441,18 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 
 	@Override
 	public void releaseGpuResources() {
-		closeDeviceHalfMatrixArray(wqDev);
-		closeDeviceHalfMatrixArray(wkDev);
-		closeDeviceHalfMatrixArray(wvDev);
-		closeDeviceHalfMatrixArray(woDev);
-		closeDeviceHalfMatrixArray(wGateDev);
-		closeDeviceHalfMatrixArray(wUpDev);
-		closeDeviceHalfMatrixArray(wDownDev);
-		if (outputProjDev != null && !outputProjDev.isClosed())
-			outputProjDev.close();
+		if (blasOps != null) {
+			blasOps.close();
+			blasOps = null;
+		}
+		LoraResidentWeights.closeArray(wqDev);
+		LoraResidentWeights.closeArray(wkDev);
+		LoraResidentWeights.closeArray(wvDev);
+		LoraResidentWeights.closeArray(woDev);
+		LoraResidentWeights.closeArray(wGateDev);
+		LoraResidentWeights.closeArray(wUpDev);
+		LoraResidentWeights.closeArray(wDownDev);
+		LoraResidentWeights.closeQuietly(outputProjDev);
 		wqDev = wkDev = wvDev = woDev = wGateDev = wUpDev = wDownDev = null;
 		outputProjDev = null;
 	}
@@ -333,103 +460,372 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 	// ── Training step ─────────────────────────────────────────────────────────
 
 	/**
-	 * One teacher-forcing training step over a token sequence.
+	 * Forward and backward over {@code tokens}, accumulating <em>unnormalized</em>
+	 * summed gradients into each adapter. Does not clear gradients or step the
+	 * optimizer. Every prediction position contributes to the loss.
+	 *
+	 * @param tokens input token sequence, length ≥ 2
+	 * @return summed loss and prediction count for token-weighted aggregation
+	 */
+	@Override
+	public LoraGradientResult computeGradients(int[] tokens) {
+		return computeGradients(tokens, null, LoraTrainContext.disabled());
+	}
+
+	/**
+	 * Like {@link #computeGradients(int[])}, but only positions where
+	 * {@code lossMask[pos]} is true contribute loss/gradients for predicting
+	 * {@code tokens[pos + 1]}. Pass {@code null} to train every position.
 	 *
 	 * <p>
-	 * For tokens [t₀, t₁, …, t_{n}], position {@code pos} predicts
-	 * {@code tokens[pos+1]}. The loss is the mean cross-entropy across all
-	 * positions. Gradients accumulate into each {@link LoraAdapter}'s
-	 * {@code gradA}/{@code gradB}. The optimizer step is applied inside this
-	 * method; call {@link LoraAdapterSet#zeroAllGrads()} before the next step.
+	 * Completion-only masks (assistant answer tokens, not the user prompt) are
+	 * required for {@code /train-qa}: otherwise LoRA overfits the answer token
+	 * and can reply with it for every prompt.
+	 *
+	 * @param tokens   input token sequence, length ≥ 2
+	 * @param lossMask length {@code tokens.length - 1}, or {@code null} for all-true
+	 */
+	@Override
+	public LoraGradientResult computeGradients(int[] tokens, boolean[] lossMask) {
+		return computeGradients(tokens, lossMask, LoraTrainContext.disabled());
+	}
+
+	/**
+	 * Gradient computation with optional deterministic train-only dropout context.
+	 */
+	@Override
+	public LoraGradientResult computeGradients(int[] tokens, boolean[] lossMask, LoraTrainContext ctx) {
+		if (tokens.length < 2)
+			throw new IllegalArgumentException("tokens.length must be >= 2 (need at least one prediction pair)");
+		int T = tokens.length - 1;
+		if (lossMask != null && lossMask.length != T)
+			throw new IllegalArgumentException(
+					"lossMask.length must equal tokens.length - 1 (got " + lossMask.length + " vs " + T + ")");
+
+		trainCtx = ctx != null ? ctx : LoraTrainContext.disabled();
+		resetStepTiming();
+		timingActive = true;
+		try {
+			int L = endLayer - startLayer;
+			int H = cfg.hiddenDim();
+			int kvDim = cfg.kvDim();
+
+			LayerState[][] allStates = new LayerState[T][L];
+			float[][] allXFinal = new float[T][];
+			float[][] allXNormFinal = new float[T][];
+			float[][] allProbs = new float[T][];
+
+			float[][] kCache = new float[L][T * kvDim];
+			float[][] vCache = new float[L][T * kvDim];
+
+			long t0 = System.currentTimeMillis();
+			float[][] xCur = new float[T][];
+			for (int pos = 0; pos < T; pos++)
+				xCur[pos] = embedding(tokens[pos]);
+
+			// Per-layer microbatched frozen linears across positions (Tier 9).
+			for (int li = 0; li < L; li++) {
+				int I = cfg.intermediateSize();
+				int Hd = cfg.headDim();
+				int NH = cfg.numHeads();
+				int mb = LoraResidentWeights.microbatchSize();
+				for (int start = 0; start < T; start += mb) {
+					int n = Math.min(mb, T - start);
+					float[][] xNorm1 = new float[n][];
+					for (int i = 0; i < n; i++) {
+						trainTokenPos = start + i;
+						xNorm1[i] = LlamaTransformerHandler.rmsNorm(xCur[start + i], attnNorm[li], cfg.rmsNormEps());
+					}
+					float[][] qB = matVecBatchLayer(wq[li], wqDev != null ? wqDev[li] : null, xNorm1, n, H, H);
+					float[][] kB = matVecBatchLayer(wk[li], wkDev != null ? wkDev[li] : null, xNorm1, n, kvDim, H);
+					float[][] vB = matVecBatchLayer(wv[li], wvDev != null ? wvDev[li] : null, xNorm1, n, kvDim, H);
+
+					float[][] attnOutB = new float[n][];
+					float[][][] attnWB = new float[n][][];
+					float[][] qPostRopeB = new float[n][];
+					for (int i = 0; i < n; i++) {
+						int pos = start + i;
+						trainTokenPos = pos;
+						float[] q = qB[i];
+						float[] k = kB[i];
+						float[] v = vB[i];
+						applyLoraInPlace(q, li, "wq", xNorm1[i]);
+						applyLoraInPlace(k, li, "wk", xNorm1[i]);
+						applyLoraInPlace(v, li, "wv", xNorm1[i]);
+						addBiasInPlace(q, bq, li);
+						addBiasInPlace(k, bk, li);
+						addBiasInPlace(v, bv, li);
+						LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), Hd, cfg.ropeTheta());
+						LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), Hd, cfg.ropeTheta());
+						qPostRopeB[i] = q.clone();
+						System.arraycopy(k, 0, kCache[li], pos * kvDim, kvDim);
+						System.arraycopy(v, 0, vCache[li], pos * kvDim, kvDim);
+
+						int seqLen = pos + 1;
+						float scale = (float) (1.0 / Math.sqrt(Hd));
+						float[] attnOut = new float[H];
+						float[][] attnW = new float[NH][seqLen];
+						float[] scores = new float[seqLen];
+						int gqaR = cfg.gqaRatio();
+						for (int h = 0; h < NH; h++) {
+							int kvHead = h / gqaR;
+							int qBase = h * Hd;
+							int kBase = kvHead * Hd;
+							for (int t = 0; t < seqLen; t++) {
+								float dot = 0f;
+								int kOff = t * kvDim + kBase;
+								for (int d = 0; d < Hd; d++)
+									dot += q[qBase + d] * kCache[li][kOff + d];
+								scores[t] = dot * scale;
+							}
+							float max = Float.NEGATIVE_INFINITY;
+							for (int t = 0; t < seqLen; t++)
+								if (scores[t] > max)
+									max = scores[t];
+							float sum = 0f;
+							for (int t = 0; t < seqLen; t++) {
+								scores[t] = (float) Math.exp(scores[t] - max);
+								sum += scores[t];
+							}
+							for (int t = 0; t < seqLen; t++) {
+								scores[t] /= sum;
+								attnW[h][t] = scores[t];
+							}
+							int outBase = h * Hd;
+							for (int t = 0; t < seqLen; t++) {
+								int vOff = t * kvDim + kBase;
+								float w = scores[t];
+								for (int d = 0; d < Hd; d++)
+									attnOut[outBase + d] += w * vCache[li][vOff + d];
+							}
+						}
+						attnOutB[i] = attnOut;
+						attnWB[i] = attnW;
+					}
+
+					float[][] attnProjB = matVecBatchLayer(wo[li], woDev != null ? woDev[li] : null, attnOutB, n, H, H);
+					float[][] xRes2B = new float[n][];
+					float[][] xNorm2B = new float[n][];
+					for (int i = 0; i < n; i++) {
+						trainTokenPos = start + i;
+						applyLoraInPlace(attnProjB[i], li, "wo", attnOutB[i]);
+						xRes2B[i] = LlamaTransformerHandler.add(xCur[start + i], attnProjB[i]);
+						xNorm2B[i] = LlamaTransformerHandler.rmsNorm(xRes2B[i], ffnNorm[li], cfg.rmsNormEps());
+					}
+					float[][] gateB = matVecBatchLayer(wGate[li], wGateDev != null ? wGateDev[li] : null, xNorm2B, n, I, H);
+					float[][] upB = matVecBatchLayer(wUp[li], wUpDev != null ? wUpDev[li] : null, xNorm2B, n, I, H);
+					float[][] hiddenB = new float[n][];
+					for (int i = 0; i < n; i++) {
+						trainTokenPos = start + i;
+						applyLoraInPlace(gateB[i], li, "wgate", xNorm2B[i]);
+						applyLoraInPlace(upB[i], li, "wup", xNorm2B[i]);
+						float[] hidden = new float[I];
+						for (int j = 0; j < I; j++)
+							hidden[j] = LlamaTransformerHandler.silu(gateB[i][j]) * upB[i][j];
+						hiddenB[i] = hidden;
+					}
+					float[][] ffnOutB = matVecBatchLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, hiddenB, n, H, I);
+					for (int i = 0; i < n; i++) {
+						int pos = start + i;
+						trainTokenPos = pos;
+						applyLoraInPlace(ffnOutB[i], li, "wdown", hiddenB[i]);
+						allStates[pos][li] = new LayerState(xCur[pos].clone(), xNorm1[i], qPostRopeB[i], attnWB[i],
+								attnOutB[i], xRes2B[i], xNorm2B[i], gateB[i], upB[i], hiddenB[i]);
+						xCur[pos] = LlamaTransformerHandler.add(xRes2B[i], ffnOutB[i]);
+					}
+				}
+			}
+
+			if (hasOutputProj) {
+				for (int pos = 0; pos < T; pos++) {
+					allXFinal[pos] = xCur[pos].clone();
+					allXNormFinal[pos] = LlamaTransformerHandler.rmsNorm(xCur[pos], outputNorm, cfg.rmsNormEps());
+				}
+				float[][] logitsB = matVecBatchLayer(outputProj, outputProjDev, allXNormFinal, T, cfg.vocabSize(), H);
+				for (int pos = 0; pos < T; pos++)
+					allProbs[pos] = softmaxCopy(logitsB[pos]);
+			}
+			long forwardMs = System.currentTimeMillis() - t0;
+
+			float lossSum = 0f;
+			int predictionCount = 0;
+			for (int pos = 0; pos < T; pos++) {
+				if (lossMask != null && !lossMask[pos])
+					continue;
+				int target = tokens[pos + 1];
+				if (allProbs[pos] != null)
+					lossSum -= (float) Math.log(Math.max(allProbs[pos][target], 1e-9f));
+				predictionCount++;
+			}
+
+			long t1 = System.currentTimeMillis();
+			// Collect loss positions for microbatched output transpose.
+			int[] lossPos = new int[predictionCount];
+			int lp = 0;
+			for (int pos = 0; pos < T; pos++) {
+				if (lossMask != null && !lossMask[pos])
+					continue;
+				lossPos[lp++] = pos;
+			}
+			float[][] gradXByPos = new float[T][];
+			if (hasOutputProj && predictionCount > 0) {
+				float[][] gradLogitsB = new float[predictionCount][];
+				for (int i = 0; i < predictionCount; i++) {
+					int pos = lossPos[i];
+					float[] gradLogits = allProbs[pos].clone();
+					gradLogits[tokens[pos + 1]] -= 1.0f;
+					gradLogitsB[i] = gradLogits;
+				}
+				float[][] gradXNormB = transposedMatVecBatchLayer(outputProj, outputProjDev, gradLogitsB,
+						predictionCount, cfg.vocabSize(), H);
+				for (int i = 0; i < predictionCount; i++) {
+					int pos = lossPos[i];
+					gradXByPos[pos] = rmsNormBackward(allXFinal[pos], outputNorm, gradXNormB[i], cfg.rmsNormEps());
+				}
+			}
+			for (int i = 0; i < predictionCount; i++) {
+				int pos = lossPos[i];
+				trainTokenPos = pos;
+				float[] gradX = hasOutputProj ? gradXByPos[pos] : new float[H];
+				for (int li = L - 1; li >= 0; li--) {
+					gradX = backwardLayer(gradX, li, pos, allStates[pos][li], kCache[li], vCache[li], pos + 1);
+				}
+			}
+			long backwardMs = System.currentTimeMillis() - t1;
+
+			return new LoraGradientResult(lossSum, predictionCount, forwardMs, backwardMs, finishStepTiming(forwardMs, backwardMs));
+		} finally {
+			timingActive = false;
+			trainCtx = LoraTrainContext.disabled();
+		}
+	}
+
+	/**
+	 * Forward-only teacher-forced loss with local K/V buffers. No activation
+	 * retention for backward, no gradient accumulation, no optimizer mutation, no
+	 * dropout, and no pollution of persistent inference caches.
+	 *
+	 * @return token-weighted loss sum and prediction count
+	 */
+	@Override
+	public LoraGradientResult evaluateLoss(int[] tokens) {
+		return evaluateLoss(tokens, null);
+	}
+
+	@Override
+	public LoraGradientResult evaluateLoss(int[] tokens, boolean[] lossMask) {
+		if (tokens.length < 2)
+			throw new IllegalArgumentException("tokens.length must be >= 2 (need at least one prediction pair)");
+		int T = tokens.length - 1;
+		if (lossMask != null && lossMask.length != T)
+			throw new IllegalArgumentException(
+					"lossMask.length must equal tokens.length - 1 (got " + lossMask.length + " vs " + T + ")");
+
+		trainCtx = LoraTrainContext.disabled();
+		int L = endLayer - startLayer;
+		int H = cfg.hiddenDim();
+		int kvDim = cfg.kvDim();
+		float[][] kCache = new float[L][T * kvDim];
+		float[][] vCache = new float[L][T * kvDim];
+
+		long t0 = System.currentTimeMillis();
+		float lossSum = 0f;
+		int predictionCount = 0;
+		for (int pos = 0; pos < T; pos++) {
+			float[] x = embedding(tokens[pos]);
+			for (int li = 0; li < L; li++)
+				x = inferenceLayer(x, li, pos, kCache[li], vCache[li]);
+			if (lossMask != null && !lossMask[pos])
+				continue;
+			if (hasOutputProj) {
+				float[] xn = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
+				float[] logits = matVecLayer(outputProj, outputProjDev, xn, cfg.vocabSize(), H);
+				float[] probs = softmaxCopy(logits);
+				lossSum -= (float) Math.log(Math.max(probs[tokens[pos + 1]], 1e-9f));
+			}
+			predictionCount++;
+		}
+		long forwardMs = System.currentTimeMillis() - t0;
+		return new LoraGradientResult(lossSum, predictionCount, forwardMs, 0L);
+	}
+
+	/**
+	 * One teacher-forcing training step over a token sequence (legacy one-chunk
+	 * update).
+	 *
+	 * <p>
+	 * Clears gradients, computes one sequence, normalizes by prediction count,
+	 * steps the optimizer once, and returns mean loss. Clipping is disabled
+	 * ({@code maxNorm = 0}) for numerical compatibility with pre-Tier-1 callers.
 	 *
 	 * @param tokens    input token sequence, length ≥ 2
 	 * @param optimizer Adam optimizer to apply after backward
 	 * @return mean cross-entropy loss (nats) for this sequence
 	 */
 	public float trainStep(int[] tokens, LoraAdamOptimizer optimizer) {
-		if (tokens.length < 2)
-			throw new IllegalArgumentException("tokens.length must be >= 2 (need at least one prediction pair)");
-
-		int T = tokens.length - 1;
-		int L = endLayer - startLayer;
-		int H = cfg.hiddenDim();
-		int kvDim = cfg.kvDim();
-
-		LayerState[][] allStates = new LayerState[T][L];
-		float[][] allXFinal = new float[T][];
-		float[][] allXNormFinal = new float[T][];
-		float[][] allProbs = new float[T][];
-
-		float[][] kCache = new float[L][T * kvDim];
-		float[][] vCache = new float[L][T * kvDim];
-
-		LoraTrainEvent event = new LoraTrainEvent();
-		event.begin();
-		event.numTokens = tokens.length;
-		event.step = optimizer.step() + 1; // will be the step number after this call
-
-		// ── Forward ───────────────────────────────────────────────────────────
-		long t0 = System.currentTimeMillis();
-		for (int pos = 0; pos < T; pos++) {
-			float[] x = embedding(tokens[pos]);
-			for (int li = 0; li < L; li++) {
-				allStates[pos][li] = forwardLayerStore(x, li, pos, kCache[li], vCache[li]);
-				x = computeLayerOutput(allStates[pos][li], li, x);
-			}
-			if (hasOutputProj) {
-				allXFinal[pos] = x.clone();
-				allXNormFinal[pos] = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
-				float[] logits = matVecLayer(outputProj, outputProjDev, allXNormFinal[pos], cfg.vocabSize(), H);
-				allProbs[pos] = softmaxCopy(logits);
-			}
-		}
-		event.forwardMs = System.currentTimeMillis() - t0;
-
-		// ── Loss ──────────────────────────────────────────────────────────────
-		float loss = 0f;
-		for (int pos = 0; pos < T; pos++) {
-			int target = tokens[pos + 1];
-			if (allProbs[pos] != null)
-				loss -= (float) Math.log(Math.max(allProbs[pos][target], 1e-9f));
-		}
-		loss /= T;
-
-		// ── Backward ──────────────────────────────────────────────────────────
-		long t1 = System.currentTimeMillis();
 		loraAdapters.zeroAllGrads();
 
-		for (int pos = 0; pos < T; pos++) {
-			int target = tokens[pos + 1];
+		LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(loraAdapters, cfg.architecture(),
+				LoraMetricsIdentity.resolveTrainDevice(true));
+		LoraTrainEvent event = new LoraTrainEvent();
+		event.begin();
+		identity.apply(event);
+		event.step = optimizer.step() + 1;
+		event.numTokens = tokens.length;
+		event.chunkCount = 1;
 
-			float[] gradX;
-			if (hasOutputProj) {
-				float[] gradLogits = allProbs[pos].clone();
-				gradLogits[target] -= 1.0f;
-				for (int i = 0; i < gradLogits.length; i++)
-					gradLogits[i] /= T;
+		LoraGradientResult r = computeGradients(tokens);
+		event.forwardMs = r.forwardMs();
+		event.backwardMs = r.backwardMs();
+		r.timing().apply(event);
+		event.predictionCount = r.predictionCount();
 
-				float[] gradXNormFinal = transposedMatVec(outputProj, gradLogits, cfg.vocabSize(), H);
-				gradX = rmsNormBackward(allXFinal[pos], outputNorm, gradXNormFinal);
-			} else {
-				gradX = new float[H];
-			}
+		LoraGradients.PrepResult prep = LoraGradients.prepare(loraAdapters, r.predictionCount(), 0f);
+		event.globalGradNorm = (float) prep.globalNorm();
+		event.clipScale = prep.scale();
+		event.clipped = prep.clipped();
 
-			for (int li = L - 1; li >= 0; li--) {
-				gradX = backwardLayer(gradX, li, pos, allStates[pos][li], kCache[li], vCache[li], pos + 1);
-			}
-		}
-		event.backwardMs = System.currentTimeMillis() - t1;
-
-		// ── Optimizer step ────────────────────────────────────────────────────
 		long t2 = System.currentTimeMillis();
 		optimizer.step(loraAdapters);
 		event.optimizerMs = System.currentTimeMillis() - t2;
 
-		event.loss = loss;
+		float meanLoss = r.lossSum() / r.predictionCount();
+		event.loss = meanLoss;
 		event.totalMs = event.forwardMs + event.backwardMs + event.optimizerMs;
 		event.commit();
 
-		return loss;
+		if (!doraByKey.isEmpty()) {
+			LoraNormRefreshEvent nr = new LoraNormRefreshEvent();
+			nr.begin();
+			identity.apply(nr);
+			nr.projectionCount = doraByKey.size();
+			nr.layerCount = endLayer - startLayer;
+			nr.durationMs = 0;
+			nr.reason = "post-step";
+			nr.commit();
+		}
+
+		return meanLoss;
+	}
+
+	/** Expose adapters for orchestration (accumulation / clipping outside the handler). */
+	@Override
+	public LoraAdapterSet adapters() {
+		return loraAdapters;
+	}
+
+	@Override
+	public String architecture() {
+		return cfg.architecture();
+	}
+
+	@Override
+	public LoraModelLayout layout() {
+		return LoraModelLayout.forArchitecture(cfg.architecture(), cfg);
+	}
+
+	public LlamaConfig config() {
+		return cfg;
 	}
 
 	// ── Inference helpers ─────────────────────────────────────────────────────
@@ -471,9 +867,12 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		float[] k = matVecLayer(wk[li], wkDev != null ? wkDev[li] : null, xNorm1, kvDim, H);
 		float[] v = matVecLayer(wv[li], wvDev != null ? wvDev[li] : null, xNorm1, kvDim, H);
 
-		// Apply LoRA deltas
 		applyLoraInPlace(q, li, "wq", xNorm1);
+		applyLoraInPlace(k, li, "wk", xNorm1);
 		applyLoraInPlace(v, li, "wv", xNorm1);
+		addBiasInPlace(q, bq, li);
+		addBiasInPlace(k, bk, li);
+		addBiasInPlace(v, bv, li);
 
 		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
 		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
@@ -483,6 +882,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 
 		float[] attnOut = gqa(q, kCacheLayer, vCacheLayer, pos + 1);
 		float[] attnProj = matVecLayer(wo[li], woDev != null ? woDev[li] : null, attnOut, H, H);
+		applyLoraInPlace(attnProj, li, "wo", attnOut);
 		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
 
 		float[] xNorm2 = LlamaTransformerHandler.rmsNorm(x2, ffnNorm[li], cfg.rmsNormEps());
@@ -490,13 +890,134 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		return LlamaTransformerHandler.add(x2, ffnOut);
 	}
 
+	/** Frozen QKV bias add (Qwen2); no-op when biases are absent. */
+	private static void addBiasInPlace(float[] x, float[][] biases, int li) {
+		if (biases == null)
+			return;
+		float[] b = biases[li];
+		for (int i = 0; i < x.length; i++)
+			x[i] += b[i];
+	}
+
 	private void applyLoraInPlace(float[] out, int li, String proj, float[] input) {
-		LoraAdapter lora = loraAdapters.get(li + startLayer, proj);
+		int absLayer = li + startLayer;
+		QaLoraAdapter qa = loraAdapters.getQa(absLayer, proj);
+		if (qa != null) {
+			float[] delta;
+			if (trainCtx.dropoutEnabled()) {
+				int projOrd = LoraProjection.fromKey(proj).ordinal();
+				delta = qa.forwardTrain(input, trainCtx.dropoutRate(), trainCtx.rootSeed(), trainCtx.optimizerUpdate(),
+						trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
+			} else {
+				delta = qa.forward(input);
+			}
+			for (int i = 0; i < out.length; i++)
+				out[i] += delta[i];
+			return;
+		}
+		LoraAdapter lora = loraAdapters.get(absLayer, proj);
 		if (lora == null)
 			return;
-		float[] delta = lora.forward(input);
+		refreshDoraIfNeeded();
+		float[] delta;
+		if (trainCtx.dropoutEnabled()) {
+			int projOrd = LoraProjection.fromKey(proj).ordinal();
+			delta = lora.forwardTrain(input, trainCtx.dropoutRate(), trainCtx.rootSeed(), trainCtx.optimizerUpdate(),
+					trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
+		} else {
+			delta = lora.forward(input);
+		}
+		DoraProjection dora = doraByKey.get(absLayer + ":" + proj);
+		if (dora == null) {
+			for (int i = 0; i < out.length; i++)
+				out[i] += delta[i];
+			return;
+		}
+		float[] direction = new float[out.length];
 		for (int i = 0; i < out.length; i++)
-			out[i] += delta[i];
+			direction[i] = out[i] + delta[i];
+		float[] scaled = dora.scaleDirectionOutput(direction);
+		System.arraycopy(scaled, 0, out, 0, out.length);
+	}
+
+	/**
+	 * Scale an outgoing projection gradient for DoRA (accumulates magnitude grads)
+	 * or return {@code gradOut} unchanged for plain LoRA.
+	 */
+	private float[] maybeScaleDoraGrad(int absLayer, String proj, float[] gradOut) {
+		DoraProjection dora = doraByKey.get(absLayer + ":" + proj);
+		if (dora == null)
+			return gradOut;
+		refreshDoraIfNeeded();
+		return dora.scaleGradient(gradOut);
+	}
+
+	private float[] loraBackward(int absLayer, String proj, float[] gradDelta, float[] input) {
+		long t0 = timingActive ? System.nanoTime() : 0L;
+		float[] result;
+		QaLoraAdapter qa = loraAdapters.getQa(absLayer, proj);
+		if (qa != null) {
+			if (!trainCtx.dropoutEnabled())
+				result = qa.backward(gradDelta, input);
+			else {
+				int projOrd = LoraProjection.fromKey(proj).ordinal();
+				result = qa.backwardTrain(gradDelta, input, trainCtx.dropoutRate(), trainCtx.rootSeed(),
+						trainCtx.optimizerUpdate(), trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
+			}
+		} else {
+			LoraAdapter lora = loraAdapters.get(absLayer, proj);
+			if (lora == null)
+				return null;
+			if (!trainCtx.dropoutEnabled())
+				result = lora.backward(gradDelta, input);
+			else {
+				int projOrd = LoraProjection.fromKey(proj).ordinal();
+				result = lora.backwardTrain(gradDelta, input, trainCtx.dropoutRate(), trainCtx.rootSeed(),
+						trainCtx.optimizerUpdate(), trainCtx.chunkOrdinal(), trainTokenPos, absLayer, projOrd);
+			}
+		}
+		if (timingActive)
+			accAdapterBackwardNs += System.nanoTime() - t0;
+		return result;
+	}
+
+	private void addLoraBackward(float[] dest, int absLayer, String proj, float[] gradDelta, float[] input) {
+		float[] g = loraBackward(absLayer, proj, gradDelta, input);
+		if (g != null)
+			addInPlace(dest, g);
+	}
+
+	private void refreshDoraIfNeeded() {
+		if (doraByKey.isEmpty())
+			return;
+		long gen = loraAdapters.doraGeneration();
+		if (gen == doraSeenGeneration)
+			return;
+		for (DoraProjection d : doraByKey.values())
+			d.markDirty();
+		doraSeenGeneration = gen;
+	}
+
+	private static Map<String, DoraProjection> buildDoraProjections(GgufReader r, LoraAdapterSet adapters, int startLayer,
+			int endLayer) throws IOException {
+		Map<String, DoraProjection> map = new java.util.HashMap<>();
+		for (var entry : adapters.asMap().entrySet()) {
+			LoraAdapter a = entry.getValue();
+			if (a.mode != LoraMode.DORA)
+				continue;
+			String key = entry.getKey();
+			int layer = LoraAdapterSet.keyLayer(key);
+			if (layer < startLayer || layer >= endLayer)
+				continue;
+			String projKey = LoraAdapterSet.keyProj(key);
+			LoraProjection proj = LoraProjection.fromKey(projKey);
+			DoraMagnitude mag = adapters.getMagnitude(layer, projKey);
+			if (mag == null)
+				throw new IllegalArgumentException("DoRA adapter missing magnitude: " + key);
+			float[] w = r.tensor(proj.ggufTensorName(layer));
+			map.put(key, new DoraProjection(w, a, mag));
+		}
+		return map;
 	}
 
 	private float[] outputProjection(float[] x) {
@@ -533,12 +1054,16 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		float[] v = matVecLayer(wv[li], wvDev != null ? wvDev[li] : null, xNorm1, kvDim, H);
 
 		applyLoraInPlace(q, li, "wq", xNorm1);
+		applyLoraInPlace(k, li, "wk", xNorm1);
 		applyLoraInPlace(v, li, "wv", xNorm1);
-
-		float[] qPreRope = q.clone(); // saved before RoPE for backward
+		addBiasInPlace(q, bq, li);
+		addBiasInPlace(k, bk, li);
+		addBiasInPlace(v, bv, li);
 
 		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), Hd, cfg.ropeTheta());
 		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), Hd, cfg.ropeTheta());
+
+		float[] qPostRope = q.clone();
 
 		System.arraycopy(k, 0, kCacheLayer, pos * kvDim, kvDim);
 		System.arraycopy(v, 0, vCacheLayer, pos * kvDim, kvDim);
@@ -588,17 +1113,20 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		}
 
 		float[] attnProj = matVecLayer(wo[li], woDev != null ? woDev[li] : null, attnOut, H, H);
+		applyLoraInPlace(attnProj, li, "wo", attnOut);
 		float[] xRes2 = LlamaTransformerHandler.add(x, attnProj);
 		float[] xNorm2 = LlamaTransformerHandler.rmsNorm(xRes2, ffnNorm[li], cfg.rmsNormEps());
 
 		int I = cfg.intermediateSize();
 		float[] gate = matVecLayer(wGate[li], wGateDev != null ? wGateDev[li] : null, xNorm2, I, H);
 		float[] up = matVecLayer(wUp[li], wUpDev != null ? wUpDev[li] : null, xNorm2, I, H);
+		applyLoraInPlace(gate, li, "wgate", xNorm2);
+		applyLoraInPlace(up, li, "wup", xNorm2);
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
 			hidden[i] = LlamaTransformerHandler.silu(gate[i]) * up[i];
 
-		return new LayerState(x.clone(), xNorm1, qPreRope, attnW, xRes2, xNorm2, gate, up, hidden);
+		return new LayerState(x.clone(), xNorm1, qPostRope, attnW, attnOut, xRes2, xNorm2, gate, up, hidden);
 	}
 
 	/** Compute the layer output from stored state (completes forwardLayerStore). */
@@ -606,6 +1134,7 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		int H = cfg.hiddenDim();
 		float[] ffnOut = matVecLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, st.hiddenAct(), H,
 				cfg.intermediateSize());
+		applyLoraInPlace(ffnOut, li, "wdown", st.hiddenAct());
 		return LlamaTransformerHandler.add(st.xRes2(), ffnOut);
 	}
 
@@ -622,15 +1151,20 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		int I = cfg.intermediateSize();
 		int kvDim = cfg.kvDim();
 		int NH = cfg.numHeads();
+		int NKV = cfg.numKvHeads();
 		int Hd = cfg.headDim();
 		int gqaR = cfg.gqaRatio();
+		int absLayer = li + startLayer;
 
 		// ── FFN residual: xOut = xRes2 + ffnOut ──────────────────────────────
 		float[] gradXRes2 = gradOut.clone(); // through residual
 		float[] gradFfnOut = gradOut; // to FFN
 
-		// Backward through wDown: ffnOut = wDown × hiddenAct
-		float[] gradHidden = transposedMatVec(wDown[li], gradFfnOut, H, I);
+		// Backward through wDown: ffnOut = wDown × hiddenAct + lora_down(hiddenAct)
+		float[] gradFfnScaled = maybeScaleDoraGrad(absLayer, "wdown", gradFfnOut);
+		float[] gradHidden = transposedMatVecLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, gradFfnScaled, H,
+				I);
+		addLoraBackward(gradHidden, absLayer, "wdown", gradFfnScaled, st.hiddenAct());
 
 		// Backward through SwiGLU: hiddenAct[i] = silu(gate[i]) * up[i]
 		float[] gradGate = new float[I];
@@ -642,25 +1176,32 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 			gradUp[i] = gradHidden[i] * LlamaTransformerHandler.silu(g);
 		}
 
-		// Backward through wGate and wUp
-		float[] gradXNorm2 = add(transposedMatVec(wGate[li], gradGate, I, H), transposedMatVec(wUp[li], gradUp, I, H));
+		// Backward through wGate and wUp (+ LoRA)
+		float[] gradGateScaled = maybeScaleDoraGrad(absLayer, "wgate", gradGate);
+		float[] gradUpScaled = maybeScaleDoraGrad(absLayer, "wup", gradUp);
+		float[] gradXNorm2 = add(
+				transposedMatVecLayer(wGate[li], wGateDev != null ? wGateDev[li] : null, gradGateScaled, I, H),
+				transposedMatVecLayer(wUp[li], wUpDev != null ? wUpDev[li] : null, gradUpScaled, I, H));
+		addLoraBackward(gradXNorm2, absLayer, "wgate", gradGateScaled, st.xNorm2());
+		addLoraBackward(gradXNorm2, absLayer, "wup", gradUpScaled, st.xNorm2());
 
 		// Backward through rmsNorm2
-		addInPlace(gradXRes2, rmsNormBackward(st.xRes2(), ffnNorm[li], gradXNorm2));
+		addInPlace(gradXRes2, rmsNormBackward(st.xRes2(), ffnNorm[li], gradXNorm2, cfg.rmsNormEps()));
 
 		// ── Attention residual: xRes2 = xIn + attnProj ───────────────────────
 		float[] gradXIn = gradXRes2.clone(); // through residual
 		float[] gradAttnProj = gradXRes2;
 
-		// Backward through wo: attnProj = wo × attnOut
-		float[] gradAttnOut = transposedMatVec(wo[li], gradAttnProj, H, H);
+		// Backward through wo: attnProj = wo × attnOut + lora_o(attnOut)
+		float[] gradAttnScaled = maybeScaleDoraGrad(absLayer, "wo", gradAttnProj);
+		float[] gradAttnOut = transposedMatVecLayer(wo[li], woDev != null ? woDev[li] : null, gradAttnScaled, H, H);
+		addLoraBackward(gradAttnOut, absLayer, "wo", gradAttnScaled, st.attnOut());
 
 		// ── Attention backward ────────────────────────────────────────────────
-		// For each head: backprop through softmax + value weighted-sum
-		// Output: gradQ (for LoRA Q), gradV at current pos (for LoRA V)
 		float scale = (float) (1.0 / Math.sqrt(Hd));
-		float[] gradQ = new float[NH * Hd]; // Q gradient (pre-RoPE)
-		float[] gradV = new float[kvDim]; // V gradient for current position only
+		float[] gradQ = new float[NH * Hd];
+		float[] gradK = new float[kvDim]; // current position only (truncated BPTT)
+		float[] gradV = new float[kvDim];
 
 		for (int h = 0; h < NH; h++) {
 			int kvHead = h / gqaR;
@@ -670,12 +1211,11 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 
 			float[] gradAttnOut_h = Arrays.copyOfRange(gradAttnOut, qBase, qBase + Hd);
 
-			// 1. gradV at current position (truncated BPTT: only pos contribution)
+			// 1. gradV at current position
 			for (int d = 0; d < Hd; d++)
 				gradV[kBase + d] += aw[pos] * gradAttnOut_h[d];
 
 			// 2. Softmax backward through attention weights
-			// dL/dattnW[t] = dot(gradAttnOut_h, V[t])
 			float[] dotWithV = new float[seqLen];
 			for (int t = 0; t < seqLen; t++) {
 				int vOff = t * kvDim + kBase;
@@ -684,11 +1224,9 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 					d2 += gradAttnOut_h[d] * vCacheLayer[vOff + d];
 				dotWithV[t] = d2;
 			}
-			// Σ_t aw[t] * dotWithV[t]
 			float sumDot = 0f;
 			for (int t = 0; t < seqLen; t++)
 				sumDot += aw[t] * dotWithV[t];
-			// gradScores[t] = aw[t] * (dotWithV[t] - sumDot)
 			float[] gradScores = new float[seqLen];
 			for (int t = 0; t < seqLen; t++)
 				gradScores[t] = aw[t] * (dotWithV[t] - sumDot);
@@ -702,27 +1240,36 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 				for (int d = 0; d < Hd; d++)
 					gradQ[qBase + d] += gs * kCacheLayer[kOff + d];
 			}
+
+			// 4. gradK at current position: scale * gradScores[pos] * Q[pos]
+			float gsPos = gradScores[pos] * scale;
+			if (gsPos != 0f) {
+				for (int d = 0; d < Hd; d++)
+					gradK[kBase + d] += gsPos * st.qPostRope()[qBase + d];
+			}
 		}
 
-		// RoPE backward on gradQ (inverse rotation = R(-angle))
+		// Inverse RoPE on Q and K gradients (post-RoPE → pre-RoPE)
 		ropeBackward(gradQ, pos, NH, Hd, cfg.ropeTheta());
+		ropeBackward(gradK, pos, NKV, Hd, cfg.ropeTheta());
 
-		// ── LoRA / frozen projection backward ─────────────────────────────────
-		// wq: xNorm1 → q. q = frozen_wq * xNorm1 + lora_q(xNorm1)
-		float[] gradXNorm1 = transposedMatVec(wq[li], gradQ, H, H);
-		LoraAdapter loraQ = loraAdapters.get(li + startLayer, "wq");
-		if (loraQ != null)
-			addInPlace(gradXNorm1, loraQ.backward(gradQ, st.xNorm1()));
+		// ── LoRA / frozen projection backward into xNorm1 ─────────────────────
+		float[] gradQScaled = maybeScaleDoraGrad(absLayer, "wq", gradQ);
+		float[] gradXNorm1 = transposedMatVecLayer(wq[li], wqDev != null ? wqDev[li] : null, gradQScaled, H, H);
+		addLoraBackward(gradXNorm1, absLayer, "wq", gradQScaled, st.xNorm1());
 
-		// wv: xNorm1 → v. v = frozen_wv * xNorm1 + lora_v(xNorm1)
-		float[] gradXNorm1_v = transposedMatVec(wv[li], gradV, kvDim, H);
-		LoraAdapter loraV = loraAdapters.get(li + startLayer, "wv");
-		if (loraV != null)
-			addInPlace(gradXNorm1_v, loraV.backward(gradV, st.xNorm1()));
+		float[] gradKScaled = maybeScaleDoraGrad(absLayer, "wk", gradK);
+		float[] gradXNorm1_k = transposedMatVecLayer(wk[li], wkDev != null ? wkDev[li] : null, gradKScaled, kvDim, H);
+		addLoraBackward(gradXNorm1_k, absLayer, "wk", gradKScaled, st.xNorm1());
+		addInPlace(gradXNorm1, gradXNorm1_k);
+
+		float[] gradVScaled = maybeScaleDoraGrad(absLayer, "wv", gradV);
+		float[] gradXNorm1_v = transposedMatVecLayer(wv[li], wvDev != null ? wvDev[li] : null, gradVScaled, kvDim, H);
+		addLoraBackward(gradXNorm1_v, absLayer, "wv", gradVScaled, st.xNorm1());
 		addInPlace(gradXNorm1, gradXNorm1_v);
 
 		// Backward through rmsNorm1
-		addInPlace(gradXIn, rmsNormBackward(st.xIn(), attnNorm[li], gradXNorm1));
+		addInPlace(gradXIn, rmsNormBackward(st.xIn(), attnNorm[li], gradXNorm1, cfg.rmsNormEps()));
 
 		return gradXIn;
 	}
@@ -777,62 +1324,28 @@ public final class LoraTrainableHandler implements ForwardPassHandler {
 		int I = cfg.intermediateSize();
 		float[] gate = matVecLayer(wGate[li], wGateDev != null ? wGateDev[li] : null, x, I, H);
 		float[] up = matVecLayer(wUp[li], wUpDev != null ? wUpDev[li] : null, x, I, H);
+		applyLoraInPlace(gate, li, "wgate", x);
+		applyLoraInPlace(up, li, "wup", x);
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
 			hidden[i] = LlamaTransformerHandler.silu(gate[i]) * up[i];
-		return matVecLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, hidden, H, I);
+		float[] down = matVecLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, hidden, H, I);
+		applyLoraInPlace(down, li, "wdown", hidden);
+		return down;
 	}
 
 	/**
-	 * RMSNorm backward.
-	 * 
-	 * <pre>
-	 *   y_i = w_i * x_i * scale,  scale = 1/sqrt(mean(x^2) + eps)
-	 *   dL/dx_j = w_j * scale * gradOut_j
-	 *           - x_j * (scale^3 / n) * sum_i(gradOut_i * w_i * x_i)
-	 * </pre>
+	 * RMSNorm backward — delegates to {@link LoraTrainingMath}.
 	 */
-	static float[] rmsNormBackward(float[] x, float[] w, float[] gradOut) {
-		int n = x.length;
-		float eps = 1e-5f;
-		float ss = 0f;
-		for (float v : x)
-			ss += v * v;
-		float normSq = ss / n + eps;
-		float scale = (float) (1.0 / Math.sqrt(normSq)); // 1 / rms
-
-		// sum_i(gradOut_i * w_i * x_i)
-		float dot = 0f;
-		for (int i = 0; i < n; i++)
-			dot += gradOut[i] * w[i] * x[i];
-
-		float s3OverN = (scale * scale * scale) / n;
-		float[] gradX = new float[n];
-		for (int i = 0; i < n; i++)
-			gradX[i] = w[i] * scale * gradOut[i] - x[i] * s3OverN * dot;
-		return gradX;
+	static float[] rmsNormBackward(float[] x, float[] w, float[] gradOut, float eps) {
+		return LoraTrainingMath.rmsNormBackward(x, w, gradOut, eps);
 	}
 
 	/**
-	 * Inverse RoPE rotation: R(-angle) applied in-place to gradients.
-	 * Mathematically: R^T is the rotation by -angle, same formula as forward but
-	 * with negated sin.
+	 * Inverse LLaMA adjacent-pair RoPE — delegates to {@link LoraTrainingMath}.
 	 */
 	static void ropeBackward(float[] g, int pos, int nHeads, int headDim, float ropeTheta) {
-		for (int h = 0; h < nHeads; h++) {
-			int base = h * headDim;
-			for (int i = 0; i < headDim / 2; i++) {
-				double freq = 1.0 / Math.pow(ropeTheta, (2.0 * i) / headDim);
-				double angle = pos * freq;
-				float cosA = (float) Math.cos(angle);
-				float sinA = (float) Math.sin(angle);
-				float g0 = g[base + 2 * i];
-				float g1 = g[base + 2 * i + 1];
-				// Inverse rotation R^T: [[cos, sin], [-sin, cos]]
-				g[base + 2 * i] = g0 * cosA + g1 * sinA;
-				g[base + 2 * i + 1] = -g0 * sinA + g1 * cosA;
-			}
-		}
+		LoraTrainingMath.ropeBackward(g, pos, nHeads, headDim, ropeTheta);
 	}
 
 	/**
