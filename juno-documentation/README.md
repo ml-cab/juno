@@ -1,7 +1,7 @@
 # Juno Documentation
 
 A 54-chapter reference, built as a [Jupyter Book](https://jupyterbook.org) (MyST Document
-Engine) static site, presenting the Juno project's restructured `docs/` folder as a single
+Engine) static site, presenting the Juno project's documentation as a single
 cross-linked book organized by reader intent (getting started, architecture, guides, LoRA
 fine-tuning, REST API, deployment, observability, testing, legal, project, releases).
 
@@ -86,6 +86,7 @@ No reader accounts, no paywalls, no server required.
 
 ## Relationship to the Juno source tree
 
-This project is a documentation build only; it does not contain or depend on the Juno engine
-source code. See [references.md](references.md) for a chapter-by-chapter map back to the
-original files in Juno's `docs/` folder.
+The `juno-documentation` replaced the `docs` folder and holding most of the technical data.
+The source files `CHANGELOG.md` `CLA.md` `CONTRIBUTORS.md` `FUNDING.md` `GOVERNANCE.md` `Legal.md` `RELEASE_NOTES.md` `SECURITY.md` are sharing the content with `juno-documentation` and have to be updated in sync!
+
+The `README.md` of Juno is heavy referencing to `juno-documentation`

@@ -10,30 +10,27 @@ Distributed LLM inference and fine-tuning. Pure Java. No Python, no GIL, no Spri
 [![ROCm](https://img.shields.io/badge/GPU-ROCm%206%2B-ED1C24?logo=amd&logoColor=white)](https://rocm.docs.amd.com/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
 
-Full documentation: **[ml.cab/juno-documentation](https://ml.cab/juno-documentation)**
-
 ## 1. What is Juno
 
 Juno runs distributed LLM inference and LoRA fine-tuning on the JVM with CUDA and ROCm GPU
 acceleration via Panama FFI. No Python runtime, no sidecar processes.
 
-| Capability | Documentation |
-|---|---|
-| Distributed inference: pipeline and tensor parallelism over gRPC | [2.2 Distributed Inference](https://ml.cab/juno-documentation/distributed-inference/) |
-| GPU acceleration: CUDA 12.x + cuBLAS, ROCm 6+ + rocBLAS | [2.4 GPU Acceleration](https://ml.cab/juno-documentation/gpu-acceleration/) |
-| LoRA fine-tuning, GPU training, DoRA, GGUF merge | [Part 4. LoRA Fine-Tuning](https://ml.cab/juno-documentation/concepts/) |
-| OpenAI-compatible and Juno-native REST API | [5.2 OpenAI-Compatible API](https://ml.cab/juno-documentation/openai-compatible-api/) |
-| JVM facade: `JunoPlayer`, `LoraTrainer`, `JunoHttpClient` | [4.6 Programmatic API](https://ml.cab/juno-documentation/programmatic-api/) |
-| Observability: JFR events, per-node health dashboard | [7.1 JFR and Metrics](https://ml.cab/juno-documentation/jfr-and-metrics/) |
+Features:
 
-Supported models and quantizations: [1.4 Supported Models](https://ml.cab/juno-documentation/supported-models/).
-Performance matrix: [ml.cab/juno_test_matrix.html](https://ml.cab/juno_test_matrix.html).
+- [Distributed Inference](https://ml.cab/juno-documentation/distributed-inference/): pipeline and tensor parallelism over gRPC
+- [GPU Acceleration](https://ml.cab/juno-documentation/gpu-acceleration/): CUDA 12.x + cuBLAS, ROCm 6+ + rocBLAS
+- [LoRA Fine-Tuning](https://ml.cab/juno-documentation/concepts/): GPU training, DoRA, GGUF merge
+- [OpenAI-Compatible API](https://ml.cab/juno-documentation/openai-compatible-api/) and Juno-native REST API
+- [Programmatic API](https://ml.cab/juno-documentation/programmatic-api/): via JVM facade: `JunoPlayer`, `LoraTrainer`, `JunoHttpClient`
+- Observability: [JFR events](https://ml.cab/juno-documentation/jfr-and-metrics/), per-node health dash-board
+- [Supported Models](https://ml.cab/juno-documentation/supported-models/) and quantizations
+- [Performance reports](https://ml.cab/juno_test_matrix.html)
 
 ## 2. How to use
 
 ### 2.1 JVM Integration
 
-Add the BOM from Maven Central at version `0.1.0`:
+Add the BOM from Maven Central at version `0.1.1`:
 
 ```xml
 <dependencyManagement>
@@ -41,7 +38,7 @@ Add the BOM from Maven Central at version `0.1.0`:
     <dependency>
       <groupId>cab.ml</groupId>
       <artifactId>juno-bom</artifactId>
-      <version>0.1.0</version>
+      <version>0.1.1</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -69,22 +66,40 @@ Build from source and run a local interactive console:
 ```bash
 git clone https://github.com/ml-cab/juno.git && cd juno
 mvn clean package -DskipTests
-
-# Download a GGUF, then run the interactive console:
-# Linux / macOS:
-./juno local --model-path models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
-# Windows:
-juno.bat local --model-path models\tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
-
-# REST alongside the REPL:
-./juno local --model-path models/... --api-port 8080
-
-# LoRA training:
-./juno lora --model-path models/...
-
-# Merge a trained adapter into a standalone GGUF:
-./juno merge
 ```
+
+Download a `.gguf` or `.llamafile` then run the interactive `console`:
+
+Linux / macOS:
+
+```
+./juno local --model-path models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+```
+
+or Windows:
+
+```
+juno.bat local --model-path models\tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+```
+
+REST alongside the REPL via setting `api-port`
+
+```
+./juno local --model-path models/... --api-port 8080
+```
+
+LoRA training is a separate mode with various artificial options :
+
+```
+./juno lora --model-path models/...
+```
+
+Merge a trained adapter into a stand-alone GGUF:
+
+```
+./juno merge --model-path models/...
+```
+
 ![Juno local console running TinyLlama-1.1B, with CPU and memory usage shown alongside](assets/juno-local-demo.gif)
 
 See [1.2 Quickstart: Local](https://ml.cab/juno-documentation/quickstart-local/),
@@ -119,7 +134,7 @@ Full module map: [2.6 Module Map](https://ml.cab/juno-documentation/module-map/)
 
 ## 4. Documentation
 
-Full reference: **[ml.cab/juno-documentation](https://ml.cab/juno-documentation)**
+Full documentation reference: **[ml.cab/juno-documentation](https://ml.cab/juno-documentation)**
 
 | Topic | Page |
 |---|---|
