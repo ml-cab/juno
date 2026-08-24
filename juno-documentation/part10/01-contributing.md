@@ -58,7 +58,7 @@ Releases are cut from the release branch into `main` by a maintainer.
 
 ### Step 1. Merge the release branch into `main`
 
-Open an MR from `release-0.1.0` into `main` via the [branch comparison page](https://github.com/ml-cab/juno/compare). After review, merge and run a smoke test.
+Open an MR from `release-0.1.0` into `main` via the [branch comparison page](https://github.com/ml-cab/juno/compare). After review, merge and run a smoke test. 
 
 ### Step 2. Publish to Maven Central
 
@@ -78,10 +78,12 @@ git push origin --tags
 
 Create a new Release in the Git UI, attaching the version tag and a description of changes. Release notes live in [Release notes](#ch-11-1).
 
-### Step 5. Prepare the next release branch
+### Step 5. Prepare the next release branch e.g. release-0.1.1
 
 ```bash
 git checkout -b release-0.1.1 main
+// Change all the versions in all the pom.xml be set to `same next version` release-0.1.1
+git commit -m "bump-up versions for release-0.1.1"
 git push origin release-0.1.1
 ```
 

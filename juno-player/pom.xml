@@ -7,7 +7,7 @@
 	<parent>
 		<groupId>cab.ml</groupId>
 		<artifactId>juno</artifactId>
-		<version>0.1.1</version>
+		<version>0.1.2</version>
 	</parent>
 
 	<artifactId>juno-player</artifactId>
@@ -102,10 +102,16 @@
 							<goal>shade</goal>
 						</goals>
 						<configuration>
-							<!-- Thin jar remains the main artifact for Maven
-							consumers; fat jar is attached. -->
-							<shadedArtifactAttached>true</shadedArtifactAttached>
-							<shadedClassifierName>shaded</shadedClassifierName>
+							<!-- Thin jar remains the sole Maven artifact for
+							this module (main jar, sources, javadoc); it is
+							the only one installed/deployed, including to
+							Maven Central via the central-publish profile.
+							The fat jar is written directly to outputFile
+							instead of being attached, so it is excluded from
+							install/deploy but still lands at the same path
+							the run scripts (run.sh / run.bat) expect. -->
+							<outputFile>
+								${project.build.directory}/${project.artifactId}-${project.version}-shaded.jar</outputFile>
 							<transformers>
 								<transformer
 									implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
