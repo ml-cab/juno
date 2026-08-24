@@ -1,4 +1,4 @@
-##Status
+## Status
 
 **Session 52** — EU AI ACT Complience User transparency and AI disclosure.
 
