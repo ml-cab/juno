@@ -14,7 +14,7 @@ Import one POM so every `cab.ml` module shares the same version:
     <dependency>
       <groupId>cab.ml</groupId>
       <artifactId>juno-bom</artifactId>
-      <version>0.1.0</version>
+      <version>0.1.1</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -34,8 +34,8 @@ Import one POM so every `cab.ml` module shares the same version:
 
 After `mvn package`, `juno-player/target/` contains:
 
-- `juno-player-0.1.0.jar`: normal thin classpath artifact for dependents (compose with BOM-managed modules).
-- `juno-player-0.1.0-shaded.jar`: fat jar with `Main-Class: cab.ml.juno.player.ConsoleMain`. The `./juno` launcher selects this shaded jar when present.
+- `juno-player-0.1.1.jar`: normal thin classpath artifact for dependents (compose with BOM-managed modules).
+- `juno-player-0.1.1-shaded.jar`: fat jar with `Main-Class: cab.ml.juno.player.ConsoleMain`. The `./juno` launcher selects this shaded jar when present.
 
 For more, see the [Juno cookbook](https://github.com/ml-cab/juno-cookbook/tree/main).
 
