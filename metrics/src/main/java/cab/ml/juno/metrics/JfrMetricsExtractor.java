@@ -115,6 +115,15 @@ final class JfrMetricsExtractor {
         List<Float> mergeDeltaRetention = new ArrayList<>();
         int mergeCount = 0;
 
+        // "last" metrics must be derived from event timestamps, not from RecordingFile
+        // read order: readEvent() does not guarantee events come back in chronological /
+        // commit order (buffer flushes can interleave), especially when several event
+        // types are enabled and events are committed in rapid succession.
+        LastByTime loraLossLast = new LastByTime();
+        LastByTime valLossLast = new LastByTime();
+        LastByTime mergeRmseLast = new LastByTime();
+        LastByTime mergeDeltaRetentionLast = new LastByTime();
+
         List<Long> playLoadMs = new ArrayList<>();
         int playCount = 0;
 
@@ -182,8 +191,11 @@ final class JfrMetricsExtractor {
                                 loraAdapterBackwardMs.add(ev.getLong("adapterBackwardMs"));
                             if (ev.hasField("transferMs"))
                                 loraTransferMs.add(ev.getLong("transferMs"));
-                            if (ev.hasField("loss"))
-                                loraLoss.add(ev.getFloat("loss"));
+                            if (ev.hasField("loss")) {
+                                float loss = ev.getFloat("loss");
+                                loraLoss.add(loss);
+                                loraLossLast.offer(ev.getStartTime(), loss);
+                            }
                             if (ev.hasField("globalGradNorm"))
                                 loraGradNorm.add(ev.getFloat("globalGradNorm"));
                             if (ev.hasField("numTokens"))
@@ -207,6 +219,7 @@ final class JfrMetricsExtractor {
                             if (ev.hasField("loss")) {
                                 float loss = ev.getFloat("loss");
                                 valLoss.add(loss);
+                                valLossLast.offer(ev.getStartTime(), loss);
                                 boolean best = ev.hasField("bestSoFar") && ev.getBoolean("bestSoFar");
                                 if (best)
                                     valBestLoss.add(loss);
@@ -223,10 +236,16 @@ final class JfrMetricsExtractor {
                             mergeCount++;
                             if (ev.hasField("durationMs"))
                                 mergeDurationMs.add(ev.getLong("durationMs"));
-                            if (ev.hasField("rmse"))
-                                mergeRmse.add(ev.getFloat("rmse"));
-                            if (ev.hasField("deltaRetention"))
-                                mergeDeltaRetention.add(ev.getFloat("deltaRetention"));
+                            if (ev.hasField("rmse")) {
+                                float rmse = ev.getFloat("rmse");
+                                mergeRmse.add(rmse);
+                                mergeRmseLast.offer(ev.getStartTime(), rmse);
+                            }
+                            if (ev.hasField("deltaRetention")) {
+                                float dr = ev.getFloat("deltaRetention");
+                                mergeDeltaRetention.add(dr);
+                                mergeDeltaRetentionLast.offer(ev.getStartTime(), dr);
+                            }
                         }
                         case LORA_PLAY -> {
                             playCount++;
@@ -291,7 +310,7 @@ final class JfrMetricsExtractor {
         m.put("juno.LoraTrainStep.frozen_transpose_ms.p95", JfrPercentiles.p95LongMs(loraFrozenTransposeMs));
         m.put("juno.LoraTrainStep.adapter_backward_ms.p95", JfrPercentiles.p95LongMs(loraAdapterBackwardMs));
         m.put("juno.LoraTrainStep.transfer_ms.p95", JfrPercentiles.p95LongMs(loraTransferMs));
-        m.put("juno.LoraTrainStep.loss.last", JfrPercentiles.lastFloat(loraLoss));
+        m.put("juno.LoraTrainStep.loss.last", loraLossLast.orElse(0.0));
         m.put("juno.LoraTrainStep.loss.mean", JfrPercentiles.meanFloat(loraLoss));
         m.put("juno.LoraTrainStep.grad_norm.p95", JfrPercentiles.p95Float(loraGradNorm));
         m.put("juno.LoraTrainStep.clipped.fraction",
@@ -307,15 +326,15 @@ final class JfrMetricsExtractor {
         }
 
         m.put("juno.LoraValidation.count", (double) valCount);
-        m.put("juno.LoraValidation.loss.last", JfrPercentiles.lastFloat(valLoss));
+        m.put("juno.LoraValidation.loss.last", valLossLast.orElse(0.0));
         m.put("juno.LoraValidation.loss.best",
                 valBestLoss.isEmpty() ? JfrPercentiles.minFloat(valLoss) : JfrPercentiles.minFloat(valBestLoss));
         m.put("juno.LoraValidation.duration_ms.p95", JfrPercentiles.p95LongMs(valDurationMs));
 
         m.put("juno.LoraMerge.count", (double) mergeCount);
         m.put("juno.LoraMerge.duration_ms.p95", JfrPercentiles.p95LongMs(mergeDurationMs));
-        m.put("juno.LoraMerge.rmse.last", JfrPercentiles.lastFloat(mergeRmse));
-        m.put("juno.LoraMerge.delta_retention.last", JfrPercentiles.lastFloat(mergeDeltaRetention));
+        m.put("juno.LoraMerge.rmse.last", mergeRmseLast.orElse(0.0));
+        m.put("juno.LoraMerge.delta_retention.last", mergeDeltaRetentionLast.orElse(0.0));
 
         m.put("juno.LoraNormRefresh.count", (double) normCount);
         m.put("juno.LoraNormRefresh.duration_ms.p95", JfrPercentiles.p95LongMs(normDurationMs));
@@ -353,5 +372,34 @@ final class JfrMetricsExtractor {
         }
         String a = algorithm.strip().toLowerCase();
         return a.isEmpty() ? "" : a;
+    }
+
+    /**
+     * Tracks the value of the most recent (by JFR event start time) sample seen so far.
+     *
+     * <p>{@link RecordingFile#readEvent()} does not guarantee events are returned in
+     * chronological / commit order — it only guarantees every event is returned. Relying
+     * on append order into a list to determine "the last sample" is therefore unsound;
+     * this class instead compares each event's actual timestamp.
+     */
+    private static final class LastByTime {
+        private Instant time;
+        private double value;
+        private boolean present;
+
+        void offer(Instant startTime, float candidate) {
+            if (!Float.isFinite(candidate)) {
+                return;
+            }
+            if (!present || startTime.isAfter(time)) {
+                time = startTime;
+                value = candidate;
+                present = true;
+            }
+        }
+
+        double orElse(double fallback) {
+            return present ? value : fallback;
+        }
     }
 }
