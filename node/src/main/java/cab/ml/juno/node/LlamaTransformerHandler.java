@@ -641,6 +641,437 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return true;
 	}
 
+	/**
+	 * Batched prefill forward pass: processes a window of new prompt tokens in one
+	 * call, issuing one GEMM per weight matrix per layer instead of one GEMV per
+	 * token per weight matrix. Attention remains per-token (causal mask, growing KV
+	 * cache) — only the ~7 linear projections per layer are batched.
+	 *
+	 * <p>For intermediate nodes the result carries all window activations flattened
+	 * as {@code float[windowSize * hiddenDim]}. For the final node only the
+	 * last-position logits are returned.
+	 */
+	/**
+	 * See {@link ForwardPassHandler#embedToken(int)}. Throws if this shard
+	 * doesn't own the embedding table — mirrors the existing hasEmbeddings
+	 * guard used by {@link #forwardBatch} and {@link #getInitialActivation}.
+	 */
+	@Override
+	public float[] embedToken(int tokenId) {
+		if (!hasEmbeddings) {
+			throw new UnsupportedOperationException(
+					"embedToken() called on a shard with hasEmbeddings=false (this node does not own the embedding table)");
+		}
+		int H = cfg.hiddenDim();
+		int clamped = Math.max(0, Math.min(tokenId, cfg.vocabSize() - 1));
+		float[] x = new float[H];
+		System.arraycopy(tokenEmbd, clamped * H, x, 0, H);
+		return x;
+	}
+
+	@Override
+	public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+		long start = System.nanoTime();
+		int W = request.windowSize();
+		int H = cfg.hiddenDim();
+		boolean usingActivations = !(hasEmbeddings && request.isFirstNode());
+		log.info("[prefill] forwardBatch ENTER requestId=" + request.requestId() + " W=" + W
+				+ " startPos=" + request.startPosition() + " hasEmbeddings=" + hasEmbeddings
+				+ " isFirstNode=" + request.isFirstNode() + " usingActivations=" + usingActivations
+				+ " hasOutputProj=" + hasOutputProj);
+
+		float[][] x;
+		// See getInitialActivation() for why this checks request.isFirstNode()
+		// rather than relying on hasEmbeddings alone: node 0 may still receive
+		// an activations-based window (vision patches spliced in by
+		// VisionAwareForwardPassHandler) instead of raw token IDs.
+		if (hasEmbeddings && request.isFirstNode()) {
+			// Embedding lookup for each token in the window
+			x = new float[W][H];
+			for (int b = 0; b < W; b++) {
+				int tokenId = request.tokenIds()[b];
+				tokenId = Math.max(0, Math.min(tokenId, cfg.vocabSize() - 1));
+				System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+			}
+		} else {
+			// Unflatten incoming activations: float[windowSize * H] → float[W][H]
+			x = new float[W][H];
+			float[] flat = request.activations();
+			for (int b = 0; b < W; b++) {
+				System.arraycopy(flat, b * H, x[b], 0, H);
+			}
+		}
+
+		x = runLayersBatch(x, request.requestId(), request.startPosition());
+
+		if (hasOutputProj) {
+			// Only the last position's logits are needed after prefill
+			long projStart = System.nanoTime();
+			float[] lastX = x[W - 1];
+			float[] logits = outputProjection(lastX);
+			log.info("[prefill] forwardBatch EXIT (final node) requestId=" + request.requestId() + " outputProjMs="
+					+ ms(projStart, System.nanoTime()) + " totalMs=" + ms(start, System.nanoTime()));
+			return new BatchForwardResult(request.requestId(), null, logits, W, System.nanoTime() - start);
+		}
+
+		// Flatten activations back to float[W * H] for the next node
+		float[] flat = new float[W * H];
+		for (int b = 0; b < W; b++) System.arraycopy(x[b], 0, flat, b * H, H);
+		log.info("[prefill] forwardBatch EXIT (intermediate node) requestId=" + request.requestId() + " totalMs="
+				+ ms(start, System.nanoTime()));
+		return new BatchForwardResult(request.requestId(), flat, null, W, System.nanoTime() - start);
+	}
+
+	/**
+	 * Run all assigned transformer layers in batch mode, processing {@code W}
+	 * positions in one pass. KV cache is grown to accommodate
+	 * {@code startPos + W - 1} before any write.
+	 */
+	private float[][] runLayersBatch(float[][] x, String requestId, int startPos) {
+		int W = x.length;
+		int L = endLayer - startLayer;
+		int kvDim = cfg.kvDim();
+		int lastPos = startPos + W - 1;
+
+		boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
+		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+
+		float[][] kCache = kvCacheK.get(requestId);
+		float[][] vCache = kvCacheV.get(requestId);
+
+		NodeKVCacheAdapter a = kvAdapter;
+		if (isNew && startPos > 0 && a != null) {
+			for (int li = 0; li < L; li++) {
+				int absLayer = startLayer + li;
+				final int i = li;
+				a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
+					ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
+					ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
+					System.arraycopy(pair.k(), 0, kCache[i], 0, pair.k().length);
+					System.arraycopy(pair.v(), 0, vCache[i], 0, pair.v().length);
+				});
+			}
+		}
+
+		ensureKvCapacity(kCache, lastPos, kvDim);
+		ensureKvCapacity(vCache, lastPos, kvDim);
+
+		// Allocate workspace once — reused across all L layers to avoid ~167 MB of
+		// per-layer temporary float[][] allocation (GC source during decode).
+		BatchWorkspace ws = new BatchWorkspace(W, cfg.hiddenDim(), cfg.intermediateSize(),
+				kvDim, cfg.numHeads(), lastPos + 1);
+
+		log.info("[prefill] runLayersBatch START requestId=" + requestId + " W=" + W + " L=" + L
+				+ " startPos=" + startPos + " lastPos=" + lastPos + " kvDim=" + kvDim);
+		long layersStart = System.nanoTime();
+		for (int li = 0; li < L; li++) {
+			long layerStart = System.nanoTime();
+			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws);
+			double layerMs = (System.nanoTime() - layerStart) / 1_000_000.0;
+			log.info("[prefill] layer " + (li + 1) + "/" + L + " done in " + String.format("%.1f", layerMs)
+					+ "ms  requestId=" + requestId);
+		}
+		log.info("[prefill] runLayersBatch DONE requestId=" + requestId + " totalMs="
+				+ String.format("%.1f", (System.nanoTime() - layersStart) / 1_000_000.0));
+
+		if (a != null) {
+			int seqLen = lastPos + 1;
+			for (int li = 0; li < L; li++) {
+				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen, kvDim);
+			}
+		}
+
+		return x;
+	}
+
+
+	/**
+	 * Pre-allocated scratch buffers for one batched-prefill call, reused across
+	 * all L transformer layers. Allocating once here instead of per-layer reduces
+	 * per-prefill temporary allocation from ~167 MB (22 layers × 7.6 MB/layer) to
+	 * ~5 MB (one workspace), eliminating the GC pressure that was inflating
+	 * decode-phase p95 latency.
+	 */
+	private static final class BatchWorkspace {
+		final float[][] norm1, norm2, q, k, v, attnOut, attnProj, gate, up, hidden, ffnOut;
+		final float[] scores; // gqa attention-score scratch: [numHeads × maxSeqLen]
+
+		BatchWorkspace(int W, int H, int I, int kvDim, int numHeads, int maxSeqLen) {
+			norm1    = new float[W][H];
+			norm2    = new float[W][H];
+			q        = new float[W][H];
+			k        = new float[W][kvDim];
+			v        = new float[W][kvDim];
+			attnOut  = new float[W][H];
+			attnProj = new float[W][H];
+			gate     = new float[W][I];
+			up       = new float[W][I];
+			hidden   = new float[W][I];
+			ffnOut   = new float[W][H];
+			scores   = new float[numHeads * maxSeqLen];
+		}
+	}
+
+	/**
+	 * Single transformer layer executed over a batch of {@code W} positions using
+	 * pre-allocated workspace buffers. All intermediate results write into
+	 * {@code ws}; residual connections are in-place on {@code x}. Zero heap
+	 * allocation on the CPU Q4_K / Q8_0 path.
+	 */
+	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
+			float[] kCacheLayer, float[] vCacheLayer, BatchWorkspace ws) {
+		int W    = x.length;
+		int H    = cfg.hiddenDim();
+		int I    = cfg.intermediateSize();
+		int kvDim = cfg.kvDim();
+
+		long t0 = System.nanoTime();
+
+		for (int b = 0; b < W; b++) rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
+
+		sgemmLayerInto(wq[li], wqDev, wqDevFp32, li, ws.norm1, ws.q,    H,     H);
+		sgemmLayerInto(wk[li], wkDev, wkDevFp32, li, ws.norm1, ws.k,    kvDim, H);
+		sgemmLayerInto(wv[li], wvDev, wvDevFp32, li, ws.norm1, ws.v,    kvDim, H);
+
+		if (bq != null) {
+			for (int b = 0; b < W; b++) {
+				addInPlace(ws.q[b], bq[li]);
+				addInPlace(ws.k[b], bk[li]);
+				addInPlace(ws.v[b], bv[li]);
+			}
+		}
+
+		long t1 = System.nanoTime(); // qkv projection done
+
+		for (int b = 0; b < W; b++) {
+			rope(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
+			rope(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+		}
+
+		for (int b = 0; b < W; b++) {
+			System.arraycopy(ws.k[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
+			System.arraycopy(ws.v[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
+		}
+
+		long t2 = System.nanoTime(); // rope + cache write done
+
+		for (int b = 0; b < W; b++) {
+			gqaInto(ws.q[b], kCacheLayer, vCacheLayer, startPos + b + 1, ws.attnOut[b], ws.scores);
+		}
+
+		long t3 = System.nanoTime(); // attention (gqaInto over all W positions) done
+
+		sgemmLayerInto(wo[li], woDev, woDevFp32, li, ws.attnOut, ws.attnProj, H, H);
+
+		// First residual — in-place (eliminates x2 allocation)
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.attnProj[b][d];
+
+		for (int b = 0; b < W; b++) rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
+
+		sgemmLayerInto(wGate[li], wGateDev, wGateDevFp32, li, ws.norm2, ws.gate, I, H);
+		sgemmLayerInto(wUp[li],   wUpDev,   wUpDevFp32,   li, ws.norm2, ws.up,   I, H);
+
+		for (int b = 0; b < W; b++)
+			for (int i = 0; i < I; i++) ws.hidden[b][i] = silu(ws.gate[b][i]) * ws.up[b][i];
+
+		sgemmLayerInto(wDown[li], wDownDev, wDownDevFp32, li, ws.hidden, ws.ffnOut, H, I);
+
+		// Second residual — in-place (eliminates x3 allocation)
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.ffnOut[b][d];
+
+		long t4 = System.nanoTime(); // wo-proj + residual + ffn + residual done
+
+		log.info("[prefill]   layer " + li + " breakdown (ms): qkvProj=" + ms(t0, t1) + " rope+cacheWrite="
+				+ ms(t1, t2) + " attention(gqa,W=" + W + ")=" + ms(t2, t3) + " woProj+ffn+residuals=" + ms(t3, t4));
+
+		return x;
+	}
+
+	private static double ms(long fromNanos, long toNanos) {
+		return (toNanos - fromNanos) / 1_000_000.0;
+	}
+
+	/**
+	 * Zero-allocation grouped-query attention. Writes output into the pre-allocated
+	 * {@code out} buffer; reuses the shared {@code scores} scratch array.
+	 */
+	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen,
+			float[] out, float[] scores) {
+		int H    = cfg.numHeads();
+		int Hd   = cfg.headDim();
+		int gqaR = cfg.gqaRatio();
+		float scale = (float) (1.0 / Math.sqrt(Hd));
+		java.util.Arrays.fill(out, 0f);
+
+		for (int h = 0; h < H; h++) {
+			int kvHead = h / gqaR;
+			int qBase  = h * Hd;
+			int kBase  = kvHead * Hd;
+
+			for (int t = 0; t < seqLen; t++) {
+				float dot = 0f;
+				int kOffset = t * cfg.kvDim() + kBase;
+				for (int d = 0; d < Hd; d++) dot += q[qBase + d] * kCache[kOffset + d];
+				scores[t] = dot * scale;
+			}
+			softmax(scores, seqLen);
+
+			int outBase = h * Hd;
+			for (int t = 0; t < seqLen; t++) {
+				int vOffset = t * cfg.kvDim() + kBase;
+				float w = scores[t];
+				for (int d = 0; d < Hd; d++) out[outBase + d] += w * vCache[vOffset + d];
+			}
+		}
+	}
+
+	/**
+	 * Write Y = A * X for a batch directly into pre-allocated rows {@code Y[b]}.
+	 *
+	 * <p>CPU Q4_K / Q8_0 path: true weight-stationary GEMM. Each quantized
+	 * weight block is dequantised <em>once</em>, dot-producted against all B
+	 * input vectors while the block is still in L1/L2 cache, then discarded.
+	 * This reduces DRAM weight reads from B × weight_bytes to 1 × weight_bytes —
+	 * the actual compute speedup for prefill on bandwidth-bound CPU hardware.
+	 *
+	 * <p>GPU paths: copy from sgemm result (GPU is fast; copy is negligible).
+	 */
+	private void sgemmLayerInto(GgufReader.QuantizedTensor quant,
+			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32,
+			int li, float[][] X, float[][] Y, int rows, int cols) {
+		if (devHalf != null) {
+			float[][] tmp = backend.sgemm(devHalf[li], X);
+			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			return;
+		}
+		if (devFp32 != null) {
+			float[][] tmp = backend.sgemm(devFp32[li], X);
+			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			return;
+		}
+		switch (quant.type()) {
+		case 12 -> sgemmQ4KWeightStationary(quant.data(), X, Y, 0, rows, cols);
+		case 8  -> sgemmQ8_0WeightStationary(quant.data(), X, Y, 0, rows, cols);
+		default -> { for (int b = 0; b < X.length; b++) matVecInto(quant, X[b], Y[b], rows, cols); }
+		}
+	}
+
+	/**
+	 * True weight-stationary batched Q4_K matmul: reads each 256-element
+	 * quantised block once, dequantises it into a 1 KB float[] that fits in L1
+	 * cache, then accumulates dot products against all B input vectors before
+	 * advancing to the next block. Rows are processed in parallel via
+	 * ForkJoinPool.commonPool().
+	 *
+	 * <p>Memory bandwidth: B × weight_bytes (old) → weight_bytes + B × input_bytes
+	 * (new). For B=416, H=2048, that is a ~100× reduction in DRAM weight reads.
+	 */
+	private static void sgemmQ4KWeightStationary(byte[] raw, float[][] X, float[][] Y,
+			int rowStart, int rowEnd, int cols) {
+		final int BLOCK_SIZE  = 256;
+		final int BLOCK_BYTES = 144;
+		final int blocksPerRow = cols / BLOCK_SIZE;
+		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int B = X.length;
+		final int rows = rowEnd - rowStart;
+
+		// Zero the output rows before accumulating
+		for (int b = 0; b < B; b++) java.util.Arrays.fill(Y[b], 0, rows, 0f);
+
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			int rowByteOffset = (rowStart + r) * bytesPerRow;
+			// Per-row dequant scratch: reused across all blocks in this row.
+			// 256 floats = 1 KB — stays in L1 cache while multiplied against B inputs.
+			float[] dq = new float[BLOCK_SIZE];
+
+			for (int blk = 0; blk < blocksPerRow; blk++) {
+				int bo     = rowByteOffset + blk * BLOCK_BYTES;
+				int scBase = bo + 4;
+				int qsBase = bo + 16;
+				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
+				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
+
+				// Dequantise 256 nibbles into dq[] — done once per block
+				int qi = 0;
+				for (int g = 0; g < BLOCK_SIZE; g += 64) {
+					int s0 = g / 32;
+					int s1 = s0 + 1;
+					float scale0 = d * q4kScaleRaw(raw, scBase, s0);
+					float min0   = dmin * q4kMinRaw(raw, scBase, s0);
+					float scale1 = d * q4kScaleRaw(raw, scBase, s1);
+					float min1   = dmin * q4kMinRaw(raw, scBase, s1);
+					for (int i = 0; i < 32; i++) {
+						dq[g + i]      = scale0 * (raw[qsBase + qi + i] & 0x0F) - min0;
+						dq[g + 32 + i] = scale1 * ((raw[qsBase + qi + i] >> 4) & 0x0F) - min1;
+					}
+					qi += 32;
+				}
+
+				// Multiply dq[] against all B input vectors while it is in L1 cache
+				int xBase = blk * BLOCK_SIZE;
+				for (int p = 0; p < B; p++) {
+					float acc = 0f;
+					float[] xp = X[p];
+					for (int i = 0; i < BLOCK_SIZE; i++) acc += dq[i] * xp[xBase + i];
+					Y[p][r] += acc;
+				}
+			}
+		});
+	}
+
+	/**
+	 * True weight-stationary batched Q8_0 matmul: reads each 32-element
+	 * quantised block once, scales it to floats, dot-products against all B
+	 * inputs, then advances. Same principle as {@link #sgemmQ4KWeightStationary}.
+	 */
+	private static void sgemmQ8_0WeightStationary(byte[] raw, float[][] X, float[][] Y,
+			int rowStart, int rowEnd, int cols) {
+		final int BLOCK_SIZE  = 32;
+		final int BLOCK_BYTES = 34;
+		final int blocksPerRow = cols / BLOCK_SIZE;
+		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int B = X.length;
+		final int rows = rowEnd - rowStart;
+
+		for (int b = 0; b < B; b++) java.util.Arrays.fill(Y[b], 0, rows, 0f);
+
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			int rowByteOffset = (rowStart + r) * bytesPerRow;
+			float[] dq = new float[BLOCK_SIZE]; // 32 floats = 128 B, always in L1
+
+			for (int blk = 0; blk < blocksPerRow; blk++) {
+				int bo    = rowByteOffset + blk * BLOCK_BYTES;
+				float sc  = GgufReader.f16ToF32(readLE16(raw, bo));
+				for (int i = 0; i < BLOCK_SIZE; i++) dq[i] = sc * raw[bo + 2 + i];
+
+				int xBase = blk * BLOCK_SIZE;
+				for (int p = 0; p < B; p++) {
+					float acc = 0f;
+					float[] xp = X[p];
+					for (int i = 0; i < BLOCK_SIZE; i++) acc += dq[i] * xp[xBase + i];
+					Y[p][r] += acc;
+				}
+			}
+		});
+	}
+
+	/**
+	 * Dispatch a batched weight-matrix multiply for a layer: FP16 GPU first,
+	 * then FP32 GPU, then CPU quantized. Returns allocated output — use
+	 * {@link #sgemmLayerInto} in hot paths to avoid per-layer allocation.
+	 */
+	private float[][] sgemmLayer(GgufReader.QuantizedTensor quant,
+			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32,
+			int li, float[][] X, int rows, int cols) {
+		if (devHalf != null) return backend.sgemm(devHalf[li], X);
+		if (devFp32 != null) return backend.sgemm(devFp32[li], X);
+		// CPU quantized: B sequential matVecs over the same weight bytes
+		int B = X.length;
+		float[][] Y = new float[B][];
+		for (int b = 0; b < B; b++) Y[b] = matVec(quant, X[b], rows, cols);
+		return Y;
+	}
+
 	// ── Transformer forward pass ──────────────────────────────────────────────
 
 	/**
@@ -649,7 +1080,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * directly
 	 */
 	private float[] getInitialActivation(ForwardRequest request) {
-		if (hasEmbeddings) {
+		// hasEmbeddings alone is not sufficient: this node is *capable* of an
+		// embedding lookup, but a caller (e.g. VisionAwareForwardPassHandler
+		// splicing in CLIP patch vectors for image tokens) may still hand node 0
+		// a pre-computed activations request instead of raw token IDs.
+		// request.isFirstNode() (tokenIds != null) is the authoritative signal
+		// for which payload this specific request actually carries.
+		if (hasEmbeddings && request.isFirstNode()) {
 			// Use the last token in the sequence (we process one token at a time)
 			int[] tokenIds = request.tokenIds();
 			int tokenId = tokenIds[tokenIds.length - 1];
@@ -722,11 +1159,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	private static void ensureKvCapacity(float[][] cache, int pos, int kvDim) {
 		int required = (pos + 1) * kvDim;
+		int cap = MAX_SEQ_LEN * kvDim;
+		if (required > cap) {
+			// Without this guard, the doubling loop below spins forever: once
+			// newLen is clamped to `cap`, `newLen < required` stays true and the
+			// loop never terminates. Fail loudly instead of hanging.
+			throw new IllegalStateException("KV cache position " + pos + " exceeds MAX_SEQ_LEN=" + MAX_SEQ_LEN
+					+ " (required=" + required + " floats, cap=" + cap + "). Prompt/window too long for this build.");
+		}
 		for (int li = 0; li < cache.length; li++) {
 			if (cache[li].length < required) {
 				int newLen = cache[li].length;
 				while (newLen < required)
-					newLen = Math.min(newLen * 2, MAX_SEQ_LEN * kvDim);
+					newLen = Math.min(newLen * 2, cap);
 				cache[li] = java.util.Arrays.copyOf(cache[li], newLen);
 			}
 		}
@@ -827,6 +1272,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return out;
 	}
 
+	/**
+	 * Zero-allocation variant of {@link #rmsNorm}: writes into {@code out} instead
+	 * of allocating. Used by {@link #transformerLayerBatch} to reuse workspace rows.
+	 */
+	static void rmsNormInto(float[] x, float[] w, float eps, float[] out) {
+		int n = x.length;
+		float ss = 0f;
+		for (float v : x) ss += v * v;
+		float scale = 1f / (float) Math.sqrt(ss / n + eps);
+		for (int i = 0; i < n; i++) out[i] = w[i] * x[i] * scale;
+	}
+
 	// ── Backend dispatch ─────────────────────────────────────────────────────
 
 	/**
@@ -841,6 +1298,38 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		if (dev != null)
 			return backend.sgemv(dev, x);
 		return matVec(quant, x, rows, cols);
+	}
+
+	/**
+	 * Zero-allocation matrix-vector multiply into a caller-provided buffer.
+	 * Fast paths for Q4_K (type 12) and Q8_0 (type 8) — no heap allocation.
+	 * Allocate-and-copy fallback for other quantisation types.
+	 *
+	 * <p>Used by {@link #sgemmLayerInto} to eliminate per-matVec allocation in
+	 * the CPU quantized batched-prefill path.
+	 */
+	static void matVecInto(GgufReader.QuantizedTensor A, float[] x, float[] out, int rows, int cols) {
+		switch (A.type()) {
+		case 12 -> matVecQ4KrawInto(A.data(), x, 0, rows, out, cols);
+		case 8  -> matVecQ8_0rawInto(A.data(), x, 0, rows, out, cols);
+		default -> {
+			float[] tmp = matVec(A, x, rows, cols);
+			System.arraycopy(tmp, 0, out, 0, rows);
+		}
+		}
+	}
+
+	/** Row-range variant of {@link #matVecInto} — used by Phi3 fused-tensor paths. */
+	static void matVecInto(GgufReader.QuantizedTensor A, float[] x, float[] out,
+			int rowStart, int rowEnd, int cols) {
+		switch (A.type()) {
+		case 12 -> matVecQ4KrawInto(A.data(), x, rowStart, rowEnd, out, cols);
+		case 8  -> matVecQ8_0rawInto(A.data(), x, rowStart, rowEnd, out, cols);
+		default -> {
+			float[] tmp = matVecQuantizedNoEvent(A, x, rowStart, rowEnd, cols);
+			System.arraycopy(tmp, 0, out, 0, rowEnd - rowStart);
+		}
+		}
 	}
 
 	/**
@@ -873,6 +1362,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	static float[] dequantize(GgufReader.QuantizedTensor t, int rows, int cols) {
 		return switch (t.type()) {
 		case 0  -> dequantizeF32(t.data(), rows, cols);
+		case 1  -> dequantizeF16(t.data(), rows, cols);
 		case 8  -> dequantizeQ8_0(t.data(), rows, cols);
 		case 10 -> dequantizeQ2K(t.data(), rows, cols);
 		case 11 -> dequantizeQ3K(t.data(), rows, cols);
@@ -889,6 +1379,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		float[] out = new float[n];
 		java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
 		for (int i = 0; i < n; i++) out[i] = bb.getFloat(i * 4);
+		return out;
+	}
+
+	/** GGML type 1 (F16): plain 2-byte half-floats, no block scaling. */
+	private static float[] dequantizeF16(byte[] raw, int rows, int cols) {
+		int n = rows * cols;
+		float[] out = new float[n];
+		java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+		for (int i = 0; i < n; i++) out[i] = GgufReader.f16ToF32(bb.getShort(i * 2));
 		return out;
 	}
 
@@ -1113,6 +1612,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			int cols) {
 		return switch (A.type()) {
 		case 0  -> ActivationCodec.matVecF32raw(A.data(), x, rowStart, rowEnd, cols);
+		case 1  -> matVecF16raw(A.data(), x, rowStart, rowEnd, cols);
 		case 8  -> matVecQ8_0raw(A.data(), x, rowStart, rowEnd, cols);
 		case 10 -> matVecQ2Kraw(A.data(), x, rowStart, rowEnd, cols);
 		case 11 -> matVecQ3Kraw(A.data(), x, rowStart, rowEnd, cols);
@@ -1150,6 +1650,35 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 						| ((raw[base + 2] & 0xFF) << 16)
 						| ((raw[base + 3] & 0xFF) << 24);
 				acc += Float.intBitsToFloat(bits) * x[c];
+			}
+			y[r] = acc;
+		});
+		return y;
+	}
+
+	/**
+	 * GGML type 1 (F16) raw-bytes matVec. F16 is a plain, unquantized 2-byte
+	 * half-float per element — no block scaling, unlike the Q*_K/Q8_0 types
+	 * below. GGUF tensor bytes are always little-endian regardless of the
+	 * cluster's {@code --byteOrder} activation-wire setting (that flag only
+	 * governs inter-node activation serialization, never model weight bytes),
+	 * so the byte assembly here is fixed little-endian, matching
+	 * {@link #matVecF32raw} and every other raw matVec in this file.
+	 *
+	 * <p>Uses the same {@link GgufReader#f16ToF32} conversion as
+	 * {@code GgufReader.loadF16} so a weight kept in raw/quantized form here
+	 * produces bit-identical results to one eagerly dequantized via
+	 * {@code GgufReader.tensor()}.
+	 */
+	private static float[] matVecF16raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
+		int rows = rowEnd - rowStart;
+		float[] y = new float[rows];
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			float acc = 0f;
+			int base = ((rowStart + r) * cols) * 2;
+			for (int c = 0; c < cols; c++, base += 2) {
+				short bits = (short) ((raw[base] & 0xFF) | ((raw[base + 1] & 0xFF) << 8));
+				acc += GgufReader.f16ToF32(bits) * x[c];
 			}
 			y[r] = acc;
 		});
@@ -1312,17 +1841,32 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
+		matVecQ4KrawInto(raw, x, rowStart, rowEnd, y, cols);
+		return y;
+	}
 
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+	/**
+	 * Zero-allocation Q4_K matVec: writes into caller-provided {@code y[0..rows)}.
+	 * Same inner loop as {@link #matVecQ4Kraw} — same numerical result, no heap
+	 * allocation.
+	 */
+	private static void matVecQ4KrawInto(byte[] raw, float[] x, int rowStart, int rowEnd,
+			float[] y, int cols) {
+		final int BLOCK_SIZE = 256;
+		final int BLOCK_BYTES = 144;
+		final int blocksPerRow = cols / BLOCK_SIZE;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
+
+		java.util.stream.IntStream.range(0, rowEnd - rowStart).parallel().forEach(r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			float acc = 0f;
 			int xBase = 0;
 
 			for (int b = 0; b < blocksPerRow; b++) {
-				int bo = rowByteOffset + b * BLOCK_BYTES;
-				int scBase = bo + 4; // 12 scale bytes at [bo+4, bo+15]
-				int qsBase = bo + 16; // 128 nibble bytes at [bo+16, bo+143]
-				float d = GgufReader.f16ToF32(readLE16(raw, bo));
+				int bo     = rowByteOffset + b * BLOCK_BYTES;
+				int scBase = bo + 4;
+				int qsBase = bo + 16;
+				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
 				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
 
 				int qi = 0;
@@ -1330,21 +1874,21 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					int s0 = g / 32;
 					int s1 = s0 + 1;
 					float scale0 = d * q4kScaleRaw(raw, scBase, s0);
-					float min0 = dmin * q4kMinRaw(raw, scBase, s0);
+					float min0   = dmin * q4kMinRaw(raw, scBase, s0);
 					float scale1 = d * q4kScaleRaw(raw, scBase, s1);
-					float min1 = dmin * q4kMinRaw(raw, scBase, s1);
+					float min1   = dmin * q4kMinRaw(raw, scBase, s1);
 
 					for (int i = 0; i < 32; i++)
 						acc += (scale0 * (raw[qsBase + qi + i] & 0x0F) - min0) * x[xBase + g + i];
 					for (int i = 0; i < 32; i++)
-						acc += (scale1 * ((raw[qsBase + qi + i] >> 4) & 0x0F) - min1) * x[xBase + g + 32 + i];
+						acc += (scale1 * ((raw[qsBase + qi + i] >> 4) & 0x0F) - min1)
+								* x[xBase + g + 32 + i];
 					qi += 32;
 				}
 				xBase += BLOCK_SIZE;
 			}
 			y[r] = acc;
 		});
-		return y;
 	}
 
 	/** Q4_K scale[j]: reads 6-bit packed value directly from raw[] at scBase. */
@@ -1370,8 +1914,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
+		matVecQ8_0rawInto(raw, x, rowStart, rowEnd, y, cols);
+		return y;
+	}
 
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+	/** Zero-allocation Q8_0 matVec: writes into {@code y[0..rows)}. */
+	private static void matVecQ8_0rawInto(byte[] raw, float[] x, int rowStart, int rowEnd,
+			float[] y, int cols) {
+		final int BLOCK_SIZE = 32;
+		final int BLOCK_BYTES = 34;
+		final int blocksPerRow = cols / BLOCK_SIZE;
+		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
+
+		java.util.stream.IntStream.range(0, rowEnd - rowStart).parallel().forEach(r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			float acc = 0f;
 			int xBase = 0;
@@ -1384,7 +1939,6 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			}
 			y[r] = acc;
 		});
-		return y;
 	}
 
 	/** Read a little-endian signed 16-bit value from raw bytes at offset. */

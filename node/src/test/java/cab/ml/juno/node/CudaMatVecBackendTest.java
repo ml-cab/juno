@@ -11,7 +11,7 @@ import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * CudaMatVecBackend tests — requires CUDA and an Nvidia GPU (org.bytedeco cuda).
+ * CudaMatVecBackend tests — requires CUDA drivers and an Nvidia GPU
  *
  * Inherits the full MatVecBackendContractTest suite. Every contract test that
  * passes on CpuMatVecBackend must also pass on CudaMatVecBackend — numerically identical

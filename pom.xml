@@ -47,6 +47,7 @@
 		<module>tokenizer</module>
 		<module>sampler</module>
 		<module>health</module>
+		<module>vision</module>
 		<!-- JFR instrumentation -->
 		<module>metrics</module>
 		<!-- executables -->
@@ -65,9 +66,6 @@
 		<grpc.version>1.68.0</grpc.version>
 		<protobuf.version>3.25.3</protobuf.version>
 		<protobuf-plugin.version>3.11.4</protobuf-plugin.version>
-		<!-- GPU: org.bytedeco cuda (JavaCPP presets), works with various NVIDIA
-		GPUs; 12.6 runtime compatible with driver 12.x/13.x -->
-		<bytedeco.cuda.version>12.6-9.5-1.5.11</bytedeco.cuda.version>
 		<!-- DJL / Tokenizer -->
 		<djl.version>0.27.0</djl.version>
 		<!-- Cache -->
@@ -155,6 +153,11 @@
 			</dependency>
 			<dependency>
 				<groupId>cab.ml</groupId>
+				<artifactId>vision</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>cab.ml</groupId>
 				<artifactId>juno-node</artifactId>
 				<version>${project.version}</version>
 			</dependency>
@@ -195,13 +198,6 @@
 				<groupId>com.google.protobuf</groupId>
 				<artifactId>protobuf-java</artifactId>
 				<version>${protobuf.version}</version>
-			</dependency>
-			<!-- CUDA via JavaCPP presets (org.bytedeco); includes cudart +
-			cublas, platform natives -->
-			<dependency>
-				<groupId>org.bytedeco</groupId>
-				<artifactId>cuda-platform</artifactId>
-				<version>${bytedeco.cuda.version}</version>
 			</dependency>
 			<!-- chronicle-map off-heap cache -->
 			<dependency>

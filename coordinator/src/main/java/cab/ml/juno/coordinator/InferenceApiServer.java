@@ -18,9 +18,11 @@ package cab.ml.juno.coordinator;
 
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import cab.ml.juno.registry.ModelDescriptor;
+import cab.ml.juno.registry.ModelIdResolver;
 import cab.ml.juno.registry.ModelRegistry;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
@@ -56,6 +58,8 @@ public final class InferenceApiServer {
 	private final OpenAiChatHandler openAiChatHandler;
 	private Javalin app;
 	private String byteOrder;
+	private final java.util.List<java.util.function.Consumer<Javalin>> extraRouteRegistrars =
+			new java.util.ArrayList<>();
 
 	/**
 	 * Optional health sidecar URL (e.g. "http://localhost:8081"). When set,
@@ -120,10 +124,18 @@ public final class InferenceApiServer {
 					e.retryAfterSeconds() * 1000));
 		});
 		app.exception(Exception.class, (e, ctx) -> {
-			log.warning("Unhandled exception: " + e.getMessage());
+			// Previously only e.getMessage() was logged, which for exceptions like
+			// ArrayIndexOutOfBoundsException gives no file/line/call-chain — e.g.
+			// "Index 1024 out of bounds for length 1024" alone cannot be traced to a
+			// specific array or loop. Log the full stack trace server-side; the HTTP
+			// response body intentionally still omits it (not for a REST client).
+			log.log(Level.WARNING, "Unhandled exception in " + ctx.method() + " " + ctx.path(), e);
 			ctx.status(500).json(Map.of("code", 500, "error", "INTERNAL_ERROR", "message",
 					e.getMessage() != null ? e.getMessage() : "Unexpected error"));
 		});
+
+		// ── Extra routes registered by callers (e.g. vision in juno-player) ──
+		extraRouteRegistrars.forEach(r -> r.accept(app));
 
 		app.start(port);
 		log.info("InferenceApiServer started on port " + port);
@@ -156,6 +168,18 @@ public final class InferenceApiServer {
 	 */
 	public void setLatencyReporter(cab.ml.juno.health.HealthReporter reporter) {
 		this.latencyReporter = reporter;
+	}
+
+	/**
+	 * Register additional Javalin routes before the server starts.
+	 *
+	 * Allows callers (e.g. juno-player) to attach routes without coordinator
+	 * importing their module. Must be called before {@link #start(int)}.
+	 *
+	 * @param registrar receives the Javalin app to register routes on
+	 */
+	public void addRoutes(java.util.function.Consumer<Javalin> registrar) {
+		extraRouteRegistrars.add(registrar);
 	}
 
 	// ── Web console ───────────────────────────────────────────────────────────
@@ -789,16 +813,9 @@ public final class InferenceApiServer {
 		if (body == null)
 			return;
 
-		String modelId = resolveModelId(body.modelId());
-		if (modelId == null) {
-			ctx.status(503).json(errorBody(503, "SERVICE_UNAVAILABLE", "No model is currently loaded"));
+		String modelId = resolveModelId(ctx, body.modelId());
+		if (modelId == null)
 			return;
-		}
-
-		if (!modelRegistry.isLoaded(modelId)) {
-			ctx.status(503).json(errorBody(503, "MODEL_NOT_LOADED", "Model '" + modelId + "' is not loaded"));
-			return;
-		}
 
 		InferenceRequest request = toInferenceRequest(body, modelId);
 
@@ -866,15 +883,9 @@ public final class InferenceApiServer {
 		if (body == null)
 			return null;
 
-		String modelId = resolveModelId(body.modelId());
-		if (modelId == null) {
-			ctx.status(503).json(errorBody(503, "SERVICE_UNAVAILABLE", "No model is currently loaded"));
+		String modelId = resolveModelId(ctx, body.modelId());
+		if (modelId == null)
 			return null;
-		}
-		if (!modelRegistry.isLoaded(modelId)) {
-			ctx.status(503).json(errorBody(503, "MODEL_NOT_LOADED", "Model '" + modelId + "' is not loaded"));
-			return null;
-		}
 		return toInferenceRequest(body, modelId);
 	}
 
@@ -892,12 +903,31 @@ public final class InferenceApiServer {
 		}
 	}
 
-	private String resolveModelId(String requested) {
-		if (requested != null && !requested.isBlank())
-			return requested;
-		// Default to first loaded model
-		return modelRegistry.listModels().stream().filter(m -> modelRegistry.isLoaded(m.modelId()))
-				.map(ModelDescriptor::modelId).findFirst().orElse(null);
+	/**
+	 * Resolves and validates the requested model id, writing a 503 error response
+	 * itself on failure. See {@link ModelIdResolver} for fallback/ambiguity rules.
+	 *
+	 * @return the resolved model id, or {@code null} if an error response was
+	 *         already written to {@code ctx}
+	 */
+	private String resolveModelId(Context ctx, String requested) {
+		// STRICT: the native API is typically driven by generated clients, not
+		// hand-typed curl, so a nonexistent model id is treated as a real error
+		// even when exactly one model is loaded (pinned by InferenceApiServerTest).
+		ModelIdResolver.Resolution res = ModelIdResolver.resolve(modelRegistry, requested,
+				ModelIdResolver.FallbackPolicy.STRICT);
+		if (res.isError()) {
+			// Preserve the pre-existing code distinction: no model loaded at all is a
+			// different condition from "this specific id is not loaded".
+			String code = res.errorMessage().startsWith("No model is currently loaded") ? "SERVICE_UNAVAILABLE"
+					: "MODEL_NOT_LOADED";
+			ctx.status(503).json(errorBody(503, code, res.errorMessage()));
+			return null;
+		}
+		if (res.warning() != null) {
+			log.warning(res.warning());
+		}
+		return res.modelId();
 	}
 
 	private InferenceRequest toInferenceRequest(ApiInferenceRequest body, String modelId) {

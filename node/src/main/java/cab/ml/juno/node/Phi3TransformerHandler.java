@@ -393,6 +393,215 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		return true;
 	}
 
+	/**
+	 * Batched prefill forward pass for Phi-3 family models. Processes a window of
+	 * new prompt tokens in one call, using GEMM for linear projections and the
+	 * extended-RoPE per-token (positions differ; cannot be batched).
+	 */
+	@Override
+	public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+		long start = System.nanoTime();
+		int W = request.windowSize();
+		int H = cfg.hiddenDim();
+
+		float[][] x;
+		if (hasEmbeddings) {
+			x = new float[W][H];
+			int actualVocab = tokenEmbd.length / H;
+			for (int b = 0; b < W; b++) {
+				int tokenId = request.tokenIds()[b];
+				tokenId = Math.max(0, Math.min(tokenId, actualVocab - 1));
+				System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+			}
+		} else {
+			x = new float[W][H];
+			float[] flat = request.activations();
+			for (int b = 0; b < W; b++) System.arraycopy(flat, b * H, x[b], 0, H);
+		}
+
+		x = runLayersBatch(x, request.requestId(), request.startPosition());
+
+		if (hasOutputProj) {
+			float[] lastX = x[W - 1];
+			float[] logits = outputProjection(lastX);
+			return new BatchForwardResult(request.requestId(), null, logits, W, System.nanoTime() - start);
+		}
+
+		float[] flat = new float[W * H];
+		for (int b = 0; b < W; b++) System.arraycopy(x[b], 0, flat, b * H, H);
+		return new BatchForwardResult(request.requestId(), flat, null, W, System.nanoTime() - start);
+	}
+
+	private float[][] runLayersBatch(float[][] x, String requestId, int startPos) {
+		int W = x.length;
+		int L = endLayer - startLayer;
+		int kvDim = cfg.kvDim();
+		int lastPos = startPos + W - 1;
+
+		boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
+		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+
+		float[][] kCache = kvCacheK.get(requestId);
+		float[][] vCache = kvCacheV.get(requestId);
+
+		NodeKVCacheAdapter a = kvAdapter;
+		if (isNew && startPos > 0 && a != null) {
+			for (int li = 0; li < L; li++) {
+				int absLayer = startLayer + li;
+				final int i = li;
+				a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
+					ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
+					ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
+					System.arraycopy(pair.k(), 0, kCache[i], 0, pair.k().length);
+					System.arraycopy(pair.v(), 0, vCache[i], 0, pair.v().length);
+				});
+			}
+		}
+
+		ensureKvCapacity(kCache, lastPos, kvDim);
+		ensureKvCapacity(vCache, lastPos, kvDim);
+
+		BatchWorkspace ws = new BatchWorkspace(W, cfg.hiddenDim(), cfg.intermediateSize(),
+				kvDim, cfg.numHeads(), lastPos + 1);
+
+		for (int li = 0; li < L; li++) {
+			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws);
+		}
+
+		if (a != null) {
+			int seqLen = lastPos + 1;
+			for (int li = 0; li < L; li++) {
+				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen, kvDim);
+			}
+		}
+		return x;
+	}
+
+	/** Pre-allocated workspace for Phi-3 batched-prefill layers. Same purpose as
+	 *  LlamaTransformerHandler.BatchWorkspace — eliminates per-layer allocation. */
+	private static final class BatchWorkspace {
+		final float[][] norm1, norm2, q, k, v, attnOut, attnProj, gate, up, hidden, ffnOut;
+		final float[] scores;
+
+		BatchWorkspace(int W, int H, int I, int kvDim, int numHeads, int maxSeqLen) {
+			norm1    = new float[W][H];
+			norm2    = new float[W][H];
+			q        = new float[W][H];
+			k        = new float[W][kvDim];
+			v        = new float[W][kvDim];
+			attnOut  = new float[W][H];
+			attnProj = new float[W][H];
+			gate     = new float[W][I];
+			up       = new float[W][I];
+			hidden   = new float[W][I];
+			ffnOut   = new float[W][H];
+			scores   = new float[numHeads * maxSeqLen];
+		}
+	}
+
+	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
+			float[] kCacheLayer, float[] vCacheLayer, BatchWorkspace ws) {
+		int W    = x.length;
+		int H    = cfg.hiddenDim();
+		int kvDim = cfg.kvDim();
+		int I    = cfg.intermediateSize();
+
+		for (int b = 0; b < W; b++)
+			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
+
+		sgemmFusedInto(attnQkv[li], attnQDev != null ? attnQDev[li] : null, ws.norm1, ws.q,    0,           H,           H);
+		sgemmFusedInto(attnQkv[li], attnKDev != null ? attnKDev[li] : null, ws.norm1, ws.k,    H,           H + kvDim,   H);
+		sgemmFusedInto(attnQkv[li], attnVDev != null ? attnVDev[li] : null, ws.norm1, ws.v,    H + kvDim,   H + 2*kvDim, H);
+
+		for (int b = 0; b < W; b++) {
+			Phi3Rope.ropeExt(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), ropeCfg);
+			Phi3Rope.ropeExt(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
+		}
+
+		for (int b = 0; b < W; b++) {
+			System.arraycopy(ws.k[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
+			System.arraycopy(ws.v[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
+		}
+
+		for (int b = 0; b < W; b++)
+			gqaInto(ws.q[b], kCacheLayer, vCacheLayer, startPos + b + 1, ws.attnOut[b], ws.scores);
+
+		sgemmFusedInto(wo[li], woDev != null ? woDev[li] : null, ws.attnOut, ws.attnProj, 0, H, H);
+
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.attnProj[b][d];
+
+		for (int b = 0; b < W; b++)
+			LlamaTransformerHandler.rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
+
+		sgemmFusedInto(ffnGateUp[li], ffnGateDev != null ? ffnGateDev[li] : null, ws.norm2, ws.gate, 0, I,     H);
+		sgemmFusedInto(ffnGateUp[li], ffnUpDev   != null ? ffnUpDev[li]   : null, ws.norm2, ws.up,   I, 2 * I, H);
+
+		for (int b = 0; b < W; b++)
+			for (int i = 0; i < I; i++) ws.hidden[b][i] = LlamaTransformerHandler.silu(ws.gate[b][i]) * ws.up[b][i];
+
+		sgemmFusedInto(wDown[li], wDownDev != null ? wDownDev[li] : null, ws.hidden, ws.ffnOut, 0, H, I);
+
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.ffnOut[b][d];
+		return x;
+	}
+
+	/** Zero-allocation gqa: writes into pre-allocated out[] using shared scores scratch. */
+	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen,
+			float[] out, float[] scores) {
+		int H    = cfg.numHeads();
+		int Hd   = cfg.headDim();
+		int gqaR = cfg.gqaRatio();
+		float scale = (float) (1.0 / Math.sqrt(Hd));
+		java.util.Arrays.fill(out, 0f);
+
+		for (int h = 0; h < H; h++) {
+			int kvHead = h / gqaR;
+			int qBase  = h * Hd;
+			int kBase  = kvHead * Hd;
+
+			for (int t = 0; t < seqLen; t++) {
+				float dot = 0f;
+				int kOffset = t * cfg.kvDim() + kBase;
+				for (int d = 0; d < Hd; d++) dot += q[qBase + d] * kCache[kOffset + d];
+				scores[t] = dot * scale;
+			}
+			LlamaTransformerHandler.softmax(scores, seqLen);
+
+			int outBase = h * Hd;
+			for (int t = 0; t < seqLen; t++) {
+				int vOffset = t * cfg.kvDim() + kBase;
+				float w = scores[t];
+				for (int d = 0; d < Hd; d++) out[outBase + d] += w * vCache[vOffset + d];
+			}
+		}
+	}
+
+	/** Zero-allocation sgemmFused: writes into pre-allocated rows Y[b]. */
+	private void sgemmFusedInto(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev,
+			float[][] X, float[][] Y, int rowStart, int rowEnd, int cols) {
+		if (dev != null) {
+			float[][] tmp = backend.sgemm(dev, X);
+			int rows = rowEnd - rowStart;
+			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			return;
+		}
+		for (int b = 0; b < X.length; b++)
+			LlamaTransformerHandler.matVecInto(quant, X[b], Y[b], rowStart, rowEnd, cols);
+	}
+
+	/**
+	 * Batched version of {@link #matVecFused}: GPU (DeviceHalfMatrix) if available,
+	 * otherwise CPU row-range quantized matVec called B times.
+	 */
+	private float[][] sgemmFused(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev,
+			float[][] X, int rowStart, int rowEnd, int cols) {
+		if (dev != null) return backend.sgemm(dev, X);
+		int B = X.length;
+		float[][] Y = new float[B][];
+		for (int b = 0; b < B; b++) Y[b] = LlamaTransformerHandler.matVec(quant, X[b], rowStart, rowEnd, cols);
+		return Y;
+	}
+
 	// ── Transformer forward pass ──────────────────────────────────────────────
 
 	private float[] getInitialActivation(ForwardRequest request) {

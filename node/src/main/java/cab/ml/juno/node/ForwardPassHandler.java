@@ -25,8 +25,7 @@ import java.util.Optional;
  * Executes the transformer forward pass for this node's assigned layers.
  *
  * Implementations: CyclicForwardPassHandler — deterministic fake, used in tests
- * + integration tests LlamaTransformerHandler — Cuda/org.bytedeco cublas
- * implementation (GPU required)
+ * + integration tests LlamaTransformerHandler
  *
  * Thread-safe — may be called concurrently for different requests in a batch.
  */
@@ -66,5 +65,90 @@ public interface ForwardPassHandler {
 	 */
 	default Optional<float[]> lastRmsHiddenForEmbedding(ForwardRequest request, ShardContext context) {
 		return Optional.empty();
+	}
+
+	/**
+	 * Look up the raw embedding-table row for a single token ID.
+	 *
+	 * <p>Only meaningful on the node that owns the embedding table
+	 * ({@code ShardContext#hasEmbeddings()} true). Exists so decorators that
+	 * intercept the embedding step for <em>some</em> token positions — e.g. a
+	 * vision-aware wrapper that splices in patch vectors at image-token
+	 * positions — can still get the real text embedding for every other
+	 * position, instead of falling back to a placeholder value.
+	 *
+	 * @throws UnsupportedOperationException if this handler does not own an
+	 *         embedding table (default implementation)
+	 */
+	default float[] embedToken(int tokenId) {
+		throw new UnsupportedOperationException(
+				getClass().getSimpleName() + " does not implement embedToken() (no embedding table on this shard)");
+	}
+
+	/**
+	 * Execute a batched forward pass over a contiguous window of new prompt tokens.
+	 *
+	 * <p>This is the prefill batching entry point: instead of calling
+	 * {@link #forward} once per token (which re-traverses all weight matrices for
+	 * each token independently), this method processes the entire window in a single
+	 * call, allowing implementations to issue one GEMM per weight matrix per layer
+	 * rather than {@code windowSize} GEMVs.
+	 *
+	 * <p><b>Correctness-preserving default</b>: loops {@code windowSize} times
+	 * through the existing single-token {@link #forward} path, reusing today's
+	 * exact code. Any handler that does not override this keeps working, just
+	 * without the speedup — mirrors the existing
+	 * {@link cab.ml.juno.node.InferencePipeline#forwardBatch} pattern (serial
+	 * default, real implementations override).
+	 *
+	 * <p>For intermediate nodes the result carries all window activations flattened
+	 * as {@code float[windowSize * hiddenDim]}. For the final node only the
+	 * last-position logits are returned ({@code float[vocabSize]}); every
+	 * intermediate logit is discarded, matching the prefill contract.
+	 *
+	 * @param request carries the new token IDs (first node) or flattened
+	 *                activations from the previous node (subsequent nodes)
+	 * @param context this node's shard assignment and model metadata
+	 * @return per-window activations (intermediate) or last-position logits (final)
+	 */
+	default BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+		int W = request.windowSize();
+		int H = context.hiddenDim();
+		long totalNanos = 0;
+		float[][] allActivations = context.hasOutputProjection() ? null : new float[W][];
+
+		for (int b = 0; b < W; b++) {
+			ForwardRequest singleReq;
+			if (request.isFirstNode()) {
+				singleReq = ForwardRequest.withTokens(request.requestId(),
+						new int[]{ request.tokenIds()[b] }, request.startPosition() + b);
+			} else {
+				float[] row = new float[H];
+				System.arraycopy(request.activations(), b * H, row, 0, H);
+				singleReq = ForwardRequest.withActivations(request.requestId(), row,
+						request.startPosition() + b);
+			}
+			ForwardResult res = forward(singleReq, context);
+			totalNanos += res.computeNanos();
+
+			if (res.isFinalNode()) {
+				// Only the last-position logits are needed for prefill
+				if (b == W - 1) {
+					return new BatchForwardResult(request.requestId(), null, res.logits(), W, totalNanos);
+				}
+				// Earlier positions: logits discarded, continue loop
+			} else {
+				if (allActivations != null) {
+					allActivations[b] = res.activations();
+				}
+			}
+		}
+
+		// Intermediate node: flatten all window activations
+		float[] flat = new float[W * H];
+		for (int b = 0; b < W; b++) {
+			System.arraycopy(allActivations[b], 0, flat, b * H, H);
+		}
+		return new BatchForwardResult(request.requestId(), flat, null, W, totalNanos);
 	}
 }

@@ -259,6 +259,60 @@ public interface ChatTemplate {
 
 	// ── Registry ─────────────────────────────────────────────────────────────
 
+	/**
+	 * moondream2 / phi-2 completion template.
+	 *
+	 * <p>moondream2 was fine-tuned on a raw Q&A format with no chat role markers:
+	 * <pre>
+	 *   Question: {user}
+	 *
+	 *   Answer: {assistant}
+	 * </pre>
+	 *
+	 * <p>The {@link cab.ml.juno.player.VisionChatHandler} pre-formats vision requests
+	 * as {@code [image_tokens]\n\nQuestion: {text}\n\nAnswer:} and sets the content of
+	 * the user message to this complete string.  This template detects that pattern
+	 * (content ending with {@code "\n\nAnswer:"}) and emits it unchanged; otherwise
+	 * it wraps plain text in the Q&A format itself.
+	 */
+	static ChatTemplate moondream() {
+		return new ChatTemplate() {
+			@Override
+			public String format(List<ChatMessage> messages) {
+				StringBuilder sb = new StringBuilder();
+				String pendingSystem = null;
+				for (ChatMessage msg : messages) {
+					String content = msg.content() != null ? msg.content() : "";
+					switch (msg.role()) {
+					case "system" -> pendingSystem = content;
+					case "user" -> {
+						if (pendingSystem != null) {
+							sb.append(pendingSystem).append("\n\n");
+							pendingSystem = null;
+						}
+						if (content.endsWith("\n\nAnswer:")) {
+							// VisionChatHandler already embedded the full format — emit as-is.
+							sb.append(content);
+						} else {
+							sb.append("Question: ").append(content).append("\n\nAnswer:");
+						}
+					}
+					case "assistant" -> sb.append(" ").append(content).append("<|endoftext|>\n\n");
+					default -> {}
+					}
+				}
+				return sb.toString();
+			}
+
+			@Override
+			public String modelType() {
+				return "moondream";
+			}
+		};
+	}
+
+	// ── Registry ─────────────────────────────────────────────────────────────
+
 	/** All built-in templates keyed by modelType. */
 	Map<String, ChatTemplate> BUILT_IN = Map.ofEntries(
 			Map.entry("llama3", llama3()),
@@ -272,7 +326,9 @@ public interface ChatTemplate {
 			Map.entry("qwen", chatml()),
 			Map.entry("qwen2", chatml()),
 			Map.entry("qwen2.5", chatml()),
-			Map.entry("qwen3", qwen3()));
+			Map.entry("qwen3", qwen3()),
+			Map.entry("moondream", moondream()),
+			Map.entry("phi2", moondream()));
 
 	/**
 	 * Resolve a template by model type string. Falls back to ChatML for unknown

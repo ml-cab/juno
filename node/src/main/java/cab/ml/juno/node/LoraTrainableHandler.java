@@ -439,6 +439,146 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		return true;
 	}
 
+	/**
+	 * Batched prefill forward pass for LoRA inference overlay (--lora-play).
+	 *
+	 * <p>Only the inference-with-adapter path is in scope: base-weight matmuls are
+	 * batched exactly as in {@link LlamaTransformerHandler}, and LoRA deltas (rank
+	 * &ll; hiddenDim) are applied per-token in a simple loop — their cost is
+	 * negligible compared to the base-weight GEMVs they ride alongside.
+	 *
+	 * <p>{@link #trainStep} is explicitly untouched: truncated-BPTT gradients do
+	 * not cross KV-cache boundaries and the training step is built around one
+	 * position at a time by design.
+	 */
+	@Override
+	public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+		long start = System.nanoTime();
+		int W = request.windowSize();
+		int H = cfg.hiddenDim();
+
+		float[][] x;
+		if (hasEmbeddings) {
+			x = new float[W][H];
+			for (int b = 0; b < W; b++) {
+				int tokenId = request.tokenIds()[b];
+				tokenId = Math.max(0, Math.min(tokenId, cfg.vocabSize() - 1));
+				System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+			}
+		} else {
+			x = new float[W][H];
+			float[] flat = request.activations();
+			for (int b = 0; b < W; b++) System.arraycopy(flat, b * H, x[b], 0, H);
+		}
+
+		x = runLayersBatch(x, request.requestId(), request.startPosition());
+
+		if (hasOutputProj) {
+			float[] logits = outputProjection(x[W - 1]);
+			return new BatchForwardResult(request.requestId(), null, logits, W, System.nanoTime() - start);
+		}
+
+		float[] flat = new float[W * H];
+		for (int b = 0; b < W; b++) System.arraycopy(x[b], 0, flat, b * H, H);
+		return new BatchForwardResult(request.requestId(), flat, null, W, System.nanoTime() - start);
+	}
+
+	private float[][] runLayersBatch(float[][] x, String requestId, int startPos) {
+		int W = x.length;
+		int L = endLayer - startLayer;
+		int kvDim = cfg.kvDim();
+		int lastPos = startPos + W - 1;
+
+		kvCacheK.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		float[][] kC = kvCacheK.get(requestId);
+		float[][] vC = kvCacheV.get(requestId);
+		ensureKvCapacity(kC, lastPos, kvDim);
+		ensureKvCapacity(vC, lastPos, kvDim);
+
+		for (int li = 0; li < L; li++) {
+			x = inferenceLayerBatch(x, li, startPos, kC[li], vC[li]);
+		}
+		return x;
+	}
+
+	/** Batch inference layer with LoRA delta applied per-token. */
+	private float[][] inferenceLayerBatch(float[][] x, int li, int startPos,
+			float[] kCacheLayer, float[] vCacheLayer) {
+		int W = x.length;
+		int H = cfg.hiddenDim();
+		int kvDim = cfg.kvDim();
+		int I = cfg.intermediateSize();
+
+		float[][] xNorm1 = new float[W][];
+		for (int b = 0; b < W; b++)
+			xNorm1[b] = LlamaTransformerHandler.rmsNorm(x[b], attnNorm[li], cfg.rmsNormEps());
+
+		// Base-weight batched projections
+		float[][] Q = sgemmBatch(wq[li], wqDev, li, xNorm1, H, H);
+		float[][] K = sgemmBatch(wk[li], wkDev, li, xNorm1, kvDim, H);
+		float[][] V = sgemmBatch(wv[li], wvDev, li, xNorm1, kvDim, H);
+
+		// LoRA delta per-token (cheap: rank-r matmul, negligible vs base)
+		for (int b = 0; b < W; b++) {
+			applyLoraInPlace(Q[b], li, "wq", xNorm1[b]);
+			applyLoraInPlace(V[b], li, "wv", xNorm1[b]);
+		}
+
+		for (int b = 0; b < W; b++) {
+			LlamaTransformerHandler.rope(Q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
+			LlamaTransformerHandler.rope(K[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+			System.arraycopy(K[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
+			System.arraycopy(V[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
+		}
+
+		float[][] attnOut = new float[W][];
+		for (int b = 0; b < W; b++)
+			attnOut[b] = gqa(Q[b], kCacheLayer, vCacheLayer, startPos + b + 1);
+
+		float[][] attnProj = sgemmBatch(wo[li], woDev, li, attnOut, H, H);
+
+		float[][] x2 = new float[W][H];
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x2[b][d] = x[b][d] + attnProj[b][d];
+
+		float[][] xNorm2 = new float[W][];
+		for (int b = 0; b < W; b++)
+			xNorm2[b] = LlamaTransformerHandler.rmsNorm(x2[b], ffnNorm[li], cfg.rmsNormEps());
+
+		float[][] gate = sgemmBatch(wGate[li], wGateDev, li, xNorm2, I, H);
+		float[][] up   = sgemmBatch(wUp[li],   wUpDev,   li, xNorm2, I, H);
+
+		float[][] hidden = new float[W][I];
+		for (int b = 0; b < W; b++)
+			for (int i = 0; i < I; i++) hidden[b][i] = LlamaTransformerHandler.silu(gate[b][i]) * up[b][i];
+
+		float[][] ffnOut = sgemmBatch(wDown[li], wDownDev, li, hidden, H, I);
+
+		float[][] x3 = new float[W][H];
+		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x3[b][d] = x2[b][d] + ffnOut[b][d];
+		return x3;
+	}
+
+	/**
+	 * Batched forward {@code Y[b] = W * X[b]} for one layer's projection.
+	 *
+	 * <p>When the projection is GPU-resident, delegates to
+	 * {@link ResidentWeightMatrix#sgemmBatch}, which itself picks the true
+	 * microbatched cuBLAS/rocBLAS GEMM path for FP32-resident weights (via
+	 * {@link #blasOps}) and falls back to sequential {@code sgemv} for FP16
+	 * residency — the same resident-weight abstraction {@link #matVecLayer}
+	 * and {@link #transposedMatVecLayer} use, so forward/backward and batched
+	 * inference never disagree about how a layer's weights are stored.
+	 */
+	private float[][] sgemmBatch(GgufReader.QuantizedTensor quant, ResidentWeightMatrix[] dev,
+			int li, float[][] X, int rows, int cols) {
+		if (dev != null) return dev[li].sgemmBatch(blasOps, X, X.length);
+		int B = X.length;
+		float[][] Y = new float[B][];
+		for (int b = 0; b < B; b++) Y[b] = LlamaTransformerHandler.matVec(quant, X[b], rows, cols);
+		return Y;
+	}
+
 	@Override
 	public void releaseGpuResources() {
 		if (blasOps != null) {

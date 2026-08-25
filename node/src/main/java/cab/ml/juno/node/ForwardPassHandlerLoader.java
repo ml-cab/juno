@@ -34,6 +34,7 @@ import cab.ml.juno.node.RocmAvailability;
  * <p>
  * Architecture dispatch table:
  * <ul>
+ * <li>{@code phi2} → {@link Phi2TransformerHandler}
  * <li>{@code phi3} → {@link Phi3TransformerHandler}
  * <li>{@code qwen3} → {@link Qwen3TransformerHandler}
  * <li>{@code qwen3moe} → {@link Qwen3MoeTransformerHandler}
@@ -205,6 +206,10 @@ public final class ForwardPassHandlerLoader {
 		}
 
 		return switch (arch) {
+		case "phi2" -> {
+			log.info("Routing to Phi2TransformerHandler (phi2 parallel-attn+FFN, LayerNorm, GELU)");
+			yield Phi2TransformerHandler.load(modelPath, context, backend);
+		}
 		case "phi3" -> {
 			log.info("Routing to Phi3TransformerHandler (phi3 fused-QKV architecture)");
 			yield Phi3TransformerHandler.load(modelPath, context, backend);
