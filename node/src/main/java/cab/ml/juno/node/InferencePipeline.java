@@ -96,4 +96,17 @@ public interface InferencePipeline {
 			forward(requestId, new int[]{ newTokens[p] }, startPosition + p);
 		}
 	}
+
+	/**
+	 * Release {@code requestId}'s per-request KV state from every stage in
+	 * this pipeline — see {@link ForwardPassHandler#evict} for what that
+	 * state is and why it must be released explicitly for stateless (no
+	 * session) requests.
+	 *
+	 * <p><b>Correctness-preserving default</b>: no-op, matching
+	 * {@link ForwardPassHandler#evict}'s default. {@link LocalInferencePipeline}
+	 * overrides this to call {@code evict} on every stage's handler.
+	 */
+	default void evict(String requestId) {
+	}
 }

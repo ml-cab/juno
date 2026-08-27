@@ -84,6 +84,15 @@ project:
       children:
         - file: part11/01-release-notes.md
         - file: part11/02-changelog.md
+    - title: "12. Vision (Image-to-Text)"
+      children:
+        - file: part12/01-overview.md
+        - file: part12/02-model-requirements-and-loading.md
+        - file: part12/03-rest-api.md
+        - file: part12/04-architecture.md
+        - file: part12/05-known-issues-and-fixes.md
+        - file: part12/06-performance.md
+        - file: part12/07-testing.md
 site:
   template: book-theme
   options:

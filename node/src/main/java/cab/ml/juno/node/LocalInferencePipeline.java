@@ -106,6 +106,18 @@ public final class LocalInferencePipeline implements InferencePipeline {
 	}
 
 	/**
+	 * Cascades to every stage's handler — see {@link InferencePipeline#evict}.
+	 * Each stage's {@link ForwardPassHandler#evict} is a no-op unless that
+	 * handler overrides it, so this is safe to call even when some stages
+	 * hold no per-request state (e.g. a stub handler in tests).
+	 */
+	@Override
+	public void evict(String requestId) {
+		for (NodeStage stage : stages)
+			stage.handler().evict(requestId);
+	}
+
+	/**
 	 * Batched prefill: process all {@code newTokens} in one pass through the
 	 * handler chain, discarding logits. Replaces the per-position loop in
 	 * {@link cab.ml.juno.coordinator.GenerationLoop} for

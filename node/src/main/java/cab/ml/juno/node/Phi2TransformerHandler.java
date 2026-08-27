@@ -251,6 +251,203 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         return result;
     }
 
+    /**
+     * Batched forward pass over a whole prefill window in one call, instead of
+     * one {@link #forward} call per prompt token.
+     *
+     * <p>Before this override, {@link Phi2TransformerHandler} fell back to
+     * {@link ForwardPassHandler#forwardBatch}'s default: loop {@code windowSize}
+     * times through {@link #forward}. Each iteration re-streamed every weight
+     * matrix in every layer from memory for a single token — for a 740-token
+     * vision-chat prefill (729 image patches + text), that is 740 sequential
+     * passes instead of one batched pass per layer. See {@link #transformerLayerBatch}.
+     */
+    @Override
+    public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+        long start = System.nanoTime();
+        int W = request.windowSize();
+        int H = cfg.hiddenDim();
+
+        float[][] x = new float[W][H];
+        if (hasEmbeddings && request.isFirstNode()) {
+            int[] tokenIds = request.tokenIds();
+            for (int b = 0; b < W; b++) {
+                int tokenId = Math.max(0, Math.min(tokenIds[b], cfg.vocabSize() - 1));
+                System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+            }
+        } else {
+            float[] flat = request.activations();
+            for (int b = 0; b < W; b++)
+                System.arraycopy(flat, b * H, x[b], 0, H);
+        }
+
+        x = runLayersBatch(x, request.requestId(), request.startPosition());
+
+        if (hasOutputProj) {
+            float[] logits = outputProjection(x[W - 1]);
+            return new BatchForwardResult(request.requestId(), null, logits, W, System.nanoTime() - start);
+        }
+
+        float[] flat = new float[W * H];
+        for (int b = 0; b < W; b++)
+            System.arraycopy(x[b], 0, flat, b * H, H);
+        return new BatchForwardResult(request.requestId(), flat, null, W, System.nanoTime() - start);
+    }
+
+    private float[][] runLayersBatch(float[][] x, String requestId, int startPos) {
+        int L     = endLayer - startLayer;
+        int kvDim = cfg.kvDim();
+        int W     = x.length;
+        int lastPos = startPos + W - 1;
+
+        boolean isNew = kvCacheK.putIfAbsent(requestId,
+                new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
+        kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+
+        float[][] kCache = kvCacheK.get(requestId);
+        float[][] vCache = kvCacheV.get(requestId);
+
+        NodeKVCacheAdapter a = kvAdapter;
+        if (isNew && startPos > 0 && a != null) {
+            for (int li = 0; li < L; li++) {
+                int absLayer = startLayer + li;
+                final int idx = li;
+                a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
+                    ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
+                    ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
+                    System.arraycopy(pair.k(), 0, kCache[idx], 0, pair.k().length);
+                    System.arraycopy(pair.v(), 0, vCache[idx], 0, pair.v().length);
+                });
+            }
+        }
+
+        ensureKvCapacity(kCache, lastPos, kvDim);
+        ensureKvCapacity(vCache, lastPos, kvDim);
+
+        log.info("[phi2-trace] runLayersBatch windowSize=" + W + " startPos=" + startPos
+                + " initial-x: " + stats(x[0], cfg.hiddenDim()));
+
+        for (int li = 0; li < L; li++)
+            x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li]);
+
+        if (a != null) {
+            int seqLen = lastPos + 1;
+            for (int li = 0; li < L; li++)
+                a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen, kvDim);
+        }
+        return x;
+    }
+
+    /**
+     * Batched dispatch for one quantized weight matrix multiply across every
+     * row of {@code X} — the batched sibling of the single-vector
+     * {@link LlamaTransformerHandler#matVec(GgufReader.QuantizedTensor, float[], int, int, int)}
+     * used by {@link #transformerLayer}. Q4_K, Q5_K and Q8_0 (the formats real
+     * GGUF quantizations actually use for Phi-2/moondream2 weights) get a true
+     * weight-stationary batched kernel — each weight row is read from memory
+     * once and dot-producted against every row of {@code X}, instead of once
+     * per row of {@code X}. Any other quant type falls back to one
+     * {@code matVecInto} call per row, which is always correct, just without
+     * the speedup — the same correctness-preserving default
+     * {@link ForwardPassHandler#forwardBatch} documents at the handler level.
+     */
+    private static void sgemmQuantBatch(GgufReader.QuantizedTensor quant, float[][] X, float[][] Y,
+            int rowStart, int rowEnd, int cols) {
+        switch (quant.type()) {
+        case 12 -> LlamaTransformerHandler.sgemmQ4KWeightStationary(quant.data(), X, Y, rowStart, rowEnd, cols);
+        case 13 -> LlamaTransformerHandler.sgemmQ5KWeightStationary(quant.data(), X, Y, rowStart, rowEnd, cols);
+        case 8  -> LlamaTransformerHandler.sgemmQ8_0WeightStationary(quant.data(), X, Y, rowStart, rowEnd, cols);
+        default -> {
+            for (int b = 0; b < X.length; b++)
+                LlamaTransformerHandler.matVecInto(quant, X[b], Y[b], rowStart, rowEnd, cols);
+        }
+        }
+    }
+
+    /**
+     * Batched sibling of {@link #transformerLayer}: identical Phi-2 parallel
+     * attention+FFN math, applied to every row of the prefill window in one
+     * pass per weight matrix via {@link #sgemmQuantBatch} instead of one
+     * {@link LlamaTransformerHandler#matVec} call per row. Only RoPE (position-
+     * dependent) and causal self-attention (each position attends to a
+     * different, growing KV window) stay per-token — see {@link #gqa}.
+     */
+    private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
+            float[] kCacheLayer, float[] vCacheLayer) {
+        int W     = x.length;
+        int H     = cfg.hiddenDim();
+        int kvDim = cfg.kvDim();
+
+        // Shared LayerNorm for both attention and FFN paths (Phi-2 parallel block).
+        float[][] xNorm = new float[W][];
+        for (int b = 0; b < W; b++)
+            xNorm[b] = layerNorm(x[b], attnNorm[li], attnNormBias[li], cfg.rmsNormEps());
+
+        // ── Attention path — batched fused-QKV projection ──────────────────────
+        float[][] q = new float[W][H];
+        float[][] k = new float[W][kvDim];
+        float[][] v = new float[W][kvDim];
+        sgemmQuantBatch(attnQkv[li], xNorm, q, 0,         H,           H);
+        sgemmQuantBatch(attnQkv[li], xNorm, k, H,         H + kvDim,   H);
+        sgemmQuantBatch(attnQkv[li], xNorm, v, H + kvDim, H + 2*kvDim, H);
+
+        if (attnQkvBias[li] != null) {
+            float[] bqkv = attnQkvBias[li];
+            for (int b = 0; b < W; b++) {
+                for (int i = 0; i < H;     i++) q[b][i] += bqkv[i];
+                for (int i = 0; i < kvDim; i++) k[b][i] += bqkv[H + i];
+                for (int i = 0; i < kvDim; i++) v[b][i] += bqkv[H + kvDim + i];
+            }
+        }
+
+        // Partial RoPE is position-dependent — cannot be batched, applied per token.
+        for (int b = 0; b < W; b++) {
+            Phi2Rope.ropePartial(q[b], startPos + b, cfg.numHeads(),   cfg.headDim(), ropeDim, cfg.ropeTheta());
+            Phi2Rope.ropePartial(k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), ropeDim, cfg.ropeTheta());
+            System.arraycopy(k[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
+            System.arraycopy(v[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
+        }
+
+        // Causal self-attention — each position attends to a different, growing
+        // prefix, so this stays per-token (same limitation as Llama/Phi3 batched paths).
+        float[][] attnOut = new float[W][];
+        for (int b = 0; b < W; b++)
+            attnOut[b] = gqa(q[b], kCacheLayer, vCacheLayer, startPos + b + 1);
+
+        float[][] attnProj = new float[W][H];
+        sgemmQuantBatch(wo[li], attnOut, attnProj, 0, H, H);
+        if (woBias[li] != null)
+            for (int b = 0; b < W; b++)
+                for (int i = 0; i < H; i++) attnProj[b][i] += woBias[li][i];
+
+        // ── FFN path (same xNorm input — Phi-2 parallel block) ─────────────────
+        int I = cfg.intermediateSize();
+        float[][] up = new float[W][I];
+        sgemmQuantBatch(wUp[li], xNorm, up, 0, I, H);
+        if (wUpBias[li] != null)
+            for (int b = 0; b < W; b++)
+                for (int i = 0; i < I; i++) up[b][i] += wUpBias[li][i];
+
+        float[][] hidden = new float[W][I];
+        for (int b = 0; b < W; b++)
+            for (int i = 0; i < I; i++)
+                hidden[b][i] = gelu(up[b][i]);
+
+        float[][] ffnOut = new float[W][H];
+        sgemmQuantBatch(wDown[li], hidden, ffnOut, 0, H, I);
+        if (wDownBias[li] != null)
+            for (int b = 0; b < W; b++)
+                for (int i = 0; i < H; i++) ffnOut[b][i] += wDownBias[li][i];
+
+        // ── Single residual: x + attn_proj + ffn_out ────────────────────────────
+        float[][] result = new float[W][H];
+        for (int b = 0; b < W; b++)
+            for (int i = 0; i < H; i++)
+                result[b][i] = x[b][i] + attnProj[b][i] + ffnOut[b][i];
+
+        return result;
+    }
+
     @Override
     public Optional<float[]> lastRmsHiddenForEmbedding(ForwardRequest request, ShardContext context) {
         if (!hasOutputProj)
@@ -288,6 +485,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         this.kvAdapter = adapter;
     }
 
+    @Override
     public void evict(String requestId) {
         kvCacheK.remove(requestId);
         kvCacheV.remove(requestId);

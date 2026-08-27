@@ -417,6 +417,66 @@ class VisionEncoderTest {
         assertThat(out).containsExactly(g1, g1, g2);
     }
 
+    // ── applyProjectorBatch: batched sibling must match applyProjector exactly ─
+    //
+    // encode() calls applyProjectorBatch once for all patches instead of
+    // applyProjector once per patch, purely as a performance change (weight-
+    // stationary batched GEMM on CpuMatVec — see its javadoc). These tests
+    // are the regression net for that change: per-row batched output must be
+    // bit-for-bit identical to calling the unbatched method row by row.
+
+    @Test
+    @DisplayName("applyProjectorBatch: single-layer output for each row matches applyProjector called "
+            + "on that row individually")
+    void applyProjectorBatch_singleLayer_matchesPerRowApplyProjector() {
+        int hiddenSize = 2;
+        int outputDim = 3;
+        float[] w1 = { 1f, 0f, 0f, 1f, 1f, 1f };
+        float[] b1 = { 0.5f, 0.5f, 0.5f };
+        float[][] X = { { 1f, 2f }, { -1f, 3f }, { 0f, 0f } };
+
+        float[][] out = VisionEncoder.applyProjectorBatch(CPU, X, w1, b1, null, null, hiddenSize, outputDim,
+                outputDim);
+
+        assertThat(out).hasNumberOfRows(X.length);
+        for (int i = 0; i < X.length; i++) {
+            float[] expected = VisionEncoder.applyProjector(CPU, X[i], w1, b1, null, null, hiddenSize, outputDim,
+                    outputDim);
+            assertThat(out[i]).containsExactly(expected);
+        }
+    }
+
+    @Test
+    @DisplayName("applyProjectorBatch: two-layer (GELU between mm.0 and mm.2) output for each row matches "
+            + "applyProjector called on that row individually")
+    void applyProjectorBatch_twoLayer_matchesPerRowApplyProjector() {
+        int hiddenSize  = 2;
+        int mm0OutDim   = 4;
+        int finalOutDim = 3;
+        float[] w1 = { 1f, 0f,  0f, 1f,  1f, 1f,  0f, 0f };
+        float[] w2 = { 1f, 0f, 0f, 0f,   0f, 1f, 0f, 0f,   0f, 0f, 1f, 0f };
+        float[] b2 = { 0.1f, 0.2f, 0.3f };
+        float[][] X = { { 1f, 1f }, { 2f, -1f }, { 0.5f, 0.5f } };
+
+        float[][] out = VisionEncoder.applyProjectorBatch(CPU, X, w1, null, w2, b2, hiddenSize, mm0OutDim,
+                finalOutDim);
+
+        assertThat(out).hasNumberOfRows(X.length);
+        for (int i = 0; i < X.length; i++) {
+            float[] expected = VisionEncoder.applyProjector(CPU, X[i], w1, null, w2, b2, hiddenSize, mm0OutDim,
+                    finalOutDim);
+            assertThat(out[i]).containsExactly(expected);
+        }
+    }
+
+    @Test
+    @DisplayName("applyProjectorBatch: empty batch returns empty output without invoking the backend")
+    void applyProjectorBatch_emptyBatch_returnsEmpty() {
+        float[][] out = VisionEncoder.applyProjectorBatch(CPU, new float[0][], new float[6], null, null, null, 2, 3,
+                3);
+        assertThat(out).isEmpty();
+    }
+
     // ── buildSequence: CLS-optional sequence construction ─────────────────────
     // These tests cover the SigLIP (no-CLS) path introduced 2026-07-22 to
     // support moondream2, whose vision GGUF lacks v.class_embd.

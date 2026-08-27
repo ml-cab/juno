@@ -1,5 +1,7 @@
 package cab.ml.juno.coordinator;
 
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import cab.ml.juno.node.InferencePipeline;
@@ -19,6 +21,7 @@ final class StubInferencePipeline implements InferencePipeline {
 
 	private final int[] tokenSequence; // if set, returns these in order
 	private final AtomicInteger callCount = new AtomicInteger(0);
+	private final Set<String> evictedIds = ConcurrentHashMap.newKeySet();
 
 	/** Always returns logits pointing at DEFAULT_TOKEN. */
 	StubInferencePipeline() {
@@ -53,5 +56,15 @@ final class StubInferencePipeline implements InferencePipeline {
 
 	int callCount() {
 		return callCount.get();
+	}
+
+	/** Records requestId so tests can assert evict() was actually called and with what id. */
+	@Override
+	public void evict(String requestId) {
+		evictedIds.add(requestId);
+	}
+
+	boolean wasEvicted(String requestId) {
+		return evictedIds.contains(requestId);
 	}
 }

@@ -61,6 +61,38 @@ class LocalInferencePipelineTest {
 		assertThat(h2.callCount()).isEqualTo(1);
 	}
 
+	// ── evict(): must reach every stage's handler ───────────────────────────────
+	//
+	// GenerationLoop calls pipeline.evict(requestId) after every stateless
+	// request to release each handler's in-process KV cache arrays (see
+	// ForwardPassHandler.evict javadoc — without this, they leak for the life
+	// of the process). These tests are the regression net for that cascade.
+
+	@Test
+	void evict_reaches_every_stage_handler() {
+		CyclicForwardPassHandler h1 = new CyclicForwardPassHandler();
+		CyclicForwardPassHandler h2 = new CyclicForwardPassHandler();
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), List.of(h1, h2), VOCAB,
+				HIDDEN_DIM, NUM_HEADS);
+
+		pipeline.evict("req-1");
+
+		assertThat(h1.wasEvicted("req-1")).isTrue();
+		assertThat(h2.wasEvicted("req-1")).isTrue();
+	}
+
+	@Test
+	void evict_only_affects_the_given_requestId() {
+		CyclicForwardPassHandler handler = new CyclicForwardPassHandler();
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), handler, VOCAB, HIDDEN_DIM,
+				NUM_HEADS);
+
+		pipeline.evict("req-1");
+
+		assertThat(handler.wasEvicted("req-1")).isTrue();
+		assertThat(handler.wasEvicted("req-2")).isFalse();
+	}
+
 	@Test
 	void stage_count_matches_shard_map_node_count() {
 		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), new CyclicForwardPassHandler(),

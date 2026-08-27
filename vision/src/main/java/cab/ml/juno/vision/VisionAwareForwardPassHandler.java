@@ -314,4 +314,16 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
         System.arraycopy(patch, 0, out, 0, hiddenDim);
         return out;
     }
+
+    /**
+     * Forwards to the wrapped {@link #textHandler}. Without this override,
+     * {@link ForwardPassHandler#evict}'s no-op default would apply to this
+     * wrapper instead of the real handler underneath it — the pipeline would
+     * believe it released {@code requestId}'s KV state while the wrapped
+     * handler silently kept it, leaking on every stateless vision-chat request.
+     */
+    @Override
+    public void evict(String requestId) {
+        textHandler.evict(requestId);
+    }
 }

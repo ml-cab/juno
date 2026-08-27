@@ -1,6 +1,8 @@
 package cab.ml.juno.vision;
 
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import cab.ml.juno.node.ForwardPassHandler;
@@ -26,6 +28,7 @@ class StubForwardPassHandler implements ForwardPassHandler {
     private final int winnerToken;
     private final int hiddenDim; // used only by embedToken(); 0 = "not configured"
     private final AtomicInteger callCount = new AtomicInteger();
+    private final Set<String> evictedIds = ConcurrentHashMap.newKeySet();
 
     StubForwardPassHandler() {
         this(0, 0);
@@ -83,5 +86,15 @@ class StubForwardPassHandler implements ForwardPassHandler {
 
     int callCount() {
         return callCount.get();
+    }
+
+    /** Records requestId so tests can assert evict() reached this inner handler. */
+    @Override
+    public void evict(String requestId) {
+        evictedIds.add(requestId);
+    }
+
+    boolean wasEvicted(String requestId) {
+        return evictedIds.contains(requestId);
     }
 }

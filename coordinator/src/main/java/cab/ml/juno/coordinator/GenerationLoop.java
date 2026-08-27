@@ -262,6 +262,7 @@ public final class GenerationLoop {
 				kvCache.cachePrefix(promptOnly, promptOnly.length, requestIds[i] + ":prefix");
 			}
 			kvCache.evict(requestIds[i]);
+			pipeline.evict(requestIds[i]);
 
 			results.add(new GenerationResult(requestIds[i], eosFilters[i].text(), generated[i], promptLens[i],
 					generated[i].size(), reasons[i], Instant.now(), Duration.between(starts[i], Instant.now())));
@@ -441,7 +442,12 @@ public final class GenerationLoop {
 		} else {
 			// Stateless request — clean up the pipeline KV immediately.
 			// No cachePrefix call: there is no stable key for a future request to match.
+			// kvCache.evict() only clears KVCacheManager's cross-node/session-restore
+			// tier; pipeline.evict() releases each handler's own in-process working
+			// KV arrays for this requestId — without it they leak for the life of
+			// the process (see ForwardPassHandler.evict javadoc).
 			kvCache.evict(kvKey);
+			pipeline.evict(kvKey);
 		}
 
 		EosOutputFilter.Outcome flushed = eosFilter.finish(stream.flush());
@@ -479,6 +485,7 @@ public final class GenerationLoop {
 	public void evictSession(String sessionId) {
 		kvCache.evict(sessionId);
 		kvCache.invalidatePrefix(sessionId);
+		pipeline.evict(sessionId);
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────────

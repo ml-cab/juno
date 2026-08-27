@@ -85,13 +85,22 @@ import cab.ml.juno.node.MatVec;
  *       (SigLIP / moondream2; skipped entirely for CLIP / LLaVA).
  *   <li>Vision projector: mm.0 (hiddenSize → mm0OutDim), then GELU + mm.2
  *       (mm0OutDim → finalOutDim) when structurally necessary (non-square).
- *       Square mm.2 is NOT applied — 2026-07-12 regression; see {@link #project()}.
+ *       Square mm.2 is NOT applied — 2026-07-12 regression; see {@link #applyProjectorBatch}.
  *   <li>Return patch embeddings (CLS position skipped when present).
  *       Shape: numPatches × {@link #outputDim()} (= finalOutDim).
  * </ol>
  *
  * The output float[][] is directly consumed by {@link VisionAwareForwardPassHandler}
  * to splice vision tokens into the LLM's residual stream.
+ *
+ * <p><b>Batching.</b> Every linear layer above (patch embedding, Q/K/V and
+ * output projections, MLP up/down, projector) processes all patches in one
+ * {@link MatVec#sgemm} call rather than one {@link MatVec#sgemv} call per
+ * patch. On {@link cab.ml.juno.node.CpuMatVec} this is weight-stationary:
+ * each weight row is streamed from memory once and dot-producted against
+ * every patch, instead of being re-streamed from memory once per patch — see
+ * {@code CpuMatVec.sgemm}'s javadoc. Only self-attention's Q@K^T / softmax /
+ * *V (a patch-to-patch computation, not a weight multiply) stays per-token.
  *
  * Thread-safe after construction — all weights are read-only.
  */
@@ -247,13 +256,13 @@ public final class VisionEncoder {
         //   NON-SQUARE (mm0OutDim ≠ mm2OutDim): structurally necessary.
         //   Example — moondream2: mm.0 [1152→8192] + GELU + mm.2 [8192→2048].
         //   Without mm.2 the patch vectors are 8192-dim but phi-2 needs 2048-dim.
-        //   mm.2 is applied in project().
+        //   mm.2 is applied in applyProjectorBatch(), called from encode().
         //
         //   SQUARE (mm0OutDim == mm2OutDim): do NOT apply — 2026-07-12 regression.
         //   Example — LLaVA-1.5: applying the square mm.2 caused output to degenerate
         //   from "coherent but hallucinated" to a repeating <image>-token loop.
         //   Root cause unknown; skipping is confirmed correct for that model.
-        //   mm.2 is loaded and logged for diagnostics but not applied in project().
+        //   mm.2 is loaded and logged for diagnostics but not applied in applyProjectorBatch().
         if (r.hasTensor("mm.2.weight")) {
             long[] proj2Dims = r.tensorDims("mm.2.weight");
             long mm2InDim  = proj2Dims[0];
@@ -493,9 +502,15 @@ public final class VisionEncoder {
         }
 
         // Step 6 — vision projector on patch tokens only (CLS position skipped when present)
-        float[][] out = new float[nP][];
+        float[][] patchVectors = new float[nP][];
         for (int i = 0; i < nP; i++)
-            out[i] = project(seq[patchStart + i]);
+            patchVectors[i] = seq[patchStart + i];
+        boolean applyMm2 = (projWeight2 != null) && (finalOutDim != mm0OutDim);
+        float[][] out = applyProjectorBatch(backend, patchVectors,
+                projWeight, projBias,
+                applyMm2 ? projWeight2 : null,
+                applyMm2 ? projBias2   : null,
+                cfg.hiddenSize(), mm0OutDim, finalOutDim);
 
         logPatchEmbeddingStats(out);
 
@@ -549,8 +564,10 @@ public final class VisionEncoder {
      * Map each image patch to a hiddenSize vector via a learned linear transform.
      *
      * The pixel tensor is in CHW (channel-first) order. Each patch is extracted
-     * column-by-column across the three channels, then multiplied by
-     * {@code patchEmbdWeight}.
+     * column-by-column across the three channels, gathered into a single
+     * {@code [nP][patchElems]} batch, then multiplied by {@code patchEmbdWeight}
+     * in one {@link MatVec#sgemm} call — see {@link #encode} for why every
+     * linear layer in this class is batched the same way.
      */
     private float[][] patchEmbed(float[] pixelTensor, int H, int nP) {
         int pSz = cfg.patchSize();
@@ -558,11 +575,12 @@ public final class VisionEncoder {
         int patchElems = 3 * pSz * pSz;
         int gridW = imgW / pSz;
 
-        float[][] out = new float[nP][H];
-        float[] patch = new float[patchElems];
+        float[][] patches = new float[nP][patchElems];
 
         for (int py = 0; py < gridW; py++) {
             for (int px = 0; px < gridW; px++) {
+                int patchIdx = py * gridW + px;
+                float[] patch = patches[patchIdx];
                 // Extract patch pixels in CHW order
                 for (int c = 0; c < 3; c++) {
                     int planeBase = c * imgW * imgW;
@@ -573,12 +591,13 @@ public final class VisionEncoder {
                         }
                     }
                 }
-                int patchIdx = py * gridW + px;
-                float[] emb = backend.sgemv(patchEmbdWeight, patch, H, patchElems);
-                for (int d = 0; d < H; d++)
-                    out[patchIdx][d] = emb[d] + patchEmbdBias[d];
             }
         }
+
+        float[][] out = backend.sgemm(patchEmbdWeight, patches, H, patchElems);
+        for (float[] row : out)
+            for (int d = 0; d < H; d++)
+                row[d] += patchEmbdBias[d];
         return out;
     }
 
@@ -603,9 +622,7 @@ public final class VisionEncoder {
         for (int i = 0; i < N; i++)
             xNorm2[i] = layerNorm(x2[i], ln2Weight[li], ln2Bias[li], cfg.layerNormEps());
 
-        float[][] mlpOut = new float[N][];
-        for (int i = 0; i < N; i++)
-            mlpOut[i] = mlp(xNorm2[i], li);
+        float[][] mlpOut = mlpBatch(xNorm2, li, N);
 
         // Residual
         float[][] x3 = new float[N][H];
@@ -622,18 +639,17 @@ public final class VisionEncoder {
         int nH  = cfg.numHeads();
         int dH  = cfg.headDim();
 
-        // Project Q, K, V for all tokens
-        float[][] Q = new float[N][H];
-        float[][] K = new float[N][H];
-        float[][] V = new float[N][H];
+        // Project Q, K, V for every token in one batched GEMM per weight
+        // matrix instead of N separate sgemv calls each re-streaming the
+        // same weight matrix from memory — see encode() for rationale.
+        float[][] Q = backend.sgemm(wq[li], x, H, H);
+        float[][] K = backend.sgemm(wk[li], x, H, H);
+        float[][] V = backend.sgemm(wv[li], x, H, H);
         for (int i = 0; i < N; i++) {
-            float[] q = backend.sgemv(wq[li], x[i], H, H);
-            float[] k = backend.sgemv(wk[li], x[i], H, H);
-            float[] v = backend.sgemv(wv[li], x[i], H, H);
             for (int d = 0; d < H; d++) {
-                Q[i][d] = q[d] + bq[li][d];
-                K[i][d] = k[d] + bk[li][d];
-                V[i][d] = v[d] + bv[li][d];
+                Q[i][d] += bq[li][d];
+                K[i][d] += bk[li][d];
+                V[i][d] += bv[li][d];
             }
         }
 
@@ -663,27 +679,32 @@ public final class VisionEncoder {
             }
         }
 
-        // Output projection
-        float[][] out = new float[N][H];
-        for (int i = 0; i < N; i++) {
-            float[] proj = backend.sgemv(wOut[li], attnOut[i], H, H);
+        // Output projection — single batched GEMM instead of N sgemv calls.
+        float[][] out = backend.sgemm(wOut[li], attnOut, H, H);
+        for (int i = 0; i < N; i++)
             for (int d = 0; d < H; d++)
-                out[i][d] = proj[d] + bOut[li][d];
-        }
+                out[i][d] += bOut[li][d];
         return out;
     }
 
     // ── MLP (activation per clip.use_gelu — see VisionConfig.useGelu) ──────
 
-    private float[] mlp(float[] x, int li) {
+    /**
+     * Batched MLP over every token in the sequence: one {@link MatVec#sgemm}
+     * call for the up-projection, one for the down-projection, instead of
+     * {@code N} sequential {@link MatVec#sgemv} calls per weight matrix.
+     */
+    private float[][] mlpBatch(float[][] x, int li, int N) {
         int I = cfg.intermediateSize();
         int H = cfg.hiddenSize();
-        float[] hidden = backend.sgemv(ffnUp[li], x, I, H);
-        for (int i = 0; i < I; i++)
-            hidden[i] = activation(hidden[i] + bffnUp[li][i]);
-        float[] out = backend.sgemv(ffnDown[li], hidden, H, I);
-        for (int d = 0; d < H; d++)
-            out[d] += bffnDown[li][d];
+        float[][] hidden = backend.sgemm(ffnUp[li], x, I, H);
+        for (float[] row : hidden)
+            for (int i = 0; i < I; i++)
+                row[i] = activation(row[i] + bffnUp[li][i]);
+        float[][] out = backend.sgemm(ffnDown[li], hidden, H, I);
+        for (float[] row : out)
+            for (int d = 0; d < H; d++)
+                row[d] += bffnDown[li][d];
         return out;
     }
 
@@ -713,19 +734,6 @@ public final class VisionEncoder {
     }
 
     // ── Vision projector: mm.0 -> [GELU -> mm.2] ───────────────────────────
-
-    private float[] project(float[] x) {
-        // Apply mm.2 only when it is structurally necessary — i.e. when mm.0's
-        // output dim differs from the final output dim (moondream2: 1152→8192 then
-        // 8192→2048). When mm.0 and mm.2 share the same width (LLaVA-1.5 square
-        // pattern), NOT applying mm.2 is correct per the 2026-07-12 regression.
-        boolean applyMm2 = (projWeight2 != null) && (finalOutDim != mm0OutDim);
-        return applyProjector(backend, x,
-                projWeight,  projBias,
-                applyMm2 ? projWeight2 : null,
-                applyMm2 ? projBias2   : null,
-                cfg.hiddenSize(), mm0OutDim, finalOutDim);
-    }
 
     /**
      * Builds the token sequence passed into the transformer encoder.
@@ -803,6 +811,49 @@ public final class VisionEncoder {
         if (b2 != null)
             for (int i = 0; i < finalOutDim; i++)
                 out2[i] += b2[i];
+        return out2;
+    }
+
+    /**
+     * Batched sibling of {@link #applyProjector}: identical math, applied to
+     * every row of {@code X} at once via {@link MatVec#sgemm} instead of one
+     * {@link MatVec#sgemv} call per patch.
+     *
+     * <p>On {@link cab.ml.juno.node.CpuMatVec}, {@code sgemm} loads each
+     * weight row once and dot-products it against every patch before moving
+     * on (see {@code CpuMatVec.sgemm} javadoc) — the same weight-stationary
+     * benefit {@link #encode} relies on for the patch embedding and every
+     * transformer sub-layer. On backends without a batched override, {@link
+     * MatVec#sgemm} falls back to {@code X.length} sequential {@code sgemv}
+     * calls, so this is always numerically identical to calling {@link
+     * #applyProjector} once per row of {@code X} — never a behavior change,
+     * only a dispatch change.
+     *
+     * @param X input vectors, shape {@code [batch][hiddenSize]}
+     * @return  output vectors, shape {@code [batch][finalOutDim]}
+     */
+    static float[][] applyProjectorBatch(MatVec backend, float[][] X, float[] w1, float[] b1, float[] w2, float[] b2,
+            int hiddenSize, int mm0OutDim, int finalOutDim) {
+        float[][] out = backend.sgemm(w1, X, mm0OutDim, hiddenSize);
+        if (b1 != null) {
+            for (float[] row : out)
+                for (int i = 0; i < mm0OutDim; i++)
+                    row[i] += b1[i];
+        }
+
+        if (w2 == null)
+            return out;
+
+        for (float[] row : out)
+            for (int i = 0; i < mm0OutDim; i++)
+                row[i] = gelu(row[i]);
+
+        float[][] out2 = backend.sgemm(w2, out, finalOutDim, mm0OutDim);
+        if (b2 != null) {
+            for (float[] row : out2)
+                for (int i = 0; i < finalOutDim; i++)
+                    row[i] += b2[i];
+        }
         return out2;
     }
 

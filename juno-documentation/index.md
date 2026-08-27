@@ -10,7 +10,7 @@ This is an official documentation of the [Juno](https://github.com/ml-cab/juno) 
 as a single, cross-linked reference organized around what a reader is trying to do: get
 started, understand a concept, complete a task, or look something up.
 
-11 parts, 54 chapters:
+12 parts, 61 chapters:
 
 - **Part 1 -- Getting Started.** What Juno requires, two ways to get a first model running, and the full model support matrix.
 - **Part 2 -- Architecture.** The distributed architecture end to end: how a request moves through the coordinator and nodes, how a GGUF file picks its handler, the GPU backends, the reasoning behind the major engineering choices, and how the modules fit together.
@@ -23,6 +23,9 @@ started, understand a concept, complete a task, or look something up.
 - **Part 9 -- Legal and Compliance.** Licensing and patents, third-party model weights, LoRA/merge licensing, the CLA, trademark policy, export control, and the EU AI Act compliance summary.
 - **Part 10 -- Community and Project.** How to contribute, how the project is governed, the security policy, funding, and commercial services.
 - **Part 11 -- Releases.** The curated release notes and the detailed engineering changelog.
+- **Part 12 -- Vision (Image-to-Text).** Multimodal image-plus-text inference: supported model
+  families, loading a two-file or embedded-GGUF vision model, the vision REST API, the request
+  pipeline, the debugging history for both supported encoder families, and performance.
 
 Where a diagram helps more than a paragraph, it is drawn with Mermaid so it renders natively
 in any viewer that supports it, rather than as fixed-width ASCII art.
@@ -117,3 +120,13 @@ in any viewer that supports it, rather than as fixed-width ASCII art.
 
 - **11.1.** [Release Notes](part11/01-release-notes.md)
 - **11.2.** [Changelog](part11/02-changelog.md)
+
+**Part 12. Vision (Image-to-Text)**
+
+- **12.1.** [Overview](part12/01-overview.md)
+- **12.2.** [Model Requirements and Loading](part12/02-model-requirements-and-loading.md)
+- **12.3.** [REST API](part12/03-rest-api.md)
+- **12.4.** [Architecture](part12/04-architecture.md)
+- **12.5.** [Known Issues and Fixes](part12/05-known-issues-and-fixes.md)
+- **12.6.** [Performance](part12/06-performance.md)
+- **12.7.** [Testing](part12/07-testing.md)

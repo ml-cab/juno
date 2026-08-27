@@ -292,9 +292,215 @@ class PhiQuantizedMatVecTest {
 		assertThat(actual[0]).isCloseTo(expected[0], within(1e-3f));
 	}
 
-	// ── Helpers ────────────────────────────────────────────────────────────────
+	// ── Test 6: sgemmQ5KWeightStationary — batched matmul must match per-row matVec ──
+	//
+	// LlamaTransformerHandler.forwardBatch (and Phi2TransformerHandler.forwardBatch,
+	// added to fix vision-chat prefill latency) dispatch Q5_K weight matrices to
+	// this batched kernel during prefill instead of one matVec() call per prompt
+	// token. It re-derives the same per-block dequantized values as matVecQ5Kraw
+	// but reuses them across every row of X before moving to the next block — see
+	// its javadoc. These tests are the correctness net for that reuse: a bug in
+	// the block/bit indexing here would silently corrupt every Q5_K prefill.
 
-	/** Fill one Q4_K block (144 bytes) starting at offset in dest. */
+	@Test
+	@DisplayName("sgemmQ5KWeightStationary: single block, single input row matches matVec exactly")
+	void sgemmQ5KWeightStationary_singleBlockSingleRow_matchesMatVec(@TempDir Path tmp) throws IOException {
+		// Reuse the exact same synthetic block as the Q5_K matVec test above.
+		byte[] block = new byte[176];
+		ByteBuffer bb = ByteBuffer.wrap(block).order(ByteOrder.LITTLE_ENDIAN);
+		bb.putShort((short) 0x3C00); // d = 1.0 f16
+		bb.putShort((short) 0x0000); // dmin = 0.0 f16
+		byte[] sc = new byte[12];
+		sc[0] = 1;
+		bb.put(sc);
+		byte[] qh = new byte[32];
+		bb.put(qh);
+		byte[] qs = new byte[128];
+		java.util.Arrays.fill(qs, (byte) 0x11);
+		bb.put(qs);
+
+		Path gguf = buildMinimalGguf(tmp, "wq5k_batch1", 13, 256, block);
+		float[] x = new float[256];
+		java.util.Arrays.fill(x, 1.0f);
+
+		float[] expected;
+		float[] actual = new float[1];
+		try (GgufReader r = GgufReader.open(gguf)) {
+			GgufReader.QuantizedTensor qt = r.tensorRaw("wq5k_batch1");
+			expected = LlamaTransformerHandler.matVec(qt, x, 0, 1, 256);
+			LlamaTransformerHandler.sgemmQ5KWeightStationary(qt.data(), new float[][] { x },
+					new float[][] { actual }, 0, 1, 256);
+		}
+
+		assertThat(actual).containsExactly(expected);
+	}
+
+	/**
+	 * Element-wise float[] comparison within a relative-plus-absolute tolerance.
+	 *
+	 * <p>The batched kernels restructure the inner accumulation loop (dequantise
+	 * a whole block into a scratch array, then run one tight 256/32-wide
+	 * multiply-accumulate loop) compared to the per-vector reference's chunked
+	 * 32-wide loops. Both compute the same mathematical sum, but the JIT can
+	 * auto-vectorize the two loop shapes differently, changing the runtime
+	 * summation order — floating-point addition is not associative, so a
+	 * different order can legitimately differ by a handful of ULPs. This is not
+	 * a correctness bug (see the single-row Q5_K test above, which matches
+	 * exactly for a single, non-vectorization-sensitive block).
+	 *
+	 * <p>That drift scales with the magnitude of the sum, not a fixed constant —
+	 * a 512-term dot product accumulating into the thousands drifts by more
+	 * absolute ULPs than one accumulating into the tens. A fixed
+	 * {@code within(1e-3f)} (the convention used elsewhere in this file for
+	 * single-block, single-scale checks) is too tight here; this helper instead
+	 * scales the tolerance with {@code |expected|}, keeping it tight in relative
+	 * terms (~2 ULPs' worth of margin) regardless of magnitude, with a small
+	 * absolute floor for values near zero.
+	 */
+	private static void assertCloseArray(float[] actual, float[] expected, float relativeTolerance,
+			float absoluteFloor) {
+		assertThat(actual).hasSameSizeAs(expected);
+		for (int i = 0; i < expected.length; i++) {
+			float tolerance = Math.max(absoluteFloor, Math.abs(expected[i]) * relativeTolerance);
+			assertThat(actual[i]).as("index %d", i).isCloseTo(expected[i], within(tolerance));
+		}
+	}
+
+	@Test
+	@DisplayName("sgemmQ5KWeightStationary: multi-row, multi-block, multi-input batch matches per-row matVec "
+			+ "within tolerance")
+	void sgemmQ5KWeightStationary_multiRowMultiBlock_matchesPerRowMatVec(@TempDir Path tmp) throws IOException {
+		int rows = 3;
+		int cols = 512; // 2 blocks per row
+		int blockBytes = 176;
+		int blocksPerRow = cols / 256;
+
+		java.util.Random rnd = new java.util.Random(42);
+		byte[] data = new byte[rows * blocksPerRow * blockBytes];
+		rnd.nextBytes(data);
+		// Random bytes make d/dmin (the first 4 bytes of every block) arbitrary
+		// f16 bit patterns, including NaN/Inf. Pin them to small, finite,
+		// positive values per block so the dequantized weights stay finite —
+		// the qs/qh/sc bytes stay random to exercise the bit-unpacking.
+		for (int i = 0; i < rows * blocksPerRow; i++) {
+			int bo = i * blockBytes;
+			ByteBuffer.wrap(data, bo, 4).order(ByteOrder.LITTLE_ENDIAN)
+					.putShort((short) 0x3400)  // d ≈ 0.25 f16
+					.putShort((short) 0x2C00); // dmin ≈ 0.03125 f16
+		}
+
+		Path gguf = buildMinimalGguf(tmp, "wq5k_multi", 13, (long) rows * cols, data);
+
+		int B = 4;
+		float[][] X = new float[B][cols];
+		for (float[] row : X)
+			for (int i = 0; i < cols; i++)
+				row[i] = (rnd.nextFloat() - 0.5f) * 2f;
+
+		float[][] expected = new float[B][];
+		float[][] actual = new float[B][rows];
+		try (GgufReader r = GgufReader.open(gguf)) {
+			GgufReader.QuantizedTensor qt = r.tensorRaw("wq5k_multi");
+			for (int b = 0; b < B; b++)
+				expected[b] = LlamaTransformerHandler.matVec(qt, X[b], 0, rows, cols);
+			LlamaTransformerHandler.sgemmQ5KWeightStationary(qt.data(), X, actual, 0, rows, cols);
+		}
+
+		for (int b = 0; b < B; b++)
+			assertCloseArray(actual[b], expected[b], 1e-4f, 1e-3f);
+	}
+
+	@Test
+	@DisplayName("sgemmQ5KWeightStationary: empty batch leaves output untouched")
+	void sgemmQ5KWeightStationary_emptyBatch_doesNothing() {
+		float[][] X = new float[0][256];
+		float[][] Y = new float[0][1];
+		// Must not throw for an empty batch.
+		LlamaTransformerHandler.sgemmQ5KWeightStationary(new byte[176], X, Y, 0, 1, 256);
+		assertThat(Y).isEmpty();
+	}
+
+	// ── Test 7/8: sgemmQ4KWeightStationary / sgemmQ8_0WeightStationary — same
+	// batched-vs-per-row regression net as Q5_K above. Both kernels predate this
+	// change but had no direct test until Phi2TransformerHandler.forwardBatch
+	// started calling them too (see sgemmQuantBatch's dispatch switch).
+
+	@Test
+	@DisplayName("sgemmQ4KWeightStationary: multi-row, multi-block, multi-input batch matches per-row matVec "
+			+ "within tolerance")
+	void sgemmQ4KWeightStationary_multiRowMultiBlock_matchesPerRowMatVec(@TempDir Path tmp) throws IOException {
+		int rows = 3;
+		int cols = 512; // 2 blocks per row (Q4_K block = 256 elements)
+		int blockBytes = 144;
+		int blocksPerRow = cols / 256;
+
+		java.util.Random rnd = new java.util.Random(7);
+		byte[] data = new byte[rows * blocksPerRow * blockBytes];
+		for (int i = 0; i < rows * blocksPerRow; i++)
+			fillQ4KBlock(data, i * blockBytes, (byte) (1 + rnd.nextInt(4)), (byte) rnd.nextInt(256));
+
+		Path gguf = buildMinimalGguf(tmp, "wq4k_multi", 12, (long) rows * cols, data);
+
+		int B = 4;
+		float[][] X = new float[B][cols];
+		for (float[] row : X)
+			for (int i = 0; i < cols; i++)
+				row[i] = (rnd.nextFloat() - 0.5f) * 2f;
+
+		float[][] expected = new float[B][];
+		float[][] actual = new float[B][rows];
+		try (GgufReader r = GgufReader.open(gguf)) {
+			GgufReader.QuantizedTensor qt = r.tensorRaw("wq4k_multi");
+			for (int b = 0; b < B; b++)
+				expected[b] = LlamaTransformerHandler.matVec(qt, X[b], 0, rows, cols);
+			LlamaTransformerHandler.sgemmQ4KWeightStationary(qt.data(), X, actual, 0, rows, cols);
+		}
+
+		for (int b = 0; b < B; b++)
+			assertCloseArray(actual[b], expected[b], 1e-4f, 1e-3f);
+	}
+
+	@Test
+	@DisplayName("sgemmQ8_0WeightStationary: multi-row, multi-block, multi-input batch matches per-row matVec "
+			+ "within tolerance")
+	void sgemmQ8_0WeightStationary_multiRowMultiBlock_matchesPerRowMatVec(@TempDir Path tmp) throws IOException {
+		int rows = 3;
+		int cols = 64; // 2 blocks per row (Q8_0 block = 32 elements)
+		int blockBytes = 34; // [d:f16][32 signed int8]
+		int blocksPerRow = cols / 32;
+
+		java.util.Random rnd = new java.util.Random(99);
+		byte[] data = new byte[rows * blocksPerRow * blockBytes];
+		for (int i = 0; i < rows * blocksPerRow; i++) {
+			int bo = i * blockBytes;
+			// d ≈ 0.125 f16 — small, finite, positive scale
+			ByteBuffer.wrap(data, bo, 2).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 0x3000);
+			for (int j = 0; j < 32; j++)
+				data[bo + 2 + j] = (byte) (rnd.nextInt(256) - 128);
+		}
+
+		Path gguf = buildMinimalGguf(tmp, "wq8_0_multi", 8, (long) rows * cols, data);
+
+		int B = 4;
+		float[][] X = new float[B][cols];
+		for (float[] row : X)
+			for (int i = 0; i < cols; i++)
+				row[i] = (rnd.nextFloat() - 0.5f) * 2f;
+
+		float[][] expected = new float[B][];
+		float[][] actual = new float[B][rows];
+		try (GgufReader r = GgufReader.open(gguf)) {
+			GgufReader.QuantizedTensor qt = r.tensorRaw("wq8_0_multi");
+			for (int b = 0; b < B; b++)
+				expected[b] = LlamaTransformerHandler.matVec(qt, X[b], 0, rows, cols);
+			LlamaTransformerHandler.sgemmQ8_0WeightStationary(qt.data(), X, actual, 0, rows, cols);
+		}
+
+		for (int b = 0; b < B; b++)
+			assertCloseArray(actual[b], expected[b], 1e-4f, 1e-3f);
+	}
+
+	// ── Helpers ────────────────────────────────────────────────────────────────
 	private static void fillQ4KBlock(byte[] dest, int offset, byte scale, byte qsByte) {
 		ByteBuffer bb = ByteBuffer.wrap(dest, offset, 144).order(ByteOrder.LITTLE_ENDIAN);
 		// d = scale as F32 rounded to F16 (scale=1 → 0x3C00, scale=2 → 0x4000, scale=3

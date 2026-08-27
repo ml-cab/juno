@@ -10,6 +10,7 @@
 | `registry` | Shard planning, model registry |
 | `coordinator` | Scheduler, generation loop, REST |
 | `node` | Transformer handlers, GGUF, GPU matmul (CUDA + ROCm via Panama FFI) |
+| `vision` | CLIP/SigLIP encoder, image patch embedding, vision-aware forward pass decorator, see [Part 12](#ch-12-1) |
 | `lora` | Adapter tensors, optimizer |
 | `tokenizer`, `sampler`, `kvcache`, `health`, `metrics` | Shared infrastructure |
 | `juno-player` | CLI REPL and cluster harness |
@@ -20,6 +21,10 @@
 ```
 juno-master (fat jar)
     +-- juno-player
+    |     +-- vision
+    |           +-- node
+    |           +-- registry
+    |           +-- tokenizer
     +-- coordinator
     +-- node
     |     +-- lora

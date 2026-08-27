@@ -6,6 +6,8 @@
 | Flag | Default | Commands | Description |
 |------|---------|----------|-------------|
 | `--model-path PATH` | (none) | all | Path to GGUF file (required) |
+| `--mmproj-path PATH` | (none) | local | Path to a separate mmproj GGUF holding the CLIP/SigLIP vision encoder. Required for `/v1/vision/chat` to be registered on real two-file LLaVA/Qwen-VL/SmolVLM releases; not needed for embedded-GGUF llamafiles such as moondream2. Environment override: `MMPROJ_PATH`. See [Chapter 12.2](#ch-12-2). |
+| `--prefill single\|batched` | `batched` | cluster, local, lora | Prefill strategy: `batched` runs a windowed GEMM prefill; `single` is the original sequential per-token loop, kept as an escape hatch. See [Chapter 12.6](#ch-12-6). |
 | `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | cluster, local | Activation wire format |
 | `--byteOrder BE\|LE` | `BE` | cluster | Activation byte order. Must match across all JVMs; propagated automatically by `ClusterHarness` and `juno-deploy.sh`. |
 | `--max-tokens N` | `200` | cluster, local, lora | Maximum tokens per response. Same default as the REST API and `SamplingParams.defaults()`. |

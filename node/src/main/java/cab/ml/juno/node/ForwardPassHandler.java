@@ -151,4 +151,24 @@ public interface ForwardPassHandler {
 		}
 		return new BatchForwardResult(request.requestId(), flat, null, W, totalNanos);
 	}
+
+	/**
+	 * Release any per-request KV cache state this handler is holding for
+	 * {@code requestId} — e.g. the in-process working arrays a transformer
+	 * handler grows during prefill/decode (distinct from
+	 * {@link cab.ml.juno.kvcache.KVCacheManager}'s cross-node/session-restore
+	 * tier, which the coordinator evicts separately).
+	 *
+	 * <p><b>Correctness-preserving default</b>: no-op. A handler with no
+	 * per-request state (e.g. a stub used in tests) does not need to override
+	 * this. Stateful handlers ({@link LlamaTransformerHandler},
+	 * {@link Phi2TransformerHandler}, {@link Phi3TransformerHandler},
+	 * {@link Qwen3TransformerHandler}, {@link Qwen3MoeTransformerHandler}) all
+	 * override it to remove {@code requestId}'s entry from their working KV
+	 * maps — without this, a stateless (no-session) request's KV arrays are
+	 * never freed for the lifetime of the process, since nothing else holds a
+	 * reference to them once {@link InferencePipeline#forward} returns.
+	 */
+	default void evict(String requestId) {
+	}
 }

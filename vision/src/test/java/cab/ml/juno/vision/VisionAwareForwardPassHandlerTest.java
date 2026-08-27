@@ -226,6 +226,31 @@ class VisionAwareForwardPassHandlerTest {
         }
     }
 
+    // ── evict(): must reach the wrapped inner handler ───────────────────────────
+    //
+    // VisionAwareForwardPassHandler wraps textHandler and, before this fix,
+    // did not override evict() — so LocalInferencePipeline.evict() called the
+    // ForwardPassHandler default no-op on the wrapper, and the real handler's
+    // KV cache underneath it was never released. See ForwardPassHandler.evict
+    // and LocalInferencePipeline.evict javadocs.
+
+    @Test
+    @DisplayName("evict: delegates to the wrapped textHandler")
+    void evict_delegates_to_inner_handler() {
+        handler.evict("req-1");
+
+        assertThat(inner.wasEvicted("req-1")).isTrue();
+    }
+
+    @Test
+    @DisplayName("evict: only affects the given requestId")
+    void evict_only_affects_the_given_requestId() {
+        handler.evict("req-1");
+
+        assertThat(inner.wasEvicted("req-1")).isTrue();
+        assertThat(inner.wasEvicted("req-2")).isFalse();
+    }
+
     // ── Helper ────────────────────────────────────────────────────────────────
 
     private static float[][] buildPatches(int count, int dim) {

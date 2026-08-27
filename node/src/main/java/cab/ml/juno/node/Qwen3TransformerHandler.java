@@ -266,6 +266,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		this.kvAdapter = adapter;
 	}
 
+	@Override
 	public void evict(String requestId) {
 		kvCacheK.remove(requestId);
 		kvCacheV.remove(requestId);

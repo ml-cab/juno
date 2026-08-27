@@ -34,7 +34,7 @@ Features:
   (real GGUF releases never merge the CLIP encoder into the base LLM file)
 - `"model"` in the request body can be omitted — `--local` mode only ever
   loads one model, so it resolves unambiguously without it
-- See [assets/Vision-I2T.md](assets/Vision-I2T.md)
+- See [juno-documentation, Part 12: Vision (Image-to-Text)](juno-documentation/part12/01-overview.md)
 
 ## 2. How to use
 

@@ -495,6 +495,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 *
 	 * @param requestId the request or session identifier
 	 */
+	@Override
 	public void evict(String requestId) {
 		kvCacheK.remove(requestId);
 		kvCacheV.remove(requestId);
@@ -951,6 +952,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 		switch (quant.type()) {
 		case 12 -> sgemmQ4KWeightStationary(quant.data(), X, Y, 0, rows, cols);
+		case 13 -> sgemmQ5KWeightStationary(quant.data(), X, Y, 0, rows, cols);
 		case 8  -> sgemmQ8_0WeightStationary(quant.data(), X, Y, 0, rows, cols);
 		default -> { for (int b = 0; b < X.length; b++) matVecInto(quant, X[b], Y[b], rows, cols); }
 		}
@@ -966,7 +968,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * <p>Memory bandwidth: B × weight_bytes (old) → weight_bytes + B × input_bytes
 	 * (new). For B=416, H=2048, that is a ~100× reduction in DRAM weight reads.
 	 */
-	private static void sgemmQ4KWeightStationary(byte[] raw, float[][] X, float[][] Y,
+	static void sgemmQ4KWeightStationary(byte[] raw, float[][] X, float[][] Y,
 			int rowStart, int rowEnd, int cols) {
 		final int BLOCK_SIZE  = 256;
 		final int BLOCK_BYTES = 144;
@@ -1024,7 +1026,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * quantised block once, scales it to floats, dot-products against all B
 	 * inputs, then advances. Same principle as {@link #sgemmQ4KWeightStationary}.
 	 */
-	private static void sgemmQ8_0WeightStationary(byte[] raw, float[][] X, float[][] Y,
+	static void sgemmQ8_0WeightStationary(byte[] raw, float[][] X, float[][] Y,
 			int rowStart, int rowEnd, int cols) {
 		final int BLOCK_SIZE  = 32;
 		final int BLOCK_BYTES = 34;
@@ -1056,10 +1058,79 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * Dispatch a batched weight-matrix multiply for a layer: FP16 GPU first,
-	 * then FP32 GPU, then CPU quantized. Returns allocated output — use
-	 * {@link #sgemmLayerInto} in hot paths to avoid per-layer allocation.
+	 * True weight-stationary batched Q5_K matmul: reads each 256-element
+	 * quantised block once, dequantises it into a 1 KB float[] that fits in L1
+	 * cache, then accumulates dot products against all B input vectors before
+	 * advancing to the next block. Same principle as
+	 * {@link #sgemmQ4KWeightStationary}, extended for Q5_K's extra 32-byte
+	 * high-bit plane ({@code qh}) that widens each 4-bit low nibble
+	 * ({@code qs}) to a 5-bit value — mirrors the per-vector reference
+	 * {@link #matVecQ5Kraw} block-for-block, only replacing "dot-product
+	 * against one x" with "dequantise once, dot-product against every x in
+	 * the batch".
 	 */
+	static void sgemmQ5KWeightStationary(byte[] raw, float[][] X, float[][] Y,
+			int rowStart, int rowEnd, int cols) {
+		final int BLOCK_SIZE  = 256;
+		final int BLOCK_BYTES = 176;
+		final int blocksPerRow = cols / BLOCK_SIZE;
+		final int bytesPerRow  = blocksPerRow * BLOCK_BYTES;
+		final int B = X.length;
+		final int rows = rowEnd - rowStart;
+
+		for (int b = 0; b < B; b++) java.util.Arrays.fill(Y[b], 0, rows, 0f);
+
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			int rowByteOffset = (rowStart + r) * bytesPerRow;
+			// Per-row dequant scratch: reused across all blocks in this row.
+			// 256 floats = 1 KB — stays in L1 cache while multiplied against B inputs.
+			float[] dq = new float[BLOCK_SIZE];
+
+			for (int blk = 0; blk < blocksPerRow; blk++) {
+				int bo     = rowByteOffset + blk * BLOCK_BYTES;
+				int scBase = bo + 4;  // 12 scale bytes [bo+4, bo+15]
+				int qhBase = bo + 16; // 32 hi-bit bytes [bo+16, bo+47]
+				int qsBase = bo + 48; // 128 nibble bytes [bo+48, bo+175]
+				float d    = GgufReader.f16ToF32(readLE16(raw, bo));
+				float dmin = GgufReader.f16ToF32(readLE16(raw, bo + 2));
+
+				// Dequantise 256 5-bit values into dq[] — done once per block
+				int qi = 0;
+				for (int g = 0; g < 4; g++) {
+					int s0 = g * 2;
+					int s1 = s0 + 1;
+					float scale0 = d * q4kScaleRaw(raw, scBase, s0);
+					float min0   = dmin * q4kMinRaw(raw, scBase, s0);
+					float scale1 = d * q4kScaleRaw(raw, scBase, s1);
+					float min1   = dmin * q4kMinRaw(raw, scBase, s1);
+					int hiBit0 = g * 2;
+					int hiBit1 = g * 2 + 1;
+					int base = g * 64;
+
+					for (int l = 0; l < 32; l++) {
+						int lo = raw[qsBase + qi + l] & 0x0F;
+						int hi = (raw[qhBase + l] >>> hiBit0) & 1;
+						dq[base + l] = scale0 * (lo | (hi << 4)) - min0;
+					}
+					for (int l = 0; l < 32; l++) {
+						int lo = (raw[qsBase + qi + l] >>> 4) & 0x0F;
+						int hi = (raw[qhBase + l] >>> hiBit1) & 1;
+						dq[base + 32 + l] = scale1 * (lo | (hi << 4)) - min1;
+					}
+					qi += 32;
+				}
+
+				// Multiply dq[] against all B input vectors while it is in L1 cache
+				int xBase = blk * BLOCK_SIZE;
+				for (int p = 0; p < B; p++) {
+					float acc = 0f;
+					float[] xp = X[p];
+					for (int i = 0; i < BLOCK_SIZE; i++) acc += dq[i] * xp[xBase + i];
+					Y[p][r] += acc;
+				}
+			}
+		});
+	}
 	private float[][] sgemmLayer(GgufReader.QuantizedTensor quant,
 			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32,
 			int li, float[][] X, int rows, int cols) {
