@@ -106,6 +106,50 @@ public final class LocalInferencePipeline implements InferencePipeline {
 	}
 
 	/**
+	 * Cascades to every stage's handler — see {@link InferencePipeline#evict}.
+	 * Each stage's {@link ForwardPassHandler#evict} is a no-op unless that
+	 * handler overrides it, so this is safe to call even when some stages
+	 * hold no per-request state (e.g. a stub handler in tests).
+	 */
+	@Override
+	public void evict(String requestId) {
+		for (NodeStage stage : stages)
+			stage.handler().evict(requestId);
+	}
+
+	/**
+	 * Batched prefill: process all {@code newTokens} in one pass through the
+	 * handler chain, discarding logits. Replaces the per-position loop in
+	 * {@link cab.ml.juno.coordinator.GenerationLoop} for
+	 * {@link cab.ml.juno.coordinator.PrefillMode#BATCHED}.
+	 *
+	 * <p>Each handler in the pipeline receives a {@link BatchForwardRequest}: the
+	 * first node gets token IDs; subsequent nodes get the previous node's flattened
+	 * activations. Only the last-position logit is returned by the final node, and
+	 * it is discarded here (prefill does not produce a sampled token).
+	 */
+	@Override
+	public void prefillBatch(String requestId, int[] newTokens, int startPosition) {
+		if (newTokens.length == 0) return;
+
+		BatchForwardRequest req = BatchForwardRequest.withTokens(requestId, newTokens, startPosition);
+		int W = newTokens.length;
+
+		for (int i = 0; i < stages.size(); i++) {
+			NodeStage stage = stages.get(i);
+			BatchForwardResult result = stage.handler().forwardBatch(req, stage.context());
+
+			if (result.isFinalNode()) {
+				// Last node: logits discarded — prefill complete
+				return;
+			}
+
+			// Pass activations to next node as a flattened batch
+			req = BatchForwardRequest.withActivations(requestId, result.activations(), W, startPosition);
+		}
+	}
+
+	/**
 	 * Causal prefill over {@code promptTokens}: for each position, runs all pipeline
 	 * stages. Returns the RMS-normalized hidden vector at the final token (before the
 	 * LM head on the last shard).

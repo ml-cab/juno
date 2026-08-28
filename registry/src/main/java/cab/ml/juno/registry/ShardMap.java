@@ -77,4 +77,47 @@ public record ShardMap(String modelId, int totalLayers, List<ShardAssignment> as
 			throw new IllegalStateException("ShardMap covers " + expected + " layers but model has " + totalLayers);
 		}
 	}
+
+	/**
+	 * Build an evenly-split ShardMap across {@code nodeCount} local pipeline
+	 * stages — each node gets {@code totalLayers / nodeCount} layers, with any
+	 * remainder distributed one-per-node starting from the first.
+	 *
+	 * <p>For in-process pipeline-parallelism simulation (e.g. {@code ./juno
+	 * local --nodes N}), where every "node" is really just a stage running in
+	 * the same JVM with no real VRAM constraint between stages. Use
+	 * {@link ShardPlanner#plan} instead for real multi-machine clusters, where
+	 * nodes genuinely differ in available VRAM and the greedy, VRAM-aware
+	 * algorithm is the correct one — this method intentionally has no VRAM
+	 * concept at all, rather than faking one, since a fake per-node VRAM
+	 * figure large enough to "always fit" causes {@link ShardPlanner}'s greedy
+	 * first-node-takes-what-fits algorithm to hand nearly the whole model to
+	 * node 0 and one layer each to every other node — correct per its own
+	 * contract, but not what an even local split needs.
+	 *
+	 * @param nodeCount number of local stages to split across; capped to
+	 *                  {@code totalLayers} if larger, since a stage cannot
+	 *                  hold zero layers
+	 */
+	public static ShardMap evenSplit(String modelId, int totalLayers, int nodeCount) {
+		if (nodeCount < 1)
+			throw new IllegalArgumentException("nodeCount must be >= 1");
+
+		int effectiveNodeCount = Math.min(nodeCount, totalLayers);
+		int base = totalLayers / effectiveNodeCount;
+		int remainder = totalLayers % effectiveNodeCount;
+
+		List<ShardAssignment> assignments = new java.util.ArrayList<>();
+		int current = 0;
+		for (int i = 0; i < effectiveNodeCount; i++) {
+			int layerCount = base + (i < remainder ? 1 : 0);
+			int end = current + layerCount;
+			assignments.add(new ShardAssignment("node-" + i, "localhost", 9092 + i, current, end,
+					current == 0,           // hasEmbeddings — first node only
+					end == totalLayers));   // hasOutputProjection — last node only
+			current = end;
+		}
+
+		return new ShardMap(modelId, totalLayers, assignments, Instant.now());
+	}
 }

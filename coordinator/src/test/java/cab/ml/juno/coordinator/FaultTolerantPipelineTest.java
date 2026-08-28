@@ -311,4 +311,48 @@ class FaultTolerantPipelineTest {
 
 		assertThat(results[0][44]).isGreaterThan(0);
 	}
+
+	// ── evict(): must broadcast to every node, not just the one that served the
+	// request — a retried request may have touched more than one node before
+	// succeeding (see FaultTolerantPipeline.evict javadoc), and a failure on
+	// one node's evict() must not stop the others.
+
+	@Test
+	void evict_broadcasts_to_every_node() {
+		StubInferencePipeline p1 = new StubInferencePipeline();
+		StubInferencePipeline p2 = new StubInferencePipeline();
+		var pipeline = new FaultTolerantPipeline(List.of(node("n1", p1), node("n2", p2)), RetryPolicy.none());
+
+		pipeline.evict("req-1");
+
+		assertThat(p1.wasEvicted("req-1")).isTrue();
+		assertThat(p2.wasEvicted("req-1")).isTrue();
+	}
+
+	@Test
+	void evict_on_one_node_failing_does_not_stop_the_others() {
+		InferencePipeline evictThrows = new InferencePipeline() {
+			@Override
+			public float[] forward(String id, int[] tokens, int start) {
+				throw new RuntimeException("simulated node failure");
+			}
+
+			@Override
+			public int vocabSize() {
+				return VOCAB;
+			}
+
+			@Override
+			public void evict(String requestId) {
+				throw new RuntimeException("simulated evict failure");
+			}
+		};
+		StubInferencePipeline healthyNode = new StubInferencePipeline();
+		var pipeline = new FaultTolerantPipeline(List.of(node("n1", evictThrows), node("n2", healthyNode)),
+				RetryPolicy.none());
+
+		pipeline.evict("req-1"); // must not throw
+
+		assertThat(healthyNode.wasEvicted("req-1")).isTrue();
+	}
 }

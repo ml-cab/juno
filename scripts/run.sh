@@ -133,11 +133,18 @@ require_jar() {
 
 # ── Common JVM flags ──────────────────────────────────────────────────────────
 # These suppress Guava/Netty sun.misc.Unsafe warnings and enable preview APIs.
+# --add-modules jdk.incubator.vector: the Vector API is still incubating as of
+# JDK 25/26 (JEP 508 / JEP 529) -- required at run time for the SIMD CPU
+# quantized-matmul kernels in VectorQuantKernels. Without it those kernels
+# fall back to a scalar path automatically (correctness-preserving, just
+# slower), so this flag is not strictly required, but should be present for
+# the intended performance.
 JVM_BASE=(
   --enable-preview
   --enable-native-access=ALL-UNNAMED
   --add-opens java.base/java.lang=ALL-UNNAMED
   --add-opens java.base/java.nio=ALL-UNNAMED
+  --add-modules jdk.incubator.vector
   -XX:+UseG1GC
   -XX:+AlwaysPreTouch
 )
@@ -164,6 +171,7 @@ cmd_cluster() {
   local health="false"
   local health_port="${HEALTH_PORT:-8081}"
   local api_port="${API_PORT:-}"
+  local prefill_mode="${PREFILL_MODE:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -193,6 +201,7 @@ cmd_cluster() {
       --health)           health="true";     shift   ;;
       --health-port)      health_port="$2";  shift 2 ;;
       --api-port)         api_port="$2";     shift 2 ;;
+      --prefill)          prefill_mode="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -289,6 +298,8 @@ cmd_cluster() {
   fi
   local api_port_arg=""
   [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
+  local prefill_mode_arg=""
+  [[ -n "$prefill_mode" ]] && prefill_mode_arg="--prefill $prefill_mode"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -309,6 +320,7 @@ cmd_cluster() {
     ${jfr_arg} \
     ${lora_play_arg} \
     ${api_port_arg} \
+    ${prefill_mode_arg} \
     ${health_flag} \
     ${verbose_flag}
 }
@@ -319,6 +331,7 @@ cmd_cluster() {
 # ---------------------------------------------------------------------------
 cmd_local() {
   local model="${MODEL_PATH:-}"
+  local mmproj="${MMPROJ_PATH:-}"
   local dtype="${DTYPE:-FLOAT16}"
   local byte_order="${BYTE_ORDER:-BE}"
   local max_tokens="${MAX_TOKENS:-200}"
@@ -335,6 +348,7 @@ cmd_local() {
   local health="false"
   local health_port="${HEALTH_PORT:-8081}"
   local api_port="${API_PORT:-}"
+  local prefill_mode="${PREFILL_MODE:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -346,6 +360,7 @@ cmd_local() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --model-path)       model="$2";        shift 2 ;;
+      --mmproj-path)      mmproj="$2";       shift 2 ;;
       --dtype)            dtype="$2";        shift 2 ;;
       --byteOrder | --byteorder | --byte-order) byte_order="${2^^}"; shift 2 ;;
       --max-tokens)       max_tokens="$2";   shift 2 ;;
@@ -364,6 +379,7 @@ cmd_local() {
       --health)           health="true";     shift   ;;
       --health-port)      health_port="$2";  shift 2 ;;
       --api-port)         api_port="$2";     shift 2 ;;
+      --prefill)          prefill_mode="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -376,6 +392,13 @@ cmd_local() {
         echo "  Required:"
         echo "    --model-path PATH          Path to a GGUF model file"
         echo "                               (or set MODEL_PATH env var)"
+        echo ""
+        echo "  Vision (image-to-text) models:"
+        echo "    --mmproj-path PATH         Path to a separate mmproj GGUF holding the CLIP"
+        echo "                               vision encoder. Required for /v1/vision/chat —"
+        echo "                               real LLaVA/Qwen-VL/SmolVLM releases keep the"
+        echo "                               vision encoder in a separate file from the base LLM."
+        echo "                               (or set MMPROJ_PATH env var)"
         echo ""
         echo "  Activation dtype:"
         echo "    --dtype FLOAT32|FLOAT16|INT8  (default FLOAT16)"
@@ -417,6 +440,7 @@ cmd_local() {
 
   [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 local --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 local"
   [[ -f "$model" ]] || err "Model file not found: $model"
+  [[ -z "$mmproj" || -f "$mmproj" ]] || err "mmproj file not found: $mmproj"
 
   # Factual LoRA playback should be reproducible. Sampling at the normal 0.7
   # default can select a nearby base-model continuation even when the trained
@@ -454,6 +478,10 @@ cmd_local() {
   fi
   local api_port_arg=""
   [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
+  local prefill_mode_arg=""
+  [[ -n "$prefill_mode" ]] && prefill_mode_arg="--prefill $prefill_mode"
+  local mmproj_arg=""
+  [[ -n "$mmproj" ]] && { mmproj_arg="--mmproj-path $mmproj"; info "Vision mmproj: ${mmproj}"; }
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -474,6 +502,8 @@ cmd_local() {
     ${jfr_arg} \
     ${lora_play_arg} \
     ${api_port_arg} \
+    ${prefill_mode_arg} \
+    ${mmproj_arg} \
     ${health_flag} \
     ${verbose_flag}
 }
@@ -849,6 +879,63 @@ cmd_test() {
     "$model"
 }
 
+# ---------------------------------------------------------------------------
+# gguf-info — dump a GGUF file's full metadata and tensor layout
+#             Use this to see a model/mmproj's real architecture (projector
+#             type, tensor names/shapes, quantisation) instead of guessing
+#             from partial log lines or a Hugging Face model card.
+# ---------------------------------------------------------------------------
+cmd_gguf_info() {
+  local model=""
+  local mmproj=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --model-path)  model="$2";  shift 2 ;;
+      --mmproj-path) mmproj="$2"; shift 2 ;;
+      --help|-h)
+        echo ""
+        echo "  Usage: $0 gguf-info --model-path /path/to/model.gguf [--mmproj-path /path/to/mmproj.gguf]"
+        echo "     or: $0 gguf-info /path/to/model.gguf [/path/to/mmproj.gguf]"
+        echo ""
+        echo "  Dumps a GGUF file's full metadata (all keys, alphabetical) and full"
+        echo "  tensor list (name, shape, quantisation type, declaration order) as"
+        echo "  plain text — paste the output directly for architecture review."
+        echo ""
+        echo "  Example:"
+        echo "    $0 gguf-info --model-path /models/llava-v1.5-7b-Q4_K.gguf \\"
+        echo "                 --mmproj-path /models/llava-v1.5-7b-mmproj-Q4_0.gguf"
+        echo ""
+        exit 0 ;;
+      *)
+        if [[ -z "$model" ]]; then
+          model="$1"; shift
+        elif [[ -z "$mmproj" ]]; then
+          mmproj="$1"; shift
+        else
+          err "Unknown gguf-info argument: $1.  Run: $0 gguf-info --help"
+        fi ;;
+    esac
+  done
+
+  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 gguf-info --model-path /path/to/model.gguf [--mmproj-path /path/to/mmproj.gguf]"
+  [[ -f "$model" ]] || err "Model file not found: $model"
+  [[ -z "$mmproj" || -f "$mmproj" ]] || err "mmproj file not found: $mmproj"
+
+  shopt -s nullglob
+  local candidates=( "$DIR/juno-player/target/"juno-player-*-shaded.jar "$DIR/juno-player/target/juno-player.jar" )
+  shopt -u nullglob
+  local juno_player_jar=""
+  for f in "${candidates[@]}"; do
+    [[ -f "$f" ]] || continue
+    juno_player_jar="$f"
+    break
+  done
+  [[ -n "$juno_player_jar" ]] || err "juno-player jar not found — build first with: mvn clean package -DskipTests"
+
+  "$JAVA" -cp "$juno_player_jar" cab.ml.juno.player.GgufInfoMain "$model" ${mmproj:+"$mmproj"}
+}
+
 # ── Health server ─────────────────────────────────────────────────────────────
 # health — standalone health-monitor HTTP server (no model required)
 # Accepts node health probes via POST /health/probe and exposes a cluster
@@ -928,7 +1015,7 @@ usage() {
   echo ""
   echo "  Build jars first (one time):"
   echo "    mvn clean package -DskipTests"
-``  echo ""
+  echo ""
   echo -e "  ${GREEN}$0${NC} --model-path PATH           3-node cluster + REPL  ${DIM}(default, forked JVM nodes)${NC}"
   echo    "  $0 cluster --help                  all cluster flags  (cluster keyword still works)"
   echo ""
@@ -945,6 +1032,9 @@ usage() {
   echo -e "  ${GREEN}$0 health${NC}                        standalone health-monitor HTTP server"
   echo    "  $0 health --port 9090              listen on a custom port (default 8081)"
   echo    "  $0 health --help                   all health flags + API reference"
+  echo ""
+  echo -e "  ${GREEN}$0 gguf-info${NC} --model-path PATH   dump a GGUF's full metadata + tensor layout"
+  echo    "  $0 gguf-info model.gguf mmproj.gguf   positional args also work"
   echo ""
   echo "  Flags common to default (cluster), local, and lora:"
   echo "    --pType pipeline|tensor        parallelism type         (default pipeline)"
@@ -1085,11 +1175,12 @@ CMD="${1:-}"
 shift || true
 
 case "$CMD" in
-  local)   cmd_local   "$@" ;;
-  lora)    cmd_lora    "$@" ;;
-  merge)   cmd_merge   "$@" ;;
-  test)    cmd_test    "$@" ;;
-  health)  cmd_health  "$@" ;;
-  cluster) cmd_cluster "$@" ;;
-  *)       cmd_cluster ${CMD:+"$CMD"} "$@" ;;
+  local)     cmd_local     "$@" ;;
+  lora)      cmd_lora      "$@" ;;
+  merge)     cmd_merge     "$@" ;;
+  gguf-info) cmd_gguf_info "$@" ;;
+  test)      cmd_test      "$@" ;;
+  health)    cmd_health    "$@" ;;
+  cluster)   cmd_cluster   "$@" ;;
+  *)         cmd_cluster ${CMD:+"$CMD"} "$@" ;;
 esac

@@ -1,6 +1,7 @@
 package cab.ml.juno.node;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import org.junit.jupiter.api.Test;
 
@@ -69,5 +70,26 @@ class ForwardPassHandlerTest {
 	@Test
 	void is_ready_returns_true() {
 		assertThat(new CyclicForwardPassHandler().isReady()).isTrue();
+	}
+
+	@Test
+	void evict_default_is_a_no_op_that_does_not_throw() {
+		// A handler that does not override evict() (e.g. a stub used only in
+		// tests, or a future handler that has no per-request state) must be
+		// safe to call evict() on — this is the correctness-preserving default
+		// every other optional ForwardPassHandler capability follows.
+		ForwardPassHandler handler = new ForwardPassHandler() {
+			@Override
+			public ForwardResult forward(ForwardRequest request, ShardContext context) {
+				throw new UnsupportedOperationException("not needed for this test");
+			}
+
+			@Override
+			public boolean isReady() {
+				return true;
+			}
+		};
+
+		assertThatCode(() -> handler.evict("req-1")).doesNotThrowAnyException();
 	}
 }

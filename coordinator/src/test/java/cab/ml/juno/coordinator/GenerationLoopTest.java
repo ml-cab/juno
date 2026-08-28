@@ -38,6 +38,10 @@ class GenerationLoopTest {
 		return new GenerationLoop(tokenizer, sampler, pipeline, kvCache);
 	}
 
+	private GenerationLoop loopWith(InferencePipeline pipeline, PrefillMode mode) {
+		return new GenerationLoop(tokenizer, sampler, pipeline, kvCache, mode);
+	}
+
 	private InferenceRequest requestFor(String... messages) {
 		List<ChatMessage> msgs = new ArrayList<>();
 		for (int i = 0; i < messages.length; i++) {
@@ -228,5 +232,59 @@ class GenerationLoopTest {
 
 		ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(req.modelId());
 		assertThat(formatter.modelType()).isEqualTo("chatml");
+	}
+
+	// ── PrefillMode parity tests ──────────────────────────────────────────────
+
+	@Test
+	void batched_prefill_produces_same_generated_tokens_as_single() {
+		// Greedy deterministic: always return token 77.
+		// StubInferencePipeline.prefillBatch default loops forward() — same callCount
+		// increments as single mode.  Both modes must produce the same output sequence.
+		StubInferencePipeline pipeline = new StubInferencePipeline();
+
+		InferenceRequest req = InferenceRequest.of("llama3-8b", List.of(ChatMessage.user("hello world")),
+				SamplingParams.defaults().withMaxTokens(3), RequestPriority.NORMAL);
+
+		GenerationResult single  = loopWith(pipeline, PrefillMode.SINGLE).generate(req, TokenConsumer.discard());
+		GenerationResult batched = loopWith(pipeline, PrefillMode.BATCHED).generate(req, TokenConsumer.discard());
+
+		assertThat(batched.generatedTokens()).isEqualTo(single.generatedTokens());
+		assertThat(batched.stopReason()).isEqualTo(single.stopReason());
+	}
+
+	@Test
+	void batched_and_single_modes_both_stop_at_eos() {
+		int eos = tokenizer.eosTokenId();
+		// Prompt "hi" → 2 tokens → 1 prefill call consumed at sequence slot 0.
+		// Decode slots 1, 2 → 42, eos.
+		int[] sequence = { StubInferencePipeline.DEFAULT_TOKEN, 42, eos };
+
+		InferenceRequest req = InferenceRequest.of("llama3-8b", List.of(ChatMessage.user("hi")),
+				SamplingParams.defaults().withMaxTokens(10), RequestPriority.NORMAL);
+
+		GenerationResult single  = loopWith(new StubInferencePipeline(sequence), PrefillMode.SINGLE)
+				.generate(req, TokenConsumer.discard());
+		GenerationResult batched = loopWith(new StubInferencePipeline(sequence), PrefillMode.BATCHED)
+				.generate(req, TokenConsumer.discard());
+
+		assertThat(batched.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
+		assertThat(batched.generatedTokens()).isEqualTo(single.generatedTokens());
+	}
+
+	@Test
+	void default_constructor_uses_batched_mode() {
+		// Default constructor must default to BATCHED (design doc §4.8).
+		// Verify it does not throw and produces the same output as explicit BATCHED.
+		InferenceRequest req = InferenceRequest.of("llama3-8b", List.of(ChatMessage.user("ping")),
+				SamplingParams.defaults().withMaxTokens(2), RequestPriority.NORMAL);
+
+		StubInferencePipeline p1 = new StubInferencePipeline();
+		StubInferencePipeline p2 = new StubInferencePipeline();
+		GenerationResult defaultResult = loopWith(p1).generate(req, TokenConsumer.discard());
+		GenerationResult explicitBatch = loopWith(p2, PrefillMode.BATCHED).generate(req, TokenConsumer.discard());
+
+		assertThat(defaultResult.generatedTokens()).isEqualTo(explicitBatch.generatedTokens());
+		assertThat(defaultResult.stopReason()).isEqualTo(explicitBatch.stopReason());
 	}
 }

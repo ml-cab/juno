@@ -61,6 +61,38 @@ class LocalInferencePipelineTest {
 		assertThat(h2.callCount()).isEqualTo(1);
 	}
 
+	// ── evict(): must reach every stage's handler ───────────────────────────────
+	//
+	// GenerationLoop calls pipeline.evict(requestId) after every stateless
+	// request to release each handler's in-process KV cache arrays (see
+	// ForwardPassHandler.evict javadoc — without this, they leak for the life
+	// of the process). These tests are the regression net for that cascade.
+
+	@Test
+	void evict_reaches_every_stage_handler() {
+		CyclicForwardPassHandler h1 = new CyclicForwardPassHandler();
+		CyclicForwardPassHandler h2 = new CyclicForwardPassHandler();
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), List.of(h1, h2), VOCAB,
+				HIDDEN_DIM, NUM_HEADS);
+
+		pipeline.evict("req-1");
+
+		assertThat(h1.wasEvicted("req-1")).isTrue();
+		assertThat(h2.wasEvicted("req-1")).isTrue();
+	}
+
+	@Test
+	void evict_only_affects_the_given_requestId() {
+		CyclicForwardPassHandler handler = new CyclicForwardPassHandler();
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), handler, VOCAB, HIDDEN_DIM,
+				NUM_HEADS);
+
+		pipeline.evict("req-1");
+
+		assertThat(handler.wasEvicted("req-1")).isTrue();
+		assertThat(handler.wasEvicted("req-2")).isFalse();
+	}
+
 	@Test
 	void stage_count_matches_shard_map_node_count() {
 		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), new CyclicForwardPassHandler(),
@@ -91,5 +123,53 @@ class LocalInferencePipelineTest {
 		assertThat(emb).hasSize(HIDDEN_DIM);
 		assertThat(emb[0]).isEqualTo(0.0f);
 		assertThat(emb[1]).isEqualTo(0.01f);
+	}
+
+	// ── Handler-list snapshot timing (root cause of the 2026-07-12 vision hang) ─
+	//
+	// LocalInferencePipeline.from(shardMap, handlers, ...) reads handlers.get(i)
+	// once, at construction time, and stores that exact reference into each
+	// NodeStage — it never re-reads the list afterwards. ConsoleMain used to call
+	// LlavaHandlerFactory.buildFromHandlers(..., handlers, ...) (which replaces
+	// handlers.get(0) with a vision-aware wrapper) AFTER building the pipeline
+	// from a defensive copy of that same list, so the wrap silently never took
+	// effect and vision requests were routed straight to the plain text handler.
+	// These tests pin down the exact ordering contract the fix relies on.
+
+	@Test
+	void mutating_handlers_list_after_pipeline_construction_has_no_effect() {
+		List<ForwardPassHandler> handlers = new java.util.ArrayList<>(
+				List.of(new CyclicForwardPassHandler(11), new CyclicForwardPassHandler(22)));
+
+		// Mirrors the buggy ConsoleMain ordering: build from a defensive copy first...
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), new java.util.ArrayList<>(handlers),
+				VOCAB, HIDDEN_DIM, NUM_HEADS);
+
+		// ...then swap in a "vision-aware" stand-in for stage 0, too late.
+		CyclicForwardPassHandler lateSwap = new CyclicForwardPassHandler(99);
+		handlers.set(0, lateSwap);
+
+		pipeline.forward("req-late-swap", new int[] { 1, 2, 3 }, 0);
+
+		// The pipeline never saw the swap: the "vision-aware" stand-in was never invoked.
+		assertThat(lateSwap.callCount()).isEqualTo(0);
+	}
+
+	@Test
+	void mutating_handlers_list_before_pipeline_construction_is_picked_up() {
+		List<ForwardPassHandler> handlers = new java.util.ArrayList<>(
+				List.of(new CyclicForwardPassHandler(11), new CyclicForwardPassHandler(22)));
+
+		// Fixed ConsoleMain ordering: wrap/swap stage 0 first...
+		CyclicForwardPassHandler earlySwap = new CyclicForwardPassHandler(99);
+		handlers.set(0, earlySwap);
+
+		// ...then build the pipeline, which now captures the swapped handler.
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), new java.util.ArrayList<>(handlers),
+				VOCAB, HIDDEN_DIM, NUM_HEADS);
+
+		pipeline.forward("req-early-swap", new int[] { 1, 2, 3 }, 0);
+
+		assertThat(earlySwap.callCount()).isEqualTo(1);
 	}
 }

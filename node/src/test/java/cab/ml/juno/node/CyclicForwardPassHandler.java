@@ -17,6 +17,8 @@
 package cab.ml.juno.node;
 
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -33,6 +35,7 @@ public final class CyclicForwardPassHandler implements ForwardPassHandler {
 
 	private final int winnerToken; // last-node logit winner
 	private final AtomicInteger callCount = new AtomicInteger(0);
+	private final Set<String> evictedIds = ConcurrentHashMap.newKeySet();
 
 	public CyclicForwardPassHandler() {
 		this.winnerToken = 42;
@@ -88,6 +91,16 @@ public final class CyclicForwardPassHandler implements ForwardPassHandler {
 	@Override
 	public boolean isReady() {
 		return true;
+	}
+
+	/** Records requestId so tests can assert evict() was actually called and with what id. */
+	@Override
+	public void evict(String requestId) {
+		evictedIds.add(requestId);
+	}
+
+	public boolean wasEvicted(String requestId) {
+		return evictedIds.contains(requestId);
 	}
 
 	public int callCount() {

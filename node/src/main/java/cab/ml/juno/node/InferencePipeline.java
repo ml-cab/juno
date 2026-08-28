@@ -73,4 +73,40 @@ public interface InferencePipeline {
 	 * forward/forwardBatch.
 	 */
 	int vocabSize();
+
+	/**
+	 * Prefill the KV cache for a contiguous window of new prompt tokens in a
+	 * single batched call. Logits are discarded — only the KV state written by
+	 * each position's forward pass matters.
+	 *
+	 * <p><b>Correctness-preserving default</b>: loops {@code newTokens.length}
+	 * times, calling {@link #forward} once per token with a minimal single-element
+	 * token array — byte-for-byte equivalent to the old per-position prefill loop
+	 * in {@link cab.ml.juno.coordinator.GenerationLoop}, minus the growing
+	 * {@code copyOfRange} prefix. Implementations that do not override this are
+	 * correct but gain no speed benefit; {@link LocalInferencePipeline} overrides
+	 * to call the batched handler chain end-to-end.
+	 *
+	 * @param requestId    KV cache key (session or request id)
+	 * @param newTokens    the new tokens to prefill, {@code promptIds[startPosition..end-1]}
+	 * @param startPosition KV cache offset of {@code newTokens[0]}
+	 */
+	default void prefillBatch(String requestId, int[] newTokens, int startPosition) {
+		for (int p = 0; p < newTokens.length; p++) {
+			forward(requestId, new int[]{ newTokens[p] }, startPosition + p);
+		}
+	}
+
+	/**
+	 * Release {@code requestId}'s per-request KV state from every stage in
+	 * this pipeline — see {@link ForwardPassHandler#evict} for what that
+	 * state is and why it must be released explicitly for stateless (no
+	 * session) requests.
+	 *
+	 * <p><b>Correctness-preserving default</b>: no-op, matching
+	 * {@link ForwardPassHandler#evict}'s default. {@link LocalInferencePipeline}
+	 * overrides this to call {@code evict} on every stage's handler.
+	 */
+	default void evict(String requestId) {
+	}
 }

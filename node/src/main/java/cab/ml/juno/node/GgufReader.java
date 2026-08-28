@@ -47,7 +47,7 @@ public final class GgufReader implements AutoCloseable {
 
 	private static final Logger log = Logger.getLogger(GgufReader.class.getName());
 
-	private static final int GGUF_MAGIC = 0x46554747; // "GGUF"
+	static final int GGUF_MAGIC = 0x46554747; // "GGUF" — package-private: used by LlamafileGgufIndex
 	private static final int ALIGNMENT = 32;
 
 	// ── GGML quantisation type IDs ───────────────────────────────────────────
@@ -116,6 +116,34 @@ public final class GgufReader implements AutoCloseable {
 			log.info("Found GGUF data at byte offset " + ggufOffset + " inside llamafile");
 		}
 
+		return parseGgufFromChannel(channel, ggufOffset);
+	}
+
+	/**
+	 * Opens a GgufReader at an explicit GGUF data-start offset within
+	 * {@code file}, bypassing the ZIP/llamafile scan entirely.
+	 *
+	 * <p>Use this when the offset is already known — for example, when
+	 * {@link LlamafileGgufIndex} has located an embedded mmproj GGUF inside a
+	 * llamafile that bundles more than one model (e.g. moondream2, which
+	 * packages its SigLIP vision encoder as a second GGUF alongside the phi2
+	 * LLM text model).
+	 *
+	 * @param file           path to the file (plain GGUF or llamafile ZIP)
+	 * @param ggufDataOffset absolute byte offset at which the GGUF magic begins
+	 */
+	public static GgufReader openAtDataOffset(Path file, long ggufDataOffset) throws IOException {
+		FileChannel channel = FileChannel.open(file, StandardOpenOption.READ);
+		log.info("Opening GGUF at explicit offset " + ggufDataOffset + " in " + file.getFileName());
+		return parseGgufFromChannel(channel, ggufDataOffset);
+	}
+
+	/**
+	 * Core GGUF parsing — reads the header, metadata KV pairs, and tensor
+	 * table starting at {@code ggufOffset} in {@code channel}.  Called by
+	 * both {@link #open(Path)} and {@link #openAtDataOffset(Path, long)}.
+	 */
+	private static GgufReader parseGgufFromChannel(FileChannel channel, long ggufOffset) throws IOException {
 		ByteBuffer header = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);
 		channel.read(header, ggufOffset);
 		header.flip();
@@ -167,7 +195,7 @@ public final class GgufReader implements AutoCloseable {
 		}
 
 		// Align to ALIGNMENT bytes — the GGUF spec aligns relative to the start
-		// of the GGUF header, not the start of the file. When the GGUF is
+		// of the GGUF header, not the start of the file.  When the GGUF is
 		// embedded inside a llamafile the header starts at ggufOffset, so we
 		// must compute the aligned position relative to ggufOffset and then
 		// add it back to get the absolute file position.
@@ -206,12 +234,44 @@ public final class GgufReader implements AutoCloseable {
 		return v instanceof Number n ? n.floatValue() : def;
 	}
 
+	public boolean metaBool(String key, boolean def) {
+		Object v = metadata.get(key);
+		return v instanceof Boolean b ? b : def;
+	}
+
+	/**
+	 * Read a float array metadata value (e.g. {@code clip.vision.image_mean}),
+	 * returning {@code def} if the key is absent or is not a numeric array.
+	 */
+	public float[] metaFloatArray(String key, float[] def) {
+		Object v = metadata.get(key);
+		if (!(v instanceof Object[] arr) || arr.length == 0)
+			return def;
+		float[] out = new float[arr.length];
+		for (int i = 0; i < arr.length; i++) {
+			if (!(arr[i] instanceof Number n))
+				return def;
+			out[i] = n.floatValue();
+		}
+		return out;
+	}
+
 	public boolean hasTensor(String name) {
 		return tensors.containsKey(name);
 	}
 
 	public Map<String, Object> allMetadata() {
 		return java.util.Collections.unmodifiableMap(metadata);
+	}
+
+	/**
+	 * All tensor names in this file, in GGUF declaration order. Combine with
+	 * {@link #tensorDims}/{@link #tensorType} to inspect a file's full tensor
+	 * layout without loading tensor data — see {@code GgufInfoMain} in the
+	 * juno-player module for a ready-made dump tool.
+	 */
+	public java.util.List<String> tensorNames() {
+		return java.util.List.copyOf(tensors.keySet());
 	}
 
 	/**
@@ -965,7 +1025,8 @@ public final class GgufReader implements AutoCloseable {
 	 * Fields are only present if the corresponding CD fixed field held 0xFFFFFFFF.
 	 * We scan all extra blocks to find the ZIP64 one, then read the offset field.
 	 */
-	private static long readZip64ExtraLocalOffset(ByteBuffer cd, int extraStart, int extraLen) throws IOException {
+	/** Package-private: also used by {@link LlamafileGgufIndex}. */
+	static long readZip64ExtraLocalOffset(ByteBuffer cd, int extraStart, int extraLen) throws IOException {
 		int pos = extraStart;
 		int end = extraStart + extraLen;
 		while (pos + 4 <= end) {

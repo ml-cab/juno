@@ -26,6 +26,16 @@ Features:
 - [Supported Models](https://ml.cab/juno-documentation/supported-models/) and quantizations
 - [Performance reports](https://ml.cab/juno_test_matrix.html)
 
+### Vision (image-to-text)
+
+- `POST /v1/vision/chat` (blocking + SSE), registered automatically on
+  `./juno local --api-port N` when the loaded model is a LLaVA-family model
+- Requires `--mmproj-path PATH` pointing at the model's separate mmproj GGUF
+  (real GGUF releases never merge the CLIP encoder into the base LLM file)
+- `"model"` in the request body can be omitted — `--local` mode only ever
+  loads one model, so it resolves unambiguously without it
+- See [juno-documentation, Part 12: Vision (Image-to-Text)](juno-documentation/part12/01-overview.md)
+
 ## 2. How to use
 
 ### 2.1 JVM Integration

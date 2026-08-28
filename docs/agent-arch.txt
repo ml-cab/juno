@@ -1,0 +1,223 @@
+Juno multi-module Maven project (JDK 25).
+
+Module dependency (excerpt):
+  api, registry, tokenizer, sampler, kvcache, health, metrics — shared libraries
+  lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA)
+  node — GgufReader, LlamafileGgufIndex, LlamaTransformerHandler,
+        Phi2TransformerHandler, Phi2Rope, Phi3TransformerHandler, Phi3Rope, MatVec
+        (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,
+        CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
+        DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
+        LoraTrainableHandler, LoraMerge, LoraQvInitializer, VectorQuantKernels
+        node depends on lora
+
+  VectorQuantKernels (node module): SIMD dot-product accumulation for the CPU
+        weight-stationary quantized matmul kernels in LlamaTransformerHandler
+        (sgemmQ4KWeightStationary, sgemmQ5KWeightStationary,
+        sgemmQ8_0WeightStationary), used by both LlamaTransformerHandler and
+        Phi2TransformerHandler.sgemmQuantBatch. Built on jdk.incubator.vector,
+        still an incubating JDK module as of JDK 25/26 (JEP 508 / JEP 529), so
+        it needs --add-modules jdk.incubator.vector at compile and run time.
+        All Vector API references live in a nested Simd class so a JVM without
+        the module falls back to an identical scalar loop at first use instead
+        of failing to load. Dequantization (nibble/bit unpacking) is left
+        scalar: only the dot-product accumulation phase is vectorized, since
+        that phase dominates cost at realistic batch sizes and is the
+        low-risk, contiguous-multiply-add half of each kernel.
+  coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
+        coordinator depends on node
+  juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,
+        ProcessPipelineClient, TensorParallelPipelineClient
+        juno-player depends on coordinator (and transitively on node)
+  juno-master — CoordinatorMain standalone executable (production coordinator)
+        depends on juno-player, coordinator, node, kvcache, tokenizer, sampler,
+        health, registry, api
+  juno-node — NodeMain standalone executable
+  juno-bom — Maven BOM (dependencyManagement for cab.ml artifacts)
+
+GPU FFI (node module — Panama project, JEP 454):
+  GpuBindings — vendor-neutral interface implemented by CudaBindings and RocmBindings.
+        All accessor methods use vendor-neutral names: gpuGetDeviceCount, gpuGetDeviceProperties,
+        gpuSetDevice, gpuMalloc, gpuFree, gpuMallocHost, gpuFreeHost, gpuMemcpy, gpuMemcpyAsync,
+        gpuStreamCreateWithFlags, gpuStreamSynchronize, gpuStreamDestroy, blasCreate, blasDestroy,
+        blasSetStream, blasSetPointerMode, blasSgemv, blasHSSgemvStridedBatched.
+        Each implementation documents the underlying vendor symbol it resolves.
+        createMatVec(GpuContext) factory method returns the correct MatVec per backend,
+        keeping GpuContext.createMatVec() free of instanceof checks.
+  CudaBindings — Panama FFI downcall handles for libcudart.so.12 and libcublas.so.12.
+        Implements GpuBindings. Singleton; thread-safe; zero per-call Java overhead.
+        Requires JVM flag: --enable-native-access=ALL-UNNAMED.
+  RocmBindings — Panama FFI downcall handles for libamdhip64.so and librocblas.so.
+        Implements GpuBindings. Pre-binds hipHostMalloc flags=0 via MethodHandles.insertArguments.
+        opTranspose()=112 (rocblas_operation_transpose). hipDeviceProp_t: sizeof=1472, name@0,
+        totalGlobalMem@288 (ROCm 7.2.x, Linux x86_64).
+  CudaAvailability — detection via CudaBindings.isAvailable(); zero heap allocation.
+  RocmAvailability — detection via RocmBindings.isAvailable(); mirrors CudaAvailability.
+  GpuMatVec — sealed interface (permits CudaMatVec, RocmMatVec) extending MatVec.
+        Exposes upload(float[], int, int) and uploadHalf(float[], int, int).
+        Transformer handlers depend on GpuMatVec, not a concrete vendor class.
+  CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16);
+        per-thread CUDA stream + async H2D/D2H; synchronized on GpuContext lock.
+  RocmMatVec — implements GpuMatVec; rocblas_sgemv (FP32) / rocblas_hssgemv_strided_batched (FP16);
+        same three compute paths as CudaMatVec; per-thread HIP stream.
+  DeviceFloatMatrix / DeviceHalfMatrix — VRAM buffer wrappers using GpuBindings
+        deviceMalloc / deviceFree; explicit lifecycle via releaseGpuResources().
+        Vendor-neutral: work identically with CudaBindings and RocmBindings.
+  GpuContext — shared BLAS handle + serialization lock per device index.
+        selectBindings() auto-detects: CUDA first, then ROCm.
+        Override: -Djuno.gpu.backend=cuda|rocm|auto.
+        createMatVec() delegates to GpuBindings.createMatVec(GpuContext) — no instanceof checks.
+
+Third-party JVM integration (juno-player module): JunoPlayer (facade), LoraTrainer,
+LocalInferencePipeline.embedLastToken, PublisherTokenConsumer → Flow.Publisher,
+JunoHttpClient (REST). Thin jar vs *-shaded.jar documented in docs/howto.md.
+
+LoRA GPU defaults:
+  ForwardPassHandlerLoader.selectBackend() — JUNO_USE_GPU unset defaults to false (cluster/local).
+  ForwardPassHandlerLoader.selectLoraBackend() — unset defaults to true when any GPU (CUDA or ROCm) exists.
+  LoraTrainableHandler.load(path, ctx, adapters) uses selectLoraBackend().
+  ForwardPassHandlerLoader.load(..., backend, adapters) passes backend into LoraTrainableHandler.
+  GpuContext.selectBindings() — CUDA first, then ROCm; -Djuno.gpu.backend overrides.
+  GpuContext.createMatVec() — delegates to GpuBindings.createMatVec(GpuContext); no instanceof.
+  node module adds: GpuBindings, GpuMatVec, RocmBindings, RocmAvailability, RocmMatVec,
+                    MatVecBackend (public enum, stable JFR label strings via public label() method).
+
+vision — Image-to-text (I2T) module. GGUF-based CLIP ViT encoder, patch
+        embedder (javax.imageio; no new deps), and ForwardPassHandler decorator.
+        depends on: node, coordinator, registry, tokenizer, sampler.
+        depended on by: juno-player, juno-master.
+        node does NOT depend on vision — no cycle is possible.
+ 
+  VisionConfig   — reads clip.* / vision.* GGUF metadata keys; derives
+                   numPatches, numVisionTokens, headDim.
+  VisionModelPaths — resolves which GGUF file to probe/load CLIP vision
+                   tensors from: the separate mmproj file when one is given,
+                   else the base model file (merged-file or embedded fallback).
+                   Pure logic, no I/O; unit-tested directly without a GGUF fixture.
+  ImagePatchEmbedder — decode → bilinear resize → CLIP normalise → CHW float[].
+  VisionEncoder  — pure Java CLIP ViT forward pass (patch embed, CLS, positional
+                   embed, pre-LN, N transformer blocks, vision projector).
+                   Reads v.patch_embd.weight, v.blk.{i}.*, mm.0.weight from GGUF.
+                   MatVec-pluggable (CPU or GPU). Thread-safe (read-only weights).
+                   Per-block FFN loading (loadFfn/resolveFfnOrientation) does NOT
+                   trust the ffn_up/ffn_down tensor names to indicate direction —
+                   some mmproj exports (e.g. llava-phi-3-mini) have them reversed.
+                   Direction is instead read from each tensor's own GgufReader.
+                   tensorDims() output dimension; a mismatch on both orientations
+                   throws IllegalStateException at load time instead of an opaque
+                   ArrayIndexOutOfBoundsException mid-request. Likewise
+                   outputDim()/resolveProjectorOutputDim() does NOT trust
+                   clip.vision.projection_dim metadata for the projector's real
+                   output width — some files (same llava-phi-3-mini) declare a
+                   value there that doesn't match mm.0.weight's own GGUF shape.
+                   Every caller needing the true patch-vector width (project(),
+                   LlavaHandlerFactory's VisionAwareForwardPassHandler sizing)
+                   uses outputDim(), never config().projectionDim().
+  VisionAwareForwardPassHandler — ForwardPassHandler decorator. On the first node
+                   (hasEmbeddings=true), replaces IMAGE_TOKEN_ID embedding lookups
+                   with pre-computed patch vectors from ConcurrentHashMap[requestId],
+                   then delegates to the wrapped LlamaTransformerHandler via a
+                   withActivations(...) request (tokenIds=null). The wrapped
+                   handler's forward()/forwardBatch() decide token-lookup vs.
+                   activations by request.isFirstNode() (tokenIds != null), NOT
+                   by hasEmbeddings alone — hasEmbeddings only means this node
+                   is capable of a lookup, not that this specific request wants
+                   one (2026-07-12 fix: the old hasEmbeddings-only check NPE'd
+                   on tokenIds()[b] whenever a request carried activations here).
+                   Delegates all other tokens and all subsequent nodes to the wrapped
+                   LlamaTransformerHandler unchanged.
+  LlamafileGgufIndex — scans a llamafile ZIP for ALL embedded GGUF entries,
+                   not just the first. Returns List<Entry> (name, dataOffset).
+                   Lives in the node package so it can access the package-private
+                   GgufReader.GGUF_MAGIC and GgufReader.readZip64ExtraLocalOffset.
+                   Used by LlavaHandlerFactory to locate an embedded vision encoder
+                   (e.g. moondream2's SigLIP GGUF) without a separate --mmproj-path.
+                   Implements its own EOCD+CD walk; does not fall back to the
+                   forward-scan path (findGgufOffsetByForwardScan) since all known
+                   multi-GGUF llamafiles use accessible ZIP64 EOCD. Plain .gguf
+                   files and non-ZIP files return an empty list.
+  GgufReader — added openAtDataOffset(Path, long) factory: opens a GGUF at an
+                   explicit byte offset within a llamafile, bypassing the ZIP scan.
+                   Internal open() body extracted to parseGgufFromChannel(channel,
+                   offset) so both open() and openAtDataOffset() share the same
+                   header/metadata/tensor-table parsing path. GGUF_MAGIC and
+                   readZip64ExtraLocalOffset are now package-private (were private)
+                   so LlamafileGgufIndex can reuse them without duplication.
+  LlavaHandlerFactory — the ONLY place that knows "this is a LLaVA/vision model".
+                   Lives in vision (not in node) to keep the dependency direction
+                   correct. isVisionArchitecture(modelPath, mmprojPath) and
+                   buildFromHandlers(modelPath, mmprojPath, handlers, config) both
+                   resolve the vision-weights file via VisionModelPaths before
+                   opening a GgufReader. Two-step detection: (1) open the primary
+                   visionWeightsPath and check for v.patch_embd.weight; (2) when
+                   no separate mmproj was given, call LlamafileGgufIndex.scanAll()
+                   and probe each additional GGUF entry for v.patch_embd.weight
+                   (the moondream2 embedded-GGUF path). resolveVisionReader() and
+                   findEmbeddedVisionEntry() are private helpers that centralise
+                   this logic for both isVisionArchitecture and buildFromHandlers.
+                   Wraps handlers.get(0) in VisionAwareForwardPassHandler. Returns
+                   Built record with all wired components for ConsoleMain to consume.
+  VisionInferenceRequest — immutable record; carries imageBytes alongside messages.
+  VisionChatHandler — Javalin handler for POST /v1/vision/chat (blocking) and
+                   POST /v1/vision/chat/stream (SSE). Reads multipart/form-data
+                   (image part + request JSON part). Encodes image, registers
+                   patches, submits InferenceRequest, releases patches in finally.
+ 
+ForwardPassHandlerLoader (node module) — UNCHANGED. Does not import vision.
+  Continues to dispatch llava architecture to LlamaTransformerHandler (text layers
+  only). Vision wrapping is applied by LlavaHandlerFactory on top.
+ 
+InferenceApiServer (coordinator module) — addRoutes(Consumer<Javalin>) is the
+  generic extension point used to attach the vision routes; there is no
+  vision-specific method on this class.
+ 
+ConsoleMain (juno-player module) — runLocalRepl() (--local mode only) calls
+  prepareVisionHandler() BEFORE LocalInferencePipeline.from(), which calls
+  LlavaHandlerFactory.isVisionArchitecture()/buildFromHandlers() and, if the
+  resolved vision-weights file has v.patch_embd.weight, wraps handlers.get(0)
+  in place with VisionAwareForwardPassHandler. This ordering is load-bearing:
+  LocalInferencePipeline.from() snapshots each handler reference into its
+  NodeStage list at construction time and never re-reads the handlers list
+  afterwards, so the wrap MUST land before that call or the pipeline silently
+  keeps using the unwrapped text handler forever (2026-07-12 bug: this used to
+  be called wireVisionRoutes() and ran after pipeline construction — see
+  CHANGELOG). Once apiServer exists, registerVisionRoutes() separately
+  registers /v1/vision/chat and /v1/vision/chat/stream via
+  InferenceApiServer.addRoutes() using the already-built Built record.
+  --mmproj-path PATH is the CLI flag carrying the separate mmproj file through
+  to prepareVisionHandler(); without it, isVisionArchitecture() probes
+  --model-path itself and returns false for every real (two-file) I2T model.
+  KNOWN LIMITATION: runClusterRepl() (--cluster mode) does not call
+  prepareVisionHandler() — vision routes are --local mode only.
+ 
+ModelIdResolver (registry module, cab.ml.juno.registry) — shared by
+  VisionChatHandler (juno-player), OpenAiChatHandler and InferenceApiServer
+  (coordinator): resolves a client-supplied "model" field against
+  ModelRegistry with one rule all three previously implemented separately
+  (and inconsistently): blank/absent -> the loaded model; exact match ->
+  that model; mismatch -> error listing loaded ids, UNLESS the caller opted
+  into FallbackPolicy.SINGLE_MODEL_FALLBACK and exactly one model is loaded,
+  in which case it falls back to that model and logs a WARNING (was a hard
+  503 before, for every caller, regardless of how many models were loaded).
+  VisionChatHandler and OpenAiChatHandler opt into SINGLE_MODEL_FALLBACK
+  (the user-facing REST surfaces where a copy-pasted/wrong model name is
+  common); InferenceApiServer's native /v1/inference API keeps
+  FallbackPolicy.STRICT (the resolve(registry, requested) 2-arg overload's
+  default) — pinned by InferenceApiServerTest, which expects an explicitly
+  wrong model id to always 503 even with one model loaded. Pure logic over
+  ModelRegistry's public API, no I/O — unit-tested directly
+  (ModelIdResolverTest, covers both policies).
+
+Dependency graph (acyclic):
+  node  →  api, lora, registry, kvcache, health, grpc, micrometer
+  vision  →  node, coordinator, registry, tokenizer, sampler
+  juno-player  →  vision, coordinator, node, registry, ...
+  juno-master  →  vision, coordinator, node, registry, ...  (pom dependency;
+                   no juno-master code references vision today — CoordinatorMain
+                   was superseded by ConsoleMain/wireVisionRoutes in juno-player)
+
+
+
+See README.md, docs/howto.md, docs/arch.md, docs/LoRA.md,
+  docs/performance.md, docs/legal.md,
+  docs/juno_test_matrix.html, docs/features.md

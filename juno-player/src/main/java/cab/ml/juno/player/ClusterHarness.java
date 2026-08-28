@@ -419,8 +419,16 @@ public final class ClusterHarness implements AutoCloseable {
 		// dequantises token_embd.weight to float[vocabSize * hiddenDim].
 		String nodeHeap = System.getProperty("juno.node.heap", "4g");
 
+		// --add-modules jdk.incubator.vector: Vector API is still incubating as
+		// of JDK 25/26 (JEP 508 / JEP 529) -- required in each forked node JVM
+		// for the SIMD CPU quantized-matmul kernels (VectorQuantKernels). Each
+		// node process needs this independently since it is a separate JVM,
+		// not inherited from the coordinator process. Falls back to scalar
+		// automatically if absent, so this is a performance flag, not a
+		// correctness requirement.
 		java.util.List<String> cmd = new java.util.ArrayList<>(java.util.List.of(javaExe, "--enable-preview",
-				"--enable-native-access=ALL-UNNAMED", "-Xms512m", "-Xmx" + nodeHeap, "-XX:+UseZGC"));
+				"--enable-native-access=ALL-UNNAMED", "--add-modules", "jdk.incubator.vector",
+				"-Xms512m", "-Xmx" + nodeHeap, "-XX:+UseZGC"));
 
 		// Partition cores across node JVMs so they do not fight over ForkJoinPool.
 		// Without this, each JVM grabs availableProcessors()-1 threads, causing

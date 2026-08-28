@@ -195,6 +195,25 @@ public final class FaultTolerantPipeline implements InferencePipeline {
 		return nodes.get(0).pipeline().vocabSize();
 	}
 
+	/**
+	 * Broadcasts to every node's pipeline, not just one — a stateless request
+	 * may have been retried across multiple nodes before landing (see
+	 * {@link #forward}'s retry loop), and a caller has no way to know which
+	 * node(s) actually wrote KV state for {@code requestId}. Best-effort: one
+	 * node failing to evict is logged and does not stop the others, since a
+	 * cleanup failure here should never surface as a request failure.
+	 */
+	@Override
+	public void evict(String requestId) {
+		for (NodePipeline node : nodes) {
+			try {
+				node.pipeline().evict(requestId);
+			} catch (Exception e) {
+				log.warning("evict() failed on node " + node.nodeId() + ": " + e.getMessage());
+			}
+		}
+	}
+
 	// ── Health event hooks ────────────────────────────────────────────────────
 
 	/**

@@ -1,5 +1,465 @@
 ## Status
 
+**Session 67** — locked down the Session 66 SIMD benchmark against the raw
+JFR logs, phase by phase, to separate what actually moved from what's just
+run-to-run noise.
+
+Cross-checked every phase sum against both runs' JFR output directly (not
+estimates): `qkvProj` 66,313.7ms → 57,426.5ms (-13.4%), `woProj+ffn+residuals`
+106,183.5ms → 62,412.8ms (-41.2%), total prefill 178,222.6ms → 124,690.3ms
+(-30.0%). `rope+cacheWrite` and `attention` also moved (-8.3%/-17.9%) despite
+neither being touched by `VectorQuantKernels` — recorded as the scheduling
+noise floor on this box, not a SIMD effect.
+
+Confirmed decode is genuinely unaffected: `matVec` p95 4.488ms vs 4.467ms,
+within noise, as expected since decode uses the single-token path, not
+`sgemm*WeightStationary`. Flagged that the two runs' raw tok/s and token
+counts (22 vs 47 tokens, temperature=0.3) are not a valid before/after
+comparison — only the fixed 741-token prefill window is apples-to-apples.
+
+**Conclusion for the record:** a real, measured 30% prefill reduction,
+isolated to the two call sites that route through `VectorQuantKernels.dot`;
+output stayed coherent both runs; still ~3.4x off the llama.cpp ~30-36s
+reference on the same hardware, because only the dot-product accumulate loop
+is vectorized so far, not the Q5_K/Q4_K/Q8_0 dequantization bit-unpacking.
+That remains the next lever, same as flagged in Session 64/63.
+
+---
+
+## Status
+
+**Session 66** — first real hardware run of the Session 65 SIMD accumulate
+kernel against the fixed 741-token vision-chat benchmark from Session 64's
+handoff doc.
+
+Total prefill 178.2s → 124.7s (-30%). Confirmed from the log that
+`VectorQuantKernels.AVAILABLE` was true (no "jdk.incubator.vector
+unavailable" fallback message), so the SIMD path actually ran, not the
+scalar fallback. `finish_reason: stop`, coherent output, no numerical
+garbage.
+
+Per-phase: `qkvProj` -13.7%, `woProj+ffn+residuals` -41.2%, attention/rope
+roughly flat (both untouched code paths — not evidence of anything). The
+much bigger win on `woProj+ffn+residuals` is tentatively attributed to
+`wUp`/`wDown` being ~4x larger than the QKV projections, giving more
+parallel accumulate work per call to amortize thread-dispatch/dequant
+overhead against — a plausible read from the shapes, not confirmed by
+profiling this run.
+
+Takeaway: this is the win from the lower-risk half of the SIMD work only
+(dot-product accumulate). The Q5_K bit-unpacking dequant phase is still
+scalar and is now the limiting factor, consistent with landing at ~30%
+instead of the 20-40x per-core gap the original FLOP analysis predicted for
+a full rewrite. The old unexplained per-layer timing variance (Session 64)
+is still present, unchanged by this session — confirmed independent of the
+SIMD work, not fixed or worsened.
+
+---
+
+## Status
+
+**Session 65** — implemented the Vector API SIMD kernel spec'd out at the end
+of Session 64, plus all the build/run plumbing it needs.
+
+Resolved the open module question first rather than assuming: confirmed JDK
+25 (JEP 508) and JDK 26 (JEP 529, current as of Aug 2026) both still ship the
+Vector API as `jdk.incubator.vector`, not finalized — so `--add-modules
+jdk.incubator.vector` is required at both compile and run time.
+
+**New:** `VectorQuantKernels` (`node` module) — vectorizes only the
+dot-product accumulation phase of the Q4_K/Q5_K/Q8_0 weight-stationary
+kernels, deliberately leaving the bit-unpacking dequant phase scalar as a
+documented follow-up rather than risk an unverified SIMD byte/float shape
+conversion in correctness-critical code. All `jdk.incubator.vector`
+references are confined to a nested `Simd` class, probed once at class-init
+inside `catch (Throwable)`, so a JVM missing the module falls back to the
+original scalar loop transparently instead of crashing.
+
+**Modified:** `sgemmQ4KWeightStationary` / `sgemmQ5KWeightStationary` /
+`sgemmQ8_0WeightStationary` in `LlamaTransformerHandler` now call
+`VectorQuantKernels.dot(...)` in their inner accumulate loop; method
+signatures and existing tests untouched. New `VectorQuantKernelsTest`
+covering block sizes 32/256, non-lane-aligned tails, offsets, zero-length.
+
+**Build/run plumbing:** root `pom.xml` (compiler args), `node/pom.xml`
+(surefire `argLine`), `scripts/run.sh` / `run.bat`, `ClusterHarness.java`
+(forked node JVMs), and all three production `java` launch points in
+`scripts/aws/juno-deploy.sh` all get `--add-modules jdk.incubator.vector`.
+`docs/agent-arch.txt` updated to document the new class.
+
+Could not run `mvn compile`/`mvn test` in this environment — validated
+read-only instead: XML well-formedness on both POMs, `bash -n` on the shell
+scripts, and manual review of the Vector API call sites
+(`FloatVector.fromArray`, `.fma`, `.reduceLanes`, `SPECIES.loopBound`)
+against the JDK 25 API shape. **Not yet benchmarked on real hardware** — that
+was Session 66.
+
+---
+
+## Status
+
+**Session 64** — closed every architectural/scheduling gap between Juno's
+vision-chat prefill and llama.cpp's on the same laptop/model/quant, down to
+one remaining, well-quantified problem: the CPU dequant/matmul kernels are
+scalar Java, not SIMD. Benchmark: `POST /v1/vision/chat`, fixed 741-token
+window (729 image patches + 11 text), `moondream2-q5_k.llamafile`, `./juno
+local`, Intel i5-1240P, GPU off both sides. llama.cpp reference on the same
+box: ~30s to first token, ~36s total.
+
+**Fixed this session:**
+- Merge-conflict compile fixes from the Vision-I2T → release-0.1.2 merge
+  (`LoraTrainableHandler` sgemm type mismatch, stale `vision/pom.xml` parent
+  version, a stray `run.sh` merge artifact, a dropped `eosFilter.text()`
+  call, a deleted-but-still-called `trainOnMasked`).
+- **Vision encoder batching** (`VisionEncoder`): every linear layer went
+  from one `sgemv` call per patch (~118K calls/image) to one batched `sgemm`
+  call per layer. Vision encode dropped to ~33-53s and stayed there — no
+  longer the bottleneck.
+- **Phi2 batched prefill**: Phi2 had no `forwardBatch` override at all, so
+  it silently fell back to 740 sequential single-token `forward()` calls.
+  Added real batched prefill mirroring Llama/Phi3's existing pattern.
+- **New Q5_K weight-stationary CPU kernel** (`sgemmQ5KWeightStationary`):
+  even Llama's own "batched" dispatch only had true batched kernels for
+  Q4_K/Q8_0 — Q5_K (this model's actual quant) fell through to a sequential
+  per-row loop. Unit-tested against the existing per-row `matVec` oracle.
+- **KV cache eviction leak**: `evict(requestId)` existed on every
+  transformer handler but was unreachable from the pipeline layer, so every
+  stateless request leaked its full per-layer KV arrays — caused an OOM on
+  a second request. Fixed by adding the interface methods with
+  correctness-preserving no-op defaults, cascaded through
+  `LocalInferencePipeline`, `VisionAwareForwardPassHandler`,
+  `FaultTolerantPipeline`, `GenerationLoop`. Known remaining gap:
+  `ProcessPipelineClient`/`TensorParallelPipelineClient` (forked-JVM cluster
+  mode) still no-op on `evict()`.
+- **`ShardMap.evenSplit`**: `./juno local --nodes N` routed through
+  `ShardPlanner`'s VRAM-aware greedy algorithm with a fabricated per-node
+  VRAM figure, so node 0 always got almost the entire model (22/24 layers).
+  Added an honest even-split method for local simulation — verified via
+  per-node timing: 150s/8s/8s skew → even ~69s/67s/70s.
+- **Attention parallelization** (`Phi2TransformerHandler`): the causal
+  self-attention loop over 740 window positions was single-threaded.
+  Parallelized with `IntStream.range(0, W).parallel()` since each `gqa()`
+  call is independent — confirmed by measurement to drop attention from an
+  estimated ~20-40s liability to 4.4s / 2.4% of prefill. **Known sibling
+  gap, deliberately unfixed:** `LlamaTransformerHandler`/
+  `Phi3TransformerHandler` have the same sequential loop, but their
+  `gqaInto()` writes into a shared `ws.scores` scratch buffer — naive
+  parallelization there would race. Needs its own fix before benchmarking
+  non-Phi2 models locally.
+- Per-layer timing instrumentation added to Phi2 (`qkvProj` /
+  `rope+cacheWrite` / `attention` / `woProj+ffn+residuals`), mirroring what
+  already existed for Llama — this is what produced the phase breakdown
+  below.
+
+**Measured breakdown** (24-layer sum, `elapsedMs=178,222.6`): `qkvProj`
+66.3s (37.2%), `rope+cacheWrite` 1.2s (0.7%), `attention` 4.4s (2.4%),
+`woProj+ffn+residuals` 106.2s (59.6%). **96.8% of remaining prefill time is
+inside the batched Q5_K dequant/dot-product kernel.** FLOP sanity check on
+just QKV: ~447 GFLOP in 66.3s ⇒ ~0.5 GFLOP/s per thread, squarely scalar-Java
+territory against llama.cpp's hand-vectorized 10-20+ GFLOP/s per core — the
+gap fully explains the observed ~6x wall-clock difference.
+
+Confirmed as *not* a bug: thread pool sizing (`ForkJoinPool.commonPool()` is
+correct for local mode; the explicit parallelism flag is only for cluster
+mode's forked JVMs).
+
+**Next task, spec'd out for Session 65:** replace the scalar inner loops in
+`sgemmQ{4K,5K,8_0}WeightStationary` with explicit Vector API SIMD, inside the
+existing weight-stationary batching structure (don't replace it). Priority
+order: Q8_0 first (simplest block layout, lowest risk, validates the JDK
+module/build plumbing), then Q4_K, then Q5_K; `CpuMatVec`/vision path and
+other scalar quant fallbacks are lower priority. First open question to
+resolve before writing code: confirm the real target JDK's Vector API status
+(`jdk.incubator.vector` vs finalized) — this session did not check it.
+
+---
+
+## Status
+
+**Session 63** — vision encode accuracy fix on branch `47-vision`: SigLIP
+vision towers (moondream2) were missing their post-encoder LayerNorm
+entirely.
+
+Commit `a5255d3`, titled "fixed some image scaling errors, something is
+replying correctly now" — despite the commit message, the actual bug was
+numerical, not geometric. `VisionEncoder` never applied `v.post_ln`.
+CLIP/LLaVA mmproj files don't declare this tensor at all (CLIP's own
+`post_layernorm` only touches the pooled CLS output, which LLaVA-style
+callers never use), so its absence from the encoder was easy to miss — but
+SigLIP (moondream2's vision tower) applies this LayerNorm to the *entire*
+last hidden state before any downstream use, making it structurally
+required there, not optional.
+
+Without it, moondream2's patch embeddings were the raw, un-normalized final
+transformer-block residual stream, with L2 norm up to ~70000, instead of
+properly LayerNorm'd features — a magnitude blowup fully consistent with
+the "sees the image but describes something nonsensical" failure mode this
+branch had been chasing.
+
+**Fix:** reads `v.post_ln.weight`/`v.post_ln.bias` when present
+(`hasPostLn`) and applies the LayerNorm once after the last transformer
+block, before the projector. Absence means skip the operation entirely —
+deliberately *not* an identity-affine LayerNorm, which would still
+normalize mean/variance and change CLIP/LLaVA's existing (correct)
+behavior. CLIP/LLaVA mmproj files therefore see zero behavior change from
+this fix. New `VisionEncoderTest` cases cover both the present and absent
+tensor case.
+
+---
+
+## Status
+
+**Session 62** — `47: Phi2Rope, image placeholder and more formatting for
+phi2`: Phi2's own RoPE variant, plus vision-side formatting cleanup, ahead
+of the first coherent moondream2 reply landed in Session 63.
+
+**New `Phi2Rope`** (`node` module): Phi2 uses a **partial-rotary** RoPE
+variant — only a configured fraction of `headDim` is actually rotated, the
+remainder passed through unchanged — different from the full-rotary RoPE
+`LlamaTransformerHandler`/`Phi3TransformerHandler` already implement, so it
+couldn't reuse either existing implementation. New `Phi2RopeTest` pins down
+the exact partial-rotation boundary.
+
+`GgufReader` gained float-array metadata reading (new
+`GgufReaderMetaFloatArrayTest`) so Phi2's rotary-fraction config comes
+straight from GGUF metadata rather than being hardcoded.
+
+`ChatTemplate` extended for Phi2's chat format; `VisionConfig`,
+`ImagePatchEmbedder`, `LlavaHandlerFactory`, and
+`VisionAwareForwardPassHandler` all received formatting/wiring adjustments
+so the `<image>` placeholder token is handled consistently on the Phi2
+path, not just Llama/Phi3. New `VisionConfigNormalizationTest`.
+
+---
+
+## Status
+
+**Session 61** — `adding mm0OutDim to projection math to support phi2
+vision`: extended `VisionEncoder`'s CLIP-only assumptions to also cover
+SigLIP-family towers (moondream2), ahead of onboarding Phi2 vision proper.
+
+`VisionEncoder`'s tensor-naming contract (javadoc and load-time
+expectations) was CLIP/LLaVA-specific: `v.class_embd` always present,
+`v.position_embd.weight` sized `numPatches+1` (CLS token included).
+SigLIP models have no CLS token at all — `v.class_embd` is absent and
+`v.position_embd.weight` is sized exactly `numPatches`. The encoder now
+branches on tensor presence rather than assuming CLIP's layout
+unconditionally.
+
+`mm0OutDim` (the first projector layer's output width) is now read from
+`mm.0.weight`'s own GGUF shape rather than assumed — consistent with this
+branch's established policy (first applied to the projector's *second*
+layer back in the mm.2-projector work) of trusting the tensor's own shape
+over metadata fields that have proven unreliable across mmproj exports.
+
+Two large reference documents were added under `docs/`
+(`meta-juno-doc.md`/`.txt`) capturing the full architecture write-up this
+branch had been accumulating — bulk documentation, no source-behavior
+change.
+
+---
+
+## Status
+
+**Session 60** — `.llamafile as vision archive`: models shipped as
+`.llamafile` (Mozilla's self-contained model+runtime bundle) can now be
+read directly as a vision model source, not just plain `.gguf`.
+
+**New `LlamafileGgufIndex`** (`node` module): a `.llamafile` is a
+self-executing archive with a GGUF payload appended after a Cosmopolitan
+binary stub. This parses the container to locate and index the embedded
+GGUF's tensors and metadata without needing a separately-extracted `.gguf`
+file on disk. New `LlamafileGgufIndexTest` covers the container-parsing
+logic directly.
+
+`GgufReader` extended to open through this index transparently, so
+downstream code doesn't need to know whether it's reading a bare GGUF or
+one embedded in a llamafile. `LlavaHandlerFactory` updated so vision model
+resolution accepts a `.llamafile` path wherever a `.gguf` path was
+previously required. New `LlavaHandlerFactoryEmbeddedVisionTest` covers
+loading vision tensors out of an embedded, llamafile-packaged GGUF
+end-to-end.
+
+This is the change that made `moondream2-q5_k.llamafile` — the model used
+for every prefill benchmark in Sessions 64-67 — usable at all.
+
+---
+
+## Status
+
+**Session 59** — `gguf-info mode and phi2 support added`: a standalone
+GGUF-inspection CLI mode and the first Phi2 architecture support, added
+together since getting Phi2 vision working at all needed the inspector
+first.
+
+**New `./juno gguf-info` subcommand** (`GgufInfoMain`, `juno-player`):
+dumps a GGUF file's metadata keys and tensor list/shapes without loading a
+full model or starting inference. Used throughout the rest of this branch
+to inspect unfamiliar mmproj/model files before writing code against them
+— this is the same tool Session 60 (main narrative numbering aside) later
+used to catch the CLIP `use_gelu` metadata bug.
+
+**New `Phi2TransformerHandler`** (`node` module, ~560 lines): first-cut
+Phi2 architecture support — distinct attention, FFN, and norm wiring from
+Llama/Phi3 — wired into `ForwardPassHandlerLoader`.
+
+`ImagePatchEmbedder` and `VisionEncoder` extended for the patch-embedding
+and encoder-config shapes this model family needs; `VisionAwareForwardPassHandler`
+updated accordingly. Expanded `ImagePatchEmbedderTest` and
+`VisionEncoderTest`.
+
+---
+
+## Status
+
+**Session 58** — `vision replies random scene, missing context of pic`: the
+zero-vector text-token bug. Image tokens carried real signal into the
+model; every text token carried none.
+
+`VisionAwareForwardPassHandler.buildWindowActivationsWithVision()` (and the
+single-token `buildActivationWithVision()`) spliced real CLIP/SigLIP patch
+vectors into image-token positions but left every **text**-token position
+as an all-zero vector — meaning the entire prompt text (chat template, the
+actual question, BOS) was invisible to the model; only the image patches
+carried any signal at all. This explains the failure mode precisely:
+grammatically-plausible output describing a plausible but unrelated scene,
+since the only "real" input reaching the model was the image.
+
+**Fix:** added `ForwardPassHandler.embedToken(int)` (default: throws
+`UnsupportedOperationException`) so a decorator can ask the wrapped handler
+for a single token's real embedding-table row. Implemented in
+`LlamaTransformerHandler.embedToken()`, reusing the existing clamping
+logic. Both vision-splicing methods now call
+`textHandler.embedToken(tokenId)` for non-image positions instead of
+leaving zero.
+
+Updated the two existing `VisionAwareForwardPassHandlerBatchTest` cases
+that had asserted the old, buggy zero-vector behavior (they'd now be
+actively wrong), added a new single-token-path regression test, and added
+direct `embedToken()` tests to
+`LlamaTransformerHandlerEmbeddingsNodeActivationsTest`. The shared
+`StubForwardPassHandler` test double gained a configurable deterministic
+fake embedding.
+
+---
+
+## Status
+
+**Session 57** — `vision finally working, but long and gives gbg reply`,
+immediately followed same day by cleanup of an accidentally-committed debug
+dump.
+
+First commit where a `/v1/vision/chat` request ran end-to-end without
+crashing or hanging and produced *some* reply text — output was still
+long-winded and largely garbage at this point (this is the exact state
+Session 58's zero-vector bug describes and fixes next). Touched
+`GenerationLoop`, `ConsoleMain`, `LlamaTransformerHandler`; new
+`LlamaTransformerHandlerEmbeddingsNodeActivationsTest`.
+
+The commit accidentally included an 8700-line `diff.txt` — a leftover
+debug artifact, not source — caught and deleted in the very next commit the
+same day. No functional change in the cleanup itself; noted here only so
+the file's brief appearance in history isn't mistaken for intentional
+content later.
+
+---
+
+## Status
+
+**Session 56** — `up`: internal refactor of the batched-prefill code paths
+added in Session 55. No externally-visible behavior change.
+
+`LlamaTransformerHandler` and `Phi3TransformerHandler`'s batched-prefill
+methods (added in Session 55) were reworked for correctness and clarity
+following self-review; `docs/batched-prefil.md` (the design doc from
+Session 55) was extended with the implementation notes this pass produced.
+No new public API surface; existing batched-prefill tests continued to
+apply unchanged.
+
+---
+
+## Status
+
+**Session 55** — `removed bytedeco from the docs and code to not confuse
+assistants`, immediately followed by `batched prefill`: the batched-prefill
+work that the later SIMD benchmark sessions (64-67) build directly on top
+of was designed and implemented here.
+
+Small cleanup first: stray `org.bytedeco` (JavaCPP) references removed
+from docs and a couple of `node`/`master` test files. The project had
+already moved off JavaCPP for its CUDA bindings well before this branch
+started, but leftover mentions were confusing enough to warrant a
+dedicated pass.
+
+**Batched prefill**, planned in a new `docs/batched-prefil.md` design
+document before any source change, then implemented: `GenerationLoop.generate()`
+and `.generateBatch()` previously prefilled a prompt with a sequential
+per-position loop, reallocating and copying a growing token-id slice on
+every single position. New `PrefillMode` (`SINGLE`/`BATCH`), new
+`BatchForwardRequest`/`BatchForwardResult` (`node` module), and real
+batched `forwardBatch()` implementations added to
+`LlamaTransformerHandler` and `Phi3TransformerHandler`. `CpuMatVec` gained
+the batched `sgemm` this all runs on top of. New batched-aware
+`LoraTrainableHandler` path. New tests: `PrefillModeTest`,
+`ConsoleMainPrefillFlagTest`, `CpuMatVecSgemmTest`,
+`VisionAwareForwardPassHandlerBatchTest`.
+
+A `docs/TODO-VectorAPI.md` note was also added here, flagging future SIMD
+work as a known follow-up — the same gap Sessions 65-67 eventually closed.
+
+---
+
+## Status
+
+**Session 54** — `#47 model resolver, f16 weights support, stack-trace on
+api error, tested on llava-phi-3-mini-f16.gguf llava-v1.5-7b-Q4_K.gguf`:
+first real-model validation pass against two actual downloaded LLaVA GGUFs.
+
+**New `ModelIdResolver`** (`registry` module) so `/v1/vision/chat` and the
+OpenAI-compatible endpoints can resolve a requested model id against
+what's actually loaded, rather than requiring an exact string match.
+
+`LlamaTransformerHandler` gained F16 weight-tensor support (new
+`LlamaTransformerHandlerF16MatVecTest`), needed once real F16 mmproj/model
+files were tested against, not just quantized ones.
+
+`InferenceApiServer`/`OpenAiChatHandler`/`VisionChatHandler` error paths
+now surface a full stack trace on API error instead of swallowing it — this
+is what made every subsequent bug in this branch (Sessions 57-63)
+traceable to a specific line rather than a bare exception name.
+
+First real-model test pass: `llava-phi-3-mini-f16.gguf` and
+`llava-v1.5-7b-Q4_K.gguf`, both downloaded rather than synthetic fixtures.
+
+---
+
+## Status (continued)
+
+**Session 53** — `#47 initial impl added, junits are passing`, preceded by
+an unrelated fix, `#43 multiple issues with dots in offending blocks
+fixed`: the start of the Vision-I2T branch.
+
+Unrelated small fix first, landed just before this branch started: `#43`
+fixed formatting issues with dots inside "offending blocks" in `run.bat`
+and docs output; not vision-related, noted here only because it's the last
+commit before the branch diverges from release-0.1.0.
+
+**New `vision` Maven module**: `VisionConfig`, `VisionEncoder` (pure-Java
+CLIP ViT-L/14 encoder reading GGUF mmproj weights), `ImagePatchEmbedder`,
+`LlavaHandlerFactory`, `VisionAwareForwardPassHandler` (wraps a text
+`ForwardPassHandler`, splices patch embeddings into image-token
+positions), and `StubForwardPassHandler` (test double). New
+`docs/Vision-I2T.md` design doc.
+
+New `VisionChatHandler` (`juno-player`) and a `POST /v1/vision/chat` route
+wired into `InferenceApiServer`/`ConsoleMain`.
+
+Full unit-test coverage from day one for every new class
+(`ImagePatchEmbedderTest`, `VisionAwareForwardPassHandlerTest`,
+`VisionConfigTest`, `VisionEncoderTest`) — all passing at this commit, per
+the commit message, though this is the scaffolding stage: no real GGUF
+file had been tested against yet (that starts in Session 54).
+
 **Session 52** — EU AI ACT Complience User transparency and AI disclosure.
 
 InferenceApiServer.java; ConsoleMain.java and juno-api.yaml was updated with `The replies are generated by an AI system` water-mark.

@@ -51,7 +51,6 @@ class GpuForwardPassIT {
 
 	@BeforeAll
 	static void setup() {
-		// Guard first — before any CUDA (bytedeco) class is touched.
 		// Without -Djuno.gpu.test=true, CUDA native libs are never loaded into
 		// the coordinator JVM, so no CUDA device FDs are inherited by the node
 		// JVMs forked by ClusterHarness (which would crash them on startup).

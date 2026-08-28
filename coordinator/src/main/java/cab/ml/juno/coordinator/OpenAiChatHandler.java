@@ -29,6 +29,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import cab.ml.juno.registry.ModelDescriptor;
+import cab.ml.juno.registry.ModelIdResolver;
 import cab.ml.juno.registry.ModelRegistry;
 import cab.ml.juno.registry.ModelStatus;
 import cab.ml.juno.sampler.SamplingParams;
@@ -90,17 +91,9 @@ public final class OpenAiChatHandler {
 			messages.add(new ChatMessage(m.role(), text));
 		}
 
-		String modelId = resolveModelId(body.model());
-		if (modelId == null) {
-			openAiError(ctx, 503, "service_unavailable_error", "service_unavailable", "No model is currently loaded",
-					null);
+		String modelId = resolveModelId(ctx, body.model());
+		if (modelId == null)
 			return;
-		}
-		if (!modelRegistry.isLoaded(modelId)) {
-			openAiError(ctx, 503, "service_unavailable_error", "service_unavailable",
-					"Model '" + modelId + "' is not loaded", "model");
-			return;
-		}
 
 		SamplingParams sampling = buildSamplingParams(body);
 		RequestPriority priority = parsePriority(body.xJunoPriority());
@@ -266,11 +259,26 @@ public final class OpenAiChatHandler {
 		return o;
 	}
 
-	private String resolveModelId(String requested) {
-		if (requested != null && !requested.isBlank())
-			return requested.strip();
-		return modelRegistry.listModels().stream().filter(m -> modelRegistry.isLoaded(m.modelId()))
-				.map(ModelDescriptor::modelId).findFirst().orElse(null);
+	/**
+	 * Resolves and validates the requested model id, writing an OpenAI-style 503
+	 * error response itself on failure. See {@link ModelIdResolver} for
+	 * fallback/ambiguity rules.
+	 *
+	 * @return the resolved model id, or {@code null} if an error response was
+	 *         already written to {@code ctx}
+	 */
+	private String resolveModelId(Context ctx, String requested) {
+		ModelIdResolver.Resolution res = ModelIdResolver.resolve(modelRegistry, requested,
+				ModelIdResolver.FallbackPolicy.SINGLE_MODEL_FALLBACK);
+		if (res.isError()) {
+			openAiError(ctx, 503, "service_unavailable_error", "service_unavailable", res.errorMessage(),
+					requested == null || requested.isBlank() ? null : "model");
+			return null;
+		}
+		if (res.warning() != null) {
+			log.warning(res.warning());
+		}
+		return res.modelId();
 	}
 
 	private static String extractTextContent(JsonNode content) {

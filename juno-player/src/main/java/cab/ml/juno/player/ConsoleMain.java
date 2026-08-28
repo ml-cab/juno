@@ -45,9 +45,13 @@ import cab.ml.juno.health.HealthThresholds;
 import cab.ml.juno.coordinator.InferenceRequest;
 import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.coordinator.TokenConsumer;
+import cab.ml.juno.health.HealthReporter;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
+import cab.ml.juno.lora.LoraAdamOptimizer;
+import cab.ml.juno.lora.LoraAdapterSet;
+import cab.ml.juno.metrics.MetricsMain;
 import cab.ml.juno.node.ActivationDtype;
 import cab.ml.juno.node.CudaAvailability;
 import cab.ml.juno.node.RocmAvailability;
@@ -77,12 +81,10 @@ import cab.ml.juno.node.LoraTrainingHandlerFactory;
 import cab.ml.juno.node.MatVec;
 import cab.ml.juno.node.QaLoraInitializer;
 import cab.ml.juno.node.ShardContext;
-import cab.ml.juno.registry.NodeDescriptor;
-import cab.ml.juno.registry.NodeStatus;
-import cab.ml.juno.registry.ParallelismType;
 import cab.ml.juno.registry.ModelDescriptor;
 import cab.ml.juno.registry.ModelRegistry;
 import cab.ml.juno.registry.ModelStatus;
+import cab.ml.juno.registry.ParallelismType;
 import cab.ml.juno.registry.QuantizationType;
 import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.registry.ShardMap;
@@ -91,6 +93,10 @@ import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.GgufTokenizer;
 import cab.ml.juno.tokenizer.Tokenizer;
+import cab.ml.juno.vision.LlavaHandlerFactory;
+import jdk.jfr.Configuration;
+import jdk.jfr.Recording;
+import jdk.jfr.RecordingState;
 
 /**
  * Interactive REPL that runs a model using the Juno engine.
@@ -103,7 +109,9 @@ import cab.ml.juno.tokenizer.Tokenizer;
  * into the GGUF. This keeps the base model untouched and lets you swap adapters
  * freely. Use /merge-hint in the REPL to see how to bake weights in.
  *
- * Command-line arguments: --model-path PATH Path to GGUF file (required) --cpu
+ * Command-line arguments: --model-path PATH Path to GGUF file (required)
+ * --mmproj-path PATH Separate mmproj GGUF holding the CLIP vision encoder
+ * (required for /v1/vision/chat on real LLaVA/Qwen-VL/SmolVLM releases) --cpu
  * Force computation on CPU --dtype FLOAT32|FLOAT16 Activation wire format
  * (default: FLOAT16) --max-tokens N Max generated tokens (default: 200)
  * --temperature F Sampling temperature (default: 0.7) --local Use in-process
@@ -120,9 +128,23 @@ public final class ConsoleMain {
 	@SuppressWarnings("unused")
 	private static final Logger log = Logger.getLogger(ConsoleMain.class.getName());
 
-	static {
-		boolean verbose = Boolean.getBoolean("JUNO_VERBOSE") || "true".equalsIgnoreCase(System.getenv("JUNO_VERBOSE"));
-		if (!verbose) {
+	/**
+	 * Configures java.util.logging verbosity for this JVM.
+	 *
+	 * Must be called from {@link #main(String[])} AFTER {@link #parseArgs(String[])}
+	 * has run, never from a static initializer. A static initializer executes at
+	 * class-load time, which is before main()'s body — including before
+	 * parseArgs() has parsed --verbose and before JUNO_VERBOSE would be set as a
+	 * system property — so it would always observe verbose=false regardless of
+	 * the CLI flag. That ordering bug previously made --verbose a no-op in
+	 * --local mode (single in-process JVM), while cluster mode happened to work
+	 * because verbosity there is read by {@link ClusterHarness} at fork time,
+	 * well after parseArgs() has already run.
+	 */
+	private static void configureLogging() {
+		boolean effectiveVerbose = verbose || Boolean.getBoolean("JUNO_VERBOSE")
+				|| "true".equalsIgnoreCase(System.getenv("JUNO_VERBOSE"));
+		if (!effectiveVerbose) {
 			java.util.logging.LogManager.getLogManager().reset();
 			java.util.logging.Logger.getLogger("").setLevel(java.util.logging.Level.OFF);
 			for (String ns : new String[] { "io.grpc", "io.netty", "cab.ml.juno", "com.google", "org.slf4j", "" }) {
@@ -133,6 +155,15 @@ public final class ConsoleMain {
 
 	// ── Standard arguments ────────────────────────────────────────────────────
 	private static String modelPath = null;
+	/**
+	 * Path to a separate mmproj GGUF holding the CLIP vision encoder (see
+	 * {@link cab.ml.juno.vision.VisionModelPaths}). Real-world multimodal GGUF
+	 * releases (LLaVA, Qwen-VL, SmolVLM, ...) never merge the vision encoder
+	 * into the base LLM file; without this path {@code --api-port} vision
+	 * routes are never registered for those models, even though
+	 * {@code --model-path} points at a genuine I2T model.
+	 */
+	private static String mmprojPath = null;
 	private static ActivationDtype dtype = ActivationDtype.FLOAT16;
 	private static int maxTokens = 200;
 	private static float temperature = 0.7f;
@@ -148,10 +179,15 @@ public final class ConsoleMain {
 	/** When true, start a health sidecar alongside the normal run mode. */
 	private static boolean healthMode = false;
 	private static int healthPort = cab.ml.juno.health.HealthMain.DEFAULT_PORT;
-	/** Active reporters — wired from runLocalRepl(); used to record per-inference latency. */
+	/**
+	 * Active reporters — wired from runLocalRepl(); used to record per-inference
+	 * latency.
+	 */
 	private static final java.util.List<HealthReporter> activeReporters = new java.util.ArrayList<>();
 	/** Optional local REST API port (OpenAI-compatible endpoint included). */
 	private static int apiPort = -1;
+	/** Prefill strategy: batched (default) or single (legacy sequential loop). */
+	private static cab.ml.juno.coordinator.PrefillMode prefillMode = cab.ml.juno.coordinator.PrefillMode.BATCHED;
 	// ── Byte-order argument ───────────────────────────────────────────────────
 	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
 	private static String byteOrder = "BE";
@@ -245,6 +281,7 @@ public final class ConsoleMain {
 			printHelp();
 			System.exit(0);
 		}
+		configureLogging();
 
 		// ── Health sidecar — start in background then continue normally ──────
 		if (healthMode) {
@@ -259,6 +296,10 @@ public final class ConsoleMain {
 		}
 		if (!Path.of(modelPath).toFile().exists()) {
 			System.err.println("ERROR: Model file not found: " + modelPath);
+			System.exit(1);
+		}
+		if (mmprojPath != null && !Path.of(mmprojPath).toFile().exists()) {
+			System.err.println("ERROR: mmproj file not found: " + mmprojPath);
 			System.exit(1);
 		}
 
@@ -334,6 +375,14 @@ public final class ConsoleMain {
 			case "--model-path":
 				if (i + 1 < args.length)
 					modelPath = args[++i];
+				break;
+			case "--mmproj-path":
+				if (i + 1 < args.length)
+					mmprojPath = args[++i];
+				break;
+			case "--prefill":
+				if (i + 1 < args.length)
+					prefillMode = parsePrefillMode(args[++i]);
 				break;
 			case "--dtype":
 				if (i + 1 < args.length)
@@ -567,6 +616,17 @@ public final class ConsoleMain {
 		System.out.println("Required:");
 		System.out.println("  --model-path PATH          Path to GGUF model file");
 		System.out.println();
+		System.out.println("Vision (image-to-text) models:");
+		System.out.println("  --mmproj-path PATH         Path to a separate mmproj GGUF holding the CLIP");
+		System.out.println("                             vision encoder. Required for /v1/vision/chat —");
+		System.out.println("                             real LLaVA/Qwen-VL/SmolVLM GGUF releases keep the");
+		System.out.println("                             vision encoder in a separate file from the base LLM.");
+		System.out.println();
+		System.out.println("Prefill strategy:");
+		System.out.println("  --prefill single|batched   Prefill strategy (default: batched)");
+		System.out.println("                             batched: windowed GEMM — fixes vision 10-min stall");
+		System.out.println("                             single:  original per-token loop (escape hatch)");
+		System.out.println();
 		System.out.println("Inference options:");
 		System.out.println("  --gpu                      Use GPU (default, no need to set)");
 		System.out.println("  --cpu                      Force to use CPU");
@@ -756,9 +816,9 @@ public final class ConsoleMain {
 		var pipeline = LocalInferencePipeline.from(shardMap, List.of(handler), config.vocabSize(), config.hiddenDim(),
 				config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
 
-		LoraAdamOptimizer optimizer = new LoraAdamOptimizer(loraLr, 0.9, 0.999, 1e-8, loraWeightDecay, loraPlusRatio);
+		LoraAdamOptimizer optimizer = LoraAdamOptimizer.defaults(loraLr);
 		int[] totalStepsTrained = { 0 };
 		boolean[] dirty = { false }; // unsaved changes?
 		final Object trainLock = new Object();
@@ -1533,18 +1593,19 @@ public final class ConsoleMain {
 	/**
 	 * Starts a programmatic JFR recording on the coordinator, injects
 	 * {@code -XX:StartFlightRecording} into every forked node JVM via
-	 * {@link ClusterHarness#withJfr}, runs the cluster REPL, and on exit
-	 * aggregates all four JFR files (coordinator + 3 nodes) before printing
-	 * the merged metrics summary.
+	 * {@link ClusterHarness#withJfr}, runs the cluster REPL, and on exit aggregates
+	 * all four JFR files (coordinator + 3 nodes) before printing the merged metrics
+	 * summary.
 	 *
-	 * <p>A <em>single</em> shutdown hook owns the full teardown sequence so that
+	 * <p>
+	 * A <em>single</em> shutdown hook owns the full teardown sequence so that
 	 * ordering is guaranteed:
 	 * <ol>
-	 *   <li>Stop coordinator's {@link Recording} (flushes its JFR file).</li>
-	 *   <li>{@link ClusterHarness#stop()} — destroys node processes; their
-	 *       {@code dumponexit=true} flag writes each node's JFR file.</li>
-	 *   <li>Brief sleep to let OS flush all files to disk.</li>
-	 *   <li>Merge-extract from coordinator + node files → print JSON summary.</li>
+	 * <li>Stop coordinator's {@link Recording} (flushes its JFR file).</li>
+	 * <li>{@link ClusterHarness#stop()} — destroys node processes; their
+	 * {@code dumponexit=true} flag writes each node's JFR file.</li>
+	 * <li>Brief sleep to let OS flush all files to disk.</li>
+	 * <li>Merge-extract from coordinator + node files → print JSON summary.</li>
 	 * </ol>
 	 */
 	private static void startClusterJfr() throws Exception {
@@ -1562,8 +1623,8 @@ public final class ConsoleMain {
 		rec.setDestination(coordinatorJfrFile);
 		rec.start();
 
-		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration
-				+ "  output=" + coordinatorJfrName + Color.RESET + "\n");
+		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration + "  output=" + coordinatorJfrName
+				+ Color.RESET + "\n");
 
 		// ── Cluster setup — nodes get their own JFR via withJfr() ─────────────
 		String modeLabel = pType == ParallelismType.TENSOR ? "tensor-parallel" : "pipeline-parallel";
@@ -1579,13 +1640,12 @@ public final class ConsoleMain {
 
 		ClusterHarness harness = ((pType == ParallelismType.TENSOR)
 				? ClusterHarness.tensorNodes(modelPath, totalLayers, numHeads)
-				: ClusterHarness.threeNodes(modelPath, totalLayers))
-				.withJfr(jfrDuration, timestamp);
+				: ClusterHarness.threeNodes(modelPath, totalLayers)).withJfr(jfrDuration, timestamp);
 
 		if (loraPlayPath != null && !loraPlayPath.isBlank()) {
 			harness.withLoraPlay(loraPlayPath);
-			print(Color.CYAN + "  ⚙ LoRA inference overlay will be applied on every node: "
-					+ loraPlayPath + Color.RESET);
+			print(Color.CYAN + "  ⚙ LoRA inference overlay will be applied on every node: " + loraPlayPath
+					+ Color.RESET);
 		}
 		if (healthMode) {
 			harness.withHealthUrl("http://localhost:" + healthPort);
@@ -1602,15 +1662,22 @@ public final class ConsoleMain {
 			try {
 				if (recRef.getState() == RecordingState.RUNNING)
 					recRef.stop();
-			} catch (Exception ignored) {}
+			} catch (Exception ignored) {
+			}
 
 			// 2. Stop cluster → destroys node processes → dumponexit fires on each node.
 			print("\n" + Color.YELLOW + "⏹ Shutting down cluster..." + Color.RESET);
-			try { harnessRef.stop(); } catch (Exception ignored) {}
+			try {
+				harnessRef.stop();
+			} catch (Exception ignored) {
+			}
 			print(Color.YELLOW + "✔ Cluster stopped." + Color.RESET);
 
 			// 3. Wait for coordinator + node JFR files to be fully flushed to disk.
-			try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+			try {
+				Thread.sleep(2000);
+			} catch (InterruptedException ignored) {
+			}
 
 			// 4. Merge-extract from coordinator + all node files and print.
 			try {
@@ -1637,7 +1704,7 @@ public final class ConsoleMain {
 		}
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
 
 		startRepl(loop, tokenizer); // calls System.exit(0) on quit — shutdown hook fires from there
 	}
@@ -1647,8 +1714,9 @@ public final class ConsoleMain {
 	 * prints the JSON summary to the console — same presentation as
 	 * {@link #extractAndPrintJfrMetrics} but across multiple files.
 	 *
-	 * <p>Files that do not exist (e.g. a node that crashed before dumping) are silently
-	 * skipped so a partial result is still reported.
+	 * <p>
+	 * Files that do not exist (e.g. a node that crashed before dumping) are
+	 * silently skipped so a partial result is still reported.
 	 */
 	private static void extractAndPrintJfrMetricsMerged(List<Path> jfrFiles, String modelStem, String modelFilename) {
 		try {
@@ -1682,8 +1750,8 @@ public final class ConsoleMain {
 	}
 
 	/**
-	 * Calls {@link MetricsMain#extractToJson} on the finished JFR file, then
-	 * prints the resulting JSON to the REPL console inside a highlighted box.
+	 * Calls {@link MetricsMain#extractToJson} on the finished JFR file, then prints
+	 * the resulting JSON to the REPL console inside a highlighted box.
 	 */
 	private static void extractAndPrintJfrMetrics(Path jfrFile, String modelStem, String modelFilename) {
 		try {
@@ -1711,16 +1779,14 @@ public final class ConsoleMain {
 			tokenizer = GgufTokenizer.load(reader);
 		}
 
-		long vramPerLayerBytes = estimateVramPerLayer(config.hiddenDim());
-		long nodeVramBytes = config.numLayers() * vramPerLayerBytes * 2;
-
-		List<NodeDescriptor> nodes = new ArrayList<>();
-		for (int i = 0; i < nodeCount; i++) {
-			nodes.add(new NodeDescriptor("node-" + i, "localhost", 9092 + i, nodeVramBytes, nodeVramBytes,
-					NodeStatus.READY, 1.0, Instant.now(), Instant.now()));
-		}
-
-		ShardMap shardMap = ShardPlanner.create().plan("model", config.numLayers(), vramPerLayerBytes, nodes);
+		// Local, in-process pipeline-parallelism simulation — every "node" is a
+		// stage in this same JVM with no real VRAM difference between stages, so
+		// split layers evenly rather than routing through ShardPlanner's
+		// VRAM-aware greedy algorithm (correct for real clusters, but a
+		// deliberately huge per-node VRAM figure to keep it from ever rejecting
+		// a local run causes it to hand nearly the whole model to node 0 and one
+		// layer each to every other node — see ShardMap.evenSplit javadoc).
+		ShardMap shardMap = ShardMap.evenSplit("model", config.numLayers(), nodeCount);
 		// Load .lora adapters for inference-only playback if --lora-play was given
 		LoraAdapterSet playAdapters = null;
 		if (loraPlayPath != null) {
@@ -1733,22 +1799,33 @@ public final class ConsoleMain {
 		}
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		GpuContext gpuCtx = prepareGpuContext();
-		// One MatVec per process — shares the same GpuContext / cuBLAS handle across shards.
+		// One MatVec per process — shares the same GpuContext / cuBLAS handle across
+		// shards.
 		MatVec sharedBackend = (gpuCtx != null) ? gpuCtx.createMatVec() : ForwardPassHandlerLoader.selectBackend();
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 			handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context, sharedBackend, playAdapters));
 		}
 
+		// MUST run before LocalInferencePipeline.from() below: prepareVisionHandler()
+		// replaces handlers.get(0) in place with a VisionAwareForwardPassHandler when
+		// the loaded model is vision-capable. LocalInferencePipeline.from() captures a
+		// direct reference to each handler into its NodeStage list at construction
+		// time — if the wrap happens after that call, the pipeline keeps using the
+		// unwrapped text handler forever and vision requests silently never reach the
+		// vision-aware code path (see CHANGELOG "vision handler wiring order").
+		LlavaHandlerFactory.Built visionBuilt = prepareVisionHandler(modelPath, mmprojPath, handlers, config);
+
 		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
 				config.hiddenDim(), config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop,
 				cab.ml.juno.coordinator.BatchConfig.disabled());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
+			registerVisionRoutes(apiServer, scheduler, registry, visionBuilt);
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Local API server on http://localhost:" + apiPort
 					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);
@@ -1766,11 +1843,89 @@ public final class ConsoleMain {
 			}
 			activeReporters.addAll(reporters);
 			Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
-				for (HealthReporter r : reporters) r.stop();
+				for (HealthReporter r : reporters)
+					r.stop();
 			}));
 		}
 
 		startRepl(loop, tokenizer);
+	}
+
+	/**
+	 * Detects a vision-capable model and, if found, wraps {@code handlers.get(0)}
+	 * in place with a {@link VisionAwareForwardPassHandler}.
+	 *
+	 * <p><b>Call this BEFORE {@link LocalInferencePipeline#from}.</b>
+	 * {@code LocalInferencePipeline.from()} reads {@code handlers.get(i)} once,
+	 * at construction time, and stores that exact reference in each
+	 * {@code NodeStage} — it never re-reads the list afterwards. Mutating
+	 * {@code handlers} after the pipeline is built has no effect on the
+	 * already-constructed pipeline, which then keeps calling the unwrapped text
+	 * handler for the lifetime of the process; vision requests never reach
+	 * {@link VisionAwareForwardPassHandler}, and image patches registered by
+	 * {@code VisionChatHandler} are silently never looked up.
+	 *
+	 * @return the wired vision components, or {@code null} if the loaded model
+	 *         is not vision-capable (nothing was wrapped)
+	 */
+	private static LlavaHandlerFactory.Built prepareVisionHandler(String modelPath, String mmprojPath,
+			List<ForwardPassHandler> handlers, LlamaConfig config) {
+		// Build/version marker — fires in under a second, long before the prefill
+		// that follows. If this string doesn't match what you expect from the
+		// latest delivered files, the running jar is STALE — stop here and
+		// rebuild rather than spending 20-30 minutes on a prefill whose result
+		// you won't be able to trust. Added 2026-07-20 after two separate stale
+		// -build incidents this session (StubForwardPassHandler missing a
+		// constructor; the text-embedding-stats log line never appearing) each
+		// cost a full ~25-minute cycle to even notice.
+		log.info("[vision] BUILD MARKER: session42-2026-07-20 "
+				+ "(includes: quick_gelu dispatch, EXIF orientation correction, "
+				+ "unconditional forwardBatch/forward entry logging, per-window text-embedding-stats aggregate)");
+		log.info("[vision] prepareVisionHandler — modelPath=" + modelPath + "  mmprojPath=" + mmprojPath
+				+ "  handlers=" + (handlers == null ? "null" : handlers.size()));
+		try {
+			Path mmproj = mmprojPath != null ? Path.of(mmprojPath) : null;
+			boolean isVision = LlavaHandlerFactory.isVisionArchitecture(Path.of(modelPath), mmproj);
+			log.info("[vision] isVisionArchitecture=" + isVision);
+			if (!isVision) {
+				log.info("[vision] Not a vision model — skipping handler wrap"
+						+ (mmproj == null ? " (no --mmproj-path given; pass one if this is a known I2T model)" : ""));
+				return null;
+			}
+			log.info("[vision] Building vision handler from " + handlers.size() + " loaded handler(s)");
+			LlavaHandlerFactory.Built built = LlavaHandlerFactory.buildFromHandlers(Path.of(modelPath), mmproj,
+					handlers, config);
+			log.info("[vision] Built — encoder patches=" + built.config().numPatches() + "  outputDim="
+					+ built.encoder().outputDim() + "  imageTokenId=" + built.imageTokenId()
+					+ "  handlers.get(0) now=" + handlers.get(0).getClass().getName());
+			return built;
+		} catch (Exception e) {
+			log.severe("[vision] prepareVisionHandler FAILED: " + e.getClass().getName() + ": " + e.getMessage());
+			java.util.Arrays.stream(e.getStackTrace()).limit(8).forEach(f -> log.severe("[vision]   at " + f));
+			return null;
+		}
+	}
+
+	/**
+	 * Registers {@code POST /v1/vision/chat} and {@code /v1/vision/chat/stream}
+	 * on {@code apiServer} when {@code built} is non-null. Call this AFTER
+	 * {@code apiServer} exists; the handler wrap itself must already have
+	 * happened via {@link #prepareVisionHandler}, before the pipeline was built.
+	 */
+	private static void registerVisionRoutes(cab.ml.juno.coordinator.InferenceApiServer apiServer,
+			cab.ml.juno.coordinator.RequestScheduler scheduler, ModelRegistry registry,
+			LlavaHandlerFactory.Built built) {
+		if (built == null) {
+			return;
+		}
+		VisionChatHandler visionChatHandler = new VisionChatHandler(scheduler, registry, built.encoder(),
+				built.visionHandler());
+		apiServer.addRoutes(app -> {
+			app.post("/v1/vision/chat", visionChatHandler::handleBlocking);
+			app.post("/v1/vision/chat/stream", visionChatHandler::handleStreaming);
+			log.info("[vision] Routes registered: POST /v1/vision/chat  POST /v1/vision/chat/stream");
+		});
+		print(Color.GREEN + "  ✔ Vision routes registered (POST /v1/vision/chat)" + Color.RESET);
 	}
 
 	private static ModelRegistry buildLocalModelRegistry(LlamaConfig config, String modelPath) {
@@ -1778,8 +1933,9 @@ public final class ConsoleMain {
 		long vramPerLayer = 4L * config.hiddenDim() * config.hiddenDim() * 2;
 		String filename = Path.of(modelPath).getFileName().toString();
 		QuantizationType quant = LlamaConfig.fromFilename(filename);
-		ModelDescriptor descriptor = new ModelDescriptor(filename, config.architecture(), config.numLayers(), config.hiddenDim(),
-				config.vocabSize(), config.numHeads(), vramPerLayer, quant, modelPath, ModelStatus.LOADED, Instant.now());
+		ModelDescriptor descriptor = new ModelDescriptor(filename, config.architecture(), config.numLayers(),
+				config.hiddenDim(), config.vocabSize(), config.numHeads(), vramPerLayer, quant, modelPath,
+				ModelStatus.LOADED, Instant.now());
 		registry.putLoaded(descriptor);
 		return registry;
 	}
@@ -1789,8 +1945,7 @@ public final class ConsoleMain {
 		if (!useGpu || !gpuAvailable)
 			return null;
 		int dev = Math.max(0, Integer.getInteger("juno.cuda.device", 0));
-		int devCount = CudaAvailability.isAvailable()
-			? CudaAvailability.deviceCount() : RocmAvailability.deviceCount();
+		int devCount = CudaAvailability.isAvailable() ? CudaAvailability.deviceCount() : RocmAvailability.deviceCount();
 		if (dev >= devCount) {
 			log.warning("juno.cuda.device=" + dev + " out of range — using CPU matmul for local REPL");
 			return null;
@@ -1839,7 +1994,7 @@ public final class ConsoleMain {
 		}
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop,
 				cab.ml.juno.coordinator.BatchConfig.disabled());
 		if (apiPort > 0) {
@@ -1953,8 +2108,8 @@ public final class ConsoleMain {
 		} else {
 			System.out.println(String.format(
 					"  %sdtype=%s · byteOrder=%s · max_tokens=%d · temperature=%.2f · top_k=%d · top_p=%.2f · %s nodes=%d%s%n",
-					Color.GREEN_BOLD_BRIGHT, dtype, byteOrder, maxTokens, temperature, topK, topP, localMode ? "local" : "cluster",
-					nodeCount, Color.RESET));
+					Color.GREEN_BOLD_BRIGHT, dtype, byteOrder, maxTokens, temperature, topK, topP,
+					localMode ? "local" : "cluster", nodeCount, Color.RESET));
 		}
 		if (jfrDuration != null) {
 			System.out.println(
@@ -1974,10 +2129,24 @@ public final class ConsoleMain {
 		if (s == null)
 			return ActivationDtype.FLOAT16;
 		return switch (s.toUpperCase()) {
+		case "FLOAT32", "F32", "FP32" -> ActivationDtype.FLOAT32;
 		case "FLOAT16", "F16", "FP16" -> ActivationDtype.FLOAT16;
 		case "INT8", "I8" -> ActivationDtype.INT8;
-		default -> ActivationDtype.FLOAT32;
+		default -> {
+			System.err.println("WARNING: Unrecognized --dtype '" + s
+					+ "' (expected FLOAT32|FLOAT16|INT8) — falling back to FLOAT32");
+			yield ActivationDtype.FLOAT32;
+		}
 		};
+	}
+
+	private static cab.ml.juno.coordinator.PrefillMode parsePrefillMode(String s) {
+		try {
+			return cab.ml.juno.coordinator.PrefillMode.parse(s);
+		} catch (IllegalArgumentException e) {
+			System.err.println("WARNING: " + e.getMessage() + " — defaulting to 'batched'");
+			return cab.ml.juno.coordinator.PrefillMode.BATCHED;
+		}
 	}
 
 	private static ParallelismType parseParallelismType(String s) {
@@ -2011,10 +2180,5 @@ public final class ConsoleMain {
 		} catch (NumberFormatException e) {
 			return def;
 		}
-	}
-
-	private static long estimateVramPerLayer(int hiddenDim) {
-		long params = 4L * hiddenDim * hiddenDim;
-		return (long) (params * 2.0);
 	}
 }
