@@ -1009,13 +1009,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					qi += 32;
 				}
 
-				// Multiply dq[] against all B input vectors while it is in L1 cache
+				// Multiply dq[] against all B input vectors while it is in L1 cache.
+				// Dot-product accumulation is SIMD-vectorized via the Vector API
+				// when available (see VectorQuantKernels); falls back to an
+				// identical scalar loop otherwise.
 				int xBase = blk * BLOCK_SIZE;
 				for (int p = 0; p < B; p++) {
-					float acc = 0f;
-					float[] xp = X[p];
-					for (int i = 0; i < BLOCK_SIZE; i++) acc += dq[i] * xp[xBase + i];
-					Y[p][r] += acc;
+					Y[p][r] += VectorQuantKernels.dot(dq, 0, X[p], xBase, BLOCK_SIZE);
 				}
 			}
 		});
@@ -1046,12 +1046,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				float sc  = GgufReader.f16ToF32(readLE16(raw, bo));
 				for (int i = 0; i < BLOCK_SIZE; i++) dq[i] = sc * raw[bo + 2 + i];
 
+				// See sgemmQ4KWeightStationary above: SIMD dot-product via
+				// VectorQuantKernels, scalar-equivalent fallback otherwise.
 				int xBase = blk * BLOCK_SIZE;
 				for (int p = 0; p < B; p++) {
-					float acc = 0f;
-					float[] xp = X[p];
-					for (int i = 0; i < BLOCK_SIZE; i++) acc += dq[i] * xp[xBase + i];
-					Y[p][r] += acc;
+					Y[p][r] += VectorQuantKernels.dot(dq, 0, X[p], xBase, BLOCK_SIZE);
 				}
 			}
 		});
@@ -1120,13 +1119,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					qi += 32;
 				}
 
-				// Multiply dq[] against all B input vectors while it is in L1 cache
+				// Multiply dq[] against all B input vectors while it is in L1 cache.
+				// See sgemmQ4KWeightStationary above: SIMD dot-product via
+				// VectorQuantKernels, scalar-equivalent fallback otherwise.
 				int xBase = blk * BLOCK_SIZE;
 				for (int p = 0; p < B; p++) {
-					float acc = 0f;
-					float[] xp = X[p];
-					for (int i = 0; i < BLOCK_SIZE; i++) acc += dq[i] * xp[xBase + i];
-					Y[p][r] += acc;
+					Y[p][r] += VectorQuantKernels.dot(dq, 0, X[p], xBase, BLOCK_SIZE);
 				}
 			}
 		});

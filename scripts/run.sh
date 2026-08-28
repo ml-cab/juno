@@ -133,11 +133,18 @@ require_jar() {
 
 # ── Common JVM flags ──────────────────────────────────────────────────────────
 # These suppress Guava/Netty sun.misc.Unsafe warnings and enable preview APIs.
+# --add-modules jdk.incubator.vector: the Vector API is still incubating as of
+# JDK 25/26 (JEP 508 / JEP 529) -- required at run time for the SIMD CPU
+# quantized-matmul kernels in VectorQuantKernels. Without it those kernels
+# fall back to a scalar path automatically (correctness-preserving, just
+# slower), so this flag is not strictly required, but should be present for
+# the intended performance.
 JVM_BASE=(
   --enable-preview
   --enable-native-access=ALL-UNNAMED
   --add-opens java.base/java.lang=ALL-UNNAMED
   --add-opens java.base/java.nio=ALL-UNNAMED
+  --add-modules jdk.incubator.vector
   -XX:+UseG1GC
   -XX:+AlwaysPreTouch
 )

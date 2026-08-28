@@ -8,8 +8,22 @@ Module dependency (excerpt):
         (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,
         CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
         DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
-        LoraTrainableHandler, LoraMerge, LoraQvInitializer
+        LoraTrainableHandler, LoraMerge, LoraQvInitializer, VectorQuantKernels
         node depends on lora
+
+  VectorQuantKernels (node module): SIMD dot-product accumulation for the CPU
+        weight-stationary quantized matmul kernels in LlamaTransformerHandler
+        (sgemmQ4KWeightStationary, sgemmQ5KWeightStationary,
+        sgemmQ8_0WeightStationary), used by both LlamaTransformerHandler and
+        Phi2TransformerHandler.sgemmQuantBatch. Built on jdk.incubator.vector,
+        still an incubating JDK module as of JDK 25/26 (JEP 508 / JEP 529), so
+        it needs --add-modules jdk.incubator.vector at compile and run time.
+        All Vector API references live in a nested Simd class so a JVM without
+        the module falls back to an identical scalar loop at first use instead
+        of failing to load. Dequantization (nibble/bit unpacking) is left
+        scalar: only the dot-product accumulation phase is vectorized, since
+        that phase dominates cost at realistic batch sizes and is the
+        low-risk, contiguous-multiply-add half of each kernel.
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
         coordinator depends on node
   juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,

@@ -368,15 +368,20 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
      * Batched sibling of {@link #transformerLayer}: identical Phi-2 parallel
      * attention+FFN math, applied to every row of the prefill window in one
      * pass per weight matrix via {@link #sgemmQuantBatch} instead of one
-     * {@link LlamaTransformerHandler#matVec} call per row. Only RoPE (position-
+     * {@link LlamaTransformerHandler#matVec} call per row. RoPE (position-
      * dependent) and causal self-attention (each position attends to a
-     * different, growing KV window) stay per-token — see {@link #gqa}.
+     * different, growing KV window) cannot be one batched GEMM the way the
+     * projections are, but attention still runs every position's independent
+     * {@link #gqa} call across all cores rather than one at a time on a single
+     * core — see the comment at that call site for why it's safe to do so.
      */
     private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
             float[] kCacheLayer, float[] vCacheLayer) {
         int W     = x.length;
         int H     = cfg.hiddenDim();
         int kvDim = cfg.kvDim();
+
+        long t0 = System.nanoTime();
 
         // Shared LayerNorm for both attention and FFN paths (Phi-2 parallel block).
         float[][] xNorm = new float[W][];
@@ -400,6 +405,8 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
             }
         }
 
+        long t1 = System.nanoTime(); // qkv projection done
+
         // Partial RoPE is position-dependent — cannot be batched, applied per token.
         for (int b = 0; b < W; b++) {
             Phi2Rope.ropePartial(q[b], startPos + b, cfg.numHeads(),   cfg.headDim(), ropeDim, cfg.ropeTheta());
@@ -408,11 +415,22 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
             System.arraycopy(v[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
         }
 
+        long t2 = System.nanoTime(); // rope + cache write done
+
         // Causal self-attention — each position attends to a different, growing
-        // prefix, so this stays per-token (same limitation as Llama/Phi3 batched paths).
+        // prefix, so this cannot be one batched GEMM the way the projections above
+        // are (same limitation as Llama/Phi3 batched paths). It CAN still run every
+        // position's independent gqa() call across all cores instead of one at a
+        // time on a single core: gqa() allocates its own local scores/out scratch
+        // (no shared mutable state), attnOut[b] is a distinct array per b, and every
+        // kCacheLayer/vCacheLayer write this window needed already happened in the
+        // loop above — so the only thing left in this phase is W independent reads,
+        // safe to parallelize.
         float[][] attnOut = new float[W][];
-        for (int b = 0; b < W; b++)
-            attnOut[b] = gqa(q[b], kCacheLayer, vCacheLayer, startPos + b + 1);
+        java.util.stream.IntStream.range(0, W).parallel()
+                .forEach(b -> attnOut[b] = gqa(q[b], kCacheLayer, vCacheLayer, startPos + b + 1));
+
+        long t3 = System.nanoTime(); // attention (gqa over all W positions) done
 
         float[][] attnProj = new float[W][H];
         sgemmQuantBatch(wo[li], attnOut, attnProj, 0, H, H);
@@ -444,6 +462,11 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         for (int b = 0; b < W; b++)
             for (int i = 0; i < H; i++)
                 result[b][i] = x[b][i] + attnProj[b][i] + ffnOut[b][i];
+
+        long t4 = System.nanoTime(); // woProj + ffn + residuals done
+
+        log.info("[phi2-trace]   layer " + li + " breakdown (ms): qkvProj=" + ms(t0, t1) + " rope+cacheWrite="
+                + ms(t1, t2) + " attention(gqa,W=" + W + ")=" + ms(t2, t3) + " woProj+ffn+residuals=" + ms(t3, t4));
 
         return result;
     }
@@ -758,5 +781,9 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
             sum += v[i]; sq += (double) v[i] * v[i];
         }
         return String.format("min=%.3f max=%.3f mean=%.4f l2=%.2f", mn, mx, sum / n, Math.sqrt(sq));
+    }
+
+    private static double ms(long fromNanos, long toNanos) {
+        return (toNanos - fromNanos) / 1_000_000.0;
     }
 }

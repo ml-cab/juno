@@ -84,8 +84,6 @@ import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.registry.ModelDescriptor;
 import cab.ml.juno.registry.ModelRegistry;
 import cab.ml.juno.registry.ModelStatus;
-import cab.ml.juno.registry.NodeDescriptor;
-import cab.ml.juno.registry.NodeStatus;
 import cab.ml.juno.registry.ParallelismType;
 import cab.ml.juno.registry.QuantizationType;
 import cab.ml.juno.registry.ShardAssignment;
@@ -1781,16 +1779,14 @@ public final class ConsoleMain {
 			tokenizer = GgufTokenizer.load(reader);
 		}
 
-		long vramPerLayerBytes = estimateVramPerLayer(config.hiddenDim());
-		long nodeVramBytes = config.numLayers() * vramPerLayerBytes * 2;
-
-		List<NodeDescriptor> nodes = new ArrayList<>();
-		for (int i = 0; i < nodeCount; i++) {
-			nodes.add(new NodeDescriptor("node-" + i, "localhost", 9092 + i, nodeVramBytes, nodeVramBytes,
-					NodeStatus.READY, 1.0, Instant.now(), Instant.now()));
-		}
-
-		ShardMap shardMap = ShardPlanner.create().plan("model", config.numLayers(), vramPerLayerBytes, nodes);
+		// Local, in-process pipeline-parallelism simulation — every "node" is a
+		// stage in this same JVM with no real VRAM difference between stages, so
+		// split layers evenly rather than routing through ShardPlanner's
+		// VRAM-aware greedy algorithm (correct for real clusters, but a
+		// deliberately huge per-node VRAM figure to keep it from ever rejecting
+		// a local run causes it to hand nearly the whole model to node 0 and one
+		// layer each to every other node — see ShardMap.evenSplit javadoc).
+		ShardMap shardMap = ShardMap.evenSplit("model", config.numLayers(), nodeCount);
 		// Load .lora adapters for inference-only playback if --lora-play was given
 		LoraAdapterSet playAdapters = null;
 		if (loraPlayPath != null) {
@@ -2184,10 +2180,5 @@ public final class ConsoleMain {
 		} catch (NumberFormatException e) {
 			return def;
 		}
-	}
-
-	private static long estimateVramPerLayer(int hiddenDim) {
-		long params = 4L * hiddenDim * hiddenDim;
-		return (long) (params * 2.0);
 	}
 }

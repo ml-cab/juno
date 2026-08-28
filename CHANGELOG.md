@@ -1,623 +1,464 @@
 ## Status
 
-**Session 61** — two things, both aimed at not wasting another ~25-minute
-cycle on ambiguous results: (1) a real, previously-unchecked bug found and
-fixed in image loading, (2) logging made unconditional/comprehensive enough
-that the next run's log is self-diagnosing.
+**Session 67** — locked down the Session 66 SIMD benchmark against the raw
+JFR logs, phase by phase, to separate what actually moved from what's just
+run-to-run noise.
 
-**Found and fixed: EXIF orientation was never applied.** `ImagePatchEmbedder`
-called `ImageIO.read()` directly and fed the result straight to the encoder.
-`ImageIO.read()` does NOT apply EXIF orientation correction — it returns raw
-sensor-orientation pixels as-is. Phone/camera photos routinely carry an EXIF
-Orientation tag (portrait shots are commonly stored as landscape pixel data
-+ orientation=6); a synthetic image (the pixel-art JUNO logo used in earlier
-sessions) essentially never does. This means every real-photo test this
-session could have been feeding the model a sideways or upside-down image
-regardless of any other fix — a confound that was never isolated because
-only the synthetic image was tested until Session 40.
+Cross-checked every phase sum against both runs' JFR output directly (not
+estimates): `qkvProj` 66,313.7ms → 57,426.5ms (-13.4%), `woProj+ffn+residuals`
+106,183.5ms → 62,412.8ms (-41.2%), total prefill 178,222.6ms → 124,690.3ms
+(-30.0%). `rope+cacheWrite` and `attention` also moved (-8.3%/-17.9%) despite
+neither being touched by `VectorQuantKernels` — recorded as the scheduling
+noise floor on this box, not a SIMD effect.
 
-**Fix:** added a self-contained JPEG APP1/Exif segment parser
-(`readExifOrientation`) and the standard 8-case EXIF orientation transform
-(`applyExifOrientation`) to `ImagePatchEmbedder`. Runs before resize/
-normalize, fails safe (any parse issue → orientation=1 → no-op, never
-applies a wrong rotation). Logs raw vs EXIF-corrected dimensions per image.
-Added tests for the byte-level parser (no-EXIF JPEG, non-JPEG, garbage
-bytes, synthetic little/big-endian TIFF segments, all 8 orientation values)
-and for the transform (dimension swap/preserve per orientation family, a
-180°-twice-is-identity invariant, and a corner-pixel placement check —
-deliberately avoiding hand-derived CW/CCW pixel assertions, since getting
-those backwards in the test would give false confidence either way).
-**Not yet run** — same standing caveat as every fix this session.
+Confirmed decode is genuinely unaffected: `matVec` p95 4.488ms vs 4.467ms,
+within noise, as expected since decode uses the single-token path, not
+`sgemm*WeightStationary`. Flagged that the two runs' raw tok/s and token
+counts (22 vs 47 tokens, temperature=0.3) are not a valid before/after
+comparison — only the fixed 741-token prefill window is apples-to-apples.
 
-**Logging made unconditional and comprehensive**, specifically to remove the
-ambiguity that cost two prior sessions:
-- `ConsoleMain.prepareVisionHandler()` now logs an explicit build/version
-  marker as its very first line — fires in under a second, so a stale build
-  (we hit this twice: `StubForwardPassHandler`'s missing constructor, and
-  the now-removed single-sample text-embedding log never appearing) is
-  caught before the ~25-minute prefill, not after.
-- `VisionAwareForwardPassHandler.forwardBatch()` and `.forward()` now log an
-  **unconditional** entry line — no branch, no flag, nothing that can
-  silently fail to fire — proving this exact code executed for this exact
-  request. This directly replaces the previous single-sample
-  `compareAndSet`-gated text-embedding-stats log, which — despite being
-  logically correct (verified twice by re-reading the code) — never once
-  appeared across two full runs, almost certainly because of a stale build
-  rather than a logic bug, but there was no way to tell the difference from
-  the log alone. There now is.
-- The text-embedding-stats comparison itself is now an **aggregate over
-  every text token in the window** (previously just the first one
-  encountered), logged unconditionally once per `forwardBatch` call, plus an
-  explicit image-token-vs-text-token count. More statistically meaningful
-  than a single sample, and — critically — not gated behind any condition
-  that could fail to trigger.
+**Conclusion for the record:** a real, measured 30% prefill reduction,
+isolated to the two call sites that route through `VectorQuantKernels.dot`;
+output stayed coherent both runs; still ~3.4x off the llama.cpp ~30-36s
+reference on the same hardware, because only the dot-product accumulate loop
+is vectorized so far, not the Q5_K/Q4_K/Q8_0 dequantization bit-unpacking.
+That remains the next lever, same as flagged in Session 64/63.
 
 ---
 
 ## Status
 
-**Session 60** — used the new `./juno gguf-info` tool (Session 40) against the
-real llava-v1.5-7b files for the first time. Found one concrete, provable bug
-and confirmed several previously-uncertain code paths are actually correct.
+**Session 66** — first real hardware run of the Session 65 SIMD accumulate
+kernel against the fixed 741-token vision-chat benchmark from Session 64's
+handoff doc.
 
-**Found and fixed: wrong GELU variant in every ViT transformer block.**
-The mmproj file's metadata explicitly declares `clip.use_gelu = false` — this
-is llama.cpp's own flag distinguishing standard (tanh-approx) GELU from
-`quick_gelu` (`x * sigmoid(1.702x)`, OpenAI CLIP's original activation).
-`VisionEncoder`'s FFN (`mlp()`) called `gelu()` unconditionally at every one
-of the 23 transformer blocks, regardless of what the file declared — this
-metadata key was never read anywhere in the codebase before this session.
-Both activation functions are smooth and bounded, so this was never going to
-crash or produce NaNs — it would silently distort every patch's features in
-a way fully consistent with the "coherent but semantically wrong" output
-we've been chasing since Session 38.
+Total prefill 178.2s → 124.7s (-30%). Confirmed from the log that
+`VectorQuantKernels.AVAILABLE` was true (no "jdk.incubator.vector
+unavailable" fallback message), so the SIMD path actually ran, not the
+scalar fallback. `finish_reason: stop`, coherent output, no numerical
+garbage.
 
-**Fix:** added `VisionConfig.useGelu` (read from `clip.use_gelu`, default
-`true` for files that don't declare it — preserves prior behavior for any
-mmproj without this key) and `GgufReader.metaBool()` (new, mirrors
-`metaInt`/`metaFloat`). `VisionEncoder.mlp()` now calls a new `activation()`
-dispatcher instead of `gelu()` directly. Added direct unit tests for
-`quickGelu()` (zero, asymptotic behavior, shape, and an explicit
-"differs from standard gelu" test so the fix can't silently regress into a
-no-op). **Not yet confirmed by an actual rerun** — same caveat as always:
-this is evidence-backed, not guessed, but it hasn't been run yet.
+Per-phase: `qkvProj` -13.7%, `woProj+ffn+residuals` -41.2%, attention/rope
+roughly flat (both untouched code paths — not evidence of anything). The
+much bigger win on `woProj+ffn+residuals` is tentatively attributed to
+`wUp`/`wDown` being ~4x larger than the QKV projections, giving more
+parallel accumulate work per call to amortize thread-dispatch/dequant
+overhead against — a plausible read from the shapes, not confirmed by
+profiling this run.
 
-**Confirmed correct (ruling these out for good, not just "looks fine"):**
-using the *real* declared tensor shapes from `gguf-info` output rather than
-assumption:
-- `v.patch_embd.weight`'s real shape `[14, 14, 3, 1024]` and `patchEmbed()`'s
-  flat indexing order (`dx` fastest, then `dy`, then `c`) match exactly, once
-  accounting for GGUF's standard PyTorch-axis-reversal convention.
-- `v.position_embd.weight`'s real shape `[1024, 577]` and the `posEmbd[i * H
-  + d]` indexing in `encode()` match exactly (position slow-varying, hidden
-  dim fast-varying, as declared).
-- The `ffn_up`/`ffn_down` name-swap warning logged at every startup is now
-  directly confirmed, not inferred: `v.blk.N.ffn_down.weight` really does
-  have shape `[1024, 4096]` (an expand/up shape) and `v.blk.N.ffn_up.weight`
-  really does have shape `[4096, 1024]` (a contract/down shape) — the
-  existing shape-based correction in `loadFfn()` is necessary and correct,
-  not a guess.
-- `mm.2.weight` really exists with shape `[4096, 4096]` (the expected
-  outputDim→outputDim shape for a 2-layer `mlp2x_gelu` projector) — the
-  Session 38 hypothesis about projector shape was right; Session 39's
-  revert was about applying it, not about whether it exists. Still not
-  re-enabled — the earlier regression (degenerate repeating-token output)
-  needs its own root cause before touching that code path again, and
-  nothing in this session's findings explains *that specific* failure mode.
+Takeaway: this is the win from the lower-risk half of the SIMD work only
+(dot-product accumulate). The Q5_K bit-unpacking dequant phase is still
+scalar and is now the limiting factor, consistent with landing at ~30%
+instead of the 20-40x per-core gap the original FLOP analysis predicted for
+a full rewrite. The old unexplained per-layer timing variance (Session 64)
+is still present, unchanged by this session — confirmed independent of the
+SIMD work, not fixed or worsened.
 
 ---
 
 ## Status
 
-**Session 59** — investigating why image content is still wrong even after
-Session 39's revert (output is coherent, varies between requests, but never
-describes the actual image — a pixel-art "JUNO" logo). No code fix in this
-session; code review + diagnostic instrumentation only.
+**Session 65** — implemented the Vector API SIMD kernel spec'd out at the end
+of Session 64, plus all the build/run plumbing it needs.
 
-**Code paths reviewed and confirmed correct** (ruling these out as the
-cause): `ImagePatchEmbedder` (CLIP mean/std, RGB bit-shifts, CHW layout —
-all correct), `VisionEncoder.patchEmbed()` (raster-order patch extraction,
-correct CHW flattening matching `patch_embd.weight`'s documented shape),
-`VisionEncoder.selfAttention()` (genuinely full bidirectional attention, no
-causal mask — confirmed by reading the code, not just the comment),
-`resolveFfnOrientation()` (shape-verified against measured tensor
-dimensions, not a blind guess — a real transpose bug here would produce
-gibberish, not coherent generic captions, which is inconsistent with what
-we're seeing).
+Resolved the open module question first rather than assuming: confirmed JDK
+25 (JEP 508) and JDK 26 (JEP 529, current as of Aug 2026) both still ship the
+Vector API as `jdk.incubator.vector`, not finalized — so `--add-modules
+jdk.incubator.vector` is required at both compile and run time.
 
-**Two live hypotheses, not yet distinguished:**
-1. **Scale/magnitude mismatch.** If the projector's output magnitude is very
-   different from a real LLM token embedding's magnitude, the transformer's
-   residual stream could effectively drown out the (much smaller, or much
-   larger) image signal, causing the model to fall back on language-model
-   priors — which look exactly like "plausible, generic, wrong" captions.
-2. **Model/architecture limitation, not a bug.** LLaVA-1.5-7B is
-   well-documented to perform poorly on non-photographic imagery — pixel
-   art, UI screenshots, diagrams, text-heavy graphics — because its training
-   distribution (COCO-style captioning/VQA data) is dominated by natural
-   photographs. A blocky, abstract, colorful logo is far outside that
-   distribution. Both observed captions ("room with a doorway and a cat",
-   "man standing in front of a camera") independently describe an indoor
-   scene with a person — consistent with the model falling back to its most
-   common training-data pattern when given a weak or out-of-distribution
-   visual signal, which is also consistent with hypothesis 1.
+**New:** `VectorQuantKernels` (`node` module) — vectorizes only the
+dot-product accumulation phase of the Q4_K/Q5_K/Q8_0 weight-stationary
+kernels, deliberately leaving the bit-unpacking dequant phase scalar as a
+documented follow-up rather than risk an unverified SIMD byte/float shape
+conversion in correctness-critical code. All `jdk.incubator.vector`
+references are confined to a nested `Simd` class, probed once at class-init
+inside `catch (Throwable)`, so a JVM missing the module falls back to the
+original scalar loop transparently instead of crashing.
 
-**Added (diagnostic only, zero behavior change):** `VisionEncoder` now logs
-min/max/mean/std and per-patch L2 norm across all projected patch embeddings
-once per request. `VisionAwareForwardPassHandler` now logs the same stats
-for one real text-token embedding, once per process, explicitly labeled for
-comparison against the patch-embedding log line above it. Next run's log
-will show whether the two are in the same ballpark (pointing at hypothesis
-2 / model limitation) or wildly different (pointing at hypothesis 1 / a
-real scale bug still to be found).
+**Modified:** `sgemmQ4KWeightStationary` / `sgemmQ5KWeightStationary` /
+`sgemmQ8_0WeightStationary` in `LlamaTransformerHandler` now call
+`VectorQuantKernels.dot(...)` in their inner accumulate loop; method
+signatures and existing tests untouched. New `VectorQuantKernelsTest`
+covering block sizes 32/256, non-lane-aligned tails, offsets, zero-length.
 
-**Suggested next step to disambiguate independent of these logs:** run the
-same request against an actual photograph (not pixel art) instead of the
-JUNO logo. If the model correctly describes a real photo, that's strong
-evidence for hypothesis 2 (model capability limitation, not a pipeline bug)
-and further code changes are probably not the right lever. If it still
-produces a generically wrong caption for a real photo too, that confirms a
-remaining pipeline bug and rules out hypothesis 2.
+**Build/run plumbing:** root `pom.xml` (compiler args), `node/pom.xml`
+(surefire `argLine`), `scripts/run.sh` / `run.bat`, `ClusterHarness.java`
+(forked node JVMs), and all three production `java` launch points in
+`scripts/aws/juno-deploy.sh` all get `--add-modules jdk.incubator.vector`.
+`docs/agent-arch.txt` updated to document the new class.
+
+Could not run `mvn compile`/`mvn test` in this environment — validated
+read-only instead: XML well-formedness on both POMs, `bash -n` on the shell
+scripts, and manual review of the Vector API call sites
+(`FloatVector.fromArray`, `.fma`, `.reduceLanes`, `SPECIES.loopBound`)
+against the JDK 25 API shape. **Not yet benchmarked on real hardware** — that
+was Session 66.
 
 ---
 
 ## Status
 
-**Session 58** — REVERT of Session 38's mm.2 projector change. Confirmed by
-the user to be a regression, not a fix: output went from "coherent English
-describing the wrong thing" (Session 38's starting point) to a fully
-degenerate repeating `<image>` token loop (`finish_reason: length`, zero real
-content) — a materially worse failure mode.
+**Session 64** — closed every architectural/scheduling gap between Juno's
+vision-chat prefill and llama.cpp's on the same laptop/model/quant, down to
+one remaining, well-quantified problem: the CPU dequant/matmul kernels are
+scalar Java, not SIMD. Benchmark: `POST /v1/vision/chat`, fixed 741-token
+window (729 image patches + 11 text), `moondream2-q5_k.llamafile`, `./juno
+local`, Intel i5-1240P, GPU off both sides. llama.cpp reference on the same
+box: ~30s to first token, ~36s total.
 
-Applying `GELU(mm.0(x))` then `mm.2` produced numerically broken patch
-embeddings for this specific mmproj file. The exact root cause is not
-understood — the shape checks passed (mm.2.weight really is `[outputDim,
-outputDim]`), so this is not a simple dimension-mismatch bug; it's either a
-data-layout mismatch specific to this tensor, a wrong assumption about what
-`mm.2` actually represents in this particular export, or something else not
-yet identified.
+**Fixed this session:**
+- Merge-conflict compile fixes from the Vision-I2T → release-0.1.2 merge
+  (`LoraTrainableHandler` sgemm type mismatch, stale `vision/pom.xml` parent
+  version, a stray `run.sh` merge artifact, a dropped `eosFilter.text()`
+  call, a deleted-but-still-called `trainOnMasked`).
+- **Vision encoder batching** (`VisionEncoder`): every linear layer went
+  from one `sgemv` call per patch (~118K calls/image) to one batched `sgemm`
+  call per layer. Vision encode dropped to ~33-53s and stayed there — no
+  longer the bottleneck.
+- **Phi2 batched prefill**: Phi2 had no `forwardBatch` override at all, so
+  it silently fell back to 740 sequential single-token `forward()` calls.
+  Added real batched prefill mirroring Llama/Phi3's existing pattern.
+- **New Q5_K weight-stationary CPU kernel** (`sgemmQ5KWeightStationary`):
+  even Llama's own "batched" dispatch only had true batched kernels for
+  Q4_K/Q8_0 — Q5_K (this model's actual quant) fell through to a sequential
+  per-row loop. Unit-tested against the existing per-row `matVec` oracle.
+- **KV cache eviction leak**: `evict(requestId)` existed on every
+  transformer handler but was unreachable from the pipeline layer, so every
+  stateless request leaked its full per-layer KV arrays — caused an OOM on
+  a second request. Fixed by adding the interface methods with
+  correctness-preserving no-op defaults, cascaded through
+  `LocalInferencePipeline`, `VisionAwareForwardPassHandler`,
+  `FaultTolerantPipeline`, `GenerationLoop`. Known remaining gap:
+  `ProcessPipelineClient`/`TensorParallelPipelineClient` (forked-JVM cluster
+  mode) still no-op on `evict()`.
+- **`ShardMap.evenSplit`**: `./juno local --nodes N` routed through
+  `ShardPlanner`'s VRAM-aware greedy algorithm with a fabricated per-node
+  VRAM figure, so node 0 always got almost the entire model (22/24 layers).
+  Added an honest even-split method for local simulation — verified via
+  per-node timing: 150s/8s/8s skew → even ~69s/67s/70s.
+- **Attention parallelization** (`Phi2TransformerHandler`): the causal
+  self-attention loop over 740 window positions was single-threaded.
+  Parallelized with `IntStream.range(0, W).parallel()` since each `gqa()`
+  call is independent — confirmed by measurement to drop attention from an
+  estimated ~20-40s liability to 4.4s / 2.4% of prefill. **Known sibling
+  gap, deliberately unfixed:** `LlamaTransformerHandler`/
+  `Phi3TransformerHandler` have the same sequential loop, but their
+  `gqaInto()` writes into a shared `ws.scores` scratch buffer — naive
+  parallelization there would race. Needs its own fix before benchmarking
+  non-Phi2 models locally.
+- Per-layer timing instrumentation added to Phi2 (`qkvProj` /
+  `rope+cacheWrite` / `attention` / `woProj+ffn+residuals`), mirroring what
+  already existed for Llama — this is what produced the phase breakdown
+  below.
 
-**Reverted:** `VisionEncoder.project()` now always calls `applyProjector`
-with `w2=null, b2=null` — i.e. mm.0 only, unconditionally — regardless of
-whether `mm.2.weight` is present in the file. `mm.2` is still detected,
-loaded, and shape-validated at load time purely for diagnostic logging (zero
-effect on the actual data path); the log line makes clear it is present but
-NOT applied. The `applyProjector` unit tests are unchanged (they test the
-utility function's math in isolation) but are now explicitly annotated as
-not being evidence that re-enabling mm.2 is safe.
+**Measured breakdown** (24-layer sum, `elapsedMs=178,222.6`): `qkvProj`
+66.3s (37.2%), `rope+cacheWrite` 1.2s (0.7%), `attention` 4.4s (2.4%),
+`woProj+ffn+residuals` 106.2s (59.6%). **96.8% of remaining prefill time is
+inside the batched Q5_K dequant/dot-product kernel.** FLOP sanity check on
+just QKV: ~447 GFLOP in 66.3s ⇒ ~0.5 GFLOP/s per thread, squarely scalar-Java
+territory against llama.cpp's hand-vectorized 10-20+ GFLOP/s per core — the
+gap fully explains the observed ~6x wall-clock difference.
 
-**Do not re-enable mm.2 without new evidence.** If picked up again, the
-right next step is dumping actual intermediate values (min/max/mean/NaN
-count of the patch vectors immediately after `mm.0`+GELU, and again after
-`mm.2`) for a real request, rather than another shape-level guess — this
-failure mode (shape-valid, numerically degenerate) is exactly the kind of
-bug that unit tests with small synthetic matrices cannot catch and that
-needs runtime inspection of real quantized weights.
+Confirmed as *not* a bug: thread pool sizing (`ForkJoinPool.commonPool()` is
+correct for local mode; the explicit parallelism flag is only for cluster
+mode's forked JVMs).
+
+**Next task, spec'd out for Session 65:** replace the scalar inner loops in
+`sgemmQ{4K,5K,8_0}WeightStationary` with explicit Vector API SIMD, inside the
+existing weight-stationary batching structure (don't replace it). Priority
+order: Q8_0 first (simplest block layout, lowest risk, validates the JDK
+module/build plumbing), then Q4_K, then Q5_K; `CpuMatVec`/vision path and
+other scalar quant fallbacks are lower priority. First open question to
+resolve before writing code: confirm the real target JDK's Vector API status
+(`jdk.incubator.vector` vs finalized) — this session did not check it.
 
 ---
 
 ## Status
 
-**Session 57** — vision output is now grammatically coherent (Session 37's
-zero-vector-text-token fix confirmed working by the user's own log/curl
-output) but describes the wrong image content ("a room with a doorway and a
-cat" for a pixel-art logo). Root cause found by code inspection + comparison
-against the standard llava-v1.5 architecture — **NOT yet confirmed by the
-user re-running it.**
+**Session 63** — vision encode accuracy fix on branch `47-vision`: SigLIP
+vision towers (moondream2) were missing their post-encoder LayerNorm
+entirely.
 
-`VisionEncoder`'s projector (`mm.0.weight`/`mm.0.bias`) was a single linear
-layer only. LLaVA-1.5's actual `mm_projector_type` is `mlp2x_gelu`: mm.0 →
-GELU → mm.2 (a second `outputDim × outputDim` linear layer; llama.cpp mmproj
-GGUF files name it `mm.2` because `mm.1` is the implicit, weight-less GELU).
-The code never checked for `mm.2.weight` at all — it applied only half the
-learned projector, which produces a shape-valid (so no crash, no shape
-warnings) but semantically arbitrary vector for each image patch. That
-explains the failure mode precisely: fluent English (text tokens are correct
-after Session 37's fix) describing a plausible but unrelated scene (the image
-tokens carry no real signal from the picture).
+Commit `a5255d3`, titled "fixed some image scaling errors, something is
+replying correctly now" — despite the commit message, the actual bug was
+numerical, not geometric. `VisionEncoder` never applied `v.post_ln`.
+CLIP/LLaVA mmproj files don't declare this tensor at all (CLIP's own
+`post_layernorm` only touches the pooled CLS output, which LLaVA-style
+callers never use), so its absence from the encoder was easy to miss — but
+SigLIP (moondream2's vision tower) applies this LayerNorm to the *entire*
+last hidden state before any downstream use, making it structurally
+required there, not optional.
 
-**Proposed fix (tried, then reverted — see Session 39 above):** `VisionEncoder`
-checked `hasTensor("mm.2.weight")` at load time and, when present, loaded
-`mm.2.weight`/`mm.2.bias` and applied the full `mm.0 → GELU → mm.2` chain.
-This was confirmed by the user to be a regression, not a fix — see Session 39.
+Without it, moondream2's patch embeddings were the raw, un-normalized final
+transformer-block residual stream, with L2 norm up to ~70000, instead of
+properly LayerNorm'd features — a magnitude blowup fully consistent with
+the "sees the image but describes something nonsensical" failure mode this
+branch had been chasing.
 
-**This was a hypothesis about this specific failure mode that turned out to
-be wrong (or at least this implementation of it was) — see Session 39 for
-the confirmed outcome.**
+**Fix:** reads `v.post_ln.weight`/`v.post_ln.bias` when present
+(`hasPostLn`) and applies the LayerNorm once after the last transformer
+block, before the projector. Absence means skip the operation entirely —
+deliberately *not* an identity-affine LayerNorm, which would still
+normalize mean/variance and change CLIP/LLaVA's existing (correct)
+behavior. CLIP/LLaVA mmproj files therefore see zero behavior change from
+this fix. New `VisionEncoderTest` cases cover both the present and absent
+tensor case.
 
 ---
 
 ## Status
 
-**Session 56** — the vision pipeline wiring/hang fixes from Session 36 were
-confirmed working end-to-end by the user (full log from `Prefill:` through
-`generate() RETURNING`, 32/32 layers completed, curl returned a response).
-Output was grammatically coherent but semantically incoherent ("
-работаonc анаási tienenпозиступа...") — traced to a second, independent bug:
+**Session 62** — `47: Phi2Rope, image placeholder and more formatting for
+phi2`: Phi2's own RoPE variant, plus vision-side formatting cleanup, ahead
+of the first coherent moondream2 reply landed in Session 63.
+
+**New `Phi2Rope`** (`node` module): Phi2 uses a **partial-rotary** RoPE
+variant — only a configured fraction of `headDim` is actually rotated, the
+remainder passed through unchanged — different from the full-rotary RoPE
+`LlamaTransformerHandler`/`Phi3TransformerHandler` already implement, so it
+couldn't reuse either existing implementation. New `Phi2RopeTest` pins down
+the exact partial-rotation boundary.
+
+`GgufReader` gained float-array metadata reading (new
+`GgufReaderMetaFloatArrayTest`) so Phi2's rotary-fraction config comes
+straight from GGUF metadata rather than being hardcoded.
+
+`ChatTemplate` extended for Phi2's chat format; `VisionConfig`,
+`ImagePatchEmbedder`, `LlavaHandlerFactory`, and
+`VisionAwareForwardPassHandler` all received formatting/wiring adjustments
+so the `<image>` placeholder token is handled consistently on the Phi2
+path, not just Llama/Phi3. New `VisionConfigNormalizationTest`.
+
+---
+
+## Status
+
+**Session 61** — `adding mm0OutDim to projection math to support phi2
+vision`: extended `VisionEncoder`'s CLIP-only assumptions to also cover
+SigLIP-family towers (moondream2), ahead of onboarding Phi2 vision proper.
+
+`VisionEncoder`'s tensor-naming contract (javadoc and load-time
+expectations) was CLIP/LLaVA-specific: `v.class_embd` always present,
+`v.position_embd.weight` sized `numPatches+1` (CLS token included).
+SigLIP models have no CLS token at all — `v.class_embd` is absent and
+`v.position_embd.weight` is sized exactly `numPatches`. The encoder now
+branches on tensor presence rather than assuming CLIP's layout
+unconditionally.
+
+`mm0OutDim` (the first projector layer's output width) is now read from
+`mm.0.weight`'s own GGUF shape rather than assumed — consistent with this
+branch's established policy (first applied to the projector's *second*
+layer back in the mm.2-projector work) of trusting the tensor's own shape
+over metadata fields that have proven unreliable across mmproj exports.
+
+Two large reference documents were added under `docs/`
+(`meta-juno-doc.md`/`.txt`) capturing the full architecture write-up this
+branch had been accumulating — bulk documentation, no source-behavior
+change.
+
+---
+
+## Status
+
+**Session 60** — `.llamafile as vision archive`: models shipped as
+`.llamafile` (Mozilla's self-contained model+runtime bundle) can now be
+read directly as a vision model source, not just plain `.gguf`.
+
+**New `LlamafileGgufIndex`** (`node` module): a `.llamafile` is a
+self-executing archive with a GGUF payload appended after a Cosmopolitan
+binary stub. This parses the container to locate and index the embedded
+GGUF's tensors and metadata without needing a separately-extracted `.gguf`
+file on disk. New `LlamafileGgufIndexTest` covers the container-parsing
+logic directly.
+
+`GgufReader` extended to open through this index transparently, so
+downstream code doesn't need to know whether it's reading a bare GGUF or
+one embedded in a llamafile. `LlavaHandlerFactory` updated so vision model
+resolution accepts a `.llamafile` path wherever a `.gguf` path was
+previously required. New `LlavaHandlerFactoryEmbeddedVisionTest` covers
+loading vision tensors out of an embedded, llamafile-packaged GGUF
+end-to-end.
+
+This is the change that made `moondream2-q5_k.llamafile` — the model used
+for every prefill benchmark in Sessions 64-67 — usable at all.
+
+---
+
+## Status
+
+**Session 59** — `gguf-info mode and phi2 support added`: a standalone
+GGUF-inspection CLI mode and the first Phi2 architecture support, added
+together since getting Phi2 vision working at all needed the inspector
+first.
+
+**New `./juno gguf-info` subcommand** (`GgufInfoMain`, `juno-player`):
+dumps a GGUF file's metadata keys and tensor list/shapes without loading a
+full model or starting inference. Used throughout the rest of this branch
+to inspect unfamiliar mmproj/model files before writing code against them
+— this is the same tool Session 60 (main narrative numbering aside) later
+used to catch the CLIP `use_gelu` metadata bug.
+
+**New `Phi2TransformerHandler`** (`node` module, ~560 lines): first-cut
+Phi2 architecture support — distinct attention, FFN, and norm wiring from
+Llama/Phi3 — wired into `ForwardPassHandlerLoader`.
+
+`ImagePatchEmbedder` and `VisionEncoder` extended for the patch-embedding
+and encoder-config shapes this model family needs; `VisionAwareForwardPassHandler`
+updated accordingly. Expanded `ImagePatchEmbedderTest` and
+`VisionEncoderTest`.
+
+---
+
+## Status
+
+**Session 58** — `vision replies random scene, missing context of pic`: the
+zero-vector text-token bug. Image tokens carried real signal into the
+model; every text token carried none.
 
 `VisionAwareForwardPassHandler.buildWindowActivationsWithVision()` (and the
-single-token `buildActivationWithVision()`) spliced real CLIP patch vectors
-into image-token positions but left every **text**-token position as an
-all-zero vector — meaning the entire prompt text (chat template, the actual
-question, BOS) was invisible to the model; only the image patches carried any
-signal.
+single-token `buildActivationWithVision()`) spliced real CLIP/SigLIP patch
+vectors into image-token positions but left every **text**-token position
+as an all-zero vector — meaning the entire prompt text (chat template, the
+actual question, BOS) was invisible to the model; only the image patches
+carried any signal at all. This explains the failure mode precisely:
+grammatically-plausible output describing a plausible but unrelated scene,
+since the only "real" input reaching the model was the image.
 
 **Fix:** added `ForwardPassHandler.embedToken(int)` (default: throws
 `UnsupportedOperationException`) so a decorator can ask the wrapped handler
 for a single token's real embedding-table row. Implemented in
-`LlamaTransformerHandler.embedToken()`, reusing the existing clamping logic.
-Both vision-splicing methods now call `textHandler.embedToken(tokenId)` for
-non-image positions instead of leaving zero. **Confirmed fixed** by the user:
-rerunning the same curl produced grammatically fluent, on-topic English
-output for the first time (see Session 38 above for the next bug this
-uncovered — content was fluent but still hallucinated, unrelated to the
-projector fix below it in this file).
+`LlamaTransformerHandler.embedToken()`, reusing the existing clamping
+logic. Both vision-splicing methods now call
+`textHandler.embedToken(tokenId)` for non-image positions instead of
+leaving zero.
 
-Updated the two existing `VisionAwareForwardPassHandlerBatchTest` cases that
-had asserted the *old, buggy* zero-vector behavior (they'd now be actively
-wrong), added a new single-token-path regression test, and added direct
-`embedToken()` tests to `LlamaTransformerHandlerEmbeddingsNodeActivationsTest`.
-The shared `StubForwardPassHandler` test double (lives in
-`vision/src/main/java`, not `test` — pre-existing structure, not something
-introduced here) gained a configurable deterministic fake embedding.
+Updated the two existing `VisionAwareForwardPassHandlerBatchTest` cases
+that had asserted the old, buggy zero-vector behavior (they'd now be
+actively wrong), added a new single-token-path regression test, and added
+direct `embedToken()` tests to
+`LlamaTransformerHandlerEmbeddingsNodeActivationsTest`. The shared
+`StubForwardPassHandler` test double gained a configurable deterministic
+fake embedding.
 
 ---
 
 ## Status
 
-**Session 55** — `--local` mode with `--mmproj-path`: fixed the vision request
-hang/never-replies bug (two stacked bugs, both traced via JFR thread dumps,
-not guessed). LoRA (`--lora-play`) hang reported by the same user is still
-**unresolved** — no reproducing JFR capture was available to trace it; see
-"Still open" below.
+**Session 57** — `vision finally working, but long and gives gbg reply`,
+immediately followed same day by cleanup of an accidentally-committed debug
+dump.
 
-### Vision requests via `--mmproj-path` never replied — root cause traced via JFR
+First commit where a `/v1/vision/chat` request ran end-to-end without
+crashing or hanging and produced *some* reply text — output was still
+long-winded and largely garbage at this point (this is the exact state
+Session 58's zero-vector bug describes and fixes next). Touched
+`GenerationLoop`, `ConsoleMain`, `LlamaTransformerHandler`; new
+`LlamaTransformerHandlerEmbeddingsNodeActivationsTest`.
 
-Symptom: `POST /v1/vision/chat` against a LLaVA model loaded with
-`--mmproj-path` never returned, even for a tiny image, and looked like an
-infinite loop from the outside (`curl` just hangs).
-
-A previous debugging session (see `bug-trace.txt`) worked through several
-hypotheses by reading code alone and could not confirm a root cause. This
-session captured a JFR recording of an actual hung request
-(`juno-llava-v1.5-7b-Q4_K-*.jfr`) and used `jdk.jfr.consumer.RecordingFile`
-(no `jfr` CLI available in this environment) to read the embedded
-`jdk.ThreadDump` events. The live stack trace showed the request thread
-executing straight through `LocalInferencePipeline.prefillBatch() →
-LlamaTransformerHandler.forwardBatch() → runLayersBatch() →
-transformerLayerBatch() → gqaInto()` — **with no
-`VisionAwareForwardPassHandler` frame anywhere in the stack.** That pointed
-directly at two independent, stacked bugs:
-
-**Bug 1 — vision handler wrap discarded (`ConsoleMain.runLocalRepl()`).**
-`wireVisionRoutes()` (which wraps `handlers.get(0)` with
-`VisionAwareForwardPassHandler` via `LlavaHandlerFactory.buildFromHandlers()`)
-was called *after* `LocalInferencePipeline.from(shardMap, new
-ArrayList<>(handlers), ...)`. `LocalInferencePipeline.from()` reads
-`handlers.get(i)` once, at construction, and stores that exact reference in
-each `NodeStage` — it never re-reads the list. Wrapping `handlers.get(0)`
-afterwards therefore had no effect on the already-built pipeline: every
-request silently ran through the plain-text `LlamaTransformerHandler`, which
-has no knowledge of the CLIP patch vectors `VisionChatHandler` registered.
-576 `<image>` placeholder tokens were looked up as ordinary (meaningless)
-vocabulary rows and batched through a full `W=1187`-wide prefill on a 7B
-model, purely on CPU (weight-stationary Q4_K GEMM, no SIMD/GPU) — tens of
-trillions of MACs, genuinely finite but so slow it looked exactly like a
-hang. Even had it returned, the reply would never have described the image.
-
-**Fix:** split `wireVisionRoutes()` into `prepareVisionHandler()` (wraps
-`handlers.get(0)` — now called *before* `LocalInferencePipeline.from()`) and
-`registerVisionRoutes()` (registers the two HTTP routes once `apiServer`
-exists, unchanged timing). `LlavaHandlerFactory`'s class-level javadoc, which
-documented the old (buggy) call order as the correct usage, is corrected.
-
-**Bug 2 — `LlamaTransformerHandler` branched on the wrong flag (would have
-crashed once Bug 1 was fixed).** Both `getInitialActivation()` (the
-single-token `forward()` path) and `forwardBatch()` decided whether to read
-`request.tokenIds()` or `request.activations()` using the handler's own fixed
-`hasEmbeddings` field (always `true` for node 0) instead of asking the
-request what it actually carries. `VisionAwareForwardPassHandler` correctly
-builds an activations-based request for node 0 (`withActivations(...)`,
-which sets `tokenIds = null`) — but `LlamaTransformerHandler` would still try
-`request.tokenIds()[b]` and throw `NullPointerException`. This bug was
-latent/unreachable while Bug 1 stood (node 0 never received an activations
-request in the first place), which is why the symptom was "hang", not
-"crash" — fixing Bug 1 alone would have turned the hang into an NPE.
-
-**Fix:** both call sites now check `hasEmbeddings && request.isFirstNode()`
-(`ForwardRequest`/`BatchForwardRequest` already exposed `isFirstNode()` —
-`tokenIds() != null` — for exactly this purpose; it just wasn't being
-consulted). Behaviourally identical to before for ordinary text requests,
-since a real first-node request always has non-null `tokenIds`.
-
-Regression tests:
-- `LocalInferencePipelineTest` — two new tests
-  (`mutating_handlers_list_after_pipeline_construction_has_no_effect`,
-  `...before_pipeline_construction_is_picked_up`) pin down the exact
-  handler-list snapshot-timing contract that Bug 1 violated, without needing
-  real GGUF fixtures.
-- `LlamaTransformerHandlerEmbeddingsNodeActivationsTest` (new file) — covers
-  Bug 2 for both `forward()` and `forwardBatch()`: activations-based requests
-  on the embeddings node no longer throw, produce correctly shaped output,
-  and diverge from a token-embedding lookup; ordinary token-based requests on
-  the same node are asserted unchanged.
-
-**Tracing method for future reference:** this environment ships a JRE with
-the `jdk.jfr` module but no `jfr` CLI tool and no `javac`. `java
-SomeTool.java recording.jfr` (JDK 11+ single-file source launch) using
-`jdk.jfr.consumer.RecordingFile` to iterate `RecordedEvent`s — filtering on
-`jdk.ThreadDump` for stack traces, or on the project's custom `juno.*` events
-(`juno.ForwardPass`, `juno.MatVec`, `juno.LoraTrainStep`) for progress
-counters — is enough to distinguish "genuinely stuck/deadlocked" (identical
-stack across dumps, thread parked/blocked) from "just very slow" (stack
-advances, CPU time and event counters keep climbing) without needing to
-attach a debugger or reproduce interactively.
-
-**Still open — `--lora-play` hang on ordinary (non-vision) handlers.** The
-user also reported that LoRA adapter playback hangs. None of the JFR
-recordings included in this session's evidence contain a
-`juno.LoraTrainStep` event or a `handlerType=lora` `juno.ForwardPass` event,
-so there is no captured stack trace of an actual LoRA hang to trace — every
-available recording is either a plain `llama` run or vision-related. Per
-CLAUDE.md ("don't guess"), no root cause is claimed here. A quick source
-check shows `LoraTrainableHandler` does *not* share the `VisionAwareForwardPassHandler`
-wiring path (vision only ever wraps `handlers.get(0)`; LoRA is unrelated to
-that code path), so Bug 1/Bug 2 above are unlikely to be the same root
-cause — but this needs its own JFR capture of a real hang to confirm.
-**Next step:** reproduce with `--local ... --lora-play PATH --jfr 5m` (the
-existing `--jfr DURATION` flag ConsoleMain already supports, e.g.
-`startLocalJfr()`) while a LoRA request is hung, then read the resulting
-`juno-<model>-<timestamp>.jfr` the same way described above.
+The commit accidentally included an 8700-line `diff.txt` — a leftover
+debug artifact, not source — caught and deleted in the very next commit the
+same day. No functional change in the cleanup itself; noted here only so
+the file's brief appearance in history isn't mistaken for intentional
+content later.
 
 ---
 
-**Session 54** — `--local` mode: fixed `--verbose` no-op and vision models never being detected.
+## Status
 
-### `--verbose` was a no-op in `--local` mode
+**Session 56** — `up`: internal refactor of the batched-prefill code paths
+added in Session 55. No externally-visible behavior change.
 
-`ConsoleMain` silenced `java.util.logging` in a `static { }` initializer, which
-runs at class-load time — before `main()` calls `parseArgs()`. It always
-observed `verbose=false` regardless of the CLI flag, so `--local --verbose`
-produced no log output. `--cluster --verbose` happened to work because its
-verbosity check lives in `ClusterHarness`, read at fork time, well after
-`parseArgs()` has already run.
+`LlamaTransformerHandler` and `Phi3TransformerHandler`'s batched-prefill
+methods (added in Session 55) were reworked for correctness and clarity
+following self-review; `docs/batched-prefil.md` (the design doc from
+Session 55) was extended with the implementation notes this pass produced.
+No new public API surface; existing batched-prefill tests continued to
+apply unchanged.
 
-**Fix:** moved the logging setup out of the static initializer into a new
-`configureLogging()` private static method, called explicitly from `main()`
-immediately after `parseArgs()` returns.
+---
 
-Regression test: `ConsoleMainLoggingTest` (drives `configureLogging()` via
-reflection and asserts on `LogManager` state).
+## Status
 
-### Vision models (`/v1/vision/chat`) never detected against real downloaded GGUFs
+**Session 55** — `removed bytedeco from the docs and code to not confuse
+assistants`, immediately followed by `batched prefill`: the batched-prefill
+work that the later SIMD benchmark sessions (64-67) build directly on top
+of was designed and implemented here.
 
-`LlavaHandlerFactory.isVisionArchitecture()` only ever probed
-`--model-path` for the CLIP tensor `v.patch_embd.weight`. Every known public
-LLaVA/Qwen-VL/SmolVLM/MiniCPM-V GGUF release ships the CLIP vision encoder in
-a **separate** `mmproj-*.gguf` file — the base LLM file never contains
-`v.patch_embd.weight`. As a result every real downloaded I2T model was
-classified as text-only and `/v1/vision/chat` was never registered, even
-though `docs/Vision-I2T.md` assumed (incorrectly) that a single merged GGUF
-was the standard format.
+Small cleanup first: stray `org.bytedeco` (JavaCPP) references removed
+from docs and a couple of `node`/`master` test files. The project had
+already moved off JavaCPP for its CUDA bindings well before this branch
+started, but leftover mentions were confusing enough to warrant a
+dedicated pass.
 
-**Fix:**
+**Batched prefill**, planned in a new `docs/batched-prefil.md` design
+document before any source change, then implemented: `GenerationLoop.generate()`
+and `.generateBatch()` previously prefilled a prompt with a sequential
+per-position loop, reallocating and copying a growing token-id slice on
+every single position. New `PrefillMode` (`SINGLE`/`BATCH`), new
+`BatchForwardRequest`/`BatchForwardResult` (`node` module), and real
+batched `forwardBatch()` implementations added to
+`LlamaTransformerHandler` and `Phi3TransformerHandler`. `CpuMatVec` gained
+the batched `sgemm` this all runs on top of. New batched-aware
+`LoraTrainableHandler` path. New tests: `PrefillModeTest`,
+`ConsoleMainPrefillFlagTest`, `CpuMatVecSgemmTest`,
+`VisionAwareForwardPassHandlerBatchTest`.
 
-- New `--mmproj-path PATH` CLI flag (`ConsoleMain`, `scripts/run.sh` `local`
-  command; `MMPROJ_PATH` env var override).
-- Windows parity: `scripts/run.bat` `local` command gains `--mmproj-path`
-  (`MMPROJ_PATH` env var) and — a prerequisite discovered while adding
-  it — `--api-port` (`API_PORT` env var). `run.bat local` had never
-  supported `--api-port` at all; `docs/howto.md` documented a
-  `juno.bat local --api-port 8080` example that did not actually work.
-  `run.bat cluster` and `run.bat lora` still lack `--api-port` /
-  `--mmproj-path`; out of scope here since vision routes are `--local`-only
-  (see known limitation below).
-- New `VisionModelPaths` record (vision module) resolving which file to open
-  for vision tensors: the mmproj file when given, else the model file
-  (merged-file fallback). Pure logic, no I/O — unit-tested directly.
-- `LlavaHandlerFactory.isVisionArchitecture(Path, Path)` and
-  `buildFromHandlers(Path, Path, List, LlamaConfig)` now take an optional
-  mmproj path; the old single-argument overloads are kept for backward
-  compatibility and delegate with `mmprojPath=null`.
-- `docs/Vision-I2T.md`, `docs/agent-arch.txt`, `docs/howto.md`, `README.md`
-  updated to describe the two-file reality and the new flag, and to note
-  that `--cluster` mode does not yet wire vision routes (`--local` only).
+A `docs/TODO-VectorAPI.md` note was also added here, flagging future SIMD
+work as a known follow-up — the same gap Sessions 65-67 eventually closed.
 
-Regression test: `VisionModelPathsTest`.
+---
 
-### `--dtype` silently accepted invalid values (discovered while live-testing the fix above)
+## Status
 
-`parseDtype()`'s `switch` had no explicit `FLOAT32` case — both an explicit
-`--dtype FLOAT32` and any unrecognized garbage (a typo, or an unsupported
-quantization label like `INT4`) fell into the same `default` branch, so
-`--dtype INT4` was silently coerced to `FLOAT32` with zero feedback. The
-startup banner's first line echoes the raw CLI string, so `INT4` appeared to
-"work" right up until the second banner line (parsed
-`ActivationDtype.toString()`) silently showed `FLOAT32` instead.
+**Session 54** — `#47 model resolver, f16 weights support, stack-trace on
+api error, tested on llava-phi-3-mini-f16.gguf llava-v1.5-7b-Q4_K.gguf`:
+first real-model validation pass against two actual downloaded LLaVA GGUFs.
 
-Note: `--dtype` only controls the wire format for activations shipped
-*between* pipeline nodes — it is unrelated to a GGUF's own weight
-quantization, so a `Q4_K`/int4-quantized base model paired with an F16
-mmproj file (the normal case for every public LLaVA release) is not a
-problem to worry about.
+**New `ModelIdResolver`** (`registry` module) so `/v1/vision/chat` and the
+OpenAI-compatible endpoints can resolve a requested model id against
+what's actually loaded, rather than requiring an exact string match.
 
-**Fix:** added an explicit `FLOAT32`/`F32`/`FP32` case, and the `default`
-branch now prints a `WARNING` to stderr naming the rejected value before
-falling back to `FLOAT32`.
+`LlamaTransformerHandler` gained F16 weight-tensor support (new
+`LlamaTransformerHandlerF16MatVecTest`), needed once real F16 mmproj/model
+files were tested against, not just quantized ones.
 
-Regression test: `ConsoleMainDtypeTest`.
+`InferenceApiServer`/`OpenAiChatHandler`/`VisionChatHandler` error paths
+now surface a full stack trace on API error instead of swallowing it — this
+is what made every subsequent bug in this branch (Sessions 57-63)
+traceable to a specific line rather than a bare exception name.
 
-### Any model-name mismatch was a hard 503, even with only one model loaded
-
-Reported while live-testing the vision fix above: `curl .../v1/vision/chat`
-with `"model":"llava-v1.5-7b"` (copied from a generic example) returned
-`{"error":{"code":"service_unavailable","message":"Model 'llava-v1.5-7b' is
-not loaded"}}` even though a model *was* loaded — just under a different id
-(the loaded GGUF's filename, e.g. `llava-phi-3-mini-int4.gguf`). The same
-exact-match-or-503 logic was independently duplicated three times
-(`VisionChatHandler.resolveModel`, `OpenAiChatHandler.resolveModelId`,
-`InferenceApiServer.resolveModelId`), so every REST entry point had this trap
-in --local mode, where exactly one model is ever loaded and the requested
-name can therefore never be ambiguous.
-
-**Fix:** new shared `ModelIdResolver` (registry module):
-
-- no model loaded at all → error, unchanged
-- blank/absent `"model"` → resolves to the loaded model, unchanged
-- exact match → resolves silently, unchanged
-- mismatch with **exactly one** model loaded → falls back to it and logs a
-  `WARNING` naming both the requested and actual id (new — this is the fix)
-- mismatch with **multiple** models loaded → still an error, now listing the
-  loaded ids so the client can self-correct (previously named only the
-  rejected id)
-
-All three call sites now delegate to `ModelIdResolver`; each keeps its own
-response format (OpenAI-style JSON, the native API's JSON, and the vision
-handler's JSON respectively) but shares the same resolution/fallback
-decision.
-
-**Correction after this broke `InferenceApiServerTest.blocking_inference_unknown_model_returns_503`:**
-that test pins a deliberate, different contract for the native
-`/v1/inference` API — an explicitly-requested nonexistent model id is always
-an error there, even with exactly one model loaded, because that endpoint is
-typically driven by generated clients rather than hand-typed `curl`, so a
-mismatch is more likely a real bug than a typo. Universally applying the
-single-model fallback was wrong. Fixed by making it opt-in per call site via
-`ModelIdResolver.FallbackPolicy`:
-
-- `InferenceApiServer.resolveModelId` → `FallbackPolicy.STRICT` (the
-  2-argument `resolve(registry, requested)` overload defaults to this, so no
-  code change was needed there beyond making the choice explicit)
-- `OpenAiChatHandler.resolveModelId`, `VisionChatHandler.resolveModel` →
-  `FallbackPolicy.SINGLE_MODEL_FALLBACK`
-
-Regression test: `ModelIdResolverTest` (registry module, exercises the real
-in-memory `ModelRegistry` — no mocking needed). Now covers both policies
-explicitly, including a test pinning the exact `InferenceApiServerTest`
-scenario (one model loaded, nonexistent id requested, `STRICT` → error).
-
-### `/v1/vision/chat` crashed mid-request: `ArrayIndexOutOfBoundsException: Index 1024 out of bounds for length 1024`
-
-Reported against a real llava-phi-3-mini mmproj file, once the two fixes
-above got the request that far. The exception's shape (flat JSON matching
-`InferenceApiServer`'s *global* Javalin error handler, not `VisionChatHandler`'s
-own nested error format) showed it was escaping uncaught from image/vision
-encoding, before inference began — narrowing the search to
-`ImagePatchEmbedder`, `VisionEncoder`, `CpuMatVec`, and `GgufReader`'s
-tensor loaders. None showed an off-by-one on static review.
-
-**Diagnostic gap fixed first:** `InferenceApiServer`'s global exception
-handler only ever logged `e.getMessage()`, never the stack trace, so there
-was no way to localize the crash to a specific line without one. Now logs the
-full trace via `log.log(Level.WARNING, ..., e)`. This produced the trace
-pinpointing `VisionEncoder.mlp():376`.
-
-**Root cause:** `VisionEncoder`'s constructor trusted the GGUF tensor names
-`ffn_up`/`ffn_down` to mean "H→I expansion" / "I→H contraction" respectively,
-and sized the corresponding bias arrays accordingly (`intermediateSize` and
-`hiddenSize`). For this particular mmproj file, `v.blk.{i}.ffn_up.bias` is
-actually shaped for the *contraction* direction (length `hiddenSize`=1024,
-not `intermediateSize`=4096) — the naming convention is not universally
-consistent across mmproj GGUF exports in the wild. `mlp()` then indexed that
-1024-length array up to `intermediateSize`=4096, crashing at the boundary.
-
-**Fix:** rather than assume any particular naming convention (unverifiable
-without the file, and a wrong guess would just move the bug), `VisionEncoder`
-now determines each FFN linear layer's actual direction from its own
-GGUF-declared output dimension (`GgufReader.tensorDims`), via a new pure,
-I/O-free `resolveFfnOrientation()` — used regardless of which literal tensor
-name holds which real shape. Throws a clear, descriptive
-`IllegalStateException` at model-load time (not a cryptic mid-request crash)
-if neither orientation matches the configured `intermediateSize`/`hiddenSize`
-at all.
-
-Regression test: `VisionEncoderTest` (new `resolveFfnOrientation` cases,
-including the exact llava-phi-3-mini shape pairing that crashed).
-
-### Same model, next crash: `IllegalArgumentException: A.length=3145728 != rows*cols=786432`
-
-Reported immediately after the FFN fix above got the same request further —
-the vision encoder now ran for ~35s (all 23 CLIP blocks) before failing in
-the final projector step, `VisionEncoder.project()`.
-
-**Root cause:** same class of bug as the FFN fix, one layer up. `VisionConfig`
-read `clip.vision.projection_dim` metadata as 768 and used it to size the
-`mm.0.weight` projector matmul (768×1024=786,432 expected elements). The
-tensor's own GGUF shape is actually `[1024, 3072]` — 3072 being the LLM's
-real hidden dimension (`LlamaConfig.hidden=3072` in the same model), the
-width the projector must actually produce so patch embeddings can be spliced
-into the LLM's embedding space (786,432 vs the real 3,145,728 = 3072×1024).
-The `clip.vision.projection_dim` metadata field is evidently not reliable for
-determining the actual mm-projector output width across mmproj exports —
-consistent with the FFN naming bug above being a symptom of the same
-underlying issue: metadata fields describing this file's architecture can't
-be trusted at face value, only the tensors' own shapes can.
-
-**Fix:** new `VisionEncoder.outputDim()`, derived from `mm.0.weight`'s own
-measured GGUF shape via a new pure `resolveProjectorOutputDim()` (same
-shape-over-metadata approach as `resolveFfnOrientation`), replacing
-`VisionConfig.projectionDim()` everywhere a caller needs the projector's real
-output width: `VisionEncoder.project()` itself, and both
-`LlavaHandlerFactory.buildFromHandlers`/`build()` call sites that construct
-`VisionAwareForwardPassHandler` (previously sized from the same unreliable
-metadata value). Throws a clear `IllegalStateException` at load time if the
-tensor's own shape is inconsistent with `hiddenSize` at all, rather than a
-cryptic crash mid-request; logs (not errors on) any metadata/tensor-shape
-disagreement, since the tensor always wins.
-
-Regression test: `VisionEncoderTest` (new `resolveProjectorOutputDim` cases,
-including the exact 768-vs-3072 mismatch that crashed).
+First real-model test pass: `llava-phi-3-mini-f16.gguf` and
+`llava-v1.5-7b-Q4_K.gguf`, both downloaded rather than synthetic fixtures.
 
 ---
 
 ## Status (continued)
 
-**Session 53** — F16-weighted GGUF models failed every inference request:
-`UnsupportedOperationException: Quantized matVec not implemented for GGML
-type 1`.
+**Session 53** — `#47 initial impl added, junits are passing`, preceded by
+an unrelated fix, `#43 multiple issues with dots in offending blocks
+fixed`: the start of the Vision-I2T branch.
 
-Reported against `llava-phi-3-mini-f16.gguf` (an F16, i.e. entirely
-unquantized, weight file) once vision loading itself succeeded — the crash
-happened on the very first LLM forward pass (prefill step 0), so this is a
-core `node` module bug, unrelated to the vision fixes above; it would affect
-any F16 model's text generation too, image or no image.
+Unrelated small fix first, landed just before this branch started: `#43`
+fixed formatting issues with dots inside "offending blocks" in `run.bat`
+and docs output; not vision-related, noted here only because it's the last
+commit before the branch diverges from release-0.1.0.
 
-**Root cause:** `LlamaTransformerHandler` has two dispatches over
-`GgufReader.QuantizedTensor.type()` (the GGML type ID) used when a weight is
-kept in raw/quantized form rather than eagerly materialized as `float[]`:
-`matVecQuantizedNoEvent` (the CPU compute path) and `dequantize` (used once
-per weight when uploading to the CUDA backend). Both handled GGML types 0
-(F32), 8 (Q8_0), and 10–14 (Q2_K..Q6_K) — but neither had a case for type 1
-(F16), despite F16 being one of the most common, standard GGUF weight
-formats, not an exotic one. Any F16 tensor reaching either dispatch hit the
-`default` branch's `UnsupportedOperationException`.
+**New `vision` Maven module**: `VisionConfig`, `VisionEncoder` (pure-Java
+CLIP ViT-L/14 encoder reading GGUF mmproj weights), `ImagePatchEmbedder`,
+`LlavaHandlerFactory`, `VisionAwareForwardPassHandler` (wraps a text
+`ForwardPassHandler`, splices patch embeddings into image-token
+positions), and `StubForwardPassHandler` (test double). New
+`docs/Vision-I2T.md` design doc.
 
-**Fix:** added the missing `case 1` branch to both switches:
+New `VisionChatHandler` (`juno-player`) and a `POST /v1/vision/chat` route
+wired into `InferenceApiServer`/`ConsoleMain`.
 
-- `matVecF16raw` (new) for the CPU path, mirroring `matVecF32raw`'s exact
-  style (manual little-endian byte assembly per row inside a parallel
-  `IntStream`, no per-row `ByteBuffer` allocation)
-- `dequantizeF16` (new) for the CUDA upload path, mirroring `dequantizeF32`
-
-Both reuse the existing `GgufReader.f16ToF32` half-to-float conversion —
-the same one `GgufReader.loadF16` already uses for eager dequantization — so
-a weight kept in raw form now produces bit-identical results to one eagerly
-converted via `GgufReader.tensor()`. Byte order is fixed little-endian in
-both (matching every other raw matVec in this file): GGUF tensor bytes are
-always little-endian regardless of the cluster's `--byteOrder` flag, which
-only governs inter-node *activation* serialization, never model weight
-bytes — an unrelated concern.
-
-A third dispatch, `LoraTrainableHandler.transposedMatVec`, was already safe:
-its `default` branch (`transposedFallback`) logs a warning and reuses
-`LlamaTransformerHandler.matVec` internally rather than throwing, so it is
-automatically fixed as a side effect of the primary fix above — no separate
-change was needed there.
-
-Regression test: `LlamaTransformerHandlerF16MatVecTest` (new — constructs a
-synthetic F16 `QuantizedTensor` directly, no GGUF file needed; covers both
-`matVec` and `dequantize`, including a numerical-correctness check against a
-plain-float reference dot product).
+Full unit-test coverage from day one for every new class
+(`ImagePatchEmbedderTest`, `VisionAwareForwardPassHandlerTest`,
+`VisionConfigTest`, `VisionEncoderTest`) — all passing at this commit, per
+the commit message, though this is the scaffolding stage: no real GGUF
+file had been tested against yet (that starts in Session 54).
 
 **Session 52** — EU AI ACT Complience User transparency and AI disclosure.
 

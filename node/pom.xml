@@ -69,11 +69,15 @@
 				<artifactId>maven-surefire-plugin</artifactId>
 				<configuration>
 					<!-- Panama FFI requires native access; also suppresses
-					Loom/Netty sun.misc.Unsafe warnings. -->
+					Loom/Netty sun.misc.Unsafe warnings. jdk.incubator.vector is
+					required at test run time for VectorQuantKernelsTest and any
+					test that exercises LlamaTransformerHandler's SIMD-backed
+					sgemm*WeightStationary kernels (see VectorQuantKernels). -->
 					<argLine>
 						--enable-native-access=ALL-UNNAMED
 						--add-opens java.base/java.lang=ALL-UNNAMED
 						--add-opens java.base/java.nio=ALL-UNNAMED
+						--add-modules jdk.incubator.vector
 					</argLine>
 				</configuration>
 			</plugin>

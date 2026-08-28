@@ -65,4 +65,70 @@ class ShardMapTest {
 		assertThatThrownBy(() -> map.assignments().add(shard("n3", 32, 48)))
 				.isInstanceOf(UnsupportedOperationException.class);
 	}
+
+	// ── evenSplit: local in-process pipeline-parallelism split ──────────────────
+	//
+	// Regression net for the bug this replaces: ConsoleMain's local mode used
+	// to route through ShardPlanner.plan() with a fabricated per-node VRAM
+	// figure large enough to "always fit". Since ShardPlanner is a greedy
+	// algorithm (first node takes everything that fits, leaving only the
+	// contractually-required 1 layer for each remaining node), that gave node 0
+	// nearly the entire model and 1 layer each to every other node — for a
+	// 24-layer model split 3 ways, 22/1/1 instead of 8/8/8. These tests assert
+	// evenSplit actually splits evenly.
+
+	@Test
+	void evenSplit_divides_evenly_when_layers_are_a_multiple_of_nodeCount() {
+		ShardMap map = ShardMap.evenSplit("model", 24, 3);
+
+		assertThat(map.nodeCount()).isEqualTo(3);
+		assertThat(map.assignments()).extracting(ShardAssignment::layerCount).containsExactly(8, 8, 8);
+		map.validateCoverage(); // no gaps/overlaps, covers all 24 layers
+	}
+
+	@Test
+	void evenSplit_distributes_remainder_one_layer_per_node_from_the_front() {
+		// 25 layers / 3 nodes = 8 each with 1 left over — must not all pile onto
+		// one node the way the old VRAM-greedy path did.
+		ShardMap map = ShardMap.evenSplit("model", 25, 3);
+
+		assertThat(map.assignments()).extracting(ShardAssignment::layerCount).containsExactly(9, 8, 8);
+		map.validateCoverage();
+	}
+
+	@Test
+	void evenSplit_first_node_has_embeddings_last_node_has_output_projection() {
+		ShardMap map = ShardMap.evenSplit("model", 24, 3);
+
+		assertThat(map.firstNode().hasEmbeddings()).isTrue();
+		assertThat(map.firstNode().hasOutputProjection()).isFalse();
+		assertThat(map.lastNode().hasOutputProjection()).isTrue();
+		assertThat(map.lastNode().hasEmbeddings()).isFalse();
+	}
+
+	@Test
+	void evenSplit_single_node_gets_the_whole_model() {
+		ShardMap map = ShardMap.evenSplit("model", 24, 1);
+
+		assertThat(map.nodeCount()).isEqualTo(1);
+		assertThat(map.firstNode().hasEmbeddings()).isTrue();
+		assertThat(map.firstNode().hasOutputProjection()).isTrue();
+		assertThat(map.firstNode().layerCount()).isEqualTo(24);
+	}
+
+	@Test
+	void evenSplit_nodeCount_greater_than_totalLayers_is_capped_to_one_layer_per_node() {
+		// Asking for more stages than layers can't give every stage a layer —
+		// cap rather than throw or hand out empty/zero-layer assignments.
+		ShardMap map = ShardMap.evenSplit("model", 3, 8);
+
+		assertThat(map.nodeCount()).isEqualTo(3);
+		assertThat(map.assignments()).extracting(ShardAssignment::layerCount).containsExactly(1, 1, 1);
+		map.validateCoverage();
+	}
+
+	@Test
+	void evenSplit_rejects_nodeCount_below_one() {
+		assertThatThrownBy(() -> ShardMap.evenSplit("model", 24, 0)).isInstanceOf(IllegalArgumentException.class);
+	}
 }

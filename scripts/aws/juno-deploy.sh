@@ -1322,6 +1322,7 @@ exec /usr/bin/java \
   --enable-preview --enable-native-access=ALL-UNNAMED \
   --add-opens java.base/java.lang=ALL-UNNAMED \
   --add-opens java.base/java.nio=ALL-UNNAMED \
+  --add-modules jdk.incubator.vector \
   -XX:+UseG1GC -XX:+AlwaysPreTouch -Xmx12g \
   ${JFR_OPT:+$JFR_OPT} \
   -DJUNO_USE_GPU=${JUNO_USE_GPU} \
@@ -1382,6 +1383,7 @@ exec /usr/bin/java \
   --enable-preview --enable-native-access=ALL-UNNAMED \
   --add-opens java.base/java.lang=ALL-UNNAMED \
   --add-opens java.base/java.nio=ALL-UNNAMED \
+  --add-modules jdk.incubator.vector \
   -XX:+UseG1GC -XX:+AlwaysPreTouch -Xmx4g \
   ${JFR_OPT:+$JFR_OPT} \
   -DJUNO_HEALTH=true \
@@ -1491,6 +1493,7 @@ exec /usr/bin/java \
   --enable-preview --enable-native-access=ALL-UNNAMED \
   --add-opens java.base/java.lang=ALL-UNNAMED \
   --add-opens java.base/java.nio=ALL-UNNAMED \
+  --add-modules jdk.incubator.vector \
   -XX:+UseG1GC -XX:+AlwaysPreTouch -Xmx4g \
   \${JFR_OPT:+\$JFR_OPT} \
   -DJUNO_HEALTH=true \

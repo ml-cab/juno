@@ -40,7 +40,12 @@ call :check_java_version
 echo [DBG] back from check_java_version errorlevel=!ERRORLEVEL!
 if errorlevel 1 exit /b 1
 echo [DBG] past errorlevel check
-set "JVM_BASE=--enable-preview --enable-native-access=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED -XX:+UseG1GC -XX:+AlwaysPreTouch -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"
+rem --add-modules jdk.incubator.vector: Vector API is still incubating as of
+rem JDK 25/26 (JEP 508 / JEP 529) -- required at run time for the SIMD CPU
+rem quantized-matmul kernels (VectorQuantKernels). Falls back to scalar
+rem automatically if absent, so this is a performance flag, not a correctness
+rem requirement.
+set "JVM_BASE=--enable-preview --enable-native-access=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED --add-modules jdk.incubator.vector -XX:+UseG1GC -XX:+AlwaysPreTouch -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"
 echo [DBG] JVM_BASE set
 echo [DBG] arg1=%~1
 if "%~1"=="" goto :usage

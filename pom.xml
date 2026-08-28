@@ -406,6 +406,17 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<!-- jdk.incubator.vector (Vector API) is still incubating as of
+					JDK 25/26 (JEP 508, JEP 529), because javac needs this flag to
+					resolve it, same as the JVM needs it at run time (see
+					scripts/run.sh, scripts/run.bat, ClusterHarness). Harmless for
+					modules that do not reference the Vector API. -->
+					<compilerArgs>
+						<arg>--add-modules</arg>
+						<arg>jdk.incubator.vector</arg>
+					</compilerArgs>
+				</configuration>
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
