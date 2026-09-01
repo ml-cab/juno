@@ -1,0 +1,15 @@
+{
+  "model": "Qwen3.5-0.8B.Q4_K_M.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 57.575503,
+    "token_gen_tps": 6.492781
+  },
+  "juno": {
+    "status": "failure",
+    "token_gen_tps": null,
+    "error": "api_health_timeout",
+    "error_detail": null
+  },
+  "ratio_juno_over_llamacpp_tg": null
+}

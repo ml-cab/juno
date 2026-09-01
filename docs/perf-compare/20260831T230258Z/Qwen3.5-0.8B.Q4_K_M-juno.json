@@ -1,0 +1,33 @@
+{
+  "engine": "juno",
+  "tool": "local-api",
+  "status": "failure",
+  "error": "api_health_timeout_or_crash",
+  "error_detail": "Exception in thread \"main\" java.lang.IllegalArgumentException: Tensor not found: blk.0.ffn_norm.weight  (available: 320 tensors) ",
+  "model": "Qwen3.5-0.8B.Q4_K_M.gguf",
+  "model_path": "/home/medion/Repo/juno/models/Qwen3.5-0.8B.Q4_K_M.gguf",
+  "log": "/home/medion/Repo/juno/target/perf-compare/20260831T230258Z/Qwen3.5-0.8B.Q4_K_M-juno.log",
+  "juno_use_vector": 0,
+  "backend": "cpu",
+  "use_gpu": 0,
+  "heap": "4g",
+  "host": {
+  "run_id": "20260831T230258Z",
+  "timestamp_utc": "2026-08-31T23:05:48Z",
+  "hostname": "medion-Precision-T3610",
+  "cpu": "Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz",
+  "mem_total": "62.7 GiB",
+  "n_threads": 12,
+  "n_prompt": 128,
+  "n_gen": 64,
+  "reps": 1,
+  "ngl": 0,
+  "backend": "cpu",
+  "use_gpu": 0,
+  "prompt": "could you please write me a short poem about love and war",
+  "juno_use_vector": 0,
+  "juno_jfr": 1,
+  "jfr_duration": "30m",
+  "llama_cpp_bin": "/home/medion/Repo/llama.cpp-bin/llama-b9551"
+}
+}

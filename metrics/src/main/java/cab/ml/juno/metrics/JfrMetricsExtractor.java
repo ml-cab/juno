@@ -292,6 +292,8 @@ final class JfrMetricsExtractor {
         m.put("juno.ForwardPass.decode.count", (double) forwardDecode.size());
         m.put("juno.ForwardPass.prefill.p95_ms", JfrPercentiles.p95NanosToMs(forwardPrefill));
         m.put("juno.ForwardPass.decode.p95_ms", JfrPercentiles.p95NanosToMs(forwardDecode));
+        m.put("juno.ForwardPass.prefill.total_ms", JfrPercentiles.sumNanosToMs(forwardPrefill));
+        m.put("juno.ForwardPass.decode.total_ms", JfrPercentiles.sumNanosToMs(forwardDecode));
 
         m.put("juno.Tokenizer.encode.count", (double) tokEncode.size());
         m.put("juno.Tokenizer.encode.p95_ms", JfrPercentiles.p95NanosToMs(tokEncode));
