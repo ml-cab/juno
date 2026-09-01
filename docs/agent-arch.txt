@@ -56,6 +56,8 @@ GPU FFI (node module — Panama project, JEP 454):
   GpuMatVec — sealed interface (permits CudaMatVec, RocmMatVec) extending MatVec.
         Exposes upload(float[], int, int) and uploadHalf(float[], int, int).
         Transformer handlers depend on GpuMatVec, not a concrete vendor class.
+  GpuLayerOffload — Tier 5 policy for --gpu-layers / JUNO_GPU_LAYERS (all|auto|0|N).
+        Handlers upload only resident global layers; matVec falls back to CPU quant when dev is null.
   CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16);
         per-thread CUDA stream + async H2D/D2H; synchronized on GpuContext lock.
   RocmMatVec — implements GpuMatVec; rocblas_sgemv (FP32) / rocblas_hssgemv_strided_batched (FP16);

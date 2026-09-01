@@ -10,10 +10,9 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 |-----|---------|--------------|-----------|
 | [`20260831T230258Z`](20260831T230258Z/) | CPU (`-ngl 0` / `--cpu`) | JFR pp/tg | [INDEX](20260831T230258Z/INDEX.md) |
 | [`20260831T231403Z`](20260831T231403Z/) | GPU (`-ngl 99` / `--gpu`) | JFR pp/tg | [INDEX](20260831T231403Z/INDEX.md) |
+| [`20260901T032753Z`](20260901T032753Z/) | GPU + Tier 5 (`JUNO_GPU_LAYERS=auto`) | JFR pp/tg | [INDEX](20260901T032753Z/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
-
-Mirrored under [`scripts/performance-tests/results/`](../../scripts/performance-tests/results/).
 
 ## CPU summary (JFR) — `20260831T230258Z`
 
@@ -38,6 +37,14 @@ Mirrored under [`scripts/performance-tests/results/`](../../scripts/performance-
 
 JFR tg is **~1.6–1.7×** API wall-clock tg on GPU for models that fit in VRAM. Mistral-7B Juno GPU still matches CPU (~0.48 t/s JFR), indicating VRAM/residency fallback on 8 GiB.
 
+## Tier 5 GPU offload (`JUNO_GPU_LAYERS=auto`) — `20260901T032753Z` · mistral-7b only
+
+| Model | llama.cpp tg | Juno tg (JFR) | Juno/llama tg | Notes |
+|-------|-------------:|--------------:|--------------:|-------|
+| mistral-7b Q4_K_M | 35.5 | 0.94 | **0.026** | Hybrid MatVec: ~10.4k GPU fp16 + ~6.6k CPU quant ops |
+
+Prior GPU baseline (`20260831T231403Z`): mistral Juno tg **0.48** t/s (**0.01×**). Tier 5 auto offload is **~2×** faster but still below the P0 gate (**≥0.15×** ≈ 5.3 t/s).
+
 ## Re-run
 
 ```bash
@@ -47,6 +54,10 @@ JFR tg is **~1.6–1.7×** API wall-clock tg on GPU for models that fit in VRAM.
 
 # GPU (default 4-model set)
 ./scripts/performance-tests/compare-llama-cpp.sh --gpu --vector 0 --reps 1
+
+# Tier 5 mistral bake-off (partial GPU residency)
+JUNO_GPU_LAYERS=auto ./scripts/performance-tests/compare-llama-cpp.sh --gpu --vector 0 --reps 1 \
+  --models mistral-7b-instruct-v0.1-q4_k_m.gguf
 ```
 
 Use `--no-jfr` to revert to API latency tg only. Per-model artifacts: `*-llama-cpp.json`, `*-juno.json`, `*-juno-jfr.json`, `*-compare.json`.

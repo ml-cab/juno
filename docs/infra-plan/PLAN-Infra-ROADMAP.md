@@ -33,11 +33,38 @@ Phases P0 → P1 → P2 → … advance **one tier at a time** on the critical p
 Before marking a tier complete and beginning the next dependent tier:
 
 1. Run [`scripts/performance-tests/compare-llama-cpp.sh`](../../scripts/performance-tests/compare-llama-cpp.sh) (CPU and/or GPU as relevant; default `--vector 0`, JFR on).
-2. Publish artifacts under [`docs/perf-compare/`](../perf-compare/README.md) `<timestamp>/` (script mirrors to `scripts/performance-tests/results/`).
+2. Publish artifacts under [`docs/perf-compare/`](../perf-compare/README.md) `<timestamp>/`.
 3. Update [`docs/perf-compare/README.md`](../perf-compare/README.md) with the new run row and summary tables.
 4. Record tier-specific metrics or regression notes in `docs/performance.md` and reference the compare run in CHANGELOG / ROADMAP tier status.
 
 API-only tiers (2–4, 7, 11) still run compare as a **regression gate** even when throughput is unchanged.
+
+### 3. No llama.cpp or vLLM in Juno docs
+
+Do not name **llama.cpp**, **vLLM**, or their variants (`llama-server`, `vllm`, etc.) in Juno documentation outside this planning tree.
+
+| Scope | Rule |
+|-------|------|
+| **`docs/infra-plan/`**, **`docs/perf-compare/`** | Internal engineering only — competitor names allowed for parity research and bake-off metadata |
+| **Everything else** (`README.md`, `CHANGELOG.md`, `docs/howto.md`, `docs/performance.md`, shipped tier notes, marketing, API docs) | **Do not** name llama.cpp or vLLM in prose |
+
+When writing or updating user-facing docs, describe targets in Juno terms only (throughput, TTFT, VRAM fit, continuous batching, OpenAI field parity, etc.). Point engineers at [`docs/perf-compare/`](../perf-compare/README.md) for measured baselines — do not cite competitor product names in prose.
+
+When a tier ships, update `docs/howto.md`, `README.md`, and `CHANGELOG.md` per Adoption principle 5 — without naming external engines.
+
+### 4. No Infra tier numbers in shipped docs or code
+
+Infra tier numbers (e.g. `Tier 5`, `Tiers 14–16`) are planning identifiers inside `docs/infra-plan/` only. Do **not** embed them in user-facing documentation, code comments, JFR `@Description` strings, CLI help, error messages, or CHANGELOG prose.
+
+| Avoid | Prefer |
+|-------|--------|
+| `(Tier 5 --gpu-layers)` | `(--gpu-layers)` |
+| "ships in Tier 8" | "prefill microbatching" or the flag/API name |
+| `// Tier 9 verify loop` | `// ngram speculative verify loop` |
+
+Name the **feature, flag, or API** — not the planning tier that delivered it. When cross-linking planning work, link `docs/infra-plan/PLAN-Infra-TierN.md` or ROADMAP phase steps; do not copy tier labels into shipped surfaces.
+
+**Exceptions:** `docs/infra-plan/**`; tier/phase status tables in this ROADMAP; `docs/lora-plan/**` for LoRA tier labels (separate track).
 
 ## Execution phases (authoritative schedule)
 
@@ -77,7 +104,7 @@ P5:  (after 8)    13 FlashAttn subset
 | 2 | `PLAN-Infra-Tier2.md` | OpenAI field parity | P2 | Pending |
 | 3 | `PLAN-Infra-Tier3.md` | GBNF + JSON Schema | P2 | Pending |
 | 4 | `PLAN-Infra-Tier4.md` | Function calling / tools | P2 | Pending |
-| 5 | `PLAN-Infra-Tier5.md` | Hybrid `--gpu-layers` offload | P0 step 2 | Pending |
+| 5 | `PLAN-Infra-Tier5.md` | Hybrid `--gpu-layers` offload | P0 step 2 | In progress |
 | 6 | `PLAN-Infra-Tier6.md` | Quantized KV cache (`q8_0`) | P1 step 1 | Pending |
 | 7 | `PLAN-Infra-Tier7.md` | Chat template + HF download | P3 | Pending |
 | 8 | `PLAN-Infra-Tier8.md` | Prefill microbatching | P0 step 3 | Pending |

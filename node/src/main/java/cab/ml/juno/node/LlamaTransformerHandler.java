@@ -132,6 +132,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private DeviceFloatMatrix[] wDownDevFp32;
 	private DeviceFloatMatrix   outputProjDevFp32;
 
+	/** Global transformer layers with GPU-resident weights (0 = CPU-only matmul). */
+	private final int gpuLayersResolved;
+
 	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
 	// When non-null, every completed forward pass flushes key/value data into
 	// the KVCacheManager (GPU + CPU tiers). Eviction under real memory pressure
@@ -221,6 +224,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.wqDev = this.wkDev = this.wvDev = this.woDev =
 				this.wGateDev = this.wUpDev = this.wDownDev = null;
 		this.outputProjDev = null;
+		this.gpuLayersResolved = 0;
 	}
 
 	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend)
@@ -293,21 +297,31 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		outputProjDev = null;
 		wqDevFp32 = wkDevFp32 = wvDevFp32 = woDevFp32 = wGateDevFp32 = wUpDevFp32 = wDownDevFp32 = null;
 		outputProjDevFp32 = null;
+		int resolvedLayers = 0;
 		if (backend instanceof GpuMatVec cuda) {
 			if (cuda.supportsHalfResident()) {
-				uploadFp16Resident(cuda, L);
+				resolvedLayers = uploadFp16Resident(cuda, L);
 			} else {
-				uploadFp32Resident(cuda, L);
+				resolvedLayers = uploadFp32Resident(cuda, L);
 			}
 		}
+		this.gpuLayersResolved = resolvedLayers;
 	}
 
-	private void uploadFp16Resident(GpuMatVec cuda, int L) {
-		log.info("Uploading dequantized weights to GPU (FP16 device-resident)…");
+	/** Resolved global GPU layer count for JFR / diagnostics. */
+	public int gpuLayersResolved() {
+		return gpuLayersResolved;
+	}
+
+	private int uploadFp16Resident(GpuMatVec cuda, int L) {
+		GpuLayerOffload policy = GpuLayerOffload.fromEnv();
+		log.info("Uploading dequantized weights to GPU (FP16 device-resident, gpu-layers="
+				+ policy.policyLabel(cfg.numLayers()) + ")…");
 		int H  = cfg.hiddenDim();
 		int KV = cfg.kvDim();
 		int I  = cfg.intermediateSize();
 		int V  = cfg.vocabSize();
+		int totalLayers = cfg.numLayers();
 		DeviceHalfMatrix[] wqD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix[] wkD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix[] wvD = new DeviceHalfMatrix[L];
@@ -316,53 +330,98 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		DeviceHalfMatrix[] wUpD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix[] wDownD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix outD = null;
+		int resolvedGlobal = 0;
 		try {
 			for (int li = 0; li < L; li++) {
-				wqD[li]    = cuda.uploadHalf(dequantize(wq[li],   H,  H), H,  H);
-				wkD[li]    = cuda.uploadHalf(dequantize(wk[li],   KV, H), KV, H);
-				wvD[li]    = cuda.uploadHalf(dequantize(wv[li],   KV, H), KV, H);
-				woD[li]    = cuda.uploadHalf(dequantize(wo[li],   H,  H), H,  H);
-				wGateD[li] = cuda.uploadHalf(dequantize(wGate[li], I, H), I,  H);
-				wUpD[li]   = cuda.uploadHalf(dequantize(wUp[li],   I, H), I,  H);
-				wDownD[li] = cuda.uploadHalf(dequantize(wDown[li], H, I), H,  I);
+				int global = startLayer + li;
+				if (!policy.isAuto() && !policy.residentForGlobalLayer(global, totalLayers))
+					continue;
+				try {
+					uploadFp16Layer(cuda, li, H, KV, I, wqD, wkD, wvD, woD, wGateD, wUpD, wDownD);
+					resolvedGlobal = Math.max(resolvedGlobal, global + 1);
+				} catch (IllegalStateException ex) {
+					if (!handleLayerUploadOom(policy, ex, global, "FP16"))
+						throw ex;
+					break;
+				}
 			}
-			if (outputProj != null)
-				outD = cuda.uploadHalf(dequantize(outputProj, V, H), V, H);
-			this.wqDev = wqD;
-			this.wkDev = wkD;
-			this.wvDev = wvD;
-			this.woDev = woD;
-			this.wGateDev = wGateD;
-			this.wUpDev = wUpD;
-			this.wDownDev = wDownD;
-			this.outputProjDev = outD;
-			log.info("GPU weight upload complete (FP16).");
+			boolean allLayersGpu = policy.isAuto()
+					? resolvedGlobal >= totalLayers
+					: policy.residentOutputProjection(totalLayers);
+			if (outputProj != null && allLayersGpu) {
+				try {
+					outD = cuda.uploadHalf(dequantize(outputProj, V, H), V, H);
+				} catch (IllegalStateException ex) {
+					if (!GpuLayerOffload.isVramOom(ex))
+						throw ex;
+					log.warning("Llama: OOM uploading output projection — using CPU matmul");
+				}
+			}
+			assignFp16DeviceArrays(wqD, wkD, wvD, woD, wGateD, wUpD, wDownD, outD);
+			if (policy.isAuto())
+				policy = policy.withAutoResolved(resolvedGlobal);
+			log.info("GPU weight upload complete (FP16, resolved gpu-layers="
+					+ policy.resolvedCount(totalLayers) + ").");
+			return policy.resolvedCount(totalLayers);
 		} catch (IllegalStateException ex) {
-			closeDeviceHalfMatrixArray(wqD);
-			closeDeviceHalfMatrixArray(wkD);
-			closeDeviceHalfMatrixArray(wvD);
-			closeDeviceHalfMatrixArray(woD);
-			closeDeviceHalfMatrixArray(wGateD);
-			closeDeviceHalfMatrixArray(wUpD);
-			closeDeviceHalfMatrixArray(wDownD);
-			if (outD != null)
-				outD.close();
-			String msg = ex.getMessage() == null ? "" : ex.getMessage();
-			if (msg.contains("cudaMalloc") || msg.contains("hipMalloc")) {
-				log.warning("Llama: insufficient GPU VRAM for FP16-resident weights (" + msg
+			releaseFp16Upload(wqD, wkD, wvD, woD, wGateD, wUpD, wDownD, outD);
+			if (policy.mode() == GpuLayerOffload.Mode.ALL && GpuLayerOffload.isVramOom(ex)) {
+				log.warning("Llama: insufficient GPU VRAM for full FP16-resident weights (" + ex.getMessage()
 						+ "). Using CPU quantised matmul for projections.");
-			} else {
-				throw ex;
+				return 0;
 			}
+			throw ex;
 		}
 	}
 
-	private void uploadFp32Resident(GpuMatVec cuda, int L) {
-		log.info("Uploading dequantized weights to GPU (FP32 device-resident — FP16 GEMV unsupported on this GFX target)…");
+	private void uploadFp16Layer(GpuMatVec cuda, int li, int H, int KV, int I,
+			DeviceHalfMatrix[] wqD, DeviceHalfMatrix[] wkD, DeviceHalfMatrix[] wvD, DeviceHalfMatrix[] woD,
+			DeviceHalfMatrix[] wGateD, DeviceHalfMatrix[] wUpD, DeviceHalfMatrix[] wDownD) {
+		wqD[li]    = cuda.uploadHalf(dequantize(wq[li],   H,  H), H,  H);
+		wkD[li]    = cuda.uploadHalf(dequantize(wk[li],   KV, H), KV, H);
+		wvD[li]    = cuda.uploadHalf(dequantize(wv[li],   KV, H), KV, H);
+		woD[li]    = cuda.uploadHalf(dequantize(wo[li],   H,  H), H,  H);
+		wGateD[li] = cuda.uploadHalf(dequantize(wGate[li], I, H), I,  H);
+		wUpD[li]   = cuda.uploadHalf(dequantize(wUp[li],   I, H), I,  H);
+		wDownD[li] = cuda.uploadHalf(dequantize(wDown[li], H, I), H,  I);
+	}
+
+	private void assignFp16DeviceArrays(DeviceHalfMatrix[] wqD, DeviceHalfMatrix[] wkD, DeviceHalfMatrix[] wvD,
+			DeviceHalfMatrix[] woD, DeviceHalfMatrix[] wGateD, DeviceHalfMatrix[] wUpD, DeviceHalfMatrix[] wDownD,
+			DeviceHalfMatrix outD) {
+		this.wqDev = wqD;
+		this.wkDev = wkD;
+		this.wvDev = wvD;
+		this.woDev = woD;
+		this.wGateDev = wGateD;
+		this.wUpDev = wUpD;
+		this.wDownDev = wDownD;
+		this.outputProjDev = outD;
+	}
+
+	private static void releaseFp16Upload(DeviceHalfMatrix[] wqD, DeviceHalfMatrix[] wkD, DeviceHalfMatrix[] wvD,
+			DeviceHalfMatrix[] woD, DeviceHalfMatrix[] wGateD, DeviceHalfMatrix[] wUpD, DeviceHalfMatrix[] wDownD,
+			DeviceHalfMatrix outD) {
+		closeDeviceHalfMatrixArray(wqD);
+		closeDeviceHalfMatrixArray(wkD);
+		closeDeviceHalfMatrixArray(wvD);
+		closeDeviceHalfMatrixArray(woD);
+		closeDeviceHalfMatrixArray(wGateD);
+		closeDeviceHalfMatrixArray(wUpD);
+		closeDeviceHalfMatrixArray(wDownD);
+		if (outD != null)
+			outD.close();
+	}
+
+	private int uploadFp32Resident(GpuMatVec cuda, int L) {
+		GpuLayerOffload policy = GpuLayerOffload.fromEnv();
+		log.info("Uploading dequantized weights to GPU (FP32 device-resident, gpu-layers="
+				+ policy.policyLabel(cfg.numLayers()) + ")…");
 		int H  = cfg.hiddenDim();
 		int KV = cfg.kvDim();
 		int I  = cfg.intermediateSize();
 		int V  = cfg.vocabSize();
+		int totalLayers = cfg.numLayers();
 		DeviceFloatMatrix[] wqD = new DeviceFloatMatrix[L];
 		DeviceFloatMatrix[] wkD = new DeviceFloatMatrix[L];
 		DeviceFloatMatrix[] wvD = new DeviceFloatMatrix[L];
@@ -371,45 +430,99 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		DeviceFloatMatrix[] wUpD = new DeviceFloatMatrix[L];
 		DeviceFloatMatrix[] wDownD = new DeviceFloatMatrix[L];
 		DeviceFloatMatrix outD = null;
+		int resolvedGlobal = 0;
 		try {
 			for (int li = 0; li < L; li++) {
-				wqD[li]    = cuda.upload(dequantize(wq[li],   H,  H), H,  H);
-				wkD[li]    = cuda.upload(dequantize(wk[li],   KV, H), KV, H);
-				wvD[li]    = cuda.upload(dequantize(wv[li],   KV, H), KV, H);
-				woD[li]    = cuda.upload(dequantize(wo[li],   H,  H), H,  H);
-				wGateD[li] = cuda.upload(dequantize(wGate[li], I, H), I,  H);
-				wUpD[li]   = cuda.upload(dequantize(wUp[li],   I, H), I,  H);
-				wDownD[li] = cuda.upload(dequantize(wDown[li], H, I), H,  I);
+				int global = startLayer + li;
+				if (!policy.isAuto() && !policy.residentForGlobalLayer(global, totalLayers))
+					continue;
+				try {
+					uploadFp32Layer(cuda, li, H, KV, I, wqD, wkD, wvD, woD, wGateD, wUpD, wDownD);
+					resolvedGlobal = Math.max(resolvedGlobal, global + 1);
+				} catch (IllegalStateException ex) {
+					if (!handleLayerUploadOom(policy, ex, global, "FP32"))
+						throw ex;
+					break;
+				}
 			}
-			if (outputProj != null)
-				outD = cuda.upload(dequantize(outputProj, V, H), V, H);
-			this.wqDevFp32 = wqD;
-			this.wkDevFp32 = wkD;
-			this.wvDevFp32 = wvD;
-			this.woDevFp32 = woD;
-			this.wGateDevFp32 = wGateD;
-			this.wUpDevFp32 = wUpD;
-			this.wDownDevFp32 = wDownD;
-			this.outputProjDevFp32 = outD;
-			log.info("GPU weight upload complete (FP32).");
+			boolean allLayersGpu = policy.isAuto()
+					? resolvedGlobal >= totalLayers
+					: policy.residentOutputProjection(totalLayers);
+			if (outputProj != null && allLayersGpu) {
+				try {
+					outD = cuda.upload(dequantize(outputProj, V, H), V, H);
+				} catch (IllegalStateException ex) {
+					if (!GpuLayerOffload.isVramOom(ex))
+						throw ex;
+					log.warning("Llama: OOM uploading output projection — using CPU matmul");
+				}
+			}
+			assignFp32DeviceArrays(wqD, wkD, wvD, woD, wGateD, wUpD, wDownD, outD);
+			if (policy.isAuto())
+				policy = policy.withAutoResolved(resolvedGlobal);
+			log.info("GPU weight upload complete (FP32, resolved gpu-layers="
+					+ policy.resolvedCount(totalLayers) + ").");
+			return policy.resolvedCount(totalLayers);
 		} catch (IllegalStateException ex) {
-			closeDeviceFloatMatrixArray(wqD);
-			closeDeviceFloatMatrixArray(wkD);
-			closeDeviceFloatMatrixArray(wvD);
-			closeDeviceFloatMatrixArray(woD);
-			closeDeviceFloatMatrixArray(wGateD);
-			closeDeviceFloatMatrixArray(wUpD);
-			closeDeviceFloatMatrixArray(wDownD);
-			if (outD != null)
-				outD.close();
-			String msg = ex.getMessage() == null ? "" : ex.getMessage();
-			if (msg.contains("hipMalloc")) {
-				log.warning("Llama: insufficient GPU VRAM for FP32-resident weights (" + msg
+			releaseFp32Upload(wqD, wkD, wvD, woD, wGateD, wUpD, wDownD, outD);
+			if (policy.mode() == GpuLayerOffload.Mode.ALL && GpuLayerOffload.isVramOom(ex)) {
+				log.warning("Llama: insufficient GPU VRAM for full FP32-resident weights (" + ex.getMessage()
 						+ "). Using CPU quantised matmul for projections.");
-			} else {
-				throw ex;
+				return 0;
 			}
+			throw ex;
 		}
+	}
+
+	private void uploadFp32Layer(GpuMatVec cuda, int li, int H, int KV, int I,
+			DeviceFloatMatrix[] wqD, DeviceFloatMatrix[] wkD, DeviceFloatMatrix[] wvD, DeviceFloatMatrix[] woD,
+			DeviceFloatMatrix[] wGateD, DeviceFloatMatrix[] wUpD, DeviceFloatMatrix[] wDownD) {
+		wqD[li]    = cuda.upload(dequantize(wq[li],   H,  H), H,  H);
+		wkD[li]    = cuda.upload(dequantize(wk[li],   KV, H), KV, H);
+		wvD[li]    = cuda.upload(dequantize(wv[li],   KV, H), KV, H);
+		woD[li]    = cuda.upload(dequantize(wo[li],   H,  H), H,  H);
+		wGateD[li] = cuda.upload(dequantize(wGate[li], I, H), I,  H);
+		wUpD[li]   = cuda.upload(dequantize(wUp[li],   I, H), I,  H);
+		wDownD[li] = cuda.upload(dequantize(wDown[li], H, I), H,  I);
+	}
+
+	private void assignFp32DeviceArrays(DeviceFloatMatrix[] wqD, DeviceFloatMatrix[] wkD, DeviceFloatMatrix[] wvD,
+			DeviceFloatMatrix[] woD, DeviceFloatMatrix[] wGateD, DeviceFloatMatrix[] wUpD, DeviceFloatMatrix[] wDownD,
+			DeviceFloatMatrix outD) {
+		this.wqDevFp32 = wqD;
+		this.wkDevFp32 = wkD;
+		this.wvDevFp32 = wvD;
+		this.woDevFp32 = woD;
+		this.wGateDevFp32 = wGateD;
+		this.wUpDevFp32 = wUpD;
+		this.wDownDevFp32 = wDownD;
+		this.outputProjDevFp32 = outD;
+	}
+
+	private static void releaseFp32Upload(DeviceFloatMatrix[] wqD, DeviceFloatMatrix[] wkD, DeviceFloatMatrix[] wvD,
+			DeviceFloatMatrix[] woD, DeviceFloatMatrix[] wGateD, DeviceFloatMatrix[] wUpD,
+			DeviceFloatMatrix[] wDownD, DeviceFloatMatrix outD) {
+		closeDeviceFloatMatrixArray(wqD);
+		closeDeviceFloatMatrixArray(wkD);
+		closeDeviceFloatMatrixArray(wvD);
+		closeDeviceFloatMatrixArray(woD);
+		closeDeviceFloatMatrixArray(wGateD);
+		closeDeviceFloatMatrixArray(wUpD);
+		closeDeviceFloatMatrixArray(wDownD);
+		if (outD != null)
+			outD.close();
+	}
+
+	/** @return true when upload should stop (OOM handled); false to rethrow */
+	private boolean handleLayerUploadOom(GpuLayerOffload policy, IllegalStateException ex, int globalLayer,
+			String precision) {
+		if (!GpuLayerOffload.isVramOom(ex))
+			return false;
+		if (policy.mode() == GpuLayerOffload.Mode.ALL)
+			return false;
+		log.warning("Llama: OOM at global layer " + globalLayer + " (" + precision
+				+ ") — keeping earlier layers on GPU, remainder on CPU");
+		return true;
 	}
 
 	private static void closeDeviceHalfMatrixArray(DeviceHalfMatrix[] a) {
@@ -623,6 +736,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		evt.startPosition = request.startPosition();
 		evt.layerCount = endLayer - startLayer;
 		evt.hasOutputProjection = hasOutputProj;
+		evt.gpuLayers = gpuLayersResolved;
 		evt.commit();
 
 		return result;
@@ -940,12 +1054,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private void sgemmLayerInto(GgufReader.QuantizedTensor quant,
 			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32,
 			int li, float[][] X, float[][] Y, int rows, int cols) {
-		if (devHalf != null) {
+		if (devHalf != null && devHalf[li] != null) {
 			float[][] tmp = backend.sgemm(devHalf[li], X);
 			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
 			return;
 		}
-		if (devFp32 != null) {
+		if (devFp32 != null && devFp32[li] != null) {
 			float[][] tmp = backend.sgemm(devFp32[li], X);
 			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
 			return;
@@ -1132,8 +1246,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private float[][] sgemmLayer(GgufReader.QuantizedTensor quant,
 			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32,
 			int li, float[][] X, int rows, int cols) {
-		if (devHalf != null) return backend.sgemm(devHalf[li], X);
-		if (devFp32 != null) return backend.sgemm(devFp32[li], X);
+		if (devHalf != null && devHalf[li] != null) return backend.sgemm(devHalf[li], X);
+		if (devFp32 != null && devFp32[li] != null) return backend.sgemm(devFp32[li], X);
 		// CPU quantized: B sequential matVecs over the same weight bytes
 		int B = X.length;
 		float[][] Y = new float[B][];

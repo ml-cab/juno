@@ -123,6 +123,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	private DeviceHalfMatrix[] wDownDev = null;
 	private DeviceHalfMatrix outputProjDev = null;
 
+	private final int gpuLayersResolved;
+
 	// Per-request KV cache — lazily allocated and grown on demand.
 	// Starts at INITIAL_SEQ_CAPACITY slots, doubles until MAX_SEQ_LEN.
 	// Avoids the 554 MB eager pre-allocation that caused node JVM OOM during
@@ -227,67 +229,113 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 
 		if (backend instanceof GpuMatVec cuda) {
-			log.info("Uploading Phi-3 dequantized projection weights to GPU (FP16 storage)…");
-			DeviceHalfMatrix[] qD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] kD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] vD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] woD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] gD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] uD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix[] dD = new DeviceHalfMatrix[L];
-			DeviceHalfMatrix outD = null;
-			try {
-				for (int li = 0; li < L; li++) {
-					float[] qkvF = LlamaTransformerHandler.dequantize(attnQkv[li], H + 2 * kvDim, H);
-					qD[li] = cuda.uploadHalf(rowMajorSlice(qkvF, 0, H, H), H, H);
-					kD[li] = cuda.uploadHalf(rowMajorSlice(qkvF, H, kvDim, H), kvDim, H);
-					vD[li] = cuda.uploadHalf(rowMajorSlice(qkvF, H + kvDim, kvDim, H), kvDim, H);
-					woD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wo[li], H, H), H, H);
-					float[] gateUpF = LlamaTransformerHandler.dequantize(ffnGateUp[li], 2 * I, H);
-					gD[li] = cuda.uploadHalf(rowMajorSlice(gateUpF, 0, I, H), I, H);
-					uD[li] = cuda.uploadHalf(rowMajorSlice(gateUpF, I, I, H), I, H);
-					dD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wDown[li], H, I), H, I);
-				}
-				if (hasOutputProj) {
-					int actualVocab = outputProj.length / H;
-					outD = cuda.uploadHalf(outputProj, actualVocab, H);
-				}
-				this.attnQDev = qD;
-				this.attnKDev = kD;
-				this.attnVDev = vD;
-				this.woDev = woD;
-				this.ffnGateDev = gD;
-				this.ffnUpDev = uD;
-				this.wDownDev = dD;
-				this.outputProjDev = outD;
-				log.info("Phi-3 GPU weight upload complete (FP16 resident matrices).");
-			} catch (IllegalStateException ex) {
-				closeDeviceHalfMatrixArray(qD);
-				closeDeviceHalfMatrixArray(kD);
-				closeDeviceHalfMatrixArray(vD);
-				closeDeviceHalfMatrixArray(woD);
-				closeDeviceHalfMatrixArray(gD);
-				closeDeviceHalfMatrixArray(uD);
-				closeDeviceHalfMatrixArray(dD);
-				if (outD != null)
-					outD.close();
-				if (ex.getMessage() != null && (ex.getMessage().contains("cudaMalloc") || ex.getMessage().contains("hipMalloc"))) {
-					log.warning(
-							"Phi-3: not enough GPU VRAM for FP16-resident weights on this shard (" + ex.getMessage()
-									+ "). Using CPU quantised matmul. "
-									+ "Close other GPU apps, use a larger GPU, or pass --cpu.");
-					this.attnQDev = this.attnKDev = this.attnVDev = null;
-					this.woDev = this.ffnGateDev = this.ffnUpDev = this.wDownDev = null;
-					this.outputProjDev = null;
-				} else {
-					throw ex;
-				}
-			}
+			gpuLayersResolved = uploadGpuWeights(cuda, L, H, kvDim, I);
+		} else {
+			gpuLayersResolved = 0;
 		}
 		// CpuMatVec: device fields stay null (defaults above).
 
 		log.info("Phi-3 shard loaded — " + L + " layers, " + (hasEmbeddings ? "with embeddings, " : "")
 				+ (hasOutputProj ? "with output projection" : "no output projection"));
+	}
+
+	private int uploadGpuWeights(GpuMatVec cuda, int L, int H, int kvDim, int I) {
+		GpuLayerOffload policy = GpuLayerOffload.fromEnv();
+		int totalLayers = cfg.numLayers();
+		log.info("Uploading Phi-3 dequantized projection weights to GPU (FP16, gpu-layers="
+				+ policy.policyLabel(totalLayers) + ")…");
+		DeviceHalfMatrix[] qD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] kD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] vD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] woD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] gD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] uD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix[] dD = new DeviceHalfMatrix[L];
+		DeviceHalfMatrix outD = null;
+		int resolvedGlobal = 0;
+		try {
+			for (int li = 0; li < L; li++) {
+				int global = startLayer + li;
+				if (!policy.isAuto() && !policy.residentForGlobalLayer(global, totalLayers))
+					continue;
+				try {
+					uploadPhi3LayerFp16(cuda, li, H, kvDim, I, qD, kD, vD, woD, gD, uD, dD);
+					resolvedGlobal = Math.max(resolvedGlobal, global + 1);
+				} catch (IllegalStateException ex) {
+					if (!phi3HandleLayerOom(policy, ex, global))
+						throw ex;
+					break;
+				}
+			}
+			boolean allLayersGpu = policy.isAuto()
+					? resolvedGlobal >= totalLayers
+					: policy.residentOutputProjection(totalLayers);
+			if (hasOutputProj && allLayersGpu) {
+				try {
+					int actualVocab = outputProj.length / H;
+					outD = cuda.uploadHalf(outputProj, actualVocab, H);
+				} catch (IllegalStateException ex) {
+					if (!GpuLayerOffload.isVramOom(ex))
+						throw ex;
+					log.warning("Phi-3: OOM uploading output projection — using CPU matmul");
+				}
+			}
+			this.attnQDev = qD;
+			this.attnKDev = kD;
+			this.attnVDev = vD;
+			this.woDev = woD;
+			this.ffnGateDev = gD;
+			this.ffnUpDev = uD;
+			this.wDownDev = dD;
+			this.outputProjDev = outD;
+			if (policy.isAuto())
+				policy = policy.withAutoResolved(resolvedGlobal);
+			log.info("Phi-3 GPU weight upload complete (resolved gpu-layers="
+					+ policy.resolvedCount(totalLayers) + ").");
+			return policy.resolvedCount(totalLayers);
+		} catch (IllegalStateException ex) {
+			closeDeviceHalfMatrixArray(qD);
+			closeDeviceHalfMatrixArray(kD);
+			closeDeviceHalfMatrixArray(vD);
+			closeDeviceHalfMatrixArray(woD);
+			closeDeviceHalfMatrixArray(gD);
+			closeDeviceHalfMatrixArray(uD);
+			closeDeviceHalfMatrixArray(dD);
+			if (outD != null)
+				outD.close();
+			if (policy.mode() == GpuLayerOffload.Mode.ALL && GpuLayerOffload.isVramOom(ex)) {
+				log.warning("Phi-3: not enough GPU VRAM for FP16-resident weights (" + ex.getMessage()
+						+ "). Using CPU quantised matmul.");
+				this.attnQDev = this.attnKDev = this.attnVDev = null;
+				this.woDev = this.ffnGateDev = this.ffnUpDev = this.wDownDev = null;
+				this.outputProjDev = null;
+				return 0;
+			}
+			throw ex;
+		}
+	}
+
+	private void uploadPhi3LayerFp16(GpuMatVec cuda, int li, int H, int kvDim, int I,
+			DeviceHalfMatrix[] qD, DeviceHalfMatrix[] kD, DeviceHalfMatrix[] vD, DeviceHalfMatrix[] woD,
+			DeviceHalfMatrix[] gD, DeviceHalfMatrix[] uD, DeviceHalfMatrix[] dD) {
+		float[] qkvF = LlamaTransformerHandler.dequantize(attnQkv[li], H + 2 * kvDim, H);
+		qD[li] = cuda.uploadHalf(rowMajorSlice(qkvF, 0, H, H), H, H);
+		kD[li] = cuda.uploadHalf(rowMajorSlice(qkvF, H, kvDim, H), kvDim, H);
+		vD[li] = cuda.uploadHalf(rowMajorSlice(qkvF, H + kvDim, kvDim, H), kvDim, H);
+		woD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wo[li], H, H), H, H);
+		float[] gateUpF = LlamaTransformerHandler.dequantize(ffnGateUp[li], 2 * I, H);
+		gD[li] = cuda.uploadHalf(rowMajorSlice(gateUpF, 0, I, H), I, H);
+		uD[li] = cuda.uploadHalf(rowMajorSlice(gateUpF, I, I, H), I, H);
+		dD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wDown[li], H, I), H, I);
+	}
+
+	private boolean phi3HandleLayerOom(GpuLayerOffload policy, IllegalStateException ex, int globalLayer) {
+		if (!GpuLayerOffload.isVramOom(ex))
+			return false;
+		if (policy.mode() == GpuLayerOffload.Mode.ALL)
+			return false;
+		log.warning("Phi-3: OOM at global layer " + globalLayer + " — partial GPU offload");
+		return true;
 	}
 
 	private static void closeDeviceHalfMatrixArray(DeviceHalfMatrix[] a) {
@@ -374,6 +422,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		evt.startPosition = request.startPosition();
 		evt.layerCount = endLayer - startLayer;
 		evt.hasOutputProjection = hasOutputProj;
+		evt.gpuLayers = gpuLayersResolved;
 		evt.commit();
 
 		return result;

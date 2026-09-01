@@ -62,6 +62,7 @@ import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.DoraInitializer;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
+import cab.ml.juno.node.GpuLayerOffload;
 
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
@@ -193,6 +194,7 @@ public final class ConsoleMain {
 	private static String byteOrder = "BE";
 	// ── GPU arguments ─────────────────────────────────────────────────────────
 	private static boolean useGpu = true; // use CPU
+	private static String gpuLayers = null; // null → env or default all
 	// ── LoRA arguments ────────────────────────────────────────────────────────
 	private static boolean loraMode = false;
 	private static String loraPath = null; // auto-derived if null
@@ -276,6 +278,7 @@ public final class ConsoleMain {
 	public static void main(String[] args) throws Exception {
 		AnsiSupport.enable();
 		applyLoraEnvDefaults();
+		applyGpuEnvDefaults();
 		parseArgs(args);
 		if (help) {
 			printHelp();
@@ -314,6 +317,8 @@ public final class ConsoleMain {
 		}
 
 		System.setProperty("JUNO_USE_GPU", String.valueOf(useGpu));
+		if (gpuLayers != null)
+			System.setProperty(GpuLayerOffload.ENV_PROPERTY, gpuLayers);
 		System.setProperty("juno.byteOrder", byteOrder);
 		System.setProperty("MODEL_PATH", modelPath);
 		System.setProperty("DTYPE", dtype.name());
@@ -342,6 +347,14 @@ public final class ConsoleMain {
 			startClusterJfr();
 		} else {
 			runClusterRepl();
+		}
+	}
+
+	private static void applyGpuEnvDefaults() {
+		if (gpuLayers == null) {
+			String env = System.getenv(GpuLayerOffload.ENV_PROPERTY);
+			if (env != null && !env.isBlank())
+				gpuLayers = env.strip();
 		}
 	}
 
@@ -439,6 +452,10 @@ public final class ConsoleMain {
 				break;
 			case "--cpu":
 				useGpu = false;
+				break;
+			case "--gpu-layers":
+				if (i + 1 < args.length)
+					gpuLayers = args[++i];
 				break;
 		// ── LoRA ──────────────────────────────────────────────────────────
 			case "--lora":
@@ -630,6 +647,8 @@ public final class ConsoleMain {
 		System.out.println("Inference options:");
 		System.out.println("  --gpu                      Use GPU (default, no need to set)");
 		System.out.println("  --cpu                      Force to use CPU");
+		System.out.println("  --gpu-layers N|all|auto    GPU-resident transformer layers (default: all)");
+		System.out.println("                             env JUNO_GPU_LAYERS; auto fits until VRAM OOM");
 		System.out.println("  --pType pipeline|tensor    Parallelism type (default: pipeline)");
 		System.out.println("  --dtype FLOAT32|FLOAT16    Activation wire format (default: FLOAT16)");
 		System.out.println("  --max-tokens N             Max generated tokens (default: 200)");

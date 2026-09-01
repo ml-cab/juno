@@ -66,6 +66,8 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	private DeviceHalfMatrix[] wDownDev = null;
 	private DeviceHalfMatrix outputProjDev = null;
 
+	private final int gpuLayersResolved;
+
 	private final Map<String, float[][]> kvCacheK = new ConcurrentHashMap<>();
 	private final Map<String, float[][]> kvCacheV = new ConcurrentHashMap<>();
 	private volatile NodeKVCacheAdapter kvAdapter;
@@ -138,15 +140,20 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			}
 		}
 
+		int resolved = 0;
 		if (backend instanceof GpuMatVec cuda) {
-			uploadGpuWeights(cuda, L, H, cfg.qDim(), kvDim, I);
+			resolved = uploadGpuWeights(cuda, L, H, cfg.qDim(), kvDim, I);
 		}
+		this.gpuLayersResolved = resolved;
 
 		log.info("Qwen3 shard loaded — " + L + " layers");
 	}
 
-	private void uploadGpuWeights(GpuMatVec cuda, int L, int H, int qDim, int kvDim, int I) {
-		log.info("Uploading Qwen3 dequantized projection weights to GPU (FP16)…");
+	private int uploadGpuWeights(GpuMatVec cuda, int L, int H, int qDim, int kvDim, int I) {
+		GpuLayerOffload policy = GpuLayerOffload.fromEnv();
+		int totalLayers = cfg.numLayers();
+		log.info("Uploading Qwen3 dequantized projection weights to GPU (FP16, gpu-layers="
+				+ policy.policyLabel(totalLayers) + ")…");
 		DeviceHalfMatrix[] qD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix[] kD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix[] vD = new DeviceHalfMatrix[L];
@@ -155,19 +162,39 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		DeviceHalfMatrix[] uD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix[] dD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix outD = null;
+		int resolvedGlobal = 0;
 		try {
 			for (int li = 0; li < L; li++) {
-				qD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(attnQ[li], qDim, H), qDim, H);
-				kD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(attnK[li], kvDim, H), kvDim, H);
-				vD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(attnV[li], kvDim, H), kvDim, H);
-				woD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wo[li], H, qDim), H, qDim);
-				gD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(ffnGate[li], I, H), I, H);
-				uD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(ffnUp[li], I, H), I, H);
-				dD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wDown[li], H, I), H, I);
+				int global = startLayer + li;
+				if (!policy.isAuto() && !policy.residentForGlobalLayer(global, totalLayers))
+					continue;
+				try {
+					qD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(attnQ[li], qDim, H), qDim, H);
+					kD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(attnK[li], kvDim, H), kvDim, H);
+					vD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(attnV[li], kvDim, H), kvDim, H);
+					woD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wo[li], H, qDim), H, qDim);
+					gD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(ffnGate[li], I, H), I, H);
+					uD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(ffnUp[li], I, H), I, H);
+					dD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wDown[li], H, I), H, I);
+					resolvedGlobal = Math.max(resolvedGlobal, global + 1);
+				} catch (IllegalStateException ex) {
+					if (!qwen3HandleLayerOom(policy, ex, global))
+						throw ex;
+					break;
+				}
 			}
-			if (hasOutputProj) {
-				int actualVocab = outputProj.length / H;
-				outD = cuda.uploadHalf(outputProj, actualVocab, H);
+			boolean allLayersGpu = policy.isAuto()
+					? resolvedGlobal >= totalLayers
+					: policy.residentOutputProjection(totalLayers);
+			if (hasOutputProj && allLayersGpu) {
+				try {
+					int actualVocab = outputProj.length / H;
+					outD = cuda.uploadHalf(outputProj, actualVocab, H);
+				} catch (IllegalStateException ex) {
+					if (!GpuLayerOffload.isVramOom(ex))
+						throw ex;
+					log.warning("Qwen3: OOM uploading output projection — using CPU matmul");
+				}
 			}
 			this.attnQDev = qD;
 			this.attnKDev = kD;
@@ -177,6 +204,9 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			this.ffnUpDev = uD;
 			this.wDownDev = dD;
 			this.outputProjDev = outD;
+			if (policy.isAuto())
+				policy = policy.withAutoResolved(resolvedGlobal);
+			return policy.resolvedCount(totalLayers);
 		} catch (IllegalStateException ex) {
 			closeDeviceHalfMatrixArray(qD);
 			closeDeviceHalfMatrixArray(kD);
@@ -187,8 +217,21 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			closeDeviceHalfMatrixArray(dD);
 			if (outD != null)
 				outD.close();
-			log.warning("Qwen3 GPU upload failed — using CPU quantised matmul: " + ex.getMessage());
+			if (policy.mode() == GpuLayerOffload.Mode.ALL && GpuLayerOffload.isVramOom(ex)) {
+				log.warning("Qwen3 GPU upload failed — using CPU quantised matmul: " + ex.getMessage());
+				return 0;
+			}
+			throw ex;
 		}
+	}
+
+	private boolean qwen3HandleLayerOom(GpuLayerOffload policy, IllegalStateException ex, int globalLayer) {
+		if (!GpuLayerOffload.isVramOom(ex))
+			return false;
+		if (policy.mode() == GpuLayerOffload.Mode.ALL)
+			return false;
+		log.warning("Qwen3: OOM at global layer " + globalLayer + " — partial GPU offload");
+		return true;
 	}
 
 	private static void closeDeviceHalfMatrixArray(DeviceHalfMatrix[] a) {
@@ -244,6 +287,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		evt.startPosition = request.startPosition();
 		evt.layerCount = endLayer - startLayer;
 		evt.hasOutputProjection = hasOutputProj;
+		evt.gpuLayers = gpuLayersResolved;
 		evt.commit();
 		return result;
 	}

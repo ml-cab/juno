@@ -5,9 +5,7 @@
 #   1) llama-bench  (prompt eval + token gen tokens/s)
 #   2) juno local API with --jfr (pp/tg from JFR ForwardPass + TokenProduced; API latency kept too)
 # and writes one result JSON per engine per model under target/perf-compare/<run-id>/.
-# On success, also publishes metrics into:
-#   docs/perf-compare/<run-id>/
-#   scripts/performance-tests/results/<run-id>/
+# On success, also publishes metrics into docs/perf-compare/<run-id>/.
 #
 # Baselines: docs/perf-compare/README.md
 #
@@ -33,7 +31,6 @@ MODELS_DIR="${ROOT}/models"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_ROOT="${ROOT}/target/perf-compare/${RUN_ID}"
 DOCS_PUBLISH_ROOT="${ROOT}/docs/perf-compare"
-SCRIPT_RESULTS_ROOT="${PERF_SCRIPTS}/results"
 
 N_PROMPT=128
 N_GEN=64
@@ -81,8 +78,8 @@ Options:
   --vector 0|1      Pass jdk.incubator.vector to Juno (default: ${JUNO_USE_VECTOR})
   --jfr DURATION    Enable Juno JFR for DURATION (default: ${JFR_DURATION}; on by default)
   --no-jfr          Skip Juno --jfr (API latency only for Juno tg)
-  --publish         Copy metrics JSON+INDEX into docs/ and scripts/.../results/ (default)
-  --no-publish      Skip docs/scripts result publish
+  --publish         Copy metrics JSON+INDEX into docs/perf-compare/ (default)
+  --no-publish      Skip docs/perf-compare publish
   --list            List selected models and exit
   -n, --dry-run     Print commands only
   -h, --help        This help
@@ -808,12 +805,11 @@ write_run_index() {
 
 publish_results() {
   [[ "$PUBLISH" -eq 1 ]] || { log "publish skipped (--no-publish)"; return 0; }
-  [[ "$DRY_RUN" -eq 1 ]] && { log "dry-run: would publish ${OUT_ROOT} → docs + scripts/results"; return 0; }
+  [[ "$DRY_RUN" -eq 1 ]] && { log "dry-run: would publish ${OUT_ROOT} → ${DOCS_PUBLISH_ROOT}"; return 0; }
   [[ -d "$OUT_ROOT" ]] || return 0
 
   local docs_dest="${DOCS_PUBLISH_ROOT}/${RUN_ID}"
-  local script_dest="${SCRIPT_RESULTS_ROOT}/${RUN_ID}"
-  mkdir -p "$docs_dest" "$script_dest"
+  mkdir -p "$docs_dest"
 
   # Metrics only (skip large logs / response dumps).
   local f
@@ -821,17 +817,11 @@ publish_results() {
            "$OUT_ROOT"/*-llama-cpp.json "$OUT_ROOT"/*-juno.json "$OUT_ROOT"/*-juno-jfr.json "$OUT_ROOT"/*-compare.json; do
     [[ -e "$f" ]] || continue
     cp -a "$f" "$docs_dest/"
-    cp -a "$f" "$script_dest/"
   done
 
-  # Keep docs/perf-compare/README.md pointing at the latest published run when present.
+  log "published: ${docs_dest}"
   if [[ -f "${DOCS_PUBLISH_ROOT}/README.md" ]]; then
-    log "published: ${docs_dest}"
-    log "published: ${script_dest}"
     log "summary doc: ${DOCS_PUBLISH_ROOT}/README.md (update manually for narrative baselines)"
-  else
-    log "published: ${docs_dest}"
-    log "published: ${script_dest}"
   fi
 }
 

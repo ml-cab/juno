@@ -73,4 +73,8 @@ public final class ForwardPassEvent extends Event {
     @Label("Has Output Projection")
     @Description("True when this is the last node in the pipeline (logits returned)")
     public boolean hasOutputProjection;
+
+    @Label("GPU Layers Resolved")
+    @Description("Global transformer layers with GPU-resident weights (--gpu-layers)")
+    public int gpuLayers;
 }
