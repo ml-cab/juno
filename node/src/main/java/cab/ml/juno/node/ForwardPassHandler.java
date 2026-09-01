@@ -153,6 +153,48 @@ public interface ForwardPassHandler {
 	}
 
 	/**
+	 * Batched decode across N independent requests — one token per request at
+	 * that request's KV position. Default loops {@link #forward} serially.
+	 */
+	default MultiDecodeForwardResult forwardMultiDecode(MultiDecodeForwardRequest request,
+			ShardContext context) {
+		int N = request.batchSize();
+		int H = context.hiddenDim();
+		long totalNanos = 0;
+
+		if (context.hasOutputProjection()) {
+			float[][] logits = new float[N][];
+			for (int i = 0; i < N; i++) {
+				ForwardRequest single = toSingleDecodeRequest(request, i, H);
+				ForwardResult res = forward(single, context);
+				totalNanos += res.computeNanos();
+				logits[i] = res.logits();
+			}
+			return new MultiDecodeForwardResult(logits, null, N, totalNanos);
+		}
+
+		float[] flat = new float[N * H];
+		for (int i = 0; i < N; i++) {
+			ForwardRequest single = toSingleDecodeRequest(request, i, H);
+			ForwardResult res = forward(single, context);
+			totalNanos += res.computeNanos();
+			System.arraycopy(res.activations(), 0, flat, i * H, H);
+		}
+		return new MultiDecodeForwardResult(null, flat, N, totalNanos);
+	}
+
+	private static ForwardRequest toSingleDecodeRequest(MultiDecodeForwardRequest request, int index, int hiddenDim) {
+		String requestId = request.requestIds().get(index);
+		int pos = request.startPositions()[index];
+		if (request.isFirstNode()) {
+			return ForwardRequest.withTokens(requestId, new int[] { request.tokenIds()[index] }, pos);
+		}
+		float[] row = new float[hiddenDim];
+		System.arraycopy(request.activations(), index * hiddenDim, row, 0, hiddenDim);
+		return ForwardRequest.withActivations(requestId, row, pos);
+	}
+
+	/**
 	 * Release any per-request KV cache state this handler is holding for
 	 * {@code requestId} — e.g. the in-process working arrays a transformer
 	 * handler grows during prefill/decode (distinct from

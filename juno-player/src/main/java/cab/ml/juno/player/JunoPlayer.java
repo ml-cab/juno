@@ -32,6 +32,7 @@ import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.coordinator.BatchConfig;
 import cab.ml.juno.coordinator.InferenceApiServer;
 import cab.ml.juno.coordinator.RequestScheduler;
+import cab.ml.juno.coordinator.ServeBatchOptions;
 import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
@@ -175,6 +176,8 @@ public final class JunoPlayer implements AutoCloseable {
 		private boolean useGpu = true;
 		private SamplingParams samplingParams = SamplingParams.defaults();
 		private String byteOrder = "BE";
+		private Integer parallel = null;
+		private Long batchWindowMs = null;
 
 		private Builder(Path modelPath) {
 			this.modelPath = modelPath;
@@ -202,6 +205,16 @@ public final class JunoPlayer implements AutoCloseable {
 
 		public Builder byteOrder(String bo) {
 			this.byteOrder = "LE".equalsIgnoreCase(bo) ? "LE" : "BE";
+			return this;
+		}
+
+		public Builder parallel(int parallel) {
+			this.parallel = parallel;
+			return this;
+		}
+
+		public Builder batchWindowMs(long batchWindowMs) {
+			this.batchWindowMs = batchWindowMs;
 			return this;
 		}
 
@@ -242,7 +255,8 @@ public final class JunoPlayer implements AutoCloseable {
 					config.hiddenDim(), config.numHeads());
 			var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 			var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
-			var scheduler = new RequestScheduler(1000, loop, BatchConfig.disabled());
+			var scheduler = new RequestScheduler(1000, loop,
+					ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig());
 
 			String filename = modelPath.getFileName().toString();
 			String inferenceModelId = ChatModelType.fromPath(modelPath.toString());

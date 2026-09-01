@@ -105,7 +105,7 @@ public final class RequestScheduler {
 	 * @throws QueueFullException if queue has reached maxQueueDepth
 	 */
 	public CompletableFuture<GenerationResult> submit(InferenceRequest request, TokenConsumer consumer) {
-		if (queue.size() >= maxQueueDepth) {
+		if (inflight.size() >= maxQueueDepth) {
 			throw new QueueFullException("Request queue full (" + maxQueueDepth + "). Retry later.",
 					estimateRetryAfterSeconds());
 		}
@@ -113,12 +113,13 @@ public final class RequestScheduler {
 		CompletableFuture<GenerationResult> future = new CompletableFuture<>();
 		// Register to inflight BEFORE queue.offer() — no lost-wakeup risk
 		inflight.put(request.requestId(), new InflightEntry(request, consumer, future));
-		queue.offer(request);
 
-		if (!batchConfig.isBatchingEnabled()) {
+		if (!batchConfig.isBatchingEnabled() || !consumer.batchEligible()) {
 			dispatchSingle(request, consumer, future);
+		} else {
+			queue.offer(request);
 		}
-		// Batching enabled: background loop picks it up from the queue
+		// Batching enabled and batch-eligible: background loop picks it up from the queue
 
 		return future;
 	}
@@ -243,7 +244,7 @@ public final class RequestScheduler {
 	}
 
 	private int estimateRetryAfterSeconds() {
-		return Math.max(1, queue.size() * 2);
+		return Math.max(1, inflight.size() * 2);
 	}
 
 	// ── Inner types ───────────────────────────────────────────────────────────

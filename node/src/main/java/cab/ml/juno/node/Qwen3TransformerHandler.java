@@ -306,6 +306,378 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		return true;
 	}
 
+	@Override
+	public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+		long start = System.nanoTime();
+		int W = request.windowSize();
+		int H = cfg.hiddenDim();
+
+		float[][] x;
+		if (hasEmbeddings && request.isFirstNode()) {
+			x = new float[W][H];
+			int actualVocab = tokenEmbd.length / H;
+			for (int b = 0; b < W; b++) {
+				int tokenId = Math.max(0, Math.min(request.tokenIds()[b], actualVocab - 1));
+				System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+			}
+		} else {
+			x = new float[W][H];
+			float[] flat = request.activations();
+			for (int b = 0; b < W; b++)
+				System.arraycopy(flat, b * H, x[b], 0, H);
+		}
+
+		x = runLayersBatch(x, request.requestId(), request.startPosition());
+
+		if (hasOutputProj) {
+			float[] logits = outputProjection(x[W - 1]);
+			return new BatchForwardResult(request.requestId(), null, logits, W, System.nanoTime() - start);
+		}
+
+		float[] flat = new float[W * H];
+		for (int b = 0; b < W; b++)
+			System.arraycopy(x[b], 0, flat, b * H, H);
+		return new BatchForwardResult(request.requestId(), flat, null, W, System.nanoTime() - start);
+	}
+
+	@Override
+	public MultiDecodeForwardResult forwardMultiDecode(MultiDecodeForwardRequest request, ShardContext context) {
+		long start = System.nanoTime();
+		int N = request.batchSize();
+		int H = cfg.hiddenDim();
+		var requestIds = request.requestIds();
+		int[] positions = request.startPositions();
+
+		float[][] x;
+		if (hasEmbeddings && request.isFirstNode()) {
+			x = new float[N][H];
+			int actualVocab = tokenEmbd.length / H;
+			for (int b = 0; b < N; b++) {
+				int tokenId = Math.max(0, Math.min(request.tokenIds()[b], actualVocab - 1));
+				System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+			}
+		} else {
+			x = new float[N][H];
+			float[] flat = request.activations();
+			for (int b = 0; b < N; b++)
+				System.arraycopy(flat, b * H, x[b], 0, H);
+		}
+
+		x = runLayersMultiDecode(x, requestIds, positions);
+
+		if (hasOutputProj) {
+			float[][] logits = outputProjectionBatch(x);
+			return new MultiDecodeForwardResult(logits, null, N, System.nanoTime() - start);
+		}
+
+		float[] flat = new float[N * H];
+		for (int b = 0; b < N; b++)
+			System.arraycopy(x[b], 0, flat, b * H, H);
+		return new MultiDecodeForwardResult(null, flat, N, System.nanoTime() - start);
+	}
+
+	private float[][] runLayersBatch(float[][] x, String requestId, int startPos) {
+		int W = x.length;
+		int L = endLayer - startLayer;
+		int kvDim = cfg.kvDim();
+		int lastPos = startPos + W - 1;
+
+		boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
+		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		float[][] kCache = kvCacheK.get(requestId);
+		float[][] vCache = kvCacheV.get(requestId);
+
+		NodeKVCacheAdapter a = kvAdapter;
+		if (isNew && startPos > 0 && a != null) {
+			for (int li = 0; li < L; li++) {
+				int absLayer = startLayer + li;
+				final int i = li;
+				a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
+					ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
+					ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
+					System.arraycopy(pair.k(), 0, kCache[i], 0, pair.k().length);
+					System.arraycopy(pair.v(), 0, vCache[i], 0, pair.v().length);
+				});
+			}
+		}
+
+		ensureKvCapacity(kCache, lastPos, kvDim);
+		ensureKvCapacity(vCache, lastPos, kvDim);
+
+		BatchWorkspace ws = new BatchWorkspace(W, cfg.hiddenDim(), cfg.qDim(), cfg.intermediateSize(),
+				cfg.kvDim(), cfg.numHeads(), lastPos + 1);
+
+		for (int li = 0; li < L; li++)
+			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws);
+
+		if (a != null) {
+			int seqLen = lastPos + 1;
+			for (int li = 0; li < L; li++)
+				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen, kvDim);
+		}
+		return x;
+	}
+
+	private float[][] runLayersMultiDecode(float[][] x, java.util.List<String> requestIds, int[] positions) {
+		int N = x.length;
+		int L = endLayer - startLayer;
+		int kvDim = cfg.kvDim();
+		int maxPos = 0;
+		for (int pos : positions)
+			maxPos = Math.max(maxPos, pos);
+
+		float[][][] kCaches = new float[N][L][];
+		float[][][] vCaches = new float[N][L][];
+
+		NodeKVCacheAdapter a = kvAdapter;
+		for (int i = 0; i < N; i++) {
+			String requestId = requestIds.get(i);
+			int pos = positions[i];
+
+			boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
+			kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+			float[][] kCache = kvCacheK.get(requestId);
+			float[][] vCache = kvCacheV.get(requestId);
+
+			if (isNew && pos > 0 && a != null) {
+				for (int li = 0; li < L; li++) {
+					int absLayer = startLayer + li;
+					final int layerIdx = li;
+					a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
+						ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
+						ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
+						System.arraycopy(pair.k(), 0, kCache[layerIdx], 0, pair.k().length);
+						System.arraycopy(pair.v(), 0, vCache[layerIdx], 0, pair.v().length);
+					});
+				}
+			}
+
+			ensureKvCapacity(kCache, pos, kvDim);
+			ensureKvCapacity(vCache, pos, kvDim);
+			kCaches[i] = kCache;
+			vCaches[i] = vCache;
+		}
+
+		BatchWorkspace ws = new BatchWorkspace(N, cfg.hiddenDim(), cfg.qDim(), cfg.intermediateSize(),
+				cfg.kvDim(), cfg.numHeads(), maxPos + 1);
+
+		for (int li = 0; li < L; li++) {
+			float[][] kLayers = new float[N][];
+			float[][] vLayers = new float[N][];
+			for (int i = 0; i < N; i++) {
+				kLayers[i] = kCaches[i][li];
+				vLayers[i] = vCaches[i][li];
+			}
+			x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, ws);
+		}
+
+		if (a != null) {
+			for (int i = 0; i < N; i++) {
+				int seqLen = positions[i] + 1;
+				for (int li = 0; li < L; li++)
+					a.flush(requestIds.get(i), startLayer + li, kCaches[i][li], vCaches[i][li], seqLen, kvDim);
+			}
+		}
+		return x;
+	}
+
+	private static final class BatchWorkspace {
+		final float[][] norm1, norm2, q, k, v, attnOut, attnProj, gate, up, hidden, ffnOut;
+		final float[] scores;
+
+		BatchWorkspace(int W, int H, int qDim, int I, int kvDim, int numHeads, int maxSeqLen) {
+			norm1 = new float[W][H];
+			norm2 = new float[W][H];
+			q = new float[W][qDim];
+			k = new float[W][kvDim];
+			v = new float[W][kvDim];
+			attnOut = new float[W][qDim];
+			attnProj = new float[W][H];
+			gate = new float[W][I];
+			up = new float[W][I];
+			hidden = new float[W][I];
+			ffnOut = new float[W][H];
+			scores = new float[numHeads * maxSeqLen];
+		}
+	}
+
+	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
+			float[] kCacheLayer, float[] vCacheLayer, BatchWorkspace ws) {
+		int W = x.length;
+		int H = cfg.hiddenDim();
+		int qDim = cfg.qDim();
+		int kvDim = cfg.kvDim();
+		int I = cfg.intermediateSize();
+
+		for (int b = 0; b < W; b++)
+			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
+
+		sgemmLayerInto(attnQ[li], attnQDev != null ? attnQDev[li] : null, ws.norm1, ws.q, qDim, H);
+		sgemmLayerInto(attnK[li], attnKDev != null ? attnKDev[li] : null, ws.norm1, ws.k, kvDim, H);
+		sgemmLayerInto(attnV[li], attnVDev != null ? attnVDev[li] : null, ws.norm1, ws.v, kvDim, H);
+
+		for (int b = 0; b < W; b++) {
+			rmsNormPerHead(ws.q[b], qNorm[li], cfg.numHeads(), cfg.headDim(), cfg.rmsNormEps());
+			rmsNormPerHead(ws.k[b], kNorm[li], cfg.numKvHeads(), cfg.headDim(), cfg.rmsNormEps());
+		}
+
+		for (int b = 0; b < W; b++) {
+			Qwen3Rope.apply(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.rope());
+			Qwen3Rope.apply(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.rope());
+		}
+
+		for (int b = 0; b < W; b++) {
+			System.arraycopy(ws.k[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
+			System.arraycopy(ws.v[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
+		}
+
+		for (int b = 0; b < W; b++)
+			gqaInto(cfg, ws.q[b], kCacheLayer, vCacheLayer, startPos + b + 1, ws.attnOut[b], ws.scores);
+
+		sgemmLayerInto(wo[li], woDev != null ? woDev[li] : null, ws.attnOut, ws.attnProj, H, qDim);
+
+		for (int b = 0; b < W; b++)
+			for (int d = 0; d < H; d++)
+				x[b][d] += ws.attnProj[b][d];
+
+		for (int b = 0; b < W; b++)
+			LlamaTransformerHandler.rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
+
+		sgemmLayerInto(ffnGate[li], ffnGateDev != null ? ffnGateDev[li] : null, ws.norm2, ws.gate, I, H);
+		sgemmLayerInto(ffnUp[li], ffnUpDev != null ? ffnUpDev[li] : null, ws.norm2, ws.up, I, H);
+
+		for (int b = 0; b < W; b++)
+			for (int i = 0; i < I; i++)
+				ws.hidden[b][i] = LlamaTransformerHandler.silu(ws.gate[b][i]) * ws.up[b][i];
+
+		sgemmLayerInto(wDown[li], wDownDev != null ? wDownDev[li] : null, ws.hidden, ws.ffnOut, H, I);
+
+		for (int b = 0; b < W; b++)
+			for (int d = 0; d < H; d++)
+				x[b][d] += ws.ffnOut[b][d];
+
+		return x;
+	}
+
+	private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
+			float[][] kCacheLayers, float[][] vCacheLayers, BatchWorkspace ws) {
+		int N = x.length;
+		int H = cfg.hiddenDim();
+		int qDim = cfg.qDim();
+		int kvDim = cfg.kvDim();
+		int I = cfg.intermediateSize();
+
+		for (int b = 0; b < N; b++)
+			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
+
+		sgemmLayerInto(attnQ[li], attnQDev != null ? attnQDev[li] : null, ws.norm1, ws.q, qDim, H);
+		sgemmLayerInto(attnK[li], attnKDev != null ? attnKDev[li] : null, ws.norm1, ws.k, kvDim, H);
+		sgemmLayerInto(attnV[li], attnVDev != null ? attnVDev[li] : null, ws.norm1, ws.v, kvDim, H);
+
+		for (int b = 0; b < N; b++) {
+			rmsNormPerHead(ws.q[b], qNorm[li], cfg.numHeads(), cfg.headDim(), cfg.rmsNormEps());
+			rmsNormPerHead(ws.k[b], kNorm[li], cfg.numKvHeads(), cfg.headDim(), cfg.rmsNormEps());
+		}
+
+		for (int b = 0; b < N; b++) {
+			int pos = positions[b];
+			Qwen3Rope.apply(ws.q[b], pos, cfg.numHeads(), cfg.headDim(), cfg.rope());
+			Qwen3Rope.apply(ws.k[b], pos, cfg.numKvHeads(), cfg.headDim(), cfg.rope());
+		}
+
+		for (int b = 0; b < N; b++) {
+			int pos = positions[b];
+			System.arraycopy(ws.k[b], 0, kCacheLayers[b], pos * kvDim, kvDim);
+			System.arraycopy(ws.v[b], 0, vCacheLayers[b], pos * kvDim, kvDim);
+		}
+
+		for (int b = 0; b < N; b++)
+			gqaInto(cfg, ws.q[b], kCacheLayers[b], vCacheLayers[b], positions[b] + 1, ws.attnOut[b], ws.scores);
+
+		sgemmLayerInto(wo[li], woDev != null ? woDev[li] : null, ws.attnOut, ws.attnProj, H, qDim);
+
+		for (int b = 0; b < N; b++)
+			for (int d = 0; d < H; d++)
+				x[b][d] += ws.attnProj[b][d];
+
+		for (int b = 0; b < N; b++)
+			LlamaTransformerHandler.rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
+
+		sgemmLayerInto(ffnGate[li], ffnGateDev != null ? ffnGateDev[li] : null, ws.norm2, ws.gate, I, H);
+		sgemmLayerInto(ffnUp[li], ffnUpDev != null ? ffnUpDev[li] : null, ws.norm2, ws.up, I, H);
+
+		for (int b = 0; b < N; b++)
+			for (int i = 0; i < I; i++)
+				ws.hidden[b][i] = LlamaTransformerHandler.silu(ws.gate[b][i]) * ws.up[b][i];
+
+		sgemmLayerInto(wDown[li], wDownDev != null ? wDownDev[li] : null, ws.hidden, ws.ffnOut, H, I);
+
+		for (int b = 0; b < N; b++)
+			for (int d = 0; d < H; d++)
+				x[b][d] += ws.ffnOut[b][d];
+
+		return x;
+	}
+
+	private void sgemmLayerInto(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev,
+			float[][] X, float[][] Y, int rows, int cols) {
+		if (dev != null) {
+			float[][] tmp = backend.sgemm(dev, X);
+			for (int b = 0; b < X.length; b++)
+				System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			return;
+		}
+		for (int b = 0; b < X.length; b++)
+			System.arraycopy(LlamaTransformerHandler.matVec(quant, X[b], rows, cols), 0, Y[b], 0, rows);
+	}
+
+	private static void gqaInto(Qwen3Config cfg, float[] q, float[] kCache, float[] vCache, int seqLen,
+			float[] out, float[] scores) {
+		int H = cfg.numHeads();
+		int Hd = cfg.headDim();
+		int gqaR = cfg.gqaRatio();
+		float scale = (float) (1.0 / Math.sqrt(Hd));
+		java.util.Arrays.fill(out, 0f);
+
+		for (int h = 0; h < H; h++) {
+			int kvHead = h / gqaR;
+			int qBase = h * Hd;
+			int kBase = kvHead * Hd;
+
+			for (int t = 0; t < seqLen; t++) {
+				float dot = 0f;
+				int kOffset = t * cfg.kvDim() + kBase;
+				for (int d = 0; d < Hd; d++)
+					dot += q[qBase + d] * kCache[kOffset + d];
+				scores[t] = dot * scale;
+			}
+			LlamaTransformerHandler.softmax(scores, seqLen);
+
+			int outBase = h * Hd;
+			for (int t = 0; t < seqLen; t++) {
+				int vOffset = t * cfg.kvDim() + kBase;
+				float w = scores[t];
+				for (int d = 0; d < Hd; d++)
+					out[outBase + d] += w * vCache[vOffset + d];
+			}
+		}
+	}
+
+	private float[][] outputProjectionBatch(float[][] x) {
+		int N = x.length;
+		int H = cfg.hiddenDim();
+		float[][] xNorm = new float[N][];
+		for (int b = 0; b < N; b++)
+			xNorm[b] = LlamaTransformerHandler.rmsNorm(x[b], outputNorm, cfg.rmsNormEps());
+		if (outputProjDev != null)
+			return backend.sgemm(outputProjDev, xNorm);
+		int actualVocab = outputProj.length / H;
+		float[][] logits = new float[N][];
+		for (int b = 0; b < N; b++)
+			logits[b] = LlamaTransformerHandler.matVec(outputProj, xNorm[b], actualVocab, H);
+		return logits;
+	}
+
 	public void setKvAdapter(NodeKVCacheAdapter adapter) {
 		this.kvAdapter = adapter;
 	}

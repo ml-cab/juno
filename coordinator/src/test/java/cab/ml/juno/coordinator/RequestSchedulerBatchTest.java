@@ -165,6 +165,45 @@ class RequestSchedulerBatchTest {
 	}
 
 	@Test
+	void streaming_requests_bypass_batch_collector() throws Exception {
+		AtomicInteger batchCalls = new AtomicInteger(0);
+		InferencePipeline countingPipeline = new InferencePipeline() {
+			@Override
+			public float[] forward(String requestId, int[] tokens, int startPos) {
+				float[] logits = new float[1000];
+				logits[42] = 100.0f;
+				return logits;
+			}
+
+			@Override
+			public float[][] forwardBatch(List<String> requestIds, List<int[]> allTokens,
+					List<Integer> startPositions) {
+				batchCalls.incrementAndGet();
+				float[][] results = new float[requestIds.size()][];
+				for (int i = 0; i < requestIds.size(); i++) {
+					results[i] = new float[1000];
+					results[i][42] = 100.0f;
+				}
+				return results;
+			}
+
+			@Override
+			public int vocabSize() {
+				return 1000;
+			}
+		};
+		GenerationLoop batchLoop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), countingPipeline,
+				new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000)));
+		scheduler = new RequestScheduler(10, batchLoop, BatchConfig.of(8, 50));
+
+		TokenConsumer streamConsumer = (piece, id, step) -> {
+		};
+		scheduler.submit(req("stream-only"), streamConsumer).get(10, TimeUnit.SECONDS);
+
+		assertThat(batchCalls.get()).isZero();
+	}
+
+	@Test
 	void shutdown_is_idempotent() {
 		scheduler = new RequestScheduler(10, loop, BatchConfig.defaults());
 		scheduler.shutdown();

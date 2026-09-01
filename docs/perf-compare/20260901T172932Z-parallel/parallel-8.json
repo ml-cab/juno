@@ -1,0 +1,21 @@
+{
+  "run_id": "20260901T172932Z",
+  "tool": "compare-parallel",
+  "status": "partial_failure",
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "model_path": "/home/medion/Repo/juno/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "backend": "gpu",
+  "parallel": 8,
+  "batch_window_ms": 50,
+  "sessions": 8,
+  "max_tokens": 64,
+  "wall_ms": 2790,
+  "sessions_ok": 0,
+  "sessions_failed": 8,
+  "total_completion_tokens": 0,
+  "total_prompt_tokens": 0,
+  "aggregate_token_gen_tps": null,
+  "mean_per_session_latency_ms": null,
+  "prompt": "could you please write me a short poem about love and war",
+  "log": "/home/medion/Repo/juno/target/perf-compare-parallel/20260901T172932Z/parallel-8.log"
+}

@@ -1,0 +1,24 @@
+{
+  "run_id": "20260901T154735Z",
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "backend": "gpu",
+  "sessions": 8,
+  "max_tokens": 64,
+  "results": [
+    {
+      "parallel": 1,
+      "aggregate_token_gen_tps": 28.8029,
+      "wall_ms": 17776,
+      "sessions_ok": 8,
+      "sessions_failed": 0
+    },
+    {
+      "parallel": 8,
+      "aggregate_token_gen_tps": 24.9161,
+      "wall_ms": 20549,
+      "sessions_ok": 8,
+      "sessions_failed": 0
+    }
+  ],
+  "speedup_parallel_over_1": 0.86505525485281
+}

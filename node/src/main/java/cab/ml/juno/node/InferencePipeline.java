@@ -26,10 +26,10 @@ import java.util.List;
  * forwardBatch() — N requests, N logit arrays, ONE GPU call.
  *
  * The default forwardBatch() implementation calls forward() N times serially —
- * all existing implementations get batching support for free. The real
- * LlamaTransformerHandler overrides forwardBatch() to use CUDA batched matrix
- * ops, turning N serial GPU launches into one, dramatically increasing
- * utilisation.
+ * all existing implementations get batching support for free.
+ * {@link LocalInferencePipeline} overrides forwardBatch to route N decode
+ * streams through {@link ForwardPassHandler#forwardMultiDecode}; Llama
+ * handlers batch linear projections in one GEMM per layer.
  */
 public interface InferencePipeline {
 

@@ -349,6 +349,8 @@ cmd_local() {
   local health_port="${HEALTH_PORT:-8081}"
   local api_port="${API_PORT:-}"
   local prefill_mode="${PREFILL_MODE:-}"
+  local parallel="${JUNO_PARALLEL:-}"
+  local batch_window="${JUNO_BATCH_WINDOW_MS:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -380,6 +382,8 @@ cmd_local() {
       --health-port)      health_port="$2";  shift 2 ;;
       --api-port)         api_port="$2";     shift 2 ;;
       --prefill)          prefill_mode="$2"; shift 2 ;;
+      --parallel)         parallel="$2";     shift 2 ;;
+      --batch-window-ms)  batch_window="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -416,6 +420,8 @@ cmd_local() {
         echo "    --nodes N                  number of in-process shards  (default 3)"
         echo "    --api-port N               start local REST API server on port N"
         echo "                               (includes OpenAI-compatible /v1/chat/completions)"
+        echo "    --parallel N               static micro-batch size (default 1)"
+        echo "    --batch-window-ms M        batch window when parallel>1 (default 50)"
         echo ""
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
@@ -480,6 +486,10 @@ cmd_local() {
   [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
   local prefill_mode_arg=""
   [[ -n "$prefill_mode" ]] && prefill_mode_arg="--prefill $prefill_mode"
+  local parallel_arg=""
+  [[ -n "$parallel" ]] && parallel_arg="--parallel $parallel"
+  local batch_window_arg=""
+  [[ -n "$batch_window" ]] && batch_window_arg="--batch-window-ms $batch_window"
   local mmproj_arg=""
   [[ -n "$mmproj" ]] && { mmproj_arg="--mmproj-path $mmproj"; info "Vision mmproj: ${mmproj}"; }
 
@@ -503,6 +513,8 @@ cmd_local() {
     ${lora_play_arg} \
     ${api_port_arg} \
     ${prefill_mode_arg} \
+    ${parallel_arg} \
+    ${batch_window_arg} \
     ${mmproj_arg} \
     ${health_flag} \
     ${verbose_flag}

@@ -50,6 +50,8 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--verbose` / `-v` | — | cluster, local | Verbose logging |
 | `--cpu` | — | cluster, local | Force CPU inference: sets `JUNO_USE_GPU=false`. Does not enable LoRA mode. |
 | `--gpu-layers N\|all\|auto` | `all` | cluster, local | Transformer layers resident on GPU (`JUNO_GPU_LAYERS`). `auto` fits until VRAM OOM. |
+| `--parallel N` | `1` | cluster, local, master | Static micro-batch size (`JUNO_PARALLEL`). `1` disables batching; recommend `8` for API servers. |
+| `--batch-window-ms M` | `50` when parallel>1 | cluster, local, master | Batch collect window (`JUNO_BATCH_WINDOW_MS`). |
 | `--lora-play PATH` | — | cluster, local | Apply a pre-trained `.lora` adapter at inference (read-only, no training). In cluster mode the file is forwarded as `-Djuno.lora.play.path` to every forked node JVM. |
 | `--api-port N` | — | cluster, local | Start the OpenAI-compatible REST API server on port N alongside the REPL. Exposes `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{model}`. Environment override: `API_PORT`. |
 
@@ -74,7 +76,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--output PATH` | `<model>-merged.gguf` | Output file (always plain GGUF, even if source is llamafile) |
 | `--heap SIZE` | `4g` | JVM heap — use at least 2x the model file size |
 
-**Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `JUNO_GPU_LAYERS`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
+**Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `JUNO_GPU_LAYERS`, `JUNO_PARALLEL`, `JUNO_BATCH_WINDOW_MS`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
 `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`,
 `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `LORA_PLAY_PATH`, `API_PORT`
 
@@ -93,6 +95,9 @@ safety. Override the vendor with `-Djuno.gpu.backend=cuda|rocm|auto` (default: `
 
 # With OpenAI-compatible REST API on port 8080
 ./juno local --model-path /path/to/model.gguf --api-port 8080
+
+# API server with static micro-batching (non-stream requests only)
+./juno local --model-path /path/to/model.gguf --api-port 8080 --parallel 8 --batch-window-ms 50
 
 # With a pre-trained LoRA adapter applied at inference
 ./juno local --model-path /path/to/model.gguf --lora-play /path/to/model.lora

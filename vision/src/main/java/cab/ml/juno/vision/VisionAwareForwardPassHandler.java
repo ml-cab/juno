@@ -25,6 +25,8 @@ import cab.ml.juno.node.BatchForwardResult;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardRequest;
 import cab.ml.juno.node.ForwardResult;
+import cab.ml.juno.node.MultiDecodeForwardRequest;
+import cab.ml.juno.node.MultiDecodeForwardResult;
 import cab.ml.juno.node.ShardContext;
 
 /**
@@ -181,11 +183,20 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
         BatchForwardRequest activationsReq = BatchForwardRequest.withActivations(
                 request.requestId(), flatActivations, W, request.startPosition());
 
-        return textHandler.forwardBatch(activationsReq, context);
-    }
+		return textHandler.forwardBatch(activationsReq, context);
+	}
 
-    /**
-     * Build a flattened {@code float[windowSize * hiddenDim]} activation matrix.
+	@Override
+	public MultiDecodeForwardResult forwardMultiDecode(MultiDecodeForwardRequest request, ShardContext context) {
+		if (!context.hasEmbeddings()) {
+			return textHandler.forwardMultiDecode(request, context);
+		}
+		// Static text-only multi-session batching: vision patches are not merged here.
+		return textHandler.forwardMultiDecode(request, context);
+	}
+
+	/**
+	 * Build a flattened {@code float[windowSize * hiddenDim]} activation matrix.
      * Image-token positions use the pre-computed patch vector; text-token
      * positions use the wrapped handler's real embedding-table row via
      * {@link ForwardPassHandler#embedToken(int)} — NOT a zero vector. (Prior to

@@ -11,6 +11,9 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260831T230258Z`](20260831T230258Z/) | CPU (`-ngl 0` / `--cpu`) | JFR pp/tg | [INDEX](20260831T230258Z/INDEX.md) |
 | [`20260831T231403Z`](20260831T231403Z/) | GPU (`-ngl 99` / `--gpu`) | JFR pp/tg | [INDEX](20260831T231403Z/INDEX.md) |
 | [`20260901T032753Z`](20260901T032753Z/) | GPU + Tier 5 (`JUNO_GPU_LAYERS=auto`) | JFR pp/tg | [INDEX](20260901T032753Z/INDEX.md) |
+| [`20260901T154735Z-parallel`](20260901T154735Z-parallel/) | GPU multi-session static batch (`--parallel` 1 vs 8) | aggregate tg | [INDEX](20260901T154735Z-parallel/INDEX.md) |
+| [`20260901T155136Z-parallel`](20260901T155136Z-parallel/) | CPU multi-session static batch (`--parallel` 1 vs 8) | aggregate tg | [INDEX](20260901T155136Z-parallel/INDEX.md) |
+| [`20260901T173121Z-parallel`](20260901T173121Z-parallel/) | GPU multi-session static batch (`--parallel` 1 vs 8) | aggregate tg | [INDEX](20260901T173121Z-parallel/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 
@@ -45,7 +48,45 @@ JFR tg is **~1.6–1.7×** API wall-clock tg on GPU for models that fit in VRAM.
 
 Prior GPU baseline (`20260831T231403Z`): mistral Juno tg **0.48** t/s (**0.01×**). Tier 5 auto offload is **~2×** faster but still below the P0 gate (**≥0.15×** ≈ 5.3 t/s).
 
-## Re-run
+## Multi-session static batch (`--parallel`) — TinyLlama Q4_K_M
+
+Workload: 8 concurrent blocking `POST /v1/chat/completions`, `max_tokens=64`, temperature 0, `--nodes 1`, `--batch-window-ms 50` when `parallel>1`.
+
+| Run | Backend | parallel=1 agg tg | parallel=8 agg tg | Speedup 8/1 | Notes |
+|-----|---------|------------------:|------------------:|------------:|-------|
+| [`20260901T154735Z-parallel`](20260901T154735Z-parallel/) | GPU | **28.8** t/s | 24.9 t/s | **0.87×** | Before multi-request decode batching |
+| [`20260901T173121Z-parallel`](20260901T173121Z-parallel/) | GPU | 28.8 t/s | **32.1** t/s | **1.11×** | `forwardMultiDecode` + batched CUDA GEMV |
+| [`20260901T155136Z-parallel`](20260901T155136Z-parallel/) | CPU | 1.46 t/s | **2.22** t/s | **1.52×** | Clear aggregate uplift on CPU |
+
+**GPU (post-fix):** `LocalInferencePipeline.forwardBatch` routes N decode steps through `ForwardPassHandler.forwardMultiDecode`. All supported handler families implement batched decode: **Llama**, **Phi-3**, **Phi-2**, **Qwen3 dense**, and **Qwen3 MoE** (attention batched; MoE FFN routed per stream). Linear projections and LM head use `cublasHSSgemvStridedBatched` / `GpuBlasOps` where GPU weights are resident (batch ≤ 8). Prefill windows stay serial on GPU.
+
+| Handler family | `forwardMultiDecode` | Parity test |
+|----------------|---------------------|-------------|
+| Llama | Yes | `LlamaTransformerHandlerMultiDecodeTest` |
+| Phi-3 | Yes | `Phi3TransformerHandlerMultiDecodeTest` |
+| Phi-2 | Yes (CPU quant batched GEMV) | `Phi2TransformerHandlerMultiDecodeTest` |
+| Qwen3 | Yes (+ `forwardBatch` prefill) | `Qwen3TransformerHandlerMultiDecodeTest` |
+| Qwen3 MoE | Yes (MoE FFN per stream) | `Qwen3MoeTransformerHandlerMultiDecodeTest` |
+
+**Phi-3 / Qwen3 GPU multi-session:** re-run `./scripts/performance-tests/compare-parallel.sh --gpu --sessions 8` with the target model when validating non-Llama speedup; Llama baseline is [`20260901T173121Z-parallel`](20260901T173121Z-parallel/) (1.11× aggregate tg).
+
+**GPU regression (0.87×, pre-fix):** static batching did not fuse multi-request decode on GPU.
+
+1. **`LocalInferencePipeline` had no `forwardBatch` override** — N serial `forward()` per decode step.
+2. **Prefill in `generateBatch()` is serial** — eight `prefillBatch()` calls in a loop before decode starts.
+3. **Unfair baseline:** `--parallel 1` still launches each HTTP request on its own virtual thread (`dispatchSingle`), so eight clients overlap on the GPU lock. `--parallel 8` runs all eight in **one** `generateBatch()` on a single thread — fully serialized GPU work without batched kernels.
+
+Handler `forwardBatch(BatchForwardRequest)` only batches **one request's prefill window** (W prompt tokens), not N concurrent decode streams.
+
+CPU uplift (1.52×) likely comes from fewer contending threads and better cache locality despite the same serial decode path.
+
+Re-run:
+
+```bash
+./scripts/performance-tests/compare-parallel.sh --gpu   # or --cpu
+```
+
+## Single-stream compare re-run
 
 ```bash
 # CPU (5 models incl. Qwen3.5 — Juno expected to fail on Qwen3.5)

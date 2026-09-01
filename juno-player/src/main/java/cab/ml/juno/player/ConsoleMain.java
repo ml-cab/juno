@@ -63,6 +63,8 @@ import cab.ml.juno.node.DoraInitializer;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
 import cab.ml.juno.node.GpuLayerOffload;
+import cab.ml.juno.coordinator.BatchConfig;
+import cab.ml.juno.coordinator.ServeBatchOptions;
 
 import cab.ml.juno.node.LlamaConfig;
 import cab.ml.juno.node.LocalInferencePipeline;
@@ -195,6 +197,8 @@ public final class ConsoleMain {
 	// ── GPU arguments ─────────────────────────────────────────────────────────
 	private static boolean useGpu = true; // use CPU
 	private static String gpuLayers = null; // null → env or default all
+	private static Integer parallel = null; // null → env or default 1
+	private static Long batchWindowMs = null; // null → env or default when parallel > 1
 	// ── LoRA arguments ────────────────────────────────────────────────────────
 	private static boolean loraMode = false;
 	private static String loraPath = null; // auto-derived if null
@@ -356,6 +360,16 @@ public final class ConsoleMain {
 			if (env != null && !env.isBlank())
 				gpuLayers = env.strip();
 		}
+		if (parallel == null) {
+			String env = System.getenv(ServeBatchOptions.ENV_PARALLEL);
+			if (env != null && !env.isBlank())
+				parallel = Integer.parseInt(env.strip());
+		}
+		if (batchWindowMs == null) {
+			String env = System.getenv(ServeBatchOptions.ENV_BATCH_WINDOW_MS);
+			if (env != null && !env.isBlank())
+				batchWindowMs = Long.parseLong(env.strip());
+		}
 	}
 
 	private static void applyLoraEnvDefaults() {
@@ -456,6 +470,14 @@ public final class ConsoleMain {
 			case "--gpu-layers":
 				if (i + 1 < args.length)
 					gpuLayers = args[++i];
+				break;
+			case "--parallel":
+				if (i + 1 < args.length)
+					parallel = parseInt(args[++i], 1);
+				break;
+			case "--batch-window-ms":
+				if (i + 1 < args.length)
+					batchWindowMs = Long.parseLong(args[++i]);
 				break;
 		// ── LoRA ──────────────────────────────────────────────────────────
 			case "--lora":
@@ -649,6 +671,10 @@ public final class ConsoleMain {
 		System.out.println("  --cpu                      Force to use CPU");
 		System.out.println("  --gpu-layers N|all|auto    GPU-resident transformer layers (default: all)");
 		System.out.println("                             env JUNO_GPU_LAYERS; auto fits until VRAM OOM");
+		System.out.println("  --parallel N               Static micro-batch size (default: 1, disabled)");
+		System.out.println("                             env JUNO_PARALLEL; recommend 8 for API servers");
+		System.out.println("  --batch-window-ms M        Batch collect window when parallel>1 (default: 50)");
+		System.out.println("                             env JUNO_BATCH_WINDOW_MS");
 		System.out.println("  --pType pipeline|tensor    Parallelism type (default: pipeline)");
 		System.out.println("  --dtype FLOAT32|FLOAT16    Activation wire format (default: FLOAT16)");
 		System.out.println("  --max-tokens N             Max generated tokens (default: 200)");
@@ -1839,8 +1865,7 @@ public final class ConsoleMain {
 				config.hiddenDim(), config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
-		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop,
-				cab.ml.juno.coordinator.BatchConfig.disabled());
+		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
@@ -1959,6 +1984,10 @@ public final class ConsoleMain {
 		return registry;
 	}
 
+	private static BatchConfig resolveBatchConfig() {
+		return ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig();
+	}
+
 	private static GpuContext prepareGpuContext() {
 		boolean gpuAvailable = CudaAvailability.isAvailable() || RocmAvailability.isAvailable();
 		if (!useGpu || !gpuAvailable)
@@ -2014,8 +2043,7 @@ public final class ConsoleMain {
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
-		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop,
-				cab.ml.juno.coordinator.BatchConfig.disabled());
+		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);

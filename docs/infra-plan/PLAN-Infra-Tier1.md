@@ -15,6 +15,7 @@ Read and follow `models/CLAUDE.md` before implementing:
 Also read:
 
 - `PLAN-Infra-ROADMAP.md`
+- [`PLAN-Infra-SUPPORTED-MODELS.md`](PLAN-Infra-SUPPORTED-MODELS.md) (all architectures — implementation + tests)
 - `coordinator/.../BatchConfig.java`
 - `coordinator/.../RequestScheduler.java`
 - `GenerationLoop` (including `generateBatch` if present)

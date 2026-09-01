@@ -28,6 +28,18 @@ package cab.ml.juno.coordinator;
 @FunctionalInterface
 public interface TokenConsumer {
 
+	/** Singleton no-op consumer for blocking / batch-eligible requests. */
+	TokenConsumer DISCARD = new TokenConsumer() {
+		@Override
+		public void onToken(String piece, int tokenId, int position) {
+		}
+
+		@Override
+		public boolean batchEligible() {
+			return true;
+		}
+	};
+
 	/**
 	 * Called when a new token piece is ready.
 	 *
@@ -54,10 +66,17 @@ public interface TokenConsumer {
 	default void onPrefillComplete() {
 	}
 
+	/**
+	 * Whether this request may join a static micro-batch. Streaming consumers
+	 * return false and are dispatched per-request even when batching is enabled.
+	 */
+	default boolean batchEligible() {
+		return false;
+	}
+
 	/** No-op consumer — useful for non-streaming (batch) generation. */
 	static TokenConsumer discard() {
-		return (piece, tokenId, position) -> {
-		};
+		return DISCARD;
 	}
 
 	/** Collects pieces into a StringBuilder — useful for testing. */

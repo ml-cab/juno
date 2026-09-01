@@ -294,6 +294,182 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         return new BatchForwardResult(request.requestId(), flat, null, W, System.nanoTime() - start);
     }
 
+    @Override
+    public MultiDecodeForwardResult forwardMultiDecode(MultiDecodeForwardRequest request, ShardContext context) {
+        long start = System.nanoTime();
+        int N = request.batchSize();
+        int H = cfg.hiddenDim();
+        var requestIds = request.requestIds();
+        int[] positions = request.startPositions();
+
+        float[][] x = new float[N][H];
+        if (hasEmbeddings && request.isFirstNode()) {
+            for (int b = 0; b < N; b++) {
+                int tokenId = Math.max(0, Math.min(request.tokenIds()[b], cfg.vocabSize() - 1));
+                System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+            }
+        } else {
+            float[] flat = request.activations();
+            for (int b = 0; b < N; b++)
+                System.arraycopy(flat, b * H, x[b], 0, H);
+        }
+
+        x = runLayersMultiDecode(x, requestIds, positions);
+
+        if (hasOutputProj) {
+            float[][] logits = outputProjectionBatch(x);
+            return new MultiDecodeForwardResult(logits, null, N, System.nanoTime() - start);
+        }
+
+        float[] flat = new float[N * H];
+        for (int b = 0; b < N; b++)
+            System.arraycopy(x[b], 0, flat, b * H, H);
+        return new MultiDecodeForwardResult(null, flat, N, System.nanoTime() - start);
+    }
+
+    private float[][] runLayersMultiDecode(float[][] x, java.util.List<String> requestIds, int[] positions) {
+        int N = x.length;
+        int L = endLayer - startLayer;
+        int kvDim = cfg.kvDim();
+
+        float[][][] kCaches = new float[N][L][];
+        float[][][] vCaches = new float[N][L][];
+
+        NodeKVCacheAdapter a = kvAdapter;
+        for (int i = 0; i < N; i++) {
+            String requestId = requestIds.get(i);
+            int pos = positions[i];
+
+            boolean isNew = kvCacheK.putIfAbsent(requestId,
+                    new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
+            kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+            float[][] kCache = kvCacheK.get(requestId);
+            float[][] vCache = kvCacheV.get(requestId);
+
+            if (isNew && pos > 0 && a != null) {
+                for (int li = 0; li < L; li++) {
+                    int absLayer = startLayer + li;
+                    final int idx = li;
+                    a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
+                        ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
+                        ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
+                        System.arraycopy(pair.k(), 0, kCache[idx], 0, pair.k().length);
+                        System.arraycopy(pair.v(), 0, vCache[idx], 0, pair.v().length);
+                    });
+                }
+            }
+
+            ensureKvCapacity(kCache, pos, kvDim);
+            ensureKvCapacity(vCache, pos, kvDim);
+            kCaches[i] = kCache;
+            vCaches[i] = vCache;
+        }
+
+        for (int li = 0; li < L; li++) {
+            float[][] kLayers = new float[N][];
+            float[][] vLayers = new float[N][];
+            for (int i = 0; i < N; i++) {
+                kLayers[i] = kCaches[i][li];
+                vLayers[i] = vCaches[i][li];
+            }
+            x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers);
+        }
+
+        if (a != null) {
+            for (int i = 0; i < N; i++) {
+                int seqLen = positions[i] + 1;
+                for (int li = 0; li < L; li++)
+                    a.flush(requestIds.get(i), startLayer + li, kCaches[i][li], vCaches[i][li], seqLen, kvDim);
+            }
+        }
+        return x;
+    }
+
+    private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
+            float[][] kCacheLayers, float[][] vCacheLayers) {
+        int N = x.length;
+        int H = cfg.hiddenDim();
+        int kvDim = cfg.kvDim();
+        int I = cfg.intermediateSize();
+
+        float[][] xNorm = new float[N][];
+        for (int b = 0; b < N; b++)
+            xNorm[b] = layerNorm(x[b], attnNorm[li], attnNormBias[li], cfg.rmsNormEps());
+
+        float[][] q = new float[N][H];
+        float[][] k = new float[N][kvDim];
+        float[][] v = new float[N][kvDim];
+        sgemmQuantBatch(attnQkv[li], xNorm, q, 0, H, H);
+        sgemmQuantBatch(attnQkv[li], xNorm, k, H, H + kvDim, H);
+        sgemmQuantBatch(attnQkv[li], xNorm, v, H + kvDim, H + 2 * kvDim, H);
+
+        if (attnQkvBias[li] != null) {
+            float[] bqkv = attnQkvBias[li];
+            for (int b = 0; b < N; b++) {
+                for (int i = 0; i < H; i++) q[b][i] += bqkv[i];
+                for (int i = 0; i < kvDim; i++) k[b][i] += bqkv[H + i];
+                for (int i = 0; i < kvDim; i++) v[b][i] += bqkv[H + kvDim + i];
+            }
+        }
+
+        for (int b = 0; b < N; b++) {
+            int pos = positions[b];
+            Phi2Rope.ropePartial(q[b], pos, cfg.numHeads(), cfg.headDim(), ropeDim, cfg.ropeTheta());
+            Phi2Rope.ropePartial(k[b], pos, cfg.numKvHeads(), cfg.headDim(), ropeDim, cfg.ropeTheta());
+            System.arraycopy(k[b], 0, kCacheLayers[b], pos * kvDim, kvDim);
+            System.arraycopy(v[b], 0, vCacheLayers[b], pos * kvDim, kvDim);
+        }
+
+        float[][] attnOut = new float[N][];
+        java.util.stream.IntStream.range(0, N).parallel()
+                .forEach(b -> attnOut[b] = gqa(q[b], kCacheLayers[b], vCacheLayers[b], positions[b] + 1));
+
+        float[][] attnProj = new float[N][H];
+        sgemmQuantBatch(wo[li], attnOut, attnProj, 0, H, H);
+        if (woBias[li] != null)
+            for (int b = 0; b < N; b++)
+                for (int i = 0; i < H; i++) attnProj[b][i] += woBias[li][i];
+
+        float[][] up = new float[N][I];
+        sgemmQuantBatch(wUp[li], xNorm, up, 0, I, H);
+        if (wUpBias[li] != null)
+            for (int b = 0; b < N; b++)
+                for (int i = 0; i < I; i++) up[b][i] += wUpBias[li][i];
+
+        float[][] hidden = new float[N][I];
+        for (int b = 0; b < N; b++)
+            for (int i = 0; i < I; i++)
+                hidden[b][i] = gelu(up[b][i]);
+
+        float[][] ffnOut = new float[N][H];
+        sgemmQuantBatch(wDown[li], hidden, ffnOut, 0, H, I);
+        if (wDownBias[li] != null)
+            for (int b = 0; b < N; b++)
+                for (int i = 0; i < H; i++) ffnOut[b][i] += wDownBias[li][i];
+
+        float[][] result = new float[N][H];
+        for (int b = 0; b < N; b++)
+            for (int i = 0; i < H; i++)
+                result[b][i] = x[b][i] + attnProj[b][i] + ffnOut[b][i];
+        return result;
+    }
+
+    private float[][] outputProjectionBatch(float[][] x) {
+        int N = x.length;
+        int vocab = cfg.vocabSize();
+        int H = cfg.hiddenDim();
+        float[][] xNorm = new float[N][];
+        for (int b = 0; b < N; b++)
+            xNorm[b] = layerNorm(x[b], outputNorm, outputNormBias, cfg.rmsNormEps());
+        float[][] logits = new float[N][vocab];
+        sgemmQuantBatch(outputProj, xNorm, logits, 0, vocab, H);
+        if (outputBias != null)
+            for (int b = 0; b < N; b++)
+                for (int i = 0; i < vocab; i++)
+                    logits[b][i] += outputBias[i];
+        return logits;
+    }
+
     private float[][] runLayersBatch(float[][] x, String requestId, int startPos) {
         int L     = endLayer - startLayer;
         int kvDim = cfg.kvDim();
@@ -585,6 +761,11 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
                 cache[li] = Arrays.copyOf(cache[li], newLen);
             }
         }
+    }
+
+    int kvCacheAllocatedSlots(String requestId) {
+        float[][] k = kvCacheK.get(requestId);
+        return (k == null || k.length == 0) ? 0 : k[0].length / cfg.kvDim();
     }
 
     // ── Single transformer layer ──────────────────────────────────────────────

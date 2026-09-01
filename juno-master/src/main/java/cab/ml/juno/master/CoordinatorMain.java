@@ -26,6 +26,7 @@ import cab.ml.juno.coordinator.BatchConfig;
 import cab.ml.juno.coordinator.GenerationLoop;
 import cab.ml.juno.coordinator.InferenceApiServer;
 import cab.ml.juno.coordinator.RequestScheduler;
+import cab.ml.juno.coordinator.ServeBatchOptions;
 import cab.ml.juno.health.HealthMain;
 import cab.ml.juno.health.HealthThresholds;
 import cab.ml.juno.kvcache.CpuKVCache;
@@ -70,6 +71,8 @@ import cab.ml.juno.tokenizer.Tokenizer;
  *   JUNO_DTYPE            FLOAT32 | FLOAT16 | INT8  (default: FLOAT16)
  *   JUNO_MAX_QUEUE        max scheduler queue depth (default: 1000)
  *   JUNO_USE_GPU          "true" / "false" propagated to nodes via LoadShard
+ *   JUNO_PARALLEL         static micro-batch size (default: 1)
+ *   JUNO_BATCH_WINDOW_MS  batch collect window ms when parallel>1 (default: 50)
  *
  *   Health sidecar (optional — starts alongside the coordinator, not instead of it):
  *   JUNO_HEALTH           "true" to enable the health HTTP sidecar (default: false)
@@ -151,7 +154,9 @@ public final class CoordinatorMain {
 		// ── Wire coordinator stack ────────────────────────────────────────
 		var kvCache = new KVCacheManager(new GpuKVCache(GPU_KV_BYTES), new CpuKVCache(CPU_KV_BLOCKS));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
-		var scheduler = new RequestScheduler(maxQueue, loop, BatchConfig.disabled());
+		var scheduler = new RequestScheduler(maxQueue, loop,
+				ServeBatchOptions.resolve(parseOptionalInt(env("JUNO_PARALLEL", null)),
+						parseOptionalLong(env("JUNO_BATCH_WINDOW_MS", null))).toBatchConfig());
 
 		// ── Build ModelRegistry with the model pre-registered as LOADED ───
 		ModelRegistry registry = buildRegistry(config, modelPath);
@@ -344,6 +349,28 @@ public final class CoordinatorMain {
 			return Integer.parseInt(s.strip());
 		} catch (NumberFormatException e) {
 			return def;
+		}
+	}
+
+	private static Integer parseOptionalInt(String s) {
+		if (s == null || s.isBlank())
+			return null;
+		try {
+			return Integer.parseInt(s.strip());
+		} catch (NumberFormatException e) {
+			die("Invalid integer: " + s);
+			return null;
+		}
+	}
+
+	private static Long parseOptionalLong(String s) {
+		if (s == null || s.isBlank())
+			return null;
+		try {
+			return Long.parseLong(s.strip());
+		} catch (NumberFormatException e) {
+			die("Invalid long: " + s);
+			return null;
 		}
 	}
 

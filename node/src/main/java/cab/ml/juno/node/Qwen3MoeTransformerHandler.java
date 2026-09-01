@@ -189,6 +189,205 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		return true;
 	}
 
+	@Override
+	public MultiDecodeForwardResult forwardMultiDecode(MultiDecodeForwardRequest request, ShardContext context) {
+		long start = System.nanoTime();
+		int N = request.batchSize();
+		int H = cfg.hiddenDim();
+		var requestIds = request.requestIds();
+		int[] positions = request.startPositions();
+
+		float[][] x;
+		if (hasEmbeddings && request.isFirstNode()) {
+			x = new float[N][H];
+			int actualVocab = tokenEmbd.length / H;
+			for (int b = 0; b < N; b++) {
+				int tokenId = Math.max(0, Math.min(request.tokenIds()[b], actualVocab - 1));
+				System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+			}
+		} else {
+			x = new float[N][H];
+			float[] flat = request.activations();
+			for (int b = 0; b < N; b++)
+				System.arraycopy(flat, b * H, x[b], 0, H);
+		}
+
+		x = runLayersMultiDecode(x, requestIds, positions);
+
+		if (hasOutputProj) {
+			float[][] logits = outputProjectionBatch(x);
+			return new MultiDecodeForwardResult(logits, null, N, System.nanoTime() - start);
+		}
+
+		float[] flat = new float[N * H];
+		for (int b = 0; b < N; b++)
+			System.arraycopy(x[b], 0, flat, b * H, H);
+		return new MultiDecodeForwardResult(null, flat, N, System.nanoTime() - start);
+	}
+
+	private float[][] runLayersMultiDecode(float[][] x, java.util.List<String> requestIds, int[] positions) {
+		int N = x.length;
+		int L = endLayer - startLayer;
+		int kvDim = cfg.kvDim();
+		int maxPos = 0;
+		for (int pos : positions)
+			maxPos = Math.max(maxPos, pos);
+
+		float[][][] kCaches = new float[N][L][];
+		float[][][] vCaches = new float[N][L][];
+
+		NodeKVCacheAdapter a = kvAdapter;
+		for (int i = 0; i < N; i++) {
+			String requestId = requestIds.get(i);
+			int pos = positions[i];
+
+			kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+			kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+			float[][] kCache = kvCacheK.get(requestId);
+			float[][] vCache = kvCacheV.get(requestId);
+
+			ensureKvCapacity(kCache, pos, kvDim);
+			ensureKvCapacity(vCache, pos, kvDim);
+			kCaches[i] = kCache;
+			vCaches[i] = vCache;
+		}
+
+		MoeBatchWorkspace ws = new MoeBatchWorkspace(N, cfg.hiddenDim(), cfg.qDim(), cfg.kvDim(),
+				cfg.numHeads(), maxPos + 1);
+
+		for (int li = 0; li < L; li++) {
+			float[][] kLayers = new float[N][];
+			float[][] vLayers = new float[N][];
+			for (int i = 0; i < N; i++) {
+				kLayers[i] = kCaches[i][li];
+				vLayers[i] = vCaches[i][li];
+			}
+			x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, ws);
+		}
+
+		if (a != null) {
+			for (int i = 0; i < N; i++) {
+				int seqLen = positions[i] + 1;
+				for (int li = 0; li < L; li++)
+					a.flush(requestIds.get(i), startLayer + li, kCaches[i][li], vCaches[i][li], seqLen, kvDim);
+			}
+		}
+		return x;
+	}
+
+	private static final class MoeBatchWorkspace {
+		final float[][] norm1, norm2, q, k, v, attnOut, attnProj;
+		final float[] scores;
+
+		MoeBatchWorkspace(int W, int H, int qDim, int kvDim, int numHeads, int maxSeqLen) {
+			norm1 = new float[W][H];
+			norm2 = new float[W][H];
+			q = new float[W][qDim];
+			k = new float[W][kvDim];
+			v = new float[W][kvDim];
+			attnOut = new float[W][qDim];
+			attnProj = new float[W][H];
+			scores = new float[numHeads * maxSeqLen];
+		}
+	}
+
+	private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
+			float[][] kCacheLayers, float[][] vCacheLayers, MoeBatchWorkspace ws) {
+		int N = x.length;
+		int H = cfg.hiddenDim();
+		int qDim = cfg.qDim();
+		int kvDim = cfg.kvDim();
+
+		for (int b = 0; b < N; b++)
+			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
+
+		sgemmLayerInto(attnQ[li], ws.norm1, ws.q, qDim, H);
+		sgemmLayerInto(attnK[li], ws.norm1, ws.k, kvDim, H);
+		sgemmLayerInto(attnV[li], ws.norm1, ws.v, kvDim, H);
+
+		for (int b = 0; b < N; b++) {
+			Qwen3TransformerHandler.rmsNormPerHead(ws.q[b], qNorm[li], cfg.numHeads(), cfg.headDim(),
+					cfg.rmsNormEps());
+			Qwen3TransformerHandler.rmsNormPerHead(ws.k[b], kNorm[li], cfg.numKvHeads(), cfg.headDim(),
+					cfg.rmsNormEps());
+		}
+
+		for (int b = 0; b < N; b++) {
+			int pos = positions[b];
+			Qwen3Rope.apply(ws.q[b], pos, cfg.numHeads(), cfg.headDim(), cfg.rope());
+			Qwen3Rope.apply(ws.k[b], pos, cfg.numKvHeads(), cfg.headDim(), cfg.rope());
+		}
+
+		for (int b = 0; b < N; b++) {
+			int pos = positions[b];
+			System.arraycopy(ws.k[b], 0, kCacheLayers[b], pos * kvDim, kvDim);
+			System.arraycopy(ws.v[b], 0, vCacheLayers[b], pos * kvDim, kvDim);
+		}
+
+		for (int b = 0; b < N; b++)
+			gqaInto(ws.q[b], kCacheLayers[b], vCacheLayers[b], positions[b] + 1, ws.attnOut[b], ws.scores);
+
+		sgemmLayerInto(wo[li], ws.attnOut, ws.attnProj, H, qDim);
+
+		for (int b = 0; b < N; b++)
+			for (int d = 0; d < H; d++)
+				x[b][d] += ws.attnProj[b][d];
+
+		for (int b = 0; b < N; b++) {
+			LlamaTransformerHandler.rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
+			float[] ffnOut = moeFfn(ws.norm2[b], li);
+			for (int d = 0; d < H; d++)
+				x[b][d] += ffnOut[d];
+		}
+
+		return x;
+	}
+
+	private void sgemmLayerInto(GgufReader.QuantizedTensor quant, float[][] X, float[][] Y, int rows, int cols) {
+		for (int b = 0; b < X.length; b++)
+			System.arraycopy(LlamaTransformerHandler.matVec(quant, X[b], rows, cols), 0, Y[b], 0, rows);
+	}
+
+	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen, float[] out, float[] scores) {
+		int H = cfg.numHeads();
+		int Hd = cfg.headDim();
+		int gqaR = cfg.gqaRatio();
+		float scale = (float) (1.0 / Math.sqrt(Hd));
+		java.util.Arrays.fill(out, 0f);
+
+		for (int h = 0; h < H; h++) {
+			int kvHead = h / gqaR;
+			int qBase = h * Hd;
+			int kBase = kvHead * Hd;
+
+			for (int t = 0; t < seqLen; t++) {
+				float dot = 0f;
+				int kOffset = t * cfg.kvDim() + kBase;
+				for (int d = 0; d < Hd; d++)
+					dot += q[qBase + d] * kCache[kOffset + d];
+				scores[t] = dot * scale;
+			}
+			LlamaTransformerHandler.softmax(scores, seqLen);
+
+			int outBase = h * Hd;
+			for (int t = 0; t < seqLen; t++) {
+				int vOffset = t * cfg.kvDim() + kBase;
+				float w = scores[t];
+				for (int d = 0; d < Hd; d++)
+					out[outBase + d] += w * vCache[vOffset + d];
+			}
+		}
+	}
+
+	private float[][] outputProjectionBatch(float[][] x) {
+		int N = x.length;
+		int H = cfg.hiddenDim();
+		float[][] logits = new float[N][];
+		for (int b = 0; b < N; b++)
+			logits[b] = outputProjection(x[b]);
+		return logits;
+	}
+
 	public void setKvAdapter(NodeKVCacheAdapter adapter) {
 		this.kvAdapter = adapter;
 	}
@@ -200,6 +399,11 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		NodeKVCacheAdapter a = kvAdapter;
 		if (a != null)
 			a.evict(requestId);
+	}
+
+	int kvCacheAllocatedSlots(String requestId) {
+		float[][] k = kvCacheK.get(requestId);
+		return (k == null || k.length == 0) ? 0 : k[0].length / cfg.kvDim();
 	}
 
 	private float[] getInitialActivation(ForwardRequest request) {

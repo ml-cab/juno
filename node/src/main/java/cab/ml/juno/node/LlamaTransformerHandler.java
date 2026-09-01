@@ -837,6 +837,177 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return new BatchForwardResult(request.requestId(), flat, null, W, System.nanoTime() - start);
 	}
 
+	@Override
+	public MultiDecodeForwardResult forwardMultiDecode(MultiDecodeForwardRequest request, ShardContext context) {
+		long start = System.nanoTime();
+		int N = request.batchSize();
+		int H = cfg.hiddenDim();
+		var requestIds = request.requestIds();
+		int[] positions = request.startPositions();
+
+		float[][] x;
+		if (hasEmbeddings && request.isFirstNode()) {
+			x = new float[N][H];
+			for (int b = 0; b < N; b++) {
+				int tokenId = Math.max(0, Math.min(request.tokenIds()[b], cfg.vocabSize() - 1));
+				System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+			}
+		} else {
+			x = new float[N][H];
+			float[] flat = request.activations();
+			for (int b = 0; b < N; b++)
+				System.arraycopy(flat, b * H, x[b], 0, H);
+		}
+
+		x = runLayersMultiDecode(x, requestIds, positions);
+
+		if (hasOutputProj) {
+			float[][] logits = outputProjectionBatch(x);
+			return new MultiDecodeForwardResult(logits, null, N, System.nanoTime() - start);
+		}
+
+		float[] flat = new float[N * H];
+		for (int b = 0; b < N; b++)
+			System.arraycopy(x[b], 0, flat, b * H, H);
+		return new MultiDecodeForwardResult(null, flat, N, System.nanoTime() - start);
+	}
+
+	/**
+	 * Run all assigned transformer layers for N independent decode streams in one
+	 * batched matmul pass per weight matrix.
+	 */
+	private float[][] runLayersMultiDecode(float[][] x, java.util.List<String> requestIds, int[] positions) {
+		int N = x.length;
+		int L = endLayer - startLayer;
+		int kvDim = cfg.kvDim();
+		int maxPos = 0;
+		for (int pos : positions)
+			maxPos = Math.max(maxPos, pos);
+
+		float[][][] kCaches = new float[N][L][];
+		float[][][] vCaches = new float[N][L][];
+
+		NodeKVCacheAdapter a = kvAdapter;
+		for (int i = 0; i < N; i++) {
+			String requestId = requestIds.get(i);
+			int pos = positions[i];
+
+			boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
+			kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+			float[][] kCache = kvCacheK.get(requestId);
+			float[][] vCache = kvCacheV.get(requestId);
+
+			if (isNew && pos > 0 && a != null) {
+				for (int li = 0; li < L; li++) {
+					int absLayer = startLayer + li;
+					final int layerIdx = li;
+					a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
+						ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
+						ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
+						System.arraycopy(pair.k(), 0, kCache[layerIdx], 0, pair.k().length);
+						System.arraycopy(pair.v(), 0, vCache[layerIdx], 0, pair.v().length);
+					});
+				}
+			}
+
+			ensureKvCapacity(kCache, pos, kvDim);
+			ensureKvCapacity(vCache, pos, kvDim);
+			kCaches[i] = kCache;
+			vCaches[i] = vCache;
+		}
+
+		BatchWorkspace ws = new BatchWorkspace(N, cfg.hiddenDim(), cfg.intermediateSize(),
+				kvDim, cfg.numHeads(), maxPos + 1);
+
+		for (int li = 0; li < L; li++) {
+			float[][] kLayers = new float[N][];
+			float[][] vLayers = new float[N][];
+			for (int i = 0; i < N; i++) {
+				kLayers[i] = kCaches[i][li];
+				vLayers[i] = vCaches[i][li];
+			}
+			x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, ws);
+		}
+
+		if (a != null) {
+			for (int i = 0; i < N; i++) {
+				int seqLen = positions[i] + 1;
+				for (int li = 0; li < L; li++) {
+					a.flush(requestIds.get(i), startLayer + li, kCaches[i][li], vCaches[i][li], seqLen, kvDim);
+				}
+			}
+		}
+
+		return x;
+	}
+
+	/**
+	 * Single transformer layer over N independent decode streams. Linear
+	 * projections are batched; attention runs per stream with its own KV cache
+	 * and position.
+	 */
+	private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
+			float[][] kCacheLayers, float[][] vCacheLayers, BatchWorkspace ws) {
+		int N = x.length;
+		int H = cfg.hiddenDim();
+		int I = cfg.intermediateSize();
+		int kvDim = cfg.kvDim();
+
+		for (int b = 0; b < N; b++)
+			rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
+
+		sgemmLayerInto(wq[li], wqDev, wqDevFp32, li, ws.norm1, ws.q, H, H);
+		sgemmLayerInto(wk[li], wkDev, wkDevFp32, li, ws.norm1, ws.k, kvDim, H);
+		sgemmLayerInto(wv[li], wvDev, wvDevFp32, li, ws.norm1, ws.v, kvDim, H);
+
+		if (bq != null) {
+			for (int b = 0; b < N; b++) {
+				addInPlace(ws.q[b], bq[li]);
+				addInPlace(ws.k[b], bk[li]);
+				addInPlace(ws.v[b], bv[li]);
+			}
+		}
+
+		for (int b = 0; b < N; b++) {
+			int pos = positions[b];
+			rope(ws.q[b], pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
+			rope(ws.k[b], pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+		}
+
+		for (int b = 0; b < N; b++) {
+			int pos = positions[b];
+			System.arraycopy(ws.k[b], 0, kCacheLayers[b], pos * kvDim, kvDim);
+			System.arraycopy(ws.v[b], 0, vCacheLayers[b], pos * kvDim, kvDim);
+		}
+
+		for (int b = 0; b < N; b++)
+			gqaInto(ws.q[b], kCacheLayers[b], vCacheLayers[b], positions[b] + 1, ws.attnOut[b], ws.scores);
+
+		sgemmLayerInto(wo[li], woDev, woDevFp32, li, ws.attnOut, ws.attnProj, H, H);
+
+		for (int b = 0; b < N; b++)
+			for (int d = 0; d < H; d++)
+				x[b][d] += ws.attnProj[b][d];
+
+		for (int b = 0; b < N; b++)
+			rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
+
+		sgemmLayerInto(wGate[li], wGateDev, wGateDevFp32, li, ws.norm2, ws.gate, I, H);
+		sgemmLayerInto(wUp[li], wUpDev, wUpDevFp32, li, ws.norm2, ws.up, I, H);
+
+		for (int b = 0; b < N; b++)
+			for (int i = 0; i < I; i++)
+				ws.hidden[b][i] = silu(ws.gate[b][i]) * ws.up[b][i];
+
+		sgemmLayerInto(wDown[li], wDownDev, wDownDevFp32, li, ws.hidden, ws.ffnOut, H, I);
+
+		for (int b = 0; b < N; b++)
+			for (int d = 0; d < H; d++)
+				x[b][d] += ws.ffnOut[b][d];
+
+		return x;
+	}
+
 	/**
 	 * Run all assigned transformer layers in batch mode, processing {@code W}
 	 * positions in one pass. KV cache is grown to accommodate
@@ -1429,12 +1600,24 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	/** Final RMS norm + output projection → float[vocabSize] logits. */
 	private float[] outputProjection(float[] x) {
-		float[] xNorm = rmsNorm(x, outputNorm, cfg.rmsNormEps());
+		return outputProjectionBatch(new float[][] { x })[0];
+	}
+
+	/** Batched LM head: one GEMM over N decode streams when the backend supports it. */
+	private float[][] outputProjectionBatch(float[][] x) {
+		int N = x.length;
+		int H = cfg.hiddenDim();
+		float[][] xNorm = new float[N][];
+		for (int b = 0; b < N; b++)
+			xNorm[b] = rmsNorm(x[b], outputNorm, cfg.rmsNormEps());
 		if (outputProjDev != null)
-			return backend.sgemv(outputProjDev, xNorm);
+			return backend.sgemm(outputProjDev, xNorm);
 		if (outputProjDevFp32 != null)
-			return backend.sgemv(outputProjDevFp32, xNorm);
-		return matVec(outputProj, xNorm, cfg.vocabSize(), cfg.hiddenDim());
+			return backend.sgemm(outputProjDevFp32, xNorm);
+		float[][] logits = new float[N][];
+		for (int b = 0; b < N; b++)
+			logits[b] = matVec(outputProj, xNorm[b], cfg.vocabSize(), H);
+		return logits;
 	}
 
 	// ── Math primitives ───────────────────────────────────────────────────────

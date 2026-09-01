@@ -106,6 +106,41 @@ public final class LocalInferencePipeline implements InferencePipeline {
 	}
 
 	/**
+	 * Multi-request decode batch: one {@link MultiDecodeForwardRequest} per decode
+	 * step through the handler chain instead of N serial {@link #forward} calls.
+	 */
+	@Override
+	public float[][] forwardBatch(List<String> requestIds, List<int[]> allTokens, List<Integer> startPositions) {
+		int n = requestIds.size();
+		if (n == 0)
+			return new float[0][];
+		if (n == 1)
+			return new float[][] { forward(requestIds.get(0), allTokens.get(0), startPositions.get(0)) };
+
+		int[] lastTokens = new int[n];
+		int[] positions = new int[n];
+		for (int i = 0; i < n; i++) {
+			int[] toks = allTokens.get(i);
+			lastTokens[i] = toks[toks.length - 1];
+			positions[i] = startPositions.get(i);
+		}
+
+		MultiDecodeForwardRequest req = MultiDecodeForwardRequest.withTokens(requestIds, lastTokens, positions);
+
+		for (int i = 0; i < stages.size(); i++) {
+			NodeStage stage = stages.get(i);
+			MultiDecodeForwardResult result = stage.handler().forwardMultiDecode(req, stage.context());
+
+			if (result.isFinalNode())
+				return result.logits();
+
+			req = MultiDecodeForwardRequest.withActivations(requestIds, result.activations(), n, positions);
+		}
+
+		throw new IllegalStateException("Pipeline completed without a final-node multi-decode result");
+	}
+
+	/**
 	 * Cascades to every stage's handler — see {@link InferencePipeline#evict}.
 	 * Each stage's {@link ForwardPassHandler#evict} is a no-op unless that
 	 * handler overrides it, so this is safe to call even when some stages

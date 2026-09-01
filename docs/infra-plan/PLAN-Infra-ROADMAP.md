@@ -18,7 +18,7 @@ See [`PLAN-Infra-PERF-ANALYSIS.md`](PLAN-Infra-PERF-ANALYSIS.md) for full number
 
 ## Execution rules
 
-These rules apply to every Infra tier (Tiers 1–16, including Tier 13 phases).
+These rules apply to every Infra tier (Tiers 1–16, including Tier 13 phases). Rules §1–§5 are mandatory for implementation, tests, and bake-offs.
 
 ### 1. One tier at a time
 
@@ -66,6 +66,42 @@ Name the **feature, flag, or API** — not the planning tier that delivered it. 
 
 **Exceptions:** `docs/infra-plan/**`; tier/phase status tables in this ROADMAP; `docs/lora-plan/**` for LoRA tier labels (separate track).
 
+### 5. All supported models
+
+Inference changes and their tests must cover **every GGUF architecture Juno loads**, not only the default LLaMA-family handler.
+
+**Canonical architecture list** (dispatch in `ForwardPassHandlerLoader`):
+
+| GGUF `general.architecture` | Handler |
+|-----------------------------|---------|
+| `llama`, `mistral`, `qwen2`, and other LLaMA-family defaults | `LlamaTransformerHandler` |
+| `phi2` | `Phi2TransformerHandler` |
+| `phi3` | `Phi3TransformerHandler` |
+| `qwen3` | `Qwen3TransformerHandler` |
+| `qwen3moe` | `Qwen3MoeTransformerHandler` |
+
+LoRA playback (`LoraTrainableHandler`) and vision wrappers (`VisionAwareForwardPassHandler`) inherit the same rule via their underlying text handler.
+
+**Implementation**
+
+- Changes to forward, prefill, decode batching, KV, GPU matmul, or scheduler paths must either land in a **shared abstraction** used by all handlers, or be implemented with **parity in each handler family** that exercises the path.
+- Llama-only landing is allowed only as an incremental step when the active tier doc names explicit follow-up for the remaining architectures **before** that tier’s exit gate.
+- Do not rely on `ForwardPassHandler` serial defaults for performance-critical batch paths on non-Llama handlers without documenting the gap in the tier doc and perf notes.
+
+**Tests**
+
+- Extend or add tests **per handler family** — not only `LlamaTransformerHandler*Test`.
+- Minimum: correctness parity (e.g. batched vs serial `forward` / `forwardMultiDecode`) on small synthetic fixtures; use existing live tests per arch where present (`*GenerationLoopLiveTest`, arch-specific node tests).
+- A tier is not complete if only the Llama handler path was tested while Phi-2/3 or Qwen3 handlers share the same API surface.
+
+**Perf / regression**
+
+- [`compare-llama-cpp.sh`](../../scripts/performance-tests/compare-llama-cpp.sh) **default model set** is the minimum bake-off matrix: TinyLlama, Qwen2.5-3B, Phi-3.5-mini, Mistral-7B (covers LLaMA-family + `phi3`).
+- Tier-specific scripts (e.g. [`compare-parallel.sh`](../../scripts/performance-tests/compare-parallel.sh)) must state which architectures they cover; expand to multi-arch before marking throughput tiers complete when the feature is architecture-specific.
+- Record per-model pass/fail or “not yet implemented” in `docs/perf-compare/README.md` when a model cannot load — do not treat a single-model green run as tier completion.
+
+See also [`PLAN-Infra-SUPPORTED-MODELS.md`](PLAN-Infra-SUPPORTED-MODELS.md).
+
 ## Execution phases (authoritative schedule)
 
 Follow this table — not tier number order (1, 2, 3, …).
@@ -100,7 +136,7 @@ P5:  (after 8)    13 FlashAttn subset
 
 | Tier | Doc | Domain | Phase | Status |
 |------|-----|--------|-------|--------|
-| 1 | `PLAN-Infra-Tier1.md` | Concurrent batch serving (`--parallel`) | P0 step 2 | Pending |
+| 1 | `PLAN-Infra-Tier1.md` | Concurrent batch serving (`--parallel`) | P0 step 2 | In progress |
 | 2 | `PLAN-Infra-Tier2.md` | OpenAI field parity | P2 | Pending |
 | 3 | `PLAN-Infra-Tier3.md` | GBNF + JSON Schema | P2 | Pending |
 | 4 | `PLAN-Infra-Tier4.md` | Function calling / tools | P2 | Pending |

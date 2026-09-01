@@ -25,6 +25,8 @@ Module dependency (excerpt):
         that phase dominates cost at realistic batch sizes and is the
         low-risk, contiguous-multiply-add half of each kernel.
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
+        ServeBatchOptions — CLI/env resolution for --parallel / --batch-window-ms
+        (maps to BatchConfig; streaming consumers bypass static batches)
         coordinator depends on node
   juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,
         ProcessPipelineClient, TensorParallelPipelineClient
@@ -120,7 +122,7 @@ vision — Image-to-text (I2T) module. GGUF-based CLIP ViT encoder, patch
                    with pre-computed patch vectors from ConcurrentHashMap[requestId],
                    then delegates to the wrapped LlamaTransformerHandler via a
                    withActivations(...) request (tokenIds=null). The wrapped
-                   handler's forward()/forwardBatch() decide token-lookup vs.
+                   handler's forward()/forwardBatch()/forwardMultiDecode() decide token-lookup vs.
                    activations by request.isFirstNode() (tokenIds != null), NOT
                    by hasEmbeddings alone — hasEmbeddings only means this node
                    is capable of a lookup, not that this specific request wants
