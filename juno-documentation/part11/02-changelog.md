@@ -3,6 +3,30 @@
 
 ## Status
 
+**Session 68** — Vector API SIMD for CPU quantized matmul kernels, plus tunable row-parallel pool
+
+- Vectorize dot-product accumulation in sgemmQ4KWeightStationary,
+  sgemmQ5KWeightStationary, sgemmQ8_0WeightStationary via new
+  VectorQuantKernels (jdk.incubator.vector), with scalar fallback if the
+  module is unavailable.
+- Vectorize Q8_0 dequantization, gated by a runtime self-test against the
+  full signed-byte range.
+- Add SimdThreadPool: dedicated ForkJoinPool for the same kernels' row-parallel
+  loop, size tunable via -Djuno.simd.pool.size (default unchanged).
+- Add JUNO_JVM_OPTS passthrough in scripts/run.sh, scripts/run.bat, and
+  ClusterHarness's forked node JVMs, for ad hoc JVM flag overrides.
+- Add --add-modules jdk.incubator.vector to compiler/surefire/run scripts/
+  AWS deploy script/ClusterHarness.
+- Add startup diagnostics (SIMD width, pool parallelism) in ConsoleMain.
+- Unit tests: VectorQuantKernelsTest, SimdThreadPoolTest.
+- Measured ~30% prefill reduction on moondream2-q5_k CPU inference; gap to
+  llama.cpp remains, mainly Q4_K/Q5_K dequant still scalar and activations
+  still float32 (llama.cpp int8-quantizes activations, see docs/agent-arch.txt).
+
+---
+
+## Status
+
 **Session 67**: JFR-verified confirmation of the Session 66 SIMD benchmark;
 decode confirmed unaffected; next lever identified as dequant vectorization.
 

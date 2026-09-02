@@ -149,6 +149,21 @@ JVM_BASE=(
   -XX:+AlwaysPreTouch
 )
 
+# JUNO_JVM_OPTS: optional, space-separated extra JVM arguments appended to
+# every java invocation below (all cmd_* functions share JVM_BASE). Exists
+# for one-off experiments that shouldn't need a dedicated CLI flag or a
+# script edit, e.g.:
+#   JUNO_JVM_OPTS="-Djuno.simd.pool.size=8" ./juno local --model-path ...
+# to override SimdThreadPool's row-parallel pool size (see node's
+# SimdThreadPool.java for what that controls). Uses plain shell
+# word-splitting, so this only supports simple space-separated flags with no
+# embedded spaces in a single value; for anything more complex, edit
+# JVM_BASE directly above instead.
+if [[ -n "${JUNO_JVM_OPTS:-}" ]]; then
+  # shellcheck disable=SC2206
+  JVM_BASE+=( ${JUNO_JVM_OPTS} )
+fi
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 # ---------------------------------------------------------------------------
