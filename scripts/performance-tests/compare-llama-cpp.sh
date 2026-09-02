@@ -40,6 +40,8 @@ NGL=""
 API_PORT=18080
 JUNO_USE_VECTOR="${JUNO_USE_VECTOR:-1}"
 PROMPT_TEXT="could you please write me a short poem about love and war"
+RAW_PROMPT=0
+JUNO_GPU_LAYERS=""
 MODEL_FILTER=""
 DRY_RUN=0
 LIST_ONLY=0
@@ -72,6 +74,8 @@ Options:
   --cpu             Force CPU (llama -ngl 0, juno --cpu) [default]
   --gpu             GPU mode (llama -ngl 99 unless --ngl set, juno --gpu)
   --ngl N           llama.cpp GPU layers (overrides --cpu/--gpu default)
+  --gpu-layers N|all|auto  Juno --gpu-layers (default: all in GPU mode)
+  --raw-prompt      Repeat a minimal token pattern (~1 tok/word) for prompt-length parity
   --api-port N      Juno REST port (default: ${API_PORT})
   --out DIR         Output directory (default: target/perf-compare/<timestamp>)
   --llama-bin DIR   Directory with llama-bench
@@ -116,6 +120,8 @@ while [[ $# -gt 0 ]]; do
     --cpu) USE_GPU=0; shift ;;
     --gpu) USE_GPU=1; shift ;;
     --ngl) NGL="$2"; shift 2 ;;
+    --gpu-layers) JUNO_GPU_LAYERS="$2"; shift 2 ;;
+    --raw-prompt) RAW_PROMPT=1; shift ;;
     --api-port) API_PORT="$2"; shift 2 ;;
     --out) OUT_ROOT="$2"; shift 2 ;;
     --llama-bin) LLAMA_CPP_BIN_EXPLICIT="$2"; shift 2 ;;
@@ -294,6 +300,8 @@ host_meta_json() {
   "backend": "$(backend_label)",
   "use_gpu": ${USE_GPU},
   "prompt": "$(json_escape "$PROMPT_TEXT")",
+  "raw_prompt": ${RAW_PROMPT},
+  "juno_gpu_layers": "$(json_escape "${JUNO_GPU_LAYERS:-}")",
   "juno_use_vector": ${JUNO_USE_VECTOR},
   "juno_jfr": ${USE_JFR},
   "jfr_duration": "$(json_escape "${JFR_DURATION}")",
@@ -515,8 +523,14 @@ run_juno() {
   if [[ "$USE_JFR" -eq 1 ]]; then
     java_args+=(--jfr "$JFR_DURATION")
   fi
+  if [[ -n "$JUNO_GPU_LAYERS" ]]; then
+    java_args+=(--gpu-layers "$JUNO_GPU_LAYERS")
+  fi
+  if [[ -n "${JUNO_PREFILL_BATCH:-}" ]]; then
+    java_args+=(--prefill-batch "$JUNO_PREFILL_BATCH")
+  fi
 
-  log "juno: ${stem} (backend=$(backend_label) max_tokens=${N_GEN} heap=${heap} vector=${JUNO_USE_VECTOR} jfr=${USE_JFR} port=${API_PORT})"
+  log "juno: ${stem} (backend=$(backend_label) max_tokens=${N_GEN} heap=${heap} vector=${JUNO_USE_VECTOR} jfr=${USE_JFR} port=${API_PORT} gpu_layers=${JUNO_GPU_LAYERS:-default})"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     log "dry-run: ${java_bin} ${java_args[*]}"
     return 0
@@ -834,6 +848,11 @@ require_cmd date
 
 resolve_llama_bin
 select_models
+
+if [[ "$RAW_PROMPT" -eq 1 ]]; then
+  PROMPT_TEXT="$(python3 -c "print(' '.join(['x'] * ${N_PROMPT}))")"
+  log "raw-prompt: using ${N_PROMPT} minimal space-separated tokens for Juno chat prefill parity"
+fi
 
 if [[ "$LIST_ONLY" -eq 1 ]]; then
   log "selected ${#SELECTED_MODELS[@]} model(s) (backend=$(backend_label)):"

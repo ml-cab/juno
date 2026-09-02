@@ -92,9 +92,10 @@ public interface InferencePipeline {
 	 * @param startPosition KV cache offset of {@code newTokens[0]}
 	 */
 	default void prefillBatch(String requestId, int[] newTokens, int startPosition) {
-		for (int p = 0; p < newTokens.length; p++) {
-			forward(requestId, new int[]{ newTokens[p] }, startPosition + p);
-		}
+		PrefillBatchJfr.run(requestId, newTokens, startPosition, () -> {
+			for (int p = 0; p < newTokens.length; p++)
+				forward(requestId, new int[] { newTokens[p] }, startPosition + p);
+		});
 	}
 
 	/**

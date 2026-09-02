@@ -38,6 +38,7 @@ final class JfrMetricsExtractor {
 
     private static final String MAT_VEC = "juno.MatVec";
     private static final String FORWARD = "juno.ForwardPass";
+    private static final String PREFILL_BATCH = "juno.PrefillBatch";
     private static final String TOKENIZER = "juno.Tokenizer";
     private static final String TEMPLATE = "juno.TemplateFormat";
     private static final String LORA_STEP = "juno.LoraTrainStep";
@@ -161,6 +162,10 @@ final class JfrMetricsExtractor {
                                     forwardDecode.add(nano);
                                 }
                             }
+                        }
+                        case PREFILL_BATCH -> {
+                            forwardAll.add(nano);
+                            forwardPrefill.add(nano);
                         }
                         case TOKENIZER -> {
                             if (ev.hasField("operation")) {

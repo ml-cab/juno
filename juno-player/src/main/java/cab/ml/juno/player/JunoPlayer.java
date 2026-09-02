@@ -27,6 +27,7 @@ import java.util.concurrent.Flow;
 import cab.ml.juno.coordinator.GenerationLoop;
 import cab.ml.juno.coordinator.GenerationResult;
 import cab.ml.juno.coordinator.InferenceRequest;
+import cab.ml.juno.coordinator.PrefillBatchOptions;
 import cab.ml.juno.coordinator.PublisherTokenConsumer;
 import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.coordinator.BatchConfig;
@@ -178,6 +179,7 @@ public final class JunoPlayer implements AutoCloseable {
 		private String byteOrder = "BE";
 		private Integer parallel = null;
 		private Long batchWindowMs = null;
+		private Integer prefillBatch = null;
 
 		private Builder(Path modelPath) {
 			this.modelPath = modelPath;
@@ -218,6 +220,11 @@ public final class JunoPlayer implements AutoCloseable {
 			return this;
 		}
 
+		public Builder prefillBatch(int prefillBatch) {
+			this.prefillBatch = prefillBatch;
+			return this;
+		}
+
 		public JunoPlayer build() throws IOException {
 			System.setProperty("juno.byteOrder", byteOrder);
 
@@ -254,7 +261,9 @@ public final class JunoPlayer implements AutoCloseable {
 			var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
 					config.hiddenDim(), config.numHeads());
 			var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-			var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+			var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache,
+					cab.ml.juno.coordinator.PrefillMode.BATCHED,
+					PrefillBatchOptions.resolve(prefillBatch).chunkSize());
 			var scheduler = new RequestScheduler(1000, loop,
 					ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig());
 

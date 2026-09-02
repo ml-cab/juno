@@ -165,23 +165,20 @@ public final class LocalInferencePipeline implements InferencePipeline {
 	 */
 	@Override
 	public void prefillBatch(String requestId, int[] newTokens, int startPosition) {
-		if (newTokens.length == 0) return;
+		PrefillBatchJfr.run(requestId, newTokens, startPosition, () -> {
+			BatchForwardRequest req = BatchForwardRequest.withTokens(requestId, newTokens, startPosition);
+			int W = newTokens.length;
 
-		BatchForwardRequest req = BatchForwardRequest.withTokens(requestId, newTokens, startPosition);
-		int W = newTokens.length;
+			for (int i = 0; i < stages.size(); i++) {
+				NodeStage stage = stages.get(i);
+				BatchForwardResult result = stage.handler().forwardBatch(req, stage.context());
 
-		for (int i = 0; i < stages.size(); i++) {
-			NodeStage stage = stages.get(i);
-			BatchForwardResult result = stage.handler().forwardBatch(req, stage.context());
+				if (result.isFinalNode())
+					return;
 
-			if (result.isFinalNode()) {
-				// Last node: logits discarded — prefill complete
-				return;
+				req = BatchForwardRequest.withActivations(requestId, result.activations(), W, startPosition);
 			}
-
-			// Pass activations to next node as a flattened batch
-			req = BatchForwardRequest.withActivations(requestId, result.activations(), W, startPosition);
-		}
+		});
 	}
 
 	/**

@@ -64,6 +64,7 @@ import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
 import cab.ml.juno.node.GpuLayerOffload;
 import cab.ml.juno.coordinator.BatchConfig;
+import cab.ml.juno.coordinator.PrefillBatchOptions;
 import cab.ml.juno.coordinator.ServeBatchOptions;
 
 import cab.ml.juno.node.LlamaConfig;
@@ -191,6 +192,7 @@ public final class ConsoleMain {
 	private static int apiPort = -1;
 	/** Prefill strategy: batched (default) or single (legacy sequential loop). */
 	private static cab.ml.juno.coordinator.PrefillMode prefillMode = cab.ml.juno.coordinator.PrefillMode.BATCHED;
+	private static Integer prefillBatch = null; // null → env or default 32
 	// ── Byte-order argument ───────────────────────────────────────────────────
 	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
 	private static String byteOrder = "BE";
@@ -370,6 +372,11 @@ public final class ConsoleMain {
 			if (env != null && !env.isBlank())
 				batchWindowMs = Long.parseLong(env.strip());
 		}
+		if (prefillBatch == null) {
+			String env = System.getenv(PrefillBatchOptions.ENV_PREFILL_BATCH);
+			if (env != null && !env.isBlank())
+				prefillBatch = Integer.parseInt(env.strip());
+		}
 	}
 
 	private static void applyLoraEnvDefaults() {
@@ -410,6 +417,10 @@ public final class ConsoleMain {
 			case "--prefill":
 				if (i + 1 < args.length)
 					prefillMode = parsePrefillMode(args[++i]);
+				break;
+			case "--prefill-batch":
+				if (i + 1 < args.length)
+					prefillBatch = parseInt(args[++i], PrefillBatchOptions.DEFAULT_CHUNK_SIZE);
 				break;
 			case "--dtype":
 				if (i + 1 < args.length)
@@ -665,6 +676,8 @@ public final class ConsoleMain {
 		System.out.println("  --prefill single|batched   Prefill strategy (default: batched)");
 		System.out.println("                             batched: windowed GEMM — fixes vision 10-min stall");
 		System.out.println("                             single:  original per-token loop (escape hatch)");
+		System.out.println("  --prefill-batch N          Max prompt tokens per prefill window (default: 32)");
+		System.out.println("                             env JUNO_PREFILL_BATCH; use 1 for per-token batched");
 		System.out.println();
 		System.out.println("Inference options:");
 		System.out.println("  --gpu                      Use GPU (default, no need to set)");
@@ -861,7 +874,8 @@ public final class ConsoleMain {
 		var pipeline = LocalInferencePipeline.from(shardMap, List.of(handler), config.vocabSize(), config.hiddenDim(),
 				config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
+				PrefillBatchOptions.resolve(prefillBatch).chunkSize());
 
 		LoraAdamOptimizer optimizer = LoraAdamOptimizer.defaults(loraLr);
 		int[] totalStepsTrained = { 0 };
@@ -1749,7 +1763,8 @@ public final class ConsoleMain {
 		}
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
+				PrefillBatchOptions.resolve(prefillBatch).chunkSize());
 
 		startRepl(loop, tokenizer); // calls System.exit(0) on quit — shutdown hook fires from there
 	}
@@ -1864,7 +1879,8 @@ public final class ConsoleMain {
 		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
 				config.hiddenDim(), config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
+				PrefillBatchOptions.resolve(prefillBatch).chunkSize());
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
@@ -2042,7 +2058,8 @@ public final class ConsoleMain {
 		}
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
+				PrefillBatchOptions.resolve(prefillBatch).chunkSize());
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);

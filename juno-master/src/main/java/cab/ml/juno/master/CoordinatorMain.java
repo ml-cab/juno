@@ -25,6 +25,7 @@ import java.util.logging.Logger;
 import cab.ml.juno.coordinator.BatchConfig;
 import cab.ml.juno.coordinator.GenerationLoop;
 import cab.ml.juno.coordinator.InferenceApiServer;
+import cab.ml.juno.coordinator.PrefillBatchOptions;
 import cab.ml.juno.coordinator.RequestScheduler;
 import cab.ml.juno.coordinator.ServeBatchOptions;
 import cab.ml.juno.health.HealthMain;
@@ -153,7 +154,9 @@ public final class CoordinatorMain {
 
 		// ── Wire coordinator stack ────────────────────────────────────────
 		var kvCache = new KVCacheManager(new GpuKVCache(GPU_KV_BYTES), new CpuKVCache(CPU_KV_BLOCKS));
-		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache);
+		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache,
+				cab.ml.juno.coordinator.PrefillMode.BATCHED,
+				PrefillBatchOptions.resolve(parseOptionalInt(env("JUNO_PREFILL_BATCH", null))).chunkSize());
 		var scheduler = new RequestScheduler(maxQueue, loop,
 				ServeBatchOptions.resolve(parseOptionalInt(env("JUNO_PARALLEL", null)),
 						parseOptionalLong(env("JUNO_BATCH_WINDOW_MS", null))).toBatchConfig());

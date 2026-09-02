@@ -136,14 +136,14 @@ P5:  (after 8)    13 FlashAttn subset
 
 | Tier | Doc | Domain | Phase | Status |
 |------|-----|--------|-------|--------|
-| 1 | `PLAN-Infra-Tier1.md` | Concurrent batch serving (`--parallel`) | P0 step 2 | In progress |
+| 1 | `PLAN-Infra-Tier1.md` | Concurrent batch serving (`--parallel`) | P0 step 2 | Complete |
 | 2 | `PLAN-Infra-Tier2.md` | OpenAI field parity | P2 | Pending |
 | 3 | `PLAN-Infra-Tier3.md` | GBNF + JSON Schema | P2 | Pending |
 | 4 | `PLAN-Infra-Tier4.md` | Function calling / tools | P2 | Pending |
-| 5 | `PLAN-Infra-Tier5.md` | Hybrid `--gpu-layers` offload | P0 step 2 | In progress |
+| 5 | `PLAN-Infra-Tier5.md` | Hybrid `--gpu-layers` offload | P0 step 2 | Complete |
 | 6 | `PLAN-Infra-Tier6.md` | Quantized KV cache (`q8_0`) | P1 step 1 | Pending |
 | 7 | `PLAN-Infra-Tier7.md` | Chat template + HF download | P3 | Pending |
-| 8 | `PLAN-Infra-Tier8.md` | Prefill microbatching | P0 step 3 | Pending |
+| 8 | `PLAN-Infra-Tier8.md` | Prefill microbatching | P0 step 3 | Complete |
 | 9 | `PLAN-Infra-Tier9.md` | Ngram speculative decoding | P4 | Pending |
 | 10 | `PLAN-Infra-Tier10.md` | Multi-adapter + GGUF LoRA interop | P3 | Pending |
 | 11 | `PLAN-Infra-Tier11.md` | Embeddings API | P3 | Pending |

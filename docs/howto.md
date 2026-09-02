@@ -52,6 +52,8 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--gpu-layers N\|all\|auto` | `all` | cluster, local | Transformer layers resident on GPU (`JUNO_GPU_LAYERS`). `auto` fits until VRAM OOM. |
 | `--parallel N` | `1` | cluster, local, master | Static micro-batch size (`JUNO_PARALLEL`). `1` disables batching; recommend `8` for API servers. |
 | `--batch-window-ms M` | `50` when parallel>1 | cluster, local, master | Batch collect window (`JUNO_BATCH_WINDOW_MS`). |
+| `--prefill-batch N` | `32` | cluster, local, master | Max prompt tokens per prefill GPU window (`JUNO_PREFILL_BATCH`). Use `1` for per-token batched prefill. |
+| `--prefill single\|batched` | `batched` | cluster, local | Prefill strategy: windowed GEMM vs per-token sequential loop. |
 | `--lora-play PATH` | — | cluster, local | Apply a pre-trained `.lora` adapter at inference (read-only, no training). In cluster mode the file is forwarded as `-Djuno.lora.play.path` to every forked node JVM. |
 | `--api-port N` | — | cluster, local | Start the OpenAI-compatible REST API server on port N alongside the REPL. Exposes `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{model}`. Environment override: `API_PORT`. |
 

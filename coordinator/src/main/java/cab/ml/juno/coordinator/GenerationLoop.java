@@ -50,18 +50,18 @@ public final class GenerationLoop {
 	private final InferencePipeline pipeline;
 	private final KVCacheManager kvCache;
 	private final PrefillMode prefillMode;
+	private final int prefillBatchSize;
 
 	/**
-	 * Construct a generation loop with the default prefill mode ({@link PrefillMode#BATCHED}).
-	 * Existing callers (tests and production code that does not yet pass a mode)
-	 * are unchanged.
+	 * Construct a generation loop with the default prefill mode ({@link PrefillMode#BATCHED})
+	 * and default chunk size ({@link PrefillBatchOptions#DEFAULT_CHUNK_SIZE}).
 	 */
 	public GenerationLoop(Tokenizer tokenizer, Sampler sampler, InferencePipeline pipeline, KVCacheManager kvCache) {
-		this(tokenizer, sampler, pipeline, kvCache, PrefillMode.BATCHED);
+		this(tokenizer, sampler, pipeline, kvCache, PrefillMode.BATCHED, PrefillBatchOptions.DEFAULT_CHUNK_SIZE);
 	}
 
 	/**
-	 * Construct a generation loop with an explicit prefill mode.
+	 * Construct a generation loop with an explicit prefill mode and default chunk size.
 	 *
 	 * @param prefillMode {@link PrefillMode#BATCHED} (default) for windowed GEMM
 	 *                    prefill; {@link PrefillMode#SINGLE} for the original
@@ -69,11 +69,23 @@ public final class GenerationLoop {
 	 */
 	public GenerationLoop(Tokenizer tokenizer, Sampler sampler, InferencePipeline pipeline, KVCacheManager kvCache,
 			PrefillMode prefillMode) {
+		this(tokenizer, sampler, pipeline, kvCache, prefillMode, PrefillBatchOptions.DEFAULT_CHUNK_SIZE);
+	}
+
+	/**
+	 * Full constructor with prefill mode and microbatch chunk size.
+	 *
+	 * @param prefillBatchSize max tokens per {@code prefillBatch} call when mode is
+	 *                         {@link PrefillMode#BATCHED}; ignored for {@link PrefillMode#SINGLE}
+	 */
+	public GenerationLoop(Tokenizer tokenizer, Sampler sampler, InferencePipeline pipeline, KVCacheManager kvCache,
+			PrefillMode prefillMode, int prefillBatchSize) {
 		this.tokenizer = tokenizer;
 		this.sampler = sampler;
 		this.pipeline = pipeline;
 		this.kvCache = kvCache;
 		this.prefillMode = prefillMode;
+		this.prefillBatchSize = prefillBatchSize;
 	}
 
 	/**
@@ -154,16 +166,7 @@ public final class GenerationLoop {
 			int[] promptIds = Arrays.copyOfRange(allTokens[i], 0, promptLens[i]);
 			int windowSize = promptLens[i] - 1 - startPos[i];
 			if (windowSize > 0) {
-				if (prefillMode == PrefillMode.BATCHED) {
-					int[] window = Arrays.copyOfRange(promptIds, startPos[i], promptLens[i] - 1);
-					pipeline.prefillBatch(requestIds[i], window, startPos[i]);
-				} else {
-					// PrefillMode.SINGLE — original sequential loop, kept verbatim
-					for (int p = startPos[i]; p < promptLens[i] - 1; p++) {
-						int[] prefillSlice = Arrays.copyOfRange(promptIds, 0, p + 1);
-						pipeline.forward(requestIds[i], prefillSlice, p);
-					}
-				}
+				PrefillChunker.run(pipeline, prefillMode, prefillBatchSize, requestIds[i], promptIds, startPos[i]);
 			}
 			// Decode step 0 covers position promptLen-1 (last prompt token)
 			if (promptLens[i] > 0) {
@@ -339,22 +342,9 @@ public final class GenerationLoop {
 					+ "  mode=" + prefillMode + ")");
 			consumer.onPrefillStart(promptIds.length);
 			long prefillCallStart = System.nanoTime();
-			if (prefillMode == PrefillMode.BATCHED) {
-				int[] window = Arrays.copyOfRange(promptIds, startPos, promptIds.length - 1);
-				log.info("Prefill: calling pipeline.prefillBatch() kvKey=" + kvKey + " windowSize=" + window.length
-						+ " startPos=" + startPos + " ... (this call blocks until the whole window is processed)");
-				pipeline.prefillBatch(kvKey, window, startPos);
-				log.info("Prefill: pipeline.prefillBatch() RETURNED kvKey=" + kvKey + " elapsedMs="
-						+ (System.nanoTime() - prefillCallStart) / 1_000_000.0);
-			} else {
-				// PrefillMode.SINGLE — original sequential loop, kept verbatim
-				for (int p = startPos; p < promptIds.length - 1; p++) {
-					int[] prefillSlice = Arrays.copyOfRange(promptIds, 0, p + 1);
-					pipeline.forward(kvKey, prefillSlice, p); // KV stored under kvKey; logits discarded
-				}
-				log.info("Prefill: SINGLE-mode loop RETURNED kvKey=" + kvKey + " elapsedMs="
-						+ (System.nanoTime() - prefillCallStart) / 1_000_000.0);
-			}
+			PrefillChunker.run(pipeline, prefillMode, prefillBatchSize, kvKey, promptIds, startPos);
+			log.info("Prefill: chunker RETURNED kvKey=" + kvKey + " mode=" + prefillMode + " chunkSize="
+					+ prefillBatchSize + " elapsedMs=" + (System.nanoTime() - prefillCallStart) / 1_000_000.0);
 			consumer.onPrefillComplete();
 			log.info("Prefill complete. Decode starts at position " + (promptIds.length - 1) + " kvKey=" + kvKey);
 		}

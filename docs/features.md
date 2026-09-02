@@ -52,6 +52,14 @@ Optional extensions:
 
 The coordinator still exposes Juno-native inference endpoints alongside this surface; behaviour is documented in [arch.md](arch.md). The authoritative OpenAPI 3 spec is [`juno-api.yaml`](../api/src/main/resources/juno-api.yaml). Examples and flags are in [howto.md](howto.md).
 
+# Concurrent static batching
+
+API servers accept `--parallel N` and `--batch-window-ms M` to micro-batch blocking (`stream: false`) chat completions: up to `N` requests submitted within the window share one `forwardBatch` decode step per token. Default `parallel=1` preserves legacy per-request dispatch.
+
+**Streaming policy (static schedule):** SSE (`stream: true`) requests always run on their own generation path and are not merged into static batches. Use blocking completions for aggregate throughput under load; continuous scheduling (future) will share decode steps across streams.
+
+Measured multi-session uplift is recorded in [`perf-compare/README.md`](perf-compare/README.md).
+
 # Performance reporting
 
 The primary Juno performance artifact is the interactive HTML matrix **[juno_test_matrix.html](juno_test_matrix.html)** (model, CPU vs GPU scenarios, throughput and latency insights). Open it from a checkout in a browser; refresh or regenerate the file when harness inputs or hardware baselines change.

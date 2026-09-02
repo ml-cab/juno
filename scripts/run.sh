@@ -351,6 +351,8 @@ cmd_local() {
   local prefill_mode="${PREFILL_MODE:-}"
   local parallel="${JUNO_PARALLEL:-}"
   local batch_window="${JUNO_BATCH_WINDOW_MS:-}"
+  local gpu_layers="${JUNO_GPU_LAYERS:-}"
+  local prefill_batch="${JUNO_PREFILL_BATCH:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -384,6 +386,8 @@ cmd_local() {
       --prefill)          prefill_mode="$2"; shift 2 ;;
       --parallel)         parallel="$2";     shift 2 ;;
       --batch-window-ms)  batch_window="$2"; shift 2 ;;
+      --gpu-layers)       gpu_layers="$2";   shift 2 ;;
+      --prefill-batch)    prefill_batch="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -422,6 +426,8 @@ cmd_local() {
         echo "                               (includes OpenAI-compatible /v1/chat/completions)"
         echo "    --parallel N               static micro-batch size (default 1)"
         echo "    --batch-window-ms M        batch window when parallel>1 (default 50)"
+        echo "    --gpu-layers N|all|auto    GPU-resident transformer layers (default all)"
+        echo "    --prefill-batch N          prefill microbatch chunk size (default 32)"
         echo ""
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
@@ -490,6 +496,10 @@ cmd_local() {
   [[ -n "$parallel" ]] && parallel_arg="--parallel $parallel"
   local batch_window_arg=""
   [[ -n "$batch_window" ]] && batch_window_arg="--batch-window-ms $batch_window"
+  local gpu_layers_arg=""
+  [[ -n "$gpu_layers" ]] && gpu_layers_arg="--gpu-layers $gpu_layers"
+  local prefill_batch_arg=""
+  [[ -n "$prefill_batch" ]] && prefill_batch_arg="--prefill-batch $prefill_batch"
   local mmproj_arg=""
   [[ -n "$mmproj" ]] && { mmproj_arg="--mmproj-path $mmproj"; info "Vision mmproj: ${mmproj}"; }
 
@@ -515,6 +525,8 @@ cmd_local() {
     ${prefill_mode_arg} \
     ${parallel_arg} \
     ${batch_window_arg} \
+    ${gpu_layers_arg} \
+    ${prefill_batch_arg} \
     ${mmproj_arg} \
     ${health_flag} \
     ${verbose_flag}

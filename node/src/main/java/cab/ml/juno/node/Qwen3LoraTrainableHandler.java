@@ -219,10 +219,8 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 				upD[li] = LoraResidentWeights.uploadQuant(gpu, ffnUp[li], I, H);
 				downD[li] = LoraResidentWeights.uploadQuant(gpu, wDown[li], H, I);
 			}
-			if (outputProj != null) {
-				int V = outputProj.length / H;
-				outHolder[0] = LoraResidentWeights.upload(gpu, outputProj, V, H);
-			}
+			if (outputProj != null)
+				log.info("Qwen3 LoRA: output projection kept on CPU (dense LM head)");
 			this.attnQDev = qD;
 			this.attnKDev = kD;
 			this.attnVDev = vD;

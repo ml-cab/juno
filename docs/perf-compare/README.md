@@ -14,6 +14,7 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260901T154735Z-parallel`](20260901T154735Z-parallel/) | GPU multi-session static batch (`--parallel` 1 vs 8) | aggregate tg | [INDEX](20260901T154735Z-parallel/INDEX.md) |
 | [`20260901T155136Z-parallel`](20260901T155136Z-parallel/) | CPU multi-session static batch (`--parallel` 1 vs 8) | aggregate tg | [INDEX](20260901T155136Z-parallel/INDEX.md) |
 | [`20260901T173121Z-parallel`](20260901T173121Z-parallel/) | GPU multi-session static batch (`--parallel` 1 vs 8) | aggregate tg | [INDEX](20260901T173121Z-parallel/INDEX.md) |
+| [`20260901T234024Z-prefill`](20260901T234024Z-prefill/) | CPU prefill microbatch (`--prefill-batch` 1 vs 32) | JFR pp | [INDEX](20260901T234024Z-prefill/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 
@@ -84,6 +85,20 @@ Re-run:
 
 ```bash
 ./scripts/performance-tests/compare-parallel.sh --gpu   # or --cpu
+```
+
+## Prefill microbatch (`--prefill-batch`) — TinyLlama Q4_K_M
+
+Workload: long raw prompt (`n_prompt=256`), single blocking chat completion, JFR on. Script: `compare-prefill-batch.sh`.
+
+| Run | Backend | batch=1 pp | batch=32 pp | Speedup 32/1 | `prefill.count` (1 / 32) |
+|-----|---------|----------:|------------:|-------------:|-------------------------|
+| [`20260901T234024Z-prefill`](20260901T234024Z-prefill/) | CPU | **2.30** t/s | **5.39** t/s | **2.35×** | 246 / 9 |
+
+Default `--prefill-batch` is **32**. `--prefill-batch 1` matches per-token batched prefill (many small `PrefillBatch` JFR events). GPU re-run pending on reference SKU — expect ≥2× on long prompts when VRAM-resident.
+
+```bash
+./scripts/performance-tests/compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32
 ```
 
 ## Single-stream compare re-run

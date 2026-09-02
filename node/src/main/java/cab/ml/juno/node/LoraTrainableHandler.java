@@ -266,7 +266,6 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		int H = cfg.hiddenDim();
 		int KV = cfg.kvDim();
 		int I = cfg.intermediateSize();
-		int V = cfg.vocabSize();
 		ResidentWeightMatrix[] wqD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] wkD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] wvD = new ResidentWeightMatrix[L];
@@ -306,8 +305,11 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 				wUpD[li] = LoraResidentWeights.uploadQuant(gpu, wUp[li], I, H);
 				wDownD[li] = LoraResidentWeights.uploadQuant(gpu, wDown[li], H, I);
 			}
+			// vocab×hidden LM head stays quantized on CPU: full-layer GPU residency plus
+			// a device output matrix exhausts scratch on common 8 GB cards and yields NaN
+			// backward (LoraTrainableHandlerGpuBackwardTest).
 			if (outputProj != null)
-				outHolder[0] = LoraResidentWeights.uploadQuant(gpu, outputProj, V, H);
+				log.info("LoRA handler: output projection kept on CPU (quantized)");
 			if (microbatch)
 				opsHolder[0] = GpuBlasOps.of(gpu);
 			this.wqDev = wqD;
@@ -349,10 +351,12 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	 */
 	private float[] transposedMatVecLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] g,
 			int rows, int cols) {
+		// Frozen backward uses CPU dequant transpose: device transpose plus many
+		// resident layers can yield NaN grads on 8 GB GPUs (see gpu backward parity).
 		if (!timingActive)
-			return LoraResidentWeights.transposedMatVec(quant, dev, g, rows, cols);
+			return LoraTrainableHandler.transposedMatVec(quant, g, rows, cols);
 		long t0 = System.nanoTime();
-		float[] y = LoraResidentWeights.transposedMatVec(quant, dev, g, rows, cols);
+		float[] y = LoraTrainableHandler.transposedMatVec(quant, g, rows, cols);
 		accFrozenTransposeNs += System.nanoTime() - t0;
 		return y;
 	}
@@ -360,11 +364,19 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private float[][] transposedMatVecBatchLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev,
 			float[][] G, int batch, int rows, int cols) {
 		if (!timingActive)
-			return LoraResidentWeights.transposedMatVecBatch(quant, dev, blasOps, G, batch, rows, cols);
+			return transposedMatVecBatchCpu(quant, G, batch, rows, cols);
 		long t0 = System.nanoTime();
-		float[][] y = LoraResidentWeights.transposedMatVecBatch(quant, dev, blasOps, G, batch, rows, cols);
+		float[][] y = transposedMatVecBatchCpu(quant, G, batch, rows, cols);
 		accFrozenTransposeNs += System.nanoTime() - t0;
 		return y;
+	}
+
+	private static float[][] transposedMatVecBatchCpu(GgufReader.QuantizedTensor quant, float[][] G, int batch,
+			int rows, int cols) {
+		float[][] dX = new float[batch][];
+		for (int b = 0; b < batch; b++)
+			dX[b] = LoraTrainableHandler.transposedMatVec(quant, G[b], rows, cols);
+		return dX;
 	}
 
 	private void resetStepTiming() {

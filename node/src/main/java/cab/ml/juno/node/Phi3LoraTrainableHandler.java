@@ -191,10 +191,8 @@ public final class Phi3LoraTrainableHandler implements LoraTrainingHandler {
 				gateUpD[li] = LoraResidentWeights.uploadQuant(gpu, ffnGateUp[li], 2 * I, H);
 				downD[li] = LoraResidentWeights.uploadQuant(gpu, wDown[li], H, I);
 			}
-			if (outputProj != null) {
-				int V = outputProj.length / H;
-				outHolder[0] = LoraResidentWeights.upload(gpu, outputProj, V, H);
-			}
+			if (outputProj != null)
+				log.info("Phi-3 LoRA: output projection kept on CPU (dense LM head)");
 			this.attnQkvDev = qkvD;
 			this.woDev = woD;
 			this.ffnGateUpDev = gateUpD;

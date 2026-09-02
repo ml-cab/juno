@@ -42,6 +42,10 @@ class GenerationLoopTest {
 		return new GenerationLoop(tokenizer, sampler, pipeline, kvCache, mode);
 	}
 
+	private GenerationLoop loopWith(InferencePipeline pipeline, PrefillMode mode, int prefillBatchSize) {
+		return new GenerationLoop(tokenizer, sampler, pipeline, kvCache, mode, prefillBatchSize);
+	}
+
 	private InferenceRequest requestFor(String... messages) {
 		List<ChatMessage> msgs = new ArrayList<>();
 		for (int i = 0; i < messages.length; i++) {
@@ -286,5 +290,25 @@ class GenerationLoopTest {
 
 		assertThat(defaultResult.generatedTokens()).isEqualTo(explicitBatch.generatedTokens());
 		assertThat(defaultResult.stopReason()).isEqualTo(explicitBatch.stopReason());
+	}
+
+	// ── Prefill chunk size parity ─────────────────────────────────────────────
+
+	@Test
+	void prefill_chunk_sizes_produce_same_tokens_as_whole_window() {
+		InferenceRequest req = InferenceRequest.of("llama3-8b",
+				List.of(ChatMessage.user("one two three four five six seven eight nine ten")),
+				SamplingParams.defaults().withMaxTokens(3), RequestPriority.NORMAL);
+
+		GenerationResult whole = loopWith(new StubInferencePipeline(), PrefillMode.BATCHED, 10_000)
+				.generate(req, TokenConsumer.discard());
+		GenerationResult chunk32 = loopWith(new StubInferencePipeline(), PrefillMode.BATCHED, 32)
+				.generate(req, TokenConsumer.discard());
+		GenerationResult chunk1 = loopWith(new StubInferencePipeline(), PrefillMode.BATCHED, 1)
+				.generate(req, TokenConsumer.discard());
+
+		assertThat(chunk32.generatedTokens()).isEqualTo(whole.generatedTokens());
+		assertThat(chunk1.generatedTokens()).isEqualTo(whole.generatedTokens());
+		assertThat(chunk32.stopReason()).isEqualTo(whole.stopReason());
 	}
 }
