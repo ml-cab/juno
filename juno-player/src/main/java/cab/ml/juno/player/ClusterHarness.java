@@ -436,6 +436,20 @@ public final class ClusterHarness implements AutoCloseable {
 		int coresPerNode = Math.max(1, Runtime.getRuntime().availableProcessors() / specs.size());
 		cmd.add("-Djava.util.concurrent.ForkJoinPool.common.parallelism=" + coresPerNode);
 
+		// JUNO_JVM_OPTS: optional, space-separated extra JVM arguments, same
+		// mechanism as scripts/run.sh and scripts/run.bat use for the
+		// coordinator JVM. Each forked node JVM here needs it applied
+		// independently too, since it is a separate process not inherited
+		// from the coordinator. Useful, for example, to override
+		// SimdThreadPool's row-parallel pool size per node:
+		// JUNO_JVM_OPTS="-Djuno.simd.pool.size=4" for cluster mode.
+		String extraJvmOpts = System.getenv("JUNO_JVM_OPTS");
+		if (extraJvmOpts != null && !extraJvmOpts.isBlank()) {
+			for (String opt : extraJvmOpts.trim().split("\\s+")) {
+				cmd.add(opt);
+			}
+		}
+
 		// Propagate byte-order to node JVMs so ActivationCodec selects the same impl.
 		String byteOrder = System.getProperty("juno.byteOrder", "BE");
 		cmd.add("-Djuno.byteOrder=" + byteOrder);

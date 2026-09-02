@@ -963,7 +963,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * quantised block once, dequantises it into a 1 KB float[] that fits in L1
 	 * cache, then accumulates dot products against all B input vectors before
 	 * advancing to the next block. Rows are processed in parallel via
-	 * ForkJoinPool.commonPool().
+	 * {@link SimdThreadPool}.
 	 *
 	 * <p>Memory bandwidth: B × weight_bytes (old) → weight_bytes + B × input_bytes
 	 * (new). For B=416, H=2048, that is a ~100× reduction in DRAM weight reads.
@@ -980,7 +980,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		// Zero the output rows before accumulating
 		for (int b = 0; b < B; b++) java.util.Arrays.fill(Y[b], 0, rows, 0f);
 
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+		SimdThreadPool.forEachRow(rows, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			// Per-row dequant scratch: reused across all blocks in this row.
 			// 256 floats = 1 KB — stays in L1 cache while multiplied against B inputs.
@@ -1037,14 +1037,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		for (int b = 0; b < B; b++) java.util.Arrays.fill(Y[b], 0, rows, 0f);
 
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+		SimdThreadPool.forEachRow(rows, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			float[] dq = new float[BLOCK_SIZE]; // 32 floats = 128 B, always in L1
 
 			for (int blk = 0; blk < blocksPerRow; blk++) {
 				int bo    = rowByteOffset + blk * BLOCK_BYTES;
 				float sc  = GgufReader.f16ToF32(readLE16(raw, bo));
-				for (int i = 0; i < BLOCK_SIZE; i++) dq[i] = sc * raw[bo + 2 + i];
+				// Dequant: SIMD widen-and-scale via VectorQuantKernels when
+				// self-verified available on this JVM, scalar-equivalent
+				// fallback otherwise (see VectorQuantKernels.dequantizeQ8_0).
+				if (!VectorQuantKernels.dequantizeQ8_0(raw, bo + 2, sc, dq)) {
+					for (int i = 0; i < BLOCK_SIZE; i++) dq[i] = sc * raw[bo + 2 + i];
+				}
 
 				// See sgemmQ4KWeightStationary above: SIMD dot-product via
 				// VectorQuantKernels, scalar-equivalent fallback otherwise.
@@ -1079,7 +1084,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		for (int b = 0; b < B; b++) java.util.Arrays.fill(Y[b], 0, rows, 0f);
 
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+		SimdThreadPool.forEachRow(rows, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			// Per-row dequant scratch: reused across all blocks in this row.
 			// 256 floats = 1 KB — stays in L1 cache while multiplied against B inputs.
