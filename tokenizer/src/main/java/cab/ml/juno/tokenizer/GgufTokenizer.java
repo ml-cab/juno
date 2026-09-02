@@ -22,6 +22,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.logging.Logger;
 
 import cab.ml.juno.node.GgufReader;
@@ -330,6 +331,25 @@ public final class GgufTokenizer implements Tokenizer {
 	}
 
 	/**
+	 * Plain angle-bracket chat-turn-boundary pieces that {@link ChatTemplate} and
+	 * {@code ChatTrainingFormats} (in {@code juno-player}) embed literally inside
+	 * formatted prompt text: TinyLlama/Zephyr/Mistral {@code </s>}, its {@code <s>}
+	 * counterpart, and Gemma's {@code <start_of_turn>}/{@code <end_of_turn>}.
+	 *
+	 * <p>These must keep the pre-vision-merge (#66) SentencePiece BPE-split
+	 * behaviour rather than the generic single-token-per-{@code <...>} rule below.
+	 * {@link cab.ml.juno.player.LoraTrainingSequences} (juno-player) computes
+	 * completion-only loss masks by separately encoding a prompt prefix and the
+	 * prefix-plus-completion text, then diffing token counts; making these pieces
+	 * atomic changes how many tokens the embedded {@code </s>} contributes and
+	 * shifts the supervised positions, so LoRA adapters trained on release-0.1.2
+	 * converge without ever learning the answer tokens (see release-0.1.2 tokenizer
+	 * regression report, TinyLlama {@code /train-qa} reproduction).
+	 */
+	private static final Set<String> CHAT_BOUNDARY_PIECES = Set.of("<s>", "</s>", "<start_of_turn>",
+			"<end_of_turn>");
+
+	/**
 	 * Control / user-defined tokens emitted as a single vocab ID (not BPE-split).
 	 *
 	 * <p>Three families are recognised:
@@ -344,12 +364,18 @@ public final class GgufTokenizer implements Tokenizer {
 	 *       rather than a BPE merge artefact or a byte token ({@code <0xHH>}).
 	 *   </li>
 	 * </ul>
+	 *
+	 * <p>{@link #CHAT_BOUNDARY_PIECES} is excluded from the vision/media family
+	 * below so chat-turn-boundary tokens keep encoding the way they did before
+	 * the vision merge.
 	 */
 	private static boolean isAtomicSpecialPiece(String piece) {
 		// <|...|> family
 		if (piece.startsWith("<|") && piece.endsWith("|>")) return true;
 		// Qwen3 thinking markers
 		if (isQwenThinkingMarker(piece)) return true;
+		// Chat-turn-boundary tokens keep their pre-vision-merge tokenization.
+		if (CHAT_BOUNDARY_PIECES.contains(piece)) return false;
 		// Vision/media placeholder tokens: <image>, <video>, <audio>, <pad>, etc.
 		// <0xHH> byte tokens are excluded by the "0x" prefix check.
 		// <|...|> is already handled above and excluded here by the "|" check.
