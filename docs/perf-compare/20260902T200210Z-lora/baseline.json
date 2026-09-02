@@ -1,0 +1,45 @@
+{
+  "tool": "compare-lora",
+  "run_id": "20260902T200210Z",
+  "git_ref": "release-0.1.2",
+  "git_commit": "51a3b90",
+  "host": "medion-Precision-T3610",
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "model_path": "/home/medion/Repo/juno/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "adapter_path": "/home/medion/Repo/juno/target/perf-compare-lora/20260902T200210Z/adapter-release-0.1.2.lora",
+  "model_type": "tinyllama",
+  "backend": "gpu",
+  "train_device": "auto",
+  "heap": "4g",
+  "scenario": {
+    "question": "What is your name?",
+    "answer": "My name is Juno",
+    "loss_target": 1.200000,
+    "max_iters": 50
+  },
+  "config": {
+    "rank": 8,
+    "alpha": 8.000000,
+    "lr": 0.000100,
+    "microbatch": 8,
+    "targets": "qv"
+  },
+  "train": {
+    "passes": 15,
+    "final_loss": 1.179659,
+    "target_reached": true,
+    "stop_reason": "TARGET_REACHED",
+    "optimizer_updates": 90,
+    "total_ms": 56722,
+    "ms_per_pass": 3781.466667
+  },
+  "playback": {
+    "reply": "My name is Juno",
+    "recall_ok": true,
+    "tokens": 7,
+    "latency_ms": 661,
+    "wall_ms": 7969,
+    "tps": 10.590015
+  },
+  "status": "success"
+}

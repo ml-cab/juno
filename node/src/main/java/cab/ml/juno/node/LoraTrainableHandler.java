@@ -266,6 +266,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		int H = cfg.hiddenDim();
 		int KV = cfg.kvDim();
 		int I = cfg.intermediateSize();
+		int V = cfg.vocabSize();
 		ResidentWeightMatrix[] wqD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] wkD = new ResidentWeightMatrix[L];
 		ResidentWeightMatrix[] wvD = new ResidentWeightMatrix[L];
@@ -305,11 +306,19 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 				wUpD[li] = LoraResidentWeights.uploadQuant(gpu, wUp[li], I, H);
 				wDownD[li] = LoraResidentWeights.uploadQuant(gpu, wDown[li], H, I);
 			}
-			// vocab×hidden LM head stays quantized on CPU: full-layer GPU residency plus
-			// a device output matrix exhausts scratch on common 8 GB cards and yields NaN
-			// backward (LoraTrainableHandlerGpuBackwardTest).
-			if (outputProj != null)
-				log.info("LoRA handler: output projection kept on CPU (quantized)");
+			// LM head: upload only with FP32 microbatch residency; skip on FP16 fallback
+			// (vocab×hidden plus all layers exhausts scratch on 8 GB and yields NaN grads).
+			if (outputProj != null && !half) {
+				try {
+					outHolder[0] = LoraResidentWeights.uploadQuant(gpu, outputProj, V, H);
+				} catch (IllegalStateException ex) {
+					if (!LoraResidentWeights.isVramOom(ex))
+						throw ex;
+					log.warning("LoRA handler: OOM uploading output projection — using CPU quantized LM head");
+				}
+			} else if (outputProj != null) {
+				log.info("LoRA handler: output projection kept on CPU (quantized, FP16 residency)");
+			}
 			if (microbatch)
 				opsHolder[0] = GpuBlasOps.of(gpu);
 			this.wqDev = wqD;
@@ -346,17 +355,17 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	}
 
 	/**
-	 * Frozen transpose {@code W^T * g}: uses resident GPU matrices when uploaded,
-	 * otherwise the quantized CPU path.
+	 * Frozen transpose {@code W^T * g}: GPU {@code sgemvTranspose} for FP32-resident
+	 * projections; quantized CPU dequant for the LM head ({@code dev == null}) and for
+	 * FP16 residency (microbatch=1 VRAM fallback), where device transpose can yield NaN
+	 * grads on 8 GB cards.
 	 */
 	private float[] transposedMatVecLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] g,
 			int rows, int cols) {
-		// Frozen backward uses CPU dequant transpose: device transpose plus many
-		// resident layers can yield NaN grads on 8 GB GPUs (see gpu backward parity).
 		if (!timingActive)
-			return LoraTrainableHandler.transposedMatVec(quant, g, rows, cols);
+			return frozenTranspose(quant, dev, g, rows, cols);
 		long t0 = System.nanoTime();
-		float[] y = LoraTrainableHandler.transposedMatVec(quant, g, rows, cols);
+		float[] y = frozenTranspose(quant, dev, g, rows, cols);
 		accFrozenTransposeNs += System.nanoTime() - t0;
 		return y;
 	}
@@ -364,15 +373,24 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private float[][] transposedMatVecBatchLayer(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev,
 			float[][] G, int batch, int rows, int cols) {
 		if (!timingActive)
-			return transposedMatVecBatchCpu(quant, G, batch, rows, cols);
+			return frozenTransposeBatch(quant, dev, G, batch, rows, cols);
 		long t0 = System.nanoTime();
-		float[][] y = transposedMatVecBatchCpu(quant, G, batch, rows, cols);
+		float[][] y = frozenTransposeBatch(quant, dev, G, batch, rows, cols);
 		accFrozenTransposeNs += System.nanoTime() - t0;
 		return y;
 	}
 
-	private static float[][] transposedMatVecBatchCpu(GgufReader.QuantizedTensor quant, float[][] G, int batch,
-			int rows, int cols) {
+	private float[] frozenTranspose(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] g, int rows,
+			int cols) {
+		if (dev != null && dev.supportsBatchedSgemm())
+			return LoraResidentWeights.transposedMatVec(quant, dev, g, rows, cols);
+		return LoraTrainableHandler.transposedMatVec(quant, g, rows, cols);
+	}
+
+	private float[][] frozenTransposeBatch(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[][] G,
+			int batch, int rows, int cols) {
+		if (dev != null && dev.supportsBatchedSgemm())
+			return LoraResidentWeights.transposedMatVecBatch(quant, dev, blasOps, G, batch, rows, cols);
 		float[][] dX = new float[batch][];
 		for (int b = 0; b < batch; b++)
 			dX[b] = LoraTrainableHandler.transposedMatVec(quant, G[b], rows, cols);

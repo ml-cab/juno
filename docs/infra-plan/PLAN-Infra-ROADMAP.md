@@ -33,11 +33,12 @@ Phases P0 → P1 → P2 → … advance **one tier at a time** on the critical p
 Before marking a tier complete and beginning the next dependent tier:
 
 1. Run [`scripts/performance-tests/compare-llama-cpp.sh`](../../scripts/performance-tests/compare-llama-cpp.sh) (CPU and/or GPU as relevant; default `--vector 0`, JFR on).
-2. Publish artifacts under [`docs/perf-compare/`](../perf-compare/README.md) `<timestamp>/`.
-3. Update [`docs/perf-compare/README.md`](../perf-compare/README.md) with the new run row and summary tables.
-4. Record tier-specific metrics or regression notes in `docs/performance.md` and reference the compare run in CHANGELOG / ROADMAP tier status.
+2. Run [`scripts/performance-tests/compare-lora.sh`](../../scripts/performance-tests/compare-lora.sh) on the same backend when the tier touches forward pass, MatVec, GPU residency, batching, or KV (Infra tiers 1, 5, 8, 13–16). Compare against the last published LoRA baseline or `release-0.1.2` (`--baseline release-0.1.2`). Exit gate: recall ok; train total ms and ms/pass ≤ **1.25×** baseline; playback tps ≥ **0.80×** baseline.
+3. Publish artifacts under [`docs/perf-compare/`](../perf-compare/README.md) `<timestamp>/` (inference) and `<timestamp>-lora/` (LoRA).
+4. Update [`docs/perf-compare/README.md`](../perf-compare/README.md) with the new run row and summary tables.
+5. Record tier-specific metrics or regression notes in `docs/performance.md` and reference the compare run in CHANGELOG / ROADMAP tier status.
 
-API-only tiers (2–4, 7, 11) still run compare as a **regression gate** even when throughput is unchanged.
+API-only tiers (2–4, 7, 11) still run inference compare as a **regression gate** even when throughput is unchanged; LoRA compare is optional for those tiers.
 
 ### 3. No llama.cpp or vLLM in Juno docs
 

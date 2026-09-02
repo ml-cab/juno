@@ -53,7 +53,7 @@ class LoraTrainableHandlerGpuBackwardTest {
 		assumeTrue(CudaAvailability.isAvailable(), "Skipping — no CUDA device");
 		assumeTrue(tinyLlamaPresent(), "Skipping — TinyLlama fixture absent");
 		prevMicrobatch = System.getProperty("juno.lora.microbatch");
-		System.setProperty("juno.lora.microbatch", "1");
+		System.setProperty("juno.lora.microbatch", "8");
 		ctx = GpuContext.init(0);
 		cuda = new CudaMatVec(ctx);
 		modelPath = modelFile();
@@ -74,6 +74,22 @@ class LoraTrainableHandlerGpuBackwardTest {
 	@DisplayName("CPU vs GPU: loss and A/B grads agree (qv, seq 64)")
 	void cpu_gpu_grad_parity_qv() throws Exception {
 		parityRun(LoraProjection.qv(), SEQ);
+	}
+
+	@Test
+	@EnabledIf("tinyLlamaPresent")
+	@DisplayName("CPU vs GPU: qv grads agree under FP16 residency (microbatch=1)")
+	void cpu_gpu_grad_parity_qv_fp16_residency() throws Exception {
+		String prev = System.getProperty("juno.lora.microbatch");
+		System.setProperty("juno.lora.microbatch", "1");
+		try {
+			parityRun(LoraProjection.qv(), SEQ);
+		} finally {
+			if (prev == null)
+				System.clearProperty("juno.lora.microbatch");
+			else
+				System.setProperty("juno.lora.microbatch", prev);
+		}
 	}
 
 	static boolean speedGateEligible() {

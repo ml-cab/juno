@@ -1,0 +1,138 @@
+вер. 02, 2026 3:04:23 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=201 metadata=23
+вер. 02, 2026 3:04:23 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 1709440
+вер. 02, 2026 3:04:23 ПП cab.ml.juno.tokenizer.GgufTokenizer load
+INFO: Loading tokenizer from GGUF metadata...
+вер. 02, 2026 3:04:23 ПП cab.ml.juno.tokenizer.GgufTokenizer load
+INFO: Tokenizer loaded: vocabSize=32000 bos=1 eos=2 addBos=true model=llama [SentencePiece]
+WARNING: A restricted method in java.lang.foreign.SymbolLookup has been called
+WARNING: java.lang.foreign.SymbolLookup::libraryLookup has been called by cab.ml.juno.node.CudaBindings in an unnamed module (file:/home/medion/Repo/juno/juno-player/target/juno-player-0.1.2-shaded.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+вер. 02, 2026 3:04:23 ПП cab.ml.juno.node.CudaBindings <init>
+INFO: CudaBindings ready — Panama FFI (cudart + cublas)
+вер. 02, 2026 3:04:23 ПП cab.ml.juno.node.CudaAvailability detect
+INFO: CUDA available — 1 device(s)
+вер. 02, 2026 3:04:24 ПП cab.ml.juno.node.GpuContext create
+INFO: GpuContext ready — [cuda] device 0: NVIDIA GeForce GTX 1080, 8,5 GB VRAM (shared=true)
+вер. 02, 2026 3:04:24 ПП cab.ml.juno.node.GpuContext shared
+INFO: GpuContext.shared(0) — process-wide GPU context installed
+вер. 02, 2026 3:04:24 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=201 metadata=23
+вер. 02, 2026 3:04:24 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 1709440
+вер. 02, 2026 3:04:24 ПП cab.ml.juno.node.LoraTrainingHandlerFactory create
+INFO: LoRA factory: arch=llama backend=CudaMatVec file=/home/medion/Repo/juno/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+вер. 02, 2026 3:04:24 ПП cab.ml.juno.node.LoraTrainableHandler load
+INFO: Loading LoRA handler: layers 0–22  adapters=44  backend=CudaMatVec  file=/home/medion/Repo/juno/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+вер. 02, 2026 3:04:24 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=201 metadata=23
+вер. 02, 2026 3:04:24 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 1709440
+вер. 02, 2026 3:04:25 ПП cab.ml.juno.node.LoraTrainableHandler lambda$uploadResidentWeights$1
+INFO: LoRA handler: uploading projection weights to GPU (FP32, microbatch=8)…
+вер. 02, 2026 3:04:30 ПП cab.ml.juno.node.LoraTrainableHandler lambda$uploadResidentWeights$1
+INFO: LoRA handler: output projection kept on CPU (quantized)
+вер. 02, 2026 3:04:30 ПП cab.ml.juno.node.LoraTrainableHandler lambda$uploadResidentWeights$1
+INFO: LoRA handler: GPU weight upload complete (FP32).
+вер. 02, 2026 3:04:30 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=201 metadata=23
+вер. 02, 2026 3:04:30 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 1709440
+вер. 02, 2026 3:09:49 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=201 metadata=23
+вер. 02, 2026 3:09:49 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 1709440
+вер. 02, 2026 3:09:49 ПП cab.ml.juno.tokenizer.GgufTokenizer load
+INFO: Loading tokenizer from GGUF metadata...
+вер. 02, 2026 3:09:49 ПП cab.ml.juno.tokenizer.GgufTokenizer load
+INFO: Tokenizer loaded: vocabSize=32000 bos=1 eos=2 addBos=true model=llama [SentencePiece]
+вер. 02, 2026 3:09:50 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=201 metadata=23
+вер. 02, 2026 3:09:50 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 1709440
+вер. 02, 2026 3:09:50 ПП cab.ml.juno.node.ForwardPassHandlerLoader load
+INFO: Detected architecture: llama  backend=CudaMatVec  file=/home/medion/Repo/juno/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf  lora=44 adapters
+вер. 02, 2026 3:09:50 ПП cab.ml.juno.node.ForwardPassHandlerLoader load
+INFO: LoRA adapters present — routing via LoraTrainingHandlerFactory
+вер. 02, 2026 3:09:50 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=201 metadata=23
+вер. 02, 2026 3:09:50 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 1709440
+вер. 02, 2026 3:09:50 ПП cab.ml.juno.node.LoraTrainingHandlerFactory create
+INFO: LoRA factory: arch=llama backend=CudaMatVec file=/home/medion/Repo/juno/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+вер. 02, 2026 3:09:50 ПП cab.ml.juno.node.LoraTrainableHandler load
+INFO: Loading LoRA handler: layers 0–22  adapters=44  backend=CudaMatVec  file=/home/medion/Repo/juno/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+вер. 02, 2026 3:09:50 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=201 metadata=23
+вер. 02, 2026 3:09:50 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 1709440
+вер. 02, 2026 3:09:51 ПП cab.ml.juno.node.LoraTrainableHandler lambda$uploadResidentWeights$1
+INFO: LoRA handler: uploading projection weights to GPU (FP32, microbatch=8)…
+вер. 02, 2026 3:09:56 ПП cab.ml.juno.node.LoraTrainableHandler lambda$uploadResidentWeights$1
+INFO: LoRA handler: output projection kept on CPU (quantized)
+вер. 02, 2026 3:09:56 ПП cab.ml.juno.node.LoraTrainableHandler lambda$uploadResidentWeights$1
+INFO: LoRA handler: GPU weight upload complete (FP32).
+вер. 02, 2026 3:09:56 ПП cab.ml.juno.registry.ModelRegistry putLoaded
+INFO: Model 'tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf' registered as LOADED (remote shards pre-wired)
+вер. 02, 2026 3:09:56 ПП cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: 22 steps for prompt of 23 tokens (kvKey=9e35a15b-fbd1-4b53-91eb-ff06c0f4a640  mode=BATCHED)
+вер. 02, 2026 3:09:56 ПП cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill: chunker RETURNED kvKey=9e35a15b-fbd1-4b53-91eb-ff06c0f4a640 mode=BATCHED chunkSize=32 elapsedMs=298.624778
+вер. 02, 2026 3:09:56 ПП cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Prefill complete. Decode starts at position 22 kvKey=9e35a15b-fbd1-4b53-91eb-ff06c0f4a640
+вер. 02, 2026 3:09:56 ПП cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Decode: starting loop kvKey=9e35a15b-fbd1-4b53-91eb-ff06c0f4a640 maxTokens=64 startPos=22
+вер. 02, 2026 3:09:57 ПП cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Decode: step 7 EOS_MARKER kvKey=9e35a15b-fbd1-4b53-91eb-ff06c0f4a640 forwardMs=66.29009
+вер. 02, 2026 3:09:57 ПП cab.ml.juno.coordinator.GenerationLoop generate
+INFO: Decode: loop EXITED kvKey=9e35a15b-fbd1-4b53-91eb-ff06c0f4a640 tokensGenerated=7 stopReason=EOS_TOKEN
+вер. 02, 2026 3:09:57 ПП cab.ml.juno.coordinator.GenerationLoop generate
+INFO: generate() RETURNING kvKey=9e35a15b-fbd1-4b53-91eb-ff06c0f4a640 stopReason=EOS_TOKEN tokensGenerated=7 totalDurationMs=952 textLength=15
+{
+  "tool": "compare-lora",
+  "run_id": "20260902T200210Z",
+  "git_ref": "HEAD",
+  "git_commit": "5fee573",
+  "host": "medion-Precision-T3610",
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "model_path": "/home/medion/Repo/juno/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "adapter_path": "/home/medion/Repo/juno/target/perf-compare-lora/20260902T200210Z/adapter-HEAD.lora",
+  "model_type": "tinyllama",
+  "backend": "gpu",
+  "train_device": "auto",
+  "heap": "4g",
+  "scenario": {
+    "question": "What is your name?",
+    "answer": "My name is Juno",
+    "loss_target": 1.200000,
+    "max_iters": 50
+  },
+  "config": {
+    "rank": 8,
+    "alpha": 8.000000,
+    "lr": 0.000100,
+    "microbatch": 8,
+    "targets": "qv"
+  },
+  "train": {
+    "passes": 15,
+    "final_loss": 1.179688,
+    "target_reached": true,
+    "stop_reason": "TARGET_REACHED",
+    "optimizer_updates": 90,
+    "total_ms": 326470,
+    "ms_per_pass": 21764.666667
+  },
+  "playback": {
+    "reply": "My name is Juno",
+    "recall_ok": true,
+    "tokens": 7,
+    "latency_ms": 952,
+    "wall_ms": 7826,
+    "tps": 7.352941
+  },
+  "status": "success"
+}
