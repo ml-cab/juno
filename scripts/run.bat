@@ -46,6 +46,14 @@ rem quantized-matmul kernels (VectorQuantKernels). Falls back to scalar
 rem automatically if absent, so this is a performance flag, not a correctness
 rem requirement.
 set "JVM_BASE=--enable-preview --enable-native-access=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED --add-modules jdk.incubator.vector -XX:+UseG1GC -XX:+AlwaysPreTouch -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"
+rem JUNO_JVM_OPTS: optional, space-separated extra JVM arguments appended to
+rem every java invocation below. Exists for one-off experiments that
+rem shouldn't need a dedicated CLI flag or a script edit, e.g.:
+rem   set JUNO_JVM_OPTS=-Djuno.simd.pool.size=8
+rem   juno.bat local --model-path ...
+rem to override SimdThreadPool's row-parallel pool size (see node's
+rem SimdThreadPool.java for what that controls).
+if defined JUNO_JVM_OPTS set "JVM_BASE=%JVM_BASE% %JUNO_JVM_OPTS%"
 echo [DBG] JVM_BASE set
 echo [DBG] arg1=%~1
 if "%~1"=="" goto :usage

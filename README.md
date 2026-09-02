@@ -26,6 +26,8 @@ Features:
 - [Supported Models](https://ml.cab/juno-documentation/supported-models/) and quantizations
 - [Performance reports](https://ml.cab/juno_test_matrix.html)
 
+## 1.1 What's new?
+
 ### Vision (image-to-text)
 
 - `POST /v1/vision/chat` (blocking + SSE), registered automatically on

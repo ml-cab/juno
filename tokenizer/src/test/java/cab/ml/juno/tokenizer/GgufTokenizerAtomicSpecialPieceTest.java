@@ -140,16 +140,27 @@ class GgufTokenizerAtomicSpecialPieceTest {
         // where N should equal patchesAvailable (729 for moondream2).
     }
 
-    // ── isAtomicSpecialPiece: edge cases for the new pattern ─────────────────
+    // ── isAtomicSpecialPiece: chat-turn-boundary pieces stay pre-vision-merge ─
 
     @Test
-    @DisplayName("isAtomicSpecialPiece: <s> and </s> match the new pattern")
-    void isAtomicSpecialPiece_bosEos_match() {
-        // <s> and </s> are BOS/EOS in SentencePiece models (type 3).
-        // The new pattern includes them. The caller's type check ensures
-        // normal-type (type-1) "<s>" BPE artefacts in non-SentencePiece
-        // models are still excluded.
-        assertThat(atomicSpecialPiece("<s>")).isTrue();
-        assertThat(atomicSpecialPiece("</s>")).isTrue();
+    @DisplayName("isAtomicSpecialPiece: <s> and </s> are excluded from the generic pattern")
+    void isAtomicSpecialPiece_bosEos_excluded() {
+        // <s> and </s> are BOS/EOS in SentencePiece models, and ChatTemplate /
+        // ChatTrainingFormats embed </s> literally inside formatted prompt text
+        // (TinyLlama, Zephyr, Mistral). Making them atomic here changes how many
+        // tokens that literal </s> contributes, which shifts the completion-only
+        // loss mask computed by LoraTrainingSequences and breaks LoRA training.
+        // Regression covered in the release-0.1.2 tokenizer report: keep the
+        // pre-vision-merge (SentencePiece BPE-split) behaviour for these pieces.
+        assertThat(atomicSpecialPiece("<s>")).isFalse();
+        assertThat(atomicSpecialPiece("</s>")).isFalse();
+    }
+
+    @Test
+    @DisplayName("isAtomicSpecialPiece: Gemma <start_of_turn> and <end_of_turn> are excluded")
+    void isAtomicSpecialPiece_gemmaTurnBoundaries_excluded() {
+        // ChatTemplate.gemma() and ChatTrainingFormats embed these literally too.
+        assertThat(atomicSpecialPiece("<start_of_turn>")).isFalse();
+        assertThat(atomicSpecialPiece("<end_of_turn>")).isFalse();
     }
 }
