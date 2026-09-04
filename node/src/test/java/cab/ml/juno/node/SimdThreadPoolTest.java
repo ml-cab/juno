@@ -64,10 +64,11 @@ class SimdThreadPoolTest {
 	}
 
 	@Test
-	@DisplayName("diagnosticSummary reports the pool's actual parallelism and does not throw")
+	@DisplayName("diagnosticSummary reports common-pool dispatch and diagnostic pool parallelism")
 	void diagnosticSummary_reportsActualParallelism() {
 		String summary = SimdThreadPool.diagnosticSummary();
 
+		assertThat(summary).contains("commonPool()");
 		assertThat(summary).contains("parallelism=" + SimdThreadPool.POOL.getParallelism());
 		assertThat(summary).contains("juno.simd.pool.size");
 	}

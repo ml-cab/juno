@@ -19,69 +19,36 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * SIMD entry point for the weight-stationary CPU quantized matmul kernels
- * ({@link LlamaTransformerHandler#sgemmQ4KWeightStationary},
+ * SIMD helpers for CPU quantized matmul used by the weight-stationary
+ * kernels ({@link LlamaTransformerHandler#sgemmQ4KWeightStationary},
  * {@link LlamaTransformerHandler#sgemmQ5KWeightStationary},
  * {@link LlamaTransformerHandler#sgemmQ8_0WeightStationary}).
  *
  * <p>
- * Scope: this class vectorizes only the dot-product accumulation phase:
- * {@code sum(dq[i] * xp[xBase+i])} over a dequantized block. This is the
- * naturally SIMD-friendly half of each kernel (contiguous multiply-add, no
- * bit manipulation). It is also the dominant cost: for a batch of B input
- * rows, the accumulation phase does {@code BLOCK_SIZE * B} multiply-adds per
- * block, versus {@code BLOCK_SIZE} for dequantization, done once per block
- * regardless of B. For the batch sizes this project actually runs
- * (B in the hundreds during prefill), accumulation dominates by orders of
- * magnitude.
+ * <b>Production policy</b> (see {@link #policySummary()}): weight-stationary
+ * Q4_K / Q5_K / Q8_0 <em>accumulate</em> loops stay inline scalar so the JIT
+ * can auto-vectorize them. Calling {@link #dot} once per (block, batch-row)
+ * at vision-scale batch widths (B≈741) was measured tens to hundreds of times
+ * slower than sequential {@code matVec} on hosts where
+ * {@code SPECIES_PREFERRED} is only 128-bit, hanging moondream prefill.
+ * Q4_K / Q5_K dequant stays scalar (irregular nibble / high-bit unpack).
+ * The Vector hot path in production is {@link #dequantizeQ8_0} only, gated by
+ * its own self-probe. {@link #dot} remains for unit tests and any future
+ * gated use that does not reintroduce the vision hang.
  *
  * <p>
- * Deliberately out of scope: vectorizing the dequantization phase itself
- * (nibble/bit unpacking for Q4_K/Q5_K, or the int8-to-float widen for
- * Q8_0). The Vector API's byte/int/float shape-conversion lanes need care
- * that is easy to get subtly wrong in code that cannot be exercised against
- * real hardware before review, and silent numeric corruption in a
- * quantized-weight kernel is exactly the failure mode this codebase's own
- * standing rule (unit tests first, for bit-manipulation-heavy code) exists
- * to guard against. Left as a follow-up once this phase is validated on
- * real hardware. See {@code juno-documentation}'s performance notes.
+ * {@link #dequantizeQ8_0} vectorizes the Q8_0 int8-to-float widen-and-scale
+ * step (flat scale + 32 signed bytes). It is gated by
+ * {@code Simd.probeDequantQ8_0()}, which checks a known 32-byte pattern
+ * covering the full signed-byte range against the scalar reference. Callers
+ * fall back to a scalar dequant loop when the probe fails.
  *
  * <p>
- * Dequantization is now partially in scope, as a follow-up to the
- * accumulate-only version of this class: {@link #dequantizeQ8_0} vectorizes
- * the Q8_0 int8-to-float widen-and-scale step, the simplest of the three
- * quant formats (a flat scale plus 32 raw signed bytes, no nibble or
- * high-bit-plane unpacking). Q4_K/Q5_K dequantization remains scalar; their
- * irregular bit-shift/mask patterns are a different, harder problem and are
- * left for a later pass once this one is validated on real hardware.
- *
- * <p>
- * Because the byte-to-int-to-float shape conversion this uses is a less
- * common corner of the Vector API than the plain same-shape arithmetic in
- * {@link #dot}, and because this code cannot be exercised on real hardware
- * before review, {@link #dequantizeQ8_0} is gated by its own dedicated probe
- * ({@code Simd.probeDequantQ8_0()}) that dequantizes a known 32-byte pattern
- * covering the full signed-byte range and checks every output lane against
- * the scalar-computed expected value. The SIMD dequant path is only enabled
- * if that self-check passes, so every call transparently reports "not
- * available" otherwise and the caller falls back to its existing scalar
- * dequant loop. This is a stronger runtime guarantee than {@link #AVAILABLE}
- * alone, because that flag only proves the module loaded, not that this
- * specific conversion is correct on this JVM/hardware combination, and it
- * exists specifically because this path could not be unit-tested against
- * real hardware ahead of time.
- *
- * <p>
- * Runtime availability: {@code jdk.incubator.vector} is still an incubating
- * JDK module as of JDK 25/26 (JEP 508 / JEP 529), because it requires
- * {@code --add-modules jdk.incubator.vector} at both compile and run time,
- * and is not guaranteed present on every deployment target (e.g. a JVM
- * launched without that flag, or a future JDK that removes the module before
- * finalizing it). All references to {@code jdk.incubator.vector} types live
- * in the nested {@link Simd} class so the class-loading failure that would
- * result from a missing module is confined to the first attempt to load
- * {@link Simd}: caught once, here, at class-init time, rather than
- * failing verification of this outer class or any of its callers.
+ * Runtime availability: {@code jdk.incubator.vector} is still incubating as
+ * of JDK 25/26 (JEP 508 / JEP 529) and needs
+ * {@code --add-modules jdk.incubator.vector} at compile and run time. All
+ * Vector API types live in the nested {@link Simd} class so a missing module
+ * fails only on first load of {@link Simd}, not of this outer class.
  */
 public final class VectorQuantKernels {
 
@@ -139,16 +106,15 @@ public final class VectorQuantKernels {
 	 * {@code sum(dq[dqOffset..dqOffset+len) * xp[xOffset..xOffset+len))}.
 	 *
 	 * <p>
-	 * Used by every {@code sgemm*WeightStationary} kernel's inner loop, once
-	 * per (block, batch-row) pair, with {@code dq} the block just
-	 * dequantized (256 elements for Q4_K/Q5_K, 32 for Q8_0) and {@code xp}
-	 * one row of the batched input matrix.
+	 * Not used by production {@code sgemm*WeightStationary} accumulate loops
+	 * (those stay scalar — see {@link #policySummary()}). Kept for unit tests
+	 * and any future gated caller that can prove it is safe at the target
+	 * batch width and SPECIES size.
 	 *
 	 * <p>
 	 * Reduction order differs from the plain scalar loop once vectorized
 	 * (SIMD-lane-width partial sums, combined at the end), so results are not
-	 * bit-exact against the scalar reference. This is the same as every
-	 * other batching change in this kernel family. Compare with
+	 * bit-exact against the scalar reference. Compare with
 	 * relative+absolute tolerance, not exact equality.
 	 */
 	static float dot(float[] dq, int dqOffset, float[] xp, int xOffset, int len) {
@@ -227,6 +193,22 @@ public final class VectorQuantKernels {
 			return "SIMD available=true but reading the diagnostic failed: "
 					+ t.getClass().getSimpleName() + ". Kernels still run correctly via the scalar fallback.";
 		}
+	}
+
+	/**
+	 * Stable one-line description of which quantized-matmul phases use the
+	 * Vector API vs scalar in production. Logged at startup alongside
+	 * {@link #diagnosticSummary()}; also the source of truth for performance
+	 * notes and the vision-safe Q4_K / Q5_K accumulate policy.
+	 */
+	public static String policySummary() {
+		String q8 = Q8_0_DEQUANT_AVAILABLE
+				? "Q8_0 dequant=Vector (self-probe ok)"
+				: "Q8_0 dequant=scalar (Vector unavailable or probe failed)";
+		return "SIMD policy: Q4_K/Q5_K weight-stationary accumulate=scalar; "
+				+ "Q4_K/Q5_K dequant=scalar; " + q8
+				+ "; VectorQuantKernels.dot not used in weight-stationary hot path "
+				+ "(vision-scale B hang on narrow SPECIES)";
 	}
 
 	/**

@@ -17,6 +17,8 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260901T234024Z-prefill`](20260901T234024Z-prefill/) | CPU prefill microbatch (`--prefill-batch` 1 vs 32) | JFR pp | [INDEX](20260901T234024Z-prefill/INDEX.md) |
 | [`20260902T200210Z-lora`](20260902T200210Z-lora/) | GPU LoRA train-qa + playback (`compare-lora.sh`) | train ms / playback tps | [INDEX](20260902T200210Z-lora/INDEX.md) |
 | [`20260904T141315Z-vision`](20260904T141315Z-vision/) | GPU vision chat (`compare-vision.sh`, `47-vision`) | latency / decode tps | [INDEX](20260904T141315Z-vision/INDEX.md) |
+| [`20260904T194612Z`](20260904T194612Z/) | CPU Vector SIMD (`--vector 0`) | JFR pp/tg | [INDEX](20260904T194612Z/INDEX.md) |
+| [`20260904T195731Z`](20260904T195731Z/) | CPU Vector SIMD (`--vector 1`) | JFR pp/tg | [INDEX](20260904T195731Z/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 
@@ -62,6 +64,20 @@ Test image: `scripts/performance-tests/fixtures/vision-bench.jpg`. Override with
 | Latency | ~503 s |
 | Decode tps (JFR) | ~1.41 |
 | Reply | non-empty (color squares) |
+
+## Vector SIMD CPU bake-off — `--vector 0` vs `--vector 1`
+
+Paired CPU runs on the default model set (`n_prompt=128`, `n_gen=64`, `reps=1`, JFR). Policy: Q4_K/Q5_K weight-stationary accumulate stays scalar; `--vector` only toggles `--add-modules jdk.incubator.vector` (Q8_0 dequant when probe passes). See [`../performance.md`](../performance.md) and [`../infra-plan/PLAN-Infra-Vector-SIMD.md`](../infra-plan/PLAN-Infra-Vector-SIMD.md).
+
+| Model | Juno tg `--vector 0` | Juno tg `--vector 1` | v1/v0 |
+|-------|---------------------:|---------------------:|------:|
+| tinyllama-1.1b Q4_K_M | 2.89 | 2.98 | 1.03 |
+| qwen2.5-3b Q4_K_M | 0.957 | 0.965 | 1.01 |
+| Phi-3.5-mini Q4_K_M | 0.818 | 0.812 | 0.99 |
+| mistral-7b Q4_K_M | 0.453 | 0.463 | 1.02 |
+
+**Verdict:** near-parity (±3%) as expected under the scalar accumulate policy. Artifacts: [`20260904T194612Z`](20260904T194612Z/) / [`20260904T195731Z`](20260904T195731Z/).
+
 ## CPU summary (JFR) — `20260831T230258Z`
 
 | Model | llama.cpp pp | llama.cpp tg | Juno pp | Juno tg | Juno/llama tg |

@@ -71,3 +71,4 @@ Before marking an Infra tier complete:
 | [`PROMPT-MultiDecode-Parity.md`](PROMPT-MultiDecode-Parity.md) | Multi-request `forwardMultiDecode` on Phi-2/3, Qwen3, Qwen3 MoE (Tier 1 follow-up — **landed** on `67-inference`; keep as reference) |
 | [`PROMPT-Vision-Perf.md`](PROMPT-Vision-Perf.md) | `compare-vision.sh` harness |
 | [`PROMPT-Vision-Regression-Fix.md`](PROMPT-Vision-Regression-Fix.md) | Moondream hang / Q5_K×SIMD regression |
+| [`PLAN-Infra-Vector-SIMD.md`](PLAN-Infra-Vector-SIMD.md) | P0 step 4 Vector SIMD track (policy + bake-off) |

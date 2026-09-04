@@ -341,20 +341,17 @@ public final class ConsoleMain {
 
 		banner();
 
-		// SIMD diagnostic: confirms whether the CPU quantized-matmul kernels
-		// (VectorQuantKernels, used by LlamaTransformerHandler's
-		// sgemm*WeightStationary) got a real vector width or fell back to
-		// scalar. Cheap (runs once, at startup), and the actual vector width
-		// materially changes how much speedup those kernels can deliver, so
-		// this is worth a log line on every run rather than only on request.
+		// SIMD diagnostic + policy: vector width, and which quant phases use
+		// Vector vs scalar (weight-stationary accumulate stays scalar).
 		System.out.println(
 				String.format("  %s%s%s%n", Color.GREEN, cab.ml.juno.node.VectorQuantKernels.diagnosticSummary(),
 						Color.RESET));
+		System.out.println(
+				String.format("  %s%s%s%n", Color.GREEN, cab.ml.juno.node.VectorQuantKernels.policySummary(),
+						Color.RESET));
 
-		// Row-parallel pool size for the same SIMD kernels (see
-		// SimdThreadPool, tunable via -Djuno.simd.pool.size=N). Printed
-		// alongside the SIMD diagnostic above since both are read together
-		// when tuning prefill throughput.
+		// Row-parallel dispatch for weight-stationary kernels (common-pool
+		// IntStream.parallel; diagnostic POOL sized via -Djuno.simd.pool.size).
 		System.out.println(
 				String.format("  %s%s%s%n", Color.GREEN, cab.ml.juno.node.SimdThreadPool.diagnosticSummary(),
 						Color.RESET));

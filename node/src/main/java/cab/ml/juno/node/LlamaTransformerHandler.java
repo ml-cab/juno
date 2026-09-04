@@ -1295,12 +1295,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				}
 
 				// Multiply dq[] against all B input vectors while it is in L1.
-				// Inline scalar accumulation (not VectorQuantKernels.dot): on
-				// hosts where SPECIES_PREFERRED is only 128-bit, the Vector API
-				// call-per-(block,batch-row) path was measured tens to hundreds
-				// of times slower than matVec for vision-scale B, hanging
-				// moondream prefill. Keep the tight scalar loop the JIT can
-				// auto-vectorize.
+				// Inline scalar accumulate — see VectorQuantKernels.policySummary()
+				// (VectorQuantKernels.dot is not used on this hot path).
 				int xBase = blk * BLOCK_SIZE;
 				for (int p = 0; p < B; p++) {
 					float acc = 0f;
@@ -1343,7 +1339,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					for (int i = 0; i < BLOCK_SIZE; i++) dq[i] = sc * raw[bo + 2 + i];
 				}
 
-				// Inline scalar accumulate — see sgemmQ4KWeightStationary.
+				// Inline scalar accumulate — see VectorQuantKernels.policySummary().
 				int xBase = blk * BLOCK_SIZE;
 				for (int p = 0; p < B; p++) {
 					float acc = 0f;
@@ -1419,7 +1415,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					qi += 32;
 				}
 
-				// Inline scalar accumulate — see sgemmQ4KWeightStationary.
+				// Inline scalar accumulate — see VectorQuantKernels.policySummary().
 				int xBase = blk * BLOCK_SIZE;
 				for (int p = 0; p < B; p++) {
 					float acc = 0f;

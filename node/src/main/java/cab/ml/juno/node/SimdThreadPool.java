@@ -109,12 +109,14 @@ public final class SimdThreadPool {
 	}
 
 	/**
-	 * One-line summary of the current pool configuration, for a single
-	 * startup log line alongside {@link VectorQuantKernels#diagnosticSummary}.
+	 * One-line summary of row-parallel dispatch, for a single startup log line
+	 * alongside {@link VectorQuantKernels#diagnosticSummary} /
+	 * {@link VectorQuantKernels#policySummary}.
 	 */
 	public static String diagnosticSummary() {
-		return "SIMD row-parallel pool: parallelism=" + POOL.getParallelism() + " (set -D" + POOL_SIZE_PROPERTY
-				+ "=N to override; default is Runtime.getRuntime().availableProcessors()="
-				+ Runtime.getRuntime().availableProcessors() + ")";
+		return "SIMD row-parallel: forEachRow uses ForkJoinPool.commonPool() IntStream.parallel(); "
+				+ "diagnostic POOL parallelism=" + POOL.getParallelism() + " (set -D" + POOL_SIZE_PROPERTY
+				+ "=N to size diagnostic pool; hot path ignores it; "
+				+ "availableProcessors()=" + Runtime.getRuntime().availableProcessors() + ")";
 	}
 }

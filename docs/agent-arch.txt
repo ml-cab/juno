@@ -12,35 +12,25 @@ Module dependency (excerpt):
         SimdThreadPool
         node depends on lora
 
-  VectorQuantKernels (node module): SIMD dot-product accumulation for the CPU
-        weight-stationary quantized matmul kernels in LlamaTransformerHandler
-        (sgemmQ4KWeightStationary, sgemmQ5KWeightStationary,
-        sgemmQ8_0WeightStationary), used by both LlamaTransformerHandler and
-        Phi2TransformerHandler.sgemmQuantBatch. Built on jdk.incubator.vector,
-        still an incubating JDK module as of JDK 25/26 (JEP 508 / JEP 529), so
-        it needs --add-modules jdk.incubator.vector at compile and run time.
-        All Vector API references live in a nested Simd class so a JVM without
-        the module falls back to an identical scalar loop at first use instead
-        of failing to load. Dequantization (nibble/bit unpacking) is left
-        scalar for Q4_K/Q5_K, since that phase is under 0.2 percent of total
-        kernel cost at realistic batch sizes and is a higher-risk change
-        (irregular bit-shift/mask patterns). Q8_0 dequantization is
-        vectorized (dequantizeQ8_0), gated by its own runtime self-test
-        against the full signed-byte range, because that format is a plain
-        widen-and-scale with no bit unpacking.
+  VectorQuantKernels (node module): JDK Vector API helpers for CPU quantized
+        matmul. Production policy (policySummary / docs/performance.md):
+        weight-stationary Q4_K/Q5_K/Q8_0 accumulate stays inline scalar (JIT);
+        VectorQuantKernels.dot is not used on that hot path after a vision-scale
+        B hang on narrow SPECIES. Q4_K/Q5_K dequant stays scalar. Q8_0
+        dequantization is vectorized (dequantizeQ8_0) when a runtime self-probe
+        over the full signed-byte range passes. Built on jdk.incubator.vector
+        (still incubating as of JDK 25/26); needs --add-modules
+        jdk.incubator.vector. All Vector API types live in a nested Simd class
+        so a JVM without the module falls back cleanly. Used by
+        LlamaTransformerHandler / Phi2TransformerHandler.sgemmQuantBatch.
 
-  SimdThreadPool (node module): dedicated ForkJoinPool for the row-parallel
-        loop inside the same three sgemm*WeightStationary kernels, replacing
-        their previous dispatch to ForkJoinPool.commonPool(). Sized via the
-        juno.simd.pool.size system property (falls back to
-        Runtime.getRuntime().availableProcessors() if unset or invalid, the
-        same parallelism the common pool would have used, so default
-        behavior is unchanged). Exists to let this one hot loop's
-        parallelism be tuned independently of the rest of the application,
-        for example to test whether keeping it at or below a hybrid CPU's
-        performance-core count reduces layer-to-layer timing variance seen
-        during prefill. Not core-affinity pinning: pure Java has no portable
-        way to bind threads to specific physical cores.
+  SimdThreadPool (node module): forEachRow runs the weight-stationary
+        row-parallel loop via IntStream.parallel() on ForkJoinPool.commonPool()
+        (same dispatch as matVecQ*raw). A dedicated ForkJoinPool (POOL) is
+        still built from -Djuno.simd.pool.size for diagnostics / future pinned
+        dispatch, but wrapping parallel streams in POOL.submit().join() was
+        pathologically slow at vision-scale B and must not be used on the hot
+        path. Not core-affinity pinning.
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
         ServeBatchOptions — CLI/env resolution for --parallel / --batch-window-ms
         (maps to BatchConfig; streaming consumers bypass static batches)

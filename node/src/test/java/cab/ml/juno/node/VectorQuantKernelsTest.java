@@ -185,6 +185,16 @@ class VectorQuantKernelsTest {
 		assertThat(handled).isFalse();
 	}
 
+	@Test
+	@DisplayName("policySummary documents scalar Q4_K/Q5_K accumulate and Q8_0 dequant Vector path")
+	void policySummary_documentsVisionSafeAccumulatePolicy() {
+		String policy = VectorQuantKernels.policySummary();
+		assertThat(policy).contains("Q4_K/Q5_K weight-stationary accumulate=scalar");
+		assertThat(policy).contains("Q4_K/Q5_K dequant=scalar");
+		assertThat(policy).contains("Q8_0 dequant=");
+		assertThat(policy).contains("VectorQuantKernels.dot not used in weight-stationary hot path");
+	}
+
 	private static float[] randomArray(int len, java.util.Random rnd) {
 		float[] a = new float[len];
 		for (int i = 0; i < len; i++) {
