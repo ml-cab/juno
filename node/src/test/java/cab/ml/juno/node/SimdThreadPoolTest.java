@@ -16,9 +16,7 @@ import org.junit.jupiter.api.Test;
  * property; that parsing logic is simple enough to review directly. What
  * they do verify is the property that actually matters for correctness:
  * {@link SimdThreadPool#forEachRow} must run the body exactly once for every
- * index in range and must not return until all of them have completed,
- * regardless of how the pool happens to be sized on the machine running the
- * test.
+ * index in range and must not return until all of them have completed.
  */
 @DisplayName("SimdThreadPool")
 class SimdThreadPoolTest {
