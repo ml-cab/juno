@@ -21,38 +21,29 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Dedicated {@link ForkJoinPool} for the row-parallel loop inside the SIMD
- * quantized-matmul kernels ({@link LlamaTransformerHandler#sgemmQ4KWeightStationary},
+ * Row-parallel dispatch helper for the weight-stationary CPU quantized matmul
+ * kernels ({@link LlamaTransformerHandler#sgemmQ4KWeightStationary},
  * {@link LlamaTransformerHandler#sgemmQ5KWeightStationary},
- * {@link LlamaTransformerHandler#sgemmQ8_0WeightStationary}), replacing the
- * previous {@code IntStream.range(rows).parallel()} dispatch to
- * {@code ForkJoinPool.commonPool()}.
+ * {@link LlamaTransformerHandler#sgemmQ8_0WeightStationary}).
  *
  * <p>
- * This exists to let the parallelism level of that one specific hot loop be
- * tuned independently of the rest of the application, via the
- * {@code juno.simd.pool.size} system property, without touching every other
- * parallel stream in the codebase that still uses the common pool.
+ * {@link #forEachRow} uses {@code IntStream.parallel()} on
+ * {@link ForkJoinPool#commonPool()}, matching {@code matVecQ*raw}. A previous
+ * {@code POOL.submit(() -> IntStream.parallel()...).join()} dispatch was kept
+ * briefly for independent pool sizing via {@code juno.simd.pool.size}, but it
+ * made vision-scale Q5_K prefill pathologically slow; see {@link #forEachRow}.
+ * {@link #POOL} remains for diagnostics ({@link #diagnosticSummary}) and any
+ * future pinned dispatch that does not wrap a nested parallel stream.
  *
  * <p>
  * This is not core-affinity pinning. Pure Java has no portable way to bind a
  * thread to a specific physical core without native code, and this class
  * does not attempt to distinguish performance cores from efficiency cores on
- * hybrid CPUs (e.g. Intel Alder Lake and later). What sizing the pool below
- * the total logical CPU count does is coarser and indirect: keeping the
- * number of runnable worker threads for this loop at or below the number of
- * performance cores makes it less likely the OS scheduler ends up placing
- * some of that work on slower efficiency cores under load, though the OS
- * still makes the actual placement decision. This is offered as a cheap way
- * to test that hypothesis by comparing runs at different pool sizes, not as
- * a guaranteed fix.
+ * hybrid CPUs (e.g. Intel Alder Lake and later).
  *
  * <p>
- * Usage: {@code -Djuno.simd.pool.size=8} (e.g. matching the logical
- * performance-core count on a specific CPU) to override; unset or an invalid
- * value falls back to {@link Runtime#availableProcessors()}, which is the
- * same parallelism {@code ForkJoinPool.commonPool()} would have used, so the
- * default behavior of the three kernels above is unchanged.
+ * Usage: {@code -Djuno.simd.pool.size=8} still builds {@link #POOL} at that
+ * size for diagnostics; the hot path currently ignores it (common pool).
  */
 public final class SimdThreadPool {
 
@@ -92,20 +83,29 @@ public final class SimdThreadPool {
 	}
 
 	/**
-	 * Runs {@code body} once for every {@code r} in {@code [0, rows)} on this
-	 * dedicated pool, and blocks until all of them complete. Equivalent to
-	 * {@code IntStream.range(0, rows).parallel().forEach(body)} except that
-	 * it dispatches to {@link #POOL} instead of {@code ForkJoinPool.commonPool()}.
+	 * Runs {@code body} once for every {@code r} in {@code [0, rows)}, and
+	 * blocks until all of them complete.
+	 *
+	 * <p>
+	 * Uses {@code IntStream.range(0, rows).parallel().forEach(body)} on
+	 * {@link ForkJoinPool#commonPool()} — the same dispatch as
+	 * {@code matVecQ5Kraw} / {@code matVecQ4Kraw}. An earlier variant wrapped
+	 * that parallel stream in {@code POOL.submit(...).join()}, which on this
+	 * codebase's host (and with the Vector-API hot loop) was measured ~37–260×
+	 * slower than the sequential matVec path for vision-scale batches (B≈741),
+	 * hanging moondream {@code forwardBatch} prefill for hours. The dedicated
+	 * {@link #POOL} is retained for sizing diagnostics / future pinned
+	 * dispatch; the hot path must stay on the common-pool parallel stream.
 	 *
 	 * <p>
 	 * Any exception thrown by {@code body} on a worker thread propagates out
-	 * of this call as an unchecked exception (via
-	 * {@link java.util.concurrent.ForkJoinTask#join()}), the same failure
-	 * behavior as the {@code IntStream.parallel().forEach()} call this
-	 * replaces.
+	 * of this call as an unchecked exception, matching
+	 * {@code IntStream.parallel().forEach()}.
 	 */
 	static void forEachRow(int rows, IntConsumer body) {
-		POOL.submit(() -> java.util.stream.IntStream.range(0, rows).parallel().forEach(body)).join();
+		if (rows <= 0)
+			return;
+		java.util.stream.IntStream.range(0, rows).parallel().forEach(body);
 	}
 
 	/**

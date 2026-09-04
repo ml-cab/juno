@@ -1294,13 +1294,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					qi += 32;
 				}
 
-				// Multiply dq[] against all B input vectors while it is in L1 cache.
-				// Dot-product accumulation is SIMD-vectorized via the Vector API
-				// when available (see VectorQuantKernels); falls back to an
-				// identical scalar loop otherwise.
+				// Multiply dq[] against all B input vectors while it is in L1.
+				// Inline scalar accumulation (not VectorQuantKernels.dot): on
+				// hosts where SPECIES_PREFERRED is only 128-bit, the Vector API
+				// call-per-(block,batch-row) path was measured tens to hundreds
+				// of times slower than matVec for vision-scale B, hanging
+				// moondream prefill. Keep the tight scalar loop the JIT can
+				// auto-vectorize.
 				int xBase = blk * BLOCK_SIZE;
 				for (int p = 0; p < B; p++) {
-					Y[p][r] += VectorQuantKernels.dot(dq, 0, X[p], xBase, BLOCK_SIZE);
+					float acc = 0f;
+					float[] xp = X[p];
+					for (int i = 0; i < BLOCK_SIZE; i++)
+						acc += dq[i] * xp[xBase + i];
+					Y[p][r] += acc;
 				}
 			}
 		});
@@ -1336,11 +1343,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					for (int i = 0; i < BLOCK_SIZE; i++) dq[i] = sc * raw[bo + 2 + i];
 				}
 
-				// See sgemmQ4KWeightStationary above: SIMD dot-product via
-				// VectorQuantKernels, scalar-equivalent fallback otherwise.
+				// Inline scalar accumulate — see sgemmQ4KWeightStationary.
 				int xBase = blk * BLOCK_SIZE;
 				for (int p = 0; p < B; p++) {
-					Y[p][r] += VectorQuantKernels.dot(dq, 0, X[p], xBase, BLOCK_SIZE);
+					float acc = 0f;
+					float[] xp = X[p];
+					for (int i = 0; i < BLOCK_SIZE; i++)
+						acc += dq[i] * xp[xBase + i];
+					Y[p][r] += acc;
 				}
 			}
 		});
@@ -1409,12 +1419,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					qi += 32;
 				}
 
-				// Multiply dq[] against all B input vectors while it is in L1 cache.
-				// See sgemmQ4KWeightStationary above: SIMD dot-product via
-				// VectorQuantKernels, scalar-equivalent fallback otherwise.
+				// Inline scalar accumulate — see sgemmQ4KWeightStationary.
 				int xBase = blk * BLOCK_SIZE;
 				for (int p = 0; p < B; p++) {
-					Y[p][r] += VectorQuantKernels.dot(dq, 0, X[p], xBase, BLOCK_SIZE);
+					float acc = 0f;
+					float[] xp = X[p];
+					for (int i = 0; i < BLOCK_SIZE; i++)
+						acc += dq[i] * xp[xBase + i];
+					Y[p][r] += acc;
 				}
 			}
 		});
