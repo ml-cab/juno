@@ -36,7 +36,7 @@ Phase A **complete** (2026-08-31 bake-off JFR; record final memo in `docs/perfor
 
 **Architecture follow-up (before 13B exit):** Phi-2 / Phi-3 / Qwen3 handlers still use FP16-resident upload; extend the same Q4_K packed path (shared upload helper preferred) per ROADMAP §5.
 
-**LoRA adjacency (plan ready, not started):** `--lora-play` / `LoraTrainableHandler` still dequant→FP16 via `LoraResidentWeights` and ignores `--mmq`. Wiring plan (risk register; recommended playback-only MMQ): [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md) (from [`PROMPT-LoRA-MMQ.md`](PROMPT-LoRA-MMQ.md)). Not part of Tier 13B exit; implement only after that plan is reviewed.
+**LoRA adjacency (Phase 1 in progress):** `--lora-play` / `LoraTrainableHandler` uses packed Q4 via `LoraMmqPolicy` + `ResidentQ4KWeight` when `--mmq` prefers it. Train stays FP16/FP32 with an explicit warn. Plan: [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md). Not part of Tier 13B exit.
 
 ## Feature × surface interaction matrix (`--mmq`)
 
@@ -44,7 +44,7 @@ Per ROADMAP **§6**. Cells filled for Phase B current state:
 
 | New feature / flag | Base inference | --lora-play | LoRA train | Vision | --parallel | --gpu-layers | --prefill-batch | CUDA | ROCm | Default |
 |--------------------|----------------|-------------|------------|--------|------------|--------------|-----------------|------|------|---------|
-| `--mmq` | **wired** (Llama-family Q4_K) | **follow-up** → [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md) | **explicit no-op** (train must stay FP16/FP32 until transpose policy) — **warn TODO** | N/A (text MatVec only) | **wired** if decode uses same Llama MMQ projections | **wired** with partial offload (Q4 upload only for resident layers) | **wired** (batched path uses Q4 `sgemm` serial GEMVs) | **wired** | **explicit no-op** (`supportsQ4KMmq` false) | **off** |
+| `--mmq` | **wired** (Llama-family Q4_K) | **wired** (Phase 1: `LoraTrainableHandler` / Qwen2) → [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md) | **explicit no-op** + warn (train stays FP16/FP32) | N/A (text MatVec only) | **wired** if decode uses same Llama MMQ projections | **wired** with partial offload (Q4 upload only for resident layers) | **wired** (batched path uses Q4 `sgemm` serial GEMVs) | **wired** | **explicit no-op** (`supportsQ4KMmq` false) | **off** |
 
 Until LoRA follow-up lands and warn-on-ignore ships: do not claim `--mmq` accelerates `--lora-play` in user-facing docs.
 

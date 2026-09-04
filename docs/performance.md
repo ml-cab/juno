@@ -4,15 +4,17 @@ Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). T
 
 ## Fused Q4_K GPU matmul (`--mmq`)
 
-**Plan:** [`infra-plan/PLAN-Infra-Tier13.md`](infra-plan/PLAN-Infra-Tier13.md) Phase B (in progress).
+**Plan:** [`infra-plan/PLAN-Infra-Tier13.md`](infra-plan/PLAN-Infra-Tier13.md) Phase B (in progress); LoRA play wiring [`infra-plan/PLAN-Infra-LoRA-MMQ.md`](infra-plan/PLAN-Infra-LoRA-MMQ.md) Phase 1 (in progress).
 
-**What:** When `--mmq on` (or `auto` with CUDA + kernel load), Q4_K projection weights stay packed on the device (`DeviceQ4KMatrix`). Decode/prefill GEMV uses a PTX fused dequant+accumulate kernel (`q4k_gemv`) instead of host dequant → FP16-resident cuBLAS. Non-Q4_K tensors still use the FP16 path. Default remains `--mmq off`.
+**What:** When `--mmq on` (or `auto` with CUDA + kernel load), Q4_K projection weights stay packed on the device (`DeviceQ4KMatrix` / `ResidentQ4KWeight`). Decode/prefill GEMV uses a PTX fused dequant+accumulate kernel (`q4k_gemv`) instead of host dequant → FP16-resident cuBLAS. Non-Q4_K tensors still use the FP16 path. Default remains `--mmq off`.
+
+**Surfaces:** Base Llama-family text inference and `--lora-play` (playback-only). LoRA training logs a one-shot warning and keeps FP16/FP32 frozen residency (no Q4 transpose kernel).
 
 **JFR:** `juno.MatVec.backend.cuda-resident-q4k.*`.
 
-**Parity:** `Q4KMmqParityTest` (GPU group) — fused kernel vs CPU `matVecInto` within `1e-2`.
+**Parity:** `Q4KMmqParityTest` (GPU group) — fused kernel vs CPU `matVecInto` within `1e-2`. Policy: `LoraMmqPolicyTest`.
 
-**Bake-off (open):** publish `compare-llama-cpp.sh --gpu` with `--mmq on` vs off; exit gate ≥1.3× decode TPS on resident models, contributing toward Phi-3.5 ≥0.5× peer ratio.
+**Bake-off (open):** publish `compare-llama-cpp.sh --gpu` with `--mmq on` vs off; exit gate ≥1.3× decode TPS on resident models. LoRA: `compare-lora.sh --gpu` with MMQ on/off for play TPS + recall.
 
 ## Vector SIMD / CPU MatVec
 

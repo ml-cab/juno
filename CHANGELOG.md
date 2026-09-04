@@ -1,5 +1,17 @@
 ## Status 
 
+**Session 70** — LoRA playback fused Q4_K MMQ (Phase 1 start)
+
+- Wire `--mmq` into `--lora-play` via `LoraMmqPolicy` + `ResidentQ4KWeight`
+  (playback-only; train stays FP16/FP32 and warns once when `--mmq` is preferred).
+- `ConsoleMain` sets `juno.lora.play.path` for in-process local play (cluster already did).
+- `LoraTrainableHandler` / Qwen2 delegate: Q4_K packed upload when play + CUDA kernel.
+- Unit: `LoraMmqPolicyTest`. Manual recall + JFR `cuda-resident-q4k` still open.
+
+---
+
+## Status 
+
 **Session 69** — Fused Q4_K GPU matmul prototype (`--mmq`)
 
 - Add `--mmq on|off|auto` / `JUNO_MMQ` (default off): keep Q4_K weights packed

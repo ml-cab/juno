@@ -68,8 +68,10 @@ GPU FFI (node module — Panama project, JEP 454):
   GpuLayerOffload — policy for --gpu-layers / JUNO_GPU_LAYERS (all|auto|0|N).
         Handlers upload only resident global layers; matVec falls back to CPU quant when dev is null.
   MmqOptions — policy for --mmq / JUNO_MMQ (on|off|auto). Default off.
+  LoraMmqPolicy — playback-only MMQ gate (juno.lora.play.path); train stays FP residency.
   CudaDriverBindings / Q4KMmqKernel / DeviceQ4KMatrix — PTX fused Q4_K dequant+GEMV
         (classpath q4k_gemv.ptx); JFR backend cuda-resident-q4k.
+  ResidentQ4KWeight — LoRA play wrapper around DeviceQ4KMatrix (forward-only).
   CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16)
         / fused Q4_K GEMV when --mmq; per-thread CUDA stream + async H2D/D2H.
   RocmMatVec — implements GpuMatVec; rocblas_sgemv (FP32) / rocblas_hssgemv_strided_batched (FP16);

@@ -18,11 +18,13 @@ package cab.ml.juno.node;
 import java.util.logging.Logger;
 
 /**
- * Shared GPU residency helpers for LoRA training handlers (Tier 10 / Tier 9).
+ * Shared GPU residency helpers for LoRA training and playback handlers.
  *
  * <p>Uploads dequantized (or dense host) projections to {@link ResidentWeightMatrix},
- * closes partial uploads on VRAM failure, and routes frozen forward / transpose
- * through resident {@code sgemv} / {@code sgemvTranspose} when present.
+ * or packed Q4_K to {@link ResidentQ4KWeight} under playback MMQ
+ * ({@link LoraMmqPolicy}). Closes partial uploads on VRAM failure, and routes
+ * frozen forward / transpose through resident {@code sgemv} / {@code sgemvTranspose}
+ * when present.
  *
  * <p>When {@link #microbatchSize()} {@code > 1}, uploads prefer FP32 so
  * {@link GpuBlasOps} microbatched GEMM can run. Honors {@code juno.lora.train.device}:
@@ -59,7 +61,39 @@ final class LoraResidentWeights {
 		return upload(gpu, LlamaTransformerHandler.dequantize(t, rows, cols), rows, cols);
 	}
 
+	/**
+	 * Upload a projection for playback MMQ: Q4_K packed when type matches, else
+	 * dequant → {@link #uploadQuant}. Returns either q4 or fp (exactly one non-null
+	 * on success).
+	 */
+	static UploadSlot uploadQuantPreferQ4K(GpuMatVec gpu, GgufReader.QuantizedTensor t, int rows, int cols) {
+		if (t != null && t.type() == QuantizationLayout.TYPE_Q4_K)
+			return UploadSlot.q4(ResidentQ4KWeight.upload(gpu, t.data(), rows, cols));
+		return UploadSlot.fp(uploadQuant(gpu, t, rows, cols));
+	}
+
+	/** Result of {@link #uploadQuantPreferQ4K}: exactly one of {@code q4} / {@code fp}. */
+	record UploadSlot(ResidentQ4KWeight q4, ResidentWeightMatrix fp) {
+		static UploadSlot q4(ResidentQ4KWeight q4) {
+			return new UploadSlot(q4, null);
+		}
+
+		static UploadSlot fp(ResidentWeightMatrix fp) {
+			return new UploadSlot(null, fp);
+		}
+
+		void closeQuietly() {
+			LoraResidentWeights.closeQuietly(q4);
+			LoraResidentWeights.closeQuietly(fp);
+		}
+	}
+
 	static void closeQuietly(ResidentWeightMatrix m) {
+		if (m != null && !m.isClosed())
+			m.close();
+	}
+
+	static void closeQuietly(ResidentQ4KWeight m) {
 		if (m != null && !m.isClosed())
 			m.close();
 	}
@@ -68,6 +102,13 @@ final class LoraResidentWeights {
 		if (a == null)
 			return;
 		for (ResidentWeightMatrix m : a)
+			closeQuietly(m);
+	}
+
+	static void closeQ4Array(ResidentQ4KWeight[] a) {
+		if (a == null)
+			return;
+		for (ResidentQ4KWeight m : a)
 			closeQuietly(m);
 	}
 
@@ -101,8 +142,19 @@ final class LoraResidentWeights {
 
 	/** Frozen forward {@code W*x}: resident GPU when {@code dev != null}, else quantized CPU. */
 	static float[] matVec(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] x, int rows, int cols) {
-		if (dev != null)
-			return dev.sgemv(x);
+		return matVec(quant, null, dev, x, rows, cols);
+	}
+
+	/**
+	 * Frozen forward with optional Q4 MMQ slot. Prefers {@code q4}, then {@code fp},
+	 * then quantized CPU.
+	 */
+	static float[] matVec(GgufReader.QuantizedTensor quant, ResidentQ4KWeight q4, ResidentWeightMatrix fp,
+			float[] x, int rows, int cols) {
+		if (q4 != null)
+			return q4.sgemv(x);
+		if (fp != null)
+			return fp.sgemv(x);
 		return LlamaTransformerHandler.matVec(quant, x, rows, cols);
 	}
 
@@ -120,12 +172,21 @@ final class LoraResidentWeights {
 	 */
 	static float[][] matVecBatch(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, GpuBlasOps ops,
 			float[][] X, int batch, int rows, int cols) {
+		return matVecBatch(quant, null, dev, ops, X, batch, rows, cols);
+	}
+
+	/**
+	 * Microbatched frozen forward. Q4 residency always uses sequential GEMV
+	 * (no batched MMQ GEMM).
+	 */
+	static float[][] matVecBatch(GgufReader.QuantizedTensor quant, ResidentQ4KWeight q4, ResidentWeightMatrix dev,
+			GpuBlasOps ops, float[][] X, int batch, int rows, int cols) {
 		if (batch <= 0)
 			return new float[0][];
-		if (dev == null || ops == null || !dev.supportsBatchedSgemm() || microbatchSize() <= 1) {
+		if (q4 != null || dev == null || ops == null || !dev.supportsBatchedSgemm() || microbatchSize() <= 1) {
 			float[][] Y = new float[batch][];
 			for (int b = 0; b < batch; b++)
-				Y[b] = matVec(quant, dev, X[b], rows, cols);
+				Y[b] = matVec(quant, q4, dev, X[b], rows, cols);
 			return Y;
 		}
 		int mb = microbatchSize();

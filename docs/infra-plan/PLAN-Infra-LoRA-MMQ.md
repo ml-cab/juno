@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Plan only** — not started; no implementation until this doc is reviewed |
+| **Status** | **Phase 1 in progress** — playback-only MMQ wiring started (Approach A) |
 | **Adjacency** | Tier 13 Phase B (MMQ landed on `LlamaTransformerHandler` only) |
 | **Not an Infra tier** | Does not consume the “one Infra tier in flight” slot; own exit gate under LoRA §2 |
 | **Prompt** | [`PROMPT-LoRA-MMQ.md`](PROMPT-LoRA-MMQ.md) |
@@ -166,17 +166,17 @@ CLI help / howto: state that `--mmq` accelerates LoRA **playback** when CUDA fus
 
 ### When implementation may start
 
-- [ ] This plan reviewed / approved (approach A accepted or explicitly amended).
-- [ ] Tier 13B kernels remain loadable on the reference CUDA SKU.
-- [ ] Owner agrees play-context detection (`juno.lora.play.path` + ConsoleMain property).
+- [x] This plan reviewed / approved (approach A accepted or explicitly amended).
+- [x] Tier 13B kernels remain loadable on the reference CUDA SKU.
+- [x] Owner agrees play-context detection (`juno.lora.play.path` + ConsoleMain property).
 
 ### When LoRA MMQ may be called done (Phase 1)
 
 - [ ] `--lora-play` + `--mmq on` uses Q4 packed path; JFR proves `cuda-resident-q4k`.
 - [ ] `--mmq off` LoRA behavior bit-compatible with pre-change (compare-lora ratios).
 - [ ] Train path with `--mmq on` does not switch frozen weights to Q4-only; no NaN on one-step smoke.
-- [ ] Docs: `howto.md`, `performance.md`, ROADMAP/Tier13 status; no competitor names outside infra-plan/perf-compare; no Infra tier numbers in CLI/JFR strings.
-- [ ] Preview file list published; no zip.
+- [x] Docs: `howto.md`, `performance.md`, ROADMAP/Tier13 status; no competitor names outside infra-plan/perf-compare; no Infra tier numbers in CLI/JFR strings.
+- [x] Preview file list published; no zip.
 
 Phase 2 (Phi-3/Qwen3, train MMQ) is **not** required to mark Phase 1 done, but must be listed as follow-up (ROADMAP §5).
 
