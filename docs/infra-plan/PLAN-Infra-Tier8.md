@@ -29,7 +29,7 @@ Also read:
 | **Exec step** | 3 (after P0 step 2) |
 | **Depends on** | Tier 1 complete |
 | **Blocks** | Tier 16; Tier 9; Tier 13 FlashAttn (P5) |
-| **Parallel with** | Vector SIMD bake-off (P0 step 4) |
+| **Parallel with** | Vector SIMD track (P0 step 4; correctness + `--vector 0`/`1` bake-off + vision regression) |
 
 **Performance evidence (2026-08-31):** JFR `ForwardPass.prefill.count` = 0 on API path. This tier owns prefill JFR instrumentation and compare-script parity (`--raw-prompt`, `--gpu-layers` passthrough after Tier 5). See [`PLAN-Infra-PERF-ANALYSIS.md`](PLAN-Infra-PERF-ANALYSIS.md).
 

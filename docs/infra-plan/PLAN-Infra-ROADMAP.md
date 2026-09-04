@@ -22,23 +22,35 @@ These rules apply to every Infra tier (Tiers 1–16, including Tier 13 phases). 
 
 ### 1. One tier at a time
 
-Implement **exactly one** Infra tier until its exit gate passes and the perf bake-off below is published. Do not start another Infra tier while one is in progress — even when a phase step lists multiple tiers (e.g. P0 step 2: complete **Tier 5**, then **Tier 1**, in that order).
+Implement **exactly one** Infra tier until it is **feature complete** (tier exit checklist + published bake-off per §2). Do not start another Infra tier while one is in progress — even when a phase step lists multiple tiers (e.g. P0 step 2: complete **Tier 5**, then **Tier 1**, in that order). Phase **gate met** may lag feature complete; do not block the next *dependent* Infra tier solely on program P0 ratios, but do not claim “P0 done” or peer language until gates pass.
 
-Parallel work is limited to non-Infra tracks ([LoRA](../lora-plan/PLAN-LoRA-ROADMAP.md), model E2E) that do not share the same implementation branch or exit gate.
+Parallel work is limited to non-Infra tracks (see [Parallel tracks](#parallel-tracks-not-infra-tiers): LoRA, model E2E, **Vision I2T**, **Vector SIMD**) that do not share the same Infra-tier exit gate. Parallel tracks may share a branch with Infra work, but each track keeps its own exit gate and must not mark an Infra tier complete.
 
 Phases P0 → P1 → P2 → … advance **one tier at a time** on the critical path: finish the current tier before starting the next.
 
+### Status vocabulary (feature vs gate)
+
+ROADMAP **Status** may use two layers — do not collapse them:
+
+| Label | Meaning |
+|-------|---------|
+| **Feature complete** | CLI/API/code + unit/parity tests + published bake-off artifacts for the tier’s feature scope |
+| **Gate met** | Program or phase **exit gate** numbers pass (e.g. P0 mistral / Phi-3.5 ratios; LoRA §2 ratios) |
+
+A tier may be **feature complete** while its phase gate remains **unmet**. Peer language and “P0 done” claims require **gate met**, not feature complete alone.
+
 ### 2. Perf compare at tier completion
 
-Before marking a tier complete and beginning the next dependent tier:
+Before marking a tier **feature complete** and beginning the next dependent tier:
 
 1. Run [`scripts/performance-tests/compare-llama-cpp.sh`](../../scripts/performance-tests/compare-llama-cpp.sh) (CPU and/or GPU as relevant; default `--vector 0`, JFR on).
 2. Run [`scripts/performance-tests/compare-lora.sh`](../../scripts/performance-tests/compare-lora.sh) on the same backend when the tier touches forward pass, MatVec, GPU residency, batching, or KV (Infra tiers 1, 5, 8, 13–16). Compare against the last published LoRA baseline or `release-0.1.2` (`--baseline release-0.1.2`). Exit gate: recall ok; train total ms and ms/pass ≤ **1.25×** baseline; playback tps ≥ **0.80×** baseline.
-3. Publish artifacts under [`docs/perf-compare/`](../perf-compare/README.md) `<timestamp>/` (inference) and `<timestamp>-lora/` (LoRA).
-4. Update [`docs/perf-compare/README.md`](../perf-compare/README.md) with the new run row and summary tables.
-5. Record tier-specific metrics or regression notes in `docs/performance.md` and reference the compare run in CHANGELOG / ROADMAP tier status.
+3. Run [`scripts/performance-tests/compare-vision.sh`](../../scripts/performance-tests/compare-vision.sh) when the change touches vision encode/splice, Phi-2 batched prefill used by vision, Q5_K / weight-stationary CPU MatVec, `VectorQuantKernels` / `SimdThreadPool`, or llamafile / embedded-mmproj loading. Compare against the last published vision baseline (e.g. `47-vision` / [`20260904T141315Z-vision`](../perf-compare/20260904T141315Z-vision/)). Exit gate: HTTP success + non-empty reply; `latency_ms` ≤ **1.25×** baseline; decode tps ≥ **0.80×** baseline when JFR `TokenProduced.tps` is present. Default script path uses `--prefill single` unless intentionally measuring batched vision prefill.
+4. Publish artifacts under [`docs/perf-compare/`](../perf-compare/README.md) `<timestamp>/` (inference), `<timestamp>-lora/` (LoRA), and `<timestamp>-vision/` (vision).
+5. Update [`docs/perf-compare/README.md`](../perf-compare/README.md) with the new run row and summary tables.
+6. Record tier-specific metrics or regression notes in `docs/performance.md` and reference the compare run in CHANGELOG / ROADMAP tier status.
 
-API-only tiers (2–4, 7, 11) still run inference compare as a **regression gate** even when throughput is unchanged; LoRA compare is optional for those tiers.
+API-only tiers (2–4, 7, 11) still run inference compare as a **regression gate** even when throughput is unchanged; LoRA / vision compares are optional for those tiers unless the change touches their paths.
 
 ### 3. No llama.cpp or vLLM in Juno docs
 
@@ -109,9 +121,9 @@ Follow this table — not tier number order (1, 2, 3, …).
 
 | Phase | Steps | Tiers | Exit gate |
 |-------|-------|-------|-----------|
-| **P0** — kernel path | 1. Tier 13 Phase A ✓ → 2. **Tier 5 → Tier 1** → 3. **Tier 8** → 4. vector SIMD bake-off → 5. **Tier 13 Phase B** | 13A, 5, 1, 8, 13B | Phi-3.5 Q4_K_M GPU tg ≥ **0.5×** llama (currently **0.22×**); mistral-7b on 8 GiB ≥ **0.15×** with Tier 5 `auto` |
+| **P0** — kernel path | 1. Tier 13 Phase A ✓ → 2. **Tier 5 → Tier 1** → 3. **Tier 8** → 4. **Vector SIMD track** (P0 gate input) → 5. **Tier 13 Phase B** | 13A, 5, 1, 8, SIMD, 13B | Phi-3.5 Q4_K_M GPU tg ≥ **0.5×** llama (currently **0.22×**); mistral-7b on 8 GiB ≥ **0.15×** with Tier 5 `auto` (currently **~0.026×**) |
 | **P1** — memory + scheduler | 1. **Tier 6** → 2. **Tier 14** → 3. **Tier 15** → 4. **Tier 16** | 6, 14, 15, 16 | Gather-tax ≤ ~15% at batch 8 / ctx 8k; continuous SSE beats static on local/single-shard |
-| **P2** — API / product | **Tier 2 → 3 → 4** (after Tier 1 completes) | 2, 3, 4 | ≥95% valid JSON (Tier 3); tools round-trip (Tier 4) |
+| **P2** — API / product | **Tier 2 → 3 → 4** (after Tier 1 feature complete) | 2, 3, 4 | ≥95% valid JSON (Tier 3); tools round-trip (Tier 4) |
 | **P3** — nice-to-have | **Tier 7**, **10**, **11** (when free; do not block P0/P1) | 7, 10, 11 | Per-tier exit gates |
 | **P4** — speculation | **Tier 9 → 12** (after Tier 8) | 9, 12 | Token identity vs non-speculative greedy |
 | **P5** — FlashAttn subset | Tier 13 FlashAttn only (after Tier 8 long-prefill baselines) | 13 (subset) | Separate go memo; MMQ is P0 |
@@ -119,32 +131,33 @@ Follow this table — not tier number order (1, 2, 3, …).
 **P0 step detail:**
 
 1. **Tier 13 Phase A** — **Complete** (2026-08-31 bake-off JFR; record final memo in `docs/performance.md`). **Go** for Phase B scoped to fused Q4 MMQ first.
-2. **Tier 5 → Tier 1** — `--gpu-layers` partial offload, then `BatchConfig` / `--parallel` wiring (one tier at a time; Tier 5 first).
-3. **Tier 8** — prefill microbatching, JFR prefill instrumentation, compare-script prompt-token parity (`--raw-prompt`).
-4. **Vector SIMD bake-off** — re-run `compare-llama-cpp.sh` with `--vector 1` (parallel track, not a numbered tier).
-5. **Tier 13 Phase B** — fused quant matmul / batched decode GEMV behind a flag.
+2. **Tier 5 → Tier 1** — `--gpu-layers` partial offload, then `BatchConfig` / `--parallel` wiring (one tier at a time; Tier 5 first). **Feature complete**; P0 **gate unmet** until mistral / Phi-3.5 ratios pass (or ROADMAP amends the gate).
+3. **Tier 8** — prefill microbatching, JFR prefill instrumentation, compare-script prompt-token parity (`--raw-prompt`). **Feature complete** (CPU bake-off published; GPU prefill re-run still open in `docs/performance.md`).
+4. **Vector SIMD track** (parallel track; also P0 step 4) — not a bake-off-only checkbox. Own correctness + publish `--vector 0` vs `--vector 1` under [`docs/perf-compare/`](../perf-compare/README.md); see [Parallel tracks → Vector SIMD](#vector-simd-cpu-kernels). Must not regress vision (`compare-vision.sh`).
+5. **Tier 13 Phase B** — fused quant matmul / batched decode GEMV behind a flag. Prefer starting after SIMD track publishes its bake-off so CPU and GPU MatVec stories stay separable in JFR.
 
 ```
-P0:  13A ✓  →  5  →  1  →  8  →  vector bake-off  →  13B     GATE: 0.5× tg
+P0:  13A ✓  →  5†  →  1†  →  8†  →  Vector SIMD track  →  13B     GATE: 0.5× tg († feature complete; phase gate open)
 P1:              6  →  14  →  15  →  16
-P2:  (after P0 step 2)  2  →  3  →  4
+P2:  (after Tier 1 feature complete)  2  →  3  →  4
 P3:  (when free)  7, 10, 11
 P4:  (after 8)    9  →  12
 P5:  (after 8)    13 FlashAttn subset
+Parallel (non-blocking): Vision I2T · LoRA · model E2E
 ```
 
 ## Feature catalog (tier number ≠ execution order)
 
 | Tier | Doc | Domain | Phase | Status |
 |------|-----|--------|-------|--------|
-| 1 | `PLAN-Infra-Tier1.md` | Concurrent batch serving (`--parallel`) | P0 step 2 | Complete |
+| 1 | `PLAN-Infra-Tier1.md` | Concurrent batch serving (`--parallel`) | P0 step 2 | **Feature complete**; multi-arch `forwardMultiDecode` landed; P0 phase gate open |
 | 2 | `PLAN-Infra-Tier2.md` | OpenAI field parity | P2 | Pending |
 | 3 | `PLAN-Infra-Tier3.md` | GBNF + JSON Schema | P2 | Pending |
 | 4 | `PLAN-Infra-Tier4.md` | Function calling / tools | P2 | Pending |
-| 5 | `PLAN-Infra-Tier5.md` | Hybrid `--gpu-layers` offload | P0 step 2 | Complete |
+| 5 | `PLAN-Infra-Tier5.md` | Hybrid `--gpu-layers` offload | P0 step 2 | **Feature complete**; P0 gate unmet (mistral ~**0.026×** vs **0.15×**) |
 | 6 | `PLAN-Infra-Tier6.md` | Quantized KV cache (`q8_0`) | P1 step 1 | Pending |
 | 7 | `PLAN-Infra-Tier7.md` | Chat template + HF download | P3 | Pending |
-| 8 | `PLAN-Infra-Tier8.md` | Prefill microbatching | P0 step 3 | Complete |
+| 8 | `PLAN-Infra-Tier8.md` | Prefill microbatching | P0 step 3 | **Feature complete**; CPU bake-off published; GPU re-run open |
 | 9 | `PLAN-Infra-Tier9.md` | Ngram speculative decoding | P4 | Pending |
 | 10 | `PLAN-Infra-Tier10.md` | Multi-adapter + GGUF LoRA interop | P3 | Pending |
 | 11 | `PLAN-Infra-Tier11.md` | Embeddings API | P3 | Pending |
@@ -154,7 +167,7 @@ P5:  (after 8)    13 FlashAttn subset
 | 15 | `PLAN-Infra-Tier15.md` | Continuous batching scheduler | P1 step 3 | Pending |
 | 16 | `PLAN-Infra-Tier16.md` | Mixed chunked prefill + decode | P1 step 4 | Pending |
 
-Read and follow `models/CLAUDE.md` before implementing any tier. **Only one Infra tier may be in flight at a time** (see Execution rules). Each tier is test-first and must pass its exit gate **and publish a [`docs/perf-compare/`](../perf-compare/README.md) bake-off** before the next tier begins.
+Read and follow `models/CLAUDE.md` before implementing any tier. **Only one Infra tier may be in flight at a time** (see Execution rules). Each tier is test-first and must reach **feature complete** (exit checklist + published [`docs/perf-compare/`](../perf-compare/README.md) bake-off) before the next dependent Infra tier begins. Phase **gate met** is separate and may lag.
 
 ## Measured performance baseline (2026-08-31)
 
@@ -184,23 +197,57 @@ Prefill (pp) rows are **not** peer-comparable until compare script matches promp
 | Speculation | ngram / draft | Draft / EAGLE family | None | Tiers 9, 12 (not EAGLE) |
 | Multi-adapter | multi `-lora` | Multi-LoRA | Single `--lora-play` | Tier 10; continuous × multi-LoRA = v1 policy below |
 | Training | Inference LoRA *playback* (GGUF adapters) | Multi-LoRA serving focus | First-class train/merge (LoRA/rsLoRA/DoRA/QA-LoRA, GPU microbatch) | Keep Juno training edge |
-| Models | Broad arch + VLM coverage | Broad HF coverage | LLaMA-family + Phi-3 solid; Qwen/Gemma E2E under development | Parallel model E2E track |
-| Kernels | FlashAttn / MMQ | Custom CUDA | Panama + cuBLAS/rocBLAS | Tier 13 gated only |
+| Models | Broad arch + VLM coverage | Broad HF coverage | LLaMA-family + Phi-3 solid; **Vision I2T v1** (moondream / embedded llamafile) parallel track; Qwen/Gemma E2E under development | Model E2E + Vision track; not “full VLM catalog” |
+| Kernels | FlashAttn / MMQ | Custom CUDA | Panama + cuBLAS/rocBLAS; **Vector SIMD** CPU track in flight | Tier 13 gated; SIMD track ≠ MMQ |
 | Streaming under batch | Slot / server dependent | Continuous + stream | Tier 1: SSE per-request only | Tier 15: SSE shares continuous steps |
 
 **Strategic rule:** Do not chase llama.cpp or vLLM feature-for-feature, and do **not** embed either engine as a subprocess. Adopt ideas that raise inference competitiveness and API/DX while preserving JVM-native distributed serving and GGUF-base LoRA training. Prefer scheduler / API / memory algorithms over porting ggml or vLLM CUDA stacks. Panama + cuBLAS/rocBLAS remains the default hot path. Continuous batching is **in scope** (Tiers 14–16); wholesale PagedAttention *kernels* stay gated like Tier 13.
 
 ## Parallel tracks (not Infra tiers)
 
-These continue under existing plans and do **not** block Tier 1:
+These continue under their own plans/exit gates. They do **not** consume the “one Infra tier in flight” slot, but they **do** share Execution rules §2–§5 (perf publish, naming, all supported models) when they touch inference code.
 
-| Track | Plan | Note |
-|-------|------|------|
-| LoRA VRAM ladder | [`PLAN-LoRA-Tier11.md`](../lora-plan/PLAN-LoRA-Tier11.md) | `--lora-microbatch` + FP32→FP16→CPU |
-| Model E2E | [`model_support_summary.md`](../model_support_summary.md) | Qwen2/3, Gemma inference polish — peer *marketing* should wait on solid E2E for primary arches |
-| LoRA training | [`PLAN-LoRA-ROADMAP.md`](../lora-plan/PLAN-LoRA-ROADMAP.md) | Tiers 1–10 done |
+| Track | Plan / prompts | Status | Note |
+|-------|----------------|--------|------|
+| LoRA VRAM ladder | [`PLAN-LoRA-Tier11.md`](../lora-plan/PLAN-LoRA-Tier11.md) | Active | `--lora-microbatch` + FP32→FP16→CPU |
+| LoRA training | [`PLAN-LoRA-ROADMAP.md`](../lora-plan/PLAN-LoRA-ROADMAP.md) | Tiers 1–10 done | Infra MatVec/GPU changes still run `compare-lora.sh` (§2) |
+| Model E2E | [`model_support_summary.md`](../model_support_summary.md) | Active | Qwen2/3, Gemma polish — owns arch quality; peer *marketing* waits on solid E2E |
+| **Vision I2T** | [`PROMPT-Vision-Perf.md`](PROMPT-Vision-Perf.md), [`PROMPT-Vision-Regression-Fix.md`](PROMPT-Vision-Regression-Fix.md); docs `juno-documentation/part12/` | **In flight** (v1 shipped; regression hardening) | See below — **not** an Infra tier |
+| **Vector SIMD** | P0 step 4 (this ROADMAP); `VectorQuantKernels` / `SimdThreadPool` | **In flight** (kernels shipped; bake-off + Q5_K policy open) | See below — feeds P0 MatVec story; not Tier 13 |
 
 Infra Tiers 5–6 benefit from residency patterns in `LoraResidentWeights` / `GpuMatVec`, but do not require LoRA Tier 11 to start Tiers 1–4.
+
+### Vision I2T (parallel track)
+
+**Scope (v1 in tree):** `vision/` module (`VisionEncoder`, `VisionAwareForwardPassHandler`, LLaVA/moondream factory), `POST /v1/vision/chat` (`VisionChatHandler`), llamafile / embedded projector loading (`LlamafileGgufIndex`, `VisionModelPaths`), local-only routes (cluster does not register vision).
+
+**Canonical gate:** [`scripts/performance-tests/compare-vision.sh`](../../scripts/performance-tests/compare-vision.sh) on `moondream2-q5_k.llamafile`, fixed ~741-token image+text prefill, `max_tokens=32`, temperature 0. Known-good snapshot: [`docs/perf-compare/20260904T141315Z-vision/`](../perf-compare/20260904T141315Z-vision/) (`47-vision`).
+
+**Exit (v1 track):**
+
+- `compare-vision.sh` green vs published baseline (§2 ratios).
+- Prefill policy documented: default **`--prefill single`** for the gate; batched Phi-2 / Q5_K vision prefill is opt-in until caption parity is proven.
+- Loading helpers (`LlamafileGgufIndex`, `ModelIdResolver` as used by vision) covered by tests; failures fail closed.
+- Regression note in `docs/performance.md` / `docs/perf-compare/README.md` when SIMD or prefill defaults change.
+
+**Agent prompts:** [`PROMPT-Vision-Perf.md`](PROMPT-Vision-Perf.md) (harness), [`PROMPT-Vision-Regression-Fix.md`](PROMPT-Vision-Regression-Fix.md) (hang / Q5_K×SIMD).
+
+**Out of v1 track (remain deferred):** auto-download of `mmproj`; broad multi-VLM catalog; cluster vision routes; claiming peer VLM throughput without published bake-offs.
+
+### Vector SIMD (CPU kernels)
+
+**Scope:** JDK Vector API path in `VectorQuantKernels` + row-parallel `SimdThreadPool` for CPU quantized MatVec (Q4_K / Q5_K / Q8_0 as wired). CLI / runtime `--vector` (or equivalent) must keep a correct scalar fallback.
+
+**This is P0 step 4** and a named parallel track — **not** “only re-run compare once.”
+
+**Exit:**
+
+1. Unit / parity tests for every quant path that calls into `VectorQuantKernels` (including Q5_K weight-stationary when enabled).
+2. Published bake-off: `compare-llama-cpp.sh` **`--vector 0` vs `--vector 1`** on the default model set; row in [`docs/perf-compare/README.md`](../perf-compare/README.md).
+3. Vision regression: `compare-vision.sh` must pass with the default safe path (today: scalar / non-hanging Q5_K policy after the moondream hang fix). Document which quants use Vector vs scalar.
+4. No silent pathological slowdown: if Vector hurts a quant at vision-scale batch (B≈741), keep scalar default for that path and record the decision in `docs/performance.md`.
+
+**Does not replace Tier 13B** (GPU fused MMQ). SIMD improves CPU MatVec and long CPU prefills; 13B owns the resident-GPU decode gap.
 
 ## Adoption principles
 
@@ -222,7 +269,14 @@ flowchart TD
     T1[Tier1 BatchServe]
     T5 --> T1
     T1 --> T8[Tier8 PrefillBatch]
-    T8 --> T13B
+    T8 --> SIMD[Vector SIMD track]
+    SIMD --> T13B
+  end
+  subgraph Parallel [Parallel tracks]
+    VIS[Vision I2T v1]
+    LORA[LoRA]
+    E2E[Model E2E]
+    SIMD -.->|vision regression| VIS
   end
   subgraph P1 [P1 scheduler path]
     T5 --> T6[Tier6 KvQ8]
@@ -251,11 +305,13 @@ flowchart TD
 
 ### Critical path (highest leverage)
 
-**P0:** 13A ✓ → 5 → 1 → 8 → vector bake-off → 13B
+**P0:** 13A ✓ → 5† → 1† → 8† → Vector SIMD track → 13B († feature complete; phase gate open)
 
 **P1:** 6 → 14 → 15 → 16 (Tier 8 required before Tier 16 only)
 
-**P2** (2 → 3 → 4) begins after Tier 1 completes. **P3** (7, 10, 11) and **P4** (9 → 12) follow their phase dependencies, one tier at a time. **P5** (Tier 13 FlashAttn) only after Tier 8 long-prefill baselines.
+**P2** (2 → 3 → 4) begins after Tier 1 **feature complete**. **P3** (7, 10, 11) and **P4** (9 → 12) follow their phase dependencies, one tier at a time. **P5** (Tier 13 FlashAttn) only after Tier 8 long-prefill baselines.
+
+**Parallel (non-blocking):** Vision I2T v1 · LoRA · model E2E — own exit gates; run §2 compares when touching shared MatVec / prefill / handler code.
 
 ## Cross-tier API ownership
 
@@ -522,7 +578,7 @@ Exit only when:
 
 ## Explicit deferrals
 
-- Full VLM / `mmproj` multimodal pipeline.
+- **Beyond Vision I2T v1:** auto-downloaded `mmproj`, multi-VLM catalog expansion, cluster-registered vision routes, and peer VLM throughput claims without bake-offs. (v1 moondream / embedded-llamafile path is an active **parallel track**, not deferred.)
 - Built-in agent filesystem tools / WebUI.
 - Metal / Vulkan / WebGPU backends.
 - Exhaustive exotic arches before Qwen3/Mixtral quality bar.
@@ -542,16 +598,18 @@ Exit only when:
 
 ### Internal (self-uplift)
 
-- **P0 gate:** Phi-3.5 Q4_K_M GPU tg ≥ **0.5×** llama.cpp (currently **0.22×**); mistral-7b on 8 GiB ≥ **0.15×** with Tier 5 `--gpu-layers auto` (currently **0.01×**).
-- Multi-session TPS uplift after Tier 1.
-- Larger models on fixed VRAM after Tier 5.
+- **P0 gate:** Phi-3.5 Q4_K_M GPU tg ≥ **0.5×** llama.cpp (currently **0.22×**); mistral-7b on 8 GiB ≥ **0.15×** with Tier 5 `--gpu-layers auto` (baseline without partial offload was **0.01×**; post–Tier 5 auto ≈ **0.026×** — still unmet).
+- Multi-session TPS uplift after Tier 1 (**feature complete**; keep monitoring under SIMD / 13B).
+- Larger models on fixed VRAM after Tier 5 (**feature complete**; gate unmet).
+- Vector SIMD track exit (published `--vector 0` vs `1` + vision-safe Q5_K policy).
+- Vision I2T v1 gate (`compare-vision.sh` vs published baseline).
 - ≥2× KV memory improvement after Tier 6.
 - ≥95% valid JSON after Tier 3.
 - Speculative acceptance + TPS after Tier 9 / 12.
 - After Tier 14: KV memory scales with used tokens (block granularity on continuous path); dual KV path (dense static / paged continuous); gather-tax microbench published with budget decision.
 - After Tier 15: continuous beats Tier 1 static on mixed-arrival load **including concurrent SSE** on **local/single-shard**; prefix hit-rate / TTFT documented; cluster falls back to static or refuses continuous.
 - After Tier 16: chunked prefill under load does not regress short-decode latency beyond a documented bound.
-- No regression on LoRA GPU training gates in `docs/performance.md`.
+- No regression on LoRA GPU training gates in `docs/performance.md` (§2 ratios; current `20260902T200210Z-lora` vs `release-0.1.2` is **failing** — treat as open before claiming Infra MatVec/GPU stability).
 
 ### External bake-off (gates “peer” language)
 

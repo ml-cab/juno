@@ -86,7 +86,7 @@ Example: **mistral-7b** on GTX 1080 — entire model falls back to CPU quantized
 | **14** | P1 step 2 | VRAM fit + continuous KV | Memory scales on continuous path; **0× single-stream** | Tier 1, Tier 6 rec. |
 | **14** gather-tax gate | P1 | Continuous viability | Must be ≤ ~10–15% attention at batch 8 / ctx 8k to start Tier 15 | Tier 14 microbench |
 | **15–16** | P1 | Concurrent SSE QPS (local/single-shard) | vLLM-class aggregate on one machine; **0× single-stream**; cluster = static | 14 gate, 1, 6, 8 (16 only) |
-| **Vector SIMD** | P0 step 4 | CPU MatVec | TBD — re-run bake-off | Parallel track |
+| **Vector SIMD** | P0 step 4 + parallel track | CPU MatVec / long CPU prefill | TBD — publish `--vector 0` vs `1`; vision-safe Q5_K policy | Not a bake-off-only checkbox |
 
 Tiers **2–4, 7, 10, 11** (P2/P3) are API/DX — no direct tg/pp uplift.
 
@@ -96,14 +96,16 @@ This analysis amends [`PLAN-Infra-ROADMAP.md`](PLAN-Infra-ROADMAP.md). Follow **
 
 | Phase | Steps | Gate |
 |-------|-------|------|
-| **P0** | 13A ✓ → 5 → 1 → 8 → vector bake-off → 13B | Phi-3.5 tg ≥ **0.5×** llama |
+| **P0** | 13A ✓ → 5† → 1† → 8† → **Vector SIMD track** → 13B († feature complete; phase gate open) | Phi-3.5 tg ≥ **0.5×** llama; mistral ≥ **0.15×** with `--gpu-layers auto` |
 | **P1** | 6 → 14 → 15 → 16 | Gather-tax gate; continuous SSE |
-| **P2** | 2 → 3 → 4 (after P0 step 2) | API parity |
+| **P2** | 2 → 3 → 4 (after Tier 1 feature complete) | API parity |
 | **P3** | 7, 10, 11 | Per-tier gates |
 | **P4** | 9 → 12 (after Tier 8) | Token identity |
 | **P5** | 13 FlashAttn subset (after Tier 8 baselines) | Separate go memo |
 
-P1 begins after P0 completes (one tier at a time). Tier 14 gather-tax microbench is a **hard gate** before Tier 15. Cluster continuous deferred to `Tier 15b` follow-on.
+**Parallel tracks** (Vision I2T, LoRA, model E2E, Vector SIMD): see [`PLAN-Infra-ROADMAP.md`](PLAN-Infra-ROADMAP.md) → Parallel tracks. Vision + SIMD share MatVec/prefill risk; §2 requires `compare-vision.sh` when those paths change.
+
+P1 begins after P0 **gate met** for peer claims (feature-complete P0 tiers may already be landed). Tier 14 gather-tax microbench is a **hard gate** before Tier 15. Cluster continuous deferred to `Tier 15b` follow-on.
 
 ## Compare-script action items (owned by Tier 8)
 

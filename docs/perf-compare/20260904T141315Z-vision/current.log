@@ -1,0 +1,71 @@
+[0;36m▶ Starting local in-process REPL  (dtype=FLOAT16  byteOrder=BE  max_tokens=32  temperature=0  nodes=3  heap=5g  gpu=true  os=linux)[0m
+
+[1;33m⚠ JFR enabled — duration=30m  (programmatic recording, metrics auto-printed on exit)[0m
+  [1;93mJuno interactive console  ·  model: moondream2-q5_k.llamafile[0m
+
+[1;31m░▀▀█[1;32m░█░█[0m
+[0;31m░░░█[0;32m░█░█[0m
+[0;31m░▀▀░[0;32m░▀▀▀[0m
+[1;34m░█▀█[1;33m░█▀█[0m
+[0;34m░█░█[0;33m░█░█[0m
+[0;34m░▀░▀[0;33m░▀▀▀[0m
+
+  [1;92mdtype=FLOAT16 · byteOrder=BE · max_tokens=32 · temperature=0,00 · top_k=50 · top_p=0,90 · local nodes=3[0m
+
+  [0;33m⏱ JFR active · duration=30m[0m
+
+[0;33m  ⏱ JFR recording started — duration=30m  output=juno-moondream2-q5_k-20260904-091347.jfr[0m
+
+[0;36m▶ Starting local in-process 3-node pipeline...[0m
+[0;32m  ✔ Vision routes registered (POST /v1/vision/chat)[0m
+[0;32m  ✔ Local API server on http://localhost:18081 (OpenAI: /v1/chat/completions)[0m
+[2mType your prompt and press Enter. Type 'exit' or Ctrl-C to quit.[0m
+
+[1;36myou> [0m
+[1;36m  ┌─────────────────────────────────────────────────┐
+  │              JFR Metrics Summary                │
+  └─────────────────────────────────────────────────┘[0m
+[2m{
+  "runId": "2026-09-04T14:23:47.555755047Z",
+  "models": [
+    {
+      "name": "moondream2-q5_k",
+      "path": "moondream2-q5_k.llamafile",
+      "jfrFile": "juno-moondream2-q5_k-20260904-091347.jfr",
+      "metrics": {
+        "jfr.file.bytes": 1.3154167E7,
+        "juno.MatVec.count": 234837.0,
+        "juno.MatVec.duration.total_ms": 1493918.248427,
+        "juno.MatVec.duration.p95_ms": 7.315986,
+        "juno.MatVec.backend.cpu.count": 234837.0,
+        "juno.MatVec.backend.cpu.p95_ms": 7.315986,
+        "juno.MatVec.backend.cuda.count": 0.0,
+        "juno.MatVec.backend.cuda.p95_ms": 0.0,
+        "juno.MatVec.backend.cuda_resident.count": 0.0,
+        "juno.MatVec.backend.cuda_resident.p95_ms": 0.0,
+        "juno.ForwardPass.count": 2192.0,
+        "juno.ForwardPass.prefill.count": 3.0,
+        "juno.ForwardPass.decode.count": 2189.0,
+        "juno.ForwardPass.prefill.p95_ms": 776.462732,
+        "juno.ForwardPass.decode.p95_ms": 643.232238,
+        "juno.Tokenizer.encode.count": 1.0,
+        "juno.Tokenizer.encode.p95_ms": 13.417465,
+        "juno.Tokenizer.decodeToken.count": 0.0,
+        "juno.Tokenizer.decodeToken.p95_ms": 0.0,
+        "juno.TemplateFormat.count": 1.0,
+        "juno.TemplateFormat.p95_ms": 0.042479,
+        "juno.LoraTrainStep.count": 0.0,
+        "juno.LoraTrainStep.forward_ms.p95": 0.0,
+        "juno.LoraTrainStep.backward_ms.p95": 0.0,
+        "juno.LoraTrainStep.optimizer_ms.p95": 0.0,
+        "juno.TokenProduced.count": 32.0,
+        "juno.TokenProduced.elapsed_seconds": 22.650721788,
+        "juno.TokenProduced.tps": 1.4127585116052728
+      }
+    }
+  ]
+}
+[0m
+[0;32m  ✔ Metrics written → target/metrics/metrics.json[0m
+[2m  JFR file         → /home/medion/Repo/juno/target/vision-perf-wt-viQjtA/juno-moondream2-q5_k-20260904-091347.jfr[0m
+

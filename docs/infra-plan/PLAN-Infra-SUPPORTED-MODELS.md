@@ -18,7 +18,7 @@ Source: `node/.../ForwardPassHandlerLoader.java`.
 | `qwen3` | Qwen3 dense | `Qwen3TransformerHandler` |
 | `qwen3moe` | Qwen3 MoE | `Qwen3MoeTransformerHandler` |
 
-Vision and LoRA paths delegate to the text handler above; parity requirements follow the wrapped handler.
+Vision and LoRA paths delegate to the text handler above; parity requirements follow the wrapped handler. Vision loading (`LlamafileGgufIndex`, `VisionModelPaths`) and the Vision I2T parallel track are documented in [`PLAN-Infra-ROADMAP.md`](PLAN-Infra-ROADMAP.md) → Parallel tracks — not as a silent exception to this rule.
 
 ## What “apply to all” means
 
@@ -62,6 +62,12 @@ Before marking an Infra tier complete:
 1. List which handler families were changed.
 2. List tests added/updated per family.
 3. List perf runs per model (or document “serial fallback / not yet batched” per arch).
-4. Confirm ROADMAP execution rules §1–§5 (one tier, perf publish, doc naming, no tier labels in shipped surfaces, all supported models).
+4. Confirm ROADMAP execution rules §1–§5 (one tier, perf publish including vision/LoRA when applicable, doc naming, no tier labels in shipped surfaces, all supported models).
 
-**Follow-up agent prompt (multi-request decode parity):** [`PROMPT-MultiDecode-Parity.md`](PROMPT-MultiDecode-Parity.md)
+**Agent prompts (linked from ROADMAP Parallel tracks):**
+
+| Prompt | Purpose |
+|--------|---------|
+| [`PROMPT-MultiDecode-Parity.md`](PROMPT-MultiDecode-Parity.md) | Multi-request `forwardMultiDecode` on Phi-2/3, Qwen3, Qwen3 MoE (Tier 1 follow-up — **landed** on `67-inference`; keep as reference) |
+| [`PROMPT-Vision-Perf.md`](PROMPT-Vision-Perf.md) | `compare-vision.sh` harness |
+| [`PROMPT-Vision-Regression-Fix.md`](PROMPT-Vision-Regression-Fix.md) | Moondream hang / Q5_K×SIMD regression |

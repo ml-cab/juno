@@ -16,6 +16,7 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260901T173121Z-parallel`](20260901T173121Z-parallel/) | GPU multi-session static batch (`--parallel` 1 vs 8) | aggregate tg | [INDEX](20260901T173121Z-parallel/INDEX.md) |
 | [`20260901T234024Z-prefill`](20260901T234024Z-prefill/) | CPU prefill microbatch (`--prefill-batch` 1 vs 32) | JFR pp | [INDEX](20260901T234024Z-prefill/INDEX.md) |
 | [`20260902T200210Z-lora`](20260902T200210Z-lora/) | GPU LoRA train-qa + playback (`compare-lora.sh`) | train ms / playback tps | [INDEX](20260902T200210Z-lora/INDEX.md) |
+| [`20260904T141315Z-vision`](20260904T141315Z-vision/) | GPU vision chat (`compare-vision.sh`, `47-vision`) | latency / decode tps | [INDEX](20260904T141315Z-vision/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 
@@ -30,6 +31,37 @@ Scenario: TinyLlama Q4_K_M · `/train-qa` *What is your name?* → *My name is J
 
 **Current vs release-0.1.2:** train wall time **5.76×** slower; playback tps **0.69×** (31% slower). Quality gate passes on both branches. Run: `./scripts/performance-tests/compare-lora.sh --gpu --baseline release-0.1.2`.
 
+## Vision chat regression — `compare-vision.sh`
+
+Scenario: `moondream2-q5_k.llamafile` (embedded vision, no mmproj) · `POST /v1/vision/chat` · *What is in this image?* · max_tokens 32 · temperature 0 · `./juno local --jfr` · **`--prefill single`** (default in the script).
+
+Fixed prefill window: **~741 tokens** (729 image patches + ~11 text). Local mode only — cluster does not register vision routes.
+
+Default `--prefill single` matches the known-good sequential Phi2 path on `47-vision`. Batched Q5_K prefill on current inference branches can finish after the hang fix but still yields wrong captions; use `--prefill batched` only when intentionally measuring that path.
+
+| Check | Threshold |
+|-------|-----------|
+| Quality | HTTP 200, non-empty reply |
+| Latency | `current.latency_ms / baseline ≤ 1.25` |
+| Decode tps | `current.tps / baseline ≥ 0.80` (JFR `TokenProduced.tps` when present) |
+
+```bash
+./scripts/performance-tests/compare-vision.sh --gpu --baseline 47-vision
+./scripts/performance-tests/compare-vision.sh --gpu --no-publish   # single ref only
+./scripts/performance-tests/compare-vision.sh --gpu --prefill batched --no-publish  # batched path only
+```
+
+Test image: `scripts/performance-tests/fixtures/vision-bench.jpg`. Override with `--image` or `VISION_TEST_IMAGE`.
+
+### Known-good snapshot — `20260904T141315Z-vision` (`47-vision`)
+
+| Field | Value |
+|-------|-------|
+| Status | success |
+| Prompt tokens | 741 |
+| Latency | ~503 s |
+| Decode tps (JFR) | ~1.41 |
+| Reply | non-empty (color squares) |
 ## CPU summary (JFR) — `20260831T230258Z`
 
 | Model | llama.cpp pp | llama.cpp tg | Juno pp | Juno tg | Juno/llama tg |
