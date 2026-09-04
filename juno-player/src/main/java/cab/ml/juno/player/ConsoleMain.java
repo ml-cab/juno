@@ -63,6 +63,7 @@ import cab.ml.juno.node.DoraInitializer;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
 import cab.ml.juno.node.GpuLayerOffload;
+import cab.ml.juno.node.MmqOptions;
 import cab.ml.juno.coordinator.BatchConfig;
 import cab.ml.juno.coordinator.PrefillBatchOptions;
 import cab.ml.juno.coordinator.ServeBatchOptions;
@@ -199,6 +200,7 @@ public final class ConsoleMain {
 	// ── GPU arguments ─────────────────────────────────────────────────────────
 	private static boolean useGpu = true; // use CPU
 	private static String gpuLayers = null; // null → env or default all
+	private static String mmq = null; // null → env or default off
 	private static Integer parallel = null; // null → env or default 1
 	private static Long batchWindowMs = null; // null → env or default when parallel > 1
 	// ── LoRA arguments ────────────────────────────────────────────────────────
@@ -325,6 +327,8 @@ public final class ConsoleMain {
 		System.setProperty("JUNO_USE_GPU", String.valueOf(useGpu));
 		if (gpuLayers != null)
 			System.setProperty(GpuLayerOffload.ENV_PROPERTY, gpuLayers);
+		if (mmq != null)
+			System.setProperty(MmqOptions.ENV_PROPERTY, mmq);
 		System.setProperty("juno.byteOrder", byteOrder);
 		System.setProperty("MODEL_PATH", modelPath);
 		System.setProperty("DTYPE", dtype.name());
@@ -376,6 +380,11 @@ public final class ConsoleMain {
 			String env = System.getenv(GpuLayerOffload.ENV_PROPERTY);
 			if (env != null && !env.isBlank())
 				gpuLayers = env.strip();
+		}
+		if (mmq == null) {
+			String env = System.getenv(MmqOptions.ENV_PROPERTY);
+			if (env != null && !env.isBlank())
+				mmq = env.strip();
 		}
 		if (parallel == null) {
 			String env = System.getenv(ServeBatchOptions.ENV_PARALLEL);
@@ -496,6 +505,10 @@ public final class ConsoleMain {
 			case "--gpu-layers":
 				if (i + 1 < args.length)
 					gpuLayers = args[++i];
+				break;
+			case "--mmq":
+				if (i + 1 < args.length)
+					mmq = args[++i];
 				break;
 			case "--parallel":
 				if (i + 1 < args.length)
@@ -699,6 +712,8 @@ public final class ConsoleMain {
 		System.out.println("  --cpu                      Force to use CPU");
 		System.out.println("  --gpu-layers N|all|auto    GPU-resident transformer layers (default: all)");
 		System.out.println("                             env JUNO_GPU_LAYERS; auto fits until VRAM OOM");
+		System.out.println("  --mmq on|off|auto          Fused Q4_K GPU matmul (default: off)");
+		System.out.println("                             env JUNO_MMQ; keeps Q4_K packed on device");
 		System.out.println("  --parallel N               Static micro-batch size (default: 1, disabled)");
 		System.out.println("                             env JUNO_PARALLEL; recommend 8 for API servers");
 		System.out.println("  --batch-window-ms M        Batch collect window when parallel>1 (default: 50)");

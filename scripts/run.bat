@@ -231,6 +231,7 @@ set "JFR_DURATION_LOCAL="
 set "API_PORT_LOCAL=%API_PORT%"
 set "LORA_PLAY=%LORA_PLAY_PATH%"
 set "USE_GPU=true"
+set "MMQ=%JUNO_MMQ%"
 if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
   if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
@@ -256,6 +257,7 @@ if /i "%~1"=="--nodes"      ( set "NODES=%~2" & shift & shift & goto :local_pars
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_LOCAL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--api-port"   ( set "API_PORT_LOCAL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--lora-play"  ( set "LORA_PLAY=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--mmq"        ( set "MMQ=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :local_parse )
@@ -285,6 +287,7 @@ if /i "%~1"=="--help" (
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
   echo   --gpu             use GPU when available (default)
   echo   --cpu             use CPU only
+  echo   --mmq on^|off^|auto fused Q4_K GPU matmul (default off)
   echo   --verbose / -v
   echo.
   echo   --api-port N         start local REST API server on port N
@@ -344,9 +347,12 @@ if not "%MMPROJ%"=="" (
   echo [INFO] Vision mmproj: %MMPROJ%
 )
 
+set "MMQ_ARG="
+if not "%MMQ%"=="" set "MMQ_ARG=--mmq %MMQ%"
+
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================

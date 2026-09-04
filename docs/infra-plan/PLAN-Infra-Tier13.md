@@ -32,6 +32,22 @@ Also read:
 
 Phase A **complete** (2026-08-31 bake-off JFR; record final memo in `docs/performance.md`). **Go** for Phase B scoped to fused Q4 MMQ first — not FlashAttn (P5).
 
+**Phase B status (in progress):** `--mmq on|off|auto` / `JUNO_MMQ` (default off); CUDA Driver API + classpath PTX `q4k_gemv.ptx`; `DeviceQ4KMatrix` + `Q4KMmqKernel`; wired in `LlamaTransformerHandler` for Q4_K projections; `Q4KMmqParityTest` green. Bake-off + perf gate (≥1.3× tg) still open before feature complete.
+
+**Architecture follow-up (before 13B exit):** Phi-2 / Phi-3 / Qwen3 handlers still use FP16-resident upload; extend the same Q4_K packed path (shared upload helper preferred) per ROADMAP §5.
+
+**LoRA adjacency (plan ready, not started):** `--lora-play` / `LoraTrainableHandler` still dequant→FP16 via `LoraResidentWeights` and ignores `--mmq`. Wiring plan (risk register; recommended playback-only MMQ): [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md) (from [`PROMPT-LoRA-MMQ.md`](PROMPT-LoRA-MMQ.md)). Not part of Tier 13B exit; implement only after that plan is reviewed.
+
+## Feature × surface interaction matrix (`--mmq`)
+
+Per ROADMAP **§6**. Cells filled for Phase B current state:
+
+| New feature / flag | Base inference | --lora-play | LoRA train | Vision | --parallel | --gpu-layers | --prefill-batch | CUDA | ROCm | Default |
+|--------------------|----------------|-------------|------------|--------|------------|--------------|-----------------|------|------|---------|
+| `--mmq` | **wired** (Llama-family Q4_K) | **follow-up** → [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md) | **explicit no-op** (train must stay FP16/FP32 until transpose policy) — **warn TODO** | N/A (text MatVec only) | **wired** if decode uses same Llama MMQ projections | **wired** with partial offload (Q4 upload only for resident layers) | **wired** (batched path uses Q4 `sgemm` serial GEMVs) | **wired** | **explicit no-op** (`supportsQ4KMmq` false) | **off** |
+
+Until LoRA follow-up lands and warn-on-ignore ships: do not claim `--mmq` accelerates `--lora-play` in user-facing docs.
+
 ## Overview
 
 Flash Attention and fused quantized matmul (MMQ) are central to llama.cpp speed. Juno’s strategy is Panama + vendor BLAS first. This tier closes the **measured** remaining gap — or formally closes the tier as unnecessary.
@@ -83,10 +99,10 @@ If no-go:
 
 ### Phase B (conditional)
 
-1. Prototype behind a flag (`--flash-attn on|off|auto` or similar).
-2. Parity vs oracle path.
-3. Perf gate: ≥1.3× decode TPS **or** ≥1.5× long-context prefill on the declared bench.
-4. Docs and ROADMAP.
+1. Prototype behind a flag (`--mmq on|off|auto` / `JUNO_MMQ`) — **landed** (default off).
+2. Parity vs oracle path — **landed** (`Q4KMmqParityTest`).
+3. Perf gate: ≥1.3× decode TPS **or** ≥1.5× long-context prefill on the declared bench — **open**.
+4. Docs and ROADMAP — **in progress** (howto / performance / ROADMAP updated; bake-off pending).
 
 ## Verification and exit gate
 

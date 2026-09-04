@@ -44,6 +44,8 @@ public enum MatVecBackend {
     CUDA_RESIDENT("cuda-resident"),
     /** cuBLAS {@code cublasHSSgemvStridedBatched} with device-resident FP16 A. */
     CUDA_RESIDENT_FP16("cuda-resident-fp16"),
+    /** Fused Q4_K dequant+GEMV with device-resident packed weights. */
+    CUDA_RESIDENT_Q4K("cuda-resident-q4k"),
     /** cuBLAS resident FP32 transpose backward {@code W^T * g}. */
     CUDA_RESIDENT_TRANSPOSE("cuda-resident-transpose"),
     /** cuBLAS resident FP16 transpose backward {@code W^T * g}. */

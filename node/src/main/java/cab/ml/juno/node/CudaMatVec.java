@@ -124,6 +124,18 @@ public final class CudaMatVec implements GpuMatVec {
         return DeviceHalfMatrix.uploadFromFloat32(ctx, host, rows, cols);
     }
 
+    @Override
+    public DeviceQ4KMatrix uploadQ4K(byte[] raw, int rows, int cols) {
+        if (!supportsQ4KMmq())
+            throw new UnsupportedOperationException("Q4_K MMQ kernel is not available");
+        return DeviceQ4KMatrix.upload(ctx, raw, rows, cols);
+    }
+
+    @Override
+    public boolean supportsQ4KMmq() {
+        return Q4KMmqKernel.isAvailable() && Q4KMmqKernel.tryLoad() != null;
+    }
+
     // ── MatVec ────────────────────────────────────────────────────────────────
 
     /**
@@ -262,6 +274,65 @@ public final class CudaMatVec implements GpuMatVec {
             }
         } finally {
             evt.backend(MatVecBackend.CUDA_RESIDENT);
+            evt.rows = rows;
+            evt.cols = cols;
+            evt.commit();
+        }
+    }
+
+    /**
+     * Device-resident fused Q4_K path: packed weights stay on device; one PTX
+     * kernel dequantises and accumulates into FP32 {@code y}.
+     */
+    @Override
+    public float[] sgemv(DeviceQ4KMatrix A, float[] x) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        if (A.isClosed()) throw new IllegalStateException("DeviceQ4KMatrix is closed");
+        int rows = A.rows(), cols = A.cols();
+        if (x.length != cols)
+            throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
+        Q4KMmqKernel kernel = Q4KMmqKernel.tryLoad();
+        if (kernel == null)
+            throw new IllegalStateException("Q4_K MMQ kernel is not loaded");
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+
+        long bytesX = (long) cols * Float.BYTES;
+        long bytesY = (long) rows * Float.BYTES;
+        Fp32Scratch scratch = FP32_SCRATCH.get();
+
+        try (Arena resultArena = Arena.ofConfined()) {
+            synchronized (ctx.cublasSerializationLock()) {
+                MemorySegment stream = ensureStream();
+                try {
+                    ensureFp32Scratch(scratch, bytesX, bytesY);
+                    try (Arena h2dArena = Arena.ofConfined()) {
+                        MemorySegment nativeX = h2dArena.allocate(bytesX);
+                        nativeX.copyFrom(MemorySegment.ofArray(x));
+                        CudaBindings.check(
+                                CudaBindings.callInt(cuda.cudaMemcpyAsync,
+                                        scratch.dX, nativeX, bytesX, CudaBindings.H2D, stream),
+                                "cudaMemcpyAsync(x H2D q4k)");
+                    }
+                    kernel.launch(A.devicePointer(), scratch.dX, scratch.dY, rows, cols, stream);
+                    MemorySegment stagingY = resultArena.allocate(bytesY);
+                    CudaBindings.check(
+                            CudaBindings.callInt(cuda.cudaMemcpyAsync,
+                                    stagingY, scratch.dY, bytesY, CudaBindings.D2H, stream),
+                            "cudaMemcpyAsync(y D2H q4k)");
+                    CudaBindings.check(
+                            CudaBindings.callInt(cuda.cudaStreamSynchronize, stream),
+                            "cudaStreamSynchronize");
+                    float[] y = new float[rows];
+                    MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
+                    return y;
+                } finally {
+                    // no cuBLAS stream bind for this path
+                }
+            }
+        } finally {
+            evt.backend(MatVecBackend.CUDA_RESIDENT_Q4K);
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();

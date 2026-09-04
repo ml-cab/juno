@@ -89,6 +89,17 @@ public interface MatVec {
     }
 
     /**
+     * Compute y = A * x with packed Q4_K {@code A} already on the device
+     * ({@link DeviceQ4KMatrix}).
+     *
+     * @throws UnsupportedOperationException for backends without fused Q4_K kernels
+     */
+    default float[] sgemv(DeviceQ4KMatrix A, float[] x) {
+        throw new UnsupportedOperationException(
+                "Q4_K device-resident weights are not supported by this MatVec implementation");
+    }
+
+    /**
      * Compute Y = A * X for a batch of B input columns in one call.
      * A: [rows, cols] row-major (unchanged from sgemv). X: [B][cols].
      * Returns Y: [B][rows].
@@ -136,6 +147,17 @@ public interface MatVec {
      * may override with a single batched BLAS SGEMM call.
      */
     default float[][] sgemm(DeviceHalfMatrix A, float[][] X) {
+        float[][] Y = new float[X.length][];
+        for (int b = 0; b < X.length; b++) Y[b] = sgemv(A, X[b]);
+        return Y;
+    }
+
+    /**
+     * Compute Y = A * X with packed Q4_K {@code A} on the device.
+     *
+     * <p>Default: B serial {@link #sgemv(DeviceQ4KMatrix, float[])} calls.
+     */
+    default float[][] sgemm(DeviceQ4KMatrix A, float[][] X) {
         float[][] Y = new float[X.length][];
         for (int b = 0; b < X.length; b++) Y[b] = sgemv(A, X[b]);
         return Y;

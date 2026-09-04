@@ -1,5 +1,18 @@
 ## Status 
 
+**Session 69** — Fused Q4_K GPU matmul prototype (`--mmq`)
+
+- Add `--mmq on|off|auto` / `JUNO_MMQ` (default off): keep Q4_K weights packed
+  on device and run a PTX fused dequant+GEMV instead of FP16-resident cuBLAS.
+- New: `MmqOptions`, `CudaDriverBindings`, `Q4KMmqKernel`, `DeviceQ4KMatrix`,
+  classpath `q4k_gemv.ptx` (sm_60+), JFR backend `cuda-resident-q4k`.
+- Wire into `LlamaTransformerHandler` for Q4_K projections (non-Q4_K stays FP16).
+- Parity: `Q4KMmqParityTest` (GPU). Bake-off vs FP16 path still open.
+
+---
+
+## Status 
+
 **Session 68** — Vector API SIMD for CPU quantized matmul kernels, plus tunable row-parallel pool
 
 - Vectorize dot-product accumulation in sgemmQ4KWeightStationary,

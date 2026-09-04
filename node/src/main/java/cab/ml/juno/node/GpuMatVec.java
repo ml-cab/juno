@@ -59,6 +59,16 @@ sealed interface GpuMatVec extends MatVec permits CudaMatVec, RocmMatVec {
     DeviceHalfMatrix uploadHalf(float[] host, int rows, int cols);
 
     /**
+     * Uploads packed Q4_K bytes as a device-resident matrix for fused dequant+GEMV.
+     *
+     * @throws UnsupportedOperationException when the backend has no Q4_K kernel
+     */
+    default DeviceQ4KMatrix uploadQ4K(byte[] raw, int rows, int cols) {
+        throw new UnsupportedOperationException(
+                "Q4_K device-resident upload is not supported by this GpuMatVec");
+    }
+
+    /**
      * Returns true if this backend supports FP16 device-resident weight matrices
      * via {@link #sgemv(DeviceHalfMatrix, float[])}.
      *
@@ -70,6 +80,12 @@ sealed interface GpuMatVec extends MatVec permits CudaMatVec, RocmMatVec {
      * (FP32 resident, twice the VRAM but functionally correct).
      */
     default boolean supportsHalfResident() { return true; }
+
+    /**
+     * Returns true when fused Q4_K device GEMV is usable ({@link #uploadQ4K} +
+     * {@link MatVec#sgemv(DeviceQ4KMatrix, float[])}).
+     */
+    default boolean supportsQ4KMmq() { return false; }
 
     /**
      * Resident frozen backward: {@code z = W^T * g} for row-major

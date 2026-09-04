@@ -367,6 +367,7 @@ cmd_local() {
   local parallel="${JUNO_PARALLEL:-}"
   local batch_window="${JUNO_BATCH_WINDOW_MS:-}"
   local gpu_layers="${JUNO_GPU_LAYERS:-}"
+  local mmq="${JUNO_MMQ:-}"
   local prefill_batch="${JUNO_PREFILL_BATCH:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
@@ -402,6 +403,7 @@ cmd_local() {
       --parallel)         parallel="$2";     shift 2 ;;
       --batch-window-ms)  batch_window="$2"; shift 2 ;;
       --gpu-layers)       gpu_layers="$2";   shift 2 ;;
+      --mmq)              mmq="$2";          shift 2 ;;
       --prefill-batch)    prefill_batch="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
@@ -442,6 +444,7 @@ cmd_local() {
         echo "    --parallel N               static micro-batch size (default 1)"
         echo "    --batch-window-ms M        batch window when parallel>1 (default 50)"
         echo "    --gpu-layers N|all|auto    GPU-resident transformer layers (default all)"
+        echo "    --mmq on|off|auto          fused Q4_K GPU matmul (default off)"
         echo "    --prefill-batch N          prefill microbatch chunk size (default 32)"
         echo ""
         echo "  Backend:"
@@ -513,6 +516,8 @@ cmd_local() {
   [[ -n "$batch_window" ]] && batch_window_arg="--batch-window-ms $batch_window"
   local gpu_layers_arg=""
   [[ -n "$gpu_layers" ]] && gpu_layers_arg="--gpu-layers $gpu_layers"
+  local mmq_arg=""
+  [[ -n "$mmq" ]] && mmq_arg="--mmq $mmq"
   local prefill_batch_arg=""
   [[ -n "$prefill_batch" ]] && prefill_batch_arg="--prefill-batch $prefill_batch"
   local mmproj_arg=""
@@ -541,6 +546,7 @@ cmd_local() {
     ${parallel_arg} \
     ${batch_window_arg} \
     ${gpu_layers_arg} \
+    ${mmq_arg} \
     ${prefill_batch_arg} \
     ${mmproj_arg} \
     ${health_flag} \

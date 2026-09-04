@@ -50,6 +50,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--verbose` / `-v` | — | cluster, local | Verbose logging |
 | `--cpu` | — | cluster, local | Force CPU inference: sets `JUNO_USE_GPU=false`. Does not enable LoRA mode. |
 | `--gpu-layers N\|all\|auto` | `all` | cluster, local | Transformer layers resident on GPU (`JUNO_GPU_LAYERS`). `auto` fits until VRAM OOM. |
+| `--mmq on\|off\|auto` | `off` | cluster, local | Fused Q4_K GPU matmul (`JUNO_MMQ`). Keeps Q4_K packed on device instead of FP16-resident dequant. `auto` enables when CUDA + kernel load. |
 | `--parallel N` | `1` | cluster, local, master | Static micro-batch size (`JUNO_PARALLEL`). `1` disables batching; recommend `8` for API servers. |
 | `--batch-window-ms M` | `50` when parallel>1 | cluster, local, master | Batch collect window (`JUNO_BATCH_WINDOW_MS`). |
 | `--prefill-batch N` | `32` | cluster, local, master | Max prompt tokens per prefill GPU window (`JUNO_PREFILL_BATCH`). Use `1` for per-token batched prefill. |
@@ -78,7 +79,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--output PATH` | `<model>-merged.gguf` | Output file (always plain GGUF, even if source is llamafile) |
 | `--heap SIZE` | `4g` | JVM heap — use at least 2x the model file size |
 
-**Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `JUNO_GPU_LAYERS`, `JUNO_PARALLEL`, `JUNO_BATCH_WINDOW_MS`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
+**Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `JUNO_GPU_LAYERS`, `JUNO_MMQ`, `JUNO_PARALLEL`, `JUNO_BATCH_WINDOW_MS`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
 `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`,
 `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `LORA_PLAY_PATH`, `API_PORT`
 
