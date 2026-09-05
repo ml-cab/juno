@@ -69,6 +69,11 @@ public final class LoraMmqPolicy {
 		return gpu != null && enabledForPlayback(gpu.supportsQ4KMmq());
 	}
 
+	/** {@link MatVec} overload for callers outside the node GPU types (REPL). */
+	public static boolean enabledForPlayback(MatVec backend) {
+		return backend instanceof GpuMatVec gpu && enabledForPlayback(gpu);
+	}
+
 	/**
 	 * When {@code --mmq} is preferred outside playback, log once that training
 	 * stays on FP residency (explicit no-op per ROADMAP §6).
@@ -82,6 +87,7 @@ public final class LoraMmqPolicy {
 			return false;
 		log.warning("LoRA training ignores --mmq (fused Q4_K); frozen weights stay FP16/FP32. "
 				+ "Use --lora-play for playback MMQ.");
+		LoraTrainNotices.add(LoraTrainNotices.MMQ_TRAIN_IGNORED);
 		return true;
 	}
 

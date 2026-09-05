@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Phase 1 in progress** — playback-only MMQ wiring started (Approach A) |
+| **Status** | **Phase 1 complete** — playback MMQ wired; unit/parity + smoke/JFR + compare-lora vs `release-0.1.2` green (2026-09-05) |
 | **Adjacency** | Tier 13 Phase B (MMQ landed on `LlamaTransformerHandler` only) |
 | **Not an Infra tier** | Does not consume the “one Infra tier in flight” slot; own exit gate under LoRA §2 |
 | **Prompt** | [`PROMPT-LoRA-MMQ.md`](PROMPT-LoRA-MMQ.md) |
@@ -147,10 +147,10 @@ CLI help / howto: state that `--mmq` accelerates LoRA **playback** when CUDA fus
 
 ### Unit / parity (first)
 
-1. `LoraMmqPolicy` / play-context parsing tests (on/off/auto × play/train × microbatch).
-2. `ResidentQ4KWeight` close / double-close / sgemv delegates (mock or GPU group).
-3. Extend or add GPU parity: frozen Q4 play forward vs CPU `matVec` within existing MMQ tol (`1e-2`), **with** a dummy LoRA delta applied after (order check).
-4. OOM closer unit: partial Q4 array closed (pattern from `LoraResidentUploadTest`).
+1. [x] `LoraMmqPolicy` / play-context parsing tests (on/off/auto × play/train × microbatch).
+2. [x] `ResidentQ4KWeight` close / double-close / sgemv delegates (GPU group: `LoraQ4KPlaybackParityTest`).
+3. [x] GPU parity: frozen Q4 play forward vs CPU `matVec` within existing MMQ tol (`1e-2`), **with** a dummy LoRA delta applied after (order check).
+4. [x] OOM closer unit: playback OOM closes once and does not mutate microbatch (`LoraResidentUpload.runPlayback`).
 
 ### Integration / gates
 
@@ -172,9 +172,9 @@ CLI help / howto: state that `--mmq` accelerates LoRA **playback** when CUDA fus
 
 ### When LoRA MMQ may be called done (Phase 1)
 
-- [ ] `--lora-play` + `--mmq on` uses Q4 packed path; JFR proves `cuda-resident-q4k`.
-- [ ] `--mmq off` LoRA behavior bit-compatible with pre-change (compare-lora ratios).
-- [ ] Train path with `--mmq on` does not switch frozen weights to Q4-only; no NaN on one-step smoke.
+- [x] `--lora-play` + `--mmq on` uses Q4 packed path; JFR proves `cuda-resident-q4k` (`20260905T031236Z`: count **4020**).
+- [x] `--mmq off` LoRA behavior bit-compatible with pre-change (`compare-lora.sh` vs `release-0.1.2` → [`20260905T031520Z-lora`](../perf-compare/20260905T031520Z-lora/): train **0.96×**, play tps **0.89×**, recall ok).
+- [x] Train path with `--mmq on` does not switch frozen weights to Q4-only; no NaN on one-step smoke (FP32 upload + ignore-mmq warn; loss ~2.77).
 - [x] Docs: `howto.md`, `performance.md`, ROADMAP/Tier13 status; no competitor names outside infra-plan/perf-compare; no Infra tier numbers in CLI/JFR strings.
 - [x] Preview file list published; no zip.
 

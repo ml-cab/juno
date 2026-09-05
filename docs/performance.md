@@ -12,9 +12,18 @@ Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). T
 
 **JFR:** `juno.MatVec.backend.cuda-resident-q4k.*`.
 
-**Parity:** `Q4KMmqParityTest` (GPU group) — fused kernel vs CPU `matVecInto` within `1e-2`. Policy: `LoraMmqPolicyTest`.
+**Parity:** `Q4KMmqParityTest` (GPU group) — fused kernel vs CPU `matVecInto` within `1e-2`. Policy: `LoraMmqPolicyTest`. Playback order: `LoraQ4KPlaybackParityTest` (Q4 GEMV then LoRA delta).
 
-**Bake-off (open):** publish `compare-llama-cpp.sh --gpu` with `--mmq on` vs off; exit gate ≥1.3× decode TPS on resident models. LoRA: `compare-lora.sh --gpu` with MMQ on/off for play TPS + recall.
+**LoRA MMQ Phase 1 smoke** ([`target/lora-mmq-smoke/20260905T031236Z/`](../target/lora-mmq-smoke/20260905T031236Z/SUMMARY.md), GTX 1080):
+
+| Gate | Result |
+|------|--------|
+| `--lora-play --mmq on` recall | `My name is Juno`; REPL `Fused Q4_K MMQ enabled`; JFR `cuda_resident_q4k.count=4020` |
+| Base `--mmq on` (no LoRA) | exit 0; JFR `cuda_resident_q4k.count=4154` |
+| `juno lora` + `JUNO_MMQ=on` | ignore-mmq warn; FP32 upload; loss finite (~2.77) |
+| `compare-lora.sh --gpu --baseline release-0.1.2` | **ok** — train **0.96×**, play tps **0.89×** ([`20260905T031520Z-lora`](perf-compare/20260905T031520Z-lora/)) |
+
+**Bake-off (still open for Tier 13B):** publish `compare-llama-cpp.sh --gpu` with `--mmq on` vs off; exit gate ≥1.3× decode TPS on resident models. Separate `--lora-play` play-tps with MMQ on vs off not yet in `compare-lora.sh` (train REPL path).
 
 ## Vector SIMD / CPU MatVec
 

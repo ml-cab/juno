@@ -36,7 +36,7 @@ Phase A **complete** (2026-08-31 bake-off JFR; record final memo in `docs/perfor
 
 **Architecture follow-up (before 13B exit):** Phi-2 / Phi-3 / Qwen3 handlers still use FP16-resident upload; extend the same Q4_K packed path (shared upload helper preferred) per ROADMAP §5.
 
-**LoRA adjacency (Phase 1 in progress):** `--lora-play` / `LoraTrainableHandler` uses packed Q4 via `LoraMmqPolicy` + `ResidentQ4KWeight` when `--mmq` prefers it. Train stays FP16/FP32 with an explicit warn. Plan: [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md). Not part of Tier 13B exit.
+**LoRA adjacency (Phase 1 complete):** `--lora-play` / `LoraTrainableHandler` uses packed Q4 via `LoraMmqPolicy` + `ResidentQ4KWeight` when `--mmq` prefers it. Train stays FP16/FP32 with an explicit warn. Smoke/JFR + compare-lora vs `release-0.1.2` green (2026-09-05). Plan: [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md). Not part of Tier 13B exit.
 
 ## Feature × surface interaction matrix (`--mmq`)
 

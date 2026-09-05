@@ -69,7 +69,9 @@ GPU FFI (node module — Panama project, JEP 454):
         Handlers upload only resident global layers; matVec falls back to CPU quant when dev is null.
   MmqOptions — policy for --mmq / JUNO_MMQ (on|off|auto). Default off.
   LoraMmqPolicy — playback-only MMQ gate (juno.lora.play.path); train stays FP residency.
-  CudaDriverBindings / Q4KMmqKernel / DeviceQ4KMatrix — PTX fused Q4_K dequant+GEMV
+  LoraResidentUpload.runPlayback — play Q4 OOM closes packed buffers and falls to CPU
+        without the train FP16 microbatch retry.
+  ResidentQ4KWeight — LoRA play wrapper around DeviceQ4KMatrix (forward-only).
         (classpath q4k_gemv.ptx); JFR backend cuda-resident-q4k.
   ResidentQ4KWeight — LoRA play wrapper around DeviceQ4KMatrix (forward-only).
   CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16)

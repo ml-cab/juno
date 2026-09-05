@@ -297,7 +297,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		ResidentQ4KWeight[] wDownQ4 = tryMmq ? new ResidentQ4KWeight[L] : null;
 		ResidentQ4KWeight[] outQ4Holder = tryMmq ? new ResidentQ4KWeight[1] : null;
 		GpuBlasOps[] opsHolder = new GpuBlasOps[1];
-		LoraResidentUpload.run(gpu, log, () -> {
+		Runnable closer = () -> {
 			if (opsHolder[0] != null) {
 				opsHolder[0].close();
 				opsHolder[0] = null;
@@ -322,7 +322,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 				LoraResidentWeights.closeQuietly(outQ4Holder[0]);
 				outQ4Holder[0] = null;
 			}
-		}, () -> {
+		};
+		Runnable attempt = () -> {
 			boolean microbatch = !tryMmq && LoraMicrobatch.current() > 1;
 			boolean half = !tryMmq && !microbatch && gpu.supportsHalfResident();
 			if (tryMmq)
@@ -403,7 +404,11 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			this.blasOps = opsHolder[0];
 			log.info("LoRA handler: GPU weight upload complete ("
 					+ (tryMmq ? "Q4K" : (half ? "FP16" : "FP32")) + ").");
-		});
+		};
+		if (tryMmq)
+			LoraResidentUpload.runPlayback(log, closer, attempt);
+		else
+			LoraResidentUpload.run(gpu, log, closer, attempt);
 	}
 
 	private static void assignUpload(LoraResidentWeights.UploadSlot slot, int li,

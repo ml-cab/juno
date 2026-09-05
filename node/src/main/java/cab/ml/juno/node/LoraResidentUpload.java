@@ -41,6 +41,19 @@ final class LoraResidentUpload {
 	}
 
 	/**
+	 * Playback MMQ upload: close partial Q4 on VRAM OOM and fall back to CPU.
+	 * Does <em>not</em> retry FP16 microbatch (that ladder is train-only and
+	 * would mutate {@link LoraMicrobatch} during {@code --lora-play}).
+	 */
+	static void runPlayback(Logger log, Runnable closer, Runnable uploadAttempt) {
+		try {
+			uploadAttempt.run();
+		} catch (IllegalStateException ex) {
+			LoraResidentWeights.tryRecoverFromUploadOom(ex, log, closer);
+		}
+	}
+
+	/**
 	 * Package-visible overload for unit tests that simulate OOM without a live GPU.
 	 *
 	 * @param supportsHalfResident whether FP16 residency retry is available

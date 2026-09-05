@@ -57,6 +57,12 @@ public final class LoraTrainNotices {
 			"GPU device index out of range — training on CPU.\n"
 					+ "  LoRA runs entirely on CPU (slower). Fix juno.gpu.device / juno.cuda.device.";
 
+	/** {@code --mmq} preferred during {@code juno lora} train — frozen path stays FP. */
+	public static final String MMQ_TRAIN_IGNORED =
+			"LoRA training ignores --mmq (fused Q4_K). Frozen weights stay FP16/FP32.\n"
+					+ "  Use --lora-play for playback fused Q4_K. Training needs a transpose "
+					+ "path that packed Q4 does not provide.";
+
 	private static final CopyOnWriteArrayList<String> NOTICES = new CopyOnWriteArrayList<>();
 
 	private LoraTrainNotices() {

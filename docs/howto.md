@@ -50,7 +50,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--verbose` / `-v` | — | cluster, local | Verbose logging |
 | `--cpu` | — | cluster, local | Force CPU inference: sets `JUNO_USE_GPU=false`. Does not enable LoRA mode. |
 | `--gpu-layers N\|all\|auto` | `all` | cluster, local | Transformer layers resident on GPU (`JUNO_GPU_LAYERS`). `auto` fits until VRAM OOM. |
-| `--mmq on\|off\|auto` | `off` | cluster, local | Fused Q4_K GPU matmul (`JUNO_MMQ`). Keeps Q4_K packed on device instead of FP16-resident dequant. Applies to base Llama-family inference and `--lora-play` when the CUDA kernel loads. LoRA **training** ignores `--mmq` (frozen weights stay FP16/FP32). `auto` enables when CUDA + kernel load. |
+| `--mmq on\|off\|auto` | `off` | cluster, local | Fused Q4_K GPU matmul (`JUNO_MMQ`). Keeps Q4_K packed on device instead of FP16-resident dequant. Applies to base Llama-family inference and `--lora-play` when the CUDA kernel loads (local REPL prints a confirmation line). LoRA **training** ignores `--mmq` (frozen weights stay FP16/FP32; the train REPL warns). `auto` enables when CUDA + kernel load. |
 | `--parallel N` | `1` | cluster, local, master | Static micro-batch size (`JUNO_PARALLEL`). `1` disables batching; recommend `8` for API servers. |
 | `--batch-window-ms M` | `50` when parallel>1 | cluster, local, master | Batch collect window (`JUNO_BATCH_WINDOW_MS`). |
 | `--prefill-batch N` | `32` | cluster, local, master | Max prompt tokens per prefill GPU window (`JUNO_PREFILL_BATCH`). Use `1` for per-token batched prefill. |

@@ -16,22 +16,25 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260901T173121Z-parallel`](20260901T173121Z-parallel/) | GPU multi-session static batch (`--parallel` 1 vs 8) | aggregate tg | [INDEX](20260901T173121Z-parallel/INDEX.md) |
 | [`20260901T234024Z-prefill`](20260901T234024Z-prefill/) | CPU prefill microbatch (`--prefill-batch` 1 vs 32) | JFR pp | [INDEX](20260901T234024Z-prefill/INDEX.md) |
 | [`20260902T200210Z-lora`](20260902T200210Z-lora/) | GPU LoRA train-qa + playback (`compare-lora.sh`) | train ms / playback tps | [INDEX](20260902T200210Z-lora/INDEX.md) |
+| [`20260905T031520Z-lora`](20260905T031520Z-lora/) | GPU LoRA train-qa + playback (`compare-lora.sh`) | train ms / playback tps | [INDEX](20260905T031520Z-lora/INDEX.md) |
 | [`20260904T141315Z-vision`](20260904T141315Z-vision/) | GPU vision chat (`compare-vision.sh`, `47-vision`) | latency / decode tps | [INDEX](20260904T141315Z-vision/INDEX.md) |
 | [`20260904T194612Z`](20260904T194612Z/) | CPU Vector SIMD (`--vector 0`) | JFR pp/tg | [INDEX](20260904T194612Z/INDEX.md) |
 | [`20260904T195731Z`](20260904T195731Z/) | CPU Vector SIMD (`--vector 1`) | JFR pp/tg | [INDEX](20260904T195731Z/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 
-## LoRA train-qa regression — `20260902T200210Z-lora`
+## LoRA train-qa regression — `20260905T031520Z-lora`
 
 Scenario: TinyLlama Q4_K_M · `/train-qa` *What is your name?* → *My name is Juno* · loss target 1.2 · playback temperature 0.
 
 | ref | commit | train total ms | ms/pass | passes | playback tps | recall |
 |-----|--------|---------------:|--------:|-------:|-------------:|:------:|
-| release-0.1.2 | 51a3b90 | 56,722 | 3,781 | 15 | 10.6 | ✓ |
-| 67-inference (HEAD) | 5fee573 | 326,470 | 21,765 | 15 | 7.4 | ✓ |
+| release-0.1.2 | 51a3b90 | 50,000 | 3,333 | 15 | 36.1 | ✓ |
+| 67-inference (HEAD) | e0245ae | 48,000 | 3,200 | 15 | 32.2 | ✓ |
 
-**Current vs release-0.1.2:** train wall time **5.76×** slower; playback tps **0.69×** (31% slower). Quality gate passes on both branches. Run: `./scripts/performance-tests/compare-lora.sh --gpu --baseline release-0.1.2`.
+**Current vs release-0.1.2:** train wall **0.96×**; playback tps **0.89×** (≥0.80 gate). Status **ok**. Run: `./scripts/performance-tests/compare-lora.sh --gpu --baseline release-0.1.2`.
+
+Earlier failing snapshot (pre-fix): [`20260902T200210Z-lora`](20260902T200210Z-lora/) (train **5.76×**, play tps **0.69×**).
 
 ## Vision chat regression — `compare-vision.sh`
 

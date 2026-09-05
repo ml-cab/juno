@@ -1894,9 +1894,17 @@ public final class ConsoleMain {
 		// One MatVec per process — shares the same GpuContext / cuBLAS handle across
 		// shards.
 		MatVec sharedBackend = (gpuCtx != null) ? gpuCtx.createMatVec() : ForwardPassHandlerLoader.selectBackend();
+		if (loraPlayPath != null)
+			cab.ml.juno.node.LoraTrainNotices.clear();
 		for (var assignment : shardMap.assignments()) {
 			var context = ShardContext.from(assignment, config.vocabSize(), config.hiddenDim(), config.numHeads());
 			handlers.add(ForwardPassHandlerLoader.load(Path.of(modelPath), context, sharedBackend, playAdapters));
+		}
+		if (loraPlayPath != null) {
+			if (cab.ml.juno.node.LoraMmqPolicy.enabledForPlayback(sharedBackend))
+				print(Color.GREEN + "  ✔ Fused Q4_K MMQ enabled (LoRA playback)" + Color.RESET);
+			for (String notice : cab.ml.juno.node.LoraTrainNotices.drain())
+				print(Color.YELLOW + "  ⚠ " + notice + Color.RESET);
 		}
 
 		// MUST run before LocalInferencePipeline.from() below: prepareVisionHandler()

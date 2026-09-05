@@ -1,12 +1,16 @@
 ## Status 
 
-**Session 70** — LoRA playback fused Q4_K MMQ (Phase 1 start)
+**Session 70** — LoRA playback fused Q4_K MMQ (Phase 1 complete)
 
 - Wire `--mmq` into `--lora-play` via `LoraMmqPolicy` + `ResidentQ4KWeight`
   (playback-only; train stays FP16/FP32 and warns once when `--mmq` is preferred).
-- `ConsoleMain` sets `juno.lora.play.path` for in-process local play (cluster already did).
-- `LoraTrainableHandler` / Qwen2 delegate: Q4_K packed upload when play + CUDA kernel.
-- Unit: `LoraMmqPolicyTest`. Manual recall + JFR `cuda-resident-q4k` still open.
+- `ConsoleMain` sets `juno.lora.play.path` for in-process local play (cluster already did)
+  and prints a REPL line when playback MMQ is active (JUL is off without `--verbose`).
+- Play OOM uses `LoraResidentUpload.runPlayback` (close Q4 → CPU; no train FP16 microbatch retry).
+- Unit: `LoraMmqPolicyTest`, `LoraResidentUploadTest` playback OOM, `LoraResidentWeightsTest` Q4 close/CPU matVec.
+- GPU: `LoraQ4KPlaybackParityTest` (packed GEMV then LoRA delta vs CPU, `1e-2`; close / double-close).
+- Smoke (GTX 1080): play JFR `cuda_resident_q4k.count=4020` + recall; train ignore-mmq + finite loss;
+  `compare-lora.sh --gpu --baseline release-0.1.2` ok (train 0.96×, play tps 0.89×) → `20260905T031520Z-lora`.
 
 ---
 

@@ -60,6 +60,42 @@ class LoraResidentWeightsTest {
 	}
 
 	@Test
+	@DisplayName("closeQ4Array is null-safe")
+	void closeQ4Array_nullSafe() {
+		LoraResidentWeights.closeQ4Array(null);
+		LoraResidentWeights.closeQ4Array(new ResidentQ4KWeight[0]);
+		LoraResidentWeights.closeQ4Array(new ResidentQ4KWeight[] { null });
+		LoraResidentWeights.closeQuietly((ResidentQ4KWeight) null);
+	}
+
+	@Test
+	@DisplayName("UploadSlot closeQuietly is null-safe for both arms")
+	void uploadSlot_closeQuietly() {
+		LoraResidentWeights.UploadSlot.fp(null).closeQuietly();
+		LoraResidentWeights.UploadSlot.q4(null).closeQuietly();
+	}
+
+	@Test
+	@DisplayName("matVec prefers CPU when q4 and fp are null")
+	void matVec_cpu_whenNoResident() {
+		int rows = 32;
+		int cols = 256;
+		float[] host = new float[rows * cols];
+		for (int i = 0; i < host.length; i++)
+			host[i] = ((i % 17) - 8) * 0.01f;
+		byte[] raw = GgufKQuantCodec.encode(host, QuantizationLayout.TYPE_Q4_K);
+		GgufReader.QuantizedTensor t = new GgufReader.QuantizedTensor(
+				"t", QuantizationLayout.TYPE_Q4_K, (long) rows * cols, raw);
+		float[] x = new float[cols];
+		for (int i = 0; i < cols; i++)
+			x[i] = ((i % 5) - 2) * 0.1f;
+		float[] expected = new float[rows];
+		LlamaTransformerHandler.matVecInto(t, x, expected, rows, cols);
+		float[] got = LoraResidentWeights.matVec(t, null, null, x, rows, cols);
+		assertThat(got).containsExactly(expected);
+	}
+
+	@Test
 	@DisplayName("matVec / transposedMatVec fall back to CPU when resident is null")
 	void cpuFallback_whenNoResident() {
 		// 2×3 F32 row-major

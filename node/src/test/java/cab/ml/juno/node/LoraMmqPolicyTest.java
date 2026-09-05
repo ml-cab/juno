@@ -44,6 +44,7 @@ class LoraMmqPolicyTest {
 		restoreProp(LoraMmqPolicy.PLAY_PATH_PROPERTY, originalPlayPath);
 		restoreProp(LoraMicrobatch.PROPERTY, originalMicrobatch);
 		LoraMmqPolicy.resetWarnStateForTests();
+		LoraTrainNotices.clear();
 	}
 
 	private static void restoreProp(String key, String value) {
@@ -114,9 +115,19 @@ class LoraMmqPolicyTest {
 	void train_warn_once() {
 		System.clearProperty(LoraMmqPolicy.PLAY_PATH_PROPERTY);
 		System.setProperty(MmqOptions.ENV_PROPERTY, "on");
+		LoraTrainNotices.clear();
 		Logger log = Logger.getLogger("LoraMmqPolicyTest.warn");
 		assertThat(LoraMmqPolicy.warnIfTrainIgnoresMmq(log)).isTrue();
 		assertThat(LoraMmqPolicy.warnIfTrainIgnoresMmq(log)).isFalse();
+		assertThat(LoraTrainNotices.drain()).containsExactly(LoraTrainNotices.MMQ_TRAIN_IGNORED);
+	}
+
+	@Test
+	@DisplayName("MatVec overload is false for null / non-GPU backends")
+	void matvec_overload() {
+		System.setProperty(MmqOptions.ENV_PROPERTY, "on");
+		System.setProperty(LoraMmqPolicy.PLAY_PATH_PROPERTY, "/tmp/x.lora");
+		assertThat(LoraMmqPolicy.enabledForPlayback((MatVec) null)).isFalse();
 	}
 
 	@Test

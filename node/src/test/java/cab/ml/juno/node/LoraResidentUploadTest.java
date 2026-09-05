@@ -133,6 +133,34 @@ class LoraResidentUploadTest {
 	}
 
 	@Test
+	@DisplayName("playback OOM closes once and does not mutate microbatch")
+	void playback_oom_no_fp16_retry() {
+		System.clearProperty(LoraMicrobatch.PROPERTY);
+		AtomicInteger attempts = new AtomicInteger();
+		AtomicInteger closes = new AtomicInteger();
+		LoraResidentUpload.runPlayback(LOG, closes::incrementAndGet, () -> {
+			attempts.incrementAndGet();
+			throw new IllegalStateException("cudaMalloc failed: out of memory");
+		});
+		assertThat(attempts.get()).isEqualTo(1);
+		assertThat(closes.get()).isEqualTo(1);
+		assertThat(System.getProperty(LoraMicrobatch.PROPERTY)).isNull();
+		assertThat(LoraTrainNotices.drain()).containsExactly(LoraTrainNotices.CPU_RESIDENT);
+	}
+
+	@Test
+	@DisplayName("playback OOM under gpu fails closed after close")
+	void playback_oom_gpu_fails_closed() {
+		System.setProperty("juno.lora.train.device", LoraTrainDevice.GPU);
+		AtomicInteger closes = new AtomicInteger();
+		assertThatThrownBy(() -> LoraResidentUpload.runPlayback(LOG, closes::incrementAndGet, () -> {
+			throw new IllegalStateException("cudaMalloc failed: out of memory");
+		})).isInstanceOf(IllegalStateException.class).hasMessageContaining("--lora-train-device=gpu");
+		assertThat(closes.get()).isEqualTo(1);
+		assertThat(LoraTrainNotices.drain()).isEmpty();
+	}
+
+	@Test
 	@DisplayName("non-VRAM errors are rethrown without retry")
 	void non_vram_rethrows() {
 		AtomicInteger attempts = new AtomicInteger();
