@@ -63,6 +63,28 @@ class KvBlockPoolTest {
 	}
 
 	@Test
+	@DisplayName("Q8_0 write/read roundtrip and smaller pages than F16")
+	void q8_roundtrip_and_size() {
+		int kvDim = 256;
+		int pageSize = 8;
+		KvBlockPool f16 = new KvBlockPool(pageSize, kvDim, KvElementType.F16);
+		KvBlockPool q8 = new KvBlockPool(pageSize, kvDim, KvElementType.Q8_0);
+		int id = q8.allocate();
+		float[] tok = new float[kvDim];
+		for (int i = 0; i < kvDim; i++)
+			tok[i] = (float) Math.cos(i * 0.02);
+		q8.writeToken(id, 3, tok);
+		float[] got = new float[kvDim];
+		q8.readToken(id, 3, got);
+		for (int i = 0; i < kvDim; i++)
+			assertThat(got[i]).isCloseTo(tok[i], org.assertj.core.data.Offset.offset(0.05f));
+
+		f16.allocate();
+		assertThat(q8.bytesPerToken() * 2L).isLessThanOrEqualTo(f16.bytesPerToken());
+		assertThat(q8.allocatedBytes()).isLessThan(f16.allocatedBytes());
+	}
+
+	@Test
 	@DisplayName("concurrent allocate/free keeps unique live ids")
 	void concurrent_allocate_free() throws Exception {
 		KvBlockPool pool = new KvBlockPool(8, 16, KvElementType.F16);

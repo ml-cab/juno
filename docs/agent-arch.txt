@@ -6,8 +6,10 @@ Module dependency (excerpt):
         Q8_0KvCodec, DenseKvTensor (in-process K/V; q8_0 packs per token;
         attention dequants to float scratch). NodeKVCacheAdapter (node) flushes
         typed payloads into the manager.
-        KvBlockPool / KvPageTable / KvPageSizeOptions / ServeScheduleOptions
-        (paged KV for continuous schedule; dense remains default static path).
+        KvBlockPool / KvPageTable / PagedKvTensor / PagedKvArena / PagedKvCodec /
+        KvPageSizeOptions / ServeScheduleOptions
+        (paged KV for continuous schedule; dense remains default static path;
+        manager may hold a shared PagedKvArena; adapter flushes paged blobs).
   lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA)
   node — GgufReader, LlamafileGgufIndex, LlamaTransformerHandler,
         Phi2TransformerHandler, Phi2Rope, Phi3TransformerHandler, Phi3Rope, MatVec

@@ -48,20 +48,55 @@ public final class KvPageTable {
 		return pool.pageSize();
 	}
 
+	public int kvDim() {
+		return pool.kvDim();
+	}
+
+	public KvElementType type() {
+		return pool.type();
+	}
+
+	public KvBlockPool pool() {
+		return pool;
+	}
+
 	/** Append one token vector; allocates a new page when the current page is full. */
 	public void appendToken(float[] src) {
 		appendToken(src, 0);
 	}
 
 	public void appendToken(float[] src, int srcOff) {
+		writeToken(seqLen, src, srcOff);
+	}
+
+	/**
+	 * Write at logical position {@code pos}. Append-only or in-place overwrite;
+	 * holes ({@code pos > seqLen}) are rejected.
+	 */
+	public void writeToken(int pos, float[] src) {
+		writeToken(pos, src, 0);
+	}
+
+	public void writeToken(int pos, float[] src, int srcOff) {
+		if (pos < 0)
+			throw new IllegalArgumentException("pos must be >= 0");
+		if (pos > seqLen)
+			throw new IllegalArgumentException("pos " + pos + " creates a hole (seqLen=" + seqLen + ")");
+		if (pos >= DenseKvTensor.MAX_SEQ_LEN)
+			throw new IllegalStateException(
+					"KV cache position " + pos + " exceeds MAX_SEQ_LEN=" + DenseKvTensor.MAX_SEQ_LEN);
 		int pageSize = pool.pageSize();
-		int slot = seqLen % pageSize;
-		if (slot == 0) {
-			blockIds.add(pool.allocate());
+		if (pos == seqLen) {
+			int slot = seqLen % pageSize;
+			if (slot == 0)
+				blockIds.add(pool.allocate());
+			pool.writeToken(blockIds.get(blockIds.size() - 1), slot, src, srcOff);
+			seqLen++;
+			return;
 		}
-		int blockId = blockIds.get(blockIds.size() - 1);
-		pool.writeToken(blockId, slot, src, srcOff);
-		seqLen++;
+		int page = pos / pageSize;
+		int slot = pos % pageSize;
+		pool.writeToken(blockIds.get(page), slot, src, srcOff);
 	}
 
 	/**
@@ -69,12 +104,19 @@ public final class KvPageTable {
 	 * {@code seqLen * kvDim}).
 	 */
 	public void gather(float[] workspace) {
-		int need = seqLen * pool.kvDim();
+		gather(workspace, seqLen);
+	}
+
+	/** Gather a prefix of length {@code len} ({@code 0 < len <= seqLen}). */
+	public void gather(float[] workspace, int len) {
+		if (len < 0 || len > seqLen)
+			throw new IllegalArgumentException("len out of range: " + len);
+		int need = len * pool.kvDim();
 		if (workspace == null || workspace.length < need)
-			throw new IllegalArgumentException("workspace must hold seqLen*kvDim floats");
+			throw new IllegalArgumentException("workspace must hold len*kvDim floats");
 		int pageSize = pool.pageSize();
 		int kvDim = pool.kvDim();
-		for (int p = 0; p < seqLen; p++) {
+		for (int p = 0; p < len; p++) {
 			int page = p / pageSize;
 			int slot = p % pageSize;
 			pool.readToken(blockIds.get(page), slot, workspace, p * kvDim);

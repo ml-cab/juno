@@ -27,6 +27,8 @@ import cab.ml.juno.kvcache.KVBlock;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.kvcache.KVKey;
 import cab.ml.juno.kvcache.KvElementType;
+import cab.ml.juno.kvcache.PagedKvCodec;
+import cab.ml.juno.kvcache.PagedKvTensor;
 import cab.ml.juno.kvcache.Q8_0KvCodec;
 
 /**
@@ -109,6 +111,29 @@ public final class NodeKVCacheAdapter {
 		encodeTensorPayload(k, seqLen, data, 4);
 		encodeTensorPayload(v, seqLen, data, 4 + kBytes);
 		putBlock(requestId, absoluteLayerIndex, data, seqLen, kType, vType);
+	}
+
+	/** Write-through from paged tensors (continuous schedule). */
+	public void flush(String requestId, int absoluteLayerIndex,
+			PagedKvTensor k, PagedKvTensor v, int seqLen) {
+		byte[] data = PagedKvCodec.encode(k, v, seqLen);
+		putBlock(requestId, absoluteLayerIndex, data, seqLen, k.type(), v.type());
+	}
+
+	/**
+	 * Restore into empty paged tensors when the manager holds a typed blob.
+	 *
+	 * @return true if restored
+	 */
+	public boolean tryRestorePaged(String requestId, int absoluteLayerIndex, int kvDim,
+			PagedKvTensor k, PagedKvTensor v) {
+		Optional<KVBlock> blk = manager.get(new KVKey(requestId, absoluteLayerIndex));
+		if (blk.isEmpty())
+			return false;
+		PagedKvCodec.decodeInto(blk.get(), kvDim, k, v);
+		log.fine("KV restored (paged) from manager: requestId=" + requestId
+				+ " layer=" + absoluteLayerIndex + " seqLen=" + blk.get().sequenceLen());
+		return true;
 	}
 
 	public Optional<KvPair> tryRestore(String requestId, int absoluteLayerIndex, int kvDim) {

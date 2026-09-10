@@ -197,7 +197,7 @@ Exit only when:
 ## Implementation todos
 
 1. ~~Page table + block pool + unit tests~~
-2. KVBlock / KVCacheManager plumbing (+ q8_0 if Tier 6 present).
+2. ~~KVBlock / KVCacheManager plumbing (+ q8_0 if Tier 6 present)~~
 3. Dual-path handler integration (dense static + paged continuous) + parity tests.
 4. Gather-tax microbench + mitigation ladder + `docs/performance.md` decision.
 5. CLI/docs; ROADMAP status; preview files; no zip.

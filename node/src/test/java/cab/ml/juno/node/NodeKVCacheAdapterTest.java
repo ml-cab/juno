@@ -212,6 +212,42 @@ class NodeKVCacheAdapterTest {
         assertThat(manager.gpuBlockCount()).isZero();
     }
 
+    @Test
+    void flush_paged_q8_round_trips_via_tryRestorePaged() {
+        var arena = new cab.ml.juno.kvcache.PagedKvArena(4, KV_DIM,
+                cab.ml.juno.kvcache.KvElementType.Q8_0,
+                cab.ml.juno.kvcache.KvElementType.F16);
+        manager = new KVCacheManager(
+                new GpuKVCache(1024 * 1024L),
+                new CpuKVCache(64),
+                cab.ml.juno.kvcache.LayerRange.all(),
+                arena);
+        adapter = new NodeKVCacheAdapter(manager);
+
+        var k = arena.newK();
+        var v = arena.newV();
+        float[] tok = new float[KV_DIM];
+        for (int p = 0; p < SEQ_LEN; p++) {
+            for (int i = 0; i < KV_DIM; i++)
+                tok[i] = p * 0.1f + i * 0.01f;
+            k.writeToken(p, tok);
+            v.writeToken(p, tok);
+        }
+        adapter.flush(REQUEST_ID, ABS_LAYER, k, v, SEQ_LEN);
+
+        var k2 = arena.newK();
+        var v2 = arena.newV();
+        assertThat(adapter.tryRestorePaged(REQUEST_ID, ABS_LAYER, KV_DIM, k2, v2)).isTrue();
+        float[] kOut = k2.toFloatArray(SEQ_LEN);
+        float[] vOut = v2.toFloatArray(SEQ_LEN);
+        for (int p = 0; p < SEQ_LEN; p++) {
+            for (int i = 0; i < KV_DIM; i++) {
+                assertThat(kOut[p * KV_DIM + i]).isCloseTo(p * 0.1f + i * 0.01f, within(0.05f));
+                assertThat(vOut[p * KV_DIM + i]).isCloseTo(p * 0.1f + i * 0.01f, within(1e-5f));
+            }
+        }
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /** Allocate a float[] with seqLen * kvDim elements all set to {@code value}. */

@@ -3,6 +3,8 @@
 **Session 73** — Block KV allocator (`--kv-page-size` / dual path) in progress
 
 - Start P1 step 2: `KvBlockPool` + `KvPageTable` with unit tests (allocate/free, gather, concurrent).
+- Manager plumbing: `PagedKvTensor` / `PagedKvArena` / `PagedKvCodec`; `KVCacheManager`
+  optional arena; `NodeKVCacheAdapter` flush/restore for paged + q8_0 payloads.
 
 ---
 

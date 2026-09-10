@@ -35,6 +35,10 @@ import java.util.logging.Logger;
  * The coordinator creates a KVCacheManager with LayerRange.all() (the default)
  * for backward compatibility and prefix cache operations.
  *
+ * Optional {@link PagedKvArena}: when non-null, continuous-schedule handlers
+ * allocate paged tensors from shared pools. Static schedule leaves it null
+ * (dense {@link DenseKvTensor} path).
+ *
  * Thread-safe — each tier implementation is independently thread-safe.
  */
 public final class KVCacheManager {
@@ -45,13 +49,14 @@ public final class KVCacheManager {
 	private final CpuKVCache cpuCache;
 	private final PrefixCache prefixCache;
 	private final LayerRange layerRange;
+	private final PagedKvArena pagedArena;
 
 	/**
 	 * Backward-compatible constructor — no layer restriction (LayerRange.all()).
 	 * Used by coordinator and single-node setups.
 	 */
 	public KVCacheManager(GpuKVCache gpuCache, CpuKVCache cpuCache) {
-		this(gpuCache, cpuCache, LayerRange.all());
+		this(gpuCache, cpuCache, LayerRange.all(), null);
 	}
 
 	/**
@@ -61,6 +66,15 @@ public final class KVCacheManager {
 	 * @param layerRange the layer range this node is responsible for
 	 */
 	public KVCacheManager(GpuKVCache gpuCache, CpuKVCache cpuCache, LayerRange layerRange) {
+		this(gpuCache, cpuCache, layerRange, null);
+	}
+
+	/**
+	 * Full constructor. {@code pagedArena} is non-null when serving under continuous
+	 * schedule (paged KV pools); null keeps the dense static path.
+	 */
+	public KVCacheManager(GpuKVCache gpuCache, CpuKVCache cpuCache, LayerRange layerRange,
+			PagedKvArena pagedArena) {
 		if (gpuCache == null)
 			throw new IllegalArgumentException("gpuCache must not be null");
 		if (cpuCache == null)
@@ -71,6 +85,7 @@ public final class KVCacheManager {
 		this.cpuCache = cpuCache;
 		this.prefixCache = new PrefixCache();
 		this.layerRange = layerRange;
+		this.pagedArena = pagedArena;
 	}
 
 	/**
@@ -181,5 +196,13 @@ public final class KVCacheManager {
 	/** Whether this manager owns the given layer index. */
 	public boolean ownsLayer(int layerIndex) {
 		return layerRange.contains(layerIndex);
+	}
+
+	/**
+	 * Shared paged K/V pools when continuous schedule is selected; empty under
+	 * static (dense) schedule.
+	 */
+	public Optional<PagedKvArena> pagedArena() {
+		return Optional.ofNullable(pagedArena);
 	}
 }
