@@ -24,8 +24,8 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
-import cab.ml.juno.kvcache.CacheTypeOptions;
-import cab.ml.juno.kvcache.DenseKvTensor;
+import cab.ml.juno.kvcache.SessionKvLayout;
+import cab.ml.juno.kvcache.SessionKvTensor;
 
 /**
  * Qwen3-MoE transformer forward pass — same Q/K-norm attention as
@@ -59,9 +59,9 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 	private final GgufReader.QuantizedTensor[] ffnDownExps;
 
 	private final MatVec backend;
-	private final Map<String, DenseKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
-	private final Map<String, DenseKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
-	private final CacheTypeOptions cacheTypes;
+	private final Map<String, SessionKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
+	private final Map<String, SessionKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
+	private final SessionKvLayout kvLayout;
 	private volatile NodeKVCacheAdapter kvAdapter;
 
 	public static Qwen3MoeTransformerHandler load(Path modelPath, ShardContext context) throws IOException {
@@ -89,8 +89,8 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
 		this.hasOutputProj = ctx.hasOutputProjection();
-		this.cacheTypes = CacheTypeOptions.fromEnv();
-		log.info(cacheTypes.policySummary());
+		this.kvLayout = SessionKvLayout.fromEnv(cfg.kvDim());
+		log.info(kvLayout.policySummary());
 
 		int L = endLayer - startLayer;
 		int H = cfg.hiddenDim();
@@ -236,8 +236,8 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		for (int pos : positions)
 			maxPos = Math.max(maxPos, pos);
 
-		DenseKvTensor[][] kCaches = new DenseKvTensor[N][];
-		DenseKvTensor[][] vCaches = new DenseKvTensor[N][];
+		SessionKvTensor[][] kCaches = new SessionKvTensor[N][];
+		SessionKvTensor[][] vCaches = new SessionKvTensor[N][];
 
 		NodeKVCacheAdapter a = kvAdapter;
 		for (int i = 0; i < N; i++) {
@@ -246,8 +246,8 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 
 			kvCacheK.putIfAbsent(requestId, newKLayers(L));
 			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
-			DenseKvTensor[] kCache = kvCacheK.get(requestId);
-			DenseKvTensor[] vCache = kvCacheV.get(requestId);
+			SessionKvTensor[] kCache = kvCacheK.get(requestId);
+			SessionKvTensor[] vCache = kvCacheV.get(requestId);
 
 			for (int li = 0; li < L; li++) {
 				kCache[li].ensureCapacity(pos);
@@ -258,11 +258,11 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		}
 
 		MoeBatchWorkspace ws = new MoeBatchWorkspace(N, cfg.hiddenDim(), cfg.qDim(), cfg.kvDim(),
-				cfg.numHeads(), maxPos + 1, cacheTypes.usesQuantized());
+				cfg.numHeads(), maxPos + 1, kvLayout.needsAttentionScratch());
 
 		for (int li = 0; li < L; li++) {
-			DenseKvTensor[] kLayers = new DenseKvTensor[N];
-			DenseKvTensor[] vLayers = new DenseKvTensor[N];
+			SessionKvTensor[] kLayers = new SessionKvTensor[N];
+			SessionKvTensor[] vLayers = new SessionKvTensor[N];
 			for (int i = 0; i < N; i++) {
 				kLayers[i] = kCaches[i][li];
 				vLayers[i] = vCaches[i][li];
@@ -305,7 +305,7 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 	}
 
 	private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
-			DenseKvTensor[] kCacheLayers, DenseKvTensor[] vCacheLayers, MoeBatchWorkspace ws) {
+			SessionKvTensor[] kCacheLayers, SessionKvTensor[] vCacheLayers, MoeBatchWorkspace ws) {
 		int N = x.length;
 		int H = cfg.hiddenDim();
 		int qDim = cfg.qDim();
@@ -407,19 +407,21 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 
 	public void setKvAdapter(NodeKVCacheAdapter adapter) {
 		this.kvAdapter = adapter;
+		if (adapter != null)
+			adapter.manager().pagedArena().ifPresent(kvLayout::bindSharedArena);
 	}
 
 	@Override
 	public void evict(String requestId) {
-		kvCacheK.remove(requestId);
-		kvCacheV.remove(requestId);
+		SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
+		SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));
 		NodeKVCacheAdapter a = kvAdapter;
 		if (a != null)
 			a.evict(requestId);
 	}
 
 	int kvCacheAllocatedSlots(String requestId) {
-		DenseKvTensor[] k = kvCacheK.get(requestId);
+		SessionKvTensor[] k = kvCacheK.get(requestId);
 		return (k == null || k.length == 0) ? 0 : k[0].capacityTokens();
 	}
 
@@ -444,8 +446,8 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 
 		kvCacheK.putIfAbsent(requestId, newKLayers(L));
 		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
-		DenseKvTensor[] kCache = kvCacheK.get(requestId);
-		DenseKvTensor[] vCache = kvCacheV.get(requestId);
+		SessionKvTensor[] kCache = kvCacheK.get(requestId);
+		SessionKvTensor[] vCache = kvCacheV.get(requestId);
 
 		for (int li = 0; li < L; li++) {
 			kCache[li].ensureCapacity(pos);
@@ -454,7 +456,7 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 
 		float[] kScratch = null;
 		float[] vScratch = null;
-		if (cacheTypes.usesQuantized()) {
+		if (kvLayout.needsAttentionScratch()) {
 			kScratch = new float[(pos + 1) * cfg.kvDim()];
 			vScratch = new float[(pos + 1) * cfg.kvDim()];
 		}
@@ -472,7 +474,7 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 	}
 
 	private float[] transformerLayer(float[] x, int li, int pos,
-			DenseKvTensor kCacheLayer, DenseKvTensor vCacheLayer,
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
 			float[] kScratch, float[] vScratch) {
 		float[] xNorm = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
 		float[] attnProj = Qwen3TransformerHandler.attentionLayer(new MoeLayerWeights(li), cfg, xNorm, pos,
@@ -559,12 +561,12 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		return LlamaTransformerHandler.matVec(outputProj, xNorm, actualVocab, cfg.hiddenDim());
 	}
 
-	private DenseKvTensor[] newKLayers(int L) {
-		return DenseKvTensor.layers(L, cacheTypes.typeK(), cfg.kvDim());
+	private SessionKvTensor[] newKLayers(int L) {
+		return kvLayout.newKLayers(L);
 	}
 
-	private DenseKvTensor[] newVLayers(int L) {
-		return DenseKvTensor.layers(L, cacheTypes.typeV(), cfg.kvDim());
+	private SessionKvTensor[] newVLayers(int L) {
+		return kvLayout.newVLayers(L);
 	}
 
 	private final class MoeLayerWeights implements Qwen3TransformerHandler.Qwen3AttentionWeights {

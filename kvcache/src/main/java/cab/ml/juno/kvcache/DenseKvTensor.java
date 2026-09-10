@@ -25,7 +25,7 @@ import java.util.Arrays;
  * returns the backing array (bit-compatible). For {@code Q8_0}, it dequants into
  * the provided scratch buffer.
  */
-public final class DenseKvTensor {
+public final class DenseKvTensor implements SessionKvTensor {
 
 	public static final int INITIAL_SEQ_CAPACITY = 64;
 	/** Matches transformer handler decode window cap. */
@@ -173,6 +173,16 @@ public final class DenseKvTensor {
 		case F16 -> f32.length * Float.BYTES;
 		case Q8_0 -> q8.length;
 		};
+	}
+
+	@Override
+	public boolean needsAttentionScratch() {
+		return type == KvElementType.Q8_0;
+	}
+
+	@Override
+	public void release() {
+		// dense storage is GC'd with the tensor
 	}
 
 	private void allocate(int tokens) {

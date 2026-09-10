@@ -7,9 +7,11 @@ Module dependency (excerpt):
         attention dequants to float scratch). NodeKVCacheAdapter (node) flushes
         typed payloads into the manager.
         KvBlockPool / KvPageTable / PagedKvTensor / PagedKvArena / PagedKvCodec /
-        KvPageSizeOptions / ServeScheduleOptions
+        KvPageSizeOptions / ServeScheduleOptions / SessionKvTensor /
+        SessionKvLayout
         (paged KV for continuous schedule; dense remains default static path;
-        manager may hold a shared PagedKvArena; adapter flushes paged blobs).
+        handlers dual-path via SessionKvLayout; manager may hold a shared
+        PagedKvArena; adapter flushes dense or paged blobs).
   lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA)
   node — GgufReader, LlamafileGgufIndex, LlamaTransformerHandler,
         Phi2TransformerHandler, Phi2Rope, Phi3TransformerHandler, Phi3Rope, MatVec

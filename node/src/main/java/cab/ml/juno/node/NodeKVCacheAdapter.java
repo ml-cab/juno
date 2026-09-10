@@ -30,6 +30,7 @@ import cab.ml.juno.kvcache.KvElementType;
 import cab.ml.juno.kvcache.PagedKvCodec;
 import cab.ml.juno.kvcache.PagedKvTensor;
 import cab.ml.juno.kvcache.Q8_0KvCodec;
+import cab.ml.juno.kvcache.SessionKvTensor;
 
 /**
  * Bridges the transformer handler's in-process KV tensors and the
@@ -118,6 +119,21 @@ public final class NodeKVCacheAdapter {
 			PagedKvTensor k, PagedKvTensor v, int seqLen) {
 		byte[] data = PagedKvCodec.encode(k, v, seqLen);
 		putBlock(requestId, absoluteLayerIndex, data, seqLen, k.type(), v.type());
+	}
+
+	/** Dispatch dense vs paged flush for dual-path handlers. */
+	public void flush(String requestId, int absoluteLayerIndex,
+			SessionKvTensor k, SessionKvTensor v, int seqLen) {
+		if (k instanceof PagedKvTensor pk && v instanceof PagedKvTensor pv) {
+			flush(requestId, absoluteLayerIndex, pk, pv, seqLen);
+			return;
+		}
+		if (k instanceof DenseKvTensor dk && v instanceof DenseKvTensor dv) {
+			flush(requestId, absoluteLayerIndex, dk, dv, seqLen);
+			return;
+		}
+		flush(requestId, absoluteLayerIndex, k.toFloatArray(seqLen), v.toFloatArray(seqLen),
+				seqLen, k.kvDim(), k.type(), v.type());
 	}
 
 	/**

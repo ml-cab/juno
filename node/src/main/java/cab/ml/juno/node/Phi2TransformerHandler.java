@@ -24,8 +24,8 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
-import cab.ml.juno.kvcache.CacheTypeOptions;
-import cab.ml.juno.kvcache.DenseKvTensor;
+import cab.ml.juno.kvcache.SessionKvLayout;
+import cab.ml.juno.kvcache.SessionKvTensor;
 
 /**
  * Phi-2 family transformer forward pass (moondream2, phi-2, etc.).
@@ -114,9 +114,9 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
 
     // ── KV cache ─────────────────────────────────────────────────────────────
 
-    private final Map<String, DenseKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
-    private final Map<String, DenseKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
-    private final CacheTypeOptions cacheTypes;
+    private final Map<String, SessionKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
+    private final Map<String, SessionKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
+    private final SessionKvLayout kvLayout;
 
     private final MatVec backend;
     private volatile NodeKVCacheAdapter kvAdapter;
@@ -149,8 +149,8 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         this.endLayer   = ctx.endLayer();
         this.hasEmbeddings  = ctx.hasEmbeddings();
         this.hasOutputProj  = ctx.hasOutputProjection();
-        this.cacheTypes     = CacheTypeOptions.fromEnv();
-        log.info(cacheTypes.policySummary());
+        this.kvLayout = SessionKvLayout.fromEnv(cfg.kvDim());
+        log.info(kvLayout.policySummary());
 
         // Partial RoPE: Phi-2 rotates only the first ropeDim dims of each head.
         // Default to full headDim when the metadata key is absent.
@@ -340,8 +340,8 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         for (int pos : positions)
             maxPos = Math.max(maxPos, pos);
 
-        DenseKvTensor[][] kCaches = new DenseKvTensor[N][];
-        DenseKvTensor[][] vCaches = new DenseKvTensor[N][];
+        SessionKvTensor[][] kCaches = new SessionKvTensor[N][];
+        SessionKvTensor[][] vCaches = new SessionKvTensor[N][];
 
         NodeKVCacheAdapter a = kvAdapter;
         for (int i = 0; i < N; i++) {
@@ -350,8 +350,8 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
 
             boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
             kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
-            DenseKvTensor[] kCache = kvCacheK.get(requestId);
-            DenseKvTensor[] vCache = kvCacheV.get(requestId);
+            SessionKvTensor[] kCache = kvCacheK.get(requestId);
+            SessionKvTensor[] vCache = kvCacheV.get(requestId);
 
             if (isNew && pos > 0 && a != null) {
                 for (int li = 0; li < L; li++) {
@@ -372,14 +372,14 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
 
         float[] kDequant = null;
         float[] vDequant = null;
-        if (cacheTypes.usesQuantized()) {
+        if (kvLayout.needsAttentionScratch()) {
             kDequant = new float[(maxPos + 1) * kvDim];
             vDequant = new float[(maxPos + 1) * kvDim];
         }
 
         for (int li = 0; li < L; li++) {
-            DenseKvTensor[] kLayers = new DenseKvTensor[N];
-            DenseKvTensor[] vLayers = new DenseKvTensor[N];
+            SessionKvTensor[] kLayers = new SessionKvTensor[N];
+            SessionKvTensor[] vLayers = new SessionKvTensor[N];
             for (int i = 0; i < N; i++) {
                 kLayers[i] = kCaches[i][li];
                 vLayers[i] = vCaches[i][li];
@@ -398,7 +398,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
     }
 
     private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
-            DenseKvTensor[] kCacheLayers, DenseKvTensor[] vCacheLayers,
+            SessionKvTensor[] kCacheLayers, SessionKvTensor[] vCacheLayers,
             float[] kDequant, float[] vDequant) {
         int N = x.length;
         int H = cfg.hiddenDim();
@@ -496,8 +496,8 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
         kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
-        DenseKvTensor[] kCache = kvCacheK.get(requestId);
-        DenseKvTensor[] vCache = kvCacheV.get(requestId);
+        SessionKvTensor[] kCache = kvCacheK.get(requestId);
+        SessionKvTensor[] vCache = kvCacheV.get(requestId);
 
         NodeKVCacheAdapter a = kvAdapter;
         if (isNew && startPos > 0 && a != null) {
@@ -516,7 +516,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
 
         float[] kDequant = null;
         float[] vDequant = null;
-        if (cacheTypes.usesQuantized()) {
+        if (kvLayout.needsAttentionScratch()) {
             kDequant = new float[(lastPos + 1) * kvDim];
             vDequant = new float[(lastPos + 1) * kvDim];
         }
@@ -573,7 +573,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
      * core — see the comment at that call site for why it's safe to do so.
      */
     private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
-            DenseKvTensor kCacheLayer, DenseKvTensor vCacheLayer,
+            SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
             float[] kDequant, float[] vDequant) {
         int W     = x.length;
         int H     = cfg.hiddenDim();
@@ -699,12 +699,14 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
 
     public void setKvAdapter(NodeKVCacheAdapter adapter) {
         this.kvAdapter = adapter;
+		if (adapter != null)
+			adapter.manager().pagedArena().ifPresent(kvLayout::bindSharedArena);
     }
 
     @Override
     public void evict(String requestId) {
-        kvCacheK.remove(requestId);
-        kvCacheV.remove(requestId);
+        SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
+        SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));
         NodeKVCacheAdapter a = kvAdapter;
         if (a != null) a.evict(requestId);
     }
@@ -734,8 +736,8 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
         kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
-        DenseKvTensor[] kCache = kvCacheK.get(requestId);
-        DenseKvTensor[] vCache = kvCacheV.get(requestId);
+        SessionKvTensor[] kCache = kvCacheK.get(requestId);
+        SessionKvTensor[] vCache = kvCacheV.get(requestId);
 
         NodeKVCacheAdapter a = kvAdapter;
         if (isNew && pos > 0 && a != null) {
@@ -754,7 +756,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
 
         float[] kScratch = null;
         float[] vScratch = null;
-        if (cacheTypes.usesQuantized()) {
+        if (kvLayout.needsAttentionScratch()) {
             kScratch = new float[(pos + 1) * kvDim];
             vScratch = new float[(pos + 1) * kvDim];
         }
@@ -772,22 +774,22 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         return x;
     }
 
-    private DenseKvTensor[] newKLayers(int L) {
-        return DenseKvTensor.layers(L, cacheTypes.typeK(), cfg.kvDim());
-    }
+    private SessionKvTensor[] newKLayers(int L) {
+		return kvLayout.newKLayers(L);
+	}
 
-    private DenseKvTensor[] newVLayers(int L) {
-        return DenseKvTensor.layers(L, cacheTypes.typeV(), cfg.kvDim());
-    }
+    private SessionKvTensor[] newVLayers(int L) {
+		return kvLayout.newVLayers(L);
+	}
 
-    private void restoreLayer(DenseKvTensor k, DenseKvTensor v, NodeKVCacheAdapter.KvPair pair, int kvDim) {
+    private void restoreLayer(SessionKvTensor k, SessionKvTensor v, NodeKVCacheAdapter.KvPair pair, int kvDim) {
         int seqLen = pair.k().length / kvDim;
         k.loadFloatPrefix(pair.k(), seqLen);
         v.loadFloatPrefix(pair.v(), seqLen);
     }
 
     int kvCacheAllocatedSlots(String requestId) {
-        DenseKvTensor[] k = kvCacheK.get(requestId);
+        SessionKvTensor[] k = kvCacheK.get(requestId);
         return (k == null || k.length == 0) ? 0 : k[0].capacityTokens();
     }
 
@@ -807,7 +809,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
      * </pre>
      */
     private float[] transformerLayer(float[] x, int li, int pos,
-            DenseKvTensor kCacheLayer, DenseKvTensor vCacheLayer,
+            SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
             float[] kScratch, float[] vScratch) {
         int H     = cfg.hiddenDim();
         int kvDim = cfg.kvDim();

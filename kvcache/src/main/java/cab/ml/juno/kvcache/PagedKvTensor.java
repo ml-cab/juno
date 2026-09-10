@@ -23,7 +23,7 @@ package cab.ml.juno.kvcache;
  * API mirrors {@link DenseKvTensor} write / view / restore helpers so handlers
  * can dual-path later.
  */
-public final class PagedKvTensor {
+public final class PagedKvTensor implements SessionKvTensor {
 
 	private final KvPageTable table;
 
@@ -70,10 +70,22 @@ public final class PagedKvTensor {
 		return table;
 	}
 
+	@Override
+	public void ensureCapacity(int pos) {
+		if (pos < 0)
+			throw new IllegalArgumentException("pos must be >= 0");
+		if (pos >= DenseKvTensor.MAX_SEQ_LEN)
+			throw new IllegalStateException(
+					"KV cache position " + pos + " exceeds MAX_SEQ_LEN=" + DenseKvTensor.MAX_SEQ_LEN);
+		// Pages are allocated on writeToken; this only enforces the seq cap.
+	}
+
+	@Override
 	public void writeToken(int pos, float[] src) {
 		writeToken(pos, src, 0);
 	}
 
+	@Override
 	public void writeToken(int pos, float[] src, int srcOff) {
 		table.writeToken(pos, src, srcOff);
 	}
@@ -82,6 +94,7 @@ public final class PagedKvTensor {
 	 * Gather positions {@code [0, seqLen)} into {@code scratch} for attention.
 	 * Always copies (paged storage is not a contiguous float array).
 	 */
+	@Override
 	public float[] viewForAttention(int seqLen, float[] scratch) {
 		if (seqLen < 1)
 			throw new IllegalArgumentException("seqLen must be >= 1");
@@ -94,6 +107,7 @@ public final class PagedKvTensor {
 		return scratch;
 	}
 
+	@Override
 	public void loadFloatPrefix(float[] src, int seqLen) {
 		if (seqLen < 1)
 			throw new IllegalArgumentException("seqLen must be >= 1");
@@ -106,15 +120,27 @@ public final class PagedKvTensor {
 			table.appendToken(src, p * table.kvDim());
 	}
 
+	@Override
 	public float[] toFloatArray(int seqLen) {
 		float[] out = new float[seqLen * table.kvDim()];
 		return viewForAttention(seqLen, out);
+	}
+
+	@Override
+	public int capacityTokens() {
+		return table.pageCount() * table.pageSize();
+	}
+
+	@Override
+	public boolean needsAttentionScratch() {
+		return true;
 	}
 
 	public long allocatedBytes() {
 		return (long) table.pageCount() * table.pageSize() * table.pool().bytesPerToken();
 	}
 
+	@Override
 	public void release() {
 		table.release();
 	}

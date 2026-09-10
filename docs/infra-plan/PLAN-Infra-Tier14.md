@@ -54,10 +54,10 @@ Tier 8 is **not** a code dependency for Tier 14 — only required before Tier 16
 
 ## Cross-feature smoke (before feature complete)
 
-- [ ] Static default: dense path bit-compatible; `--kv-page-size` ignored with startup note
-- [ ] Continuous KV path (unit / short greedy): allocate/free + gather parity vs dense
+- [x] Static default: dense path bit-compatible; `--kv-page-size` ignored with startup note
+- [x] Continuous KV path (unit / short greedy): allocate/free + gather parity vs dense
 - [ ] `--lora-play` + static: unchanged
-- [ ] LoRA train + flags: warn / ephemeral float
+- [x] LoRA train + flags: warn / ephemeral float
 - [ ] §2 compares when marking feature complete
 
 ## Exit checklist (compatibility)
@@ -198,7 +198,7 @@ Exit only when:
 
 1. ~~Page table + block pool + unit tests~~
 2. ~~KVBlock / KVCacheManager plumbing (+ q8_0 if Tier 6 present)~~
-3. Dual-path handler integration (dense static + paged continuous) + parity tests.
+3. ~~Dual-path handler integration (dense static + paged continuous) + parity tests~~
 4. Gather-tax microbench + mitigation ladder + `docs/performance.md` decision.
 5. CLI/docs; ROADMAP status; preview files; no zip.
 

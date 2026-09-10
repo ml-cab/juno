@@ -26,8 +26,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Logger;
 
-import cab.ml.juno.kvcache.CacheTypeOptions;
-import cab.ml.juno.kvcache.DenseKvTensor;
+import cab.ml.juno.kvcache.SessionKvLayout;
+import cab.ml.juno.kvcache.SessionKvTensor;
 
 /**
  * LLaMA-family transformer forward pass with a pluggable {@link MatVec}.
@@ -45,9 +45,10 @@ import cab.ml.juno.kvcache.DenseKvTensor;
  * before layer 0 startLayer..endLayer → which layers to execute
  * hasOutputProjection → run RMS norm + output projection after last layer
  *
- * KV cache: Stored in-process via {@link DenseKvTensor} per layer (float32
- * {@code f16} CLI default, or packed {@code q8_0}). {@link ConcurrentHashMap}
- * allows distinct requestIds to allocate and evict concurrently on one node.
+ * KV cache: dual path via {@link SessionKvLayout} — dense under
+ * {@code --schedule static}, paged gather under {@code continuous}.
+ * {@link ConcurrentHashMap} allows distinct requestIds to allocate and evict
+ * concurrently on one node.
  *
  * Thread safety: Each request uses an isolated KV cache entry keyed by
  * requestId. Multiple threads may call forward() concurrently for distinct
@@ -100,9 +101,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private final float[][] bv; // [L][kvDim]
 
 	// Per-request KV cache — lazily allocated and grown on demand.
-	private final Map<String, DenseKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
-	private final Map<String, DenseKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
-	private final CacheTypeOptions cacheTypes;
+	private final Map<String, SessionKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
+	private final Map<String, SessionKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
+	private final SessionKvLayout kvLayout;
 
 	// ── MatVec backend (CPU or CUDA) ─────────────────────────────────────────
 	private final MatVec backend;
@@ -232,7 +233,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.bq           = bq;
 		this.bk           = bk;
 		this.bv           = bv;
-		this.cacheTypes   = CacheTypeOptions.fromEnv();
+		this.kvLayout = SessionKvLayout.fromEnv(cfg.kvDim());
 		// Direct (test) constructor: no GPU upload — device matrices are unused.
 		this.wqDev = this.wkDev = this.wvDev = this.woDev =
 				this.wGateDev = this.wUpDev = this.wDownDev = null;
@@ -241,7 +242,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				this.wGateQ4Dev = this.wUpQ4Dev = this.wDownQ4Dev = null;
 		this.outputProjQ4Dev = null;
 		this.gpuLayersResolved = 0;
-		log.info(cacheTypes.policySummary());
+		log.info(kvLayout.policySummary());
 	}
 
 	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend)
@@ -252,8 +253,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
 		this.hasOutputProj = ctx.hasOutputProjection();
-		this.cacheTypes = CacheTypeOptions.fromEnv();
-		log.info(cacheTypes.policySummary());
+		this.kvLayout = SessionKvLayout.fromEnv(cfg.kvDim());
+		log.info(kvLayout.policySummary());
 
 		int L = endLayer - startLayer;
 
@@ -695,6 +696,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	public void setKvAdapter(NodeKVCacheAdapter adapter) {
 		this.kvAdapter = adapter;
+		if (adapter != null)
+			adapter.manager().pagedArena().ifPresent(kvLayout::bindSharedArena);
 	}
 
 	/**
@@ -708,8 +711,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	@Override
 	public void evict(String requestId) {
-		kvCacheK.remove(requestId);
-		kvCacheV.remove(requestId);
+		SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
+		SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));
 		NodeKVCacheAdapter a = kvAdapter;
 		if (a != null) {
 			a.evict(requestId);
@@ -982,8 +985,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		for (int pos : positions)
 			maxPos = Math.max(maxPos, pos);
 
-		DenseKvTensor[][] kCaches = new DenseKvTensor[N][];
-		DenseKvTensor[][] vCaches = new DenseKvTensor[N][];
+		SessionKvTensor[][] kCaches = new SessionKvTensor[N][];
+		SessionKvTensor[][] vCaches = new SessionKvTensor[N][];
 
 		NodeKVCacheAdapter a = kvAdapter;
 		for (int i = 0; i < N; i++) {
@@ -992,8 +995,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 			boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
-			DenseKvTensor[] kCache = kvCacheK.get(requestId);
-			DenseKvTensor[] vCache = kvCacheV.get(requestId);
+			SessionKvTensor[] kCache = kvCacheK.get(requestId);
+			SessionKvTensor[] vCache = kvCacheV.get(requestId);
 
 			if (isNew && pos > 0 && a != null) {
 				for (int li = 0; li < L; li++) {
@@ -1013,11 +1016,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 
 		BatchWorkspace ws = new BatchWorkspace(N, cfg.hiddenDim(), cfg.intermediateSize(),
-				kvDim, cfg.numHeads(), maxPos + 1, cacheTypes.usesQuantized());
+				kvDim, cfg.numHeads(), maxPos + 1, kvLayout.needsAttentionScratch());
 
 		for (int li = 0; li < L; li++) {
-			DenseKvTensor[] kLayers = new DenseKvTensor[N];
-			DenseKvTensor[] vLayers = new DenseKvTensor[N];
+			SessionKvTensor[] kLayers = new SessionKvTensor[N];
+			SessionKvTensor[] vLayers = new SessionKvTensor[N];
 			for (int i = 0; i < N; i++) {
 				kLayers[i] = kCaches[i][li];
 				vLayers[i] = vCaches[i][li];
@@ -1043,7 +1046,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * and position.
 	 */
 	private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
-			DenseKvTensor[] kCacheLayers, DenseKvTensor[] vCacheLayers, BatchWorkspace ws) {
+			SessionKvTensor[] kCacheLayers, SessionKvTensor[] vCacheLayers, BatchWorkspace ws) {
 		int N = x.length;
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
@@ -1122,8 +1125,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
-		DenseKvTensor[] kCache = kvCacheK.get(requestId);
-		DenseKvTensor[] vCache = kvCacheV.get(requestId);
+		SessionKvTensor[] kCache = kvCacheK.get(requestId);
+		SessionKvTensor[] vCache = kvCacheV.get(requestId);
 
 		NodeKVCacheAdapter a = kvAdapter;
 		if (isNew && startPos > 0 && a != null) {
@@ -1140,7 +1143,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 
 		BatchWorkspace ws = new BatchWorkspace(W, cfg.hiddenDim(), cfg.intermediateSize(),
-				kvDim, cfg.numHeads(), lastPos + 1, cacheTypes.usesQuantized());
+				kvDim, cfg.numHeads(), lastPos + 1, kvLayout.needsAttentionScratch());
 
 		log.info("[prefill] runLayersBatch START requestId=" + requestId + " W=" + W + " L=" + L
 				+ " startPos=" + startPos + " lastPos=" + lastPos + " kvDim=" + kvDim);
@@ -1208,7 +1211,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * allocation on the CPU Q4_K / Q8_0 path.
 	 */
 	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
-			DenseKvTensor kCacheLayer, DenseKvTensor vCacheLayer, BatchWorkspace ws) {
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, BatchWorkspace ws) {
 		int W    = x.length;
 		int H    = cfg.hiddenDim();
 		int I    = cfg.intermediateSize();
@@ -1589,8 +1592,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
-		DenseKvTensor[] kCache = kvCacheK.get(requestId);
-		DenseKvTensor[] vCache = kvCacheV.get(requestId);
+		SessionKvTensor[] kCache = kvCacheK.get(requestId);
+		SessionKvTensor[] vCache = kvCacheV.get(requestId);
 
 		NodeKVCacheAdapter a = kvAdapter;
 		if (isNew && pos > 0 && a != null) {
@@ -1608,7 +1611,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		float[] kScratch = null;
 		float[] vScratch = null;
-		if (cacheTypes.usesQuantized()) {
+		if (kvLayout.needsAttentionScratch()) {
 			kScratch = new float[(pos + 1) * kvDim];
 			vScratch = new float[(pos + 1) * kvDim];
 		}
@@ -1627,15 +1630,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return x;
 	}
 
-	private DenseKvTensor[] newKLayers(int L) {
-		return DenseKvTensor.layers(L, cacheTypes.typeK(), cfg.kvDim());
+	private SessionKvTensor[] newKLayers(int L) {
+		return kvLayout.newKLayers(L);
 	}
 
-	private DenseKvTensor[] newVLayers(int L) {
-		return DenseKvTensor.layers(L, cacheTypes.typeV(), cfg.kvDim());
+	private SessionKvTensor[] newVLayers(int L) {
+		return kvLayout.newVLayers(L);
 	}
 
-	private void restoreLayer(DenseKvTensor k, DenseKvTensor v, NodeKVCacheAdapter.KvPair pair, int kvDim) {
+	private void restoreLayer(SessionKvTensor k, SessionKvTensor v, NodeKVCacheAdapter.KvPair pair, int kvDim) {
 		int seqLen = pair.k().length / kvDim;
 		k.loadFloatPrefix(pair.k(), seqLen);
 		v.loadFloatPrefix(pair.v(), seqLen);
@@ -1643,7 +1646,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	/** Package-private for testing: allocated KV cache slots for a request. */
 	int kvCacheAllocatedSlots(String requestId) {
-		DenseKvTensor[] k = kvCacheK.get(requestId);
+		SessionKvTensor[] k = kvCacheK.get(requestId);
 		return (k == null || k.length == 0) ? 0 : k[0].capacityTokens();
 	}
 
@@ -1651,7 +1654,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * Single transformer layer: attention + FFN, both with residual connections.
 	 */
 	private float[] transformerLayer(float[] x, int li, int pos,
-			DenseKvTensor kCacheLayer, DenseKvTensor vCacheLayer,
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
 			float[] kScratch, float[] vScratch) {
 		int H = cfg.hiddenDim();
 

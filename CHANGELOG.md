@@ -5,6 +5,9 @@
 - Start P1 step 2: `KvBlockPool` + `KvPageTable` with unit tests (allocate/free, gather, concurrent).
 - Manager plumbing: `PagedKvTensor` / `PagedKvArena` / `PagedKvCodec`; `KVCacheManager`
   optional arena; `NodeKVCacheAdapter` flush/restore for paged + q8_0 payloads.
+- Dual-path handlers: `SessionKvTensor` / `SessionKvLayout`; dense under `static`,
+  paged gather under `continuous`; LoRA train stays ephemeral float (warn); Llama
+  schedule parity test.
 
 ---
 

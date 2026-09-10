@@ -23,8 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.logging.Logger;
 
-import cab.ml.juno.kvcache.CacheTypeOptions;
-import cab.ml.juno.kvcache.DenseKvTensor;
+import cab.ml.juno.kvcache.SessionKvLayout;
+import cab.ml.juno.kvcache.SessionKvTensor;
 import cab.ml.juno.lora.LoraAdapter;
 import cab.ml.juno.lora.LoraAdapterSet;
 import cab.ml.juno.lora.LoraTrainContext;
@@ -100,9 +100,9 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 	private LoraTrainContext trainCtx = LoraTrainContext.disabled();
 	private int trainTokenPos;
 
-	private final Map<String, DenseKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
-	private final Map<String, DenseKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
-	private final CacheTypeOptions cacheTypes;
+	private final Map<String, SessionKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
+	private final Map<String, SessionKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
+	private final SessionKvLayout kvLayout;
 
 	// ── Factory ───────────────────────────────────────────────────────────────
 
@@ -136,11 +136,15 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
 		this.hasOutputProj = ctx.hasOutputProjection();
-		this.cacheTypes = CacheTypeOptions.fromEnv();
-		log.info(cacheTypes.policySummary());
-		if (cacheTypes.usesQuantized()) {
+		this.kvLayout = SessionKvLayout.fromEnv(cfg.kvDim());
+		log.info(kvLayout.policySummary());
+		if (kvLayout.cacheTypes().usesQuantized()) {
 			log.warning("LoRA training uses ephemeral float KV for teacher-forced forward; "
-					+ cacheTypes.policySummary() + " applies to inference / --lora-play maps only.");
+					+ kvLayout.cacheTypes().policySummary() + " applies to inference / --lora-play maps only.");
+		}
+		if (kvLayout.usesPaged()) {
+			log.warning("LoRA training uses ephemeral float KV (schedule=continuous / kv-page-size "
+					+ "are no-ops for train); paged KV applies to inference / --lora-play maps only.");
 		}
 
 		int L = endLayer - startLayer;
@@ -320,8 +324,8 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		int kvDim = cfg.kvDim();
 		kvCacheK.computeIfAbsent(requestId, k -> newKLayers(L));
 		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
-		DenseKvTensor[] kC = kvCacheK.get(requestId);
-		DenseKvTensor[] vC = kvCacheV.get(requestId);
+		SessionKvTensor[] kC = kvCacheK.get(requestId);
+		SessionKvTensor[] vC = kvCacheV.get(requestId);
 		for (int li = 0; li < L; li++) {
 			kC[li].ensureCapacity(pos);
 			vC[li].ensureCapacity(pos);
@@ -329,7 +333,7 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 
 		float[] kScratch = null;
 		float[] vScratch = null;
-		if (cacheTypes.usesQuantized()) {
+		if (kvLayout.needsAttentionScratch()) {
 			kScratch = new float[(pos + 1) * kvDim];
 			vScratch = new float[(pos + 1) * kvDim];
 		}
@@ -340,7 +344,7 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 	}
 
 	private float[] inferenceLayer(float[] x, int li, int pos,
-			DenseKvTensor kCacheLayer, DenseKvTensor vCacheLayer,
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
 			float[] kScratch, float[] vScratch) {
 		int H = cfg.hiddenDim();
 		int qDim = cfg.qDim();
@@ -906,11 +910,11 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 			dst[i] += src[i];
 	}
 
-	private DenseKvTensor[] newKLayers(int L) {
-		return DenseKvTensor.layers(L, cacheTypes.typeK(), cfg.kvDim());
+	private SessionKvTensor[] newKLayers(int L) {
+		return kvLayout.newKLayers(L);
 	}
 
-	private DenseKvTensor[] newVLayers(int L) {
-		return DenseKvTensor.layers(L, cacheTypes.typeV(), cfg.kvDim());
+	private SessionKvTensor[] newVLayers(int L) {
+		return kvLayout.newVLayers(L);
 	}
 }

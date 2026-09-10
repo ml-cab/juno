@@ -70,8 +70,9 @@ public final class KvPageTable {
 	}
 
 	/**
-	 * Write at logical position {@code pos}. Append-only or in-place overwrite;
-	 * holes ({@code pos > seqLen}) are rejected.
+	 * Write at logical position {@code pos}. Append-only or in-place overwrite.
+	 * Positions ahead of {@code seqLen} are zero-filled (matches dense
+	 * {@link DenseKvTensor} capacity growth semantics).
 	 */
 	public void writeToken(int pos, float[] src) {
 		writeToken(pos, src, 0);
@@ -80,11 +81,16 @@ public final class KvPageTable {
 	public void writeToken(int pos, float[] src, int srcOff) {
 		if (pos < 0)
 			throw new IllegalArgumentException("pos must be >= 0");
-		if (pos > seqLen)
-			throw new IllegalArgumentException("pos " + pos + " creates a hole (seqLen=" + seqLen + ")");
 		if (pos >= DenseKvTensor.MAX_SEQ_LEN)
 			throw new IllegalStateException(
 					"KV cache position " + pos + " exceeds MAX_SEQ_LEN=" + DenseKvTensor.MAX_SEQ_LEN);
+		// Dense path leaves earlier slots as zeros when first write is mid-sequence;
+		// match that so single-token forward at startPosition>0 stays compatible.
+		if (pos > seqLen) {
+			float[] zeros = new float[pool.kvDim()];
+			while (seqLen < pos)
+				appendToken(zeros);
+		}
 		int pageSize = pool.pageSize();
 		if (pos == seqLen) {
 			int slot = seqLen % pageSize;
