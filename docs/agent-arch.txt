@@ -1,7 +1,11 @@
 Juno multi-module Maven project (JDK 25).
 
 Module dependency (excerpt):
-  api, registry, tokenizer, sampler, kvcache, health, metrics — shared libraries
+  kvcache — CpuKVCache, GpuKVCache, KVCacheManager, PrefixCache,
+        KvElementType / CacheTypeOptions (--cache-type-k/v; f16 = float32 path),
+        Q8_0KvCodec, DenseKvTensor (in-process K/V; q8_0 packs per token;
+        attention dequants to float scratch). NodeKVCacheAdapter (node) flushes
+        typed payloads into the manager.
   lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA)
   node — GgufReader, LlamafileGgufIndex, LlamaTransformerHandler,
         Phi2TransformerHandler, Phi2Rope, Phi3TransformerHandler, Phi3Rope, MatVec

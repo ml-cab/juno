@@ -241,7 +241,7 @@ Parallel (non-blocking): Vision I2T · LoRA · model E2E
 | 3    | `PLAN-Infra-Tier3.md`  | GBNF + JSON Schema                      | P2                       | Pending                                                                          |
 | 4    | `PLAN-Infra-Tier4.md`  | Function calling / tools                | P2                       | Pending                                                                          |
 | 5    | `PLAN-Infra-Tier5.md`  | Hybrid `--gpu-layers` offload           | P0 step 2                | **Feature complete**; P0 gate unmet (mistral ~**0.026×** vs **0.15×**)           |
-| 6    | `PLAN-Infra-Tier6.md`  | Quantized KV cache (`q8_0`)             | P1 step 1                | Pending                                                                          |
+| 6    | `PLAN-Infra-Tier6.md`  | Quantized KV cache (`q8_0`)             | P1 step 1                | **In progress** — codec + `DenseKvTensor` + handler/CLI wiring; bake-off pending |
 | 7    | `PLAN-Infra-Tier7.md`  | Chat template + HF download             | P3                       | Pending                                                                          |
 | 8    | `PLAN-Infra-Tier8.md`  | Prefill microbatching                   | P0 step 3                | **Feature complete**; CPU bake-off published; GPU re-run open                    |
 | 9    | `PLAN-Infra-Tier9.md`  | Ngram speculative decoding              | P4                       | Pending                                                                          |
@@ -345,7 +345,7 @@ Infra Tiers 5–6 benefit from residency patterns in `LoraResidentWeights` / `Gp
 3. Vision regression: hang fix + scalar Q4/Q5 accumulate; gate vs `47-vision` — **done**.
 4. No silent pathological slowdown at vision-scale B — scalar accumulate + common-pool `forEachRow` — **done**.
 
-**Status: Feature complete.** P0 Infra Tier 13 Phase B is **feature complete** (VRAM-fit); next critical-path Infra work is **P1 Tier 6** (or tile-kernel / fuller activation residency as 13B follow-ons).
+**Status: Feature complete.** P0 Infra Tier 13 Phase B is **feature complete** (VRAM-fit); next critical-path Infra work is **P1 Tier 6** (**in progress**).
 
 **Does not replace Tier 13B** (GPU fused MMQ). SIMD improves CPU MatVec and long CPU prefills; 13B owns the resident-GPU decode gap.
 

@@ -26,6 +26,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.CacheTypeOptions;
+import cab.ml.juno.kvcache.DenseKvTensor;
+
 /**
  * Phi-3 family transformer forward pass with optional CUDA matmul.
  *
@@ -139,10 +142,9 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	// Starts at INITIAL_SEQ_CAPACITY slots, doubles until MAX_SEQ_LEN.
 	// Avoids the 554 MB eager pre-allocation that caused node JVM OOM during
 	// multi-test runs against phi-3.5-mini with --heap 4g.
-	private final Map<String, float[][]> kvCacheK = new ConcurrentHashMap<>();
-	private final Map<String, float[][]> kvCacheV = new ConcurrentHashMap<>();
-	private static final int MAX_SEQ_LEN = 2048;
-	private static final int INITIAL_SEQ_CAPACITY = 64; // grows on demand
+	private final Map<String, DenseKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
+	private final Map<String, DenseKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
+	private final CacheTypeOptions cacheTypes;
 
 	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
 	private volatile NodeKVCacheAdapter kvAdapter;
@@ -191,6 +193,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
 		this.hasOutputProj = ctx.hasOutputProjection();
+		this.cacheTypes = CacheTypeOptions.fromEnv();
+		log.info(cacheTypes.policySummary());
 
 		int L = endLayer - startLayer;
 		int H = cfg.hiddenDim();
@@ -590,44 +594,42 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		for (int pos : positions)
 			maxPos = Math.max(maxPos, pos);
 
-		float[][][] kCaches = new float[N][L][];
-		float[][][] vCaches = new float[N][L][];
+		DenseKvTensor[][] kCaches = new DenseKvTensor[N][];
+		DenseKvTensor[][] vCaches = new DenseKvTensor[N][];
 
 		NodeKVCacheAdapter a = kvAdapter;
 		for (int i = 0; i < N; i++) {
 			String requestId = requestIds.get(i);
 			int pos = positions[i];
 
-			boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
-			kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-			float[][] kCache = kvCacheK.get(requestId);
-			float[][] vCache = kvCacheV.get(requestId);
+			boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+			DenseKvTensor[] kCache = kvCacheK.get(requestId);
+			DenseKvTensor[] vCache = kvCacheV.get(requestId);
 
 			if (isNew && pos > 0 && a != null) {
 				for (int li = 0; li < L; li++) {
 					int absLayer = startLayer + li;
 					final int layerIdx = li;
-					a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
-						ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
-						ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
-						System.arraycopy(pair.k(), 0, kCache[layerIdx], 0, pair.k().length);
-						System.arraycopy(pair.v(), 0, vCache[layerIdx], 0, pair.v().length);
-					});
+					a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair ->
+							restoreLayer(kCache[layerIdx], vCache[layerIdx], pair, kvDim));
 				}
 			}
 
-			ensureKvCapacity(kCache, pos, kvDim);
-			ensureKvCapacity(vCache, pos, kvDim);
+			for (int li = 0; li < L; li++) {
+				kCache[li].ensureCapacity(pos);
+				vCache[li].ensureCapacity(pos);
+			}
 			kCaches[i] = kCache;
 			vCaches[i] = vCache;
 		}
 
 		BatchWorkspace ws = new BatchWorkspace(N, cfg.hiddenDim(), cfg.intermediateSize(),
-				kvDim, cfg.numHeads(), maxPos + 1);
+				kvDim, cfg.numHeads(), maxPos + 1, cacheTypes.usesQuantized());
 
 		for (int li = 0; li < L; li++) {
-			float[][] kLayers = new float[N][];
-			float[][] vLayers = new float[N][];
+			DenseKvTensor[] kLayers = new DenseKvTensor[N];
+			DenseKvTensor[] vLayers = new DenseKvTensor[N];
 			for (int i = 0; i < N; i++) {
 				kLayers[i] = kCaches[i][li];
 				vLayers[i] = vCaches[i][li];
@@ -639,7 +641,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			for (int i = 0; i < N; i++) {
 				int seqLen = positions[i] + 1;
 				for (int li = 0; li < L; li++) {
-					a.flush(requestIds.get(i), startLayer + li, kCaches[i][li], vCaches[i][li], seqLen, kvDim);
+					a.flush(requestIds.get(i), startLayer + li, kCaches[i][li], vCaches[i][li], seqLen);
 				}
 			}
 		}
@@ -648,7 +650,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	}
 
 	private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
-			float[][] kCacheLayers, float[][] vCacheLayers, BatchWorkspace ws) {
+			DenseKvTensor[] kCacheLayers, DenseKvTensor[] vCacheLayers, BatchWorkspace ws) {
 		int N = x.length;
 		int H = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
@@ -667,12 +669,16 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 		for (int b = 0; b < N; b++) {
 			int pos = positions[b];
-			System.arraycopy(ws.k[b], 0, kCacheLayers[b], pos * kvDim, kvDim);
-			System.arraycopy(ws.v[b], 0, vCacheLayers[b], pos * kvDim, kvDim);
+			kCacheLayers[b].writeToken(pos, ws.k[b]);
+			vCacheLayers[b].writeToken(pos, ws.v[b]);
 		}
 
-		for (int b = 0; b < N; b++)
-			gqaInto(ws.q[b], kCacheLayers[b], vCacheLayers[b], positions[b] + 1, ws.attnOut[b], ws.scores);
+		for (int b = 0; b < N; b++) {
+			int seqLen = positions[b] + 1;
+			float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
+			float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
+			gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+		}
 
 		sgemmProjInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, H);
 
@@ -719,31 +725,29 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		int kvDim = cfg.kvDim();
 		int lastPos = startPos + W - 1;
 
-		boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
-		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
-		float[][] kCache = kvCacheK.get(requestId);
-		float[][] vCache = kvCacheV.get(requestId);
+		DenseKvTensor[] kCache = kvCacheK.get(requestId);
+		DenseKvTensor[] vCache = kvCacheV.get(requestId);
 
 		NodeKVCacheAdapter a = kvAdapter;
 		if (isNew && startPos > 0 && a != null) {
 			for (int li = 0; li < L; li++) {
 				int absLayer = startLayer + li;
 				final int i = li;
-				a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
-					ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
-					ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
-					System.arraycopy(pair.k(), 0, kCache[i], 0, pair.k().length);
-					System.arraycopy(pair.v(), 0, vCache[i], 0, pair.v().length);
-				});
+				a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair ->
+						restoreLayer(kCache[i], vCache[i], pair, kvDim));
 			}
 		}
 
-		ensureKvCapacity(kCache, lastPos, kvDim);
-		ensureKvCapacity(vCache, lastPos, kvDim);
+		for (int li = 0; li < L; li++) {
+			kCache[li].ensureCapacity(lastPos);
+			vCache[li].ensureCapacity(lastPos);
+		}
 
 		BatchWorkspace ws = new BatchWorkspace(W, cfg.hiddenDim(), cfg.intermediateSize(),
-				kvDim, cfg.numHeads(), lastPos + 1);
+				kvDim, cfg.numHeads(), lastPos + 1, cacheTypes.usesQuantized());
 
 		for (int li = 0; li < L; li++) {
 			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws);
@@ -752,7 +756,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		if (a != null) {
 			int seqLen = lastPos + 1;
 			for (int li = 0; li < L; li++) {
-				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen, kvDim);
+				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen);
 			}
 		}
 		return x;
@@ -763,8 +767,9 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	private static final class BatchWorkspace {
 		final float[][] norm1, norm2, q, k, v, attnOut, attnProj, gate, up, hidden, ffnOut;
 		final float[] scores;
+		final float[] kDequant, vDequant;
 
-		BatchWorkspace(int W, int H, int I, int kvDim, int numHeads, int maxSeqLen) {
+		BatchWorkspace(int W, int H, int I, int kvDim, int numHeads, int maxSeqLen, boolean quantKv) {
 			norm1    = new float[W][H];
 			norm2    = new float[W][H];
 			q        = new float[W][H];
@@ -777,11 +782,18 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			hidden   = new float[W][I];
 			ffnOut   = new float[W][H];
 			scores   = new float[numHeads * maxSeqLen];
+			if (quantKv) {
+				kDequant = new float[maxSeqLen * kvDim];
+				vDequant = new float[maxSeqLen * kvDim];
+			} else {
+				kDequant = null;
+				vDequant = null;
+			}
 		}
 	}
 
 	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
-			float[] kCacheLayer, float[] vCacheLayer, BatchWorkspace ws) {
+			DenseKvTensor kCacheLayer, DenseKvTensor vCacheLayer, BatchWorkspace ws) {
 		int W    = x.length;
 		int H    = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
@@ -798,12 +810,16 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 
 		for (int b = 0; b < W; b++) {
-			System.arraycopy(ws.k[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
-			System.arraycopy(ws.v[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
+			kCacheLayer.writeToken(startPos + b, ws.k[b]);
+			vCacheLayer.writeToken(startPos + b, ws.v[b]);
 		}
 
-		for (int b = 0; b < W; b++)
-			gqaInto(ws.q[b], kCacheLayer, vCacheLayer, startPos + b + 1, ws.attnOut[b], ws.scores);
+		for (int b = 0; b < W; b++) {
+			int seqLen = startPos + b + 1;
+			float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
+			float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
+			gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+		}
 
 		sgemmProjInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, H);
 
@@ -935,40 +951,41 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 		// Lazy initial allocation — 64 slots, grows on demand to avoid OOM.
 		// phi-3.5-mini: eager 2048 slots = 554 MB per request; lazy = 17 MB initially.
-		boolean isNew = kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]) == null;
-		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
+		boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
-		float[][] kCache = kvCacheK.get(requestId);
-		float[][] vCache = kvCacheV.get(requestId);
+		DenseKvTensor[] kCache = kvCacheK.get(requestId);
+		DenseKvTensor[] vCache = kvCacheV.get(requestId);
 
-		// Restore from KVCacheManager when local entry was cleared (evicted under
-		// heap pressure) but the manager still holds the block.
 		NodeKVCacheAdapter a = kvAdapter;
 		if (isNew && pos > 0 && a != null) {
 			for (int li = 0; li < L; li++) {
 				int absLayer = startLayer + li;
 				final int i = li;
-				a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair -> {
-					ensureKvCapacity(kCache, pair.k().length / kvDim - 1, kvDim);
-					ensureKvCapacity(vCache, pair.v().length / kvDim - 1, kvDim);
-					System.arraycopy(pair.k(), 0, kCache[i], 0, pair.k().length);
-					System.arraycopy(pair.v(), 0, vCache[i], 0, pair.v().length);
-				});
+				a.tryRestore(requestId, absLayer, kvDim).ifPresent(pair ->
+						restoreLayer(kCache[i], vCache[i], pair, kvDim));
 			}
 		}
 
-		// Grow before writing at pos — transformerLayer writes kCacheLayer[pos * kvDim]
-		ensureKvCapacity(kCache, pos, kvDim);
-		ensureKvCapacity(vCache, pos, kvDim);
+		for (int li = 0; li < L; li++) {
+			kCache[li].ensureCapacity(pos);
+			vCache[li].ensureCapacity(pos);
+		}
+
+		float[] kScratch = null;
+		float[] vScratch = null;
+		if (cacheTypes.usesQuantized()) {
+			kScratch = new float[(pos + 1) * kvDim];
+			vScratch = new float[(pos + 1) * kvDim];
+		}
 
 		for (int li = 0; li < L; li++)
-			x = transformerLayer(x, li, pos, kCache[li], vCache[li]);
+			x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch);
 
-		// Write-through: flush updated KV into the manager (GPU→CPU tiers).
 		if (a != null) {
 			int seqLen = pos + 1;
 			for (int li = 0; li < L; li++) {
-				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen, kvDim);
+				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen);
 			}
 		}
 
@@ -1001,33 +1018,28 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 	}
 
-	/**
-	 * Grows KV cache arrays to accommodate {@code pos}. Uses doubling growth,
-	 * capped at {@link #MAX_SEQ_LEN}. Modifies the array slots in-place so the
-	 * map entry is updated automatically.
-	 */
-	private static void ensureKvCapacity(float[][] cache, int pos, int kvDim) {
-		int required = (pos + 1) * kvDim;
-		for (int li = 0; li < cache.length; li++) {
-			if (cache[li].length < required) {
-				int newLen = cache[li].length;
-				while (newLen < required)
-					newLen = Math.min(newLen * 2, MAX_SEQ_LEN * kvDim);
-				cache[li] = java.util.Arrays.copyOf(cache[li], newLen);
-			}
-		}
+	private DenseKvTensor[] newKLayers(int L) {
+		return DenseKvTensor.layers(L, cacheTypes.typeK(), cfg.kvDim());
 	}
 
-	/**
-	 * Package-private for testing: number of sequence positions currently allocated
-	 * in the K cache for the given request.
-	 */
+	private DenseKvTensor[] newVLayers(int L) {
+		return DenseKvTensor.layers(L, cacheTypes.typeV(), cfg.kvDim());
+	}
+
+	private void restoreLayer(DenseKvTensor k, DenseKvTensor v, NodeKVCacheAdapter.KvPair pair, int kvDim) {
+		int seqLen = pair.k().length / kvDim;
+		k.loadFloatPrefix(pair.k(), seqLen);
+		v.loadFloatPrefix(pair.v(), seqLen);
+	}
+
 	int kvCacheAllocatedSlots(String requestId) {
-		float[][] k = kvCacheK.get(requestId);
-		return (k == null || k.length == 0) ? 0 : k[0].length / cfg.kvDim();
+		DenseKvTensor[] k = kvCacheK.get(requestId);
+		return (k == null || k.length == 0) ? 0 : k[0].capacityTokens();
 	}
 
-	private float[] transformerLayer(float[] x, int li, int pos, float[] kCacheLayer, float[] vCacheLayer) {
+	private float[] transformerLayer(float[] x, int li, int pos,
+			DenseKvTensor kCacheLayer, DenseKvTensor vCacheLayer,
+			float[] kScratch, float[] vScratch) {
 		int H = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
 
@@ -1051,10 +1063,13 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		Phi3Rope.ropeExt(q, pos, cfg.numHeads(), cfg.headDim(), ropeCfg);
 		Phi3Rope.ropeExt(k, pos, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
 
-		System.arraycopy(k, 0, kCacheLayer, pos * kvDim, kvDim);
-		System.arraycopy(v, 0, vCacheLayer, pos * kvDim, kvDim);
+		kCacheLayer.writeToken(pos, k);
+		vCacheLayer.writeToken(pos, v);
 
-		float[] attnOut = gqa(q, kCacheLayer, vCacheLayer, pos + 1);
+		int seqLen = pos + 1;
+		float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
+		float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
+		float[] attnOut = gqa(q, kView, vView, seqLen);
 		float[] attnProj = matVecProj(wo[li],
 				woQ4Dev != null ? woQ4Dev[li] : null,
 				woDev != null ? woDev[li] : null,

@@ -51,6 +51,8 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--cpu` | — | cluster, local | Force CPU inference: sets `JUNO_USE_GPU=false`. Does not enable LoRA mode. |
 | `--gpu-layers N\|all\|auto` | `all` | cluster, local | Transformer layers resident on GPU (`JUNO_GPU_LAYERS`). `auto` fits until VRAM OOM. |
 | `--mmq on\|off\|auto` | `off` | cluster, local | Packed Q4_K GPU weights (`JUNO_MMQ`) for **VRAM fit** — keeps Q4_K on device instead of FP16-resident dequant. Applies to Llama-family, Phi-3, and Qwen3 dense text inference, and to `--lora-play` when the CUDA kernel loads (local REPL prints a confirmation line). LoRA **training** ignores `--mmq` (frozen weights stay FP16/FP32; the train REPL warns). `auto` enables when CUDA + kernel load. Default **off**. Not a decode-speed claim vs `--mmq off` on the current kernel; see `docs/performance.md`. |
+| `--cache-type-k f16\|q8_0` | `f16` | cluster, local | K-cache element type (`JUNO_CACHE_TYPE_K`). `f16` is the current float32 path (bit-compatible default). `q8_0` packs keys (~3.8× smaller persistent KV vs float); attention dequants to float. Slight quality tradeoff vs `f16`. |
+| `--cache-type-v f16\|q8_0` | `f16` | cluster, local | V-cache element type (`JUNO_CACHE_TYPE_V`). Same semantics as `--cache-type-k`. |
 | `--parallel N` | `1` | cluster, local, master | Static micro-batch size (`JUNO_PARALLEL`). `1` disables batching; recommend `8` for API servers. |
 | `--batch-window-ms M` | `50` when parallel>1 | cluster, local, master | Batch collect window (`JUNO_BATCH_WINDOW_MS`). |
 | `--prefill-batch N` | `32` | cluster, local, master | Max prompt tokens per prefill GPU window (`JUNO_PREFILL_BATCH`). Use `1` for per-token batched prefill. |

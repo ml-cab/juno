@@ -24,6 +24,8 @@ import java.util.Optional;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
+import cab.ml.juno.kvcache.CacheTypeOptions;
+import cab.ml.juno.kvcache.DenseKvTensor;
 import cab.ml.juno.lora.DoraMagnitude;
 import cab.ml.juno.lora.DoraProjection;
 import cab.ml.juno.lora.LoraAdapter;
@@ -153,10 +155,9 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 
 	// ── Inference KV cache ────────────────────────────────────────────────────
 
-	private final Map<String, float[][]> kvCacheK = new ConcurrentHashMap<>();
-	private final Map<String, float[][]> kvCacheV = new ConcurrentHashMap<>();
-	private static final int MAX_SEQ_LEN = 2048;
-	private static final int INITIAL_SEQ_CAPACITY = 64;
+	private final Map<String, DenseKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
+	private final Map<String, DenseKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
+	private final CacheTypeOptions cacheTypes;
 
 	// ── Factory ───────────────────────────────────────────────────────────────
 
@@ -197,6 +198,12 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
 		this.hasOutputProj = ctx.hasOutputProjection();
+		this.cacheTypes = CacheTypeOptions.fromEnv();
+		log.info(cacheTypes.policySummary());
+		if (cacheTypes.usesQuantized()) {
+			log.warning("LoRA training uses ephemeral float KV for teacher-forced forward; "
+					+ cacheTypes.policySummary() + " applies to inference / --lora-play maps only.");
+		}
 
 		int L = endLayer - startLayer;
 
@@ -622,22 +629,32 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		int kvDim = cfg.kvDim();
 		int lastPos = startPos + W - 1;
 
-		kvCacheK.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-		float[][] kC = kvCacheK.get(requestId);
-		float[][] vC = kvCacheV.get(requestId);
-		ensureKvCapacity(kC, lastPos, kvDim);
-		ensureKvCapacity(vC, lastPos, kvDim);
+		kvCacheK.computeIfAbsent(requestId, k -> newKLayers(L));
+		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+		DenseKvTensor[] kC = kvCacheK.get(requestId);
+		DenseKvTensor[] vC = kvCacheV.get(requestId);
+		for (int li = 0; li < L; li++) {
+			kC[li].ensureCapacity(lastPos);
+			vC[li].ensureCapacity(lastPos);
+		}
+
+		float[] kDequant = null;
+		float[] vDequant = null;
+		if (cacheTypes.usesQuantized()) {
+			kDequant = new float[(lastPos + 1) * kvDim];
+			vDequant = new float[(lastPos + 1) * kvDim];
+		}
 
 		for (int li = 0; li < L; li++) {
-			x = inferenceLayerBatch(x, li, startPos, kC[li], vC[li]);
+			x = inferenceLayerBatch(x, li, startPos, kC[li], vC[li], kDequant, vDequant);
 		}
 		return x;
 	}
 
 	/** Batch inference layer with LoRA delta applied per-token. */
 	private float[][] inferenceLayerBatch(float[][] x, int li, int startPos,
-			float[] kCacheLayer, float[] vCacheLayer) {
+			DenseKvTensor kCacheLayer, DenseKvTensor vCacheLayer,
+			float[] kDequant, float[] vDequant) {
 		int W = x.length;
 		int H = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
@@ -661,13 +678,17 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		for (int b = 0; b < W; b++) {
 			LlamaTransformerHandler.rope(Q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
 			LlamaTransformerHandler.rope(K[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
-			System.arraycopy(K[b], 0, kCacheLayer, (startPos + b) * kvDim, kvDim);
-			System.arraycopy(V[b], 0, vCacheLayer, (startPos + b) * kvDim, kvDim);
+			kCacheLayer.writeToken(startPos + b, K[b]);
+			vCacheLayer.writeToken(startPos + b, V[b]);
 		}
 
 		float[][] attnOut = new float[W][];
-		for (int b = 0; b < W; b++)
-			attnOut[b] = gqa(Q[b], kCacheLayer, vCacheLayer, startPos + b + 1);
+		for (int b = 0; b < W; b++) {
+			int seqLen = startPos + b + 1;
+			float[] kView = kCacheLayer.viewForAttention(seqLen, kDequant);
+			float[] vView = vCacheLayer.viewForAttention(seqLen, vDequant);
+			attnOut[b] = gqa(Q[b], kView, vView, seqLen);
+		}
 
 		float[][] attnProj = sgemmBatch(wo[li], woQ4Dev, woDev, li, attnOut, H, H);
 
@@ -1131,19 +1152,68 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private float[] runLayers(float[] x, String requestId, int pos) {
 		int L = endLayer - startLayer;
 		int kvDim = cfg.kvDim();
-		kvCacheK.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-		float[][] kC = kvCacheK.get(requestId);
-		float[][] vC = kvCacheV.get(requestId);
-		ensureKvCapacity(kC, pos, kvDim);
-		ensureKvCapacity(vC, pos, kvDim);
+		kvCacheK.computeIfAbsent(requestId, k -> newKLayers(L));
+		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+		DenseKvTensor[] kC = kvCacheK.get(requestId);
+		DenseKvTensor[] vC = kvCacheV.get(requestId);
 		for (int li = 0; li < L; li++) {
-			x = inferenceLayer(x, li, pos, kC[li], vC[li]);
+			kC[li].ensureCapacity(pos);
+			vC[li].ensureCapacity(pos);
+		}
+
+		float[] kScratch = null;
+		float[] vScratch = null;
+		if (cacheTypes.usesQuantized()) {
+			kScratch = new float[(pos + 1) * kvDim];
+			vScratch = new float[(pos + 1) * kvDim];
+		}
+
+		for (int li = 0; li < L; li++) {
+			x = inferenceLayer(x, li, pos, kC[li], vC[li], kScratch, vScratch);
 		}
 		return x;
 	}
 
 	/** Fast inference layer — LoRA applied but no activations stored. */
+	private float[] inferenceLayer(float[] x, int li, int pos,
+			DenseKvTensor kCacheLayer, DenseKvTensor vCacheLayer,
+			float[] kScratch, float[] vScratch) {
+		int H = cfg.hiddenDim();
+		int kvDim = cfg.kvDim();
+
+		float[] xNorm1 = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
+
+		float[] q = matVecLayer(wq[li], q4At(wqQ4Dev, li), fpAt(wqDev, li), xNorm1, H, H);
+		float[] k = matVecLayer(wk[li], q4At(wkQ4Dev, li), fpAt(wkDev, li), xNorm1, kvDim, H);
+		float[] v = matVecLayer(wv[li], q4At(wvQ4Dev, li), fpAt(wvDev, li), xNorm1, kvDim, H);
+
+		applyLoraInPlace(q, li, "wq", xNorm1);
+		applyLoraInPlace(k, li, "wk", xNorm1);
+		applyLoraInPlace(v, li, "wv", xNorm1);
+		addBiasInPlace(q, bq, li);
+		addBiasInPlace(k, bk, li);
+		addBiasInPlace(v, bv, li);
+
+		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
+		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+
+		kCacheLayer.writeToken(pos, k);
+		vCacheLayer.writeToken(pos, v);
+
+		int seqLen = pos + 1;
+		float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
+		float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
+		float[] attnOut = gqa(q, kView, vView, seqLen);
+		float[] attnProj = matVecLayer(wo[li], q4At(woQ4Dev, li), fpAt(woDev, li), attnOut, H, H);
+		applyLoraInPlace(attnProj, li, "wo", attnOut);
+		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
+
+		float[] xNorm2 = LlamaTransformerHandler.rmsNorm(x2, ffnNorm[li], cfg.rmsNormEps());
+		float[] ffnOut = ffn(xNorm2, li);
+		return LlamaTransformerHandler.add(x2, ffnOut);
+	}
+
+	/** Ephemeral float[] KV buffers (evaluateLoss / local teacher forcing). */
 	private float[] inferenceLayer(float[] x, int li, int pos, float[] kCacheLayer, float[] vCacheLayer) {
 		int H = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
@@ -1912,17 +1982,11 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			dst[i] += src[i];
 	}
 
-	// ── KV cache growth ───────────────────────────────────────────────────────
+	private DenseKvTensor[] newKLayers(int L) {
+		return DenseKvTensor.layers(L, cacheTypes.typeK(), cfg.kvDim());
+	}
 
-	private static void ensureKvCapacity(float[][] cache, int pos, int kvDim) {
-		int required = (pos + 1) * kvDim;
-		for (int li = 0; li < cache.length; li++) {
-			if (cache[li].length < required) {
-				int newLen = cache[li].length;
-				while (newLen < required)
-					newLen = Math.min(newLen * 2, MAX_SEQ_LEN * kvDim);
-				cache[li] = Arrays.copyOf(cache[li], newLen);
-			}
-		}
+	private DenseKvTensor[] newVLayers(int L) {
+		return DenseKvTensor.layers(L, cacheTypes.typeV(), cfg.kvDim());
 	}
 }

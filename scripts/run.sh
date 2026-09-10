@@ -368,6 +368,8 @@ cmd_local() {
   local batch_window="${JUNO_BATCH_WINDOW_MS:-}"
   local gpu_layers="${JUNO_GPU_LAYERS:-}"
   local mmq="${JUNO_MMQ:-}"
+  local cache_type_k="${JUNO_CACHE_TYPE_K:-}"
+  local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
   local prefill_batch="${JUNO_PREFILL_BATCH:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
@@ -404,6 +406,8 @@ cmd_local() {
       --batch-window-ms)  batch_window="$2"; shift 2 ;;
       --gpu-layers)       gpu_layers="$2";   shift 2 ;;
       --mmq)              mmq="$2";          shift 2 ;;
+      --cache-type-k)     cache_type_k="$2"; shift 2 ;;
+      --cache-type-v)     cache_type_v="$2"; shift 2 ;;
       --prefill-batch)    prefill_batch="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
@@ -445,6 +449,8 @@ cmd_local() {
         echo "    --batch-window-ms M        batch window when parallel>1 (default 50)"
         echo "    --gpu-layers N|all|auto    GPU-resident transformer layers (default all)"
         echo "    --mmq on|off|auto          packed Q4_K GPU weights for VRAM fit (default off)"
+        echo "    --cache-type-k f16|q8_0    K cache type (default f16 = current float path)"
+        echo "    --cache-type-v f16|q8_0    V cache type (default f16)"
         echo "    --prefill-batch N          prefill microbatch chunk size (default 32)"
         echo ""
         echo "  Backend:"
@@ -518,6 +524,10 @@ cmd_local() {
   [[ -n "$gpu_layers" ]] && gpu_layers_arg="--gpu-layers $gpu_layers"
   local mmq_arg=""
   [[ -n "$mmq" ]] && mmq_arg="--mmq $mmq"
+  local cache_type_k_arg=""
+  [[ -n "$cache_type_k" ]] && cache_type_k_arg="--cache-type-k $cache_type_k"
+  local cache_type_v_arg=""
+  [[ -n "$cache_type_v" ]] && cache_type_v_arg="--cache-type-v $cache_type_v"
   local prefill_batch_arg=""
   [[ -n "$prefill_batch" ]] && prefill_batch_arg="--prefill-batch $prefill_batch"
   local mmproj_arg=""
@@ -547,6 +557,8 @@ cmd_local() {
     ${batch_window_arg} \
     ${gpu_layers_arg} \
     ${mmq_arg} \
+    ${cache_type_k_arg} \
+    ${cache_type_v_arg} \
     ${prefill_batch_arg} \
     ${mmproj_arg} \
     ${health_flag} \
@@ -598,6 +610,8 @@ cmd_lora() {
   local jfr_duration=""
   local health="false"
   local health_port="${HEALTH_PORT:-8081}"
+  local cache_type_k="${JUNO_CACHE_TYPE_K:-}"
+  local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -651,6 +665,8 @@ cmd_lora() {
       --health-port)  health_port="$2";  shift 2 ;;
       --gpu)          use_gpu="true";    shift   ;;
       --cpu)          use_gpu="false";   shift   ;;
+      --cache-type-k) cache_type_k="$2"; shift 2 ;;
+      --cache-type-v) cache_type_v="$2"; shift 2 ;;
       --verbose | -v) verbose="true";   shift   ;;
       --help)
         echo ""
@@ -704,6 +720,8 @@ cmd_lora() {
         echo "    --temperature F         (default 0.7)"
         echo "    --top-k N               (default 50)"
         echo "    --top-p F               (default 0.9)"
+        echo "    --cache-type-k f16|q8_0 Inference KV K type (default f16; train ephemeral float)"
+        echo "    --cache-type-v f16|q8_0 Inference KV V type (default f16)"
         echo ""
         echo "  Backend:"
         echo "    --gpu                   use GPU when available (default)"
@@ -789,6 +807,10 @@ cmd_lora() {
     jfr_arg="--jfr $jfr_duration"
     warn "JFR enabled — duration=${jfr_duration}  (programmatic recording, metrics auto-printed on exit)"
   fi
+  local cache_type_k_arg=""
+  [[ -n "$cache_type_k" ]] && cache_type_k_arg="--cache-type-k $cache_type_k"
+  local cache_type_v_arg=""
+  [[ -n "$cache_type_v" ]] && cache_type_v_arg="--cache-type-v $cache_type_v"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -831,6 +853,8 @@ cmd_lora() {
     --top-p "$top_p" \
     "$gpu_flag" \
     ${jfr_arg} \
+    ${cache_type_k_arg} \
+    ${cache_type_v_arg} \
     ${lora_path_flag} \
     ${health_flag} \
     ${verbose_flag}

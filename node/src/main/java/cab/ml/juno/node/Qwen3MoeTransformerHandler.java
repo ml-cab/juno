@@ -24,6 +24,9 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.CacheTypeOptions;
+import cab.ml.juno.kvcache.DenseKvTensor;
+
 /**
  * Qwen3-MoE transformer forward pass — same Q/K-norm attention as
  * {@link Qwen3TransformerHandler} with routed expert SwiGLU FFN.
@@ -31,9 +34,6 @@ import java.util.logging.Logger;
 public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 
 	private static final Logger log = Logger.getLogger(Qwen3MoeTransformerHandler.class.getName());
-	private static final int MAX_SEQ_LEN = 2048;
-	private static final int INITIAL_SEQ_CAPACITY = 64;
-
 	private final Qwen3Config cfg;
 	private final int startLayer;
 	private final int endLayer;
@@ -59,8 +59,9 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 	private final GgufReader.QuantizedTensor[] ffnDownExps;
 
 	private final MatVec backend;
-	private final Map<String, float[][]> kvCacheK = new ConcurrentHashMap<>();
-	private final Map<String, float[][]> kvCacheV = new ConcurrentHashMap<>();
+	private final Map<String, DenseKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
+	private final Map<String, DenseKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
+	private final CacheTypeOptions cacheTypes;
 	private volatile NodeKVCacheAdapter kvAdapter;
 
 	public static Qwen3MoeTransformerHandler load(Path modelPath, ShardContext context) throws IOException {
@@ -88,6 +89,8 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
 		this.hasOutputProj = ctx.hasOutputProjection();
+		this.cacheTypes = CacheTypeOptions.fromEnv();
+		log.info(cacheTypes.policySummary());
 
 		int L = endLayer - startLayer;
 		int H = cfg.hiddenDim();
@@ -233,31 +236,33 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		for (int pos : positions)
 			maxPos = Math.max(maxPos, pos);
 
-		float[][][] kCaches = new float[N][L][];
-		float[][][] vCaches = new float[N][L][];
+		DenseKvTensor[][] kCaches = new DenseKvTensor[N][];
+		DenseKvTensor[][] vCaches = new DenseKvTensor[N][];
 
 		NodeKVCacheAdapter a = kvAdapter;
 		for (int i = 0; i < N; i++) {
 			String requestId = requestIds.get(i);
 			int pos = positions[i];
 
-			kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-			kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-			float[][] kCache = kvCacheK.get(requestId);
-			float[][] vCache = kvCacheV.get(requestId);
+			kvCacheK.putIfAbsent(requestId, newKLayers(L));
+			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+			DenseKvTensor[] kCache = kvCacheK.get(requestId);
+			DenseKvTensor[] vCache = kvCacheV.get(requestId);
 
-			ensureKvCapacity(kCache, pos, kvDim);
-			ensureKvCapacity(vCache, pos, kvDim);
+			for (int li = 0; li < L; li++) {
+				kCache[li].ensureCapacity(pos);
+				vCache[li].ensureCapacity(pos);
+			}
 			kCaches[i] = kCache;
 			vCaches[i] = vCache;
 		}
 
 		MoeBatchWorkspace ws = new MoeBatchWorkspace(N, cfg.hiddenDim(), cfg.qDim(), cfg.kvDim(),
-				cfg.numHeads(), maxPos + 1);
+				cfg.numHeads(), maxPos + 1, cacheTypes.usesQuantized());
 
 		for (int li = 0; li < L; li++) {
-			float[][] kLayers = new float[N][];
-			float[][] vLayers = new float[N][];
+			DenseKvTensor[] kLayers = new DenseKvTensor[N];
+			DenseKvTensor[] vLayers = new DenseKvTensor[N];
 			for (int i = 0; i < N; i++) {
 				kLayers[i] = kCaches[i][li];
 				vLayers[i] = vCaches[i][li];
@@ -269,7 +274,7 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 			for (int i = 0; i < N; i++) {
 				int seqLen = positions[i] + 1;
 				for (int li = 0; li < L; li++)
-					a.flush(requestIds.get(i), startLayer + li, kCaches[i][li], vCaches[i][li], seqLen, kvDim);
+					a.flush(requestIds.get(i), startLayer + li, kCaches[i][li], vCaches[i][li], seqLen);
 			}
 		}
 		return x;
@@ -278,8 +283,9 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 	private static final class MoeBatchWorkspace {
 		final float[][] norm1, norm2, q, k, v, attnOut, attnProj;
 		final float[] scores;
+		final float[] kDequant, vDequant;
 
-		MoeBatchWorkspace(int W, int H, int qDim, int kvDim, int numHeads, int maxSeqLen) {
+		MoeBatchWorkspace(int W, int H, int qDim, int kvDim, int numHeads, int maxSeqLen, boolean quantKv) {
 			norm1 = new float[W][H];
 			norm2 = new float[W][H];
 			q = new float[W][qDim];
@@ -288,11 +294,18 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 			attnOut = new float[W][qDim];
 			attnProj = new float[W][H];
 			scores = new float[numHeads * maxSeqLen];
+			if (quantKv) {
+				kDequant = new float[maxSeqLen * kvDim];
+				vDequant = new float[maxSeqLen * kvDim];
+			} else {
+				kDequant = null;
+				vDequant = null;
+			}
 		}
 	}
 
 	private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
-			float[][] kCacheLayers, float[][] vCacheLayers, MoeBatchWorkspace ws) {
+			DenseKvTensor[] kCacheLayers, DenseKvTensor[] vCacheLayers, MoeBatchWorkspace ws) {
 		int N = x.length;
 		int H = cfg.hiddenDim();
 		int qDim = cfg.qDim();
@@ -320,12 +333,16 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 
 		for (int b = 0; b < N; b++) {
 			int pos = positions[b];
-			System.arraycopy(ws.k[b], 0, kCacheLayers[b], pos * kvDim, kvDim);
-			System.arraycopy(ws.v[b], 0, vCacheLayers[b], pos * kvDim, kvDim);
+			kCacheLayers[b].writeToken(pos, ws.k[b]);
+			vCacheLayers[b].writeToken(pos, ws.v[b]);
 		}
 
-		for (int b = 0; b < N; b++)
-			gqaInto(ws.q[b], kCacheLayers[b], vCacheLayers[b], positions[b] + 1, ws.attnOut[b], ws.scores);
+		for (int b = 0; b < N; b++) {
+			int seqLen = positions[b] + 1;
+			float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
+			float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
+			gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+		}
 
 		sgemmLayerInto(wo[li], ws.attnOut, ws.attnProj, H, qDim);
 
@@ -402,8 +419,8 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 	}
 
 	int kvCacheAllocatedSlots(String requestId) {
-		float[][] k = kvCacheK.get(requestId);
-		return (k == null || k.length == 0) ? 0 : k[0].length / cfg.kvDim();
+		DenseKvTensor[] k = kvCacheK.get(requestId);
+		return (k == null || k.length == 0) ? 0 : k[0].capacityTokens();
 	}
 
 	private float[] getInitialActivation(ForwardRequest request) {
@@ -425,30 +442,41 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		int L = endLayer - startLayer;
 		int kvDim = cfg.kvDim();
 
-		kvCacheK.putIfAbsent(requestId, new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-		kvCacheV.computeIfAbsent(requestId, k -> new float[L][INITIAL_SEQ_CAPACITY * kvDim]);
-		float[][] kCache = kvCacheK.get(requestId);
-		float[][] vCache = kvCacheV.get(requestId);
+		kvCacheK.putIfAbsent(requestId, newKLayers(L));
+		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
+		DenseKvTensor[] kCache = kvCacheK.get(requestId);
+		DenseKvTensor[] vCache = kvCacheV.get(requestId);
 
-		ensureKvCapacity(kCache, pos, kvDim);
-		ensureKvCapacity(vCache, pos, kvDim);
+		for (int li = 0; li < L; li++) {
+			kCache[li].ensureCapacity(pos);
+			vCache[li].ensureCapacity(pos);
+		}
+
+		float[] kScratch = null;
+		float[] vScratch = null;
+		if (cacheTypes.usesQuantized()) {
+			kScratch = new float[(pos + 1) * cfg.kvDim()];
+			vScratch = new float[(pos + 1) * cfg.kvDim()];
+		}
 
 		for (int li = 0; li < L; li++)
-			x = transformerLayer(x, li, pos, kCache[li], vCache[li]);
+			x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch);
 
 		NodeKVCacheAdapter a = kvAdapter;
 		if (a != null) {
 			int seqLen = pos + 1;
 			for (int li = 0; li < L; li++)
-				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen, kvDim);
+				a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen);
 		}
 		return x;
 	}
 
-	private float[] transformerLayer(float[] x, int li, int pos, float[] kCacheLayer, float[] vCacheLayer) {
+	private float[] transformerLayer(float[] x, int li, int pos,
+			DenseKvTensor kCacheLayer, DenseKvTensor vCacheLayer,
+			float[] kScratch, float[] vScratch) {
 		float[] xNorm = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
 		float[] attnProj = Qwen3TransformerHandler.attentionLayer(new MoeLayerWeights(li), cfg, xNorm, pos,
-				kCacheLayer, vCacheLayer);
+				kCacheLayer, vCacheLayer, kScratch, vScratch);
 		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
 
 		float[] xNorm2 = LlamaTransformerHandler.rmsNorm(x2, ffnNorm[li], cfg.rmsNormEps());
@@ -531,16 +559,12 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		return LlamaTransformerHandler.matVec(outputProj, xNorm, actualVocab, cfg.hiddenDim());
 	}
 
-	private static void ensureKvCapacity(float[][] cache, int pos, int kvDim) {
-		int required = (pos + 1) * kvDim;
-		for (int li = 0; li < cache.length; li++) {
-			if (cache[li].length < required) {
-				int newLen = cache[li].length;
-				while (newLen < required)
-					newLen = Math.min(newLen * 2, MAX_SEQ_LEN * kvDim);
-				cache[li] = java.util.Arrays.copyOf(cache[li], newLen);
-			}
-		}
+	private DenseKvTensor[] newKLayers(int L) {
+		return DenseKvTensor.layers(L, cacheTypes.typeK(), cfg.kvDim());
+	}
+
+	private DenseKvTensor[] newVLayers(int L) {
+		return DenseKvTensor.layers(L, cacheTypes.typeV(), cfg.kvDim());
 	}
 
 	private final class MoeLayerWeights implements Qwen3TransformerHandler.Qwen3AttentionWeights {

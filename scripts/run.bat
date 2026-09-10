@@ -232,6 +232,8 @@ set "API_PORT_LOCAL=%API_PORT%"
 set "LORA_PLAY=%LORA_PLAY_PATH%"
 set "USE_GPU=true"
 set "MMQ=%JUNO_MMQ%"
+set "CACHE_TYPE_K=%JUNO_CACHE_TYPE_K%"
+set "CACHE_TYPE_V=%JUNO_CACHE_TYPE_V%"
 if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
   if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
@@ -258,6 +260,8 @@ if /i "%~1"=="--jfr"        ( set "JFR_DURATION_LOCAL=%~2" & shift & shift & got
 if /i "%~1"=="--api-port"   ( set "API_PORT_LOCAL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--lora-play"  ( set "LORA_PLAY=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--mmq"        ( set "MMQ=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--cache-type-k" ( set "CACHE_TYPE_K=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--cache-type-v" ( set "CACHE_TYPE_V=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :local_parse )
@@ -288,6 +292,8 @@ if /i "%~1"=="--help" (
   echo   --gpu             use GPU when available (default)
   echo   --cpu             use CPU only
   echo   --mmq on^|off^|auto packed Q4_K GPU weights for VRAM fit (default off)
+  echo   --cache-type-k f16^|q8_0 K cache type (default f16)
+  echo   --cache-type-v f16^|q8_0 V cache type (default f16)
   echo   --verbose / -v
   echo.
   echo   --api-port N         start local REST API server on port N
@@ -349,10 +355,14 @@ if not "%MMPROJ%"=="" (
 
 set "MMQ_ARG="
 if not "%MMQ%"=="" set "MMQ_ARG=--mmq %MMQ%"
+set "CACHE_TYPE_K_ARG="
+if not "%CACHE_TYPE_K%"=="" set "CACHE_TYPE_K_ARG=--cache-type-k %CACHE_TYPE_K%"
+set "CACHE_TYPE_V_ARG="
+if not "%CACHE_TYPE_V%"=="" set "CACHE_TYPE_V_ARG=--cache-type-v %CACHE_TYPE_V%"
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -397,6 +407,8 @@ if "%HEAP%"==""        set "HEAP=4g"
 set "VERBOSE=false"
 set "JFR_DURATION_LORA="
 set "USE_GPU=true"
+set "CACHE_TYPE_K=%JUNO_CACHE_TYPE_K%"
+set "CACHE_TYPE_V=%JUNO_CACHE_TYPE_V%"
 if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
   if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
@@ -448,6 +460,8 @@ if /i "%~1"=="--verbose" ( set "VERBOSE=true" & shift & goto :lora_parse )
 if /i "%~1"=="-v"        ( set "VERBOSE=true" & shift & goto :lora_parse )
 if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :lora_parse )
 if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :lora_parse )
+if /i "%~1"=="--cache-type-k" ( set "CACHE_TYPE_K=%~2" & shift & shift & goto :lora_parse )
+if /i "%~1"=="--cache-type-v" ( set "CACHE_TYPE_V=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat lora --model-path PATH [flags]
@@ -477,6 +491,8 @@ if /i "%~1"=="--help" (
   echo     --temperature F         (default 0.7)
   echo     --top-k N               (default 50)
   echo     --top-p F               (default 0.9)
+  echo     --cache-type-k f16^|q8_0 Inference KV K type (default f16)
+  echo     --cache-type-v f16^|q8_0 Inference KV V type (default f16)
   echo.
   echo   JVM:
   echo     --heap SIZE             e.g. 4g 8g 16g  (default 4g)
@@ -547,9 +563,14 @@ set "JFR_ARG_LORA=--jfr %JFR_DURATION_LORA%"
 echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  (programmatic recording, metrics auto-printed on exit)
 :lora_jfr_skip
 
+set "CACHE_TYPE_K_ARG="
+if not "%CACHE_TYPE_K%"=="" set "CACHE_TYPE_K_ARG=--cache-type-k %CACHE_TYPE_K%"
+set "CACHE_TYPE_V_ARG="
+if not "%CACHE_TYPE_V%"=="" set "CACHE_TYPE_V_ARG=--cache-type-v %CACHE_TYPE_V%"
+
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --lora-mode %LORA_MODE% --lora-scaling %LORA_SCALING% --lora-init %LORA_INIT% --lora-chunk-tokens %LORA_CHUNK_TOKENS% --lora-max-train-tokens %LORA_MAX_TRAIN_TOKENS% --lora-train-device %LORA_TRAIN_DEVICE% --lora-microbatch %LORA_MICROBATCH% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %JFR_ARG_LORA% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --lora-mode %LORA_MODE% --lora-scaling %LORA_SCALING% --lora-init %LORA_INIT% --lora-chunk-tokens %LORA_CHUNK_TOKENS% --lora-max-train-tokens %LORA_MAX_TRAIN_TOKENS% --lora-train-device %LORA_TRAIN_DEVICE% --lora-microbatch %LORA_MICROBATCH% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %JFR_ARG_LORA% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================

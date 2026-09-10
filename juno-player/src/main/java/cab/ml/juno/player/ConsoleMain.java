@@ -201,6 +201,8 @@ public final class ConsoleMain {
 	private static boolean useGpu = true; // use CPU
 	private static String gpuLayers = null; // null → env or default all
 	private static String mmq = null; // null → env or default off
+	private static String cacheTypeK = null; // null → env or default f16
+	private static String cacheTypeV = null; // null → env or default f16
 	private static Integer parallel = null; // null → env or default 1
 	private static Long batchWindowMs = null; // null → env or default when parallel > 1
 	// ── LoRA arguments ────────────────────────────────────────────────────────
@@ -329,6 +331,10 @@ public final class ConsoleMain {
 			System.setProperty(GpuLayerOffload.ENV_PROPERTY, gpuLayers);
 		if (mmq != null)
 			System.setProperty(MmqOptions.ENV_PROPERTY, mmq);
+		if (cacheTypeK != null)
+			System.setProperty(cab.ml.juno.kvcache.CacheTypeOptions.ENV_K, cacheTypeK);
+		if (cacheTypeV != null)
+			System.setProperty(cab.ml.juno.kvcache.CacheTypeOptions.ENV_V, cacheTypeV);
 		if (loraPlayPath != null)
 			System.setProperty(cab.ml.juno.node.LoraMmqPolicy.PLAY_PATH_PROPERTY, loraPlayPath);
 		System.setProperty("juno.byteOrder", byteOrder);
@@ -387,6 +393,16 @@ public final class ConsoleMain {
 			String env = System.getenv(MmqOptions.ENV_PROPERTY);
 			if (env != null && !env.isBlank())
 				mmq = env.strip();
+		}
+		if (cacheTypeK == null) {
+			String env = System.getenv(cab.ml.juno.kvcache.CacheTypeOptions.ENV_K);
+			if (env != null && !env.isBlank())
+				cacheTypeK = env.strip();
+		}
+		if (cacheTypeV == null) {
+			String env = System.getenv(cab.ml.juno.kvcache.CacheTypeOptions.ENV_V);
+			if (env != null && !env.isBlank())
+				cacheTypeV = env.strip();
 		}
 		if (parallel == null) {
 			String env = System.getenv(ServeBatchOptions.ENV_PARALLEL);
@@ -511,6 +527,14 @@ public final class ConsoleMain {
 			case "--mmq":
 				if (i + 1 < args.length)
 					mmq = args[++i];
+				break;
+			case "--cache-type-k":
+				if (i + 1 < args.length)
+					cacheTypeK = args[++i];
+				break;
+			case "--cache-type-v":
+				if (i + 1 < args.length)
+					cacheTypeV = args[++i];
 				break;
 			case "--parallel":
 				if (i + 1 < args.length)
@@ -716,6 +740,10 @@ public final class ConsoleMain {
 		System.out.println("                             env JUNO_GPU_LAYERS; auto fits until VRAM OOM");
 		System.out.println("  --mmq on|off|auto          Packed Q4_K GPU weights for VRAM fit (default: off; LoRA play when CUDA kernel loads; ignored for LoRA train)");
 		System.out.println("                             env JUNO_MMQ; keeps Q4_K packed on device");
+		System.out.println("  --cache-type-k f16|q8_0    K cache element type (default: f16 = current float path)");
+		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8× smaller vs float)");
+		System.out.println("  --cache-type-v f16|q8_0    V cache element type (default: f16)");
+		System.out.println("                             env JUNO_CACHE_TYPE_V");
 		System.out.println("  --parallel N               Static micro-batch size (default: 1, disabled)");
 		System.out.println("                             env JUNO_PARALLEL; recommend 8 for API servers");
 		System.out.println("  --batch-window-ms M        Batch collect window when parallel>1 (default: 50)");

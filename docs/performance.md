@@ -2,6 +2,31 @@
 
 Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). This file records tier-specific regression notes and exit-gate evidence.
 
+## Quantized KV cache (`--cache-type-k/v`)
+
+**Plan:** [`infra-plan/PLAN-Infra-Tier6.md`](infra-plan/PLAN-Infra-Tier6.md) (P1 step 1 — **in progress**).
+
+**What:** `--cache-type-k` / `--cache-type-v` (`f16|q8_0`, default `f16`). CLI `f16` keeps the current float32 in-process path. `q8_0` stores per-token GGUF-style blocks (34 B / 32 elems) via `DenseKvTensor`; attention dequants to float scratch. Manager write-through (`NodeKVCacheAdapter`) carries typed payloads.
+
+**Claim:** ≥2× persistent KV memory vs default float path (measured ~3.8× when `kvDim` aligns to 32). Not a throughput claim.
+
+**Surfaces:** All text handlers + LoRA playback inference maps. LoRA **train** still uses ephemeral float KV inside teacher-forced forward (explicit no-op + WARNING when q8 flags set).
+
+**Parity:** `Q8_0KvCodecTest`, `DenseKvTensorTest`, `LlamaTransformerHandlerCacheTypeParityTest`.
+
+**Cross-feature smoke ([`target/cache-type-smoke/20260910T154500Z/`](../target/cache-type-smoke/20260910T154500Z/), CPU):**
+
+| Gate | Result |
+|------|--------|
+| Base `f16` / `q8_0` short decode | exit 0; policy log names types |
+| `--lora-play` + q8_0 | recall `My name is Juno` |
+| `juno lora` + q8_0 | `train-loss=3.76` finite; ephemeral KV warn |
+| `--parallel 2` + q8_0 | decode ok |
+| Multi-decode unit + q8_0 | surefire 2/2 green |
+| `--gpu-layers auto` + q8_0 | skipped (no GPU driver on smoke host) |
+
+**Bake-off:** pending before feature-complete.
+
 ## Fused Q4_K GPU matmul (`--mmq`)
 
 **Plan:** [`infra-plan/PLAN-Infra-Tier13.md`](infra-plan/PLAN-Infra-Tier13.md) Phase B (**feature complete** as VRAM-fit); LoRA play [`infra-plan/PLAN-Infra-LoRA-MMQ.md`](infra-plan/PLAN-Infra-LoRA-MMQ.md) Phase 1 (**complete**).

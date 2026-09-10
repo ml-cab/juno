@@ -22,151 +22,195 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.DenseKvTensor;
 import cab.ml.juno.kvcache.KVBlock;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.kvcache.KVKey;
+import cab.ml.juno.kvcache.KvElementType;
+import cab.ml.juno.kvcache.Q8_0KvCodec;
 
 /**
- * Bridges the transformer handler's in-process {@code float[][]} KV arrays and
- * the {@link KVCacheManager} (GPU + CPU tiers with LRU eviction).
+ * Bridges the transformer handler's in-process KV tensors and the
+ * {@link KVCacheManager} (GPU + CPU tiers with LRU eviction).
  *
- * <p><b>Write-through</b>: after each token position is written to the
- * handler's local KV arrays, {@link #flush} serialises the updated K and V
- * data into a {@link KVBlock} and stores it in the manager. This keeps the
- * GPU-tier budget accounting accurate and allows the manager to evict under
- * real memory pressure.
- *
- * <p><b>Restore</b>: if a local {@code float[][]} entry was removed from
- * the handler's in-process map (e.g. under JVM heap pressure), calling
- * {@link #tryRestore} will rebuild it from whichever tier still holds the
- * block, transparently promoting it back to GPU if found only in CPU tier.
- *
- * <p><b>Evict</b>: {@link #evict} removes entries from both the local
- * in-process map and the manager's GPU/CPU tiers. It is the single eviction
- * call-site for completed requests.
- *
- * <h3>KVBlock serialisation format</h3>
- * {@code data} = float32 little-endian, concatenated:
- * <pre>
- *   bytes [0 .. seqLen*kvDim*4)         K values for positions 0..seqLen-1
- *   bytes [seqLen*kvDim*4 .. 2*above)   V values for positions 0..seqLen-1
- * </pre>
- *
- * <h3>Thread safety</h3>
- * Each requestId has independent KV state. {@link KVCacheManager} is internally
- * thread-safe; concurrent flushes for different requestIds are safe.
+ * <h3>KVBlock serialisation</h3>
+ * <ul>
+ * <li>{@link KvElementType#F16} + {@link KvElementType#F16} (default): legacy
+ * float32 LE — K then V.</li>
+ * <li>Otherwise: {@code 'K''V' ver=1 kType vType} then per-token packed payloads.</li>
+ * </ul>
  */
 public final class NodeKVCacheAdapter {
 
-    private static final Logger log = Logger.getLogger(NodeKVCacheAdapter.class.getName());
+	private static final Logger log = Logger.getLogger(NodeKVCacheAdapter.class.getName());
 
-    private final KVCacheManager manager;
+	private static final byte MAGIC0 = 'K';
+	private static final byte MAGIC1 = 'V';
+	private static final byte VERSION = 1;
 
-    /**
-     * @param manager the cluster-level cache manager for this node's layer range
-     */
-    public NodeKVCacheAdapter(KVCacheManager manager) {
-        if (manager == null)
-            throw new IllegalArgumentException("manager must not be null");
-        this.manager = manager;
-    }
+	private final KVCacheManager manager;
 
-    // ── Write-through ─────────────────────────────────────────────────────────
+	public NodeKVCacheAdapter(KVCacheManager manager) {
+		if (manager == null)
+			throw new IllegalArgumentException("manager must not be null");
+		this.manager = manager;
+	}
 
-    /**
-     * Serialise the current K and V arrays and store them in the
-     * {@link KVCacheManager}. Called after each new token position is written to
-     * the handler's local KV arrays.
-     *
-     * <p>This is a write-through operation: an existing block for the same key is
-     * replaced with the updated (longer) block. GpuKVCache byte-budget eviction
-     * fires here if VRAM is exhausted, so older requests will be demoted to the
-     * CPU tier automatically.
-     *
-     * @param requestId          request or session identifier
-     * @param absoluteLayerIndex absolute layer index ({@code startLayer + localLi})
-     * @param kData              K array for this layer; first {@code seqLen * kvDim}
-     *                           elements are valid
-     * @param vData              V array for this layer; first {@code seqLen * kvDim}
-     *                           elements are valid
-     * @param seqLen             number of token positions written so far (1-based)
-     * @param kvDim              key/value dimension per position
-     */
-    public void flush(String requestId, int absoluteLayerIndex,
-                      float[] kData, float[] vData,
-                      int seqLen, int kvDim) {
-        int floatsPerSeq = seqLen * kvDim;
-        int bytesPerSeq  = floatsPerSeq * Float.BYTES;
-        byte[] data = new byte[bytesPerSeq * 2];
+	/**
+	 * Serialise float K/V (legacy F16 path) into the manager.
+	 */
+	public void flush(String requestId, int absoluteLayerIndex,
+			float[] kData, float[] vData,
+			int seqLen, int kvDim) {
+		flush(requestId, absoluteLayerIndex, kData, vData, seqLen, kvDim,
+				KvElementType.F16, KvElementType.F16);
+	}
 
-        ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-        for (int i = 0; i < floatsPerSeq; i++) bb.putFloat(kData[i]);
-        for (int i = 0; i < floatsPerSeq; i++) bb.putFloat(vData[i]);
+	public void flush(String requestId, int absoluteLayerIndex,
+			float[] kData, float[] vData,
+			int seqLen, int kvDim,
+			KvElementType kType, KvElementType vType) {
+		if (kType == KvElementType.F16 && vType == KvElementType.F16) {
+			int floatsPerSeq = seqLen * kvDim;
+			int bytesPerSeq = floatsPerSeq * Float.BYTES;
+			byte[] data = new byte[bytesPerSeq * 2];
+			ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+			for (int i = 0; i < floatsPerSeq; i++)
+				bb.putFloat(kData[i]);
+			for (int i = 0; i < floatsPerSeq; i++)
+				bb.putFloat(vData[i]);
+			putBlock(requestId, absoluteLayerIndex, data, seqLen, kType, vType);
+			return;
+		}
+		DenseKvTensor kT = new DenseKvTensor(kType, kvDim, seqLen);
+		DenseKvTensor vT = new DenseKvTensor(vType, kvDim, seqLen);
+		kT.loadFloatPrefix(kData, seqLen);
+		vT.loadFloatPrefix(vData, seqLen);
+		flush(requestId, absoluteLayerIndex, kT, vT, seqLen);
+	}
 
-        KVKey   key = new KVKey(requestId, absoluteLayerIndex);
-        Instant now = Instant.now();
-        KVBlock blk = new KVBlock(key, data, seqLen, absoluteLayerIndex, now, now);
-        manager.put(key, blk);
-    }
+	/** Write-through from in-process tensors (preferred). */
+	public void flush(String requestId, int absoluteLayerIndex,
+			DenseKvTensor k, DenseKvTensor v, int seqLen) {
+		KvElementType kType = k.type();
+		KvElementType vType = v.type();
+		if (kType == KvElementType.F16 && vType == KvElementType.F16) {
+			flush(requestId, absoluteLayerIndex, k.toFloatArray(seqLen), v.toFloatArray(seqLen),
+					seqLen, k.kvDim(), kType, vType);
+			return;
+		}
+		int kBytes = seqLen * k.bytesPerToken();
+		int vBytes = seqLen * v.bytesPerToken();
+		byte[] data = new byte[4 + kBytes + vBytes];
+		data[0] = MAGIC0;
+		data[1] = MAGIC1;
+		data[2] = VERSION;
+		data[3] = (byte) ((kType.ordinal() << 4) | (vType.ordinal() & 0x0f));
+		encodeTensorPayload(k, seqLen, data, 4);
+		encodeTensorPayload(v, seqLen, data, 4 + kBytes);
+		putBlock(requestId, absoluteLayerIndex, data, seqLen, kType, vType);
+	}
 
-    // ── Restore ───────────────────────────────────────────────────────────────
+	public Optional<KvPair> tryRestore(String requestId, int absoluteLayerIndex, int kvDim) {
+		KVKey key = new KVKey(requestId, absoluteLayerIndex);
+		return manager.get(key).map(blk -> decodeBlock(blk, kvDim));
+	}
 
-    /**
-     * Attempt to restore K and V arrays from the {@link KVCacheManager} for
-     * the given request and layer. Returns {@link Optional#empty()} when no block
-     * is cached — i.e., this is the first forward pass for that request.
-     *
-     * <p>A GPU-tier hit returns immediately. A CPU-tier hit promotes the block back
-     * to GPU (handled transparently by {@link KVCacheManager#get}).
-     *
-     * @param requestId          request or session identifier
-     * @param absoluteLayerIndex absolute layer index
-     * @param kvDim              key/value dimension per position
-     * @return restored {@link KvPair} or empty
-     */
-    public Optional<KvPair> tryRestore(String requestId, int absoluteLayerIndex, int kvDim) {
-        KVKey key = new KVKey(requestId, absoluteLayerIndex);
-        return manager.get(key).map(blk -> {
-            int floatsPerSeq = blk.sequenceLen() * kvDim;
-            float[] k = new float[floatsPerSeq];
-            float[] v = new float[floatsPerSeq];
-            // Note: do NOT call asReadOnlyBuffer() here — it silently drops the
-            // byte order on HeapByteBuffer in some JVM builds, producing garbage.
-            ByteBuffer bb = ByteBuffer.wrap(blk.data()).order(ByteOrder.LITTLE_ENDIAN);
-            for (int i = 0; i < floatsPerSeq; i++) k[i] = bb.getFloat();
-            for (int i = 0; i < floatsPerSeq; i++) v[i] = bb.getFloat();
-            log.fine("KV restored from manager: requestId=" + requestId + " layer=" + absoluteLayerIndex
-                    + " seqLen=" + blk.sequenceLen());
-            return new KvPair(k, v);
-        });
-    }
+	public void evict(String requestId) {
+		manager.evict(requestId);
+		log.fine("KV evicted from manager: requestId=" + requestId);
+	}
 
-    // ── Eviction ──────────────────────────────────────────────────────────────
+	public KVCacheManager manager() {
+		return manager;
+	}
 
-    /**
-     * Evict all KV blocks for the given request from the manager's GPU and CPU
-     * tiers. Call this when a request or session completes and its KV data is no
-     * longer needed.
-     *
-     * @param requestId request or session identifier
-     */
-    public void evict(String requestId) {
-        manager.evict(requestId);
-        log.fine("KV evicted from manager: requestId=" + requestId);
-    }
+	private void putBlock(String requestId, int layer, byte[] data, int seqLen,
+			KvElementType kType, KvElementType vType) {
+		KVKey key = new KVKey(requestId, layer);
+		Instant now = Instant.now();
+		manager.put(key, new KVBlock(key, data, seqLen, layer, now, now, kType, vType));
+	}
 
-    // ── Accessors (for stats / testing) ──────────────────────────────────────
+	private static KvPair decodeBlock(KVBlock blk, int kvDim) {
+		int seqLen = blk.sequenceLen();
+		byte[] data = blk.data();
+		if (isVersioned(data)) {
+			KvElementType kType = typeFromNibble(data[3] >> 4);
+			KvElementType vType = typeFromNibble(data[3] & 0x0f);
+			int kBytes = seqLen * bytesPerToken(kType, kvDim);
+			float[] k = decodePayload(data, 4, seqLen, kvDim, kType);
+			float[] v = decodePayload(data, 4 + kBytes, seqLen, kvDim, vType);
+			return new KvPair(k, v);
+		}
+		// Legacy float32
+		int floatsPerSeq = seqLen * kvDim;
+		float[] k = new float[floatsPerSeq];
+		float[] v = new float[floatsPerSeq];
+		ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+		for (int i = 0; i < floatsPerSeq; i++)
+			k[i] = bb.getFloat();
+		for (int i = 0; i < floatsPerSeq; i++)
+			v[i] = bb.getFloat();
+		log.fine("KV restored from manager: requestId=" + blk.key().requestId()
+				+ " layer=" + blk.layerIndex() + " seqLen=" + seqLen);
+		return new KvPair(k, v);
+	}
 
-    /** Returns the underlying {@link KVCacheManager}. */
-    public KVCacheManager manager() {
-        return manager;
-    }
+	private static boolean isVersioned(byte[] data) {
+		return data.length >= 4 && data[0] == MAGIC0 && data[1] == MAGIC1 && data[2] == VERSION;
+	}
 
-    // ── Value type ────────────────────────────────────────────────────────────
+	private static KvElementType typeFromNibble(int n) {
+		KvElementType[] vals = KvElementType.values();
+		int i = n & 0x0f;
+		if (i < 0 || i >= vals.length)
+			throw new IllegalArgumentException("unknown KV element type nibble " + i);
+		return vals[i];
+	}
 
-    /**
-     * Restored key and value arrays for one (requestId, layerIndex) pair.
-     * Both arrays have length {@code seqLen * kvDim}.
-     */
-    public record KvPair(float[] k, float[] v) {}
+	private static int bytesPerToken(KvElementType type, int kvDim) {
+		return switch (type) {
+		case F16 -> kvDim * Float.BYTES;
+		case Q8_0 -> Q8_0KvCodec.encodedBytes(kvDim);
+		};
+	}
+
+	private static void encodeTensorPayload(DenseKvTensor t, int seqLen, byte[] dst, int dstOff) {
+		float[] floats = t.toFloatArray(seqLen);
+		switch (t.type()) {
+		case F16 -> {
+			ByteBuffer bb = ByteBuffer.wrap(dst, dstOff, seqLen * t.kvDim() * Float.BYTES)
+					.order(ByteOrder.LITTLE_ENDIAN);
+			for (float f : floats)
+				bb.putFloat(f);
+		}
+		case Q8_0 -> {
+			int bpt = t.bytesPerToken();
+			for (int p = 0; p < seqLen; p++)
+				Q8_0KvCodec.encode(floats, p * t.kvDim(), t.kvDim(), dst, dstOff + p * bpt);
+		}
+		}
+	}
+
+	private static float[] decodePayload(byte[] data, int off, int seqLen, int kvDim, KvElementType type) {
+		float[] out = new float[seqLen * kvDim];
+		switch (type) {
+		case F16 -> {
+			ByteBuffer bb = ByteBuffer.wrap(data, off, seqLen * kvDim * Float.BYTES)
+					.order(ByteOrder.LITTLE_ENDIAN);
+			for (int i = 0; i < out.length; i++)
+				out[i] = bb.getFloat();
+		}
+		case Q8_0 -> {
+			int bpt = Q8_0KvCodec.encodedBytes(kvDim);
+			for (int p = 0; p < seqLen; p++)
+				Q8_0KvCodec.decode(data, off + p * bpt, out, p * kvDim, kvDim);
+		}
+		}
+		return out;
+	}
+
+	public record KvPair(float[] k, float[] v) {
+	}
 }

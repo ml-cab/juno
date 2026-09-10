@@ -1,5 +1,16 @@
 ## Status 
 
+**Session 72** — Quantized KV cache (`--cache-type-k/v`) in progress
+
+- Add `Q8_0KvCodec`, `CacheTypeOptions`, `DenseKvTensor`; CLI `--cache-type-k|v f16|q8_0`
+  (default `f16` = current float32 path). Wire inference KV in all text + LoRA play handlers.
+- Adapter flushes typed payloads; unit + Llama logit parity tests green.
+- Docs/plan/ROADMAP marked in progress; bake-off still required before feature-complete.
+
+---
+
+## Status 
+
 **Session 71** — Tier 13B VRAM-fit ship + shared-activation Phase 1
 
 - Amend Phase B exit: `--mmq` ships as **VRAM-fit** (default off); ≥1.3× tg vs FP16-resident
