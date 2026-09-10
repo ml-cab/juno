@@ -49,7 +49,7 @@ Earlier ok snapshot: [`20260905T031520Z-lora`](20260905T031520Z-lora/). Earlier 
 | Phi-3.5-mini Q4_K_M | 60.6 | 7.39 | 0.12 | 6720 |
 | mistral-7b Q4_K_M | 37.1 | 5.34 | 0.14 | 15936 |
 
-**Gates:** P0 Phi-3.5 ≥ **0.5×** llama — **unmet** (0.12×). Tier 13B ≥ **1.3×** vs FP16-resident path — **not measured in this run** (no paired `--mmq off`); vs prior GPU baseline [`20260831T231403Z`](20260831T231403Z/) Phi-3.5 tg **12.6**, this MMQ-on run is **lower** — treat as open kernel/perf work, not feature-complete.
+**Gates:** P0 Phi-3.5 ≥ **0.5×** llama — **unmet** (0.12×). Original Tier 13B ≥ **1.3×** vs FP16-resident — **amended / deferred** (MMQ ships as VRAM-fit; this run is slower than prior FP16 GPU baseline Phi-3.5 tg **12.6**). Mistral packed-Q4 ≈ **0.14×** llama supports the fit claim (near P0 **0.15×**).
 
 ## Vision chat regression — `compare-vision.sh`
 

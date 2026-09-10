@@ -68,6 +68,7 @@ GPU FFI (node module — Panama project, JEP 454):
   GpuLayerOffload — policy for --gpu-layers / JUNO_GPU_LAYERS (all|auto|0|N).
         Handlers upload only resident global layers; matVec falls back to CPU quant when dev is null.
   MmqOptions — policy for --mmq / JUNO_MMQ (on|off|auto). Default off.
+        Ships as VRAM-fit packed Q4 residency; not a decode-speed claim vs FP16-resident.
   LoraMmqPolicy — playback-only MMQ gate (juno.lora.play.path); train stays FP residency.
   LoraResidentUpload.runPlayback — play Q4 OOM closes packed buffers and falls to CPU
         without the train FP16 microbatch retry.
@@ -75,9 +76,10 @@ GPU FFI (node module — Panama project, JEP 454):
         (classpath q4k_gemv.ptx); JFR backend cuda-resident-q4k.
   ResidentQ4KWeight — LoRA play wrapper around DeviceQ4KMatrix (forward-only).
   CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16)
-        / fused Q4_K GEMV when --mmq; per-thread CUDA stream + async H2D/D2H.
+        / fused Q4_K GEMV when --mmq; per-thread CUDA stream + async H2D/D2H;
+        sgemvSameX uploads shared activations once for Q/K/V and gate/up groups.
   RocmMatVec — implements GpuMatVec; rocblas_sgemv (FP32) / rocblas_hssgemv_strided_batched (FP16);
-        same three compute paths as CudaMatVec; per-thread HIP stream.
+        same three compute paths as CudaMatVec; per-thread HIP stream; sgemvSameX mirror.
   DeviceFloatMatrix / DeviceHalfMatrix / DeviceQ4KMatrix — VRAM buffer wrappers using GpuBindings
         deviceMalloc / deviceFree; explicit lifecycle via releaseGpuResources().
         Vendor-neutral half/float; Q4_K path is CUDA-only.

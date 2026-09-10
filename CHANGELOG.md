@@ -1,5 +1,17 @@
 ## Status 
 
+**Session 71** — Tier 13B VRAM-fit ship + shared-activation Phase 1
+
+- Amend Phase B exit: `--mmq` ships as **VRAM-fit** (default off); ≥1.3× tg vs FP16-resident
+  deferred to a tile Q4 kernel follow-on (bake-off showed MMQ slower when both fit).
+- Add `MatVec.sgemvSameX` (CUDA/ROCm): one activation H2D + coalesced sync for Q/K/V and
+  gate/up; wire into `LlamaTransformerHandler` decode; parity `SgemvSameXParityTest`.
+- Docs: `PLAN-Infra-Tier13.md`, ROADMAP, `performance.md`, `howto.md`.
+
+---
+
+## Status 
+
 **Session 70** — LoRA playback fused Q4_K MMQ (Phase 1 complete)
 
 - Wire `--mmq` into `--lora-play` via `LoraMmqPolicy` + `ResidentQ4KWeight`

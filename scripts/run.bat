@@ -287,7 +287,7 @@ if /i "%~1"=="--help" (
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
   echo   --gpu             use GPU when available (default)
   echo   --cpu             use CPU only
-  echo   --mmq on^|off^|auto fused Q4_K GPU matmul (default off)
+  echo   --mmq on^|off^|auto packed Q4_K GPU weights for VRAM fit (default off)
   echo   --verbose / -v
   echo.
   echo   --api-port N         start local REST API server on port N

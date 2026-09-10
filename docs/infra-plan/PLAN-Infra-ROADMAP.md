@@ -217,10 +217,10 @@ Follow this table — not tier number order (1, 2, 3, …).
 2. **Tier 5 → Tier 1** — `--gpu-layers` partial offload, then `BatchConfig` / `--parallel` wiring (one tier at a time; Tier 5 first). **Feature complete**; P0 **gate unmet** until mistral / Phi-3.5 ratios pass (or ROADMAP amends the gate).
 3. **Tier 8** — prefill microbatching, JFR prefill instrumentation, compare-script prompt-token parity (`--raw-prompt`). **Feature complete** (CPU bake-off published; GPU prefill re-run still open in `docs/performance.md`).
 4. **Vector SIMD track** (parallel track; also P0 step 4) — not a bake-off-only checkbox. Own correctness + publish `--vector 0` vs `--vector 1` under `[docs/perf-compare/](../perf-compare/README.md)`; see [Parallel tracks → Vector SIMD](#vector-simd-cpu-kernels). Must not regress vision (`compare-vision.sh`).
-5. **Tier 13 Phase B** — fused quant matmul / batched decode GEMV behind a flag. Prefer starting after SIMD track publishes its bake-off so CPU and GPU MatVec stories stay separable in JFR.
+5. **Tier 13 Phase B** — fused quant matmul / batched decode GEMV behind a flag. **Feature complete** as VRAM-fit ship (speed ≥1.3× vs FP16 deferred to tile kernel). Prefer after SIMD track bake-off so CPU and GPU MatVec stories stay separable in JFR.
 
 ```
-P0:  13A ✓  →  5†  →  1†  →  8†  →  Vector SIMD†  →  13B     GATE: 0.5× tg († feature complete; phase gate open)
+P0:  13A ✓  →  5†  →  1†  →  8†  →  Vector SIMD†  →  13B†    GATE: 0.5× tg († feature complete; phase gate open; 13B = VRAM-fit ship, speed follow-on)
 P1:              6  →  14  →  15  →  16
 P2:  (after Tier 1 feature complete)  2  →  3  →  4
 P3:  (when free)  7, 10, 11
@@ -248,7 +248,7 @@ Parallel (non-blocking): Vision I2T · LoRA · model E2E
 | 10   | `PLAN-Infra-Tier10.md` | Multi-adapter + GGUF LoRA interop       | P3                       | Pending                                                                          |
 | 11   | `PLAN-Infra-Tier11.md` | Embeddings API                          | P3                       | Pending                                                                          |
 | 12   | `PLAN-Infra-Tier12.md` | Draft-model speculation                 | P4                       | Pending                                                                          |
-| 13   | `PLAN-Infra-Tier13.md` | Fused quant / FlashAttn (gated)         | P0 (13A ✓, 13B); P5 (FA) | 13A complete; **13B in progress** (`--mmq`, PTX Q4_K GEMV; Llama + Phi-3 + Qwen3 dense; shared `Q4KResidentUpload`); LoRA MMQ Phase 1 **complete** ([`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md)) — **not** a new Infra tier |
+| 13   | `PLAN-Infra-Tier13.md` | Fused quant / FlashAttn (gated)         | P0 (13A ✓, 13B); P5 (FA) | 13A complete; **13B feature complete (VRAM-fit ship)** — `--mmq` default off; speed ≥1.3× vs FP16 **deferred** to tile kernel; shared-activation `sgemvSameX` Phase 1 on Llama; LoRA play Phase 1 complete; bake-off [`20260910T025804Z`](../perf-compare/20260910T025804Z/) |
 | 14   | `PLAN-Infra-Tier14.md` | Block KV allocator                      | P1 step 2                | Pending                                                                          |
 | 15   | `PLAN-Infra-Tier15.md` | Continuous batching scheduler           | P1 step 3                | Pending                                                                          |
 | 16   | `PLAN-Infra-Tier16.md` | Mixed chunked prefill + decode          | P1 step 4                | Pending                                                                          |
@@ -345,7 +345,7 @@ Infra Tiers 5–6 benefit from residency patterns in `LoraResidentWeights` / `Gp
 3. Vision regression: hang fix + scalar Q4/Q5 accumulate; gate vs `47-vision` — **done**.
 4. No silent pathological slowdown at vision-scale B — scalar accumulate + common-pool `forEachRow` — **done**.
 
-**Status: Feature complete.** Next P0 Infra tier: Tier 13 Phase B.
+**Status: Feature complete.** P0 Infra Tier 13 Phase B is **feature complete** (VRAM-fit); next critical-path Infra work is **P1 Tier 6** (or tile-kernel / fuller activation residency as 13B follow-ons).
 
 **Does not replace Tier 13B** (GPU fused MMQ). SIMD improves CPU MatVec and long CPU prefills; 13B owns the resident-GPU decode gap.
 
@@ -650,14 +650,16 @@ Exit only when:
 
 Only if profiling shows attention or dequant-GEMM dominates. **Phase A complete:** bake-off JFR (2026-08-31) shows MatVec **>90%** of GPU decode → **go** for Phase B scoped to **fused Q4 MMQ** first; FlashAttn deferred until Tier 8 long-prefill baselines. See `[PLAN-Infra-PERF-ANALYSIS.md](PLAN-Infra-PERF-ANALYSIS.md)`.
 
+**Phase B (feature complete, amended gate):** `--mmq` ships as **VRAM-fit** packed Q4 residency (default **off**). Bake-off [`20260910T025804Z`](../perf-compare/20260910T025804Z/): Mistral ≈ **0.14×** llama (near P0 **0.15×** fit). Speed vs FP16-resident is **not** claimed (Phi-3.5 MMQ slower than FP16 on reference SKU); ≥1.3× tg is a **tile-kernel follow-on** exit, not required to mark 13B feature-complete. Shared-activation `sgemvSameX` Phase 1 reduces repeated H2D/sync on Llama QKV and gate/up.
+
 Exit only when **one of**:
 
-- ship: ≥1.3× decode TPS or ≥1.5× long-context prefill with parity tests; or
+- ship: VRAM-fit path with parity + bake-off + honest docs (met); **or** later tile kernel meets ≥1.3× decode / ≥1.5× long prefill; or
 - close: memo shows BLAS path sufficient; tier marked deferred without code.
 
-**§6:** `--mmq` interaction matrix required ([`PLAN-Infra-Tier13.md`](PLAN-Infra-Tier13.md)); `--lora-play` is **follow-up** ([`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md)) — do not claim play acceleration until that plan is implemented with warn/wire.
+**§6:** `--mmq` interaction matrix in [`PLAN-Infra-Tier13.md`](PLAN-Infra-Tier13.md); LoRA play wired ([`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md)).
 
-**P0 gate contribution:** Phase B MMQ should contribute to Phi-3.5 tg ≥ **0.5×** llama on reference SKU.
+**P0 gate contribution:** packed-Q4 fit helps mistral on 8 GiB; Phi-3.5 ≥ **0.5×** llama still needs faster MatVec (tile kernel and/or fuller device-resident activations).
 
 ### Tier 14 — block KV allocator
 

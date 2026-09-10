@@ -100,6 +100,36 @@ public interface MatVec {
     }
 
     /**
+     * Several device-resident GEMVs that share the same host activation {@code x}
+     * (e.g. Q/K/V or gate/up). Default: serial {@link #sgemv} calls.
+     *
+     * <p>GPU backends should upload {@code x} once and coalesce device synchronisation
+     * across the group. All matrices must have {@code cols == x.length}.
+     */
+    default float[][] sgemvSameX(DeviceHalfMatrix[] weights, float[] x) {
+        float[][] y = new float[weights.length][];
+        for (int i = 0; i < weights.length; i++)
+            y[i] = sgemv(weights[i], x);
+        return y;
+    }
+
+    /** FP32-resident variant of {@link #sgemvSameX(DeviceHalfMatrix[], float[])}. */
+    default float[][] sgemvSameX(DeviceFloatMatrix[] weights, float[] x) {
+        float[][] y = new float[weights.length][];
+        for (int i = 0; i < weights.length; i++)
+            y[i] = sgemv(weights[i], x);
+        return y;
+    }
+
+    /** Q4_K-resident variant of {@link #sgemvSameX(DeviceHalfMatrix[], float[])}. */
+    default float[][] sgemvSameX(DeviceQ4KMatrix[] weights, float[] x) {
+        float[][] y = new float[weights.length][];
+        for (int i = 0; i < weights.length; i++)
+            y[i] = sgemv(weights[i], x);
+        return y;
+    }
+
+    /**
      * Compute Y = A * X for a batch of B input columns in one call.
      * A: [rows, cols] row-major (unchanged from sgemv). X: [B][cols].
      * Returns Y: [B][rows].

@@ -72,7 +72,7 @@ Vision: re-run `compare-vision.sh` only if MatVec dispatch changes again.
 
 ### 4. After this lands
 
-Next Infra tier: **Tier 13 Phase B** ([`PLAN-Infra-Tier13.md`](PLAN-Infra-Tier13.md)) — fused Q4 MMQ / batched decode GEMV behind a flag.
+Next Infra tier: **P1 Tier 6** (quantized KV), or 13B follow-ons (tile Q4 kernel / fuller device-resident activations). Tier 13 Phase B is **feature complete** as VRAM-fit.
 
 ## Exit checklist
 

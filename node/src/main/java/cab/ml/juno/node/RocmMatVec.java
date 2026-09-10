@@ -327,6 +327,154 @@ public final class RocmMatVec implements GpuMatVec {
     }
 
     /**
+     * Shared-activation GEMVs: one FP16 H2D of {@code x}, N rocBLAS calls, one sync.
+     */
+    @Override
+    public float[][] sgemvSameX(DeviceHalfMatrix[] weights, float[] x) {
+        if (weights == null || weights.length == 0)
+            return new float[0][];
+        if (weights.length == 1)
+            return new float[][] { sgemv(weights[0], x) };
+        int cols = x.length;
+        int n = weights.length;
+        int maxRows = 0;
+        for (int i = 0; i < n; i++) {
+            DeviceHalfMatrix A = weights[i];
+            if (A == null)
+                throw new IllegalArgumentException("weights[" + i + "] is null");
+            if (A.isClosed())
+                throw new IllegalStateException("DeviceHalfMatrix is closed");
+            if (A.cols() != cols)
+                throw new IllegalArgumentException(
+                        "weights[" + i + "].cols=" + A.cols() + " != x.length=" + cols);
+            maxRows = Math.max(maxRows, A.rows());
+        }
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+        long bytesXh = (long) cols * Short.BYTES;
+        long bytesYMax = (long) maxRows * Float.BYTES;
+        Fp16Scratch scratch = FP16_SCRATCH.get();
+        float[][] Y = new float[n][];
+
+        try (Arena callArena = Arena.ofConfined()) {
+            synchronized (ctx.cublasSerializationLock()) {
+                MemorySegment stream = ensureStream();
+                bindStream(stream);
+                try {
+                    ensureFp16Scratch(scratch, bytesXh, bytesYMax);
+                    MemorySegment stagingXh = callArena.allocate(bytesXh);
+                    for (int j = 0; j < cols; j++)
+                        stagingXh.setAtIndex(JAVA_SHORT, j, Float.floatToFloat16(x[j]));
+                    GpuBindings.check(
+                            GpuBindings.callInt(rocm.gpuMemcpyAsync(),
+                                    scratch.dXh, stagingXh, bytesXh, GpuBindings.H2D, stream),
+                            "hipMemcpyAsync(xh H2D sameX)");
+
+                    MemorySegment[] stagingY = new MemorySegment[n];
+                    for (int i = 0; i < n; i++) {
+                        DeviceHalfMatrix A = weights[i];
+                        int rows = A.rows();
+                        callSgemvFp16(rocm.opTranspose(), A.devicePointer(), cols,
+                                scratch.dXh, scratch.dY, rows, cols);
+                        long bytesY = (long) rows * Float.BYTES;
+                        stagingY[i] = callArena.allocate(bytesY);
+                        GpuBindings.check(
+                                GpuBindings.callInt(rocm.gpuMemcpyAsync(),
+                                        stagingY[i], scratch.dY, bytesY, GpuBindings.D2H, stream),
+                                "hipMemcpyAsync(y D2H sameX)");
+                    }
+                    GpuBindings.check(
+                            GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
+                            "hipStreamSynchronize");
+                    for (int i = 0; i < n; i++) {
+                        int rows = weights[i].rows();
+                        Y[i] = new float[rows];
+                        MemorySegment.copy(stagingY[i], JAVA_FLOAT, 0, Y[i], 0, rows);
+                    }
+                    return Y;
+                } finally {
+                    unbindStream();
+                }
+            }
+        } finally {
+            evt.commit();
+        }
+    }
+
+    @Override
+    public float[][] sgemvSameX(DeviceFloatMatrix[] weights, float[] x) {
+        if (weights == null || weights.length == 0)
+            return new float[0][];
+        if (weights.length == 1)
+            return new float[][] { sgemv(weights[0], x) };
+        int cols = x.length;
+        int n = weights.length;
+        int maxRows = 0;
+        for (int i = 0; i < n; i++) {
+            DeviceFloatMatrix A = weights[i];
+            if (A == null)
+                throw new IllegalArgumentException("weights[" + i + "] is null");
+            if (A.isClosed())
+                throw new IllegalStateException("DeviceFloatMatrix is closed");
+            if (A.cols() != cols)
+                throw new IllegalArgumentException(
+                        "weights[" + i + "].cols=" + A.cols() + " != x.length=" + cols);
+            maxRows = Math.max(maxRows, A.rows());
+        }
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+        long bytesX = (long) cols * Float.BYTES;
+        long bytesYMax = (long) maxRows * Float.BYTES;
+        Fp32Scratch scratch = FP32_SCRATCH.get();
+        float[][] Y = new float[n][];
+
+        try (Arena callArena = Arena.ofConfined()) {
+            synchronized (ctx.cublasSerializationLock()) {
+                MemorySegment stream = ensureStream();
+                bindStream(stream);
+                try {
+                    ensureFp32Scratch(scratch, bytesX, bytesYMax);
+                    MemorySegment stagingX = callArena.allocate(bytesX);
+                    stagingX.copyFrom(MemorySegment.ofArray(x));
+                    GpuBindings.check(
+                            GpuBindings.callInt(rocm.gpuMemcpyAsync(),
+                                    scratch.dX, stagingX, bytesX, GpuBindings.H2D, stream),
+                            "hipMemcpyAsync(x H2D sameX)");
+
+                    MemorySegment[] stagingY = new MemorySegment[n];
+                    for (int i = 0; i < n; i++) {
+                        DeviceFloatMatrix A = weights[i];
+                        int rows = A.rows();
+                        callSgemvFp32(rocm.opTranspose(), A.devicePointer(), cols,
+                                scratch.dX, scratch.dY, rows, cols);
+                        long bytesY = (long) rows * Float.BYTES;
+                        stagingY[i] = callArena.allocate(bytesY);
+                        GpuBindings.check(
+                                GpuBindings.callInt(rocm.gpuMemcpyAsync(),
+                                        stagingY[i], scratch.dY, bytesY, GpuBindings.D2H, stream),
+                                "hipMemcpyAsync(y D2H sameX)");
+                    }
+                    GpuBindings.check(
+                            GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
+                            "hipStreamSynchronize");
+                    for (int i = 0; i < n; i++) {
+                        int rows = weights[i].rows();
+                        Y[i] = new float[rows];
+                        MemorySegment.copy(stagingY[i], JAVA_FLOAT, 0, Y[i], 0, rows);
+                    }
+                    return Y;
+                } finally {
+                    unbindStream();
+                }
+            }
+        } finally {
+            evt.commit();
+        }
+    }
+
+    /**
      * Device-resident FP32 transpose: {@code z = W^T * g} for row-major
      * {@code W[rows×cols]}. Uses {@link GpuBindings#opNoTranspose()}.
      */

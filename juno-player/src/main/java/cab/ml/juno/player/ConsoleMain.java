@@ -714,7 +714,7 @@ public final class ConsoleMain {
 		System.out.println("  --cpu                      Force to use CPU");
 		System.out.println("  --gpu-layers N|all|auto    GPU-resident transformer layers (default: all)");
 		System.out.println("                             env JUNO_GPU_LAYERS; auto fits until VRAM OOM");
-		System.out.println("  --mmq on|off|auto          Fused Q4_K GPU matmul (default: off; LoRA play when CUDA kernel loads; ignored for LoRA train)");
+		System.out.println("  --mmq on|off|auto          Packed Q4_K GPU weights for VRAM fit (default: off; LoRA play when CUDA kernel loads; ignored for LoRA train)");
 		System.out.println("                             env JUNO_MMQ; keeps Q4_K packed on device");
 		System.out.println("  --parallel N               Static micro-batch size (default: 1, disabled)");
 		System.out.println("                             env JUNO_PARALLEL; recommend 8 for API servers");

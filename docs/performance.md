@@ -4,17 +4,21 @@ Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). T
 
 ## Fused Q4_K GPU matmul (`--mmq`)
 
-**Plan:** [`infra-plan/PLAN-Infra-Tier13.md`](infra-plan/PLAN-Infra-Tier13.md) Phase B (in progress); LoRA play wiring [`infra-plan/PLAN-Infra-LoRA-MMQ.md`](infra-plan/PLAN-Infra-LoRA-MMQ.md) Phase 1 (**complete**).
+**Plan:** [`infra-plan/PLAN-Infra-Tier13.md`](infra-plan/PLAN-Infra-Tier13.md) Phase B (**feature complete** as VRAM-fit); LoRA play [`infra-plan/PLAN-Infra-LoRA-MMQ.md`](infra-plan/PLAN-Infra-LoRA-MMQ.md) Phase 1 (**complete**).
 
 **What:** When `--mmq on` (or `auto` with CUDA + kernel load), Q4_K projection weights stay packed on the device (`DeviceQ4KMatrix` / `ResidentQ4KWeight`). Decode/prefill GEMV uses a PTX fused dequant+accumulate kernel (`q4k_gemv`) instead of host dequant → FP16-resident cuBLAS. Non-Q4_K tensors still use the FP16 path. Default remains `--mmq off`.
+
+**Claim (honest):** `--mmq` is for **VRAM fit** (more layers / larger models on a fixed GPU). It is **not** a decode-throughput win vs `--mmq off` on the current PTX (Phi-3.5 MMQ slower than FP16-resident on GTX 1080). Speed vs FP16 awaits a tile/`mul_mat_vec`-class kernel.
 
 **Surfaces:** Base text inference on Llama-family, Phi-3 (fused QKV/gate_up = one GEMV + host slice), and Qwen3 dense; plus `--lora-play` (playback-only). LoRA training logs a one-shot warning and keeps FP16/FP32 frozen residency (no Q4 transpose kernel). Phi-2 / Qwen3-MoE: no GPU residency yet (follow-up).
 
 **Shared helper:** `Q4KResidentUpload` routes Q4 packed vs FP16 half upload.
 
+**Shared activations (Phase 1):** `MatVec.sgemvSameX` — Llama decode uploads each shared `x` once for Q/K/V and for gate/up (CUDA/ROCm), coalescing device sync. Does not keep hidden states on GPU across norm/attention/residual.
+
 **JFR:** `juno.MatVec.backend.cuda-resident-q4k.*`.
 
-**Parity:** `Q4KMmqParityTest`, `Phi3Q4KMmqParityTest`, `Qwen3Q4KMmqParityTest` (GPU group) — fused kernel vs CPU `matVec` within `1e-2`. Policy: `LoraMmqPolicyTest` / `Q4KResidentUploadTest`. Playback order: `LoraQ4KPlaybackParityTest` (Q4 GEMV then LoRA delta).
+**Parity:** `Q4KMmqParityTest`, `Phi3Q4KMmqParityTest`, `Qwen3Q4KMmqParityTest` (GPU group); `SgemvSameXParityTest`; policy / playback tests as before.
 
 **LoRA MMQ Phase 1 smoke** ([`target/lora-mmq-smoke/20260905T031236Z/`](../target/lora-mmq-smoke/20260905T031236Z/SUMMARY.md), GTX 1080):
 
@@ -25,7 +29,9 @@ Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). T
 | `juno lora` + `JUNO_MMQ=on` | ignore-mmq warn; FP32 upload; loss finite (~2.77) |
 | `compare-lora.sh --gpu --baseline release-0.1.2` | **ok** — train **0.98×**, play tps **1.00×** ([`20260910T030058Z-lora`](perf-compare/20260910T030058Z-lora/); prior ok [`20260905T031520Z-lora`](perf-compare/20260905T031520Z-lora/)) |
 
-**Bake-off ([`20260910T025804Z`](perf-compare/20260910T025804Z/), `--gpu --vector 0`, `-DJUNO_MMQ=on`):** JFR `cuda_resident_q4k` on TinyLlama / Qwen2.5 / **Phi-3.5** / Mistral. Juno/llama tg ≈ **0.12–0.15×** (Phi-3.5 **0.12×** — P0 **0.5×** unmet). Paired `--mmq off` uplift (≥1.3×) not run in this session; vs prior FP16 GPU baseline Phi-3.5 tg **12.6**, MMQ-on **7.39** — exit gate still open.
+**Bake-off ([`20260910T025804Z`](perf-compare/20260910T025804Z/), `--gpu --vector 0`, `-DJUNO_MMQ=on`):** JFR `cuda_resident_q4k` on TinyLlama / Qwen2.5 / **Phi-3.5** / Mistral. Juno/llama tg ≈ **0.12–0.15×** (Phi-3.5 **0.12×** — P0 **0.5×** unmet). Paired smoke: Phi-3.5 `--mmq off` ≈ **12.2** tg vs `--mmq on` ≈ **7.4** — speed gate deferred. Mistral packed-Q4 ≈ **0.14×** llama (near P0 **0.15×** fit).
+
+**Kernel note:** Phi-3.5 `cuda_resident_q4k.p95` ≈ **2.3 ms** vs FP16 ≈ **0.3–0.45 ms**. Warp-per-row / shared-mem `x` tile PTX experiments did not beat the landed kernel on GTX 1080.
 
 ## Vector SIMD / CPU MatVec
 

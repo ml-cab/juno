@@ -1657,10 +1657,25 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		// ── Attention sub-layer ───────────────────────────────────────────────
 		float[] xNorm = rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
 
-		// Project to Q, K, V
-		float[] q = matVecProjection(wq[li], wqQ4Dev, wqDev, wqDevFp32, li, xNorm, H, H);
-		float[] k = matVecProjection(wk[li], wkQ4Dev, wkDev, wkDevFp32, li, xNorm, cfg.kvDim(), H);
-		float[] v = matVecProjection(wv[li], wvQ4Dev, wvDev, wvDevFp32, li, xNorm, cfg.kvDim(), H);
+		// Project to Q, K, V (shared activation upload when all three are device-resident)
+		float[] q;
+		float[] k;
+		float[] v;
+		float[][] qkv = matVecProjectionSameX(
+				wq[li], wk[li], wv[li],
+				wqQ4Dev, wkQ4Dev, wvQ4Dev,
+				wqDev, wkDev, wvDev,
+				wqDevFp32, wkDevFp32, wvDevFp32,
+				li, xNorm);
+		if (qkv != null) {
+			q = qkv[0];
+			k = qkv[1];
+			v = qkv[2];
+		} else {
+			q = matVecProjection(wq[li], wqQ4Dev, wqDev, wqDevFp32, li, xNorm, H, H);
+			k = matVecProjection(wk[li], wkQ4Dev, wkDev, wkDevFp32, li, xNorm, cfg.kvDim(), H);
+			v = matVecProjection(wv[li], wvQ4Dev, wvDev, wvDevFp32, li, xNorm, cfg.kvDim(), H);
+		}
 
 		if (bq != null) {
 			addInPlace(q, bq[li]);
@@ -1693,8 +1708,21 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private float[] ffn(float[] x, int li) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
-		float[] gate = matVecProjection(wGate[li], wGateQ4Dev, wGateDev, wGateDevFp32, li, x, I, H);
-		float[] up = matVecProjection(wUp[li], wUpQ4Dev, wUpDev, wUpDevFp32, li, x, I, H);
+		float[] gate;
+		float[] up;
+		float[][] gateUp = matVecProjectionSameX(
+				wGate[li], wUp[li], null,
+				wGateQ4Dev, wUpQ4Dev, null,
+				wGateDev, wUpDev, null,
+				wGateDevFp32, wUpDevFp32, null,
+				li, x);
+		if (gateUp != null) {
+			gate = gateUp[0];
+			up = gateUp[1];
+		} else {
+			gate = matVecProjection(wGate[li], wGateQ4Dev, wGateDev, wGateDevFp32, li, x, I, H);
+			up = matVecProjection(wUp[li], wUpQ4Dev, wUpDev, wUpDevFp32, li, x, I, H);
+		}
 		// SiLU(gate) * up
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
@@ -1771,6 +1799,39 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		if (fp32 != null && fp32[li] != null)
 			return backend.sgemv(fp32[li], x);
 		return matVec(quant, x, rows, cols);
+	}
+
+	/**
+	 * Shared-activation projections (Q/K/V or gate/up): one device upload of {@code x}
+	 * when every slot is the same resident backend. Returns {@code null} to fall back
+	 * to per-matrix {@link #matVecProjection}.
+	 */
+	private float[][] matVecProjectionSameX(
+			GgufReader.QuantizedTensor qa, GgufReader.QuantizedTensor qb, GgufReader.QuantizedTensor qc,
+			DeviceQ4KMatrix[] q4a, DeviceQ4KMatrix[] q4b, DeviceQ4KMatrix[] q4c,
+			DeviceHalfMatrix[] ha, DeviceHalfMatrix[] hb, DeviceHalfMatrix[] hc,
+			DeviceFloatMatrix[] fa, DeviceFloatMatrix[] fb, DeviceFloatMatrix[] fc,
+			int li, float[] x) {
+		boolean trio = qc != null || (q4c != null) || (hc != null) || (fc != null);
+		if (q4a != null && q4a[li] != null && q4b != null && q4b[li] != null
+				&& (!trio || (q4c != null && q4c[li] != null))) {
+			if (trio)
+				return backend.sgemvSameX(new DeviceQ4KMatrix[] { q4a[li], q4b[li], q4c[li] }, x);
+			return backend.sgemvSameX(new DeviceQ4KMatrix[] { q4a[li], q4b[li] }, x);
+		}
+		if (ha != null && ha[li] != null && hb != null && hb[li] != null
+				&& (!trio || (hc != null && hc[li] != null))) {
+			if (trio)
+				return backend.sgemvSameX(new DeviceHalfMatrix[] { ha[li], hb[li], hc[li] }, x);
+			return backend.sgemvSameX(new DeviceHalfMatrix[] { ha[li], hb[li] }, x);
+		}
+		if (fa != null && fa[li] != null && fb != null && fb[li] != null
+				&& (!trio || (fc != null && fc[li] != null))) {
+			if (trio)
+				return backend.sgemvSameX(new DeviceFloatMatrix[] { fa[li], fb[li], fc[li] }, x);
+			return backend.sgemvSameX(new DeviceFloatMatrix[] { fa[li], fb[li] }, x);
+		}
+		return null;
 	}
 
 	/**

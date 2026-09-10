@@ -444,7 +444,7 @@ cmd_local() {
         echo "    --parallel N               static micro-batch size (default 1)"
         echo "    --batch-window-ms M        batch window when parallel>1 (default 50)"
         echo "    --gpu-layers N|all|auto    GPU-resident transformer layers (default all)"
-        echo "    --mmq on|off|auto          fused Q4_K GPU matmul (default off)"
+        echo "    --mmq on|off|auto          packed Q4_K GPU weights for VRAM fit (default off)"
         echo "    --prefill-batch N          prefill microbatch chunk size (default 32)"
         echo ""
         echo "  Backend:"
