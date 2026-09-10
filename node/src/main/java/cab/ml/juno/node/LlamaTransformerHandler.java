@@ -429,11 +429,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private static void uploadProjection(GpuMatVec cuda, GgufReader.QuantizedTensor quant,
 			int rows, int cols, boolean tryMmq, int li,
 			DeviceHalfMatrix[] halfSlot, DeviceQ4KMatrix[] q4Slot) {
-		if (tryMmq && q4Slot != null && quant.type() == QuantizationLayout.TYPE_Q4_K) {
-			q4Slot[li] = cuda.uploadQ4K(quant.data(), rows, cols);
-			return;
-		}
-		halfSlot[li] = cuda.uploadHalf(dequantize(quant, rows, cols), rows, cols);
+		Q4KResidentUpload.uploadInto(cuda, quant, rows, cols, tryMmq, li, halfSlot, q4Slot);
 	}
 
 	private void assignFp16DeviceArrays(DeviceHalfMatrix[] wqD, DeviceHalfMatrix[] wkD, DeviceHalfMatrix[] wvD,

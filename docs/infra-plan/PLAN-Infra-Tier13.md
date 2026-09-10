@@ -32,9 +32,9 @@ Also read:
 
 Phase A **complete** (2026-08-31 bake-off JFR; record final memo in `docs/performance.md`). **Go** for Phase B scoped to fused Q4 MMQ first — not FlashAttn (P5).
 
-**Phase B status (in progress):** `--mmq on|off|auto` / `JUNO_MMQ` (default off); CUDA Driver API + classpath PTX `q4k_gemv.ptx`; `DeviceQ4KMatrix` + `Q4KMmqKernel`; wired in `LlamaTransformerHandler` for Q4_K projections; `Q4KMmqParityTest` green. Bake-off + perf gate (≥1.3× tg) still open before feature complete.
+**Phase B status (in progress):** `--mmq on|off|auto` / `JUNO_MMQ` (default off); CUDA Driver API + classpath PTX `q4k_gemv.ptx`; `DeviceQ4KMatrix` + `Q4KMmqKernel`; shared `Q4KResidentUpload`; wired in `LlamaTransformerHandler`, `Phi3TransformerHandler` (fused QKV/gate_up = one GEMV + host slice), and `Qwen3TransformerHandler` for Q4_K projections; parity tests green (`Q4KMmqParityTest`, `Phi3Q4KMmqParityTest`, `Qwen3Q4KMmqParityTest`). Bake-off + perf gate (≥1.3× tg) still open before feature complete.
 
-**Architecture follow-up (before 13B exit):** Phi-2 / Phi-3 / Qwen3 handlers still use FP16-resident upload; extend the same Q4_K packed path (shared upload helper preferred) per ROADMAP §5.
+**Architecture follow-up (before 13B exit):** Phi-2 and Qwen3-MoE handlers have no GPU weight residency yet — MMQ deferred until a FP16/Q4 upload path exists. Output projections that load as host `float[]` (Phi-3 / Qwen3 tied embeddings) stay FP16 half.
 
 **LoRA adjacency (Phase 1 complete):** `--lora-play` / `LoraTrainableHandler` uses packed Q4 via `LoraMmqPolicy` + `ResidentQ4KWeight` when `--mmq` prefers it. Train stays FP16/FP32 with an explicit warn. Smoke/JFR + compare-lora vs `release-0.1.2` green (2026-09-05). Plan: [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md). Not part of Tier 13B exit.
 
@@ -44,9 +44,9 @@ Per ROADMAP **§6**. Cells filled for Phase B current state:
 
 | New feature / flag | Base inference | --lora-play | LoRA train | Vision | --parallel | --gpu-layers | --prefill-batch | CUDA | ROCm | Default |
 |--------------------|----------------|-------------|------------|--------|------------|--------------|-----------------|------|------|---------|
-| `--mmq` | **wired** (Llama-family Q4_K) | **wired** (Phase 1: `LoraTrainableHandler` / Qwen2) → [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md) | **explicit no-op** + warn (train stays FP16/FP32) | N/A (text MatVec only) | **wired** if decode uses same Llama MMQ projections | **wired** with partial offload (Q4 upload only for resident layers) | **wired** (batched path uses Q4 `sgemm` serial GEMVs) | **wired** | **explicit no-op** (`supportsQ4KMmq` false) | **off** |
+| `--mmq` | **wired** (Llama-family + Phi-3 + Qwen3 dense Q4_K) | **wired** (Phase 1: `LoraTrainableHandler` / Qwen2) → [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md) | **explicit no-op** + warn (train stays FP16/FP32) | N/A (text MatVec only) | **wired** if decode uses same MMQ projections | **wired** with partial offload (Q4 upload only for resident layers) | **wired** (batched path uses Q4 `sgemm` serial GEMVs) | **wired** | **explicit no-op** (`supportsQ4KMmq` false) | **off** |
 
-Until LoRA follow-up lands and warn-on-ignore ships: do not claim `--mmq` accelerates `--lora-play` in user-facing docs.
+Phi-2 / Qwen3-MoE: **follow-up** (no GPU residency path yet). User-facing docs may claim `--mmq` for Llama-family, Phi-3, and Qwen3 dense text inference plus LoRA playback.
 
 ## Overview
 

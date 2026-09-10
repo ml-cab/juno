@@ -66,6 +66,15 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	private DeviceHalfMatrix[] wDownDev = null;
 	private DeviceHalfMatrix outputProjDev = null;
 
+	/** Packed Q4_K residency when {@code --mmq} prefers fused GEMV. */
+	private DeviceQ4KMatrix[] attnQQ4Dev = null;
+	private DeviceQ4KMatrix[] attnKQ4Dev = null;
+	private DeviceQ4KMatrix[] attnVQ4Dev = null;
+	private DeviceQ4KMatrix[] woQ4Dev = null;
+	private DeviceQ4KMatrix[] ffnGateQ4Dev = null;
+	private DeviceQ4KMatrix[] ffnUpQ4Dev = null;
+	private DeviceQ4KMatrix[] wDownQ4Dev = null;
+
 	private final int gpuLayersResolved;
 
 	private final Map<String, float[][]> kvCacheK = new ConcurrentHashMap<>();
@@ -152,8 +161,12 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	private int uploadGpuWeights(GpuMatVec cuda, int L, int H, int qDim, int kvDim, int I) {
 		GpuLayerOffload policy = GpuLayerOffload.fromEnv();
 		int totalLayers = cfg.numLayers();
-		log.info("Uploading Qwen3 dequantized projection weights to GPU (FP16, gpu-layers="
-				+ policy.policyLabel(totalLayers) + ")…");
+		boolean tryMmq = MmqOptions.fromEnv().preferMmq() && cuda.supportsQ4KMmq();
+		if (tryMmq)
+			log.info("Fused Q4_K MMQ enabled (mmq=" + MmqOptions.fromEnv().policyLabel() + ")");
+		log.info("Uploading Qwen3 projection weights to GPU (FP16"
+				+ (tryMmq ? ", Q4_K packed when available" : "")
+				+ ", gpu-layers=" + policy.policyLabel(totalLayers) + ")…");
 		DeviceHalfMatrix[] qD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix[] kD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix[] vD = new DeviceHalfMatrix[L];
@@ -161,6 +174,13 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		DeviceHalfMatrix[] gD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix[] uD = new DeviceHalfMatrix[L];
 		DeviceHalfMatrix[] dD = new DeviceHalfMatrix[L];
+		DeviceQ4KMatrix[] qQ4 = tryMmq ? new DeviceQ4KMatrix[L] : null;
+		DeviceQ4KMatrix[] kQ4 = tryMmq ? new DeviceQ4KMatrix[L] : null;
+		DeviceQ4KMatrix[] vQ4 = tryMmq ? new DeviceQ4KMatrix[L] : null;
+		DeviceQ4KMatrix[] woQ4 = tryMmq ? new DeviceQ4KMatrix[L] : null;
+		DeviceQ4KMatrix[] gQ4 = tryMmq ? new DeviceQ4KMatrix[L] : null;
+		DeviceQ4KMatrix[] uQ4 = tryMmq ? new DeviceQ4KMatrix[L] : null;
+		DeviceQ4KMatrix[] dQ4 = tryMmq ? new DeviceQ4KMatrix[L] : null;
 		DeviceHalfMatrix outD = null;
 		int resolvedGlobal = 0;
 		try {
@@ -169,13 +189,13 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 				if (!policy.isAuto() && !policy.residentForGlobalLayer(global, totalLayers))
 					continue;
 				try {
-					qD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(attnQ[li], qDim, H), qDim, H);
-					kD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(attnK[li], kvDim, H), kvDim, H);
-					vD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(attnV[li], kvDim, H), kvDim, H);
-					woD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wo[li], H, qDim), H, qDim);
-					gD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(ffnGate[li], I, H), I, H);
-					uD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(ffnUp[li], I, H), I, H);
-					dD[li] = cuda.uploadHalf(LlamaTransformerHandler.dequantize(wDown[li], H, I), H, I);
+					Q4KResidentUpload.uploadInto(cuda, attnQ[li], qDim, H, tryMmq, li, qD, qQ4);
+					Q4KResidentUpload.uploadInto(cuda, attnK[li], kvDim, H, tryMmq, li, kD, kQ4);
+					Q4KResidentUpload.uploadInto(cuda, attnV[li], kvDim, H, tryMmq, li, vD, vQ4);
+					Q4KResidentUpload.uploadInto(cuda, wo[li], H, qDim, tryMmq, li, woD, woQ4);
+					Q4KResidentUpload.uploadInto(cuda, ffnGate[li], I, H, tryMmq, li, gD, gQ4);
+					Q4KResidentUpload.uploadInto(cuda, ffnUp[li], I, H, tryMmq, li, uD, uQ4);
+					Q4KResidentUpload.uploadInto(cuda, wDown[li], H, I, tryMmq, li, dD, dQ4);
 					resolvedGlobal = Math.max(resolvedGlobal, global + 1);
 				} catch (IllegalStateException ex) {
 					if (!qwen3HandleLayerOom(policy, ex, global))
@@ -203,9 +223,19 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			this.ffnGateDev = gD;
 			this.ffnUpDev = uD;
 			this.wDownDev = dD;
+			this.attnQQ4Dev = qQ4;
+			this.attnKQ4Dev = kQ4;
+			this.attnVQ4Dev = vQ4;
+			this.woQ4Dev = woQ4;
+			this.ffnGateQ4Dev = gQ4;
+			this.ffnUpQ4Dev = uQ4;
+			this.wDownQ4Dev = dQ4;
 			this.outputProjDev = outD;
 			if (policy.isAuto())
 				policy = policy.withAutoResolved(resolvedGlobal);
+			log.info("Qwen3 GPU weight upload complete (resolved gpu-layers="
+					+ policy.resolvedCount(totalLayers)
+					+ (tryMmq ? "+Q4K" : "") + ").");
 			return policy.resolvedCount(totalLayers);
 		} catch (IllegalStateException ex) {
 			closeDeviceHalfMatrixArray(qD);
@@ -215,6 +245,13 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			closeDeviceHalfMatrixArray(gD);
 			closeDeviceHalfMatrixArray(uD);
 			closeDeviceHalfMatrixArray(dD);
+			Q4KResidentUpload.closeArray(qQ4);
+			Q4KResidentUpload.closeArray(kQ4);
+			Q4KResidentUpload.closeArray(vQ4);
+			Q4KResidentUpload.closeArray(woQ4);
+			Q4KResidentUpload.closeArray(gQ4);
+			Q4KResidentUpload.closeArray(uQ4);
+			Q4KResidentUpload.closeArray(dQ4);
 			if (outD != null)
 				outD.close();
 			if (policy.mode() == GpuLayerOffload.Mode.ALL && GpuLayerOffload.isVramOom(ex)) {
@@ -261,6 +298,15 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		closeDeviceHalfMatrixArray(wDownDev);
 		attnQDev = attnKDev = attnVDev = null;
 		woDev = ffnGateDev = ffnUpDev = wDownDev = null;
+		Q4KResidentUpload.closeArray(attnQQ4Dev);
+		Q4KResidentUpload.closeArray(attnKQ4Dev);
+		Q4KResidentUpload.closeArray(attnVQ4Dev);
+		Q4KResidentUpload.closeArray(woQ4Dev);
+		Q4KResidentUpload.closeArray(ffnGateQ4Dev);
+		Q4KResidentUpload.closeArray(ffnUpQ4Dev);
+		Q4KResidentUpload.closeArray(wDownQ4Dev);
+		attnQQ4Dev = attnKQ4Dev = attnVQ4Dev = null;
+		woQ4Dev = ffnGateQ4Dev = ffnUpQ4Dev = wDownQ4Dev = null;
 		if (outputProjDev != null && !outputProjDev.isClosed())
 			outputProjDev.close();
 		outputProjDev = null;
@@ -512,9 +558,9 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < W; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
 
-		sgemmLayerInto(attnQ[li], attnQDev != null ? attnQDev[li] : null, ws.norm1, ws.q, qDim, H);
-		sgemmLayerInto(attnK[li], attnKDev != null ? attnKDev[li] : null, ws.norm1, ws.k, kvDim, H);
-		sgemmLayerInto(attnV[li], attnVDev != null ? attnVDev[li] : null, ws.norm1, ws.v, kvDim, H);
+		sgemmLayerInto(attnQ[li], attnQQ4Dev, attnQDev, li, ws.norm1, ws.q, qDim, H);
+		sgemmLayerInto(attnK[li], attnKQ4Dev, attnKDev, li, ws.norm1, ws.k, kvDim, H);
+		sgemmLayerInto(attnV[li], attnVQ4Dev, attnVDev, li, ws.norm1, ws.v, kvDim, H);
 
 		for (int b = 0; b < W; b++) {
 			rmsNormPerHead(ws.q[b], qNorm[li], cfg.numHeads(), cfg.headDim(), cfg.rmsNormEps());
@@ -534,7 +580,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < W; b++)
 			gqaInto(cfg, ws.q[b], kCacheLayer, vCacheLayer, startPos + b + 1, ws.attnOut[b], ws.scores);
 
-		sgemmLayerInto(wo[li], woDev != null ? woDev[li] : null, ws.attnOut, ws.attnProj, H, qDim);
+		sgemmLayerInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, qDim);
 
 		for (int b = 0; b < W; b++)
 			for (int d = 0; d < H; d++)
@@ -543,14 +589,14 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < W; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
 
-		sgemmLayerInto(ffnGate[li], ffnGateDev != null ? ffnGateDev[li] : null, ws.norm2, ws.gate, I, H);
-		sgemmLayerInto(ffnUp[li], ffnUpDev != null ? ffnUpDev[li] : null, ws.norm2, ws.up, I, H);
+		sgemmLayerInto(ffnGate[li], ffnGateQ4Dev, ffnGateDev, li, ws.norm2, ws.gate, I, H);
+		sgemmLayerInto(ffnUp[li], ffnUpQ4Dev, ffnUpDev, li, ws.norm2, ws.up, I, H);
 
 		for (int b = 0; b < W; b++)
 			for (int i = 0; i < I; i++)
 				ws.hidden[b][i] = LlamaTransformerHandler.silu(ws.gate[b][i]) * ws.up[b][i];
 
-		sgemmLayerInto(wDown[li], wDownDev != null ? wDownDev[li] : null, ws.hidden, ws.ffnOut, H, I);
+		sgemmLayerInto(wDown[li], wDownQ4Dev, wDownDev, li, ws.hidden, ws.ffnOut, H, I);
 
 		for (int b = 0; b < W; b++)
 			for (int d = 0; d < H; d++)
@@ -570,9 +616,9 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < N; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
 
-		sgemmLayerInto(attnQ[li], attnQDev != null ? attnQDev[li] : null, ws.norm1, ws.q, qDim, H);
-		sgemmLayerInto(attnK[li], attnKDev != null ? attnKDev[li] : null, ws.norm1, ws.k, kvDim, H);
-		sgemmLayerInto(attnV[li], attnVDev != null ? attnVDev[li] : null, ws.norm1, ws.v, kvDim, H);
+		sgemmLayerInto(attnQ[li], attnQQ4Dev, attnQDev, li, ws.norm1, ws.q, qDim, H);
+		sgemmLayerInto(attnK[li], attnKQ4Dev, attnKDev, li, ws.norm1, ws.k, kvDim, H);
+		sgemmLayerInto(attnV[li], attnVQ4Dev, attnVDev, li, ws.norm1, ws.v, kvDim, H);
 
 		for (int b = 0; b < N; b++) {
 			rmsNormPerHead(ws.q[b], qNorm[li], cfg.numHeads(), cfg.headDim(), cfg.rmsNormEps());
@@ -594,7 +640,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < N; b++)
 			gqaInto(cfg, ws.q[b], kCacheLayers[b], vCacheLayers[b], positions[b] + 1, ws.attnOut[b], ws.scores);
 
-		sgemmLayerInto(wo[li], woDev != null ? woDev[li] : null, ws.attnOut, ws.attnProj, H, qDim);
+		sgemmLayerInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, qDim);
 
 		for (int b = 0; b < N; b++)
 			for (int d = 0; d < H; d++)
@@ -603,14 +649,14 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < N; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
 
-		sgemmLayerInto(ffnGate[li], ffnGateDev != null ? ffnGateDev[li] : null, ws.norm2, ws.gate, I, H);
-		sgemmLayerInto(ffnUp[li], ffnUpDev != null ? ffnUpDev[li] : null, ws.norm2, ws.up, I, H);
+		sgemmLayerInto(ffnGate[li], ffnGateQ4Dev, ffnGateDev, li, ws.norm2, ws.gate, I, H);
+		sgemmLayerInto(ffnUp[li], ffnUpQ4Dev, ffnUpDev, li, ws.norm2, ws.up, I, H);
 
 		for (int b = 0; b < N; b++)
 			for (int i = 0; i < I; i++)
 				ws.hidden[b][i] = LlamaTransformerHandler.silu(ws.gate[b][i]) * ws.up[b][i];
 
-		sgemmLayerInto(wDown[li], wDownDev != null ? wDownDev[li] : null, ws.hidden, ws.ffnOut, H, I);
+		sgemmLayerInto(wDown[li], wDownQ4Dev, wDownDev, li, ws.hidden, ws.ffnOut, H, I);
 
 		for (int b = 0; b < N; b++)
 			for (int d = 0; d < H; d++)
@@ -619,10 +665,16 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		return x;
 	}
 
-	private void sgemmLayerInto(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev,
-			float[][] X, float[][] Y, int rows, int cols) {
-		if (dev != null) {
-			float[][] tmp = backend.sgemm(dev, X);
+	private void sgemmLayerInto(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix[] q4,
+			DeviceHalfMatrix[] half, int li, float[][] X, float[][] Y, int rows, int cols) {
+		if (q4 != null && q4[li] != null) {
+			float[][] tmp = backend.sgemm(q4[li], X);
+			for (int b = 0; b < X.length; b++)
+				System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			return;
+		}
+		if (half != null && half[li] != null) {
+			float[][] tmp = backend.sgemm(half[li], X);
 			for (int b = 0; b < X.length; b++)
 				System.arraycopy(tmp[b], 0, Y[b], 0, rows);
 			return;
@@ -791,12 +843,12 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	private float[] denseFfn(float[] x, int li) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
-		float[] gate = matVecLayer(ffnGate[li], ffnGateDev != null ? ffnGateDev[li] : null, x, I, H);
-		float[] up = matVecLayer(ffnUp[li], ffnUpDev != null ? ffnUpDev[li] : null, x, I, H);
+		float[] gate = matVecLayer(ffnGate[li], ffnGateQ4Dev, ffnGateDev, li, x, I, H);
+		float[] up = matVecLayer(ffnUp[li], ffnUpQ4Dev, ffnUpDev, li, x, I, H);
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
 			hidden[i] = LlamaTransformerHandler.silu(gate[i]) * up[i];
-		return matVecLayer(wDown[li], wDownDev != null ? wDownDev[li] : null, hidden, H, I);
+		return matVecLayer(wDown[li], wDownQ4Dev, wDownDev, li, hidden, H, I);
 	}
 
 	private float[] outputProjection(float[] x) {
@@ -807,10 +859,12 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		return LlamaTransformerHandler.matVec(outputProj, xNorm, actualVocab, cfg.hiddenDim());
 	}
 
-	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev, float[] x, int rows,
-			int cols) {
-		if (dev != null)
-			return backend.sgemv(dev, x);
+	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix[] q4, DeviceHalfMatrix[] half,
+			int li, float[] x, int rows, int cols) {
+		if (q4 != null && q4[li] != null)
+			return backend.sgemv(q4[li], x);
+		if (half != null && half[li] != null)
+			return backend.sgemv(half[li], x);
 		return LlamaTransformerHandler.matVec(quant, x, rows, cols);
 	}
 
@@ -909,22 +963,22 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 		@Override
 		public float[] matVecQ(float[] x, int rows, int cols) {
-			return matVecLayer(attnQ[li], attnQDev != null ? attnQDev[li] : null, x, cfg.qDim(), cfg.hiddenDim());
+			return matVecLayer(attnQ[li], attnQQ4Dev, attnQDev, li, x, cfg.qDim(), cfg.hiddenDim());
 		}
 
 		@Override
 		public float[] matVecK(float[] x, int rows, int cols) {
-			return matVecLayer(attnK[li], attnKDev != null ? attnKDev[li] : null, x, cfg.kvDim(), cfg.hiddenDim());
+			return matVecLayer(attnK[li], attnKQ4Dev, attnKDev, li, x, cfg.kvDim(), cfg.hiddenDim());
 		}
 
 		@Override
 		public float[] matVecV(float[] x, int rows, int cols) {
-			return matVecLayer(attnV[li], attnVDev != null ? attnVDev[li] : null, x, cfg.kvDim(), cfg.hiddenDim());
+			return matVecLayer(attnV[li], attnVQ4Dev, attnVDev, li, x, cfg.kvDim(), cfg.hiddenDim());
 		}
 
 		@Override
 		public float[] matVecWo(float[] x, int rows, int cols) {
-			return matVecLayer(wo[li], woDev != null ? woDev[li] : null, x, cfg.hiddenDim(), cfg.qDim());
+			return matVecLayer(wo[li], woQ4Dev, woDev, li, x, cfg.hiddenDim(), cfg.qDim());
 		}
 	}
 }

@@ -20,21 +20,36 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260904T141315Z-vision`](20260904T141315Z-vision/) | GPU vision chat (`compare-vision.sh`, `47-vision`) | latency / decode tps | [INDEX](20260904T141315Z-vision/INDEX.md) |
 | [`20260904T194612Z`](20260904T194612Z/) | CPU Vector SIMD (`--vector 0`) | JFR pp/tg | [INDEX](20260904T194612Z/INDEX.md) |
 | [`20260904T195731Z`](20260904T195731Z/) | CPU Vector SIMD (`--vector 1`) | JFR pp/tg | [INDEX](20260904T195731Z/INDEX.md) |
+| [`20260910T025804Z`](20260910T025804Z/) | GPU + fused Q4_K MMQ (`JUNO_MMQ=on` / `-DJUNO_MMQ=on`) | JFR pp/tg | [INDEX](20260910T025804Z/INDEX.md) |
+| [`20260910T030058Z-lora`](20260910T030058Z-lora/) | GPU LoRA train-qa + playback (`compare-lora.sh`) | train ms / playback tps | [INDEX](20260910T030058Z-lora/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 
-## LoRA train-qa regression — `20260905T031520Z-lora`
+## LoRA train-qa regression — `20260910T030058Z-lora`
 
 Scenario: TinyLlama Q4_K_M · `/train-qa` *What is your name?* → *My name is Juno* · loss target 1.2 · playback temperature 0.
 
 | ref | commit | train total ms | ms/pass | passes | playback tps | recall |
 |-----|--------|---------------:|--------:|-------:|-------------:|:------:|
-| release-0.1.2 | 51a3b90 | 50,000 | 3,333 | 15 | 36.1 | ✓ |
-| 67-inference (HEAD) | e0245ae | 48,000 | 3,200 | 15 | 32.2 | ✓ |
+| release-0.1.2 | 51a3b90 | 45,000 | 3,000 | 15 | 38.3 | ✓ |
+| HEAD | 8b78382 | 44,000 | 2,933 | 15 | 38.3 | ✓ |
 
-**Current vs release-0.1.2:** train wall **0.96×**; playback tps **0.89×** (≥0.80 gate). Status **ok**. Run: `./scripts/performance-tests/compare-lora.sh --gpu --baseline release-0.1.2`.
+**Current vs release-0.1.2:** train wall **0.98×**; playback tps **1.00×** (≥0.80 gate). Status **ok**. Run: `./scripts/performance-tests/compare-lora.sh --gpu --baseline release-0.1.2`.
 
-Earlier failing snapshot (pre-fix): [`20260902T200210Z-lora`](20260902T200210Z-lora/) (train **5.76×**, play tps **0.69×**).
+Earlier ok snapshot: [`20260905T031520Z-lora`](20260905T031520Z-lora/). Earlier failing snapshot: [`20260902T200210Z-lora`](20260902T200210Z-lora/).
+
+## GPU fused Q4_K MMQ bake-off — `20260910T025804Z`
+
+`compare-llama-cpp.sh --gpu --vector 0` with `-DJUNO_MMQ=on`. JFR proves `cuda_resident_q4k` on all four models (including Phi-3 fused path).
+
+| Model | llama tg | Juno tg (MMQ on) | Juno/llama | q4k MatVec count |
+|-------|---------:|-----------------:|-----------:|-----------------:|
+| tinyllama-1.1b Q4_K_M | 195.4 | 27.3 | 0.14 | 12462 |
+| qwen2.5-3b Q4_K_M | 71.8 | 10.7 | 0.15 | 12744 |
+| Phi-3.5-mini Q4_K_M | 60.6 | 7.39 | 0.12 | 6720 |
+| mistral-7b Q4_K_M | 37.1 | 5.34 | 0.14 | 15936 |
+
+**Gates:** P0 Phi-3.5 ≥ **0.5×** llama — **unmet** (0.12×). Tier 13B ≥ **1.3×** vs FP16-resident path — **not measured in this run** (no paired `--mmq off`); vs prior GPU baseline [`20260831T231403Z`](20260831T231403Z/) Phi-3.5 tg **12.6**, this MMQ-on run is **lower** — treat as open kernel/perf work, not feature-complete.
 
 ## Vision chat regression — `compare-vision.sh`
 
