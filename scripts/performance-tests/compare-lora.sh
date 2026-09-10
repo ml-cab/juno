@@ -9,7 +9,13 @@
 #   ./scripts/performance-tests/compare-lora.sh --gpu --baseline release-0.1.2
 #   ./scripts/performance-tests/compare-lora.sh --cpu --no-publish
 #
-# Regression gate (default): train ms/pass or total ms > 1.25× baseline → exit 1.
+# Regression gate (default): train ms/pass or total ms > 1.25× baseline → fail;
+# playback wall-clock tps < 0.80× baseline → fail. JFR TokenProduced.tps is recorded
+# as playback.tps_jfr only — do not gate on it for this short post-train playback
+# (a single GC pause dominates first→last TokenProduced span).
+#
+# Env:
+#   LORA_PERF_REGRESSION_RATIO  train regression limit (default 1.25)
 
 set -euo pipefail
 
@@ -206,9 +212,9 @@ write_bench_json() {
   if [[ -f "$jfr_metrics" ]]; then
     jfr_block="$(jq -c '.models[0] // null' "$jfr_metrics" 2>/dev/null || echo null)"
     play_tps_jfr="$(jq -r '.models[0].metrics["juno.TokenProduced.tps"] // empty' "$jfr_metrics" 2>/dev/null || true)"
-    if [[ -n "$play_tps_jfr" && "$play_tps_jfr" != "null" ]]; then
-      play_tps="$play_tps_jfr"
-    fi
+    # Keep wall-clock play_tps for the §2 gate. TokenProduced.tps = count/(last−first)
+    # on a 5–7 token playback after a heavy train session is GC-spike dominated and
+    # falsely fails when steady-state decode is unchanged (see docs/performance.md).
   fi
 
   local status="success"
@@ -472,11 +478,11 @@ write_index_md() {
     echo
     echo "Model: \`${MODEL}\` · backend=$([ "$USE_GPU" -eq 1 ] && echo gpu || echo cpu) · scenario: train-qa name recall · JFR \`${JFR_DURATION}\`"
     echo
-    echo "| ref | commit | train ms | ms/pass | passes | playback tps | recall |"
-    echo "|-----|--------|----------:|--------:|-------:|-------------:|:------:|"
+    echo "| ref | commit | train ms | ms/pass | passes | playback tps (wall) | tps_jfr | recall |"
+    echo "|-----|--------|----------:|--------:|-------:|---------------------:|--------:|:------:|"
     for f in "$baseline_json" "$current_json"; do
       [[ -f "$f" ]] || continue
-      jq -r '"| \(.git_ref // "?") | \(.git_commit // "?") | \(.train.total_ms) | \(.train.ms_per_pass) | \(.train.passes) | \(.playback.tps) | \(.playback.recall_ok) |"' "$f"
+      jq -r '"| \(.git_ref // "?") | \(.git_commit // "?") | \(.train.total_ms) | \(.train.ms_per_pass) | \(.train.passes) | \(.playback.tps) | \(.playback.tps_jfr // "-") | \(.playback.recall_ok) |"' "$f"
     done
     echo
     if [[ -f "$compare_json" ]]; then
@@ -487,13 +493,14 @@ write_index_md() {
         "- current: \(.current.git_ref) (\(.current.git_commit))",
         "- train_total_ms ratio: \(.ratios.train_total_ms // "-")",
         "- train_ms_per_pass ratio: \(.ratios.train_ms_per_pass // "-")",
-        "- playback_tps ratio: \(.ratios.playback_tps // "-")",
+        "- playback_tps ratio (wall): \(.ratios.playback_tps // "-")",
         "- status: **\(.status)**",
         (if (.regressions | length) > 0 then "- regressions: " + (.regressions | join(", ")) else empty end)
       ' "$compare_json"
     fi
     echo
-    echo "Train/playback timings from REPL log; playback tps prefers \`juno.TokenProduced.tps\` from JFR when present."
+    echo "Train timings from REPL log. Playback gate uses wall-clock tokens/ms (REPL \`Generated\` line)."
+    echo "\`juno.TokenProduced.tps\` is informational only here (short decode after train; GC spikes dominate first→last span)."
   } >"$index_md"
 }
 

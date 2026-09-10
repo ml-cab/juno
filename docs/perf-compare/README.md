@@ -22,10 +22,38 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260904T195731Z`](20260904T195731Z/) | CPU Vector SIMD (`--vector 1`) | JFR pp/tg | [INDEX](20260904T195731Z/INDEX.md) |
 | [`20260910T025804Z`](20260910T025804Z/) | GPU + fused Q4_K MMQ (`JUNO_MMQ=on` / `-DJUNO_MMQ=on`) | JFR pp/tg | [INDEX](20260910T025804Z/INDEX.md) |
 | [`20260910T030058Z-lora`](20260910T030058Z-lora/) | GPU LoRA train-qa + playback (`compare-lora.sh`) | train ms / playback tps | [INDEX](20260910T030058Z-lora/INDEX.md) |
+| [`20260910T170557Z`](20260910T170557Z/) | GPU default path (post–quantized KV landing, `--cache-type` default `f16`) | JFR pp/tg | [INDEX](20260910T170557Z/INDEX.md) |
+| [`20260910T180703Z-lora`](20260910T180703Z-lora/) | GPU LoRA train-qa + playback (`compare-lora.sh`, wall tps gate) | train ms / playback tps | [INDEX](20260910T180703Z-lora/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 
-## LoRA train-qa regression — `20260910T030058Z-lora`
+## Quantized KV regression — `20260910T170557Z`
+
+Default `--cache-type-k/v f16` (float32 path) after `DenseKvTensor` landing. `compare-llama-cpp.sh --gpu --vector 0`. Failures=0.
+
+| Model | llama tg | Juno tg | Juno/llama |
+|-------|---------:|--------:|-----------:|
+| tinyllama-1.1b Q4_K_M | 173.4 | 33.4 | 0.19 |
+| qwen2.5-3b Q4_K_M | 63.3 | 12.4 | 0.20 |
+| Phi-3.5-mini Q4_K_M | 53.2 | 12.8 | 0.24 |
+| mistral-7b Q4_K_M | 32.4 | 0.47 | 0.015 |
+
+No decode regression vs prior default-GPU rows (~0.17–0.22× on small models). Memory claim for `q8_0` is unit-proven (`Q8_0KvCodec.compressionRatioVsF32` ≥2×), not a throughput claim.
+
+## LoRA train-qa regression — `20260910T180703Z-lora`
+
+Scenario: TinyLlama Q4_K_M · `/train-qa` *What is your name?* → *My name is Juno* · loss target 1.2 · playback temperature 0.
+
+| ref | commit | train total ms | ms/pass | passes | playback tps (wall) | recall |
+|-----|--------|---------------:|--------:|-------:|--------------------:|:------:|
+| release-0.1.2 | 51a3b90 | 49,000 | 3,267 | 15 | 12.5 | ✓ |
+| HEAD | e137c15 | 49,000 | 3,267 | 15 | 11.0 | ✓ |
+
+**Current vs release-0.1.2:** train wall **1.00×**; playback wall tps **0.88×** (≥0.80 gate). Status **ok**. Gate uses REPL wall-clock tps (`compare-lora.sh`); JFR `TokenProduced.tps` is informational (`tps_jfr` ≈ 0.98× on this run).
+
+Earlier ok snapshot: [`20260910T030058Z-lora`](20260910T030058Z-lora/). Earlier failing snapshot: [`20260902T200210Z-lora`](20260902T200210Z-lora/).
+
+## LoRA train-qa regression — `20260910T030058Z-lora` (prior)
 
 Scenario: TinyLlama Q4_K_M · `/train-qa` *What is your name?* → *My name is Juno* · loss target 1.2 · playback temperature 0.
 

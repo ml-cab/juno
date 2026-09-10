@@ -27,15 +27,51 @@ Also read:
 |-------|-------|
 | **Phase** | P1 |
 | **Exec step** | 2 (after Tier 6) |
-| **Depends on** | Tier 1 complete; Tier 6 recommended (q8_0 block payload) |
+| **Depends on** | Tier 1 complete; Tier 6 landed (q8_0 block payload optional) |
 | **Blocks** | Tier 15 (gather-tax gate must pass) |
 | **Parallel with** | P2 if staffed |
+| **Status** | **In progress** (lock 2026-09-10) |
 
 Tier 8 is **not** a code dependency for Tier 14 — only required before Tier 16.
 
+## Design lock (2026-09-10)
+
+| Decision | Choice |
+|----------|--------|
+| Primary new types | `KvBlockPool` + `KvPageTable` (+ gather helper) — not only extending `DenseKvTensor` |
+| Default path | `--schedule static` → dense `DenseKvTensor` / float path (Tier 1 + 6 unchanged) |
+| Continuous path | `--schedule continuous` → paged pool + gather-to-workspace (scheduler engine is Tier 15) |
+| Page size | `--kv-page-size N` / `JUNO_KV_PAGE_SIZE`, default **16** |
+| Schedule flag | Introduced here for KV path selection (default `static`); Tier 15 owns continuous engine semantics |
+| q8_0 blocks | Optional payload via Tier 6 codecs inside pool blocks |
+
+## Feature × surface interaction matrix
+
+| New feature / flag | Base inference | --lora-play | LoRA train | Vision | --parallel | --gpu-layers | --prefill-batch | CUDA | ROCm | Default |
+|--------------------|----------------|-------------|------------|--------|------------|--------------|-----------------|------|------|---------|
+| `--kv-page-size` | **wired** when schedule=continuous; **explicit no-op** under static (dense) | **wired** (same dual path) | **explicit no-op** (ephemeral float train KV) | **wired** via text handler | **wired** (static keeps dense) | **wired** (independent) | **wired** | N/A (host KV) | N/A | **16** |
+| `--schedule static\|continuous` | **wired** (KV path only in this tier; continuous **engine** = Tier 15 follow-up) | **wired** | **explicit no-op** / warn if continuous | **wired** | **fail closed** or static fallback until Tier 15 | **wired** | **wired** | N/A | N/A | **static** |
+
+## Cross-feature smoke (before feature complete)
+
+- [ ] Static default: dense path bit-compatible; `--kv-page-size` ignored with startup note
+- [ ] Continuous KV path (unit / short greedy): allocate/free + gather parity vs dense
+- [ ] `--lora-play` + static: unchanged
+- [ ] LoRA train + flags: warn / ephemeral float
+- [ ] §2 compares when marking feature complete
+
+## Exit checklist (compatibility)
+
+- [ ] Interaction matrix complete (no empty cells)
+- [ ] No silent flag ignore
+- [ ] Launchers forward `--kv-page-size` / `--schedule` for local (cluster as documented)
+- [ ] User-facing docs: dual path + gather stance
+- [ ] ROADMAP §5 architectures covered or named follow-up
+- [ ] Gather-tax microbench + budget decision in `docs/performance.md`
+
 ## Overview
 
-vLLM stores KV in fixed-size blocks with a per-request page table (PagedAttention). Juno today grows dense per-request `float[][]` up to `MAX_SEQ_LEN` and stores whole-sequence `KVBlock` blobs.
+Peer engines store KV in fixed-size blocks with a per-request page table. Juno today grows dense per-request tensors up to `MAX_SEQ_LEN` and stores whole-sequence `KVBlock` blobs.
 
 This tier introduces **logical** block/page KV allocation so memory scales with used tokens and continuous batching (Tier 15) can share a pool. Attention on the continuous path **gathers** active blocks into a contiguous workspace for existing Panama + BLAS paths. No custom PagedAttention CUDA kernel.
 
@@ -160,7 +196,7 @@ Exit only when:
 
 ## Implementation todos
 
-1. Page table + block pool + unit tests.
+1. ~~Page table + block pool + unit tests~~
 2. KVBlock / KVCacheManager plumbing (+ q8_0 if Tier 6 present).
 3. Dual-path handler integration (dense static + paged continuous) + parity tests.
 4. Gather-tax microbench + mitigation ladder + `docs/performance.md` decision.

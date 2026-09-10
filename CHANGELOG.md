@@ -1,11 +1,21 @@
 ## Status 
 
-**Session 72** — Quantized KV cache (`--cache-type-k/v`) in progress
+**Session 73** — Block KV allocator (`--kv-page-size` / dual path) in progress
+
+- Start P1 step 2: `KvBlockPool` + `KvPageTable` with unit tests (allocate/free, gather, concurrent).
+
+---
+
+## Status 
+
+**Session 72** — Quantized KV cache (`--cache-type-k/v`) **feature complete**
 
 - Add `Q8_0KvCodec`, `CacheTypeOptions`, `DenseKvTensor`; CLI `--cache-type-k|v f16|q8_0`
   (default `f16` = current float32 path). Wire inference KV in all text + LoRA play handlers.
 - Adapter flushes typed payloads; unit + Llama logit parity tests green.
-- Docs/plan/ROADMAP marked in progress; bake-off still required before feature-complete.
+- Cluster: launchers forward flags; `ClusterHarness` passes `JUNO_CACHE_TYPE_*` to forked nodes.
+- Bake-off [`20260910T170557Z`](docs/perf-compare/20260910T170557Z/); LoRA [`20260910T180703Z-lora`](docs/perf-compare/20260910T180703Z-lora/) **ok**
+  (wall playback 0.88×). `compare-lora.sh` gates on wall tps; JFR `tps_jfr` informational.
 
 ---
 

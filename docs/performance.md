@@ -14,7 +14,7 @@ Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). T
 
 **Parity:** `Q8_0KvCodecTest`, `DenseKvTensorTest`, `LlamaTransformerHandlerCacheTypeParityTest`.
 
-**Cross-feature smoke ([`target/cache-type-smoke/20260910T154500Z/`](../target/cache-type-smoke/20260910T154500Z/), CPU):**
+**Cross-feature smoke ([`target/cache-type-smoke/20260910T154500Z/`](../target/cache-type-smoke/20260910T154500Z/), CPU + GPU follow-up):**
 
 | Gate | Result |
 |------|--------|
@@ -23,9 +23,18 @@ Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). T
 | `juno lora` + q8_0 | `train-loss=3.76` finite; ephemeral KV warn |
 | `--parallel 2` + q8_0 | decode ok |
 | Multi-decode unit + q8_0 | surefire 2/2 green |
-| `--gpu-layers auto` + q8_0 | skipped (no GPU driver on smoke host) |
+| `--gpu-layers auto` + q8_0 | exit 0; `cache-type-k=q8_0`; resolved `gpu-layers=22` ([`20260910T163000Z`](../target/cache-type-smoke/20260910T163000Z/)) |
+| Cluster CLI + node `-D` forward | launcher accepts flags; `ClusterHarness` forwards `JUNO_CACHE_TYPE_*` |
 
-**Bake-off:** pending before feature-complete.
+**Bake-off:** [`perf-compare/20260910T170557Z`](perf-compare/20260910T170557Z/) (`--gpu --vector 0`, default `f16` path). Failures=0; Juno/llama tg ≈ **0.19–0.24×** on TinyLlama/Qwen/Phi-3.5; mistral ≈ **0.015×** (fit gate unchanged).
+
+**LoRA §2:** [`perf-compare/20260910T180703Z-lora`](perf-compare/20260910T180703Z-lora/) vs `release-0.1.2` — status **ok**. Train **1.00×**; wall playback tps **0.88×** (≥0.80). JFR `tps_jfr` ≈ **0.98×** on this re-run (prior false fail was a 622 ms GC pause on one decode step — see below).
+
+**JFR playback_tps gap explained (20260910T171139Z):** not a steady-state MatVec/KV regression. HEAD TokenProduced timeline showed ~36–40 ms/token except one `ForwardPass` at `startPosition=25` lasting **665 ms**, coincident with a **`jdk.GCPhasePause` of 622 ms**. Other decode steps matched baseline (~37 ms p95). Wall REPL was **662 vs 554 ms** (~**0.84×** wall-implied tps). `TokenProduced.tps = count/(last−first)` on a 5-token span is dominated by that single GC spike → false **0.18×** JFR ratio.
+
+**Gate fix:** `compare-lora.sh` now gates on **wall-clock** playback tps; JFR `TokenProduced.tps` is recorded as `playback.tps_jfr` only.
+
+**Status:** feature complete (default `f16` bit-compatible; `q8_0` ≥2× persistent KV via codec).
 
 ## Fused Q4_K GPU matmul (`--mmq`)
 

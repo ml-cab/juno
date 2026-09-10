@@ -187,6 +187,8 @@ cmd_cluster() {
   local health_port="${HEALTH_PORT:-8081}"
   local api_port="${API_PORT:-}"
   local prefill_mode="${PREFILL_MODE:-}"
+  local cache_type_k="${JUNO_CACHE_TYPE_K:-}"
+  local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -217,6 +219,8 @@ cmd_cluster() {
       --health-port)      health_port="$2";  shift 2 ;;
       --api-port)         api_port="$2";     shift 2 ;;
       --prefill)          prefill_mode="$2"; shift 2 ;;
+      --cache-type-k)     cache_type_k="$2"; shift 2 ;;
+      --cache-type-v)     cache_type_v="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -251,6 +255,10 @@ cmd_cluster() {
         echo "    --api-port N               start REST API server on port N"
         echo "                               (includes OpenAI-compatible /v1/chat/completions)"
         echo ""
+        echo "  KV cache:"
+        echo "    --cache-type-k f16|q8_0    K cache type (default f16 = current float path)"
+        echo "    --cache-type-v f16|q8_0    V cache type (default f16)"
+        echo ""
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
         echo "    --cpu                      use CPU only"
@@ -266,6 +274,7 @@ cmd_cluster() {
         echo ""
         echo "  Environment overrides:"
         echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
+        echo "    JUNO_CACHE_TYPE_K  JUNO_CACHE_TYPE_V"
         echo ""
         echo "  Examples:"
         echo "    $0 cluster --model-path /models/tiny.gguf"
@@ -315,6 +324,10 @@ cmd_cluster() {
   [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
   local prefill_mode_arg=""
   [[ -n "$prefill_mode" ]] && prefill_mode_arg="--prefill $prefill_mode"
+  local cache_type_k_arg=""
+  [[ -n "$cache_type_k" ]] && cache_type_k_arg="--cache-type-k $cache_type_k"
+  local cache_type_v_arg=""
+  [[ -n "$cache_type_v" ]] && cache_type_v_arg="--cache-type-v $cache_type_v"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -336,6 +349,8 @@ cmd_cluster() {
     ${lora_play_arg} \
     ${api_port_arg} \
     ${prefill_mode_arg} \
+    ${cache_type_k_arg} \
+    ${cache_type_v_arg} \
     ${health_flag} \
     ${verbose_flag}
 }

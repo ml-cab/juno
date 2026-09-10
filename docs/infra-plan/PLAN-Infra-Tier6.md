@@ -29,7 +29,7 @@ Also read:
 | **Depends on** | Tier 5 recommended; Tier 1 minimum |
 | **Blocks** | Tier 14 (q8_0 block payload) |
 | **Parallel with** | Late P0 if staffed |
-| **Status** | **In progress** (lock 2026-09-10) |
+| **Status** | **Feature complete** (2026-09-10) |
 
 ## Overview
 
@@ -79,18 +79,21 @@ Vision / CUDA / ROCm cells: flag applies to host KV regardless of MatVec backend
 - [x] `--lora-play` + q8_0: recall ok on TinyLlama fixture (`My name is Juno`)
 - [x] LoRA train + q8_0: loss finite; no crash; ephemeral KV WARNING logged
 - [x] `--parallel` + q8_0: multi-decode completes (REPL + `LlamaTransformerHandlerMultiDecodeTest`)
-- [ ] `--gpu-layers auto` + q8_0: hybrid residency still works — **skipped** (no NVIDIA driver on smoke host)
+- [x] `--gpu-layers auto` + q8_0: hybrid residency still works — [`target/cache-type-smoke/20260910T163000Z/`](../../target/cache-type-smoke/20260910T163000Z/)
 - [ ] Vision (optional if time): one `/v1/vision/chat` with q8_0 text KV
-- [ ] §2 `compare-llama-cpp.sh` + `compare-lora.sh` published when marking feature complete
+- [x] §2 `compare-llama-cpp.sh` published — [`docs/perf-compare/20260910T170557Z/`](../perf-compare/20260910T170557Z/)
+- [x] §2 `compare-lora.sh` published — [`docs/perf-compare/20260910T180703Z-lora/`](../perf-compare/20260910T180703Z-lora/) (wall playback **0.88×**; status **ok**)
+- [x] Cluster: launcher accepts `--cache-type-*`; `ClusterHarness` forwards `JUNO_CACHE_TYPE_K/V` to forked node JVMs (no silent ignore)
 
 ## Exit checklist (compatibility)
 
-- [ ] Interaction matrix complete (no empty cells)
-- [ ] No silent flag ignore when launcher accepts the flag
-- [ ] `scripts/run.sh` / `run.bat` forward flags for local/cluster
-- [ ] User-facing docs state `f16` = current float path; q8_0 quality caveat
-- [ ] ROADMAP §5 architectures covered
-- [ ] Bake-off + `docs/performance.md` bytes/token note
+- [x] Interaction matrix complete (no empty cells)
+- [x] No silent flag ignore when launcher accepts the flag (cluster nodes get `-DJUNO_CACHE_TYPE_*`)
+- [x] `scripts/run.sh` / `run.bat` forward flags for local/cluster/lora
+- [x] User-facing docs state `f16` = current float path; q8_0 quality caveat; LoRA train ephemeral no-op
+- [x] ROADMAP §5 architectures covered (shared `DenseKvTensor` in all text + LoRA handlers; Llama parity test)
+- [x] Bake-off inference [`20260910T170557Z`](../perf-compare/20260910T170557Z/) + LoRA [`20260910T180703Z-lora`](../perf-compare/20260910T180703Z-lora/) + `docs/performance.md` bytes/token note
+- [x] LoRA §2 gate clean (wall playback tps; JFR informational)
 
 ## Chosen design
 
@@ -153,10 +156,10 @@ Exit only when:
 ## Implementation todos
 
 1. ~~Amend plan + §6 matrix + design lock~~
-2. q8_0 codec + `CacheTypeOptions` + roundtrip tests.
-3. `DenseKvTensor` + `KVBlock` type + adapter plumbing.
-4. Attention integration all handlers + parity tests.
-5. CLI + docs; ROADMAP status; bake-off before feature-complete.
+2. ~~q8_0 codec + `CacheTypeOptions` + roundtrip tests~~
+3. ~~`DenseKvTensor` + `KVBlock` type + adapter plumbing~~
+4. ~~Attention integration all handlers + parity tests~~
+5. ~~CLI + docs; ROADMAP status; cluster prop forward; bake-off~~
 6. List preview files; no zip.
 
 ## Preview files (expected)

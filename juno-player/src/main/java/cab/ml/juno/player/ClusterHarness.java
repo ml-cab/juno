@@ -470,6 +470,12 @@ public final class ClusterHarness implements AutoCloseable {
 			cmd.add("-Djuno.lora.play.path=" + loraPlayPath);
 		}
 
+		// KV cache element types — ConsoleMain sets these as system properties on the
+		// coordinator; forked nodes are separate JVMs and must receive -D explicitly
+		// (env inheritance alone is not enough when the user passed CLI flags).
+		forwardSysProp(cmd, cab.ml.juno.kvcache.CacheTypeOptions.ENV_K);
+		forwardSysProp(cmd, cab.ml.juno.kvcache.CacheTypeOptions.ENV_V);
+
 		// Health reporter: each node JVM pushes its own heap stats to the sidecar.
 		if (healthUrl != null) {
 			cmd.add("-Djuno.health.url=" + healthUrl);
@@ -538,6 +544,13 @@ public final class ClusterHarness implements AutoCloseable {
 		} catch (Exception e) {
 			return "(could not read stderr: " + e.getMessage() + ")";
 		}
+	}
+
+	/** Append {@code -Dkey=value} when the coordinator JVM has a non-blank property. */
+	private static void forwardSysProp(java.util.List<String> cmd, String key) {
+		String v = System.getProperty(key);
+		if (v != null && !v.isBlank())
+			cmd.add("-D" + key + "=" + v);
 	}
 
 	private record NodeSpec(String nodeId, String host, int port, ProcessPipelineClient.ShardConfig pipelineShard) {

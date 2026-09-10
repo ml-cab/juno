@@ -241,7 +241,7 @@ Parallel (non-blocking): Vision I2T · LoRA · model E2E
 | 3    | `PLAN-Infra-Tier3.md`  | GBNF + JSON Schema                      | P2                       | Pending                                                                          |
 | 4    | `PLAN-Infra-Tier4.md`  | Function calling / tools                | P2                       | Pending                                                                          |
 | 5    | `PLAN-Infra-Tier5.md`  | Hybrid `--gpu-layers` offload           | P0 step 2                | **Feature complete**; P0 gate unmet (mistral ~**0.026×** vs **0.15×**)           |
-| 6    | `PLAN-Infra-Tier6.md`  | Quantized KV cache (`q8_0`)             | P1 step 1                | **In progress** — codec + `DenseKvTensor` + handler/CLI wiring; bake-off pending |
+| 6    | `PLAN-Infra-Tier6.md`  | Quantized KV cache (`q8_0`)             | P1 step 1                | **Feature complete** — [`20260910T170557Z`](../perf-compare/20260910T170557Z/) + LoRA [`20260910T180703Z-lora`](../perf-compare/20260910T180703Z-lora/); default `f16` unchanged |
 | 7    | `PLAN-Infra-Tier7.md`  | Chat template + HF download             | P3                       | Pending                                                                          |
 | 8    | `PLAN-Infra-Tier8.md`  | Prefill microbatching                   | P0 step 3                | **Feature complete**; CPU bake-off published; GPU re-run open                    |
 | 9    | `PLAN-Infra-Tier9.md`  | Ngram speculative decoding              | P4                       | Pending                                                                          |
@@ -249,7 +249,7 @@ Parallel (non-blocking): Vision I2T · LoRA · model E2E
 | 11   | `PLAN-Infra-Tier11.md` | Embeddings API                          | P3                       | Pending                                                                          |
 | 12   | `PLAN-Infra-Tier12.md` | Draft-model speculation                 | P4                       | Pending                                                                          |
 | 13   | `PLAN-Infra-Tier13.md` | Fused quant / FlashAttn (gated)         | P0 (13A ✓, 13B); P5 (FA) | 13A complete; **13B feature complete (VRAM-fit ship)** — `--mmq` default off; speed ≥1.3× vs FP16 **deferred** to tile kernel; shared-activation `sgemvSameX` Phase 1 on Llama; LoRA play Phase 1 complete; bake-off [`20260910T025804Z`](../perf-compare/20260910T025804Z/) |
-| 14   | `PLAN-Infra-Tier14.md` | Block KV allocator                      | P1 step 2                | Pending                                                                          |
+| 14   | `PLAN-Infra-Tier14.md` | Block KV allocator                      | P1 step 2                | **In progress**                                                                          |
 | 15   | `PLAN-Infra-Tier15.md` | Continuous batching scheduler           | P1 step 3                | Pending                                                                          |
 | 16   | `PLAN-Infra-Tier16.md` | Mixed chunked prefill + decode          | P1 step 4                | Pending                                                                          |
 
@@ -345,7 +345,7 @@ Infra Tiers 5–6 benefit from residency patterns in `LoraResidentWeights` / `Gp
 3. Vision regression: hang fix + scalar Q4/Q5 accumulate; gate vs `47-vision` — **done**.
 4. No silent pathological slowdown at vision-scale B — scalar accumulate + common-pool `forEachRow` — **done**.
 
-**Status: Feature complete.** P0 Infra Tier 13 Phase B is **feature complete** (VRAM-fit); next critical-path Infra work is **P1 Tier 6** (**in progress**).
+**Status: Feature complete.** P0 Infra Tier 13 Phase B is **feature complete** (VRAM-fit); P1 Tier 6 is **feature complete**; next critical-path Infra work is **P1 Tier 14**.
 
 **Does not replace Tier 13B** (GPU fused MMQ). SIMD improves CPU MatVec and long CPU prefills; 13B owns the resident-GPU decode gap.
 
