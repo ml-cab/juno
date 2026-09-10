@@ -2,9 +2,43 @@
 
 Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). This file records tier-specific regression notes and exit-gate evidence.
 
+## Block KV / gather tax (`--schedule` / `--kv-page-size`)
+
+**Plan:** [`infra-plan/PLAN-Infra-Tier14.md`](infra-plan/PLAN-Infra-Tier14.md) (P1 step 2 — **feature complete**).
+
+**What:** Dual KV path — dense under `--schedule static` (default); paged pool + gather-to-workspace under `continuous`. Cap `DenseKvTensor.MAX_SEQ_LEN` raised to **32768** so long-context cells are measurable. F16 paged gather uses page-bulk `FloatBuffer` copies (mitigation after first matrix). CLI: `--schedule` / `--kv-page-size` (+ envs) via `ConsoleMain`, `run.sh` / `run.bat`, cluster node `-D` forward.
+
+**Microbench:** [`scripts/performance-tests/gather-tax-microbench.sh`](../scripts/performance-tests/gather-tax-microbench.sh) → `GatherTaxMicrobench` (TinyLlama-like GQA: 32/4/64). Full matrix: [`perf-compare/20260910T214300Z-gather-tax.md`](perf-compare/20260910T214300Z-gather-tax.md).
+
+| Cell | gather % of (gather+attn) | Notes |
+|------|--------------------------:|-------|
+| batch **8** / ctx **8k** / page **16** | **4.61%** | Gate ≤ ~15% — **PASS**; Tier 15 unblocked on gather tax |
+| batch 8 / ctx 8k / page 64 | 4.43% | Larger pages help little after bulk gather |
+| batch 8 / ctx 2k / page 16 | 6.90% | Still under budget |
+| batch 8 / ctx 32k / page 16 | 4.82% | Stress column OK |
+
+**Budget decision:** Proceed to continuous scheduler (Tier 15) on gather tax. Dual path remains: static stays dense (no gather).
+
+**Pre-bulk baseline** (per-token byte unpack): gate cell was **10.72%** ([`20260910T213121Z-gather-tax.md`](perf-compare/20260910T213121Z-gather-tax.md)); still PASS, then page-bulk F16 gather applied.
+
+**Cross-feature smoke** ([`target/tier14-smoke/20260910T220100Z/`](../target/tier14-smoke/20260910T220100Z/)):
+
+| Gate | Result |
+|------|--------|
+| `--lora-play` + static | recall `My name is Juno` |
+| Base continuous + page 16 | exit 0; paged policy log |
+| static + `--kv-page-size 64` | `kv-page-size ignored (dense)` |
+| continuous + `--parallel 2` | WARNING: continuous scheduler not enabled yet |
+
+**Bake-off:** [`perf-compare/20260910T222026Z`](perf-compare/20260910T222026Z/) (`--gpu --vector 0`, default static/dense). Failures=0; Juno/llama tg ≈ **0.16–0.23×** on TinyLlama/Qwen/Phi-3.5; mistral ≈ **0.015×**.
+
+**LoRA §2:** [`perf-compare/20260910T221031Z-lora`](perf-compare/20260910T221031Z-lora/) vs `release-0.1.2` — status **ok**. Train **1.00×**; wall playback tps **0.88×** (≥0.80).
+
+**Status:** feature complete.
+
 ## Quantized KV cache (`--cache-type-k/v`)
 
-**Plan:** [`infra-plan/PLAN-Infra-Tier6.md`](infra-plan/PLAN-Infra-Tier6.md) (P1 step 1 — **in progress**).
+**Plan:** [`infra-plan/PLAN-Infra-Tier6.md`](infra-plan/PLAN-Infra-Tier6.md) (P1 step 1 — **feature complete**).
 
 **What:** `--cache-type-k` / `--cache-type-v` (`f16|q8_0`, default `f16`). CLI `f16` keeps the current float32 in-process path. `q8_0` stores per-token GGUF-style blocks (34 B / 32 elems) via `DenseKvTensor`; attention dequants to float scratch. Manager write-through (`NodeKVCacheAdapter`) carries typed payloads.
 

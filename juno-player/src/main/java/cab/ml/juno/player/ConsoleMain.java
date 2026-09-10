@@ -203,6 +203,8 @@ public final class ConsoleMain {
 	private static String mmq = null; // null → env or default off
 	private static String cacheTypeK = null; // null → env or default f16
 	private static String cacheTypeV = null; // null → env or default f16
+	private static String schedule = null; // null → env or default static
+	private static String kvPageSize = null; // null → env or default 16
 	private static Integer parallel = null; // null → env or default 1
 	private static Long batchWindowMs = null; // null → env or default when parallel > 1
 	// ── LoRA arguments ────────────────────────────────────────────────────────
@@ -335,6 +337,10 @@ public final class ConsoleMain {
 			System.setProperty(cab.ml.juno.kvcache.CacheTypeOptions.ENV_K, cacheTypeK);
 		if (cacheTypeV != null)
 			System.setProperty(cab.ml.juno.kvcache.CacheTypeOptions.ENV_V, cacheTypeV);
+		if (schedule != null)
+			System.setProperty(cab.ml.juno.kvcache.ServeScheduleOptions.ENV, schedule);
+		if (kvPageSize != null)
+			System.setProperty(cab.ml.juno.kvcache.KvPageSizeOptions.ENV, kvPageSize);
 		if (loraPlayPath != null)
 			System.setProperty(cab.ml.juno.node.LoraMmqPolicy.PLAY_PATH_PROPERTY, loraPlayPath);
 		System.setProperty("juno.byteOrder", byteOrder);
@@ -367,6 +373,8 @@ public final class ConsoleMain {
 		System.out.println(
 				String.format("  %s%s%s%n", Color.GREEN, cab.ml.juno.node.SimdThreadPool.diagnosticSummary(),
 						Color.RESET));
+
+		printKvSchedulePolicy();
 
 		if (loraMode && jfrDuration != null) {
 			startLoraJfr();
@@ -404,6 +412,16 @@ public final class ConsoleMain {
 			if (env != null && !env.isBlank())
 				cacheTypeV = env.strip();
 		}
+		if (schedule == null) {
+			String env = System.getenv(cab.ml.juno.kvcache.ServeScheduleOptions.ENV);
+			if (env != null && !env.isBlank())
+				schedule = env.strip();
+		}
+		if (kvPageSize == null) {
+			String env = System.getenv(cab.ml.juno.kvcache.KvPageSizeOptions.ENV);
+			if (env != null && !env.isBlank())
+				kvPageSize = env.strip();
+		}
 		if (parallel == null) {
 			String env = System.getenv(ServeBatchOptions.ENV_PARALLEL);
 			if (env != null && !env.isBlank())
@@ -419,6 +437,33 @@ public final class ConsoleMain {
 			if (env != null && !env.isBlank())
 				prefillBatch = Integer.parseInt(env.strip());
 		}
+	}
+
+	/** REPL-visible KV path policy (JUL alone is off without --verbose). */
+	private static void printKvSchedulePolicy() {
+		var sched = cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv();
+		var page = cab.ml.juno.kvcache.KvPageSizeOptions.fromEnv();
+		var types = cab.ml.juno.kvcache.CacheTypeOptions.fromEnv();
+		StringBuilder sb = new StringBuilder(sched.policySummary());
+		sb.append(' ').append(types.policySummary());
+		if (sched.usesPagedKv()) {
+			sb.append(' ').append(page.policySummary());
+			sb.append(" (paged KV; continuous batch engine is a follow-up)");
+			int p = parallel != null ? parallel : 1;
+			if (p > 1) {
+				System.out.println(String.format(
+						"  %sWARNING: schedule=continuous with --parallel %d uses paged KV under static micro-batch; continuous scheduler is not enabled yet%s%n",
+						Color.YELLOW, p, Color.RESET));
+			}
+			if (!localMode && !loraMode) {
+				System.out.println(String.format(
+						"  %sWARNING: schedule=continuous on cluster selects paged KV on each node; continuous scheduler is local/single-shard follow-up%s%n",
+						Color.YELLOW, Color.RESET));
+			}
+		} else {
+			sb.append(" kv-page-size ignored (dense)");
+		}
+		System.out.println(String.format("  %s%s%s%n", Color.GREEN, sb, Color.RESET));
 	}
 
 	private static void applyLoraEnvDefaults() {
@@ -535,6 +580,18 @@ public final class ConsoleMain {
 			case "--cache-type-v":
 				if (i + 1 < args.length)
 					cacheTypeV = args[++i];
+				break;
+			case "--schedule":
+				if (i + 1 >= args.length)
+					throw new IllegalArgumentException("--schedule requires static|continuous");
+				schedule = args[++i];
+				cab.ml.juno.kvcache.ServeScheduleOptions.parse(schedule);
+				break;
+			case "--kv-page-size":
+				if (i + 1 >= args.length)
+					throw new IllegalArgumentException("--kv-page-size requires a positive integer");
+				kvPageSize = args[++i];
+				cab.ml.juno.kvcache.KvPageSizeOptions.of(Integer.parseInt(kvPageSize.strip()));
 				break;
 			case "--parallel":
 				if (i + 1 < args.length)
@@ -744,6 +801,10 @@ public final class ConsoleMain {
 		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8× smaller vs float)");
 		System.out.println("  --cache-type-v f16|q8_0    V cache element type (default: f16)");
 		System.out.println("                             env JUNO_CACHE_TYPE_V");
+		System.out.println("  --schedule static|continuous  KV layout (default: static = dense; continuous = paged)");
+		System.out.println("                             env JUNO_SCHEDULE; continuous batching engine is a follow-up");
+		System.out.println("  --kv-page-size N           Tokens per KV page when schedule=continuous (default: 16)");
+		System.out.println("                             env JUNO_KV_PAGE_SIZE; ignored under static (dense)");
 		System.out.println("  --parallel N               Static micro-batch size (default: 1, disabled)");
 		System.out.println("                             env JUNO_PARALLEL; recommend 8 for API servers");
 		System.out.println("  --batch-window-ms M        Batch collect window when parallel>1 (default: 50)");

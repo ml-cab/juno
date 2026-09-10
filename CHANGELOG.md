@@ -1,6 +1,6 @@
 ## Status 
 
-**Session 73** — Block KV allocator (`--kv-page-size` / dual path) in progress
+**Session 73** — Block KV allocator (`--kv-page-size` / dual path) **feature complete**
 
 - Start P1 step 2: `KvBlockPool` + `KvPageTable` with unit tests (allocate/free, gather, concurrent).
 - Manager plumbing: `PagedKvTensor` / `PagedKvArena` / `PagedKvCodec`; `KVCacheManager`
@@ -8,6 +8,13 @@
 - Dual-path handlers: `SessionKvTensor` / `SessionKvLayout`; dense under `static`,
   paged gather under `continuous`; LoRA train stays ephemeral float (warn); Llama
   schedule parity test.
+- Gather-tax microbench **PASS** (4.61% at batch 8 / ctx 8k after F16 page-bulk gather);
+  `MAX_SEQ_LEN` → 32768; report [`20260910T214300Z-gather-tax.md`](docs/perf-compare/20260910T214300Z-gather-tax.md).
+- CLI: `--schedule` / `--kv-page-size` in ConsoleMain + `run.sh` / `run.bat`; cluster `-D` forward;
+  howto/README; smoke [`target/tier14-smoke/20260910T220100Z/`](target/tier14-smoke/20260910T220100Z/).
+- §2 bake-off [`20260910T222026Z`](docs/perf-compare/20260910T222026Z/) failures=0;
+  LoRA [`20260910T221031Z-lora`](docs/perf-compare/20260910T221031Z-lora/) **ok** (wall play 0.88×).
+  Next Infra: Tier 15 continuous scheduler.
 
 ---
 

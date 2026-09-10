@@ -189,6 +189,8 @@ cmd_cluster() {
   local prefill_mode="${PREFILL_MODE:-}"
   local cache_type_k="${JUNO_CACHE_TYPE_K:-}"
   local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
+  local schedule="${JUNO_SCHEDULE:-}"
+  local kv_page_size="${JUNO_KV_PAGE_SIZE:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -221,6 +223,8 @@ cmd_cluster() {
       --prefill)          prefill_mode="$2"; shift 2 ;;
       --cache-type-k)     cache_type_k="$2"; shift 2 ;;
       --cache-type-v)     cache_type_v="$2"; shift 2 ;;
+      --schedule)         schedule="$2";     shift 2 ;;
+      --kv-page-size)     kv_page_size="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -258,6 +262,8 @@ cmd_cluster() {
         echo "  KV cache:"
         echo "    --cache-type-k f16|q8_0    K cache type (default f16 = current float path)"
         echo "    --cache-type-v f16|q8_0    V cache type (default f16)"
+        echo "    --schedule static|continuous  KV layout (default static=dense; continuous=paged)"
+        echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
         echo ""
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
@@ -274,7 +280,7 @@ cmd_cluster() {
         echo ""
         echo "  Environment overrides:"
         echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
-        echo "    JUNO_CACHE_TYPE_K  JUNO_CACHE_TYPE_V"
+        echo "    JUNO_CACHE_TYPE_K  JUNO_CACHE_TYPE_V  JUNO_SCHEDULE  JUNO_KV_PAGE_SIZE"
         echo ""
         echo "  Examples:"
         echo "    $0 cluster --model-path /models/tiny.gguf"
@@ -328,6 +334,10 @@ cmd_cluster() {
   [[ -n "$cache_type_k" ]] && cache_type_k_arg="--cache-type-k $cache_type_k"
   local cache_type_v_arg=""
   [[ -n "$cache_type_v" ]] && cache_type_v_arg="--cache-type-v $cache_type_v"
+  local schedule_arg=""
+  [[ -n "$schedule" ]] && schedule_arg="--schedule $schedule"
+  local kv_page_size_arg=""
+  [[ -n "$kv_page_size" ]] && kv_page_size_arg="--kv-page-size $kv_page_size"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -351,6 +361,8 @@ cmd_cluster() {
     ${prefill_mode_arg} \
     ${cache_type_k_arg} \
     ${cache_type_v_arg} \
+    ${schedule_arg} \
+    ${kv_page_size_arg} \
     ${health_flag} \
     ${verbose_flag}
 }
@@ -385,6 +397,8 @@ cmd_local() {
   local mmq="${JUNO_MMQ:-}"
   local cache_type_k="${JUNO_CACHE_TYPE_K:-}"
   local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
+  local schedule="${JUNO_SCHEDULE:-}"
+  local kv_page_size="${JUNO_KV_PAGE_SIZE:-}"
   local prefill_batch="${JUNO_PREFILL_BATCH:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
@@ -423,6 +437,8 @@ cmd_local() {
       --mmq)              mmq="$2";          shift 2 ;;
       --cache-type-k)     cache_type_k="$2"; shift 2 ;;
       --cache-type-v)     cache_type_v="$2"; shift 2 ;;
+      --schedule)         schedule="$2";     shift 2 ;;
+      --kv-page-size)     kv_page_size="$2"; shift 2 ;;
       --prefill-batch)    prefill_batch="$2"; shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
@@ -466,6 +482,8 @@ cmd_local() {
         echo "    --mmq on|off|auto          packed Q4_K GPU weights for VRAM fit (default off)"
         echo "    --cache-type-k f16|q8_0    K cache type (default f16 = current float path)"
         echo "    --cache-type-v f16|q8_0    V cache type (default f16)"
+        echo "    --schedule static|continuous  KV layout (default static=dense; continuous=paged)"
+        echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
         echo "    --prefill-batch N          prefill microbatch chunk size (default 32)"
         echo ""
         echo "  Backend:"
@@ -543,6 +561,10 @@ cmd_local() {
   [[ -n "$cache_type_k" ]] && cache_type_k_arg="--cache-type-k $cache_type_k"
   local cache_type_v_arg=""
   [[ -n "$cache_type_v" ]] && cache_type_v_arg="--cache-type-v $cache_type_v"
+  local schedule_arg=""
+  [[ -n "$schedule" ]] && schedule_arg="--schedule $schedule"
+  local kv_page_size_arg=""
+  [[ -n "$kv_page_size" ]] && kv_page_size_arg="--kv-page-size $kv_page_size"
   local prefill_batch_arg=""
   [[ -n "$prefill_batch" ]] && prefill_batch_arg="--prefill-batch $prefill_batch"
   local mmproj_arg=""
@@ -574,6 +596,8 @@ cmd_local() {
     ${mmq_arg} \
     ${cache_type_k_arg} \
     ${cache_type_v_arg} \
+    ${schedule_arg} \
+    ${kv_page_size_arg} \
     ${prefill_batch_arg} \
     ${mmproj_arg} \
     ${health_flag} \
@@ -627,6 +651,8 @@ cmd_lora() {
   local health_port="${HEALTH_PORT:-8081}"
   local cache_type_k="${JUNO_CACHE_TYPE_K:-}"
   local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
+  local schedule="${JUNO_SCHEDULE:-}"
+  local kv_page_size="${JUNO_KV_PAGE_SIZE:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -682,6 +708,8 @@ cmd_lora() {
       --cpu)          use_gpu="false";   shift   ;;
       --cache-type-k) cache_type_k="$2"; shift 2 ;;
       --cache-type-v) cache_type_v="$2"; shift 2 ;;
+      --schedule)     schedule="$2";     shift 2 ;;
+      --kv-page-size) kv_page_size="$2"; shift 2 ;;
       --verbose | -v) verbose="true";   shift   ;;
       --help)
         echo ""
@@ -737,6 +765,8 @@ cmd_lora() {
         echo "    --top-p F               (default 0.9)"
         echo "    --cache-type-k f16|q8_0 Inference KV K type (default f16; train ephemeral float)"
         echo "    --cache-type-v f16|q8_0 Inference KV V type (default f16)"
+        echo "    --schedule static|continuous  Inference KV layout (train ephemeral float + warn if continuous)"
+        echo "    --kv-page-size N           page size when schedule=continuous (default 16; train no-op)"
         echo ""
         echo "  Backend:"
         echo "    --gpu                   use GPU when available (default)"
@@ -826,6 +856,10 @@ cmd_lora() {
   [[ -n "$cache_type_k" ]] && cache_type_k_arg="--cache-type-k $cache_type_k"
   local cache_type_v_arg=""
   [[ -n "$cache_type_v" ]] && cache_type_v_arg="--cache-type-v $cache_type_v"
+  local schedule_arg=""
+  [[ -n "$schedule" ]] && schedule_arg="--schedule $schedule"
+  local kv_page_size_arg=""
+  [[ -n "$kv_page_size" ]] && kv_page_size_arg="--kv-page-size $kv_page_size"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -870,6 +904,8 @@ cmd_lora() {
     ${jfr_arg} \
     ${cache_type_k_arg} \
     ${cache_type_v_arg} \
+    ${schedule_arg} \
+    ${kv_page_size_arg} \
     ${lora_path_flag} \
     ${health_flag} \
     ${verbose_flag}

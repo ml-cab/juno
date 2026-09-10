@@ -249,7 +249,7 @@ Parallel (non-blocking): Vision I2T · LoRA · model E2E
 | 11   | `PLAN-Infra-Tier11.md` | Embeddings API                          | P3                       | Pending                                                                          |
 | 12   | `PLAN-Infra-Tier12.md` | Draft-model speculation                 | P4                       | Pending                                                                          |
 | 13   | `PLAN-Infra-Tier13.md` | Fused quant / FlashAttn (gated)         | P0 (13A ✓, 13B); P5 (FA) | 13A complete; **13B feature complete (VRAM-fit ship)** — `--mmq` default off; speed ≥1.3× vs FP16 **deferred** to tile kernel; shared-activation `sgemvSameX` Phase 1 on Llama; LoRA play Phase 1 complete; bake-off [`20260910T025804Z`](../perf-compare/20260910T025804Z/) |
-| 14   | `PLAN-Infra-Tier14.md` | Block KV allocator                      | P1 step 2                | **In progress**                                                                          |
+| 14   | `PLAN-Infra-Tier14.md` | Block KV allocator                      | P1 step 2                | **Feature complete** — dual KV; gather-tax **PASS** ([`20260910T214300Z-gather-tax.md`](../perf-compare/20260910T214300Z-gather-tax.md)); bake-off [`20260910T222026Z`](../perf-compare/20260910T222026Z/) + LoRA [`20260910T221031Z-lora`](../perf-compare/20260910T221031Z-lora/); next = Tier 15 |
 | 15   | `PLAN-Infra-Tier15.md` | Continuous batching scheduler           | P1 step 3                | Pending                                                                          |
 | 16   | `PLAN-Infra-Tier16.md` | Mixed chunked prefill + decode          | P1 step 4                | Pending                                                                          |
 
@@ -345,7 +345,7 @@ Infra Tiers 5–6 benefit from residency patterns in `LoraResidentWeights` / `Gp
 3. Vision regression: hang fix + scalar Q4/Q5 accumulate; gate vs `47-vision` — **done**.
 4. No silent pathological slowdown at vision-scale B — scalar accumulate + common-pool `forEachRow` — **done**.
 
-**Status: Feature complete.** P0 Infra Tier 13 Phase B is **feature complete** (VRAM-fit); P1 Tier 6 is **feature complete**; next critical-path Infra work is **P1 Tier 14**.
+**Status: Feature complete.** P0 Infra Tier 13 Phase B is **feature complete** (VRAM-fit); P1 Tier 6 is **feature complete**; P1 Tier 14 is **feature complete** (gather-tax PASS); next critical-path Infra work is **P1 Tier 15**.
 
 **Does not replace Tier 13B** (GPU fused MMQ). SIMD improves CPU MatVec and long CPU prefills; 13B owns the resident-GPU decode gap.
 

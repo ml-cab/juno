@@ -8,10 +8,11 @@ Module dependency (excerpt):
         typed payloads into the manager.
         KvBlockPool / KvPageTable / PagedKvTensor / PagedKvArena / PagedKvCodec /
         KvPageSizeOptions / ServeScheduleOptions / SessionKvTensor /
-        SessionKvLayout
+        SessionKvLayout / GatherTaxMicrobench
         (paged KV for continuous schedule; dense remains default static path;
         handlers dual-path via SessionKvLayout; manager may hold a shared
-        PagedKvArena; adapter flushes dense or paged blobs).
+        PagedKvArena; adapter flushes dense or paged blobs; gather-tax gate
+        PASS — see docs/performance.md / perf-compare/*-gather-tax.md).
   lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA)
   node — GgufReader, LlamafileGgufIndex, LlamaTransformerHandler,
         Phi2TransformerHandler, Phi2Rope, Phi3TransformerHandler, Phi3Rope, MatVec

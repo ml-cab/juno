@@ -24,6 +24,10 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260910T030058Z-lora`](20260910T030058Z-lora/) | GPU LoRA train-qa + playback (`compare-lora.sh`) | train ms / playback tps | [INDEX](20260910T030058Z-lora/INDEX.md) |
 | [`20260910T170557Z`](20260910T170557Z/) | GPU default path (post–quantized KV landing, `--cache-type` default `f16`) | JFR pp/tg | [INDEX](20260910T170557Z/INDEX.md) |
 | [`20260910T180703Z-lora`](20260910T180703Z-lora/) | GPU LoRA train-qa + playback (`compare-lora.sh`, wall tps gate) | train ms / playback tps | [INDEX](20260910T180703Z-lora/INDEX.md) |
+| [`20260910T213121Z-gather-tax.md`](20260910T213121Z-gather-tax.md) | CPU gather-tax (pre page-bulk F16) | gather % of attn | markdown report |
+| [`20260910T214300Z-gather-tax.md`](20260910T214300Z-gather-tax.md) | CPU gather-tax (post page-bulk F16; gate PASS) | gather % of attn | markdown report |
+| [`20260910T221031Z-lora`](20260910T221031Z-lora/) | GPU LoRA train-qa + playback (post block-KV dual path) | train ms / playback tps | [INDEX](20260910T221031Z-lora/INDEX.md) |
+| [`20260910T222026Z`](20260910T222026Z/) | GPU default path (post block-KV dual path, `--schedule` default static) | JFR pp/tg | [INDEX](20260910T222026Z/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 

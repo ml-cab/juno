@@ -30,7 +30,7 @@ Also read:
 | **Depends on** | Tier 1 complete; Tier 6 landed (q8_0 block payload optional) |
 | **Blocks** | Tier 15 (gather-tax gate must pass) |
 | **Parallel with** | P2 if staffed |
-| **Status** | **In progress** (lock 2026-09-10) |
+| **Status** | **Feature complete** (2026-09-10) |
 
 Tier 8 is **not** a code dependency for Tier 14 — only required before Tier 16.
 
@@ -56,18 +56,19 @@ Tier 8 is **not** a code dependency for Tier 14 — only required before Tier 16
 
 - [x] Static default: dense path bit-compatible; `--kv-page-size` ignored with startup note
 - [x] Continuous KV path (unit / short greedy): allocate/free + gather parity vs dense
-- [ ] `--lora-play` + static: unchanged
+- [x] `--lora-play` + static: unchanged (recall `My name is Juno`; [`target/tier14-smoke/20260910T220100Z/`](../../target/tier14-smoke/20260910T220100Z/))
 - [x] LoRA train + flags: warn / ephemeral float
-- [ ] §2 compares when marking feature complete
+- [x] Gather-tax microbench + budget decision ([`../perf-compare/20260910T214300Z-gather-tax.md`](../perf-compare/20260910T214300Z-gather-tax.md); gate **4.61%** ≤ 15%)
+- [x] §2 compares: inference [`20260910T222026Z`](../perf-compare/20260910T222026Z/) failures=0; LoRA [`20260910T221031Z-lora`](../perf-compare/20260910T221031Z-lora/) **ok** (wall play 0.88×)
 
 ## Exit checklist (compatibility)
 
-- [ ] Interaction matrix complete (no empty cells)
-- [ ] No silent flag ignore
-- [ ] Launchers forward `--kv-page-size` / `--schedule` for local (cluster as documented)
-- [ ] User-facing docs: dual path + gather stance
-- [ ] ROADMAP §5 architectures covered or named follow-up
-- [ ] Gather-tax microbench + budget decision in `docs/performance.md`
+- [x] Interaction matrix complete (no empty cells)
+- [x] No silent flag ignore
+- [x] Launchers forward `--kv-page-size` / `--schedule` for local (cluster as documented)
+- [x] User-facing docs: dual path + gather stance
+- [x] ROADMAP §5 architectures covered (SessionKvLayout in all text + LoRA handlers)
+- [x] Gather-tax microbench + budget decision in `docs/performance.md`
 
 ## Overview
 
@@ -199,8 +200,8 @@ Exit only when:
 1. ~~Page table + block pool + unit tests~~
 2. ~~KVBlock / KVCacheManager plumbing (+ q8_0 if Tier 6 present)~~
 3. ~~Dual-path handler integration (dense static + paged continuous) + parity tests~~
-4. Gather-tax microbench + mitigation ladder + `docs/performance.md` decision.
-5. CLI/docs; ROADMAP status; preview files; no zip.
+4. ~~Gather-tax microbench + mitigation ladder + `docs/performance.md` decision~~ (**PASS** 4.61% at 8k×batch8; F16 page-bulk gather)
+5. ~~CLI/docs; ROADMAP status; preview files; no zip.~~
 
 ## Preview files (expected)
 

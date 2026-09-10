@@ -15,6 +15,8 @@
  */
 package cab.ml.juno.kvcache;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -108,6 +110,17 @@ public final class KvBlockPool {
 		}
 	}
 
+	/**
+	 * Live page payload (caller must not retain across {@link #free}). Used by
+	 * F16 bulk gather.
+	 */
+	byte[] pageBytes(int blockId) {
+		synchronized (lock) {
+			checkLive(blockId);
+			return pages.get(blockId);
+		}
+	}
+
 	public void writeToken(int blockId, int slot, float[] src) {
 		writeToken(blockId, slot, src, 0);
 	}
@@ -125,13 +138,8 @@ public final class KvBlockPool {
 		int off = slot * bytesPerToken;
 		switch (type) {
 		case F16 -> {
-			for (int i = 0; i < kvDim; i++) {
-				int bits = Float.floatToIntBits(src[srcOff + i]);
-				page[off + i * 4] = (byte) bits;
-				page[off + i * 4 + 1] = (byte) (bits >>> 8);
-				page[off + i * 4 + 2] = (byte) (bits >>> 16);
-				page[off + i * 4 + 3] = (byte) (bits >>> 24);
-			}
+			ByteBuffer.wrap(page, off, bytesPerToken).order(ByteOrder.LITTLE_ENDIAN)
+					.asFloatBuffer().put(src, srcOff, kvDim);
 		}
 		case Q8_0 -> Q8_0KvCodec.encode(src, srcOff, kvDim, page, off);
 		}
@@ -154,13 +162,8 @@ public final class KvBlockPool {
 		int off = slot * bytesPerToken;
 		switch (type) {
 		case F16 -> {
-			for (int i = 0; i < kvDim; i++) {
-				int bits = (page[off + i * 4] & 0xff)
-						| ((page[off + i * 4 + 1] & 0xff) << 8)
-						| ((page[off + i * 4 + 2] & 0xff) << 16)
-						| ((page[off + i * 4 + 3] & 0xff) << 24);
-				dst[dstOff + i] = Float.intBitsToFloat(bits);
-			}
+			ByteBuffer.wrap(page, off, bytesPerToken).order(ByteOrder.LITTLE_ENDIAN)
+					.asFloatBuffer().get(dst, dstOff, kvDim);
 		}
 		case Q8_0 -> Q8_0KvCodec.decode(page, off, dst, dstOff, kvDim);
 		}

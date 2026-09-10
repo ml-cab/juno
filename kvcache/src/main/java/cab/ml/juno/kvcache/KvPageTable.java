@@ -15,6 +15,9 @@
  */
 package cab.ml.juno.kvcache;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -120,12 +123,38 @@ public final class KvPageTable {
 		int need = len * pool.kvDim();
 		if (workspace == null || workspace.length < need)
 			throw new IllegalArgumentException("workspace must hold len*kvDim floats");
+		if (len == 0)
+			return;
+		// F16 float path: copy whole pages via FloatBuffer (gather-tax mitigation).
+		if (pool.type() == KvElementType.F16) {
+			gatherF16Bulk(workspace, len);
+			return;
+		}
 		int pageSize = pool.pageSize();
 		int kvDim = pool.kvDim();
 		for (int p = 0; p < len; p++) {
 			int page = p / pageSize;
 			int slot = p % pageSize;
 			pool.readToken(blockIds.get(page), slot, workspace, p * kvDim);
+		}
+	}
+
+	private void gatherF16Bulk(float[] workspace, int len) {
+		int pageSize = pool.pageSize();
+		int kvDim = pool.kvDim();
+		int fullPages = len / pageSize;
+		int rem = len % pageSize;
+		int dst = 0;
+		for (int pi = 0; pi < fullPages; pi++) {
+			byte[] page = pool.pageBytes(blockIds.get(pi));
+			FloatBuffer fb = ByteBuffer.wrap(page).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+			fb.get(workspace, dst, pageSize * kvDim);
+			dst += pageSize * kvDim;
+		}
+		if (rem > 0) {
+			byte[] page = pool.pageBytes(blockIds.get(fullPages));
+			FloatBuffer fb = ByteBuffer.wrap(page).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+			fb.get(workspace, dst, rem * kvDim);
 		}
 	}
 

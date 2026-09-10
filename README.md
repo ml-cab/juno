@@ -28,6 +28,13 @@ Features:
 
 ## 1.1 What's new?
 
+### Block KV / dual path
+
+- `--schedule static|continuous` (`JUNO_SCHEDULE`, default `static`): dense KV under
+  static; paged block pool + gather under continuous (continuous batching engine is a
+  follow-up). `--kv-page-size N` (`JUNO_KV_PAGE_SIZE`, default 16) applies when continuous.
+- See `docs/howto.md` and `docs/performance.md` (gather-tax gate).
+
 ### Vision (image-to-text)
 
 - `POST /v1/vision/chat` (blocking + SSE), registered automatically on

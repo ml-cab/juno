@@ -28,8 +28,12 @@ import java.util.Arrays;
 public final class DenseKvTensor implements SessionKvTensor {
 
 	public static final int INITIAL_SEQ_CAPACITY = 64;
-	/** Matches transformer handler decode window cap. */
-	public static final int MAX_SEQ_LEN = 2048;
+	/**
+	 * Hard cap on positions per request. Raised for continuous/paged long-context
+	 * gather-tax measurement (8k / 32k cells). Dense still grows on demand from
+	 * {@link #INITIAL_SEQ_CAPACITY}; this is only the ceiling.
+	 */
+	public static final int MAX_SEQ_LEN = 32768;
 
 	private final KvElementType type;
 	private final int kvDim;
