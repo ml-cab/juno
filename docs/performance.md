@@ -2,6 +2,29 @@
 
 Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). This file records tier-specific regression notes and exit-gate evidence.
 
+## OpenAI field parity (`stop` / `seed` / `presence_penalty`)
+
+**Plan:** [`infra-plan/PLAN-Infra-Tier2.md`](infra-plan/PLAN-Infra-Tier2.md) (P2 step 1 — **feature complete**).
+
+**What:** Chat Completions honors `stop` (string/array ≤4), `seed` (seeded sampler RNG), and
+`presence_penalty` (−2..2). Unsupported `response_format` types return HTTP 400 until grammar
+support; `logit_bias` / `user` remain ignored with docs honesty.
+
+**§2 regression:** [`perf-compare/20260911T221215Z`](perf-compare/20260911T221215Z/) (`--cpu --vector 0`).
+Failures=0. GPU compare deferred (driver unavailable on host this run).
+
+**Cross-feature smoke** ([`target/tier2-smoke/20260911T223000Z/`](../target/tier2-smoke/20260911T223000Z/)):
+
+| Gate | Result |
+|------|--------|
+| Same `seed` twice | identical completion text |
+| `stop=["STOP"]` | truncates before stop; `finish_reason=stop` |
+| `presence_penalty=1.5` | HTTP 200 |
+| `response_format.type=json_object` | HTTP 400 |
+| `logit_bias` + `user` | HTTP 200 (explicit no-op) |
+
+**Status:** feature complete. Next = grammar / JSON Schema constrained decoding.
+
 ## Block KV / gather tax (`--schedule` / `--kv-page-size`)
 
 **Plan:** [`infra-plan/PLAN-Infra-Tier14.md`](infra-plan/PLAN-Infra-Tier14.md) (P1 step 2 — **feature complete**).

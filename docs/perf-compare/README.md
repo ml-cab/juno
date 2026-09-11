@@ -34,8 +34,15 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260911T204721Z-mixed-prefill`](20260911T204721Z-mixed-prefill/) | GPU mixed chunked prefill vs admit-time (long+short SSE) | short TTFT/TPOT + JFR prefill_chunks | [INDEX](20260911T204721Z-mixed-prefill/INDEX.md) |
 | [`20260911T204900Z`](20260911T204900Z/) | GPU default path (post mixed-prefill landing) | JFR pp/tg | [INDEX](20260911T204900Z/INDEX.md) |
 | [`20260911T205447Z-lora`](20260911T205447Z-lora/) | GPU LoRA train-qa + playback (post mixed-prefill) | train ms / playback tps | [INDEX](20260911T205447Z-lora/INDEX.md) |
+| [`20260911T221215Z`](20260911T221215Z/) | CPU default path (post OpenAI field parity; `--vector 0`) | JFR pp/tg | [INDEX](20260911T221215Z/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
+
+## Inference regression — `20260911T221215Z`
+
+CPU (`--vector 0`) after OpenAI `stop` / `seed` / `presence_penalty` landing. Failures=0.
+Default curated models + accidental TinyLlama Q2_K row from `--models tinyllama` filter.
+GPU re-run deferred (NVIDIA driver unavailable). See [INDEX](20260911T221215Z/INDEX.md).
 
 ## Continuous vs static bake-off — `20260911T194430Z-continuous`
 

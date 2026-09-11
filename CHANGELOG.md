@@ -1,6 +1,6 @@
 ## Status 
 
-**Session 77** — OpenAI field parity (`stop` / `seed` / `presence_penalty`) **in progress**
+**Session 77** — OpenAI field parity (`stop` / `seed` / `presence_penalty`) **feature complete**
 
 - `SamplingParams` gains `presencePenalty`, `stopStrings`, `seed`; `PresencePenaltyStep`
   in the sampler pipeline; seeded `Random` on decode loops.
@@ -8,6 +8,11 @@
   stop strings merge into stop token ids via the tokenizer.
 - `response_format` fail-closed (HTTP 400) unless absent or `type=text`.
 - Docs / OpenAPI updated; `logit_bias` and `user` remain ignored with honesty.
+- §2 CPU regression [`docs/perf-compare/20260911T221215Z/`](docs/perf-compare/20260911T221215Z/)
+  failures=0 (GPU driver unavailable this run). Smoke
+  [`target/tier2-smoke/20260911T223000Z/`](target/tier2-smoke/20260911T223000Z/):
+  seed match, stop truncates, `presence_penalty` 200, `response_format` 400.
+- Next Infra: constrained decoding / grammar (Tier 3 plan).
 
 ---
 

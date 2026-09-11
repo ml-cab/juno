@@ -89,7 +89,11 @@ curl http://localhost:8080/v1/models
 | `frequency_penalty` | `SamplingParams.repetitionPenalty` | Mapped: `1 + max(0, fp/2)` |
 | `stream` | route selection | `false` -> blocking JSON; `true` -> SSE |
 | `n` | N/A | Only `1` accepted; other values -> HTTP 400 |
-| `stop`, `presence_penalty`, `logit_bias`, `user`, `seed` | N/A | Silently ignored for client compatibility |
+| `stop` | `SamplingParams.stopStrings` (+ single-token ids) | String or ≤4 strings; halts decode; `finish_reason=stop` |
+| `seed` | `SamplingParams.seed` | Deterministic stochastic sampling when set |
+| `presence_penalty` | `SamplingParams.presencePenalty` | OpenAI-style (−2..2); subtracts from seen-token logits |
+| `response_format` | — | Absent or `type=text` only; other types → HTTP 400 |
+| `logit_bias`, `user` | — | Silently ignored for client compatibility |
 
 **Juno request extensions** (namespaced under `x_juno_*` to avoid OpenAI field conflicts):
 

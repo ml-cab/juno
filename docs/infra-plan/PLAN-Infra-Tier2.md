@@ -31,7 +31,7 @@ Also read:
 | **Depends on** | Tier 1 complete |
 | **Blocks** | Tiers 3, 7, 11 |
 | **Parallel with** | P0 / P1 if staffed |
-| **Status** | **In progress** (2026-09-11) |
+| **Status** | **Feature complete** (2026-09-11) — §2 CPU regression [`20260911T221215Z`](../perf-compare/20260911T221215Z/); smoke [`target/tier2-smoke/20260911T223000Z/`](../../target/tier2-smoke/20260911T223000Z/) |
 
 ## Feature × surface interaction matrix
 
@@ -43,18 +43,18 @@ Also read:
 
 ## Cross-feature smoke (before feature complete)
 
-- [ ] Each **wired** cell: command + expected JFR/log proof recorded
-- [ ] Each **explicit no-op** cell: warning string + howto note (`logit_bias` / `user`; LoRA train)
-- [ ] Each **follow-up** cell: none (`response_format` types → Tier 3)
-- [ ] §2 compares run as required by change surface (API regression gate)
+- [x] Each **wired** cell: command + expected JFR/log proof recorded ([`target/tier2-smoke/20260911T223000Z/`](../../target/tier2-smoke/20260911T223000Z/) — seed match; stop truncates; `presence_penalty` 200; `response_format` 400)
+- [x] Each **explicit no-op** cell: warning string + howto note (`logit_bias` / `user` ignored honesty in howto/features; LoRA train not OpenAI chat)
+- [x] Each **follow-up** cell: none (`response_format` types → Tier 3)
+- [x] §2 compares run as required by change surface (API regression gate [`20260911T221215Z`](../perf-compare/20260911T221215Z/), failures=0; LoRA optional)
 
 ## Exit checklist (compatibility)
 
-- [ ] Interaction matrix complete (no empty cells)
-- [ ] No silent flag ignore on OpenAI fields this tier claims to honor
-- [ ] Launcher unchanged (no new CLI flags)
-- [ ] User-facing docs / OpenAPI state which fields are honored vs ignored
-- [ ] ROADMAP §5 architectures covered (sampler + decode loop are handler-agnostic)
+- [x] Interaction matrix complete (no empty cells)
+- [x] No silent flag ignore on OpenAI fields this tier claims to honor
+- [x] Launcher unchanged (no new CLI flags)
+- [x] User-facing docs / OpenAPI state which fields are honored vs ignored
+- [x] ROADMAP §5 architectures covered (sampler + decode loop are handler-agnostic)
 
 ## Overview
 
@@ -112,21 +112,21 @@ Non-goals:
 **Global rules** ([`PLAN-Infra-ROADMAP.md`](PLAN-Infra-ROADMAP.md) → Execution rules): only one Infra tier in flight at a time; publish a [`docs/perf-compare/`](../perf-compare/README.md) bake-off before marking this tier complete.
 
 
-Exit only when:
+Exit only when: **done** (2026-09-11) — §2 [`20260911T221215Z`](../perf-compare/20260911T221215Z/); smoke [`target/tier2-smoke/20260911T223000Z/`](../../target/tier2-smoke/20260911T223000Z/).
 
-1. Stop strings halt generation; `finish_reason` reflects stop.
-2. Same seed with fixed temperature produces an identical token sequence across two runs.
-3. `presence_penalty` changes ranking vs baseline in a unit test.
-4. Unsupported `response_format` returns 400 (until Tier 3).
-5. Docs / OpenAPI no longer claim implemented fields are ignored.
-6. Relevant module tests pass (`sampler`, `coordinator`, API fixtures).
+1. ~~Stop strings halt generation; `finish_reason` reflects stop.~~
+2. ~~Same seed with fixed temperature produces an identical token sequence across two runs.~~
+3. ~~`presence_penalty` changes ranking vs baseline in a unit test.~~
+4. ~~Unsupported `response_format` returns 400 (until Tier 3).~~
+5. ~~Docs / OpenAPI no longer claim implemented fields are ignored.~~
+6. ~~Relevant module tests pass (`sampler`, `coordinator`, API fixtures).~~
 
 ## Implementation todos
 
 1. ~~SamplingParams + Sampler changes + unit tests.~~
 2. ~~OpenAiChatHandler / OpenAiAdapter wiring + stop tokenization helper.~~
 3. ~~OpenAPI + features + RELEASE_NOTES + agent-arch as needed.~~
-4. §2 inference compare + mark feature complete / ROADMAP status; preview files; no zip.
+4. ~~§2 inference compare + mark feature complete / ROADMAP status; preview files; no zip.~~
 
 ## Preview files (expected)
 
