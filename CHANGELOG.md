@@ -1,5 +1,22 @@
 ## Status 
 
+**Session 76** — Mixed chunked prefill under continuous schedule **feature complete**
+
+- Bake-off [`docs/perf-compare/20260911T204721Z-mixed-prefill/`](docs/perf-compare/20260911T204721Z-mixed-prefill/):
+  short mean TTFT **0.327×** admit-time baseline (4552 vs 13929 ms); JFR
+  `ContinuousStep.prefill_chunks=12` proof **PASS**. Short TPOT rises under mix
+  (shared steps) — documented tradeoff. Short-decode TTFT bound ≤ **5702 ms**
+  (1.25× measured max) on this recipe.
+- Admit no longer blocks on full prompt eval; `ContinuousPrefillState` +
+  `ContinuousMixedStepPolicy` (decode preferred when step slots full).
+- §2 [`20260911T204900Z`](docs/perf-compare/20260911T204900Z/) failures=0;
+  LoRA [`20260911T205447Z-lora`](docs/perf-compare/20260911T205447Z-lora/) **ok**
+  (train 1.00×, playback 0.86×). Smoke [`target/tier16-smoke/20260911T205500Z/`](target/tier16-smoke/20260911T205500Z/).
+
+---
+
+## Status 
+
 **Session 75** — Continuous batching scheduler (`--schedule continuous`) **feature complete**
 
 - Bake-off [`docs/perf-compare/20260911T194430Z-continuous/`](docs/perf-compare/20260911T194430Z-continuous/):

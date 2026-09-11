@@ -38,6 +38,24 @@ class RequestSchedulerContinuousTest {
 	}
 
 	@Test
+	void decode_interleaves_while_peer_prefills() throws Exception {
+		RecordingPipeline pipeline = new RecordingPipeline();
+		// Small prefill chunks so a long prompt needs many steps
+		GenerationLoop loop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), pipeline,
+				new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000)), PrefillMode.BATCHED, 2);
+		scheduler = new RequestScheduler(32, loop, BatchConfig.of(4, 20), ServeScheduleOptions.parse("continuous"));
+
+		String longPrompt = "w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19";
+		CompletableFuture<GenerationResult> longReq = scheduler.submit(req(longPrompt, 4), TokenConsumer.discard());
+		CompletableFuture<GenerationResult> shortReq = scheduler.submit(req("hi", 4), TokenConsumer.discard());
+		CompletableFuture.allOf(longReq, shortReq).get(30, TimeUnit.SECONDS);
+
+		assertThat(pipeline.prefillCallCount()).isGreaterThan(1);
+		assertThat(pipeline.maxBatchSize()).isGreaterThanOrEqualTo(1);
+		assertThat(pipeline.sawPrefillAndDecodeOverlap()).isTrue();
+	}
+
+	@Test
 	void overlapping_decode_shares_forward_batch() throws Exception {
 		RecordingPipeline pipeline = new RecordingPipeline();
 		GenerationLoop loop = new GenerationLoop(new SimpleTokenizer(), Sampler.create(), pipeline,
@@ -137,6 +155,9 @@ class RequestSchedulerContinuousTest {
 	private static final class RecordingPipeline implements InferencePipeline {
 		private final List<Integer> batchSizes = new CopyOnWriteArrayList<>();
 		private final List<List<Integer>> positions = new CopyOnWriteArrayList<>();
+		private final AtomicInteger prefillCalls = new AtomicInteger();
+		private final AtomicInteger decodeCalls = new AtomicInteger();
+		private final AtomicInteger prefillAfterDecode = new AtomicInteger();
 
 		@Override
 		public float[] forward(String requestId, int[] tokens, int startPos) {
@@ -146,7 +167,15 @@ class RequestSchedulerContinuousTest {
 		}
 
 		@Override
+		public void prefillBatch(String requestId, int[] newTokens, int startPosition) {
+			prefillCalls.incrementAndGet();
+			if (decodeCalls.get() > 0)
+				prefillAfterDecode.incrementAndGet();
+		}
+
+		@Override
 		public float[][] forwardBatch(List<String> requestIds, List<int[]> allTokens, List<Integer> startPositions) {
+			decodeCalls.incrementAndGet();
 			batchSizes.add(requestIds.size());
 			positions.add(List.copyOf(startPositions));
 			float[][] results = new float[requestIds.size()][];
@@ -164,6 +193,14 @@ class RequestSchedulerContinuousTest {
 
 		int maxBatchSize() {
 			return batchSizes.stream().mapToInt(Integer::intValue).max().orElse(0);
+		}
+
+		int prefillCallCount() {
+			return prefillCalls.get();
+		}
+
+		boolean sawPrefillAndDecodeOverlap() {
+			return prefillAfterDecode.get() > 0;
 		}
 
 		boolean sawDistinctPositions() {

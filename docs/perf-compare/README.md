@@ -31,6 +31,9 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260911T194430Z-continuous`](20260911T194430Z-continuous/) | GPU continuous vs static (TPS / SSE TTFT-TPOT / prefix) | agg tg + JFR ContinuousStep | [INDEX](20260911T194430Z-continuous/INDEX.md) |
 | [`20260911T195008Z`](20260911T195008Z/) | GPU default path (post continuous landing, `--schedule` default static) | JFR pp/tg | [INDEX](20260911T195008Z/INDEX.md) |
 | [`20260911T195711Z-lora`](20260911T195711Z-lora/) | GPU LoRA train-qa + playback (post continuous) | train ms / playback tps | [INDEX](20260911T195711Z-lora/INDEX.md) |
+| [`20260911T204721Z-mixed-prefill`](20260911T204721Z-mixed-prefill/) | GPU mixed chunked prefill vs admit-time (long+short SSE) | short TTFT/TPOT + JFR prefill_chunks | [INDEX](20260911T204721Z-mixed-prefill/INDEX.md) |
+| [`20260911T204900Z`](20260911T204900Z/) | GPU default path (post mixed-prefill landing) | JFR pp/tg | [INDEX](20260911T204900Z/INDEX.md) |
+| [`20260911T205447Z-lora`](20260911T205447Z-lora/) | GPU LoRA train-qa + playback (post mixed-prefill) | train ms / playback tps | [INDEX](20260911T205447Z-lora/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 
@@ -47,7 +50,38 @@ TinyLlama Q4_K_M · GPU · 8 sessions · max_tokens=64 · `compare-schedule.sh`.
 
 P1 “continuous SSE beats static” gate: **unmet** on this synchronized recipe (honest).
 
-## Inference regression — `20260911T195008Z`
+## Mixed chunked prefill — `20260911T204721Z-mixed-prefill`
+
+TinyLlama Q4_K_M · GPU · continuous · n_prompt=256 · 3 shorts · `compare-mixed-prefill.sh`.
+
+| Mode | short mean TTFT ms | short mean TPOT ms | Notes |
+|------|-------------------:|-------------------:|-------|
+| mixed (default) | 4552 | 929 | `prefill_chunks=12` proof **PASS** |
+| admit-time baseline | 13929 | 189 | `-Djuno.continuous.mixedPrefill=false` |
+
+Short TTFT mixed/admit **0.327×**. Short-decode TTFT bound ≤ **5702 ms** (1.25× max). TPOT rises under mix (shared steps) — documented tradeoff.
+
+## Inference regression — `20260911T204900Z`
+
+`compare-llama-cpp.sh --gpu --vector 0`. Failures=0.
+
+| Model | llama tg | Juno tg | Juno/llama |
+|-------|---------:|--------:|-----------:|
+| tinyllama-1.1b Q4_K_M | 164.7 | 26.2 | 0.16 |
+| qwen2.5-3b Q4_K_M | 61.3 | 11.8 | 0.19 |
+| Phi-3.5-mini Q4_K_M | 54.2 | 11.3 | 0.21 |
+| mistral-7b Q4_K_M | 32.9 | 0.42 | 0.013 |
+
+## LoRA train-qa regression — `20260911T205447Z-lora`
+
+| ref | train total ms | ms/pass | playback tps (wall) | recall |
+|-----|---------------:|--------:|--------------------:|:------:|
+| release-0.1.2 | 54,000 | 3,600 | 11.7 | ✓ |
+| HEAD | 54,000 | 3,600 | 10.1 | ✓ |
+
+**Current vs release-0.1.2:** train wall **1.00×**; playback wall tps **0.86×** (≥0.80 gate). Status **ok**.
+
+## Inference regression — `20260911T195008Z` (continuous landing)
 
 `compare-llama-cpp.sh --gpu --vector 0`. Failures=0. Qwen2.5 re-measured alone after first matrix pass hit CPU MatVec (VRAM contention).
 

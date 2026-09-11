@@ -23,11 +23,12 @@ import jdk.jfr.Name;
 import jdk.jfr.StackTrace;
 
 /**
- * One continuous-scheduler decode step (shared {@code forwardBatch}).
+ * One continuous-scheduler engine step (shared decode {@code forwardBatch}
+ * and optional mixed prefill ubatch chunks).
  */
 @Name("juno.ContinuousStep")
 @Label("Continuous Step")
-@Description("One shared decode step of the continuous running set.")
+@Description("One shared engine step of the continuous running set.")
 @Category({ "Juno", "Inference" })
 @StackTrace(false)
 public final class ContinuousStepEvent extends Event {
@@ -39,6 +40,14 @@ public final class ContinuousStepEvent extends Event {
 	@Label("Decode Batch")
 	@Description("Requests included in this forwardBatch call.")
 	public int decodeBatchSize;
+
+	@Label("Prefill Chunks")
+	@Description("Prefill ubatch chunks executed in this step.")
+	public int prefillChunks;
+
+	@Label("Prefill Tokens")
+	@Description("Prompt tokens evaluated across prefill chunks this step.")
+	public int prefillTokens;
 
 	@Label("Admitted")
 	@Description("Requests admitted since the previous step.")

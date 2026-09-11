@@ -49,7 +49,42 @@ Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). T
 | Concurrent SSE | mean TTFT ≈ **6.4 s**, TPOT ≈ **208 ms**; `ContinuousStep` max_decode_batch=**8**, shared_steps=**64** (proof **PASS**) |
 | Prefix (multi-turn session) | lookups=8, hits=7, hit rate **0.875**; trie survives across turns |
 
-P1 phase gate “continuous SSE beats static”: **unmet** on synchronized arrival (honest). Next Infra = mixed chunked prefill.
+P1 phase gate “continuous SSE beats static”: **unmet** on synchronized arrival (honest).
+
+## Mixed chunked prefill (continuous)
+
+**Plan:** [`infra-plan/PLAN-Infra-Tier16.md`](infra-plan/PLAN-Infra-Tier16.md) (P1 step 4 — **feature complete**).
+
+**What:** Under `--schedule continuous`, admit no longer blocks on full prompt eval.
+Remaining prompt advances in `--prefill-batch` ubatch chunks mixed into the same
+engine steps as decode; decode is preferred when the step slot budget
+(`--parallel` cap) is full. Static / single-request `--prefill-batch` unchanged.
+Bake-off baseline: `-Djuno.continuous.mixedPrefill=false` (admit-time full prefill).
+
+**Bake-off:** [`perf-compare/20260911T204721Z-mixed-prefill/`](perf-compare/20260911T204721Z-mixed-prefill/)
+via `scripts/performance-tests/compare-mixed-prefill.sh --gpu`
+(TinyLlama Q4_K_M · n_prompt=256 · 3 shorts · prefill-batch=32 · parallel=8).
+
+| Metric | mixed (default) | admit-time baseline | mixed/admit |
+|--------|----------------:|--------------------:|------------:|
+| Short mean TTFT ms | 4552 | 13929 | **0.327×** |
+| Short mean TPOT ms | 929 | 189 | 4.9× (shared-step tradeoff) |
+| Short max TTFT ms | 4562 | 13938 | — |
+| JFR `prefill_chunks` | 12 | — | proof **PASS** |
+
+**Short-decode latency bound (this SKU/recipe):** short TTFT max **4562 ms** under
+mixed load; re-run gate ≤ **1.25×** that max (**≤ 5702 ms**).
+
+**Cross-feature smoke:** [`target/tier16-smoke/20260911T205500Z/`](../target/tier16-smoke/20260911T205500Z/)
+(`ContinuousStep.prefill_chunks=6`, `max_decode_batch=2`).
+
+**§2 bake-off:** [`perf-compare/20260911T204900Z`](perf-compare/20260911T204900Z/) (`--gpu --vector 0`). Failures=0.
+
+**LoRA §2:** [`perf-compare/20260911T205447Z-lora`](perf-compare/20260911T205447Z-lora/) vs `release-0.1.2` — status **ok**. Train **1.00×**; wall playback tps **0.86×** (≥0.80).
+
+**Status:** feature complete.
+
+## Continuous batching — prior smoke / §2
 
 **Cross-feature smoke** ([`target/tier15-smoke/20260911T200500Z/`](../target/tier15-smoke/20260911T200500Z/)):
 
@@ -60,9 +95,9 @@ P1 phase gate “continuous SSE beats static”: **unmet** on synchronized arriv
 | `x_juno_loras` under continuous | HTTP 400 fail-closed |
 | `juno lora` + continuous | REPL WARNING: continuous is a no-op for train |
 
-**§2 bake-off:** [`perf-compare/20260911T195008Z`](perf-compare/20260911T195008Z/) (`--gpu --vector 0`). Failures=0; TinyLlama/Qwen/Phi-3.5 ≈ **0.15–0.22×**; mistral ≈ **0.013×**.
+**§2 bake-off (continuous landing):** [`perf-compare/20260911T195008Z`](perf-compare/20260911T195008Z/). Failures=0; TinyLlama/Qwen/Phi-3.5 ≈ **0.15–0.22×**; mistral ≈ **0.013×**.
 
-**LoRA §2:** [`perf-compare/20260911T195711Z-lora`](perf-compare/20260911T195711Z-lora/) vs `release-0.1.2` — status **ok**. Train **0.98×**; wall playback tps **0.88×** (≥0.80).
+**LoRA §2 (continuous landing):** [`perf-compare/20260911T195711Z-lora`](perf-compare/20260911T195711Z-lora/) vs `release-0.1.2` — status **ok**. Train **0.98×**; wall playback tps **0.88×** (≥0.80).
 
 **Status:** feature complete (P1 SSE-beats-static gate unmet).
 

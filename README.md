@@ -31,9 +31,12 @@ Features:
 ### Continuous batching
 
 - `--schedule continuous` (`JUNO_SCHEDULE`): local / in-process running-set
-  batching so overlapping requests (including SSE) share decode steps. Default
-  remains `static`. Cluster launchers auto-fallback to `static`. Bake-off:
-  `docs/perf-compare/20260911T194430Z-continuous/`. See `docs/howto.md`.
+  batching so overlapping requests (including SSE) share engine steps. Long
+  prompts advance in `--prefill-batch` chunks mixed with decode; decode wins
+  when the step is full. Default remains `static`. Cluster launchers
+  auto-fallback to `static`. Bake-offs:
+  `docs/perf-compare/20260911T194430Z-continuous/`,
+  `docs/perf-compare/20260911T204721Z-mixed-prefill/`. See `docs/howto.md`.
 
 ### Block KV / dual path
 

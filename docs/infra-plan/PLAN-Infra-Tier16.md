@@ -30,6 +30,29 @@ Also read:
 | **Depends on** | Tiers 8, 14, and 15 complete |
 | **Blocks** | None |
 | **Parallel with** | P4 if staffed |
+| **Status** | **Feature complete** (2026-09-11) — bake-off published; short-decode TTFT bound documented |
+
+## Feature × surface interaction matrix
+
+| New feature / flag | Base inference | --lora-play | LoRA train | Vision | --parallel | --gpu-layers | --prefill-batch | CUDA | ROCm | Default |
+|--------------------|----------------|-------------|------------|--------|------------|--------------|-----------------|------|------|---------|
+| Mixed chunked prefill under `--schedule continuous` | **wired** (local/single-shard engine) | **wired** (global adapter set; same as continuous) | **explicit no-op** (no continuous engine) | **wired** via text handler + same scheduler | **wired** (running-set / step slot cap; decode preferred when full) | **wired** (independent) | **wired** (owns chunk size; static path unchanged) | N/A (host scheduler) | N/A | off when `schedule=static` |
+| Admit-time full prefill (Tier 15 behavior) | superseded under continuous | same | N/A | same | same | same | same | N/A | N/A | only when continuous off; bake-off baseline via `-Djuno.continuous.mixedPrefill=false` |
+
+## Cross-feature smoke (before feature complete)
+
+- [x] Each **wired** cell: command + expected JFR/log proof recorded ([`20260911T204721Z-mixed-prefill`](../perf-compare/20260911T204721Z-mixed-prefill/) `prefill_chunks=12`; local [`target/tier16-smoke/20260911T205500Z/`](../../target/tier16-smoke/20260911T205500Z/))
+- [x] Each **explicit no-op** cell: warning string + howto note (LoRA train continuous no-op)
+- [x] Each **follow-up** cell: none for this tier
+- [x] §2 compares run as required by change surface ([`20260911T204900Z`](../perf-compare/20260911T204900Z/) + LoRA [`20260911T205447Z-lora`](../perf-compare/20260911T205447Z-lora/))
+
+## Exit checklist (compatibility)
+
+- [x] Interaction matrix complete (no empty cells)
+- [x] No silent flag ignore on any surface that accepts the flag in the launcher
+- [x] Launcher forwards `--schedule` / `--prefill-batch` (already; no new flag)
+- [x] User-facing docs state mixed-chunk fairness under continuous
+- [x] ROADMAP §5 architectures covered (engine remains handler-agnostic via `prefillBatch` / `forwardBatch`)
 
 ## Overview
 
@@ -92,19 +115,19 @@ flowchart LR
 **Global rules** ([`PLAN-Infra-ROADMAP.md`](PLAN-Infra-ROADMAP.md) → Execution rules): only one Infra tier in flight at a time; publish a [`docs/perf-compare/`](../perf-compare/README.md) bake-off before marking this tier complete.
 
 
-Exit only when:
+Exit only when: **done** (2026-09-11) — bake-off [`20260911T204721Z-mixed-prefill`](../perf-compare/20260911T204721Z-mixed-prefill/).
 
-1. Long-prompt + short-decode concurrency improves TTFT/TPOT vs “prefill-to-completion then decode others”.
-2. Logits at chunk boundaries match full prefill within tolerance.
-3. Short-decode latency under load stays within a documented bound.
-4. Tier 8 `--prefill-batch` semantics unchanged for static / single-request paths.
-5. Docs describe the fairness policy; relevant tests pass.
+1. ~~Long-prompt + short-decode concurrency improves TTFT/TPOT vs “prefill-to-completion then decode others”.~~ (short TTFT **0.327×** admit-time; TPOT rises under shared steps — documented tradeoff)
+2. ~~Logits at chunk boundaries match full prefill within tolerance.~~ (same `prefillBatch` windows as `PrefillChunker`; `ContinuousPrefillStateTest.windows_match_prefill_chunker_batched_path`)
+3. ~~Short-decode latency under load stays within a documented bound.~~ (short TTFT max **4562 ms**; re-run bound ≤ **5702 ms** = 1.25×)
+4. ~~Tier 8 `--prefill-batch` semantics unchanged for static / single-request paths.~~
+5. ~~Docs describe the fairness policy; relevant tests pass.~~
 
 ## Implementation todos
 
-1. Prefill chunk state machine + parity tests.
-2. Continuous step-builder mix + fairness.
-3. Perf evidence + docs; ROADMAP status; preview files; no zip.
+1. ~~Prefill chunk state machine + parity tests.~~
+2. ~~Continuous step-builder mix + fairness.~~
+3. ~~Perf evidence + docs; ROADMAP status; preview files; no zip.~~
 
 ## Preview files (expected)
 

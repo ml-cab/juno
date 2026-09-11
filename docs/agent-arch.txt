@@ -48,6 +48,9 @@ Module dependency (excerpt):
         ServeSchedulePolicy — cluster auto-fallback from continuous to static;
         ContinuousBatchEngine / ContinuousStepEvent / ContinuousLoraPolicy —
         local running-set loop (SSE shares forwardBatch; x_juno_loras fail-closed);
+        ContinuousPrefillState / ContinuousMixedStepPolicy — under continuous,
+        long prompts emit --prefill-batch ubatch chunks mixed with decode;
+        decode preferred when the step slot budget is full;
         GET /v1/cluster/health exposes schedule + prefixLookups/Hits/HitRate
         coordinator depends on node
   juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,

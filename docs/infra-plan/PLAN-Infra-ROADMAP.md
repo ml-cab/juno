@@ -86,7 +86,7 @@ Infra tier numbers (e.g. `Tier 5`, `Tiers 14–16`) are planning identifiers ins
 
 Name the **feature, flag, or API** — not the planning tier that delivered it. When cross-linking planning work, link `docs/infra-plan/PLAN-Infra-TierN.md` or ROADMAP phase steps; do not copy tier labels into shipped surfaces.
 
-**Exceptions:** `docs/infra-plan/`**; tier/phase status tables in this ROADMAP; `docs/lora-plan/**` for LoRA tier labels (separate track).
+**Exceptions:** `docs/infra-plan/`**; tier/phase status tables in this ROADMAP; `docs/lora-plan/`** for LoRA tier labels (separate track).
 
 ### 5. All supported models
 
@@ -133,28 +133,31 @@ See also `[PLAN-Infra-SUPPORTED-MODELS.md](PLAN-Infra-SUPPORTED-MODELS.md)`.
 **Rule:** Before implementing a tier or parallel-track change that adds a **CLI/env flag**, **MatVec / residency path**, or **scheduler mode**, the tier (or track) plan **must** include a **feature × product-surface interaction matrix** (see [Tier plan template](#tier-plan-template-required-sections)). Every cell must be one of:
 
 
-| Cell label | Meaning |
-|------------|---------|
-| **wired** | Feature is implemented on that surface; §2/§6 smoke proves it (JFR backend label, policy log, or equivalent) |
+| Cell label         | Meaning                                                                                                                                         |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **wired**          | Feature is implemented on that surface; §2/§6 smoke proves it (JFR backend label, policy log, or equivalent)                                    |
 | **explicit no-op** | Feature is intentionally ignored on that surface; **startup warning** (or help text) says so; user-facing `docs/howto.md` states the limitation |
-| **fail closed** | Combination is rejected or hard-errors (preferred when silent wrong path would corrupt train/play) |
-| **follow-up** | Deferred with a named plan link and owner phase; **not** claimed in howto/CHANGELOG as working |
+| **fail closed**    | Combination is rejected or hard-errors (preferred when silent wrong path would corrupt train/play)                                              |
+| **follow-up**      | Deferred with a named plan link and owner phase; **not** claimed in howto/CHANGELOG as working                                                  |
+
 
 **No silent ignore.** If the user sets the flag and the active handler/path cannot honor it, the process must **warn or fail** — never succeed while implying acceleration that did not run.
 
 **Canonical product surfaces** (extend the matrix if the tier adds a new mode):
 
-| Surface | Typical entry |
-|---------|----------------|
-| Base text inference | `LlamaTransformerHandler` / peer handlers, no adapters |
-| `--lora-play` / inference overlay | `LoraTrainableHandler` (+ Phi3/Qwen LoRA handlers) |
+
+| Surface                               | Typical entry                                              |
+| ------------------------------------- | ---------------------------------------------------------- |
+| Base text inference                   | `LlamaTransformerHandler` / peer handlers, no adapters     |
+| `--lora-play` / inference overlay     | `LoraTrainableHandler` (+ Phi3/Qwen LoRA handlers)         |
 | LoRA train (`juno lora` / train REPL) | Same LoRA handlers; forward **and** transpose / microbatch |
-| Vision I2T | `VisionAwareForwardPassHandler` / `/v1/vision/chat` |
-| `--parallel` static batch | `forwardMultiDecode` / `BatchConfig` |
-| `--gpu-layers` / partial offload | Hybrid residency |
-| `--prefill-batch` / prefill mode | Chunked vs single prefill |
-| CUDA vs ROCm | Vendor backends |
-| local vs cluster | In-process vs forked nodes |
+| Vision I2T                            | `VisionAwareForwardPassHandler` / `/v1/vision/chat`        |
+| `--parallel` static batch             | `forwardMultiDecode` / `BatchConfig`                       |
+| `--gpu-layers` / partial offload      | Hybrid residency                                           |
+| `--prefill-batch` / prefill mode      | Chunked vs single prefill                                  |
+| CUDA vs ROCm                          | Vendor backends                                            |
+| local vs cluster                      | In-process vs forked nodes                                 |
+
 
 **Cross-feature smoke (§2 step 4):** For each **wired** cell that combines the new feature with an existing flag, run a short repro and record evidence in `docs/performance.md` or the compare `INDEX.md`, e.g.:
 
@@ -162,14 +165,13 @@ See also `[PLAN-Infra-SUPPORTED-MODELS.md](PLAN-Infra-SUPPORTED-MODELS.md)`.
 - Startup log line naming the active policy (same spirit as `VectorQuantKernels.policySummary()`)
 - Correctness gate where applicable (LoRA recall, vision non-empty reply, greedy token identity)
 
-**Llama-only / surface-only increments:** Allowed only when the tier doc lists remaining surfaces as **follow-up** with a plan link **before** feature-complete claims that mention the flag in user-facing docs. Example: Tier 13B MMQ on Llama text inference + [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md) for `--lora-play`.
+**Llama-only / surface-only increments:** Allowed only when the tier doc lists remaining surfaces as **follow-up** with a plan link **before** feature-complete claims that mention the flag in user-facing docs. Example: Tier 13B MMQ on Llama text inference + `[PLAN-Infra-LoRA-MMQ.md](PLAN-Infra-LoRA-MMQ.md)` for `--lora-play`.
 
 **Applies to parallel tracks** the same way (Vision, Vector SIMD, LoRA adjacency plans).
 
 ## Tier plan template (required sections)
 
 Every new or substantially revised `PLAN-Infra-TierN.md` (and parallel-track plans under `docs/infra-plan/` that touch inference) must include the sections below in addition to overview / implementation / exit gate. Copy the skeleton into the tier doc and fill cells — do not leave blanks.
-
 
 ```markdown
 ## Feature × surface interaction matrix
@@ -234,24 +236,24 @@ Parallel (non-blocking): Vision I2T · LoRA · model E2E
 ## Feature catalog (tier number ≠ execution order)
 
 
-| Tier | Doc                    | Domain                                  | Phase                    | Status                                                                           |
-| ---- | ---------------------- | --------------------------------------- | ------------------------ | -------------------------------------------------------------------------------- |
-| 1    | `PLAN-Infra-Tier1.md`  | Concurrent batch serving (`--parallel`) | P0 step 2                | **Feature complete**; multi-arch `forwardMultiDecode` landed; P0 phase gate open |
-| 2    | `PLAN-Infra-Tier2.md`  | OpenAI field parity                     | P2                       | Pending                                                                          |
-| 3    | `PLAN-Infra-Tier3.md`  | GBNF + JSON Schema                      | P2                       | Pending                                                                          |
-| 4    | `PLAN-Infra-Tier4.md`  | Function calling / tools                | P2                       | Pending                                                                          |
-| 5    | `PLAN-Infra-Tier5.md`  | Hybrid `--gpu-layers` offload           | P0 step 2                | **Feature complete**; P0 gate unmet (mistral ~**0.026×** vs **0.15×**)           |
-| 6    | `PLAN-Infra-Tier6.md`  | Quantized KV cache (`q8_0`)             | P1 step 1                | **Feature complete** — [`20260910T170557Z`](../perf-compare/20260910T170557Z/) + LoRA [`20260910T180703Z-lora`](../perf-compare/20260910T180703Z-lora/); default `f16` unchanged |
-| 7    | `PLAN-Infra-Tier7.md`  | Chat template + HF download             | P3                       | Pending                                                                          |
-| 8    | `PLAN-Infra-Tier8.md`  | Prefill microbatching                   | P0 step 3                | **Feature complete**; CPU bake-off published; GPU re-run open                    |
-| 9    | `PLAN-Infra-Tier9.md`  | Ngram speculative decoding              | P4                       | Pending                                                                          |
-| 10   | `PLAN-Infra-Tier10.md` | Multi-adapter + GGUF LoRA interop       | P3                       | Pending                                                                          |
-| 11   | `PLAN-Infra-Tier11.md` | Embeddings API                          | P3                       | Pending                                                                          |
-| 12   | `PLAN-Infra-Tier12.md` | Draft-model speculation                 | P4                       | Pending                                                                          |
-| 13   | `PLAN-Infra-Tier13.md` | Fused quant / FlashAttn (gated)         | P0 (13A ✓, 13B); P5 (FA) | 13A complete; **13B feature complete (VRAM-fit ship)** — `--mmq` default off; speed ≥1.3× vs FP16 **deferred** to tile kernel; shared-activation `sgemvSameX` Phase 1 on Llama; LoRA play Phase 1 complete; bake-off [`20260910T025804Z`](../perf-compare/20260910T025804Z/) |
-| 14   | `PLAN-Infra-Tier14.md` | Block KV allocator                      | P1 step 2                | **Feature complete** — dual KV; gather-tax **PASS** ([`20260910T214300Z-gather-tax.md`](../perf-compare/20260910T214300Z-gather-tax.md)); bake-off [`20260910T222026Z`](../perf-compare/20260910T222026Z/) + LoRA [`20260910T221031Z-lora`](../perf-compare/20260910T221031Z-lora/); next = Tier 15 |
-| 15   | `PLAN-Infra-Tier15.md` | Continuous batching scheduler           | P1 step 3                | **Feature complete** — bake-off [`20260911T194430Z-continuous`](../perf-compare/20260911T194430Z-continuous/); §2 [`20260911T195008Z`](../perf-compare/20260911T195008Z/) + LoRA [`20260911T195711Z-lora`](../perf-compare/20260911T195711Z-lora/); P1 SSE-beats-static gate **unmet** on synchronized load; next = Tier 16 |
-| 16   | `PLAN-Infra-Tier16.md` | Mixed chunked prefill + decode          | P1 step 4                | Pending                                                                          |
+| Tier | Doc                    | Domain                                  | Phase                    | Status                                                                                                                                                                                                                                                                                                                      |
+| ---- | ---------------------- | --------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `PLAN-Infra-Tier1.md`  | Concurrent batch serving (`--parallel`) | P0 step 2                | **Feature complete**; multi-arch `forwardMultiDecode` landed; P0 phase gate open                                                                                                                                                                                                                                            |
+| 2    | `PLAN-Infra-Tier2.md`  | OpenAI field parity                     | P2                       | Pending                                                                                                                                                                                                                                                                                                                     |
+| 3    | `PLAN-Infra-Tier3.md`  | GBNF + JSON Schema                      | P2                       | Pending                                                                                                                                                                                                                                                                                                                     |
+| 4    | `PLAN-Infra-Tier4.md`  | Function calling / tools                | P2                       | Pending                                                                                                                                                                                                                                                                                                                     |
+| 5    | `PLAN-Infra-Tier5.md`  | Hybrid `--gpu-layers` offload           | P0 step 2                | **Feature complete**; P0 gate unmet (mistral ~**0.026×** vs **0.15×**)                                                                                                                                                                                                                                                      |
+| 6    | `PLAN-Infra-Tier6.md`  | Quantized KV cache (`q8_0`)             | P1 step 1                | **Feature complete** — `[20260910T170557Z](../perf-compare/20260910T170557Z/)` + LoRA `[20260910T180703Z-lora](../perf-compare/20260910T180703Z-lora/)`; default `f16` unchanged                                                                                                                                            |
+| 7    | `PLAN-Infra-Tier7.md`  | Chat template + HF download             | P3                       | Pending                                                                                                                                                                                                                                                                                                                     |
+| 8    | `PLAN-Infra-Tier8.md`  | Prefill microbatching                   | P0 step 3                | **Feature complete**; CPU bake-off published; GPU re-run open                                                                                                                                                                                                                                                               |
+| 9    | `PLAN-Infra-Tier9.md`  | Ngram speculative decoding              | P4                       | Pending                                                                                                                                                                                                                                                                                                                     |
+| 10   | `PLAN-Infra-Tier10.md` | Multi-adapter + GGUF LoRA interop       | P3                       | Pending                                                                                                                                                                                                                                                                                                                     |
+| 11   | `PLAN-Infra-Tier11.md` | Embeddings API                          | P3                       | Pending                                                                                                                                                                                                                                                                                                                     |
+| 12   | `PLAN-Infra-Tier12.md` | Draft-model speculation                 | P4                       | Pending                                                                                                                                                                                                                                                                                                                     |
+| 13   | `PLAN-Infra-Tier13.md` | Fused quant / FlashAttn (gated)         | P0 (13A ✓, 13B); P5 (FA) | 13A complete; **13B feature complete (VRAM-fit ship)** — `--mmq` default off; speed ≥1.3× vs FP16 **deferred** to tile kernel; shared-activation `sgemvSameX` Phase 1 on Llama; LoRA play Phase 1 complete; bake-off `[20260910T025804Z](../perf-compare/20260910T025804Z/)`                                                |
+| 14   | `PLAN-Infra-Tier14.md` | Block KV allocator                      | P1 step 2                | **Feature complete** — dual KV; gather-tax **PASS** (`[20260910T214300Z-gather-tax.md](../perf-compare/20260910T214300Z-gather-tax.md)`); bake-off `[20260910T222026Z](../perf-compare/20260910T222026Z/)` + LoRA `[20260910T221031Z-lora](../perf-compare/20260910T221031Z-lora/)`; next = Tier 15                         |
+| 15   | `PLAN-Infra-Tier15.md` | Continuous batching scheduler           | P1 step 3                | **Feature complete** — bake-off `[20260911T194430Z-continuous](../perf-compare/20260911T194430Z-continuous/)`; §2 `[20260911T195008Z](../perf-compare/20260911T195008Z/)` + LoRA `[20260911T195711Z-lora](../perf-compare/20260911T195711Z-lora/)`; P1 SSE-beats-static gate **unmet** on synchronized load; next = Tier 16 |
+| 16   | `PLAN-Infra-Tier16.md` | Mixed chunked prefill + decode          | P1 step 4                | **Feature complete** — bake-off [`20260911T204721Z-mixed-prefill`](../perf-compare/20260911T204721Z-mixed-prefill/); short TTFT **0.327×** admit-time; §2 [`20260911T204900Z`](../perf-compare/20260911T204900Z/) + LoRA [`20260911T205447Z-lora`](../perf-compare/20260911T205447Z-lora/) |
 
 
 Read and follow `models/CLAUDE.md` before implementing any tier. **Only one Infra tier may be in flight at a time** (see Execution rules). Each tier is test-first and must reach **feature complete** (exit checklist + published `[docs/perf-compare/](../perf-compare/README.md)` bake-off + **§6 interaction matrix**) before the next dependent Infra tier begins. Phase **gate met** is separate and may lag.
@@ -288,7 +290,7 @@ Prefill (pp) rows are **not** peer-comparable until compare script matches promp
 | Multi-adapter            | multi `-lora`                             | Multi-LoRA                             | Single `--lora-play`                                                                                                            | Tier 10; continuous × multi-LoRA = v1 policy below |
 | Training                 | Inference LoRA *playback* (GGUF adapters) | Multi-LoRA serving focus               | First-class train/merge (LoRA/rsLoRA/DoRA/QA-LoRA, GPU microbatch)                                                              | Keep Juno training edge                            |
 | Models                   | Broad arch + VLM coverage                 | Broad HF coverage                      | LLaMA-family + Phi-3 solid; **Vision I2T v1** (moondream / embedded llamafile) parallel track; Qwen/Gemma E2E under development | Model E2E + Vision track; not “full VLM catalog”   |
-| Kernels                  | FlashAttn / MMQ                           | Custom CUDA                            | Panama + cuBLAS/rocBLAS; **Vector SIMD** CPU track **feature complete**                                                                         | Tier 13 gated; SIMD track ≠ MMQ                    |
+| Kernels                  | FlashAttn / MMQ                           | Custom CUDA                            | Panama + cuBLAS/rocBLAS; **Vector SIMD** CPU track **feature complete**                                                         | Tier 13 gated; SIMD track ≠ MMQ                    |
 | Streaming under batch    | Slot / server dependent                   | Continuous + stream                    | Tier 1: SSE per-request only                                                                                                    | Tier 15: SSE shares continuous steps               |
 
 
@@ -299,14 +301,14 @@ Prefill (pp) rows are **not** peer-comparable until compare script matches promp
 These continue under their own plans/exit gates. They do **not** consume the “one Infra tier in flight” slot, but they **do** share Execution rules §2–§6 (perf publish, naming, all supported models, cross-feature matrix) when they touch inference code.
 
 
-| Track            | Plan / prompts                                                                                                                                            | Status                                                       | Note                                                                           |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| LoRA VRAM ladder | `[PLAN-LoRA-Tier11.md](../lora-plan/PLAN-LoRA-Tier11.md)`                                                                                                 | Active                                                       | `--lora-microbatch` + FP32→FP16→CPU                                            |
-| LoRA training    | `[PLAN-LoRA-ROADMAP.md](../lora-plan/PLAN-LoRA-ROADMAP.md)`                                                                                               | Tiers 1–10 done                                              | Infra MatVec/GPU changes still run `compare-lora.sh` (§2)                      |
-| LoRA MMQ (13B adjacency) | [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md)                                                                                                 | **Phase 1 complete** (playback-only)                     | Fused Q4_K under `--lora-play`; train explicit no-op + warn; not an Infra tier |
-| Model E2E        | `[model_support_summary.md](../model_support_summary.md)`                                                                                                 | Active                                                       | Qwen2/3, Gemma polish — owns arch quality; peer *marketing* waits on solid E2E |
-| **Vision I2T**   | `[PROMPT-Vision-Perf.md](PROMPT-Vision-Perf.md)`, `[PROMPT-Vision-Regression-Fix.md](PROMPT-Vision-Regression-Fix.md)`; docs `juno-documentation/part12/` | **In flight** (v1 shipped; regression hardening)             | See below — **not** an Infra tier                                              |
-| **Vector SIMD**  | [`PLAN-Infra-Vector-SIMD.md`](PLAN-Infra-Vector-SIMD.md); `VectorQuantKernels` / `SimdThreadPool`                                                         | **Feature complete** (policy + `--vector 0`/`1` bake-off)    | P0 step 4 done; next Infra = Tier 13B                                          |
+| Track                    | Plan / prompts                                                                                                                                            | Status                                                    | Note                                                                           |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| LoRA VRAM ladder         | `[PLAN-LoRA-Tier11.md](../lora-plan/PLAN-LoRA-Tier11.md)`                                                                                                 | Active                                                    | `--lora-microbatch` + FP32→FP16→CPU                                            |
+| LoRA training            | `[PLAN-LoRA-ROADMAP.md](../lora-plan/PLAN-LoRA-ROADMAP.md)`                                                                                               | Tiers 1–10 done                                           | Infra MatVec/GPU changes still run `compare-lora.sh` (§2)                      |
+| LoRA MMQ (13B adjacency) | `[PLAN-Infra-LoRA-MMQ.md](PLAN-Infra-LoRA-MMQ.md)`                                                                                                        | **Phase 1 complete** (playback-only)                      | Fused Q4_K under `--lora-play`; train explicit no-op + warn; not an Infra tier |
+| Model E2E                | `[model_support_summary.md](../model_support_summary.md)`                                                                                                 | Active                                                    | Qwen2/3, Gemma polish — owns arch quality; peer *marketing* waits on solid E2E |
+| **Vision I2T**           | `[PROMPT-Vision-Perf.md](PROMPT-Vision-Perf.md)`, `[PROMPT-Vision-Regression-Fix.md](PROMPT-Vision-Regression-Fix.md)`; docs `juno-documentation/part12/` | **In flight** (v1 shipped; regression hardening)          | See below — **not** an Infra tier                                              |
+| **Vector SIMD**          | `[PLAN-Infra-Vector-SIMD.md](PLAN-Infra-Vector-SIMD.md)`; `VectorQuantKernels` / `SimdThreadPool`                                                         | **Feature complete** (policy + `--vector 0`/`1` bake-off) | P0 step 4 done; next Infra = Tier 13B                                          |
 
 
 Infra Tiers 5–6 benefit from residency patterns in `LoraResidentWeights` / `GpuMatVec`, but do not require LoRA Tier 11 to start Tiers 1–4.
@@ -330,22 +332,22 @@ Infra Tiers 5–6 benefit from residency patterns in `LoraResidentWeights` / `Gp
 
 ### Vector SIMD (CPU kernels)
 
-**Plan:** [`PLAN-Infra-Vector-SIMD.md`](PLAN-Infra-Vector-SIMD.md).
+**Plan:** `[PLAN-Infra-Vector-SIMD.md](PLAN-Infra-Vector-SIMD.md)`.
 
 **Scope:** JDK Vector API path in `VectorQuantKernels` + row-parallel `SimdThreadPool` for CPU quantized MatVec (Q4_K / Q5_K / Q8_0 as wired). Compare-script `--vector 0|1` toggles `--add-modules jdk.incubator.vector` (scalar fallback when the module is absent).
 
 **This is P0 step 4** and a named parallel track — **not** “only re-run compare once.”
 
-**Policy (locked):** weight-stationary Q4_K/Q5_K/Q8_0 **accumulate** stays scalar; Q4_K/Q5_K dequant scalar; Q8_0 dequant Vector when self-probe passes; `VectorQuantKernels.dot` not on the weight-stationary hot path (vision-scale hang on narrow SPECIES). Recorded in `VectorQuantKernels.policySummary()` and [`docs/performance.md`](../performance.md).
+**Policy (locked):** weight-stationary Q4_K/Q5_K/Q8_0 **accumulate** stays scalar; Q4_K/Q5_K dequant scalar; Q8_0 dequant Vector when self-probe passes; `VectorQuantKernels.dot` not on the weight-stationary hot path (vision-scale hang on narrow SPECIES). Recorded in `VectorQuantKernels.policySummary()` and `[docs/performance.md](../performance.md)`.
 
 **Exit:**
 
 1. Unit / parity tests for Vector paths in use (Q8_0 dequant + `dot` API) and Q5_K weight-stationary regression bench — **done**.
-2. Published bake-off: `compare-llama-cpp.sh` `--vector 0` **vs** `--vector 1` — **done** ([`20260904T194612Z`](../perf-compare/20260904T194612Z/) / [`20260904T195731Z`](../perf-compare/20260904T195731Z/); Juno tg v1/v0 ≈ 0.99–1.03).
+2. Published bake-off: `compare-llama-cpp.sh` `--vector 0` **vs** `--vector 1` — **done** (`[20260904T194612Z](../perf-compare/20260904T194612Z/)` / `[20260904T195731Z](../perf-compare/20260904T195731Z/)`; Juno tg v1/v0 ≈ 0.99–1.03).
 3. Vision regression: hang fix + scalar Q4/Q5 accumulate; gate vs `47-vision` — **done**.
 4. No silent pathological slowdown at vision-scale B — scalar accumulate + common-pool `forEachRow` — **done**.
 
-**Status: Feature complete.** P0 Infra Tier 13 Phase B is **feature complete** (VRAM-fit); P1 Tier 6 is **feature complete**; P1 Tier 14 is **feature complete** (gather-tax PASS); P1 Tier 15 (continuous scheduler) is **feature complete** (P1 SSE-beats-static gate unmet on synchronized load).
+**Status: Feature complete.** P0 Infra Tier 13 Phase B is **feature complete** (VRAM-fit); P1 Tier 6 is **feature complete**; P1 Tier 14 is **feature complete** (gather-tax PASS); P1 Tier 15 (continuous scheduler) is **feature complete** (P1 SSE-beats-static gate unmet on synchronized load). P1 Tier 16 (mixed chunked prefill) is **feature complete**.
 
 **Does not replace Tier 13B** (GPU fused MMQ). SIMD improves CPU MatVec and long CPU prefills; 13B owns the resident-GPU decode gap.
 
@@ -650,14 +652,14 @@ Exit only when:
 
 Only if profiling shows attention or dequant-GEMM dominates. **Phase A complete:** bake-off JFR (2026-08-31) shows MatVec **>90%** of GPU decode → **go** for Phase B scoped to **fused Q4 MMQ** first; FlashAttn deferred until Tier 8 long-prefill baselines. See `[PLAN-Infra-PERF-ANALYSIS.md](PLAN-Infra-PERF-ANALYSIS.md)`.
 
-**Phase B (feature complete, amended gate):** `--mmq` ships as **VRAM-fit** packed Q4 residency (default **off**). Bake-off [`20260910T025804Z`](../perf-compare/20260910T025804Z/): Mistral ≈ **0.14×** llama (near P0 **0.15×** fit). Speed vs FP16-resident is **not** claimed (Phi-3.5 MMQ slower than FP16 on reference SKU); ≥1.3× tg is a **tile-kernel follow-on** exit, not required to mark 13B feature-complete. Shared-activation `sgemvSameX` Phase 1 reduces repeated H2D/sync on Llama QKV and gate/up.
+**Phase B (feature complete, amended gate):** `--mmq` ships as **VRAM-fit** packed Q4 residency (default **off**). Bake-off `[20260910T025804Z](../perf-compare/20260910T025804Z/)`: Mistral ≈ **0.14×** llama (near P0 **0.15×** fit). Speed vs FP16-resident is **not** claimed (Phi-3.5 MMQ slower than FP16 on reference SKU); ≥1.3× tg is a **tile-kernel follow-on** exit, not required to mark 13B feature-complete. Shared-activation `sgemvSameX` Phase 1 reduces repeated H2D/sync on Llama QKV and gate/up.
 
 Exit only when **one of**:
 
 - ship: VRAM-fit path with parity + bake-off + honest docs (met); **or** later tile kernel meets ≥1.3× decode / ≥1.5× long prefill; or
 - close: memo shows BLAS path sufficient; tier marked deferred without code.
 
-**§6:** `--mmq` interaction matrix in [`PLAN-Infra-Tier13.md`](PLAN-Infra-Tier13.md); LoRA play wired ([`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md)).
+**§6:** `--mmq` interaction matrix in `[PLAN-Infra-Tier13.md](PLAN-Infra-Tier13.md)`; LoRA play wired (`[PLAN-Infra-LoRA-MMQ.md](PLAN-Infra-LoRA-MMQ.md)`).
 
 **P0 gate contribution:** packed-Q4 fit helps mistral on 8 GiB; Phi-3.5 ≥ **0.5×** llama still needs faster MatVec (tile kernel and/or fuller device-resident activations).
 

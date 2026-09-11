@@ -139,6 +139,10 @@ final class JfrMetricsExtractor {
         int continuousSharedSteps = 0;
         int continuousMaxDecodeBatch = 0;
         int continuousMaxRunningSet = 0;
+        int continuousStepsWithPrefill = 0;
+        int continuousPrefillChunks = 0;
+        int continuousPrefillTokens = 0;
+        int continuousMaxPrefillChunks = 0;
 
         for (Path jfrFile : jfrFiles) {
             if (!Files.isRegularFile(jfrFile) || Files.size(jfrFile) == 0)
@@ -276,12 +280,20 @@ final class JfrMetricsExtractor {
                             continuousStepCount++;
                             int decodeBatch = ev.hasField("decodeBatchSize") ? ev.getInt("decodeBatchSize") : 0;
                             int runningSet = ev.hasField("runningSetSize") ? ev.getInt("runningSetSize") : 0;
+                            int prefillChunks = ev.hasField("prefillChunks") ? ev.getInt("prefillChunks") : 0;
+                            int prefillTokens = ev.hasField("prefillTokens") ? ev.getInt("prefillTokens") : 0;
                             if (decodeBatch >= 2)
                                 continuousSharedSteps++;
                             if (decodeBatch > continuousMaxDecodeBatch)
                                 continuousMaxDecodeBatch = decodeBatch;
                             if (runningSet > continuousMaxRunningSet)
                                 continuousMaxRunningSet = runningSet;
+                            if (prefillChunks > 0)
+                                continuousStepsWithPrefill++;
+                            continuousPrefillChunks += prefillChunks;
+                            continuousPrefillTokens += prefillTokens;
+                            if (prefillChunks > continuousMaxPrefillChunks)
+                                continuousMaxPrefillChunks = prefillChunks;
                         }
                         default -> { /* ignore JDK and other events */ }
                     }
@@ -383,6 +395,10 @@ final class JfrMetricsExtractor {
         m.put("juno.ContinuousStep.shared_steps", (double) continuousSharedSteps);
         m.put("juno.ContinuousStep.max_decode_batch", (double) continuousMaxDecodeBatch);
         m.put("juno.ContinuousStep.max_running_set", (double) continuousMaxRunningSet);
+        m.put("juno.ContinuousStep.steps_with_prefill", (double) continuousStepsWithPrefill);
+        m.put("juno.ContinuousStep.prefill_chunks", (double) continuousPrefillChunks);
+        m.put("juno.ContinuousStep.prefill_tokens", (double) continuousPrefillTokens);
+        m.put("juno.ContinuousStep.max_prefill_chunks", (double) continuousMaxPrefillChunks);
 
         return new MetricsSnapshot.ModelMetrics(model.getName(), model.getPath(), jfrName, m);
     }

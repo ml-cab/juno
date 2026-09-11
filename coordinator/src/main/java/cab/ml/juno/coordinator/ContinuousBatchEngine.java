@@ -18,6 +18,7 @@ package cab.ml.juno.coordinator;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.PriorityBlockingQueue;
@@ -31,18 +32,21 @@ import cab.ml.juno.tokenizer.ChatTemplateFormatter;
 import cab.ml.juno.tokenizer.Tokenizer;
 
 /**
- * Iteration-level running set: overlapping decode at different positions shares
- * {@code forwardBatch}. Prefill runs at admit time (mixed chunked prefill is a
- * later step). Stream and non-stream members are first-class.
+ * Iteration-level running set: overlapping decode and chunked prefill share
+ * engine steps. Fairness prefers decode when the step slot budget is full.
+ * Stream and non-stream members are first-class.
  */
 final class ContinuousBatchEngine {
 
 	private static final Logger log = Logger.getLogger(ContinuousBatchEngine.class.getName());
 	private static final String LORA_PLAY_PROPERTY = "juno.lora.play.path";
+	/** When {@code false}, admit runs full prefill (pre-mix baseline for bake-off). Default {@code true}. */
+	static final String MIXED_PREFILL_PROPERTY = "juno.continuous.mixedPrefill";
 
 	private final GenerationLoop loop;
 	private final int maxRunning;
 	private final long admitWindowMs;
+	private final boolean mixedPrefill;
 	private final PriorityBlockingQueue<Pending> waiting = new PriorityBlockingQueue<>();
 	private final List<Slot> running = new ArrayList<>();
 
@@ -59,6 +63,14 @@ final class ContinuousBatchEngine {
 		this.loop = loop;
 		this.maxRunning = maxRunning;
 		this.admitWindowMs = admitWindowMs;
+		this.mixedPrefill = mixedPrefillEnabled();
+		if (!mixedPrefill)
+			log.info("continuous mixed prefill disabled — admit-time full prefill (bake-off baseline)");
+	}
+
+	static boolean mixedPrefillEnabled() {
+		String raw = System.getProperty(MIXED_PREFILL_PROPERTY, "true");
+		return !"false".equalsIgnoreCase(raw.strip()) && !"0".equals(raw.strip());
 	}
 
 	void start() {
@@ -86,7 +98,7 @@ final class ContinuousBatchEngine {
 				drainAdmit();
 				if (running.isEmpty())
 					continue;
-				decodeStep();
+				engineStep();
 				coalesceAdmit();
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
@@ -120,7 +132,7 @@ final class ContinuousBatchEngine {
 
 	private void admit(Pending pending) {
 		try {
-			Slot slot = prefillsSlot(pending);
+			Slot slot = createSlot(pending);
 			running.add(slot);
 			admittedSinceLastStep++;
 		} catch (Exception e) {
@@ -129,7 +141,13 @@ final class ContinuousBatchEngine {
 		}
 	}
 
-	private Slot prefillsSlot(Pending pending) {
+	/**
+	 * Admit without blocking on full prefill when mixed mode is on — remaining
+	 * prompt work runs as ubatch chunks mixed into later engine steps. When
+	 * {@link #MIXED_PREFILL_PROPERTY} is {@code false}, runs admit-time full
+	 * prefill (bake-off baseline).
+	 */
+	private Slot createSlot(Pending pending) {
 		InferenceRequest request = pending.request();
 		Tokenizer tokenizer = loop.tokenizer();
 		KVCacheManager kvCache = loop.kvCache();
@@ -154,50 +172,113 @@ final class ContinuousBatchEngine {
 					+ ")");
 		}
 
-		int prefillSteps = promptIds.length - 1 - startPos;
 		pending.consumer().onPrefillStart(promptIds.length);
-		if (prefillSteps > 0) {
-			PrefillChunker.run(pipeline, loop.prefillMode(), loop.prefillBatchSize(), kvKey, promptIds, startPos);
+		ContinuousPrefillState prefill;
+		if (!mixedPrefill) {
+			int prefillSteps = promptIds.length - 1 - startPos;
+			if (prefillSteps > 0) {
+				PrefillChunker.run(pipeline, loop.prefillMode(), loop.prefillBatchSize(), kvKey, promptIds, startPos);
+			}
+			pending.consumer().onPrefillComplete();
+			prefill = ContinuousPrefillState.start(promptIds, promptIds.length > 0 ? promptIds.length - 1 : 0);
+		} else {
+			prefill = ContinuousPrefillState.start(promptIds, startPos);
 		}
-		pending.consumer().onPrefillComplete();
 
 		int decodeBase = promptIds.length > 0 ? promptIds.length - 1 : 0;
 		Slot slot = new Slot(request, pending.consumer(), pending.future(), Instant.now(), kvKey, hasSession,
-				promptIds.clone(), promptIds.length, decodeBase, hadCacheHit);
+				promptIds.clone(), promptIds.length, decodeBase, hadCacheHit, prefill);
 		slot.stream = tokenizer.openStreamContext();
+		if (prefill.isComplete()) {
+			slot.phase = Phase.DECODE;
+			if (mixedPrefill)
+				pending.consumer().onPrefillComplete();
+		}
 		return slot;
 	}
 
-	private void decodeStep() {
-		List<Slot> batch = new ArrayList<>(running.size());
-		for (Slot s : running) {
-			if (s.generated.size() < s.request.samplingParams().maxTokens())
-				batch.add(s);
+	private void engineStep() {
+		ContinuousMixedStepPolicy.Plan<Slot> plan = ContinuousMixedStepPolicy.plan(running, maxRunning,
+				loop.prefillBatchSize(), Slot::isDecode, s -> s.prefill.remainingTokens());
+
+		int admitted = admittedSinceLastStep;
+		admittedSinceLastStep = 0;
+
+		int prefillChunks = runPrefillChunks(plan.prefill());
+		List<Slot> justFinished = runDecode(plan.decode());
+		retireFinished(justFinished);
+
+		ContinuousStepEvent ev = new ContinuousStepEvent();
+		ev.runningSetSize = running.size() + justFinished.size();
+		ev.decodeBatchSize = plan.decode().size();
+		ev.prefillChunks = prefillChunks;
+		ev.prefillTokens = plan.prefill().stream().mapToInt(ContinuousMixedStepPolicy.PrefillWork::tokenBudget).sum();
+		ev.admitted = admitted;
+		ev.retired = justFinished.size();
+		ev.commit();
+	}
+
+	private int runPrefillChunks(List<ContinuousMixedStepPolicy.PrefillWork<Slot>> works) {
+		if (works.isEmpty())
+			return 0;
+		InferencePipeline pipeline = loop.pipeline();
+		PrefillMode mode = loop.prefillMode();
+		int done = 0;
+		for (ContinuousMixedStepPolicy.PrefillWork<Slot> work : works) {
+			Slot s = work.member();
+			ContinuousPrefillState.Chunk chunk = s.prefill.nextChunk(work.tokenBudget());
+			if (chunk.isEmpty())
+				continue;
+			runOneChunk(pipeline, mode, s, chunk);
+			s.prefill.advance(chunk.tokenCount());
+			done++;
+			if (s.prefill.isComplete()) {
+				s.phase = Phase.DECODE;
+				s.consumer.onPrefillComplete();
+			}
 		}
-		if (batch.isEmpty()) {
-			retireFinished(List.of());
+		return done;
+	}
+
+	private static void runOneChunk(InferencePipeline pipeline, PrefillMode mode, Slot slot,
+			ContinuousPrefillState.Chunk chunk) {
+		if (mode == PrefillMode.SINGLE) {
+			for (int i = 0; i < chunk.tokenCount(); i++) {
+				int pos = chunk.startPos() + i;
+				int[] slice = Arrays.copyOfRange(slot.allTokens, 0, pos + 1);
+				pipeline.forward(slot.kvKey, slice, pos);
+			}
 			return;
 		}
+		pipeline.prefillBatch(slot.kvKey, chunk.tokens(), chunk.startPos());
+	}
 
+	private List<Slot> runDecode(List<Slot> batch) {
+		if (batch.isEmpty())
+			return List.of();
+
+		List<Slot> active = new ArrayList<>(batch.size());
 		List<String> ids = new ArrayList<>(batch.size());
 		List<int[]> toks = new ArrayList<>(batch.size());
 		List<Integer> pos = new ArrayList<>(batch.size());
 		for (Slot s : batch) {
+			if (s.generated.size() >= s.request.samplingParams().maxTokens())
+				continue;
+			active.add(s);
 			ids.add(s.kvKey);
 			toks.add(s.allTokens);
 			pos.add(s.decodeBase + s.generated.size());
 		}
-
-		int admitted = admittedSinceLastStep;
-		admittedSinceLastStep = 0;
+		if (active.isEmpty())
+			return List.of();
 
 		float[][] logitsBatch = loop.pipeline().forwardBatch(ids, toks, pos);
 		Sampler sampler = loop.sampler();
 		Tokenizer tokenizer = loop.tokenizer();
 
 		List<Slot> justFinished = new ArrayList<>();
-		for (int j = 0; j < batch.size(); j++) {
-			Slot s = batch.get(j);
+		for (int j = 0; j < active.size(); j++) {
+			Slot s = active.get(j);
 			float[] logits = logitsBatch[j];
 			int[] historyArr = s.generated.stream().mapToInt(Integer::intValue).toArray();
 			int nextToken = sampler.sample(logits, s.request.samplingParams(), historyArr);
@@ -233,15 +314,7 @@ final class ContinuousBatchEngine {
 				}
 			}
 		}
-
-		retireFinished(justFinished);
-
-		ContinuousStepEvent ev = new ContinuousStepEvent();
-		ev.runningSetSize = running.size() + justFinished.size();
-		ev.decodeBatchSize = batch.size();
-		ev.admitted = admitted;
-		ev.retired = justFinished.size();
-		ev.commit();
+		return justFinished;
 	}
 
 	private void retireFinished(List<Slot> finished) {
@@ -295,6 +368,10 @@ final class ContinuousBatchEngine {
 		}
 	}
 
+	private enum Phase {
+		PREFILL, DECODE
+	}
+
 	private static final class Slot {
 		final InferenceRequest request;
 		final TokenConsumer consumer;
@@ -306,14 +383,16 @@ final class ContinuousBatchEngine {
 		final int promptLen;
 		final int decodeBase;
 		final boolean hadCacheHit;
+		final ContinuousPrefillState prefill;
 		final List<Integer> generated = new ArrayList<>();
 		final EosOutputFilter eosFilter = new EosOutputFilter();
 		Tokenizer.StreamContext stream;
 		GenerationResult.StopReason reason = GenerationResult.StopReason.MAX_TOKENS;
+		Phase phase;
 
 		Slot(InferenceRequest request, TokenConsumer consumer, CompletableFuture<GenerationResult> future,
 				Instant start, String kvKey, boolean hasSession, int[] allTokens, int promptLen, int decodeBase,
-				boolean hadCacheHit) {
+				boolean hadCacheHit, ContinuousPrefillState prefill) {
 			this.request = request;
 			this.consumer = consumer;
 			this.future = future;
@@ -324,6 +403,12 @@ final class ContinuousBatchEngine {
 			this.promptLen = promptLen;
 			this.decodeBase = decodeBase;
 			this.hadCacheHit = hadCacheHit;
+			this.prefill = prefill;
+			this.phase = prefill.isComplete() ? Phase.DECODE : Phase.PREFILL;
+		}
+
+		boolean isDecode() {
+			return phase == Phase.DECODE;
 		}
 	}
 }
