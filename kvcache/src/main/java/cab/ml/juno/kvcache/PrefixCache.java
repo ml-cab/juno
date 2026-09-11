@@ -18,6 +18,7 @@ package cab.ml.juno.kvcache;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -39,6 +40,8 @@ public final class PrefixCache {
 
 	private final TrieNode root = new TrieNode();
 	private final ReadWriteLock lock = new ReentrantReadWriteLock();
+	private final LongAdder lookups = new LongAdder();
+	private final LongAdder hits = new LongAdder();
 
 	/**
 	 * Find the longest cached prefix of the given token sequence.
@@ -47,6 +50,7 @@ public final class PrefixCache {
 	 * @return PrefixMatch with the matched length (0 if no match) and cache key
 	 */
 	public PrefixMatch findLongestPrefix(int[] tokens) {
+		lookups.increment();
 		if (tokens == null || tokens.length == 0)
 			return PrefixMatch.empty();
 
@@ -66,10 +70,31 @@ public final class PrefixCache {
 					lastCacheKey = current.cacheKey;
 			}
 
-			return matchLen > 0 && lastCacheKey != null ? new PrefixMatch(matchLen, lastCacheKey) : PrefixMatch.empty();
+			PrefixMatch match = matchLen > 0 && lastCacheKey != null
+					? new PrefixMatch(matchLen, lastCacheKey)
+					: PrefixMatch.empty();
+			if (match.isHit())
+				hits.increment();
+			return match;
 		} finally {
 			lock.readLock().unlock();
 		}
+	}
+
+	/** Total {@link #findLongestPrefix} calls, including empty inputs. */
+	public long lookupCount() {
+		return lookups.sum();
+	}
+
+	/** Lookups that returned {@link PrefixMatch#isHit()}. */
+	public long hitCount() {
+		return hits.sum();
+	}
+
+	/** {@code hits / lookups}, or 0 when no lookups. */
+	public double hitRate() {
+		long n = lookups.sum();
+		return n == 0 ? 0.0 : (double) hits.sum() / n;
 	}
 
 	/**

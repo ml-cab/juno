@@ -28,8 +28,46 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260910T214300Z-gather-tax.md`](20260910T214300Z-gather-tax.md) | CPU gather-tax (post page-bulk F16; gate PASS) | gather % of attn | markdown report |
 | [`20260910T221031Z-lora`](20260910T221031Z-lora/) | GPU LoRA train-qa + playback (post block-KV dual path) | train ms / playback tps | [INDEX](20260910T221031Z-lora/INDEX.md) |
 | [`20260910T222026Z`](20260910T222026Z/) | GPU default path (post block-KV dual path, `--schedule` default static) | JFR pp/tg | [INDEX](20260910T222026Z/INDEX.md) |
+| [`20260911T194430Z-continuous`](20260911T194430Z-continuous/) | GPU continuous vs static (TPS / SSE TTFT-TPOT / prefix) | agg tg + JFR ContinuousStep | [INDEX](20260911T194430Z-continuous/INDEX.md) |
+| [`20260911T195008Z`](20260911T195008Z/) | GPU default path (post continuous landing, `--schedule` default static) | JFR pp/tg | [INDEX](20260911T195008Z/INDEX.md) |
+| [`20260911T195711Z-lora`](20260911T195711Z-lora/) | GPU LoRA train-qa + playback (post continuous) | train ms / playback tps | [INDEX](20260911T195711Z-lora/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
+
+## Continuous vs static bake-off — `20260911T194430Z-continuous`
+
+TinyLlama Q4_K_M · GPU · 8 sessions · max_tokens=64 · `compare-schedule.sh`.
+
+| Workload | continuous | static | Notes |
+|----------|-----------:|-------:|-------|
+| Aggregate tg t/s | 25.57 | 29.66 | continuous **0.86×** synchronized blocking |
+| SSE mean TTFT ms | 6414 | 5136 | ContinuousStep max_decode_batch=8, shared_steps=64 |
+| SSE mean TPOT ms | 208 | 168 | shared-step proof **PASS** |
+| Prefix hit rate | 0.875 | 0.875 | multi-turn `x_juno_session_id`; 7/8 hits |
+
+P1 “continuous SSE beats static” gate: **unmet** on this synchronized recipe (honest).
+
+## Inference regression — `20260911T195008Z`
+
+`compare-llama-cpp.sh --gpu --vector 0`. Failures=0. Qwen2.5 re-measured alone after first matrix pass hit CPU MatVec (VRAM contention).
+
+| Model | llama tg | Juno tg | Juno/llama |
+|-------|---------:|--------:|-----------:|
+| tinyllama-1.1b Q4_K_M | 168.1 | 25.8 | 0.15 |
+| qwen2.5-3b Q4_K_M | 62.7 | 12.3 | 0.20 |
+| Phi-3.5-mini Q4_K_M | 55.7 | 12.5 | 0.22 |
+| mistral-7b Q4_K_M | 34.2 | 0.45 | 0.013 |
+
+## LoRA train-qa regression — `20260911T195711Z-lora`
+
+Scenario: TinyLlama Q4_K_M · `/train-qa` *What is your name?* → *My name is Juno* · loss target 1.2 · playback temperature 0.
+
+| ref | commit | train total ms | ms/pass | passes | playback tps (wall) | recall |
+|-----|--------|---------------:|--------:|-------:|--------------------:|:------:|
+| release-0.1.2 | 51a3b90 | 51,000 | 3,400 | 15 | 11.9 | ✓ |
+| HEAD | 57839dd | 50,000 | 3,333 | 15 | 10.6 | ✓ |
+
+**Current vs release-0.1.2:** train wall **0.98×**; playback wall tps **0.88×** (≥0.80 gate). Status **ok**.
 
 ## Quantized KV regression — `20260910T170557Z`
 

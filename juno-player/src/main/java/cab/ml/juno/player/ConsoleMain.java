@@ -328,6 +328,19 @@ public final class ConsoleMain {
 				loraPath = deriveLoraPath(modelPath);
 		}
 
+		cab.ml.juno.kvcache.ServeScheduleOptions requestedSchedule = schedule != null
+				? cab.ml.juno.kvcache.ServeScheduleOptions.parse(schedule)
+				: cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv();
+		boolean clusterLaunch = !localMode && !loraMode;
+		var scheduleResolution = cab.ml.juno.coordinator.ServeSchedulePolicy.resolve(requestedSchedule,
+				clusterLaunch ? cab.ml.juno.coordinator.ServeSchedulePolicy.Topology.CLUSTER
+						: cab.ml.juno.coordinator.ServeSchedulePolicy.Topology.LOCAL);
+		scheduleResolution.applyToEnv();
+		schedule = scheduleResolution.options().mode().name().toLowerCase();
+		if (scheduleResolution.fallback())
+			System.out.println(String.format("  %sWARNING: %s%s%n", Color.YELLOW, scheduleResolution.warning(),
+					Color.RESET));
+
 		System.setProperty("JUNO_USE_GPU", String.valueOf(useGpu));
 		if (gpuLayers != null)
 			System.setProperty(GpuLayerOffload.ENV_PROPERTY, gpuLayers);
@@ -448,22 +461,16 @@ public final class ConsoleMain {
 		sb.append(' ').append(types.policySummary());
 		if (sched.usesPagedKv()) {
 			sb.append(' ').append(page.policySummary());
-			sb.append(" (paged KV; continuous batch engine is a follow-up)");
-			int p = parallel != null ? parallel : 1;
-			if (p > 1) {
-				System.out.println(String.format(
-						"  %sWARNING: schedule=continuous with --parallel %d uses paged KV under static micro-batch; continuous scheduler is not enabled yet%s%n",
-						Color.YELLOW, p, Color.RESET));
-			}
-			if (!localMode && !loraMode) {
-				System.out.println(String.format(
-						"  %sWARNING: schedule=continuous on cluster selects paged KV on each node; continuous scheduler is local/single-shard follow-up%s%n",
-						Color.YELLOW, Color.RESET));
-			}
+			sb.append(" (paged KV; continuous batching on local/single-shard)");
 		} else {
 			sb.append(" kv-page-size ignored (dense)");
 		}
 		System.out.println(String.format("  %s%s%s%n", Color.GREEN, sb, Color.RESET));
+		if (loraMode && sched.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.CONTINUOUS) {
+			System.out.println(String.format(
+					"  %sWARNING: schedule=continuous is a no-op for LoRA training (ephemeral float KV; no running-set engine)%s%n",
+					Color.YELLOW, Color.RESET));
+		}
 	}
 
 	private static void applyLoraEnvDefaults() {
@@ -801,11 +808,13 @@ public final class ConsoleMain {
 		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8× smaller vs float)");
 		System.out.println("  --cache-type-v f16|q8_0    V cache element type (default: f16)");
 		System.out.println("                             env JUNO_CACHE_TYPE_V");
-		System.out.println("  --schedule static|continuous  KV layout (default: static = dense; continuous = paged)");
-		System.out.println("                             env JUNO_SCHEDULE; continuous batching engine is a follow-up");
+		System.out.println("  --schedule static|continuous  Serving schedule (default: static = dense KV + static micro-batch;");
+		System.out.println("                             continuous = paged KV + running-set batching on local/single-shard.");
+		System.out.println("                             env JUNO_SCHEDULE. Cluster/TP/PP auto-falls back to static.");
 		System.out.println("  --kv-page-size N           Tokens per KV page when schedule=continuous (default: 16)");
 		System.out.println("                             env JUNO_KV_PAGE_SIZE; ignored under static (dense)");
-		System.out.println("  --parallel N               Static micro-batch size (default: 1, disabled)");
+		System.out.println("  --parallel N               Static micro-batch size (default: 1, disabled);");
+		System.out.println("                             under continuous, caps the running set (default cap 8 if N=1)");
 		System.out.println("                             env JUNO_PARALLEL; recommend 8 for API servers");
 		System.out.println("  --batch-window-ms M        Batch collect window when parallel>1 (default: 50)");
 		System.out.println("                             env JUNO_BATCH_WINDOW_MS");
@@ -2010,7 +2019,8 @@ public final class ConsoleMain {
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
 				PrefillBatchOptions.resolve(prefillBatch).chunkSize());
-		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig());
+		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig(),
+				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
@@ -2130,7 +2140,11 @@ public final class ConsoleMain {
 	}
 
 	private static BatchConfig resolveBatchConfig() {
-		return ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig();
+		BatchConfig batch = ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig();
+		if (cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv().mode()
+				== cab.ml.juno.kvcache.ServeScheduleOptions.Mode.CONTINUOUS)
+			return cab.ml.juno.coordinator.ServeSchedulePolicy.runningSetConfig(batch);
+		return batch;
 	}
 
 	private static GpuContext prepareGpuContext() {
@@ -2189,7 +2203,8 @@ public final class ConsoleMain {
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
 				PrefillBatchOptions.resolve(prefillBatch).chunkSize());
-		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig());
+		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig(),
+				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
 			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);

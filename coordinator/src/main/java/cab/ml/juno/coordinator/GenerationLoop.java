@@ -88,6 +88,30 @@ public final class GenerationLoop {
 		this.prefillBatchSize = prefillBatchSize;
 	}
 
+	Tokenizer tokenizer() {
+		return tokenizer;
+	}
+
+	Sampler sampler() {
+		return sampler;
+	}
+
+	InferencePipeline pipeline() {
+		return pipeline;
+	}
+
+	KVCacheManager kvCache() {
+		return kvCache;
+	}
+
+	PrefillMode prefillMode() {
+		return prefillMode;
+	}
+
+	int prefillBatchSize() {
+		return prefillBatchSize;
+	}
+
 	/**
 	 * Run batched generation for N requests simultaneously.
 	 *
@@ -242,7 +266,7 @@ public final class GenerationLoop {
 						active[i] = false;
 					} else {
 						generated[i].add(nextToken);
-						allTokens[i] = appendToken(allTokens[i], nextToken);
+						allTokens[i] = GenerationLoop.appendToken(allTokens[i], nextToken);
 					}
 				}
 			}
@@ -407,7 +431,7 @@ public final class GenerationLoop {
 			}
 
 			generatedIds.add(nextToken);
-			allTokens = appendToken(allTokens, nextToken);
+			allTokens = GenerationLoop.appendToken(allTokens, nextToken);
 		}
 		log.info("Decode: loop EXITED kvKey=" + kvKey + " tokensGenerated=" + generatedIds.size() + " stopReason="
 				+ stopReason);
@@ -480,7 +504,7 @@ public final class GenerationLoop {
 
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
-	private int[] appendToken(int[] tokens, int newToken) {
+	static int[] appendToken(int[] tokens, int newToken) {
 		int[] next = new int[tokens.length + 1];
 		System.arraycopy(tokens, 0, next, 0, tokens.length);
 		next[tokens.length] = newToken;

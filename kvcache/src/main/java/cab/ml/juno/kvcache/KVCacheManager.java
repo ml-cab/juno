@@ -205,4 +205,16 @@ public final class KVCacheManager {
 	public Optional<PagedKvArena> pagedArena() {
 		return Optional.ofNullable(pagedArena);
 	}
+
+	public long prefixLookups() {
+		return prefixCache.lookupCount();
+	}
+
+	public long prefixHits() {
+		return prefixCache.hitCount();
+	}
+
+	public double prefixHitRate() {
+		return prefixCache.hitRate();
+	}
 }

@@ -264,8 +264,11 @@ public final class JunoPlayer implements AutoCloseable {
 			var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache,
 					cab.ml.juno.coordinator.PrefillMode.BATCHED,
 					PrefillBatchOptions.resolve(prefillBatch).chunkSize());
-			var scheduler = new RequestScheduler(1000, loop,
-					ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig());
+			var schedule = cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv();
+			BatchConfig batch = ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig();
+			if (schedule.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.CONTINUOUS)
+				batch = cab.ml.juno.coordinator.ServeSchedulePolicy.runningSetConfig(batch);
+			var scheduler = new RequestScheduler(1000, loop, batch, schedule);
 
 			String filename = modelPath.getFileName().toString();
 			String inferenceModelId = ChatModelType.fromPath(modelPath.toString());

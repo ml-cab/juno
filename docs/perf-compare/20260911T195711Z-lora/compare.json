@@ -1,0 +1,36 @@
+{
+  "tool": "compare-lora",
+  "run_id": "20260911T195711Z",
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "backend": "gpu",
+  "use_jfr": true,
+  "baseline": {
+    "git_ref": "release-0.1.2",
+    "git_commit": "51a3b90",
+    "train_total_ms": 51000,
+    "train_ms_per_pass": 3400.000000,
+    "train_passes": 15,
+    "playback_tps": 11.945392,
+    "playback_latency_ms": 586,
+    "recall_ok": true
+  },
+  "current": {
+    "git_ref": "HEAD",
+    "git_commit": "57839dd",
+    "train_total_ms": 50000,
+    "train_ms_per_pass": 3333.333333,
+    "train_passes": 15,
+    "playback_tps": 10.558069,
+    "playback_latency_ms": 663,
+    "recall_ok": true
+  },
+  "ratios": {
+    "train_total_ms": 0.9803921568627451,
+    "train_ms_per_pass": 0.9803921567647059,
+    "playback_tps": 0.8838612412217196,
+    "playback_latency_ms": 1.1313993174061434
+  },
+  "regression_ratio_limit": 1.25,
+  "regressions": [],
+  "status": "ok"
+}

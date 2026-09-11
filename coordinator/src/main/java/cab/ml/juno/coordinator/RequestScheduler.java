@@ -24,6 +24,8 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.ServeScheduleOptions;
+
 /**
  * Priority-aware request scheduler with optional micro-batching.
  *
@@ -60,6 +62,8 @@ public final class RequestScheduler {
 	private final PriorityBlockingQueue<InferenceRequest> queue;
 	private final GenerationLoop generationLoop;
 	private final BatchConfig batchConfig;
+	private final ServeScheduleOptions schedule;
+	private final ContinuousBatchEngine continuousEngine;
 	private final ConcurrentHashMap<String, InflightEntry> inflight = new ConcurrentHashMap<>();
 
 	private volatile boolean running = true;
@@ -79,20 +83,40 @@ public final class RequestScheduler {
 	 * loop when batching is enabled.
 	 */
 	public RequestScheduler(int maxQueueDepth, GenerationLoop generationLoop, BatchConfig batchConfig) {
+		this(maxQueueDepth, generationLoop, batchConfig, ServeScheduleOptions.defaults());
+	}
+
+	/**
+	 * Full constructor. {@code continuous} schedule starts the running-set engine
+	 * (streams included). {@code static} keeps the static micro-batch collector
+	 * (SSE isolated).
+	 */
+	public RequestScheduler(int maxQueueDepth, GenerationLoop generationLoop, BatchConfig batchConfig,
+			ServeScheduleOptions schedule) {
 		if (maxQueueDepth < 1)
 			throw new IllegalArgumentException("maxQueueDepth must be >= 1");
 		if (generationLoop == null)
 			throw new IllegalArgumentException("generationLoop must not be null");
 		if (batchConfig == null)
 			throw new IllegalArgumentException("batchConfig must not be null");
+		if (schedule == null)
+			throw new IllegalArgumentException("schedule must not be null");
 
 		this.maxQueueDepth = maxQueueDepth;
 		this.generationLoop = generationLoop;
 		this.batchConfig = batchConfig;
+		this.schedule = schedule;
 		this.queue = new PriorityBlockingQueue<>(maxQueueDepth);
 
-		if (batchConfig.isBatchingEnabled()) {
-			startBatchDispatchLoop();
+		if (schedule.mode() == ServeScheduleOptions.Mode.CONTINUOUS) {
+			BatchConfig running = ServeSchedulePolicy.runningSetConfig(batchConfig);
+			this.continuousEngine = new ContinuousBatchEngine(generationLoop, running.maxBatchSize(),
+					running.batchWindowMs());
+			this.continuousEngine.start();
+		} else {
+			this.continuousEngine = null;
+			if (batchConfig.isBatchingEnabled())
+				startBatchDispatchLoop();
 		}
 	}
 
@@ -114,6 +138,12 @@ public final class RequestScheduler {
 		// Register to inflight BEFORE queue.offer() — no lost-wakeup risk
 		inflight.put(request.requestId(), new InflightEntry(request, consumer, future));
 
+		if (continuousEngine != null) {
+			continuousEngine.submit(request, consumer, future);
+			future.whenComplete((r, e) -> inflight.remove(request.requestId()));
+			return future;
+		}
+
 		if (!batchConfig.isBatchingEnabled() || !consumer.batchEligible()) {
 			dispatchSingle(request, consumer, future);
 		} else {
@@ -133,9 +163,30 @@ public final class RequestScheduler {
 		return submit(request, TokenConsumer.discard()).join();
 	}
 
-	/** Stop the batch dispatch loop. No-op if batching was never enabled. */
+	/** Stop the batch dispatch loop / continuous engine. No-op if neither was started. */
 	public void shutdown() {
 		running = false;
+		if (continuousEngine != null)
+			continuousEngine.shutdown();
+	}
+
+	public ServeScheduleOptions schedule() {
+		return schedule;
+	}
+
+	/** Cumulative prefix-trie lookups since process start. */
+	public long prefixLookups() {
+		return generationLoop.kvCache().prefixLookups();
+	}
+
+	/** Cumulative prefix-trie hits since process start. */
+	public long prefixHits() {
+		return generationLoop.kvCache().prefixHits();
+	}
+
+	/** {@code prefixHits / prefixLookups}, or {@code 0} when no lookups. */
+	public double prefixHitRate() {
+		return generationLoop.kvCache().prefixHitRate();
 	}
 
 	public int queueDepth() {

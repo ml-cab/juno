@@ -1,0 +1,21 @@
+{
+  "run_id": "20260911T195007Z",
+  "tool": "compare-schedule",
+  "workload": "prefix",
+  "status": "success",
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "backend": "gpu",
+  "schedule": "continuous",
+  "sessions": 8,
+  "max_tokens": 64,
+  "sessions_ok": 8,
+  "sessions_failed": 0,
+  "system_prompt": "You are a helpful assistant that answers briefly and accurately.",
+  "session_id": "bakeoff-prefix-continuous-20260911T195007Z",
+  "first_request_latency_ms": 5966,
+  "mean_later_request_latency_ms": 9882.86,
+  "prefix_lookups": 8,
+  "prefix_hits": 7,
+  "prefix_hit_rate": 0.875,
+  "note": "Multi-turn x_juno_session_id + shared system. Latency is full-response wall (non-stream)."
+}

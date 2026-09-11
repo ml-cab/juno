@@ -17,7 +17,7 @@ Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). T
 | batch 8 / ctx 2k / page 16 | 6.90% | Still under budget |
 | batch 8 / ctx 32k / page 16 | 4.82% | Stress column OK |
 
-**Budget decision:** Proceed to continuous scheduler (Tier 15) on gather tax. Dual path remains: static stays dense (no gather).
+**Budget decision:** Proceed to continuous scheduler on gather tax. Dual path remains: static stays dense (no gather).
 
 **Pre-bulk baseline** (per-token byte unpack): gate cell was **10.72%** ([`20260910T213121Z-gather-tax.md`](perf-compare/20260910T213121Z-gather-tax.md)); still PASS, then page-bulk F16 gather applied.
 
@@ -28,13 +28,43 @@ Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). T
 | `--lora-play` + static | recall `My name is Juno` |
 | Base continuous + page 16 | exit 0; paged policy log |
 | static + `--kv-page-size 64` | `kv-page-size ignored (dense)` |
-| continuous + `--parallel 2` | WARNING: continuous scheduler not enabled yet |
 
 **Bake-off:** [`perf-compare/20260910T222026Z`](perf-compare/20260910T222026Z/) (`--gpu --vector 0`, default static/dense). Failures=0; Juno/llama tg ≈ **0.16–0.23×** on TinyLlama/Qwen/Phi-3.5; mistral ≈ **0.015×**.
 
 **LoRA §2:** [`perf-compare/20260910T221031Z-lora`](perf-compare/20260910T221031Z-lora/) vs `release-0.1.2` — status **ok**. Train **1.00×**; wall playback tps **0.88×** (≥0.80).
 
 **Status:** feature complete.
+
+## Continuous batching (`--schedule continuous`)
+
+**Plan:** [`infra-plan/PLAN-Infra-Tier15.md`](infra-plan/PLAN-Infra-Tier15.md) (P1 step 3 — **feature complete**).
+
+**What:** Local/in-process running-set engine; SSE and non-stream share `forwardBatch` steps (`juno.ContinuousStep`). Default remains `static` (dense KV). Cluster / TP / PP auto-fallback to static. Per-request `x_juno_loras` fail-closed; LoRA train treats continuous as no-op (REPL WARNING). Prefix reuse is session-scoped (`x_juno_session_id`); `GET /v1/cluster/health` exposes `prefixLookups` / `prefixHits` / `prefixHitRate`.
+
+**Bake-off:** [`perf-compare/20260911T194430Z-continuous/`](perf-compare/20260911T194430Z-continuous/) via `scripts/performance-tests/compare-schedule.sh --gpu`.
+
+| Workload | Result |
+|----------|--------|
+| Multi-session TPS (8×64, GPU) | continuous **25.6** agg t/s vs static **29.7** (**0.86×**) |
+| Concurrent SSE | mean TTFT ≈ **6.4 s**, TPOT ≈ **208 ms**; `ContinuousStep` max_decode_batch=**8**, shared_steps=**64** (proof **PASS**) |
+| Prefix (multi-turn session) | lookups=8, hits=7, hit rate **0.875**; trie survives across turns |
+
+P1 phase gate “continuous SSE beats static”: **unmet** on synchronized arrival (honest). Next Infra = mixed chunked prefill.
+
+**Cross-feature smoke** ([`target/tier15-smoke/20260911T200500Z/`](../target/tier15-smoke/20260911T200500Z/)):
+
+| Gate | Result |
+|------|--------|
+| continuous + `--parallel 2` SSE | `ContinuousStep.max_decode_batch=2` |
+| static + `--kv-page-size 64` | `kv-page-size ignored (dense)` |
+| `x_juno_loras` under continuous | HTTP 400 fail-closed |
+| `juno lora` + continuous | REPL WARNING: continuous is a no-op for train |
+
+**§2 bake-off:** [`perf-compare/20260911T195008Z`](perf-compare/20260911T195008Z/) (`--gpu --vector 0`). Failures=0; TinyLlama/Qwen/Phi-3.5 ≈ **0.15–0.22×**; mistral ≈ **0.013×**.
+
+**LoRA §2:** [`perf-compare/20260911T195711Z-lora`](perf-compare/20260911T195711Z-lora/) vs `release-0.1.2` — status **ok**. Train **0.98×**; wall playback tps **0.88×** (≥0.80).
+
+**Status:** feature complete (P1 SSE-beats-static gate unmet).
 
 ## Quantized KV cache (`--cache-type-k/v`)
 

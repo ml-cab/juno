@@ -118,6 +118,13 @@ public final class CoordinatorMain {
 		boolean tensorMode = "tensor".equalsIgnoreCase(ptypeStr.strip());
 		ActivationDtype dtype = parseDtype(dtypeStr);
 
+		var scheduleResolution = cab.ml.juno.coordinator.ServeSchedulePolicy.resolve(
+				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv(),
+				cab.ml.juno.coordinator.ServeSchedulePolicy.Topology.CLUSTER);
+		scheduleResolution.applyToEnv();
+		if (scheduleResolution.fallback())
+			log.warning(scheduleResolution.warning());
+
 		// ── Health sidecar (optional) ─────────────────────────────────────────
 		if ("true".equalsIgnoreCase(env("JUNO_HEALTH", "false"))) {
 			int healthPort = parseInt(env("JUNO_HEALTH_PORT", "8081"), 8081);
@@ -159,7 +166,8 @@ public final class CoordinatorMain {
 				PrefillBatchOptions.resolve(parseOptionalInt(env("JUNO_PREFILL_BATCH", null))).chunkSize());
 		var scheduler = new RequestScheduler(maxQueue, loop,
 				ServeBatchOptions.resolve(parseOptionalInt(env("JUNO_PARALLEL", null)),
-						parseOptionalLong(env("JUNO_BATCH_WINDOW_MS", null))).toBatchConfig());
+						parseOptionalLong(env("JUNO_BATCH_WINDOW_MS", null))).toBatchConfig(),
+				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 
 		// ── Build ModelRegistry with the model pre-registered as LOADED ───
 		ModelRegistry registry = buildRegistry(config, modelPath);

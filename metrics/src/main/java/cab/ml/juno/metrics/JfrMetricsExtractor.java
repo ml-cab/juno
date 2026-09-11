@@ -48,6 +48,7 @@ final class JfrMetricsExtractor {
     private static final String LORA_PLAY = "juno.LoraPlayback";
     private static final String LORA_CKPT = "juno.LoraCheckpoint";
     private static final String TOKEN_PRODUCED = "juno.TokenProduced";
+    private static final String CONTINUOUS_STEP = "juno.ContinuousStep";
 
     private JfrMetricsExtractor() {
     }
@@ -133,6 +134,11 @@ final class JfrMetricsExtractor {
         int tokenProducedCount = 0;
         Instant tokenProducedFirst = null;
         Instant tokenProducedLast = null;
+
+        int continuousStepCount = 0;
+        int continuousSharedSteps = 0;
+        int continuousMaxDecodeBatch = 0;
+        int continuousMaxRunningSet = 0;
 
         for (Path jfrFile : jfrFiles) {
             if (!Files.isRegularFile(jfrFile) || Files.size(jfrFile) == 0)
@@ -266,6 +272,17 @@ final class JfrMetricsExtractor {
                             if (tokenProducedLast == null || ts.isAfter(tokenProducedLast))
                                 tokenProducedLast = ts;
                         }
+                        case CONTINUOUS_STEP -> {
+                            continuousStepCount++;
+                            int decodeBatch = ev.hasField("decodeBatchSize") ? ev.getInt("decodeBatchSize") : 0;
+                            int runningSet = ev.hasField("runningSetSize") ? ev.getInt("runningSetSize") : 0;
+                            if (decodeBatch >= 2)
+                                continuousSharedSteps++;
+                            if (decodeBatch > continuousMaxDecodeBatch)
+                                continuousMaxDecodeBatch = decodeBatch;
+                            if (runningSet > continuousMaxRunningSet)
+                                continuousMaxRunningSet = runningSet;
+                        }
                         default -> { /* ignore JDK and other events */ }
                     }
                 }
@@ -361,6 +378,11 @@ final class JfrMetricsExtractor {
         m.put("juno.TokenProduced.count", (double) tokenProducedCount);
         m.put("juno.TokenProduced.elapsed_seconds", elapsedSeconds);
         m.put("juno.TokenProduced.tps", tps);
+
+        m.put("juno.ContinuousStep.count", (double) continuousStepCount);
+        m.put("juno.ContinuousStep.shared_steps", (double) continuousSharedSteps);
+        m.put("juno.ContinuousStep.max_decode_batch", (double) continuousMaxDecodeBatch);
+        m.put("juno.ContinuousStep.max_running_set", (double) continuousMaxRunningSet);
 
         return new MetricsSnapshot.ModelMetrics(model.getName(), model.getPath(), jfrName, m);
     }

@@ -164,7 +164,7 @@ if /i "%~1"=="--help" (
   echo   --lora-play PATH  apply a .lora file at inference
   echo   --cache-type-k f16^|q8_0 K cache type (default f16)
   echo   --cache-type-v f16^|q8_0 V cache type (default f16)
-  echo   --schedule static^|continuous  KV layout (default static)
+  echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
   echo   --kv-page-size N           page size when continuous (default 16)
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
@@ -319,7 +319,7 @@ if /i "%~1"=="--help" (
   echo   --mmq on^|off^|auto packed Q4_K GPU weights for VRAM fit (default off)
   echo   --cache-type-k f16^|q8_0 K cache type (default f16)
   echo   --cache-type-v f16^|q8_0 V cache type (default f16)
-  echo   --schedule static^|continuous  KV layout (default static)
+  echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
   echo   --kv-page-size N           page size when continuous (default 16)
   echo   --verbose / -v
   echo.

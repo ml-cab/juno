@@ -103,6 +103,13 @@ public final class OpenAiChatHandler {
 
 		boolean disclosureEnabled = AiDisclosure.isEnabled(body.xJunoDisclosure());
 
+		if (ContinuousLoraPolicy.forbidden(hasPerRequestLoras(body.xJunoLoras()),
+				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv())) {
+			openAiError(ctx, 400, "invalid_request_error", "invalid_request", ContinuousLoraPolicy.ERROR,
+					"x_juno_loras");
+			return;
+		}
+
 		if (Boolean.TRUE.equals(body.stream())) {
 			handleStreamingChat(ctx, request, modelId, disclosureEnabled);
 		} else {
@@ -304,6 +311,14 @@ public final class OpenAiChatHandler {
 		return p;
 	}
 
+	private static boolean hasPerRequestLoras(JsonNode node) {
+		if (node == null || node.isNull() || node.isMissingNode())
+			return false;
+		if (node.isArray())
+			return node.size() > 0;
+		return true;
+	}
+
 	private static RequestPriority parsePriority(String priority) {
 		if (priority == null || priority.isBlank())
 			return RequestPriority.NORMAL;
@@ -355,7 +370,7 @@ public final class OpenAiChatHandler {
 			@JsonProperty("n") Integer n, @JsonProperty("frequency_penalty") Double frequencyPenalty,
 			@JsonProperty("stop") JsonNode stop, @JsonProperty("x_juno_priority") String xJunoPriority,
 			@JsonProperty("x_juno_session_id") String xJunoSessionId, @JsonProperty("x_juno_top_k") Integer xJunoTopK,
-			@JsonProperty("x_juno_disclosure") Boolean xJunoDisclosure) {
+			@JsonProperty("x_juno_disclosure") Boolean xJunoDisclosure, @JsonProperty("x_juno_loras") JsonNode xJunoLoras) {
 	}
 
 	public record OaiMessage(@JsonProperty("role") String role, @JsonProperty("content") JsonNode content) {

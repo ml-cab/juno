@@ -871,8 +871,17 @@ public final class InferenceApiServer {
 	}
 
 	private void handleClusterHealth(Context ctx) {
-		ctx.json(Map.of("status", "HEALTHY", "queueDepth", scheduler.queueDepth(), "maxQueue",
-				scheduler.maxQueueDepth(), "loadedModels", modelRegistry.modelCount(), "byteOrder", byteOrder));
+		Map<String, Object> body = new java.util.LinkedHashMap<>();
+		body.put("status", "HEALTHY");
+		body.put("queueDepth", scheduler.queueDepth());
+		body.put("maxQueue", scheduler.maxQueueDepth());
+		body.put("loadedModels", modelRegistry.modelCount());
+		body.put("byteOrder", byteOrder);
+		body.put("schedule", scheduler.schedule().mode().name().toLowerCase());
+		body.put("prefixLookups", scheduler.prefixLookups());
+		body.put("prefixHits", scheduler.prefixHits());
+		body.put("prefixHitRate", scheduler.prefixHitRate());
+		ctx.json(body);
 	}
 
 	// ── Request parsing ───────────────────────────────────────────────────────

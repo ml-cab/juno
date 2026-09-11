@@ -1,0 +1,29 @@
+{
+  "run_id": "20260911T194430Z",
+  "tool": "compare-schedule",
+  "workload": "sse",
+  "status": "success",
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "backend": "gpu",
+  "schedule": "continuous",
+  "parallel": 8,
+  "sessions": 8,
+  "max_tokens": 64,
+  "wall_ms": 19640,
+  "sessions_ok": 8,
+  "sessions_failed": 0,
+  "mean_ttft_ms": 6414.36275,
+  "mean_tpot_ms": 208.03727777777777,
+  "median_ttft_ms": 6421.299,
+  "prefix_lookups": 8,
+  "prefix_hits": 0,
+  "prefix_hit_rate": 0.0,
+  "jfr": {
+    "juno.ContinuousStep.count": 64.0,
+    "juno.ContinuousStep.shared_steps": 64.0,
+    "juno.ContinuousStep.max_decode_batch": 8.0,
+    "juno.ContinuousStep.max_running_set": 8.0,
+    "juno.TokenProduced.tps": 39.00396418001199
+  },
+  "shared_step_proof": "pass"
+}

@@ -72,8 +72,25 @@ class PrefixCacheTest {
 	}
 
 	@Test
-	void empty_token_array_returns_no_hit() {
-		assertThat(cache.findLongestPrefix(new int[0]).isHit()).isFalse();
-		assertThat(cache.findLongestPrefix(null).isHit()).isFalse();
+	void stats_count_lookups_and_hits() {
+		assertThat(cache.lookupCount()).isZero();
+		assertThat(cache.hitRate()).isZero();
+
+		cache.findLongestPrefix(systemPrompt);
+		assertThat(cache.lookupCount()).isEqualTo(1);
+		assertThat(cache.hitCount()).isZero();
+
+		cache.cachePrefix(systemPrompt, systemPrompt.length, "k");
+		cache.findLongestPrefix(fullRequest);
+		assertThat(cache.hitCount()).isEqualTo(1);
+		assertThat(cache.hitRate()).isEqualTo(0.5);
+	}
+
+	@Test
+	void invalidate_does_not_reset_counters() {
+		cache.cachePrefix(systemPrompt, 5, "k");
+		cache.findLongestPrefix(fullRequest);
+		cache.invalidate("k");
+		assertThat(cache.hitCount()).isEqualTo(1);
 	}
 }

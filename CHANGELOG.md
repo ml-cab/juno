@@ -1,5 +1,34 @@
 ## Status 
 
+**Session 75** — Continuous batching scheduler (`--schedule continuous`) **feature complete**
+
+- Bake-off [`docs/perf-compare/20260911T194430Z-continuous/`](docs/perf-compare/20260911T194430Z-continuous/):
+  multi-session TPS continuous **0.86×** static (synchronized 8-way); concurrent SSE
+  `juno.ContinuousStep` shared-step proof **PASS** (max_decode_batch=8); prefix session
+  hit rate **0.875**. P1 “SSE beats static” gate **unmet** on this synchronized recipe.
+- §2 regression [`20260911T195008Z`](docs/perf-compare/20260911T195008Z/) + LoRA
+  [`20260911T195711Z-lora`](docs/perf-compare/20260911T195711Z-lora/) **ok** (train 0.98×,
+  wall play 0.88×). Health exposes prefix counters; JFR extracts ContinuousStep.
+- `compare-schedule.sh`; §6 smoke [`target/tier15-smoke/20260911T200500Z/`](target/tier15-smoke/20260911T200500Z/).
+  Next Infra: mixed chunked prefill ([`PLAN-Infra-Tier16.md`](docs/infra-plan/PLAN-Infra-Tier16.md)).
+
+---
+
+## Status 
+
+**Session 74** — Continuous batching scheduler (`--schedule continuous`) **in progress**
+
+- Local / in-process running-set engine: overlapping decode shares `forwardBatch`;
+  SSE and publisher streams join the running set (static schedule still isolates SSE).
+- Cluster / TP / PP **auto-fallback to static** (`WARN: continuous unsupported on cluster; using static`)
+  before handlers load so KV path stays dense.
+- Prefix cache: lookup/hit counters; session skip; trie kept after stateless complete.
+- Per-request `x_juno_loras` fail-closed under continuous. Bake-off / JFR TTFT still open.
+
+---
+
+## Status 
+
 **Session 73** — Block KV allocator (`--kv-page-size` / dual path) **feature complete**
 
 - Start P1 step 2: `KvBlockPool` + `KvPageTable` with unit tests (allocate/free, gather, concurrent).

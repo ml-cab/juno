@@ -45,6 +45,10 @@ Module dependency (excerpt):
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
         ServeBatchOptions — CLI/env resolution for --parallel / --batch-window-ms
         (maps to BatchConfig; streaming consumers bypass static batches)
+        ServeSchedulePolicy — cluster auto-fallback from continuous to static;
+        ContinuousBatchEngine / ContinuousStepEvent / ContinuousLoraPolicy —
+        local running-set loop (SSE shares forwardBatch; x_juno_loras fail-closed);
+        GET /v1/cluster/health exposes schedule + prefixLookups/Hits/HitRate
         coordinator depends on node
   juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,
         ProcessPipelineClient, TensorParallelPipelineClient

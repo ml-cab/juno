@@ -28,12 +28,17 @@ Features:
 
 ## 1.1 What's new?
 
+### Continuous batching
+
+- `--schedule continuous` (`JUNO_SCHEDULE`): local / in-process running-set
+  batching so overlapping requests (including SSE) share decode steps. Default
+  remains `static`. Cluster launchers auto-fallback to `static`. Bake-off:
+  `docs/perf-compare/20260911T194430Z-continuous/`. See `docs/howto.md`.
+
 ### Block KV / dual path
 
-- `--schedule static|continuous` (`JUNO_SCHEDULE`, default `static`): dense KV under
-  static; paged block pool + gather under continuous (continuous batching engine is a
-  follow-up). `--kv-page-size N` (`JUNO_KV_PAGE_SIZE`, default 16) applies when continuous.
-- See `docs/howto.md` and `docs/performance.md` (gather-tax gate).
+- Dense KV under `static`; paged KV (`--kv-page-size`) under `continuous`.
+  See `docs/howto.md`.
 
 ### Vision (image-to-text)
 
