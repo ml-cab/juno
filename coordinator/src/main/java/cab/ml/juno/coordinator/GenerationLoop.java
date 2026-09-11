@@ -21,11 +21,13 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Random;
 import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.Sampler;
+import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatTemplateFormatter;
 import cab.ml.juno.tokenizer.Tokenizer;
 
@@ -150,6 +152,9 @@ public final class GenerationLoop {
 		int[] maxTokens = new int[n];
 		List<Integer>[] generated = new List[n];
 		EosOutputFilter[] eosFilters = new EosOutputFilter[n];
+		StopSequenceFilter[] stopFilters = new StopSequenceFilter[n];
+		SamplingParams[] params = new SamplingParams[n];
+		Random[] rngs = new Random[n];
 		GenerationResult.StopReason[] reasons = new GenerationResult.StopReason[n];
 		boolean[] active = new boolean[n];
 		Instant[] starts = new Instant[n];
@@ -174,9 +179,12 @@ public final class GenerationLoop {
 
 			allTokens[i] = promptIds.clone();
 			promptLens[i] = promptIds.length;
-			maxTokens[i] = req.samplingParams().maxTokens();
+			params[i] = resolveSamplingParams(req.samplingParams());
+			maxTokens[i] = params[i].maxTokens();
+			rngs[i] = params[i].seed() != null ? new Random(params[i].seed()) : null;
 			generated[i] = new ArrayList<>();
 			eosFilters[i] = new EosOutputFilter();
+			stopFilters[i] = new StopSequenceFilter(params[i].stopStrings());
 			reasons[i] = GenerationResult.StopReason.MAX_TOKENS;
 			active[i] = true;
 		}
@@ -237,32 +245,37 @@ public final class GenerationLoop {
 			// Sample + stream for each result independently
 			for (int j = 0; j < batchIdx.size(); j++) {
 				int i = batchIdx.get(j);
-				InferenceRequest req = entries.get(i).request();
 				float[] logits = logitsBatch[j];
 
 				int[] historyArr = generated[i].stream().mapToInt(Integer::intValue).toArray();
-				int nextToken = sampler.sample(logits, req.samplingParams(), historyArr);
+				int nextToken = sampler.sample(logits, params[i], historyArr, rngs[i]);
 
 				if (nextToken == tokenizer.eosTokenId()) {
 					eosFilters[i].discardHeld();
+					stopFilters[i].discardHeld();
 					reasons[i] = GenerationResult.StopReason.EOS_TOKEN;
 					active[i] = false;
-				} else if (sampler.isStopToken(nextToken, req.samplingParams())) {
+				} else if (sampler.isStopToken(nextToken, params[i])) {
 					eosFilters[i].discardHeld();
+					stopFilters[i].discardHeld();
 					reasons[i] = GenerationResult.StopReason.STOP_TOKEN;
 					active[i] = false;
 				} else {
 					String piece = streams[i].append(nextToken);
-					EosOutputFilter.Outcome outcome = eosFilters[i].accept(piece);
-					if (!outcome.emit().isEmpty()) {
-						entries.get(i).consumer().onToken(outcome.emit(), nextToken, generated[i].size());
+					EosOutputFilter.Outcome eosOut = eosFilters[i].accept(piece);
+					StopSequenceFilter.Outcome stopOut = stopFilters[i].accept(eosOut.emit());
+					if (!stopOut.emit().isEmpty()) {
+						entries.get(i).consumer().onToken(stopOut.emit(), nextToken, generated[i].size());
 						TokenProducedEvent tpe = new TokenProducedEvent();
 						tpe.requestId = requestIds[i];
 						tpe.position = generated[i].size();
 						tpe.commit();
 					}
-					if (outcome.stop()) {
+					if (eosOut.stop()) {
 						reasons[i] = GenerationResult.StopReason.EOS_TOKEN;
+						active[i] = false;
+					} else if (stopOut.stop()) {
+						reasons[i] = GenerationResult.StopReason.STOP_TOKEN;
 						active[i] = false;
 					} else {
 						generated[i].add(nextToken);
@@ -275,12 +288,15 @@ public final class GenerationLoop {
 		// ── Build results + cleanup ───────────────────────────────────────────
 		List<GenerationResult> results = new ArrayList<>(n);
 		for (int i = 0; i < n; i++) {
-			EosOutputFilter.Outcome flushed = eosFilters[i].finish(streams[i].flush());
-			if (!flushed.emit().isEmpty()) {
-				entries.get(i).consumer().onToken(flushed.emit(), -1, generated[i].size());
+			EosOutputFilter.Outcome flushedEos = eosFilters[i].finish(streams[i].flush());
+			StopSequenceFilter.Outcome flushedStop = stopFilters[i].finish(flushedEos.emit());
+			if (!flushedStop.emit().isEmpty()) {
+				entries.get(i).consumer().onToken(flushedStop.emit(), -1, generated[i].size());
 			}
-			if (flushed.stop())
+			if (flushedEos.stop())
 				reasons[i] = GenerationResult.StopReason.EOS_TOKEN;
+			else if (flushedStop.stop())
+				reasons[i] = GenerationResult.StopReason.STOP_TOKEN;
 
 			// Cache prompt prefix for future requests
 			if (!hadCacheHit[i] && promptLens[i] > 0) {
@@ -291,7 +307,7 @@ public final class GenerationLoop {
 			kvCache.evict(requestIds[i]);
 			pipeline.evict(requestIds[i]);
 
-			results.add(new GenerationResult(requestIds[i], eosFilters[i].text(), generated[i], promptLens[i],
+			results.add(new GenerationResult(requestIds[i], stopFilters[i].text(), generated[i], promptLens[i],
 					generated[i].size(), reasons[i], Instant.now(), Duration.between(starts[i], Instant.now())));
 		}
 		return results;
@@ -354,6 +370,9 @@ public final class GenerationLoop {
 		int[] allTokens = promptIds.clone();
 		List<Integer> generatedIds = new ArrayList<>();
 		EosOutputFilter eosFilter = new EosOutputFilter();
+		SamplingParams params = resolveSamplingParams(request.samplingParams());
+		StopSequenceFilter stopFilter = new StopSequenceFilter(params.stopStrings());
+		Random rng = params.seed() != null ? new Random(params.seed()) : null;
 		GenerationResult.StopReason stopReason = GenerationResult.StopReason.MAX_TOKENS;
 
 		// ── Step 2b: Prefill — populate KV cache for uncached prompt tokens ──
@@ -381,7 +400,7 @@ public final class GenerationLoop {
 		}
 
 		// ── Steps 3–8: Autoregressive decode loop ─────────────────────────────
-		int maxTokens = request.samplingParams().maxTokens();
+		int maxTokens = params.maxTokens();
 		Tokenizer.StreamContext stream = tokenizer.openStreamContext();
 		log.info("Decode: starting loop kvKey=" + kvKey + " maxTokens=" + maxTokens + " startPos=" + startPos);
 
@@ -395,38 +414,43 @@ public final class GenerationLoop {
 
 			// Step 4: Sample next token
 			int[] historyArr = generatedIds.stream().mapToInt(Integer::intValue).toArray();
-			int nextToken = sampler.sample(logits, request.samplingParams(), historyArr);
+			int nextToken = sampler.sample(logits, params, historyArr, rng);
 
 			// Step 5: Check stop conditions by token ID
 			if (nextToken == tokenizer.eosTokenId()) {
 				eosFilter.discardHeld();
+				stopFilter.discardHeld();
 				stopReason = GenerationResult.StopReason.EOS_TOKEN;
 				log.info("Decode: step " + step + " EOS_TOKEN kvKey=" + kvKey + " forwardMs=" + forwardMs);
 				break;
 			}
-			if (sampler.isStopToken(nextToken, request.samplingParams())) {
+			if (sampler.isStopToken(nextToken, params)) {
 				eosFilter.discardHeld();
+				stopFilter.discardHeld();
 				stopReason = GenerationResult.StopReason.STOP_TOKEN;
 				log.info("Decode: step " + step + " STOP_TOKEN kvKey=" + kvKey + " forwardMs=" + forwardMs);
 				break;
 			}
 
-			// Step 6–7: Decode and stream through EosOutputFilter.
-			// Holds back partial turn-end markers (e.g. "</"+"s"+">") and strips
-			// complete markers for every supported chat template so /train-qa
-			// completions never leak "</s>", "<|end|>", "<|im_end|>", etc.
+			// Step 6–7: Decode and stream through EosOutputFilter then stop sequences.
 			String piece = stream.append(nextToken);
-			EosOutputFilter.Outcome outcome = eosFilter.accept(piece);
-			if (!outcome.emit().isEmpty()) {
-				consumer.onToken(outcome.emit(), nextToken, step);
+			EosOutputFilter.Outcome eosOut = eosFilter.accept(piece);
+			StopSequenceFilter.Outcome stopOut = stopFilter.accept(eosOut.emit());
+			if (!stopOut.emit().isEmpty()) {
+				consumer.onToken(stopOut.emit(), nextToken, step);
 				TokenProducedEvent tpe = new TokenProducedEvent();
 				tpe.requestId = kvKey;
 				tpe.position = step;
 				tpe.commit();
 			}
-			if (outcome.stop()) {
+			if (eosOut.stop()) {
 				stopReason = GenerationResult.StopReason.EOS_TOKEN;
 				log.info("Decode: step " + step + " EOS_MARKER kvKey=" + kvKey + " forwardMs=" + forwardMs);
+				break;
+			}
+			if (stopOut.stop()) {
+				stopReason = GenerationResult.StopReason.STOP_TOKEN;
+				log.info("Decode: step " + step + " STOP_SEQUENCE kvKey=" + kvKey + " forwardMs=" + forwardMs);
 				break;
 			}
 
@@ -464,18 +488,26 @@ public final class GenerationLoop {
 			pipeline.evict(kvKey);
 		}
 
-		EosOutputFilter.Outcome flushed = eosFilter.finish(stream.flush());
-		if (!flushed.emit().isEmpty())
-			consumer.onToken(flushed.emit(), -1, generatedIds.size());
-		if (flushed.stop())
+		EosOutputFilter.Outcome flushedEos = eosFilter.finish(stream.flush());
+		StopSequenceFilter.Outcome flushedStop = stopFilter.finish(flushedEos.emit());
+		if (!flushedStop.emit().isEmpty())
+			consumer.onToken(flushedStop.emit(), -1, generatedIds.size());
+		if (flushedEos.stop())
 			stopReason = GenerationResult.StopReason.EOS_TOKEN;
+		else if (flushedStop.stop())
+			stopReason = GenerationResult.StopReason.STOP_TOKEN;
 
-		GenerationResult result = new GenerationResult(kvKey, eosFilter.text(), generatedIds, promptIds.length,
+		GenerationResult result = new GenerationResult(kvKey, stopFilter.text(), generatedIds, promptIds.length,
 				generatedIds.size(), stopReason, Instant.now(), Duration.between(start, Instant.now()));
 		log.info("generate() RETURNING kvKey=" + kvKey + " stopReason=" + stopReason + " tokensGenerated="
 				+ generatedIds.size() + " totalDurationMs=" + result.latency().toMillis() + " textLength="
 				+ result.text().length());
 		return result;
+	}
+
+	SamplingParams resolveSamplingParams(SamplingParams params) {
+		int[] merged = OpenAiAdapter.stopTokenIdsFromStrings(tokenizer, params.stopStrings(), params.stopTokenIds());
+		return params.withStopTokenIds(merged);
 	}
 
 	/** Collapses newlines/control chars so one log line per decode step stays one line. */

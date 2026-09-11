@@ -15,13 +15,16 @@
  */
 package cab.ml.juno.sampler;
 
+import java.util.Random;
+
 /**
  * Main sampling pipeline.
  *
- * Chains all steps in order: temperature → topK → softmax → topP →
- * repetitionPenalty → sample
+ * Chains all steps in order: presencePenalty → repetitionPenalty → temperature
+ * → topK → softmax → topP → sample
  *
- * Stateless and thread-safe. One instance shared across all requests.
+ * Stateless and thread-safe when no seeded {@link Random} is supplied. One
+ * instance may be shared across requests; seeded RNGs stay request-local.
  *
  * Usage: Sampler sampler = Sampler.create(); int nextToken =
  * sampler.sample(logits, SamplingParams.defaults(), generatedSoFar);
@@ -33,15 +36,18 @@ public final class Sampler {
 	private final SoftmaxStep softmaxStep;
 	private final TopPStep topPStep;
 	private final RepetitionPenaltyStep repetitionPenaltyStep;
+	private final PresencePenaltyStep presencePenaltyStep;
 	private final SampleStep sampleStep;
 
 	private Sampler(TemperatureStep temperatureStep, TopKStep topKStep, SoftmaxStep softmaxStep, TopPStep topPStep,
-			RepetitionPenaltyStep repetitionPenaltyStep, SampleStep sampleStep) {
+			RepetitionPenaltyStep repetitionPenaltyStep, PresencePenaltyStep presencePenaltyStep,
+			SampleStep sampleStep) {
 		this.temperatureStep = temperatureStep;
 		this.topKStep = topKStep;
 		this.softmaxStep = softmaxStep;
 		this.topPStep = topPStep;
 		this.repetitionPenaltyStep = repetitionPenaltyStep;
+		this.presencePenaltyStep = presencePenaltyStep;
 		this.sampleStep = sampleStep;
 	}
 
@@ -50,7 +56,7 @@ public final class Sampler {
 	 */
 	public static Sampler create() {
 		return new Sampler(TemperatureStep.INSTANCE, TopKStep.INSTANCE, SoftmaxStep.INSTANCE, TopPStep.INSTANCE,
-				RepetitionPenaltyStep.INSTANCE, SampleStep.INSTANCE);
+				RepetitionPenaltyStep.INSTANCE, PresencePenaltyStep.INSTANCE, SampleStep.INSTANCE);
 	}
 
 	/**
@@ -60,34 +66,40 @@ public final class Sampler {
 	 *                        BE MUTATED
 	 * @param params          sampling configuration for this request
 	 * @param generatedTokens token IDs generated so far in this sequence (for
-	 *                        repetition penalty)
+	 *                        repetition / presence penalty)
 	 * @return next token ID
 	 */
 	public int sample(float[] rawLogits, SamplingParams params, int[] generatedTokens) {
+		return sample(rawLogits, params, generatedTokens, null);
+	}
+
+	/**
+	 * @param rng optional seeded RNG for stochastic sampling; {@code null} uses
+	 *            thread-local randomness
+	 */
+	public int sample(float[] rawLogits, SamplingParams params, int[] generatedTokens, Random rng) {
 		if (rawLogits == null || rawLogits.length == 0)
 			throw new IllegalArgumentException("logits must not be null or empty");
 		if (params == null)
 			throw new IllegalArgumentException("params must not be null");
 
-		float[] logits = rawLogits.clone(); // defensive copy — don't mutate caller's array
+		float[] logits = rawLogits.clone();
 
-		// Pipeline — repetition penalty must run on raw logits, before softmax.
-		// Applying it after softmax (on probabilities) is nearly a no-op and
-		// causes the model to collapse into repeating the same token.
+		logits = presencePenaltyStep.apply(logits, params, generatedTokens);
 		logits = repetitionPenaltyStep.apply(logits, params, generatedTokens);
 		logits = temperatureStep.apply(logits, params, generatedTokens);
 		logits = topKStep.apply(logits, params, generatedTokens);
 		logits = softmaxStep.apply(logits, params, generatedTokens);
 		logits = topPStep.apply(logits, params, generatedTokens);
 
-		return sampleStep.sample(logits, params);
+		return sampleStep.sample(logits, params, rng);
 	}
 
 	/**
 	 * Convenience overload — no previous tokens (start of sequence).
 	 */
 	public int sample(float[] rawLogits, SamplingParams params) {
-		return sample(rawLogits, params, new int[0]);
+		return sample(rawLogits, params, new int[0], null);
 	}
 
 	/**

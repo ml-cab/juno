@@ -1,5 +1,18 @@
 ## Status 
 
+**Session 77** — OpenAI field parity (`stop` / `seed` / `presence_penalty`) **in progress**
+
+- `SamplingParams` gains `presencePenalty`, `stopStrings`, `seed`; `PresencePenaltyStep`
+  in the sampler pipeline; seeded `Random` on decode loops.
+- `StopSequenceFilter` holds back / truncates OpenAI stop sequences; single-token
+  stop strings merge into stop token ids via the tokenizer.
+- `response_format` fail-closed (HTTP 400) unless absent or `type=text`.
+- Docs / OpenAPI updated; `logit_bias` and `user` remain ignored with honesty.
+
+---
+
+## Status 
+
 **Session 76** — Mixed chunked prefill under continuous schedule **feature complete**
 
 - Bake-off [`docs/perf-compare/20260911T204721Z-mixed-prefill/`](docs/perf-compare/20260911T204721Z-mixed-prefill/):

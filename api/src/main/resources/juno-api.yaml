@@ -46,11 +46,12 @@ info:
     | frequency_penalty       | sampling.repetitionPenalty        | OpenAI range −2..2; mapped: 1 + penalty/2 (0→1.0, 2→2.0) |
     | stream                  | (route selection)                 | false → blocking JSON; true → SSE chunks|
     | n                       | —                                 | Only n=1 is supported; other values are rejected with 400 |
-    | stop                    | —                                 | Not implemented; ignored with a warning  |
-    | presence_penalty        | —                                 | Not implemented; silently ignored        |
-    | logit_bias              | —                                 | Not implemented; silently ignored        |
-    | user                    | —                                 | Not implemented; silently ignored        |
-    | seed                    | —                                 | Not implemented; silently ignored        |
+    | stop                    | sampling.stopStrings / stopTokenIds | Honored (string or ≤4 strings); finish_reason=stop |
+    | presence_penalty        | sampling.presencePenalty          | Honored (−2..2); OpenAI-style presence penalty |
+    | seed                    | sampling.seed                     | Honored; seeds stochastic sampling RNG |
+    | response_format         | —                                 | Absent or type=text only; else HTTP 400 |
+    | logit_bias              | —                                 | Not implemented; silently ignored |
+    | user                    | —                                 | Not implemented; silently ignored |
 
     ## Field mapping — response
 
@@ -495,7 +496,9 @@ components:
           maximum: 2.0
           default: 0.0
           description: |
-            Not implemented. Accepted and silently ignored for compatibility.
+            OpenAI-style presence penalty. Subtracts this value from the logits
+            of every token that has already appeared at least once in the
+            generated completion. `0` disables the penalty.
 
         stop:
           oneOf:
@@ -505,9 +508,10 @@ components:
                 type: string
               maxItems: 4
           description: |
-            Not implemented. Accepted and silently ignored for compatibility.
-            Use `x_juno_*` extensions for stop-token control (coming in a
-            future release).
+            One or more stop sequences (max 4). Generation halts when a
+            sequence appears in decoded text (or when a stop string encodes to
+            a single token id). The stop text is not included in the completion.
+            `finish_reason` is `stop`.
 
         logit_bias:
           type: object
@@ -523,8 +527,21 @@ components:
 
         seed:
           type: integer
+          format: int64
           description: |
-            Not implemented. Accepted and silently ignored for compatibility.
+            When set, seeds the stochastic sampler RNG for this request so that
+            the same seed and sampling parameters produce the same token sequence.
+
+        response_format:
+          type: object
+          description: |
+            Structured output control. Only omitted or `{"type":"text"}` is
+            accepted today. Other types (e.g. `json_object`) return HTTP 400
+            until grammar / schema enforcement ships.
+          properties:
+            type:
+              type: string
+              enum: [text, json_object, json_schema]
 
         # ── Juno extensions ─────────────────────────────────────────────────
 

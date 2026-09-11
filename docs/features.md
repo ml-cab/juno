@@ -48,7 +48,7 @@ Optional extensions:
 | `x_juno_session_id` | string | Stable ID for KV-cache reuse |
 | `x_juno_top_k` | integer | Top-K cutoff (0 = disabled; default 50) |
 
-**Supported fields:** `model`, `messages`, `temperature`, `top_p`, `max_completion_tokens`, `max_tokens` (deprecated alias), `frequency_penalty`, `stream`, `n` (only 1 accepted). **Ignored for compatibility:** `stop`, `presence_penalty`, `logit_bias`, `user`, `seed`.
+**Supported fields:** `model`, `messages`, `temperature`, `top_p`, `max_completion_tokens`, `max_tokens` (deprecated alias), `frequency_penalty`, `presence_penalty`, `stop`, `seed`, `stream`, `n` (only 1 accepted). `response_format` is accepted only when absent or `type=text`; other types return HTTP 400 until grammar support ships. **Ignored for compatibility:** `logit_bias`, `user`.
 
 The coordinator still exposes Juno-native inference endpoints alongside this surface; behaviour is documented in [arch.md](arch.md). The authoritative OpenAPI 3 spec is [`juno-api.yaml`](../api/src/main/resources/juno-api.yaml). Examples and flags are in [howto.md](howto.md).
 

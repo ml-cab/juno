@@ -246,6 +246,12 @@ ModelIdResolver (registry module, cab.ml.juno.registry) — shared by
   ModelRegistry's public API, no I/O — unit-tested directly
   (ModelIdResolverTest, covers both policies).
 
+OpenAiChatHandler / SamplingParams — OpenAI chat fields stop, seed, and
+  presence_penalty map into SamplingParams and the decode loop
+  (StopSequenceFilter + PresencePenaltyStep + seeded Random). response_format
+  is fail-closed (HTTP 400) unless absent or type=text. logit_bias and user
+  remain ignored with docs honesty.
+
 Dependency graph (acyclic):
   node  →  api, lora, registry, kvcache, health, grpc, micrometer
   vision  →  node, coordinator, registry, tokenizer, sampler

@@ -15,6 +15,7 @@
  */
 package cab.ml.juno.sampler;
 
+import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -26,7 +27,8 @@ import java.util.concurrent.ThreadLocalRandom;
  * Returns the selected token ID via a single-element array. The logits array is
  * treated as probabilities at this stage (post-softmax).
  *
- * Thread-safe: uses ThreadLocalRandom, no shared mutable state.
+ * Thread-safe when {@code rng} is null (uses {@link ThreadLocalRandom}). Callers
+ * that pass a seeded {@link Random} must not share it across concurrent requests.
  */
 public final class SampleStep {
 
@@ -43,10 +45,16 @@ public final class SampleStep {
 	 * @return selected token ID
 	 */
 	public int sample(float[] probs, SamplingParams params) {
-		return params.greedy() ? greedy(probs) : weightedSample(probs);
+		return sample(probs, params, null);
 	}
 
-	// ── Greedy: argmax ────────────────────────────────────────────────────────
+	/**
+	 * @param rng optional RNG for stochastic mode; {@code null} uses
+	 *            {@link ThreadLocalRandom}
+	 */
+	public int sample(float[] probs, SamplingParams params, Random rng) {
+		return params.greedy() ? greedy(probs) : weightedSample(probs, rng);
+	}
 
 	private int greedy(float[] probs) {
 		int best = 0;
@@ -57,17 +65,14 @@ public final class SampleStep {
 		return best;
 	}
 
-	// ── Weighted random draw ──────────────────────────────────────────────────
-
-	private int weightedSample(float[] probs) {
-		double r = ThreadLocalRandom.current().nextDouble();
+	private int weightedSample(float[] probs, Random rng) {
+		double r = rng != null ? rng.nextDouble() : ThreadLocalRandom.current().nextDouble();
 		double cumulative = 0.0;
 		for (int i = 0; i < probs.length; i++) {
 			cumulative += probs[i];
 			if (r < cumulative)
 				return i;
 		}
-		// Fallback — floating point rounding edge case: return last non-zero token
 		for (int i = probs.length - 1; i >= 0; i--) {
 			if (probs[i] > 0.0f)
 				return i;

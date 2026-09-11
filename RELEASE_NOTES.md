@@ -106,8 +106,9 @@ and [Part 3. CLI Reference](https://ml.cab/juno-documentation/commands/).
 
 - **Text only**: image or multimodal message content is not supported.
 - **OpenAI `n > 1`**: rejected with HTTP 400; only single completions.
-- **Partial OpenAI compatibility**: `stop`, `presence_penalty`, `logit_bias`, `user`, `seed` are
-  ignored for client compatibility.
+- **Partial OpenAI compatibility**: `logit_bias` and `user` remain ignored for
+  client compatibility. `stop`, `seed`, and `presence_penalty` are honored on
+  `/v1/chat/completions`; unsupported `response_format` types return HTTP 400.
 - **No built-in auth or TLS** on the REST server; configure at the reverse proxy or network layer
   for production.
 - **LoRA merge / redistribution** may trigger model-license obligations; see

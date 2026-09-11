@@ -31,6 +31,30 @@ Also read:
 | **Depends on** | Tier 1 complete |
 | **Blocks** | Tiers 3, 7, 11 |
 | **Parallel with** | P0 / P1 if staffed |
+| **Status** | **In progress** (2026-09-11) |
+
+## Feature × surface interaction matrix
+
+| New feature / flag | Base inference | --lora-play | LoRA train | Vision | --parallel | --gpu-layers | --prefill-batch | CUDA | ROCm | Default |
+|--------------------|----------------|-------------|------------|--------|------------|--------------|-----------------|------|------|---------|
+| OpenAI `stop` / `seed` / `presence_penalty` | **wired** (`OpenAiChatHandler` → `SamplingParams` / decode loop) | **wired** (same OpenAI path + playback consumer) | **explicit no-op** (train REPL not OpenAI chat) | **wired** via chat completions when fields present | **wired** (per-request params in static + continuous slots) | N/A | N/A | N/A | N/A | absent = prior defaults |
+| `response_format` (pre–Tier 3) | **fail closed** (HTTP 400 unless absent or `type=text`) | same | N/A | same | same | N/A | N/A | N/A | N/A | absent |
+| `logit_bias` / `user` | **explicit no-op** (docs honesty; still ignored) | same | N/A | same | same | N/A | N/A | N/A | N/A | ignored |
+
+## Cross-feature smoke (before feature complete)
+
+- [ ] Each **wired** cell: command + expected JFR/log proof recorded
+- [ ] Each **explicit no-op** cell: warning string + howto note (`logit_bias` / `user`; LoRA train)
+- [ ] Each **follow-up** cell: none (`response_format` types → Tier 3)
+- [ ] §2 compares run as required by change surface (API regression gate)
+
+## Exit checklist (compatibility)
+
+- [ ] Interaction matrix complete (no empty cells)
+- [ ] No silent flag ignore on OpenAI fields this tier claims to honor
+- [ ] Launcher unchanged (no new CLI flags)
+- [ ] User-facing docs / OpenAPI state which fields are honored vs ignored
+- [ ] ROADMAP §5 architectures covered (sampler + decode loop are handler-agnostic)
 
 ## Overview
 
@@ -99,10 +123,10 @@ Exit only when:
 
 ## Implementation todos
 
-1. SamplingParams + Sampler changes + unit tests.
-2. OpenAiChatHandler / OpenAiAdapter wiring + stop tokenization helper.
-3. OpenAPI + features + RELEASE_NOTES + agent-arch as needed.
-4. List preview files; no zip.
+1. ~~SamplingParams + Sampler changes + unit tests.~~
+2. ~~OpenAiChatHandler / OpenAiAdapter wiring + stop tokenization helper.~~
+3. ~~OpenAPI + features + RELEASE_NOTES + agent-arch as needed.~~
+4. §2 inference compare + mark feature complete / ROADMAP status; preview files; no zip.
 
 ## Preview files (expected)
 

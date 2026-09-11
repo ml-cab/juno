@@ -1,10 +1,17 @@
 package cab.ml.juno.coordinator;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 class OpenAiAdapterTest {
+
+	private static final ObjectMapper JSON = new ObjectMapper();
 
 	@Test
 	void frequency_penalty_mapping() {
@@ -29,5 +36,28 @@ class OpenAiAdapterTest {
 		assertThat(OpenAiAdapter.toOpenAiFinishReason(GenerationResult.StopReason.ERROR)).isEqualTo("error");
 		assertThat(OpenAiAdapter.chatCompletionId("550e8400-e29b-41d4-a716-446655440000"))
 				.isEqualTo("chatcmpl-550e8400e29b41d4a716446655440000");
+	}
+
+	@Test
+	void parse_stop_string_and_array() {
+		assertThat(OpenAiAdapter.parseStop(null)).isEmpty();
+		assertThat(OpenAiAdapter.parseStop(JSON.getNodeFactory().textNode("END"))).containsExactly("END");
+		ArrayNode arr = JSON.createArrayNode().add("a").add("b");
+		assertThat(OpenAiAdapter.parseStop(arr)).containsExactly("a", "b");
+	}
+
+	@Test
+	void parse_stop_rejects_too_many() {
+		ArrayNode arr = JSON.createArrayNode().add("1").add("2").add("3").add("4").add("5");
+		assertThatThrownBy(() -> OpenAiAdapter.parseStop(arr)).isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	void response_format_text_ok_json_rejected() {
+		assertThat(OpenAiAdapter.validateResponseFormat(null)).isNull();
+		ObjectNode text = JSON.createObjectNode().put("type", "text");
+		assertThat(OpenAiAdapter.validateResponseFormat(text)).isNull();
+		ObjectNode json = JSON.createObjectNode().put("type", "json_object");
+		assertThat(OpenAiAdapter.validateResponseFormat(json)).contains("not supported");
 	}
 }

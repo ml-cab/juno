@@ -70,6 +70,18 @@ public final class OpenAiChatHandler {
 			openAiError(ctx, 400, "invalid_request_error", "invalid_request", nError, "n");
 			return;
 		}
+		String responseFormatError = OpenAiAdapter.validateResponseFormat(body.responseFormat());
+		if (responseFormatError != null) {
+			openAiError(ctx, 400, "invalid_request_error", "invalid_request", responseFormatError, "response_format");
+			return;
+		}
+		final String[] stopStrings;
+		try {
+			stopStrings = OpenAiAdapter.parseStop(body.stop());
+		} catch (IllegalArgumentException e) {
+			openAiError(ctx, 400, "invalid_request_error", "invalid_request", e.getMessage(), "stop");
+			return;
+		}
 		if (body.messages() == null || body.messages().isEmpty()) {
 			openAiError(ctx, 400, "invalid_request_error", "invalid_request", "messages must not be empty", "messages");
 			return;
@@ -95,7 +107,13 @@ public final class OpenAiChatHandler {
 		if (modelId == null)
 			return;
 
-		SamplingParams sampling = buildSamplingParams(body);
+		SamplingParams sampling;
+		try {
+			sampling = buildSamplingParams(body, stopStrings);
+		} catch (IllegalArgumentException e) {
+			openAiError(ctx, 400, "invalid_request_error", "invalid_request", e.getMessage(), null);
+			return;
+		}
 		RequestPriority priority = parsePriority(body.xJunoPriority());
 		InferenceRequest request = (body.xJunoSessionId() != null && !body.xJunoSessionId().isBlank())
 				? InferenceRequest.ofSession(body.xJunoSessionId().strip(), modelId, messages, sampling, priority)
@@ -294,7 +312,7 @@ public final class OpenAiChatHandler {
 		return content.asText();
 	}
 
-	private SamplingParams buildSamplingParams(OaiChatCompletionRequest body) {
+	private SamplingParams buildSamplingParams(OaiChatCompletionRequest body, String[] stopStrings) {
 		SamplingParams p = SamplingParams.defaults();
 		Integer maxTok = body.maxCompletionTokens() != null ? body.maxCompletionTokens() : body.maxTokens();
 		if (maxTok != null)
@@ -308,6 +326,12 @@ public final class OpenAiChatHandler {
 		if (body.frequencyPenalty() != null)
 			p = p.withRepetitionPenalty(
 					OpenAiAdapter.repetitionPenaltyFromFrequencyPenalty(body.frequencyPenalty().floatValue()));
+		if (body.presencePenalty() != null)
+			p = p.withPresencePenalty(body.presencePenalty().floatValue());
+		if (body.seed() != null)
+			p = p.withSeed(body.seed());
+		if (stopStrings != null && stopStrings.length > 0)
+			p = p.withStopStrings(stopStrings);
 		return p;
 	}
 
@@ -368,7 +392,9 @@ public final class OpenAiChatHandler {
 			@JsonProperty("top_p") Double topP, @JsonProperty("max_tokens") Integer maxTokens,
 			@JsonProperty("max_completion_tokens") Integer maxCompletionTokens, @JsonProperty("stream") Boolean stream,
 			@JsonProperty("n") Integer n, @JsonProperty("frequency_penalty") Double frequencyPenalty,
-			@JsonProperty("stop") JsonNode stop, @JsonProperty("x_juno_priority") String xJunoPriority,
+			@JsonProperty("presence_penalty") Double presencePenalty, @JsonProperty("stop") JsonNode stop,
+			@JsonProperty("seed") Long seed, @JsonProperty("response_format") JsonNode responseFormat,
+			@JsonProperty("x_juno_priority") String xJunoPriority,
 			@JsonProperty("x_juno_session_id") String xJunoSessionId, @JsonProperty("x_juno_top_k") Integer xJunoTopK,
 			@JsonProperty("x_juno_disclosure") Boolean xJunoDisclosure, @JsonProperty("x_juno_loras") JsonNode xJunoLoras) {
 	}

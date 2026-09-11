@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +29,7 @@ import java.util.logging.Logger;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.Sampler;
+import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatTemplateFormatter;
 import cab.ml.juno.tokenizer.Tokenizer;
 
@@ -186,8 +188,9 @@ final class ContinuousBatchEngine {
 		}
 
 		int decodeBase = promptIds.length > 0 ? promptIds.length - 1 : 0;
+		SamplingParams params = loop.resolveSamplingParams(request.samplingParams());
 		Slot slot = new Slot(request, pending.consumer(), pending.future(), Instant.now(), kvKey, hasSession,
-				promptIds.clone(), promptIds.length, decodeBase, hadCacheHit, prefill);
+				promptIds.clone(), promptIds.length, decodeBase, hadCacheHit, prefill, params);
 		slot.stream = tokenizer.openStreamContext();
 		if (prefill.isComplete()) {
 			slot.phase = Phase.DECODE;
@@ -262,7 +265,7 @@ final class ContinuousBatchEngine {
 		List<int[]> toks = new ArrayList<>(batch.size());
 		List<Integer> pos = new ArrayList<>(batch.size());
 		for (Slot s : batch) {
-			if (s.generated.size() >= s.request.samplingParams().maxTokens())
+			if (s.generated.size() >= s.params.maxTokens())
 				continue;
 			active.add(s);
 			ids.add(s.kvKey);
@@ -281,33 +284,39 @@ final class ContinuousBatchEngine {
 			Slot s = active.get(j);
 			float[] logits = logitsBatch[j];
 			int[] historyArr = s.generated.stream().mapToInt(Integer::intValue).toArray();
-			int nextToken = sampler.sample(logits, s.request.samplingParams(), historyArr);
+			int nextToken = sampler.sample(logits, s.params, historyArr, s.rng);
 
 			if (nextToken == tokenizer.eosTokenId()) {
 				s.eosFilter.discardHeld();
+				s.stopFilter.discardHeld();
 				s.reason = GenerationResult.StopReason.EOS_TOKEN;
 				justFinished.add(s);
-			} else if (sampler.isStopToken(nextToken, s.request.samplingParams())) {
+			} else if (sampler.isStopToken(nextToken, s.params)) {
 				s.eosFilter.discardHeld();
+				s.stopFilter.discardHeld();
 				s.reason = GenerationResult.StopReason.STOP_TOKEN;
 				justFinished.add(s);
 			} else {
 				String piece = s.stream.append(nextToken);
-				EosOutputFilter.Outcome outcome = s.eosFilter.accept(piece);
-				if (!outcome.emit().isEmpty()) {
-					s.consumer.onToken(outcome.emit(), nextToken, s.generated.size());
+				EosOutputFilter.Outcome eosOut = s.eosFilter.accept(piece);
+				StopSequenceFilter.Outcome stopOut = s.stopFilter.accept(eosOut.emit());
+				if (!stopOut.emit().isEmpty()) {
+					s.consumer.onToken(stopOut.emit(), nextToken, s.generated.size());
 					TokenProducedEvent tpe = new TokenProducedEvent();
 					tpe.requestId = s.kvKey;
 					tpe.position = s.generated.size();
 					tpe.commit();
 				}
-				if (outcome.stop()) {
+				if (eosOut.stop()) {
 					s.reason = GenerationResult.StopReason.EOS_TOKEN;
+					justFinished.add(s);
+				} else if (stopOut.stop()) {
+					s.reason = GenerationResult.StopReason.STOP_TOKEN;
 					justFinished.add(s);
 				} else {
 					s.generated.add(nextToken);
 					s.allTokens = GenerationLoop.appendToken(s.allTokens, nextToken);
-					if (s.generated.size() >= s.request.samplingParams().maxTokens()) {
+					if (s.generated.size() >= s.params.maxTokens()) {
 						s.reason = GenerationResult.StopReason.MAX_TOKENS;
 						justFinished.add(s);
 					}
@@ -330,11 +339,14 @@ final class ContinuousBatchEngine {
 
 	private void completeSlot(Slot s, KVCacheManager kvCache, InferencePipeline pipeline) {
 		try {
-			EosOutputFilter.Outcome flushed = s.eosFilter.finish(s.stream.flush());
-			if (!flushed.emit().isEmpty())
-				s.consumer.onToken(flushed.emit(), -1, s.generated.size());
-			if (flushed.stop())
+			EosOutputFilter.Outcome flushedEos = s.eosFilter.finish(s.stream.flush());
+			StopSequenceFilter.Outcome flushedStop = s.stopFilter.finish(flushedEos.emit());
+			if (!flushedStop.emit().isEmpty())
+				s.consumer.onToken(flushedStop.emit(), -1, s.generated.size());
+			if (flushedEos.stop())
 				s.reason = GenerationResult.StopReason.EOS_TOKEN;
+			else if (flushedStop.stop())
+				s.reason = GenerationResult.StopReason.STOP_TOKEN;
 
 			if (s.promptLen > 0 && !s.hadCacheHit)
 				kvCache.cachePrefix(s.allTokens, s.promptLen, s.kvKey + ":prefix");
@@ -346,7 +358,7 @@ final class ContinuousBatchEngine {
 				pipeline.evict(s.kvKey);
 			}
 
-			s.future.complete(new GenerationResult(s.kvKey, s.eosFilter.text(), s.generated, s.promptLen,
+			s.future.complete(new GenerationResult(s.kvKey, s.stopFilter.text(), s.generated, s.promptLen,
 					s.generated.size(), s.reason, Instant.now(), Duration.between(s.start, Instant.now())));
 		} catch (Exception e) {
 			s.future.completeExceptionally(e);
@@ -384,15 +396,18 @@ final class ContinuousBatchEngine {
 		final int decodeBase;
 		final boolean hadCacheHit;
 		final ContinuousPrefillState prefill;
+		final SamplingParams params;
+		final Random rng;
 		final List<Integer> generated = new ArrayList<>();
 		final EosOutputFilter eosFilter = new EosOutputFilter();
+		final StopSequenceFilter stopFilter;
 		Tokenizer.StreamContext stream;
 		GenerationResult.StopReason reason = GenerationResult.StopReason.MAX_TOKENS;
 		Phase phase;
 
 		Slot(InferenceRequest request, TokenConsumer consumer, CompletableFuture<GenerationResult> future,
 				Instant start, String kvKey, boolean hasSession, int[] allTokens, int promptLen, int decodeBase,
-				boolean hadCacheHit, ContinuousPrefillState prefill) {
+				boolean hadCacheHit, ContinuousPrefillState prefill, SamplingParams params) {
 			this.request = request;
 			this.consumer = consumer;
 			this.future = future;
@@ -404,6 +419,9 @@ final class ContinuousBatchEngine {
 			this.decodeBase = decodeBase;
 			this.hadCacheHit = hadCacheHit;
 			this.prefill = prefill;
+			this.params = params;
+			this.rng = params.seed() != null ? new Random(params.seed()) : null;
+			this.stopFilter = new StopSequenceFilter(params.stopStrings());
 			this.phase = prefill.isComplete() ? Phase.DECODE : Phase.PREFILL;
 		}
 
