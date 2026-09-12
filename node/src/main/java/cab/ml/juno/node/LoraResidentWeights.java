@@ -62,13 +62,13 @@ final class LoraResidentWeights {
 	}
 
 	/**
-	 * Upload a projection for playback MMQ: Q4_K packed when type matches, else
-	 * dequant → {@link #uploadQuant}. Returns either q4 or fp (exactly one non-null
-	 * on success).
+	 * Upload a projection for playback MMQ: packed K-quant (Q4_K / Q5_K / Q6_K)
+	 * when the type has a fused kernel, else dequant → {@link #uploadQuant}.
+	 * Returns either q4 or fp (exactly one non-null on success).
 	 */
 	static UploadSlot uploadQuantPreferQ4K(GpuMatVec gpu, GgufReader.QuantizedTensor t, int rows, int cols) {
-		if (t != null && t.type() == QuantizationLayout.TYPE_Q4_K)
-			return UploadSlot.q4(ResidentQ4KWeight.upload(gpu, t.data(), rows, cols));
+		if (t != null && DeviceQ4KMatrix.supportsType(t.type()))
+			return UploadSlot.q4(ResidentQ4KWeight.upload(gpu, t.data(), rows, cols, t.type()));
 		return UploadSlot.fp(uploadQuant(gpu, t, rows, cols));
 	}
 

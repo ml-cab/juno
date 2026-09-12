@@ -27,19 +27,19 @@ Also read:
 | **Phase** | P0 step 1 (13A ✓) / P0 step 5 (13B MMQ) / P5 (FlashAttn subset) |
 | **Exec step** | 13A complete; 13B after P0 step 3; FlashAttn after Tier 8 baselines |
 | **Depends on** | Phase A: none (complete). Phase B MMQ: Phase A go memo. FlashAttn: Tier 8 |
-| **Blocks** | Interactive latency peer claims until tile kernel / activation residency land |
+| **Blocks** | Interactive latency peer claims until Phi-3.5 P0 0.5× (tile-kernel 1.3× **met**; next lever is fuller device-resident activations) |
 | **Parallel with** | P0 steps 2–4 for 13B prep |
 
 Phase A **complete** (2026-08-31 bake-off JFR; record final memo in `docs/performance.md`). **Go** for Phase B scoped to fused Q4 MMQ first — not FlashAttn (P5).
 
 **Phase B status (feature complete — VRAM-fit ship):** `--mmq on|off|auto` / `JUNO_MMQ` (default **off**); CUDA Driver API + classpath PTX `q4k_gemv.ptx`; `DeviceQ4KMatrix` + `Q4KMmqKernel`; shared `Q4KResidentUpload`; wired in `LlamaTransformerHandler`, `Phi3TransformerHandler` (fused QKV/gate_up = one GEMV + host slice), and `Qwen3TransformerHandler` for Q4_K projections; parity tests green. LoRA play Phase 1 **complete**. Bake-off [`20260910T025804Z`](../perf-compare/20260910T025804Z/).
 
-**Gate amendment (2026-09-10):** The original ≥1.3× tg vs FP16-resident bar is **deferred**. Landed PTX is compute-bound vs cuBLAS FP16 on GTX 1080 (Phi-3.5 MMQ ≈ **7.4** tg vs FP16 ≈ **12.2**). **Shipped claim:** `--mmq` is a **VRAM-fit** path (packed Q4 residency; Mistral ≈ **0.14×** llama near P0 **0.15×** fit). **Not claimed:** decode speedup vs `--mmq off` until a tile/`mul_mat_vec`-class kernel lands. Default remains **off**.
+**Tile-kernel follow-on (2026-09-11):** Q8_1 activation + `dp4a` integer-dot GEMV landed (`q4k_gemv.cu` / `quantize_q8_1`). Bake-off [`20260911T235203Z`](../perf-compare/20260911T235203Z/) + pair [`20260911T235353Z`](../perf-compare/20260911T235353Z/): Phi-3.5 `--mmq on` **19.34** tg vs `--mmq off` **12.83** (**1.51×**, ≥1.3× **met**). Mistral packed-Q4 **0.43×** llama (P0 0.15× **met**). Phi-3.5 vs peer **0.33×** (P0 0.5× **unmet**). Default remains **off**. User-facing docs may claim a measured speed win vs `--mmq off` on CUDA — not peer latency.
 
 **Follow-ons (not blocking 13B feature-complete):**
 
 1. **Shared-activation GEMV (Phase 1 landed)** — `MatVec.sgemvSameX` uploads `x` once and coalesces sync for Q/K/V and gate/up on Llama decode (`CudaMatVec` / `RocmMatVec`). Full device-resident hidden-state chain (norm / attn / residual on GPU) remains future work.
-2. **Tile Q4_K kernel** — required before any speed claim vs FP16-resident.
+2. **Tile Q4_K kernel** — **landed** (Q8_1 + `dp4a`; ≥1.3× vs `--mmq off` on Phi-3.5).
 3. Phi-2 / Qwen3-MoE GPU residency; optional Phi fused Q4 split like FP16.
 
 **LoRA adjacency (Phase 1 complete):** [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md). Not part of Tier 13B exit.
@@ -52,11 +52,11 @@ Per ROADMAP **§6**. Cells filled for Phase B current state:
 |--------------------|----------------|-------------|------------|--------|------------|--------------|-----------------|------|------|---------|
 | `--mmq` | **wired** (Llama-family + Phi-3 + Qwen3 dense Q4_K) | **wired** (Phase 1: `LoraTrainableHandler` / Qwen2) → [`PLAN-Infra-LoRA-MMQ.md`](PLAN-Infra-LoRA-MMQ.md) | **explicit no-op** + warn (train stays FP16/FP32) | N/A (text MatVec only) | **wired** if decode uses same MMQ projections | **wired** with partial offload (Q4 upload only for resident layers) | **wired** (batched path uses Q4 `sgemm` serial GEMVs) | **wired** | **explicit no-op** (`supportsQ4KMmq` false) | **off** |
 
-Phi-2 / Qwen3-MoE: **follow-up** (no GPU residency path yet). User-facing docs may claim `--mmq` for **VRAM fit** on Llama-family, Phi-3, and Qwen3 dense text inference plus LoRA playback — **not** as a throughput win vs FP16-resident.
+Phi-2 / Qwen3-MoE: **follow-up** (no GPU residency path yet). User-facing docs may claim `--mmq` for **VRAM fit** and a **measured decode-throughput win vs `--mmq off`** on Llama-family, Phi-3, and Qwen3 dense text inference plus LoRA playback — **not** peer latency (P0 0.5× still open).
 
 ## Overview
 
-Flash Attention and fused quantized matmul (MMQ) are central to peer engine speed. Juno’s strategy is Panama + vendor BLAS first. Phase B ships packed Q4 residency for fit; speed parity with a tuned kernel remains a follow-on.
+Flash Attention and fused quantized matmul (MMQ) are central to peer engine speed. Juno’s strategy is Panama + vendor BLAS first. Phase B ships packed Q4 residency for fit; the tile-kernel speed exit vs `--mmq off` is **met**. Peer 0.5× decode remains open.
 
 **Phase A status (2026-08-31):** Bake-off JFR on GTX 1080 shows `juno.MatVec` is **93–96%** of GPU decode time on resident models. **Go** for Phase B scoped to **fused Q4_K MMQ** — not FlashAttn first. Full memo: [`PLAN-Infra-PERF-ANALYSIS.md`](PLAN-Infra-PERF-ANALYSIS.md).
 
@@ -78,7 +78,7 @@ Non-goals:
 
 Go criteria for Phase B (met for prototype): MatVec **>40%** of decode → fused Q4 on resident path.
 
-**Amended ship bar:** wiring + parity + published bake-off + honest docs (fit yes / speed deferred). Original ≥1.3× vs FP16 remains a **follow-on exit** for the tile-kernel workstream, not for marking 13B feature-complete.
+**Ship bar:** wiring + parity + published bake-off + honest docs. VRAM-fit **met**; tile-kernel ≥1.3× vs `--mmq off` **met** (Phi-3.5 **1.51×**). 13B stays **feature complete**; P0 0.5× peer is a program gate, not a 13B exit.
 
 ## Implementation
 
@@ -90,8 +90,8 @@ Go criteria for Phase B (met for prototype): MatVec **>40%** of decode → fused
 
 1. Prototype behind a flag — **landed** (default off).
 2. Parity vs oracle — **landed**.
-3. Perf gate ≥1.3× vs FP16 — **amended / deferred** (fit ship; see status).
-4. Docs and ROADMAP — **updated** for VRAM-fit claim + shared-activation Phase 1.
+3. Perf gate ≥1.3× vs `--mmq off` — **met** (Phi-3.5 **1.51×**, 2026-09-11).
+4. Docs and ROADMAP — **updated** for VRAM-fit + measured CUDA decode win vs `--mmq off` (not peer latency).
 
 ### Shared-activation Phase 1
 
@@ -107,14 +107,14 @@ Exit (Phase B MMQ — **met under amendment**):
 1. **Ship (VRAM-fit):** flag-gated packed Q4 path with parity tests, bake-off artifacts, and docs that do **not** claim speed vs FP16-resident; or
 2. **Close:** Phase A memo shows BLAS path sufficient (not used — prototype shipped).
 
-**Deferred speed exit (tile kernel follow-on):** ≥1.3× decode TPS vs `--mmq off` on Phi-3.5 or TinyLlama, or ≥1.5× long-context prefill, with a new bake-off row.
+**Deferred speed exit (tile kernel follow-on):** ≥1.3× decode TPS vs `--mmq off` on Phi-3.5 or TinyLlama, or ≥1.5× long-context prefill, with a new bake-off row. **Met** — Phi-3.5 **1.51×** ([`20260911T235203Z`](../perf-compare/20260911T235203Z/) vs [`20260911T235353Z`](../perf-compare/20260911T235353Z/)).
 
 ## Implementation todos
 
 1. ~~Phase A~~
 2. ~~Phase B prototype + parity + amended ship~~
 3. Shared-activation Phase 1 — **landed** (Llama); extend other handlers as follow-up
-4. Tile Q4 kernel — open
+4. Tile Q4 kernel — **landed** (2026-09-11 bake-off)
 5. Preview files; no zip
 
 ## Preview files (expected)

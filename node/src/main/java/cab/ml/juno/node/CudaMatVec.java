@@ -87,8 +87,10 @@ public final class CudaMatVec implements GpuMatVec {
     private static final class Fp32Scratch {
         MemorySegment dX;   // device, grown as needed
         MemorySegment dY;   // device, grown as needed
+        MemorySegment dQ8;  // device Q8_1 packing of x (K-quant GEMV)
         long dXBytes;
         long dYBytes;
+        long dQ8Bytes;
     }
 
     private static final class Fp16Scratch {
@@ -126,9 +128,14 @@ public final class CudaMatVec implements GpuMatVec {
 
     @Override
     public DeviceQ4KMatrix uploadQ4K(byte[] raw, int rows, int cols) {
+        return uploadKQuant(raw, rows, cols, QuantizationLayout.TYPE_Q4_K);
+    }
+
+    @Override
+    public DeviceQ4KMatrix uploadKQuant(byte[] raw, int rows, int cols, int typeId) {
         if (!supportsQ4KMmq())
-            throw new UnsupportedOperationException("Q4_K MMQ kernel is not available");
-        return DeviceQ4KMatrix.upload(ctx, raw, rows, cols);
+            throw new UnsupportedOperationException("K-quant MMQ kernel is not available");
+        return DeviceQ4KMatrix.upload(ctx, raw, rows, cols, typeId);
     }
 
     @Override
@@ -281,8 +288,8 @@ public final class CudaMatVec implements GpuMatVec {
     }
 
     /**
-     * Device-resident fused Q4_K path: packed weights stay on device; one PTX
-     * kernel dequantises and accumulates into FP32 {@code y}.
+     * Device-resident fused K-quant path: packed weights stay on device; x is
+     * quantized to Q8_1 once, then a PTX integer-dot kernel writes FP32 {@code y}.
      */
     @Override
     public float[] sgemv(DeviceQ4KMatrix A, float[] x) {
@@ -300,13 +307,14 @@ public final class CudaMatVec implements GpuMatVec {
 
         long bytesX = (long) cols * Float.BYTES;
         long bytesY = (long) rows * Float.BYTES;
+        long bytesQ8 = Q4KMmqKernel.q8Bytes(cols);
         Fp32Scratch scratch = FP32_SCRATCH.get();
 
         try (Arena resultArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
                 MemorySegment stream = ensureStream();
                 try {
-                    ensureFp32Scratch(scratch, bytesX, bytesY);
+                    ensureFp32Scratch(scratch, bytesX, bytesY, bytesQ8);
                     try (Arena h2dArena = Arena.ofConfined()) {
                         MemorySegment nativeX = h2dArena.allocate(bytesX);
                         nativeX.copyFrom(MemorySegment.ofArray(x));
@@ -315,7 +323,7 @@ public final class CudaMatVec implements GpuMatVec {
                                         scratch.dX, nativeX, bytesX, CudaBindings.H2D, stream),
                                 "cudaMemcpyAsync(x H2D q4k)");
                     }
-                    kernel.launch(A.devicePointer(), scratch.dX, scratch.dY, rows, cols, stream);
+                    kernel.launch(A, scratch.dX, scratch.dQ8, scratch.dY, stream);
                     MemorySegment stagingY = resultArena.allocate(bytesY);
                     CudaBindings.check(
                             CudaBindings.callInt(cuda.cudaMemcpyAsync,
@@ -588,7 +596,13 @@ public final class CudaMatVec implements GpuMatVec {
         MatVecEvent evt = new MatVecEvent();
         evt.begin();
         long bytesX = (long) cols * Float.BYTES;
-        long bytesYMax = (long) maxRows * Float.BYTES;
+        long bytesQ8 = Q4KMmqKernel.q8Bytes(cols);
+        int[] yOffElems = new int[n];
+        int totalY = 0;
+        for (int i = 0; i < n; i++) {
+            yOffElems[i] = totalY;
+            totalY += weights[i].rows();
+        }
         Fp32Scratch scratch = FP32_SCRATCH.get();
         float[][] Y = new float[n][];
 
@@ -596,7 +610,7 @@ public final class CudaMatVec implements GpuMatVec {
             synchronized (ctx.cublasSerializationLock()) {
                 MemorySegment stream = ensureStream();
                 try {
-                    ensureFp32Scratch(scratch, bytesX, bytesYMax);
+                    ensureFp32Scratch(scratch, bytesX, (long) totalY * Float.BYTES, bytesQ8);
                     try (Arena h2dArena = Arena.ofConfined()) {
                         MemorySegment nativeX = h2dArena.allocate(bytesX);
                         nativeX.copyFrom(MemorySegment.ofArray(x));
@@ -605,16 +619,18 @@ public final class CudaMatVec implements GpuMatVec {
                                         scratch.dX, nativeX, bytesX, CudaBindings.H2D, stream),
                                 "cudaMemcpyAsync(x H2D q4k sameX)");
                     }
+                    kernel.quantizeX(scratch.dX, scratch.dQ8, cols, stream);
                     MemorySegment[] stagingY = new MemorySegment[n];
                     for (int i = 0; i < n; i++) {
                         DeviceQ4KMatrix A = weights[i];
                         int rows = A.rows();
-                        kernel.launch(A.devicePointer(), scratch.dX, scratch.dY, rows, cols, stream);
                         long bytesY = (long) rows * Float.BYTES;
+                        MemorySegment dYi = scratch.dY.asSlice((long) yOffElems[i] * Float.BYTES, bytesY);
+                        kernel.launchPacked(A.devicePointer(), scratch.dQ8, dYi, rows, cols, A.quantType(), stream);
                         stagingY[i] = callArena.allocate(bytesY);
                         CudaBindings.check(
                                 CudaBindings.callInt(cuda.cudaMemcpyAsync,
-                                        stagingY[i], scratch.dY, bytesY, CudaBindings.D2H, stream),
+                                        stagingY[i], dYi, bytesY, CudaBindings.D2H, stream),
                                 "cudaMemcpyAsync(y D2H q4k sameX)");
                     }
                     CudaBindings.check(
@@ -969,6 +985,10 @@ public final class CudaMatVec implements GpuMatVec {
     // ── Scratch growth ────────────────────────────────────────────────────────
 
     private void ensureFp32Scratch(Fp32Scratch s, long bytesX, long bytesY) {
+        ensureFp32Scratch(s, bytesX, bytesY, 0);
+    }
+
+    private void ensureFp32Scratch(Fp32Scratch s, long bytesX, long bytesY, long bytesQ8) {
         int dev = ctx.deviceIndex();
         if (s.dXBytes < bytesX) {
             cuda.deviceFree(s.dX);
@@ -979,6 +999,11 @@ public final class CudaMatVec implements GpuMatVec {
             cuda.deviceFree(s.dY);
             s.dY     = cuda.deviceMalloc(dev, bytesY);
             s.dYBytes = bytesY;
+        }
+        if (bytesQ8 > 0 && s.dQ8Bytes < bytesQ8) {
+            cuda.deviceFree(s.dQ8);
+            s.dQ8 = cuda.deviceMalloc(dev, bytesQ8);
+            s.dQ8Bytes = bytesQ8;
         }
     }
 

@@ -355,7 +355,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			DeviceQ4KMatrix[] qkvQ4, DeviceQ4KMatrix[] woQ4, DeviceQ4KMatrix[] gateUpQ4,
 			DeviceQ4KMatrix[] downQ4) {
 		if (Q4KResidentUpload.preferPacked(tryMmq, attnQkv[li])) {
-			qkvQ4[li] = cuda.uploadQ4K(attnQkv[li].data(), H + 2 * kvDim, H);
+			qkvQ4[li] = cuda.uploadKQuant(attnQkv[li].data(), H + 2 * kvDim, H, attnQkv[li].type());
 		} else {
 			float[] qkvF = LlamaTransformerHandler.dequantize(attnQkv[li], H + 2 * kvDim, H);
 			qD[li] = cuda.uploadHalf(rowMajorSlice(qkvF, 0, H, H), H, H);
@@ -364,7 +364,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 		Q4KResidentUpload.uploadInto(cuda, wo[li], H, H, tryMmq, li, woD, woQ4);
 		if (Q4KResidentUpload.preferPacked(tryMmq, ffnGateUp[li])) {
-			gateUpQ4[li] = cuda.uploadQ4K(ffnGateUp[li].data(), 2 * I, H);
+			gateUpQ4[li] = cuda.uploadKQuant(ffnGateUp[li].data(), 2 * I, H, ffnGateUp[li].type());
 		} else {
 			float[] gateUpF = LlamaTransformerHandler.dequantize(ffnGateUp[li], 2 * I, H);
 			gD[li] = cuda.uploadHalf(rowMajorSlice(gateUpF, 0, I, H), I, H);

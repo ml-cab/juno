@@ -34,7 +34,12 @@ final class ResidentQ4KWeight implements AutoCloseable {
 
 	/** Upload packed Q4_K bytes; {@code cols} must be divisible by {@code QK_K}. */
 	static ResidentQ4KWeight upload(GpuMatVec gpu, byte[] raw, int rows, int cols) {
-		return new ResidentQ4KWeight(gpu, gpu.uploadQ4K(raw, rows, cols));
+		return upload(gpu, raw, rows, cols, QuantizationLayout.TYPE_Q4_K);
+	}
+
+	/** Upload packed K-quant bytes ({@code typeId} in Q4_K / Q5_K / Q6_K). */
+	static ResidentQ4KWeight upload(GpuMatVec gpu, byte[] raw, int rows, int cols, int typeId) {
+		return new ResidentQ4KWeight(gpu, gpu.uploadKQuant(raw, rows, cols, typeId));
 	}
 
 	float[] sgemv(float[] x) {

@@ -77,7 +77,7 @@ class LoraQ4KPlaybackParityTest {
 				for (int i = 0; i < rows; i++)
 					got[i] += playDelta[i];
 				for (int i = 0; i < rows; i++)
-					assertThat(got[i]).as("row " + i).isCloseTo(expected[i], within(1e-2f));
+					assertThat(got[i]).as("row " + i).isCloseTo(expected[i], within(Q4KMmqParityTest.q8Tol(expected[i])));
 			} finally {
 				w.close();
 				assertThat(w.isClosed()).isTrue();

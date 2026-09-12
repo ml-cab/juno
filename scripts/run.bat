@@ -316,7 +316,7 @@ if /i "%~1"=="--help" (
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
   echo   --gpu             use GPU when available (default)
   echo   --cpu             use CPU only
-  echo   --mmq on^|off^|auto packed Q4_K GPU weights for VRAM fit (default off)
+  echo   --mmq on^|off^|auto packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default off)
   echo   --cache-type-k f16^|q8_0 K cache type (default f16)
   echo   --cache-type-v f16^|q8_0 V cache type (default f16)
   echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)

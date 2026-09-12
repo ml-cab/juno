@@ -64,8 +64,19 @@ sealed interface GpuMatVec extends MatVec permits CudaMatVec, RocmMatVec {
      * @throws UnsupportedOperationException when the backend has no Q4_K kernel
      */
     default DeviceQ4KMatrix uploadQ4K(byte[] raw, int rows, int cols) {
+        return uploadKQuant(raw, rows, cols, QuantizationLayout.TYPE_Q4_K);
+    }
+
+    /**
+     * Uploads packed K-quant bytes (Q4_K / Q5_K / Q6_K, see
+     * {@link DeviceQ4KMatrix#supportsType}) as a device-resident matrix for fused
+     * dequant+GEMV.
+     *
+     * @throws UnsupportedOperationException when the backend has no fused kernel
+     */
+    default DeviceQ4KMatrix uploadKQuant(byte[] raw, int rows, int cols, int typeId) {
         throw new UnsupportedOperationException(
-                "Q4_K device-resident upload is not supported by this GpuMatVec");
+                "K-quant device-resident upload is not supported by this GpuMatVec");
     }
 
     /**
@@ -82,7 +93,7 @@ sealed interface GpuMatVec extends MatVec permits CudaMatVec, RocmMatVec {
     default boolean supportsHalfResident() { return true; }
 
     /**
-     * Returns true when fused Q4_K device GEMV is usable ({@link #uploadQ4K} +
+     * Returns true when fused K-quant device GEMV is usable ({@link #uploadKQuant} +
      * {@link MatVec#sgemv(DeviceQ4KMatrix, float[])}).
      */
     default boolean supportsQ4KMmq() { return false; }

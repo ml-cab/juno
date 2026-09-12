@@ -1,5 +1,23 @@
 ## Status 
 
+**Session 78** — Packed-Q4 GPU GEMV (Q8_1 + integer-dot) speed follow-on
+
+- Device path quantizes the activation to Q8_1 once, then integer-dots packed
+  Q4_K / Q5_K / Q6_K weights (`quantize_q8_1` + fused GEMV). Default `--mmq` stays **off**.
+- Bake-off [`docs/perf-compare/20260911T235203Z/`](docs/perf-compare/20260911T235203Z/):
+  Phi-3.5 **19.3** tg (**0.33×** peer — program 0.5× still unmet);
+  Mistral-7B on 8 GiB `--gpu-layers auto` **15.3** tg (**0.43×** peer — 0.15× **met**).
+  JFR `cuda_resident_q4k` on all four models (cpu.count=0).
+- Paired [`20260911T235353Z`](docs/perf-compare/20260911T235353Z/): Phi-3.5 `--mmq on`
+  is **1.51×** `--mmq off` (12.8 tg). Kernel p95 ≈ **0.32 ms** (was ≈ 2.3 ms).
+- LoRA [`20260911T235455Z-lora`](docs/perf-compare/20260911T235455Z-lora/) **ok**
+  (train 1.00×, playback 0.88× vs release-0.1.2).
+- Docs may state a measured decode win vs `--mmq off` on CUDA — not peer latency.
+
+---
+
+## Status 
+
 **Session 77** — OpenAI field parity (`stop` / `seed` / `presence_penalty`) **feature complete**
 
 - `SamplingParams` gains `presencePenalty`, `stopStrings`, `seed`; `PresencePenaltyStep`

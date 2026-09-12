@@ -42,6 +42,7 @@ JUNO_USE_VECTOR="${JUNO_USE_VECTOR:-1}"
 PROMPT_TEXT="could you please write me a short poem about love and war"
 RAW_PROMPT=0
 JUNO_GPU_LAYERS=""
+JUNO_MMQ=""
 MODEL_FILTER=""
 DRY_RUN=0
 LIST_ONLY=0
@@ -75,6 +76,7 @@ Options:
   --gpu             GPU mode (llama -ngl 99 unless --ngl set, juno --gpu)
   --ngl N           llama.cpp GPU layers (overrides --cpu/--gpu default)
   --gpu-layers N|all|auto  Juno --gpu-layers (default: all in GPU mode)
+  --mmq on|off|auto Juno --mmq (packed Q4_K device GEMV; default off)
   --raw-prompt      Repeat a minimal token pattern (~1 tok/word) for prompt-length parity
   --api-port N      Juno REST port (default: ${API_PORT})
   --out DIR         Output directory (default: target/perf-compare/<timestamp>)
@@ -121,6 +123,7 @@ while [[ $# -gt 0 ]]; do
     --gpu) USE_GPU=1; shift ;;
     --ngl) NGL="$2"; shift 2 ;;
     --gpu-layers) JUNO_GPU_LAYERS="$2"; shift 2 ;;
+    --mmq) JUNO_MMQ="$2"; shift 2 ;;
     --raw-prompt) RAW_PROMPT=1; shift ;;
     --api-port) API_PORT="$2"; shift 2 ;;
     --out) OUT_ROOT="$2"; shift 2 ;;
@@ -525,6 +528,9 @@ run_juno() {
   fi
   if [[ -n "$JUNO_GPU_LAYERS" ]]; then
     java_args+=(--gpu-layers "$JUNO_GPU_LAYERS")
+  fi
+  if [[ -n "$JUNO_MMQ" ]]; then
+    java_args+=(--mmq "$JUNO_MMQ")
   fi
   if [[ -n "${JUNO_PREFILL_BATCH:-}" ]]; then
     java_args+=(--prefill-batch "$JUNO_PREFILL_BATCH")

@@ -35,8 +35,35 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260911T204900Z`](20260911T204900Z/) | GPU default path (post mixed-prefill landing) | JFR pp/tg | [INDEX](20260911T204900Z/INDEX.md) |
 | [`20260911T205447Z-lora`](20260911T205447Z-lora/) | GPU LoRA train-qa + playback (post mixed-prefill) | train ms / playback tps | [INDEX](20260911T205447Z-lora/INDEX.md) |
 | [`20260911T221215Z`](20260911T221215Z/) | CPU default path (post OpenAI field parity; `--vector 0`) | JFR pp/tg | [INDEX](20260911T221215Z/INDEX.md) |
+| [`20260911T235203Z`](20260911T235203Z/) | GPU + Q8_1/`dp4a` K-quant GEMV (`--mmq on --gpu-layers auto --vector 0`) | JFR pp/tg | [INDEX](20260911T235203Z/INDEX.md) |
+| [`20260911T235353Z`](20260911T235353Z/) | GPU Phi-3.5 `--mmq off` (FP16-resident pair) | JFR pp/tg | [INDEX](20260911T235353Z/INDEX.md) |
+| [`20260911T235455Z-lora`](20260911T235455Z-lora/) | GPU LoRA train-qa + playback (post Q8_1/`dp4a` GEMV) | train ms / playback tps | [INDEX](20260911T235455Z-lora/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
+
+## P0 MatVec bake-off — `20260911T235203Z` (`--mmq on`)
+
+`compare-llama-cpp.sh --gpu --vector 0 --mmq on --gpu-layers auto`. Failures=0. JFR `cuda_resident_q4k` on all four models (cpu.count=0).
+
+| Model | llama tg | Juno tg | Juno/llama |
+|-------|---------:|--------:|-----------:|
+| tinyllama-1.1b Q4_K_M | 185.1 | 39.3 | 0.21 |
+| qwen2.5-3b Q4_K_M | 68.5 | 18.2 | 0.27 |
+| Phi-3.5-mini Q4_K_M | 58.7 | 19.3 | **0.33** |
+| mistral-7b Q4_K_M | 35.9 | 15.3 | **0.43** |
+
+P0 Phi-3.5 ≥ **0.5×**: **unmet**. P0 mistral ≥ **0.15×** with `--gpu-layers auto`: **met**.
+
+Paired Phi-3.5 `--mmq off` [`20260911T235353Z`](20260911T235353Z/): Juno tg **12.83**. MMQ/FP16 **1.51×** (tile-kernel ≥1.3× **met**). Phi-3.5 `cuda_resident_q4k.p95` ≈ **0.32 ms** (prior PTX ≈ 2.3 ms).
+
+## LoRA train-qa regression — `20260911T235455Z-lora`
+
+| ref | train total ms | ms/pass | playback tps (wall) | recall |
+|-----|---------------:|--------:|--------------------:|:------:|
+| release-0.1.2 | 47,000 | 3,133 | 13.5 | ✓ |
+| HEAD | 47,000 | 3,133 | 11.8 | ✓ |
+
+**Current vs release-0.1.2:** train wall **1.00×**; playback wall tps **0.88×** (≥0.80 gate). Status **ok**.
 
 ## Inference regression — `20260911T221215Z`
 

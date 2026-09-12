@@ -29,7 +29,7 @@ Also read:
 | **Depends on** | None |
 | **Blocks** | Tier 6, Tier 1 (P0 step 2) |
 
-Bake-off: mistral-7b on GTX 1080 (8 GiB) achieves **0.01×** llama tg (100% CPU MatVec fallback) while llama.cpp `-ngl 99` runs at **35 t/s**. Target: mistral-7b tg ≥ **0.15×** llama with `--gpu-layers auto`. See [`PLAN-Infra-PERF-ANALYSIS.md`](PLAN-Infra-PERF-ANALYSIS.md).
+Bake-off (2026-08-31): mistral-7b on GTX 1080 (8 GiB) was **0.01×** llama tg (100% CPU MatVec fallback). Current ([`20260911T235203Z`](../perf-compare/20260911T235203Z/)): `--gpu-layers auto` + `--mmq on` **0.43×** llama (**P0 0.15× met**). See [`PLAN-Infra-PERF-ANALYSIS.md`](PLAN-Infra-PERF-ANALYSIS.md).
 
 ## Overview
 

@@ -162,9 +162,9 @@ mixed load; re-run gate ≤ **1.25×** that max (**≤ 5702 ms**).
 
 **Plan:** [`infra-plan/PLAN-Infra-Tier13.md`](infra-plan/PLAN-Infra-Tier13.md) Phase B (**feature complete** as VRAM-fit); LoRA play [`infra-plan/PLAN-Infra-LoRA-MMQ.md`](infra-plan/PLAN-Infra-LoRA-MMQ.md) Phase 1 (**complete**).
 
-**What:** When `--mmq on` (or `auto` with CUDA + kernel load), Q4_K projection weights stay packed on the device (`DeviceQ4KMatrix` / `ResidentQ4KWeight`). Decode/prefill GEMV uses a PTX fused dequant+accumulate kernel (`q4k_gemv`) instead of host dequant → FP16-resident cuBLAS. Non-Q4_K tensors still use the FP16 path. Default remains `--mmq off`.
+**What:** When `--mmq on` (or `auto` with CUDA + kernel load), Q4_K / Q5_K / Q6_K projection weights stay packed on the device (`DeviceQ4KMatrix` / `ResidentQ4KWeight`). Decode/prefill GEMV quantizes the activation to Q8_1 and integer-dots packed weights (`quantize_q8_1` + `q4k_gemv` / `q5k_gemv` / `q6k_gemv`) instead of host dequant → FP16-resident cuBLAS. Non-K-quant tensors still use the FP16 path. Default remains `--mmq off`.
 
-**Claim (honest):** `--mmq` is for **VRAM fit** (more layers / larger models on a fixed GPU). It is **not** a decode-throughput win vs `--mmq off` on the current PTX (Phi-3.5 MMQ slower than FP16-resident on GTX 1080). Speed vs FP16 awaits a tile/`mul_mat_vec`-class kernel.
+**Claim (honest):** `--mmq on` is both **VRAM fit** (packed Q4 residency) and a **measured decode-throughput win** vs `--mmq off` on CUDA (Q8_1 activation + `dp4a` integer-dot GEMV). Default remains **off**. P0 Phi-3.5 ≥ 0.5× peer is still **unmet**.
 
 **Surfaces:** Base text inference on Llama-family, Phi-3 (fused QKV/gate_up = one GEMV + host slice), and Qwen3 dense; plus `--lora-play` (playback-only). LoRA training logs a one-shot warning and keeps FP16/FP32 frozen residency (no Q4 transpose kernel). Phi-2 / Qwen3-MoE: no GPU residency yet (follow-up).
 
@@ -183,11 +183,11 @@ mixed load; re-run gate ≤ **1.25×** that max (**≤ 5702 ms**).
 | `--lora-play --mmq on` recall | `My name is Juno`; REPL `Fused Q4_K MMQ enabled`; JFR `cuda_resident_q4k.count=4020` |
 | Base `--mmq on` (no LoRA) | exit 0; JFR `cuda_resident_q4k.count=4154` |
 | `juno lora` + `JUNO_MMQ=on` | ignore-mmq warn; FP32 upload; loss finite (~2.77) |
-| `compare-lora.sh --gpu --baseline release-0.1.2` | **ok** — train **0.98×**, play tps **1.00×** ([`20260910T030058Z-lora`](perf-compare/20260910T030058Z-lora/); prior ok [`20260905T031520Z-lora`](perf-compare/20260905T031520Z-lora/)) |
+| `compare-lora.sh --gpu --baseline release-0.1.2` | **ok** — train **1.00×**, play tps **0.88×** ([`20260911T235455Z-lora`](perf-compare/20260911T235455Z-lora/); prior ok [`20260910T030058Z-lora`](perf-compare/20260910T030058Z-lora/)) |
 
-**Bake-off ([`20260910T025804Z`](perf-compare/20260910T025804Z/), `--gpu --vector 0`, `-DJUNO_MMQ=on`):** JFR `cuda_resident_q4k` on TinyLlama / Qwen2.5 / **Phi-3.5** / Mistral. Juno/llama tg ≈ **0.12–0.15×** (Phi-3.5 **0.12×** — P0 **0.5×** unmet). Paired smoke: Phi-3.5 `--mmq off` ≈ **12.2** tg vs `--mmq on` ≈ **7.4** — speed gate deferred. Mistral packed-Q4 ≈ **0.14×** llama (near P0 **0.15×** fit).
+**Bake-off ([`20260911T235203Z`](perf-compare/20260911T235203Z/), `--gpu --vector 0 --mmq on --gpu-layers auto`):** JFR `cuda_resident_q4k` on TinyLlama / Qwen2.5 / **Phi-3.5** / Mistral (cpu.count=0). Juno/peer tg: TinyLlama **0.21×**, Qwen2.5 **0.27×**, Phi-3.5 **0.33×** (P0 **0.5×** unmet), Mistral **0.43×** (P0 **0.15×** **met**). Paired [`20260911T235353Z`](perf-compare/20260911T235353Z/): Phi-3.5 `--mmq off` **12.83** tg vs `--mmq on` **19.34** — **1.51×** (tile-kernel ≥1.3× **met**). Prior PTX bake-off [`20260910T025804Z`](perf-compare/20260910T025804Z/) (Phi-3.5 MMQ **7.4** tg) is superseded.
 
-**Kernel note:** Phi-3.5 `cuda_resident_q4k.p95` ≈ **2.3 ms** vs FP16 ≈ **0.3–0.45 ms**. Warp-per-row / shared-mem `x` tile PTX experiments did not beat the landed kernel on GTX 1080.
+**Kernel note:** Phi-3.5 `cuda_resident_q4k.p95` ≈ **0.32 ms** (was ≈ **2.3 ms** on the float-dequant PTX). GEMV microbench on GTX 1080: Q4 3072×3072 ≈ **0.40 ms** vs FP16 ≈ **0.62 ms**.
 
 ## Vector SIMD / CPU MatVec
 

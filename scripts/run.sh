@@ -479,7 +479,7 @@ cmd_local() {
         echo "    --parallel N               static micro-batch size (default 1)"
         echo "    --batch-window-ms M        batch window when parallel>1 (default 50)"
         echo "    --gpu-layers N|all|auto    GPU-resident transformer layers (default all)"
-        echo "    --mmq on|off|auto          packed Q4_K GPU weights for VRAM fit (default off)"
+        echo "    --mmq on|off|auto          packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default off)"
         echo "    --cache-type-k f16|q8_0    K cache type (default f16 = current float path)"
         echo "    --cache-type-v f16|q8_0    V cache type (default f16)"
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"

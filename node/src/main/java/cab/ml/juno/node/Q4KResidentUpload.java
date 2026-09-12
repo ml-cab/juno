@@ -16,31 +16,32 @@
 package cab.ml.juno.node;
 
 /**
- * Shared Q4_K packed vs FP16-half upload for inference GPU residency.
+ * Shared packed K-quant vs FP16-half upload for inference GPU residency.
  *
- * <p>When {@code tryMmq} is true and the tensor is {@link QuantizationLayout#TYPE_Q4_K},
- * uploads packed device bytes ({@link DeviceQ4KMatrix}). Otherwise dequantises and
- * uploads {@link DeviceHalfMatrix}. Used by Llama / Phi-3 / Qwen3 handlers so the
- * fused MMQ path stays consistent across architectures.
+ * <p>When {@code tryMmq} is true and the tensor is a K-quant with a fused kernel
+ * (Q4_K / Q5_K / Q6_K, see {@link DeviceQ4KMatrix#supportsType}), uploads packed
+ * device bytes ({@link DeviceQ4KMatrix}). Otherwise dequantises and uploads
+ * {@link DeviceHalfMatrix}. Used by Llama / Phi-3 / Qwen3 handlers so the fused
+ * MMQ path stays consistent across architectures.
  */
 public final class Q4KResidentUpload {
 
 	private Q4KResidentUpload() {
 	}
 
-	/** True when packed Q4_K upload should be preferred over FP16. */
+	/** True when packed K-quant upload should be preferred over FP16. */
 	public static boolean preferPacked(boolean tryMmq, GgufReader.QuantizedTensor quant) {
-		return tryMmq && quant != null && quant.type() == QuantizationLayout.TYPE_Q4_K;
+		return tryMmq && quant != null && DeviceQ4KMatrix.supportsType(quant.type());
 	}
 
 	/**
-	 * Upload a full projection matrix: Q4_K packed when preferred, else FP16 half.
+	 * Upload a full projection matrix: packed K-quant when preferred, else FP16 half.
 	 * Exactly one of {@link Slot#q4()} / {@link Slot#half()} is non-null on success.
 	 */
 	public static Slot upload(GpuMatVec cuda, GgufReader.QuantizedTensor quant, int rows, int cols,
 			boolean tryMmq) {
 		if (preferPacked(tryMmq, quant))
-			return Slot.q4(cuda.uploadQ4K(quant.data(), rows, cols));
+			return Slot.q4(cuda.uploadKQuant(quant.data(), rows, cols, quant.type()));
 		return Slot.half(cuda.uploadHalf(LlamaTransformerHandler.dequantize(quant, rows, cols), rows, cols));
 	}
 

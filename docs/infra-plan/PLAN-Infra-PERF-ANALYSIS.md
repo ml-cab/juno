@@ -96,7 +96,7 @@ This analysis amends [`PLAN-Infra-ROADMAP.md`](PLAN-Infra-ROADMAP.md). Follow **
 
 | Phase | Steps | Gate |
 |-------|-------|------|
-| **P0** | 13A ✓ → 5† → 1† → 8† → **Vector SIMD track** → 13B († feature complete; phase gate open) | Phi-3.5 tg ≥ **0.5×** llama; mistral ≥ **0.15×** with `--gpu-layers auto` |
+| **P0** | 13A ✓ → 5† → 1† → 8† → **Vector SIMD track** → 13B († feature complete; Phi-3.5 0.5× **open**; mistral 0.15× **met**) | Phi-3.5 tg ≥ **0.5×** llama (**0.33×** current); mistral ≥ **0.15×** with `--gpu-layers auto` (**0.43×** **met**) |
 | **P1** | 6 → 14 → 15 → 16 | Gather-tax gate; continuous SSE |
 | **P2** | 2 → 3 → 4 (after Tier 1 feature complete) | API parity |
 | **P3** | 7, 10, 11 | Per-tier gates |
@@ -134,8 +134,8 @@ P1 begins after P0 **gate met** for peer claims (feature-complete P0 tiers may a
 
 | Metric | Current (GPU JFR) | P0 target | P1 target |
 |--------|-------------------|-----------|-----------|
-| Phi-3.5 tg vs llama | 0.22× | **≥0.5×** | ≥0.5× (unchanged) |
-| mistral-7b tg on 8 GiB | 0.01× (CPU) | **≥0.15×** with `--gpu-layers auto` | — |
+| Phi-3.5 tg vs llama | **0.33×** (`20260911T235203Z`, `--mmq on`; was 0.22× FP16) | **≥0.5×** | ≥0.5× (unchanged) |
+| mistral-7b tg on 8 GiB | **0.43×** (`20260911T235203Z`, `--gpu-layers auto` + `--mmq on`; was 0.01× CPU) | **≥0.15×** with `--gpu-layers auto` (**met**) | — |
 | Long prefill pp (512 tok, matched count) | not measured | **≥0.3×** llama with Tier 8 | Tier 16 under load |
 | 8 concurrent SSE aggregate TPS | not measured | — | ≥0.5× vLLM on same SKU |
 

@@ -62,7 +62,61 @@ class Q4KMmqParityTest {
 			float[] got = mv.sgemv(dA, x);
 			assertThat(got).hasSize(rows);
 			for (int i = 0; i < rows; i++)
-				assertThat(got[i]).as("row " + i).isCloseTo(expected[i], within(1e-2f));
+				assertThat(got[i]).as("row " + i).isCloseTo(expected[i], within(q8Tol(expected[i])));
 		}
+	}
+
+	/**
+	 * The kernel maps one row per block and 16 super-blocks per iteration; exercise
+	 * row counts and super-block counts that do not divide evenly, plus a
+	 * single-super-block row, so tail handling is covered.
+	 */
+	@Test
+	@DisplayName("GPU fused Q4_K GEMV matches CPU on ragged row / super-block counts")
+	void gpu_matches_cpu_on_ragged_shapes() {
+		assumeTrue(CudaAvailability.isAvailable(), "No CUDA — skipping");
+		assumeTrue(CudaDriverBindings.isAvailable(), "No CUDA driver API — skipping");
+		assumeTrue(Q4KMmqKernel.tryLoad() != null, "Q4K MMQ kernel failed to load");
+
+		int[][] shapes = {
+				{ 1, 256 },       // one row, one super-block: only 8 of 32 lanes active
+				{ 13, 768 },      // several rows, 3 super-blocks (< 16 in-flight)
+				{ 3001, 1280 },   // rows not a multiple of 12, 5 super-blocks
+				{ 50, 3072 },     // Phi-3 hidden width, 12 super-blocks
+		};
+		Random rnd = new Random(7);
+		try (GpuContext ctx = GpuContext.init(0)) {
+			CudaMatVec mv = new CudaMatVec(ctx);
+			for (int[] shape : shapes) {
+				int rows = shape[0], cols = shape[1];
+				float[] host = new float[rows * cols];
+				for (int i = 0; i < host.length; i++)
+					host[i] = (rnd.nextFloat() * 2f) - 1f;
+				byte[] raw = GgufKQuantCodec.encode(host, QuantizationLayout.TYPE_Q4_K);
+				float[] x = new float[cols];
+				for (int i = 0; i < cols; i++)
+					x[i] = (rnd.nextFloat() * 2f) - 1f;
+				float[] expected = new float[rows];
+				LlamaTransformerHandler.matVecInto(
+						new GgufReader.QuantizedTensor("t", QuantizationLayout.TYPE_Q4_K, (long) rows * cols, raw),
+						x, expected, rows, cols);
+				try (DeviceQ4KMatrix dA = DeviceQ4KMatrix.upload(ctx, raw, rows, cols)) {
+					float[] got = mv.sgemv(dA, x);
+					assertThat(got).hasSize(rows);
+					for (int i = 0; i < rows; i++)
+						assertThat(got[i]).as(rows + "x" + cols + " row " + i)
+								.isCloseTo(expected[i], within(q8Tol(expected[i])));
+				}
+			}
+		}
+	}
+
+	/**
+	 * Device GEMV quantizes {@code x} to Q8_1; error grows with K and with
+	 * poorly-scaled 32-element blocks. Floor + relative band catch layout bugs
+	 * (O(1) or sign flips) without failing on that activation quant.
+	 */
+	static float q8Tol(float expected) {
+		return Math.max(0.15f, Math.abs(expected) * 0.12f);
 	}
 }

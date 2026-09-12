@@ -66,11 +66,12 @@ class Phi3Q4KMmqParityTest {
 			float[] qkv = mv.sgemv(dA, x);
 			assertThat(qkv).hasSize(rows);
 			for (int i = 0; i < H; i++)
-				assertThat(qkv[i]).as("q[" + i + "]").isCloseTo(qCpu[i], within(1e-2f));
+				assertThat(qkv[i]).as("q[" + i + "]").isCloseTo(qCpu[i], within(Q4KMmqParityTest.q8Tol(qCpu[i])));
 			for (int i = 0; i < kvDim; i++)
-				assertThat(qkv[H + i]).as("k[" + i + "]").isCloseTo(kCpu[i], within(1e-2f));
+				assertThat(qkv[H + i]).as("k[" + i + "]").isCloseTo(kCpu[i], within(Q4KMmqParityTest.q8Tol(kCpu[i])));
 			for (int i = 0; i < kvDim; i++)
-				assertThat(qkv[H + kvDim + i]).as("v[" + i + "]").isCloseTo(vCpu[i], within(1e-2f));
+				assertThat(qkv[H + kvDim + i]).as("v[" + i + "]")
+						.isCloseTo(vCpu[i], within(Q4KMmqParityTest.q8Tol(vCpu[i])));
 		}
 	}
 }

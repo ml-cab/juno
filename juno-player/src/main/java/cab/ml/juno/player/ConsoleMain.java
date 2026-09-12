@@ -802,7 +802,7 @@ public final class ConsoleMain {
 		System.out.println("  --cpu                      Force to use CPU");
 		System.out.println("  --gpu-layers N|all|auto    GPU-resident transformer layers (default: all)");
 		System.out.println("                             env JUNO_GPU_LAYERS; auto fits until VRAM OOM");
-		System.out.println("  --mmq on|off|auto          Packed Q4_K GPU weights for VRAM fit (default: off; LoRA play when CUDA kernel loads; ignored for LoRA train)");
+		System.out.println("  --mmq on|off|auto          Packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default: off; LoRA play when CUDA kernel loads; ignored for LoRA train)");
 		System.out.println("                             env JUNO_MMQ; keeps Q4_K packed on device");
 		System.out.println("  --cache-type-k f16|q8_0    K cache element type (default: f16 = current float path)");
 		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8× smaller vs float)");

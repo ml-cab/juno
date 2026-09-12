@@ -387,8 +387,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					: policy.residentOutputProjection(totalLayers);
 			if (outputProj != null && allLayersGpu) {
 				try {
-					if (tryMmq && outputProj.type() == QuantizationLayout.TYPE_Q4_K)
-						outQ4 = cuda.uploadQ4K(outputProj.data(), V, H);
+					if (Q4KResidentUpload.preferPacked(tryMmq, outputProj))
+						outQ4 = cuda.uploadKQuant(outputProj.data(), V, H, outputProj.type());
 					else
 						outD = cuda.uploadHalf(dequantize(outputProj, V, H), V, H);
 				} catch (IllegalStateException ex) {

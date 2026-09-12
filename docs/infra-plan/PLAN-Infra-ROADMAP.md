@@ -14,7 +14,7 @@ This file is the authoritative execution order for raising Juno inference toward
 
 **Tier numbers identify features. Execution phases (P0–P5) define when to build them. Always follow phases, not tier number order.**
 
-Measured bake-off (2026-08-31, GTX 1080): Juno GPU decode is **0.17–0.22×** llama.cpp tg on models with full VRAM residency; **mistral-7b** falls to **0.01×** (100% CPU MatVec fallback). JFR shows `juno.MatVec` **≈ 93–96%** of decode time. Phase P1 (Tiers 14–16) improves aggregate QPS under load but does **not** close this gap.
+Historical bake-off (2026-08-31, GTX 1080): Juno GPU decode was **0.17–0.22×** llama.cpp tg on models with full VRAM residency; **mistral-7b** fell to **0.01×** (100% CPU MatVec fallback). JFR showed `juno.MatVec` **≈ 93–96%** of decode time. Current P0 numbers (2026-09-11, `--mmq on`): Phi-3.5 **0.33×** (0.5× **unmet**); mistral **0.43×** (0.15× **met**). Phase P1 (Tiers 14–16) improves aggregate QPS under load but does **not** close the remaining single-stream gap.
 
 See `[PLAN-Infra-PERF-ANALYSIS.md](PLAN-Infra-PERF-ANALYSIS.md)` for full numbers, JFR breakdown, and compare-script caveats.
 
@@ -205,7 +205,7 @@ Follow this table — not tier number order (1, 2, 3, …).
 
 | Phase                       | Steps                                                                                                                             | Tiers                   | Exit gate                                                                                                                                |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **P0** — kernel path        | 1. Tier 13 Phase A ✓ → 2. **Tier 5 → Tier 1** → 3. **Tier 8** → 4. **Vector SIMD track** (P0 gate input) → 5. **Tier 13 Phase B** | 13A, 5, 1, 8, SIMD, 13B | Phi-3.5 Q4_K_M GPU tg ≥ **0.5×** llama (currently **0.22×**); mistral-7b on 8 GiB ≥ **0.15×** with Tier 5 `auto` (currently **~0.026×**) |
+| **P0** — kernel path        | 1. Tier 13 Phase A ✓ → 2. **Tier 5 → Tier 1** → 3. **Tier 8** → 4. **Vector SIMD track** (P0 gate input) → 5. **Tier 13 Phase B** | 13A, 5, 1, 8, SIMD, 13B | Phi-3.5 Q4_K_M GPU tg ≥ **0.5×** llama (currently **0.33×** with `--mmq on`); mistral-7b on 8 GiB ≥ **0.15×** with Tier 5 `auto` (**0.43×** — **met**) |
 | **P1** — memory + scheduler | 1. **Tier 6** → 2. **Tier 14** → 3. **Tier 15** → 4. **Tier 16**                                                                  | 6, 14, 15, 16           | Gather-tax ≤ ~15% at batch 8 / ctx 8k; continuous SSE beats static on local/single-shard                                                 |
 | **P2** — API / product      | **Tier 2 → 3 → 4** (after Tier 1 feature complete)                                                                                | 2, 3, 4                 | ≥95% valid JSON (Tier 3); tools round-trip (Tier 4)                                                                                      |
 | **P3** — nice-to-have       | **Tier 7**, **10**, **11** (when free; do not block P0/P1)                                                                        | 7, 10, 11               | Per-tier exit gates                                                                                                                      |
@@ -219,10 +219,10 @@ Follow this table — not tier number order (1, 2, 3, …).
 2. **Tier 5 → Tier 1** — `--gpu-layers` partial offload, then `BatchConfig` / `--parallel` wiring (one tier at a time; Tier 5 first). **Feature complete**; P0 **gate unmet** until mistral / Phi-3.5 ratios pass (or ROADMAP amends the gate).
 3. **Tier 8** — prefill microbatching, JFR prefill instrumentation, compare-script prompt-token parity (`--raw-prompt`). **Feature complete** (CPU bake-off published; GPU prefill re-run still open in `docs/performance.md`).
 4. **Vector SIMD track** (parallel track; also P0 step 4) — not a bake-off-only checkbox. Own correctness + publish `--vector 0` vs `--vector 1` under `[docs/perf-compare/](../perf-compare/README.md)`; see [Parallel tracks → Vector SIMD](#vector-simd-cpu-kernels). Must not regress vision (`compare-vision.sh`).
-5. **Tier 13 Phase B** — fused quant matmul / batched decode GEMV behind a flag. **Feature complete** as VRAM-fit ship (speed ≥1.3× vs FP16 deferred to tile kernel). Prefer after SIMD track bake-off so CPU and GPU MatVec stories stay separable in JFR.
+5. **Tier 13 Phase B** — fused quant matmul / batched decode GEMV behind a flag. **Feature complete**; tile Q8_1/`dp4a` kernel **1.51×** vs `--mmq off` on Phi-3.5 (speed exit **met**). P0 Phi-3.5 0.5× still **open**. Prefer after SIMD track bake-off so CPU and GPU MatVec stories stay separable in JFR.
 
 ```
-P0:  13A ✓  →  5†  →  1†  →  8†  →  Vector SIMD†  →  13B†    GATE: 0.5× tg († feature complete; phase gate open; 13B = VRAM-fit ship, speed follow-on)
+P0:  13A ✓  →  5†  →  1†  →  8†  →  Vector SIMD†  →  13B†    GATE: 0.5× tg open (Phi-3.5 **0.33×**); mistral 0.15× **met** († feature complete; 13B tile-kernel speed exit met)
 P1:              6  →  14  →  15  →  16
 P2:  (after Tier 1 feature complete)  2  →  3  →  4
 P3:  (when free)  7, 10, 11
@@ -242,7 +242,7 @@ Parallel (non-blocking): Vision I2T · LoRA · model E2E
 | 2    | `PLAN-Infra-Tier2.md`  | OpenAI field parity                     | P2                       | **Feature complete** — `stop` / `seed` / `presence_penalty`; `response_format` fail-closed until Tier 3; §2 [`20260911T221215Z`](../perf-compare/20260911T221215Z/); next = Tier 3                                                                                                                                          |
 | 3    | `PLAN-Infra-Tier3.md`  | GBNF + JSON Schema                      | P2                       | Pending                                                                                                                                                                                                                                                                                                                     |
 | 4    | `PLAN-Infra-Tier4.md`  | Function calling / tools                | P2                       | Pending                                                                                                                                                                                                                                                                                                                     |
-| 5    | `PLAN-Infra-Tier5.md`  | Hybrid `--gpu-layers` offload           | P0 step 2                | **Feature complete**; P0 gate unmet (mistral ~**0.026×** vs **0.15×**)                                                                                                                                                                                                                                                      |
+| 5    | `PLAN-Infra-Tier5.md`  | Hybrid `--gpu-layers` offload           | P0 step 2                | **Feature complete**; mistral `--gpu-layers auto` + `--mmq on` **0.43×** (P0 0.15× **met**); Phi-3.5 P0 0.5× still open                                                                                                                                                                                                     |
 | 6    | `PLAN-Infra-Tier6.md`  | Quantized KV cache (`q8_0`)             | P1 step 1                | **Feature complete** — `[20260910T170557Z](../perf-compare/20260910T170557Z/)` + LoRA `[20260910T180703Z-lora](../perf-compare/20260910T180703Z-lora/)`; default `f16` unchanged                                                                                                                                            |
 | 7    | `PLAN-Infra-Tier7.md`  | Chat template + HF download             | P3                       | Pending                                                                                                                                                                                                                                                                                                                     |
 | 8    | `PLAN-Infra-Tier8.md`  | Prefill microbatching                   | P0 step 3                | **Feature complete**; CPU bake-off published; GPU re-run open                                                                                                                                                                                                                                                               |
@@ -250,7 +250,7 @@ Parallel (non-blocking): Vision I2T · LoRA · model E2E
 | 10   | `PLAN-Infra-Tier10.md` | Multi-adapter + GGUF LoRA interop       | P3                       | Pending                                                                                                                                                                                                                                                                                                                     |
 | 11   | `PLAN-Infra-Tier11.md` | Embeddings API                          | P3                       | Pending                                                                                                                                                                                                                                                                                                                     |
 | 12   | `PLAN-Infra-Tier12.md` | Draft-model speculation                 | P4                       | Pending                                                                                                                                                                                                                                                                                                                     |
-| 13   | `PLAN-Infra-Tier13.md` | Fused quant / FlashAttn (gated)         | P0 (13A ✓, 13B); P5 (FA) | 13A complete; **13B feature complete (VRAM-fit ship)** — `--mmq` default off; speed ≥1.3× vs FP16 **deferred** to tile kernel; shared-activation `sgemvSameX` Phase 1 on Llama; LoRA play Phase 1 complete; bake-off `[20260910T025804Z](../perf-compare/20260910T025804Z/)`                                                |
+| 13   | `PLAN-Infra-Tier13.md` | Fused quant / FlashAttn (gated)         | P0 (13A ✓, 13B); P5 (FA) | 13A complete; **13B feature complete**; tile Q8_1/`dp4a` kernel **1.51×** vs `--mmq off` on Phi-3.5 (**speed exit met**); `--mmq` default off; bake-off `[20260911T235203Z](../perf-compare/20260911T235203Z/)`; P0 Phi-3.5 **0.33×** (0.5× unmet) |
 | 14   | `PLAN-Infra-Tier14.md` | Block KV allocator                      | P1 step 2                | **Feature complete** — dual KV; gather-tax **PASS** (`[20260910T214300Z-gather-tax.md](../perf-compare/20260910T214300Z-gather-tax.md)`); bake-off `[20260910T222026Z](../perf-compare/20260910T222026Z/)` + LoRA `[20260910T221031Z-lora](../perf-compare/20260910T221031Z-lora/)`; next = Tier 15                         |
 | 15   | `PLAN-Infra-Tier15.md` | Continuous batching scheduler           | P1 step 3                | **Feature complete** — bake-off `[20260911T194430Z-continuous](../perf-compare/20260911T194430Z-continuous/)`; §2 `[20260911T195008Z](../perf-compare/20260911T195008Z/)` + LoRA `[20260911T195711Z-lora](../perf-compare/20260911T195711Z-lora/)`; P1 SSE-beats-static gate **unmet** on synchronized load; next = Tier 16 |
 | 16   | `PLAN-Infra-Tier16.md` | Mixed chunked prefill + decode          | P1 step 4                | **Feature complete** — bake-off [`20260911T204721Z-mixed-prefill`](../perf-compare/20260911T204721Z-mixed-prefill/); short TTFT **0.327×** admit-time; §2 [`20260911T204900Z`](../perf-compare/20260911T204900Z/) + LoRA [`20260911T205447Z-lora`](../perf-compare/20260911T205447Z-lora/) |
@@ -414,7 +414,7 @@ flowchart TD
 
 ### Critical path (highest leverage)
 
-**P0:** 13A ✓ → 5† → 1† → 8† → Vector SIMD track → 13B († feature complete; phase gate open)
+**P0:** 13A ✓ → 5† → 1† → 8† → Vector SIMD track → 13B († feature complete; Phi-3.5 0.5× **open**; mistral 0.15× **met**; tile-kernel 1.3× **met**)
 
 **P1:** 6 → 14 → 15 → 16 (Tier 8 required before Tier 16 only)
 
@@ -652,16 +652,16 @@ Exit only when:
 
 Only if profiling shows attention or dequant-GEMM dominates. **Phase A complete:** bake-off JFR (2026-08-31) shows MatVec **>90%** of GPU decode → **go** for Phase B scoped to **fused Q4 MMQ** first; FlashAttn deferred until Tier 8 long-prefill baselines. See `[PLAN-Infra-PERF-ANALYSIS.md](PLAN-Infra-PERF-ANALYSIS.md)`.
 
-**Phase B (feature complete, amended gate):** `--mmq` ships as **VRAM-fit** packed Q4 residency (default **off**). Bake-off `[20260910T025804Z](../perf-compare/20260910T025804Z/)`: Mistral ≈ **0.14×** llama (near P0 **0.15×** fit). Speed vs FP16-resident is **not** claimed (Phi-3.5 MMQ slower than FP16 on reference SKU); ≥1.3× tg is a **tile-kernel follow-on** exit, not required to mark 13B feature-complete. Shared-activation `sgemvSameX` Phase 1 reduces repeated H2D/sync on Llama QKV and gate/up.
+**Phase B (feature complete; tile-kernel speed exit met 2026-09-11):** `--mmq` default **off**. Bake-off `[20260911T235203Z](../perf-compare/20260911T235203Z/)`: Mistral **0.43×** llama (P0 0.15× **met**); Phi-3.5 **0.33×** (P0 0.5× **unmet**). Paired `--mmq off` `[20260911T235353Z](../perf-compare/20260911T235353Z/)`: Phi-3.5 **1.51×** MMQ vs FP16-resident. Shared-activation `sgemvSameX` Phase 1 reduces repeated H2D/sync on Llama QKV and gate/up.
 
 Exit only when **one of**:
 
-- ship: VRAM-fit path with parity + bake-off + honest docs (met); **or** later tile kernel meets ≥1.3× decode / ≥1.5× long prefill; or
+- ship: VRAM-fit path with parity + bake-off + honest docs (met); tile kernel ≥1.3× decode **met** (Phi-3.5 **1.51×** vs `--mmq off`); or
 - close: memo shows BLAS path sufficient; tier marked deferred without code.
 
 **§6:** `--mmq` interaction matrix in `[PLAN-Infra-Tier13.md](PLAN-Infra-Tier13.md)`; LoRA play wired (`[PLAN-Infra-LoRA-MMQ.md](PLAN-Infra-LoRA-MMQ.md)`).
 
-**P0 gate contribution:** packed-Q4 fit helps mistral on 8 GiB; Phi-3.5 ≥ **0.5×** llama still needs faster MatVec (tile kernel and/or fuller device-resident activations).
+**P0 gate contribution:** mistral on 8 GiB **0.43×** (**0.15× met**). Phi-3.5 ≥ **0.5×** still **unmet** (**0.33×**); next lever is fuller device-resident activations (norm/attn/residual on GPU), not another Infra scheduler tier.
 
 ### Tier 14 — block KV allocator
 
@@ -763,7 +763,7 @@ Exit only when:
 
 ### Internal (self-uplift)
 
-- **P0 gate:** Phi-3.5 Q4_K_M GPU tg ≥ **0.5×** llama.cpp (currently **0.22×**); mistral-7b on 8 GiB ≥ **0.15×** with Tier 5 `--gpu-layers auto` (baseline without partial offload was **0.01×**; post–Tier 5 auto ≈ **0.026×** — still unmet).
+- **P0 gate:** Phi-3.5 Q4_K_M GPU tg ≥ **0.5×** llama.cpp (currently **0.33×** with `--mmq on` — **unmet**); mistral-7b on 8 GiB ≥ **0.15×** with `--gpu-layers auto` + `--mmq on` (**0.43×** — **met**).
 - Multi-session TPS uplift after Tier 1 (**feature complete**; keep monitoring under SIMD / 13B).
 - Larger models on fixed VRAM after Tier 5 (**feature complete**; gate unmet).
 - Vector SIMD track exit (published `--vector 0` vs `1` + vision-safe Q5_K policy) — **feature complete** (`20260904T194612Z` / `20260904T195731Z`).
