@@ -49,7 +49,7 @@ Optional extensions:
 | `x_juno_top_k` | integer | Top-K cutoff (0 = disabled; default 50) |
 | `x_juno_grammar` | string | Raw GBNF (conflicts with `json_object` / `json_schema`) |
 
-**Supported fields:** `model`, `messages`, `temperature`, `top_p`, `max_completion_tokens`, `max_tokens` (deprecated alias), `frequency_penalty`, `presence_penalty`, `stop`, `seed`, `stream`, `n` (only 1 accepted). `response_format`: omit or `type=text` (unconstrained); `json_object` and `json_schema` constrain decode (unsupported schema keywords → HTTP 400). **Ignored for compatibility:** `logit_bias`, `user`.
+**Supported fields:** `model`, `messages`, `temperature`, `top_p`, `max_completion_tokens`, `max_tokens` (deprecated alias), `frequency_penalty`, `presence_penalty`, `stop`, `seed`, `stream`, `n` (only 1 accepted), `tools`, `tool_choice`. `response_format`: omit or `type=text` (unconstrained); `json_object` and `json_schema` constrain decode (unsupported schema keywords → HTTP 400). Function calling: Llama 3 / ChatML / Qwen3 templates; `tool_choice=none` never emits `tool_calls`; client executes tools. **Ignored for compatibility:** `logit_bias`, `user`.
 
 CLI: `--grammar-file` / `--json-schema-file` (mutually exclusive; env `JUNO_GRAMMAR_FILE` / `JUNO_JSON_SCHEMA_FILE`). Schema subset and samples: [howto.md](howto.md).
 

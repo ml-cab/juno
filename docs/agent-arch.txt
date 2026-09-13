@@ -257,6 +257,14 @@ OpenAiChatHandler / SamplingParams — OpenAI chat fields stop, seed, and
   JUNO_JSON_SCHEMA_FILE) attach the same SamplingParams.grammar on local and
   cluster inference; LoRA /train is an explicit no-op.
 
+OpenAiTools / ToolPrompt / ToolCallParser — OpenAI tools and tool_choice on
+  chat completions. ToolPrompt injects schemas for llama3, chatml, and qwen3
+  templates and fails closed on other families. ToolCallParser reads
+  <tool_call> blocks (and raw JSON) into message.tool_calls. tool_choice=none
+  skips inject/parse. required / named choice compiles a GBNF envelope via
+  ToolCallGrammar + JsonSchemaToGbnf. tools conflict with json_* /
+  x_juno_grammar / CLI grammar (HTTP 400). /v1/vision/chat does not honor tools.
+
 Dependency graph (acyclic):
   node  →  api, lora, registry, kvcache, health, grpc, micrometer
   vision  →  node, coordinator, registry, tokenizer, sampler

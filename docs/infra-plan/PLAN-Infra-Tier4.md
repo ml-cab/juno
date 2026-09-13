@@ -28,6 +28,31 @@ Also read:
 | **Depends on** | Tier 3 complete |
 | **Blocks** | None |
 | **Parallel with** | P0 / P1 if staffed |
+| **Status** | **Feature complete** (2026-09-13) — §2 [`20260913T032734Z`](../perf-compare/20260913T032734Z/); smoke `target/tools-smoke/20260913T025903Z/` |
+
+## Feature × surface interaction matrix
+
+| New feature / flag | Base inference | --lora-play | LoRA train | Vision | --parallel | --gpu-layers | --prefill-batch | CUDA | ROCm | Default |
+|--------------------|----------------|-------------|------------|--------|------------|--------------|-----------------|------|------|---------|
+| OpenAI `tools` / `tool_choice` | **wired** (`OpenAiChatHandler`; llama3 / chatml / qwen3 templates) | **wired** (same chat path) | **N/A** (train REPL is not chat completions) | **explicit no-op** on `/v1/vision/chat`; **fail closed** on chat completions with an unsupported template (phi3 / moondream / mistral / gemma / tinyllama) | **wired** (per-request) | N/A | N/A | N/A | N/A | absent = no tools |
+| `tool_choice=required` / named function | **wired** (GBNF envelope via JSON Schema subset) | **wired** | N/A | same as tools | **wired** | N/A | N/A | N/A | N/A | `auto` when `tools` is set |
+| `messages[].role=tool` | **wired** (ChatML / Llama 3 / Qwen3 emit the role) | **wired** | N/A | fail closed if tools were used | **wired** | N/A | N/A | N/A | N/A | n/a |
+
+## Cross-feature smoke (before feature complete)
+
+- [x] Each **wired** cell: command + expected log/response proof recorded (`target/tools-smoke/20260913T025903Z/`)
+- [x] Each **explicit no-op** cell: howto note (`/v1/vision/chat` does not honor `tools`)
+- [x] Each **follow-up** cell: none
+- [x] §2 compares run as required by change surface (API regression gate) — [`20260913T032734Z`](../perf-compare/20260913T032734Z/) CPU `--vector 0`, failures=0
+
+## Exit checklist (compatibility)
+
+- [x] Interaction matrix complete (no empty cells)
+- [x] No silent flag ignore: unsupported template + tools → HTTP 400; tools + json_* grammar → HTTP 400
+- [x] Launcher unchanged (no new CLI flags)
+- [x] User-facing docs / OpenAPI state the template allowlist and `tool_calls` shape
+- [x] ROADMAP §5 architectures covered (prompt + parse are handler-agnostic; template allowlist is documented)
+- [x] `docs/perf-compare/` bake-off published
 
 ## Overview
 
@@ -97,14 +122,15 @@ Exit only when:
 
 ## Implementation todos
 
-1. `ToolCallParser` + fixture tests.
-2. Template helpers for ChatML + Llama3.
-3. OpenAI handler request/response + optional Tier 3 constraint.
-4. Docs / OpenAPI / agent-arch; ROADMAP status.
-5. List preview files; no zip.
+1. ~~`ToolCallParser` + fixture tests.~~
+2. ~~Template helpers for ChatML + Llama3.~~
+3. ~~OpenAI handler request/response + optional grammar constraint.~~
+4. ~~Docs / OpenAPI / agent-arch; ROADMAP status.~~
+5. ~~§2 `compare-llama-cpp.sh` regression + publish `docs/perf-compare/` before marking feature complete.~~ [`20260913T032734Z`](../perf-compare/20260913T032734Z/)
+6. List preview files; no zip.
 
 ## Preview files (expected)
 
-New: `ToolCallParser.java`, template helper class(es), tests
+New: `ToolCallParser.java`, `ToolCallGrammar.java`, `OpenAiTools.java`, `ToolPrompt.java`, tests, `scripts/performance-tests/smoke-tools.sh`
 
-Modified: `OpenAiChatHandler`, `OpenAiAdapter`, `ChatTemplate` (or adjacent), `juno-api.yaml`, docs, ROADMAP status
+Modified: `OpenAiChatHandler`, `ChatMessage`, `juno-api.yaml`, docs, ROADMAP status

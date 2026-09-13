@@ -1,5 +1,20 @@
 ## Status 
 
+**Session 80** — Function calling / tools **feature complete**
+
+- OpenAI `tools` / `tool_choice` on chat completions: prompt inject for
+  Llama 3 / ChatML / Qwen3; parse `<tool_call>` into `message.tool_calls`.
+  `tool_choice=none` never emits tools. `required` / named choice uses GBNF.
+  Unsupported templates and grammar conflicts fail closed.
+- Bake-off [`docs/perf-compare/20260913T032734Z/`](docs/perf-compare/20260913T032734Z/)
+  (`--cpu --vector 0`, failures=0). Cross-feature smoke
+  `target/tools-smoke/20260913T025903Z/` (required `tool_calls`, template
+  fail-closed, `--parallel 2`).
+
+---
+
+## Status 
+
 **Session 79** — Constrained decoding (GBNF + JSON Schema) **feature complete**
 
 - Sampler GBNF engine + JSON Schema subset compiler; grammar masks logits

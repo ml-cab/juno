@@ -80,7 +80,7 @@ curl http://localhost:8080/v1/models
 | OpenAI field | Juno internal | Notes |
 |---|---|---|
 | `model` | `modelId` | First loaded model if omitted |
-| `messages[].role` | `ChatMessage.role` | `system` / `user` / `assistant` |
+| `messages[].role` | `ChatMessage.role` | `system` / `user` / `assistant` / `tool` |
 | `messages[].content` | `ChatMessage.content` | Text only; image content not supported |
 | `temperature` | `SamplingParams.temperature` | 0.0–2.0; default 0.7 |
 | `top_p` | `SamplingParams.topP` | 0.0–1.0; default 0.9 |
@@ -93,6 +93,7 @@ curl http://localhost:8080/v1/models
 | `seed` | `SamplingParams.seed` | Deterministic stochastic sampling when set |
 | `presence_penalty` | `SamplingParams.presencePenalty` | OpenAI-style (−2..2); subtracts from seen-token logits |
 | `response_format` | `SamplingParams.grammar` | omit/`text` unconstrained; `json_object` / `json_schema` constrain decode; unsupported schema → HTTP 400 |
+| `tools` / `tool_choice` | `ToolPrompt` + `ToolCallParser` | Function calling on llama3 / chatml / qwen3; `none` never emits `tool_calls` |
 | `logit_bias`, `user` | — | Silently ignored for client compatibility |
 
 **Juno request extensions** (namespaced under `x_juno_*` to avoid OpenAI field conflicts):
@@ -104,6 +105,8 @@ curl http://localhost:8080/v1/models
 | `x_juno_top_k` | integer | `50` | Top-K sampling cutoff (0 = disabled) |
 | `x_juno_grammar` | string | none | Raw GBNF. Cannot be combined with `json_object` / `json_schema`. |
 | `x_juno_disclosure` | boolean | `true` | EU AI Act Article 50 opt-out. `true` includes `x_juno_ai_disclosure` in the response; `false` omits it. Set `false` only for API-to-API integrations with no human end-user present. See [Chapter 9.7](#ch-9-7) |
+
+**Function calling.** `tools` / `tool_choice` are honored on chat completions for Llama 3, ChatML (Qwen2 / Qwen2.5), and Qwen3 templates. Other templates return HTTP 400. Juno parses `<tool_call>` blocks into `message.tool_calls` and does not execute functions. `/v1/vision/chat` does not honor `tools`. See [howto.md](../../docs/howto.md).
 
 **Multi-turn conversation with KV-cache reuse:**
 

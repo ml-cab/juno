@@ -35,6 +35,12 @@ Features:
   `x_juno_grammar`, CLI `--grammar-file` / `--json-schema-file`. See
   `docs/howto.md` and `docs/grammars/`.
 
+### Function calling
+
+- OpenAI `tools` / `tool_choice` on `POST /v1/chat/completions` (Llama 3,
+  ChatML, Qwen3 templates). Parsed `message.tool_calls`; client executes.
+  See `docs/howto.md`.
+
 ### Continuous batching
 
 - `--schedule continuous` (`JUNO_SCHEDULE`): local / in-process running-set

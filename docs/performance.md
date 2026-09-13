@@ -7,8 +7,9 @@ Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). T
 **Plan:** [`infra-plan/PLAN-Infra-Tier2.md`](infra-plan/PLAN-Infra-Tier2.md) (P2 step 1 — **feature complete**).
 
 **What:** Chat Completions honors `stop` (string/array ≤4), `seed` (seeded sampler RNG), and
-`presence_penalty` (−2..2). Unsupported `response_format` types return HTTP 400 until grammar
-support; `logit_bias` / `user` remain ignored with docs honesty.
+`presence_penalty` (−2..2). `logit_bias` / `user` remain ignored with docs honesty.
+`response_format` types `json_object` / `json_schema` are honored by constrained
+decoding (see below).
 
 **§2 regression:** [`perf-compare/20260911T221215Z`](perf-compare/20260911T221215Z/) (`--cpu --vector 0`).
 Failures=0. GPU compare deferred (driver unavailable on host this run).
@@ -20,10 +21,10 @@ Failures=0. GPU compare deferred (driver unavailable on host this run).
 | Same `seed` twice | identical completion text |
 | `stop=["STOP"]` | truncates before stop; `finish_reason=stop` |
 | `presence_penalty=1.5` | HTTP 200 |
-| `response_format.type=json_object` | HTTP 400 |
+| `response_format.type=json_object` | HTTP 400 (pre-grammar smoke; now honored, see below) |
 | `logit_bias` + `user` | HTTP 200 (explicit no-op) |
 
-**Status:** feature complete. Next = grammar / JSON Schema constrained decoding.
+**Status:** feature complete. Constrained decoding shipped next (see below).
 
 ## Constrained decoding (GBNF + JSON Schema)
 
@@ -55,7 +56,41 @@ Failures=0. Juno decode tg is in line with the previous CPU bake-off
 | Vision `/v1/vision/chat` | no mmproj GGUF; wired surface is chat completions |
 | CUDA / ROCm | N/A (sampler path) |
 
-**Status:** feature complete. Next = function calling / tools.
+**Status:** feature complete. Function calling shipped next (see below).
+
+## Function calling (`tools` / `tool_choice`)
+
+**Plan:** [`infra-plan/PLAN-Infra-Tier4.md`](infra-plan/PLAN-Infra-Tier4.md) (P2 step 3 — **feature complete**).
+
+**What:** OpenAI `tools` / `tool_choice` on chat completions. Prompt inject for
+llama3 / chatml / qwen3; parse `<tool_call>` into `message.tool_calls`.
+`tool_choice=none` never emits tools. `required` / named choice uses GBNF.
+Unsupported templates and grammar conflicts fail closed. `/v1/vision/chat` does
+not honor `tools`.
+
+**§2 regression:** [`perf-compare/20260913T032734Z`](perf-compare/20260913T032734Z/) (`--cpu --vector 0`).
+Failures=0. Juno decode tg is in line with the previous CPU bake-off
+([`20260912T193402Z`](perf-compare/20260912T193402Z/)). GPU compare skipped
+(tools are prompt+parse; CUDA/ROCm matrix cells are N/A).
+
+**Cross-feature smoke** ([`target/tools-smoke/20260913T025903Z/`](../target/tools-smoke/20260913T025903Z/)):
+
+| Gate | Result |
+|------|--------|
+| Qwen2.5 `tool_choice=required` | HTTP 200; `tool_calls` `get_weather`; `finish_reason=tool_calls` |
+| named `tool_choice` | HTTP 200; `get_weather` |
+| `tool_choice=none` | HTTP 200; no `tool_calls` |
+| multi-turn `role=tool` | HTTP 200; continues generation |
+| `tools` + `json_object` / `x_juno_grammar` | HTTP 400 |
+| SSE tools path | buffered after generation (3 chunks) |
+| JFR `GrammarConstrained.count` | 3 (required + named) |
+| TinyLlama + `tools` | HTTP 400 (unsupported template) |
+| `--lora-play` + TinyLlama + `tools` | HTTP 400 (same template fail-closed; overlay loaded) |
+| `--parallel 2` + required | two `get_weather` tool_calls |
+| Vision `/v1/vision/chat` | no mmproj; explicit no-op (howto) |
+| CUDA / ROCm | N/A (prompt+parse) |
+
+**Status:** feature complete. P2 API path (fields → grammar → tools) is done.
 
 ## Block KV / gather tax (`--schedule` / `--kv-page-size`)
 

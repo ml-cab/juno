@@ -37,8 +37,10 @@ info:
     | OpenAI field            | Juno internal field               | Notes                                   |
     |-------------------------|-----------------------------------|-----------------------------------------|
     | model                   | modelId                           | First loaded model if omitted           |
-    | messages[].role         | messages[].role                   | system / user / assistant               |
+    | messages[].role         | messages[].role                   | system / user / assistant / tool        |
     | messages[].content      | messages[].content                | Text only; image content is not supported |
+    | messages[].tool_calls   | replayed into the prompt          | Prior assistant function calls          |
+    | tools / tool_choice     | ToolPrompt + ToolCallParser       | Function calling; llama3/chatml/qwen3   |
     | temperature             | sampling.temperature              | 0.0–2.0; default 0.7                    |
     | top_p                   | sampling.topP                     | 0.0–1.0; default 0.9                    |
     | max_tokens              | sampling.maxTokens                | Deprecated alias; use max_completion_tokens |
@@ -62,8 +64,9 @@ info:
     | created                               | Unix epoch (seconds)      |
     | model                                 | modelId                   |
     | choices[0].message.role               | "assistant"               |
-    | choices[0].message.content            | text (full generated text)|
-    | choices[0].finish_reason              | finishReason              |
+    | choices[0].message.content            | text or null when tool_calls     |
+    | choices[0].message.tool_calls         | parsed function calls            |
+    | choices[0].finish_reason              | finishReason (incl. tool_calls)  |
     | usage.prompt_tokens                   | promptTokenCount          |
     | usage.completion_tokens               | tokenCount                |
     | usage.total_tokens                    | promptTokenCount + tokenCount |
@@ -212,6 +215,25 @@ paths:
                   x_juno_priority: HIGH
                   x_juno_top_k: 40
                   x_juno_disclosure: true
+              function_call:
+                summary: Required function call
+                value:
+                  model: llama3-8b
+                  tool_choice: required
+                  tools:
+                    - type: function
+                      function:
+                        name: get_weather
+                        description: Current weather for a city
+                        parameters:
+                          type: object
+                          properties:
+                            city:
+                              type: string
+                          required: [city]
+                  messages:
+                    - role: user
+                      content: Weather in Boston?
       responses:
         '200':
           description: |
@@ -540,7 +562,7 @@ components:
             unconstrained. `json_object` forces a JSON object. `json_schema`
             compiles a documented schema subset to GBNF and masks illegal tokens.
             Unsupported schema keywords return HTTP 400. Do not combine json_*
-            types with `x_juno_grammar`.
+            types with `x_juno_grammar` or with `tools`.
           properties:
             type:
               type: string
@@ -550,6 +572,27 @@ components:
               description: |
                 Required when type=json_schema. Either a schema object or
                 `{name, schema}` with `schema` holding the JSON Schema subset.
+
+        tools:
+          type: array
+          description: |
+            OpenAI function tools. Injected into the prompt for llama3, chatml
+            (Qwen2 / Qwen2.5), and qwen3 templates. Other templates return HTTP 400.
+            Juno emits `message.tool_calls`; it does not execute functions.
+            Cannot be combined with `response_format` json_* types, `x_juno_grammar`,
+            or `--grammar-file` / `--json-schema-file`.
+          items:
+            $ref: '#/components/schemas/ChatTool'
+
+        tool_choice:
+          description: |
+            `none` never returns `tool_calls`. `auto` (default when `tools` is set)
+            may return content or calls. `required` and a named function attach a
+            GBNF envelope so the model must emit a `<tool_call>` block.
+          oneOf:
+            - type: string
+              enum: [none, auto, required]
+            - $ref: '#/components/schemas/ChatToolChoiceFunction'
 
         # ── Juno extensions ─────────────────────────────────────────────────
 
@@ -617,20 +660,86 @@ components:
 
     ChatMessage:
       type: object
-      required: [role, content]
+      required: [role]
       properties:
         role:
           type: string
-          enum: [system, user, assistant]
+          enum: [system, user, assistant, tool]
           description: |
-            Role of the message author. Passed directly to
-            `ChatTemplateFormatter` which formats it according to the model's
-            chat template (llama3, mistral, chatml, phi3, etc.).
+            Role of the message author. `tool` is a function result (multi-turn).
+            Templates that emit the role string (llama3, chatml, qwen3) honor `tool`.
           example: user
         content:
           type: string
-          description: Text content of the message. Image content is not supported.
+          nullable: true
+          description: |
+            Text content. Required for system/user/tool. Assistant content may be
+            null when `tool_calls` is set. Image content is not supported.
           example: What is Java?
+        tool_calls:
+          type: array
+          description: Prior assistant function calls (replayed into the prompt).
+          items:
+            $ref: '#/components/schemas/ChatToolCall'
+        tool_call_id:
+          type: string
+          description: Present on `role=tool` messages (OpenAI wire compatibility).
+
+    ChatTool:
+      type: object
+      required: [type, function]
+      properties:
+        type:
+          type: string
+          enum: [function]
+        function:
+          $ref: '#/components/schemas/ChatToolFunction'
+
+    ChatToolFunction:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        parameters:
+          type: object
+          description: JSON Schema subset for the function arguments.
+
+    ChatToolChoiceFunction:
+      type: object
+      required: [type, function]
+      properties:
+        type:
+          type: string
+          enum: [function]
+        function:
+          type: object
+          required: [name]
+          properties:
+            name:
+              type: string
+
+    ChatToolCall:
+      type: object
+      required: [id, type, function]
+      properties:
+        id:
+          type: string
+          example: call_550e84000
+        type:
+          type: string
+          enum: [function]
+        function:
+          type: object
+          required: [name, arguments]
+          properties:
+            name:
+              type: string
+            arguments:
+              type: string
+              description: JSON object serialized as a string.
 
     # ── Responses — blocking ─────────────────────────────────────────────────
 
@@ -703,7 +812,7 @@ components:
         finish_reason:
           type: string
           nullable: true
-          enum: [stop, length, error]
+          enum: [stop, length, error, tool_calls]
           description: |
             Reason generation ended.
             - stop   → EOS token or natural end-of-generation
@@ -712,11 +821,12 @@ components:
                        (maps from `GenerationResult.StopReason.MAX_TOKENS`)
             - error  → generation error occurred
                        (maps from `GenerationResult.StopReason.ERROR`)
+            - tool_calls → parsed function calls when `tools` were active
           example: stop
 
     AssistantMessage:
       type: object
-      required: [role, content]
+      required: [role]
       properties:
         role:
           type: string
@@ -724,9 +834,14 @@ components:
           example: assistant
         content:
           type: string
+          nullable: true
           description: |
-            Full generated text. Maps from `GenerationResult.text()`.
+            Full generated text, or null when `tool_calls` is present.
           example: "Java is a high-level, object-oriented programming language..."
+        tool_calls:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatToolCall'
 
     CompletionUsage:
       type: object
@@ -814,10 +929,11 @@ components:
         finish_reason:
           type: string
           nullable: true
-          enum: [stop, length, error]
+          enum: [stop, length, error, tool_calls]
           description: |
             null on all chunks except the final one. On the final chunk,
-            set to the stop reason. Maps from `SseTokenConsumer.sendComplete(finishReason)`.
+            set to the stop reason. When tools are active, SSE is emitted after
+            generation completes (`tool_calls` or content).
           example: null
 
     ChunkDelta:
@@ -839,6 +955,13 @@ components:
             Token text piece for this step.
             Maps from `TokenEvent.token()` emitted by `SseTokenConsumer`.
           example: " world"
+        tool_calls:
+          type: array
+          description: |
+            Present on a tools-mode SSE chunk after generation finishes, instead
+            of incremental `content` pieces. Each element includes `index`.
+          items:
+            $ref: '#/components/schemas/ChatToolCall'
 
     # ── Models ───────────────────────────────────────────────────────────────
 

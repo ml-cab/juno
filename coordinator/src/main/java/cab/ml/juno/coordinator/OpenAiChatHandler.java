@@ -90,6 +90,13 @@ public final class OpenAiChatHandler {
 			openAiError(ctx, 400, "invalid_request_error", "invalid_request", e.getMessage(), "stop");
 			return;
 		}
+		final OpenAiTools.ParsedRequest toolsReq;
+		try {
+			toolsReq = OpenAiTools.parse(body.tools(), body.toolChoice());
+		} catch (IllegalArgumentException e) {
+			openAiError(ctx, 400, "invalid_request_error", "invalid_request", e.getMessage(), "tools");
+			return;
+		}
 		if (body.messages() == null || body.messages().isEmpty()) {
 			openAiError(ctx, 400, "invalid_request_error", "invalid_request", "messages must not be empty", "messages");
 			return;
@@ -97,27 +104,35 @@ public final class OpenAiChatHandler {
 
 		List<ChatMessage> messages = new ArrayList<>();
 		for (OaiMessage m : body.messages()) {
-			if (m == null || m.role() == null || m.role().isBlank()) {
+			if (m == null) {
 				openAiError(ctx, 400, "invalid_request_error", "invalid_request", "each message needs a non-blank role",
 						"messages");
 				return;
 			}
-			String text = extractTextContent(m.content());
-			if (text == null) {
-				openAiError(ctx, 400, "invalid_request_error", "invalid_request",
-						"Only string text content is supported in messages[].content", "messages");
+			try {
+				messages.add(OpenAiTools.toChatMessage(m.role(), m.content(), m.toolCalls(), m.toolCallId()));
+			} catch (IllegalArgumentException e) {
+				openAiError(ctx, 400, "invalid_request_error", "invalid_request", e.getMessage(), "messages");
 				return;
 			}
-			messages.add(new ChatMessage(m.role(), text));
 		}
 
 		String modelId = resolveModelId(ctx, body.model());
 		if (modelId == null)
 			return;
 
+		try {
+			OpenAiTools.rejectGrammarConflict(toolsReq, body.responseFormat(), body.xJunoGrammar(),
+					defaultGrammar != null);
+			messages = new ArrayList<>(OpenAiTools.bindPrompt(messages, toolsReq, modelId));
+		} catch (IllegalArgumentException e) {
+			openAiError(ctx, 400, "invalid_request_error", "invalid_request", e.getMessage(), "tools");
+			return;
+		}
+
 		SamplingParams sampling;
 		try {
-			sampling = buildSamplingParams(body, stopStrings);
+			sampling = buildSamplingParams(body, stopStrings, toolsReq);
 		} catch (IllegalArgumentException e) {
 			openAiError(ctx, 400, "invalid_request_error", "invalid_request", e.getMessage(), null);
 			return;
@@ -137,14 +152,18 @@ public final class OpenAiChatHandler {
 		}
 
 		if (Boolean.TRUE.equals(body.stream())) {
-			handleStreamingChat(ctx, request, modelId, disclosureEnabled);
+			if (toolsReq.active()) {
+				handleStreamingToolsChat(ctx, request, modelId, disclosureEnabled, toolsReq);
+			} else {
+				handleStreamingChat(ctx, request, modelId, disclosureEnabled);
+			}
 		} else {
-			handleBlockingChat(ctx, request, modelId, disclosureEnabled);
+			handleBlockingChat(ctx, request, modelId, disclosureEnabled, toolsReq);
 		}
 	}
 
 	private void handleBlockingChat(Context ctx, InferenceRequest request, String modelId,
-			boolean disclosureEnabled) {
+			boolean disclosureEnabled, OpenAiTools.ParsedRequest toolsReq) {
 		try {
 			long start = System.currentTimeMillis();
 			GenerationResult result = scheduler.submitAndWait(request);
@@ -152,10 +171,13 @@ public final class OpenAiChatHandler {
 
 			String completionId = OpenAiAdapter.chatCompletionId(result.requestId());
 			long created = request.receivedAt().getEpochSecond();
-			String finish = OpenAiAdapter.toOpenAiFinishReason(result.stopReason());
+			List<Map<String, Object>> toolCalls = parseToolCalls(result, toolsReq);
+			String finish = OpenAiTools.finishReason(result.stopReason(), !toolCalls.isEmpty());
 
-			Map<String, Object> choice = Map.of("index", 0, "message",
-					Map.of("role", "assistant", "content", result.text()), "finish_reason", finish);
+			Map<String, Object> choice = new LinkedHashMap<>();
+			choice.put("index", 0);
+			choice.put("message", OpenAiTools.assistantMessage(result.text(), toolCalls));
+			choice.put("finish_reason", finish);
 			Map<String, Object> usage = Map.of("prompt_tokens", result.promptTokens(), "completion_tokens",
 					result.generatedTokens(), "total_tokens", result.promptTokens() + result.generatedTokens());
 			Map<String, Object> root = new LinkedHashMap<>();
@@ -222,6 +244,62 @@ public final class OpenAiChatHandler {
 
 			writeSseChunk(writer, chunkRoot(completionId, created, modelId, List.of(
 					chunkChoice(0, Map.of("content", ""), OpenAiAdapter.toOpenAiFinishReason(result.stopReason())))));
+			writer.write("data: [DONE]\n\n");
+			writer.flush();
+		} catch (RequestScheduler.QueueFullException e) {
+			writeJsonQueueFull(ctx, e);
+		} catch (Exception e) {
+			log.warning("OpenAI streaming error: " + e.getMessage());
+		}
+	}
+
+	private void handleStreamingToolsChat(Context ctx, InferenceRequest request, String modelId,
+			boolean disclosureEnabled, OpenAiTools.ParsedRequest toolsReq) {
+		String completionId = OpenAiAdapter.chatCompletionId(request.requestId());
+		long created = request.receivedAt().getEpochSecond();
+		ctx.res().setContentType("text/event-stream");
+		ctx.res().setCharacterEncoding("UTF-8");
+		ctx.res().setHeader("Cache-Control", "no-cache");
+		ctx.res().setHeader("X-Accel-Buffering", "no");
+
+		final java.io.PrintWriter writer;
+		try {
+			writer = ctx.res().getWriter();
+		} catch (IOException e) {
+			openAiError(ctx, 500, "internal_error", "internal_error", "Could not open response writer", null);
+			return;
+		}
+
+		try {
+			long start = System.currentTimeMillis();
+			GenerationResult result = scheduler.submitAndWait(request);
+			latencyCallback.accept(System.currentTimeMillis() - start);
+
+			Map<String, Object> first = chunkRoot(completionId, created, modelId,
+					List.of(chunkChoice(0, Map.of("role", "assistant", "content", ""), null)));
+			if (disclosureEnabled) {
+				first.put(AiDisclosure.FIELD_NAME, AiDisclosure.DISCLOSURE_TEXT);
+			}
+			writeSseChunk(writer, first);
+
+			List<Map<String, Object>> toolCalls = parseToolCalls(result, toolsReq);
+			String finish = OpenAiTools.finishReason(result.stopReason(), !toolCalls.isEmpty());
+			if (!toolCalls.isEmpty()) {
+				List<Map<String, Object>> indexed = new ArrayList<>(toolCalls.size());
+				for (int i = 0; i < toolCalls.size(); i++) {
+					Map<String, Object> tc = new LinkedHashMap<>(toolCalls.get(i));
+					tc.put("index", i);
+					indexed.add(tc);
+				}
+				Map<String, Object> delta = new LinkedHashMap<>();
+				delta.put("tool_calls", indexed);
+				writeSseChunk(writer, chunkRoot(completionId, created, modelId, List.of(chunkChoice(0, delta, finish))));
+			} else {
+				writeSseChunk(writer, chunkRoot(completionId, created, modelId,
+						List.of(chunkChoice(0, Map.of("content", result.text() != null ? result.text() : ""), null))));
+				writeSseChunk(writer, chunkRoot(completionId, created, modelId,
+						List.of(chunkChoice(0, Map.of("content", ""), finish))));
+			}
 			writer.write("data: [DONE]\n\n");
 			writer.flush();
 		} catch (RequestScheduler.QueueFullException e) {
@@ -314,13 +392,8 @@ public final class OpenAiChatHandler {
 		return res.modelId();
 	}
 
-	private static String extractTextContent(JsonNode content) {
-		if (content == null || content.isNull() || !content.isTextual())
-			return null;
-		return content.asText();
-	}
-
-	private SamplingParams buildSamplingParams(OaiChatCompletionRequest body, String[] stopStrings) {
+	private SamplingParams buildSamplingParams(OaiChatCompletionRequest body, String[] stopStrings,
+			OpenAiTools.ParsedRequest toolsReq) {
 		SamplingParams p = SamplingParams.defaults();
 		Integer maxTok = body.maxCompletionTokens() != null ? body.maxCompletionTokens() : body.maxTokens();
 		if (maxTok != null)
@@ -340,8 +413,16 @@ public final class OpenAiChatHandler {
 			p = p.withSeed(body.seed());
 		if (stopStrings != null && stopStrings.length > 0)
 			p = p.withStopStrings(stopStrings);
-		p = p.withGrammar(OpenAiResponseFormat.compile(body.responseFormat(), body.xJunoGrammar(), defaultGrammar));
+		GbnfGrammar grammar = OpenAiResponseFormat.compile(body.responseFormat(), body.xJunoGrammar(), defaultGrammar);
+		GbnfGrammar toolGrammar = OpenAiTools.grammar(toolsReq);
+		p = p.withGrammar(toolGrammar != null ? toolGrammar : grammar);
 		return p;
+	}
+
+	private static List<Map<String, Object>> parseToolCalls(GenerationResult result, OpenAiTools.ParsedRequest toolsReq) {
+		if (toolsReq == null || !toolsReq.active())
+			return List.of();
+		return OpenAiTools.toOpenAiToolCalls(result.requestId(), ToolCallParser.parse(result.text()));
 	}
 
 	private static boolean hasPerRequestLoras(JsonNode node) {
@@ -403,12 +484,15 @@ public final class OpenAiChatHandler {
 			@JsonProperty("n") Integer n, @JsonProperty("frequency_penalty") Double frequencyPenalty,
 			@JsonProperty("presence_penalty") Double presencePenalty, @JsonProperty("stop") JsonNode stop,
 			@JsonProperty("seed") Long seed, @JsonProperty("response_format") JsonNode responseFormat,
+			@JsonProperty("tools") JsonNode tools, @JsonProperty("tool_choice") JsonNode toolChoice,
 			@JsonProperty("x_juno_priority") String xJunoPriority,
 			@JsonProperty("x_juno_session_id") String xJunoSessionId, @JsonProperty("x_juno_top_k") Integer xJunoTopK,
 			@JsonProperty("x_juno_disclosure") Boolean xJunoDisclosure, @JsonProperty("x_juno_loras") JsonNode xJunoLoras,
 			@JsonProperty("x_juno_grammar") String xJunoGrammar) {
 	}
 
-	public record OaiMessage(@JsonProperty("role") String role, @JsonProperty("content") JsonNode content) {
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public record OaiMessage(@JsonProperty("role") String role, @JsonProperty("content") JsonNode content,
+			@JsonProperty("tool_calls") JsonNode toolCalls, @JsonProperty("tool_call_id") String toolCallId) {
 	}
 }

@@ -17,7 +17,7 @@ package cab.ml.juno.tokenizer;
 
 /**
  * A single turn in a chat conversation. Role is one of: "system", "user",
- * "assistant".
+ * "assistant", "tool".
  */
 public record ChatMessage(String role, String content) {
 
@@ -41,6 +41,10 @@ public record ChatMessage(String role, String content) {
 		return new ChatMessage("assistant", content);
 	}
 
+	public static ChatMessage tool(String content) {
+		return new ChatMessage("tool", content);
+	}
+
 	public boolean isSystem() {
 		return "system".equals(role);
 	}
@@ -51,5 +55,9 @@ public record ChatMessage(String role, String content) {
 
 	public boolean isAssistant() {
 		return "assistant".equals(role);
+	}
+
+	public boolean isTool() {
+		return "tool".equals(role);
 	}
 }

@@ -378,8 +378,10 @@ curl http://localhost:8080/v1/models
 | OpenAI field | Juno internal | Notes |
 |---|---|---|
 | `model` | `modelId` | First loaded model if omitted |
-| `messages[].role` | `ChatMessage.role` | `system` / `user` / `assistant` |
-| `messages[].content` | `ChatMessage.content` | Text only; image content not supported |
+| `messages[].role` | `ChatMessage.role` | `system` / `user` / `assistant` / `tool` |
+| `messages[].content` | `ChatMessage.content` | Text only; image content not supported. Assistant `content` may be null when `tool_calls` is set. |
+| `messages[].tool_calls` | replayed into the prompt | Prior assistant function calls (`<tool_call>` blocks) |
+| `messages[].tool_call_id` | — | Accepted on `role=tool` (result text is wrapped as `<tool_response>`) |
 | `temperature` | `SamplingParams.temperature` | 0.0–2.0; default 0.7 |
 | `top_p` | `SamplingParams.topP` | 0.0–1.0; default 0.9 |
 | `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 200 |
@@ -390,7 +392,9 @@ curl http://localhost:8080/v1/models
 | `stop` | `SamplingParams.stopStrings` (+ single-token ids) | String or ≤4 strings; halts decode; `finish_reason=stop` |
 | `seed` | `SamplingParams.seed` | Deterministic stochastic sampling when set |
 | `presence_penalty` | `SamplingParams.presencePenalty` | OpenAI-style (−2..2); subtracts from seen-token logits |
-| `response_format` | `SamplingParams.grammar` | Absent / `type=text` = unconstrained. `json_object` and `json_schema` mask illegal tokens. Unsupported schema keywords → HTTP 400. |
+| `response_format` | `SamplingParams.grammar` | Absent / `type=text` = unconstrained. `json_object` and `json_schema` mask illegal tokens. Unsupported schema keywords → HTTP 400. Cannot combine with `tools`. |
+| `tools` | `ToolPrompt` + `ToolCallParser` | OpenAI function tools. Templates: **llama3**, **chatml** (Qwen2 / Qwen2.5), **qwen3**. Other templates → HTTP 400. |
+| `tool_choice` | same | `none` (never emit `tool_calls`) / `auto` (default when `tools` is set) / `required` / `{type:function, function:{name}}`. `required` and named choice attach a GBNF envelope. |
 | `logit_bias`, `user` | — | Silently ignored for client compatibility |
 
 **Juno request extensions** (namespaced under `x_juno_*` to avoid OpenAI field conflicts):
@@ -400,7 +404,7 @@ curl http://localhost:8080/v1/models
 | `x_juno_priority` | string | `NORMAL` | Scheduler priority: `HIGH` / `NORMAL` / `LOW` |
 | `x_juno_session_id` | string | — | Stable session ID; enables KV-cache reuse across turns |
 | `x_juno_top_k` | integer | `50` | Top-K sampling cutoff (0 = disabled) |
-| `x_juno_grammar` | string | — | Raw GBNF. Cannot be combined with `response_format` `json_object` / `json_schema`. |
+| `x_juno_grammar` | string | — | Raw GBNF. Cannot be combined with `response_format` `json_object` / `json_schema` or with `tools`. |
 
 **Constrained decoding.** Grammar is applied **before** temperature / top-k / top-p. When no grammar is set, sampling is unchanged. Sample files: [`docs/grammars/yes-no.gbnf`](grammars/yes-no.gbnf), [`docs/grammars/json-object.gbnf`](grammars/json-object.gbnf).
 
@@ -410,6 +414,34 @@ curl http://localhost:8080/v1/models
 ```
 
 JSON Schema subset (v1): `object`, `array`, `string`, `number`, `integer`, `boolean`, `null`, `enum`, `const`, `required`, nested objects/arrays. Object keys are emitted in schema key order (permutations are not generated). Rejected (HTTP 400 / CLI error): `$ref`, `oneOf` / `anyOf` / `allOf`, `pattern`, `format`, numeric/length/item bounds, `additionalProperties` schemas, type unions. `response_format.type=json_object` uses a generic object grammar. Fixture eval: 20 schemas, ≥95% parseable JSON under an adversarial logit prior (`GrammarEvalTest`).
+
+**Function calling.** `POST /v1/chat/completions` accepts OpenAI `tools` and `tool_choice`. Juno injects tool schemas into the chat prompt and parses `<tool_call>{"name","arguments"}</tool_call>` (or a raw JSON object) into `message.tool_calls`. The engine does **not** execute tools — the client runs them and continues with `role: tool` messages. `tool_choice=none` never returns `tool_calls`. `required` / named choice constrain decode with the JSON Schema subset. Combining `tools` with `json_object` / `json_schema` / `x_juno_grammar` / `--grammar-file` returns HTTP 400. `/v1/vision/chat` does not honor `tools`.
+
+Supported chat templates: Llama 3, ChatML (including Qwen2 / Qwen2.5), Qwen3. Phi-3, Mistral, Gemma, TinyLlama, and vision (moondream) templates fail closed.
+
+When `tools` is set and `tool_choice` is not `none`, SSE waits until generation finishes, then emits either `delta.tool_calls` or the full content.
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama3-8b",
+    "tool_choice": "required",
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city",
+        "parameters": {
+          "type": "object",
+          "properties": { "city": { "type": "string" } },
+          "required": ["city"]
+        }
+      }
+    }],
+    "messages": [{"role": "user", "content": "Weather in Boston?"}]
+  }'
+```
 
 **Multi-turn conversation with KV-cache reuse:**
 
