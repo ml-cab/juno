@@ -53,11 +53,13 @@ class OpenAiAdapterTest {
 	}
 
 	@Test
-	void response_format_text_ok_json_rejected() {
+	void response_format_text_and_json_ok_unknown_rejected() {
 		assertThat(OpenAiAdapter.validateResponseFormat(null)).isNull();
 		ObjectNode text = JSON.createObjectNode().put("type", "text");
 		assertThat(OpenAiAdapter.validateResponseFormat(text)).isNull();
 		ObjectNode json = JSON.createObjectNode().put("type", "json_object");
-		assertThat(OpenAiAdapter.validateResponseFormat(json)).contains("not supported");
+		assertThat(OpenAiAdapter.validateResponseFormat(json)).isNull();
+		ObjectNode xml = JSON.createObjectNode().put("type", "xml");
+		assertThat(OpenAiAdapter.validateResponseFormat(xml)).contains("not supported");
 	}
 }

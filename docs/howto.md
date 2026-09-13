@@ -61,6 +61,8 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--prefill single\|batched` | `batched` | cluster, local | Prefill strategy: windowed GEMM vs per-token sequential loop. |
 | `--lora-play PATH` | — | cluster, local | Apply a pre-trained `.lora` adapter at inference (read-only, no training). In cluster mode the file is forwarded as `-Djuno.lora.play.path` to every forked node JVM. |
 | `--api-port N` | — | cluster, local | Start the OpenAI-compatible REST API server on port N alongside the REPL. Exposes `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{model}`. Environment override: `API_PORT`. |
+| `--grammar-file PATH` | — | cluster, local | GBNF file for constrained decoding (REPL and `--api-port`). Env `JUNO_GRAMMAR_FILE`. Mutually exclusive with `--json-schema-file`. Applies to chat completions when the request omits a grammar (`response_format.type=text` stays unconstrained). LoRA **training** ignores the flag (launcher WARNING). |
+| `--json-schema-file PATH` | — | cluster, local | JSON Schema file compiled to GBNF (documented subset below). Env `JUNO_JSON_SCHEMA_FILE`. Unsupported keywords fail closed. |
 
 **LoRA specific flags** (`lora` command only):
 
@@ -388,7 +390,7 @@ curl http://localhost:8080/v1/models
 | `stop` | `SamplingParams.stopStrings` (+ single-token ids) | String or ≤4 strings; halts decode; `finish_reason=stop` |
 | `seed` | `SamplingParams.seed` | Deterministic stochastic sampling when set |
 | `presence_penalty` | `SamplingParams.presencePenalty` | OpenAI-style (−2..2); subtracts from seen-token logits |
-| `response_format` | — | Absent or `type=text` only; other types → HTTP 400 |
+| `response_format` | `SamplingParams.grammar` | Absent / `type=text` = unconstrained. `json_object` and `json_schema` mask illegal tokens. Unsupported schema keywords → HTTP 400. |
 | `logit_bias`, `user` | — | Silently ignored for client compatibility |
 
 **Juno request extensions** (namespaced under `x_juno_*` to avoid OpenAI field conflicts):
@@ -398,6 +400,16 @@ curl http://localhost:8080/v1/models
 | `x_juno_priority` | string | `NORMAL` | Scheduler priority: `HIGH` / `NORMAL` / `LOW` |
 | `x_juno_session_id` | string | — | Stable session ID; enables KV-cache reuse across turns |
 | `x_juno_top_k` | integer | `50` | Top-K sampling cutoff (0 = disabled) |
+| `x_juno_grammar` | string | — | Raw GBNF. Cannot be combined with `response_format` `json_object` / `json_schema`. |
+
+**Constrained decoding.** Grammar is applied **before** temperature / top-k / top-p. When no grammar is set, sampling is unchanged. Sample files: [`docs/grammars/yes-no.gbnf`](grammars/yes-no.gbnf), [`docs/grammars/json-object.gbnf`](grammars/json-object.gbnf).
+
+```
+./juno local --model-path MODEL.gguf --grammar-file docs/grammars/yes-no.gbnf
+./juno local --model-path MODEL.gguf --json-schema-file schema.json --api-port 8080
+```
+
+JSON Schema subset (v1): `object`, `array`, `string`, `number`, `integer`, `boolean`, `null`, `enum`, `const`, `required`, nested objects/arrays. Object keys are emitted in schema key order (permutations are not generated). Rejected (HTTP 400 / CLI error): `$ref`, `oneOf` / `anyOf` / `allOf`, `pattern`, `format`, numeric/length/item bounds, `additionalProperties` schemas, type unions. `response_format.type=json_object` uses a generic object grammar. Fixture eval: 20 schemas, ≥95% parseable JSON under an adversarial logit prior (`GrammarEvalTest`).
 
 **Multi-turn conversation with KV-cache reuse:**
 

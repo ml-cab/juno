@@ -28,6 +28,7 @@ import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.InferencePipeline;
+import cab.ml.juno.sampler.GrammarSession;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatTemplateFormatter;
@@ -190,7 +191,8 @@ final class ContinuousBatchEngine {
 		int decodeBase = promptIds.length > 0 ? promptIds.length - 1 : 0;
 		SamplingParams params = loop.resolveSamplingParams(request.samplingParams());
 		Slot slot = new Slot(request, pending.consumer(), pending.future(), Instant.now(), kvKey, hasSession,
-				promptIds.clone(), promptIds.length, decodeBase, hadCacheHit, prefill, params);
+				promptIds.clone(), promptIds.length, decodeBase, hadCacheHit, prefill, params,
+				GrammarBinding.open(tokenizer, params, kvKey));
 		slot.stream = tokenizer.openStreamContext();
 		if (prefill.isComplete()) {
 			slot.phase = Phase.DECODE;
@@ -284,7 +286,7 @@ final class ContinuousBatchEngine {
 			Slot s = active.get(j);
 			float[] logits = logitsBatch[j];
 			int[] historyArr = s.generated.stream().mapToInt(Integer::intValue).toArray();
-			int nextToken = sampler.sample(logits, s.params, historyArr, s.rng);
+			int nextToken = sampler.sample(logits, s.params, historyArr, s.rng, s.grammar);
 
 			if (nextToken == tokenizer.eosTokenId()) {
 				s.eosFilter.discardHeld();
@@ -398,6 +400,7 @@ final class ContinuousBatchEngine {
 		final ContinuousPrefillState prefill;
 		final SamplingParams params;
 		final Random rng;
+		final GrammarSession grammar;
 		final List<Integer> generated = new ArrayList<>();
 		final EosOutputFilter eosFilter = new EosOutputFilter();
 		final StopSequenceFilter stopFilter;
@@ -407,7 +410,7 @@ final class ContinuousBatchEngine {
 
 		Slot(InferenceRequest request, TokenConsumer consumer, CompletableFuture<GenerationResult> future,
 				Instant start, String kvKey, boolean hasSession, int[] allTokens, int promptLen, int decodeBase,
-				boolean hadCacheHit, ContinuousPrefillState prefill, SamplingParams params) {
+				boolean hadCacheHit, ContinuousPrefillState prefill, SamplingParams params, GrammarSession grammar) {
 			this.request = request;
 			this.consumer = consumer;
 			this.future = future;
@@ -421,6 +424,7 @@ final class ContinuousBatchEngine {
 			this.prefill = prefill;
 			this.params = params;
 			this.rng = params.seed() != null ? new Random(params.seed()) : null;
+			this.grammar = grammar;
 			this.stopFilter = new StopSequenceFilter(params.stopStrings());
 			this.phase = prefill.isComplete() ? Phase.DECODE : Phase.PREFILL;
 		}

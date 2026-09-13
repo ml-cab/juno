@@ -49,6 +49,7 @@ final class JfrMetricsExtractor {
     private static final String LORA_CKPT = "juno.LoraCheckpoint";
     private static final String TOKEN_PRODUCED = "juno.TokenProduced";
     private static final String CONTINUOUS_STEP = "juno.ContinuousStep";
+    private static final String GRAMMAR_CONSTRAINED = "juno.GrammarConstrained";
 
     private JfrMetricsExtractor() {
     }
@@ -143,6 +144,7 @@ final class JfrMetricsExtractor {
         int continuousPrefillChunks = 0;
         int continuousPrefillTokens = 0;
         int continuousMaxPrefillChunks = 0;
+        int grammarConstrainedCount = 0;
 
         for (Path jfrFile : jfrFiles) {
             if (!Files.isRegularFile(jfrFile) || Files.size(jfrFile) == 0)
@@ -276,6 +278,7 @@ final class JfrMetricsExtractor {
                             if (tokenProducedLast == null || ts.isAfter(tokenProducedLast))
                                 tokenProducedLast = ts;
                         }
+                        case GRAMMAR_CONSTRAINED -> grammarConstrainedCount++;
                         case CONTINUOUS_STEP -> {
                             continuousStepCount++;
                             int decodeBatch = ev.hasField("decodeBatchSize") ? ev.getInt("decodeBatchSize") : 0;
@@ -399,6 +402,7 @@ final class JfrMetricsExtractor {
         m.put("juno.ContinuousStep.prefill_chunks", (double) continuousPrefillChunks);
         m.put("juno.ContinuousStep.prefill_tokens", (double) continuousPrefillTokens);
         m.put("juno.ContinuousStep.max_prefill_chunks", (double) continuousMaxPrefillChunks);
+        m.put("juno.GrammarConstrained.count", (double) grammarConstrainedCount);
 
         return new MetricsSnapshot.ModelMetrics(model.getName(), model.getPath(), jfrName, m);
     }

@@ -28,7 +28,33 @@ Also read:
 | **Exec step** | 2 |
 | **Depends on** | Tier 2 complete |
 | **Blocks** | Tier 4 |
-| **Parallel with** | P0 / P1 if staffed |
+| **Status** | **Feature complete** (2026-09-12) — §2 [`20260912T193402Z`](../perf-compare/20260912T193402Z/); smoke `target/grammar-smoke/20260912T193149Z/` |
+
+## Feature × surface interaction matrix
+
+| New feature / flag | Base inference | --lora-play | LoRA train | Vision | --parallel | --gpu-layers | --prefill-batch | CUDA | ROCm | Default |
+|--------------------|----------------|-------------|------------|--------|------------|--------------|-----------------|------|------|---------|
+| GBNF / JSON Schema (`SamplingParams.grammar`) | **wired** (`GenerationLoop` + continuous slots) | **wired** (same decode path) | **explicit no-op** (`/train` unused; launcher WARNING) | **wired** via chat completions when fields present | **wired** (per-request session) | N/A | N/A | N/A | N/A | absent = unconstrained |
+| `--grammar-file` / `JUNO_GRAMMAR_FILE` | **wired** (local + cluster) | **wired** | **explicit no-op** | **wired** when CLI grammar set | **wired** | N/A | N/A | N/A | N/A | unset |
+| `--json-schema-file` / `JUNO_JSON_SCHEMA_FILE` | **wired** (fail closed on unsupported keywords) | **wired** | **explicit no-op** | **wired** | **wired** | N/A | N/A | N/A | N/A | unset |
+| OpenAI `response_format` `json_object` / `json_schema` | **wired** | **wired** | N/A | **wired** | **wired** | N/A | N/A | N/A | N/A | omit / `text` |
+| `x_juno_grammar` | **wired** (conflicts with json_* fail closed) | **wired** | N/A | **wired** | **wired** | N/A | N/A | N/A | N/A | absent |
+
+## Cross-feature smoke (before feature complete)
+
+- [x] Each **wired** cell: command + expected JFR/log proof recorded (`target/grammar-smoke/20260912T193149Z/`, `juno.GrammarConstrained`)
+- [x] Each **explicit no-op** cell: warning string + howto note (LoRA train)
+- [x] Each **follow-up** cell: none
+- [x] §2 compares run as required by change surface (API regression gate) — [`20260912T193402Z`](../perf-compare/20260912T193402Z/) CPU `--vector 0`, failures=0
+
+## Exit checklist (compatibility)
+
+- [x] Interaction matrix complete (no empty cells)
+- [x] No silent flag ignore on grammar fields this tier claims to honor (CLI grammar now binds OpenAI + native `/v1/inference`; `type=text` stays unconstrained)
+- [x] Launcher flags forwarded on local + cluster; LoRA train warns
+- [x] User-facing docs / OpenAPI state subset vs fail-closed
+- [x] ROADMAP §5 architectures covered (sampler + decode loop are handler-agnostic; default model set all loaded)
+- [x] `docs/perf-compare/` bake-off published
 
 ## Overview
 
@@ -109,14 +135,15 @@ Exit only when:
 
 ## Implementation todos
 
-1. GBNF engine + unit tests.
-2. Schema→GBNF subset compiler + rejection tests.
-3. GenerationLoop / OpenAI / CLI wiring.
-4. Eval set + docs/grammars + howto/features/agent-arch.
-5. List preview files; no zip.
+1. ~~GBNF engine + unit tests.~~
+2. ~~Schema→GBNF subset compiler + rejection tests.~~
+3. ~~GenerationLoop / OpenAI / CLI wiring.~~
+4. ~~Eval set + docs/grammars + howto/features/agent-arch.~~
+5. ~~§2 `compare-llama-cpp.sh` regression + publish `docs/perf-compare/` before marking feature complete.~~ [`20260912T193402Z`](../perf-compare/20260912T193402Z/)
+6. List preview files; no zip.
 
 ## Preview files (expected)
 
-New: `GbnfGrammar.java`, `GrammarSampler.java`, `JsonSchemaToGbnf.java` (+ tests), sample `.gbnf` resources
+New: `GbnfGrammar.java`, `GrammarSession.java`, `JsonSchemaToGbnf.java`, `MiniJson.java`, `GrammarBinding.java`, `OpenAiResponseFormat.java`, `GrammarConstrainedEvent.java` (+ tests), `docs/grammars/*.gbnf`, `scripts/performance-tests/smoke-grammar.sh`
 
-Modified: `GenerationLoop`, `OpenAiChatHandler` / adapter, CLI/run scripts, docs, ROADMAP status
+Modified: `Sampler`, `SamplingParams`, `GenerationLoop`, `ContinuousBatchEngine`, `OpenAiChatHandler` / adapter, `InferenceApiServer`, CLI/run scripts, docs, ROADMAP status

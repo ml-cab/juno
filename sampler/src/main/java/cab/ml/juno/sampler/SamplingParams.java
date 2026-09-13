@@ -23,7 +23,7 @@ import java.util.Objects;
  * static factory methods for preset profiles.
  */
 public record SamplingParams(float temperature, int topK, float topP, float repetitionPenalty, float presencePenalty,
-		boolean greedy, int maxTokens, int[] stopTokenIds, String[] stopStrings, Long seed) {
+		boolean greedy, int maxTokens, int[] stopTokenIds, String[] stopStrings, Long seed, GbnfGrammar grammar) {
 
 	public SamplingParams {
 		if (temperature < 0.0f || temperature > 2.0f)
@@ -55,7 +55,7 @@ public record SamplingParams(float temperature, int topK, float topP, float repe
 	 * topP=0.9, penalty=1.1, maxTokens=200
 	 */
 	public static SamplingParams defaults() {
-		return new SamplingParams(0.7f, 50, 0.9f, 1.1f, 0.0f, false, 200, new int[0], new String[0], null);
+		return new SamplingParams(0.7f, 50, 0.9f, 1.1f, 0.0f, false, 200, new int[0], new String[0], null, null);
 	}
 
 	/**
@@ -63,7 +63,7 @@ public record SamplingParams(float temperature, int topK, float topP, float repe
 	 * greedy=true
 	 */
 	public static SamplingParams deterministic() {
-		return new SamplingParams(0.1f, 1, 1.0f, 1.0f, 0.0f, true, 512, new int[0], new String[0], null);
+		return new SamplingParams(0.1f, 1, 1.0f, 1.0f, 0.0f, true, 512, new int[0], new String[0], null, null);
 	}
 
 	/**
@@ -71,57 +71,62 @@ public record SamplingParams(float temperature, int topK, float topP, float repe
 	 * topK=100, topP=0.95
 	 */
 	public static SamplingParams creative() {
-		return new SamplingParams(1.2f, 100, 0.95f, 1.1f, 0.0f, false, 512, new int[0], new String[0], null);
+		return new SamplingParams(1.2f, 100, 0.95f, 1.1f, 0.0f, false, 512, new int[0], new String[0], null, null);
 	}
 
 	public SamplingParams withTemperature(float temperature) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed);
+				stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withTopK(int topK) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed);
+				stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withTopP(float topP) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed);
+				stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withRepetitionPenalty(float repetitionPenalty) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed);
+				stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withPresencePenalty(float presencePenalty) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed);
+				stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withGreedy(boolean greedy) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed);
+				stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withMaxTokens(int maxTokens) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed);
+				stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withStopTokenIds(int... stopTokenIds) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed);
+				stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withStopStrings(String... stopStrings) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed);
+				stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withSeed(Long seed) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed);
+				stopTokenIds, stopStrings, seed, grammar);
+	}
+
+	public SamplingParams withGrammar(GbnfGrammar grammar) {
+		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
+				stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	@Override

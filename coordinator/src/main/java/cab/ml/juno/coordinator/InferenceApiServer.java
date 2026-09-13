@@ -24,6 +24,7 @@ import java.util.logging.Logger;
 import cab.ml.juno.registry.ModelDescriptor;
 import cab.ml.juno.registry.ModelIdResolver;
 import cab.ml.juno.registry.ModelRegistry;
+import cab.ml.juno.sampler.GbnfGrammar;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
 import io.javalin.Javalin;
@@ -56,6 +57,7 @@ public final class InferenceApiServer {
 	private final RequestScheduler scheduler;
 	private final ModelRegistry modelRegistry;
 	private final OpenAiChatHandler openAiChatHandler;
+	private final GbnfGrammar defaultGrammar;
 	private Javalin app;
 	private String byteOrder;
 	private final java.util.List<java.util.function.Consumer<Javalin>> extraRouteRegistrars =
@@ -75,6 +77,11 @@ public final class InferenceApiServer {
 	private cab.ml.juno.health.HealthReporter latencyReporter;
 
 	public InferenceApiServer(RequestScheduler scheduler, ModelRegistry modelRegistry, String byteOrder) {
+		this(scheduler, modelRegistry, byteOrder, null);
+	}
+
+	public InferenceApiServer(RequestScheduler scheduler, ModelRegistry modelRegistry, String byteOrder,
+			GbnfGrammar defaultGrammar) {
 		this.byteOrder = byteOrder != null ? byteOrder : "BE";
 		if (scheduler == null)
 			throw new IllegalArgumentException("scheduler must not be null");
@@ -82,10 +89,11 @@ public final class InferenceApiServer {
 			throw new IllegalArgumentException("modelRegistry must not be null");
 		this.scheduler = scheduler;
 		this.modelRegistry = modelRegistry;
+		this.defaultGrammar = defaultGrammar;
 		this.openAiChatHandler = new OpenAiChatHandler(scheduler, modelRegistry, ms -> {
 			if (latencyReporter != null)
 				latencyReporter.recordLatency(ms);
-		});
+		}, defaultGrammar);
 	}
 
 	public void start(int port) {
@@ -949,17 +957,19 @@ public final class InferenceApiServer {
 	}
 
 	private SamplingParams buildSamplingParams(ApiSampling s) {
-		if (s == null)
-			return SamplingParams.defaults();
 		SamplingParams params = SamplingParams.defaults();
-		if (s.maxTokens() != null)
-			params = params.withMaxTokens(s.maxTokens());
-		if (s.temperature() != null)
-			params = params.withTemperature(s.temperature());
-		if (s.topK() != null)
-			params = params.withTopK(s.topK());
-		if (s.topP() != null)
-			params = params.withTopP(s.topP());
+		if (s != null) {
+			if (s.maxTokens() != null)
+				params = params.withMaxTokens(s.maxTokens());
+			if (s.temperature() != null)
+				params = params.withTemperature(s.temperature());
+			if (s.topK() != null)
+				params = params.withTopK(s.topK());
+			if (s.topP() != null)
+				params = params.withTopP(s.topP());
+		}
+		if (params.grammar() == null && defaultGrammar != null)
+			params = params.withGrammar(defaultGrammar);
 		return params;
 	}
 

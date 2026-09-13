@@ -94,6 +94,8 @@ import cab.ml.juno.registry.QuantizationType;
 import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.registry.ShardMap;
 import cab.ml.juno.registry.ShardPlanner;
+import cab.ml.juno.sampler.GbnfGrammar;
+import cab.ml.juno.sampler.JsonSchemaToGbnf;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.GgufTokenizer;
@@ -207,6 +209,9 @@ public final class ConsoleMain {
 	private static String kvPageSize = null; // null → env or default 16
 	private static Integer parallel = null; // null → env or default 1
 	private static Long batchWindowMs = null; // null → env or default when parallel > 1
+	private static String grammarFile = null;
+	private static String jsonSchemaFile = null;
+	private static GbnfGrammar cliGrammar = null;
 	// ── LoRA arguments ────────────────────────────────────────────────────────
 	private static boolean loraMode = false;
 	private static String loraPath = null; // auto-derived if null
@@ -284,6 +289,8 @@ public final class ConsoleMain {
 	private static SamplingParams samplingParamsFromCli() {
 		SamplingParams params = SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(temperature)
 				.withTopK(topK).withTopP(topP);
+		if (cliGrammar != null)
+			params = params.withGrammar(cliGrammar);
 		return temperature < 1e-6f ? params.withGreedy(true) : params;
 	}
 
@@ -317,6 +324,7 @@ public final class ConsoleMain {
 			System.err.println("ERROR: mmproj file not found: " + mmprojPath);
 			System.exit(1);
 		}
+		loadCliGrammarOrExit();
 
 		// LoRA forces single in-process node
 		if (loraMode) {
@@ -450,6 +458,16 @@ public final class ConsoleMain {
 			if (env != null && !env.isBlank())
 				prefillBatch = Integer.parseInt(env.strip());
 		}
+		if (grammarFile == null) {
+			String env = System.getenv("JUNO_GRAMMAR_FILE");
+			if (env != null && !env.isBlank())
+				grammarFile = env.strip();
+		}
+		if (jsonSchemaFile == null) {
+			String env = System.getenv("JUNO_JSON_SCHEMA_FILE");
+			if (env != null && !env.isBlank())
+				jsonSchemaFile = env.strip();
+		}
 	}
 
 	/** REPL-visible KV path policy (JUL alone is off without --verbose). */
@@ -495,6 +513,37 @@ public final class ConsoleMain {
 		loraMaxTrainTokens = env.maxTrainTokens;
 		loraTrainDevice = env.trainDevice;
 		loraMicrobatch = env.microbatch;
+	}
+
+	private static void loadCliGrammarOrExit() {
+		if (grammarFile != null && jsonSchemaFile != null) {
+			System.err.println("ERROR: --grammar-file and --json-schema-file are mutually exclusive");
+			System.exit(1);
+		}
+		try {
+			if (grammarFile != null) {
+				Path p = Path.of(grammarFile);
+				if (!p.toFile().isFile()) {
+					System.err.println("ERROR: grammar file not found: " + grammarFile);
+					System.exit(1);
+				}
+				cliGrammar = GbnfGrammar.parse(Files.readString(p));
+			} else if (jsonSchemaFile != null) {
+				Path p = Path.of(jsonSchemaFile);
+				if (!p.toFile().isFile()) {
+					System.err.println("ERROR: JSON Schema file not found: " + jsonSchemaFile);
+					System.exit(1);
+				}
+				cliGrammar = JsonSchemaToGbnf.compileGrammar(Files.readString(p));
+			}
+		} catch (Exception e) {
+			System.err.println("ERROR: failed to load constrained-decoding grammar: " + e.getMessage());
+			System.exit(1);
+		}
+		if (loraMode && cliGrammar != null) {
+			System.out.println(
+					"  WARNING: --grammar-file / --json-schema-file apply to inference REPL only; LoRA /train ignores them");
+		}
 	}
 
 	private static void parseArgs(String[] args) {
@@ -607,6 +656,14 @@ public final class ConsoleMain {
 			case "--batch-window-ms":
 				if (i + 1 < args.length)
 					batchWindowMs = Long.parseLong(args[++i]);
+				break;
+			case "--grammar-file":
+				if (i + 1 < args.length)
+					grammarFile = args[++i];
+				break;
+			case "--json-schema-file":
+				if (i + 1 < args.length)
+					jsonSchemaFile = args[++i];
 				break;
 		// ── LoRA ──────────────────────────────────────────────────────────
 			case "--lora":
@@ -824,6 +881,10 @@ public final class ConsoleMain {
 		System.out.println("  --temperature F            Sampling temperature (default: 0.7)");
 		System.out.println("  --top-k N                  Top-K sampling cutoff (default: 50)");
 		System.out.println("  --top-p F                  Nucleus sampling top-p (default: 0.9)");
+		System.out.println("  --grammar-file PATH        GBNF grammar for constrained decoding (REPL + API)");
+		System.out.println("                             env JUNO_GRAMMAR_FILE; mutually exclusive with --json-schema-file");
+		System.out.println("  --json-schema-file PATH    JSON Schema (documented subset) compiled to GBNF");
+		System.out.println("                             env JUNO_JSON_SCHEMA_FILE; fail-closed on unsupported keywords");
 		System.out.println("  --byteOrder BE|LE          Activation codec byte order (default: BE)");
 		System.out.println("                             BE = big-endian (default, hardware-validated)");
 		System.out.println("                             LE = little-endian (native x86 order)");
@@ -1721,6 +1782,7 @@ public final class ConsoleMain {
 		Duration duration = parseJfrDuration(jfrDuration);
 		Configuration cfg = Configuration.getConfiguration("profile");
 		Recording rec = new Recording(cfg);
+		rec.enable("juno.GrammarConstrained");
 		rec.setDuration(duration);
 		rec.setDestination(jfrFile);
 		rec.start();
@@ -2023,7 +2085,7 @@ public final class ConsoleMain {
 				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
-			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
+			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder, cliGrammar);
 			registerVisionRoutes(apiServer, scheduler, registry, visionBuilt);
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Local API server on http://localhost:" + apiPort
@@ -2207,7 +2269,7 @@ public final class ConsoleMain {
 				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
-			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder);
+			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder, cliGrammar);
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Cluster API server on http://localhost:" + apiPort
 					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);

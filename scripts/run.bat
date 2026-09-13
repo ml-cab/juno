@@ -105,6 +105,8 @@ set "CACHE_TYPE_K_CLUSTER=%JUNO_CACHE_TYPE_K%"
 set "CACHE_TYPE_V_CLUSTER=%JUNO_CACHE_TYPE_V%"
 set "SCHEDULE_CLUSTER=%JUNO_SCHEDULE%"
 set "KV_PAGE_SIZE_CLUSTER=%JUNO_KV_PAGE_SIZE%"
+set "GRAMMAR_FILE_CLUSTER=%JUNO_GRAMMAR_FILE%"
+set "JSON_SCHEMA_FILE_CLUSTER=%JUNO_JSON_SCHEMA_FILE%"
 set "USE_GPU=true"
 if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
@@ -125,6 +127,8 @@ if /i "%~1"=="--max-tokens" ( set "MAX_TOKENS=%~2" & shift & shift & goto :clust
 if /i "%~1"=="--temperature"( set "TEMPERATURE=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--top-k"      ( set "TOP_K=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--top-p"      ( set "TOP_P=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--grammar-file" ( set "GRAMMAR_FILE_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--json-schema-file" ( set "JSON_SCHEMA_FILE_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--api-port"   ( set "API_PORT_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
@@ -159,6 +163,8 @@ if /i "%~1"=="--help" (
   echo   --temperature F   (default 0.7)
   echo   --top-k N         (default 50)
   echo   --top-p F         (default 0.9)
+  echo   --grammar-file PATH   GBNF constrained decoding (env JUNO_GRAMMAR_FILE)
+  echo   --json-schema-file PATH  JSON Schema subset (env JUNO_JSON_SCHEMA_FILE)
   echo   --api-port N      start REST API server on port N
   echo                     (includes OpenAI-compatible /v1/chat/completions)
   echo   --lora-play PATH  apply a .lora file at inference
@@ -225,10 +231,18 @@ set "SCHEDULE_ARG_CLUSTER="
 if not "%SCHEDULE_CLUSTER%"=="" set "SCHEDULE_ARG_CLUSTER=--schedule %SCHEDULE_CLUSTER%"
 set "KV_PAGE_SIZE_ARG_CLUSTER="
 if not "%KV_PAGE_SIZE_CLUSTER%"=="" set "KV_PAGE_SIZE_ARG_CLUSTER=--kv-page-size %KV_PAGE_SIZE_CLUSTER%"
+if not "%GRAMMAR_FILE_CLUSTER%"=="" if not "%JSON_SCHEMA_FILE_CLUSTER%"=="" (
+  echo [ERR] --grammar-file and --json-schema-file are mutually exclusive
+  exit /b 1
+)
+set "GRAMMAR_FILE_ARG_CLUSTER="
+if not "%GRAMMAR_FILE_CLUSTER%"=="" set "GRAMMAR_FILE_ARG_CLUSTER=--grammar-file %GRAMMAR_FILE_CLUSTER%"
+set "JSON_SCHEMA_FILE_ARG_CLUSTER="
+if not "%JSON_SCHEMA_FILE_CLUSTER%"=="" set "JSON_SCHEMA_FILE_ARG_CLUSTER=--json-schema-file %JSON_SCHEMA_FILE_CLUSTER%"
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %GRAMMAR_FILE_ARG_CLUSTER% %JSON_SCHEMA_FILE_ARG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -257,6 +271,8 @@ set "CACHE_TYPE_K=%JUNO_CACHE_TYPE_K%"
 set "CACHE_TYPE_V=%JUNO_CACHE_TYPE_V%"
 set "SCHEDULE=%JUNO_SCHEDULE%"
 set "KV_PAGE_SIZE=%JUNO_KV_PAGE_SIZE%"
+set "GRAMMAR_FILE=%JUNO_GRAMMAR_FILE%"
+set "JSON_SCHEMA_FILE=%JUNO_JSON_SCHEMA_FILE%"
 if not "%USE_GPU_ENV%"=="" (
   if /i "%USE_GPU_ENV%"=="false" set "USE_GPU=false"
   if /i "%USE_GPU_ENV%"=="0" set "USE_GPU=false"
@@ -277,6 +293,8 @@ if /i "%~1"=="--max-tokens" ( set "MAX_TOKENS=%~2" & shift & shift & goto :local
 if /i "%~1"=="--temperature"( set "TEMPERATURE=%~2" & set "TEMPERATURE_EXPLICIT=true" & shift & shift & goto :local_parse )
 if /i "%~1"=="--top-k"      ( set "TOP_K=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--top-p"      ( set "TOP_P=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--grammar-file" ( set "GRAMMAR_FILE=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--json-schema-file" ( set "JSON_SCHEMA_FILE=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--nodes"      ( set "NODES=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_LOCAL=%~2" & shift & shift & goto :local_parse )
@@ -308,6 +326,8 @@ if /i "%~1"=="--help" (
   echo   --temperature F   (default 0.7; 0 with --lora-play)
   echo   --top-k N         (default 50)
   echo   --top-p F         (default 0.9)
+  echo   --grammar-file PATH   GBNF constrained decoding (env JUNO_GRAMMAR_FILE)
+  echo   --json-schema-file PATH  JSON Schema subset (env JUNO_JSON_SCHEMA_FILE)
   echo   --nodes N         (default 3)
   echo   --api-port N      start local REST API server on port N
   echo                     (includes OpenAI-compatible /v1/chat/completions)
@@ -390,10 +410,18 @@ set "SCHEDULE_ARG="
 if not "%SCHEDULE%"=="" set "SCHEDULE_ARG=--schedule %SCHEDULE%"
 set "KV_PAGE_SIZE_ARG="
 if not "%KV_PAGE_SIZE%"=="" set "KV_PAGE_SIZE_ARG=--kv-page-size %KV_PAGE_SIZE%"
+if not "%GRAMMAR_FILE%"=="" if not "%JSON_SCHEMA_FILE%"=="" (
+  echo [ERR] --grammar-file and --json-schema-file are mutually exclusive
+  exit /b 1
+)
+set "GRAMMAR_FILE_ARG="
+if not "%GRAMMAR_FILE%"=="" set "GRAMMAR_FILE_ARG=--grammar-file %GRAMMAR_FILE%"
+set "JSON_SCHEMA_FILE_ARG="
+if not "%JSON_SCHEMA_FILE%"=="" set "JSON_SCHEMA_FILE_ARG=--json-schema-file %JSON_SCHEMA_FILE%"
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %GRAMMAR_FILE_ARG% %JSON_SCHEMA_FILE_ARG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -485,6 +513,14 @@ if /i "%~1"=="--max-tokens"  ( set "MAX_TOKENS=%~2"    & shift & shift & goto :l
 if /i "%~1"=="--temperature" ( set "TEMPERATURE=%~2"   & shift & shift & goto :lora_parse )
 if /i "%~1"=="--top-k"       ( set "TOP_K=%~2"         & shift & shift & goto :lora_parse )
 if /i "%~1"=="--top-p"       ( set "TOP_P=%~2"         & shift & shift & goto :lora_parse )
+if /i "%~1"=="--grammar-file" (
+  echo [WARN] constrained decoding is a no-op for LoRA training
+  shift & shift & goto :lora_parse
+)
+if /i "%~1"=="--json-schema-file" (
+  echo [WARN] constrained decoding is a no-op for LoRA training
+  shift & shift & goto :lora_parse
+)
 if /i "%~1"=="--heap"        ( set "HEAP=%~2"           & shift & shift & goto :lora_parse )
 if /i "%~1"=="--jfr"         ( set "JFR_DURATION_LORA=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--pType"       ( shift & shift & goto :lora_parse )

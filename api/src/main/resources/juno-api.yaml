@@ -49,7 +49,7 @@ info:
     | stop                    | sampling.stopStrings / stopTokenIds | Honored (string or ≤4 strings); finish_reason=stop |
     | presence_penalty        | sampling.presencePenalty          | Honored (−2..2); OpenAI-style presence penalty |
     | seed                    | sampling.seed                     | Honored; seeds stochastic sampling RNG |
-    | response_format         | —                                 | Absent or type=text only; else HTTP 400 |
+    | response_format         | sampling.grammar                  | text/absent unconstrained; json_object and json_schema constrain decode; unsupported schema → 400 |
     | logit_bias              | —                                 | Not implemented; silently ignored |
     | user                    | —                                 | Not implemented; silently ignored |
 
@@ -81,6 +81,7 @@ info:
     | x_juno_priority      | string  | HIGH / NORMAL (default) / LOW — scheduler queue priority |
     | x_juno_session_id    | string  | Stable ID across turns; enables KV-cache reuse           |
     | x_juno_top_k         | integer | Top-K sampling cutoff (0 = disabled; default 50)         |
+    | x_juno_grammar       | string  | Raw GBNF; cannot be combined with json_object/json_schema |
     | x_juno_disclosure    | boolean | EU AI Act Article 50 transparency opt-out; true (default) includes `x_juno_ai_disclosure` in the response, false omits it. Set to false only for API-to-API integrations with no human end-user present. |
 
     ## Streaming (SSE)
@@ -535,13 +536,20 @@ components:
         response_format:
           type: object
           description: |
-            Structured output control. Only omitted or `{"type":"text"}` is
-            accepted today. Other types (e.g. `json_object`) return HTTP 400
-            until grammar / schema enforcement ships.
+            Structured output control. Omit or `{"type":"text"}` leaves sampling
+            unconstrained. `json_object` forces a JSON object. `json_schema`
+            compiles a documented schema subset to GBNF and masks illegal tokens.
+            Unsupported schema keywords return HTTP 400. Do not combine json_*
+            types with `x_juno_grammar`.
           properties:
             type:
               type: string
               enum: [text, json_object, json_schema]
+            json_schema:
+              type: object
+              description: |
+                Required when type=json_schema. Either a schema object or
+                `{name, schema}` with `schema` holding the JSON Schema subset.
 
         # ── Juno extensions ─────────────────────────────────────────────────
 
@@ -585,6 +593,13 @@ components:
 
             Maps to: `SamplingParams.topK`
           example: 50
+
+        x_juno_grammar:
+          type: string
+          description: |
+            Juno-specific. Raw GBNF grammar for constrained decoding.
+            Cannot be combined with `response_format` types `json_object` or
+            `json_schema`. Invalid grammar text returns HTTP 400.
 
         x_juno_disclosure:
           type: boolean

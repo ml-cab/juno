@@ -47,8 +47,11 @@ Optional extensions:
 | `x_juno_priority` | string | `HIGH` / `NORMAL` / `LOW` |
 | `x_juno_session_id` | string | Stable ID for KV-cache reuse |
 | `x_juno_top_k` | integer | Top-K cutoff (0 = disabled; default 50) |
+| `x_juno_grammar` | string | Raw GBNF (conflicts with `json_object` / `json_schema`) |
 
-**Supported fields:** `model`, `messages`, `temperature`, `top_p`, `max_completion_tokens`, `max_tokens` (deprecated alias), `frequency_penalty`, `presence_penalty`, `stop`, `seed`, `stream`, `n` (only 1 accepted). `response_format` is accepted only when absent or `type=text`; other types return HTTP 400 until grammar support ships. **Ignored for compatibility:** `logit_bias`, `user`.
+**Supported fields:** `model`, `messages`, `temperature`, `top_p`, `max_completion_tokens`, `max_tokens` (deprecated alias), `frequency_penalty`, `presence_penalty`, `stop`, `seed`, `stream`, `n` (only 1 accepted). `response_format`: omit or `type=text` (unconstrained); `json_object` and `json_schema` constrain decode (unsupported schema keywords → HTTP 400). **Ignored for compatibility:** `logit_bias`, `user`.
+
+CLI: `--grammar-file` / `--json-schema-file` (mutually exclusive; env `JUNO_GRAMMAR_FILE` / `JUNO_JSON_SCHEMA_FILE`). Schema subset and samples: [howto.md](howto.md).
 
 The coordinator still exposes Juno-native inference endpoints alongside this surface; behaviour is documented in [arch.md](arch.md). The authoritative OpenAPI 3 spec is [`juno-api.yaml`](../api/src/main/resources/juno-api.yaml). Examples and flags are in [howto.md](howto.md).
 

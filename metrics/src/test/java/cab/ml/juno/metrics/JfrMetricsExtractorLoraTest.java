@@ -50,6 +50,7 @@ class JfrMetricsExtractorLoraTest {
 		assertThat(metrics.get("juno.LoraNormRefresh.count")).isEqualTo(0.0);
 		assertThat(metrics.get("juno.LoraPlayback.count")).isEqualTo(0.0);
 		assertThat(metrics.get("juno.LoraCheckpoint.count")).isEqualTo(0.0);
+		assertThat(metrics.get("juno.GrammarConstrained.count")).isEqualTo(0.0);
 		assertThat(metrics.get("juno.LoraTrainStep.forward_ms.p95")).isEqualTo(0.0);
 		assertThat(metrics.keySet()).noneMatch(k -> k.startsWith("juno.LoraTrainStep.by_algorithm."));
 	}
@@ -144,6 +145,17 @@ class JfrMetricsExtractorLoraTest {
 		assertThat(metrics.get("juno.LoraPlayback.count")).isEqualTo(1.0);
 		assertThat(metrics.get("juno.LoraPlayback.load_ms.p95")).isEqualTo(15.0);
 		assertThat(metrics.get("juno.LoraCheckpoint.count")).isEqualTo(1.0);
+	}
+
+	@Test
+	void grammarConstrained_counts() throws Exception {
+		Path jfr = record(rec -> {
+			GrammarConstrained ev = new GrammarConstrained();
+			ev.requestId = "req-1";
+			ev.commit();
+		});
+		var metrics = extract(jfr);
+		assertThat(metrics.get("juno.GrammarConstrained.count")).isEqualTo(1.0);
 	}
 
 	private static void commitTrain(String algorithm, String scaling, int groupWidth, float loss, long totalMs,
@@ -269,5 +281,13 @@ class JfrMetricsExtractorLoraTest {
 	@StackTrace(false)
 	public static class Checkpoint extends Event {
 		public String operation = "";
+	}
+
+	@Name("juno.GrammarConstrained")
+	@Label("Grammar Constrained")
+	@Category({ "Juno", "Inference" })
+	@StackTrace(false)
+	public static class GrammarConstrained extends Event {
+		public String requestId = "";
 	}
 }

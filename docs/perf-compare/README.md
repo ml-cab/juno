@@ -38,8 +38,24 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260911T235203Z`](20260911T235203Z/) | GPU + Q8_1/`dp4a` K-quant GEMV (`--mmq on --gpu-layers auto --vector 0`) | JFR pp/tg | [INDEX](20260911T235203Z/INDEX.md) |
 | [`20260911T235353Z`](20260911T235353Z/) | GPU Phi-3.5 `--mmq off` (FP16-resident pair) | JFR pp/tg | [INDEX](20260911T235353Z/INDEX.md) |
 | [`20260911T235455Z-lora`](20260911T235455Z-lora/) | GPU LoRA train-qa + playback (post Q8_1/`dp4a` GEMV) | train ms / playback tps | [INDEX](20260911T235455Z-lora/INDEX.md) |
+| [`20260912T193402Z`](20260912T193402Z/) | CPU default path (post constrained decoding; `--vector 0`) | JFR pp/tg | [INDEX](20260912T193402Z/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
+
+## Inference regression — `20260912T193402Z`
+
+`compare-llama-cpp.sh --cpu --vector 0 --reps 1`. Failures=0. Grammar is sampler-side; CUDA/ROCm cells N/A (no GPU compare). See [INDEX](20260912T193402Z/INDEX.md).
+
+| Model | llama tg | Juno tg | Juno/llama |
+|-------|---------:|--------:|-----------:|
+| tinyllama-1.1b Q4_K_M | 46.0 | 3.33 | 0.072 |
+| qwen2.5-3b Q4_K_M | 15.7 | 1.13 | 0.072 |
+| Phi-3.5-mini Q4_K_M | 13.8 | 0.91 | 0.066 |
+| mistral-7b Q4_K_M | 5.34 | 0.48 | 0.090 |
+
+Juno absolute tg is in line with the prior CPU bake-off [`20260911T221215Z`](20260911T221215Z/) (TinyLlama 3.09→3.33, Qwen 1.05→1.13, Phi-3.5 0.86→0.91, Mistral 0.50→0.48). llama.cpp tg on this host/bin is ~3–4× that earlier INDEX, so **ratios are not comparable** across those two runs.
+
+Cross-feature smoke: [`../../target/grammar-smoke/20260912T193149Z/`](../../target/grammar-smoke/20260912T193149Z/) (`smoke-grammar.sh`, failures=0, `juno.GrammarConstrained.count` proof).
 
 ## P0 MatVec bake-off — `20260911T235203Z` (`--mmq on`)
 

@@ -249,8 +249,13 @@ ModelIdResolver (registry module, cab.ml.juno.registry) — shared by
 OpenAiChatHandler / SamplingParams — OpenAI chat fields stop, seed, and
   presence_penalty map into SamplingParams and the decode loop
   (StopSequenceFilter + PresencePenaltyStep + seeded Random). response_format
-  is fail-closed (HTTP 400) unless absent or type=text. logit_bias and user
-  remain ignored with docs honesty.
+  type=text (or absent) is unconstrained; json_object / json_schema compile to
+  GBNF and mask illegal tokens before sample (GrammarSession). x_juno_grammar
+  is raw GBNF and conflicts with json_* types. Unsupported schema keywords
+  fail closed. logit_bias and user remain ignored with docs honesty.
+  CLI --grammar-file / --json-schema-file (JUNO_GRAMMAR_FILE /
+  JUNO_JSON_SCHEMA_FILE) attach the same SamplingParams.grammar on local and
+  cluster inference; LoRA /train is an explicit no-op.
 
 Dependency graph (acyclic):
   node  →  api, lora, registry, kvcache, health, grpc, micrometer

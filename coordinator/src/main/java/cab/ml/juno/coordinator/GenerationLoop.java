@@ -26,6 +26,7 @@ import java.util.logging.Logger;
 
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.InferencePipeline;
+import cab.ml.juno.sampler.GrammarSession;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatTemplateFormatter;
@@ -155,6 +156,7 @@ public final class GenerationLoop {
 		StopSequenceFilter[] stopFilters = new StopSequenceFilter[n];
 		SamplingParams[] params = new SamplingParams[n];
 		Random[] rngs = new Random[n];
+		GrammarSession[] grammars = new GrammarSession[n];
 		GenerationResult.StopReason[] reasons = new GenerationResult.StopReason[n];
 		boolean[] active = new boolean[n];
 		Instant[] starts = new Instant[n];
@@ -182,6 +184,7 @@ public final class GenerationLoop {
 			params[i] = resolveSamplingParams(req.samplingParams());
 			maxTokens[i] = params[i].maxTokens();
 			rngs[i] = params[i].seed() != null ? new Random(params[i].seed()) : null;
+			grammars[i] = GrammarBinding.open(tokenizer, params[i], requestIds[i]);
 			generated[i] = new ArrayList<>();
 			eosFilters[i] = new EosOutputFilter();
 			stopFilters[i] = new StopSequenceFilter(params[i].stopStrings());
@@ -248,7 +251,7 @@ public final class GenerationLoop {
 				float[] logits = logitsBatch[j];
 
 				int[] historyArr = generated[i].stream().mapToInt(Integer::intValue).toArray();
-				int nextToken = sampler.sample(logits, params[i], historyArr, rngs[i]);
+				int nextToken = sampler.sample(logits, params[i], historyArr, rngs[i], grammars[i]);
 
 				if (nextToken == tokenizer.eosTokenId()) {
 					eosFilters[i].discardHeld();
@@ -373,6 +376,7 @@ public final class GenerationLoop {
 		SamplingParams params = resolveSamplingParams(request.samplingParams());
 		StopSequenceFilter stopFilter = new StopSequenceFilter(params.stopStrings());
 		Random rng = params.seed() != null ? new Random(params.seed()) : null;
+		GrammarSession grammar = GrammarBinding.open(tokenizer, params, kvKey);
 		GenerationResult.StopReason stopReason = GenerationResult.StopReason.MAX_TOKENS;
 
 		// ── Step 2b: Prefill — populate KV cache for uncached prompt tokens ──
@@ -402,7 +406,8 @@ public final class GenerationLoop {
 		// ── Steps 3–8: Autoregressive decode loop ─────────────────────────────
 		int maxTokens = params.maxTokens();
 		Tokenizer.StreamContext stream = tokenizer.openStreamContext();
-		log.info("Decode: starting loop kvKey=" + kvKey + " maxTokens=" + maxTokens + " startPos=" + startPos);
+		log.info("Decode: starting loop kvKey=" + kvKey + " maxTokens=" + maxTokens + " startPos=" + startPos
+				+ " grammar=" + (grammar != null));
 
 		for (int step = 0; step < maxTokens; step++) {
 
@@ -414,7 +419,7 @@ public final class GenerationLoop {
 
 			// Step 4: Sample next token
 			int[] historyArr = generatedIds.stream().mapToInt(Integer::intValue).toArray();
-			int nextToken = sampler.sample(logits, params, historyArr, rng);
+			int nextToken = sampler.sample(logits, params, historyArr, rng, grammar);
 
 			// Step 5: Check stop conditions by token ID
 			if (nextToken == tokenizer.eosTokenId()) {

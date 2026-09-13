@@ -28,6 +28,13 @@ Features:
 
 ## 1.1 What's new?
 
+### Constrained decoding
+
+- GBNF and a documented JSON Schema subset mask illegal tokens before
+  sampling. OpenAI `response_format` `json_object` / `json_schema`, optional
+  `x_juno_grammar`, CLI `--grammar-file` / `--json-schema-file`. See
+  `docs/howto.md` and `docs/grammars/`.
+
 ### Continuous batching
 
 - `--schedule continuous` (`JUNO_SCHEDULE`): local / in-process running-set

@@ -25,6 +25,38 @@ Failures=0. GPU compare deferred (driver unavailable on host this run).
 
 **Status:** feature complete. Next = grammar / JSON Schema constrained decoding.
 
+## Constrained decoding (GBNF + JSON Schema)
+
+**Plan:** [`infra-plan/PLAN-Infra-Tier3.md`](infra-plan/PLAN-Infra-Tier3.md) (P2 step 2 — **feature complete**).
+
+**What:** GBNF + documented JSON Schema subset mask illegal tokens before sample.
+OpenAI `json_object` / `json_schema`, `x_juno_grammar`, CLI `--grammar-file` /
+`--json-schema-file`. Fixture eval: 20 schemas, ≥95% valid JSON (`GrammarEvalTest`).
+CLI grammar applies to `/v1/chat/completions` when the request omits a grammar
+(`response_format.type=text` stays unconstrained).
+
+**§2 regression:** [`perf-compare/20260912T193402Z`](perf-compare/20260912T193402Z/) (`--cpu --vector 0`).
+Failures=0. Juno decode tg is in line with the previous CPU bake-off
+([`20260911T221215Z`](perf-compare/20260911T221215Z/)). GPU compare skipped
+(grammar is sampler-side; CUDA/ROCm matrix cells are N/A).
+
+**Cross-feature smoke** ([`target/grammar-smoke/20260912T193149Z/`](../target/grammar-smoke/20260912T193149Z/)):
+
+| Gate | Result |
+|------|--------|
+| `response_format.type=json_schema` | HTTP 200; parseable JSON; JFR `GrammarConstrained.count=3` |
+| `response_format.type=json_object` | HTTP 200; parseable JSON object |
+| `x_juno_grammar` yes/no | HTTP 200; output `yes` or `no` |
+| `x_juno_grammar` + `json_object` | HTTP 400 |
+| unsupported schema `pattern` | HTTP 400 (API) and CLI fail-closed |
+| `--grammar-file` / `--json-schema-file` | constrain API with no request grammar; JFR count≥1 |
+| `--lora-play` + `--parallel 2` + `json_schema` | two parseable replies; JFR count=2 |
+| LoRA train `--grammar-file` | launcher WARNING (explicit no-op) |
+| Vision `/v1/vision/chat` | no mmproj GGUF; wired surface is chat completions |
+| CUDA / ROCm | N/A (sampler path) |
+
+**Status:** feature complete. Next = function calling / tools.
+
 ## Block KV / gather tax (`--schedule` / `--kv-page-size`)
 
 **Plan:** [`infra-plan/PLAN-Infra-Tier14.md`](infra-plan/PLAN-Infra-Tier14.md) (P1 step 2 — **feature complete**).

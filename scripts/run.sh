@@ -191,6 +191,8 @@ cmd_cluster() {
   local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
   local schedule="${JUNO_SCHEDULE:-}"
   local kv_page_size="${JUNO_KV_PAGE_SIZE:-}"
+  local grammar_file="${JUNO_GRAMMAR_FILE:-}"
+  local json_schema_file="${JUNO_JSON_SCHEMA_FILE:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -209,6 +211,8 @@ cmd_cluster() {
       --temperature)      temperature="$2";  shift 2 ;;
       --top-k)            top_k="$2";        shift 2 ;;
       --top-p)            top_p="$2";        shift 2 ;;
+      --grammar-file)     grammar_file="$2"; shift 2 ;;
+      --json-schema-file) json_schema_file="$2"; shift 2 ;;
       --heap)             heap="$2";         shift 2 ;;
       --jfr)              jfr_duration="$2"; shift 2 ;;
       --lora-play)        lora_play="$2";    shift 2 ;;
@@ -256,6 +260,9 @@ cmd_cluster() {
         echo "    --temperature F            sampling temperature       (default 0.7)"
         echo "    --top-k N                  top-K sampling cutoff     (default 50, 0=disabled)"
         echo "    --top-p F                  top-p nucleus sampling    (default 0.9, 0=disabled)"
+        echo "    --grammar-file PATH        GBNF constrained decoding (env JUNO_GRAMMAR_FILE)"
+        echo "    --json-schema-file PATH    JSON Schema subset → GBNF (env JUNO_JSON_SCHEMA_FILE;"
+        echo "                               mutually exclusive with --grammar-file)"
         echo "    --api-port N               start REST API server on port N"
         echo "                               (includes OpenAI-compatible /v1/chat/completions)"
         echo ""
@@ -338,6 +345,13 @@ cmd_cluster() {
   [[ -n "$schedule" ]] && schedule_arg="--schedule $schedule"
   local kv_page_size_arg=""
   [[ -n "$kv_page_size" ]] && kv_page_size_arg="--kv-page-size $kv_page_size"
+  if [[ -n "$grammar_file" && -n "$json_schema_file" ]]; then
+    err "--grammar-file and --json-schema-file are mutually exclusive"
+  fi
+  local grammar_file_arg=""
+  [[ -n "$grammar_file" ]] && grammar_file_arg="--grammar-file $grammar_file"
+  local json_schema_file_arg=""
+  [[ -n "$json_schema_file" ]] && json_schema_file_arg="--json-schema-file $json_schema_file"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -363,6 +377,8 @@ cmd_cluster() {
     ${cache_type_v_arg} \
     ${schedule_arg} \
     ${kv_page_size_arg} \
+    ${grammar_file_arg} \
+    ${json_schema_file_arg} \
     ${health_flag} \
     ${verbose_flag}
 }
@@ -400,6 +416,8 @@ cmd_local() {
   local schedule="${JUNO_SCHEDULE:-}"
   local kv_page_size="${JUNO_KV_PAGE_SIZE:-}"
   local prefill_batch="${JUNO_PREFILL_BATCH:-}"
+  local grammar_file="${JUNO_GRAMMAR_FILE:-}"
+  local json_schema_file="${JUNO_JSON_SCHEMA_FILE:-}"
   local use_gpu="true"
   if [[ -n "${USE_GPU:-}" ]]; then
     case "${USE_GPU}" in
@@ -418,6 +436,8 @@ cmd_local() {
       --temperature)      temperature="$2"; temperature_explicit="true"; shift 2 ;;
       --top-k)            top_k="$2";        shift 2 ;;
       --top-p)            top_p="$2";        shift 2 ;;
+      --grammar-file)     grammar_file="$2"; shift 2 ;;
+      --json-schema-file) json_schema_file="$2"; shift 2 ;;
       --heap)             heap="$2";         shift 2 ;;
       --nodes)            nodes="$2";        shift 2 ;;
       --jfr)              jfr_duration="$2"; shift 2 ;;
@@ -471,6 +491,8 @@ cmd_local() {
         echo "    --temperature F            (default 0.7; 0 with --lora-play)"
         echo "    --top-k N                  top-K sampling cutoff     (default 50, 0=disabled)"
         echo "    --top-p F                  top-p nucleus sampling    (default 0.9, 0=disabled)"
+        echo "    --grammar-file PATH        GBNF constrained decoding (env JUNO_GRAMMAR_FILE)"
+        echo "    --json-schema-file PATH    JSON Schema subset → GBNF (env JUNO_JSON_SCHEMA_FILE)"
         echo ""
         echo "  Pipeline:"
         echo "    --nodes N                  number of in-process shards  (default 3)"
@@ -569,6 +591,13 @@ cmd_local() {
   [[ -n "$prefill_batch" ]] && prefill_batch_arg="--prefill-batch $prefill_batch"
   local mmproj_arg=""
   [[ -n "$mmproj" ]] && { mmproj_arg="--mmproj-path $mmproj"; info "Vision mmproj: ${mmproj}"; }
+  if [[ -n "$grammar_file" && -n "$json_schema_file" ]]; then
+    err "--grammar-file and --json-schema-file are mutually exclusive"
+  fi
+  local grammar_file_arg=""
+  [[ -n "$grammar_file" ]] && grammar_file_arg="--grammar-file $grammar_file"
+  local json_schema_file_arg=""
+  [[ -n "$json_schema_file" ]] && json_schema_file_arg="--json-schema-file $json_schema_file"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -600,6 +629,8 @@ cmd_local() {
     ${kv_page_size_arg} \
     ${prefill_batch_arg} \
     ${mmproj_arg} \
+    ${grammar_file_arg} \
+    ${json_schema_file_arg} \
     ${health_flag} \
     ${verbose_flag}
 }
@@ -698,6 +729,9 @@ cmd_lora() {
       --temperature)  temperature="$2"; shift 2 ;;
       --top-k)        top_k="$2";       shift 2 ;;
       --top-p)        top_p="$2";       shift 2 ;;
+      --grammar-file|--json-schema-file)
+        warn "constrained decoding is a no-op for LoRA training"
+        shift 2 ;;
       --heap)         heap="$2";        shift 2 ;;
       # --pType is accepted but ignored: lora always runs single in-process node
       --pType | --ptype) shift 2 ;;
@@ -1167,6 +1201,8 @@ usage() {
   echo "    --temperature F                sampling temperature      (default 0.7)"
   echo "    --top-k N                      top-K sampling cutoff     (default 50, 0=disabled)"
   echo "    --top-p F                      top-p nucleus sampling    (default 0.9, 0=disabled)"
+  echo "    --grammar-file PATH            GBNF constrained decoding (cluster/local; env JUNO_GRAMMAR_FILE)"
+  echo "    --json-schema-file PATH        JSON Schema subset (cluster/local; env JUNO_JSON_SCHEMA_FILE)"
   echo "    --heap SIZE                    JVM heap e.g. 4g 8g      (default 4g)"
   echo "    --jfr DURATION                 Java Flight Recording     e.g. 5m 30s 1h"
   echo "    --gpu                          use GPU when available (default)"
@@ -1206,6 +1242,7 @@ usage() {
   echo ""
   echo "  Environment overrides (equivalent to their flag counterparts):"
   echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  NODES  USE_GPU"
+  echo "    JUNO_GRAMMAR_FILE  JUNO_JSON_SCHEMA_FILE"
   echo "    LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_MAX_ITERS  LORA_LOSS_TARGET_TEXT"
   echo "    LORA_TARGETS  LORA_GRADIENT_ACCUMULATION  LORA_MAX_GRAD_NORM"
   echo ""

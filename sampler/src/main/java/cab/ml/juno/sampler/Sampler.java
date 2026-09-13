@@ -78,12 +78,23 @@ public final class Sampler {
 	 *            thread-local randomness
 	 */
 	public int sample(float[] rawLogits, SamplingParams params, int[] generatedTokens, Random rng) {
+		return sample(rawLogits, params, generatedTokens, rng, null);
+	}
+
+	/**
+	 * @param grammar per-sequence constrained-decoding cursor; {@code null} leaves
+	 *                sampling unconstrained
+	 */
+	public int sample(float[] rawLogits, SamplingParams params, int[] generatedTokens, Random rng,
+			GrammarSession grammar) {
 		if (rawLogits == null || rawLogits.length == 0)
 			throw new IllegalArgumentException("logits must not be null or empty");
 		if (params == null)
 			throw new IllegalArgumentException("params must not be null");
 
 		float[] logits = rawLogits.clone();
+		if (grammar != null)
+			grammar.mask(logits);
 
 		logits = presencePenaltyStep.apply(logits, params, generatedTokens);
 		logits = repetitionPenaltyStep.apply(logits, params, generatedTokens);
@@ -92,7 +103,10 @@ public final class Sampler {
 		logits = softmaxStep.apply(logits, params, generatedTokens);
 		logits = topPStep.apply(logits, params, generatedTokens);
 
-		return sampleStep.sample(logits, params, rng);
+		int token = sampleStep.sample(logits, params, rng);
+		if (grammar != null)
+			grammar.accept(token);
+		return token;
 	}
 
 	/**

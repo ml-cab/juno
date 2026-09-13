@@ -32,6 +32,7 @@ import cab.ml.juno.registry.ModelDescriptor;
 import cab.ml.juno.registry.ModelIdResolver;
 import cab.ml.juno.registry.ModelRegistry;
 import cab.ml.juno.registry.ModelStatus;
+import cab.ml.juno.sampler.GbnfGrammar;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatMessage;
 import io.javalin.http.Context;
@@ -47,12 +48,19 @@ public final class OpenAiChatHandler {
 	private final RequestScheduler scheduler;
 	private final ModelRegistry modelRegistry;
 	private final java.util.function.LongConsumer latencyCallback;
+	private final GbnfGrammar defaultGrammar;
 
 	public OpenAiChatHandler(RequestScheduler scheduler, ModelRegistry modelRegistry,
 			java.util.function.LongConsumer latencyCallback) {
+		this(scheduler, modelRegistry, latencyCallback, null);
+	}
+
+	public OpenAiChatHandler(RequestScheduler scheduler, ModelRegistry modelRegistry,
+			java.util.function.LongConsumer latencyCallback, GbnfGrammar defaultGrammar) {
 		this.scheduler = scheduler;
 		this.modelRegistry = modelRegistry;
 		this.latencyCallback = latencyCallback;
+		this.defaultGrammar = defaultGrammar;
 	}
 
 	public void handleChatCompletion(Context ctx) {
@@ -332,6 +340,7 @@ public final class OpenAiChatHandler {
 			p = p.withSeed(body.seed());
 		if (stopStrings != null && stopStrings.length > 0)
 			p = p.withStopStrings(stopStrings);
+		p = p.withGrammar(OpenAiResponseFormat.compile(body.responseFormat(), body.xJunoGrammar(), defaultGrammar));
 		return p;
 	}
 
@@ -396,7 +405,8 @@ public final class OpenAiChatHandler {
 			@JsonProperty("seed") Long seed, @JsonProperty("response_format") JsonNode responseFormat,
 			@JsonProperty("x_juno_priority") String xJunoPriority,
 			@JsonProperty("x_juno_session_id") String xJunoSessionId, @JsonProperty("x_juno_top_k") Integer xJunoTopK,
-			@JsonProperty("x_juno_disclosure") Boolean xJunoDisclosure, @JsonProperty("x_juno_loras") JsonNode xJunoLoras) {
+			@JsonProperty("x_juno_disclosure") Boolean xJunoDisclosure, @JsonProperty("x_juno_loras") JsonNode xJunoLoras,
+			@JsonProperty("x_juno_grammar") String xJunoGrammar) {
 	}
 
 	public record OaiMessage(@JsonProperty("role") String role, @JsonProperty("content") JsonNode content) {

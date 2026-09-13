@@ -92,7 +92,7 @@ curl http://localhost:8080/v1/models
 | `stop` | `SamplingParams.stopStrings` (+ single-token ids) | String or ≤4 strings; halts decode; `finish_reason=stop` |
 | `seed` | `SamplingParams.seed` | Deterministic stochastic sampling when set |
 | `presence_penalty` | `SamplingParams.presencePenalty` | OpenAI-style (−2..2); subtracts from seen-token logits |
-| `response_format` | — | Absent or `type=text` only; other types → HTTP 400 |
+| `response_format` | `SamplingParams.grammar` | omit/`text` unconstrained; `json_object` / `json_schema` constrain decode; unsupported schema → HTTP 400 |
 | `logit_bias`, `user` | — | Silently ignored for client compatibility |
 
 **Juno request extensions** (namespaced under `x_juno_*` to avoid OpenAI field conflicts):
@@ -102,6 +102,7 @@ curl http://localhost:8080/v1/models
 | `x_juno_priority` | string | `NORMAL` | Scheduler priority: `HIGH` / `NORMAL` / `LOW` |
 | `x_juno_session_id` | string | none | Stable session ID; enables KV-cache reuse across turns |
 | `x_juno_top_k` | integer | `50` | Top-K sampling cutoff (0 = disabled) |
+| `x_juno_grammar` | string | none | Raw GBNF. Cannot be combined with `json_object` / `json_schema`. |
 | `x_juno_disclosure` | boolean | `true` | EU AI Act Article 50 opt-out. `true` includes `x_juno_ai_disclosure` in the response; `false` omits it. Set `false` only for API-to-API integrations with no human end-user present. See [Chapter 9.7](#ch-9-7) |
 
 **Multi-turn conversation with KV-cache reuse:**

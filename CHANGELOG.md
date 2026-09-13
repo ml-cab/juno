@@ -1,5 +1,21 @@
 ## Status 
 
+**Session 79** — Constrained decoding (GBNF + JSON Schema) **feature complete**
+
+- Sampler GBNF engine + JSON Schema subset compiler; grammar masks logits
+  before temperature / top-k / top-p. `GrammarEvalTest`: 20 schemas, ≥95%
+  parseable JSON under an adversarial logit prior.
+- OpenAI `response_format` `json_object` / `json_schema`; `x_juno_grammar`;
+  CLI `--grammar-file` / `--json-schema-file` (local + cluster). LoRA train
+  is an explicit no-op. Unsupported schema keywords fail closed.
+- Bake-off [`docs/perf-compare/20260912T193402Z/`](docs/perf-compare/20260912T193402Z/)
+  (`--cpu --vector 0`, failures=0). Cross-feature smoke
+  `target/grammar-smoke/20260912T193149Z/` (JFR `juno.GrammarConstrained`).
+
+---
+
+## Status 
+
 **Session 78** — Packed-Q4 GPU GEMV (Q8_1 + integer-dot) speed follow-on
 
 - Device path quantizes the activation to Q8_1 once, then integer-dots packed

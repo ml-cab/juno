@@ -51,23 +51,13 @@ public final class OpenAiAdapter {
 	}
 
 	/**
-	 * Rejects structured {@code response_format} until grammar support ships.
-	 * Absent or {@code type=text} is accepted.
+	 * Shape-check {@code response_format}. Absent or {@code type=text|json_object|json_schema}
+	 * is accepted; other types fail closed.
 	 *
 	 * @return error message, or {@code null} when allowed
 	 */
 	public static String validateResponseFormat(JsonNode responseFormat) {
-		if (responseFormat == null || responseFormat.isNull() || responseFormat.isMissingNode())
-			return null;
-		if (!responseFormat.isObject())
-			return "response_format must be an object";
-		JsonNode type = responseFormat.get("type");
-		if (type == null || !type.isTextual())
-			return "response_format.type is required";
-		String t = type.asText();
-		if ("text".equals(t))
-			return null;
-		return "response_format type '" + t + "' is not supported yet (only type=text, or omit the field)";
+		return OpenAiResponseFormat.validate(responseFormat);
 	}
 
 	/**
