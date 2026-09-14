@@ -537,6 +537,72 @@ The full OpenAPI 3.0 specification is at `api/src/main/resources/juno-api.yaml`.
 
 ---
 
+### Embeddings API (`--embeddings`, `--pooling`)
+
+`POST /v1/embeddings` is OpenAI wire-compatible but **disabled by default** — pass `--embeddings`
+to the same `local` or `cluster` invocation that starts `--api-port` to turn it on. A server
+started without `--embeddings` returns HTTP 400 on the route rather than silently ignoring the
+request or 404ing.
+
+Juno has no dedicated embedding-model GGUFs yet, so embeddings are extracted from whatever chat
+model is loaded: the RMS/LayerNorm-normalized hidden state immediately before the LM head, at
+every prompt position, reduced to one vector by `--pooling`:
+
+| Pooling | Behavior | When to use |
+|---|---|---|
+| `mean` (default) | Average hidden vector across every prompt position | Best default for chat-tuned models — spreads representation across the whole prompt |
+| `cls` | Hidden vector at the first prompt position | Rarely useful outside encoder-style (BERT-like) checkpoints, which Juno does not load |
+| `last` | Hidden vector at the final prompt position | Cheapest; tends to under-represent earlier tokens on chat-tuned models — the server logs a one-time warning when used |
+
+**Quick verification:**
+
+```bash
+./juno local --model-path /path/to/model.gguf --api-port 8080 --embeddings
+
+curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"input": "What is Java?"}'
+
+# Batch input — one embedding object per string, same order as the request
+curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"input": ["first sentence", "second sentence"], "x_juno_pooling": "cls"}'
+```
+
+Response shape matches OpenAI's `POST /v1/embeddings`:
+
+```json
+{
+  "object": "list",
+  "data": [{"object": "embedding", "index": 0, "embedding": [0.01, -0.02, ...]}],
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "usage": {"prompt_tokens": 5, "total_tokens": 5}
+}
+```
+
+`x_juno_pooling` (optional, `mean` / `cls` / `last`) overrides `--pooling` for a single request.
+
+**Concurrency model (v1):** unlike `/v1/chat/completions`, embeddings requests run directly on
+the pipeline on the HTTP request's own thread — they do not go through `RequestScheduler`'s
+queue-depth limit or 429 semantics. There is no continuous-batching or micro-batching path for
+embeddings in v1: `--prefill-batch` chunking (chat completions prefill) does not apply here —
+each prompt position runs its own forward pass, so long inputs to `/v1/embeddings` are
+proportionally slower than an equivalent-length chat prompt. `--parallel` static batching is
+likewise chat-completions-only; embeddings batch input (multiple `input` strings) is processed
+one string at a time, not as one micro-batch.
+
+**Scope (v1):** local / single-shard only, matching `--schedule continuous`'s scope. `cluster`
+mode accepts `--embeddings` (so scripted launches do not need per-mode branching) but every
+request fails closed with HTTP 400 — tensor-parallel and pipeline-parallel node pipelines do not
+implement embeddings extraction. `--lora-play` and vision are otherwise unaffected: chat
+completions keep working normally with `--embeddings` on, and embeddings themselves reflect the
+loaded LoRA overlay (they run through the same handler chain). `juno lora` (train REPL) accepts
+`--embeddings` without error but the flag has no effect there — that mode's API server only ever
+serves `/v1/lora/train-file-qa` and `/v1/lora/save`; the REPL prints a startup warning rather than
+silently ignoring the flag.
+
+---
+
 ### JVM integration — BOM, `JunoPlayer` facade, LoRA, embeddings, `Flow`, HTTP client
 
 #### Maven BOM (`juno-bom`)

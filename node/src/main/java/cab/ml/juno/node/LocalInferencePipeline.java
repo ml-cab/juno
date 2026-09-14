@@ -185,13 +185,32 @@ public final class LocalInferencePipeline implements InferencePipeline {
 	 * Causal prefill over {@code promptTokens}: for each position, runs all pipeline
 	 * stages. Returns the RMS-normalized hidden vector at the final token (before the
 	 * LM head on the last shard).
+	 *
+	 * <p>Convenience wrapper over {@link #embedTokens} for callers that only need
+	 * last-token pooling (e.g. {@code JunoPlayer.embed}).
 	 */
 	public float[] embedLastToken(String requestId, int[] promptTokens) {
-		if (promptTokens.length == 0)
-			throw new IllegalArgumentException("promptTokens must not be empty");
-		float[] last = null;
-		for (int pos = 0; pos < promptTokens.length; pos++) {
-			int[] prefix = Arrays.copyOf(promptTokens, pos + 1);
+		float[][] hidden = embedTokens(requestId, promptTokens);
+		return hidden[hidden.length - 1];
+	}
+
+	/**
+	 * Causal prefill over {@code tokens}: for each position, runs all pipeline
+	 * stages and keeps the RMS/LayerNorm-normalized hidden vector the final stage
+	 * exposes before its LM head — one row per position, for
+	 * {@code POST /v1/embeddings} pooling ({@link EmbeddingPooling}).
+	 *
+	 * <p>Evicts {@code requestId}'s per-stage KV state before returning: unlike
+	 * {@link #forward}, this is a one-shot call with no follow-up decode, so the KV
+	 * cache entries it left behind would otherwise leak for the life of the process.
+	 */
+	@Override
+	public float[][] embedTokens(String requestId, int[] tokens) {
+		if (tokens.length == 0)
+			throw new IllegalArgumentException("tokens must not be empty");
+		float[][] hidden = new float[tokens.length][];
+		for (int pos = 0; pos < tokens.length; pos++) {
+			int[] prefix = Arrays.copyOf(tokens, pos + 1);
 			float[] activations = null;
 			for (int i = 0; i < stages.size(); i++) {
 				NodeStage stage = stages.get(i);
@@ -199,8 +218,9 @@ public final class LocalInferencePipeline implements InferencePipeline {
 						: ForwardRequest.withActivations(requestId, activations, pos);
 				boolean finalStage = (i == stages.size() - 1);
 				if (finalStage) {
-					last = stage.handler().lastRmsHiddenForEmbedding(req, stage.context()).orElseThrow(() -> new IllegalStateException(
-							"Final pipeline stage does not expose embeddings (missing output projection?)"));
+					hidden[pos] = stage.handler().lastRmsHiddenForEmbedding(req, stage.context())
+							.orElseThrow(() -> new IllegalStateException(
+									"Final pipeline stage does not expose embeddings (missing output projection?)"));
 				} else {
 					ForwardResult result = stage.handler().forward(req, stage.context());
 					if (result.isFinalNode())
@@ -209,7 +229,8 @@ public final class LocalInferencePipeline implements InferencePipeline {
 				}
 			}
 		}
-		return last;
+		evict(requestId);
+		return hidden;
 	}
 
 	public int stageCount() {

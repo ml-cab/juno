@@ -1,5 +1,46 @@
 ## Status 
 
+**Session 82** — Embeddings API (`POST /v1/embeddings`) **feature complete**
+
+- OpenAI wire-compatible `POST /v1/embeddings`, opt-in via `--embeddings` (off
+  by default — a server started without it returns HTTP 400
+  `embeddings_disabled` rather than 404 or a silent no-op). `--pooling
+  mean|cls|last` (default `mean`) reduces the RMS/LayerNorm-normalized hidden
+  state at every prompt position to one vector via the new
+  `EmbeddingPooling`/`PoolingMode` (node module). Batch string `input`,
+  deterministic output, OpenAI-shaped `usage`/`data` response.
+- `InferencePipeline.embedTokens` is a new default method that throws
+  `UnsupportedOperationException` — a fail-closed contract only
+  `LocalInferencePipeline` overrides. Distributed pipelines (gRPC node
+  clients, tensor-/pipeline-parallel `cluster` launchers) inherit the
+  default and return HTTP 400 `embeddings_unsupported` on every request
+  instead of a 500 or a silently wrong vector, matching `--schedule
+  continuous`'s existing local/single-shard-only scope.
+  `LocalInferencePipeline.embedTokens` generalizes the pre-existing
+  `embedLastToken` loop to keep every position's hidden vector instead of
+  discarding all but the last (no extra compute — that work was already
+  happening); both now call `evict(requestId)` before returning, fixing a
+  pre-existing per-request KV-cache leak that had gone unnoticed because
+  `embedLastToken`'s only prior caller (`JunoPlayer.embed`) is rarely used at
+  volume.
+- `EmbeddingsHandler` (coordinator module) runs directly on the Javalin
+  request's own thread, bypassing `RequestScheduler`/`GenerationLoop`'s
+  sampler-driven decode loop and its queue-depth/429 semantics entirely — a
+  deliberate v1 scope choice, documented rather than silently assumed.
+- Live-smoked against a real TinyLlama GGUF (not just unit-test doubles):
+  correct hiddenDim-length vectors, batch input, determinism, invalid-input
+  400s, chat completions unaffected, and a `--lora-play` combination (the
+  embedding path runs through the LoRA-wrapped handler chain, so embeddings
+  reflect the loaded adapter rather than bypassing it). LoRA train mode and
+  `cluster` mode both print a startup warning when `--embeddings` is passed
+  but cannot honor it, rather than ignoring the flag silently.
+- §2 regression: `compare-llama-cpp.sh --models tinyllama --cpu --vector 0
+  --no-jfr`, failures=0 — a regression spot-check per the API-only-tier
+  carve-out (no MatVec/forward/KV/vision path touched); not a published
+  multi-model bake-off.
+- Vision + `--embeddings` combination is an unverified follow-up (documented,
+  not claimed as working).
+
 **Session 81** — GGUF chat template + Hugging Face Hub download **feature complete**
 
 - Prefer a GGUF's own embedded `tokenizer.chat_template` metadata, rendered

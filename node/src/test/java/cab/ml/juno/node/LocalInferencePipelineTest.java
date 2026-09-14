@@ -125,6 +125,39 @@ class LocalInferencePipelineTest {
 		assertThat(emb[1]).isEqualTo(0.01f);
 	}
 
+	@Test
+	void embedLastToken_evicts_the_request_afterwards() {
+		CyclicForwardPassHandler h1 = new CyclicForwardPassHandler();
+		CyclicForwardPassHandler h2 = new CyclicForwardPassHandler();
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), List.of(h1, h2), VOCAB,
+				HIDDEN_DIM, NUM_HEADS);
+
+		pipeline.embedLastToken("embed-req", new int[] { 10, 20, 30 });
+
+		assertThat(h1.wasEvicted("embed-req")).isTrue();
+		assertThat(h2.wasEvicted("embed-req")).isTrue();
+	}
+
+	@Test
+	void embedTokens_returns_one_hidden_vector_per_position() {
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), new CyclicForwardPassHandler(),
+				VOCAB, HIDDEN_DIM, NUM_HEADS);
+
+		float[][] hidden = pipeline.embedTokens("embed-req", new int[] { 10, 20, 30 });
+
+		assertThat(hidden).hasDimensions(3, HIDDEN_DIM);
+		assertThat(hidden[2]).isEqualTo(pipeline.embedLastToken("embed-req-2", new int[] { 10, 20, 30 }));
+	}
+
+	@Test
+	void embedTokens_rejects_empty_prompt() {
+		LocalInferencePipeline pipeline = LocalInferencePipeline.from(twoNodeMap(), new CyclicForwardPassHandler(),
+				VOCAB, HIDDEN_DIM, NUM_HEADS);
+
+		assertThatThrownBy(() -> pipeline.embedTokens("embed-req", new int[0]))
+				.isInstanceOf(IllegalArgumentException.class);
+	}
+
 	// ── Handler-list snapshot timing (root cause of the 2026-07-12 vision hang) ─
 	//
 	// LocalInferencePipeline.from(shardMap, handlers, ...) reads handlers.get(i)

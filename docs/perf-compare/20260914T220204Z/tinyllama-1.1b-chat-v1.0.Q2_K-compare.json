@@ -1,0 +1,28 @@
+{
+  "model": "tinyllama-1.1b-chat-v1.0.Q2_K.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 45.631471,
+    "token_gen_tps": 15.894777
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": null,
+    "token_gen_tps": 1.4591,
+    "api_token_gen_tps": 1.4591,
+    "latency_ms": 43862,
+    "prompt_tokens": 30,
+    "completion_tokens": 64,
+    "juno_use_vector": 0,
+    "use_jfr": 0
+  },
+  "ratio_juno_over_llamacpp_pp": null,
+  "ratio_juno_over_llamacpp_tg": 0.09179745019385928,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20260914T220204Z/tinyllama-1.1b-chat-v1.0.Q2_K-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20260914T220204Z/tinyllama-1.1b-chat-v1.0.Q2_K-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20260914T220204Z/tinyllama-1.1b-chat-v1.0.Q2_K-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20260914T220204Z/tinyllama-1.1b-chat-v1.0.Q2_K-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20260914T220204Z/tinyllama-1.1b-chat-v1.0.Q2_K-juno-jfr.json"
+  }
+}

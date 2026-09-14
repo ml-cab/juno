@@ -92,6 +92,45 @@ Failures=0. Juno decode tg is in line with the previous CPU bake-off
 
 **Status:** feature complete. P2 API path (fields → grammar → tools) is done.
 
+## Embeddings API (`--embeddings` / `--pooling`)
+
+**Plan:** [`infra-plan/PLAN-Infra-Tier11.md`](infra-plan/PLAN-Infra-Tier11.md) (P3 — **feature complete**).
+
+**What:** `POST /v1/embeddings`, off by default (`--embeddings`). Extracts the RMS/LayerNorm-normalized
+hidden state at every prompt position (`InferencePipeline.embedTokens`, default method that throws
+`UnsupportedOperationException` — only `LocalInferencePipeline` overrides it) and reduces it with
+`EmbeddingPooling.pool(hidden, PoolingMode)`: `mean` (default), `cls`, `last`. Runs on the request's
+own thread, bypassing `RequestScheduler`'s queue-depth limit / 429 semantics (documented v1 scope
+boundary, not a silent gap).
+
+**§2 regression:** [`perf-compare/20260914T220204Z`](perf-compare/20260914T220204Z/)
+(`--models tinyllama --cpu --vector 0 --no-jfr`). Failures=0. This tier does not touch `MatVec`,
+`forward`/`forwardMultiDecode`, KV, or vision code, so per Execution rule §2's API-only-tier
+carve-out this is a regression spot-check on the existing chat completions path (not a throughput
+claim), and `compare-lora.sh` / `compare-vision.sh` were not run.
+
+**Live smoke** (`./juno local --model-path models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf --api-port
+18081 --embeddings --pooling mean --cpu`, TinyLlama Q4_K_M, hiddenDim=2048):
+
+| Gate | Result |
+|------|--------|
+| `POST /v1/embeddings {"input":"What is Java?"}` | HTTP 200; `data[0].embedding` length 2048 |
+| Batch `input: [s1, s2]` | 2 embedding objects, `index` 0/1, `usage.prompt_tokens` = combined token count |
+| Same input twice | byte-identical response body (deterministic) |
+| `x_juno_pooling: "bogus"` | HTTP 400 |
+| Missing `input` | HTTP 400 |
+| `POST /v1/chat/completions` with `--embeddings` on | HTTP 200 — unaffected |
+| `--lora-play models/tinyllama-1.1b-chat-v1.0.Q4_K_M.lora` + `--embeddings` | HTTP 200; embedding values differ from the no-LoRA run (overlay is applied) — **wired** |
+| Server without `--embeddings` (`InferenceApiServer` 3/4-arg constructor) | `POST /v1/embeddings` → HTTP 400 `embeddings_disabled` (`EmbeddingsDisabledTest`) |
+| Distributed pipeline (`StubInferencePipeline`, stands in for gRPC / TP / PP node clients) + `--embeddings` on | HTTP 400 `embeddings_unsupported` — **fail closed**, not a 500 or a silently wrong vector (`EmbeddingsUnsupportedPipelineTest`) |
+
+**Cross-feature matrix:** see `PLAN-Infra-Tier11.md`. `cluster` / TP / PP fail closed (no
+implementation, matches `--schedule continuous`'s local/single-shard scope); vision and `--parallel`
+are explicit no-ops on the embeddings path itself (batch input is processed sequentially, one
+`embedTokens` call per string) with no interaction to break.
+
+**Status:** feature complete.
+
 ## Block KV / gather tax (`--schedule` / `--kv-page-size`)
 
 **Plan:** [`infra-plan/PLAN-Infra-Tier14.md`](infra-plan/PLAN-Infra-Tier14.md) (P1 step 2 — **feature complete**).

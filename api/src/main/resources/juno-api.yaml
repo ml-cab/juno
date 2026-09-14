@@ -29,6 +29,7 @@ info:
     | OpenAI endpoint                 | Juno support         |
     |---------------------------------|----------------------|
     | POST /v1/chat/completions       | Full (blocking + SSE)|
+    | POST /v1/embeddings             | Opt-in (`--embeddings`); local/single-shard only |
     | GET  /v1/models                 | Full                 |
     | GET  /v1/models/{model}         | Full                 |
 
@@ -111,6 +112,16 @@ info:
     data: [DONE]
     ```
 
+    ## Embeddings (opt-in)
+
+    `POST /v1/embeddings` — see the path definition below for the full
+    request/response shape. Disabled unless the server was started with
+    `--embeddings`; local / single-shard only — `cluster` mode fails closed
+    with HTTP 400 on every request rather than silently returning a wrong
+    vector. Runs on the request's own thread, not through the chat
+    completions scheduler queue, so it does not share that queue's 429
+    semantics.
+
     ## Error codes
 
     | HTTP | error code        | Cause                                        |
@@ -138,6 +149,8 @@ servers:
 tags:
   - name: chat
     description: OpenAI-compatible chat completions
+  - name: embeddings
+    description: OpenAI-compatible embeddings extraction
   - name: models
     description: Model discovery
 
@@ -383,6 +396,83 @@ paths:
                   message: "Model 'llama3-8b' not found"
                   type: invalid_request_error
                   code: model_not_found
+
+  # ── Embeddings ────────────────────────────────────────────────────────────
+
+  /embeddings:
+    post:
+      tags: [embeddings]
+      operationId: createEmbedding
+      summary: Extract embeddings for one or more inputs
+      description: |
+        Wire-compatible with OpenAI's `POST /v1/embeddings`. **Disabled by
+        default** — the server must be started with `--embeddings`; a server
+        that was not returns `400 embeddings_disabled` rather than 404 or a
+        silent no-op.
+
+        ## Implementation mapping
+
+        `EmbeddingsHandler.handleEmbeddings` bypasses `RequestScheduler` /
+        `GenerationLoop`'s sampler-driven decode loop entirely: it calls
+        `InferencePipeline.embedTokens(requestId, tokens)` directly (a causal
+        prefill that keeps the RMS/LayerNorm-normalized hidden vector at every
+        prompt position, immediately before the LM head) and reduces it to one
+        vector with `EmbeddingPooling.pool(hidden, PoolingMode)`.
+
+        `InferencePipeline.embedTokens` is a default method that throws
+        `UnsupportedOperationException` — only `LocalInferencePipeline`
+        overrides it. Distributed pipelines (gRPC node clients, tensor- or
+        pipeline-parallel cluster launchers) therefore fail closed with `400
+        embeddings_unsupported` on every request: embeddings extraction is
+        local / single-shard only in v1, matching `--schedule continuous`'s
+        scope. Runs on the HTTP request's own thread — v1 does not share the
+        chat completions queue-depth limit or `429` semantics.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingsRequest'
+            examples:
+              single:
+                value:
+                  input: "What is Java?"
+              batch:
+                value:
+                  input: ["first sentence", "second sentence"]
+                  x_juno_pooling: cls
+      responses:
+        '200':
+          description: Embeddings for every input, in request order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingsResponse'
+              example:
+                object: list
+                data:
+                  - object: embedding
+                    index: 0
+                    embedding: [0.0123, -0.0456, 0.0789]
+                model: llama3-8b
+                usage:
+                  prompt_tokens: 5
+                  total_tokens: 5
+        '400':
+          description: |
+            Invalid request body, empty/blank input, invalid `x_juno_pooling`,
+            embeddings disabled (`embeddings_disabled`), or an unsupported
+            pipeline (`embeddings_unsupported`, e.g. `cluster` mode)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: No model loaded, or the requested model is not registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
 # ─────────────────────────────────────────────────────────────────────────────
 # COMPONENTS
@@ -962,6 +1052,99 @@ components:
             of incremental `content` pieces. Each element includes `index`.
           items:
             $ref: '#/components/schemas/ChatToolCall'
+
+    # ── Embeddings ───────────────────────────────────────────────────────────
+
+    EmbeddingsRequest:
+      type: object
+      required: [input]
+      properties:
+        model:
+          type: string
+          description: |
+            ID of the model to use. Must match a model registered in Juno
+            (`GET /v1/models`). If omitted, the first loaded model is used.
+          example: llama3-8b
+        input:
+          description: |
+            A single string, or an array of strings. Juno has no dedicated
+            embedding-model GGUFs — every input is embedded through whatever
+            chat model is loaded, so a blank string or empty array is rejected
+            with `400 invalid_request`.
+          oneOf:
+            - type: string
+            - type: array
+              minItems: 1
+              items:
+                type: string
+          example: "What is Java?"
+        encoding_format:
+          type: string
+          enum: [float]
+          description: |
+            Accepted for OpenAI client compatibility; only `float` (plain JSON
+            number arrays) is implemented. base64 encoding is not supported.
+        x_juno_pooling:
+          type: string
+          enum: [mean, cls, last]
+          description: |
+            Per-request override of `--pooling`. `mean` averages the hidden
+            vector across every input position (default); `cls` takes the
+            first position; `last` takes the final position (chat-tuned
+            models tend to under-represent earlier tokens with `last` — the
+            server logs a one-time warning).
+
+    EmbeddingsResponse:
+      type: object
+      required: [object, data, model, usage]
+      properties:
+        object:
+          type: string
+          enum: [list]
+        data:
+          type: array
+          description: One entry per `input` string, in request order.
+          items:
+            $ref: '#/components/schemas/Embedding'
+        model:
+          type: string
+          example: llama3-8b
+        usage:
+          $ref: '#/components/schemas/EmbeddingsUsage'
+
+    Embedding:
+      type: object
+      required: [object, index, embedding]
+      properties:
+        object:
+          type: string
+          enum: [embedding]
+        index:
+          type: integer
+          description: Position of this embedding in the `data` array, matching its input's position in the request.
+          example: 0
+        embedding:
+          type: array
+          description: |
+            The embedding vector. Length equals the loaded model's hidden
+            dimension (`ModelDescriptor.hiddenDim()`), not `vocabSize`.
+          items:
+            type: number
+            format: float
+          example: [0.0123, -0.0456, 0.0789]
+
+    EmbeddingsUsage:
+      type: object
+      required: [prompt_tokens, total_tokens]
+      properties:
+        prompt_tokens:
+          type: integer
+          description: Sum of tokenized length across every input string.
+          example: 5
+        total_tokens:
+          type: integer
+          description: Equal to prompt_tokens — embeddings have no completion tokens.
+          example: 5
 
     # ── Models ───────────────────────────────────────────────────────────────
 

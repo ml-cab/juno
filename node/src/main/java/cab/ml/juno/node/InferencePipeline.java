@@ -110,4 +110,27 @@ public interface InferencePipeline {
 	 */
 	default void evict(String requestId) {
 	}
+
+	/**
+	 * Causal prefill over {@code tokens}, returning the RMS/LayerNorm-normalized
+	 * hidden vector at every position (before the LM head) for
+	 * {@code POST /v1/embeddings} pooling.
+	 *
+	 * <p><b>Fail closed by default.</b> Embeddings extraction is only implemented
+	 * on {@link LocalInferencePipeline} (single JVM / single shard); distributed
+	 * pipelines (gRPC node clients, tensor/pipeline-parallel cluster launchers)
+	 * throw here rather than silently returning a wrong or zeroed vector, per
+	 * ROADMAP Execution rule 6 (no silent flag ignore).
+	 *
+	 * @param requestId unique key for the per-request KV state used during prefill
+	 * @param tokens    prompt token ids, must not be empty
+	 * @return {@code hidden[pos][hiddenDim]}, one row per position in {@code tokens}
+	 * @throws UnsupportedOperationException when this pipeline does not support
+	 *                                        embeddings extraction
+	 */
+	default float[][] embedTokens(String requestId, int[] tokens) {
+		throw new UnsupportedOperationException(
+				"Embeddings extraction is not supported by " + getClass().getSimpleName()
+						+ "; /v1/embeddings requires a single-process or single-shard pipeline (local mode).");
+	}
 }

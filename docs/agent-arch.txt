@@ -107,7 +107,7 @@ GPU FFI (node module — Panama project, JEP 454):
         createMatVec() delegates to GpuBindings.createMatVec(GpuContext) — no instanceof checks.
 
 Third-party JVM integration (juno-player module): JunoPlayer (facade), LoraTrainer,
-LocalInferencePipeline.embedLastToken, PublisherTokenConsumer → Flow.Publisher,
+LocalInferencePipeline.embedLastToken/embedTokens, PublisherTokenConsumer → Flow.Publisher,
 JunoHttpClient (REST). Thin jar vs *-shaded.jar documented in docs/howto.md.
 
 LoRA GPU defaults:
@@ -315,6 +315,38 @@ HfGgufFetcher (juno-player module) — resolves a Hugging Face Hub
   --hf into the effective --model-path; when both flags are given and
   disagree (different resolved file), it fails fast with an error rather than
   silently preferring one.
+
+Embeddings API (Infra Tier 11) — POST /v1/embeddings (coordinator module), off by
+  default. InferencePipeline.embedTokens(requestId, tokens) (node module) is a
+  default method that throws UnsupportedOperationException — a fail-closed
+  contract satisfied only by LocalInferencePipeline; gRPC / tensor-parallel /
+  pipeline-parallel pipeline implementations (ProcessPipelineClient,
+  TensorParallelPipelineClient, StubInferencePipeline in tests) inherit the
+  default and therefore fail closed, matching --schedule continuous's
+  local/single-shard-only scope. LocalInferencePipeline.embedTokens runs the
+  same causal-prefill loop embedLastToken always ran (one forward pass per
+  prompt position through every pipeline stage), but now keeps every
+  position's ForwardPassHandler.lastRmsHiddenForEmbedding result instead of
+  overwriting all but the last — no extra compute, just no longer discarding
+  work already being done. embedLastToken(requestId, promptTokens) is now a
+  thin wrapper returning embedTokens(...)[last]; both now call evict(requestId)
+  before returning, fixing a pre-existing per-request KV-cache leak (embedding
+  extraction is one-shot with no follow-up decode, so nothing else ever
+  evicted that state). EmbeddingPooling.pool(hidden, PoolingMode) (node
+  module) reduces the per-position hidden matrix to one vector: MEAN
+  (default), CLS (first position), LAST (final position — logs a one-time
+  quality warning in EmbeddingsHandler, since it under-represents chat-tuned
+  prompts). EmbeddingsHandler (coordinator module) bypasses RequestScheduler /
+  GenerationLoop's sampler-driven decode loop entirely — it runs directly on
+  the Javalin request's own virtual thread, so v1 embeddings requests do not
+  share the chat completions queue-depth limit or 429 semantics. CLI
+  --embeddings (enables the route; RequestScheduler.generationLoop() is a new
+  package-private accessor EmbeddingsHandler uses to reach the tokenizer and
+  pipeline) and --pooling mean|cls|last thread through both ConsoleMain
+  runLocalRepl() and runClusterRepl() and scripts/run.sh / run.bat for local
+  and cluster; cluster mode accepts both flags (no per-mode branching needed
+  in scripts) but prints a startup warning that every request will 400,
+  since its pipeline never implements embedTokens.
 
 Dependency graph (acyclic):
   node  →  api, lora, registry, kvcache, health, grpc, micrometer

@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import cab.ml.juno.node.PoolingMode;
 import cab.ml.juno.registry.ModelDescriptor;
 import cab.ml.juno.registry.ModelIdResolver;
 import cab.ml.juno.registry.ModelRegistry;
@@ -57,6 +58,7 @@ public final class InferenceApiServer {
 	private final RequestScheduler scheduler;
 	private final ModelRegistry modelRegistry;
 	private final OpenAiChatHandler openAiChatHandler;
+	private final EmbeddingsHandler embeddingsHandler;
 	private final GbnfGrammar defaultGrammar;
 	private Javalin app;
 	private String byteOrder;
@@ -82,6 +84,18 @@ public final class InferenceApiServer {
 
 	public InferenceApiServer(RequestScheduler scheduler, ModelRegistry modelRegistry, String byteOrder,
 			GbnfGrammar defaultGrammar) {
+		this(scheduler, modelRegistry, byteOrder, defaultGrammar, false, PoolingMode.MEAN);
+	}
+
+	/**
+	 * @param embeddingsEnabled when {@code false} (default), {@code POST /v1/embeddings}
+	 *                          returns 400 rather than silently degrading — see
+	 *                          {@code --embeddings} in {@code docs/howto.md}
+	 * @param defaultPooling    pooling applied when a request omits
+	 *                          {@code x_juno_pooling}
+	 */
+	public InferenceApiServer(RequestScheduler scheduler, ModelRegistry modelRegistry, String byteOrder,
+			GbnfGrammar defaultGrammar, boolean embeddingsEnabled, PoolingMode defaultPooling) {
 		this.byteOrder = byteOrder != null ? byteOrder : "BE";
 		if (scheduler == null)
 			throw new IllegalArgumentException("scheduler must not be null");
@@ -94,6 +108,8 @@ public final class InferenceApiServer {
 			if (latencyReporter != null)
 				latencyReporter.recordLatency(ms);
 		}, defaultGrammar);
+		this.embeddingsHandler = new EmbeddingsHandler(scheduler, modelRegistry, embeddingsEnabled,
+				defaultPooling != null ? defaultPooling : PoolingMode.MEAN);
 	}
 
 	public void start(int port) {
@@ -117,6 +133,7 @@ public final class InferenceApiServer {
 		app.post("/v1/inference", this::handleBlockingInference);
 		app.post("/v1/inference/stream", this::handleStreamingInference);
 		app.post("/v1/chat/completions", openAiChatHandler::handleChatCompletion);
+		app.post("/v1/embeddings", embeddingsHandler::handleEmbeddings);
 
 		// ── Models ────────────────────────────────────────────────────────────
 		app.get("/v1/models", openAiChatHandler::handleListModels);

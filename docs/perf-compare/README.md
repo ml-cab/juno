@@ -40,8 +40,25 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260911T235455Z-lora`](20260911T235455Z-lora/) | GPU LoRA train-qa + playback (post Q8_1/`dp4a` GEMV) | train ms / playback tps | [INDEX](20260911T235455Z-lora/INDEX.md) |
 | [`20260912T193402Z`](20260912T193402Z/) | CPU default path (post constrained decoding; `--vector 0`) | JFR pp/tg | [INDEX](20260912T193402Z/INDEX.md) |
 | [`20260913T032734Z`](20260913T032734Z/) | CPU default path (post function calling; `--vector 0`) | JFR pp/tg | [INDEX](20260913T032734Z/INDEX.md) |
+| [`20260914T220204Z`](20260914T220204Z/) | CPU default path (post embeddings API; `--vector 0`, `--no-jfr`) | wall-clock tg | [INDEX](20260914T220204Z/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
+
+## Inference regression — `20260914T220204Z`
+
+`compare-llama-cpp.sh --models tinyllama --cpu --vector 0 --no-jfr` after the embeddings API landing
+(Infra Tier 11 — `POST /v1/embeddings`, off by default). Failures=0. Not a full curated-model
+bake-off: this tier adds a new REST route and an `InferencePipeline.embedTokens` default method
+but does not touch `MatVec`, `forward`/`forwardMultiDecode`, KV, or vision code paths, so per
+Execution rule §2's API-only-tier carve-out this is a regression spot-check on the existing chat
+completions path, not a throughput claim; `compare-lora.sh` / `compare-vision.sh` were not run
+(same carve-out). `--models tinyllama` matches both TinyLlama GGUFs present under `models/`. See
+[INDEX](20260914T220204Z/INDEX.md).
+
+| Model | llama.cpp tg | Juno tg | Juno/llama |
+|-------|-------------:|--------:|-----------:|
+| tinyllama-1.1b Q2_K | 15.89 | 1.46 | 0.092 |
+| tinyllama-1.1b Q4_K_M | 25.28 | 2.49 | 0.099 |
 
 ## Inference regression — `20260913T032734Z`
 

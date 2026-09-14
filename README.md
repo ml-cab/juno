@@ -28,6 +28,14 @@ Features:
 
 ## 1.1 What's new?
 
+### Embeddings API
+
+- `POST /v1/embeddings` (OpenAI wire-compatible), opt-in via `--embeddings`;
+  `--pooling mean|cls|last` (default `mean`) reduces the per-position hidden
+  state to one vector. Batch string input, deterministic output. Local /
+  single-shard only — `cluster` mode fails closed with HTTP 400. See
+  `docs/howto.md`.
+
 ### Constrained decoding
 
 - GBNF and a documented JSON Schema subset mask illegal tokens before

@@ -187,6 +187,8 @@ cmd_cluster() {
   local health="false"
   local health_port="${HEALTH_PORT:-8081}"
   local api_port="${API_PORT:-}"
+  local embeddings="${JUNO_EMBEDDINGS:-}"
+  local pooling="${JUNO_POOLING:-}"
   local prefill_mode="${PREFILL_MODE:-}"
   local cache_type_k="${JUNO_CACHE_TYPE_K:-}"
   local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
@@ -226,6 +228,8 @@ cmd_cluster() {
       --health)           health="true";     shift   ;;
       --health-port)      health_port="$2";  shift 2 ;;
       --api-port)         api_port="$2";     shift 2 ;;
+      --embeddings)       embeddings="true"; shift   ;;
+      --pooling)          pooling="$2";      shift 2 ;;
       --prefill)          prefill_mode="$2"; shift 2 ;;
       --cache-type-k)     cache_type_k="$2"; shift 2 ;;
       --cache-type-v)     cache_type_v="$2"; shift 2 ;;
@@ -269,6 +273,9 @@ cmd_cluster() {
         echo "                               mutually exclusive with --grammar-file)"
         echo "    --api-port N               start REST API server on port N"
         echo "                               (includes OpenAI-compatible /v1/chat/completions)"
+        echo "    --embeddings               enable POST /v1/embeddings (default: off; cluster mode"
+        echo "                               fails closed — embeddings are local/single-shard only)"
+        echo "    --pooling mean|cls|last    /v1/embeddings pooling (default: mean)"
         echo ""
         echo "  KV cache:"
         echo "    --cache-type-k f16|q8_0    K cache type (default f16 = current float path)"
@@ -340,6 +347,13 @@ cmd_cluster() {
   fi
   local api_port_arg=""
   [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
+  local embeddings_arg=""
+  if [[ "$embeddings" == "true" ]]; then
+    embeddings_arg="--embeddings"
+    warn "Embeddings enabled: POST /v1/embeddings — cluster mode fails closed (local/single-shard only)"
+  fi
+  local pooling_arg=""
+  [[ -n "$pooling" ]] && pooling_arg="--pooling $pooling"
   local prefill_mode_arg=""
   [[ -n "$prefill_mode" ]] && prefill_mode_arg="--prefill $prefill_mode"
   local cache_type_k_arg=""
@@ -382,6 +396,8 @@ cmd_cluster() {
     ${jfr_arg} \
     ${lora_play_arg} \
     ${api_port_arg} \
+    ${embeddings_arg} \
+    ${pooling_arg} \
     ${prefill_mode_arg} \
     ${cache_type_k_arg} \
     ${cache_type_v_arg} \
@@ -417,6 +433,8 @@ cmd_local() {
   local health="false"
   local health_port="${HEALTH_PORT:-8081}"
   local api_port="${API_PORT:-}"
+  local embeddings="${JUNO_EMBEDDINGS:-}"
+  local pooling="${JUNO_POOLING:-}"
   local prefill_mode="${PREFILL_MODE:-}"
   local parallel="${JUNO_PARALLEL:-}"
   local batch_window="${JUNO_BATCH_WINDOW_MS:-}"
@@ -462,6 +480,8 @@ cmd_local() {
       --health)           health="true";     shift   ;;
       --health-port)      health_port="$2";  shift 2 ;;
       --api-port)         api_port="$2";     shift 2 ;;
+      --embeddings)       embeddings="true"; shift   ;;
+      --pooling)          pooling="$2";      shift 2 ;;
       --prefill)          prefill_mode="$2"; shift 2 ;;
       --parallel)         parallel="$2";     shift 2 ;;
       --batch-window-ms)  batch_window="$2"; shift 2 ;;
@@ -512,6 +532,8 @@ cmd_local() {
         echo "    --nodes N                  number of in-process shards  (default 3)"
         echo "    --api-port N               start local REST API server on port N"
         echo "                               (includes OpenAI-compatible /v1/chat/completions)"
+        echo "    --embeddings               enable POST /v1/embeddings (default: off)"
+        echo "    --pooling mean|cls|last    /v1/embeddings pooling (default: mean)"
         echo "    --parallel N               static micro-batch size (default 1)"
         echo "    --batch-window-ms M        batch window when parallel>1 (default 50)"
         echo "    --gpu-layers N|all|auto    GPU-resident transformer layers (default all)"
@@ -584,6 +606,13 @@ cmd_local() {
   fi
   local api_port_arg=""
   [[ -n "$api_port" ]] && api_port_arg="--api-port $api_port"
+  local embeddings_arg=""
+  if [[ "$embeddings" == "true" ]]; then
+    embeddings_arg="--embeddings"
+    info "Embeddings enabled: POST /v1/embeddings"
+  fi
+  local pooling_arg=""
+  [[ -n "$pooling" ]] && pooling_arg="--pooling $pooling"
   local prefill_mode_arg=""
   [[ -n "$prefill_mode" ]] && prefill_mode_arg="--prefill $prefill_mode"
   local parallel_arg=""
@@ -638,6 +667,8 @@ cmd_local() {
     ${jfr_arg} \
     ${lora_play_arg} \
     ${api_port_arg} \
+    ${embeddings_arg} \
+    ${pooling_arg} \
     ${prefill_mode_arg} \
     ${parallel_arg} \
     ${batch_window_arg} \

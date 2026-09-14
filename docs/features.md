@@ -37,6 +37,7 @@ Pass `--api-port N` to `local` or cluster modes to start Javalin on the coordina
 | Endpoint | OpenAI equivalent | Description |
 |----------|-------------------|-------------|
 | `POST /v1/chat/completions` | `POST /v1/chat/completions` | Blocking or SSE streaming completion |
+| `POST /v1/embeddings` | `POST /v1/embeddings` | Opt-in via `--embeddings` (off by default); `--pooling mean\|cls\|last`; local/single-shard only |
 | `GET /v1/models` | `GET /v1/models` | List loaded models |
 | `GET /v1/models/{model}` | `GET /v1/models/{model}` | Single model metadata |
 

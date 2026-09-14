@@ -134,6 +134,8 @@ if /i "%~1"=="--json-schema-file" ( set "JSON_SCHEMA_FILE_CLUSTER=%~2" & shift &
 if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--api-port"   ( set "API_PORT_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--embeddings" ( set "EMBEDDINGS_CLUSTER=true" & shift & goto :cluster_parse )
+if /i "%~1"=="--pooling"    ( set "POOLING_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--lora-play"  ( set "LORA_PLAY_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--cache-type-k" ( set "CACHE_TYPE_K_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--cache-type-v" ( set "CACHE_TYPE_V_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
@@ -172,6 +174,9 @@ if /i "%~1"=="--help" (
   echo   --json-schema-file PATH  JSON Schema subset (env JUNO_JSON_SCHEMA_FILE)
   echo   --api-port N      start REST API server on port N
   echo                     (includes OpenAI-compatible /v1/chat/completions)
+  echo   --embeddings      enable POST /v1/embeddings (default: off; cluster mode
+  echo                     fails closed -- embeddings are local/single-shard only)
+  echo   --pooling mean^|cls^|last  /v1/embeddings pooling (default: mean)
   echo   --lora-play PATH  apply a .lora file at inference
   echo   --cache-type-k f16^|q8_0 K cache type (default f16)
   echo   --cache-type-v f16^|q8_0 V cache type (default f16)
@@ -223,6 +228,14 @@ if not "%JFR_DURATION_CLUSTER%"=="" (
 set "API_PORT_ARG_CLUSTER="
 if not "%API_PORT_CLUSTER%"=="" set "API_PORT_ARG_CLUSTER=--api-port %API_PORT_CLUSTER%"
 
+set "EMBEDDINGS_ARG_CLUSTER="
+if /i "%EMBEDDINGS_CLUSTER%"=="true" (
+  set "EMBEDDINGS_ARG_CLUSTER=--embeddings"
+  echo [WARN] --embeddings requested but /v1/embeddings is local/single-shard only; cluster mode fails closed (HTTP 400)
+)
+set "POOLING_ARG_CLUSTER="
+if not "%POOLING_CLUSTER%"=="" set "POOLING_ARG_CLUSTER=--pooling %POOLING_CLUSTER%"
+
 set "LORA_PLAY_ARG_CLUSTER="
 if not "%LORA_PLAY_CLUSTER%"=="" (
   set "LORA_PLAY_ARG_CLUSTER=--lora-play %LORA_PLAY_CLUSTER%"
@@ -252,7 +265,7 @@ if not "%HF%"=="" ( set "HF_ARG_CLUSTER=--hf %HF%" & echo [WARN] Resolving --hf 
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG_CLUSTER% %HF_ARG_CLUSTER% --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %GRAMMAR_FILE_ARG_CLUSTER% %JSON_SCHEMA_FILE_ARG_CLUSTER% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG_CLUSTER% %HF_ARG_CLUSTER% --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %EMBEDDINGS_ARG_CLUSTER% %POOLING_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %GRAMMAR_FILE_ARG_CLUSTER% %JSON_SCHEMA_FILE_ARG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -311,6 +324,8 @@ if /i "%~1"=="--heap"       ( set "HEAP=%~2" & shift & shift & goto :local_parse
 if /i "%~1"=="--nodes"      ( set "NODES=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--jfr"        ( set "JFR_DURATION_LOCAL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--api-port"   ( set "API_PORT_LOCAL=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--embeddings" ( set "EMBEDDINGS_LOCAL=true" & shift & goto :local_parse )
+if /i "%~1"=="--pooling"    ( set "POOLING_LOCAL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--lora-play"  ( set "LORA_PLAY=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--mmq"        ( set "MMQ=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--cache-type-k" ( set "CACHE_TYPE_K=%~2" & shift & shift & goto :local_parse )
@@ -346,6 +361,8 @@ if /i "%~1"=="--help" (
   echo   --nodes N         (default 3)
   echo   --api-port N      start local REST API server on port N
   echo                     (includes OpenAI-compatible /v1/chat/completions)
+  echo   --embeddings      enable POST /v1/embeddings (default: off)
+  echo   --pooling mean^|cls^|last  /v1/embeddings pooling (default: mean)
   echo   --heap SIZE       (default 4g)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
@@ -407,6 +424,14 @@ if not "%JFR_DURATION_LOCAL%"=="" (
 set "API_PORT_ARG="
 if not "%API_PORT_VAL%"=="" set "API_PORT_ARG=--api-port %API_PORT_VAL%"
 
+set "EMBEDDINGS_ARG="
+if /i "%EMBEDDINGS_LOCAL%"=="true" (
+  set "EMBEDDINGS_ARG=--embeddings"
+  echo [INFO] Embeddings enabled: POST /v1/embeddings
+)
+set "POOLING_ARG="
+if not "%POOLING_LOCAL%"=="" set "POOLING_ARG=--pooling %POOLING_LOCAL%"
+
 set "PREFILL_MODE_ARG="
 if not "%PREFILL_MODE_VAL%"=="" set "PREFILL_MODE_ARG=--prefill %PREFILL_MODE_VAL%"
 
@@ -441,7 +466,7 @@ if not "%HF%"=="" ( set "HF_ARG=--hf %HF%" & echo [INFO] Resolving --hf %HF% (do
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %GRAMMAR_FILE_ARG% %JSON_SCHEMA_FILE_ARG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %EMBEDDINGS_ARG% %POOLING_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %GRAMMAR_FILE_ARG% %JSON_SCHEMA_FILE_ARG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -838,6 +863,8 @@ echo   Env overrides: MODEL_PATH  DTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  
 echo                  LORA_PATH  LORA_RANK  LORA_ALPHA  LORA_LR  LORA_STEPS  USE_GPU  API_PORT
 echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h  (all commands)
 echo   --api-port N      start REST API server on port N  (cluster, local)
+echo   --embeddings      enable POST /v1/embeddings  (cluster, local; cluster fails closed)
+echo   --pooling mean^|cls^|last  /v1/embeddings pooling  (default: mean)
 echo.
 echo   Run 'run.bat ^<command^> --help' for all flags of that command.
 echo.

@@ -64,6 +64,7 @@ import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
 import cab.ml.juno.node.GpuLayerOffload;
 import cab.ml.juno.node.MmqOptions;
+import cab.ml.juno.node.PoolingMode;
 import cab.ml.juno.coordinator.BatchConfig;
 import cab.ml.juno.coordinator.PrefillBatchOptions;
 import cab.ml.juno.coordinator.ServeBatchOptions;
@@ -203,6 +204,10 @@ public final class ConsoleMain {
 	private static final java.util.List<HealthReporter> activeReporters = new java.util.ArrayList<>();
 	/** Optional local REST API port (OpenAI-compatible endpoint included). */
 	private static int apiPort = -1;
+	/** --embeddings: enables POST /v1/embeddings on the local/cluster API server. */
+	private static boolean embeddingsEnabled = false;
+	/** --pooling mean|cls|last (default mean) for POST /v1/embeddings. */
+	private static String pooling = null;
 	/** Prefill strategy: batched (default) or single (legacy sequential loop). */
 	private static cab.ml.juno.coordinator.PrefillMode prefillMode = cab.ml.juno.coordinator.PrefillMode.BATCHED;
 	private static Integer prefillBatch = null; // null → env or default 32
@@ -880,6 +885,15 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					apiPort = parseInt(args[++i], -1);
 				break;
+			case "--embeddings":
+				embeddingsEnabled = true;
+				break;
+			case "--pooling":
+				if (i + 1 >= args.length)
+					throw new IllegalArgumentException("--pooling requires mean|cls|last");
+				pooling = args[++i];
+				PoolingMode.parse(pooling); // validate eagerly so a typo fails at startup, not on first request
+				break;
 			default:
 				System.err.println("Unknown option: " + args[i]);
 				help = true;
@@ -1008,6 +1022,9 @@ public final class ConsoleMain {
 		System.out.println("  --health                   Start the standalone health-monitor HTTP server");
 		System.out.println("  --api-port N               Start REST API (local/cluster: chat; lora: train-file-qa)");
 		System.out.println("                             lora: POST /v1/lora/train-file-qa , POST /v1/lora/save");
+		System.out.println("  --embeddings               Enable POST /v1/embeddings on the API server (default: off)");
+		System.out.println("                             local/cluster only; disabled server returns 400");
+		System.out.println("  --pooling M                mean|cls|last for /v1/embeddings (default: mean)");
 		System.out.println("    --port N                   Health listen port (default: 8081)");
 		System.out.println("    --stale-ms N               Node stale threshold in ms (default: 15000)");
 		System.out.println("    --warn F                   VRAM warning threshold 0.0-1.0 (default: 0.90)");
@@ -1183,6 +1200,10 @@ public final class ConsoleMain {
 			loraApi.start(apiPort);
 			print(Color.GREEN + "  LoRA API on http://localhost:" + apiPort
 					+ "  (POST /v1/lora/train-file-qa , POST /v1/lora/save)" + Color.RESET);
+			if (embeddingsEnabled)
+				print(Color.YELLOW
+						+ "  ⚠ --embeddings has no effect in lora mode; this API only serves "
+						+ "/v1/lora/train-file-qa and /v1/lora/save, not /v1/embeddings" + Color.RESET);
 		}
 
 		print(Color.DIM + "Type to chat, or use /train <text>  /save  /status  /help" + Color.RESET);
@@ -2153,11 +2174,15 @@ public final class ConsoleMain {
 				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
-			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder, cliGrammar);
+			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder, cliGrammar,
+					embeddingsEnabled, PoolingMode.parse(pooling));
 			registerVisionRoutes(apiServer, scheduler, registry, visionBuilt);
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Local API server on http://localhost:" + apiPort
 					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);
+			if (embeddingsEnabled)
+				print(Color.GREEN + "  ✔ Embeddings enabled: POST /v1/embeddings  (pooling="
+						+ PoolingMode.parse(pooling) + ")" + Color.RESET);
 			Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(apiServer::stop));
 		}
 
@@ -2375,10 +2400,15 @@ public final class ConsoleMain {
 				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {
 			ModelRegistry registry = buildLocalModelRegistry(config, modelPath);
-			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder, cliGrammar);
+			var apiServer = new cab.ml.juno.coordinator.InferenceApiServer(scheduler, registry, byteOrder, cliGrammar,
+					embeddingsEnabled, PoolingMode.parse(pooling));
 			apiServer.start(apiPort);
 			print(Color.GREEN + "  ✔ Cluster API server on http://localhost:" + apiPort
 					+ " (OpenAI: /v1/chat/completions)" + Color.RESET);
+			if (embeddingsEnabled)
+				print(Color.YELLOW
+						+ "  ⚠ --embeddings requested but /v1/embeddings is local/single-shard only; "
+						+ "cluster mode fails closed (HTTP 400) on every embeddings request" + Color.RESET);
 			Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(apiServer::stop));
 		}
 

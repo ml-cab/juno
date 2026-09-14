@@ -174,6 +174,16 @@ public final class RequestScheduler {
 		return schedule;
 	}
 
+	/**
+	 * The generation loop this scheduler dispatches onto — its
+	 * {@link GenerationLoop#tokenizer()} and {@link GenerationLoop#pipeline()}
+	 * are what {@link EmbeddingsHandler} needs to extract embeddings directly,
+	 * bypassing the sampler-driven token generation path entirely.
+	 */
+	GenerationLoop generationLoop() {
+		return generationLoop;
+	}
+
 	/** Cumulative prefix-trie lookups since process start. */
 	public long prefixLookups() {
 		return generationLoop.kvCache().prefixLookups();
