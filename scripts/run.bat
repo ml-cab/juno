@@ -87,6 +87,7 @@ rem ============================================================================
 :cluster
 
 set "MODEL=%MODEL_PATH%"
+set "HF=%JUNO_HF%"
 if "%DTYPE%"==""       set "DTYPE=FLOAT16"
 if "%BYTE_ORDER%"==""  set "BYTE_ORDER=BE"
 if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
@@ -117,6 +118,7 @@ if not "%USE_GPU_ENV%"=="" (
 :cluster_parse
 if "%~1"=="" goto :cluster_done
 if /i "%~1"=="--model-path" ( set "MODEL=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--hf"         ( set "HF=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--pType"      ( set "PTYPE=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--ptype"      ( set "PTYPE=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--dtype"      ( set "DTYPE=%~2" & shift & shift & goto :cluster_parse )
@@ -148,8 +150,11 @@ if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :cluster_parse )
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat cluster --model-path PATH [flags]
+  echo      or: run.bat cluster --hf REPO[:QUANT] [flags]
   echo      or: set MODEL_PATH=PATH ^&^& run.bat cluster [flags]
   echo.
+  echo   --hf REPO[:QUANT] download/resolve a GGUF from the Hugging Face Hub
+  echo                     (or set JUNO_HF env var); no Python dependency
   echo   --pType pipeline^|tensor  parallelism type (default pipeline)
   echo     pipeline: contiguous layer blocks, serial activation flow
   echo     tensor:   weight-matrix slices, all nodes in parallel (AllReduce)
@@ -186,12 +191,13 @@ echo       Run: run.bat cluster --help
 exit /b 1
 
 :cluster_done
-if "%MODEL%"=="" (
+if "%MODEL%"=="" if "%HF%"=="" (
   echo [ERR] Model path is required.
   echo       Usage: run.bat cluster --model-path PATH
+  echo          or: run.bat cluster --hf REPO[:QUANT]
   exit /b 1
 )
-if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
+if not "%MODEL%"=="" if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
 call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
@@ -239,10 +245,14 @@ set "GRAMMAR_FILE_ARG_CLUSTER="
 if not "%GRAMMAR_FILE_CLUSTER%"=="" set "GRAMMAR_FILE_ARG_CLUSTER=--grammar-file %GRAMMAR_FILE_CLUSTER%"
 set "JSON_SCHEMA_FILE_ARG_CLUSTER="
 if not "%JSON_SCHEMA_FILE_CLUSTER%"=="" set "JSON_SCHEMA_FILE_ARG_CLUSTER=--json-schema-file %JSON_SCHEMA_FILE_CLUSTER%"
+set "MODEL_ARG_CLUSTER="
+if not "%MODEL%"=="" set "MODEL_ARG_CLUSTER=--model-path %MODEL%"
+set "HF_ARG_CLUSTER="
+if not "%HF%"=="" ( set "HF_ARG_CLUSTER=--hf %HF%" & echo [WARN] Resolving --hf %HF% (download/cache may take a while)... )
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %GRAMMAR_FILE_ARG_CLUSTER% %JSON_SCHEMA_FILE_ARG_CLUSTER% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG_CLUSTER% %HF_ARG_CLUSTER% --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %GRAMMAR_FILE_ARG_CLUSTER% %JSON_SCHEMA_FILE_ARG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -251,6 +261,7 @@ rem ============================================================================
 :local
 
 set "MODEL=%MODEL_PATH%"
+set "HF=%JUNO_HF%"
 set "MMPROJ=%MMPROJ_PATH%"
 set "API_PORT_VAL=%API_PORT%"
 if "%DTYPE%"==""       set "DTYPE=FLOAT16"
@@ -282,6 +293,7 @@ if not "%USE_GPU_ENV%"=="" (
 :local_parse
 if "%~1"=="" goto :local_done
 if /i "%~1"=="--model-path" ( set "MODEL=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--hf"         ( set "HF=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--mmproj-path"( set "MMPROJ=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--api-port"   ( set "API_PORT_VAL=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--prefill"    ( set "PREFILL_MODE_VAL=%~2" & shift & shift & goto :local_parse )
@@ -316,8 +328,11 @@ if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :local_parse )
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat local --model-path PATH [flags]
+  echo      or: run.bat local --hf REPO[:QUANT] [flags]
   echo      or: set MODEL_PATH=PATH ^&^& run.bat local [flags]
   echo.
+  echo   --hf REPO[:QUANT] download/resolve a GGUF from the Hugging Face Hub
+  echo                     (or set JUNO_HF env var); no Python dependency
   echo   --dtype FLOAT32^|FLOAT16^|INT8  (default FLOAT16)
   echo   --byteOrder BE^|LE    activation codec byte order (default BE)
   echo                        BE=big-endian (hardware-validated default)
@@ -360,12 +375,13 @@ echo       Run: run.bat local --help
 exit /b 1
 
 :local_done
-if "%MODEL%"=="" (
+if "%MODEL%"=="" if "%HF%"=="" (
   echo [ERR] Model path is required.
   echo       Usage: run.bat local --model-path PATH
+  echo          or: run.bat local --hf REPO[:QUANT]
   exit /b 1
 )
-if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
+if not "%MODEL%"=="" if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
 if not "%MMPROJ%"=="" if not exist "%MMPROJ%" ( echo [ERR] mmproj file not found: "%MMPROJ%" & exit /b 1 )
 call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
@@ -418,10 +434,14 @@ set "GRAMMAR_FILE_ARG="
 if not "%GRAMMAR_FILE%"=="" set "GRAMMAR_FILE_ARG=--grammar-file %GRAMMAR_FILE%"
 set "JSON_SCHEMA_FILE_ARG="
 if not "%JSON_SCHEMA_FILE%"=="" set "JSON_SCHEMA_FILE_ARG=--json-schema-file %JSON_SCHEMA_FILE%"
+set "MODEL_ARG="
+if not "%MODEL%"=="" set "MODEL_ARG=--model-path %MODEL%"
+set "HF_ARG="
+if not "%HF%"=="" ( set "HF_ARG=--hf %HF%" & echo [INFO] Resolving --hf %HF% (download/cache may take a while)... )
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %GRAMMAR_FILE_ARG% %JSON_SCHEMA_FILE_ARG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %GRAMMAR_FILE_ARG% %JSON_SCHEMA_FILE_ARG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -430,6 +450,7 @@ rem ============================================================================
 :lora
 
 set "MODEL=%MODEL_PATH%"
+set "HF=%JUNO_HF%"
 set "LORA_PATH_VAL=%LORA_PATH%"
 if "%LORA_RANK%"==""  set "LORA_RANK=8"
 if "%LORA_LR%"==""    set "LORA_LR=0.0001"
@@ -479,6 +500,7 @@ if not "%USE_GPU_ENV%"=="" (
 :lora_parse
 if "%~1"=="" goto :lora_done
 if /i "%~1"=="--model-path"  ( set "MODEL=%~2"         & shift & shift & goto :lora_parse )
+if /i "%~1"=="--hf"          ( set "HF=%~2"            & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-path"   ( set "LORA_PATH_VAL=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-rank"   ( set "LORA_RANK=%~2"     & shift & shift & goto :lora_parse )
 if /i "%~1"=="--lora-alpha"  ( set "LORA_ALPHA=%~2"    & shift & shift & goto :lora_parse )
@@ -536,14 +558,17 @@ if /i "%~1"=="--kv-page-size" ( set "KV_PAGE_SIZE=%~2" & shift & shift & goto :l
 if /i "%~1"=="--help" (
   echo.
   echo   Usage: run.bat lora --model-path PATH [flags]
+  echo      or: run.bat lora --hf REPO[:QUANT] [flags]
   echo      or: set MODEL_PATH=PATH ^&^& run.bat lora [flags]
   echo.
   echo   Runs a LoRA fine-tuning REPL in a single in-process JVM.
   echo   Adapter weights are saved to a separate .lora file.
   echo   The base GGUF is never modified.
   echo.
-  echo   Required:
+  echo   Required (one of):
   echo     --model-path PATH       Path to a GGUF model file
+  echo     --hf REPO[:QUANT]       Download/resolve a GGUF from the Hugging Face Hub
+  echo                             (or set JUNO_HF env var); no Python dependency
   echo.
   echo   LoRA adapter:
   echo     --lora-path PATH        Checkpoint file  (default: ^<model^>.lora)
@@ -604,12 +629,13 @@ echo       Run: run.bat lora --help
 exit /b 1
 
 :lora_done
-if "%MODEL%"=="" (
+if "%MODEL%"=="" if "%HF%"=="" (
   echo [ERR] Model path is required.
   echo       Usage: run.bat lora --model-path PATH
+  echo          or: run.bat lora --hf REPO[:QUANT]
   exit /b 1
 )
-if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
+if not "%MODEL%"=="" if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
 call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
@@ -644,10 +670,14 @@ set "SCHEDULE_ARG="
 if not "%SCHEDULE%"=="" set "SCHEDULE_ARG=--schedule %SCHEDULE%"
 set "KV_PAGE_SIZE_ARG="
 if not "%KV_PAGE_SIZE%"=="" set "KV_PAGE_SIZE_ARG=--kv-page-size %KV_PAGE_SIZE%"
+set "MODEL_ARG="
+if not "%MODEL%"=="" set "MODEL_ARG=--model-path %MODEL%"
+set "HF_ARG="
+if not "%HF%"=="" ( set "HF_ARG=--hf %HF%" & echo [WARN] Resolving --hf %HF% (download/cache may take a while)... )
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%JUNO_PLAYER_JAR%" --model-path "%MODEL%" --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --lora-mode %LORA_MODE% --lora-scaling %LORA_SCALING% --lora-init %LORA_INIT% --lora-chunk-tokens %LORA_CHUNK_TOKENS% --lora-max-train-tokens %LORA_MAX_TRAIN_TOKENS% --lora-train-device %LORA_TRAIN_DEVICE% --lora-microbatch %LORA_MICROBATCH% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %JFR_ARG_LORA% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --lora --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% --lora-lr %LORA_LR% --lora-max-iters %LORA_MAX_ITERS% --lora-loss-target-text %LORA_LOSS_TARGET_TEXT% --lora-loss-target-qa %LORA_LOSS_TARGET_QA% --lora-steps-qa %LORA_MAX_ITERS_QA% --lora-early-stop %LORA_EARLY_STOP% --lora-targets %LORA_TARGETS% --lora-gradient-accumulation %LORA_GRADIENT_ACCUMULATION% --lora-max-grad-norm %LORA_MAX_GRAD_NORM% --lora-lr-schedule %LORA_LR_SCHEDULE% --lora-warmup-steps %LORA_WARMUP_STEPS% --lora-min-lr %LORA_MIN_LR% --lora-weight-decay %LORA_WEIGHT_DECAY% --lora-plus-ratio %LORA_PLUS_RATIO% --lora-dropout %LORA_DROPOUT% --lora-seed %LORA_SEED% --lora-validation-split %LORA_VALIDATION_SPLIT% --lora-validation-patience %LORA_VALIDATION_PATIENCE% --lora-validation-min-delta %LORA_VALIDATION_MIN_DELTA% --lora-mode %LORA_MODE% --lora-scaling %LORA_SCALING% --lora-init %LORA_INIT% --lora-chunk-tokens %LORA_CHUNK_TOKENS% --lora-max-train-tokens %LORA_MAX_TRAIN_TOKENS% --lora-train-device %LORA_TRAIN_DEVICE% --lora-microbatch %LORA_MICROBATCH% --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %JFR_ARG_LORA% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %LORA_PATH_FLAG% %GPU_FLAG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================

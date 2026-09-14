@@ -98,6 +98,9 @@ import cab.ml.juno.sampler.GbnfGrammar;
 import cab.ml.juno.sampler.JsonSchemaToGbnf;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
+import cab.ml.juno.tokenizer.ChatTemplate;
+import cab.ml.juno.tokenizer.EmbeddedChatTemplateRegistry;
+import cab.ml.juno.tokenizer.GgufChatTemplateResolver;
 import cab.ml.juno.tokenizer.GgufTokenizer;
 import cab.ml.juno.tokenizer.Tokenizer;
 import cab.ml.juno.vision.LlavaHandlerFactory;
@@ -162,6 +165,13 @@ public final class ConsoleMain {
 
 	// ── Standard arguments ────────────────────────────────────────────────────
 	private static String modelPath = null;
+	/**
+	 * {@code --hf repo[:quant]} — resolves into the effective model path via
+	 * {@link HfGgufFetcher}. Mutually agreeing with {@code --model-path}: if both
+	 * are given and resolve to different files, startup fails with a clear error
+	 * rather than silently picking one (see {@link #main}).
+	 */
+	private static String hfSpec = null;
 	/**
 	 * Path to a separate mmproj GGUF holding the CLIP vision encoder (see
 	 * {@link cab.ml.juno.vision.VisionModelPaths}). Real-world multimodal GGUF
@@ -311,8 +321,11 @@ public final class ConsoleMain {
 				healthPort, cab.ml.juno.health.HealthThresholds.defaults());
 		}
 
+		if (hfSpec != null)
+			resolveHfSpecOrExit();
+
 		if (modelPath == null) {
-			System.err.println("ERROR: --model-path is required");
+			System.err.println("ERROR: --model-path (or --hf) is required");
 			printHelp();
 			System.exit(1);
 		}
@@ -410,6 +423,43 @@ public final class ConsoleMain {
 		} else {
 			runClusterRepl();
 		}
+	}
+
+	/**
+	 * Resolves {@code --hf repo[:quant]} into {@link #modelPath} via
+	 * {@link HfGgufFetcher} (downloading into the fetcher's cache directory if
+	 * not already cached). Chosen design (see
+	 * {@code docs/infra-plan/PLAN-Infra-Tier7.md}): {@code --hf} populates the
+	 * effective model path; when {@code --model-path} is also given and resolves
+	 * to a different file, startup fails with a clear error instead of silently
+	 * preferring one flag over the other.
+	 */
+	private static void resolveHfSpecOrExit() {
+		Path resolved;
+		try {
+			System.out.println(String.format("  %sResolving --hf %s …%s", Color.DIM, hfSpec, Color.RESET));
+			resolved = new HfGgufFetcher().resolve(hfSpec);
+		} catch (Exception e) {
+			System.err.println("ERROR: --hf " + hfSpec + " could not be resolved: " + e.getMessage());
+			System.exit(1);
+			return; // unreachable — keeps the compiler happy about 'resolved' below
+		}
+		if (modelPath != null) {
+			Path explicit = Path.of(modelPath).toAbsolutePath().normalize();
+			Path fromHf = resolved.toAbsolutePath().normalize();
+			if (!explicit.equals(fromHf)) {
+				System.err.println("ERROR: --hf " + hfSpec + " resolved to " + fromHf
+						+ " but --model-path explicitly set " + explicit + " — these disagree.");
+				System.err.println("       Pass only one of --hf / --model-path, or point --model-path at the "
+						+ "same file --hf would resolve to.");
+				System.exit(1);
+			}
+			// Equal — the user redundantly named the same file both ways; keep --model-path as-is.
+			return;
+		}
+		modelPath = resolved.toString();
+		System.out.println(
+				String.format("  %s--hf %s resolved to %s%s", Color.GREEN, hfSpec, modelPath, Color.RESET));
 	}
 
 	private static void applyGpuEnvDefaults() {
@@ -552,6 +602,10 @@ public final class ConsoleMain {
 			case "--model-path":
 				if (i + 1 < args.length)
 					modelPath = args[++i];
+				break;
+			case "--hf":
+				if (i + 1 < args.length)
+					hfSpec = args[++i];
 				break;
 			case "--mmproj-path":
 				if (i + 1 < args.length)
@@ -838,8 +892,14 @@ public final class ConsoleMain {
 		System.out.println();
 		System.out.println("Usage: java -jar juno-player.jar [options]");
 		System.out.println();
-		System.out.println("Required:");
+		System.out.println("Required (one of):");
 		System.out.println("  --model-path PATH          Path to GGUF model file");
+		System.out.println("  --hf REPO[:QUANT]          Download/resolve a GGUF from the Hugging Face Hub");
+		System.out.println("                             and use it as --model-path. Cached under");
+		System.out.println("                             ~/.cache/juno/models (resume + ETag reuse); no");
+		System.out.println("                             Python dependency. QUANT defaults to Q4_K_M when");
+		System.out.println("                             present, else the first .gguf asset in the repo.");
+		System.out.println("                             Combined with --model-path, the two must agree.");
 		System.out.println();
 		System.out.println("Vision (image-to-text) models:");
 		System.out.println("  --mmproj-path PATH         Path to a separate mmproj GGUF holding the CLIP");
@@ -976,7 +1036,12 @@ public final class ConsoleMain {
 		LoraAdapterSet adapters;
 		Path adapterFile = Path.of(loraPath);
 		LoraTrainingConfig trainCfg = currentTrainingConfig();
+		// Explicit no-op (ROADMAP Execution rule #6): LoRA train/play never applies a
+		// GGUF-embedded chat template — recorded here (reader still open) and
+		// surfaced as a startup notice below, alongside the other LoRA notices.
+		boolean embeddedTemplateIgnored;
 		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
+			embeddedTemplateIgnored = GgufChatTemplateResolver.hasEmbeddedTemplate(reader);
 			config = LlamaConfig.from(reader);
 			loraModelConfig = config;
 			tokenizer = GgufTokenizer.load(reader);
@@ -1038,6 +1103,8 @@ public final class ConsoleMain {
 		if (cab.ml.juno.node.LoraTrainDevice.AUTO.equals(loraTrainDevice)
 				&& "cpu".equals(loraResolvedTrainDevice))
 			cab.ml.juno.node.LoraTrainNotices.add(autoCpuFallbackNotice());
+		if (embeddedTemplateIgnored)
+			cab.ml.juno.node.LoraTrainNotices.add(cab.ml.juno.node.LoraTrainNotices.EMBEDDED_CHAT_TEMPLATE_IGNORED);
 		LoraTrainingHandler handler = LoraTrainingHandlerFactory.create(Path.of(modelPath), ctx, adapters, loraBackend);
 		print(Color.GREEN + "  ✔ Model loaded  (" + config + ")" + Color.RESET);
 		print(Color.DIM + "  " + formatLoraTrainStatus(loraTrainDevice, loraResolvedTrainDevice,
@@ -2030,6 +2097,7 @@ public final class ConsoleMain {
 			config = LlamaConfig.from(reader);
 			tokenizer = GgufTokenizer.load(reader);
 		}
+		registerEmbeddedChatTemplate(modelPath);
 
 		// Local, in-process pipeline-parallelism simulation — every "node" is a
 		// stage in this same JVM with no real VRAM difference between stages, so
@@ -2189,6 +2257,43 @@ public final class ConsoleMain {
 		print(Color.GREEN + "  ✔ Vision routes registered (POST /v1/vision/chat)" + Color.RESET);
 	}
 
+	/**
+	 * Resolves the GGUF-embedded {@code tokenizer.chat_template} (if any) for
+	 * {@code modelPath} and registers it in {@link EmbeddedChatTemplateRegistry}
+	 * under every model-id key a downstream text-inference call site might use
+	 * for this process's requests: the short {@link ChatModelType} key (REPL
+	 * sessions — see {@link #startRepl}) and the raw GGUF filename (REST API
+	 * model ids — see {@link #buildLocalModelRegistry} and
+	 * {@code cab.ml.juno.registry.ModelIdResolver}). Either key reaching
+	 * {@code ChatTemplateFormatter.forModelType} then picks
+	 * up the same resolved template.
+	 *
+	 * <p>Base text-inference surface only (local REPL, cluster REPL, and their
+	 * REST/OpenAI API servers, per the interaction matrix in
+	 * {@code docs/infra-plan/PLAN-Infra-Tier7.md}) — deliberately
+	 * <b>not</b> called from {@link #runLoraRepl}: LoRA train and
+	 * {@code --lora-play} keep using the named template so train-time and
+	 * inference-time formatting stay identical for adapter recall (see
+	 * {@link EmbeddedChatTemplateRegistry}). A failure here (unreadable file,
+	 * unusable template) falls back silently — chat-template resolution never
+	 * blocks model load.
+	 */
+	private static void registerEmbeddedChatTemplate(String modelPath) {
+		String chatKey = ChatModelType.fromPath(modelPath);
+		String filenameKey = Path.of(modelPath).getFileName().toString();
+		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
+			boolean present = GgufChatTemplateResolver.hasEmbeddedTemplate(reader);
+			ChatTemplate resolved = GgufChatTemplateResolver.resolve(reader, chatKey);
+			EmbeddedChatTemplateRegistry.register(chatKey, resolved);
+			EmbeddedChatTemplateRegistry.register(filenameKey, resolved);
+			if (present)
+				print(Color.DIM + "  GGUF embedded chat template: detected, validated, and in use "
+						+ "(named fallback: " + chatKey + ")" + Color.RESET);
+		} catch (Exception e) {
+			log.fine(() -> "Chat-template resolution skipped for " + modelPath + ": " + e.getMessage());
+		}
+	}
+
 	private static ModelRegistry buildLocalModelRegistry(LlamaConfig config, String modelPath) {
 		ModelRegistry registry = new ModelRegistry(ShardPlanner.create());
 		long vramPerLayer = 4L * config.hiddenDim() * config.hiddenDim() * 2;
@@ -2233,6 +2338,7 @@ public final class ConsoleMain {
 		try (GgufReader cfgReader = GgufReader.open(Path.of(modelPath))) {
 			config = LlamaConfig.from(cfgReader);
 		}
+		registerEmbeddedChatTemplate(modelPath);
 
 		ClusterHarness harness = (pType == ParallelismType.TENSOR)
 				? ClusterHarness.tensorNodes(modelPath, config.numLayers(), config.numHeads())

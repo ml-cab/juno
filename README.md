@@ -122,6 +122,13 @@ or Windows:
 juno.bat local --model-path models\tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
 ```
 
+Or skip the manual download — `--hf` resolves a Hugging Face Hub repo to a local GGUF (cached
+under `~/.cache/juno/models`, resume + reuse on re-run, no Python dependency):
+
+```
+./juno local --hf TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF:Q4_K_M
+```
+
 REST alongside the REPL via setting `api-port`
 
 ```

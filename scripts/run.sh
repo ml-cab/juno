@@ -172,6 +172,7 @@ fi
 # ---------------------------------------------------------------------------
 cmd_cluster() {
   local model="${MODEL_PATH:-}"
+  local hf="${JUNO_HF:-}"
   local dtype="${DTYPE:-FLOAT16}"
   local byte_order="${BYTE_ORDER:-BE}"
   local max_tokens="${MAX_TOKENS:-200}"
@@ -204,6 +205,7 @@ cmd_cluster() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --model-path)       model="$2";        shift 2 ;;
+      --hf)               hf="$2";           shift 2 ;;
       --pType | --ptype)  ptype="$2";        shift 2 ;;
       --dtype)            dtype="$2";        shift 2 ;;
       --byteOrder | --byteorder | --byte-order) byte_order="${2^^}"; shift 2 ;;
@@ -238,9 +240,11 @@ cmd_cluster() {
         echo "  Starts a 3-node cluster (one forked JVM per node) and an interactive"
         echo "  REPL. Each node serves gRPC on localhost:19092-19094."
         echo ""
-        echo "  Required:"
+        echo "  Required (one of):"
         echo "    --model-path PATH          Path to a GGUF model file"
         echo "                               (or set MODEL_PATH env var)"
+        echo "    --hf REPO[:QUANT]          Download/resolve a GGUF from the Hugging Face Hub"
+        echo "                               (or set JUNO_HF env var); no Python dependency"
         echo ""
         echo "  Parallelism:"
         echo "    --pType pipeline           pipeline-parallel: contiguous layer blocks,"
@@ -300,12 +304,13 @@ cmd_cluster() {
     esac
   done
 
-  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 cluster --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 cluster"
-  [[ -f "$model" ]] || err "Model file not found: $model"
+  [[ -n "$model" || -n "$hf" ]] || err "Model path is required.\n  Usage: $0 cluster --model-path /path/to/model.gguf\n     or: $0 cluster --hf org/repo[:quant]\n     or: MODEL_PATH=/path/to/model.gguf $0 cluster"
+  [[ -z "$model" || -f "$model" ]] || err "Model file not found: $model"
 
   require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
 
+  [[ -n "$hf" ]] && warn "Resolving --hf ${hf} (download/cache may take a while)…"
   warn "Starting 3-node cluster  (pType=${ptype}  dtype=${dtype}  byteOrder=${byte_order}  max_tokens=${max_tokens}  temperature=${temperature}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   warn "Ctrl-C to stop all nodes and exit"
@@ -352,6 +357,10 @@ cmd_cluster() {
   [[ -n "$grammar_file" ]] && grammar_file_arg="--grammar-file $grammar_file"
   local json_schema_file_arg=""
   [[ -n "$json_schema_file" ]] && json_schema_file_arg="--json-schema-file $json_schema_file"
+  local model_arg=""
+  [[ -n "$model" ]] && model_arg="--model-path $model"
+  local hf_arg=""
+  [[ -n "$hf" ]] && hf_arg="--hf $hf"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -360,7 +369,8 @@ cmd_cluster() {
     "-Djuno.node.heap=${heap}" \
     "-Djuno.byteOrder=${byte_order}" \
     -jar "$JUNO_PLAYER_JAR" \
-    --model-path "$model" \
+    ${model_arg} \
+    ${hf_arg} \
     --dtype "$dtype" \
     --byteOrder "$byte_order" \
     --max-tokens "$max_tokens" \
@@ -389,6 +399,7 @@ cmd_cluster() {
 # ---------------------------------------------------------------------------
 cmd_local() {
   local model="${MODEL_PATH:-}"
+  local hf="${JUNO_HF:-}"
   local mmproj="${MMPROJ_PATH:-}"
   local dtype="${DTYPE:-FLOAT16}"
   local byte_order="${BYTE_ORDER:-BE}"
@@ -429,6 +440,7 @@ cmd_local() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --model-path)       model="$2";        shift 2 ;;
+      --hf)               hf="$2";           shift 2 ;;
       --mmproj-path)      mmproj="$2";       shift 2 ;;
       --dtype)            dtype="$2";        shift 2 ;;
       --byteOrder | --byteorder | --byte-order) byte_order="${2^^}"; shift 2 ;;
@@ -469,9 +481,11 @@ cmd_local() {
         echo "  Runs all transformer nodes in-process in a single JVM — no forking,"
         echo "  no gRPC sockets. Fastest startup. Use this for everyday experimentation."
         echo ""
-        echo "  Required:"
+        echo "  Required (one of):"
         echo "    --model-path PATH          Path to a GGUF model file"
         echo "                               (or set MODEL_PATH env var)"
+        echo "    --hf REPO[:QUANT]          Download/resolve a GGUF from the Hugging Face Hub"
+        echo "                               (or set JUNO_HF env var); no Python dependency"
         echo ""
         echo "  Vision (image-to-text) models:"
         echo "    --mmproj-path PATH         Path to a separate mmproj GGUF holding the CLIP"
@@ -529,8 +543,8 @@ cmd_local() {
     esac
   done
 
-  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 local --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 local"
-  [[ -f "$model" ]] || err "Model file not found: $model"
+  [[ -n "$model" || -n "$hf" ]] || err "Model path is required.\n  Usage: $0 local --model-path /path/to/model.gguf\n     or: $0 local --hf org/repo[:quant]\n     or: MODEL_PATH=/path/to/model.gguf $0 local"
+  [[ -z "$model" || -f "$model" ]] || err "Model file not found: $model"
   [[ -z "$mmproj" || -f "$mmproj" ]] || err "mmproj file not found: $mmproj"
 
   # Factual LoRA playback should be reproducible. Sampling at the normal 0.7
@@ -543,6 +557,7 @@ cmd_local() {
   require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
 
+  [[ -n "$hf" ]] && info "Resolving --hf ${hf} (download/cache may take a while)…"
   info "Starting local in-process REPL  (dtype=${dtype}  byteOrder=${byte_order}  max_tokens=${max_tokens}  temperature=${temperature}  nodes=${nodes}  heap=${heap}  gpu=${use_gpu}  os=${OS})"
   [[ "$verbose" == "true" ]] && warn "Verbose mode ON"
   echo ""
@@ -598,6 +613,10 @@ cmd_local() {
   [[ -n "$grammar_file" ]] && grammar_file_arg="--grammar-file $grammar_file"
   local json_schema_file_arg=""
   [[ -n "$json_schema_file" ]] && json_schema_file_arg="--json-schema-file $json_schema_file"
+  local model_arg=""
+  [[ -n "$model" ]] && model_arg="--model-path $model"
+  local hf_arg=""
+  [[ -n "$hf" ]] && hf_arg="--hf $hf"
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
@@ -605,7 +624,8 @@ cmd_local() {
     -Xms512m "-Xmx${heap}" \
     "-Djuno.byteOrder=${byte_order}" \
     -jar "$JUNO_PLAYER_JAR" \
-    --model-path "$model" \
+    ${model_arg} \
+    ${hf_arg} \
     --dtype "$dtype" \
     --byteOrder "$byte_order" \
     --max-tokens "$max_tokens" \
@@ -642,6 +662,7 @@ cmd_local() {
 # ---------------------------------------------------------------------------
 cmd_lora() {
   local model="${MODEL_PATH:-}"
+  local hf="${JUNO_HF:-}"
   local lora_path="${LORA_PATH:-}"
   local lora_rank="${LORA_RANK:-8}"
   local lora_alpha="${LORA_ALPHA:-}"           # default = rank (set below)
@@ -695,6 +716,7 @@ cmd_lora() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --model-path)   model="$2";       shift 2 ;;
+      --hf)           hf="$2";          shift 2 ;;
       --lora-path)    lora_path="$2";   shift 2 ;;
       --lora-rank)    lora_rank="$2";   shift 2 ;;
       --lora-alpha)   lora_alpha="$2";  shift 2 ;;
@@ -754,9 +776,11 @@ cmd_lora() {
         echo "  Adapter weights are saved to a separate .lora file."
         echo "  The base GGUF is never modified."
         echo ""
-        echo "  Required:"
+        echo "  Required (one of):"
         echo "    --model-path PATH       Path to a GGUF model file"
         echo "                            (or set MODEL_PATH env var)"
+        echo "    --hf REPO[:QUANT]       Download/resolve a GGUF from the Hugging Face Hub"
+        echo "                            (or set JUNO_HF env var); no Python dependency"
         echo ""
         echo "  LoRA adapter:"
         echo "    --lora-path PATH        Checkpoint file (default: <model>.lora)"
@@ -851,8 +875,8 @@ cmd_lora() {
     esac
   done
 
-  [[ -n "$model" ]] || err "Model path is required.\n  Usage: $0 lora --model-path /path/to/model.gguf\n     or: MODEL_PATH=/path/to/model.gguf $0 lora"
-  [[ -f "$model" ]] || err "Model file not found: $model"
+  [[ -n "$model" || -n "$hf" ]] || err "Model path is required.\n  Usage: $0 lora --model-path /path/to/model.gguf\n     or: $0 lora --hf org/repo[:quant]\n     or: MODEL_PATH=/path/to/model.gguf $0 lora"
+  [[ -z "$model" || -f "$model" ]] || err "Model file not found: $model"
 
   require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
@@ -894,13 +918,18 @@ cmd_lora() {
   [[ -n "$schedule" ]] && schedule_arg="--schedule $schedule"
   local kv_page_size_arg=""
   [[ -n "$kv_page_size" ]] && kv_page_size_arg="--kv-page-size $kv_page_size"
+  local model_arg=""
+  [[ -n "$model" ]] && model_arg="--model-path $model"
+  local hf_arg=""
+  [[ -n "$hf" ]] && { hf_arg="--hf $hf"; warn "Resolving --hf ${hf} (download/cache may take a while)…"; }
 
   # shellcheck disable=SC2086
   exec "$JAVA" \
     "${JVM_BASE[@]}" \
     -Xms512m "-Xmx${heap}" \
     -jar "$JUNO_PLAYER_JAR" \
-    --model-path "$model" \
+    ${model_arg} \
+    ${hf_arg} \
     --lora \
     --lora-rank  "$lora_rank" \
     --lora-alpha "$lora_alpha" \

@@ -42,9 +42,16 @@ public final class ChatTemplateFormatter {
 	/**
 	 * Convenience factory — resolve by model type string. Falls back to ChatML for
 	 * unknown model types.
+	 *
+	 * <p>Checks {@link EmbeddedChatTemplateRegistry} first: when the loaded
+	 * model's GGUF carries a usable embedded {@code tokenizer.chat_template} and
+	 * the caller's product surface opted in (registered it under this same key at
+	 * model-load time), that template is used instead of the named lookup. See
+	 * {@link GgufChatTemplateResolver} and {@link EmbeddedChatTemplateRegistry}.
 	 */
 	public static ChatTemplateFormatter forModelType(String modelType) {
-		return new ChatTemplateFormatter(ChatTemplate.forModelType(modelType));
+		ChatTemplate override = EmbeddedChatTemplateRegistry.lookup(modelType);
+		return new ChatTemplateFormatter(override != null ? override : ChatTemplate.forModelType(modelType));
 	}
 
 	/**

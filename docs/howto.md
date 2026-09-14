@@ -35,7 +35,8 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 
 | Flag | Default | Commands | Description |
 |------|---------|----------|-------------|
-| `--model-path PATH` | — | all | Path to GGUF file (required) |
+| `--model-path PATH` | — | all | Path to GGUF file (required unless `--hf` is given) |
+| `--hf REPO[:QUANT]` | — | cluster, local, lora | Resolve a Hugging Face Hub repo into a local GGUF path and use it as the effective model path — downloads (with resume + ETag caching) if not already cached. `QUANT` defaults to `Q4_K_M` when present in the repo, else the first `.gguf` asset. Combined with `--model-path`, the two must resolve to the same file or startup fails with an error. Env override: `JUNO_HF`. See "Chat templates and Hugging Face downloads" below. |
 | `--mmproj-path PATH` | — | local | Path to a separate mmproj GGUF holding the CLIP vision encoder. Required for `/v1/vision/chat` to be registered — real LLaVA/Qwen-VL/SmolVLM GGUF releases keep the vision encoder in a file separate from the base LLM; see `assets/Vision-I2T.md`. Environment override: `MMPROJ_PATH`. |
 | `--dtype FLOAT32\|FLOAT16\|INT8` | `FLOAT16` | cluster, local | Activation wire format |
 | `--byteOrder BE\|LE` | `BE` | cluster | Activation byte order. Must match across all JVMs — propagated automatically by `ClusterHarness` and `juno-deploy.sh`. |
@@ -85,9 +86,62 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--output PATH` | `<model>-merged.gguf` | Output file (always plain GGUF, even if source is llamafile) |
 | `--heap SIZE` | `4g` | JVM heap — use at least 2x the model file size |
 
-**Environment overrides:** `MODEL_PATH`, `JUNO_USE_GPU`, `JUNO_GPU_LAYERS`, `JUNO_MMQ`, `JUNO_CACHE_TYPE_K`, `JUNO_CACHE_TYPE_V`, `JUNO_SCHEDULE`, `JUNO_KV_PAGE_SIZE`, `JUNO_PARALLEL`, `JUNO_BATCH_WINDOW_MS`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
+**Environment overrides:** `MODEL_PATH`, `JUNO_HF`, `JUNO_USE_GPU`, `JUNO_GPU_LAYERS`, `JUNO_MMQ`, `JUNO_CACHE_TYPE_K`, `JUNO_CACHE_TYPE_V`, `JUNO_SCHEDULE`, `JUNO_KV_PAGE_SIZE`, `JUNO_PARALLEL`, `JUNO_BATCH_WINDOW_MS`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
 `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`,
 `LORA_PATH`, `LORA_RANK`, `LORA_ALPHA`, `LORA_LR`, `LORA_STEPS`, `LORA_PLAY_PATH`, `API_PORT`
+
+---
+
+### Chat templates and Hugging Face downloads
+
+**Template resolution precedence.** Every text-inference request is formatted into a model-ready
+prompt before tokenization. Juno picks the template in this order:
+
+1. **GGUF-embedded template** — when the loaded GGUF carries a `tokenizer.chat_template` metadata
+   string, Juno parses and renders it with a restricted Jinja-subset engine (messages loop,
+   role/content access, `if`/`elif`/`else`, `and`/`or`/`not`, string concatenation, the `trim`
+   filter, `bos_token`/`eos_token` substitution, and Jinja's default whitespace control around
+   block tags so templates that rely on that default — not just ones that spell out `{%-`/`-%}`
+   explicitly — render without stray blank lines). This covers real-world Llama-3-, Phi-3-, and
+   ChatML-style templates.
+2. **Named template fallback** — if the metadata is absent, fails to parse, or fails a validation
+   render, Juno falls back to the existing named template lookup (model-family detection from the
+   file path or model id; ChatML is the default for unrecognized names). This is silent and
+   automatic — generation is never blocked or corrupted by an unusable embedded template.
+
+Supported named templates: Llama 3, ChatML (including Qwen2 / Qwen2.5), Qwen3, Phi-3, Mistral,
+Gemma, TinyLlama, and a vision (moondream) template.
+
+Template resolution is **wired on the base text-inference surface** (the `local` and `cluster`
+REPLs and their `--api-port` REST/OpenAI servers) for both CUDA and ROCm backends. `juno lora`
+train and `--lora-play` intentionally keep using the named template only, even when the loaded
+GGUF has an embedded one — train-time and inference-time formatting must stay identical for
+adapter recall; the LoRA REPL prints a one-line notice when it detects (and ignores) an embedded
+template.
+
+**`--hf` downloads.** `--hf org/repo[:quant]` resolves a Hugging Face Hub repository to a local
+GGUF and uses it as the effective model path:
+
+```bash
+# Default quant preference (Q4_K_M when present, else the first .gguf asset)
+./juno local --hf TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF
+
+# Explicit quant
+./juno local --hf TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF:Q8_0
+
+# Works on cluster and lora too
+./juno cluster --hf org/repo:Q4_K_M
+./juno lora --hf org/repo
+```
+
+- Downloads go to `~/.cache/juno/models/<org>_<repo>/` — **not** the repo's local `models/`
+  directory, which stays reserved for manually placed test fixtures.
+- Downloads resume (HTTP `Range`) if interrupted, and re-resolve without re-downloading when the
+  cached file's ETag still matches the remote asset.
+- Passing both `--hf` and `--model-path` is allowed only when they resolve to the same file;
+  otherwise startup fails with an explicit error rather than silently preferring one.
+- No Python dependency anywhere in this path — the fetcher is a plain JDK `HttpClient` consumer
+  talking to the public Hugging Face Hub HTTP API.
 
 For the `lora` command and `ForwardPassHandlerLoader.selectLoraBackend()`, `JUNO_USE_GPU` unset
 means try GPU (CUDA first, then ROCm) when available. Set `JUNO_USE_GPU=false` or pass `--cpu`
@@ -732,6 +786,11 @@ Rename the model file to include the architecture keyword (`tinyllama`, `llama-3
 `phi3`) to ensure `ChatModelType.fromPath()` detects it correctly. Gemma, Qwen 2 / Qwen3 /
 Qwen3.5 paths are under development — prefer LLaMA-family or Phi-3 models for LoRA
 training workflows today.
+
+If the loaded GGUF carries an embedded `tokenizer.chat_template`, `juno lora` prints a one-line
+warning that it is ignored — LoRA train and `--lora-play` always use the named template above so
+train-time and inference-time formatting stay identical (see "Chat templates and Hugging Face
+downloads").
 
 ---
 

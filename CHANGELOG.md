@@ -1,5 +1,47 @@
 ## Status 
 
+**Session 81** — GGUF chat template + Hugging Face Hub download **feature complete**
+
+- Prefer a GGUF's own embedded `tokenizer.chat_template` metadata, rendered
+  through a restricted Jinja subset (`MiniJinjaTemplate`), over the named
+  template registry; falls back automatically when the metadata is absent,
+  unparseable, or fails a smoke render. `GgufChatTemplateResolverTest` — 9
+  tests, including real-GGUF spot checks (Phi-3.5, TinyLlama).
+- Manual multi-turn testing against the real TinyLlama GGUF surfaced a
+  whitespace bug the automated substring/ordering checks missed: block tags
+  (`{% %}`) without explicit `{%-`/`-%}` dashes left stray blank lines that
+  compounded every turn, degrading generation by turn 3-4. Fixed by
+  implementing Jinja2's own `trim_blocks`/`lstrip_blocks` **defaults** (the
+  behavior HF's `apply_chat_template` and llama.cpp's renderer both assume) —
+  most real-world templates rely on this default rather than writing dashes
+  themselves. New exact-match regression test
+  (`default_trim_blocks_and_lstrip_blocks_apply_without_explicit_dashes`)
+  locks in the fix.
+- `--hf repo[:quant]` resolves and downloads a GGUF from the Hugging Face
+  Hub into the effective model path (`Q4_K_M` preferred quant, resume +
+  ETag cache under `~/.cache/juno/models`, no Python dependency); fails
+  closed when `--hf` and `--model-path` disagree. `HfGgufFetcherTest` — 16
+  tests against a local mock HTTP server.
+- A live run against the real Hub (`TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF`,
+  668 MB) surfaced two bugs the mock-only tests missed: the fetcher's
+  `HttpClient` didn't follow redirects, so every real download failed
+  against the Hub's CDN-redirecting `/resolve/main/...` endpoint; and a
+  nonexistent or private repo surfaced as a bare "HTTP 401" instead of a
+  clear "not found" message (the Hub API conflates the two cases
+  deliberately, to avoid disclosing private-repo existence). Both fixed,
+  with regression tests (redirect-following, 401-message) added.
+- LoRA train / `--lora-play` keep the named template only (explicit no-op,
+  startup notice) so train-time and inference-time formatting stay
+  identical for adapter recall; vision + embedded template is an unverified
+  follow-up.
+- §2 CPU regression spot-check `target/perf-compare/20260914T181535Z/`
+  (`--cpu --vector 0 --models tinyllama`, failures=0) — not a published
+  multi-model bake-off; this tier touches no MatVec/forward/KV path.
+
+---
+
+## Status 
+
 **Session 80** — Function calling / tools **feature complete**
 
 - OpenAI `tools` / `tool_choice` on chat completions: prompt inject for

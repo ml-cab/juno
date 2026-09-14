@@ -265,6 +265,57 @@ OpenAiTools / ToolPrompt / ToolCallParser — OpenAI tools and tool_choice on
   ToolCallGrammar + JsonSchemaToGbnf. tools conflict with json_* /
   x_juno_grammar / CLI grammar (HTTP 400). /v1/vision/chat does not honor tools.
 
+MiniJinjaTemplate / EmbeddedChatTemplate / GgufChatTemplateResolver /
+  EmbeddedChatTemplateRegistry (tokenizer module) — GGUF-embedded chat
+  template support. MiniJinjaTemplate is a restricted Jinja-subset engine
+  (package-private): {{ output }}, {% for x in messages %}, {% if/elif/else %},
+  string concat, ==/!=/</<=/>/>=, and/or/not, trim/upper/lower filters,
+  {%-/-%} whitespace trim, loop.index0/index/first/last/length. Unsupported
+  syntax (set, macros, filter args, non-literal bracket indices, non-list
+  for-targets) throws MiniJinjaException at parse or render time — never a
+  raw/uncaught exception. GgufChatTemplateResolver.resolve(GgufReader,
+  fallbackModelType) reads tokenizer.chat_template metadata, parses it, and
+  smoke-renders a probe conversation before committing to it; any failure at
+  any stage falls back to the existing ChatTemplate.forModelType(fallback)
+  path unchanged. EmbeddedChatTemplate wraps a validated MiniJinjaTemplate +
+  fallback ChatTemplate; format() also catches per-call render failures and
+  falls back, so a template that only breaks on some real message shapes
+  degrades to the named template rather than crashing generation.
+  EmbeddedChatTemplateRegistry is a process-local String->ChatTemplate map;
+  ChatTemplateFormatter.forModelType(modelType) checks it before the named
+  lookup — this is how a template resolved once at model load reaches every
+  GenerationLoop / ContinuousBatchEngine / JunoPlayer call site that already
+  calls forModelType(req.modelId()), with no change to those call sites.
+  Nothing populates the registry automatically: ConsoleMain.
+  registerEmbeddedChatTemplate(modelPath) (juno-player) is the only writer,
+  called from runLocalRepl() and runClusterRepl() (registers under both the
+  ChatModelType short key used by the REPL and the raw GGUF filename used as
+  the REST/OpenAI model id — see buildLocalModelRegistry) — deliberately not
+  called from runLoraRepl(), so juno lora train / --lora-play keep using the
+  named template only (train/inference formatting must stay identical for
+  adapter recall); LoraTrainNotices.EMBEDDED_CHAT_TEMPLATE_IGNORED (node
+  module) surfaces that as a startup notice when the loaded GGUF has one.
+
+HfGgufFetcher (juno-player module) — resolves a Hugging Face Hub
+  "org/repo[:quant]" spec (--hf CLI flag, wired in ConsoleMain.main() ahead of
+  the --model-path null check, and in scripts/run.sh / run.bat for cluster,
+  local, and lora) to a local GGUF path. listGgufAssets() calls the Hub
+  models API (GET /api/models/{repo}, "siblings[].rfilename" filtered to
+  *.gguf); selectAsset() prefers a filename containing the requested
+  ":quant", else PREFERRED_QUANT ("Q4_K_M"), else the alphabetically-first
+  .gguf asset. download() does a HEAD for the remote ETag (cache hit skips
+  the body download when it matches a ".etag" sidecar next to the cached
+  file), and resumes a partial ".part" file via an HTTP Range request when
+  present. Cache root is ~/.cache/juno/models/<org>_<repo>/ by default
+  (constructor-overridable for tests) — never models/, which CLAUDE.md
+  reserves for manually placed local fixtures. Plain java.net.http.HttpClient
+  + the existing Jackson dependency; no new Maven dependency, no Python.
+  Tested against com.sun.net.httpserver.HttpServer (HfGgufFetcherTest) — no
+  real network access in tests. ConsoleMain.resolveHfSpecOrExit() resolves
+  --hf into the effective --model-path; when both flags are given and
+  disagree (different resolved file), it fails fast with an error rather than
+  silently preferring one.
+
 Dependency graph (acyclic):
   node  →  api, lora, registry, kvcache, health, grpc, micrometer
   vision  →  node, coordinator, registry, tokenizer, sampler

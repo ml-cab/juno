@@ -63,6 +63,12 @@ public final class LoraTrainNotices {
 					+ "  Use --lora-play for playback fused Q4_K. Training needs a transpose "
 					+ "path that packed Q4 does not provide.";
 
+	/** GGUF carries an embedded chat template, but LoRA train/play intentionally ignore it. */
+	public static final String EMBEDDED_CHAT_TEMPLATE_IGNORED =
+			"This GGUF carries an embedded chat template (tokenizer.chat_template) -- ignored here.\n"
+					+ "  LoRA train and --lora-play always use the named chat template so train-time "
+					+ "and inference-time formatting stay identical for adapter recall.";
+
 	private static final CopyOnWriteArrayList<String> NOTICES = new CopyOnWriteArrayList<>();
 
 	private LoraTrainNotices() {

@@ -36,6 +36,7 @@ import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.ActivationDtype;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.LlamaConfig;
+import cab.ml.juno.player.HfGgufFetcher;
 import cab.ml.juno.player.ProcessPipelineClient;
 import cab.ml.juno.player.TensorParallelPipelineClient;
 import cab.ml.juno.registry.ModelDescriptor;
@@ -44,6 +45,9 @@ import cab.ml.juno.registry.ModelStatus;
 import cab.ml.juno.registry.QuantizationType;
 import cab.ml.juno.registry.ShardPlanner;
 import cab.ml.juno.sampler.Sampler;
+import cab.ml.juno.tokenizer.ChatTemplate;
+import cab.ml.juno.tokenizer.EmbeddedChatTemplateRegistry;
+import cab.ml.juno.tokenizer.GgufChatTemplateResolver;
 import cab.ml.juno.tokenizer.GgufTokenizer;
 import cab.ml.juno.tokenizer.Tokenizer;
 
@@ -67,6 +71,9 @@ import cab.ml.juno.tokenizer.Tokenizer;
  *   JUNO_NODE_ADDRESSES   comma-separated host:port list, one per node
  *                         e.g. "10.0.0.1:19092,10.0.0.2:19092,10.0.0.3:19092"
  *   JUNO_MODEL_PATH       local path to the GGUF file (for tokenizer + config)
+ *   JUNO_HF               "org/repo[:quant]" — resolves (downloads/caches, see
+ *                         {@link HfGgufFetcher}) into the effective JUNO_MODEL_PATH;
+ *                         an error if both are set and resolve to different files
  *   JUNO_PTYPE            "pipeline" (default) or "tensor"
  *   JUNO_HTTP_PORT        REST port (default: 8080)
  *   JUNO_DTYPE            FLOAT32 | FLOAT16 | INT8  (default: FLOAT16)
@@ -97,6 +104,9 @@ public final class CoordinatorMain {
 		// ── Read environment ──────────────────────────────────────────────
 		String rawAddresses = env("JUNO_NODE_ADDRESSES", "");
 		String modelPath = env("JUNO_MODEL_PATH", "");
+		String hfSpec = env("JUNO_HF", "");
+		if (!hfSpec.isBlank())
+			modelPath = resolveHfSpecOrDie(hfSpec, modelPath);
 		String ptypeStr = env("JUNO_PTYPE", "pipeline");
 		int httpPort = parseInt(env("JUNO_HTTP_PORT", "8080"), 8080);
 		String dtypeStr = env("JUNO_DTYPE", "FLOAT16");
@@ -148,6 +158,7 @@ public final class CoordinatorMain {
 			config = LlamaConfig.from(reader);
 			tokenizer = GgufTokenizer.load(reader);
 		}
+		registerEmbeddedChatTemplate(modelPath);
 		log.info("Model config: " + config);
 
 		// ── Build pipeline + load shards ──────────────────────────────────
@@ -411,5 +422,53 @@ public final class CoordinatorMain {
 	private static void die(String msg) {
 		System.err.println("[CoordinatorMain] FATAL: " + msg);
 		System.exit(1);
+	}
+
+	/**
+	 * Resolves {@code JUNO_HF} into the effective model path (mirrors
+	 * {@code ConsoleMain.resolveHfSpecOrExit()}): if {@code JUNO_MODEL_PATH} is
+	 * also set, the two must resolve to the same file or the process exits with
+	 * an error rather than silently preferring one.
+	 */
+	private static String resolveHfSpecOrDie(String hfSpec, String explicitModelPath) {
+		Path resolved;
+		try {
+			log.info("Resolving JUNO_HF=" + hfSpec + " ...");
+			resolved = new HfGgufFetcher().resolve(hfSpec);
+		} catch (Exception e) {
+			die("JUNO_HF=" + hfSpec + " could not be resolved: " + e.getMessage());
+			return null; // unreachable — die() exits
+		}
+		if (!explicitModelPath.isBlank()) {
+			Path explicit = Path.of(explicitModelPath).toAbsolutePath().normalize();
+			Path fromHf = resolved.toAbsolutePath().normalize();
+			if (!explicit.equals(fromHf)) {
+				die("JUNO_HF=" + hfSpec + " resolved to " + fromHf + " but JUNO_MODEL_PATH explicitly set "
+						+ explicit + " — these disagree. Set only one of JUNO_HF / JUNO_MODEL_PATH.");
+			}
+			return explicitModelPath;
+		}
+		log.info("JUNO_HF=" + hfSpec + " resolved to " + resolved);
+		return resolved.toString();
+	}
+
+	/**
+	 * Resolves the GGUF-embedded {@code tokenizer.chat_template} (if any) and
+	 * registers it under the model's registry filename id (see
+	 * {@link #buildRegistry}) so {@code ChatTemplateFormatter.forModelType}
+	 * (used by {@link GenerationLoop} for every request this coordinator serves)
+	 * picks it up automatically. Falls back silently on any failure — chat
+	 * template resolution never blocks coordinator startup.
+	 */
+	private static void registerEmbeddedChatTemplate(String modelPath) {
+		String filenameKey = Path.of(modelPath).getFileName().toString();
+		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
+			ChatTemplate resolved = GgufChatTemplateResolver.resolve(reader, filenameKey);
+			EmbeddedChatTemplateRegistry.register(filenameKey, resolved);
+			if (GgufChatTemplateResolver.hasEmbeddedTemplate(reader))
+				log.info("GGUF embedded chat template detected, validated, and in use for " + filenameKey);
+		} catch (Exception e) {
+			log.fine("Chat-template resolution skipped for " + modelPath + ": " + e.getMessage());
+		}
 	}
 }
