@@ -68,6 +68,14 @@ final class CudaBindings implements GpuBindings {
     // ── cublasPointerMode_t ───────────────────────────────────────────────────
     static final int CUBLAS_POINTER_MODE_HOST = 0;
 
+    // ── cudaDataType (library_types.h) ────────────────────────────────────────
+    static final int CUDA_R_16F = 2; // real half
+    static final int CUDA_R_32F = 0; // real float
+
+    // ── cublasComputeType_t / cublasGemmAlgo_t (cublas_api.h) ────────────────
+    static final int CUBLAS_COMPUTE_32F  = 68;
+    static final int CUBLAS_GEMM_DEFAULT = -1;
+
     // ── cudaStream_t non-blocking flag ────────────────────────────────────────
     static final int STREAM_NON_BLOCKING = 0x01;
 
@@ -101,6 +109,7 @@ final class CudaBindings implements GpuBindings {
     final MethodHandle cublasSgemv;              // int (handle,op,m,n,*α,*A,lda,*x,incx,*β,*y,incy)
     final MethodHandle cublasSgemm;              // int (handle,ta,tb,m,n,k,*α,*A,lda,*B,ldb,*β,*C,ldc)
     final MethodHandle cublasHSSgemvStridedBatched; // FP16 A+x, FP32 y, batched
+    final MethodHandle cublasGemmEx;             // mixed-type tiled GEMM (FP16 A/B, FP32 C), large batches
 
     // ── Singleton init ────────────────────────────────────────────────────────
     private static final CudaBindings INSTANCE;
@@ -224,6 +233,27 @@ final class CudaBindings implements GpuBindings {
                 JAVA_INT,  // incy
                 JAVA_LONG, // strideY
                 JAVA_INT));// batchCount
+        cublasGemmEx              = bind(linker, cublas, "cublasGemmEx",
+            FunctionDescriptor.of(JAVA_INT,
+                ADDRESS,   // handle
+                JAVA_INT,  // transa
+                JAVA_INT,  // transb
+                JAVA_INT,  // m
+                JAVA_INT,  // n
+                JAVA_INT,  // k
+                ADDRESS,   // *alpha
+                ADDRESS,   // *A
+                JAVA_INT,  // Atype (cudaDataType)
+                JAVA_INT,  // lda
+                ADDRESS,   // *B
+                JAVA_INT,  // Btype (cudaDataType)
+                JAVA_INT,  // ldb
+                ADDRESS,   // *beta
+                ADDRESS,   // *C
+                JAVA_INT,  // Ctype (cudaDataType)
+                JAVA_INT,  // ldc
+                JAVA_INT,  // computeType (cublasComputeType_t)
+                JAVA_INT));// algo (cublasGemmAlgo_t)
 
         log.info("CudaBindings ready — Panama FFI (cudart + cublas)");
     }

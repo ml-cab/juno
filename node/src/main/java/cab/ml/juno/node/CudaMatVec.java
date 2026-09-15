@@ -69,6 +69,7 @@ public final class CudaMatVec implements GpuMatVec {
     private final GpuContext     ctx;
     private final CudaBindings   cuda;
     private GpuBlasOps           blasOps;
+    private CudaFp16GemmOps      fp16GemmOps;
 
     // ── Per-thread device scratch (FP32 resident path) ────────────────────────
     private static final ThreadLocal<Fp32Scratch> FP32_SCRATCH =
@@ -669,21 +670,26 @@ public final class CudaMatVec implements GpuMatVec {
         return blasOps().forward(A, X, X.length);
     }
 
-    /** Max batch for one FP16 strided-batched kernel (multi-request decode); prefill windows stay serial. */
+    /** Max batch for the strided-batched GEMV kernel (multi-request decode); larger (prefill) windows use the tiled GEMM. */
     private static final int HALF_SGEMM_BATCH_MAX = 8;
 
     /**
-     * Batched FP16-weight GEMM: one {@code cublasHSSgemvStridedBatched} for small
-     * decode batches; large prefill windows fall back to serial {@link #sgemv}.
+     * Batched FP16-weight GEMM: {@code cublasHSSgemvStridedBatched} for small decode
+     * batches (bounded per-call overhead dominates, no weight reuse needed);
+     * {@code cublasGemmEx} tiled GEMM for large prefill windows (weight-stationary
+     * reuse across the batch — see {@link CudaFp16GemmOps}); {@code batch <= 1} stays
+     * serial {@link #sgemv}.
      */
     @Override
     public float[][] sgemm(DeviceHalfMatrix A, float[][] X) {
-        if (X.length <= 1 || X.length > HALF_SGEMM_BATCH_MAX) {
+        if (X.length <= 1) {
             float[][] Y = new float[X.length][];
             for (int b = 0; b < X.length; b++)
                 Y[b] = sgemv(A, X[b]);
             return Y;
         }
+        if (X.length > HALF_SGEMM_BATCH_MAX)
+            return sgemmHalfBatchedGemm(A, X);
         return sgemmHalfBatched(A, X);
     }
 
@@ -737,7 +743,7 @@ public final class CudaMatVec implements GpuMatVec {
                     float[][] Y = new float[batch][];
                     for (int b = 0; b < batch; b++) {
                         Y[b] = new float[rows];
-                        MemorySegment.copy(stagingY, JAVA_FLOAT, (long) b * rows, Y[b], 0, rows);
+                        MemorySegment.copy(stagingY, JAVA_FLOAT, (long) b * rows * Float.BYTES, Y[b], 0, rows);
                     }
                     return Y;
                 } finally {
@@ -750,6 +756,85 @@ public final class CudaMatVec implements GpuMatVec {
             evt.cols = cols;
             evt.commit();
         }
+    }
+
+    /**
+     * Tiled-GEMM counterpart to {@link #sgemmHalfBatched}: same staging/H2D/D2H shape
+     * (and the same {@link Fp16Scratch} buffer — {@code sgemmHalfBatched} already grows
+     * it to {@code batch}-scaled sizes, so no separate scratch container is needed for
+     * larger batches), but compute goes through {@link CudaFp16GemmOps#gemmHalf} —
+     * {@code cublasGemmEx}, a real weight-stationary tiled GEMM — instead of
+     * {@code cublasHSSgemvStridedBatched}, which does not gain compute/bandwidth reuse
+     * across the batch as batch size grows.
+     */
+    private float[][] sgemmHalfBatchedGemm(DeviceHalfMatrix A, float[][] X) {
+        int batch = X.length;
+        int rows = A.rows();
+        int cols = A.cols();
+        for (int b = 0; b < batch; b++) {
+            if (X[b].length != cols)
+                throw new IllegalArgumentException("X[" + b + "].length != cols");
+        }
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+
+        long bytesXh = (long) cols * batch * Short.BYTES;
+        long bytesY = (long) rows * batch * Float.BYTES;
+        Fp16Scratch scratch = FP16_SCRATCH.get();
+
+        try (Arena callArena = Arena.ofConfined()) {
+            synchronized (ctx.cublasSerializationLock()) {
+                MemorySegment stream = ensureStream();
+                bindStream(stream);
+                try {
+                    ensureFp16Scratch(scratch, bytesXh, bytesY);
+
+                    MemorySegment stagingXh = callArena.allocate(bytesXh);
+                    for (int b = 0; b < batch; b++) {
+                        int base = b * cols;
+                        for (int j = 0; j < cols; j++)
+                            stagingXh.setAtIndex(JAVA_SHORT, base + j, Float.floatToFloat16(X[b][j]));
+                    }
+
+                    CudaBindings.check(
+                            CudaBindings.callInt(cuda.cudaMemcpyAsync,
+                                    scratch.dXh, stagingXh, bytesXh, CudaBindings.H2D, stream),
+                            "cudaMemcpyAsync(xh H2D batched-gemm)");
+
+                    fp16GemmOps().gemmHalf(A.devicePointer(), scratch.dXh, scratch.dY, rows, cols, batch);
+
+                    MemorySegment stagingY = callArena.allocate(bytesY);
+                    CudaBindings.check(
+                            CudaBindings.callInt(cuda.cudaMemcpyAsync,
+                                    stagingY, scratch.dY, bytesY, CudaBindings.D2H, stream),
+                            "cudaMemcpyAsync(y D2H batched-gemm)");
+                    CudaBindings.check(
+                            CudaBindings.callInt(cuda.cudaStreamSynchronize, stream),
+                            "cudaStreamSynchronize");
+
+                    float[][] Y = new float[batch][];
+                    for (int b = 0; b < batch; b++) {
+                        Y[b] = new float[rows];
+                        MemorySegment.copy(stagingY, JAVA_FLOAT, (long) b * rows * Float.BYTES, Y[b], 0, rows);
+                    }
+                    return Y;
+                } finally {
+                    unbindStream();
+                }
+            }
+        } finally {
+            evt.backend(MatVecBackend.CUDA_RESIDENT_FP16_GEMM);
+            evt.rows = rows;
+            evt.cols = cols;
+            evt.commit();
+        }
+    }
+
+    private CudaFp16GemmOps fp16GemmOps() {
+        if (fp16GemmOps == null)
+            fp16GemmOps = new CudaFp16GemmOps(ctx);
+        return fp16GemmOps;
     }
 
     private GpuBlasOps blasOps() {

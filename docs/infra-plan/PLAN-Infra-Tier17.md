@@ -1,5 +1,62 @@
 # Tier 17: GPU Batched Prefill GEMM
 
+## Progress (2026-09-14)
+
+**Gap 1 (`DeviceHalfMatrix`) done, verified on real GPU:**
+
+- `CudaBindings`: `cublasGemmEx` binding + `CUDA_R_16F`/`CUDA_R_32F`/`CUBLAS_COMPUTE_32F`/
+  `CUBLAS_GEMM_DEFAULT` constants, values verified against the installed CUDA 12.0 headers
+  (`/usr/include/library_types.h`, `/usr/include/cublas_api.h`) on this session's host, not
+  assumed from the plan doc.
+- New `CudaFp16GemmOps.gemmHalf` — issues the `cublasGemmEx` call; reuses `CudaMatVec`'s existing
+  `Fp16Scratch` (`dXh`/`dY`) verbatim, no new scratch container, as scoped.
+- `CudaMatVec.sgemm(DeviceHalfMatrix, float[][])`: `X.length > HALF_SGEMM_BATCH_MAX` now routes to
+  new `sgemmHalfBatchedGemm` (`cublasGemmEx`) instead of serial `sgemv`; `<= 8` path unchanged
+  (`sgemmHalfBatched`, still `cublasHSSgemvStridedBatched`).
+- New `MatVecBackend.CUDA_RESIDENT_FP16_GEMM` (`"cuda-resident-fp16-gemm"`) JFR label; also added
+  `CUDA_RESIDENT_Q4K_GEMM` ahead of Gap 2 landing.
+- `CudaSgemmBatchedPrefillParityTest` (new, `@Tag("gpu")`): batches {1,8,9,16,32,128}, non-tile-
+  aligned 17×13 shape, batched output vs. serial `sgemv`-loop oracle — green. Includes
+  `DeviceQ4KMatrix` cases against today's serial fallback (trivially green pre-Gap-2; establishes
+  the oracle for when Gap 2 lands).
+- Full regression: `mvn test -Dgroups=gpu -pl node` (81 tests) and `mvn test -pl node` (505 tests)
+  both green, no other test changed.
+- **Live JFR proof** (`--prefill-batch 32`, `--mmq off`, real GGUF, `/v1/chat/completions` with a
+  ~260-270 token prompt): `jfr print --events juno.MatVec` shows `backend = "cuda-resident-fp16-gemm"`
+  firing (1232 events on TinyLlama, 1792 on Phi-3.5-mini) alongside the unchanged
+  `cuda-resident-fp16` small-batch path — confirms the new path is live on real Llama-family and
+  Phi-3 (`Phi3TransformerHandler`) forward passes, not just the synthetic parity test.
+- Qwen3 (`Qwen3TransformerHandler.java:683-696`) confirmed by code reading to call the exact same
+  `backend.sgemm(half[li], X)` — same shared primitive fixed above — but **not live-verified**:
+  the only Qwen3-family GGUF in `models/` this session is `Qwen3.5-0.8B.Q4_K_M.gguf`
+  (`general.architecture = "qwen35"`), which is not in Juno's supported-architecture dispatch list
+  (`ForwardPassHandlerLoader` falls back to `LlamaTransformerHandler`, which then fails on a
+  missing tensor name) — a pre-existing Model E2E gap, unrelated to this tier. Follow-up: live
+  Qwen3 verification once a loadable non-MoE Qwen3 (not 3.5) fixture is available, or a synthetic
+  GPU-resident Qwen3 test is added.
+- **Bug found and fixed while writing the parity test** (not scoped by the original plan, but
+  directly blocking it): `sgemmHalfBatched`'s D2H readback used
+  `MemorySegment.copy(stagingY, JAVA_FLOAT, (long) b * rows, Y[b], 0, rows)` — the third argument
+  is a **byte** offset (confirmed empirically: `MemorySegment.copy` with a non-4-byte-aligned
+  integer offset and `JAVA_FLOAT` throws `IllegalArgumentException: Source segment incompatible
+  with alignment constraints`), but the code passed `b * rows` (an **element** count) instead of
+  `b * rows * Float.BYTES`. For `batch >= 2` this either crashed (misaligned offset) or silently
+  read from the wrong location in `stagingY` (correct offset understated by 4x) — undetected
+  because no existing test called `sgemm(DeviceHalfMatrix, float[][])` at all before this session's
+  `CudaSgemmBatchedPrefillParityTest`, and real model hidden/head dimensions happen to always make
+  `b * rows` byte-aligned, which hid the *crash* but not the *silent wrong answer*. Fixed in both
+  `sgemmHalfBatched` (pre-existing, used by `--parallel` multi-request FP16 decode batching,
+  batch 2-8) and the new `sgemmHalfBatchedGemm`. This affects the shipped Tier 1
+  (`--parallel`) concurrent-batch-serving path on the default FP16 GPU dtype — flagging for
+  awareness beyond this tier's own scope.
+
+**Not started:** Gap 2 (Q4_K/Q5_K/Q6_K dequant-to-FP16 PTX kernel, `Q4KDequantScratch`,
+`sgemm(DeviceQ4KMatrix, ...)` override — items 4-5 of Implementation todos below), concurrency test
+(item 7), full 4-model GPU bake-off with `--mmq off`/`on` (item 8), `compare-lora.sh` (item 9),
+`compare-vision.sh` (item 10), and doc updates (item 11: `docs/performance.md`, ROADMAP Tier 8
+status line, `docs/perf-compare/README.md`). Tier 17 is **not** feature complete yet — this is a
+mid-tier checkpoint, not an exit.
+
 ## Agent handoff
 
 Read and follow `models/CLAUDE.md` before implementing:

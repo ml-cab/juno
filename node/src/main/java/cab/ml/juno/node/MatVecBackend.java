@@ -44,8 +44,12 @@ public enum MatVecBackend {
     CUDA_RESIDENT("cuda-resident"),
     /** cuBLAS {@code cublasHSSgemvStridedBatched} with device-resident FP16 A. */
     CUDA_RESIDENT_FP16("cuda-resident-fp16"),
+    /** cuBLAS {@code cublasGemmEx} tiled GEMM with device-resident FP16 A, large (prefill) batches. */
+    CUDA_RESIDENT_FP16_GEMM("cuda-resident-fp16-gemm"),
     /** Fused Q4_K dequant+GEMV with device-resident packed weights. */
     CUDA_RESIDENT_Q4K("cuda-resident-q4k"),
+    /** Device dequant-to-FP16-scratch + {@code cublasGemmEx} tiled GEMM, large (prefill) batches. */
+    CUDA_RESIDENT_Q4K_GEMM("cuda-resident-q4k-gemm"),
     /** cuBLAS resident FP32 transpose backward {@code W^T * g}. */
     CUDA_RESIDENT_TRANSPOSE("cuda-resident-transpose"),
     /** cuBLAS resident FP16 transpose backward {@code W^T * g}. */
