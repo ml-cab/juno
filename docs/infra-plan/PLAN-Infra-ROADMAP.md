@@ -57,6 +57,8 @@ Before marking a tier **feature complete** and beginning the next dependent tier
 
 API-only tiers (2–4, 7, 11) still run inference compare as a **regression gate** even when throughput is unchanged; LoRA / vision compares are optional for those tiers unless the change touches their paths. §6 still applies when the tier introduces a **new CLI/env flag** that can be combined with existing modes.
 
+**Keep the regression gate able to parse what it gates.** `compare-llama-cpp.sh` is step 1 above — the one script every tier runs as its baseline regression check. When a tier ships a new CLI/env flag, add that flag to `compare-llama-cpp.sh`'s own pass-through option set (mirroring how `--gpu-layers`/`--mmq`/`--prefill-batch`/`--schedule`/`--cache-type-k`/`--cache-type-v`/`--kv-page-size` already work) in the **same change** that ships the flag — not left to live only in a bespoke tier-specific script (`compare-schedule.sh`, `compare-lora.sh`, etc.). The bespoke script remains the right place for that tier's own specialized measurement (e.g. aggregate-tps-under-load); the point is that the standing regression gate must be able to at least exercise any shipped flag combination, current or future, not just the flags that existed when the script was last touched. See [`PLAN-Infra-Review-Fixes.md`](PLAN-Infra-Review-Fixes.md) item 9 for the gap this closes.
+
 ### 3. No llama.cpp or vLLM in Juno docs
 
 Do not name **llama.cpp**, **vLLM**, or their variants (`llama-server`, `vllm`, etc.) in Juno documentation outside this planning tree.
@@ -221,6 +223,21 @@ Follow this table — not tier number order (1, 2, 3, …).
 4. **Vector SIMD track** (parallel track; also P0 step 4) — not a bake-off-only checkbox. Own correctness + publish `--vector 0` vs `--vector 1` under `[docs/perf-compare/](../perf-compare/README.md)`; see [Parallel tracks → Vector SIMD](#vector-simd-cpu-kernels). Must not regress vision (`compare-vision.sh`).
 5. **Tier 13 Phase B** — fused quant matmul / batched decode GEMV behind a flag. **Feature complete**; tile Q8_1/`dp4a` kernel **1.51×** vs `--mmq off` on Phi-3.5 (speed exit **met**). P0 Phi-3.5 0.5× still **open**. Prefer after SIMD track bake-off so CPU and GPU MatVec stories stay separable in JFR.
 6. **Tier 17** — GPU batched-prefill GEMM fix (`CudaMatVec.sgemm` for `DeviceHalfMatrix`/`DeviceQ4KMatrix` large batches). Closes Tier 8's open "GPU prefill re-run" item. **Feature complete** — qualitative gate (pp materially greater than tg) met on the default 4-model GPU bake-off under both `--mmq off`/`on`; quantitative 3x-floor not directly checkable against the plan doc's baseline due to a pre-existing prompt-length/methodology gap (documented honestly in `docs/perf-compare/README.md`, not a new problem). LoRA gate flat as expected (no shared code path); vision gate N/A (Phi-2's batched prefill never routes through the fixed `CudaMatVec.sgemm`).
+
+**P0 decode-kernel gap — explicit deferral (2026-09-15):** Phi-3.5's 0.5× tg gate remains unmet
+(0.33× as of session 78's Q8_1/`dp4a` kernel). Sessions 79-82 and Tier 17 all landed after that
+kernel work without pushing further on it — permitted by phase rules (those are P2/prefill-side, not
+P0-gated) but left undecided by default rather than by choice. Recording the decision explicitly per
+[`PLAN-Infra-Review-Fixes.md`](PLAN-Infra-Review-Fixes.md) item 10: **formally deferred**, not
+resumed, in this session. Reason: this session's scope is glue-layer fixes (measurement rigor,
+launcher/config parity, hot-path allocation cleanup — see the fix-list doc), not new CUDA kernel
+authorship; closing the remaining gap needs Nsight Compute profiling against the Q8_1/`dp4a` kernel's
+now-known 0.32ms p95 baseline (per `PLAN-Infra-PERF-ANALYSIS.md` suggestion #3 — GEMV
+occupancy/tiling is the more likely remaining lever, not the quantization scheme) and dedicated
+iteration time this session did not have. **Unblocks resumption:** a future session picking this up
+should start from `PROMPT-P0-Gate.md` plus that Nsight Compute pass, not from a fresh kernel
+redesign — the 1.3× tile-kernel target is already cleared (1.51×), so the remaining 0.33×→0.5× gap is
+believed to be tuning, not architecture.
 
 ```
 P0:  13A ✓  →  5†  →  1†  →  8†  →  Vector SIMD†  →  13B†  →  17    GATE: 0.5× tg open (Phi-3.5 **0.33×**); mistral 0.15× **met** († feature complete; 13B tile-kernel speed exit met)

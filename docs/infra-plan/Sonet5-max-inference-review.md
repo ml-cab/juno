@@ -1,3 +1,5 @@
+Fix list derived from this review: [`PLAN-Infra-Review-Fixes.md`](PLAN-Infra-Review-Fixes.md).
+
 ## Scope and method (final)
 
 Confirmed mapping: `51a3b90` is the `release-0.1.2` baseline every `docs/perf-compare` run diffs against. 29 commits sit between it and HEAD (`3f4a340`). 19 of them carry an explicit **Session N** label in `CHANGELOG.md` (69 through 82); the other 10, dated Aug 31 to Sep 4, are real, substantial, *feature-complete* work (`GpuLayerOffload`, batched decode/`--parallel`, prefill microbatching, the vision fix, the Vector SIMD lock) that I could only place by cross-referencing `docs/infra-plan/PLAN-Infra-ROADMAP.md`, where they turn out to be **P0 steps 1-4** (Tier 5, Tier 1, Tier 8, SIMD track). They never got a Session heading in `CHANGELOG.md`. I've kept them as their own row below because they're squarely inside "everything below `51a3b90`."

@@ -152,6 +152,7 @@ public final class GenerationLoop {
 		int[] startPos = new int[n]; // KV cache offset per request
 		int[] maxTokens = new int[n];
 		List<Integer>[] generated = new List[n];
+		GrowableIntArray[] historyBufs = new GrowableIntArray[n];
 		EosOutputFilter[] eosFilters = new EosOutputFilter[n];
 		StopSequenceFilter[] stopFilters = new StopSequenceFilter[n];
 		SamplingParams[] params = new SamplingParams[n];
@@ -186,6 +187,7 @@ public final class GenerationLoop {
 			rngs[i] = params[i].seed() != null ? new Random(params[i].seed()) : null;
 			grammars[i] = GrammarBinding.open(tokenizer, params[i], requestIds[i]);
 			generated[i] = new ArrayList<>();
+			historyBufs[i] = new GrowableIntArray();
 			eosFilters[i] = new EosOutputFilter();
 			stopFilters[i] = new StopSequenceFilter(params[i].stopStrings());
 			reasons[i] = GenerationResult.StopReason.MAX_TOKENS;
@@ -250,7 +252,7 @@ public final class GenerationLoop {
 				int i = batchIdx.get(j);
 				float[] logits = logitsBatch[j];
 
-				int[] historyArr = generated[i].stream().mapToInt(Integer::intValue).toArray();
+				int[] historyArr = historyBufs[i].toTrimmedArray();
 				int nextToken = sampler.sample(logits, params[i], historyArr, rngs[i], grammars[i]);
 
 				if (nextToken == tokenizer.eosTokenId()) {
@@ -282,6 +284,7 @@ public final class GenerationLoop {
 						active[i] = false;
 					} else {
 						generated[i].add(nextToken);
+						historyBufs[i].append(nextToken);
 						allTokens[i] = GenerationLoop.appendToken(allTokens[i], nextToken);
 					}
 				}
@@ -372,6 +375,7 @@ public final class GenerationLoop {
 		// Build working token array (prompt IDs only at first)
 		int[] allTokens = promptIds.clone();
 		List<Integer> generatedIds = new ArrayList<>();
+		GrowableIntArray historyBuf = new GrowableIntArray();
 		EosOutputFilter eosFilter = new EosOutputFilter();
 		SamplingParams params = resolveSamplingParams(request.samplingParams());
 		StopSequenceFilter stopFilter = new StopSequenceFilter(params.stopStrings());
@@ -418,7 +422,7 @@ public final class GenerationLoop {
 			double forwardMs = (System.nanoTime() - stepStart) / 1_000_000.0;
 
 			// Step 4: Sample next token
-			int[] historyArr = generatedIds.stream().mapToInt(Integer::intValue).toArray();
+			int[] historyArr = historyBuf.toTrimmedArray();
 			int nextToken = sampler.sample(logits, params, historyArr, rng, grammar);
 
 			// Step 5: Check stop conditions by token ID
@@ -460,6 +464,7 @@ public final class GenerationLoop {
 			}
 
 			generatedIds.add(nextToken);
+			historyBuf.append(nextToken);
 			allTokens = GenerationLoop.appendToken(allTokens, nextToken);
 		}
 		log.info("Decode: loop EXITED kvKey=" + kvKey + " tokensGenerated=" + generatedIds.size() + " stopReason="

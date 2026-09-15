@@ -267,6 +267,11 @@ final class ContinuousBatchEngine {
 		List<int[]> toks = new ArrayList<>(batch.size());
 		List<Integer> pos = new ArrayList<>(batch.size());
 		for (Slot s : batch) {
+			// Defense-in-depth: a slot reaching maxTokens is retired from `running` (see
+			// retireFinished) in the same engineStep() that finishes it, so plan.decode() —
+			// derived from `running` — should never hand this method an already-finished slot
+			// on a later call. Kept as a guard rather than an assertion in case a future
+			// scheduling change (ContinuousMixedStepPolicy) stops guaranteeing that invariant.
 			if (s.generated.size() >= s.params.maxTokens())
 				continue;
 			active.add(s);
@@ -285,7 +290,7 @@ final class ContinuousBatchEngine {
 		for (int j = 0; j < active.size(); j++) {
 			Slot s = active.get(j);
 			float[] logits = logitsBatch[j];
-			int[] historyArr = s.generated.stream().mapToInt(Integer::intValue).toArray();
+			int[] historyArr = s.historyBuf.toTrimmedArray();
 			int nextToken = sampler.sample(logits, s.params, historyArr, s.rng, s.grammar);
 
 			if (nextToken == tokenizer.eosTokenId()) {
@@ -317,6 +322,7 @@ final class ContinuousBatchEngine {
 					justFinished.add(s);
 				} else {
 					s.generated.add(nextToken);
+					s.historyBuf.append(nextToken);
 					s.allTokens = GenerationLoop.appendToken(s.allTokens, nextToken);
 					if (s.generated.size() >= s.params.maxTokens()) {
 						s.reason = GenerationResult.StopReason.MAX_TOKENS;
@@ -402,6 +408,7 @@ final class ContinuousBatchEngine {
 		final Random rng;
 		final GrammarSession grammar;
 		final List<Integer> generated = new ArrayList<>();
+		final GrowableIntArray historyBuf = new GrowableIntArray();
 		final EosOutputFilter eosFilter = new EosOutputFilter();
 		final StopSequenceFilter stopFilter;
 		Tokenizer.StreamContext stream;

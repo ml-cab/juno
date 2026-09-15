@@ -323,7 +323,9 @@ public final class ClusterHarness implements AutoCloseable {
 	 *
 	 * <p>Must be called before {@link #start()}. Each node is launched with
 	 * {@code -XX:StartFlightRecording=duration=<duration>,filename=juno-<nodeId>-<stem>-<timestamp>.jfr,
-	 * settings=profile,dumponexit=true} so its events are written when the process exits.
+	 * settings=default,dumponexit=true} so its events are written when the process exits.
+	 * {@code default}, not {@code profile} — see {@code ConsoleMain.startProgrammaticJfr()}'s
+	 * comment on why the heavier profile settings are avoided for benchmark recordings.
 	 *
 	 * @param duration  human-friendly duration string, e.g. {@code "2m"} or {@code "30s"}
 	 * @param timestamp shared timestamp string (yyyyMMdd-HHmmss) — keeps coordinator and node
@@ -460,7 +462,7 @@ public final class ClusterHarness implements AutoCloseable {
 			String nodeJfrFile = "juno-" + nodeId + "-" + stem + "-" + jfrTimestamp + ".jfr";
 			cmd.add("-XX:StartFlightRecording=duration=" + jfrDuration
 					+ ",filename=" + nodeJfrFile
-					+ ",settings=profile,dumponexit=true");
+					+ ",settings=default,dumponexit=true");
 		}
 
 		// LoRA adapter overlay — propagate to node JVM so EmbeddedNodeServer loads the

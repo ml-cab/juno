@@ -43,7 +43,12 @@ PROMPT_TEXT="could you please write me a short poem about love and war"
 RAW_PROMPT=0
 JUNO_GPU_LAYERS=""
 JUNO_MMQ=""
+JUNO_SCHEDULE=""
+JUNO_CACHE_TYPE_K=""
+JUNO_CACHE_TYPE_V=""
+JUNO_KV_PAGE_SIZE=""
 MODEL_FILTER=""
+MISTRAL_TUNED_LANE=1
 DRY_RUN=0
 LIST_ONLY=0
 PUBLISH=1
@@ -77,6 +82,10 @@ Options:
   --ngl N           llama.cpp GPU layers (overrides --cpu/--gpu default)
   --gpu-layers N|all|auto  Juno --gpu-layers (default: all in GPU mode)
   --mmq on|off|auto Juno --mmq (packed Q4_K device GEMV; default off)
+  --schedule static|continuous  Juno --schedule (default static)
+  --cache-type-k f16|q8_0  Juno --cache-type-k (default f16)
+  --cache-type-v f16|q8_0  Juno --cache-type-v (default f16)
+  --kv-page-size N  Juno --kv-page-size (default 16, schedule=continuous only)
   --raw-prompt      Repeat a minimal token pattern (~1 tok/word) for prompt-length parity
   --api-port N      Juno REST port (default: ${API_PORT})
   --out DIR         Output directory (default: target/perf-compare/<timestamp>)
@@ -86,6 +95,12 @@ Options:
   --no-jfr          Skip Juno --jfr (API latency only for Juno tg)
   --publish         Copy metrics JSON+INDEX into docs/perf-compare/ (default)
   --no-publish      Skip docs/perf-compare publish
+  --no-mistral-tuned-lane  Skip the extra mistral-7b tuned lane (--mmq on --gpu-layers auto)
+                    that GPU runs add automatically when mistral-7b is selected (default: on).
+                    The vanilla default-flags lane always runs regardless; this only controls
+                    the second, additional run. See docs/infra-plan/PLAN-Infra-Review-Fixes.md
+                    item 8 — the default-flags Mistral-7B number is not representative of a
+                    production config, so the regression sweep also measures the tuned one.
   --list            List selected models and exit
   -n, --dry-run     Print commands only
   -h, --help        This help
@@ -124,6 +139,10 @@ while [[ $# -gt 0 ]]; do
     --ngl) NGL="$2"; shift 2 ;;
     --gpu-layers) JUNO_GPU_LAYERS="$2"; shift 2 ;;
     --mmq) JUNO_MMQ="$2"; shift 2 ;;
+    --schedule) JUNO_SCHEDULE="$2"; shift 2 ;;
+    --cache-type-k) JUNO_CACHE_TYPE_K="$2"; shift 2 ;;
+    --cache-type-v) JUNO_CACHE_TYPE_V="$2"; shift 2 ;;
+    --kv-page-size) JUNO_KV_PAGE_SIZE="$2"; shift 2 ;;
     --raw-prompt) RAW_PROMPT=1; shift ;;
     --api-port) API_PORT="$2"; shift 2 ;;
     --out) OUT_ROOT="$2"; shift 2 ;;
@@ -133,6 +152,7 @@ while [[ $# -gt 0 ]]; do
     --no-jfr) USE_JFR=0; shift ;;
     --publish) PUBLISH=1; shift ;;
     --no-publish) PUBLISH=0; shift ;;
+    --no-mistral-tuned-lane) MISTRAL_TUNED_LANE=0; shift ;;
     --list) LIST_ONLY=1; shift ;;
     -n|--dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -305,6 +325,11 @@ host_meta_json() {
   "prompt": "$(json_escape "$PROMPT_TEXT")",
   "raw_prompt": ${RAW_PROMPT},
   "juno_gpu_layers": "$(json_escape "${JUNO_GPU_LAYERS:-}")",
+  "juno_mmq": "$(json_escape "${JUNO_MMQ:-}")",
+  "juno_schedule": "$(json_escape "${JUNO_SCHEDULE:-}")",
+  "juno_cache_type_k": "$(json_escape "${JUNO_CACHE_TYPE_K:-}")",
+  "juno_cache_type_v": "$(json_escape "${JUNO_CACHE_TYPE_V:-}")",
+  "juno_kv_page_size": "$(json_escape "${JUNO_KV_PAGE_SIZE:-}")",
   "juno_use_vector": ${JUNO_USE_VECTOR},
   "juno_jfr": ${USE_JFR},
   "jfr_duration": "$(json_escape "${JFR_DURATION}")",
@@ -535,6 +560,18 @@ run_juno() {
   if [[ -n "${JUNO_PREFILL_BATCH:-}" ]]; then
     java_args+=(--prefill-batch "$JUNO_PREFILL_BATCH")
   fi
+  if [[ -n "$JUNO_SCHEDULE" ]]; then
+    java_args+=(--schedule "$JUNO_SCHEDULE")
+  fi
+  if [[ -n "$JUNO_CACHE_TYPE_K" ]]; then
+    java_args+=(--cache-type-k "$JUNO_CACHE_TYPE_K")
+  fi
+  if [[ -n "$JUNO_CACHE_TYPE_V" ]]; then
+    java_args+=(--cache-type-v "$JUNO_CACHE_TYPE_V")
+  fi
+  if [[ -n "$JUNO_KV_PAGE_SIZE" ]]; then
+    java_args+=(--kv-page-size "$JUNO_KV_PAGE_SIZE")
+  fi
 
   log "juno: ${stem} (backend=$(backend_label) max_tokens=${N_GEN} heap=${heap} vector=${JUNO_USE_VECTOR} jfr=${USE_JFR} port=${API_PORT} gpu_layers=${JUNO_GPU_LAYERS:-default})"
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -725,6 +762,34 @@ EOF
   return 0
 }
 
+run_mistral_tuned_lane() {
+  # Mistral-7B's default-flags (--mmq off, --gpu-layers unset) lane sits at a
+  # ~30-40x deficit vs the --mmq on --gpu-layers auto config on 8 GiB cards
+  # (see docs/infra-plan/PLAN-Infra-Review-Fixes.md item 8) — a config nobody
+  # would actually run in production. Add a second lane so the standing GPU
+  # regression sweep measures both, not just the unrepresentative default.
+  local model_path="$1" stem="$2"
+  local tuned_stem="${stem}-tuned"
+  local saved_mmq="$JUNO_MMQ" saved_gpu_layers="$JUNO_GPU_LAYERS"
+
+  JUNO_MMQ="on"
+  JUNO_GPU_LAYERS="auto"
+  log "=== mistral tuned lane: ${stem} (--mmq on --gpu-layers auto) ==="
+  run_juno "$model_path" "$tuned_stem"
+  local rc=$?
+  JUNO_MMQ="$saved_mmq"
+  JUNO_GPU_LAYERS="$saved_gpu_layers"
+
+  # Reuse the vanilla lane's llama.cpp reference numbers — the reference engine
+  # doesn't read Juno's flags, so re-running llama-bench would just add noise.
+  if [[ -f "${OUT_ROOT}/${stem}-llama-cpp.json" ]]; then
+    cp -a "${OUT_ROOT}/${stem}-llama-cpp.json" "${OUT_ROOT}/${tuned_stem}-llama-cpp.json"
+  fi
+  write_pair_summary "$tuned_stem"
+  STEMS+=("$tuned_stem")
+  return "$rc"
+}
+
 write_pair_summary() {
   local stem="$1"
   local llama_f="${OUT_ROOT}/${stem}-llama-cpp.json"
@@ -898,6 +963,9 @@ for base in "${SELECTED_MODELS[@]}"; do
   run_llama_bench "$model_path" "$stem" || failures=$((failures + 1))
   run_juno "$model_path" "$stem" || failures=$((failures + 1))
   write_pair_summary "$stem"
+  if [[ "$USE_GPU" -eq 1 && "$MISTRAL_TUNED_LANE" -eq 1 && "$base" == mistral-7b* ]]; then
+    run_mistral_tuned_lane "$model_path" "$stem" || failures=$((failures + 1))
+  fi
 done
 
 write_run_index

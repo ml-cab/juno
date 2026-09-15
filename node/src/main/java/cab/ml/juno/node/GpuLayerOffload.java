@@ -94,9 +94,18 @@ public final class GpuLayerOffload {
 		}
 	}
 
-	/** Reads {@link #ENV_PROPERTY}; defaults to {@code all}. */
+	/** Reads {@link #ENV_PROPERTY} (system property, falling back to the env var); defaults to {@code all}. */
 	public static GpuLayerOffload fromEnv() {
-		return parse(System.getProperty(ENV_PROPERTY, ALL));
+		String raw = firstNonBlank(System.getProperty(ENV_PROPERTY), System.getenv(ENV_PROPERTY));
+		return parse(raw == null ? ALL : raw);
+	}
+
+	private static String firstNonBlank(String a, String b) {
+		if (a != null && !a.isBlank())
+			return a;
+		if (b != null && !b.isBlank())
+			return b;
+		return null;
 	}
 
 	public Mode mode() {

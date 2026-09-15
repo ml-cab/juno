@@ -1,0 +1,28 @@
+{
+  "model": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 1487.833001,
+    "token_gen_tps": 74.410803
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 32.45921036861955,
+    "token_gen_tps": 13.425804679080516,
+    "api_token_gen_tps": 11.3556,
+    "latency_ms": 5636,
+    "prompt_tokens": 20,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1
+  },
+  "ratio_juno_over_llamacpp_pp": 0.021816433932304983,
+  "ratio_juno_over_llamacpp_tg": 0.1804281655054914,
+  "result_files": {
+    "llama_cpp_raw": "/tmp/claude-1000/-home-medion-Repo-juno/6249368c-8180-4291-bac7-50959b27ed29/scratchpad/item8-bakeoff/qwen2.5-3b-instruct-q4_k_m-llama-cpp.raw.json",
+    "juno_response": "/tmp/claude-1000/-home-medion-Repo-juno/6249368c-8180-4291-bac7-50959b27ed29/scratchpad/item8-bakeoff/qwen2.5-3b-instruct-q4_k_m-juno-response.json",
+    "llama_result": "/tmp/claude-1000/-home-medion-Repo-juno/6249368c-8180-4291-bac7-50959b27ed29/scratchpad/item8-bakeoff/qwen2.5-3b-instruct-q4_k_m-llama-cpp.json",
+    "juno_result": "/tmp/claude-1000/-home-medion-Repo-juno/6249368c-8180-4291-bac7-50959b27ed29/scratchpad/item8-bakeoff/qwen2.5-3b-instruct-q4_k_m-juno.json",
+    "juno_jfr": "/tmp/claude-1000/-home-medion-Repo-juno/6249368c-8180-4291-bac7-50959b27ed29/scratchpad/item8-bakeoff/qwen2.5-3b-instruct-q4_k_m-juno-jfr.json"
+  }
+}

@@ -295,6 +295,10 @@ set "CACHE_TYPE_K=%JUNO_CACHE_TYPE_K%"
 set "CACHE_TYPE_V=%JUNO_CACHE_TYPE_V%"
 set "SCHEDULE=%JUNO_SCHEDULE%"
 set "KV_PAGE_SIZE=%JUNO_KV_PAGE_SIZE%"
+set "GPU_LAYERS=%JUNO_GPU_LAYERS%"
+set "PARALLEL=%JUNO_PARALLEL%"
+set "BATCH_WINDOW_MS=%JUNO_BATCH_WINDOW_MS%"
+set "PREFILL_BATCH=%JUNO_PREFILL_BATCH%"
 set "GRAMMAR_FILE=%JUNO_GRAMMAR_FILE%"
 set "JSON_SCHEMA_FILE=%JUNO_JSON_SCHEMA_FILE%"
 if not "%USE_GPU_ENV%"=="" (
@@ -332,6 +336,10 @@ if /i "%~1"=="--cache-type-k" ( set "CACHE_TYPE_K=%~2" & shift & shift & goto :l
 if /i "%~1"=="--cache-type-v" ( set "CACHE_TYPE_V=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--schedule" ( set "SCHEDULE=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--kv-page-size" ( set "KV_PAGE_SIZE=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--gpu-layers" ( set "GPU_LAYERS=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--parallel"   ( set "PARALLEL=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--batch-window-ms" ( set "BATCH_WINDOW_MS=%~2" & shift & shift & goto :local_parse )
+if /i "%~1"=="--prefill-batch" ( set "PREFILL_BATCH=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :local_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :local_parse )
@@ -373,6 +381,10 @@ if /i "%~1"=="--help" (
   echo   --cache-type-v f16^|q8_0 V cache type (default f16)
   echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
   echo   --kv-page-size N           page size when continuous (default 16)
+  echo   --gpu-layers N^|all^|auto    GPU-resident transformer layers (default all)
+  echo   --parallel N               static micro-batch size (default 1)
+  echo   --batch-window-ms M        batch window when parallel^>1 (default 50)
+  echo   --prefill-batch N          prefill microbatch chunk size (default 32)
   echo   --verbose / -v
   echo.
   echo   --api-port N         start local REST API server on port N
@@ -451,6 +463,14 @@ set "SCHEDULE_ARG="
 if not "%SCHEDULE%"=="" set "SCHEDULE_ARG=--schedule %SCHEDULE%"
 set "KV_PAGE_SIZE_ARG="
 if not "%KV_PAGE_SIZE%"=="" set "KV_PAGE_SIZE_ARG=--kv-page-size %KV_PAGE_SIZE%"
+set "GPU_LAYERS_ARG="
+if not "%GPU_LAYERS%"=="" set "GPU_LAYERS_ARG=--gpu-layers %GPU_LAYERS%"
+set "PARALLEL_ARG="
+if not "%PARALLEL%"=="" set "PARALLEL_ARG=--parallel %PARALLEL%"
+set "BATCH_WINDOW_ARG="
+if not "%BATCH_WINDOW_MS%"=="" set "BATCH_WINDOW_ARG=--batch-window-ms %BATCH_WINDOW_MS%"
+set "PREFILL_BATCH_ARG="
+if not "%PREFILL_BATCH%"=="" set "PREFILL_BATCH_ARG=--prefill-batch %PREFILL_BATCH%"
 if not "%GRAMMAR_FILE%"=="" if not "%JSON_SCHEMA_FILE%"=="" (
   echo [ERR] --grammar-file and --json-schema-file are mutually exclusive
   exit /b 1
@@ -466,7 +486,7 @@ if not "%HF%"=="" ( set "HF_ARG=--hf %HF%" & echo [INFO] Resolving --hf %HF% (do
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %EMBEDDINGS_ARG% %POOLING_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %GRAMMAR_FILE_ARG% %JSON_SCHEMA_FILE_ARG% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG% %HF_ARG% --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% --nodes %NODES% --local %GPU_FLAG% %JFR_ARG_LOCAL% %API_PORT_ARG% %EMBEDDINGS_ARG% %POOLING_ARG% %PREFILL_MODE_ARG% %MMPROJ_ARG% %MMQ_ARG% %CACHE_TYPE_K_ARG% %CACHE_TYPE_V_ARG% %SCHEDULE_ARG% %KV_PAGE_SIZE_ARG% %GPU_LAYERS_ARG% %PARALLEL_ARG% %BATCH_WINDOW_ARG% %PREFILL_BATCH_ARG% %GRAMMAR_FILE_ARG% %JSON_SCHEMA_FILE_ARG% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================

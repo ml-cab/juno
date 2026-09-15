@@ -17,6 +17,7 @@ package cab.ml.juno.node;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Row-major packed K-quant weight matrix resident on the GPU (Q4_K, Q5_K, Q6_K).
@@ -43,7 +44,7 @@ public final class DeviceQ4KMatrix implements AutoCloseable {
 	private final int cols;
 	private final int quantType;
 	private final long byteLength;
-	private volatile boolean closed;
+	private final AtomicBoolean closed = new AtomicBoolean();
 
 	private DeviceQ4KMatrix(GpuContext ctx, MemorySegment dA, int rows, int cols, int quantType,
 			long byteLength) {
@@ -138,19 +139,18 @@ public final class DeviceQ4KMatrix implements AutoCloseable {
 	}
 
 	MemorySegment devicePointer() {
-		if (closed)
+		if (closed.get())
 			throw new IllegalStateException("DeviceQ4KMatrix already closed");
 		return dA;
 	}
 
 	public boolean isClosed() {
-		return closed;
+		return closed.get();
 	}
 
 	@Override
 	public void close() {
-		if (!closed) {
-			closed = true;
+		if (closed.compareAndSet(false, true)) {
 			GpuBindings.callInt(gpu.gpuSetDevice(), ctx.deviceIndex());
 			gpu.deviceFree(dA);
 		}

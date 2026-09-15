@@ -15,6 +15,8 @@
  */
 package cab.ml.juno.node;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 /**
  * Forward-only Q4_K packed frozen projection for LoRA playback MMQ.
  *
@@ -25,7 +27,7 @@ final class ResidentQ4KWeight implements AutoCloseable {
 
 	private final GpuMatVec gpu;
 	private final DeviceQ4KMatrix q4;
-	private boolean closed;
+	private final AtomicBoolean closed = new AtomicBoolean();
 
 	private ResidentQ4KWeight(GpuMatVec gpu, DeviceQ4KMatrix q4) {
 		this.gpu = gpu;
@@ -56,20 +58,19 @@ final class ResidentQ4KWeight implements AutoCloseable {
 	}
 
 	boolean isClosed() {
-		return closed;
+		return closed.get();
 	}
 
 	@Override
 	public void close() {
-		if (closed)
+		if (!closed.compareAndSet(false, true))
 			return;
-		closed = true;
 		if (q4 != null && !q4.isClosed())
 			q4.close();
 	}
 
 	private void ensureOpen() {
-		if (closed)
+		if (closed.get())
 			throw new IllegalStateException("ResidentQ4KWeight is closed");
 	}
 }

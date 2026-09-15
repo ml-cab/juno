@@ -1868,7 +1868,11 @@ public final class ConsoleMain {
 		Path jfrFile = Path.of(jfrFileName);
 
 		Duration duration = parseJfrDuration(jfrDuration);
-		Configuration cfg = Configuration.getConfiguration("profile");
+		// "default", not "profile": profile's aggressive native-thread stack sampling both
+		// perturbs the throughput numbers this recording is used to measure and was the
+		// subsystem behind a JfrSamplerThread ShouldNotReachHere() crash observed under
+		// --gpu --mmq on --lora-play (JDK JFR bug suspending a thread mid Panama-FFI downcall).
+		Configuration cfg = Configuration.getConfiguration("default");
 		Recording rec = new Recording(cfg);
 		rec.enable("juno.GrammarConstrained");
 		rec.setDuration(duration);
@@ -1956,7 +1960,8 @@ public final class ConsoleMain {
 
 		// ── Coordinator recording ─────────────────────────────────────────────
 		Duration duration = parseJfrDuration(jfrDuration);
-		Configuration cfg = Configuration.getConfiguration("profile");
+		// "default" — see startProgrammaticJfr()'s comment on why "profile" is avoided here.
+		Configuration cfg = Configuration.getConfiguration("default");
 		Recording rec = new Recording(cfg);
 		rec.setDuration(duration);
 		rec.setDestination(coordinatorJfrFile);

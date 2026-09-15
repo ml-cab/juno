@@ -46,8 +46,91 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260915T042421Z`](20260915T042421Z/) | GPU Tier 17, `--raw-prompt --n-prompt 128` (token-count-matched) | JFR pp/tg | [INDEX](20260915T042421Z/INDEX.md) |
 | [`20260915T043143Z`](20260915T043143Z/) | GPU Tier 17, `JUNO_PREFILL_BATCH=512 --raw-prompt --n-prompt 512` | JFR pp/tg | [INDEX](20260915T043143Z/INDEX.md) |
 | [`20260915T190157Z-lora`](20260915T190157Z-lora/) | GPU LoRA train-qa + playback (post Tier 17, expected flat) | train ms / playback tps | [INDEX](20260915T190157Z-lora/INDEX.md) |
+| [`20260915T223032Z`](20260915T223032Z/) | GPU default 4-model sweep + standing Mistral-7B tuned lane (`--mmq on --gpu-layers auto`, auto-added by `compare-llama-cpp.sh` whenever mistral-7b is selected on GPU) | JFR pp/tg | [INDEX](20260915T223032Z/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
+
+## `historyArr` fix measurement — 2026-09-15 (CPU, `compare-schedule.sh`)
+
+`docs/infra-plan/PLAN-Infra-Review-Fixes.md` item 4 replaced
+`ContinuousBatchEngine`/`GenerationLoop`'s per-decode-step
+`generated.stream().mapToInt(Integer::intValue).toArray()` (boxed `List<Integer>` traversal,
+repeated every step for every active slot) with an incrementally-appended `GrowableIntArray`.
+Measured a genuine before/after rather than assuming a win: `git stash` isolated exactly the 3
+files this fix touches (`ContinuousBatchEngine.java`, `GenerationLoop.java`,
+`GrowableIntArray.java`), rebuilt, ran `compare-schedule.sh --cpu --mode tps --sessions 8
+--max-tokens 64` against the pre-fix jar, restored the fix, rebuilt, ran the identical command
+again.
+
+| Schedule | Before (agg tg t/s) | After (agg tg t/s) | Delta |
+|---|---:|---:|---:|
+| static | 3.7309 | 3.6607 | -1.9% |
+| continuous | 3.6863 | 3.6742 | -0.3% |
+
+**No measurable win at this scale.** Both deltas are smaller than the run-to-run noise this same
+investigation's [harness noise section](#harness-noise-investigation--2026-09-15) above found on
+this host (unpinned GPU clocks, `schedutil` CPU governor, background load ~4-5) — i.e. this is
+consistent with pure measurement noise, not a real regression from the fix. The fix is still
+correct and worth keeping (eliminates real per-step boxing/unboxing and stream-pipeline overhead
+verified via `mvn test`), but at 64 generated tokens × 8 concurrent sessions on a 1.1B model, the
+O(n) history-array rebuild simply isn't large enough to dominate anything measurable. A longer
+generation length or higher concurrency would be needed to see whether the reconstruction cost
+actually compounds the way the original hypothesis suggested — not tested here, reported honestly
+rather than claimed.
+
+## Harness noise investigation — 2026-09-15
+
+`docs/infra-plan/PLAN-Infra-Review-Fixes.md` item 7 flagged a 9x swing in the llama.cpp reference
+tg number for the identical tinyllama Q4_K_M CPU config across two sessions ~13 hours apart, on a
+run where nothing Juno-side changed — despite `compare-llama-cpp.sh` already averaging 3 reps
+internally (`llama-bench -r 3`). Checked this host directly rather than guessing at causes:
+
+- **GPU persistence mode is `Disabled`** (`nvidia-smi -q -d PERFORMANCE`). Without persistence
+  mode, the NVIDIA driver can let the GPU drop to a low-power state (observed: `pstate P2`,
+  SM clock 1607 MHz vs. a 1911 MHz max) between invocations, so a freshly-started process pays a
+  clock ramp-up cost the previous run's warm GPU didn't — a real, well-documented source of
+  cross-run GPU variance, and one `nvidia-smi -pm 1` (as root) would eliminate.
+- **3614s of accumulated SW power-capping time** (`Clocks Event Reasons Counters` → `SW Power
+  Capping`), not active at the moment checked but a sign the card throttles under sustained load
+  on this box — plausible additional variance for longer runs.
+- **CPU governor is `schedutil`** (dynamic frequency scaling), not a fixed/performance governor —
+  affects the CPU-side llama.cpp reference number specifically, which is exactly the number that
+  swung 9x.
+- **Background load average ~4-5** on a 12-thread host at the time of this check — consistent
+  with the review's own characterization of this as "a shared, unisolated dev box," not an
+  idle benchmark rig.
+
+None of this proves which factor caused the specific 9x swing in sessions 79/80 (that host state
+wasn't captured at the time), but all four are real, verified conditions on this box today that
+would independently degrade repeatability. Recommended before trusting tight ratio gates further:
+`nvidia-smi -pm 1` to enable persistence mode, pin the CPU governor to `performance` for benchmark
+runs, and check `uptime`/`nvidia-smi` for contending load before publishing a bake-off intended as
+a baseline. `compare-lora.sh --reps N` (added alongside this investigation, see item 7) now takes
+the median across N repeated train+playback cycles for exactly this reason — a single-shot outlier
+no longer becomes the published number.
+
+## Standing Mistral-7B tuned lane — `20260915T223032Z`
+
+`compare-llama-cpp.sh --gpu` now automatically adds a second Mistral-7B row (`*-tuned`,
+`--mmq on --gpu-layers auto`) whenever mistral-7b is among the selected GPU models — alongside
+the existing vanilla-default row, not instead of it (`--no-mistral-tuned-lane` opts out). See
+`docs/infra-plan/PLAN-Infra-Review-Fixes.md` item 8: on this 8 GiB card, Mistral-7B's
+default-flags lane (`--mmq off`, `--gpu-layers` unset) has consistently measured worse than
+Juno's own CPU numbers for smaller models across many prior sessions, while the tuned
+configuration nobody was actually exercising in the standing regression gate is ~30-40x faster.
+This run (`n_prompt=128`, `n_gen=64`, `reps=3`, full default 4-model set) makes both lanes
+visible in the same sweep going forward:
+
+| Lane | Juno tg (JFR) | Juno/llama.cpp tg ratio |
+|---|---:|---:|
+| default (`--mmq off`, `--gpu-layers` unset) | 0.479 t/s | 0.0136× |
+| tuned (`--mmq on --gpu-layers auto`) | 15.65 t/s | 0.444× |
+
+Tuned/default ≈ **32.7×**, consistent with the session-78 finding this lane was added to track.
+The tuned ratio clears the P0 mistral-7b gate (≥0.15×) with real margin; the default lane remains
+representative of what a user gets who doesn't know `--mmq`/`--gpu-layers` exist, which is the
+gap this standing lane exists to keep visible rather than let the sweep quietly measure only the
+unrepresentative default going forward.
 
 ## GPU batched-prefill GEMM bake-off — Tier 17
 

@@ -37,6 +37,7 @@ PUBLISH=1
 BASELINE_REF=""
 CURRENT_REF=""
 REGRESSION_RATIO="${LORA_PERF_REGRESSION_RATIO:-1.25}"
+REPS="${LORA_PERF_REPS:-1}"
 DRY_RUN=0
 SKIP_BUILD=0
 
@@ -58,6 +59,11 @@ Options:
   --current REF         Git ref for current run (default: HEAD)
   --regression-ratio F  Fail when current/baseline > F (default: ${REGRESSION_RATIO})
   --skip-build          Skip mvn package (use existing jar)
+  --reps N              Repeat train+playback N times per ref, report the median
+                        (default: ${REPS}; env LORA_PERF_REPS). Guards against the kind
+                        of single-shot outlier that undermines the P0/P1 ratio gates —
+                        see docs/infra-plan/PLAN-Infra-Review-Fixes.md item 7. Each rep's
+                        raw JSON is kept alongside the aggregated one for inspection.
   --no-publish          Skip docs/perf-compare copy
   -n, --dry-run         Print planned steps only
   -h, --help            This help
@@ -75,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --baseline) BASELINE_REF="$2"; shift 2 ;;
     --current) CURRENT_REF="$2"; shift 2 ;;
     --regression-ratio) REGRESSION_RATIO="$2"; shift 2 ;;
+    --reps) REPS="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --no-publish) PUBLISH=0; shift ;;
     -n|--dry-run) DRY_RUN=1; shift ;;
@@ -303,7 +310,7 @@ write_bench_json() {
     }' >"$out_json"
 }
 
-run_bench_at() {
+run_bench_rep() {
   local workdir="$1"
   local ref="$2"
   local out_json="$3"
@@ -366,6 +373,69 @@ run_bench_at() {
     jq -e '.status == "success"' "$out_json" >/dev/null \
       || die "benchmark failed for ref=${ref} — see ${logf} and ${out_json}"
   fi
+}
+
+# Median across N rep JSONs (same schema as write_bench_json's output) for the
+# headline train/playback numbers. Median, not mean, so a single-shot outlier —
+# the kind that swung this project's own llama.cpp reference number 9x in one
+# session (docs/infra-plan/PLAN-Infra-Review-Fixes.md item 7) — doesn't quietly
+# skew the reported number the way an average would.
+aggregate_reps_json() {
+  local out_json="$1"
+  shift
+  local -a rep_jsons=("$@")
+
+  jq -s --argjson reps "${#rep_jsons[@]}" '
+    def median: sort as $s | ($s | length) as $n |
+      if $n == 0 then null
+      elif ($n % 2) == 1 then $s[($n - 1) / 2]
+      else (($s[$n / 2 - 1] + $s[$n / 2]) / 2)
+      end;
+    (map(.train.total_ms) | map(select(. != null)) | median) as $train_total_ms |
+    (map(.train.ms_per_pass) | map(select(. != null)) | median) as $train_ms_per_pass |
+    (map(.playback.tps) | map(select(. != null)) | median) as $playback_tps |
+    (map(.playback.tps_jfr) | map(select(. != null)) | median) as $playback_tps_jfr |
+    (map(.playback.latency_ms) | map(select(. != null)) | median) as $playback_latency_ms |
+    (map(.status) | all(. == "success")) as $all_ok |
+    (map(.status)) as $rep_status |
+    (.[0] | .train.total_ms = $train_total_ms
+          | .train.ms_per_pass = $train_ms_per_pass
+          | .playback.tps = $playback_tps
+          | .playback.tps_jfr = $playback_tps_jfr
+          | .playback.latency_ms = $playback_latency_ms
+          | .playback.wall_ms = $playback_latency_ms
+          | .reps = $reps
+          | .rep_status = $rep_status
+          | .status = (if $all_ok then "success" else "recall_failed" end))
+  ' "${rep_jsons[@]}" >"$out_json"
+}
+
+run_bench_at() {
+  local workdir="$1"
+  local ref="$2"
+  local out_json="$3"
+
+  if (( REPS <= 1 )); then
+    run_bench_rep "$workdir" "$ref" "$out_json"
+    return 0
+  fi
+
+  local -a rep_jsons=()
+  local i rep_json
+  for ((i = 1; i <= REPS; i++)); do
+    rep_json="${out_json%.json}-rep${i}.json"
+    log "rep ${i}/${REPS} for ref=${ref}"
+    run_bench_rep "$workdir" "$ref" "$rep_json"
+    rep_jsons+=("$rep_json")
+  done
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log "dry-run: would aggregate ${#rep_jsons[@]} reps into ${out_json}"
+    return 0
+  fi
+
+  aggregate_reps_json "$out_json" "${rep_jsons[@]}"
+  log "aggregated ${REPS} reps (median) -> ${out_json}"
 }
 
 stage_worktree() {

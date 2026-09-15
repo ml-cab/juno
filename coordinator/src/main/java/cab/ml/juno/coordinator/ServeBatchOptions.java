@@ -82,7 +82,9 @@ public final class ServeBatchOptions {
 	}
 
 	private static String env(String key) {
-		String v = System.getenv(key);
+		String v = System.getProperty(key);
+		if (v == null || v.isBlank())
+			v = System.getenv(key);
 		return (v == null || v.isBlank()) ? null : v.strip();
 	}
 
