@@ -20,7 +20,7 @@ See `[PLAN-Infra-PERF-ANALYSIS.md](PLAN-Infra-PERF-ANALYSIS.md)` for full number
 
 ## Execution rules
 
-These rules apply to every Infra tier (Tiers 1–16, including Tier 13 phases) and to **parallel tracks** when they touch inference / MatVec / KV / residency. Rules **§1–§6** are mandatory for implementation, tests, and bake-offs.
+These rules apply to every Infra tier (Tiers 1–17, including Tier 13 phases) and to **parallel tracks** when they touch inference / MatVec / KV / residency. Rules **§1–§6** are mandatory for implementation, tests, and bake-offs.
 
 ### 1. One tier at a time
 
@@ -205,7 +205,7 @@ Follow this table — not tier number order (1, 2, 3, …).
 
 | Phase                       | Steps                                                                                                                             | Tiers                   | Exit gate                                                                                                                                |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **P0** — kernel path        | 1. Tier 13 Phase A ✓ → 2. **Tier 5 → Tier 1** → 3. **Tier 8** → 4. **Vector SIMD track** (P0 gate input) → 5. **Tier 13 Phase B** | 13A, 5, 1, 8, SIMD, 13B | Phi-3.5 Q4_K_M GPU tg ≥ **0.5×** llama (currently **0.33×** with `--mmq on`); mistral-7b on 8 GiB ≥ **0.15×** with Tier 5 `auto` (**0.43×** — **met**) |
+| **P0** — kernel path        | 1. Tier 13 Phase A ✓ → 2. **Tier 5 → Tier 1** → 3. **Tier 8** → 4. **Vector SIMD track** (P0 gate input) → 5. **Tier 13 Phase B** → 6. **Tier 17** (GPU batched-prefill GEMM) | 13A, 5, 1, 8, SIMD, 13B, 17 | Phi-3.5 Q4_K_M GPU tg ≥ **0.5×** llama (currently **0.33×** with `--mmq on`); mistral-7b on 8 GiB ≥ **0.15×** with Tier 5 `auto` (**0.43×** — **met**) |
 | **P1** — memory + scheduler | 1. **Tier 6** → 2. **Tier 14** → 3. **Tier 15** → 4. **Tier 16**                                                                  | 6, 14, 15, 16           | Gather-tax ≤ ~15% at batch 8 / ctx 8k; continuous SSE beats static on local/single-shard                                                 |
 | **P2** — API / product      | **Tier 2 → 3 → 4** (after Tier 1 feature complete)                                                                                | 2, 3, 4                 | ≥95% valid JSON (Tier 3 **met**); tools round-trip (Tier 4 **met**)                                                                      |
 | **P3** — nice-to-have       | **Tier 7**, **10**, **11** (when free; do not block P0/P1)                                                                        | 7, 10, 11               | Per-tier exit gates                                                                                                                      |
@@ -220,9 +220,10 @@ Follow this table — not tier number order (1, 2, 3, …).
 3. **Tier 8** — prefill microbatching, JFR prefill instrumentation, compare-script prompt-token parity (`--raw-prompt`). **Feature complete** (CPU bake-off published; GPU prefill re-run still open in `docs/performance.md`).
 4. **Vector SIMD track** (parallel track; also P0 step 4) — not a bake-off-only checkbox. Own correctness + publish `--vector 0` vs `--vector 1` under `[docs/perf-compare/](../perf-compare/README.md)`; see [Parallel tracks → Vector SIMD](#vector-simd-cpu-kernels). Must not regress vision (`compare-vision.sh`).
 5. **Tier 13 Phase B** — fused quant matmul / batched decode GEMV behind a flag. **Feature complete**; tile Q8_1/`dp4a` kernel **1.51×** vs `--mmq off` on Phi-3.5 (speed exit **met**). P0 Phi-3.5 0.5× still **open**. Prefer after SIMD track bake-off so CPU and GPU MatVec stories stay separable in JFR.
+6. **Tier 17** — GPU batched-prefill GEMM fix (`CudaMatVec.sgemm` for `DeviceHalfMatrix`/`DeviceQ4KMatrix` large batches). Closes Tier 8's open "GPU prefill re-run" item. **Pending.**
 
 ```
-P0:  13A ✓  →  5†  →  1†  →  8†  →  Vector SIMD†  →  13B†    GATE: 0.5× tg open (Phi-3.5 **0.33×**); mistral 0.15× **met** († feature complete; 13B tile-kernel speed exit met)
+P0:  13A ✓  →  5†  →  1†  →  8†  →  Vector SIMD†  →  13B†  →  17    GATE: 0.5× tg open (Phi-3.5 **0.33×**); mistral 0.15× **met** († feature complete; 13B tile-kernel speed exit met)
 P1:              6  →  14  →  15  →  16
 P2:  (after Tier 1 feature complete)  2  →  3  →  4
 P3:  (when free)  7, 10, 11
@@ -254,6 +255,7 @@ Parallel (non-blocking): Vision I2T · LoRA · model E2E
 | 14   | `PLAN-Infra-Tier14.md` | Block KV allocator                      | P1 step 2                | **Feature complete** — dual KV; gather-tax **PASS** (`[20260910T214300Z-gather-tax.md](../perf-compare/20260910T214300Z-gather-tax.md)`); bake-off `[20260910T222026Z](../perf-compare/20260910T222026Z/)` + LoRA `[20260910T221031Z-lora](../perf-compare/20260910T221031Z-lora/)`; next = Tier 15                         |
 | 15   | `PLAN-Infra-Tier15.md` | Continuous batching scheduler           | P1 step 3                | **Feature complete** — bake-off `[20260911T194430Z-continuous](../perf-compare/20260911T194430Z-continuous/)`; §2 `[20260911T195008Z](../perf-compare/20260911T195008Z/)` + LoRA `[20260911T195711Z-lora](../perf-compare/20260911T195711Z-lora/)`; P1 SSE-beats-static gate **unmet** on synchronized load; next = Tier 16 |
 | 16   | `PLAN-Infra-Tier16.md` | Mixed chunked prefill + decode          | P1 step 4                | **Feature complete** — bake-off [`20260911T204721Z-mixed-prefill`](../perf-compare/20260911T204721Z-mixed-prefill/); short TTFT **0.327×** admit-time; §2 [`20260911T204900Z`](../perf-compare/20260911T204900Z/) + LoRA [`20260911T205447Z-lora`](../perf-compare/20260911T205447Z-lora/) |
+| 17   | `PLAN-Infra-Tier17.md` | GPU batched-prefill GEMM (CUDA)         | P0 step 6                | Pending — closes Tier 8's open "GPU prefill re-run" item; `CudaMatVec.sgemm` real batched GEMM for `DeviceHalfMatrix`/`DeviceQ4KMatrix` large batches |
 
 
 Read and follow `models/CLAUDE.md` before implementing any tier. **Only one Infra tier may be in flight at a time** (see Execution rules). Each tier is test-first and must reach **feature complete** (exit checklist + published `[docs/perf-compare/](../perf-compare/README.md)` bake-off + **§6 interaction matrix**) before the next dependent Infra tier begins. Phase **gate met** is separate and may lag.
