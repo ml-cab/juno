@@ -79,6 +79,10 @@ public final class CudaMatVec implements GpuMatVec {
     private static final ThreadLocal<Fp16Scratch> FP16_SCRATCH =
         ThreadLocal.withInitial(Fp16Scratch::new);
 
+    // ── Per-thread device scratch (Q4_K/Q5_K/Q6_K dequant-to-FP16 batched path) ──
+    private static final ThreadLocal<Q4KDequantScratch> Q4K_DEQUANT_SCRATCH =
+        ThreadLocal.withInitial(Q4KDequantScratch::new);
+
     // ── Per-thread CUDA stream ────────────────────────────────────────────────
     private static final ThreadLocal<MemorySegment> CUDA_STREAM =
         ThreadLocal.withInitial(() -> null);
@@ -835,6 +839,98 @@ public final class CudaMatVec implements GpuMatVec {
         if (fp16GemmOps == null)
             fp16GemmOps = new CudaFp16GemmOps(ctx);
         return fp16GemmOps;
+    }
+
+    /**
+     * Batched Q4_K/Q5_K/Q6_K GEMM: {@code batch <= HALF_SGEMM_BATCH_MAX} stays serial
+     * {@link #sgemv(DeviceQ4KMatrix, float[])} (dequant has fixed per-call overhead not
+     * worth paying for small batches); {@code batch > HALF_SGEMM_BATCH_MAX} dequantizes
+     * the packed weights once into a device FP16 scratch buffer ({@link Q4KDequantScratch})
+     * and reuses the {@link CudaFp16GemmOps} tiled-GEMM path from
+     * {@link #sgemmHalfBatchedGemm}. Does not touch the single-token
+     * {@link #sgemv(DeviceQ4KMatrix, float[])} decode path.
+     */
+    @Override
+    public float[][] sgemm(DeviceQ4KMatrix A, float[][] X) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        if (A.isClosed()) throw new IllegalStateException("DeviceQ4KMatrix is closed");
+        if (X.length <= HALF_SGEMM_BATCH_MAX) {
+            float[][] Y = new float[X.length][];
+            for (int b = 0; b < X.length; b++)
+                Y[b] = sgemv(A, X[b]);
+            return Y;
+        }
+        return sgemmQ4KBatchedGemm(A, X);
+    }
+
+    private float[][] sgemmQ4KBatchedGemm(DeviceQ4KMatrix A, float[][] X) {
+        int batch = X.length;
+        int rows = A.rows();
+        int cols = A.cols();
+        for (int b = 0; b < batch; b++) {
+            if (X[b].length != cols)
+                throw new IllegalArgumentException("X[" + b + "].length != cols");
+        }
+        Q4KMmqKernel kernel = Q4KMmqKernel.tryLoad();
+        if (kernel == null)
+            throw new IllegalStateException("Q4_K MMQ kernel is not loaded");
+
+        MatVecEvent evt = new MatVecEvent();
+        evt.begin();
+
+        long bytesXh = (long) cols * batch * Short.BYTES;
+        long bytesY = (long) rows * batch * Float.BYTES;
+        Fp16Scratch scratch = FP16_SCRATCH.get();
+        Q4KDequantScratch dequantScratch = Q4K_DEQUANT_SCRATCH.get();
+
+        try (Arena callArena = Arena.ofConfined()) {
+            synchronized (ctx.cublasSerializationLock()) {
+                MemorySegment stream = ensureStream();
+                bindStream(stream);
+                try {
+                    ensureFp16Scratch(scratch, bytesXh, bytesY);
+                    MemorySegment dW = dequantScratch.ensure(cuda, ctx.deviceIndex(), rows, cols);
+                    kernel.launchDequant(A, dW, stream);
+
+                    MemorySegment stagingXh = callArena.allocate(bytesXh);
+                    for (int b = 0; b < batch; b++) {
+                        int base = b * cols;
+                        for (int j = 0; j < cols; j++)
+                            stagingXh.setAtIndex(JAVA_SHORT, base + j, Float.floatToFloat16(X[b][j]));
+                    }
+
+                    CudaBindings.check(
+                            CudaBindings.callInt(cuda.cudaMemcpyAsync,
+                                    scratch.dXh, stagingXh, bytesXh, CudaBindings.H2D, stream),
+                            "cudaMemcpyAsync(xh H2D q4k-batched-gemm)");
+
+                    fp16GemmOps().gemmHalf(dW, scratch.dXh, scratch.dY, rows, cols, batch);
+
+                    MemorySegment stagingY = callArena.allocate(bytesY);
+                    CudaBindings.check(
+                            CudaBindings.callInt(cuda.cudaMemcpyAsync,
+                                    stagingY, scratch.dY, bytesY, CudaBindings.D2H, stream),
+                            "cudaMemcpyAsync(y D2H q4k-batched-gemm)");
+                    CudaBindings.check(
+                            CudaBindings.callInt(cuda.cudaStreamSynchronize, stream),
+                            "cudaStreamSynchronize");
+
+                    float[][] Y = new float[batch][];
+                    for (int b = 0; b < batch; b++) {
+                        Y[b] = new float[rows];
+                        MemorySegment.copy(stagingY, JAVA_FLOAT, (long) b * rows * Float.BYTES, Y[b], 0, rows);
+                    }
+                    return Y;
+                } finally {
+                    unbindStream();
+                }
+            }
+        } finally {
+            evt.backend(MatVecBackend.CUDA_RESIDENT_Q4K_GEMM);
+            evt.rows = rows;
+            evt.cols = cols;
+            evt.commit();
+        }
     }
 
     private GpuBlasOps blasOps() {

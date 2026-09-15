@@ -47,11 +47,16 @@ final class Q4KMmqKernel {
 	private static final String ENTRY_Q4K = "q4k_gemv";
 	private static final String ENTRY_Q5K = "q5k_gemv";
 	private static final String ENTRY_Q6K = "q6k_gemv";
+	private static final String ENTRY_Q4K_DEQUANT = "q4k_dequant_to_fp16";
+	private static final String ENTRY_Q5K_DEQUANT = "q5k_dequant_to_fp16";
+	private static final String ENTRY_Q6K_DEQUANT = "q6k_dequant_to_fp16";
 	private static final int WARPS = 4;
 	private static final int BLOCK_THREADS = WARPS * 32;
 	static final int ROWS_PER_BLOCK = 1;
 	static final int Q8_1_BLOCK_ELEMS = 32;
 	static final int Q8_1_BLOCK_BYTES = 36;
+	/** Elements per K-quant super-block; also the dequant kernel's block thread count. */
+	static final int QK_K = 256;
 
 	private static final AtomicReference<Q4KMmqKernel> INSTANCE = new AtomicReference<>();
 
@@ -60,15 +65,22 @@ final class Q4KMmqKernel {
 	private final MemorySegment fnQ4K;       // CUfunction per quant type
 	private final MemorySegment fnQ5K;
 	private final MemorySegment fnQ6K;
+	private final MemorySegment fnQ4Dequant; // dequant-to-FP16 CUfunction per quant type
+	private final MemorySegment fnQ5Dequant;
+	private final MemorySegment fnQ6Dequant;
 	private final Arena moduleArena;         // keeps module/function slots alive
 
 	private Q4KMmqKernel(MemorySegment module, MemorySegment fnQ8, MemorySegment fnQ4K,
-			MemorySegment fnQ5K, MemorySegment fnQ6K, Arena moduleArena) {
+			MemorySegment fnQ5K, MemorySegment fnQ6K, MemorySegment fnQ4Dequant,
+			MemorySegment fnQ5Dequant, MemorySegment fnQ6Dequant, Arena moduleArena) {
 		this.module = module;
 		this.fnQ8 = fnQ8;
 		this.fnQ4K = fnQ4K;
 		this.fnQ5K = fnQ5K;
 		this.fnQ6K = fnQ6K;
+		this.fnQ4Dequant = fnQ4Dequant;
+		this.fnQ5Dequant = fnQ5Dequant;
+		this.fnQ6Dequant = fnQ6Dequant;
 		this.moduleArena = moduleArena;
 	}
 
@@ -132,7 +144,11 @@ final class Q4KMmqKernel {
 		MemorySegment fnQ4K = getFunction(drv, arena, module, ENTRY_Q4K);
 		MemorySegment fnQ5K = getFunction(drv, arena, module, ENTRY_Q5K);
 		MemorySegment fnQ6K = getFunction(drv, arena, module, ENTRY_Q6K);
-		return new Q4KMmqKernel(module, fnQ8, fnQ4K, fnQ5K, fnQ6K, arena);
+		MemorySegment fnQ4Dequant = getFunction(drv, arena, module, ENTRY_Q4K_DEQUANT);
+		MemorySegment fnQ5Dequant = getFunction(drv, arena, module, ENTRY_Q5K_DEQUANT);
+		MemorySegment fnQ6Dequant = getFunction(drv, arena, module, ENTRY_Q6K_DEQUANT);
+		return new Q4KMmqKernel(module, fnQ8, fnQ4K, fnQ5K, fnQ6K,
+				fnQ4Dequant, fnQ5Dequant, fnQ6Dequant, arena);
 	}
 
 	private static MemorySegment getFunction(CudaDriverBindings drv, Arena arena, MemorySegment module,
@@ -159,6 +175,15 @@ final class Q4KMmqKernel {
 			case QuantizationLayout.TYPE_Q5_K -> fnQ5K;
 			case QuantizationLayout.TYPE_Q6_K -> fnQ6K;
 			default -> throw new IllegalArgumentException("No fused GEMV kernel for GGML type " + quantType);
+		};
+	}
+
+	private MemorySegment dequantFunctionFor(int quantType) {
+		return switch (quantType) {
+			case QuantizationLayout.TYPE_Q4_K -> fnQ4Dequant;
+			case QuantizationLayout.TYPE_Q5_K -> fnQ5Dequant;
+			case QuantizationLayout.TYPE_Q6_K -> fnQ6Dequant;
+			default -> throw new IllegalArgumentException("No dequant kernel for GGML type " + quantType);
 		};
 	}
 
@@ -256,6 +281,53 @@ final class Q4KMmqKernel {
 							params,
 							MemorySegment.NULL),
 					"cuLaunchKernel(kquant_gemv type=" + quantType + ")");
+		}
+	}
+
+	/**
+	 * Launches the elementwise dequant-to-FP16 kernel for {@code A}: writes a
+	 * row-major FP16 buffer at {@code dOutFp16} (sized {@code rows * cols * 2}
+	 * bytes), independent of any activation vector. Feeds the batched-prefill
+	 * tiled GEMM path ({@code CudaFp16GemmOps}) for {@code DeviceQ4KMatrix}.
+	 */
+	void launchDequant(DeviceQ4KMatrix A, MemorySegment dOutFp16, MemorySegment stream) {
+		Objects.requireNonNull(A, "A");
+		Objects.requireNonNull(dOutFp16, "dOutFp16");
+		int rows = A.rows(), cols = A.cols();
+		int quantType = A.quantType();
+		QuantizationLayout.require(quantType).validateMatrix(rows, cols);
+		MemorySegment function = dequantFunctionFor(quantType);
+
+		CudaDriverBindings drv = CudaDriverBindings.instance();
+		int nb = cols / QK_K;
+
+		try (Arena arena = Arena.ofConfined()) {
+			MemorySegment pA = arena.allocate(ADDRESS);
+			MemorySegment pOut = arena.allocate(ADDRESS);
+			MemorySegment pRows = arena.allocate(JAVA_INT);
+			MemorySegment pCols = arena.allocate(JAVA_INT);
+			pA.set(ADDRESS, 0, A.devicePointer());
+			pOut.set(ADDRESS, 0, dOutFp16);
+			pRows.set(JAVA_INT, 0, rows);
+			pCols.set(JAVA_INT, 0, cols);
+
+			MemorySegment params = arena.allocate(ADDRESS, 4);
+			params.setAtIndex(ADDRESS, 0, pA);
+			params.setAtIndex(ADDRESS, 1, pOut);
+			params.setAtIndex(ADDRESS, 2, pRows);
+			params.setAtIndex(ADDRESS, 3, pCols);
+
+			MemorySegment streamOrNull = stream == null ? MemorySegment.NULL : stream;
+			CudaDriverBindings.check(
+					CudaDriverBindings.callInt(drv.cuLaunchKernel,
+							function,
+							rows, nb, 1,
+							QK_K, 1, 1,
+							0,
+							streamOrNull,
+							params,
+							MemorySegment.NULL),
+					"cuLaunchKernel(kquant_dequant_to_fp16 type=" + quantType + ")");
 		}
 	}
 }

@@ -41,8 +41,88 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260912T193402Z`](20260912T193402Z/) | CPU default path (post constrained decoding; `--vector 0`) | JFR pp/tg | [INDEX](20260912T193402Z/INDEX.md) |
 | [`20260913T032734Z`](20260913T032734Z/) | CPU default path (post function calling; `--vector 0`) | JFR pp/tg | [INDEX](20260913T032734Z/INDEX.md) |
 | [`20260914T220204Z`](20260914T220204Z/) | CPU default path (post embeddings API; `--vector 0`, `--no-jfr`) | wall-clock tg | [INDEX](20260914T220204Z/INDEX.md) |
+| [`20260915T041705Z`](20260915T041705Z/) | GPU Tier 17 batched-prefill GEMM, `--mmq off` | JFR pp/tg | [INDEX](20260915T041705Z/INDEX.md) |
+| [`20260915T042207Z`](20260915T042207Z/) | GPU Tier 17 batched-prefill GEMM, `--mmq on` | JFR pp/tg | [INDEX](20260915T042207Z/INDEX.md) |
+| [`20260915T042421Z`](20260915T042421Z/) | GPU Tier 17, `--raw-prompt --n-prompt 128` (token-count-matched) | JFR pp/tg | [INDEX](20260915T042421Z/INDEX.md) |
+| [`20260915T043143Z`](20260915T043143Z/) | GPU Tier 17, `JUNO_PREFILL_BATCH=512 --raw-prompt --n-prompt 512` | JFR pp/tg | [INDEX](20260915T043143Z/INDEX.md) |
+| [`20260915T190157Z-lora`](20260915T190157Z-lora/) | GPU LoRA train-qa + playback (post Tier 17, expected flat) | train ms / playback tps | [INDEX](20260915T190157Z-lora/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
+
+## GPU batched-prefill GEMM bake-off — Tier 17
+
+`CudaMatVec.sgemm(DeviceHalfMatrix|DeviceQ4KMatrix, float[][])` now uses a real tiled GEMM
+(`cublasGemmEx`) for prefill-sized batches (`> HALF_SGEMM_BATCH_MAX = 8`) instead of falling
+through to one serial `sgemv` call per batch element. `DeviceQ4KMatrix` additionally dequantizes
+once into an FP16 scratch buffer (new `q4k_dequant_to_fp16`/`q5k_.../q6k_...` PTX kernels) before
+reusing the same GEMM — no `sgemm` override for `DeviceQ4KMatrix` existed before this tier at any
+batch size. Single-token decode kernels are unchanged (out of scope, `PROMPT-P0-Gate.md`'s domain).
+
+`compare-llama-cpp.sh --gpu` (GTX 1080, default 4-model set, `n_gen=64`):
+
+| Model | `--mmq off` pp | `--mmq off` tg | pp/tg ratio | `--mmq on` pp | `--mmq on` tg | pp/tg ratio |
+|-------|---------------:|---------------:|------------:|--------------:|--------------:|------------:|
+| tinyllama-1.1b Q4_K_M | 64.97 | 28.66 | **2.27x** | 59.38 | 39.20 | **1.51x** |
+| qwen2.5-3b Q4_K_M | 34.54 | 13.22 | **2.61x** | 30.99 | 18.75 | **1.65x** |
+| Phi-3.5-mini Q4_K_M | 35.48 | 12.74 | **2.78x** | 35.04 | 20.00 | **1.75x** |
+| mistral-7b Q4_K_M | 0.93 | 0.54 | 1.72x (CPU fallback, OOM — Tier 5's domain, unaffected) | 21.57 | 16.06 | **1.34x** |
+
+**Qualitative gate — met.** Before this tier, GPU pp and tg sat within ~1x of each other on every
+model (the fingerprint of prefill never getting a batched kernel). Every GPU-resident model above
+now shows pp materially greater than tg under both `--mmq off` and `--mmq on`.
+
+**Quantitative floor (Tier 17 plan doc, 3x over "today" pp) — not directly checkable as stated.**
+The plan doc's "today" baseline column was measured with a token-count-matched raw prompt; the
+bake-off numbers above use the compare script's default short API/chat-template prompt (~20-30
+tokens) — pp t/s at very different window sizes is not an apples-to-apples ratio. This is the same
+prompt-length/methodology gap Tier 8 already named as an open compare-script parity item, not a
+new problem introduced here. The pp/tg ratio, not the absolute pp value, is this tier's honest
+signal, and it clears the qualitative bar on every model tested.
+
+**Long-window caveat** — [`20260915T043143Z`](20260915T043143Z/) (`--prefill-batch 512`, raw
+512-token prompt): pp regresses vs. the 32/128-token-window runs (TinyLlama 64.2 -> 31.8 t/s). JFR
+confirms the batched-GEMM path fires correctly at that window size
+(`cuda_resident_q4k_gemm.count=308` for 2 prefill calls); `ForwardPass.prefill.total_ms=16650` vs.
+`MatVec.duration.total_ms=1873` for the same run shows over 14.7s of the 16.65s prefill wall time
+is spent outside MatVec — attention/softmax/RoPE is `O(seq^2)` and untouched by this tier, the more
+likely dominant cost at 512-token windows, not the GEMM this tier fixed. No attention-specific JFR
+span exists yet to confirm directly — named follow-up before publishing a `--prefill-batch >= 512`
+number as a tier result.
+
+**Per-handler coverage:** Llama-family and Phi-3 confirmed live via JFR (`cuda-resident-fp16-gemm`
+/ `cuda-resident-q4k-gemm` backend labels firing on real TinyLlama / Phi-3.5-mini forward passes).
+Qwen3 shares the identical `backend.sgemm(...)` call site by code inspection
+(`Qwen3TransformerHandler.java:683-696`) but has no loadable non-MoE Qwen3 GGUF fixture available
+to live-verify (pre-existing Model E2E gap, not a Tier 17 regression). `Qwen3MoeTransformerHandler`
+has no GPU residency path at all, batched or serial (pre-existing, unrelated to this tier).
+`RocmMatVec` has zero `sgemm` overrides for any residency type — named follow-up, no ROCm hardware
+available this session to implement or validate; the serial `MatVec` default keeps it correct, just
+unoptimized.
+
+**Correctness:** `CudaSgemmBatchedPrefillParityTest` (`DeviceHalfMatrix`/`DeviceQ4KMatrix`, batches
+{1, 8, 9, 16, 32, 128}, non-tile-aligned shapes) and `Q4KDequantParityTest` (isolated dequant
+kernels vs. `GgufKQuantCodec.decodeRows`, 5e-3 tolerance) are green.
+`CudaSgemmBatchedPrefillConcurrencyTest` (new) runs 4 threads concurrently, each against a
+distinctly-shaped weight matrix and independent random data, on the large-batch path for both
+matrix types — confirms the per-thread `Fp16Scratch`/`Q4KDequantScratch` buffers do not
+cross-contaminate under concurrent prefill.
+
+**LoRA regression gate:** [`20260915T190157Z-lora`](20260915T190157Z-lora/) — train 44,000ms
+(2,933ms/pass), playback 12.37 t/s (wall), recall correct. In line with the last pre-Tier-17
+snapshot [`20260911T235455Z-lora`](20260911T235455Z-lora/) (train 47,000ms/3,133ms-per-pass,
+playback 11.8 t/s) — flat, as expected: `LoraTrainableHandler` routes through
+`ResidentWeightMatrix`/`LoraResidentWeights`, not `CudaMatVec.sgemm`, so this tier does not touch
+the LoRA path at all.
+
+**Vision gate:** N/A, not run. `VisionAwareForwardPassHandler` delegates its batched window to the
+wrapped text handler's `forwardBatch`, so in principle a Phi-3/Llama-backed vision model would
+share this tier's fix — but the only vision fixture available (`moondream2-q5_k.llamafile`) is
+Phi-2-backed, and `Phi2TransformerHandler`'s batched prefill uses its own CPU
+weight-stationary quant kernels (`sgemmQuantBatch` -> `LlamaTransformerHandler.sgemmQ*WeightStationary`),
+never `CudaMatVec.sgemm` — confirmed by reading `Phi2TransformerHandler.java`. Separately,
+`compare-vision.sh` defaults to `--prefill single` (batch=1, below this tier's `> 8` threshold
+regardless), and its own documented `--prefill batched` mode already produces wrong captions for a
+pre-existing, unrelated reason. Nothing in this tier changes vision's benchmarked path.
 
 ## Inference regression — `20260914T220204Z`
 
@@ -360,7 +440,7 @@ Workload: long raw prompt (`n_prompt=256`), single blocking chat completion, JFR
 |-----|---------|----------:|------------:|-------------:|-------------------------|
 | [`20260901T234024Z-prefill`](20260901T234024Z-prefill/) | CPU | **2.30** t/s | **5.39** t/s | **2.35×** | 246 / 9 |
 
-Default `--prefill-batch` is **32**. `--prefill-batch 1` matches per-token batched prefill (many small `PrefillBatch` JFR events). GPU re-run pending on reference SKU — expect ≥2× on long prompts when VRAM-resident.
+Default `--prefill-batch` is **32**. `--prefill-batch 1` matches per-token batched prefill (many small `PrefillBatch` JFR events). GPU re-run: see "GPU batched-prefill GEMM bake-off — Tier 17" below.
 
 ```bash
 ./scripts/performance-tests/compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32

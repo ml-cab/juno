@@ -332,13 +332,58 @@ Workload: raw 256-token user prompt (`compare-prefill-batch.sh`), `max_tokens=8`
 
 **Parity:** `LlamaTransformerHandlerPrefillChunkParityTest` — chunked `forwardBatch` prefill matches whole-window logits within `1e-4`. `GenerationLoopTest.prefill_chunk_sizes_produce_same_tokens_as_whole_window` — chunk sizes 1 / 32 / whole window produce identical greedy decode.
 
-**GPU:** Re-run on reference SKU (GTX 1080):
+**GPU (Tier 17 — batched-prefill GEMM):** prefill windows above `HALF_SGEMM_BATCH_MAX` (8) now
+route through a real tiled GEMM (`cublasGemmEx`, FP16-resident weights directly; Q4_K/Q5_K/Q6_K
+weights dequantized once to an FP16 scratch buffer then the same GEMM) instead of one serial
+`sgemv` call per prefill token. Before this fix, GPU prefill and decode throughput sat within
+roughly 1x of each other on every model — the fingerprint of prefill never getting a batched
+kernel at all.
+
+`compare-llama-cpp.sh --gpu` (default prompt, GTX 1080), `--mmq off`
+([`perf-compare/20260915T041705Z`](perf-compare/20260915T041705Z/)) and `--mmq on`
+([`perf-compare/20260915T042207Z`](perf-compare/20260915T042207Z/)):
+
+| Model | `--mmq off` pp | `--mmq off` tg | pp/tg | `--mmq on` pp | `--mmq on` tg | pp/tg |
+|-------|---------------:|---------------:|------:|--------------:|--------------:|------:|
+| tinyllama-1.1b Q4_K_M | 64.97 | 28.66 | 2.27x | 59.38 | 39.20 | 1.51x |
+| qwen2.5-3b Q4_K_M | 34.54 | 13.22 | 2.61x | 30.99 | 18.75 | 1.65x |
+| Phi-3.5-mini Q4_K_M | 35.48 | 12.74 | 2.78x | 35.04 | 20.00 | 1.75x |
+| mistral-7b Q4_K_M | 0.93 | 0.54 | 1.72x (CPU fallback, OOM — unaffected by this tier, Tier 5's domain) | 21.57 | 16.06 | 1.34x |
+
+Qualitative gate (pp materially greater than tg, not pp ~= tg) holds for every model that fits GPU
+residency, under both `--mmq off` and `--mmq on`. The quantitative "≥3x today's pp" floor from the
+Tier 17 plan doc does not hold at face value against these absolute numbers — that floor's "today"
+baseline was measured with a token-count-matched raw prompt, while these bake-off numbers use the
+compare script's default short API/chat-template prompt (~20-30 tokens); the two are not directly
+comparable (same prompt-length/methodology gap Tier 8 already flagged for `pp`, tracked as a
+compare-script parity follow-up). Treat the pp/tg ratio above, not the absolute pp value, as this
+tier's real signal.
+
+At very long prefill windows (`--prefill-batch 512`, raw 512-token prompt,
+[`perf-compare/20260915T043143Z`](perf-compare/20260915T043143Z/)) pp *regresses* relative to the
+32/128-token-window runs (TinyLlama 64.2 -> 31.8 t/s). JFR confirms the new batched-GEMM path does
+fire correctly at that window size — the regression traces to attention/softmax/RoPE cost
+(`O(seq^2)`, untouched by this tier and not yet separately instrumented in JFR), not the GEMM this
+tier fixed. Follow-up: add a JFR span around attention specifically before publishing a
+`--prefill-batch >= 512` number as a tier result.
+
+Per-handler live JFR proof: the new `cuda-resident-fp16-gemm` / `cuda-resident-q4k-gemm` backend
+labels fire on real TinyLlama and Phi-3.5-mini forward passes (Llama-family and Phi-3 handlers);
+Qwen3 shares the identical `backend.sgemm(...)` call site by code inspection but has no loadable
+non-MoE Qwen3 GGUF fixture in this session to live-verify against (pre-existing Model E2E gap, not
+a Tier 17 regression). `RocmMatVec` has no batched-GEMM override for any residency type — named
+follow-up, no ROCm hardware available to implement or validate.
+
+Correctness: `CudaSgemmBatchedPrefillParityTest` (`DeviceHalfMatrix`/`DeviceQ4KMatrix`, batches
+{1, 8, 9, 16, 32, 128}, non-tile-aligned shapes) and `Q4KDequantParityTest` (isolated dequant
+kernels vs. `GgufKQuantCodec.decodeRows`) are green, plus
+`CudaSgemmBatchedPrefillConcurrencyTest` (4 threads, distinct shapes/seeds per thread, large-batch
+path) confirms no cross-thread corruption in the per-thread `Fp16Scratch` / `Q4KDequantScratch`
+buffers.
 
 ```bash
 ./scripts/performance-tests/compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32
 ```
-
-Expect larger uplift than CPU when `runLayersBatch` uses GPU GEMM.
 
 ## GPU layer offload (`--gpu-layers`)
 

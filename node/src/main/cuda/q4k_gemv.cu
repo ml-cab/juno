@@ -338,3 +338,125 @@ q6k_gemv(
     }
     reduce_and_store(acc, lane, warp, row, rows, y);
 }
+
+/*
+ * ───────────────────── Dequant-to-FP16 (batched-prefill GEMM path) ─────────────────────
+ *
+ * Elementwise dequant of packed K-quant weights into a row-major FP16 buffer, no
+ * activation/reduction involved (dequant is independent of x, done once per
+ * layer-projection rather than once per token). Feeds the tiled cublasGemmEx
+ * path (see CudaFp16GemmOps) for prefill-sized batches, replacing W serial
+ * mul_mat_vec launches with one dequant pass + one weight-stationary GEMM.
+ *
+ * One thread per output element; one block per (row, super-block). Reuses
+ * kq_affine_scales (Q4_K/Q5_K) and the Q6_K scale/qh/ql bit-unpacking already
+ * proven correct by the mul_mat_vec kernels above — this is the same decode
+ * math, just writing every element instead of dot-reducing against x.
+ */
+
+extern "C" __global__ void
+q4k_dequant_to_fp16(
+        const uint8_t* __restrict__ A,
+        half* __restrict__ out,
+        int rows,
+        int cols) {
+    const int row = (int)blockIdx.x;
+    const int b = (int)blockIdx.y;
+    const int nb = cols >> 8;
+    if (row >= rows || b >= nb)
+        return;
+
+    const int e = (int)threadIdx.x; // 0..255
+    const size_t rowBytes = (size_t)nb * Q4K_BLOCK_BYTES;
+    const uint8_t* rp = A + (size_t)row * rowBytes + (size_t)b * Q4K_BLOCK_BYTES;
+    uint4 hdr = *reinterpret_cast<const uint4*>(rp);
+
+    const int g = e >> 6;        // 0..3 (group of 64 elements)
+    const int r = e & 63;        // 0..63 within group
+    const bool hi = r >= 32;
+    const int i = hi ? (r - 32) : r; // 0..31
+    const uint8_t qbyte = rp[16 + g * 32 + i];
+    const int q = hi ? ((qbyte >> 4) & 0x0F) : (qbyte & 0x0F);
+
+    float d, dmin, sc0, mn0, sc1, mn1;
+    kq_affine_scales(hdr, g, d, dmin, sc0, mn0, sc1, mn1);
+    float val = hi ? (d * sc1 * (float)q - dmin * mn1) : (d * sc0 * (float)q - dmin * mn0);
+
+    out[(size_t)row * cols + (size_t)b * 256 + e] = __float2half(val);
+}
+
+extern "C" __global__ void
+q5k_dequant_to_fp16(
+        const uint8_t* __restrict__ A,
+        half* __restrict__ out,
+        int rows,
+        int cols) {
+    const int row = (int)blockIdx.x;
+    const int b = (int)blockIdx.y;
+    const int nb = cols >> 8;
+    if (row >= rows || b >= nb)
+        return;
+
+    const int e = (int)threadIdx.x; // 0..255
+    const size_t rowBytes = (size_t)nb * Q5K_BLOCK_BYTES;
+    const uint8_t* rp = A + (size_t)row * rowBytes + (size_t)b * Q5K_BLOCK_BYTES;
+    uint4 hdr = *reinterpret_cast<const uint4*>(rp);
+
+    const int g = e >> 6;        // 0..3
+    const int r = e & 63;        // 0..63
+    const bool hi = r >= 32;
+    const int i = hi ? (r - 32) : r; // 0..31
+    const uint8_t qbyte = rp[48 + g * 32 + i];
+    const int nib = hi ? ((qbyte >> 4) & 0x0F) : (qbyte & 0x0F);
+    const int bit = hi ? (2 * g + 1) : (2 * g);
+    const uint8_t hbyte = rp[16 + i];
+    const int q = nib | (((hbyte >> bit) & 1) << 4);
+
+    float d, dmin, sc0, mn0, sc1, mn1;
+    kq_affine_scales(hdr, g, d, dmin, sc0, mn0, sc1, mn1);
+    float val = hi ? (d * sc1 * (float)q - dmin * mn1) : (d * sc0 * (float)q - dmin * mn0);
+
+    out[(size_t)row * cols + (size_t)b * 256 + e] = __float2half(val);
+}
+
+extern "C" __global__ void
+q6k_dequant_to_fp16(
+        const uint8_t* __restrict__ A,
+        half* __restrict__ out,
+        int rows,
+        int cols) {
+    const int row = (int)blockIdx.x;
+    const int b = (int)blockIdx.y;
+    const int nb = cols >> 8;
+    if (row >= rows || b >= nb)
+        return;
+
+    const int e = (int)threadIdx.x; // 0..255
+    const size_t rowBytes = (size_t)nb * Q6K_SLOT_BYTES;
+    const uint8_t* blk = A + (size_t)row * rowBytes + (size_t)b * Q6K_SLOT_BYTES;
+    const float d = __half2float(*reinterpret_cast<const half*>(blk + 208));
+
+    const int half_ = e >> 7;    // 0 or 1 (of the two 128-element halves)
+    const int k = e & 127;       // 0..127 within half
+    const int group = k >> 5;    // 0..3 (q1/q2/q3/q4)
+    const int l = k & 31;        // 0..31
+    const int is = l >> 4;       // 0 or 1
+
+    const int qlOff = half_ * 64;
+    const int qhOff = 128 + half_ * 32;
+    const int scOff = 192 + half_ * 8;
+    const uint8_t qhByte = blk[qhOff + l];
+
+    int nib, hibits, scIdx;
+    switch (group) {
+        case 0: nib = blk[qlOff + l] & 0x0F;              hibits = (qhByte >> 0) & 3; scIdx = scOff + is + 0; break;
+        case 1: nib = blk[qlOff + l + 32] & 0x0F;         hibits = (qhByte >> 2) & 3; scIdx = scOff + is + 2; break;
+        case 2: nib = (blk[qlOff + l] >> 4) & 0x0F;       hibits = (qhByte >> 4) & 3; scIdx = scOff + is + 4; break;
+        default: nib = (blk[qlOff + l + 32] >> 4) & 0x0F; hibits = (qhByte >> 6) & 3; scIdx = scOff + is + 6; break;
+    }
+    int q = (nib | (hibits << 4)) - 32;
+    float sc = (float)(int8_t)blk[scIdx];
+    float val = d * sc * (float)q;
+
+    out[(size_t)row * cols + (size_t)b * 256 + e] = __float2half(val);
+}
