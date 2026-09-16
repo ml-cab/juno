@@ -43,6 +43,7 @@ PROMPT_TEXT="could you please write me a short poem about love and war"
 RAW_PROMPT=0
 JUNO_GPU_LAYERS=""
 JUNO_MMQ=""
+JUNO_GPU_ATTENTION=""
 JUNO_SCHEDULE=""
 JUNO_CACHE_TYPE_K=""
 JUNO_CACHE_TYPE_V=""
@@ -82,6 +83,7 @@ Options:
   --ngl N           llama.cpp GPU layers (overrides --cpu/--gpu default)
   --gpu-layers N|all|auto  Juno --gpu-layers (default: all in GPU mode)
   --mmq on|off|auto Juno --mmq (packed Q4_K device GEMV; default off)
+  --gpu-attention on|off|auto  Juno --gpu-attention (GPU-resident attention kernel; default off)
   --schedule static|continuous  Juno --schedule (default static)
   --cache-type-k f16|q8_0  Juno --cache-type-k (default f16)
   --cache-type-v f16|q8_0  Juno --cache-type-v (default f16)
@@ -139,6 +141,7 @@ while [[ $# -gt 0 ]]; do
     --ngl) NGL="$2"; shift 2 ;;
     --gpu-layers) JUNO_GPU_LAYERS="$2"; shift 2 ;;
     --mmq) JUNO_MMQ="$2"; shift 2 ;;
+    --gpu-attention) JUNO_GPU_ATTENTION="$2"; shift 2 ;;
     --schedule) JUNO_SCHEDULE="$2"; shift 2 ;;
     --cache-type-k) JUNO_CACHE_TYPE_K="$2"; shift 2 ;;
     --cache-type-v) JUNO_CACHE_TYPE_V="$2"; shift 2 ;;
@@ -326,6 +329,7 @@ host_meta_json() {
   "raw_prompt": ${RAW_PROMPT},
   "juno_gpu_layers": "$(json_escape "${JUNO_GPU_LAYERS:-}")",
   "juno_mmq": "$(json_escape "${JUNO_MMQ:-}")",
+  "juno_gpu_attention": "$(json_escape "${JUNO_GPU_ATTENTION:-}")",
   "juno_schedule": "$(json_escape "${JUNO_SCHEDULE:-}")",
   "juno_cache_type_k": "$(json_escape "${JUNO_CACHE_TYPE_K:-}")",
   "juno_cache_type_v": "$(json_escape "${JUNO_CACHE_TYPE_V:-}")",
@@ -556,6 +560,9 @@ run_juno() {
   fi
   if [[ -n "$JUNO_MMQ" ]]; then
     java_args+=(--mmq "$JUNO_MMQ")
+  fi
+  if [[ -n "$JUNO_GPU_ATTENTION" ]]; then
+    java_args+=(--gpu-attention "$JUNO_GPU_ATTENTION")
   fi
   if [[ -n "${JUNO_PREFILL_BATCH:-}" ]]; then
     java_args+=(--prefill-batch "$JUNO_PREFILL_BATCH")

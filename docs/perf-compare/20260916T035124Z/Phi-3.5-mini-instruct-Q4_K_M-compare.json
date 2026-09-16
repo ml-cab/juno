@@ -1,0 +1,28 @@
+{
+  "model": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 1209.875551,
+    "token_gen_tps": 64.848029
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 39.33279760439738,
+    "token_gen_tps": 13.227424886117772,
+    "api_token_gen_tps": 11.4367,
+    "latency_ms": 5596,
+    "prompt_tokens": 21,
+    "completion_tokens": 64,
+    "juno_use_vector": 0,
+    "use_jfr": 1
+  },
+  "ratio_juno_over_llamacpp_pp": 0.03250978794627893,
+  "ratio_juno_over_llamacpp_tg": 0.2039757428266289,
+  "result_files": {
+    "llama_cpp_raw": "/tmp/perf-on/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.raw.json",
+    "juno_response": "/tmp/perf-on/Phi-3.5-mini-instruct-Q4_K_M-juno-response.json",
+    "llama_result": "/tmp/perf-on/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.json",
+    "juno_result": "/tmp/perf-on/Phi-3.5-mini-instruct-Q4_K_M-juno.json",
+    "juno_jfr": "/tmp/perf-on/Phi-3.5-mini-instruct-Q4_K_M-juno-jfr.json"
+  }
+}

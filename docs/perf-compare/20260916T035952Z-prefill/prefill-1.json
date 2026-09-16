@@ -1,0 +1,18 @@
+{
+  "tool": "compare-prefill-batch",
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "prefill_batch": 1,
+  "n_prompt_target": 512,
+  "prompt_tokens": 530,
+  "completion_tokens": 5,
+  "wall_ms": 26268,
+  "http_code": 200,
+  "exit_code": 0,
+  "forward_pass_prefill_total_ms": 25414.892104,
+  "forward_pass_prefill_count": 529.0,
+  "prompt_eval_tps": 20.8539,
+  "use_gpu": 1,
+  "gpu_attention": "",
+  "attention_prefill_total_ms": 3.322485,
+  "attention_share_pct": 0.0
+}

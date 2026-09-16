@@ -63,6 +63,12 @@ public final class LoraTrainNotices {
 					+ "  Use --lora-play for playback fused Q4_K. Training needs a transpose "
 					+ "path that packed Q4 does not provide.";
 
+	/** {@code --gpu-attention} preferred during {@code juno lora} train/play — attention stays scalar CPU. */
+	public static final String GPU_ATTENTION_IGNORED =
+			"LoRA train / --lora-play ignores --gpu-attention (GPU-resident attention kernel).\n"
+					+ "  Attention runs on scalar CPU here; this handler keeps its own attention math "
+					+ "and KV map, separate from LlamaTransformerHandler.";
+
 	/** GGUF carries an embedded chat template, but LoRA train/play intentionally ignore it. */
 	public static final String EMBEDDED_CHAT_TEMPLATE_IGNORED =
 			"This GGUF carries an embedded chat template (tokenizer.chat_template) -- ignored here.\n"

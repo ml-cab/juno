@@ -362,10 +362,32 @@ tier's real signal.
 At very long prefill windows (`--prefill-batch 512`, raw 512-token prompt,
 [`perf-compare/20260915T043143Z`](perf-compare/20260915T043143Z/)) pp *regresses* relative to the
 32/128-token-window runs (TinyLlama 64.2 -> 31.8 t/s). JFR confirms the new batched-GEMM path does
-fire correctly at that window size — the regression traces to attention/softmax/RoPE cost
-(`O(seq^2)`, untouched by this tier and not yet separately instrumented in JFR), not the GEMM this
-tier fixed. Follow-up: add a JFR span around attention specifically before publishing a
-`--prefill-batch >= 512` number as a tier result.
+fire correctly at that window size — the regression traces to attention cost
+(`O(seq^2)`, untouched by this tier), not the GEMM this tier fixed.
+
+**Attention JFR span (`juno.Attention`):** added to confirm this directly — a new event wraps each
+`gqaInto`/`gqa` call (QK^T + softmax + attention-weighted V sum; scalar CPU in every handler
+regardless of GPU layer offload, since `CudaMatVec`/`RocmMatVec` only accelerate the linear
+projection GEMM/GEMV) separately from `juno.MatVec`, with `windowSize`/`startPosition`/
+`contextLength` fields so cost-vs-context-length is directly queryable.
+
+Re-run of `compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32`
+([`perf-compare/20260916T003101Z-prefill`](perf-compare/20260916T003101Z-prefill/), TinyLlama
+Q4_K_M, GTX 1080) confirms attention, not GEMM, dominates at this window size:
+
+| Phase | `ForwardPass.*.total_ms` | `Attention.*.total_ms` | `Attention` share | `MatVec` (est.) share |
+|-------|-------------------------:|-----------------------:|-------------------:|-----------------------:|
+| Prefill (batch=32, 17 windows) | 16,708.5 | 13,088.7 | **78.3%** | ~9.9% |
+| Decode (8 tokens, ctx grown to ~512+) | 674.3 | 432.6 | **64.2%** | ~35.9% |
+
+`Attention.prefill.count` = 374 = 17 windows x 22 TinyLlama layers, `p95_ms` = 66.0 per per-layer
+call (versus `Attention.decode.p95_ms` = 2.6 for a single query position at the same context
+length) — the O(seq^2) shape is now directly visible instead of inferred from `ForwardPass` minus
+`MatVec`. Tier 17's batched GEMM fix is not the remaining lever at long context; attention
+(`gqaInto`'s scalar per-head, per-position QK^T/softmax/weighted-sum loop) is. This reopens the
+case for the P5 FlashAttention-style work ahead of schedule for long-context workloads
+specifically — P5 remains gated on Tier 8 baselines per the ROADMAP, this is evidence for that
+gate, not a scope change on its own.
 
 Per-handler live JFR proof: the new `cuda-resident-fp16-gemm` / `cuda-resident-q4k-gemm` backend
 labels fire on real TinyLlama and Phi-3.5-mini forward passes (Llama-family and Phi-3 handlers);
@@ -383,6 +405,69 @@ buffers.
 
 ```bash
 ./scripts/performance-tests/compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32
+```
+
+## GPU-resident attention (`--gpu-attention`)
+
+**Run:** [`perf-compare/20260916T035952Z-prefill/`](perf-compare/20260916T035952Z-prefill/) (off) vs.
+[`perf-compare/20260916T040113Z-prefill/`](perf-compare/20260916T040113Z-prefill/) (on)
+
+Direct follow-on to the attention-share finding above: `--gpu-attention on|off|auto`
+(`JUNO_GPU_ATTENTION`, default **off**, CUDA only) moves QK^T + softmax + weighted-V-sum onto the
+GPU against a device-resident FP16 KV mirror (`DeviceKvCache` + `CudaGqaAttention` +
+`gqa_attention.ptx`) instead of running `gqaInto`/`gqa` as scalar CPU Java. Wired for
+`LlamaTransformerHandler` (Llama-family, Mistral, Qwen2) and vision (delegates to the same
+handler); Phi-2/Phi-3/Qwen3/Qwen3-MoE keep the scalar path (**follow-up**, each owns a separate
+attention implementation / KV map). LoRA train and `--lora-play` explicitly ignore the flag and warn
+once (separate handler, own KV map/attention math), same pattern as `--mmq` under LoRA training.
+
+`compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32` (TinyLlama Q4_K_M, GTX 1080):
+
+| `--gpu-attention` | prefill-batch | pp t/s (JFR) | prefill ms | attention share of prefill |
+|---|---:|---:|---:|---:|
+| off (default) | 1 | 20.85 | 25,414.9 | 0.0% |
+| off (default) | 32 | 31.04 | 17,076.8 | **78.7%** |
+| on | 1 | 40.74 | 13,008.1 | 0.2% |
+| on | 32 | **119.56** | **4,432.8** | **11.0%** |
+
+At `prefill-batch=32` — the window size where attention is actually classified as a windowed
+"prefill" JFR event rather than folded into per-token decode accounting — `--gpu-attention on`
+takes pp throughput from 31.04 to 119.56 t/s (**3.85x**) and attention's share of prefill wall time
+from 78.7% down to 11.0%. This is the honest before/after number this feature set out to produce:
+attention was the dominant long-context cost (see the Tier 17 follow-on finding above), and moving
+it to the GPU removes most of that cost rather than merely shifting it. The remaining ~11% share is
+whatever stays on CPU around the batched kernel dispatch (RoPE, cache-write bookkeeping) plus the
+kernel's own device time as measured by the same JFR span.
+
+The `prefill-batch=1` row shows a smaller, real win (20.85 -> 40.74 t/s, **1.95x**) but its
+`attention_share_pct` is not a meaningful before/after signal — at window size 1 each prompt token
+is processed like a decode step, and JFR attributes `juno.Attention` events to the `decode` bucket
+rather than `prefill` in that shape, not because attention cost disappeared.
+
+**Standing regression gate** (`compare-llama-cpp.sh --gpu --vector 0`, default short prompt,
+4-model set): [`perf-compare/20260916T034621Z/`](perf-compare/20260916T034621Z/) (off) vs.
+[`perf-compare/20260916T035124Z/`](perf-compare/20260916T035124Z/) (on) — flat to modestly improved,
+never regressed, at this short (~20-30 token) context length where attention's share of total cost
+is naturally small: TinyLlama tg 28.85 -> 29.10 t/s, Qwen2.5-3B 13.39 -> 14.55 t/s, Phi-3.5-mini
+12.87 -> 13.23 t/s, Mistral-7B tuned lane (`--mmq on --gpu-layers auto`) 16.30 -> 19.52 t/s
+(**+20%**). This is expected: the feature's real leverage is long-context prefill/decode, not short
+default-prompt throughput, matching why the dedicated `compare-prefill-batch.sh` repro above (not
+the short-prompt regression gate) is this feature's real bake-off signal.
+
+**LoRA regression gate** (`compare-lora.sh --gpu --baseline release-0.1.2`, flag stays off,
+explicit no-op): [`perf-compare/20260916T035640Z-lora/`](perf-compare/20260916T035640Z-lora/) —
+train_total_ms ratio 0.95x, ms/pass ratio 0.95x, playback tps ratio 0.89x vs. baseline, all within
+gate (recall correct). Flat as expected — `LoraTrainableHandler` never reads
+`GpuAttentionOptions`.
+
+**Known limitation** (see `DeviceKvCache` javadoc): multi-token greedy-decode sequences can
+occasionally diverge between `--gpu-attention on` and `off` on some prompts after 15+ tokens — FP16
+KV rounding occasionally flips a close greedy decision, the same class of tradeoff already accepted
+for `--mmq` and other reduced-precision paths in this codebase. Single-step logits match tightly
+(parity test); this is not bit-identical-generation territory, here or anywhere else in Juno.
+
+```bash
+./scripts/performance-tests/compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32 --gpu-attention on
 ```
 
 ## GPU layer offload (`--gpu-layers`)

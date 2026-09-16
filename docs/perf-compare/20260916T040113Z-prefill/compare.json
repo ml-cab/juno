@@ -1,0 +1,22 @@
+{
+  "run_id": "20260916T040113Z",
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "n_prompt_target": 512,
+  "results": [
+    {
+      "prefill_batch": 1,
+      "prompt_eval_tps": 40.7439,
+      "forward_pass_prefill_total_ms": 13008.093387,
+      "forward_pass_prefill_count": 529.0,
+      "wall_ms": 13597
+    },
+    {
+      "prefill_batch": 32,
+      "prompt_eval_tps": 119.5622,
+      "forward_pass_prefill_total_ms": 4432.838426,
+      "forward_pass_prefill_count": 17.0,
+      "wall_ms": 5075
+    }
+  ],
+  "speedup_32_over_1": 2.934480989792337
+}

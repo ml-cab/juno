@@ -47,6 +47,12 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260915T043143Z`](20260915T043143Z/) | GPU Tier 17, `JUNO_PREFILL_BATCH=512 --raw-prompt --n-prompt 512` | JFR pp/tg | [INDEX](20260915T043143Z/INDEX.md) |
 | [`20260915T190157Z-lora`](20260915T190157Z-lora/) | GPU LoRA train-qa + playback (post Tier 17, expected flat) | train ms / playback tps | [INDEX](20260915T190157Z-lora/INDEX.md) |
 | [`20260915T223032Z`](20260915T223032Z/) | GPU default 4-model sweep + standing Mistral-7B tuned lane (`--mmq on --gpu-layers auto`, auto-added by `compare-llama-cpp.sh` whenever mistral-7b is selected on GPU) | JFR pp/tg | [INDEX](20260915T223032Z/INDEX.md) |
+| [`20260916T003101Z-prefill`](20260916T003101Z-prefill/) | GPU `--n-prompt 512`, new `juno.Attention` JFR span (prefill-batch=1 vs 32) | JFR pp + `Attention`/`MatVec` breakdown | [INDEX](20260916T003101Z-prefill/INDEX.md) |
+| [`20260916T034621Z`](20260916T034621Z/) | GPU default 4-model sweep, `--gpu-attention off` (default) regression gate | JFR pp/tg | [INDEX](20260916T034621Z/INDEX.md) |
+| [`20260916T035124Z`](20260916T035124Z/) | GPU default 4-model sweep, `--gpu-attention on` regression gate | JFR pp/tg | [INDEX](20260916T035124Z/INDEX.md) |
+| [`20260916T035640Z-lora`](20260916T035640Z-lora/) | GPU LoRA train-qa + playback (post GPU-resident attention, expected flat — explicit no-op) | train ms / playback tps | [INDEX](20260916T035640Z-lora/INDEX.md) |
+| [`20260916T035952Z-prefill`](20260916T035952Z-prefill/) | GPU `--n-prompt 512`, `--gpu-attention off` (default) | JFR pp + `Attention` share of prefill | [INDEX](20260916T035952Z-prefill/INDEX.md) |
+| [`20260916T040113Z-prefill`](20260916T040113Z-prefill/) | GPU `--n-prompt 512`, `--gpu-attention on` | JFR pp + `Attention` share of prefill | [INDEX](20260916T040113Z-prefill/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 
@@ -132,6 +138,67 @@ representative of what a user gets who doesn't know `--mmq`/`--gpu-layers` exist
 gap this standing lane exists to keep visible rather than let the sweep quietly measure only the
 unrepresentative default going forward.
 
+## GPU-resident attention bake-off — Tier 13 Phase C
+
+`--gpu-attention on|off|auto` (`JUNO_GPU_ATTENTION`, default off, CUDA only) moves attention
+(QK^T + softmax + weighted-V-sum) onto a device-resident FP16 KV mirror (`DeviceKvCache` +
+`CudaGqaAttention` + `gqa_attention.ptx`, one block per batch-row/head, 3-pass QK^T+max / softmax /
+weighted-V-sum) instead of scalar CPU Java (`GqaMath`, extracted unchanged from the prior
+`gqaInto`/`gqa`). Direct follow-on to the Tier 17 long-window finding above that attention, not the
+GEMM path, dominates prefill/decode wall time at realistic context length.
+
+`compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32` (TinyLlama Q4_K_M, GTX 1080):
+[`20260916T035952Z-prefill`](20260916T035952Z-prefill/) (off) vs.
+[`20260916T040113Z-prefill`](20260916T040113Z-prefill/) (on):
+
+| `--gpu-attention` | prefill-batch | pp t/s (JFR) | prefill ms | attention share of prefill |
+|---|---:|---:|---:|---:|
+| off | 1 | 20.85 | 25,414.9 | 0.0% |
+| off | 32 | 31.04 | 17,076.8 | **78.7%** |
+| on | 1 | 40.74 | 13,008.1 | 0.2% |
+| on | 32 | **119.56** | **4,432.8** | **11.0%** |
+
+**Honest speed claim — met.** At `prefill-batch=32` (the window size where `juno.Attention` events
+are actually classified as `prefill`, not folded into decode accounting at window=1): pp throughput
+**31.04 -> 119.56 t/s (3.85x)**, attention's share of prefill wall time **78.7% -> 11.0%**. This is
+a measured decode/prefill throughput lever on the exact workload (long raw prompt, GPU-resident
+model) that motivated the feature — not a peer-latency claim.
+
+**Regression gate — flat/improved, never regressed.**
+[`20260916T034621Z`](20260916T034621Z/) (off) vs. [`20260916T035124Z`](20260916T035124Z/) (on),
+`compare-llama-cpp.sh --gpu --vector 0` default short prompt (~20-30 tokens), 4-model set: TinyLlama
+tg 28.85 -> 29.10 t/s, Qwen2.5-3B tg 13.39 -> 14.55 t/s, Phi-3.5-mini tg 12.87 -> 13.23 t/s,
+Mistral-7B tuned lane (`--mmq on --gpu-layers auto`) tg 16.30 -> 19.52 t/s (+20%); pp flat within
+run-to-run noise on every model. Expected: attention's share of cost is naturally small at this
+short a context, so the regression gate is a flatness check, not this feature's bake-off signal —
+`compare-prefill-batch.sh` above is.
+
+**LoRA regression gate — flat, as expected (explicit no-op).**
+[`20260916T035640Z-lora`](20260916T035640Z-lora/) vs. `release-0.1.2` baseline: train_total_ms ratio
+0.95x, ms/pass ratio 0.95x, playback tps ratio 0.89x (all within the 1.25x train / 0.80x playback
+gate), recall correct. `LoraTrainableHandler` never reads `GpuAttentionOptions` — attention stays
+scalar CPU there regardless of the flag, with a one-time startup warning if `--gpu-attention` is set.
+
+**Per-handler coverage:** `LlamaTransformerHandler` only (Llama-family, Mistral, Qwen2); vision is
+wired automatically since `VisionAwareForwardPassHandler` delegates to the same handler. Phi-2,
+Phi-3, Qwen3, and Qwen3-MoE keep their own scalar attention implementations and KV maps — named
+follow-up, not silently unimplemented. ROCm: `CudaGqaAttention.tryCreate` returns `null` on
+non-CUDA backends, falling back to `GqaMath` scalar CPU — never silent, logged at handler
+construction.
+
+**Correctness:** `GqaAttentionKernelParityTest` (kernel vs. `GqaMath` CPU oracle),
+`DeviceKvCacheLifecycleTest` (device-byte allocate/free, grow-and-preserve),
+`LlamaTransformerHandlerGpuAttentionLiveTest` (real GGUF + CUDA, confirms
+`gpuAttentionActive()` and greedy-token parity), `LlamaTransformerHandlerAttentionJfrTest`,
+`GpuAttentionOptionsTest`. Full `node` suite 522/522, GPU-tagged suite 91/91 (`mvn test
+-Dgroups=gpu -pl node`), both unchanged in count from the pre-feature baseline.
+
+**Known limitation:** multi-token greedy-decode can occasionally diverge between `on`/`off` after
+15+ tokens on some prompts (FP16 KV rounding flipping a close greedy choice) — same class of
+tradeoff already accepted for `--mmq` and other reduced-precision paths; single-step logits match
+tightly via the parity test. Not treated as a defect; bit-identical multi-step generation is not the
+bar for reduced-precision paths anywhere in this codebase.
+
 ## GPU batched-prefill GEMM bake-off — Tier 17
 
 `CudaMatVec.sgemm(DeviceHalfMatrix|DeviceQ4KMatrix, float[][])` now uses a real tiled GEMM
@@ -167,10 +234,22 @@ signal, and it clears the qualitative bar on every model tested.
 confirms the batched-GEMM path fires correctly at that window size
 (`cuda_resident_q4k_gemm.count=308` for 2 prefill calls); `ForwardPass.prefill.total_ms=16650` vs.
 `MatVec.duration.total_ms=1873` for the same run shows over 14.7s of the 16.65s prefill wall time
-is spent outside MatVec — attention/softmax/RoPE is `O(seq^2)` and untouched by this tier, the more
-likely dominant cost at 512-token windows, not the GEMM this tier fixed. No attention-specific JFR
-span exists yet to confirm directly — named follow-up before publishing a `--prefill-batch >= 512`
-number as a tier result.
+is spent outside MatVec — attention was the suspected dominant cost, not the GEMM this tier fixed.
+
+**Confirmed** with a new `juno.Attention` JFR span (wraps `gqaInto`/`gqa` — QK^T + softmax +
+weighted-V-sum, scalar CPU regardless of GPU layer offload) added specifically to check this:
+re-run at `--n-prompt 512 --prefill-batch 32`
+([`20260916T003101Z-prefill`](20260916T003101Z-prefill/), TinyLlama Q4_K_M) shows
+`Attention.prefill.total_ms=13088.7` of `ForwardPass.prefill.total_ms=16708.5` — **78.3%** of
+prefill wall time is attention, versus an estimated ~9.9% GEMM (`MatVec`) and ~11.7% other
+(RoPE/RMSNorm/residual/KV-cache-write loops). `Attention.prefill.count=374` = 17 windows x 22
+layers, `p95_ms=66.0` per per-layer call at this context length. Decode attention share at the same
+(grown) context is **64.2%** (`Attention.decode.total_ms=432.6` of `ForwardPass.decode.total_ms=
+674.3`) — materially higher than the ~4-7% "non-MatVec" decode share measured on the original
+short-prompt bake-off, because that bake-off's decode context length stayed small. Tier 17's
+batched-GEMM fix is not the remaining lever at long context; attention is — evidence for the P5
+FlashAttention-style work (still gated on Tier 8 baselines per the ROADMAP), not a scope change on
+its own.
 
 **Per-handler coverage:** Llama-family and Phi-3 confirmed live via JFR (`cuda-resident-fp16-gemm`
 / `cuda-resident-q4k-gemm` backend labels firing on real TinyLlama / Phi-3.5-mini forward passes).

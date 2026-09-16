@@ -440,6 +440,7 @@ cmd_local() {
   local batch_window="${JUNO_BATCH_WINDOW_MS:-}"
   local gpu_layers="${JUNO_GPU_LAYERS:-}"
   local mmq="${JUNO_MMQ:-}"
+  local gpu_attention="${JUNO_GPU_ATTENTION:-}"
   local cache_type_k="${JUNO_CACHE_TYPE_K:-}"
   local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
   local schedule="${JUNO_SCHEDULE:-}"
@@ -487,6 +488,7 @@ cmd_local() {
       --batch-window-ms)  batch_window="$2"; shift 2 ;;
       --gpu-layers)       gpu_layers="$2";   shift 2 ;;
       --mmq)              mmq="$2";          shift 2 ;;
+      --gpu-attention)    gpu_attention="$2"; shift 2 ;;
       --cache-type-k)     cache_type_k="$2"; shift 2 ;;
       --cache-type-v)     cache_type_v="$2"; shift 2 ;;
       --schedule)         schedule="$2";     shift 2 ;;
@@ -538,6 +540,8 @@ cmd_local() {
         echo "    --batch-window-ms M        batch window when parallel>1 (default 50)"
         echo "    --gpu-layers N|all|auto    GPU-resident transformer layers (default all)"
         echo "    --mmq on|off|auto          packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default off)"
+        echo "    --gpu-attention on|off|auto  GPU-resident attention kernel (measured decode/prefill throughput"
+        echo "                               lever, not a peer-latency claim; default off; CUDA only)"
         echo "    --cache-type-k f16|q8_0    K cache type (default f16 = current float path)"
         echo "    --cache-type-v f16|q8_0    V cache type (default f16)"
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
@@ -623,6 +627,8 @@ cmd_local() {
   [[ -n "$gpu_layers" ]] && gpu_layers_arg="--gpu-layers $gpu_layers"
   local mmq_arg=""
   [[ -n "$mmq" ]] && mmq_arg="--mmq $mmq"
+  local gpu_attention_arg=""
+  [[ -n "$gpu_attention" ]] && gpu_attention_arg="--gpu-attention $gpu_attention"
   local cache_type_k_arg=""
   [[ -n "$cache_type_k" ]] && cache_type_k_arg="--cache-type-k $cache_type_k"
   local cache_type_v_arg=""
@@ -674,6 +680,7 @@ cmd_local() {
     ${batch_window_arg} \
     ${gpu_layers_arg} \
     ${mmq_arg} \
+    ${gpu_attention_arg} \
     ${cache_type_k_arg} \
     ${cache_type_v_arg} \
     ${schedule_arg} \

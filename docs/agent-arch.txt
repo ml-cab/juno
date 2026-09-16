@@ -87,6 +87,20 @@ GPU FFI (node module — Panama project, JEP 454):
         Handlers upload only resident global layers; matVec falls back to CPU quant when dev is null.
   MmqOptions — policy for --mmq / JUNO_MMQ (on|off|auto). Default off.
         Ships as VRAM-fit packed Q4 residency; not a decode-speed claim vs FP16-resident.
+  GpuAttentionOptions — policy for --gpu-attention / JUNO_GPU_ATTENTION (on|off|auto). Default off.
+        CUDA only; measured decode/prefill throughput lever, not a peer-latency claim.
+  GqaMath — attention math (QK^T + softmax + weighted-V-sum) extracted from
+        LlamaTransformerHandler.gqaInto/gqa; scalar CPU oracle used by both the fallback path
+        and the GPU kernel's parity test.
+  DeviceKvCache — device-resident FP16 KV mirror kept alongside the host SessionKvTensor
+        (dual-write); grow-and-preserve via D2D copy; lifecycle tied to
+        LlamaTransformerHandler.evict(). CUDA only.
+  GqaAttentionKernel — PTX loader/launcher (CUDA Driver API) for gqa_attention.ptx; one block
+        per (batch-row, head), 3-pass QK^T+max / softmax / weighted-V-sum.
+  CudaGqaAttention — handler-facing attendBatched(...); real dispatch against DeviceKvCache,
+        grow-and-keep-max scratch; one batched launch serves prefill window, single decode, or
+        --parallel multi-decode. tryCreate(...) returns null on non-CUDA backends (falls back
+        to GqaMath scalar CPU, never silent).
   LoraMmqPolicy — playback-only MMQ gate (juno.lora.play.path); train stays FP residency.
   LoraResidentUpload.runPlayback — play Q4 OOM closes packed buffers and falls to CPU
         without the train FP16 microbatch retry.

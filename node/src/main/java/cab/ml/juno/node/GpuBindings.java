@@ -64,6 +64,8 @@ interface GpuBindings {
     int H2D = 1;
     /** DeviceToHost — identical value in CUDA and HIP. */
     int D2H = 2;
+    /** DeviceToDevice — identical value in CUDA and HIP. */
+    int D2D = 3;
 
     // ── Stream flag ───────────────────────────────────────────────────────────
     /** {@code cudaStreamNonBlocking} / {@code hipStreamNonBlocking}. */

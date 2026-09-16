@@ -218,6 +218,7 @@ public final class ConsoleMain {
 	private static boolean useGpu = true; // use CPU
 	private static String gpuLayers = null; // null → env or default all
 	private static String mmq = null; // null → env or default off
+	private static String gpuAttention = null; // null → env or default off
 	private static String cacheTypeK = null; // null → env or default f16
 	private static String cacheTypeV = null; // null → env or default f16
 	private static String schedule = null; // null → env or default static
@@ -372,6 +373,8 @@ public final class ConsoleMain {
 			System.setProperty(GpuLayerOffload.ENV_PROPERTY, gpuLayers);
 		if (mmq != null)
 			System.setProperty(MmqOptions.ENV_PROPERTY, mmq);
+		if (gpuAttention != null)
+			System.setProperty(cab.ml.juno.node.GpuAttentionOptions.ENV_PROPERTY, gpuAttention);
 		if (cacheTypeK != null)
 			System.setProperty(cab.ml.juno.kvcache.CacheTypeOptions.ENV_K, cacheTypeK);
 		if (cacheTypeV != null)
@@ -477,6 +480,11 @@ public final class ConsoleMain {
 			String env = System.getenv(MmqOptions.ENV_PROPERTY);
 			if (env != null && !env.isBlank())
 				mmq = env.strip();
+		}
+		if (gpuAttention == null) {
+			String env = System.getenv(cab.ml.juno.node.GpuAttentionOptions.ENV_PROPERTY);
+			if (env != null && !env.isBlank())
+				gpuAttention = env.strip();
 		}
 		if (cacheTypeK == null) {
 			String env = System.getenv(cab.ml.juno.kvcache.CacheTypeOptions.ENV_K);
@@ -687,6 +695,10 @@ public final class ConsoleMain {
 			case "--mmq":
 				if (i + 1 < args.length)
 					mmq = args[++i];
+				break;
+			case "--gpu-attention":
+				if (i + 1 < args.length)
+					gpuAttention = args[++i];
 				break;
 			case "--cache-type-k":
 				if (i + 1 < args.length)
@@ -935,6 +947,8 @@ public final class ConsoleMain {
 		System.out.println("                             env JUNO_GPU_LAYERS; auto fits until VRAM OOM");
 		System.out.println("  --mmq on|off|auto          Packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default: off; LoRA play when CUDA kernel loads; ignored for LoRA train)");
 		System.out.println("                             env JUNO_MMQ; keeps Q4_K packed on device");
+		System.out.println("  --gpu-attention on|off|auto  GPU-resident attention kernel (measured decode/prefill throughput");
+		System.out.println("                             lever, not a peer-latency claim; default: off; CUDA only; env JUNO_GPU_ATTENTION)");
 		System.out.println("  --cache-type-k f16|q8_0    K cache element type (default: f16 = current float path)");
 		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8× smaller vs float)");
 		System.out.println("  --cache-type-v f16|q8_0    V cache element type (default: f16)");

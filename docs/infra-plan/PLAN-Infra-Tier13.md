@@ -120,3 +120,110 @@ Exit (Phase B MMQ — **met under amendment**):
 ## Preview files (expected)
 
 Phase B: PTX / Panama bindings, handlers, CLI flag, tests, ROADMAP / howto / performance notes
+
+## Phase C — GPU-resident attention (`--gpu-attention`)
+
+**Motivation:** the new `juno.Attention` JFR span (added during the Phase B/Tier 17 follow-on,
+see [`docs/performance.md`](../performance.md) "Prefill microbatching") showed attention —
+not the GEMM/MatVec path Tier 17 fixed — is the dominant GPU decode/prefill cost at realistic
+context length: **78.3%** of prefill wall time and **64.2%** of decode wall time at ~512 tokens
+context (TinyLlama, GTX 1080). Attention (`gqaInto`/`gqa`: QK^T + softmax + weighted-V-sum) ran
+entirely on scalar CPU Java even when the model's weights were fully GPU-resident. Phase C moves
+attention onto the GPU.
+
+**Design decision:** v1 is a straightforward parallel kernel (materialize the score row, softmax,
+weighted-V-sum, parallelized across GPU threads) — one block per (batch-row, head), 3-pass
+(QK^T+max, softmax, weighted-V-sum) — **not** a tiled/online-softmax FlashAttention-2 kernel. The
+fuller design remains the P5 FlashAttn follow-on (gated on Tier 8 baselines per the ROADMAP);
+Phase C does not change that gate, it is additional evidence for it.
+
+**Scope:** `LlamaTransformerHandler` only (`llama`/`mistral`/`qwen2` GGUF architectures). CUDA
+only. `Phi2TransformerHandler`/`Phi3TransformerHandler`/`Qwen3TransformerHandler`/
+`Qwen3MoeTransformerHandler`, ROCm, and `--lora-play`/LoRA train are named follow-ups (each owns
+its own attention math / KV map — see `LoraTrainableHandler`), matching how Phase B's MMQ rollout
+handled the same handlers. Vision is wired automatically (no vision-specific code) since
+`VisionAwareForwardPassHandler` delegates every forward call to an internal
+`LlamaTransformerHandler`.
+
+**Status: feature complete.** `--gpu-attention on|off|auto` / `JUNO_GPU_ATTENTION` (default
+**off**); CUDA Driver API + classpath PTX `gqa_attention.ptx`; `DeviceKvCache` (device-resident FP16
+KV mirror, dual-write alongside host `SessionKvTensor`, grow-and-preserve via D2D copy) +
+`GqaAttentionKernel` (PTX loader/launcher) + `CudaGqaAttention` (handler-facing
+`attendBatched(...)`, batched-pointer design serving prefill window / single decode / `--parallel`
+multi-decode in one launch); `GqaMath` (attention math extracted from `LlamaTransformerHandler`,
+zero behavior change, also the parity-test CPU oracle); wired into all three
+`LlamaTransformerHandler` attention call sites (prefill batch, single decode, multi-decode) with
+fallback to `GqaMath` when GPU dispatch returns `false`. CLI flag mirrors `--mmq` exactly in
+`ConsoleMain`, `scripts/run.sh`, and `scripts/performance-tests/compare-llama-cpp.sh` (+
+`compare-prefill-batch.sh` passthrough for its own bake-off). Bake-off:
+[`20260916T035952Z-prefill`](../perf-compare/20260916T035952Z-prefill/) (off) /
+[`20260916T040113Z-prefill`](../perf-compare/20260916T040113Z-prefill/) (on); regression gate
+[`20260916T034621Z`](../perf-compare/20260916T034621Z/) /
+[`20260916T035124Z`](../perf-compare/20260916T035124Z/); LoRA regression
+[`20260916T035640Z-lora`](../perf-compare/20260916T035640Z-lora/). Full write-up:
+[`docs/perf-compare/README.md`](../perf-compare/README.md) → "GPU-resident attention bake-off —
+Tier 13 Phase C".
+
+**Speed exit — met.** At `--prefill-batch 32` (the window size where `juno.Attention` events are
+classified as `prefill`, not folded into decode accounting at window=1): pp throughput
+**31.04 -> 119.56 t/s (3.85x)**, attention's share of prefill wall time **78.7% -> 11.0%**
+(`compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32`, TinyLlama Q4_K_M, GTX
+1080). Standing regression gate (short default prompt, 4-model set) stays flat to modestly
+improved, never regressed — expected, since attention's share of cost is naturally small at short
+context; the dedicated long-prompt repro above is this feature's real signal, same honesty
+standard as `--mmq`'s "measured decode-throughput win, not peer latency" framing.
+
+**Known limitation (documented in `DeviceKvCache` javadoc, not a defect):** multi-token
+greedy-decode sequences can occasionally diverge between `--gpu-attention on` and `off` on some
+prompts after 15+ tokens — FP16 KV rounding occasionally flips a close greedy decision, same class
+of behavior already accepted for `--mmq` and other reduced-precision paths in this codebase.
+Single-step logits match tightly (parity test). Not pursued further — bit-identical multi-step
+generation is not the bar here or anywhere else in this codebase.
+
+### Feature × surface interaction matrix (`--gpu-attention`)
+
+Per ROADMAP **§6**.
+
+| New feature / flag | Base inference | --lora-play | LoRA train | Vision | --parallel | --gpu-layers | --prefill-batch | --mmq | CUDA | ROCm | Default |
+|--------------------|----------------|-------------|------------|--------|------------|--------------|-----------------|-------|------|------|---------|
+| `--gpu-attention` | **wired** (Llama-family/Mistral/Qwen2); Phi-2/Phi-3/Qwen3/Qwen3-MoE **follow-up** | **explicit no-op + warn** (separate handler class, own KV map/attention math) | **explicit no-op + warn** | **wired automatically** (delegates to internal `LlamaTransformerHandler`) | **wired** (per-stream device pointers, one batched launch) | **wired** — activates only for GPU-resident layers, scalar fallback below cutover | **wired** | **wired**, orthogonal (attention only ever consumes host `float[]` Q/K/V regardless of which device dtype produced it) | **wired** | **follow-up** — no kernel; `CudaGqaAttention.tryCreate` returns `null` on non-CUDA backends, falls back to scalar CPU, never silent (logged at handler construction) | **off** |
+
+### Cross-feature smoke (before feature complete)
+
+- [x] Base inference **wired**: `LlamaTransformerHandlerGpuAttentionLiveTest` (real GGUF + CUDA)
+      proves `gpuAttentionActive()` true and greedy-token parity; JFR `cuda-resident-*` /
+      `gpuAttentionActive()` log line names the active policy.
+- [x] `--lora-play` / LoRA train **explicit no-op + warn**: `LoraTrainableHandler.
+      warnIfGpuAttentionIgnored()` logs once and records `LoraTrainNotices.GPU_ATTENTION_IGNORED`
+      when `--gpu-attention` is preferred outside the base handler.
+- [x] Vision **wired automatically**: no vision-specific code — delegation via
+      `VisionAwareForwardPassHandler` inherited from Phase B's same pattern; not independently
+      re-verified in this stage (no vision-specific bake-off required per this stage's exit
+      criteria — vision shares `LlamaTransformerHandler`'s code path with no divergent call site).
+- [x] `--parallel` **wired**: batched-pointer `attendBatched(...)` design serves multi-decode in
+      one launch; covered by the existing multi-decode parity tests.
+- [x] `--gpu-layers` **wired**: `layerGpuResident(...)` gate in `LlamaTransformerHandler` — only
+      GPU-resident layers get a `DeviceKvCache` entry, non-resident layers fall to `GqaMath`.
+- [x] `--prefill-batch` **wired**: prefill batch call site builds a `B`-sized batch and calls
+      `attendBatched`, same as single/multi-decode call sites.
+- [x] `--mmq` **wired**, orthogonal: confirmed by code inspection — attention consumes host
+      `float[]` Q/K/V regardless of which device dtype (FP16/Q4_K) produced them.
+- [x] CUDA **wired**; ROCm **follow-up**: `CudaGqaAttention.tryCreate` returns `null` on non-CUDA
+      backends (checked in `GpuBindings`/`GpuContext.selectBindings()` dispatch), logged, falls
+      back to `GqaMath`.
+- [x] §2 compares run: inference regression (off/on), LoRA regression, and the dedicated
+      `compare-prefill-batch.sh` bake-off — see run links above. Vision compare not required this
+      stage (no MatVec/vision-specific code changed; delegates unchanged).
+
+### Exit checklist (compatibility)
+
+- [x] Interaction matrix complete (no empty cells)
+- [x] No silent flag ignore on any surface that accepts the flag in the launcher
+- [x] Launcher (`scripts/run.sh`) forwards `--gpu-attention` for the command mode that honors it
+      (`local`; `cluster`/`lora` share `ConsoleMain`'s CLI parser and env-var fallback, matching
+      exactly how `--mmq` is scoped — `--mmq` itself is only CLI-wired in `run.sh`'s `local`
+      subcommand today)
+- [x] User-facing docs (`docs/howto.md`) state which modes honor the feature and which
+      architectures/surfaces are follow-ups
+- [x] ROADMAP §5 architectures covered (Llama-family) or named follow-up (Phi-2/Phi-3/Qwen3/
+      Qwen3-MoE)

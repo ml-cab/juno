@@ -24,6 +24,7 @@ MAX_TOKENS=8
 PREFILL_VALUES="1,32"
 API_PORT=18083
 USE_GPU=0
+GPU_ATTENTION=""
 PUBLISH=1
 JFR_DURATION="${JFR_DURATION:-10m}"
 
@@ -44,6 +45,7 @@ Options:
   --prefill-values LIST   Comma-separated chunk sizes (default: ${PREFILL_VALUES})
   --api-port N            REST port (default: ${API_PORT})
   --cpu / --gpu           Backend (default: CPU)
+  --gpu-attention on|off|auto  Juno --gpu-attention (GPU-resident attention kernel; default off)
   --out DIR               Output directory
   --no-publish            Skip docs/perf-compare copy
   -h, --help              This help
@@ -59,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --api-port) API_PORT="$2"; shift 2 ;;
     --cpu) USE_GPU=0; shift ;;
     --gpu) USE_GPU=1; shift ;;
+    --gpu-attention) GPU_ATTENTION="$2"; shift 2 ;;
     --out) OUT_ROOT="$2"; shift 2 ;;
     --no-publish) PUBLISH=0; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -172,6 +175,7 @@ run_prefill_value() {
     --prefill-batch "$prefill_batch"
     --jfr "$JFR_DURATION"
   )
+  [[ -n "$GPU_ATTENTION" ]] && java_args+=(--gpu-attention "$GPU_ATTENTION")
 
   log "start prefill-batch=${prefill_batch} n_prompt≈${N_PROMPT} ${backend_flag#--}"
   : >"$logf"
@@ -214,11 +218,17 @@ run_prefill_value() {
   prefill_ms="null"
   prefill_count="null"
   pp_tps="null"
+  attention_prefill_ms="null"
+  attention_share_pct="null"
   if wait_for_metrics "$metrics" 45; then
     prefill_ms="$(jq -r '.models[0].metrics."juno.ForwardPass.prefill.total_ms" // null' "$metrics")"
     prefill_count="$(jq -r '.models[0].metrics."juno.ForwardPass.prefill.count" // null' "$metrics")"
+    attention_prefill_ms="$(jq -r '.models[0].metrics."juno.Attention.prefill.total_ms" // null' "$metrics")"
     if [[ "$prefill_ms" != "null" && "$prompt_tokens" =~ ^[0-9]+$ && "$prompt_tokens" -gt 0 ]]; then
       pp_tps="$(awk -v pt="$prompt_tokens" -v ms="$prefill_ms" 'BEGIN { if (ms>0) printf "%.4f", pt/(ms/1000); }')"
+    fi
+    if [[ "$attention_prefill_ms" != "null" && "$prefill_ms" != "null" ]]; then
+      attention_share_pct="$(awk -v a="$attention_prefill_ms" -v f="$prefill_ms" 'BEGIN { if (f>0) printf "%.1f", (a/f)*100; }')"
     fi
   else
     warn "metrics.json missing for prefill-batch=${prefill_batch}"
@@ -238,6 +248,9 @@ run_prefill_value() {
     --argjson prefill_count "${prefill_count:-null}" \
     --argjson prompt_eval_tps "${pp_tps:-null}" \
     --argjson use_gpu "$USE_GPU" \
+    --arg gpu_attention "$GPU_ATTENTION" \
+    --argjson attention_prefill_total_ms "${attention_prefill_ms:-null}" \
+    --argjson attention_share_pct "${attention_share_pct:-null}" \
     '{
       tool: $tool,
       model: $model,
@@ -251,10 +264,13 @@ run_prefill_value() {
       forward_pass_prefill_total_ms: $prefill_total_ms,
       forward_pass_prefill_count: $prefill_count,
       prompt_eval_tps: $prompt_eval_tps,
-      use_gpu: $use_gpu
+      use_gpu: $use_gpu,
+      gpu_attention: $gpu_attention,
+      attention_prefill_total_ms: $attention_prefill_total_ms,
+      attention_share_pct: $attention_share_pct
     }' >"$out_json"
 
-  log "prefill-batch=${prefill_batch}: pp_tps=${pp_tps:-?} prefill_ms=${prefill_ms:-?} count=${prefill_count:-?} wall_ms=${wall_ms}"
+  log "prefill-batch=${prefill_batch}: pp_tps=${pp_tps:-?} prefill_ms=${prefill_ms:-?} count=${prefill_count:-?} wall_ms=${wall_ms} attention_share_pct=${attention_share_pct:-?}"
   [[ "$http_code" == "200" ]] || warn "http=${http_code} for prefill-batch=${prefill_batch}"
 }
 
@@ -262,8 +278,10 @@ mkdir -p "$OUT_ROOT"
 setup_cuda_env
 
 IFS=',' read -ra PV <<< "$PREFILL_VALUES"
+declare -a RESULT_JSONS=()
 for pv in "${PV[@]}"; do
   run_prefill_value "$pv"
+  RESULT_JSONS+=("${OUT_ROOT}/prefill-${pv}.json")
 done
 
 compare_json="${OUT_ROOT}/compare.json"
@@ -277,19 +295,19 @@ jq -s '{
      then ([.[] | select(.prefill_batch == 32) | .prompt_eval_tps][0] // null) /
           ([.[] | select(.prefill_batch == 1) | .prompt_eval_tps][0])
      else null end)
-}' "${OUT_ROOT}"/prefill-[0-9]*.json >"$compare_json" 2>/dev/null || true
+}' "${RESULT_JSONS[@]}" >"$compare_json" 2>/dev/null || true
 
 INDEX="${OUT_ROOT}/INDEX.md"
 {
   echo "# Prefill microbatch — ${RUN_ID}"
   echo
-  echo "Model: \`${MODEL}\` · raw prompt target: ${N_PROMPT} tokens · backend: $([ "$USE_GPU" -eq 1 ] && echo GPU || echo CPU)"
+  echo "Model: \`${MODEL}\` · raw prompt target: ${N_PROMPT} tokens · backend: $([ "$USE_GPU" -eq 1 ] && echo GPU || echo CPU) · gpu-attention: ${GPU_ATTENTION:-off (default)}"
   echo
-  echo "| prefill-batch | pp t/s (JFR) | prefill ms | prefill count | wall ms |"
-  echo "|--------------:|-------------:|-----------:|--------------:|--------:|"
-  for f in "${OUT_ROOT}"/prefill-[0-9]*.json; do
+  echo "| prefill-batch | pp t/s (JFR) | prefill ms | prefill count | wall ms | attention share of prefill |"
+  echo "|--------------:|-------------:|-----------:|--------------:|--------:|---------------------------:|"
+  for f in "${RESULT_JSONS[@]}"; do
     [[ -f "$f" ]] || continue
-    jq -r '"| \(.prefill_batch) | \(.prompt_eval_tps // "-") | \(.forward_pass_prefill_total_ms // "-") | \(.forward_pass_prefill_count // "-") | \(.wall_ms) |"' "$f"
+    jq -r '"| \(.prefill_batch) | \(.prompt_eval_tps // "-") | \(.forward_pass_prefill_total_ms // "-") | \(.forward_pass_prefill_count // "-") | \(.wall_ms) | \(.attention_share_pct // "-")% |"' "$f"
   done
   if [[ -f "$compare_json" ]]; then
     echo

@@ -60,6 +60,7 @@ final class CudaBindings implements GpuBindings {
     // ── cudaMemcpyKind ────────────────────────────────────────────────────────
     static final int H2D = 1; // cudaMemcpyHostToDevice
     static final int D2H = 2; // cudaMemcpyDeviceToHost
+    static final int D2D = 3; // cudaMemcpyDeviceToDevice
 
     // ── cublasOperation_t ─────────────────────────────────────────────────────
     static final int CUBLAS_OP_N = 0;

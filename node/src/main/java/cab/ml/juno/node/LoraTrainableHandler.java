@@ -21,6 +21,7 @@ import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
@@ -284,8 +285,27 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		}
 	}
 
+	private static final AtomicBoolean GPU_ATTENTION_WARNED = new AtomicBoolean();
+
+	/**
+	 * {@code --gpu-attention} has no effect here — this handler keeps its own
+	 * attention math / KV map (never reads {@link GpuAttentionOptions}), same as
+	 * {@code --mmq} training residency (see {@link LoraMmqPolicy}). Explicit
+	 * no-op per ROADMAP §6: warn once instead of silently ignoring the flag.
+	 */
+	private void warnIfGpuAttentionIgnored() {
+		if (!GpuAttentionOptions.fromEnv().preferGpuAttention())
+			return;
+		if (!GPU_ATTENTION_WARNED.compareAndSet(false, true))
+			return;
+		log.warning("LoRA train / --lora-play ignores --gpu-attention; attention runs on scalar CPU "
+				+ "(separate handler, own KV map/attention math from LlamaTransformerHandler).");
+		LoraTrainNotices.add(LoraTrainNotices.GPU_ATTENTION_IGNORED);
+	}
+
 	private void uploadResidentWeights(GpuMatVec gpu, int L) {
 		LoraMmqPolicy.warnIfTrainIgnoresMmq(log);
+		warnIfGpuAttentionIgnored();
 		boolean tryMmq = LoraMmqPolicy.enabledForPlayback(gpu);
 		int H = cfg.hiddenDim();
 		int KV = cfg.kvDim();
