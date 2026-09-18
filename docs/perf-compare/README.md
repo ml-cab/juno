@@ -53,8 +53,65 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260916T035640Z-lora`](20260916T035640Z-lora/) | GPU LoRA train-qa + playback (post GPU-resident attention, expected flat — explicit no-op) | train ms / playback tps | [INDEX](20260916T035640Z-lora/INDEX.md) |
 | [`20260916T035952Z-prefill`](20260916T035952Z-prefill/) | GPU `--n-prompt 512`, `--gpu-attention off` (default) | JFR pp + `Attention` share of prefill | [INDEX](20260916T035952Z-prefill/INDEX.md) |
 | [`20260916T040113Z-prefill`](20260916T040113Z-prefill/) | GPU `--n-prompt 512`, `--gpu-attention on` | JFR pp + `Attention` share of prefill | [INDEX](20260916T040113Z-prefill/INDEX.md) |
+| [`20260916T043335Z`](20260916T043335Z/) | GPU default 4-model sweep + Mistral-7B tuned lane, HEAD `8e73d5e` | JFR pp/tg | [INDEX](20260916T043335Z/INDEX.md) |
+| [`20260916T043833Z-lora`](20260916T043833Z-lora/) | GPU LoRA train-qa + playback vs release-0.1.2, HEAD `8e73d5e` | train ms / playback tps | [INDEX](20260916T043833Z-lora/INDEX.md) |
+| [`20260918T024641Z`](20260918T024641Z/) | GPU default 4-model sweep + generalized per-model tuned lane (`--mmq auto --gpu-attention auto --gpu-layers auto`, Tier 18) | JFR pp/tg | [INDEX](20260918T024641Z/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
+
+## HEAD bake-off + vision chat-template regression fix — 2026-09-16 (`8e73d5e`)
+
+Full CPU + GPU compare-llama-cpp.sh sweep against `llama.cpp` requested for HEAD (`8e73d5e`,
+tip of this branch). This host had **nine other Claude Code sessions** concurrently working the
+same repo at the time, several of which had left long-running `compare-llama-cpp.sh --gpu` and
+`compare-vision.sh` processes running well past their normal completion time (up to ~59 minutes,
+vs. a normal ~5-20 minute run) — real contention for the single GTX 1080 and 12 CPU threads on
+this shared dev box, not simulated. Reported honestly rather than pushed through with noisy
+numbers:
+
+- **GPU sweep** [`20260916T043335Z`](20260916T043335Z/) (default 4-model set + Mistral-7B tuned
+  lane) completed cleanly (failures=0) — numbers are in line with prior GPU baselines on this host
+  (e.g. TinyLlama tg 28.5 t/s vs. the `20260916T035124Z` regression-gate run's 29.1 t/s). No GPU
+  contention was present during this specific run's ~5-minute window.
+- **LoRA regression gate** [`20260916T043833Z-lora`](20260916T043833Z-lora/) vs. release-0.1.2:
+  train ratio **1.00x**, playback tps ratio **0.906x** (≥0.80 gate) — **ok**.
+- **CPU sweep**: attempted twice; both runs overlapped with the other sessions' stray GPU/vision
+  processes competing for the same 12 CPU threads, making the numbers untrustworthy. Rather than
+  publish contaminated CPU throughput numbers, this run was abandoned per explicit user direction
+  after the contention did not clear within a bounded wait — **no CPU sweep published this
+  session**. Re-run `compare-llama-cpp.sh --cpu --vector 0` alone on a quiet host for a trustworthy
+  CPU baseline at this commit.
+- **Vision regression found and fixed.** `compare-vision.sh --gpu --baseline release-0.1.2` caught
+  a real bug, not noise: HEAD returned `completion_tokens=0` / empty caption /
+  `finish_reason=stop` for the standard moondream2 vision-chat scenario (baseline release-0.1.2
+  produced a normal 32-token caption). Root cause: `ConsoleMain.registerEmbeddedChatTemplate`
+  (landed in commit `ebe4301`, the GGUF chat-template feature) registered the *named fallback*
+  chat template into `EmbeddedChatTemplateRegistry` under the model's raw filename even when the
+  GGUF carries no `tokenizer.chat_template` metadata at all. For `moondream2-q5_k.llamafile` that
+  fallback resolved to generic ChatML (via `ChatModelType.fromPath`, which has no moondream/phi2
+  case) and got published under the filename key, which `ChatTemplateFormatter.forModelType`
+  checks *before* falling through to the filename-substring match that used to correctly select
+  the moondream Q&A template (`"...\n\nAnswer:"`) that `VisionChatHandler` depends on. Result: the
+  prompt ended in `<|im_start|>assistant\n` instead of `\n\nAnswer:`, so the first sampled token
+  was immediately `<|endoftext|>`. The 7.7-minute wall time / 2301 "decode" JFR events were not a
+  hang — `--prefill single` mode classifies every prompt position past index 0 as a decode-shaped
+  forward pass, so 768 prompt tokens × 3 shard events ≈ 2304, all correctly attributed and
+  producing nothing useful once the wrong template was selected.
+  - **Fix**: only register into `EmbeddedChatTemplateRegistry` when
+    `GgufChatTemplateResolver.hasEmbeddedTemplate()` is true (`ConsoleMain.java`,
+    `registerEmbeddedChatTemplate`) — when no embedded template exists, downstream
+    `ChatTemplateFormatter.forModelType` already resolves the correct named/substring template on
+    its own, so registering the fallback was actively harmful, never useful.
+  - **Regression test**: `ConsoleMainEmbeddedChatTemplateTest` (new) — verified to fail against the
+    pre-fix code (reproduces the exact bug via a synthetic no-template GGUF named
+    `moondream2-q5_k.llamafile`) and pass with the fix; a second case confirms models that *do*
+    carry a real embedded template still register correctly under both keys.
+  - **Suite-wide check**: full `mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,
+    registry,juno-player` passed clean after the fix — no other surface depends on the buggy
+    registration.
+  - **Not yet re-verified**: the live `compare-vision.sh` quality gate was not re-run against the
+    fix in this session (host contention, per above) — the fix is unit-test-verified but the
+    end-to-end perf-compare vision number at this commit is still outstanding.
 
 ## `historyArr` fix measurement — 2026-09-15 (CPU, `compare-schedule.sh`)
 
@@ -115,17 +172,73 @@ a baseline. `compare-lora.sh --reps N` (added alongside this investigation, see 
 the median across N repeated train+playback cycles for exactly this reason — a single-shot outlier
 no longer becomes the published number.
 
-## Standing Mistral-7B tuned lane — `20260915T223032Z`
+## Standing per-model tuned lane — `20260918T024641Z` (Tier 18: generalized)
 
-`compare-llama-cpp.sh --gpu` now automatically adds a second Mistral-7B row (`*-tuned`,
-`--mmq on --gpu-layers auto`) whenever mistral-7b is among the selected GPU models — alongside
-the existing vanilla-default row, not instead of it (`--no-mistral-tuned-lane` opts out). See
+`compare-llama-cpp.sh --gpu` originally added a second row only for Mistral-7B
+(`--mmq on --gpu-layers auto`, see history below). [`PLAN-Infra-Tier18.md`](../infra-plan/PLAN-Infra-Tier18.md)
+generalized `run_mistral_tuned_lane` into `run_tuned_lane`: every model in the default GPU set now
+gets a second, clearly-labeled `*-tuned` row using all three shipped `auto` flags together
+(`--mmq auto --gpu-attention auto --gpu-layers auto`), alongside the existing vanilla-default row,
+not instead of it (`--no-tuned-lane`, renamed from `--no-mistral-tuned-lane`, opts out). Rationale
+unchanged from the original mistral-only lane (`docs/infra-plan/PLAN-Infra-Review-Fixes.md` item 8):
+the published *default*-flags bake-off understates what Juno already does with its own shipped
+`auto` modes, so the standing regression gate now measures both configurations for every model, not
+only Mistral-7B.
+
+Run (`n_prompt=128`, `n_gen=64`, `reps=3`, full default 4-model set, HEAD after the Tier 18 script
+change): [`20260918T024641Z`](20260918T024641Z/):
+
+| Model | default tg (JFR) | tuned tg (JFR) | tuned/default tg | default Juno/llama tg | tuned Juno/llama tg |
+|---|---:|---:|---:|---:|---:|
+| TinyLlama-1.1B Q4_K_M | 27.17 t/s | 44.16 t/s | 1.63× | 0.152× | 0.247× |
+| Qwen2.5-3B Q4_K_M | 13.73 t/s | 20.26 t/s | 1.48× | 0.198× | 0.293× |
+| Phi-3.5-mini Q4_K_M | 12.45 t/s | 19.95 t/s | 1.60× | 0.203× | 0.326× |
+| Mistral-7B Q4_K_M | 0.529 t/s | 18.86 t/s | 35.6× | 0.0142× | 0.505× |
+
+pp (`n_prompt=128`, single-window prefill, not the long `--prefill-batch` shape
+`--gpu-attention` was measured for): flat-to-slightly-down for the three already GPU-resident
+models (TinyLlama 66.2 → 61.2 t/s, Qwen2.5-3B 33.3 → 29.7 t/s, Phi-3.5-mini 38.1 → 34.6 t/s — a few
+percent, within the noise band of the auto-resolved kernel path switching from dequant-to-FP16 to
+packed-Q4-GEMM), and a large win for Mistral-7B (0.92 → 20.65 t/s, 22.6×) purely from
+`--gpu-layers auto` giving it GPU residency it does not otherwise get. This is expected, not a
+regression: `--gpu-attention`'s own prefill win (3.85×, see below) only shows up at
+`--prefill-batch ≥ 32`; at the default single-window `n_prompt=128` shape used here, attention's
+share of prefill cost is small on these models regardless of the flag (documented in the
+`--gpu-attention` section below), so pp tracks the dominant GEMM path, not attention.
+
+**JFR confirms exactly which auto resolution ran, per model, per flag** (`*-tuned-juno.log`,
+`juno.MatVec.backend.*` / `juno.Attention.*` counts):
+
+- `--mmq auto` resolved **on** (packed `cuda_resident_q4k` + `cuda_resident_q4k_gemm` MatVec
+  events replace `cuda_resident_fp16`) for **all four models**, including Phi-3.5-mini.
+- `--gpu-attention auto` resolved **on** for TinyLlama, Qwen2.5-3B, and Mistral-7B — attention p95
+  dropped (TinyLlama decode p95 0.426ms → 0.174ms; Qwen2.5-3B 0.311ms → 0.119ms; total attention
+  wall time roughly halved on each). It correctly resolved to **off** for **Phi-3.5-mini**: that
+  model's `juno.Attention` event count is **0** in both the default and tuned runs, because
+  `Phi3TransformerHandler` owns a separate attention implementation the GPU-resident kernel is not
+  wired to yet — a named follow-up in Tier 13's own interaction matrix, not a silent gap introduced
+  here. The tuned row's tg win for Phi-3.5-mini (1.60×) therefore comes entirely from `--mmq auto`,
+  not `--gpu-attention`.
+- `--gpu-layers auto` gave Mistral-7B full GPU residency it does not get by default on this 8 GiB
+  card (near-zero GPU MatVec events in the default log vs. a full `cuda_resident_q4k` path in the
+  tuned log), explaining its outsized tg/pp jump relative to the other three models, which are
+  already fully GPU-resident by default.
+
+Tuned/default ratios for TinyLlama, Qwen2.5-3B, and Phi-3.5-mini (1.48–1.63×) directionally confirm
+the same effect already proven individually for Mistral-7B (`--mmq`/`--gpu-layers`, prior sessions)
+and for `--gpu-attention` (3.85× pp at long `--prefill-batch`, below) — now visible together, per
+model, in the one standing artifact. This is a reporting change only; no flag's own default value
+changed (all three keep default off/none), and `auto`'s per-architecture fallback behavior is
+unchanged from what Tier 5 and Tier 13 already shipped and tested.
+
+### History: Mistral-7B-only tuned lane — `20260915T223032Z` (superseded by the above)
+
+`compare-llama-cpp.sh --gpu` originally added a second Mistral-7B row (`*-tuned`,
+`--mmq on --gpu-layers auto`) only when mistral-7b was among the selected GPU models. See
 `docs/infra-plan/PLAN-Infra-Review-Fixes.md` item 8: on this 8 GiB card, Mistral-7B's
 default-flags lane (`--mmq off`, `--gpu-layers` unset) has consistently measured worse than
 Juno's own CPU numbers for smaller models across many prior sessions, while the tuned
 configuration nobody was actually exercising in the standing regression gate is ~30-40x faster.
-This run (`n_prompt=128`, `n_gen=64`, `reps=3`, full default 4-model set) makes both lanes
-visible in the same sweep going forward:
 
 | Lane | Juno tg (JFR) | Juno/llama.cpp tg ratio |
 |---|---:|---:|
@@ -133,10 +246,6 @@ visible in the same sweep going forward:
 | tuned (`--mmq on --gpu-layers auto`) | 15.65 t/s | 0.444× |
 
 Tuned/default ≈ **32.7×**, consistent with the session-78 finding this lane was added to track.
-The tuned ratio clears the P0 mistral-7b gate (≥0.15×) with real margin; the default lane remains
-representative of what a user gets who doesn't know `--mmq`/`--gpu-layers` exist, which is the
-gap this standing lane exists to keep visible rather than let the sweep quietly measure only the
-unrepresentative default going forward.
 
 ## GPU-resident attention bake-off — Tier 13 Phase C
 

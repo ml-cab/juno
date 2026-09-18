@@ -49,7 +49,7 @@ JUNO_CACHE_TYPE_K=""
 JUNO_CACHE_TYPE_V=""
 JUNO_KV_PAGE_SIZE=""
 MODEL_FILTER=""
-MISTRAL_TUNED_LANE=1
+TUNED_LANE=1
 DRY_RUN=0
 LIST_ONLY=0
 PUBLISH=1
@@ -97,12 +97,14 @@ Options:
   --no-jfr          Skip Juno --jfr (API latency only for Juno tg)
   --publish         Copy metrics JSON+INDEX into docs/perf-compare/ (default)
   --no-publish      Skip docs/perf-compare publish
-  --no-mistral-tuned-lane  Skip the extra mistral-7b tuned lane (--mmq on --gpu-layers auto)
-                    that GPU runs add automatically when mistral-7b is selected (default: on).
-                    The vanilla default-flags lane always runs regardless; this only controls
-                    the second, additional run. See docs/infra-plan/PLAN-Infra-Review-Fixes.md
-                    item 8 — the default-flags Mistral-7B number is not representative of a
-                    production config, so the regression sweep also measures the tuned one.
+  --no-tuned-lane   Skip the extra per-model tuned lane (--mmq auto --gpu-attention auto
+                    --gpu-layers auto) that GPU runs add automatically for every selected
+                    model (default: on). The vanilla default-flags lane always runs
+                    regardless; this only controls the second, additional run. See
+                    docs/infra-plan/PLAN-Infra-Review-Fixes.md item 8 and
+                    docs/infra-plan/PLAN-Infra-Tier18.md — the default-flags numbers
+                    understate what Juno's already-shipped auto modes do, so the regression
+                    sweep also measures the tuned config.
   --list            List selected models and exit
   -n, --dry-run     Print commands only
   -h, --help        This help
@@ -155,7 +157,7 @@ while [[ $# -gt 0 ]]; do
     --no-jfr) USE_JFR=0; shift ;;
     --publish) PUBLISH=1; shift ;;
     --no-publish) PUBLISH=0; shift ;;
-    --no-mistral-tuned-lane) MISTRAL_TUNED_LANE=0; shift ;;
+    --no-tuned-lane) TUNED_LANE=0; shift ;;
     --list) LIST_ONLY=1; shift ;;
     -n|--dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -769,22 +771,28 @@ EOF
   return 0
 }
 
-run_mistral_tuned_lane() {
-  # Mistral-7B's default-flags (--mmq off, --gpu-layers unset) lane sits at a
-  # ~30-40x deficit vs the --mmq on --gpu-layers auto config on 8 GiB cards
-  # (see docs/infra-plan/PLAN-Infra-Review-Fixes.md item 8) — a config nobody
-  # would actually run in production. Add a second lane so the standing GPU
-  # regression sweep measures both, not just the unrepresentative default.
+run_tuned_lane() {
+  # Default-flags (--mmq off, --gpu-attention off, --gpu-layers unset) lanes
+  # sit well below what Juno's own shipped auto modes already do (see
+  # docs/infra-plan/PLAN-Infra-Review-Fixes.md item 8 and
+  # docs/infra-plan/PLAN-Infra-Tier18.md) — a config nobody would actually run
+  # in production. Add a second lane per model, using the three flags' own
+  # auto resolution together, so the standing GPU regression sweep measures
+  # both, not just the unrepresentative default. auto falls back to off/serial
+  # per-architecture where a flag is not wired (e.g. --gpu-attention on Phi-3)
+  # — this is reported, not silently implied as "fully tuned" for every model.
   local model_path="$1" stem="$2"
   local tuned_stem="${stem}-tuned"
-  local saved_mmq="$JUNO_MMQ" saved_gpu_layers="$JUNO_GPU_LAYERS"
+  local saved_mmq="$JUNO_MMQ" saved_gpu_attention="$JUNO_GPU_ATTENTION" saved_gpu_layers="$JUNO_GPU_LAYERS"
 
-  JUNO_MMQ="on"
+  JUNO_MMQ="auto"
+  JUNO_GPU_ATTENTION="auto"
   JUNO_GPU_LAYERS="auto"
-  log "=== mistral tuned lane: ${stem} (--mmq on --gpu-layers auto) ==="
+  log "=== tuned lane: ${stem} (--mmq auto --gpu-attention auto --gpu-layers auto) ==="
   run_juno "$model_path" "$tuned_stem"
   local rc=$?
   JUNO_MMQ="$saved_mmq"
+  JUNO_GPU_ATTENTION="$saved_gpu_attention"
   JUNO_GPU_LAYERS="$saved_gpu_layers"
 
   # Reuse the vanilla lane's llama.cpp reference numbers — the reference engine
@@ -970,8 +978,8 @@ for base in "${SELECTED_MODELS[@]}"; do
   run_llama_bench "$model_path" "$stem" || failures=$((failures + 1))
   run_juno "$model_path" "$stem" || failures=$((failures + 1))
   write_pair_summary "$stem"
-  if [[ "$USE_GPU" -eq 1 && "$MISTRAL_TUNED_LANE" -eq 1 && "$base" == mistral-7b* ]]; then
-    run_mistral_tuned_lane "$model_path" "$stem" || failures=$((failures + 1))
+  if [[ "$USE_GPU" -eq 1 && "$TUNED_LANE" -eq 1 ]]; then
+    run_tuned_lane "$model_path" "$stem" || failures=$((failures + 1))
   fi
 done
 

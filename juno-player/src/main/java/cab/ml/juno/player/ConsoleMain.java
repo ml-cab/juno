@@ -2327,12 +2327,13 @@ public final class ConsoleMain {
 		String filenameKey = Path.of(modelPath).getFileName().toString();
 		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
 			boolean present = GgufChatTemplateResolver.hasEmbeddedTemplate(reader);
-			ChatTemplate resolved = GgufChatTemplateResolver.resolve(reader, chatKey);
-			EmbeddedChatTemplateRegistry.register(chatKey, resolved);
-			EmbeddedChatTemplateRegistry.register(filenameKey, resolved);
-			if (present)
+			if (present) {
+				ChatTemplate resolved = GgufChatTemplateResolver.resolve(reader, chatKey);
+				EmbeddedChatTemplateRegistry.register(chatKey, resolved);
+				EmbeddedChatTemplateRegistry.register(filenameKey, resolved);
 				print(Color.DIM + "  GGUF embedded chat template: detected, validated, and in use "
 						+ "(named fallback: " + chatKey + ")" + Color.RESET);
+			}
 		} catch (Exception e) {
 			log.fine(() -> "Chat-template resolution skipped for " + modelPath + ": " + e.getMessage());
 		}

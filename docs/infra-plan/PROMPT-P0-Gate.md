@@ -30,6 +30,29 @@ If after honest engineering the gate still fails, **report fail with numbers** �
 
 JFR ([`PLAN-Infra-PERF-ANALYSIS.md`](PLAN-Infra-PERF-ANALYSIS.md)): `juno.MatVec` ≈ **93–96%** of GPU decode. P1 (continuous / mixed prefill) improves concurrent load only and does **not** close interactive tg. Interactive peer claims are blocked until P0 gate is **met**.
 
+**New evidence (2026-09-16), read before profiling:** a JFR `juno.Attention` span now exists (landed
+alongside Tier 17, see [`PLAN-Infra-ROADMAP.md`](PLAN-Infra-ROADMAP.md) "Attention JFR span landed"
+note) and shows attention is **not** negligible at every context length the way Tier 13 Phase A's
+short-context (64-token) finding implied. At `ctx≈512` (`compare-prefill-batch.sh --gpu --n-prompt
+512`, TinyLlama), attention is **64.2%** of *decode* wall time and 78.3% of prefill wall time —
+MatVec dominance is a short-context finding, not a universal one. Two implications for this gate:
+
+1. **Re-baseline before touching kernels.** Step 1 below ("record Phi-3.5 and Mistral ratios") is
+   also this program's overdue re-verification that the last published Phi-3.5 ratio (**0.33×**,
+   2026-09-11, pre-Tier-17) still holds — nothing after that session touched the decode-kernel path,
+   but no one has re-run the number since. Do this before any new kernel work, not after, so effort
+   isn't spent chasing a stale target.
+2. **`--gpu-attention` (Tier 13C, feature complete, default off) is a second, already-shipped
+   decode-side lever for longer-context sessions**, not only the prefill lever it was built and
+   measured for (`docs/performance.md:424-440`'s 3.85× pp / 78.7%→11.0% prefill-share numbers). It
+   is untested as a *decode* tg lever at long context. If step 1's short-prompt re-baseline still
+   shows Phi-3.5 short of 0.5×, consider a second measurement at longer context (`--gpu-attention
+   on` vs `off`, decode tg only) before committing to new kernel authorship — it may close part of
+   the gap for free on already-wired architectures (Llama-family/Mistral/Qwen2; Phi-3 itself is a
+   named `--gpu-attention` follow-up per Tier 13's interaction matrix, so this lever does not apply
+   to Phi-3.5-mini specifically — check TinyLlama/Qwen2.5-3B/Mistral instead, or land the Phi-3
+   follow-up first).
+
 ## Read first (mandatory)
 
 1. [`models/CLAUDE.md`](../../models/CLAUDE.md) — tests first, KISS, prefer new classes, list changed files (no zip)

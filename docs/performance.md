@@ -477,3 +477,41 @@ See [`perf-compare/20260901T032753Z/`](perf-compare/20260901T032753Z/) (mistral-
 ## Static micro-batching (`--parallel`)
 
 See [`perf-compare/20260901T173121Z-parallel/`](perf-compare/20260901T173121Z-parallel/) (GPU 1.11× aggregate tg, parallel 8 vs 1).
+
+## Recommended flags (GPU)
+
+Three independently-shipped flags each default to off/none because each carries its own
+correctness or VRAM-fit caveat (see their own sections above and `docs/howto.md`), but running them
+together via their own `auto` mode is safe on supported hardware/architectures and measurably
+faster than the defaults. `auto` resolves per-model to off/serial wherever the flag is not wired
+for that architecture — it never forces an unsupported path.
+
+```
+--mmq auto --gpu-attention auto --gpu-layers auto
+```
+
+**Run:** [`perf-compare/20260918T024641Z/`](perf-compare/20260918T024641Z/) (default 4-model GPU
+set, each with a paired default row and a tuned row using the flags above)
+
+| Model | tuned/default tg | notes |
+|---|---:|---|
+| TinyLlama-1.1B Q4_K_M | 1.63× | `--mmq` + `--gpu-attention` both wired |
+| Qwen2.5-3B Q4_K_M | 1.48× | `--mmq` + `--gpu-attention` both wired |
+| Phi-3.5-mini Q4_K_M | 1.60× | `--mmq` wired; `--gpu-attention` not yet wired for `phi3` (falls back to the existing scalar path, verified via 0 `juno.Attention` JFR events) — the whole 1.60× is from `--mmq` alone |
+| Mistral-7B Q4_K_M | 35.6× | all three flags contribute; `--gpu-layers auto` is what gives this model GPU residency at all on an 8 GiB card |
+
+Caveats to know before turning these on in production:
+
+- **`--gpu-layers`**: VRAM headroom dependent — `auto` measures free VRAM and falls back toward
+  CPU-resident layers when the model does not fit; see the GPU layer offload section above.
+- **`--gpu-attention`**: occasional greedy-decode divergence at the bit level vs. the scalar CPU
+  path (FP16 KV rounding can flip a close logits comparison) — same class of tradeoff already
+  accepted for `--mmq` and other reduced-precision paths in this codebase; not bit-identical
+  generation. Wired for Llama-family/Mistral/Qwen2 (and vision, which shares the same handler);
+  Phi-2/Phi-3/Qwen3/Qwen3-MoE and ROCm remain a named follow-up. Its largest measured win (3.85× pp,
+  see the GPU-resident attention section above) is at long `--prefill-batch` windows, not the short
+  default prompt used in the sweep above.
+- **`--mmq`**: packed Q4_K device GEMV; wired for every architecture in the default GPU set,
+  including Phi-3.5-mini, independent of `--gpu-attention`'s narrower architecture coverage.
+- None of these three flags are wired for LoRA train or `--lora-play` (`--mmq`/`--gpu-attention`
+  explicitly no-op and warn there); see their own sections for the full interaction matrix.
