@@ -40,6 +40,10 @@ final class JfrMetricsExtractor {
     private static final String FORWARD = "juno.ForwardPass";
     private static final String PREFILL_BATCH = "juno.PrefillBatch";
     private static final String ATTENTION = "juno.Attention";
+    private static final String RMS_NORM = "juno.RmsNorm";
+    private static final String ROPE = "juno.Rope";
+    private static final String RESIDUAL_ADD = "juno.ResidualAdd";
+    private static final String SWIGLU = "juno.SwiGlu";
     private static final String TOKENIZER = "juno.Tokenizer";
     private static final String TEMPLATE = "juno.TemplateFormat";
     private static final String LORA_STEP = "juno.LoraTrainStep";
@@ -85,9 +89,11 @@ final class JfrMetricsExtractor {
         List<Long> forwardPrefill = new ArrayList<>();
         List<Long> forwardDecode = new ArrayList<>();
 
-        List<Long> attentionAll = new ArrayList<>();
-        List<Long> attentionPrefill = new ArrayList<>();
-        List<Long> attentionDecode = new ArrayList<>();
+        DurationBucket attention = new DurationBucket();
+        DurationBucket rmsNorm = new DurationBucket();
+        DurationBucket rope = new DurationBucket();
+        DurationBucket residualAdd = new DurationBucket();
+        DurationBucket swiglu = new DurationBucket();
 
         List<Long> tokEncode = new ArrayList<>();
         List<Long> tokDecodeToken = new ArrayList<>();
@@ -189,21 +195,16 @@ final class JfrMetricsExtractor {
                             forwardAll.add(nano);
                             forwardPrefill.add(nano);
                         }
-                        case ATTENTION -> {
-                            attentionAll.add(nano);
-                            int windowSize = ev.hasField("windowSize") ? ev.getInt("windowSize") : 1;
-                            // windowSize > 1 only occurs in the batched-prefill loop; a single-position
-                            // call (windowSize == 1) is prefill only when it is the very first position
-                            // (the transformerLayer() sequential-fallback prefill path), same heuristic
-                            // as FORWARD above.
-                            boolean prefill = windowSize > 1
-                                    || (ev.hasField("startPosition") && ev.getInt("startPosition") == 0);
-                            if (prefill) {
-                                attentionPrefill.add(nano);
-                            } else {
-                                attentionDecode.add(nano);
-                            }
-                        }
+                        // windowSize > 1 only occurs in the batched-prefill / multi-decode loop; a
+                        // single-row call (windowSize == 1) is prefill only when it is the very first
+                        // position (the sequential-fallback prefill path), same heuristic as FORWARD
+                        // above. Shared by Attention and the four per-op elementwise events below,
+                        // all of which record the same windowSize/startPosition field pair.
+                        case ATTENTION -> attention.add(nano, isWindowPrefill(ev));
+                        case RMS_NORM -> rmsNorm.add(nano, isWindowPrefill(ev));
+                        case ROPE -> rope.add(nano, isWindowPrefill(ev));
+                        case RESIDUAL_ADD -> residualAdd.add(nano, isWindowPrefill(ev));
+                        case SWIGLU -> swiglu.add(nano, isWindowPrefill(ev));
                         case TOKENIZER -> {
                             if (ev.hasField("operation")) {
                                 String op = ev.getString("operation");
@@ -364,15 +365,11 @@ final class JfrMetricsExtractor {
         m.put("juno.ForwardPass.prefill.total_ms", JfrPercentiles.sumNanosToMs(forwardPrefill));
         m.put("juno.ForwardPass.decode.total_ms", JfrPercentiles.sumNanosToMs(forwardDecode));
 
-        m.put("juno.Attention.count", (double) attentionAll.size());
-        m.put("juno.Attention.duration.total_ms", JfrPercentiles.sumNanosToMs(attentionAll));
-        m.put("juno.Attention.duration.p95_ms", JfrPercentiles.p95NanosToMs(attentionAll));
-        m.put("juno.Attention.prefill.count", (double) attentionPrefill.size());
-        m.put("juno.Attention.decode.count", (double) attentionDecode.size());
-        m.put("juno.Attention.prefill.p95_ms", JfrPercentiles.p95NanosToMs(attentionPrefill));
-        m.put("juno.Attention.decode.p95_ms", JfrPercentiles.p95NanosToMs(attentionDecode));
-        m.put("juno.Attention.prefill.total_ms", JfrPercentiles.sumNanosToMs(attentionPrefill));
-        m.put("juno.Attention.decode.total_ms", JfrPercentiles.sumNanosToMs(attentionDecode));
+        putDurationBucket(m, "juno.Attention", attention);
+        putDurationBucket(m, "juno.RmsNorm", rmsNorm);
+        putDurationBucket(m, "juno.Rope", rope);
+        putDurationBucket(m, "juno.ResidualAdd", residualAdd);
+        putDurationBucket(m, "juno.SwiGlu", swiglu);
 
         m.put("juno.Tokenizer.encode.count", (double) tokEncode.size());
         m.put("juno.Tokenizer.encode.p95_ms", JfrPercentiles.p95NanosToMs(tokEncode));
@@ -453,6 +450,43 @@ final class JfrMetricsExtractor {
                 specDraftTokens > 0 ? (double) specAcceptedTokens / specDraftTokens : 0.0);
 
         return new MetricsSnapshot.ModelMetrics(model.getName(), model.getPath(), jfrName, m);
+    }
+
+    /**
+     * {@code windowSize > 1} only occurs in the batched-prefill / multi-decode loop; a
+     * single-row call ({@code windowSize == 1}) is prefill only when it is the very first
+     * position (the sequential-fallback prefill path). Shared by {@code juno.Attention} and
+     * every per-op elementwise event ({@code juno.RmsNorm}/{@code Rope}/{@code ResidualAdd}/
+     * {@code SwiGlu}), which all record the same {@code windowSize}/{@code startPosition}
+     * field pair.
+     */
+    private static boolean isWindowPrefill(RecordedEvent ev) {
+        int windowSize = ev.hasField("windowSize") ? ev.getInt("windowSize") : 1;
+        return windowSize > 1 || (ev.hasField("startPosition") && ev.getInt("startPosition") == 0);
+    }
+
+    private static void putDurationBucket(Map<String, Double> m, String prefix, DurationBucket b) {
+        m.put(prefix + ".count", (double) b.all.size());
+        m.put(prefix + ".duration.total_ms", JfrPercentiles.sumNanosToMs(b.all));
+        m.put(prefix + ".duration.p95_ms", JfrPercentiles.p95NanosToMs(b.all));
+        m.put(prefix + ".prefill.count", (double) b.prefill.size());
+        m.put(prefix + ".decode.count", (double) b.decode.size());
+        m.put(prefix + ".prefill.p95_ms", JfrPercentiles.p95NanosToMs(b.prefill));
+        m.put(prefix + ".decode.p95_ms", JfrPercentiles.p95NanosToMs(b.decode));
+        m.put(prefix + ".prefill.total_ms", JfrPercentiles.sumNanosToMs(b.prefill));
+        m.put(prefix + ".decode.total_ms", JfrPercentiles.sumNanosToMs(b.decode));
+    }
+
+    /** Accumulates a duration event's nanos into an overall list plus a prefill/decode bucket. */
+    private static final class DurationBucket {
+        final List<Long> all = new ArrayList<>();
+        final List<Long> prefill = new ArrayList<>();
+        final List<Long> decode = new ArrayList<>();
+
+        void add(long nano, boolean isPrefill) {
+            all.add(nano);
+            (isPrefill ? prefill : decode).add(nano);
+        }
     }
 
     private static String sanitizeBackend(String backend) {

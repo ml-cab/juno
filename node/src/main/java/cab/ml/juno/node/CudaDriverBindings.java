@@ -25,6 +25,7 @@ import java.util.logging.Logger;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * Panama FFI downcall handles for the CUDA Driver API ({@code libcuda}).
@@ -43,6 +44,13 @@ final class CudaDriverBindings {
 	final MethodHandle cuModuleGetFunction;
 	final MethodHandle cuModuleUnload;
 	final MethodHandle cuLaunchKernel;
+	// CUDA graph capture/replay (Tier 19 Phase B — see CudaGraphSession).
+	final MethodHandle cuStreamBeginCapture;
+	final MethodHandle cuStreamEndCapture;
+	final MethodHandle cuGraphInstantiate;
+	final MethodHandle cuGraphLaunch;
+	final MethodHandle cuGraphDestroy;
+	final MethodHandle cuGraphExecDestroy;
 
 	private static final CudaDriverBindings INSTANCE;
 	private static final Throwable INIT_FAILURE;
@@ -95,6 +103,25 @@ final class CudaDriverBindings {
 						ADDRESS, // stream
 						ADDRESS, // kernelParams
 						ADDRESS)); // extra
+
+		// CUresult cuStreamBeginCapture(CUstream hStream, CUstreamCaptureMode mode)
+		cuStreamBeginCapture = bind(linker, cuda, "cuStreamBeginCapture",
+				FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+		// CUresult cuStreamEndCapture(CUstream hStream, CUgraph *phGraph)
+		cuStreamEndCapture = bind(linker, cuda, "cuStreamEndCapture",
+				FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+		// CUresult cuGraphInstantiate(CUgraphExec *phGraphExec, CUgraph hGraph, unsigned long long flags)
+		cuGraphInstantiate = bind(linker, cuda, "cuGraphInstantiate",
+				FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
+		// CUresult cuGraphLaunch(CUgraphExec hGraphExec, CUstream hStream)
+		cuGraphLaunch = bind(linker, cuda, "cuGraphLaunch",
+				FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+		// CUresult cuGraphDestroy(CUgraph hGraph)
+		cuGraphDestroy = bind(linker, cuda, "cuGraphDestroy",
+				FunctionDescriptor.of(JAVA_INT, ADDRESS));
+		// CUresult cuGraphExecDestroy(CUgraphExec hGraphExec)
+		cuGraphExecDestroy = bind(linker, cuda, "cuGraphExecDestroy",
+				FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
 		check(callInt(cuInit, 0), "cuInit");
 		log.info("CudaDriverBindings ready — Panama FFI (libcuda)");

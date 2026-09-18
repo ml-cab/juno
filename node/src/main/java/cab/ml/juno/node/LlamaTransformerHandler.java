@@ -157,6 +157,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	/** Non-null only when {@code --gpu-attention} is active on a CUDA backend. */
 	private final CudaGqaAttention gqaGpu;
 
+	/**
+	 * Non-null whenever a CUDA backend is resolved (no dedicated flag — see
+	 * {@link CudaRmsNorm}). Tier 19 Phase A GPU-resident RMS norm.
+	 */
+	private final CudaRmsNorm rmsNormGpu;
+
 	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
 	// When non-null, every completed forward pass flushes key/value data into
 	// the KVCacheManager (GPU + CPU tiers). Eviction under real memory pressure
@@ -252,6 +258,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.outputProjQ4Dev = null;
 		this.gpuLayersResolved = 0;
 		this.gqaGpu = null;
+		this.rmsNormGpu = null;
 		log.info(kvLayout.policySummary());
 	}
 
@@ -331,6 +338,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		outputProjDevFp32 = null;
 		int resolvedLayers = 0;
 		CudaGqaAttention gqa = null;
+		CudaRmsNorm rmsNorm = null;
 		if (backend instanceof GpuMatVec cuda) {
 			if (cuda.supportsHalfResident()) {
 				resolvedLayers = uploadFp16Resident(cuda, L);
@@ -347,9 +355,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 							+ " backend — not yet implemented there, falling back to scalar CPU attention");
 				}
 			}
+			// Deliberately not activated by default (unlike --gpu-attention above), despite
+			// no dedicated CLI flag existing to opt out — see CudaRmsNorm's class javadoc
+			// and docs/infra-plan/PLAN-Infra-Tier19.md's "measured regression" note for why:
+			// a live A/B on real TinyLlama decode showed this path's independent per-call
+			// H2D-upload/kernel-launch/D2H-download round trip costs ~11x more than the
+			// scalar CPU path it replaces (0.168ms vs 0.015ms decode p95), because nothing
+			// yet keeps the activation device-resident across the surrounding GEMV calls
+			// (which still do their own independent host round trip either side of this
+			// one). Left unconstructed (null) until that residency gap is closed.
+			rmsNorm = null;
 		}
 		this.gpuLayersResolved = resolvedLayers;
 		this.gqaGpu = gqa;
+		this.rmsNormGpu = rmsNorm;
 	}
 
 	/** Resolved global GPU layer count for JFR / diagnostics. */
@@ -1126,6 +1145,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * Single transformer layer over N independent decode streams. Linear
 	 * projections are batched; attention runs per stream with its own KV cache
 	 * and position.
+	 *
+	 * <p>The per-op JFR events emitted here (RmsNorm/Rope/ResidualAdd/SwiGlu)
+	 * record {@code positions[0]} as their start position — streams in a
+	 * {@code --parallel} batch may sit at different KV positions, so this is a
+	 * representative value for prefill/decode bucketing, not an exact one for
+	 * every row in the call.
 	 */
 	private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
 			SessionKvTensor[] kCacheLayers, SessionKvTensor[] vCacheLayers, BatchWorkspace ws,
@@ -1135,8 +1160,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int I = cfg.intermediateSize();
 		int kvDim = cfg.kvDim();
 
-		for (int b = 0; b < N; b++)
-			rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
+		RmsNormEvent normEvt1 = new RmsNormEvent();
+		normEvt1.begin();
+		rmsNormIntoGpuOrCpu(x, attnNorm[li], cfg.rmsNormEps(), ws.norm1);
+		normEvt1.windowSize = N;
+		normEvt1.startPosition = positions[0];
+		normEvt1.dimension = H;
+		normEvt1.commit();
 
 		sgemmLayerInto(wq[li], wqDev, wqDevFp32, wqQ4Dev, li, ws.norm1, ws.q, H, H);
 		sgemmLayerInto(wk[li], wkDev, wkDevFp32, wkQ4Dev, li, ws.norm1, ws.k, kvDim, H);
@@ -1150,11 +1180,17 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			}
 		}
 
+		RopeEvent ropeEvt = new RopeEvent();
+		ropeEvt.begin();
 		for (int b = 0; b < N; b++) {
 			int pos = positions[b];
 			rope(ws.q[b], pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
 			rope(ws.k[b], pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
 		}
+		ropeEvt.windowSize = N;
+		ropeEvt.startPosition = positions[0];
+		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
+		ropeEvt.commit();
 
 		for (int b = 0; b < N; b++) {
 			int pos = positions[b];
@@ -1192,25 +1228,48 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		sgemmLayerInto(wo[li], woDev, woDevFp32, woQ4Dev, li, ws.attnOut, ws.attnProj, H, H);
 
+		ResidualAddEvent residEvt1 = new ResidualAddEvent();
+		residEvt1.begin();
 		for (int b = 0; b < N; b++)
 			for (int d = 0; d < H; d++)
 				x[b][d] += ws.attnProj[b][d];
+		residEvt1.windowSize = N;
+		residEvt1.startPosition = positions[0];
+		residEvt1.dimension = H;
+		residEvt1.commit();
 
-		for (int b = 0; b < N; b++)
-			rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
+		RmsNormEvent normEvt2 = new RmsNormEvent();
+		normEvt2.begin();
+		rmsNormIntoGpuOrCpu(x, ffnNorm[li], cfg.rmsNormEps(), ws.norm2);
+		normEvt2.windowSize = N;
+		normEvt2.startPosition = positions[0];
+		normEvt2.dimension = H;
+		normEvt2.commit();
 
 		sgemmLayerInto(wGate[li], wGateDev, wGateDevFp32, wGateQ4Dev, li, ws.norm2, ws.gate, I, H);
 		sgemmLayerInto(wUp[li], wUpDev, wUpDevFp32, wUpQ4Dev, li, ws.norm2, ws.up, I, H);
 
+		SwiGluEvent swigluEvt = new SwiGluEvent();
+		swigluEvt.begin();
 		for (int b = 0; b < N; b++)
 			for (int i = 0; i < I; i++)
 				ws.hidden[b][i] = silu(ws.gate[b][i]) * ws.up[b][i];
+		swigluEvt.windowSize = N;
+		swigluEvt.startPosition = positions[0];
+		swigluEvt.dimension = I;
+		swigluEvt.commit();
 
 		sgemmLayerInto(wDown[li], wDownDev, wDownDevFp32, wDownQ4Dev, li, ws.hidden, ws.ffnOut, H, I);
 
+		ResidualAddEvent residEvt2 = new ResidualAddEvent();
+		residEvt2.begin();
 		for (int b = 0; b < N; b++)
 			for (int d = 0; d < H; d++)
 				x[b][d] += ws.ffnOut[b][d];
+		residEvt2.windowSize = N;
+		residEvt2.startPosition = positions[0];
+		residEvt2.dimension = H;
+		residEvt2.commit();
 
 		return x;
 	}
@@ -1325,7 +1384,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		long t0 = System.nanoTime();
 
-		for (int b = 0; b < W; b++) rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
+		RmsNormEvent normEvt1 = new RmsNormEvent();
+		normEvt1.begin();
+		rmsNormIntoGpuOrCpu(x, attnNorm[li], cfg.rmsNormEps(), ws.norm1);
+		normEvt1.windowSize = W;
+		normEvt1.startPosition = startPos;
+		normEvt1.dimension = H;
+		normEvt1.commit();
 
 		sgemmLayerInto(wq[li], wqDev, wqDevFp32, wqQ4Dev, li, ws.norm1, ws.q,    H,     H);
 		sgemmLayerInto(wk[li], wkDev, wkDevFp32, wkQ4Dev, li, ws.norm1, ws.k,    kvDim, H);
@@ -1341,10 +1406,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		long t1 = System.nanoTime(); // qkv projection done
 
+		RopeEvent ropeEvt = new RopeEvent();
+		ropeEvt.begin();
 		for (int b = 0; b < W; b++) {
 			rope(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
 			rope(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
 		}
+		ropeEvt.windowSize = W;
+		ropeEvt.startPosition = startPos;
+		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
+		ropeEvt.commit();
 
 		for (int b = 0; b < W; b++) {
 			kCacheLayer.writeToken(startPos + b, ws.k[b]);
@@ -1386,20 +1457,44 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		sgemmLayerInto(wo[li], woDev, woDevFp32, woQ4Dev, li, ws.attnOut, ws.attnProj, H, H);
 
 		// First residual — in-place (eliminates x2 allocation)
+		ResidualAddEvent residEvt1 = new ResidualAddEvent();
+		residEvt1.begin();
 		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.attnProj[b][d];
+		residEvt1.windowSize = W;
+		residEvt1.startPosition = startPos;
+		residEvt1.dimension = H;
+		residEvt1.commit();
 
-		for (int b = 0; b < W; b++) rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
+		RmsNormEvent normEvt2 = new RmsNormEvent();
+		normEvt2.begin();
+		rmsNormIntoGpuOrCpu(x, ffnNorm[li], cfg.rmsNormEps(), ws.norm2);
+		normEvt2.windowSize = W;
+		normEvt2.startPosition = startPos;
+		normEvt2.dimension = H;
+		normEvt2.commit();
 
 		sgemmLayerInto(wGate[li], wGateDev, wGateDevFp32, wGateQ4Dev, li, ws.norm2, ws.gate, I, H);
 		sgemmLayerInto(wUp[li],   wUpDev,   wUpDevFp32,   wUpQ4Dev, li, ws.norm2, ws.up,   I, H);
 
+		SwiGluEvent swigluEvt = new SwiGluEvent();
+		swigluEvt.begin();
 		for (int b = 0; b < W; b++)
 			for (int i = 0; i < I; i++) ws.hidden[b][i] = silu(ws.gate[b][i]) * ws.up[b][i];
+		swigluEvt.windowSize = W;
+		swigluEvt.startPosition = startPos;
+		swigluEvt.dimension = I;
+		swigluEvt.commit();
 
 		sgemmLayerInto(wDown[li], wDownDev, wDownDevFp32, wDownQ4Dev, li, ws.hidden, ws.ffnOut, H, I);
 
 		// Second residual — in-place (eliminates x3 allocation)
+		ResidualAddEvent residEvt2 = new ResidualAddEvent();
+		residEvt2.begin();
 		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.ffnOut[b][d];
+		residEvt2.windowSize = W;
+		residEvt2.startPosition = startPos;
+		residEvt2.dimension = H;
+		residEvt2.commit();
 
 		long t4 = System.nanoTime(); // wo-proj + residual + ffn + residual done
 
@@ -1787,7 +1882,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int H = cfg.hiddenDim();
 
 		// ── Attention sub-layer ───────────────────────────────────────────────
-		float[] xNorm = rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
+		RmsNormEvent normEvt1 = new RmsNormEvent();
+		normEvt1.begin();
+		float[] xNorm = rmsNormGpuOrCpu(x, attnNorm[li], cfg.rmsNormEps());
+		normEvt1.windowSize = 1;
+		normEvt1.startPosition = pos;
+		normEvt1.dimension = H;
+		normEvt1.commit();
 
 		// Project to Q, K, V (shared activation upload when all three are device-resident)
 		float[] q;
@@ -1816,8 +1917,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 
 		// Rotary position embeddings on Q and K
+		RopeEvent ropeEvt = new RopeEvent();
+		ropeEvt.begin();
 		rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
 		rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+		ropeEvt.windowSize = 1;
+		ropeEvt.startPosition = pos;
+		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
+		ropeEvt.commit();
 
 		kCacheLayer.writeToken(pos, k);
 		vCacheLayer.writeToken(pos, v);
@@ -1848,16 +1955,35 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		// Output projection + residual
 		float[] attnProj = matVecProjection(wo[li], woQ4Dev, woDev, woDevFp32, li, attnOut, H, H);
+		ResidualAddEvent residEvt1 = new ResidualAddEvent();
+		residEvt1.begin();
 		float[] x2 = add(x, attnProj);
+		residEvt1.windowSize = 1;
+		residEvt1.startPosition = pos;
+		residEvt1.dimension = H;
+		residEvt1.commit();
 
 		// ── FFN sub-layer ─────────────────────────────────────────────────────
-		float[] xNorm2 = rmsNorm(x2, ffnNorm[li], cfg.rmsNormEps());
-		float[] ffnOut = ffn(xNorm2, li);
-		return add(x2, ffnOut);
+		RmsNormEvent normEvt2 = new RmsNormEvent();
+		normEvt2.begin();
+		float[] xNorm2 = rmsNormGpuOrCpu(x2, ffnNorm[li], cfg.rmsNormEps());
+		normEvt2.windowSize = 1;
+		normEvt2.startPosition = pos;
+		normEvt2.dimension = H;
+		normEvt2.commit();
+		float[] ffnOut = ffn(xNorm2, li, pos);
+		ResidualAddEvent residEvt2 = new ResidualAddEvent();
+		residEvt2.begin();
+		float[] out = add(x2, ffnOut);
+		residEvt2.windowSize = 1;
+		residEvt2.startPosition = pos;
+		residEvt2.dimension = H;
+		residEvt2.commit();
+		return out;
 	}
 
 	/** SwiGLU feed-forward: silu(gate(x)) * up(x) → down. */
-	private float[] ffn(float[] x, int li) {
+	private float[] ffn(float[] x, int li, int pos) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
 		float[] gate;
@@ -1876,9 +2002,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			up = matVecProjection(wUp[li], wUpQ4Dev, wUpDev, wUpDevFp32, li, x, I, H);
 		}
 		// SiLU(gate) * up
+		SwiGluEvent swigluEvt = new SwiGluEvent();
+		swigluEvt.begin();
 		float[] hidden = new float[I];
 		for (int i = 0; i < I; i++)
 			hidden[i] = silu(gate[i]) * up[i];
+		swigluEvt.windowSize = 1;
+		swigluEvt.startPosition = pos;
+		swigluEvt.dimension = I;
+		swigluEvt.commit();
 		return matVecProjection(wDown[li], wDownQ4Dev, wDownDev, wDownDevFp32, li, hidden, H, I);
 	}
 
@@ -1934,6 +2066,32 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		for (float v : x) ss += v * v;
 		float scale = 1f / (float) Math.sqrt(ss / n + eps);
 		for (int i = 0; i < n; i++) out[i] = w[i] * x[i] * scale;
+	}
+
+	/**
+	 * GPU-dispatched {@link #rmsNorm} for a single row, falling back to the scalar
+	 * CPU path when {@link #rmsNormGpu} is unavailable (no CUDA backend, or the
+	 * kernel failed to load). Tier 19 Phase A.
+	 */
+	private float[] rmsNormGpuOrCpu(float[] x, float[] w, float eps) {
+		if (rmsNormGpu != null) {
+			float[][] out = new float[1][];
+			if (rmsNormGpu.normalizeBatch(new float[][] { x }, w, eps, out))
+				return out[0];
+		}
+		return rmsNorm(x, w, eps);
+	}
+
+	/**
+	 * GPU-dispatched {@link #rmsNormInto} for a batch of rows sharing one weight
+	 * vector, falling back per-row to the scalar CPU path when {@link #rmsNormGpu}
+	 * is unavailable. Tier 19 Phase A.
+	 */
+	private void rmsNormIntoGpuOrCpu(float[][] x, float[] w, float eps, float[][] out) {
+		if (rmsNormGpu != null && rmsNormGpu.normalizeBatch(x, w, eps, out))
+			return;
+		for (int b = 0; b < x.length; b++)
+			rmsNormInto(x[b], w, eps, out[b]);
 	}
 
 	// ── Backend dispatch ─────────────────────────────────────────────────────

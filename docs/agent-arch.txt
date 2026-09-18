@@ -160,6 +160,20 @@ GPU FFI (node module — Panama project, JEP 454):
         grow-and-keep-max scratch; one batched launch serves prefill window, single decode, or
         --parallel multi-decode. tryCreate(...) returns null on non-CUDA backends (falls back
         to GqaMath scalar CPU, never silent).
+  RmsNormKernel — PTX loader/launcher (CUDA Driver API) for rms_norm.ptx; one block per batch
+        row, block-wide sum-of-squares reduction then normalize+scale (Tier 19 Phase A).
+  CudaRmsNorm — handler-facing normalizeBatch(...); grow-on-demand device scratch, mirrors
+        CudaGqaAttention's shape. Built and parity-tested but deliberately NOT constructed by
+        LlamaTransformerHandler — a live A/B found the per-call H2D/kernel/D2H round trip costs
+        ~11x more than the scalar CPU rmsNorm it would replace (no device-resident activation
+        path exists yet to avoid the round trip). Kept as verified, dormant infrastructure; see
+        docs/infra-plan/PLAN-Infra-Tier19.md "Measured finding".
+  CudaGraphSession — generic CUDA driver graph capture/replay wrapper (cuStreamBeginCapture /
+        cuStreamEndCapture / cuGraphInstantiate / cuGraphLaunch); captures a fixed async op
+        sequence once, replays it against fresh data in the same fixed buffers. Tested against
+        RmsNormKernel's launch sequence: cut ad-hoc per-call overhead ~3.2x but still left it
+        slower than CPU for a single isolated op (the sync-point cost only amortizes across a
+        chain of graphed ops). Not wired into any handler; see PLAN-Infra-Tier19.md.
   LoraMmqPolicy — playback-only MMQ gate (juno.lora.play.path); train stays FP residency.
   LoraResidentUpload.runPlayback — play Q4 OOM closes packed buffers and falls to CPU
         without the train FP16 microbatch retry.
