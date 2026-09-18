@@ -63,6 +63,7 @@ if /i "%~1"=="local"   ( shift & goto :local )
 if /i "%~1"=="lora"    ( shift & goto :lora )
 if /i "%~1"=="test"    ( shift & goto :test )
 if /i "%~1"=="merge"   ( shift & goto :merge )
+if /i "%~1"=="lora-import" ( shift & goto :lora_import )
 echo [DBG] no subcommand matched falling to cluster
 goto :cluster
 
@@ -376,12 +377,12 @@ if /i "%~1"=="--help" (
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
   echo   --gpu             use GPU when available (default)
   echo   --cpu             use CPU only
-  echo   --mmq on^|off^|auto packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default off)
+  echo   --mmq on^|off^|auto packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default auto)
   echo   --cache-type-k f16^|q8_0 K cache type (default f16)
   echo   --cache-type-v f16^|q8_0 V cache type (default f16)
   echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
   echo   --kv-page-size N           page size when continuous (default 16)
-  echo   --gpu-layers N^|all^|auto    GPU-resident transformer layers (default all)
+  echo   --gpu-layers N^|all^|auto    GPU-resident transformer layers (default auto)
   echo   --parallel N               static micro-batch size (default 1)
   echo   --batch-window-ms M        batch window when parallel^>1 (default 50)
   echo   --prefill-batch N          prefill microbatch chunk size (default 32)
@@ -856,6 +857,66 @@ call :prepend_cuda_path
 goto :eof
 
 rem ============================================================================
+rem  lora-import — convert a GGUF LoRA adapter into a Juno .lora v2 checkpoint
+rem ============================================================================
+:lora_import
+
+set "GGUF_IN="
+set "LORA_OUT="
+set "ALPHA_VAL="
+if "%HEAP%"=="" set "HEAP=4g"
+
+:lora_import_parse
+if "%~1"=="" goto :lora_import_done
+if /i "%~1"=="--gguf"  ( set "GGUF_IN=%~2"  & shift & shift & goto :lora_import_parse )
+if /i "%~1"=="--out"   ( set "LORA_OUT=%~2" & shift & shift & goto :lora_import_parse )
+if /i "%~1"=="--alpha" ( set "ALPHA_VAL=%~2" & shift & shift & goto :lora_import_parse )
+if /i "%~1"=="--heap"  ( set "HEAP=%~2"     & shift & shift & goto :lora_import_parse )
+if /i "%~1"=="--help" ( goto :lora_import_help )
+if /i "%~1"=="-h"     ( goto :lora_import_help )
+echo [ERR] Unknown lora-import flag: %~1
+echo       Run: run.bat lora-import --help
+exit /b 1
+
+:lora_import_help
+echo.
+echo   Usage: run.bat lora-import --gguf adapter.gguf --out x.lora [options]
+echo.
+echo   Options:
+echo     --gguf PATH    Source GGUF LoRA adapter (required)
+echo     --out PATH     Destination .lora v2 checkpoint (required)
+echo     --alpha N      Override alpha for every imported adapter (default:
+echo                    GGUF metadata if present, else alpha == rank)
+echo     --heap SIZE    JVM heap, e.g. 4g (default: 4g)
+echo.
+echo   Example:
+echo     run.bat lora-import --gguf hub-adapter.gguf --out hub-adapter.lora
+echo.
+goto :eof
+
+:lora_import_done
+if "%GGUF_IN%"=="" (
+  echo [ERR] GGUF adapter path is required.
+  echo       Usage: run.bat lora-import --gguf adapter.gguf --out x.lora
+  exit /b 1
+)
+if "%LORA_OUT%"=="" (
+  echo [ERR] Output .lora path is required.
+  echo       Usage: run.bat lora-import --gguf adapter.gguf --out x.lora
+  exit /b 1
+)
+call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
+if errorlevel 1 exit /b 1
+
+echo [INFO] Importing GGUF LoRA adapter  (heap=%HEAP%)
+
+set "ALPHA_FLAG_IMPORT="
+if not "%ALPHA_VAL%"=="" set "ALPHA_FLAG_IMPORT=--alpha %ALPHA_VAL%"
+
+"%JAVA%" "-Xmx%HEAP%" -cp "%JUNO_PLAYER_JAR%" cab.ml.juno.player.LoraImportMain --gguf "%GGUF_IN%" --out "%LORA_OUT%" %ALPHA_FLAG_IMPORT%
+goto :eof
+
+rem ============================================================================
 rem  Usage
 rem ============================================================================
 :usage
@@ -874,6 +935,7 @@ echo   run.bat local   --model-path PATH    in-process REPL (single JVM)
 echo   run.bat lora    --model-path PATH    LoRA fine-tuning REPL (adapter kept separate)
 echo   run.bat test    --model-path PATH    8 smoke checks
 echo   run.bat merge   --model-path PATH    bake a .lora adapter into a new GGUF
+echo   run.bat lora-import --gguf FILE --out x.lora   convert a GGUF LoRA adapter to .lora v2
 echo.
 echo   Backend flags (cluster/local/lora):
 echo     --gpu          use GPU when available (default)

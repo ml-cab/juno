@@ -81,15 +81,22 @@ class LlamaTransformerHandlerGpuAttentionLiveTest {
 
 	@Test
 	@EnabledIf("modelPresent")
-	@DisplayName("gpuAttentionActive() is false by default, true with --gpu-attention on, and frees device memory on evict")
+	@DisplayName("gpuAttentionActive() is auto (on) by default on CUDA, false with --gpu-attention off, true with --gpu-attention on, and frees device memory on evict")
 	void gpu_attention_activates_and_frees_on_evict() throws Exception {
 		savedProperty = System.getProperty(GpuAttentionOptions.ENV_PROPERTY);
 
-		// Default (off): no device KV mirror should ever be allocated.
+		// Default (auto): on CUDA with a supported architecture, the GPU path activates.
 		System.clearProperty(GpuAttentionOptions.ENV_PROPERTY);
+		ShardContext shardAuto = shardContext();
+		LlamaTransformerHandler auto = LlamaTransformerHandler.load(MODEL, shardAuto, new CudaMatVec(ctx));
+		assertThat(auto.gpuAttentionActive()).as("default (auto) must activate on CUDA for a supported architecture")
+				.isTrue();
+
+		// Explicit off: no device KV mirror should ever be allocated.
+		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "off");
 		ShardContext shardOff = shardContext();
 		LlamaTransformerHandler off = LlamaTransformerHandler.load(MODEL, shardOff, new CudaMatVec(ctx));
-		assertThat(off.gpuAttentionActive()).as("default must be off").isFalse();
+		assertThat(off.gpuAttentionActive()).as("--gpu-attention off must disable the GPU path").isFalse();
 
 		long baselineBytes = DeviceKvCache.allocatedBytes();
 		int[] prompt = { 1, 2, 3, 4, 5, 6, 7, 8 };
@@ -121,7 +128,7 @@ class LlamaTransformerHandlerGpuAttentionLiveTest {
 		// Stage-1 stub is a correctness-preserving round trip through FP16 device
 		// storage — output should closely track the CPU-only run (loose tolerance
 		// covers FP16 K/V rounding, not an algorithmic difference).
-		System.clearProperty(GpuAttentionOptions.ENV_PROPERTY);
+		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "off");
 		ShardContext shardRef = shardContext();
 		LlamaTransformerHandler ref = LlamaTransformerHandler.load(MODEL, shardRef, new CudaMatVec(ctx));
 		float[] refLogits = ref.forwardBatch(BatchForwardRequest.withTokens("live-ref", prompt, 0), shardRef)

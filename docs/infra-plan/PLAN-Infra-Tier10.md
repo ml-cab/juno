@@ -77,6 +77,29 @@ Non-goals:
 
 - howto + LoRA.md playback section; cookbook note if applicable.
 
+## Feature × surface interaction matrix
+
+| New feature / flag | Base inference | --lora-play | LoRA train | Vision | --parallel | --gpu-layers | --prefill-batch | CUDA | ROCm | Default |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `--lora-play` multi-scale (`a:0.5,b:1.0`) | wired (this *is* the `--lora-play` surface) | wired | explicit no-op (train REPL never reads `--lora-play`; unaffected) | follow-up (multi-adapter × vision combination not verified this tier — single-adapter `--lora-play` × vision was already an unverified follow-up per Tier 7/11's rows, and multi-adapter inherits that same gap) | wired (merge happens once at load time into a single `LoraAdapterSet`; `--parallel` batching is unaffected downstream) | wired (residency logic doesn't inspect adapter count) | wired (prefill chunking is independent of LoRA) | wired (unit-tested; GPU dispatch is unchanged, same `LoraAdapterSet` shape post-merge) | wired (same reasoning — vendor-neutral `MatVec`, no LoRA-specific ROCm path) | off (opt-in: only multi-entry or non-1.0-scale specs invoke the merge path; single bare-path stays byte-identical) |
+| `lora-import` subcommand | n/a — offline `.lora`-file converter, does not run during inference | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a (not a serving-time flag; produces a `.lora` file consumed later via `--lora-play`) |
+| `x_juno_loras` (per-request override) | fail closed (HTTP 400) | fail closed | n/a (REST-only field; train REPL has no HTTP surface) | fail closed | fail closed | fail closed | fail closed | fail closed | fail closed | always on — was previously fail-closed only under `--schedule continuous`; static schedule silently ignored it (ROADMAP §6 gap, pre-existing before this tier), now closed uniformly since real per-request wiring is a named follow-up, not implemented this tier |
+
+## Cross-feature smoke (before feature complete)
+
+- [x] `--lora-play a:S,b:S` (**wired**): `LoraPlaybackMergeTest` proves `merged.forward(x) == sum(scale_i * adapter_i.forward(x))` against hand-computed reference math (mirrors `LoraMergeFormulaTest`'s pattern); `LoraPlaySpecTest` covers CLI syntax parsing incl. Windows drive-letter paths. No live GPU JFR run needed beyond the existing `--lora-play` GPU tests (`LoraQ4KPlaybackParityTest` etc.) since the merge produces an ordinary `LoraAdapterSet` — same object type those tests already exercise.
+- [x] Vision (**follow-up**): not newly verified this tier; documented as inheriting the existing single-adapter `--lora-play` × vision gap (Tier 7/11 follow-up), not silently implied covered.
+- [x] `x_juno_loras` (**fail closed**, all schedules): `ContinuousLoraPolicyTest` — `forbidden(true, static)` and `forbidden(true, null)` now both assert `true` (previously only `continuous` did).
+- [x] `lora-import` (**n/a / offline**): `GgufLoraImporterTest` — 9 cases covering successful import, multi-key/multi-layer, `.weight`-suffixed tensor names, alpha override vs. GGUF metadata, and fail-closed paths (unrecognized tensor, unsupported projection, missing half, rank mismatch).
+
+## Exit checklist (compatibility)
+
+- [x] Interaction matrix complete (no empty cells)
+- [x] No silent flag ignore on any surface that accepts the flag in the launcher — `x_juno_loras` gap (silently ignored under static) closed as part of this tier
+- [x] Launcher (`scripts/run.sh` / `run.bat`) forwards new flags for every command mode that should honor them — `lora-import` wired into both dispatchers alongside `merge`; `--lora-play`'s CLI surface is unchanged (same flag, richer syntax) so no launcher wiring was needed there
+- [x] User-facing docs state which modes honor the feature — `docs/howto.md`, `juno-documentation/part3/05-lora-mode.md`
+- [x] ROADMAP §5 architectures covered or named follow-up — multi-scale merge operates purely in the `lora` module on `LoraAdapterSet`/`LoraAdapter`, below any handler-specific code, so it applies uniformly to every architecture that already supports `--lora-play` (Llama-family, Phi-3, Qwen3 per `PLAN-Infra-LoRA-MMQ.md`); no new per-architecture gap introduced
+
 ## Verification and exit gate
 
 **Global rules** ([`PLAN-Infra-ROADMAP.md`](PLAN-Infra-ROADMAP.md) → Execution rules): only one Infra tier in flight at a time; publish a [`docs/perf-compare/`](../perf-compare/README.md) bake-off before marking this tier complete.

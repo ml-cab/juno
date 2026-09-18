@@ -26,6 +26,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `local` | In-process REPL — all transformer shards in one JVM, no forking, no gRPC |
 | `lora` | LoRA fine-tuning REPL — single in-process JVM, adapter persisted to `.lora` file |
 | `merge` | Bake a trained `.lora` adapter into a new standalone GGUF — no sidecar needed at inference time |
+| `lora-import` | Convert a GGUF LoRA adapter into a Juno `.lora` v2 checkpoint usable with `--lora-play` |
 | `gguf-info` | Dump a GGUF's full metadata + tensor layout (name/shape/quant type) as plain text — for architecture review without guessing |
 | `test` | 8 automated real-model smoke checks (6 pipeline + 2 tensor), exits 0 (all pass) or 1 (any fail) |
 
@@ -50,18 +51,18 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--jfr DURATION` | — | cluster, local, lora | Java Flight Recording (e.g. `30s`, `5m`) |
 | `--verbose` / `-v` | — | cluster, local | Verbose logging |
 | `--cpu` | — | cluster, local | Force CPU inference: sets `JUNO_USE_GPU=false`. Does not enable LoRA mode. |
-| `--gpu-layers N\|all\|auto` | `all` | cluster, local | Transformer layers resident on GPU (`JUNO_GPU_LAYERS`). `auto` fits until VRAM OOM. |
-| `--mmq on\|off\|auto` | `off` | cluster, local | Packed Q4_K GPU weights (`JUNO_MMQ`) — keeps Q4_K on device instead of FP16-resident dequant. On CUDA this is a **VRAM-fit** path and a **measured decode-throughput win** vs `--mmq off` (see `docs/performance.md`). Applies to Llama-family, Phi-3, and Qwen3 dense text inference, and to `--lora-play` when the CUDA kernel loads (local REPL prints a confirmation line). LoRA **training** ignores `--mmq` (frozen weights stay FP16/FP32; the train REPL warns). `auto` enables when CUDA + kernel load. Default **off**. |
-| `--gpu-attention on\|off\|auto` | `off` | cluster, local | GPU-resident attention kernel (`JUNO_GPU_ATTENTION`) — moves QK^T + softmax + weighted-V-sum onto a device-resident FP16 KV mirror instead of scalar CPU Java. CUDA only. A **measured decode/prefill throughput lever** (see `docs/performance.md`), not a peer-latency claim. Applies to Llama-family, Mistral, and Qwen2 dense text inference (`LlamaTransformerHandler`), and to vision automatically (delegates to the same handler). Phi-2, Phi-3, Qwen3, and Qwen3-MoE keep the scalar CPU path (**follow-up**). LoRA **training** and `--lora-play` ignore `--gpu-attention` (attention stays scalar CPU; the train REPL warns). `auto` enables when CUDA is available. Occasional multi-token greedy-decode divergence from FP16 KV rounding is expected and documented, same class of tradeoff as other reduced-precision paths in this codebase. Default **off**. |
+| `--gpu-layers N\|all\|auto` | `auto` | cluster, local | Transformer layers resident on GPU (`JUNO_GPU_LAYERS`). `auto` fits until VRAM OOM; pass `all` to force full residency (may OOM) or a count/`off` to opt out. |
+| `--mmq on\|off\|auto` | `auto` | cluster, local | Packed Q4_K GPU weights (`JUNO_MMQ`) — keeps Q4_K on device instead of FP16-resident dequant. On CUDA this is a **VRAM-fit** path and a **measured decode-throughput win** vs `--mmq off` (see `docs/performance.md`). Applies to Llama-family, Phi-3, and Qwen3 dense text inference, and to `--lora-play` when the CUDA kernel loads (local REPL prints a confirmation line). LoRA **training** ignores `--mmq` (frozen weights stay FP16/FP32; the train REPL warns). `auto` enables when CUDA + kernel load, and is a no-op elsewhere; pass `off` to opt out. |
+| `--gpu-attention on\|off\|auto` | `auto` | cluster, local | GPU-resident attention kernel (`JUNO_GPU_ATTENTION`) — moves QK^T + softmax + weighted-V-sum onto a device-resident FP16 KV mirror instead of scalar CPU Java. CUDA only. A **measured decode/prefill throughput lever** (see `docs/performance.md`), not a peer-latency claim. Applies to Llama-family, Mistral, and Qwen2 dense text inference (`LlamaTransformerHandler`), and to vision automatically (delegates to the same handler). Phi-2, Phi-3, Qwen3, and Qwen3-MoE keep the scalar CPU path (**follow-up**) — `auto` correctly resolves to off there. LoRA **training** and `--lora-play` ignore `--gpu-attention` (attention stays scalar CPU; the train REPL warns). Occasional multi-token greedy-decode divergence from FP16 KV rounding is expected and documented, same class of tradeoff as other reduced-precision paths in this codebase; pass `off` for a bit-identical CPU-parity baseline. |
 | `--cache-type-k f16\|q8_0` | `f16` | cluster, local, lora | K-cache element type (`JUNO_CACHE_TYPE_K`). `f16` is the current float32 path (bit-compatible default). `q8_0` packs keys (~3.8× smaller persistent KV vs float); attention dequants to float. Slight quality tradeoff vs `f16`. On `juno lora` **training**, teacher-forced forward keeps ephemeral float KV (startup WARNING); q8 applies to inference / `--lora-play` maps. |
 | `--cache-type-v f16\|q8_0` | `f16` | cluster, local, lora | V-cache element type (`JUNO_CACHE_TYPE_V`). Same semantics as `--cache-type-k`. |
-| `--schedule static\|continuous` | `static` | cluster, local, lora | Serving schedule (`JUNO_SCHEDULE`). `static` = dense KV + static micro-batch (SSE isolated). `continuous` = paged KV + running-set batching (SSE shares steps) on **local / in-process only**. Under continuous, long prompts advance in `--prefill-batch` ubatch chunks mixed into the same engine steps as other requests’ decode; when the step slot budget is full, **decode is preferred** so short replies are not starved. Cluster, TP, and PP launchers **auto-fallback to static** with a startup WARNING. On `juno lora` **training**, continuous is an explicit no-op (ephemeral float KV + REPL WARNING; no running-set engine). Per-request `x_juno_loras` is rejected under continuous (use process-wide `--lora-play`). Prefix KV reuse is **session-scoped** (`x_juno_session_id`); shared system prompts across different sessions do not skip prefill. Tools / LoRA play that change the tokenized prefix invalidate cross-turn hits. `--parallel` caps the continuous running set (default cap 8 when parallel is 1). |
+| `--schedule static\|continuous` | `static` | cluster, local, lora | Serving schedule (`JUNO_SCHEDULE`). `static` = dense KV + static micro-batch (SSE isolated). `continuous` = paged KV + running-set batching (SSE shares steps) on **local / in-process only**. Under continuous, long prompts advance in `--prefill-batch` ubatch chunks mixed into the same engine steps as other requests’ decode; when the step slot budget is full, **decode is preferred** so short replies are not starved. Cluster, TP, and PP launchers **auto-fallback to static** with a startup WARNING. On `juno lora` **training**, continuous is an explicit no-op (ephemeral float KV + REPL WARNING; no running-set engine). Per-request `x_juno_loras` is not wired on any schedule yet and is rejected on both `static` and `continuous` (use process-wide `--lora-play`, which now supports multiple adapters and per-file scales). Prefix KV reuse is **session-scoped** (`x_juno_session_id`); shared system prompts across different sessions do not skip prefill. Tools / LoRA play that change the tokenized prefix invalidate cross-turn hits. `--parallel` caps the continuous running set (default cap 8 when parallel is 1). |
 | `--kv-page-size N` | `16` | cluster, local, lora | Tokens per KV page when `schedule=continuous` (`JUNO_KV_PAGE_SIZE`). Ignored under `static` (dense; startup note). |
 | `--parallel N` | `1` | cluster, local, master | Static micro-batch size (`JUNO_PARALLEL`). `1` disables batching; recommend `8` for API servers. |
 | `--batch-window-ms M` | `50` when parallel>1 | cluster, local, master | Batch collect window (`JUNO_BATCH_WINDOW_MS`). |
 | `--prefill-batch N` | `32` | cluster, local, master | Max prompt tokens per prefill GPU window (`JUNO_PREFILL_BATCH`). Use `1` for per-token batched prefill. |
 | `--prefill single\|batched` | `batched` | cluster, local | Prefill strategy: windowed GEMM vs per-token sequential loop. |
-| `--lora-play PATH` | — | cluster, local | Apply a pre-trained `.lora` adapter at inference (read-only, no training). In cluster mode the file is forwarded as `-Djuno.lora.play.path` to every forked node JVM. |
+| `--lora-play PATH[:SCALE][,PATH[:SCALE]...]` | — | cluster, local | Apply one or more pre-trained `.lora` adapters at inference (read-only, no training). A bare path defaults to scale `1.0` (back-compat with the single-file form); multiple comma-separated `path:scale` entries combine as `sum(scale_i * adapter_i)` — see `LoraPlaybackMerge` for the exact math. QA-LoRA and DoRA checkpoints are only supported as a single file at scale `1.0`; combining them with another adapter or a non-1.0 scale fails closed. In cluster mode the raw spec string is forwarded as `-Djuno.lora.play.path` to every forked node JVM. |
 | `--api-port N` | — | cluster, local | Start the OpenAI-compatible REST API server on port N alongside the REPL. Exposes `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{model}`. Environment override: `API_PORT`. |
 | `--grammar-file PATH` | — | cluster, local | GBNF file for constrained decoding (REPL and `--api-port`). Env `JUNO_GRAMMAR_FILE`. Mutually exclusive with `--json-schema-file`. Applies to chat completions when the request omits a grammar (`response_format.type=text` stays unconstrained). LoRA **training** ignores the flag (launcher WARNING). |
 | `--json-schema-file PATH` | — | cluster, local | JSON Schema file compiled to GBNF (documented subset below). Env `JUNO_JSON_SCHEMA_FILE`. Unsupported keywords fail closed. |
@@ -362,6 +363,36 @@ merged file is approximately 1 GB.
 
 ---
 
+### `lora-import` — convert a GGUF LoRA adapter into a Juno `.lora` v2 checkpoint
+
+Reads a GGUF LoRA adapter (the tensor naming/layout convention documented in `GgufLoraImporter`'s
+javadoc — `blk.<layer>.<proj>.weight.lora_a`/`.lora_b`, one of the standard GGML projection names)
+and writes a Juno `.lora` v2 checkpoint usable with `--lora-play`. This is a converter, not a
+training path — Juno's own training remains `juno lora` / `docs/lora-plan/`.
+
+```bash
+./juno lora-import --gguf /path/to/hub-adapter.gguf --out /adapters/hub-adapter.lora
+
+# Override alpha instead of trusting the GGUF's adapter.lora.alpha metadata (or its absence)
+./juno lora-import --gguf /path/to/hub-adapter.gguf --out /adapters/hub-adapter.lora --alpha 16
+
+./juno local --model-path model.gguf --lora-play /adapters/hub-adapter.lora
+```
+
+**Windows (Command Prompt):**
+```bat
+juno.bat lora-import --gguf models\hub-adapter.gguf --out adapters\hub-adapter.lora
+```
+
+Unrecognized tensor names, an unsupported projection, a missing `lora_a`/`lora_b` half, or a rank
+mismatch between the two halves all fail the import closed with a clear message rather than
+silently dropping or misreading part of the adapter. **Not verified against a real
+converter-produced GGUF-LoRA file this session** (no network access to fetch one) — the
+naming/layout convention follows the commonly documented scheme; see `GgufLoraImporter`'s javadoc
+for the full caveat.
+
+---
+
 ### `gguf-info` — dump a GGUF's full metadata and tensor layout
 
 Prints every metadata key/value (alphabetical) and every tensor's name, shape, and
@@ -381,9 +412,8 @@ that no amount of reading the base architecture's paper or README can substitute
 ./juno gguf-info /path/to/model.gguf /path/to/mmproj.gguf
 ```
 
-Linux/macOS only for now — `scripts/run.bat` does not currently wire up `gguf-info` (it only
-implements `cluster`/`local`/`lora`/`test`; note `merge`, just above, has the same pre-existing
-gap despite the Windows example below it).
+Linux/macOS only for now — `scripts/run.bat` does not currently wire up `gguf-info` (it implements
+`cluster`/`local`/`lora`/`test`/`merge`/`lora-import`).
 
 ---
 

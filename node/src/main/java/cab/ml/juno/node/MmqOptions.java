@@ -22,7 +22,7 @@ import java.util.Locale;
  *
  * <p>When enabled on CUDA, Q4_K projection weights stay packed on the device and
  * a fused dequant+GEMV kernel replaces the FP16-resident cuBLAS path. Default is
- * {@link Mode#OFF} until bake-off gates pass.
+ * {@link Mode#AUTO}, which enables on CUDA and is a no-op elsewhere.
  */
 public final class MmqOptions {
 
@@ -71,10 +71,10 @@ public final class MmqOptions {
 		};
 	}
 
-	/** Reads {@link #ENV_PROPERTY} (system property, falling back to the env var); defaults to {@code off}. */
+	/** Reads {@link #ENV_PROPERTY} (system property, falling back to the env var); defaults to {@code auto}. */
 	public static MmqOptions fromEnv() {
 		String raw = firstNonBlank(System.getProperty(ENV_PROPERTY), System.getenv(ENV_PROPERTY));
-		return parse(raw == null ? OFF : raw);
+		return parse(raw == null ? AUTO : raw);
 	}
 
 	private static String firstNonBlank(String a, String b) {

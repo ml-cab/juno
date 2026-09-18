@@ -1,0 +1,28 @@
+{
+  "model": "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 668.842110,
+    "token_gen_tps": 37.274698
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 0.8752636059902932,
+    "token_gen_tps": 0.5158640529254107,
+    "api_token_gen_tps": 0.4283,
+    "latency_ms": 149412,
+    "prompt_tokens": 20,
+    "completion_tokens": 64,
+    "juno_use_vector": 0,
+    "use_jfr": 1
+  },
+  "ratio_juno_over_llamacpp_pp": 0.001308625149200449,
+  "ratio_juno_over_llamacpp_tg": 0.013839523339006279,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20260918T030920Z/mistral-7b-instruct-v0.1-q4_k_m-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20260918T030920Z/mistral-7b-instruct-v0.1-q4_k_m-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20260918T030920Z/mistral-7b-instruct-v0.1-q4_k_m-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20260918T030920Z/mistral-7b-instruct-v0.1-q4_k_m-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20260918T030920Z/mistral-7b-instruct-v0.1-q4_k_m-juno-jfr.json"
+  }
+}

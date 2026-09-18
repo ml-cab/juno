@@ -538,10 +538,10 @@ cmd_local() {
         echo "    --pooling mean|cls|last    /v1/embeddings pooling (default: mean)"
         echo "    --parallel N               static micro-batch size (default 1)"
         echo "    --batch-window-ms M        batch window when parallel>1 (default 50)"
-        echo "    --gpu-layers N|all|auto    GPU-resident transformer layers (default all)"
-        echo "    --mmq on|off|auto          packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default off)"
+        echo "    --gpu-layers N|all|auto    GPU-resident transformer layers (default auto)"
+        echo "    --mmq on|off|auto          packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default auto)"
         echo "    --gpu-attention on|off|auto  GPU-resident attention kernel (measured decode/prefill throughput"
-        echo "                               lever, not a peer-latency claim; default off; CUDA only)"
+        echo "                               lever, not a peer-latency claim; default auto; CUDA only)"
         echo "    --cache-type-k f16|q8_0    K cache type (default f16 = current float path)"
         echo "    --cache-type-v f16|q8_0    V cache type (default f16)"
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
@@ -1257,6 +1257,9 @@ usage() {
   echo -e "  ${GREEN}$0 gguf-info${NC} --model-path PATH   dump a GGUF's full metadata + tensor layout"
   echo    "  $0 gguf-info model.gguf mmproj.gguf   positional args also work"
   echo ""
+  echo -e "  ${GREEN}$0 lora-import${NC} --gguf FILE --out x.lora   convert a GGUF LoRA adapter to .lora v2"
+  echo    "  $0 lora-import --help              all lora-import flags"
+  echo ""
   echo "  Flags common to default (cluster), local, and lora:"
   echo "    --pType pipeline|tensor        parallelism type         (default pipeline)"
   echo "    --dtype FLOAT32|FLOAT16|INT8   activation wire format   (default FLOAT16)"
@@ -1394,17 +1397,77 @@ cmd_merge() {
     ${output:+--output   "$output"}
 }
 
+# ---------------------------------------------------------------------------
+# lora-import — convert a GGUF LoRA adapter into a Juno .lora v2 checkpoint
+# ---------------------------------------------------------------------------
+cmd_lora_import() {
+  local gguf=""
+  local out=""
+  local alpha=""
+  local heap="${HEAP:-4g}"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --gguf)  gguf="$2";  shift 2 ;;
+      --out)   out="$2";   shift 2 ;;
+      --alpha) alpha="$2"; shift 2 ;;
+      --heap)  heap="$2";  shift 2 ;;
+      --help|-h)
+        echo ""
+        echo "  Usage: $0 lora-import --gguf adapter.gguf --out x.lora [options]"
+        echo ""
+        echo "  Options:"
+        echo "    --gguf PATH    Source GGUF LoRA adapter (required)"
+        echo "    --out PATH     Destination .lora v2 checkpoint (required)"
+        echo "    --alpha N      Override alpha for every imported adapter (default:"
+        echo "                   GGUF metadata if present, else alpha == rank)"
+        echo "    --heap SIZE    JVM heap, e.g. 4g (default: 4g)"
+        echo ""
+        echo "  Example:"
+        echo "    $0 lora-import --gguf hub-adapter.gguf --out hub-adapter.lora"
+        echo ""
+        return 0
+        ;;
+      *) err "Unknown lora-import flag: $1.  Run: $0 lora-import --help" ;;
+    esac
+  done
+
+  [[ -n "$gguf" ]] || err "GGUF adapter path is required.\n  Usage: $0 lora-import --gguf adapter.gguf --out x.lora"
+  [[ -n "$out" ]] || err "Output .lora path is required.\n  Usage: $0 lora-import --gguf adapter.gguf --out x.lora"
+
+  shopt -s nullglob
+  local candidates=( "$DIR/juno-player/target/"juno-player-*-shaded.jar "$DIR/juno-player/target/juno-player.jar" )
+  shopt -u nullglob
+  local juno_player_jar=""
+  for f in "${candidates[@]}"; do
+    [[ -f "$f" ]] || continue
+    juno_player_jar="$f"
+    break
+  done
+  [[ -n "$juno_player_jar" ]] || err "juno-player jar not found — build first with: mvn clean package -DskipTests"
+
+  info "Importing GGUF LoRA adapter  (heap=${heap})"
+
+  "$JAVA" -Xmx${heap} \
+    -cp "$juno_player_jar" \
+    cab.ml.juno.player.LoraImportMain \
+    ${gguf:+--gguf  "$gguf"} \
+    ${out:+--out   "$out"} \
+    ${alpha:+--alpha "$alpha"}
+}
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 CMD="${1:-}"
 shift || true
 
 case "$CMD" in
-  local)     cmd_local     "$@" ;;
-  lora)      cmd_lora      "$@" ;;
-  merge)     cmd_merge     "$@" ;;
-  gguf-info) cmd_gguf_info "$@" ;;
-  test)      cmd_test      "$@" ;;
-  health)    cmd_health    "$@" ;;
-  cluster)   cmd_cluster   "$@" ;;
-  *)         cmd_cluster ${CMD:+"$CMD"} "$@" ;;
+  local)        cmd_local        "$@" ;;
+  lora)         cmd_lora         "$@" ;;
+  merge)        cmd_merge        "$@" ;;
+  lora-import)  cmd_lora_import  "$@" ;;
+  gguf-info)    cmd_gguf_info    "$@" ;;
+  test)         cmd_test         "$@" ;;
+  health)       cmd_health       "$@" ;;
+  cluster)      cmd_cluster      "$@" ;;
+  *)            cmd_cluster ${CMD:+"$CMD"} "$@" ;;
 esac

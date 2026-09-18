@@ -56,8 +56,30 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260916T043335Z`](20260916T043335Z/) | GPU default 4-model sweep + Mistral-7B tuned lane, HEAD `8e73d5e` | JFR pp/tg | [INDEX](20260916T043335Z/INDEX.md) |
 | [`20260916T043833Z-lora`](20260916T043833Z-lora/) | GPU LoRA train-qa + playback vs release-0.1.2, HEAD `8e73d5e` | train ms / playback tps | [INDEX](20260916T043833Z-lora/INDEX.md) |
 | [`20260918T024641Z`](20260918T024641Z/) | GPU default 4-model sweep + generalized per-model tuned lane (`--mmq auto --gpu-attention auto --gpu-layers auto`, Tier 18) | JFR pp/tg | [INDEX](20260918T024641Z/INDEX.md) |
+| [`20260918T030920Z`](20260918T030920Z/) | GPU default 4-model sweep, bare default flags (`--vector 0`, no `--mmq`/`--gpu-layers`), P0 gate re-verification post-Tier-17/18 | JFR pp/tg | [INDEX](20260918T030920Z/INDEX.md) |
+| [`20260918T031702Z`](20260918T031702Z/) | CPU Vector SIMD refresh (`--vector 0`) | JFR pp/tg | [INDEX](20260918T031702Z/INDEX.md) |
+| [`20260918T032455Z`](20260918T032455Z/) | CPU Vector SIMD refresh (`--vector 1`) | JFR pp/tg | [INDEX](20260918T032455Z/INDEX.md) |
+| [`20260918T044915Z-lora`](20260918T044915Z-lora/) | GPU LoRA train-qa + playback vs release-0.1.2, Tier 10 (multi-adapter `--lora-play` + `lora-import`) regression gate | train ms / playback tps | [INDEX](20260918T044915Z-lora/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
+
+## LoRA train-qa regression — `20260918T044915Z-lora` (Tier 10: multi-adapter `--lora-play` + `lora-import`)
+
+Regression gate for [`PLAN-Infra-Tier10.md`](../infra-plan/PLAN-Infra-Tier10.md) (multi-adapter
+scaled `--lora-play`, GGUF LoRA import). The single-file, scale-1.0 `--lora-play` path this
+benchmark exercises returns the original `LoraAdapterSet` unchanged (`LoraPlaybackMerge`'s identity
+shortcut), so no forward-pass or training math changed for this scenario — flat/near-flat ratios
+here are the expected outcome, not just a passing number.
+
+| ref | train total ms | ms/pass | playback tps (wall) | recall |
+|-----|---------------:|--------:|--------------------:|:------:|
+| release-0.1.2 | 57,000 | 3,800 | 10.09 | ✓ |
+| HEAD | 57,000 | 3,800 | 9.07 | ✓ |
+
+**Current vs release-0.1.2:** train wall **1.00×**; playback wall tps **0.90×** (≥0.80 gate). Status **ok**.
+Also ran a CPU regression spot-check (`compare-llama-cpp.sh --cpu --vector 0 --models tinyllama`,
+`--no-publish`, base text inference only): failures=0 on both TinyLlama Q2_K and Q4_K_M — Tier 10's
+changes are additive to LoRA loading/CLI only and do not touch the base forward-pass/MatVec path.
 
 ## HEAD bake-off + vision chat-template regression fix — 2026-09-16 (`8e73d5e`)
 
@@ -633,6 +655,28 @@ Paired CPU runs on the default model set (`n_prompt=128`, `n_gen=64`, `reps=1`, 
 | mistral-7b Q4_K_M | 0.453 | 0.463 | 1.02 |
 
 **Verdict:** near-parity (±3%) as expected under the scalar accumulate policy. Artifacts: [`20260904T194612Z`](20260904T194612Z/) / [`20260904T195731Z`](20260904T195731Z/).
+
+### Refresh — 2026-09-18 (post Tier 13B/13C, Tier 17, Tier 18)
+
+Re-verification per [`PROMPT-Vector-SIMD-Refresh.md`](../infra-plan/PROMPT-Vector-SIMD-Refresh.md):
+every GPU bake-off since 2026-09-04 had published with `--vector 0`, so the CPU SIMD path had gone
+unverified across several sessions of GPU-side kernel work. `VectorQuantKernels`/`SimdThreadPool` had
+no commits in that window; `LlamaTransformerHandler`/`Phi2TransformerHandler` gained GPU-only code but
+no diff touched their `*WeightStationary` methods, so this is a like-for-like re-run, not a
+methodology change.
+
+| Model | Juno tg `--vector 0` | Juno tg `--vector 1` | v1/v0 |
+|-------|---------------------:|---------------------:|------:|
+| tinyllama-1.1b Q4_K_M | 3.271 | 3.300 | 1.009 |
+| qwen2.5-3b Q4_K_M | 1.096 | 1.099 | 1.003 |
+| Phi-3.5-mini Q4_K_M | 0.919 | 0.919 | 0.999 |
+| mistral-7b Q4_K_M | 0.521 | 0.520 | 0.998 |
+
+**Verdict:** still near-parity (0.998–1.009×), tighter than the original ±3% band and consistent with
+"no shared-path change" from the diff check above — not a coincidence. No regression found;
+`VectorQuantKernels` policy unchanged. `compare-vision.sh` skipped intentionally (no change to the
+shared CPU MatVec dispatch path this refresh would need to catch). Artifacts:
+[`20260918T031702Z`](20260918T031702Z/) / [`20260918T032455Z`](20260918T032455Z/).
 
 ## CPU summary (JFR) — `20260831T230258Z`
 

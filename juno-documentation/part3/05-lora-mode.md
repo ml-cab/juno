@@ -43,6 +43,42 @@ juno.bat local --model-path models\model.gguf --lora-play adapters\model.lora
 juno.bat --model-path models\model.gguf --lora-play adapters\model.lora
 ```
 
+## Multiple adapters and per-adapter scales
+
+`--lora-play` accepts more than one adapter, each with its own scale:
+`path[:scale][,path[:scale]...]`. A bare path (no colon) defaults to scale `1.0`, so the
+single-file form above is unchanged.
+
+```bash
+./juno local --model-path /path/to/model.gguf \
+             --lora-play /adapters/style.lora:0.5,/adapters/facts.lora:1.0
+```
+
+The effective delta is the sum of each adapter's own contribution scaled by its playback scale —
+mathematically identical to running each adapter separately and adding the results, computed
+without extra per-token overhead by folding the scales into a single merged adapter at load time.
+QA-LoRA and DoRA checkpoints only support the single-file, scale-`1.0` form for now; combining one
+with another adapter, or giving it a non-default scale, fails closed with a clear error rather
+than silently dropping its quantization-aware or magnitude term.
+
+Per-request adapter selection via the OpenAI-compatible API's `x_juno_loras` field is not wired
+yet on any serving schedule — a request that sets it is rejected (HTTP 400); use process-wide
+`--lora-play` with the multi-adapter syntax above instead.
+
+## Importing a GGUF LoRA adapter
+
+`./juno lora-import` converts a GGUF LoRA adapter (the tensor naming convention is documented in
+the CLI's own `--help`) into a Juno `.lora` v2 checkpoint usable with `--lora-play`:
+
+```bash
+./juno lora-import --gguf /path/to/hub-adapter.gguf --out /adapters/hub-adapter.lora
+./juno local --model-path /path/to/model.gguf --lora-play /adapters/hub-adapter.lora
+```
+
+This is a format converter, not a training path — Juno's own adapters are still trained with
+`juno lora` as described above. Unrecognized tensor names or a rank/shape mismatch between an
+adapter's two halves fail the import closed with a clear message.
+
 ## Profiling a slow training step
 
 ```bash

@@ -216,9 +216,9 @@ public final class ConsoleMain {
 	private static String byteOrder = "BE";
 	// ── GPU arguments ─────────────────────────────────────────────────────────
 	private static boolean useGpu = true; // use CPU
-	private static String gpuLayers = null; // null → env or default all
-	private static String mmq = null; // null → env or default off
-	private static String gpuAttention = null; // null → env or default off
+	private static String gpuLayers = null; // null → env or default auto
+	private static String mmq = null; // null → env or default auto
+	private static String gpuAttention = null; // null → env or default auto
 	private static String cacheTypeK = null; // null → env or default f16
 	private static String cacheTypeV = null; // null → env or default f16
 	private static String schedule = null; // null → env or default static
@@ -231,7 +231,7 @@ public final class ConsoleMain {
 	// ── LoRA arguments ────────────────────────────────────────────────────────
 	private static boolean loraMode = false;
 	private static String loraPath = null; // auto-derived if null
-	private static String loraPlayPath = null; // --lora-play: apply .lora at inference in non-lora modes
+	private static String loraPlayPath = null; // --lora-play: apply .lora file(s) at inference; see LoraPlaySpec
 	private static int loraRank = 8;
 	private static float loraAlpha = -1f; // sentinel: default to loraRank
 	private static double loraLr = 1e-4;
@@ -943,12 +943,12 @@ public final class ConsoleMain {
 		System.out.println("Inference options:");
 		System.out.println("  --gpu                      Use GPU (default, no need to set)");
 		System.out.println("  --cpu                      Force to use CPU");
-		System.out.println("  --gpu-layers N|all|auto    GPU-resident transformer layers (default: all)");
+		System.out.println("  --gpu-layers N|all|auto    GPU-resident transformer layers (default: auto)");
 		System.out.println("                             env JUNO_GPU_LAYERS; auto fits until VRAM OOM");
-		System.out.println("  --mmq on|off|auto          Packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default: off; LoRA play when CUDA kernel loads; ignored for LoRA train)");
+		System.out.println("  --mmq on|off|auto          Packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default: auto; LoRA play when CUDA kernel loads; ignored for LoRA train)");
 		System.out.println("                             env JUNO_MMQ; keeps Q4_K packed on device");
 		System.out.println("  --gpu-attention on|off|auto  GPU-resident attention kernel (measured decode/prefill throughput");
-		System.out.println("                             lever, not a peer-latency claim; default: off; CUDA only; env JUNO_GPU_ATTENTION)");
+		System.out.println("                             lever, not a peer-latency claim; default: auto; CUDA only; env JUNO_GPU_ATTENTION)");
 		System.out.println("  --cache-type-k f16|q8_0    K cache element type (default: f16 = current float path)");
 		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8× smaller vs float)");
 		System.out.println("  --cache-type-v f16|q8_0    V cache element type (default: f16)");
@@ -982,7 +982,9 @@ public final class ConsoleMain {
 		System.out.println("LoRA fine-tuning (forces --local --nodes 1):");
 		System.out.println("  --lora                     Enable LoRA fine-tuning mode");
 		System.out.println("  --lora-path PATH           Adapter checkpoint file (default: <model>.lora)");
-		System.out.println("  --lora-play PATH           Apply a .lora file at inference in local/cluster mode (read-only, no training)");
+		System.out.println("  --lora-play PATH[:SCALE][,PATH[:SCALE]...]");
+		System.out.println("                             Apply one or more .lora files at inference (read-only, no training);");
+		System.out.println("                             scale defaults to 1.0, e.g. a.lora:0.5,b.lora:1.0");
 		System.out.println("  --lora-rank N              Low-rank bottleneck dimension (default: 8)");
 		System.out.println("  --lora-alpha F             Scale factor alpha (default: same as rank)");
 		System.out.println("  --lora-mode lora|dora|qa-lora  Adapter algorithm (default: lora)");
@@ -1802,6 +1804,17 @@ public final class ConsoleMain {
 		ev.commit();
 	}
 
+	private static String describePlayEntries(List<cab.ml.juno.lora.LoraPlaySpec.Entry> entries) {
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < entries.size(); i++) {
+			if (i > 0)
+				sb.append(", ");
+			var e = entries.get(i);
+			sb.append(e.path()).append(" (scale ").append(e.scale()).append(')');
+		}
+		return sb.toString();
+	}
+
 	private static void commitPlaybackEvent(LoraAdapterSet adapters, long loadMs) {
 		LoraMetricsIdentity identity = LoraMetricsIdentity.fromAdapterSet(adapters,
 				loraModelConfig != null ? loraModelConfig.architecture() : "",
@@ -2150,12 +2163,14 @@ public final class ConsoleMain {
 		// Load .lora adapters for inference-only playback if --lora-play was given
 		LoraAdapterSet playAdapters = null;
 		if (loraPlayPath != null) {
-			print(Color.CYAN + "  ⚙ Loading LoRA adapters for inference: " + loraPlayPath + Color.RESET);
-			long t0 = System.currentTimeMillis();
-			playAdapters = LoraAdapterSet.load(Path.of(loraPlayPath));
-			commitPlaybackEvent(playAdapters, System.currentTimeMillis() - t0);
-			print(Color.GREEN + "  ✔ Loaded " + playAdapters.size() + " LoRA adapters  (inference-only, no training)"
+			List<cab.ml.juno.lora.LoraPlaySpec.Entry> playEntries = cab.ml.juno.lora.LoraPlaySpec.parse(loraPlayPath);
+			print(Color.CYAN + "  ⚙ Loading LoRA adapters for inference: " + describePlayEntries(playEntries)
 					+ Color.RESET);
+			long t0 = System.currentTimeMillis();
+			playAdapters = cab.ml.juno.lora.LoraPlaySpec.loadAndMerge(loraPlayPath);
+			commitPlaybackEvent(playAdapters, System.currentTimeMillis() - t0);
+			print(Color.GREEN + "  ✔ Loaded " + playAdapters.size() + " LoRA adapters from " + playEntries.size()
+					+ " file(s)  (inference-only, no training)" + Color.RESET);
 		}
 		List<ForwardPassHandler> handlers = new ArrayList<>();
 		GpuContext gpuCtx = prepareGpuContext();

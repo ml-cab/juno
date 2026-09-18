@@ -155,6 +155,13 @@ Merge a trained adapter into a stand-alone GGUF:
 ./juno merge --model-path models/...
 ```
 
+Import a GGUF LoRA adapter into Juno's `.lora` format, or play back one or more adapters at once:
+
+```
+./juno lora-import --gguf adapter.gguf --out adapter.lora
+./juno local --model-path models/... --lora-play adapter.lora:0.5,other.lora:1.0
+```
+
 ![Juno local console running TinyLlama-1.1B, with CPU and memory usage shown alongside](assets/juno-local-demo.gif)
 
 See [1.2 Quickstart: Local](https://ml.cab/juno-documentation/quickstart-local/),

@@ -16,8 +16,21 @@ This is a **parallel track**, not a numbered Infra tier. It still follows ROADMA
 | Vision gate | `compare-vision.sh` green vs `47-vision` / [`20260904T141315Z-vision`](../perf-compare/20260904T141315Z-vision/) after hang fix |
 | Policy | `VectorQuantKernels.policySummary` + [`docs/performance.md`](../performance.md) |
 | Bake-off | [`20260904T194612Z`](../perf-compare/20260904T194612Z/) (`--vector 0`) vs [`20260904T195731Z`](../perf-compare/20260904T195731Z/) (`--vector 1`); Juno tg v1/v0 ≈ 0.99–1.03 |
+| Refresh bake-off (2026-09-18) | [`20260918T031702Z`](../perf-compare/20260918T031702Z/) (`--vector 0`) vs [`20260918T032455Z`](../perf-compare/20260918T032455Z/) (`--vector 1`); Juno tg v1/v0 = 1.009 (TinyLlama), 1.003 (Qwen2.5-3B), 0.999 (Phi-3.5-mini), 0.998 (Mistral-7B) — still near-parity, no regression |
 
 **Track status: Feature complete.** Next Infra tier on the critical path: Tier 13 Phase B.
+
+**Refresh verdict (2026-09-18, per [`PROMPT-Vector-SIMD-Refresh.md`](PROMPT-Vector-SIMD-Refresh.md)):** re-ran
+the CPU `--vector 0`/`--vector 1` pair against current HEAD (post Tier 13 Phase B/C and Tier 17/18).
+`git log` on `VectorQuantKernels.java`/`SimdThreadPool.java` since the 2026-09-04 baseline shows no
+commits; `LlamaTransformerHandler.java`/`Phi2TransformerHandler.java` gained GPU-only code in that
+window (Q8_1/`dp4a` MMQ, `--gpu-attention`, KV packing) but no diff lines touch their
+`*WeightStationary` methods — the CPU weight-stationary accumulate dispatch path is byte-for-byte
+unchanged. The fresh ratios (0.998–1.009×) confirm this: still near-parity, no model regressed beyond
+noise. Per the refresh prompt's own condition, `compare-vision.sh` was **not** re-run because no
+change to the shared CPU MatVec dispatch path was found — not a silent omission. No policy change to
+`VectorQuantKernels` (scalar Q4/Q5 accumulate stays as-is; this was a verification pass, not new
+kernel work).
 
 ```mermaid
 flowchart LR

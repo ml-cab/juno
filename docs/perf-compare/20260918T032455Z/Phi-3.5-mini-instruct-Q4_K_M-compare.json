@@ -1,0 +1,28 @@
+{
+  "model": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 19.155678,
+    "token_gen_tps": 8.080427
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 0.953189843374552,
+    "token_gen_tps": 0.9186025617007919,
+    "api_token_gen_tps": 0.6871,
+    "latency_ms": 93142,
+    "prompt_tokens": 21,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1
+  },
+  "ratio_juno_over_llamacpp_pp": 0.04976017259083975,
+  "ratio_juno_over_llamacpp_tg": 0.11368242813168065,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20260918T032455Z/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20260918T032455Z/Phi-3.5-mini-instruct-Q4_K_M-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20260918T032455Z/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20260918T032455Z/Phi-3.5-mini-instruct-Q4_K_M-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20260918T032455Z/Phi-3.5-mini-instruct-Q4_K_M-juno-jfr.json"
+  }
+}

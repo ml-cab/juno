@@ -480,14 +480,14 @@ See [`perf-compare/20260901T173121Z-parallel/`](perf-compare/20260901T173121Z-pa
 
 ## Recommended flags (GPU)
 
-Three independently-shipped flags each default to off/none because each carries its own
-correctness or VRAM-fit caveat (see their own sections above and `docs/howto.md`), but running them
-together via their own `auto` mode is safe on supported hardware/architectures and measurably
-faster than the defaults. `auto` resolves per-model to off/serial wherever the flag is not wired
-for that architecture — it never forces an unsupported path.
+`--mmq`, `--gpu-attention`, and `--gpu-layers` all default to `auto` (no flags needed). `auto`
+resolves per-model to off/serial wherever the flag is not wired for that architecture or CUDA is
+unavailable — it never forces an unsupported path. Each still carries its own correctness or
+VRAM-fit caveat (see the caveats below, their own sections above, and `docs/howto.md`); pass
+`off` explicitly to opt out of one, e.g. for a bit-identical CPU-parity baseline run.
 
 ```
---mmq auto --gpu-attention auto --gpu-layers auto
+--mmq auto --gpu-attention auto --gpu-layers auto   # already the default; shown for scripting clarity
 ```
 
 **Run:** [`perf-compare/20260918T024641Z/`](perf-compare/20260918T024641Z/) (default 4-model GPU
@@ -515,3 +515,34 @@ Caveats to know before turning these on in production:
   including Phi-3.5-mini, independent of `--gpu-attention`'s narrower architecture coverage.
 - None of these three flags are wired for LoRA train or `--lora-play` (`--mmq`/`--gpu-attention`
   explicitly no-op and warn there); see their own sections for the full interaction matrix.
+
+## Multi-adapter LoRA playback + GGUF import (Tier 10)
+
+`--lora-play` now accepts `path[:scale][,path[:scale]...]` — a bare path still defaults to scale
+`1.0` (unchanged from before this tier). Multiple adapters combine as
+`sum(scale_i * adapter_i)`, computed by rank-concatenating the adapters into one merged
+`LoraAdapterSet` at load time (`LoraPlaybackMerge`) rather than threading a list through every
+forward-pass call site — see its javadoc for the exact linear-algebra argument. The single-file,
+scale-1.0 case is a pure identity return (the original `LoraAdapterSet` object, unchanged), so it
+carries zero risk to the existing playback path.
+
+`./juno lora-import --gguf adapter.gguf --out x.lora` converts a GGUF LoRA adapter into a Juno
+`.lora` v2 checkpoint. Not verified against a real converter-produced GGUF-LoRA file this session
+(no network access) — see `GgufLoraImporter`'s javadoc for the documented naming/layout convention
+and the honest caveat; unrecognized tensors or a rank/shape mismatch fail the import closed.
+
+As part of this tier, the pre-existing `x_juno_loras` (OpenAI API per-request adapter override)
+silent-ignore gap under `--schedule static` was closed: it was previously fail-closed (HTTP 400)
+only under `--schedule continuous`, silently ignored under `static`. It now fails closed on every
+schedule until real per-request wiring is implemented (named follow-up, not this tier) — use
+process-wide `--lora-play` with the multi-adapter syntax above instead.
+
+**LoRA regression gate** (`compare-lora.sh --gpu --baseline release-0.1.2`, single-file
+scale-1.0 scenario, unaffected by design): **ok** — train **1.00×**, playback wall tps **0.90×**
+([`20260918T044915Z-lora`](perf-compare/20260918T044915Z-lora/)). CPU base-inference spot-check
+(`compare-llama-cpp.sh --cpu --vector 0 --models tinyllama`, `--no-publish`): failures=0 — Tier 10
+does not touch the base forward-pass/MatVec path.
+
+Unit tests: `LoraPlaybackMergeTest` / `LoraPlaySpecTest` (`lora` module, reference-math and CLI
+parsing incl. Windows drive-letter paths) and `GgufLoraImporterTest` (`node` module, successful
+import plus fail-closed cases) — 24 cases total, all green.

@@ -23,8 +23,8 @@ import java.util.Locale;
  *
  * <p>When enabled on CUDA with GPU-resident layers, attention (QK^T + softmax +
  * weighted-V-sum) runs on-device against a device-resident KV cache mirror
- * instead of scalar CPU Java. Default is {@link Mode#OFF} until bake-off gates
- * pass.
+ * instead of scalar CPU Java. Default is {@link Mode#AUTO}, which enables on
+ * CUDA for supported architectures and is a no-op elsewhere.
  */
 public final class GpuAttentionOptions {
 
@@ -73,10 +73,10 @@ public final class GpuAttentionOptions {
 		};
 	}
 
-	/** Reads {@link #ENV_PROPERTY} (system property, falling back to the env var); defaults to {@code off}. */
+	/** Reads {@link #ENV_PROPERTY} (system property, falling back to the env var); defaults to {@code auto}. */
 	public static GpuAttentionOptions fromEnv() {
 		String raw = firstNonBlank(System.getProperty(ENV_PROPERTY), System.getenv(ENV_PROPERTY));
-		return parse(raw == null ? OFF : raw);
+		return parse(raw == null ? AUTO : raw);
 	}
 
 	private static String firstNonBlank(String a, String b) {

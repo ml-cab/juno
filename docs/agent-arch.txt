@@ -13,7 +13,15 @@ Module dependency (excerpt):
         handlers dual-path via SessionKvLayout; manager may hold a shared
         PagedKvArena; adapter flushes dense or paged blobs; gather-tax gate
         PASS — see docs/performance.md / perf-compare/*-gather-tax.md).
-  lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA)
+  lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA).
+        LoraPlaySpec parses --lora-play's "path[:scale][,path[:scale]]" syntax
+        (bare path = scale 1.0, back-compat) and loads+merges via
+        LoraPlaybackMerge, which rank-concatenates multiple ScaledAdapterSets
+        into one LoraAdapterSet so playback wiring (ForwardPassHandlerLoader,
+        LoraTrainableHandler) never sees more than one set; QA-LoRA/DoRA and
+        cross-set shape mismatches fail closed. GgufLoraImporter (node module,
+        needs GgufReader) converts a GGUF LoRA adapter into a LoraAdapterSet
+        for the `lora-import` CLI subcommand (LoraImportMain, juno-player).
   node — GgufReader, LlamafileGgufIndex, LlamaTransformerHandler,
         Phi2TransformerHandler, Phi2Rope, Phi3TransformerHandler, Phi3Rope, MatVec
         (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,

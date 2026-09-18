@@ -274,7 +274,7 @@ public final class EmbeddedNodeServer {
 					LoraAdapterSet playAdapters = null;
 					if (loraPlayPath != null && !loraPlayPath.isBlank()) {
 						log.info("Loading LoRA adapters for inference: " + loraPlayPath);
-						playAdapters = LoraAdapterSet.load(Path.of(loraPlayPath));
+						playAdapters = cab.ml.juno.lora.LoraPlaySpec.loadAndMerge(loraPlayPath);
 						log.info("Loaded " + playAdapters.size() + " LoRA adapters");
 					}
 

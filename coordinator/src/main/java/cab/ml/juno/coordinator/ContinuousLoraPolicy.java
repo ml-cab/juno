@@ -18,19 +18,30 @@ package cab.ml.juno.coordinator;
 import cab.ml.juno.kvcache.ServeScheduleOptions;
 
 /**
- * Multi-adapter × continuous v1: one process-wide {@code --lora-play} set.
- * Per-request {@code x_juno_loras} is fail-closed under continuous schedule.
+ * Multi-adapter policy: v1 supports only one process-wide {@code --lora-play}
+ * adapter set (loaded via {@code cab.ml.juno.lora.LoraPlaySpec}, optionally
+ * combining several files with per-file scales). Per-request
+ * {@code x_juno_loras} overrides are not wired into the forward-pass
+ * pipeline on any schedule yet — selecting or re-scaling adapters per
+ * request would need threading a per-request adapter selection through
+ * {@code InferenceRequest} / {@code GenerationLoop} / the forward-pass
+ * handlers, which Tier 10 scoped as a named follow-up rather than
+ * implementing. Per ROADMAP Execution rule §6 ("no silent ignore"), a
+ * request that sets {@code x_juno_loras} fails closed on every schedule
+ * (this used to only fail under {@code continuous}; static silently ignored
+ * it, which is the gap this generalization closes) rather than accepting it
+ * and running the process-wide set as if the override had taken effect.
  */
 public final class ContinuousLoraPolicy {
 
-	public static final String ERROR = "per-request adapters (x_juno_loras) are not supported under "
-			+ "schedule=continuous; use process-wide --lora-play";
+	public static final String ERROR = "per-request adapters (x_juno_loras) are not wired yet on any "
+			+ "schedule; use process-wide --lora-play (optionally with multiple files and per-file scales)";
 
 	private ContinuousLoraPolicy() {
 	}
 
+	/** {@code schedule} is accepted for call-site compatibility; the check no longer depends on it. */
 	public static boolean forbidden(boolean hasPerRequestLoras, ServeScheduleOptions schedule) {
-		return hasPerRequestLoras && schedule != null
-				&& schedule.mode() == ServeScheduleOptions.Mode.CONTINUOUS;
+		return hasPerRequestLoras;
 	}
 }

@@ -19,7 +19,12 @@ class ContinuousLoraPolicyTest {
 	}
 
 	@Test
-	void static_does_not_fail_closed() {
-		assertThat(ContinuousLoraPolicy.forbidden(true, ServeScheduleOptions.defaults())).isFalse();
+	void static_also_fails_closed_pending_per_request_wiring() {
+		assertThat(ContinuousLoraPolicy.forbidden(true, ServeScheduleOptions.defaults())).isTrue();
+	}
+
+	@Test
+	void schedule_null_still_fails_closed_when_per_request_loras_present() {
+		assertThat(ContinuousLoraPolicy.forbidden(true, null)).isTrue();
 	}
 }
