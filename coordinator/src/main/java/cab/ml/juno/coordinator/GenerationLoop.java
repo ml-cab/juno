@@ -55,6 +55,7 @@ public final class GenerationLoop {
 	private final PrefillMode prefillMode;
 	private final int prefillBatchSize;
 	private final SpeculativeDecodeOptions specOptions;
+	private final InferencePipeline draftPipeline;
 
 	/**
 	 * Construct a generation loop with the default prefill mode ({@link PrefillMode#BATCHED})
@@ -90,7 +91,8 @@ public final class GenerationLoop {
 
 	/**
 	 * Full constructor with prefill mode, microbatch chunk size, and speculative
-	 * decoding options.
+	 * decoding options. No draft model — invalid if {@code specOptions.specType()}
+	 * is {@link SpeculativeDecodeOptions.SpecType#DRAFT_SIMPLE}.
 	 *
 	 * @param prefillBatchSize max tokens per {@code prefillBatch} call when mode is
 	 *                         {@link PrefillMode#BATCHED}; ignored for {@link PrefillMode#SINGLE}
@@ -101,6 +103,28 @@ public final class GenerationLoop {
 	 */
 	public GenerationLoop(Tokenizer tokenizer, Sampler sampler, InferencePipeline pipeline, KVCacheManager kvCache,
 			PrefillMode prefillMode, int prefillBatchSize, SpeculativeDecodeOptions specOptions) {
+		this(tokenizer, sampler, pipeline, kvCache, prefillMode, prefillBatchSize, specOptions, null);
+	}
+
+	/**
+	 * Full constructor including a draft model pipeline for {@code --spec-type
+	 * draft-simple}.
+	 *
+	 * @param draftPipeline a second, independently-loaded pipeline for the draft
+	 *                      model; required (non-null) when {@code specOptions.specType()}
+	 *                      is {@link SpeculativeDecodeOptions.SpecType#DRAFT_SIMPLE},
+	 *                      ignored otherwise. Must report the same {@link InferencePipeline#vocabSize()}
+	 *                      as {@code pipeline} — draft and target must share a vocabulary
+	 *                      since draft-proposed token ids are compared directly against
+	 *                      the target's own sampled ids.
+	 * @throws IllegalArgumentException when {@code specOptions.specType() == DRAFT_SIMPLE}
+	 *                                  and {@code draftPipeline} is null or its vocab size
+	 *                                  does not match {@code pipeline}'s — fail closed rather
+	 *                                  than silently comparing incompatible token id spaces.
+	 */
+	public GenerationLoop(Tokenizer tokenizer, Sampler sampler, InferencePipeline pipeline, KVCacheManager kvCache,
+			PrefillMode prefillMode, int prefillBatchSize, SpeculativeDecodeOptions specOptions,
+			InferencePipeline draftPipeline) {
 		this.tokenizer = tokenizer;
 		this.sampler = sampler;
 		this.pipeline = pipeline;
@@ -108,6 +132,18 @@ public final class GenerationLoop {
 		this.prefillMode = prefillMode;
 		this.prefillBatchSize = prefillBatchSize;
 		this.specOptions = specOptions;
+		this.draftPipeline = draftPipeline;
+		if (specOptions.specType() == SpeculativeDecodeOptions.SpecType.DRAFT_SIMPLE) {
+			if (draftPipeline == null) {
+				throw new IllegalArgumentException(
+						"--spec-type draft-simple requires a loaded --model-draft pipeline");
+			}
+			if (draftPipeline.vocabSize() != pipeline.vocabSize()) {
+				throw new IllegalArgumentException("--model-draft vocabulary size (" + draftPipeline.vocabSize()
+						+ ") does not match the target model's vocabulary size (" + pipeline.vocabSize()
+						+ ") — draft and target must share the same tokenizer/vocab");
+			}
+		}
 	}
 
 	Tokenizer tokenizer() {
@@ -429,16 +465,20 @@ public final class GenerationLoop {
 		// ── Steps 3–8: Autoregressive decode loop ─────────────────────────────
 		int maxTokens = params.maxTokens();
 		Tokenizer.StreamContext stream = tokenizer.openStreamContext();
-		NgramDraftCache draftCache = specOptions.enabled() ? new NgramDraftCache(specOptions.ngramN()) : null;
-		if (draftCache != null)
-			draftCache.observe(allTokens);
+		DraftProposer draftProposer = switch (specOptions.specType()) {
+			case NONE -> null;
+			case NGRAM_SIMPLE -> new NgramDraftCache(specOptions.ngramN());
+			case DRAFT_SIMPLE -> new DraftModelSession(draftPipeline, kvKey + "#draft");
+		};
+		if (draftProposer != null)
+			draftProposer.observe(allTokens);
 		log.info("Decode: starting loop kvKey=" + kvKey + " maxTokens=" + maxTokens + " startPos=" + startPos
 				+ " grammar=" + (grammar != null) + " specType=" + specOptions.specType());
 
 		int step = 0;
 		while (step < maxTokens) {
-			int[] draft = draftCache != null
-					? draftCache.propose(allTokens, Math.min(specOptions.ngramM(), maxTokens - step))
+			int[] draft = draftProposer != null
+					? draftProposer.propose(allTokens, Math.min(specOptions.ngramM(), maxTokens - step))
 					: EMPTY_DRAFT;
 
 			boolean stop;
@@ -493,9 +533,9 @@ public final class GenerationLoop {
 				se.acceptedTokens = accepted;
 				se.commit();
 
-				// draft.length > 0 implies draftCache != null (see the ternary above)
-				if (draftCache != null)
-					draftCache.observe(allTokens);
+				// draft.length > 0 implies draftProposer != null (see the ternary above)
+				if (draftProposer != null)
+					draftProposer.observe(allTokens);
 			} else {
 				// Fallback: plain single-token decode (also covers --spec-type none).
 				float[] logits = pipeline.forward(kvKey, allTokens, startPos + step);
@@ -510,8 +550,8 @@ public final class GenerationLoop {
 				if (stop)
 					stopReason = outcome.reason();
 
-				if (draftCache != null)
-					draftCache.observe(allTokens);
+				if (draftProposer != null)
+					draftProposer.observe(allTokens);
 			}
 
 			if (stop)
@@ -519,6 +559,8 @@ public final class GenerationLoop {
 		}
 		log.info("Decode: loop EXITED kvKey=" + kvKey + " tokensGenerated=" + generatedIds.size() + " stopReason="
 				+ stopReason);
+		if (draftProposer != null)
+			draftProposer.close();
 
 		// ── Post-generation: cache or evict ───────────────────────────────────
 		if (hasSession) {

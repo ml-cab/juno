@@ -578,6 +578,9 @@ run_juno() {
   if [[ -n "${JUNO_SPEC_NGRAM_M:-}" ]]; then
     java_args+=(--spec-ngram-m "$JUNO_SPEC_NGRAM_M")
   fi
+  if [[ -n "${JUNO_MODEL_DRAFT:-}" ]]; then
+    java_args+=(--model-draft "$JUNO_MODEL_DRAFT")
+  fi
   if [[ -n "$JUNO_SCHEDULE" ]]; then
     java_args+=(--schedule "$JUNO_SCHEDULE")
   fi

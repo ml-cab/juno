@@ -449,6 +449,7 @@ cmd_local() {
   local spec_type="${JUNO_SPEC_TYPE:-}"
   local spec_ngram_n="${JUNO_SPEC_NGRAM_N:-}"
   local spec_ngram_m="${JUNO_SPEC_NGRAM_M:-}"
+  local model_draft="${JUNO_MODEL_DRAFT:-}"
   local grammar_file="${JUNO_GRAMMAR_FILE:-}"
   local json_schema_file="${JUNO_JSON_SCHEMA_FILE:-}"
   local use_gpu="true"
@@ -500,6 +501,7 @@ cmd_local() {
       --spec-type)        spec_type="$2";     shift 2 ;;
       --spec-ngram-n)     spec_ngram_n="$2";  shift 2 ;;
       --spec-ngram-m)     spec_ngram_m="$2";  shift 2 ;;
+      --model-draft)      model_draft="$2";  shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -553,9 +555,10 @@ cmd_local() {
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
         echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
         echo "    --prefill-batch N          prefill microbatch chunk size (default 32)"
-        echo "    --spec-type none|ngram-simple  ngram speculative decoding (default none; --local only)"
-        echo "    --spec-ngram-n N           ngram order for the draft cache (default 3)"
+        echo "    --spec-type none|ngram-simple|draft-simple  speculative decoding (default none; --local only)"
+        echo "    --spec-ngram-n N           ngram order for the draft cache (default 3; ngram-simple only)"
         echo "    --spec-ngram-m N           max tokens drafted per verify round (default 4)"
+        echo "    --model-draft PATH         draft model GGUF for --spec-type draft-simple"
         echo ""
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
@@ -654,6 +657,8 @@ cmd_local() {
   [[ -n "$spec_ngram_n" ]] && spec_ngram_n_arg="--spec-ngram-n $spec_ngram_n"
   local spec_ngram_m_arg=""
   [[ -n "$spec_ngram_m" ]] && spec_ngram_m_arg="--spec-ngram-m $spec_ngram_m"
+  local model_draft_arg=""
+  [[ -n "$model_draft" ]] && model_draft_arg="--model-draft $model_draft"
   local mmproj_arg=""
   [[ -n "$mmproj" ]] && { mmproj_arg="--mmproj-path $mmproj"; info "Vision mmproj: ${mmproj}"; }
   if [[ -n "$grammar_file" && -n "$json_schema_file" ]]; then
@@ -704,6 +709,7 @@ cmd_local() {
     ${spec_type_arg} \
     ${spec_ngram_n_arg} \
     ${spec_ngram_m_arg} \
+    ${model_draft_arg} \
     ${mmproj_arg} \
     ${grammar_file_arg} \
     ${json_schema_file_arg} \

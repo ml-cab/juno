@@ -63,6 +63,7 @@ import cab.ml.juno.node.DoraInitializer;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.GpuContext;
 import cab.ml.juno.node.GpuLayerOffload;
+import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.node.MmqOptions;
 import cab.ml.juno.node.PoolingMode;
 import cab.ml.juno.coordinator.BatchConfig;
@@ -211,10 +212,12 @@ public final class ConsoleMain {
 	/** Prefill strategy: batched (default) or single (legacy sequential loop). */
 	private static cab.ml.juno.coordinator.PrefillMode prefillMode = cab.ml.juno.coordinator.PrefillMode.BATCHED;
 	private static Integer prefillBatch = null; // null → env or default 32
-	/** --spec-type none|ngram-simple (default none): ngram speculative decoding. */
+	/** --spec-type none|ngram-simple|draft-simple (default none): speculative decoding. */
 	private static String specType = null; // null → env or default none
 	private static Integer specNgramN = null; // null → env or default 3
-	private static Integer specNgramM = null; // null → env or default 4
+	private static Integer specNgramM = null; // null → env or default 4 (also draft-simple's tokens-per-round)
+	/** --model-draft PATH: draft model GGUF for --spec-type draft-simple; local mode only. */
+	private static String modelDraftPath = null; // null → env or unset
 	// ── Byte-order argument ───────────────────────────────────────────────────
 	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
 	private static String byteOrder = "BE";
@@ -347,6 +350,10 @@ public final class ConsoleMain {
 			System.err.println("ERROR: mmproj file not found: " + mmprojPath);
 			System.exit(1);
 		}
+		if (modelDraftPath != null && !Path.of(modelDraftPath).toFile().exists()) {
+			System.err.println("ERROR: --model-draft file not found: " + modelDraftPath);
+			System.exit(1);
+		}
 		loadCliGrammarOrExit();
 
 		// LoRA forces single in-process node
@@ -363,6 +370,27 @@ public final class ConsoleMain {
 				? cab.ml.juno.kvcache.ServeScheduleOptions.parse(schedule)
 				: cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv();
 		boolean clusterLaunch = !localMode && !loraMode;
+
+		// --spec-type draft-simple loads a second full pipeline for its own draft
+		// model — wired for the local single-shard REPL only (runLocalRepl()). Fail
+		// closed here, before any model loading, rather than let LoRA train/play or
+		// cluster/tensor-parallel mode silently ignore --model-draft or crash later
+		// with a misleading "requires --model-draft" error when the flag was in fact
+		// set (see PLAN-Infra-Tier12.md).
+		try {
+			cab.ml.juno.coordinator.SpeculativeDecodeOptions specCheck = cab.ml.juno.coordinator.SpeculativeDecodeOptions
+					.resolve(specType, specNgramN, specNgramM, modelDraftPath);
+			if (specCheck.specType() == cab.ml.juno.coordinator.SpeculativeDecodeOptions.SpecType.DRAFT_SIMPLE
+					&& (loraMode || clusterLaunch)) {
+				System.err.println("ERROR: --spec-type draft-simple is local-mode only — not yet supported for "
+						+ "--lora-play, LoRA train, or cluster/tensor-parallel mode (see docs/howto.md)");
+				System.exit(1);
+			}
+		} catch (IllegalArgumentException e) {
+			System.err.println("ERROR: " + e.getMessage());
+			System.exit(1);
+		}
+
 		var scheduleResolution = cab.ml.juno.coordinator.ServeSchedulePolicy.resolve(requestedSchedule,
 				clusterLaunch ? cab.ml.juno.coordinator.ServeSchedulePolicy.Topology.CLUSTER
 						: cab.ml.juno.coordinator.ServeSchedulePolicy.Topology.LOCAL);
@@ -649,6 +677,10 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					specNgramM = parseInt(args[++i],
 							cab.ml.juno.coordinator.SpeculativeDecodeOptions.DEFAULT_NGRAM_M);
+				break;
+			case "--model-draft":
+				if (i + 1 < args.length)
+					modelDraftPath = args[++i];
 				break;
 			case "--dtype":
 				if (i + 1 < args.length)
@@ -959,15 +991,19 @@ public final class ConsoleMain {
 		System.out.println("                             env JUNO_PREFILL_BATCH; use 1 for per-token batched");
 		System.out.println();
 		System.out.println("Speculative decoding:");
-		System.out.println("  --spec-type none|ngram-simple  Ngram speculative decoding (default: none)");
+		System.out.println("  --spec-type none|ngram-simple|draft-simple  Speculative decoding (default: none)");
 		System.out.println("                             env JUNO_SPEC_TYPE; ngram-simple drafts tokens from");
-		System.out.println("                             an in-request ngram cache, verified against this");
-		System.out.println("                             model before being emitted (--local only; no effect");
-		System.out.println("                             on --parallel static batching, see docs/howto.md)");
-		System.out.println("  --spec-ngram-n N           Ngram order for the draft cache (default: 3)");
-		System.out.println("                             env JUNO_SPEC_NGRAM_N");
-		System.out.println("  --spec-ngram-m N           Max tokens drafted per verify round (default: 4)");
-		System.out.println("                             env JUNO_SPEC_NGRAM_M");
+		System.out.println("                             an in-request ngram cache; draft-simple drafts from a");
+		System.out.println("                             second --model-draft GGUF; both verify against this");
+		System.out.println("                             model before emitting (--local only; no effect on");
+		System.out.println("                             --parallel static batching, see docs/howto.md)");
+		System.out.println("  --spec-ngram-n N           Ngram order for the draft cache (default: 3;");
+		System.out.println("                             ngram-simple only) — env JUNO_SPEC_NGRAM_N");
+		System.out.println("  --spec-ngram-m N           Max tokens drafted per verify round (default: 4;");
+		System.out.println("                             both ngram-simple and draft-simple) — env JUNO_SPEC_NGRAM_M");
+		System.out.println("  --model-draft PATH         Draft model GGUF for --spec-type draft-simple; must");
+		System.out.println("                             share the target model's vocabulary (fails closed at");
+		System.out.println("                             startup otherwise) — env JUNO_MODEL_DRAFT");
 		System.out.println();
 		System.out.println("Inference options:");
 		System.out.println("  --gpu                      Use GPU (default, no need to set)");
@@ -2232,10 +2268,29 @@ public final class ConsoleMain {
 
 		var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
 				config.hiddenDim(), config.numHeads());
+
+		cab.ml.juno.coordinator.SpeculativeDecodeOptions specOptions = cab.ml.juno.coordinator.SpeculativeDecodeOptions
+				.resolve(specType, specNgramN, specNgramM, modelDraftPath);
+		InferencePipeline draftPipeline = null;
+		if (specOptions.specType() == cab.ml.juno.coordinator.SpeculativeDecodeOptions.SpecType.DRAFT_SIMPLE) {
+			print(Color.CYAN + "  ⚙ Loading draft model: " + specOptions.modelDraftPath() + Color.RESET);
+			long tDraft = System.currentTimeMillis();
+			try {
+				draftPipeline = loadDraftPipeline(specOptions.modelDraftPath(), sharedBackend);
+			} catch (OutOfMemoryError e) {
+				System.err.println("ERROR: --model-draft failed to load (out of memory): "
+						+ specOptions.modelDraftPath()
+						+ " — reduce --gpu-layers, use a smaller draft model, or drop --spec-type draft-simple");
+				System.exit(1);
+				return;
+			}
+			print(Color.GREEN + "  ✔ Draft model loaded in " + (System.currentTimeMillis() - tDraft)
+					+ "ms  (vocab=" + draftPipeline.vocabSize() + ")" + Color.RESET);
+		}
+
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
-				PrefillBatchOptions.resolve(prefillBatch).chunkSize(),
-				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
+				PrefillBatchOptions.resolve(prefillBatch).chunkSize(), specOptions, draftPipeline);
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig(),
 				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {
@@ -2269,6 +2324,29 @@ public final class ConsoleMain {
 		}
 
 		startRepl(loop, tokenizer);
+	}
+
+	/**
+	 * Loads a second, independent single-node text pipeline for {@code
+	 * --spec-type draft-simple} ({@code --model-draft}). Always a single shard
+	 * (draft models are small — no need to pipeline-parallel them) and never
+	 * carries LoRA adapters or vision wrapping; shares the target's {@link MatVec}
+	 * backend (same {@link GpuContext}/cuBLAS handle, following the same {@code
+	 * --gpu-layers} device policy) rather than opening a second GPU context.
+	 */
+	private static InferencePipeline loadDraftPipeline(String draftModelPath, MatVec sharedBackend)
+			throws Exception {
+		LlamaConfig draftConfig;
+		try (GgufReader reader = GgufReader.open(Path.of(draftModelPath))) {
+			draftConfig = LlamaConfig.from(reader);
+		}
+		ShardMap draftShardMap = ShardMap.evenSplit("draft-model", draftConfig.numLayers(), 1);
+		var draftContext = ShardContext.from(draftShardMap.assignments().get(0), draftConfig.vocabSize(),
+				draftConfig.hiddenDim(), draftConfig.numHeads());
+		ForwardPassHandler draftHandler = ForwardPassHandlerLoader.load(Path.of(draftModelPath), draftContext,
+				sharedBackend, null);
+		return LocalInferencePipeline.from(draftShardMap, List.of(draftHandler), draftConfig.vocabSize(),
+				draftConfig.hiddenDim(), draftConfig.numHeads());
 	}
 
 	/**
@@ -2407,9 +2485,8 @@ public final class ConsoleMain {
 		// GenerationLoop.generateBatch() (static multi-request batching, entries.size() > 1)
 		// does not draft/verify yet — a request that lands in a concurrent batch decodes
 		// without speculation, silently, unless flagged here. See PLAN-Infra-Tier9.md.
-		if (batch.isBatchingEnabled()
-				&& cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM)
-						.enabled()) {
+		if (batch.isBatchingEnabled() && cab.ml.juno.coordinator.SpeculativeDecodeOptions
+				.resolve(specType, specNgramN, specNgramM, modelDraftPath).enabled()) {
 			System.out.println(String.format(
 					"  %sWARNING: --spec-type only speculates for requests decoded one at a time; "
 							+ "under concurrent load --parallel %d's static batching decodes without "

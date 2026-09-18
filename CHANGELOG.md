@@ -1,5 +1,55 @@
 ## Status 
 
+**Session 84** — Draft-model speculative decoding (`--spec-type draft-simple`) **feature complete**
+
+- `--spec-type none|ngram-simple|draft-simple` + `--model-draft PATH`
+  (`JUNO_MODEL_DRAFT`; local REPL only). `draft-simple` drafts tokens from a
+  second, independently-loaded GGUF model instead of an in-request ngram
+  cache, reusing the same `GenerationLoop.generate()` draft/verify loop and
+  batched `forwardVerify` path the ngram mode already established. Both
+  strategies now implement a shared `DraftProposer` interface
+  (`propose`/`observe`/`close`) so the loop itself does not care which one is
+  active.
+- New `DraftModelSession` (coordinator module): drives the draft model
+  through its own persistent KV session with ordinary greedy `forward()`
+  calls (one per drafted token, feeding its own prediction back in — the same
+  shape a plain non-speculative decode step already takes), then reconciles
+  that tentative continuation against ground truth after every round by
+  walking forward from the last agreed position and issuing at most one
+  corrective `forward()` call on the first disagreement — no bulk resend of
+  the drafted window, and no explicit KV-truncate API, since KV storage is
+  indexed by absolute position and a later real write simply overwrites a
+  stale speculative one.
+- `GenerationLoop`'s constructor fails closed when `--spec-type draft-simple`
+  is given without a loaded draft pipeline, or when the draft and target
+  models' vocabulary sizes differ — draft-proposed token ids are compared
+  directly against the target's own sampled ids, so a vocab mismatch would
+  otherwise silently compare incompatible id spaces.
+- Wired for the local single-shard REPL only (`ConsoleMain.loadDraftPipeline()`
+  loads the draft model sharing the target's `MatVec`/`GpuContext`, never
+  carrying LoRA adapters or vision wrapping); `--lora-play`, LoRA train, and
+  cluster/tensor-parallel launches fail closed at CLI-parse time with an
+  explicit error rather than silently ignoring `--model-draft`.
+- Live smoke test (TinyLlama Q4_K_M as `--model-draft`, Mistral-7B Q4_K_M as
+  the target, both sharing the same 32000-token vocabulary, GTX 1080, greedy
+  decode, same maximally-repetitive prompt as the ngram smoke test): output
+  byte-identical to `--spec-type none` (token identity holds), draft
+  acceptance **55.2%** — but wall-clock tg **regressed to 0.52×** (19.78 →
+  10.35 t/s), not an improvement. `juno.MatVec.count` nearly quadrupled
+  (7,965 → 31,058) because the draft model's own decode/prefill/resync calls
+  route through the same global `MatVec` span the target uses — unlike the
+  ngram cache's free lookups, a draft *model*'s proposals cost a real forward
+  pass per token, and on this GPU that cost is not offset by the verify-side
+  savings. Honestly reported as a negative result, not hidden — see
+  `docs/performance.md` / `docs/perf-compare/README.md`.
+- §2 regression: `compare-llama-cpp.sh --gpu --models mistral` (default
+  `--spec-type none`), failures=0; `compare-lora.sh --gpu --baseline
+  release-0.1.2`, flat as expected (LoRA never routes through `forwardVerify`
+  or touches `--model-draft`).
+- Vision, ROCm, and the remaining handler families' `forwardVerify` overrides
+  remain the same named follow-ups the ngram mode already carried — not
+  reintroduced or re-scoped here.
+
 **Session 83** — Ngram speculative decoding (`--spec-type`) **feature complete**
 
 - `--spec-type none|ngram-simple` (`--spec-ngram-n`, `--spec-ngram-m`; default

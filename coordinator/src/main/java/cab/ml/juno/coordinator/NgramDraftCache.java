@@ -34,7 +34,7 @@ import java.util.Map;
  * <p>Not thread-safe — one instance per in-flight {@code generate()} call,
  * matching {@link GenerationLoop}'s per-request state.
  */
-final class NgramDraftCache {
+final class NgramDraftCache implements DraftProposer {
 
 	private static final int MAX_ENTRIES = 4096;
 
@@ -58,7 +58,8 @@ final class NgramDraftCache {
 	 * exposes since the last call. Safe to call repeatedly as the sequence grows —
 	 * only the newly-appended suffix is indexed each time.
 	 */
-	void observe(int[] tokens) {
+	@Override
+	public void observe(int[] tokens) {
 		int start = Math.max(indexedLength, n);
 		for (int i = start; i < tokens.length; i++) {
 			nextTokenByNgram.put(new Key(tokens, i - n, n), tokens[i]);
@@ -74,7 +75,8 @@ final class NgramDraftCache {
 	 * @return a draft of length {@code [0, maxDraft]}; empty when {@code tokens}
 	 *         is shorter than {@code n} or the very first lookup misses
 	 */
-	int[] propose(int[] tokens, int maxDraft) {
+	@Override
+	public int[] propose(int[] tokens, int maxDraft) {
 		if (tokens.length < n || maxDraft <= 0)
 			return new int[0];
 

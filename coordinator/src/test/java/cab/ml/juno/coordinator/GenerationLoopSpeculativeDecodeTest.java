@@ -1,6 +1,7 @@
 package cab.ml.juno.coordinator;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.HashMap;
 import java.util.List;
@@ -60,6 +61,13 @@ class GenerationLoopSpeculativeDecodeTest {
 
 	private GenerationLoop plainLoop(InferencePipeline pipeline) {
 		return new GenerationLoop(tokenizer, sampler, pipeline, kvCache);
+	}
+
+	private GenerationLoop draftSimpleLoop(InferencePipeline pipeline, InferencePipeline draftPipeline) {
+		SpeculativeDecodeOptions spec = SpeculativeDecodeOptions.of(SpeculativeDecodeOptions.SpecType.DRAFT_SIMPLE, 1,
+				2, "unused-in-test");
+		return new GenerationLoop(tokenizer, sampler, pipeline, kvCache, PrefillMode.BATCHED,
+				PrefillBatchOptions.DEFAULT_CHUNK_SIZE, spec, draftPipeline);
 	}
 
 	private InferenceRequest requestWithMaxTokens(int maxTokens) {
@@ -133,5 +141,73 @@ class GenerationLoopSpeculativeDecodeTest {
 		// real answer (700) diverges from the drafted 600, so only that round's
 		// window size is observable here — the accept count itself is JFR-only.
 		assertThat(specPipeline.verifyDraftWindowSizes()).isEqualTo(List.of(2));
+	}
+
+	@Test
+	void draft_simple_matches_plain_decode_when_draft_agrees_with_target() {
+		Map<Integer, Integer> script = scriptFromStep(500, 600, 500, 600, 500, 600, 500, 600);
+
+		GenerationResult reference = plainLoop(new RecordingVerifyPipeline(script)).generate(requestWithMaxTokens(8),
+				TokenConsumer.discard());
+
+		// A draft "model" that happens to always agree with the target — same
+		// position -> token script, a separate pipeline instance and separate KV
+		// key from the target's own.
+		RecordingVerifyPipeline targetPipeline = new RecordingVerifyPipeline(script);
+		RecordingVerifyPipeline draftPipeline = new RecordingVerifyPipeline(script);
+		GenerationResult speculative = draftSimpleLoop(targetPipeline, draftPipeline).generate(
+				requestWithMaxTokens(8), TokenConsumer.discard());
+
+		assertThat(speculative.tokenIds()).isEqualTo(reference.tokenIds());
+		assertThat(speculative.tokenIds()).containsExactly(500, 600, 500, 600, 500, 600, 500, 600);
+	}
+
+	@Test
+	void draft_simple_divergence_emits_target_prediction_not_the_stale_draft() {
+		Map<Integer, Integer> targetScript = scriptFromStep(500, 600, 500, 700, 800, 900);
+		// The draft model's own (wrong) guess at step 3 differs from the target's.
+		Map<Integer, Integer> draftScript = scriptFromStep(500, 600, 500, 111, 800, 900);
+
+		GenerationResult reference = plainLoop(new RecordingVerifyPipeline(targetScript))
+				.generate(requestWithMaxTokens(6), TokenConsumer.discard());
+
+		RecordingVerifyPipeline targetPipeline = new RecordingVerifyPipeline(targetScript);
+		RecordingVerifyPipeline draftPipeline = new RecordingVerifyPipeline(draftScript);
+		GenerationResult speculative = draftSimpleLoop(targetPipeline, draftPipeline).generate(
+				requestWithMaxTokens(6), TokenConsumer.discard());
+
+		assertThat(speculative.tokenIds()).isEqualTo(reference.tokenIds());
+		assertThat(speculative.tokenIds()).containsExactly(500, 600, 500, 700, 800, 900);
+	}
+
+	@Test
+	void draft_simple_without_a_draft_pipeline_fails_closed() {
+		SpeculativeDecodeOptions spec = SpeculativeDecodeOptions.of(SpeculativeDecodeOptions.SpecType.DRAFT_SIMPLE, 1,
+				2, "unused-in-test");
+
+		assertThatThrownBy(() -> new GenerationLoop(tokenizer, sampler, new RecordingVerifyPipeline(Map.of()),
+				kvCache, PrefillMode.BATCHED, PrefillBatchOptions.DEFAULT_CHUNK_SIZE, spec, null))
+				.isInstanceOf(IllegalArgumentException.class).hasMessageContaining("--model-draft");
+	}
+
+	@Test
+	void draft_simple_with_mismatched_vocab_fails_closed() {
+		SpeculativeDecodeOptions spec = SpeculativeDecodeOptions.of(SpeculativeDecodeOptions.SpecType.DRAFT_SIMPLE, 1,
+				2, "unused-in-test");
+		InferencePipeline mismatchedVocabDraft = new InferencePipeline() {
+			@Override
+			public float[] forward(String requestId, int[] tokens, int startPos) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public int vocabSize() {
+				return RecordingVerifyPipeline.VOCAB_SIZE + 1;
+			}
+		};
+
+		assertThatThrownBy(() -> new GenerationLoop(tokenizer, sampler, new RecordingVerifyPipeline(Map.of()),
+				kvCache, PrefillMode.BATCHED, PrefillBatchOptions.DEFAULT_CHUNK_SIZE, spec, mismatchedVocabDraft))
+				.isInstanceOf(IllegalArgumentException.class).hasMessageContaining("vocabulary");
 	}
 }

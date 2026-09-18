@@ -582,3 +582,52 @@ Unit tests: `NgramDraftCacheTest` (insert/lookup/eviction), `GenerationLoopSpecu
 call-count-indexed — test pipeline so a discarded/wasted verify position doesn't corrupt the
 comparison), `LlamaTransformerHandlerVerifyParityTest` (batched verify vs serial `forward`, both
 final-node and intermediate-node shapes), `JfrMetricsExtractorSpeculationTest` (`metrics` module).
+
+## Draft-model speculative decoding (`--spec-type draft-simple`)
+
+`--spec-type draft-simple --model-draft PATH` drafts tokens from a second, independently-loaded GGUF
+model instead of an ngram cache, reusing the same `GenerationLoop.generate()` draft/verify loop and
+`ForwardPassHandler.forwardVerify` batched-verify path as `ngram-simple` above — both strategies
+implement a shared `DraftProposer` interface (`propose`/`observe`/`close`) so the loop itself does not
+care which one is active. `DraftModelSession` drives the draft model through its own persistent KV
+session with ordinary greedy `forward()` calls (one per drafted token, feeding its own prediction back
+in — the same shape a plain non-speculative decode step already takes), then reconciles that tentative
+continuation against ground truth after every round: it walks forward from the last position both
+sides are known to agree on and, on the first disagreement, issues exactly one corrective `forward()`
+call — no bulk resend of the drafted window, and no explicit KV-truncate API, since KV storage is
+indexed by absolute position and a later real write simply overwrites a stale speculative one (the
+same overwrite-in-place semantics `ngram-simple`'s verify window already relies on). `GenerationLoop`'s
+constructor fails closed when `--spec-type draft-simple` is set without a loaded draft pipeline, or
+when the draft and target `InferencePipeline.vocabSize()` differ — draft-proposed token ids are
+compared directly against the target's own sampled ids, so a vocab mismatch would otherwise silently
+compare incompatible id spaces. Wired for the local single-shard REPL only (`ConsoleMain.runLocalRepl()`
++ `loadDraftPipeline()`, sharing the target's `MatVec`/`GpuContext`); `--lora-play`, LoRA train, and
+cluster/tensor-parallel launches fail closed at CLI-parse time with an explicit error rather than
+silently ignoring `--model-draft`.
+
+Full live-smoke-test numbers and methodology: `docs/perf-compare/README.md` → "Draft-model speculative
+decoding — regression gate + live smoke test". Headline, on the same maximally-repetitive synthetic
+workload as the `ngram-simple` entry above (TinyLlama Q4_K_M as `--model-draft`, Mistral-7B Q4_K_M as
+the target, both sharing the same 32000-token Llama-family vocabulary, GTX 1080, greedy decode): output
+was byte-identical to `--spec-type none` (token-identity exit gate met) and draft acceptance was decent
+(**55.2%**, 53/96 drafted tokens), but wall-clock tg **regressed to 0.52×** (19.78 -> 10.35 t/s,
+JFR) rather than improving. `juno.MatVec.count` nearly quadrupled (7,965 -> 31,058) because the draft
+model's own decode/prefill/resync forward calls route through the same global `MatVec` span the target
+uses — unlike `ngram-simple`'s free lookup-table proposals, `draft-simple`'s proposals cost a real
+transformer forward pass per drafted token, and on this GPU that additional cost is not offset by the
+verify-side savings. This directly compounds, rather than contradicts, this doc set's separate finding
+that per-launch host/FFI overhead (not kernel throughput) is the current GPU decode ceiling: a smaller
+draft model still issues thousands of its own tiny per-projection launches, and those are not free even
+though the FLOPs they represent are small. Reported honestly as a negative result, not hidden — the
+tier's own exit gate anticipates this ("TPS uplift documented when draft is small and acceptance is
+high; failure cases documented"). Regression gates: `compare-llama-cpp.sh --gpu --models mistral`
+(default `--spec-type none`) failures=0; `compare-lora.sh` flat as expected (LoRA never routes through
+`forwardVerify` or touches `--model-draft`).
+
+Unit tests: `DraftModelSessionTest` (propose/observe reconciliation: full acceptance needing no
+resync, divergence triggering exactly one resync `forward()` call, continuing correctly after resync,
+and a case that starves the session of an `observe()` call between rounds to prove it still self-heals),
+`SpeculativeDecodeOptionsTest` (`draft-simple` parsing, fail-closed when `--model-draft` is missing),
+and two new `GenerationLoopSpeculativeDecodeTest` cases (full agreement and a scripted divergence
+between an independent draft pipeline and the target, plus dedicated cases for the missing-draft-pipeline
+and vocab-mismatch fail-closed constructor checks).

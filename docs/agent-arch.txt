@@ -60,18 +60,40 @@ Module dependency (excerpt):
         long prompts emit --prefill-batch ubatch chunks mixed with decode;
         decode preferred when the step slot budget is full;
         GET /v1/cluster/health exposes schedule + prefixLookups/Hits/HitRate
-        SpeculativeDecodeOptions / NgramDraftCache / SpeculationEvent — ngram
-        speculative decoding (--spec-type none|ngram-simple). NgramDraftCache
-        indexes n-gram -> next-token from the request's own prompt + generated
-        tokens (no second model); GenerationLoop.generate() drafts up to
-        --spec-ngram-m tokens per round and verifies the whole window in one
-        pipeline.verifyDraft call (ForwardPassHandler.forwardVerify: same
-        windowed one-GEMM-per-layer path as forwardBatch, but keeps every
-        position's logits instead of only the last). Sampling runs exactly
-        once per position in order regardless of accept/reject, so rng/grammar
-        state — and the emitted token — is byte-identical to --spec-type none;
-        a mismatch emits the target model's own prediction and the round ends
-        there. Wired only for GenerationLoop.generate() (single-request path);
+        SpeculativeDecodeOptions / DraftProposer / NgramDraftCache /
+        DraftModelSession / SpeculationEvent — speculative decoding
+        (--spec-type none|ngram-simple|draft-simple), sharing one draft/verify
+        loop in GenerationLoop.generate() via the DraftProposer interface
+        (propose/observe/close) both drafting strategies implement.
+        NgramDraftCache (ngram-simple) indexes n-gram -> next-token from the
+        request's own prompt + generated tokens (no second model).
+        DraftModelSession (draft-simple, --model-draft PATH) drafts from a
+        second, independently-loaded single-shard GGUF pipeline: it drives its
+        own persistent KV session (key kvKey+"#draft", distinct from the
+        target's) via ordinary greedy forward() calls, then reconciles that
+        tentative continuation against ground truth in observe() — walking
+        forward from the last agreed position and, on the first mismatch (or
+        once it reaches propose()'s own frontier), issuing exactly one
+        corrective forward() call so the draft's KV converges without ever
+        needing a bulk resend of the whole window. Fail-closed at
+        GenerationLoop construction when --spec-type draft-simple is given
+        without a loaded draft pipeline, or when the draft and target
+        InferencePipeline.vocabSize() values differ (draft-proposed token ids
+        are compared directly against the target's own sampled ids, so a
+        vocab mismatch would silently compare incompatible id spaces).
+        Whichever proposer is active, GenerationLoop.generate() drafts up to
+        --spec-ngram-m tokens per round (also draft-simple's max-per-round
+        knob) and verifies the whole window in one pipeline.verifyDraft call
+        (ForwardPassHandler.forwardVerify: same windowed one-GEMM-per-layer
+        path as forwardBatch, but keeps every position's logits instead of
+        only the last). Sampling runs exactly once per position in order
+        regardless of accept/reject, so rng/grammar state — and the emitted
+        token — is byte-identical to --spec-type none; a mismatch emits the
+        target model's own prediction and the round ends there (this holds
+        for both proposers: the draft's own correctness only ever affects
+        acceptance rate, never emitted-token correctness, since `emitted`
+        always equals the target's own sampled prediction by construction).
+        Wired only for GenerationLoop.generate() (single-request path);
         generateBatch (static multi-request batching) does not draft/verify
         yet — ConsoleMain warns at startup when both --spec-type and a
         --parallel > 1 batch config are set. LlamaTransformerHandler overrides
@@ -79,7 +101,16 @@ Module dependency (excerpt):
         and cluster/tensor-parallel pipelines fall back to the
         correctness-preserving serial ForwardPassHandler/InferencePipeline
         default (no speed benefit there yet — named follow-up, see
-        docs/infra-plan/PLAN-Infra-Tier9.md).
+        docs/infra-plan/PLAN-Infra-Tier9.md). draft-simple is wired for
+        ConsoleMain.runLocalRepl() only (loadDraftPipeline() loads a second,
+        always-single-shard pipeline sharing the target's MatVec/GpuContext);
+        LoRA train/play and cluster/tensor-parallel modes fail closed at CLI
+        parse time with an explicit error rather than silently ignoring
+        --model-draft (see docs/infra-plan/PLAN-Infra-Tier12.md). The draft
+        session is rebuilt fresh on every generate() call, including repeated
+        turns of one chat session, so it does not yet share the target's
+        cross-turn prefix-cache reuse — a named perf cost, not a correctness
+        gap.
         coordinator depends on node
   juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,
         ProcessPipelineClient, TensorParallelPipelineClient

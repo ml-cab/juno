@@ -62,6 +62,8 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260918T044915Z-lora`](20260918T044915Z-lora/) | GPU LoRA train-qa + playback vs release-0.1.2, Tier 10 (multi-adapter `--lora-play` + `lora-import`) regression gate | train ms / playback tps | [INDEX](20260918T044915Z-lora/INDEX.md) |
 | [`20260918T063656Z`](20260918T063656Z/) | GPU TinyLlama (Q2_K + Q4_K_M) default path, ngram speculative decoding (`--spec-type` still `none` here) regression gate | JFR pp/tg | [INDEX](20260918T063656Z/INDEX.md) |
 | [`20260918T063739Z-lora`](20260918T063739Z-lora/) | GPU LoRA train-qa + playback vs release-0.1.2, ngram speculative decoding regression gate (flat as expected — LoRA doesn't route through `forwardVerify`) | train ms / playback tps | [INDEX](20260918T063739Z-lora/INDEX.md) |
+| [`20260918T152002Z`](20260918T152002Z/) | GPU Mistral-7B, draft-model speculative decoding (`--spec-type` still `none` here) regression gate | JFR pp/tg | [INDEX](20260918T152002Z/INDEX.md) |
+| [`20260918T152100Z-lora`](20260918T152100Z-lora/) | GPU LoRA train-qa + playback vs release-0.1.2, draft-model speculative decoding regression gate (flat as expected — LoRA doesn't route through `forwardVerify`) | train ms / playback tps | [INDEX](20260918T152100Z-lora/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 
@@ -145,6 +147,56 @@ neutrality per the tier's exit gate is plausible but unmeasured — only the max
 case was tested live); wiring `forwardVerify` into `Phi2TransformerHandler`/`Phi3TransformerHandler`/
 `Qwen3TransformerHandler`/`Qwen3MoeTransformerHandler` (they fall back to the correctness-preserving
 serial default — no speed benefit, named follow-up); a JFR span around `forwardVerify` itself.
+
+## Draft-model speculative decoding — regression gate + live smoke test — `20260918T152002Z`
+
+Regression gate for draft-model speculative decoding (`--spec-type none|ngram-simple|draft-simple`,
+`docs/infra-plan/PLAN-Infra-Tier12.md`): `compare-llama-cpp.sh --gpu --models mistral` with
+`--spec-type` left at its default (`none`) — failures=0, Mistral-7B Q4_K_M tg **18.76** t/s (JFR),
+in line with prior Mistral baselines above (default-lane, no `--gpu-layers`/`--mmq` override). LoRA
+regression (`20260918T152100Z-lora`) flat as expected (**0.98×** train total ms, **0.88×** playback
+wall tps, both within the ±25%/≥80% gate — `LoraTrainableHandler` never overrides `forwardVerify` or
+touches `--model-draft`, so `draft-simple` never reaches the LoRA path at all).
+
+**Not yet the standardized script bake-off** — same caveat as the ngram entry above:
+`compare-llama-cpp.sh` has no built-in draft-acceptance workload, so the numbers below are a manual
+`./juno local` REPL smoke test: TinyLlama Q4_K_M as `--model-draft` (draft), Mistral-7B Q4_K_M as the
+target (both share the same 32000-token Llama-family vocabulary — the pairing the vocab-size fail-closed
+check in `GenerationLoop`'s constructor is designed to accept), GTX 1080, `--gpu-layers auto`,
+`--temperature 0`, `--jfr 30s`, `--spec-ngram-m 8`, same "repeat apple banana cherry 10 times" maximally
+repetitive prompt as the ngram entry for direct comparability.
+
+| Metric (59 generated tokens) | `--spec-type none` | `--spec-type draft-simple` |
+|---|---:|---:|
+| Output text | `apple banana cherry` × 10 | **byte-identical** — same 10 lines |
+| Wall-clock tg (`TokenProduced.tps`) | 19.78 t/s | **10.35 t/s** (**0.52×** — a regression, not a speedup) |
+| `juno.MatVec.count` | 7,965 | 31,058 (**3.9×**) |
+| `juno.MatVec.duration.total_ms` | 2,763.3 ms | 5,070.5 ms |
+| `juno.Speculation.acceptanceRate` | n/a | **0.552** (53/96 drafted tokens accepted) |
+
+**Reading this honestly:** token identity holds exactly (exit gate #1 met) and acceptance is decent
+(55.2%) for a draft model that was never fine-tuned to match the target's distribution — but
+wall-clock tg **regresses to 0.52×**, the opposite of a speedup. Unlike `ngram-simple`'s free
+lookup-table proposals, `draft-simple`'s proposals cost real GPU work: `DraftModelSession.propose()`
+drives TinyLlama through its own full transformer forward pass once per drafted token, and that cost
+is *additional* to Mistral's own verify pass, not a replacement for it. `juno.MatVec.count` nearly
+quadruples (7,965 -> 31,058) because every one of TinyLlama's own decode/prefill/resync forward calls
+routes through the same global `juno.MatVec` span the target uses — this is the clearest evidence for
+*why* the wall-clock result is negative: it directly compounds the P0 gap analysis's finding that
+per-launch host/FFI overhead, not raw kernel throughput, is the current decode ceiling on this
+hardware (`PLAN-Infra-PERF-ANALYSIS.md` → "Post-MMQ GPU idle-time finding"). A ~7x-smaller draft model
+still issues its own thousands of tiny per-projection launches, and on this GPU those launches are not
+free even though the FLOPs they represent are small. This is an honest, informative negative result,
+not a bug — the exit gate's own wording anticipates it ("TPS uplift documented when draft is small and
+acceptance is high; **failure cases documented**"). A draft model whose own decode cost is
+proportionally smaller relative to the target (e.g. a much larger target, or a future lower-launch-overhead
+decode path per the P0 lever) would be expected to change this ratio; not measured this session.
+
+**Not done this session**: a multi-model, multi-workload standardized bake-off (only one draft/target
+pair, one maximally-repetitive workload, was measured live); tuning `--spec-ngram-m` or trying a
+smaller/larger draft model to see whether the regression narrows; wiring `--model-draft` into vision,
+ROCm, or cluster/tensor-parallel launches (all explicit follow-ups per the tier doc, several fail
+closed at CLI-parse time rather than silently no-op).
 
 ## HEAD bake-off + vision chat-template regression fix — 2026-09-16 (`8e73d5e`)
 
