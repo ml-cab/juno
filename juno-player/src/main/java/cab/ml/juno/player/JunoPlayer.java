@@ -180,6 +180,8 @@ public final class JunoPlayer implements AutoCloseable {
 		private Integer parallel = null;
 		private Long batchWindowMs = null;
 		private Integer prefillBatch = null;
+		private cab.ml.juno.coordinator.SpeculativeDecodeOptions specOptions =
+				cab.ml.juno.coordinator.SpeculativeDecodeOptions.disabled();
 
 		private Builder(Path modelPath) {
 			this.modelPath = modelPath;
@@ -225,6 +227,12 @@ public final class JunoPlayer implements AutoCloseable {
 			return this;
 		}
 
+		/** Ngram speculative decoding; {@link cab.ml.juno.coordinator.SpeculativeDecodeOptions#disabled()} (default) matches plain decoding exactly. */
+		public Builder speculativeDecode(cab.ml.juno.coordinator.SpeculativeDecodeOptions specOptions) {
+			this.specOptions = specOptions;
+			return this;
+		}
+
 		public JunoPlayer build() throws IOException {
 			System.setProperty("juno.byteOrder", byteOrder);
 
@@ -263,7 +271,7 @@ public final class JunoPlayer implements AutoCloseable {
 			var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 			var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache,
 					cab.ml.juno.coordinator.PrefillMode.BATCHED,
-					PrefillBatchOptions.resolve(prefillBatch).chunkSize());
+					PrefillBatchOptions.resolve(prefillBatch).chunkSize(), specOptions);
 			var schedule = cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv();
 			BatchConfig batch = ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig();
 			if (schedule.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.CONTINUOUS)

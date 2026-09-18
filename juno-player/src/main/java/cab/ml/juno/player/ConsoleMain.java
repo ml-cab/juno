@@ -211,6 +211,10 @@ public final class ConsoleMain {
 	/** Prefill strategy: batched (default) or single (legacy sequential loop). */
 	private static cab.ml.juno.coordinator.PrefillMode prefillMode = cab.ml.juno.coordinator.PrefillMode.BATCHED;
 	private static Integer prefillBatch = null; // null → env or default 32
+	/** --spec-type none|ngram-simple (default none): ngram speculative decoding. */
+	private static String specType = null; // null → env or default none
+	private static Integer specNgramN = null; // null → env or default 3
+	private static Integer specNgramM = null; // null → env or default 4
 	// ── Byte-order argument ───────────────────────────────────────────────────
 	/** Activation codec byte order: {@code "BE"} (default) or {@code "LE"}. */
 	private static String byteOrder = "BE";
@@ -632,6 +636,20 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					prefillBatch = parseInt(args[++i], PrefillBatchOptions.DEFAULT_CHUNK_SIZE);
 				break;
+			case "--spec-type":
+				if (i + 1 < args.length)
+					specType = args[++i];
+				break;
+			case "--spec-ngram-n":
+				if (i + 1 < args.length)
+					specNgramN = parseInt(args[++i],
+							cab.ml.juno.coordinator.SpeculativeDecodeOptions.DEFAULT_NGRAM_N);
+				break;
+			case "--spec-ngram-m":
+				if (i + 1 < args.length)
+					specNgramM = parseInt(args[++i],
+							cab.ml.juno.coordinator.SpeculativeDecodeOptions.DEFAULT_NGRAM_M);
+				break;
 			case "--dtype":
 				if (i + 1 < args.length)
 					dtype = parseDtype(args[++i]);
@@ -940,6 +958,17 @@ public final class ConsoleMain {
 		System.out.println("  --prefill-batch N          Max prompt tokens per prefill window (default: 32)");
 		System.out.println("                             env JUNO_PREFILL_BATCH; use 1 for per-token batched");
 		System.out.println();
+		System.out.println("Speculative decoding:");
+		System.out.println("  --spec-type none|ngram-simple  Ngram speculative decoding (default: none)");
+		System.out.println("                             env JUNO_SPEC_TYPE; ngram-simple drafts tokens from");
+		System.out.println("                             an in-request ngram cache, verified against this");
+		System.out.println("                             model before being emitted (--local only; no effect");
+		System.out.println("                             on --parallel static batching, see docs/howto.md)");
+		System.out.println("  --spec-ngram-n N           Ngram order for the draft cache (default: 3)");
+		System.out.println("                             env JUNO_SPEC_NGRAM_N");
+		System.out.println("  --spec-ngram-m N           Max tokens drafted per verify round (default: 4)");
+		System.out.println("                             env JUNO_SPEC_NGRAM_M");
+		System.out.println();
 		System.out.println("Inference options:");
 		System.out.println("  --gpu                      Use GPU (default, no need to set)");
 		System.out.println("  --cpu                      Force to use CPU");
@@ -1166,7 +1195,8 @@ public final class ConsoleMain {
 				config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
-				PrefillBatchOptions.resolve(prefillBatch).chunkSize());
+				PrefillBatchOptions.resolve(prefillBatch).chunkSize(),
+				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
 
 		LoraAdamOptimizer optimizer = LoraAdamOptimizer.defaults(loraLr);
 		int[] totalStepsTrained = { 0 };
@@ -2076,7 +2106,8 @@ public final class ConsoleMain {
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
-				PrefillBatchOptions.resolve(prefillBatch).chunkSize());
+				PrefillBatchOptions.resolve(prefillBatch).chunkSize(),
+				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
 
 		startRepl(loop, tokenizer); // calls System.exit(0) on quit — shutdown hook fires from there
 	}
@@ -2203,7 +2234,8 @@ public final class ConsoleMain {
 				config.hiddenDim(), config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
-				PrefillBatchOptions.resolve(prefillBatch).chunkSize());
+				PrefillBatchOptions.resolve(prefillBatch).chunkSize(),
+				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig(),
 				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {
@@ -2370,7 +2402,21 @@ public final class ConsoleMain {
 		BatchConfig batch = ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig();
 		if (cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv().mode()
 				== cab.ml.juno.kvcache.ServeScheduleOptions.Mode.CONTINUOUS)
-			return cab.ml.juno.coordinator.ServeSchedulePolicy.runningSetConfig(batch);
+			batch = cab.ml.juno.coordinator.ServeSchedulePolicy.runningSetConfig(batch);
+		// --spec-type only wires into GenerationLoop.generate() (single-request path);
+		// GenerationLoop.generateBatch() (static multi-request batching, entries.size() > 1)
+		// does not draft/verify yet — a request that lands in a concurrent batch decodes
+		// without speculation, silently, unless flagged here. See PLAN-Infra-Tier9.md.
+		if (batch.isBatchingEnabled()
+				&& cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM)
+						.enabled()) {
+			System.out.println(String.format(
+					"  %sWARNING: --spec-type only speculates for requests decoded one at a time; "
+							+ "under concurrent load --parallel %d's static batching decodes without "
+							+ "speculation for any request sharing a batch (no silent throughput loss — "
+							+ "just no speculative gain there)%s%n",
+					Color.YELLOW, batch.maxBatchSize(), Color.RESET));
+		}
 		return batch;
 	}
 
@@ -2430,7 +2476,8 @@ public final class ConsoleMain {
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
-				PrefillBatchOptions.resolve(prefillBatch).chunkSize());
+				PrefillBatchOptions.resolve(prefillBatch).chunkSize(),
+				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig(),
 				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {

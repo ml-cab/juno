@@ -53,6 +53,50 @@ MatVec dominance is a short-context finding, not a universal one. Two implicatio
    to Phi-3.5-mini specifically — check TinyLlama/Qwen2.5-3B/Mistral instead, or land the Phi-3
    follow-up first).
 
+## New evidence (2026-09-18): the kernel is not the remaining bottleneck — read before profiling further
+
+A session attempted step 2 below (profile why `q4k_gemv` loses to FP16 cuBLAS) via Nsight Compute and
+found a different answer than kernel tiling/memory traffic. Full methodology and numbers:
+`PLAN-Infra-PERF-ANALYSIS.md` → "Post-MMQ GPU idle-time finding (2026-09-18)". Summary:
+
+- `ncu` (hardware counters) is blocked in this environment by `ERR_NVGPUCTRPERM` (no passwordless
+  `sudo`); `nsys` timeline tracing was used instead (works without the restricted permission), with a
+  manual `QdstrmImporter` workaround for a broken `.qdstrm` auto-import in this `nsys` install.
+- GPU utilization during decode/prefill is only **17.9–26.8%** (TinyLlama/Phi-3.5-mini) — the GPU sits
+  idle 73–82% of wall time. `q4k_gemv`/`q5k_gemv`/`q6k_gemv` themselves run in a reasonable 55–140
+  µs/launch; they are not slow, they are idle most of the time.
+- Memcpy (1.4% of the generation window, once one-time model-load HtoD transfer is excluded) and
+  `cudaStreamSynchronize` (<2%) are both ruled out as the idle-time cause.
+- Turning on the already-shipped `--gpu-attention` (already wired for TinyLlama) moved GPU utilization
+  17.9%→19.6% and wall time 1137ms→1116ms — noise-level at short context, not the dominant lever
+  there (does not contradict the ROADMAP's separate long-context, ctx≈512 finding of 64.2% attention
+  share — different regime).
+- JFR cross-validates independently: `(juno.MatVec + juno.Attention) / juno.ForwardPass` = 26.7% on
+  the same TinyLlama run — matching the Nsight Systems GPU-utilization number via a completely
+  different measurement path.
+- The historical `93–96%` MatVec-share figure elsewhere in this doc set was measured on the
+  **pre-MMQ `cuda_resident_fp16`** backend, where large FP16 weight volume made the cuBLAS call itself
+  slow enough to dominate. Tier 13B's Q4_K MMQ kernel is much faster per call, but nothing shrank the
+  **host-side** overhead surrounding each of the thousands of per-projection kernel launches a decode
+  token issues (`Q4KMmqKernel` builds a fresh `Arena.ofConfined()` and marshals several
+  `MemorySegment`s per call, outside any JFR span). That fixed per-launch overhead, negligible when
+  the kernel was slow, is now the ceiling.
+- **A hypothetically zero-cost kernel could only improve Phi-3.5 decode by ~27% at most** on this
+  evidence — not enough to close 0.326×→0.5×. Tile-kernel tuning (this doc's original step 2 framing)
+  is **downgraded in expected leverage**; do not restart kernel-tiling work on this basis without
+  re-reading the full finding first.
+- **Recommended next levers instead**, in rough order of expected leverage: (a) reduce per-launch
+  host/FFI overhead — CUDA graphs to capture-and-replay a whole layer's launch sequence, or fusing
+  more of the ~7 per-layer projections into fewer/larger launches beyond the existing `sgemvSameX` QKV
+  fusion; (b) move `rmsNorm`/`rope`/residual-add/SwiGLU (`silu(gate)*up`) onto the GPU — confirmed by
+  code inspection to still be plain scalar Java loops, no JDK Vector API, no GPU kernel — or at
+  minimum vectorize them on CPU first as a cheaper experiment.
+- **Not done by this session:** apportioning the ~73% idle time precisely between host/FFI overhead
+  vs. raw CPU elementwise compute (would need direct instrumentation of `Arena.ofConfined()` setup
+  cost and the norm/rope/residual/SwiGLU loops, not just kernel-level tracing); any actual fix
+  (CUDA graphs, launch fusion, or GPU-porting the elementwise ops) — this was a diagnosis pass only,
+  consistent with this doc's own exit criteria ("if gate still fails, report fail with numbers").
+
 ## Read first (mandatory)
 
 1. [`models/CLAUDE.md`](../../models/CLAUDE.md) — tests first, KISS, prefer new classes, list changed files (no zip)

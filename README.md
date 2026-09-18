@@ -64,6 +64,16 @@ Features:
 - Dense KV under `static`; paged KV (`--kv-page-size`) under `continuous`.
   See `docs/howto.md`.
 
+### Speculative decoding
+
+- `--spec-type none|ngram-simple` (`JUNO_SPEC_TYPE`, default `none`): drafts up
+  to `--spec-ngram-m` tokens from an in-request ngram cache (prompt + generated
+  tokens, no second model, no static corpus), verifies the whole draft window
+  against this model in one batched pass, and emits the target model's own
+  prediction at the first mismatch. Output is byte-for-byte identical to
+  `none` regardless of draft accuracy. `--local` single-request decoding only
+  for now. See `docs/howto.md`.
+
 ### Vision (image-to-text)
 
 - `POST /v1/vision/chat` (blocking + SSE), registered automatically on

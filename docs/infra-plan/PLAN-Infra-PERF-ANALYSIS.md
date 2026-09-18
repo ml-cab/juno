@@ -130,6 +130,82 @@ P1 begins after P0 **gate met** for peer claims (feature-complete P0 tiers may a
 - KV quant (Tier 6): memory, not the 4× MatVec gap on decode.
 - Partial offload (Tier 5): essential for fit, not for resident-model kernel efficiency.
 
+## Post-MMQ GPU idle-time finding (2026-09-18) — the kernel is not the remaining bottleneck
+
+**Context:** the Phase A memo above (and the `93–96%` MatVec-share figure throughout this doc) was
+measured on the **`cuda_resident_fp16`** backend — i.e. before Tier 13B's Q4_K MMQ kernel shipped.
+`PROMPT-P0-Gate.md` step 2 asks a future session to profile *why the current `q4k_gemv` kernel loses
+to FP16 cuBLAS* using Nsight Compute. This session attempted that pass and found a different, more
+fundamental answer than a kernel-tiling problem.
+
+**Method:** `ncu` (hardware perf counters) hit `ERR_NVGPUCTRPERM` — this account lacks the elevated
+GPU counter access `ncu` needs, and there is no passwordless `sudo` in this environment to grant it
+non-interactively. As a substitute, `nsys profile --trace=cuda` (CUDA API/kernel **timeline** tracing,
+which does not need the restricted counter permission) was used instead, on a live `./juno local
+--mmq on --gpu-layers all --gpu` run (TinyLlama and Phi-3.5-mini, GTX 1080, short prompt, 20-40 decode
+tokens). `nsys`'s own `.qdstrm → .nsys-rep` importer was broken in this install (`Importer binary and
+its dependencies were not found`); worked around by invoking `QdstrmImporter` directly from
+`/usr/lib/nsight-systems/host-linux-x64/`, then querying the resulting `.sqlite` export with Python
+(`sqlite3` module) for `CUPTI_ACTIVITY_KIND_KERNEL` / `CUPTI_ACTIVITY_KIND_MEMCPY` timestamps.
+Cross-validated against a `--jfr` recording of the identical TinyLlama run.
+
+**Finding 1 — memcpy is not the decode bottleneck once model load is excluded.** The naive
+`cudaMemcpyAsync`/`cudaMemcpy` totals across a whole process capture are dominated by the **one-time**
+model-to-VRAM upload (2.5 GB HtoD, ~389 ms, all *before* the first `q4k_gemv` launch). Restricting to
+the generation window only (first `q4k_gemv` launch → process end) drops memcpy to **13.7 ms of a
+1007 ms window (1.4%)** — negligible during steady-state decode/prefill.
+
+**Finding 2 — the GPU is idle ~73–82% of wall time during generation.** Summing all CUDA kernel
+execution intervals inside the generation window: TinyLlama **203.7–218.6 ms busy of ~1120–1137 ms
+window (17.9–19.6% utilization)**; Phi-3.5-mini **270.5 ms busy of 1007 ms window (26.8%
+utilization)**. `q4k_gemv`/`q5k_gemv`/`q6k_gemv` themselves run in a reasonable 55–140 µs/launch
+(consistent with near-bandwidth-bound execution for their data volume, not an obviously broken
+kernel) — the kernel is not slow, it is idle most of the time.
+
+**Finding 3 — it is not `cudaStreamSynchronize` (host blocked on GPU) either.** That API totals **17.8
+ms** across the whole captured trace (well under 2% of any generation window) — the host is not stuck
+waiting on the device; it is doing something else entirely off the CUDA API surface.
+
+**Finding 4 — turning on the already-shipped `--gpu-attention` does not close the gap at short
+context.** TinyLlama `--gpu-attention off` vs `on`, same prompt/token count: GPU utilization **17.9%
+→ 19.6%**, wall time **1137 ms → 1116 ms** — noise-level, not the dominant lever at this context
+length. (This does not contradict the ROADMAP's separate `ctx≈512` finding that attention reaches
+64.2% of decode wall time at longer context — that is a context-length-dependent cost this session's
+short-prompt test does not exercise.)
+
+**Finding 5 — JFR cross-validation lands on the same number two independent ways.** A `--jfr`
+recording of the identical TinyLlama run: `juno.MatVec` (cuda backend) totals **204 ms** over 3715
+calls (avg 54.9 µs), `juno.Attention` totals **35 ms** over 902 calls (avg 38.8 µs), against a
+`juno.ForwardPass` total of **894 ms**. `(204+35)/894 = 26.7%` — matching the Nsight Systems
+GPU-utilization number (27%) almost exactly, via a completely independent measurement path (software
+JFR spans vs. hardware/API kernel-timeline tracing).
+
+**Reconciling with the historical 93–96% figure:** that number was real for the `cuda_resident_fp16`
+backend, where the FP16 weight volume made each cuBLAS SGEMV call itself slow enough to dominate wall
+time. Tier 13B's Q4_K MMQ kernel is much faster per call (confirmed above: 55–140 µs), but nothing
+shrank the **host-side** cost that surrounds each of the thousands of per-projection kernel launches a
+decode token issues (`Q4KMmqKernel.launchPacked`/`quantizeX` each build a fresh `Arena.ofConfined()`
+and marshal several `MemorySegment`s per call — outside any JFR span, invisible to both `ncu`/`nsys`
+GPU-side tracing and to the `juno.MatVec` span's own reported duration). Speeding up the kernel used to
+help because the kernel *was* the bottleneck; now that it is 3-5x faster, the fixed per-launch host
+overhead that used to be a rounding error is the new ceiling. **A hypothetical zero-cost kernel could
+only improve Phi-3.5 decode by ~27% at most** on this evidence — nowhere near enough to close 0.326×
+→ 0.5×. Code inspection also confirms `rmsNorm`/`rope`/residual-add/SwiGLU (`silu(gate)*up`) all run as
+plain scalar Java loops with no JDK Vector API and no GPU kernel — architecturally consistent with
+"non-GPU, non-MatVec-JFR-instrumented work fills the idle time," though this session did not
+instrument those loops directly to apportion the remaining ~73% between host/FFI call overhead and
+raw CPU elementwise compute.
+
+**Implication for the next P0 lever:** tile/`mul_mat_vec`-class kernel tuning (`PROMPT-P0-Gate.md`
+step 2's original framing) has a low ceiling now and is **not** the recommended next step. Higher-
+leverage candidates, in rough order of expected leverage: (a) reduce per-launch host/FFI overhead —
+CUDA graphs to capture-and-replay a whole layer's launch sequence, or fusing more of the ~7
+per-layer projections into fewer/larger launches beyond the existing `sgemvSameX` QKV fusion; (b) move
+`rmsNorm`/`rope`/residual-add/SwiGLU onto the GPU (already named as the "optional second lever" in
+`PROMPT-P0-Gate.md`, now upgraded to primary-candidate status by this evidence) or at minimum vectorize
+them on CPU. Neither is implemented by this session — this is a diagnosis, not a fix; see
+`PROMPT-P0-Gate.md`'s dated addendum for the same evidence recorded against its exit checklist.
+
 ## Success metrics (program-level gates)
 
 | Metric | Current (GPU JFR) | P0 target | P1 target |

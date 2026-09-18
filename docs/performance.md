@@ -546,3 +546,39 @@ does not touch the base forward-pass/MatVec path.
 Unit tests: `LoraPlaybackMergeTest` / `LoraPlaySpecTest` (`lora` module, reference-math and CLI
 parsing incl. Windows drive-letter paths) and `GgufLoraImporterTest` (`node` module, successful
 import plus fail-closed cases) — 24 cases total, all green.
+
+## Ngram speculative decoding (`--spec-type`)
+
+`--spec-type none|ngram-simple` (`--spec-ngram-n`, `--spec-ngram-m`) drafts tokens from an in-request
+ngram cache (prompt + generated tokens, no second model), verifies the whole draft window against
+this model in one batched pass (`ForwardPassHandler.forwardVerify` — same windowed one-GEMM-per-layer
+path as `forwardBatch`, but keeps every position's logits instead of only the last), and emits the
+target model's own prediction at the first mismatch. Sampling runs exactly once per position in
+order and always emits its result, so rng/grammar state — and the emitted token — is byte-identical
+to `--spec-type none` regardless of draft accuracy. Wired for `GenerationLoop.generate()`
+(single-request decoding) only; `generateBatch` (static multi-request batching) does not draft/verify
+yet, and the local REPL/API launcher warns at startup when both `--spec-type` and a `--parallel > 1`
+batch config are configured together. `LlamaTransformerHandler` overrides `forwardVerify` (Llama /
+Mistral / Qwen2 family); Phi-2/Phi-3/Qwen3/Qwen3-MoE and cluster/tensor-parallel pipelines fall back
+to the correctness-preserving serial default (no speed benefit there yet).
+
+Full live-smoke-test numbers, methodology, and the off-by-one correctness bug this smoke test caught
+(a first cut fed drafted tokens directly as the verify window's input, corrupting KV at an
+already-confirmed position — unit tests with a scripted, non-causal test double could not catch this):
+`docs/perf-compare/README.md` → "Ngram speculative decoding — regression gate + live smoke test".
+Headline: on a maximally-repetitive synthetic workload (TinyLlama Q4_K_M, GTX 1080, greedy decode),
+draft acceptance reached **94.9%** and decode rounds dropped roughly 16× (903 single-token forwards
+to 57 forward/verify calls), but wall-clock tg improved only **~7%** (59.1 -> 63.3 t/s) — `Attention`
+JFR count/time roughly halved (the real saving, from batching multiple query positions into one
+attention dispatch per round) while `MatVec` time was flat-to-slightly-higher (a batched-window GEMM
+over several rows costs more per call than a single-row GEMV, even with far fewer calls) — consistent
+with, not contradicting, this doc set's separate finding that per-launch host/FFI overhead rather than
+kernel throughput is the current GPU decode ceiling. Regression gates: `compare-llama-cpp.sh --gpu
+--models tinyllama` (default `--spec-type none`) failures=0; `compare-lora.sh` flat as expected
+(LoRA never routes through `forwardVerify`).
+
+Unit tests: `NgramDraftCacheTest` (insert/lookup/eviction), `GenerationLoopSpeculativeDecodeTest`
+(token-identity vs plain decode, including a divergence case, using a position-indexed — not
+call-count-indexed — test pipeline so a discarded/wasted verify position doesn't corrupt the
+comparison), `LlamaTransformerHandlerVerifyParityTest` (batched verify vs serial `forward`, both
+final-node and intermediate-node shapes), `JfrMetricsExtractorSpeculationTest` (`metrics` module).

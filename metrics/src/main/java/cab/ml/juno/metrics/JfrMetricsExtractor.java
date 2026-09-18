@@ -51,6 +51,7 @@ final class JfrMetricsExtractor {
     private static final String TOKEN_PRODUCED = "juno.TokenProduced";
     private static final String CONTINUOUS_STEP = "juno.ContinuousStep";
     private static final String GRAMMAR_CONSTRAINED = "juno.GrammarConstrained";
+    private static final String SPECULATION = "juno.Speculation";
 
     private JfrMetricsExtractor() {
     }
@@ -150,6 +151,10 @@ final class JfrMetricsExtractor {
         int continuousPrefillTokens = 0;
         int continuousMaxPrefillChunks = 0;
         int grammarConstrainedCount = 0;
+
+        int specRoundCount = 0;
+        long specDraftTokens = 0;
+        long specAcceptedTokens = 0;
 
         for (Path jfrFile : jfrFiles) {
             if (!Files.isRegularFile(jfrFile) || Files.size(jfrFile) == 0)
@@ -299,6 +304,13 @@ final class JfrMetricsExtractor {
                                 tokenProducedLast = ts;
                         }
                         case GRAMMAR_CONSTRAINED -> grammarConstrainedCount++;
+                        case SPECULATION -> {
+                            specRoundCount++;
+                            if (ev.hasField("draftTokens"))
+                                specDraftTokens += ev.getInt("draftTokens");
+                            if (ev.hasField("acceptedTokens"))
+                                specAcceptedTokens += ev.getInt("acceptedTokens");
+                        }
                         case CONTINUOUS_STEP -> {
                             continuousStepCount++;
                             int decodeBatch = ev.hasField("decodeBatchSize") ? ev.getInt("decodeBatchSize") : 0;
@@ -433,6 +445,12 @@ final class JfrMetricsExtractor {
         m.put("juno.ContinuousStep.prefill_tokens", (double) continuousPrefillTokens);
         m.put("juno.ContinuousStep.max_prefill_chunks", (double) continuousMaxPrefillChunks);
         m.put("juno.GrammarConstrained.count", (double) grammarConstrainedCount);
+
+        m.put("juno.Speculation.count", (double) specRoundCount);
+        m.put("juno.Speculation.draftTokens.sum", (double) specDraftTokens);
+        m.put("juno.Speculation.acceptedTokens.sum", (double) specAcceptedTokens);
+        m.put("juno.Speculation.acceptanceRate",
+                specDraftTokens > 0 ? (double) specAcceptedTokens / specDraftTokens : 0.0);
 
         return new MetricsSnapshot.ModelMetrics(model.getName(), model.getPath(), jfrName, m);
     }

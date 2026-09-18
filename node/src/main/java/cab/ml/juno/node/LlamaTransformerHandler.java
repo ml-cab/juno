@@ -969,6 +969,52 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return new BatchForwardResult(request.requestId(), flat, null, W, System.nanoTime() - start);
 	}
 
+	/**
+	 * Speculative-decode verify: same windowed one-GEMM-per-layer path as
+	 * {@link #forwardBatch}, but every position's logits are kept instead of only
+	 * the last — {@link #outputProjectionBatch} already computes one LM-head GEMM
+	 * over all window positions, so no new low-level plumbing is needed here, only
+	 * returning what it already produces instead of discarding all but the last row.
+	 */
+	@Override
+	public VerifyBatchResult forwardVerify(BatchForwardRequest request, ShardContext context) {
+		long start = System.nanoTime();
+		int W = request.windowSize();
+		int H = cfg.hiddenDim();
+
+		float[][] x;
+		if (hasEmbeddings && request.isFirstNode()) {
+			x = new float[W][H];
+			for (int b = 0; b < W; b++) {
+				int tokenId = request.tokenIds()[b];
+				tokenId = Math.max(0, Math.min(tokenId, cfg.vocabSize() - 1));
+				System.arraycopy(tokenEmbd, tokenId * H, x[b], 0, H);
+			}
+		} else {
+			x = new float[W][H];
+			float[] flatIn = request.activations();
+			for (int b = 0; b < W; b++) {
+				System.arraycopy(flatIn, b * H, x[b], 0, H);
+			}
+		}
+
+		x = runLayersBatch(x, request.requestId(), request.startPosition());
+
+		if (hasOutputProj) {
+			float[][] logitsPerPos = outputProjectionBatch(x);
+			int vocabSize = logitsPerPos[0].length;
+			float[] flatLogits = new float[W * vocabSize];
+			for (int b = 0; b < W; b++) {
+				System.arraycopy(logitsPerPos[b], 0, flatLogits, b * vocabSize, vocabSize);
+			}
+			return new VerifyBatchResult(request.requestId(), null, flatLogits, W, System.nanoTime() - start);
+		}
+
+		float[] flatOut = new float[W * H];
+		for (int b = 0; b < W; b++) System.arraycopy(x[b], 0, flatOut, b * H, H);
+		return new VerifyBatchResult(request.requestId(), flatOut, null, W, System.nanoTime() - start);
+	}
+
 	@Override
 	public MultiDecodeForwardResult forwardMultiDecode(MultiDecodeForwardRequest request, ShardContext context) {
 		long start = System.nanoTime();

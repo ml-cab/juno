@@ -60,6 +60,8 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260918T031702Z`](20260918T031702Z/) | CPU Vector SIMD refresh (`--vector 0`) | JFR pp/tg | [INDEX](20260918T031702Z/INDEX.md) |
 | [`20260918T032455Z`](20260918T032455Z/) | CPU Vector SIMD refresh (`--vector 1`) | JFR pp/tg | [INDEX](20260918T032455Z/INDEX.md) |
 | [`20260918T044915Z-lora`](20260918T044915Z-lora/) | GPU LoRA train-qa + playback vs release-0.1.2, Tier 10 (multi-adapter `--lora-play` + `lora-import`) regression gate | train ms / playback tps | [INDEX](20260918T044915Z-lora/INDEX.md) |
+| [`20260918T063656Z`](20260918T063656Z/) | GPU TinyLlama (Q2_K + Q4_K_M) default path, ngram speculative decoding (`--spec-type` still `none` here) regression gate | JFR pp/tg | [INDEX](20260918T063656Z/INDEX.md) |
+| [`20260918T063739Z-lora`](20260918T063739Z-lora/) | GPU LoRA train-qa + playback vs release-0.1.2, ngram speculative decoding regression gate (flat as expected — LoRA doesn't route through `forwardVerify`) | train ms / playback tps | [INDEX](20260918T063739Z-lora/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 
@@ -80,6 +82,69 @@ here are the expected outcome, not just a passing number.
 Also ran a CPU regression spot-check (`compare-llama-cpp.sh --cpu --vector 0 --models tinyllama`,
 `--no-publish`, base text inference only): failures=0 on both TinyLlama Q2_K and Q4_K_M — Tier 10's
 changes are additive to LoRA loading/CLI only and do not touch the base forward-pass/MatVec path.
+
+## Ngram speculative decoding — regression gate + live smoke test — `20260918T063656Z`
+
+Regression gate for ngram speculative decoding (`--spec-type none|ngram-simple`,
+`docs/infra-plan/PLAN-Infra-Tier9.md`): `compare-llama-cpp.sh --gpu --models tinyllama` with
+`--spec-type` left at its default (`none`) — failures=0, TinyLlama Q4_K_M tg **46.4** t/s, Q2_K tg
+**31.1** t/s (JFR), both in line with prior TinyLlama baselines above. LoRA regression
+(`20260918T063739Z-lora`) flat as expected (**1.00×** train wall, **0.90×** playback wall tps —
+LoRA's `LoraTrainableHandler` never overrides `forwardVerify`, so it always uses
+`ForwardPassHandler`'s correctness-preserving serial default regardless of `--spec-type`).
+
+**This is not yet the standardized script bake-off** — `compare-llama-cpp.sh` has no built-in
+workload for measuring draft-acceptance rate, so the numbers below are from a manual `./juno local`
+REPL smoke test (TinyLlama Q4_K_M, GTX 1080, `--gpu-layers all`, `--temperature 0`, `--jfr 30s`,
+`--spec-ngram-n 3 --spec-ngram-m 8`), prompting the model to literally repeat a 3-word cycle
+("apple banana cherry") 10 times — a maximally repetitive workload, deliberately chosen per the
+tier's exit gate ("measurable TPS gain on at least one repetitive workload"), not representative of
+natural text.
+
+| Metric (300 generated tokens) | `--spec-type none` | `--spec-type ngram-simple` |
+|---|---:|---:|
+| Wall-clock tg (`TokenProduced.tps`) | 59.1 t/s | **63.3 t/s** (**1.07×**) |
+| Wall-clock elapsed | 5.074 s | 4.737 s |
+| `juno.ForwardPass.count` (single-token decode calls) | 903 | 57 |
+| `juno.Attention.count` | 6,666 | 1,276 |
+| `juno.Attention.duration.total_ms` | 777.2 ms | 316.4 ms |
+| `juno.MatVec.count` | 27,165 | 47,792 |
+| `juno.MatVec.duration.total_ms` | 3,321.3 ms | 3,699.0 ms |
+| `juno.Speculation.acceptanceRate` | n/a | **0.949** (280/295 drafted tokens accepted) |
+
+**Reading this honestly:** draft acceptance is very high (94.9%) on this workload and the number of
+decode *rounds* drops by roughly 16× (903 single-token forwards -> 57 forward/verify calls,
+consistent with `--spec-ngram-m 8`'s max draft length), but wall-clock tg only improves **~7%**, not
+proportionally. `juno.Attention` count and time both drop by roughly half (batching multiple query
+positions into one attention dispatch per round, same mechanism `--gpu-attention`/Tier 13C already
+uses for prefill) — this is where the real wall-time saving comes from. `juno.MatVec` time is flat
+to slightly *higher* under speculation (a batched-window GEMM over up to 8 rows costs more per call
+than a single-row GEMV, even though there are far fewer calls) — i.e. on this GPU, at this scale,
+verify-window GEMM cost roughly cancels out the per-launch overhead saved by not issuing one GEMV per
+token, which is consistent with (not a contradiction of) the P0 finding elsewhere in this doc set that
+per-launch host/FFI overhead, not kernel throughput, is the current decode ceiling — fewer, larger
+launches trade one kind of overhead for a bigger per-launch payload rather than eliminating overhead
+outright. `forwardVerify`'s own GEMM/attention work is not yet wrapped in a `ForwardPassEvent`-style
+JFR span (only single-token `forward()` calls are), so `juno.ForwardPass.count`/`.decode.total_ms`
+undercount total decode work under speculation — noted here as a known instrumentation gap, not
+double-counted or hidden.
+
+**A real bug was found and fixed via this live smoke test, not by the unit suite**: the first
+implementation fed the drafted tokens directly as the verify window's input row-for-row (row *b* =
+`draft[b]`), which silently overwrote the KV entry for the *already-confirmed* token at the window's
+first position with an unverified draft token's embedding — corrupted context that unit tests (driven
+by a scripted test double with no real causal/KV semantics) could not catch, but immediately produced
+garbled output against a real model. Fixed by shifting the verify window by one position (row 0 =
+the already-confirmed last token, rows 1..M-1 = the first M-1 drafted tokens; see
+`GenerationLoop.generate()`'s comment and `InferencePipeline.verifyDraft`'s javadoc for the exact
+contract). Recorded here so a future session extending this path starts from a known-correct
+baseline instead of re-discovering the same off-by-one.
+
+**Not done this session**: a multi-model, multi-workload standardized bake-off (natural-text
+neutrality per the tier's exit gate is plausible but unmeasured — only the maximally-repetitive
+case was tested live); wiring `forwardVerify` into `Phi2TransformerHandler`/`Phi3TransformerHandler`/
+`Qwen3TransformerHandler`/`Qwen3MoeTransformerHandler` (they fall back to the correctness-preserving
+serial default — no speed benefit, named follow-up); a JFR span around `forwardVerify` itself.
 
 ## HEAD bake-off + vision chat-template regression fix — 2026-09-16 (`8e73d5e`)
 

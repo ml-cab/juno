@@ -60,6 +60,26 @@ Module dependency (excerpt):
         long prompts emit --prefill-batch ubatch chunks mixed with decode;
         decode preferred when the step slot budget is full;
         GET /v1/cluster/health exposes schedule + prefixLookups/Hits/HitRate
+        SpeculativeDecodeOptions / NgramDraftCache / SpeculationEvent — ngram
+        speculative decoding (--spec-type none|ngram-simple). NgramDraftCache
+        indexes n-gram -> next-token from the request's own prompt + generated
+        tokens (no second model); GenerationLoop.generate() drafts up to
+        --spec-ngram-m tokens per round and verifies the whole window in one
+        pipeline.verifyDraft call (ForwardPassHandler.forwardVerify: same
+        windowed one-GEMM-per-layer path as forwardBatch, but keeps every
+        position's logits instead of only the last). Sampling runs exactly
+        once per position in order regardless of accept/reject, so rng/grammar
+        state — and the emitted token — is byte-identical to --spec-type none;
+        a mismatch emits the target model's own prediction and the round ends
+        there. Wired only for GenerationLoop.generate() (single-request path);
+        generateBatch (static multi-request batching) does not draft/verify
+        yet — ConsoleMain warns at startup when both --spec-type and a
+        --parallel > 1 batch config are set. LlamaTransformerHandler overrides
+        forwardVerify (Llama/Mistral/Qwen2 family); Phi2/Phi3/Qwen3/Qwen3-MoE
+        and cluster/tensor-parallel pipelines fall back to the
+        correctness-preserving serial ForwardPassHandler/InferencePipeline
+        default (no speed benefit there yet — named follow-up, see
+        docs/infra-plan/PLAN-Infra-Tier9.md).
         coordinator depends on node
   juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,
         ProcessPipelineClient, TensorParallelPipelineClient

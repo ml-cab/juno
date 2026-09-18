@@ -182,6 +182,36 @@ public final class LocalInferencePipeline implements InferencePipeline {
 	}
 
 	/**
+	 * Speculative-decode verify: routes the whole draft window through
+	 * {@link ForwardPassHandler#forwardVerify} in one pass per stage instead of
+	 * {@code draftTokens.length} serial {@link #forward} calls — the real speed win
+	 * ({@link LlamaTransformerHandler#forwardVerify} batches the LM-head GEMM over
+	 * every window position). {@link BatchForwardRequest} already has the right
+	 * shape for this (a contiguous token/activation window); only the result type
+	 * differs from {@link #prefillBatch} since every position's logits are kept.
+	 */
+	@Override
+	public float[][] verifyDraft(String requestId, int[] draftTokens, int startPosition) {
+		if (draftTokens.length == 0)
+			return new float[0][];
+
+		BatchForwardRequest req = BatchForwardRequest.withTokens(requestId, draftTokens, startPosition);
+		int W = draftTokens.length;
+
+		for (int i = 0; i < stages.size(); i++) {
+			NodeStage stage = stages.get(i);
+			VerifyBatchResult result = stage.handler().forwardVerify(req, stage.context());
+
+			if (result.isFinalNode())
+				return result.logitsPerPosition(vocabSize);
+
+			req = BatchForwardRequest.withActivations(requestId, result.activations(), W, startPosition);
+		}
+
+		throw new IllegalStateException("Pipeline completed without a final-node verify result");
+	}
+
+	/**
 	 * Causal prefill over {@code promptTokens}: for each position, runs all pipeline
 	 * stages. Returns the RMS-normalized hidden vector at the final token (before the
 	 * LM head on the last shard).

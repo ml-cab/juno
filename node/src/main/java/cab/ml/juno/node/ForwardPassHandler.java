@@ -153,6 +153,75 @@ public interface ForwardPassHandler {
 	}
 
 	/**
+	 * Execute a batched forward pass over a contiguous window of speculatively
+	 * <b>drafted</b> tokens, returning logits at <em>every</em> position instead of
+	 * only the last — the primitive speculative decoding needs to verify each
+	 * drafted token against what this model would have produced on its own.
+	 *
+	 * <p>Sibling to {@link #forwardBatch}, which exists for prefill and discards all
+	 * but the last position's logits because prefill has no draft to check. Reuses
+	 * the same {@link BatchForwardRequest} shape (a contiguous token/activation
+	 * window) since the input side is identical; only the output needs every
+	 * position kept.
+	 *
+	 * <p><b>Correctness-preserving default</b>: loops {@code windowSize} times
+	 * through the existing single-token {@link #forward} path, collecting every
+	 * position's logits/activations instead of discarding intermediates — mirrors
+	 * {@link #forwardBatch}'s own default-serial-loop pattern. Any handler that does
+	 * not override this stays correct, just without the one-GEMM-per-layer speedup.
+	 *
+	 * @param request carries the draft window: new token IDs (first node) or
+	 *                flattened activations from the previous node (subsequent nodes)
+	 * @param context this node's shard assignment and model metadata
+	 * @return per-window activations (intermediate) or per-position logits (final)
+	 */
+	default VerifyBatchResult forwardVerify(BatchForwardRequest request, ShardContext context) {
+		int W = request.windowSize();
+		int H = context.hiddenDim();
+		long totalNanos = 0;
+		boolean finalNode = context.hasOutputProjection();
+		float[][] allActivations = finalNode ? null : new float[W][];
+		float[] logitsFlat = null;
+		int vocabSize = -1;
+
+		for (int b = 0; b < W; b++) {
+			ForwardRequest singleReq;
+			if (request.isFirstNode()) {
+				singleReq = ForwardRequest.withTokens(request.requestId(),
+						new int[]{ request.tokenIds()[b] }, request.startPosition() + b);
+			} else {
+				float[] row = new float[H];
+				System.arraycopy(request.activations(), b * H, row, 0, H);
+				singleReq = ForwardRequest.withActivations(request.requestId(), row,
+						request.startPosition() + b);
+			}
+			ForwardResult res = forward(singleReq, context);
+			totalNanos += res.computeNanos();
+
+			if (res.isFinalNode()) {
+				float[] rowLogits = res.logits();
+				if (logitsFlat == null) {
+					vocabSize = rowLogits.length;
+					logitsFlat = new float[W * vocabSize];
+				}
+				System.arraycopy(rowLogits, 0, logitsFlat, b * vocabSize, vocabSize);
+			} else if (allActivations != null) {
+				allActivations[b] = res.activations();
+			}
+		}
+
+		if (finalNode) {
+			return new VerifyBatchResult(request.requestId(), null, logitsFlat, W, totalNanos);
+		}
+
+		float[] flat = new float[W * H];
+		for (int b = 0; b < W; b++) {
+			System.arraycopy(allActivations[b], 0, flat, b * H, H);
+		}
+		return new VerifyBatchResult(request.requestId(), flat, null, W, totalNanos);
+	}
+
+	/**
 	 * Batched decode across N independent requests — one token per request at
 	 * that request's KV position. Default loops {@link #forward} serially.
 	 */

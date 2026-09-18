@@ -569,6 +569,15 @@ run_juno() {
   if [[ -n "${JUNO_PREFILL_BATCH:-}" ]]; then
     java_args+=(--prefill-batch "$JUNO_PREFILL_BATCH")
   fi
+  if [[ -n "${JUNO_SPEC_TYPE:-}" ]]; then
+    java_args+=(--spec-type "$JUNO_SPEC_TYPE")
+  fi
+  if [[ -n "${JUNO_SPEC_NGRAM_N:-}" ]]; then
+    java_args+=(--spec-ngram-n "$JUNO_SPEC_NGRAM_N")
+  fi
+  if [[ -n "${JUNO_SPEC_NGRAM_M:-}" ]]; then
+    java_args+=(--spec-ngram-m "$JUNO_SPEC_NGRAM_M")
+  fi
   if [[ -n "$JUNO_SCHEDULE" ]]; then
     java_args+=(--schedule "$JUNO_SCHEDULE")
   fi

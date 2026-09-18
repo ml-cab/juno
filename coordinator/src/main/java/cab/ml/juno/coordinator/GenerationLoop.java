@@ -54,6 +54,7 @@ public final class GenerationLoop {
 	private final KVCacheManager kvCache;
 	private final PrefillMode prefillMode;
 	private final int prefillBatchSize;
+	private final SpeculativeDecodeOptions specOptions;
 
 	/**
 	 * Construct a generation loop with the default prefill mode ({@link PrefillMode#BATCHED})
@@ -76,19 +77,37 @@ public final class GenerationLoop {
 	}
 
 	/**
-	 * Full constructor with prefill mode and microbatch chunk size.
+	 * Full constructor with prefill mode and microbatch chunk size. Speculative
+	 * decoding defaults to {@link SpeculativeDecodeOptions#disabled()}.
 	 *
 	 * @param prefillBatchSize max tokens per {@code prefillBatch} call when mode is
 	 *                         {@link PrefillMode#BATCHED}; ignored for {@link PrefillMode#SINGLE}
 	 */
 	public GenerationLoop(Tokenizer tokenizer, Sampler sampler, InferencePipeline pipeline, KVCacheManager kvCache,
 			PrefillMode prefillMode, int prefillBatchSize) {
+		this(tokenizer, sampler, pipeline, kvCache, prefillMode, prefillBatchSize, SpeculativeDecodeOptions.disabled());
+	}
+
+	/**
+	 * Full constructor with prefill mode, microbatch chunk size, and speculative
+	 * decoding options.
+	 *
+	 * @param prefillBatchSize max tokens per {@code prefillBatch} call when mode is
+	 *                         {@link PrefillMode#BATCHED}; ignored for {@link PrefillMode#SINGLE}
+	 * @param specOptions      ngram speculative decoding config; {@link SpeculativeDecodeOptions#disabled()}
+	 *                         (i.e. {@code --spec-type none}) matches the pre-speculation decode path exactly.
+	 *                         Only {@link #generate} (single-request path) honors this — {@link #generateBatch}
+	 *                         does not draft/verify yet (named follow-up, see PLAN-Infra-Tier9.md).
+	 */
+	public GenerationLoop(Tokenizer tokenizer, Sampler sampler, InferencePipeline pipeline, KVCacheManager kvCache,
+			PrefillMode prefillMode, int prefillBatchSize, SpeculativeDecodeOptions specOptions) {
 		this.tokenizer = tokenizer;
 		this.sampler = sampler;
 		this.pipeline = pipeline;
 		this.kvCache = kvCache;
 		this.prefillMode = prefillMode;
 		this.prefillBatchSize = prefillBatchSize;
+		this.specOptions = specOptions;
 	}
 
 	Tokenizer tokenizer() {
@@ -410,62 +429,93 @@ public final class GenerationLoop {
 		// ── Steps 3–8: Autoregressive decode loop ─────────────────────────────
 		int maxTokens = params.maxTokens();
 		Tokenizer.StreamContext stream = tokenizer.openStreamContext();
+		NgramDraftCache draftCache = specOptions.enabled() ? new NgramDraftCache(specOptions.ngramN()) : null;
+		if (draftCache != null)
+			draftCache.observe(allTokens);
 		log.info("Decode: starting loop kvKey=" + kvKey + " maxTokens=" + maxTokens + " startPos=" + startPos
-				+ " grammar=" + (grammar != null));
+				+ " grammar=" + (grammar != null) + " specType=" + specOptions.specType());
 
-		for (int step = 0; step < maxTokens; step++) {
+		int step = 0;
+		while (step < maxTokens) {
+			int[] draft = draftCache != null
+					? draftCache.propose(allTokens, Math.min(specOptions.ngramM(), maxTokens - step))
+					: EMPTY_DRAFT;
 
-			long stepStart = System.nanoTime();
-			// Step 3: Forward pass — always under kvKey so the pipeline reuses its
-			// internal KV matrices for this session.
-			float[] logits = pipeline.forward(kvKey, allTokens, startPos + step);
-			double forwardMs = (System.nanoTime() - stepStart) / 1_000_000.0;
+			boolean stop;
+			if (draft.length > 0) {
+				// Verify the whole draft window against the target model in one batched
+				// call — logits at every position, not just the last (unlike prefill).
+				//
+				// Row b's INPUT token must be the token already confirmed to sit at
+				// position (startPos+step+b) so the model's own causal KV write there is
+				// correct — for b==0 that is allTokens' last (already-committed) token,
+				// not draft[0] itself (draft[0] is only a GUESS for the position AFTER
+				// it, startPos+step+1). Row b's OUTPUT then predicts draft[b], which is
+				// what row b+1 would need as its input if draft[b] turns out accepted.
+				// Feeding draft[b] as row b's own input (instead of row b-1's) would
+				// silently overwrite the KV entry for an already-committed position with
+				// an unverified token's embedding, corrupting every later step's context.
+				int[] verifyWindow = new int[draft.length];
+				verifyWindow[0] = allTokens[allTokens.length - 1];
+				System.arraycopy(draft, 0, verifyWindow, 1, draft.length - 1);
+				float[][] verifyLogits = pipeline.verifyDraft(kvKey, verifyWindow, startPos + step);
+				int accepted = 0;
+				stop = false;
 
-			// Step 4: Sample next token
-			int[] historyArr = historyBuf.toTrimmedArray();
-			int nextToken = sampler.sample(logits, params, historyArr, rng, grammar);
+				for (int d = 0; d < draft.length; d++) {
+					int[] historyArr = historyBuf.toTrimmedArray();
+					// Sampling exactly once per position, in order, and always emitting its
+					// result (whether or not it matches the draft) keeps rng/grammar state —
+					// and therefore the emitted token — identical to the non-speculative path.
+					int predicted = sampler.sample(verifyLogits[d], params, historyArr, rng, grammar);
+					boolean matched = predicted == draft[d];
+					int emitted = matched ? draft[d] : predicted;
 
-			// Step 5: Check stop conditions by token ID
-			if (nextToken == tokenizer.eosTokenId()) {
-				eosFilter.discardHeld();
-				stopFilter.discardHeld();
-				stopReason = GenerationResult.StopReason.EOS_TOKEN;
-				log.info("Decode: step " + step + " EOS_TOKEN kvKey=" + kvKey + " forwardMs=" + forwardMs);
+					EmitOutcome outcome = emitToken(emitted, step, kvKey, allTokens, stream, eosFilter, stopFilter,
+							consumer, params, generatedIds, historyBuf);
+					allTokens = outcome.allTokens();
+					step++;
+					if (matched)
+						accepted++;
+
+					if (outcome.stop()) {
+						stopReason = outcome.reason();
+						stop = true;
+						break;
+					}
+					if (!matched)
+						break; // accept the common prefix only; continue from divergence next round
+				}
+
+				SpeculationEvent se = new SpeculationEvent();
+				se.requestId = kvKey;
+				se.draftTokens = draft.length;
+				se.acceptedTokens = accepted;
+				se.commit();
+
+				// draft.length > 0 implies draftCache != null (see the ternary above)
+				if (draftCache != null)
+					draftCache.observe(allTokens);
+			} else {
+				// Fallback: plain single-token decode (also covers --spec-type none).
+				float[] logits = pipeline.forward(kvKey, allTokens, startPos + step);
+				int[] historyArr = historyBuf.toTrimmedArray();
+				int nextToken = sampler.sample(logits, params, historyArr, rng, grammar);
+
+				EmitOutcome outcome = emitToken(nextToken, step, kvKey, allTokens, stream, eosFilter, stopFilter,
+						consumer, params, generatedIds, historyBuf);
+				allTokens = outcome.allTokens();
+				step++;
+				stop = outcome.stop();
+				if (stop)
+					stopReason = outcome.reason();
+
+				if (draftCache != null)
+					draftCache.observe(allTokens);
+			}
+
+			if (stop)
 				break;
-			}
-			if (sampler.isStopToken(nextToken, params)) {
-				eosFilter.discardHeld();
-				stopFilter.discardHeld();
-				stopReason = GenerationResult.StopReason.STOP_TOKEN;
-				log.info("Decode: step " + step + " STOP_TOKEN kvKey=" + kvKey + " forwardMs=" + forwardMs);
-				break;
-			}
-
-			// Step 6–7: Decode and stream through EosOutputFilter then stop sequences.
-			String piece = stream.append(nextToken);
-			EosOutputFilter.Outcome eosOut = eosFilter.accept(piece);
-			StopSequenceFilter.Outcome stopOut = stopFilter.accept(eosOut.emit());
-			if (!stopOut.emit().isEmpty()) {
-				consumer.onToken(stopOut.emit(), nextToken, step);
-				TokenProducedEvent tpe = new TokenProducedEvent();
-				tpe.requestId = kvKey;
-				tpe.position = step;
-				tpe.commit();
-			}
-			if (eosOut.stop()) {
-				stopReason = GenerationResult.StopReason.EOS_TOKEN;
-				log.info("Decode: step " + step + " EOS_MARKER kvKey=" + kvKey + " forwardMs=" + forwardMs);
-				break;
-			}
-			if (stopOut.stop()) {
-				stopReason = GenerationResult.StopReason.STOP_TOKEN;
-				log.info("Decode: step " + step + " STOP_SEQUENCE kvKey=" + kvKey + " forwardMs=" + forwardMs);
-				break;
-			}
-
-			generatedIds.add(nextToken);
-			historyBuf.append(nextToken);
-			allTokens = GenerationLoop.appendToken(allTokens, nextToken);
 		}
 		log.info("Decode: loop EXITED kvKey=" + kvKey + " tokensGenerated=" + generatedIds.size() + " stopReason="
 				+ stopReason);
@@ -546,10 +596,60 @@ public final class GenerationLoop {
 
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
+	private static final int[] EMPTY_DRAFT = new int[0];
+
 	static int[] appendToken(int[] tokens, int newToken) {
 		int[] next = new int[tokens.length + 1];
 		System.arraycopy(tokens, 0, next, 0, tokens.length);
 		next[tokens.length] = newToken;
 		return next;
+	}
+
+	/** Outcome of {@link #emitToken}: whether to stop, why, and the (possibly grown) token history. */
+	private record EmitOutcome(boolean stop, GenerationResult.StopReason reason, int[] allTokens) {
+	}
+
+	/**
+	 * Applies steps 5–7 of the decode loop to a single already-sampled token: EOS /
+	 * stop-token checks by ID, then EOS-output-filter and stop-sequence-filter
+	 * streaming, then (if not stopped) appends the token to the running history.
+	 *
+	 * <p>Shared by both the plain single-token decode path and the speculative
+	 * accept/verify path in {@link #generate} — every token this loop ever emits,
+	 * drafted or not, goes through exactly this one code path, which is what keeps
+	 * the two paths byte-for-byte equivalent for a given token.
+	 */
+	private EmitOutcome emitToken(int token, int position, String kvKey, int[] allTokens,
+			Tokenizer.StreamContext stream, EosOutputFilter eosFilter, StopSequenceFilter stopFilter,
+			TokenConsumer consumer, SamplingParams params, List<Integer> generatedIds, GrowableIntArray historyBuf) {
+		if (token == tokenizer.eosTokenId()) {
+			eosFilter.discardHeld();
+			stopFilter.discardHeld();
+			return new EmitOutcome(true, GenerationResult.StopReason.EOS_TOKEN, allTokens);
+		}
+		if (sampler.isStopToken(token, params)) {
+			eosFilter.discardHeld();
+			stopFilter.discardHeld();
+			return new EmitOutcome(true, GenerationResult.StopReason.STOP_TOKEN, allTokens);
+		}
+
+		String piece = stream.append(token);
+		EosOutputFilter.Outcome eosOut = eosFilter.accept(piece);
+		StopSequenceFilter.Outcome stopOut = stopFilter.accept(eosOut.emit());
+		if (!stopOut.emit().isEmpty()) {
+			consumer.onToken(stopOut.emit(), token, position);
+			TokenProducedEvent tpe = new TokenProducedEvent();
+			tpe.requestId = kvKey;
+			tpe.position = position;
+			tpe.commit();
+		}
+		if (eosOut.stop())
+			return new EmitOutcome(true, GenerationResult.StopReason.EOS_TOKEN, allTokens);
+		if (stopOut.stop())
+			return new EmitOutcome(true, GenerationResult.StopReason.STOP_TOKEN, allTokens);
+
+		generatedIds.add(token);
+		historyBuf.append(token);
+		return new EmitOutcome(false, null, GenerationLoop.appendToken(allTokens, token));
 	}
 }

@@ -270,12 +270,35 @@ environment: `ncu`/`nsys` and a real GTX 1080 are confirmed present, so that pro
 actually runnable here (previous sessions deferred partly for lack of dedicated iteration time, not
 missing tooling).
 
+**Nsight profiling pass done, finding reframes the lever (2026-09-18):** a session picked this up.
+`ncu` itself hit `ERR_NVGPUCTRPERM` (this account lacks the GPU perf-counter permission and there is
+no passwordless `sudo` here); `nsys` CUDA timeline tracing was used as a substitute (does not need the
+restricted permission), with a manual `QdstrmImporter` workaround for a broken `.qdstrm` auto-import.
+Full numbers and methodology: `PLAN-Infra-PERF-ANALYSIS.md` → "Post-MMQ GPU idle-time finding"
+and `PROMPT-P0-Gate.md`'s matching addendum. Headline finding: the GPU sits idle **73–82%** of decode
+wall time (17.9–26.8% utilization, TinyLlama/Phi-3.5-mini); the `q4k_gemv`/`q5k_gemv`/`q6k_gemv`
+kernels themselves run in a reasonable 55–140 µs/launch and are not the bottleneck. Memcpy and
+`cudaStreamSynchronize` are both ruled out (<2% of the generation window each, once one-time
+model-load HtoD transfer is excluded). JFR cross-validates independently at 26.7% MatVec+Attention
+share of `ForwardPass` on the same run — matching the Nsight Systems number via an unrelated
+measurement path. This means the historical `93–96%` MatVec-share figure (measured pre-MMQ, on the
+`cuda_resident_fp16` backend where large FP16 weight volume made the kernel itself slow) no longer
+describes the current MMQ path: the kernel got much faster, but nothing shrank the host-side overhead
+surrounding each of the thousands of per-projection launches a decode token issues, so that overhead —
+not kernel efficiency — is now believed to be the ceiling. **A hypothetically zero-cost kernel could
+only improve Phi-3.5 decode by ~27% at most on this evidence**, not enough to close 0.326×→0.5× alone.
+**The tile-kernel-tuning framing of this deferral is superseded**: the next P0 lever should target
+per-launch host/FFI overhead (e.g. CUDA graphs, launch fusion beyond the existing `sgemvSameX`) and/or
+porting the still-CPU-scalar `rmsNorm`/`rope`/residual-add/SwiGLU ops onto the GPU (or vectorizing them
+on CPU first), not further GEMV tiling work. No fix was attempted this session — diagnosis only, per
+`PROMPT-P0-Gate.md`'s own "report fail with numbers" exit criterion. P0 gate remains **unmet**.
+
 ```
 P0:  13A ✓  →  5†  →  1†  →  8†  →  Vector SIMD†  →  13B†  →  17†  →  18†    GATE: 0.5× tg open (Phi-3.5 **0.33×**); mistral 0.15× **met** († feature complete; 13B tile-kernel speed exit met; 18 feature complete, reporting/docs only)
 P1:              6  →  14  →  15  →  16
 P2:  (after Tier 1 feature complete)  2  →  3  →  4
 P3:  (when free)  7, 10, 11
-P4:  (after 8)    9  →  12
+P4:  (after 8)    9✓  →  12   (9 feature complete 2026-09-18; 12 is its hard prerequisite-met next step)
 P5:  (after 8)    13 FlashAttn subset
 Parallel (non-blocking): Vision I2T · LoRA · model E2E
 ```
@@ -295,7 +318,7 @@ Parallel (non-blocking): Vision I2T · LoRA · model E2E
 | 6    | `PLAN-Infra-Tier6.md`  | Quantized KV cache (`q8_0`)             | P1 step 1                | **Feature complete** — `[20260910T170557Z](../perf-compare/20260910T170557Z/)` + LoRA `[20260910T180703Z-lora](../perf-compare/20260910T180703Z-lora/)`; default `f16` unchanged                                                                                                                                            |
 | 7    | `PLAN-Infra-Tier7.md`  | Chat template + HF download             | P3                       | **Feature complete** — GGUF-embedded `tokenizer.chat_template` (restricted Jinja subset incl. `trim_blocks`/`lstrip_blocks` defaults, fallback to named templates) + `--hf repo[:quant]` Hub download (resume + ETag cache, no Python); LoRA train/`--lora-play` explicit no-op; vision combination unverified (**follow-up**); both the template resolver and `--hf` verified live against a real GGUF and the real Hub (668 MB TinyLlama download, redirect-following + clearer 401 message fixed after live testing found them); §2 CPU regression spot-check `target/perf-compare/20260914T181535Z/` (not a published multi-model bake-off — no MatVec/forward/KV touched); Tier 10 landed next, feature complete — see its row                                            |
 | 8    | `PLAN-Infra-Tier8.md`  | Prefill microbatching                   | P0 step 3                | **Feature complete**; CPU bake-off published; GPU re-run open                                                                                                                                                                                                                                                               |
-| 9    | `PLAN-Infra-Tier9.md`  | Ngram speculative decoding              | P4                       | Pending                                                                                                                                                                                                                                                                                                                     |
+| 9    | `PLAN-Infra-Tier9.md`  | Ngram speculative decoding              | P4                       | **Feature complete** (2026-09-18) — `--spec-type none\|ngram-simple`; `NgramDraftCache` + draft/verify loop in `GenerationLoop.generate()`; new node primitive `ForwardPassHandler.forwardVerify`/`InferencePipeline.verifyDraft`/`VerifyBatchResult` (batched-GEMM verify via `LlamaTransformerHandler`, reusing `forwardBatch`'s `runLayersBatch`/`outputProjectionBatch`); token-identity exit gate verified via unit tests and a real TinyLlama live smoke test (byte-identical vs `--spec-type none`); JFR `juno.Speculation.{count,draftTokens,acceptedTokens,acceptanceRate}`; live smoke test on a maximally-repetitive workload measured **94.9%** draft acceptance but only **~7%** wall-clock tg gain (attention-dispatch batching is the real saving; per-row verify GEMM cost offsets the launch-count reduction — honestly reported, not overclaimed, in `docs/perf-compare/README.md`); §2 regression gates green (`compare-llama-cpp.sh --gpu --models tinyllama` failures=0, `compare-lora.sh` flat/expected); a real KV-position off-by-one bug was found and fixed via the live smoke test (unit tests alone, using a scripted non-causal pipeline, could not have caught it — see the perf-compare writeup). Wired for `GenerationLoop.generate()` (single-request) only — `generateBatch`, Phi-2/Phi-3/Qwen3/Qwen3-MoE `forwardVerify` overrides, vision, ROCm, and cluster/tensor-parallel pipelines are named follow-ups (correctness-preserving serial fallback, no speed benefit there yet), not silently implied covered. |
 | 10   | `PLAN-Infra-Tier10.md` | Multi-adapter + GGUF LoRA interop       | P3                       | **Feature complete** (2026-09-18) — multi-scale `--lora-play a:0.5,b:1.0` via `LoraPlaybackMerge` (rank-concatenation; single-file scale-1.0 path is an identity return, byte-compatible); `lora-import` GGUF→`.lora` v2 subcommand (`GgufLoraImporter`, fail-closed on unrecognized tensors/rank mismatch; not verified against a real converter output this session — no network access, honestly caveated); QA-LoRA/DoRA restricted to single-file scale-1.0 (fail closed otherwise, named follow-up); closed a pre-existing §6 gap by making `x_juno_loras` fail closed on every schedule (previously only `continuous`); 24 new unit tests; `compare-lora.sh --gpu --baseline release-0.1.2` **ok** (train 1.00×, playback tps 0.90×, [`20260918T044915Z-lora`](../perf-compare/20260918T044915Z-lora/)); CPU base-inference spot-check failures=0. This was P3's last remaining tier — **P3 is now fully feature complete** (7, 10, 11 all done). |
 | 11   | `PLAN-Infra-Tier11.md` | Embeddings API                          | P3                       | **Feature complete** — `POST /v1/embeddings` opt-in via `--embeddings`; `--pooling mean/cls/last`; batch input; local/single-shard only, cluster/TP/PP fail closed (HTTP 400); §2 regression [`20260914T220204Z`](../perf-compare/20260914T220204Z/); live smoke incl. `--lora-play` combo in `docs/performance.md`; vision combination unverified (**follow-up**); Tier 10 landed next, feature complete — see its row; P3 is now fully feature complete                                                                                                                                                                                                                     |
 | 12   | `PLAN-Infra-Tier12.md` | Draft-model speculation                 | P4                       | Pending                                                                                                                                                                                                                                                                                                                     |

@@ -99,6 +99,58 @@ public interface InferencePipeline {
 	}
 
 	/**
+	 * Verify a window of speculatively-drafted tokens against this pipeline's own
+	 * model in one pass, returning the target model's logits at <em>every</em>
+	 * position in the window — unlike {@link #prefillBatch}, which discards all
+	 * but the last position's logits since prefill has nothing to compare against.
+	 *
+	 * <p><b>Window shape — same off-by-one rule as {@link #forward}</b>: element
+	 * {@code i} of {@code draftTokens} is the token this pipeline treats as already
+	 * sitting at position {@code startPosition + i}, and {@code result[i]} is the
+	 * prediction for position {@code startPosition + i + 1}. To verify {@code M}
+	 * newly-drafted tokens the caller must therefore pass the <em>already-confirmed</em>
+	 * last token as {@code draftTokens[0]} (echoing it — this is a no-op re-write of
+	 * that position's KV entry) followed by the first {@code M - 1} drafted tokens,
+	 * with {@code startPosition} equal to that confirmed token's own position
+	 * (exactly the value already passed to {@link #forward} for a plain decode step
+	 * at this point in the sequence). {@code result[i]} is then compared against
+	 * the {@code i}-th <em>drafted</em> token. Passing the drafted tokens directly
+	 * as {@code draftTokens[0..M-1]} instead would silently overwrite the
+	 * already-confirmed token's KV entry with an unverified one and corrupt every
+	 * later step — KV storage here is indexed by absolute position, not
+	 * append-only, so a wrong token at an already-real position is not
+	 * self-correcting.
+	 *
+	 * <p>On a mismatch, the target model's own prediction at that position (not the
+	 * draft) is what must be emitted, and every later position in this window is
+	 * moot (its KV entries get silently overwritten by the next real write at that
+	 * position).
+	 *
+	 * <p><b>Correctness-preserving default</b>: loops {@code draftTokens.length}
+	 * times through {@link #forward}, one window position per call — token-identity
+	 * correct, but no speed benefit over plain sequential decoding.
+	 * {@link LocalInferencePipeline} overrides this to route the whole window
+	 * through {@link ForwardPassHandler#forwardVerify} in one batched GEMM pass per
+	 * layer instead — the actual speculative-decoding speed win.
+	 *
+	 * @param requestId     KV cache key (session or request id)
+	 * @param draftTokens   window of {@code M} token ids: the already-confirmed
+	 *                      token at {@code startPosition}, then {@code M - 1}
+	 *                      speculatively-drafted continuations
+	 * @param startPosition KV cache position of {@code draftTokens[0]} — the
+	 *                      already-confirmed token's own (existing) position
+	 * @return one logits row per window position, {@code result[i].length == vocabSize()}
+	 */
+	default float[][] verifyDraft(String requestId, int[] draftTokens, int startPosition) {
+		int M = draftTokens.length;
+		float[][] logits = new float[M][];
+		for (int i = 0; i < M; i++) {
+			logits[i] = forward(requestId, new int[] { draftTokens[i] }, startPosition + i);
+		}
+		return logits;
+	}
+
+	/**
 	 * Release {@code requestId}'s per-request KV state from every stage in
 	 * this pipeline — see {@link ForwardPassHandler#evict} for what that
 	 * state is and why it must be released explicitly for stateless (no

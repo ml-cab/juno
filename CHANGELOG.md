@@ -1,5 +1,64 @@
 ## Status 
 
+**Session 83** — Ngram speculative decoding (`--spec-type`) **feature complete**
+
+- `--spec-type none|ngram-simple` (`--spec-ngram-n`, `--spec-ngram-m`; default
+  `none`, byte-for-byte identical to the pre-speculation decode path).
+  `NgramDraftCache` (coordinator module) indexes every `n`-gram seen so far
+  (prompt + generated tokens) against the token that followed it — no second
+  model, no static corpus — and `GenerationLoop.generate()` drafts up to `m`
+  tokens per round, verifies the whole window against this model in one
+  batched pass, and emits the target model's own prediction at the first
+  mismatch.
+- New node-module primitive: `ForwardPassHandler.forwardVerify` /
+  `InferencePipeline.verifyDraft` / `VerifyBatchResult` — sibling to the
+  existing `forwardBatch`/`BatchForwardResult` prefill path, but keeps every
+  window position's logits instead of discarding all but the last.
+  `LlamaTransformerHandler.forwardVerify` reuses the same
+  `runLayersBatch`/`outputProjectionBatch` machinery `forwardBatch` already
+  has (one GEMM per weight per layer over the whole window), so Llama /
+  Mistral / Qwen2 get real batched-GEMM verification; Phi-2/Phi-3/Qwen3/
+  Qwen3-MoE and cluster/tensor-parallel pipelines fall back to the
+  correctness-preserving serial default (no speed benefit there yet, named
+  follow-up).
+- Sampling runs exactly once per verify position, in order, and always emits
+  its result whether or not it matches the draft — this keeps rng/grammar
+  state, and therefore the emitted token, byte-identical to plain decoding
+  regardless of draft accuracy (verified both by unit tests and a live
+  TinyLlama smoke test at temperature 0).
+- Wired for `GenerationLoop.generate()` (single-request decoding) only;
+  `generateBatch` (static multi-request batching) does not draft/verify yet —
+  the local REPL/API launcher warns at startup when both `--spec-type` and a
+  `--parallel > 1` batch config are configured together, rather than silently
+  dropping speculation under concurrent load.
+- **A real correctness bug was found and fixed via a live smoke test, not the
+  unit suite**: the first cut fed drafted tokens directly as the verify
+  window's input row-for-row, silently overwriting the KV entry for the
+  already-confirmed token at the window's first position with an unverified
+  draft token's embedding — garbled output against a real model, even though
+  a scripted (non-causal) test double couldn't catch it. Fixed by shifting
+  the verify window by one position (row 0 = the already-confirmed last
+  token, rows 1..M-1 = the first M-1 drafted tokens). See
+  `docs/perf-compare/README.md`'s writeup for the full story.
+- Live smoke test (TinyLlama Q4_K_M, GTX 1080, maximally-repetitive prompt,
+  greedy decode): **94.9%** draft acceptance, decode rounds down ~16× (903
+  single-token forwards → 57 forward/verify calls), but wall-clock tg
+  improved only **~7%** (59.1 → 63.3 t/s) — `Attention` JFR count/time
+  roughly halved (the real saving, from batching multiple query positions
+  into one attention dispatch per round) while `MatVec` time was flat to
+  slightly higher (a batched-window GEMM over several rows costs more per
+  call than a single-row GEMV). Honestly reported, not overclaimed — see
+  `docs/performance.md` / `docs/perf-compare/README.md`.
+- JFR: new `juno.Speculation` event (`draftTokens`/`acceptedTokens`),
+  aggregated by `JfrMetricsExtractor` into `juno.Speculation.{count,
+  draftTokens.sum, acceptedTokens.sum, acceptanceRate}`.
+- §2 regression: `compare-llama-cpp.sh --gpu --models tinyllama` (default
+  `--spec-type none`), failures=0; `compare-lora.sh --gpu --baseline
+  release-0.1.2`, flat as expected (LoRA never routes through
+  `forwardVerify`).
+- Vision, ROCm, and the remaining handler families' `forwardVerify` overrides
+  are named follow-ups, not claimed as working.
+
 **Session 82** — Embeddings API (`POST /v1/embeddings`) **feature complete**
 
 - OpenAI wire-compatible `POST /v1/embeddings`, opt-in via `--embeddings` (off

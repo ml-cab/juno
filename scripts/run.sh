@@ -446,6 +446,9 @@ cmd_local() {
   local schedule="${JUNO_SCHEDULE:-}"
   local kv_page_size="${JUNO_KV_PAGE_SIZE:-}"
   local prefill_batch="${JUNO_PREFILL_BATCH:-}"
+  local spec_type="${JUNO_SPEC_TYPE:-}"
+  local spec_ngram_n="${JUNO_SPEC_NGRAM_N:-}"
+  local spec_ngram_m="${JUNO_SPEC_NGRAM_M:-}"
   local grammar_file="${JUNO_GRAMMAR_FILE:-}"
   local json_schema_file="${JUNO_JSON_SCHEMA_FILE:-}"
   local use_gpu="true"
@@ -494,6 +497,9 @@ cmd_local() {
       --schedule)         schedule="$2";     shift 2 ;;
       --kv-page-size)     kv_page_size="$2"; shift 2 ;;
       --prefill-batch)    prefill_batch="$2"; shift 2 ;;
+      --spec-type)        spec_type="$2";     shift 2 ;;
+      --spec-ngram-n)     spec_ngram_n="$2";  shift 2 ;;
+      --spec-ngram-m)     spec_ngram_m="$2";  shift 2 ;;
       --verbose | -v)     verbose="true";    shift   ;;
       --help)
         echo ""
@@ -547,6 +553,9 @@ cmd_local() {
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
         echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
         echo "    --prefill-batch N          prefill microbatch chunk size (default 32)"
+        echo "    --spec-type none|ngram-simple  ngram speculative decoding (default none; --local only)"
+        echo "    --spec-ngram-n N           ngram order for the draft cache (default 3)"
+        echo "    --spec-ngram-m N           max tokens drafted per verify round (default 4)"
         echo ""
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
@@ -639,6 +648,12 @@ cmd_local() {
   [[ -n "$kv_page_size" ]] && kv_page_size_arg="--kv-page-size $kv_page_size"
   local prefill_batch_arg=""
   [[ -n "$prefill_batch" ]] && prefill_batch_arg="--prefill-batch $prefill_batch"
+  local spec_type_arg=""
+  [[ -n "$spec_type" ]] && spec_type_arg="--spec-type $spec_type"
+  local spec_ngram_n_arg=""
+  [[ -n "$spec_ngram_n" ]] && spec_ngram_n_arg="--spec-ngram-n $spec_ngram_n"
+  local spec_ngram_m_arg=""
+  [[ -n "$spec_ngram_m" ]] && spec_ngram_m_arg="--spec-ngram-m $spec_ngram_m"
   local mmproj_arg=""
   [[ -n "$mmproj" ]] && { mmproj_arg="--mmproj-path $mmproj"; info "Vision mmproj: ${mmproj}"; }
   if [[ -n "$grammar_file" && -n "$json_schema_file" ]]; then
@@ -686,6 +701,9 @@ cmd_local() {
     ${schedule_arg} \
     ${kv_page_size_arg} \
     ${prefill_batch_arg} \
+    ${spec_type_arg} \
+    ${spec_ngram_n_arg} \
+    ${spec_ngram_m_arg} \
     ${mmproj_arg} \
     ${grammar_file_arg} \
     ${json_schema_file_arg} \
