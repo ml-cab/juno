@@ -1,6 +1,22 @@
 # Tier 20: Prefill GPU-Residency Fixes — Pinned Staging Memory, Redundant Dequant, Adaptive Chunk Sizing
 
-**Status: Proposed (not started).** Grew out of a profiling pass on Juno's own prefill-vs-llama.cpp
+**Status: Phase A feature complete (2026-09-18).** Pinned host-staging memory (`GpuBindings.hostMalloc`/
+`hostFree`, wired into `CudaMatVec`'s three batched-GEMM paths and `CudaRmsNorm.normalizeBatch`) and
+adaptive whole-prompt chunk sizing for the `static` schedule (`PrefillBatchOptions.resolveAdaptive`,
+querying live free VRAM via a new `GpuBindings.memGetInfo`/`GpuContext.freeVramBytes()`) are landed,
+tested, and measured on real hardware: **-30% prefill time, -27% request wall time** on a real 488-token
+mistral-7b prompt (16 fixed-32 chunks collapsed to 1). Phase B's checkpoint measurement is recorded:
+**no-go** — GPU-resident Rope/SwiGlu still loses to CPU scalar (1.56-2.18x slower) even under pinned
+memory, so Phase B is not pursued further. Phase C (tiled batched-quantized GEMM) remains a separately
+gated stretch goal, not started. Full writeup: `docs/performance.md` → "Prefill GPU-residency fixes:
+pinned staging memory + adaptive chunk sizing"; bake-off:
+[`docs/perf-compare/20260918T153900Z-prefill-adaptive/`](../perf-compare/20260918T153900Z-prefill-adaptive/).
+This session's `nsys` install could not reproduce Finding 3's exact timeline-collapse verification
+(fails on every invocation, including argument-free — an environment defect, not a code issue); the
+end-to-end wall-clock win and green parity/regression tests are relied on instead, honestly noted as an
+open re-verification for a session with working `nsys`.
+
+Grew out of a profiling pass on Juno's own prefill-vs-llama.cpp
 gap (Juno gets **1-3%** of llama.cpp's pp throughput even on a token-count-matched bake-off — see
 `docs/perf-compare/20260915T042421Z/INDEX.md`). This tier's evidence was gathered on the **prefill**
 path, whereas [`PLAN-Infra-Tier19.md`](PLAN-Infra-Tier19.md) profiled **decode** (batch=1) and parked
@@ -151,6 +167,21 @@ a confounded number.
    (batch=1) stays scalar regardless per Tier 19's own finding, unless a future session separately
    re-measures decode under pinned memory too — that is not this tier's exit gate.
 
+**Phase B checkpoint result (2026-09-18): no-go.** Re-ran Finding 6's throwaway microbenchmark
+(`CudaRmsNorm.normalizeBatch` as the round-trip-shape proxy, batch=136, real GTX 1080) against the
+now-pinned-memory staging:
+
+| Shape | CPU scalar (whole-batch, per-row loop) | GPU round trip (pinned memory) | GPU/CPU |
+|---|---:|---:|---:|
+| batch=136, dim=4096 | 0.697 ms/call | 1.519 ms/call | 2.18x slower |
+| batch=136, dim=14336 | 2.948 ms/call | 4.614 ms/call | 1.56x slower |
+
+Pinned memory did not close the gap — the round trip is still slower than CPU scalar, by a similar or
+slightly wider margin than Finding 6's original confounded 1.30-1.32x. This confirms Tier 19's original
+diagnosis: the bottleneck is the per-launch cost of one ad-hoc GPU round trip with no
+activation-residency chain to amortize across, not memcpy speed. `RopeKernel`/`SwiGluKernel` are **not**
+built on this evidence. Full numbers: `docs/perf-compare/20260918T153900Z-prefill-adaptive/INDEX.md`.
+
 ### Phase C — remove (not amortize) the remaining dequant cost (stretch, separately gated)
 
 5. Extend the existing Q8_1/`dp4a` MMQ kernel (`Q4KMmqKernel`, Tier 13B — today decode-only, batch
@@ -205,6 +236,13 @@ to proceed to `RopeKernel`/`ResidualAddKernel`/`SwiGluKernel` on an unverified a
 - **New** (Phase C only, gated, stretch): a tiled batched-quantized-GEMM kernel extending
   `Q4KMmqKernel`'s dp4a approach to large batches.
 
+## Feature × surface interaction matrix
+
+| New feature / flag | Base inference | `--lora-play` | LoRA train | Vision | `--parallel` | `--gpu-layers` | `--prefill-batch` | CUDA | ROCm | Default |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Pinned host-staging memory (`CudaMatVec`/`CudaRmsNorm`) | wired | wired (shares `CudaMatVec`) | wired (shares `CudaMatVec`) | follow-up (Phi-2 vision prefill never routes through `CudaMatVec`'s batched-GEMM paths) | wired (`forwardMultiDecode` shares `sgemmHalfBatched*`) | wired (orthogonal — pinning applies regardless of layer count) | wired (applies to every chunk size) | wired | binding exists (`hostMalloc`/`hostFree` in `RocmBindings`), no `sgemm` override to stage through it — follow-up | on |
+| Adaptive whole-prompt chunk sizing (`resolveAdaptive`) | wired (`runLocalRepl`) | wired (same call site) | follow-up (LoRA train REPL keeps `resolve()`, unaffected) | wired (same call site/pipeline) | wired (shares `GenerationLoop.prefillBatchSize`) | wired (orthogonal) | explicit override always wins, unchanged | wired | wired (same `GpuBindings.memGetInfo` path) | on for `static` schedule + GPU; fixed 32 on CPU-only or `continuous` |
+
 ## Cross-feature smoke (before feature complete)
 
 - Phase A correctness: existing `CudaSgemmBatchedPrefillParityTest`/`Q4KDequantParityTest`/
@@ -225,13 +263,19 @@ to proceed to `RopeKernel`/`ResidualAddKernel`/`SwiGluKernel` on an unverified a
 
 ## Exit checklist (compatibility)
 
-- [ ] Interaction matrix: which schedules/architectures get adaptive chunk sizing (static: yes;
-      continuous: unchanged) and pinned memory (CUDA: yes; ROCm: binding exists, no `sgemm` override
-      to apply it to yet — named, not silently implied covered).
-- [ ] No silent no-op: `--prefill-batch` explicit override still works exactly as today when passed.
-- [ ] `docs/performance.md`, `docs/perf-compare/README.md`, and this tier's ROADMAP catalog row
+- [x] Interaction matrix: which schedules/architectures get adaptive chunk sizing (static: yes —
+      wired in `ConsoleMain.runLocalRepl()` local single-shard REPL, covering base inference,
+      `--lora-play`, and vision, which all share that call site; `runClusterRepl()` and the LoRA
+      train REPL keep the old fixed-32 `resolve()` path, named follow-up; continuous: unchanged, per
+      design) and pinned memory (CUDA: yes; ROCm: binding exists (`hostMalloc`/`hostFree` implemented
+      in `RocmBindings`), no `sgemm` override to apply it to yet — named, not silently implied
+      covered).
+- [x] No silent no-op: `--prefill-batch` explicit override still works exactly as today when passed
+      (checked first in `resolveAdaptive`, ahead of the adaptive computation).
+- [x] `docs/performance.md`, `docs/perf-compare/README.md`, and this tier's ROADMAP catalog row
       updated with the honest before/after numbers.
-- [ ] Phase B's go/no-go decision recorded with numbers either way, even if "no-go."
+- [x] Phase B's go/no-go decision recorded with numbers either way, even if "no-go" — see "Phase B
+      checkpoint" above: **no-go**.
 
 ## Verification and exit gate
 

@@ -111,6 +111,7 @@ final class RocmBindings implements GpuBindings {
     private final MethodHandle hipFree;
     private final MethodHandle hipHostMalloc;       // pre-bound flags=0
     private final MethodHandle hipHostFree;
+    private final MethodHandle hipMemGetInfo;       // int (size_t* free, size_t* total)
     private final MethodHandle hipMemcpy;
     private final MethodHandle hipMemcpyAsync;
     private final MethodHandle hipStreamCreateWithFlags;
@@ -155,6 +156,8 @@ final class RocmBindings implements GpuBindings {
             2, 0);
         hipHostFree              = GpuBindings.bind(l, hip, "hipHostFree",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
+        hipMemGetInfo            = GpuBindings.bind(l, hip, "hipMemGetInfo",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
         hipMemcpy                = GpuBindings.bind(l, hip, "hipMemcpy",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT));
         hipMemcpyAsync           = GpuBindings.bind(l, hip, "hipMemcpyAsync",
@@ -262,6 +265,38 @@ final class RocmBindings implements GpuBindings {
     public void deviceFree(MemorySegment devicePtr) {
         if (devicePtr == null || devicePtr.equals(MemorySegment.NULL)) return;
         GpuBindings.callInt(hipFree, devicePtr);
+    }
+
+    @Override
+    public MemorySegment hostMalloc(int deviceIndex, long bytes) {
+        GpuBindings.check(GpuBindings.callInt(hipSetDevice, deviceIndex), "hipSetDevice");
+        try (Arena tmp = Arena.ofConfined()) {
+            MemorySegment slot = tmp.allocate(ADDRESS);
+            GpuBindings.check(GpuBindings.callInt(hipHostMalloc, slot, bytes), "hipHostMalloc");
+            return slot.get(ADDRESS, 0).reinterpret(bytes);
+        }
+    }
+
+    @Override
+    public void hostFree(MemorySegment hostPtr) {
+        if (hostPtr == null || hostPtr.equals(MemorySegment.NULL)) return;
+        GpuBindings.callInt(hipHostFree, hostPtr);
+    }
+
+    @Override
+    public long[] memGetInfo(int deviceIndex) {
+        try {
+            GpuBindings.check(GpuBindings.callInt(hipSetDevice, deviceIndex), "hipSetDevice");
+            try (Arena tmp = Arena.ofConfined()) {
+                MemorySegment freeSlot = tmp.allocate(JAVA_LONG);
+                MemorySegment totalSlot = tmp.allocate(JAVA_LONG);
+                GpuBindings.check(GpuBindings.callInt(hipMemGetInfo, freeSlot, totalSlot), "hipMemGetInfo");
+                return new long[] { freeSlot.get(JAVA_LONG, 0), totalSlot.get(JAVA_LONG, 0) };
+            }
+        } catch (IllegalStateException e) {
+            log.warning("hipMemGetInfo failed: " + e.getMessage());
+            return new long[] { 0L, 0L };
+        }
     }
 
     // ── GpuBindings accessors ─────────────────────────────────────────────────

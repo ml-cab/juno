@@ -407,6 +407,61 @@ buffers.
 ./scripts/performance-tests/compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32
 ```
 
+## Prefill GPU-residency fixes: pinned staging memory + adaptive chunk sizing
+
+**Run:** [`perf-compare/20260918T153900Z-prefill-adaptive/`](perf-compare/20260918T153900Z-prefill-adaptive/)
+
+Two independent fixes to the `static`-schedule prefill path, found by profiling rather than assumed:
+
+1. **Pinned host-staging memory.** `CudaMatVec`'s batched-GEMM paths (`sgemmHalfBatched`,
+   `sgemmHalfBatchedGemm`, `sgemmQ4KBatchedGemm`) and `CudaRmsNorm.normalizeBatch` staged their
+   H2D/D2H buffers through plain `Arena.ofConfined()` (pageable host memory), which forces the CUDA
+   driver to stage through its own internal pinned bounce buffer on every call. They now stage
+   through `GpuBindings.hostMalloc`/`hostFree` (`cudaMallocHost`/`cudaFreeHost`; `hipHostMalloc`/
+   `hipHostFree` on ROCm), grown-and-kept-max the same way the existing device-side scratch already
+   is.
+2. **Adaptive whole-prompt chunk sizing for `static` schedule.** `--prefill-batch` previously
+   defaulted to a fixed 32-token chunk regardless of prompt length or free VRAM, re-dequantizing
+   every resident Q4_K/Q5_K/Q6_K weight matrix on every chunk. The default now sizes the chunk to
+   cover the whole prompt in one window whenever there is CUDA/ROCm headroom for it — live free VRAM
+   is queried via `GpuContext.freeVramBytes()` (`cudaMemGetInfo`/`hipMemGetInfo`), and the chunk size
+   is `floor(freeBytes * 0.5 / 65536)` tokens, floored at the old fixed default (32, so this can only
+   grow the chunk relative to today's behavior, never shrink it) and capped at 65536. `continuous`
+   schedule is unchanged (Tier 16 owns that chunking for decode-interleaving fairness). CPU-only runs
+   keep the fixed 32-token default. `--prefill-batch N` still works as an explicit override on every
+   surface.
+
+Real GTX 1080, `mistral-7b-instruct-v0.1-q4_k_m.gguf`, `--gpu-layers auto --mmq auto`, a real 488-token
+chat prompt, `max_tokens=16`:
+
+| `--prefill-batch` | resolved chunk | `PrefillBatch` calls | prefill total (JFR) | MatVec calls | request wall |
+|---:|---:|---:|---:|---:|---:|
+| `32` (explicit, old fixed default) | 32 | 16 | 15710 ms | 7008 | 16971 ms |
+| *(none — new adaptive default)* | 24889 | 1 | 11000 ms | 2289 | 12354 ms |
+
+**-30.0% prefill time, -27.2% request wall time, 3.06x fewer MatVec launches** from consolidating 16
+prefill windows into 1 for this prompt. Correctness: chunk-boundary numeric identity across chunk
+sizes (any size, not just 32) is covered by the pre-existing
+`LlamaTransformerHandlerPrefillChunkParityTest`, unaffected by which fixed value the resolver picks.
+
+**Phase B checkpoint (no-go):** re-ran the GPU-resident-Rope/SwiGlu round-trip microbenchmark from the
+GPU-resident-attention/elementwise-ops investigation under the new pinned-memory staging — still
+1.56-2.18x slower than CPU scalar at prefill batch scale (worse than the original confounded
+1.30-1.32x). Pinned memory does not close the gap; the per-launch cost of one ad-hoc GPU round trip
+with no activation-residency chain remains the bottleneck regardless of memcpy speed. Does not proceed
+to building dedicated `RopeKernel`/`SwiGluKernel` classes on this evidence.
+
+**Note:** this session's `nsys` install fails on every invocation (`option is ambiguous`, reproduced
+even on a bare `nsys profile -- echo hi` with no Juno-specific arguments), so the specific
+`cudaMemcpyAsync`-collapse timeline verification could not be re-run quantitatively here; the
+end-to-end wall-clock win and passing parity/regression tests are relied on instead. A future session
+with a working `nsys` install should re-run that measurement directly.
+
+```bash
+./juno local --model-path models/mistral-7b-instruct-v0.1-q4_k_m.gguf --gpu-layers auto --mmq auto
+# no --prefill-batch needed — sizes to the whole prompt automatically when VRAM allows
+```
+
 ## GPU-resident attention (`--gpu-attention`)
 
 **Run:** [`perf-compare/20260916T035952Z-prefill/`](perf-compare/20260916T035952Z-prefill/) (off) vs.

@@ -15,7 +15,6 @@
  */
 package cab.ml.juno.node;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
@@ -45,6 +44,8 @@ final class CudaRmsNorm {
 	private static final class RmsNormScratch {
 		MemorySegment dX, dWeight, dOut;
 		long xBytes, weightBytes, outBytes;
+		MemorySegment hX, hWeight, hOut;      // pinned host staging, grown as needed
+		long hXBytes, hWeightBytes, hOutBytes;
 	}
 
 	private CudaRmsNorm(GpuContext ctx) {
@@ -98,32 +99,45 @@ final class CudaRmsNorm {
 			s.dOut = gpu.deviceMalloc(dev, outBytes);
 			s.outBytes = outBytes;
 		}
+		if (s.hXBytes < xBytes) {
+			gpu.hostFree(s.hX);
+			s.hX = gpu.hostMalloc(dev, xBytes);
+			s.hXBytes = xBytes;
+		}
+		if (s.hWeightBytes < weightBytes) {
+			gpu.hostFree(s.hWeight);
+			s.hWeight = gpu.hostMalloc(dev, weightBytes);
+			s.hWeightBytes = weightBytes;
+		}
+		if (s.hOutBytes < outBytes) {
+			gpu.hostFree(s.hOut);
+			s.hOut = gpu.hostMalloc(dev, outBytes);
+			s.hOutBytes = outBytes;
+		}
 
-		try (Arena staging = Arena.ofConfined()) {
-			MemorySegment hostX = staging.allocate(xBytes);
-			for (int b = 0; b < batch; b++)
-				MemorySegment.copy(x[b], 0, hostX, JAVA_FLOAT, (long) b * dim * Float.BYTES, dim);
-			GpuBindings.check(
-					GpuBindings.callInt(gpu.gpuMemcpy(), s.dX, hostX, xBytes, GpuBindings.H2D),
-					"memcpy(rmsNorm xBatch H2D)");
+		MemorySegment hostX = s.hX;
+		for (int b = 0; b < batch; b++)
+			MemorySegment.copy(x[b], 0, hostX, JAVA_FLOAT, (long) b * dim * Float.BYTES, dim);
+		GpuBindings.check(
+				GpuBindings.callInt(gpu.gpuMemcpy(), s.dX, hostX, xBytes, GpuBindings.H2D),
+				"memcpy(rmsNorm xBatch H2D)");
 
-			MemorySegment hostWeight = staging.allocate(weightBytes);
-			MemorySegment.copy(weight, 0, hostWeight, JAVA_FLOAT, 0, dim);
-			GpuBindings.check(
-					GpuBindings.callInt(gpu.gpuMemcpy(), s.dWeight, hostWeight, weightBytes, GpuBindings.H2D),
-					"memcpy(rmsNorm weight H2D)");
+		MemorySegment hostWeight = s.hWeight;
+		MemorySegment.copy(weight, 0, hostWeight, JAVA_FLOAT, 0, dim);
+		GpuBindings.check(
+				GpuBindings.callInt(gpu.gpuMemcpy(), s.dWeight, hostWeight, weightBytes, GpuBindings.H2D),
+				"memcpy(rmsNorm weight H2D)");
 
-			kernel.launch(s.dX, s.dWeight, s.dOut, batch, dim, eps, null);
+		kernel.launch(s.dX, s.dWeight, s.dOut, batch, dim, eps, null);
 
-			MemorySegment hostOut = staging.allocate(outBytes);
-			GpuBindings.check(
-					GpuBindings.callInt(gpu.gpuMemcpy(), hostOut, s.dOut, outBytes, GpuBindings.D2H),
-					"memcpy(rmsNorm outBatch D2H)");
-			for (int b = 0; b < batch; b++) {
-				if (out[b] == null || out[b].length != dim)
-					out[b] = new float[dim];
-				MemorySegment.copy(hostOut, JAVA_FLOAT, (long) b * dim * Float.BYTES, out[b], 0, dim);
-			}
+		MemorySegment hostOut = s.hOut;
+		GpuBindings.check(
+				GpuBindings.callInt(gpu.gpuMemcpy(), hostOut, s.dOut, outBytes, GpuBindings.D2H),
+				"memcpy(rmsNorm outBatch D2H)");
+		for (int b = 0; b < batch; b++) {
+			if (out[b] == null || out[b].length != dim)
+				out[b] = new float[dim];
+			MemorySegment.copy(hostOut, JAVA_FLOAT, (long) b * dim * Float.BYTES, out[b], 0, dim);
 		}
 		return true;
 	}

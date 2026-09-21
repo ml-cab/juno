@@ -64,6 +64,9 @@ Juno metrics use **JFR by default** (`--jfr 30m`): `TokenProduced.tps` for decod
 | [`20260918T063739Z-lora`](20260918T063739Z-lora/) | GPU LoRA train-qa + playback vs release-0.1.2, ngram speculative decoding regression gate (flat as expected — LoRA doesn't route through `forwardVerify`) | train ms / playback tps | [INDEX](20260918T063739Z-lora/INDEX.md) |
 | [`20260918T152002Z`](20260918T152002Z/) | GPU Mistral-7B, draft-model speculative decoding (`--spec-type` still `none` here) regression gate | JFR pp/tg | [INDEX](20260918T152002Z/INDEX.md) |
 | [`20260918T152100Z-lora`](20260918T152100Z-lora/) | GPU LoRA train-qa + playback vs release-0.1.2, draft-model speculative decoding regression gate (flat as expected — LoRA doesn't route through `forwardVerify`) | train ms / playback tps | [INDEX](20260918T152100Z-lora/INDEX.md) |
+| [`20260918T153900Z-prefill-adaptive`](20260918T153900Z-prefill-adaptive/) | GPU Mistral-7B, prefill pinned host-staging memory + adaptive whole-prompt chunk sizing (Tier 20 Phase A); Phase B checkpoint (GPU-resident Rope/SwiGlu re-measured under pinned memory) recorded no-go | prefill ms / MatVec+Attention call counts / request wall | [INDEX](20260918T153900Z-prefill-adaptive/INDEX.md) |
+| [`20260918T204809Z`](20260918T204809Z/) | GPU default 4-model sweep, post Tier 20 Phase A regression gate | JFR pp/tg | [INDEX](20260918T204809Z/INDEX.md) |
+| [`20260918T204959Z-lora`](20260918T204959Z-lora/) | GPU LoRA train-qa + playback vs release-0.1.2, Tier 20 Phase A regression gate | train ms / playback tps | [INDEX](20260918T204959Z-lora/INDEX.md) |
 
 Earlier runs (API wall-clock tg only, no JFR): [`20260831T214609Z`](20260831T214609Z/) (CPU), [`20260831T223850Z`](20260831T223850Z/) (GPU).
 

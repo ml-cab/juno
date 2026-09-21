@@ -103,6 +103,10 @@ public final class CudaMatVec implements GpuMatVec {
         MemorySegment dY;   // device FP32 y, grown as needed
         long dXhBytes;
         long dYBytes;
+        MemorySegment hXh;  // pinned host staging for dXh H2D upload, grown as needed
+        MemorySegment hY;   // pinned host staging for dY D2H download, grown as needed
+        long hXhBytes;
+        long hYBytes;
     }
 
     // ── Construction ──────────────────────────────────────────────────────────
@@ -713,14 +717,14 @@ public final class CudaMatVec implements GpuMatVec {
         long bytesY = (long) rows * batch * Float.BYTES;
         Fp16Scratch scratch = FP16_SCRATCH.get();
 
-        try (Arena callArena = Arena.ofConfined()) {
+        try {
             synchronized (ctx.cublasSerializationLock()) {
                 MemorySegment stream = ensureStream();
                 bindStream(stream);
                 try {
                     ensureFp16Scratch(scratch, bytesXh, bytesY);
 
-                    MemorySegment stagingXh = callArena.allocate(bytesXh);
+                    MemorySegment stagingXh = scratch.hXh;
                     for (int b = 0; b < batch; b++) {
                         int base = b * cols;
                         for (int j = 0; j < cols; j++)
@@ -735,7 +739,7 @@ public final class CudaMatVec implements GpuMatVec {
                     callSgemvFp16(CudaBindings.CUBLAS_OP_T, A.devicePointer(), cols, scratch.dXh, scratch.dY,
                             rows, cols, batch);
 
-                    MemorySegment stagingY = callArena.allocate(bytesY);
+                    MemorySegment stagingY = scratch.hY;
                     CudaBindings.check(
                             CudaBindings.callInt(cuda.cudaMemcpyAsync,
                                     stagingY, scratch.dY, bytesY, CudaBindings.D2H, stream),
@@ -787,14 +791,14 @@ public final class CudaMatVec implements GpuMatVec {
         long bytesY = (long) rows * batch * Float.BYTES;
         Fp16Scratch scratch = FP16_SCRATCH.get();
 
-        try (Arena callArena = Arena.ofConfined()) {
+        try {
             synchronized (ctx.cublasSerializationLock()) {
                 MemorySegment stream = ensureStream();
                 bindStream(stream);
                 try {
                     ensureFp16Scratch(scratch, bytesXh, bytesY);
 
-                    MemorySegment stagingXh = callArena.allocate(bytesXh);
+                    MemorySegment stagingXh = scratch.hXh;
                     for (int b = 0; b < batch; b++) {
                         int base = b * cols;
                         for (int j = 0; j < cols; j++)
@@ -808,7 +812,7 @@ public final class CudaMatVec implements GpuMatVec {
 
                     fp16GemmOps().gemmHalf(A.devicePointer(), scratch.dXh, scratch.dY, rows, cols, batch);
 
-                    MemorySegment stagingY = callArena.allocate(bytesY);
+                    MemorySegment stagingY = scratch.hY;
                     CudaBindings.check(
                             CudaBindings.callInt(cuda.cudaMemcpyAsync,
                                     stagingY, scratch.dY, bytesY, CudaBindings.D2H, stream),
@@ -883,7 +887,7 @@ public final class CudaMatVec implements GpuMatVec {
         Fp16Scratch scratch = FP16_SCRATCH.get();
         Q4KDequantScratch dequantScratch = Q4K_DEQUANT_SCRATCH.get();
 
-        try (Arena callArena = Arena.ofConfined()) {
+        try {
             synchronized (ctx.cublasSerializationLock()) {
                 MemorySegment stream = ensureStream();
                 bindStream(stream);
@@ -892,7 +896,7 @@ public final class CudaMatVec implements GpuMatVec {
                     MemorySegment dW = dequantScratch.ensure(cuda, ctx.deviceIndex(), rows, cols);
                     kernel.launchDequant(A, dW, stream);
 
-                    MemorySegment stagingXh = callArena.allocate(bytesXh);
+                    MemorySegment stagingXh = scratch.hXh;
                     for (int b = 0; b < batch; b++) {
                         int base = b * cols;
                         for (int j = 0; j < cols; j++)
@@ -906,7 +910,7 @@ public final class CudaMatVec implements GpuMatVec {
 
                     fp16GemmOps().gemmHalf(dW, scratch.dXh, scratch.dY, rows, cols, batch);
 
-                    MemorySegment stagingY = callArena.allocate(bytesY);
+                    MemorySegment stagingY = scratch.hY;
                     CudaBindings.check(
                             CudaBindings.callInt(cuda.cudaMemcpyAsync,
                                     stagingY, scratch.dY, bytesY, CudaBindings.D2H, stream),
@@ -1199,6 +1203,16 @@ public final class CudaMatVec implements GpuMatVec {
             cuda.deviceFree(s.dY);
             s.dY     = cuda.deviceMalloc(dev, bytesY);
             s.dYBytes = bytesY;
+        }
+        if (s.hXhBytes < bytesXh) {
+            cuda.hostFree(s.hXh);
+            s.hXh      = cuda.hostMalloc(dev, bytesXh);
+            s.hXhBytes = bytesXh;
+        }
+        if (s.hYBytes < bytesY) {
+            cuda.hostFree(s.hY);
+            s.hY      = cuda.hostMalloc(dev, bytesY);
+            s.hYBytes = bytesY;
         }
     }
 }

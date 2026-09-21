@@ -987,7 +987,10 @@ public final class ConsoleMain {
 		System.out.println("  --prefill single|batched   Prefill strategy (default: batched)");
 		System.out.println("                             batched: windowed GEMM — fixes vision 10-min stall");
 		System.out.println("                             single:  original per-token loop (escape hatch)");
-		System.out.println("  --prefill-batch N          Max prompt tokens per prefill window (default: 32)");
+		System.out.println("  --prefill-batch N          Max prompt tokens per prefill window (default: adaptive on");
+		System.out.println("                             GPU with --schedule static — sizes to cover the whole");
+		System.out.println("                             prompt in one window up to a VRAM-headroom ceiling,");
+		System.out.println("                             fixed 32 on CPU or --schedule continuous)");
 		System.out.println("                             env JUNO_PREFILL_BATCH; use 1 for per-token batched");
 		System.out.println();
 		System.out.println("Speculative decoding:");
@@ -2289,8 +2292,18 @@ public final class ConsoleMain {
 		}
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
+		// Adaptive whole-prompt chunk sizing applies to the static schedule only —
+		// continuous keeps Tier 16's fixed chunking for decode-interleaving fairness.
+		boolean staticSchedule = cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv()
+				.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.STATIC;
+		int resolvedPrefillBatch = staticSchedule
+				? PrefillBatchOptions.resolveAdaptive(prefillBatch, gpuCtx).chunkSize()
+				: PrefillBatchOptions.resolve(prefillBatch).chunkSize();
+		if (prefillBatch == null && staticSchedule && gpuCtx != null)
+			log.info("Prefill chunk size resolved to " + resolvedPrefillBatch
+					+ " (adaptive, free VRAM=" + (gpuCtx.freeVramBytes() / (1024 * 1024)) + " MiB)");
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
-				PrefillBatchOptions.resolve(prefillBatch).chunkSize(), specOptions, draftPipeline);
+				resolvedPrefillBatch, specOptions, draftPipeline);
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig(),
 				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());
 		if (apiPort > 0) {

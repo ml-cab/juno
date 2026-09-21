@@ -187,6 +187,30 @@ interface GpuBindings {
      */
     void deviceFree(MemorySegment devicePtr);
 
+    /**
+     * Queries {@code cudaMemGetInfo} / {@code hipMemGetInfo} for {@code deviceIndex}.
+     *
+     * @return {@code {freeBytes, totalBytes}}, or {@code {0, 0}} if the query fails
+     */
+    long[] memGetInfo(int deviceIndex);
+
+    /**
+     * Allocates {@code bytes} of pinned (page-locked) host memory registered against
+     * {@code deviceIndex} and returns a {@link MemorySegment} wrapping the host pointer.
+     *
+     * <p>Pinned memory lets {@code cudaMemcpyAsync}/{@code hipMemcpyAsync} DMA the host
+     * buffer directly instead of the driver silently staging through its own internal
+     * pinned bounce buffer on every call, which otherwise inflates
+     * {@code cudaMemcpyAsync} host-API time well beyond the matching GPU-side DMA time
+     * for plain {@code Arena.ofConfined()} staging.
+     */
+    MemorySegment hostMalloc(int deviceIndex, long bytes);
+
+    /**
+     * Frees a host pointer previously returned by {@link #hostMalloc}.
+     */
+    void hostFree(MemorySegment hostPtr);
+
     // ── MatVec factory ────────────────────────────────────────────────────────
 
     /**

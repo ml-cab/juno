@@ -1,0 +1,43 @@
+{
+  "run_id": "20260918T153900Z",
+  "tool": "manual (compare-prefill-batch.sh always passes --prefill-batch explicitly and cannot exercise the new no-flag adaptive default; gathered by hand against a live local API instance, same methodology as PLAN-Infra-Tier20.md Finding 4)",
+  "model": "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "backend": "gpu",
+  "flags": "--gpu-layers auto --mmq auto --schedule static",
+  "prompt_tokens": 488,
+  "max_tokens": 16,
+  "temperature": 0,
+  "results": [
+    {
+      "prefill_batch": 32,
+      "note": "explicit --prefill-batch 32 (old fixed default)",
+      "resolved_chunk_size": 32,
+      "prefill_batch_call_count": 16,
+      "forward_pass_prefill_total_ms": 15710,
+      "matvec_count": 7008,
+      "matvec_total_ms": 142721,
+      "attention_count": 1024,
+      "attention_total_ms": 19744,
+      "request_wall_ms": 16971
+    },
+    {
+      "prefill_batch": null,
+      "note": "no --prefill-batch flag (new adaptive default)",
+      "resolved_chunk_size": 24889,
+      "free_vram_mib_at_resolution": 3111,
+      "prefill_batch_call_count": 1,
+      "forward_pass_prefill_total_ms": 11000,
+      "matvec_count": 2289,
+      "matvec_total_ms": 46105,
+      "attention_count": 544,
+      "attention_total_ms": 10368,
+      "request_wall_ms": 12354
+    }
+  ],
+  "speedup_adaptive_over_fixed32": {
+    "prefill_total_ms": 1.428,
+    "request_wall_ms": 1.374,
+    "matvec_call_count_reduction": 3.062,
+    "attention_call_count_reduction": 1.882
+  }
+}

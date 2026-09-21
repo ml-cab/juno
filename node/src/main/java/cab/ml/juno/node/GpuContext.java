@@ -215,6 +215,17 @@ public final class GpuContext implements AutoCloseable {
     public String backendLabel() { return bindings.backendLabel(); }
 
     /**
+     * Currently-free device memory in bytes for this context's device, queried live
+     * via {@code cudaMemGetInfo}/{@code hipMemGetInfo}. Returns {@code 0} if the
+     * query fails — callers use this for advisory sizing (e.g. prefill chunk-size
+     * headroom), never for correctness-critical allocation decisions.
+     */
+    public long freeVramBytes() {
+        if (closed) return 0L;
+        return bindings.memGetInfo(deviceIndex)[0];
+    }
+
+    /**
      * Creates the appropriate {@link MatVec} implementation for this GPU context.
      *
      * Delegates to {@link GpuBindings#createMatVec(GpuContext)} so that adding

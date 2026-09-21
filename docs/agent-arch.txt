@@ -130,6 +130,9 @@ GPU FFI (node module — Panama project, JEP 454):
         Each implementation documents the underlying vendor symbol it resolves.
         createMatVec(GpuContext) factory method returns the correct MatVec per backend,
         keeping GpuContext.createMatVec() free of instanceof checks.
+        hostMalloc(deviceIndex, bytes)/hostFree(ptr) — pinned host-staging memory
+        (cudaMallocHost/hipHostMalloc + matching free); memGetInfo(deviceIndex) — live
+        {free, total} device bytes (cudaMemGetInfo/hipMemGetInfo), advisory sizing only.
   CudaBindings — Panama FFI downcall handles for libcudart.so.12 and libcublas.so.12.
         Implements GpuBindings. Singleton; thread-safe; zero per-call Java overhead.
         Requires JVM flag: --enable-native-access=ALL-UNNAMED.
@@ -192,6 +195,8 @@ GPU FFI (node module — Panama project, JEP 454):
         selectBindings() auto-detects: CUDA first, then ROCm.
         Override: -Djuno.gpu.backend=cuda|rocm|auto.
         createMatVec() delegates to GpuBindings.createMatVec(GpuContext) — no instanceof checks.
+        freeVramBytes() — live free-VRAM query (GpuBindings.memGetInfo), used by coordinator's
+        PrefillBatchOptions.resolveAdaptive for whole-prompt prefill chunk sizing on static schedule.
 
 Third-party JVM integration (juno-player module): JunoPlayer (facade), LoraTrainer,
 LocalInferencePipeline.embedLastToken/embedTokens, PublisherTokenConsumer → Flow.Publisher,

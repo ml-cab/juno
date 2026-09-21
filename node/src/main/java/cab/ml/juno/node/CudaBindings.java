@@ -96,6 +96,7 @@ final class CudaBindings implements GpuBindings {
     final MethodHandle cudaFree;                 // int (void*)
     final MethodHandle cudaMallocHost;           // int (void**, size_t)
     final MethodHandle cudaFreeHost;             // int (void*)
+    final MethodHandle cudaMemGetInfo;           // int (size_t* free, size_t* total)
     final MethodHandle cudaMemcpy;               // int (void*, const void*, size_t, int)
     final MethodHandle cudaMemcpyAsync;          // int (void*, const void*, size_t, int, cudaStream_t)
     final MethodHandle cudaStreamCreateWithFlags;// int (cudaStream_t*, unsigned int)
@@ -167,6 +168,8 @@ final class CudaBindings implements GpuBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
         cudaFreeHost              = bind(linker, cudart, "cudaFreeHost",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
+        cudaMemGetInfo            = bind(linker, cudart, "cudaMemGetInfo",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
         cudaMemcpy                = bind(linker, cudart, "cudaMemcpy",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT));
         cudaMemcpyAsync           = bind(linker, cudart, "cudaMemcpyAsync",
@@ -286,6 +289,52 @@ final class CudaBindings implements GpuBindings {
     public void deviceFree(MemorySegment devicePtr) {
         if (devicePtr == null || devicePtr.equals(MemorySegment.NULL)) return;
         callInt(cudaFree, devicePtr);
+    }
+
+    /**
+     * Calls {@code cudaMallocHost} and returns a {@link MemorySegment} sized to
+     * {@code bytes} representing the pinned host pointer.
+     *
+     * <p>The caller is responsible for freeing it via {@link #hostFree}.
+     */
+    @Override
+    public MemorySegment hostMalloc(int deviceIndex, long bytes) {
+        check(callInt(cudaSetDevice, deviceIndex), "cudaSetDevice");
+        try (Arena tmp = Arena.ofConfined()) {
+            MemorySegment slot = tmp.allocate(ADDRESS);
+            check(callInt(cudaMallocHost, slot, bytes), "cudaMallocHost");
+            return slot.get(ADDRESS, 0).reinterpret(bytes);
+        }
+    }
+
+    /**
+     * Calls {@code cudaFreeHost} on a host segment returned by {@link #hostMalloc}.
+     */
+    @Override
+    public void hostFree(MemorySegment hostPtr) {
+        if (hostPtr == null || hostPtr.equals(MemorySegment.NULL)) return;
+        callInt(cudaFreeHost, hostPtr);
+    }
+
+    /**
+     * Calls {@code cudaMemGetInfo} for {@code deviceIndex}. Returns {@code {0, 0}}
+     * on failure instead of throwing — callers use this for advisory sizing
+     * decisions, not correctness-critical allocation.
+     */
+    @Override
+    public long[] memGetInfo(int deviceIndex) {
+        try {
+            check(callInt(cudaSetDevice, deviceIndex), "cudaSetDevice");
+            try (Arena tmp = Arena.ofConfined()) {
+                MemorySegment freeSlot = tmp.allocate(JAVA_LONG);
+                MemorySegment totalSlot = tmp.allocate(JAVA_LONG);
+                check(callInt(cudaMemGetInfo, freeSlot, totalSlot), "cudaMemGetInfo");
+                return new long[] { freeSlot.get(JAVA_LONG, 0), totalSlot.get(JAVA_LONG, 0) };
+            }
+        } catch (IllegalStateException e) {
+            log.warning("cudaMemGetInfo failed: " + e.getMessage());
+            return new long[] { 0L, 0L };
+        }
     }
 
     // ── Package-private static utilities ─────────────────────────────────────

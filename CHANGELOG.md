@@ -1,5 +1,51 @@
 ## Status 
 
+**Session 85** — Prefill GPU-residency fixes: pinned staging memory + adaptive chunk sizing (Phase A) **feature complete**
+
+- Pinned host-staging memory: new vendor-neutral `GpuBindings.hostMalloc`/`hostFree`
+  (`cudaMallocHost`/`cudaFreeHost`; `hipHostMalloc`/`hipHostFree` on ROCm) replaces plain
+  `Arena.ofConfined()` staging in `CudaMatVec`'s three batched-GEMM paths
+  (`sgemmHalfBatched`, `sgemmHalfBatchedGemm`, `sgemmQ4KBatchedGemm`) and
+  `CudaRmsNorm.normalizeBatch`, grown-and-kept-max the same way the existing
+  device-side scratch already is.
+- Adaptive whole-prompt prefill chunk sizing for `--schedule static` on GPU:
+  `PrefillBatchOptions.resolveAdaptive` sizes the chunk to cover the whole
+  prompt in one window when there is enough free VRAM, using a new live
+  `GpuBindings.memGetInfo`/`GpuContext.freeVramBytes()` query
+  (`cudaMemGetInfo`/`hipMemGetInfo`) — the plan's original assumption that
+  `--gpu-layers auto`'s existing budget check could be reused turned out to
+  be wrong on inspection (it is a reactive per-layer upload-and-catch-OOM
+  loop, not a predictive query), so this needed its own minimal binding.
+  Floored at the old fixed 32 (can only grow the chunk vs today, never
+  shrink it) and capped at 65536 tokens; `--prefill-batch N` still works as
+  an explicit override on every surface; `--schedule continuous` and
+  CPU-only runs keep the fixed 32-token default unchanged.
+- Wired into the local single-shard REPL only (`ConsoleMain.runLocalRepl()`),
+  which covers base inference, `--lora-play`, `--parallel`, and vision since
+  they share the same `GenerationLoop`; cluster REPL and the LoRA train REPL
+  keep the old fixed-32 path, named follow-up.
+- Live smoke test (real GTX 1080, `mistral-7b-instruct-v0.1-q4_k_m.gguf`,
+  `--gpu-layers auto --mmq auto`, real 488-token chat prompt): adaptive
+  default resolved to a 24889-token chunk (1 `PrefillBatch` call vs 16 under
+  the old fixed 32), measuring **-30% prefill time, -27% request wall time**,
+  3.06x fewer `MatVec` launches. Correctness relies on the pre-existing
+  `LlamaTransformerHandlerPrefillChunkParityTest` (chunk-boundary numeric
+  identity already proven generically across chunk sizes, not just 32).
+- Phase B checkpoint (re-measure GPU-resident Rope/SwiGlu under pinned
+  memory, go/no-go): **no-go** — still 1.56-2.18x slower than CPU scalar,
+  confirming the bottleneck is per-launch overhead with no
+  activation-residency chain, not memcpy speed. `RopeKernel`/`SwiGluKernel`
+  not built.
+- This session's `nsys` install could not reproduce the original
+  `cudaMemcpyAsync`-collapse timeline verification (fails on every
+  invocation, including a bare argument-free `nsys profile -- echo hi` — an
+  environment defect); end-to-end wall-clock evidence and green
+  parity/regression tests are relied on instead, honestly flagged as an open
+  re-verification.
+- §2 regression: `compare-llama-cpp.sh --gpu` (default 4-model set),
+  failures=0; `compare-lora.sh --gpu --baseline release-0.1.2`, **ok** (train
+  1.00x, playback tps 0.87x ≥ 0.80 gate).
+
 **Session 84** — Draft-model speculative decoding (`--spec-type draft-simple`) **feature complete**
 
 - `--spec-type none|ngram-simple|draft-simple` + `--model-draft PATH`
