@@ -128,10 +128,11 @@ public final class EmbeddedNodeServer {
 	// ── Stub handler (no model loaded) ───────────────────────────────────────
 
 	/**
-	 * Minimal no-op ForwardPassHandler used before a real shard is loaded and as a
-	 * safe fallback when model loading fails. Returns zero-filled arrays of the
-	 * correct shape; never produces meaningful output. Not for use in tests — tests
-	 * should use {@code CyclicForwardPassHandler} (node/src/test) which provides
+	 * Minimal no-op ForwardPassHandler used in stub mode only (no model path).
+	 * Returns zero-filled arrays of the correct shape; never produces meaningful
+	 * output. A node started with a real model never uses it: see
+	 * {@link UnloadedShardHandler}. Not for use in tests — tests should use
+	 * {@code CyclicForwardPassHandler} (node/src/test) which provides
 	 * deterministic, inspectable results.
 	 */
 		private static final class StubForwardPassHandler implements ForwardPassHandler {
@@ -189,7 +190,7 @@ public final class EmbeddedNodeServer {
 			this.modelPath = modelPath;
 			this.useGpu = useGpu;
 			this.loraPlayPath = System.getProperty("juno.lora.play.path");
-			this.handler = new StubForwardPassHandler(); // replaced in loadShard() when real model
+			this.handler = placeholderHandler(); // replaced in loadShard() when a shard loads
 			this.context = buildDefaultContext();
 			this.kvCache = new KVCacheManager(new GpuKVCache(NODE_VRAM_BUDGET), new CpuKVCache(256));
 			if (loraPlayPath != null)
@@ -307,18 +308,24 @@ public final class EmbeddedNodeServer {
 					}
 					log.info(msg);
 				} catch (Exception e) {
-					log.severe("FAILED to load real model: " + e.getMessage());
+					// A node started with a real model must never fall back to stub output: report
+					// the failure to the coordinator and refuse forward passes.
+					String cause = e.getMessage() != null ? e.getMessage() : e.getClass().getName();
+					log.severe("FAILED to load real model: " + cause);
 					e.printStackTrace();
-					log.warning("Falling back to stub handler");
 					if (handler != null)
 						handler.releaseGpuResources();
 					if (gpuContext != null) {
 						gpuContext.close();
 						gpuContext = null;
 					}
-					handler = new StubForwardPassHandler();
-					msg = "Stub shard (model load failed: " + e.getMessage() + ") layers " + request.getStartLayer()
-							+ "–" + request.getEndLayer();
+					handler = new UnloadedShardHandler("Shard failed to load: " + cause);
+					responseObserver.onNext(LoadShardResponse.newBuilder().setSuccess(false)
+							.setMessage("Model load failed on node " + nodeId + " (layers " + request.getStartLayer()
+									+ "–" + request.getEndLayer() + "): " + cause)
+							.build());
+					responseObserver.onCompleted();
+					return;
 				}
 			} else {
 				handler = new StubForwardPassHandler();
@@ -349,7 +356,7 @@ public final class EmbeddedNodeServer {
 		public void unloadShard(UnloadShardRequest request, StreamObserver<UnloadShardResponse> responseObserver) {
 			if (handler != null)
 				handler.releaseGpuResources();
-			handler = new StubForwardPassHandler();
+			handler = placeholderHandler();
 			if (gpuContext != null) {
 				gpuContext.close();
 				gpuContext = null;
@@ -368,6 +375,16 @@ public final class EmbeddedNodeServer {
 		}
 
 		// ── helpers ───────────────────────────────────────────────────────────
+
+		/**
+		 * Handler used while no shard is loaded: the fixed-output stub in stub mode (no
+		 * model path), and a handler that refuses forward passes when a real model was
+		 * requested.
+		 */
+		private ForwardPassHandler placeholderHandler() {
+			return modelPath == null ? new StubForwardPassHandler()
+					: new UnloadedShardHandler("Shard not loaded: no LoadShard has completed for " + modelPath);
+		}
 
 		private static ShardContext buildDefaultContext() {
 			ShardAssignment full = new ShardAssignment("default", "localhost", 0, 0, TOTAL_LAYERS, true, true);

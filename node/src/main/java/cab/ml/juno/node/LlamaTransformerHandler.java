@@ -33,10 +33,12 @@ import cab.ml.juno.kvcache.SessionKvTensor;
  * LLaMA-family transformer forward pass with a pluggable {@link MatVec}.
  *
  * <p>
- * Handles all LLaMA-compatible architectures: LLaMA 2/3, TinyLlama, Mistral,
- * Gemma — any model whose GGUF {@code general.architecture} is not
- * {@code phi3}. The transformer math (RMS norm, RoPE, GQA, SwiGLU FFN) is
- * identical regardless of the backend. Swapping {@link CpuMatVec} for
+ * Handles the dense LLaMA-family architectures listed in
+ * {@link LlamaFamilyArchitectures} (LLaMA 2/3, TinyLlama, Mistral, Qwen2).
+ * {@link ForwardPassHandlerLoader} routes every other architecture to its own
+ * handler or rejects it; this class has no Gemma-style GeGLU, embedding scaling
+ * or sliding-window attention. The transformer math (RMS norm, RoPE, GQA,
+ * SwiGLU FFN) is identical regardless of the backend. Swapping {@link CpuMatVec} for
  * {@link CudaMatVec} moves all matrix multiplies from CPU threads to
  * cublasSgemv on a GPU.
  *
@@ -158,8 +160,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private final CudaGqaAttention gqaGpu;
 
 	/**
-	 * Non-null whenever a CUDA backend is resolved (no dedicated flag — see
-	 * {@link CudaRmsNorm}). Tier 19 Phase A GPU-resident RMS norm.
+	 * Reserved for the GPU-resident RMS-norm path. Currently always null: that path
+	 * is deliberately not constructed (see the comment in the constructor and
+	 * {@link CudaRmsNorm}).
 	 */
 	private final CudaRmsNorm rmsNormGpu;
 
@@ -357,7 +360,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			}
 			// Deliberately not activated by default (unlike --gpu-attention above), despite
 			// no dedicated CLI flag existing to opt out — see CudaRmsNorm's class javadoc
-			// and docs/infra-plan/PLAN-Infra-Tier19.md's "measured regression" note for why:
+			// for why:
 			// a live A/B on real TinyLlama decode showed this path's independent per-call
 			// H2D-upload/kernel-launch/D2H-download round trip costs ~11x more than the
 			// scalar CPU path it replaces (0.168ms vs 0.015ms decode p95), because nothing
@@ -2071,7 +2074,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	/**
 	 * GPU-dispatched {@link #rmsNorm} for a single row, falling back to the scalar
 	 * CPU path when {@link #rmsNormGpu} is unavailable (no CUDA backend, or the
-	 * kernel failed to load). Tier 19 Phase A.
+	 * kernel failed to load).
 	 */
 	private float[] rmsNormGpuOrCpu(float[] x, float[] w, float eps) {
 		if (rmsNormGpu != null) {
@@ -2085,7 +2088,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	/**
 	 * GPU-dispatched {@link #rmsNormInto} for a batch of rows sharing one weight
 	 * vector, falling back per-row to the scalar CPU path when {@link #rmsNormGpu}
-	 * is unavailable. Tier 19 Phase A.
+	 * is unavailable.
 	 */
 	private void rmsNormIntoGpuOrCpu(float[][] x, float[] w, float eps, float[][] out) {
 		if (rmsNormGpu != null && rmsNormGpu.normalizeBatch(x, w, eps, out))

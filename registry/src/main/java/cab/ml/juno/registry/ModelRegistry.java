@@ -25,9 +25,8 @@ import java.util.logging.Logger;
  * Central model registry — stores model metadata and shard maps, drives the
  * ShardPlanner when models are registered.
  *
- * Backed by ConcurrentHashMap for now. Hazelcast IMap upgrade path: replace the
- * two maps with IMap("model-registry") and IMap("shard-maps") — the interface
- * is identical.
+ * In-memory: backed by two ConcurrentHashMaps (model descriptors and shard
+ * maps). There is no distributed registry; membership is fixed at cluster launch.
  *
  * Lifecycle: register() — plan shards, store model (LOADING), store ShardMap
  * markLoaded() — transition model to LOADED after nodes confirm markError() —

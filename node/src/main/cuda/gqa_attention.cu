@@ -1,8 +1,6 @@
 /*
- * GPU-resident grouped-query attention kernel for Juno (Tier 13 Phase C, v1 —
- * a straightforward parallel kernel, not a tiled/online-softmax FlashAttention
- * design; see docs/infra-plan/PLAN-Infra-Tier13.md Phase C for the scope note
- * and rationale).
+ * GPU-resident grouped-query attention kernel for Juno (a straightforward
+ * parallel kernel, not a tiled/online-softmax FlashAttention design).
  *
  * One block per (batch row b, query head h): QK^T dot products, a max-
  * subtracted softmax, and the weighted-V-sum — the exact same math as

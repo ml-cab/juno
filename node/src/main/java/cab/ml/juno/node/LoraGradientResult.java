@@ -23,7 +23,7 @@ package cab.ml.juno.node;
  * @param predictionCount  number of prediction positions ({@code tokens.length - 1})
  * @param forwardMs        wall time of the forward pass
  * @param backwardMs       wall time of the backward pass
- * @param timing           Tier-4/9 subset timings (never null)
+ * @param timing           finer per-phase timings (never null)
  */
 public record LoraGradientResult(float lossSum, int predictionCount, long forwardMs, long backwardMs,
 		LoraStepTiming timing) {

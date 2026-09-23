@@ -1,6 +1,5 @@
 /*
- * GPU-resident RMS-normalisation kernel for Juno (Tier 19 Phase A, step 2 —
- * see docs/infra-plan/PLAN-Infra-Tier19.md).
+ * GPU-resident RMS-normalisation kernel for Juno.
  *
  * One block per row of a [B][dim] activation batch: a block-wide sum-of-
  * squares reduction, then a second elementwise pass writing

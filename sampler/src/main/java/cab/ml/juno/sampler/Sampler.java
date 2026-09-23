@@ -20,8 +20,11 @@ import java.util.Random;
 /**
  * Main sampling pipeline.
  *
- * Chains all steps in order: presencePenalty → repetitionPenalty → temperature
- * → topK → softmax → topP → sample
+ * This class is the only authoritative description of the pipeline order; the
+ * per-step javadocs describe one step each and deliberately do not number it.
+ * When a {@link GrammarSession} is supplied its mask runs first, then the steps
+ * run in this order: presencePenalty → repetitionPenalty → temperature → topK →
+ * softmax → topP → sample
  *
  * Stateless and thread-safe when no seeded {@link Random} is supplied. One
  * instance may be shared across requests; seeded RNGs stay request-local.
@@ -52,7 +55,9 @@ public final class Sampler {
 	}
 
 	/**
-	 * Create a default Sampler with all standard pipeline steps.
+	 * Create a default Sampler with all standard pipeline steps. The order they run
+	 * in is fixed by the {@code sample} method and described in the class javadoc,
+	 * which is the only authoritative statement of it.
 	 */
 	public static Sampler create() {
 		return new Sampler(TemperatureStep.INSTANCE, TopKStep.INSTANCE, SoftmaxStep.INSTANCE, TopPStep.INSTANCE,

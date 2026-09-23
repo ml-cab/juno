@@ -16,7 +16,7 @@
 package cab.ml.juno.node;
 
 /**
- * CPU reference for microbatched frozen linears (Tier 9 parity oracle).
+ * CPU reference for microbatched frozen linears (parity oracle).
  *
  * <p>Column layout matches {@link DeviceActivationBatch#packColumns}: each
  * {@code X[b]} / {@code G[b]} is one activation / gradient column.

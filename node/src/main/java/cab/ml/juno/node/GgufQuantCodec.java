@@ -16,7 +16,7 @@
 package cab.ml.juno.node;
 
 /**
- * Shared GGUF quantisation codec facade for Tier-5 merge and training paths.
+ * Shared GGUF quantisation codec facade for the quantized merge and training paths.
  *
  * <p>K-quant (Q4_K / Q5_K / Q6_K) work delegates to {@link GgufKQuantCodec}.
  * Other GGML types remain on their existing call sites until extracted.

@@ -18,12 +18,12 @@ package cab.ml.juno.sampler;
 import java.util.Arrays;
 
 /**
- * Step 2: Top-K filtering.
+ * Top-K filtering.
  *
  * Keeps only the K tokens with the highest logit scores. All others are set to
  * -Infinity so softmax will assign them probability 0.
  *
- * Skipped if params.topK() == 0 (disabled) or greedy=true.
+ * Skipped if params.topK() == 0 (disabled) or decoding is greedy (including temperature 0).
  */
 public final class TopKStep implements SamplingStep {
 
@@ -36,7 +36,7 @@ public final class TopKStep implements SamplingStep {
 
 	@Override
 	public float[] apply(float[] logits, SamplingParams params, int[] generatedTokens) {
-		if (params.greedy())
+		if (params.effectivelyGreedy())
 			return logits;
 
 		int k = params.topK();

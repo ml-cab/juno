@@ -376,7 +376,7 @@ public final class ConsoleMain {
 		// closed here, before any model loading, rather than let LoRA train/play or
 		// cluster/tensor-parallel mode silently ignore --model-draft or crash later
 		// with a misleading "requires --model-draft" error when the flag was in fact
-		// set (see PLAN-Infra-Tier12.md).
+		// set.
 		try {
 			cab.ml.juno.coordinator.SpeculativeDecodeOptions specCheck = cab.ml.juno.coordinator.SpeculativeDecodeOptions
 					.resolve(specType, specNgramN, specNgramM, modelDraftPath);
@@ -468,8 +468,7 @@ public final class ConsoleMain {
 	/**
 	 * Resolves {@code --hf repo[:quant]} into {@link #modelPath} via
 	 * {@link HfGgufFetcher} (downloading into the fetcher's cache directory if
-	 * not already cached). Chosen design (see
-	 * {@code docs/infra-plan/PLAN-Infra-Tier7.md}): {@code --hf} populates the
+	 * not already cached). Chosen design: {@code --hf} populates the
 	 * effective model path; when {@code --model-path} is also given and resolves
 	 * to a different file, startup fails with a clear error instead of silently
 	 * preferring one flag over the other.
@@ -2293,7 +2292,7 @@ public final class ConsoleMain {
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		// Adaptive whole-prompt chunk sizing applies to the static schedule only —
-		// continuous keeps Tier 16's fixed chunking for decode-interleaving fairness.
+		// continuous keeps fixed-size chunking for decode-interleaving fairness.
 		boolean staticSchedule = cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv()
 				.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.STATIC;
 		int resolvedPrefillBatch = staticSchedule
@@ -2451,8 +2450,7 @@ public final class ConsoleMain {
 	 * up the same resolved template.
 	 *
 	 * <p>Base text-inference surface only (local REPL, cluster REPL, and their
-	 * REST/OpenAI API servers, per the interaction matrix in
-	 * {@code docs/infra-plan/PLAN-Infra-Tier7.md}) — deliberately
+	 * REST/OpenAI API servers) — deliberately
 	 * <b>not</b> called from {@link #runLoraRepl}: LoRA train and
 	 * {@code --lora-play} keep using the named template so train-time and
 	 * inference-time formatting stay identical for adapter recall (see
@@ -2497,7 +2495,7 @@ public final class ConsoleMain {
 		// --spec-type only wires into GenerationLoop.generate() (single-request path);
 		// GenerationLoop.generateBatch() (static multi-request batching, entries.size() > 1)
 		// does not draft/verify yet — a request that lands in a concurrent batch decodes
-		// without speculation, silently, unless flagged here. See PLAN-Infra-Tier9.md.
+		// without speculation, silently, unless flagged here.
 		if (batch.isBatchingEnabled() && cab.ml.juno.coordinator.SpeculativeDecodeOptions
 				.resolve(specType, specNgramN, specNgramM, modelDraftPath).enabled()) {
 			System.out.println(String.format(

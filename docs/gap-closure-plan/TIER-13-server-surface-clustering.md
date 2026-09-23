@@ -33,9 +33,9 @@ the finished system.
    sense for a sharded topology. Design this explicitly rather than assuming the existing
    replica-pool-oriented `FaultTolerantPipeline` design transfers unchanged.
 2. **Elastic N-node clustering**: move `ClusterHarness` and the production cluster launch path
-   beyond the hard-coded 3-node topology, to a configurable node count — this is also the natural
-   point to finally implement `RegistryService` for real if Tier 00 deferred that decision here
-   rather than removing it outright.
+   beyond the hard-coded 3-node topology, to a configurable node count. Tier 00 removed the
+   never-implemented `RegistryService` RPCs and the unused Hazelcast dependency, so any node
+   discovery this needs is designed here from scratch rather than revived from that surface.
 3. **Reranking endpoint**: add a `/v1/rerank`-style endpoint (Juno-native naming), reusing the
    existing embeddings infrastructure's pooling logic where applicable.
 4. **Broader tool/function calling**: extend `ToolPrompt.SUPPORTED_MODEL_TYPES` beyond
@@ -81,8 +81,8 @@ the finished system.
 2. Wire `FaultTolerantPipeline` (or a redesigned equivalent, if the design step concludes the
    existing replica-oriented class doesn't fit) into `CoordinatorMain`.
 3. Generalize `ClusterHarness` and the production launch path to a configurable node count.
-4. If Tier 00 deferred the `RegistryService` decision here: implement it for real (Hazelcast-backed
-   dynamic membership) now that elastic clustering gives it an actual purpose.
+4. Decide how elastic nodes are discovered (Tier 00 removed the old `RegistryService`/Hazelcast
+   surface, so there is nothing to revive); implement only what the elastic design needs.
 5. Add the reranking endpoint.
 6. Extend tool-calling template support one template at a time, each validated with real
    tool-call round-trip tests.
@@ -95,8 +95,8 @@ the finished system.
   real).
 - **New `ClusterHarness` test**: N-node cluster for N other than 3 (e.g. 2, 5), confirming correct
   shard assignment and operation.
-- **`RegistryService` integration test** (if implemented): dynamic node registration/deregistration
-  correctness.
+- **Membership/discovery integration test** (if the elastic design adds a discovery mechanism):
+  dynamic node registration/deregistration correctness.
 - **New `RerankHandlerTest`**: standard reranking correctness cases.
 - **`ToolPromptTest`**: new cases per newly-supported chat template, round-tripping a tool call
   correctly.
@@ -120,8 +120,9 @@ and fault-tolerance testing use the existing forked-JVM harness and don't need n
 - [ ] `FaultTolerantPipeline` (or its redesigned equivalent) is wired into the production cluster
       launch path, with tested, documented failure/failover behavior for a sharded topology.
 - [ ] Cluster node count is configurable, not hard-coded to 3.
-- [ ] `RegistryService` is either implemented for real (if that was the Tier 00 deferral) or
-      remains removed — no ambiguous middle state.
+- [ ] No ambiguous membership state: either the elastic design's discovery mechanism is implemented
+      and tested, or membership stays fixed at launch and is documented as such (Tier 00 removed
+      `RegistryService` and Hazelcast).
 - [ ] Reranking endpoint implemented and tested.
 - [ ] Tool calling works on at least one additional chat template beyond
       `{llama3, chatml, qwen3}`, with the remaining unsupported templates still failing closed

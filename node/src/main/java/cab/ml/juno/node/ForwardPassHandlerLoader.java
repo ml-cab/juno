@@ -21,6 +21,7 @@ package cab.ml.juno.node;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Set;
 import java.util.logging.Logger;
 
 import cab.ml.juno.lora.LoraAdapterSet;
@@ -38,7 +39,10 @@ import cab.ml.juno.node.RocmAvailability;
  * <li>{@code phi3} → {@link Phi3TransformerHandler}
  * <li>{@code qwen3} → {@link Qwen3TransformerHandler}
  * <li>{@code qwen3moe} → {@link Qwen3MoeTransformerHandler}
- * <li>everything else → {@link LlamaTransformerHandler}
+ * <li>{@code llama}, {@code mistral}, {@code tinyllama}, {@code qwen2},
+ *     {@code qwen2.5} → {@link LlamaTransformerHandler}
+ * <li>everything else → rejected with an {@link IOException} naming the
+ *     architecture (see {@link LlamaFamilyArchitectures})
  * </ul>
  *
  * <p>
@@ -58,6 +62,9 @@ import cab.ml.juno.node.RocmAvailability;
 public final class ForwardPassHandlerLoader {
 
 	private static final Logger log = Logger.getLogger(ForwardPassHandlerLoader.class.getName());
+
+	/** Architectures with a dedicated handler; keep in sync with the switch in {@code load}. */
+	private static final Set<String> DEDICATED_HANDLER_ARCHITECTURES = Set.of("phi2", "phi3", "qwen3", "qwen3moe");
 
 	private ForwardPassHandlerLoader() {
 	}
@@ -223,10 +230,19 @@ public final class ForwardPassHandlerLoader {
 			yield Qwen3MoeTransformerHandler.load(modelPath, context, backend);
 		}
 		default -> {
+			LlamaFamilyArchitectures.requireVerified(arch, modelPath);
 			log.info("Routing to LlamaTransformerHandler (LLaMA-family architecture: " + arch + ")");
 			yield LlamaTransformerHandler.load(modelPath, context, backend);
 		}
 		};
+	}
+
+	/**
+	 * Whether {@link #load} has a verified handler for this {@code general.architecture}
+	 * value (already lower-cased and stripped). Any other value is rejected at load.
+	 */
+	public static boolean isSupportedArchitecture(String architecture) {
+		return DEDICATED_HANDLER_ARCHITECTURES.contains(architecture) || LlamaFamilyArchitectures.isVerified(architecture);
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────────

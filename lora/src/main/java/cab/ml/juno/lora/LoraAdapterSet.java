@@ -52,7 +52,7 @@ public final class LoraAdapterSet {
 	private final Map<String, LoraAdapter> adapters = new LinkedHashMap<>();
 	/** Grouped QA-LoRA adapters (mutually exclusive keys with {@link #adapters}). */
 	private final Map<String, QaLoraAdapter> qaAdapters = new LinkedHashMap<>();
-	/** Per-key Tier-5 merge / layout metadata for QA entries. */
+	/** Per-key merge / layout metadata for QA entries. */
 	private final Map<String, QaLoraEntryMeta> qaMeta = new LinkedHashMap<>();
 	/** Optional DoRA magnitude vectors keyed identically to adapters. */
 	private final Map<String, DoraMagnitude> magnitudes = new LinkedHashMap<>();
@@ -321,7 +321,7 @@ public final class LoraAdapterSet {
 			if (hasFp)
 				fp.write(out);
 
-			out.writeInt(0); // no Tier-5 extension for dense LoRA/DoRA
+			out.writeInt(0); // no QA-LoRA extension for dense LoRA/DoRA
 		}
 		return bos.toByteArray();
 	}
@@ -473,7 +473,7 @@ public final class LoraAdapterSet {
 				if (extLen < 0)
 					throw new IOException("Negative extension length: " + extLen);
 				if (extLen == 0)
-					throw new IOException("QA-LoRA entry missing Tier-5 extension: " + key);
+					throw new IOException("QA-LoRA entry missing its metadata extension: " + key);
 				byte[] ext = in.readNBytes(extLen);
 				if (ext.length != extLen)
 					throw new EOFException("Truncated extension block");

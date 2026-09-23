@@ -28,8 +28,8 @@ import jdk.jfr.StackTrace;
  * <p>
  * Captures a timing breakdown of forward, backward, and Adam plus accumulation
  * and clipping metadata so profilers can correlate updates with chunk counts.
- * Tier 4 adds finer fields (frozen forward/transpose, adapter backward, transfer)
- * that remain zero until the corresponding instrumentation path fills them.
+ * Finer fields (frozen forward/transpose, adapter backward, transfer) remain
+ * zero until the corresponding instrumentation path fills them.
  *
  * @see LoraTrainableHandler#trainStep
  * @see LoraTrainableHandler#computeGradients

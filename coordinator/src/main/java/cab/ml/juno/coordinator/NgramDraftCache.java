@@ -27,9 +27,9 @@ import java.util.Map;
  * <p>No second model and no static corpus — draft quality comes entirely from
  * repeated substrings within the <em>same</em> request (templated JSON,
  * repeated boilerplate, echoed context). Free-form novel text mostly misses and
- * the caller falls back to plain one-token decoding for that step; see
- * {@code PLAN-Infra-Tier9.md}'s exit gate ("measurable TPS gain on a repetitive
- * workload, or documented neutrality on natural text").
+ * the caller falls back to plain one-token decoding for that step. The
+ * expected outcome is a measurable throughput gain on repetitive workloads and
+ * neutrality on natural text.
  *
  * <p>Not thread-safe — one instance per in-flight {@code generate()} call,
  * matching {@link GenerationLoop}'s per-request state.

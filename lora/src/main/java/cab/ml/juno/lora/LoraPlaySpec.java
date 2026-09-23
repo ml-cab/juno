@@ -24,7 +24,7 @@ import java.util.Objects;
 /**
  * Parses the {@code --lora-play} CLI/env syntax:
  * {@code path[:scale][,path[:scale]]*}. A bare path (no colon) defaults to
- * scale {@code 1.0}, so the pre-Tier-10 single-file usage is unchanged.
+ * scale {@code 1.0}, so the original single-file usage is unchanged.
  *
  * <p>
  * The scale suffix is only recognized as the text after the <em>last</em>

@@ -29,7 +29,7 @@ import java.util.Locale;
  *
  * <p>Matrix: ctx ∈ {2k, 8k, 32k} × batch ∈ {1, 8, 32}, optional page sizes.
  * Prints absolute ns and gather overhead as % of (gather + attention).
- * Budget gate: ≤ ~15% at batch 8 / ctx 8k (see PLAN-Infra-Tier14).
+ * Budget gate: ≤ ~15% at batch 8 / ctx 8k.
  *
  * <p>Shapes match TinyLlama-class GQA (heads=32, kvHeads=4, headDim=64).
  */

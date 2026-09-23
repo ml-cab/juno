@@ -34,8 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Callers decide per product surface whether to register — the base
  * text-inference REPL entry points do; {@code --lora-play} and LoRA train
  * intentionally do not (train-time and inference-time formatting must stay
- * identical for adapter recall — see the feature/surface interaction matrix in
- * {@code docs/infra-plan/PLAN-Infra-Tier7.md}), so
+ * identical for adapter recall), so
  * for those surfaces this registry simply stays empty and
  * {@code forModelType} behaves exactly as before this feature existed.
  *

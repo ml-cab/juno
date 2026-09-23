@@ -33,8 +33,7 @@ import cab.ml.juno.node.GgufReader;
  * the named {@link ChatTemplate#forModelType(String)} lookup when the metadata
  * is absent, fails to parse, or fails a smoke-render.
  *
- * <p>Precedence, matching the chosen design in
- * {@code docs/infra-plan/PLAN-Infra-Tier7.md}:
+ * <p>Precedence:
  * <ol>
  * <li>metadata present, parses, and renders a non-blank probe conversation →
  * use the embedded template ({@link EmbeddedChatTemplate}, which itself falls
@@ -64,8 +63,7 @@ public final class GgufChatTemplateResolver {
 	 * {@value #METADATA_KEY} — used to decide whether an "embedded template
 	 * ignored on this surface" notice is warranted (e.g. LoRA train / play, which
 	 * intentionally keep using named templates so train-time and inference-time
-	 * formatting stay identical; see the interaction matrix in
-	 * {@code docs/infra-plan/PLAN-Infra-Tier7.md}).
+	 * formatting stay identical).
 	 */
 	public static boolean hasEmbeddedTemplate(GgufReader reader) {
 		if (reader == null)

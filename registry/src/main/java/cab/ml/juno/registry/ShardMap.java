@@ -20,8 +20,8 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * Complete layer-to-node assignment for a loaded model. Stored in Hazelcast
- * IMap("shard-maps") keyed by modelId.
+ * Complete layer-to-node assignment for a loaded model, keyed by modelId in
+ * {@link ModelRegistry}.
  *
  * Assignments are ordered by startLayer ascending — this is the pipeline
  * execution order: coordinator sends activations to assignments.get(0), then

@@ -52,8 +52,8 @@ import java.util.Set;
  * <p><b>Explicitly not supported</b> (throws {@link MiniJinjaException} at
  * parse time so callers can fail closed to a named template): {@code set},
  * macros, includes, arbitrary filters/tests, arithmetic beyond string
- * concatenation, non-literal bracket indices. This is a deliberate scope cut
- * — see {@code docs/infra-plan/PLAN-Infra-Tier7.md} — not a defect.
+ * concatenation, non-literal bracket indices. This is a deliberate scope cut,
+ * not a defect.
  *
  * <p>Stateless and immutable after construction — a parsed instance is safe
  * to share and render concurrently.

@@ -659,7 +659,7 @@ public final class GgufReader implements AutoCloseable {
 		return out;
 	}
 
-	// Q4_K / Q5_K / Q6_K: decode via shared GgufKQuantCodec (Tier-5 Gate A).
+	// Q4_K / Q5_K / Q6_K: decode via shared GgufKQuantCodec.
 	private float[] loadQ4_K(TensorInfo info) throws IOException {
 		return loadKQuant(info, QuantizationLayout.Q4_K);
 	}

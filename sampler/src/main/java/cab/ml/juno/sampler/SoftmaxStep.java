@@ -16,7 +16,7 @@
 package cab.ml.juno.sampler;
 
 /**
- * Step 3: Softmax normalization.
+ * Softmax normalization.
  *
  * Converts logits to a probability distribution. Uses the numerically stable
  * formulation: subtract max before exp to avoid float overflow when logits are

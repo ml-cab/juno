@@ -27,6 +27,13 @@ import cab.ml.juno.node.InferencePipeline;
  * Fault-tolerant InferencePipeline that wraps one or more pipeline replicas,
  * each guarded by its own CircuitBreaker.
  *
+ * <p><b>Current state: not wired into the cluster launch path.</b> This class
+ * and {@link HealthReactor} are unit-tested, but nothing in production
+ * constructs either of them: the coordinator builds its pipeline clients
+ * directly, with no retry or circuit-breaker layer. It also models interchangeable
+ * replicas, whereas pipeline- and tensor-parallel nodes each hold a unique shard,
+ * so a lost node currently fails the request rather than failing over.
+ *
  * ── Routing
  * ─────────────────────────────────────────────────────────────────── forward()
  * scans the node list in order, skipping OPEN circuits. The first permitted

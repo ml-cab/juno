@@ -13,16 +13,12 @@
 	<artifactId>registry</artifactId>
 	<name>registry</name>
 	<description>Model Registry and Shard Loader — GGUF weight loading,
-		IMQ-inspired seed election, dynamic VRAM-aware sharding via Hazelcast</description>
+		IMQ-inspired seed scoring, VRAM-aware shard planning</description>
 
 	<dependencies>
 		<dependency>
 			<groupId>cab.ml</groupId>
 			<artifactId>api</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>com.hazelcast</groupId>
-			<artifactId>hazelcast</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>io.grpc</groupId>

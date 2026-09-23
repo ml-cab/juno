@@ -18,8 +18,10 @@ package cab.ml.juno.master;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -40,9 +42,12 @@ import cab.ml.juno.kvcache.CpuKVCache;
 import cab.ml.juno.kvcache.GpuKVCache;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.ActivationDtype;
+import cab.ml.juno.node.CpuMatVec;
 import cab.ml.juno.node.EmbeddedNodeServer;
+import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GgufReader;
 import cab.ml.juno.node.LlamaConfig;
+import cab.ml.juno.node.ShardContext;
 import cab.ml.juno.player.ClusterHarness;
 import cab.ml.juno.player.ProcessPipelineClient;
 import cab.ml.juno.sampler.Sampler;
@@ -63,6 +68,12 @@ import cab.ml.juno.tokenizer.GgufTokenizer;
  *
  * <p>Each model gets its own cluster lifecycle (start / run 8 tests / stop) so
  * failures in one model do not abort tests for the rest.
+ *
+ * <p>A model whose {@code general.architecture} has no verified handler is not run
+ * through the suite: the test asserts instead that the loader rejects it with an
+ * error naming the architecture (see {@code ForwardPassHandlerLoader}), and that a
+ * pipeline- or tensor-parallel cluster started with it fails to start with that
+ * reason.
  *
  * <p>Test scenarios per model (mirrors {@code ModelLiveRunner} main-class logic):
  * <ol>
@@ -129,6 +140,17 @@ class ModelLiveRunnerIT {
     @DisplayName("Full suite")
     void testModel(String modelPath) throws Exception {
 
+        // ── Architectures without a verified handler must be rejected, not run ──
+        String architecture;
+        try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
+            String arch = reader.metaString("general.architecture");
+            architecture = arch != null ? arch.toLowerCase().strip() : "llama";
+        }
+        if (!ForwardPassHandlerLoader.isSupportedArchitecture(architecture)) {
+            assertUnsupportedArchitectureRejected(modelPath, architecture);
+            return;
+        }
+
         // ── Read config + tokenizer ───────────────────────────────────────
         int totalLayers;
         int numHeads;
@@ -186,6 +208,43 @@ class ModelLiveRunnerIT {
     }
 
     // ── Sub-test assertions ───────────────────────────────────────────────────
+
+    /**
+     * The loader must refuse an architecture it has no verified handler for, with an
+     * error that names it, and a cluster started with such a model must fail to start
+     * with the same reason instead of coming up with stub nodes. The in-process check
+     * asserts the loader's own error (it runs before any tensor is read, so the shard
+     * geometry passed there is irrelevant); the cluster checks assert that the failure
+     * reaches the coordinator in both pipeline- and tensor-parallel mode.
+     */
+    private void assertUnsupportedArchitectureRejected(String modelPath, String architecture) throws Exception {
+        ShardContext context = new ShardContext("n0", 0, 1, true, true, 8, 8, 2);
+        IOException e = assertThrows(IOException.class,
+                () -> ForwardPassHandlerLoader.load(Path.of(modelPath), context, CpuMatVec.INSTANCE));
+        assertTrue(e.getMessage().contains("Unsupported model architecture")
+                        && e.getMessage().contains("'" + architecture + "'"),
+                "rejection must name the architecture '" + architecture + "' but was: " + e.getMessage());
+
+        LlamaConfig cfg;
+        try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
+            cfg = LlamaConfig.from(reader);
+        }
+        assertClusterStartFails(ClusterHarness.threeNodes(modelPath, cfg.numLayers()), "pipeline", architecture);
+        assertClusterStartFails(ClusterHarness.tensorNodes(modelPath, cfg.numLayers(), cfg.numHeads()), "tensor",
+                architecture);
+    }
+
+    private void assertClusterStartFails(ClusterHarness harness, String mode, String architecture) throws Exception {
+        try {
+            RuntimeException e = assertThrows(RuntimeException.class, harness::start);
+            assertTrue(e.getMessage().contains("Unsupported model architecture")
+                            && e.getMessage().contains("'" + architecture + "'"),
+                    mode + "-parallel cluster start must fail naming '" + architecture + "' but was: "
+                            + e.getMessage());
+        } finally {
+            harness.stop();
+        }
+    }
 
     private void assertHelloGreeting(GenerationLoop loop) {
         GenerationResult result = generate(loop, "hello", 20);

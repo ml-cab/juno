@@ -39,6 +39,14 @@ import io.grpc.ManagedChannelBuilder;
  * Tensor-parallel InferencePipeline that dispatches each decode step to ALL
  * nodes simultaneously and reduces (element-wise sums) the partial results.
  *
+ * <p><b>Current state.</b> The transport and the star AllReduce below are
+ * implemented and tested, but per-layer weight slicing is not: no node slices
+ * its weights by the {@code tensorRank} it is given, so every node loads and
+ * runs the full model and returns a complete (not partial) logit vector. The
+ * sum of N complete vectors is N times a single node's logits, which leaves the
+ * greedy argmax unchanged but sharpens sampling. The per-node weight slices
+ * described below are the intended design.
+ *
  * Pipeline-parallel vs tensor-parallel comparison
  * ───────────────────────────────────────────────── ProcessPipelineClient
  * (pipeline parallel — vertical / depth scaling): Activation flows node-0 →
@@ -180,6 +188,9 @@ public final class TensorParallelPipelineClient implements InferencePipeline {
 
 			futures.add(CompletableFuture.runAsync(() -> {
 				LoadShardResponse response = stubs.get(idx).blockingStub.loadShard(req);
+				if (!response.getSuccess())
+					throw new IllegalStateException(
+							"Tensor-parallel node " + idx + " did not load its shard: " + response.getMessage());
 				log.info("Tensor-parallel node " + idx + " (rank=" + shard.tensorRank() + ") shard load: "
 						+ response.getMessage());
 			}));

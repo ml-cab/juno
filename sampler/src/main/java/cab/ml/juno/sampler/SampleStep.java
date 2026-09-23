@@ -19,7 +19,7 @@ import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Step 6: Final token selection.
+ * Final token selection.
  *
  * Two modes: greedy — argmax: always picks the highest probability token sample
  * — weighted random draw over the probability distribution
@@ -53,7 +53,7 @@ public final class SampleStep {
 	 *            {@link ThreadLocalRandom}
 	 */
 	public int sample(float[] probs, SamplingParams params, Random rng) {
-		return params.greedy() ? greedy(probs) : weightedSample(probs, rng);
+		return params.effectivelyGreedy() ? greedy(probs) : weightedSample(probs, rng);
 	}
 
 	private int greedy(float[] probs) {

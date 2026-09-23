@@ -69,8 +69,8 @@ public final class LoraPlaybackMerge {
 	/**
 	 * Merge {@code sets} into one playback-ready {@link LoraAdapterSet}. The
 	 * single-set, scale-1.0 case returns the original set unchanged (no format
-	 * perturbation) so the pre-Tier-10 {@code --lora-play file.lora} path stays
-	 * byte-for-byte back-compatible.
+	 * perturbation) so the original single-file {@code --lora-play file.lora}
+	 * path stays byte-for-byte back-compatible.
 	 */
 	public static LoraAdapterSet merge(List<ScaledAdapterSet> sets) {
 		if (sets == null || sets.isEmpty())
@@ -82,11 +82,11 @@ public final class LoraPlaybackMerge {
 			if (!s.adapters().allQa().isEmpty())
 				throw new IllegalArgumentException(
 						"multi-adapter / scaled --lora-play does not support QA-LoRA adapters yet (" + s.sourceLabel()
-								+ "); use a single adapter file at scale 1.0, or see PLAN-Infra-Tier10.md");
+								+ "); use a single adapter file at scale 1.0");
 			if (!s.adapters().magnitudes().isEmpty())
 				throw new IllegalArgumentException(
 						"multi-adapter / scaled --lora-play does not support DoRA adapters yet (" + s.sourceLabel()
-								+ "); use a single adapter file at scale 1.0, or see PLAN-Infra-Tier10.md");
+								+ "); use a single adapter file at scale 1.0");
 		}
 
 		Map<String, List<Weighted>> byKey = new LinkedHashMap<>();

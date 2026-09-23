@@ -62,7 +62,7 @@ public final class LoraAdapterConfig {
 		return new LoraAdapterConfig(rank, alpha, scaling, initialization, mode);
 	}
 
-	/** Classic LoRA with legacy {@code N(0, 0.01)} A init (pre-Tier-3 default). */
+	/** Classic LoRA with legacy {@code N(0, 0.01)} A init (the original default). */
 	public static LoraAdapterConfig legacy(int rank, float alpha) {
 		return of(rank, alpha, LoraScaling.STANDARD, LoraInitialization.LEGACY_NORMAL, LoraMode.LORA);
 	}

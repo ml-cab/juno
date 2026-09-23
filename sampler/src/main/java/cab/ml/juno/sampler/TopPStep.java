@@ -18,7 +18,7 @@ package cab.ml.juno.sampler;
 import java.util.Arrays;
 
 /**
- * Step 4: Top-P (nucleus) sampling.
+ * Top-P (nucleus) sampling.
  *
  * Keeps the smallest set of tokens whose cumulative probability exceeds topP.
  * Must be applied AFTER softmax (operates on probabilities, not logits).
@@ -26,7 +26,7 @@ import java.util.Arrays;
  * Example: topP=0.9 keeps the most probable tokens that together account for
  * 90% of the probability mass.
  *
- * Skipped if params.topP() >= 1.0 (disabled) or greedy=true.
+ * Skipped if params.topP() >= 1.0 (disabled) or decoding is greedy (including temperature 0).
  */
 public final class TopPStep implements SamplingStep {
 
@@ -37,7 +37,7 @@ public final class TopPStep implements SamplingStep {
 
 	@Override
 	public float[] apply(float[] logits, SamplingParams params, int[] generatedTokens) {
-		if (params.greedy())
+		if (params.effectivelyGreedy())
 			return logits;
 
 		float p = params.topP();

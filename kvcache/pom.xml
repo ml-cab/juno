@@ -12,17 +12,13 @@
 
 	<artifactId>kvcache</artifactId>
 	<name>kvcache</name>
-	<description>KV Cache Manager — three-tier GPU/CPU/Disk storage, prefix Trie
-		cache, configurable eviction, Hazelcast metadata index</description>
+	<description>KV Cache Manager — two-tier GPU/CPU storage, prefix trie cache,
+		configurable eviction</description>
 
 	<dependencies>
 		<dependency>
 			<groupId>cab.ml</groupId>
 			<artifactId>api</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>com.hazelcast</groupId>
-			<artifactId>hazelcast</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>com.github.ben-manes.caffeine</groupId>

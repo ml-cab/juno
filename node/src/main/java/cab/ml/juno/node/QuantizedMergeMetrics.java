@@ -16,7 +16,7 @@
 package cab.ml.juno.node;
 
 /**
- * Reconstruction / projected-merge metrics for Tier-5 quantized merge paths.
+ * Reconstruction / projected-merge metrics for quantized merge paths.
  *
  * <p>All fields are finite. Saturation is the fraction of elements that hit the
  * extreme representable code after encode (caller-supplied count).

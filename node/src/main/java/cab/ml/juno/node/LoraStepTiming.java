@@ -16,7 +16,7 @@
 package cab.ml.juno.node;
 
 /**
- * Tier-4/9 wall-time subsets for one chunk gradient computation (milliseconds).
+ * Finer wall-time subsets for one chunk gradient computation (milliseconds).
  *
  * <p>Copied onto {@link LoraTrainEvent} after accumulation. Values may be zero on
  * CPU-only runs that skip finer instrumentation.

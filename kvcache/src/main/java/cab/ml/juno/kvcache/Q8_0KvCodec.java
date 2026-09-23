@@ -103,7 +103,7 @@ public final class Q8_0KvCodec {
 		return max;
 	}
 
-	/** Persistent size ratio float32 / q8_0 (≥ 2 for the Tier 6 exit gate). */
+	/** Persistent size ratio float32 / q8_0 (about 3.8 for whole 32-value blocks). */
 	public static double compressionRatioVsF32(int nFloats) {
 		if (nFloats <= 0)
 			throw new IllegalArgumentException("nFloats must be > 0");

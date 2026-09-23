@@ -13,7 +13,8 @@ Module dependency (excerpt):
         handlers dual-path via SessionKvLayout; manager may hold a shared
         PagedKvArena; adapter flushes dense or paged blobs; gather-tax gate
         PASS — see docs/performance.md / perf-compare/*-gather-tax.md).
-  lora — LoRA adapter tensors, .lora checkpoint format, Adam (no GGUF, no CUDA).
+  lora — LoRA adapter tensors, .lora checkpoint format, AdamW with LoRA+ learning-rate
+        groups (no GGUF, no CUDA).
         LoraPlaySpec parses --lora-play's "path[:scale][,path[:scale]]" syntax
         (bare path = scale 1.0, back-compat) and loads+merges via
         LoraPlaybackMerge, which rank-concatenates multiple ScaledAdapterSets
@@ -120,6 +121,55 @@ Module dependency (excerpt):
         health, registry, api
   juno-node — NodeMain standalone executable
   juno-bom — Maven BOM (dependencyManagement for cab.ml artifacts)
+
+Architecture dispatch (node module): ForwardPassHandlerLoader reads general.architecture.
+  phi2, phi3, qwen3 and qwen3moe have dedicated handlers. llama, mistral, tinyllama, qwen2
+  and qwen2.5 run on LlamaTransformerHandler; LlamaFamilyArchitectures is that allowlist.
+  Any other value (for example gemma4, qwen35, mistral3, minimax-m2) is rejected at load with
+  an IOException that names the architecture, instead of falling through to a handler whose
+  tensor layout and computation it does not match. In cluster mode a node whose real-model
+  load fails (unsupported architecture, unsupported quantization, missing tensor, missing
+  file) answers LoadShard with success=false and its reason, then refuses forward passes
+  (UnloadedShardHandler); it never falls back to stub output. ProcessPipelineClient and
+  TensorParallelPipelineClient fail loadShards() on any node that reports failure, and
+  ClusterHarness.start() stops the forked node JVMs before rethrowing. Only a node started
+  without a model path (stub mode, used by tests) serves fixed stub output.
+
+Membership: fixed at cluster launch. ModelRegistry is in-memory (two ConcurrentHashMaps).
+  There is no dynamic-membership or distributed-registry service: an earlier design for a
+  Hazelcast-backed RegistryService and Hazelcast leader election was never built and has
+  been removed (the proto RPCs and the dependency).
+
+Prefix cache and KV ownership: prefix reuse is session-scoped. A PrefixCache trie entry names
+  KV that must still exist in the pipeline when the entry is hit, so it is written only for
+  session requests (whose KV is kept under the session id). GenerationLoop.generate() and
+  ContinuousBatchEngine act on a trie hit only for requests that carry a session id.
+  GenerationLoop.generateBatch() (static multi-request batching) keys each request's KV by
+  its own request id and evicts it on completion, so it never reads or writes the trie and
+  prefills every prompt in full.
+
+Tensor parallelism (current state): the gRPC transport, the coordinator-side star AllReduce
+  (TensorParallelPipelineClient: broadcast the tokens to every node, element-wise sum of the
+  returned float arrays), the shard-assignment data model (TensorShardAssignment) and the
+  geometry record TensorShardContext (heads and feed-forward slice width per rank) are built
+  and tested. Per-layer weight slicing is not built: no transformer handler reads
+  TensorShardContext and the rank a node is given is not used to slice weights, so every node
+  loads and runs the full model and returns a complete logit vector. The coordinator then sums
+  N complete vectors: N times the memory and compute of a single node, no speedup, and summed
+  logits that are N times a single node's (greedy argmax is unchanged; sampling is sharper).
+  TensorParallelClusterIT exercises the transport and AllReduce with a fixed-logit stub
+  handler rather than a real model. Real column-/row-parallel slicing of the attention and
+  feed-forward projections with a per-layer AllReduce is planned for a future
+  tensor-parallelism milestone.
+
+Fault tolerance (current state): FaultTolerantPipeline (per-node circuit breakers plus a retry
+  policy over replica InferencePipelines) and HealthReactor (health events force-open or
+  reset circuits) are built and unit-tested, but nothing in production constructs either.
+  CoordinatorMain and ConsoleMain build ProcessPipelineClient / TensorParallelPipelineClient
+  directly with no retry or circuit-breaker layer. Pipeline- and tensor-parallel nodes each
+  hold a unique, non-interchangeable shard, so the replica-routing model does not apply to
+  them as it stands: a lost node in `./juno cluster` currently fails the request with no
+  failover. Failure handling for sharded topologies is planned for a future cluster milestone.
 
 GPU FFI (node module — Panama project, JEP 454):
   GpuBindings — vendor-neutral interface implemented by CudaBindings and RocmBindings.

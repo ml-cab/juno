@@ -32,6 +32,15 @@ class SamplingParamsTest {
 	}
 
 	@Test
+	void effectively_greedy_when_the_flag_is_set_or_the_temperature_is_zero() {
+		assertThat(SamplingParams.defaults().effectivelyGreedy()).isFalse();
+		assertThat(SamplingParams.defaults().withGreedy(true).effectivelyGreedy()).isTrue();
+		assertThat(SamplingParams.defaults().withTemperature(0f).effectivelyGreedy()).isTrue();
+		assertThat(SamplingParams.defaults().withTemperature(1e-7f).effectivelyGreedy()).isTrue();
+		assertThat(SamplingParams.defaults().withTemperature(0.01f).effectivelyGreedy()).isFalse();
+	}
+
+	@Test
 	void creative_profile_has_high_temperature() {
 		SamplingParams p = SamplingParams.creative();
 		assertThat(p.temperature()).isGreaterThan(1.0f);

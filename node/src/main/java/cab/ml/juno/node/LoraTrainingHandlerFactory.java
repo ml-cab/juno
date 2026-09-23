@@ -26,7 +26,7 @@ import cab.ml.juno.lora.LoraAdapterSet;
 /**
  * Selects a {@link LoraTrainingHandler} by GGUF {@code general.architecture}.
  *
- * <p>Explicit allowlist (Tier 6):
+ * <p>Explicit allowlist:
  * <ul>
  * <li>{@code llama}, {@code mistral}, {@code tinyllama} → {@link LoraTrainableHandler}
  * <li>{@code qwen2}, {@code qwen2.5} → {@link Qwen2LoraTrainableHandler}
@@ -54,7 +54,7 @@ public final class LoraTrainingHandlerFactory {
 	}
 
 	/**
-	 * Throws if architecture is not on the Tier 6 LoRA allowlist.
+	 * Throws if architecture is not on the LoRA allowlist.
 	 */
 	public static void requireSupported(String architecture) {
 		String a = normalize(architecture);

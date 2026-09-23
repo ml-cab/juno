@@ -38,9 +38,10 @@ import cab.ml.juno.health.NodeHealth;
  * RequestScheduler is shut down to stop accepting new requests until at least
  * one node recovers.
  *
- * ── Wiring in production
- * ────────────────────────────────────────────────────── Hazelcast
- * EntryAddedListener on IMap("node-health") calls:
+ * ── Wiring
+ * ────────────────────────────────────────────────────── Not constructed by
+ * the production launch path yet (see {@link FaultTolerantPipeline}). A
+ * health-probe source would call:
  *
  * healthReactor.onHealthProbe(newHealth);
  *
@@ -85,8 +86,8 @@ public final class HealthReactor {
 	/**
 	 * Accept a fresh health probe from a node and react to any state transitions.
 	 *
-	 * Called by the Hazelcast IMap listener in production; called directly in
-	 * tests. Safe for concurrent calls from multiple Hazelcast listener threads.
+	 * Called directly by tests; nothing in production drives it yet. Safe for
+	 * concurrent calls from multiple threads.
 	 *
 	 * @param probe fresh NodeHealth snapshot
 	 */
@@ -98,8 +99,8 @@ public final class HealthReactor {
 	}
 
 	/**
-	 * Notify the reactor that a node has left the cluster entirely (e.g. Hazelcast
-	 * memberRemoved event). Equivalent to a permanent stale — force-opens the
+	 * Notify the reactor that a node has left the cluster entirely (e.g. its
+	 * process exited). Equivalent to a permanent stale — force-opens the
 	 * circuit and removes state from the evaluator.
 	 */
 	public void onNodeRemoved(String nodeId) {

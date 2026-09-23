@@ -60,8 +60,6 @@
 		<java.version>25</java.version>
 		<maven.compiler.release>25</maven.compiler.release>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-		<!-- Hazelcast -->
-		<hazelcast.version>5.4.0</hazelcast.version>
 		<!-- gRPC / Protobuf -->
 		<grpc.version>1.68.0</grpc.version>
 		<protobuf.version>3.25.3</protobuf.version>
@@ -170,12 +168,6 @@
 				<groupId>cab.ml</groupId>
 				<artifactId>juno-master</artifactId>
 				<version>${project.version}</version>
-			</dependency>
-			<!-- Hazelcast -->
-			<dependency>
-				<groupId>com.hazelcast</groupId>
-				<artifactId>hazelcast</artifactId>
-				<version>${hazelcast.version}</version>
 			</dependency>
 			<!-- gRPC -->
 			<dependency>

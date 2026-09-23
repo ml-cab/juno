@@ -99,7 +99,7 @@ public final class GenerationLoop {
 	 * @param specOptions      ngram speculative decoding config; {@link SpeculativeDecodeOptions#disabled()}
 	 *                         (i.e. {@code --spec-type none}) matches the pre-speculation decode path exactly.
 	 *                         Only {@link #generate} (single-request path) honors this — {@link #generateBatch}
-	 *                         does not draft/verify yet (named follow-up, see PLAN-Infra-Tier9.md).
+	 *                         does not draft/verify yet (a named follow-up).
 	 */
 	public GenerationLoop(Tokenizer tokenizer, Sampler sampler, InferencePipeline pipeline, KVCacheManager kvCache,
 			PrefillMode prefillMode, int prefillBatchSize, SpeculativeDecodeOptions specOptions) {
@@ -176,10 +176,11 @@ public final class GenerationLoop {
 	 * One forwardBatch() call per decode step serves all active requests — the GPU
 	 * sees a full batch matrix instead of N scalar passes.
 	 *
-	 * Algorithm (static batching): 1. Encode all prompts and resolve prefix-cache
-	 * startPos per request. 2. Each step: collect still-active requests, call
-	 * forwardBatch() once, sample independently per request, stream tokens, mark
-	 * finished. 3. Loop until every request has hit EOS or its own maxTokens.
+	 * Algorithm (static batching): 1. Encode all prompts and prefill each one in
+	 * full (this path never reuses cached prefix KV). 2. Each step: collect
+	 * still-active requests, call forwardBatch() once, sample independently per
+	 * request, stream tokens, mark finished. 3. Loop until every request has hit
+	 * EOS or its own maxTokens.
 	 *
 	 * Requests finish independently — a short maxTokens request exits early without
 	 * stalling others. Streaming consumers receive tokens in real time, step by
@@ -232,8 +233,13 @@ public final class GenerationLoop {
 			String prompt = formatter.format(req.messages());
 			int[] promptIds = tokenizer.encode(prompt);
 
-			var prefixMatch = kvCache.findLongestPrefix(promptIds);
-			startPos[i] = prefixMatch.isHit() ? prefixMatch.matchedTokens() : 0;
+			// No prefix-cache lookup on this path. Each batched request's pipeline KV is
+			// keyed by its own request id and evicted when it finishes, so a trie hit
+			// would always point at KV that was written under a different key (another
+			// request, or a session) or has since been evicted. Skipping prefill against
+			// it would continue from positions this request never wrote. Prefix reuse is
+			// session-scoped and served by generate() and the continuous engine only.
+			startPos[i] = 0;
 
 			allTokens[i] = promptIds.clone();
 			promptLens[i] = promptIds.length;
@@ -249,12 +255,10 @@ public final class GenerationLoop {
 			active[i] = true;
 		}
 
-		// ── Step 1b: Prefill — populate KV cache for all uncached prompt tokens ─
-		// Each request gets its own prefill: positions startPos[i]..promptLen[i]-2
+		// ── Step 1b: Prefill — populate KV cache for every prompt token ─────────
+		// Each request gets its own full prefill: positions 0..promptLen[i]-2
 		// so the KV cache is warm before the decode loop starts.
-		boolean[] hadCacheHit = new boolean[n]; // remember original hit status for later
 		for (int i = 0; i < n; i++) {
-			hadCacheHit[i] = (startPos[i] > 0);
 			int[] promptIds = Arrays.copyOfRange(allTokens[i], 0, promptLens[i]);
 			int windowSize = promptLens[i] - 1 - startPos[i];
 			if (windowSize > 0) {
@@ -359,12 +363,9 @@ public final class GenerationLoop {
 			else if (flushedStop.stop())
 				reasons[i] = GenerationResult.StopReason.STOP_TOKEN;
 
-			// Cache prompt prefix for future requests
-			if (!hadCacheHit[i] && promptLens[i] > 0) {
-				int[] promptOnly = new int[promptLens[i]];
-				System.arraycopy(allTokens[i], 0, promptOnly, 0, promptLens[i]);
-				kvCache.cachePrefix(promptOnly, promptOnly.length, requestIds[i] + ":prefix");
-			}
+			// No cachePrefix call: the KV released just below is the only KV this request
+			// ever owned, so any trie entry registered for it would dangle immediately and
+			// later be matched by an unrelated request that then skips prefill.
 			kvCache.evict(requestIds[i]);
 			pipeline.evict(requestIds[i]);
 

@@ -74,6 +74,19 @@ public record SamplingParams(float temperature, int topK, float topP, float repe
 		return new SamplingParams(1.2f, 100, 0.95f, 1.1f, 0.0f, false, 512, new int[0], new String[0], null, null);
 	}
 
+	/** Temperatures below this are treated as zero: deterministic decoding. */
+	public static final float ZERO_TEMPERATURE = 1e-6f;
+
+	/**
+	 * Whether decoding is deterministic: the explicit {@code greedy} flag, or a
+	 * temperature of zero. Temperature 0 is documented as deterministic, and the
+	 * REST surfaces only set the temperature, never the flag, so the sampling steps
+	 * consult this rather than {@link #greedy()} alone.
+	 */
+	public boolean effectivelyGreedy() {
+		return greedy || temperature < ZERO_TEMPERATURE;
+	}
+
 	public SamplingParams withTemperature(float temperature) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
 				stopTokenIds, stopStrings, seed, grammar);

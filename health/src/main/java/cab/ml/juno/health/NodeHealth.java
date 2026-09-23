@@ -21,8 +21,7 @@ import java.time.Instant;
 
 /**
  * Immutable health snapshot for a single inference node. Published by each
- * node's health reporter every 5s. Stored in Hazelcast IMap("node-health")
- * keyed by nodeId.
+ * node's health reporter every 5s and evaluated per nodeId.
  *
  * <p>
  * {@code nodeRole} is either {@code "coordinator"} or {@code "node"} and

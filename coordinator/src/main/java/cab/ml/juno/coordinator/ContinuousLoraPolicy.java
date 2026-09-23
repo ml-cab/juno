@@ -25,8 +25,8 @@ import cab.ml.juno.kvcache.ServeScheduleOptions;
  * pipeline on any schedule yet — selecting or re-scaling adapters per
  * request would need threading a per-request adapter selection through
  * {@code InferenceRequest} / {@code GenerationLoop} / the forward-pass
- * handlers, which Tier 10 scoped as a named follow-up rather than
- * implementing. Per ROADMAP Execution rule §6 ("no silent ignore"), a
+ * handlers, which has not been implemented. Per ROADMAP Execution rule §6
+ * ("no silent ignore"), a
  * request that sets {@code x_juno_loras} fails closed on every schedule
  * (this used to only fail under {@code continuous}; static silently ignored
  * it, which is the gap this generalization closes) rather than accepting it

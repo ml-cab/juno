@@ -44,7 +44,7 @@ final class CudaDriverBindings {
 	final MethodHandle cuModuleGetFunction;
 	final MethodHandle cuModuleUnload;
 	final MethodHandle cuLaunchKernel;
-	// CUDA graph capture/replay (Tier 19 Phase B — see CudaGraphSession).
+	// CUDA graph capture/replay (see CudaGraphSession).
 	final MethodHandle cuStreamBeginCapture;
 	final MethodHandle cuStreamEndCapture;
 	final MethodHandle cuGraphInstantiate;

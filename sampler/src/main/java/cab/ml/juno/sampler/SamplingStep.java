@@ -17,8 +17,8 @@ package cab.ml.juno.sampler;
 
 /**
  * A single step in the sampling pipeline. Stateless and thread-safe — takes
- * logits in, returns modified logits. Steps are chained: temperature → topK →
- * topP → softmax → penalty → sample
+ * logits in, returns modified logits. {@link Sampler} chains the steps and is the
+ * only authoritative description of their order.
  */
 @FunctionalInterface
 public interface SamplingStep {

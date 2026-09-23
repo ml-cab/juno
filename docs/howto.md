@@ -56,7 +56,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--gpu-attention on\|off\|auto` | `auto` | cluster, local | GPU-resident attention kernel (`JUNO_GPU_ATTENTION`) — moves QK^T + softmax + weighted-V-sum onto a device-resident FP16 KV mirror instead of scalar CPU Java. CUDA only. A **measured decode/prefill throughput lever** (see `docs/performance.md`), not a peer-latency claim. Applies to Llama-family, Mistral, and Qwen2 dense text inference (`LlamaTransformerHandler`), and to vision automatically (delegates to the same handler). Phi-2, Phi-3, Qwen3, and Qwen3-MoE keep the scalar CPU path (**follow-up**) — `auto` correctly resolves to off there. LoRA **training** and `--lora-play` ignore `--gpu-attention` (attention stays scalar CPU; the train REPL warns). Occasional multi-token greedy-decode divergence from FP16 KV rounding is expected and documented, same class of tradeoff as other reduced-precision paths in this codebase; pass `off` for a bit-identical CPU-parity baseline. |
 | `--cache-type-k f16\|q8_0` | `f16` | cluster, local, lora | K-cache element type (`JUNO_CACHE_TYPE_K`). `f16` is the current float32 path (bit-compatible default). `q8_0` packs keys (~3.8× smaller persistent KV vs float); attention dequants to float. Slight quality tradeoff vs `f16`. On `juno lora` **training**, teacher-forced forward keeps ephemeral float KV (startup WARNING); q8 applies to inference / `--lora-play` maps. |
 | `--cache-type-v f16\|q8_0` | `f16` | cluster, local, lora | V-cache element type (`JUNO_CACHE_TYPE_V`). Same semantics as `--cache-type-k`. |
-| `--schedule static\|continuous` | `static` | cluster, local, lora | Serving schedule (`JUNO_SCHEDULE`). `static` = dense KV + static micro-batch (SSE isolated). `continuous` = paged KV + running-set batching (SSE shares steps) on **local / in-process only**. Under continuous, long prompts advance in `--prefill-batch` ubatch chunks mixed into the same engine steps as other requests’ decode; when the step slot budget is full, **decode is preferred** so short replies are not starved. Cluster, TP, and PP launchers **auto-fallback to static** with a startup WARNING. On `juno lora` **training**, continuous is an explicit no-op (ephemeral float KV + REPL WARNING; no running-set engine). Per-request `x_juno_loras` is not wired on any schedule yet and is rejected on both `static` and `continuous` (use process-wide `--lora-play`, which now supports multiple adapters and per-file scales). Prefix KV reuse is **session-scoped** (`x_juno_session_id`); shared system prompts across different sessions do not skip prefill. Tools / LoRA play that change the tokenized prefix invalidate cross-turn hits. `--parallel` caps the continuous running set (default cap 8 when parallel is 1). |
+| `--schedule static\|continuous` | `static` | cluster, local, lora | Serving schedule (`JUNO_SCHEDULE`). `static` = dense KV + static micro-batch (SSE isolated). `continuous` = paged KV + running-set batching (SSE shares steps) on **local / in-process only**. Under continuous, long prompts advance in `--prefill-batch` ubatch chunks mixed into the same engine steps as other requests’ decode; when the step slot budget is full, **decode is preferred** so short replies are not starved. Cluster, TP, and PP launchers **auto-fallback to static** with a startup WARNING. On `juno lora` **training**, continuous is an explicit no-op (ephemeral float KV + REPL WARNING; no running-set engine). Per-request `x_juno_loras` is not wired on any schedule yet and is rejected on both `static` and `continuous` (use process-wide `--lora-play`, which now supports multiple adapters and per-file scales). Prefix KV reuse is **session-scoped** (`x_juno_session_id`); shared system prompts across different sessions do not skip prefill. Under `static` with `--parallel` above 1, a request that is collected into a batch of two or more always prefills its whole prompt (session KV reuse applies to requests dispatched on their own and to the `continuous` schedule). Tools / LoRA play that change the tokenized prefix invalidate cross-turn hits. `--parallel` caps the continuous running set (default cap 8 when parallel is 1). |
 | `--kv-page-size N` | `16` | cluster, local, lora | Tokens per KV page when `schedule=continuous` (`JUNO_KV_PAGE_SIZE`). Ignored under `static` (dense; startup note). |
 | `--parallel N` | `1` | cluster, local, master | Static micro-batch size (`JUNO_PARALLEL`). `1` disables batching; recommend `8` for API servers. |
 | `--batch-window-ms M` | `50` when parallel>1 | cluster, local, master | Batch collect window (`JUNO_BATCH_WINDOW_MS`). |
@@ -78,7 +78,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--lora-path PATH` | `<model>.lora` | Adapter checkpoint (auto-loaded if exists) |
 | `--lora-rank N` | `8` | Low-rank bottleneck dimension |
 | `--lora-alpha F` | `= rank` | Scaling factor α (effective scale = α/rank) |
-| `--lora-lr F` | `1e-4` | Adam learning rate |
+| `--lora-lr F` | `1e-4` | AdamW learning rate |
 | `--lora-steps N` | `50` | Gradient steps per `/train` |
 | `--lora-steps-qa N` | `10` | Gradient steps per `/train-qa` Q&A pair |
 | `--lora-early-stop F` | `0.25` | Stop chunk early when loss delta < F |
@@ -471,7 +471,7 @@ curl http://localhost:8080/v1/models
 | `messages[].content` | `ChatMessage.content` | Text only; image content not supported. Assistant `content` may be null when `tool_calls` is set. |
 | `messages[].tool_calls` | replayed into the prompt | Prior assistant function calls (`<tool_call>` blocks) |
 | `messages[].tool_call_id` | — | Accepted on `role=tool` (result text is wrapped as `<tool_response>`) |
-| `temperature` | `SamplingParams.temperature` | 0.0–2.0; default 0.7 |
+| `temperature` | `SamplingParams.temperature` | 0.0–2.0; default 0.7. `0` selects greedy decoding (deterministic), on every surface |
 | `top_p` | `SamplingParams.topP` | 0.0–1.0; default 0.9 |
 | `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 200 |
 | `max_tokens` | `SamplingParams.maxTokens` | Deprecated alias; `max_completion_tokens` takes precedence |
@@ -936,14 +936,14 @@ Requires JDK 25+ and Maven 3.9+.
 ```bash
 mvn clean package -DskipTests          # build — juno-player emits thin jar + *-shaded.jar runnable
 
-mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
+mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player
                                        # unit tests — no model file, no GPU needed
 
 mvn verify -pl juno-master             # integration tests — forks 3 JVM nodes (stub mode)
                                        # includes ThreeNodeClusterIT and TensorParallelClusterIT
 
-mvn verify -pl juno-master -Pintegration -Dmodels=/path/to/models
-                                       # ModelLiveRunnerIT — requires real model files
+mvn verify -pl juno-master -Pintegration -DMODELS=/abs/a.gguf,/abs/b.gguf
+                                       # ModelLiveRunnerIT — requires real model files (comma-separated absolute paths)
 
 ./juno test --model-path /path/to/model.gguf   # real-model smoke test (8 checks, exits 0/1)
 ```
@@ -952,11 +952,11 @@ mvn verify -pl juno-master -Pintegration -Dmodels=/path/to/models
 ```bat
 mvn clean package -DskipTests
 
-mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player
+mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player
 
 mvn verify -pl juno-master
 
-mvn verify -pl juno-master -Pintegration -Dmodels=C:\models
+mvn verify -pl juno-master -Pintegration -DMODELS=C:\models\a.gguf,C:\models\b.gguf
 
 juno.bat test --model-path models\model.gguf
 ```

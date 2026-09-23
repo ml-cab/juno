@@ -19,8 +19,8 @@ import java.io.Serializable;
 import java.time.Instant;
 
 /**
- * Immutable metadata snapshot of a model registered in the cluster. Stored in
- * Hazelcast IMap("model-registry") keyed by modelId.
+ * Immutable metadata snapshot of a model registered in the cluster, keyed by
+ * modelId in {@link ModelRegistry}.
  *
  * vramPerLayerBytes is derived from model architecture + quantization at
  * construction time — no weight file access needed for shard planning.

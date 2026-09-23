@@ -20,10 +20,10 @@ import java.time.Instant;
 
 /**
  * Immutable snapshot of an inference node's identity, resources and health.
- * Stored in Hazelcast IMap("node-registry") — must be Serializable.
+ * Serializable so it can be carried between processes.
  *
- * Nodes self-register on startup by writing their descriptor into the IMap.
- * Updated periodically by the health monitor (vram, temperature, status).
+ * Describes a node to the shard planner (vram, status). Refreshed by whoever
+ * owns node state (vram, temperature, status).
  */
 public record NodeDescriptor(String nodeId, // unique node identifier e.g. "node-192.168.1.10-0"
 		String host, // hostname or IP

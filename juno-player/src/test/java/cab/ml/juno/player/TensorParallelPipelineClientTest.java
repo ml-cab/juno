@@ -1,6 +1,7 @@
 package cab.ml.juno.player;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -59,8 +60,16 @@ class TensorParallelPipelineClientTest {
         private final int   winnerToken;
         private final float winnerValue;
         private final long  delayMs;
+        private final boolean loadSucceeds;
 
         TensorNodeStub(int port, int winnerToken, float winnerValue, long delayMs) throws Exception {
+            this(port, winnerToken, winnerValue, delayMs, true);
+        }
+
+        /** @param loadSucceeds whether this node reports success=true for LoadShard */
+        TensorNodeStub(int port, int winnerToken, float winnerValue, long delayMs, boolean loadSucceeds)
+                throws Exception {
+            this.loadSucceeds = loadSucceeds;
             this.port        = port;
             this.winnerToken = winnerToken;
             this.winnerValue = winnerValue;
@@ -99,9 +108,11 @@ class TensorParallelPipelineClientTest {
                                 StreamObserver<LoadShardResponse> responseObserver) {
                             loadRequests.add(request);
                             responseObserver.onNext(LoadShardResponse.newBuilder()
-                                    .setSuccess(true)
-                                    .setMessage("ok rank=" + request.getTensorRank()
-                                                + " worldSize=" + request.getTensorWorldSize())
+                                    .setSuccess(loadSucceeds)
+                                    .setMessage(loadSucceeds
+                                            ? "ok rank=" + request.getTensorRank()
+                                                + " worldSize=" + request.getTensorWorldSize()
+                                            : "Model load failed: Unsupported model architecture 'gemma4'")
                                     .build());
                             responseObserver.onCompleted();
                         }
@@ -229,6 +240,34 @@ class TensorParallelPipelineClientTest {
                 assertThat(stub.loadRequests.get(0).getHasEmbeddings()).isTrue();
                 assertThat(stub.loadRequests.get(0).getHasOutputProjection()).isTrue();
             }
+
+            client.shutdown();
+        } finally {
+            n0.shutdown(); n1.shutdown(); n2.shutdown();
+        }
+    }
+
+    @Test
+    @DisplayName("loadShards() fails when a node reports that its load failed")
+    void loadShards_fails_when_a_node_reports_a_failed_load() throws Exception {
+        TensorNodeStub n0 = new TensorNodeStub(BASE_PORT + 30, 0, 0f, 0);
+        TensorNodeStub n1 = new TensorNodeStub(BASE_PORT + 31, 0, 0f, 0, false);
+        TensorNodeStub n2 = new TensorNodeStub(BASE_PORT + 32, 0, 0f, 0);
+
+        try {
+            TensorParallelPipelineClient client = new TensorParallelPipelineClient(
+                    List.of(
+                            new TensorParallelPipelineClient.NodeAddress("localhost", BASE_PORT + 30),
+                            new TensorParallelPipelineClient.NodeAddress("localhost", BASE_PORT + 31),
+                            new TensorParallelPipelineClient.NodeAddress("localhost", BASE_PORT + 32)),
+                    VOCAB_SIZE);
+
+            assertThatThrownBy(() -> client.loadShards(List.of(
+                    new TensorParallelPipelineClient.TensorShardConfig(0, 22, true, true, 0, 3),
+                    new TensorParallelPipelineClient.TensorShardConfig(0, 22, true, true, 1, 3),
+                    new TensorParallelPipelineClient.TensorShardConfig(0, 22, true, true, 2, 3))))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("Unsupported model architecture 'gemma4'");
 
             client.shutdown();
         } finally {

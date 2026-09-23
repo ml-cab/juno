@@ -442,13 +442,21 @@ public final class GbnfGrammar {
 				rules.set(id, compileRule(new Expr.Alt(List.of(new Expr.Seq(List.of(inner, self)), inner))));
 				return id;
 			}
+			// {min,max} is compiled by unrolling: min mandatory copies of the inner
+			// expression, then up to max-min chained optional copies, so the compiled
+			// grammar grows linearly with the bound (and multiplies under nesting). The
+			// cap on the optional tail is a size guard, not a language restriction: 8 is a
+			// conservative choice rather than a measured limit, and min itself is not
+			// capped. A rule-based encoding of counted repetition would remove the need
+			// for it.
 			List<Expr> seq = new ArrayList<>();
 			for (int i = 0; i < min; i++)
 				seq.add(inner);
 			for (int i = min; i < Math.min(max, min + 8); i++)
 				seq.add(new Expr.Rep(inner, 0, 1));
 			if (max > min + 8)
-				throw new IllegalArgumentException("bounded repetition max too large: " + max);
+				throw new IllegalArgumentException("bounded repetition {" + min + "," + max
+						+ "} is too wide: max must not exceed min + 8");
 			return addAnon(new Expr.Seq(seq));
 		}
 

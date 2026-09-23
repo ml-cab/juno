@@ -175,7 +175,8 @@ public final class ClusterHarness implements AutoCloseable {
 	 * Constraint: numHeads must be even (divisible by 2). Uneven distribution
 	 * across the 3 nodes is handled by ceiling-division in TensorShardContext. All
 	 * 3 nodes receive startLayer=0, endLayer=totalLayers, hasEmbeddings=true,
-	 * hasOutputProjection=true. The node uses its tensorRank to slice weights.
+	 * hasOutputProjection=true. The rank is passed to each node but is not yet used
+	 * to slice weights: every node currently loads and runs the full model.
 	 *
 	 * @param modelPath   path to a GGUF/llamafile, or null for stub mode
 	 * @param totalLayers transformer layer count
@@ -199,20 +200,33 @@ public final class ClusterHarness implements AutoCloseable {
 	// ── Lifecycle ─────────────────────────────────────────────────────────────
 
 	/**
-	 * Fork all three node JVMs and wait until each reports READY.
+	 * Fork all three node JVMs, wait until each reports READY, and load its shard.
+	 * If any step fails (a node does not start, or reports that its shard could not
+	 * be loaded), the forked JVMs are stopped before the failure is rethrown, so a
+	 * failed start never leaves nodes running.
 	 */
 	public void start() throws IOException, InterruptedException {
-		for (NodeSpec spec : specs) {
-			Process proc = launchNode(spec.nodeId(), spec.port());
-			processes.add(proc);
-			waitForReady(proc, spec.nodeId());
-			log.info("Node [" + spec.nodeId() + "] is up on port " + spec.port());
-		}
+		try {
+			for (NodeSpec spec : specs) {
+				Process proc = launchNode(spec.nodeId(), spec.port());
+				processes.add(proc);
+				waitForReady(proc, spec.nodeId());
+				log.info("Node [" + spec.nodeId() + "] is up on port " + spec.port());
+			}
 
-		if (parallelismType == ParallelismType.TENSOR) {
-			startTensorParallel();
-		} else {
-			startPipelineParallel();
+			if (parallelismType == ParallelismType.TENSOR) {
+				startTensorParallel();
+			} else {
+				startPipelineParallel();
+			}
+		} catch (IOException | InterruptedException | RuntimeException e) {
+			try {
+				stop();
+			} catch (InterruptedException interrupted) {
+				Thread.currentThread().interrupt();
+				e.addSuppressed(interrupted);
+			}
+			throw e;
 		}
 	}
 

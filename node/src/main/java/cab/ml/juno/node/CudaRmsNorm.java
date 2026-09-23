@@ -20,19 +20,22 @@ import java.lang.foreign.MemorySegment;
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 
 /**
- * Handler-facing entry point for the GPU-resident RMS-norm path (Tier 19
- * Phase A — see {@code docs/infra-plan/PLAN-Infra-Tier19.md}).
+ * Handler-facing entry point for the GPU-resident RMS-norm path.
  *
  * <p>{@link #normalizeBatch} dispatches to the real CUDA kernel
  * ({@code rms_norm.cu} / {@link RmsNormKernel}) that computes RMS
  * normalisation (the same math as {@code LlamaTransformerHandler.rmsNorm}/
- * {@code rmsNormInto}) in parallel on-device. Unlike
- * {@link CudaGqaAttention}, this has no dedicated CLI flag — it activates
- * automatically whenever the handler is already on the CUDA-resident weight
- * path for a covered architecture (Llama-family/Mistral/Qwen2), the same way
- * {@code sgemvSameX}'s QKV upload fusion does today. Callers fall back to the
- * scalar {@code rmsNorm}/{@code rmsNormInto} CPU path when this returns
- * {@code false} (kernel unavailable).
+ * {@code rmsNormInto}) in parallel on-device. Callers fall back to the scalar
+ * {@code rmsNorm}/{@code rmsNormInto} CPU path when this returns {@code false}
+ * (kernel unavailable).
+ *
+ * <p><b>Not constructed by default.</b> {@code LlamaTransformerHandler} leaves
+ * its reference null: a live decode A/B measured this path as slower than the
+ * scalar CPU path, because every call pays its own host-to-device upload, kernel
+ * launch and device-to-host download while the surrounding matrix-vector calls
+ * each do their own host round trip, so nothing keeps the activation
+ * device-resident. The class, its kernel and its unit tests are kept until that
+ * residency gap is closed.
  */
 final class CudaRmsNorm {
 

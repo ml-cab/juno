@@ -167,10 +167,8 @@ final class ContinuousBatchEngine {
 
 		int startPos = 0;
 		var prefixMatch = kvCache.findLongestPrefix(promptIds);
-		boolean hadCacheHit = false;
 		if (hasSession && !loraPlay && prefixMatch.isHit()) {
 			startPos = prefixMatch.matchedTokens();
-			hadCacheHit = true;
 			log.info("Prefix cache hit: " + startPos + "/" + promptIds.length + " tokens cached (session=" + kvKey
 					+ ")");
 		}
@@ -191,7 +189,7 @@ final class ContinuousBatchEngine {
 		int decodeBase = promptIds.length > 0 ? promptIds.length - 1 : 0;
 		SamplingParams params = loop.resolveSamplingParams(request.samplingParams());
 		Slot slot = new Slot(request, pending.consumer(), pending.future(), Instant.now(), kvKey, hasSession,
-				promptIds.clone(), promptIds.length, decodeBase, hadCacheHit, prefill, params,
+				promptIds.clone(), promptIds.length, decodeBase, prefill, params,
 				GrammarBinding.open(tokenizer, params, kvKey));
 		slot.stream = tokenizer.openStreamContext();
 		if (prefill.isComplete()) {
@@ -356,12 +354,12 @@ final class ContinuousBatchEngine {
 			else if (flushedStop.stop())
 				s.reason = GenerationResult.StopReason.STOP_TOKEN;
 
-			if (s.promptLen > 0 && !s.hadCacheHit)
-				kvCache.cachePrefix(s.allTokens, s.promptLen, s.kvKey + ":prefix");
-
 			if (s.hasSession) {
 				kvCache.cachePrefix(java.util.Arrays.copyOf(s.allTokens, s.promptLen), s.promptLen, s.kvKey);
 			} else {
+				// No cachePrefix call: the KV released here is the only KV this slot owned, so
+				// a trie entry registered for it would dangle immediately and a later session
+				// request with the same prompt would match it and skip prefill.
 				kvCache.evict(s.kvKey);
 				pipeline.evict(s.kvKey);
 			}
@@ -402,7 +400,6 @@ final class ContinuousBatchEngine {
 		int[] allTokens;
 		final int promptLen;
 		final int decodeBase;
-		final boolean hadCacheHit;
 		final ContinuousPrefillState prefill;
 		final SamplingParams params;
 		final Random rng;
@@ -417,7 +414,7 @@ final class ContinuousBatchEngine {
 
 		Slot(InferenceRequest request, TokenConsumer consumer, CompletableFuture<GenerationResult> future,
 				Instant start, String kvKey, boolean hasSession, int[] allTokens, int promptLen, int decodeBase,
-				boolean hadCacheHit, ContinuousPrefillState prefill, SamplingParams params, GrammarSession grammar) {
+				ContinuousPrefillState prefill, SamplingParams params, GrammarSession grammar) {
 			this.request = request;
 			this.consumer = consumer;
 			this.future = future;
@@ -427,7 +424,6 @@ final class ContinuousBatchEngine {
 			this.allTokens = allTokens;
 			this.promptLen = promptLen;
 			this.decodeBase = decodeBase;
-			this.hadCacheHit = hadCacheHit;
 			this.prefill = prefill;
 			this.params = params;
 			this.rng = params.seed() != null ? new Random(params.seed()) : null;

@@ -27,8 +27,8 @@ import java.util.logging.Logger;
  * <p>{@link #format} never throws: any render-time failure (a construct the
  * restricted engine does not support, an unexpected message shape) is caught
  * and silently delegates to the fallback named template instead — "no crash,
- * no silent corruption" per the chat-template resolver design
- * ({@code docs/infra-plan/PLAN-Infra-Tier7.md}). Construction-time (parse and
+ * no silent corruption" per the chat-template resolver design.
+ * Construction-time (parse and
  * smoke-render) validation lives in {@link GgufChatTemplateResolver#resolve};
  * by the time an instance of this class exists, the template has already
  * proven it can render at least one representative conversation.

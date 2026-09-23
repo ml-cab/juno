@@ -55,9 +55,8 @@ import cab.ml.juno.node.InferencePipeline;
  * <p>Rebuilt fresh for every {@link GenerationLoop#generate} call — including
  * repeated turns of the same chat session — the same way {@link
  * NgramDraftCache} is; the draft model does not yet share the target's
- * cross-turn prefix-cache reuse. This is a known, named perf cost for
- * multi-turn sessions, not a correctness gap: see {@code
- * PLAN-Infra-Tier12.md}.
+ * cross-turn prefix-cache reuse. This is a known perf cost for multi-turn
+ * sessions, not a correctness gap.
  */
 final class DraftModelSession implements DraftProposer {
 

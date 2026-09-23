@@ -148,7 +148,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	/** Microbatched GEMM scratch; non-null when resident FP32 weights are uploaded. */
 	private GpuBlasOps blasOps;
 
-	/** Nanosecond accumulators for Tier-9 train-step timing subsets (reset per chunk). */
+	/** Nanosecond accumulators for train-step timing subsets (reset per chunk). */
 	private long accFrozenForwardNs;
 	private long accFrozenTransposeNs;
 	private long accAdapterBackwardNs;
@@ -855,7 +855,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			for (int pos = 0; pos < T; pos++)
 				xCur[pos] = embedding(tokens[pos]);
 
-			// Per-layer microbatched frozen linears across positions (Tier 9).
+			// Per-layer microbatched frozen linears across positions.
 			for (int li = 0; li < L; li++) {
 				int I = cfg.intermediateSize();
 				int Hd = cfg.headDim();
@@ -1088,7 +1088,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	 * <p>
 	 * Clears gradients, computes one sequence, normalizes by prediction count,
 	 * steps the optimizer once, and returns mean loss. Clipping is disabled
-	 * ({@code maxNorm = 0}) for numerical compatibility with pre-Tier-1 callers.
+	 * ({@code maxNorm = 0}) for numerical compatibility with callers that predate gradient clipping.
 	 *
 	 * @param tokens    input token sequence, length ≥ 2
 	 * @param optimizer Adam optimizer to apply after backward

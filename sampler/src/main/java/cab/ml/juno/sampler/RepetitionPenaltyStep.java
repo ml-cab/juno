@@ -19,12 +19,15 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * Step 5: Repetition penalty.
+ * Repetition penalty.
  *
  * Reduces the probability of tokens that have already appeared in the generated
- * sequence. Applied after softmax, before final sampling.
+ * sequence. Operates on raw logits, before temperature and softmax (see
+ * {@link Sampler} for the pipeline order).
  *
- * For each token already seen: prob[token] /= repetitionPenalty
+ * For each token already seen: a positive logit is divided by repetitionPenalty
+ * and a negative logit is multiplied by it, so the token becomes less likely
+ * either way.
  *
  * penalty=1.0 → no effect (disabled) penalty=1.1 → mild suppression (default)
  * penalty=1.5 → strong suppression

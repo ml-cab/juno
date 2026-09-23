@@ -22,8 +22,7 @@ import static java.lang.foreign.ValueLayout.ADDRESS;
 
 /**
  * Owns a CUDA stream plus (once captured) an instantiated graph on that
- * stream — Tier 19 Phase B (see {@code docs/infra-plan/PLAN-Infra-Tier19.md}
- * "Measured finding": per-op GPU dispatch was found to cost ~11x more than
+ * stream. Measured finding: per-op GPU dispatch was found to cost ~11x more than
  * the CPU path it replaces due to each call's independent
  * H2D-upload/kernel-launch/D2H-download round trip; this class exists to test
  * whether replaying a pre-recorded sequence of those same operations as one

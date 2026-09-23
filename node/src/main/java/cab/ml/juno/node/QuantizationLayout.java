@@ -16,7 +16,7 @@
 package cab.ml.juno.node;
 
 /**
- * Layout metadata for a GGUF / GGML quantisation type used by Tier-5 codecs.
+ * Layout metadata for a GGUF / GGML quantisation type used by the K-quant codecs.
  *
  * <p>K-quants share a 256-element super-block ({@link #QK_K}). Q4_K / Q5_K are
  * affine (scale + min); Q6_K is symmetric (scaled, no additive zero/min).
@@ -60,7 +60,7 @@ public record QuantizationLayout(
 	}
 
 	/**
-	 * @throws IllegalArgumentException if {@code typeId} is not a Tier-5 K-quant
+	 * @throws IllegalArgumentException if {@code typeId} is not a supported K-quant
 	 */
 	public static QuantizationLayout require(int typeId) {
 		QuantizationLayout layout = forType(typeId);

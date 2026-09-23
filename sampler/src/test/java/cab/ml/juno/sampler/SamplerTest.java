@@ -17,6 +17,42 @@ class SamplerTest {
 		assertThat(token).isEqualTo(3);
 	}
 
+	/**
+	 * A request that sets temperature 0 (the REST surfaces only set the temperature, never the greedy
+	 * flag) must decode deterministically: the documented meaning of temperature 0. The logits leave
+	 * several competitors inside the default top-k / top-p nucleus, so a random draw would frequently
+	 * pick something other than the argmax.
+	 */
+	@Test
+	void temperature_zero_selects_the_argmax_without_the_greedy_flag() {
+		float[] logits = { 3.0f, 2.9f, 2.8f, 1.0f, 0.5f };
+		SamplingParams params = SamplingParams.defaults().withTemperature(0f);
+		assertThat(params.greedy()).as("the flag itself is not set").isFalse();
+
+		for (int i = 0; i < 300; i++)
+			assertThat(sampler.sample(logits, params, new int[0], new java.util.Random(i))).isEqualTo(0);
+	}
+
+	@Test
+	void near_zero_temperature_also_selects_the_argmax() {
+		float[] logits = { 3.0f, 2.9f, 2.8f, 1.0f, 0.5f };
+		SamplingParams params = SamplingParams.defaults().withTemperature(1e-7f);
+
+		for (int i = 0; i < 300; i++)
+			assertThat(sampler.sample(logits, params, new int[0], new java.util.Random(i))).isEqualTo(0);
+	}
+
+	@Test
+	void positive_temperature_still_samples_other_tokens() {
+		float[] logits = { 3.0f, 2.9f, 2.8f, 1.0f, 0.5f };
+		SamplingParams params = SamplingParams.defaults().withTemperature(0.7f);
+
+		boolean sawOther = false;
+		for (int i = 0; i < 300 && !sawOther; i++)
+			sawOther = sampler.sample(logits, params, new int[0], new java.util.Random(i)) != 0;
+		assertThat(sawOther).as("a non-zero temperature must remain stochastic").isTrue();
+	}
+
 	@Test
 	void stochastic_pipeline_returns_token_in_valid_range() {
 		float[] logits = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f };

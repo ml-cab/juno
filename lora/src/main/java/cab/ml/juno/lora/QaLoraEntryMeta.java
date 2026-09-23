@@ -18,7 +18,7 @@ package cab.ml.juno.lora;
 import java.util.Objects;
 
 /**
- * Per-adapter Tier-5 metadata for QA-LoRA checkpoints (layout, encoder, merge).
+ * Per-adapter metadata for QA-LoRA checkpoints (layout, encoder, merge).
  */
 public record QaLoraEntryMeta(
 		int groupWidth,

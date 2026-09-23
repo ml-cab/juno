@@ -1,6 +1,7 @@
 package cab.ml.juno.player;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -55,6 +56,11 @@ class LoadShardsParallelTest {
 		private final long delayMs;
 
 		TrackingNodeServer(int port, long delayMs) throws Exception {
+			this(port, delayMs, true);
+		}
+
+		/** @param loadSucceeds whether this node reports success=true for LoadShard */
+		TrackingNodeServer(int port, long delayMs, boolean loadSucceeds) throws Exception {
 			this.port = port;
 			this.delayMs = delayMs;
 			this.server = ServerBuilder.forPort(port).addService(new NodeServiceGrpc.NodeServiceImplBase() {
@@ -68,8 +74,10 @@ class LoadShardsParallelTest {
 						} catch (InterruptedException ignored) {
 						}
 					}
-					responseObserver.onNext(LoadShardResponse.newBuilder()
-							.setMessage("ok layers " + request.getStartLayer() + "-" + request.getEndLayer()).build());
+					responseObserver.onNext(LoadShardResponse.newBuilder().setSuccess(loadSucceeds)
+							.setMessage(loadSucceeds ? "ok layers " + request.getStartLayer() + "-" + request.getEndLayer()
+									: "Model load failed: Unsupported model architecture 'gemma4'")
+							.build());
 					responseObserver.onCompleted();
 				}
 
@@ -180,6 +188,31 @@ class LoadShardsParallelTest {
 			assertThat(elapsed).as("loadShards must be parallel: expected ~%dms, got %dms", delayMs, elapsed)
 					.isLessThan(delayMs * 2);
 
+		} finally {
+			client.shutdown();
+			servers.forEach(TrackingNodeServer::stop);
+		}
+	}
+
+	// ── Failure reporting ─────────────────────────────────────────────────────
+
+	@Test
+	@DisplayName("A node that reports a failed load fails loadShards() with its message")
+	void failed_load_on_one_node_fails_load_shards() throws Exception {
+		int n = 3;
+		List<TrackingNodeServer> servers = new ArrayList<>();
+		for (int i = 0; i < n; i++)
+			servers.add(new TrackingNodeServer(BASE_PORT + 20 + i, 0, i != 1));
+
+		List<ProcessPipelineClient.NodeAddress> addrs = new ArrayList<>();
+		for (int i = 0; i < n; i++)
+			addrs.add(new ProcessPipelineClient.NodeAddress("localhost", BASE_PORT + 20 + i));
+
+		ProcessPipelineClient client = new ProcessPipelineClient(addrs, 32000, ActivationDtype.FLOAT32);
+		try {
+			assertThatThrownBy(() -> client.loadShards(threeNodeShards())).isInstanceOf(RuntimeException.class)
+					.hasMessageContaining("Shard loading failed")
+					.hasMessageContaining("Unsupported model architecture 'gemma4'");
 		} finally {
 			client.shutdown();
 			servers.forEach(TrackingNodeServer::stop);

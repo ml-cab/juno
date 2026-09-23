@@ -1,5 +1,75 @@
 ## Status 
 
+**Session 87** — Cluster loads fail closed, dead registry/Hazelcast surface removed, REST temperature 0 is greedy
+
+- **A cluster node whose model cannot be loaded no longer serves stub output.** `EmbeddedNodeServer.loadShard`
+  used to catch any load failure (unsupported architecture or quantization, missing tensor, missing file, bad
+  adapter), install a fixed-logit stub and reply `success = true` with a message beginning `Stub shard`, while
+  `ProcessPipelineClient` and `TensorParallelPipelineClient` only logged that message. The result was a
+  healthy-looking cluster returning dummy logits. Now the node replies `success = false` with the reason and
+  installs `UnloadedShardHandler`, which refuses forward passes (a node started with a real model also refuses
+  them before its first successful load); both clients fail `loadShards()` on any node that reports failure; and
+  `ClusterHarness.start()` stops the forked node JVMs before rethrowing, so a failed start leaves nothing running.
+  Stub mode (no model path, used by tests) is unchanged. Covered by `EmbeddedNodeServerLoadFailureTest`, failure
+  cases in `LoadShardsParallelTest` and `TensorParallelPipelineClientTest`, `UnsupportedArchitectureClusterIT`
+  (forked JVMs, metadata-only GGUF) and, on real files, `ModelLiveRunnerIT` and the smoke script
+  (`./juno cluster` in both modes, and no leftover `NodeMain` processes).
+- **`RegistryService` and Hazelcast removed.** No source file used a Hazelcast API; the `RegistryService` RPCs
+  (`GetShardMap`, `RegisterNode`, `RecomputeShards`) and their seven messages had no implementation and no
+  caller. The proto section, the `hazelcast` dependency in `node`, `health`, `kvcache`, `registry` and
+  `coordinator`, the root `hazelcast.version` property and managed dependency, and the unused port 5701 rule in
+  `scripts/aws/juno-deploy.sh` are gone, and the comments that described a Hazelcast-backed registry now describe
+  the in-memory code. Membership is fixed at cluster launch.
+- **A REST `temperature` of 0 now selects greedy decoding.** `/v1/chat/completions`, `/v1/inference` and
+  `/v1/vision/chat` only set the temperature, `TemperatureStep` skipped scaling below 1e-6, and `SampleStep` drew
+  randomly unless the `greedy` flag was set, so `temperature: 0` sampled at temperature 1 (identical requests could
+  return different text) while the CLI, which sets the flag, was deterministic. `SamplingParams.effectivelyGreedy()`
+  (flag or temperature below 1e-6) is now the single rule used by the temperature, top-k, top-p and sample steps.
+- No performance run: none of the changes touches the forward pass, MatVec, GPU residency, batching or KV code;
+  the sampler change is one comparison per sampled token.
+
+**Session 86** — Correctness and consistency audit: prefix-cache ownership on batched paths, fail-closed architecture dispatch, doc/code drift
+
+- **Static micro-batching no longer resumes from KV it did not write.** `GenerationLoop.generateBatch()`
+  consulted the prefix trie and registered a `<requestId>:prefix` entry per request, although each batched
+  request's pipeline KV is keyed by its own request id and evicted when it finishes. A repeated (or extended)
+  prompt in a later batch matched the stale entry, skipped prefill and decoded over zeroed KV; on real TinyLlama
+  the greedy output degenerated (`[22443, 23600, 6845, 15945, 13, 13]` instead of `[1576, 7483, 310, 3444, 338,
+  3681]`). Adding a session gate would not have been enough, because a session request inside a batch is also
+  keyed by its request id, so the batch path now never reads or writes the trie and prefills every prompt in
+  full. Reproduced first with a KV-ownership test double (`KvTrackingPipeline`, which records any forward pass
+  that continues from a position not written under the same key) and on real weights
+  (`TinyLlamaStaticBatchLiveTest`).
+- **Same defect in `ContinuousBatchEngine`:** every non-hit slot registered a `<key>:prefix` trie entry, which
+  dangles for stateless slots (their KV is evicted at retirement), so a later session request with the same
+  prompt skipped prefill against KV it never wrote. Only session slots register trie entries now.
+- **Unrecognized architectures no longer fall through to the dense Llama handler.** `ForwardPassHandlerLoader`
+  now runs `LlamaTransformerHandler` only for `llama`, `mistral`, `tinyllama`, `qwen2` and `qwen2.5`
+  (`LlamaFamilyArchitectures`), and rejects everything else without a dedicated handler with an `IOException`
+  that names the architecture, before any tensor is read. Observed on the real files: `qwen35` failed on an
+  unrelated missing tensor, `gemma4` failed with a heap error (or, given enough heap, on a missing tensor after
+  loading 24 layers with sliding-window attention and logit softcapping ignored), and `mistral3` / `minimax-m2`
+  failed on unsupported quantization types; a variant of any of them with the right tensor names would have run
+  and produced fluent wrong output. `ForwardPassHandlerLoader.isSupportedArchitecture` exposes the same rule and
+  `ModelLiveRunnerIT` asserts the rejection for such files instead of running the suite on them.
+- Corrected documentation that described intent rather than wiring: `TensorShardContext`,
+  `TensorParallelPipelineClient` and `ClusterHarness` (no node slices its weights; every node runs the full model
+  and the coordinator sums N complete logit vectors), `FaultTolerantPipeline` (built and tested, not constructed
+  by the production launch path), `CudaRmsNorm` (documented as automatic, actually never constructed), the
+  sampler pipeline order (`Sampler` is now the only place it is stated; step javadocs are no longer numbered),
+  the GBNF bounded-repetition cap (why it exists and that its value is not measured; the error now states the
+  limit), the LoRA optimizer (AdamW with LoRA+ groups, not Adam), the CPU SIMD description, the documented
+  `mvn test` module list (now includes `vision` and `metrics`) and the live-IT invocation (`-DMODELS=`), and the
+  `docs/agent-arch.txt` sections for architecture dispatch, prefix-cache ownership, tensor parallelism and fault
+  tolerance. Internal planning-tier numbers and planning-file pointers were removed from 33 `src/main` files,
+  including two exception messages and two CUDA kernel headers.
+- Tests: `StaticBatchPrefixCacheSessionGatingTest`, `ContinuousPrefixCacheGatingTest`,
+  `TinyLlamaStaticBatchLiveTest`, `ForwardPassHandlerLoaderArchitectureTest`, plus
+  `scripts/performance-tests/smoke-tier00-consistency.sh` (real-file architecture audit and a batching check over
+  both REST surfaces on CPU and GPU). No performance run: the change removes a trie lookup and write from the
+  batch path and one redundant write per continuous slot, and touches no MatVec, KV-layout, GPU-residency or
+  quantization code.
+
 **Session 85** — Prefill GPU-residency fixes: pinned staging memory + adaptive chunk sizing (Phase A) **feature complete**
 
 - Pinned host-staging memory: new vendor-neutral `GpuBindings.hostMalloc`/`hostFree`
@@ -1746,6 +1816,8 @@ End-to-end trace of a single request: tokenizer encodes the chat-templated promp
 **Integration test infrastructure:** `InProcessClusterIT` (zero network, in-JVM stub pipeline, ~250ms) and `ThreeNodeClusterIT` (forks 3 real `NodeMain` JVMs, real gRPC, ~16GB memory budget) exercise the cluster end to end. `ModelLiveRunnerIT` runs 6 real-model checks (greeting response, no raw SentencePiece markers, question answering, greedy determinism, multi-turn conversation, FLOAT16 parity) against an actual GGUF file, disabled by default and activated with `-Pintegration`. `LoadShardsParallelTest` is the timing regression anchor proving shard loading happens in parallel, not serially.
 
 ## 8. Actors — Design Decisions
+
+*Status note: this section records the original design, not the current code. The Hazelcast-backed pieces it describes (the distributed `IMap` model registry, the weighted seed-node election, and leader/standby coordinator election with `CP FencedLock`) were never implemented: no source file uses a Hazelcast API, the `RegistryService` RPCs in `inference.proto` had no implementation, and the Hazelcast dependency was declared but unused (the RPCs and the dependency have since been removed). `FaultTolerantPipeline` exists and is unit-tested, but the production cluster launch path does not construct it, so a lost node currently fails the request instead of failing over. The sampler order quoted below is also out of date; the current order is presence penalty, repetition penalty, temperature, top-k, softmax, top-p, sample (see `Sampler`).*
 
 Model registry and shard planning live in a Hazelcast distributed `IMap` (no single point of failure); seed-node election uses an IMQ-inspired weighted score (connectivity, stability, betweenness centrality, VRAM); sharding is greedy and VRAM-aware but capped per node so a single large-VRAM node can't starve later nodes of layers (`ShardPlanner`'s fairness cap). The coordinator uses static micro-batching (configurable window/size, default 8 requests / 50ms), a `PriorityBlockingQueue` (HIGH/NORMAL/LOW), and Java virtual threads throughout; `FaultTolerantPipeline` wraps each node in its own circuit breaker with a configurable retry policy (`none`/`once`/`aggressive`) and reports `CIRCUIT_OPEN` or `RETRIES_EXHAUSTED` as HTTP 503 with a `Retry-After` hint. The tokenizer supports LLaMA/TinyLlama/Mistral/Gemma chat templates by model-id lookup, defaulting to ChatML. The sampler is a pure-Java pipeline: temperature → top-k → top-p → softmax → repetition penalty → sample.
 

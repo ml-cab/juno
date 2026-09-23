@@ -29,14 +29,15 @@ import cab.ml.juno.node.LoraProjection;
  * Builder-based configuration for LoRA training orchestration.
  *
  * <p>
- * Tier 1 fields: projection targets, learning rate, gradient accumulation, and
- * max gradient norm. Tier 2 adds schedule, AdamW decay, LoRA+, dropout, seed,
- * and validation early-stopping. Tier 3 adds {@link LoraAdapterConfig} (scaling,
- * initialization, mode) while retaining rank/alpha accessors. Tier 8 adds
- * {@code chunkTokens} and {@code maxTrainTokens} for train-file scheduling.
+ * Core fields: projection targets, learning rate, gradient accumulation, and
+ * max gradient norm. Schedule, AdamW decay, LoRA+, dropout, seed, and
+ * validation early-stopping are configured here too, as is
+ * {@link LoraAdapterConfig} (scaling, initialization, mode) alongside the
+ * rank/alpha accessors, and {@code chunkTokens} / {@code maxTrainTokens} for
+ * train-file scheduling.
  *
  * <p>
- * Later tiers extend this builder rather than adding competing
+ * New training options extend this builder rather than adding competing
  * {@code LoraTrainer.open} overloads.
  */
 public final class LoraTrainingConfig {

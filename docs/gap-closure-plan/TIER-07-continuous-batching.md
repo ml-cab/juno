@@ -45,7 +45,7 @@ actually help rather than hurt.
 
 - Any change to the `static` schedule itself, beyond what's needed to keep the Tier-00 prefix-cache
   fix correct as continuous's behavior changes around it.
-- Elastic cluster membership (that's `RegistryService`'s territory, resolved in Tier 00/Tier 13).
+- Elastic cluster membership (Tier 00 removed the unimplemented `RegistryService`; any replacement is Tier 13's scope).
 
 ## Cross-surface compatibility checklist
 

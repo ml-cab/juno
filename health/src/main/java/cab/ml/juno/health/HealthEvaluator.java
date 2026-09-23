@@ -22,11 +22,10 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Pure domain evaluator — no Hazelcast, no Cuda, no I/O.
+ * Pure domain evaluator — no Cuda, no I/O.
  *
- * Receives NodeHealth snapshots (from whatever source — Hazelcast IMap listener
- * in production, direct calls in tests) and emits HealthEvents when thresholds
- * are crossed.
+ * Receives NodeHealth snapshots (from whatever source — the caller decides how
+ * they arrive) and emits HealthEvents when thresholds are crossed.
  *
  * State tracked: - Previous health level per node (to avoid duplicate events) -
  * Whether a node was previously stale (to emit NODE_RECOVERED)

@@ -18,25 +18,29 @@ package cab.ml.juno.node;
 import cab.ml.juno.registry.TensorShardAssignment;
 
 /**
- * Runtime context for a tensor-parallel inference node.
+ * Shard geometry for one node of a tensor-parallel group: the attention heads
+ * and feed-forward slice width that node would own.
  *
  * Unlike {@link ShardContext} (pipeline-parallel — each node owns a distinct
  * contiguous layer range), a tensor-parallel node owns ALL transformer layers
- * but only a horizontal slice of the weight matrices:
+ * and, by design, only a horizontal slice of the weight matrices:
  *
  * Attention: heads [headStart(), headEnd()) — column-parallel Q/K/V projection,
  * row-parallel output projection FFN: width slice [0, sliceDim()) —
  * column-parallel first linear, row-parallel second linear
  *
- * The coordinator broadcasts the full input activation to every tensor-parallel
- * node. Each node computes on its slice and returns a partial result (same
- * shape as the full output). The coordinator sums all partial results (star
- * AllReduce) to obtain the final activation for the next step.
+ * <p><b>Current state: geometry only.</b> No transformer handler reads this
+ * record, and the rank a node receives when its shard is loaded is not used to
+ * slice weights, so every node loads and runs the full model. The coordinator
+ * broadcasts the activation, each node returns a complete logit vector, and the
+ * coordinator sums them (star AllReduce): N times the memory and compute of one
+ * node, and summed logits that are N times a single node's logits. Per-layer
+ * weight slicing with a per-layer AllReduce is not implemented yet.
  *
- * Example — 3 nodes, 32 heads, hiddenDim=2048: Rank 0: heads [0, 10),
- * headDim=64, sliceDim=682 Rank 1: heads [10, 21), headDim=64, sliceDim=682
- * Rank 2: heads [21, 32), headDim=64, sliceDim=682 (sums produce the full
- * hidden-dim output after AllReduce)
+ * Example of the geometry slicing would use — 3 nodes, 32 heads,
+ * hiddenDim=2048: Rank 0: heads [0, 10), headDim=64, sliceDim=682 Rank 1: heads
+ * [10, 21), headDim=64, sliceDim=682 Rank 2: heads [21, 32), headDim=64,
+ * sliceDim=682
  */
 public record TensorShardContext(String nodeId, int startLayer, // inclusive — always 0 in pure tensor-parallel mode
 		int endLayer, // exclusive — always totalLayers in pure tensor-parallel mode

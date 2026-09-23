@@ -966,7 +966,6 @@ setup() {
       "IpProtocol=tcp,FromPort=${GRPC_PORT},ToPort=$(( GRPC_PORT + NODE_COUNT + 1 )),IpRanges=[{CidrIp=${VPC_CIDR},Description=Juno-gRPC-internal}]" \
       "IpProtocol=tcp,FromPort=${HTTP_PORT},ToPort=${HTTP_PORT},IpRanges=[{CidrIp=0.0.0.0/0,Description=Juno-REST}]" \
       "IpProtocol=tcp,FromPort=8081,ToPort=8081,IpRanges=[{CidrIp=${VPC_CIDR},Description=Juno-health-sidecar-internal}]" \
-      "IpProtocol=tcp,FromPort=5701,ToPort=5701,IpRanges=[{CidrIp=${VPC_CIDR},Description=Hazelcast}]" \
       &>/dev/null
   log "  OK Security group: $SG_ID  (SSH from ${MY_IP}, gRPC internal, REST public)"
 
