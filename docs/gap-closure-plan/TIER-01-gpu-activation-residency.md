@@ -92,9 +92,13 @@ wall three more times.
    path (the only handler with a fused GQA attention kernel today), gated behind the existing
    `--gpu-attention`-style opt-in flag pattern so it can be toggled off if something regresses.
 4. Re-run the Phase B-style microbenchmark (batch=1, dim=2048, N iterations) and the full
-   `compare-lora.sh`/model-sweep perf gate; publish results under `docs/perf-compare/`.
-5. Only after the measured win is confirmed, wire the flag on by default and update
+   `compare-lora.sh`/model-sweep perf gate, plus `compare-llama-cpp.sh` for a llama.cpp-relative
+   reading on the same workload; publish results under `docs/perf-compare/`.
+5. If the measured win is confirmed: wire the flag on by default and update
    `docs/howto.md`/`docs/performance.md` accordingly (Juno-native language, no competitor names).
+   If not confirmed: follow the contingency in this tier's exit criteria (document, mark
+   partial-complete, escalate to the user) rather than continuing to iterate past this checkpoint
+   without a decision.
 
 ## Tests to write/upgrade before implementation
 
@@ -130,7 +134,20 @@ wall three more times.
       materialization boundary is, which ops participate).
 - [ ] RMSNorm + RoPE measured *faster* than CPU scalar (or at minimum, no longer the ~7x-slower
       finding from Phase B) with residency, on real GTX 1080 hardware, published in
-      `docs/perf-compare/`.
+      `docs/perf-compare/`. **Contingency, decided before Tiers 02/06/07 start**: this project has
+      already shelved three closely-related bets on grounds that turned out to be exactly this kind
+      of per-op dispatch overhead (`CudaRmsNorm`/`CudaGraphSession` itself, draft-model speculative
+      decoding, `VectorQuantKernels.dot()`), so a fourth negative result is a real possibility, not a
+      formality. If the measured result is still worse than CPU scalar after the residency primitive
+      is correctly wired (not just "not yet wired right"), do not iterate indefinitely — document the
+      measurement, what was tried, and why it still regresses, then downgrade Tier 01 to
+      **partial-complete**: the residency primitive itself (item 1) and the correctness guarantees
+      below still ship and close out, but the "no longer dormant scaffolding" bullet below is
+      explicitly waived for this pass, and Tiers 02/06/07 proceed using today's op-at-a-time GPU path
+      for any sub-item that isn't itself residency-dependent, with their own residency-specific
+      sub-items marked `NEEDS-TIER-01-REVISIT` rather than blocked indefinitely. Escalate to the user
+      at that point rather than silently re-scoping — this changes three other tiers' scope, not just
+      this one's.
 - [ ] No correctness regression: greedy decode output identical (CPU) or within tolerance (GPU)
       with the new path enabled vs. disabled, across all three cross-surface-listed models.
 - [ ] Cluster (pipeline- and tensor-parallel) smoke tests confirm activations still correctly
@@ -139,6 +156,8 @@ wall three more times.
 - [ ] LoRA train + playback smoke tests unaffected.
 - [ ] `docs/agent-arch.txt`/`docs/performance.md`/`docs/howto.md` updated (Juno-native language).
 - [ ] `CudaGraphSession`/`CudaRmsNorm` are no longer "dormant scaffolding" — either wired live
-      (preferred, if the measurement confirms the fix) or the tier is not marked complete.
+      (preferred, if the measurement confirms the fix), or the tier is explicitly marked
+      **partial-complete** per the contingency above (not silently marked complete with the
+      scaffolding still dormant and unexplained).
 - [ ] Full `mvn test`/`mvn verify -pl juno-master` pass with zero regressions.
 - [ ] `CHANGELOG.md` entry added.

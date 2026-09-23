@@ -80,6 +80,12 @@ conceptually "backend breadth/parity," not a new feature.
 3. Build the ROCm tiled-GEMM kernel, porting the CUDA design.
 4. Complete any remaining ROCm MMQ kernel coverage from Tier 04.
 5. Make and record the Metal/Vulkan/SYCL/CANN decision.
+6. Re-verify, not assume, that every earlier tier's row-1 ("CPU inference") correctness result still
+   holds under the new SIMD default — vectorized float accumulation can legitimately reorder
+   floating-point sums vs. the scalar path. Re-run the greedy-decode correctness checks Tiers 00-09
+   already established (at minimum `ModelLiveRunnerIT`'s CPU-path checks and each tier's own
+   CPU-path unit tests) with the SIMD default on, and document any within-tolerance-but-non-identical
+   output rather than silently treating "still passes" as "output is unchanged."
 
 ## Tests to write/upgrade before implementation
 
@@ -98,7 +104,10 @@ conceptually "backend breadth/parity," not a new feature.
   asserting no regression in either correctness or the previously-fixed pathological slowdown.
 - **Perf gate (required)**: both the CPU SIMD fix and ROCm tiled-GEMM are hot-path changes —
   `compare-lora.sh` and `compare-vision.sh` (vision is the specific regression risk here), plus a
-  CPU-only microbenchmark before/after; publish under `docs/perf-compare/`.
+  CPU-only microbenchmark before/after, plus `compare-llama-cpp.sh --cpu` for a llama.cpp-relative
+  CPU reading (per README's llama.cpp-relative gate — this is the tier where that ratio should move
+  the most, since it's the one closing the "no real SIMD" gap directly); publish under
+  `docs/perf-compare/`.
 
 ## Models needed
 
@@ -109,6 +118,9 @@ vision-scale batch-width regression guard (already present).
 
 - [ ] CPU SIMD hot-path fix lands, measured faster than the current thread-parallel-scalar default,
       with the vision-scale regression guard passing (no repeat of the old pathological slowdown).
+- [ ] Every earlier tier's CPU-inference ("row 1") correctness result re-verified under the new SIMD
+      default, with any output changes (even within-tolerance ones) explicitly documented rather than
+      assumed away.
 - [ ] ROCm tiled-GEMM implemented, unit-tested, marked NEEDS-AMD-HARDWARE pending real validation.
 - [ ] Any remaining ROCm MMQ kernel coverage from Tier 04 completed.
 - [ ] Metal/Vulkan/SYCL/CANN decision made and recorded (pursue as a new tier, or explicitly

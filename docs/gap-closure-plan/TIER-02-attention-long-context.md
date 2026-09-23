@@ -102,7 +102,12 @@ about before it locks in a block-table layout.
   server keeps responding instead of erroring, and asserts a second run *without* the opt-in flag
   still gets the documented hard error at the same point.
 - **Perf gate (required)**: the tiled kernel is a hot-path change — `compare-lora.sh` plus a
-  dedicated long-context latency/memory microbenchmark; publish under `docs/perf-compare/`.
+  dedicated long-context latency/memory microbenchmark, plus `compare-llama-cpp.sh` for a
+  llama.cpp-relative pp/tg reading on the same models (per README's llama.cpp-relative gate); publish
+  under `docs/perf-compare/`. Threshold: peak GPU memory at the longest tested sequence length must
+  drop by a stated percentage vs. the old full-materialization kernel (measure the old kernel's
+  actual number first, then set this tier's target relative to it — do not accept "some reduction"
+  with no number).
 
 ## Models needed
 

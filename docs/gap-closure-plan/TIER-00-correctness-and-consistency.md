@@ -37,17 +37,43 @@ time before discovering it's unwired).
 4. **§2.6 — `RegistryService`/Hazelcast decision.** Decide: implement it for real, or remove the
    proto RPCs and the unused Hazelcast dependency from every module `pom.xml`. This tier makes the
    decision and either removes the dead surface (small, same-tier work) or files it as an explicit,
-   scoped follow-up tier (large work, deferred) — it does not attempt a partial implementation.
+   scoped follow-up tier (large work, deferred) — it does not attempt a partial implementation. While
+   auditing this, also check `CHANGELOG.md`'s "Actors — Design Decisions" section, which describes a
+   "Hazelcast distributed `IMap`" model registry and Hazelcast `CP FencedLock`-based leader/standby
+   coordinator election — a repo-wide grep for actual Hazelcast API usage (not just the dependency
+   declaration) turns up nothing in `src/main` anywhere, so this section appears to document a design
+   that was never built, the same pattern as the proto RPCs themselves. Correct or annotate it as
+   historical/aspirational in the same pass, since `CHANGELOG.md` is not in Tier 14's later doc-audit
+   scope and this would otherwise never get caught.
 5. **§2.7 — "JDK Vector API CPU kernels" doc correction.** Update `CLAUDE.md`'s module table (and
    any other doc making the same claim) to describe what's actually on the hot path by default.
 6. **§2.9 — Minor naming fixes.** `CLAUDE.md`'s "Adam optimizer" → "AdamW (with LoRA+)" for the
    `lora` module description; add a one-line comment on the GBNF bounded-repetition cap explaining
-   the `max ≤ min + 8` choice or removing it if no real reason survives investigation.
+   the `max ≤ min + 8` choice or removing it if no real reason survives investigation. Also fix
+   `CLAUDE.md`'s "Build, test, run" `mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,
+   health,registry,juno-player` command, which silently omits two real modules with their own test
+   suites — `vision` and `metrics` — add them to the documented command (or explain in the same
+   place why they're intentionally run separately).
 7. **§2.3 — `FaultTolerantPipeline` wiring status.** Not fixed in this tier (that's a real feature,
    scoped into Tier 13), but document its current unwired state explicitly in
    `docs/agent-arch.txt` so it stops reading as if it's load-bearing.
 8. **§2.2 — `TensorShardContext` wiring status.** Same treatment as §2.3: document the true state
    now (its javadoc currently overclaims), defer the actual fix to Tier 09.
+9. **Tier-number leakage into shipped code.** `CLAUDE.md` already bans internal "Infra tier" numbers
+   from shipped docs, code comments, JFR `@Description`, CLI help, and error messages — but as of
+   this writing that rule is already violated in at least `LlamaTransformerHandler.java` ("Tier 19"),
+   `LoraTrainingHandlerFactory.java` ("Tier 6"), `CpuFrozenBatchOps.java` ("Tier 9"),
+   `LoraTrainableHandler.java` ("Tier 9"), `CudaDriverBindings.java` ("Tier 19"),
+   `LoraTrainEvent.java` ("Tier 4"), `ContinuousLoraPolicy.java` ("Tier 10"), `Q8_0KvCodec.java`
+   ("Tier 6"), `LoraTrainingConfig.java` ("Tier 1/2/3/8"), `ConsoleMain.java` ("Tier 16"), and
+   `CudaRmsNorm.java` ("Tier 19"). Grep every `src/main` tree for `Tier [0-9]+`/`Infra tier` and
+   rewrite each hit to describe the actual mechanism instead of the internal planning-tier number
+   that introduced it (e.g. "Tier 19 Phase A GPU-resident RMS norm" → "GPU-resident RMS-norm path,
+   currently unconstructed by default — see class javadoc for why"). This is the same class of
+   finding as §2.7/§2.9 above — cheap, mechanical, and worth doing before 13 more tiers have a chance
+   to add more of the same pattern. Tier 14 re-runs this grep at the very end as a regression check
+   (alongside its existing competitor-name grep), the same relationship Tier 00/14 already have for
+   the competitor-name rule.
 
 ### Out of scope (deferred to later tiers, tracked explicitly so they aren't lost)
 
@@ -155,11 +181,16 @@ via `Devstral`, `minimax-m2` via `minimax-m2.5-tiny`). No downloads required for
       produce wrong output without an error.
 - [ ] `Sampler.java`/`SamplingStep.java`/`RepetitionPenaltyStep.java` agree on pipeline order.
 - [ ] `RegistryService`/Hazelcast decision made and executed (removed, or filed as a new
-      explicitly-scoped tier — not left ambiguous).
-- [ ] `CLAUDE.md` module table and LoRA optimizer description corrected.
+      explicitly-scoped tier — not left ambiguous); `CHANGELOG.md`'s "Actors — Design Decisions"
+      section corrected or annotated as historical/aspirational for the same Hazelcast claim.
+- [ ] `CLAUDE.md` module table and LoRA optimizer description corrected; its `mvn test -pl ...`
+      command includes `vision` and `metrics` or explains why it doesn't.
 - [ ] GBNF bounded-repetition cap has a real justifying comment or is removed.
 - [ ] `docs/agent-arch.txt` states the true wiring state of `TensorShardContext` and
       `FaultTolerantPipeline` in Juno-native language, with no plan-tree references.
+- [ ] A repo-wide grep for `Tier [0-9]+`/`Infra tier` across every `src/main` tree returns no hits
+      outside `docs/infra-plan/`/`docs/lora-plan/`.
 - [ ] Full cross-surface checklist above resolved (PASS/N/A/FAIL-CLOSED, no blanks).
-- [ ] `mvn test` (all modules) and `mvn verify -pl juno-master` pass with zero regressions.
+- [ ] `mvn test` (all modules, including `vision` and `metrics`) and `mvn verify -pl juno-master`
+      pass with zero regressions.
 - [ ] `CHANGELOG.md` entry added.

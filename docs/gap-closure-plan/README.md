@@ -42,6 +42,17 @@ before acting on it — both documents are snapshots, not ground truth that stay
    exercises the new feature *combined with* the other major surfaces (LoRA play, vision, grammar,
    tools, cluster/TP, static/continuous), not just in isolation. A feature that only works alone is
    not feature-complete.
+7. **Performance thresholds are numeric, and anchored to llama.cpp where the tier is performance-
+   relevant.** Every tier's perf-gate bullet states a concrete pass/fail number for whatever new
+   metric it introduces — "measured, published, no unexplained regression" alone is not enough for a
+   metric with no prior baseline to be implicitly anchored to. See "Test infrastructure" below for
+   the specific llama.cpp-relative gate this adds on top of the existing `compare-lora.sh` rule.
+8. **Doc/comment claim audits are repo-wide, not scoped to a named list of files.** When a tier's job
+   is to fix a doc/code drift item (Tier 00's §2.x items, Tier 14's full audit), the fix is not
+   complete until the same class of claim has been grepped for across `src/main` and `CHANGELOG.md`,
+   not just in whichever file the gap analysis happened to cite. A rule stated once in `CLAUDE.md`
+   (e.g. "no internal tier numbers in shipped code") is binding everywhere that rule applies, not
+   just in the specific files a prior audit pass already looked at.
 
 ## Tier index and ordering rationale
 
@@ -95,12 +106,25 @@ rejection is itself tested).
 | 13 | Native REST surface | `/v1/inference`, `/v1/inference/stream` |
 | 14 | CLI direct usage | `./juno local`/`cluster`/`lora`/`merge`/`lora-import`/`gguf-info`/`test` |
 
+**Row 1 caveat (CPU inference) before Tier 10 lands:** every tier from 00 through 09 uses row 1 as a
+*correctness* oracle only — `CpuMatVec`'s scalar path, not a SIMD path, since Tier 10 is what makes
+CPU inference actually SIMD-accelerated. A tier's row-1 "PASS" before Tier 10 means "correct," not
+"final-performance-path verified." Tier 10 re-verifies, rather than assumes, that its SIMD fix
+preserves every earlier tier's row-1 correctness result (vectorized float accumulation can
+legitimately reorder floating-point sums vs. the scalar path) — see that tier's own exit criteria.
+
 ## Test infrastructure
 
 Three layers, all of which get extended (never replaced) tier over tier:
 
 1. **Unit tests** in the owning module (`mvn test -pl <module>`). Each tier's file names the exact
-   test classes to add cases to or create.
+   test classes to add cases to or create. Note that `CLAUDE.md`'s own quick-reference `mvn test -pl
+   tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,juno-player` command omits two
+   real modules with their own test suites — `vision` (relevant from Tier 08 onward, primary from
+   Tier 11) and `metrics` (the JFR-extractor tests every perf-gate change ultimately depends on).
+   Any tier touching either module must explicitly add `-pl vision` / `-pl metrics` to its own test
+   commands rather than assuming the documented command covers them; Tier 00 corrects the documented
+   command itself.
 2. **Integration tests**: `ModelLiveRunnerIT` (`juno-master/src/test/java/cab/ml/juno/master/`,
    run via `./juno test --model-path ...`, 8 checks today — 6 pipeline-parallel + 2 tensor-parallel)
    and the forked-JVM cluster ITs (`ThreeNodeClusterIT`, `TensorParallelClusterIT`, `mvn verify -pl
@@ -123,6 +147,42 @@ residency, batching, or KV paths runs `scripts/performance-tests/compare-lora.sh
 `docs/perf-compare/`, and publishes a new timestamped result directory there — that mechanism
 already exists and this plan doesn't change it, it just says explicitly, per tier, when it applies.
 
+**llama.cpp-relative gate (new, applies from Tier 01 onward).** `compare-lora.sh`/`compare-vision.sh`
+only ever compare Juno against its own prior baseline — neither tells you whether the actual stated
+goal of this plan (closing the gap with llama.cpp) is moving. Every tier whose scope includes the
+forward pass, MatVec, GPU residency, batching, quantization, or KV paths (at minimum: Tiers 01, 02,
+03, 04, 06, 07, 08, 09, 10) additionally re-runs `scripts/performance-tests/compare-llama-cpp.sh` on
+the same host/model/quant/flags as the last published run under `docs/perf-compare/`, and records
+the resulting Juno/llama.cpp tg and pp ratios in that tier's own file (not just in
+`docs/performance.md`, so the trend across tiers is visible from the plan tree itself). This is not
+a new mechanism — the script already exists with a multi-month history of published runs — it just
+has to actually be invoked per tier instead of only opportunistically. Tier 14's exit criteria add a
+final consolidated scorecard summarizing this trend across every tier (see that file).
+
+**Numeric thresholds, not "no unexplained regression."** Per execution rule 7 above, every tier's
+perf-gate bullet under "Tests to write/upgrade before implementation" states a concrete pass/fail
+number for whatever new metric that tier introduces (a memory-reduction percentage, a throughput
+ratio, a latency ceiling) — the same way Tiers 01/03/06/07 already do for the specific historical
+regression each one is re-measuring ("no longer ~7x slower," "gather tax at zero," "faster than
+`--spec-type none`," "beats static"). Pick the number before implementation starts, the same way the
+tests-before-implementation rule already asks for tests before code.
+
+**Regression-noise control: GC pauses and allocation rate are tracked by default, not discovered ad
+hoc.** `docs/performance.md`'s own history includes a real false-positive regression signal caused by
+a single 622ms GC pause contaminating a short JFR-window `tps` measurement (the LoRA playback gate
+incident that led to switching that one gate to wall-clock timing). Every perf-gate run from Tier 01
+onward records `jdk.GCPhasePause` count/max and an allocation-rate figure (JFR
+`jdk.ObjectAllocationSample` or equivalent) alongside its primary metric, and a run containing an
+outlier GC pause is re-run rather than scored — this generalizes the fix already applied once to
+LoRA, instead of waiting to rediscover the same failure mode per tier.
+
+**No CI exists in this repository today** (confirmed: no `.github/workflows` pipeline) — tier-gating
+(execution rule 1: don't start Tier N+1 until Tier N's exit criteria are all checked) is enforced
+procedurally, by whoever executes the plan re-reading the checklist, not automatically. This is an
+accepted, explicit trade-off rather than a silent gap; if a CI pipeline is added during this plan's
+execution, wiring `mvn test` plus the relevant `compare-*.sh` gate into it per tier is in scope for
+whichever tier is active at that point.
+
 ## Model and hardware inventory
 
 See [`INVENTORY.md`](INVENTORY.md). Summary: one NVIDIA GTX 1080 (CUDA) is the only GPU available
@@ -142,7 +202,9 @@ works":
 - All new/extended tests from layer 1-3 above pass, and all pre-existing tests still pass
   (`mvn test` across all unit-test-bearing modules, `mvn verify -pl juno-master`).
 - Any hot-path change has a published `docs/perf-compare/` entry per the existing performance-gate
-  rule, with no unexplained regression.
+  rule, against a concrete numeric threshold stated in that tier's own file (execution rule 7 — not
+  just "no unexplained regression"), and, for Tiers 01, 02, 03, 04, 06, 07, 08, 09, 10, an
+  accompanying `compare-llama-cpp.sh` run recording the current Juno/llama.cpp ratio.
 - `CHANGELOG.md` gets an entry describing what shipped, in the project's existing style.
 - `docs/agent-arch.txt`, `docs/howto.md`, and `README.md` are updated if the change is user-facing
   or architectural (existing `CLAUDE.md` rule), using Juno-native language only (rule 4 above).

@@ -103,8 +103,10 @@ grammar-constrained target is a real edge case that must be tested, not assumed 
   exercises `lookahead`, batch-mode drafting, and continuous-mode drafting end to end, diffing
   output against `--spec-type none` for correctness.
 - **Perf gate (required)**: this tier's entire point is a performance fix — full
-  `compare-lora.sh` plus the dedicated draft-model/ngram/lookahead comparison; publish under
-  `docs/perf-compare/`.
+  `compare-lora.sh` plus the dedicated draft-model/ngram/lookahead comparison, plus
+  `compare-llama-cpp.sh` for a llama.cpp-relative reading (per README's llama.cpp-relative gate, and
+  directly relevant here since llama.cpp has the same sequential-draft-forward structure — see gap
+  analysis §1.5); publish under `docs/perf-compare/`.
 
 ## Models needed
 

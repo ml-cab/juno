@@ -40,6 +40,18 @@ depend on IQ4_NL (`minimax-m2.5`'s quant) landing here first.
    target format, produces a new GGUF file. Scope the initial format set to whatever this tier has
    implemented dequant *and* a corresponding quantize (encode) path for — quantizing to a format
    Juno can't itself read back would be a bad first release.
+6. **Memory-mapped GGUF weight loading.** `GgufReader` currently opens a `FileChannel` and copies
+   every tensor into a heap `byte[]`/`float[]` via `readNBytes`-style calls (see `loadQ4_0` and its
+   siblings) — there is no `FileChannel.map`/`MemorySegment`-based zero-copy path anywhere. This is
+   one of llama.cpp's defining characteristics (near-instant load, OS page cache shared across
+   processes, lower RSS) and nothing elsewhere in this plan addresses it. Add a
+   `java.lang.foreign.Arena`-backed mapped-read path (fits the project's existing Panama-FFI
+   investment better than the legacy `FileChannel.map`/`MappedByteBuffer` API and its 2GiB-per-mapping
+   limit) as an alternative tensor-loading strategy, opt-in behind a flag first (e.g. `--mmap-weights
+   auto|on|off`, default `auto` = on once the platform/quant-format combination is verified safe) so
+   it can be disabled if a real correctness or portability issue turns up. Bundled into this tier
+   because it touches the same `GgufReader` tensor-loading code this tier already modifies for new
+   quant formats, not because it's a quantization-format item per se.
 
 ### Out of scope
 
@@ -58,7 +70,7 @@ depend on IQ4_NL (`minimax-m2.5`'s quant) landing here first.
 | 3 | ROCm GPU inference | new fused K-quant kernels, NEEDS-AMD-HARDWARE until validated |
 | 4 | Static schedule | quant format choice must not interact badly with batched GEMM paths (`CudaFp16GemmOps`/`sgemmQ4KBatchedGemm`-style batch-size thresholds) — verify each new MMQ kernel has the same batch-size-aware dispatch as the existing Q4_K one |
 | 5 | Continuous schedule | same, for `ContinuousBatchEngine`'s mixed prefill/decode batch shapes |
-| 6 | Single-node local mode | primary dev surface, using the two real IQ-quantized files already on disk |
+| 6 | Single-node local mode | primary dev surface, using the two real IQ-quantized files already on disk; also where `--mmap-weights` load-time/RSS is measured (see the memory-mapped-loading scope item) |
 | 7 | Pipeline-parallel cluster | shard loading must correctly propagate the new quant formats' metadata to every node |
 | 8 | Tensor-parallel cluster | same |
 | 9 | LoRA training | training's frozen-weight dequant path must support the new formats too (a model quantized in a new format should be trainable, not just inferable) |
@@ -84,6 +96,9 @@ depend on IQ4_NL (`minimax-m2.5`'s quant) landing here first.
    `./juno local` (architecture-string handling for these two is still Tier 08's job — this tier
    only needs the *quantization* to stop being the blocker; if the architecture-string guard from
    Tier 00 rejects them for architecture reasons, that's expected and correct, not a Tier 04 defect).
+7. Implement the memory-mapped weight-loading path; measure load time and peak RSS for the largest
+   model on disk (`llama-1-30b.Q4_K_M.gguf`) against the current read-and-copy path before enabling
+   it by default.
 
 ## Tests to write/upgrade before implementation
 
@@ -100,8 +115,17 @@ depend on IQ4_NL (`minimax-m2.5`'s quant) landing here first.
 - **New bash smoke script**: `scripts/performance-tests/smoke-tier04-quant-coverage.sh` — runs
   `./juno gguf-info` and `./juno local` against every quant format now supported, plus a
   `./juno quantize` round-trip for each newly-encodable format.
+- **New `GgufReaderTest`/load-time test**: mapped-load path produces identical tensor values to the
+  existing read-and-copy path for at least one model per quant family; a separate microbenchmark
+  records load-time and peak-RSS improvement for `llama-1-30b.Q4_K_M.gguf`, published alongside this
+  tier's other perf-compare results.
 - **Perf gate (required)**: new MMQ kernels are hot-path changes — `compare-lora.sh` plus a
-  per-format microbenchmark; publish under `docs/perf-compare/`.
+  per-format microbenchmark, plus `compare-llama-cpp.sh` for a llama.cpp-relative reading (per
+  README's llama.cpp-relative gate); publish under `docs/perf-compare/`. Threshold: each new fused
+  MMQ kernel (Q2_K/Q3_K/Q8_0/Q4_0/IQ4_NL) must land within 15% of the existing Q4_K MMQ kernel's
+  tokens/sec at an equivalent bit-width on the same model/hardware — a new kernel that "works" but is
+  far slower than the dequant-fallback it replaces is not a win and should be flagged, not shipped
+  silently.
 
 ## Models needed
 
@@ -122,6 +146,9 @@ user for a small model download in that format at the point this tier starts.
 - [ ] ROCm fused K-quant kernels implemented for Q4_K/Q5_K/Q6_K, unit-tested, marked
       NEEDS-AMD-HARDWARE.
 - [ ] `./juno quantize` ships for at least the formats with both decode and encode support.
+- [ ] Memory-mapped weight loading implemented behind `--mmap-weights`, correctness-verified against
+      the existing read-and-copy path, with a measured load-time/RSS improvement published for the
+      largest model on disk.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, no unexplained regression.
 - [ ] Docs (`docs/howto.md` new `quantize` command docs, `docs/agent-arch.txt`) updated.

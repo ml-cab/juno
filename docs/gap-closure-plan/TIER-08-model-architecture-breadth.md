@@ -107,7 +107,10 @@ support to a handler that's about to be substantially rewritten here.
   non-crashing) output.
 - **Perf gate**: new forward-pass code is a hot-path change by definition — `compare-lora.sh` at
   minimum; a dedicated per-architecture microbenchmark if these models are large enough to matter
-  (`Devstral` at 24B is the one most worth measuring for memory/GPU-layer-offload behavior).
+  (`Devstral` at 24B is the one most worth measuring for memory/GPU-layer-offload behavior), plus
+  `compare-llama-cpp.sh` for a llama.cpp-relative reading on each newly-supported architecture (per
+  README's llama.cpp-relative gate) — these are exactly the models where Juno previously couldn't
+  even load, so this is the first llama.cpp-relative data point for each one.
 
 ## Models needed
 

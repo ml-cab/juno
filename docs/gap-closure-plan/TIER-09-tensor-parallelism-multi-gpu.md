@@ -104,7 +104,13 @@ against the existing (correct, if slow) single-node dense computation.
   dense run of the same model/prompt/seed.
 - **Perf gate (required)**: tensor parallelism is explicitly a forward-pass/GPU-residency change —
   full `compare-lora.sh`, plus a dedicated tensor-parallel-vs-single-node throughput/latency
-  comparison; publish under `docs/perf-compare/`.
+  comparison, plus `compare-llama-cpp.sh` for a llama.cpp-relative reading on the single-node
+  configuration (per README's llama.cpp-relative gate — multi-node TP has no direct llama.cpp
+  equivalent on this hardware, so the single-node ratio is the relevant anchor); publish under
+  `docs/perf-compare/`. Threshold: 2-node TP throughput must exceed single-node dense throughput by a
+  stated margin (e.g. ≥1.3x) net of gRPC/AllReduce overhead — a real-slicing implementation that is
+  not measurably faster than single-node for any tested configuration means the gRPC round-trip cost
+  is dominating, and that finding must be reported explicitly, not folded into a bare "PASS."
 
 ## Models needed
 

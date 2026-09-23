@@ -108,7 +108,8 @@ that touches KV.
 - **Perf gate (required)**: block-table attention and defrag are hot-path changes —
   `compare-lora.sh` plus a dedicated "gather tax" re-measurement (the existing methodology in
   `docs/perf-compare/20260910T213121Z-gather-tax.md`/`20260910T214300Z-gather-tax.md` is the
-  template to reuse) confirming the tax is now fully eliminated, not just reduced.
+  template to reuse) confirming the tax is now fully eliminated, not just reduced, plus
+  `compare-llama-cpp.sh` for a llama.cpp-relative reading (per README's llama.cpp-relative gate).
 
 ## Models needed
 

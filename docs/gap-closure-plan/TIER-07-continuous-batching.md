@@ -90,7 +90,8 @@ actually help rather than hurt.
   drives N concurrent SSE streams under `continuous`, asserts correctness and captures TTFT/TPOT.
 - **Perf gate (required)**: this is entirely a batching/scheduling hot-path change —
   `compare-schedule.sh` (already exists per `scripts/performance-tests/`) rerun, plus
-  `compare-lora.sh`; publish under `docs/perf-compare/`.
+  `compare-lora.sh`, plus `compare-llama-cpp.sh` for a llama.cpp-relative reading (per README's
+  llama.cpp-relative gate); publish under `docs/perf-compare/`.
 
 ## Models needed
 
