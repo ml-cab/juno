@@ -83,6 +83,21 @@
 
 	</dependencies>
 	<build>
+		<resources>
+			<resource>
+				<directory>src/main/resources</directory>
+			</resource>
+			<!-- The JFR measurement configuration is checked in once, under
+			     scripts/performance-tests/ where the launcher scripts name it, and
+			     packaged from there so an in-process recording started from a jar
+			     resolves the same settings a script-launched one does. -->
+			<resource>
+				<directory>${project.basedir}/../scripts/performance-tests</directory>
+				<includes>
+					<include>juno-perf.jfc</include>
+				</includes>
+			</resource>
+		</resources>
 		<plugins>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>

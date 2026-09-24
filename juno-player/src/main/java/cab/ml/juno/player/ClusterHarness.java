@@ -337,9 +337,10 @@ public final class ClusterHarness implements AutoCloseable {
 	 *
 	 * <p>Must be called before {@link #start()}. Each node is launched with
 	 * {@code -XX:StartFlightRecording=duration=<duration>,filename=juno-<nodeId>-<stem>-<timestamp>.jfr,
-	 * settings=default,dumponexit=true} so its events are written when the process exits.
-	 * {@code default}, not {@code profile} — see {@code ConsoleMain.startProgrammaticJfr()}'s
-	 * comment on why the heavier profile settings are avoided for benchmark recordings.
+	 * settings=<juno-perf.jfc>,dumponexit=true} so its events are written when the process
+	 * exits. The settings file is the one {@link JunoJfrSettings} resolves — the same one
+	 * the coordinator's own recording uses, so node and coordinator files can be merged
+	 * into a single measurement.
 	 *
 	 * @param duration  human-friendly duration string, e.g. {@code "2m"} or {@code "30s"}
 	 * @param timestamp shared timestamp string (yyyyMMdd-HHmmss) — keeps coordinator and node
@@ -471,12 +472,17 @@ public final class ClusterHarness implements AutoCloseable {
 		cmd.add("-Djuno.byteOrder=" + byteOrder);
 
 		// JFR on the node JVM — records MatVec / ForwardPass events that fire here.
+		// The node gets the same settings file the coordinator records under, so the
+		// two files merge into one comparable measurement rather than two taken at
+		// different instrumentation overheads.
 		if (jfrDuration != null && jfrTimestamp != null) {
 			String stem = modelPath != null ? stemOf(modelPath) : "model";
 			String nodeJfrFile = "juno-" + nodeId + "-" + stem + "-" + jfrTimestamp + ".jfr";
+			Path settings = JunoJfrSettings.fileForForkedJvm();
 			cmd.add("-XX:StartFlightRecording=duration=" + jfrDuration
 					+ ",filename=" + nodeJfrFile
-					+ ",settings=default,dumponexit=true");
+					+ ",settings=" + (settings != null ? settings.toAbsolutePath() : JunoJfrSettings.fallbackName())
+					+ ",dumponexit=true");
 		}
 
 		// LoRA adapter overlay — propagate to node JVM so EmbeddedNodeServer loads the

@@ -29,7 +29,16 @@ about before it locks in a block-table layout.
 1. **Tiled/online-softmax attention kernel** (CUDA), replacing `gqa_attention.cu`'s current
    full-materialization design, built on Tier 01's residency primitive. Must remain numerically
    correct (verified against the existing scalar CPU attention path) while reducing peak memory at
-   long sequence lengths.
+   long sequence lengths. **It inherits whatever architecture coverage Tier 01B actually delivered —
+   read that tier's exit table, do not assume it covered everything.** Tier 01B ships the kernel path
+   for Phi-2, Phi-3, Qwen3 and Qwen3-MoE but explicitly leaves any architecture it could not measure
+   on a real model with its default resolved off behind an explicit notice, and at the time of
+   writing no `qwen3` or `qwen3moe` file exists on disk to measure with. So the starting state for
+   this tier is "default-on for the architectures 01B measured," not "default-on everywhere."
+   Whatever that set turns out to be, this rewrite must not shrink it — no architecture may regress
+   to the scalar path as a side effect — and must re-run Tier 01B's per-architecture greedy-decode
+   divergence characterisation for every member of it, since a tiled online-softmax accumulates in a
+   different order and its divergence profile is not the one Tier 01B measured.
 2. **Context-shifting**: when a session's KV would exceed `MAX_SEQ_LEN`, instead of throwing
    `IllegalStateException` in `DenseKvTensor`/`KvPageTable`/`PagedKvTensor`/`DeviceKvCache`, support
    an explicit, opt-in shift policy (drop oldest N non-system tokens, keep going) — opt-in because
@@ -76,9 +85,27 @@ about before it locks in a block-table layout.
    would have overflowed the old kernel's scratch buffer.
 3. Implement context-shift as an opt-in KV-cache operation (works for both dense and paged KV);
    wire the opt-in flag through CLI and both REST surfaces.
-4. Implement sliding-window attention, driven by GGUF metadata (`rope.scaling.*`-style metadata,
-   confirm which key llama.cpp-format GGUF exporters actually use — check `Devstral`'s Mistral3
-   metadata if it turns out to be a windowed architecture, once Tier 08 makes that model loadable).
+4. Implement sliding-window attention, driven by GGUF metadata. No window key is read anywhere
+   today — `GgufReader` has no `sliding`/`window` reference at all — so this tier adds the read via
+   the existing generic `metaInt` accessor and must first confirm which key real exporters write
+   (`<arch>.attention.sliding_window` is the expected spelling; verify against a real file rather
+   than assuming).
+
+   **Validation does not depend on Tier 08, and must not be deferred to it.** An earlier draft
+   deferred the windowed-model check until "Tier 08 makes that model loadable," which created a
+   cycle: Tier 08's Gemma handler needs this tier's windowing mechanism, and Tier 00's audit already
+   established that `gemma-4-E4B` uses patterned sliding-window attention with a 512 window. Break it
+   by splitting the validation:
+   - **This tier** validates the mechanism against a synthetic fixture — a GGUF whose metadata
+     declares a window — plus a unit-level test that the windowed causal mask ignores exactly the
+     tokens outside the window and that a model *without* the key is bit-identical to pre-tier
+     behaviour. That is sufficient to prove the mechanism and to ship it.
+   - **Tier 08** carries the end-to-end validation on `gemma-4-E4B` as one of its own exit criteria,
+     once its handler makes that file loadable. Tier 08's file states this explicitly so the
+     obligation is tracked rather than lost between the two tiers.
+
+   Also check whether `mistral-7b-instruct-v0.1` (already present) declares a window before
+   requesting any new download.
 5. Run the full cross-surface smoke matrix, including a long-context stress case (loop conversation
    turns until the shift boundary is hit) for both static and continuous schedules.
 
@@ -94,9 +121,9 @@ about before it locks in a block-table layout.
   tokens outside the window, and a non-windowed model's behavior is bit-identical to before this
   tier (regression guard).
 - **`ModelLiveRunnerIT`**: add a long-context check (generate past the old hard-fail point with
-  `--context-shift` enabled) and a sliding-window model check once Tier 08 makes a windowed model
-  loadable (may need to sequence this specific sub-check after Tier 08, noted here so it isn't
-  forgotten).
+  `--context-shift` enabled). The real-model windowed check belongs to Tier 08 and is listed in that
+  tier's exit criteria; this tier's windowed coverage is the synthetic fixture plus the unit-level
+  mask tests above, which is enough to ship the mechanism without waiting on a later tier.
 - **New bash smoke script**: `scripts/performance-tests/smoke-tier02-attention-context.sh` —
   drives a long multi-turn conversation via the REST API until the shift boundary, asserts the
   server keeps responding instead of erroring, and asserts a second run *without* the opt-in flag
@@ -104,10 +131,17 @@ about before it locks in a block-table layout.
 - **Perf gate (required)**: the tiled kernel is a hot-path change — `compare-lora.sh` plus a
   dedicated long-context latency/memory microbenchmark, plus `compare-llama-cpp.sh` for a
   llama.cpp-relative pp/tg reading on the same models (per README's llama.cpp-relative gate); publish
-  under `docs/perf-compare/`. Threshold: peak GPU memory at the longest tested sequence length must
-  drop by a stated percentage vs. the old full-materialization kernel (measure the old kernel's
-  actual number first, then set this tier's target relative to it — do not accept "some reduction"
-  with no number).
+  under `docs/perf-compare/`.
+
+  **Threshold.** Measure the old full-materialization kernel's peak attention scratch first, then
+  hold the tiled kernel to both of these:
+  - peak attention scratch at the longest tested sequence length drops by **>= 80%**;
+  - peak attention scratch scales sub-quadratically — doubling the sequence length must **less than
+    double** it, which is the property the rewrite exists to buy and the one a percentage alone does
+    not capture.
+
+  Throughput must not regress: tg ratio within 0.95x and pp ratio within 0.95x of the pre-tier
+  baseline for every sweep model, median of three runs per the README's noise-floor rule.
 
 ## Models needed
 
@@ -123,10 +157,13 @@ this metadata before assuming a new download is needed; flag to the user only if
 - [ ] Context-shift works correctly, opt-in only, for both dense and paged KV, both schedules.
 - [ ] Default (non-opt-in) behavior is unchanged — still a clear, documented error past
       `MAX_SEQ_LEN`.
-- [ ] Sliding-window attention verified correct for a windowed model and a no-op (bit-identical) for
-      non-windowed models.
+- [ ] Sliding-window attention verified correct against a synthetic windowed-metadata fixture and a
+      no-op (bit-identical) for non-windowed models. Real-model validation on `gemma-4-E4B` is Tier
+      08's exit criterion, not this tier's — confirm it is listed there before closing this one.
 - [ ] Cross-surface checklist fully resolved.
-- [ ] Perf gate published with no unexplained regression.
+- [ ] Perf gate published, both memory thresholds above met, no throughput regression.
+- [ ] The context-shift opt-in is in `api/src/main/resources/openapi.yaml` and `juno-api.yaml`
+      alongside the code that reads it (README feature-complete rule).
 - [ ] Docs (`docs/howto.md`, `docs/agent-arch.txt`, `docs/performance.md`) updated, Juno-native
       language only.
 - [ ] `CHANGELOG.md` entry added.

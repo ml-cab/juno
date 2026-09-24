@@ -48,8 +48,10 @@ against the existing (correct, if slow) single-node dense computation.
   distributed tooling over NCCL/MPI), not treated as a gap to reverse in this plan unless the user
   says otherwise; the single-process multi-GPU path in scope above can use direct
   peer-to-peer/device-to-device CUDA calls without adopting NCCL specifically.
-- Elastic N-node clustering beyond the existing fixed-3-node `ClusterHarness` topology (that's
-  Tier 13's scope).
+- Elastic N-node clustering — discovery, membership, the production launch path and fault tolerance
+  are all Tier 13's scope. The one exception is implementation step 0 option (a): generalizing
+  `ClusterHarness`'s node count so a 2-way parity split can be tested at all. That is a test-harness
+  change, not elastic clustering, and it is the only part of Tier 13's territory this tier may take.
 
 ## Cross-surface compatibility checklist
 
@@ -72,13 +74,28 @@ against the existing (correct, if slow) single-node dense computation.
 
 ## Implementation steps
 
-1. Write the numerical-parity test harness first: run a small model single-node dense, then
-   2-way-and-3-way tensor-parallel-sharded, assert outputs match within float tolerance — this test
-   must fail against today's stub implementation (confirming it currently doesn't validate anything
-   meaningful) before any new code is written, as proof the test is actually exercising real
-   slicing once implemented.
+0. **Resolve the node-count dependency before writing the parity harness.** This tier's parity test
+   wants 2-way *and* 3-way splits, but `ClusterHarness` is hard-coded to three nodes
+   (`threeNodes()`/`tensorNodes()`, fixed ports, and an explicit `totalLayers must be >= 3 to split
+   across 3 nodes` guard), and generalizing it to a configurable node count is Tier 13's scope —
+   a later tier. Pick one and record the choice here:
+   - **(a)** hoist just the node-count generalization of `ClusterHarness` into this tier, leaving
+     the production launch path, discovery and fault tolerance to Tier 13 (preferred: it is a
+     contained change and it makes the 2-way parity case possible); or
+   - **(b)** restrict this tier's parity testing to 3-way splits and state plainly that 2-way is
+     untested until Tier 13, rather than listing a 2-way case that cannot run.
+
+   Do not leave this implicit — a parity test that silently only ever ran 3-way while the plan
+   claims 2-and-3-way coverage is the same class of defect this tier exists to fix in
+   `TensorParallelClusterIT`.
+
+1. Write the numerical-parity test harness: run a small model single-node dense, then
+   tensor-parallel-sharded at each split width step 0 made available, assert outputs match within
+   float tolerance — this test must fail against today's stub implementation (confirming it
+   currently doesn't validate anything meaningful) before any new code is written, as proof the test
+   is actually exercising real slicing once implemented.
 2. Implement real column-/row-parallel slicing for `LlamaTransformerHandler`; get the parity test
-   passing for 2-node and 3-node splits.
+   passing at every split width step 0 made available.
 3. Replace `TensorParallelClusterIT`'s stub handler with the real sliced computation.
 4. Extend to the remaining handlers, one at a time, each gated by its own parity test.
 5. Evaluate and, if justified, implement single-process multi-GPU addressing.
@@ -87,8 +104,9 @@ against the existing (correct, if slow) single-node dense computation.
 
 ## Tests to write/upgrade before implementation
 
-- **New `TensorShardContextParityTest`** (or similarly named): single-node dense vs. 2-way/3-way
-  tensor-parallel-sharded output comparison, for each supported architecture, within float
+- **New `TensorShardContextParityTest`** (or similarly named): single-node dense vs.
+  tensor-parallel-sharded output comparison at every split width step 0 made available (3-way at
+  minimum, 2-way as well if step 0 chose option (a)), for each supported architecture, within float
   tolerance.
 - **`TensorParallelClusterIT`**: rewritten to use a real model and real slicing instead of the
   dummy-fixed-logit stub — this is the single most important test change in this tier, since it's
@@ -107,21 +125,38 @@ against the existing (correct, if slow) single-node dense computation.
   comparison, plus `compare-llama-cpp.sh` for a llama.cpp-relative reading on the single-node
   configuration (per README's llama.cpp-relative gate — multi-node TP has no direct llama.cpp
   equivalent on this hardware, so the single-node ratio is the relevant anchor); publish under
-  `docs/perf-compare/`. Threshold: 2-node TP throughput must exceed single-node dense throughput by a
-  stated margin (e.g. ≥1.3x) net of gRPC/AllReduce overhead — a real-slicing implementation that is
-  not measurably faster than single-node for any tested configuration means the gRPC round-trip cost
-  is dominating, and that finding must be reported explicitly, not folded into a bare "PASS."
+  `docs/perf-compare/`.
+
+  **Threshold — and read the hardware constraint before setting one.** An earlier draft required
+  "2-node TP throughput must exceed single-node dense throughput by ≥1.3x." That is unreachable
+  here and would have to be waived or faked. `ClusterHarness` forks node JVMs on `localhost`, and
+  per [`INVENTORY.md`](INVENTORY.md) this environment has exactly one GTX 1080, so every shard
+  contends for the same device: tensor parallelism on one GPU does the same total work as a single
+  node and adds gRPC hops and AllReduce on top. It cannot be faster, however correct the slicing.
+
+  So throughput is **recorded, not gated**, and correctness is the exit bar:
+  - **Gate:** sliced output matches single-node dense within float tolerance on every supported
+    architecture — this is the threshold, and it is a hard one.
+  - **Gate:** per-layer AllReduce and gRPC overhead is published as a measured per-token cost, so a
+    future multi-GPU host has a number to be held to.
+  - **Gate:** single-node throughput must not regress — tg and pp within **0.95x** of the pre-tier
+    baseline, median of three per the README's noise-floor rule, since this tier rewrites the
+    projection path that single-node inference also uses.
+  - **Recorded, no threshold:** 2- and 3-way TP throughput against single-node dense on this host.
+    Expect it to be below 1.0x. Report the number and the reason plainly rather than omitting it.
 
 ## Models needed
 
-Existing dense models suffice for parity testing across 2-3 simulated shards on one physical
-machine (the existing `ClusterHarness` forks JVM processes, not physical hosts, so no additional
+Existing dense models suffice for parity testing across the simulated shard counts step 0 makes
+available on one physical machine (the existing `ClusterHarness` forks JVM processes, not physical hosts, so no additional
 hardware is strictly required to validate correctness — only the single-process multi-GPU
 sub-scope needs a second physical GPU, which isn't available here; flag that limitation when this
 tier reaches that point).
 
 ## Exit criteria
 
+- [ ] Step 0's node-count decision recorded in this file, with the split widths actually tested
+      named explicitly — no claim of 2-way coverage unless 2-way ran.
 - [ ] Real column-/row-parallel slicing implemented for every currently-supported transformer
       handler, numerically validated against single-node dense output.
 - [ ] `TensorParallelClusterIT` exercises real slicing, not a dummy-fixed-logit stub.
@@ -130,7 +165,9 @@ tier reaches that point).
       GPU.
 - [ ] Cross-surface checklist fully resolved; continuous+tensor-parallel fallback-to-static
       behavior explicitly confirmed unchanged (not silently made reachable in a half-working state).
-- [ ] Perf gate published.
+- [ ] Perf gate published: parity gate met, single-node throughput within 0.95x, AllReduce/gRPC
+      per-token overhead recorded, and multi-node throughput reported as measured — including if it
+      is below 1.0x, which is the expected result on a single-GPU host.
 - [ ] Docs (`docs/agent-arch.txt`, `docs/howto.md`) updated to state plainly that tensor parallelism
       now does real sliced computation, replacing whatever Tier 00 documented as its prior
       (non-functional) state.

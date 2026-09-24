@@ -1,5 +1,41 @@
 ## Status 
 
+**Session 88** — One JFR configuration for every recording, GC and allocation in every metrics report, prompt-token parity for prefill comparisons
+
+- **Every JFR recording is now taken under one settings file.** Juno starts recordings from six places, and
+  they disagreed: the launcher `test` command used `profile` on both platforms, forked cluster-node JVMs used
+  `default`, and the local, LoRA and cluster-coordinator recordings built their own from `default`
+  programmatically. Two runs could therefore differ by their instrumentation overhead alone, which made every
+  published throughput comparison weaker than it looked. `scripts/performance-tests/juno-perf.jfc` is now the
+  single configuration, resolved by the new `JunoJfrSettings` for the in-process recordings and named directly
+  by `scripts/run.sh`, `scripts/run.bat` and `ClusterHarness`. It is packaged into the `juno-player` jar, so a
+  run started from a jar resolves the same settings a script-launched one does; override it with
+  `JUNO_JFR_SETTINGS` or `-Djuno.jfr.settings`. A settings file that cannot be resolved falls back to the JDK
+  stock settings and says so rather than changing the overhead quietly. The AWS deployment script keeps its own
+  settings: it launches remote instances, not the benchmark host. Native-thread stack sampling deliberately
+  stays at its stock interval — tightening it was behind a JFR sampler crash under `--gpu --mmq` on
+  `--lora-play`.
+- **The metrics report now covers the JVM, not only Juno.** `JfrMetricsExtractor` consumed `juno.*` events and
+  nothing else, so no run could report a garbage-collection pause or an allocation rate — and a short
+  measurement window holding one long pause reports a throughput drop that looks exactly like a code
+  regression. The new `JdkEventBucket` adds `jdk.GCPhasePause` (count, maximum and total), allocated bytes,
+  sampled allocation volume with a bounded per-site breakdown, execution samples with a bounded per-method
+  breakdown, and monitor-contention and park time. Allocated bytes is the sum over threads of each thread's own
+  running total, not of every sample, since the underlying field is cumulative per thread. Covered by
+  `JfrMetricsExtractorJdkEventsTest`, which computes its expected values from the same recording so the
+  assertions hold however many events the window caught.
+- **A prefill comparison now requires both engines to have prefilled comparable work.**
+  `compare-llama-cpp.sh` prefilled a fixed 57-character sentence unless `--raw-prompt` was passed, against a
+  reference prefilling `n_prompt` tokens — roughly 20 tokens against 128 in the runs on record. That default is
+  reversed (`--no-raw-prompt` restores the old behaviour for a Juno-only measurement), every result JSON records
+  the real `prompt_tokens` beside `n_prompt`, and a prefill ratio whose deviation exceeds 10% is withheld with
+  its reason stated in the JSON and in the published index rather than reported as a throughput gap. Generation
+  ratios are unaffected. The index also gained garbage-collection and allocated-bytes-per-token columns and now
+  states the unmatched thread count between the two engines explicitly.
+- No performance run: nothing here touches the forward pass, MatVec, GPU residency, batching, KV or
+  quantization. The JFR configuration change does break strict comparability with previously published runs, so
+  the first run taken under it becomes the new reference.
+
 **Session 87** — Cluster loads fail closed, dead registry/Hazelcast surface removed, REST temperature 0 is greedy
 
 - **A cluster node whose model cannot be loaded no longer serves stub output.** `EmbeddedNodeServer.loadShard`

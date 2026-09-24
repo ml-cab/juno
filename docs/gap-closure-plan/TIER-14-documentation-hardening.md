@@ -40,21 +40,37 @@ happened to touch, but that Tier 03's changes quietly invalidated).
 2. **Known-limitations ledger**: add a short, consistently-formatted "Known limitations" section
    next to the code it describes (a class-level javadoc block, or a short markdown file colocated
    with the module) for each major subsystem (`node`, `coordinator`, `kvcache`, `sampler`, `lora`,
-   `vision`), stating current real limitations in one place instead of scattered across javadoc,
+   `vision`, `tokenizer`, `api`), stating current real limitations in one place instead of scattered across javadoc,
    `CHANGELOG.md`, and `docs/howto.md` caveats. This is a discoverability aid, not new analysis —
    it should mostly restate what's already true post-Tier-13, gathered into one findable spot per
    subsystem.
 3. **Full doc consistency pass**: `docs/howto.md`, `docs/performance.md`, `README.md`,
    `docs/agent-arch.txt` all get read end-to-end against current source and corrected where drifted.
 4. **Final llama.cpp-relative scorecard**: pull every `compare-llama-cpp.sh` run published per tier
-   under README's "llama.cpp-relative gate" (Tiers 01, 02, 03, 04, 06, 07, 08, 09, 10) into one table
-   in this tier's own file — model, quant, hardware, Juno tg/pp, llama.cpp tg/pp, ratio — so the
-   plan's actual stated goal (closing the gap with llama.cpp) has a single, final, honest answer
-   instead of being implied by eight separate tier-local perf-compare directories nobody has
+   under README's "llama.cpp-relative gate" (Tiers 01, 01B, 02, 03, 04, 04B, 06, 07, 08, 09, 10)
+   into one table in this tier's own file — model, quant, hardware, Juno tg/pp, llama.cpp tg/pp, ratio — so
+   the plan's actual stated goal (closing the gap with llama.cpp) has a single, final, honest answer
+   instead of being implied by eleven separate tier-local perf-compare directories nobody has
    aggregated. Report the trend (did the ratio improve, tier over tier, or not) as plainly as
    `docs/performance.md` already reports individual negative results (0.52x draft-model, 0.86x
    continuous) — an unchanged or worsened ratio on some workload is a valid, reportable outcome here,
-   not a reason to withhold the table.
+   not a reason to withhold the table. **Score the final row against the program target table in
+   [`README.md`](README.md)**, per metric, as met or missed with the actual number — including the
+   intermediate milestones assigned to Tiers 01B, 04 and 10, so a milestone that was missed mid-plan
+   and never recovered is visible rather than averaged away. Mark clearly which runs were taken
+   before the benchmark-parity preconditions landed and which after; do not compare across that
+   boundary in the same column. The same applies to Tier 04B: mark which runs were taken before the
+   tokenizer fidelity work changed token counts, since `prompt_tokens` is the denominator of every
+   pp and tg figure in the table.
+
+   **Score the pp row against Tier 01's re-derived target, not the README's original `>= 0.15x`.**
+   That figure was set against readings taken with `raw_prompt: 0`, where llama-bench prefilled 128
+   tokens and Juno prefilled 20 to 30 — never a like-for-like measurement. Tier 01 re-derives the
+   target from its parity-corrected re-baseline and records the new number in its own file; this
+   scorecard scores against that one and states plainly that the original was retired and why. A
+   scorecard that scores a parity-corrected result against a pre-parity target would report a
+   regression that is really a measurement correction, which is the opposite of what this table is
+   for.
 
 ### Out of scope
 
@@ -78,7 +94,9 @@ skipping the checklist format entirely.
 
 ## Implementation steps
 
-1. Enumerate every load-bearing architectural claim across `docs/agent-arch.txt` and `CLAUDE.md`
+1. Enumerate every load-bearing architectural claim across `docs/agent-arch.txt`, `CLAUDE.md` and
+   the published API contract (`api/src/main/resources/openapi.yaml`, `juno-api.yaml`,
+   `api/src/main/proto/inference.proto`)
    (a claim is "load-bearing" if a reader — human or agent — would make a different decision
    believing it true vs. false; skip purely descriptive/cosmetic text).
 2. For each claim, find and cite the current call site/test that verifies it, or mark it for
@@ -101,10 +119,19 @@ cases:
 
 - **New bash script**: `scripts/performance-tests/smoke-tier14-doc-consistency.sh` (naming kept
   consistent with the rest of the plan's smoke-script convention even though this one checks docs,
-  not runtime behavior) — greps for competitor product names *and* for `Tier [0-9]+`/`Infra tier`
-  outside the allowed directories, and fails if any are found; optionally checks for a minimal set
-  of known-stale phrases if any were identified during the audit, so the check can catch a
-  regression if someone reintroduces one of the fixed claims later.
+  not runtime behavior). It must fail, not warn, on each of:
+  - a competitor product name outside the allowed directories;
+  - `Tier [0-9]+`/`Infra tier` outside the allowed directories;
+  - **any tier file under `docs/gap-closure-plan/` containing `Perf gate` but no `**Threshold`
+    block carrying a numeral and a comparison operator** — this is what makes execution rule 7
+    self-enforcing rather than a rule everyone agrees with and half the tiers ignore. Match on
+    `Perf gate`, not `Perf gate (required)`: three spellings of that heading are in use. Exclude
+    this tier's own file from the scan — it names the string in order to describe the check, and a
+    check that fails on its own specification is noise;
+  - any known-stale phrase identified during the audit, so a fixed claim cannot quietly return.
+
+  Run it against this tree *before* starting the audit as well as after, so the rule-7 check is a
+  finding this tier reports rather than something it silently fixes.
 - No unit/integration test changes expected, since no code behavior changes in this tier — if the
   audit reveals a real behavioral bug, that goes into a newly-filed tier's test plan instead, not
   here.
@@ -118,13 +145,23 @@ None — this tier is documentation and static analysis only.
 - [ ] Every load-bearing architectural claim in `docs/agent-arch.txt`/`CLAUDE.md`/`CHANGELOG.md` has
       a verified current call site, or has been corrected/removed.
 - [ ] Known-limitations ledger exists for `node`, `coordinator`, `kvcache`, `sampler`, `lora`,
-      `vision`.
+      `vision`, `tokenizer` and `api` — the last two added because nothing in Tiers 00-13 audited
+      them by default: the `tokenizer` module had no owning tier until Tier 04B, and the published
+      API contract (`openapi.yaml`, `juno-api.yaml`, `inference.proto`) is the one artifact a
+      reader is most likely to trust without checking.
+- [ ] `api/src/main/resources/openapi.yaml`, `juno-api.yaml` and `api/src/main/proto/inference.proto`
+      audited against the implemented surface: every endpoint, field and RPC the code serves is
+      declared, and nothing declared is unimplemented. Six tiers added surface here; this is the
+      backstop for any that skipped the feature-complete rule.
+- [ ] `smoke-tier14-doc-consistency.sh`'s rule-7 check passes — every tier file with a `Perf gate`
+      has a numeric threshold.
 - [ ] `docs/howto.md`, `docs/performance.md`, `README.md` read-through complete, drift corrected.
 - [ ] Competitor-product-name grep *and* `Tier [0-9]+`/`Infra tier` grep both pass clean outside the
       allowed directories.
 - [ ] Final llama.cpp-relative scorecard published in this tier's file, aggregating every
       `compare-llama-cpp.sh` run from Tiers 01-13, with an honest statement of whether the ratio
-      improved.
+      improved, and every row of the program target table scored met or missed with its actual
+      number.
 - [ ] `CHANGELOG.md` entry added summarizing the audit and what was corrected.
 - [ ] This plan tree (`docs/gap-closure-plan/`) is itself left in place as a historical record —
       not deleted — since it documents the reasoning behind thirteen tiers of real change; consider

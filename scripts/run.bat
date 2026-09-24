@@ -20,6 +20,10 @@ echo [DBG] DIR after strip trailing backslash: !DIR!
 for %%I in ("%DIR%\..") do set "DIR=%%~fI"
 echo [DBG] DIR resolved to project root: !DIR!
 
+rem The one JFR settings file every Juno recording is taken under, so two runs
+rem differ by the code under test and not by their instrumentation overhead.
+if not defined JUNO_JFR_SETTINGS set "JUNO_JFR_SETTINGS=%DIR%\scripts\performance-tests\juno-perf.jfc"
+
 rem Read project version from root pom.xml
 set "JUNO_VERSION="
 for /f "usebackq tokens=3 delims=<>" %%V in (`findstr /r "<version>[0-9]" "%DIR%\pom.xml"`) do if not defined JUNO_VERSION set "JUNO_VERSION=%%V"
@@ -223,6 +227,7 @@ rem exactly as in local mode.  Pass --jfr as an app arg, not a JVM flag.
 set "JFR_ARG_CLUSTER="
 if not "%JFR_DURATION_CLUSTER%"=="" (
   set "JFR_ARG_CLUSTER=--jfr %JFR_DURATION_CLUSTER%"
+  if exist "%JUNO_JFR_SETTINGS%" set "JVM_BASE=!JVM_BASE! -Djuno.jfr.settings=%JUNO_JFR_SETTINGS%"
   echo [WARN] JFR enabled -- duration=%JFR_DURATION_CLUSTER%  (programmatic recording, metrics auto-printed on exit)
 )
 
@@ -443,6 +448,7 @@ rem recording lifecycle and auto-prints metrics on exit (mirrors run.sh local).
 set "JFR_ARG_LOCAL="
 if not "%JFR_DURATION_LOCAL%"=="" (
   set "JFR_ARG_LOCAL=--jfr %JFR_DURATION_LOCAL%"
+  if exist "%JUNO_JFR_SETTINGS%" set "JVM_BASE=!JVM_BASE! -Djuno.jfr.settings=%JUNO_JFR_SETTINGS%"
   echo [WARN] JFR enabled -- duration=%JFR_DURATION_LOCAL%  (programmatic recording, metrics auto-printed on exit)
 )
 
@@ -725,6 +731,7 @@ if not "%LORA_PATH_VAL%"=="" set "LORA_PATH_FLAG=--lora-path %LORA_PATH_VAL%"
 set "JFR_ARG_LORA="
 if "%JFR_DURATION_LORA%"=="" goto :lora_jfr_skip
 set "JFR_ARG_LORA=--jfr %JFR_DURATION_LORA%"
+if exist "%JUNO_JFR_SETTINGS%" set "JVM_BASE=%JVM_BASE% -Djuno.jfr.settings=%JUNO_JFR_SETTINGS%"
 echo [WARN] JFR enabled -- duration=%JFR_DURATION_LORA%  (programmatic recording, metrics auto-printed on exit)
 :lora_jfr_skip
 
@@ -809,7 +816,13 @@ set "JFR_FLAG_TEST="
 if "%JFR_DURATION_TEST%"=="" goto :test_jfr_skip
 for /f "tokens=2 delims==" %%T in ('wmic os get localdatetime /value 2^>nul ^| find "="') do set "DT=%%T"
 set "JFR_TS=!DT:~0,8!-!DT:~8,6!"
-set "JFR_FLAG_TEST=-XX:StartFlightRecording=duration=%JFR_DURATION_TEST%,filename=juno-!JFR_TS!.jfr,settings=profile,dumponexit=true"
+set "JFR_SETTINGS_TEST=%JUNO_JFR_SETTINGS%"
+if not exist "%JFR_SETTINGS_TEST%" (
+  echo [WARN] JFR settings file not found: %JFR_SETTINGS_TEST% -- falling back to the JDK default settings.
+  echo [WARN] This run is not comparable with one taken under the Juno settings.
+  set "JFR_SETTINGS_TEST=default"
+)
+set "JFR_FLAG_TEST=-XX:StartFlightRecording=duration=%JFR_DURATION_TEST%,filename=juno-!JFR_TS!.jfr,settings=!JFR_SETTINGS_TEST!,dumponexit=true"
 echo [WARN] JFR enabled -- duration=%JFR_DURATION_TEST%  output=juno-!JFR_TS!.jfr
 :test_jfr_skip
 

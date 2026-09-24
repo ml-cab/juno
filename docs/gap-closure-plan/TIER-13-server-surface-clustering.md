@@ -36,6 +36,12 @@ the finished system.
    beyond the hard-coded 3-node topology, to a configurable node count. Tier 00 removed the
    never-implemented `RegistryService` RPCs and the unused Hazelcast dependency, so any node
    discovery this needs is designed here from scratch rather than revived from that surface.
+
+   **Check what Tier 09 already took.** Tier 09's implementation step 0 may have hoisted the
+   `ClusterHarness` node-count generalization into itself so its 2-way parity split could run at
+   all. If it did, that part is done and this tier's remaining work is the production launch path,
+   discovery, membership and fault tolerance — read Tier 09's recorded decision before starting
+   rather than re-doing it.
 3. **Reranking endpoint**: add a `/v1/rerank`-style endpoint (Juno-native naming), reusing the
    existing embeddings infrastructure's pooling logic where applicable.
 4. **Broader tool/function calling**: extend `ToolPrompt.SUPPORTED_MODEL_TYPES` beyond
@@ -110,6 +116,15 @@ the finished system.
   code path, not a hot-path *change*, so the existing rule's "optional" carve-out likely applies —
   confirm at implementation time rather than assuming.
 
+  **Threshold, if the gate applies.** Per-request latency on the happy path within **0.95x** of the
+  pre-tier baseline on both schedules, median of three per the README's noise-floor rule — the
+  circuit-breaker and retry wrapper sits on every request once wired, so "it only costs something
+  when a node dies" needs measuring rather than assuming. Reranking's own number: end-to-end latency
+  for a 10-document rerank at **<= 1.5x** the latency of a single chat completion of equivalent
+  total token count on the same model, since it reuses the embedding path and should not be paying
+  a per-document full-generation cost. If the gate is judged not to apply, record that judgement and
+  the reasoning here rather than omitting the section.
+
 ## Models needed
 
 Existing dense models suffice for reranking and tool-calling template extension. Elastic clustering
@@ -123,7 +138,10 @@ and fault-tolerance testing use the existing forked-JVM harness and don't need n
 - [ ] No ambiguous membership state: either the elastic design's discovery mechanism is implemented
       and tested, or membership stays fixed at launch and is documented as such (Tier 00 removed
       `RegistryService` and Hazelcast).
-- [ ] Reranking endpoint implemented and tested.
+- [ ] Reranking endpoint implemented and tested, and declared in
+      `api/src/main/resources/openapi.yaml` and `juno-api.yaml` alongside the code that serves it
+      (README feature-complete rule). Any gRPC change from the elastic-clustering work is reflected
+      in `api/src/main/proto/inference.proto` in the same change.
 - [ ] Tool calling works on at least one additional chat template beyond
       `{llama3, chatml, qwen3}`, with the remaining unsupported templates still failing closed
       correctly.

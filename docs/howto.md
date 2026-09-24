@@ -921,6 +921,35 @@ JFR file. These are the primary throughput metrics for performance comparison:
 | `juno.TokenProduced.elapsed_seconds` | Wall-clock span from first to last delivered token |
 | `juno.TokenProduced.tps` | Aggregate tokens per second (`count / elapsed_seconds`) |
 
+It also reports the JVM-side figures a throughput number has to be read against. A short
+measurement window holding one long collection pause reports a drop that looks exactly like a
+code regression, and these are what tell the two apart:
+
+| Field | Description |
+|-------|-------------|
+| `jdk.GCPhasePause.count` / `.max_ms` / `.total_ms` | Collection pauses in the window. Re-run rather than score a result whose `max_ms` is a large fraction of its window |
+| `jdk.ThreadAllocationStatistics.bytes_total` | Bytes allocated across all threads. The sum of each thread's own running total, not of every sample |
+| `jdk.ObjectAllocationSample.count` / `.weight_total_bytes` | Sampled allocation volume |
+| `jdk.ObjectAllocationSample.top_sites.<method>.bytes` | Where those bytes were allocated, ten entries at most |
+| `jdk.ExecutionSample.count` and `.top_methods.<method>.samples` | Where CPU time went, ten entries at most |
+| `jdk.JavaMonitorEnter.total_ms` / `jdk.ThreadPark.total_ms` | Time lost to monitor contention and to parking |
+
+### One JFR configuration for every recording
+
+Two throughput measurements are comparable only when both were recorded under the same
+instrumentation overhead. Every recording Juno takes therefore names one settings file,
+`scripts/performance-tests/juno-perf.jfc`: the launcher `test` command, each forked cluster-node
+JVM, and the local, LoRA and cluster-coordinator recordings the console starts in-process. The
+file enables every `juno.*` event plus the JVM events tabulated above, and is packaged into the
+runnable jar so a recording started from a jar resolves the same settings a script-launched one
+does.
+
+Point a run at a different file with `JUNO_JFR_SETTINGS=/path/to/custom.jfc` (the launcher
+scripts) or `-Djuno.jfr.settings=/path/to/custom.jfc` (a bare `java -jar` invocation). If the
+file cannot be found, the run falls back to the JDK's stock low-overhead settings and says so,
+because a recording that cannot state which settings produced it should not be compared against
+one taken under the Juno settings.
+
 AWS cluster JFR:
 
 ```bash

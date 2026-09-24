@@ -18,20 +18,38 @@ This is the tier where the four "falls through to the generic handler" files fro
 [`INVENTORY.md`](INVENTORY.md) get real support, not just a safe rejection (Tier 00 already made
 sure the current behavior is at least safe). It's sequenced after quantization coverage (Tier 04)
 because two of these files (`Devstral`, `minimax-m2.5-tiny`) need their quant formats implemented
-before there's anything to test the architecture handler against. It's after speculative decoding
-(Tier 06) because Tier 06 explicitly adds `forwardVerify` overrides per architecture, and doing that
-work against a stable, final set of architecture handlers is less wasteful than adding verify
-support to a handler that's about to be substantially rewritten here.
+before there's anything to test the architecture handler against.
+
+**This tier runs before Tier 06, not after it** — see the tier index in [`README.md`](README.md),
+which is the running order. An earlier draft placed it after Tier 06 while giving a rationale that
+argues for exactly the opposite: Tier 06 adds a `forwardVerify` override per architecture, so
+running it first means adding verify support to four handlers and then having this tier introduce
+four more that either need the same work again or silently lack it. Running this tier first means
+Tier 06 covers every handler in one pass, against a stable and final set. The dependency direction
+was right in the prose and wrong in the ordering; the ordering is now the one the prose implies.
+
+This tier also carries an obligation handed over from Tier 02. Tier 02 ships sliding-window
+attention validated against a synthetic windowed-metadata fixture, because the only real windowed
+file on disk (`gemma-4-E4B`, patterned 512-token window per Tier 00's audit) is not loadable until
+this tier's Gemma handler exists. Real-model validation of the windowed path is therefore one of
+this tier's exit criteria, not Tier 02's.
 
 ## Scope
 
 ### In scope
 
-1. **Gemma handler** (`gemma4` architecture) — verify actual tensor-layout differences from Llama
-   (Gemma has some real structural differences: different normalization placement, embedding
-   scaling) and build a dedicated handler if the current silent fallback isn't actually correct
-   (Tier 00's audit will have already determined whether it's silently wrong or coincidentally
-   fine — this tier acts on that finding).
+1. **Gemma handler** (`gemma4` architecture). Tier 00's audit already established what this file
+   needs, so build to that finding rather than re-deriving it: patterned sliding-window attention
+   with a 512 window, final logit softcapping (30), per-layer input embeddings, KV-shared layers,
+   and all-supported tensor types (Q4_0/F32). Tier 00 also recorded that a Gemma variant *without*
+   KV sharing would have loaded and run silently wrong under the old fallback, which is why the
+   architecture guard rejects it by name today.
+
+   **This handler is where Tier 02's sliding-window mechanism gets its real-model validation.** Use
+   the window metadata read Tier 02 added; do not implement a second windowing path here. If the
+   window key Tier 02 chose is not the one this file declares, that is a Tier 02 defect surfacing
+   late — fix it in the shared mechanism, not with a Gemma-local special case.
+
 2. **Mistral3 handler** (or confirmed-safe extension of the existing Llama-family path) for
    `Devstral-Small` and any other `mistral3`-architecture file.
 3. **Qwen3.5 handler** for `qwen35`, using the existing `Qwen3TransformerHandler` as a reference
@@ -60,7 +78,7 @@ support to a handler that's about to be substantially rewritten here.
 | # | Surface | Notes |
 |---|---|---|
 | 1 | CPU inference | every new handler must work correctly on CPU first (correctness oracle) |
-| 2 | CUDA GPU inference | new handlers should get GPU residency parity with existing dense handlers where feasible; MoE routing on GPU needs its own `matVecExpert`-equivalent kernel path, mirroring `Qwen3MoeTransformerHandler`'s existing (CPU-only per the gap analysis) expert slicing — extending it to GPU is in scope if time allows, otherwise explicitly deferred and documented |
+| 2 | CUDA GPU inference | new handlers should get GPU residency parity with existing dense handlers where feasible, **including GPU-resident attention** — Tier 01B made that the default for every architecture it was able to measure on a real model and built the capability-reporting mechanism for the rest, so a new handler that quietly resolves to the scalar path reopens exactly the silent-degrade gap 01B closed; each new architecture either supports it and says so, or fails to the documented fallback with an explicit notice. MoE routing on GPU needs its own `matVecExpert`-equivalent kernel path, mirroring `Qwen3MoeTransformerHandler`'s existing (CPU-only per the gap analysis) expert slicing — extending it to GPU is in scope if time allows, otherwise explicitly deferred and documented |
 | 3 | ROCm GPU inference | NEEDS-AMD-HARDWARE for any new GPU kernel work; CPU path must be correct regardless |
 | 4 | Static schedule | new handlers must support `generateBatch()` correctly |
 | 5 | Continuous schedule | new handlers must support `ContinuousBatchEngine` correctly |
@@ -112,6 +130,17 @@ support to a handler that's about to be substantially rewritten here.
   README's llama.cpp-relative gate) — these are exactly the models where Juno previously couldn't
   even load, so this is the first llama.cpp-relative data point for each one.
 
+  **Threshold.** These architectures have no prior Juno baseline, so the gate is relative to the
+  nearest already-supported family rather than to their own history:
+  - each new handler's tg must reach **>= 0.70x** the tg of the closest supported dense model of
+    comparable parameter count and quant on the same host — a new handler an order slower than its
+    nearest neighbour indicates a layout or dispatch mistake, not merely an unoptimized path;
+  - no already-supported architecture regresses: tg and pp both within **0.95x** of the pre-tier
+    baseline, median of three per the README's noise-floor rule, since the generic structural MoE
+    detection in item 5 runs on every load;
+  - `Devstral` (24B, IQ1_S) additionally reports peak RSS and GPU-layer-offload behaviour with no
+    threshold attached — it is the memory-pressure data point, and this is its first measurement.
+
 ## Models needed
 
 All four target files are already present. If a true Mixtral-8x7B-shaped file or a working
@@ -128,6 +157,13 @@ fixture in the meantime, but end-to-end `ModelLiveRunnerIT` coverage for genuine
       (synthetic fixture at minimum, real Mixtral file if available) and either routes correctly or
       fails closed with a clear error — never silently drops expert tensors.
 - [ ] Chat templates correctly detected for all four architectures.
+- [ ] **Sliding-window attention validated end to end on `gemma-4-E4B`**, using Tier 02's mechanism
+      and window-metadata read — the real-model half of Tier 02's sliding-window work, handed over
+      because this tier is what makes that file loadable. A non-windowed model's output stays
+      bit-identical.
+- [ ] Each new handler either supports GPU-resident attention and reports that capability through
+      the mechanism Tier 01B built, or fails to the documented fallback with an explicit notice —
+      never a silent resolution to the scalar path.
 - [ ] Cross-surface checklist fully resolved, LoRA-trainability gap (if any) explicitly documented
       per architecture rather than silently absent.
 - [ ] Perf gate published for at least the largest new model (`Devstral`, 24B).

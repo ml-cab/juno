@@ -126,5 +126,8 @@ not model-architecture-dependent.
       (`pattern`/`format`/`oneOf`/etc.) still fail closed with a clear error, not silently ignored.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Existing `smoke-grammar.sh`/`smoke-tools.sh` still pass unmodified.
+- [ ] `x_juno_samplers`, the new `frequency_penalty` semantics and the widened `json_schema` support
+      are declared in `api/src/main/resources/openapi.yaml` and `juno-api.yaml` (README
+      feature-complete rule).
 - [ ] Docs updated (`docs/howto.md` sampler/grammar sections), Juno-native language only.
 - [ ] `CHANGELOG.md` entry added.

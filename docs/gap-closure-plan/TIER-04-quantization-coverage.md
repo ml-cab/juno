@@ -15,16 +15,47 @@ checkpoint instead of only loading pre-quantized files.
 
 Two real files already on disk (`Devstral-Small...IQ1_S.gguf`, `minimax-m2.5-tiny...iq4_nl-imat
 .gguf`) cannot load at all today because of this gap — Tier 00 already had to document that as an
-expected failure. This tier is what actually makes those files usable. It's sequenced after the KV
-cache tier because Tier 03's Q4_0 KV codec work and this tier's Q4_0 *weight* dequant work touch
-adjacent code and should share a design pass rather than each rediscovering the K-quant layout
-conventions independently. It's before sampling/grammar (Tier 05) and speculative decoding (Tier
-06) because those don't depend on quant coverage, but MoE architecture breadth (Tier 08) does
-depend on IQ4_NL (`minimax-m2.5`'s quant) landing here first.
+expected failure. This tier is what actually makes those files usable.
+
+**On the ordering, stated accurately.** An earlier draft justified sitting after Tier 03 on the
+grounds that Tier 03's Q4_0 KV codec and this tier's Q4_0 weight dequant "should share a design
+pass." They cannot: execution rule 1 runs one tier to completion before the next begins, so there is
+no pass for them to share, and in any case they are different layouts against different call sites.
+The real reasons this tier sits here are simpler:
+
+- it has **no dependency on Tier 03** and could in principle run earlier;
+- it must run **before Tier 08**, which needs IQ4_NL for `minimax-m2.5-tiny` and IQ1_S for
+  `Devstral` before either file can be tested against a real handler;
+- it does not block Tier 05 or Tier 06, neither of which depends on quant coverage.
+
+Scope item 0 (mapped weight loading) is likewise independent of everything else in this tier and
+runs first — see its own note.
 
 ## Scope
 
 ### In scope
+
+0. **Memory-mapped GGUF weight loading — first, and larger than it looks.** `GgufReader` opens a
+   `FileChannel` and copies every tensor into a heap `byte[]`/`float[]` via `readNBytes`-style calls;
+   there is no `FileChannel.map`/`MemorySegment` path anywhere. Near-instant load, an OS page cache
+   shared across processes, and a much lower RSS all follow from fixing that, and nothing else in
+   this plan addresses it.
+
+   **Scope it honestly.** `GgufReader.QuantizedTensor` is declared as `record QuantizedTensor(String
+   name, int type, long nelems, byte[] data)`, and roughly sixty call sites under `node/src/main`
+   take a `byte[] raw` — every weight-stationary kernel among them. A flag-gated mapped read that
+   still materializes a `byte[]` delivers **none** of the RSS or page-cache benefit; the win only
+   exists if the quantized bytes are read in place. So the real work is a
+   `java.lang.foreign.Arena`-backed `MemorySegment` accessor threaded through those kernels (Panama
+   fits the project's existing FFI investment, and unlike `MappedByteBuffer` it has no 2 GiB
+   per-mapping limit). Plan for that, not for a reader-local change.
+
+   Ship it behind `--mmap-weights auto|on|off` (default `auto` = on once the platform and
+   quant-format combination is verified safe) so it can be disabled if a correctness or portability
+   problem turns up. It runs **first in this tier**, before any new format work, because it is
+   independent of every other item here and because doing it afterwards would mean touching the same
+   tensor-loading code twice. It stays in this tier rather than becoming its own only because that
+   code is the code this tier already modifies.
 
 1. Implement Q4_1, Q5_0, Q5_1 dequantization (CPU) — these are simpler, non-K-quant legacy formats,
    good validation targets before the harder IQ family.
@@ -40,18 +71,6 @@ depend on IQ4_NL (`minimax-m2.5`'s quant) landing here first.
    target format, produces a new GGUF file. Scope the initial format set to whatever this tier has
    implemented dequant *and* a corresponding quantize (encode) path for — quantizing to a format
    Juno can't itself read back would be a bad first release.
-6. **Memory-mapped GGUF weight loading.** `GgufReader` currently opens a `FileChannel` and copies
-   every tensor into a heap `byte[]`/`float[]` via `readNBytes`-style calls (see `loadQ4_0` and its
-   siblings) — there is no `FileChannel.map`/`MemorySegment`-based zero-copy path anywhere. This is
-   one of llama.cpp's defining characteristics (near-instant load, OS page cache shared across
-   processes, lower RSS) and nothing elsewhere in this plan addresses it. Add a
-   `java.lang.foreign.Arena`-backed mapped-read path (fits the project's existing Panama-FFI
-   investment better than the legacy `FileChannel.map`/`MappedByteBuffer` API and its 2GiB-per-mapping
-   limit) as an alternative tensor-loading strategy, opt-in behind a flag first (e.g. `--mmap-weights
-   auto|on|off`, default `auto` = on once the platform/quant-format combination is verified safe) so
-   it can be disabled if a real correctness or portability issue turns up. Bundled into this tier
-   because it touches the same `GgufReader` tensor-loading code this tier already modifies for new
-   quant formats, not because it's a quantization-format item per se.
 
 ### Out of scope
 
@@ -74,7 +93,7 @@ depend on IQ4_NL (`minimax-m2.5`'s quant) landing here first.
 | 7 | Pipeline-parallel cluster | shard loading must correctly propagate the new quant formats' metadata to every node |
 | 8 | Tensor-parallel cluster | same |
 | 9 | LoRA training | training's frozen-weight dequant path must support the new formats too (a model quantized in a new format should be trainable, not just inferable) |
-| 10 | LoRA playback | packed-Q4/新-format weights + LoRA delta composition — confirm `LoraMmqPolicy`'s playback-only MMQ gate extends cleanly or is explicitly scoped out per format |
+| 10 | LoRA playback | packed-Q4 and new-format weights + LoRA delta composition — confirm `LoraMmqPolicy`'s playback-only MMQ gate extends cleanly or is explicitly scoped out per format |
 | 11 | Vision | `VisionEncoder` reuses `MatVec`; confirm new formats work for `mmproj` GGUF weights too, not just the main LLM weights, if any vision model in the wild ships with these quant types |
 | 12 | OpenAI REST surface | N/A directly — this is a loading/compute concern, not an API concern; verify indirectly via successful chat completions against the newly-loadable files |
 | 13 | Native REST surface | same |
@@ -82,6 +101,11 @@ depend on IQ4_NL (`minimax-m2.5`'s quant) landing here first.
 
 ## Implementation steps
 
+0. **Mapped weight loading first** (scope item 0). Thread the `Arena`/`MemorySegment` accessor
+   through `GgufReader` and the `byte[] raw` kernel call sites, then measure load time and peak RSS
+   for the largest model on disk (`llama-1-30b.Q4_K_M.gguf`) against the current read-and-copy path
+   before enabling it by default. Doing this before the new formats land means each new format is
+   written against the final accessor rather than being converted afterwards.
 1. Write golden-value regression tests for each new format's dequant math before implementing it
    (mirroring the existing Q6_K bug-fix test pattern) — use published reference dequant formulas,
    cross-checked against small hand-computed examples.
@@ -96,9 +120,6 @@ depend on IQ4_NL (`minimax-m2.5`'s quant) landing here first.
    `./juno local` (architecture-string handling for these two is still Tier 08's job — this tier
    only needs the *quantization* to stop being the blocker; if the architecture-string guard from
    Tier 00 rejects them for architecture reasons, that's expected and correct, not a Tier 04 defect).
-7. Implement the memory-mapped weight-loading path; measure load time and peak RSS for the largest
-   model on disk (`llama-1-30b.Q4_K_M.gguf`) against the current read-and-copy path before enabling
-   it by default.
 
 ## Tests to write/upgrade before implementation
 
@@ -121,11 +142,23 @@ depend on IQ4_NL (`minimax-m2.5`'s quant) landing here first.
   tier's other perf-compare results.
 - **Perf gate (required)**: new MMQ kernels are hot-path changes — `compare-lora.sh` plus a
   per-format microbenchmark, plus `compare-llama-cpp.sh` for a llama.cpp-relative reading (per
-  README's llama.cpp-relative gate); publish under `docs/perf-compare/`. Threshold: each new fused
-  MMQ kernel (Q2_K/Q3_K/Q8_0/Q4_0/IQ4_NL) must land within 15% of the existing Q4_K MMQ kernel's
-  tokens/sec at an equivalent bit-width on the same model/hardware — a new kernel that "works" but is
-  far slower than the dequant-fallback it replaces is not a win and should be flagged, not shipped
-  silently.
+  README's llama.cpp-relative gate); publish under `docs/perf-compare/`.
+
+  **Threshold, mapped loading (item 0).** On `llama-1-30b.Q4_K_M.gguf`: time-to-first-token on a cold
+  page cache drops by **>= 50%** against the read-and-copy path, peak RSS during and after load drops
+  by **>= 40%**, and a second process loading the same file while the first holds it shows RSS
+  **below** the sum of two independent loads (which is the page-cache-sharing property the item
+  exists for — if it is absent, the mapped path is still copying somewhere).
+
+  **Threshold, MMQ kernels.** Each new fused MMQ kernel (Q2_K/Q3_K/Q8_0/Q4_0/IQ4_NL) must land
+  within **15%** of the existing Q4_K MMQ kernel's tokens/sec at an equivalent bit-width on the same
+  model/hardware — a new kernel that "works" but is far slower than the dequant-fallback it replaces
+  is not a win and should be flagged, not shipped silently. This threshold sits inside this host's
+  ±15% noise floor, so it is scored on a median of at least three runs with min/max published, per
+  the README's noise-floor rule.
+
+  **Milestone.** The README assigns this tier GPU tg >= **0.40x** on Phi-3.5-mini. Report it against
+  the parity-corrected baseline Tier 01 established, met or missed with the actual number.
 
 ## Models needed
 
@@ -146,9 +179,10 @@ user for a small model download in that format at the point this tier starts.
 - [ ] ROCm fused K-quant kernels implemented for Q4_K/Q5_K/Q6_K, unit-tested, marked
       NEEDS-AMD-HARDWARE.
 - [ ] `./juno quantize` ships for at least the formats with both decode and encode support.
-- [ ] Memory-mapped weight loading implemented behind `--mmap-weights`, correctness-verified against
-      the existing read-and-copy path, with a measured load-time/RSS improvement published for the
-      largest model on disk.
+- [ ] Memory-mapped weight loading implemented behind `--mmap-weights` and landed **first**,
+      correctness-verified against the existing read-and-copy path, with the quantized bytes read in
+      place through a `MemorySegment` accessor rather than copied into `byte[]` — the load-time, RSS
+      and page-cache-sharing thresholds above all met on `llama-1-30b.Q4_K_M.gguf`.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, no unexplained regression.
 - [ ] Docs (`docs/howto.md` new `quantize` command docs, `docs/agent-arch.txt`) updated.

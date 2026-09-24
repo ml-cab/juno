@@ -30,7 +30,6 @@ import java.util.Locale;
 import java.util.Random;
 import java.util.logging.Logger;
 
-import jdk.jfr.Configuration;
 import jdk.jfr.Recording;
 import jdk.jfr.RecordingState;
 
@@ -106,7 +105,6 @@ import cab.ml.juno.tokenizer.GgufChatTemplateResolver;
 import cab.ml.juno.tokenizer.GgufTokenizer;
 import cab.ml.juno.tokenizer.Tokenizer;
 import cab.ml.juno.vision.LlavaHandlerFactory;
-import jdk.jfr.Configuration;
 import jdk.jfr.Recording;
 import jdk.jfr.RecordingState;
 
@@ -1955,6 +1953,19 @@ public final class ConsoleMain {
 		runLocalRepl(); // extracts via stopAndExtractActiveJfr() before System.exit
 	}
 
+	/**
+	 * A recording that cannot say which settings produced it cannot be published as a
+	 * comparison against another run, so an unresolved settings file is reported rather
+	 * than quietly swapped for the JDK's stock one.
+	 */
+	private static void warnIfJfrSettingsUnresolved() {
+		if (!JunoJfrSettings.resolved())
+			print(Color.YELLOW + "  ! " + JunoJfrSettings.RESOURCE_NAME + " not found — recording under the JDK "
+					+ JunoJfrSettings.fallbackName() + " settings. This run is not comparable with one taken "
+					+ "under the Juno settings; set -D" + JunoJfrSettings.SETTINGS_PROPERTY
+					+ "=<path> to name it explicitly." + Color.RESET + "\n");
+	}
+
 	private static void startProgrammaticJfr() throws Exception {
 		String modelName = Path.of(modelPath).getFileName().toString();
 		String modelStem = modelName.contains(".") ? modelName.substring(0, modelName.lastIndexOf('.')) : modelName;
@@ -1963,12 +1974,16 @@ public final class ConsoleMain {
 		Path jfrFile = Path.of(jfrFileName);
 
 		Duration duration = parseJfrDuration(jfrDuration);
-		// "default", not "profile": profile's aggressive native-thread stack sampling both
-		// perturbs the throughput numbers this recording is used to measure and was the
-		// subsystem behind a JfrSamplerThread ShouldNotReachHere() crash observed under
-		// --gpu --mmq on --lora-play (JDK JFR bug suspending a thread mid Panama-FFI downcall).
-		Configuration cfg = Configuration.getConfiguration("default");
-		Recording rec = new Recording(cfg);
+		// One settings file for every recording this project takes, so two runs differ
+		// by the code under test and not by their instrumentation overhead. It keeps
+		// native-thread stack sampling at the stock interval: tightening that was behind
+		// a JfrSamplerThread ShouldNotReachHere() crash observed under --gpu --mmq on
+		// --lora-play (a JDK JFR bug suspending a thread mid Panama-FFI downcall).
+		warnIfJfrSettingsUnresolved();
+		Recording rec = new Recording(JunoJfrSettings.configuration());
+		// Redundant when the Juno settings resolved — they name every juno.* event —
+		// but this event is off by default, so it still has to be asked for on the
+		// stock-configuration fallback path.
 		rec.enable("juno.GrammarConstrained");
 		rec.setDuration(duration);
 		rec.setDestination(jfrFile);
@@ -1981,7 +1996,7 @@ public final class ConsoleMain {
 		jfrExtracted = false;
 
 		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration
-				+ "  output=" + jfrFileName + Color.RESET + "\n");
+				+ "  output=" + jfrFileName + "  settings=" + JunoJfrSettings.describe() + Color.RESET + "\n");
 
 		// Platform thread: virtual-thread shutdown hooks can be skipped during JVM teardown.
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> stopAndExtractActiveJfr(), "juno-jfr-extract"));
@@ -2055,15 +2070,15 @@ public final class ConsoleMain {
 
 		// ── Coordinator recording ─────────────────────────────────────────────
 		Duration duration = parseJfrDuration(jfrDuration);
-		// "default" — see startProgrammaticJfr()'s comment on why "profile" is avoided here.
-		Configuration cfg = Configuration.getConfiguration("default");
-		Recording rec = new Recording(cfg);
+		// Same settings file as every other recording — see startProgrammaticJfr().
+		warnIfJfrSettingsUnresolved();
+		Recording rec = new Recording(JunoJfrSettings.configuration());
 		rec.setDuration(duration);
 		rec.setDestination(coordinatorJfrFile);
 		rec.start();
 
 		print(Color.YELLOW + "  ⏱ JFR recording started — duration=" + jfrDuration + "  output=" + coordinatorJfrName
-				+ Color.RESET + "\n");
+				+ "  settings=" + JunoJfrSettings.describe() + Color.RESET + "\n");
 
 		// ── Cluster setup — nodes get their own JFR via withJfr() ─────────────
 		String modeLabel = pType == ParallelismType.TENSOR ? "tensor-parallel" : "pipeline-parallel";

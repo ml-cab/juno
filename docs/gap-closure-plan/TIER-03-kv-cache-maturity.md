@@ -25,9 +25,12 @@ that touches KV.
 
 ### In scope
 
-1. **Block-table-aware attention**: extend the Tier 02 tiled attention kernel (or the existing GQA
-   kernel if Tier 02's tiling isn't ready for this) to read `KvPageTable`'s pages directly, removing
-   `PagedKvTensor.needsAttentionScratch()`'s unconditional `true` and the "gather tax" it causes.
+1. **Block-table-aware attention**: extend the Tier 02 tiled attention kernel to read
+   `KvPageTable`'s pages directly, removing `PagedKvTensor.needsAttentionScratch()`'s unconditional
+   `true` and the "gather tax" it causes. (An earlier draft offered "or the existing GQA kernel if
+   Tier 02's tiling isn't ready" — under execution rule 1 that state cannot exist, since Tier 02's
+   exit criteria require the tiled kernel before this tier starts. If Tier 02 ended partial-complete,
+   that is an escalation, not a fallback path to take quietly.)
 2. **Cross-session prefix sharing**: allow `PrefixCache`'s trie to be consulted and populated across
    sessions when the leading tokens genuinely match, with correct reference counting so that KV
    pages backing a shared prefix are not freed while any session still references them (this is the
@@ -36,10 +39,12 @@ that touches KV.
 3. **KV cache defragmentation**: compact `KvBlockPool`'s free/live pages when fragmentation crosses
    a threshold, to reclaim memory without requiring a full session evict.
 4. **Q4_0 KV quantization tier**, alongside the existing F16/Q8_0, for memory-constrained
-   long-context serving — using the format work landed in Tier 04 if sequenced usefully, or
-   standalone if Tier 04 hasn't reached Q4_0 dequant support yet (check dependency order at
-   implementation time; Q4_0 *decode* already exists per the gap analysis §1.1, only the KV-specific
-   codec is new work here).
+   long-context serving. This is **standalone work with no dependency on Tier 04**, which runs
+   later: Q4_0 weight decode already exists (gap analysis §1.1), and a KV codec is a different
+   layout against different call sites than a weight dequant path. Nothing here waits on, or shares
+   a design pass with, Tier 04 — the two tiers cannot share one under execution rule 1, and the
+   earlier "check dependency order at implementation time" wording implied an option that does not
+   exist.
 5. **Disk-backed session persistence**: a session-save/session-restore mechanism (KV state to disk,
    reloadable in a later process), analogous in purpose (not implementation) to what was removed in
    the earlier three-tier-to-two-tier simplification (`CHANGELOG.md:1758`) — this time scoped
@@ -106,10 +111,21 @@ that touches KV.
   concurrent clients sharing a system prompt (expect the *shared*-prefill-skip this time, not just
   correctness), a defragmentation stress loop, and a save/kill-process/restore/continue sequence.
 - **Perf gate (required)**: block-table attention and defrag are hot-path changes —
-  `compare-lora.sh` plus a dedicated "gather tax" re-measurement (the existing methodology in
-  `docs/perf-compare/20260910T213121Z-gather-tax.md`/`20260910T214300Z-gather-tax.md` is the
-  template to reuse) confirming the tax is now fully eliminated, not just reduced, plus
+  `compare-lora.sh` plus a dedicated "gather tax" re-measurement (reuse
+  `scripts/performance-tests/gather-tax-microbench.sh` and the methodology in
+  `docs/perf-compare/20260910T213121Z-gather-tax.md`/`20260910T214300Z-gather-tax.md`), plus
   `compare-llama-cpp.sh` for a llama.cpp-relative reading (per README's llama.cpp-relative gate).
+
+  **Threshold.** The existing gate allows gather to be **<= 15%** of gather+attention at batch 8 /
+  ctx 8192, and the last published run measured **4.61%**. Reading the block table directly should
+  take that to zero, so this tier's gate is:
+  - `gather_ms` is **0** at every measured (ctx, batch, page) cell — not "reduced", zero, because
+    the step no longer exists;
+  - `PagedKvTensor.needsAttentionScratch()` returns `false` on every path, asserted by unit test;
+  - `paged_vs_dense%` at ctx 8192 / batch 8 is **<= 2%**, so removing the gather did not simply move
+    its cost into the kernel's page-walk;
+  - defragmentation's pause: a compaction pass over a fragmented pool adds **<= 5 ms** to any single
+    decode step at ctx 8192, or it runs off the decode path entirely.
 
 ## Models needed
 
@@ -126,6 +142,9 @@ tier specifically.
 - [ ] Q4_0 KV tier available alongside F16/Q8_0.
 - [ ] Disk-backed session save/restore round-trips correctly across a process restart.
 - [ ] Cross-surface checklist fully resolved, vision/LoRA-play exclusions explicit and tested.
-- [ ] Perf gate published, gather tax confirmed eliminated.
+- [ ] Perf gate published; `gather_ms` at zero, `paged_vs_dense%` <= 2% at ctx 8192 / batch 8, defrag
+      pause within budget.
+- [ ] The session save/restore surface is in `api/src/main/resources/openapi.yaml` and
+      `juno-api.yaml` alongside the code that serves it (README feature-complete rule).
 - [ ] Docs updated, Juno-native language only.
 - [ ] `CHANGELOG.md` entry added.

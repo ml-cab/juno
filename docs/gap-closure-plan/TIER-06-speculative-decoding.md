@@ -9,7 +9,8 @@ Fix draft-model speculative decoding's measured 0.52x regression using Tier 01's
 residency work, add lookahead decoding as a third strategy, and wire speculative decoding into the
 surfaces that currently fall back to serial generation without it: `generateBatch()` (static
 multi-request batching), `ContinuousBatchEngine`, and the non-`LlamaTransformerHandler`
-architectures (Phi-2, Phi-3, Qwen3, Qwen3-MoE) and cluster/tensor-parallel pipelines.
+architectures (Phi-2, Phi-3, Qwen3, Qwen3-MoE, and the families Tier 08 added) and
+cluster/tensor-parallel pipelines.
 
 ## Why this tier, why now
 
@@ -20,6 +21,14 @@ project has already hit twice. This tier is sequenced after sampling/grammar (Ti
 speculative decoding's verify step needs to interact correctly with whatever sampler chain is
 active (grammar-masked speculative decoding in particular — verifying drafted tokens against a
 grammar-constrained target is a real edge case that must be tested, not assumed to work).
+
+**It also runs after Tier 08, not before it** (see the tier index in [`README.md`](README.md), which
+is the running order). Item 3 below adds a `forwardVerify` override per architecture; running this
+tier first would mean covering four handlers and then having Tier 08 add four more that either need
+the same work repeated or silently lack it. With Tier 08 first, the handler set is final and this
+tier covers all of it in one pass — which means item 3's list is not four handlers but **every
+handler that exists when this tier starts**, including `gemma4`, `mistral3`, `qwen35` and
+`minimax-m2`.
 
 ## Scope
 
@@ -33,10 +42,12 @@ grammar-constrained target is a real edge case that must be tested, not assumed 
 2. Lookahead decoding (Jacobi-iteration n-gram-pool approach) as a third `--spec-type` option,
    alongside the existing `ngram-simple` and `draft-simple`.
 3. Wire speculative decoding (whichever strategies make sense per-surface) into `generateBatch()`,
-   `ContinuousBatchEngine`, and every `ForwardPassHandler` implementation — Phi-2, Phi-3, Qwen3,
-   Qwen3-MoE need their own `forwardVerify` override (today only `LlamaTransformerHandler` has
-   one), and cluster/tensor-parallel pipelines need a verify path that works across the gRPC
-   boundary.
+   `ContinuousBatchEngine`, and **every** `ForwardPassHandler` implementation that exists when this
+   tier starts. Today only `LlamaTransformerHandler` has a `forwardVerify` override; Phi-2, Phi-3,
+   Qwen3 and Qwen3-MoE need one, and so does each handler Tier 08 added (`gemma4`, `mistral3`,
+   `qwen35`, `minimax-m2`) — enumerate the handlers at implementation time rather than working from
+   this list, which was written before Tier 08 ran. Cluster/tensor-parallel pipelines need a verify
+   path that works across the gRPC boundary.
 4. Re-verify the grammar+speculative-decoding interaction explicitly (draft tokens that would be
    grammar-illegal must be correctly rejected at verify time, not accepted).
 
@@ -76,8 +87,8 @@ grammar-constrained target is a real edge case that must be tested, not assumed 
    tier — this is the tier's key go/no-go checkpoint.
 2. If positive: proceed to wire draft-simple and ngram-simple into `generateBatch()` and
    `ContinuousBatchEngine`.
-3. Add `forwardVerify` overrides for Phi-2, Phi-3, Qwen3, Qwen3-MoE (mirroring
-   `LlamaTransformerHandler`'s existing batched-verify design).
+3. Add `forwardVerify` overrides for every handler still lacking one, enumerated from the source
+   (mirroring `LlamaTransformerHandler`'s existing batched-verify design).
 4. Implement lookahead decoding as a new strategy.
 5. Add cluster/tensor-parallel verify-path support, with the single-node-draft-model constraint
    documented if that's what implementation reveals is necessary.
@@ -88,8 +99,9 @@ grammar-constrained target is a real edge case that must be tested, not assumed 
 - **Re-run existing draft-simple JFR-based benchmark** (the one that produced the 0.52x finding) as
   a before/after comparison — this is a test in the sense of a go/no-go gate, tracked the same way
   as a perf-compare run.
-- **New `forwardVerify` unit tests** for Phi-2, Phi-3, Qwen3, Qwen3-MoE handlers, mirroring the
-  existing `LlamaTransformerHandlerVerifyParityTest`.
+- **New `forwardVerify` unit tests** for every handler lacking one when this tier starts —
+  Phi-2, Phi-3, Qwen3, Qwen3-MoE, plus Tier 08's `gemma4`, `mistral3`, `qwen35` and `minimax-m2` —
+  mirroring the existing `LlamaTransformerHandlerVerifyParityTest`.
 - **New `GenerationLoop.generateBatch()` speculative-decoding test**: multiple concurrent requests,
   draft/verify wired in, output byte-identical to `--spec-type none` for each.
 - **New `ContinuousBatchEngine` speculative-decoding test**: same correctness guarantee across
@@ -108,6 +120,14 @@ grammar-constrained target is a real edge case that must be tested, not assumed 
   directly relevant here since llama.cpp has the same sequential-draft-forward structure — see gap
   analysis §1.5); publish under `docs/perf-compare/`.
 
+  **Threshold.** Draft-model speculative decoding on the GTX 1080 must reach **>= 1.20x** the tg of
+  `--spec-type none` on the mistral-7b target / tinyllama draft pair that produced the 0.52x
+  finding — positive, and by a margin outside this host's noise floor, since "faster than none" at
+  1.02x is indistinguishable from measurement error at +-15%. Median of three per the README's
+  noise-floor rule. Lookahead decoding is held to the same bar. Every strategy must stay
+  byte-identical to `--spec-type none` in greedy output; a speedup bought with a correctness change
+  is a failure, not a trade.
+
 ## Models needed
 
 `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf` as the draft model and `mistral-7b-instruct-v0.1-q4_k_m
@@ -125,7 +145,9 @@ sub-checks if they're still missing.
       why residency alone wasn't sufficient and what alternative was shipped instead.
 - [ ] Lookahead decoding implemented, correctness-verified (byte-identical to `--spec-type none`).
 - [ ] `generateBatch()` and `ContinuousBatchEngine` both support speculative decoding.
-- [ ] Phi-2, Phi-3, Qwen3, Qwen3-MoE each have a `forwardVerify` override.
+- [ ] Every `ForwardPassHandler` implementation has a `forwardVerify` override — Phi-2, Phi-3,
+      Qwen3, Qwen3-MoE and each handler Tier 08 added — enumerated from the source at implementation
+      time, not from a list written before Tier 08 ran.
 - [ ] Cluster/tensor-parallel verify path works or is explicitly, documentedly constrained.
 - [ ] Grammar + speculative decoding interaction tested and correct.
 - [ ] Cross-surface checklist fully resolved.

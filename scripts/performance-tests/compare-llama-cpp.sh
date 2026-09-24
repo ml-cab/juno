@@ -36,11 +36,22 @@ N_PROMPT=128
 N_GEN=64
 REPS=3
 N_THREADS="$(nproc 2>/dev/null || echo 6)"
+# What Juno actually runs its kernels at: they dispatch on the common pool, whose
+# default parallelism is one fewer than the available processors. Recorded so the
+# published mismatch against llama-bench -t is explicit rather than inferred.
+JUNO_EFFECTIVE_PARALLELISM="$(( $(nproc 2>/dev/null || echo 6) - 1 ))"
+(( JUNO_EFFECTIVE_PARALLELISM < 1 )) && JUNO_EFFECTIVE_PARALLELISM=1
 NGL=""
 API_PORT=18080
 JUNO_USE_VECTOR="${JUNO_USE_VECTOR:-1}"
 PROMPT_TEXT="could you please write me a short poem about love and war"
-RAW_PROMPT=0
+# On by default: the reference tool prefills N_PROMPT tokens, so Juno has to be
+# given a prompt of about the same length or the prefill columns compare two
+# different amounts of work. Turn it off only for a Juno-only measurement.
+RAW_PROMPT=1
+# A prefill ratio is only published when Juno's real prompt_tokens is within this
+# fraction of n_prompt. Beyond it the two engines did measurably different work.
+PROMPT_PARITY_TOLERANCE=0.10
 JUNO_GPU_LAYERS=""
 JUNO_MMQ=""
 JUNO_GPU_ATTENTION=""
@@ -89,6 +100,10 @@ Options:
   --cache-type-v f16|q8_0  Juno --cache-type-v (default f16)
   --kv-page-size N  Juno --kv-page-size (default 16, schedule=continuous only)
   --raw-prompt      Repeat a minimal token pattern (~1 tok/word) for prompt-length parity
+                    (default: on; a prefill ratio needs it)
+  --no-raw-prompt   Use the fixed prompt sentence instead. Juno then prefills far
+                    fewer tokens than the reference tool, so prefill ratios from
+                    such a run are withheld rather than published
   --api-port N      Juno REST port (default: ${API_PORT})
   --out DIR         Output directory (default: target/perf-compare/<timestamp>)
   --llama-bin DIR   Directory with llama-bench
@@ -149,6 +164,7 @@ while [[ $# -gt 0 ]]; do
     --cache-type-v) JUNO_CACHE_TYPE_V="$2"; shift 2 ;;
     --kv-page-size) JUNO_KV_PAGE_SIZE="$2"; shift 2 ;;
     --raw-prompt) RAW_PROMPT=1; shift ;;
+    --no-raw-prompt) RAW_PROMPT=0; shift ;;
     --api-port) API_PORT="$2"; shift 2 ;;
     --out) OUT_ROOT="$2"; shift 2 ;;
     --llama-bin) LLAMA_CPP_BIN_EXPLICIT="$2"; shift 2 ;;
@@ -321,6 +337,7 @@ host_meta_json() {
   "cpu": "$(json_escape "$cpu")",
   "mem_total": "$(json_escape "$mem")",
   "n_threads": ${N_THREADS},
+  "juno_effective_parallelism": ${JUNO_EFFECTIVE_PARALLELISM},
   "n_prompt": ${N_PROMPT},
   "n_gen": ${N_GEN},
   "reps": ${REPS},
@@ -506,7 +523,30 @@ jfr_summary_json() {
       forward_pass_decode_count: ($m."juno.ForwardPass.decode.count" // null),
       token_produced_count: ($m."juno.TokenProduced.count" // null),
       token_produced_tps: $token_tps,
-      token_produced_elapsed_s: ($m."juno.TokenProduced.elapsed_seconds" // null)
+      token_produced_elapsed_s: ($m."juno.TokenProduced.elapsed_seconds" // null),
+      # A short measurement window holding one long collection pause reports a
+      # throughput drop that looks exactly like a code regression. Recording the
+      # pauses is what lets the two be told apart after the run.
+      gc_pause_count: ($m."jdk.GCPhasePause.count" // null),
+      gc_pause_max_ms: ($m."jdk.GCPhasePause.max_ms" // null),
+      gc_pause_total_ms: ($m."jdk.GCPhasePause.total_ms" // null),
+      allocated_bytes_total: ($m."jdk.ThreadAllocationStatistics.bytes_total" // null),
+      allocated_bytes_per_token:
+        (($m."jdk.ThreadAllocationStatistics.bytes_total" // null) as $bytes
+         | if $bytes != null and $ct > 0 then ($bytes / $ct) else null end),
+      execution_sample_count: ($m."jdk.ExecutionSample.count" // null),
+      top_methods: [ $m | to_entries[]
+                     | select(.key | startswith("jdk.ExecutionSample.top_methods."))
+                     | { method: (.key | ltrimstr("jdk.ExecutionSample.top_methods.") | rtrimstr(".samples")),
+                         samples: .value } ]
+                   | sort_by(-.samples),
+      top_allocation_sites: [ $m | to_entries[]
+                     | select(.key | startswith("jdk.ObjectAllocationSample.top_sites."))
+                     | { site: (.key | ltrimstr("jdk.ObjectAllocationSample.top_sites.") | rtrimstr(".bytes")),
+                         bytes: .value } ]
+                   | sort_by(-.bytes),
+      monitor_enter_total_ms: ($m."jdk.JavaMonitorEnter.total_ms" // null),
+      thread_park_total_ms: ($m."jdk.ThreadPark.total_ms" // null)
     }
   '
 }
@@ -739,6 +779,8 @@ EOF
     --arg heap "$heap" \
     --argjson threads_hint "$N_THREADS" \
     --argjson use_jfr "$USE_JFR" \
+    --argjson n_prompt "$N_PROMPT" \
+    --argjson prompt_parity_tolerance "$PROMPT_PARITY_TOLERANCE" \
     --arg jfr_duration "$JFR_DURATION" \
     --arg response_json "$resp" \
     --arg log "$logf" \
@@ -754,7 +796,15 @@ EOF
       model_path: $model_path,
       model_id: $model_id,
       n_gen: $n_gen,
+      n_prompt: $n_prompt,
       prompt_tokens: $prompt_tokens,
+      # How far the real Juno prefill was from what the reference tool was asked
+      # for. A prefill ratio is published only while this stays within tolerance.
+      prompt_token_deviation:
+        (if $n_prompt > 0 and $prompt_tokens != null
+         then (($prompt_tokens - $n_prompt) / $n_prompt | fabs)
+         else null end),
+      prompt_parity_tolerance: $prompt_parity_tolerance,
       completion_tokens: $completion_tokens,
       finish_reason: $finish_reason,
       load_ms: $load_ms,
@@ -842,15 +892,40 @@ write_pair_summary() {
         token_gen_tps: num($j[0].token_gen_tps),
         api_token_gen_tps: num($j[0].api_token_gen_tps),
         latency_ms: $j[0].latency_ms,
+        n_prompt: $j[0].n_prompt,
         prompt_tokens: $j[0].prompt_tokens,
+        prompt_token_deviation: $j[0].prompt_token_deviation,
         completion_tokens: $j[0].completion_tokens,
         juno_use_vector: $j[0].juno_use_vector,
-        use_jfr: $j[0].use_jfr
+        use_jfr: $j[0].use_jfr,
+        gc_pause_count: ($j[0].jfr.gc_pause_count // null),
+        gc_pause_max_ms: ($j[0].jfr.gc_pause_max_ms // null),
+        gc_pause_total_ms: ($j[0].jfr.gc_pause_total_ms // null),
+        allocated_bytes_total: ($j[0].jfr.allocated_bytes_total // null),
+        allocated_bytes_per_token: ($j[0].jfr.allocated_bytes_per_token // null)
       },
+      # A prefill ratio compares two engines only when both prefilled about the
+      # same number of tokens. Where they did not, the number is withheld and the
+      # reason is stated, rather than published as though it meant something.
+      prompt_parity:
+        (($j[0].prompt_token_deviation) as $dev
+         | ($j[0].prompt_parity_tolerance // 0.10) as $tol
+         | if $dev == null then { ok: false, reason: "juno prompt_tokens unknown" }
+           elif $dev > $tol then
+             { ok: false,
+               deviation: $dev,
+               tolerance: $tol,
+               reason: ("juno prefilled \($j[0].prompt_tokens) tokens against n_prompt "
+                        + "\($j[0].n_prompt): \(($dev * 100) | floor)% off, over the "
+                        + "\(($tol * 100) | floor)% tolerance") }
+           else { ok: true, deviation: $dev, tolerance: $tol } end),
       ratio_juno_over_llamacpp_pp:
-        (if ($l[0].prompt_eval_tps != null and $j[0].prompt_eval_tps != null and $l[0].prompt_eval_tps > 0)
-         then ($j[0].prompt_eval_tps / $l[0].prompt_eval_tps)
-         else null end),
+        (($j[0].prompt_token_deviation) as $dev
+         | ($j[0].prompt_parity_tolerance // 0.10) as $tol
+         | if ($dev == null or $dev > $tol) then null
+           elif ($l[0].prompt_eval_tps != null and $j[0].prompt_eval_tps != null and $l[0].prompt_eval_tps > 0)
+           then ($j[0].prompt_eval_tps / $l[0].prompt_eval_tps)
+           else null end),
       ratio_juno_over_llamacpp_tg:
         (if ($l[0].token_gen_tps != null and $j[0].token_gen_tps != null and $l[0].token_gen_tps > 0)
          then ($j[0].token_gen_tps / $l[0].token_gen_tps)
@@ -874,9 +949,10 @@ write_run_index() {
   {
     echo "# llama.cpp vs Juno - ${RUN_ID} ($(backend_label))"
     echo
-    echo "| Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno/llama pp | Juno/llama tg | Results |"
-    echo "|-------|------------------|------------------|-------------|-------------|---------------|---------------|---------|"
-    local stem llama_f juno_f cmp pp tg jpp jt ratio_pp ratio_tg
+    echo "| Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno/llama pp | Juno/llama tg | Juno prompt tok | GC max ms | Alloc B/tok | Results |"
+    echo "|-------|------------------|------------------|-------------|-------------|---------------|---------------|-----------------|-----------|-------------|---------|"
+    local stem llama_f juno_f cmp pp tg jpp jt ratio_pp ratio_tg ptok gcmax allocpt
+    local -a parity_notes=()
     for stem in "${STEMS[@]}"; do
       llama_f="${OUT_ROOT}/${stem}-llama-cpp.json"
       juno_f="${OUT_ROOT}/${stem}-juno.json"
@@ -885,21 +961,44 @@ write_run_index() {
       tg="$(jq -r 'if .token_gen_tps == null then "-" else .token_gen_tps end' "$llama_f" 2>/dev/null || echo -)"
       jpp="$(jq -r 'if .prompt_eval_tps == null then "-" else .prompt_eval_tps end' "$juno_f" 2>/dev/null || echo -)"
       jt="$(jq -r 'if .token_gen_tps == null then "-" else .token_gen_tps end' "$juno_f" 2>/dev/null || echo -)"
+      ptok="$(jq -r '[(.prompt_tokens // "?"), "/", (.n_prompt // "?")] | map(tostring) | join("")' "$juno_f" 2>/dev/null || echo -)"
+      gcmax="$(jq -r 'if (.jfr.gc_pause_max_ms // null) == null then "-" else (.jfr.gc_pause_max_ms | floor) end' "$juno_f" 2>/dev/null || echo -)"
+      allocpt="$(jq -r 'if (.jfr.allocated_bytes_per_token // null) == null then "-" else (.jfr.allocated_bytes_per_token | floor) end' "$juno_f" 2>/dev/null || echo -)"
       if [[ -f "$cmp" ]]; then
-        ratio_pp="$(jq -r 'if .ratio_juno_over_llamacpp_pp == null then "-" else .ratio_juno_over_llamacpp_pp end' "$cmp" 2>/dev/null || echo -)"
+        ratio_pp="$(jq -r 'if .ratio_juno_over_llamacpp_pp == null then "withheld" else .ratio_juno_over_llamacpp_pp end' "$cmp" 2>/dev/null || echo -)"
         ratio_tg="$(jq -r 'if .ratio_juno_over_llamacpp_tg == null then "-" else .ratio_juno_over_llamacpp_tg end' "$cmp" 2>/dev/null || echo -)"
+        if [[ "$(jq -r 'if .prompt_parity.ok == false then "false" else "true" end' "$cmp" 2>/dev/null || echo true)" == "false" ]]; then
+          parity_notes+=("${stem}: $(jq -r '.prompt_parity.reason // "prompt parity not established"' "$cmp")")
+        fi
       else
         ratio_pp="-"
         ratio_tg="-"
       fi
-      printf '| %s | %s | %s | %s | %s | %s | %s | %s-*.json |\n' \
-        "$stem" "$pp" "$tg" "$jpp" "$jt" "$ratio_pp" "$ratio_tg" "$stem"
+      printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s-*.json |\n' \
+        "$stem" "$pp" "$tg" "$jpp" "$jt" "$ratio_pp" "$ratio_tg" "$ptok" "$gcmax" "$allocpt" "$stem"
     done
     echo
     echo "Host meta: see any *-llama-cpp.json .host field."
     echo
     echo "Notes:"
     echo "- llama.cpp metrics from llama-bench (avg_ts)."
+    echo "- Prompt tokens column is Juno actual / requested. A prefill ratio is published"
+    echo "  only when the two are within $(awk -v t="$PROMPT_PARITY_TOLERANCE" 'BEGIN{printf "%d", t*100}')%; otherwise it reads \`withheld\`, because the two"
+    echo "  engines then prefilled measurably different amounts of work."
+    if (( ${#parity_notes[@]} > 0 )); then
+      echo "- Prefill ratios withheld this run:"
+      local note
+      for note in "${parity_notes[@]}"; do
+        echo "  - ${note}"
+      done
+    fi
+    echo "- Thread counts are not matched: the reference tool ran with -t ${N_THREADS}, while Juno"
+    echo "  dispatches its kernels on the common pool at an effective parallelism of"
+    echo "  ${JUNO_EFFECTIVE_PARALLELISM}. Juno has no thread-count control reaching the hot path yet, so this"
+    echo "  mismatch is recorded rather than removed."
+    echo "- GC max ms and Alloc B/tok come from the recording taken alongside each run. A"
+    echo "  result whose GC max is a large fraction of its measurement window should be"
+    echo "  re-run rather than scored: one long pause looks exactly like a regression."
     if [[ "$USE_JFR" -eq 1 ]]; then
       echo "- Juno pp/tg from JFR (--jfr ${JFR_DURATION}): TokenProduced.tps + ForwardPass decode total_ms for tg; pp from ForwardPass prefill total_ms when present, else (API latency − decode total_ms)."
     else

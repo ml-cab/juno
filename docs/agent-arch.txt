@@ -121,6 +121,24 @@ Module dependency (excerpt):
         health, registry, api
   juno-node — NodeMain standalone executable
   juno-bom — Maven BOM (dependencyManagement for cab.ml artifacts)
+  metrics — MetricsMain, JfrMetricsExtractor, JdkEventBucket, JfrPercentiles,
+        JfrModelMapper, MetricsWriter, MetricsSnapshot, ModelsConfig(Loader).
+        Reads .jfr files and writes target/metrics/metrics.json.
+        JfrMetricsExtractor accounts for the juno.* events; JdkEventBucket takes
+        the JVM events in the same pass — GC pauses (count/max_ms/total_ms),
+        allocated bytes, hot methods and lock/park time — so a throughput number
+        can be read against the pauses and allocation that produced it. Its
+        ThreadAllocationStatistics figure sums each thread's own running total
+        rather than every sample, since the field is cumulative per thread. The
+        two attribution histograms (top_sites, top_methods) are bounded to ten
+        entries and are for reading, not for gating.
+        Recording settings: scripts/performance-tests/juno-perf.jfc is the single
+        configuration every Juno recording uses, resolved by JunoJfrSettings
+        (juno-player) for the in-process recordings and named directly by the
+        launcher scripts and by ClusterHarness for forked node JVMs. It is
+        packaged into the juno-player jar so a jar-launched run resolves the same
+        settings; an unresolved file falls back to the JDK stock settings with a
+        warning rather than silently changing the instrumentation overhead.
 
 Architecture dispatch (node module): ForwardPassHandlerLoader reads general.architecture.
   phi2, phi3, qwen3 and qwen3moe have dedicated handlers. llama, mistral, tinyllama, qwen2

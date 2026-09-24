@@ -35,6 +35,14 @@ tensor-parallel path that's actually real, rather than the current stub.
    the relevant layer range (pipeline-parallel) or on every node (tensor-parallel), and image data
    must be correctly transported to the right node(s) over gRPC.
 
+   **This requires a build-graph change, and it is not optional.** `VisionAwareForwardPassHandler`
+   lives in the `vision` module, and `juno-node/pom.xml` does not depend on `vision` — only
+   `juno-master` does. So today's node executable cannot wrap a handler in it at all. Add the
+   `vision` dependency to `juno-node`; this does not create a cycle, since `vision` depends on
+   `node`, `coordinator`, `registry`, `tokenizer` and `sampler` but not on `juno-node`. Budget for
+   the shaded-jar size increase and confirm the shade plugin's relocations still behave. Do this
+   first in the tier — nothing else in item 3 can be tested until the node jar can load the class.
+
 ### Out of scope
 
 - Native dynamic-resolution ViT (Qwen2-VL-style 2D-RoPE variable patch grids) — no test model is
@@ -95,6 +103,17 @@ tensor-parallel path that's actually real, rather than the current stub.
 - **Perf gate (required)**: `compare-vision.sh` rerun, plus a new tiling-specific latency
   measurement (N tiles vs. single fixed-resize); publish under `docs/perf-compare/`.
 
+  **Threshold.**
+  - Existing single-image local-mode path must not regress, per the standing vision rule:
+    `latency_ms` **<= 1.25x** baseline, decode tps **>= 0.80x** baseline.
+  - Tiling must amortize, not merely work: an N-tile encode must cost **<= 1.3 * N** times a
+    single-tile encode. A linear-or-worse scaling means each tile is paying full per-call dispatch
+    and staging cost, which is the same amortization failure Tier 01B measured on the prefill path
+    and is the specific risk of running the encoder once per tile.
+  - Multi-image requests scale the same way against image count.
+  - Cluster-mode vision end-to-end latency is **recorded with no threshold** on first delivery — it
+    has no prior baseline, and this run establishes it as the reference for later tiers.
+
 ## Models needed
 
 `moondream2-q5_k.llamafile` (present) covers multi-image and cluster-wiring validation, though it's
@@ -109,7 +128,11 @@ can be validated against the model family that actually needs them.
 - [ ] Dynamic/high-resolution tiling implemented and validated (LLaVA-1.6-family model obtained and
       tested, or the tier explicitly documents why validation proceeded without one).
 - [ ] Multi-image-per-request works correctly.
+- [ ] `juno-node` depends on `vision`, the shaded node jar loads `VisionAwareForwardPassHandler`,
+      and the jar-size change is recorded.
 - [ ] Vision works end to end under pipeline-parallel and tensor-parallel cluster mode.
+- [ ] Multi-image and any new cluster-vision request shape are declared in
+      `api/src/main/resources/openapi.yaml` and `juno-api.yaml` (README feature-complete rule).
 - [ ] Native dynamic-resolution ViT evaluated; implemented only if a suitable model was obtained,
       otherwise explicitly deferred with reasoning (not silently dropped).
 - [ ] Cross-surface checklist fully resolved.

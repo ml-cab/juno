@@ -24,6 +24,11 @@ unset _JUNO_SHADED
 LIVE_JAR="$DIR/juno-master/target/juno-master.jar"
 HEALTH_JAR="$DIR/health/target/juno-health.jar"
 
+# The one JFR settings file every Juno recording is taken under, so two runs differ
+# by the code under test and not by their instrumentation overhead. Override with
+# JUNO_JFR_SETTINGS to point at a different file.
+JUNO_JFR_SETTINGS="${JUNO_JFR_SETTINGS:-$DIR/scripts/performance-tests/juno-perf.jfc}"
+
 # ── Colour helpers ────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; DIM='\033[2m'; NC='\033[0m'
@@ -337,6 +342,10 @@ cmd_cluster() {
   local jfr_arg=""
   [[ -n "$jfr_duration" ]] && jfr_arg="--jfr $jfr_duration" && \
     warn "JFR enabled — duration=${jfr_duration}  (programmatic recording, metrics auto-printed on exit)"
+  # Name the settings file explicitly: the console resolves it relative to the working
+  # directory otherwise, which is wherever the caller happened to be.
+  [[ -n "$jfr_duration" && -r "$JUNO_JFR_SETTINGS" ]] && \
+    JVM_BASE+=("-Djuno.jfr.settings=$JUNO_JFR_SETTINGS")
 
   local lora_play_arg=""
   [[ -n "$lora_play" ]] && { lora_play_arg="--lora-play $lora_play"; warn "LoRA inference overlay: ${lora_play}"; }
@@ -612,6 +621,10 @@ cmd_local() {
   local jfr_arg=""
   [[ -n "$jfr_duration" ]] && jfr_arg="--jfr $jfr_duration" && \
     warn "JFR enabled — duration=${jfr_duration}  (programmatic recording, metrics auto-printed on exit)"
+  # Name the settings file explicitly: the console resolves it relative to the working
+  # directory otherwise, which is wherever the caller happened to be.
+  [[ -n "$jfr_duration" && -r "$JUNO_JFR_SETTINGS" ]] && \
+    JVM_BASE+=("-Djuno.jfr.settings=$JUNO_JFR_SETTINGS")
 
   local lora_play_arg=""
   [[ -n "$lora_play" ]] && { lora_play_arg="--lora-play $lora_play"; warn "LoRA inference overlay: ${lora_play}"; }
@@ -1110,8 +1123,14 @@ cmd_test() {
     model_name="$(basename "$model")"
     model_stem="${model_name%.*}"
     local jfr_file="juno-${model_stem}-$(date +%Y%m%d-%H%M%S).jfr"
-    jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=profile,dumponexit=true"
-    warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}"
+    local jfr_settings="$JUNO_JFR_SETTINGS"
+    if [[ ! -r "$jfr_settings" ]]; then
+      warn "JFR settings file not readable: ${jfr_settings} — falling back to the JDK default settings."
+      warn "This run is not comparable with one taken under the Juno settings."
+      jfr_settings="default"
+    fi
+    jfr_flag="-XX:StartFlightRecording=duration=${jfr_duration},filename=${jfr_file},settings=${jfr_settings},dumponexit=true"
+    warn "JFR enabled — duration=${jfr_duration}  output=${jfr_file}  settings=$(basename "$jfr_settings")"
   fi
 
   exec "$JAVA" \

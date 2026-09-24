@@ -93,6 +93,18 @@ actually help rather than hurt.
   `compare-lora.sh`, plus `compare-llama-cpp.sh` for a llama.cpp-relative reading (per README's
   llama.cpp-relative gate); publish under `docs/perf-compare/`.
 
+  **Threshold.**
+  - Aggregate multi-session throughput under `continuous` must reach **>= 1.10x** `static` on the
+    8x64 GPU benchmark that produced the 0.86x finding (`docs/performance.md`). Not 1.0x: parity is
+    inside this host's noise floor and would not establish that continuous is actually better.
+  - Streaming latency must not be traded away for aggregate throughput — p95 TTFT under `continuous`
+    at the benchmark concurrency **<= 1.25x** `static`'s, and p95 TPOT **<= 1.10x**. A scheduler
+    that wins on aggregate tokens by starving individual streams has not improved the product.
+  - Correctness at the raised concurrency ceiling: no request starvation (every admitted request
+    completes) and no KV cross-contamination, asserted by test rather than by throughput alone.
+  - `static` must be untouched: tg and pp within **0.98x** of the pre-tier baseline, since this tier
+    is scoped to change only `continuous`.
+
 ## Models needed
 
 Existing models are sufficient (this is a scheduling change, not architecture-dependent). Reuse the
@@ -109,7 +121,8 @@ comparison.
 - [ ] Cluster-support decision made and executed (real support, or a closed, technically-grounded
       "not now" note replacing the open-ended "v1 scope" comment).
 - [ ] Cross-surface checklist fully resolved.
-- [ ] Perf gate published showing the throughput result.
+- [ ] Perf gate published showing the throughput result against every threshold above, or the
+      miss reported plainly with its number.
 - [ ] Docs (`docs/howto.md`, `docs/performance.md`) updated with the new `--parallel` semantics
       under `continuous`.
 - [ ] `CHANGELOG.md` entry added.

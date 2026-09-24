@@ -2,6 +2,29 @@
 
 Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). This file records tier-specific regression notes and exit-gate evidence.
 
+## Measurement boundary: one JFR configuration, and prompt-token parity
+
+Two changes to how measurements are taken. Every entry in this file recorded before them is on the
+other side of a boundary and is not strictly comparable with one recorded after; runs taken before
+the change are kept and are still valid against each other.
+
+**One recording configuration.** Juno starts JFR recordings from several places, and they used to
+name different settings, so two runs could differ by their instrumentation overhead rather than by
+the code under test. All of them now resolve `scripts/performance-tests/juno-perf.jfc` — see
+[`howto.md`](howto.md) for how to point a run at a different file. The configuration also records
+what a throughput number has to be read against: collection pauses, allocated bytes and their
+attribution, hot methods, and monitor and park time. The 622 ms pause documented in the LoRA
+playback section below, which read as a regression until it was root-caused by hand, is the failure
+mode this makes visible by default rather than by investigation.
+
+**Prompt-token parity.** `compare-llama-cpp.sh` used to prefill a fixed short sentence for Juno
+while asking the reference tool for `n_prompt` tokens, so the two prefill figures described
+different amounts of work — roughly 20 tokens against 128 in the runs on record. Parity is now the
+default, each result records Juno's real `prompt_tokens`, and a prefill ratio whose deviation from
+the requested count exceeds 10% is withheld with its reason stated rather than published. Prefill
+ratios published before this change read as better than a like-for-like measurement supports;
+generation ratios are unaffected.
+
 ## OpenAI field parity (`stop` / `seed` / `presence_penalty`)
 
 **Plan:** [`infra-plan/PLAN-Infra-Tier2.md`](infra-plan/PLAN-Infra-Tier2.md) (P2 step 1 — **feature complete**).

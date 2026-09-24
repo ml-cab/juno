@@ -102,8 +102,22 @@ interim one).
   multi-adapter hot-swapped requests through both schedules, and a QLoRA-style training run,
   end to end.
 - **Perf gate (required)**: `compare-lora.sh` rerun (this script already exists specifically for
-  LoRA train+playback comparisons) plus new checkpointing/QLoRA-specific memory/throughput
-  measurements; publish under `docs/perf-compare/`.
+  LoRA train+playback comparisons, and it takes `--reps`; pass `--reps 3` per the README's
+  noise-floor rule, since it defaults to 1) plus new checkpointing/QLoRA-specific memory and
+  throughput measurements; publish under `docs/perf-compare/`.
+
+  **Threshold.**
+  - Existing `.lora` train and playback must not regress, per the standing LoRA rule: train
+    **>= 0.95x** and wall-clock playback tps **>= 0.80x** of the last published baseline.
+  - Gradient/activation checkpointing must reduce peak training memory by **>= 30%** on
+    `tinyllama-1.1b` at the longest sequence length that fits without it, while costing **<= 1.4x**
+    the training step time — checkpointing that saves no meaningful memory, or that halves training
+    speed to save a little, is not worth shipping and the number is how that gets decided.
+  - QLoRA-style quantized-base-weight training must reduce peak training memory by **>= 25%**
+    against the current FP16/FP32-frozen path, with final validation loss within **2%** of it after
+    an equal number of steps. A memory win bought with a convergence regression is a failure.
+  - Per-request hot-swapping must not slow the single-adapter path: playback tps with one adapter
+    selected per-request **>= 0.95x** the `--lora-play` startup-flag path it replaces.
 
 ## Models needed
 
@@ -123,6 +137,9 @@ against a truly independent real-world file.
 - [ ] Gradient/activation checkpointing implemented, measured to reduce peak training memory.
 - [ ] QLoRA-style quantized-base-weight training implemented and correctness-validated.
 - [ ] Cross-surface checklist fully resolved.
-- [ ] Perf gate published.
+- [ ] Perf gate published, every threshold above met or explicitly missed with its number.
+- [ ] `x_juno_loras`'s now-working request shape, and any new LoRA fields, are declared in
+      `api/src/main/resources/openapi.yaml` and `juno-api.yaml` (README feature-complete rule) —
+      this field has been accepted-and-rejected by the server without ever being specified.
 - [ ] Docs (`docs/howto.md` LoRA sections, `docs/agent-arch.txt`) updated.
 - [ ] `CHANGELOG.md` entry added.

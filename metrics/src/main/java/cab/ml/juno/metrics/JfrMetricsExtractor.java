@@ -162,6 +162,8 @@ final class JfrMetricsExtractor {
         long specDraftTokens = 0;
         long specAcceptedTokens = 0;
 
+        JdkEventBucket jdkEvents = new JdkEventBucket();
+
         for (Path jfrFile : jfrFiles) {
             if (!Files.isRegularFile(jfrFile) || Files.size(jfrFile) == 0)
                 continue;
@@ -331,7 +333,9 @@ final class JfrMetricsExtractor {
                             if (prefillChunks > continuousMaxPrefillChunks)
                                 continuousMaxPrefillChunks = prefillChunks;
                         }
-                        default -> { /* ignore JDK and other events */ }
+                        // GC pauses, allocation, hot methods and lock/park time: the
+                        // context a throughput number has to be read against.
+                        default -> jdkEvents.accept(ev, type, nano);
                     }
                 }
             }
@@ -448,6 +452,8 @@ final class JfrMetricsExtractor {
         m.put("juno.Speculation.acceptedTokens.sum", (double) specAcceptedTokens);
         m.put("juno.Speculation.acceptanceRate",
                 specDraftTokens > 0 ? (double) specAcceptedTokens / specDraftTokens : 0.0);
+
+        jdkEvents.putInto(m);
 
         return new MetricsSnapshot.ModelMetrics(model.getName(), model.getPath(), jfrName, m);
     }
