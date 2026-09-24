@@ -32,6 +32,15 @@
   its reason stated in the JSON and in the published index rather than reported as a throughput gap. Generation
   ratios are unaffected. The index also gained garbage-collection and allocated-bytes-per-token columns and now
   states the unmatched thread count between the two engines explicitly.
+- **The launchers size the JVM heap from the model file.** Juno reads GGUF tensors onto the Java heap, so
+  the model has to fit in `-Xmx`, but every command defaulted to a fixed `4g` regardless of the model. A
+  model larger than roughly 1.5 GiB of weights therefore died with an `OutOfMemoryError` naming whichever
+  tensor happened to cross the limit, with nothing pointing at the heap — an 18 GiB model failed this way on
+  a 62 GiB machine. `run.sh` and `run.bat` now derive it for `cluster`, `local`, `lora`, `test`, `merge` and
+  `lora-import`: file size x1.5 plus 2 GiB, clamped to 4g..48g, which is the formula the performance
+  comparison harness already used, so an interactive run and a benchmark run of the same model now get the
+  same heap. An explicit `--heap` or `HEAP` still wins, and the derived value is printed when it is used.
+  With no local file to measure — the `--hf` case before a download resolves — it stays at `4g`.
 - No performance run: nothing here touches the forward pass, MatVec, GPU residency, batching, KV or
   quantization. The JFR configuration change does break strict comparability with previously published runs, so
   the first run taken under it becomes the new reference.

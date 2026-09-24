@@ -37,6 +37,42 @@ ok()   { echo -e "${GREEN}✔ $*${NC}"; }
 warn() { echo -e "${YELLOW}⚠ $*${NC}"; }
 err()  { echo -e "${RED}✖ $*${NC}" >&2; exit 1; }
 
+# ── Heap sizing ───────────────────────────────────────────────────────────────
+# Juno reads GGUF tensors onto the Java heap, so the whole model has to fit in
+# -Xmx. A fixed default therefore caps the model size a command can open at all,
+# and the failure is an OutOfMemoryError from whichever tensor happened to cross
+# the limit rather than anything naming the heap. Size it from the file instead
+# when the caller did not choose: file size x1.5 plus 2 GiB of headroom, clamped
+# to 4g..48g. This is the formula the performance-comparison harness already
+# uses, so an interactive run and a benchmark run of the same model get the same
+# heap. Falls back to 4g when there is no local file to measure, which is the
+# --hf case before the download resolves.
+heap_for_model() {
+  local path="${1:-}" bytes heap_g
+  if [[ -z "$path" || ! -f "$path" ]]; then
+    printf '4g'
+    return
+  fi
+  bytes="$(stat -c%s "$path" 2>/dev/null || stat -f%z "$path" 2>/dev/null || echo 0)"
+  if (( bytes <= 0 )); then
+    printf '4g'
+    return
+  fi
+  heap_g=$(( (bytes * 3 / 2 + 2 * 1024 * 1024 * 1024 + 1024 * 1024 * 1024 - 1) / (1024 * 1024 * 1024) ))
+  (( heap_g < 4 )) && heap_g=4
+  (( heap_g > 48 )) && heap_g=48
+  printf '%sg' "$heap_g"
+}
+
+# Resolves $heap in place for a cmd_* function: an explicit --heap or HEAP wins,
+# otherwise derive one and say so, since a heap nobody typed should be visible.
+resolve_heap() {
+  local model_file="${1:-}"
+  [[ -n "$heap" ]] && return 0
+  heap="$(heap_for_model "$model_file")"
+  info "heap=${heap} derived from model size (override with --heap SIZE or HEAP=SIZE)"
+}
+
 # ── OS detection ──────────────────────────────────────────────────────────────
 detect_os() {
   case "${OSTYPE:-}" in
@@ -184,7 +220,7 @@ cmd_cluster() {
   local temperature="${TEMPERATURE:-0.7}"
   local top_k="${TOP_K:-50}"
   local top_p="${TOP_P:-0.9}"
-  local heap="${HEAP:-4g}"
+  local heap="${HEAP:-}"   # empty = derive from the model file, see resolve_heap
   local verbose="false"
   local ptype="pipeline"
   local jfr_duration=""
@@ -293,7 +329,8 @@ cmd_cluster() {
         echo "    --cpu                      use CPU only"
         echo ""
         echo "  JVM:"
-        echo "    --heap SIZE                JVM heap  e.g. 4g 8g 16g  (default 4g)"
+        echo "    --heap SIZE                JVM heap  e.g. 4g 8g 16g"
+        echo "                               (default: derived from the model file size)"
         echo "    --jfr DURATION             Enable Java Flight Recording for DURATION"
         echo "                               e.g. 5m 30s 1h — records from JVM start,"
         echo "                               writes juno-<timestamp>.jfr on exit"
@@ -318,6 +355,7 @@ cmd_cluster() {
 
   [[ -n "$model" || -n "$hf" ]] || err "Model path is required.\n  Usage: $0 cluster --model-path /path/to/model.gguf\n     or: $0 cluster --hf org/repo[:quant]\n     or: MODEL_PATH=/path/to/model.gguf $0 cluster"
   [[ -z "$model" || -f "$model" ]] || err "Model file not found: $model"
+  resolve_heap "$model"
 
   require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
@@ -432,7 +470,7 @@ cmd_local() {
   local temperature="${TEMPERATURE:-0.7}"
   local temperature_explicit="false"
   [[ -n "${TEMPERATURE+x}" ]] && temperature_explicit="true"
-  local heap="${HEAP:-4g}"
+  local heap="${HEAP:-}"   # empty = derive from the model file, see resolve_heap
   local top_k="${TOP_K:-50}"
   local top_p="${TOP_P:-0.9}"
   local nodes="${NODES:-3}"
@@ -574,7 +612,8 @@ cmd_local() {
         echo "    --cpu                      use CPU only"
         echo ""
         echo "  JVM:"
-        echo "    --heap SIZE                e.g. 4g 8g 16g               (default 4g)"
+        echo "    --heap SIZE                e.g. 4g 8g 16g"
+        echo "                               (default: derived from the model file size)"
         echo "    --jfr DURATION             Enable Java Flight Recording for DURATION"
         echo "                               e.g. 5m 30s 1h — writes juno-<timestamp>.jfr"
         echo ""
@@ -592,6 +631,7 @@ cmd_local() {
 
   [[ -n "$model" || -n "$hf" ]] || err "Model path is required.\n  Usage: $0 local --model-path /path/to/model.gguf\n     or: $0 local --hf org/repo[:quant]\n     or: MODEL_PATH=/path/to/model.gguf $0 local"
   [[ -z "$model" || -f "$model" ]] || err "Model file not found: $model"
+  resolve_heap "$model"
   [[ -z "$mmproj" || -f "$mmproj" ]] || err "mmproj file not found: $mmproj"
 
   # Factual LoRA playback should be reproducible. Sampling at the normal 0.7
@@ -771,7 +811,7 @@ cmd_lora() {
   local temperature="${TEMPERATURE:-0.7}"
   local top_k="${TOP_K:-50}"
   local top_p="${TOP_P:-0.9}"
-  local heap="${HEAP:-4g}"
+  local heap="${HEAP:-}"   # empty = derive from the model file, see resolve_heap
   local verbose="false"
   local jfr_duration=""
   local health="false"
@@ -906,7 +946,7 @@ cmd_lora() {
         echo "    --cpu                   use CPU only"
         echo ""
         echo "  JVM:"
-        echo "    --heap SIZE             e.g. 4g 8g 16g  (default 4g)"
+        echo "    --heap SIZE             e.g. 4g 8g 16g  (default: derived from model size)"
         echo "                            LoRA loads the full model in one JVM."
         echo "                            Tip: use at least 2× the model file size."
         echo ""
@@ -952,6 +992,7 @@ cmd_lora() {
 
   [[ -n "$model" || -n "$hf" ]] || err "Model path is required.\n  Usage: $0 lora --model-path /path/to/model.gguf\n     or: $0 lora --hf org/repo[:quant]\n     or: MODEL_PATH=/path/to/model.gguf $0 lora"
   [[ -z "$model" || -f "$model" ]] || err "Model file not found: $model"
+  resolve_heap "$model"
 
   require_jar "$JUNO_PLAYER_JAR" "juno-player"
   check_java_version
@@ -1055,7 +1096,7 @@ cmd_lora() {
 # ---------------------------------------------------------------------------
 cmd_test() {
   local model="${MODEL_PATH:-}"
-  local heap="${HEAP:-4g}"
+  local heap="${HEAP:-}"   # empty = derive from the model file, see resolve_heap
   local ptype="${PTYPE:-all}"
   local jfr_duration=""
 
@@ -1093,7 +1134,7 @@ cmd_test() {
         echo "                                 (default: all — runs both suites)"
         echo ""
         echo "  JVM:"
-        echo "    --heap SIZE        e.g. 4g 8g 16g  (default 4g)"
+        echo "    --heap SIZE        e.g. 4g 8g 16g  (default: derived from model size)"
         echo "    --jfr DURATION     Enable Java Flight Recording for DURATION"
         echo "                       e.g. 5m 30s 1h — writes juno-<timestamp>.jfr"
         echo ""
@@ -1114,6 +1155,7 @@ cmd_test() {
   require_jar "$LIVE_JAR" "juno-master"
   check_java_version
 
+  resolve_heap "$model"
   info "Running ModelLiveRunner  (model=$(basename "$model")  pType=${ptype}  heap=${heap}  os=${OS})"
   echo ""
 
@@ -1316,7 +1358,7 @@ usage() {
   echo "    --top-p F                      top-p nucleus sampling    (default 0.9, 0=disabled)"
   echo "    --grammar-file PATH            GBNF constrained decoding (cluster/local; env JUNO_GRAMMAR_FILE)"
   echo "    --json-schema-file PATH        JSON Schema subset (cluster/local; env JUNO_JSON_SCHEMA_FILE)"
-  echo "    --heap SIZE                    JVM heap e.g. 4g 8g      (default 4g)"
+  echo "    --heap SIZE                    JVM heap e.g. 4g 8g      (default: from model size)"
   echo "    --jfr DURATION                 Java Flight Recording     e.g. 5m 30s 1h"
   echo "    --gpu                          use GPU when available (default)"
   echo "    --cpu                          use CPU only"
@@ -1386,7 +1428,7 @@ cmd_merge() {
   local model="${MODEL_PATH:-}"
   local lora=""
   local output=""
-  local heap="${HEAP:-4g}"
+  local heap="${HEAP:-}"   # empty = derive from the model file, see resolve_heap
   local use_gpu="${JUNO_USE_GPU:-false}"
 
   while [[ $# -gt 0 ]]; do
@@ -1403,7 +1445,7 @@ cmd_merge() {
         echo "    --model-path PATH    Source GGUF or llamafile (required)"
         echo "    --lora-path PATH     Trained .lora checkpoint (default: <model>.lora)"
         echo "    --output PATH        Output GGUF path (default: <model>-merged.gguf)"
-        echo "    --heap SIZE          JVM heap, e.g. 4g (default: 4g)"
+        echo "    --heap SIZE          JVM heap, e.g. 4g (default: derived from model size)"
         echo ""
         echo "  Example:"
         echo "    $0 merge --model-path /models/tinyllama.gguf"
@@ -1430,6 +1472,7 @@ cmd_merge() {
 
   prepend_cuda_bin_to_path_if_gpu "$use_gpu"
 
+  resolve_heap "$model"
   info "Starting LoRA merge  (heap=${heap})"
 
   "$JAVA" -Xmx${heap} \
@@ -1447,7 +1490,7 @@ cmd_lora_import() {
   local gguf=""
   local out=""
   local alpha=""
-  local heap="${HEAP:-4g}"
+  local heap="${HEAP:-}"   # empty = derive from the model file, see resolve_heap
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1464,7 +1507,7 @@ cmd_lora_import() {
         echo "    --out PATH     Destination .lora v2 checkpoint (required)"
         echo "    --alpha N      Override alpha for every imported adapter (default:"
         echo "                   GGUF metadata if present, else alpha == rank)"
-        echo "    --heap SIZE    JVM heap, e.g. 4g (default: 4g)"
+        echo "    --heap SIZE    JVM heap, e.g. 4g (default: derived from model size)"
         echo ""
         echo "  Example:"
         echo "    $0 lora-import --gguf hub-adapter.gguf --out hub-adapter.lora"
@@ -1489,6 +1532,7 @@ cmd_lora_import() {
   done
   [[ -n "$juno_player_jar" ]] || err "juno-player jar not found — build first with: mvn clean package -DskipTests"
 
+  resolve_heap "$gguf"
   info "Importing GGUF LoRA adapter  (heap=${heap})"
 
   "$JAVA" -Xmx${heap} \

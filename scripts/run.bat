@@ -74,6 +74,33 @@ goto :cluster
 rem ============================================================================
 rem  Helper: prepend CUDA bin to PATH if GPU mode and CUDA available
 rem ============================================================================
+rem --------------------------------------------------------------------------
+rem  heap_for_model - size the JVM heap from the model file
+rem --------------------------------------------------------------------------
+rem Juno reads GGUF tensors onto the Java heap, so the whole model has to fit
+rem in -Xmx. A fixed default caps the model size a command can open at all, and
+rem the failure is an OutOfMemoryError naming some tensor rather than the heap.
+rem Formula: file size x1.5 plus 2 GiB headroom, clamped to 4g..48g -- the same
+rem one run.sh and the performance-comparison harness use, so every launcher
+rem gives the same model the same heap. The arithmetic runs in units of 1000
+rem bytes because set /a is 32-bit and a large model overflows it.
+:heap_for_model
+if not "%HEAP%"=="" goto :eof
+set "HEAP=4g"
+if "%~1"=="" goto :eof
+if not exist "%~1" goto :eof
+set "_HFM_BYTES="
+for %%I in ("%~1") do set "_HFM_BYTES=%%~zI"
+if "%_HFM_BYTES%"=="" goto :eof
+set "_HFM_K=%_HFM_BYTES:~0,-3%"
+if "%_HFM_K%"=="" set "_HFM_K=1"
+set /a _HFM_G=(_HFM_K * 3 / 2 + 2 * 1073742 + 1073741) / 1073742
+if %_HFM_G% LSS 4 set "_HFM_G=4"
+if %_HFM_G% GTR 48 set "_HFM_G=48"
+set "HEAP=%_HFM_G%g"
+echo [INFO] heap=%HEAP% derived from model size (override with --heap SIZE or HEAP=SIZE)
+goto :eof
+
 :prepend_cuda_path
 if /i "%USE_GPU%"=="false" exit /b 0
 if not "%CUDA_PATH%"=="" if exist "%CUDA_PATH%\bin" (
@@ -101,7 +128,7 @@ if not "%TEMPERATURE%"=="" set "TEMPERATURE_EXPLICIT=true"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
 if "%TOP_P%"==""       set "TOP_P=0.9"
-if "%HEAP%"==""        set "HEAP=4g"
+rem HEAP left empty on purpose: :heap_for_model derives it from the model file.
 set "VERBOSE=false"
 if "%PTYPE%"=="" set "PTYPE=pipeline"
 set "JFR_DURATION_CLUSTER="
@@ -187,7 +214,7 @@ if /i "%~1"=="--help" (
   echo   --cache-type-v f16^|q8_0 V cache type (default f16)
   echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
   echo   --kv-page-size N           page size when continuous (default 16)
-  echo   --heap SIZE       (default 4g)
+  echo   --heap SIZE       (default: derived from model size)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
   echo   --gpu             use GPU when available (default)
@@ -208,6 +235,7 @@ if "%MODEL%"=="" if "%HF%"=="" (
   exit /b 1
 )
 if not "%MODEL%"=="" if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
+call :heap_for_model "%MODEL%"
 call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
@@ -289,7 +317,7 @@ if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
 if "%TOP_P%"==""       set "TOP_P=0.9"
-if "%HEAP%"==""        set "HEAP=4g"
+rem HEAP left empty on purpose: :heap_for_model derives it from the model file.
 if "%NODES%"==""       set "NODES=3"
 set "VERBOSE=false"
 set "JFR_DURATION_LOCAL="
@@ -385,7 +413,7 @@ if /i "%~1"=="--help" (
   echo                     (includes OpenAI-compatible /v1/chat/completions)
   echo   --embeddings      enable POST /v1/embeddings (default: off)
   echo   --pooling mean^|cls^|last  /v1/embeddings pooling (default: mean)
-  echo   --heap SIZE       (default 4g)
+  echo   --heap SIZE       (default: derived from model size)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
   echo   --gpu             use GPU when available (default)
@@ -429,6 +457,7 @@ if "%MODEL%"=="" if "%HF%"=="" (
   exit /b 1
 )
 if not "%MODEL%"=="" if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
+call :heap_for_model "%MODEL%"
 if not "%MMPROJ%"=="" if not exist "%MMPROJ%" ( echo [ERR] mmproj file not found: "%MMPROJ%" & exit /b 1 )
 call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
@@ -555,7 +584,7 @@ if "%MAX_TOKENS%"==""  set "MAX_TOKENS=200"
 if "%TEMPERATURE%"=="" set "TEMPERATURE=0.7"
 if "%TOP_K%"==""       set "TOP_K=50"
 if "%TOP_P%"==""       set "TOP_P=0.9"
-if "%HEAP%"==""        set "HEAP=4g"
+rem HEAP left empty on purpose: :heap_for_model derives it from the model file.
 set "VERBOSE=false"
 set "JFR_DURATION_LORA="
 set "USE_GPU=true"
@@ -665,7 +694,7 @@ if /i "%~1"=="--help" (
   echo     --kv-page-size N           page size when continuous (default 16)
   echo.
   echo   JVM:
-  echo     --heap SIZE             e.g. 4g 8g 16g  (default 4g)
+  echo     --heap SIZE             e.g. 4g 8g 16g  (default: derived from model size)
   echo                             Use at least 2x the model file size.
   echo.
   echo   Backend:
@@ -708,6 +737,7 @@ if "%MODEL%"=="" if "%HF%"=="" (
   exit /b 1
 )
 if not "%MODEL%"=="" if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
+call :heap_for_model "%MODEL%"
 call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
@@ -759,7 +789,7 @@ rem ============================================================================
 :test
 
 set "MODEL=%MODEL_PATH%"
-if "%HEAP%"==""  set "HEAP=4g"
+rem HEAP left empty on purpose: :heap_for_model derives it from the model file.
 if "%PTYPE%"=="" set "PTYPE=all"
 set "JFR_DURATION_TEST="
 
@@ -789,7 +819,7 @@ if /i "%~1"=="--help" (
   echo     8. tensor-parallel greedy determinism
   echo.
   echo   --pType pipeline^|tensor^|all   filter cluster tests (default: all)
-  echo   --heap SIZE                    (default 4g)
+  echo   --heap SIZE                    (default: derived from model size)
   echo   --jfr DURATION                 Java Flight Recording  e.g. 5m 30s 1h
   echo                                  Records from start, writes juno-^<timestamp^>.jfr on exit
   goto :eof
@@ -806,6 +836,7 @@ if "%MODEL%"=="" (
   exit /b 1
 )
 if not exist "%MODEL%" ( echo [ERR] Model not found: "%MODEL%" & exit /b 1 )
+call :heap_for_model "%MODEL%"
 call :require_jar "%LIVE_JAR%" "juno-master"
 if errorlevel 1 exit /b 1
 
@@ -837,7 +868,7 @@ rem ============================================================================
 set "MODEL=%MODEL_PATH%"
 set "LORA_PATH_VAL="
 set "OUTPUT="
-if "%HEAP%"=="" set "HEAP=4g"
+rem HEAP left empty on purpose: :heap_for_model derives it from the model file.
 set "USE_GPU=false"
 
 :merge_parse
@@ -860,7 +891,7 @@ echo   Options:
 echo     --model-path PATH    Source GGUF or llamafile (required)
 echo     --lora-path PATH     Trained .lora checkpoint (default: ^<model^>.lora)
 echo     --output PATH        Output GGUF path (default: ^<model^>-merged.gguf)
-echo     --heap SIZE          JVM heap, e.g. 4g (default: 4g)
+echo     --heap SIZE          JVM heap, e.g. 4g (default: derived from model size)
 echo.
 echo   Example:
 echo     run.bat merge --model-path C:\models\tinyllama.gguf
@@ -877,6 +908,7 @@ if "%MODEL%"=="" (
 call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
+call :heap_for_model "%MODEL%"
 echo [INFO] Starting LoRA merge  (heap=%HEAP%)
 
 set "LORA_PATH_FLAG_MERGE="
@@ -897,7 +929,7 @@ rem ============================================================================
 set "GGUF_IN="
 set "LORA_OUT="
 set "ALPHA_VAL="
-if "%HEAP%"=="" set "HEAP=4g"
+rem HEAP left empty on purpose: :heap_for_model derives it from the model file.
 
 :lora_import_parse
 if "%~1"=="" goto :lora_import_done
@@ -920,7 +952,7 @@ echo     --gguf PATH    Source GGUF LoRA adapter (required)
 echo     --out PATH     Destination .lora v2 checkpoint (required)
 echo     --alpha N      Override alpha for every imported adapter (default:
 echo                    GGUF metadata if present, else alpha == rank)
-echo     --heap SIZE    JVM heap, e.g. 4g (default: 4g)
+echo     --heap SIZE    JVM heap, e.g. 4g (default: derived from model size)
 echo.
 echo   Example:
 echo     run.bat lora-import --gguf hub-adapter.gguf --out hub-adapter.lora
@@ -941,6 +973,7 @@ if "%LORA_OUT%"=="" (
 call :require_jar "%JUNO_PLAYER_JAR%" "juno-player"
 if errorlevel 1 exit /b 1
 
+call :heap_for_model "%GGUF%"
 echo [INFO] Importing GGUF LoRA adapter  (heap=%HEAP%)
 
 set "ALPHA_FLAG_IMPORT="

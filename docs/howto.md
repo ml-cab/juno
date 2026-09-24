@@ -45,7 +45,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--temperature F` | `0.7` | all | Sampling temperature (0.0 = deterministic) |
 | `--top-k N` | `50` | all | Top-K sampling cutoff (0 = disabled) |
 | `--top-p F` | `0.9` | all | Nucleus sampling cutoff (0 = disabled). Same default as REST API and `SamplingParams.defaults()`. |
-| `--heap SIZE` | `4g` | all | JVM heap per node, e.g. `4g`, `8g` |
+| `--heap SIZE` | derived | all | JVM heap per node, e.g. `4g`, `8g`. Sized from the model file when not given — see below |
 | `--nodes N` | `3` | local | Number of in-process shards |
 | `--pType pipeline\|tensor` | `pipeline` | cluster, test | Parallelism type |
 | `--jfr DURATION` | — | cluster, local, lora | Java Flight Recording (e.g. `30s`, `5m`) |
@@ -90,7 +90,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--model-path PATH` | — | Source GGUF or llamafile (required) |
 | `--lora-path PATH` | `<model>.lora` | Trained adapter checkpoint |
 | `--output PATH` | `<model>-merged.gguf` | Output file (always plain GGUF, even if source is llamafile) |
-| `--heap SIZE` | `4g` | JVM heap — use at least 2x the model file size |
+| `--heap SIZE` | derived | JVM heap, sized from the model file when not given — see below |
 
 **Environment overrides:** `MODEL_PATH`, `JUNO_HF`, `JUNO_USE_GPU`, `JUNO_GPU_LAYERS`, `JUNO_MMQ`, `JUNO_CACHE_TYPE_K`, `JUNO_CACHE_TYPE_V`, `JUNO_SCHEDULE`, `JUNO_KV_PAGE_SIZE`, `JUNO_PARALLEL`, `JUNO_BATCH_WINDOW_MS`, `PTYPE`, `DTYPE`, `BYTE_ORDER`,
 `MAX_TOKENS`, `TEMPERATURE`, `TOP_K`, `TOP_P`, `HEAP`, `NODES`, `JAVA_HOME`,
@@ -894,6 +894,25 @@ train-time and inference-time formatting stay identical (see "Chat templates and
 downloads").
 
 ---
+
+### Heap sizing
+
+Juno reads GGUF tensors onto the Java heap, so a model only opens if it fits in `-Xmx`. Every
+command that loads one therefore sizes the heap from the model file unless you choose a value:
+file size x1.5 plus 2 GiB of headroom, clamped to 4g..48g. The launcher prints what it picked.
+
+```
+$ ./juno local --model-path models/llama-1-30b.Q4_K_M.gguf
+heap=30g derived from model size (override with --heap SIZE or HEAP=SIZE)
+```
+
+An explicit `--heap` or the `HEAP` environment variable always wins, and neither prints that line.
+Pass one when the derived figure does not suit the machine — the formula does not consult how much
+memory the host actually has, so on a machine smaller than the model the honest answer is a
+different model or a GPU offload, not a larger number here.
+
+When the model is fetched with `--hf`, there is no local file to measure at launch and the heap
+falls back to `4g`; pass `--heap` explicitly for a large repository model.
 
 ### Metrics
 
