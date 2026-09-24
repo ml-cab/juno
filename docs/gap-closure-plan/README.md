@@ -157,6 +157,7 @@ ordering while sitting after 06; that rationale is corrected there.
 | [03](TIER-03-kv-cache-maturity.md) | KV cache maturity | §1.3 |
 | [04](TIER-04-quantization-coverage.md) | Quantization coverage (mapped weight loading first) | §1.1 |
 | [04B](TIER-04B-tokenizer-fidelity.md) | Tokenizer fidelity | none — see that file's "Why this tier, why now" |
+| [04C](TIER-04C-packed-weight-matmul.md) | Packed-weight matmul (dequantize-to-FP16 elimination) | none — adjacent to §1.1; see that file's "Why this tier, why now" |
 | [05](TIER-05-sampling-grammar.md) | Sampling & grammar completeness | §1.4 |
 | [08](TIER-08-model-architecture-breadth.md) | Model architecture breadth | §1.9, real files in `models/` |
 | [06](TIER-06-speculative-decoding.md) | Speculative decoding expansion | §1.5 |
@@ -240,7 +241,7 @@ already exists and this plan doesn't change it, it just says explicitly, per tie
 only ever compare Juno against its own prior baseline — neither tells you whether the actual stated
 goal of this plan (closing the gap with llama.cpp) is moving. Every tier whose scope includes the
 forward pass, MatVec, GPU residency, batching, quantization, or KV paths (at minimum: Tiers 01, 01B,
-02, 03, 04, 04B, 06, 07, 08, 09, 10) additionally re-runs
+02, 03, 04, 04B, 04C, 06, 07, 08, 09, 10) additionally re-runs
 `scripts/performance-tests/compare-llama-cpp.sh` on the same host/model/quant/flags as the last
 published run under `docs/perf-compare/`, and records the resulting Juno/llama.cpp tg and pp ratios
 in that tier's own file (not just in `docs/performance.md`, so the trend across tiers is visible
@@ -377,7 +378,7 @@ works":
   (`mvn test` across all unit-test-bearing modules, `mvn verify -pl juno-master`).
 - Any hot-path change has a published `docs/perf-compare/` entry per the existing performance-gate
   rule, against a concrete numeric threshold stated in that tier's own file (execution rule 7 — not
-  just "no unexplained regression"), and, for Tiers 01, 01B, 02, 03, 04, 04B, 06, 07, 08, 09, 10, an
+  just "no unexplained regression"), and, for Tiers 01, 01B, 02, 03, 04, 04B, 04C, 06, 07, 08, 09, 10, an
   accompanying `compare-llama-cpp.sh` run recording the current Juno/llama.cpp ratio and reading it
   against the program target and that tier's intermediate milestone, if it has one.
 - **The published API contract is updated in the same change as the code.**

@@ -36,7 +36,16 @@ final class Q4KDequantScratch {
     MemorySegment ensure(CudaBindings cuda, int deviceIndex, long rows, long cols) {
         long needed = rows * cols * Short.BYTES;
         if (bytes < needed) {
-            cuda.deviceFree(dOutFp16);
+            // Drop the old buffer from this object before freeing it, so a failed
+            // allocation leaves an empty scratch rather than one pointing at memory
+            // that has already been freed. Callers may survive the failure and come
+            // back, and a stale pointer here surfaces later as an unrelated invalid
+            // argument on a memcpy rather than as the allocation failure it was.
+            MemorySegment previous = dOutFp16;
+            dOutFp16 = null;
+            bytes = 0L;
+            if (previous != null)
+                cuda.deviceFree(previous);
             dOutFp16 = cuda.deviceMalloc(deviceIndex, needed);
             bytes = needed;
         }

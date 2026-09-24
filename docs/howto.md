@@ -51,7 +51,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--jfr DURATION` | — | cluster, local, lora | Java Flight Recording (e.g. `30s`, `5m`) |
 | `--verbose` / `-v` | — | cluster, local | Verbose logging |
 | `--cpu` | — | cluster, local | Force CPU inference: sets `JUNO_USE_GPU=false`. Does not enable LoRA mode. |
-| `--gpu-layers N\|all\|auto` | `auto` | cluster, local | Transformer layers resident on GPU (`JUNO_GPU_LAYERS`). `auto` fits until VRAM OOM; pass `all` to force full residency (may OOM) or a count/`off` to opt out. |
+| `--gpu-layers N\|all\|auto` | `auto` | cluster, local | Transformer layers resident on GPU (`JUNO_GPU_LAYERS`). `auto` uploads as many as fit while leaving device memory free for the forward pass (see below); pass `all` to force full residency (may OOM) or a count/`off` to opt out. |
 | `--mmq on\|off\|auto` | `auto` | cluster, local | Packed Q4_K GPU weights (`JUNO_MMQ`) — keeps Q4_K on device instead of FP16-resident dequant. On CUDA this is a **VRAM-fit** path and a **measured decode-throughput win** vs `--mmq off` (see `docs/performance.md`). Applies to Llama-family, Phi-3, and Qwen3 dense text inference, and to `--lora-play` when the CUDA kernel loads (local REPL prints a confirmation line). LoRA **training** ignores `--mmq` (frozen weights stay FP16/FP32; the train REPL warns). `auto` enables when CUDA + kernel load, and is a no-op elsewhere; pass `off` to opt out. |
 | `--gpu-attention on\|off\|auto` | `auto` | cluster, local | GPU-resident attention kernel (`JUNO_GPU_ATTENTION`) — moves QK^T + softmax + weighted-V-sum onto a device-resident FP16 KV mirror instead of scalar CPU Java. CUDA only. A **measured decode/prefill throughput lever** (see `docs/performance.md`), not a peer-latency claim. Applies to Llama-family, Mistral, and Qwen2 dense text inference (`LlamaTransformerHandler`), and to vision automatically (delegates to the same handler). Phi-2, Phi-3, Qwen3, and Qwen3-MoE keep the scalar CPU path (**follow-up**) — `auto` correctly resolves to off there. LoRA **training** and `--lora-play` ignore `--gpu-attention` (attention stays scalar CPU; the train REPL warns). Occasional multi-token greedy-decode divergence from FP16 KV rounding is expected and documented, same class of tradeoff as other reduced-precision paths in this codebase; pass `off` for a bit-identical CPU-parity baseline. |
 | `--cache-type-k f16\|q8_0` | `f16` | cluster, local, lora | K-cache element type (`JUNO_CACHE_TYPE_K`). `f16` is the current float32 path (bit-compatible default). `q8_0` packs keys (~3.8× smaller persistent KV vs float); attention dequants to float. Slight quality tradeoff vs `f16`. On `juno lora` **training**, teacher-forced forward keeps ephemeral float KV (startup WARNING); q8 applies to inference / `--lora-play` maps. |
@@ -894,6 +894,37 @@ train-time and inference-time formatting stay identical (see "Chat templates and
 downloads").
 
 ---
+
+### Device memory with `--gpu-layers auto`
+
+Weight upload is not the only thing that allocates on the GPU. The forward pass also needs device
+memory: a scratch buffer to dequantize a packed weight matrix into when a prompt is wide enough to
+take the batched path, and a key/value mirror when the GPU-resident attention path is active. Those
+allocations happen after the upload, at the first real request.
+
+So `auto` stops uploading while enough device memory is still free for them, rather than filling the
+card. It reports what it kept back:
+
+```
+Llama: stopping GPU upload at global layer 23 to keep 351 MiB free for the forward pass — remainder on CPU
+```
+
+On a card that is comfortably larger than the model this changes nothing: the reserve is far smaller
+than one layer, so the same layers are resident as before. It matters when the model is close to, or
+larger than, the card.
+
+If device memory runs short anyway — a long conversation grows the key/value mirror, and that growth
+cannot be reserved for in advance without pinning memory a short conversation would never use — the
+affected piece of work moves to the CPU rather than ending the process, and says so once:
+
+```
+Llama: out of device memory growing the attention KV mirror — attention continues on the CPU, which holds the same history.
+```
+
+This is a fallback, not a target. A run that logs it is spending time on the CPU that it could spend
+on the GPU with a lower `--gpu-layers`, and a model far larger than the card will log it constantly.
+Treat it as a prompt to set `--gpu-layers` explicitly, or to pass `--gpu-attention off`, or to use a
+smaller model or quantization.
 
 ### Heap sizing
 

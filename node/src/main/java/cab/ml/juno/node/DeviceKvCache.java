@@ -79,6 +79,7 @@ final class DeviceKvCache implements AutoCloseable {
 	private MemorySegment dK;
 	private MemorySegment dV;
 	private int capacityTokens;
+	private int validTokens;
 	private boolean closed;
 
 	DeviceKvCache(GpuContext ctx, int kvDim) {
@@ -118,6 +119,38 @@ final class DeviceKvCache implements AutoCloseable {
 
 	int capacityTokens() {
 		return capacityTokens;
+	}
+
+	/**
+	 * Length of the contiguous run of positions actually written to this mirror,
+	 * starting at 0. Device memory is never zeroed, so a position that was never
+	 * appended holds whatever the allocator last left there — indistinguishable,
+	 * on-device, from a real K/V row. This watermark is what makes that
+	 * distinguishable host-side; {@link #readableThrough(int)} is the check
+	 * callers should make before handing this mirror to an attention kernel.
+	 */
+	int validTokens() {
+		return validTokens;
+	}
+
+	/**
+	 * False once the mirror has been retired (closed) after running out of device
+	 * memory. A retired mirror must not be appended to or read; the request
+	 * continues from the host KV tensors, which hold the same history.
+	 */
+	boolean live() {
+		return !closed;
+	}
+
+	/**
+	 * Whether attention may read positions {@code [0, seqLen)} from this mirror.
+	 * False once the mirror is closed, and false whenever the host KV tensors hold
+	 * history this mirror never received — a request whose prefix was restored
+	 * from the KV adapter, or one whose mirror was given up mid-flight and would
+	 * otherwise be silently re-created empty.
+	 */
+	boolean readableThrough(int seqLen) {
+		return !closed && seqLen <= validTokens;
 	}
 
 	int kvDim() {
@@ -183,6 +216,12 @@ final class DeviceKvCache implements AutoCloseable {
 					GpuBindings.callInt(gpu.gpuMemcpy(), dV.asSlice(offset, rowBytes), stagingV, rowBytes, GpuBindings.H2D),
 					"memcpy(V row H2D)");
 		}
+		// Only extend the watermark when this row abuts the written prefix. A write
+		// past the end leaves a hole of uninitialized device memory behind it, so
+		// the prefix stops being readable there and the mirror stays unusable until
+		// the gap is filled in order.
+		if (pos == validTokens)
+			validTokens = pos + 1;
 	}
 
 	/**

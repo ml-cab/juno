@@ -374,6 +374,22 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.rmsNormGpu = rmsNorm;
 	}
 
+	/** Guards {@link #warnGpuAttentionFellBackOnce} so the hot path logs once. */
+	private final java.util.concurrent.atomic.AtomicBoolean gpuAttentionFallbackWarned =
+			new java.util.concurrent.atomic.AtomicBoolean();
+
+	/** Guards {@link #warnKvMirrorGrowthFellBackOnce} so the hot path logs once. */
+	private final java.util.concurrent.atomic.AtomicBoolean kvMirrorGrowthWarned =
+			new java.util.concurrent.atomic.AtomicBoolean();
+
+	/** Guards {@link #warnKvMirrorFellBackOnce} so the per-request path logs once. */
+	private final java.util.concurrent.atomic.AtomicBoolean kvMirrorFallbackWarned =
+			new java.util.concurrent.atomic.AtomicBoolean();
+
+	/** Guards {@link #warnDeviceMatmulFellBackOnce} so the hot path logs once, not per matmul. */
+	private final java.util.concurrent.atomic.AtomicBoolean deviceMatmulFallbackWarned =
+			new java.util.concurrent.atomic.AtomicBoolean();
+
 	/** Resolved global GPU layer count for JFR / diagnostics. */
 	public int gpuLayersResolved() {
 		return gpuLayersResolved;
@@ -416,15 +432,26 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		DeviceQ4KMatrix outQ4 = null;
 		int resolvedGlobal = 0;
 		try {
+			long reserve = inferenceReserveBytes(L);
+			long layerBytes = 0L;
 			for (int li = 0; li < L; li++) {
 				int global = startLayer + li;
 				if (!policy.isAuto() && !policy.residentForGlobalLayer(global, totalLayers))
 					continue;
+				long freeBefore = cuda.gpuContext().freeVramBytes();
+				if (policy.isAuto()
+						&& !DeviceScratchBudget.canUploadAnotherLayer(freeBefore, layerBytes, reserve)) {
+					log.info("Llama: stopping GPU upload at global layer " + global
+							+ " to keep " + (reserve / (1024 * 1024)) + " MiB free for the forward pass"
+							+ " — remainder on CPU");
+					break;
+				}
 				try {
 					uploadFp16Layer(cuda, li, H, KV, I, tryMmq,
 							wqD, wkD, wvD, woD, wGateD, wUpD, wDownD,
 							wqQ4, wkQ4, wvQ4, woQ4, wGateQ4, wUpQ4, wDownQ4);
 					resolvedGlobal = Math.max(resolvedGlobal, global + 1);
+					layerBytes = noteLayerUploadCost(cuda, freeBefore, layerBytes);
 				} catch (IllegalStateException ex) {
 					if (!handleLayerUploadOom(policy, ex, global, tryMmq ? "Q4K/FP16" : "FP16"))
 						throw ex;
@@ -560,13 +587,24 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		DeviceFloatMatrix outD = null;
 		int resolvedGlobal = 0;
 		try {
+			long reserve = inferenceReserveBytes(L);
+			long layerBytes = 0L;
 			for (int li = 0; li < L; li++) {
 				int global = startLayer + li;
 				if (!policy.isAuto() && !policy.residentForGlobalLayer(global, totalLayers))
 					continue;
+				long freeBefore = cuda.gpuContext().freeVramBytes();
+				if (policy.isAuto()
+						&& !DeviceScratchBudget.canUploadAnotherLayer(freeBefore, layerBytes, reserve)) {
+					log.info("Llama: stopping GPU upload at global layer " + global
+							+ " to keep " + (reserve / (1024 * 1024)) + " MiB free for the forward pass"
+							+ " — remainder on CPU");
+					break;
+				}
 				try {
 					uploadFp32Layer(cuda, li, H, KV, I, wqD, wkD, wvD, woD, wGateD, wUpD, wDownD);
 					resolvedGlobal = Math.max(resolvedGlobal, global + 1);
+					layerBytes = noteLayerUploadCost(cuda, freeBefore, layerBytes);
 				} catch (IllegalStateException ex) {
 					if (!handleLayerUploadOom(policy, ex, global, "FP32"))
 						throw ex;
@@ -642,6 +680,50 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/** @return true when upload should stop (OOM handled); false to rethrow */
+	/**
+	 * Logs the first device-matmul fallback only. This sits on the forward-pass hot
+	 * path, and a card that is short of memory will hit it on every layer of every
+	 * request, so logging each one would bury the process in identical lines.
+	 */
+	private void warnDeviceMatmulFellBackOnce(int li) {
+		if (deviceMatmulFallbackWarned.compareAndSet(false, true))
+			log.warning("Llama: out of device memory in a batched matmul at layer " + li
+					+ " — using the CPU path for it. Lower --gpu-layers to keep more device memory free.");
+	}
+
+	/**
+	 * Device bytes that must stay free once the weights are up: the scratch the
+	 * first wide prefill dequantizes a packed weight matrix into, plus the KV
+	 * mirror the GPU-resident attention path allocates at the first token.
+	 *
+	 * <p>Both are allocated after the upload finishes, which is why a card filled
+	 * to the brim with weights loads and decodes and then fails on a real prompt.
+	 *
+	 * @param layerCount layers this handler owns, for sizing the KV mirror
+	 */
+	private long inferenceReserveBytes(int layerCount) {
+		long scratch = DeviceScratchBudget.reserveBytes(cfg.hiddenDim(), cfg.kvDim(), cfg.intermediateSize());
+		int mirrorLayers = GpuAttentionOptions.fromEnv().preferGpuAttention() ? layerCount : 0;
+		return scratch + DeviceScratchBudget.kvMirrorBytes(
+				mirrorLayers, cfg.kvDim(), DeviceKvCache.INITIAL_SEQ_CAPACITY);
+	}
+
+	/**
+	 * Stops an {@code auto} upload while the reserve is still intact, rather than
+	 * when the allocator refuses. Filling the card loads and decodes perfectly
+	 * well and then fails on the first prompt wider than a single token, so
+	 * "it still fits" is the wrong place to stop.
+	 *
+	 * @return the layer cost in bytes, measured across the upload, or the previous
+	 *         measurement when the free-memory query is unavailable
+	 */
+	private long noteLayerUploadCost(GpuMatVec cuda, long freeBefore, long knownLayerBytes) {
+		long freeAfter = cuda.gpuContext().freeVramBytes();
+		if (freeBefore <= 0 || freeAfter <= 0)
+			return knownLayerBytes;
+		return Math.max(knownLayerBytes, freeBefore - freeAfter);
+	}
+
 	private boolean handleLayerUploadOom(GpuLayerOffload policy, IllegalStateException ex, int globalLayer,
 			String precision) {
 		if (!GpuLayerOffload.isVramOom(ex))
@@ -1199,14 +1281,27 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			int pos = positions[b];
 			kCacheLayers[b].writeToken(pos, ws.k[b]);
 			vCacheLayers[b].writeToken(pos, ws.v[b]);
-			if (deviceKvLayers != null && deviceKvLayers[b] != null)
-				deviceKvLayers[b].appendToken(pos, ws.k[b], ws.v[b]);
+			if (deviceKvLayers != null && deviceKvLayers[b] != null && deviceKvLayers[b].live()) {
+				try {
+					deviceKvLayers[b].appendToken(pos, ws.k[b], ws.v[b]);
+				} catch (IllegalStateException ex) {
+					if (!GpuLayerOffload.isVramOom(ex))
+						throw ex;
+					warnKvMirrorGrowthFellBackOnce();
+					deviceKvLayers[b].close();
+				}
+			}
 		}
 
-		boolean allDeviceResident = deviceKvLayers != null;
-		if (allDeviceResident) {
-			for (DeviceKvCache d : deviceKvLayers) {
-				if (d == null) {
+		// A mirror is only usable when it holds every position the kernel will read.
+		// Device memory is never zeroed, so a mirror that is short of the host
+		// tensors -- retired mid-request, or created for a request whose prefix was
+		// restored into the host tensors only -- would otherwise be read as history.
+		boolean allDeviceResident = false;
+		if (deviceKvLayers != null) {
+			allDeviceResident = true;
+			for (int b = 0; b < N; b++) {
+				if (deviceKvLayers[b] == null || !deviceKvLayers[b].readableThrough(positions[b] + 1)) {
 					allDeviceResident = false;
 					break;
 				}
@@ -1217,8 +1312,24 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			int[] seqLens = new int[N];
 			for (int b = 0; b < N; b++)
 				seqLens[b] = positions[b] + 1;
-			gpuAttnDispatched = gqaGpu.attendBatched(deviceKvLayers, ws.q, seqLens, ws.attnOut,
-					cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+			// Guarded at the dispatch boundary rather than at each allocation inside:
+			// the kernel allocates scratch of its own, and any of it can fail on a
+			// card this full. Whatever fails, the answer is the same -- run this
+			// layer's attention from the CPU tensors, which hold the same history.
+			try {
+				gpuAttnDispatched = gqaGpu.attendBatched(deviceKvLayers, ws.q, seqLens, ws.attnOut,
+						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+			} catch (IllegalStateException ex) {
+				if (!GpuLayerOffload.isVramOom(ex))
+					throw ex;
+				// The kernel takes every request in the batch at once, so which mirror
+				// it ran out of memory on is not recoverable here. Retire all of them
+				// for this layer: over-retiring costs throughput, under-retiring would
+				// leave one being read past its written prefix.
+				warnGpuAttentionFellBackOnce();
+				retireMirrors(deviceKvLayers);
+				gpuAttnDispatched = false;
+			}
 		}
 		if (!gpuAttnDispatched) {
 			for (int b = 0; b < N; b++) {
@@ -1317,7 +1428,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		long layersStart = System.nanoTime();
 		for (int li = 0; li < L; li++) {
 			long layerStart = System.nanoTime();
-			DeviceKvCache dev = (devCache != null && layerGpuResident(li)) ? devCache[li] : null;
+			DeviceKvCache dev = (devCache != null && layerGpuResident(li) && devCache[li].live())
+					? devCache[li]
+					: null;
 			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws, dev);
 			double layerMs = (System.nanoTime() - layerStart) / 1_000_000.0;
 			log.info("[prefill] layer " + (li + 1) + "/" + L + " done in " + String.format("%.1f", layerMs)
@@ -1421,10 +1534,31 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		ropeEvt.commit();
 
 		for (int b = 0; b < W; b++) {
+			// The CPU tensors are written first and unconditionally: the device cache
+			// is a mirror of them, never the only copy. That is what makes dropping
+			// the mirror below safe at any point -- no KV history is lost with it.
 			kCacheLayer.writeToken(startPos + b, ws.k[b]);
 			vCacheLayer.writeToken(startPos + b, ws.v[b]);
-			if (deviceKv != null)
-				deviceKv.appendToken(startPos + b, ws.k[b], ws.v[b]);
+			if (deviceKv != null) {
+				try {
+					deviceKv.appendToken(startPos + b, ws.k[b], ws.v[b]);
+				} catch (IllegalStateException ex) {
+					if (!GpuLayerOffload.isVramOom(ex))
+						throw ex;
+					// The mirror grows as a conversation lengthens, and growth cannot be
+					// reserved for up front without pinning memory a short conversation
+					// would never use. So it is handled where it happens: give up the
+					// mirror and let attention run from the CPU tensors above.
+					//
+					// Closing it is what retires it: the array stays mapped under this
+					// request, so the next token finds a closed mirror rather than a
+					// freshly allocated empty one, and this layer stays on the CPU for
+					// the rest of the request.
+					warnKvMirrorGrowthFellBackOnce();
+					deviceKv.close();
+					deviceKv = null;
+				}
+			}
 		}
 
 		long t2 = System.nanoTime(); // rope + cache write done
@@ -1432,15 +1566,29 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		AttentionEvent attnEvt = new AttentionEvent();
 		attnEvt.begin();
 		boolean gpuAttnDispatched = false;
-		if (deviceKv != null) {
+		// readableThrough covers the widest position the kernel will read in this
+		// window; see the note in the multi-request path above.
+		if (deviceKv != null && deviceKv.readableThrough(startPos + W)) {
 			int[] seqLens = new int[W];
 			DeviceKvCache[] kvPerB = new DeviceKvCache[W];
 			for (int b = 0; b < W; b++) {
 				seqLens[b] = startPos + b + 1;
 				kvPerB[b] = deviceKv;
 			}
-			gpuAttnDispatched = gqaGpu.attendBatched(kvPerB, ws.q, seqLens, ws.attnOut,
-					cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+			// Guarded at the dispatch boundary rather than at each allocation inside:
+			// the kernel allocates scratch of its own, and any of it can fail on a
+			// card this full. Whatever fails, the answer is the same -- run this
+			// layer's attention from the CPU tensors, which hold the same history.
+			try {
+				gpuAttnDispatched = gqaGpu.attendBatched(kvPerB, ws.q, seqLens, ws.attnOut,
+						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+			} catch (IllegalStateException ex) {
+				if (!GpuLayerOffload.isVramOom(ex))
+					throw ex;
+				warnGpuAttentionFellBackOnce();
+				deviceKv.close();
+				gpuAttnDispatched = false;
+			}
 		}
 		if (!gpuAttnDispatched) {
 			for (int b = 0; b < W; b++) {
@@ -1535,20 +1683,34 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private void sgemmLayerInto(GgufReader.QuantizedTensor quant,
 			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32, DeviceQ4KMatrix[] devQ4,
 			int li, float[][] X, float[][] Y, int rows, int cols) {
-		if (devQ4 != null && devQ4[li] != null) {
-			float[][] tmp = backend.sgemm(devQ4[li], X);
-			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
-			return;
-		}
-		if (devHalf != null && devHalf[li] != null) {
-			float[][] tmp = backend.sgemm(devHalf[li], X);
-			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
-			return;
-		}
-		if (devFp32 != null && devFp32[li] != null) {
-			float[][] tmp = backend.sgemm(devFp32[li], X);
-			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
-			return;
+		// A device matmul can still run out of device memory: the batched packed path
+		// dequantizes the whole weight matrix into a scratch buffer, and a request
+		// wide enough to take that path may arrive when the card is fuller than it
+		// was at upload time. The upload reserve (see DeviceScratchBudget) is what
+		// should prevent it; this is the net under that, so a reserve that turns out
+		// to be too small costs throughput on one matmul instead of ending the
+		// process. The CPU weight-stationary path below is the same fallback a
+		// never-uploaded layer takes.
+		try {
+			if (devQ4 != null && devQ4[li] != null) {
+				float[][] tmp = backend.sgemm(devQ4[li], X);
+				for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+				return;
+			}
+			if (devHalf != null && devHalf[li] != null) {
+				float[][] tmp = backend.sgemm(devHalf[li], X);
+				for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+				return;
+			}
+			if (devFp32 != null && devFp32[li] != null) {
+				float[][] tmp = backend.sgemm(devFp32[li], X);
+				for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+				return;
+			}
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			warnDeviceMatmulFellBackOnce(li);
 		}
 		switch (quant.type()) {
 		case 12 -> sgemmQ4KWeightStationary(quant.data(), X, Y, 0, rows, cols);
@@ -1819,7 +1981,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 
 		for (int li = 0; li < L; li++) {
-			DeviceKvCache dev = (devCache != null && layerGpuResident(li)) ? devCache[li] : null;
+			DeviceKvCache dev = (devCache != null && layerGpuResident(li) && devCache[li].live())
+					? devCache[li]
+					: null;
 			x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch, dev);
 		}
 
@@ -1849,7 +2013,62 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private DeviceKvCache[] deviceLayersFor(String requestId, int L) {
 		if (gqaGpu == null)
 			return null;
-		return kvCacheDev.computeIfAbsent(requestId, k -> gqaGpu.newLayers(L, cfg.kvDim()));
+		try {
+			return kvCacheDev.computeIfAbsent(requestId, k -> gqaGpu.newLayers(L, cfg.kvDim()));
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			// No device mirror for this request, so attention runs on the CPU for it
+			// -- the same path a handler without --gpu-attention takes. Safe here and
+			// only here: nothing has been written to a device mirror yet, so no KV
+			// history is lost. The lambda returning exceptionally leaves no mapping,
+			// so a later request may still get one if memory frees up.
+			warnKvMirrorFellBackOnce();
+			return null;
+		}
+	}
+
+	/**
+	 * Retires every mirror in a layer's batch, freeing the device memory. The host
+	 * KV tensors keep the full history, so the affected requests simply continue
+	 * with CPU attention.
+	 *
+	 * <p>Retiring is closing, never unmapping: the array stays under its request in
+	 * {@code kvCacheDev} so the next token finds a closed mirror instead of the
+	 * empty one {@code computeIfAbsent} would allocate in its place. Device memory
+	 * is not zeroed, so that replacement would be read as history and would turn a
+	 * throughput fallback into wrong output.
+	 */
+	private void retireMirrors(DeviceKvCache[] mirrors) {
+		if (mirrors == null)
+			return;
+		for (DeviceKvCache d : mirrors)
+			if (d != null)
+				d.close();
+	}
+
+	/** Logs the first GPU-attention fallback only; this sits on the hot path. */
+	private void warnGpuAttentionFellBackOnce() {
+		if (gpuAttentionFallbackWarned.compareAndSet(false, true))
+			log.warning("Llama: out of device memory in the GPU attention kernel"
+					+ " — attention continues on the CPU, which holds the same history."
+					+ " Lower --gpu-layers, or pass --gpu-attention off.");
+	}
+
+	/** Logs the first KV-mirror growth fallback only; this sits on the hot path. */
+	private void warnKvMirrorGrowthFellBackOnce() {
+		if (kvMirrorGrowthWarned.compareAndSet(false, true))
+			log.warning("Llama: out of device memory growing the attention KV mirror"
+					+ " — attention continues on the CPU, which holds the same history."
+					+ " Lower --gpu-layers, or pass --gpu-attention off, to keep it on the GPU.");
+	}
+
+	/** Logs the first KV-mirror fallback only; this sits on the per-request path. */
+	private void warnKvMirrorFellBackOnce() {
+		if (kvMirrorFallbackWarned.compareAndSet(false, true))
+			log.warning("Llama: out of device memory for the attention KV mirror"
+					+ " — running attention on the CPU for this request."
+					+ " Lower --gpu-layers, or pass --gpu-attention off.");
 	}
 
 	/**
@@ -1929,22 +2148,42 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
 		ropeEvt.commit();
 
+		// CPU tensors first and unconditionally, as in the batched path: the device
+		// cache mirrors them, so it can be given up at any point without losing KV.
 		kCacheLayer.writeToken(pos, k);
 		vCacheLayer.writeToken(pos, v);
-		if (deviceKv != null)
-			deviceKv.appendToken(pos, k, v);
+		if (deviceKv != null) {
+			try {
+				deviceKv.appendToken(pos, k, v);
+			} catch (IllegalStateException ex) {
+				if (!GpuLayerOffload.isVramOom(ex))
+					throw ex;
+				warnKvMirrorGrowthFellBackOnce();
+				deviceKv.close();
+				deviceKv = null;
+			}
+		}
 
 		int seqLen = pos + 1;
 		AttentionEvent attnEvt = new AttentionEvent();
 		attnEvt.begin();
 		float[] attnOut = null;
-		if (deviceKv != null) {
+		if (deviceKv != null && deviceKv.readableThrough(seqLen)) {
 			float[][] outBatch = new float[1][];
-			boolean dispatched = gqaGpu.attendBatched(
-					new DeviceKvCache[] { deviceKv }, new float[][] { q }, new int[] { seqLen }, outBatch,
-					cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
-			if (dispatched)
-				attnOut = outBatch[0];
+			// Guarded at the dispatch boundary -- see the batched path.
+			try {
+				boolean dispatched = gqaGpu.attendBatched(
+						new DeviceKvCache[] { deviceKv }, new float[][] { q }, new int[] { seqLen }, outBatch,
+						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+				if (dispatched)
+					attnOut = outBatch[0];
+			} catch (IllegalStateException ex) {
+				if (!GpuLayerOffload.isVramOom(ex))
+					throw ex;
+				warnGpuAttentionFellBackOnce();
+				deviceKv.close();
+				attnOut = null;
+			}
 		}
 		if (attnOut == null) {
 			float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);

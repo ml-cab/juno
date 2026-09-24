@@ -1192,25 +1192,48 @@ public final class CudaMatVec implements GpuMatVec {
         }
     }
 
+    /**
+     * Grows the per-thread staging buffers. Each grow clears its field before
+     * freeing the old buffer, so an allocation that fails leaves that slot empty
+     * rather than holding a pointer to freed memory: a caller that survives the
+     * failure and retries would otherwise hand a dangling pointer to a later
+     * memcpy, which reports an invalid argument far from the real cause.
+     */
     private void ensureFp16Scratch(Fp16Scratch s, long bytesXh, long bytesY) {
         int dev = ctx.deviceIndex();
         if (s.dXhBytes < bytesXh) {
-            cuda.deviceFree(s.dXh);
+            MemorySegment previous = s.dXh;
+            s.dXh = null;
+            s.dXhBytes = 0L;
+            if (previous != null)
+                cuda.deviceFree(previous);
             s.dXh     = cuda.deviceMalloc(dev, bytesXh);
             s.dXhBytes = bytesXh;
         }
         if (s.dYBytes < bytesY) {
-            cuda.deviceFree(s.dY);
+            MemorySegment previous = s.dY;
+            s.dY = null;
+            s.dYBytes = 0L;
+            if (previous != null)
+                cuda.deviceFree(previous);
             s.dY     = cuda.deviceMalloc(dev, bytesY);
             s.dYBytes = bytesY;
         }
         if (s.hXhBytes < bytesXh) {
-            cuda.hostFree(s.hXh);
+            MemorySegment previous = s.hXh;
+            s.hXh = null;
+            s.hXhBytes = 0L;
+            if (previous != null)
+                cuda.hostFree(previous);
             s.hXh      = cuda.hostMalloc(dev, bytesXh);
             s.hXhBytes = bytesXh;
         }
         if (s.hYBytes < bytesY) {
-            cuda.hostFree(s.hY);
+            MemorySegment previous = s.hY;
+            s.hY = null;
+            s.hYBytes = 0L;
+            if (previous != null)
+                cuda.hostFree(previous);
             s.hY      = cuda.hostMalloc(dev, bytesY);
             s.hYBytes = bytesY;
         }

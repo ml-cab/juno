@@ -1,5 +1,67 @@
 ## Status 
 
+**Session 89** — `--gpu-layers auto` keeps device memory free for the forward pass, and every device allocation falls back to CPU instead of ending the process
+
+- **A model larger than the card no longer dies at the first prompt.** `--gpu-layers auto` uploaded weight
+  layers until the allocator refused, caught that, and kept what fit — so it finished with the card full and
+  called it success. But weight upload is not the only consumer: a prompt wider than eight tokens takes the
+  batched path, which dequantizes a whole packed weight matrix into a device scratch buffer (227 MiB for a 30B
+  Llama), and the GPU-resident attention path allocates a key/value mirror. Both happen after the upload, so a
+  model that loaded and decoded single tokens perfectly well aborted on the first real prompt with
+  `cudaMalloc failed: rc=2`. `auto` now stops while that memory is still free, sized by the new
+  `DeviceScratchBudget` from the widest matmul in the model plus the KV mirror, and learns the per-layer cost
+  by measuring free device memory across the first upload. Covered by `DeviceScratchBudgetTest` (14 cases,
+  no GPU required).
+- **Every device allocation on the inference path now degrades instead of propagating.** The batched matmul
+  falls back to the weight-stationary CPU path; the attention KV mirror and the attention kernel fall back to
+  CPU attention, which is safe because the CPU key/value tensors are always written and the device copy is
+  only ever a mirror. The attention fallback is taken at the dispatch boundary rather than at each allocation
+  inside the kernel, so scratch the kernel allocates internally is covered by the same guard. Each path warns
+  once rather than per matmul. Verified on an 18.2 GiB model on an 8 GiB card: four prompts in one session,
+  coherent output, no failure, where the same command previously aborted on the first.
+- **A mirror that has been given up stays given up.** The first cut of the fallback above dropped the device
+  key/value mirror by unmapping it from the per-request table, then cleared the flag that had suppressed it.
+  The next token found no mapping, so `computeIfAbsent` allocated a replacement — and device memory is never
+  zeroed, so every position before the current one held whatever the allocator last left there. Attention was
+  handed `seqLen = pos + 1` over that buffer and read it as conversation history. Nothing failed: token
+  counts, timings and exit status all looked healthy while the logits were noise, and output became token
+  soup from the moment the first fallback fired. A 30B Q4_K_M model on a card that could not hold it answered
+  one short prompt and then produced nothing but garbage, while `JUNO_GPU_ATTENTION=off` stayed coherent on
+  the same build — so the four-prompt verification above only held because that session never tripped the
+  fallback. `DeviceKvCache` now tracks `validTokens`, the contiguous run of positions actually written, and
+  `readableThrough(seqLen)` / `live()` gate every attention dispatch and every append. A mirror that runs out
+  of memory is retired by closing it in place, never by unmapping it, so no empty replacement can appear
+  behind it. Retirement is per mirror rather than per handler, so one layer or one request giving up no
+  longer punches holes in the mirrors of the others — the previous flag was handler-wide and was reset after
+  a single pass. The same watermark covers a request whose prefix was restored into the host tensors by
+  `NodeKVCacheAdapter`, which never had matching device rows to begin with. Covered by
+  `DeviceKvMirrorWatermarkTest` (5 cases, GPU-tagged).
+- Performance gate: `compare-lora.sh --gpu --baseline 1f90b68 --current HEAD --reps 3`, published under
+  `perf-compare/20260924T201548Z-lora`. Train **1.00x**, playback **1.00x**, status ok. The three ratios read
+  as exactly 1 because train time is recorded at 1 s granularity (45000 ms on all six repetitions) and the
+  median playback window landed on the same millisecond on both sides; the underlying repetitions do differ
+  (576/597/575 ms baseline against 576/591/567 ms current), so this is a granularity artifact rather than one
+  run reported twice. Recorded GPU dispatch counts are unchanged — 21913 against 21912 resident, 83190
+  resident-transpose on both sides, and **0 CPU MatVec dispatches on both**, which is the result that matters
+  here: the added guards displace nothing onto the CPU path. Note this gate cannot cover the mirror itself.
+  `juno lora` ignores `--gpu-attention` (the run log carries that notice), so no device KV mirror is ever
+  built on the LoRA path and every guard short-circuits before touching one; what the run establishes is the
+  absence of collateral damage to the forward pass and MatVec. Mirror coverage is
+  `DeviceKvMirrorWatermarkTest` plus a real multi-turn run on a model larger than the card.
+- **Device scratch buffers stay consistent when an allocation fails.** `Q4KDequantScratch` and the FP16
+  staging buffers freed the old buffer before allocating the new one and recorded the new size afterwards, so
+  a failed allocation left the field pointing at freed memory and the size stale. That was unreachable while
+  an exhausted device ended the process; making the failure survivable exposed it as an unrelated
+  `cudaMemcpyAsync ... rc=1` on the next call. They now clear the field and size first, so a failure leaves an
+  empty buffer that the next call re-allocates.
+- Performance gate: `compare-lora.sh --baseline HEAD~1 --reps 3 --gpu`, published under
+  `perf-compare/20260924T185248Z-lora`. Playback **0.99x**, train **1.02x**, both inside the measurement
+  noise floor. The stronger result is that the recorded GPU operation counts are identical on both sides
+  (21913 resident, 83190 resident-transpose, 0 CPU) with identical allocation, so the reserve displaces no
+  layer on a model that fits the card. Three of six repetitions on both sides carried a ~635 ms collection
+  pause; they fall in the training phase rather than the measured playback window, which is why that gate
+  reads wall-clock time.
+
 **Session 88** — One JFR configuration for every recording, GC and allocation in every metrics report, prompt-token parity for prefill comparisons
 
 - **Every JFR recording is now taken under one settings file.** Juno starts recordings from six places, and

@@ -121,6 +121,42 @@ Module dependency (excerpt):
         health, registry, api
   juno-node — NodeMain standalone executable
   juno-bom — Maven BOM (dependencyManagement for cab.ml artifacts)
+  DeviceScratchBudget (node module): sizes the device memory kept free for the
+        forward pass when --gpu-layers auto decides how many weight layers to
+        upload. Weight upload, the Q4_K dequant scratch and the GPU attention KV
+        mirror all allocate from one device, but only the upload was written to
+        expect it to run out; filling the card therefore loaded and decoded and
+        then failed on the first prompt wide enough to take the batched path.
+        The reserve is the widest matmul in the model (hidden x max(hidden, kv,
+        ffn) halves) plus a margin, plus the KV mirror at its initial capacity
+        when --gpu-attention is active. LlamaTransformerHandler learns the
+        per-layer cost by measuring free VRAM across the first upload and stops
+        while the reserve is still intact. Every device allocation on the
+        inference path falls back to its CPU equivalent on VRAM exhaustion
+        instead of propagating: the batched matmul to the weight-stationary CPU
+        path, the KV mirror and the attention kernel to CPU attention (the CPU
+        KV tensors are always written, so the mirror can be dropped without
+        losing history). The attention fallback is taken at the dispatch
+        boundary rather than per allocation, so scratch allocated inside the
+        kernel is covered too.
+  DeviceKvCache written-prefix watermark (node module): dropping the mirror is
+        only safe while nothing can read an unwritten position out of it. Device
+        memory is never zeroed, so an unwritten row holds whatever the allocator
+        last left there and is indistinguishable on-device from a real K/V row;
+        attention over it yields noise logits while token counts, timings and
+        exit status all still look healthy. DeviceKvCache therefore tracks
+        validTokens, the contiguous run of positions actually appended, and
+        exposes readableThrough(seqLen) / live(). LlamaTransformerHandler checks
+        both before every attention dispatch and before every append, and a
+        mirror that runs out of memory is retired by closing it in place --
+        never by unmapping it from kvCacheDev, because computeIfAbsent would
+        then hand the next token a freshly allocated empty mirror in its stead.
+        Retirement is per mirror (per request, per layer), so one layer giving
+        up does not cost the others. A request whose prefix was restored into
+        the host KV tensors by NodeKVCacheAdapter has no matching device rows,
+        and the same watermark keeps it on CPU attention rather than reading the
+        restored range out of uninitialized memory.
+
   metrics — MetricsMain, JfrMetricsExtractor, JdkEventBucket, JfrPercentiles,
         JfrModelMapper, MetricsWriter, MetricsSnapshot, ModelsConfig(Loader).
         Reads .jfr files and writes target/metrics/metrics.json.
