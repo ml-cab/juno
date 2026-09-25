@@ -16,6 +16,7 @@
 package cab.ml.juno.metrics;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -101,9 +102,18 @@ class JfrMetricsExtractorAttentionTest {
 		assertThat(metrics.get("juno.Attention.count")).isEqualTo(3.0);
 		assertThat(metrics.get("juno.Attention.prefill.count")).isEqualTo(1.0);
 		assertThat(metrics.get("juno.Attention.decode.count")).isEqualTo(2.0);
-		assertThat(metrics.get("juno.Attention.duration.total_ms"))
-				.isEqualTo(metrics.get("juno.Attention.prefill.total_ms")
-						+ metrics.get("juno.Attention.decode.total_ms"));
+
+		// The partition is exhaustive: prefill plus decode accounts for the whole
+		// total. Both sides add up the same three measured durations, but in
+		// different groupings, and floating-point addition is not associative — so
+		// asserting bit-identical equality here fails on roughly one run in three,
+		// depending on the durations the JVM happened to record. The tolerance is
+		// far tighter than any real defect: a miscounted event moves either side by
+		// about a third, while this permits a difference in the last bit.
+		double total = metrics.get("juno.Attention.duration.total_ms");
+		double partitioned = metrics.get("juno.Attention.prefill.total_ms")
+				+ metrics.get("juno.Attention.decode.total_ms");
+		assertThat(total).isCloseTo(partitioned, within(1e-9));
 	}
 
 	// ── helpers ──────────────────────────────────────────────────────────────

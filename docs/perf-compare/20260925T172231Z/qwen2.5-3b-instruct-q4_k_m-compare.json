@@ -1,0 +1,148 @@
+{
+  "model": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 1334.923815,
+    "token_gen_tps": 64.506204
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 66.08139916764934,
+    "token_gen_tps": 27.82642492660014,
+    "api_token_gen_tps": 24.1692,
+    "latency_ms": 2648,
+    "n_prompt": 128,
+    "prompt_tokens": 128,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 1.0,
+    "gc_pause_max_ms": 6.943315,
+    "gc_pause_total_ms": 5.458203,
+    "allocated_bytes_total": 9015735216,
+    "allocated_bytes_per_token": 141832193.625,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 128,
+        "n_prompt": 128,
+        "n_gen": 1,
+        "completion_tokens": 0,
+        "prompt_eval_tps": 66.08139916764934,
+        "latency_ms": 2006,
+        "status": "success",
+        "gc_pause_max_ms": 6.943315
+      },
+      "generate": {
+        "prompt_tokens": 9,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 27.82642492660014,
+        "latency_ms": 2648,
+        "status": "success",
+        "gc_pause_max_ms": 5.458203
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "5g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 66.08139916764934,
+        "min": 48.04223697520166,
+        "max": 67.2864245407855,
+        "values": [
+          48.04223697520166,
+          67.2864245407855,
+          66.08139916764934
+        ]
+      },
+      "token_gen_tps": {
+        "median": 27.82642492660014,
+        "min": 25.61901101752494,
+        "max": 29.43723446131155,
+        "values": [
+          27.82642492660014,
+          25.61901101752494,
+          29.43723446131155
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 24.1692,
+        "min": 21.9103,
+        "max": 25.1969,
+        "values": [
+          24.1692,
+          21.9103,
+          25.1969
+        ]
+      },
+      "latency_ms": {
+        "median": 2648,
+        "min": 2540,
+        "max": 2921,
+        "values": [
+          2648,
+          2921,
+          2540
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 4.960556,
+        "min": 4.906206,
+        "max": 5.458203,
+        "values": [
+          5.458203,
+          4.906206,
+          4.960556
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 141373920.375,
+        "min": 140870862.75,
+        "max": 141832193.625,
+        "values": [
+          140870862.75,
+          141832193.625,
+          141373920.375
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.049502000357712794,
+  "noise": {
+    "ok": true,
+    "condition": null,
+    "gc_pause_max_ms": 6.943315,
+    "window_ms": 2648,
+    "threshold_ms": 132.4,
+    "monitor_enter_total_ms": 0.0,
+    "thread_park_total_ms": 6288.006531,
+    "reason": null
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.43137594837544835,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/qwen2.5-3b-instruct-q4_k_m-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/qwen2.5-3b-instruct-q4_k_m-generate-rep1-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/qwen2.5-3b-instruct-q4_k_m-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/qwen2.5-3b-instruct-q4_k_m-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/qwen2.5-3b-instruct-q4_k_m-juno-jfr.json"
+  }
+}

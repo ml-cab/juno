@@ -1,0 +1,148 @@
+{
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 3512.110790,
+    "token_gen_tps": 174.673297
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 140.7466636014389,
+    "token_gen_tps": 57.63029157622801,
+    "api_token_gen_tps": 44.4136,
+    "latency_ms": 1441,
+    "n_prompt": 128,
+    "prompt_tokens": 128,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 1.0,
+    "gc_pause_max_ms": 633.161134,
+    "gc_pause_total_ms": 633.161134,
+    "allocated_bytes_total": 3087485216,
+    "allocated_bytes_per_token": 48742892.125,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 128,
+        "n_prompt": 128,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 140.7466636014389,
+        "latency_ms": 951,
+        "status": "success",
+        "gc_pause_max_ms": 6.456242
+      },
+      "generate": {
+        "prompt_tokens": 19,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 57.63029157622801,
+        "latency_ms": 1441,
+        "status": "success",
+        "gc_pause_max_ms": 633.161134
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "4g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 140.7466636014389,
+        "min": 139.41511438465545,
+        "max": 142.2861165933569,
+        "values": [
+          140.7466636014389,
+          139.41511438465545,
+          142.2861165933569
+        ]
+      },
+      "token_gen_tps": {
+        "median": 57.63029157622801,
+        "min": 57.115072546900294,
+        "max": 57.78699035635175,
+        "values": [
+          57.63029157622801,
+          57.115072546900294,
+          57.78699035635175
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 44.4136,
+        "min": 42.3561,
+        "max": 44.6615,
+        "values": [
+          42.3561,
+          44.4136,
+          44.6615
+        ]
+      },
+      "latency_ms": {
+        "median": 1441,
+        "min": 1433,
+        "max": 1511,
+        "values": [
+          1511,
+          1441,
+          1433
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 5.230738,
+        "min": 4.405246,
+        "max": 633.161134,
+        "values": [
+          633.161134,
+          5.230738,
+          4.405246
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 48669019.625,
+        "min": 48241956.5,
+        "max": 48742892.125,
+        "values": [
+          48241956.5,
+          48669019.625,
+          48742892.125
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.040074665070983964,
+  "noise": {
+    "ok": false,
+    "condition": "gc_pause",
+    "gc_pause_max_ms": 633.161134,
+    "window_ms": 1441,
+    "threshold_ms": 72.05,
+    "monitor_enter_total_ms": 0.0,
+    "thread_park_total_ms": 4017.05244,
+    "reason": "a single collection pause of 633 ms in a 1441 ms window exceeds the 72 ms ceiling: re-run rather than score this row"
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.3299318932316713,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/tinyllama-1.1b-chat-v1.0.Q4_K_M-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/tinyllama-1.1b-chat-v1.0.Q4_K_M-tuned-generate-rep1-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/tinyllama-1.1b-chat-v1.0.Q4_K_M-tuned-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/tinyllama-1.1b-chat-v1.0.Q4_K_M-tuned-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/tinyllama-1.1b-chat-v1.0.Q4_K_M-tuned-juno-jfr.json"
+  }
+}

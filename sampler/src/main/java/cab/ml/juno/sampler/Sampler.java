@@ -92,6 +92,18 @@ public final class Sampler {
 	 */
 	public int sample(float[] rawLogits, SamplingParams params, int[] generatedTokens, Random rng,
 			GrammarSession grammar) {
+		return sample(rawLogits, params, generatedTokens, rng, grammar, null);
+	}
+
+	/**
+	 * As above, with a floor that holds the sequence open until it has produced a
+	 * minimum number of tokens.
+	 *
+	 * @param floor may be null; when present it suppresses the end-of-sequence
+	 *              token while {@code generatedTokens} is shorter than the minimum
+	 */
+	public int sample(float[] rawLogits, SamplingParams params, int[] generatedTokens, Random rng,
+			GrammarSession grammar, MinTokenFloor floor) {
 		if (rawLogits == null || rawLogits.length == 0)
 			throw new IllegalArgumentException("logits must not be null or empty");
 		if (params == null)
@@ -100,6 +112,10 @@ public final class Sampler {
 		float[] logits = rawLogits.clone();
 		if (grammar != null)
 			grammar.mask(logits);
+		// After the grammar, so the floor can see what the grammar left standing and
+		// yield rather than mask the last candidate.
+		if (floor != null)
+			floor.mask(logits, generatedTokens != null ? generatedTokens.length : 0);
 
 		logits = presencePenaltyStep.apply(logits, params, generatedTokens);
 		logits = repetitionPenaltyStep.apply(logits, params, generatedTokens);

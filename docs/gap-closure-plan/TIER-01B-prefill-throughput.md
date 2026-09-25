@@ -132,12 +132,43 @@ on today's op-at-a-time GPU path either way.
      lane number is therefore labelled wrong. Correct the labelling, and state in the first
      re-baselined run which lanes were affected — this sits alongside the benchmark-parity
      preconditions in [`README.md`](README.md) and is the same class of defect.
-1. **Measure before changing anything.** Produce a per-term breakdown of prefill wall time for all
-   four sweep models at `n_prompt` of 128 and 512, on GPU, from the JFR spans that already exist:
-   `juno.PrefillBatch` (window size, start position), `juno.ForwardPass` (prefill total), `juno.MatVec`
-   (call count and time), `juno.Attention` (prefill share). Attribute the remainder — host-to-device
-   staging, dequantization, layout packing, per-chunk fixed cost — explicitly rather than leaving it as
-   an unlabelled residue. This breakdown is the tier's primary artifact and decides what items 2-5
+1. **Measure before changing anything — after building the instrumentation that makes the
+   measurement possible.** An earlier draft of this item said the breakdown could be read "from the
+   JFR spans that already exist." It cannot, and the difference is not cosmetic, so this item has two
+   halves and the first one is net-new code.
+
+   **1a. Add the two spans the breakdown needs.** Four spans do exist and are useful —
+   `juno.PrefillBatch` (window size, start position), `juno.ForwardPass` (prefill total),
+   `juno.MatVec` (call count and time), `juno.Attention` (prefill share) — but there is **no** event
+   anywhere in `src/main` for host-to-device staging, for device-to-host readback, or for weight
+   dequantization. The twenty `@Name("juno.*")` declarations in the tree are `Attention`,
+   `ContinuousStep`, `ForwardPass`, `GrammarConstrained`, five `Lora*`, `MatVec`, `PrefillBatch`,
+   `ResidualAdd`, `RmsNorm`, `Rope`, `Speculation`, `SwiGlu`, `TemplateFormat`, `Tokenizer` and
+   `TokenProduced`; none of them is a staging or dequant span. `juno.MatVec` wraps staging,
+   dequantization and compute in a single span, so the very terms 1b has to attribute are *inside*
+   it, not beside it. Asking for a breakdown with "no unattributed residue" off those spans is asking
+   for something nobody can deliver. Add:
+   - **`juno.DeviceStaging`** — direction (`H2D`/`D2H`), bytes and duration, around every
+     `gpuMemcpy` on the activation and weight paths. The staged-bytes assertion under "Tests to
+     write/upgrade" reads from this same event, so it is instrumentation both halves of this tier
+     need rather than extra work for the breakdown alone.
+   - **`juno.WeightDequant`** — format, rows, cols and duration, around `Q4KMmqKernel.launchDequant`
+     and `LlamaTransformerHandler.dequantize`.
+
+   Register both in `scripts/performance-tests/juno-perf.jfc` and in `JfrMetricsExtractor`, with
+   tests in the `metrics` module, following the pattern Tier 01 established for `JdkEventBucket` —
+   including its rule that every key is written on every run, zero or not, so a consumer never has to
+   distinguish "absent" from "none". [Tier 04C](TIER-04C-packed-weight-matmul.md) item 1 reads its
+   `launchDequant`-versus-`gemmHalf`-versus-staging split off these same two spans; it was written
+   believing Tier 01 had widened the extractor far enough for that, and Tier 01 widened only the
+   `jdk.*` bucket. Building them here covers both tiers, and `metrics` must be in this tier's own
+   `mvn test -pl` line (the documented command omits it — see [`README.md`](README.md)'s test
+   infrastructure section).
+
+   **1b. Produce the breakdown.** A per-term breakdown of prefill wall time for all four sweep models
+   at `n_prompt` of 128 and 512, on GPU, from the four existing spans plus the two added in 1a.
+   Attribute what remains — layout packing, per-chunk fixed cost — explicitly rather than leaving it
+   as an unlabelled residue. This breakdown is the tier's primary artifact and decides what items 2-4
    are actually worth doing; publish it under `docs/perf-compare/` before writing any kernel code.
 2. **Stop staging the activation batch to host between every matmul.** An earlier draft of this item
    proposed extending batched `sgemm` to "every other quantized residency type." That set is empty:
@@ -227,16 +258,22 @@ on today's op-at-a-time GPU path either way.
    four architectures and slow on four others. Re-measure immediately after, so the default change
    has its own attributable number, and record that number per architecture: the Llama-family 3.85x
    says nothing about what these four will do.
-3. Produce the per-term prefill breakdown (scope item 1) on the post-item-0 build and publish it.
+3. **Build the `juno.DeviceStaging` and `juno.WeightDequant` spans (scope item 1a) before
+   attempting the breakdown.** This is net-new instrumentation with `metrics` tests, not a
+   measurement step, and the breakdown's "no unattributed residue" criterion is unreachable without
+   it. Land it on the post-item-0 build so the spans are present for every measurement from here on.
+4. Produce the per-term prefill breakdown (scope item 1b) and publish it.
    Decide which of items 2-4 the breakdown actually justifies, and record the decision in this file
    — item 0 may well have moved which term dominates, which is the point of sequencing it here. The
    expected ranking going in is that host-device staging (item 2) dominates once attention is on the
    GPU, since a 512-token window moves roughly 8 MB each way per matmul; if the breakdown says
    otherwise, follow the breakdown.
-4. Implement in the order the breakdown ranks, largest term first.
-5. Re-measure after each change rather than only at the end, so a negative result is attributable to
+5. Write down the expected contribution of each remaining item against the threshold, per the
+   "Decompose the ask before implementing it" clause below, and escalate here if they do not sum.
+6. Implement in the order the breakdown ranks, largest term first.
+7. Re-measure after each change rather than only at the end, so a negative result is attributable to
    one change instead of the batch.
-6. Run the full cross-surface smoke matrix, including the vision gate.
+8. Run the full cross-surface smoke matrix, including the vision gate.
 
 ## Tests to write/upgrade before implementation
 
@@ -258,9 +295,14 @@ on today's op-at-a-time GPU path either way.
   memory is not leaked across repeated windows (reuse the accounting assertion Tier 01 adds); and
   the non-allocating batched form produces bit-identical results to the allocating one for every
   backend implementation.
-- **A staged-bytes assertion**: instrument H2D/D2H bytes per prefill window and assert the
-  post-item-2 figure against the pre-item-2 baseline, so item 2's win is measured in bytes moved and
-  not only in wall time.
+- **New `metrics` tests for the two added spans** (item 1a), mirroring
+  `JfrMetricsExtractorJdkEventsTest`: `juno.DeviceStaging` aggregates bytes and duration per
+  direction, `juno.WeightDequant` aggregates per format, and both emit their keys on every run
+  including when the count is zero. These must fail on the pre-item-1a build for the right reason
+  (the keys do not exist), the same evidence standard Tier 01 applied to `JdkEventBucket`.
+- **A staged-bytes assertion**: read H2D/D2H bytes per prefill window off `juno.DeviceStaging` and
+  assert the post-item-2 figure against the pre-item-2 baseline, so item 2's win is measured in bytes
+  moved and not only in wall time.
 - **New `PrefillBatchOptions` tests** for any surface whose chunk-sizing default changes: assert the
   new default per surface, and assert that an explicit `--prefill-batch N` still overrides on every
   surface.
@@ -306,6 +348,20 @@ on today's op-at-a-time GPU path either way.
   so here rather than carrying a target that was set against the wrong denominator. Decode must not
   regress: tg ratio within 0.95x of the step-1 baseline for every sweep model. Vision gate per the
   existing rule: `latency_ms` <= 1.25x baseline, decode tps >= 0.80x baseline.
+
+  **Decompose the ask before implementing it, and escalate if it does not add up.** This is the
+  largest single performance ask in the plan and the only milestone tier that previously had no
+  stop-before-implementing clause; [Tier 10](TIER-10-gpu-backend-breadth-cpu-simd.md) already carries
+  one for its own 0.20x CPU milestone and this tier now matches it. Once the re-baseline and the
+  breakdown exist, and **before** implementing the staging and chunk-sizing items, write down the
+  expected contribution of each named item — the GPU-attention default change, the removal of
+  host-device staging, chunk sizing, residual attention — as a multiple on the re-baselined pp ratio,
+  read off the breakdown rather than estimated. If the named items do not plausibly sum to the
+  threshold, say so in this file **before** implementing rather than after, and escalate. Shipping
+  four items that were never expected to reach the number and reporting the miss afterwards is the
+  outcome this clause exists to prevent; reporting up front that the number needs a mechanism no item
+  here owns is a useful result, and it is what tells the user whether the missing mechanism belongs
+  to [Tier 04C](TIER-04C-packed-weight-matmul.md), to Tier 02, or to a tier that does not exist yet.
 
   **Contingency, in the same spirit as Tier 01's.** If the breakdown in step 3 shows prefill time is
   dominated by a term this tier cannot move without work owned by a later tier (for example: residual
@@ -364,8 +420,14 @@ unvalidated default is exactly the silent-degrade this item exists to remove.
       the default is **off** while `GpuAttentionOptions.fromEnv()` defaults to `auto`.
 - [ ] Item 0's own attributable measurement published separately from the rest of the tier's, so the
       default change's effect is visible on its own.
+- [ ] `juno.DeviceStaging` and `juno.WeightDequant` exist, are enabled in
+      `scripts/performance-tests/juno-perf.jfc`, are aggregated by `JfrMetricsExtractor`, and have
+      `metrics` tests that failed on the pre-tier build for the right reason. Until this is checked,
+      the breakdown criterion below cannot be satisfied by anyone.
 - [ ] Per-term prefill breakdown published for all four sweep models at `n_prompt` 128 and 512, with
       no unattributed residue — every term named, including host-device staging and dequantization.
+- [ ] The threshold decomposition written down before implementation, with each item's expected
+      contribution read off the breakdown, and an escalation recorded here if they did not sum.
 - [ ] Prefill activations stay device-resident across a layer's projections, with the materialization
       boundary documented; bytes staged per 512-token window down >= 70% against the step-1 baseline;
       `sgemmLayerInto`'s per-matmul allocate-and-copy removed via the non-allocating batched form,

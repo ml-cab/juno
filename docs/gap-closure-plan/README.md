@@ -9,9 +9,13 @@ before acting on it — both documents are snapshots, not ground truth that stay
 
 1. **One tier at a time, to feature-complete.** Do not start the next tier's work until the current
    tier's exit criteria (bottom of its file) are all checked off. "Next" means the next row of the
-   tier index below, not the next integer — the index is the running order. Three rows break integer
-   order: Tier 01B sits between 01 and 02, Tier 04B between 04 and 05, and Tier 08 runs before Tier
-   06. Partial, half-wired features are not acceptable stopping points between tiers.
+   tier index below, not the next integer — the index is the running order. Four rows carry a
+   non-integer number or sit out of integer order: Tier 01B sits between 01 and 02, Tier 04B between
+   04 and 05, Tier 04C between 04B and 05, and Tier 08 runs before Tier 06. Only the last of those
+   actually breaks the order — 01B, 04B and 04C read in sequence — but all four are enumerated here
+   because this list, not the numbering, is what a reader builds the running order from, and 04C was
+   added to the tree after the first three were written. Partial, half-wired features are not
+   acceptable stopping points between tiers.
 2. **No surface left aside.** A tier is not complete until its change has been carried through
    every product surface it touches — see "Cross-surface compatibility checklist" below. If a
    surface can't reasonably support the new feature yet (e.g. continuous schedule doesn't support
@@ -63,6 +67,19 @@ before acting on it — both documents are snapshots, not ground truth that stay
    not just in whichever file the gap analysis happened to cite. A rule stated once in `CLAUDE.md`
    (e.g. "no internal tier numbers in shipped code") is binding everywhere that rule applies, not
    just in the specific files a prior audit pass already looked at.
+9. **Work that lands outside a tier is recorded against the active tier.** A defect found and fixed
+   between tiers — or any change to the forward pass, MatVec, KV, batching, quantization or the
+   launcher that is not in the active tier's scope — is recorded in that tier's execution record
+   under an **Out-of-tier changes** heading, naming the commit, what it touched, whether it is a
+   measurement boundary, and which published baselines it invalidates. Tier 14's scorecard lists
+   them alongside the tiers. The point of this plan is that it knows what was measured, when, and
+   against which build; an unrecorded hot-path commit is precisely the change that breaks that
+   property. This rule exists because it was already violated twice. Commit `c91f879` retired a
+   device KV mirror by closing it in place, gated attention on a written-prefix watermark, and added
+   `DeviceScratchBudget`/`Q4KDequantScratch` work plus three published `compare-lora.sh` runs;
+   commit `1f90b68` changed both launchers to derive the JVM heap from the model file size. Both
+   landed while Tier 01 sat at eight unticked exit criteria, and neither was recorded in any tier
+   file. Both are now in Tier 01's execution record. A third occurrence should not need a new rule.
 
 ## Program target
 
@@ -73,12 +90,20 @@ tier can fail on it and the final scorecard in Tier 14 can only report a directi
 four-model sweep (`tinyllama-1.1b`, `qwen2.5-3b`, `Phi-3.5-mini`, `mistral-7b`, all Q4_K_M) on the
 `docs/perf-compare/README.md` baseline host, under the benchmark-parity preconditions below:
 
-| Metric | Target at end of plan | Reading when this plan was written |
-|---|---|---|
-| GPU tg, Phi-3.5-mini | >= **0.50x** | 0.330x |
-| GPU tg, mistral-7b | >= **0.60x** | 0.513x |
-| GPU pp, every sweep model | >= **0.15x** | see the caveat below — not 0.016x to 0.031x |
-| CPU tg, every sweep model | >= **0.25x** | 0.106x to 0.147x |
+| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) |
+|---|---|---|---|
+| GPU tg, Phi-3.5-mini | >= **0.50x** | 0.330x | 0.423x |
+| GPU tg, mistral-7b | >= **0.60x** | 0.513x | 0.581x (0.631x tuned) |
+| GPU pp, every sweep model | >= **0.15x** | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x |
+| CPU tg, every sweep model | >= **0.25x** | 0.106x to 0.147x | 0.079x to 0.128x |
+
+**The right-hand column is the reference, and the two columns before it are not comparable with it.**
+Those readings come from `docs/perf-compare/20260925T172231Z/` (GPU) and `20260925T174146Z/` (CPU),
+the first sweep taken with prompt-token parity, warm repeated measurement, a fixed heap, `min_tokens`
+generation parity, and prefill and generation measured in two separate runs as the reference tool
+measures them. Tier 01's execution record derives them and explains each correction. The generation
+figures moved up mainly because the measurement stopped penalizing Juno, not because the engine got
+faster — score a later tier against the right-hand column, never against the middle one.
 
 **The pp row's starting reading is not yet known, and the target is provisional until it is.** The
 0.016x-to-0.031x figures widely quoted from `docs/perf-compare/20260918T204809Z/` were taken with
@@ -194,6 +219,7 @@ rejection is itself tested).
 | 12 | OpenAI-compatible REST surface | `/v1/chat/completions`, streaming, tools, grammar |
 | 13 | Native REST surface | `/v1/inference`, `/v1/inference/stream` |
 | 14 | CLI direct usage | `./juno local`/`cluster`/`lora`/`merge`/`lora-import`/`gguf-info`/`test` |
+| 15 | JVM embedding facade | `JunoPlayer`, `LoraTrainer`, `JunoHttpClient` (`juno-player`) — an embedder cannot reach a new capability through CLI or REST alone |
 
 **Row 1 caveat (CPU inference) before Tier 10 lands:** every tier from 00 through 09, Tier 01B
 included, uses row 1 as a *correctness* oracle only — `CpuMatVec`'s scalar path, not a SIMD path,
@@ -202,6 +228,18 @@ since Tier 10 is what makes CPU inference actually fast. A tier's row-1 "PASS" b
 CPU changes preserve every earlier tier's row-1 correctness result — vectorized float accumulation
 can legitimately reorder floating-point sums vs. the scalar path, and so can a different thread count
 or work-splitting strategy, which Tier 10 now also changes — see that tier's own exit criteria.
+
+**Row 15 (JVM embedding facade) was added late — read this before marking it N/A.** `JunoPlayer`,
+`LoraTrainer` and `JunoHttpClient` in `juno-player` are a public surface `CLAUDE.md` names, and a
+capability wired through the CLI and both REST surfaces is still unreachable to an embedder if the
+facade does not expose it. Before this row existed the facade appeared in this tree exactly once, in
+Tier 00's execution record. Tiers 00 and 01 were written and executed without it and do not carry
+it. Tier 01B's scope is internal throughput with no new embedder-invocable capability, so it is N/A
+there. From Tier 02 onward the row is resolved like any other — PASS, N/A with a reason, or
+FAIL-CLOSED. Its table row is already present in the three tiers where it is most clearly
+load-bearing: Tier 02 (context-shift opt-in), Tier 05 (sampler-chain selection) and Tier 12
+(per-request LoRA selection). Any other tier from 02 onward that adds a user-invocable capability
+adds the row to its own table rather than leaving it off.
 
 ## Test infrastructure
 
@@ -320,6 +358,37 @@ incident that led to switching that one gate to wall-clock timing). Every perf-g
 onward records `jdk.GCPhasePause` count/max and an allocation-rate figure alongside its primary
 metric, and a run containing an outlier GC pause is re-run rather than scored — this generalizes the
 fix already applied once to LoRA, instead of waiting to rediscover the same failure mode per tier.
+
+**"Outlier" is a number, not a judgement call.** A run is re-run rather than scored when either
+condition fires:
+
+- ~~any single `jdk.GCPhasePause` exceeds **200 ms**, or **5%** of the measurement window, whichever
+  is smaller.~~ **Replaced, on measurement, by a dispersion rule: a row is not scorable when its own
+  repetitions disagree by more than 15% of their median.** Applied by `compare-llama-cpp.sh`, which
+  emits a `noise` object per comparison and a `Scorable` column in `INDEX.md` naming the condition.
+  The pause rule was implemented first and then found to gate on a number that does not measure
+  stopped time on this host: `tinyllama` tuned produced 64 tokens across token spans of 1110, 1120 and
+  1107 ms while its three pause readings were 633, 5 and 4 ms, and a 633 ms stop-the-world inside a
+  1110 ms span would imply 134 t/s, twice what the model reaches. It rejected three rows whose readings
+  agreed to within 1% and passed one whose readings spanned 31%; dispersion gets all four right, and a
+  pause that does cost time appears as one slow repetition. Pause figures are still published, now
+  including the share overlapping the measured token span
+  (`jdk.GCPhasePause.in_token_span.*`), for reading rather than gating;
+- ~~`jdk.JavaMonitorEnter.total_ms` plus `jdk.ThreadPark.total_ms` exceeds **10%** of wall time.~~
+  **Withdrawn as a gate — measurement showed it cannot discriminate.** The park figure is a sum
+  across every thread, so an idle worker pool parks for longer than the run takes however healthy
+  the run is. On a clean GPU run during Tier 01's re-baseline, `qwen2.5-3b` park time was 11,458 ms
+  against a 4,241 ms request — about 2.7x wall time, monitor time zero, on all three repetitions of
+  a run whose readings agreed to within 1%. As written the condition fires on every run. Both
+  figures are still published in every result JSON, for reading rather than gating. A usable version
+  of this condition would have to normalize per thread, or count only threads that did work.
+
+`compare-llama-cpp.sh` prints a `NOISY` marker in `INDEX.md` naming which condition fired, so a
+reader can tell a discarded run from a missing one. Neither threshold is hypothetical: the
+historical LoRA incident above was a 622 ms pause, and the first run taken under Tier 01's new JFR
+configuration produced a 657 ms pause on `./juno local --cpu --jfr 2m` against tinyllama. Both fire
+this rule. A tier that scores a run despite a fired marker states why in its own file rather than
+leaving the marker unexplained.
 
 **That rule needs tooling that does not exist yet, and Tier 01 builds it.** `JfrMetricsExtractor`
 declares twenty `juno.*` event names and no `jdk.*` ones; a repo-wide grep for `GCPhasePause`,

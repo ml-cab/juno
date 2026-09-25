@@ -72,6 +72,7 @@ baseline avoids compounding the confusion Tier 00 fixed).
 | 12 | OpenAI REST surface | new `frequency_penalty` semantics, new `x_juno_samplers` field, widened `json_schema`/`$ref` support |
 | 13 | Native REST surface | same, via native field names |
 | 14 | CLI | new `--samplers`-style flag; existing individual flags (`--temperature`, `--top-k`, etc.) keep working and compose with the new chain-selection flag rather than being replaced |
+| 15 | JVM embedding facade | `JunoPlayer`/`LoraTrainer` build `SamplingParams` directly, so a configurable chain that is only reachable through the CLI flag and the REST field leaves the facade on the hardcoded default; expose chain selection there or document the limitation |
 
 ## Implementation steps
 

@@ -47,7 +47,10 @@ happened to touch, but that Tier 03's changes quietly invalidated).
 3. **Full doc consistency pass**: `docs/howto.md`, `docs/performance.md`, `README.md`,
    `docs/agent-arch.txt` all get read end-to-end against current source and corrected where drifted.
 4. **Final llama.cpp-relative scorecard**: pull every `compare-llama-cpp.sh` run published per tier
-   under README's "llama.cpp-relative gate" (Tiers 01, 01B, 02, 03, 04, 04B, 06, 07, 08, 09, 10)
+   under README's "llama.cpp-relative gate" (Tiers 01, 01B, 02, 03, 04, 04B, 04C, 06, 07, 08, 09, 10
+   — this list must match the one in [`README.md`](README.md)'s llama.cpp-relative gate paragraph
+   verbatim; 04C was missing from it once already, which would have dropped the tier that changes the
+   GEMM operand for every later pp figure out of the plan's single final answer)
    into one table in this tier's own file — model, quant, hardware, Juno tg/pp, llama.cpp tg/pp, ratio — so
    the plan's actual stated goal (closing the gap with llama.cpp) has a single, final, honest answer
    instead of being implied by eleven separate tier-local perf-compare directories nobody has
@@ -62,6 +65,15 @@ happened to touch, but that Tier 03's changes quietly invalidated).
    boundary in the same column. The same applies to Tier 04B: mark which runs were taken before the
    tokenizer fidelity work changed token counts, since `prompt_tokens` is the denominator of every
    pp and tg figure in the table.
+
+   **List the out-of-tier changes alongside the tiers.** Execution rule 9 requires any hot-path or
+   launcher change landing outside a tier's scope to be recorded in the then-active tier's execution
+   record. Pull those entries into this scorecard as their own rows — commit, what it touched, and
+   whether it was a measurement boundary — so a reader can tell which ratio movements belong to a
+   tier's work and which to a change nobody planned. Two already exist (`c91f879`, `1f90b68`, both
+   recorded against Tier 01); if the scorecard's rows do not account for every published
+   `docs/perf-compare/` directory in the plan's date range, a change went unrecorded and that is
+   itself a finding for this tier to report.
 
    **Score the pp row against Tier 01's re-derived target, not the README's original `>= 0.15x`.**
    That figure was set against readings taken with `raw_prompt: 0`, where llama-bench prefilled 128
@@ -83,14 +95,20 @@ happened to touch, but that Tier 03's changes quietly invalidated).
 ## Cross-surface compatibility checklist
 
 Not applicable in the usual sense — this tier makes no behavioral changes, so there's no
-cross-surface regression risk. The equivalent check for this tier is: does every one of the 14
+cross-surface regression risk. The equivalent check for this tier is: does every one of the 15
 compatibility-checklist surfaces have accurate, current documentation describing its actual
 capabilities as of the end of Tier 13? Confirm this explicitly for each surface rather than
 skipping the checklist format entirely.
 
 | # | Surface | What "accurate documentation" means here |
 |---|---|---|
-| 1-14 | (all surfaces, per the shared checklist in [`README.md`](README.md)) | Each surface's current, real capability (as landed by Tiers 00-13) is stated correctly in at least one production doc, with no stale claim contradicting it elsewhere. |
+| 1-15 | (all surfaces, per the shared checklist in [`README.md`](README.md)) | Each surface's current, real capability (as landed by Tiers 00-13) is stated correctly in at least one production doc, with no stale claim contradicting it elsewhere. |
+
+Row 15 (the JVM embedding facade — `JunoPlayer`, `LoraTrainer`, `JunoHttpClient`) deserves
+particular attention here, because it was added to the shared checklist late and Tiers 00, 01 and
+01B do not carry it. Whatever capability those three landed is reachable from the CLI and from both
+REST surfaces; this tier confirms the facade's own documentation says what an embedder can and
+cannot call.
 
 ## Implementation steps
 
@@ -128,6 +146,11 @@ cases:
     `Perf gate`, not `Perf gate (required)`: three spellings of that heading are in use. Exclude
     this tier's own file from the scan — it names the string in order to describe the check, and a
     check that fails on its own specification is noise;
+  - **a mismatch between the tier list in this file's llama.cpp-relative scorecard and the tier list
+    in [`README.md`](README.md)'s llama.cpp-relative gate paragraph.** Extract both comma-separated
+    lists and fail on any difference. The two drifted apart once already, when Tier 04C was added to
+    the README's list in two places and not to this one, so this check is a regression guard for a
+    defect that actually happened rather than a hypothetical one;
   - any known-stale phrase identified during the audit, so a fixed claim cannot quietly return.
 
   Run it against this tree *before* starting the audit as well as after, so the rule-7 check is a
@@ -155,6 +178,8 @@ None — this tier is documentation and static analysis only.
       backstop for any that skipped the feature-complete rule.
 - [ ] `smoke-tier14-doc-consistency.sh`'s rule-7 check passes — every tier file with a `Perf gate`
       has a numeric threshold.
+- [ ] `smoke-tier14-doc-consistency.sh`'s tier-list check passes — this file's scorecard tier list
+      and [`README.md`](README.md)'s llama.cpp-relative gate list are identical.
 - [ ] `docs/howto.md`, `docs/performance.md`, `README.md` read-through complete, drift corrected.
 - [ ] Competitor-product-name grep *and* `Tier [0-9]+`/`Infra tier` grep both pass clean outside the
       allowed directories.
@@ -162,6 +187,9 @@ None — this tier is documentation and static analysis only.
       `compare-llama-cpp.sh` run from Tiers 01-13, with an honest statement of whether the ratio
       improved, and every row of the program target table scored met or missed with its actual
       number.
+- [ ] The scorecard's out-of-tier rows (execution rule 9) account for every published
+      `docs/perf-compare/` directory in the plan's date range; any directory with no owning tier and
+      no out-of-tier row is reported as an unrecorded change rather than left unexplained.
 - [ ] `CHANGELOG.md` entry added summarizing the audit and what was corrected.
 - [ ] This plan tree (`docs/gap-closure-plan/`) is itself left in place as a historical record —
       not deleted — since it documents the reasoning behind thirteen tiers of real change; consider

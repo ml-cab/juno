@@ -27,6 +27,7 @@ import java.util.logging.Logger;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.GrammarSession;
+import cab.ml.juno.sampler.MinTokenFloor;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatTemplateFormatter;
@@ -214,6 +215,7 @@ public final class GenerationLoop {
 		SamplingParams[] params = new SamplingParams[n];
 		Random[] rngs = new Random[n];
 		GrammarSession[] grammars = new GrammarSession[n];
+		MinTokenFloor[] floors = new MinTokenFloor[n];
 		GenerationResult.StopReason[] reasons = new GenerationResult.StopReason[n];
 		boolean[] active = new boolean[n];
 		Instant[] starts = new Instant[n];
@@ -247,6 +249,9 @@ public final class GenerationLoop {
 			maxTokens[i] = params[i].maxTokens();
 			rngs[i] = params[i].seed() != null ? new Random(params[i].seed()) : null;
 			grammars[i] = GrammarBinding.open(tokenizer, params[i], requestIds[i]);
+			// Per request, not per batch: one request asking for a minimum must not hold
+			// another request in the same batch open.
+			floors[i] = new MinTokenFloor(tokenizer.eosTokenId(), params[i].minTokens());
 			generated[i] = new ArrayList<>();
 			historyBufs[i] = new GrowableIntArray();
 			eosFilters[i] = new EosOutputFilter();
@@ -312,7 +317,7 @@ public final class GenerationLoop {
 				float[] logits = logitsBatch[j];
 
 				int[] historyArr = historyBufs[i].toTrimmedArray();
-				int nextToken = sampler.sample(logits, params[i], historyArr, rngs[i], grammars[i]);
+				int nextToken = sampler.sample(logits, params[i], historyArr, rngs[i], grammars[i], floors[i]);
 
 				if (nextToken == tokenizer.eosTokenId()) {
 					eosFilters[i].discardHeld();
@@ -437,6 +442,7 @@ public final class GenerationLoop {
 		StopSequenceFilter stopFilter = new StopSequenceFilter(params.stopStrings());
 		Random rng = params.seed() != null ? new Random(params.seed()) : null;
 		GrammarSession grammar = GrammarBinding.open(tokenizer, params, kvKey);
+		MinTokenFloor floor = new MinTokenFloor(tokenizer.eosTokenId(), params.minTokens());
 		GenerationResult.StopReason stopReason = GenerationResult.StopReason.MAX_TOKENS;
 
 		// ── Step 2b: Prefill — populate KV cache for uncached prompt tokens ──
@@ -508,7 +514,7 @@ public final class GenerationLoop {
 					// Sampling exactly once per position, in order, and always emitting its
 					// result (whether or not it matches the draft) keeps rng/grammar state —
 					// and therefore the emitted token — identical to the non-speculative path.
-					int predicted = sampler.sample(verifyLogits[d], params, historyArr, rng, grammar);
+					int predicted = sampler.sample(verifyLogits[d], params, historyArr, rng, grammar, floor);
 					boolean matched = predicted == draft[d];
 					int emitted = matched ? draft[d] : predicted;
 
@@ -541,7 +547,7 @@ public final class GenerationLoop {
 				// Fallback: plain single-token decode (also covers --spec-type none).
 				float[] logits = pipeline.forward(kvKey, allTokens, startPos + step);
 				int[] historyArr = historyBuf.toTrimmedArray();
-				int nextToken = sampler.sample(logits, params, historyArr, rng, grammar);
+				int nextToken = sampler.sample(logits, params, historyArr, rng, grammar, floor);
 
 				EmitOutcome outcome = emitToken(nextToken, step, kvKey, allTokens, stream, eosFilter, stopFilter,
 						consumer, params, generatedIds, historyBuf);

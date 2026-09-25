@@ -23,7 +23,8 @@ import java.util.Objects;
  * static factory methods for preset profiles.
  */
 public record SamplingParams(float temperature, int topK, float topP, float repetitionPenalty, float presencePenalty,
-		boolean greedy, int maxTokens, int[] stopTokenIds, String[] stopStrings, Long seed, GbnfGrammar grammar) {
+		boolean greedy, int maxTokens, int minTokens, int[] stopTokenIds, String[] stopStrings, Long seed,
+		GbnfGrammar grammar) {
 
 	public SamplingParams {
 		if (temperature < 0.0f || temperature > 2.0f)
@@ -39,6 +40,11 @@ public record SamplingParams(float temperature, int topK, float topP, float repe
 			throw new IllegalArgumentException("presencePenalty must be -2.0..2.0, got: " + presencePenalty);
 		if (maxTokens < 1)
 			throw new IllegalArgumentException("maxTokens must be >= 1, got: " + maxTokens);
+		if (minTokens < 0)
+			throw new IllegalArgumentException("minTokens must be >= 0 (0 = disabled), got: " + minTokens);
+		if (minTokens > maxTokens)
+			throw new IllegalArgumentException(
+					"minTokens must be <= maxTokens, got: " + minTokens + " > " + maxTokens);
 		stopTokenIds = stopTokenIds != null ? stopTokenIds.clone() : new int[0];
 		stopStrings = normalizeStopStrings(stopStrings);
 	}
@@ -55,7 +61,7 @@ public record SamplingParams(float temperature, int topK, float topP, float repe
 	 * topP=0.9, penalty=1.1, maxTokens=200
 	 */
 	public static SamplingParams defaults() {
-		return new SamplingParams(0.7f, 50, 0.9f, 1.1f, 0.0f, false, 200, new int[0], new String[0], null, null);
+		return new SamplingParams(0.7f, 50, 0.9f, 1.1f, 0.0f, false, 200, 0, new int[0], new String[0], null, null);
 	}
 
 	/**
@@ -63,7 +69,7 @@ public record SamplingParams(float temperature, int topK, float topP, float repe
 	 * greedy=true
 	 */
 	public static SamplingParams deterministic() {
-		return new SamplingParams(0.1f, 1, 1.0f, 1.0f, 0.0f, true, 512, new int[0], new String[0], null, null);
+		return new SamplingParams(0.1f, 1, 1.0f, 1.0f, 0.0f, true, 512, 0, new int[0], new String[0], null, null);
 	}
 
 	/**
@@ -71,7 +77,7 @@ public record SamplingParams(float temperature, int topK, float topP, float repe
 	 * topK=100, topP=0.95
 	 */
 	public static SamplingParams creative() {
-		return new SamplingParams(1.2f, 100, 0.95f, 1.1f, 0.0f, false, 512, new int[0], new String[0], null, null);
+		return new SamplingParams(1.2f, 100, 0.95f, 1.1f, 0.0f, false, 512, 0, new int[0], new String[0], null, null);
 	}
 
 	/** Temperatures below this are treated as zero: deterministic decoding. */
@@ -89,57 +95,70 @@ public record SamplingParams(float temperature, int topK, float topP, float repe
 
 	public SamplingParams withTemperature(float temperature) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed, grammar);
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withTopK(int topK) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed, grammar);
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withTopP(float topP) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed, grammar);
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withRepetitionPenalty(float repetitionPenalty) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed, grammar);
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withPresencePenalty(float presencePenalty) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed, grammar);
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withGreedy(boolean greedy) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed, grammar);
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
+	}
+
+	/**
+	 * Tokens this request must produce before an end-of-sequence token may end it.
+	 * Zero, the default, leaves the model free to stop whenever it likes.
+	 *
+	 * <p>Only the end-of-sequence token is held back. An explicit stop sequence is
+	 * still honoured below the minimum, because a caller who asked for a stop
+	 * string asked for it unconditionally.
+	 */
+	public SamplingParams withMinTokens(int minTokens) {
+		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withMaxTokens(int maxTokens) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed, grammar);
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withStopTokenIds(int... stopTokenIds) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed, grammar);
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withStopStrings(String... stopStrings) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed, grammar);
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withSeed(Long seed) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed, grammar);
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	public SamplingParams withGrammar(GbnfGrammar grammar) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,
-				stopTokenIds, stopStrings, seed, grammar);
+				minTokens, stopTokenIds, stopStrings, seed, grammar);
 	}
 
 	@Override

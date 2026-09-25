@@ -1,0 +1,116 @@
+{
+  "model": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 1474.813591,
+    "token_gen_tps": 71.631093
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 69.53118871418155,
+    "token_gen_tps": 28.222403281776547,
+    "api_token_gen_tps": 15.3183,
+    "latency_ms": 4178,
+    "n_prompt": 128,
+    "prompt_tokens": 128,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 1.0,
+    "gc_pause_max_ms": 6.617134,
+    "gc_pause_total_ms": 6.617134,
+    "allocated_bytes_total": 1.125583556E+10,
+    "allocated_bytes_per_token": 175872430.625,
+    "juno_reps": 3,
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "5g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 69.53118871418155,
+        "min": 67.26533865587912,
+        "max": 71.99936260764268,
+        "values": [
+          71.99936260764268,
+          67.26533865587912,
+          69.53118871418155
+        ]
+      },
+      "token_gen_tps": {
+        "median": 28.222403281776547,
+        "min": 28.13944104297959,
+        "max": 28.38485661956267,
+        "values": [
+          28.222403281776547,
+          28.38485661956267,
+          28.13944104297959
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 15.3183,
+        "min": 15.1731,
+        "max": 15.5869,
+        "values": [
+          15.5869,
+          15.1731,
+          15.3183
+        ]
+      },
+      "latency_ms": {
+        "median": 4178,
+        "min": 4106,
+        "max": 4218,
+        "values": [
+          4106,
+          4218,
+          4178
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 6.502553,
+        "min": 5.635624,
+        "max": 6.617134,
+        "values": [
+          6.617134,
+          5.635624,
+          6.502553
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 175514816.25,
+        "min": 175326432.375,
+        "max": 175872430.625,
+        "values": [
+          175872430.625,
+          175326432.375,
+          175514816.25
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.04714574719035224,
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.39399654674788426,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20260925T053847Z/qwen2.5-3b-instruct-q4_k_m-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20260925T053847Z/qwen2.5-3b-instruct-q4_k_m-tuned-rep1-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20260925T053847Z/qwen2.5-3b-instruct-q4_k_m-tuned-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20260925T053847Z/qwen2.5-3b-instruct-q4_k_m-tuned-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20260925T053847Z/qwen2.5-3b-instruct-q4_k_m-tuned-juno-jfr.json"
+  }
+}

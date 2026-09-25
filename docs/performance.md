@@ -2,11 +2,11 @@
 
 Measured baselines live in [`perf-compare/README.md`](perf-compare/README.md). This file records tier-specific regression notes and exit-gate evidence.
 
-## Measurement boundary: one JFR configuration, and prompt-token parity
+## Measurement boundary: one JFR configuration, prompt-token parity, warm and repeated readings
 
-Two changes to how measurements are taken. Every entry in this file recorded before them is on the
-other side of a boundary and is not strictly comparable with one recorded after; runs taken before
-the change are kept and are still valid against each other.
+Changes to how measurements are taken, in two passes. Every entry in this file recorded before them
+is on the other side of a boundary and is not strictly comparable with one recorded after; runs
+taken before the change are kept and are still valid against each other.
 
 **One recording configuration.** Juno starts JFR recordings from several places, and they used to
 name different settings, so two runs could differ by their instrumentation overhead rather than by
@@ -24,6 +24,87 @@ default, each result records Juno's real `prompt_tokens`, and a prefill ratio wh
 the requested count exceeds 10% is withheld with its reason stated rather than published. Prefill
 ratios published before this change read as better than a like-for-like measurement supports;
 generation ratios are unaffected.
+
+**The prompt length is now calibrated, not assumed.** Asking for a prompt of `n_prompt` words does
+not prefill `n_prompt` tokens: the chat template wraps every request in role and control tokens,
+about 19 of them on TinyLlama. A 128-word prompt therefore prefilled 146 tokens, 14% over the
+requested count and past the parity tolerance above — so the withholding rule would have suppressed
+every prefill ratio in the sweep, which is the one column the comparison exists to move. Each
+measured cycle now sends one short calibration request, reads back the `prompt_tokens` the engine
+actually produced, and corrects the word count by the difference. On TinyLlama at `n_prompt` 128
+that lands on 128 tokens exactly. Nothing assumes a particular template, and the withholding rule
+still has the final say.
+
+**A generation ratio requires tokens to have been generated.** The reference tool generates the
+requested token count whatever the model would rather do, while Juno stops at a stop token. At 64
+requested tokens on the standing sweep, one model generated all 64, one 49, one 22, and Qwen2.5-3B
+generated none — it emits a stop token immediately when given a minimal-token prompt. A generation
+ratio is now withheld, with its reason and the finish reason stated, when nothing was generated, rather
+than published as a `0` that reads as infinitely slower than the reference. Where a model generated
+some but not all of the requested tokens, the ratio is published and the shortfall stated, because that
+reading is an average over a shorter and slightly cheaper span of context — an effect below this host's
+measurement floor.
+
+**Prefill and generation are measured in two separate runs.** The reference tool benchmarks prompt
+processing and generation separately: it measures generation from an empty context. Juno measured both
+in one request, so its generation ran immediately after its own prefill, at the prompt length, while
+the reference measured generation near zero context — and decode slows as context grows. Once
+prompt-token parity raised the prompt to the requested length, that gap became large: on Phi-3.5-mini
+the generation figure read 12.38 t/s measured after a 128-token prefill and 24.42 t/s measured in its
+own run, so the single-request shape was costing about half the reading. The comparison now runs a
+prefill run (requested prompt length, one token generated) and a generation run (shortest prompt the
+chat template allows, full token count) per model, and takes each figure from the run that measured
+it. One residual is recorded rather than hidden: Juno cannot reach an empty context, because the chat
+template wraps every request, so the generation run prefills about ten tokens against the reference's
+zero.
+
+**A run is marked unscorable when its own repetitions disagree.** Each published index carries a
+`Scorable` column: a generation reading whose cycles span more than 15% of their median is not stable
+at the resolution a gate would read it at, and reads `NOISY` with the reason. That is the direct
+evidence of whether a reading can be trusted, and it is measured rather than inferred.
+
+An earlier version of this gate used the longest collection pause instead, and it had to be withdrawn
+on measurement. On this host the pause counter does not report time the application was stopped: one
+model produced 64 tokens across token spans of 1110, 1120 and 1107 ms while its three pause readings
+were 633 ms, 5 ms and 4 ms, and a 633 ms stop-the-world inside a 1110 ms span would imply more than
+twice the generation rate the model reaches. The pause rule rejected three rows whose readings agreed
+to within 1% and passed one whose readings spanned 31%. Collection pauses are still recorded in every
+result, including the share of them that overlapped the measured token span, as context rather than as
+a gate; a pause that does cost time shows up in the dispersion anyway. Lock and park totals are
+likewise recorded and not gated on, since the park figure sums every thread and an idle worker pool
+exceeds wall time on a healthy run.
+
+**`min_tokens` makes the generation column like-for-like.** A request can now state the number of
+tokens it must produce before an end-of-sequence token may end it, so Juno generates the count the
+reference tool was given instead of stopping wherever the model preferred. The comparison passes it by
+default, equal to the requested generation length; pass `--juno-min-tokens 0` to measure Juno as an
+ordinary caller would experience it, at the cost of a comparable generation ratio. With it, the model
+that previously generated nothing produces a full-length reading and a published ratio.
+
+**Juno readings are warm, repeated and taken at a fixed heap.** The reference tool runs its own
+warmup and repetitions; Juno was measured from a single request against a just-started JVM, so the
+compilation of the whole forward pass sat inside the measurement window and every Juno figure on
+record before this is a cold one. `compare-llama-cpp.sh` now issues `--juno-warmup` requests
+(default 2) that are discarded, then measures `--juno-reps` whole cycles (default 3), publishes the
+median and records the min/max spread beside it, so a reader can tell a result from a difference
+smaller than this host can resolve. A cycle is a whole engine start rather than another request in
+the same process, because model load, page-cache state and device residency all sit inside one.
+
+Warmup is what forced the recording to change hands. The engine's own `--jfr` recording covers the
+whole process lifetime, so the discarded requests would have landed in the same window as the
+measured one and contaminated every aggregate the published figures are read off — the
+token-to-token span above all. The harness now starts and stops the recording itself, after the
+warmup requests have returned and before the engine exits, and extracts it with `JfrMetricsCli`.
+Verified on a real run: with two warmups and an 8-token measured request the recording holds 8
+token events, not 24. `--jfr DURATION` is now an upper bound on that window rather than the window
+itself.
+
+The JVM heap is also no longer derived from the model file size. It is a fixed value per model in
+the sweep, so the collector does the same amount of work in a run as in the baseline it is compared
+against; a model outside that table keeps the size derivation and its result is labelled `derived`,
+which is not comparable with a baseline taken at a fixed heap. Each run additionally records the CPU
+governor, the turbo state and the GPU clocks with any active throttle reason, because a thermally
+throttled run and a real regression are otherwise indistinguishable in the result.
 
 ## OpenAI field parity (`stop` / `seed` / `presence_penalty`)
 

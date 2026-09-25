@@ -1,0 +1,148 @@
+{
+  "model": "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 618.606824,
+    "token_gen_tps": 34.355557
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 44.99886125811389,
+    "token_gen_tps": 21.670752071836485,
+    "api_token_gen_tps": 18.2129,
+    "latency_ms": 3514,
+    "n_prompt": 128,
+    "prompt_tokens": 128,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 0.0,
+    "gc_pause_max_ms": 636.635342,
+    "gc_pause_total_ms": 0.0,
+    "allocated_bytes_total": 14416115168,
+    "allocated_bytes_per_token": 225251799.5,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 128,
+        "n_prompt": 128,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 44.99886125811389,
+        "latency_ms": 2924,
+        "status": "success",
+        "gc_pause_max_ms": 0.0
+      },
+      "generate": {
+        "prompt_tokens": 9,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 21.670752071836485,
+        "latency_ms": 3514,
+        "status": "success",
+        "gc_pause_max_ms": 636.635342
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "9g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 44.99886125811389,
+        "min": 43.056196753240314,
+        "max": 58.130370716325466,
+        "values": [
+          58.130370716325466,
+          44.99886125811389,
+          43.056196753240314
+        ]
+      },
+      "token_gen_tps": {
+        "median": 21.670752071836485,
+        "min": 21.243486055517348,
+        "max": 21.930940571540667,
+        "values": [
+          21.670752071836485,
+          21.243486055517348,
+          21.930940571540667
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 18.2129,
+        "min": 18.1098,
+        "max": 18.2909,
+        "values": [
+          18.2129,
+          18.2909,
+          18.1098
+        ]
+      },
+      "latency_ms": {
+        "median": 3514,
+        "min": 3499,
+        "max": 3534,
+        "values": [
+          3514,
+          3499,
+          3534
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 636.635342,
+        "values": [
+          0.0,
+          0.0,
+          636.635342
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 225139981.875,
+        "min": 225115199.5,
+        "max": 225251799.5,
+        "values": [
+          225251799.5,
+          225139981.875,
+          225115199.5
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.07274226457306894,
+  "noise": {
+    "ok": false,
+    "condition": "gc_pause",
+    "gc_pause_max_ms": 636.635342,
+    "window_ms": 3514,
+    "threshold_ms": 175.70000000000002,
+    "monitor_enter_total_ms": 0.0,
+    "thread_park_total_ms": 10008.651388,
+    "reason": "a single collection pause of 636 ms in a 3514 ms window exceeds the 175 ms ceiling: re-run rather than score this row"
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.6307786560362414,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/mistral-7b-instruct-v0.1-q4_k_m-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/mistral-7b-instruct-v0.1-q4_k_m-tuned-generate-rep1-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/mistral-7b-instruct-v0.1-q4_k_m-tuned-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/mistral-7b-instruct-v0.1-q4_k_m-tuned-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/mistral-7b-instruct-v0.1-q4_k_m-tuned-juno-jfr.json"
+  }
+}

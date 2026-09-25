@@ -1,0 +1,187 @@
+{
+  "engine": "juno",
+  "tool": "local-api+jfr",
+  "status": "success",
+  "exit_code": 0,
+  "http_code": "200",
+  "model": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "model_path": "/home/medion/Repo/juno/models/qwen2.5-3b-instruct-q4_k_m.gguf",
+  "model_id": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "n_gen": 1,
+  "n_prompt": 128,
+  "prompt_tokens": 128,
+  "prompt_token_deviation": 0,
+  "prompt_parity_tolerance": 0.10,
+  "completion_tokens": 0,
+  "finish_reason": "stop",
+  "load_ms": 10294,
+  "latency_ms": 1966,
+  "wall_ms": 1982,
+  "api_token_gen_tps": null,
+  "prompt_eval_tps": 67.2864245407855,
+  "token_gen_tps": null,
+  "juno_use_vector": 1,
+  "backend": "gpu",
+  "use_gpu": 1,
+  "heap": "5g",
+  "heap_source": "fixed",
+  "threads_hint": 12,
+  "use_jfr": 1,
+  "rep_label": "qwen2.5-3b-instruct-q4_k_m-prefill-rep2",
+  "lane": "prefill",
+  "juno_warmup": 2,
+  "calibrated_prompt_words": 120,
+  "jfr_scoped_to_measured_request": 1,
+  "jfr_duration": "30m",
+  "jfr": {
+    "metrics_file": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/qwen2.5-3b-instruct-q4_k_m-prefill-rep2-juno-jfr.json",
+    "jfr_file": "qwen2.5-3b-instruct-q4_k_m-prefill-rep2-measured.jfr",
+    "prompt_eval_tps": 67.2864245407855,
+    "prompt_eval_tps_source": "jfr_prefill_total_ms",
+    "token_gen_tps": null,
+    "token_gen_tps_source": "ForwardPass.decode.total_ms",
+    "token_gen_tps_decode_derived": null,
+    "forward_pass_prefill_total_ms": 1902.315376,
+    "forward_pass_decode_total_ms": 48.123733,
+    "forward_pass_prefill_p95_ms": 1902.315376,
+    "forward_pass_decode_p95_ms": 48.123733,
+    "forward_pass_prefill_count": 1.0,
+    "forward_pass_decode_count": 1.0,
+    "token_produced_count": 0.0,
+    "token_produced_tps": 0.0,
+    "token_produced_elapsed_s": 0.0,
+    "gc_pause_count": 1.0,
+    "gc_pause_max_ms": 6.768005,
+    "gc_pause_total_ms": 6.768005,
+    "allocated_bytes_total": 9055076056,
+    "allocated_bytes_per_token": null,
+    "execution_sample_count": 149.0,
+    "top_methods": [
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch",
+        "samples": 69.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_rope",
+        "samples": 32.0
+      },
+      {
+        "method": "cab_ml_juno_node_CudaMatVec_sgemmQ4KBatchedGemm",
+        "samples": 29.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_sgemmLayerInto",
+        "samples": 4.0
+      },
+      {
+        "method": "cab_ml_juno_node_CudaGqaAttention_attendBatched",
+        "samples": 2.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_ffn",
+        "samples": 2.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_rmsNormInto",
+        "samples": 2.0
+      },
+      {
+        "method": "cab_ml_juno_node_DeviceKvCache_newLayers",
+        "samples": 1.0
+      },
+      {
+        "method": "com_fasterxml_jackson_core_json_JsonReadContext_expectComma",
+        "samples": 1.0
+      },
+      {
+        "method": "java_lang_classfile_constantpool_ConstantPoolBuilder_methodRefEntry",
+        "samples": 1.0
+      }
+    ],
+    "top_allocation_sites": [
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_forwardBatch",
+        "bytes": 638365104
+      },
+      {
+        "site": "cab_ml_juno_node_CudaMatVec_sgemmQ4KBatchedGemm",
+        "bytes": 521279808
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_BatchWorkspace__init_",
+        "bytes": 24106336
+      },
+      {
+        "site": "java_lang_ThreadLocal_createMap",
+        "bytes": 12233488
+      },
+      {
+        "site": "jdk_internal_classfile_impl_SplitConstantPool_classEntryForClassOrInterface",
+        "bytes": 9873080.0
+      },
+      {
+        "site": "java_util_Arrays_copyOf",
+        "bytes": 8389632.0
+      },
+      {
+        "site": "cab_ml_juno_node_CudaMatVec_sgemvSameX",
+        "bytes": 6337592.0
+      },
+      {
+        "site": "java_lang_invoke_LambdaFormEditor_TransformKey_of",
+        "bytes": 4193136.0
+      },
+      {
+        "site": "java_lang_invoke_MethodType_makeImpl",
+        "bytes": 4193112.0
+      },
+      {
+        "site": "cab_ml_juno_node_CudaMatVec_sgemv",
+        "bytes": 4062648.0
+      }
+    ],
+    "monitor_enter_total_ms": 0.0,
+    "thread_park_total_ms": 5551.979839
+  },
+  "response_json": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/qwen2.5-3b-instruct-q4_k_m-prefill-rep2-juno-response.json",
+  "log": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/qwen2.5-3b-instruct-q4_k_m-prefill-rep2-juno.log",
+  "host": {
+    "run_id": "20260925T172231Z",
+    "timestamp_utc": "2026-09-25T17:26:22Z",
+    "hostname": "medion-Precision-T3610",
+    "cpu": "Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz",
+    "mem_total": "62.7 GiB",
+    "n_threads": 12,
+    "juno_effective_parallelism": 11,
+    "cpu_governor": "schedutil",
+    "cpu_turbo": "enabled",
+    "gpu_clocks": {
+      "graphics_mhz": 1771,
+      "sm_mhz": 1771,
+      "memory_mhz": 5005,
+      "active_throttle_reasons": "Idle"
+    },
+    "n_prompt": 128,
+    "n_gen": 64,
+    "reps": 3,
+    "juno_warmup": 2,
+    "juno_reps": 3,
+    "juno_min_tokens": 64,
+    "ngl": 99,
+    "backend": "gpu",
+    "use_gpu": 1,
+    "prompt": "x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x",
+    "raw_prompt": 1,
+    "juno_gpu_layers": "",
+    "juno_mmq": "",
+    "juno_gpu_attention": "",
+    "juno_schedule": "",
+    "juno_cache_type_k": "",
+    "juno_cache_type_v": "",
+    "juno_kv_page_size": "",
+    "juno_use_vector": 1,
+    "juno_jfr": 1,
+    "jfr_duration": "30m",
+    "llama_cpp_bin": "/home/medion/Repo/llama.cpp/build-cuda/bin"
+  }
+}

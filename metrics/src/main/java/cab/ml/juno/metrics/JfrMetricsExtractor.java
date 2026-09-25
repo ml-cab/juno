@@ -453,7 +453,9 @@ final class JfrMetricsExtractor {
         m.put("juno.Speculation.acceptanceRate",
                 specDraftTokens > 0 ? (double) specAcceptedTokens / specDraftTokens : 0.0);
 
-        jdkEvents.putInto(m);
+        // The token span is what the generation figure is measured over, so the
+        // collection pauses are attributed to it as well as to the whole recording.
+        jdkEvents.putInto(m, tokenProducedFirst, tokenProducedLast);
 
         return new MetricsSnapshot.ModelMetrics(model.getName(), model.getPath(), jfrName, m);
     }

@@ -65,6 +65,8 @@ final class JdkEventBucket {
     private int gcPauseCount;
     private long gcPauseTotalNanos;
     private long gcPauseMaxNanos;
+    /** When each pause happened, so it can be attributed to the measured window. */
+    private final GcPauseSpans gcPauseSpans = new GcPauseSpans();
 
     /**
      * {@code jdk.ThreadAllocationStatistics#allocated} is a running total for the
@@ -102,6 +104,7 @@ final class JdkEventBucket {
                 gcPauseTotalNanos += nanos;
                 if (nanos > gcPauseMaxNanos)
                     gcPauseMaxNanos = nanos;
+                gcPauseSpans.add(ev.getStartTime(), nanos);
             }
             case THREAD_ALLOCATION_STATISTICS -> {
                 if (!ev.hasField("allocated"))
@@ -139,9 +142,32 @@ final class JdkEventBucket {
 
     /** Writes this bucket's metrics into {@code m}; every key is always written, zero or not. */
     void putInto(Map<String, Double> m) {
+        putInto(m, null, null);
+    }
+
+    /**
+     * As {@link #putInto(Map)}, and additionally attributes the collection pauses
+     * to {@code [spanFrom, spanTo)} — the window a throughput figure was derived
+     * from, normally first token to last.
+     *
+     * <p>The whole-recording figures stay exactly as they were, because they are
+     * what a reader wants when asking how much collection the process did. The
+     * span-restricted figures are what a gate should read: a pause during model
+     * load or prefill cannot have slowed a token-to-token rate, and judging the run
+     * by it rejects results that were never contaminated. Null bounds mean the
+     * window is unknown, and then every pause is reported rather than none.
+     */
+    void putInto(Map<String, Double> m, java.time.Instant spanFrom, java.time.Instant spanTo) {
         m.put("jdk.GCPhasePause.count", (double) gcPauseCount);
         m.put("jdk.GCPhasePause.total_ms", gcPauseTotalNanos / NANOS_PER_MS);
         m.put("jdk.GCPhasePause.max_ms", gcPauseMaxNanos / NANOS_PER_MS);
+
+        GcPauseSpans.Stats inSpan = gcPauseSpans.overlapping(spanFrom, spanTo);
+        m.put("jdk.GCPhasePause.in_token_span.count", (double) inSpan.count());
+        m.put("jdk.GCPhasePause.in_token_span.max_ms", inSpan.maxMs());
+        m.put("jdk.GCPhasePause.in_token_span.total_ms", inSpan.totalMs());
+        m.put("jdk.GCPhasePause.in_token_span.known", (spanFrom != null && spanTo != null) ? 1.0 : 0.0);
+        m.put("jdk.GCPhasePause.spans_truncated", gcPauseSpans.truncated() ? 1.0 : 0.0);
 
         double allocatedBytes = 0.0;
         for (long perThread : allocatedByThread.values())

@@ -399,6 +399,21 @@ components:
           default: 200
           description: Maximum number of tokens to generate
           example: 512
+        minTokens:
+          type: integer
+          minimum: 0
+          maximum: 32768
+          default: 0
+          description: |
+            Tokens this request must produce before an end-of-sequence token may
+            end it. 0 (default) leaves the model free to stop whenever it likes.
+            Must not exceed maxTokens; a larger value is rejected rather than
+            clamped.
+
+            Only the end-of-sequence token is held back. An explicit stop
+            sequence is still honoured below the minimum, because a caller who
+            asked for a stop string asked for it unconditionally.
+          example: 64
         priority:
           type: string
           enum: [HIGH, NORMAL, LOW]

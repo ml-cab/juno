@@ -392,12 +392,16 @@ public final class OpenAiChatHandler {
 		return res.modelId();
 	}
 
-	private SamplingParams buildSamplingParams(OaiChatCompletionRequest body, String[] stopStrings,
+	SamplingParams buildSamplingParams(OaiChatCompletionRequest body, String[] stopStrings,
 			OpenAiTools.ParsedRequest toolsReq) {
 		SamplingParams p = SamplingParams.defaults();
 		Integer maxTok = body.maxCompletionTokens() != null ? body.maxCompletionTokens() : body.maxTokens();
 		if (maxTok != null)
 			p = p.withMaxTokens(maxTok);
+		// After the maximum, because the parameters reject a minimum above it and the
+		// caller should hear that rather than have one of the two quietly clamped.
+		if (body.minTokens() != null)
+			p = p.withMinTokens(body.minTokens());
 		if (body.temperature() != null)
 			p = p.withTemperature(body.temperature().floatValue());
 		if (body.topP() != null)
@@ -480,7 +484,8 @@ public final class OpenAiChatHandler {
 	public record OaiChatCompletionRequest(@JsonProperty("model") String model,
 			@JsonProperty("messages") List<OaiMessage> messages, @JsonProperty("temperature") Double temperature,
 			@JsonProperty("top_p") Double topP, @JsonProperty("max_tokens") Integer maxTokens,
-			@JsonProperty("max_completion_tokens") Integer maxCompletionTokens, @JsonProperty("stream") Boolean stream,
+			@JsonProperty("max_completion_tokens") Integer maxCompletionTokens,
+			@JsonProperty("min_tokens") Integer minTokens, @JsonProperty("stream") Boolean stream,
 			@JsonProperty("n") Integer n, @JsonProperty("frequency_penalty") Double frequencyPenalty,
 			@JsonProperty("presence_penalty") Double presencePenalty, @JsonProperty("stop") JsonNode stop,
 			@JsonProperty("seed") Long seed, @JsonProperty("response_format") JsonNode responseFormat,

@@ -52,16 +52,22 @@ public final class JunoHttpClient {
 		baseV1 = s.endsWith("/v1") ? s : s + "/v1";
 	}
 
+	/**
+	 * As {@link #blockingInference(String, List, Integer)}, with a minimum number of
+	 * tokens the response must contain before an end-of-sequence token may end it.
+	 *
+	 * @param minTokens minimum tokens to generate; null or 0 leaves the model free
+	 *                  to stop whenever it likes
+	 */
+	public String blockingInference(String modelId, List<ChatMessage> messages, Integer maxTokens, Integer minTokens)
+			throws Exception {
+		String body = postJson(baseV1 + "/inference",
+				buildInferenceJsonUnchecked(modelId, messages, maxTokens, minTokens));
+		return json.readTree(body).path("text").asText("");
+	}
+
 	public String blockingInference(String modelId, List<ChatMessage> messages, Integer maxTokens) throws Exception {
-		String payload = buildInferenceJsonUnchecked(modelId, messages, maxTokens);
-		HttpRequest req = HttpRequest.newBuilder(URI.create(baseV1 + "/inference"))
-				.header("Content-Type", "application/json")
-				.POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build();
-		HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-		if (res.statusCode() != 200)
-			throw new IllegalStateException("HTTP " + res.statusCode() + ": " + res.body());
-		JsonNode root = json.readTree(res.body());
-		return root.path("text").asText("");
+		return blockingInference(modelId, messages, maxTokens, null);
 	}
 
 	/**
@@ -73,17 +79,33 @@ public final class JunoHttpClient {
 				line -> parseNativeToken(line, json));
 	}
 
+	/**
+	 * As {@link #blockingOpenAiChat(String, List, Integer, Float)}, with a minimum
+	 * number of tokens the response must contain.
+	 *
+	 * @param minTokens minimum tokens to generate; null or 0 leaves the model free
+	 *                  to stop whenever it likes
+	 */
+	public String blockingOpenAiChat(String model, List<ChatMessage> messages, Integer maxTokens, Float temperature,
+			Integer minTokens) throws Exception {
+		String body = postJson(baseV1 + "/chat/completions",
+				buildOpenAiChatJsonUnchecked(model, messages, false, maxTokens, temperature, minTokens));
+		return json.readTree(body).path("choices").path(0).path("message").path("content").asText("");
+	}
+
 	public String blockingOpenAiChat(String model, List<ChatMessage> messages, Integer maxTokens, Float temperature)
 			throws Exception {
-		String payload = buildOpenAiChatJsonUnchecked(model, messages, false, maxTokens, temperature);
-		HttpRequest req = HttpRequest.newBuilder(URI.create(baseV1 + "/chat/completions"))
-				.header("Content-Type", "application/json")
+		return blockingOpenAiChat(model, messages, maxTokens, temperature, null);
+	}
+
+	/** One JSON POST, returning the response body and failing on any non-200. */
+	private String postJson(String url, String payload) throws Exception {
+		HttpRequest req = HttpRequest.newBuilder(URI.create(url)).header("Content-Type", "application/json")
 				.POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build();
 		HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 		if (res.statusCode() != 200)
 			throw new IllegalStateException("HTTP " + res.statusCode() + ": " + res.body());
-		JsonNode root = json.readTree(res.body());
-		return root.path("choices").path(0).path("message").path("content").asText("");
+		return res.body();
 	}
 
 	/** OpenAI-compatible SSE ({@code choices[0].delta.content}). */
@@ -159,6 +181,11 @@ public final class JunoHttpClient {
 	}
 
 	private String buildInferenceJsonUnchecked(String modelId, List<ChatMessage> messages, Integer maxTokens) {
+		return buildInferenceJsonUnchecked(modelId, messages, maxTokens, null);
+	}
+
+	private String buildInferenceJsonUnchecked(String modelId, List<ChatMessage> messages, Integer maxTokens,
+			Integer minTokens) {
 		try {
 			ObjectNode root = json.createObjectNode();
 			ArrayNode arr = root.putArray("messages");
@@ -169,9 +196,12 @@ public final class JunoHttpClient {
 			}
 			if (modelId != null && !modelId.isBlank())
 				root.put("modelId", modelId);
-			if (maxTokens != null) {
+			if (maxTokens != null || minTokens != null) {
 				ObjectNode sampling = root.putObject("sampling");
-				sampling.put("maxTokens", maxTokens);
+				if (maxTokens != null)
+					sampling.put("maxTokens", maxTokens);
+				if (minTokens != null)
+					sampling.put("minTokens", minTokens);
 			}
 			return json.writeValueAsString(root);
 		} catch (Exception e) {
@@ -181,6 +211,11 @@ public final class JunoHttpClient {
 
 	private String buildOpenAiChatJsonUnchecked(String model, List<ChatMessage> messages, boolean stream,
 			Integer maxTokens, Float temperature) {
+		return buildOpenAiChatJsonUnchecked(model, messages, stream, maxTokens, temperature, null);
+	}
+
+	private String buildOpenAiChatJsonUnchecked(String model, List<ChatMessage> messages, boolean stream,
+			Integer maxTokens, Float temperature, Integer minTokens) {
 		try {
 			ObjectNode root = json.createObjectNode();
 			if (model != null && !model.isBlank())
@@ -194,6 +229,8 @@ public final class JunoHttpClient {
 			root.put("stream", stream);
 			if (maxTokens != null)
 				root.put("max_completion_tokens", maxTokens);
+			if (minTokens != null)
+				root.put("min_tokens", minTokens);
 			if (temperature != null)
 				root.put("temperature", temperature);
 			return json.writeValueAsString(root);

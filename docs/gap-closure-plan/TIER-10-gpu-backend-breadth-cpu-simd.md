@@ -93,6 +93,18 @@ result, which is the pattern this plan exists to stop repeating.
    worth pursuing given Juno's target audience and the JVM/Panama-FFI architecture, and record the
    decision (pursue as a new, separately-scoped future tier; or explicitly decline with reasoning)
    rather than leaving it an open question indefinitely.
+7. **Mark which of this tier's CPU conclusions are host-specific.** Every CPU number this tier
+   produces comes off one machine: an Intel Xeon E5-1650 v2 with AVX2, **no AVX-512 and no VNNI**,
+   12 threads (per [`INVENTORY.md`](INVENTORY.md)). Several of this tier's decisions turn directly on
+   that — the fixed safe species width chosen in item 3 instead of `SPECIES_PREFERRED`, whether the
+   SIMD kernel is worth putting on the hot path at all (the `--vector 0` versus `--vector 1` wash
+   that rescoped this tier is a *this-host* result), the persistent-pool-versus-`commonPool` verdict
+   in item 5, and the `--threads` default. For each conclusion the execution record reaches, state a
+   one-line `host-specific` or `expected-general` marker and, where it is host-specific, what would
+   have to be re-measured on an AVX-512/VNNI host. This is not an essay per finding; it is the line
+   that tells a future reader on different silicon which results to trust and which to re-derive.
+   [Tier 04C](TIER-04C-packed-weight-matmul.md) carries the same obligation for its GPU findings on
+   this host's Pascal-generation GTX 1080.
 
 ### Out of scope
 
@@ -222,6 +234,8 @@ vision-scale batch-width regression guard (already present).
 - [ ] Any remaining ROCm MMQ kernel coverage from Tier 04 completed.
 - [ ] Metal/Vulkan/SYCL/CANN decision made and recorded (pursue as a new tier, or explicitly
       declined with reasoning) — not left open.
+- [ ] Every CPU conclusion in the execution record carries a `host-specific` or `expected-general`
+      marker, and each host-specific one names what to re-measure on an AVX-512/VNNI host.
 - [ ] Cross-surface checklist fully resolved, vision regression guard explicitly passing.
 - [ ] Perf gate published for both CPU and vision paths.
 - [ ] `CLAUDE.md`'s "JDK Vector API CPU kernels" description (corrected in Tier 00 to describe the

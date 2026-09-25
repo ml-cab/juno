@@ -475,6 +475,7 @@ curl http://localhost:8080/v1/models
 | `top_p` | `SamplingParams.topP` | 0.0–1.0; default 0.9 |
 | `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 200 |
 | `max_tokens` | `SamplingParams.maxTokens` | Deprecated alias; `max_completion_tokens` takes precedence |
+| `min_tokens` | `SamplingParams.minTokens` | 0–max; default 0. Tokens the request must produce before an end-of-sequence token may end it. Above the maximum → HTTP 400 (rejected, not clamped). Only end-of-sequence is held back; an explicit `stop` still applies |
 | `frequency_penalty` | `SamplingParams.repetitionPenalty` | Mapped: `1 + max(0, fp/2)` |
 | `stream` | route selection | `false` → blocking JSON; `true` → SSE |
 | `n` | — | Only `1` accepted; other values → HTTP 400 |
@@ -788,6 +789,10 @@ var http = new JunoHttpClient(URI.create("http://localhost:8080"));
 String text = http.blockingInference("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
         List.of(ChatMessage.user("Ping")), 64);
 
+// The same, insisting on at least 64 tokens before a stop token may end it
+String full = http.blockingInference("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        List.of(ChatMessage.user("Ping")), 64, 64);
+
 // Native SSE (/v1/inference/stream) — publisher emits decoded token pieces from JSON events
 Flow.Publisher<String> nativeStream = http.streamingInference(null,
         List.of(ChatMessage.user("Stream ping")), 32);
@@ -795,6 +800,9 @@ Flow.Publisher<String> nativeStream = http.streamingInference(null,
 // OpenAI-compatible blocking + SSE (/v1/chat/completions)
 String openAiText = http.blockingOpenAiChat("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
         List.of(ChatMessage.user("Ping")), 64, 0.7f);
+// ... with a minimum token count (min_tokens)
+String openAiFull = http.blockingOpenAiChat("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        List.of(ChatMessage.user("Ping")), 64, 0.7f, 64);
 Flow.Publisher<String> openAiSse = http.streamingOpenAiChat("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
         List.of(ChatMessage.user("Stream")), 32, 0.7f);
 ```
@@ -960,7 +968,17 @@ falls back to `4g`; pass `--heap` explicitly for a large repository model.
 mvn package -pl metrics -am -DskipTests
 java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.MetricsMain
 # Output: target/metrics/metrics.json (one snapshot per mapped .jfr in project root)
+
+# One named recording to one named output file, for a recording you took yourself
+# (no project-root scan, and the model need not be listed in models.json)
+java -cp metrics/target/metrics-*.jar cab.ml.juno.metrics.JfrMetricsCli \
+  /path/to/recording.jfr /path/to/metrics.json [model-stem] [model-filename]
 ```
+
+Use `JfrMetricsCli` when you control the recording window yourself — for example when you start a
+recording with `jcmd <pid> JFR.start` after warming the engine up, so that only the request you
+mean to measure is inside it. It fails on a missing or empty recording instead of writing a report
+of zeroes, which would otherwise read as a run with no collection pauses and no tokens.
 
 The JSON report includes the following `juno.TokenProduced` fields derived from the coordinator
 JFR file. These are the primary throughput metrics for performance comparison:

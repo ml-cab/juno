@@ -1,0 +1,116 @@
+{
+  "model": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 19.687895,
+    "token_gen_tps": 10.963165
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 0.9491867287979242,
+    "token_gen_tps": 0.9071184365265359,
+    "api_token_gen_tps": 0.3091,
+    "latency_ms": 207045,
+    "n_prompt": 128,
+    "prompt_tokens": 128,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 2.0,
+    "gc_pause_max_ms": 11.746571,
+    "gc_pause_total_ms": 2.562512,
+    "allocated_bytes_total": 1.542666252E+10,
+    "allocated_bytes_per_token": 241041601.875,
+    "juno_reps": 3,
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "6g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 0.9491867287979242,
+        "min": 0.9485149907823667,
+        "max": 0.9514188408948238,
+        "values": [
+          0.9485149907823667,
+          0.9491867287979242,
+          0.9514188408948238
+        ]
+      },
+      "token_gen_tps": {
+        "median": 0.9071184365265359,
+        "min": 0.9039729159236213,
+        "max": 0.9074819633179914,
+        "values": [
+          0.9039729159236213,
+          0.9074819633179914,
+          0.9071184365265359
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 0.3091,
+        "min": 0.3077,
+        "max": 0.3096,
+        "values": [
+          0.3077,
+          0.3091,
+          0.3096
+        ]
+      },
+      "latency_ms": {
+        "median": 207045,
+        "min": 206696,
+        "max": 207990,
+        "values": [
+          207990,
+          207045,
+          206696
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 7.369371,
+        "min": 2.406047,
+        "max": 11.746571,
+        "values": [
+          2.406047,
+          7.369371,
+          11.746571
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 241031202.25,
+        "min": 241027505.625,
+        "max": 241041601.875,
+        "values": [
+          241041601.875,
+          241031202.25,
+          241027505.625
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.04821169194563076,
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.08274238657600573,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20260925T055156Z/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20260925T055156Z/Phi-3.5-mini-instruct-Q4_K_M-rep1-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20260925T055156Z/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20260925T055156Z/Phi-3.5-mini-instruct-Q4_K_M-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20260925T055156Z/Phi-3.5-mini-instruct-Q4_K_M-juno-jfr.json"
+  }
+}

@@ -29,6 +29,7 @@ import java.util.logging.Logger;
 import cab.ml.juno.kvcache.KVCacheManager;
 import cab.ml.juno.node.InferencePipeline;
 import cab.ml.juno.sampler.GrammarSession;
+import cab.ml.juno.sampler.MinTokenFloor;
 import cab.ml.juno.sampler.Sampler;
 import cab.ml.juno.sampler.SamplingParams;
 import cab.ml.juno.tokenizer.ChatTemplateFormatter;
@@ -190,7 +191,8 @@ final class ContinuousBatchEngine {
 		SamplingParams params = loop.resolveSamplingParams(request.samplingParams());
 		Slot slot = new Slot(request, pending.consumer(), pending.future(), Instant.now(), kvKey, hasSession,
 				promptIds.clone(), promptIds.length, decodeBase, prefill, params,
-				GrammarBinding.open(tokenizer, params, kvKey));
+				GrammarBinding.open(tokenizer, params, kvKey),
+				new MinTokenFloor(tokenizer.eosTokenId(), params.minTokens()));
 		slot.stream = tokenizer.openStreamContext();
 		if (prefill.isComplete()) {
 			slot.phase = Phase.DECODE;
@@ -289,7 +291,7 @@ final class ContinuousBatchEngine {
 			Slot s = active.get(j);
 			float[] logits = logitsBatch[j];
 			int[] historyArr = s.historyBuf.toTrimmedArray();
-			int nextToken = sampler.sample(logits, s.params, historyArr, s.rng, s.grammar);
+			int nextToken = sampler.sample(logits, s.params, historyArr, s.rng, s.grammar, s.floor);
 
 			if (nextToken == tokenizer.eosTokenId()) {
 				s.eosFilter.discardHeld();
@@ -404,6 +406,9 @@ final class ContinuousBatchEngine {
 		final SamplingParams params;
 		final Random rng;
 		final GrammarSession grammar;
+		// Per slot: a minimum on one request must not hold another slot in the same
+		// running set open.
+		final MinTokenFloor floor;
 		final List<Integer> generated = new ArrayList<>();
 		final GrowableIntArray historyBuf = new GrowableIntArray();
 		final EosOutputFilter eosFilter = new EosOutputFilter();
@@ -414,7 +419,7 @@ final class ContinuousBatchEngine {
 
 		Slot(InferenceRequest request, TokenConsumer consumer, CompletableFuture<GenerationResult> future,
 				Instant start, String kvKey, boolean hasSession, int[] allTokens, int promptLen, int decodeBase,
-				ContinuousPrefillState prefill, SamplingParams params, GrammarSession grammar) {
+				ContinuousPrefillState prefill, SamplingParams params, GrammarSession grammar, MinTokenFloor floor) {
 			this.request = request;
 			this.consumer = consumer;
 			this.future = future;
@@ -428,6 +433,7 @@ final class ContinuousBatchEngine {
 			this.params = params;
 			this.rng = params.seed() != null ? new Random(params.seed()) : null;
 			this.grammar = grammar;
+			this.floor = floor;
 			this.stopFilter = new StopSequenceFilter(params.stopStrings());
 			this.phase = prefill.isComplete() ? Phase.DECODE : Phase.PREFILL;
 		}

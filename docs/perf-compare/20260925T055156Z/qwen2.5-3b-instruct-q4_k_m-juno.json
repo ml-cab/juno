@@ -1,0 +1,254 @@
+{
+  "engine": "juno",
+  "tool": "local-api+jfr",
+  "status": "success",
+  "exit_code": 0,
+  "http_code": "200",
+  "model": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "model_path": "/home/medion/Repo/juno/models/qwen2.5-3b-instruct-q4_k_m.gguf",
+  "model_id": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "n_gen": 64,
+  "n_prompt": 128,
+  "prompt_tokens": 128,
+  "prompt_token_deviation": 0,
+  "prompt_parity_tolerance": 0.10,
+  "completion_tokens": 64,
+  "finish_reason": "length",
+  "load_ms": 8261,
+  "latency_ms": 117909,
+  "wall_ms": 117738,
+  "api_token_gen_tps": 0.5428,
+  "prompt_eval_tps": 2.1558147592945236,
+  "token_gen_tps": 1.1197259367139258,
+  "juno_use_vector": 1,
+  "backend": "cpu",
+  "use_gpu": 0,
+  "heap": "5g",
+  "heap_source": "fixed",
+  "threads_hint": 12,
+  "use_jfr": 1,
+  "rep_label": "qwen2.5-3b-instruct-q4_k_m-rep1",
+  "juno_warmup": 2,
+  "calibrated_prompt_words": 120,
+  "jfr_scoped_to_measured_request": 1,
+  "jfr_duration": "30m",
+  "jfr": {
+    "metrics_file": "/home/medion/Repo/juno/target/perf-compare/20260925T055156Z/qwen2.5-3b-instruct-q4_k_m-rep1-juno-jfr.json",
+    "jfr_file": "qwen2.5-3b-instruct-q4_k_m-rep1-measured.jfr",
+    "prompt_eval_tps": 2.1558147592945236,
+    "prompt_eval_tps_source": "jfr_prefill_total_ms",
+    "token_gen_tps": 1.1197259367139258,
+    "token_gen_tps_source": "TokenProduced.tps",
+    "token_gen_tps_decode_derived": 1.1049136237590895,
+    "forward_pass_prefill_total_ms": 59374.303589,
+    "forward_pass_decode_total_ms": 57923.079799,
+    "forward_pass_prefill_p95_ms": 14936.312496,
+    "forward_pass_decode_p95_ms": 1524.529182,
+    "forward_pass_prefill_count": 4.0,
+    "forward_pass_decode_count": 64.0,
+    "token_produced_count": 64.0,
+    "token_produced_tps": 1.1197259367139258,
+    "token_produced_elapsed_s": 57.156843386,
+    "gc_pause_count": 6.0,
+    "gc_pause_max_ms": 4.971101,
+    "gc_pause_total_ms": 18.520191,
+    "allocated_bytes_total": 26400243808,
+    "allocated_bytes_per_token": 412624245.25,
+    "execution_sample_count": 36931.0,
+    "top_methods": [
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecQ6Kraw_0",
+        "samples": 12642.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_lambda_sgemmQ4KWeightStationary_0",
+        "samples": 9651.0
+      },
+      {
+        "method": "cab_ml_juno_node_GgufReader_f16ToF32",
+        "samples": 7942.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecQ4KrawInto_0",
+        "samples": 6242.0
+      },
+      {
+        "method": "cab_ml_juno_node_GqaMath_attend",
+        "samples": 132.0
+      },
+      {
+        "method": "java_util_concurrent_ForkJoinPool_runWorker",
+        "samples": 48.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch",
+        "samples": 42.0
+      },
+      {
+        "method": "java_util_concurrent_ForkJoinTask_doExec",
+        "samples": 33.0
+      },
+      {
+        "method": "java_util_concurrent_ForkJoinPool_deactivate",
+        "samples": 32.0
+      },
+      {
+        "method": "java_util_concurrent_ForkJoinPool_awaitWork",
+        "samples": 21.0
+      }
+    ],
+    "top_allocation_sites": [
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_lambda_sgemmQ4KWeightStationary_0",
+        "bytes": 17062310072
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_forwardBatch",
+        "bytes": 1.08059428E+9
+      },
+      {
+        "site": "cab_ml_juno_kvcache_DenseKvTensor_allocate",
+        "bytes": 285508656
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_matVecQ4Kraw",
+        "bytes": 160564784
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_matVecQ6Kraw",
+        "bytes": 74673296
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_rmsNorm",
+        "bytes": 59730136
+      },
+      {
+        "site": "java_util_stream_ForEachOps_ForEachTask_compute",
+        "bytes": 4.721024E+7
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_add",
+        "bytes": 47045856
+      },
+      {
+        "site": "java_lang_Object_clone",
+        "bytes": 37528432
+      },
+      {
+        "site": "java_util_stream_Streams_RangeIntSpliterator_trySplit",
+        "bytes": 36330488
+      }
+    ],
+    "monitor_enter_total_ms": 0.0,
+    "thread_park_total_ms": 1190773.885048
+  },
+  "response_json": "/home/medion/Repo/juno/target/perf-compare/20260925T055156Z/qwen2.5-3b-instruct-q4_k_m-rep1-juno-response.json",
+  "log": "/home/medion/Repo/juno/target/perf-compare/20260925T055156Z/qwen2.5-3b-instruct-q4_k_m-rep1-juno.log",
+  "host": {
+    "run_id": "20260925T055156Z",
+    "timestamp_utc": "2026-09-25T06:07:31Z",
+    "hostname": "medion-Precision-T3610",
+    "cpu": "Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz",
+    "mem_total": "62.7 GiB",
+    "n_threads": 12,
+    "juno_effective_parallelism": 11,
+    "cpu_governor": "schedutil",
+    "cpu_turbo": "enabled",
+    "gpu_clocks": {
+      "graphics_mhz": 139,
+      "sm_mhz": 139,
+      "memory_mhz": 405,
+      "active_throttle_reasons": "Idle"
+    },
+    "n_prompt": 128,
+    "n_gen": 64,
+    "reps": 3,
+    "juno_warmup": 2,
+    "juno_reps": 3,
+    "juno_min_tokens": 64,
+    "ngl": 0,
+    "backend": "cpu",
+    "use_gpu": 0,
+    "prompt": "x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x",
+    "raw_prompt": 1,
+    "juno_gpu_layers": "",
+    "juno_mmq": "",
+    "juno_gpu_attention": "",
+    "juno_schedule": "",
+    "juno_cache_type_k": "",
+    "juno_cache_type_v": "",
+    "juno_kv_page_size": "",
+    "juno_use_vector": 1,
+    "juno_jfr": 1,
+    "jfr_duration": "30m",
+    "llama_cpp_bin": "/home/medion/Repo/llama.cpp-bin/llama-b9551"
+  },
+  "juno_reps": 3,
+  "rep_status": [
+    "success",
+    "success",
+    "success"
+  ],
+  "reps": {
+    "prompt_eval_tps": {
+      "median": 2.1558147592945236,
+      "min": 2.148020857267488,
+      "max": 2.160891211036922,
+      "values": [
+        2.1558147592945236,
+        2.148020857267488,
+        2.160891211036922
+      ]
+    },
+    "token_gen_tps": {
+      "median": 1.1197259367139258,
+      "min": 1.1107185819879546,
+      "max": 1.1203510838645767,
+      "values": [
+        1.1197259367139258,
+        1.1203510838645767,
+        1.1107185819879546
+      ]
+    },
+    "api_token_gen_tps": {
+      "median": 0.5428,
+      "min": 0.5406,
+      "max": 0.5437,
+      "values": [
+        0.5437,
+        0.5428,
+        0.5406
+      ]
+    },
+    "latency_ms": {
+      "median": 117909,
+      "min": 117722,
+      "max": 118378,
+      "values": [
+        117722,
+        117909,
+        118378
+      ]
+    },
+    "gc_pause_max_ms": {
+      "median": 4.766004,
+      "min": 4.198708,
+      "max": 4.971101,
+      "values": [
+        4.198708,
+        4.971101,
+        4.766004
+      ]
+    },
+    "allocated_bytes_per_token": {
+      "median": 412525801.875,
+      "min": 412503809.5,
+      "max": 412624245.25,
+      "values": [
+        412503809.5,
+        412525801.875,
+        412624245.25
+      ]
+    }
+  }
+}

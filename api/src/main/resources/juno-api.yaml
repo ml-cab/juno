@@ -46,6 +46,7 @@ info:
     | top_p                   | sampling.topP                     | 0.0–1.0; default 0.9                    |
     | max_tokens              | sampling.maxTokens                | Deprecated alias; use max_completion_tokens |
     | max_completion_tokens   | sampling.maxTokens                | 1–32768; default 200                    |
+    | min_tokens              | sampling.minTokens                | 0–maxTokens; default 0 (model may stop) |
     | frequency_penalty       | sampling.repetitionPenalty        | OpenAI range −2..2; mapped: 1 + penalty/2 (0→1.0, 2→2.0) |
     | stream                  | (route selection)                 | false → blocking JSON; true → SSE chunks|
     | n                       | —                                 | Only n=1 is supported; other values are rejected with 400 |
@@ -556,6 +557,26 @@ components:
 
             Maps to: `SamplingParams.maxTokens`
           example: 200
+
+        min_tokens:
+          type: integer
+          minimum: 0
+          maximum: 32768
+          default: 0
+          description: |
+            Tokens this request must produce before an end-of-sequence token may
+            end it. 0 (default) leaves the model free to stop whenever it likes,
+            which is the behaviour of every earlier release.
+
+            Must not exceed the effective maximum; a larger value is rejected
+            with HTTP 400 rather than clamped, so a caller is never silently
+            given fewer tokens than it asked for. Only the end-of-sequence token
+            is held back: an explicit `stop` sequence still ends generation below
+            the minimum, because a caller who asked for a stop string asked for
+            it unconditionally.
+
+            Maps to: `SamplingParams.minTokens`
+          example: 64
 
         stream:
           type: boolean

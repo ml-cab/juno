@@ -75,6 +75,7 @@ about before it locks in a block-table layout.
 | 12 | OpenAI REST surface | context-shift needs an explicit request-level opt-in (e.g. an `x_juno_*` extension field, following the project's existing `x_juno_grammar`/`x_juno_loras` naming convention) |
 | 13 | Native REST surface | same opt-in surfaced there too |
 | 14 | CLI | a `--context-shift` (or similarly named) flag for `local`/`cluster`, off by default |
+| 15 | JVM embedding facade | the context-shift opt-in must be settable through `JunoPlayer`/`JunoHttpClient`, or explicitly documented as REST/CLI-only — an embedder that cannot opt in still hits the hard `MAX_SEQ_LEN` error this tier exists to make survivable |
 
 ## Implementation steps
 

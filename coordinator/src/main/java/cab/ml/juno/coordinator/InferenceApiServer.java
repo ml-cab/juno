@@ -842,7 +842,9 @@ public final class InferenceApiServer {
 		if (modelId == null)
 			return;
 
-		InferenceRequest request = toInferenceRequest(body, modelId);
+		InferenceRequest request = buildRequest(ctx, body, modelId);
+		if (request == null)
+			return;
 
 		// Set SSE headers manually — Javalin's sse() API doesn't support
 		// POST bodies, so we drive SSE by hand on a regular POST route.
@@ -920,7 +922,27 @@ public final class InferenceApiServer {
 		String modelId = resolveModelId(ctx, body.modelId());
 		if (modelId == null)
 			return null;
-		return toInferenceRequest(body, modelId);
+		return buildRequest(ctx, body, modelId);
+	}
+
+	/**
+	 * Builds the request, answering 400 rather than propagating when a sampling
+	 * value is out of range.
+	 *
+	 * <p>The sampling parameters validate their own ranges and throw, which without
+	 * this would leave the caller a 500 for what is plainly a bad request. Every
+	 * validated field reaches this path — temperature, the token counts, top-k and
+	 * top-p — so the guard belongs here rather than around any one of them.
+	 *
+	 * @return the request, or null when an error response has already been written
+	 */
+	private InferenceRequest buildRequest(Context ctx, ApiInferenceRequest body, String modelId) {
+		try {
+			return toInferenceRequest(body, modelId);
+		} catch (IllegalArgumentException e) {
+			ctx.status(400).json(errorBody(400, "BAD_REQUEST", e.getMessage()));
+			return null;
+		}
 	}
 
 	private ApiInferenceRequest parseBody(Context ctx) {
@@ -973,11 +995,14 @@ public final class InferenceApiServer {
 		return InferenceRequest.of(modelId, messages, params, priority);
 	}
 
-	private SamplingParams buildSamplingParams(ApiSampling s) {
+	SamplingParams buildSamplingParams(ApiSampling s) {
 		SamplingParams params = SamplingParams.defaults();
 		if (s != null) {
 			if (s.maxTokens() != null)
 				params = params.withMaxTokens(s.maxTokens());
+			// After the maximum, so a minimum above it is reported rather than clamped.
+			if (s.minTokens() != null)
+				params = params.withMinTokens(s.minTokens());
 			if (s.temperature() != null)
 				params = params.withTemperature(s.temperature());
 			if (s.topK() != null)
@@ -1036,6 +1061,7 @@ public final class InferenceApiServer {
 	public record ApiMessage(String role, String content) {
 	}
 
-	public record ApiSampling(Float temperature, Integer topK, Float topP, Integer maxTokens, String priority) {
+	public record ApiSampling(Float temperature, Integer topK, Float topP, Integer maxTokens, Integer minTokens,
+			String priority) {
 	}
 }

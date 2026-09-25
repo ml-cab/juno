@@ -124,7 +124,18 @@ The 04B adjacency carries no dependency — tokenizer fidelity and packed matmul
    tier verifies and tests it rather than re-implementing it, and says so in its execution record.
 1. **Measure the batched dequant term before building anything.** Produce, per model and per batch
    width (9, 16, 32, 64, 128, 512), the split between `launchDequant` wall time, `gemmHalf` wall
-   time, and the H2D/D2H staging around them, from the JFR spans Tier 01 widened. **The expected
+   time, and the H2D/D2H staging around them.
+
+   **Check the spans exist before planning around them.** An earlier draft said this split could be
+   read "from the JFR spans Tier 01 widened." Tier 01 widened only the `jdk.*` bucket
+   (`JdkEventBucket`); it added no sub-`MatVec` spans, and `juno.MatVec` wraps staging,
+   dequantization and compute in one span, so this split cannot be read off it.
+   [Tier 01B](TIER-01B-prefill-throughput.md) item 1a builds the two events this item needs —
+   `juno.DeviceStaging` (direction, bytes, duration) and `juno.WeightDequant` (format, rows, cols,
+   duration, wrapping `Q4KMmqKernel.launchDequant` among others) — and 01B runs well before this
+   tier. Verify they are present and aggregated by `JfrMetricsExtractor` before starting; if 01B
+   shipped them under different names or with a narrower payload, use what it shipped and say so
+   here rather than adding a second spelling. **The expected
    answer is not uniform and the plan should not pretend otherwise**: the dequant pass is paid once
    per matmul and amortizes over the batch, so its share falls as the window widens. The certain win
    from item 2 is VRAM and the removal of a failure mode; the throughput win is batch-dependent and
@@ -143,6 +154,17 @@ The 04B adjacency carries no dependency — tokenizer fidelity and packed matmul
    4x FP32 rate. A packed integer GEMM should therefore win on compute as well as on memory here —
    but Pascal is the favourable case for this argument, not the general one, and a Turing-or-later
    host with FP16 tensor cores could invert it. Record the measurement, not the expectation.
+
+   **Mark which of this tier's conclusions are host-specific.** Every number this tier produces comes
+   off a 2016 GP104 with no int8 tensor cores and 1/64-rate FP16, and several of its decisions turn
+   directly on that: the choice to route batch > 8 through an integer GEMM rather than
+   `cublasGemmEx`, the `HALF_SGEMM_BATCH_MAX` crossover width, and the claim that the packed path
+   wins on compute as well as memory. The execution record states, for each conclusion it reaches,
+   whether it is expected to hold on a host with FP16 or int8 tensor cores or should be re-derived
+   there — a one-line `host-specific` / `expected-general` marker per finding, not an essay. A future
+   reader on a Turing-or-later GPU needs to know which of these to re-measure and which to trust.
+   [Tier 10](TIER-10-gpu-backend-breadth-cpu-simd.md) carries the same obligation for its CPU
+   findings on this host's AVX2-without-AVX-512, no-VNNI Xeon.
 3. **Packed residency for every format that has a packed kernel, on every backend.** Widen
    `DeviceQ4KMatrix.supportsType` and `Q4KResidentUpload.preferPacked` to the formats Tier 04 added
    kernels for, and make `Q4KResidentUpload` the single decision point for packed-versus-FP16 across

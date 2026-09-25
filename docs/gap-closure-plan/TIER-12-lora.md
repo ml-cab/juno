@@ -68,6 +68,7 @@ interim one).
 | 12 | OpenAI REST surface | `x_juno_loras` actually works now — needs request-shape documentation and validation (which adapters are visible/selectable, error behavior for an unknown adapter name) |
 | 13 | Native REST surface | same |
 | 14 | CLI | `--lora-play` gains the ability to reference a raw GGUF-LoRA file directly, not just a converted `.lora`; `./juno lora` gains checkpointing/QLoRA-training flags |
+| 15 | JVM embedding facade | per-request adapter selection and native GGUF-LoRA loading must be reachable from `JunoPlayer`/`LoraTrainer`, which are the facades an embedder uses for exactly this; a hot-swap feature available only over REST is half-wired for the surface most likely to want it |
 
 ## Implementation steps
 

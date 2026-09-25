@@ -1,5 +1,122 @@
 ## Status 
 
+**Session 90** — Juno is measured warm, repeated and at the prompt length it was asked for
+
+- **A prefill comparison now actually compares prefills.** The previous session made a prefill ratio
+  conditional on both engines having prefilled comparable work, and withheld it otherwise. That rule was
+  right, but nothing could satisfy it: the raw-prompt mode counted words, while the chat template wraps
+  every request in role and control tokens — about 19 of them on TinyLlama — so a 128-word prompt
+  prefilled 146 tokens, 14% over the requested count, and a 32-word prompt prefilled 50, 56% over. Every
+  prefill ratio in the sweep would have been withheld, which is the one column the comparison exists to
+  move. Each measured cycle now sends one short calibration request, reads back the `prompt_tokens` the
+  engine actually produced, and corrects the word count by the difference; on TinyLlama at a requested
+  128 that lands on 128 exactly. Nothing assumes a particular template, and the withholding rule still
+  has the final say.
+- **A generation ratio now requires tokens to have been generated.** The reference tool generates the
+  requested token count whatever the model would rather do; Juno stops at a stop token. On a real sweep
+  at 64 requested tokens, one model generated 64, one 49, one 22, and Qwen2.5-3B generated none at all,
+  emitting a stop token immediately on every repetition. The comparison reported that last case as a
+  ratio of `0` — which reads as infinitely slower than the reference when it means never measured. A
+  run that generated nothing now withholds the generation ratio and states the reason and the finish
+  reason instead, and the index carries a generated-token actual/requested column beside the
+  prompt-token one. Where a model generated some but not all of the requested tokens the ratio is still
+  published, with the shortfall noted: that reading is an average over a shorter and slightly cheaper
+  span of context, an effect smaller than this host's measurement floor, so stating it beats discarding
+  three models' figures.
+- **`min_tokens` closes that gap, on every surface.** A request can now state how many tokens it must
+  produce before an end-of-sequence token may end it, which is what makes a generation comparison
+  like-for-like instead of merely honest about not being one. The new `MinTokenFloor` suppresses the
+  end-of-sequence token below the minimum rather than ignoring it once sampled, so the model falls
+  through to its next-best continuation instead of leaking a marker into the output, and it yields in
+  the one case where a grammar has left end-of-sequence as the only legal token — masking it there
+  would leave a distribution that cannot be sampled from. It is wired into all three generation paths
+  (single request, static batch, continuous running set), both REST surfaces (`min_tokens` on chat
+  completions, `sampling.minTokens` on the native route), the published contracts, and the embedding
+  facade. A minimum above the maximum is rejected rather than clamped, so a caller is never quietly
+  given fewer tokens than it asked for. On the model that previously generated nothing at 64 requested
+  tokens, generation is now 32 of 32 with a published ratio where there had been no reading at all.
+- **The native inference surface answers 400 for sampling it cannot honour.** The sampling parameters
+  validate their own ranges and throw, and nothing on that surface caught it, so an out-of-range
+  temperature or token count came back as a server error telling the caller Juno had broken rather than
+  that the request was wrong. The chat surface already mapped these to 400. Both native routes,
+  blocking and streaming, now do too — this was a pre-existing gap across every validated field, not
+  only the new one, and the test covers temperature as well as the new minimum.
+- **Juno readings are warm, repeated, and taken at a fixed heap.** The reference tool runs its own warmup
+  and repetitions, while Juno was measured from a single request against a just-started JVM — so the
+  compilation of the entire forward pass sat inside the measurement window, and every Juno figure on
+  record before this is a cold one. `compare-llama-cpp.sh` gains `--juno-warmup` (default 2) discarded
+  requests and `--juno-reps` (default 3) measured cycles, publishing the median with the min/max spread
+  beside it, because a difference smaller than that spread is not a result on this host. A cycle is a
+  whole engine start rather than another request in the same process, since model load, page-cache state
+  and device residency all sit inside one. The JVM heap is now a fixed value per model rather than derived
+  from the file size, so the collector does the same work in a run as in the baseline it is compared
+  against; an off-table model keeps the derivation and its result is labelled `derived`. Each run also
+  records the CPU governor, the turbo state and the GPU clocks with any active throttle reason, because a
+  thermally throttled run and a real regression are otherwise indistinguishable.
+- **The measurement window is now scoped to the request being measured.** Warmup forced this: warmup
+  requests have to run in the same process as the measured one, since what they buy is compiled code, but
+  a recording started with `--jfr` covers the whole process lifetime and would have held the discarded
+  requests too. That is not a rounding error — the token-throughput figure is computed across the span
+  from the first recorded token to the last, so it would have divided the measured token count by a span
+  containing the warmups and the idle gaps between them. The comparison harness now starts the recording
+  itself once the warmup requests have returned and stops it before the engine exits, under the same
+  settings file every other recording site names, so overhead is unchanged. Verified on a real process:
+  with two warmups and an 8-token measured request the recording holds 8 token events, not 24. `--jfr
+  DURATION` becomes an upper bound on that window rather than the window itself, and a recording that
+  reaches the bound still dumps.
+- **Metrics can be extracted from a recording you took yourself.** The existing entry points serve the
+  running engine — scan the working directory and map against `models.json`, or extract programmatically
+  at shutdown — and both write to a fixed relative path, so a caller could only steer the output by
+  changing its working directory. The new `JfrMetricsCli` takes one named recording to one named output
+  file, needs no `models.json` entry, and fails on a missing or empty recording instead of writing a
+  report of zeroes, which would otherwise read as a run with no collection pauses and no tokens. Covered
+  by `JfrMetricsCliTest` (6 cases); the harness arithmetic is covered by a `--selftest` mode on the
+  comparison script itself (24 checks, no model required).
+- **Prefill and generation are now measured in two separate runs, and that was worth about half the
+  generation figure.** The reference tool benchmarks the two separately and measures generation from an
+  empty context; Juno measured both in one request, so its generation ran at the prompt length while the
+  reference ran near zero, and decode slows as context grows. Harmless while Juno prefilled a short
+  sentence, this became the dominant error once prompt-token parity raised the prompt to the requested
+  length: on Phi-3.5-mini generation read 12.38 t/s measured after a 128-token prefill against 24.42 t/s
+  measured in its own run. The comparison now runs a prefill run and a generation run per model and takes
+  each figure from the run that measured it. Juno cannot reach a truly empty context, since the chat
+  template wraps every request, so the generation run prefills about ten tokens against the reference's
+  zero; that residual is recorded in every result rather than hidden.
+- **A measurement now declares itself unscorable when its own repetitions disagree.** Each published
+  index carries a `Scorable` column: a generation reading whose cycles span more than 15% of their median
+  is not stable at the resolution a gate reads it at, and says so with the reason. This replaces a rule
+  based on the longest collection pause, which was built first and then withdrawn on measurement — on
+  this host the pause counter does not report time the application was stopped. One model produced 64
+  tokens across token spans of 1110, 1120 and 1107 ms while its three pause readings were 633 ms, 5 ms
+  and 4 ms; a 633 ms stop-the-world inside a 1110 ms span would imply more than twice the generation rate
+  the model can reach. The pause rule rejected three readings that agreed to within 1% and passed one
+  that spanned 31%, which the dispersion rule gets the right way round. Collection pauses are still
+  reported, now including the share that overlapped the measured token span, as context rather than as a
+  gate; a pause that does cost time appears as one slow repetition anyway. The same applies to lock and
+  park totals, where the figure sums every thread and an idle pool exceeds wall time on a healthy run.
+- **A test that failed one run in three no longer does.** A metrics assertion required the prefill and
+  decode duration totals to equal the overall total by exact floating-point comparison. Both sides add up
+  the same measured durations in different groupings, and that addition is not associative, so they could
+  differ in the last bit. It now permits a difference of one part in a billion, which is still far tighter
+  than any real miscount, and passed twelve consecutive runs. It had been halting the documented
+  all-module test command before its last two modules.
+- **The performance harness no longer leaves a process behind for every engine it starts.** Keeping the
+  console session alive needs its input never to reach end of file, and that was arranged with a
+  background loop that nothing ever cleaned up — one per launch, each respawning hourly, so they
+  accumulated until a check for "is a benchmark still running" answered yes to processes from days
+  earlier. The comparison harness now holds a named pipe it owns and releases it with the engine; a
+  three-repetition run that previously left six leftovers now leaves none. Eight sibling smoke and
+  comparison scripts still carry the same pattern and are unchanged for now, since several cannot be
+  exercised without a GPU and real models.
+- Unit tests: 1646 across eleven modules, 0 failures, 0 errors (46 skipped, all GPU-, ROCm- or
+  missing-model-gated as before), in under 25 minutes.
+- No performance gate: nothing here touches the forward pass, MatVec, GPU residency, batching, KV or
+  quantization, and the only source change is an extraction entry point no inference path calls. This
+  session is a measurement boundary, though, and a larger one than the last: a reading taken after it is
+  warm, is a median of three cycles, sits at a fixed heap and prefills the requested token count, and a
+  reading taken before it is none of those. Prefill ratios published earlier read as better than a
+  like-for-like measurement supports, and generation ratios read as worse, because they were cold.
+
 **Session 89** — `--gpu-layers auto` keeps device memory free for the forward pass, and every device allocation falls back to CPU instead of ending the process
 
 - **A model larger than the card no longer dies at the first prompt.** `--gpu-layers auto` uploaded weight

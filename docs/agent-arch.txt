@@ -157,9 +157,19 @@ Module dependency (excerpt):
         and the same watermark keeps it on CPU attention rather than reading the
         restored range out of uninitialized memory.
 
-  metrics — MetricsMain, JfrMetricsExtractor, JdkEventBucket, JfrPercentiles,
-        JfrModelMapper, MetricsWriter, MetricsSnapshot, ModelsConfig(Loader).
+  metrics — MetricsMain, JfrMetricsCli, JfrMetricsExtractor, JdkEventBucket,
+        GcPauseSpans, JfrPercentiles, JfrModelMapper, MetricsWriter,
+        MetricsSnapshot, ModelsConfig(Loader).
         Reads .jfr files and writes target/metrics/metrics.json.
+        MetricsMain serves the running engine: it scans the working directory for
+        recordings, maps them against models.json, and is also called
+        programmatically at shutdown. JfrMetricsCli is the form a measurement
+        harness needs instead — one named recording to one named output file,
+        with no directory scan and no models.json entry required, because a
+        harness that warms an engine up before the measured request has to scope
+        the recording to that request and then say where its metrics go. It
+        fails on a missing or empty recording rather than writing a file of
+        zeroes, which would otherwise read as a run with no pauses and no tokens.
         JfrMetricsExtractor accounts for the juno.* events; JdkEventBucket takes
         the JVM events in the same pass — GC pauses (count/max_ms/total_ms),
         allocated bytes, hot methods and lock/park time — so a throughput number
@@ -168,6 +178,15 @@ Module dependency (excerpt):
         rather than every sample, since the field is cumulative per thread. The
         two attribution histograms (top_sites, top_methods) are bounded to ten
         entries and are for reading, not for gating.
+        GcPauseSpans records when each collection pause happened, so the pauses
+        can be attributed to the window a throughput figure was measured over
+        (first token to last) as well as to the whole recording:
+        jdk.GCPhasePause.in_token_span.{count,max_ms,total_ms}. A pause overlaps
+        that window if it intersects it at all, since a collection already
+        running when the first token appeared took time from the measurement too.
+        The interval list is the one thing here that cannot be folded into a
+        running total, because the window is not known until the recording has
+        been read, so it is bounded and reports when it truncated.
         Recording settings: scripts/performance-tests/juno-perf.jfc is the single
         configuration every Juno recording uses, resolved by JunoJfrSettings
         (juno-player) for the in-process recordings and named directly by the
@@ -452,6 +471,22 @@ OpenAiChatHandler / SamplingParams — OpenAI chat fields stop, seed, and
   CLI --grammar-file / --json-schema-file (JUNO_GRAMMAR_FILE /
   JUNO_JSON_SCHEMA_FILE) attach the same SamplingParams.grammar on local and
   cluster inference; LoRA /train is an explicit no-op.
+
+MinTokenFloor / SamplingParams.minTokens — a request states how many tokens it
+  must produce before an end-of-sequence token may end it. min_tokens on chat
+  completions, sampling.minTokens on the native route, both rejected with HTTP
+  400 when above the effective maximum rather than clamped. The floor masks the
+  end-of-sequence token below the minimum instead of ignoring it once sampled,
+  so the model falls through to its next-best continuation rather than leaking a
+  marker into the output; it is stateless and reads the count from the generated
+  history the sampler already receives, which also makes it correct on the
+  speculative path where one step samples several positions. It yields where a
+  grammar has already left end-of-sequence as the only legal token, since
+  masking that too would leave a distribution that cannot be sampled from.
+  Wired per request in GenerationLoop.generate and .generateBatch and per slot
+  in ContinuousBatchEngine — per request, never per batch, so one request's
+  minimum cannot hold another open. Only the end-of-sequence token is held back:
+  an explicit stop sequence still ends generation below the minimum.
 
 OpenAiTools / ToolPrompt / ToolCallParser — OpenAI tools and tool_choice on
   chat completions. ToolPrompt injects schemas for llama3, chatml, and qwen3

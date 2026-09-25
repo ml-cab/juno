@@ -1,0 +1,148 @@
+{
+  "model": "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 618.606824,
+    "token_gen_tps": 34.355557
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 43.866810442742484,
+    "token_gen_tps": 19.977074141159044,
+    "api_token_gen_tps": 17.1766,
+    "latency_ms": 3726,
+    "n_prompt": 128,
+    "prompt_tokens": 128,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 0.0,
+    "gc_pause_max_ms": 10.336635,
+    "gc_pause_total_ms": 0.0,
+    "allocated_bytes_total": 14359227656,
+    "allocated_bytes_per_token": 224362932.125,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 128,
+        "n_prompt": 128,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 43.866810442742484,
+        "latency_ms": 3001,
+        "status": "success",
+        "gc_pause_max_ms": 10.336635
+      },
+      "generate": {
+        "prompt_tokens": 9,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 19.977074141159044,
+        "latency_ms": 3726,
+        "status": "success",
+        "gc_pause_max_ms": 6.731769
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "9g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 43.866810442742484,
+        "min": 42.89563316144067,
+        "max": 45.63110509873769,
+        "values": [
+          45.63110509873769,
+          43.866810442742484,
+          42.89563316144067
+        ]
+      },
+      "token_gen_tps": {
+        "median": 19.977074141159044,
+        "min": 19.87566535303736,
+        "max": 20.268926983084423,
+        "values": [
+          20.268926983084423,
+          19.87566535303736,
+          19.977074141159044
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 17.1766,
+        "min": 17.1260,
+        "max": 17.4768,
+        "values": [
+          17.4768,
+          17.1260,
+          17.1766
+        ]
+      },
+      "latency_ms": {
+        "median": 3726,
+        "min": 3662,
+        "max": 3737,
+        "values": [
+          3662,
+          3737,
+          3726
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 6.731769,
+        "values": [
+          0.0,
+          6.731769,
+          0.0
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 224065993.5,
+        "min": 223894790.875,
+        "max": 224362932.125,
+        "values": [
+          224362932.125,
+          223894790.875,
+          224065993.5
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.07091226404373206,
+  "noise": {
+    "ok": true,
+    "condition": null,
+    "gc_pause_max_ms": 10.336635,
+    "window_ms": 3726,
+    "threshold_ms": 186.3,
+    "monitor_enter_total_ms": 0.0,
+    "thread_park_total_ms": 10934.682793,
+    "reason": null
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.5814801413686597,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/mistral-7b-instruct-v0.1-q4_k_m-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/mistral-7b-instruct-v0.1-q4_k_m-generate-rep1-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/mistral-7b-instruct-v0.1-q4_k_m-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/mistral-7b-instruct-v0.1-q4_k_m-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20260925T172231Z/mistral-7b-instruct-v0.1-q4_k_m-juno-jfr.json"
+  }
+}
