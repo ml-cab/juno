@@ -1,5 +1,77 @@
 ## Status 
 
+**Session 93** — A turn ends where the template says it ends, whether the model says so in text or in a token that decodes to nothing
+
+- **A reply no longer continues into an invented conversation.** Asked "Hello", TinyLlama answered
+  "Hey! How are you doing today?", then wrote a `<|user|>` header, invented the user's reply, wrote
+  an assistant header and answered that too — all of it streamed to the console as though the
+  assistant had said it. Generation only ended a hundred tokens later, when the model finally
+  produced an end-of-sequence token. The turn had in fact ended at the first header: every chat
+  template marks a speaker change with one, and one can never legitimately appear inside the
+  assistant's own content. Those headers are now turn boundaries, so the answer stops at
+  "Hey! How are you doing today?" and the fabrication is never streamed.
+- **The damage compounded across turns, which is why this is not cosmetic.** The console appends
+  each reply to the conversation history and sends it back as context, so a fabricated dialogue
+  became the model's own record of what it had said, and every later turn was conditioned on words
+  no one wrote. Truncating at the header keeps the history to what the model actually answered.
+- **One marker vocabulary, one filter, every surface.** `ChatTurnMarkers` now holds both the
+  turn-end markers already recognized (`</s>`, `<|end|>`, `<|eot_id|>`, `<end_of_turn>`,
+  `<|im_end|>`, `<|endoftext|>`) and the turn-opening role headers (`<|user|>`, `<|assistant|>`,
+  `<|system|>`, `<|im_start|>`, `<|start_header_id|>`, `<start_of_turn>`), and `EosOutputFilter`
+  stops on either. Because that filter is wired into single-request generation, static batching and
+  the continuous engine alike, the interactive console, the OpenAI-compatible route, the native
+  route and vision all truncate identically. A header split across several decoded pieces is held
+  back rather than streamed, as turn-end markers already were.
+- **Mistral's `[INST]` is deliberately excluded.** Square brackets around a common word appear in
+  ordinary prose and in code, and truncating an answer on them would cost more than it saves; that
+  template closes the assistant turn with `</s>`, which is caught already.
+- **A role header that decodes to nothing now ends the turn too.** Phi-3 stores `<|user|>`,
+  `<|assistant|>` and `<|system|>` as control tokens, and a control token decodes to the empty
+  string because it is prompt scaffolding rather than content. A model emitting one was therefore
+  invisible: nothing reached the text filter and the reply ran to the token limit. Turn markers are
+  now recognised by token id as well, from a single list the tokenizer and the filter share, so the
+  two halves cannot drift apart again — which is how this survived, the text half knowing the
+  turn-end markers while the id half knew only the configured end-of-sequence id.
+- No performance gate: the forward pass, MatVec, GPU residency, batching and KV paths are untouched
+  and the change is confined to decoded-text filtering and one membership check per sampled token.
+  Doubling the marker set would have doubled a scan that ran over the whole answer on every token,
+  so the filter now rescans only the window within one marker length of the last emitted character
+  — the per-token cost no longer grows with the length of the answer. The marker ids are scanned
+  out of the vocabulary once at tokenizer load, not per token.
+
+**Session 92** — The cost of a GPU operation with no device-resident activation is now a measurement, not a remembered number
+
+- **The claim that moving RMS norm to the GPU makes decode slower is reproducible on demand.** That
+  finding is why `CudaRmsNorm` is built, parity-tested and then deliberately left unused, and it has
+  been carried in prose ever since — roughly eleven times slower on one live comparison, somewhere
+  between 1.56 and 2.18 times slower on another at prefill scale. Neither could be re-run. A new
+  harness, `scripts/performance-tests/rmsnorm-roundtrip-microbench.sh`, times the scalar CPU norm
+  against the GPU norm's per-call upload, kernel launch and download, and both claims hold: on a
+  GTX 1080 at hidden size 2048 the GPU path is **10.6 times slower at decode width** (one row) and
+  **1.60 times slower at prefill width** (512 rows).
+- **The gap narrows with width but does not close, and the two widths fail for different reasons.**
+  At one row a fixed per-call cost dominates and the GPU loses by an order of magnitude. At 512 rows
+  that cost is spread across the batch and the loss falls to a factor of 1.6, while about four
+  megabytes is staged in each direction. Both widths are therefore reported separately and neither
+  is at parity, so a result at one says nothing about the other.
+- **The harness refuses to report a number it cannot stand behind.** GPU output is checked against
+  the scalar path on every run and timings are withheld if they diverge, so a changed kernel stops
+  the run rather than quietly producing timings for a different computation. A row whose repetitions
+  disagree by more than 15% of their median is marked unscorable rather than averaged into a
+  conclusion — which caught a real bad reading immediately: at the harness's first warm-up default
+  the decode GPU row's repetitions spanned 37.9% and were correctly refused, so the defaults were
+  raised until the same row spanned 2.3%. Device memory is reported either side of the run, and
+  collection pauses and allocation are captured through the shared recording configuration.
+- **A device-memory figure now says when it is not ours.** The device reports free memory for the
+  whole GPU, not per process, so a stray process alongside a run lands in the reading: during
+  bring-up a leftover test JVM holding 7.2 GB made the harness report 4.1 GB unreturned, which is
+  memory it never allocated. The report now carries device capacity next to free bytes and says
+  plainly when retention is larger than anything the harness could be holding, so a contaminated
+  reading announces itself rather than being published as a leak.
+- No performance gate: the harness adds a standalone class that no handler references, so the
+  forward pass, MatVec, GPU residency, batching, KV and quantization paths are unchanged and there is
+  nothing for a regression gate to detect. This is not a measurement boundary.
+
 **Session 91** — A model's declared pre-tokenizer split is read and applied, and a file declaring one Juno has not implemented is refused
 
 - **Text is now cut the way the vocabulary was trained to cut it.** A GPT-2 BPE vocabulary is built

@@ -110,6 +110,20 @@ public final class OpenAiAdapter {
 		return ids.stream().mapToInt(Integer::intValue).toArray();
 	}
 
+	/** Union of two stop-token-id sets, order-preserving and duplicate-free. */
+	public static int[] mergeStopTokenIds(int[] existing, int[] extra) {
+		if (extra == null || extra.length == 0)
+			return existing == null ? new int[0] : existing;
+		Set<Integer> ids = new LinkedHashSet<>();
+		if (existing != null) {
+			for (int id : existing)
+				ids.add(id);
+		}
+		for (int id : extra)
+			ids.add(id);
+		return ids.stream().mapToInt(Integer::intValue).toArray();
+	}
+
 	public static String toOpenAiFinishReason(GenerationResult.StopReason reason) {
 		return switch (reason) {
 		case EOS_TOKEN, STOP_TOKEN -> "stop";

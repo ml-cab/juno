@@ -1105,6 +1105,133 @@ metadata key, which is how the enumeration above was taken.
   lives in this pass's scratch directory and its findings are the table above; Tier 04B is what
   turns that into a maintained fixture.
 
+### 2026-09-26 — implementation step 1: the round-trip cost re-measured before any residency code
+
+Implementation step 1 asks for the correctness/perf harness *first*, "so the 'regresses decode'
+claim can be re-measured objectively before any residency code exists". That claim is the premise of
+this whole tier and it was being carried as two remembered numbers in prose — `CudaRmsNorm`'s class
+javadoc saying roughly 11x on a live decode A/B, and `docs/performance.md`'s Phase B checkpoint
+saying 1.56x to 2.18x slower at prefill batch scale. Neither was reproducible on demand. Both now
+are.
+
+**What shipped.** `RmsNormRoundTripMicrobench` (`node`, package-private neighbours so it can call
+both the real scalar path and the real GPU path, not copies of them) runs two lanes at each width:
+
+- `cpu-scalar` — `LlamaTransformerHandler.rmsNormInto`, the path the handler actually uses today.
+- `gpu-round-trip` — `CudaRmsNorm.normalizeBatch`, today's per-call host-to-device upload, kernel
+  launch and device-to-host download.
+
+Ratios are reported as CPU-scalar median over lane median, so a lane at least as fast as the path it
+would replace reads at or above `1.00x`. That is deliberately the same unit this tier's threshold is
+written in (">= 1.0x the CPU scalar path"), so the residency result can be read against the
+threshold without a conversion step. The residency lane plugs in as a third lane at the same two
+widths.
+
+`scripts/performance-tests/rmsnorm-roundtrip-microbench.sh` drives it, captures JFR under the
+tier's own `juno-perf.jfc`, and extracts GC and allocation figures through `JfrMetricsCli`.
+
+**The measurement**, GTX 1080, dim 2048, 3 repetitions, published as
+[`docs/perf-compare/20260926T060301Z-tier01-rmsnorm-roundtrip/`](../perf-compare/20260926T060301Z-tier01-rmsnorm-roundtrip/INDEX.md):
+
+| width | batch | lane | median ms | spread % | vs CPU scalar | scorable |
+|---|---:|---|---:|---:|---:|---|
+| decode | 1 | cpu-scalar | 0.0035 | 0.6 | 1.00x | yes |
+| decode | 1 | gpu-round-trip | 0.0371 | 2.3 | **0.09x** | yes |
+| prefill | 512 | cpu-scalar | 1.3004 | 1.1 | 1.00x | yes |
+| prefill | 512 | gpu-round-trip | 2.0859 | 1.5 | **0.62x** | yes |
+
+**Both prose claims hold, and the second is now bounded rather than a range.** Decode is 10.6x
+slower than scalar CPU, against the javadoc's "roughly 11x". Prefill is 1.60x slower, at the fast
+end of Phase B's 1.56x-to-2.18x band — the band was three readings under different staging, this is
+one number under one stated configuration.
+
+**The finding that matters for what comes next: the gap narrows with width but does not close.** At
+batch 1 a fixed per-call cost dominates and the GPU lane loses by an order of magnitude. At batch 512
+that same fixed cost is amortised across 512 rows and the loss falls to 1.60x, while about 4 MB is
+staged each way. So the two widths are failing for different reasons — launch overhead at decode,
+staging bandwidth at prefill — and residency has a different job at each. This is precisely why the
+threshold demands both widths separately and why a pass at one does not license the other. Neither
+is at parity today, so both remain open for residency to close; there is no width at which the
+current path is already good enough to leave alone.
+
+**Correctness is checked on every run, not assumed.** The harness compares the GPU lane's output
+against the scalar lane's and refuses to report timings if they diverge beyond `1e-4`: observed
+`5.96e-07` at decode and `1.91e-06` at prefill. A harness that silently times a different
+computation is worse than no harness.
+
+**Noise.** One `jdk.GCPhasePause` of 2.71 ms across the whole run, so nothing needed re-running on
+collection grounds. Row-level repetition dispersion is the binding rule (README's replacement for
+the pause rule) and every row is inside it. Reaching that took a correction: at the harness's first
+default of 500 ms warm-up per lane the decode GPU row's repetitions spanned **37.9%** of their
+median and the row was correctly reported **unscorable**, so it was re-run rather than scored. The
+defaults are now 3000 ms warm-up and an 800 ms measurement window, at which the same row spans 2.3%.
+The dispersion rule caught a bad reading on its first real use.
+
+**VRAM.** 65536 bytes not returned at process end — `CudaRmsNorm`'s per-thread device scratch,
+allocated on first use and grown in place rather than freed per call, not a per-call leak. The
+tier's device-memory exit criterion is about the residency primitive's own allocations and is not
+claimed by this pass.
+
+**One thing the harness learned the hard way, and now reports.** `memGetInfo` is device-wide, not
+per-process. A stray surefire fork from an interrupted test run held 7.2 GB of the GPU alongside an
+early run of this harness, and the retention line dutifully reported **4.1 GB "not returned"** —
+memory belonging to another process — while the CPU lane also ran 17% slower on the contended host.
+Nothing in the reading said so. The harness now carries device total alongside free bytes and states
+plainly when retention exceeds what its own scratch could possibly be, so a contaminated reading
+announces itself instead of being published as a leak. This matters beyond this harness: every later
+tier that asserts "device memory returns to its pre-request level" is asserting it against the same
+device-wide counter, and that assertion is only meaningful on an idle device.
+
+**Tests.** `RmsNormRoundTripMicrobenchTest`, 19 cases, in the `node` module, GPU-free by design: the
+scoring and reporting logic decides what this tier concludes, so it is covered without hardware,
+while the measurement needs a device. Written first — it failed to compile against the tree as it
+stood, which is the intended failure for a harness that does not exist yet. The cases pin median for
+odd and even repetition counts, the 15%-of-median dispersion boundary in both directions, ratio
+orientation (a slower lane must score below `1.00x`, not above it), rejection of a cell with no CPU
+lane to score against, defensive copying of repetition arrays, and that both widths and the
+unscorable marker survive into the rendered table.
+
+**Full suite.** `mvn -o test` across all eleven test-bearing modules: **1697 tests, 0 failures,
+0 errors, 46 skipped** in 23:41 min, and `mvn -o clean verify -pl juno-master` is **20 tests,
+0 failures, 0 errors** (`InProcessClusterIT` 6, `ThreeNodeClusterIT` 8, `TensorParallelClusterIT` 5,
+`UnsupportedArchitectureClusterIT` 1). That is the previous pass's 1674 plus this pass's 23 new cases,
+with the skip count unchanged, so no new model-gated case started skipping. The tier's full-suite
+exit criterion still covers the residency work and stays unticked.
+
+**No perf gate applies to this pass, and that is a statement, not an omission.** The harness adds a
+standalone class no handler references; the forward pass, MatVec, KV and batching paths are
+unchanged, so `compare-lora.sh` and `compare-llama-cpp.sh` have nothing to detect. Both become
+required when the residency path itself lands. No `compare-llama-cpp.sh` ratio is published here and
+the 2026-09-25 reference sweeps are untouched.
+
+**Still open in this tier** (implementation steps 2 to 5): the residency primitive itself, the
+`RopeKernel` built on it from day one, wiring both through `LlamaTransformerHandler`'s decode path
+behind an opt-in flag, and the two-op chain measurement the `<= 0.7x` chaining threshold is written
+against. The chaining threshold cannot be read yet at all: it compares a resident two-op chain
+against the same two ops run through today's host-round-trip path, and the second op does not exist
+on the GPU today. Building `RopeKernel` is what makes that comparison possible, so the op-at-a-time
+two-op baseline is taken in the same pass that builds it, not retrofitted afterwards.
+
+**Four internal tier numbers removed from shipped docs, per execution rule 8.** The rule makes a
+doc/claim audit repo-wide rather than scoped to whichever files a prior pass happened to look at.
+Tier 00's equivalent grep was scoped to `src/main` and returned no hits, so the shipped docs were
+never covered. A case-insensitive scan found `Infra Tier 11` in `docs/agent-arch.txt` and
+`Tier 17`, `Tier 16` and `Tier 10` in `docs/performance.md` — all in files this pass was already
+editing. Each now names the mechanism instead of the number (for example "GPU (batched-prefill
+GEMM)" rather than "GPU (Tier 17 — batched-prefill GEMM)"). `docs/agent-arch.txt`, `docs/howto.md`,
+`docs/performance.md` and `README.md` are now clean under that scan. **`CHANGELOG.md` still carries
+15**, all inside historical release entries; rewriting shipped release history is a different
+decision from correcting a current description, so it is left to Tier 14's audit rather than taken
+unilaterally here. Worth noting that the first grep used for this check missed every one of them by
+being case-sensitive on `Infra tier` and requiring a parenthesis — a check is only as good as its
+pattern.
+
+**Doc-maintenance gap noted, not fixed here.** `docs/perf-compare/README.md`'s run index stops at
+`20260918T204959Z-lora`: the seven directories this tier's own precondition passes published on
+2026-09-24 and 2026-09-25, including both reference re-baseline sweeps, were never added to it. This
+pass added its own row and left the backlog alone rather than widening its scope. Tier 14's doc audit
+owns closing it.
+
 ### Out-of-tier changes (recorded per execution rule 9)
 
 Two commits touching hot-path or launcher behaviour landed while this tier was in progress and
@@ -1195,6 +1322,9 @@ Two consequences for later tiers, neither of which changes this tier's scope:
       and the digit-grouping case — before the fix.*
 - [ ] Residency primitive implemented, unit-tested, and documented (what it is, where the
       materialization boundary is, which ops participate).
+      *Not started. Note for whoever picks this up: `DeviceActivationBatch` already exists in
+      `node` and is **not** this — it is the LoRA-training host-packing helper behind `GpuBlasOps`,
+      host `float[]` in and host `float[]` out. The residency primitive needs a different name.*
 - [ ] RMSNorm + RoPE measured *faster* than CPU scalar (or at minimum, no longer the ~7x-slower
       finding from Phase B) with residency, on real GTX 1080 hardware, **at both decode width (batch 1)
       and prefill width (batch 512), reported separately**, published in `docs/perf-compare/`. **Contingency, decided before Tiers 02/06/07 start**: this project has
@@ -1212,7 +1342,15 @@ Two consequences for later tiers, neither of which changes this tier's scope:
       for any sub-item that isn't itself residency-dependent, with their own residency-specific
       sub-items marked `NEEDS-TIER-01-REVISIT` rather than blocked indefinitely. Escalate to the user
       at that point rather than silently re-scoping — this changes three other tiers' scope, not just
-      this one's. **Tier 01B is in that set, and is its most affected member.** An earlier draft
+      this one's.
+      *The **before** side of this comparison now exists and is published:
+      `docs/perf-compare/20260926T060301Z-tier01-rmsnorm-roundtrip/`, taken by
+      `RmsNormRoundTripMicrobench` at both widths on the GTX 1080 — decode 0.09x (10.6x slower than
+      scalar CPU), prefill 0.62x (1.60x slower), every row scorable. Both figures confirm the prose
+      claims this tier was built on. The box stays unticked because it asks for the residency result,
+      which needs implementation steps 2 to 5. The `<= 0.7x` chaining threshold in this tier's
+      Threshold block cannot be read until `RopeKernel` exists, since there is no second GPU op to
+      chain today; its op-at-a-time baseline is taken in the same pass that builds it.* **Tier 01B is in that set, and is its most affected member.** An earlier draft
       excused it on the grounds that prefill is dominated by large-batch GEMM and host-device staging
       rather than per-op dispatch overhead — but host-device staging is precisely what residency
       removes, and Tier 01B's largest scope item is built on this primitive. If this tier downgrades,
@@ -1234,7 +1372,10 @@ Two consequences for later tiers, neither of which changes this tier's scope:
       declared value does and that an unimplemented one is refused; `docs/performance.md` needed
       nothing, since no published figure moved. `README.md` needed nothing either — it names the
       `tokenizer` module in one table row and links model support to the external documentation site,
-      neither of which this changes.*
+      neither of which this changes. The step-1 pass added `RmsNormRoundTripMicrobench` to
+      `docs/agent-arch.txt`'s `node` entry and the harness's invocation to `docs/howto.md`, and
+      recorded the re-measured round-trip cost in `docs/performance.md` next to the Phase B
+      checkpoint whose claim it reproduces.*
 - [ ] `CudaGraphSession`/`CudaRmsNorm` are no longer "dormant scaffolding" — either wired live
       (preferred, if the measurement confirms the fix), or the tier is explicitly marked
       **partial-complete** per the contingency above (not silently marked complete with the
@@ -1247,6 +1388,9 @@ Two consequences for later tiers, neither of which changes this tier's scope:
       unchanged, so no new model-gated case skipped. No rerun flag was needed — the flaky attention
       assertion is fixed. Unticked because the box covers the tier, whose residency work has not
       shipped and will need both commands re-run.*
+      *Re-run after the step-1 pass: `mvn -o test` is **1697 tests, 0 failures, 0 errors, 46
+      skipped** (the same 1674 plus 23 new `node` cases, skip count unchanged) and
+      `mvn -o clean verify -pl juno-master` is **20 tests, 0 failures, 0 errors**.*
 - [ ] `CHANGELOG.md` entry added.
       *Entries covering the passes so far are in (Sessions 88, 90 and 91). Unticked because the box
       covers the tier, whose residency work has not shipped.*

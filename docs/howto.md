@@ -526,6 +526,8 @@ curl http://localhost:8080/v1/models
 | `x_juno_top_k` | integer | `50` | Top-K sampling cutoff (0 = disabled) |
 | `x_juno_grammar` | string | — | Raw GBNF. Cannot be combined with `response_format` `json_object` / `json_schema` or with `tools`. |
 
+**Turn boundaries.** Generation always ends at the first chat turn marker, whether or not `stop` is set, and the marker itself is never returned. A marker is recognised both as decoded text and by token id, because a role header is usually a control token that decodes to nothing — matching the text alone would miss it and the reply would run to `max_tokens`. Two kinds count: the turn-end markers (`</s>`, `<|endoftext|>`, `<|end|>`, `<|eot_id|>`, `<end_of_turn>`, `<|im_end|>`) a model may emit as plain text instead of the end-of-sequence token id, and the turn-opening role headers (`<|user|>`, `<|assistant|>`, `<|system|>`, `<|im_start|>`, `<|start_header_id|>`, `<start_of_turn>`) a model emits when it runs past its own turn and starts writing the next speaker's. Small chat models do the latter routinely — answer, then invent the user's follow-up and answer that too; the reply ends at the header instead, and only the real answer is streamed, returned and appended to the conversation history. `finish_reason` is `stop`. Mistral's `[INST]` is not treated as a boundary: square brackets are too common in ordinary text, and that template closes the turn with `</s>`. There is no opt-out, so an answer that would legitimately contain one of these strings verbatim is truncated at it.
+
 **Constrained decoding.** Grammar is applied **before** temperature / top-k / top-p. When no grammar is set, sampling is unchanged. Sample files: [`docs/grammars/yes-no.gbnf`](grammars/yes-no.gbnf), [`docs/grammars/json-object.gbnf`](grammars/json-object.gbnf).
 
 ```
@@ -1054,6 +1056,29 @@ AWS cluster JFR:
 ./launcher.sh juno-deploy.sh setup --jfr 2m ...
 # Ctrl+C -> recordings collected from all nodes -> metrics printed -> instances stopped
 ```
+
+### RMS-norm round-trip microbench
+
+Times the scalar CPU RMS norm against the GPU RMS norm's per-call upload, kernel launch and
+download, so the cost of moving one small operation to the GPU without a device-resident
+activation path is a reading rather than an assumption. Requires a CUDA device; it exits with a
+message rather than reporting a ratio without one.
+
+```bash
+./scripts/performance-tests/rmsnorm-roundtrip-microbench.sh
+# -> target/rmsnorm-roundtrip/rmsnorm-roundtrip-<stamp>.md  (report)
+#    target/rmsnorm-roundtrip/rmsnorm-roundtrip-<stamp>-jfr.json  (GC and allocation figures)
+```
+
+Override any of `DIM`, `BATCHES`, `REPS`, `WARMUP_MS`, `TARGET_MS` and `OUT_DIR` in the
+environment. Decode width (batch 1) and prefill width (batch 512) are reported separately because
+they fail for different reasons — a fixed per-call cost at decode, staged bytes at prefill — so a
+result at one width does not carry to the other. Each lane's ratio is taken against the scalar CPU
+median, so at or above `1.00x` the GPU lane is at least as fast as the path it would replace. A row
+whose repetitions disagree by more than 15% of their median is marked unscorable and should be
+re-run, not read; if that happens, raise `WARMUP_MS` first. Output is checked against the scalar
+path on every run, so a divergent kernel stops the run instead of producing timings for a different
+computation.
 ---
 
 ### Build and Test

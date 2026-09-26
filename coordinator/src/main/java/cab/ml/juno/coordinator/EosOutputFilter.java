@@ -16,14 +16,26 @@
 
 package cab.ml.juno.coordinator;
 
+import cab.ml.juno.tokenizer.ChatTurnMarkers;
+
 /**
- * Suppresses chat turn-end markers from streamed generation output.
+ * Ends generation at the first chat turn boundary in the decoded output and
+ * suppresses the marker itself.
  *
  * <p>
- * After {@code /train-qa}, models often emit the same end-of-turn string used in
- * the training completion ({@code </s>}, {@code <|end|>}, {@code <|im_end|>},
- * …). Those strings must stop generation and must not appear in
- * {@link GenerationResult#text()} or reach {@link TokenConsumer}.
+ * Two things end an assistant turn, and {@link ChatTurnMarkers} lists both. A
+ * turn-end marker ({@code </s>}, {@code <|end|>}, {@code <|im_end|>}, …) is the
+ * model saying it is finished — after {@code /train-qa} models often emit the
+ * one used in the training completion instead of the real EOS token id. A
+ * turn-opening role header ({@code <|user|>}, {@code <|im_start|>}, …) is the
+ * model having run past its own turn into the next speaker's, which small chat
+ * models do readily; the answer ended where the header began.
+ *
+ * <p>
+ * Either way the marker must stop generation and must not appear in
+ * {@link GenerationResult#text()} or reach {@link TokenConsumer} — otherwise the
+ * fabricated continuation is streamed to the caller and stored as the
+ * assistant's own words in the conversation history.
  *
  * <p>
  * GgufTokenizer may surface a marker as one vocab piece, as a non-EOS token id
@@ -38,24 +50,6 @@ package cab.ml.juno.coordinator;
  */
 final class EosOutputFilter {
 
-	/**
-	 * Markers for every chat template used by LoRA / inference:
-	 * {@code </s>} (LLaMA/Mistral/TinyLlama), {@code <|endoftext|>},
-	 * {@code <|end|>} (Phi-3), {@code <|eot_id|>} (LLaMA 3),
-	 * {@code <end_of_turn>} (Gemma), {@code <|im_end|>} (ChatML/Qwen).
-	 */
-	static final String[] MARKERS = { "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>",
-			"<|im_end|>" };
-
-	private static final int MAX_MARKER_LEN;
-
-	static {
-		int max = 0;
-		for (String m : MARKERS)
-			max = Math.max(max, m.length());
-		MAX_MARKER_LEN = max;
-	}
-
 	record Outcome(boolean stop, String emit) {
 	}
 
@@ -64,7 +58,7 @@ final class EosOutputFilter {
 
 	/**
 	 * Accept one decoded piece. {@link Outcome#emit()} is safe to stream;
-	 * {@link Outcome#stop()} means a turn-end marker was found and stripped.
+	 * {@link Outcome#stop()} means a turn marker was found and stripped.
 	 */
 	Outcome accept(String piece) {
 		if (piece == null || piece.isEmpty())
@@ -88,7 +82,7 @@ final class EosOutputFilter {
 		return new Outcome(false, emit);
 	}
 
-	/** Accumulated text with any turn-end marker removed. */
+	/** Accumulated text with any turn marker removed. */
 	String text() {
 		return text.toString();
 	}
@@ -102,7 +96,13 @@ final class EosOutputFilter {
 	}
 
 	private Outcome drain(boolean allowHoldback) {
-		int markerAt = indexOfMarker(text);
+		// Everything below emittedLen was scanned by an earlier drain and holds no
+		// marker, and no emitted text ever ends in a marker prefix (that is what the
+		// hold-back guarantees). So a marker that is complete now must start within
+		// one marker-length of emittedLen — rescanning the whole buffer every token
+		// would make the decode loop quadratic in the length of the answer.
+		int scanFrom = Math.max(0, emittedLen - (ChatTurnMarkers.MAX_LENGTH - 1));
+		int markerAt = indexOfMarker(text, scanFrom);
 		if (markerAt >= 0) {
 			text.setLength(markerAt);
 			String emit = text.substring(emittedLen);
@@ -116,9 +116,13 @@ final class EosOutputFilter {
 	}
 
 	static int indexOfMarker(CharSequence text) {
+		return indexOfMarker(text, 0);
+	}
+
+	static int indexOfMarker(CharSequence text, int from) {
 		int best = -1;
-		for (String marker : MARKERS) {
-			int idx = indexOf(text, marker);
+		for (String marker : ChatTurnMarkers.ALL) {
+			int idx = indexOf(text, marker, from);
 			if (idx >= 0 && (best < 0 || idx < best))
 				best = idx;
 		}
@@ -127,13 +131,14 @@ final class EosOutputFilter {
 
 	/**
 	 * Length of the prefix that cannot be the start of an unfinished marker.
-	 * Holds back the longest trailing proper prefix of any {@link #MARKERS} entry.
+	 * Holds back the longest trailing proper prefix of any {@link ChatTurnMarkers}
+	 * entry.
 	 */
 	static int safeEmitLength(CharSequence text) {
 		int len = text.length();
 		if (len == 0)
 			return 0;
-		int from = Math.max(0, len - (MAX_MARKER_LEN - 1));
+		int from = Math.max(0, len - (ChatTurnMarkers.MAX_LENGTH - 1));
 		for (int start = from; start < len; start++) {
 			if (isProperPrefixOfMarker(text, start, len))
 				return start;
@@ -145,7 +150,7 @@ final class EosOutputFilter {
 		int suffixLen = end - start;
 		if (suffixLen <= 0)
 			return false;
-		for (String marker : MARKERS) {
+		for (String marker : ChatTurnMarkers.ALL) {
 			if (suffixLen >= marker.length())
 				continue;
 			if (regionEquals(text, start, end, marker, suffixLen))
@@ -154,10 +159,10 @@ final class EosOutputFilter {
 		return false;
 	}
 
-	private static int indexOf(CharSequence haystack, String needle) {
+	private static int indexOf(CharSequence haystack, String needle, int from) {
 		int n = needle.length();
 		int limit = haystack.length() - n;
-		outer: for (int i = 0; i <= limit; i++) {
+		outer: for (int i = Math.max(0, from); i <= limit; i++) {
 			for (int j = 0; j < n; j++) {
 				if (haystack.charAt(i + j) != needle.charAt(j))
 					continue outer;

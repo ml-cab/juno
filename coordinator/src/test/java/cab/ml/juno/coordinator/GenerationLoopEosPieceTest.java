@@ -49,8 +49,19 @@ class GenerationLoopEosPieceTest {
 			this.delegate = delegate;
 		}
 
+		private int[] turnIds = new int[0];
+
 		void override(int id, String piece) {
 			overrides.put(id, piece);
+		}
+
+		void turnTokenIds(int... ids) {
+			turnIds = ids;
+		}
+
+		@Override
+		public int[] chatTurnTokenIds() {
+			return turnIds;
 		}
 
 		@Override
@@ -304,6 +315,52 @@ class GenerationLoopEosPieceTest {
 		assertThat(String.join("", streamed)).doesNotContain("</s>");
 		assertThat(streamed).doesNotContain("extra");
 		assertThat(result.text()).doesNotContain("</s>");
+		assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
+	}
+
+	// ── Turn markers that decode to nothing ──────────────────────────────────
+
+	/**
+	 * REGRESSION: a role header such as Phi-3's {@code <|user|>} is a control
+	 * token, and a control token decodes to the empty string — it is prompt
+	 * scaffolding, not content. A model that emits one has started writing the
+	 * next speaker's turn, but nothing appears in the decoded text, so before the
+	 * id-level check generation ran on to the token limit.
+	 */
+	@Test
+	@DisplayName("Role header that decodes to nothing still ends the turn")
+	void invisible_role_header_token_stops_generation() {
+		int roleHeader = 104;
+		assertThat(roleHeader).isNotEqualTo(stubTokenizer.eosTokenId());
+
+		DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
+		tok.override(roleHeader, "");
+		tok.turnTokenIds(roleHeader);
+
+		StubInferencePipeline pipeline = new StubInferencePipeline(StubInferencePipeline.DEFAULT_TOKEN, roleHeader,
+				StubInferencePipeline.DEFAULT_TOKEN);
+
+		List<String> streamed = new ArrayList<>();
+		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, id, step) -> streamed.add(piece));
+
+		assertThat(streamed).isEmpty();
+		assertThat(result.generatedTokens()).isZero();
+		assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.STOP_TOKEN);
+	}
+
+	@Test
+	@DisplayName("A tokenizer reporting no turn ids keeps generating as before")
+	void no_turn_ids_does_not_stop_early() {
+		DelegatingTokenizer tok = new DelegatingTokenizer(stubTokenizer);
+		tok.override(105, "ok");
+
+		StubInferencePipeline pipeline = new StubInferencePipeline(StubInferencePipeline.DEFAULT_TOKEN, 105,
+				stubTokenizer.eosTokenId());
+
+		List<String> streamed = new ArrayList<>();
+		GenerationResult result = loopWith(tok, pipeline).generate(req("hi"), (piece, id, step) -> streamed.add(piece));
+
+		assertThat(streamed).containsExactly("ok");
 		assertThat(result.stopReason()).isEqualTo(GenerationResult.StopReason.EOS_TOKEN);
 	}
 }

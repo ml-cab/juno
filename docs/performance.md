@@ -436,7 +436,7 @@ Workload: raw 256-token user prompt (`compare-prefill-batch.sh`), `max_tokens=8`
 
 **Parity:** `LlamaTransformerHandlerPrefillChunkParityTest` — chunked `forwardBatch` prefill matches whole-window logits within `1e-4`. `GenerationLoopTest.prefill_chunk_sizes_produce_same_tokens_as_whole_window` — chunk sizes 1 / 32 / whole window produce identical greedy decode.
 
-**GPU (Tier 17 — batched-prefill GEMM):** prefill windows above `HALF_SGEMM_BATCH_MAX` (8) now
+**GPU (batched-prefill GEMM):** prefill windows above `HALF_SGEMM_BATCH_MAX` (8) now
 route through a real tiled GEMM (`cublasGemmEx`, FP16-resident weights directly; Q4_K/Q5_K/Q6_K
 weights dequantized once to an FP16 scratch buffer then the same GEMM) instead of one serial
 `sgemv` call per prefill token. Before this fix, GPU prefill and decode throughput sat within
@@ -531,7 +531,7 @@ Two independent fixes to the `static`-schedule prefill path, found by profiling 
    is queried via `GpuContext.freeVramBytes()` (`cudaMemGetInfo`/`hipMemGetInfo`), and the chunk size
    is `floor(freeBytes * 0.5 / 65536)` tokens, floored at the old fixed default (32, so this can only
    grow the chunk relative to today's behavior, never shrink it) and capped at 65536. `continuous`
-   schedule is unchanged (Tier 16 owns that chunking for decode-interleaving fairness). CPU-only runs
+   schedule is unchanged: its own chunking exists for decode-interleaving fairness. CPU-only runs
    keep the fixed 32-token default. `--prefill-batch N` still works as an explicit override on every
    surface.
 
@@ -554,6 +554,22 @@ GPU-resident-attention/elementwise-ops investigation under the new pinned-memory
 1.30-1.32x). Pinned memory does not close the gap; the per-launch cost of one ad-hoc GPU round trip
 with no activation-residency chain remains the bottleneck regardless of memcpy speed. Does not proceed
 to building dedicated `RopeKernel`/`SwiGluKernel` classes on this evidence.
+
+**Re-measured 2026-09-26** ([`perf-compare/20260926T060301Z-tier01-rmsnorm-roundtrip/`](perf-compare/20260926T060301Z-tier01-rmsnorm-roundtrip/INDEX.md)).
+`scripts/performance-tests/rmsnorm-roundtrip-microbench.sh` turns the checkpoint above into a
+repeatable reading instead of a remembered one, timing the scalar CPU norm against the GPU norm's
+per-call upload/launch/download at two widths on the GTX 1080 (dim 2048, 3 reps, median):
+
+| width | scalar CPU | GPU round trip | GPU vs scalar CPU |
+|---|---:|---:|---:|
+| decode (batch 1) | 0.0035 ms | 0.0371 ms | **0.09x** (10.6x slower) |
+| prefill (batch 512) | 1.3004 ms | 2.0859 ms | **0.62x** (1.60x slower) |
+
+The gap narrows with width but does not close: at batch 1 a fixed per-call cost dominates, and at
+batch 512 that cost is amortised across 512 rows while about 4 MB is staged each way. The two widths
+therefore fail for different reasons — launch overhead against staging bandwidth — so a result at one
+says nothing about the other, and both are reported separately. Output is checked against the scalar
+path on every run (largest divergence 1.9e-06) so the harness cannot time a different computation.
 
 **Note:** this session's `nsys` install fails on every invocation (`option is ambiguous`, reproduced
 even on a bare `nsys profile -- echo hi` with no Juno-specific arguments), so the specific
@@ -675,7 +691,7 @@ Caveats to know before turning these on in production:
 - None of these three flags are wired for LoRA train or `--lora-play` (`--mmq`/`--gpu-attention`
   explicitly no-op and warn there); see their own sections for the full interaction matrix.
 
-## Multi-adapter LoRA playback + GGUF import (Tier 10)
+## Multi-adapter LoRA playback + GGUF import
 
 `--lora-play` now accepts `path[:scale][,path[:scale]...]` — a bare path still defaults to scale
 `1.0` (unchanged from before this tier). Multiple adapters combine as

@@ -614,8 +614,21 @@ public final class GenerationLoop {
 		return result;
 	}
 
+	/**
+	 * Adds the ids a request never states but generation must always stop on: the
+	 * single-token encodings of its own stop strings, and the vocabulary's chat
+	 * turn markers.
+	 *
+	 * <p>
+	 * The turn markers are needed by id, not only as decoded text, because a role
+	 * header is usually a control token that decodes to nothing — see
+	 * {@link Tokenizer#chatTurnTokenIds()}. Every generation path routes through
+	 * here (single request, static batch, and the continuous engine), so all three
+	 * stop on the same set.
+	 */
 	SamplingParams resolveSamplingParams(SamplingParams params) {
 		int[] merged = OpenAiAdapter.stopTokenIdsFromStrings(tokenizer, params.stopStrings(), params.stopTokenIds());
+		merged = OpenAiAdapter.mergeStopTokenIds(merged, tokenizer.chatTurnTokenIds());
 		return params.withStopTokenIds(merged);
 	}
 

@@ -18,6 +18,7 @@ package cab.ml.juno.tokenizer;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -109,6 +110,9 @@ public final class GgufTokenizer implements Tokenizer {
 	 * chat control tokens, or Qwen3 {@code <think>} markers.
 	 */
 	private final List<String> sortedSpecialPieces;
+
+	/** Vocabulary ids whose piece is a chat turn marker, computed once at load. */
+	private final int[] chatTurnTokenIds;
 
 	// ── Factory ───────────────────────────────────────────────────────────────
 
@@ -234,6 +238,12 @@ public final class GgufTokenizer implements Tokenizer {
 		}
 		specials.sort(Comparator.comparingInt(String::length).reversed());
 		this.sortedSpecialPieces = List.copyOf(specials);
+
+		GrowableTurnIds turnIds = new GrowableTurnIds(vocab.length);
+		for (int i = 0; i < vocab.length; i++)
+			if (ChatTurnMarkers.isTurnMarker(vocab[i]))
+				turnIds.add(i);
+		this.chatTurnTokenIds = turnIds.toArray();
 	}
 
 	// ── Tokenizer interface ───────────────────────────────────────────────────
@@ -486,10 +496,7 @@ public final class GgufTokenizer implements Tokenizer {
 	}
 
 	private static boolean isEogVocabPiece(String piece) {
-		return switch (piece) {
-		case "</s>", "<|endoftext|>", "<|end|>", "<|eot_id|>", "<end_of_turn>", "<|im_end|>" -> true;
-		default -> false;
-		};
+		return ChatTurnMarkers.isTurnEnd(piece);
 	}
 
 	private List<String> splitOnSpecialTokens(String text) {
@@ -617,6 +624,22 @@ public final class GgufTokenizer implements Tokenizer {
 		return raw;
 	}
 
+	/**
+	 * Vocabulary ids whose piece is a chat turn marker — see
+	 * {@link ChatTurnMarkers}. A model emitting one has ended its turn, whether by
+	 * closing it or by opening the next speaker's, and generation must stop there.
+	 *
+	 * <p>
+	 * Checking by id is what catches the role headers that are control tokens:
+	 * {@code decodeToken} renders those as the empty string (they are prompt
+	 * scaffolding, not content), so a filter watching the decoded text never sees
+	 * them and generation would run to the token limit.
+	 */
+	@Override
+	public int[] chatTurnTokenIds() {
+		return chatTurnTokenIds.clone();
+	}
+
 	@Override
 	public int bosTokenId() {
 		return bosId;
@@ -650,5 +673,25 @@ public final class GgufTokenizer implements Tokenizer {
 	// ── Inner types ───────────────────────────────────────────────────────────
 
 	private record Sym(String piece, int id, float score) {
+	}
+
+	/** Collects the turn-marker ids found while scanning the vocabulary once. */
+	private static final class GrowableTurnIds {
+		private int[] ids;
+		private int size;
+
+		GrowableTurnIds(int vocabSize) {
+			ids = new int[Math.min(16, Math.max(1, vocabSize))];
+		}
+
+		void add(int id) {
+			if (size == ids.length)
+				ids = Arrays.copyOf(ids, size * 2);
+			ids[size++] = id;
+		}
+
+		int[] toArray() {
+			return Arrays.copyOf(ids, size);
+		}
 	}
 }

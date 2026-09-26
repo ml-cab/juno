@@ -8,7 +8,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Hold-back / strip behaviour for chat turn-end markers across supported
+ * Hold-back / strip behaviour for chat turn markers — both the turn-end markers
+ * and the turn-opening role headers — across supported
  * LoRA templates (TinyLlama/Zephyr, Mistral, Phi-3, LLaMA-3, Gemma, ChatML/Qwen).
  */
 @DisplayName("EosOutputFilter")
@@ -118,5 +119,54 @@ class EosOutputFilterTest {
 		EosOutputFilter.Outcome o = filter.finish("");
 		assertThat(o.emit()).isEmpty();
 		assertThat(filter.text()).isEqualTo("hi");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "<|user|>", "<|assistant|>", "<|system|>", "<|im_start|>", "<|start_header_id|>",
+			"<start_of_turn>" })
+	@DisplayName("role header after the answer: answer emitted, header and everything after it dropped")
+	void role_header_ends_the_turn(String header) {
+		EosOutputFilter filter = new EosOutputFilter();
+		EosOutputFilter.Outcome o = filter.accept("Paris." + header);
+		assertThat(o.stop()).isTrue();
+		assertThat(o.emit()).isEqualTo("Paris.");
+		assertThat(filter.text()).isEqualTo("Paris.");
+	}
+
+	@Test
+	@DisplayName("TinyLlama role-play leak: the invented user turn is never streamed")
+	void tinyllama_role_play_leak_is_truncated() {
+		EosOutputFilter filter = new EosOutputFilter();
+		assertThat(filter.accept("Hey! How are you doing today?").emit()).isEqualTo("Hey! How are you doing today?");
+		EosOutputFilter.Outcome o = filter.accept("\n<|user|>\nI'm good, thanks.");
+		assertThat(o.stop()).isTrue();
+		assertThat(o.emit()).isEqualTo("\n");
+		assertThat(filter.text()).isEqualTo("Hey! How are you doing today?\n");
+	}
+
+	@Test
+	@DisplayName("multi-token <|user|> never reaches emit")
+	void multi_token_user_header_never_emitted() {
+		EosOutputFilter filter = new EosOutputFilter();
+		assertThat(filter.accept("done").emit()).isEqualTo("done");
+		assertThat(filter.accept("<|").emit()).isEmpty();
+		assertThat(filter.accept("user").emit()).isEmpty();
+		EosOutputFilter.Outcome done = filter.accept("|>");
+		assertThat(done.stop()).isTrue();
+		assertThat(done.emit()).isEmpty();
+		assertThat(filter.text()).isEqualTo("done");
+	}
+
+	@Test
+	@DisplayName("marker split across pieces is still caught far into a long answer")
+	void marker_found_after_long_answer() {
+		EosOutputFilter filter = new EosOutputFilter();
+		for (int i = 0; i < 200; i++)
+			filter.accept("word ");
+		assertThat(filter.accept("<|start_header").emit()).isEmpty();
+		EosOutputFilter.Outcome o = filter.accept("_id|>user");
+		assertThat(o.stop()).isTrue();
+		assertThat(o.emit()).isEmpty();
+		assertThat(filter.text()).hasSize(1000);
 	}
 }

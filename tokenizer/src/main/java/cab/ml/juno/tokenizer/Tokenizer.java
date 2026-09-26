@@ -67,6 +67,25 @@ public interface Tokenizer {
 		}
 	}
 
+	/**
+	 * Vocabulary ids that end an assistant turn — the model's turn-end markers and
+	 * the turn-opening role headers of its chat template (see
+	 * {@link ChatTurnMarkers}). Generation stops on any of them.
+	 *
+	 * <p>
+	 * These are checked by id because a role header is usually a control token,
+	 * and {@link #decodeToken} renders a control token as the empty string: it is
+	 * prompt scaffolding, not content. A filter watching the decoded text would
+	 * never see it, and generation would run on to the token limit.
+	 *
+	 * <p>
+	 * The default is empty, for tokenizers that do not know their vocabulary's
+	 * special pieces.
+	 */
+	default int[] chatTurnTokenIds() {
+		return new int[0];
+	}
+
 	/** Beginning-of-sequence token ID. */
 	int bosTokenId();
 

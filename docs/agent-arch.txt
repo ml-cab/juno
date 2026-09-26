@@ -287,13 +287,22 @@ GPU FFI (node module — Panama project, JEP 454):
         --parallel multi-decode. tryCreate(...) returns null on non-CUDA backends (falls back
         to GqaMath scalar CPU, never silent).
   RmsNormKernel — PTX loader/launcher (CUDA Driver API) for rms_norm.ptx; one block per batch
-        row, block-wide sum-of-squares reduction then normalize+scale (Tier 19 Phase A).
+        row, block-wide sum-of-squares reduction then normalize+scale.
   CudaRmsNorm — handler-facing normalizeBatch(...); grow-on-demand device scratch, mirrors
         CudaGqaAttention's shape. Built and parity-tested but deliberately NOT constructed by
-        LlamaTransformerHandler — a live A/B found the per-call H2D/kernel/D2H round trip costs
-        ~11x more than the scalar CPU rmsNorm it would replace (no device-resident activation
-        path exists yet to avoid the round trip). Kept as verified, dormant infrastructure; see
-        docs/infra-plan/PLAN-Infra-Tier19.md "Measured finding".
+        LlamaTransformerHandler — the per-call H2D/kernel/D2H round trip costs more than the
+        scalar CPU rmsNorm it would replace, because no device-resident activation path exists
+        yet to avoid it. Measured by RmsNormRoundTripMicrobench on a GTX 1080 at dim 2048:
+        10.6x slower at decode width (batch 1), 1.60x slower at prefill width (batch 512), so
+        the gap narrows with width but does not close. Kept as verified, dormant infrastructure;
+        see docs/infra-plan/PLAN-Infra-Tier19.md "Measured finding" for the original analysis.
+  RmsNormRoundTripMicrobench — standalone main class (no handler references it) timing the scalar
+        CPU norm against CudaRmsNorm's per-call round trip at decode and prefill width. Reports
+        each lane as a ratio of the scalar CPU median, flags a row whose repetitions disagree by
+        more than 15% of their median as unscorable, checks GPU output against the scalar path on
+        every run, and reports device memory either side. Driven by
+        scripts/performance-tests/rmsnorm-roundtrip-microbench.sh, which also captures JFR under
+        juno-perf.jfc and extracts GC/allocation figures via JfrMetricsCli.
   CudaGraphSession — generic CUDA driver graph capture/replay wrapper (cuStreamBeginCapture /
         cuStreamEndCapture / cuGraphInstantiate / cuGraphLaunch); captures a fixed async op
         sequence once, replays it against fresh data in the same fixed buffers. Tested against
@@ -488,6 +497,28 @@ MinTokenFloor / SamplingParams.minTokens — a request states how many tokens it
   minimum cannot hold another open. Only the end-of-sequence token is held back:
   an explicit stop sequence still ends generation below the minimum.
 
+EosOutputFilter — the text half of turn-boundary detection: it stops
+  generation at the first ChatTurnMarkers string in the decoded output and
+  never streams the marker. (The id half is Tokenizer.chatTurnTokenIds, merged
+  into the stop token ids; see the ChatTurnMarkers entry in the tokenizer
+  section. Text and id are both needed: a marker reaches the text path only
+  when the tokenizer renders it, and a control-token role header renders as
+  nothing.) TURN_END covers a model emitting its turn-end string as ordinary
+  vocabulary pieces instead of the EOS token id, which LoRA-tuned models do
+  routinely. ROLE_OPEN covers the opposite failure: a small chat model that
+  answers, then writes the next speaker's header and carries on inventing the
+  dialogue — without it the whole fabrication is streamed to the caller and
+  ChatHistory stores it as the assistant's own words, so every later turn is
+  conditioned on it. Markers may arrive split across several decoded pieces, so
+  the filter holds back any trailing text that is a proper prefix of a marker
+  and releases it in finish() if it never completes. It rescans only the window
+  within one marker length of the last emit boundary, not the whole answer, so
+  the decode loop stays linear in the length of the output. Wired in
+  GenerationLoop.generate and .generateBatch and per slot in
+  ContinuousBatchEngine, so every surface (REPL, OpenAI REST, native REST,
+  vision) gets the same truncation; the stop is reported as
+  StopReason.EOS_TOKEN, which maps to OpenAI finish_reason "stop".
+
 OpenAiTools / ToolPrompt / ToolCallParser — OpenAI tools and tool_choice on
   chat completions. ToolPrompt injects schemas for llama3, chatml, and qwen3
   templates and fails closed on other families. ToolCallParser reads
@@ -554,6 +585,23 @@ BpePreTokenizer (tokenizer module, package-private) — the split a GPT-2 BPE
   unimplemented type is refused at load; in single-node mode that refusal
   reaches the user before the architecture check, in cluster mode after it.
 
+ChatTurnMarkers (tokenizer module) — the single list of strings that mark a
+  chat turn boundary, read by both paths that have to stop on one, so the two
+  cannot drift apart (they had: the text path knew the turn-end markers and the
+  id path knew only the configured eos_token_id). TURN_END is </s>,
+  <|endoftext|>, <|end|>, <|eot_id|>, <end_of_turn>, <|im_end|>; ROLE_OPEN is
+  <|user|>, <|assistant|>, <|system|>, <|im_start|>, <|start_header_id|>,
+  <start_of_turn>. Mistral's [INST] is deliberately absent — square brackets
+  are too common in prose and code to truncate on, and that template closes the
+  turn with </s>. GgufTokenizer.chatTurnTokenIds() scans the vocabulary once at
+  load for pieces that match either group; Tokenizer's default returns empty.
+  GenerationLoop.resolveSamplingParams merges those ids into the request's stop
+  token ids, and all three generation paths (single request, static batch,
+  continuous engine) call it. The id check is what catches a role header that
+  is a control token: decodeToken renders a control token as the empty string
+  (it is prompt scaffolding, not content), so nothing reaches the text filter
+  and generation would otherwise run to the token limit.
+
 HfGgufFetcher (juno-player module) — resolves a Hugging Face Hub
   "org/repo[:quant]" spec (--hf CLI flag, wired in ConsoleMain.main() ahead of
   the --model-path null check, and in scripts/run.sh / run.bat for cluster,
@@ -574,7 +622,7 @@ HfGgufFetcher (juno-player module) — resolves a Hugging Face Hub
   disagree (different resolved file), it fails fast with an error rather than
   silently preferring one.
 
-Embeddings API (Infra Tier 11) — POST /v1/embeddings (coordinator module), off by
+Embeddings API — POST /v1/embeddings (coordinator module), off by
   default. InferencePipeline.embedTokens(requestId, tokens) (node module) is a
   default method that throws UnsupportedOperationException — a fail-closed
   contract satisfied only by LocalInferencePipeline; gRPC / tensor-parallel /
