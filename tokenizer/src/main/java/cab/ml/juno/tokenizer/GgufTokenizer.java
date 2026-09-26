@@ -36,6 +36,8 @@ import cab.ml.juno.node.GgufReader;
  * tokenizer.ggml.scores float[] — BPE merge scores (higher = preferred)
  * tokenizer.ggml.token_type int[] — 1=normal 2=unknown 3=control 6=byte
  * tokenizer.ggml.bos_token_id tokenizer.ggml.eos_token_id
+ * tokenizer.ggml.pre String — the pre-tokenizer split a GPT-2 BPE vocabulary
+ * was trained with; see {@link BpePreTokenizer}
  *
  * Encoding algorithm (SentencePiece BPE): 1. Prepend ▁ to the first word, ▁ to
  * each subsequent word (space normalisation) 2. Initialise: one symbol per
@@ -84,6 +86,18 @@ public final class GgufTokenizer implements Tokenizer {
 	private final Map<String, Float> gpt2MergePairScores;
 
 	/**
+	 * The split declared by {@code tokenizer.ggml.pre}, or {@code null} when the
+	 * file declares none and each segment is merged as a single run.
+	 *
+	 * <p>
+	 * Non-null only for GPT-2 BPE vocabularies: see
+	 * {@link #resolvePreTokenizer(GgufReader, boolean)}. When it is set,
+	 * {@link #encode} merges each pre-token on its own so that no merge crosses a
+	 * boundary the vocabulary was trained to respect.
+	 */
+	private final BpePreTokenizer preTokenizer;
+
+	/**
 	 * Special-token pieces sorted longest-first. Used in {@link #encode} to
 	 * pre-split the input text at special-token boundaries before BPE so that
 	 * control tokens like {@code <|begin_of_text|>}, {@code <|eot_id|>} etc. map
@@ -130,14 +144,41 @@ public final class GgufTokenizer implements Tokenizer {
 		boolean isGpt2Bpe = "gpt2".equals(ggmlModel);
 		boolean addBosToken = metaBool(r, "tokenizer.ggml.add_bos_token", true);
 		Map<String, Float> gpt2MergePairScores = buildGpt2MergePairScores(r, isGpt2Bpe);
+		BpePreTokenizer preTokenizer = resolvePreTokenizer(r, isGpt2Bpe);
 
 		log.info("Tokenizer loaded: vocabSize=" + V + " bos=" + bosId + " eos=" + eosId + " addBos=" + addBosToken
 				+ " model=" + (ggmlModel != null ? ggmlModel : "llama(default)")
 				+ (isGpt2Bpe ? " [GPT-2 BPE" + (gpt2MergePairScores.isEmpty() ? "" : ", merges=" + gpt2MergePairScores.size())
-						+ "]"
+						+ ", pre-split=" + (preTokenizer != null ? preTokenizer.typeName() : "none") + "]"
 				: " [SentencePiece]"));
 		return new GgufTokenizer(vocab, scores, tokenTypes, bosId, eosId, padId, unkId, isGpt2Bpe, addBosToken,
-				gpt2MergePairScores);
+				gpt2MergePairScores, preTokenizer);
+	}
+
+	/**
+	 * The pre-tokenizer split this file declares, or {@code null} when no split
+	 * applies and each segment is merged as one run.
+	 *
+	 * <p>
+	 * The key governs BPE vocabularies only. A SentencePiece vocabulary carries no
+	 * pre-tokenizer split — its word boundaries come from the {@code ▁} prefix —
+	 * so the key is not consulted for one, and a SentencePiece file tokenizes
+	 * exactly as it did before this key was read at all.
+	 *
+	 * @throws IllegalArgumentException naming the type when a BPE file declares a
+	 *                                  pre-tokenizer with no verified
+	 *                                  implementation, rather than tokenizing it
+	 *                                  under a split that was never checked for it
+	 */
+	private static BpePreTokenizer resolvePreTokenizer(GgufReader r, boolean isGpt2Bpe) {
+		if (!isGpt2Bpe)
+			return null;
+		BpePreTokenizer pre = BpePreTokenizer.resolve(r.metaString("tokenizer.ggml.pre"));
+		if (pre == null)
+			log.info("No pre-tokenizer split applies to this byte-level BPE vocabulary "
+					+ "(tokenizer.ggml.pre is absent or 'default'): text is merged one segment at a time, "
+					+ "so token boundaries can differ from the ones it was trained with.");
+		return pre;
 	}
 
 	private static Map<String, Float> buildGpt2MergePairScores(GgufReader r, boolean isGpt2Bpe) {
@@ -164,7 +205,9 @@ public final class GgufTokenizer implements Tokenizer {
 	}
 
 	private GgufTokenizer(String[] vocab, float[] scores, int[] tokenTypes, int bosId, int eosId, int padId,
-			int unkId, boolean isGpt2Bpe, boolean addBosToken, Map<String, Float> gpt2MergePairScores) {
+			int unkId, boolean isGpt2Bpe, boolean addBosToken, Map<String, Float> gpt2MergePairScores,
+			BpePreTokenizer preTokenizer) {
+		this.preTokenizer = preTokenizer;
 		this.vocab = vocab;
 		this.scores = scores;
 		this.tokenTypes = tokenTypes;
@@ -203,58 +246,127 @@ public final class GgufTokenizer implements Tokenizer {
 		TokenizerEvent evt = new TokenizerEvent();
 		evt.begin();
 
-		// Split the raw text into segments: either an exact special-token piece
-		// (which maps to a single vocab ID immediately) or a plain-text run (which
-		// goes through normalisation + BPE).
-		//
-		// This is necessary for GPT-2 BPE models (Llama 3+) where the chat template
-		// injects literal special-token strings such as <|begin_of_text|>,
-		// <|start_header_id|> etc. Without pre-splitting, these 17-char strings get
-		// decomposed character-by-character and the model never sees the correct
-		// control token IDs — causing garbled output.
-		//
-		// SentencePiece models benefit too: it prevents accidental BPE merging of
-		// what should be atomic control tokens.
+		// Both strategies first cut the raw text at special-token boundaries, so a
+		// literal control string such as <|begin_of_text|> maps to its own vocab ID
+		// instead of being decomposed character by character (which produced garbled
+		// output on GPT-2 BPE chat templates before it was handled). They differ in
+		// how far a BPE merge may reach: the whole segment, or one pre-token of the
+		// split the file declares.
+		List<Sym> syms = preTokenizer == null ? mergeWholeRuns(text) : mergePreTokens(text);
+
+		// Prepend BOS when tokenizer.ggml.add_bos_token is true (default) and the
+		// encoded text does not already begin with bosId. Phi-3 sets add_bos_token
+		// false — prepending <s> shifts KV positions and causes garbage output.
+		// GPT-2 BPE chat templates (e.g. Llama 3) inject <|begin_of_text|> as the
+		// very first special token; prepending bosId again would produce a double-BOS
+		// sequence that causes the model to emit EOS immediately on the first turn.
+		boolean startsWithBos = !syms.isEmpty() && syms.get(0).id == bosId;
+		int offset = (addBosToken && !startsWithBos) ? 1 : 0;
+		int[] result = new int[syms.size() + offset];
+		if (addBosToken && !startsWithBos)
+			result[0] = bosId;
+		for (int i = 0; i < syms.size(); i++)
+			result[i + offset] = syms.get(i).id;
+
+		evt.tokenizerType = "gguf";
+		evt.operation = "encode";
+		evt.inputLength = text.length();
+		evt.outputLength = result.length;
+		evt.commit();
+
+		return result;
+	}
+
+	/**
+	 * Symbols for the whole text, merged as one run — the behaviour of every file
+	 * that declares no pre-tokenizer split.
+	 *
+	 * <p>
+	 * Special-token symbols survive the merge loop because the string formed by
+	 * joining one to its neighbour is not in the vocabulary, so the pair scores
+	 * {@link Float#NEGATIVE_INFINITY}.
+	 */
+	private List<Sym> mergeWholeRuns(String text) {
 		List<Sym> syms = new ArrayList<>();
 		for (String segment : splitOnSpecialTokens(text)) {
 			Integer specialId = pieceToId.get(segment);
-			boolean isSpecial = isAtomicSpecialSegment(segment, specialId);
-			if (isSpecial) {
-				// Emit the control token directly — no BPE, no normalisation.
-				syms.add(new Sym(segment, specialId, scores[specialId < scores.length ? specialId : 0]));
-			} else {
-				// GPT-2 BPE: UTF-8 bytes → byte-to-unicode chars, then merge.
-				// SentencePiece: ▁-normalised per-character symbols.
-				String normalised = isGpt2Bpe
-						? Gpt2ByteCodec.textToBpeChars(segment)
-						: SP + segment.replace(' ', SP);
+			if (isAtomicSpecialSegment(segment, specialId))
+				syms.add(specialSym(segment, specialId));
+			else
+				appendPlainSymbols(segment, syms);
+		}
+		mergeInPlace(syms);
+		return syms;
+	}
 
-				for (int cp : (Iterable<Integer>) normalised.codePoints()::iterator) {
-					String piece = new String(Character.toChars(cp));
-					Integer id = pieceToId.get(piece);
-					if (id == null) {
-						if (isGpt2Bpe) {
-							syms.add(new Sym(piece, unkId, scores[unkId < scores.length ? unkId : 0]));
-							continue;
-						}
-						// SentencePiece OOV: fall back to byte tokens <0xHH>
-						byte[] bytes = piece.getBytes(StandardCharsets.UTF_8);
-						for (byte b : bytes) {
-							String byteKey = String.format("<0x%02X>", b & 0xFF);
-							id = pieceToId.getOrDefault(byteKey, unkId);
-							syms.add(new Sym(byteKey, id, scores[id < scores.length ? id : 0]));
-						}
-						continue;
-					}
-					syms.add(new Sym(piece, id, scores[id]));
-				}
+	/**
+	 * Symbols for the whole text with each pre-token merged on its own, so that no
+	 * merge crosses a boundary the vocabulary was trained to respect.
+	 *
+	 * <p>
+	 * A special token is its own group as well: it is already one vocabulary ID,
+	 * and the declared split describes plain text only.
+	 */
+	private List<Sym> mergePreTokens(String text) {
+		List<Sym> out = new ArrayList<>();
+		List<Sym> group = new ArrayList<>();
+		for (String segment : splitOnSpecialTokens(text)) {
+			Integer specialId = pieceToId.get(segment);
+			if (isAtomicSpecialSegment(segment, specialId)) {
+				out.add(specialSym(segment, specialId));
+				continue;
+			}
+			for (String preToken : preTokenizer.split(segment)) {
+				appendPlainSymbols(preToken, group);
+				mergeInPlace(group);
+				out.addAll(group);
+				group.clear();
 			}
 		}
+		return out;
+	}
 
-		// BPE merges: repeatedly find the adjacent pair with the highest score and
-		// merge. Special-token symbols are left untouched because their pair score
-		// with neighbours will be Float.NEGATIVE_INFINITY (the combined string won't
-		// be in pieceToId).
+	private Sym specialSym(String segment, Integer specialId) {
+		// Emit the control token directly — no BPE, no normalisation.
+		return new Sym(segment, specialId, scores[specialId < scores.length ? specialId : 0]);
+	}
+
+	/**
+	 * Appends one symbol per character of a plain-text run: GPT-2 BPE maps UTF-8
+	 * bytes to their byte-to-unicode characters, SentencePiece prefixes the run
+	 * with {@code ▁} and marks each space the same way.
+	 */
+	private void appendPlainSymbols(String segment, List<Sym> syms) {
+		String normalised = isGpt2Bpe
+				? Gpt2ByteCodec.textToBpeChars(segment)
+				: SP + segment.replace(' ', SP);
+
+		for (int cp : (Iterable<Integer>) normalised.codePoints()::iterator) {
+			String piece = new String(Character.toChars(cp));
+			Integer id = pieceToId.get(piece);
+			if (id == null) {
+				if (isGpt2Bpe) {
+					syms.add(new Sym(piece, unkId, scores[unkId < scores.length ? unkId : 0]));
+					continue;
+				}
+				// SentencePiece OOV: fall back to byte tokens <0xHH>
+				byte[] bytes = piece.getBytes(StandardCharsets.UTF_8);
+				for (byte b : bytes) {
+					String byteKey = String.format("<0x%02X>", b & 0xFF);
+					id = pieceToId.getOrDefault(byteKey, unkId);
+					syms.add(new Sym(byteKey, id, scores[id < scores.length ? id : 0]));
+				}
+				continue;
+			}
+			syms.add(new Sym(piece, id, scores[id]));
+		}
+	}
+
+	/**
+	 * BPE merges: repeatedly replace the adjacent pair with the highest score
+	 * until no pair in {@code syms} is in the vocabulary.
+	 */
+	private void mergeInPlace(List<Sym> syms) {
 		boolean merged = true;
 		while (merged && syms.size() > 1) {
 			merged = false;
@@ -280,28 +392,6 @@ public final class GgufTokenizer implements Tokenizer {
 				merged = true;
 			}
 		}
-
-		// Prepend BOS when tokenizer.ggml.add_bos_token is true (default) and the
-		// encoded text does not already begin with bosId. Phi-3 sets add_bos_token
-		// false — prepending <s> shifts KV positions and causes garbage output.
-		// GPT-2 BPE chat templates (e.g. Llama 3) inject <|begin_of_text|> as the
-		// very first special token; prepending bosId again would produce a double-BOS
-		// sequence that causes the model to emit EOS immediately on the first turn.
-		boolean startsWithBos = !syms.isEmpty() && syms.get(0).id == bosId;
-		int offset = (addBosToken && !startsWithBos) ? 1 : 0;
-		int[] result = new int[syms.size() + offset];
-		if (addBosToken && !startsWithBos)
-			result[0] = bosId;
-		for (int i = 0; i < syms.size(); i++)
-			result[i + offset] = syms.get(i).id;
-
-		evt.tokenizerType = "gguf";
-		evt.operation = "encode";
-		evt.inputLength = text.length();
-		evt.outputLength = result.length;
-		evt.commit();
-
-		return result;
 	}
 
 	private float scorePair(String pair, Integer mergedId) {

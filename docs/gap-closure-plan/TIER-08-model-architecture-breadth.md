@@ -143,11 +143,19 @@ this tier's exit criteria, not Tier 02's.
 
 ## Models needed
 
-All four target files are already present. If a true Mixtral-8x7B-shaped file or a working
-`qwen3moe` file remains unavailable when this tier starts (see [`INVENTORY.md`](INVENTORY.md)'s
-open gaps), ask the user then — the generic structural MoE guard can be tested with a synthetic
-fixture in the meantime, but end-to-end `ModelLiveRunnerIT` coverage for genuine Mixtral and for the
-*existing* `qwen3moe` handler needs real files.
+All four target files are already present. So are the two regression files this tier needs for the
+*existing* Qwen3 paths: `Qwen3-1.7B-Q4_K_M.gguf` (`qwen3`) and
+`Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf` (`qwen3moe`, 18.6 GB — partial GPU offload on this host,
+full CPU run otherwise). [`INVENTORY.md`](INVENTORY.md) recorded both as resolved on 2026-09-24; two
+of this tier's four stated model gaps are closed, and `qwen3moe` handler coverage no longer needs a
+download. Note that the Qwen3.5 handler in item 3 is therefore diffable against a *real* `qwen3`
+file rather than against the handler source alone, which is what item 1's step-1 metadata diff wants.
+
+**One genuine gap remains:** a true Mixtral-8x7B-shaped file (`general.architecture=llama` with
+`ffn_*_exps` tensors). Ask the user when item 5 starts. The generic structural MoE guard can be tested
+with a synthetic fixture in the meantime — and must be, per the exit criteria — but end-to-end
+`ModelLiveRunnerIT` coverage for genuine Mixtral needs the real file. Check `models/` rather than this
+paragraph when deciding whether to ask; this section was stale once.
 
 ## Exit criteria
 

@@ -5,11 +5,11 @@ Gap analysis refs: §1.1
 
 ## Objective
 
-Add the missing quantization formats (Q4_1, Q5_0, Q5_1, and the IQ1-IQ4 importance-quantized
-family), extend GPU MMQ kernel coverage to the formats that currently dequantize-and-fall-back
-(Q2_K, Q3_K, Q8_0, Q4_0), close the CUDA/ROCm fused-kernel gap for the formats ROCm currently lacks
-entirely, and add a `quantize` CLI command so Juno can produce a quantized GGUF from an F32/F16
-checkpoint instead of only loading pre-quantized files.
+Add the missing quantization formats (Q4_0's GPU path, Q4_1, Q5_0, Q5_1, and the IQ1-IQ4
+importance-quantized family), extend GPU MMQ kernel coverage to the formats that currently
+dequantize-and-fall-back (Q2_K, Q3_K, Q8_0, Q4_0), close the CUDA/ROCm fused-kernel gap for the formats
+ROCm currently lacks entirely, and add a `quantize` CLI command so Juno can produce a quantized GGUF
+from an F32/F16 checkpoint instead of only loading pre-quantized files.
 
 ## Why this tier, why now
 
@@ -57,8 +57,23 @@ runs first — see its own note.
    tensor-loading code twice. It stays in this tier rather than becoming its own only because that
    code is the code this tier already modifies.
 
-1. Implement Q4_1, Q5_0, Q5_1 dequantization (CPU) — these are simpler, non-K-quant legacy formats,
-   good validation targets before the harder IQ family.
+1. Implement **Q4_0**, Q4_1, Q5_0 and Q5_1 dequantization — simpler, non-K-quant legacy formats, good
+   validation targets before the harder IQ family.
+
+   **Q4_0 belongs in this list and was missing from it.** It is a half-supported format rather than an
+   absent one, which is why it slipped: `GgufReader.loadQ4_0` exists and decodes it to floats, so a
+   Q4_0 file loads and runs on the CPU path — but `LlamaTransformerHandler.dequantize`'s switch covers
+   GGML types 0, 1, 8, 10, 11, 12, 13 and 14 only, so Q4_0 (type 2) has no GPU-upload path at all and
+   such a model simply cannot offload. Item 3 below asks for a *fused GPU kernel* for Q4_0, which
+   cannot be reached while the format has no route onto the device in the first place. So this item
+   adds the `dequantize` cases for types 2, 3, 6 and 7, and Q4_0's is the one with an existing float
+   decoder to validate against rather than only a published reference formula.
+
+   This is load-bearing beyond format tidiness: `gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf` is a Q4_0/F32 file
+   per Tier 00's audit, so [Tier 08](TIER-08-model-architecture-breadth.md)'s Gemma handler inherits
+   whatever this item and [Tier 04C](TIER-04C-packed-weight-matmul.md) item 3 leave it. Tier 08's
+   cross-surface row 2 asks that new handlers get GPU residency parity with the existing dense ones; for
+   Gemma that is only possible if Q4_0 can reach the device.
 2. Implement the IQ1_S, IQ2_*, IQ3_*, IQ4_NL/IQ4_XS formats (CPU dequant first; GPU MMQ kernels for
    at minimum IQ4_NL, since that's what unblocks `minimax-m2.5-tiny` on disk today).
 3. Extend `Q4KMmqKernel`-style fused GPU kernels to Q2_K, Q3_K, Q8_0, and Q4_0 (CUDA), so these
@@ -109,8 +124,11 @@ runs first — see its own note.
 1. Write golden-value regression tests for each new format's dequant math before implementing it
    (mirroring the existing Q6_K bug-fix test pattern) — use published reference dequant formulas,
    cross-checked against small hand-computed examples.
-2. Implement Q4_1/Q5_0/Q5_1 CPU dequant; validate; then GPU MMQ kernels for the currently-fallback
-   formats (Q2_K/Q3_K/Q8_0/Q4_0), in that order (simplest first).
+2. Implement Q4_0/Q4_1/Q5_0/Q5_1 dequant — including the `dequantize` switch cases that give them a
+   GPU-upload path, which Q4_0 lacks today despite having a working float decoder; validate; then GPU
+   MMQ kernels for the currently-fallback formats (Q2_K/Q3_K/Q8_0/Q4_0), in that order (simplest
+   first). Q4_0's kernel cannot be tested before its upload path exists, so the order within this step
+   matters.
 3. Implement the IQ family CPU dequant, prioritizing IQ4_NL (unblocks `minimax-m2.5-tiny`) and
    IQ1_S (unblocks `Devstral-Small`), then the remaining IQ2_*/IQ3_*/IQ4_XS variants.
 4. Implement ROCm fused K-quant kernels for Q4_K/Q5_K/Q6_K (parity with existing CUDA coverage).
@@ -123,8 +141,11 @@ runs first — see its own note.
 
 ## Tests to write/upgrade before implementation
 
-- **`GgufReaderTest`**: one golden-value test per new format (Q4_1, Q5_0, Q5_1, IQ1_S, IQ2_*,
-  IQ3_*, IQ4_NL, IQ4_XS), following the existing Q6_K regression-test pattern.
+- **`GgufReaderTest`**: one golden-value test per new format (Q4_0, Q4_1, Q5_0, Q5_1, IQ1_S, IQ2_*,
+  IQ3_*, IQ4_NL, IQ4_XS), following the existing Q6_K regression-test pattern. Q4_0 is the one case
+  with an independent in-repo oracle — assert the new `dequantize` path against `GgufReader.loadQ4_0`'s
+  existing output as well as against the reference formula, since disagreement between the two would be
+  a real defect in whichever is wrong.
 - **New MMQ kernel tests**: per format, correctness against the CPU dequant oracle, at multiple
   batch sizes crossing the existing serial/batched-GEMM thresholds.
 - **New `./juno quantize` round-trip test**: quantize a small known model to each newly-supported
@@ -171,7 +192,10 @@ user for a small model download in that format at the point this tier starts.
 
 ## Exit criteria
 
-- [ ] Q4_1, Q5_0, Q5_1 dequant implemented and golden-value tested.
+- [ ] Q4_0, Q4_1, Q5_0 and Q5_1 dequant implemented and golden-value tested, **including a
+      GPU-upload path for each** — `LlamaTransformerHandler.dequantize` covers GGML types 2, 3, 6 and 7
+      where before it covered none of them, so a model in any of these formats can offload rather than
+      being CPU-only. Q4_0's result additionally agrees with `GgufReader.loadQ4_0`.
 - [ ] IQ1_S, IQ2_*, IQ3_*, IQ4_NL, IQ4_XS dequant implemented and golden-value tested.
 - [ ] `Devstral-Small` and `minimax-m2.5-tiny` load successfully (quantization is no longer the
       blocker for either — architecture routing outcome documented separately per Tier 00).

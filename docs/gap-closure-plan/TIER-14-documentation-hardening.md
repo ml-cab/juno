@@ -62,9 +62,15 @@ happened to touch, but that Tier 03's changes quietly invalidated).
    intermediate milestones assigned to Tiers 01B, 04 and 10, so a milestone that was missed mid-plan
    and never recovered is visible rather than averaged away. Mark clearly which runs were taken
    before the benchmark-parity preconditions landed and which after; do not compare across that
-   boundary in the same column. The same applies to Tier 04B: mark which runs were taken before the
-   tokenizer fidelity work changed token counts, since `prompt_tokens` is the denominator of every
-   pp and tg figure in the table.
+   boundary in the same column. **The tokenization boundary is Tier 01's, not Tier 04B's** — reading
+   `tokenizer.ggml.pre` and dispatching on it was hoisted into Tier 01 as benchmark-parity
+   precondition 7 precisely so that it would not become a second boundary crossing five tiers of
+   published gates. So it falls inside the same boundary as the rest of the parity work, and Tier 01's
+   record states whether any sweep model's token count actually moved. If Tier 04B's own gate found a
+   *further* token-count change for some family — meaning precondition 7 was incomplete for it — that
+   is a late boundary and Tier 04B's record names it; mark those rows separately. `prompt_tokens` is
+   the denominator of every pp figure and sets the context depth of every tg figure, so a row on the
+   wrong side of either boundary is not comparable in the same column.
 
    **List the out-of-tier changes alongside the tiers.** Execution rule 9 requires any hot-path or
    launcher change landing outside a tier's scope to be recorded in the then-active tier's execution
@@ -140,12 +146,14 @@ cases:
   not runtime behavior). It must fail, not warn, on each of:
   - a competitor product name outside the allowed directories;
   - `Tier [0-9]+`/`Infra tier` outside the allowed directories;
-  - **any tier file under `docs/gap-closure-plan/` containing `Perf gate` but no `**Threshold`
-    block carrying a numeral and a comparison operator** — this is what makes execution rule 7
-    self-enforcing rather than a rule everyone agrees with and half the tiers ignore. Match on
-    `Perf gate`, not `Perf gate (required)`: three spellings of that heading are in use. Exclude
-    this tier's own file from the scan — it names the string in order to describe the check, and a
-    check that fails on its own specification is noise;
+  - **the execution-rule-7 threshold check** — by invoking
+    `scripts/performance-tests/check-plan-thresholds.sh`, **not by restating it**. That script was
+    hoisted out of this tier and shipped by [Tier 01B](TIER-01B-prefill-throughput.md), because a rule
+    governing seventeen tiers enforced only by the last of them is the deferral shape rule 7 exists to
+    prevent. Call it and propagate its exit code, so there is one implementation of the match (on
+    `Perf gate`, not `Perf gate (required)` — three spellings of that heading are in use) and one place
+    the exclusion of this tier's own file lives. If the script is absent when this tier runs, that is
+    itself a finding: it means every tier from 01B onward skipped a test its own list required;
   - **a mismatch between the tier list in this file's llama.cpp-relative scorecard and the tier list
     in [`README.md`](README.md)'s llama.cpp-relative gate paragraph.** Extract both comma-separated
     lists and fail on any difference. The two drifted apart once already, when Tier 04C was added to
@@ -153,8 +161,10 @@ cases:
     defect that actually happened rather than a hypothetical one;
   - any known-stale phrase identified during the audit, so a fixed claim cannot quietly return.
 
-  Run it against this tree *before* starting the audit as well as after, so the rule-7 check is a
-  finding this tier reports rather than something it silently fixes.
+  Run it against this tree *before* starting the audit as well as after, so any rule-7 violation is a
+  finding this tier reports rather than something it silently fixes. Since 01B onward each ran the
+  threshold check as their first test, a violation found here means a tier shipped without running it —
+  name that tier in the scorecard.
 - No unit/integration test changes expected, since no code behavior changes in this tier — if the
   audit reveals a real behavioral bug, that goes into a newly-filed tier's test plan instead, not
   here.
@@ -176,8 +186,9 @@ None — this tier is documentation and static analysis only.
       audited against the implemented surface: every endpoint, field and RPC the code serves is
       declared, and nothing declared is unimplemented. Six tiers added surface here; this is the
       backstop for any that skipped the feature-complete rule.
-- [ ] `smoke-tier14-doc-consistency.sh`'s rule-7 check passes — every tier file with a `Perf gate`
-      has a numeric threshold.
+- [ ] `smoke-tier14-doc-consistency.sh` invokes `check-plan-thresholds.sh` rather than restating its
+      logic, and the rule-7 check passes — every tier file with a `Perf gate` has a numeric threshold.
+      If the script was missing on arrival, the tiers that skipped it are named in the scorecard.
 - [ ] `smoke-tier14-doc-consistency.sh`'s tier-list check passes — this file's scorecard tier list
       and [`README.md`](README.md)'s llama.cpp-relative gate list are identical.
 - [ ] `docs/howto.md`, `docs/performance.md`, `README.md` read-through complete, drift corrected.

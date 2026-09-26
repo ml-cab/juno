@@ -129,6 +129,17 @@ wall three more times.
     width (batch 1, dim 2048) — parity at minimum, not the ~6.9x-slower Phase B result. This is the
     proof point the whole tier turns on, and the contingency in the exit criteria is what happens if
     it is missed.
+  - **And the same chain must reach >= 1.0x the CPU scalar path at prefill width (batch 512, dim
+    2048), measured and reported separately from the decode-width figure.** The decode-width number
+    alone is the wrong evidence for the primitive's largest consumer:
+    [Tier 01B](TIER-01B-prefill-throughput.md) item 2 is built on this primitive and runs at a
+    512-token prefill window, where the cost being removed is roughly 8 MB of activation staged each
+    way per matmul rather than a per-op launch. A pass at batch 1 does not license that, and a fail at
+    batch 1 should not block it. So report both widths, and read the contingency below against both:
+    if the two disagree, record both figures and let Tier 01B item 2 proceed on the prefill result,
+    since that is the width it will actually run at. A tier downgrade on a decode-width failure while
+    the prefill width passed would block the one item the primitive most clearly helps, on evidence
+    that never tested it.
   - Chaining must beat op-at-a-time: the two-op resident chain must cost **<= 0.7x** the same two
     ops run through today's host-round-trip-between-ops path, since eliminating one round trip is
     the entire mechanism being tested. If the chain is no cheaper than the sum of its parts, the
@@ -148,13 +159,49 @@ wall three more times.
   until Tier 10 item 5; until then, record Juno's effective parallelism in the run metadata and state
   the mismatch in the published INDEX rather than leaving it implicit.
 
-  Two of these are bigger than they look and neither is optional:
+  Three of these are bigger than they look and none is optional:
 
   - **Prompt-token parity is the one that moves the numbers.** `RAW_PROMPT` defaults to `0` today,
     so every published pp ratio compared llama-bench's `-p N` against Juno's hard-coded 20-to-30
     token sentence. Flipping the default and enforcing the 10% `prompt_tokens`-versus-`n_prompt`
     check is what makes the pp column mean anything. Expect the re-baselined pp ratios to move
     substantially, and in the unflattering direction.
+  - **Pre-tokenizer parity (precondition 7) is a `src/main` change, and it is the other half of
+    precondition 1.** `GgufTokenizer` never reads `tokenizer.ggml.pre` — a repo-wide grep finds no
+    reference to that key anywhere — so it runs one BPE strategy over every file regardless of the
+    pre-tokenizer type the file declares, while the reference tool applies the split the file asks
+    for. Precondition 1 makes Juno prefill the *number* of tokens the reference was given; this makes
+    them the *same* tokens. Without it, the calibrated prompt hits a token count that matches by
+    construction while the tokenization underneath it may not, and the difference is absorbed into
+    both the pp denominator and the tg context depth with nothing to detect it inside the 10%
+    tolerance.
+
+    Scope here is exactly [Tier 04B](TIER-04B-tokenizer-fidelity.md)'s items 1 and 3 and no more:
+    read the key, dispatch to a pre-tokenizer implementation per declared type, keep today's
+    behaviour as the no-key path (correct for the SentencePiece-era models that predate the key), and
+    reject a file declaring an unimplemented pre-type at load with an error naming it — the same
+    treatment `ForwardPassHandlerLoader` now gives an unrecognized architecture. Enumerate the types
+    actually present by running `./juno gguf-info` across `models/` before writing any code, rather
+    than implementing a guessed list, and record the enumeration in this file. Tier 04B keeps its
+    items 2 and 4 (the per-family split implementations beyond what the sweep models need, and the
+    cross-engine token-ID parity corpus); those deepen the guarantee but do not gate a ratio, so they
+    stay where they were.
+
+    **This one can invalidate the reference re-baseline, and that is the point of landing it here
+    rather than eight tiers later.** If dispatching on the declared pre-type changes any sweep model's
+    `prompt_tokens` for the benchmark prompt, the reference sweep is re-taken on top of it and the
+    earlier one is marked superseded, exactly as the two sweeps of 2026-09-25 were. Paying that once,
+    now, is cheaper than paying it after five tiers have published gates against the old denominator
+    — and cheapest of all if the enumeration turns out to show the sweep models' declared pre-types
+    already match what `GgufTokenizer` does, in which case the finding is that the reference stands
+    and the guarantee is now explicit instead of accidental. Record which of those two happened.
+
+    The LoRA question Tier 04B raises (an adapter trained under the old tokenization may not compose
+    with a base model tokenized under the new one — `tinyllama-1.1b-chat-v1.0.Q4_K_M.lora` on disk was
+    trained under today's tokenizer) is **not** resolved here. If this precondition changes TinyLlama's
+    tokenization, note the fact and keep the adapter's provenance recorded; the decision between
+    re-train, version the `.lora` format, or accept-and-warn stays Tier 04B's, where its cross-surface
+    rows 9 and 10 already own it.
   - **The JFR work is net-new tooling, not a settings tweak.** Add
     `scripts/performance-tests/juno-perf.jfc` and point all four recording sites at it — `run.sh`'s
     `cmd_test`, `ClusterHarness`'s forked-node flag, and both `Configuration.getConfiguration("default")`
@@ -851,6 +898,213 @@ and a long run. Editing a smoke script that is another tier's exit-criteria evid
 to run it is the wrong trade. `perf-lib.sh` is a safe host for the helper when someone takes them on: it
 defines functions only, and its one assignment is guarded.
 
+**They are now owned.** [Tier 01B](TIER-01B-prefill-throughput.md) scope item 5 takes all eight, via a
+shared helper in `perf-lib.sh` rather than eight copies of the edit, and carries the exit criterion. It
+is the right owner because it runs three of them — `compare-vision.sh`, `compare-prefill-batch.sh` and
+`compare-schedule.sh` — as required gates, so it can actually exercise the fix, which is the thing this
+tier could not do.
+
+### 2026-09-26 — benchmark-parity precondition 7: the pre-tokenizer split is read and dispatched on
+
+Scope of this pass: exit criterion 5 only — [Tier 04B](TIER-04B-tokenizer-fidelity.md)'s items 1 and
+3, hoisted here so that no tier publishes a prefill ratio whose denominator a later tier moves. No
+residency code was written and no residency number was measured.
+
+**Plan-versus-code drift found before starting.**
+
+- HEAD is `d185756`. Tier 00's claims were re-verified rather than trusted, at this HEAD rather than
+  at the one the previous passes checked: `generateBatch()` still carries the explicit "No
+  cachePrefix call" comment where the write used to be, `ForwardPassHandlerLoader` still routes
+  through `LlamaFamilyArchitectures.requireVerified`, a repo-wide grep finds no `com.hazelcast` or
+  `RegistryService` symbol in any source or pom, the grep for internal tier numbers across every
+  `src/main` tree is clean, `CLAUDE.md` lists `vision` and `metrics` in its test command,
+  `TensorShardContext` is referenced only by its own test and a `ClusterHarness` comment, and
+  `FaultTolerantPipeline` is reachable only through `HealthReactor`. All hold.
+- The claim this pass turns on also holds: a repo-wide grep for `tokenizer.ggml.pre` over every
+  `.java`, `.sh`, `.yaml` and `.proto` file outside `docs/` returned nothing. The key was read
+  nowhere.
+- **[`INVENTORY.md`](INVENTORY.md) understates what is on disk, again.** `phi-2.Q4_K_M.gguf`
+  (`general.architecture=phi2`) is present and was not listed. The inventory's gap table asks for
+  "a plain Phi-2 GGUF" for [Tier 01B](TIER-01B-prefill-throughput.md)'s per-architecture
+  GPU-attention measurement and [Tier 06](TIER-06-speculative-decoding.md)'s `forwardVerify`
+  coverage, and Tier 01B had pre-authorised shipping that architecture's default resolved off for
+  want of the file. Corrected in the inventory and in both tiers, in this pass, per the rule the
+  inventory itself carries about resolving a row everywhere it is cited.
+
+**The enumeration, taken before writing any code**, by dumping every model file's metadata with
+`GgufInfoMain` (what `./juno gguf-info` runs) and reading `tokenizer.ggml.model` and
+`tokenizer.ggml.pre` off each. Sixteen files:
+
+| Declared `tokenizer.ggml.pre` | Vocabulary | Files |
+|---|---|---|
+| *(absent)* | SentencePiece | `tinyllama-1.1b-chat-v1.0.Q4_K_M`, `tinyllama-1.1b-chat-v1.0.Q2_K` |
+| *(absent)* | SentencePiece-style (`tokenizer.ggml.model=gemma4`) | `gemma-4-E4B-it-qat-UD-Q4_K_XL` |
+| *(absent)* | GPT-2 BPE | `phi-2.Q4_K_M`, `moondream2-q5_k.llamafile` |
+| `default` | SentencePiece | `Phi-3.5-mini-instruct-Q4_K_M`, `mistral-7b-instruct-v0.1-q4_k_m`, `mistral-7b-instruct-v0.2.Q2_K.llamafile`, `llama-1-30b.Q4_K_M` |
+| `qwen2` | GPT-2 BPE | `qwen2.5-3b-instruct-q4_k_m`, `Qwen3-1.7B-Q4_K_M`, `Qwen3-Coder-30B-A3B-Instruct-Q4_K_M` |
+| `llama-bpe` | GPT-2 BPE | `Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile` |
+| `tekken` | GPT-2 BPE | `Devstral-Small-2-24B-Instruct-2512-UD-IQ1_S` |
+| `minimax-m2` | GPT-2 BPE | `minimax-m2.5-tiny-24e-iq4_nl-imat` |
+| `qwen35` | GPT-2 BPE | `Qwen3.5-0.8B.Q4_K_M` |
+
+Two things follow from the table that the tier text did not anticipate. The declared value governs
+**BPE vocabularies only** — a SentencePiece vocabulary takes no pre-tokenizer split, its word
+boundaries coming from the `▁` prefix — so three of the four sweep models (`tinyllama`,
+`Phi-3.5-mini`, `mistral-7b`) cannot be affected by this work at all, whatever they declare. And the
+one sweep model that can be, `qwen2.5-3b`, declares `qwen2`. So the implemented set is `qwen2` plus
+`llama-bpe`: the second is not a sweep model, but `Meta-Llama-3.2-1B-Instruct-Q8_0.llamafile`
+declares it, is a verified `llama` architecture, and loads today — failing it closed to keep the
+implemented set minimal would have removed a working model rather than protected one.
+
+**What shipped.**
+
+| Item | Where |
+|---|---|
+| The declared splits, the dispatch and the fail-closed set | `BpePreTokenizer` (new, `tokenizer`) |
+| Reading the key, and not reading it for a SentencePiece vocabulary | `GgufTokenizer.resolvePreTokenizer` |
+| Merging each pre-token on its own instead of the whole segment | `GgufTokenizer.mergePreTokens` |
+| Today's whole-run path, unchanged, for a file that declares nothing | `GgufTokenizer.mergeWholeRuns` |
+| The active split named in the tokenizer's load line | `GgufTokenizer.load` |
+
+**Why the split matters at all, since nothing threw without it.** A BPE vocabulary is trained on
+text that was first cut into pre-tokens, and merges are only ever learned inside one pre-token.
+Merging a whole run in one pass admits pairs the training never produced. Measured on a 33-line
+probe corpus against a second engine's tokenizer on the same strings:
+
+| Model | Divergent lines before | After |
+|---|---|---|
+| `qwen2.5-3b` (`qwen2`) | 5 of 33 | **0 of 33** |
+| `Qwen3-1.7B` (`qwen2`) | 5 of 33 | **0 of 33** |
+| `Meta-Llama-3.2-1B` (`llama-bpe`) | 8 of 33 | **0 of 33** |
+
+Two divergence classes, and both are silent. A run of whitespace before a word: `"a  b"` tokenized
+as `"a"` + `"  "` + `"b"` where the training splits it `"a"` + `" "` + `" b"`, because the last space
+of a run belongs to the word after it. And groups of digits, which only `llama-bpe` exposed here:
+`"3.14159265"` merged into whatever the merge table allowed rather than into groups of at most
+three, so a date or a version string tokenized differently from the way the model was trained to
+read one. Most of the corpus already agreed — the merge table cannot contain a pair the split never
+produced, so many boundaries are enforced implicitly — which is exactly why this was not visible
+without measuring it.
+
+**Files that declare nothing are byte-identical, verified rather than argued.** The same corpus was
+encoded before and after the change on all five: `tinyllama`, `Phi-3.5-mini` and `mistral-7b`
+(SentencePiece) and `phi-2` and `moondream2` (GPT-2 BPE, no key). All five produced identical token
+IDs on all 33 lines. The no-key path is not a new code path — `mergeWholeRuns` is the previous
+implementation moved into a method, merging one list of symbols across all segments exactly as
+before — and a declared `default` takes it too, since an absent key and a declared `default` mean
+the same thing.
+
+**The fail-closed path, on real files.** `Qwen3.5-0.8B` (`qwen35`), `minimax-m2.5-tiny`
+(`minimax-m2`) and `Devstral-Small-2-24B` (`tekken`) are now rejected at load with an error naming
+the declared type and listing what is implemented. All three were already rejected for their
+architecture, so no file that loaded before this pass fails after it. One behaviour change worth
+recording: in local mode the tokenizer loads before the handler, so those three now report the
+pre-tokenizer rejection rather than the architecture rejection. Both are correct refusals; the
+message a user sees for those three files changed. Cluster mode is unaffected — the handler loads
+first there, so it still reports the architecture. Verified end to end through the launcher:
+`./juno local --model-path models/Qwen3.5-0.8B.Q4_K_M.gguf --cpu` exits 1 naming `'qwen35'`.
+
+**The reference re-baseline stands, and here is the check rather than the argument.** The criterion
+says that if any sweep model's `prompt_tokens` for the benchmark prompt changed, the reference
+sweeps of 2026-09-25 are superseded and re-taken. They did not change, for two reasons that both
+had to hold. Three of the four sweep models are SentencePiece and are untouched by construction. The
+fourth, `qwen2.5-3b`, is affected in general but not by this prompt: the harness's raw prompt is
+`"x x x … x"`, single letters separated by single spaces, which contains none of the constructs the
+split moves — no whitespace run of two or more, no digits, no contractions. Confirmed by
+measurement, not by reading the regex: see the harness run under "Verification commands" below,
+which reproduces `128/128` prompt tokens at deviation 0 with the same calibrated word count.
+
+**The LoRA-adapter question does not fire, and that is a finding rather than a deferral.**
+[Tier 04B](TIER-04B-tokenizer-fidelity.md)'s cross-surface rows 9 and 10 ask whether an adapter
+trained under the old tokenization still composes with a base model tokenized under the new one.
+`tinyllama-1.1b-chat-v1.0.Q4_K_M.lora` was trained against `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf`,
+which is SentencePiece with no declared key, and its tokenization is byte-identical across this
+change. So that adapter is **not** on the far side of a tokenization boundary, and Tier 04B's
+decision (re-train, version the `.lora` format, or accept and warn) is still open but no longer has
+a live instance on disk to resolve. It becomes live only if Tier 04B changes a tokenization an
+adapter was trained under.
+
+**Tests, written before the implementation.** `BpePreTokenizerTest`, 12 cases in the `tokenizer`
+module, covering both splits (whitespace runs, digit grouping, contractions, line breaks,
+punctuation), a losslessness property over a 17-string corpus including non-Latin text and emoji,
+the dispatch, and the fail-closed set. They failed to compile against the original tree because the
+class did not exist, which is the right failure. `PreTokenizerParityLiveTest`, 7 model-gated cases,
+pins the token IDs a second engine produces for the same strings, plus the byte-identity of the
+three no-declared-type files. Run against the original tree with the unit test set aside so the
+module would compile: **3 failures of 7**, exactly the two whitespace cases and the digit-grouping
+case, with the four cases that already agreed passing. That is the divergence reproduced as a test
+before any fix, and the same seven pass now.
+
+One expectation in each file was wrong when written and was corrected from the reference rather than
+from reasoning: a punctuation run absorbs the line break that follows it, so `"end.\nNext"` is three
+pieces and not four; and one live expectation had been copied from the wrong model's reading.
+
+**Verification commands and results.**
+
+- `mvn -o test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player`:
+  BUILD SUCCESS in 23:32 min, all eleven modules, **1674 tests, 0 failures, 0 errors, 46 skipped**
+  (`registry` 93, `lora` 116, `kvcache` 78, `health` 23, `node` 597/41 skipped, `tokenizer` 108/2,
+  `sampler` 81, `coordinator` 311/1, `vision` 95, `metrics` 61, `juno-player` 111/2). 1674 is 1646
+  plus this pass's 19 `tokenizer` cases and the 9 `metrics` cases from the previous pass, which was
+  recorded before they were counted. The skip count is unchanged at 46, so none of the seven new
+  model-gated cases skipped — every file they need is on disk. Run without
+  `-Dsurefire.rerunFailingTestsCount=2`: the flaky attention assertion is fixed, and the reactor
+  reached its last two modules unaided for the first time in this tier.
+- `mvn -o clean verify -pl juno-master`: BUILD SUCCESS, **20 tests, 0 failures, 0 errors** —
+  `ThreeNodeClusterIT` 8, `InProcessClusterIT` 6, `TensorParallelClusterIT` 5,
+  `UnsupportedArchitectureClusterIT` 1. Run because `CoordinatorMain` loads the tokenizer and this
+  pass gave that load a new way to fail; the last of those four confirms the cluster path still
+  reports the architecture refusal, since it loads handlers before the tokenizer.
+- `mvn -o clean install -DskipTests` before both of the above, per the stale-artifact trap the first
+  pass in this tier recorded.
+- **The benchmark-prompt check, which is what decides whether the reference stands.** A GPU cycle on
+  the one sweep model that can be affected
+  (`--gpu --models qwen2.5-3b --n-prompt 128 --n-gen 8 --juno-warmup 1 --juno-reps 1 --reps 1
+  --no-publish --no-tuned-lane`): `failures=0`, and the prefill lane reports
+  `calibrated_prompt_words: 120`, `prompt_tokens: 128`, `n_prompt: 128`, `prompt_token_deviation: 0`.
+  The published reference run [`20260925T172231Z`](../perf-compare/20260925T172231Z/) reports
+  `calibrated_prompt_words: 120` and the same 128/128 on all three of its repetitions. **The same
+  word count produces the same token count on both sides of the change**, which is the direct
+  evidence that this is not a measurement boundary. Not published and not a baseline: one repetition,
+  eight generated tokens, taken to read the parity fields.
+- Three real files rejected by name at load (`Qwen3.5-0.8B` → `'qwen35'`, `minimax-m2.5-tiny` →
+  `'minimax-m2'`, `Devstral-Small-2-24B` → `'tekken'`), and the first of those also through the
+  launcher: `./juno local --model-path models/Qwen3.5-0.8B.Q4_K_M.gguf --cpu` exits 1 with the
+  message, rather than the refusal being swallowed into a generic load error.
+- The 33-line probe corpus encoded through Juno and through a second engine's tokenizer on every
+  file where both can read it, before and after: the parity and byte-identity tables above.
+
+**Performance gate: not run, and not required for this pass.** Nothing here touches the forward
+pass, MatVec, GPU residency, batching, KV or quantization. The change is to how a prompt is cut into
+tokens, not to what is computed per token, and the benchmark prompt's token count is unchanged, so
+no published figure moves. This pass is **not** a measurement boundary — the first pass in this tier
+that is not.
+
+**Cross-surface reading for this pass** (the tier's own checklist is about residency, which has not
+started): tokenization is backend-agnostic, so CPU and GPU see the same token IDs by construction and
+the `--cpu` launcher run above exercises the refusal path; static and continuous schedules and both
+REST surfaces tokenize through the same `GgufTokenizer.encode` with no shape change; the cluster
+rows are covered by the four ITs, which also confirm nodes do not re-tokenize; LoRA train and
+playback are covered by `juno-player`'s 111 tests including `LoraTrainingSequencesTest`, whose
+completion-only loss masks are computed from token counts on a SentencePiece base that is
+byte-identical here; vision is covered by the `vision` module's 95 tests plus moondream2's
+byte-identical corpus, since it declares no pre-type and its `<image>` splice is unchanged; the CLI
+gains no flag, and `./juno gguf-info` already reports the declared value because it dumps every
+metadata key, which is how the enumeration above was taken.
+
+**Not done in this pass**, and still owned by [Tier 04B](TIER-04B-tokenizer-fidelity.md):
+
+- The splits for `tekken`, `minimax-m2` and `qwen35` — its item 2. Those three files are rejected
+  rather than mistokenized, which is the safe failure and still a failure.
+- The split the reference applies to a BPE vocabulary that declares `default` or nothing. Juno keeps
+  its whole-run merge there, which is what `phi-2` and `moondream2` already ran under and what this
+  tier's scope line ("keep today's behaviour as the no-key path") asks for. It remains a divergence
+  from the reference for those two files, now explicit and logged at load instead of unstated. Also
+  Tier 04B item 2.
+- The cross-engine parity corpus as a committed artefact — its item 4. The 33-line corpus used here
+  lives in this pass's scratch directory and its findings are the table above; Tier 04B is what
+  turns that into a maintained fixture.
+
 ### Out-of-tier changes (recorded per execution rule 9)
 
 Two commits touching hot-path or launcher behaviour landed while this tier was in progress and
@@ -910,18 +1164,46 @@ Two consequences for later tiers, neither of which changes this tier's scope:
       context depth, closed by measuring prefill and generation in separate runs. The collection-pause
       rule is now machine-applied with a `Scorable` column; its lock-and-park half is withdrawn as
       unusable, with the measurement that shows why. Two earlier sweeps of the same day are kept and
-      marked superseded. The one precondition still absent is a thread-count control reaching the hot
-      path, which belongs to the CPU hot-path tier and is recorded in every published index as a
-      stated mismatch rather than a silent one.*
+      marked superseded. The one precondition still absent **of the six this criterion covered** is a
+      thread-count control reaching the hot path, which belongs to the CPU hot-path tier and is
+      recorded in every published index as a stated mismatch rather than a silent one. A seventh
+      precondition — pre-tokenizer parity — was added to the list after this box was ticked and carries
+      its own box below rather than re-opening this one.*
+- [x] **Precondition 7 (pre-tokenizer parity) landed**: `tokenizer.ggml.pre` is read and dispatched
+      on, the enumeration of declared pre-types across `models/` is recorded in this file, a file
+      declaring an unimplemented pre-type is rejected at load with an error naming it, and a file with
+      no such key still loads bit-identically to today. If any sweep model's `prompt_tokens` for the
+      benchmark prompt changed, the reference re-baseline is re-taken on top of it and the 2026-09-25
+      sweeps are marked superseded; if none changed, that finding is recorded and the reference stands.
+      Tests first, in the `tokenizer` module, and `-pl tokenizer` is in this tier's test command —
+      which the documented `mvn test -pl ...` line does cover, unlike `vision` and `metrics`.
+      *Hoisted from [Tier 04B](TIER-04B-tokenizer-fidelity.md) items 1 and 3 so that no tier publishes
+      a pp ratio whose denominator a later tier moves. That tier keeps its items 2 and 4.*
+      *Landed 2026-09-26 as `BpePreTokenizer` plus `GgufTokenizer`'s dispatch: the sixteen files on
+      disk declare six distinct values and the enumeration is the table in the execution record above.
+      `qwen2` and `llama-bpe` are implemented and reach full token-ID parity with a second engine
+      across a 33-line probe corpus on all three files that declare them (`qwen2.5-3b` and
+      `Qwen3-1.7B` from five divergent lines to zero, `Meta-Llama-3.2-1B` from eight to zero);
+      `tekken`, `minimax-m2` and `qwen35` are rejected at load by name, verified on the three real
+      files and end to end through the launcher. The five files declaring nothing produce identical
+      token IDs before and after on every line of the same corpus. **No sweep model's benchmark
+      `prompt_tokens` changed, so the 2026-09-25 reference sweeps stand** — three of the four are
+      SentencePiece and cannot be affected, and the fourth's benchmark prompt contains none of the
+      constructs the split moves; confirmed by a harness run at `128/128`, deviation 0, at the same
+      calibrated word count. Tests first: `BpePreTokenizerTest` (12 cases) did not compile against the
+      original tree, and `PreTokenizerParityLiveTest` failed 3 of 7 on it — the two whitespace cases
+      and the digit-grouping case — before the fix.*
 - [ ] Residency primitive implemented, unit-tested, and documented (what it is, where the
       materialization boundary is, which ops participate).
 - [ ] RMSNorm + RoPE measured *faster* than CPU scalar (or at minimum, no longer the ~7x-slower
-      finding from Phase B) with residency, on real GTX 1080 hardware, published in
-      `docs/perf-compare/`. **Contingency, decided before Tiers 02/06/07 start**: this project has
+      finding from Phase B) with residency, on real GTX 1080 hardware, **at both decode width (batch 1)
+      and prefill width (batch 512), reported separately**, published in `docs/perf-compare/`. **Contingency, decided before Tiers 02/06/07 start**: this project has
       already shelved three closely-related bets on grounds that turned out to be exactly this kind
       of per-op dispatch overhead (`CudaRmsNorm`/`CudaGraphSession` itself, draft-model speculative
       decoding, `VectorQuantKernels.dot()`), so a fourth negative result is a real possibility, not a
-      formality. If the measured result is still worse than CPU scalar after the residency primitive
+      formality. **Both widths in the threshold are read before this contingency fires**: a decode-width
+      miss with a prefill-width pass is a partial result to record and hand to Tier 01B item 2, not a
+      tier downgrade. If the measured result is still worse than CPU scalar after the residency primitive
       is correctly wired (not just "not yet wired right"), do not iterate indefinitely — document the
       measurement, what was tried, and why it still regresses, then downgrade Tier 01 to
       **partial-complete**: the residency primitive itself (item 1) and the correctness guarantees
@@ -944,24 +1226,27 @@ Two consequences for later tiers, neither of which changes this tier's scope:
       gRPC call.
 - [ ] LoRA train + playback smoke tests unaffected.
 - [ ] `docs/agent-arch.txt`/`docs/performance.md`/`docs/howto.md` updated (Juno-native language).
-      *Done for both harness passes and unticked only because the box also covers the residency work,
-      which has not started. This pass added `JfrMetricsCli` to the `metrics` entry in
-      `docs/agent-arch.txt`, its invocation to `docs/howto.md`, and the second measurement boundary
-      (calibrated prompt length, warm and repeated readings, harness-owned recording window, fixed
-      heap, recorded clock state) to `docs/performance.md`.*
+      *Done for all three passes so far, and unticked only because the box also covers the residency
+      work, which has not started. The harness passes added `JfrMetricsCli` to the `metrics` entry in
+      `docs/agent-arch.txt`, its invocation to `docs/howto.md`, and both measurement boundaries to
+      `docs/performance.md`. The precondition-7 pass added a `BpePreTokenizer` entry to
+      `docs/agent-arch.txt` and a "Pre-tokenizer splits" section to `docs/howto.md` stating what each
+      declared value does and that an unimplemented one is refused; `docs/performance.md` needed
+      nothing, since no published figure moved. `README.md` needed nothing either — it names the
+      `tokenizer` module in one table row and links model support to the external documentation site,
+      neither of which this changes.*
 - [ ] `CudaGraphSession`/`CudaRmsNorm` are no longer "dormant scaffolding" — either wired live
       (preferred, if the measurement confirms the fix), or the tier is explicitly marked
       **partial-complete** per the contingency above (not silently marked complete with the
       scaffolding still dormant and unexplained).
 - [ ] Full `mvn test`/`mvn verify -pl juno-master` pass with zero regressions.
-      *`mvn test` across all eleven modules passes as of this pass: **1646 tests, 0 failures, 0 errors,
-      46 skipped** in 24:55 min (`tokenizer` 89/2 skipped, `lora` 116, `node` 597/41, `coordinator` 311,
-      `sampler` 81, `kvcache` 78, `health` 23, `registry` 93, `vision` 95, `metrics` 52, `juno-player`
-      111/2). `coordinator` is 311 where the previous pass recorded 294, `sampler` 81 where it was 66,
-      and `juno-player` 111 where it was 104 — the differences are this pass's new cases. Run with
-      `-Dsurefire.rerunFailingTestsCount=2` for the known-flaky `metrics` attention test, as the first
-      pass in this tier also did; no flake was reported. Unticked because the box also covers
-      `mvn verify -pl juno-master` and the residency work, neither of which this pass carries.*
+      *Both halves pass as of the precondition-7 pass: `mvn test` across all eleven modules is
+      **1674 tests, 0 failures, 0 errors, 46 skipped** in 23:32 min, and `mvn -o clean verify -pl
+      juno-master` is **20 tests, 0 failures, 0 errors**. The count is 1646 plus 19 new `tokenizer`
+      cases and the 9 `metrics` cases the previous pass added before counting them; the skip count is
+      unchanged, so no new model-gated case skipped. No rerun flag was needed — the flaky attention
+      assertion is fixed. Unticked because the box covers the tier, whose residency work has not
+      shipped and will need both commands re-run.*
 - [ ] `CHANGELOG.md` entry added.
-      *An entry covering this pass is in (Session 90). Unticked because the box covers the tier, whose
-      residency work has not shipped.*
+      *Entries covering the passes so far are in (Sessions 88, 90 and 91). Unticked because the box
+      covers the tier, whose residency work has not shipped.*

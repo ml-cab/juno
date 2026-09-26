@@ -527,6 +527,33 @@ MiniJinjaTemplate / EmbeddedChatTemplate / GgufChatTemplateResolver /
   adapter recall); LoraTrainNotices.EMBEDDED_CHAT_TEMPLATE_IGNORED (node
   module) surfaces that as a startup notice when the loaded GGUF has one.
 
+BpePreTokenizer (tokenizer module, package-private) — the split a GPT-2 BPE
+  vocabulary applies to text before its merges run, named by the GGUF
+  tokenizer.ggml.pre metadata key. A BPE vocabulary's merges are only ever
+  learned inside one pre-token, so merging a whole run of text in one pass
+  admits pairs the training never produced: a whitespace run before a word
+  ("a  b" merging the two spaces instead of leaving the last one to "b") and
+  groups of digits (grouped by whatever the merge table allows rather than by
+  the rule the vocabulary was built with). Nothing throws when that happens —
+  the model just gets a sequence it was not trained on. resolve(declaredType)
+  returns null for an absent key, an empty value or "default" (all the same
+  case: the whole-run path every file used before the key was read), one of
+  two implementations for "qwen2" (one piece per digit) and "llama-bpe"
+  (digits group up to three), and throws IllegalArgumentException naming the
+  type for anything else — an allowlist of types checked against real files,
+  not a catalogue. split(text) returns the pre-tokens, covering every input
+  character. Instances are immutable and shared across threads.
+  GgufTokenizer.resolvePreTokenizer consults the key for GPT-2 BPE
+  vocabularies only: a SentencePiece vocabulary takes no pre-tokenizer split
+  (its word boundaries come from the U+2581 prefix), so such a file tokenizes
+  exactly as it did before the key was read at all. encode() then picks
+  between mergeWholeRuns (no declared split — one merge pass over all
+  segments, the pre-existing behaviour) and mergePreTokens (each pre-token
+  merged on its own, so no merge crosses a boundary the vocabulary respects).
+  Both first cut at special-token boundaries. A file declaring an
+  unimplemented type is refused at load; in single-node mode that refusal
+  reaches the user before the architecture check, in cluster mode after it.
+
 HfGgufFetcher (juno-player module) — resolves a Hugging Face Hub
   "org/repo[:quant]" spec (--hf CLI flag, wired in ConsoleMain.main() ahead of
   the --model-path null check, and in scripts/run.sh / run.bat for cluster,

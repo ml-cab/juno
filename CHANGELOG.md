@@ -1,5 +1,38 @@
 ## Status 
 
+**Session 91** — A model's declared pre-tokenizer split is read and applied, and a file declaring one Juno has not implemented is refused
+
+- **Text is now cut the way the vocabulary was trained to cut it.** A GPT-2 BPE vocabulary is built
+  over text that was first split into pre-tokens by a fixed pattern, and its merges are only ever
+  learned inside one of them. Juno merged a whole run of text in one pass, which admits pairs the
+  training never produced, and nothing threw when it happened — the model simply received a token
+  sequence it had not been trained on. The `tokenizer.ggml.pre` key names the split each file was
+  built with, and Juno now reads it, cuts the text accordingly, and merges each piece on its own. Two
+  divergence classes disappear as a result: a run of whitespace before a word (`"a  b"` was becoming
+  `"a"` + `"  "` + `"b"` rather than `"a"` + `" "` + `" b"`, because the last space of a run belongs
+  to the word after it) and groups of digits, where a date or a version string was grouped by
+  whatever the merge table happened to allow. Measured against a second engine's tokenization of the
+  same 33-line corpus, Qwen2.5-3B went from five divergent lines to none, Qwen3-1.7B from five to
+  none, and Llama-3.2-1B from eight to none.
+- **A file declaring a split Juno has not implemented is refused by name.** The implemented set is
+  `qwen2` and `llama-bpe`, each checked line by line against a second engine's output on real files.
+  Three models on disk declare something else, and they are now rejected at load with an error naming
+  the declared type and listing what is implemented, rather than tokenized under a split that was
+  never verified for them. All three were already refused for their architecture, so no file that
+  loaded before this session fails after it; in single-node mode the tokenizer is read before the
+  handler, so those three now report the tokenizer refusal rather than the architecture one.
+- **A file that declares nothing is untouched, and that was verified rather than assumed.** The key
+  governs BPE vocabularies only — a SentencePiece vocabulary takes no pre-tokenizer split, its word
+  boundaries coming from the `▁` prefix — so it is not consulted for one, and a declared `default`
+  means exactly what an absent key means. The same corpus was encoded before and after the change on
+  the five files that declare nothing (TinyLlama, Phi-3.5-mini and Mistral-7B on SentencePiece,
+  Phi-2 and moondream2 on GPT-2 BPE): identical token IDs on every line. The load line now names the
+  active split, and a BPE vocabulary running without one says so.
+- No performance gate: nothing here touches the forward pass, MatVec, GPU residency, batching, KV or
+  quantization. This is not a measurement boundary either — the benchmark prompt is single letters
+  separated by single spaces, which contains none of the constructs the split moves, and a harness
+  run confirms the same prompt-token count at the same calibrated word length.
+
 **Session 90** — Juno is measured warm, repeated and at the prompt length it was asked for
 
 - **A prefill comparison now actually compares prefills.** The previous session made a prefill ratio

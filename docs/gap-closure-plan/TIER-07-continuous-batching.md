@@ -40,6 +40,29 @@ actually help rather than hurt.
    no shard-routing logic at all per the gap analysis), or close the "v1 scope" note with a
    concrete technical explanation of what would be required and file it as an explicitly-scoped
    future tier rather than leaving it an open TODO indefinitely.
+5. **The CI re-examination this plan defers to this tier.** [`README.md`](README.md) records that no CI
+   exists (`.github/` holds only a `modernize/` directory, no workflows), that tier-gating is therefore
+   enforced procedurally by whoever executes the plan re-reading the checklist, and that the decision is
+   "re-examined at Tier 07 or at the first point a tier's full smoke matrix exceeds thirty minutes of
+   hands-on execution, whichever comes first." That naming lived only in the README, so nothing in this
+   tier's own scope or exit criteria would have told a reader the revisit was due — which is how an
+   accepted trade-off quietly becomes an omission. It is now this tier's item.
+
+   Re-examine and record the outcome here with a date. Two things have changed since that judgement was
+   made and both bear on it: six tiers have landed, each adding a `smoke-tierNN-*.sh` script that every
+   later tier is required to re-run unmodified as a regression check, so the procedural matrix is
+   monotonically growing; and this tier is the one whose own gate is a concurrency benchmark that has to
+   be re-run after every change in it. Time the full smoke matrix as part of this tier's exit work and
+   record the figure, since the thirty-minute condition cannot be evaluated without it.
+
+   Either outcome is acceptable and both must be written down. If CI is adopted: wire `mvn test` across
+   every unit-test-bearing module (including `vision` and `metrics`, which the documented command
+   omitted until Tier 00 fixed it), `mvn verify -pl juno-master`, `check-plan-thresholds.sh`, and the
+   accumulated `smoke-tierNN-*.sh` scripts that can run without a GPU or a real model. The GPU-gated and
+   real-model gates stay manual — this host's GTX 1080 is not a CI runner — so state plainly which
+   fraction of the matrix CI actually covers rather than implying it covers the gate. If CI is declined:
+   name what changed since the README's original judgement, or state that nothing did, and record the
+   measured smoke-matrix duration that supports the call.
 
 ### Out of scope
 
@@ -120,6 +143,14 @@ comparison.
 - [ ] Concurrency ceiling raised and validated, or kept at 8 with a documented, measured reason.
 - [ ] Cluster-support decision made and executed (real support, or a closed, technically-grounded
       "not now" note replacing the open-ended "v1 scope" comment).
+- [ ] **The CI re-examination is recorded in this file with a date and an outcome** — either a
+      `.github/workflows/` pipeline covering `mvn test` across every unit-test-bearing module,
+      `mvn verify -pl juno-master`, `check-plan-thresholds.sh` and the GPU-free smoke scripts, with the
+      fraction of the matrix it actually covers stated; or a written decision not to, naming what
+      changed since the README's original judgement or stating that nothing did. The measured duration
+      of this tier's full smoke matrix is recorded either way, since the README's thirty-minute revisit
+      condition cannot be evaluated without it. An unrecorded revisit is a missed exit criterion, not a
+      deferral.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published showing the throughput result against every threshold above, or the
       miss reported plainly with its number.

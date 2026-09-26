@@ -32,9 +32,12 @@ about before it locks in a block-table layout.
    long sequence lengths. **It inherits whatever architecture coverage Tier 01B actually delivered —
    read that tier's exit table, do not assume it covered everything.** Tier 01B ships the kernel path
    for Phi-2, Phi-3, Qwen3 and Qwen3-MoE but explicitly leaves any architecture it could not measure
-   on a real model with its default resolved off behind an explicit notice, and at the time of
-   writing no `qwen3` or `qwen3moe` file exists on disk to measure with. So the starting state for
-   this tier is "default-on for the architectures 01B measured," not "default-on everywhere."
+   on a real model with its default resolved off behind an explicit notice. Files exist on disk for
+   Phi-3, Qwen3 and Qwen3-MoE, so those three should arrive here default-on; Phi-2 is the one that may
+   not, since it is only reachable through `moondream2`'s backbone unless a plain Phi-2 GGUF was
+   obtained. So the starting state for this tier is "default-on for the architectures 01B measured,"
+   not "default-on everywhere" — and not the narrower set an earlier draft of this paragraph assumed,
+   which wrongly recorded the two Qwen3 files as absent.
    Whatever that set turns out to be, this rewrite must not shrink it — no architecture may regress
    to the scalar path as a side effect — and must re-run Tier 01B's per-architecture greedy-decode
    divergence characterisation for every member of it, since a tiled online-softmax accumulates in a
@@ -45,9 +48,13 @@ about before it locks in a block-table layout.
    silently dropping context is itself a form of silent degrade the project's fail-closed philosophy
    would otherwise reject; the default behavior stays a clear error unless the caller opts in via a
    flag/request parameter.
-3. **Sliding-window attention** for model families that need it (Mistral-style windowed causal
-   mask) — add the windowing option to the attention path and confirm it's applied only when the
-   loaded GGUF's metadata specifies a window size, not globally.
+3. **Sliding-window attention** for model families that need it — add the windowing option to the
+   attention path and confirm it is applied only when the loaded GGUF's metadata declares a window,
+   not globally. The mechanism must cover **both** shapes real exporters write: a uniform window
+   (every layer windowed, the Mistral-style case) and a **patterned** window (a repeating period in
+   which some layers attend globally), because the only real windowed file on disk declares the
+   patterned form — see implementation step 4 for the exact keys and why a uniform-only mechanism
+   would strand Tier 08.
 
 ### Out of scope
 
@@ -67,7 +74,7 @@ about before it locks in a block-table layout.
 | 4 | Static schedule | context-shift must interact correctly with `BatchConfig`'s "all requests start at step 0" constraint — a mid-batch shift changes sequence length for one member only |
 | 5 | Continuous schedule | context-shift interacting with `ContinuousBatchEngine`'s per-slot state needs its own test — a slot that shifts mid-stream must not corrupt `ContinuousPrefillState` bookkeeping for other slots |
 | 6 | Single-node local mode | primary dev surface |
-| 7 | Pipeline-parallel cluster | sliding-window metadata (window size) must propagate to every node holding a shard of a windowed model |
+| 7 | Pipeline-parallel cluster | sliding-window metadata must propagate to every node holding a shard of a windowed model — **both** the window width and the layer pattern, and the pattern has to be interpreted against each shard's global layer indices, not its local ones, or a sharded patterned model windows the wrong layers |
 | 8 | Tensor-parallel cluster | same |
 | 9 | LoRA training | confirm training's own attention/backward path (`LoraTrainingMath`) is unaffected — training doesn't currently use the fused GQA kernel |
 | 10 | LoRA playback | confirm LoRA-modified attention projections still compose correctly with the new tiled kernel |
@@ -88,9 +95,31 @@ about before it locks in a block-table layout.
    wire the opt-in flag through CLI and both REST surfaces.
 4. Implement sliding-window attention, driven by GGUF metadata. No window key is read anywhere
    today — `GgufReader` has no `sliding`/`window` reference at all — so this tier adds the read via
-   the existing generic `metaInt` accessor and must first confirm which key real exporters write
-   (`<arch>.attention.sliding_window` is the expected spelling; verify against a real file rather
-   than assuming).
+   the existing generic `metaInt` accessor.
+
+   **Read both keys, not one.** The expected spelling was confirmed against the only real windowed file
+   on disk: `gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf` declares **`gemma4.attention.sliding_window`** *and*
+   **`gemma4.attention.sliding_window_pattern`**, which matches Tier 00's audit finding that its
+   windowing is *patterned* rather than uniform — a subset of layers attend globally and the rest attend
+   within the window, on a repeating period. So the mechanism must express "every Nth layer is global,
+   the rest are windowed", not a single window size applied to every layer. Read
+   `<arch>.attention.sliding_window` for the width and `<arch>.attention.sliding_window_pattern` for the
+   period, treat a present width with an absent period as "every layer windowed" (the uniform case, which
+   is what a Mistral-style exporter writes), and treat an absent width as today's unwindowed behaviour
+   whatever the period says.
+
+   This matters because [Tier 08](TIER-08-model-architecture-breadth.md) carries the real-model
+   validation on that exact file and is explicitly forbidden from adding a second windowing path. A
+   mechanism built here for a single uniform window would make Tier 08's exit criterion unreachable
+   without reopening this tier — which its own text anticipates ("that is a Tier 02 defect surfacing
+   late") but which costs one design decision to avoid instead.
+
+   Also confirmed while establishing the above, so nobody re-checks it: **`mistral-7b-instruct-v0.1`
+   declares no window key at all.** Its full metadata key set is `llama.{block_count, context_length,
+   embedding_length, feed_forward_length, attention.head_count, attention.head_count_kv,
+   attention.layer_norm_rms_epsilon, rope.dimension_count, rope.freq_base, vocab_size}`. So there is no
+   real windowed file this tier can validate against before Tier 08 lands its Gemma handler, and the
+   synthetic-fixture split below is the only option rather than a convenience.
 
    **Validation does not depend on Tier 08, and must not be deferred to it.** An earlier draft
    deferred the windowed-model check until "Tier 08 makes that model loadable," which created a
@@ -118,9 +147,12 @@ about before it locks in a block-table layout.
   `DeviceKvCache` each get a test that grows a session past `MAX_SEQ_LEN` with the opt-in flag set
   and confirms it shifts instead of throwing, and a test confirming the *default* (flag unset)
   behavior still throws (no silent regression of the existing fail-closed guarantee).
-- **New unit test** for sliding-window: confirm a windowed model's attention correctly ignores
-  tokens outside the window, and a non-windowed model's behavior is bit-identical to before this
-  tier (regression guard).
+- **New unit tests** for sliding-window, one per metadata shape: (a) a *uniform* windowed fixture —
+  attention ignores exactly the tokens outside the window, on every layer; (b) a *patterned* windowed
+  fixture declaring both `sliding_window` and `sliding_window_pattern` — asserting **which** layers
+  attend globally and which are windowed, since the period is the half of the mechanism a single-window
+  test cannot reach; (c) width present, period absent — resolves to the uniform case; (d) a non-windowed
+  model's behaviour is bit-identical to before this tier (regression guard).
 - **`ModelLiveRunnerIT`**: add a long-context check (generate past the old hard-fail point with
   `--context-shift` enabled). The real-model windowed check belongs to Tier 08 and is listed in that
   tier's exit criteria; this tier's windowed coverage is the synthetic fixture plus the unit-level
@@ -147,9 +179,11 @@ about before it locks in a block-table layout.
 ## Models needed
 
 Existing dense models (`tinyllama`, `mistral-7b`, `qwen2.5-3b`) cover the tiled-kernel and
-context-shift work. Sliding-window-specific validation may need a model whose GGUF metadata
-actually declares a window size — check whether `mistral-7b-instruct-v0.1` (already present) has
-this metadata before assuming a new download is needed; flag to the user only if it doesn't.
+context-shift work. **No new download is needed for the windowed work, and none would help.**
+`mistral-7b-instruct-v0.1` was checked and declares no window key (its full `llama.*` key set is
+listed in implementation step 4), and the only file on disk that does declare one —
+`gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf` — is not loadable until Tier 08's Gemma handler exists. That is
+why this tier ships against synthetic fixtures and Tier 08 carries the real-model validation.
 
 ## Exit criteria
 
@@ -158,9 +192,15 @@ this metadata before assuming a new download is needed; flag to the user only if
 - [ ] Context-shift works correctly, opt-in only, for both dense and paged KV, both schedules.
 - [ ] Default (non-opt-in) behavior is unchanged — still a clear, documented error past
       `MAX_SEQ_LEN`.
-- [ ] Sliding-window attention verified correct against a synthetic windowed-metadata fixture and a
-      no-op (bit-identical) for non-windowed models. Real-model validation on `gemma-4-E4B` is Tier
-      08's exit criterion, not this tier's — confirm it is listed there before closing this one.
+- [ ] Both window keys are read — `<arch>.attention.sliding_window` and
+      `<arch>.attention.sliding_window_pattern` — and the patterned case is covered by a unit test
+      asserting which layers attend globally and which are windowed, not only that a window is applied.
+      A present width with an absent period resolves to the uniform case.
+- [ ] Sliding-window attention verified correct against synthetic uniform and patterned
+      windowed-metadata fixtures, and a no-op (bit-identical) for non-windowed models. Real-model
+      validation on `gemma-4-E4B` is Tier 08's exit criterion, not this tier's — confirm it is listed
+      there before closing this one, and confirm the keys this tier chose are the ones that file
+      declares (they are, as of the check recorded in implementation step 4).
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, both memory thresholds above met, no throughput regression.
 - [ ] The context-shift opt-in is in `api/src/main/resources/openapi.yaml` and `juno-api.yaml`

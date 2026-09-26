@@ -213,6 +213,33 @@ on today's op-at-a-time GPU path either way.
    Tier 02 can be held to it; if item 0 already reduced it to noise, record that too, so Tier 02 is
    not later credited with a prefill win that this tier already banked. Do not extrapolate the
    78.7%-to-11.0% figure onto any architecture that was not measured — it is one model's result.
+5. **Reap the engine-keepalive subshell in the eight sibling scripts.** Keeping the console REPL alive
+   requires stdin never to reach end of file, and eight scripts do that with
+   `< <(while true; do sleep 3600; done)` — a process substitution whose subshell nothing reaps, which
+   respawns a fresh `sleep` every hour and therefore persists indefinitely:
+   `compare-vision.sh`, `compare-prefill-batch.sh`, `compare-schedule.sh`, `compare-parallel.sh`,
+   `compare-mixed-prefill.sh`, `smoke-tools.sh`, `smoke-grammar.sh` and `smoke-tier00-consistency.sh`.
+   [Tier 01](TIER-01-gpu-activation-residency.md) fixed the same line in `compare-llama-cpp.sh` — it
+   now holds a named pipe open on a descriptor it owns and releases both with the engine — and
+   deliberately left these eight, because none of them sources `perf-lib.sh` today and several cannot be
+   exercised without a GPU, real models and a long run. That was the right call for a tier that could not
+   run them. **It is the wrong call for this tier, which runs three of them as required gates**:
+   `compare-vision.sh` (mandatory here, not optional), `compare-prefill-batch.sh` and, through the
+   cross-surface matrix, `compare-schedule.sh`.
+
+   Move Tier 01's named-pipe helper into `perf-lib.sh` — which is a safe host for it, since it defines
+   functions only and its one assignment is guarded — and have all nine scripts source it, rather than
+   making eight separate copies of the same edit. This is not hygiene for its own sake: Tier 01's record
+   documents that the accumulated orphans (some two days old, from Tier 00's smoke script, still
+   spawning) made `pgrep` checks for "is a sweep still running" return false positives, which cost real
+   time while stopping a sweep. This tier runs more sweeps than any tier before it, and every later tier
+   inherits both the scripts and the problem.
+
+   **Exit condition:** a full run of each of the nine scripts leaves zero leftover shells and zero
+   leftover pipes, checked with `pgrep` and `lsof` immediately after the script returns, on the same host.
+   For the scripts this tier cannot fully exercise (no AMD hardware, or a model this host will not fit),
+   run them far enough to launch and stop an engine at least once — which is all that is needed to
+   demonstrate the leak is gone, since the leak is per engine launch rather than per run.
 
 ### Out of scope
 
@@ -245,25 +272,32 @@ on today's op-at-a-time GPU path either way.
 
 ## Implementation steps
 
+0. **Ship the two script fixes before the first sweep, because both of them affect running one.**
+   `scripts/performance-tests/check-plan-thresholds.sh` (execution rule 7's enforcement, hoisted out of
+   Tier 14 — see the test list below) and scope item 5's engine-keepalive reaping. The second one comes
+   first in practice: this tier runs more engine launches than any tier before it, and until the leak is
+   fixed a `pgrep` check for "is a sweep still running" returns false positives, which is a problem
+   whose cost is paid during step 1 rather than after it. Neither needs a model, a GPU or a build.
 1. Re-baseline first. Run `compare-llama-cpp.sh --gpu` at `n_prompt` 128 and 512 on all four sweep
    models on current HEAD (post-Tier-01), under the parity-corrected harness required by this plan's
    "Benchmark parity preconditions" (README), and with each lane's actual resolved
    `--gpu-attention` value recorded rather than assumed — the historical numbers quoted above were
    taken before those corrections, with at least one lane mislabelled, and are not a valid
    before-measurement for this tier's gate.
-2. **Land item 0 next, before anything else in this tier.** Not because it is cheap — it is four
-   kernel integrations against four handlers that each own their own KV map and attention math, plus
-   a capability-reporting mechanism that does not exist yet — but because leaving it until later
-   would mean every subsequent measurement in this tier is taken against a baseline that is fast on
-   four architectures and slow on four others. Re-measure immediately after, so the default change
+2. **Land item 0 next, before anything else that changes the forward pass.** Not because it is cheap —
+   it is four kernel integrations against four handlers that each own their own KV map and attention
+   math, plus a capability-reporting mechanism that does not exist yet — but because leaving it until
+   later would mean every subsequent measurement in this tier is taken against a baseline that is fast
+   on four architectures and slow on four others. Re-measure immediately after, so the default change
    has its own attributable number, and record that number per architecture: the Llama-family 3.85x
-   says nothing about what these four will do.
+   says nothing about what these four will do. Three of the four have a real file to measure on — see
+   "Models needed", and check `models/` rather than trusting any table.
 3. **Build the `juno.DeviceStaging` and `juno.WeightDequant` spans (scope item 1a) before
    attempting the breakdown.** This is net-new instrumentation with `metrics` tests, not a
    measurement step, and the breakdown's "no unattributed residue" criterion is unreachable without
    it. Land it on the post-item-0 build so the spans are present for every measurement from here on.
 4. Produce the per-term prefill breakdown (scope item 1b) and publish it.
-   Decide which of items 2-4 the breakdown actually justifies, and record the decision in this file
+   Decide which of scope items 2, 3 and 4 the breakdown actually justifies, and record the decision here
    — item 0 may well have moved which term dominates, which is the point of sequencing it here. The
    expected ranking going in is that host-device staging (item 2) dominates once attention is on the
    GPU, since a 512-token window moves roughly 8 MB each way per matmul; if the breakdown says
@@ -312,6 +346,16 @@ on today's op-at-a-time GPU path either way.
   `/v1/chat/completions` with 128-, 512- and 2048-token prompts against `tinyllama` and `mistral-7b`,
   on both schedules, asserting correct output and recording TTFT; and asserts greedy-decode output is
   identical to the pre-tier build for the same prompt and seed.
+- **`scripts/performance-tests/check-plan-thresholds.sh` (new, and this tier ships it).** Execution
+  rule 7 in [`README.md`](README.md) says every tier file with a `Perf gate` must carry a `**Threshold`
+  block with a numeral and a comparison operator, and says the rule is machine-checked. The check was
+  originally specified inside Tier 14's doc-consistency script, which left a rule governing seventeen
+  tiers enforced by nothing until the last of them. This tier is the next to execute, so it ships the
+  script: grep every `TIER-*.md` in this tree, fail on any file containing `Perf gate` without a
+  matching `**Threshold` block, exclude `TIER-14-*.md` (it names the string to describe the check), and
+  exit non-zero with the offending filenames listed. Every later tier runs it as the first item of its
+  own test list, before its own tests, and Tier 14 calls it rather than restating it. It needs no model,
+  no GPU and no build — it is `grep` and an exit code, and it should run in under a second.
 - **Perf gate (required)**: this is by definition a forward-pass change. `compare-lora.sh`,
   `compare-vision.sh` (mandatory here, not optional — vision runs the widest batches in the system),
   `compare-prefill-batch.sh`, and `compare-llama-cpp.sh` at both `n_prompt` 128 and 512; publish under
@@ -323,9 +367,11 @@ on today's op-at-a-time GPU path either way.
   **Threshold, item 0 on its own.** Every architecture newly covered by the default change (Phi-2,
   Phi-3, Qwen3, Qwen3-MoE) must show a measured prefill gain against its own pre-item-0 baseline on
   the same host and prompt length — a default flipped on that buys nothing on a given architecture is
-  a finding to report and investigate, not a checkbox. **There is no reference point for these four.**
-  The 3.85x figure is TinyLlama's, on the one architecture family where the kernel was already the
-  default, so it predicts nothing here; record what each of the four actually does. Decode is also
+  a finding to report and investigate, not a checkbox. Three of the four have a file on disk to
+  measure on (Phi-3, Qwen3, Qwen3-MoE — see "Models needed"), so three of the four readings are
+  obtainable in this tier without asking for anything. **There is no reference point for any of
+  them.** The 3.85x figure is TinyLlama's, on the one architecture family where the kernel was already
+  the default, so it predicts nothing here; record what each one actually does. Decode is also
   expected to move on these architectures, since attention has been measured at 64.2% of decode wall
   time at ctx around 512; a flat decode result here is a signal that the kernel is not actually being
   taken, not a pass.
@@ -379,37 +425,54 @@ on today's op-at-a-time GPU path either way.
 The four standing sweep models (`tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf`,
 `qwen2.5-3b-instruct-q4_k_m.gguf`, `Phi-3.5-mini-instruct-Q4_K_M.gguf`,
 `mistral-7b-instruct-v0.1-q4_k_m.gguf`) plus `moondream2-q5_k.llamafile` for the vision gate cover
-items 1 through 4. All present.
+items 1 through 4. All present. Item 5 (the script-leak fix) needs no model file, though verifying it
+means launching an engine at least once per script.
 
-**Item 0 has a real model gap, and it blocks part of its own threshold.** Per
-[`INVENTORY.md`](INVENTORY.md), of the four architectures whose default this tier flips on:
+**Item 0's model coverage, corrected.** An earlier draft of this section listed Qwen3 and Qwen3-MoE
+as untestable for want of a file. Both files are on disk, and have been since before this tier was
+written — [`INVENTORY.md`](INVENTORY.md) was corrected on 2026-09-24 and
+[Tier 01](TIER-01-gpu-activation-residency.md)'s execution record notes the correction, but this
+table was not updated with it. Read from the file headers:
 
 | Architecture | Testable today | With what |
 |---|---|---|
 | Phi-3 | yes | `Phi-3.5-mini-instruct-Q4_K_M.gguf` |
-| Phi-2 | partly | only via `moondream2-q5_k.llamafile`'s phi2 backbone, which exercises it through the vision path rather than plain text generation |
-| Qwen3 | **no** | only `qwen35` is on disk, and Tier 00 made that one fail closed by name |
-| Qwen3-MoE | **no** | no `qwen3moe` file on disk at all |
+| Phi-2 | yes | `phi-2.Q4_K_M.gguf` (1.7 GB, header reports `general.architecture=phi2`). On disk since 2026-09-23 and first noticed on 2026-09-26, while this table still said the only Phi-2 was `moondream2-q5_k.llamafile`'s backbone reached through the vision path |
+| Qwen3 | yes | `Qwen3-1.7B-Q4_K_M.gguf` (1.1 GB, header reports `general.architecture=qwen3`) |
+| Qwen3-MoE | yes, with a caveat | `Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf` (18.6 GB, `qwen3moe`). Too large to fully offload to 8 GiB of VRAM, so its per-architecture gain is measured at partial offload and the offloaded layer count is recorded beside the figure. A partial-offload measurement is a real measurement; absence of a full-offload one is not grounds for leaving the default off |
 
-So item 0 can ship kernel support for all four, but can only produce the required per-architecture
-measured gain for Phi-3, and partially for Phi-2. Ask the user for a plain Phi-2 GGUF, a plain
-`qwen3` (non-3.5, non-MoE) GGUF, and a working `qwen3moe` GGUF **at the point this tier starts** —
-these are the same three files [`INVENTORY.md`](INVENTORY.md) already lists as missing for Tiers 06
-and 08, so obtaining them here pays for those tiers too. If they are not available, Qwen3 and
-Qwen3-MoE ship the kernel path with unit-test coverage only and their **defaults stay resolved off**
-with the explicit notice from item 0 rather than being flipped on unmeasured — turning on an
-unvalidated default is exactly the silent-degrade this item exists to remove.
+So item 0 can ship kernel support for all four **and** produce the required per-architecture measured
+gain for every one of them — Phi-2, Phi-3, Qwen3 and Qwen3-MoE (the last at partial offload). No file
+is missing for this item, and nothing here needs asking the user for.
+
+**No architecture may therefore ship with its default resolved off for want of a measurement.** An
+earlier version of this section pre-authorised exactly that for Phi-2, on the strength of a file gap
+that had already closed. Every one of the four has a real file, so every one gets a measured default.
+Turning on an unvalidated default is exactly the silent-degrade this item exists to remove — and so is
+leaving a default off
+because a table said a file was missing when it was not.
+
+**Lesson recorded for the rest of the tree, not just this tier.** A correction to
+[`INVENTORY.md`](INVENTORY.md) is propagated to every tier whose "Models needed" section cites the
+corrected row, in the same pass that makes the correction — otherwise a stale availability claim
+silently narrows a later tier's scope, which is what happened here and what would have shipped two
+architectures' defaults off on a false premise.
 
 ## Exit criteria
 
 - [ ] `--gpu-attention` defaults to on for every architecture whose gain was actually measured on a
-      real model (Llama-family, Mistral, Qwen2, Phi-3 at minimum), and any architecture that could not
-      be measured for want of a model file keeps its default resolved off behind the explicit notice
-      rather than being flipped on unvalidated — with the missing file named. The ROCm answer decided
-      and either implemented (`NEEDS-AMD-HARDWARE`) or made an explicit announced fallback. No path
-      resolves to scalar silently, whichever way each one landed.
+      real model — Llama-family, Mistral, Qwen2, **Phi-2, Phi-3, Qwen3 and Qwen3-MoE**, since a file
+      exists on disk for each of those last four (see "Models needed"; Qwen3-MoE is measured at
+      partial offload and the offloaded layer count is recorded beside its figure). **No architecture
+      on this list has a file gap to fall back on**, so none may keep its default resolved off for
+      want of a measurement; the Phi-2 exception this criterion used to carry was written against a
+      gap that had already closed. The ROCm answer decided and either implemented (`NEEDS-AMD-HARDWARE`) or
+      made an explicit announced fallback. No path resolves to scalar silently, whichever way each one
+      landed.
 - [ ] Each newly covered architecture shows a measured prefill gain against its own pre-item-0
-      baseline, or is documented as unmeasured with the reason and the missing model named.
+      baseline. "Unmeasured" is only acceptable for an architecture with no file on disk, and the
+      claim is checked against `models/` at the time this tier runs rather than against this file's
+      table — that table was wrong once already.
 - [ ] Greedy-decode divergence from the FP16 KV mirror characterised per newly covered architecture
       and documented in `docs/howto.md` and `--help`, with `off` retained as the bit-identical
       CPU-parity baseline.
@@ -434,6 +497,14 @@ unvalidated default is exactly the silent-degrade this item exists to remove.
       whose contract matches the one Tier 10 item 4 adds for CPU.
 - [ ] Chunk-sizing defaults reviewed per surface; any surface still pinned at `32` has a measured
       reason, not an inherited one.
+- [ ] `scripts/performance-tests/check-plan-thresholds.sh` exists, passes against this tree, and fails
+      against a deliberately broken copy of a tier file with its threshold block removed — a check that
+      cannot fail is not a check. Recorded here as shipped, so later tiers run it rather than re-deriving
+      execution rule 7's enforcement.
+- [ ] The engine-keepalive subshell leak is gone from all eight sibling scripts, via a shared helper in
+      `perf-lib.sh` rather than eight copies of the edit, and a full run of each of the nine scripts
+      leaves zero leftover shells and zero leftover pipes. Until this is checked, a `pgrep` check for a
+      running sweep is unreliable, which already cost real time once.
 - [ ] Prefill throughput no longer degrades with prompt length: the `n_prompt=512` pp ratio is greater
       than or equal to the `n_prompt=128` pp ratio for every sweep model — **both measured under
       `RAW_PROMPT=1` with the same `--vector` setting**, which no published pair of runs has ever

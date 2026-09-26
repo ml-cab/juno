@@ -132,11 +132,17 @@ handler that exists when this tier starts**, including `gemma4`, `mistral3`, `qw
 
 `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf` as the draft model and `mistral-7b-instruct-v0.1-q4_k_m
 .gguf` as the target (matching the existing benchmark setup that produced the 0.52x finding) are
-already present and sufficient. Phi-2/Phi-3/Qwen3/Qwen3-MoE `forwardVerify` testing needs a working
-model per architecture — `Phi-3.5-mini-instruct-Q4_K_M.gguf` is present; a plain Phi-2, a plain
-`qwen3` (non-MoE, non-3.5), and a working `qwen3moe` model are not (see
-[`INVENTORY.md`](INVENTORY.md)) — flag to the user at the point this tier reaches those specific
-sub-checks if they're still missing.
+already present and sufficient. `forwardVerify` testing needs a working model per architecture, and
+all four are on disk: `phi-2.Q4_K_M.gguf` (`phi2`), `Phi-3.5-mini-instruct-Q4_K_M.gguf` (`phi3`),
+`Qwen3-1.7B-Q4_K_M.gguf` (`qwen3`) and `Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf` (`qwen3moe`, 18.6 GB,
+so partial offload on this host). This section has twice claimed a file was missing that was already
+on disk — the two Qwen3 files, corrected in [`INVENTORY.md`](INVENTORY.md) on 2026-09-24, and the
+plain Phi-2, corrected there on 2026-09-25. Nothing this tier needs is absent; check `models/` rather
+than this paragraph when confirming that.
+
+Every handler Tier 08 added (`gemma4`, `mistral3`, `qwen35`, `minimax-m2`) has its real file on disk
+by construction — those files are why that tier exists — so their `forwardVerify` coverage needs no
+new download.
 
 ## Exit criteria
 

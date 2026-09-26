@@ -419,6 +419,36 @@ that no amount of reading the base architecture's paper or README can substitute
 Linux/macOS only for now — `scripts/run.bat` does not currently wire up `gguf-info` (it implements
 `cluster`/`local`/`lora`/`test`/`merge`/`lora-import`).
 
+Two tokenizer keys in that dump decide how a prompt is split, and are worth reading before
+reporting odd tokenization: `tokenizer.ggml.model` (`gpt2` for a byte-level BPE vocabulary,
+anything else for SentencePiece) and `tokenizer.ggml.pre` — see the next section.
+
+---
+
+### Pre-tokenizer splits (`tokenizer.ggml.pre`)
+
+A byte-level BPE vocabulary (`tokenizer.ggml.model = gpt2`) is built over text that was first cut
+into pre-tokens by a fixed pattern, and its merges only ever join characters inside one of them.
+The `tokenizer.ggml.pre` key names that pattern, and Juno applies it: text is cut into pre-tokens
+first, and each one is merged on its own so no merge crosses a boundary the vocabulary was built to
+respect. Without it, a run of whitespace before a word and a group of digits both merge in ways the
+training never produced — silently, since nothing about a wrong-but-valid token sequence throws.
+
+| Declared value | What Juno does |
+|---|---|
+| `qwen2` | Applies that split: one piece per digit. Qwen2.5, Qwen3 and Qwen3-Coder files declare it |
+| `llama-bpe` | Applies that split: digits group up to three at a time. Llama-3 family files declare it |
+| `default`, or no key at all | No split — text is merged one segment at a time, the behaviour these files have always had. The load line says so |
+| anything else | **Refused at load**, with an error naming the declared type and listing what is implemented |
+
+The refusal is deliberate: tokenizing a file under a split that was never checked for it produces a
+token sequence the model was not trained on, which degrades output quality without failing. Run
+`./juno gguf-info` on the file to read its declared value.
+
+The key governs BPE vocabularies only. A SentencePiece vocabulary carries no pre-tokenizer split —
+its word boundaries come from the `▁` prefix — so Juno does not consult the key for one, and such a
+file tokenizes identically whatever it declares.
+
 ---
 
 ### OpenAI-compatible REST API (`--api-port`)

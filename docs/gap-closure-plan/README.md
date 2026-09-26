@@ -53,14 +53,26 @@ before acting on it — both documents are snapshots, not ground truth that stay
    metric it introduces — "measured, published, no unexplained regression" alone is not enough for a
    metric with no prior baseline to be implicitly anchored to. See "Test infrastructure" below for
    the specific llama.cpp-relative gate this adds on top of the existing `compare-lora.sh` rule.
-   **This rule is machine-checked, not trusted.** Tier 14's `smoke-tier14-doc-consistency.sh` greps
-   this tree and fails if any tier file containing the string `Perf gate` does not also contain a
-   `**Threshold` block carrying at least one numeral and a comparison operator. It matches on
-   `Perf gate`, not `Perf gate (required)`, because three spellings of that heading are already in
-   use and keying on the longest one would let the other two through. Tier 14's own file is excluded
-   from the scan, since it names the string to describe the check. The rule was added once and
-   immediately drifted — at the time this enforcement was written only six of seventeen tier files
-   stated a threshold at all, and Tiers 11 and 12 both declared a required perf gate with no number.
+   **This rule is machine-checked, not trusted, and the check does not wait for Tier 14.** It lives in
+   `scripts/performance-tests/check-plan-thresholds.sh`, greps this tree, and fails if any tier file
+   containing the string `Perf gate` does not also contain a `**Threshold` block carrying at least one
+   numeral and a comparison operator. It matches on `Perf gate`, not `Perf gate (required)`, because
+   three spellings of that heading are already in use and keying on the longest one would let the other
+   two through. Tier 14's own file is excluded from the scan, since it names the string to describe the
+   check.
+
+   **The script ships in the next tier to execute, and every later tier runs it as the first item of its
+   own test list.** It was originally specified inside Tier 14's `smoke-tier14-doc-consistency.sh`,
+   which meant a rule governing seventeen tiers was enforced by nothing until the last of them — the
+   same deferral shape this rule exists to prevent. Tier 14 keeps the check as one input to its
+   doc-consistency script rather than as its origin: that script sources or calls this one instead of
+   restating it, so there is one implementation and one place a spelling can drift. Whichever tier is
+   active when this paragraph is first read owns shipping it, and records in its own file that it did.
+
+   The rule was added once and immediately drifted — at the time this enforcement was written only six
+   of seventeen tier files stated a threshold at all, and Tiers 11 and 12 both declared a required perf
+   gate with no number. It has since been brought into compliance by hand across every tier file, which
+   is exactly the state a check is needed to hold rather than to establish.
 8. **Doc/comment claim audits are repo-wide, not scoped to a named list of files.** When a tier's job
    is to fix a doc/code drift item (Tier 00's §2.x items, Tier 14's full audit), the fix is not
    complete until the same class of claim has been grepped for across `src/main` and `CHANGELOG.md`,
@@ -181,7 +193,7 @@ ordering while sitting after 06; that rationale is corrected there.
 | [02](TIER-02-attention-long-context.md) | Attention & long context | §1.2 |
 | [03](TIER-03-kv-cache-maturity.md) | KV cache maturity | §1.3 |
 | [04](TIER-04-quantization-coverage.md) | Quantization coverage (mapped weight loading first) | §1.1 |
-| [04B](TIER-04B-tokenizer-fidelity.md) | Tokenizer fidelity | none — see that file's "Why this tier, why now" |
+| [04B](TIER-04B-tokenizer-fidelity.md) | Tokenizer fidelity (per-family splits and cross-engine parity; the key read and fail-closed path moved to Tier 01 as parity precondition 7) | none — see that file's "Why this tier, why now" |
 | [04C](TIER-04C-packed-weight-matmul.md) | Packed-weight matmul (dequantize-to-FP16 elimination) | none — adjacent to §1.1; see that file's "Why this tier, why now" |
 | [05](TIER-05-sampling-grammar.md) | Sampling & grammar completeness | §1.4 |
 | [08](TIER-08-model-architecture-breadth.md) | Model architecture breadth | §1.9, real files in `models/` |
@@ -302,8 +314,12 @@ every ratio this plan is about to collect would inherit the difference:
 | Four JFR creation sites disagree: `run.sh`'s `cmd_test` uses `settings=profile`, `ClusterHarness` uses `settings=default`, and `ConsoleMain` builds two recordings programmatically from `Configuration.getConfiguration("default")` (`startLocalJfr` and the cluster-coordinator recording) | measurements carry different instrumentation overhead and are not directly comparable. Note which site matters: `compare-llama-cpp.sh` passes `--jfr` as an *app* argument, so **every published Juno ratio was taken under `ConsoleMain`'s programmatic `default`** — not under either of the two configurations named in a `settings=` string |
 | no CPU governor, turbo, or GPU clock state is recorded | a thermally throttled run is indistinguishable from a regression |
 | no JDK event is consumed anywhere in this repository — `JfrMetricsExtractor` declares only `juno.*` names, and `compare-llama-cpp.sh`'s `jfr_summary_json` reads only `juno.ForwardPass.*`/`juno.TokenProduced.*` | GC pauses, allocation rate, hot methods and lock/park time cannot be read off any gate run, so the noise-control rule below and Tier 10's cost breakdown are unenforceable until the extractor is widened |
+| **the two engines tokenize the same prompt differently.** `GgufTokenizer` never reads `tokenizer.ggml.pre` — a repo-wide grep finds no reference to that key anywhere — so it applies one BPE strategy whatever the file declares, while the reference tool applies the pre-tokenizer split the file asks for | `prompt_tokens` is the denominator of every pp figure and the context depth every tg figure is taken at, so a token-count difference is absorbed silently into both ratios. Precondition 1's 10% tolerance detects a large divergence but cannot correct one, and cannot see a divergence that happens to land inside 10% |
 
-Before Tier 01 publishes its gate, `compare-llama-cpp.sh` gains, in this order of importance:
+Before Tier 01 publishes its gate, the harness and the engine gain the following, in this order of
+importance. Preconditions 1 to 6 are `compare-llama-cpp.sh` changes; precondition 7 is an engine
+change, and it is here rather than in a later tier because it moves the same number precondition 1
+moves:
 
 1. **Prompt-token parity.** `RAW_PROMPT` defaults to `1`, so Juno prefills approximately the same
    token count llama-bench is given. Every result JSON records Juno's actual `prompt_tokens`
@@ -323,6 +339,35 @@ Before Tier 01 publishes its gate, `compare-llama-cpp.sh` gains, in this order o
    published INDEX rather than leaving it implicit).
 5. A fixed per-model `COMPARE_HEAP` rather than a derived one.
 6. CPU governor plus `nvidia-smi -q -d CLOCK` captured into the run metadata.
+7. **Pre-tokenizer parity.** `tokenizer.ggml.pre` is read and dispatched on for every pre-type the
+   sweep models declare, so the token count the ratio divides by is the count the model was trained
+   against, and a file declaring a pre-type Juno does not implement is rejected at load with an error
+   naming it. A ratio published before this lands carries a tokenization boundary as well as a
+   prompt-length one. This is last in the ordering because it is the only one of the seven that is a
+   change to `src/main` rather than to the harness, not because it matters least: preconditions 1 and
+   7 move the same figure, and 1 without 7 is a tolerance around an error rather than its absence.
+   The work is [Tier 04B](TIER-04B-tokenizer-fidelity.md)'s items 1 and 3, hoisted into Tier 01 for
+   this reason; that tier keeps the per-family splits and the cross-engine parity corpus, which
+   deepen the guarantee but do not gate a ratio.
+
+   **Landed 2026-09-26**, in [Tier 01](TIER-01-gpu-activation-residency.md) — see its execution
+   record for the enumeration of declared types across `models/` and the measured divergence. The
+   finding that matters for this list: **it moved no sweep model's benchmark `prompt_tokens`, so the
+   2026-09-25 reference sweeps are not superseded** and the ratios in the target table above do not
+   carry a tokenization boundary after all. Three of the four sweep models are SentencePiece, which
+   takes no pre-tokenizer split at all, and the fourth's benchmark prompt contains none of the
+   constructs the split moves.
+
+**Why precondition 7 is not simply left to Tier 04B where it was written.** Tier 04B sits eighth in
+the running order, after Tiers 01, 01B, 02, 03 and 04 have each published a `compare-llama-cpp.sh`
+ratio. `prompt_tokens` is the denominator of every pp figure and sets the context depth of every tg
+figure, so landing pre-tokenizer dispatch at that point would make Tier 04B a second measurement
+boundary crossing five tiers of published gates — including [Tier 01B](TIER-01B-prefill-throughput.md)'s
+`pp >= 0.10x` milestone, which is the largest single performance ask in this plan and the one it can
+least afford to have scored against a denominator that later moves. Tier 04B's own text makes the
+argument for this: it says precondition 1's tolerance "is a guard against the symptom. This tier
+removes the cause." A cause of a measurement error belongs with the measurement corrections, and the
+measurement corrections are Tier 01's.
 
 The JFR configuration mismatch is resolved in the same change, and the fix has to name all four
 creation sites, not the two that carry a literal `settings=` string. Add
@@ -426,6 +471,14 @@ CI pipeline is added during this plan's execution, wiring `mvn test` plus the re
 at Tier 07 or at the first point a tier's full smoke matrix exceeds thirty minutes of hands-on
 execution, whichever comes first. Record the outcome of that re-examination in the then-active
 tier's file, so "we decided not to" stays a decision with a date on it rather than an omission.
+
+**That trigger now has somewhere to fire.** Naming Tier 07 here and nowhere else meant the revisit
+lived only in this paragraph, and a reader working through Tier 07's own scope and exit criteria would
+never learn it was due — an omission of exactly the shape this paragraph exists to prevent.
+[Tier 07](TIER-07-continuous-batching.md) now carries it as a scope item and an exit criterion. The
+thirty-minute condition stays a standing trip-wire for every tier: a tier whose smoke matrix crosses
+it records the re-examination in its own file even if Tier 07 has already been closed out, because the
+condition is about how expensive the matrix has become, and that only grows.
 
 ## Model and hardware inventory
 
