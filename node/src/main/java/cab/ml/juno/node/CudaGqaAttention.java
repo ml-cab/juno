@@ -42,16 +42,47 @@ final class CudaGqaAttention {
 	private final GpuContext ctx;
 	private final GpuBindings gpu;
 
-	private static final ThreadLocal<GqaScratch> SCRATCH = ThreadLocal.withInitial(GqaScratch::new);
+	/**
+	 * Device scratch, pooled by concurrent callers rather than kept per thread:
+	 * this path runs outside the context's serialization lock, so callers at the
+	 * same time need separate entries, and a request's thread ends with it.
+	 */
+	private final DeviceScratchPool<GqaScratch> scratch;
 
 	private static final class GqaScratch {
 		MemorySegment dQ, dOut, dScores, dKPtrs, dVPtrs, dSeqLens;
 		long qBytes, outBytes, scoresBytes, ptrBytes, seqLensBytes;
+
+		long deviceBytes() {
+			return qBytes + outBytes + scoresBytes + 2 * ptrBytes + seqLensBytes;
+		}
 	}
 
 	private CudaGqaAttention(GpuContext ctx) {
 		this.ctx = ctx;
 		this.gpu = ctx.bindings();
+		this.scratch = new DeviceScratchPool<>(GqaScratch::new, this::free);
+	}
+
+	private void free(GqaScratch s) {
+		gpu.deviceFree(s.dQ);
+		gpu.deviceFree(s.dOut);
+		gpu.deviceFree(s.dScores);
+		gpu.deviceFree(s.dKPtrs);
+		gpu.deviceFree(s.dVPtrs);
+		gpu.deviceFree(s.dSeqLens);
+		s.dQ = s.dOut = s.dScores = s.dKPtrs = s.dVPtrs = s.dSeqLens = null;
+		s.qBytes = s.outBytes = s.scoresBytes = s.ptrBytes = s.seqLensBytes = 0L;
+	}
+
+	/** Frees the pooled device scratch. A call after this still works and frees its own. */
+	void close() {
+		scratch.close();
+	}
+
+	/** Device bytes held by idle pooled scratch entries. */
+	long scratchDeviceBytes() {
+		return scratch.idleBytes(GqaScratch::deviceBytes);
 	}
 
 	/** Returns a usable instance for {@code ctx}, or {@code null} when the backend isn't CUDA. */
@@ -95,7 +126,19 @@ final class CudaGqaAttention {
 		long ptrBytes = (long) batch * ADDRESS.byteSize();
 		long seqLensBytes = (long) batch * Integer.BYTES;
 
-		GqaScratch s = SCRATCH.get();
+		GqaScratch s = scratch.acquire();
+		try {
+			return attendWith(s, kernel, kv, qBatch, seqLens, outBatch, batch, numHeads, headDim, gqaRatio, kvDim,
+					rowDim, maxSeqLen, qBytes, outBytes, scoresBytes, ptrBytes, seqLensBytes);
+		} finally {
+			scratch.release(s);
+		}
+	}
+
+	private boolean attendWith(GqaScratch s, GqaAttentionKernel kernel, DeviceKvCache[] kv, float[][] qBatch,
+			int[] seqLens, float[][] outBatch, int batch, int numHeads, int headDim, int gqaRatio, int kvDim,
+			int rowDim, int maxSeqLen, long qBytes, long outBytes, long scoresBytes, long ptrBytes,
+			long seqLensBytes) {
 		int dev = ctx.deviceIndex();
 		if (s.qBytes < qBytes) {
 			gpu.deviceFree(s.dQ);

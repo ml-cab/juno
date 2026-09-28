@@ -34,6 +34,12 @@ public record Qwen3Config(
 		boolean expertWeightsNorm,
 		Qwen3RopeConfig rope) {
 
+	/** Same config with a different RoPE pair layout (test-only override). */
+	Qwen3Config withRopePairing(RopePairing pairing) {
+		return new Qwen3Config(base, expertCount, expertUsedCount, expertFeedForwardLength, expertWeightsScale,
+				expertWeightsNorm, rope.withPairing(pairing));
+	}
+
 	public static Qwen3Config from(GgufReader r) throws IOException {
 		LlamaConfig raw = LlamaConfig.from(r);
 		String arch = raw.architecture();

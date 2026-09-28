@@ -349,7 +349,7 @@ public final class RmsNormRoundTripMicrobench {
 		return new WidthResult(new Cell(label, batch, dim, List.of(cpu, gpuReading)), maxAbsDiff);
 	}
 
-	private static Reading measureLane(String lane, Runnable op, long warmupMs, long targetMs, int reps) {
+	static Reading measureLane(String lane, Runnable op, long warmupMs, long targetMs, int reps) {
 		warmUp(op, warmupMs * 1_000_000L);
 		int iters = calibrateIters(op, targetMs * 1_000_000L);
 		double[] repMs = new double[reps];
@@ -434,7 +434,7 @@ public final class RmsNormRoundTripMicrobench {
 		return String.format(Locale.ROOT, "%.0f", v);
 	}
 
-	private static int[] parseInts(String csv) {
+	static int[] parseInts(String csv) {
 		String[] parts = csv.split(",");
 		int[] out = new int[parts.length];
 		for (int i = 0; i < parts.length; i++)

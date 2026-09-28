@@ -18,8 +18,11 @@ package cab.ml.juno.node;
 import java.lang.foreign.MemorySegment;
 
 /**
- * Per-thread device scratch holding one weight-shaped FP16 buffer: the dequant
- * output of whichever {@link DeviceQ4KMatrix} projection is mid-prefill.
+ * Device scratch holding one weight-shaped FP16 buffer: the dequant output of
+ * whichever {@link DeviceQ4KMatrix} projection is mid-prefill. One per
+ * {@link CudaMatVec} instance, used under the context's serialization lock, so
+ * the device holds one such matrix per backend - the figure
+ * {@link DeviceScratchBudget#reserveBytes} reserves - not one per thread.
  *
  * <p>Unlike {@code Fp16Scratch}'s {@code dXh}/{@code dY} (sized by batch), this
  * buffer is sized by {@code rows * cols} of the weight matrix being dequantized —
@@ -31,6 +34,20 @@ final class Q4KDequantScratch {
 
     private MemorySegment dOutFp16;
     private long bytes;
+
+    /** Device bytes held now. */
+    long heldBytes() {
+        return bytes;
+    }
+
+    /** Frees the buffer; the next {@link #ensure} allocates again. */
+    void release(CudaBindings cuda) {
+        MemorySegment previous = dOutFp16;
+        dOutFp16 = null;
+        bytes = 0L;
+        if (previous != null)
+            cuda.deviceFree(previous);
+    }
 
     /** Returns a device FP16 buffer of at least {@code rows * cols} half-words, growing if needed. */
     MemorySegment ensure(CudaBindings cuda, int deviceIndex, long rows, long cols) {

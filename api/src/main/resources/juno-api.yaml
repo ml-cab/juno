@@ -564,16 +564,19 @@ components:
           maximum: 32768
           default: 0
           description: |
-            Tokens this request must produce before an end-of-sequence token may
-            end it. 0 (default) leaves the model free to stop whenever it likes,
-            which is the behaviour of every earlier release.
+            Tokens this request must produce before the model may end it. 0
+            (default) leaves the model free to stop whenever it likes, which is
+            the behaviour of every earlier release.
 
             Must not exceed the effective maximum; a larger value is rejected
             with HTTP 400 rather than clamped, so a caller is never silently
-            given fewer tokens than it asked for. Only the end-of-sequence token
-            is held back: an explicit `stop` sequence still ends generation below
-            the minimum, because a caller who asked for a stop string asked for
-            it unconditionally.
+            given fewer tokens than it asked for. Below the minimum the model's
+            own end signals are held back: the end-of-sequence token, the
+            vocabulary's chat turn-marker tokens, and a chat role header or turn
+            marker appearing in the decoded text (which is then returned as
+            ordinary text). An explicit `stop` sequence still ends generation
+            below the minimum, because a caller who asked for a stop string asked
+            for it unconditionally.
 
             Maps to: `SamplingParams.minTokens`
           example: 64

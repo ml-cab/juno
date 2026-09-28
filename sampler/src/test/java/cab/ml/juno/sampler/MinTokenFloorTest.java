@@ -105,4 +105,61 @@ class MinTokenFloorTest {
 		assertThat(floor.holdsOpen(3)).isFalse();
 		assertThat(new MinTokenFloor(EOS, 0).holdsOpen(0)).isFalse();
 	}
+
+	// ── The model's own end signals beyond end-of-sequence ──────────────────
+
+	private static final int TURN = 3;
+
+	@Test
+	void suppressesEveryHeldEndSignalWhileBelowTheFloor() {
+		// A chat turn marker ends generation exactly as end-of-sequence does, so a
+		// minimum that holds back only one of them does not hold.
+		float[] logits = { 1.0f, 2.0f, 9.0f, 8.0f };
+		new MinTokenFloor(EOS, new int[] { TURN }, 5).mask(logits, 0);
+
+		assertThat(logits[EOS]).isEqualTo(Float.NEGATIVE_INFINITY);
+		assertThat(logits[TURN]).isEqualTo(Float.NEGATIVE_INFINITY);
+		assertThat(logits[0]).isEqualTo(1.0f);
+		assertThat(logits[1]).isEqualTo(2.0f);
+	}
+
+	@Test
+	void releasesEveryHeldEndSignalAtTheFloor() {
+		float[] logits = { 1.0f, 2.0f, 9.0f, 8.0f };
+		new MinTokenFloor(EOS, new int[] { TURN }, 5).mask(logits, 5);
+
+		assertThat(logits).containsExactly(1.0f, 2.0f, 9.0f, 8.0f);
+	}
+
+	@Test
+	void yieldsWhenOnlyHeldEndSignalsSurvive() {
+		// The grammar rule widens with the set: if a grammar leaves only ending
+		// tokens legal, ending is allowed.
+		float[] logits = { Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, 9.0f, 8.0f };
+		new MinTokenFloor(EOS, new int[] { TURN }, 5).mask(logits, 0);
+
+		assertThat(logits).containsExactly(Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, 9.0f, 8.0f);
+	}
+
+	@Test
+	void holdsBackEndOfSequenceEvenWhenListedAgainAmongTheOthers() {
+		float[] logits = { 1.0f, 2.0f, 9.0f, 8.0f };
+		new MinTokenFloor(EOS, new int[] { EOS, TURN, 99, -1 }, 5).mask(logits, 0);
+
+		assertThat(logits[EOS]).isEqualTo(Float.NEGATIVE_INFINITY);
+		assertThat(logits[TURN]).isEqualTo(Float.NEGATIVE_INFINITY);
+		assertThat(logits[1]).isEqualTo(2.0f);
+	}
+
+	@Test
+	void doesNotKeepAReferenceToTheCallersArray() {
+		int[] held = { TURN };
+		MinTokenFloor floor = new MinTokenFloor(EOS, held, 5);
+		held[0] = 0;
+		float[] logits = { 1.0f, 2.0f, 9.0f, 8.0f };
+		floor.mask(logits, 0);
+
+		assertThat(logits[0]).isEqualTo(1.0f);
+		assertThat(logits[TURN]).isEqualTo(Float.NEGATIVE_INFINITY);
+	}
 }

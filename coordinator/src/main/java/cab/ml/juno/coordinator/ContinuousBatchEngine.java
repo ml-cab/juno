@@ -192,7 +192,7 @@ final class ContinuousBatchEngine {
 		Slot slot = new Slot(request, pending.consumer(), pending.future(), Instant.now(), kvKey, hasSession,
 				promptIds.clone(), promptIds.length, decodeBase, prefill, params,
 				GrammarBinding.open(tokenizer, params, kvKey),
-				new MinTokenFloor(tokenizer.eosTokenId(), params.minTokens()));
+				loop.minTokenFloor(request.samplingParams()));
 		slot.stream = tokenizer.openStreamContext();
 		if (prefill.isComplete()) {
 			slot.phase = Phase.DECODE;
@@ -305,7 +305,7 @@ final class ContinuousBatchEngine {
 				justFinished.add(s);
 			} else {
 				String piece = s.stream.append(nextToken);
-				EosOutputFilter.Outcome eosOut = s.eosFilter.accept(piece);
+				EosOutputFilter.Outcome eosOut = s.eosFilter.accept(piece, !s.floor.holdsOpen(s.generated.size()));
 				StopSequenceFilter.Outcome stopOut = s.stopFilter.accept(eosOut.emit());
 				if (!stopOut.emit().isEmpty()) {
 					s.consumer.onToken(stopOut.emit(), nextToken, s.generated.size());

@@ -28,19 +28,18 @@ import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * Validates the {@link CudaRmsNorm} handler-facing wrapper (device malloc /
- * grow-on-demand scratch, H2D/D2H staging, weight upload) end to end, on top
+ * Validates the {@link CudaRmsNorm} handler-facing wrapper end to end, on top
  * of {@link RmsNormKernelParityTest}'s isolation of the raw kernel launch
- * itself.
+ * itself: both the per-call round-trip path ({@code normalizeBatch}: device
+ * malloc / grow-on-demand scratch, H2D/D2H staging, weight upload) and the
+ * device-resident path ({@code normalizeResident}), which reads and writes
+ * {@link ResidentActivation} buffers and never stages to the host.
  *
  * <p>{@link CudaRmsNorm} is deliberately <b>not</b> constructed by
- * {@code LlamaTransformerHandler} today (see its class javadoc and
- * {@code docs/infra-plan/PLAN-Infra-Tier19.md}'s "measured regression" note —
- * a live A/B on real TinyLlama decode found the independent per-call
- * H2D/kernel/D2H round trip costs ~11x more than the scalar CPU path it would
- * replace). This test exists so the wrapper stays correctness-verified while
- * dormant, ready to re-activate once a device-resident-activation redesign
- * removes the round trip.
+ * {@code LlamaTransformerHandler} today (see its class javadoc - a live A/B on
+ * real TinyLlama decode found the independent per-call H2D/kernel/D2H round
+ * trip costs ~11x more than the scalar CPU path it would replace). This test
+ * keeps both paths correctness-verified until the resident path is wired in.
  */
 @Tag("gpu")
 @DisplayName("CudaRmsNorm.normalizeBatch — end-to-end wrapper correctness")
@@ -101,6 +100,50 @@ class CudaRmsNormTest {
 
 		for (int b = 0; b < batch; b++)
 			assertThat(out[b]).as("row " + b).containsExactly(expected[b], within(1e-4f));
+	}
+
+	@Test
+	@DisplayName("normalizeResident matches the scalar reference and is bit-identical to the round-trip path")
+	void normalizeResident_matchesReference_andRoundTripPathExactly() {
+		CudaRmsNorm gpu = CudaRmsNorm.tryCreate(ctx);
+		assertThat(gpu).isNotNull();
+
+		float eps = 1e-5f;
+		Random rng = new Random(2027);
+		for (int batch : new int[] { 1, 8, 512 }) {
+			int dim = 2048;
+			float[][] x = new float[batch][dim];
+			for (int b = 0; b < batch; b++)
+				for (int i = 0; i < dim; i++)
+					x[b][i] = (rng.nextFloat() * 4f) - 2f;
+			float[] weight = new float[dim];
+			for (int i = 0; i < dim; i++)
+				weight[i] = (rng.nextFloat() * 2f) - 1f;
+
+			float[][] roundTrip = new float[batch][];
+			assertThat(gpu.normalizeBatch(x, weight, eps, roundTrip)).isTrue();
+
+			float[][] resident = new float[batch][];
+			try (ResidentChain chain = ResidentChain.open(ctx);
+					DeviceFloatMatrix w = DeviceFloatMatrix.upload(ctx, weight, 1, dim)) {
+				ResidentActivation in = chain.allocate(batch, dim);
+				ResidentActivation out = chain.allocate(batch, dim);
+				in.upload(x);
+				assertThat(gpu.normalizeResident(in, w, eps, out)).isTrue();
+				assertThat(out.rows()).isEqualTo(batch);
+				out.materialize(resident);
+			}
+
+			for (int b = 0; b < batch; b++) {
+				float[] expected = LlamaTransformerHandler.rmsNorm(x[b], weight, eps);
+				assertThat(resident[b]).as("batch " + batch + " row " + b + " vs scalar CPU")
+						.containsExactly(expected, within(1e-4f));
+				// Same kernel, same geometry, same inputs: the only difference between the two
+				// paths is where the activation lives, so the bits must not differ.
+				assertThat(resident[b]).as("batch " + batch + " row " + b + " vs round-trip path")
+						.containsExactly(roundTrip[b]);
+			}
+		}
 	}
 
 	@Test

@@ -17,8 +17,9 @@
 package cab.ml.juno.node;
 
 /**
- * Qwen3 rotary embeddings — LLaMA adjacent-pair RoPE with optional YaRN scaling
- * ({@code rope.scaling.type=yarn}), port of llama.cpp {@code ggml_rope_ext}.
+ * Qwen3 rotary embeddings — RoPE with optional YaRN scaling
+ * ({@code rope.scaling.type=yarn}), port of llama.cpp {@code ggml_rope_ext}, in
+ * the pair layout {@link Qwen3RopeConfig#pairing()} names.
  */
 final class Qwen3Rope {
 
@@ -29,7 +30,7 @@ final class Qwen3Rope {
 		if (cfg.yarn()) {
 			ropeYarn(x, pos, nHeads, headDim, cfg);
 		} else {
-			LlamaTransformerHandler.rope(x, pos, nHeads, headDim, cfg.freqBase());
+			LlamaTransformerHandler.rope(x, pos, nHeads, headDim, cfg.freqBase(), cfg.pairing());
 		}
 	}
 
@@ -45,15 +46,22 @@ final class Qwen3Rope {
 	static void applyBackward(float[] g, int pos, int nHeads, int headDim, Qwen3RopeConfig cfg) {
 		if (cfg.yarn()) {
 			float[] cache = buildYarnCache(pos, headDim, cfg);
-			backwardAdjacentRotations(g, nHeads, headDim, cache);
+			if (cfg.pairing() == RopePairing.SPLIT_HALF)
+				backwardSplitHalfRotations(g, nHeads, headDim, cache);
+			else
+				backwardAdjacentRotations(g, nHeads, headDim, cache);
 		} else {
-			LoraTrainingMath.ropeBackward(g, pos, nHeads, headDim, cfg.freqBase());
+			LoraTrainingMath.ropeBackward(g, pos, nHeads, headDim, cfg.freqBase(), cfg.pairing());
 		}
 	}
 
 	private static void ropeYarn(float[] x, int pos, int nHeads, int headDim, Qwen3RopeConfig cfg) {
 		float[] cache = buildYarnCache(pos, headDim, cfg);
-		applyAdjacentRotations(x, nHeads, headDim, cache);
+		if (cfg.pairing() == RopePairing.SPLIT_HALF) {
+			applySplitHalfRotations(x, nHeads, headDim, cache);
+		} else {
+			applyAdjacentRotations(x, nHeads, headDim, cache);
+		}
 	}
 
 	private static float[] buildYarnCache(int pos, int headDim, Qwen3RopeConfig cfg) {
@@ -81,6 +89,21 @@ final class Qwen3Rope {
 		}
 	}
 
+	private static void backwardSplitHalfRotations(float[] g, int nHeads, int headDim, float[] cache) {
+		int half = headDim / 2;
+		for (int h = 0; h < nHeads; h++) {
+			int base = h * headDim;
+			for (int i = 0; i < half; i++) {
+				float cosA = cache[2 * i];
+				float sinA = cache[2 * i + 1];
+				float g0 = g[base + i];
+				float g1 = g[base + i + half];
+				g[base + i] = cosA * g0 + sinA * g1;
+				g[base + i + half] = -sinA * g0 + cosA * g1;
+			}
+		}
+	}
+
 	/** LLaMA-style adjacent-pair rotation within each head. */
 	private static void applyAdjacentRotations(float[] x, int nHeads, int headDim, float[] cache) {
 		for (int h = 0; h < nHeads; h++) {
@@ -92,6 +115,22 @@ final class Qwen3Rope {
 				float x1 = x[base + 2 * i + 1];
 				x[base + 2 * i] = x0 * cosA - x1 * sinA;
 				x[base + 2 * i + 1] = x0 * sinA + x1 * cosA;
+			}
+		}
+	}
+
+	/** Rotate-half rotation within each head: pair {@code (x[i], x[i + headDim/2])}. */
+	private static void applySplitHalfRotations(float[] x, int nHeads, int headDim, float[] cache) {
+		int half = headDim / 2;
+		for (int h = 0; h < nHeads; h++) {
+			int base = h * headDim;
+			for (int i = 0; i < half; i++) {
+				float cosA = cache[2 * i];
+				float sinA = cache[2 * i + 1];
+				float x0 = x[base + i];
+				float x1 = x[base + i + half];
+				x[base + i] = x0 * cosA - x1 * sinA;
+				x[base + i + half] = x0 * sinA + x1 * cosA;
 			}
 		}
 	}

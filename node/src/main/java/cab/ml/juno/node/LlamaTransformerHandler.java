@@ -71,6 +71,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	// ── Loaded weights ────────────────────────────────────────────────────────
 
 	private final LlamaConfig cfg;
+	/** Q/K pair layout this file's weights were converted for; see {@link RopePairing}. */
+	private final RopePairing ropePairing;
 	private final int startLayer;
 	private final int endLayer;
 	private final boolean hasEmbeddings;
@@ -166,6 +168,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	private final CudaRmsNorm rmsNormGpu;
 
+	/**
+	 * The device-resident decode region (norm, Q/K/V projection and RoPE with one
+	 * upload in and one download out), non-null only with {@code --gpu-residency}
+	 * on a CUDA backend whose Q/K/V projections are K-quant MMQ matrices on the
+	 * device. Single-sequence decode only.
+	 */
+	private final ResidentQkvPath residentQkv;
+
 	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
 	// When non-null, every completed forward pass flushes key/value data into
 	// the KVCacheManager (GPU + CPU tiers). Eviction under real memory pressure
@@ -190,7 +200,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			LlamaConfig cfg = LlamaConfig.from(r);
 			log.info("Model: " + cfg);
-			return new LlamaTransformerHandler(r, cfg, context, CpuMatVec.INSTANCE);
+			return new LlamaTransformerHandler(r, cfg, context, CpuMatVec.INSTANCE, ropePairingFor(cfg));
 		}
 	}
 
@@ -209,8 +219,37 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			LlamaConfig cfg = LlamaConfig.from(r);
 			log.info("Model: " + cfg);
-			return new LlamaTransformerHandler(r, cfg, context, backend);
+			return new LlamaTransformerHandler(r, cfg, context, backend, ropePairingFor(cfg));
 		}
+	}
+
+	/**
+	 * Test-only: load with a forced RoPE pair layout, so a test can compare a
+	 * file under both layouts. Production loads always use
+	 * {@link #ropePairingFor(LlamaConfig)}; there is deliberately no flag or
+	 * property that reaches this.
+	 */
+	static LlamaTransformerHandler load(Path modelPath, ShardContext context, MatVec backend,
+			RopePairing ropePairing) throws IOException {
+		try (GgufReader r = GgufReader.open(modelPath)) {
+			LlamaConfig cfg = LlamaConfig.from(r);
+			log.info("Model: " + cfg + "  ropePairing=" + ropePairing + " (forced)");
+			return new LlamaTransformerHandler(r, cfg, context, backend, ropePairing);
+		}
+	}
+
+	/**
+	 * The RoPE pair layout for an architecture served by this handler. The LLaMA
+	 * conversion permutes Q/K rows so adjacent pairs are right for {@code llama}
+	 * and its derivatives; the Qwen2 conversion leaves them in the rotate-half
+	 * layout, which a teacher-forced perplexity comparison on real files confirms
+	 * (a wrong-layout run is two orders of magnitude worse).
+	 */
+	static RopePairing ropePairingFor(LlamaConfig cfg) {
+		return switch (cfg.architecture()) {
+		case "qwen2", "qwen2.5" -> RopePairing.SPLIT_HALF;
+		default -> RopePairing.ADJACENT;
+		};
 	}
 
 	/** Direct constructor used by {@link #newTestInstance} — no GGUF I/O. */
@@ -231,6 +270,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			float[][] bq, float[][] bk, float[][] bv,
 			MatVec backend) {
 		this.cfg          = cfg;
+		this.ropePairing  = ropePairingFor(cfg);
 		this.backend      = backend;
 		this.startLayer   = startLayer;
 		this.endLayer     = endLayer;
@@ -262,12 +302,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.gpuLayersResolved = 0;
 		this.gqaGpu = null;
 		this.rmsNormGpu = null;
+		this.residentQkv = null;
 		log.info(kvLayout.policySummary());
 	}
 
-	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend)
-			throws IOException {
+	private LlamaTransformerHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, MatVec backend,
+			RopePairing ropePairing) throws IOException {
 		this.cfg = cfg;
+		this.ropePairing = ropePairing;
 		this.backend = backend;
 		this.startLayer = ctx.startLayer();
 		this.endLayer = ctx.endLayer();
@@ -372,6 +414,56 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.gpuLayersResolved = resolvedLayers;
 		this.gqaGpu = gqa;
 		this.rmsNormGpu = rmsNorm;
+		this.residentQkv = GpuResidencyOptions.fromEnv().requested() ? openResidentQkv(backend, L) : null;
+	}
+
+	/**
+	 * Builds the device-resident decode region when this model and backend can run
+	 * it, and otherwise says once why not and returns null (today's path).
+	 */
+	private ResidentQkvPath openResidentQkv(MatVec backend, int L) {
+		if (!(backend instanceof GpuMatVec cuda)) {
+			GpuResidencyOptions.announceUnsupported(log, "the CPU backend", "has no device to keep activations on");
+			return null;
+		}
+		String reason = ResidentQkvPath.unsupportedReason(cuda.gpuContext(), ropePairing, bq != null, cfg);
+		if (reason != null) {
+			GpuResidencyOptions.announceUnsupported(log, "architecture " + cfg.architecture(), reason);
+			return null;
+		}
+		if (wqQ4Dev == null || wkQ4Dev == null || wvQ4Dev == null) {
+			GpuResidencyOptions.announceUnsupported(log, "this model's Q/K/V projections",
+					"are not K-quant MMQ matrices on the device (needs a K-quant file and --mmq on or auto)");
+			return null;
+		}
+		ResidentQkvPath path;
+		try {
+			path = ResidentQkvPath.create(cuda.gpuContext(), cfg, attnNorm, wqQ4Dev, wkQ4Dev, wvQ4Dev);
+		} catch (RuntimeException e) {
+			GpuResidencyOptions.announceUnsupported(log, "the device-resident decode region",
+					"could not be built (" + e.getMessage() + ")");
+			return null;
+		}
+		int eligible = 0;
+		for (int li = 0; li < L; li++)
+			if (path.eligible(li))
+				eligible++;
+		if (eligible == 0) {
+			path.close();
+			GpuResidencyOptions.announceUnsupported(log, "this shard",
+					"has no layer whose Q/K/V projections are all K-quant MMQ matrices on the device");
+			return null;
+		}
+		log.info("GPU-resident decode region active (gpu-residency=" + GpuResidencyOptions.fromEnv().policyLabel()
+				+ ") on " + eligible + " of " + L + " layers: norm, Q/K/V projection and RoPE with one upload and one"
+				+ " download per layer. Single-sequence decode only; prefill windows and batched decode"
+				+ " (--parallel above 1, continuous schedule) keep the existing path.");
+		return path;
+	}
+
+	/** Whether the device-resident decode region ({@code --gpu-residency}) is active for this handler. */
+	boolean gpuResidencyActive() {
+		return residentQkv != null;
 	}
 
 	/** Guards {@link #warnGpuAttentionFellBackOnce} so the hot path logs once. */
@@ -788,6 +880,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		if (outputProjDevFp32 != null && !outputProjDevFp32.isClosed())
 			outputProjDevFp32.close();
 		outputProjDevFp32 = null;
+		if (gqaGpu != null)
+			gqaGpu.close();
 	}
 
 	private static void closeDeviceFloatMatrixArray(DeviceFloatMatrix[] a) {
@@ -1269,8 +1363,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		ropeEvt.begin();
 		for (int b = 0; b < N; b++) {
 			int pos = positions[b];
-			rope(ws.q[b], pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
-			rope(ws.k[b], pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+			rope(ws.q[b], pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
+			rope(ws.k[b], pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
 		}
 		ropeEvt.windowSize = N;
 		ropeEvt.startPosition = positions[0];
@@ -1525,8 +1619,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		RopeEvent ropeEvt = new RopeEvent();
 		ropeEvt.begin();
 		for (int b = 0; b < W; b++) {
-			rope(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
-			rope(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+			rope(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
+			rope(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
 		}
 		ropeEvt.windowSize = W;
 		ropeEvt.startPosition = startPos;
@@ -2096,14 +2190,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * Single transformer layer: attention + FFN, both with residual connections.
+	 * The attention entry op at a time: RMS norm, the Q/K/V projection (plus
+	 * biases), then RoPE on Q and K. Returns {q, k, v}.
 	 */
-	private float[] transformerLayer(float[] x, int li, int pos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kScratch, float[] vScratch, DeviceKvCache deviceKv) {
+	private float[][] normProjectRope(float[] x, int li, int pos) {
 		int H = cfg.hiddenDim();
-
-		// ── Attention sub-layer ───────────────────────────────────────────────
+		float[] q;
+		float[] k;
+		float[] v;
 		RmsNormEvent normEvt1 = new RmsNormEvent();
 		normEvt1.begin();
 		float[] xNorm = rmsNormGpuOrCpu(x, attnNorm[li], cfg.rmsNormEps());
@@ -2113,9 +2207,6 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		normEvt1.commit();
 
 		// Project to Q, K, V (shared activation upload when all three are device-resident)
-		float[] q;
-		float[] k;
-		float[] v;
 		float[][] qkv = matVecProjectionSameX(
 				wq[li], wk[li], wv[li],
 				wqQ4Dev, wkQ4Dev, wvQ4Dev,
@@ -2141,12 +2232,31 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		// Rotary position embeddings on Q and K
 		RopeEvent ropeEvt = new RopeEvent();
 		ropeEvt.begin();
-		rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
-		rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+		rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
+		rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
 		ropeEvt.windowSize = 1;
 		ropeEvt.startPosition = pos;
 		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
 		ropeEvt.commit();
+		return new float[][] { q, k, v };
+	}
+
+	/**
+	 * Single transformer layer: attention + FFN, both with residual connections.
+	 */
+	private float[] transformerLayer(float[] x, int li, int pos,
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
+			float[] kScratch, float[] vScratch, DeviceKvCache deviceKv) {
+		int H = cfg.hiddenDim();
+
+		// ── Attention sub-layer ───────────────────────────────────────────────
+		// The device region runs norm, projection and RoPE with one upload and one
+		// download; its arrays belong to this thread's region until its next call.
+		float[][] resident = residentQkv != null ? residentQkv.run(li, x, pos) : null;
+		float[][] qkvRotated = resident != null ? resident : normProjectRope(x, li, pos);
+		float[] q = qkvRotated[0];
+		float[] k = qkvRotated[1];
+		float[] v = qkvRotated[2];
 
 		// CPU tensors first and unconditionally, as in the batched path: the device
 		// cache mirrors them, so it can be given up at any point without losing KV.
@@ -3183,12 +3293,40 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * Rotary position embeddings (RoPE). Applied in-place to x[nHeads * headDim],
 	 * treating each head independently.
 	 *
-	 * GGUF/llama.cpp LLaMA models use ADJACENT-pair rotation: (x[2i], x[2i+1]). The
-	 * W_Q and W_K weights in the GGUF file are pre-permuted by llama.cpp's
-	 * convert.py to match this convention. Using split-half pairing (x[i],
-	 * x[i+headDim/2]) produces completely wrong attention scores.
+	 * This is ADJACENT-pair rotation: (x[2i], x[2i+1]), right for LLaMA-family
+	 * files, whose W_Q and W_K rows the converter pre-permuted to match it. Using
+	 * split-half pairing (x[i], x[i+headDim/2]) on those files produces wrong
+	 * attention scores; the reverse holds for files converted without the
+	 * permutation. See {@link RopePairing} and {@link #ropePairingFor}.
+	 *
+	 * The cosines and sines come from {@link RopeTable}, computed once per position
+	 * with the same expressions this method used to evaluate per head and per
+	 * layer, so the result is bit-identical.
 	 */
 	static void rope(float[] x, int pos, int nHeads, int headDim, float ropeTheta) {
+		RopeTable table = RopeTable.of(headDim, ropeTheta);
+		float[] cs = table.block(pos);
+		if (cs == null) {
+			ropeComputed(x, pos, nHeads, headDim, ropeTheta);
+			return;
+		}
+		int row = table.rowOffset(pos);
+		int pairs = headDim / 2;
+		for (int h = 0; h < nHeads; h++) {
+			int base = h * headDim;
+			for (int i = 0; i < pairs; i++) {
+				float cosA = cs[row + 2 * i];
+				float sinA = cs[row + 2 * i + 1];
+				float x0 = x[base + 2 * i];
+				float x1 = x[base + 2 * i + 1];
+				x[base + 2 * i] = x0 * cosA - x1 * sinA;
+				x[base + 2 * i + 1] = x0 * sinA + x1 * cosA;
+			}
+		}
+	}
+
+	/** Adjacent rotation computing each angle in place: positions past {@link RopeTable#MAX_POSITIONS}. */
+	private static void ropeComputed(float[] x, int pos, int nHeads, int headDim, float ropeTheta) {
 		for (int h = 0; h < nHeads; h++) {
 			int base = h * headDim;
 			for (int i = 0; i < headDim / 2; i++) {
@@ -3200,6 +3338,56 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				float x1 = x[base + 2 * i + 1];
 				x[base + 2 * i] = x0 * cosA - x1 * sinA;
 				x[base + 2 * i + 1] = x0 * sinA + x1 * cosA;
+			}
+		}
+	}
+
+	/**
+	 * {@link #rope(float[], int, int, int, float)} with an explicit pair layout.
+	 * {@link RopePairing#ADJACENT} is that method; {@link RopePairing#SPLIT_HALF}
+	 * rotates {@code (x[i], x[i + headDim/2])} with the same per-pair frequency and
+	 * the same per-step rounding. Both read their angles from {@link RopeTable}.
+	 */
+	static void rope(float[] x, int pos, int nHeads, int headDim, float ropeTheta, RopePairing pairing) {
+		if (pairing == RopePairing.ADJACENT) {
+			rope(x, pos, nHeads, headDim, ropeTheta);
+			return;
+		}
+		int half = headDim / 2;
+		RopeTable table = RopeTable.of(headDim, ropeTheta);
+		float[] cs = table.block(pos);
+		if (cs == null) {
+			ropeSplitHalfComputed(x, pos, nHeads, headDim, ropeTheta);
+			return;
+		}
+		int row = table.rowOffset(pos);
+		for (int h = 0; h < nHeads; h++) {
+			int base = h * headDim;
+			for (int i = 0; i < half; i++) {
+				float cosA = cs[row + 2 * i];
+				float sinA = cs[row + 2 * i + 1];
+				float x0 = x[base + i];
+				float x1 = x[base + i + half];
+				x[base + i] = x0 * cosA - x1 * sinA;
+				x[base + i + half] = x0 * sinA + x1 * cosA;
+			}
+		}
+	}
+
+	/** Split-half rotation computing each angle in place: positions past {@link RopeTable#MAX_POSITIONS}. */
+	private static void ropeSplitHalfComputed(float[] x, int pos, int nHeads, int headDim, float ropeTheta) {
+		int half = headDim / 2;
+		for (int h = 0; h < nHeads; h++) {
+			int base = h * headDim;
+			for (int i = 0; i < half; i++) {
+				double freq = 1.0 / Math.pow(ropeTheta, (2.0 * i) / headDim);
+				double angle = pos * freq;
+				float cosA = (float) Math.cos(angle);
+				float sinA = (float) Math.sin(angle);
+				float x0 = x[base + i];
+				float x1 = x[base + i + half];
+				x[base + i] = x0 * cosA - x1 * sinA;
+				x[base + i + half] = x0 * sinA + x1 * cosA;
 			}
 		}
 	}

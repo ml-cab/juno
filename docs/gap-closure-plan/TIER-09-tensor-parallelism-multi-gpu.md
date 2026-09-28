@@ -29,6 +29,17 @@ against the existing (correct, if slow) single-node dense computation.
    `TensorShardContext`'s existing (currently aspirational) design, wired into
    `LlamaTransformerHandler` first (the most-used handler), with per-layer AllReduce replacing
    today's whole-model-output AllReduce.
+   *Known limitation found before this tier (2026-09-27).* mistral-7b cannot start in tensor mode
+   on this host (one 8 GiB GTX 1080, three forked nodes) because every node loads the **whole**
+   model (`TensorShardContext` is geometry only). Observed by `ModelLiveRunnerIT` on 2026-09-27 with
+   and without `--gpu-residency`. The first reading was that three copies do not fit the card; the
+   node's own error, once it was made to reach the coordinator (a Tier 01 out-of-tier change),
+   shows the first wall is the **node heap**: `java.lang.OutOfMemoryError: Java heap space` in
+   `GgufReader.tensorRaw` during `LlamaTransformerHandler` construction, at the forked node's default
+   `-Xmx4g` (`juno.node.heap`). A larger heap would only move the failure to device or host memory for
+   three full copies. Real weight slicing (item 1) is what fixes it; its parity test should include a
+   model that only fits when sliced, and the heap each node is given should follow its slice (as the
+   launchers already derive heap from the model file size) rather than a fixed 4 GB.
 2. Replace `TensorParallelClusterIT`'s dummy-fixed-logit `CyclicForwardPassHandler` stub with a
    real multi-node test against an actual sliced model, numerically validated against the
    equivalent single-node dense run.

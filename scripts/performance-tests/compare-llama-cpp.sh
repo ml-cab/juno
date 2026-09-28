@@ -78,6 +78,7 @@ REP_SPREAD_TOLERANCE=0.15
 JUNO_GPU_LAYERS=""
 JUNO_MMQ=""
 JUNO_GPU_ATTENTION=""
+JUNO_GPU_RESIDENCY=""
 JUNO_SCHEDULE=""
 JUNO_CACHE_TYPE_K=""
 JUNO_CACHE_TYPE_V=""
@@ -128,7 +129,8 @@ Options:
                     (default: ${JUNO_WARMUP})
   --juno-reps N     Measured Juno cycles per lane; the median is published and the
                     min/max spread is recorded beside it (default: ${JUNO_REPS})
-  --juno-min-tokens N  Tokens Juno must generate before a stop token may end the
+  --juno-min-tokens N  Tokens Juno must generate before the model's own end
+                    signals (end-of-sequence, chat turn markers) may end the
                     request (default: the same as --n-gen, which is what the
                     reference tool generates). 0 lets Juno stop early, which makes
                     the generation ratio incomparable and is reported as such
@@ -139,6 +141,8 @@ Options:
   --gpu-layers N|all|auto  Juno --gpu-layers (default: all in GPU mode)
   --mmq on|off|auto Juno --mmq (packed Q4_K device GEMV; default off)
   --gpu-attention on|off|auto  Juno --gpu-attention (GPU-resident attention kernel; default off)
+  --gpu-residency on|off|auto  Juno --gpu-residency (device-resident decode region: norm, Q/K/V
+                    projection and RoPE with one upload and one download; default off)
   --schedule static|continuous  Juno --schedule (default static)
   --cache-type-k f16|q8_0  Juno --cache-type-k (default f16)
   --cache-type-v f16|q8_0  Juno --cache-type-v (default f16)
@@ -463,6 +467,7 @@ while [[ $# -gt 0 ]]; do
     --gpu-layers) JUNO_GPU_LAYERS="$2"; shift 2 ;;
     --mmq) JUNO_MMQ="$2"; shift 2 ;;
     --gpu-attention) JUNO_GPU_ATTENTION="$2"; shift 2 ;;
+    --gpu-residency) JUNO_GPU_RESIDENCY="$2"; shift 2 ;;
     --schedule) JUNO_SCHEDULE="$2"; shift 2 ;;
     --cache-type-k) JUNO_CACHE_TYPE_K="$2"; shift 2 ;;
     --cache-type-v) JUNO_CACHE_TYPE_V="$2"; shift 2 ;;
@@ -750,6 +755,7 @@ host_meta_json() {
   "juno_gpu_layers": "$(json_escape "${JUNO_GPU_LAYERS:-}")",
   "juno_mmq": "$(json_escape "${JUNO_MMQ:-}")",
   "juno_gpu_attention": "$(json_escape "${JUNO_GPU_ATTENTION:-}")",
+  "juno_gpu_residency": "$(json_escape "${JUNO_GPU_RESIDENCY:-}")",
   "juno_schedule": "$(json_escape "${JUNO_SCHEDULE:-}")",
   "juno_cache_type_k": "$(json_escape "${JUNO_CACHE_TYPE_K:-}")",
   "juno_cache_type_v": "$(json_escape "${JUNO_CACHE_TYPE_V:-}")",
@@ -1100,6 +1106,9 @@ run_juno_rep() {
   fi
   if [[ -n "$JUNO_MMQ" ]]; then
     java_args+=(--mmq "$JUNO_MMQ")
+  fi
+  if [[ -n "$JUNO_GPU_RESIDENCY" ]]; then
+    java_args+=(--gpu-residency "$JUNO_GPU_RESIDENCY")
   fi
   if [[ -n "$JUNO_GPU_ATTENTION" ]]; then
     java_args+=(--gpu-attention "$JUNO_GPU_ATTENTION")

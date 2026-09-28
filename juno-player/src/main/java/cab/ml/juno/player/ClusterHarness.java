@@ -499,6 +499,7 @@ public final class ClusterHarness implements AutoCloseable {
 		forwardSysProp(cmd, cab.ml.juno.kvcache.CacheTypeOptions.ENV_V);
 		forwardSysProp(cmd, cab.ml.juno.kvcache.ServeScheduleOptions.ENV);
 		forwardSysProp(cmd, cab.ml.juno.kvcache.KvPageSizeOptions.ENV);
+		forwardSysProp(cmd, cab.ml.juno.node.GpuResidencyOptions.ENV_PROPERTY);
 
 		// Health reporter: each node JVM pushes its own heap stats to the sidecar.
 		if (healthUrl != null) {

@@ -56,6 +56,31 @@ public final class LoraTrainingMath {
 	}
 
 	/**
+	 * Adjoint of {@link LlamaTransformerHandler#rope(float[], int, int, int, float, RopePairing)}:
+	 * R(-angle) applied in place to gradients, in the given pair layout.
+	 */
+	static void ropeBackward(float[] g, int pos, int nHeads, int headDim, float ropeTheta, RopePairing pairing) {
+		if (pairing == RopePairing.ADJACENT) {
+			ropeBackward(g, pos, nHeads, headDim, ropeTheta);
+			return;
+		}
+		int half = headDim / 2;
+		for (int h = 0; h < nHeads; h++) {
+			int base = h * headDim;
+			for (int i = 0; i < half; i++) {
+				double freq = 1.0 / Math.pow(ropeTheta, (2.0 * i) / headDim);
+				double angle = pos * freq;
+				float cosA = (float) Math.cos(angle);
+				float sinA = (float) Math.sin(angle);
+				float g0 = g[base + i];
+				float g1 = g[base + i + half];
+				g[base + i] = g0 * cosA + g1 * sinA;
+				g[base + i + half] = -g0 * sinA + g1 * cosA;
+			}
+		}
+	}
+
+	/**
 	 * Inverse LLaMA adjacent-pair RoPE: R(-angle) applied in-place to gradients.
 	 */
 	public static void ropeBackward(float[] g, int pos, int nHeads, int headDim, float ropeTheta) {
@@ -131,10 +156,12 @@ public final class LoraTrainingMath {
 	}
 
 	/**
-	 * Adjoint of {@code Qwen3Rope.apply} — inverse adjacent-pair rotation for
-	 * gradient backpropagation. Standard (non-YaRN) delegates to
+	 * Adjoint of {@code Qwen3Rope.apply} — inverse rotation, in the config's pair
+	 * layout, for gradient backpropagation. Standard (non-YaRN) delegates to
 	 * {@link #ropeBackward}; YaRN rebuilds the same cos/sin cache used in the
-	 * forward pass and applies the transpose rotation.
+	 * forward pass and applies the transpose rotation. The formulas below are
+	 * written for adjacent pairs; split-half pairs {@code (i, i + headDim/2)} with
+	 * the same cache entry {@code i}.
 	 *
 	 * <p>
 	 * Forward rotation: {@code y[2i] = x[2i]*cos - x[2i+1]*sin},
@@ -145,7 +172,7 @@ public final class LoraTrainingMath {
 	 */
 	public static void qwen3RopeBackward(float[] g, int pos, int nHeads, int headDim, Qwen3RopeConfig cfg) {
 		if (!cfg.yarn()) {
-			ropeBackward(g, pos, nHeads, headDim, cfg.freqBase());
+			ropeBackward(g, pos, nHeads, headDim, cfg.freqBase(), cfg.pairing());
 			return;
 		}
 		float thetaScale = (float) Math.pow(cfg.freqBase(), -2.0 / headDim);
@@ -153,6 +180,21 @@ public final class LoraTrainingMath {
 		yarnCorrDims(headDim, cfg.originalContextLength(), cfg.freqBase(), 1.0f, 1.0f, corrDims);
 		float[] cache = new float[headDim];
 		yarnCacheInit(pos, cfg.freqScale(), corrDims, headDim, 1.0f, cfg.attnFactor(), thetaScale, cache);
+		if (cfg.pairing() == RopePairing.SPLIT_HALF) {
+			int half = headDim / 2;
+			for (int h = 0; h < nHeads; h++) {
+				int base = h * headDim;
+				for (int i = 0; i < half; i++) {
+					float cosA = cache[2 * i];
+					float sinA = cache[2 * i + 1];
+					float g0 = g[base + i];
+					float g1 = g[base + i + half];
+					g[base + i] = g0 * cosA + g1 * sinA;
+					g[base + i + half] = -g0 * sinA + g1 * cosA;
+				}
+			}
+			return;
+		}
 		for (int h = 0; h < nHeads; h++) {
 			int base = h * headDim;
 			for (int i = 0; i < headDim / 2; i++) {

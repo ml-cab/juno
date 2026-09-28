@@ -231,6 +231,7 @@ cmd_cluster() {
   local embeddings="${JUNO_EMBEDDINGS:-}"
   local pooling="${JUNO_POOLING:-}"
   local prefill_mode="${PREFILL_MODE:-}"
+  local gpu_residency="${JUNO_GPU_RESIDENCY:-}"
   local cache_type_k="${JUNO_CACHE_TYPE_K:-}"
   local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
   local schedule="${JUNO_SCHEDULE:-}"
@@ -272,6 +273,7 @@ cmd_cluster() {
       --embeddings)       embeddings="true"; shift   ;;
       --pooling)          pooling="$2";      shift 2 ;;
       --prefill)          prefill_mode="$2"; shift 2 ;;
+      --gpu-residency)    gpu_residency="$2"; shift 2 ;;
       --cache-type-k)     cache_type_k="$2"; shift 2 ;;
       --cache-type-v)     cache_type_v="$2"; shift 2 ;;
       --schedule)         schedule="$2";     shift 2 ;;
@@ -321,6 +323,8 @@ cmd_cluster() {
         echo "  KV cache:"
         echo "    --cache-type-k f16|q8_0    K cache type (default f16 = current float path)"
         echo "    --cache-type-v f16|q8_0    V cache type (default f16)"
+        echo "    --gpu-residency on|off|auto  device-resident decode region: norm, Q/K/V projection and RoPE"
+        echo "                               with one upload and one download per layer (default off; CUDA only)"
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
         echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
         echo ""
@@ -340,7 +344,7 @@ cmd_cluster() {
         echo ""
         echo "  Environment overrides:"
         echo "    MODEL_PATH  DTYPE  PTYPE  MAX_TOKENS  TEMPERATURE  TOP_K  TOP_P  HEAP  USE_GPU"
-        echo "    JUNO_CACHE_TYPE_K  JUNO_CACHE_TYPE_V  JUNO_SCHEDULE  JUNO_KV_PAGE_SIZE"
+        echo "    JUNO_CACHE_TYPE_K  JUNO_CACHE_TYPE_V  JUNO_SCHEDULE  JUNO_KV_PAGE_SIZE  JUNO_GPU_RESIDENCY"
         echo ""
         echo "  Examples:"
         echo "    $0 cluster --model-path /models/tiny.gguf"
@@ -403,6 +407,8 @@ cmd_cluster() {
   [[ -n "$pooling" ]] && pooling_arg="--pooling $pooling"
   local prefill_mode_arg=""
   [[ -n "$prefill_mode" ]] && prefill_mode_arg="--prefill $prefill_mode"
+  local gpu_residency_arg=""
+  [[ -n "$gpu_residency" ]] && gpu_residency_arg="--gpu-residency $gpu_residency"
   local cache_type_k_arg=""
   [[ -n "$cache_type_k" ]] && cache_type_k_arg="--cache-type-k $cache_type_k"
   local cache_type_v_arg=""
@@ -446,6 +452,7 @@ cmd_cluster() {
     ${embeddings_arg} \
     ${pooling_arg} \
     ${prefill_mode_arg} \
+    ${gpu_residency_arg} \
     ${cache_type_k_arg} \
     ${cache_type_v_arg} \
     ${schedule_arg} \
@@ -488,6 +495,7 @@ cmd_local() {
   local gpu_layers="${JUNO_GPU_LAYERS:-}"
   local mmq="${JUNO_MMQ:-}"
   local gpu_attention="${JUNO_GPU_ATTENTION:-}"
+  local gpu_residency="${JUNO_GPU_RESIDENCY:-}"
   local cache_type_k="${JUNO_CACHE_TYPE_K:-}"
   local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
   local schedule="${JUNO_SCHEDULE:-}"
@@ -540,6 +548,7 @@ cmd_local() {
       --gpu-layers)       gpu_layers="$2";   shift 2 ;;
       --mmq)              mmq="$2";          shift 2 ;;
       --gpu-attention)    gpu_attention="$2"; shift 2 ;;
+      --gpu-residency)    gpu_residency="$2"; shift 2 ;;
       --cache-type-k)     cache_type_k="$2"; shift 2 ;;
       --cache-type-v)     cache_type_v="$2"; shift 2 ;;
       --schedule)         schedule="$2";     shift 2 ;;
@@ -597,6 +606,8 @@ cmd_local() {
         echo "    --mmq on|off|auto          packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default auto)"
         echo "    --gpu-attention on|off|auto  GPU-resident attention kernel (measured decode/prefill throughput"
         echo "                               lever, not a peer-latency claim; default auto; CUDA only)"
+        echo "    --gpu-residency on|off|auto  device-resident decode region: norm, Q/K/V projection and RoPE"
+        echo "                               with one upload and one download per layer (default off; CUDA only)"
         echo "    --cache-type-k f16|q8_0    K cache type (default f16 = current float path)"
         echo "    --cache-type-v f16|q8_0    V cache type (default f16)"
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
@@ -694,6 +705,8 @@ cmd_local() {
   [[ -n "$mmq" ]] && mmq_arg="--mmq $mmq"
   local gpu_attention_arg=""
   [[ -n "$gpu_attention" ]] && gpu_attention_arg="--gpu-attention $gpu_attention"
+  local gpu_residency_arg=""
+  [[ -n "$gpu_residency" ]] && gpu_residency_arg="--gpu-residency $gpu_residency"
   local cache_type_k_arg=""
   [[ -n "$cache_type_k" ]] && cache_type_k_arg="--cache-type-k $cache_type_k"
   local cache_type_v_arg=""
@@ -754,6 +767,7 @@ cmd_local() {
     ${gpu_layers_arg} \
     ${mmq_arg} \
     ${gpu_attention_arg} \
+    ${gpu_residency_arg} \
     ${cache_type_k_arg} \
     ${cache_type_v_arg} \
     ${schedule_arg} \

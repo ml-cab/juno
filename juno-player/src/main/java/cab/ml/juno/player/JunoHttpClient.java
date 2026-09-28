@@ -54,7 +54,7 @@ public final class JunoHttpClient {
 
 	/**
 	 * As {@link #blockingInference(String, List, Integer)}, with a minimum number of
-	 * tokens the response must contain before an end-of-sequence token may end it.
+	 * tokens the response must contain before the model may end it.
 	 *
 	 * @param minTokens minimum tokens to generate; null or 0 leaves the model free
 	 *                  to stop whenever it likes

@@ -47,6 +47,11 @@ import cab.ml.juno.tokenizer.ChatTurnMarkers;
  * <li>holds back a trailing suffix that is a proper prefix of any marker so
  * partial pieces are never streamed</li>
  * </ul>
+ *
+ * <p>
+ * Below a request's minimum token count the model may not end its turn, so a
+ * marker completed then is ordinary text: {@link #accept(String, boolean)} with
+ * {@code mayStop == false} emits it and never looks at it again.
  */
 final class EosOutputFilter {
 
@@ -55,16 +60,34 @@ final class EosOutputFilter {
 
 	private final StringBuilder text = new StringBuilder();
 	private int emittedLen;
+	/** Text before this index was passed over while ending was not allowed; never rescanned. */
+	private int scanFloor;
 
 	/**
 	 * Accept one decoded piece. {@link Outcome#emit()} is safe to stream;
 	 * {@link Outcome#stop()} means a turn marker was found and stripped.
 	 */
 	Outcome accept(String piece) {
+		return accept(piece, true);
+	}
+
+	/**
+	 * As {@link #accept(String)}; with {@code mayStop == false} (the request is
+	 * still below its minimum) a complete marker does not stop and is emitted as
+	 * text. A trailing marker prefix is still held back, so a marker that completes
+	 * once stopping is allowed is caught whole.
+	 */
+	Outcome accept(String piece, boolean mayStop) {
 		if (piece == null || piece.isEmpty())
 			return new Outcome(false, "");
 		text.append(piece);
-		return drain(true);
+		if (mayStop)
+			return drain(true);
+		int safe = safeEmitLength(text);
+		String emit = text.substring(emittedLen, safe);
+		emittedLen = safe;
+		scanFloor = safe;
+		return new Outcome(false, emit);
 	}
 
 	/**
@@ -101,7 +124,7 @@ final class EosOutputFilter {
 		// hold-back guarantees). So a marker that is complete now must start within
 		// one marker-length of emittedLen — rescanning the whole buffer every token
 		// would make the decode loop quadratic in the length of the answer.
-		int scanFrom = Math.max(0, emittedLen - (ChatTurnMarkers.MAX_LENGTH - 1));
+		int scanFrom = Math.max(scanFloor, emittedLen - (ChatTurnMarkers.MAX_LENGTH - 1));
 		int markerAt = indexOfMarker(text, scanFrom);
 		if (markerAt >= 0) {
 			text.setLength(markerAt);

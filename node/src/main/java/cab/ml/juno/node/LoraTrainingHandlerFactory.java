@@ -76,6 +76,8 @@ public final class LoraTrainingHandlerFactory {
 		requireSupported(arch);
 		log.info("LoRA factory: arch=" + arch + " backend=" + backend.getClass().getSimpleName() + " file="
 				+ modelPath);
+		GpuResidencyOptions.announceUnsupported(log, "LoRA training and playback (--lora-play)",
+				"apply adapters to Q/K/V on the host, so the device-resident decode region does not run there");
 		String a = normalize(arch);
 		if (LLAMA_FAMILY.contains(a))
 			return LoraTrainableHandler.load(modelPath, context, adapters, backend);

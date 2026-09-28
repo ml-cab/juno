@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20260925T172231Z (gpu)
 
+> **Superseded as reference on 2026-09-27** by [`20260927T091155Z`](../20260927T091155Z/INDEX.md): the scalar CPU RoPE stopped recomputing its angles, which moved Juno throughput on the Llama-family and Qwen2 models. Kept as the reading before that change; do not score across it.
+
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |
 |-------|------------------|------------------|-------------|-------------|-----------------|---------------|---------------|-----------------|--------------|-----------|-------------|----------|---------|
 | tinyllama-1.1b-chat-v1.0.Q4_K_M | 3512.110790 | 174.673297 | 138.2703736704673 | 56.81736688442882 | 56.42 / 56.82 | 0.03936959336936729 | 0.32527792089725555 | 128/128 | 64/64 | 634 | 48541096 | NOISY | tinyllama-1.1b-chat-v1.0.Q4_K_M-*.json |

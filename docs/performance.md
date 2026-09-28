@@ -75,7 +75,7 @@ likewise recorded and not gated on, since the park figure sums every thread and 
 exceeds wall time on a healthy run.
 
 **`min_tokens` makes the generation column like-for-like.** A request can now state the number of
-tokens it must produce before an end-of-sequence token may end it, so Juno generates the count the
+tokens it must produce before the model may end it, so Juno generates the count the
 reference tool was given instead of stopping wherever the model preferred. The comparison passes it by
 default, equal to the requested generation length; pass `--juno-min-tokens 0` to measure Juno as an
 ordinary caller would experience it, at the cost of a comparable generation ratio. With it, the model
@@ -570,6 +570,116 @@ batch 512 that cost is amortised across 512 rows while about 4 MB is staged each
 therefore fail for different reasons — launch overhead against staging bandwidth — so a result at one
 says nothing about the other, and both are reported separately. Output is checked against the scalar
 path on every run (largest divergence 1.9e-06) so the harness cannot time a different computation.
+
+**With the activation kept on the device, 2026-09-27** ([`perf-compare/20260927T025430Z-tier01-resident-chain/`](perf-compare/20260927T025430Z-tier01-resident-chain/INDEX.md)).
+`scripts/performance-tests/resident-chain-microbench.sh` times RMS norm then RoPE, each lane with
+device-resident weights, so the gap between the op-at-a-time and resident lanes is the host round trip
+between the two operations and nothing else (GTX 1080, dim 2048 as 32 heads of 64, 3 reps, median):
+
+| width | scalar CPU chain | op-at-a-time | resident chain | device-only | resident vs CPU | resident vs op-at-a-time |
+|---|---:|---:|---:|---:|---:|---:|
+| decode (batch 1) | 0.0670 ms | 0.0359 ms | 0.0183 ms | 0.0112 ms | **3.65x** faster | **0.51** of the cost |
+| prefill (batch 512) | 34.06 ms | 3.88 ms | 2.15 ms | 0.158 ms | **15.86x** faster | **0.55** of the cost |
+
+Removing the round trip between two operations halves their cost at both widths — the mechanism a
+device-resident activation path rests on, measured with everything else held equal. The ratio against
+the CPU needs reading with care: about 95% of the CPU chain is RoPE (the CPU norm alone is 0.0035 ms
+and 1.30 ms, from the round-trip run above), because the scalar `rope` recomputes a power, a cosine
+and a sine for every rotated pair on every call. Against the CPU norm alone the resident chain is
+still about five times slower at decode, so a two-operation region that pays its own entry and exit
+does not beat an operation that is cheap on the CPU at decode width. At prefill the resident chain is
+almost all boundary: the two operations take 0.158 ms of its 2.15 ms, the rest being 4 MB staged each
+way and the host copies around it. The RoPE kernel is bit-identical to the CPU rotation.
+
+**The scalar RoPE is a large share of the GPU forward pass today.** Read from the `juno.Rope` and
+`juno.ForwardPass` spans of the parity-corrected GPU reference sweep
+([`perf-compare/20260925T172231Z/`](perf-compare/20260925T172231Z/INDEX.md), repetition 2, default
+lane), where every matrix product already runs on the GPU and RoPE still runs on the CPU:
+
+| model | lane | RoPE | forward pass | RoPE share |
+|---|---|---:|---:|---:|
+| TinyLlama | generation (64 tokens) | 111.95 ms | 1126.73 ms | 9.9% |
+| Mistral-7B | generation (64 tokens) | 349.34 ms | 3240.58 ms | 10.8% |
+| Qwen2.5-3B | generation (64 tokens) | 192.23 ms | 2394.09 ms | 8.0% |
+| TinyLlama | prefill (128 tokens) | 216.07 ms | 918.47 ms | 23.5% |
+| Mistral-7B | prefill (128 tokens) | 682.16 ms | 2917.92 ms | 23.4% |
+
+The rotation angle for a position depends only on the position and the pair index, yet it was
+recomputed for every head of every layer — 32 query and 4 key heads across 22 layers on TinyLlama, so
+each angle was evaluated 792 times per token.
+
+**Now the CPU rotation reads each position's cosines and sines from a table** (`RopeTable`), computed
+once with the same expressions and therefore bit-identical, shared by every handler with the same head
+size and base. Same spans, the GPU reference sweep taken after it
+([`perf-compare/20260927T091155Z/`](perf-compare/20260927T091155Z/INDEX.md), repetition 2, default lane):
+
+| model | lane | RoPE before | RoPE after | share before | share after |
+|---|---|---:|---:|---:|---:|
+| TinyLlama | generation (64 tokens) | 111.95 ms | 4.07 ms | 9.9% | 0.5% |
+| Mistral-7B | generation (64 tokens) | 349.34 ms | 10.08 ms | 10.8% | 0.4% |
+| Qwen2.5-3B | generation (64 tokens) | 192.23 ms | 5.75 ms | 8.0% | 0.3% |
+| TinyLlama | prefill (128 tokens) | 216.07 ms | 6.57 ms | 23.5% | 0.9% |
+| Qwen2.5-3B | prefill (128 tokens) | 343.51 ms | 9.16 ms | 18.1% | 0.6% |
+| Mistral-7B | prefill (128 tokens) | 682.16 ms | 19.24 ms | 23.4% | 0.9% |
+
+End to end on the GPU (medians of three, default flags, the new reference rows): TinyLlama tg 56.8 to
+71.5 t/s and pp 138 to 168 t/s, Mistral-7B tg 20.0 to 23.4 and pp 43.9 to 59.1, Qwen2.5-3B tg 27.8 to
+31.1 and pp 66.1 to 80.4; Phi-3.5-mini, whose rotation was never on this path, is unchanged (tg 24.4
+to 24.6). CPU
+throughput does not move: the rotation was never a visible share of a CPU forward pass.
+
+**The resident chain re-read against the cheaper CPU rotation**
+([`perf-compare/20260927T115107Z-tier01-resident-chain/`](perf-compare/20260927T115107Z-tier01-resident-chain/INDEX.md),
+same harness and settings as above):
+
+| width | scalar CPU chain | op-at-a-time | resident chain | device-only | resident vs CPU | resident vs op-at-a-time |
+|---|---:|---:|---:|---:|---:|---:|
+| decode (batch 1) | 0.0049 ms | 0.0320 ms | 0.0187 ms | 0.0111 ms | **0.26x** | **0.58** of the cost |
+| prefill (batch 512) | 2.13 ms | 3.87 ms | 2.13 ms | 0.157 ms | **1.00x** | **0.55** of the cost |
+
+The CPU chain is 13.7 times cheaper at decode and 16 times at prefill; the GPU lanes did not move.
+Removing the round trip between two operations still halves their cost, but a two-operation region
+now loses to the CPU at decode width and only ties it at prefill width. What still wins clearly is
+the device-only lane at prefill (13.6 times the CPU): residency pays when a region spans enough
+operations that its single entry and exit are amortised, which norm and RoPE alone do not at decode.
+
+**The decode region wired into the handler (`--gpu-residency`).** Per layer, single-sequence decode
+uploads the residual row once, runs RMS norm, the Q8_1 quantization and the three K-quant Q/K/V
+projections and RoPE on one device stream, and downloads q, k and v with one wait - the same one wait
+the default path already pays for its Q/K/V projection, with the CPU norm and the CPU rotation moved
+inside it. Measured with the region on, against the reference sweeps taken just before it
+([`perf-compare/20260927T131355Z/`](perf-compare/20260927T131355Z/INDEX.md), with TinyLlama and
+Mistral-7B from its re-run [`20260927T133246Z/`](perf-compare/20260927T133246Z/INDEX.md); medians of
+three, GPU):
+
+| model | region | tg off (reference) | tg on | on / off |
+|---|---|---:|---:|---:|
+| TinyLlama | active, all layers | 71.54 t/s | 75.38 t/s | **1.054** |
+| Mistral-7B | active, all layers | 23.40 t/s | 24.24 t/s | **1.036** |
+| Qwen2.5-3B | declined (split-half RoPE, Q/K/V biases) | 31.08 t/s | 30.77 t/s | 0.990 |
+| Phi-3.5-mini | declined (another handler) | 24.57 t/s | 24.43 t/s | 0.994 |
+
+Where it runs, generation is 4% to 5% faster; where it declines, throughput is unchanged within the
+repetition spread. The JFR spans agree: with the region on, decode emits no `juno.Rope` span, half as
+many `juno.RmsNorm` spans (only the feed-forward norm is left on the host) and one `juno.MatVec` fewer
+per layer. Greedy output matched the region-off run token for token over 32 tokens on TinyLlama,
+Mistral-7B and LLaMA-30B (the last with only part of its layers on the GPU, where the region runs on
+those layers and the rest keep the host path). It is off by default.
+
+**Device scratch per backend instead of per thread, and the prefill FP16 packing compiled on its own
+(a measurement boundary for GPU prefill).** The GPU matrix-vector backend kept its device scratch per
+thread, and the server runs every request on a new thread, so device memory grew with every request
+(about 23 MiB per request on TinyLlama, 114 MiB on Mistral-7B); it now belongs to the backend instance
+and stays flat. Moving it exposed a cost the old code had been paying intermittently: the loop that
+converts a prefill window to FP16 before the batched matmul sat inside a large method that the JIT
+deoptimizes whenever a rarely taken branch runs, and the rest of that call then packed the window in
+the interpreter (17 to 38 ms instead of about 1 ms per matmul, read from per-phase timing). The loop
+is now a method of its own. Same-hour A/B against the previous build, prefill medians of three:
+TinyLlama 181 to 229 t/s, Qwen2.5-3B 83 to 90, Mistral-7B 61 to 65. The GPU reference sweep taken on
+it ([`perf-compare/20260927T232837Z/`](perf-compare/20260927T232837Z/INDEX.md), with three rows from
+its re-run [`20260927T234659Z/`](perf-compare/20260927T234659Z/INDEX.md)): pp 1.10x to 1.34x the
+previous reference on TinyLlama, Qwen2.5-3B and Mistral-7B, 1.02x to 1.04x on Phi-3.5-mini; tg 0.96x
+to 1.02x. Do not compare GPU prefill figures across this boundary.
 
 **Note:** this session's `nsys` install fails on every invocation (`option is ambiguous`, reproduced
 even on a bare `nsys profile -- echo hi` with no Juno-specific arguments), so the specific

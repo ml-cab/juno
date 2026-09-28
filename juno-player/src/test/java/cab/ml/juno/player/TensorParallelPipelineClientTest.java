@@ -61,6 +61,7 @@ class TensorParallelPipelineClientTest {
         private final float winnerValue;
         private final long  delayMs;
         private final boolean loadSucceeds;
+        private final boolean loadThrows;
 
         TensorNodeStub(int port, int winnerToken, float winnerValue, long delayMs) throws Exception {
             this(port, winnerToken, winnerValue, delayMs, true);
@@ -69,7 +70,14 @@ class TensorParallelPipelineClientTest {
         /** @param loadSucceeds whether this node reports success=true for LoadShard */
         TensorNodeStub(int port, int winnerToken, float winnerValue, long delayMs, boolean loadSucceeds)
                 throws Exception {
+            this(port, winnerToken, winnerValue, delayMs, loadSucceeds, false);
+        }
+
+        /** @param loadThrows whether LoadShard throws out of the handler (the node answers UNKNOWN) */
+        TensorNodeStub(int port, int winnerToken, float winnerValue, long delayMs, boolean loadSucceeds,
+                boolean loadThrows) throws Exception {
             this.loadSucceeds = loadSucceeds;
+            this.loadThrows   = loadThrows;
             this.port        = port;
             this.winnerToken = winnerToken;
             this.winnerValue = winnerValue;
@@ -107,6 +115,8 @@ class TensorParallelPipelineClientTest {
                         public void loadShard(LoadShardRequest request,
                                 StreamObserver<LoadShardResponse> responseObserver) {
                             loadRequests.add(request);
+                            if (loadThrows)
+                                throw new OutOfMemoryError("Java heap space");
                             responseObserver.onNext(LoadShardResponse.newBuilder()
                                     .setSuccess(loadSucceeds)
                                     .setMessage(loadSucceeds
@@ -268,6 +278,36 @@ class TensorParallelPipelineClientTest {
                     new TensorParallelPipelineClient.TensorShardConfig(0, 22, true, true, 2, 3))))
                     .isInstanceOf(RuntimeException.class)
                     .hasMessageContaining("Unsupported model architecture 'gemma4'");
+
+            client.shutdown();
+        } finally {
+            n0.shutdown(); n1.shutdown(); n2.shutdown();
+        }
+    }
+
+    @Test
+    @DisplayName("loadShards() names the node and its address when a node answers with a bare error status")
+    void loadShards_names_the_node_when_it_answers_with_an_error_status() throws Exception {
+        TensorNodeStub n0 = new TensorNodeStub(BASE_PORT + 30, 0, 0f, 0);
+        TensorNodeStub n1 = new TensorNodeStub(BASE_PORT + 31, 0, 0f, 0, false, true);
+        TensorNodeStub n2 = new TensorNodeStub(BASE_PORT + 32, 0, 0f, 0);
+
+        try {
+            TensorParallelPipelineClient client = new TensorParallelPipelineClient(
+                    List.of(
+                            new TensorParallelPipelineClient.NodeAddress("localhost", BASE_PORT + 30),
+                            new TensorParallelPipelineClient.NodeAddress("localhost", BASE_PORT + 31),
+                            new TensorParallelPipelineClient.NodeAddress("localhost", BASE_PORT + 32)),
+                    VOCAB_SIZE);
+
+            assertThatThrownBy(() -> client.loadShards(List.of(
+                    new TensorParallelPipelineClient.TensorShardConfig(0, 22, true, true, 0, 3),
+                    new TensorParallelPipelineClient.TensorShardConfig(0, 22, true, true, 1, 3),
+                    new TensorParallelPipelineClient.TensorShardConfig(0, 22, true, true, 2, 3))))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("node 1")
+                    .hasMessageContaining("localhost:" + (BASE_PORT + 31))
+                    .hasMessageContaining("UNKNOWN");
 
             client.shutdown();
         } finally {

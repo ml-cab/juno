@@ -102,14 +102,26 @@ tier can fail on it and the final scorecard in Tier 14 can only report a directi
 four-model sweep (`tinyllama-1.1b`, `qwen2.5-3b`, `Phi-3.5-mini`, `mistral-7b`, all Q4_K_M) on the
 `docs/perf-compare/README.md` baseline host, under the benchmark-parity preconditions below:
 
-| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) |
-|---|---|---|---|
-| GPU tg, Phi-3.5-mini | >= **0.50x** | 0.330x | 0.423x |
-| GPU tg, mistral-7b | >= **0.60x** | 0.513x | 0.581x (0.631x tuned) |
-| GPU pp, every sweep model | >= **0.15x** | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x |
-| CPU tg, every sweep model | >= **0.25x** | 0.106x to 0.147x | 0.079x to 0.128x |
+| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) |
+|---|---|---|---|---|
+| GPU tg, Phi-3.5-mini | >= **0.50x** | 0.330x | 0.423x | 0.415x (0.414x tuned) |
+| GPU tg, mistral-7b | >= **0.60x** | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) |
+| GPU pp, every sweep model | >= **0.15x** | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x |
+| CPU tg, every sweep model | >= **0.25x** | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x |
 
-**The right-hand column is the reference, and the two columns before it are not comparable with it.**
+**The right-most column is the reference from 2026-09-27**, taken after the scalar CPU RoPE stopped
+recomputing its angles for every head of every layer, which is a measurement boundary (Tier 01's
+"Out-of-tier changes"). Sources: GPU `docs/perf-compare/20260927T091155Z/` with the `tinyllama`,
+`qwen2.5-3b` and `Phi-3.5-mini` rows from its re-run `20260927T093054Z/`; CPU `20260927T094414Z/`.
+Juno's GPU throughput rose where the rotation runs on the CPU path (tinyllama tg +26%, mistral-7b
++17%, qwen2.5-3b +12%; pp +22% to +35%) and held on Phi-3.5-mini, which has its own rotation; its
+ratio moved only with the reference tool's own reading. CPU throughput did not move (the rotation was
+never a visible share of a CPU forward pass); the CPU ratios moved with the reference tool's readings.
+The mistral-7b GPU tg row now meets its end-of-plan target on the default flags. The 2026-09-25
+column is kept, not overwritten; score later tiers against the 2026-09-27 column.
+
+**The 2026-09-25 column was the reference until 2026-09-27, and the two columns before it are not
+comparable with it.**
 Those readings come from `docs/perf-compare/20260925T172231Z/` (GPU) and `20260925T174146Z/` (CPU),
 the first sweep taken with prompt-token parity, warm repeated measurement, a fixed heap, `min_tokens`
 generation parity, and prefill and generation measured in two separate runs as the reference tool

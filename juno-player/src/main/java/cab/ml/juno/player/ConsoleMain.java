@@ -151,6 +151,27 @@ public final class ConsoleMain {
 	 * because verbosity there is read by {@link ClusterHarness} at fork time,
 	 * well after parseArgs() has already run.
 	 */
+	/**
+	 * When --gpu-residency was requested for a launch that cannot use it (LoRA
+	 * training or playback, the CPU backend, an architecture without the device
+	 * region), says so on the console. Library logging is off unless --verbose,
+	 * so the handlers' own once-logged notice would not reach the user.
+	 */
+	private static void printGpuResidencyNotice() {
+		String architecture = null;
+		if (modelPath != null && java.nio.file.Files.isRegularFile(java.nio.file.Path.of(modelPath))) {
+			try (cab.ml.juno.node.GgufReader r = cab.ml.juno.node.GgufReader.open(java.nio.file.Path.of(modelPath))) {
+				architecture = r.metaString("general.architecture");
+			} catch (Exception e) {
+				architecture = null; // the model load reports an unreadable file itself
+			}
+		}
+		String notice = cab.ml.juno.node.GpuResidencyOptions.consoleNotice(architecture,
+				loraMode || loraPlayPath != null, !useGpu);
+		if (notice != null)
+			System.out.println(String.format("  %sWARNING: %s%s%n", Color.YELLOW, notice, Color.RESET));
+	}
+
 	private static void configureLogging() {
 		boolean effectiveVerbose = verbose || Boolean.getBoolean("JUNO_VERBOSE")
 				|| "true".equalsIgnoreCase(System.getenv("JUNO_VERBOSE"));
@@ -224,6 +245,7 @@ public final class ConsoleMain {
 	private static String gpuLayers = null; // null → env or default auto
 	private static String mmq = null; // null → env or default auto
 	private static String gpuAttention = null; // null → env or default auto
+	private static String gpuResidency = null; // null → env or default off
 	private static String cacheTypeK = null; // null → env or default f16
 	private static String cacheTypeV = null; // null → env or default f16
 	private static String schedule = null; // null → env or default static
@@ -405,6 +427,8 @@ public final class ConsoleMain {
 			System.setProperty(MmqOptions.ENV_PROPERTY, mmq);
 		if (gpuAttention != null)
 			System.setProperty(cab.ml.juno.node.GpuAttentionOptions.ENV_PROPERTY, gpuAttention);
+		if (gpuResidency != null)
+			System.setProperty(cab.ml.juno.node.GpuResidencyOptions.ENV_PROPERTY, gpuResidency);
 		if (cacheTypeK != null)
 			System.setProperty(cab.ml.juno.kvcache.CacheTypeOptions.ENV_K, cacheTypeK);
 		if (cacheTypeV != null)
@@ -430,6 +454,7 @@ public final class ConsoleMain {
 			System.setProperty("juno.jfr.duration", jfrDuration);
 
 		banner();
+		printGpuResidencyNotice();
 
 		// SIMD diagnostic + policy: vector width, and which quant phases use
 		// Vector vs scalar (weight-stationary accumulate stays scalar).
@@ -514,6 +539,11 @@ public final class ConsoleMain {
 			String env = System.getenv(cab.ml.juno.node.GpuAttentionOptions.ENV_PROPERTY);
 			if (env != null && !env.isBlank())
 				gpuAttention = env.strip();
+		}
+		if (gpuResidency == null) {
+			String env = System.getenv(cab.ml.juno.node.GpuResidencyOptions.ENV_PROPERTY);
+			if (env != null && !env.isBlank())
+				gpuResidency = env.strip();
 		}
 		if (cacheTypeK == null) {
 			String env = System.getenv(cab.ml.juno.kvcache.CacheTypeOptions.ENV_K);
@@ -746,6 +776,13 @@ public final class ConsoleMain {
 			case "--gpu-attention":
 				if (i + 1 < args.length)
 					gpuAttention = args[++i];
+				break;
+			case "--gpu-residency":
+				if (i + 1 < args.length) {
+					gpuResidency = args[++i];
+					// Fail at the command line on a typo, not at the first model load.
+					cab.ml.juno.node.GpuResidencyOptions.parse(gpuResidency);
+				}
 				break;
 			case "--cache-type-k":
 				if (i + 1 < args.length)
@@ -1014,6 +1051,11 @@ public final class ConsoleMain {
 		System.out.println("                             env JUNO_MMQ; keeps Q4_K packed on device");
 		System.out.println("  --gpu-attention on|off|auto  GPU-resident attention kernel (measured decode/prefill throughput");
 		System.out.println("                             lever, not a peer-latency claim; default: auto; CUDA only; env JUNO_GPU_ATTENTION)");
+		System.out.println("  --gpu-residency on|off|auto  Keep the decode activation on the GPU from RMS norm through the Q/K/V");
+		System.out.println("                             projection and RoPE: one upload and one download per layer instead of");
+		System.out.println("                             a round trip per operation (default: off; CUDA, K-quant MMQ weights,");
+		System.out.println("                             LLaMA-family adjacent RoPE, single-sequence decode; elsewhere it says so");
+		System.out.println("                             once and keeps the existing path; env JUNO_GPU_RESIDENCY)");
 		System.out.println("  --cache-type-k f16|q8_0    K cache element type (default: f16 = current float path)");
 		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8× smaller vs float)");
 		System.out.println("  --cache-type-v f16|q8_0    V cache element type (default: f16)");

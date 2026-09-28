@@ -246,12 +246,12 @@ public final class GenerationLoop {
 			allTokens[i] = promptIds.clone();
 			promptLens[i] = promptIds.length;
 			params[i] = resolveSamplingParams(req.samplingParams());
+			floors[i] = minTokenFloor(req.samplingParams());
 			maxTokens[i] = params[i].maxTokens();
 			rngs[i] = params[i].seed() != null ? new Random(params[i].seed()) : null;
 			grammars[i] = GrammarBinding.open(tokenizer, params[i], requestIds[i]);
-			// Per request, not per batch: one request asking for a minimum must not hold
-			// another request in the same batch open.
-			floors[i] = new MinTokenFloor(tokenizer.eosTokenId(), params[i].minTokens());
+			// floors[i] is set per request above, not per batch: one request asking for a
+			// minimum must not hold another request in the same batch open.
 			generated[i] = new ArrayList<>();
 			historyBufs[i] = new GrowableIntArray();
 			eosFilters[i] = new EosOutputFilter();
@@ -331,7 +331,8 @@ public final class GenerationLoop {
 					active[i] = false;
 				} else {
 					String piece = streams[i].append(nextToken);
-					EosOutputFilter.Outcome eosOut = eosFilters[i].accept(piece);
+					EosOutputFilter.Outcome eosOut = eosFilters[i].accept(piece,
+							!floors[i].holdsOpen(generated[i].size()));
 					StopSequenceFilter.Outcome stopOut = stopFilters[i].accept(eosOut.emit());
 					if (!stopOut.emit().isEmpty()) {
 						entries.get(i).consumer().onToken(stopOut.emit(), nextToken, generated[i].size());
@@ -442,7 +443,7 @@ public final class GenerationLoop {
 		StopSequenceFilter stopFilter = new StopSequenceFilter(params.stopStrings());
 		Random rng = params.seed() != null ? new Random(params.seed()) : null;
 		GrammarSession grammar = GrammarBinding.open(tokenizer, params, kvKey);
-		MinTokenFloor floor = new MinTokenFloor(tokenizer.eosTokenId(), params.minTokens());
+		MinTokenFloor floor = minTokenFloor(request.samplingParams());
 		GenerationResult.StopReason stopReason = GenerationResult.StopReason.MAX_TOKENS;
 
 		// ── Step 2b: Prefill — populate KV cache for uncached prompt tokens ──
@@ -519,7 +520,7 @@ public final class GenerationLoop {
 					int emitted = matched ? draft[d] : predicted;
 
 					EmitOutcome outcome = emitToken(emitted, step, kvKey, allTokens, stream, eosFilter, stopFilter,
-							consumer, params, generatedIds, historyBuf);
+							consumer, params, floor, generatedIds, historyBuf);
 					allTokens = outcome.allTokens();
 					step++;
 					if (matched)
@@ -550,7 +551,7 @@ public final class GenerationLoop {
 				int nextToken = sampler.sample(logits, params, historyArr, rng, grammar, floor);
 
 				EmitOutcome outcome = emitToken(nextToken, step, kvKey, allTokens, stream, eosFilter, stopFilter,
-						consumer, params, generatedIds, historyBuf);
+						consumer, params, floor, generatedIds, historyBuf);
 				allTokens = outcome.allTokens();
 				step++;
 				stop = outcome.stop();
@@ -632,6 +633,25 @@ public final class GenerationLoop {
 		return params.withStopTokenIds(merged);
 	}
 
+	/**
+	 * The floor that holds a request open until its {@code minTokens}: it holds
+	 * back the model's own end signals - end-of-sequence and the vocabulary's chat
+	 * turn markers - but not a turn marker the request itself asked to stop on, by
+	 * id or as a single-token stop string, because a caller who asked for a stop
+	 * asked for it unconditionally. Takes the request's params as submitted, before
+	 * {@link #resolveSamplingParams} merges the turn markers into its stop set.
+	 */
+	MinTokenFloor minTokenFloor(SamplingParams requested) {
+		int[] turnIds = tokenizer.chatTurnTokenIds();
+		if (requested.minTokens() <= 0 || turnIds == null || turnIds.length == 0)
+			return new MinTokenFloor(tokenizer.eosTokenId(), requested.minTokens());
+		int[] callerStops = OpenAiAdapter.stopTokenIdsFromStrings(tokenizer, requested.stopStrings(),
+				requested.stopTokenIds());
+		int[] held = java.util.Arrays.stream(turnIds)
+				.filter(id -> java.util.Arrays.stream(callerStops).noneMatch(c -> c == id)).toArray();
+		return new MinTokenFloor(tokenizer.eosTokenId(), held, requested.minTokens());
+	}
+
 	/** Collapses newlines/control chars so one log line per decode step stays one line. */
 	private static String escapeForLog(String s) {
 		return s.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
@@ -683,7 +703,8 @@ public final class GenerationLoop {
 	 */
 	private EmitOutcome emitToken(int token, int position, String kvKey, int[] allTokens,
 			Tokenizer.StreamContext stream, EosOutputFilter eosFilter, StopSequenceFilter stopFilter,
-			TokenConsumer consumer, SamplingParams params, List<Integer> generatedIds, GrowableIntArray historyBuf) {
+			TokenConsumer consumer, SamplingParams params, MinTokenFloor floor, List<Integer> generatedIds,
+			GrowableIntArray historyBuf) {
 		if (token == tokenizer.eosTokenId()) {
 			eosFilter.discardHeld();
 			stopFilter.discardHeld();
@@ -696,7 +717,7 @@ public final class GenerationLoop {
 		}
 
 		String piece = stream.append(token);
-		EosOutputFilter.Outcome eosOut = eosFilter.accept(piece);
+		EosOutputFilter.Outcome eosOut = eosFilter.accept(piece, !floor.holdsOpen(generatedIds.size()));
 		StopSequenceFilter.Outcome stopOut = stopFilter.accept(eosOut.emit());
 		if (!stopOut.emit().isEmpty()) {
 			consumer.onToken(stopOut.emit(), token, position);

@@ -89,6 +89,28 @@ class EmbeddedNodeServerLoadFailureTest {
 	}
 
 	@Test
+	@DisplayName("an Error during load (out of heap) is reported as a failed load naming the node, the model and the cause")
+	void an_error_during_load_is_reported_with_its_cause() throws Exception {
+		// Every tensor-parallel node loads the whole model, so a node heap too small for
+		// it fails with OutOfMemoryError, an Error that a catch of Exception does not
+		// see. The coordinator then read only "UNKNOWN: Application error processing RPC".
+		Path gguf = MetadataOnlyGguf.write(dir, "llama");
+		int port = freePort();
+		start(new EmbeddedNodeServer("n7", port, gguf.toString(), false, (model, ctx, backend, adapters) -> {
+			throw new OutOfMemoryError("Java heap space");
+		}), port);
+
+		LoadShardResponse load = stub.loadShard(loadRequest());
+
+		assertThat(load.getSuccess()).isFalse();
+		assertThat(load.getMessage()).contains("n7").contains(gguf.getFileName().toString())
+				.contains("java.lang.OutOfMemoryError").contains("Java heap space");
+
+		ForwardResponse forward = stub.forwardPass(forwardRequest());
+		assertThat(forward.getError()).as("the node refuses forward passes after the failed load").isNotEmpty();
+	}
+
+	@Test
 	@DisplayName("a missing model file is reported as a failed load")
 	void missing_model_file_fails_the_load() throws Exception {
 		int port = freePort();

@@ -37,8 +37,14 @@ import static java.lang.foreign.ValueLayout.JAVA_SHORT;
  *   <li>Device weight matrices ({@link DeviceFloatMatrix}, {@link DeviceHalfMatrix})
  *       are uploaded once and held resident; their {@link MemorySegment} is passed
  *       directly to cuBLAS as an ADDRESS parameter — zero H2D copy per token.
- *   <li>Per-thread x and y scratch buffers on the device are grown lazily and
- *       reused across calls — one {@code cudaMalloc} per thread, per buffer.
+ *   <li>x and y scratch buffers on the device, the Q4_K dequant buffer and the
+ *       CUDA stream belong to the instance, are grown lazily and reused across
+ *       calls. They are touched only under the context's serialization lock,
+ *       which every call holds until its stream has been synchronized, so one
+ *       set serves every caller. Not per thread: the request scheduler runs each
+ *       request on a new thread, and scratch tied to a finished thread would
+ *       stay allocated on the device. {@link #releaseScratch()} frees the set;
+ *       the next call grows it again.
  *   <li>H2D upload of x uses a short-lived confined {@link Arena}: x is copied
  *       from the heap array into native memory with {@code copyFrom} (a pure Java
  *       operation), then the native segment is passed to {@code cudaMemcpyAsync}.
@@ -71,21 +77,12 @@ public final class CudaMatVec implements GpuMatVec {
     private GpuBlasOps           blasOps;
     private CudaFp16GemmOps      fp16GemmOps;
 
-    // ── Per-thread device scratch (FP32 resident path) ────────────────────────
-    private static final ThreadLocal<Fp32Scratch> FP32_SCRATCH =
-        ThreadLocal.withInitial(Fp32Scratch::new);
-
-    // ── Per-thread device scratch (FP16 resident path) ────────────────────────
-    private static final ThreadLocal<Fp16Scratch> FP16_SCRATCH =
-        ThreadLocal.withInitial(Fp16Scratch::new);
-
-    // ── Per-thread device scratch (Q4_K/Q5_K/Q6_K dequant-to-FP16 batched path) ──
-    private static final ThreadLocal<Q4KDequantScratch> Q4K_DEQUANT_SCRATCH =
-        ThreadLocal.withInitial(Q4KDequantScratch::new);
-
-    // ── Per-thread CUDA stream ────────────────────────────────────────────────
-    private static final ThreadLocal<MemorySegment> CUDA_STREAM =
-        ThreadLocal.withInitial(() -> null);
+    // ── Device scratch and stream: one set per instance, guarded by ───────────
+    // ── ctx.cublasSerializationLock() (see the class javadoc) ─────────────────
+    private final Fp32Scratch       fp32Scratch    = new Fp32Scratch();
+    private final Fp16Scratch       fp16Scratch    = new Fp16Scratch();
+    private final Q4KDequantScratch dequantScratch = new Q4KDequantScratch();
+    private MemorySegment           stream;
 
     // ── Scratch containers ────────────────────────────────────────────────────
 
@@ -249,7 +246,7 @@ public final class CudaMatVec implements GpuMatVec {
         long bytesX = (long) cols * Float.BYTES;
         long bytesY = (long) rows * Float.BYTES;
 
-        Fp32Scratch scratch = FP32_SCRATCH.get();
+        Fp32Scratch scratch = fp32Scratch;
 
         try (Arena resultArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
@@ -317,7 +314,7 @@ public final class CudaMatVec implements GpuMatVec {
         long bytesX = (long) cols * Float.BYTES;
         long bytesY = (long) rows * Float.BYTES;
         long bytesQ8 = Q4KMmqKernel.q8Bytes(cols);
-        Fp32Scratch scratch = FP32_SCRATCH.get();
+        Fp32Scratch scratch = fp32Scratch;
 
         try (Arena resultArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
@@ -376,7 +373,7 @@ public final class CudaMatVec implements GpuMatVec {
         long bytesXh = (long) cols * Short.BYTES;  // FP16
         long bytesY  = (long) rows * Float.BYTES;  // FP32
 
-        Fp16Scratch scratch = FP16_SCRATCH.get();
+        Fp16Scratch scratch = fp16Scratch;
 
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
@@ -451,7 +448,7 @@ public final class CudaMatVec implements GpuMatVec {
         evt.begin();
         long bytesXh = (long) cols * Short.BYTES;
         long bytesYMax = (long) maxRows * Float.BYTES;
-        Fp16Scratch scratch = FP16_SCRATCH.get();
+        Fp16Scratch scratch = fp16Scratch;
         float[][] Y = new float[n][];
 
         try (Arena callArena = Arena.ofConfined()) {
@@ -527,7 +524,7 @@ public final class CudaMatVec implements GpuMatVec {
         evt.begin();
         long bytesX = (long) cols * Float.BYTES;
         long bytesYMax = (long) maxRows * Float.BYTES;
-        Fp32Scratch scratch = FP32_SCRATCH.get();
+        Fp32Scratch scratch = fp32Scratch;
         float[][] Y = new float[n][];
 
         try (Arena callArena = Arena.ofConfined()) {
@@ -612,7 +609,7 @@ public final class CudaMatVec implements GpuMatVec {
             yOffElems[i] = totalY;
             totalY += weights[i].rows();
         }
-        Fp32Scratch scratch = FP32_SCRATCH.get();
+        Fp32Scratch scratch = fp32Scratch;
         float[][] Y = new float[n][];
 
         try (Arena callArena = Arena.ofConfined()) {
@@ -715,7 +712,7 @@ public final class CudaMatVec implements GpuMatVec {
 
         long bytesXh = (long) cols * batch * Short.BYTES;
         long bytesY = (long) rows * batch * Float.BYTES;
-        Fp16Scratch scratch = FP16_SCRATCH.get();
+        Fp16Scratch scratch = fp16Scratch;
 
         try {
             synchronized (ctx.cublasSerializationLock()) {
@@ -725,11 +722,7 @@ public final class CudaMatVec implements GpuMatVec {
                     ensureFp16Scratch(scratch, bytesXh, bytesY);
 
                     MemorySegment stagingXh = scratch.hXh;
-                    for (int b = 0; b < batch; b++) {
-                        int base = b * cols;
-                        for (int j = 0; j < cols; j++)
-                            stagingXh.setAtIndex(JAVA_SHORT, base + j, Float.floatToFloat16(X[b][j]));
-                    }
+                    packFp16Rows(stagingXh, X, batch, cols);
 
                     CudaBindings.check(
                             CudaBindings.callInt(cuda.cudaMemcpyAsync,
@@ -789,7 +782,7 @@ public final class CudaMatVec implements GpuMatVec {
 
         long bytesXh = (long) cols * batch * Short.BYTES;
         long bytesY = (long) rows * batch * Float.BYTES;
-        Fp16Scratch scratch = FP16_SCRATCH.get();
+        Fp16Scratch scratch = fp16Scratch;
 
         try {
             synchronized (ctx.cublasSerializationLock()) {
@@ -799,11 +792,7 @@ public final class CudaMatVec implements GpuMatVec {
                     ensureFp16Scratch(scratch, bytesXh, bytesY);
 
                     MemorySegment stagingXh = scratch.hXh;
-                    for (int b = 0; b < batch; b++) {
-                        int base = b * cols;
-                        for (int j = 0; j < cols; j++)
-                            stagingXh.setAtIndex(JAVA_SHORT, base + j, Float.floatToFloat16(X[b][j]));
-                    }
+                    packFp16Rows(stagingXh, X, batch, cols);
 
                     CudaBindings.check(
                             CudaBindings.callInt(cuda.cudaMemcpyAsync,
@@ -836,6 +825,25 @@ public final class CudaMatVec implements GpuMatVec {
             evt.rows = rows;
             evt.cols = cols;
             evt.commit();
+        }
+    }
+
+    /**
+     * Packs {@code batch} rows of {@code X} as FP16 into {@code dst}, row-major.
+     *
+     * <p>Its own method on purpose: the batched callers are large and deoptimize
+     * whenever an uncommon branch runs (a scratch buffer growing to a new largest
+     * window, for example), and with the loop inline, the rest of that call packed
+     * a prefill window in the interpreter - measured at 17 to 38 ms instead of
+     * about 1 ms per matmul. Compiled on its own, the loop stays compiled when its
+     * caller does not.
+     */
+    private static void packFp16Rows(MemorySegment dst, float[][] X, int batch, int cols) {
+        for (int b = 0; b < batch; b++) {
+            float[] row = X[b];
+            long base = (long) b * cols;
+            for (int j = 0; j < cols; j++)
+                dst.setAtIndex(JAVA_SHORT, base + j, Float.floatToFloat16(row[j]));
         }
     }
 
@@ -884,8 +892,7 @@ public final class CudaMatVec implements GpuMatVec {
 
         long bytesXh = (long) cols * batch * Short.BYTES;
         long bytesY = (long) rows * batch * Float.BYTES;
-        Fp16Scratch scratch = FP16_SCRATCH.get();
-        Q4KDequantScratch dequantScratch = Q4K_DEQUANT_SCRATCH.get();
+        Fp16Scratch scratch = fp16Scratch;
 
         try {
             synchronized (ctx.cublasSerializationLock()) {
@@ -897,11 +904,7 @@ public final class CudaMatVec implements GpuMatVec {
                     kernel.launchDequant(A, dW, stream);
 
                     MemorySegment stagingXh = scratch.hXh;
-                    for (int b = 0; b < batch; b++) {
-                        int base = b * cols;
-                        for (int j = 0; j < cols; j++)
-                            stagingXh.setAtIndex(JAVA_SHORT, base + j, Float.floatToFloat16(X[b][j]));
-                    }
+                    packFp16Rows(stagingXh, X, batch, cols);
 
                     CudaBindings.check(
                             CudaBindings.callInt(cuda.cudaMemcpyAsync,
@@ -965,7 +968,7 @@ public final class CudaMatVec implements GpuMatVec {
         long bytesG = (long) rows * Float.BYTES;
         long bytesZ = (long) cols * Float.BYTES;
 
-        Fp32Scratch scratch = FP32_SCRATCH.get();
+        Fp32Scratch scratch = fp32Scratch;
 
         try (Arena resultArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
@@ -1028,7 +1031,7 @@ public final class CudaMatVec implements GpuMatVec {
         long bytesGh = (long) rows * Short.BYTES;
         long bytesZ  = (long) cols * Float.BYTES;
 
-        Fp16Scratch scratch = FP16_SCRATCH.get();
+        Fp16Scratch scratch = fp16Scratch;
 
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
@@ -1138,9 +1141,8 @@ public final class CudaMatVec implements GpuMatVec {
 
     // ── Stream management ─────────────────────────────────────────────────────
 
-    /** Returns or lazily creates the per-thread non-blocking CUDA stream. */
+    /** Returns or lazily creates the instance's non-blocking CUDA stream. Caller holds the lock. */
     private MemorySegment ensureStream() {
-        MemorySegment stream = CUDA_STREAM.get();
         if (stream != null) return stream;
         CudaBindings.check(
             CudaBindings.callInt(cuda.cudaSetDevice, ctx.deviceIndex()),
@@ -1151,7 +1153,6 @@ public final class CudaMatVec implements GpuMatVec {
                 CudaBindings.callInt(cuda.cudaStreamCreateWithFlags, slot, STREAM_NON_BLOCKING),
                 "cudaStreamCreateWithFlags");
             stream = slot.get(ADDRESS, 0); // opaque 0-byte segment = stream handle
-            CUDA_STREAM.set(stream);
             return stream;
         }
     }
@@ -1167,33 +1168,97 @@ public final class CudaMatVec implements GpuMatVec {
         CudaBindings.callInt(cuda.cublasSetStream, ctx.handle(), MemorySegment.NULL);
     }
 
+    // ── Scratch lifetime ──────────────────────────────────────────────────────
+
+    /**
+     * Frees this instance's device scratch, pinned host staging and stream.
+     * Safe while other callers are active: it takes the same lock they hold, and
+     * the next call grows the scratch again. Not needed per request; for callers
+     * that retire a backend, and for tests that need the device back to baseline.
+     */
+    void releaseScratch() {
+        synchronized (ctx.cublasSerializationLock()) {
+            freeDevice(fp32Scratch.dX);
+            freeDevice(fp32Scratch.dY);
+            freeDevice(fp32Scratch.dQ8);
+            fp32Scratch.dX = fp32Scratch.dY = fp32Scratch.dQ8 = null;
+            fp32Scratch.dXBytes = fp32Scratch.dYBytes = fp32Scratch.dQ8Bytes = 0L;
+            freeDevice(fp16Scratch.dXh);
+            freeDevice(fp16Scratch.dY);
+            fp16Scratch.dXh = fp16Scratch.dY = null;
+            fp16Scratch.dXhBytes = fp16Scratch.dYBytes = 0L;
+            if (fp16Scratch.hXh != null)
+                cuda.hostFree(fp16Scratch.hXh);
+            if (fp16Scratch.hY != null)
+                cuda.hostFree(fp16Scratch.hY);
+            fp16Scratch.hXh = fp16Scratch.hY = null;
+            fp16Scratch.hXhBytes = fp16Scratch.hYBytes = 0L;
+            dequantScratch.release(cuda);
+            if (stream != null) {
+                CudaBindings.callInt(cuda.cudaStreamDestroy, stream);
+                stream = null;
+            }
+        }
+    }
+
+    /** Device bytes this instance's scratch holds now (excluding the stream). */
+    long scratchDeviceBytes() {
+        synchronized (ctx.cublasSerializationLock()) {
+            return fp32Scratch.dXBytes + fp32Scratch.dYBytes + fp32Scratch.dQ8Bytes
+                    + fp16Scratch.dXhBytes + fp16Scratch.dYBytes + dequantScratch.heldBytes();
+        }
+    }
+
+    private void freeDevice(MemorySegment p) {
+        if (p != null)
+            cuda.deviceFree(p);
+    }
+
     // ── Scratch growth ────────────────────────────────────────────────────────
 
     private void ensureFp32Scratch(Fp32Scratch s, long bytesX, long bytesY) {
         ensureFp32Scratch(s, bytesX, bytesY, 0);
     }
 
+    /**
+     * Grows the FP32 scratch. As in {@link #ensureFp16Scratch}, each grow clears
+     * its field before freeing, so a failed allocation leaves the slot empty
+     * rather than holding a freed pointer the next caller would reuse: the
+     * scratch now outlives the call and the thread that failed.
+     */
     private void ensureFp32Scratch(Fp32Scratch s, long bytesX, long bytesY, long bytesQ8) {
         int dev = ctx.deviceIndex();
         if (s.dXBytes < bytesX) {
-            cuda.deviceFree(s.dX);
+            MemorySegment previous = s.dX;
+            s.dX = null;
+            s.dXBytes = 0L;
+            if (previous != null)
+                cuda.deviceFree(previous);
             s.dX     = cuda.deviceMalloc(dev, bytesX);
             s.dXBytes = bytesX;
         }
         if (s.dYBytes < bytesY) {
-            cuda.deviceFree(s.dY);
+            MemorySegment previous = s.dY;
+            s.dY = null;
+            s.dYBytes = 0L;
+            if (previous != null)
+                cuda.deviceFree(previous);
             s.dY     = cuda.deviceMalloc(dev, bytesY);
             s.dYBytes = bytesY;
         }
         if (bytesQ8 > 0 && s.dQ8Bytes < bytesQ8) {
-            cuda.deviceFree(s.dQ8);
+            MemorySegment previous = s.dQ8;
+            s.dQ8 = null;
+            s.dQ8Bytes = 0L;
+            if (previous != null)
+                cuda.deviceFree(previous);
             s.dQ8 = cuda.deviceMalloc(dev, bytesQ8);
             s.dQ8Bytes = bytesQ8;
         }
     }
 
     /**
-     * Grows the per-thread staging buffers. Each grow clears its field before
+     * Grows the FP16 staging buffers. Each grow clears its field before
      * freeing the old buffer, so an allocation that fails leaves that slot empty
      * rather than holding a pointer to freed memory: a caller that survives the
      * failure and retries would otherwise hand a dangling pointer to a later

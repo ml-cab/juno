@@ -1,5 +1,177 @@
 ## Status 
 
+**Session 97** — GPU device memory no longer grows with every request, GPU prefill is faster, and two failures now say what they are
+
+- **A GPU server's device memory now stays flat across requests.** The server runs every request on
+  a new thread, and the GPU matrix-vector backend, the GPU attention path and the round-trip GPU norm
+  kept their device scratch (staging buffers, a whole dequantized weight matrix for batched prefill,
+  and a CUDA stream) per thread, so every request allocated a fresh set that was never released.
+  Measured in local mode with three in-process nodes, GPU memory after each of 8 requests:
+  TinyLlama 938 MiB after every request, with and without `--gpu-residency`; Mistral-7B 4604 MiB
+  (4608 with the flag); LLaMA-30B, which fills the card, settles within a few requests and then holds
+  (7768 MiB without the flag, 7784 with it, over 16 requests). Before, it grew by about 23 MiB per
+  request on TinyLlama and 114 MiB per request on Mistral-7B, which on an 8 GiB card ran a Mistral-7B
+  server out of device memory after a few dozen requests. The GPU residency smoke test now fails a
+  server whose memory grows by more than 8 MiB per request over the second half of its requests, in
+  either mode.
+- **GPU prefill is 7% to 26% faster.** Moving the scratch exposed a cost the old code had paid
+  intermittently: the loop converting a prefill window to FP16 before each batched matmul sat inside a
+  large method that the JIT recompiles whenever a rarely taken branch runs, and the rest of that call
+  then ran the loop in the interpreter (17 to 38 ms instead of about 1 ms per matmul). The loop is now
+  a method of its own. Same-hour comparison against the previous build, prefill medians of three:
+  TinyLlama 181 to 229 tokens per second, Qwen2.5-3B 83 to 90, Mistral-7B 61 to 65; generation is
+  unchanged within noise, and LoRA training and playback pass their gates (training 0.91 of the
+  baseline's time, playback 1.08x). GPU prefill figures from before this change are not comparable.
+- **How**: the matrix-vector backend's scratch and stream now belong to the backend instance; every
+  use was already serialized by the GPU context's lock and waits for its stream before releasing it,
+  so one set serves every caller. The attention path and the round-trip norm run outside that lock, so
+  their scratch comes from a small pool sized by how many callers run at once (`DeviceScratchPool`).
+  The same change is made to the ROCm backend (not yet exercised on AMD hardware).
+- **Tests**: new GPU tests drive every scratch-backed call from 50 short-lived threads and assert the
+  scratch stays at one set, check device-wide free memory across 60 such threads, check that
+  releasing returns the memory, and check four concurrent callers get bit-identical results. They
+  failed on the previous code (device-wide: 42 MiB and 76 MiB taken by 60 threads).
+
+- **The documented live-model integration command runs its test again.** `mvn verify -pl juno-master
+  -Pintegration -DMODELS=...` reported success while running no test at all: the profile's empty
+  exclusion list was merged with the default one, which excludes the very test the profile exists to
+  run. It now runs `ModelLiveRunnerIT` (TinyLlama passes); the default `verify` still runs exactly the
+  20 stub cluster tests. The `gpu` profile had the same defect and now runs `GpuForwardPassIT`.
+- **A tensor-parallel node that cannot load its model now says why.** A node that ran out of JVM heap
+  while loading reached the coordinator only as `UNKNOWN: Application error processing RPC`, because the
+  error was not an exception the node reported. It is now reported like any failed load, naming the
+  node, its layers, the model file and the cause, for example `java.lang.OutOfMemoryError: Java heap
+  space` on Mistral-7B with three tensor-parallel nodes, each of which loads the whole model; and a node
+  that still answers with a bare error status is named by index and address.
+
+**Session 96** — The decode activation can stay on the GPU from the norm through the Q/K/V projection and RoPE (`--gpu-residency`, off by default)
+
+- **One residency region per layer at decode.** With `--gpu-residency on`, each layer of
+  single-sequence decode uploads the residual row once, runs RMS norm, the Q/K/V projection and RoPE
+  on one GPU stream, and downloads q, k and v together: one wait, as the default path already pays for
+  its projection, with the host norm and the host rotation moved inside it. The projection and
+  rotation kernels are the ones the default path runs; the region is bit-identical to the GPU
+  operation-at-a-time path in every test, and against the default path only the norm's summation
+  order differs (GPU against CPU).
+- **Measured: 4% to 5% faster generation where it runs, unchanged where it does not.** TinyLlama
+  generation went from 71.5 to 75.4 tokens per second and Mistral-7B from 23.4 to 24.2, medians of
+  three. Greedy output matched the flag-off run token for token over 32 tokens on TinyLlama,
+  Mistral-7B and LLaMA-30B. LoRA training and playback are unchanged with the flag set.
+- **Where it cannot run, it says so once and keeps the existing path**: Qwen2 and Qwen2.5 (the
+  split-half rotation layout and the Q/K/V biases have no device counterpart yet), the Phi and Qwen3
+  handlers, LoRA training and `--lora-play` (adapters are applied to Q/K/V on the host), a non-CUDA
+  backend, and any layer whose projections are not K-quant matrices on the device - so a model only
+  partly on the GPU runs the region on the layers that are. Prefill windows and batched decode keep
+  the existing path. Cluster nodes receive the setting; pipeline and tensor clusters answer with
+  exactly local mode's output.
+- **The region keeps no device memory per request.** Its device buffers come from a pool sized by
+  concurrent calls, not by threads, because the server runs every request on a new thread: memory
+  tied to a finished thread would never be used again.
+- **New smoke test: `scripts/performance-tests/smoke-gpu-residency.sh`** - on against off on real
+  models (greedy output, activation notice, per-request GPU memory), then pipeline and tensor clusters.
+
+**Session 95** — Qwen models now rotate positions in the layout their weights were converted for, the CPU rotation stops recomputing its angles, and `min_tokens` holds against every way the model can end its own turn
+
+- **The CPU rotary embedding computes each angle once instead of 792 times per token.** The angle of a
+  rotated pair depends only on the position and the pair index, but the scalar rotation evaluated a
+  power, a cosine and a sine for every pair of every head of every layer on every call. It now reads
+  them from a per-position table (`RopeTable`) built with exactly the same expressions, so every
+  output is bit-identical, checked against a verbatim copy of the old code across head sizes 64, 96
+  and 128, bases 1e4, 5e5 and 1e6, and positions up to 32767. The table fills lazily in blocks,
+  publishes each block whole so readers take no lock, allocates nothing per call, and is shared by
+  every model with the same head size and base.
+- **GPU generation is 12% to 26% faster on the models that use it, prefill 22% to 35%.** With every
+  matrix product on the GPU, the CPU rotation had been 8% to 11% of each generated token's forward
+  pass and 18% to 23% of a 128-token prefill; it is now under 1% of either. TinyLlama generation went
+  from 56.8 to 71.5 tokens per second, Mistral-7B from 20.0 to 23.4, Qwen2.5-3B from 27.8 to 31.1.
+  Phi-3.5, which rotates on its own path, is unchanged, and so is CPU inference, where the rotation
+  was never a visible share. LoRA training is 7% faster end to end on the benchmark scenario, and
+  playback 7.5%.
+- **New benchmark references.** The GPU and CPU comparison sweeps were re-taken and are the
+  references from here on; the previous ones are kept and marked superseded.
+
+- **Qwen2, Qwen2.5, Qwen3 and Qwen3-MoE were served with the wrong RoPE pair layout.** Rotary
+  position embedding rotates pairs of dimensions, either adjacent ones or the two halves of each
+  head, and the right choice is fixed by how the file's Q/K weight rows were laid out at
+  conversion. LLaMA-family files are converted for adjacent pairs; Qwen files are not permuted and
+  need the split-half layout, but Juno applied adjacent pairs to them. The wrong layout does not
+  fail: short factual prompts still came out right, which is how it went unnoticed. Measured as
+  teacher-forced perplexity over a 700-token English text, Qwen2.5-3B was 169 under the old layout
+  and 1.17 under the correct one, Qwen3-1.7B 526 and 4.05. TinyLlama, the control, is 5.27 under
+  adjacent pairs and 7618 under split-half, so the method discriminates in both directions.
+- **Generated text changes for every Qwen model; nothing else does.** The layout is chosen per
+  architecture at load (`RopePairing`), never by a flag, since a switch that selects a known-wrong
+  geometry would be a silent-quality hazard. Throughput is unchanged: the arithmetic per pair is the
+  same. LLaMA, Mistral, TinyLlama, Phi and the vision backbones are untouched.
+- **LoRA training on Qwen models uses the same layout forward and backward.** The Qwen2 training
+  handler, the Qwen3 one, and the YaRN path all rotate and un-rotate in the corrected layout, so an
+  adapter trains against the geometry it will be played back with. No Qwen adapter was trained
+  before this change on the reference host, so none needs retraining; an adapter trained elsewhere
+  on a Qwen model with an earlier release was trained against the wrong layout and should be
+  retrained.
+- **A perplexity ceiling per model now guards the layout.** `RopePairingPerplexityLiveTest` runs
+  the production loader over 128 tokens of the same text on TinyLlama, Qwen2.5-3B and Qwen3-1.7B
+  whenever the files are present; the full two-layout comparison runs on request.
+
+- **A minimum token count could be cut short by a chat turn marker.** Generation stops on a
+  vocabulary's turn markers (by token id) and on role headers in the decoded text, as well as on
+  end-of-sequence, but the minimum held back only end-of-sequence. A request asking for 64 tokens
+  could end at 3 on `<|im_start|>`, `<|end|>`, `<|endoftext|>`, or a `<|user|>` spelled out in
+  text. The benchmark prompt never triggered it, so no published figure moved.
+- **Below the minimum the model's own end signals are now all held back.** `MinTokenFloor` masks
+  end-of-sequence and the vocabulary's turn-marker ids together, and yields only when nothing else
+  is legal, as before. A role header or turn marker that appears in the decoded text below the
+  minimum no longer ends the request; it is returned as ordinary text, not dropped, and it is never
+  treated as a stop later. The same rule applies on all three generation paths: single request,
+  static batch, and the continuous engine.
+- **A stop the caller asked for still ends the request below its minimum**, by id or as a stop
+  string, as the published contract has always said; a turn marker the caller names explicitly is
+  therefore not held back. Both API contract files, the SDK javadoc, `docs/howto.md` and the
+  comparison harness help now describe the rule as it is.
+
+**Session 94** — Activations can stay on the GPU between operations, and removing the round trip between two of them halves their cost
+
+- **A device-resident activation path now exists.** `ResidentChain` is a residency region - one GPU
+  stream and the activation buffers allocated on it - and `ResidentActivation` is one such buffer.
+  Data crosses between host and device in exactly two places: an upload where it enters the region
+  and a materialize where it leaves, the only point the host waits for the device and sees its
+  results. Operations in between work on device memory only. Closing a region frees every buffer on
+  it, so a region cannot leak one; the tests assert that device memory returns exactly to where it
+  started after every allocate-and-close cycle, and that the same query does see the allocation,
+  so the check can fail.
+- **Two operations run on it: RMS norm and a new GPU RoPE.** `CudaRmsNorm.normalizeResident` reads
+  one resident buffer and writes another, with the layer's norm weight uploaded once instead of on
+  every call. `CudaRope` rotates a resident buffer in place with a new kernel that computes the
+  angle, sine and cosine in double and rounds each step of the rotation separately, exactly as the
+  CPU path does - it is bit-identical to the CPU rotation in every parity test, including at
+  position 30000, where a single-precision angle would already be off by about 2e-3 radians.
+- **Measured: keeping the activation on the device between two operations halves their cost.** On a
+  GTX 1080 at hidden size 2048, RMS norm then RoPE costs 0.51 of the op-at-a-time path at decode
+  width and 0.55 at prefill width, with weights on the device in both, so the difference is the host
+  round trip alone. Against the scalar CPU path the resident chain is 3.65 times faster at decode
+  and 15.9 times at prefill, but that ratio mostly measures the CPU RoPE rather than residency: the
+  CPU norm alone is still about five times cheaper than the resident chain at decode width.
+- **The scalar RoPE turns out to be a tenth of GPU decode and nearly a quarter of GPU prefill.** In
+  the standing GPU sweep, where every matrix product already runs on the GPU, RoPE on the CPU is
+  8% to 11% of forward-pass time during generation and 23% during a 128-token prefill. It recomputes a
+  power, a cosine and a sine for every rotated pair of every head of every layer, although the angle
+  depends only on the position and the pair. Nothing changes here yet: the new kernel and a
+  once-per-position CPU angle cache are both ways to remove it.
+- **Kernel launches on the resident path allocate nothing.** A parameter block is built once per
+  thread and rewritten in place, and the driver is called with its exact signature instead of through
+  argument boxing, which stops being negligible once a launch is most of what a small operation costs.
+- **Two uploads in a row can no longer corrupt each other.** Both go through one pinned host buffer,
+  so an upload now waits for the previous transfer out of it if that one may still be running. The
+  race only shows when device work is queued ahead of the transfer; the test queues milliseconds of
+  it, and without the wait the device received the second rows in place of the first on every run.
+- **New harness: `scripts/performance-tests/resident-chain-microbench.sh`.** Four lanes per width -
+  scalar CPU, op-at-a-time, resident chain, and the two operations on an activation already on the
+  device - with the same dispersion rule, correctness check and device-memory reading as the
+  round-trip microbench it builds on.
+- No performance gate: no handler constructs the new classes, so the forward pass, MatVec, KV and
+  batching paths are unchanged. The existing per-call GPU norm path is also unchanged, because it is
+  the baseline the resident path is measured against.
+
 **Session 93** — A turn ends where the template says it ends, whether the model says so in text or in a token that decodes to nothing
 
 - **A reply no longer continues into an invented conversation.** Asked "Hello", TinyLlama answered

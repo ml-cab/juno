@@ -169,4 +169,53 @@ class EosOutputFilterTest {
 		assertThat(o.emit()).isEmpty();
 		assertThat(filter.text()).hasSize(1000);
 	}
+
+	// ── Below a request's minimum the model's own markers must not end it ──────
+
+	@ParameterizedTest
+	@ValueSource(strings = { "</s>", "<|end|>", "<|user|>", "<|im_start|>", "<|endoftext|>" })
+	@DisplayName("below the minimum a complete marker is emitted as text and does not stop")
+	void marker_below_minimum_is_emitted_not_stopped(String marker) {
+		EosOutputFilter filter = new EosOutputFilter();
+		EosOutputFilter.Outcome o = filter.accept("Paris." + marker, false);
+		assertThat(o.stop()).isFalse();
+		assertThat(o.emit()).isEqualTo("Paris." + marker);
+		assertThat(filter.text()).isEqualTo("Paris." + marker);
+	}
+
+	@Test
+	@DisplayName("below the minimum a marker split across pieces is still emitted, not dropped")
+	void split_marker_below_minimum_is_released() {
+		EosOutputFilter filter = new EosOutputFilter();
+		assertThat(filter.accept("done", false).emit()).isEqualTo("done");
+		assertThat(filter.accept("<|", false).emit()).as("still a prefix: held").isEmpty();
+		assertThat(filter.accept("user", false).emit()).isEmpty();
+		EosOutputFilter.Outcome o = filter.accept("|>", false);
+		assertThat(o.stop()).isFalse();
+		assertThat(o.emit()).isEqualTo("<|user|>");
+		assertThat(filter.text()).isEqualTo("done<|user|>");
+	}
+
+	@Test
+	@DisplayName("a marker passed over below the minimum is not rediscovered once the minimum is met")
+	void passed_over_marker_is_not_rediscovered() {
+		EosOutputFilter filter = new EosOutputFilter();
+		assertThat(filter.accept("a</s>", false).emit()).isEqualTo("a</s>");
+		EosOutputFilter.Outcome o = filter.accept("b");
+		assertThat(o.stop()).isFalse();
+		assertThat(o.emit()).isEqualTo("b");
+		assertThat(filter.text()).isEqualTo("a</s>b");
+	}
+
+	@Test
+	@DisplayName("a marker completed once the minimum is met still stops and is stripped")
+	void marker_after_minimum_still_stops() {
+		EosOutputFilter filter = new EosOutputFilter();
+		assertThat(filter.accept("a<|user|>", false).stop()).isFalse();
+		assertThat(filter.accept("b<|", false).emit()).isEqualTo("b");
+		EosOutputFilter.Outcome o = filter.accept("end|>");
+		assertThat(o.stop()).isTrue();
+		assertThat(o.emit()).isEmpty();
+		assertThat(filter.text()).isEqualTo("a<|user|>b");
+	}
 }

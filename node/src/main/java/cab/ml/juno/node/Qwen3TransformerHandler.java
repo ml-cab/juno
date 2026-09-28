@@ -97,6 +97,20 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		}
 	}
 
+	/**
+	 * Test-only: load with a forced RoPE pair layout, so a test can compare a
+	 * file under both layouts. There is deliberately no flag or property that
+	 * reaches this.
+	 */
+	static Qwen3TransformerHandler load(Path modelPath, ShardContext context, MatVec backend,
+			RopePairing ropePairing) throws IOException {
+		try (GgufReader r = GgufReader.open(modelPath)) {
+			Qwen3Config config = Qwen3Config.from(r).withRopePairing(ropePairing);
+			log.info("Model: " + config + "  ropePairing=" + ropePairing + " (forced)");
+			return new Qwen3TransformerHandler(r, config, context, backend);
+		}
+	}
+
 	private Qwen3TransformerHandler(GgufReader r, Qwen3Config cfg, ShardContext ctx, MatVec backend)
 			throws IOException {
 		this.cfg = cfg;

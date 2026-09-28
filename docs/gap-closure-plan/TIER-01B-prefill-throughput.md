@@ -196,6 +196,14 @@ on today's op-at-a-time GPU path either way.
 
    **This item is the one that depends on Tier 01.** If Tier 01's residency primitive did not ship,
    escalate rather than proceeding — see "Why this tier, why now."
+
+   *2026-09-27, hand-off from Tier 01.* Tier 01 closed with the primitive-threshold reading "decode
+   width missed (0.26x the CPU chain), prefill width at parity (1.002x / 0.995x), chaining met (0.55 at
+   prefill)". Per Tier 01's contingency this item **proceeds on the prefill result**. The evidence is
+   `docs/perf-compare/20260927T115107Z-tier01-resident-chain/`; the device-only lane (0.157 ms against
+   2.13 ms on the CPU at batch 512, 13.6x) is the case this item rests on. `ResidentQkvPath` is the
+   working decode-width template: chain-owned scratch (`ResidentChain.allocateScratch`), device regions
+   pooled by concurrent callers rather than per thread, one wait per region.
 3. **Chunk sizing and staging cost.** `--prefill-batch` defaults to adaptive whole-prompt sizing only
    on GPU + `static` + local single-shard, and to a fixed `32` everywhere else — including CPU, the
    `continuous` schedule, cluster, and `juno lora` (`docs/howto.md:63`). A fixed 32-token chunk pays
@@ -278,6 +286,22 @@ on today's op-at-a-time GPU path either way.
    first in practice: this tier runs more engine launches than any tier before it, and until the leak is
    fixed a `pgrep` check for "is a sweep still running" returns false positives, which is a problem
    whose cost is paid during step 1 rather than after it. Neither needs a model, a GPU or a build.
+
+   **A third item, handed over by Tier 01 on 2026-09-27: find and fix the one fast prefill
+   repetition before step 1's re-baseline.** In `compare-llama-cpp.sh` sweeps, one of three prefill
+   repetitions sometimes reads four to five times faster than the other two: the tinyllama default lane
+   read 898 and then 819 t/s in two separate runs against about 168 for the others, and the qwen2.5-3b
+   tuned lane 130.6 against about 80. On tinyllama it was **repetition 1 both times**, the measured
+   request that directly follows the warm-up. Medians are unaffected (median of three), but the row
+   breaks the 15% spread rule and forces re-runs, and step 1's re-baseline is this tier's
+   before-measurement, so it must not need re-runs for a harness artifact. Suspects, not verified: (a)
+   prefix-cache or KV reuse between the warm-up and the measured request, so the measured request does
+   not actually prefill every prompt token; (b) a timing boundary in how the prefill lane reads
+   `prompt_eval_tps`. Evidence: `docs/perf-compare/20260927T091155Z/` and `20260927T093054Z/` (the INDEX
+   banners, and the per-repetition `*-prefill-rep*-juno.json`: `prompt_eval_tps`). If the cause is (a),
+   the fix belongs to the harness (a fresh session or a distinct prompt per measured request), not to
+   the engine's reuse; if the engine turns out to reuse a prefix the request did not ask to share,
+   that is a correctness finding and is raised with the owner before the re-baseline.
 1. Re-baseline first. Run `compare-llama-cpp.sh --gpu` at `n_prompt` 128 and 512 on all four sweep
    models on current HEAD (post-Tier-01), under the parity-corrected harness required by this plan's
    "Benchmark parity preconditions" (README), and with each lane's actual resolved
@@ -356,6 +380,12 @@ on today's op-at-a-time GPU path either way.
   exit non-zero with the offending filenames listed. Every later tier runs it as the first item of its
   own test list, before its own tests, and Tier 14 calls it rather than restating it. It needs no model,
   no GPU and no build — it is `grep` and an exit code, and it should run in under a second.
+- **Every prefill repetition is a full prefill (implementation step 0, third item).** A harness selftest
+  or a live check, run before step 1's re-baseline: for every measured prefill repetition, the prompt
+  tokens the engine actually prefilled equal `prompt_tokens` (no reused prefix reported for the
+  measured request), and the repetition's `prompt_eval_tps` comes from that request's own prefill span.
+  Show it catching the artifact on the evidence runs' shape (a warm-up followed by repetition 1 on
+  tinyllama) before the fix, and passing after.
 - **Perf gate (required)**: this is by definition a forward-pass change. `compare-lora.sh`,
   `compare-vision.sh` (mandatory here, not optional — vision runs the widest batches in the system),
   `compare-prefill-batch.sh`, and `compare-llama-cpp.sh` at both `n_prompt` 128 and 512; publish under

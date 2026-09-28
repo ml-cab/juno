@@ -49,6 +49,8 @@ final class RmsNormKernel {
 
 	private static final AtomicReference<RmsNormKernel> INSTANCE = new AtomicReference<>();
 
+	private static final ThreadLocal<KernelParams> PARAMS = ThreadLocal.withInitial(() -> new KernelParams(5));
+
 	private final MemorySegment module; // CUmodule (opaque pointer value)
 	private final MemorySegment fn;     // CUfunction
 	private final Arena moduleArena;    // keeps module/function slots alive
@@ -169,5 +171,28 @@ final class RmsNormKernel {
 							MemorySegment.NULL),
 					"cuLaunchKernel(rms_norm)");
 		}
+	}
+
+	/**
+	 * The same launch as {@link #launch}, through a per-thread {@link KernelParams}
+	 * block: no arena, no per-argument allocation, no boxing. Used by the
+	 * device-resident path, where the launch is most of what the operation costs.
+	 * {@link #launch} is kept as it is because it is the per-call round-trip path
+	 * the resident path is measured against.
+	 */
+	void launchResident(MemorySegment xBatch, MemorySegment weight, MemorySegment outBatch,
+			int batch, int dim, float eps, MemorySegment stream) {
+		Objects.requireNonNull(xBatch, "xBatch");
+		Objects.requireNonNull(weight, "weight");
+		Objects.requireNonNull(outBatch, "outBatch");
+		if (batch <= 0 || dim <= 0)
+			throw new IllegalArgumentException("batch and dim must be positive: " + batch + ", " + dim);
+		PARAMS.get()
+				.pointer(0, xBatch)
+				.pointer(1, weight)
+				.pointer(2, outBatch)
+				.i32(3, dim)
+				.f32(4, eps)
+				.launch(fn, batch, RMSNORM_THREADS, stream, "cuLaunchKernel(rms_norm)");
 	}
 }

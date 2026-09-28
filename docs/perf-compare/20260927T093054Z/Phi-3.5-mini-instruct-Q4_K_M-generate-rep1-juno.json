@@ -1,0 +1,190 @@
+{
+  "engine": "juno",
+  "tool": "local-api+jfr",
+  "status": "success",
+  "exit_code": 0,
+  "http_code": "200",
+  "model": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "model_path": "/home/medion/Repo/juno/models/Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "model_id": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "n_gen": 64,
+  "n_prompt": 0,
+  "prompt_tokens": 10,
+  "prompt_token_deviation": null,
+  "prompt_parity_tolerance": 0.10,
+  "completion_tokens": 64,
+  "finish_reason": "length",
+  "load_ms": 12304,
+  "latency_ms": 3033,
+  "wall_ms": 3050,
+  "api_token_gen_tps": 21.1012,
+  "prompt_eval_tps": 26.738653896749035,
+  "token_gen_tps": 24.433692613501467,
+  "juno_use_vector": 1,
+  "backend": "gpu",
+  "use_gpu": 1,
+  "heap": "6g",
+  "heap_source": "fixed",
+  "threads_hint": 12,
+  "use_jfr": 1,
+  "rep_label": "Phi-3.5-mini-instruct-Q4_K_M-generate-rep1",
+  "lane": "generate",
+  "juno_warmup": 2,
+  "calibrated_prompt_words": 0,
+  "jfr_scoped_to_measured_request": 1,
+  "jfr_duration": "30m",
+  "jfr": {
+    "metrics_file": "/home/medion/Repo/juno/target/perf-compare/20260927T093054Z/Phi-3.5-mini-instruct-Q4_K_M-generate-rep1-juno-jfr.json",
+    "jfr_file": "Phi-3.5-mini-instruct-Q4_K_M-generate-rep1-measured.jfr",
+    "prompt_eval_tps": 26.738653896749035,
+    "prompt_eval_tps_source": "jfr_prefill_total_ms",
+    "token_gen_tps": 24.433692613501467,
+    "token_gen_tps_source": "TokenProduced.tps",
+    "token_gen_tps_decode_derived": 24.468447101521036,
+    "forward_pass_prefill_total_ms": 373.990405,
+    "forward_pass_decode_total_ms": 2615.613477,
+    "forward_pass_prefill_p95_ms": 373.990405,
+    "forward_pass_decode_p95_ms": 49.880947,
+    "forward_pass_prefill_count": 1.0,
+    "forward_pass_decode_count": 64.0,
+    "token_produced_count": 64.0,
+    "token_produced_tps": 24.433692613501467,
+    "token_produced_elapsed_s": 2.619333926,
+    "gc_pause_count": 1.0,
+    "gc_pause_max_ms": 8.387509,
+    "gc_pause_total_ms": 8.387509,
+    "gc_pause_count_in_token_span": 1.0,
+    "gc_pause_max_ms_in_token_span": 8.387509,
+    "gc_pause_total_ms_in_token_span": 8.387509,
+    "allocated_bytes_total": 13543227776,
+    "allocated_bytes_per_token": 211612934,
+    "execution_sample_count": 126.0,
+    "top_methods": [
+      {
+        "method": "cab_ml_juno_node_Phi3TransformerHandler_gqa",
+        "samples": 69.0
+      },
+      {
+        "method": "cab_ml_juno_node_Phi3TransformerHandler_ffn",
+        "samples": 18.0
+      },
+      {
+        "method": "cab_ml_juno_node_Phi3TransformerHandler_transformerLayerBatch",
+        "samples": 8.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_softmax",
+        "samples": 6.0
+      },
+      {
+        "method": "cab_ml_juno_node_Phi3Rope_applyNeoxRotations",
+        "samples": 3.0
+      },
+      {
+        "method": "cab_ml_juno_sampler_SoftmaxStep_apply",
+        "samples": 3.0
+      },
+      {
+        "method": "cab_ml_juno_node_CudaMatVec_sgemmQ4KBatchedGemm",
+        "samples": 2.0
+      },
+      {
+        "method": "cab_ml_juno_node_Phi3TransformerHandler_gqaInto",
+        "samples": 2.0
+      },
+      {
+        "method": "cab_ml_juno_node_Phi3TransformerHandler_transformerLayer",
+        "samples": 2.0
+      },
+      {
+        "method": "cab_ml_juno_kvcache_SessionKvLayout_newKLayers",
+        "samples": 1.0
+      }
+    ],
+    "top_allocation_sites": [
+      {
+        "site": "cab_ml_juno_kvcache_DenseKvTensor_allocate",
+        "bytes": 3.8527224E+9
+      },
+      {
+        "site": "java_lang_ThreadLocal_createMap",
+        "bytes": 2527315512
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_rmsNorm",
+        "bytes": 267836536
+      },
+      {
+        "site": "cab_ml_juno_node_Phi3TransformerHandler_ffn",
+        "bytes": 259962192
+      },
+      {
+        "site": "cab_ml_juno_node_CudaMatVec_sgemv",
+        "bytes": 190933072
+      },
+      {
+        "site": "cab_ml_juno_node_Phi3TransformerHandler_gqa",
+        "bytes": 145607136
+      },
+      {
+        "site": "java_util_Arrays_copyOf",
+        "bytes": 1.1875264E+8
+      },
+      {
+        "site": "cab_ml_juno_node_Phi3TransformerHandler_transformerLayer",
+        "bytes": 68249896
+      },
+      {
+        "site": "cab_ml_juno_node_CudaMatVec_sgemmQ4KBatchedGemm",
+        "bytes": 37460504
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_add",
+        "bytes": 17614296
+      }
+    ],
+    "monitor_enter_total_ms": 0.0,
+    "thread_park_total_ms": 8684.194036
+  },
+  "response_json": "/home/medion/Repo/juno/target/perf-compare/20260927T093054Z/Phi-3.5-mini-instruct-Q4_K_M-generate-rep1-juno-response.json",
+  "log": "/home/medion/Repo/juno/target/perf-compare/20260927T093054Z/Phi-3.5-mini-instruct-Q4_K_M-generate-rep1-juno.log",
+  "host": {
+    "run_id": "20260927T093054Z",
+    "timestamp_utc": "2026-09-27T09:40:02Z",
+    "hostname": "medion-Precision-T3610",
+    "cpu": "Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz",
+    "mem_total": "62.7 GiB",
+    "n_threads": 12,
+    "juno_effective_parallelism": 11,
+    "cpu_governor": "schedutil",
+    "cpu_turbo": "enabled",
+    "gpu_clocks": {
+      "graphics_mhz": 1822,
+      "sm_mhz": 1822,
+      "memory_mhz": 5005,
+      "active_throttle_reasons": "none"
+    },
+    "n_prompt": 128,
+    "n_gen": 64,
+    "reps": 3,
+    "juno_warmup": 2,
+    "juno_reps": 3,
+    "juno_min_tokens": 64,
+    "ngl": 99,
+    "backend": "gpu",
+    "use_gpu": 1,
+    "prompt": "x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x",
+    "raw_prompt": 1,
+    "juno_gpu_layers": "",
+    "juno_mmq": "",
+    "juno_gpu_attention": "",
+    "juno_schedule": "",
+    "juno_cache_type_k": "",
+    "juno_cache_type_v": "",
+    "juno_kv_page_size": "",
+    "juno_use_vector": 1,
+    "juno_jfr": 1,
+    "jfr_duration": "30m",
+    "llama_cpp_bin": "/home/medion/Repo/llama.cpp/build-cuda/bin"
+  }
+}

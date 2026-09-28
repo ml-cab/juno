@@ -23,7 +23,7 @@ Module dependency (excerpt):
         cross-set shape mismatches fail closed. GgufLoraImporter (node module,
         needs GgufReader) converts a GGUF LoRA adapter into a LoraAdapterSet
         for the `lora-import` CLI subcommand (LoraImportMain, juno-player).
-  node — GgufReader, LlamafileGgufIndex, LlamaTransformerHandler,
+  node — GgufReader, LlamafileGgufIndex, LlamaTransformerHandler, RopePairing,
         Phi2TransformerHandler, Phi2Rope, Phi3TransformerHandler, Phi3Rope, MatVec
         (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,
         CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
@@ -283,19 +283,27 @@ GPU FFI (node module — Panama project, JEP 454):
   GqaAttentionKernel — PTX loader/launcher (CUDA Driver API) for gqa_attention.ptx; one block
         per (batch-row, head), 3-pass QK^T+max / softmax / weighted-V-sum.
   CudaGqaAttention — handler-facing attendBatched(...); real dispatch against DeviceKvCache,
-        grow-and-keep-max scratch; one batched launch serves prefill window, single decode, or
-        --parallel multi-decode. tryCreate(...) returns null on non-CUDA backends (falls back
-        to GqaMath scalar CPU, never silent).
+        grow-and-keep-max scratch taken from a DeviceScratchPool (runs outside the context lock,
+        so concurrent callers each hold an entry; the pool is sized by concurrent calls, not by
+        threads, and close() - called from LlamaTransformerHandler.releaseGpuResources - frees
+        it); one batched launch serves prefill window, single decode, or --parallel
+        multi-decode. tryCreate(...) returns null on non-CUDA backends (falls back to GqaMath
+        scalar CPU, never silent).
+  DeviceScratchPool — device scratch entries shared by the callers of one GPU operation:
+        acquire (idle entry or a new one), exclusive use, release; ArrayDeque, no allocation per
+        call once grown; close() frees idle entries and any entry released afterwards. Exists
+        because the request scheduler runs every request on a new thread, so scratch kept per
+        thread is never used again and nothing frees device memory on GC.
   RmsNormKernel — PTX loader/launcher (CUDA Driver API) for rms_norm.ptx; one block per batch
         row, block-wide sum-of-squares reduction then normalize+scale.
-  CudaRmsNorm — handler-facing normalizeBatch(...); grow-on-demand device scratch, mirrors
-        CudaGqaAttention's shape. Built and parity-tested but deliberately NOT constructed by
-        LlamaTransformerHandler — the per-call H2D/kernel/D2H round trip costs more than the
-        scalar CPU rmsNorm it would replace, because no device-resident activation path exists
-        yet to avoid it. Measured by RmsNormRoundTripMicrobench on a GTX 1080 at dim 2048:
-        10.6x slower at decode width (batch 1), 1.60x slower at prefill width (batch 512), so
-        the gap narrows with width but does not close. Kept as verified, dormant infrastructure;
-        see docs/infra-plan/PLAN-Infra-Tier19.md "Measured finding" for the original analysis.
+  CudaRmsNorm — handler-facing GPU RMS norm, two paths over the same kernel. normalizeBatch(...):
+        host rows in and out, grow-on-demand device scratch pooled like CudaGqaAttention's
+        (DeviceScratchPool), weight uploaded per call. normalizeResident(...): a ResidentActivation in, another out,
+        weight as a 1 x dim DeviceFloatMatrix uploaded once; no host transfer, no wait; never in
+        place (the input is the residual stream). Deliberately NOT constructed by
+        LlamaTransformerHandler: the round-trip path costs more than the scalar CPU rmsNorm it
+        would replace (RmsNormRoundTripMicrobench, GTX 1080, dim 2048: 10.6x slower at decode width,
+        1.60x slower at prefill width), and the resident path is measured but not yet wired in.
   RmsNormRoundTripMicrobench — standalone main class (no handler references it) timing the scalar
         CPU norm against CudaRmsNorm's per-call round trip at decode and prefill width. Reports
         each lane as a ratio of the scalar CPU median, flags a row whose repetitions disagree by
@@ -303,12 +311,106 @@ GPU FFI (node module — Panama project, JEP 454):
         every run, and reports device memory either side. Driven by
         scripts/performance-tests/rmsnorm-roundtrip-microbench.sh, which also captures JFR under
         juno-perf.jfc and extracts GC/allocation figures via JfrMetricsCli.
+  ResidentChain — activation residency region: one GPU stream (via GpuBindings, vendor-neutral)
+        plus the ResidentActivation buffers allocated on it. Every operation on those buffers is
+        issued on that stream, so they run in order with no host wait between them; the host
+        waits only at a materialize or an explicit sync. close() synchronizes, frees every
+        activation still open and destroys the stream, so a region cannot leak a buffer. One
+        thread at a time. allocateScratch(bytes) gives an operation raw device memory ordered by
+        the same stream (the Q8_1 copy of the projection input), freed with the chain. Used by
+        ResidentQkvPath.
+  ResidentActivation — capacityRows x dim floats on the device plus one pinned host staging
+        buffer. Materialization boundary: data crosses host/device only at upload(...) (async,
+        on the chain's stream) and materialize(...) (the one point the host waits and sees device
+        results). Operations in between read and write device memory only and never write through
+        to a host array; a consumer that is not device-resident (host MatVec, sampler, gRPC
+        hand-off) takes a materialized copy. An upload issued while the previous upload may still
+        be reading the staging buffer waits for it first (tested by queueing device work ahead of
+        the transfer, the only way to make the race observable).
+        Operations that run on it today: CudaRmsNorm.normalizeResident, CudaRope.applyResident,
+        and the K-quant MMQ quantize/project kernels inside ResidentQkvPath.
+        materializeRows(acts, out): several single-row activations of one chain downloaded with
+        one wait - the region's exit when it produces more than one result.
+  ResidentQkvPath — the decode-time attention entry as one residency region (--gpu-residency):
+        upload the residual row, RMS norm (CudaRmsNorm.normalizeResident with the layer's norm
+        weight uploaded once), quantize to Q8_1 and project to Q, K and V (Q4KMmqKernel.quantizeX
+        and launchPacked on the chain's stream, chain-owned Q8_1 scratch so a kernel on another
+        stream cannot overwrite it mid-use), RoPE on q and k (CudaRope), then q, k and v in one
+        materializeRows - one wait per layer, as the op-at-a-time QKV projection already pays,
+        with the norm and RoPE moved inside it. Bit-identical to the GPU op-at-a-time path
+        (ResidentQkvPathTest); against the default path, whose norm runs on the CPU, only the
+        norm's summation order differs. unsupportedReason(ctx, pairing, qkvBias, cfg) names what
+        it cannot run for a whole model (non-CUDA, split-half RoPE, Q/K/V biases, query width
+        different from hidden size); eligible(li) is false for a layer without all three K-quant
+        projections on the device. Device regions come from a pool (bounded by concurrent calls,
+        not by threads ever seen); results are copied into per-thread host arrays. Issued under
+        the context's serialization lock. close() frees every region and the norm weights.
+  GpuResidencyOptions — --gpu-residency on|off|auto / JUNO_GPU_RESIDENCY (system property, then
+        env); default off. announceUnsupported(log, surface, reason) logs once per surface per
+        process where the flag was requested but cannot run: LlamaTransformerHandler (CPU backend,
+        qwen2 split-half and biases, no K-quant device projections), ForwardPassHandlerLoader
+        (phi2, phi3, qwen3, qwen3moe handlers), LoraTrainingHandlerFactory (LoRA training and
+        --lora-play). Because the console front end turns library logging off unless --verbose,
+        ConsoleMain also prints consoleNotice(architecture, lora, cpu) at startup: one warning when
+        the launch cannot use the region (LoRA, CPU backend, or unsupportedArchitectureReason of the
+        file's general.architecture). ConsoleMain sets the property; ClusterHarness forwards it to
+        forked nodes.
+  KernelParams — a cuLaunchKernel parameter block allocated once and rewritten in place, launched
+        through invokeExact: a launch allocates nothing and boxes nothing. Used by the resident
+        path (RmsNormKernel.launchResident, RopeKernel.launch); the older per-call launch builds an
+        arena and boxes its arguments through invokeWithArguments, which is cheap next to a
+        synchronous round trip and not once the round trip is gone.
+  RopePairing — the RoPE pair layout: ADJACENT (x[2i], x[2i+1]) or SPLIT_HALF
+        (x[i], x[i+headDim/2]), same per-pair frequency in both. Fixed by how the
+        file's converter laid out the Q/K rows, never by a flag: LlamaTransformerHandler
+        .ropePairingFor(cfg) gives SPLIT_HALF for qwen2/qwen2.5 and ADJACENT for the
+        LLaMA family; Qwen3RopeConfig.PAIRING (qwen3, qwen3moe, plain and YaRN) is
+        SPLIT_HALF; Phi2Rope/Phi3Rope are split-half on their own. The wrong layout
+        does not fail, it degrades quality silently (two orders of magnitude of
+        perplexity on real files; RopePairingPerplexityLiveTest holds a ceiling per
+        model through the production loader). LoraTrainableHandler (qwen2 through
+        Qwen2LoraTrainableHandler) and Qwen3LoraTrainableHandler use the same layout
+        forward and backward (LoraTrainingMath.ropeBackward(..., RopePairing),
+        Qwen3Rope.applyBackward). Package-private forced-layout loads exist for tests.
+  RopeTable — RoPE cosines and sines per position, shared per (headDim, base):
+        LlamaTransformerHandler.rope (both layouts) reads them instead of evaluating
+        pow/cos/sin for every pair of every head of every layer. Entries use exactly
+        the expressions the rotation used, so it is bit-identical (RopeTableTest
+        against a verbatim copy of the old code). Filled lazily in blocks of 256
+        positions up to 32768 and published whole through an AtomicReferenceArray,
+        so reads take no lock and allocate nothing; a position past the table is
+        computed in place. Tables are found through a copy-on-write array scanned
+        without locking (a handful of distinct head sizes and bases per process).
+        Covers every caller of LlamaTransformerHandler.rope: the LLaMA-family and
+        Qwen2 inference paths, the non-YaRN Qwen3 path, LoraTrainableHandler's
+        forward, and the CPU lane of ResidentChainMicrobench. Not used by the LoRA
+        backward rotation, Qwen3's YaRN path or the Phi rotations.
+  RopeKernel — PTX loader/launcher for rope.ptx (rope.cu): rotary position embedding in place on
+        a device-resident [rows][nHeads*headDim] batch, row r at position startPos + r, one thread
+        per rotated pair. Adjacent-pair rotation, the same math as LlamaTransformerHandler.rope;
+        split-half pairing (Phi2Rope/Phi3Rope) is not implemented on the device. Angle, sine and
+        cosine in double from a host-computed inverse-frequency table, rotation with separately
+        rounded float multiplies and adds: bit-identical to the CPU rotation in the parity tests,
+        including at position 30000.
+  CudaRope — handler-facing: uploads the model's inverse-frequency table once (tryCreate) and
+        rotates a ResidentActivation in place (applyResident). No host-array entry point: RoPE on
+        the device only pays when the activation is already there. Built by ResidentQkvPath, which
+        LlamaTransformerHandler constructs under --gpu-residency.
+  ResidentChainMicrobench — standalone main class timing RMS norm then RoPE four ways at decode and
+        prefill width: scalar CPU, op-at-a-time (each operation stages its own activation), resident
+        chain (upload once, both operations, download once) and device-only (both operations on
+        an activation already resident). Reports speedup against the CPU chain and cost against
+        op-at-a-time, with the same repetition-dispersion rule, correctness check and device-memory
+        reading as RmsNormRoundTripMicrobench, whose scoring records it reuses. Driven by
+        scripts/performance-tests/resident-chain-microbench.sh.
   CudaGraphSession — generic CUDA driver graph capture/replay wrapper (cuStreamBeginCapture /
         cuStreamEndCapture / cuGraphInstantiate / cuGraphLaunch); captures a fixed async op
         sequence once, replays it against fresh data in the same fixed buffers. Tested against
         RmsNormKernel's launch sequence: cut ad-hoc per-call overhead ~3.2x but still left it
         slower than CPU for a single isolated op (the sync-point cost only amortizes across a
-        chain of graphed ops). Not wired into any handler; see PLAN-Infra-Tier19.md.
+        chain of graphed ops). Not wired into any handler, and not used by the resident path:
+        a captured graph fixes its kernel arguments, and the RoPE position changes every decode
+        step.
   LoraMmqPolicy — playback-only MMQ gate (juno.lora.play.path); train stays FP residency.
   LoraResidentUpload.runPlayback — play Q4 OOM closes packed buffers and falls to CPU
         without the train FP16 microbatch retry.
@@ -316,10 +418,20 @@ GPU FFI (node module — Panama project, JEP 454):
         (classpath q4k_gemv.ptx); JFR backend cuda-resident-q4k.
   ResidentQ4KWeight — LoRA play wrapper around DeviceQ4KMatrix (forward-only).
   CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16)
-        / fused Q4_K GEMV when --mmq; per-thread CUDA stream + async H2D/D2H;
-        sgemvSameX uploads shared activations once for Q/K/V and gate/up groups.
+        / fused Q4_K GEMV when --mmq; async H2D/D2H on one CUDA stream per instance;
+        sgemvSameX uploads shared activations once for Q/K/V and gate/up groups. Scratch
+        lifetime: the FP32/FP16 staging, the Q4KDequantScratch (one whole weight matrix in FP16
+        for batched prefill, the figure DeviceScratchBudget reserves) and the stream belong to
+        the instance, not to a thread; every use is under GpuContext.cublasSerializationLock()
+        and each call synchronizes its stream before releasing it, so one set serves every
+        caller. Grown on demand, kept at the largest size; releaseScratch() frees the set and
+        the next call grows it again; scratchDeviceBytes() reports it (tests). The batched
+        FP16 pack of the activation window is its own method (packFp16Rows) so it stays compiled
+        when the large batched caller is deoptimized - inline, it fell back to the interpreter.
   RocmMatVec — implements GpuMatVec; rocblas_sgemv (FP32) / rocblas_hssgemv_strided_batched (FP16);
-        same three compute paths as CudaMatVec; per-thread HIP stream; sgemvSameX mirror.
+        same three compute paths as CudaMatVec; one HIP stream and one scratch set per
+        instance under the context lock, as CudaMatVec (releaseScratch, scratchDeviceBytes);
+        sgemvSameX mirror.
   DeviceFloatMatrix / DeviceHalfMatrix / DeviceQ4KMatrix — VRAM buffer wrappers using GpuBindings
         deviceMalloc / deviceFree; explicit lifecycle via releaseGpuResources().
         Vendor-neutral half/float; Q4_K path is CUDA-only.
@@ -482,20 +594,27 @@ OpenAiChatHandler / SamplingParams — OpenAI chat fields stop, seed, and
   cluster inference; LoRA /train is an explicit no-op.
 
 MinTokenFloor / SamplingParams.minTokens — a request states how many tokens it
-  must produce before an end-of-sequence token may end it. min_tokens on chat
+  must produce before the model may end it. min_tokens on chat
   completions, sampling.minTokens on the native route, both rejected with HTTP
   400 when above the effective maximum rather than clamped. The floor masks the
-  end-of-sequence token below the minimum instead of ignoring it once sampled,
+  model's own end signals below the minimum instead of ignoring them once
+  sampled: the end-of-sequence token plus the vocabulary's chat turn-marker ids
+  (Tokenizer.chatTurnTokenIds), minus any id the request itself asked to stop on
+  (GenerationLoop.minTokenFloor builds the set from the params as submitted,
+  before resolveSamplingParams merges the turn markers into the stop set),
   so the model falls through to its next-best continuation rather than leaking a
   marker into the output; it is stateless and reads the count from the generated
   history the sampler already receives, which also makes it correct on the
   speculative path where one step samples several positions. It yields where a
-  grammar has already left end-of-sequence as the only legal token, since
-  masking that too would leave a distribution that cannot be sampled from.
+  grammar has already left only held tokens legal, since masking those too
+  would leave a distribution that cannot be sampled from.
   Wired per request in GenerationLoop.generate and .generateBatch and per slot
   in ContinuousBatchEngine — per request, never per batch, so one request's
-  minimum cannot hold another open. Only the end-of-sequence token is held back:
-  an explicit stop sequence still ends generation below the minimum.
+  minimum cannot hold another open. A stop the caller asked for (stop string or
+  stop token id) still ends generation below the minimum. The text half is
+  EosOutputFilter.accept(piece, mayStop): below the minimum a completed marker is
+  emitted as text and never rescanned (a scan floor), so it cannot end the
+  request later either.
 
 EosOutputFilter — the text half of turn-boundary detection: it stops
   generation at the first ChatTurnMarkers string in the decoded output and

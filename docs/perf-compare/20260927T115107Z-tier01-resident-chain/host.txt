@@ -1,0 +1,3 @@
+NVIDIA GeForce GTX 1080, 1860 MHz, 5005 MHz (read at idle right after the run)
+schedutil
+12

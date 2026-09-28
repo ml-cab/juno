@@ -97,4 +97,16 @@ class SamplerMinTokensTest {
 		org.assertj.core.api.Assertions.assertThatThrownBy(() -> SamplingParams.defaults().withMinTokens(-1))
 				.isInstanceOf(IllegalArgumentException.class);
 	}
+
+	@Test
+	void aTurnMarkerHeldByTheFloorIsNotSampledBelowTheMinimum() {
+		// Index 3 stands for a chat turn marker the model proposes before its
+		// minimum; it outscores everything once end-of-sequence is masked.
+		float[] logits = { 1.0f, 2.0f, 20.0f, 15.0f };
+		MinTokenFloor floor = new MinTokenFloor(EOS, new int[] { 3 }, 2);
+		SamplingParams params = SamplingParams.deterministic();
+
+		assertThat(Sampler.create().sample(logits, params, new int[1], null, null, floor)).isEqualTo(1);
+		assertThat(Sampler.create().sample(logits, params, new int[2], null, null, floor)).isEqualTo(EOS);
+	}
 }

@@ -187,7 +187,15 @@ public final class TensorParallelPipelineClient implements InferencePipeline {
 					.setTensorRank(shard.tensorRank()).setTensorWorldSize(shard.tensorWorldSize()).build();
 
 			futures.add(CompletableFuture.runAsync(() -> {
-				LoadShardResponse response = stubs.get(idx).blockingStub.loadShard(req);
+				LoadShardResponse response;
+				try {
+					response = stubs.get(idx).blockingStub.loadShard(req);
+				} catch (io.grpc.StatusRuntimeException e) {
+					// A node that fails outside its own error reporting answers with a bare status;
+					// name the node so the operator knows which log to read.
+					throw new IllegalStateException("Tensor-parallel node " + idx + " (" + stubs.get(idx).address
+							+ ") failed to load its shard: " + e.getStatus(), e);
+				}
 				if (!response.getSuccess())
 					throw new IllegalStateException(
 							"Tensor-parallel node " + idx + " did not load its shard: " + response.getMessage());

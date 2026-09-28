@@ -18,7 +18,11 @@ package cab.ml.juno.sampler;
 
 /**
  * Holds a sequence open until it has produced a minimum number of tokens, by
- * making the end-of-sequence token unsamplable below that count.
+ * making the model's own end signals unsamplable below that count: the
+ * end-of-sequence token, plus any further ids the caller names - in practice the
+ * vocabulary's chat turn markers, which end generation exactly as
+ * end-of-sequence does. Stops the request itself asked for are not passed here,
+ * so they still end the sequence below its minimum.
  *
  * <p>Suppressing the token is deliberate, rather than ignoring it once sampled.
  * An ignored end-of-sequence token still has text, so every generation path would
@@ -31,11 +35,11 @@ package cab.ml.juno.sampler;
  * create a counter that can disagree with the sequence. That also makes the floor
  * safe on the speculative path, where one step samples several positions.
  *
- * <p>It yields in one case. A grammar can reduce the legal set to end-of-sequence
- * alone; masking it then would leave every logit at negative infinity, and a
- * softmax over that is not a distribution. A request for more tokens must not make
- * sampling impossible, so where nothing else survives the token is left alone and
- * the sequence is allowed to end below its minimum.
+ * <p>It yields in one case. A grammar can reduce the legal set to held end
+ * signals alone; masking them then would leave every logit at negative infinity,
+ * and a softmax over that is not a distribution. A request for more tokens must
+ * not make sampling impossible, so where nothing else survives the held tokens
+ * are left alone and the sequence is allowed to end below its minimum.
  *
  * @author Yevhen Soldatov
  */
@@ -44,6 +48,8 @@ public final class MinTokenFloor {
 	private static final float NEG_INF = Float.NEGATIVE_INFINITY;
 
 	private final int eosTokenId;
+	/** Further held ids, sorted, deduplicated, without {@link #eosTokenId}; never null. */
+	private final int[] alsoHeld;
 	private final int minTokens;
 
 	/**
@@ -53,7 +59,22 @@ public final class MinTokenFloor {
 	 *                   or less disables the floor
 	 */
 	public MinTokenFloor(int eosTokenId, int minTokens) {
+		this(eosTokenId, null, minTokens);
+	}
+
+	/**
+	 * @param eosTokenId the end-of-sequence token to hold back, ignored when it
+	 *                   falls outside the vocabulary
+	 * @param alsoHeld   further end signals to hold back alongside it; may be null,
+	 *                   ids outside the vocabulary are ignored, the array is copied
+	 * @param minTokens  tokens this sequence must produce before it may end; zero
+	 *                   or less disables the floor
+	 */
+	public MinTokenFloor(int eosTokenId, int[] alsoHeld, int minTokens) {
 		this.eosTokenId = eosTokenId;
+		this.alsoHeld = alsoHeld == null ? new int[0]
+				: java.util.Arrays.stream(alsoHeld).filter(id -> id >= 0 && id != eosTokenId).distinct().sorted()
+						.toArray();
 		this.minTokens = minTokens;
 	}
 
@@ -74,23 +95,29 @@ public final class MinTokenFloor {
 			return;
 		if (!holdsOpen(generatedCount))
 			return;
-		if (eosTokenId < 0 || eosTokenId >= logits.length)
-			return;
 		if (!anyOtherCandidate(logits))
 			return;
-		logits[eosTokenId] = NEG_INF;
+		if (eosTokenId >= 0 && eosTokenId < logits.length)
+			logits[eosTokenId] = NEG_INF;
+		for (int id : alsoHeld) {
+			if (id < logits.length)
+				logits[id] = NEG_INF;
+		}
+	}
+
+	private boolean isHeld(int id) {
+		return id == eosTokenId || java.util.Arrays.binarySearch(alsoHeld, id) >= 0;
 	}
 
 	/**
-	 * Whether some token other than end-of-sequence could still be sampled. Scans
-	 * until the first survivor, so a normal distribution costs one comparison.
+	 * Whether some token other than a held end signal could still be sampled.
+	 * Scans until the first survivor, so a normal distribution costs a comparison
+	 * or two.
 	 */
 	private boolean anyOtherCandidate(float[] logits) {
 		for (int i = 0; i < logits.length; i++) {
-			if (i == eosTokenId)
-				continue;
 			float v = logits[i];
-			if (v > NEG_INF && !Float.isNaN(v))
+			if (v > NEG_INF && !Float.isNaN(v) && !isHeld(i))
 				return true;
 		}
 		return false;

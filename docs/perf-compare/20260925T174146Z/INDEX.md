@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20260925T174146Z (cpu)
 
+> **Superseded as reference on 2026-09-27** by [`20260927T094414Z`](../20260927T094414Z/INDEX.md), taken after the scalar CPU RoPE stopped recomputing its angles. Kept as the reading before that change; do not score across it.
+
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |
 |-------|------------------|------------------|-------------|-------------|-----------------|---------------|---------------|-----------------|--------------|-----------|-------------|----------|---------|
 | tinyllama-1.1b-chat-v1.0.Q4_K_M | 73.570879 | 26.793220 | 6.229390376450727 | 3.417368788583141 | 3.13 / 3.42 | 0.08467195799646116 | 0.12754602800944198 | 128/128 | 64/64 | 4 | 64223482 | yes | tinyllama-1.1b-chat-v1.0.Q4_K_M-*.json |

@@ -100,6 +100,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	// ── Frozen weights ────────────────────────────────────────────────────────
 
 	private final LlamaConfig cfg;
+	/** Same layout the inference handler uses for this architecture; forward and backward must agree. */
+	private final RopePairing ropePairing;
 	private final int startLayer, endLayer;
 	private final boolean hasEmbeddings, hasOutputProj;
 
@@ -193,6 +195,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private LoraTrainableHandler(GgufReader r, LlamaConfig cfg, ShardContext ctx, LoraAdapterSet adapters,
 			MatVec backend) throws IOException {
 		this.cfg = cfg;
+		this.ropePairing = LlamaTransformerHandler.ropePairingFor(cfg);
 		this.loraAdapters = adapters;
 		this.backend = backend;
 		this.startLayer = ctx.startLayer();
@@ -700,8 +703,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		}
 
 		for (int b = 0; b < W; b++) {
-			LlamaTransformerHandler.rope(Q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
-			LlamaTransformerHandler.rope(K[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+			LlamaTransformerHandler.rope(Q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
+			LlamaTransformerHandler.rope(K[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
 			kCacheLayer.writeToken(startPos + b, K[b]);
 			vCacheLayer.writeToken(startPos + b, V[b]);
 		}
@@ -887,8 +890,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 						addBiasInPlace(q, bq, li);
 						addBiasInPlace(k, bk, li);
 						addBiasInPlace(v, bv, li);
-						LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), Hd, cfg.ropeTheta());
-						LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), Hd, cfg.ropeTheta());
+						LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), Hd, cfg.ropeTheta(), ropePairing);
+						LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), Hd, cfg.ropeTheta(), ropePairing);
 						qPostRopeB[i] = q.clone();
 						System.arraycopy(k, 0, kCache[li], pos * kvDim, kvDim);
 						System.arraycopy(v, 0, vCache[li], pos * kvDim, kvDim);
@@ -1218,8 +1221,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		addBiasInPlace(k, bk, li);
 		addBiasInPlace(v, bv, li);
 
-		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
-		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
+		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
 
 		kCacheLayer.writeToken(pos, k);
 		vCacheLayer.writeToken(pos, v);
@@ -1255,8 +1258,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		addBiasInPlace(k, bk, li);
 		addBiasInPlace(v, bv, li);
 
-		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta());
-		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta());
+		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
+		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
 
 		System.arraycopy(k, 0, kCacheLayer, pos * kvDim, kvDim);
 		System.arraycopy(v, 0, vCacheLayer, pos * kvDim, kvDim);
@@ -1441,8 +1444,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		addBiasInPlace(k, bk, li);
 		addBiasInPlace(v, bv, li);
 
-		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), Hd, cfg.ropeTheta());
-		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), Hd, cfg.ropeTheta());
+		LlamaTransformerHandler.rope(q, pos, cfg.numHeads(), Hd, cfg.ropeTheta(), ropePairing);
+		LlamaTransformerHandler.rope(k, pos, cfg.numKvHeads(), Hd, cfg.ropeTheta(), ropePairing);
 
 		float[] qPostRope = q.clone();
 
@@ -1631,8 +1634,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		}
 
 		// Inverse RoPE on Q and K gradients (post-RoPE → pre-RoPE)
-		ropeBackward(gradQ, pos, NH, Hd, cfg.ropeTheta());
-		ropeBackward(gradK, pos, NKV, Hd, cfg.ropeTheta());
+		LoraTrainingMath.ropeBackward(gradQ, pos, NH, Hd, cfg.ropeTheta(), ropePairing);
+		LoraTrainingMath.ropeBackward(gradK, pos, NKV, Hd, cfg.ropeTheta(), ropePairing);
 
 		// ── LoRA / frozen projection backward into xNorm1 ─────────────────────
 		float[] gradQScaled = maybeScaleDoraGrad(absLayer, "wq", gradQ);

@@ -1,0 +1,128 @@
+/*
+ * Copyright 2026 Dmytro Soloviov (soulaway)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package cab.ml.juno.node;
+
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+
+import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
+
+/**
+ * Handler-facing entry point for GPU rotary position embeddings on a
+ * device-resident activation ({@code rope.cu} / {@link RopeKernel}).
+ *
+ * <p>Holds the model's inverse-frequency table on the device - uploaded once,
+ * here, rather than per call - and rotates a {@link ResidentActivation} in place
+ * on its chain's stream: no host transfer, no synchronization. Row {@code r} of
+ * the activation is rotated as position {@code startPos + r}, which covers one
+ * decode row and a prefill window of consecutive positions.
+ *
+ * <p>Same math as {@link LlamaTransformerHandler#rope} (adjacent-pair
+ * rotation). There is deliberately no host-array entry point: moving RoPE to the
+ * device only pays when the activation is already there.
+ *
+ * <p><b>Not constructed by any handler yet.</b> It exists as the second
+ * operation of the device-resident chain (after RMS norm) and is exercised by
+ * {@code ResidentChainMicrobench} and the unit tests until the decode path is
+ * wired through it.
+ */
+final class CudaRope implements AutoCloseable {
+
+	private final GpuContext ctx;
+	private final int headDim;
+	private final float ropeTheta;
+	private final MemorySegment invFreq; // device double[headDim / 2]
+	private boolean closed;
+
+	private CudaRope(GpuContext ctx, int headDim, float ropeTheta, MemorySegment invFreq) {
+		this.ctx = ctx;
+		this.headDim = headDim;
+		this.ropeTheta = ropeTheta;
+		this.invFreq = invFreq;
+	}
+
+	/**
+	 * Uploads the inverse-frequency table for {@code headDim} and
+	 * {@code ropeTheta}. Returns {@code null} when the backend is not CUDA, the
+	 * same contract as {@link CudaRmsNorm#tryCreate}.
+	 */
+	static CudaRope tryCreate(GpuContext ctx, int headDim, float ropeTheta) {
+		if (ctx == null || !"cuda".equals(ctx.backendLabel()))
+			return null;
+		double[] table = RopeKernel.inverseFrequencies(headDim, ropeTheta);
+		GpuBindings gpu = ctx.bindings();
+		long tableBytes = (long) table.length * Double.BYTES;
+		MemorySegment device = gpu.deviceMalloc(ctx.deviceIndex(), tableBytes);
+		try (Arena staging = Arena.ofConfined()) {
+			MemorySegment host = staging.allocate(tableBytes, Double.BYTES);
+			MemorySegment.copy(table, 0, host, JAVA_DOUBLE, 0, table.length);
+			GpuBindings.check(GpuBindings.callInt(gpu.gpuMemcpy(), device, host, tableBytes, GpuBindings.H2D),
+					"memcpy(rope inverse frequencies H2D)");
+		} catch (RuntimeException e) {
+			gpu.deviceFree(device);
+			throw e;
+		}
+		return new CudaRope(ctx, headDim, ropeTheta, device);
+	}
+
+	/**
+	 * Rotates every valid row of {@code x} in place, row {@code r} at position
+	 * {@code startPos + r}, treating each row as {@code x.dim() / headDim} heads.
+	 * Asynchronous on {@code x}'s chain.
+	 *
+	 * @return {@code false} (doing nothing) if the kernel failed to load
+	 */
+	boolean applyResident(ResidentActivation x, int startPos) {
+		requireOpen();
+		x.requireOpen();
+		if (x.dim() % headDim != 0)
+			throw new IllegalArgumentException(
+					"activation width " + x.dim() + " is not a whole number of " + headDim + "-wide heads");
+		if (startPos < 0)
+			throw new IllegalArgumentException("startPos must not be negative: " + startPos);
+		if (x.chain().context().deviceIndex() != ctx.deviceIndex())
+			throw new IllegalArgumentException("activation is on device " + x.chain().context().deviceIndex()
+					+ ", the RoPE table on device " + ctx.deviceIndex());
+		if (x.rows() == 0)
+			throw new IllegalStateException("activation holds no rows to rotate");
+		RopeKernel kernel = RopeKernel.tryLoad();
+		if (kernel == null)
+			return false;
+		kernel.launch(x.devicePointer(), invFreq, x.rows(), x.dim() / headDim, headDim, startPos, x.chain().stream());
+		return true;
+	}
+
+	int headDim() {
+		return headDim;
+	}
+
+	float ropeTheta() {
+		return ropeTheta;
+	}
+
+	@Override
+	public void close() {
+		if (closed)
+			return;
+		closed = true;
+		ctx.bindings().deviceFree(invFreq);
+	}
+
+	private void requireOpen() {
+		if (closed)
+			throw new IllegalStateException("CudaRope is closed");
+	}
+}

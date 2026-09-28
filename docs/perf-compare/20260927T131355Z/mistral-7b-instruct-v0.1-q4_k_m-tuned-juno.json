@@ -1,0 +1,281 @@
+{
+  "engine": "juno",
+  "tool": "local-api+jfr",
+  "status": "success",
+  "exit_code": 0,
+  "http_code": "200",
+  "model": "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "model_path": "/home/medion/Repo/juno/models/mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "model_id": "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "n_gen": 64,
+  "n_prompt": 128,
+  "prompt_tokens": 128,
+  "prompt_token_deviation": 0,
+  "prompt_parity_tolerance": 0.10,
+  "completion_tokens": 64,
+  "finish_reason": "length",
+  "load_ms": 10311,
+  "latency_ms": 3161,
+  "wall_ms": 3178,
+  "api_token_gen_tps": 20.2468,
+  "prompt_eval_tps": 59.46558366372338,
+  "token_gen_tps": 23.698779062305256,
+  "juno_use_vector": 1,
+  "backend": "gpu",
+  "use_gpu": 1,
+  "heap": "9g",
+  "heap_source": "fixed",
+  "threads_hint": 12,
+  "use_jfr": 1,
+  "rep_label": "mistral-7b-instruct-v0.1-q4_k_m-tuned-generate-rep1",
+  "lane": "generate",
+  "juno_warmup": 2,
+  "calibrated_prompt_words": 0,
+  "jfr_scoped_to_measured_request": 1,
+  "jfr_duration": "30m",
+  "jfr": {
+    "metrics_file": "/home/medion/Repo/juno/target/perf-compare/20260927T131355Z/mistral-7b-instruct-v0.1-q4_k_m-tuned-generate-rep1-juno-jfr.json",
+    "jfr_file": "mistral-7b-instruct-v0.1-q4_k_m-tuned-generate-rep1-measured.jfr",
+    "prompt_eval_tps": 22.91473248289768,
+    "prompt_eval_tps_source": "jfr_prefill_total_ms",
+    "token_gen_tps": 23.698779062305256,
+    "token_gen_tps_source": "TokenProduced.tps",
+    "token_gen_tps_decode_derived": 23.494059631277118,
+    "forward_pass_prefill_total_ms": 392.760422,
+    "forward_pass_decode_total_ms": 2724.092856,
+    "forward_pass_prefill_p95_ms": 392.760422,
+    "forward_pass_decode_p95_ms": 46.123335,
+    "forward_pass_prefill_count": 1.0,
+    "forward_pass_decode_count": 64.0,
+    "token_produced_count": 64.0,
+    "token_produced_tps": 23.698779062305256,
+    "token_produced_elapsed_s": 2.700561064,
+    "gc_pause_count": 1.0,
+    "gc_pause_max_ms": 9.935061,
+    "gc_pause_total_ms": 6.251014,
+    "gc_pause_count_in_token_span": 1.0,
+    "gc_pause_max_ms_in_token_span": 6.251014,
+    "gc_pause_total_ms_in_token_span": 6.251014,
+    "allocated_bytes_total": 1.40912048E+10,
+    "allocated_bytes_per_token": 221608232.25,
+    "execution_sample_count": 64.0,
+    "top_methods": [
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_ffn",
+        "samples": 39.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch",
+        "samples": 10.0
+      },
+      {
+        "method": "cab_ml_juno_node_CudaMatVec_sgemvSameX",
+        "samples": 2.0
+      },
+      {
+        "method": "jdk_internal_foreign_ArenaImpl_allocate",
+        "samples": 2.0
+      },
+      {
+        "method": "cab_ml_juno_node_CudaMatVec_sgemv",
+        "samples": 1.0
+      },
+      {
+        "method": "cab_ml_juno_node_DeviceKvCache_appendToken",
+        "samples": 1.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_rmsNorm",
+        "samples": 1.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_sgemmLayerInto",
+        "samples": 1.0
+      },
+      {
+        "method": "cab_ml_juno_sampler_SoftmaxStep_apply",
+        "samples": 1.0
+      },
+      {
+        "method": "java_lang_Class_cast",
+        "samples": 1.0
+      }
+    ],
+    "top_allocation_sites": [
+      {
+        "site": "cab_ml_juno_kvcache_DenseKvTensor_allocate",
+        "bytes": 1580617304
+      },
+      {
+        "site": "cab_ml_juno_node_CudaMatVec_sgemvSameX",
+        "bytes": 358685936
+      },
+      {
+        "site": "cab_ml_juno_node_CudaMatVec_sgemv",
+        "bytes": 264727976
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_ffn",
+        "bytes": 182841656
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_rmsNorm",
+        "bytes": 34775472
+      },
+      {
+        "site": "java_util_Arrays_copyOf",
+        "bytes": 3.355552E+7
+      },
+      {
+        "site": "java_lang_invoke_MethodType_makeImpl",
+        "bytes": 8911760.0
+      },
+      {
+        "site": "jdk_internal_foreign_SegmentFactories_allocateNativeInternal",
+        "bytes": 7600656.0
+      },
+      {
+        "site": "cab_ml_juno_node_CudaGqaAttention_attendBatched",
+        "bytes": 7336864.0
+      },
+      {
+        "site": "java_lang_ThreadLocal_createMap",
+        "bytes": 6750896.0
+      }
+    ],
+    "monitor_enter_total_ms": 0.0,
+    "thread_park_total_ms": 9304.373364
+  },
+  "response_json": "/home/medion/Repo/juno/target/perf-compare/20260927T131355Z/mistral-7b-instruct-v0.1-q4_k_m-tuned-generate-rep1-juno-response.json",
+  "log": "/home/medion/Repo/juno/target/perf-compare/20260927T131355Z/mistral-7b-instruct-v0.1-q4_k_m-tuned-generate-rep1-juno.log",
+  "host": {
+    "run_id": "20260927T131355Z",
+    "timestamp_utc": "2026-09-27T13:31:04Z",
+    "hostname": "medion-Precision-T3610",
+    "cpu": "Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz",
+    "mem_total": "62.7 GiB",
+    "n_threads": 12,
+    "juno_effective_parallelism": 11,
+    "cpu_governor": "schedutil",
+    "cpu_turbo": "enabled",
+    "gpu_clocks": {
+      "graphics_mhz": 1809,
+      "sm_mhz": 1809,
+      "memory_mhz": 5005,
+      "active_throttle_reasons": "none"
+    },
+    "n_prompt": 128,
+    "n_gen": 64,
+    "reps": 3,
+    "juno_warmup": 2,
+    "juno_reps": 3,
+    "juno_min_tokens": 64,
+    "ngl": 99,
+    "backend": "gpu",
+    "use_gpu": 1,
+    "prompt": "x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x",
+    "raw_prompt": 1,
+    "juno_gpu_layers": "auto",
+    "juno_mmq": "auto",
+    "juno_gpu_attention": "auto",
+    "juno_gpu_residency": "on",
+    "juno_schedule": "",
+    "juno_cache_type_k": "",
+    "juno_cache_type_v": "",
+    "juno_kv_page_size": "",
+    "juno_use_vector": 1,
+    "juno_jfr": 1,
+    "jfr_duration": "30m",
+    "llama_cpp_bin": "/home/medion/Repo/llama.cpp/build-cuda/bin"
+  },
+  "juno_reps": 3,
+  "rep_status": [
+    "success",
+    "success",
+    "success"
+  ],
+  "reps": {
+    "prompt_eval_tps": {
+      "median": 59.46558366372338,
+      "min": 58.073961926263216,
+      "max": 62.19256593038044,
+      "values": [
+        62.19256593038044,
+        58.073961926263216,
+        59.46558366372338
+      ]
+    },
+    "token_gen_tps": {
+      "median": 23.698779062305256,
+      "min": 22.212173442669318,
+      "max": 23.86677001544919,
+      "values": [
+        23.698779062305256,
+        23.86677001544919,
+        22.212173442669318
+      ]
+    },
+    "api_token_gen_tps": {
+      "median": 20.2468,
+      "min": 19.1216,
+      "max": 20.4082,
+      "values": [
+        20.2468,
+        20.4082,
+        19.1216
+      ]
+    },
+    "latency_ms": {
+      "median": 3161,
+      "min": 3136,
+      "max": 3347,
+      "values": [
+        3161,
+        3136,
+        3347
+      ]
+    },
+    "gc_pause_max_ms": {
+      "median": 5.936058,
+      "min": 0.0,
+      "max": 6.251014,
+      "values": [
+        6.251014,
+        0.0,
+        5.936058
+      ]
+    },
+    "allocated_bytes_per_token": {
+      "median": 220373061.875,
+      "min": 220175075,
+      "max": 221608232.25,
+      "values": [
+        220175075,
+        220373061.875,
+        221608232.25
+      ]
+    }
+  },
+  "lanes": {
+    "prefill": {
+      "prompt_tokens": 128,
+      "n_prompt": 128,
+      "n_gen": 1,
+      "completion_tokens": 1,
+      "prompt_eval_tps": 59.46558366372338,
+      "latency_ms": 2220,
+      "status": "success",
+      "gc_pause_max_ms": 9.935061
+    },
+    "generate": {
+      "prompt_tokens": 9,
+      "n_prompt": 0,
+      "n_gen": 64,
+      "completion_tokens": 64,
+      "token_gen_tps": 23.698779062305256,
+      "latency_ms": 3161,
+      "status": "success",
+      "gc_pause_max_ms": 6.251014
+    }
+  }
+}

@@ -54,6 +54,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--gpu-layers N\|all\|auto` | `auto` | cluster, local | Transformer layers resident on GPU (`JUNO_GPU_LAYERS`). `auto` uploads as many as fit while leaving device memory free for the forward pass (see below); pass `all` to force full residency (may OOM) or a count/`off` to opt out. |
 | `--mmq on\|off\|auto` | `auto` | cluster, local | Packed Q4_K GPU weights (`JUNO_MMQ`) — keeps Q4_K on device instead of FP16-resident dequant. On CUDA this is a **VRAM-fit** path and a **measured decode-throughput win** vs `--mmq off` (see `docs/performance.md`). Applies to Llama-family, Phi-3, and Qwen3 dense text inference, and to `--lora-play` when the CUDA kernel loads (local REPL prints a confirmation line). LoRA **training** ignores `--mmq` (frozen weights stay FP16/FP32; the train REPL warns). `auto` enables when CUDA + kernel load, and is a no-op elsewhere; pass `off` to opt out. |
 | `--gpu-attention on\|off\|auto` | `auto` | cluster, local | GPU-resident attention kernel (`JUNO_GPU_ATTENTION`) — moves QK^T + softmax + weighted-V-sum onto a device-resident FP16 KV mirror instead of scalar CPU Java. CUDA only. A **measured decode/prefill throughput lever** (see `docs/performance.md`), not a peer-latency claim. Applies to Llama-family, Mistral, and Qwen2 dense text inference (`LlamaTransformerHandler`), and to vision automatically (delegates to the same handler). Phi-2, Phi-3, Qwen3, and Qwen3-MoE keep the scalar CPU path (**follow-up**) — `auto` correctly resolves to off there. LoRA **training** and `--lora-play` ignore `--gpu-attention` (attention stays scalar CPU; the train REPL warns). Occasional multi-token greedy-decode divergence from FP16 KV rounding is expected and documented, same class of tradeoff as other reduced-precision paths in this codebase; pass `off` for a bit-identical CPU-parity baseline. |
+| `--gpu-residency on\|off\|auto` | `off` | cluster, local | Device-resident decode region (`JUNO_GPU_RESIDENCY`): per layer, the residual row is uploaded once, RMS-normalized, projected to Q, K and V by the K-quant kernels and rotated on the GPU, and q, k and v come back in one download. The default path normalizes on the CPU, uploads the normalized row for the projection, downloads q, k and v, and rotates on the CPU; the region keeps the same one round trip and moves the norm and RoPE inside it. The projection and RoPE kernels are the ones the default path runs; only the norm's summation order differs (GPU against CPU), and greedy output matched token for token on TinyLlama. Applies to single-sequence decode in the LLaMA-family handler (Llama, Mistral, TinyLlama) on CUDA with K-quant weights on the device (`--mmq on\|auto`, the default); per layer, a layer whose Q/K/V projections are not on the device keeps the existing path. Prefill windows and batched decode (`--parallel` above 1, `--schedule continuous`) keep the existing path. Everything else says so, once, on the console at startup and in the log, and keeps the existing path: Qwen2/Qwen2.5 (split-half RoPE layout, and Q/K/V biases), Phi-2, Phi-3, Qwen3 and Qwen3-MoE (other handlers), LoRA training and `--lora-play` (adapters apply on the host), a non-CUDA backend. Forked cluster nodes receive the setting. `auto` enables it wherever CUDA is present. |
 | `--cache-type-k f16\|q8_0` | `f16` | cluster, local, lora | K-cache element type (`JUNO_CACHE_TYPE_K`). `f16` is the current float32 path (bit-compatible default). `q8_0` packs keys (~3.8× smaller persistent KV vs float); attention dequants to float. Slight quality tradeoff vs `f16`. On `juno lora` **training**, teacher-forced forward keeps ephemeral float KV (startup WARNING); q8 applies to inference / `--lora-play` maps. |
 | `--cache-type-v f16\|q8_0` | `f16` | cluster, local, lora | V-cache element type (`JUNO_CACHE_TYPE_V`). Same semantics as `--cache-type-k`. |
 | `--schedule static\|continuous` | `static` | cluster, local, lora | Serving schedule (`JUNO_SCHEDULE`). `static` = dense KV + static micro-batch (SSE isolated). `continuous` = paged KV + running-set batching (SSE shares steps) on **local / in-process only**. Under continuous, long prompts advance in `--prefill-batch` ubatch chunks mixed into the same engine steps as other requests’ decode; when the step slot budget is full, **decode is preferred** so short replies are not starved. Cluster, TP, and PP launchers **auto-fallback to static** with a startup WARNING. On `juno lora` **training**, continuous is an explicit no-op (ephemeral float KV + REPL WARNING; no running-set engine). Per-request `x_juno_loras` is not wired on any schedule yet and is rejected on both `static` and `continuous` (use process-wide `--lora-play`, which now supports multiple adapters and per-file scales). Prefix KV reuse is **session-scoped** (`x_juno_session_id`); shared system prompts across different sessions do not skip prefill. Under `static` with `--parallel` above 1, a request that is collected into a batch of two or more always prefills its whole prompt (session KV reuse applies to requests dispatched on their own and to the `continuous` schedule). Tools / LoRA play that change the tokenized prefix invalidate cross-turn hits. `--parallel` caps the continuous running set (default cap 8 when parallel is 1). |
@@ -505,7 +506,7 @@ curl http://localhost:8080/v1/models
 | `top_p` | `SamplingParams.topP` | 0.0–1.0; default 0.9 |
 | `max_completion_tokens` | `SamplingParams.maxTokens` | 1–32768; default 200 |
 | `max_tokens` | `SamplingParams.maxTokens` | Deprecated alias; `max_completion_tokens` takes precedence |
-| `min_tokens` | `SamplingParams.minTokens` | 0–max; default 0. Tokens the request must produce before an end-of-sequence token may end it. Above the maximum → HTTP 400 (rejected, not clamped). Only end-of-sequence is held back; an explicit `stop` still applies |
+| `min_tokens` | `SamplingParams.minTokens` | 0–max; default 0. Tokens the request must produce before the model may end it. Above the maximum → HTTP 400 (rejected, not clamped). Below it the model's own end signals are held back (end-of-sequence, chat turn-marker tokens, and a role header or turn marker in the decoded text, which is then returned as text); an explicit `stop` still applies |
 | `frequency_penalty` | `SamplingParams.repetitionPenalty` | Mapped: `1 + max(0, fp/2)` |
 | `stream` | route selection | `false` → blocking JSON; `true` → SSE |
 | `n` | — | Only `1` accepted; other values → HTTP 400 |
@@ -821,7 +822,7 @@ var http = new JunoHttpClient(URI.create("http://localhost:8080"));
 String text = http.blockingInference("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
         List.of(ChatMessage.user("Ping")), 64);
 
-// The same, insisting on at least 64 tokens before a stop token may end it
+// The same, insisting on at least 64 tokens before the model may end it
 String full = http.blockingInference("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
         List.of(ChatMessage.user("Ping")), 64, 64);
 
@@ -1079,6 +1080,49 @@ whose repetitions disagree by more than 15% of their median is marked unscorable
 re-run, not read; if that happens, raise `WARMUP_MS` first. Output is checked against the scalar
 path on every run, so a divergent kernel stops the run instead of producing timings for a different
 computation.
+
+### Resident norm + RoPE chain microbench
+
+Times two GPU operations in a row - RMS norm, then RoPE on the normalized rows - with the activation
+kept on the device between them, against the same two operations each staging its own activation to
+the device and back, and against the scalar CPU path. It is the measurement behind the question of
+whether a device-resident activation path pays, reported at decode width and prefill width separately.
+Requires a CUDA device.
+
+```bash
+./scripts/performance-tests/resident-chain-microbench.sh
+# -> target/resident-chain/resident-chain-<stamp>.md  (report)
+#    target/resident-chain/resident-chain-<stamp>-jfr.json  (GC and allocation figures)
+```
+
+Four lanes per width: `cpu-scalar` (what the transformer handler runs today), `gpu-op-at-a-time`
+(upload, norm, download; upload, RoPE, download), `gpu-resident-chain` (upload once, both operations,
+download once) and `gpu-device-only` (both operations on an activation already on the device - the
+cost of the two operations inside a longer resident region). Two ratios per lane: speedup against the
+CPU chain, at or above `1.00x` when the lane is at least as fast, and cost against op-at-a-time, below
+`1.00` when keeping the activation on the device between the operations saves time. The GPU lanes all
+use device-resident weights, so the gap between op-at-a-time and the resident chain is the host round
+trip and nothing else. Override `DIM`, `HEAD_DIM`, `THETA`, `DECODE_POS`, `BATCHES`, `REPS`,
+`WARMUP_MS`, `TARGET_MS` and `OUT_DIR` in the environment. The dispersion rule and the correctness
+check are the same as the round-trip microbench's.
+
+### Device-resident decode region smoke test
+
+Runs `--gpu-residency` against real model files on the GPU: local mode (three in-process nodes) with
+the region off and on, the greedy output of both compared token for token, the log checked for the
+activation notice (or, for a model the region cannot run, the notice saying why), and the server's GPU
+memory read after every request. Memory is judged over the second half of the requests, after the early
+ones have sized the buffers a process keeps and a model at the card's capacity has settled its
+placement: in each mode it may grow by at most 8 MiB per request on average, and no more with the
+region on than off. A server that keeps device memory per request fails this in either mode. Then cluster
+mode, pipeline and tensor, with the region on: the forked nodes must answer with local mode's output
+and leave no node process behind. Requires a CUDA device; run it on an otherwise idle one.
+
+```bash
+./scripts/performance-tests/smoke-gpu-residency.sh                 # tinyllama, mistral-7b, llama-1-30b
+./scripts/performance-tests/smoke-gpu-residency.sh --models tinyllama-1.1b-chat-v1.0.Q4_K_M --requests 8
+# -> target/gpu-residency-smoke/<stamp>/summary.md
+```
 ---
 
 ### Build and Test

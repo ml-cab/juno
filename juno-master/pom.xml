@@ -228,8 +228,11 @@
 								--enable-native-access=ALL-UNNAMED</argLine>
 							<forkCount>1</forkCount>
 							<reuseForks>false</reuseForks>
-							<!-- Include GPU tests when -Pgpu is active -->
-							<excludes />
+							<!-- Include GPU tests when -Pgpu is active. combine.self="override":
+							     Maven merges profile configuration into the default one element by
+							     element, so a plain empty <excludes /> keeps the default exclusion of
+							     this very test and failsafe would run nothing. -->
+							<excludes combine.self="override" />
 							<includes>
 								<include>**/GpuForwardPassIT.java</include>
 							</includes>
@@ -251,7 +254,7 @@
 		     Disabled by default — not triggered by mvn clean package.
 
 		     Activate with:
-		       mvn verify -pl integration -Pintegration \
+		       mvn verify -pl juno-master -Pintegration \
 		           -DMODELS=/data/model1.gguf,/data/model2.gguf
 
 		     MODELS — comma-separated list of absolute GGUF paths.
@@ -273,8 +276,10 @@
 							<forkCount>1</forkCount>
 							<reuseForks>false</reuseForks>
 							<!-- Run only ModelLiveRunnerIT — not the stub-based
-							ITs -->
-							<excludes />
+							ITs. combine.self="override": a plain empty <excludes />
+							is merged with the default exclusion of this very test,
+							and failsafe would run nothing while reporting success. -->
+							<excludes combine.self="override" />
 							<includes>
 								<include>**/ModelLiveRunnerIT.java</include>
 							</includes>

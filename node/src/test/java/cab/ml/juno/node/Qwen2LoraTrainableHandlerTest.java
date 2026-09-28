@@ -57,6 +57,31 @@ class Qwen2LoraTrainableHandlerTest {
 	}
 
 	@Test
+	@DisplayName("zero-adapter logits match the base handler past position 0, where RoPE is not the identity")
+	void zeroAdapter_matchesBase_acrossPositions(@TempDir Path tmp) throws IOException {
+		// Position 0 rotates by angle 0, so a pair-layout mismatch between the LoRA
+		// forward and the inference forward is invisible there. Decode several
+		// positions through both.
+		Path gguf = buildSyntheticQwen2Gguf(tmp, filled(H, 0.01f), filled(KV_HEADS * (H / HEADS), -0.02f));
+		ShardContext ctx = new ShardContext("n0", 0, LAYERS, true, true, VOCAB, H, HEADS);
+
+		LlamaTransformerHandler base = LlamaTransformerHandler.load(gguf, ctx, CpuMatVec.INSTANCE);
+		LoraAdapterSet adapters = LoraInitializer.create(
+				LlamaConfig.from(GgufReader.open(gguf)), LoraProjection.qv(), 2, 2f, new Random(1));
+		zeroAdapters(adapters);
+		Qwen2LoraTrainableHandler lora = Qwen2LoraTrainableHandler.load(gguf, ctx, adapters, CpuMatVec.INSTANCE);
+
+		int[] tokens = { 3, 7, 11, 5, 9 };
+		for (int pos = 0; pos < tokens.length; pos++) {
+			ForwardRequest req = ForwardRequest.withTokens("r", new int[] { tokens[pos] }, pos);
+			float[] baseLogits = base.forward(req, ctx).logits();
+			float[] loraLogits = lora.forward(req, ctx).logits();
+			for (int i = 0; i < baseLogits.length; i++)
+				assertThat(loraLogits[i]).as("pos %d logit[%d]", pos, i).isCloseTo(baseLogits[i], within(1e-4f));
+		}
+	}
+
+	@Test
 	@DisplayName("factory routes qwen2 adapters to Qwen2LoraTrainableHandler")
 	void factoryRoutesQwen2(@TempDir Path tmp) throws IOException {
 		Path gguf = buildSyntheticQwen2Gguf(tmp, filled(H, 0f), filled(KV_HEADS * (H / HEADS), 0f));

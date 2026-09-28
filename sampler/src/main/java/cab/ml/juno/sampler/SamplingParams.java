@@ -124,12 +124,14 @@ public record SamplingParams(float temperature, int topK, float topP, float repe
 	}
 
 	/**
-	 * Tokens this request must produce before an end-of-sequence token may end it.
-	 * Zero, the default, leaves the model free to stop whenever it likes.
+	 * Tokens this request must produce before the model may end it. Zero, the
+	 * default, leaves the model free to stop whenever it likes.
 	 *
-	 * <p>Only the end-of-sequence token is held back. An explicit stop sequence is
-	 * still honoured below the minimum, because a caller who asked for a stop
-	 * string asked for it unconditionally.
+	 * <p>Below the minimum the model's own end signals are held back: the
+	 * end-of-sequence token, the vocabulary's chat turn markers, and a role header
+	 * or turn marker in the decoded text. An explicit stop sequence or stop token
+	 * id is still honoured below the minimum, because a caller who asked for a
+	 * stop asked for it unconditionally.
 	 */
 	public SamplingParams withMinTokens(int minTokens) {
 		return new SamplingParams(temperature, topK, topP, repetitionPenalty, presencePenalty, greedy, maxTokens,

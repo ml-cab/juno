@@ -88,10 +88,22 @@ public final class EmbeddedNodeServer {
 	 * @param useGpu    when true use GPU if available; when false use CPU.
 	 */
 	public EmbeddedNodeServer(String nodeId, int port, String modelPath, boolean useGpu) {
+		this(nodeId, port, modelPath, useGpu, ForwardPassHandlerLoader::load);
+	}
+
+	/** Real-model mode with the shard loader supplied, so tests can make a load fail in a chosen way. */
+	EmbeddedNodeServer(String nodeId, int port, String modelPath, boolean useGpu, ShardLoader loader) {
 		this.nodeId = nodeId;
 		this.port = port;
-		this.serviceImpl = new NodeServiceImpl(nodeId, modelPath, useGpu);
+		this.serviceImpl = new NodeServiceImpl(nodeId, modelPath, useGpu, loader);
 		this.grpcServer = ServerBuilder.forPort(port).addService(serviceImpl).build();
+	}
+
+	/** Loads a shard's forward-pass handler; {@link ForwardPassHandlerLoader#load} in production. */
+	@FunctionalInterface
+	interface ShardLoader {
+		ForwardPassHandler load(Path modelPath, ShardContext context, MatVec backend, LoraAdapterSet adapters)
+				throws IOException;
 	}
 
 	/**
@@ -169,6 +181,7 @@ public final class EmbeddedNodeServer {
 		private final String nodeId;
 		private final String modelPath; // null = stub mode
 		private final boolean useGpu;
+		private final ShardLoader loader;
 		private final String loraPlayPath; // null = no LoRA adapter overlay at inference
 		private volatile ForwardPassHandler handler;
 		private volatile ShardContext context;
@@ -185,10 +198,11 @@ public final class EmbeddedNodeServer {
 			this.healthReporter = r;
 		}
 
-		NodeServiceImpl(String nodeId, String modelPath, boolean useGpu) {
+		NodeServiceImpl(String nodeId, String modelPath, boolean useGpu, ShardLoader loader) {
 			this.nodeId = nodeId;
 			this.modelPath = modelPath;
 			this.useGpu = useGpu;
+			this.loader = loader;
 			this.loraPlayPath = System.getProperty("juno.lora.play.path");
 			this.handler = placeholderHandler(); // replaced in loadShard() when a shard loads
 			this.context = buildDefaultContext();
@@ -287,30 +301,34 @@ public final class EmbeddedNodeServer {
 								? CudaAvailability.deviceCount() : RocmAvailability.deviceCount();
 						if (cudaDevice >= devCount) {
 							log.warning("juno.gpu.device=" + cudaDevice + " invalid — loading shard on CPU");
-							handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
+							handler = loader.load(Path.of(modelPath), newCtx,
 									ForwardPassHandlerLoader.selectBackend(), playAdapters);
 							msg = "Real shard loaded (CPU/CpuMatVec; invalid juno.gpu.device) layers "
 									+ request.getStartLayer() + "–" + request.getEndLayer()
 									+ (playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")" : "");
 						} else {
 							gpuContext = GpuContext.shared(cudaDevice);
-							handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
+							handler = loader.load(Path.of(modelPath), newCtx,
 									gpuContext.createMatVec(), playAdapters);
 							msg = "Real shard loaded (GPU/" + gpuContext.backendLabel() + ", device " + cudaDevice + ") layers "
 									+ (playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")" : "");
 						}
 					} else {
-						handler = ForwardPassHandlerLoader.load(Path.of(modelPath), newCtx,
+						handler = loader.load(Path.of(modelPath), newCtx,
 								ForwardPassHandlerLoader.selectBackend(), playAdapters);
 						msg = "Real shard loaded (CPU/CpuMatVec) layers " + request.getStartLayer() + "–"
 								+ request.getEndLayer()
 								+ (playAdapters != null ? "  +LoRA(" + playAdapters.size() + ")" : "");
 					}
 					log.info(msg);
-				} catch (Exception e) {
+				} catch (Exception | Error e) {
 					// A node started with a real model must never fall back to stub output: report
-					// the failure to the coordinator and refuse forward passes.
-					String cause = e.getMessage() != null ? e.getMessage() : e.getClass().getName();
+					// the failure to the coordinator and refuse forward passes. Errors too: a heap
+					// too small for the model fails with OutOfMemoryError, and left uncaught it
+					// reaches the coordinator only as an unexplained UNKNOWN status. The handler
+					// being loaded is unreachable by now, so reporting has the memory it needs.
+					String cause = e instanceof Error ? e.toString()
+							: e.getMessage() != null ? e.getMessage() : e.getClass().getName();
 					log.severe("FAILED to load real model: " + cause);
 					e.printStackTrace();
 					if (handler != null)
@@ -322,7 +340,8 @@ public final class EmbeddedNodeServer {
 					handler = new UnloadedShardHandler("Shard failed to load: " + cause);
 					responseObserver.onNext(LoadShardResponse.newBuilder().setSuccess(false)
 							.setMessage("Model load failed on node " + nodeId + " (layers " + request.getStartLayer()
-									+ "–" + request.getEndLayer() + "): " + cause)
+									+ "–" + request.getEndLayer() + ", model " + Path.of(modelPath).getFileName()
+									+ "): " + cause)
 							.build());
 					responseObserver.onCompleted();
 					return;

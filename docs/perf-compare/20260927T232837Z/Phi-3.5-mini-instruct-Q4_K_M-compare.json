@@ -1,0 +1,148 @@
+{
+  "model": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 1180.328335,
+    "token_gen_tps": 59.880509
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 46.18773057217306,
+    "token_gen_tps": 24.916677947627722,
+    "api_token_gen_tps": 21.7096,
+    "latency_ms": 2948,
+    "n_prompt": 128,
+    "prompt_tokens": 128,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 1.0,
+    "gc_pause_max_ms": 8.713505,
+    "gc_pause_total_ms": 8.531139,
+    "allocated_bytes_total": 13631782016,
+    "allocated_bytes_per_token": 212996594,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 128,
+        "n_prompt": 128,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 46.18773057217306,
+        "latency_ms": 2866,
+        "status": "success",
+        "gc_pause_max_ms": 6.996588
+      },
+      "generate": {
+        "prompt_tokens": 10,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 24.916677947627722,
+        "latency_ms": 2948,
+        "status": "success",
+        "gc_pause_max_ms": 8.713505
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "6g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 46.18773057217306,
+        "min": 45.933885878123235,
+        "max": 46.59722511311083,
+        "values": [
+          46.18773057217306,
+          45.933885878123235,
+          46.59722511311083
+        ]
+      },
+      "token_gen_tps": {
+        "median": 24.916677947627722,
+        "min": 19.982910889372434,
+        "max": 25.10138526971745,
+        "values": [
+          25.10138526971745,
+          19.982910889372434,
+          24.916677947627722
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 21.7096,
+        "min": 21.7023,
+        "max": 21.9028,
+        "values": [
+          21.9028,
+          21.7096,
+          21.7023
+        ]
+      },
+      "latency_ms": {
+        "median": 2948,
+        "min": 2922,
+        "max": 2949,
+        "values": [
+          2922,
+          2948,
+          2949
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 8.587011,
+        "min": 8.531139,
+        "max": 8.713505,
+        "values": [
+          8.531139,
+          8.587011,
+          8.713505
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 212952694.5,
+        "min": 212942396,
+        "max": 212996594,
+        "values": [
+          212996594,
+          212952694.5,
+          212942396
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.039131256280628954,
+  "noise": {
+    "ok": false,
+    "basis": "repetition dispersion",
+    "condition": "rep_spread",
+    "rep_spread": 0.20542362794524696,
+    "rep_spread_tolerance": 0.15,
+    "gc_pause_max_ms": 8.713505,
+    "gc_pause_max_ms_in_token_span": 8.713505,
+    "reason": "the 3 generation readings span 20% of their median, over the 15% this host can resolve: re-run rather than score this row"
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.4161066491206299,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20260927T232837Z/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20260927T232837Z/Phi-3.5-mini-instruct-Q4_K_M-generate-rep1-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20260927T232837Z/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20260927T232837Z/Phi-3.5-mini-instruct-Q4_K_M-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20260927T232837Z/Phi-3.5-mini-instruct-Q4_K_M-juno-jfr.json"
+  }
+}

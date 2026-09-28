@@ -40,9 +40,11 @@ import static java.lang.foreign.ValueLayout.JAVA_SHORT;
  * device matrices allocate through the vendor-neutral {@link GpuBindings} from
  * {@link GpuContext#bindings()}, so they work identically on AMD and NVIDIA.
  *
- * <p>Per-thread HIP streams back the resident async path (same pattern as
- * {@link CudaMatVec}). The serialization lock from
- * {@link GpuContext#cublasSerializationLock()} guards rocBLAS handle usage.
+ * <p>One HIP stream and one set of device scratch per instance back the
+ * resident async path (same pattern as {@link CudaMatVec}): the serialization
+ * lock from {@link GpuContext#cublasSerializationLock()} guards rocBLAS handle
+ * usage, every call synchronizes its stream before releasing it, so one set
+ * serves every caller. Not per thread, since each request runs on a new thread.
  *
  * <p>Requires JVM flag: {@code --enable-native-access=ALL-UNNAMED}.
  *
@@ -59,23 +61,11 @@ public final class RocmMatVec implements GpuMatVec {
     private final GpuContext  ctx;
     private final RocmBindings rocm;
 
-    // ── Per-thread device scratch ─────────────────────────────────────────────
-    // ── Per-thread device scratch (FP32 resident path) ────────────────────
-    private static final ThreadLocal<Fp32Scratch> FP32_SCRATCH =
-        ThreadLocal.withInitial(Fp32Scratch::new);
-
-    // ── Per-thread device scratch (FP16 resident path) ────────────────────
-    private static final ThreadLocal<Fp16Scratch> FP16_SCRATCH =
-        ThreadLocal.withInitial(Fp16Scratch::new);
-
-    // ── Per-thread HIP stream ───────────────────────────────────
-    // TODO(#streams-leak): HIP streams are created lazily per-thread and held for the
-    // thread's lifetime. On a Loom virtual-thread pool this is acceptable because
-    // carrier threads are pooled, but if worker threads are terminated between requests
-    // the HIP streams leak. The same issue exists in CudaMatVec.
-    // Track: https://github.com/ml-cab/juno/issues/35
-    private static final ThreadLocal<MemorySegment> HIP_STREAM =
-        ThreadLocal.withInitial(() -> null);
+    // ── Device scratch and stream: one set per instance, guarded by ───────────
+    // ── ctx.cublasSerializationLock() (see the class javadoc) ─────────────────
+    private final Fp32Scratch fp32Scratch = new Fp32Scratch();
+    private final Fp16Scratch fp16Scratch = new Fp16Scratch();
+    private MemorySegment     stream;
 
     private static final class Fp32Scratch {
         MemorySegment dX;
@@ -219,7 +209,7 @@ public final class RocmMatVec implements GpuMatVec {
         long bytesX = (long) cols * Float.BYTES;
         long bytesY = (long) rows * Float.BYTES;
 
-        Fp32Scratch scratch = FP32_SCRATCH.get();
+        Fp32Scratch scratch = fp32Scratch;
 
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
@@ -283,7 +273,7 @@ public final class RocmMatVec implements GpuMatVec {
         long bytesXh = (long) cols * Short.BYTES;  // FP16
         long bytesY  = (long) rows * Float.BYTES;  // FP32
 
-        Fp16Scratch scratch = FP16_SCRATCH.get();
+        Fp16Scratch scratch = fp16Scratch;
 
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
@@ -354,7 +344,7 @@ public final class RocmMatVec implements GpuMatVec {
         evt.begin();
         long bytesXh = (long) cols * Short.BYTES;
         long bytesYMax = (long) maxRows * Float.BYTES;
-        Fp16Scratch scratch = FP16_SCRATCH.get();
+        Fp16Scratch scratch = fp16Scratch;
         float[][] Y = new float[n][];
 
         try (Arena callArena = Arena.ofConfined()) {
@@ -427,7 +417,7 @@ public final class RocmMatVec implements GpuMatVec {
         evt.begin();
         long bytesX = (long) cols * Float.BYTES;
         long bytesYMax = (long) maxRows * Float.BYTES;
-        Fp32Scratch scratch = FP32_SCRATCH.get();
+        Fp32Scratch scratch = fp32Scratch;
         float[][] Y = new float[n][];
 
         try (Arena callArena = Arena.ofConfined()) {
@@ -492,7 +482,7 @@ public final class RocmMatVec implements GpuMatVec {
         long bytesG = (long) rows * Float.BYTES;
         long bytesZ = (long) cols * Float.BYTES;
 
-        Fp32Scratch scratch = FP32_SCRATCH.get();
+        Fp32Scratch scratch = fp32Scratch;
 
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
@@ -553,7 +543,7 @@ public final class RocmMatVec implements GpuMatVec {
         long bytesGh = (long) rows * Short.BYTES;
         long bytesZ  = (long) cols * Float.BYTES;
 
-        Fp16Scratch scratch = FP16_SCRATCH.get();
+        Fp16Scratch scratch = fp16Scratch;
 
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
@@ -658,9 +648,8 @@ public final class RocmMatVec implements GpuMatVec {
 
     // ── Stream management ─────────────────────────────────────────────────────
 
-    /** Returns or lazily creates the per-thread non-blocking HIP stream. */
+    /** Returns or lazily creates the instance's non-blocking HIP stream. Caller holds the lock. */
     private MemorySegment ensureStream() {
-        MemorySegment stream = HIP_STREAM.get();
         if (stream != null) return stream;
         GpuBindings.check(
             GpuBindings.callInt(rocm.gpuSetDevice(), ctx.deviceIndex()),
@@ -671,7 +660,6 @@ public final class RocmMatVec implements GpuMatVec {
                 GpuBindings.callInt(rocm.gpuStreamCreateWithFlags(), slot, STREAM_NON_BLOCKING),
                 "hipStreamCreateWithFlags");
             stream = slot.get(ADDRESS, 0);
-            HIP_STREAM.set(stream);
             return stream;
         }
     }
@@ -689,15 +677,24 @@ public final class RocmMatVec implements GpuMatVec {
 
     // ── Scratch growth ────────────────────────────────────────────────────────
 
+    // Each grow clears its slot before freeing, so a failed allocation leaves it
+    // empty rather than holding a freed pointer: the scratch outlives the call.
+
     private void ensureFp32Scratch(Fp32Scratch s, long bytesX, long bytesY) {
         int dev = ctx.deviceIndex();
         if (s.dXBytes < bytesX) {
-            rocm.deviceFree(s.dX);
+            MemorySegment previous = s.dX;
+            s.dX = null;
+            s.dXBytes = 0L;
+            rocm.deviceFree(previous);
             s.dX     = rocm.deviceMalloc(dev, bytesX);
             s.dXBytes = bytesX;
         }
         if (s.dYBytes < bytesY) {
-            rocm.deviceFree(s.dY);
+            MemorySegment previous = s.dY;
+            s.dY = null;
+            s.dYBytes = 0L;
+            rocm.deviceFree(previous);
             s.dY     = rocm.deviceMalloc(dev, bytesY);
             s.dYBytes = bytesY;
         }
@@ -706,14 +703,51 @@ public final class RocmMatVec implements GpuMatVec {
     private void ensureFp16Scratch(Fp16Scratch s, long bytesXh, long bytesY) {
         int dev = ctx.deviceIndex();
         if (s.dXhBytes < bytesXh) {
-            rocm.deviceFree(s.dXh);
+            MemorySegment previous = s.dXh;
+            s.dXh = null;
+            s.dXhBytes = 0L;
+            rocm.deviceFree(previous);
             s.dXh     = rocm.deviceMalloc(dev, bytesXh);
             s.dXhBytes = bytesXh;
         }
         if (s.dYBytes < bytesY) {
-            rocm.deviceFree(s.dY);
+            MemorySegment previous = s.dY;
+            s.dY = null;
+            s.dYBytes = 0L;
+            rocm.deviceFree(previous);
             s.dY     = rocm.deviceMalloc(dev, bytesY);
             s.dYBytes = bytesY;
+        }
+    }
+
+    // ── Scratch lifetime ──────────────────────────────────────────────────────
+
+    /**
+     * Frees this instance's device scratch and stream. Safe while other callers
+     * are active: it takes the lock they hold, and the next call grows the
+     * scratch again.
+     */
+    void releaseScratch() {
+        synchronized (ctx.cublasSerializationLock()) {
+            rocm.deviceFree(fp32Scratch.dX);
+            rocm.deviceFree(fp32Scratch.dY);
+            fp32Scratch.dX = fp32Scratch.dY = null;
+            fp32Scratch.dXBytes = fp32Scratch.dYBytes = 0L;
+            rocm.deviceFree(fp16Scratch.dXh);
+            rocm.deviceFree(fp16Scratch.dY);
+            fp16Scratch.dXh = fp16Scratch.dY = null;
+            fp16Scratch.dXhBytes = fp16Scratch.dYBytes = 0L;
+            if (stream != null) {
+                GpuBindings.callInt(rocm.gpuStreamDestroy(), stream);
+                stream = null;
+            }
+        }
+    }
+
+    /** Device bytes this instance's scratch holds now (excluding the stream). */
+    long scratchDeviceBytes() {
+        synchronized (ctx.cublasSerializationLock()) {
+            return fp32Scratch.dXBytes + fp32Scratch.dYBytes + fp16Scratch.dXhBytes + fp16Scratch.dYBytes;
         }
     }
 }

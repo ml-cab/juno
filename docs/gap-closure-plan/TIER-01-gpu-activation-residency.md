@@ -1,6 +1,13 @@
 # Tier 01: GPU activation-residency redesign
 
-Status: in progress (see "Execution record" below)
+Status: **complete** (2026-09-27). The decode residency region (norm, Q/K/V projection, RoPE) is wired
+behind `--gpu-residency`, default off by owner decision, +3.6% to +5.4% decode where it runs; the
+primitive threshold closed under the contingency (decode width missed, prefill width at parity,
+chaining met; handed to Tier 01B item 2); step 3b, `CudaGraphSession` and the flag default moved to
+Tier 02 by the owner. Closed with three out-of-tier fixes - per-request device memory (a GPU prefill
+measurement boundary), `-Pintegration`, the tensor-parallel load error - and the fast prefill
+repetition handed to Tier 01B.
+Next in the running order: Tier 01B.
 Gap analysis refs: §1.6, §2.8
 
 ## Objective
@@ -38,6 +45,12 @@ wall three more times.
    GTX 1080/TinyLlama/Mistral-7B workloads `docs/performance.md`'s Phase B analysis used, to confirm
    the 6.9x-slower-than-CPU-scalar finding is actually fixed by residency (not just "somewhat
    better") before calling this tier done.
+   *2026-09-27, owner decision: `CudaRmsNorm` is wired live as the resident norm inside
+   `ResidentQkvPath` (behind `--gpu-residency`). `CudaGraphSession` is **moved to Tier 02**
+   ([Tier 02 scope item 5](TIER-02-attention-long-context.md#in-scope)), because graph replay only
+   pays once a region issues many launches per wait, which is what attention inside the region
+   creates; today's region has five launches per layer. See "2026-09-27 - owner decisions on the
+   step 3a pass" in the execution record.*
 3. Extending residency to at least one additional op in the same layer (RoPE is the natural next
    op after the Q/K/V projection) to prove the chain — not just a single isolated op — is what
    fixes the round-trip cost. `RopeKernel`, mentioned as "never built" in the gap analysis, gets
@@ -62,6 +75,14 @@ wall three more times.
 - ROCm-side residency — CUDA only for this tier (ROCm has no CUDA-graph equivalent readily
   available; a ROCm residency design is a separate, later decision, tracked in Tier 10).
 - Multi-GPU/cross-process residency — out of scope; this is single-device, single-process only.
+- `CudaGraphSession` graph capture/replay — deferred to [Tier 02](TIER-02-attention-long-context.md)
+  scope item 5 with its wire-or-delete decision rule (owner, 2026-09-27); the code and
+  `CudaGraphSessionTest` stay in place until then.
+- Step 3b (KV append and attention inside the residency region) — [Tier 02](TIER-02-attention-long-context.md)
+  scope item 4, per the owner, 2026-09-27.
+- Making `--gpu-residency` default-on — re-decided after step 3b is measured
+  ([Tier 02](TIER-02-attention-long-context.md) scope item 6); it stays `off` until then (owner,
+  2026-09-27).
 
 ## Cross-surface compatibility checklist
 
@@ -149,6 +170,11 @@ wall three more times.
     tps **>= 0.80x**.
   - Device memory returns to its pre-request level after each request (no leak across repeated
     requests), asserted via `GpuBindings.memGetInfo` rather than inferred from not crashing.
+    *Met 2026-09-27 on the default path as well as the residency path, after the per-request scratch
+    fix (see the close-out section): `memGetInfo`-based tests in `CudaMatVecScratchLifetimeTest`,
+    `CudaAttentionNormScratchLifetimeTest` and `ResidentQkvPathTest`; smoke, 8 requests: tinyllama 938
+    MiB after every request with the region off and on, mistral-7b 4604 off / 4608 on, llama-1-30b (at the
+    card's capacity) flat from request 7 off and request 4 on over 16 requests.*
 - **Benchmark-parity preconditions (blocking, and they come first).** This tier carries the harness
   corrections described in [`README.md`](README.md)'s "Benchmark parity preconditions" — prompt-token
   parity, Juno warmup and repetitions, matched thread count, fixed heap, recorded clock state, one
@@ -1232,16 +1258,840 @@ pattern.
 pass added its own row and left the backlog alone rather than widening its scope. Tier 14's doc audit
 owns closing it.
 
+### 2026-09-27 — implementation step 2: the residency primitive, RoPE on the device, and the chain measured
+
+Scope of this pass: implementation step 2 ("design and implement the minimal residency primitive,
+scoped to RMSNorm + RoPE only"), its tests, and the op-at-a-time two-op baseline the step-1 record
+committed to taking in the same pass that builds `RopeKernel`. Nothing is wired into a handler; that
+is step 3. Dates in this section are UTC, matching the published run directory.
+
+**Plan-versus-code drift found before starting.**
+
+- HEAD is `cc94c53`. Tier 00's claims were re-verified at this HEAD rather than trusted:
+  `generateBatch()` still carries the "No cachePrefix call" comment where the write used to be and
+  calls neither `findLongestPrefix` nor `cachePrefix`; `ForwardPassHandlerLoader` still dispatches
+  `phi2`/`phi3`/`qwen3`/`qwen3moe` and sends everything else through
+  `LlamaFamilyArchitectures.requireVerified`; `Sampler`, `SamplingStep` and `RepetitionPenaltyStep`
+  agree that `Sampler` alone states the order; `TensorShardContext` is referenced only by its test
+  and `ClusterHarness`, and `FaultTolerantPipeline` only by `HealthReactor`; no `hazelcast` or
+  `RegistryService` symbol survives in any source, proto or pom; a case-insensitive grep for
+  internal tier numbers over every `src/main` tree is clean; `CLAUDE.md`'s test command lists
+  `vision` and `metrics`. All hold. The session prompt that started this pass expected Tier 00 to be
+  the active tier; it has been complete since 2026-09-23.
+- **The step-1 record's claim that the production docs are clean of tier numbers is false.** It says
+  `docs/agent-arch.txt`, `docs/howto.md`, `docs/performance.md` and `README.md` "are now clean under
+  that scan". `docs/agent-arch.txt` carried four `PLAN-Infra-TierN.md` pointers and
+  `docs/performance.md` carries 24 hits, among them two bare mentions in prose ("Tier 15 unblocked
+  on gather tax", "Tier 5's domain") and a run of `PLAN-Infra-TierN.md` links. The two pointers in
+  the `agent-arch.txt` entries this pass rewrote are gone; the other two there and all of
+  `performance.md` are left to Tier 14's audit, which owns the repo-wide sweep, rather than widening
+  this step.
+- **README rule 4 is violated in `src/main` code comments, and nothing owns it before Tier 14.** Ten
+  comments in `node` name the reference implementation (`GgufKQuantCodec`, `Qwen3Rope`,
+  `Phi3RopeConfig`, `LlamaConfig` twice, `GgufReader` three times, `Phi2Rope`, `Phi3Rope`). Tier 00's
+  item 9 covered tier numbers only. Recorded for Tier 14's grep, not changed here.
+- **The no-emoji rule in `CLAUDE.md` is violated in CLI and log output, and no planned check looks for
+  it.** `scripts/run.sh` prints `✔`/`⚠` from its `ok`/`warn` helpers, `scripts/aws/launcher.sh`
+  prints `❌`, and `ConsoleMain` prints `✔` on loading a LoRA checkpoint; `docs/howto.md` and one
+  historical `CHANGELOG.md` entry reproduce that output. Tier 14's consistency script greps competitor
+  names and tier numbers only; adding pictographs to it would close this. Not changed here.
+- `DeviceActivationBatch` is still the LoRA-training host-packing helper, as this file warned; the
+  primitive is named `ResidentChain`/`ResidentActivation`. `LlamaTransformerHandler` is still the only
+  handler holding the fused attention kernel (`gqaGpu`), and still leaves `rmsNormGpu` null.
+
+**What shipped.**
+
+| Item | Where |
+|---|---|
+| Residency region: one stream, the buffers on it, close frees all | `ResidentChain` (new, `node`) |
+| Device activation buffer with the materialization boundary | `ResidentActivation` (new, `node`) |
+| Launch parameter block, allocation-free, `invokeExact` | `KernelParams` (new, `node`) |
+| RoPE kernel source and PTX | `node/src/main/cuda/rope.cu`, `rope.ptx` (new) |
+| RoPE kernel loader and launch | `RopeKernel` (new, `node`) |
+| RoPE on a resident activation, table uploaded once | `CudaRope` (new, `node`) |
+| Resident RMS norm, weight uploaded once, never in place | `CudaRmsNorm.normalizeResident` |
+| Allocation-free RMS-norm launch for the resident path | `RmsNormKernel.launchResident` |
+| Four-lane chain measurement | `ResidentChainMicrobench` (new), `scripts/performance-tests/resident-chain-microbench.sh` (new) |
+
+**Design, and why each choice.**
+
+- *Where the boundary is.* Data crosses host and device only at `ResidentActivation.upload` (async,
+  on the chain's stream) and `materialize` (the one point the host waits and sees device results).
+  Operations between them touch device memory only; the host input array is untouched after
+  upload, which a test asserts. A consumer that is not device-resident takes a materialized copy.
+  Which operations participate today: RMS norm and RoPE.
+- *One stream per region, owned by the region.* Ordering comes from the stream, so a chain of
+  operations needs no host wait between them. `ResidentChain.close` synchronizes, frees every
+  activation still open and destroys the stream, so a region cannot leak by forgetting a buffer.
+  The buffers and stream go through `GpuBindings` and are vendor-neutral; the two kernels are
+  CUDA-only, and `CudaRope.tryCreate` returns null off CUDA, the same contract as
+  `CudaRmsNorm.tryCreate`.
+- *Dispatch that does not undo the saving.* Every existing kernel launch builds a confined arena,
+  allocates a slot per argument and calls the driver through `invokeWithArguments`, which boxes each
+  argument. That is noise beside a synchronous round trip and is not beside a bare launch, so the
+  resident path uses `KernelParams` (built once per thread, rewritten in place) and `invokeExact`
+  for launches, copies and synchronizations. The old launch is kept unchanged on purpose: it is the
+  round-trip path the step-1 baseline measured, and changing it would move the before-side of this
+  tier's comparison.
+- *RoPE precision.* The CPU path computes a double angle and double sine and cosine, then rounds;
+  a single-precision angle would be off by about 2e-3 radians at position 30000. The kernel follows
+  the CPU step by step: a double inverse-frequency table computed on the host with the CPU path's own
+  expression and uploaded once, `sincos` in double, and the rotation written with
+  `__fmul_rn`/`__fadd_rn`/`__fsub_rn` so the compiler cannot contract it into fused multiply-adds
+  (the PTX was checked: `mul.rn.f32`/`sub.rn.f32`/`add.rn.f32`, no float `fma`). Result: bit-identical
+  to the CPU rotation in all five parity cases, including position 30000, 128-wide heads and base
+  1e6.
+- *Adjacent pairs only.* The kernel implements the pairing `LlamaTransformerHandler` uses. Split-half
+  (NeoX) pairing, which `Phi2Rope`/`Phi3Rope` use on the CPU, is not built, because nothing on the
+  device path would call it; any later handler that wants the GPU RoPE needs it first.
+- *No CUDA graph.* `CudaGraphSession` stays unwired. A captured graph fixes its kernel arguments,
+  and the RoPE position is an argument that changes every decode step; replay would need the
+  position read from device memory or an exec-node parameter update. Whether launch overhead is
+  worth that is a step-4 question the measurement below starts to answer.
+
+**Tests, written first.** `RopeKernelParityTest` (6 cases), `ResidentActivationTest` (8),
+`ResidentChainMicrobenchTest` (7, GPU-free) and one new `CudaRmsNormTest` case (the resident path at
+batch 1, 8 and 512 against the scalar reference and, exactly, against the round-trip path — same
+kernel, same inputs, so the bits must not differ; they do not). 22 new cases in `node`. Against the tree as it stood, `mvn -pl node
+test-compile` failed with `cannot find symbol` for every new class and nothing else, which is the
+right failure for code that does not exist yet.
+
+**One test had no teeth, and it was caught.** The test for two uploads in a row — both copy through
+one pinned host buffer, so the second can overwrite the first while its transfer is still reading —
+passed three runs out of three with the guard deliberately disabled. The transfer from pinned memory
+simply outran the host's overwrite. It now queues milliseconds of device work ahead of the first
+transfer, so the transfer is still waiting when the host starts the second copy: with the guard
+disabled it fails three runs out of three (the device normalized the second rows in place of the
+first), with the guard it passes three out of three. The guard is an epoch check, one synchronization
+only when an upload follows another with no wait between.
+
+**The measurement.** Published as
+[`docs/perf-compare/20260927T025430Z-tier01-resident-chain/`](../perf-compare/20260927T025430Z-tier01-resident-chain/INDEX.md).
+GTX 1080, dim 2048 as 32 heads of 64, base 10000, decode row at position 512, prefill window at
+positions 0 to 511, 3 repetitions. All GPU lanes use device-resident weights, so op-at-a-time and the
+resident chain differ by the host round trip alone.
+
+| width | lane | median ms | min / max | vs CPU scalar | cost vs op-at-a-time |
+|---|---|---:|---|---:|---:|
+| decode | cpu-scalar | 0.0670 | 0.0669 / 0.0677 | 1.00x | — |
+| decode | gpu-op-at-a-time | 0.0359 | 0.0332 / 0.0364 | 1.86x | 1.00 |
+| decode | gpu-resident-chain | 0.0183 | 0.0182 / 0.0188 | **3.65x** | **0.51** |
+| decode | gpu-device-only | 0.0112 | 0.0112 / 0.0114 | 5.98x | 0.31 |
+| prefill | cpu-scalar | 34.06 | 33.91 / 34.49 | 1.00x | — |
+| prefill | gpu-op-at-a-time | 3.88 | 3.86 / 3.90 | 8.77x | 1.00 |
+| prefill | gpu-resident-chain | 2.15 | 2.10 / 2.16 | **15.86x** | **0.55** |
+| prefill | gpu-device-only | 0.158 | 0.156 / 0.159 | 215.5x | 0.04 |
+
+Every row scorable (largest spread 9.0%); one 3.7 ms collection pause over the whole run; 56 MB
+allocated in total, all setup, none per call; 0 bytes of device memory not returned; largest
+divergence from the CPU chain 2.4e-6, all of it the norm's summation order.
+
+**Read against this tier's Threshold block, as written:**
+
+- Resident chain `>= 1.0x` CPU scalar at decode width: **3.65x**. At prefill width: **15.86x**.
+- Resident chain `<= 0.7x` op-at-a-time: **0.51** at decode, **0.55** at prefill.
+- Device memory back to its starting level: **exactly**, per allocate-and-close cycle in the unit
+  tests and over the whole harness run. Per request is a step-3 assertion.
+- End-to-end tg, `compare-lora.sh`: not applicable until the path is wired.
+
+**And the reading that has to go next to it, because it changes what those numbers mean.** About 95%
+of the CPU chain is RoPE: the CPU norm alone is 0.0035 ms at decode and 1.3004 ms at prefill on this
+host ([`20260926T060301Z-tier01-rmsnorm-roundtrip`](../perf-compare/20260926T060301Z-tier01-rmsnorm-roundtrip/INDEX.md)),
+and execution samples put 1004 of this run's 1663 in `LlamaTransformerHandler.rope`. The scalar
+`rope` recomputes a `Math.pow`, a `Math.cos` and a `Math.sin` for every rotated pair on every call.
+So the `>= 1.0x` result is mostly a statement about the CPU RoPE's cost, not about residency. The
+chaining result (0.51 / 0.55) is the one that isolates residency, and it holds. Against the CPU norm
+alone, the resident chain is still about five times slower at decode width: **a two-operation region
+that pays its own entry and exit does not beat an elementwise operation that is cheap on the CPU at
+decode width.** Estimated, not measured: against a CPU RoPE that computes each position's angles once,
+the decode-width chain would read about 0.3x and the prefill-width chain about parity, while the
+device-only lane (0.158 ms against roughly 2 ms) would still clear it by an order of magnitude at
+prefill. That is consistent with the step-1 finding that decode fails on fixed per-call cost and
+prefill on staged bytes, and it says the decode-width win has to come from a region spanning many
+operations per wait, not from norm and RoPE alone.
+
+**The CPU RoPE cost is large in the real forward pass, measured, and nothing in this plan owns it.**
+From the `juno.Rope` and `juno.ForwardPass` spans of the parity-corrected GPU reference sweep
+([`20260925T172231Z`](../perf-compare/20260925T172231Z/INDEX.md), repetition 2, default lane), where
+every matrix product already runs on the GPU:
+
+| model | lane | `juno.Rope` | `juno.ForwardPass` | share |
+|---|---|---:|---:|---:|
+| tinyllama | generation, 64 tokens | 111.95 ms | 1126.73 ms | 9.9% |
+| mistral-7b | generation, 64 tokens | 349.34 ms | 3240.58 ms | 10.8% |
+| qwen2.5-3b | generation, 64 tokens | 192.23 ms | 2394.09 ms | 8.0% |
+| tinyllama | prefill, 128 tokens | 216.07 ms | 918.47 ms | 23.5% |
+| mistral-7b | prefill, 128 tokens | 682.16 ms | 2917.92 ms | 23.4% |
+
+The angle depends only on position and pair index, yet it is evaluated for every head of every layer:
+792 times per token on TinyLlama. Two ways to remove it: the GPU kernel this pass built (step 3), or
+computing each position's angles once per forward pass on the CPU, which can be bit-identical because
+the cached values would be the same expressions. The second is small, touches the forward pass of
+every Llama-family model on every backend, and would **move the reference sweep's figures** (a
+measurement boundary under README rule 9) **and the CPU baseline this tier's decode threshold is read
+against**. That makes its placement a decision for the owner, not for this pass: see "Open for the
+owner" below.
+
+**Open for the owner — decisions this pass surfaced and did not take.**
+
+1. *The CPU RoPE angle recomputation* (about 10% of GPU decode and 23% of GPU prefill forward-pass
+   time above). Land it before step 3 as a recorded out-of-tier change and re-take this chain
+   measurement against the corrected CPU path, or leave the CPU path alone and let step 3's GPU RoPE
+   take it. Taking it first gives step 3 an honest baseline; it would also likely turn the
+   decode-width `>= 1.0x` reading into a miss, which this tier's contingency already classes as a
+   partial result for Tier 01B, not a downgrade.
+2. *Whether `qwen2` and `qwen3`/`qwen3moe` use the right RoPE pairing.* `LlamaTransformerHandler`
+   (for `qwen2`) and `Qwen3Rope` apply adjacent-pair rotation, and nothing in `src/main` permutes
+   their Q/K rows. The reference implementation applies split-half (NeoX) rotation to those
+   architectures, and its converter permutes Q/K rows only for `llama`. Juno already uses split-half
+   for `phi2` and `phi3`, with a comment saying why adjacent is wrong there. A greedy run of
+   `qwen2.5-3b` on this HEAD answers "The capital of France is Paris." correctly, which does not
+   settle it: any consistent pairing keeps relative position, so a short factual prompt can survive
+   the wrong one. `Qwen2LiveForwardTest` only asserts that the first token is not end-of-turn.
+   Settling it needs a perplexity comparison of the two pairings on a real text, or logits against
+   the reference tool, on `qwen2.5-3b` and `Qwen3-1.7B`. If confirmed, it is a forward-pass
+   correctness fix on a sweep model and needs a home.
+3. *Step 3's scope, as written, would regress decode.* In a transformer layer the Q/K/V projection
+   sits between the norm and RoPE, and `MatVec` is host-in, host-out. Wiring norm and RoPE alone
+   would add round trips: materialize the norm for the host projection, then upload Q and K for RoPE.
+   Step 3 therefore needs a device-in, device-out entry point on at least the projection path the
+   decode loop uses (the K-quant MMQ path already runs device pointer to device pointer inside
+   `CudaMatVec`, between its own upload and download), and a rule for ordering `CudaMatVec`'s
+   per-thread stream with the chain's. That is the smallest design that can meet step 3's intent;
+   it is more than "norm and RoPE only", so it is flagged here rather than assumed.
+4. *`min_tokens` no longer holds against every stop token.* Found while explaining this pass's test
+   counts: the turn-marker change that shipped inside `cc94c53` (see Out-of-tier changes) merges the
+   vocabulary's turn-marker ids into every request's stop set, and `MinTokenFloor` holds back only
+   the end-of-sequence id, so a request can end below its minimum on a turn marker - by id, or as
+   text through `EosOutputFilter`, which also does not consult the minimum. The benchmark prompt does
+   not trigger it on any of the four sweep models (checked at this HEAD, including `tinyllama`, whose
+   role headers are plain text rather than control tokens), so no published figure moved. Masking every stop-token id below the minimum, rather
+   than only the end-of-sequence id, would restore what `min_tokens` promises; it is a sampler change
+   outside this tier's scope, so it is the owner's to place.
+
+**Verification commands and results.**
+
+- `mvn -o -pl node test -Dtest='RopeKernelParityTest,ResidentActivationTest,CudaRmsNormTest,ResidentChainMicrobenchTest,RmsNormKernelParityTest,CudaGraphSessionTest,RmsNormRoundTripMicrobenchTest'`:
+  54 tests, 0 failures, 0 skipped, so every GPU case ran on the GTX 1080. RoPE parity printed
+  `max|diff| = 0` in all five rotation cases.
+- The upload-race case with its guard disabled, three runs: 3 failures (row 0 normalized from the
+  second upload); guard restored, three runs: 3 passes. The source was compared byte for byte with a
+  copy taken before the experiment.
+- `mvn -o clean install -DskipTests`, then
+  `mvn -o test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player`:
+  BUILD SUCCESS in 22:46 min, **1731 tests, 0 failures, 0 errors, 46 skipped** (`registry` 93, `lora`
+  116, `kvcache` 78, `health` 23, `node` 642/41 skipped, `tokenizer` 109/2, `sampler` 81,
+  `coordinator` 322/1, `vision` 95, `metrics` 61, `juno-player` 111/2). Against the step-1 pass's
+  1697: plus this pass's 22 `node` cases, plus 12 cases the turn-marker change in `cc94c53` added
+  (1 `tokenizer`, 11 `coordinator`; see Out-of-tier changes). Skip count unchanged at 46.
+- `mvn -o clean verify -pl juno-master`: BUILD SUCCESS, **20 tests, 0 failures, 0 errors**
+  (`InProcessClusterIT` 6, `ThreeNodeClusterIT` 8, `TensorParallelClusterIT` 5,
+  `UnsupportedArchitectureClusterIT` 1); no node JVM left behind.
+- `./scripts/performance-tests/resident-chain-microbench.sh` on an idle device: the published run.
+- Two short, unpublished harness runs to check whether `cc94c53` moved the reference sweep's parity
+  (`compare-llama-cpp.sh --gpu --models qwen2.5-3b,Phi-3.5-mini --n-gen 64 --juno-reps 1
+  --juno-warmup 1 --reps 1 --no-publish --no-tuned-lane`, then the same with
+  `--models tinyllama,mistral-7b`): `failures=0` both times, every model - including both tinyllama
+  files - at 128/128 prompt tokens (deviation 0) and 64/64 generated tokens, `finish_reason:
+  length`. The first run alone covered only the two models whose markers are control tokens; the
+  second was added because the new role-header stop also works on decoded text, which is where
+  tinyllama's markers live. One repetition each, not a baseline, not scored.
+
+**Performance gate: not run, and not required for this pass.** No handler constructs
+`ResidentChain`, `CudaRope` or `RopeKernel`, and `CudaRmsNorm` is still unconstructed by default, so
+the forward pass, MatVec, KV, batching and quantization paths are unchanged and `compare-lora.sh` /
+`compare-llama-cpp.sh` have nothing to detect. The existing round-trip launch was deliberately left
+alone so the step-1 baseline still describes the code. Both gates become required in step 3. This
+pass is not a measurement boundary.
+
+**Cross-surface reading for this pass.** Nothing reaches a product surface yet: CPU inference (row 1)
+is untouched and remains the oracle both new kernels are tested against; CUDA (row 2) is where every
+new test runs; ROCm (row 3) gets vendor-neutral buffers and stream handling through `GpuBindings` but
+no kernels, and `CudaRope.tryCreate` returns null off CUDA — not exercised, no AMD hardware; the
+schedules, cluster modes, LoRA, vision, REST and CLI rows are untouched because no handler or entry
+point references the new classes. The tier's own checklist is resolved when step 3 wires the path.
+
+**Docs updated.** `docs/agent-arch.txt` (entries for `ResidentChain`, `ResidentActivation`,
+`KernelParams`, `RopeKernel`, `CudaRope`, `ResidentChainMicrobench`; `CudaRmsNorm` and
+`CudaGraphSession` rewritten), `docs/howto.md` (the new harness), `docs/performance.md` (the chain
+reading and the CPU RoPE share), `docs/perf-compare/README.md` (run index row), `CHANGELOG.md`
+(Session 94). `README.md` needs nothing: it describes no class at this level.
+
+### 2026-09-27 — follow-up item 1: the Qwen RoPE pairing, diagnosed by perplexity
+
+Scope: "Open for the owner" item 2 above, taken first in the order the owner approved on 2026-09-27
+(diagnose the Qwen pairing; fix `min_tokens`; fix the pairing if confirmed; remove the CPU angle
+recomputation and re-baseline once; then step 3a). Diagnosis only: **default behaviour unchanged**.
+Out of this tier's scope; recorded below under Out-of-tier changes.
+
+**What was built.** `RopePairing` (`ADJACENT`, `SPLIT_HALF`) in `node`;
+`LlamaTransformerHandler.rope(..., RopePairing)` (split-half uses the same per-pair frequency and the
+same per-step rounding as the adjacent body, which it delegates to); a `ropePairing` field on
+`LlamaTransformerHandler` used at all three rotation sites (single decode, batched decode, prefill
+window) and set by `ropePairingFor(cfg)`, which returns `ADJACENT` for every architecture; a
+`pairing` component on `Qwen3RopeConfig` (default `ADJACENT`) that `Qwen3Rope.apply` dispatches on
+for both the plain and the YaRN rotation; package-private test-only loads
+`LlamaTransformerHandler.load(path, ctx, backend, RopePairing)` and
+`Qwen3TransformerHandler.load(..., RopePairing)`. No system property, no CLI flag.
+
+**Tests.** `RopePairingTest` (5): the adjacent overload is bit-identical to the legacy method;
+split-half equals adjacent applied to the head with its halves interleaved, then de-interleaved, bit
+for bit at positions 0 to 32767; the same identity through `Qwen3Rope`'s YaRN path; `Qwen3RopeConfig`
+defaults to `ADJACENT`. Written first; did not compile against the tree before the change.
+`RopePairingPerplexityLiveTest` (3, model-gated, CPU backend): teacher-forced perplexity over a fixed
+text, the opening of the United States Declaration of Independence (public domain,
+`node/src/test/resources/cab/ml/juno/node/rope-pairing-perplexity.txt`), tokenized raw with no chat
+template. `node` cannot depend on `tokenizer` (the dependency runs the other way), so the ids are
+checked in beside the text, produced once by `GgufTokenizer.encode`: 821 ids for TinyLlama's
+SentencePiece vocabulary (leading BOS included, as the tokenizer emits it) and 701 for the Qwen
+vocabulary, which the Qwen2.5 and Qwen3 files share and encode identically (checked byte for byte).
+
+**Result — confirmed.**
+
+| Model | Tokens | Adjacent | Split-half | Winner, margin |
+|---|---|---|---|---|
+| `tinyllama-1.1b-chat-v1.0.Q4_K_M` (control, `llama`) | 821 | **5.27** | 7617.88 | adjacent, 1447x |
+| `qwen2.5-3b-instruct-q4_k_m` (`qwen2`) | 701 | 169.13 | **1.165** | split-half, 145x |
+| `Qwen3-1.7B-Q4_K_M` (`qwen3`) | 701 | 525.76 | **4.054** | split-half, 130x |
+
+The control discriminates: adjacent wins on the file whose converter permuted Q/K rows, by three
+orders of magnitude, so the method can tell the layouts apart. Both Qwen files are two orders of
+magnitude better under split-half. **Juno has served `qwen2`/`qwen2.5` and `qwen3` with the wrong
+pair layout.** Short factual prompts survived it (relative position within a short window is still
+partly consistent), which is why the "capital of France" check and `Qwen2LiveForwardTest` never
+caught it. The Qwen2.5 split-half figure is very low because the text is heavily memorized; the
+comparison between layouts, not the absolute value, is the reading. Wall time on this host: about
+282 s per TinyLlama pass, 350 to 384 s per Qwen3-1.7B pass, 685 to 711 s per Qwen2.5-3B pass.
+
+`qwen3moe` shares `Qwen3Rope` and the reference implementation assigns it the same layout; it was not
+measured (the only file on disk is 30B) and follows the other two in item 3.
+
+**Commands.** `mvn -o -pl node test -Dtest=RopePairingTest`: 5 tests, 0 failures.
+`mvn -o -pl node test -Dtest='RopePairingPerplexityLiveTest#control_tinyllama_adjacent_wins'`: 1
+test, 0 failures, 567 s. `mvn -o -pl node test -Dtest='RopePairingPerplexityLiveTest#qwen*'`: 2
+tests, 0 failures, BUILD SUCCESS, 2146 s.
+
+**Consequence.** Item 3 (the fix) proceeds. Throughput is unaffected (same arithmetic per pair);
+generated tokens on both Qwen models change. The live test runs about 36 minutes on this host in its
+diagnostic form, too long for every `node` run; item 3 turns it into a regression test that runs
+only the production layout with a perplexity ceiling per model.
+
+### 2026-09-27 — follow-up item 2: `min_tokens` holds against the model's own end signals
+
+Scope: "Open for the owner" item 4 above. A sampler and generation-loop change, outside this tier's
+scope; recorded below under Out-of-tier changes.
+
+**The gap, as found.** `cc94c53` made generation stop on the vocabulary's chat turn markers by id
+(merged into every request's `stopTokenIds` by `GenerationLoop.resolveSamplingParams`) and on role
+headers in decoded text (`EosOutputFilter`), but `MinTokenFloor` held back only end-of-sequence and
+neither `Sampler.isStopToken` nor the text filter consulted the minimum. The published contract said
+"only the end-of-sequence token is held back"; the harness help promised the minimum held "before a
+stop token may end the request". Neither matched the code, and they did not match each other.
+
+**The rule now.** Below the minimum the model's own end signals are held back: end-of-sequence, the
+vocabulary's turn-marker ids, and a role header or turn marker in the decoded text. A stop the caller
+asked for (a stop string, a stop token id, or a stop string that encodes to a single token) still ends
+the request below the minimum, as the contract has always said for stop strings; a turn-marker id the
+caller names explicitly is therefore not held back. End-of-sequence is held back even if the caller
+lists it, as before.
+
+**What changed.** `MinTokenFloor(int eos, int[] alsoHeld, int minTokens)`: masks end-of-sequence and
+the extra ids below the minimum, yields only when nothing but held ids survives (the grammar rule,
+widened to the set); no allocation per step. `GenerationLoop.minTokenFloor(requested)` builds it from
+the request's params as submitted, before `resolveSamplingParams` merges the turn markers in, so the
+caller's own stops are known; used by the single-request path, the static batch and
+`ContinuousBatchEngine`. `EosOutputFilter.accept(piece, mayStop)`: with `mayStop == false` a complete
+marker is emitted as text, a trailing marker prefix is still held back, and a scan floor makes sure a
+marker passed over below the minimum is never found later (without it, a rescan that found an
+already-emitted marker would try to truncate text that had already been streamed). All three emit
+paths pass `!floor.holdsOpen(generatedSoFar)`, including the speculative path through `emitToken`.
+Contracts (`openapi.yaml`, `juno-api.yaml`), `SamplingParams` and `JunoHttpClient` javadoc,
+`docs/howto.md`, `docs/performance.md` and the `compare-llama-cpp.sh --juno-min-tokens` help now
+state the rule above.
+
+**Tests first.** `GenerationLoopMinTokensTurnMarkerTest` (12: four cases on each of the single,
+static and continuous paths) was run against the HEAD versions of `GenerationLoop`,
+`ContinuousBatchEngine` and `EosOutputFilter`, restored temporarily from `git show HEAD:` and then put
+back: **6 failures, all `expected: 5 but was: 0`** - the turn-marker id and the role-header text each
+ended the request at zero tokens on all three paths; the caller-stop and no-minimum controls passed,
+as they should. The new `MinTokenFloorTest` (5), `SamplerMinTokensTest` (1) and `EosOutputFilterTest`
+(8) cases did not compile against the old API (no held-set constructor, no `accept(piece, mayStop)`).
+After the change: `mvn -o -pl sampler,coordinator test` BUILD SUCCESS, `sampler` 87 tests (81 + 6),
+`coordinator` 342 tests, 0 failures, 1 skipped (322 + 20).
+
+**Verification.** `mvn -o clean install -DskipTests`, then the 11-module
+`mvn -o test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player
+-Dtest='!RopePairingPerplexityLiveTest' -Dsurefire.failIfNoSpecifiedTests=false`: BUILD SUCCESS in
+25:57 min, **1762 tests, 0 failures, 0 errors, 46 skipped** (`registry` 93, `lora` 116, `kvcache` 78,
+`health` 23, `node` 647/41, `tokenizer` 109/2, `sampler` 87, `coordinator` 342/1, `vision` 95,
+`metrics` 61, `juno-player` 111/2): the hand-off 1731 plus item 1's 5 `node` cases and this item's 26.
+The one exclusion is item 1's diagnostic A/B, which ran on its own and takes 36 minutes. Quick parity
+check on the jar that install built (`compare-llama-cpp.sh --gpu --models
+tinyllama,qwen2.5-3b,Phi-3.5-mini,mistral-7b --n-gen 64 --juno-reps 1 --juno-warmup 1 --reps 1
+--no-publish --no-tuned-lane`, `target/perf-compare/20260927T074422Z/`): `failures=0`, all five files
+(both tinyllama quantizations) at 128/128 prompt tokens, deviation 0, and 64/64 generated tokens.
+Unpublished, one repetition, not scored.
+
+### 2026-09-27 — follow-up item 3: Qwen2 and Qwen3 moved to the split-half RoPE layout
+
+Scope: the fix item 1 confirmed. A forward-pass correctness change on a sweep model (`qwen2.5-3b`),
+outside this tier's scope; recorded below under Out-of-tier changes.
+
+**What changed.** `LlamaTransformerHandler.ropePairingFor(cfg)` returns `SPLIT_HALF` for `qwen2` and
+`qwen2.5` (the rest of the LLaMA family stays `ADJACENT`), used at all three rotation sites.
+`Qwen3RopeConfig.PAIRING` is `SPLIT_HALF`, which covers `qwen3` and `qwen3moe` on the plain and YaRN
+paths (`Qwen3TransformerHandler` at three sites, `Qwen3MoeTransformerHandler` at one,
+`Qwen3LoraTrainableHandler` at three). LoRA: `LoraTrainableHandler` (which serves `qwen2` through
+`Qwen2LoraTrainableHandler`) takes its layout from the same `ropePairingFor` at its five forward
+sites and its backward; `LoraTrainingMath.ropeBackward(..., RopePairing)` is the split-half adjoint;
+`Qwen3Rope.applyBackward` and `LoraTrainingMath.qwen3RopeBackward` follow the config's layout, YaRN
+included. Every RoPE site in `src/main` was checked by grep: the Phi-2/Phi-3 paths are split-half on
+their own, and the vision text backbones (`llama` for LLaVA, `phi2` for moondream) are unaffected.
+**No Qwen adapter exists on this host** (every `.lora` file on disk is a TinyLlama adapter), so no
+retraining is owed here; an adapter trained on a Qwen model elsewhere with an earlier build trained
+against the wrong layout, which the CHANGELOG says.
+
+**The GPU `RopeKernel` is adjacent-only**, so step 3a (item 5) must keep `qwen2`/`qwen3` on the CPU
+rotation until the kernel gains a split-half mode; that fallback is item 5's to implement and announce.
+
+**Tests first.** `RopePairingTest` grew to 9: the production layout per architecture (`llama`,
+`mistral`, `tinyllama` adjacent; `qwen2`, `qwen2.5`, Qwen3 config split-half); the split-half backward
+is the adjoint of the forward at positions 1, 250 and 30000; the adjacent backward overload is the
+legacy one bit for bit; `Qwen3Rope.applyBackward` and `LoraTrainingMath.qwen3RopeBackward` are the
+adjoints of `Qwen3Rope.apply` in both layouts with and without YaRN. With the two layout constants
+temporarily set back to `ADJACENT`, the production-layout case failed (`[qwen2] expected: SPLIT_HALF
+but was: ADJACENT`); restored, it passes. `Qwen2LoraTrainableHandlerTest` gained a zero-adapter
+parity case over positions 0 to 4 - the existing one decodes only position 0, where the rotation
+angle is zero and no layout difference can show. With the inference handler fixed and the LoRA
+forward not yet, it **failed at `pos 1 logit[0]`**, the first position that rotates anything; it
+passes after the LoRA change.
+
+**The A/B became a regression test.** `RopePairingPerplexityLiveTest` now runs by default, whenever
+the files are present, through the production loader (`ForwardPassHandlerLoader.load`) over the first
+128 tokens of the text, against a ceiling per model; the whole-text two-layout comparison is kept
+behind `-Djuno.test.ropeAb=true`, which enables a test and reaches no production code. The 128-token
+readings, measured with a throwaway probe under both layouts before the ceilings were set:
+
+| Model | Right layout | Wrong layout | Ceiling |
+|---|---|---|---|
+| `tinyllama-1.1b-chat-v1.0.Q4_K_M` | 2.88 (adjacent) | 467.2 | 6.0 |
+| `qwen2.5-3b-instruct-q4_k_m` | 1.29 (split-half) | 23.0 | 4.0 |
+| `Qwen3-1.7B-Q4_K_M` | 2.50 (split-half) | 208.9 | 8.0 |
+
+The production-loader run reproduces the right-layout column to four decimals (2.8836, 1.2869,
+2.4977) in about 40, 122 and 60 s, so the regression adds roughly four minutes to a `node` run on
+this host.
+
+**Verification.** `mvn -o clean install -DskipTests`, then the 11-module `mvn -o test` (nothing
+excluded): BUILD SUCCESS in 27:14 min, **1773 tests, 0 failures, 0 errors, 49 skipped** (`node`
+658/44: item 2's 647 plus 4 `RopePairingTest` cases, 1 `Qwen2LoraTrainableHandlerTest` case, and the
+6 live methods of which the 3 opt-in A/B ones skip by default; every other module as in item 2).
+`mvn -o clean verify -pl juno-master`: BUILD SUCCESS, 20 tests, 0 failures (`InProcessClusterIT` 6,
+`ThreeNodeClusterIT` 8, `TensorParallelClusterIT` 5, `UnsupportedArchitectureClusterIT` 1), no node
+JVM left behind. Quick parity check on the rebuilt jar (`target/perf-compare/20260927T080434Z/`,
+same command as item 2): `failures=0`, all five files at 128/128 prompt tokens, deviation 0, and 64/64
+generated. One repetition with one warmup is not a throughput reading, but for the record: Juno tg
+tinyllama 57.71, mistral-7b 18.66, Phi-3.5-mini 22.60, qwen2.5-3b 34.36 t/s, against the reference
+sweep's 56.82, 19.98, 24.42 and 27.83 (qwen2.5-3b rep range there 25.62 to 29.44). The qwen2.5-3b
+reading sits above that range although the change does the same arithmetic per pair; item 4's
+three-repetition re-baseline measures it properly and is where it will be explained or retracted.
+(Item 2's parity directory, `20260927T074422Z`, no longer exists: a root `mvn clean` removes
+`target/perf-compare/`. Its figures are the ones recorded in the item 2 section.)
+
+### 2026-09-27 — follow-up item 4: the CPU RoPE angles computed once, and the one re-baseline
+
+Scope: "Open for the owner" item 1 above, placed before step 3 by the owner. A forward-pass change on
+every backend, outside this tier's scope, and **a measurement boundary** (README rule 9).
+
+**What changed.** New `RopeTable` (`node`): per `(headDim, base)`, cosine and sine per position,
+computed with exactly the expressions `LlamaTransformerHandler.rope` used
+(`1.0 / Math.pow(theta, (2.0 * i) / headDim)`, `pos * freq`, `(float) Math.cos`, `(float) Math.sin`),
+filled lazily in blocks of 256 positions up to 32768, each block computed aside and published whole
+through an `AtomicReferenceArray` (no lock on the read path; racing fillers compute identical values),
+tables found through a copy-on-write array scanned without locking. `rope()` keeps its signature and
+reads the table in both layouts; a position at or past 32768 is computed in place by the old body.
+Covered: every caller of `LlamaTransformerHandler.rope` (Llama-family and Qwen2 inference, non-YaRN
+Qwen3, the LoRA forward, the CPU lane of the chain microbench). Not taken (both optional in the plan
+and not measured to matter): the YaRN path and `LoraTrainingMath.ropeBackward`.
+
+**Tests first.** `RopeTableTest` (6) did not compile before `RopeTable` existed. It checks the adjacent
+and split-half rotations bit for bit against verbatim copies of the pre-table code for 200 positions
+in `[0, 32767]` (including 0, 1 and 32767) at every combination of head size 64/96/128 and base
+10000/500000/1e6; positions 32768, 32769 and 100000 (computed in place, still identical); one table
+per `(headDim, base)`; eight threads racing on cold blocks with zero mismatches; and fewer than 20000
+bytes allocated by 20000 warm rotations. The allocation case was shown to fail with a planted
+per-call allocation, then the plant was removed. `RopeKernelParityTest` still reads `max|diff| = 0`
+against the CPU rotation.
+
+**Verification.** `mvn -o clean install -DskipTests`, then the 11-module `mvn -o test`: BUILD SUCCESS in
+24:47 min, **1779 tests, 0 failures, 0 errors, 49 skipped** (`node` 664/44, item 3's 658 plus these 6).
+
+**RoPE share of the GPU forward pass, before and after** (`juno.Rope` over `juno.ForwardPass`,
+repetition 2, default lane; before from `20260925T172231Z`, after from `20260927T091155Z`):
+
+| Model | Lane | RoPE before | RoPE after | Share before | Share after |
+|---|---|---:|---:|---:|---:|
+| tinyllama | generation, 64 tokens | 111.95 ms | 4.07 ms | 9.9% | 0.5% |
+| mistral-7b | generation, 64 tokens | 349.34 ms | 10.08 ms | 10.8% | 0.4% |
+| qwen2.5-3b | generation, 64 tokens | 192.23 ms | 5.75 ms | 8.0% | 0.3% |
+| tinyllama | prefill, 128 tokens | 216.07 ms | 6.57 ms | 23.5% | 0.9% |
+| qwen2.5-3b | prefill, 128 tokens | 343.51 ms | 9.16 ms | 18.1% | 0.6% |
+| mistral-7b | prefill, 128 tokens | 682.16 ms | 19.24 ms | 23.4% | 0.9% |
+
+Phi-3.5-mini emits no `juno.Rope` span in either sweep (its rotation is `Phi3Rope`), as before.
+
+**Perf gate: `compare-lora.sh --gpu --reps 3 --baseline cc94c53`** (`docs/perf-compare/20260927T090436Z-lora/`;
+the harness builds the baseline in a temporary detached `git worktree`, removed afterwards; no commit,
+branch or index change): train 41000 ms against 44000 ms, **ratio 0.932** (7% faster; the gate
+`train >= 0.95x` in speed terms passes), playback wall-clock **1.075x** (gate `>= 0.80x`), recall
+true. Against the last published baseline (`20260924T201548Z-lora`, 45000 ms, 12.15 t/s): 0.911 and
+1.083. The baseline ref is `cc94c53` rather than that run's `1f90b68` so the comparison isolates this
+session's working tree.
+
+**The re-baseline** (`compare-llama-cpp.sh --gpu` and `--cpu`, `--reps 3 --juno-reps 3
+--juno-warmup 2`, published). GPU `20260927T091155Z`, `failures=0`, every row 128/128 and 64/64. Four
+rows spread over 15% of their median and were re-run in `20260927T093054Z` (tinyllama, qwen2.5-3b,
+Phi-3.5-mini, both lanes): Phi-3.5-mini came back clean, three rows still exceed the rule there
+(qwen2.5-3b default generation 23%; one repetition four to five times faster than the other two in
+the tinyllama default and qwen2.5-3b tuned prefill lanes - 898 and then 819 t/s against about 168 on
+the same tinyllama lane in both runs). The medians agree between the two runs (tinyllama pp 170.5 and
+168.2, tg 70.1 and 71.5; qwen2.5-3b tg 30.8 and 31.1; qwen2.5-3b tuned pp 86.8 and 79.6) and the
+median of three is robust to one such reading, so the rows are published with the spread stated
+rather than re-run a third time; **the recurring fast prefill repetition is a harness question left
+for the owner**. CPU `20260927T094414Z`, `failures=0`, every row within 1% spread.
+
+| Model | GPU tg before -> after (t/s) | GPU pp before -> after | GPU tg ratio after | CPU tg before -> after | CPU tg ratio after |
+|---|---|---|---:|---|---:|
+| tinyllama | 56.82 -> 71.54 | 138.3 -> 168.2 | 0.375x | 3.42 -> 3.39 | 0.135x |
+| qwen2.5-3b | 27.83 -> 31.08 | 66.1 -> 80.4 | 0.445x | 1.15 -> 1.14 | 0.094x |
+| Phi-3.5-mini | 24.42 -> 24.57 | 43.2 -> 45.5 | 0.415x | 0.94 -> 0.93 | 0.095x |
+| mistral-7b | 19.98 -> 23.40 | 43.9 -> 59.1 | 0.646x | 0.51 -> 0.53 | 0.090x |
+
+(tinyllama, qwen2.5-3b and Phi-3.5-mini GPU from the re-run.) The README's "Program target" table
+has a new column for these readings; the 2026-09-25 column stays. `20260925T172231Z` and
+`20260925T174146Z` are marked superseded-as-reference in their INDEX files and in
+`docs/perf-compare/README.md`, where neither had been listed until now. The qwen2.5-3b generation
+reading item 3's single repetition flagged (34.4 t/s) does not reproduce as a three-repetition median
+(31.08, within 1% of the first sweep's 30.83), so it was noise, not an effect of the layout change.
+
+**The chain microbench re-read** (`docs/perf-compare/20260927T115107Z-tier01-resident-chain/`): the CPU
+chain is 0.0049 ms at decode (from 0.0670) and 2.13 ms at prefill (from 34.06). Against it the
+resident chain is **0.26x at decode width and 1.00x at prefill width** (median 1.002x, lanes' min-max
+overlapping: parity within noise), and **0.58 / 0.55 of op-at-a-time**. Read against the Threshold
+block: decode-width `>= 1.0x` **missed**; prefill-width `>= 1.0x` met only at parity; chaining
+`<= 0.7x` **met** at both widths. Per this tier's contingency, a decode-width miss with the
+prefill-width figure at or above 1.0x is **a partial result recorded and handed to
+[Tier 01B](TIER-01B-prefill-throughput.md) item 2, not a downgrade**. The case for residency now rests
+on the device-only lane (13.6x the CPU at prefill, 0.45x at decode): a region pays only when it spans
+enough operations to amortise its one entry and exit, which is what step 3a is built to test.
+
+### 2026-09-27 — implementation step 3a (follow-up item 5): the decode region wired, and step 4
+
+Scope: this tier's own step 3 as the owner re-scoped it on 2026-09-27 - "3a", one residency region
+per layer at decode covering norm, the Q/K/V projection and RoPE - then step 4's measurement. Step 3b
+(KV append and attention inside the region) was **not** taken: the plan assigns attention residency to
+Tier 02 and this prompt says to ask before taking it into Tier 01. It is the owner's call.
+
+**What was built.**
+- `ResidentQkvPath` (new, `node`): per layer, upload the residual row, `CudaRmsNorm.normalizeResident`
+  with the layer's norm weight uploaded once at load, `Q4KMmqKernel.quantizeX` then `launchPacked` for
+  W_q, W_k and W_v on the chain's stream with a **chain-owned** Q8_1 scratch
+  (`ResidentChain.allocateScratch`, so no kernel on another stream can overwrite it mid-use),
+  `CudaRope.applyResident` on q and k, and `ResidentActivation.materializeRows` for q, k and v with one
+  wait. `unsupportedReason` names what it cannot run for a model (non-CUDA; split-half RoPE; Q/K/V
+  biases; query width different from hidden size); `eligible(li)` is false for a layer without all
+  three K-quant projections on the device. Issued under the context's serialization lock, as the
+  matrix-vector path's work is.
+- `LlamaTransformerHandler`: builds it at load when `--gpu-residency` is requested, after the device
+  uploads; `transformerLayer` (single-sequence decode) takes q, k and v from the region when the
+  layer is eligible, and otherwise from `normProjectRope`, which is the previous code moved into a
+  method unchanged. Prefill windows and batched decode (`transformerLayerBatch`) are not wired, which
+  the activation log line states.
+- `GpuResidencyOptions` (new, public): `--gpu-residency on|off|auto` / `JUNO_GPU_RESIDENCY`, default
+  **off**; `announceUnsupported` logs once per surface; `consoleNotice` prints a console warning at
+  startup when the launch cannot use the region, because the console front end turns library logging
+  off unless `--verbose` (found in this pass: without it, every declined surface would have been a
+  silent no-op to a normal console or API user). Surfaces that decline: the CPU backend, `qwen2` /
+  `qwen2.5` (split-half, biases), `phi2`, `phi3`, `qwen3`, `qwen3moe` (other handlers,
+  `ForwardPassHandlerLoader`), LoRA training and `--lora-play` (`LoraTrainingHandlerFactory`). ROCm:
+  `unsupportedReason` declines any non-CUDA context - **NEEDS-AMD-HARDWARE** to exercise.
+- CLI: `ConsoleMain --gpu-residency` (validated at parse time), `scripts/run.sh` `local` and `cluster`,
+  `ClusterHarness` forwards the property to forked nodes, `compare-llama-cpp.sh --gpu-residency`
+  pass-through (help text, JSON metadata).
+
+**A per-thread design that would have leaked, caught by the smoke test.** The first version kept one
+device region per calling thread (`ThreadLocal`), as the plan text suggested. The request scheduler
+starts **one new virtual thread per request** (`RequestScheduler`: `Thread.ofVirtual().name("gen-" +
+requestId)`), so every request would have opened fresh regions on every in-process node and never
+freed the old ones. The smoke test showed it (about 1 MiB more per request with the region on than
+off); `ResidentQkvPathTest.shortLivedThreadsDoNotAccumulateRegions` then failed on it (51 regions
+after 50 short-lived threads) before the fix: device regions now come from a pool bounded by
+concurrent calls, and only the small host result arrays are per thread.
+
+**Pre-existing, found by the same test, not fixed (the owner's to place).** With the region **off**,
+the server's GPU memory grows on every request: about 23 MiB per request on tinyllama and 114 MiB on
+mistral-7b in local mode (`nvidia-smi`, per process). The cause is the same pattern: `CudaMatVec`
+keeps its device scratch - FP32/FP16 staging, the Q4_K dequant scratch, and a CUDA stream - in
+`ThreadLocal`s, and each request runs on a new thread, so each request allocates a fresh set that is
+never released. On an 8 GiB card that bounds how many requests a mistral-7b server can serve before
+device memory runs out. It changes `CudaMatVec`, a hot path, so it needs its own tests and perf gate;
+it is recorded here rather than fixed in this pass.
+
+**Tests first.**
+- `GpuResidencyOptionsTest` (6), `ResidentQkvPathTest` (8), `LlamaTransformerHandlerGpuResidencyTest`
+  (2) did not compile before the classes existed.
+- `ResidentQkvPathTest` pins the region **bit for bit** to the GPU op-at-a-time path (round-trip GPU
+  norm, `sgemvSameX` over the same K-quant matrices, CPU rotation) at positions 0, 1, 17, 511 and 30000,
+  and across three concurrent threads; checks the input is never written; declines a layer without
+  device projections; allocates no device memory per call; returns device memory across 300
+  create-run-close cycles (bound 4 MB: a deliberately planted leak of every region measured 48 MB over
+  300 cycles, while the leak-free reading moves by at most 256 KB either way, not with the cycle count;
+  the planted leak made the test fail, then was removed); and pools regions across short-lived threads.
+- `LlamaTransformerHandlerGpuResidencyTest` on the real tinyllama file with a CUDA backend: the region
+  active on 22 of 22 layers, **the same greedy token at all 24 decode positions**, largest logit
+  difference **0.237** against the flag-off run (bound 0.5). Not bit-identical, and not expected to
+  be: the handler's default decode normalizes on the CPU (`rmsNormGpu` is deliberately null), so the
+  GPU norm's summation order moves a Q8_1 rounding of the projection input, compounded over 22 layers.
+  On qwen2.5-3b the flag declines (split-half) and decode runs as before.
+
+**Live, smoke and cluster checks.**
+- `ModelLiveRunnerIT` with `JUNO_GPU_RESIDENCY=on` (forked nodes inherit it): **tinyllama passes**,
+  pipeline and tensor. **mistral-7b fails at tensor-parallel shard loading** ("Tensor-parallel shard
+  loading failed: UNKNOWN: Application error processing RPC") - and **fails identically with the flag
+  unset**, so it is pre-existing: tensor mode currently loads the full model on each of three nodes
+  (`TensorShardContext`: "geometry only"), three copies of a 4 GB model on an 8 GiB card. Separately,
+  **the documented command `mvn verify -pl juno-master -Pintegration -DMODELS=...` runs no test at
+  all**: the profile's empty `<excludes />` does not clear the default execution's exclusion of
+  `ModelLiveRunnerIT` (Maven merges the element), so failsafe runs nothing and reports BUILD SUCCESS.
+  Adding `-Dit.test=ModelLiveRunnerIT` makes it run. Pre-existing; not fixed here.
+- `scripts/performance-tests/smoke-gpu-residency.sh` (new; the plan's name
+  `smoke-tier01-gpu-residency.sh` would put a tier number into `docs/howto.md`, which `CLAUDE.md`
+  forbids, so it was renamed). Final run on the final build
+  (`target/gpu-residency-smoke/20260927T135113Z/`, 4 requests per mode, 32 generated tokens, local
+  mode with three in-process nodes, idle device): **failures=0**.
+
+  | Model | Region | Greedy output on vs off | GPU MiB after requests 1-4, off / on | Growth 2..4, on vs off |
+  |---|---|---|---|---|
+  | tinyllama | active; the node the smoke quotes: 8 of its 8 layers (22 of 22 in the single-handler test) | identical | 936 960 984 1006 / 936 960 984 1006 | 46 vs 46 |
+  | mistral-7b | active; the node the smoke quotes: 11 of its 11 layers | identical | 4602 4716 4832 4946 / 4604 4718 4832 4946 | 228 vs 230 |
+  | llama-1-30b | active on 20, 3 and 1 layers of the three nodes' 20 each (read from the logs of the first run of this smoke), the rest not on the device | identical | 7726 7762 7762 7774 / 7680 7758 7758 7764 | 6 vs 12 |
+
+  The llama-1-30b row is the per-layer fallback working: the file does not fit the card, so the GPU
+  layer policy places some layers on the device, the region runs on exactly those, and the host path
+  runs the others, with identical greedy output. The growth column compares from the second request,
+  after first-use buffers are sized and, at the card's capacity, placement has settled; the growth
+  itself is the pre-existing per-request leak described above, the same with the region on or off.
+  (The run directory under `target/` was removed by the root `mvn clean` of the verification build
+  that followed; the figures above are the script's own summary output, kept in this session's
+  record.) Cluster, tinyllama, region on: pipeline and tensor both answer with **exactly local mode's output**
+  (activations cross the gRPC boundary as host arrays; nothing device-resident leaves a node), and no
+  node JVM is left after either.
+- Console notice verified by launch: `./juno local` on Phi-3.5-mini with `--gpu-residency on`, and
+  `./juno lora` with `JUNO_GPU_RESIDENCY=on`, each print one yellow warning naming why the region does
+  not run there; tinyllama prints none.
+
+**Step 4 - measurement.** GPU sweep with `--gpu-residency on`, `--reps 3 --juno-reps 3
+--juno-warmup 2`, published as `docs/perf-compare/20260927T131355Z/`, `failures=0`, every row 128/128 and
+64/64; the tinyllama tuned (43%) and mistral-7b default (21%) rows spread over 15% and were re-run in
+`20260927T133246Z/` (4% and 2%). Against the item 4 reference:
+
+| Model | Region | tg reference | tg with region | Ratio | Threshold `>= 0.95x` |
+|---|---|---:|---:|---:|---|
+| tinyllama | active | 71.54 | 75.38 | **1.054** | pass |
+| tinyllama tuned | active | 72.05 | 74.88 | 1.039 | pass |
+| mistral-7b | active | 23.40 | 24.24 | **1.036** | pass |
+| mistral-7b tuned | active | 23.11 | 23.70 | 1.025 | pass (first run; its re-run spread 19%) |
+| qwen2.5-3b | declined | 31.08 | 30.77 | 0.990 | pass |
+| Phi-3.5-mini | declined | 24.57 | 24.43 | 0.994 | pass |
+
+JFR agrees on the mechanism: with the region on, decode emits no `juno.Rope` span, half as many
+`juno.RmsNorm` spans (1408 against 2816 on tinyllama) and one `juno.MatVec` fewer per layer (4443
+against 5851). The reference was taken earlier the same day rather than interleaved, so a few percent
+of the difference could be host drift; the gate does not depend on it.
+The chain microbench, re-run on the final code (unpublished; the primitive's code paths are those of
+`20260927T115107Z-tier01-resident-chain`, with two additive methods): decode 0.26x the CPU chain and
+0.52 of op-at-a-time, prefill 0.995x and 0.55 - the published reading holds, prefill at parity within
+noise (1.002x there, 0.995x here). Device memory not returned: 0 bytes.
+`compare-lora.sh --gpu --reps 3 --baseline cc94c53` with `JUNO_GPU_RESIDENCY=on`
+(`docs/perf-compare/20260927T134122Z-lora/`): train **0.932** of the baseline's time, playback
+**1.092x**, recall true - the LoRA handlers decline the region, and the console now says so.
+
+**Verification.** `mvn -o clean install -DskipTests`, then the 11-module `mvn -o test`: BUILD SUCCESS
+in 25:46 min, **1795 tests, 0 failures, 0 errors, 49 skipped** (`registry` 93, `lora` 116, `kvcache`
+78, `health` 23, `node` 680/44, `tokenizer` 109/2, `sampler` 87, `coordinator` 342/1, `vision` 95,
+`metrics` 61, `juno-player` 111/2): item 4's 1779 plus the 16 residency cases. `mvn -o clean verify
+-pl juno-master`: BUILD SUCCESS, **20 tests, 0 failures** (`InProcessClusterIT` 6,
+`ThreeNodeClusterIT` 8, `TensorParallelClusterIT` 5, `UnsupportedArchitectureClusterIT` 1), no node
+JVM left.
+
+**Open for the owner - decisions this pass surfaced and did not take.**
+
+1. *Step 3b* - KV append and attention inside the region, downloading only the attention output. The
+   bigger decode lever (the attention path's four synchronous uploads and the KV mirror's two copies
+   per layer are still there); assigned to Tier 02 by the plan, so not taken without asking.
+   *Decided 2026-09-27: not in Tier 01; Tier 02 owns it (its scope item 4).*
+2. *The primitive-threshold box.* Decode width `>= 1.0x`: missed (0.26x against the cheaper CPU
+   chain). Prefill width: parity within noise (1.002x, 0.995x). Chaining `<= 0.7x`: met at both widths.
+   The contingency classes this as a partial result for Tier 01B item 2, not a downgrade; the wired
+   region nonetheless makes decode 3.6% to 5.4% faster end to end, because it spans a projection as
+   well. Ticking the box on that reading, or leaving it open, is the owner's call.
+   *Decided 2026-09-27: ticked under the contingency, a partial result handed to Tier 01B item 2, not a
+   downgrade.*
+3. *`CudaGraphSession`* stays explained and not wired (nothing measured it worthwhile);
+   `CudaRmsNorm` is now live on the resident path behind the flag. The "no longer dormant scaffolding"
+   box turns on whether that satisfies it.
+   *Decided 2026-09-27: re-scoped - `CudaGraphSession` moves to Tier 02 (scope item 5) with a
+   wire-or-delete decision rule; the box is ticked on that Scope amendment.*
+4. *Default of `--gpu-residency`.* Off, as planned until measured. Measured now: +3.6% to +5.4% where
+   it runs, neutral elsewhere, identical greedy output on three models. Whether to make `auto` the
+   default is a product decision.
+   *Decided 2026-09-27: keep `off`; re-decided after 3b lands, on the larger re-measured gain (Tier 02
+   scope item 6).*
+5. *Pre-existing, found this pass, not fixed:* the per-request device-memory growth from
+   `CudaMatVec`'s thread-local scratch under one-new-thread-per-request scheduling (about 114 MiB per
+   request on mistral-7b); mistral-7b's tensor-parallel start failing on an 8 GiB card; the documented
+   `-Pintegration` command running no test; the recurring fast prefill repetition in the comparison
+   harness (item 4). Each needs a home.
+   *Decided 2026-09-27: the memory growth is fixed in this tier as an out-of-tier change; the
+   `-Pintegration` profile is fixed now; the tensor-parallel start failure gets a clearer error now and
+   is recorded in Tier 09; the fast prefill repetition is handed to Tier 01B (implementation step 0).*
+
+### 2026-09-27 - owner decisions on the step 3a pass
+
+The owner decided the five items the step 3a pass left open:
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Step 3b (KV append + attention inside the region) | **Not in Tier 01. Tier 02 owns it.** |
+| 2 | Primitive-threshold exit box (decode width missed, prefill at parity, chaining met) | **Tick it**, with the contingency reading recorded: a partial result handed to Tier 01B item 2, not a downgrade. |
+| 3 | "No longer dormant scaffolding" box | Owner delegated the choice between (a) "tick, CudaGraphSession explained-not-wired" and (c) "re-scope". **Decided: (c), re-scope to Tier 02.** |
+| 4 | `--gpu-residency` default | **Keep `off`.** Re-decide after 3b lands, on the larger re-measured gain. |
+| 5 | The four pre-existing problems | Memory leak fixed now; `-Pintegration` fixed now; tensor-parallel start failure recorded in Tier 09 with a clearer error now; fast prefill repetition handed to Tier 01B. |
+
+Why (c) and not (a): the box offers exactly two outcomes - wired live, or the tier marked
+partial-complete - and "explained, not wired" is neither, while decision 2 rules out partial-complete.
+Execution rule 2 accepts "out of scope for this tier" only when the Scope section says so, and Scope item
+2 named `CudaGraphSession`; so the Scope is amended (see In scope item 2 and Out of scope) and the class
+moves to Tier 02, where a captured graph can actually pay (attention inside the region multiplies the
+launches per wait). It is not deleted: Tier 02's decision rule decides wire-or-delete on a measurement.
+
+### 2026-09-27 - close-out: the owner's decisions carried out
+
+Scope: the five owner decisions above. Task order as the owner set it: plan-tree records, the
+per-request device-memory fix, the `-Pintegration` profile, the tensor-parallel start error, the fast
+prefill repetition handed to Tier 01B, then this close-out. Every code change here is outside this
+tier's scope and is in the "Out-of-tier changes" table.
+
+**Plan tree.** This file's Scope (item 2 note, three Out-of-scope bullets), both remaining exit boxes,
+and the "Open for the owner" list of the step 3a section; [Tier 02](TIER-02-attention-long-context.md)
+scope items 4 to 6 with implementation step 6, tests, thresholds and exit boxes;
+[Tier 01B](TIER-01B-prefill-throughput.md) item 2's hand-off note and step 0's third item with its test
+bullet; [Tier 09](TIER-09-tensor-parallelism-multi-gpu.md) scope item 1's known-limitation note.
+
+**Per-request device memory.** The prompt named four `ThreadLocal`s in `CudaMatVec` and three in
+`RocmMatVec`; `CudaGqaAttention.SCRATCH` (on by default through `--gpu-attention`) and
+`CudaRmsNorm.SCRATCH` held device memory the same way. Design, confirmed by reading every use: all of
+`CudaMatVec`'s scratch and stream use is inside `GpuContext.cublasSerializationLock()`, and each call
+synchronizes its stream before leaving it, so the lock alone makes one scratch set per instance safe -
+no pool needed there. The attention path and the round-trip norm run outside that lock (synchronous
+copies on the default stream), so concurrent callers need separate entries: `DeviceScratchPool`, sized
+by concurrent callers. `DeviceScratchBudget` reserves one dequantized matrix per backend; per-thread
+scratch broke that assumption with every new thread and the instance-owned scratch restores it.
+Tests first, each shown failing on the old code for the right reason: `CudaMatVecScratchLifetimeTest`
+(scratch grew about 0.58 MB per thread, 2.9 to 31.9 MB over 50 threads; device-wide 44,040,192 bytes
+over 60 threads) and `CudaAttentionNormScratchLifetimeTest` (+13.7 KB attention and +57 KB norm per
+thread; device-wide 79,691,776 bytes over 60 threads, once the shapes were enlarged so the device-wide
+reading could resolve it). Leak-free drift 0 in most runs, at most 2.4 MiB either way; bound 12 MiB.
+Smoke, 8 requests, local mode, three in-process nodes, idle device: tinyllama 938 MiB after every
+request with the region off and on (before: 936 -> 1006 over 4), mistral-7b 4604 off / 4608 on (before:
+4602 -> 4946), cluster pipeline and tensor pass. llama-1-30b, which fills the card, settles and holds
+(16 requests: off 7768 from request 7 with one 12 MiB step at 16, on 7784 from request 4); its first
+8-request run failed only the smoke's old "on grows no more than off from request 2" comparison while
+the two modes settled at different paces, so the check was tightened as the prompt allowed: over the
+second half of the requests each mode may grow at most 8 MiB per request and on no more than off
+(`docs/howto.md` says so). Replayed on the recorded series it passes every post-fix run and fails the
+pre-fix tinyllama (46 MiB against 16) and mistral-7b (230 against 16) series.
+
+**The perf gate caught a regression in the first version, and its cause.** The first published sweep
+(`20260927T214616Z`, now marked superseded) read GPU prefill 7% to 9% below the reference on tinyllama,
+qwen2.5-3b and mistral-7b with generation unchanged. A same-hour A/B against a build without the change
+confirmed it (prefill 0.84x to 0.93x); a bisect build with only `CudaMatVec` reverted was as fast as
+the baseline; per-phase timing inside `sgemmQ4KBatchedGemm` put the time in the host loop that packs
+the activation window to FP16 (17 to 38 ms per matmul instead of about 1 ms, with the upload call
+itself at 0.1 ms), and the JIT log shows that method compiled and made not entrant on uncommon traps
+repeatedly, in both builds. The single-thread microbenchmark never reproduced it. The fix does not
+depend on which branch trips the trap: the loop is now `packFp16Rows`, compiled on its own, shared by
+the three batched paths. A/B after it, same hour: prefill tinyllama 181 -> 229 t/s, qwen2.5-3b 83 -> 90,
+mistral-7b 61 -> 65 - above the old code, which had been paying the same cost intermittently. The
+exact trigger of the traps is inferred, not proven; the extracted loop removes the sensitivity either
+way.
+
+**Gates on the final build.** Quick parity check: 128/128 and 64/64 on every sweep model,
+`failures=0`. GPU sweep `20260927T232837Z`, with the `qwen2.5-3b` tuned and both `Phi-3.5-mini` rows
+from the re-run `20260927T234659Z`: every row passes `>= 0.95x`; pp 1.10x to 1.34x on tinyllama,
+qwen2.5-3b and mistral-7b, 1.02x to 1.04x on Phi-3.5-mini; tg 0.962x (tinyllama, tight spread; decode
+does not touch the changed loop) to 1.021x. The re-run's `qwen2.5-3b` default row spread 23.84 to 31.88
+t/s in generation although its first-run row was clean; recorded, not re-run a third time.
+`compare-lora.sh --gpu --reps 3 --baseline cc94c53` (`20260927T235655Z-lora`; the harness created and
+removed its temporary detached `git worktree`, as last session): train 0.909 of the baseline's time,
+playback 1.082x. A measurement boundary for GPU prefill; see the table row.
+
+**`-Pintegration`.** Before: `mvn -o clean verify -pl juno-master -Pintegration -DMODELS=<tinyllama>`
+printed BUILD SUCCESS and no `Running` line. After `combine.self="override"`: `Running
+cab.ml.juno.master.ModelLiveRunnerIT`, `Tests run: 1, Failures: 0`. The default verify still runs
+exactly 20 (6 + 1 + 8 + 5). The documented command in `CLAUDE.md` works verbatim; `CLAUDE.md` is
+unchanged. The `gpu` profile had the same defect; fixed, it now runs `GpuForwardPassIT` for the first
+time and **2 of its 4 fail** on an absolute 0.03 tolerance against GPU values around 134 (worst 0.29,
+about 0.2%): a stale tolerance for today's FP16 and K-quant paths, not introduced here. **Owner
+decision 2026-09-27: keep the profile fix and record the failing test as open** - not assigned to a
+tier yet.
+
+**Tensor-parallel start error.** Verbose node logs showed the real cause: each forked node dies with
+`java.lang.OutOfMemoryError: Java heap space` in `GgufReader.tensorRaw` while constructing
+`LlamaTransformerHandler` (forked nodes get `-Xmx4g`), an `Error` that `loadShard`'s `catch (Exception)`
+did not see, so gRPC turned it into `UNKNOWN`. Tests first: the node-side case failed with exactly
+`UNKNOWN: Application error processing RPC`, the client-side one because the message named no node.
+Now `ModelLiveRunnerIT` on mistral-7b fails with: "Tensor-parallel node 0 did not load its shard: Model
+load failed on node node-1 (layers 0-32, model mistral-7b-instruct-v0.1-q4_k_m.gguf):
+java.lang.OutOfMemoryError: Java heap space" - the expected outcome until Tier 09.
+
+**Verification** (final build, `mvn -o clean install -DskipTests` first). The 11-module `mvn -o test`:
+BUILD SUCCESS in 25:34 min, **1806 tests, 0 failures, 0 errors, 49 skipped** (`registry` 93, `lora`
+116, `kvcache` 78, `health` 23, `node` 690/44, `tokenizer` 109/2, `sampler` 87, `coordinator` 342/1,
+`vision` 95, `metrics` 61, `juno-player` 112/2): the hand-off's 1795 plus this pass's 11 (10 `node`, 1
+`juno-player`), skip count unchanged. The first full run stopped at `metrics` on one failure of
+`JfrMetricsExtractorJdkEventsTest.monitorContentionAndParkTimeAreSummed` ("a 120ms held monitor produced
+no JavaMonitorEnter event"); `metrics` is untouched by this pass, the test passed three isolated re-runs
+and the whole second run, so it is recorded as timing-sensitive rather than fixed. `mvn -o clean verify
+-pl juno-master`: **20 tests, 0 failures** (6 + 1 + 8 + 5). `mvn -o clean verify -pl juno-master
+-Pintegration -DMODELS=<tinyllama>`: `ModelLiveRunnerIT` **1 test, 0 failures**; no node JVM left.
+
+**Housekeeping.** The keepalive subshells leaked by this pass's smoke runs (Tier 01B scope item 5) were
+killed; those left by the previous session's runs were not touched. The A/B builds lived under the
+session scratchpad, not in the tree.
+
 ### Out-of-tier changes (recorded per execution rule 9)
 
-Two commits touching hot-path or launcher behaviour landed while this tier was in progress and
-outside its scope. Neither was in any tier's plan; both are recorded here because the value of this
-plan tree is that it knows what was measured, when, and against which build.
+Three changes touching hot-path, generation or launcher behaviour landed while this tier was in
+progress and outside its scope. None was in any tier's plan; all are recorded here because the value
+of this plan tree is that it knows what was measured, when, and against which build. The third
+shipped inside a commit that was otherwise this tier's own, which is why the pass that made that
+commit did not record it and the next pass did. The rows after those three are the follow-up items
+the owner approved on 2026-09-27 (see the "follow-up item" sections above); they were planned, but
+not as this tier's scope, so they are recorded here as well.
 
 | Commit | What it changed | Measurement boundary? |
 |---|---|---|
 | `1f90b68` | Both launchers (`scripts/run.sh`, `scripts/run.bat`) derive the JVM heap from the model file size instead of a fixed 4 GB, so a large model no longer dies with an `OutOfMemoryError` naming a tensor. `--heap` and `HEAP` still win. | **Yes, for launcher-driven runs only.** `compare-llama-cpp.sh` builds its own `java_args` and does not shell the launcher, so no llama.cpp ratio moved. Every `./juno`-driven measurement did, including `compare-lora.sh` and every smoke script. Do not compare a launcher-driven run taken before this commit against one taken after. |
 | `c91f879` | Retired a device KV mirror by closing it in place rather than unmapping it, so an empty replacement is no longer read as history; gated attention on a written-prefix watermark, per mirror instead of per handler. Touched `DeviceKvCache`, `LlamaTransformerHandler`, `CudaMatVec`, `DeviceScratchBudget`, `Q4KDequantScratch`, with `DeviceKvMirrorWatermarkTest` and `DeviceScratchBudgetTest`. Published three `compare-lora.sh` runs (`docs/perf-compare/20260924T184429Z-lora/`, `20260924T185248Z-lora/`, `20260924T201548Z-lora/`). | **Correctness fix on the GPU attention path; gated and published.** The three runs compare a working tree against its own `HEAD` (`1f90b68`), which is why both columns name the same commit. Later tiers reading those directories should know that is deliberate, not a harness bug. |
+| `cc94c53` (the part that is not the step-1 harness) | Generation now stops on a chat template's role headers and turn markers, by decoded text and by token id: `ChatTurnMarkers` (new, `tokenizer`), `Tokenizer`/`GgufTokenizer.chatTurnTokenIds`, `EosOutputFilter`, `OpenAiAdapter.mergeStopTokenIds`, and `GenerationLoop.resolveSamplingParams`, which merges the turn-marker ids into every request's stop set on all three generation paths; `Phi3TokenizerLiveTest`, `EosOutputFilterTest`, `GenerationLoopEosPieceTest`. CHANGELOG Session 93. It shipped inside the step-1 commit and the step-1 record does not mention it; recorded here in the step-2 pass, the first to find it. | **Not a measurement boundary, checked rather than assumed**: two unpublished harness runs at this HEAD reproduce the reference sweep's parity on all four sweep models - `qwen2.5-3b` and `Phi-3.5-mini`, whose markers are control tokens, and `tinyllama` (both files) and `mistral-7b`, where the risk is the new text-level role-header stop (128/128 prompt tokens, 64/64 generated, `finish_reason: length`). **It opened a gap in `min_tokens`**: `MinTokenFloor` held back only the end-of-sequence id and `Sampler.isStopToken` did not consult the minimum, so a request could end below its `min_tokens` on a turn-marker id or a role header in text. Not seen on the benchmark prompt. **Closed 2026-09-27** by follow-up item 2 (see its section and the row below). |
+| Working tree, 2026-09-27 (follow-up item 1) | `RopePairing`, a pair-layout parameter on `LlamaTransformerHandler.rope` and `Qwen3RopeConfig`, test-only forced-layout loads, `RopePairingTest`, `RopePairingPerplexityLiveTest` with its text and id fixtures. Every architecture still gets `ADJACENT`. | **Diagnosis only; default unchanged; not a measurement boundary.** Every production call resolves to the same arithmetic as before (the adjacent overload delegates to the old body, bit-identical by test). It found that `qwen2` and `qwen3` are served with the wrong layout (see "follow-up item 1"); the fix is item 3. |
+| Working tree, 2026-09-27 (follow-up item 2) | `MinTokenFloor` holds back the vocabulary's turn-marker ids with end-of-sequence, minus the caller's own stops; `EosOutputFilter` does not end below the minimum and emits the held text; `GenerationLoop.minTokenFloor` on all three generation paths; contracts, javadoc, `docs/howto.md`, `docs/performance.md`, harness help; `GenerationLoopMinTokensTurnMarkerTest` and new cases in `MinTokenFloorTest`, `SamplerMinTokensTest`, `EosOutputFilterTest`. | **Not a measurement boundary.** It changes output only for a request with `min_tokens > 0` whose model proposes a turn marker below the minimum; the benchmark prompt never did on any sweep model (checked at `cc94c53`, and re-checked after this change by the quick parity run recorded in the item 2 section). No baseline invalidated. |
+| Working tree, 2026-09-27 (follow-up item 3) | `qwen2`/`qwen2.5` (`LlamaTransformerHandler.ropePairingFor`) and `qwen3`/`qwen3moe` (`Qwen3RopeConfig.PAIRING`) moved to split-half RoPE, forward and LoRA backward, plain and YaRN; `LoraTrainingMath.ropeBackward(..., RopePairing)`; `RopePairingPerplexityLiveTest` as a regression with ceilings; new `RopePairingTest` and `Qwen2LoraTrainableHandlerTest` cases. | **Correctness fix, not a throughput boundary.** Same arithmetic per pair, so no throughput figure moves; generated tokens change on every Qwen model, including `qwen2.5-3b` in the sweep (its generated text in any earlier run is not comparable, its t/s is). Quick parity check after the change: see the item 3 section. |
+| Working tree, 2026-09-27 (follow-up item 4) | `RopeTable`; `LlamaTransformerHandler.rope` (both layouts) reads it; `RopeTableTest`. Bit-identical output. | **Yes - a measurement boundary.** GPU throughput rose 11% to 23% (tg) and 22% to 35% (pp) on tinyllama, qwen2.5-3b and mistral-7b; Phi-3.5-mini and every CPU figure held. **Invalidates as reference**: `20260925T172231Z` (GPU) and `20260925T174146Z` (CPU), superseded by `20260927T091155Z` + `20260927T093054Z` (GPU) and `20260927T094414Z` (CPU); `20260924T201548Z-lora` as the LoRA baseline, superseded by `20260927T090436Z-lora`; `20260927T025430Z-tier01-resident-chain` as the chain's CPU-relative reading, superseded by `20260927T115107Z-tier01-resident-chain` (its op-at-a-time ratio still stands). Do not score across this boundary. |
+| Working tree, 2026-09-27 (owner decision 5: per-request device memory) | `CudaMatVec` and `RocmMatVec` keep their device scratch (FP32/FP16 staging, `Q4KDequantScratch`, pinned host staging) and their stream per **instance** instead of per thread: every use was already under `GpuContext.cublasSerializationLock()` and each call synchronizes its stream before releasing it, so one set serves every caller (`releaseScratch`, `scratchDeviceBytes`). `CudaGqaAttention` (on by default with `--gpu-attention`) and `CudaRmsNorm.normalizeBatch` run outside that lock, so their scratch comes from the new `DeviceScratchPool`, sized by concurrent callers; `LlamaTransformerHandler.releaseGpuResources` closes the attention pool. The batched FP16 pack loop moved into its own method (`packFp16Rows`), found necessary by the perf gate (see the close-out section). Tests: `CudaMatVecScratchLifetimeTest` (5), `CudaAttentionNormScratchLifetimeTest` (4), one `RocmMatVecTest` case (NEEDS-AMD-HARDWARE). | **Yes - a measurement boundary for GPU prefill.** pp rose 10% to 34% on tinyllama, qwen2.5-3b and mistral-7b (the batched K-quant path), 2% to 4% on Phi-3.5-mini; tg within the gate (0.962x to 1.021x); per-request GPU memory flat. **Invalidates as reference**: `20260927T091155Z` + `20260927T093054Z` (GPU), superseded by `20260927T232837Z` + `20260927T234659Z`; `20260927T090436Z-lora` as the LoRA baseline, superseded by `20260927T235655Z-lora` (train 0.909, playback 1.082x). `20260927T214616Z` and `20260927T213908Z-lora` were taken on an intermediate build and are marked superseded. The CPU reference `20260927T094414Z` is untouched (CPU path unchanged). |
+| Working tree, 2026-09-27 (owner decision 5: `-Pintegration`) | `juno-master/pom.xml`: the `integration` and `gpu` profiles' empty `<excludes />` became `<excludes combine.self="override" />`, so they no longer inherit the default execution's exclusion of the very test they exist to run; the profile comment's `-pl integration` corrected to `-pl juno-master`. | **Not a measurement boundary** (build configuration only). The documented `mvn verify -pl juno-master -Pintegration -DMODELS=...` now runs `ModelLiveRunnerIT`; the default verify still runs exactly the 20 stub ITs. Exposed, not fixed: `-Pgpu` now runs `GpuForwardPassIT`, which fails 2 of 4 on an absolute 0.03 tolerance (see "2026-09-27 - close-out" above; the owner decided to record it as open). |
+| Working tree, 2026-09-27 (owner decision 5: tensor-parallel start error) | `EmbeddedNodeServer.loadShard` reports an `Error` during load (not only an `Exception`) as a failed load naming the node, the layers, the model file and the cause, instead of letting it escape as gRPC `UNKNOWN`; a package-private `ShardLoader` seam for the test. `TensorParallelPipelineClient.loadShards` names the node index and address when a node answers with a bare error status. Tests: one `EmbeddedNodeServerLoadFailureTest` case, one `TensorParallelPipelineClientTest` case. | **Not a measurement boundary** (load-failure reporting only). Placement and pre-flight are unchanged; the underlying limitation is Tier 09's (see its scope item 1 note). |
 
 Two consequences for later tiers, neither of which changes this tier's scope:
 
@@ -1320,12 +2170,21 @@ Two consequences for later tiers, neither of which changes this tier's scope:
       calibrated word count. Tests first: `BpePreTokenizerTest` (12 cases) did not compile against the
       original tree, and `PreTokenizerParityLiveTest` failed 3 of 7 on it — the two whitespace cases
       and the digit-grouping case — before the fix.*
-- [ ] Residency primitive implemented, unit-tested, and documented (what it is, where the
+- [x] Residency primitive implemented, unit-tested, and documented (what it is, where the
       materialization boundary is, which ops participate).
-      *Not started. Note for whoever picks this up: `DeviceActivationBatch` already exists in
-      `node` and is **not** this — it is the LoRA-training host-packing helper behind `GpuBlasOps`,
-      host `float[]` in and host `float[]` out. The residency primitive needs a different name.*
-- [ ] RMSNorm + RoPE measured *faster* than CPU scalar (or at minimum, no longer the ~7x-slower
+      *Landed 2026-09-27 as `ResidentChain` (the region: one stream and the buffers on it; closing
+      it frees them all) and `ResidentActivation` (the buffer; host and device meet only at `upload`
+      and `materialize`), with RMS norm (`CudaRmsNorm.normalizeResident`) and RoPE (`CudaRope`, over
+      the new `rope.cu` kernel) as the operations that run on it. `ResidentActivationTest` (8 cases)
+      asserts the two-operation chain against the scalar path, that host arrays are never written
+      through, and an exact return of device memory per allocate-and-close cycle, together with the
+      same query seeing the allocation, so the no-leak check can fail; its upload-race case was shown
+      to fail without the guard it tests. `RopeKernelParityTest` (6) is bit-identical to the CPU
+      rotation; one new `CudaRmsNormTest` case pins the resident path to the round-trip path bit for
+      bit. `node` is 642 tests, 0 failures, 41 skipped (620 plus these 22, skip count unchanged).
+      Documented in `docs/agent-arch.txt`. As this box's earlier note warned, `DeviceActivationBatch`
+      is unrelated. Nothing is wired into a handler yet; that is implementation step 3.*
+- [x] RMSNorm + RoPE measured *faster* than CPU scalar (or at minimum, no longer the ~7x-slower
       finding from Phase B) with residency, on real GTX 1080 hardware, **at both decode width (batch 1)
       and prefill width (batch 512), reported separately**, published in `docs/perf-compare/`. **Contingency, decided before Tiers 02/06/07 start**: this project has
       already shelved three closely-related bets on grounds that turned out to be exactly this kind
@@ -1350,20 +2209,56 @@ Two consequences for later tiers, neither of which changes this tier's scope:
       claims this tier was built on. The box stays unticked because it asks for the residency result,
       which needs implementation steps 2 to 5. The `<= 0.7x` chaining threshold in this tier's
       Threshold block cannot be read until `RopeKernel` exists, since there is no second GPU op to
-      chain today; its op-at-a-time baseline is taken in the same pass that builds it.* **Tier 01B is in that set, and is its most affected member.** An earlier draft
+      chain today; its op-at-a-time baseline is taken in the same pass that builds it.*
+      *Primitive-level reading taken 2026-09-27 and published
+      (`docs/perf-compare/20260927T025430Z-tier01-resident-chain/`), the op-at-a-time baseline with
+      it: the resident chain is 3.65x the scalar CPU chain at decode width and 15.86x at prefill
+      width, and costs 0.51 and 0.55 of op-at-a-time, so every number in the Threshold block that can
+      be read before wiring passes. The box stays unticked for two reasons. Implementation step 4 is
+      where this tier re-reads it, on the wired path and beside the end-to-end gate. And the
+      decode-width `>= 1.0x` leans on the scalar RoPE recomputing its angles on every call - about
+      95% of the CPU chain - so it would probably not survive that CPU cost being removed, while the
+      chaining result, which isolates residency, would. See "Open for the owner" in the execution
+      record: whether that CPU cost is removed before step 3 is the owner's call, because it moves
+      the baseline this box is read against.* **Tier 01B is in that set, and is its most affected member.** An earlier draft
       excused it on the grounds that prefill is dominated by large-batch GEMM and host-device staging
       rather than per-op dispatch overhead — but host-device staging is precisely what residency
       removes, and Tier 01B's largest scope item is built on this primitive. If this tier downgrades,
       Tier 01B's item 2 does not proceed on a substitute design; it escalates. Its other items (the
       `--gpu-attention` architecture coverage, the JFR breakdown, chunk sizing, residual attention)
       proceed unchanged on today's GPU path.
-- [ ] No correctness regression: greedy decode output identical (CPU) or within tolerance (GPU)
+      *Re-read 2026-09-27 after the CPU RoPE table and on the wired path
+      (`20260927T115107Z-tier01-resident-chain`, re-run on the final code): decode width 0.26x
+      (missed), prefill width 1.002x / 0.995x (parity within noise), chaining 0.52 to 0.58 and 0.55
+      (met). Per the contingency above, a partial result recorded and handed to Tier 01B item 2, not a
+      downgrade; the wired region itself is 3.6% to 5.4% faster end to end. Left unticked for the
+      owner's reading - see the step 3a section's "Open for the owner".*
+      *Ticked by the owner on 2026-09-27 under the contingency: decode width missed, prefill width at
+      parity, chaining met; a partial result handed to [Tier 01B](TIER-01B-prefill-throughput.md)
+      item 2 (see that tier), not a downgrade. The wired region is +3.6% to +5.4% end to end.*
+- [x] No correctness regression: greedy decode output identical (CPU) or within tolerance (GPU)
       with the new path enabled vs. disabled, across all three cross-surface-listed models.
-- [ ] Cluster (pipeline- and tensor-parallel) smoke tests confirm activations still correctly
+      *2026-09-27, step 3a: greedy output **identical** over 32 generated tokens with the region on and
+      off on tinyllama, mistral-7b and llama-1-30b (the last with the region on only its device
+      layers), `smoke-gpu-residency.sh`, failures=0. Handler level: the same greedy token at all 24
+      positions on tinyllama, largest logit difference 0.237, the GPU norm's summation order; the
+      region itself is bit-identical to the GPU op-at-a-time path. CPU path untouched by construction
+      (the region needs a CUDA backend and declines otherwise).*
+- [x] Cluster (pipeline- and tensor-parallel) smoke tests confirm activations still correctly
       materialize at the process/AllReduce boundary — no stale or device-resident data crossing a
       gRPC call.
-- [ ] LoRA train + playback smoke tests unaffected.
-- [ ] `docs/agent-arch.txt`/`docs/performance.md`/`docs/howto.md` updated (Juno-native language).
+      *2026-09-27: with the region on, tinyllama pipeline and tensor clusters answer with exactly
+      local mode's output and leave no node JVM; `ModelLiveRunnerIT` passes on tinyllama with
+      `JUNO_GPU_RESIDENCY=on`. mistral-7b's tensor-parallel start fails on this 8 GiB card with the flag
+      on and off alike (pre-existing; recorded in the step 3a section).*
+- [x] LoRA train + playback smoke tests unaffected.
+      *2026-09-27: `compare-lora.sh --reps 3` with `JUNO_GPU_RESIDENCY=on`: train 0.932 of the
+      baseline's time, playback 1.092x, recall true (`20260927T134122Z-lora`); the LoRA handlers
+      decline the region and the console says so.*
+- [x] `docs/agent-arch.txt`/`docs/performance.md`/`docs/howto.md` updated (Juno-native language).
+      *2026-09-27: `ResidentQkvPath`, `GpuResidencyOptions`, the chain's scratch and multi-row
+      materialize in `docs/agent-arch.txt`; the flag and the smoke test in `docs/howto.md`; the wired
+      region's measurement in `docs/performance.md`. No competitor names or tier numbers added.*
       *Done for all three passes so far, and unticked only because the box also covers the residency
       work, which has not started. The harness passes added `JfrMetricsCli` to the `metrics` entry in
       `docs/agent-arch.txt`, its invocation to `docs/howto.md`, and both measurement boundaries to
@@ -1375,12 +2270,28 @@ Two consequences for later tiers, neither of which changes this tier's scope:
       neither of which this changes. The step-1 pass added `RmsNormRoundTripMicrobench` to
       `docs/agent-arch.txt`'s `node` entry and the harness's invocation to `docs/howto.md`, and
       recorded the re-measured round-trip cost in `docs/performance.md` next to the Phase B
-      checkpoint whose claim it reproduces.*
-- [ ] `CudaGraphSession`/`CudaRmsNorm` are no longer "dormant scaffolding" — either wired live
+      checkpoint whose claim it reproduces. The step-2 pass added the residency primitive, the
+      materialization boundary and the two participating operations to `docs/agent-arch.txt`
+      (`ResidentChain`, `ResidentActivation`, `KernelParams`, `RopeKernel`, `CudaRope`,
+      `ResidentChainMicrobench`, with `CudaRmsNorm` and `CudaGraphSession` rewritten and their two
+      planning-file pointers removed), the chain harness to `docs/howto.md`, and the chain reading
+      plus the scalar RoPE's measured share of the forward pass to `docs/performance.md`. The box
+      stays unticked until the wired path is documented as well.*
+- [x] `CudaGraphSession`/`CudaRmsNorm` are no longer "dormant scaffolding" — either wired live
       (preferred, if the measurement confirms the fix), or the tier is explicitly marked
       **partial-complete** per the contingency above (not silently marked complete with the
       scaffolding still dormant and unexplained).
-- [ ] Full `mvn test`/`mvn verify -pl juno-master` pass with zero regressions.
+      *Ticked 2026-09-27. `CudaRmsNorm` is wired live: the resident norm in `ResidentQkvPath`, behind
+      `--gpu-residency` (default off by owner decision). `CudaGraphSession` is explicitly re-scoped to
+      [Tier 02](TIER-02-attention-long-context.md) (scope item 5) in this tier's Scope section by the
+      owner (execution rule 2), with a wire-or-delete decision rule there - so neither is dormant and
+      unexplained.*
+- [x] Full `mvn test`/`mvn verify -pl juno-master` pass with zero regressions.
+      *2026-09-27, close-out, final build: 1806 tests, 0 failures, 0 errors, 49 skipped; `juno-master` 20
+      tests, 0 failures; `-Pintegration` on tinyllama 1 test, 0 failures (see the close-out section,
+      including one timing-sensitive `metrics` failure in a first run that did not recur).*
+      *2026-09-27, after step 3a, from a clean install: 1795 tests, 0 failures, 0 errors, 49 skipped;
+      `juno-master` 20 tests, 0 failures.*
       *Both halves pass as of the precondition-7 pass: `mvn test` across all eleven modules is
       **1674 tests, 0 failures, 0 errors, 46 skipped** in 23:32 min, and `mvn -o clean verify -pl
       juno-master` is **20 tests, 0 failures, 0 errors**. The count is 1646 plus 19 new `tokenizer`
@@ -1391,6 +2302,15 @@ Two consequences for later tiers, neither of which changes this tier's scope:
       *Re-run after the step-1 pass: `mvn -o test` is **1697 tests, 0 failures, 0 errors, 46
       skipped** (the same 1674 plus 23 new `node` cases, skip count unchanged) and
       `mvn -o clean verify -pl juno-master` is **20 tests, 0 failures, 0 errors**.*
-- [ ] `CHANGELOG.md` entry added.
-      *Entries covering the passes so far are in (Sessions 88, 90 and 91). Unticked because the box
-      covers the tier, whose residency work has not shipped.*
+      *Re-run after the step-2 pass, from a clean install: `mvn -o test` is **1731 tests, 0 failures,
+      0 errors, 46 skipped** in 22:46 min (1697 plus this pass's 22 `node` cases plus 12 cases from
+      the turn-marker change recorded under Out-of-tier changes) and `mvn -o clean verify -pl
+      juno-master` is **20 tests, 0 failures, 0 errors**. Still unticked: the box covers the wired
+      path, which will need both commands again.*
+- [x] `CHANGELOG.md` entry added.
+      *2026-09-27, close-out: Session 97 (per-request device memory, the prefill packing, the
+      `-Pintegration` profile, the tensor-parallel load error), alongside Sessions 95 and 96.*
+      *2026-09-27: Sessions 95 (the follow-up items) and 96 (the wired region).*
+      *Entries covering the passes so far are in (Sessions 88, 90, 91, 92 and 94; the earlier note
+      listed only the first three, omitting Session 92, the step-1 harness). Unticked because the box
+      covers the tier, whose residency work is not yet wired into a handler.*

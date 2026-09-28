@@ -237,6 +237,35 @@ class RocmMatVecTest extends MatVecBackendContractTest {
         }
     }
 
+    // ── Scratch lifetime ──────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("50 short-lived threads reuse one set of device scratch; release frees it")
+    void short_lived_threads_share_one_scratch() throws Exception {
+        // Not run on the reference host (no AMD device): NEEDS-AMD-HARDWARE.
+        int rows = 512, cols = 512;
+        float[] A = randomMatrix(rows, cols, 300);
+        float[] x = randomVector(cols, 301);
+        RocmMatVec mv = new RocmMatVec(ctx);
+        DeviceFloatMatrix d = DeviceFloatMatrix.upload(ctx, A, rows, cols);
+        try {
+            mv.sgemv(d, x);
+            long oneSet = mv.scratchDeviceBytes();
+            assertThat(oneSet).isPositive();
+            for (int t = 0; t < 50; t++) {
+                Thread th = new Thread(() -> mv.sgemv(d, x));
+                th.start();
+                th.join();
+            }
+            assertThat(mv.scratchDeviceBytes()).isEqualTo(oneSet);
+            mv.releaseScratch();
+            assertThat(mv.scratchDeviceBytes()).isZero();
+        } finally {
+            mv.releaseScratch();
+            d.close();
+        }
+    }
+
     // ── Throughput sanity ─────────────────────────────────────────────────────
 
     @Test

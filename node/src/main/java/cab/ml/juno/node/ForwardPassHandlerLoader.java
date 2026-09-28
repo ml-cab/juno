@@ -212,6 +212,10 @@ public final class ForwardPassHandlerLoader {
 			return LoraTrainingHandlerFactory.create(modelPath, context, adapters, backend);
 		}
 
+		if (DEDICATED_HANDLER_ARCHITECTURES.contains(arch))
+			GpuResidencyOptions.announceUnsupported(log, "the " + arch + " handler",
+					"has no device-resident decode region (only the LLaMA-family handler does)");
+
 		return switch (arch) {
 		case "phi2" -> {
 			log.info("Routing to Phi2TransformerHandler (phi2 parallel-attn+FFN, LayerNorm, GELU)");

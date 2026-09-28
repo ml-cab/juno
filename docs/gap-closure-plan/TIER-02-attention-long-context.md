@@ -22,6 +22,15 @@ sequenced before KV cache work (Tier 03) because context-shifting and sliding-wi
 policy decisions about *what* the KV cache holds, which the Tier 03 paged-KV redesign needs to know
 about before it locks in a block-table layout.
 
+**What Tier 01 handed over (2026-09-27).** Tier 01 shipped the decode residency region through RoPE:
+`ResidentQkvPath` runs, per layer at single-sequence decode, the norm, the Q/K/V projections and RoPE on
+the device with one download of q, k and v, behind `--gpu-residency` (default off), for +3.6% to +5.4%
+decode where it runs. The attention half of that region ("step 3b") is here, not there, by the owner's
+decision: after the region the layer still pays a host FP16 conversion and two synchronous copies for
+the KV append, and four synchronous uploads plus one download for attention, and removing those is
+attention work. `CudaGraphSession` came with it, because a captured graph only pays once a region
+issues many launches per wait. Scope items 4 to 6 below carry all three.
+
 ## Scope
 
 ### In scope
@@ -55,6 +64,31 @@ about before it locks in a block-table layout.
    which some layers attend globally), because the only real windowed file on disk declares the
    patterned form — see implementation step 4 for the exact keys and why a uniform-only mechanism
    would strand Tier 08.
+4. **Attention inside the decode residency region (Tier 01's "step 3b").** Extend `ResidentQkvPath`
+   (Tier 01) so that, per layer at single-sequence decode, k and v are appended to the device KV
+   mirror (`DeviceKvCache`) without a host round trip and attention (`CudaGqaAttention`) reads q from
+   the region, downloading only the attention output. Today, after the region, the layer still pays:
+   FP16 conversion on the host plus two synchronous copies for the KV append, four synchronous uploads
+   plus one download for attention. Keep the CPU KV tensors written (they are the fallback and the
+   source of truth for the mirror); the order and failure handling of `DeviceKvCache.appendToken` and
+   the written-prefix watermark (`c91f879`) must hold. Scope and fallbacks as in Tier 01:
+   single-sequence decode, CUDA, K-quant device projections, adjacent RoPE, no Q/K/V bias; announce
+   (log **and** console, as `GpuResidencyOptions.consoleNotice` does) everything else. Tests:
+   bit-identity of the region against the op-at-a-time path; greedy parity on/off on tinyllama,
+   mistral-7b, llama-1-30b; per-request device memory flat. Files: `ResidentQkvPath`,
+   `GpuResidencyOptions`, `LlamaTransformerHandler`, `DeviceKvCache`, `CudaGqaAttention`; tests
+   `ResidentQkvPathTest`, `LlamaTransformerHandlerGpuResidencyTest`; smoke
+   `scripts/performance-tests/smoke-gpu-residency.sh`.
+5. **`CudaGraphSession` (moved from Tier 01 by the owner on 2026-09-27).** After item 4 lands, measure
+   whether capturing one layer's region as a CUDA graph and replaying it (position read from device
+   memory, or updated per step via an exec-node parameter update) beats plain launches on the GTX 1080
+   at decode width. **Decision rule**: wire it behind the same flag if it saves at least 5% of decode
+   forward-pass time on tinyllama and mistral-7b with greedy output unchanged; otherwise delete
+   `CudaGraphSession` and `CudaGraphSessionTest` and record the measurement. Either way the class stops
+   being dormant in this tier.
+6. **Default of `--gpu-residency`.** After item 4 (and 5 if wired), re-measure the region on vs off on
+   all four sweep models (full `compare-llama-cpp.sh --gpu` sweeps, both published) and put the default
+   to the owner with the numbers; do not change it unasked.
 
 ### Out of scope
 
@@ -138,6 +172,10 @@ about before it locks in a block-table layout.
    requesting any new download.
 5. Run the full cross-surface smoke matrix, including a long-context stress case (loop conversation
    turns until the shift boundary is hit) for both static and continuous schedules.
+6. Scope items 4 to 6, in that order: attention inside the decode residency region, then the
+   `CudaGraphSession` measurement and its wire-or-delete decision, then the two on/off sweeps and the
+   flag default put to the owner. Item 4 is independent of the tiled kernel (item 1) at decode width
+   and may land before it; if it does, item 1 must keep the region's bit-identity test passing.
 
 ## Tests to write/upgrade before implementation
 
@@ -175,6 +213,21 @@ about before it locks in a block-table layout.
 
   Throughput must not regress: tg ratio within 0.95x and pp ratio within 0.95x of the pre-tier
   baseline for every sweep model, median of three runs per the README's noise-floor rule.
+- **Attention inside the residency region (scope item 4)**: extend `ResidentQkvPathTest` with a
+  bit-identity case of the region (now through the KV append and attention) against the op-at-a-time
+  path at several positions and across concurrent threads, a case that the CPU KV tensors and the
+  device mirror's written-prefix watermark agree after every appended token, and the no-retained-device-
+  memory and short-lived-thread pooling cases; extend `LlamaTransformerHandlerGpuResidencyTest` for
+  greedy parity on/off; re-run `scripts/performance-tests/smoke-gpu-residency.sh` on tinyllama,
+  mistral-7b and llama-1-30b (greedy output identical on/off, per-request device memory flat).
+  **Threshold**: end-to-end tg with the region on **>= 1.0x** the region-off run on every model where
+  the region runs, and **>= 0.95x** everywhere.
+- **`CudaGraphSession` (scope item 5)**: a decode-width microbenchmark of one layer's region, graph
+  replay against plain launches, plus greedy parity with replay on. **Threshold**: the decision rule in
+  scope item 5 (at least 5% of decode forward-pass time on tinyllama and mistral-7b with greedy output
+  unchanged, or delete the class and its test).
+- **Flag default (scope item 6)**: two published `compare-llama-cpp.sh --gpu` sweeps on all four sweep
+  models, `--gpu-residency on` and `off`, read side by side.
 
 ## Models needed
 
@@ -201,6 +254,18 @@ why this tier ships against synthetic fixtures and Tier 08 carries the real-mode
       validation on `gemma-4-E4B` is Tier 08's exit criterion, not this tier's — confirm it is listed
       there before closing this one, and confirm the keys this tier chose are the ones that file
       declares (they are, as of the check recorded in implementation step 4).
+- [ ] Attention inside the decode residency region (scope item 4): k and v appended to the device
+      mirror and attention read from the region, one download of the attention output per layer;
+      bit-identical to the op-at-a-time path by test; greedy output identical on/off on tinyllama,
+      mistral-7b and llama-1-30b; per-request device memory flat in `smoke-gpu-residency.sh`.
+      **Threshold**: end-to-end tg with the region on >= 1.0x the region-off run on every model where
+      it runs, and >= 0.95x everywhere.
+- [ ] `CudaGraphSession` decided by measurement (scope item 5): wired behind `--gpu-residency` if it
+      saves at least 5% of decode forward-pass time on tinyllama and mistral-7b with greedy output
+      unchanged, otherwise deleted with `CudaGraphSessionTest` and the measurement recorded. Not
+      dormant either way.
+- [ ] `--gpu-residency` default put to the owner (scope item 6) with the two published on/off sweeps
+      on all four sweep models; changed only on the owner's decision.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, both memory thresholds above met, no throughput regression.
 - [ ] The context-shift opt-in is in `api/src/main/resources/openapi.yaml` and `juno-api.yaml`
