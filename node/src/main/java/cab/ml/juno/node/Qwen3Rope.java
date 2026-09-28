@@ -18,7 +18,7 @@ package cab.ml.juno.node;
 
 /**
  * Qwen3 rotary embeddings — RoPE with optional YaRN scaling
- * ({@code rope.scaling.type=yarn}), port of llama.cpp {@code ggml_rope_ext}, in
+ * ({@code rope.scaling.type=yarn}), port of the reference implementation's {@code rope_ext}, in
  * the pair layout {@link Qwen3RopeConfig#pairing()} names.
  */
 final class Qwen3Rope {

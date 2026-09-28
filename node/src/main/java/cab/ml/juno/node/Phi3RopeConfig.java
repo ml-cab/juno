@@ -19,7 +19,7 @@ package cab.ml.juno.node;
 import java.io.IOException;
 
 /**
- * Phi-3 extended RoPE parameters from GGUF — mirrors llama.cpp {@code ggml_rope_ext}
+ * Phi-3 extended RoPE parameters from GGUF — mirrors the reference implementation's {@code rope_ext}
  * inputs for linear scaling with short/long frequency factor tensors.
  */
 record Phi3RopeConfig(

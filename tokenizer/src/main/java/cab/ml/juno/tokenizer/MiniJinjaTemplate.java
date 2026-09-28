@@ -33,7 +33,7 @@ import java.util.Set;
  * {@code trim_blocks}/{@code lstrip_blocks} treatment even without explicit
  * dashes (one newline eaten after a block tag; same-line leading
  * spaces/tabs eaten before one) — matching the environment HF's
- * {@code apply_chat_template} and llama.cpp's renderer both use, since most
+ * {@code apply_chat_template} and the reference implementation's renderer both use, since most
  * real-world templates (e.g. TinyLlama/Zephyr-style) rely on this default
  * rather than writing dashes themselves. This does <b>not</b> apply around
  * {@code {{ }}} output tags, only {@code {% %}} block tags — see
@@ -118,7 +118,7 @@ final class MiniJinjaTemplate {
 	/**
 	 * Mirrors Jinja2's environment defaults {@code trim_blocks=True} and
 	 * {@code lstrip_blocks=True} — the settings HF's {@code apply_chat_template}
-	 * and llama.cpp's own template renderer both use. Most real-world
+	 * and the reference implementation's own template renderer both use. Most real-world
 	 * {@code chat_template} strings (e.g. TinyLlama/Zephyr-style) are authored
 	 * assuming these defaults and never write explicit {@code {%-}/{-%}}
 	 * markers; without this, every block tag on its own line leaves a blank

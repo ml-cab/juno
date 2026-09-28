@@ -165,7 +165,7 @@ public interface ChatTemplate {
 	/**
 	 * Qwen3 ChatML with {@code enable_thinking=false} — appends an empty closed
 	 * {@code <think>} block on every assistant turn so the model skips
-	 * chain-of-thought and replies directly (matches HuggingFace / llama.cpp Qwen3
+	 * chain-of-thought and replies directly (matches the HuggingFace and reference-implementation Qwen3
 	 * template behaviour).
 	 */
 	static ChatTemplate qwen3() {

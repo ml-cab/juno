@@ -16,7 +16,7 @@
 package cab.ml.juno.node;
 
 /**
- * Layout metadata for a GGUF / GGML quantisation type used by the K-quant codecs.
+ * Layout metadata for a GGUF tensor type used by the K-quant codecs.
  *
  * <p>K-quants share a 256-element super-block ({@link #QK_K}). Q4_K / Q5_K are
  * affine (scale + min); Q6_K is symmetric (scaled, no additive zero/min).
@@ -30,7 +30,7 @@ public record QuantizationLayout(
 		boolean affine,
 		boolean symmetric) {
 
-	/** llama.cpp / GGUF K-quant super-block width. */
+	/** GGUF K-quant super-block width. */
 	public static final int QK_K = 256;
 
 	public static final int TYPE_Q4_K = 12;
@@ -47,7 +47,7 @@ public record QuantizationLayout(
 			TYPE_Q6_K, "Q6_K", QK_K, 16, 210, false, true);
 
 	/**
-	 * @param typeId GGML type ID
+	 * @param typeId GGUF tensor type ID
 	 * @return layout for a supported K-quant, or {@code null} if unsupported
 	 */
 	public static QuantizationLayout forType(int typeId) {

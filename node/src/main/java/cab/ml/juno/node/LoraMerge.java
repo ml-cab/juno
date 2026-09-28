@@ -540,7 +540,7 @@ public final class LoraMerge {
 			case TYPE_Q6_K -> GgufKQuantCodec.encodeQ6K(data);
 			case TYPE_Q2_K -> quantizeQ2_K(data, n);
 			case TYPE_Q3_K -> quantizeQ3_K(data, n);
-			default -> throw new UnsupportedOperationException("Re-quantisation not implemented for GGML type " + type);
+			default -> throw new UnsupportedOperationException("Re-quantisation not implemented for GGUF tensor type " + type);
 		};
 	}
 

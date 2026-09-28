@@ -1166,6 +1166,10 @@ mvn verify -Pgpu -Dit.model.path=/path/to/model.gguf -pl juno-master \
   --enable-native-access=ALL-UNNAMED
 ```
 
+The `-Pgpu` run is `GpuForwardPassIT`: the GPU forward pass held to the CPU one on a real Llama-family
+model. It checks the hidden state (relative error and cosine similarity), the logits (same top-1, top-5
+overlap, relative error) and a 16-token greedy decode that must match the CPU token for token.
+
 **Windows (NVIDIA GPU tests):**
 ```bat
 mvn test -Dgroups=gpu -pl node --enable-native-access=ALL-UNNAMED

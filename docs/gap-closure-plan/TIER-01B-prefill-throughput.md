@@ -339,7 +339,11 @@ on today's op-at-a-time GPU path either way.
   Qwen3-MoE): kernel output against that handler's scalar CPU attention within stated tolerance, and
   a greedy-decode divergence characterisation on a real model — how often, and by how many tokens,
   the FP16 KV mirror diverges. This is the evidence that decides whether that architecture's default
-  flips on; do not inherit the Llama-family answer for it.
+  flips on; do not inherit the Llama-family answer for it. *Build on
+  `juno-master/.../GpuForwardPassIT` (rebuilt 2026-09-27, see Tier 01's out-of-tier table): it already
+  holds the Llama-family GPU path to the CPU oracle by relative L2, cosine, top-1 and top-5 logits and
+  a 16-token greedy decode, with bounds calibrated against planted faults. Extend it per architecture
+  with each one's own calibration rather than writing a second oracle.*
 - **New GPU-attention capability tests.** Note what these can and cannot be: `GpuAttentionOptions`
   has no architecture awareness today (`AUTO` is just `CudaAvailability.isAvailable()`), so there is
   no resolver to test until item 0 builds one. The tests are therefore (a) each covered handler

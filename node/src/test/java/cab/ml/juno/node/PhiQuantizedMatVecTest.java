@@ -192,7 +192,7 @@ class PhiQuantizedMatVecTest {
 	// ── Test 5: Q6_K QuantizedTensor → matches GgufReader dequant + matVec ────
 
 	/**
-	 * Q6_K is GGML type 14. phi-3.5-mini uses Q6_K for some projection weights.
+	 * Q6_K is GGUF tensor type 14. phi-3.5-mini uses Q6_K for some projection weights.
 	 * Uses the same golden block as GgufReaderTest.q6k_single_block_golden_values
 	 * (seed=42, d=0.25).
 	 */
@@ -240,7 +240,7 @@ class PhiQuantizedMatVecTest {
 	// ── Test 5: Q5_K QuantizedTensor → matches GgufReader dequant + matVec ────
 
 	/**
-	 * Q5_K is GGML type 13. phi-3.5-mini-instruct.Q4_K_M uses Q5_K for some tensors
+	 * Q5_K is GGUF tensor type 13. phi-3.5-mini-instruct.Q4_K_M uses Q5_K for some tensors
 	 * (e.g. attn_output.weight in certain layers). Before the fix,
 	 * matVec(QuantizedTensor) threw UnsupportedOperationException for type 13 at
 	 * runtime with "Killed" appearing as SIGKILL via OOM — now it actually throws

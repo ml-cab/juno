@@ -16,7 +16,7 @@
 package cab.ml.juno.kvcache;
 
 /**
- * GGUF / ggml {@code Q8_0} block codec for KV tensors.
+ * GGUF {@code Q8_0} block codec for KV tensors.
  *
  * <p>Block layout (34 bytes, little-endian): {@code fp16 d} + {@code int8 qs[32]}.
  * Dequant: {@code x[i] = float16ToFloat(d) * qs[i]}.

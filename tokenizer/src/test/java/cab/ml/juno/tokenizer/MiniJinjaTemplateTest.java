@@ -126,7 +126,7 @@ class MiniJinjaTemplateTest {
 		// Real TinyLlama/Zephyr-style chat_template (verbatim from the GGUF metadata) —
 		// unlike the Llama-3 fixture above, this one has no {%- / -%} markers at all and
 		// relies entirely on Jinja2's environment defaults (trim_blocks=True,
-		// lstrip_blocks=True), which is how HF's apply_chat_template and llama.cpp's own
+		// lstrip_blocks=True), which is how HF's apply_chat_template and the reference implementation's own
 		// renderer treat it. Without honoring those defaults, every block-tag line leaves
 		// a blank line behind, and the noise compounds every turn — exactly the bug this
 		// test guards against (observed as garbled generation after a few chat turns).

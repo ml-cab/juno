@@ -2580,7 +2580,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		case 13 -> GgufKQuantCodec.decodeQ5KRows(t.data(), rows, cols);
 		case 14 -> GgufKQuantCodec.decodeQ6KRows(t.data(), rows, cols);
 		default -> throw new UnsupportedOperationException(
-				"dequantize not implemented for GGML type " + t.type());
+				"dequantize not implemented for GGUF tensor type " + t.type());
 		};
 	}
 
@@ -2592,7 +2592,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		return out;
 	}
 
-	/** GGML type 1 (F16): plain 2-byte half-floats, no block scaling. */
+	/** GGUF tensor type 1 (F16): plain 2-byte half-floats, no block scaling. */
 	private static float[] dequantizeF16(byte[] raw, int rows, int cols) {
 		int n = rows * cols;
 		float[] out = new float[n];
@@ -2810,7 +2810,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * This ensures juno.MatVec.backend.cpu.count reflects the true number of
 	 * CPU-side matrix multiplies, including quantized ones.
 	 *
-	 * @param ggmlType GGML type ID (unused — kept for signature clarity)
+	 * @param ggmlType GGUF tensor type ID (unused — kept for signature clarity)
 	 */
 	@SuppressWarnings("unused")
 	private static MatVecBackend matVecQuantBackend(int ggmlType) {
@@ -2829,7 +2829,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		case 12 -> matVecQ4Kraw(A.data(), x, rowStart, rowEnd, cols);
 		case 13 -> matVecQ5Kraw(A.data(), x, rowStart, rowEnd, cols);
 		case 14 -> matVecQ6Kraw(A.data(), x, rowStart, rowEnd, cols);
-		default -> throw new UnsupportedOperationException("Quantized matVec not implemented for GGML type " + A.type()
+		default -> throw new UnsupportedOperationException("Quantized matVec not implemented for GGUF tensor type " + A.type()
 				+ " — add a case branch or convert to float[] first.");
 		};
 	}
@@ -2867,7 +2867,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * GGML type 1 (F16) raw-bytes matVec. F16 is a plain, unquantized 2-byte
+	 * GGUF tensor type 1 (F16) raw-bytes matVec. F16 is a plain, unquantized 2-byte
 	 * half-float per element — no block scaling, unlike the Q*_K/Q8_0 types
 	 * below. GGUF tensor bytes are always little-endian regardless of the
 	 * cluster's {@code --byteOrder} activation-wire setting (that flag only
@@ -2902,7 +2902,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 *
 	 * Block layout: [d:f16(2)][dmin:f16(2)][sc:12][qs:128] = 144 bytes per 256
 	 * elements. 4 groups of 64 elements; each group yields two 32-element
-	 * sub-blocks via low/high nibbles of the same qs bytes — matching llama.cpp
+	 * sub-blocks via low/high nibbles of the same qs bytes — matching the reference implementation
 	 * dequantize_row_q4_K.
 	 *
 	 * No per-row heap allocations: sc and qs data are read directly from raw[]
@@ -2917,7 +2917,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * Block layout: [scales:16][qs:64][d:f16][dmin:f16] = 84 bytes per 256 elements.
 	 * Two halves of 128 elements; 8 scale bytes per half encode a 4-bit scale
 	 * (lower nibble) and 4-bit min (upper nibble). 2-bit quants packed 4 per byte.
-	 * Mirrors llama.cpp dequantize_row_q2_K.
+	 * Mirrors the reference dequantize_row_q2_K.
 	 */
 	private static float[] matVecQ2Kraw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
 		final int BLOCK_SIZE  = 256;
@@ -2972,7 +2972,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * Block layout: [hmask:32][qs:64][scales:12][d:f16] = 110 bytes per 256 elements.
 	 * 3-bit quants: 2 low bits from qs, 1 high bit from hmask. 16 groups of 16
 	 * elements, each with a signed 6-bit scale (stored biased +32).
-	 * Mirrors llama.cpp dequantize_row_q3_K.
+	 * Mirrors the reference dequantize_row_q3_K.
 	 */
 	private static float[] matVecQ3Kraw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
 		final int BLOCK_SIZE  = 256;
@@ -2995,7 +2995,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				int scBase  = bo + 96;  // 12 scale bytes
 				float d = GgufReader.f16ToF32(readLE16(raw, bo + 108));
 
-				// Unpack 16 × 6-bit signed scales from 12 bytes — mirrors llama.cpp kmask logic
+				// Unpack 16 × 6-bit signed scales from 12 bytes — mirrors the reference kmask logic
 				int aux0 = (raw[scBase+ 0]&0xFF)|((raw[scBase+ 1]&0xFF)<<8)|((raw[scBase+ 2]&0xFF)<<16)|((raw[scBase+ 3]&0xFF)<<24);
 				int aux1 = (raw[scBase+ 4]&0xFF)|((raw[scBase+ 5]&0xFF)<<8)|((raw[scBase+ 6]&0xFF)<<16)|((raw[scBase+ 7]&0xFF)<<24);
 				int aux2 = (raw[scBase+ 8]&0xFF)|((raw[scBase+ 9]&0xFF)<<8)|((raw[scBase+10]&0xFF)<<16)|((raw[scBase+11]&0xFF)<<24);

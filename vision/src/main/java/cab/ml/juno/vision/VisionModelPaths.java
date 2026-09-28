@@ -22,7 +22,7 @@ import java.nio.file.Path;
  * Resolves which GGUF file holds the CLIP vision-encoder tensors for a given
  * text model.
  *
- * <p>Real-world llama.cpp-format multimodal releases (LLaVA, Qwen-VL,
+ * <p>Real-world GGUF multimodal releases (LLaVA, Qwen-VL,
  * SmolVLM, etc.) ship the vision encoder in a <b>separate</b> GGUF file,
  * conventionally named {@code mmproj-*.gguf}, loaded alongside the base LLM
  * via a {@code --mmproj} flag. The base LLM file itself never contains

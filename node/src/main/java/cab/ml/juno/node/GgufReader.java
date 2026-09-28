@@ -50,7 +50,7 @@ public final class GgufReader implements AutoCloseable {
 	static final int GGUF_MAGIC = 0x46554747; // "GGUF" — package-private: used by LlamafileGgufIndex
 	private static final int ALIGNMENT = 32;
 
-	// ── GGML quantisation type IDs ───────────────────────────────────────────
+	// ── GGUF tensor type IDs ─────────────────────────────────────────────────
 	private static final int GGML_TYPE_F32 = 0;
 	private static final int GGML_TYPE_F16 = 1;
 	private static final int GGML_TYPE_Q4_0 = 2;
@@ -290,7 +290,7 @@ public final class GgufReader implements AutoCloseable {
 	}
 
 	/**
-	 * GGML quantisation type ID for the named tensor (0=F32, 1=F16, 8=Q8_0,
+	 * GGUF tensor type ID for the named tensor (0=F32, 1=F16, 8=Q8_0,
 	 * 12=Q4_K, …). See the {@code GGML_TYPE_*} constants in this class.
 	 *
 	 * @throws IllegalArgumentException if the tensor does not exist
@@ -372,7 +372,7 @@ public final class GgufReader implements AutoCloseable {
 	 * </ul>
 	 *
 	 * @param name   tensor name as it appears in the GGUF file
-	 * @param type   GGML quantisation type ID (0=F32, 1=F16, 8=Q8_0, 12=Q4_K, …)
+	 * @param type   GGUF tensor type ID (0=F32, 1=F16, 8=Q8_0, 12=Q4_K, …)
 	 * @param nelems total number of logical scalar elements in the tensor
 	 * @param data   raw quantised bytes (NOT dequantised)
 	 */
@@ -401,7 +401,7 @@ public final class GgufReader implements AutoCloseable {
 	/**
 	 * Byte size of a quantised tensor in its encoded form.
 	 *
-	 * @param type   GGML quantisation type ID
+	 * @param type   GGUF tensor type ID
 	 * @param nelems number of logical scalar elements
 	 */
 	public static long rawByteCount(int type, long nelems) {
@@ -416,7 +416,7 @@ public final class GgufReader implements AutoCloseable {
 		case GGML_TYPE_Q4_0 -> (nelems / 32L) * 18L;
 		case GGML_TYPE_Q2_K -> (nelems / 256L) * 84L;
 		case GGML_TYPE_Q3_K -> (nelems / 256L) * 110L;
-		default -> throw new UnsupportedOperationException("No byte-size formula for GGML type " + type);
+		default -> throw new UnsupportedOperationException("No byte-size formula for GGUF tensor type " + type);
 		};
 	}
 
@@ -536,7 +536,7 @@ public final class GgufReader implements AutoCloseable {
 	// Each superblock is split into two halves of 128 elements.
 	// Within each half, 8 scale bytes each encode a 4-bit scale (lower nibble)
 	// and a 4-bit min (upper nibble). The 32 qs bytes hold four 2-bit quant
-	// values per byte. Dequant formula (mirrors llama.cpp dequantize_row_q2_K):
+	// values per byte. Dequant formula (mirrors the reference dequantize_row_q2_K):
 	//   out[l+ 0] = d*(sc[0]&0xF)*((q[l   ]>>0)&3) - dmin*(sc[0]>>4)
 	//   out[l+16] = d*(sc[1]&0xF)*((q[l   ]>>2)&3) - dmin*(sc[1]>>4)
 	//   out[l+32] = d*(sc[2]&0xF)*((q[l+16]>>0)&3) - dmin*(sc[2]>>4)
@@ -590,7 +590,7 @@ public final class GgufReader implements AutoCloseable {
 	// Each element uses 3 bits: 2 low bits from qs, 1 high bit from hmask.
 	// 16 groups of 16 elements, each with a signed 6-bit scale (stored biased +32).
 	//
-	// Loop mirrors llama.cpp dequantize_row_q3_K exactly:
+	// Loop mirrors the reference dequantize_row_q3_K exactly:
 	//   two 128-element halves (qBase=0, qBase=32 in qs);
 	//   within each half, 4 bit-shift iterations (shift=0,2,4,6);
 	//   hmask bitmask m advances 1→2→4→8→16→32→64→128 across both halves.
@@ -615,7 +615,7 @@ public final class GgufReader implements AutoCloseable {
 			buf.get(scRaw);
 			float d = f16ToF32(buf.getShort());
 
-			// Unpack 16 × 6-bit scales from 12 bytes — mirrors llama.cpp kmask1/kmask2 logic
+			// Unpack 16 × 6-bit scales from 12 bytes — mirrors the reference kmask1/kmask2 logic
 			int aux0 = (scRaw[ 0]&0xFF)|((scRaw[ 1]&0xFF)<<8)|((scRaw[ 2]&0xFF)<<16)|((scRaw[ 3]&0xFF)<<24);
 			int aux1 = (scRaw[ 4]&0xFF)|((scRaw[ 5]&0xFF)<<8)|((scRaw[ 6]&0xFF)<<16)|((scRaw[ 7]&0xFF)<<24);
 			int aux2 = (scRaw[ 8]&0xFF)|((scRaw[ 9]&0xFF)<<8)|((scRaw[10]&0xFF)<<16)|((scRaw[11]&0xFF)<<24);

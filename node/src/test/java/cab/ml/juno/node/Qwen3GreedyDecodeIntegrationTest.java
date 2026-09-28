@@ -12,7 +12,7 @@ import org.junit.jupiter.api.condition.EnabledIf;
 
 /**
  * End-to-end greedy decode on a real Qwen3 dense GGUF — compares against
- * llama.cpp reference token IDs when the model file is present.
+ * reference-implementation token IDs when the model file is present.
  */
 class Qwen3GreedyDecodeIntegrationTest {
 

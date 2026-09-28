@@ -80,7 +80,7 @@ public final class DeviceQ4KMatrix implements AutoCloseable {
 		if (ctx == null)
 			throw new IllegalArgumentException("ctx must not be null");
 		if (!supportsType(typeId))
-			throw new IllegalArgumentException("No fused GEMV kernel for GGML type " + typeId);
+			throw new IllegalArgumentException("No fused GEMV kernel for GGUF tensor type " + typeId);
 		QuantizationLayout layout = QuantizationLayout.require(typeId);
 		layout.validateMatrix(rows, cols);
 		long expected = layout.encodedBytes((long) rows * cols);
@@ -128,7 +128,7 @@ public final class DeviceQ4KMatrix implements AutoCloseable {
 		return cols;
 	}
 
-	/** GGML type id of the packed blocks (Q4_K / Q5_K / Q6_K). */
+	/** GGUF tensor type id of the packed blocks (Q4_K / Q5_K / Q6_K). */
 	public int quantType() {
 		return quantType;
 	}

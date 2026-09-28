@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.within;
 /**
  * Tier-5 Gate A: shared K-quant codec conformance.
  *
- * <p>Decode goldens are pinned to the same llama.cpp-derived Q6_K vectors as
+ * <p>Decode goldens are pinned to the same reference-derived Q6_K vectors as
  * {@link GgufReaderTest}. Encoder strategy is {@link GgufKQuantCodec#ENCODER_ID}.
  */
 @DisplayName("GgufKQuantCodec / GgufQuantCodec (Tier-5 Gate A)")
@@ -70,7 +70,7 @@ class GgufKQuantCodecTest {
 	}
 
 	@Test
-	@DisplayName("Q6_K decode matches pinned llama.cpp golden values (seed=42)")
+	@DisplayName("Q6_K decode matches pinned reference golden values (seed=42)")
 	void q6k_decode_matches_llama_cpp_golden() {
 		byte[] ql = { 57, 12, -116, 125, 114, 71, 52, 44, -40, 16, 15, 47, 111, 119, 13, 101, -42, 112, -27, -114, 3,
 				81, -40, -82, -114, 79, 110, -84, 52, 47, -62, 49, -73, -80, -121, 22, -21, 63, -63, 40, -106, -71, 98,

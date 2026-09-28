@@ -62,7 +62,7 @@ public final class QaLoraInitializer {
 				int outDim = proj.outDim(cfg);
 				if (inDim % groupWidth != 0)
 					throw new IllegalArgumentException("tensor " + name + " inDim=" + inDim
-							+ " not divisible by groupWidth=" + groupWidth + " (ggml type " + ggmlType + ")");
+							+ " not divisible by groupWidth=" + groupWidth + " (GGUF tensor type " + ggmlType + ")");
 
 				QaLoraAdapter adapter = new QaLoraAdapter(config, inDim, outDim, groupWidth, rng);
 				QaLoraEntryMeta meta = QaLoraEntryMeta.of(groupWidth, adapter.groupCount, ggmlType,
@@ -93,7 +93,7 @@ public final class QaLoraInitializer {
 				throw new IllegalArgumentException("QA-LoRA missing entry meta: " + key);
 			int ggmlType = reader.tensorType(proj.ggufTensorName(layer));
 			if (meta.ggmlType() != ggmlType)
-				throw new IllegalArgumentException("QA-LoRA ggml type mismatch for " + key + ": checkpoint "
+				throw new IllegalArgumentException("QA-LoRA GGUF tensor type mismatch for " + key + ": checkpoint "
 						+ meta.ggmlType() + " vs model " + ggmlType);
 			QaLoraAdapter a = entry.getValue();
 			if (meta.groupWidth() != a.groupWidth || meta.groupCount() != a.groupCount)
@@ -107,7 +107,7 @@ public final class QaLoraInitializer {
 		QuantizationLayout layout = QuantizationLayout.forType(ggmlType);
 		if (layout == null)
 			throw new IllegalArgumentException(
-					"QA-LoRA requires Q4_K/Q5_K/Q6_K tensor; unsupported GGML type " + ggmlType);
+					"QA-LoRA requires Q4_K/Q5_K/Q6_K tensor; unsupported GGUF tensor type " + ggmlType);
 		return layout.subBlockWidth();
 	}
 }

@@ -13,11 +13,11 @@ import org.junit.jupiter.api.Test;
  * Regression coverage for: any F16-weighted GGUF model (a very common,
  * standard format — not exotic) failed every inference request with
  * {@code UnsupportedOperationException: Quantized matVec not implemented for
- * GGML type 1 — add a case branch or convert to float[] first.}
+ * GGUF tensor type 1 — add a case branch or convert to float[] first.}
  *
  * Root cause: {@code LlamaTransformerHandler}'s two dispatches over
  * {@code GgufReader.QuantizedTensor.type()} — {@code matVecQuantizedNoEvent}
- * (CPU path) and {@code dequantize} (CUDA upload path) — handled GGML types
+ * (CPU path) and {@code dequantize} (CUDA upload path) — handled GGUF tensor types
  * 0 (F32), 8 (Q8_0), and 10–14 (Q2_K..Q6_K), but never 1 (F16), even though
  * F16 is one of the most common GGUF weight formats. Any model file
  * literally named {@code *-f16.gguf} hit this immediately on its first
@@ -28,7 +28,7 @@ import org.junit.jupiter.api.Test;
  * {@link GgufReader#f16ToF32} conversion {@code GgufReader.loadF16} already
  * uses, so results are bit-identical to eager float[] dequantization.
  */
-@DisplayName("LlamaTransformerHandler — GGML type 1 (F16) quantized matVec/dequantize")
+@DisplayName("LlamaTransformerHandler — GGUF tensor type 1 (F16) quantized matVec/dequantize")
 class LlamaTransformerHandlerF16MatVecTest {
 
     /** Encodes a float as its nearest IEEE-754 half-precision bit pattern. */

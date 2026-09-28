@@ -17,7 +17,7 @@
 package cab.ml.juno.node;
 
 /**
- * Phi-2 partial rotary embeddings — port of llama.cpp {@code ggml_rope_ext}
+ * Phi-2 partial rotary embeddings — port of the reference implementation's {@code rope_ext}
  * for {@code GGML_ROPE_TYPE_NEOX} (mode 2), restricted to the first
  * {@code ropeDim} dimensions of each head.
  *

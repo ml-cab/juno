@@ -38,7 +38,7 @@ import cab.ml.juno.lora.LoraAdapterSet;
  * Expected tensor naming: {@code blk.<layer>.<ggml_proj>.weight.lora_a} and
  * {@code blk.<layer>.<ggml_proj>.weight.lora_b} (an optional trailing
  * {@code .weight} on the lora suffix is also accepted, since converter
- * versions vary). {@code ggml_proj} is one of the standard GGML tensor-name
+ * versions vary). {@code ggml_proj} is one of the standard GGUF tensor-name
  * projections ({@code attn_q}, {@code attn_k}, {@code attn_v},
  * {@code attn_output}, {@code ffn_gate}, {@code ffn_up}, {@code ffn_down}),
  * mapped to Juno's own projection keys ({@code wq}/{@code wk}/{@code wv}/

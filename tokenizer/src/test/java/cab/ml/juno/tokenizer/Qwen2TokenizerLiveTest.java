@@ -39,7 +39,7 @@ class Qwen2TokenizerLiveTest {
 	void hello_word_alone_matches_llama_cpp() throws Exception {
 		try (GgufReader r = GgufReader.open(MODEL)) {
 			GgufTokenizer tok = GgufTokenizer.load(r);
-			// llama.cpp: 14990 hello, 198 newline
+			// reference implementation: 14990 hello, 198 newline
 			assertThat(tok.encode("hello\n")).containsExactly(14990, 198);
 		}
 	}

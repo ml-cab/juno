@@ -28,7 +28,7 @@ import cab.ml.juno.node.MatVec;
  * Pure Java CLIP ViT-L/14 encoder.
  *
  * Reads pre-trained CLIP or SigLIP weights from a GGUF file following
- * the llama.cpp mmproj (multimodal projector) naming convention used by
+ * the mmproj (multimodal projector) naming convention used by
  * LLaVA-1.5, Phi-3 Vision, moondream2, and others:
  *
  * <pre>

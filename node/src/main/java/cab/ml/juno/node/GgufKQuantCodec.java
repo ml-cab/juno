@@ -22,7 +22,7 @@ import java.util.Arrays;
 /**
  * Versioned Q4_K / Q5_K / Q6_K encode and decode codecs for GGUF tensors.
  *
- * <p>Decoder math matches llama.cpp {@code dequantize_row_q*_K}. Encoder strategy
+ * <p>Decoder math matches the reference implementation's {@code dequantize_row_q*_K}. Encoder strategy
  * ID is {@link #ENCODER_ID} — do not assume binary identity with other encoders
  * without differential tests.
  *

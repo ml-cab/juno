@@ -12,12 +12,12 @@ import org.junit.jupiter.api.condition.EnabledIf;
 
 /**
  * End-to-end greedy decode on the real Phi-3.5-mini GGUF — compares against
- * llama.cpp reference for the standard Hello chat prompt.
+ * the reference implementation's output for the standard Hello chat prompt.
  */
 class Phi3GreedyDecodeIntegrationTest {
 
 	private static final int[] PROMPT_IDS = { 32010, 29871, 13, 10994, 32007, 29871, 13, 32001, 29871, 13 };
-	/** llama.cpp greedy continuation after the Hello chat prompt (9 tokens). */
+	/** The reference implementation's greedy continuation after the Hello chat prompt (9 tokens). */
 	private static final int[] EXPECTED_LLAMA_IDS = { 15043, 29991, 1128, 508, 306, 6985, 366, 9826, 29973 };
 	/** Juno may pick 10994 (prompt "▁Hello") or llama's 15043 (assistant "Hello") at step 0. */
 	private static final int HELLO_PROMPT_ID = 10994;
@@ -67,7 +67,7 @@ class Phi3GreedyDecodeIntegrationTest {
 		assertThat(generated.get(0)).as("first token is a Hello variant")
 				.isIn(HELLO_PROMPT_ID, HELLO_ASSISTANT_ID);
 		assertThat(generated.subList(1, generated.size()))
-				.as("tokens after Hello must match llama.cpp exactly")
+				.as("tokens after Hello must match the reference implementation exactly")
 				.containsExactlyElementsOf(Arrays.stream(EXPECTED_LLAMA_IDS).skip(1).boxed().toList());
 	}
 

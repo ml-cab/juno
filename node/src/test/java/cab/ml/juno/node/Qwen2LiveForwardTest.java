@@ -21,7 +21,7 @@ class Qwen2LiveForwardTest {
 
 	private static final int IM_END_ID = 151645;
 
-	/** llama.cpp tokenization of Juno ChatML "hello" prompt (--no-bos). */
+	/** The reference implementation's tokenization of Juno ChatML "hello" prompt (--no-bos). */
 	private static final int[] HELLO_PROMPT_IDS = {
 			151644, 872, 198, 14990, IM_END_ID, 198, 151644, 77091, 198
 	};

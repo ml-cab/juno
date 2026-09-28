@@ -17,7 +17,7 @@
 package cab.ml.juno.node;
 
 /**
- * Phi-3 rotary embeddings — port of llama.cpp {@code ggml_rope_ext} for
+ * Phi-3 rotary embeddings — port of the reference implementation's {@code rope_ext} for
  * {@code GGML_ROPE_TYPE_NEOX} (mode 2) with per-dimension frequency factors.
  *
  * <p>LLaMA-family handlers use adjacent-pair RoPE in {@link LlamaTransformerHandler#rope};

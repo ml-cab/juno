@@ -105,7 +105,7 @@ public final class GgufInfoMain {
 
 	/**
 	 * Mirrors the exact GGML_TYPE_* constants defined in {@link GgufReader} —
-	 * NOT the full upstream GGML type list. A type ID appearing here as
+	 * NOT the full upstream GGUF tensor type list. A type ID appearing here as
 	 * "UNKNOWN (unsupported by this reader)" is a real GGUF type this specific
 	 * codebase does not know how to decode; the tensor's metadata (name, dims)
 	 * is still listed correctly, but loading its data would fail.

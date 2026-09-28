@@ -1980,7 +1980,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	 */
 	private static float[] transposedFallback(GgufReader.QuantizedTensor A, float[] v, int rows, int cols) {
 		java.util.logging.Logger.getLogger(LoraTrainableHandler.class.getName())
-				.warning("transposedFallback: no dedicated transpose for GGML type=" + A.type() + " (" + rows + "x"
+				.warning("transposedFallback: no dedicated transpose for GGUF tensor type=" + A.type() + " (" + rows + "x"
 						+ cols + "). Training will be slow — add a transposedTypeXxx case.");
 		float[] y = new float[cols];
 		IntStream.range(0, cols).parallel().forEach(c -> {

@@ -41,7 +41,7 @@ public record LlamaConfig(int hiddenDim, // embedding / residual stream dimensio
 
 	/**
 	 * Extract config from an open GgufReader. Reads standard GGUF metadata keys in
-	 * priority order, falling back to llama.cpp legacy keys for older files.
+	 * priority order, falling back to the reference implementation's legacy keys for older files.
 	 *
 	 * <h3>Vocab size — why we read from the tokenizer, not the architecture</h3>
 	 * Some models (notably the Phi-3 family) store only the <em>base</em>
@@ -130,7 +130,7 @@ public record LlamaConfig(int hiddenDim, // embedding / residual stream dimensio
 	 * from the filename.
 	 *
 	 * <p>GGUF stores {@code general.file_type} as a uint32 matching the
-	 * {@code llama_ftype} enum in llama.cpp:
+	 * {@code llama_ftype} enum in the reference implementation:
 	 * <pre>
 	 *   0   ALL_F32      → FP32
 	 *   1   MOSTLY_F16   → FP16

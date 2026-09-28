@@ -19,7 +19,7 @@ package cab.ml.juno.node;
  * Shared GGUF quantisation codec facade for the quantized merge and training paths.
  *
  * <p>K-quant (Q4_K / Q5_K / Q6_K) work delegates to {@link GgufKQuantCodec}.
- * Other GGML types remain on their existing call sites until extracted.
+ * Other GGUF tensor types remain on their existing call sites until extracted.
  *
  * <p>Thread-safe: all methods are static and stateless.
  */

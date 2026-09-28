@@ -30,7 +30,7 @@ class GgufTokenizerBosTest {
 		try (GgufReader r = GgufReader.open(phiModelPath())) {
 			GgufTokenizer tok = GgufTokenizer.load(r);
 			int[] ids = tok.encode(prompt);
-			assertThat(ids).as("must match llama.cpp tokenization (no leading BOS)").containsExactly(expected);
+			assertThat(ids).as("must match the reference tokenization (no leading BOS)").containsExactly(expected);
 			assertThat(ids[0]).isNotEqualTo(tok.bosTokenId());
 			assertThat(tok.decodeToken(32007)).isEqualTo("<|end|>");
 		}

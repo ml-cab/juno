@@ -174,7 +174,7 @@ final class Q4KMmqKernel {
 			case QuantizationLayout.TYPE_Q4_K -> fnQ4K;
 			case QuantizationLayout.TYPE_Q5_K -> fnQ5K;
 			case QuantizationLayout.TYPE_Q6_K -> fnQ6K;
-			default -> throw new IllegalArgumentException("No fused GEMV kernel for GGML type " + quantType);
+			default -> throw new IllegalArgumentException("No fused GEMV kernel for GGUF tensor type " + quantType);
 		};
 	}
 
@@ -183,7 +183,7 @@ final class Q4KMmqKernel {
 			case QuantizationLayout.TYPE_Q4_K -> fnQ4Dequant;
 			case QuantizationLayout.TYPE_Q5_K -> fnQ5Dequant;
 			case QuantizationLayout.TYPE_Q6_K -> fnQ6Dequant;
-			default -> throw new IllegalArgumentException("No dequant kernel for GGML type " + quantType);
+			default -> throw new IllegalArgumentException("No dequant kernel for GGUF tensor type " + quantType);
 		};
 	}
 

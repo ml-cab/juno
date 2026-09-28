@@ -23,7 +23,7 @@ import cab.ml.juno.node.GgufReader;
  *
  * Covers the CLIP / SigLIP encoder embedded in multimodal models
  * (LLaVA-1.5, Phi-3 Vision, Qwen-VL). Reads the {@code clip.*}
- * and {@code vision.*} key namespaces used by llama.cpp-format GGUFs.
+ * and {@code vision.*} key namespaces used by multimodal GGUFs.
  *
  * Key relationships:
  * <ul>
@@ -48,7 +48,7 @@ public record VisionConfig(
         float layerNormEps, // layer-norm epsilon for the CLIP encoder
         boolean useGelu,    // true: standard (tanh-approx) GELU. false: quick_gelu
                              // (x * sigmoid(1.702x), OpenAI CLIP's original activation).
-                             // Read from clip.use_gelu — llama.cpp's own flag for exactly
+                             // Read from clip.use_gelu — the reference implementation's own flag for exactly
                              // this distinction. 2026-07-20: found via ./juno gguf-info
                              // that llava-v1.5-7b-mmproj-Q4_0.gguf declares this false;
                              // VisionEncoder previously always used standard GELU
@@ -79,11 +79,11 @@ public record VisionConfig(
     /**
      * Derive from an open {@link GgufReader}.
      *
-     * Reads {@code clip.*} keys first (llama.cpp mmproj convention), then
+     * Reads {@code clip.*} keys first (the mmproj convention), then
      * falls back to {@code vision.*} keys used by older Phi-3 Vision GGUFs.
      */
     public static VisionConfig from(GgufReader r) {
-        // Prefer clip.* namespace (llama.cpp mmproj standard)
+        // Prefer clip.* namespace (the mmproj standard)
         int imageSize       = r.metaInt("clip.vision.image_size",
                               r.metaInt("vision.image_size",       336));
         int patchSize       = r.metaInt("clip.vision.patch_size",

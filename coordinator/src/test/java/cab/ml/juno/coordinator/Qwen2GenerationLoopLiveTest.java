@@ -33,7 +33,7 @@ import cab.ml.juno.tokenizer.GgufTokenizer;
 /** End-to-end GenerationLoop on Qwen2.5 when model is present. */
 class Qwen2GenerationLoopLiveTest {
 
-	private static final int HELLO_GREEDY_TOKEN = 9707; // llama.cpp reference for hello ChatML prompt
+	private static final int HELLO_GREEDY_TOKEN = 9707; // the reference implementation's token for the hello ChatML prompt
 
 	private static final Path MODEL = Path.of(System.getProperty("user.dir")).getParent() != null
 			&& Path.of(System.getProperty("user.dir")).endsWith("coordinator")

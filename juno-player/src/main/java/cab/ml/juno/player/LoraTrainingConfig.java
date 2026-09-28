@@ -126,7 +126,7 @@ public final class LoraTrainingConfig {
 		return adapterConfig.mode();
 	}
 
-	/** QA-LoRA group width override; {@code <= 0} means auto from GGML layout. */
+	/** QA-LoRA group width override; {@code <= 0} means auto from the GGUF tensor layout. */
 	public int groupWidth() {
 		return groupWidth;
 	}
@@ -399,7 +399,7 @@ public final class LoraTrainingConfig {
 			return this;
 		}
 
-		/** QA-LoRA group width; {@code <= 0} auto-selects from tensor GGML layout. */
+		/** QA-LoRA group width; {@code <= 0} auto-selects from the tensor's GGUF layout. */
 		public Builder groupWidth(int groupWidth) {
 			this.groupWidth = groupWidth;
 			return this;

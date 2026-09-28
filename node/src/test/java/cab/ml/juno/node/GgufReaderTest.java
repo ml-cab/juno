@@ -21,7 +21,7 @@ import org.junit.jupiter.api.io.TempDir;
  * model file.
  *
  * Golden expected values are pre-computed by the C reference implementation
- * (llama.cpp dequantize_row_q6_K / dequantize_row_q4_K) running the same
+ * (the reference dequantize_row_q6_K / dequantize_row_q4_K) running the same
  * synthetic input. See scripts/golden_quant.py in the repo root.
  */
 @DisplayName("GgufReader dequantization")
@@ -52,7 +52,7 @@ class GgufReaderTest {
 	 *
 	 * This was the bug epicentre: the old flat loop used hi=i/4 to index into qh,
 	 * meaning outputs at positions l+32, l+64, l+96 read wrong qh bytes. The fix
-	 * restructures the loop to match llama.cpp dequantize_row_q6_K exactly.
+	 * restructures the loop to match the reference dequantize_row_q6_K exactly.
 	 *
 	 * Golden values computed independently with the C reference on the same
 	 * synthetic block (seed=42, d=0.25, sc = [14,6,9,15,8,28,30,3,...]).
@@ -80,7 +80,7 @@ class GgufReaderTest {
 
 		assertThat(actual).hasSize(256);
 
-		// Golden values from C reference (llama.cpp dequantize_row_q6_K, seed=42,
+		// Golden values from C reference (the reference dequantize_row_q6_K, seed=42,
 		// d=0.25)
 		float eps = 0.001f;
 		assertThat(actual[0]).isCloseTo(31.5000f, within(eps));

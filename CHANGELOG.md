@@ -37,6 +37,14 @@
   exclusion list was merged with the default one, which excludes the very test the profile exists to
   run. It now runs `ModelLiveRunnerIT` (TinyLlama passes); the default `verify` still runs exactly the
   20 stub cluster tests. The `gpu` profile had the same defect and now runs `GpuForwardPassIT`.
+- **The GPU-against-CPU integration test checks agreement the way it can be trusted.** Once it ran
+  again, `GpuForwardPassIT` failed 2 of 4 on a fixed tolerance of 0.03 per value, which a correct GPU
+  path cannot meet on hidden-state values above 100. It now compares relative error and cosine
+  similarity of the hidden state, the top-1 and top-5 tokens and relative error of the logits, and a
+  16-token greedy decode over the whole model that must match the CPU exactly. Every bound sits
+  between the measured value and a deliberately introduced fault. It passes on TinyLlama and
+  Mistral-7B, whose greedy output is identical on GPU and CPU. It reads the model's shapes from the
+  file instead of assuming TinyLlama.
 - **A tensor-parallel node that cannot load its model now says why.** A node that ran out of JVM heap
   while loading reached the coordinator only as `UNKNOWN: Application error processing RPC`, because the
   error was not an exception the node reported. It is now reported like any failed load, naming the
