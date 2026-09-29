@@ -103,8 +103,8 @@ final class BpePreTokenizer {
 	 *                     such key
 	 * @return {@code null} when no split applies and the caller keeps merging each
 	 *         segment as one run, otherwise the split to apply
-	 * @throws IllegalArgumentException naming the type when the file declares one
-	 *                                  that has no verified implementation
+	 * @throws UnsupportedPreTokenizerException naming the type when the file declares
+	 *                                          one that has no verified implementation
 	 */
 	static BpePreTokenizer resolve(String declaredType) {
 		if (declaredType == null)
@@ -115,7 +115,7 @@ final class BpePreTokenizer {
 		return switch (declared) {
 		case "qwen2" -> QWEN2;
 		case "llama-bpe" -> LLAMA_BPE;
-		default -> throw new IllegalArgumentException("Unsupported pre-tokenizer type '" + declaredType
+		default -> throw new UnsupportedPreTokenizerException("Unsupported pre-tokenizer type '" + declaredType
 				+ "' in tokenizer.ggml.pre. Implemented: qwen2, llama-bpe; a file with no such key, or with "
 				+ "'default', keeps the whole-run merge. Each type cuts text into different pre-tokens before "
 				+ "the BPE merges run, so tokenizing this file under another type's split would feed the model "

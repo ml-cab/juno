@@ -238,6 +238,8 @@ public final class JunoPlayer implements AutoCloseable {
 
 			LlamaConfig config;
 			Tokenizer tokenizer;
+			// The architecture first, so it is the reason given when a file fails more than one check.
+			cab.ml.juno.node.ModelFileGate.requireLoadable(modelPath);
 			try (GgufReader reader = GgufReader.open(modelPath)) {
 				config = LlamaConfig.from(reader);
 				tokenizer = GgufTokenizer.load(reader);

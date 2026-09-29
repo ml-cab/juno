@@ -164,17 +164,20 @@ this tier is what makes those files work.
   is the denominator of every pp and tg figure this plan publishes. Re-run `compare-llama-cpp.sh`
   on all four sweep models and publish under `docs/perf-compare/<timestamp>-tier04b-tokenizer/`.
 
-  **Threshold.** Juno's `prompt_tokens` for the benchmark prompt must equal llama.cpp's token count
-  for the same prompt on every sweep model — **exact equality, not a tolerance**, since that is the
-  whole point of the tier. Tier 01's precondition 7 should already have achieved this for the sweep
+  **Threshold.** Token-count mismatch between Juno and the reference tokenizer is **<= 0 tokens**
+  per parity-corpus line on every sweep model — exact equality, not a tolerance, since that is the
+  whole point of the tier. **Measure it with the reference tool's tokenizer (`llama-tokenize`) on the
+  parity corpus, not with `llama-bench`**: `llama-bench -p N` prefills N synthetic token IDs and never
+  tokenizes text, so it has no token count to compare against, and the benchmark prompt's count is
+  calibrated to `n_prompt` on the Juno side whatever the split does. Tier 01's precondition 7 should already have achieved this for the sweep
   models; if it did, this threshold is a regression check that passes on arrival, and saying so is the
   correct outcome rather than a sign the threshold is too weak. What is *not* already covered is
   item 4's stronger claim: the token **IDs** must match the reference for the parity corpus, not only
   the count, on every sweep model — equal counts with a different split is the failure this item
   exists to catch and is invisible to precondition 7's check.
 
-  Throughput must not regress: tg ratio within 0.95x and pp ratio within 0.95x of the pre-tier
-  baseline, median of three per the README's noise-floor rule. If any sweep model's token count moves
+  Throughput must not regress: Juno tg and pp t/s **>= 0.95x** the pre-tier build on every sweep
+  model, from a same-hour interleaved A/B with pinned clocks against the pre-tier build (README, "No-regression gates tighter than the floor are Juno-against-Juno"). If any sweep model's token count moves
   *here* — which would mean Tier 01's implementation was incomplete for that family — state which model
   moved and why, mark the run as the new reference for it, and record it as a late measurement boundary
   under this tier's execution record, since the whole reason precondition 7 was hoisted into Tier 01
@@ -199,7 +202,8 @@ that point rather than asserting against Juno's own output and calling it parity
       still loads bit-identically.
 - [ ] Token-ID parity evidence published per sweep model, with any remaining divergence documented
       per model rather than unstated.
-- [ ] `prompt_tokens` equals llama.cpp's token count for the benchmark prompt on every sweep model.
+- [ ] Juno's token count equals the reference tokenizer's (`llama-tokenize`, not `llama-bench`,
+      which never tokenizes text) on every parity-corpus line for every sweep model.
 - [ ] The LoRA-adapter question (checklist rows 9 and 10) is resolved and documented — re-train,
       version, or accept-and-warn — not left implicit, and covering both Tier 01's precondition-7
       change and any further change this tier made, since the adapter on disk may already be on the far

@@ -125,8 +125,9 @@ actually help rather than hurt.
     that wins on aggregate tokens by starving individual streams has not improved the product.
   - Correctness at the raised concurrency ceiling: no request starvation (every admitted request
     completes) and no KV cross-contamination, asserted by test rather than by throughput alone.
-  - `static` must be untouched: tg and pp within **0.98x** of the pre-tier baseline, since this tier
-    is scoped to change only `continuous`.
+  - `static` must be untouched: Juno tg and pp t/s **>= 0.98x** the pre-tier build, from a same-hour interleaved A/B with pinned clocks against the pre-tier build (README, "No-regression gates tighter than the floor are Juno-against-Juno"), since
+    this tier is scoped to change only `continuous`. If the A/B's own spread on this host is wider than
+    2%, record the spread and score against it rather than claiming a resolution the harness lacks.
 
 ## Models needed
 

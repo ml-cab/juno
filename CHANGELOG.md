@@ -1,5 +1,38 @@
 ## Status 
 
+**Session 98** — Benchmark readings no longer depend on which CPU core a span started on, and engines launched by the performance scripts no longer leave processes behind
+
+- **Recorded durations are checked against the request that contains them, and read off a clock the
+  kernel trusts.** On a host whose kernel has rejected the CPU timestamp counter, the JVM still stamps
+  flight-recorder events with it. On the reference host CPU0's counter reads 633 ms ahead of the other
+  cores, so a span that crossed CPU0 read 633 ms short or long: single prefill repetitions four to five
+  times too fast, prefill spans longer than their request, generation spans misread both ways, and
+  633 ms "collection pauses" that cost nothing. The comparison and vision harnesses now make the
+  recorder read the operating-system clock whenever the kernel clocksource is not `tsc`
+  (`PERF_JFR_OS_CLOCK=auto`, recorded in `host.json` and the index), and withhold any repetition whose
+  spans do not account for its own latency or whose prefill did not start at position 0. Same-hour
+  check on TinyLlama: 1 of 24 repetitions misread with the default clock, 0 of 24 with the
+  operating-system clock; generation measured under the recorder reads 3.9% lower, prefill unchanged.
+  Applied to the four comparison sweeps of 2026-09-27, the check withholds 23 of 156 repetitions; no
+  reference median moves by more than 2.2%. `docs/howto.md` says how to get correct durations from
+  `./juno --jfr` on such a host.
+- **Two new prefill metrics.** `juno.PrefillBatch.tokens` and `juno.PrefillBatch.min_start_position`
+  (-1 when there was no prefill window) report how much of the prompt the recorded prefill covered and
+  where it started, written on every run.
+- **Performance scripts reap the engine's stdin keepalive.** Ten scripts kept the console open with a
+  shell loop that nothing ever reaped, so every engine launch left a sleeping shell behind, enough to
+  make "is a sweep still running" checks return false positives. They now share one named-pipe helper in
+  `perf-lib.sh`, checked by `selftest-engine-stdin.sh`; a full run of each leaves no shell, pipe or
+  engine behind, and an engine whose script dies without stopping it now exits instead of running on.
+  The comparison harness also stops discarding its own warnings after its first engine stop.
+- **A refused model file says why in one line, and says the right why.** Files whose architecture
+  Juno has no verified handler for (qwen35, gemma4, mistral3, minimax-m2 among those on hand) mostly
+  also declare a pre-tokenizer split Juno has not implemented, and local mode had begun refusing them
+  for the split, since the tokenizer loaded first, and as a stack trace. Every entry point (local,
+  cluster and LoRA modes, the standalone coordinator, the `JunoPlayer` and `LoraTrainer` embedding
+  API) now checks the architecture before reading anything else, and the console reports either
+  refusal as one `ERROR:` line with exit status 1. Cluster mode now refuses before starting any node.
+
 **Session 97** — GPU device memory no longer grows with every request, GPU prefill is faster, and two failures now say what they are
 
 - **A GPU server's device memory now stays flat across requests.** The server runs every request on
@@ -22,6 +55,16 @@
   TinyLlama 181 to 229 tokens per second, Qwen2.5-3B 83 to 90, Mistral-7B 61 to 65; generation is
   unchanged within noise, and LoRA training and playback pass their gates (training 0.91 of the
   baseline's time, playback 1.08x). GPU prefill figures from before this change are not comparable.
+- **Faster performance checks, same checks.** The GPU residency smoke test generates the full output
+  only on its first and last request per mode (which must match); the requests between, which exist
+  for the per-request memory reading, generate 8 tokens (`--mem-n-gen`) and must reproduce the first
+  request's opening. The comparison harness takes `--juno-jar PATH` to measure another build from the
+  same checkout without publishing it, for same-hour comparisons of two builds.
+- **Pinned clocks and named builds for performance gates.** The comparison harness takes
+  `--pin-clocks` (performance governor, turbo off, GPU clock locked where the driver allows; restored
+  on exit) and records in every run the Juno commit, the jar's hash, the JDK build, the JVM flags, the
+  GPU driver and the reference tool's build. The Juno heap is now fixed per model (initial size equal
+  to the maximum), so absolute figures from before this change are not comparable with those after it.
 - **How**: the matrix-vector backend's scratch and stream now belong to the backend instance; every
   use was already serialized by the GPU context's lock and waits for its stream before releasing it,
   so one set serves every caller. The attention path and the round-trip norm run outside that lock, so

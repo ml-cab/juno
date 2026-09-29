@@ -150,9 +150,9 @@ against the existing (correct, if slow) single-node dense computation.
     architecture — this is the threshold, and it is a hard one.
   - **Gate:** per-layer AllReduce and gRPC overhead is published as a measured per-token cost, so a
     future multi-GPU host has a number to be held to.
-  - **Gate:** single-node throughput must not regress — tg and pp within **0.95x** of the pre-tier
-    baseline, median of three per the README's noise-floor rule, since this tier rewrites the
-    projection path that single-node inference also uses.
+  - **Gate:** single-node throughput must not regress — Juno tg and pp t/s **>= 0.95x** the pre-tier
+    build, from a same-hour interleaved A/B with pinned clocks against the pre-tier build (README, "No-regression gates tighter than the floor are Juno-against-Juno"), since this tier rewrites the projection path that single-node inference
+    also uses.
   - **Recorded, no threshold:** 2- and 3-way TP throughput against single-node dense on this host.
     Expect it to be below 1.0x. Report the number and the reason plainly rather than omitting it.
 
@@ -176,7 +176,7 @@ tier reaches that point).
       GPU.
 - [ ] Cross-surface checklist fully resolved; continuous+tensor-parallel fallback-to-static
       behavior explicitly confirmed unchanged (not silently made reachable in a half-working state).
-- [ ] Perf gate published: parity gate met, single-node throughput within 0.95x, AllReduce/gRPC
+- [ ] Perf gate published: parity gate met, single-node Juno t/s >= 0.95x the pre-tier build (same-hour A/B), AllReduce/gRPC
       per-token overhead recorded, and multi-node throughput reported as measured — including if it
       is below 1.0x, which is the expected result on a single-GPU host.
 - [ ] Docs (`docs/agent-arch.txt`, `docs/howto.md`) updated to state plainly that tensor parallelism

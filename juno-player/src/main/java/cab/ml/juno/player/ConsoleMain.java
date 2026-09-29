@@ -473,18 +473,28 @@ public final class ConsoleMain {
 
 		printKvSchedulePolicy();
 
-		if (loraMode && jfrDuration != null) {
-			startLoraJfr();
-		} else if (loraMode) {
-			runLoraRepl();
-		} else if (localMode && jfrDuration != null) {
-			startLocalJfr();
-		} else if (localMode) {
-			runLocalRepl();
-		} else if (jfrDuration != null) {
-			startClusterJfr();
-		} else {
-			runClusterRepl();
+		// A refused model file is reported in one line, not as a stack trace. The
+		// architecture is checked before anything else reads the file, so it is the
+		// reason given when a file fails more than one check.
+		try {
+			cab.ml.juno.node.ModelFileGate.requireLoadable(Path.of(modelPath));
+			if (loraMode && jfrDuration != null) {
+				startLoraJfr();
+			} else if (loraMode) {
+				runLoraRepl();
+			} else if (localMode && jfrDuration != null) {
+				startLocalJfr();
+			} else if (localMode) {
+				runLocalRepl();
+			} else if (jfrDuration != null) {
+				startClusterJfr();
+			} else {
+				runClusterRepl();
+			}
+		} catch (cab.ml.juno.node.UnsupportedModelException
+				| cab.ml.juno.tokenizer.UnsupportedPreTokenizerException e) {
+			System.err.println("ERROR: " + e.getMessage());
+			System.exit(1);
 		}
 	}
 

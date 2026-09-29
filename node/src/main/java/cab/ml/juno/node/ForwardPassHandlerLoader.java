@@ -257,7 +257,7 @@ public final class ForwardPassHandlerLoader {
 	 *
 	 * @return architecture string, lower-cased; {@code "llama"} when absent
 	 */
-	private static String readArchitecture(Path modelPath) throws IOException {
+	static String readArchitecture(Path modelPath) throws IOException {
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			String arch = r.metaString("general.architecture");
 			return arch != null ? arch.toLowerCase().strip() : "llama";

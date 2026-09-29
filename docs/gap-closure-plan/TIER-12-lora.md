@@ -109,7 +109,10 @@ interim one).
 
   **Threshold.**
   - Existing `.lora` train and playback must not regress, per the standing LoRA rule: train
-    **>= 0.95x** and wall-clock playback tps **>= 0.80x** of the last published baseline.
+    **>= 0.95x** and wall-clock playback tps **>= 0.80x** of the baseline. The train figure sits inside
+    the noise floor, so it is read from `compare-lora.sh --baseline <pre-tier ref> --reps 3`, which runs
+    both builds in one session, with clocks pinned (README, "No-regression gates tighter than the
+    floor"), not against the last published directory.
   - Gradient/activation checkpointing must reduce peak training memory by **>= 30%** on
     `tinyllama-1.1b` at the longest sequence length that fits without it, while costing **<= 1.4x**
     the training step time — checkpointing that saves no meaningful memory, or that halves training
@@ -118,7 +121,8 @@ interim one).
     against the current FP16/FP32-frozen path, with final validation loss within **2%** of it after
     an equal number of steps. A memory win bought with a convergence regression is a failure.
   - Per-request hot-swapping must not slow the single-adapter path: playback tps with one adapter
-    selected per-request **>= 0.95x** the `--lora-play` startup-flag path it replaces.
+    selected per-request **>= 0.95x** the `--lora-play` startup-flag path it replaces, both paths
+    alternated in one session with pinned clocks.
 
 ## Models needed
 

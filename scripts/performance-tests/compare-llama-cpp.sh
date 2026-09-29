@@ -26,6 +26,8 @@
 set -euo pipefail
 
 PERF_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=perf-lib.sh
+source "${PERF_SCRIPTS}/perf-lib.sh"
 ROOT="$(cd "${PERF_SCRIPTS}/../.." && pwd)"
 MODELS_DIR="${ROOT}/models"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -91,6 +93,30 @@ SELFTEST_ONLY=0
 PUBLISH=1
 USE_GPU=0
 LLAMA_CPP_BIN_EXPLICIT=""
+JUNO_JAR_EXPLICIT=""
+# Clock pinning for gate runs. Recording the governor, turbo state and GPU clocks
+# tells a reader a run was taken at a moving clock; it does not stop the clock from
+# moving, and this host's reference tool has moved -14% and +16% between two sweeps
+# eight minutes apart. --pin-clocks fixes the CPU governor at performance and turns
+# turbo off for the run (restored on exit), and locks the GPU graphics clock where
+# the driver allows it. It needs sudo without a prompt (run `sudo -v` first) and
+# refuses to start a run it could not pin, rather than publishing an unpinned run
+# that believes it was pinned.
+PIN_CLOCKS=0
+PIN_GPU_MHZ=""
+CLOCK_PIN_STATE="not requested"
+PINNED_PREV_GOVERNOR=""
+PINNED_PREV_NO_TURBO=""
+PINNED_GPU=0
+# The JVM flags every Juno cycle runs with, recorded so a run states what it ran
+# under. The heap is pinned per model (-Xms equal to -Xmx) so the collector does not
+# resize it inside a measurement.
+JUNO_JVM_FLAGS=(-XX:+UseG1GC -XX:+AlwaysPreTouch)
+# JFR reads the operating-system clock where the kernel has rejected the CPU timestamp
+# counter; otherwise a span crossing two cores with disagreeing counters is misread
+# (perf-lib.sh, "JFR timestamp source"). PERF_JFR_OS_CLOCK=0 keeps the JVM default.
+# shellcheck disable=SC2206
+JUNO_JVM_FLAGS+=($(perf_jfr_clock_jvm_flags))
 USE_JFR=1
 JFR_DURATION="${JFR_DURATION:-30m}"
 # The one measurement configuration every recording in this project names, so two
@@ -100,10 +126,6 @@ JFR_RECORDING_NAME=juno-compare
 # Set per rep: a rep whose recording could not be started is measured without one
 # rather than abandoned, and says so.
 USE_JFR_THIS_REP=0
-# The stdin pipe holding the engine REPL open, and the descriptor this script keeps
-# on it. Both are released with the engine.
-JUNO_STDIN_FD=""
-JUNO_STDIN_FIFO=""
 
 # Default model set: text GGUFs both engines load locally (skip huge / vision / llamafile /
 # architectures Juno cannot load yet, e.g. Qwen3.5).
@@ -155,7 +177,18 @@ Options:
   --api-port N      Juno REST port (default: ${API_PORT})
   --out DIR         Output directory (default: target/perf-compare/<timestamp>)
   --llama-bin DIR   Directory with llama-bench
-  --vector 0|1      Pass jdk.incubator.vector to Juno (default: ${JUNO_USE_VECTOR})
+  --juno-jar PATH   Run this Juno shaded jar instead of this tree's juno-player build, for an
+                    A/B against another build from the same checkout (so the reference tool
+                    and models resolve as usual). Implies --no-publish: a published sweep is
+                    always this tree's build.
+  --pin-clocks      Pin the clocks for the run: CPU governor performance, turbo off,
+                    GPU graphics clock locked where the driver supports it; all restored
+                    on exit. Needs prompt-free sudo (run sudo -v first); the run refuses
+                    to start if the CPU cannot be pinned. Required for any gate tighter
+                    than this host's 15% noise floor
+  --pin-gpu-mhz N   GPU graphics clock to lock at with --pin-clocks (default: the card's
+                    maximum graphics clock)
+  --vector 0|1     Pass jdk.incubator.vector to Juno (default: ${JUNO_USE_VECTOR})
   --jfr DURATION    Enable Juno JFR for DURATION (default: ${JFR_DURATION}; on by default)
   --no-jfr          Skip Juno --jfr (API latency only for Juno tg)
   --publish         Copy metrics JSON+INDEX into docs/perf-compare/ (default)
@@ -428,6 +461,76 @@ run_selftest() {
   selftest_expect "off-table model heap marked derived" derived \
     "$(COMPARE_HEAP= heap_source_for_model "${MODELS_DIR}/Qwen3-1.7B-Q4_K_M.gguf")"
 
+  # Every measured repetition is checked against its own request. The cases are the
+  # shapes of the 2026-09-27 sweeps (20260927T091155Z, 20260927T232837Z): JFR spans
+  # read 633 ms short or long when they crossed CPU0, whose timestamp counter runs
+  # ahead of the other cores on that host, while the request latency (the engine
+  # clock) stayed right. A reading taken off such spans is withheld.
+  log "selftest: span check against the request, full prefill"
+  selftest_metrics() {  # path prefill_ms decode_ms [prefill_tokens min_start]
+    jq -n --argjson p "$2" --argjson dec "$3" --argjson t "${4:-null}" --argjson st "${5:-null}" \
+      '{ models: [ { metrics: ({ "juno.ForwardPass.prefill.total_ms": $p,
+                                  "juno.ForwardPass.decode.total_ms": $dec }
+                               + (if $t == null then {} else { "juno.PrefillBatch.tokens": $t,
+                                  "juno.PrefillBatch.min_start_position": $st } end)) } ] }' >"$1"
+  }
+  local sj
+  selftest_metrics "$d/short.json" 142 25 127 0
+  sj="$(jfr_summary_json "$d/short.json" 128 1 808)"
+  selftest_expect "a prefill span 633 ms short of its request is caught" false \
+    "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
+  selftest_expect "its 898 t/s prefill reading is withheld" null "$(jq -r '.prompt_eval_tps' <<<"$sj")"
+  selftest_metrics "$d/long.json" 1451 23 127 0
+  sj="$(jfr_summary_json "$d/long.json" 128 1 850)"
+  selftest_expect "a prefill span longer than its whole request is caught" false \
+    "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
+  selftest_metrics "$d/ok.json" 750 23 127 0
+  sj="$(jfr_summary_json "$d/ok.json" 128 1 782)"
+  selftest_expect "a span that accounts for its request passes" true \
+    "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
+  selftest_expect "and its prefill reading is published" 170.67 \
+    "$(jq -r '.prompt_eval_tps * 100 | round / 100' <<<"$sj")"
+  selftest_expect "a whole-prompt prefill from position 0 is a full prefill" true \
+    "$(jq -r '.span_check.full_prefill' <<<"$sj")"
+  selftest_metrics "$d/gen.json" 266 2003 10 0
+  sj="$(jfr_summary_json "$d/gen.json" 11 64 2411)"
+  selftest_expect "64 tokens of sampling overhead (142 ms) is not flagged" true \
+    "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
+  selftest_metrics "$d/gen-long.json" 334 3796 10 0
+  sj="$(jfr_summary_json "$d/gen-long.json" 11 64 2948)"
+  selftest_expect "decode spans 1184 ms over their request are caught" false \
+    "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
+  selftest_expect "and the generation reading is withheld" null "$(jq -r '.token_gen_tps' <<<"$sj")"
+  # CPU shape (2026-09-28, operating-system clock): 8 tokens, 314 ms per decode step,
+  # so the first step alone leaves 484 ms outside the token span. Not a misread.
+  jq -n '{ models: [ { metrics: { "juno.ForwardPass.prefill.total_ms": 3293,
+      "juno.ForwardPass.decode.total_ms": 2510, "juno.ForwardPass.decode.count": 8,
+      "juno.TokenProduced.elapsed_seconds": 2.075 } } ] }' >"$d/cpu-gen.json"
+  sj="$(jfr_summary_json "$d/cpu-gen.json" 11 8 5853)"
+  selftest_expect "a slow first CPU decode step is not read as a misread span" true \
+    "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
+  jq '.models[0].metrics["juno.TokenProduced.elapsed_seconds"] = 1.414' "$d/gen.json" >"$d/gen-tok.json"
+  sj="$(jfr_summary_json "$d/gen-tok.json" 11 64 2361)"
+  selftest_expect "a token span 651 ms short, with sound forward passes, is caught" false \
+    "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
+  jq '.models[0].metrics["juno.TokenProduced.elapsed_seconds"] = 2.065' "$d/gen.json" >"$d/gen-tok-ok.json"
+  sj="$(jfr_summary_json "$d/gen-tok-ok.json" 11 64 2361)"
+  selftest_expect "a token span that leaves a first-token gap passes" true \
+    "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
+  selftest_metrics "$d/reuse.json" 200 23 27 100
+  sj="$(jfr_summary_json "$d/reuse.json" 128 1 240)"
+  selftest_expect "a prefill resumed at position 100 is not a full prefill" false \
+    "$(jq -r '.span_check.full_prefill' <<<"$sj")"
+  selftest_expect "and its prefill reading is withheld" null "$(jq -r '.prompt_eval_tps' <<<"$sj")"
+  selftest_expect "and the reason names the start position" true \
+    "$(jq -r '.span_check.reason | test("starting at position 100")' <<<"$sj")"
+  selftest_metrics "$d/oldjar.json" 750 23
+  sj="$(jfr_summary_json "$d/oldjar.json" 128 1 782)"
+  selftest_expect "a build without prefill-token keys is not judged on them" null \
+    "$(jq -r '.span_check.full_prefill' <<<"$sj")"
+  selftest_expect "and still publishes its reading" 170.67 \
+    "$(jq -r '.prompt_eval_tps * 100 | round / 100' <<<"$sj")"
+
   if (( SELFTEST_FAILURES > 0 )); then
     die "selftest: ${SELFTEST_FAILURES} check(s) failed"
   fi
@@ -477,6 +580,9 @@ while [[ $# -gt 0 ]]; do
     --api-port) API_PORT="$2"; shift 2 ;;
     --out) OUT_ROOT="$2"; shift 2 ;;
     --llama-bin) LLAMA_CPP_BIN_EXPLICIT="$2"; shift 2 ;;
+    --juno-jar) JUNO_JAR_EXPLICIT="$2"; shift 2 ;;
+    --pin-clocks) PIN_CLOCKS=1; shift ;;
+    --pin-gpu-mhz) PIN_GPU_MHZ="$2"; shift 2 ;;
     --vector) JUNO_USE_VECTOR="$2"; shift 2 ;;
     --jfr) USE_JFR=1; JFR_DURATION="$2"; shift 2 ;;
     --no-jfr) USE_JFR=0; shift ;;
@@ -489,6 +595,15 @@ while [[ $# -gt 0 ]]; do
     *) die "unknown option: $1 (try --help)" ;;
   esac
 done
+
+if [[ -n "$JUNO_JAR_EXPLICIT" ]]; then
+  [[ -f "$JUNO_JAR_EXPLICIT" ]] || die "--juno-jar: no such file: $JUNO_JAR_EXPLICIT"
+  JUNO_JAR_EXPLICIT="$(cd "$(dirname "$JUNO_JAR_EXPLICIT")" && pwd)/$(basename "$JUNO_JAR_EXPLICIT")"
+  if [[ "$PUBLISH" -eq 1 ]]; then
+    PUBLISH=0
+    printf '[compare] --juno-jar given: not publishing (a published sweep is always this tree'"'"'s build)\n' >&2
+  fi
+fi
 
 # Generation parity defaults to the requested token count; resolved here because it
 # follows --n-gen, which may itself have been set on the command line.
@@ -662,6 +777,10 @@ heap_source_for_model() {
 }
 
 find_juno_jar() {
+  if [[ -n "$JUNO_JAR_EXPLICIT" ]]; then
+    printf '%s' "$JUNO_JAR_EXPLICIT"
+    return
+  fi
   shopt -s nullglob
   local jars=( "$ROOT/juno-player/target/"juno-player-*-shaded.jar )
   shopt -u nullglob
@@ -725,6 +844,113 @@ gpu_clock_json() {
     "${graphics:-null}" "${sm:-null}" "${mem:-null}" "$(json_escape "${throttle:-none}")"
 }
 
+pin_clocks() {
+  [[ "$PIN_CLOCKS" -eq 1 ]] || return 0
+  sudo -n true 2>/dev/null \
+    || die "--pin-clocks needs sudo without a prompt: run 'sudo -v' first, or drop --pin-clocks (the run is then recorded as unpinned)"
+  local govs=(/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor)
+  [[ -e "${govs[0]}" ]] || die "--pin-clocks: no cpufreq governor on this host; cannot pin the CPU clock"
+  PINNED_PREV_GOVERNOR="$(cat "${govs[0]}")"
+  printf 'performance\n' | sudo -n tee "${govs[@]}" >/dev/null \
+    || die "--pin-clocks: could not set the performance governor"
+  local detail="cpu governor performance (was ${PINNED_PREV_GOVERNOR})"
+  if [[ -e /sys/devices/system/cpu/intel_pstate/no_turbo ]]; then
+    PINNED_PREV_NO_TURBO="$(cat /sys/devices/system/cpu/intel_pstate/no_turbo)"
+    printf '1\n' | sudo -n tee /sys/devices/system/cpu/intel_pstate/no_turbo >/dev/null \
+      || die "--pin-clocks: could not turn turbo off"
+    detail+=", turbo off"
+  elif [[ -e /sys/devices/system/cpu/cpufreq/boost ]]; then
+    PINNED_PREV_NO_TURBO="boost:$(cat /sys/devices/system/cpu/cpufreq/boost)"
+    printf '0\n' | sudo -n tee /sys/devices/system/cpu/cpufreq/boost >/dev/null \
+      || die "--pin-clocks: could not turn boost off"
+    detail+=", boost off"
+  else
+    die "--pin-clocks: no turbo or boost control found; cannot pin the CPU clock"
+  fi
+  if [[ "$USE_GPU" -eq 1 ]] && command -v nvidia-smi >/dev/null 2>&1; then
+    local mhz="$PIN_GPU_MHZ"
+    [[ -n "$mhz" ]] || mhz="$(nvidia-smi --query-gpu=clocks.max.graphics --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
+    if [[ -n "$mhz" ]] && sudo -n nvidia-smi -lgc "${mhz},${mhz}" >/dev/null 2>&1; then
+      PINNED_GPU=1
+      detail+=", gpu graphics clock locked at ${mhz} MHz"
+    else
+      # Locking graphics clocks is not available on every card and driver (it is
+      # refused on this project's Pascal GeForce). The CPU half still stands; the GPU
+      # clock stays recorded rather than fixed, and the run says so.
+      detail+=", gpu clock lock refused by the driver (recorded, not fixed)"
+    fi
+  fi
+  CLOCK_PIN_STATE="pinned: ${detail}"
+  log "clocks ${CLOCK_PIN_STATE}"
+}
+
+restore_clocks() {
+  [[ -n "$PINNED_PREV_GOVERNOR" ]] || return 0
+  local govs=(/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor)
+  printf '%s\n' "$PINNED_PREV_GOVERNOR" | sudo -n tee "${govs[@]}" >/dev/null 2>&1 \
+    || warn "could not restore the CPU governor to ${PINNED_PREV_GOVERNOR}"
+  if [[ "$PINNED_PREV_NO_TURBO" == boost:* ]]; then
+    printf '%s\n' "${PINNED_PREV_NO_TURBO#boost:}" | sudo -n tee /sys/devices/system/cpu/cpufreq/boost >/dev/null 2>&1 \
+      || warn "could not restore the boost setting"
+  elif [[ -n "$PINNED_PREV_NO_TURBO" ]]; then
+    printf '%s\n' "$PINNED_PREV_NO_TURBO" | sudo -n tee /sys/devices/system/cpu/intel_pstate/no_turbo >/dev/null 2>&1 \
+      || warn "could not restore the turbo setting"
+  fi
+  if [[ "$PINNED_GPU" -eq 1 ]]; then
+    sudo -n nvidia-smi -rgc >/dev/null 2>&1 || warn "could not reset the GPU clock lock"
+  fi
+  PINNED_PREV_GOVERNOR=""
+}
+
+# Build identity, so a published run names the code and toolchain it measured
+# rather than leaving a reader to infer them from the date.
+juno_commit() {
+  git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown'
+}
+
+juno_tree_dirty() {
+  if [[ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
+}
+
+juno_jar_sha256() {
+  local jar="${JUNO_JAR_EXPLICIT:-$ROOT/juno-player/target/juno-player.jar}"
+  if [[ -f "$jar" ]]; then
+    sha256sum "$jar" 2>/dev/null | cut -c1-16
+  else
+    printf 'missing'
+  fi
+}
+
+java_version_line() {
+  local j
+  j="${JAVA_HOME:+${JAVA_HOME}/bin/}java"
+  "$j" -version 2>&1 | sed -n 2p || printf 'unknown'
+}
+
+gpu_driver_version() {
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || printf 'unknown'
+  else
+    printf 'none'
+  fi
+}
+
+# The reference tool reports its own build in every result; read it from the first
+# one this run wrote. Two builds are in use on this host (one per backend), so a run
+# that does not name its build cannot be compared with one that does.
+llama_build_commit() {
+  local f
+  for f in "${OUT_ROOT}"/*-llama-cpp.json; do
+    [[ -f "$f" ]] || continue
+    jq -r '[.. | objects | select(has("build_commit")) | .build_commit][0] // empty' "$f" 2>/dev/null && return 0
+  done
+  printf ''
+}
+
 host_meta_json() {
   local cpu mem
   cpu="$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ //' || uname -m)"
@@ -741,6 +967,17 @@ host_meta_json() {
   "cpu_governor": "$(json_escape "$(cpu_governor_state)")",
   "cpu_turbo": "$(json_escape "$(cpu_turbo_state)")",
   "gpu_clocks": $(gpu_clock_json),
+  "clock_pinned": $([[ "$CLOCK_PIN_STATE" == pinned:* ]] && echo true || echo false),
+  "clock_pin_state": "$(json_escape "$CLOCK_PIN_STATE")",
+  "juno_commit": "$(json_escape "$(juno_commit)")",
+  "juno_tree_dirty": $(juno_tree_dirty),
+  "juno_jar": "$(json_escape "${JUNO_JAR_EXPLICIT:-juno-player/target/juno-player.jar}")",
+  "juno_jar_sha256_16": "$(json_escape "$(juno_jar_sha256)")",
+  "java_version": "$(json_escape "$(java_version_line)")",
+  "juno_jvm_flags": "$(json_escape "${JUNO_JVM_FLAGS[*]} -Xms=-Xmx (fixed per model)")",
+  "jfr_timestamp_source": "$(json_escape "$(perf_jfr_clock_label)")",
+  "gpu_driver": "$(json_escape "$(gpu_driver_version)")",
+  "llama_build_commit": "$(json_escape "$(llama_build_commit)")",
   "n_prompt": ${N_PROMPT},
   "n_gen": ${N_GEN},
   "reps": ${REPS},
@@ -860,24 +1097,10 @@ wait_for_juno_api() {
   done
 }
 
-# Closes the stdin pipe and removes it. Separate from killing the engine because the
-# engine exits on its own once the pipe closes, and because the pipe has to go even
-# when there was no engine left to kill.
-release_juno_stdin() {
-  if [[ -n "${JUNO_STDIN_FD:-}" ]]; then
-    exec {JUNO_STDIN_FD}>&- 2>/dev/null || true
-    JUNO_STDIN_FD=""
-  fi
-  if [[ -n "${JUNO_STDIN_FIFO:-}" ]]; then
-    rm -f "$JUNO_STDIN_FIFO"
-    JUNO_STDIN_FIFO=""
-  fi
-}
-
 stop_juno() {
   local pid="${JUNO_PID:-}"
   if [[ -z "$pid" ]]; then
-    release_juno_stdin
+    perf_engine_stdin_release
     return 0
   fi
   if kill -0 "$pid" 2>/dev/null; then
@@ -891,7 +1114,7 @@ stop_juno() {
     wait "$pid" 2>/dev/null || true
   fi
   JUNO_PID=""
-  release_juno_stdin
+  perf_engine_stdin_release
 }
 
 # One request. Callers that discard it read nothing back but its success.
@@ -983,12 +1206,64 @@ jfr_summary_json() {
     (if $prefill_ms > 0 then "jfr_prefill_total_ms"
      elif ($latency_ms > $decode_ms and $pt > 0) then "wall_minus_decode"
      else null end) as $pp_source |
+    # The spans must account for the request that contains them. The engine latency
+    # (read off System.nanoTime) minus the prefill and decode spans leaves a small
+    # positive overhead, 9 to 170 ms on the reference sweeps; a span misread by a
+    # CPU timestamp counter that disagrees between cores leaves hundreds of ms either
+    # side of that. Spans exceeding their request are impossible, so the lower bound
+    # is tight; the upper bound allows per-token sampling and detokenization.
+    (if $latency_ms > 0 and ($prefill_ms + $decode_ms) > 0
+     then ($latency_ms - $prefill_ms - $decode_ms) else null end) as $resid |
+    (300 + 3 * $ct) as $resid_max |
+    # The generation figure is read off the first-to-last token span, which is a
+    # separate pair of timestamps and is misread separately. What the request leaves
+    # around it after prefill is the first decode step (the span starts at the first
+    # token) plus overhead; one mean decode step is taken off, so a slow CPU step is
+    # not read as a misread span. 22 to 106 ms before that subtraction on the GPU
+    # reference sweeps.
+    ($m."juno.TokenProduced.elapsed_seconds" // null) as $tok_span_s |
+    ($m."juno.ForwardPass.decode.count" // 0) as $decode_n |
+    (if $decode_n > 0 then ($decode_ms / $decode_n) else 0 end) as $decode_step_ms |
+    (if $ct >= 2 and $tok_span_s != null and $tok_span_s > 0 and $latency_ms > 0
+     then ($latency_ms - $prefill_ms - ($tok_span_s * 1000) - $decode_step_ms) else null end) as $tok_resid |
+    (if $resid == null and $tok_resid == null then null
+     else (($resid == null or ($resid >= -25 and $resid <= $resid_max))
+           and ($tok_resid == null or ($tok_resid >= -25 and $tok_resid <= $resid_max))) end) as $clock_ok |
+    # A measured request prefills its whole prompt from position 0: the batched
+    # windows cover every prompt token but the last, which the first forward pass
+    # takes. A later start means it resumed from KV it did not write.
+    ($m."juno.PrefillBatch.tokens" // null) as $pb_tokens |
+    ($m."juno.PrefillBatch.min_start_position" // null) as $pb_start |
+    (if $pb_tokens == null or $pb_tokens == 0 or $pt <= 1 then null
+     else ($pb_start == 0 and $pb_tokens >= ($pt - 1)) end) as $full_prefill |
     {
       metrics_file: $f,
       jfr_file: ($raw[0].models[0].jfrFile // null),
-      prompt_eval_tps: $pp_tps,
+      # A reading taken off spans that fail the check below is withheld, not published.
+      prompt_eval_tps: (if $clock_ok == false or $full_prefill == false then null else $pp_tps end),
       prompt_eval_tps_source: $pp_source,
-      token_gen_tps: (if $token_tps != null and $token_tps > 0 then $token_tps else $decode_derived_tps end),
+      token_gen_tps: (if $clock_ok == false then null
+                      elif $token_tps != null and $token_tps > 0 then $token_tps
+                      else $decode_derived_tps end),
+      span_check: {
+        timestamps_consistent: $clock_ok,
+        span_residual_ms: $resid,
+        token_span_residual_ms: $tok_resid,
+        span_residual_min_ms: -25,
+        span_residual_max_ms: $resid_max,
+        prefill_tokens: $pb_tokens,
+        prefill_min_start_position: $pb_start,
+        full_prefill: $full_prefill,
+        reason: (if $clock_ok == false then
+                   ("the recorded spans leave \($resid // 0 | floor) ms (forward passes) and "
+                    + "\($tok_resid // 0 | floor) ms (token span) of the \($latency_ms) ms request "
+                    + "unaccounted for (allowed -25 to \($resid_max)): JFR timestamps disagree "
+                    + "with the engine clock, readings withheld")
+                 elif $full_prefill == false then
+                   ("the request prefilled \($pb_tokens) of \($pt) prompt tokens starting at "
+                    + "position \($pb_start): it did not prefill its whole prompt, prefill reading withheld")
+                 else null end)
+      },
       token_gen_tps_source: (if $token_tps != null and $token_tps > 0 then "TokenProduced.tps" else "ForwardPass.decode.total_ms" end),
       token_gen_tps_decode_derived: $decode_derived_tps,
       forward_pass_prefill_total_ms: $prefill_ms,
@@ -1083,9 +1358,8 @@ run_juno_rep() {
     java_args+=(--add-modules jdk.incubator.vector)
   fi
   java_args+=(
-    -XX:+UseG1GC
-    -XX:+AlwaysPreTouch
-    -Xms512m
+    "${JUNO_JVM_FLAGS[@]}"
+    -Xms"${heap}"
     -Xmx"${heap}"
     -Djuno.byteOrder=BE
     -jar "$jar"
@@ -1154,23 +1428,11 @@ run_juno_rep() {
 
   : >"$logf"
   # Keep stdin open: the console REPL exits on EOF, which would tear down the API
-  # mid-benchmark when launched non-interactively.
-  #
-  # A named pipe held open by this script, rather than the process substitution this
-  # used to use. That substitution ran an endless sleep loop in a subshell nothing
-  # ever reaped, so every engine launch left a sleeping shell behind — dozens across
-  # a sweep, enough that checking whether a sweep was still running gave false
-  # positives. The pipe costs one inode and is closed with the engine.
-  local stdin_fifo="${OUT_ROOT}/${rep_label}.stdin"
-  rm -f "$stdin_fifo"
-  mkfifo "$stdin_fifo"
-  # Read-write, so the engine reading the other end never sees EOF while this fd is
-  # open, and does see it the moment the fd closes.
-  exec {JUNO_STDIN_FD}<>"$stdin_fifo"
-  JUNO_STDIN_FIFO="$stdin_fifo"
+  # mid-benchmark when launched non-interactively (perf-lib.sh, "Engine stdin keepalive").
+  perf_engine_stdin_open || die "cannot create the engine stdin pipe"
   (
     cd "$ROOT"
-    exec "$java_bin" "${java_args[@]}" <"$stdin_fifo"
+    perf_engine_exec "$java_bin" "${java_args[@]}"
   ) >>"$logf" 2>&1 &
   JUNO_PID=$!
 
@@ -1180,7 +1442,7 @@ run_juno_rep() {
   local jfr_metrics="${OUT_ROOT}/${rep_label}-juno-jfr.json"
   local jfr_recording="${OUT_ROOT}/${rep_label}-measured.jfr"
   local jfr_block="null"
-  local jfr_pp_tps="null" jfr_tg_tps="null"
+  local jfr_pp_tps="null" jfr_tg_tps="null" span_reason="" span_withheld=0
 
   load_start="$(date +%s%N)"
   if ! wait_for_juno_api "$API_PORT" 600 "$JUNO_PID"; then
@@ -1321,6 +1583,13 @@ EOF
         jfr_block="$(jfr_summary_json "$jfr_metrics" "$prompt_tokens" "$completion_tokens" "${gen_ms:-0}")"
         jfr_pp_tps="$(jq -r '.prompt_eval_tps // empty' <<<"$jfr_block" 2>/dev/null || true)"
         jfr_tg_tps="$(jq -r '.token_gen_tps // empty' <<<"$jfr_block" 2>/dev/null || true)"
+        span_reason="$(jq -r '.span_check.reason // empty' <<<"$jfr_block" 2>/dev/null || true)"
+        if [[ -n "$span_reason" ]]; then
+          warn "${rep_label}: ${span_reason}"
+        fi
+        if [[ "$(jq -r '.span_check.timestamps_consistent' <<<"$jfr_block" 2>/dev/null)" == "false" ]]; then
+          span_withheld=1
+        fi
       else
         warn "could not extract metrics from ${jfr_recording} — see ${logf}"
       fi
@@ -1343,6 +1612,9 @@ EOF
     compare_tg=null
     tps=null
   fi
+  # Spans that failed the timestamp check withhold the generation reading too, rather
+  # than letting it fall back to the API figure, which is a different measurement.
+  (( span_withheld == 1 )) && compare_tg=null
   [[ -z "$compare_pp" ]] && compare_pp=null
   [[ -z "$compare_tg" ]] && compare_tg=null
   [[ -z "$tps" ]] && tps=null
@@ -1830,7 +2102,14 @@ write_run_index() {
     local -a parity_notes=()
     local -a gen_notes=()
     local -a noise_notes=()
+    local -a withheld_notes=()
+    local repf wreason
     for stem in "${STEMS[@]}"; do
+      for repf in "${OUT_ROOT}/${stem}"-*rep*-juno.json; do
+        [[ -f "$repf" ]] || continue
+        wreason="$(jq -r '.jfr.span_check.reason // empty' "$repf" 2>/dev/null || true)"
+        [[ -n "$wreason" ]] && withheld_notes+=("$(basename "$repf" -juno.json): ${wreason}")
+      done
       llama_f="${OUT_ROOT}/${stem}-llama-cpp.json"
       juno_f="${OUT_ROOT}/${stem}-juno.json"
       cmp="${OUT_ROOT}/${stem}-compare.json"
@@ -1920,6 +2199,16 @@ write_run_index() {
     echo "  min/max column is that median's own spread; a difference smaller than the spread"
     echo "  is not a result. Each cycle records only its measured request: the recording is"
     echo "  started after the warmup requests return and stopped before the engine exits."
+    echo "- Build: Juno \`$(juno_commit)\`$([[ "$(juno_tree_dirty)" == true ]] && echo ' plus uncommitted changes'), jar sha256 \`$(juno_jar_sha256)\`,"
+    echo "  $(java_version_line); JVM ${JUNO_JVM_FLAGS[*]}, -Xms equal to -Xmx per model."
+    echo "  Reference tool build \`$(llama_build_commit)\` from ${LLAMA_CPP_BIN:-?}; GPU driver $(gpu_driver_version)."
+    echo "  A different reference build is a measurement boundary: its ratios are not comparable with this run."
+    if [[ "$CLOCK_PIN_STATE" == pinned:* ]]; then
+      echo "- Clocks ${CLOCK_PIN_STATE}."
+    else
+      echo "- Clocks not pinned (${CLOCK_PIN_STATE}). This run can be read against the 15% noise floor"
+      echo "  only; it is not usable for a gate tighter than that (see --pin-clocks)."
+    fi
     echo "- Clock state this run: CPU governor $(cpu_governor_state), turbo $(cpu_turbo_state),"
     echo "  GPU clocks $(gpu_clock_json). A throttled run and a regression look the same"
     echo "  without this."
@@ -1934,14 +2223,25 @@ write_run_index() {
         echo "  - ${nnote}"
       done
     fi
+    if (( ${#withheld_notes[@]} > 0 )); then
+      echo "- Repetitions whose readings were withheld (the median is taken over the rest):"
+      local wnote
+      for wnote in "${withheld_notes[@]}"; do
+        echo "  - ${wnote}"
+      done
+    fi
+    echo "- JFR timestamps: $(perf_jfr_clock_label). Every repetition's spans are checked against"
+    echo "  the engine's own request latency and its prefill against its prompt; a failing"
+    echo "  repetition is withheld and listed above."
     echo "- The Scorable column asks whether a row's own repetitions agree: a generation reading"
     echo "  whose cycles span more than $(awk -v t="$REP_SPREAD_TOLERANCE" 'BEGIN{printf "%d", t*100}')% of their median is not stable at the resolution a"
     echo "  gate would read it at, and should be re-run rather than scored. Collection pauses and"
     echo "  lock/park totals are recorded in every result JSON but are not gated on. Neither"
     echo "  measures lost time reliably here: the park figure sums every thread, so an idle worker"
-    echo "  pool exceeds wall time on a healthy run, and the pause counter has reported ~635 ms on"
-    echo "  rows that produced their tokens in the same span as pause-free repetitions of"
-    echo "  themselves. A pause that does cost time appears in the dispersion anyway."
+    echo "  pool exceeds wall time on a healthy run, and the ~635 ms pauses that runs before"
+    echo "  2026-09-28 reported on rows that lost no time were JFR timestamps misread across"
+    echo "  CPU cores whose counters disagree, not pauses. A pause that does cost time appears in"
+    echo "  the dispersion anyway."
     echo "- GC max ms and Alloc B/tok come from the recording taken alongside each run. A"
     echo "  result whose GC max is a large fraction of its measurement window should be"
     echo "  re-run rather than scored: one long pause looks exactly like a regression."
@@ -2036,13 +2336,15 @@ if [[ "$USE_GPU" -eq 1 ]]; then
 fi
 
 mkdir -p "$OUT_ROOT"
+trap 'stop_juno; restore_clocks' EXIT
+pin_clocks
 host_meta_json >"${OUT_ROOT}/host.json"
 log "output: ${OUT_ROOT}"
+[[ -n "$JUNO_JAR_EXPLICIT" ]] && log "juno jar (--juno-jar): $JUNO_JAR_EXPLICIT"
 log "models: ${#SELECTED_MODELS[@]}"
 
 STEMS=()
 failures=0
-trap 'stop_juno' EXIT
 
 for base in "${SELECTED_MODELS[@]}"; do
   model_path="${MODELS_DIR}/${base}"
@@ -2058,6 +2360,11 @@ for base in "${SELECTED_MODELS[@]}"; do
   fi
 done
 
+# The reference build is only known once the reference tool has reported it.
+if [[ -n "$(llama_build_commit)" ]]; then
+  jq --arg c "$(llama_build_commit)" '.llama_build_commit = $c' "${OUT_ROOT}/host.json" >"${OUT_ROOT}/host.json.tmp" \
+    && mv "${OUT_ROOT}/host.json.tmp" "${OUT_ROOT}/host.json"
+fi
 write_run_index
 publish_results
 log "done. failures=${failures}  results in ${OUT_ROOT}"

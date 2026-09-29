@@ -23,6 +23,8 @@
 set -euo pipefail
 
 PERF_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=perf-lib.sh
+source "${PERF_SCRIPTS}/perf-lib.sh"
 ROOT="$(cd "${PERF_SCRIPTS}/../.." && pwd)"
 MODELS_DIR="${ROOT}/models"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -214,7 +216,7 @@ wait_for_vision_routes() {
 
 stop_juno() {
   local pid="${JUNO_PID:-}"
-  [[ -n "$pid" ]] || return 0
+  [[ -n "$pid" ]] || { perf_engine_stdin_release; return 0; }
   if kill -0 "$pid" 2>/dev/null; then
     kill -TERM "$pid" 2>/dev/null || true
     local i
@@ -226,6 +228,7 @@ stop_juno() {
     wait "$pid" 2>/dev/null || true
   fi
   JUNO_PID=""
+  perf_engine_stdin_release
 }
 
 wait_for_jfr_metrics() {
@@ -464,10 +467,17 @@ run_bench_at() {
   setup_cuda_env
   : >"$logf"
 
+  perf_engine_stdin_open || die "cannot create the engine stdin pipe"
   (
     cd "$workdir"
     # shellcheck disable=SC2094
-    exec "$juno" "${juno_args[@]}" < <(while true; do sleep 3600; done)
+    # JFR reads the operating-system clock where the kernel has rejected the CPU
+    # timestamp counter, so the decode figure is not read off a span misread across
+    # cores (perf-lib.sh, "JFR timestamp source"). Launchers from release-0.1.2 on
+    # honor JUNO_JVM_OPTS, so a baseline built from such a ref gets the same clock.
+    JUNO_JVM_OPTS="$(perf_jfr_clock_jvm_flags) ${JUNO_JVM_OPTS:-}"
+    export JUNO_JVM_OPTS
+    perf_engine_exec "$juno" "${juno_args[@]}"
   ) >>"$logf" 2>&1 &
   JUNO_PID=$!
 
@@ -515,6 +525,10 @@ run_bench_at() {
   fi
 
   write_bench_json "$out_json" "$ref" "$commit" "$host" "$resp" "$http_code" "$jfr_metrics" "$logf" "$load_ms" "$wall_ms"
+  if [[ -s "$out_json" ]]; then
+    jq --arg src "$(perf_jfr_clock_label)" '.jfr_timestamp_source = $src' "$out_json" >"${out_json}.tmp" \
+      && mv "${out_json}.tmp" "$out_json"
+  fi
 
   if [[ "$rc" -ne 0 || "$http_code" != "200" ]]; then
     die "vision request failed http=${http_code} rc=${rc} — see ${logf} ${resp}"

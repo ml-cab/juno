@@ -64,15 +64,36 @@ at the resolution a gate would read it at, and reads `NOISY` with the reason. Th
 evidence of whether a reading can be trusted, and it is measured rather than inferred.
 
 An earlier version of this gate used the longest collection pause instead, and it had to be withdrawn
-on measurement. On this host the pause counter does not report time the application was stopped: one
-model produced 64 tokens across token spans of 1110, 1120 and 1107 ms while its three pause readings
-were 633 ms, 5 ms and 4 ms, and a 633 ms stop-the-world inside a 1110 ms span would imply more than
-twice the generation rate the model reaches. The pause rule rejected three rows whose readings agreed
-to within 1% and passed one whose readings spanned 31%. Collection pauses are still recorded in every
+on measurement: one model produced 64 tokens across token spans of 1110, 1120 and 1107 ms while its
+three pause readings were 633 ms, 5 ms and 4 ms, and a 633 ms stop-the-world inside a 1110 ms span
+would imply more than twice the generation rate the model reaches. The pause rule rejected three rows
+whose readings agreed to within 1% and passed one whose readings spanned 31%. The 633 ms was later
+traced to the recording's clock rather than to the collector (next paragraph). Collection pauses are still recorded in every
 result, including the share of them that overlapped the measured token span, as context rather than as
 a gate; a pause that does cost time shows up in the dispersion anyway. Lock and park totals are
 likewise recorded and not gated on, since the park figure sums every thread and an idle worker pool
 exceeds wall time on a healthy run.
+
+**Every repetition's recorded spans are checked against the request that contains them.** The JVM
+stamps flight-recorder events with the CPU's timestamp counter whenever the processor advertises an
+invariant one, even where the kernel has rejected that counter at boot and keeps time from another
+clock. On the reference host the kernel did exactly that: CPU0's counter reads 633 ms ahead of the
+other eleven cores, so any recorded span that began on one side of that split and ended on the other
+read 633 ms short or long, while the request's own latency, taken from the kernel clock, stayed right.
+That produced single prefill repetitions four to five times too fast, prefill spans longer than the
+whole request, generation spans misread in both directions, and the 633 ms "pauses" above. Two changes
+follow. The comparison and vision harnesses make the recorder read the operating-system clock whenever
+the kernel clocksource is not `tsc` (`PERF_JFR_OS_CLOCK=auto`; `0` keeps the JVM default), which makes
+one recorded event cost about 3 microseconds instead of about 0.7 on that host, and record which clock
+was used in `host.json` and the index. And every repetition is checked: the request latency minus its
+forward-pass spans, and minus its prefill and token spans, must each leave between -25 ms and 300 ms
+plus 3 ms per generated token, and the measured request must have prefilled its whole prompt from
+position 0. A repetition that fails has its readings withheld, not replaced, with the reason in its
+result file and in the index; the median is taken over the rest. Applied to the four comparison sweeps
+of 2026-09-27, the check withholds 23 of 156 repetitions; no median used as a reference moves by more
+than 2.2%, and one non-reference generation row (all three repetitions misread) is unscorable. Runs
+taken with the operating-system clock are a measurement boundary for generation figures read under the
+recorder.
 
 **`min_tokens` makes the generation column like-for-like.** A request can now state the number of
 tokens it must produce before the model may end it, so Juno generates the count the
@@ -105,6 +126,40 @@ against; a model outside that table keeps the size derivation and its result is 
 which is not comparable with a baseline taken at a fixed heap. Each run additionally records the CPU
 governor, the turbo state and the GPU clocks with any active throttle reason, because a thermally
 throttled run and a real regression are otherwise indistinguishable in the result.
+
+**Checking a change before the full sweep, and comparing two builds.** A full published sweep takes
+about 18 minutes on the GTX 1080. Run a quick pre-gate first, on one model and the default lane, which
+takes about a minute and a half and shows a large prefill or generation regression before the sweep
+is spent:
+
+```bash
+./scripts/performance-tests/compare-llama-cpp.sh --gpu --models tinyllama-1.1b-chat-v1.0.Q4_K_M \
+  --reps 1 --juno-reps 3 --juno-warmup 2 --no-tuned-lane --no-publish
+```
+
+When a reading moves and the question is whether the change or the host moved it, measure both builds
+in the same hour, alternating, from this checkout: build the other version's shaded jar elsewhere and
+pass it with `--juno-jar PATH` (it resolves the reference tool and the models as usual, logs which jar
+it ran, and never publishes). Two passes each, A B A B, separate a change from host drift; a JFR span
+comparison between the two sides then says which operation moved.
+
+**Gates tighter than the noise floor.** A no-regression gate at 0.90x or tighter is read as Juno
+tokens per second from such a same-hour A/B, three passes each (A B A B A B, `--juno-reps 1`), never
+from the ratio against the reference tool across two sweeps: that ratio carries the reference tool's
+own drift, which has reached 14% to 16% between two sweeps eight minutes apart on this host. Pass
+`--pin-clocks` to every invocation of such a gate. It sets the CPU governor to `performance` and turns
+turbo off for the run, restoring both on exit, and locks the GPU graphics clock where the driver allows
+it (`--pin-gpu-mhz N`, default the card's maximum; consumer Pascal cards refuse the lock, and the run
+then records the GPU clock rather than fixing it). It needs sudo without a prompt, so run `sudo -v`
+first; it refuses to start rather than run unpinned. Absolute throughput from a pinned run is not
+comparable with an unpinned one, since turbo is off.
+
+Every run records what it measured in `host.json` and the index header: whether and how the clocks
+were pinned, the Juno commit and whether the tree had uncommitted changes, a hash of the jar, the JDK
+build, the JVM flags (the heap is fixed per model, with the initial size equal to the maximum), the GPU
+driver, and the reference tool's build commit. A different reference build is a measurement boundary:
+this host uses one build for the CPU sweep and another for the GPU sweep, and a ratio taken against one
+is not comparable with a ratio taken against the other.
 
 ## OpenAI field parity (`stop` / `seed` / `presence_penalty`)
 

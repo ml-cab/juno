@@ -120,7 +120,10 @@ class BpePreTokenizerTest {
 		// Three real files on disk declare these. Running them under another
 		// type's split would tokenize them differently from their training.
 		for (String declared : new String[] { "tekken", "minimax-m2", "qwen35" }) {
+			// A dedicated type, so a launcher can report it as a refused model file
+			// rather than as a crash; it is still an IllegalArgumentException.
 			assertThatThrownBy(() -> BpePreTokenizer.resolve(declared))
+					.isInstanceOf(UnsupportedPreTokenizerException.class)
 					.isInstanceOf(IllegalArgumentException.class)
 					.hasMessageContaining(declared)
 					.hasMessageContaining("tokenizer.ggml.pre");

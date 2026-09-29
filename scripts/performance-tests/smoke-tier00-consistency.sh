@@ -27,6 +27,8 @@
 set -uo pipefail
 
 PERF_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=perf-lib.sh
+source "${PERF_SCRIPTS}/perf-lib.sh"
 ROOT="$(cd "${PERF_SCRIPTS}/../.." && pwd)"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="${ROOT}/target/consistency-smoke/${RUN_ID}"
@@ -136,7 +138,7 @@ find_juno_jar() {
 
 stop_juno() {
   local pid="${JUNO_PID:-}"
-  [[ -n "$pid" ]] || return 0
+  [[ -n "$pid" ]] || { perf_engine_stdin_release; return 0; }
   if kill -0 "$pid" 2>/dev/null; then
     kill -TERM "$pid" 2>/dev/null || true
     local i
@@ -144,6 +146,7 @@ stop_juno() {
     kill -KILL "$pid" 2>/dev/null || true
   fi
   JUNO_PID=""
+  perf_engine_stdin_release
 }
 
 start_server() {
@@ -152,15 +155,15 @@ start_server() {
   : >"$logf"
   curl -sf "http://127.0.0.1:${API_PORT}/v1/cluster/health" >/dev/null 2>&1 \
     && die "port ${API_PORT} already has a healthy Juno API"
+  perf_engine_stdin_open || die "cannot create the engine stdin pipe"
   (
     cd "$ROOT"
-    exec java --enable-preview --enable-native-access=ALL-UNNAMED \
+    perf_engine_exec java --enable-preview --enable-native-access=ALL-UNNAMED \
       --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED \
       --add-modules jdk.incubator.vector -XX:+UseG1GC -Xms512m -Xmx4g -Djuno.byteOrder=BE \
       -jar "$(find_juno_jar)" --model-path "$GOOD_MODEL" --dtype FLOAT16 --byteOrder BE \
       --max-tokens 8 --temperature 0 --top-k 0 --top-p 0 --nodes 1 --local \
-      --api-port "$API_PORT" --parallel "$SERVER_PARALLEL" --batch-window-ms 300 "$@" \
-      < <(while true; do sleep 3600; done)
+      --api-port "$API_PORT" --parallel "$SERVER_PARALLEL" --batch-window-ms 300 "$@"
   ) >>"$logf" 2>&1 &
   JUNO_PID=$!
   start="$(date +%s)"

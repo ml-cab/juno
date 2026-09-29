@@ -894,3 +894,102 @@ perf_run_single_test_attempt() {
     log "=== test complete: row=${row_id} column=${column} (cluster torn down) ==="
     return 0
 }
+
+# ---------------------------------------------------------------------------
+# Engine stdin keepalive
+#
+# The console REPL exits on end of file, so a script that launches ./juno local in the
+# background has to keep its stdin open for the engine's lifetime. Use a named pipe this
+# shell holds open read-write, not `< <(while true; do sleep 3600; done)`: that process
+# substitution runs an endless sleep loop in a subshell nothing reaps, so every engine
+# launch leaves a sleeping shell behind, and enough of them make `pgrep` checks for a
+# running sweep return false positives.
+#
+#   perf_engine_stdin_open                   # in the launching shell, before the fork
+#   ( cd "$ROOT"; perf_engine_exec "$java" "${args[@]}" ) >>"$logf" 2>&1 &
+#   ...
+#   perf_engine_stdin_release                # in stop_juno, on every path
+#
+# perf_engine_exec closes the child's inherited copy of the read-write descriptor. Without
+# that the engine would hold a writer on its own stdin and never see end of file, so a
+# script that exits without stopping it would leave the engine running.
+# ---------------------------------------------------------------------------
+PERF_ENGINE_STDIN_FD="${PERF_ENGINE_STDIN_FD:-}"
+PERF_ENGINE_STDIN_FIFO="${PERF_ENGINE_STDIN_FIFO:-}"
+
+# Creates the pipe and opens this shell's read-write descriptor on it. Must run in the
+# shell that later calls perf_engine_stdin_release, not in a subshell. Releases any
+# pipe a previous launch left open first.
+perf_engine_stdin_open() {
+  perf_engine_stdin_release
+  PERF_ENGINE_STDIN_FIFO="$(mktemp -u "${TMPDIR:-/tmp}/juno-engine-stdin.XXXXXXXX")" || return 1
+  mkfifo -m 600 "$PERF_ENGINE_STDIN_FIFO" || { PERF_ENGINE_STDIN_FIFO=""; return 1; }
+  exec {PERF_ENGINE_STDIN_FD}<>"$PERF_ENGINE_STDIN_FIFO"
+}
+
+# Replaces the calling (sub)shell with "$@", stdin on the pipe, inherited descriptor closed.
+perf_engine_exec() {
+  [[ -n "$PERF_ENGINE_STDIN_FIFO" && -n "$PERF_ENGINE_STDIN_FD" ]] || {
+    printf 'perf_engine_exec: perf_engine_stdin_open was not called\n' >&2
+    exit 1
+  }
+  exec "$@" <"$PERF_ENGINE_STDIN_FIFO" {PERF_ENGINE_STDIN_FD}>&-
+}
+
+# Closes this shell's descriptor, which delivers end of file to the engine, and removes
+# the pipe. Safe to call when nothing is open.
+perf_engine_stdin_release() {
+  if [[ -n "${PERF_ENGINE_STDIN_FD:-}" ]]; then
+    # Braces scope the stderr redirect; on a bare exec it would silence this shell for good.
+    { exec {PERF_ENGINE_STDIN_FD}>&-; } 2>/dev/null || true
+    PERF_ENGINE_STDIN_FD=""
+  fi
+  if [[ -n "${PERF_ENGINE_STDIN_FIFO:-}" ]]; then
+    rm -f "$PERF_ENGINE_STDIN_FIFO"
+    PERF_ENGINE_STDIN_FIFO=""
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# JFR timestamp source
+#
+# The JVM stamps JFR events with the raw CPU timestamp counter whenever the CPU advertises an
+# invariant one (UseFastUnorderedTimeStamps turns itself on), whether or not the kernel trusts
+# that counter. Where the kernel has rejected it at boot (its clocksource is then not tsc), the
+# per-core counters can disagree, and a span that begins on one core and ends on another is off
+# by the difference. On the reference host CPU0 reads 633 ms ahead of CPUs 1 to 11, so a JFR
+# span crossing CPU0 read 633 ms short or long: single prefill repetitions four to five times
+# too fast, prefill spans longer than their whole request, and 633 ms "collection pauses" that
+# cost no time. System.nanoTime is unaffected; it reads the kernel's clock.
+#
+# PERF_JFR_OS_CLOCK=auto (default) makes JFR read the operating-system clock whenever the kernel
+# clocksource is not tsc; 1 forces that, 0 keeps the JVM default. On the reference host it
+# raises the cost of one JFR event from about 0.7 to about 3 microseconds.
+# ---------------------------------------------------------------------------
+PERF_JFR_OS_CLOCK="${PERF_JFR_OS_CLOCK:-auto}"
+
+perf_kernel_clocksource() {
+  cat /sys/devices/system/clocksource/clocksource0/current_clocksource 2>/dev/null || echo unknown
+}
+
+# Prints the JVM flags that make JFR read the operating-system clock, space separated, or nothing.
+perf_jfr_clock_jvm_flags() {
+  local use=0
+  case "$PERF_JFR_OS_CLOCK" in
+    1) use=1 ;;
+    0) use=0 ;;
+    *) case "$(perf_kernel_clocksource)" in tsc|unknown) use=0 ;; *) use=1 ;; esac ;;
+  esac
+  (( use == 1 )) && printf '%s' '-XX:+UnlockExperimentalVMOptions -XX:-UseFastUnorderedTimeStamps'
+  return 0
+}
+
+# One line naming the clock JFR timestamps come from, for run metadata.
+perf_jfr_clock_label() {
+  local cs; cs="$(perf_kernel_clocksource)"
+  if [[ -n "$(perf_jfr_clock_jvm_flags)" ]]; then
+    printf 'os-clock (kernel clocksource %s, PERF_JFR_OS_CLOCK=%s)' "$cs" "$PERF_JFR_OS_CLOCK"
+  else
+    printf 'cpu-tsc (kernel clocksource %s, PERF_JFR_OS_CLOCK=%s)' "$cs" "$PERF_JFR_OS_CLOCK"
+  fi
+}

@@ -4,6 +4,12 @@
 # For each model (default: tinyllama Q4_K_M, mistral-7b, llama-1-30b):
 #   1. Local mode (three in-process nodes, the default) with --gpu-residency off, then on:
 #      greedy output over /v1/chat/completions, on vs off, reported token for token.
+#      Request 1 and the last request generate N_GEN tokens (--n-gen, default 32) and must be
+#      identical, so state leaking from one request into the next still shows over the full
+#      output; the requests between them generate MEM_N_GEN tokens (--mem-n-gen, default 8) and
+#      must reproduce request 1's opening. They exist for the memory reading below, which is per
+#      request, not per token; generating less makes a large model's run several times shorter.
+#      --mem-n-gen 0 makes every request full length.
 #   2. The on run logs that the device-resident decode region is active (and on how many
 #      layers); a model it cannot run says so instead.
 #   3. Neither mode keeps device memory per request (nvidia-smi, per process; run on an otherwise
@@ -31,9 +37,13 @@
 #   ./scripts/performance-tests/smoke-gpu-residency.sh
 #   ./scripts/performance-tests/smoke-gpu-residency.sh --models tinyllama --requests 3
 #   ./scripts/performance-tests/smoke-gpu-residency.sh --no-cluster --n-gen 16
+#   ./scripts/performance-tests/smoke-gpu-residency.sh --requests 8 --mem-n-gen 0   # every request full length
 set -uo pipefail
+shopt -s extglob
 
 PERF_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=perf-lib.sh
+source "${PERF_SCRIPTS}/perf-lib.sh"
 ROOT="$(cd "${PERF_SCRIPTS}/../.." && pwd)"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="${ROOT}/target/gpu-residency-smoke/${RUN_ID}"
@@ -41,6 +51,7 @@ MODELS_DIR="${MODELS_DIR:-${ROOT}/models}"
 MODELS="tinyllama-1.1b-chat-v1.0.Q4_K_M,mistral-7b-instruct-v0.1-q4_k_m,llama-1-30b.Q4_K_M"
 API_PORT=18095
 N_GEN=32
+MEM_N_GEN=8
 REQUESTS=4
 LEAK_MIB_PER_REQUEST=8
 RUN_CLUSTER=1
@@ -59,10 +70,11 @@ while [[ $# -gt 0 ]]; do
     --models) MODELS="$2"; shift 2 ;;
     --api-port) API_PORT="$2"; shift 2 ;;
     --n-gen) N_GEN="$2"; shift 2 ;;
+    --mem-n-gen) MEM_N_GEN="$2"; shift 2 ;;
     --requests) REQUESTS="$2"; shift 2 ;;
     --no-cluster) RUN_CLUSTER=0; shift ;;
     --out) OUT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,33p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    -h|--help) sed -n '2,40p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) die "unknown flag: $1" ;;
   esac
 done
@@ -106,7 +118,7 @@ heap_for() {
 
 stop_juno() {
   local pid="${JUNO_PID:-}"
-  [[ -n "$pid" ]] || return 0
+  [[ -n "$pid" ]] || { perf_engine_stdin_release; return 0; }
   if kill -0 "$pid" 2>/dev/null; then
     kill -TERM "$pid" 2>/dev/null || true
     local i
@@ -114,6 +126,7 @@ stop_juno() {
     kill -KILL "$pid" 2>/dev/null || true
   fi
   JUNO_PID=""
+  perf_engine_stdin_release
   sleep 2
 }
 
@@ -124,15 +137,15 @@ start_server() {
   : >"$logf"
   curl -sf "http://127.0.0.1:${API_PORT}/v1/cluster/health" >/dev/null 2>&1 \
     && die "port ${API_PORT} already has a healthy Juno API"
+  perf_engine_stdin_open || die "cannot create the engine stdin pipe"
   (
     cd "$ROOT"
-    exec java --enable-preview --enable-native-access=ALL-UNNAMED \
+    perf_engine_exec java --enable-preview --enable-native-access=ALL-UNNAMED \
       --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED \
       --add-modules jdk.incubator.vector -XX:+UseG1GC -Xms512m -Xmx"$(heap_for "$model")" -Djuno.byteOrder=BE \
       -jar "$(find_juno_jar)" --model-path "$model" --dtype FLOAT32 --byteOrder BE \
       --max-tokens "$N_GEN" --temperature 0 --top-k 0 --top-p 0 --gpu --verbose \
-      --api-port "$API_PORT" "$@" \
-      < <(while true; do sleep 3600; done)
+      --api-port "$API_PORT" "$@"
   ) >>"$logf" 2>&1 &
   JUNO_PID=$!
   start="$(date +%s)"
@@ -148,8 +161,9 @@ start_server() {
 PROMPT="Write three sentences about the history of the printing press."
 
 # ask <dest-json>  -> prints message content
+# ask <response.json> [max_tokens]  -> the reply text (max_tokens defaults to N_GEN)
 ask() {
-  jq -n --arg u "$PROMPT" --argjson n "$N_GEN" \
+  jq -n --arg u "$PROMPT" --argjson n "${2:-$N_GEN}" \
     '{messages:[{role:"user",content:$u}],temperature:0,max_tokens:$n,min_tokens:$n}' |
     curl -sS --max-time 3600 -H 'Content-Type: application/json' \
       "http://127.0.0.1:${API_PORT}/v1/chat/completions" -d @- -o "$1"
@@ -181,11 +195,21 @@ run_local() {
   local stem="$1" model="$2" mode="$3" r text first=""
   REPLY_TEXT=""; MEM_FIRST=""; MEM_LAST=""; MEM_SERIES=""
   start_server "${stem}-local-${mode}" "$model" --local --gpu-residency "$mode" || { fail "${stem} local ${mode}: server did not start"; return 1; }
+  local n long
   for (( r = 1; r <= REQUESTS; r++ )); do
-    text="$(ask "${OUT}/${stem}-local-${mode}-req${r}.json")"
+    # Request 1 and the last request generate the full N_GEN tokens and must match each
+    # other; the requests between them only have to exercise a whole request for the memory
+    # reading, so they generate MEM_N_GEN tokens and must match request 1's opening.
+    long=0; (( r == 1 || r == REQUESTS || MEM_N_GEN == 0 )) && long=1
+    n=$(( long == 1 ? N_GEN : MEM_N_GEN ))
+    text="$(ask "${OUT}/${stem}-local-${mode}-req${r}.json" "$n")"
     [[ -n "$text" ]] || { fail "${stem} local ${mode}: request ${r} returned no text; see ${OUT}/${stem}-local-${mode}-req${r}.json"; stop_juno; return 1; }
     [[ -z "$first" ]] && first="$text"
-    [[ "$text" == "$first" ]] || fail "${stem} local ${mode}: request ${r} differs from request 1 (greedy)"
+    if (( long == 1 )); then
+      [[ "$text" == "$first" ]] || fail "${stem} local ${mode}: request ${r} differs from request 1 (greedy, ${N_GEN} tokens)"
+    else
+      [[ "$first" == "${text%%+([[:space:]])}"* ]] || fail "${stem} local ${mode}: request ${r} (${MEM_N_GEN} tokens) is not the opening of request 1 (greedy)"
+    fi
     MEM_LAST="$(gpu_mib)"
     MEM_SERIES="${MEM_SERIES:+${MEM_SERIES} }${MEM_LAST}"
     if (( r == WINDOW_START || REQUESTS == 1 )); then MEM_FIRST="$MEM_LAST"; fi

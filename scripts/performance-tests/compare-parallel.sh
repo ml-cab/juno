@@ -12,6 +12,8 @@
 set -euo pipefail
 
 PERF_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=perf-lib.sh
+source "${PERF_SCRIPTS}/perf-lib.sh"
 ROOT="$(cd "${PERF_SCRIPTS}/../.." && pwd)"
 MODELS_DIR="${ROOT}/models"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -117,12 +119,13 @@ wait_for_api() {
 
 stop_juno() {
   local pid="${JUNO_PID:-}"
-  [[ -n "$pid" ]] || return 0
+  [[ -n "$pid" ]] || { perf_engine_stdin_release; return 0; }
   kill -TERM "$pid" 2>/dev/null || true
   for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
   kill -KILL "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   JUNO_PID=""
+  perf_engine_stdin_release
 }
 
 run_parallel_value() {
@@ -165,9 +168,10 @@ run_parallel_value() {
 
   log "start juno parallel=${parallel} sessions=${SESSIONS} max_tokens=${MAX_TOKENS} ${backend_flag#--}"
   : >"$logf"
+  perf_engine_stdin_open || die "cannot create the engine stdin pipe"
   (
     cd "$ROOT"
-    exec "$java_bin" "${java_args[@]}" < <(while true; do sleep 3600; done)
+    perf_engine_exec "$java_bin" "${java_args[@]}"
   ) >>"$logf" 2>&1 &
   JUNO_PID=$!
 

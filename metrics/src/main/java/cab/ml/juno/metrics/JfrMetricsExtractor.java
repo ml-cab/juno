@@ -88,6 +88,10 @@ final class JfrMetricsExtractor {
         List<Long> forwardAll = new ArrayList<>();
         List<Long> forwardPrefill = new ArrayList<>();
         List<Long> forwardDecode = new ArrayList<>();
+        // Prompt coverage of the recorded prefill windows: a request that prefilled its whole
+        // prompt starts at position 0; one that resumed from reused KV starts later.
+        long prefillBatchTokens = 0;
+        int prefillBatchMinStart = -1;
 
         DurationBucket attention = new DurationBucket();
         DurationBucket rmsNorm = new DurationBucket();
@@ -196,6 +200,13 @@ final class JfrMetricsExtractor {
                         case PREFILL_BATCH -> {
                             forwardAll.add(nano);
                             forwardPrefill.add(nano);
+                            if (ev.hasField("windowSize"))
+                                prefillBatchTokens += ev.getInt("windowSize");
+                            if (ev.hasField("startPosition")) {
+                                int start = ev.getInt("startPosition");
+                                if (prefillBatchMinStart < 0 || start < prefillBatchMinStart)
+                                    prefillBatchMinStart = start;
+                            }
                         }
                         // windowSize > 1 only occurs in the batched-prefill / multi-decode loop; a
                         // single-row call (windowSize == 1) is prefill only when it is the very first
@@ -368,6 +379,8 @@ final class JfrMetricsExtractor {
         m.put("juno.ForwardPass.decode.p95_ms", JfrPercentiles.p95NanosToMs(forwardDecode));
         m.put("juno.ForwardPass.prefill.total_ms", JfrPercentiles.sumNanosToMs(forwardPrefill));
         m.put("juno.ForwardPass.decode.total_ms", JfrPercentiles.sumNanosToMs(forwardDecode));
+        m.put("juno.PrefillBatch.tokens", (double) prefillBatchTokens);
+        m.put("juno.PrefillBatch.min_start_position", (double) prefillBatchMinStart);
 
         putDurationBucket(m, "juno.Attention", attention);
         putDurationBucket(m, "juno.RmsNorm", rmsNorm);

@@ -280,7 +280,9 @@ The 04B adjacency carries no dependency — tokenizer fidelity and packed matmul
 
   **Threshold, throughput (item 2).** The tiled packed GEMM's pp t/s is **>= 0.95x** the current
   dequant-plus-`cublasGemmEx` path at a 512-token window, and **>= 1.10x** at the 16-to-64 widths
-  the continuous schedule runs, on `tinyllama-1.1b` and `mistral-7b` Q4_K_M. The 512 figure is a
+  the continuous schedule runs, on `tinyllama-1.1b` and `mistral-7b` Q4_K_M, both read as Juno
+  absolute pp t/s from a same-hour interleaved A/B with pinned clocks against the pre-item-2 build
+  (README, "No-regression gates tighter than the floor"). The 512 figure is a
   no-regression floor because the win there is VRAM; the narrow-batch figure is where the dequant
   amortizes worst and is the one this item is justified by. A result below either number is
   reported, not absorbed.
@@ -294,9 +296,10 @@ The 04B adjacency carries no dependency — tokenizer fidelity and packed matmul
   intermediate is no longer built. If Tier 04 item 0's mapped loading already landed, measure the
   delta on top of it rather than against the pre-mmap baseline.
 
-  **Milestone.** The README assigns Tier 04 GPU tg **>= 0.40x** on Phi-3.5-mini. This tier inherits
-  that figure as a floor and additionally reports the pp ratio against Tier 01B's re-baselined
-  prefill number, met or missed with the actual value.
+  **Milestone.** The Tier 04 milestone (GPU tg >= 0.40x on Phi-3.5-mini) was retired as met on
+  arrival, so this tier inherits no tg milestone; it records the Phi-3.5-mini tg ratio so a drop below
+  that figure would show. It reports the pp ratio on every sweep model against Tier 01B's milestone
+  rows in the README and its re-baselined prefill number, met or missed with the actual value.
 
 ## Models needed
 
@@ -327,7 +330,8 @@ ended with. No AMD hardware exists here, so item 3's ROCm half is unit-tested an
       including the case where the breakdown did not support the throughput premise.
 - [ ] All thresholds above met or explicitly reported as missed with the measured number.
 - [ ] Cross-surface checklist fully resolved.
-- [ ] Perf gate published, no unexplained regression; `compare-llama-cpp.sh` pp and tg ratios
-      recorded in this file against the program target and the inherited Tier 04 milestone.
+- [ ] Perf gate published, with every threshold above (VRAM, throughput, numerical quality, load)
+      met or reported missed with its number; `compare-llama-cpp.sh` pp and tg ratios recorded in this
+      file against the program target and Tier 01B's pp milestone rows.
 - [ ] Docs (`docs/agent-arch.txt`, `docs/howto.md`, `README.md`) updated in Juno-native language.
 - [ ] `CHANGELOG.md` entry added.

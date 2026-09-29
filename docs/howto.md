@@ -446,6 +446,11 @@ The refusal is deliberate: tokenizing a file under a split that was never checke
 token sequence the model was not trained on, which degrades output quality without failing. Run
 `./juno gguf-info` on the file to read its declared value.
 
+The architecture is checked before the pre-tokenizer. A file whose `general.architecture` has no
+verified handler is refused for that reason even when it also declares an unimplemented split, since
+implementing the split would still not make it loadable. Either refusal is one `ERROR:` line and exit
+status 1, in local, cluster and LoRA modes alike; cluster mode refuses before starting any node.
+
 The key governs BPE vocabularies only. A SentencePiece vocabulary carries no pre-tokenizer split —
 its word boundaries come from the `▁` prefix — so Juno does not consult the key for one, and such a
 file tokenizes identically whatever it declares.
@@ -1051,6 +1056,30 @@ file cannot be found, the run falls back to the JDK's stock low-overhead setting
 because a recording that cannot state which settings produced it should not be compared against
 one taken under the Juno settings.
 
+### JFR durations on a host whose kernel rejected the CPU timestamp counter
+
+The JVM stamps recorded events with the CPU's timestamp counter whenever the processor advertises an
+invariant one, even when the kernel has found the counters out of step across cores and switched
+its own clock away from them. On such a host a recorded span that starts on one core and ends on
+another is misread by the difference between their counters (633 ms on the reference host), while
+latencies Juno reports from its own clock stay right. Check with:
+
+```bash
+cat /sys/devices/system/clocksource/clocksource0/current_clocksource   # anything but "tsc"
+journalctl -k -b 0 | grep -i "tsc"                                       # "Marking TSC unstable"
+```
+
+If the clocksource is not `tsc`, make the recorder read the operating-system clock for that run:
+
+```bash
+JUNO_JVM_OPTS="-XX:+UnlockExperimentalVMOptions -XX:-UseFastUnorderedTimeStamps" \
+  ./juno local --model-path /path/to/model.gguf --jfr 5m
+```
+
+Each recorded event then costs a few microseconds instead of under one. The comparison and vision
+harnesses under `scripts/performance-tests/` apply this automatically (`PERF_JFR_OS_CLOCK=auto`) and
+record which clock a run used.
+
 AWS cluster JFR:
 
 ```bash
@@ -1114,7 +1143,11 @@ activation notice (or, for a model the region cannot run, the notice saying why)
 memory read after every request. Memory is judged over the second half of the requests, after the early
 ones have sized the buffers a process keeps and a model at the card's capacity has settled its
 placement: in each mode it may grow by at most 8 MiB per request on average, and no more with the
-region on than off. A server that keeps device memory per request fails this in either mode. Then cluster
+region on than off. A server that keeps device memory per request fails this in either mode. The first
+and last requests generate the full `--n-gen` tokens and must be identical, so state carried from one
+request into the next still shows; the requests between them generate `--mem-n-gen` tokens (default 8)
+and must reproduce the first request's opening, which makes a large model's run several times shorter
+without weakening the memory reading (`--mem-n-gen 0` makes every request full length). Then cluster
 mode, pipeline and tensor, with the region on: the forked nodes must answer with local mode's output
 and leave no node process behind. Requires a CUDA device; run it on an otherwise idle one.
 

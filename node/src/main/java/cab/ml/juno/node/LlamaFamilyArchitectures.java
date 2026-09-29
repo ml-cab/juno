@@ -57,12 +57,12 @@ final class LlamaFamilyArchitectures {
 	}
 
 	/**
-	 * @throws IOException naming the architecture when it is not verified
+	 * @throws UnsupportedModelException naming the architecture when it is not verified
 	 */
-	static void requireVerified(String architecture, Path modelPath) throws IOException {
+	static void requireVerified(String architecture, Path modelPath) throws UnsupportedModelException {
 		if (isVerified(architecture))
 			return;
-		throw new IOException("Unsupported model architecture '" + architecture + "' in " + modelPath
+		throw new UnsupportedModelException("Unsupported model architecture '" + architecture + "' in " + modelPath
 				+ ". Supported: llama, mistral, tinyllama, qwen2 (dense Llama family), phi2, phi3, qwen3, qwen3moe. "
 				+ "This architecture computes something the dense Llama path does not (for example sliding-window "
 				+ "attention, logit softcapping, recurrent layers or routed experts), so loading it would produce "

@@ -54,20 +54,29 @@ before acting on it — both documents are snapshots, not ground truth that stay
    metric with no prior baseline to be implicitly anchored to. See "Test infrastructure" below for
    the specific llama.cpp-relative gate this adds on top of the existing `compare-lora.sh` rule.
    **This rule is machine-checked, not trusted, and the check does not wait for Tier 14.** It lives in
-   `scripts/performance-tests/check-plan-thresholds.sh`, greps this tree, and fails if any tier file
-   containing the string `Perf gate` does not also contain a `**Threshold` block carrying at least one
-   numeral and a comparison operator. It matches on `Perf gate`, not `Perf gate (required)`, because
-   three spellings of that heading are already in use and keying on the longest one would let the other
-   two through. Tier 14's own file is excluded from the scan, since it names the string to describe the
-   check.
+   `scripts/performance-tests/check-plan-thresholds.sh` (shipped 2026-09-27, recorded in Tier 01B's
+   execution record), reads only this tree, and fails on any of:
+   - a tier file mentioning a perf gate in any capitalization (`Perf gate`, `perf gate`, `Perf gate
+     (required)` are all in use) without a `**Threshold` block carrying a numeral and a comparison
+     operator. A tier with no gate says so with an explicit `**No perf gate**` declaration and its
+     reason, which exempts it; a lowercase mention no longer slips past the match;
+   - an exit criterion reading "no unexplained regression", the phrasing this rule replaced;
+   - an intermediate-milestone row (see "Program target") whose threshold is not `>= number`, or an
+     `active` milestone its reference reading already meets. A milestone met before its tier starts
+     measures nothing; it is either raised or marked `retired`, and a retired row must really be met.
 
-   **The script ships in the next tier to execute, and every later tier runs it as the first item of its
-   own test list.** It was originally specified inside Tier 14's `smoke-tier14-doc-consistency.sh`,
-   which meant a rule governing seventeen tiers was enforced by nothing until the last of them — the
-   same deferral shape this rule exists to prevent. Tier 14 keeps the check as one input to its
-   doc-consistency script rather than as its origin: that script sources or calls this one instead of
-   restating it, so there is one implementation and one place a spelling can drift. Whichever tier is
-   active when this paragraph is first read owns shipping it, and records in its own file that it did.
+   Tier 14's own file is excluded from the first check, since it names the string to describe it. The
+   script exits non-zero listing every failure; it passes against this tree and was shown failing
+   against the tree as it stood before the fixes that made it pass (seven failures: Tiers 04, 04B, 04C
+   and 05 and all three milestone rows).
+
+   **Every tier from 01B on runs it as the first item of its own test list.** It was originally
+   specified inside Tier 14's `smoke-tier14-doc-consistency.sh`, which meant a rule governing seventeen
+   tiers was enforced by nothing until the last of them — the same deferral shape this rule exists to
+   prevent. Tier 14 keeps the check as one input to its doc-consistency script rather than as its
+   origin: that script calls this one instead of restating it, so there is one implementation and one
+   place a spelling can drift. This paragraph first said the script would ship "in the next tier to
+   execute"; Tier 01 closed without it, which is recorded here rather than smoothed over.
 
    The rule was added once and immediately drifted — at the time this enforcement was written only six
    of seventeen tier files stated a threshold at all, and Tiers 11 and 12 both declared a required perf
@@ -102,14 +111,29 @@ tier can fail on it and the final scorecard in Tier 14 can only report a directi
 four-model sweep (`tinyllama-1.1b`, `qwen2.5-3b`, `Phi-3.5-mini`, `mistral-7b`, all Q4_K_M) on the
 `docs/perf-compare/README.md` baseline host, under the benchmark-parity preconditions below:
 
-| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) |
-|---|---|---|---|---|
-| GPU tg, Phi-3.5-mini | >= **0.50x** | 0.330x | 0.423x | 0.415x (0.414x tuned) |
-| GPU tg, mistral-7b | >= **0.60x** | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) |
-| GPU pp, every sweep model | >= **0.15x** | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x |
-| CPU tg, every sweep model | >= **0.25x** | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x |
+| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) | **Current reference** (2026-09-27, late) |
+|---|---|---|---|---|---|
+| GPU tg, Phi-3.5-mini | >= **0.50x** | 0.330x | 0.423x | 0.415x (0.414x tuned) | **0.416x** (0.417x tuned) |
+| GPU tg, mistral-7b | >= **0.60x** | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) | **0.639x** (0.643x tuned) — target met |
+| GPU pp, every sweep model | >= **0.15x** | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | **0.040x to 0.101x**, median 0.064x (Phi-3.5-mini 0.040x binding) |
+| CPU tg, every sweep model | >= **0.25x** | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | **0.090x to 0.135x** (CPU reference unchanged) |
 
-**The right-most column is the reference from 2026-09-27**, taken after the scalar CPU RoPE stopped
+**Score every later tier against the right-most column.** It is the reference from late 2026-09-27:
+GPU `docs/perf-compare/20260927T232837Z/` with the `qwen2.5-3b` tuned and both `Phi-3.5-mini` rows
+from its re-run `20260927T234659Z/`; CPU `20260927T094414Z/`, which the change behind it did not touch.
+It follows the per-request device-memory fix and the extracted FP16 pack loop, a GPU-prefill
+measurement boundary recorded in Tier 01's "Out-of-tier changes" (GPU pp +10% to +34% on tinyllama,
+qwen2.5-3b and mistral-7b; generation within the gate). The column to its left was the reference for
+most of that day and is now superseded; it is kept, not overwritten, for the same reason the older
+columns are.
+
+**Rule: the reference column moves in the same change that supersedes it.** Whenever a run is marked
+superseded-as-reference in `docs/perf-compare/` (its `INDEX.md` banner and `docs/perf-compare/README.md`),
+the same change adds the new column here and names it as the one to score against. The 2026-09-27
+column went stale for a day because this rule did not exist: Tier 01's out-of-tier table superseded
+its source while this table still told every later tier to score against it.
+
+**The 2026-09-27 (RoPE table) column** was taken after the scalar CPU RoPE stopped
 recomputing its angles for every head of every layer, which is a measurement boundary (Tier 01's
 "Out-of-tier changes"). Sources: GPU `docs/perf-compare/20260927T091155Z/` with the `tinyllama`,
 `qwen2.5-3b` and `Phi-3.5-mini` rows from its re-run `20260927T093054Z/`; CPU `20260927T094414Z/`.
@@ -117,11 +141,10 @@ Juno's GPU throughput rose where the rotation runs on the CPU path (tinyllama tg
 +17%, qwen2.5-3b +12%; pp +22% to +35%) and held on Phi-3.5-mini, which has its own rotation; its
 ratio moved only with the reference tool's own reading. CPU throughput did not move (the rotation was
 never a visible share of a CPU forward pass); the CPU ratios moved with the reference tool's readings.
-The mistral-7b GPU tg row now meets its end-of-plan target on the default flags. The 2026-09-25
-column is kept, not overwritten; score later tiers against the 2026-09-27 column.
+The mistral-7b GPU tg row met its end-of-plan target on the default flags from this column on.
 
-**The 2026-09-25 column was the reference until 2026-09-27, and the two columns before it are not
-comparable with it.**
+**The 2026-09-25 column was the reference until the morning of 2026-09-27, and the two columns
+before it are not comparable with it.**
 Those readings come from `docs/perf-compare/20260925T172231Z/` (GPU) and `20260925T174146Z/` (CPU),
 the first sweep taken with prompt-token parity, warm repeated measurement, a fixed heap, `min_tokens`
 generation parity, and prefill and generation measured in two separate runs as the reference tool
@@ -141,22 +164,42 @@ the same shape. Tier 01's re-baseline establishes the real starting reading unde
 0.15x target is re-derived from that number in Tier 01's own file before any later tier is scored
 against it.** A target anchored to a measurement that was never like-for-like is not a target.
 
-**Intermediate milestones**, so the trend is checkable before Tier 14 rather than only at the end:
+**Intermediate milestones**, so the trend is checkable before Tier 14 rather than only at the end.
+This table is machine-read by `scripts/performance-tests/check-plan-thresholds.sh` (execution rule 7):
+every threshold is `>= number`, every reference is a number or `unmeasured`, and an `active` row must
+ask for more than its reference reading. For an "every model" scope the reference is the binding
+(lowest) model's reading, named in the cell.
 
-| After | Milestone |
-|---|---|
-| Tier 01B | GPU pp >= 0.10x on mistral-7b at `n_prompt=512`, and pp no longer degrades with prompt length |
-| Tier 04 | GPU tg >= 0.40x on Phi-3.5-mini |
-| Tier 10 | CPU tg >= 0.20x on every sweep model |
+| After | Metric | Scope | Threshold | Reference reading | Status |
+|---|---|---|---|---|---|
+| 01B | GPU pp ratio, `n_prompt=512` | every sweep model except Phi-3.5-mini | >= 0.10x | 0.062x (tinyllama; read at `n_prompt=128`) | active |
+| 01B | GPU pp ratio, `n_prompt=512` | Phi-3.5-mini | >= 0.08x | 0.040x (read at `n_prompt=128`) | active |
+| 01B | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | unmeasured | active |
+| 04 | GPU tg ratio | Phi-3.5-mini | >= 0.40x | 0.416x | retired: met on arrival |
+| 10 | CPU tg ratio | every sweep model | >= 0.20x | 0.090x (mistral-7b) | active |
 
-The GPU pp milestone is by far the least certain number in this table, and the parity correction
-makes it harder to reach, not easier. Measured like-for-like, the best prefill
-configuration ever recorded here sits at roughly 0.028x, so 0.10x is a **three- to four-fold
-improvement over the best number this project has ever produced** — not a four-to-six-fold
-improvement over a 0.0166x reading that was partly a measurement artefact. The other milestones
-demand roughly one and a half to two and a half fold. It is stated at that level deliberately
-because prefill is the dominant gap, not because it is known to be reachable. Missing it and
-reporting the miss plainly is an acceptable outcome for this plan; not having a number to miss is
+**Why the Tier 01B milestone changed shape (2026-09-27).** It read "GPU pp >= 0.10x on mistral-7b".
+Under the current reference mistral-7b already reads 0.101x at `n_prompt=128` — the out-of-tier
+memory fix and the extracted pack loop moved it there — so a mistral-only milestone would have been
+credited to Tier 01B for work that landed before the tier began. The binding model is Phi-3.5-mini at
+0.040x, which runs a handler the GPU attention kernel does not reach today; Tier 01B item 0 is what
+changes that. So the milestone now covers every sweep model: 0.10x for the three whose handler already
+runs the kernel (a 1.6x move for the binding one, tinyllama at 0.062x), and 0.08x for Phi-3.5-mini (a
+2.0x move). The references are `n_prompt=128` readings because no parity-corrected 512 reading exists
+yet; Tier 01B's step 2 re-baseline takes it, and if the 512 figures sit materially below the 128 ones
+(the degradation this milestone's third row is about), Tier 01B restates the first two rows against
+them in its own file and here.
+
+**Why the Tier 04 milestone is retired.** GPU tg on Phi-3.5-mini reads 0.416x before Tier 04 starts,
+and nothing in Tier 04 touches that model's decode path (its Q4_K_M weights already take the packed
+MMQ route). A milestone met before its tier begins, by work its tier does not contain, measures
+nothing. It is kept as a retired row so the history stays visible. Phi-3.5-mini's decode is still the
+binding constraint on the 0.50x end-of-plan target; giving that a milestone belongs with whichever tier
+takes non-Llama decode residency, which no tier owns yet.
+
+The GPU pp milestone is still the least certain number in this table. It is stated at that level
+deliberately because prefill is the dominant gap, not because it is known to be reachable. Missing it
+and reporting the miss plainly is an acceptable outcome for this plan; not having a number to miss is
 not.
 
 **Relationship to `docs/infra-plan/`.** This plan tree replaces it. The infra tree grew to 36
@@ -350,7 +393,9 @@ moves:
    record the effective Juno parallelism in the run metadata and state the mismatch in every
    published INDEX rather than leaving it implicit).
 5. A fixed per-model `COMPARE_HEAP` rather than a derived one.
-6. CPU governor plus `nvidia-smi -q -d CLOCK` captured into the run metadata.
+6. CPU governor plus `nvidia-smi -q -d CLOCK` captured into the run metadata. *Extended 2026-09-27:
+   captured is not enough for a gate tighter than the noise floor. `--pin-clocks` pins them for the run,
+   and the run metadata now names the build it measured — see "Clocks are pinned for gate runs" below.*
 7. **Pre-tokenizer parity.** `tokenizer.ggml.pre` is read and dispatched on for every pre-type the
    sweep models declare, so the token count the ratio divides by is the count the model was trained
    against, and a file declaring a pre-type Juno does not implement is rejected at load with an error
@@ -430,7 +475,12 @@ condition fires:
   agreed to within 1% and passed one whose readings spanned 31%; dispersion gets all four right, and a
   pause that does cost time appears as one slow repetition. Pause figures are still published, now
   including the share overlapping the measured token span
-  (`jdk.GCPhasePause.in_token_span.*`), for reading rather than gating;
+  (`jdk.GCPhasePause.in_token_span.*`), for reading rather than gating. *Cause found 2026-09-28 (Tier
+  01B step 0): the 633 ms "pause" was not a pause. On this host CPU0's timestamp counter reads 633 ms
+  ahead of the other cores, and JFR stamped events with the raw counter, so any span crossing CPU0 read
+  633 ms short or long. The harness now makes JFR read the operating-system clock on such a host and
+  withholds any repetition whose spans do not account for its own request; see Tier 01B's execution
+  record. The dispersion rule stays the gate;*
 - ~~`jdk.JavaMonitorEnter.total_ms` plus `jdk.ThreadPark.total_ms` exceeds **10%** of wall time.~~
   **Withdrawn as a gate — measurement showed it cannot discriminate.** The park figure is a sum
   across every thread, so an idle worker pool parks for longer than the run takes however healthy
@@ -444,7 +494,9 @@ condition fires:
 reader can tell a discarded run from a missing one. Neither threshold is hypothetical: the
 historical LoRA incident above was a 622 ms pause, and the first run taken under Tier 01's new JFR
 configuration produced a 657 ms pause on `./juno local --cpu --jfr 2m` against tinyllama. Both fire
-this rule. A tier that scores a run despite a fired marker states why in its own file rather than
+this rule. (The 657 ms reading sits within a few tens of milliseconds of the 633 ms timestamp offset
+described above and was most likely the same artifact; the 622 ms LoRA incident predates any recording
+of this host's counter offset and is not attributable either way.) A tier that scores a run despite a fired marker states why in its own file rather than
 leaving the marker unexplained.
 
 **That rule needs tooling that does not exist yet, and Tier 01 builds it.** `JfrMetricsExtractor`
@@ -472,6 +524,43 @@ necessarily tighter than that (Tier 01B's "tg within 0.95x", Tier 04's "within 1
 kernel"), the median-of-three discipline is mandatory, not optional, and the min/max spread is
 published next to the median so a reader can see whether the result cleared the floor.
 
+**No-regression gates tighter than the floor are Juno-against-Juno, same hour, pinned clocks — never a
+ratio.** Median-of-three does not remove drift between two sessions, and a llama.cpp-relative ratio
+carries the reference tool's drift as well as Juno's: the -14%/+16% above was llama.cpp alone. A
+"tg ratio within 0.95x of the baseline" gate read across two sweeps taken hours apart therefore cannot
+tell a 5% regression from the host. Tier 01's close-out is the evidence in the other direction: a 7% to
+9% prefill regression that two sweeps could not attribute was found by a same-hour A/B. So:
+
+- **Any no-regression gate at 0.90x or tighter** is scored on **Juno absolute t/s** (or ms), from a
+  **same-hour interleaved A/B**: the baseline build's jar and the candidate, alternating A B A B A B,
+  each invocation `compare-llama-cpp.sh --juno-jar <jar> --juno-reps 1 --juno-warmup 2 --reps 1
+  --no-publish` (the candidate's own build may be passed the same way), with **`--pin-clocks`** on
+  every invocation. The gate reads the median of the three candidate readings against the median of
+  the three baseline readings, and publishes all six. A run without pinned clocks is not scorable
+  against such a gate. A gate comparing two configurations of one build (a flag on against off)
+  alternates the flag the same way instead of the jar. `compare-lora.sh --baseline <ref>` already
+  builds and runs both sides in one session, which satisfies the same-hour half; until it gains its
+  own pinning flag, pin the governor and turbo by hand (`sudo cpupower frequency-set -g performance`,
+  turbo off) for a gate run and say so in the tier's record.
+- **llama.cpp-relative ratios are reported, never gated below the 15% floor.** They remain the
+  program's scoreboard (milestones, the end-of-plan target, Tier 14's scorecard), all of which sit well
+  outside the floor.
+- Gates looser than 0.90x (for example the vision gate's latency `<= 1.25x`, decode tps `>= 0.80x`, or
+  the LoRA playback gate's `>= 0.80x`) may still be read across published runs, median of three.
+
+**Clocks are pinned for gate runs, not only recorded.** Recording the governor, turbo state and GPU
+clocks lets a reader see that a run was taken at a moving clock; it does not stop the clock moving,
+and this host runs `schedutil` with turbo on by default. `compare-llama-cpp.sh --pin-clocks` sets the
+performance governor and turns turbo off for the run and restores both on exit, and locks the GPU
+graphics clock where the driver allows (`--pin-gpu-mhz`, default the card's maximum). It needs
+prompt-free sudo (`sudo -v` first) and refuses to start if it cannot pin the CPU. GPU clock locking is
+refused by the driver on some cards, including consumer Pascal parts like this host's; the run then says
+the GPU clock was recorded, not fixed. Every run also records what it measured: the Juno commit and
+whether the tree was dirty, the jar's hash, the JDK build, the JVM flags (the heap is now fixed with
+`-Xms` equal to `-Xmx`), the GPU driver, and the reference tool's build commit. **A change of reference
+build is a measurement boundary** — this host already runs two (one per backend), and a ratio against
+one is not comparable with a ratio against the other.
+
 **No CI exists in this repository today** (confirmed: `.github/` holds only a `modernize/`
 directory, no workflows) — tier-gating (execution rule 1: don't start Tier N+1 until Tier N's exit
 criteria are all checked) is enforced procedurally, by whoever executes the plan re-reading the
@@ -483,6 +572,12 @@ CI pipeline is added during this plan's execution, wiring `mvn test` plus the re
 at Tier 07 or at the first point a tier's full smoke matrix exceeds thirty minutes of hands-on
 execution, whichever comes first. Record the outcome of that re-examination in the then-active
 tier's file, so "we decided not to" stays a decision with a date on it rather than an omission.
+
+**The thirty-minute condition fired during Tier 01 and was not recorded there.** Its eleven-module
+unit reactor ran 25 to 27 minutes per pass, the residency smoke on llama-1-30b took 3 h 11 min, and the
+RoPE-pairing diagnosis ran 36 minutes. The trigger and the evidence are now recorded in
+[Tier 01B](TIER-01B-prefill-throughput.md)'s execution record, the active tier, with the decision itself
+left to the owner and due before Tier 01B's step 2 re-baseline.
 
 **That trigger now has somewhere to fire.** Naming Tier 07 here and nowhere else meant the revisit
 lived only in this paragraph, and a reader working through Tier 07's own scope and exit criteria would

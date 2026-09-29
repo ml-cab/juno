@@ -116,8 +116,8 @@ the finished system.
   code path, not a hot-path *change*, so the existing rule's "optional" carve-out likely applies —
   confirm at implementation time rather than assuming.
 
-  **Threshold, if the gate applies.** Per-request latency on the happy path within **0.95x** of the
-  pre-tier baseline on both schedules, median of three per the README's noise-floor rule — the
+  **Threshold, if the gate applies.** Per-request happy-path latency **<= 1.05x** the pre-tier build on
+  both schedules, from a same-hour interleaved A/B with pinned clocks against the pre-tier build (README, "No-regression gates tighter than the floor are Juno-against-Juno") — the
   circuit-breaker and retry wrapper sits on every request once wired, so "it only costs something
   when a node dies" needs measuring rather than assuming. Reranking's own number: end-to-end latency
   for a 10-document rerank at **<= 1.5x** the latency of a single chat completion of equivalent

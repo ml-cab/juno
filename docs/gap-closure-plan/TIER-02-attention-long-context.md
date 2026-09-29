@@ -31,6 +31,46 @@ the KV append, and four synchronous uploads plus one download for attention, and
 attention work. `CudaGraphSession` came with it, because a captured graph only pays once a region
 issues many launches per wait. Scope items 4 to 6 below carry all three.
 
+**Defect found 2026-09-28: Phi-3.5 always rotates with the long-context RoPE factors.** Found from a
+console report: `./juno local` on `Phi-3.5-mini-instruct-Q4_K_M.gguf` answered "Hello" correctly, then
+ran on to `max_tokens` with training-data text ("---", "## Instruction 2 ... {ct}"). The stop path was
+not at fault: no turn marker or role header was ever produced, so the Session 93 stop (`ChatTurnMarkers`)
+had nothing to catch. The model rarely produced `<|end|>`. Measured on the CPU path, teacher-forced
+over the same 19 prompt+answer token ids (tokenization confirmed identical to the reference engine's
+`/tokenize`, including the `29871` space pieces after each control token and no BOS), probability of
+`<|end|>` (32007) after "How can I help you today?":
+
+| Build | Factors | P(`<\|end\|>`) | P(`\n`) |
+|---|---|---|---|
+| Juno HEAD | long (always) | 0.502 | 0.487 |
+| Juno, `Phi3RopeConfig` swapped to short by reflection | short | 0.992 | 0.007 |
+| reference engine b9551, `-c 512` / `-c 4096` | short | 0.996 | 0.004 |
+| reference engine b9551, `-c 8192` | long | 0.675 | 0.297 |
+
+At the console default (temperature 0.7, top-k 50, top-p 0.9) this is roughly a coin flip per reply:
+7 of 10 GPU runs and 4 of 6 CPU runs of a single "Hello" hit the token limit; greedy stops every time.
+
+Cause: `Phi3RopeConfig.selectFactors()` (since `a384152`) returns the long factors whenever the GGUF's
+trained `phi3.context_length` (131072) exceeds `rope.scaling.original_context_length` (4096), which is
+true for every request, so a 10-token prompt is rotated as if it were a long-context one. The reference
+engine picks by the configured per-sequence context instead (the last row shows it degrades the same
+way when configured above 4096). **Selecting by Juno's own capacity does not fix it**: `MAX_SEQ_LEN` is
+32768, above 4096, so the fix is a context policy, which is why it sits in this tier. Options for the
+owner (scope item 7): (a) short factors unless the session is explicitly configured for more than
+4096 tokens, failing closed when a short-factor session would cross 4096; (b) the model author's
+per-sequence semantics, short until the sequence crosses 4096 and long after, which needs cached K
+re-rotated at the crossing and so shares machinery with context-shift (scope item 2).
+
+Also open: at matched long factors Juno reads 0.502 against the reference's 0.675. The short-factor
+rows agree to 0.004, so this gap may be a second, long-factor-only discrepancy (for example in how
+`attn_factor` or the factor tensor is applied) and must be explained before item 7 closes.
+
+Scope of the damage: every Phi-3.5 reply on every surface, CPU and GPU, since `a384152`. Not a
+throughput measurement boundary (the factors change rotation angles, not work); Phi-3.5 greedy-parity
+or divergence readings against the reference engine are affected, readings of Juno against itself are
+not. If the fix lands before this tier starts, record it under the active tier's **Out-of-tier
+changes** (README execution rule 9) and tick item 7 here.
+
 ## Scope
 
 ### In scope
@@ -40,13 +80,15 @@ issues many launches per wait. Scope items 4 to 6 below carry all three.
    correct (verified against the existing scalar CPU attention path) while reducing peak memory at
    long sequence lengths. **It inherits whatever architecture coverage Tier 01B actually delivered —
    read that tier's exit table, do not assume it covered everything.** Tier 01B ships the kernel path
-   for Phi-2, Phi-3, Qwen3 and Qwen3-MoE but explicitly leaves any architecture it could not measure
-   on a real model with its default resolved off behind an explicit notice. Files exist on disk for
-   Phi-3, Qwen3 and Qwen3-MoE, so those three should arrive here default-on; Phi-2 is the one that may
-   not, since it is only reachable through `moondream2`'s backbone unless a plain Phi-2 GGUF was
-   obtained. So the starting state for this tier is "default-on for the architectures 01B measured,"
-   not "default-on everywhere" — and not the narrower set an earlier draft of this paragraph assumed,
-   which wrongly recorded the two Qwen3 files as absent.
+   for Phi-2, Phi-3, Qwen3 and Qwen3-MoE, and its exit criteria forbid leaving any of them with the
+   default resolved off for want of a measurement: a real file exists for every one
+   (`phi-2.Q4_K_M.gguf`, `Phi-3.5-mini-instruct-Q4_K_M.gguf`, `Qwen3-1.7B-Q4_K_M.gguf`, and
+   `Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf` at partial offload; see [`INVENTORY.md`](INVENTORY.md)).
+   So the expected starting state is default-on for Llama-family, Mistral, Qwen2, Phi-2, Phi-3, Qwen3
+   and Qwen3-MoE. It can still be narrower if Tier 01B measured an architecture and found the kernel
+   bought nothing or diverged unacceptably there; that tier's exit table is the record, and an earlier
+   draft of this paragraph was wrong twice about which files existed (the two Qwen3 files, then the
+   plain Phi-2), so read that table and check `models/` rather than trusting this paragraph.
    Whatever that set turns out to be, this rewrite must not shrink it — no architecture may regress
    to the scalar path as a side effect — and must re-run Tier 01B's per-architecture greedy-decode
    divergence characterisation for every member of it, since a tiled online-softmax accumulates in a
@@ -89,6 +131,12 @@ issues many launches per wait. Scope items 4 to 6 below carry all three.
 6. **Default of `--gpu-residency`.** After item 4 (and 5 if wired), re-measure the region on vs off on
    all four sweep models (full `compare-llama-cpp.sh --gpu` sweeps, both published) and put the default
    to the owner with the numbers; do not change it unasked.
+7. **Phi-3.5 LongRoPE factor selection** (defect found 2026-09-28, see "Why this tier, why now").
+   Replace `Phi3RopeConfig.selectFactors()`'s trained-context test with the policy the owner picks
+   (option a or b), applied identically on every path that calls `Phi3Rope` (CPU, GPU, batched prefill,
+   LoRA training's `ropeExtBackward`), and explain the long-factor 0.502 vs 0.675 gap. Files:
+   `Phi3RopeConfig`, `Phi3Rope`, `Phi3TransformerHandler`; test `Phi3RopeLoadTest` plus the live test
+   below.
 
 ### Out of scope
 
@@ -195,6 +243,11 @@ issues many launches per wait. Scope items 4 to 6 below carry all three.
   `--context-shift` enabled). The real-model windowed check belongs to Tier 08 and is listed in that
   tier's exit criteria; this tier's windowed coverage is the synthetic fixture plus the unit-level
   mask tests above, which is enough to ship the mechanism without waiting on a later tier.
+- **Phi-3.5 end-of-turn live test (scope item 7)**: teacher-force the 19 ids
+  `32010 29871 13 10994 32007 29871 13 32001 29871 13 10994 29991 1128 508 306 1371 366 9826 29973`
+  on `Phi-3.5-mini-instruct-Q4_K_M.gguf` and assert P(32007) at the last position is **>= 0.95**
+  (0.502 before the fix, 0.992 with short factors); a unit test that a short session selects the short
+  factors and, under option (b), that crossing 4096 switches to the long ones.
 - **New bash smoke script**: `scripts/performance-tests/smoke-tier02-attention-context.sh` —
   drives a long multi-turn conversation via the REST API until the shift boundary, asserts the
   server keeps responding instead of erroring, and asserts a second run *without* the opt-in flag
@@ -211,8 +264,9 @@ issues many launches per wait. Scope items 4 to 6 below carry all three.
     double** it, which is the property the rewrite exists to buy and the one a percentage alone does
     not capture.
 
-  Throughput must not regress: tg ratio within 0.95x and pp ratio within 0.95x of the pre-tier
-  baseline for every sweep model, median of three runs per the README's noise-floor rule.
+  Throughput must not regress: Juno tg and pp t/s **>= 0.95x** the pre-tier build on every sweep
+  model, from a same-hour interleaved A/B with pinned clocks against the pre-tier build (README, "No-regression gates tighter than the floor are Juno-against-Juno"). The llama.cpp-relative ratios are recorded against the program target, not
+  gated.
 - **Attention inside the residency region (scope item 4)**: extend `ResidentQkvPathTest` with a
   bit-identity case of the region (now through the KV append and attention) against the op-at-a-time
   path at several positions and across concurrent threads, a case that the CPU KV tensors and the
@@ -221,7 +275,8 @@ issues many launches per wait. Scope items 4 to 6 below carry all three.
   greedy parity on/off; re-run `scripts/performance-tests/smoke-gpu-residency.sh` on tinyllama,
   mistral-7b and llama-1-30b (greedy output identical on/off, per-request device memory flat).
   **Threshold**: end-to-end tg with the region on **>= 1.0x** the region-off run on every model where
-  the region runs, and **>= 0.95x** everywhere.
+  the region runs, and **>= 0.95x** everywhere — read from a same-hour A/B alternating the flag
+  (region off, on, off, on, off, on) with pinned clocks, per the README's no-regression rule.
 - **`CudaGraphSession` (scope item 5)**: a decode-width microbenchmark of one layer's region, graph
   replay against plain launches, plus greedy parity with replay on. **Threshold**: the decision rule in
   scope item 5 (at least 5% of decode forward-pass time on tinyllama and mistral-7b with greedy output
@@ -240,6 +295,9 @@ why this tier ships against synthetic fixtures and Tier 08 carries the real-mode
 
 ## Exit criteria
 
+- [ ] Phi-3.5 selects its RoPE factors by the owner-chosen context policy, not the trained context
+      length; the end-of-turn live test reads P(`<|end|>`) >= 0.95; the long-factor gap to the
+      reference engine is explained or fixed (scope item 7).
 - [ ] Tiled attention kernel numerically matches the CPU oracle at all tested sequence lengths and
       reduces peak GPU memory at long context vs. the old full-materialization kernel (measured).
 - [ ] Context-shift works correctly, opt-in only, for both dense and paged KV, both schedules.

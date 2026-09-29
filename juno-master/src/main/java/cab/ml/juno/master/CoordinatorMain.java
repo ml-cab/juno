@@ -154,6 +154,8 @@ public final class CoordinatorMain {
 		// ── Read model config + tokenizer from GGUF ───────────────────────
 		LlamaConfig config;
 		Tokenizer tokenizer;
+		// The architecture first, so it is the reason given when a file fails more than one check.
+		cab.ml.juno.node.ModelFileGate.requireLoadable(Path.of(modelPath));
 		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
 			config = LlamaConfig.from(reader);
 			tokenizer = GgufTokenizer.load(reader);

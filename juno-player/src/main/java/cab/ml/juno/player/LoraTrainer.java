@@ -89,6 +89,8 @@ public final class LoraTrainer implements AutoCloseable {
 		Tokenizer tokenizer;
 		LoraAdapterSet adapters;
 		Path ap = adapterPath != null ? adapterPath : defaultAdapterPath(modelPath);
+		// The architecture first, so it is the reason given when a file fails more than one check.
+		cab.ml.juno.node.ModelFileGate.requireLoadable(modelPath);
 		try (GgufReader r = GgufReader.open(modelPath)) {
 			cfg = LlamaConfig.from(r);
 			tokenizer = GgufTokenizer.load(r);

@@ -11,6 +11,8 @@
 set -euo pipefail
 
 PERF_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=perf-lib.sh
+source "${PERF_SCRIPTS}/perf-lib.sh"
 ROOT="$(cd "${PERF_SCRIPTS}/../.." && pwd)"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_ROOT="${ROOT}/target/grammar-smoke/${RUN_ID}"
@@ -84,7 +86,7 @@ wait_for_juno_api() {
 
 stop_juno() {
   local pid="${JUNO_PID:-}"
-  [[ -n "$pid" ]] || return 0
+  [[ -n "$pid" ]] || { perf_engine_stdin_release; return 0; }
   if kill -0 "$pid" 2>/dev/null; then
     kill -TERM "$pid" 2>/dev/null || true
     local i
@@ -97,6 +99,7 @@ stop_juno() {
     fi
   fi
   JUNO_PID=""
+  perf_engine_stdin_release
 }
 
 wait_for_metrics() {
@@ -155,9 +158,10 @@ start_juno() {
     die "port ${API_PORT} already has a healthy Juno API"
   fi
 
+  perf_engine_stdin_open || die "cannot create the engine stdin pipe"
   (
     cd "$ROOT"
-    exec "$java_bin" \
+    perf_engine_exec "$java_bin" \
       --enable-preview \
       --enable-native-access=ALL-UNNAMED \
       --add-opens java.base/java.lang=ALL-UNNAMED \
@@ -179,7 +183,7 @@ start_juno() {
       --api-port "$API_PORT" \
       --jfr 30m \
       --verbose \
-      "$@" < <(while true; do sleep 3600; done)
+      "$@"
   ) >>"$logf" 2>&1 &
   JUNO_PID=$!
   if ! wait_for_juno_api "$API_PORT" 300 "$JUNO_PID"; then

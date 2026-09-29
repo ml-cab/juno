@@ -1,6 +1,6 @@
 # Tier 01B: Prefill throughput
 
-Status: not started
+Status: in progress — implementation step 0 complete (2026-09-28); step 1 next
 Gap analysis refs: none directly — this tier exists because the gap analysis has no prefill section
 at all, while the published measurements under `docs/perf-compare/` show prompt processing to be the
 single largest gap Juno has. See "Why this tier, why now".
@@ -52,7 +52,7 @@ differ in **two** variables besides prompt length: the 128 run has `raw_prompt: 
 while the 512 run has `raw_prompt: 1` (520 Juno tokens), and the 128 run used `--vector 1` while the
 512 run used `--vector 0`. The claim may well be true — a fixed per-chunk cost paid sixteen times
 for a 512-token prompt predicts exactly that shape — but it is **not established by those two
-runs**, and step 1 below is what actually establishes it.
+runs**, and step 2 below (the re-baseline) is what actually establishes it.
 
 Decode is 2 to 4 times slower than llama.cpp. Prefill, measured like-for-like, is 35 to 130 times
 slower depending on configuration. A serving engine whose time-to-first-token scales that badly with
@@ -86,8 +86,9 @@ handlers owns its own KV map and attention math. ROCm is inactive for a third re
 keys off CUDA availability specifically.
 
 So item 0 is **four kernel integrations plus a capability-reporting mechanism that does not exist
-yet**, not "existing kernel code reaching more architectures." Size it accordingly. It still goes
-first, because every other measurement in this tier would otherwise be taken against a baseline that
+yet**, not "existing kernel code reaching more architectures." Size it accordingly. It is still the
+first forward-pass change in this tier (only the instrumentation of step 1 and the re-baseline of
+step 2 precede it), because every other measurement in this tier would otherwise be taken against a baseline that
 is fast on four architectures and slow on four others — but it is no longer the cheap win this tier
 was originally written around.
 
@@ -285,15 +286,15 @@ on today's op-at-a-time GPU path either way.
    Tier 14 — see the test list below) and scope item 5's engine-keepalive reaping. The second one comes
    first in practice: this tier runs more engine launches than any tier before it, and until the leak is
    fixed a `pgrep` check for "is a sweep still running" returns false positives, which is a problem
-   whose cost is paid during step 1 rather than after it. Neither needs a model, a GPU or a build.
+   whose cost is paid during step 2 rather than after it. Neither needs a model, a GPU or a build.
 
    **A third item, handed over by Tier 01 on 2026-09-27: find and fix the one fast prefill
-   repetition before step 1's re-baseline.** In `compare-llama-cpp.sh` sweeps, one of three prefill
+   repetition before step 2's re-baseline.** In `compare-llama-cpp.sh` sweeps, one of three prefill
    repetitions sometimes reads four to five times faster than the other two: the tinyllama default lane
    read 898 and then 819 t/s in two separate runs against about 168 for the others, and the qwen2.5-3b
    tuned lane 130.6 against about 80. On tinyllama it was **repetition 1 both times**, the measured
    request that directly follows the warm-up. Medians are unaffected (median of three), but the row
-   breaks the 15% spread rule and forces re-runs, and step 1's re-baseline is this tier's
+   breaks the 15% spread rule and forces re-runs, and step 2's re-baseline is this tier's
    before-measurement, so it must not need re-runs for a harness artifact. Suspects, not verified: (a)
    prefix-cache or KV reuse between the warm-up and the measured request, so the measured request does
    not actually prefill every prompt token; (b) a timing boundary in how the prefill lane reads
@@ -302,24 +303,44 @@ on today's op-at-a-time GPU path either way.
    the fix belongs to the harness (a fresh session or a distinct prompt per measured request), not to
    the engine's reuse; if the engine turns out to reuse a prefix the request did not ask to share,
    that is a correctness finding and is raised with the owner before the re-baseline.
-1. Re-baseline first. Run `compare-llama-cpp.sh --gpu` at `n_prompt` 128 and 512 on all four sweep
+
+   *Two harness changes already landed, 2026-09-27, after Tier 01's close-out (owner-approved,
+   measurement time only, no check weakened):* `smoke-gpu-residency.sh` generates the full `--n-gen`
+   only on the first and last request (which must match) and `--mem-n-gen` (default 8) on the
+   requests between, which only feed the per-request memory reading (the 16-request llama-1-30b run
+   took 3 h 11 min; the memory reading is per request, not per token); and `compare-llama-cpp.sh
+   --juno-jar PATH` runs another build's jar from this checkout, logs it, and never publishes, for
+   same-hour A/B runs. `docs/performance.md` gives the pre-gate and A/B recipe. **Lesson for this
+   tier's item 1a:** the Tier 01 close-out spent about 75 minutes of A/B, bisect and hand-added
+   per-phase timing to find a prefill cost that a `juno.DeviceStaging`-style span would have shown in
+   the first sweep. *Decided by the owner 2026-09-27, in the plan review: item 1a now runs first, as step 1 below.*
+
+   *`check-plan-thresholds.sh` shipped 2026-09-27; see the execution record.*
+1. **Build the `juno.DeviceStaging` and `juno.WeightDequant` spans (scope item 1a) first, before the
+   re-baseline.** It is instrumentation, not a forward-pass change, so it does not have to wait behind
+   item 0, and two things depend on it being in place before any measurement: the item-2 threshold
+   reads bytes staged per 512-token window "against the step-2 baseline", which has no staged-bytes
+   figure unless the spans exist when that baseline is taken; and Tier 01's close-out spent about 75
+   minutes finding by bisect a prefill cost these spans would have shown in the first sweep. The spans
+   do add work around every staging copy, so land them with a same-hour A/B (pinned clocks, README
+   "No-regression gates tighter than the floor") of the build with the spans against the build without,
+   on two sweep models at `n_prompt` 512: prefill **>= 0.98x**, or the spans are made cheaper before the
+   re-baseline is taken on top of them.
+2. Re-baseline. Run `compare-llama-cpp.sh --gpu --pin-clocks` at `n_prompt` 128 and 512 on all four sweep
    models on current HEAD (post-Tier-01), under the parity-corrected harness required by this plan's
    "Benchmark parity preconditions" (README), and with each lane's actual resolved
    `--gpu-attention` value recorded rather than assumed — the historical numbers quoted above were
    taken before those corrections, with at least one lane mislabelled, and are not a valid
-   before-measurement for this tier's gate.
-2. **Land item 0 next, before anything else that changes the forward pass.** Not because it is cheap —
+   before-measurement for this tier's gate. This run carries the staged-bytes and dequant figures
+   from step 1's spans, which are item 2's before-measurement.
+3. **Land item 0 next, before anything else that changes the forward pass.** Not because it is cheap —
    it is four kernel integrations against four handlers that each own their own KV map and attention
    math, plus a capability-reporting mechanism that does not exist yet — but because leaving it until
    later would mean every subsequent measurement in this tier is taken against a baseline that is fast
    on four architectures and slow on four others. Re-measure immediately after, so the default change
    has its own attributable number, and record that number per architecture: the Llama-family 3.85x
-   says nothing about what these four will do. Three of the four have a real file to measure on — see
+   says nothing about what these four will do. All four have a real file to measure on — see
    "Models needed", and check `models/` rather than trusting any table.
-3. **Build the `juno.DeviceStaging` and `juno.WeightDequant` spans (scope item 1a) before
-   attempting the breakdown.** This is net-new instrumentation with `metrics` tests, not a
-   measurement step, and the breakdown's "no unattributed residue" criterion is unreachable without
-   it. Land it on the post-item-0 build so the spans are present for every measurement from here on.
 4. Produce the per-term prefill breakdown (scope item 1b) and publish it.
    Decide which of scope items 2, 3 and 4 the breakdown actually justifies, and record the decision here
    — item 0 may well have moved which term dominates, which is the point of sequencing it here. The
@@ -385,7 +406,7 @@ on today's op-at-a-time GPU path either way.
   own test list, before its own tests, and Tier 14 calls it rather than restating it. It needs no model,
   no GPU and no build — it is `grep` and an exit code, and it should run in under a second.
 - **Every prefill repetition is a full prefill (implementation step 0, third item).** A harness selftest
-  or a live check, run before step 1's re-baseline: for every measured prefill repetition, the prompt
+  or a live check, run before step 2's re-baseline: for every measured prefill repetition, the prompt
   tokens the engine actually prefilled equal `prompt_tokens` (no reused prefix reported for the
   measured request), and the repetition's `prompt_eval_tps` comes from that request's own prefill span.
   Show it catching the artifact on the evidence runs' shape (a warm-up followed by repetition 1 on
@@ -401,9 +422,9 @@ on today's op-at-a-time GPU path either way.
   **Threshold, item 0 on its own.** Every architecture newly covered by the default change (Phi-2,
   Phi-3, Qwen3, Qwen3-MoE) must show a measured prefill gain against its own pre-item-0 baseline on
   the same host and prompt length — a default flipped on that buys nothing on a given architecture is
-  a finding to report and investigate, not a checkbox. Three of the four have a file on disk to
-  measure on (Phi-3, Qwen3, Qwen3-MoE — see "Models needed"), so three of the four readings are
-  obtainable in this tier without asking for anything. **There is no reference point for any of
+  a finding to report and investigate, not a checkbox. All four have a file on disk to
+  measure on (Phi-2, Phi-3, Qwen3, and Qwen3-MoE at partial offload — see "Models needed"), so all four
+  readings are obtainable in this tier without asking for anything. **There is no reference point for any of
   them.** The 3.85x figure is TinyLlama's, on the one architecture family where the kernel was already
   the default, so it predicts nothing here; record what each one actually does. Decode is also
   expected to move on these architectures, since attention has been measured at 64.2% of decode wall
@@ -411,22 +432,38 @@ on today's op-at-a-time GPU path either way.
   taken, not a pass.
 
   **Threshold, item 2 on its own.** Bytes staged host-to-device and device-to-host per 512-token
-  prefill window must drop by **>= 70%** against the step-1 baseline. This is the item's primary
+  prefill window must drop by **>= 70%** against the step-2 baseline. This is the item's primary
   number because it is the one that is not confounded by clock state or noise: a residency change
   either stops moving the bytes or it does not.
 
-  **Threshold, the tier overall.** mistral-7b Q4_K_M on GPU must reach **pp ratio >= 0.10x**
-  llama.cpp at `n_prompt=512` **and** pp must not fall with prompt length — the 512-token ratio must
-  be greater than or equal to the 128-token ratio for every sweep model. Both are measured under the
-  parity-corrected harness (`RAW_PROMPT=1`, warmup, median of three), and **both are re-derived from
-  step 1's re-baseline before implementation starts**, because neither has ever been measured
-  like-for-like. Understand the size of the 0.10x ask honestly: the best parity-corrected prefill
-  figure in this repository is TinyLlama at 0.028x with the attention kernel on, so 0.10x is roughly
-  a three- to four-fold improvement over the best result this project has produced, not a six-fold
-  improvement over a 0.0166x reading that was partly an artefact. If step 1's re-baseline puts
-  mistral-7b materially below 0.028x, restate this threshold against the re-baselined number and say
-  so here rather than carrying a target that was set against the wrong denominator. Decode must not
-  regress: tg ratio within 0.95x of the step-1 baseline for every sweep model. Vision gate per the
+  **Threshold, the tier overall** (the README's Tier 01B milestone rows, restated 2026-09-27).
+  At `n_prompt=512`, GPU:
+  - pp ratio **>= 0.10x** llama.cpp on every sweep model except Phi-3.5-mini (tinyllama, qwen2.5-3b,
+    mistral-7b; binding reference 0.062x on tinyllama, read at `n_prompt=128`);
+  - pp ratio **>= 0.08x** on Phi-3.5-mini (reference 0.040x at `n_prompt=128`) — the model whose
+    handler item 0 newly gives the GPU attention kernel, and the binding constraint on the program's
+    end-of-plan pp target;
+  - pp must not fall with prompt length: the 512-token ratio **>= 1.00x** the 128-token ratio for
+    every sweep model.
+
+  All three are measured under the parity-corrected harness (`RAW_PROMPT=1`, warmup, median of three,
+  `--pin-clocks`), and **the first two are re-read against step 2's 512-token re-baseline before
+  implementation starts**: their references were taken at 128 tokens because no parity-corrected 512
+  reading exists. If the 512 readings sit materially below the 128 ones, restate both rows against the
+  512 figures, here and in the README table, keeping the same multiples (about 1.6x on the binding
+  non-Phi model and 2.0x on Phi-3.5-mini) rather than carrying a target set against the wrong
+  denominator.
+
+  *Why this changed from "mistral-7b >= 0.10x".* The current reference (`20260927T232837Z`) already reads
+  mistral-7b at 0.101x at 128 tokens, after the out-of-tier memory fix and the extracted FP16 pack loop
+  that landed at Tier 01's close-out. A mistral-only milestone would have credited this tier with work
+  done before it began, while leaving the model that binds the program target untested. The earlier
+  framing ("0.10x is a three- to four-fold improvement over TinyLlama's 0.028x") predates both the
+  parity-corrected re-baseline and that fix, and no longer describes the ask.
+
+  Decode must not regress: Juno tg t/s **>= 0.95x** the step-2 build on every sweep model, from a
+  same-hour interleaved A/B with pinned clocks (README, "No-regression gates tighter than the floor are
+  Juno-against-Juno"); the tg ratio is recorded against the program target, not gated. Vision gate per the
   existing rule: `latency_ms` <= 1.25x baseline, decode tps >= 0.80x baseline.
 
   **Decompose the ask before implementing it, and escalate if it does not add up.** This is the
@@ -443,7 +480,7 @@ on today's op-at-a-time GPU path either way.
   here owns is a useful result, and it is what tells the user whether the missing mechanism belongs
   to [Tier 04C](TIER-04C-packed-weight-matmul.md), to Tier 02, or to a tier that does not exist yet.
 
-  **Contingency, in the same spirit as Tier 01's.** If the breakdown in step 3 shows prefill time is
+  **Contingency, in the same spirit as Tier 01's.** If the breakdown in step 4 shows prefill time is
   dominated by a term this tier cannot move without work owned by a later tier (for example: residual
   attention at long context, which is Tier 02; or per-format kernels, which is Tier 04), do not
   iterate indefinitely. Publish the breakdown, ship whatever items the breakdown does justify, state
@@ -492,6 +529,234 @@ corrected row, in the same pass that makes the correction — otherwise a stale 
 silently narrows a later tier's scope, which is what happened here and what would have shipped two
 architectures' defaults off on a false premise.
 
+## Execution record
+
+Status of the tier: in progress. Implementation step 0 is complete (threshold check, keepalive reaping,
+and the fast prefill repetition traced and fixed in the harness); step 1 (the two new spans) is next. This
+section records the plan-review pass of 2026-09-27, which landed ahead of step 1.
+
+### 2026-09-27 — plan-review pass: threshold check, CI trigger, reference and gate rules, clock pinning
+
+Scope, as the owner directed from the plan review: re-point the program target's reference column,
+ship and extend the rule-7 check, record the CI trigger, correct Tier 02 item 1, make tight
+no-regression gates same-hour Juno-against-Juno A/B, move item 1a ahead of item 0, restate this tier's
+milestone, and pin clocks plus record build identity in the comparison harness. No forward-pass,
+MatVec, KV or batching code changed.
+
+**`check-plan-thresholds.sh` shipped** (`scripts/performance-tests/`), implementation step 0's first
+item and this tier's exit criterion. It fails on a tier mentioning a perf gate in any capitalization
+without a numeric `**Threshold` block (a tier with no gate declares `**No perf gate**`), on an exit
+criterion reading "no unexplained regression", and on a malformed intermediate-milestone row or an
+active milestone its reference reading already meets. Evidence, both directions:
+- Against the tree as it stood when written: **7 failures** — Tiers 04 and 04C ("no unexplained
+  regression" in an exit criterion), 04B (a threshold block with no comparison operator: "exact
+  equality", "within 0.95x"), 05 (a lowercase "perf gate" with neither threshold nor declaration), and
+  all three rows of the old free-text milestone table.
+- After the fixes (the milestone table made machine-readable, the Tier 04 milestone retired as met on
+  arrival, the 04B threshold rewritten, Tier 05 declaring `**No perf gate**`, both exit criteria
+  stating their numbers): `check-plan-thresholds: ok (18 tier files, milestone table checked)`.
+- Against a scratch copy with four planted defects (Tier 03's `**Threshold` markers removed, a "no
+  unexplained regression" exit criterion added to Tier 11, the Tier 10 milestone lowered below its
+  reference, Tier 05's declaration removed): exit 1 naming exactly those four.
+
+**The CI revisit trigger fired during Tier 01 and is recorded here** (README, "Owner and revisit
+trigger": a tier whose smoke matrix exceeds thirty minutes of hands-on execution records the
+re-examination in its own file). Evidence from Tier 01's record: the eleven-module unit reactor took
+22:46 to 27:14 per pass across seven passes; `smoke-gpu-residency.sh` on llama-1-30b took 3 h 11 min
+before its request count was trimmed; the RoPE-pairing A/B took 36 minutes. What changed since the
+README's original judgement: every one of those runs was started and read by hand, one run was
+misread from a pipeline's exit code and a second reactor started on top of it (Tier 01, four-hour
+run), and the rule-7 check shipped here is exactly the kind of GPU-free gate a CI job would run on
+every change. **Outcome: open — the decision belongs to the owner and is due before step 2's
+re-baseline.** *2026-09-28: the owner deferred it to the end of step 1 and asked to be asked
+again then; the recommendation on the table is a GPU-free two-job workflow (script checks on every
+push; the unit reactor and `mvn verify -pl juno-master` on pull requests and pushes to `main`), with
+real-model and performance gates staying manual.* The two options, as Tier 07 item 5 frames them: adopt a `.github/workflows/` job
+covering `mvn test` on the eleven unit-test modules, `mvn verify -pl juno-master`,
+`check-plan-thresholds.sh` and `compare-llama-cpp.sh --selftest` (GPU and real-model gates stay
+manual on this host), stating that fraction; or decline, naming what changed or that nothing did. Tier
+07 still carries its own re-examination.
+
+**Harness: clock pinning and build identity** (`compare-llama-cpp.sh`). `--pin-clocks` sets the
+performance governor and turns turbo off for the run and restores both on exit, and locks the GPU
+graphics clock where the driver allows (`--pin-gpu-mhz`); it needs prompt-free sudo and refuses to run
+if it cannot pin the CPU. `host.json` and `INDEX.md` now carry `clock_pinned` and what was pinned, the
+Juno commit and dirty flag, the jar's hash, the JDK build, the JVM flags, the GPU driver and the
+reference tool's build commit, and an unpinned run's index says it is not usable for a gate tighter
+than the noise floor. The Juno heap is now fixed with `-Xms` equal to `-Xmx` (was `-Xms512m`).
+Verified: `bash -n` and `--selftest` (all checks pass). **Not yet verified on a live run**: a dry run
+exercising the pinned and unpinned paths was not executed in this pass, so the first real sweep is
+also the first live exercise of both; check its `host.json` fields before trusting them.
+
+### 2026-09-28 — implementation step 0: engine-keepalive reaping, and the fast prefill repetition
+
+Scope: implementation step 0's two remaining items (scope item 5, and the third item handed over by
+Tier 01). No forward-pass, MatVec, KV or batching code changed. One `metrics` change (two new keys) and
+harness changes only.
+
+**Plan-versus-code drift found before starting, and corrected here rather than worked around.**
+- Scope item 5 lists **eight** sibling scripts. There are **nine**: `smoke-gpu-residency.sh`, added in
+  Tier 01, uses the same `< <(while true; do sleep 3600; done)` keepalive and was not in the list. With
+  `compare-llama-cpp.sh` that makes ten scripts on the shared helper, not nine.
+- Item 5 says `perf-lib.sh`'s "one assignment is guarded". It has several top-level assignments, all of
+  the guarded `${X:-default}` form, so the conclusion (a safe host to source) holds.
+- `compare-prefill-batch.sh --help` also documents `--gpu-attention`'s default as "off", the same stale
+  label item 0 names for `compare-llama-cpp.sh`. Left for item 0 to correct with the other one.
+
+**Tier 01's named-pipe helper had two defects of its own**, both found while moving it into `perf-lib.sh`
+and both shown by the new selftest failing against a copy of it:
+- The engine inherited the script's read-write descriptor on the pipe, so it held a writer on its own
+  stdin and never saw end of file. Its comment ("the engine exits on its own once the pipe closes") was
+  false. Harmless while `stop_juno` kills the engine, but a script that died without stopping it left
+  the engine running.
+- `exec {fd}>&- 2>/dev/null` applies the redirect to the shell itself, so from its first engine stop
+  onward **`compare-llama-cpp.sh` discarded all of its own stderr** — every `warn` and `die` message of
+  every sweep after the first engine of that sweep. Published result files are unaffected (they are
+  written to files, not stderr); what was lost is warnings a reader never saw.
+
+**The engine-keepalive fix.** `perf-lib.sh` gains `perf_engine_stdin_open` / `perf_engine_exec` /
+`perf_engine_stdin_release`: a named pipe under `$TMPDIR`, held read-write by the launching shell, with
+the child's inherited copy closed so releasing it delivers end of file. All ten scripts source it and
+call the release from their `stop_juno` on every path. `selftest-engine-stdin.sh` (new, no model or GPU)
+checks, over three launches, that the engine stays up while the pipe is held, holds only its stdin on
+it, exits on release, and leaves no pipe on disk, no descriptor in the shell and no helper process;
+that stderr survives a release; and that an engine whose script exits without stopping it is not
+orphaned. Its negative control runs the old process substitution and requires the leftover check to
+see the sleep loop it leaves. Evidence: passes (23 checks); against a copy of Tier 01's helper it fails
+8 checks naming the inherited writer, the engine outliving release, the orphaned engine, and stderr
+redirected to `/dev/null`.
+
+**Exit condition, run 2026-09-28 on this host: all ten scripts ran to completion with an engine
+launched and stopped at least once, and left nothing behind.** Small parameters (TinyLlama, or the
+script's default model where it has one; CPU where the script defaults to it), `--no-publish`, one
+after another, checked 3 s after each returned:
+
+| Script | Exit | Wall | New keepalive loops | Pipe files | Pipe descriptors held (`lsof`) | Engine JVMs left |
+|---|---|---|---|---|---|---|
+| `compare-parallel.sh` | 0 | 22 s | 0 | 0 | 0 | 0 |
+| `compare-prefill-batch.sh` | 0 | 28 s | 0 | 0 | 0 | 0 |
+| `compare-mixed-prefill.sh` | 0 | 59 s | 0 | 0 | 0 | 0 |
+| `compare-schedule.sh` (`--mode tps`) | 0 | 37 s | 0 | 0 | 0 | 0 |
+| `smoke-grammar.sh` | 0 | 117 s | 0 | 0 | 0 | 0 |
+| `smoke-tools.sh` | 0 | 510 s | 0 | 0 | 0 | 0 |
+| `smoke-tier00-consistency.sh` (`--no-gpu`) | 1 (see below) | 350 s | 0 | 0 | 0 | 0 |
+| `smoke-gpu-residency.sh` (tinyllama, 2 requests, no cluster) | 0 | 30 s | 0 | 0 | 0 | 0 |
+| `compare-vision.sh` (moondream2, GPU, `--skip-build`) | 0 | 552 s | 0 | 0 | 0 | 0 |
+| `compare-llama-cpp.sh` (tinyllama, CPU) | 0 | 47 s | 0 | 0 | 0 | 0 |
+
+"New keepalive loops" counts `sleep 3600` processes whose parent shell started after the run began. A
+PID baseline does not work: 24 orphaned loops from earlier sessions (parents are old
+`smoke-tier01-gpu-residency.sh` and `smoke-gpu-residency.sh` runs) respawn their `sleep` every hour, so
+a first version of this check reported 5 and then 14 "new" loops that were all respawns. Those 24 are
+still on the host; they are what this item exists to stop accumulating, and killing them is left to the
+owner. The CPU `compare-llama-cpp.sh` run also showed the stderr fix working: its warnings reached the
+terminal after the first engine stop.
+
+**The fast prefill repetition: root cause, and it is neither suspect.** Not a prefix reuse (suspect a)
+and not the harness's arithmetic (suspect b). The fast repetitions were not faster requests: the
+tinyllama repetition reading 898 t/s had a request latency of 808 ms against 782 ms for its sibling
+reading 170 t/s. What was wrong was the recorded span. On this host **CPU0's timestamp counter reads
+633 ms ahead of CPUs 1 to 11** (probe: rdtsc against `CLOCK_MONOTONIC` per pinned CPU; offsets
+-632.8 to -633.2 ms on every other core). The kernel detected it at boot ("Measured 208056 cycles TSC
+warp between CPUs, turning off TSC clock", clocksource switched to `hpet`), but the CPU advertises an
+invariant counter, and the JVM enables `UseFastUnorderedTimeStamps` ergonomically on that flag alone,
+so **JFR stamps events with the raw counter while `System.nanoTime` uses the kernel clock**. A span
+that begins on CPU0 and ends elsewhere reads 633 ms short; the reverse reads 633 ms long. Reproduced
+deterministically with a one-event program re-pinned mid-span (`taskset`): a real 1500 ms span reads
+866 ms (CPU0 to CPU1), 2128 ms (CPU1 to CPU0) and 1497 ms (CPU1 to CPU2); with
+`-XX:+UnlockExperimentalVMOptions -XX:-UseFastUnorderedTimeStamps` it reads 1501 ms both ways.
+
+What this explains beyond the fast repetition:
+- **The ~633 to 636 ms "GC pauses"** the README's noise-control section used to withdraw the pause rule
+  (and Tier 01's record discusses at length) were this offset, not pauses. The withdrawal stands — the
+  dispersion rule is the better gate — but its stated reason ("the pause counter does not measure
+  stopped time on this host") was the symptom, not the cause. Corrected in the README and in
+  `docs/performance.md`.
+- **Readings that were too slow**, not only too fast, and in the generation lane as well as prefill.
+  Applying the new check to every published repetition of `20260927T091155Z`, `093054Z`, `232837Z`
+  and `234659Z` withholds **23 of 156**. Every withheld residual sits near +633 ms or near the normal
+  overhead minus 633 ms; the healthy residuals are 9 to 170 ms (forward passes) and 22 to 106 ms (token
+  span).
+- **Effect on the current reference column: none at its stated precision.** Recomputing each row's
+  median without the withheld repetitions moves no reference row by more than 2.2% (tinyllama pp
+  224.89 to 229.78; qwen2.5-3b tuned pp 88.93 to 90.24; the rest within 0.4%). The binding Phi-3.5-mini
+  pp ratio is unchanged at 0.040x; tinyllama's pp ratio, the milestone's binding non-Phi reference, moves
+  from 0.062x to 0.064x (229.78 / 3599.25). Neither changes the milestone rows, which step 2's 512-token
+  re-baseline restates anyway; the reference column is left as published. One published row is
+  wrong outright but is not in the reference: `234659Z` qwen2.5-3b default generation has **all three**
+  repetitions withheld; two of its token spans were misread long and its published 23.93 t/s median
+  should be about 31 (its engine-clock `api_token_gen_tps` is 26.9 to 27.0 on all three, identical to
+  the clean sweep).
+
+**The fix, as the owner chose it (2026-09-28): the JVM flag, applied automatically.** `perf-lib.sh`
+gains `perf_jfr_clock_jvm_flags`, which returns the two flags above whenever the kernel clocksource is
+not `tsc` (`PERF_JFR_OS_CLOCK=auto`, the default; `1` forces it, `0` keeps the JVM default for an A/B).
+`compare-llama-cpp.sh` adds them to Juno's JVM flags and records `jfr_timestamp_source` in `host.json`
+and the INDEX; `compare-vision.sh` passes them through `JUNO_JVM_OPTS` (honored by launchers from
+`release-0.1.2` on, so both sides of a baseline comparison get the same clock). Cost, measured with a
+microbenchmark on this host: one JFR event from about 0.7 to about 3.0 us, which at about 260 events
+per decoded token is on the order of 3 to 4% of decode while a recording runs; prefill spans are per
+layer, not per token.
+
+**Live check, same hour, 2026-09-28 00:36 to 00:46** (`compare-llama-cpp.sh --gpu`, TinyLlama
+Q4_K_M, `n_prompt` 128, 2 warm-ups, 6 repetitions per lane, no tuned lane, `--no-publish`, clocks not
+pinned; `PERF_JFR_OS_CLOCK` alternated 0, 1, 0, 1, so 24 repetitions per setting):
+
+| JFR clock | Withheld | Forward-pass residual | Token-span residual | pp median (min/max) | JFR tg median (min/max) | Engine-clock tg median (min/max) |
+|---|---|---|---|---|---|---|
+| raw counter (JVM default) | **1 of 24** (residual -581 ms) | 6 to 214 ms | 9 to 187 ms | 224.33 (202.9 / 230.3) | 70.36 (68.4 / 71.5) | 57.94 (56.1 / 59.0) |
+| operating-system clock | **0 of 24** | 4 to 38 ms | 5 to 13 ms | 225.21 (216.5 / 231.0) | 67.62 (64.6 / 68.3) | 55.72 (53.2 / 56.2) |
+
+The operating-system clock removes the misreads and tightens every residual. It costs **3.9% of
+generation read under JFR** (and 3.8% on the engine's own clock, since the recording is running during
+the request); prefill does not move (+0.4%, inside the spread). That matches the microbenchmark
+estimate. Generation readings from this harness are therefore about 4% below what the same build read
+before the change, which is the measurement boundary noted below; a Juno-against-Juno A/B is unaffected
+because both sides carry the same cost.
+
+**A guard, independent of the fix.** `jfr_summary_json` now checks every repetition against its own
+request: the engine latency minus the forward-pass spans, and minus prefill and the token span, must
+each lie between -25 ms and 300 + 3 ms per generated token (a negative residual beyond that is
+physically impossible, since the spans are sequential and inside the request). A failing repetition
+has its readings withheld — not replaced by the API figure, which is a different measurement — with the
+reason in its JSON, a warning, and a line in the INDEX; the median is taken over the rest. It also
+checks that the measured request prefilled its whole prompt from position 0, read off two new
+`JfrMetricsExtractor` keys, `juno.PrefillBatch.tokens` and `juno.PrefillBatch.min_start_position`
+(written on every run; -1 when there was no prefill window), with four `metrics` tests that failed on
+the unchanged extractor (keys absent) and pass now. On the evidence, suspect (a) did not happen: every
+measured prefill is one 127-token window at position 0 plus one forward pass at position 127, for a
+128-token prompt. `--selftest` gains 17 cases built from the evidence runs' own numbers.
+
+*Corrected the same day:* the first version of the token-span leg flagged a healthy CPU repetition
+(8 tokens, 314 ms per decode step: 484 ms left outside the token span). The span starts at the first
+token, so the gap before it includes one whole decode step, which is 14 to 43 ms on the GPU sweeps the
+bounds were calibrated on and hid the mistake. The leg now subtracts one mean decode step. Re-applied to
+the four evidence sweeps it withholds the same 23 repetitions, and healthy token-span residuals sit at
+-1 to 29 ms (one at 267 ms, inside the bound).
+
+**Found while verifying: `smoke-tier00-consistency.sh` failed 3 of 36 checks at HEAD** (fixed the
+same day at the owner's direction; recorded under "Out-of-tier changes" below). Its local-mode audit
+expects `Unsupported model architecture '<arch>'` for qwen35, mistral3 and minimax-m2. Since commit
+`a906a8d` (Tier 01, pre-tokenizer dispatch), `ConsoleMain`'s local REPL loaded the tokenizer before the
+handler loader, and the tokenizer refused each of those files' pre-tokenizer type first (`qwen35`,
+`tekken`, `minimax-m2`), as an uncaught `IllegalArgumentException` stack trace. The files were still
+refused and the cluster legs still named the architecture, so nothing loaded that should not; what
+regressed was the reason given. Tier 01 closed without re-running this smoke's local leg. The same
+ordering existed at six other entry points (three more `ConsoleMain` paths, `CoordinatorMain`,
+`JunoPlayer`, `LoraTrainer`); the cluster legs passed only because the nodes rejected first.
+
+**Measurement boundary.** Juno readings from `compare-llama-cpp.sh` and `compare-vision.sh` taken with
+the flag are on a different JFR clock from every published run. Generation readings move by the flag's
+own cost under JFR; prefill is expected not to. The step 2 re-baseline is the first run on this side of
+it, so no gate in this tier straddles it.
+
+### Out-of-tier changes (recorded per execution rule 9)
+
+| Change | What it touched | Measurement boundary? |
+|---|---|---|
+| Working tree, 2026-09-28: architecture checked first at every entry point | `ModelFileGate.requireLoadable` (new, `node`) reads `general.architecture` and refuses an unverified one with `UnsupportedModelException` (new, an `IOException`, now also what `LlamaFamilyArchitectures` throws) before the config or tokenizer is read; called once in `ConsoleMain.main` before the mode dispatch (covers local, cluster, lora and their JFR variants), and in `CoordinatorMain`, `JunoPlayer.build` and `LoraTrainer.open`. The tokenizer's refusal becomes `UnsupportedPreTokenizerException` (new, still an `IllegalArgumentException`). `ConsoleMain` prints either as one `ERROR:` line and exits 1; cluster mode now refuses before forking nodes. Tests first: `ModelFileGateTest` (4 cases) and `BpePreTokenizerTest` tightened to the new type, both failing to compile before the change and passing after; `smoke-tier00-consistency.sh`, unmodified, 54 of 54 checks with the GPU legs (was 33 of 36 without them).; `mvn test` on the eleven unit-test modules passes (25:20 min), and `mvn verify -pl juno-master` passes, including `ThreeNodeClusterIT`, `TensorParallelClusterIT` and the unsupported-architecture IT. | **No.** One metadata read per model load, before any weights; nothing in the forward pass, MatVec, KV, batching or quantization. No published baseline is affected. |
+| Working tree, 2026-09-27: `compare-llama-cpp.sh` heap and clock pinning | Juno launched with `-Xms` equal to `-Xmx` (was `-Xms512m`); optional `--pin-clocks`. | **Yes, for Juno readings from this harness**: a fixed-size heap changes when and how often G1 collects, and a pinned run runs at different clocks from an unpinned one (turbo off lowers absolute throughput for both engines). No published reference is invalidated by the code change itself, because none has been taken with it; the **step 2 re-baseline is the first run on this side of it** and every gate in this tier reads against that run, so no gate straddles the boundary. Do not compare a pinned run's absolute t/s with an unpinned run's. |
+
 ## Exit criteria
 
 - [ ] `--gpu-attention` defaults to on for every architecture whose gain was actually measured on a
@@ -526,23 +791,30 @@ architectures' defaults off on a false premise.
 - [ ] The threshold decomposition written down before implementation, with each item's expected
       contribution read off the breakdown, and an escalation recorded here if they did not sum.
 - [ ] Prefill activations stay device-resident across a layer's projections, with the materialization
-      boundary documented; bytes staged per 512-token window down >= 70% against the step-1 baseline;
+      boundary documented; bytes staged per 512-token window down >= 70% against the step-2 baseline;
       `sgemmLayerInto`'s per-matmul allocate-and-copy removed via the non-allocating batched form,
       whose contract matches the one Tier 10 item 4 adds for CPU.
 - [ ] Chunk-sizing defaults reviewed per surface; any surface still pinned at `32` has a measured
       reason, not an inherited one.
-- [ ] `scripts/performance-tests/check-plan-thresholds.sh` exists, passes against this tree, and fails
+- [x] `scripts/performance-tests/check-plan-thresholds.sh` exists, passes against this tree, and fails
       against a deliberately broken copy of a tier file with its threshold block removed — a check that
       cannot fail is not a check. Recorded here as shipped, so later tiers run it rather than re-deriving
       execution rule 7's enforcement.
-- [ ] The engine-keepalive subshell leak is gone from all eight sibling scripts, via a shared helper in
+      *Shipped 2026-09-27: passes against this tree; fails against a scratch copy with four planted
+      defects, naming each (see the execution record). Extended beyond this box's wording to catch
+      lowercase gate mentions, "no unexplained regression" exit criteria, and already-met milestones.*
+- [x] The engine-keepalive subshell leak is gone from all eight sibling scripts, via a shared helper in
       `perf-lib.sh` rather than eight copies of the edit, and a full run of each of the nine scripts
       leaves zero leftover shells and zero leftover pipes. Until this is checked, a `pgrep` check for a
       running sweep is unreliable, which already cost real time once.
+      *Checked 2026-09-28: nine siblings, not eight (`smoke-gpu-residency.sh` was missing from the list),
+      ten scripts on the helper with `compare-llama-cpp.sh`; `selftest-engine-stdin.sh` passes and fails
+      against Tier 01's helper; all ten ran to completion leaving zero new loops, pipes, descriptors and
+      engines (table in the execution record). The 24 pre-existing orphans are not removed by this.*
 - [ ] Prefill throughput no longer degrades with prompt length: the `n_prompt=512` pp ratio is greater
       than or equal to the `n_prompt=128` pp ratio for every sweep model — **both measured under
       `RAW_PROMPT=1` with the same `--vector` setting**, which no published pair of runs has ever
-      been. Step 1 establishes whether the degradation is real before this criterion can be scored.
+      been. Step 2 establishes whether the degradation is real before this criterion can be scored.
 - [ ] Threshold above met, or the tier is explicitly marked partial-complete with the dominant term
       named and assigned to a successor tier (not silently marked complete).
 - [ ] Decode (tg) and vision both verified not regressed, with published numbers.

@@ -135,9 +135,8 @@ this tier's exit criteria, not Tier 02's.
   - each new handler's tg must reach **>= 0.70x** the tg of the closest supported dense model of
     comparable parameter count and quant on the same host — a new handler an order slower than its
     nearest neighbour indicates a layout or dispatch mistake, not merely an unoptimized path;
-  - no already-supported architecture regresses: tg and pp both within **0.95x** of the pre-tier
-    baseline, median of three per the README's noise-floor rule, since the generic structural MoE
-    detection in item 5 runs on every load;
+  - no already-supported architecture regresses: Juno tg and pp t/s both **>= 0.95x** the pre-tier
+    build, from a same-hour interleaved A/B with pinned clocks against the pre-tier build (README, "No-regression gates tighter than the floor are Juno-against-Juno"), since the generic structural MoE detection in item 5 runs on every load;
   - `Devstral` (24B, IQ1_S) additionally reports peak RSS and GPU-layer-offload behaviour with no
     threshold attached — it is the memory-pressure data point, and this is its first measurement.
 

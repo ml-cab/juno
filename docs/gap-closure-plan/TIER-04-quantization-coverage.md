@@ -178,8 +178,11 @@ runs first — see its own note.
   ±15% noise floor, so it is scored on a median of at least three runs with min/max published, per
   the README's noise-floor rule.
 
-  **Milestone.** The README assigns this tier GPU tg >= **0.40x** on Phi-3.5-mini. Report it against
-  the parity-corrected baseline Tier 01 established, met or missed with the actual number.
+  **Milestone: retired before this tier starts.** The README assigned this tier GPU tg >= 0.40x on
+  Phi-3.5-mini. The current reference already reads 0.416x, and nothing in this tier touches that
+  model's decode path (its Q4_K_M weights already take the packed MMQ route), so the README now carries
+  the row as `retired: met on arrival`. Still record the Phi-3.5-mini tg ratio from this tier's
+  `compare-llama-cpp.sh` run against the program target, so a regression below 0.40x would show.
 
 ## Models needed
 
@@ -208,6 +211,8 @@ user for a small model download in that format at the point this tier starts.
       place through a `MemorySegment` accessor rather than copied into `byte[]` — the load-time, RSS
       and page-cache-sharing thresholds above all met on `llama-1-30b.Q4_K_M.gguf`.
 - [ ] Cross-surface checklist fully resolved.
-- [ ] Perf gate published, no unexplained regression.
+- [ ] Perf gate published, with the mapped-loading thresholds (TTFT >= 50% lower, RSS >= 40% lower,
+      shared-page-cache RSS below two loads) and the per-kernel MMQ threshold (>= 0.85x the Q4_K
+      kernel) each met or reported missed with its number.
 - [ ] Docs (`docs/howto.md` new `quantize` command docs, `docs/agent-arch.txt`) updated.
 - [ ] `CHANGELOG.md` entry added.

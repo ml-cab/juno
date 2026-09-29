@@ -105,9 +105,12 @@ baseline avoids compounding the confusion Tier 00 fixed).
   exercises each new sampler step and the widened grammar support end-to-end via
   `/v1/chat/completions`, plus the existing `smoke-grammar.sh`/`smoke-tools.sh` scripts must still
   pass unmodified (regression guard for existing grammar/tools behavior).
-- No mandatory perf gate rerun (this tier is not a forward-pass/MatVec/GPU-residency/batching/KV
-  change per the existing `CLAUDE.md` rule) — confirm that classification still holds at
-  implementation time before skipping the gate.
+- **No perf gate** (declared for `check-plan-thresholds.sh`): this tier is not a
+  forward-pass/MatVec/GPU-residency/batching/KV change per the existing `CLAUDE.md` rule — confirm
+  that classification still holds at implementation time before skipping the gate. Note the one
+  per-token cost it does add: every sampler step runs once per generated token over the full
+  vocabulary, so if a later review gives this tier a per-token sampler budget, replace this
+  declaration with a numeric threshold block rather than keeping both.
 
 ## Models needed
 

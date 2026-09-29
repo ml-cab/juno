@@ -170,7 +170,17 @@ Module dependency (excerpt):
         the recording to that request and then say where its metrics go. It
         fails on a missing or empty recording rather than writing a file of
         zeroes, which would otherwise read as a run with no pauses and no tokens.
-        JfrMetricsExtractor accounts for the juno.* events; JdkEventBucket takes
+        JfrMetricsExtractor accounts for the juno.* events, including the prompt
+        coverage of the recorded prefill windows (juno.PrefillBatch.tokens, the
+        sum of their window sizes, and juno.PrefillBatch.min_start_position, -1
+        when there were none), which a harness reads to confirm a measured
+        request prefilled its whole prompt rather than resuming from reused KV.
+        Recorded durations are only as good as the recorder's clock: on a host
+        whose kernel rejected the CPU timestamp counter, a span crossing two
+        cores whose counters disagree is misread, so the comparison harnesses
+        (scripts/performance-tests/perf-lib.sh) make the recorder read the
+        operating-system clock there and check each span against its request.
+        JdkEventBucket takes
         the JVM events in the same pass — GC pauses (count/max_ms/total_ms),
         allocated bytes, hot methods and lock/park time — so a throughput number
         can be read against the pauses and allocation that produced it. Its
@@ -199,8 +209,14 @@ Architecture dispatch (node module): ForwardPassHandlerLoader reads general.arch
   phi2, phi3, qwen3 and qwen3moe have dedicated handlers. llama, mistral, tinyllama, qwen2
   and qwen2.5 run on LlamaTransformerHandler; LlamaFamilyArchitectures is that allowlist.
   Any other value (for example gemma4, qwen35, mistral3, minimax-m2) is rejected at load with
-  an IOException that names the architecture, instead of falling through to a handler whose
-  tensor layout and computation it does not match. In cluster mode a node whose real-model
+  an UnsupportedModelException (an IOException) that names the architecture, instead of
+  falling through to a handler whose tensor layout and computation it does not match.
+  ModelFileGate.requireLoadable runs that check before anything else reads the file, at every
+  entry point (ConsoleMain for local, cluster and lora modes; CoordinatorMain; JunoPlayer;
+  LoraTrainer), so the architecture is the reason given when a file also fails a later check
+  such as an unimplemented pre-tokenizer type (UnsupportedPreTokenizerException, tokenizer
+  module). ConsoleMain reports either refusal as one "ERROR:" line with exit status 1, and in
+  cluster mode before any node JVM is forked. In cluster mode a node whose real-model
   load fails (unsupported architecture, unsupported quantization, missing tensor, missing
   file) answers LoadShard with success=false and its reason, then refuses forward passes
   (UnloadedShardHandler); it never falls back to stub output. ProcessPipelineClient and
