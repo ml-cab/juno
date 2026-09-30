@@ -771,13 +771,34 @@ with a working `nsys` install should re-run that measurement directly.
 [`perf-compare/20260916T040113Z-prefill/`](perf-compare/20260916T040113Z-prefill/) (on)
 
 Direct follow-on to the attention-share finding above: `--gpu-attention on|off|auto`
-(`JUNO_GPU_ATTENTION`, default **off**, CUDA only) moves QK^T + softmax + weighted-V-sum onto the
-GPU against a device-resident FP16 KV mirror (`DeviceKvCache` + `CudaGqaAttention` +
-`gqa_attention.ptx`) instead of running `gqaInto`/`gqa` as scalar CPU Java. Wired for
-`LlamaTransformerHandler` (Llama-family, Mistral, Qwen2) and vision (delegates to the same
-handler); Phi-2/Phi-3/Qwen3/Qwen3-MoE keep the scalar path (**follow-up**, each owns a separate
-attention implementation / KV map). LoRA train and `--lora-play` explicitly ignore the flag and warn
-once (separate handler, own KV map/attention math), same pattern as `--mmq` under LoRA training.
+(`JUNO_GPU_ATTENTION`, default **auto**, which requests the kernel whenever CUDA is present; CUDA
+only) moves QK^T + softmax + weighted-V-sum onto the GPU against a device-resident FP16 KV mirror
+(`DeviceKvCache` + `CudaGqaAttention` + `gqa_attention.ptx`) instead of running `gqaInto`/`gqa` as
+scalar CPU Java. *Correction (2026-09-30): this section previously gave the default as off. It has
+been `auto` since 2026-09-17, so every default-flag GPU run of a Llama-family model since then ran the
+kernel.* Wired for `LlamaTransformerHandler` (Llama-family, Mistral, Qwen2),
+`Phi3TransformerHandler` and `Qwen3TransformerHandler` (the last two through `GpuAttentionMirror`,
+from 2026-09-30); each reports it through `ForwardPassHandler.gpuAttentionActive()`. The Phi-2 and
+Qwen3-MoE handlers compute every matmul and attention on the CPU on any backend, so neither this
+flag nor `--gpu-layers` reaches them; a GPU launch of either says so at startup. Vision's only
+supported model on disk (moondream2) has a Phi-2 text backbone, so its text half is on that CPU path.
+On a backend other than CUDA a launch that requests the kernel says it is CUDA-only. LoRA train and
+`--lora-play` explicitly ignore the flag and warn once (separate handler, own KV map/attention math),
+same pattern as `--mmq` under LoRA training.
+
+**Phi-3 and Qwen3 (2026-09-30).** Run:
+[`perf-compare/20260930T205554Z-tier01b-item0-ab/`](perf-compare/20260930T205554Z-tier01b-item0-ab/)
+(same build, `--gpu-attention` alternated off and on, clocks pinned, median of three, GTX 1080):
+
+| Model | Prompt tokens | pp t/s off → on | pp | tg t/s off → on | tg |
+|---|---:|---|---:|---|---:|
+| Phi-3.5-mini Q4_K_M | 512 | 13.69 → 89.71 | **6.55x** | 24.08 → 32.03 | 1.33x |
+| Qwen3-1.7B Q4_K_M | 512 | 28.80 → 175.56 | **6.10x** | 34.96 → 38.43 | 1.10x |
+| Phi-3.5-mini Q4_K_M | 128 | 44.63 → 98.07 | 2.20x | 24.20 → 31.87 | 1.32x |
+| Qwen3-1.7B Q4_K_M | 128 | 82.12 → 177.72 | 2.16x | 34.87 → 38.63 | 1.11x |
+
+The gain grows with prompt length because it removes scalar attention, whose cost is quadratic in
+it: with the kernel, prefill is nearly flat from 128 to 512 tokens.
 
 `compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32` (TinyLlama Q4_K_M, GTX 1080):
 
@@ -792,7 +813,7 @@ At `prefill-batch=32` — the window size where attention is actually classified
 "prefill" JFR event rather than folded into per-token decode accounting — `--gpu-attention on`
 takes pp throughput from 31.04 to 119.56 t/s (**3.85x**) and attention's share of prefill wall time
 from 78.7% down to 11.0%. This is the honest before/after number this feature set out to produce:
-attention was the dominant long-context cost (see the Tier 17 follow-on finding above), and moving
+attention was the dominant long-context cost (see the attention-share finding above), and moving
 it to the GPU removes most of that cost rather than merely shifting it. The remaining ~11% share is
 whatever stays on CPU around the batched kernel dispatch (RoPE, cache-write bookkeeping) plus the
 kernel's own device time as measured by the same JFR span.
@@ -819,10 +840,23 @@ gate (recall correct). Flat as expected — `LoraTrainableHandler` never reads
 `GpuAttentionOptions`.
 
 **Known limitation** (see `DeviceKvCache` javadoc): multi-token greedy-decode sequences can
-occasionally diverge between `--gpu-attention on` and `off` on some prompts after 15+ tokens — FP16
-KV rounding occasionally flips a close greedy decision, the same class of tradeoff already accepted
-for `--mmq` and other reduced-precision paths in this codebase. Single-step logits match tightly
-(parity test); this is not bit-identical-generation territory, here or anywhere else in Juno.
+occasionally diverge between `--gpu-attention on` and `off` — FP16 KV rounding occasionally flips a
+close greedy decision, the same class of tradeoff already accepted for `--mmq` and other
+reduced-precision paths in this codebase. Single-step logits match tightly (parity tests); this is not
+bit-identical-generation territory, here or anywhere else in Juno. Measured per architecture
+(2026-09-30, `GpuAttentionDivergenceIT`: six real prompts, 64 greedy tokens, `on` against `off` on
+the same CUDA build, GTX 1080):
+
+| Model | Prompts identical over 64 tokens | First divergent step on the others |
+|---|---:|---|
+| TinyLlama-1.1B Q4_K_M (Llama family) | 3 of 6 | 8, 13, 23 |
+| Phi-3.5-mini Q4_K_M | 4 of 6 | 26, 50 |
+| Qwen3-1.7B Q4_K_M | 3 of 6 | 20, 23, 32 |
+
+The first generated token agreed on every prompt for all three. Logits of the Phi-3 and Qwen3
+handlers stay within 0.015 relative L2 of `off` at each of the three attention call sites (prefill
+window, single-token decode, multi-stream decode; `GpuAttentionHandlerParityTest`). Pass `off` for the
+bit-identical CPU-parity baseline.
 
 ```bash
 ./scripts/performance-tests/compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32 --gpu-attention on
@@ -839,8 +873,8 @@ See [`perf-compare/20260901T173121Z-parallel/`](perf-compare/20260901T173121Z-pa
 ## Recommended flags (GPU)
 
 `--mmq`, `--gpu-attention`, and `--gpu-layers` all default to `auto` (no flags needed). `auto`
-resolves per-model to off/serial wherever the flag is not wired for that architecture or CUDA is
-unavailable — it never forces an unsupported path. Each still carries its own correctness or
+never forces an unsupported path; where `--gpu-attention` or `--gpu-layers` cannot take effect
+(the Phi-2 and Qwen3-MoE handlers, a backend other than CUDA) the launch says so at startup. Each still carries its own correctness or
 VRAM-fit caveat (see the caveats below, their own sections above, and `docs/howto.md`); pass
 `off` explicitly to opt out of one, e.g. for a bit-identical CPU-parity baseline run.
 
@@ -855,7 +889,7 @@ set, each with a paired default row and a tuned row using the flags above)
 |---|---:|---|
 | TinyLlama-1.1B Q4_K_M | 1.63× | `--mmq` + `--gpu-attention` both wired |
 | Qwen2.5-3B Q4_K_M | 1.48× | `--mmq` + `--gpu-attention` both wired |
-| Phi-3.5-mini Q4_K_M | 1.60× | `--mmq` wired; `--gpu-attention` not yet wired for `phi3` (falls back to the existing scalar path, verified via 0 `juno.Attention` JFR events) — the whole 1.60× is from `--mmq` alone |
+| Phi-3.5-mini Q4_K_M | 1.60× | `--mmq` wired; `--gpu-attention` was not yet wired for `phi3` when this was measured (2026-09-18, the scalar path, verified via 0 `juno.Attention` JFR events), so the whole 1.60× is from `--mmq` alone |
 | Mistral-7B Q4_K_M | 35.6× | all three flags contribute; `--gpu-layers auto` is what gives this model GPU residency at all on an 8 GiB card |
 
 Caveats to know before turning these on in production:
@@ -865,8 +899,9 @@ Caveats to know before turning these on in production:
 - **`--gpu-attention`**: occasional greedy-decode divergence at the bit level vs. the scalar CPU
   path (FP16 KV rounding can flip a close logits comparison) — same class of tradeoff already
   accepted for `--mmq` and other reduced-precision paths in this codebase; not bit-identical
-  generation. Wired for Llama-family/Mistral/Qwen2 (and vision, which shares the same handler);
-  Phi-2/Phi-3/Qwen3/Qwen3-MoE and ROCm remain a named follow-up. Its largest measured win (3.85× pp,
+  generation. Wired for Llama-family/Mistral/Qwen2, Phi-3 and Qwen3. The Phi-2 and Qwen3-MoE
+  handlers (and so moondream2's text half) run on the CPU on any backend, and ROCm has no kernel;
+  each says so at startup. Its largest measured win (3.85× pp,
   see the GPU-resident attention section above) is at long `--prefill-batch` windows, not the short
   default prompt used in the sweep above.
 - **`--mmq`**: packed Q4_K device GEMV; wired for every architecture in the default GPU set,

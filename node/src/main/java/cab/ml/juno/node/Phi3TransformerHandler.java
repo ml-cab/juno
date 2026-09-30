@@ -138,6 +138,13 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 	private final int gpuLayersResolved;
 
+	/**
+	 * GPU-resident attention kernel and its per-request device KV mirrors
+	 * ({@code --gpu-attention}); {@code null} on the CPU backend, with the flag off,
+	 * or on a backend without the kernel. Cleared by {@link #releaseGpuResources()}.
+	 */
+	private GpuAttentionMirror gpuAttention;
+
 	// Per-request KV cache — lazily allocated and grown on demand.
 	// Starts at INITIAL_SEQ_CAPACITY slots, doubles until MAX_SEQ_LEN.
 	// Avoids the 554 MB eager pre-allocation that caused node JVM OOM during
@@ -248,6 +255,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			gpuLayersResolved = 0;
 		}
 		// CpuMatVec: device fields stay null (defaults above).
+		this.gpuAttention = GpuAttentionMirror.open(backend, "Phi-3", L, kvDim, cfg.numHeads(), cfg.headDim(),
+				cfg.gqaRatio());
 
 		log.info("Phi-3 shard loaded — " + L + " layers, " + (hasEmbeddings ? "with embeddings, " : "")
 				+ (hasOutputProj ? "with output projection" : "no output projection"));
@@ -410,6 +419,26 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		if (outputProjDev != null && !outputProjDev.isClosed())
 			outputProjDev.close();
 		outputProjDev = null;
+		GpuAttentionMirror g = gpuAttention;
+		gpuAttention = null;
+		if (g != null)
+			g.close();
+	}
+
+	@Override
+	public boolean gpuAttentionActive() {
+		return gpuAttention != null;
+	}
+
+	/** Whether layer {@code li}'s Q/K/V projection runs on the device (a layer the KV mirror serves). */
+	private boolean layerOnDevice(int li) {
+		return (attnQkvQ4Dev != null && attnQkvQ4Dev[li] != null) || (attnQDev != null && attnQDev[li] != null);
+	}
+
+	/** The request's device KV mirrors, or {@code null} when the kernel path is not active. */
+	private DeviceKvCache[] mirrorsFor(String requestId) {
+		GpuAttentionMirror g = gpuAttention;
+		return g != null ? g.layersFor(requestId) : null;
 	}
 
 	/** Contiguous row block {@code A[rowStart : rowStart+nRows, 0:cols]} in row-major {@code full}. */
@@ -596,6 +625,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 		SessionKvTensor[][] kCaches = new SessionKvTensor[N][];
 		SessionKvTensor[][] vCaches = new SessionKvTensor[N][];
+		DeviceKvCache[][] mirrors = new DeviceKvCache[N][];
 
 		NodeKVCacheAdapter a = kvAdapter;
 		for (int i = 0; i < N; i++) {
@@ -622,6 +652,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			}
 			kCaches[i] = kCache;
 			vCaches[i] = vCache;
+			mirrors[i] = mirrorsFor(requestId);
 		}
 
 		BatchWorkspace ws = new BatchWorkspace(N, cfg.hiddenDim(), cfg.intermediateSize(),
@@ -630,11 +661,14 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		for (int li = 0; li < L; li++) {
 			SessionKvTensor[] kLayers = new SessionKvTensor[N];
 			SessionKvTensor[] vLayers = new SessionKvTensor[N];
+			DeviceKvCache[] devLayers = new DeviceKvCache[N];
+			boolean onDevice = layerOnDevice(li);
 			for (int i = 0; i < N; i++) {
 				kLayers[i] = kCaches[i][li];
 				vLayers[i] = vCaches[i][li];
+				devLayers[i] = GpuAttentionMirror.layer(mirrors[i], li, onDevice);
 			}
-			x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, ws);
+			x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, ws, devLayers);
 		}
 
 		if (a != null) {
@@ -650,7 +684,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	}
 
 	private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
-			SessionKvTensor[] kCacheLayers, SessionKvTensor[] vCacheLayers, BatchWorkspace ws) {
+			SessionKvTensor[] kCacheLayers, SessionKvTensor[] vCacheLayers, BatchWorkspace ws,
+			DeviceKvCache[] mirrors) {
 		int N = x.length;
 		int H = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
@@ -667,17 +702,23 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			Phi3Rope.ropeExt(ws.k[b], pos, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
 		}
 
+		// Host KV first and always; a device mirror only copies it.
+		GpuAttentionMirror g = gpuAttention;
 		for (int b = 0; b < N; b++) {
 			int pos = positions[b];
 			kCacheLayers[b].writeToken(pos, ws.k[b]);
 			vCacheLayers[b].writeToken(pos, ws.v[b]);
+			if (g != null)
+				mirrors[b] = g.append(mirrors[b], pos, ws.k[b], ws.v[b], N);
 		}
 
-		for (int b = 0; b < N; b++) {
-			int seqLen = positions[b] + 1;
-			float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
-			float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
-			gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+		if (g == null || !g.attendStreams(mirrors, positions, ws.q, ws.attnOut)) {
+			for (int b = 0; b < N; b++) {
+				int seqLen = positions[b] + 1;
+				float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
+				float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
+				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+			}
 		}
 
 		sgemmProjInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, H);
@@ -748,9 +789,11 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 		BatchWorkspace ws = new BatchWorkspace(W, cfg.hiddenDim(), cfg.intermediateSize(),
 				kvDim, cfg.numHeads(), lastPos + 1, kvLayout.needsAttentionScratch());
+		DeviceKvCache[] mirrors = mirrorsFor(requestId);
 
 		for (int li = 0; li < L; li++) {
-			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws);
+			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws,
+					GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)));
 		}
 
 		if (a != null) {
@@ -793,7 +836,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	}
 
 	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, BatchWorkspace ws) {
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror) {
 		int W    = x.length;
 		int H    = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
@@ -809,16 +852,22 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			Phi3Rope.ropeExt(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
 		}
 
+		// Host KV first and always; a device mirror only copies it.
+		GpuAttentionMirror g = gpuAttention;
 		for (int b = 0; b < W; b++) {
 			kCacheLayer.writeToken(startPos + b, ws.k[b]);
 			vCacheLayer.writeToken(startPos + b, ws.v[b]);
+			if (g != null)
+				mirror = g.append(mirror, startPos + b, ws.k[b], ws.v[b], W);
 		}
 
-		for (int b = 0; b < W; b++) {
-			int seqLen = startPos + b + 1;
-			float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
-			float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
-			gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+		if (g == null || !g.attendWindow(mirror, startPos, ws.q, ws.attnOut)) {
+			for (int b = 0; b < W; b++) {
+				int seqLen = startPos + b + 1;
+				float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
+				float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
+				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+			}
 		}
 
 		sgemmProjInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, H);
@@ -979,8 +1028,10 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			vScratch = new float[(pos + 1) * kvDim];
 		}
 
+		DeviceKvCache[] mirrors = mirrorsFor(requestId);
 		for (int li = 0; li < L; li++)
-			x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch);
+			x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch,
+					GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)));
 
 		if (a != null) {
 			int seqLen = pos + 1;
@@ -1014,6 +1065,9 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	public void evict(String requestId) {
 		SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
 		SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));
+		GpuAttentionMirror g = gpuAttention;
+		if (g != null)
+			g.evict(requestId);
 		NodeKVCacheAdapter a = kvAdapter;
 		if (a != null) {
 			a.evict(requestId);
@@ -1041,7 +1095,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 	private float[] transformerLayer(float[] x, int li, int pos,
 			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kScratch, float[] vScratch) {
+			float[] kScratch, float[] vScratch, DeviceKvCache mirror) {
 		int H = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
 
@@ -1067,11 +1121,22 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 		kCacheLayer.writeToken(pos, k);
 		vCacheLayer.writeToken(pos, v);
+		GpuAttentionMirror g = gpuAttention;
+		if (g != null)
+			mirror = g.append(mirror, pos, k, v, 1);
 
 		int seqLen = pos + 1;
-		float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
-		float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
-		float[] attnOut = gqa(q, kView, vView, seqLen);
+		float[] attnOut = null;
+		if (g != null) {
+			float[] out = new float[H];
+			if (g.attendOne(mirror, pos, q, out))
+				attnOut = out;
+		}
+		if (attnOut == null) {
+			float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
+			float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
+			attnOut = gqa(q, kView, vView, seqLen);
+		}
 		float[] attnProj = matVecProj(wo[li],
 				woQ4Dev != null ? woQ4Dev[li] : null,
 				woDev != null ? woDev[li] : null,

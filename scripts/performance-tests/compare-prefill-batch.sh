@@ -47,7 +47,8 @@ Options:
   --prefill-values LIST   Comma-separated chunk sizes (default: ${PREFILL_VALUES})
   --api-port N            REST port (default: ${API_PORT})
   --cpu / --gpu           Backend (default: CPU)
-  --gpu-attention on|off|auto  Juno --gpu-attention (GPU-resident attention kernel; default off)
+  --gpu-attention on|off|auto  Juno --gpu-attention (GPU-resident attention kernel). Not passed when
+                    unset, so the engine default applies (auto: the kernel on CUDA)
   --out DIR               Output directory
   --no-publish            Skip docs/perf-compare copy
   -h, --help              This help
@@ -305,7 +306,7 @@ INDEX="${OUT_ROOT}/INDEX.md"
 {
   echo "# Prefill microbatch — ${RUN_ID}"
   echo
-  echo "Model: \`${MODEL}\` · raw prompt target: ${N_PROMPT} tokens · backend: $([ "$USE_GPU" -eq 1 ] && echo GPU || echo CPU) · gpu-attention: ${GPU_ATTENTION:-off (default)}"
+  echo "Model: \`${MODEL}\` · raw prompt target: ${N_PROMPT} tokens · backend: $([ "$USE_GPU" -eq 1 ] && echo GPU || echo CPU) · gpu-attention: ${GPU_ATTENTION:-engine default (auto)}"
   echo
   echo "| prefill-batch | pp t/s (JFR) | prefill ms | prefill count | wall ms | attention share of prefill |"
   echo "|--------------:|-------------:|-----------:|--------------:|--------:|---------------------------:|"

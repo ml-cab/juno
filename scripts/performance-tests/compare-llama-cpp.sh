@@ -171,7 +171,10 @@ Options:
   --ngl N           llama.cpp GPU layers (overrides --cpu/--gpu default)
   --gpu-layers N|all|auto  Juno --gpu-layers (default: all in GPU mode)
   --mmq on|off|auto Juno --mmq (packed Q4_K device GEMV; default off)
-  --gpu-attention on|off|auto  Juno --gpu-attention (GPU-resident attention kernel; default off)
+  --gpu-attention on|off|auto  Juno --gpu-attention (GPU-resident attention kernel). Not passed
+                    unless set, so a lane runs the engine's own default (auto: on under CUDA
+                    for Llama-family handlers, scalar elsewhere); each result records the
+                    value the engine actually resolved
   --gpu-residency on|off|auto  Juno --gpu-residency (device-resident decode region: norm, Q/K/V
                     projection and RoPE with one upload and one download; default off)
   --schedule static|continuous  Juno --schedule (default static)
@@ -553,6 +556,47 @@ run_selftest() {
     "$(jq -r '.device_staging' <<<"$(DEVICE_SPANS=0 jfr_summary_json "$d/staging.json" 128 1 782)")"
   selftest_expect "prefill staging is surfaced per prompt token" 31496.06 \
     "$(jq -r '.device_staging.prefill_bytes_per_token * 100 | round / 100' <<<"$sj")"
+
+  log "selftest: GPU attention as the engine resolved it, not as the flag asked"
+  # Read off the engine log: the published default lane passed no flag at all, and
+  # handlers without the kernel resolve to scalar attention without saying so.
+  printf 'INFO: GPU-resident attention path active (gpu-attention=auto)\n' >"$d/attn-on.log"
+  printf 'WARNING: --gpu-attention requested on ROCm backend — not yet implemented there, falling back to scalar CPU attention\n' >"$d/attn-fallback.log"
+  printf 'INFO: Phi3TransformerHandler loaded\n' >"$d/attn-silent.log"
+  # The console turns library logging off unless --verbose, so a silent log is the
+  # normal case and proves nothing. With --device-spans the attention kernel leaves
+  # its own copy sites (memcpy_gqa_*) in the recording, which is positive evidence
+  # either way; without spans and without a log line the answer is unknown.
+  jq -n '{ models: [ { metrics: { "juno.DeviceStaging.site.memcpy_gqa_qbatch_h2d.prefill.count": 22,
+                                  "juno.DeviceStaging.site.memcpy_k_row_h2d.prefill.count": 11242 } } ] }' >"$d/attn-gqa.json"
+  jq -n '{ models: [ { metrics: { "juno.DeviceStaging.site.cudamemcpyasync_xh_h2d_q4k_batched_gemm.prefill.count": 128 } } ] }' >"$d/attn-nogqa.json"
+  jq -n '{ models: [ { metrics: { "juno.DeviceStaging.H2D.count": 0 } } ] }' >"$d/attn-nospans.json"
+  selftest_expect "an activation line reads on" on "$(gpu_attention_resolved_from_log "$d/attn-on.log" 1)"
+  selftest_expect "a backend fallback reads off, naming it" off-backend-fallback \
+    "$(gpu_attention_resolved_from_log "$d/attn-fallback.log" 1)"
+  selftest_expect "a silent log with no recording is unknown, not off" unknown \
+    "$(gpu_attention_resolved_from_log "$d/attn-silent.log" 1)"
+  selftest_expect "a silent log without spans is unknown, not off" unknown \
+    "$(DEVICE_SPANS=0 gpu_attention_resolved_from_log "$d/attn-silent.log" 1 "$d/attn-nospans.json")"
+  selftest_expect "attention-kernel copy sites in a spans run read on" on \
+    "$(DEVICE_SPANS=1 gpu_attention_resolved_from_log "$d/attn-silent.log" 1 "$d/attn-gqa.json")"
+  selftest_expect "a spans run without attention-kernel copies reads off" off \
+    "$(DEVICE_SPANS=1 gpu_attention_resolved_from_log "$d/attn-silent.log" 1 "$d/attn-nogqa.json")"
+  selftest_expect "a CPU run has no GPU attention to resolve" n/a "$(gpu_attention_resolved_from_log "$d/attn-on.log" 0)"
+  selftest_rep "$d/a1.json" success 10 5.0 4.0 1000 0 100
+  selftest_rep "$d/a2.json" success 20 6.0 5.0 2000 0 200
+  jq '.gpu_attention_resolved = "on"' "$d/a1.json" >"$d/a1r.json"
+  jq '.gpu_attention_resolved = "on"' "$d/a2.json" >"$d/a2r.json"
+  jq '.gpu_attention_resolved = "off"' "$d/a2.json" >"$d/a2o.json"
+  aggregate_juno_reps_json "$d/attn-agree.json" "$d/a1r.json" "$d/a2r.json"
+  aggregate_juno_reps_json "$d/attn-mixed.json" "$d/a1r.json" "$d/a2o.json"
+  selftest_expect "reps that agree carry the resolved value" on "$(jq -r '.gpu_attention_resolved' "$d/attn-agree.json")"
+  selftest_expect "reps that disagree read mixed" mixed "$(jq -r '.gpu_attention_resolved' "$d/attn-mixed.json")"
+  merge_juno_lanes_json "$d/attn-lanes.json" "$d/attn-agree.json" "$d/attn-mixed.json"
+  selftest_expect "the prefill lane keeps its own resolved value" on \
+    "$(jq -r '.lanes.prefill.gpu_attention_resolved' "$d/attn-lanes.json")"
+  selftest_expect "lanes that disagree read mixed at the top" mixed \
+    "$(jq -r '.gpu_attention_resolved' "$d/attn-lanes.json")"
 
   if (( SELFTEST_FAILURES > 0 )); then
     die "selftest: ${SELFTEST_FAILURES} check(s) failed"
@@ -940,9 +984,12 @@ juno_tree_dirty() {
   fi
 }
 
+# Hashes the jar the engine is actually launched from (find_juno_jar), not a fixed
+# name the build does not produce: that recorded `missing` on every run until 2026-09-30.
 juno_jar_sha256() {
-  local jar="${JUNO_JAR_EXPLICIT:-$ROOT/juno-player/target/juno-player.jar}"
-  if [[ -f "$jar" ]]; then
+  local jar
+  jar="$(find_juno_jar 2>/dev/null || true)"
+  if [[ -n "$jar" && -f "$jar" ]]; then
     sha256sum "$jar" 2>/dev/null | cut -c1-16
   else
     printf 'missing'
@@ -995,7 +1042,7 @@ host_meta_json() {
   "clock_pin_state": "$(json_escape "$CLOCK_PIN_STATE")",
   "juno_commit": "$(json_escape "$(juno_commit)")",
   "juno_tree_dirty": $(juno_tree_dirty),
-  "juno_jar": "$(json_escape "${JUNO_JAR_EXPLICIT:-juno-player/target/juno-player.jar}")",
+  "juno_jar": "$(json_escape "$(find_juno_jar 2>/dev/null || echo missing)")",
   "juno_jar_sha256_16": "$(json_escape "$(juno_jar_sha256)")",
   "java_version": "$(json_escape "$(java_version_line)")",
   "juno_jvm_flags": "$(json_escape "${JUNO_JVM_FLAGS[*]} -Xms=-Xmx (fixed per model)")",
@@ -1372,6 +1419,37 @@ jfr_summary_json() {
 # returned puts exactly the measured request inside it. Verified on a real run:
 # with two warmups and an 8-token measured request the recording holds 8
 # juno.TokenProduced events, not 24.
+# What the engine actually ran for attention, rather than the flag this script
+# passed: the default lane passes no --gpu-attention at all, and a handler without
+# the GPU kernel resolves to scalar attention without saying so. Evidence, in order:
+# LlamaTransformerHandler's activation or fallback line in the engine log (only
+# written under --verbose; the console turns library logging off otherwise), then,
+# on a --device-spans run, the attention kernel's own copy sites (memcpy_gqa_*) in
+# the recording. on, off-backend-fallback, off (spans run, no kernel copies),
+# unknown (nothing observable: a silent log is the normal case), or n/a on CPU.
+gpu_attention_resolved_from_log() {
+  local logf="$1" use_gpu="$2" jfr_json="${3:-}"
+  local gqa_copies
+  if [[ "$use_gpu" -ne 1 ]]; then
+    echo "n/a"
+  elif grep -q 'GPU-resident attention path active' "$logf" 2>/dev/null; then
+    echo "on"
+  elif grep -q 'falling back to scalar CPU attention' "$logf" 2>/dev/null; then
+    echo "off-backend-fallback"
+  elif [[ "${DEVICE_SPANS:-0}" == "1" && -f "$jfr_json" ]]; then
+    gqa_copies="$(jq -r '[.models[0].metrics // {} | to_entries[]
+                          | select(.key | test("^juno\\.DeviceStaging\\.site\\.memcpy_gqa_.*\\.count$")) | .value]
+                         | add // 0' "$jfr_json" 2>/dev/null || echo 0)"
+    if awk -v n="$gqa_copies" 'BEGIN { exit !(n > 0) }'; then
+      echo "on"
+    else
+      echo "off"
+    fi
+  else
+    echo "unknown"
+  fi
+}
+
 run_juno_rep() {
   local model_path="$1" stem="$2" rep_label="$3" lane="${4:-generate}"
   local out_json="${OUT_ROOT}/${rep_label}-juno.json"
@@ -1731,6 +1809,8 @@ EOF
     --arg jfr_duration "$JFR_DURATION" \
     --arg response_json "$resp" \
     --arg log "$logf" \
+    --arg gpu_attention_requested "${JUNO_GPU_ATTENTION:-engine default}" \
+    --arg gpu_attention_resolved "$(gpu_attention_resolved_from_log "$logf" "$USE_GPU" "$jfr_metrics")" \
     --argjson jfr "$jfr_block" \
     --argjson host "$(host_meta_json)" \
     '{
@@ -1761,6 +1841,10 @@ EOF
       prompt_eval_tps: $prompt_eval_tps,
       token_gen_tps: $token_gen_tps,
       juno_use_vector: $juno_use_vector,
+      # The flag as passed (engine default when none was), and what the engine
+      # log shows it ran: see gpu_attention_resolved_from_log.
+      gpu_attention_requested: $gpu_attention_requested,
+      gpu_attention_resolved: $gpu_attention_resolved,
       backend: $backend,
       use_gpu: $use_gpu,
       heap: $heap,
@@ -1894,6 +1978,7 @@ aggregate_juno_reps_json() {
     def spread(f): (map(f)) as $all | ($all | map(select(. != null))) as $v |
       { median: ($v | median), min: ($v | min), max: ($v | max), values: $all };
 
+    . as $all_reps |
     (spread(.prompt_eval_tps)) as $pp |
     (spread(.token_gen_tps)) as $tg |
     (spread(.api_token_gen_tps)) as $api_tg |
@@ -1914,6 +1999,8 @@ aggregate_juno_reps_json() {
       | .juno_reps = $reps
       | .juno_warmup = $warmup
       | .rep_status = $rep_status
+      | .gpu_attention_resolved = ($all_reps | map(.gpu_attention_resolved) | unique
+          | if length == 1 then .[0] else "mixed" end)
       | .reps = { prompt_eval_tps: $pp, token_gen_tps: $tg, api_token_gen_tps: $api_tg,
                   latency_ms: $latency, gc_pause_max_ms: $gc, allocated_bytes_per_token: $alloc }
       | (if .jfr != null then .jfr.gc_pause_max_ms = $gc.max else . end)
@@ -1950,6 +2037,8 @@ merge_juno_lanes_json() {
     | .n_prompt = $pre.n_prompt
     | .prompt_token_deviation = $pre.prompt_token_deviation
     | .prompt_parity_tolerance = ($pre.prompt_parity_tolerance // 0.10)
+    | .gpu_attention_resolved = (if $pre.gpu_attention_resolved == $gen.gpu_attention_resolved
+                                 then $gen.gpu_attention_resolved else "mixed" end)
     | .reps = { prompt_eval_tps: ($pre.reps.prompt_eval_tps // null),
                 token_gen_tps: ($gen.reps.token_gen_tps // null),
                 api_token_gen_tps: ($gen.reps.api_token_gen_tps // null),
@@ -1967,17 +2056,19 @@ merge_juno_lanes_json() {
     | .lanes = { prefill: { prompt_tokens: $pre.prompt_tokens, n_prompt: $pre.n_prompt,
                             n_gen: $pre.n_gen, completion_tokens: $pre.completion_tokens,
                             prompt_eval_tps: $pre.prompt_eval_tps, latency_ms: $pre.latency_ms,
-                            status: $pre.status, gc_pause_max_ms: ($pre.jfr.gc_pause_max_ms // null) },
+                            status: $pre.status, gc_pause_max_ms: ($pre.jfr.gc_pause_max_ms // null),
+                            gpu_attention_resolved: ($pre.gpu_attention_resolved // null) },
                  generate: { prompt_tokens: $gen.prompt_tokens, n_prompt: $gen.n_prompt,
                              n_gen: $gen.n_gen, completion_tokens: $gen.completion_tokens,
                              token_gen_tps: $gen.token_gen_tps, latency_ms: $gen.latency_ms,
-                             status: $gen.status, gc_pause_max_ms: ($gen.jfr.gc_pause_max_ms // null) } }
+                             status: $gen.status, gc_pause_max_ms: ($gen.jfr.gc_pause_max_ms // null),
+                             gpu_attention_resolved: ($gen.gpu_attention_resolved // null) } }
     | .status = (if ($pre.status == "success" and $gen.status == "success") then "success" else "failure" end)
   ' >"$out_json"
 }
 
 run_tuned_lane() {
-  # Default-flags (--mmq off, --gpu-attention off, --gpu-layers unset) lanes
+  # Default-flags (--mmq off, --gpu-attention unset so the engine default, --gpu-layers unset) lanes
   # sit well below what Juno's own shipped auto modes already do (see
   # docs/infra-plan/PLAN-Infra-Review-Fixes.md item 8 and
   # docs/infra-plan/PLAN-Infra-Tier18.md) — a config nobody would actually run
@@ -2228,6 +2319,13 @@ write_run_index() {
       printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s-*.json |\n' \
         "$stem" "$pp" "$tg" "$jpp" "$jt" "$tgspread" "$ratio_pp" "$ratio_tg" "$ptok" "$gtok" "$gcmax" "$allocpt" \
         "$noise" "$stem"
+    done
+    echo
+    echo "GPU attention per row, as the engine resolved it (read from its log, not from the flag):"
+    for stem in "${STEMS[@]}"; do
+      juno_f="${OUT_ROOT}/${stem}-juno.json"
+      [[ -f "$juno_f" ]] || continue
+      echo "- ${stem}: $(jq -r '"\(.gpu_attention_resolved // "not recorded") (requested: \(.gpu_attention_requested // "not recorded"))"' "$juno_f" 2>/dev/null || echo "not recorded")"
     done
     echo
     echo "Host meta: see any *-llama-cpp.json .host field."

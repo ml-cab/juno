@@ -152,12 +152,15 @@ public final class ConsoleMain {
 	 * well after parseArgs() has already run.
 	 */
 	/**
-	 * When --gpu-residency was requested for a launch that cannot use it (LoRA
-	 * training or playback, the CPU backend, an architecture without the device
-	 * region), says so on the console. Library logging is off unless --verbose,
-	 * so the handlers' own once-logged notice would not reach the user.
+	 * Says on the console when this launch cannot run a GPU path it asked for, or
+	 * that applies by default: --gpu-residency where it will not run (LoRA training
+	 * or playback, the CPU backend, an architecture without the device region), and
+	 * GPU attention where it will not run (a handler that computes on the CPU, a
+	 * backend without the kernel, an explicit on with the CPU backend). Library
+	 * logging is off unless --verbose, so the handlers' own once-logged notices would
+	 * not reach the user.
 	 */
-	private static void printGpuResidencyNotice() {
+	private static void printGpuPathNotices() {
 		String architecture = null;
 		if (modelPath != null && java.nio.file.Files.isRegularFile(java.nio.file.Path.of(modelPath))) {
 			try (cab.ml.juno.node.GgufReader r = cab.ml.juno.node.GgufReader.open(java.nio.file.Path.of(modelPath))) {
@@ -166,10 +169,14 @@ public final class ConsoleMain {
 				architecture = null; // the model load reports an unreadable file itself
 			}
 		}
-		String notice = cab.ml.juno.node.GpuResidencyOptions.consoleNotice(architecture,
-				loraMode || loraPlayPath != null, !useGpu);
+		boolean lora = loraMode || loraPlayPath != null;
+		String notice = cab.ml.juno.node.GpuResidencyOptions.consoleNotice(architecture, lora, !useGpu);
 		if (notice != null)
 			System.out.println(String.format("  %sWARNING: %s%s%n", Color.YELLOW, notice, Color.RESET));
+		String attention = cab.ml.juno.node.GpuAttentionSupport.consoleNotice(architecture, lora, !useGpu,
+				cab.ml.juno.node.GpuAttentionSupport.cudaBackendExpected());
+		if (attention != null)
+			System.out.println(String.format("  %sWARNING: %s%s%n", Color.YELLOW, attention, Color.RESET));
 	}
 
 	private static void configureLogging() {
@@ -454,7 +461,7 @@ public final class ConsoleMain {
 			System.setProperty("juno.jfr.duration", jfrDuration);
 
 		banner();
-		printGpuResidencyNotice();
+		printGpuPathNotices();
 
 		// SIMD diagnostic + policy: vector width, and which quant phases use
 		// Vector vs scalar (weight-stationary accumulate stays scalar).
@@ -1060,7 +1067,10 @@ public final class ConsoleMain {
 		System.out.println("  --mmq on|off|auto          Packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default: auto; LoRA play when CUDA kernel loads; ignored for LoRA train)");
 		System.out.println("                             env JUNO_MMQ; keeps Q4_K packed on device");
 		System.out.println("  --gpu-attention on|off|auto  GPU-resident attention kernel (measured decode/prefill throughput");
-		System.out.println("                             lever, not a peer-latency claim; default: auto; CUDA only; env JUNO_GPU_ATTENTION)");
+		System.out.println("                             lever, not a peer-latency claim; default: auto; CUDA only; env JUNO_GPU_ATTENTION).");
+		System.out.println("                             Llama-family, Mistral, Qwen2, Phi-3 and Qwen3; Phi-2 and Qwen3-MoE run on");
+		System.out.println("                             the CPU and say so at startup. Reads an FP16 KV copy, so greedy output can");
+		System.out.println("                             part from off after some tokens; off is the bit-identical CPU-parity baseline");
 		System.out.println("  --gpu-residency on|off|auto  Keep the decode activation on the GPU from RMS norm through the Q/K/V");
 		System.out.println("                             projection and RoPE: one upload and one download per layer instead of");
 		System.out.println("                             a round trip per operation (default: off; CUDA, K-quant MMQ weights,");

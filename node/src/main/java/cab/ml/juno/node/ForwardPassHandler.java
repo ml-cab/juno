@@ -55,6 +55,15 @@ public interface ForwardPassHandler {
 	}
 
 	/**
+	 * Whether this handler runs attention on the GPU-resident attention kernel
+	 * ({@code --gpu-attention}). A handler that does not override this never runs it;
+	 * {@link GpuAttentionSupport} names those architectures and says so at startup.
+	 */
+	default boolean gpuAttentionActive() {
+		return false;
+	}
+
+	/**
 	 * RMS-normalized final hidden state at the current position, immediately before
 	 * the LM head. Only the shard that owns the output projection returns a value;
 	 * intermediate shards return empty.

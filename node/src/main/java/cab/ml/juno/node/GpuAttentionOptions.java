@@ -23,8 +23,10 @@ import java.util.Locale;
  *
  * <p>When enabled on CUDA with GPU-resident layers, attention (QK^T + softmax +
  * weighted-V-sum) runs on-device against a device-resident KV cache mirror
- * instead of scalar CPU Java. Default is {@link Mode#AUTO}, which enables on
- * CUDA for supported architectures and is a no-op elsewhere.
+ * instead of scalar CPU Java. Default is {@link Mode#AUTO}, which requests the
+ * kernel whenever CUDA is present. This class has no architecture awareness:
+ * which handlers run the kernel, and the notice for those that do not, is
+ * {@link GpuAttentionSupport}'s.
  */
 public final class GpuAttentionOptions {
 

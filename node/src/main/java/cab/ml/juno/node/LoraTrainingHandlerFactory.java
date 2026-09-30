@@ -78,6 +78,7 @@ public final class LoraTrainingHandlerFactory {
 				+ modelPath);
 		GpuResidencyOptions.announceUnsupported(log, "LoRA training and playback (--lora-play)",
 				"apply adapters to Q/K/V on the host, so the device-resident decode region does not run there");
+		noteGpuAttentionIgnored(backend instanceof GpuMatVec);
 		String a = normalize(arch);
 		if (LLAMA_FAMILY.contains(a))
 			return LoraTrainableHandler.load(modelPath, context, adapters, backend);
@@ -88,6 +89,25 @@ public final class LoraTrainingHandlerFactory {
 		if ("qwen3".equals(a))
 			return Qwen3LoraTrainableHandler.load(modelPath, context, adapters, backend);
 		throw new IllegalArgumentException("LoRA is not supported for architecture '" + a + "'");
+	}
+
+	private static final java.util.concurrent.atomic.AtomicBoolean GPU_ATTENTION_LOGGED =
+			new java.util.concurrent.atomic.AtomicBoolean();
+
+	/**
+	 * Every LoRA handler keeps its own attention math and KV map and never runs the
+	 * GPU attention kernel, so {@code --gpu-attention} has no effect under LoRA
+	 * training or {@code --lora-play} on any architecture. Says so for a GPU load that
+	 * requests the kernel: the console notice on every load (the REPL drains it per
+	 * load), the log line once per process.
+	 */
+	static void noteGpuAttentionIgnored(boolean gpuBackend) {
+		if (!gpuBackend || !GpuAttentionOptions.fromEnv().preferGpuAttention())
+			return;
+		LoraTrainNotices.add(LoraTrainNotices.GPU_ATTENTION_IGNORED);
+		if (GPU_ATTENTION_LOGGED.compareAndSet(false, true))
+			log.warning("LoRA train / --lora-play ignores --gpu-attention; attention runs on scalar CPU"
+					+ " (the LoRA handlers keep their own KV map and attention math).");
 	}
 
 	static String normalize(String architecture) {

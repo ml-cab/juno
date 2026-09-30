@@ -488,6 +488,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/** Whether the GPU-resident attention path ({@code --gpu-attention}) is active for this handler. */
+	@Override
 	public boolean gpuAttentionActive() {
 		return gqaGpu != null;
 	}

@@ -215,6 +215,8 @@ public final class ForwardPassHandlerLoader {
 		if (DEDICATED_HANDLER_ARCHITECTURES.contains(arch))
 			GpuResidencyOptions.announceUnsupported(log, "the " + arch + " handler",
 					"has no device-resident decode region (only the LLaMA-family handler does)");
+		if (backend instanceof GpuMatVec)
+			GpuAttentionSupport.announceCpuOnlyHandler(arch);
 
 		return switch (arch) {
 		case "phi2" -> {

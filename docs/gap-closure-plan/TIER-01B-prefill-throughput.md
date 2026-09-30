@@ -1,6 +1,6 @@
 # Tier 01B: Prefill throughput
 
-Status: in progress — implementation steps 0 and 1 complete (2026-09-30); step 2 (re-baseline) next
+Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); step 4 (the per-term prefill breakdown) next
 Gap analysis refs: none directly — this tier exists because the gap analysis has no prefill section
 at all, while the published measurements under `docs/perf-compare/` show prompt processing to be the
 single largest gap Juno has. See "Why this tier, why now".
@@ -111,13 +111,26 @@ on today's op-at-a-time GPU path either way.
    - Add GPU-attention support to `Phi2TransformerHandler`, `Phi3TransformerHandler`,
      `Qwen3TransformerHandler` and `Qwen3MoeTransformerHandler`, which today keep the scalar CPU
      path unconditionally.
+     *Amended 2026-09-30 (owner decision, see "Before step 3" in the execution record): Phi-3 and Qwen3
+     only. Phi-2 and Qwen3-MoE run every matmul on the CPU even on a GPU run, so there is no device
+     path to put the kernel on. They announce that at startup through the capability mechanism, and
+     their GPU path moves to Tier 08 scope item 6.*
    - Decide and document the ROCm answer. If the kernel can be ported, port it (subject to this
      plan's `NEEDS-AMD-HARDWARE` rule, since there is no AMD device here). If it cannot land this
      tier, `auto` must say so — a startup notice naming the backend and the resulting path, not a
      silent resolution to scalar.
+     *Decided 2026-09-30 (owner): announced fallback in this tier; the port is
+     [Tier 10](TIER-10-gpu-backend-breadth-cpu-simd.md) scope item 8, targeting the attention kernel
+     current when that tier runs.*
    - Once coverage is complete, change the default from `auto` to `on` and keep `auto` as an
      explicit opt-in for anyone who wants per-architecture resolution. Where a path genuinely cannot
      support the kernel, it fails loudly to the documented fallback rather than resolving quietly.
+     *Amended 2026-09-30 (owner decision): the default stays `auto`. This bullet assumed `auto`
+     resolved per architecture and could fall back silently, so `on` was to be the loud mode. After
+     item 0, `auto` already announces every case where the kernel cannot run (CPU-only handler,
+     non-CUDA backend), and on CUDA `auto` and `on` execute identically. Flipping would change only
+     the label, and would make every CPU launch warn unless an explicit `on` were told apart from a
+     default one. The "fails loudly" half of this bullet is what is kept.*
    - Keep the two existing, deliberate exemptions and re-verify them rather than assuming: LoRA
      **training** and `--lora-play` ignore `--gpu-attention` (attention stays scalar CPU, the train
      REPL warns), and that stays true unless this tier explicitly changes it.
@@ -274,7 +287,7 @@ on today's op-at-a-time GPU path either way.
 | 8 | Tensor-parallel cluster | same |
 | 9 | LoRA training | training prefills its own microbatches; confirm unaffected, or improved, but not silently changed in numerics. Training's existing `--gpu-attention` exemption (attention stays scalar CPU, REPL warns) is **re-verified and kept** by item 0, not quietly swept into the new default |
 | 10 | LoRA playback | playback prefills a LoRA-modified prefix; confirm the delta-add still composes correctly against a wider batched path. Same `--gpu-attention` exemption as row 9 — re-verified, kept, and still warned about |
-| 11 | Vision | `VisionEncoder` runs the widest batches in the system (B around 741) and reuses the same `MatVec` primitives — a batched-dispatch change is exactly the kind that regressed vision once before; run `compare-vision.sh` as a required gate, not an optional one. Vision already inherits `--gpu-attention` by delegating to `LlamaTransformerHandler`, so item 0 changes nothing for it directly — verify that stays true rather than assuming it |
+| 11 | Vision | `VisionEncoder` runs the widest batches in the system (B around 741) and reuses the same `MatVec` primitives — a batched-dispatch change is exactly the kind that regressed vision once before; run `compare-vision.sh` as a required gate, not an optional one. ~~Vision already inherits `--gpu-attention` by delegating to `LlamaTransformerHandler`~~ *Corrected 2026-09-30: the only vision model on disk, moondream2, has a Phi-2 backbone and runs `Phi2TransformerHandler` (CPU matmuls, scalar attention). Item 0 leaves Phi-2 on that path, so vision's text half must stay bit-identical; `compare-vision.sh` verifies it* |
 | 12 | OpenAI REST surface | time-to-first-token is the user-visible form of this tier's metric; measure TTFT, not only aggregate pp |
 | 13 | Native REST surface | same |
 | 14 | CLI | `--prefill-batch` semantics change on any surface where the default moves off `32`; this is user-visible and must be documented |
@@ -456,6 +469,14 @@ on today's op-at-a-time GPU path either way.
   non-Phi model and 2.0x on Phi-3.5-mini) rather than carrying a target set against the wrong
   denominator.
 
+  *Re-read 2026-09-30 (step 2, owner decision): neither row is restated.* The non-Phi 512 reading
+  (0.064x, qwen2.5-3b) is not materially below its 128 reference (0.062x), so 0.10x stands. Phi-3.5-mini's
+  (0.011x) is 3.6x below, but that is a collapse caused by the scalar attention item 0 removes, not the
+  modest dip this rule was written for. Restating at 2.0x would give 0.022x, which item 0 alone would meet
+  by restoring the 128-token behaviour (about 0.037x). **0.08x is kept**, now a 7.2x move from 0.011x.
+  **The restatement rule applies to a modest dip, not to a collapse that an item scoped in this tier
+  removes.**
+
   *Why this changed from "mistral-7b >= 0.10x".* The current reference (`20260927T232837Z`) already reads
   mistral-7b at 0.101x at 128 tokens, after the out-of-tier memory fix and the extracted FP16 pack loop
   that landed at Tier 01's close-out. A mistral-only milestone would have credited this tier with work
@@ -518,6 +539,11 @@ So item 0 can ship kernel support for all four **and** produce the required per-
 gain for every one of them — Phi-2, Phi-3, Qwen3 and Qwen3-MoE (the last at partial offload). No file
 is missing for this item, and nothing here needs asking the user for.
 
+*Amended 2026-09-30: the files are all present, but Phi-2 and Qwen3-MoE turned out to have no GPU path
+to measure. Their handlers never use the GPU backend, so "partial offload" offloads nothing. By the
+owner's decision, item 0 measures Phi-3 and Qwen3, and Phi-2 and Qwen3-MoE announce their CPU path (see
+"Before step 3" in the execution record).*
+
 **No architecture may therefore ship with its default resolved off for want of a measurement.** An
 earlier version of this section pre-authorised exactly that for Phi-2, on the strength of a file gap
 that had already closed. Every one of the four has a real file, so every one gets a measured default.
@@ -534,8 +560,12 @@ architectures' defaults off on a false premise.
 ## Execution record
 
 Status of the tier: in progress. Implementation steps 0 (threshold check, keepalive reaping, the fast
-prefill repetition) and 1 (the copy and dequantization spans, opt-in, gate met) are complete; step 2 (the
-re-baseline, with `--device-spans` for the staged-bytes figures) is next. This section also records the
+prefill repetition), 1 (the copy and dequantization spans, opt-in, gate met) and 2 (the pinned
+re-baseline at 128 and 512, with a spans run for staged bytes) are complete. Step 3 (item 0) is
+implemented and tested for Phi-3 and Qwen3 under an owner-amended scope. The default and the ROCm
+answer are decided; its pinned gate is met (see its record). Step 4 (the per-term prefill breakdown)
+is next.
+The two milestone decisions step 2 raised were taken by the owner on 2026-09-30 (recorded under step 2). This section also records the
 plan-review pass of 2026-09-27, which landed ahead of step 1.
 
 ### 2026-09-27 — plan-review pass: threshold check, CI trigger, reference and gate rules, clock pinning
@@ -852,6 +882,49 @@ jar of `38b1c6d`, median of three, all 24 invocations pinned):
 
 **CI revisit, due at the end of this step (owner deferred it here on 2026-09-28): still open, put to the
 owner in this step's report.** Recommendation unchanged (GPU-free two-job workflow).
+*Decided 2026-09-29 (owner): adopted.* See "Before step 2" below.
+
+### 2026-09-29 — before step 2: CI adopted, resolved GPU attention recorded
+
+**CI decision (the README's revisit trigger, due before this step): adopted.** `.github/workflows/ci.yml`
+has two GPU-free jobs. `script-checks` runs on every push: `check-plan-thresholds.sh`,
+`compare-llama-cpp.sh --selftest` and `selftest-engine-stdin.sh`. `build-and-test` runs on pull requests
+and pushes to `main`: `mvn -B clean verify` at the root, which is every unit-test module plus the stub
+cluster ITs in `juno-master`. GPU- and ROCm-tagged tests skip themselves without a device. Real-model runs
+(`ModelLiveRunnerIT`, the smoke scripts) and every performance gate stay manual on this host. So CI
+covers the unit and stub-IT layer and the script checks, and none of the gates this plan scores. **Not
+yet verified on GitHub**: the workflow was checked for YAML validity only, and its first run happens on
+the first push that carries it. Tier 07's re-examination still stands.
+
+**Harness: the resolved `--gpu-attention` value is recorded, as step 2 requires.** Before this change
+the harness recorded only the flag it passed, which is empty for the default lane. Each per-repetition
+result now carries `gpu_attention_requested` (`engine default` when no flag was passed) and
+`gpu_attention_resolved`, read from the engine log:
+- `on`: `LlamaTransformerHandler` wrote its activation line.
+- `off-backend-fallback`: the kernel was requested but the backend lacks it.
+- `off`: a GPU run with no activation line. This is sound on current code, because the only handler that
+  can activate the kernel logs when it does. The Phi-3, Phi-2, Qwen3 and Qwen3-MoE handlers never read the
+  option.
+- `n/a`: a CPU run.
+
+*Corrected 2026-09-30, after step 2's sweep: the `off` rule was wrong.* The console resets library
+logging to `OFF` unless `--verbose`, so the activation line never reaches the engine log, and the first
+sweep read `off` on every row, including the three Llama-family models that ran the kernel. The rule is
+now evidence-only. A log line is used when present. On a `--device-spans` run the result is `on` when
+the kernel's own copy sites (`memcpy_gqa_*`) are in the recording and `off` when they are not.
+Otherwise it is `unknown`. Tests first again: 4 new `--selftest` cases; 3 failed on the first version,
+and the fourth passed only because that version answered `off` everywhere. The three published runs
+were re-derived from their own recordings, with a correction note in each `INDEX.md` (see step 2
+below).
+
+The aggregate reads `mixed` when repetitions or lanes disagree. The prefill and generation lanes each
+keep their own value under `lanes`, and `INDEX.md` lists the value per row. The `--help` text and the
+tuned-lane comment no longer say the default lane runs `--gpu-attention off`. That is the stale label
+scope item 0 names, and it is corrected here because step 2's run is the one the exit criterion asks
+to state the mislabelling. The engine's own `--help` and `docs/performance.md` corrections stay with
+item 0. Tests first: 8 new `--selftest` cases. Seven failed on the unchanged script (the function was
+absent, and neither the aggregate nor the lane merge carried the field); all pass now, as do the
+existing cases.
 
 **Verification, on the final tree (2026-09-30).** `mvn test` on the eleven unit-test modules: 1,832 tests,
 0 failures, 49 skipped (existing assumptions), 26:22. `mvn test -pl node -Dgroups=gpu`: 145 tests, 0
@@ -860,6 +933,311 @@ failures, 7 skipped. `compare-llama-cpp.sh --selftest` and `check-plan-threshold
 contract) and the real-model live runner; both belong to the tier's closing matrix (implementation step
 8). No `compare-lora.sh` or `compare-vision.sh` run: with the events off every copy site is the plain
 call, and the pinned A/B above is the step's own gate.
+
+### 2026-09-30 — implementation step 2: the re-baseline
+
+Scope: measurement only, on the build of `ffd0ca7` (jar `juno-player-0.1.2-shaded.jar`, sha256
+`dc94bd797c8a3219`; the tree was dirty only in harness scripts and plan docs). The owner ran the three
+sweeps from a local terminal, because prompt-free sudo was not available in the agent shell. No
+engine code changed. Every row of all three runs is scorable (repetitions within 15%), every Juno
+prefill is 128/128 or 512/512 tokens, and no repetition was withheld by the span check.
+
+| Run | `n_prompt` | Flags | Role |
+|---|---|---|---|
+| [`20260930T135225Z`](../perf-compare/20260930T135225Z/INDEX.md) | 128 | `--gpu --pin-clocks` | GPU reference at 128 |
+| [`20260930T141026Z`](../perf-compare/20260930T141026Z/INDEX.md) | 512 | `--gpu --pin-clocks` | GPU reference at 512 |
+| [`20260930T144658Z`](../perf-compare/20260930T144658Z/INDEX.md) | 512 | `--gpu --pin-clocks --device-spans` | staged bytes and dequantization (item 2's before-measurement) |
+
+**Resolved GPU attention, per lane:** `on` for tinyllama, qwen2.5-3b and mistral-7b (default and tuned
+lanes); `off` for Phi-3.5-mini on both lanes. This is read from the spans run's copy sites. The two ratio
+runs record `unknown`, since they carry no spans, but they are the same build, flags and models, so the
+same resolution applies to them.
+
+**Default lanes, median of three (min to max); ratios against the reference tool's own reading in the same run:**
+
+| Model | pp t/s @128 | pp ratio @128 | pp t/s @512 | pp ratio @512 | 512/128 ratio | tg t/s | tg ratio |
+|---|---|---|---|---|---|---|---|
+| tinyllama-1.1b | 239.08 (238.9 to 244.7) | 0.0676x | 242.35 (242.2 to 244.6) | 0.0662x | 0.979 | 68.76 | 0.377x |
+| qwen2.5-3b | 95.24 (93.6 to 96.1) | 0.0668x | 91.74 (90.3 to 93.3) | 0.0638x | 0.955 | 29.23 | 0.423x |
+| Phi-3.5-mini | 43.07 (43.0 to 43.2) | 0.0372x | **13.06** (13.04 to 13.06) | **0.0112x** | **0.300** | 22.80 | 0.394x |
+| mistral-7b | 64.28 (63.6 to 64.3) | 0.1014x | 68.35 (67.8 to 68.5) | 0.0984x | 0.970 | 21.46 | 0.610x |
+
+(tg from the 128 run. The 512 run's tg is within 6% of it on every model, and generation does not depend
+on `n_prompt` in this harness.) Tuned lanes are within each row's spread of the default lane.
+
+What this establishes:
+- **Prefill really does degrade with prompt length, and only on the model without the GPU attention
+  kernel.** Phi-3.5-mini's own throughput falls 3.3x from 128 to 512 tokens, with tight spreads. That is
+  the quadratic scalar attention the earlier runs could only suggest. On the three Llama-family models
+  Juno's own prefill t/s is flat (tinyllama +1.4%, mistral +6.3%, qwen2.5 -3.7%). Their 512/128 ratios
+  of 0.955 to 0.979 come from the reference tool reading faster at 512 (tinyllama +3.5%, mistral +9.6%)
+  and, for qwen2.5, from Juno's own -3.7% (the reference moved +0.9%). All sit inside the 15% noise
+  floor.
+- **The binding reference moved.** At 512 the binding non-Phi model is qwen2.5-3b at 0.064x (reference
+  was tinyllama 0.062x at 128), which is not materially different. Phi-3.5-mini is at 0.011x, against its
+  0.040x reference at 128: 3.6x below it, so it is materially below.
+- **Spans cost less than step 1 estimated.** At pinned clocks the spans run reads 0.980x to 1.013x of the
+  unspanned 512 run's Juno prefill, within each row's spread (step 1's 6% was unpinned).
+
+**Staged bytes and dequantization per 512-token prefill window** (spans run; bytes identical across all
+three repetitions; times are device-event totals and their share of that window's prefill wall time):
+
+| Model | H2D MB | D2H MB | H2D + D2H ms (share) | Device dequant ms (share) | Copies | Prefill ms |
+|---|---|---|---|---|---|---|
+| tinyllama-1.1b | 507 | 898 | 294 (13.6%) | 38 (1.8%) | 22,902 | 2,157 |
+| qwen2.5-3b | 1,027 | 2,261 | 564 (10.2%) | 98 (1.8%) | 37,476 | 5,512 |
+| Phi-3.5-mini | 569 | 2,076 | 249 (0.6%) | 119 (0.3%) | 256 | 39,474 |
+| mistral-7b | 1,608 | 3,081 | 695 (9.2%) | 200 (2.7%) | 33,312 | 7,522 |
+
+These byte counts are item 2's before-measurement for its `>= 70%` threshold. The Llama-family copy
+count is dominated by the KV mirror's per-position row copies (`memcpy_k_row_h2d`/`memcpy_v_row_h2d`,
+one per layer per token), which item 2's description does not mention. **Early warning for step 5,
+not a decision:** staging plus dequantization is 12% to 15% of prefill wall time on the three
+Llama-family models. So removing it entirely is worth at most about 1.13x to 1.18x on those models,
+against the 1.6x the non-Phi milestone asks. Step 4's breakdown has to find the rest, or step 5
+escalates.
+
+**Three harness faults found and corrected while reading the runs** (all in `compare-llama-cpp.sh`):
+1. The resolved-attention rule; see the correction under "Before step 2" above.
+2. `jar sha256` was recorded as `missing` in every run since the plan-review pass: the hash function
+   and `host.json`'s `juno_jar` named `juno-player/target/juno-player.jar`, which the build does not
+   produce, while the engine ran the shaded jar `find_juno_jar` selects. Both now use `find_juno_jar`.
+   The three runs' `host.json` and `INDEX.md` carry the hash of the jar they launched. It was unchanged on
+   disk from before the first run, so this is the same file, and the correction is noted in each.
+3. The mislabelled-lanes statement the exit criterion asks for is in `20260930T135225Z/INDEX.md`: from
+   `8776a3f` (2026-09-17, where the engine default moved from `off` to `auto`) every GPU run's default
+   lane ran the kernel on the three Llama-family models while the harness called it `off`. The data
+   recorded the flag as empty, so no published figure changes.
+
+**Reference and milestones.** Per the README rule, the program-target table gains this run as its
+current-reference column in the same change, and the two 2026-09-27 reference runs carry
+superseded banners. The Tier 01B milestone rows now cite the 512 readings (0.064x, 0.011x, and 0.30 for
+the 512/128 ratio, which was unmeasured before). Their thresholds are unchanged, by the owner's decision below.
+
+**Decisions taken by the owner (raised and decided 2026-09-30):**
+- **Phi-3.5-mini milestone.** The plan says that if the 512 reading is materially below the 128 one,
+  the row is restated against the 512 figure at the same 2.0x multiple. That gives 0.022x, well under
+  today's 0.08x, because the degradation is 3.6x, not the modest dip the rule was written for. The cause
+  is exactly what item 0 removes. Recommendation: keep 0.08x, now a 7.2x move, because a target lowered
+  to 0.022x would be met by item 0 restoring the 128-token behaviour, with nothing else required. The
+  non-Phi row stays at 0.10x either way (0.064x is not materially below 0.062x). **Decided: keep 0.08x.**
+  The restatement rule under "Threshold, the tier overall" now carries the collapse carve-out. If 0.08x
+  proves unreachable in this tier (Phi-3.5-mini's staging is 0.6% of its prefill, so item 2 barely
+  reaches it), the tier's contingency applies: partial-complete, with the dominant term named.
+- **The retired Tier 04 milestone** (Phi-3.5-mini GPU tg >= 0.40x, "met on arrival" at 0.416x) reads
+  0.394x at pinned clocks, so it no longer meets its threshold. The gap is inside the noise floor, and
+  pinning changed both engines' clocks. **Decided: keep retired.** Its reference cell keeps the 0.416x
+  it was retired on, and the README records the pinned reading beside it. Reactivating it would gate on
+  a 1.5% gap, a tenth of the noise floor, in a tier whose work cannot move the number.
+
+**Verification.** `compare-llama-cpp.sh --selftest` (all cases, including the 12 new ones) and `bash -n`
+pass; `check-plan-thresholds.sh` passes after the milestone edits. No Java changed, so no `mvn` run.
+
+### 2026-09-30 — before step 3: plan-versus-code drift in item 0, raised with the owner
+
+Read-only pass over the claims item 0 depends on, against HEAD `ffd0ca7` plus the uncommitted step 2
+tree. No code changed. **Step 3 is on hold until the owner decides how item 0 covers Phi-2 and Qwen3-MoE.**
+
+Confirmed as the plan states:
+- `GpuAttentionOptions.preferGpuAttention()` returns `CudaAvailability.isAvailable()` for `AUTO`; the
+  class has no architecture awareness. Only `LlamaTransformerHandler` and `LoraTrainableHandler` (plus
+  `ConsoleMain`'s flag plumbing) reference it. Its class javadoc ("enables on CUDA for supported
+  architectures") overstates this; corrected with item 0.
+- `CudaGqaAttention.tryCreate` returns `null` for any backend other than `cuda`, so ROCm never runs the
+  kernel.
+- All four uncovered handlers own their own `SessionKvTensor` maps and a private `gqaInto` with the same
+  math as `GqaMath.attend` (scale `1/sqrt(headDim)`, grouped-query head mapping, causal by `seqLen`, no
+  sliding window, no soft-cap). The kernel computes that math for any head dimension, so no kernel change
+  is needed for Phi-2's head dimension of 80 or Qwen3's decoupled `qDim`.
+- The LoRA training and `--lora-play` exemption is still in place and still warns
+  (`LoraTrainableHandler.warnIfGpuAttentionIgnored`).
+- All four item-0 model files are on disk (`phi-2.Q4_K_M.gguf`, `Phi-3.5-mini-instruct-Q4_K_M.gguf`,
+  `Qwen3-1.7B-Q4_K_M.gguf`, `Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf`).
+
+**Not as the plan states. These change item 0's scope:**
+1. **Phi-2 and Qwen3-MoE never use the GPU.** Both handlers take a `MatVec backend` and store it, but no
+   matmul goes through it. `Phi2TransformerHandler` runs every projection through its static
+   `sgemmQuantBatch`, which calls `LlamaTransformerHandler`'s host weight-stationary kernels.
+   `Qwen3MoeTransformerHandler` runs every projection, the router and the experts through
+   `LlamaTransformerHandler.matVec` on the host. So on a `--gpu` run those two models run entirely on the
+   CPU. No weights are on the device, and `--gpu-layers` has no effect on them. Item 0 assumed four
+   GPU-weight handlers that lack only the attention kernel. That is true of Phi-3 and Qwen3, not of these two.
+2. **"Qwen3-MoE measured at partial offload, with the offloaded layer count recorded" cannot be done as
+   written.** The handler offloads zero layers whatever `--gpu-layers` says. A "partial offload" figure
+   would be a CPU figure under a GPU label.
+3. **Vision is not unaffected by item 0.** Cross-surface row 11 says vision "inherits `--gpu-attention` by
+   delegating to `LlamaTransformerHandler`". `LlavaHandlerFactory` loads the text handler through
+   `ForwardPassHandlerLoader`, and the only vision model on disk (`moondream2-q5_k.llamafile`) has a Phi-2
+   backbone. So the vision gate runs `Phi2TransformerHandler`, CPU matmuls and scalar attention included.
+   Whatever item 0 does for Phi-2, it does for the vision gate's text half.
+4. `docs/howto.md`'s `--gpu-attention` row says `auto` "correctly resolves to off" on the four
+   architectures. `auto` resolves to on (CUDA present); those handlers just never read it. That is the
+   silent no-op item 0 exists to remove, so the correction belongs with item 0.
+5. `Qwen3MoeTransformerHandler` has no `forwardBatch` override (Phi-2, Phi-3 and Qwen3 do), so its
+   prefill does not run as a batched window. Item 0's prefill-gain threshold for Qwen3-MoE would be
+   measured on the token-at-a-time path.
+
+Phi-3 and Qwen3 match the plan: device FP16 or packed Q4_K weights through the backend, and the same
+three attention call sites as the Llama handler (prefill window, single-token decode, multi-decode).
+Item 0 can proceed for those two as written.
+
+**Owner decision (2026-09-30): the kernel goes into Phi-3 and Qwen3; Phi-2 and Qwen3-MoE announce.**
+Item 0 integrates the GPU attention kernel into `Phi3TransformerHandler` and `Qwen3TransformerHandler`
+and measures both. `Phi2TransformerHandler` and `Qwen3MoeTransformerHandler` do not get the kernel in
+this tier. On a GPU run each prints a startup notice, once, saying the handler runs its matmuls and
+attention on the CPU and that `--gpu-attention` and `--gpu-layers` do not apply to it. The notice goes
+through the same capability mechanism the covered handlers use, so neither resolves to scalar silently.
+A GPU weight path for those two handlers, and then the kernel, is handed to
+[Tier 08](TIER-08-model-architecture-breadth.md) (scope item 6 there), because that tier already owns the
+MoE handler family. The same goes for a batched `forwardBatch` for Qwen3-MoE. Scope item 0, the "Models
+needed" table, cross-surface row 11 and the first three exit criteria are amended to match. Vision keeps
+its current behaviour: the moondream2 text half stays on the CPU handler, and item 0 must leave it
+bit-identical.
+
+### 2026-09-30 — implementation step 3 (item 0): the kernel in Phi-3 and Qwen3, and the capability mechanism
+
+Scope as amended by the owner decision above. Code, tests and docs are done. The item's gate reading
+(pinned clocks) was taken by the owner and meets the item-0 threshold; the owner decisions are
+recorded at the end. **Step 3 is complete.**
+
+**What shipped.**
+- `node`: `ForwardPassHandler.gpuAttentionActive()` (default `false`; overridden by
+  `LlamaTransformerHandler`, `Phi3TransformerHandler`, `Qwen3TransformerHandler`) is the capability
+  report. `GpuAttentionSupport` (new) names the handlers that run the kernel. It builds the console
+  notice and the once-per-process log lines for a CPU-only handler on a GPU backend (Phi-2,
+  Qwen3-MoE), a backend without the kernel (ROCm; `on` or `auto`), and an explicit `on` with the CPU
+  backend. `GpuAttentionMirror` (new) is the kernel plus per-request `DeviceKvCache` mirrors for the
+  Phi-3 and Qwen3 handlers at all three call sites, with the LLaMA-family contract. That contract:
+  host KV written first and always, the kernel reads only through the watermark, and a device OOM
+  retires mirrors in place and continues on the CPU, logged once. The LLaMA-family handler's own
+  inline path is unchanged. `ForwardPassHandlerLoader` logs the CPU-only notice.
+  `LoraTrainingHandlerFactory.noteGpuAttentionIgnored` raises the LoRA exemption notice for every
+  LoRA architecture. It used to be raised only by the LLaMA-family LoRA handler: with Phi-3 and Qwen3
+  now running the kernel outside LoRA, LoRA on them would otherwise have dropped the flag silently.
+  The same was already true, before this change, of Qwen2 LoRA.
+- `juno-player`: `ConsoleMain` prints the GPU attention notice beside the residency notice; `--help`
+  names the covered architectures and the divergence.
+- ROCm answer: **announced fallback this tier**, no port. The kernel is PTX loaded through the CUDA
+  driver API, and a HIP port could not be compiled or run here (`NEEDS-AMD-HARDWARE`). A GPU launch on
+  ROCm with `on` or `auto` warns that the kernel is CUDA-only. Where a port should live is an owner
+  decision (Tier 10 holds the other hardware-gated ROCm work).
+- Docs: `docs/performance.md`'s GPU-resident-attention section (default was stated as off; coverage;
+  divergence table), its recommended-flags section, `docs/howto.md`, `docs/agent-arch.txt`,
+  `compare-prefill-batch.sh`'s stale "default off" label (found in step 0), `CHANGELOG.md` (Session 100).
+  One internal tier number in the section edited ("see the Tier 17 follow-on finding") was replaced;
+  others elsewhere in `docs/performance.md` were not audited in this step.
+
+**Tests, written first and shown failing for the right reason.**
+- `GpuAttentionSupportTest` (`node`, CPU, 7 cases): failed with the class a throwing skeleton (7
+  errors); pass.
+- `GpuAttentionHandlerParityTest` (`node`, `@Tag("gpu")`, Phi-3.5-mini and Qwen3-1.7B): kernel `on`
+  (the default) against `off` on the same CUDA backend at the prefill window, single decode and a
+  two-stream multi-decode at different positions; capability reported; device KV freed on evict.
+  Failed before the wiring on "the default must activate the kernel on CUDA" for both models, with
+  their `off` legs passing; passes. Measured logits relative L2 0.00012 to 0.0099 (Phi-3.5-mini) and
+  0.00029 to 0.0149 (Qwen3-1.7B), top-1 equal everywhere; bound 0.025. **Planted fault** (one head's
+  output zeroed after every launch): 0.153 and 0.090, failing the bound with top-1 unchanged.
+- `LoraGpuAttentionNoticeTest` (`node`, CPU, 2 cases): failed against an empty method (notice absent);
+  passes.
+- `GpuAttentionDivergenceIT` (`juno-master`, `-Pgpu`, new): greedy divergence, below.
+
+**Greedy-decode divergence** (six real prompts, 64 greedy tokens, `on` against `off`, same CUDA build):
+
+| Model | Identical over 64 | First divergent step on the others | First token |
+|---|---:|---|---|
+| TinyLlama-1.1B (LLaMA family, kernel already default) | 3 of 6 | 8, 13, 23 | equal on all 6 |
+| Phi-3.5-mini | 4 of 6 | 26, 50 | equal on all 6 |
+| Qwen3-1.7B | 3 of 6 | 20, 23, 32 | equal on all 6 |
+
+Neither newly covered architecture diverges earlier than the LLaMA-family default already shipping.
+Documented in `docs/howto.md`, `docs/performance.md` and `--help`, with `off` kept as the bit-identical
+baseline.
+
+**Measurement, pinned (the gate reading).** The owner ran the pinned runs from a local terminal
+(the agent shell has no prompt-free sudo), all on one jar (`2564f8f506273981`, the final tree), all
+rows scorable, every prefill the full prompt, no repetition withheld.
+
+*Same-build flag A/B*, twelve runs alternating off and on, published as
+[`20260930T205554Z-tier01b-item0-ab`](../perf-compare/20260930T205554Z-tier01b-item0-ab/INDEX.md). Juno
+t/s, median of three (min to max):
+
+| Model | `n_prompt` | pp off | pp on | pp gain | tg off / on | tg gain |
+|---|---|---|---|---|---|---|
+| Phi-3.5-mini | 512 | 13.69 (12.96 to 13.75) | 89.71 (89.42 to 89.83) | **6.55x** | 24.08 / 32.03 | 1.33x |
+| Qwen3-1.7B | 512 | 28.80 (28.32 to 29.07) | 175.56 (175.46 to 176.05) | **6.10x** | 34.96 / 38.43 | 1.10x |
+| Phi-3.5-mini | 128 | 44.63 (44.43 to 44.65) | 98.07 (96.46 to 98.16) | **2.20x** | 24.20 / 31.87 | 1.32x |
+| Qwen3-1.7B | 128 | 82.12 (81.94 to 82.41) | 177.72 (173.02 to 177.91) | **2.16x** | 34.87 / 38.63 | 1.11x |
+
+**Item 0's threshold is met**: each newly covered architecture shows a measured prefill gain against
+its own pre-item-0 path, far outside the noise floor (every spread under 3%), and decode moves with it,
+the plan's evidence that the kernel is actually taken. The gain grows with prompt length because it
+removes quadratic scalar attention: with the kernel, prefill is nearly flat from 128 to 512 tokens.
+The unpinned run above (`20260930T180709Z-tier01b-item0-unpinned-ab`) is superseded by this one and
+agreed with it.
+
+*Item 0's attributable ratio* for the four standard models: the same build's default sweeps,
+[`20260930T211637Z`](../perf-compare/20260930T211637Z/INDEX.md) (128) and
+[`20260930T215547Z`](../perf-compare/20260930T215547Z/INDEX.md) (512), pinned, read against the step 2
+reference (`20260930T135225Z`, `20260930T141026Z`):
+
+| Model | pp ratio @128, step 2 → item 0 | pp ratio @512, step 2 → item 0 | 512/128 | tg ratio |
+|---|---|---|---|---|
+| tinyllama-1.1b | 0.0676x → 0.0658x | 0.0662x → 0.0672x | 1.02 | 0.358x |
+| qwen2.5-3b | 0.0668x → 0.0666x | 0.0638x → 0.0607x | 0.91 | 0.424x |
+| Phi-3.5-mini | 0.0372x → **0.0818x** | 0.0112x → **0.0749x** | 0.30 → **0.92** | 0.394x → **0.534x** |
+| mistral-7b | 0.1014x → 0.1040x | 0.0984x → 0.0999x | 0.96 | 0.620x |
+
+Only Phi-3.5-mini moves, as expected: the LLaMA-family handler is untouched, and the other three sit
+within noise of step 2 (qwen2.5-3b's 512 ratio fell 4.9% because the reference tool read 7.8% faster
+while Juno read 3.0% faster).
+
+Against the milestones (read, not gated: ratios are reported, never gated below the noise floor):
+- Phi-3.5-mini pp @512 **>= 0.08x: not met, 0.0749x** (from 0.0112x). Item 0 alone is a 6.7x move of
+  the 7.2x asked for; the rest must come from items 2 to 4 or the contingency applies.
+- Non-Phi pp @512 >= 0.10x: not met (tinyllama 0.0672x, qwen2.5-3b 0.0607x, mistral-7b 0.0999x);
+  item 0 does not touch these handlers.
+- 512/128 >= 1.00 on every model: met by tinyllama only (1.02); Phi-3.5-mini recovers from 0.30 to
+  0.92.
+- Program end-of-plan target GPU tg Phi-3.5-mini >= 0.50x: **met at 0.534x** (from 0.394x), because
+  decode attention on Phi-3 now runs on the GPU. Recorded here and not moved into the README's
+  reference column: that column moves with the tier's closing sweep, and step 2 stays the baseline
+  every gate in this tier is scored against.
+
+**Verification, on the final tree (2026-09-30).** `mvn test` on the eleven unit-test modules: 1,843
+tests, 0 failures, 0 errors, 49 skipped (existing assumptions), 26:07, GPU-tagged tests included (CUDA
+present). The first pass stopped in `node` on `Q4KMmqMicrobenchTest` (`cudaMalloc` out of memory). The
+cause was the new parity test leaving each `CudaMatVec`'s scratch allocated: 204 MB after Phi-3.5-mini
+and 54 MB after Qwen3, measured, on top of the node JVM's other GPU tests. The test now releases its
+backends' scratch, and asserts that free device memory returns to within 16 MB of where it started, so
+the new mirror and kernel scratch are shown freed as well. `mvn verify -pl juno-master`: 20 ITs, 0
+failures (in-process, unsupported-architecture, three-node pipeline, tensor-parallel).
+`GpuAttentionDivergenceIT` (`-Pgpu`): 3 of 3. `compare-llama-cpp.sh --selftest` and
+`check-plan-thresholds.sh` pass. **Not run in this step:** `compare-lora.sh` and `compare-vision.sh`.
+The change does not touch the LLaMA-family handler's forward path, the LoRA handlers' compute or the
+vision encoder, and moondream2's text half runs the unchanged Phi-2 handler, so both are expected
+flat. Both belong to the tier's closing matrix (implementation step 8), and are needed there because
+the tier's gate lists them. `ModelLiveRunnerIT` and `smoke-tier01b-prefill.sh` also belong to step 8
+(the latter does not exist yet).
+
+**Owner decisions, 2026-09-30:** (2) keep `auto`, and restate exit criterion 1 as behaviour;
+(3) the ROCm port is Tier 10 scope item 8. Both are recorded at scope item 0 and at the criterion.
+(1) The pinned gate run: done by the owner; results above.
+
+**Originally open, for the owner:**
+1. **The pinned gate run for item 0** (needs prompt-free sudo, as in step 2). Same-hour flag A/B,
+   `--gpu-attention` alternating off, on, off, on, off, on with `--pin-clocks`:
+   `scripts/performance-tests/compare-llama-cpp.sh --gpu --pin-clocks --models Phi-3.5-mini,Qwen3-1.7B
+   --n-prompt 512 --juno-warmup 2 --juno-reps 1 --reps 1 --no-tuned-lane --no-publish --gpu-attention
+   {off|on}`, then the same at `--n-prompt 128`. Then a published default sweep of the four sweep
+   models at 128 and 512 (`--gpu --pin-clocks`, no `--gpu-attention`), which is item 0's attributable
+   ratio against the step-2 reference.
+2. **The `auto` to `on` default flip** that scope item 0 names. On CUDA the two now behave the same
+   everywhere the kernel exists, and both announce everywhere it does not. The flip would change only
+   the label, and it would make every CPU launch print the "`on` has no effect" notice unless explicit
+   and default `on` were told apart. Recommendation: keep `auto` and restate the criterion as "the
+   default runs the kernel on every covered architecture". Owner decision.
+3. **Where a ROCm port of the kernel lives** (recommendation: Tier 10, beside its other hardware-gated
+   ROCm work).
 
 ### Out-of-tier changes (recorded per execution rule 9)
 
@@ -870,7 +1248,7 @@ call, and the pinned A/B above is the step's own gate.
 
 ## Exit criteria
 
-- [ ] `--gpu-attention` defaults to on for every architecture whose gain was actually measured on a
+- [x] `--gpu-attention` defaults to on for every architecture whose gain was actually measured on a
       real model — Llama-family, Mistral, Qwen2, **Phi-2, Phi-3, Qwen3 and Qwen3-MoE**, since a file
       exists on disk for each of those last four (see "Models needed"; Qwen3-MoE is measured at
       partial offload and the offloaded layer count is recorded beside its figure). **No architecture
@@ -879,20 +1257,48 @@ call, and the pinned A/B above is the step's own gate.
       gap that had already closed. The ROCm answer decided and either implemented (`NEEDS-AMD-HARDWARE`) or
       made an explicit announced fallback. No path resolves to scalar silently, whichever way each one
       landed.
-- [ ] Each newly covered architecture shows a measured prefill gain against its own pre-item-0
+      *Amended 2026-09-30 (owner decision): the architectures that get the kernel are Llama-family,
+      Mistral, Qwen2, Phi-3 and Qwen3. Phi-2 and Qwen3-MoE run on the CPU on every backend and announce
+      it at startup through the capability mechanism; their GPU path is Tier 08 scope item 6. This and
+      the next two criteria read "newly covered architecture" as Phi-3 and Qwen3.*
+      *Restated 2026-09-30 (owner decision): "defaults to on" is read as behaviour, not as the flag's
+      label. The default (`auto`) runs the kernel on every covered architecture on CUDA, and every
+      case where it cannot run announces itself. The ROCm answer is decided: announced fallback,
+      port in Tier 10 scope item 8. Ticked once the pinned run shows the gains the next criterion
+      asks for.*
+      *Checked 2026-09-30: the default runs the kernel on the LLaMA family, Phi-3 and Qwen3 on CUDA
+      (pinned gains below); Phi-2, Qwen3-MoE, ROCm and an explicit `on` with the CPU backend each
+      announce themselves (`GpuAttentionSupportTest`).*
+- [x] Each newly covered architecture shows a measured prefill gain against its own pre-item-0
       baseline. "Unmeasured" is only acceptable for an architecture with no file on disk, and the
       claim is checked against `models/` at the time this tier runs rather than against this file's
       table — that table was wrong once already.
-- [ ] Greedy-decode divergence from the FP16 KV mirror characterised per newly covered architecture
+      *Checked 2026-09-30, pinned same-build A/B: Phi-3.5-mini 6.55x at 512 and 2.20x at 128, Qwen3-1.7B
+      6.10x and 2.16x, spreads under 3%; decode 1.33x and 1.10x.*
+- [x] Greedy-decode divergence from the FP16 KV mirror characterised per newly covered architecture
       and documented in `docs/howto.md` and `--help`, with `off` retained as the bit-identical
       CPU-parity baseline.
-- [ ] LoRA training and `--lora-play` exemptions re-verified as still holding and still warning.
-- [ ] `compare-llama-cpp.sh`'s stale default-lane `--gpu-attention` labelling corrected, and the
+      *Checked 2026-09-30: `GpuAttentionDivergenceIT`, six prompts, 64 tokens. Phi-3.5-mini 4 of 6
+      identical (earliest divergence at 26), Qwen3-1.7B 3 of 6 (earliest at 20), against TinyLlama's
+      3 of 6 (earliest at 8); first token equal everywhere. Table in the step 3 record.*
+- [x] LoRA training and `--lora-play` exemptions re-verified as still holding and still warning.
+      *Checked 2026-09-30: holding, because every LoRA handler is its own class that calls the scalar
+      `gqa` and never `GpuAttentionMirror` (all production loads go through
+      `LoraTrainingHandlerFactory`). Warning: it was raised only for the LLaMA family, and is now raised
+      by the factory for every LoRA architecture (`LoraGpuAttentionNoticeTest`, failing against an empty
+      method first).*
+- [x] `compare-llama-cpp.sh`'s stale default-lane `--gpu-attention` labelling corrected, and the
       first re-baselined run states which previously published lanes were mislabelled.
       `docs/performance.md`'s GPU-resident-attention section is corrected in the same pass: it states
       the default is **off** while `GpuAttentionOptions.fromEnv()` defaults to `auto`.
-- [ ] Item 0's own attributable measurement published separately from the rest of the tier's, so the
+      *Checked 2026-09-30: harness labelling and the mislabelled-lanes statement landed with step 2
+      (`20260930T135225Z/INDEX.md`); `docs/performance.md` corrected in step 3, as was the same stale
+      label in `compare-prefill-batch.sh`.*
+- [x] Item 0's own attributable measurement published separately from the rest of the tier's, so the
       default change's effect is visible on its own.
+      *Checked 2026-09-30: `20260930T205554Z-tier01b-item0-ab` (flag A/B) and the default sweeps
+      `20260930T211637Z` / `20260930T215547Z`, all pinned, before any other forward-pass change of this
+      tier.*
 - [x] `juno.DeviceStaging` and `juno.WeightDequant` exist, are enabled in
       `scripts/performance-tests/juno-perf.jfc`, are aggregated by `JfrMetricsExtractor`, and have
       `metrics` tests that failed on the pre-tier build for the right reason. Until this is checked,

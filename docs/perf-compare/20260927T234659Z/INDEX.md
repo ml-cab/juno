@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20260927T234659Z (gpu)
 
+> **Superseded as reference (2026-09-30)** by the pinned re-baseline [`20260930T135225Z`](../20260930T135225Z/INDEX.md) (`n_prompt=128`) and [`20260930T141026Z`](../20260930T141026Z/INDEX.md) (512). Kept for history; its absolute t/s were taken at unpinned clocks and are not comparable with them.
+
 > **Part of the GPU reference from 2026-09-27, late**: re-run of the rows of [`20260927T232837Z`](../20260927T232837Z/INDEX.md) that spread over 15%. The `qwen2.5-3b` tuned and both `Phi-3.5-mini` rows here are the reference; the `qwen2.5-3b` default row is **not** (it was clean in the first run and is read there; here it spread 23.84 to 31.88 t/s in generation and 31% in prefill, recorded rather than re-run a third time).
 
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |

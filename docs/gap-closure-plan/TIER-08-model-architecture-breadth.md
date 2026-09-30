@@ -66,6 +66,18 @@ this tier's exit criteria, not Tier 02's.
    recognized" error) rather than ever letting expert tensors silently pass through the dense
    handler unused.
 
+6. **A GPU path for the Phi-2 and Qwen3-MoE handlers** (handed over by Tier 01B, 2026-09-30, owner
+   decision). Both handlers store the `MatVec` backend they are given and never call it: every
+   projection, and for Qwen3-MoE the router and the experts, runs on host kernels in
+   `LlamaTransformerHandler`, so a `--gpu` run of either model is a CPU run and `--gpu-layers` offloads
+   nothing. Tier 01B left both announcing that at startup instead of resolving silently. This item
+   gives them device weights through `GpuBindings`/`MatVec` like `Phi3TransformerHandler` and
+   `Qwen3TransformerHandler`, then the GPU attention kernel through the capability mechanism Tier 01B
+   built. Qwen3-MoE also gains a batched `forwardBatch`, since today it prefills token by token through
+   the interface default, and layer offload that respects `--gpu-layers`, since the 18.6 GB file does
+   not fit this host's 8 GiB card. Phi-2 is the text half of moondream2, so this item changes the vision
+   gate as well; run `compare-vision.sh`. Measure each against its own CPU-path baseline.
+
 ### Out of scope
 
 - DeepSeek-MoE-specific optimizations (e.g. its particular shared-expert design) beyond what the
@@ -171,6 +183,9 @@ paragraph when deciding whether to ask; this section was stale once.
 - [ ] Each new handler either supports GPU-resident attention and reports that capability through
       the mechanism Tier 01B built, or fails to the documented fallback with an explicit notice —
       never a silent resolution to the scalar path.
+- [ ] Phi-2 and Qwen3-MoE run their matmuls on the device on a GPU run, Qwen3-MoE prefills as a
+      batched window and honors `--gpu-layers`, both report GPU attention through Tier 01B's mechanism,
+      and each has a measured prefill gain against its own CPU-path baseline (scope item 6).
 - [ ] Cross-surface checklist fully resolved, LoRA-trainability gap (if any) explicitly documented
       per architecture rather than silently absent.
 - [ ] Perf gate published for at least the largest new model (`Devstral`, 24B).

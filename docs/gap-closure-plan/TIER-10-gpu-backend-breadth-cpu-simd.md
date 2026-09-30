@@ -105,6 +105,20 @@ result, which is the pattern this plan exists to stop repeating.
    that tells a future reader on different silicon which results to trust and which to re-derive.
    [Tier 04C](TIER-04C-packed-weight-matmul.md) carries the same obligation for its GPU findings on
    this host's Pascal-generation GTX 1080.
+8. **ROCm port of the GPU attention kernel** (handed over by Tier 01B, 2026-09-30, owner decision).
+   `--gpu-attention` is CUDA-only. The kernel is PTX loaded through the CUDA driver API, and
+   `CudaGqaAttention.tryCreate` returns nothing for any other backend, so on ROCm attention runs on the
+   CPU and a launch that requests the kernel (`on` or `auto`) says so at startup
+   (`GpuAttentionSupport`). Port the attention kernel **current when this tier runs**. Tier 02 is
+   expected to replace today's simple kernel with a tiled one, and porting the old one first would be
+   wasted work. The device KV mirror (`DeviceKvCache`) already goes through the vendor-neutral
+   `GpuBindings`; the port needs the kernel in HIP, its loader, and a `GpuAttentionMirror`/handler path
+   that accepts the ROCm backend. It is not a mechanical translation: the kernel's reductions assume
+   32-lane warps (`__shfl_xor_sync` with a 32-bit mask, warps counted as threads/32), AMD wavefronts are
+   commonly 64 lanes, and HIP code objects are built per GPU architecture rather than JIT-compiled from
+   PTX. It sits here because item 1 is what gives ROCm a batched prefill at all; until then ROCm prefill
+   is a serial matrix-vector loop and attention is not its dominant term. Once ported, the ROCm row of
+   the startup notice goes, and `GpuAttentionSupportTest` is updated to match.
 
 ### Out of scope
 
@@ -232,6 +246,10 @@ vision-scale batch-width regression guard (already present).
       within-tolerance ones) explicitly documented rather than assumed away.
 - [ ] ROCm tiled-GEMM implemented, unit-tested, marked NEEDS-AMD-HARDWARE pending real validation.
 - [ ] Any remaining ROCm MMQ kernel coverage from Tier 04 completed.
+- [ ] The GPU attention kernel current at this tier ported to ROCm (scope item 8): parity against the
+      scalar CPU attention within the bound the CUDA kernel is held to, the ROCm fallback notice
+      removed, marked NEEDS-AMD-HARDWARE pending real validation. Until then the fallback stays
+      announced, never silent.
 - [ ] Metal/Vulkan/SYCL/CANN decision made and recorded (pursue as a new tier, or explicitly
       declined with reasoning) — not left open.
 - [ ] Every CPU conclusion in the execution record carries a `host-specific` or `expected-general`

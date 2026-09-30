@@ -111,14 +111,22 @@ tier can fail on it and the final scorecard in Tier 14 can only report a directi
 four-model sweep (`tinyllama-1.1b`, `qwen2.5-3b`, `Phi-3.5-mini`, `mistral-7b`, all Q4_K_M) on the
 `docs/perf-compare/README.md` baseline host, under the benchmark-parity preconditions below:
 
-| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) | **Current reference** (2026-09-27, late) |
-|---|---|---|---|---|---|
-| GPU tg, Phi-3.5-mini | >= **0.50x** | 0.330x | 0.423x | 0.415x (0.414x tuned) | **0.416x** (0.417x tuned) |
-| GPU tg, mistral-7b | >= **0.60x** | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) | **0.639x** (0.643x tuned) — target met |
-| GPU pp, every sweep model | >= **0.15x** | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | **0.040x to 0.101x**, median 0.064x (Phi-3.5-mini 0.040x binding) |
-| CPU tg, every sweep model | >= **0.25x** | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | **0.090x to 0.135x** (CPU reference unchanged) |
+| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) | Reference 2026-09-27, late | **Current reference** (2026-09-30, pinned re-baseline) |
+|---|---|---|---|---|---|---|
+| GPU tg, Phi-3.5-mini | >= **0.50x** | 0.330x | 0.423x | 0.415x (0.414x tuned) | 0.416x (0.417x tuned) | **0.394x** (0.396x tuned) |
+| GPU tg, mistral-7b | >= **0.60x** | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) | 0.639x (0.643x tuned) | **0.610x** (0.610x tuned) — target met |
+| GPU pp, every sweep model | >= **0.15x** | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | 0.040x to 0.101x, median 0.064x (Phi-3.5-mini 0.040x binding) | **0.037x to 0.101x** at `n_prompt=128`, median 0.067x; **0.011x to 0.098x** at 512 (Phi-3.5-mini binding at both) |
+| CPU tg, every sweep model | >= **0.25x** | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | 0.090x to 0.135x | **0.090x to 0.135x** (CPU not re-measured) |
 
-**Score every later tier against the right-most column.** It is the reference from late 2026-09-27:
+**Score every later tier against the right-most column.** It is Tier 01B's step 2 re-baseline
+(2026-09-30): GPU `docs/perf-compare/20260930T135225Z/` (`n_prompt=128`) and `20260930T141026Z/`
+(`n_prompt=512`), both with pinned clocks, the operating-system JFR clock and the warm-up recording;
+CPU unchanged from `20260927T094414Z/`. It is a measurement boundary against every column to its left
+(turbo off lowers both engines' absolute throughput, and the harness changes of 2026-09-28 and
+2026-09-29 apply), so compare ratios across it, never absolute t/s. Tier 01B's execution record derives
+it. The column to its left, described next, was the reference until then.
+
+The previous reference was from late 2026-09-27:
 GPU `docs/perf-compare/20260927T232837Z/` with the `qwen2.5-3b` tuned and both `Phi-3.5-mini` rows
 from its re-run `20260927T234659Z/`; CPU `20260927T094414Z/`, which the change behind it did not touch.
 It follows the per-request device-memory fix and the extracted FP16 pack loop, a GPU-prefill
@@ -172,9 +180,9 @@ ask for more than its reference reading. For an "every model" scope the referenc
 
 | After | Metric | Scope | Threshold | Reference reading | Status |
 |---|---|---|---|---|---|
-| 01B | GPU pp ratio, `n_prompt=512` | every sweep model except Phi-3.5-mini | >= 0.10x | 0.062x (tinyllama; read at `n_prompt=128`) | active |
-| 01B | GPU pp ratio, `n_prompt=512` | Phi-3.5-mini | >= 0.08x | 0.040x (read at `n_prompt=128`) | active |
-| 01B | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | unmeasured | active |
+| 01B | GPU pp ratio, `n_prompt=512` | every sweep model except Phi-3.5-mini | >= 0.10x | 0.064x (qwen2.5-3b at `n_prompt=512`, step 2 re-baseline) | active |
+| 01B | GPU pp ratio, `n_prompt=512` | Phi-3.5-mini | >= 0.08x | 0.011x (at `n_prompt=512`, step 2 re-baseline; threshold kept by owner decision, see below) | active |
+| 01B | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 0.30 (Phi-3.5-mini; the others 0.955 to 0.979) | active |
 | 04 | GPU tg ratio | Phi-3.5-mini | >= 0.40x | 0.416x | retired: met on arrival |
 | 10 | CPU tg ratio | every sweep model | >= 0.20x | 0.090x (mistral-7b) | active |
 
@@ -190,12 +198,24 @@ yet; Tier 01B's step 2 re-baseline takes it, and if the 512 figures sit material
 (the degradation this milestone's third row is about), Tier 01B restates the first two rows against
 them in its own file and here.
 
+*Re-read 2026-09-30 against the step 2 re-baseline; owner decision: neither row restated.* The non-Phi
+512 reading (0.064x, qwen2.5-3b) is not materially below 0.062x. Phi-3.5-mini's (0.011x) is a 3.6x
+collapse from scalar attention, which Tier 01B item 0 removes; restating it at 2.0x (0.022x) would be
+met by that fix alone. So 0.08x stands, now a 7.2x move. The restatement rule applies to a modest dip,
+not to a collapse that an item in the same tier removes.
+
 **Why the Tier 04 milestone is retired.** GPU tg on Phi-3.5-mini reads 0.416x before Tier 04 starts,
 and nothing in Tier 04 touches that model's decode path (its Q4_K_M weights already take the packed
 MMQ route). A milestone met before its tier begins, by work its tier does not contain, measures
 nothing. It is kept as a retired row so the history stays visible. Phi-3.5-mini's decode is still the
 binding constraint on the 0.50x end-of-plan target; giving that a milestone belongs with whichever tier
 takes non-Llama decode residency, which no tier owns yet.
+
+*2026-09-30: kept retired (owner decision).* The pinned re-baseline (`20260930T135225Z`) reads Phi-3.5-mini
+GPU tg at 0.394x, below 0.40x. No Phi-3.5-mini decode code changed between the two readings, the 5% move
+sits inside the 15% noise floor, and pinning (turbo off) changes both engines' clocks. The reference cell
+keeps the 0.416x the row was retired on. Reactivating it would gate on noise, in a tier whose work cannot
+move the number.
 
 The GPU pp milestone is still the least certain number in this table. It is stated at that level
 deliberately because prefill is the dominant gap, not because it is known to be reachable. Missing it
@@ -560,6 +580,11 @@ whether the tree was dirty, the jar's hash, the JDK build, the JVM flags (the he
 `-Xms` equal to `-Xmx`), the GPU driver, and the reference tool's build commit. **A change of reference
 build is a measurement boundary** — this host already runs two (one per backend), and a ratio against
 one is not comparable with a ratio against the other.
+
+*Superseded 2026-09-29: the owner adopted GPU-free CI at Tier 01B's revisit
+(`.github/workflows/ci.yml`: script checks on every push; `mvn -B clean verify` on pull requests and
+`main`). Real-model and performance gates, and so tier gating, stay procedural. The paragraph below is
+kept as the record of the earlier decision.*
 
 **No CI exists in this repository today** (confirmed: `.github/` holds only a `modernize/`
 directory, no workflows) — tier-gating (execution rule 1: don't start Tier N+1 until Tier N's exit

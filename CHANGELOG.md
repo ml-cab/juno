@@ -1,5 +1,33 @@
 ## Status 
 
+**Session 100** — The GPU attention kernel reaches the Phi-3 and Qwen3 handlers, and every launch that cannot use it says so
+
+- **Phi-3 and Qwen3 run attention on the GPU.** The GPU-resident attention kernel behind
+  `--gpu-attention` (default `auto`, which requests it whenever CUDA is present) was wired only into
+  the LLaMA-family handler; the Phi-3 and Qwen3 handlers read the default and ran scalar CPU attention
+  anyway. Both now run the kernel at all three attention call sites (prefill window, single-token
+  decode, multi-stream decode) through a shared `GpuAttentionMirror`, with the same fallbacks as the
+  LLaMA-family path: the host KV cache is always written first, and running out of device memory moves
+  the request back to CPU attention without losing history. In a pinned same-build comparison,
+  prefill rose 6.55x on Phi-3.5-mini (13.7 to 89.7 t/s) and 6.10x on Qwen3-1.7B (28.8 to 175.6 t/s) at
+  a 512-token prompt, and 2.20x and 2.16x at 128; generation rose 1.33x and 1.10x. Phi-3.5-mini's
+  prefill no longer collapses with prompt length: it reads 98 t/s at 128 tokens and 90 at 512, where it
+  read 45 and 14. Logits stay
+  within 0.015 relative L2 of `off` at every call site, and the first generated token matched on every
+  test prompt; greedy output can part from `off` after 20 or more tokens, as it already could on the
+  LLaMA family (from token 8 there). `off` remains the bit-identical CPU-parity baseline.
+- **No launch drops the kernel silently.** Every handler reports whether it runs the kernel
+  (`ForwardPassHandler.gpuAttentionActive()`). The Phi-2 and Qwen3-MoE handlers compute every matmul
+  and attention on the CPU on any backend, so `--gpu-attention` and `--gpu-layers` do not reach them;
+  a GPU launch of either now prints a startup warning saying so (this includes moondream2, whose text
+  backbone is Phi-2). A backend other than CUDA, and an explicit `--gpu-attention on` with the CPU
+  backend, warn the same way. LoRA training and `--lora-play` keep attention on the CPU on every
+  architecture; the notice saying so was raised only for the LLaMA family and now covers Phi-3, Qwen2
+  and Qwen3 as well.
+- **Corrected documentation of the default.** The performance notes gave `--gpu-attention`'s default
+  as off; it has been `auto` since 2026-09-17, so every default-flag GPU run of a LLaMA-family model
+  since then ran the kernel.
+
 **Session 99** — GPU copies and weight dequantization can be read on their own, and the first benchmark recording no longer slows the request it measures
 
 - **Two new recording events break the matmul span apart.** `juno.DeviceStaging` totals every

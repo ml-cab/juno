@@ -296,8 +296,24 @@ GPU FFI (node module — Panama project, JEP 454):
         Handlers upload only resident global layers; matVec falls back to CPU quant when dev is null.
   MmqOptions — policy for --mmq / JUNO_MMQ (on|off|auto). Default off.
         Ships as VRAM-fit packed Q4 residency; not a decode-speed claim vs FP16-resident.
-  GpuAttentionOptions — policy for --gpu-attention / JUNO_GPU_ATTENTION (on|off|auto). Default off.
-        CUDA only; measured decode/prefill throughput lever, not a peer-latency claim.
+  GpuAttentionOptions — policy for --gpu-attention / JUNO_GPU_ATTENTION (on|off|auto). Default auto
+        (requests the kernel whenever CUDA is present). CUDA only; measured decode/prefill throughput
+        lever, not a peer-latency claim. No architecture awareness of its own.
+  GpuAttentionSupport — which handlers run the kernel and the startup notice where it cannot take
+        effect. Kernel: LlamaTransformerHandler (Llama, Mistral, TinyLlama, Qwen2), Phi3- and
+        Qwen3TransformerHandler. Phi2TransformerHandler and Qwen3MoeTransformerHandler compute every
+        matmul and attention on the CPU on any backend (they never use the MatVec backend they are
+        given), so --gpu-layers and --gpu-attention do not reach them; consoleNotice() says so for a GPU
+        launch, as it does for a non-CUDA backend and for an explicit on with the CPU backend.
+        ForwardPassHandlerLoader logs the same once per process for other entry points. Each handler
+        reports the kernel through ForwardPassHandler.gpuAttentionActive() (default false).
+  GpuAttentionMirror — the kernel plus per-request DeviceKvCache mirrors for the Phi-3 and Qwen3
+        handlers, at their three attention call sites (prefill window, single-token decode,
+        multi-stream decode). Same contract as LlamaTransformerHandler's inline path: host KV written
+        first and always; the kernel reads a mirror only through its written-prefix watermark; a
+        device OOM while allocating, growing or attending retires the mirrors by closing them in place
+        and the request continues on the CPU, logged once per kind. Mirrors serve only layers whose
+        Q/K/V weights are on the device; freed on evict() and releaseGpuResources().
   GqaMath — attention math (QK^T + softmax + weighted-V-sum) extracted from
         LlamaTransformerHandler.gqaInto/gqa; scalar CPU oracle used by both the fallback path
         and the GPU kernel's parity test.

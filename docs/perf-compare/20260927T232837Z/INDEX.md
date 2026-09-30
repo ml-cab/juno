@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20260927T232837Z (gpu)
 
+> **Superseded as reference (2026-09-30)** by the pinned re-baseline [`20260930T135225Z`](../20260930T135225Z/INDEX.md) (`n_prompt=128`) and [`20260930T141026Z`](../20260930T141026Z/INDEX.md) (512). Kept for history; its absolute t/s were taken at unpinned clocks and are not comparable with them.
+
 > **GPU reference from 2026-09-27, late** (supersedes [`20260927T091155Z`](../20260927T091155Z/INDEX.md) + [`20260927T093054Z`](../20260927T093054Z/INDEX.md) as reference). Taken on the final build of the per-request device-memory fix: `CudaMatVec` scratch owned by the instance, and the batched FP16 pack loop moved into its own method, which a same-hour A/B showed is what the old code was paying for in prefill (tinyllama 181 to 229 t/s, qwen2.5-3b 83 to 90, mistral-7b 61 to 65). **A measurement boundary for prefill**: pp rose 10% to 34% on the three models that take the batched K-quant path, 2% to 4% on Phi-3.5-mini; generation within the 0.95x gate (0.962x to 1.021x). The `qwen2.5-3b` tuned and both `Phi-3.5-mini` rows spread over 15% and were re-run in [`20260927T234659Z`](../20260927T234659Z/INDEX.md); read those three rows there.
 
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |

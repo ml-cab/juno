@@ -77,6 +77,13 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	private final int gpuLayersResolved;
 
+	/**
+	 * GPU-resident attention kernel and its per-request device KV mirrors
+	 * ({@code --gpu-attention}); {@code null} on the CPU backend, with the flag off,
+	 * or on a backend without the kernel. Cleared by {@link #releaseGpuResources()}.
+	 */
+	private GpuAttentionMirror gpuAttention;
+
 	private final Map<String, SessionKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
 	private final Map<String, SessionKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
 	private final SessionKvLayout kvLayout;
@@ -171,6 +178,8 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			resolved = uploadGpuWeights(cuda, L, H, cfg.qDim(), kvDim, I);
 		}
 		this.gpuLayersResolved = resolved;
+		this.gpuAttention = GpuAttentionMirror.open(backend, "Qwen3", L, kvDim, cfg.numHeads(), cfg.headDim(),
+				cfg.gqaRatio());
 
 		log.info("Qwen3 shard loaded — " + L + " layers");
 	}
@@ -327,6 +336,26 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		if (outputProjDev != null && !outputProjDev.isClosed())
 			outputProjDev.close();
 		outputProjDev = null;
+		GpuAttentionMirror g = gpuAttention;
+		gpuAttention = null;
+		if (g != null)
+			g.close();
+	}
+
+	@Override
+	public boolean gpuAttentionActive() {
+		return gpuAttention != null;
+	}
+
+	/** Whether layer {@code li}'s Q/K/V projections run on the device (a layer the KV mirror serves). */
+	private boolean layerOnDevice(int li) {
+		return (attnQQ4Dev != null && attnQQ4Dev[li] != null) || (attnQDev != null && attnQDev[li] != null);
+	}
+
+	/** The request's device KV mirrors, or {@code null} when the kernel path is not active. */
+	private DeviceKvCache[] mirrorsFor(String requestId) {
+		GpuAttentionMirror g = gpuAttention;
+		return g != null ? g.layersFor(requestId) : null;
 	}
 
 	@Override
@@ -467,9 +496,11 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 		BatchWorkspace ws = new BatchWorkspace(W, cfg.hiddenDim(), cfg.qDim(), cfg.intermediateSize(),
 				cfg.kvDim(), cfg.numHeads(), lastPos + 1, kvLayout.needsAttentionScratch());
+		DeviceKvCache[] mirrors = mirrorsFor(requestId);
 
 		for (int li = 0; li < L; li++)
-			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws);
+			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws,
+					GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)));
 
 		if (a != null) {
 			int seqLen = lastPos + 1;
@@ -489,6 +520,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 		SessionKvTensor[][] kCaches = new SessionKvTensor[N][];
 		SessionKvTensor[][] vCaches = new SessionKvTensor[N][];
+		DeviceKvCache[][] mirrors = new DeviceKvCache[N][];
 
 		NodeKVCacheAdapter a = kvAdapter;
 		for (int i = 0; i < N; i++) {
@@ -515,6 +547,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			}
 			kCaches[i] = kCache;
 			vCaches[i] = vCache;
+			mirrors[i] = mirrorsFor(requestId);
 		}
 
 		BatchWorkspace ws = new BatchWorkspace(N, cfg.hiddenDim(), cfg.qDim(), cfg.intermediateSize(),
@@ -523,11 +556,14 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		for (int li = 0; li < L; li++) {
 			SessionKvTensor[] kLayers = new SessionKvTensor[N];
 			SessionKvTensor[] vLayers = new SessionKvTensor[N];
+			DeviceKvCache[] devLayers = new DeviceKvCache[N];
+			boolean onDevice = layerOnDevice(li);
 			for (int i = 0; i < N; i++) {
 				kLayers[i] = kCaches[i][li];
 				vLayers[i] = vCaches[i][li];
+				devLayers[i] = GpuAttentionMirror.layer(mirrors[i], li, onDevice);
 			}
-			x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, ws);
+			x = transformerLayerMultiDecode(x, li, positions, kLayers, vLayers, ws, devLayers);
 		}
 
 		if (a != null) {
@@ -569,7 +605,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	}
 
 	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, BatchWorkspace ws) {
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror) {
 		int W = x.length;
 		int H = cfg.hiddenDim();
 		int qDim = cfg.qDim();
@@ -593,16 +629,22 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			Qwen3Rope.apply(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.rope());
 		}
 
+		// Host KV first and always; a device mirror only copies it.
+		GpuAttentionMirror g = gpuAttention;
 		for (int b = 0; b < W; b++) {
 			kCacheLayer.writeToken(startPos + b, ws.k[b]);
 			vCacheLayer.writeToken(startPos + b, ws.v[b]);
+			if (g != null)
+				mirror = g.append(mirror, startPos + b, ws.k[b], ws.v[b], W);
 		}
 
-		for (int b = 0; b < W; b++) {
-			int seqLen = startPos + b + 1;
-			float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
-			float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
-			gqaInto(cfg, ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+		if (g == null || !g.attendWindow(mirror, startPos, ws.q, ws.attnOut)) {
+			for (int b = 0; b < W; b++) {
+				int seqLen = startPos + b + 1;
+				float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
+				float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
+				gqaInto(cfg, ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+			}
 		}
 
 		sgemmLayerInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, qDim);
@@ -631,7 +673,8 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	}
 
 	private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
-			SessionKvTensor[] kCacheLayers, SessionKvTensor[] vCacheLayers, BatchWorkspace ws) {
+			SessionKvTensor[] kCacheLayers, SessionKvTensor[] vCacheLayers, BatchWorkspace ws,
+			DeviceKvCache[] mirrors) {
 		int N = x.length;
 		int H = cfg.hiddenDim();
 		int qDim = cfg.qDim();
@@ -656,17 +699,23 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			Qwen3Rope.apply(ws.k[b], pos, cfg.numKvHeads(), cfg.headDim(), cfg.rope());
 		}
 
+		// Host KV first and always; a device mirror only copies it.
+		GpuAttentionMirror g = gpuAttention;
 		for (int b = 0; b < N; b++) {
 			int pos = positions[b];
 			kCacheLayers[b].writeToken(pos, ws.k[b]);
 			vCacheLayers[b].writeToken(pos, ws.v[b]);
+			if (g != null)
+				mirrors[b] = g.append(mirrors[b], pos, ws.k[b], ws.v[b], N);
 		}
 
-		for (int b = 0; b < N; b++) {
-			int seqLen = positions[b] + 1;
-			float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
-			float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
-			gqaInto(cfg, ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+		if (g == null || !g.attendStreams(mirrors, positions, ws.q, ws.attnOut)) {
+			for (int b = 0; b < N; b++) {
+				int seqLen = positions[b] + 1;
+				float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
+				float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
+				gqaInto(cfg, ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+			}
 		}
 
 		sgemmLayerInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, qDim);
@@ -769,6 +818,9 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	public void evict(String requestId) {
 		SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
 		SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));
+		GpuAttentionMirror g = gpuAttention;
+		if (g != null)
+			g.evict(requestId);
 		NodeKVCacheAdapter a = kvAdapter;
 		if (a != null)
 			a.evict(requestId);
@@ -825,8 +877,10 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			vScratch = new float[(pos + 1) * kvDim];
 		}
 
+		DeviceKvCache[] mirrors = mirrorsFor(requestId);
 		for (int li = 0; li < L; li++)
-			x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch);
+			x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch,
+					GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)));
 
 		if (a != null) {
 			int seqLen = pos + 1;
@@ -838,9 +892,10 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	private float[] transformerLayer(float[] x, int li, int pos,
 			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kScratch, float[] vScratch) {
+			float[] kScratch, float[] vScratch, DeviceKvCache mirror) {
 		float[] xNorm = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
-		float[] attnProj = attentionLayer(xNorm, li, pos, kCacheLayer, vCacheLayer, kScratch, vScratch);
+		float[] attnProj = attentionLayer(new LayerWeights(li), cfg, xNorm, pos, kCacheLayer, vCacheLayer,
+				kScratch, vScratch, gpuAttention, mirror);
 		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
 
 		float[] xNorm2 = LlamaTransformerHandler.rmsNorm(x2, ffnNorm[li], cfg.rmsNormEps());
@@ -854,6 +909,17 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	static float[] attentionLayer(Qwen3AttentionWeights w, Qwen3Config cfg, float[] xNorm, int pos,
 			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
 			float[] kScratch, float[] vScratch) {
+		return attentionLayer(w, cfg, xNorm, pos, kCacheLayer, vCacheLayer, kScratch, vScratch, null, null);
+	}
+
+	/**
+	 * As above, running attention on the GPU kernel when {@code gpu} is non-null and
+	 * {@code mirror} holds this position's whole history; the host KV is written
+	 * first either way.
+	 */
+	static float[] attentionLayer(Qwen3AttentionWeights w, Qwen3Config cfg, float[] xNorm, int pos,
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
+			float[] kScratch, float[] vScratch, GpuAttentionMirror gpu, DeviceKvCache mirror) {
 		int H = cfg.hiddenDim();
 		int qDim = cfg.qDim();
 		int kvDim = cfg.kvDim();
@@ -870,18 +936,22 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 		kCacheLayer.writeToken(pos, k);
 		vCacheLayer.writeToken(pos, v);
+		if (gpu != null)
+			mirror = gpu.append(mirror, pos, k, v, 1);
 
 		int seqLen = pos + 1;
-		float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
-		float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
-		float[] attnOut = gqa(cfg, q, kView, vView, seqLen);
+		float[] attnOut = null;
+		if (gpu != null) {
+			float[] out = new float[qDim];
+			if (gpu.attendOne(mirror, pos, q, out))
+				attnOut = out;
+		}
+		if (attnOut == null) {
+			float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
+			float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
+			attnOut = gqa(cfg, q, kView, vView, seqLen);
+		}
 		return w.matVecWo(attnOut, H, qDim);
-	}
-
-	private float[] attentionLayer(float[] xNorm, int li, int pos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kScratch, float[] vScratch) {
-		return attentionLayer(new LayerWeights(li), cfg, xNorm, pos, kCacheLayer, vCacheLayer, kScratch, vScratch);
 	}
 
 	private float[] denseFfn(float[] x, int li) {

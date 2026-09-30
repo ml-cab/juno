@@ -1,0 +1,150 @@
+{
+  "model": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 1444.275400,
+    "token_gen_tps": 71.336840
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 96.30231919826977,
+    "token_gen_tps": 30.30229762446473,
+    "api_token_gen_tps": 26.9360,
+    "latency_ms": 2376,
+    "n_prompt": 128,
+    "prompt_tokens": 128,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 0.0,
+    "gc_pause_max_ms": 0.0,
+    "gc_pause_total_ms": 0.0,
+    "allocated_bytes_total": 9162055736,
+    "allocated_bytes_per_token": 145016225.625,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 128,
+        "n_prompt": 128,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 96.30231919826977,
+        "latency_ms": 1379,
+        "status": "success",
+        "gc_pause_max_ms": 0.0,
+        "gpu_attention_resolved": "unknown"
+      },
+      "generate": {
+        "prompt_tokens": 9,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 30.30229762446473,
+        "latency_ms": 2376,
+        "status": "success",
+        "gc_pause_max_ms": 0.0,
+        "gpu_attention_resolved": "unknown"
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "5g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 96.30231919826977,
+        "min": 95.3458770836022,
+        "max": 100.34108631906544,
+        "values": [
+          95.3458770836022,
+          100.34108631906544,
+          96.30231919826977
+        ]
+      },
+      "token_gen_tps": {
+        "median": 30.30229762446473,
+        "min": 30.068773246488664,
+        "max": 30.832188422972546,
+        "values": [
+          30.30229762446473,
+          30.832188422972546,
+          30.068773246488664
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 26.9360,
+        "min": 26.5781,
+        "max": 27.3387,
+        "values": [
+          26.9360,
+          27.3387,
+          26.5781
+        ]
+      },
+      "latency_ms": {
+        "median": 2376,
+        "min": 2341,
+        "max": 2408,
+        "values": [
+          2376,
+          2341,
+          2408
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 143625329.25,
+        "min": 143157120.875,
+        "max": 145016225.625,
+        "values": [
+          143157120.875,
+          143625329.25,
+          145016225.625
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.06667863982054238,
+  "noise": {
+    "ok": true,
+    "basis": "repetition dispersion",
+    "condition": null,
+    "rep_spread": 0.025193309957708764,
+    "rep_spread_tolerance": 0.15,
+    "gc_pause_max_ms": 0.0,
+    "gc_pause_max_ms_in_token_span": 0.0,
+    "reason": null
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.4247776832344233,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20260930T211637Z/qwen2.5-3b-instruct-q4_k_m-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20260930T211637Z/qwen2.5-3b-instruct-q4_k_m-generate-rep1-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20260930T211637Z/qwen2.5-3b-instruct-q4_k_m-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20260930T211637Z/qwen2.5-3b-instruct-q4_k_m-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20260930T211637Z/qwen2.5-3b-instruct-q4_k_m-juno-jfr.json"
+  }
+}

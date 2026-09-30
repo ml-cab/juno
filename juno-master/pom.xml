@@ -129,11 +129,12 @@
 					<reuseForks>false</reuseForks>
 					<!--
 					  Default run: in-process and three-node cluster ITs only.
-					  GpuForwardPassIT: requires CUDA hardware, enabled via -Pgpu.
+					  GpuForwardPassIT, GpuAttentionDivergenceIT: require CUDA hardware, enabled via -Pgpu.
 					  ModelLiveRunnerIT: requires real model files, enabled via -Pintegration.
 					-->
 					<excludes>
 						<exclude>**/GpuForwardPassIT.java</exclude>
+						<exclude>**/GpuAttentionDivergenceIT.java</exclude>
 						<exclude>**/ModelLiveRunnerIT.java</exclude>
 					</excludes>
 					<systemPropertyVariables>
@@ -235,6 +236,7 @@
 							<excludes combine.self="override" />
 							<includes>
 								<include>**/GpuForwardPassIT.java</include>
+								<include>**/GpuAttentionDivergenceIT.java</include>
 							</includes>
 							<systemPropertyVariables>
 								<it.model.path>${it.model.path}</it.model.path>
