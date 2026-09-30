@@ -82,9 +82,7 @@ public final class DeviceHalfMatrix implements AutoCloseable {
             for (int i = 0; i < n; i++)
                 stagingHost.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(host[i]));
 
-            GpuBindings.check(
-                GpuBindings.callInt(gpu.gpuMemcpy(), dA, stagingHost, halfBytes, GpuBindings.H2D),
-                "memcpy(A FP16 H2D)");
+            DeviceStaging.copy(gpu, dA, stagingHost, halfBytes, GpuBindings.H2D, 0, "memcpy(A FP16 H2D)");
         }
 
         return new DeviceHalfMatrix(ctx, dA, rows, cols);

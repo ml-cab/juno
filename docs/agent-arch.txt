@@ -157,7 +157,7 @@ Module dependency (excerpt):
         and the same watermark keeps it on CPU attention rather than reading the
         restored range out of uninitialized memory.
 
-  metrics — MetricsMain, JfrMetricsCli, JfrMetricsExtractor, JdkEventBucket,
+  metrics — MetricsMain, JfrMetricsCli, JfrMetricsExtractor, JdkEventBucket, DeviceSpanBucket,
         GcPauseSpans, JfrPercentiles, JfrModelMapper, MetricsWriter,
         MetricsSnapshot, ModelsConfig(Loader).
         Reads .jfr files and writes target/metrics/metrics.json.
@@ -175,6 +175,13 @@ Module dependency (excerpt):
         sum of their window sizes, and juno.PrefillBatch.min_start_position, -1
         when there were none), which a harness reads to confirm a measured
         request prefilled its whole prompt rather than resuming from reused KV.
+        DeviceSpanBucket sums the juno.DeviceStaging totals per direction (H2D,
+        D2H, D2D), per phase (prefill, decode, other) and per site into
+        count/bytes/timed_count/total_ms, and juno.WeightDequant overall, per
+        timing source (device, host) and per format; every direction, phase and
+        dequant key is written on every run. Decode copies are untimed, so their
+        total_ms is 0 with a non-zero count; sampled sites add estimated_total_ms,
+        each site's measured mean scaled to all of its copies.
         Recorded durations are only as good as the recorder's clock: on a host
         whose kernel rejected the CPU timestamp counter, a span crossing two
         cores whose counters disagree is misread, so the comparison harnesses
@@ -264,7 +271,8 @@ GPU FFI (node module — Panama project, JEP 454):
   GpuBindings — vendor-neutral interface implemented by CudaBindings and RocmBindings.
         All accessor methods use vendor-neutral names: gpuGetDeviceCount, gpuGetDeviceProperties,
         gpuSetDevice, gpuMalloc, gpuFree, gpuMallocHost, gpuFreeHost, gpuMemcpy, gpuMemcpyAsync,
-        gpuStreamCreateWithFlags, gpuStreamSynchronize, gpuStreamDestroy, blasCreate, blasDestroy,
+        gpuStreamCreateWithFlags, gpuStreamSynchronize, gpuStreamDestroy, gpuEventCreate,
+        gpuEventRecord, gpuEventElapsedTime, gpuEventDestroy, blasCreate, blasDestroy,
         blasSetStream, blasSetPointerMode, blasSgemv, blasHSSgemvStridedBatched.
         Each implementation documents the underlying vendor symbol it resolves.
         createMatVec(GpuContext) factory method returns the correct MatVec per backend,
@@ -448,6 +456,30 @@ GPU FFI (node module — Panama project, JEP 454):
         same three compute paths as CudaMatVec; one HIP stream and one scratch set per
         instance under the context lock, as CudaMatVec (releaseScratch, scratchDeviceBytes);
         sgemvSameX mirror.
+  Copy and dequantization totals — juno.DeviceStaging (DeviceStagingEvent: site, direction,
+        phase, copies, bytes, timedCopies, transferNanos) and juno.WeightDequant
+        (WeightDequantEvent: format, timing, count, timedCount, dequantNanos) break out the terms
+        juno.MatVec otherwise hides inside its own span. Both are periodic (endChunk):
+        DeviceSpanTally counts every copy into lock-free per-site, per-phase counters and commits
+        one event per non-empty cell when a chunk ends, so a recording holds the totals of what ran
+        while it ran (starting a recording ends the previous chunk). A per-copy event cost 25% of a
+        TinyLlama prefill window under a recording, which issues tens of thousands of copies (every
+        KV-mirror row of every layer). Phase is the width of the forward call that issued the copy:
+        prefill (> 1 row), decode (1 row), other (0: weights, tables, cache growth). Prefill and
+        other copies are timed; decode copies are counted with exact bytes but not timed.
+        DeviceSpanTimer times asynchronous work on the device: a stream event on each side, elapsed
+        time read after the owner's existing stream synchronize (CudaMatVec/RocmMatVec per call,
+        under the context lock; ResidentChain at each sync). DeviceStaging.copy is the synchronous
+        gpuMemcpy every other site uses; a timed device-to-host copy drains the default stream first,
+        so the figure is the copy rather than a wait for the kernel whose result it reads back.
+        LlamaTransformerHandler.dequantize (load-time, host) and Q4KMmqKernel.launchDequant (per
+        batched K-quant GEMM, device) feed the dequant totals. Small synchronous copies (< 64 KB)
+        are timed one in sixteen and counted every time. Without a recording that enables the
+        events every path is the plain call it replaced: nothing is counted, no stream event, no
+        extra synchronize. scripts/performance-tests/juno-perf.jfc leaves both events off, because
+        counting and timing every copy costs 4% to 7% of a TinyLlama prefill window;
+        juno-perf-spans.jfc layered over it (compare-llama-cpp.sh --device-spans) turns them on
+        for a breakdown run.
   DeviceFloatMatrix / DeviceHalfMatrix / DeviceQ4KMatrix — VRAM buffer wrappers using GpuBindings
         deviceMalloc / deviceFree; explicit lifecycle via releaseGpuResources().
         Vendor-neutral half/float; Q4_K path is CUDA-only.

@@ -79,14 +79,14 @@ final class GpuBlasOps implements AutoCloseable {
 		synchronized (ctx.cublasSerializationLock()) {
 			MemorySegment dX = scratch.ensureInput(bytesX);
 			MemorySegment dY = scratch.ensureOutput(bytesY);
-			scratch.copyH2D(dX, packedX);
+			scratch.copyH2D(dX, packedX, batch);
 			callSgemm(
 					gpu.opTranspose(), gpu.opNoTranspose(),
 					rows, batch, cols,
 					W.devicePointer(), cols,
 					dX, cols,
 					dY, rows);
-			float[] packedY = scratch.copyD2H(dY, rows * batch);
+			float[] packedY = scratch.copyD2H(dY, rows * batch, batch);
 			float[][] Y = new float[batch][];
 			DeviceActivationBatch.unpackColumns(packedY, Y, batch, rows);
 			return Y;
@@ -116,14 +116,14 @@ final class GpuBlasOps implements AutoCloseable {
 		synchronized (ctx.cublasSerializationLock()) {
 			MemorySegment dG = scratch.ensureInput(bytesG);
 			MemorySegment dZ = scratch.ensureOutput(bytesZ);
-			scratch.copyH2D(dG, packedG);
+			scratch.copyH2D(dG, packedG, batch);
 			callSgemm(
 					gpu.opNoTranspose(), gpu.opNoTranspose(),
 					cols, batch, rows,
 					W.devicePointer(), cols,
 					dG, rows,
 					dZ, cols);
-			float[] packedZ = scratch.copyD2H(dZ, cols * batch);
+			float[] packedZ = scratch.copyD2H(dZ, cols * batch, batch);
 			float[][] dX = new float[batch][];
 			DeviceActivationBatch.unpackColumns(packedZ, dX, batch, cols);
 			return dX;

@@ -69,8 +69,7 @@ final class CudaRope implements AutoCloseable {
 		try (Arena staging = Arena.ofConfined()) {
 			MemorySegment host = staging.allocate(tableBytes, Double.BYTES);
 			MemorySegment.copy(table, 0, host, JAVA_DOUBLE, 0, table.length);
-			GpuBindings.check(GpuBindings.callInt(gpu.gpuMemcpy(), device, host, tableBytes, GpuBindings.H2D),
-					"memcpy(rope inverse frequencies H2D)");
+			DeviceStaging.copy(gpu, device, host, tableBytes, GpuBindings.H2D, 0, "memcpy(rope inverse frequencies H2D)");
 		} catch (RuntimeException e) {
 			gpu.deviceFree(device);
 			throw e;

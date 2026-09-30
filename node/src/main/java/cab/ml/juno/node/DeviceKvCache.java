@@ -181,12 +181,8 @@ final class DeviceKvCache implements AutoCloseable {
 		long newBytes = bytesFor(newCap);
 		MemorySegment newK = gpu.deviceMalloc(ctx.deviceIndex(), newBytes);
 		MemorySegment newV = gpu.deviceMalloc(ctx.deviceIndex(), newBytes);
-		GpuBindings.check(
-				GpuBindings.callInt(gpu.gpuMemcpy(), newK, dK, oldBytes, GpuBindings.D2D),
-				"memcpy(K D2D grow)");
-		GpuBindings.check(
-				GpuBindings.callInt(gpu.gpuMemcpy(), newV, dV, oldBytes, GpuBindings.D2D),
-				"memcpy(V D2D grow)");
+		DeviceStaging.copy(gpu, newK, dK, oldBytes, GpuBindings.D2D, 0, "memcpy(K D2D grow)");
+		DeviceStaging.copy(gpu, newV, dV, oldBytes, GpuBindings.D2D, 0, "memcpy(V D2D grow)");
 		gpu.deviceFree(dK);
 		gpu.deviceFree(dV);
 		ALLOCATED_BYTES.addAndGet(2 * (newBytes - oldBytes));
@@ -197,6 +193,15 @@ final class DeviceKvCache implements AutoCloseable {
 
 	/** Appends one K/V row at {@code pos}, growing first if needed. Packs float32 -> FP16 host-side. */
 	void appendToken(int pos, float[] k, float[] v) {
+		appendToken(pos, k, v, 1);
+	}
+
+	/**
+	 * As {@link #appendToken(int, float[], float[])}, from a forward call over
+	 * {@code windowSize} rows; recorded on the row copies so a prefill window's KV
+	 * writes are counted with the window rather than as single-token traffic.
+	 */
+	void appendToken(int pos, float[] k, float[] v, int windowSize) {
 		ensureCapacity(pos);
 		if (k.length < kvDim || v.length < kvDim)
 			throw new IllegalArgumentException("k/v must hold at least kvDim=" + kvDim + " floats");
@@ -209,11 +214,9 @@ final class DeviceKvCache implements AutoCloseable {
 				stagingK.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(k[i]));
 				stagingV.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(v[i]));
 			}
-			GpuBindings.check(
-					GpuBindings.callInt(gpu.gpuMemcpy(), dK.asSlice(offset, rowBytes), stagingK, rowBytes, GpuBindings.H2D),
+			DeviceStaging.copy(gpu, dK.asSlice(offset, rowBytes), stagingK, rowBytes, GpuBindings.H2D, windowSize,
 					"memcpy(K row H2D)");
-			GpuBindings.check(
-					GpuBindings.callInt(gpu.gpuMemcpy(), dV.asSlice(offset, rowBytes), stagingV, rowBytes, GpuBindings.H2D),
+			DeviceStaging.copy(gpu, dV.asSlice(offset, rowBytes), stagingV, rowBytes, GpuBindings.H2D, windowSize,
 					"memcpy(V row H2D)");
 		}
 		// Only extend the watermark when this row abuts the written prefix. A write
@@ -248,9 +251,7 @@ final class DeviceKvCache implements AutoCloseable {
 		float[] out = new float[n];
 		try (Arena staging = Arena.ofConfined()) {
 			MemorySegment stagingHost = staging.allocate(bytes);
-			GpuBindings.check(
-					GpuBindings.callInt(gpu.gpuMemcpy(), stagingHost, d, bytes, GpuBindings.D2H),
-					"memcpy(D2H download)");
+			DeviceStaging.copy(gpu, stagingHost, d, bytes, GpuBindings.D2H, 0, "memcpy(D2H download)");
 			for (int i = 0; i < n; i++)
 				out[i] = Float.float16ToFloat(stagingHost.getAtIndex(JAVA_SHORT, i));
 		}

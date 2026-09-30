@@ -167,6 +167,7 @@ final class JfrMetricsExtractor {
         long specAcceptedTokens = 0;
 
         JdkEventBucket jdkEvents = new JdkEventBucket();
+        DeviceSpanBucket deviceSpans = new DeviceSpanBucket();
 
         for (Path jfrFile : jfrFiles) {
             if (!Files.isRegularFile(jfrFile) || Files.size(jfrFile) == 0)
@@ -346,7 +347,10 @@ final class JfrMetricsExtractor {
                         }
                         // GC pauses, allocation, hot methods and lock/park time: the
                         // context a throughput number has to be read against.
-                        default -> jdkEvents.accept(ev, type, nano);
+                        default -> {
+                            if (!deviceSpans.accept(ev, type))
+                                jdkEvents.accept(ev, type, nano);
+                        }
                     }
                 }
             }
@@ -381,6 +385,8 @@ final class JfrMetricsExtractor {
         m.put("juno.ForwardPass.decode.total_ms", JfrPercentiles.sumNanosToMs(forwardDecode));
         m.put("juno.PrefillBatch.tokens", (double) prefillBatchTokens);
         m.put("juno.PrefillBatch.min_start_position", (double) prefillBatchMinStart);
+
+        deviceSpans.putInto(m);
 
         putDurationBucket(m, "juno.Attention", attention);
         putDurationBucket(m, "juno.RmsNorm", rmsNorm);

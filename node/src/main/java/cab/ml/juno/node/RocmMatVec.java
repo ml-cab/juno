@@ -66,6 +66,8 @@ public final class RocmMatVec implements GpuMatVec {
     private final Fp32Scratch fp32Scratch = new Fp32Scratch();
     private final Fp16Scratch fp16Scratch = new Fp16Scratch();
     private MemorySegment     stream;
+    /** Device-side timing of this instance's copies; see {@link DeviceSpanTimer}. */
+    private final DeviceSpanTimer spans;
 
     private static final class Fp32Scratch {
         MemorySegment dX;
@@ -96,6 +98,7 @@ public final class RocmMatVec implements GpuMatVec {
         }
         this.ctx  = ctx;
         this.rocm = (RocmBindings) b;
+        this.spans = new DeviceSpanTimer(rocm);
     }
 
     @Override
@@ -156,21 +159,15 @@ public final class RocmMatVec implements GpuMatVec {
                 MemorySegment nativeX = hostArena.allocate(bytesX);
                 nativeA.copyFrom(MemorySegment.ofArray(A)); // heap→native (Java copy, no FFI)
                 nativeX.copyFrom(MemorySegment.ofArray(x));
-                GpuBindings.check(
-                    GpuBindings.callInt(rocm.gpuMemcpy(), dA, nativeA, bytesA, GpuBindings.H2D),
-                    "hipMemcpy(A H2D)");
-                GpuBindings.check(
-                    GpuBindings.callInt(rocm.gpuMemcpy(), dX, nativeX, bytesX, GpuBindings.H2D),
-                    "hipMemcpy(x H2D)");
+                DeviceStaging.copy(rocm, dA, nativeA, bytesA, GpuBindings.H2D, 1, "hipMemcpy(A H2D)");
+                DeviceStaging.copy(rocm, dX, nativeX, bytesX, GpuBindings.H2D, 1, "hipMemcpy(x H2D)");
             }
 
             // D2H — similarly, copy into native staging first, then into Java array.
             try (Arena resultArena = Arena.ofConfined()) {
                 MemorySegment stagingY = resultArena.allocate(bytesY);
                 callSgemvFp32(rocm.opTranspose(), dA, cols, dX, dY, rows, cols);
-                GpuBindings.check(
-                    GpuBindings.callInt(rocm.gpuMemcpy(), stagingY, dY, bytesY, GpuBindings.D2H),
-                    "hipMemcpy(y D2H)");
+                DeviceStaging.copy(rocm, stagingY, dY, bytesY, GpuBindings.D2H, 1, "hipMemcpy(y D2H)");
                 float[] y = new float[rows];
                 MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
                 return y;
@@ -214,6 +211,7 @@ public final class RocmMatVec implements GpuMatVec {
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
                 MemorySegment stream = ensureStream();
+                spans.reset();
                 bindStream(stream);
                 try {
                     ensureFp32Scratch(scratch, bytesX, bytesY);
@@ -221,21 +219,26 @@ public final class RocmMatVec implements GpuMatVec {
                     // H2D of x — stage heap→native first (Java 25 forbids heap segments in downcalls).
                     MemorySegment stagingX = callArena.allocate(bytesX);
                     stagingX.copyFrom(MemorySegment.ofArray(x));
+                    int h2dMark = spans.begin(stream, 1);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             scratch.dX, stagingX, bytesX, GpuBindings.H2D, stream),
                         "hipMemcpyAsync(x H2D)");
+                    spans.staging(GpuBindings.H2D, bytesX, 1, "hipMemcpyAsync(x H2D)", h2dMark, stream);
 
                     callSgemvFp32(rocm.opTranspose(), A.devicePointer(), cols, scratch.dX, scratch.dY, rows, cols);
 
                     MemorySegment stagingY = callArena.allocate(bytesY);
+                    int d2hMark = spans.begin(stream, 1);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             stagingY, scratch.dY, bytesY, GpuBindings.D2H, stream),
                         "hipMemcpyAsync(y D2H)");
+                    spans.staging(GpuBindings.D2H, bytesY, 1, "hipMemcpyAsync(y D2H)", d2hMark, stream);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
                         "hipStreamSynchronize");
+                    spans.commit();
 
                     float[] y = new float[rows];
                     MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
@@ -278,6 +281,7 @@ public final class RocmMatVec implements GpuMatVec {
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
                 MemorySegment stream = ensureStream();
+                spans.reset();
                 bindStream(stream);
                 try {
                     ensureFp16Scratch(scratch, bytesXh, bytesY);
@@ -288,21 +292,26 @@ public final class RocmMatVec implements GpuMatVec {
                     for (int j = 0; j < cols; j++)
                         stagingXh.setAtIndex(JAVA_SHORT, j, Float.floatToFloat16(x[j]));
 
+                    int h2dMark = spans.begin(stream, 1);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             scratch.dXh, stagingXh, bytesXh, GpuBindings.H2D, stream),
                         "hipMemcpyAsync(xh H2D)");
+                    spans.staging(GpuBindings.H2D, bytesXh, 1, "hipMemcpyAsync(xh H2D)", h2dMark, stream);
 
                     callSgemvFp16(rocm.opTranspose(), A.devicePointer(), cols, scratch.dXh, scratch.dY, rows, cols);
 
                     MemorySegment stagingY = callArena.allocate(bytesY);
+                    int d2hMark = spans.begin(stream, 1);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             stagingY, scratch.dY, bytesY, GpuBindings.D2H, stream),
                         "hipMemcpyAsync(y D2H)");
+                    spans.staging(GpuBindings.D2H, bytesY, 1, "hipMemcpyAsync(y D2H)", d2hMark, stream);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
                         "hipStreamSynchronize");
+                    spans.commit();
 
                     float[] y = new float[rows];
                     MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
@@ -350,16 +359,19 @@ public final class RocmMatVec implements GpuMatVec {
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
                 MemorySegment stream = ensureStream();
+                spans.reset();
                 bindStream(stream);
                 try {
                     ensureFp16Scratch(scratch, bytesXh, bytesYMax);
                     MemorySegment stagingXh = callArena.allocate(bytesXh);
                     for (int j = 0; j < cols; j++)
                         stagingXh.setAtIndex(JAVA_SHORT, j, Float.floatToFloat16(x[j]));
+                    int h2dMark = spans.begin(stream, 1);
                     GpuBindings.check(
                             GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                                     scratch.dXh, stagingXh, bytesXh, GpuBindings.H2D, stream),
                             "hipMemcpyAsync(xh H2D sameX)");
+                    spans.staging(GpuBindings.H2D, bytesXh, 1, "hipMemcpyAsync(xh H2D sameX)", h2dMark, stream);
 
                     MemorySegment[] stagingY = new MemorySegment[n];
                     for (int i = 0; i < n; i++) {
@@ -369,14 +381,17 @@ public final class RocmMatVec implements GpuMatVec {
                                 scratch.dXh, scratch.dY, rows, cols);
                         long bytesY = (long) rows * Float.BYTES;
                         stagingY[i] = callArena.allocate(bytesY);
+                        int d2hMark = spans.begin(stream, 1);
                         GpuBindings.check(
                                 GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                                         stagingY[i], scratch.dY, bytesY, GpuBindings.D2H, stream),
                                 "hipMemcpyAsync(y D2H sameX)");
+                        spans.staging(GpuBindings.D2H, bytesY, 1, "hipMemcpyAsync(y D2H sameX)", d2hMark, stream);
                     }
                     GpuBindings.check(
                             GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
                             "hipStreamSynchronize");
+                    spans.commit();
                     for (int i = 0; i < n; i++) {
                         int rows = weights[i].rows();
                         Y[i] = new float[rows];
@@ -423,15 +438,18 @@ public final class RocmMatVec implements GpuMatVec {
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
                 MemorySegment stream = ensureStream();
+                spans.reset();
                 bindStream(stream);
                 try {
                     ensureFp32Scratch(scratch, bytesX, bytesYMax);
                     MemorySegment stagingX = callArena.allocate(bytesX);
                     stagingX.copyFrom(MemorySegment.ofArray(x));
+                    int h2dMark = spans.begin(stream, 1);
                     GpuBindings.check(
                             GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                                     scratch.dX, stagingX, bytesX, GpuBindings.H2D, stream),
                             "hipMemcpyAsync(x H2D sameX)");
+                    spans.staging(GpuBindings.H2D, bytesX, 1, "hipMemcpyAsync(x H2D sameX)", h2dMark, stream);
 
                     MemorySegment[] stagingY = new MemorySegment[n];
                     for (int i = 0; i < n; i++) {
@@ -441,14 +459,17 @@ public final class RocmMatVec implements GpuMatVec {
                                 scratch.dX, scratch.dY, rows, cols);
                         long bytesY = (long) rows * Float.BYTES;
                         stagingY[i] = callArena.allocate(bytesY);
+                        int d2hMark = spans.begin(stream, 1);
                         GpuBindings.check(
                                 GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                                         stagingY[i], scratch.dY, bytesY, GpuBindings.D2H, stream),
                                 "hipMemcpyAsync(y D2H sameX)");
+                        spans.staging(GpuBindings.D2H, bytesY, 1, "hipMemcpyAsync(y D2H sameX)", d2hMark, stream);
                     }
                     GpuBindings.check(
                             GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
                             "hipStreamSynchronize");
+                    spans.commit();
                     for (int i = 0; i < n; i++) {
                         int rows = weights[i].rows();
                         Y[i] = new float[rows];
@@ -487,28 +508,34 @@ public final class RocmMatVec implements GpuMatVec {
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
                 MemorySegment stream = ensureStream();
+                spans.reset();
                 bindStream(stream);
                 try {
                     ensureFp32Scratch(scratch, bytesG, bytesZ);
 
                     MemorySegment stagingG = callArena.allocate(bytesG);
                     stagingG.copyFrom(MemorySegment.ofArray(g));
+                    int h2dMark = spans.begin(stream, 1);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             scratch.dX, stagingG, bytesG, GpuBindings.H2D, stream),
                         "hipMemcpyAsync(g H2D)");
+                    spans.staging(GpuBindings.H2D, bytesG, 1, "hipMemcpyAsync(g H2D)", h2dMark, stream);
 
                     callSgemvFp32(rocm.opNoTranspose(), W.devicePointer(), cols,
                             scratch.dX, scratch.dY, rows, cols);
 
                     MemorySegment stagingZ = callArena.allocate(bytesZ);
+                    int d2hMark = spans.begin(stream, 1);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             stagingZ, scratch.dY, bytesZ, GpuBindings.D2H, stream),
                         "hipMemcpyAsync(z D2H)");
+                    spans.staging(GpuBindings.D2H, bytesZ, 1, "hipMemcpyAsync(z D2H)", d2hMark, stream);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
                         "hipStreamSynchronize");
+                    spans.commit();
 
                     float[] z = new float[cols];
                     MemorySegment.copy(stagingZ, JAVA_FLOAT, 0, z, 0, cols);
@@ -548,6 +575,7 @@ public final class RocmMatVec implements GpuMatVec {
         try (Arena callArena = Arena.ofConfined()) {
             synchronized (ctx.cublasSerializationLock()) {
                 MemorySegment stream = ensureStream();
+                spans.reset();
                 bindStream(stream);
                 try {
                     ensureFp16Scratch(scratch, bytesGh, bytesZ);
@@ -556,22 +584,27 @@ public final class RocmMatVec implements GpuMatVec {
                     for (int r = 0; r < rows; r++)
                         stagingGh.setAtIndex(JAVA_SHORT, r, Float.floatToFloat16(g[r]));
 
+                    int h2dMark = spans.begin(stream, 1);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             scratch.dXh, stagingGh, bytesGh, GpuBindings.H2D, stream),
                         "hipMemcpyAsync(gh H2D)");
+                    spans.staging(GpuBindings.H2D, bytesGh, 1, "hipMemcpyAsync(gh H2D)", h2dMark, stream);
 
                     callSgemvFp16(rocm.opNoTranspose(), W.devicePointer(), cols,
                             scratch.dXh, scratch.dY, rows, cols);
 
                     MemorySegment stagingZ = callArena.allocate(bytesZ);
+                    int d2hMark = spans.begin(stream, 1);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuMemcpyAsync(),
                             stagingZ, scratch.dY, bytesZ, GpuBindings.D2H, stream),
                         "hipMemcpyAsync(z D2H)");
+                    spans.staging(GpuBindings.D2H, bytesZ, 1, "hipMemcpyAsync(z D2H)", d2hMark, stream);
                     GpuBindings.check(
                         GpuBindings.callInt(rocm.gpuStreamSynchronize(), stream),
                         "hipStreamSynchronize");
+                    spans.commit();
 
                     float[] z = new float[cols];
                     MemorySegment.copy(stagingZ, JAVA_FLOAT, 0, z, 0, cols);
@@ -723,7 +756,7 @@ public final class RocmMatVec implements GpuMatVec {
     // ── Scratch lifetime ──────────────────────────────────────────────────────
 
     /**
-     * Frees this instance's device scratch and stream. Safe while other callers
+     * Frees this instance's device scratch, timing events and stream. Safe while other callers
      * are active: it takes the lock they hold, and the next call grows the
      * scratch again.
      */
@@ -737,6 +770,7 @@ public final class RocmMatVec implements GpuMatVec {
             rocm.deviceFree(fp16Scratch.dY);
             fp16Scratch.dXh = fp16Scratch.dY = null;
             fp16Scratch.dXhBytes = fp16Scratch.dYBytes = 0L;
+            spans.releaseEvents();
             if (stream != null) {
                 GpuBindings.callInt(rocm.gpuStreamDestroy(), stream);
                 stream = null;

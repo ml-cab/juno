@@ -95,9 +95,7 @@ public final class DeviceQ4KMatrix implements AutoCloseable {
 		try (Arena staging = Arena.ofConfined()) {
 			MemorySegment host = staging.allocate(deviceLength);
 			MemorySegment.copy(MemorySegment.ofArray(deviceBytes), 0, host, 0, deviceLength);
-			GpuBindings.check(
-					GpuBindings.callInt(gpu.gpuMemcpy(), dA, host, deviceLength, GpuBindings.H2D),
-					"memcpy(" + layout.name() + " H2D)");
+			DeviceStaging.copy(gpu, dA, host, deviceLength, GpuBindings.H2D, 0, "memcpy(" + layout.name() + " H2D)");
 		}
 		return new DeviceQ4KMatrix(ctx, dA, rows, cols, typeId, deviceLength);
 	}

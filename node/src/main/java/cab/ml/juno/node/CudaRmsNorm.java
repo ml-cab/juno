@@ -169,22 +169,16 @@ final class CudaRmsNorm {
 		MemorySegment hostX = s.hX;
 		for (int b = 0; b < batch; b++)
 			MemorySegment.copy(x[b], 0, hostX, JAVA_FLOAT, (long) b * dim * Float.BYTES, dim);
-		GpuBindings.check(
-				GpuBindings.callInt(gpu.gpuMemcpy(), s.dX, hostX, xBytes, GpuBindings.H2D),
-				"memcpy(rmsNorm xBatch H2D)");
+		DeviceStaging.copy(gpu, s.dX, hostX, xBytes, GpuBindings.H2D, batch, "memcpy(rmsNorm xBatch H2D)");
 
 		MemorySegment hostWeight = s.hWeight;
 		MemorySegment.copy(weight, 0, hostWeight, JAVA_FLOAT, 0, dim);
-		GpuBindings.check(
-				GpuBindings.callInt(gpu.gpuMemcpy(), s.dWeight, hostWeight, weightBytes, GpuBindings.H2D),
-				"memcpy(rmsNorm weight H2D)");
+		DeviceStaging.copy(gpu, s.dWeight, hostWeight, weightBytes, GpuBindings.H2D, batch, "memcpy(rmsNorm weight H2D)");
 
 		kernel.launch(s.dX, s.dWeight, s.dOut, batch, dim, eps, null);
 
 		MemorySegment hostOut = s.hOut;
-		GpuBindings.check(
-				GpuBindings.callInt(gpu.gpuMemcpy(), hostOut, s.dOut, outBytes, GpuBindings.D2H),
-				"memcpy(rmsNorm outBatch D2H)");
+		DeviceStaging.copy(gpu, hostOut, s.dOut, outBytes, GpuBindings.D2H, batch, "memcpy(rmsNorm outBatch D2H)");
 		for (int b = 0; b < batch; b++) {
 			if (out[b] == null || out[b].length != dim)
 				out[b] = new float[dim];

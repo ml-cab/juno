@@ -109,7 +109,7 @@ final class ResidentActivation implements AutoCloseable {
 			chain.sync();
 		for (int b = 0; b < count; b++)
 			MemorySegment.copy(x[b], 0, staging, JAVA_FLOAT, (long) b * dim * Float.BYTES, dim);
-		copyAsync(device, staging, (long) count * dim * Float.BYTES, GpuBindings.H2D, "upload(resident activation)");
+		copyAsync(device, staging, (long) count * dim * Float.BYTES, GpuBindings.H2D, count, "upload(resident activation)");
 		rows = count;
 		uploadEpoch = chain.syncEpoch();
 	}
@@ -125,7 +125,7 @@ final class ResidentActivation implements AutoCloseable {
 			throw new IllegalStateException("nothing has been uploaded to or written into this activation");
 		if (out.length < rows)
 			throw new IllegalArgumentException("materialize of " + rows + " rows into " + out.length);
-		copyAsync(staging, device, (long) rows * dim * Float.BYTES, GpuBindings.D2H, "materialize(resident activation)");
+		copyAsync(staging, device, (long) rows * dim * Float.BYTES, GpuBindings.D2H, rows, "materialize(resident activation)");
 		chain.sync();
 		for (int b = 0; b < rows; b++) {
 			if (out[b] == null || out[b].length != dim)
@@ -153,7 +153,7 @@ final class ResidentActivation implements AutoCloseable {
 				throw new IllegalStateException("activation " + i + " holds " + a.rows + " rows, expected 1");
 			if (out[i] == null || out[i].length != a.dim)
 				throw new IllegalArgumentException("output " + i + " must be " + a.dim + " long");
-			a.copyAsync(a.staging, a.device, (long) a.dim * Float.BYTES, GpuBindings.D2H,
+			a.copyAsync(a.staging, a.device, (long) a.dim * Float.BYTES, GpuBindings.D2H, 1,
 					"materializeRows(resident activation)");
 		}
 		chain.sync();
@@ -226,7 +226,9 @@ final class ResidentActivation implements AutoCloseable {
 		gpu.hostFree(staging);
 	}
 
-	private void copyAsync(MemorySegment dst, MemorySegment src, long n, int kind, String what) {
+	private void copyAsync(MemorySegment dst, MemorySegment src, long n, int kind, int windowSize, String what) {
+		DeviceSpanTimer spans = chain.spans();
+		int before = spans.begin(chain.stream(), windowSize);
 		int rc;
 		try {
 			rc = (int) chain.bindings().gpuMemcpyAsync().invokeExact(dst, src, n, kind, chain.stream());
@@ -234,5 +236,6 @@ final class ResidentActivation implements AutoCloseable {
 			throw new IllegalStateException(what + ": native call failed", t);
 		}
 		GpuBindings.check(rc, what);
+		spans.staging(kind, n, windowSize, what, before, chain.stream());
 	}
 }

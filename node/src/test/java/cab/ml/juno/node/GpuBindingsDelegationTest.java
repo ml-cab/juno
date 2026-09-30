@@ -61,6 +61,10 @@ class GpuBindingsDelegationTest {
         assertThat(cuda.gpuMemcpyAsync()).isNotNull();
         assertThat(cuda.gpuStreamCreateWithFlags()).isNotNull();
         assertThat(cuda.gpuStreamSynchronize()).isNotNull();
+        assertThat(cuda.gpuEventCreate()).isNotNull();
+        assertThat(cuda.gpuEventRecord()).isNotNull();
+        assertThat(cuda.gpuEventElapsedTime()).isNotNull();
+        assertThat(cuda.gpuEventDestroy()).isNotNull();
         assertThat(cuda.blasCreate()).isNotNull();
         assertThat(cuda.blasDestroy()).isNotNull();
         assertThat(cuda.blasSetStream()).isNotNull();
@@ -95,6 +99,10 @@ class GpuBindingsDelegationTest {
         assertThat(rocm.gpuMemcpyAsync()).isNotNull();
         assertThat(rocm.gpuStreamCreateWithFlags()).isNotNull();
         assertThat(rocm.gpuStreamSynchronize()).isNotNull();
+        assertThat(rocm.gpuEventCreate()).isNotNull();
+        assertThat(rocm.gpuEventRecord()).isNotNull();
+        assertThat(rocm.gpuEventElapsedTime()).isNotNull();
+        assertThat(rocm.gpuEventDestroy()).isNotNull();
         assertThat(rocm.blasCreate()).isNotNull();
         assertThat(rocm.blasDestroy()).isNotNull();
         assertThat(rocm.blasSetStream()).isNotNull();

@@ -117,6 +117,10 @@ final class RocmBindings implements GpuBindings {
     private final MethodHandle hipStreamCreateWithFlags;
     private final MethodHandle hipStreamSynchronize;
     private final MethodHandle hipStreamDestroy;
+    private final MethodHandle hipEventCreate;
+    private final MethodHandle hipEventRecord;
+    private final MethodHandle hipEventElapsedTime;
+    private final MethodHandle hipEventDestroy;
 
     // ── rocBLAS handles (private — exposed via accessors) ─────────────────────
     private final MethodHandle rocblasCreateHandle;
@@ -167,6 +171,14 @@ final class RocmBindings implements GpuBindings {
         hipStreamSynchronize     = GpuBindings.bind(l, hip, "hipStreamSynchronize",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
         hipStreamDestroy         = GpuBindings.bind(l, hip, "hipStreamDestroy",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+        hipEventCreate           = GpuBindings.bind(l, hip, "hipEventCreate",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+        hipEventRecord           = GpuBindings.bind(l, hip, "hipEventRecord",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+        hipEventElapsedTime      = GpuBindings.bind(l, hip, "hipEventElapsedTime",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+        hipEventDestroy          = GpuBindings.bind(l, hip, "hipEventDestroy",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
         rocblasCreateHandle      = GpuBindings.bind(l, rb, "rocblas_create_handle",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
@@ -313,6 +325,10 @@ final class RocmBindings implements GpuBindings {
     @Override public MethodHandle gpuStreamCreateWithFlags()    { return hipStreamCreateWithFlags; }
     @Override public MethodHandle gpuStreamSynchronize()        { return hipStreamSynchronize; }
     @Override public MethodHandle gpuStreamDestroy()            { return hipStreamDestroy; }
+    @Override public MethodHandle gpuEventCreate()              { return hipEventCreate; }
+    @Override public MethodHandle gpuEventRecord()              { return hipEventRecord; }
+    @Override public MethodHandle gpuEventElapsedTime()         { return hipEventElapsedTime; }
+    @Override public MethodHandle gpuEventDestroy()             { return hipEventDestroy; }
     @Override public MethodHandle blasCreate()                  { return rocblasCreateHandle; }
     @Override public MethodHandle blasDestroy()                 { return rocblasDestroyHandle; }
     @Override public MethodHandle blasSetStream()               { return rocblasSetStream; }

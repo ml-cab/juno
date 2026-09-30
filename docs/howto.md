@@ -1046,15 +1046,50 @@ Two throughput measurements are comparable only when both were recorded under th
 instrumentation overhead. Every recording Juno takes therefore names one settings file,
 `scripts/performance-tests/juno-perf.jfc`: the launcher `test` command, each forked cluster-node
 JVM, and the local, LoRA and cluster-coordinator recordings the console starts in-process. The
-file enables every `juno.*` event plus the JVM events tabulated above, and is packaged into the
-runnable jar so a recording started from a jar resolves the same settings a script-launched one
-does.
+file enables every `juno.*` event except the two device-copy events below, plus the JVM events
+tabulated above, and is packaged into the runnable jar so a recording started from a jar resolves
+the same settings a script-launched one does.
 
 Point a run at a different file with `JUNO_JFR_SETTINGS=/path/to/custom.jfc` (the launcher
 scripts) or `-Djuno.jfr.settings=/path/to/custom.jfc` (a bare `java -jar` invocation). If the
 file cannot be found, the run falls back to the JDK's stock low-overhead settings and says so,
 because a recording that cannot state which settings produced it should not be compared against
 one taken under the Juno settings.
+
+### Host-device copy and dequantization totals
+
+`juno.MatVec` times a GPU matmul as one span, which hides the copies around it. Two further events
+break those terms out: `juno.DeviceStaging` (every host-to-device, device-to-host and
+device-to-device copy) and `juno.WeightDequant` (every weight dequantization: per batched K-quant
+GEMM on the device, once per weight on the host at load). They are totals, not one event per
+copy: each is committed per copy site and phase when the recording ends, so a recording holds
+exactly the work done while it ran.
+
+They are off in `juno-perf.jfc`, because counting and timing every copy costs 4% to 7% of a
+TinyLlama prefill window, which writes every KV row of every layer as its own copy. Turn them on
+for a breakdown run by layering `scripts/performance-tests/juno-perf-spans.jfc` over the base
+file, on a running engine:
+
+```bash
+jcmd <pid> JFR.start name=spans filename=spans.jfr \
+  settings=scripts/performance-tests/juno-perf.jfc \
+  settings=scripts/performance-tests/juno-perf-spans.jfc
+```
+
+or with `compare-llama-cpp.sh --device-spans`, which adds a `device_staging` object to every
+result file (prefill bytes and milliseconds each way, bytes per prompt token, decode bytes, device
+dequantization).
+
+| Key | Meaning |
+|---|---|
+| `juno.DeviceStaging.{H2D,D2H,D2D}[.{prefill,decode,other}].{count,bytes}` | Copies and bytes, exact. `prefill`: the forward call covered more than one row; `decode`: one row; `other`: outside a forward call (weights, tables, cache growth) |
+| `...timed_count`, `...total_ms` | Copies timed and their measured sum. Decode copies are counted, not timed; copies under 64 KB are timed one in sixteen |
+| `...estimated_total_ms` | Each site's measured mean scaled to all of its copies: the figure to read |
+| `juno.DeviceStaging.site.<site>.<phase>.*` | The same, per copy site |
+| `juno.WeightDequant.{count,timed_count,total_ms}`, also under `.device`, `.host` and `.format.<F>` | Dequantizations, overall, per timing source and per format |
+
+Asynchronous copies and kernels are timed on the device between two stream events, since a host
+clock would only see them being queued. With the events off, every copy site is the plain call.
 
 ### JFR durations on a host whose kernel rejected the CPU timestamp counter
 

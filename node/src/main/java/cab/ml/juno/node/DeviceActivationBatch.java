@@ -102,29 +102,25 @@ final class DeviceActivationBatch implements AutoCloseable {
 		return dOut;
 	}
 
-	/** Synchronous H2D of a host float array into {@code dest}. */
-	void copyH2D(MemorySegment dest, float[] host) {
+	/** Synchronous H2D of a host float array into {@code dest}; {@code windowSize} is the activation rows it holds. */
+	void copyH2D(MemorySegment dest, float[] host, int windowSize) {
 		ensureOpen();
 		long bytes = (long) host.length * Float.BYTES;
 		try (Arena staging = Arena.ofConfined()) {
 			MemorySegment nativeHost = staging.allocate(bytes);
 			nativeHost.copyFrom(MemorySegment.ofArray(host));
-			GpuBindings.check(
-					GpuBindings.callInt(gpu.gpuMemcpy(), dest, nativeHost, bytes, GpuBindings.H2D),
-					"memcpy(batch H2D)");
+			DeviceStaging.copy(gpu, dest, nativeHost, bytes, GpuBindings.H2D, windowSize, "memcpy(batch H2D)");
 		}
 	}
 
-	/** Synchronous D2H into a new host float array. */
-	float[] copyD2H(MemorySegment src, int floats) {
+	/** Synchronous D2H into a new host float array; {@code windowSize} is the activation rows it holds. */
+	float[] copyD2H(MemorySegment src, int floats, int windowSize) {
 		ensureOpen();
 		long bytes = (long) floats * Float.BYTES;
 		float[] host = new float[floats];
 		try (Arena staging = Arena.ofConfined()) {
 			MemorySegment nativeHost = staging.allocate(bytes);
-			GpuBindings.check(
-					GpuBindings.callInt(gpu.gpuMemcpy(), nativeHost, src, bytes, GpuBindings.D2H),
-					"memcpy(batch D2H)");
+			DeviceStaging.copy(gpu, nativeHost, src, bytes, GpuBindings.D2H, windowSize, "memcpy(batch D2H)");
 			MemorySegment.copy(nativeHost, JAVA_FLOAT, 0, host, 0, floats);
 		}
 		return host;

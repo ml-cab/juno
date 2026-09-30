@@ -1,6 +1,6 @@
 # Tier 01B: Prefill throughput
 
-Status: in progress — implementation step 0 complete (2026-09-28); step 1 next
+Status: in progress — implementation steps 0 and 1 complete (2026-09-30); step 2 (re-baseline) next
 Gap analysis refs: none directly — this tier exists because the gap analysis has no prefill section
 at all, while the published measurements under `docs/perf-compare/` show prompt processing to be the
 single largest gap Juno has. See "Why this tier, why now".
@@ -332,7 +332,9 @@ on today's op-at-a-time GPU path either way.
    `--gpu-attention` value recorded rather than assumed — the historical numbers quoted above were
    taken before those corrections, with at least one lane mislabelled, and are not a valid
    before-measurement for this tier's gate. This run carries the staged-bytes and dequant figures
-   from step 1's spans, which are item 2's before-measurement.
+   from step 1's spans, which are item 2's before-measurement. *Since step 1 the spans are opt-in: take
+   the ratios from the default run and the staged bytes and dequant figures from a separate
+   `--device-spans` run of the same build, which costs about 6% of prefill.*
 3. **Land item 0 next, before anything else that changes the forward pass.** Not because it is cheap —
    it is four kernel integrations against four handlers that each own their own KV map and attention
    math, plus a capability-reporting mechanism that does not exist yet — but because leaving it until
@@ -531,9 +533,10 @@ architectures' defaults off on a false premise.
 
 ## Execution record
 
-Status of the tier: in progress. Implementation step 0 is complete (threshold check, keepalive reaping,
-and the fast prefill repetition traced and fixed in the harness); step 1 (the two new spans) is next. This
-section records the plan-review pass of 2026-09-27, which landed ahead of step 1.
+Status of the tier: in progress. Implementation steps 0 (threshold check, keepalive reaping, the fast
+prefill repetition) and 1 (the copy and dequantization spans, opt-in, gate met) are complete; step 2 (the
+re-baseline, with `--device-spans` for the staged-bytes figures) is next. This section also records the
+plan-review pass of 2026-09-27, which landed ahead of step 1.
 
 ### 2026-09-27 — plan-review pass: threshold check, CI trigger, reference and gate rules, clock pinning
 
@@ -750,6 +753,114 @@ the flag are on a different JFR clock from every published run. Generation readi
 own cost under JFR; prefill is expected not to. The step 2 re-baseline is the first run on this side of
 it, so no gate in this tier straddles it.
 
+### 2026-09-28 to 2026-09-30 — implementation step 1: `juno.DeviceStaging` and `juno.WeightDequant`
+
+Scope: scope item 1a, its same-hour A/B gate, and one harness correction the gate exposed. No change to
+what any copy, kernel or matmul computes. **Gate met** (prefill 0.999x and 1.000x); two owner decisions
+changed the design on the way, recorded below.
+
+**Plan-versus-code drift found before starting.**
+- **"Duration around every `gpuMemcpy`" measures nothing on the prefill path.** Every activation copy
+  the CUDA batched GEMM issues is `cudaMemcpyAsync` on one stream, and so is `Q4KMmqKernel.launchDequant`,
+  with one `cudaStreamSynchronize` at the end of the call. A host clock around each call times the
+  enqueue and would have reported staging and dequantization as free. No GPU event bindings existed.
+  **Owner decision 1 (2026-09-28): time asynchronous work on the device with stream events**, added
+  vendor-neutrally to `GpuBindings` (`gpuEventCreate`/`Record`/`ElapsedTime`/`Destroy`, CUDA and HIP).
+- Three synchronous copies read a kernel's result straight back (attention output, norm output, the
+  FP32 BLAS batch), so a host clock would also time the kernel; a timed device-to-host copy drains
+  the default stream first. The host waits for that kernel either way.
+- `LlamaTransformerHandler.dequantize` is **load-time only** (every caller is an FP16 upload), not a
+  per-prefill term. It is counted as the item asks, under `timing=host`, apart from the per-call device
+  dequantization (`timing=device`) the breakdown needs.
+- The copies a prefill window issues are not only matmul activations: the attention kernel's pointer
+  and length tables, the norm weight and the KV mirror's per-position rows (22,528 of the 22,726 H2D
+  copies of a TinyLlama window) happen inside it too. Each copy is therefore classified by the width
+  of the forward call that issued it; `DeviceKvCache.appendToken` gained that parameter.
+- `juno-perf.jfc` also ships inside the `juno-player` jar (resource copied from `scripts/performance-tests/`).
+
+**The gate, four same-hour pinned A/B runs** (`docs/perf-compare/20260930T030253Z-tier01b-step1-spans/`,
+per-pass readings in its `ab-readings.json`; TinyLlama and Mistral 7B Q4_K_M, `n_prompt` 512, A = the
+jar of `38b1c6d`, median of three, all 24 invocations pinned):
+
+| Run | Candidate | TinyLlama prefill | Mistral prefill | TinyLlama gen | Mistral gen |
+|---|---|---|---|---|---|
+| 1 | one JFR event per copy | 0.802x | 0.948x | 0.818x | 0.902x |
+| 2 | totals per site and phase, decode untimed | 0.896x | 0.975x | 1.016x | 1.000x |
+| 3 | as run 2, harness corrected (below) | 0.933x | 1.006x | 1.026x | 0.984x |
+| 4 | spans opt-in, small copies timed 1 in 16 | **0.999x** | **1.000x** | 1.000x | 0.998x |
+
+- **Run 1 failed on cost.** One event per copy, at a few microseconds each on this host's
+  operating-system JFR clock, across 22,726 copies per prefill window and several hundred per token.
+  Owner decision 2 (2026-09-29): **totals per site and phase**. `DeviceSpanTally` counts into
+  lock-free cells and both events became periodic (`endChunk`), one event per non-empty cell; starting
+  a recording ends the previous chunk, so a recording holds exactly its own window's work
+  (`DeviceSpanTallyTest.workBeforeARecordingStartsIsNotInIt`). Decode copies are counted, not timed.
+- **Run 2's prefill miss was not the copies.** Per-layer `juno.SwiGlu` read 251 and 161 ms for the first
+  two of 22 layers, then 35 ms like the baseline, and `jdk.Deoptimization` named `DeviceStaging.copy`
+  and `DeviceSpanTally.staging` (`unstable_if`): the harness warmed the engine up with no recording, so
+  the recording-only branches compiled as uncommon traps and the measured request's recording tripped
+  them, deoptimizing the batched-layer method they are inlined into. The baseline pays a smaller share
+  of the same effect from JFR instrumenting its own event classes (85 and 42 ms). **Harness fix:** the
+  last warmup runs under a discarded recording with the measurement settings (`compare-llama-cpp.sh`,
+  `JFR_WARMUP_RECORDING_NAME`); verified every layer flat and no Juno method deoptimized in the window.
+  This is a **measurement boundary for prefill** (TinyLlama baseline about 240 to 248 t/s); the step-2
+  re-baseline is the first published run on this side of it, so no gate straddles it.
+- **Run 3's remaining TinyLlama gap was the counting work.** The same candidate jar with the two
+  events disabled in the settings matched the baseline in three interleaved unpinned rounds (248.7
+  against 246.5 t/s median); enabled it read 237.6. Isolated checks ruled out the enabled check (5 ns),
+  the matmul's stream-event timing (no measurable change over 60 calls at FFN shape) and the
+  small-copy clock reads (sampling them 1 in 16 did not close it). Owner decision 3 (2026-09-30):
+  **the spans are opt-in**. `juno-perf.jfc` ships them disabled; `juno-perf-spans.jfc` is an overlay
+  that enables only those two, layered with a second `settings=` on `jcmd JFR.start` or by
+  `compare-llama-cpp.sh --device-spans` (recorded as `device_spans` in `host.json`). A spans run costs
+  about 6% of TinyLlama prefill (241.5 against 258.0 t/s, unpinned): read throughput from a run without
+  the flag, staged bytes and the breakdown from a run with it. Bytes are exact either way.
+
+**What shipped.**
+- `node`: `DeviceStagingEvent` (`juno.DeviceStaging`: `site`, `direction`, `phase`, `copies`, `bytes`,
+  `timedCopies`, `transferNanos`) and `WeightDequantEvent` (`juno.WeightDequant`: `format`, `timing`,
+  `count`, `timedCount`, `dequantNanos`), both periodic; `DeviceSpanTally` (the totals and the periodic
+  hooks); `DeviceSpanTimer` (pooled stream events per owner, `CudaMatVec`/`RocmMatVec` per call under the
+  context lock, `ResidentChain` at each sync); `DeviceStaging` (the synchronous copy every other site
+  uses; copies under 64 KB timed one in sixteen). Instrumented: all 22 asynchronous and 3 synchronous
+  copy sites in `CudaMatVec`, all 15 in `RocmMatVec`, the resident-activation copies, and the 19
+  synchronous sites in `DeviceKvCache`, `CudaGqaAttention`, `CudaRmsNorm`, `CudaRope`,
+  `DeviceActivationBatch` and the three device matrix uploads. With the events off every site is the
+  plain call: nothing counted, no stream event, no extra synchronize.
+- `metrics`: `DeviceSpanBucket`: `juno.DeviceStaging.{H2D,D2H,D2D}[.{prefill,decode,other}]` and
+  `.site.<site>.<phase>` as `count`/`bytes`/`timed_count`/`total_ms`/`estimated_total_ms` (each site's
+  measured mean scaled to all its copies); `juno.WeightDequant` overall, per timing and per format.
+- Harness: `juno-perf-spans.jfc`; `--device-spans`; the warmup recording; a `device_staging` object in
+  each result (null without the flag or on an older build); `JUNO_JFR_SETTINGS_FILE` override;
+  three new `--selftest` cases.
+
+**Tests, written first and shown failing for the right reason.**
+- `JfrMetricsExtractorDeviceSpansTest` (`metrics`, 7 cases): the first version failed on the unchanged
+  extractor with every key absent (5 of 5); the estimated-duration case failed with its keys absent
+  before `estimated_total_ms` existed (3 of 7). All pass.
+- `DeviceStagingSpansTest` (`node`, `@Tag("gpu")`, 6 cases, GTX 1080): exact bytes and device timing for
+  a 32-row FP16 GEMM; decode-width copies counted with bytes, untimed; the Q4_K batched GEMM's device
+  dequantization apart from its copies; a weight upload as a host-timed `other` copy; a resident
+  chain's upload and materialize; bit-identical GEMM output with and without a recording. 5 failed
+  before any instrumentation existed (no events), the bit-identity control passed; all pass.
+- `DeviceSpanTallyTest` (`node`, CPU, 4 cases): totals per site and phase, recording scoping, nothing
+  counted without a recording, dequant totals. `WeightDequantEventTest` (CPU): the load-time host
+  dequantization. `GpuBindingsDelegationTest`: the four new handles on both vendors.
+- Regression: see the verification lines at the end of this section. ROCm: bindings, `RocmMatVec`
+  sites and the vendor-neutral timer compile and are covered by the handle test's ROCm case, which
+  skips here — **NEEDS-AMD-HARDWARE**.
+
+**CI revisit, due at the end of this step (owner deferred it here on 2026-09-28): still open, put to the
+owner in this step's report.** Recommendation unchanged (GPU-free two-job workflow).
+
+**Verification, on the final tree (2026-09-30).** `mvn test` on the eleven unit-test modules: 1,832 tests,
+0 failures, 49 skipped (existing assumptions), 26:22. `mvn test -pl node -Dgroups=gpu`: 145 tests, 0
+failures, 7 skipped. `compare-llama-cpp.sh --selftest` and `check-plan-thresholds.sh` pass. Not run:
+`mvn verify -pl juno-master` (stub-mode cluster ITs; step 1 changes no gRPC, scheduling or handler
+contract) and the real-model live runner; both belong to the tier's closing matrix (implementation step
+8). No `compare-lora.sh` or `compare-vision.sh` run: with the events off every copy site is the plain
+call, and the pinned A/B above is the step's own gate.
+
 ### Out-of-tier changes (recorded per execution rule 9)
 
 | Change | What it touched | Measurement boundary? |
@@ -782,10 +893,15 @@ it, so no gate in this tier straddles it.
       the default is **off** while `GpuAttentionOptions.fromEnv()` defaults to `auto`.
 - [ ] Item 0's own attributable measurement published separately from the rest of the tier's, so the
       default change's effect is visible on its own.
-- [ ] `juno.DeviceStaging` and `juno.WeightDequant` exist, are enabled in
+- [x] `juno.DeviceStaging` and `juno.WeightDequant` exist, are enabled in
       `scripts/performance-tests/juno-perf.jfc`, are aggregated by `JfrMetricsExtractor`, and have
       `metrics` tests that failed on the pre-tier build for the right reason. Until this is checked,
       the breakdown criterion below cannot be satisfied by anyone.
+      *Checked 2026-09-30, with one owner-approved change to its wording: the events are registered in
+      `juno-perf.jfc` but **disabled** there, and enabled by the overlay `juno-perf-spans.jfc`
+      (`compare-llama-cpp.sh --device-spans`), because counting every copy costs about 6% of TinyLlama
+      prefill. Step 1's gate is met on that design (prefill 0.999x and 1.000x, pinned A/B). Every run
+      that feeds the breakdown or the item-2 staged-bytes threshold passes `--device-spans`.*
 - [ ] Per-term prefill breakdown published for all four sweep models at `n_prompt` 128 and 512, with
       no unattributed residue — every term named, including host-device staging and dequantization.
 - [ ] The threshold decomposition written down before implementation, with each item's expected

@@ -1,5 +1,22 @@
 ## Status 
 
+**Session 99** — GPU copies and weight dequantization can be read on their own, and the first benchmark recording no longer slows the request it measures
+
+- **Two new recording events break the matmul span apart.** `juno.DeviceStaging` totals every
+  host-device copy (bytes and measured time per direction, per phase and per copy site) and
+  `juno.WeightDequant` every weight dequantization (per format, on the device per batched K-quant
+  matmul or on the host at load). Asynchronous copies are timed on the device between two stream
+  events, because a host clock only sees them being queued; the GPU backends gained the stream-event
+  calls for both vendors. Both are off in `juno-perf.jfc`, since counting every copy costs about 6% of
+  a TinyLlama prefill window; `compare-llama-cpp.sh --device-spans` turns them on and adds the staged
+  bytes to every result. With them off, a same-hour pinned comparison against the build without them
+  reads 0.999x to 1.000x prefill and 0.998x to 1.000x generation.
+- **The comparison harness warms up under a recording.** Starting the first recording in a process
+  deoptimized code compiled during the warmup, inside the measured request: the first two of 22
+  TinyLlama layers ran two to three times slower. The last warmup now runs under a discarded
+  recording with the measurement settings, which raised TinyLlama prefill readings by about 3% on an
+  unchanged build.
+
 **Session 98** — Benchmark readings no longer depend on which CPU core a span started on, and engines launched by the performance scripts no longer leave processes behind
 
 - **Recorded durations are checked against the request that contains them, and read off a clock the

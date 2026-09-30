@@ -96,6 +96,14 @@ interface GpuBindings {
     MethodHandle gpuStreamSynchronize();
     /** {@code cudaStreamDestroy} / {@code hipStreamDestroy}. */
     MethodHandle gpuStreamDestroy();
+    /** {@code cudaEventCreate} / {@code hipEventCreate}: {@code int (event_t*)}. */
+    MethodHandle gpuEventCreate();
+    /** {@code cudaEventRecord} / {@code hipEventRecord}: {@code int (event_t, stream_t)}. */
+    MethodHandle gpuEventRecord();
+    /** {@code cudaEventElapsedTime} / {@code hipEventElapsedTime}: {@code int (float* ms, event_t, event_t)}. */
+    MethodHandle gpuEventElapsedTime();
+    /** {@code cudaEventDestroy} / {@code hipEventDestroy}: {@code int (event_t)}. */
+    MethodHandle gpuEventDestroy();
 
     // ── Handle accessors (BLAS) ───────────────────────────────────────────────
     /** {@code cublasCreate_v2} / {@code rocblas_create_handle}. */

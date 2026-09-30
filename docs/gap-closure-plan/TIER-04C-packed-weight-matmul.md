@@ -135,7 +135,12 @@ The 04B adjacency carries no dependency — tokenizer fidelity and packed matmul
    duration, wrapping `Q4KMmqKernel.launchDequant` among others) — and 01B runs well before this
    tier. Verify they are present and aggregated by `JfrMetricsExtractor` before starting; if 01B
    shipped them under different names or with a narrower payload, use what it shipped and say so
-   here rather than adding a second spelling. **The expected
+   here rather than adding a second spelling. *Tier 01B step 1 (2026-09-30) shipped them with a
+   different payload: totals per copy site and phase rather than one event per copy (`copies`,
+   `bytes`, `timedCopies`, `transferNanos`; dequant per format and timing source, without rows and
+   cols), and opt-in: off in `juno-perf.jfc`, on with `compare-llama-cpp.sh --device-spans`, which
+   costs about 6% of TinyLlama prefill. Read this item's split from a `--device-spans` run and its
+   throughput from a run without the flag.* **The expected
    answer is not uniform and the plan should not pretend otherwise**: the dequant pass is paid once
    per matmul and amortizes over the batch, so its share falls as the window widens. The certain win
    from item 2 is VRAM and the removal of a failure mode; the throughput win is batch-dependent and

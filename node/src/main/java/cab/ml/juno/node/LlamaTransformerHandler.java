@@ -1377,7 +1377,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			vCacheLayers[b].writeToken(pos, ws.v[b]);
 			if (deviceKvLayers != null && deviceKvLayers[b] != null && deviceKvLayers[b].live()) {
 				try {
-					deviceKvLayers[b].appendToken(pos, ws.k[b], ws.v[b]);
+					deviceKvLayers[b].appendToken(pos, ws.k[b], ws.v[b], N);
 				} catch (IllegalStateException ex) {
 					if (!GpuLayerOffload.isVramOom(ex))
 						throw ex;
@@ -1635,7 +1635,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			vCacheLayer.writeToken(startPos + b, ws.v[b]);
 			if (deviceKv != null) {
 				try {
-					deviceKv.appendToken(startPos + b, ws.k[b], ws.v[b]);
+					deviceKv.appendToken(startPos + b, ws.k[b], ws.v[b], W);
 				} catch (IllegalStateException ex) {
 					if (!GpuLayerOffload.isVramOom(ex))
 						throw ex;
@@ -2570,6 +2570,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * @return row-major float[rows * cols] with all values dequantized
 	 */
 	static float[] dequantize(GgufReader.QuantizedTensor t, int rows, int cols) {
+		long start = DeviceStaging.hostDequantStart();
+		float[] out = dequantizeByType(t, rows, cols);
+		DeviceStaging.hostDequantDone(start, t.type());
+		return out;
+	}
+
+	private static float[] dequantizeByType(GgufReader.QuantizedTensor t, int rows, int cols) {
 		return switch (t.type()) {
 		case 0  -> dequantizeF32(t.data(), rows, cols);
 		case 1  -> dequantizeF16(t.data(), rows, cols);

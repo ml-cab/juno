@@ -161,6 +161,24 @@ driver, and the reference tool's build commit. A different reference build is a 
 this host uses one build for the CPU sweep and another for the GPU sweep, and a ratio taken against one
 is not comparable with a ratio taken against the other.
 
+**The last warmup runs under a recording (2026-09-30).** `compare-llama-cpp.sh` used to warm the
+engine up with no recording running and start one just before the measured request. Starting the
+first recording in a process instruments the event classes and takes every branch that only runs
+while one records, so code compiled during the warmup was deoptimized inside the measured window:
+on TinyLlama at a 512-token prompt the first two of 22 layers ran two to three times slower and the
+rest were unaffected. The last warmup now runs under a discarded recording with the same settings.
+TinyLlama prefill read about 240 t/s before and 248 t/s after on the same build, pinned; this is a
+measurement boundary for prefill readings, and no gate straddles it.
+
+**Host-device copy and dequantization totals.** `juno.DeviceStaging` and `juno.WeightDequant` break
+the copies and weight dequantization out of `juno.MatVec` (bytes and measured time per direction,
+phase and copy site; asynchronous copies timed on the device). They are off in `juno-perf.jfc`,
+because counting every copy costs about 6% of a TinyLlama prefill window, and `compare-llama-cpp.sh
+--device-spans` turns them on for a breakdown run. With them off, a same-hour pinned A/B against the
+build without them reads 0.999x TinyLlama prefill and 1.000x Mistral 7B, generation 1.000x and
+0.998x (`docs/perf-compare/20260930T030253Z-tier01b-step1-spans/`). Read throughput from a run without
+the flag and staged bytes from a run with it; bytes are exact either way.
+
 ## OpenAI field parity (`stop` / `seed` / `presence_penalty`)
 
 **Plan:** [`infra-plan/PLAN-Infra-Tier2.md`](infra-plan/PLAN-Infra-Tier2.md) (P2 step 1 — **feature complete**).

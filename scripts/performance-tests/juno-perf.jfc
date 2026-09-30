@@ -9,7 +9,10 @@
      published numbers were not comparable with each other.
 
      Derived from the JDK's stock low-overhead configuration, with two groups of
-     changes. Every juno.* event is enabled by name at the bottom of this file.
+     changes. Every juno.* event is named at the bottom of this file and enabled,
+     except juno.DeviceStaging and juno.WeightDequant: counting every host-device
+     copy costs a few percent of prefill, so those two are switched on by layering
+     juno-perf-spans.jfc over this file for a breakdown run.
      Six JVM events are pinned above their stock values so a run can report what
      its throughput number should be read against: collection pauses, how many
      bytes it allocated and where, where it spent CPU, and time lost to monitor
@@ -1342,6 +1345,18 @@
 
     <event name="juno.Speculation">
       <setting name="enabled">true</setting>
+      <setting name="stackTrace">false</setting>
+      <setting name="threshold">0 ms</setting>
+    </event>
+
+    <event name="juno.DeviceStaging">
+      <setting name="enabled">false</setting>
+      <setting name="stackTrace">false</setting>
+      <setting name="threshold">0 ms</setting>
+    </event>
+
+    <event name="juno.WeightDequant">
+      <setting name="enabled">false</setting>
       <setting name="stackTrace">false</setting>
       <setting name="threshold">0 ms</setting>
     </event>

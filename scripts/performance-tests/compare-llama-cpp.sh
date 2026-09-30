@@ -121,8 +121,17 @@ USE_JFR=1
 JFR_DURATION="${JFR_DURATION:-30m}"
 # The one measurement configuration every recording in this project names, so two
 # runs carry the same instrumentation overhead and stay comparable.
-JFR_SETTINGS_FILE="${PERF_SCRIPTS}/juno-perf.jfc"
+JFR_SETTINGS_FILE="${JUNO_JFR_SETTINGS_FILE:-${PERF_SCRIPTS}/juno-perf.jfc}"
+# --device-spans layers juno-perf-spans.jfc over it, enabling juno.DeviceStaging and
+# juno.WeightDequant: the host-device copy and dequantization totals a prefill
+# breakdown reads. Off by default because counting and timing tens of thousands of
+# copies per prefill window cost 4% to 7% of TinyLlama prefill; bytes are exact
+# either way, so a spans lane is for attribution, not for a throughput figure.
+DEVICE_SPANS=0
+JFR_SPANS_FILE="${PERF_SCRIPTS}/juno-perf-spans.jfc"
 JFR_RECORDING_NAME=juno-compare
+# Discarded; runs over the last warmup request only (run_juno_rep).
+JFR_WARMUP_RECORDING_NAME=juno-compare-warmup
 # Set per rep: a rep whose recording could not be started is measured without one
 # rather than abandoned, and says so.
 USE_JFR_THIS_REP=0
@@ -186,6 +195,10 @@ Options:
                     on exit. Needs prompt-free sudo (run sudo -v first); the run refuses
                     to start if the CPU cannot be pinned. Required for any gate tighter
                     than this host's 15% noise floor
+  --device-spans    Also record juno.DeviceStaging and juno.WeightDequant (host-device
+                    copy and dequantization totals per site and phase; results gain a
+                    device_staging object). Costs 4% to 7% of TinyLlama prefill, so a
+                    spans run is for attribution and staged bytes, not for a ratio
   --pin-gpu-mhz N   GPU graphics clock to lock at with --pin-clocks (default: the card's
                     maximum graphics clock)
   --vector 0|1     Pass jdk.incubator.vector to Juno (default: ${JUNO_USE_VECTOR})
@@ -530,6 +543,16 @@ run_selftest() {
     "$(jq -r '.span_check.full_prefill' <<<"$sj")"
   selftest_expect "and still publishes its reading" 170.67 \
     "$(jq -r '.prompt_eval_tps * 100 | round / 100' <<<"$sj")"
+  selftest_expect "a build without staging keys reports no staging figures" null \
+    "$(jq -r '.device_staging' <<<"$sj")"
+  jq '.models[0].metrics += { "juno.DeviceStaging.H2D.prefill.bytes": 1000000,
+      "juno.DeviceStaging.D2H.prefill.bytes": 3000000, "juno.DeviceStaging.H2D.prefill.count": 7,
+      "juno.DeviceStaging.D2H.prefill.count": 7 }' "$d/ok.json" >"$d/staging.json"
+  sj="$(DEVICE_SPANS=1 jfr_summary_json "$d/staging.json" 128 1 782)"
+  selftest_expect "a run without --device-spans reports no staging figures" null \
+    "$(jq -r '.device_staging' <<<"$(DEVICE_SPANS=0 jfr_summary_json "$d/staging.json" 128 1 782)")"
+  selftest_expect "prefill staging is surfaced per prompt token" 31496.06 \
+    "$(jq -r '.device_staging.prefill_bytes_per_token * 100 | round / 100' <<<"$sj")"
 
   if (( SELFTEST_FAILURES > 0 )); then
     die "selftest: ${SELFTEST_FAILURES} check(s) failed"
@@ -582,6 +605,7 @@ while [[ $# -gt 0 ]]; do
     --llama-bin) LLAMA_CPP_BIN_EXPLICIT="$2"; shift 2 ;;
     --juno-jar) JUNO_JAR_EXPLICIT="$2"; shift 2 ;;
     --pin-clocks) PIN_CLOCKS=1; shift ;;
+    --device-spans) DEVICE_SPANS=1; shift ;;
     --pin-gpu-mhz) PIN_GPU_MHZ="$2"; shift 2 ;;
     --vector) JUNO_USE_VECTOR="$2"; shift 2 ;;
     --jfr) USE_JFR=1; JFR_DURATION="$2"; shift 2 ;;
@@ -976,6 +1000,7 @@ host_meta_json() {
   "java_version": "$(json_escape "$(java_version_line)")",
   "juno_jvm_flags": "$(json_escape "${JUNO_JVM_FLAGS[*]} -Xms=-Xmx (fixed per model)")",
   "jfr_timestamp_source": "$(json_escape "$(perf_jfr_clock_label)")",
+  "device_spans": ${DEVICE_SPANS},
   "gpu_driver": "$(json_escape "$(gpu_driver_version)")",
   "llama_build_commit": "$(json_escape "$(llama_build_commit)")",
   "n_prompt": ${N_PROMPT},
@@ -1192,7 +1217,7 @@ jfr_summary_json() {
   [[ -f "$jfr_file" ]] || { echo null; return 0; }
   jq -nc --arg f "$jfr_file" \
     --argjson pt "${prompt_tokens:-0}" --argjson ct "${completion_tokens:-0}" \
-    --argjson latency_ms "${latency_ms:-0}" \
+    --argjson latency_ms "${latency_ms:-0}" --argjson spans "${DEVICE_SPANS:-0}" \
     --slurpfile raw "$jfr_file" '
     ($raw[0].models[0].metrics // {}) as $m |
     ($m."juno.ForwardPass.prefill.total_ms" // 0) as $prefill_ms |
@@ -1303,7 +1328,34 @@ jfr_summary_json() {
                          bytes: .value } ]
                    | sort_by(-.bytes),
       monitor_enter_total_ms: ($m."jdk.JavaMonitorEnter.total_ms" // null),
-      thread_park_total_ms: ($m."jdk.ThreadPark.total_ms" // null)
+      thread_park_total_ms: ($m."jdk.ThreadPark.total_ms" // null),
+      # Host-device copies and weight dequantization, which the matmul span otherwise
+      # hides inside itself. The prefill figures are the bytes a residency change is
+      # scored on; durations are measured on the device for asynchronous copies. A
+      # build that predates the events, or a run without --device-spans (the events
+      # were not recorded), reports null, not zero.
+      device_staging: (($m."juno.DeviceStaging.H2D.prefill.bytes" // null) as $h2d
+        | ($m."juno.DeviceStaging.D2H.prefill.bytes" // null) as $d2h
+        | if $h2d == null or $spans == 0 then null else {
+            prefill_h2d_bytes: $h2d,
+            prefill_d2h_bytes: $d2h,
+            # Small copies are timed one in sixteen; the estimate scales the mean of each site
+            # to all of its copies (older builds: the measured sum).
+            prefill_h2d_ms: ($m."juno.DeviceStaging.H2D.prefill.estimated_total_ms"
+                             // $m."juno.DeviceStaging.H2D.prefill.total_ms" // null),
+            prefill_d2h_ms: ($m."juno.DeviceStaging.D2H.prefill.estimated_total_ms"
+                             // $m."juno.DeviceStaging.D2H.prefill.total_ms" // null),
+            prefill_copies: (($m."juno.DeviceStaging.H2D.prefill.count" // 0)
+                             + ($m."juno.DeviceStaging.D2H.prefill.count" // 0)),
+            prefill_bytes_per_token: (if $pb_tokens != null and $pb_tokens > 0
+                                      then (($h2d + $d2h) / $pb_tokens) else null end),
+            decode_h2d_bytes: ($m."juno.DeviceStaging.H2D.decode.bytes" // null),
+            decode_d2h_bytes: ($m."juno.DeviceStaging.D2H.decode.bytes" // null),
+            decode_h2d_ms: ($m."juno.DeviceStaging.H2D.decode.total_ms" // null),
+            decode_d2h_ms: ($m."juno.DeviceStaging.D2H.decode.total_ms" // null),
+            dequant_device_count: ($m."juno.WeightDequant.device.count" // null),
+            dequant_device_ms: ($m."juno.WeightDequant.device.total_ms" // null)
+          } end)
     }
   '
 }
@@ -1509,8 +1561,27 @@ EOF
   # Discarded requests, so the measured one runs on compiled code rather than
   # paying for the compilation of the whole forward pass inside the window. They
   # use the measured prompt, so they compile the shapes the measured request runs.
-  local w warmup_rc=0
+  #
+  # The last warmup runs under a throwaway recording with the measurement settings.
+  # Starting the first recording in a process instruments the event classes and
+  # takes every branch that only runs while one records; code compiled during an
+  # unrecorded warmup has never seen those paths, so the first recording
+  # deoptimizes it and the measured request would pay for the recompilation (seen:
+  # the first two of 22 layers of a TinyLlama prefill window running two to three
+  # times slower, then every layer identical). The throwaway recording moves that
+  # into the warmup; its data is discarded.
+  local w warmup_rc=0 warmup_recording=0
+  local -a jfr_settings_args=("settings=${JFR_SETTINGS_FILE}")
+  (( DEVICE_SPANS )) && jfr_settings_args+=("settings=${JFR_SPANS_FILE}")
   for (( w = 1; w <= JUNO_WARMUP; w++ )); do
+    if [[ "$USE_JFR" -eq 1 && "$w" -eq "$JUNO_WARMUP" ]]; then
+      if jcmd "$JUNO_PID" JFR.start name="$JFR_WARMUP_RECORDING_NAME" "${jfr_settings_args[@]}" \
+           >>"$logf" 2>&1; then
+        warmup_recording=1
+      else
+        warn "could not start the warmup recording — the measured request may pay for recompilation; see ${logf}"
+      fi
+    fi
     log "juno warmup ${w}/${JUNO_WARMUP}: ${rep_label}"
     if ! juno_chat_request "$model_id" "$measured_prompt" "$lane_max_tokens" \
          "${OUT_ROOT}/${rep_label}-juno-warmup${w}.json" "$logf" "$lane_min_tokens"; then
@@ -1519,6 +1590,10 @@ EOF
       break
     fi
   done
+  if (( warmup_recording )); then
+    jcmd "$JUNO_PID" JFR.stop name="$JFR_WARMUP_RECORDING_NAME" >>"$logf" 2>&1 \
+      || warn "could not stop the warmup recording — see ${logf}"
+  fi
 
   # From here to JFR.stop is the measurement window, and nothing else is in it.
   if [[ "$USE_JFR" -eq 1 && "$warmup_rc" -eq 0 ]]; then
@@ -1526,7 +1601,7 @@ EOF
     # window is the measured request, and the bound only stops a recording whose
     # request never returned. The dump lands in the file named here either way, so
     # a recording that hit the bound is still readable.
-    if ! jcmd "$JUNO_PID" JFR.start name="$JFR_RECORDING_NAME" "settings=${JFR_SETTINGS_FILE}" \
+    if ! jcmd "$JUNO_PID" JFR.start name="$JFR_RECORDING_NAME" "${jfr_settings_args[@]}" \
          "duration=${JFR_DURATION}" "filename=${jfr_recording}" >>"$logf" 2>&1; then
       warn "could not start the measurement recording — see ${logf}"
       USE_JFR_THIS_REP=0
@@ -2199,6 +2274,8 @@ write_run_index() {
     echo "  min/max column is that median's own spread; a difference smaller than the spread"
     echo "  is not a result. Each cycle records only its measured request: the recording is"
     echo "  started after the warmup requests return and stopped before the engine exits."
+    echo "  The last warmup ran under a discarded recording with the same settings, so the"
+    echo "  measured request does not pay for the first recording's recompilation."
     echo "- Build: Juno \`$(juno_commit)\`$([[ "$(juno_tree_dirty)" == true ]] && echo ' plus uncommitted changes'), jar sha256 \`$(juno_jar_sha256)\`,"
     echo "  $(java_version_line); JVM ${JUNO_JVM_FLAGS[*]}, -Xms equal to -Xmx per model."
     echo "  Reference tool build \`$(llama_build_commit)\` from ${LLAMA_CPP_BIN:-?}; GPU driver $(gpu_driver_version)."
@@ -2302,6 +2379,9 @@ if [[ "$USE_JFR" -eq 1 ]]; then
   require_cmd jcmd
   [[ -f "$JFR_SETTINGS_FILE" ]] \
     || die "JFR settings not found: ${JFR_SETTINGS_FILE} (pass --no-jfr for an API-only measurement)"
+  if (( DEVICE_SPANS )); then
+    [[ -f "$JFR_SPANS_FILE" ]] || die "--device-spans: settings not found: ${JFR_SPANS_FILE}"
+  fi
 fi
 
 resolve_llama_bin

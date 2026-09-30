@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+     Overlay for juno-perf.jfc: enables the host-device copy and dequantization
+     totals (juno.DeviceStaging, juno.WeightDequant) that a prefill breakdown
+     reads. Pass it after the base file, e.g.
+       jcmd <pid> JFR.start settings=juno-perf.jfc settings=juno-perf-spans.jfc
+     or the device-spans option of compare-llama-cpp.sh. Both events are totals committed at
+     the end of each recording chunk; counting every copy costs 4% to 7% of a
+     TinyLlama prefill window, which is why the base file leaves them off.
+-->
+<configuration version="2.0" label="Juno device spans" description="Enables juno.DeviceStaging and juno.WeightDequant on top of juno-perf.jfc" provider="Juno">
+
+    <event name="juno.DeviceStaging">
+      <setting name="enabled">true</setting>
+      <setting name="stackTrace">false</setting>
+      <setting name="threshold">0 ms</setting>
+      <setting name="period">endChunk</setting>
+    </event>
+
+    <event name="juno.WeightDequant">
+      <setting name="enabled">true</setting>
+      <setting name="stackTrace">false</setting>
+      <setting name="threshold">0 ms</setting>
+      <setting name="period">endChunk</setting>
+    </event>
+
+</configuration>

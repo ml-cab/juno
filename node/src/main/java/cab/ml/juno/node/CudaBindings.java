@@ -102,6 +102,10 @@ final class CudaBindings implements GpuBindings {
     final MethodHandle cudaStreamCreateWithFlags;// int (cudaStream_t*, unsigned int)
     final MethodHandle cudaStreamSynchronize;    // int (cudaStream_t)
     final MethodHandle cudaStreamDestroy;        // int (cudaStream_t)
+    final MethodHandle cudaEventCreate;          // int (cudaEvent_t*)
+    final MethodHandle cudaEventRecord;          // int (cudaEvent_t, cudaStream_t)
+    final MethodHandle cudaEventElapsedTime;     // int (float*, cudaEvent_t, cudaEvent_t)
+    final MethodHandle cudaEventDestroy;         // int (cudaEvent_t)
 
     // ── cuBLAS handles ────────────────────────────────────────────────────────
     final MethodHandle cublasCreate;             // int (cublasHandle_t*)
@@ -179,6 +183,14 @@ final class CudaBindings implements GpuBindings {
         cudaStreamSynchronize     = bind(linker, cudart, "cudaStreamSynchronize",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
         cudaStreamDestroy         = bind(linker, cudart, "cudaStreamDestroy",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+        cudaEventCreate           = bind(linker, cudart, "cudaEventCreate",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+        cudaEventRecord           = bind(linker, cudart, "cudaEventRecord",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+        cudaEventElapsedTime      = bind(linker, cudart, "cudaEventElapsedTime",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+        cudaEventDestroy          = bind(linker, cudart, "cudaEventDestroy",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
         cublasCreate              = bind(linker, cublas, "cublasCreate_v2",
@@ -394,6 +406,10 @@ final class CudaBindings implements GpuBindings {
     @Override public MethodHandle gpuStreamCreateWithFlags()    { return cudaStreamCreateWithFlags; }
     @Override public MethodHandle gpuStreamSynchronize()        { return cudaStreamSynchronize; }
     @Override public MethodHandle gpuStreamDestroy()            { return cudaStreamDestroy; }
+    @Override public MethodHandle gpuEventCreate()              { return cudaEventCreate; }
+    @Override public MethodHandle gpuEventRecord()              { return cudaEventRecord; }
+    @Override public MethodHandle gpuEventElapsedTime()         { return cudaEventElapsedTime; }
+    @Override public MethodHandle gpuEventDestroy()             { return cudaEventDestroy; }
     @Override public MethodHandle blasCreate()                  { return cublasCreate; }
     @Override public MethodHandle blasDestroy()                 { return cublasDestroy; }
     @Override public MethodHandle blasSetStream()               { return cublasSetStream; }

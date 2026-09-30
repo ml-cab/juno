@@ -78,9 +78,7 @@ public final class DeviceFloatMatrix implements AutoCloseable {
         try (Arena staging = Arena.ofConfined()) {
             MemorySegment nativeHost = staging.allocate(bytes);
             nativeHost.copyFrom(MemorySegment.ofArray(host));
-            GpuBindings.check(
-                GpuBindings.callInt(gpu.gpuMemcpy(), dA, nativeHost, bytes, GpuBindings.H2D),
-                "memcpy(A H2D)");
+            DeviceStaging.copy(gpu, dA, nativeHost, bytes, GpuBindings.H2D, 0, "memcpy(A H2D)");
         }
 
         return new DeviceFloatMatrix(ctx, dA, rows, cols);

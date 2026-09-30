@@ -56,6 +56,8 @@ final class ResidentChain implements AutoCloseable {
 	private final List<ResidentActivation> activations = new ArrayList<>();
 	/** Raw device scratch owned by this chain (not activations), freed on {@link #close}. */
 	private final List<MemorySegment> scratch = new ArrayList<>();
+	/** Device-side timing of the copies issued on this chain, committed at each synchronization. */
+	private final DeviceSpanTimer spans;
 
 	/**
 	 * Incremented at every synchronization. An activation records it when it
@@ -69,6 +71,7 @@ final class ResidentChain implements AutoCloseable {
 		this.ctx = ctx;
 		this.gpu = ctx.bindings();
 		this.stream = stream;
+		this.spans = new DeviceSpanTimer(gpu);
 	}
 
 	/** Opens a region on {@code ctx}'s device with a stream of its own. */
@@ -142,6 +145,7 @@ final class ResidentChain implements AutoCloseable {
 			for (MemorySegment s : scratch)
 				gpu.deviceFree(s);
 			scratch.clear();
+			spans.close();
 			GpuBindings.callInt(gpu.gpuStreamDestroy(), stream);
 			closed = true;
 		}
@@ -157,6 +161,10 @@ final class ResidentChain implements AutoCloseable {
 
 	GpuBindings bindings() {
 		return gpu;
+	}
+
+	DeviceSpanTimer spans() {
+		return spans;
 	}
 
 	long syncEpoch() {
@@ -182,6 +190,7 @@ final class ResidentChain implements AutoCloseable {
 		}
 		GpuBindings.check(rc, "streamSynchronize(resident chain)");
 		syncEpoch++;
+		spans.commit();
 	}
 
 	private void requireOpen() {
