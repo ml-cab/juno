@@ -181,7 +181,11 @@ Module dependency (excerpt):
         timing source (device, host) and per format; every direction, phase and
         dequant key is written on every run. Decode copies are untimed, so their
         total_ms is 0 with a non-zero count; sampled sites add estimated_total_ms,
-        each site's measured mean scaled to all of its copies.
+        each site's measured mean scaled to all of its copies. The HOST direction
+        (host FP16 packing, site pack_fp16_host) is kept apart from H2D/D2H.
+        juno.DeviceCompute is summed overall, per phase and per kernel site
+        (gemm_half, gemv_half_batched, gemm_fp32, mmq_packed, gqa_attention, always
+        written) into count/timed_count/total_ms.
         Recorded durations are only as good as the recorder's clock: on a host
         whose kernel rejected the CPU timestamp counter, a span crossing two
         cores whose counters disagree is misread, so the comparison harnesses
@@ -400,6 +404,12 @@ GPU FFI (node module — Panama project, JEP 454):
         path (RmsNormKernel.launchResident, RopeKernel.launch); the older per-call launch builds an
         arena and boxes its arguments through invokeWithArguments, which is cheap next to a
         synchronous round trip and not once the round trip is gone.
+  Phi3RopeConfig — Phi-3 LongRoPE factors. selectFactors() returns the short set whenever the
+        file carries one (the trained context_length, 131072 on Phi-3.5, is not the selector:
+        it would pick the long set for every request); requirePosition(pos), called by every
+        Phi3Rope rotation (CPU and GPU handlers, batched prefill, LoRA forward and
+        ropeExtBackward), throws at pos >= original_context_length when the file also has
+        long factors, so no sequence continues past 4096 on factors it did not start with.
   RopePairing — the RoPE pair layout: ADJACENT (x[2i], x[2i+1]) or SPLIT_HALF
         (x[i], x[i+headDim/2]), same per-pair frequency in both. Fixed by how the
         file's converter laid out the Q/K rows, never by a flag: LlamaTransformerHandler
@@ -496,6 +506,16 @@ GPU FFI (node module — Panama project, JEP 454):
         counting and timing every copy costs 4% to 7% of a TinyLlama prefill window;
         juno-perf-spans.jfc layered over it (compare-llama-cpp.sh --device-spans) turns them on
         for a breakdown run.
+  Device kernel totals — juno.DeviceCompute (DeviceComputeEvent: site, phase, count, timedCount,
+        computeNanos), periodic through the same DeviceSpanTally. CudaMatVec brackets its
+        asynchronous kernels with DeviceSpanTimer stream events (gemm_half: the tiled FP16 GEMM,
+        including the K-quant path after launchDequant; gemv_half_batched: the strided batched GEMV
+        for 2 to 8 rows; mmq_packed: the packed decode GEMV, counted untimed at width 1).
+        DeviceComputeClock times the default-stream kernels between two synchronous copies on the
+        host, between two drains of that stream (gemm_fp32 in GpuBlasOps.forward, gqa_attention in
+        CudaGqaAttention). CudaMatVec.packFp16Window counts the host FP16 packing of each window as a
+        juno.DeviceStaging site (pack_fp16_host) with direction HOST. Off in juno-perf.jfc, on in
+        juno-perf-spans.jfc. RocmMatVec has no batched GEMM, so it has no compute site yet.
   DeviceFloatMatrix / DeviceHalfMatrix / DeviceQ4KMatrix — VRAM buffer wrappers using GpuBindings
         deviceMalloc / deviceFree; explicit lifecycle via releaseGpuResources().
         Vendor-neutral half/float; Q4_K path is CUDA-only.

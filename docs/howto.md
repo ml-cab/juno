@@ -457,6 +457,17 @@ file tokenizes identically whatever it declares.
 
 ---
 
+### Maximum sequence length
+
+A request's prompt plus generated tokens can reach 32,768 positions, the KV cache's capacity. One
+family is limited further: a Phi-3 model whose GGUF carries both `rope_factors_short` and
+`rope_factors_long` (Phi-3.5-mini, the Phi-3 128k variants) rotates with the short factors and is
+limited to its original training context, `rope.scaling.original_context_length` (4,096 tokens on
+Phi-3.5-mini). The long factors are meant for sequences configured past that length, and rotating a
+short sequence with them damages it: Phi-3.5-mini then rarely ends its turn. A sequence that reaches
+the limit fails with an error naming it rather than continuing on factors it did not start with. This
+applies on every path, CPU and GPU, local and cluster, inference and LoRA training.
+
 ### OpenAI-compatible REST API (`--api-port`)
 
 Pass `--api-port N` to any `local` or cluster invocation to start an OpenAI wire-compatible
@@ -1056,14 +1067,17 @@ file cannot be found, the run falls back to the JDK's stock low-overhead setting
 because a recording that cannot state which settings produced it should not be compared against
 one taken under the Juno settings.
 
-### Host-device copy and dequantization totals
+### Host-device copy, dequantization and device kernel totals
 
-`juno.MatVec` times a GPU matmul as one span, which hides the copies around it. Two further events
-break those terms out: `juno.DeviceStaging` (every host-to-device, device-to-host and
-device-to-device copy) and `juno.WeightDequant` (every weight dequantization: per batched K-quant
-GEMM on the device, once per weight on the host at load). They are totals, not one event per
-copy: each is committed per copy site and phase when the recording ends, so a recording holds
-exactly the work done while it ran.
+`juno.MatVec` times a GPU matmul as one span, which hides the copies, the dequantization and the
+kernel inside it. Three further events break those terms out: `juno.DeviceStaging` (every
+host-to-device, device-to-host and device-to-device copy, plus the host FP16 packing of each
+activation window under the direction `HOST`), `juno.WeightDequant` (every weight dequantization:
+per batched K-quant GEMM on the device, once per weight on the host at load) and
+`juno.DeviceCompute` (the device kernels: the tiled FP16 GEMM, the batched FP16 GEMV, the FP32 BLAS
+GEMM, the packed decode GEMV and the attention kernel). They are totals, not one event per copy or
+launch: each is committed per site and phase when the recording ends, so a recording holds exactly
+the work done while it ran.
 
 They are off in `juno-perf.jfc`, because counting and timing every copy costs 4% to 7% of a
 TinyLlama prefill window, which writes every KV row of every layer as its own copy. Turn them on
@@ -1078,18 +1092,23 @@ jcmd <pid> JFR.start name=spans filename=spans.jfr \
 
 or with `compare-llama-cpp.sh --device-spans`, which adds a `device_staging` object to every
 result file (prefill bytes and milliseconds each way, bytes per prompt token, decode bytes, device
-dequantization).
+dequantization, host packing time, and prefill kernel time overall and per kernel site).
 
 | Key | Meaning |
 |---|---|
 | `juno.DeviceStaging.{H2D,D2H,D2D}[.{prefill,decode,other}].{count,bytes}` | Copies and bytes, exact. `prefill`: the forward call covered more than one row; `decode`: one row; `other`: outside a forward call (weights, tables, cache growth) |
+| `juno.DeviceStaging.HOST[.<phase>].*` | Host work done only to stage a copy (FP16 packing of an activation window, site `pack_fp16_host`), timed on the host clock. It crosses no bus, so it is not in the H2D or D2H totals |
 | `...timed_count`, `...total_ms` | Copies timed and their measured sum. Decode copies are counted, not timed; copies under 64 KB are timed one in sixteen |
 | `...estimated_total_ms` | Each site's measured mean scaled to all of its copies: the figure to read |
 | `juno.DeviceStaging.site.<site>.<phase>.*` | The same, per copy site |
 | `juno.WeightDequant.{count,timed_count,total_ms}`, also under `.device`, `.host` and `.format.<F>` | Dequantizations, overall, per timing source and per format |
+| `juno.DeviceCompute[.<phase>].{count,timed_count,total_ms}` | Device kernel launches and their measured time. Decode launches are counted, not timed |
+| `juno.DeviceCompute.site.<site>.<phase>.*` | The same per kernel: `gemm_half`, `gemv_half_batched`, `gemm_fp32`, `mmq_packed`, `gqa_attention` |
 
 Asynchronous copies and kernels are timed on the device between two stream events, since a host
-clock would only see them being queued. With the events off, every copy site is the plain call.
+clock would only see them being queued. The attention kernel and the FP32 BLAS GEMM run on the
+default stream between two synchronous copies; they are timed on the host between two drains of
+that stream. With the events off, every copy and kernel site is the plain call.
 
 ### JFR durations on a host whose kernel rejected the CPU timestamp counter
 

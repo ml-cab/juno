@@ -56,11 +56,12 @@ JUNO_MIN_TOKENS=""
 # at the shallow context the reference tool measures its own generation at.
 GENERATE_LANE_PROMPT="Hi"
 N_THREADS="$(nproc 2>/dev/null || echo 6)"
-# What Juno actually runs its kernels at: they dispatch on the common pool, whose
-# default parallelism is one fewer than the available processors. Recorded so the
-# published mismatch against llama-bench -t is explicit rather than inferred.
-JUNO_EFFECTIVE_PARALLELISM="$(( $(nproc 2>/dev/null || echo 6) - 1 ))"
-(( JUNO_EFFECTIVE_PARALLELISM < 1 )) && JUNO_EFFECTIVE_PARALLELISM=1
+# Juno's CPU kernels dispatch on the common fork-join pool, and the calling thread joins
+# the work as one more worker. Juno is launched with the pool's parallelism set to
+# N_THREADS - 1 (resolved after the flags are parsed), so its hot path runs the same
+# N_THREADS threads the reference tool is given with -t. Recorded as juno_threads.
+JUNO_POOL_PARALLELISM=""
+JUNO_THREADS=""
 NGL=""
 API_PORT=18080
 JUNO_USE_VECTOR="${JUNO_USE_VECTOR:-1}"
@@ -122,9 +123,9 @@ JFR_DURATION="${JFR_DURATION:-30m}"
 # The one measurement configuration every recording in this project names, so two
 # runs carry the same instrumentation overhead and stay comparable.
 JFR_SETTINGS_FILE="${JUNO_JFR_SETTINGS_FILE:-${PERF_SCRIPTS}/juno-perf.jfc}"
-# --device-spans layers juno-perf-spans.jfc over it, enabling juno.DeviceStaging and
-# juno.WeightDequant: the host-device copy and dequantization totals a prefill
-# breakdown reads. Off by default because counting and timing tens of thousands of
+# --device-spans layers juno-perf-spans.jfc over it, enabling juno.DeviceStaging,
+# juno.WeightDequant and juno.DeviceCompute: the host-device copy, dequantization and
+# device kernel totals a prefill breakdown reads. Off by default because counting and timing tens of thousands of
 # copies per prefill window cost 4% to 7% of TinyLlama prefill; bytes are exact
 # either way, so a spans lane is for attribution, not for a throughput figure.
 DEVICE_SPANS=0
@@ -198,9 +199,10 @@ Options:
                     on exit. Needs prompt-free sudo (run sudo -v first); the run refuses
                     to start if the CPU cannot be pinned. Required for any gate tighter
                     than this host's 15% noise floor
-  --device-spans    Also record juno.DeviceStaging and juno.WeightDequant (host-device
-                    copy and dequantization totals per site and phase; results gain a
-                    device_staging object). Costs 4% to 7% of TinyLlama prefill, so a
+  --device-spans    Also record juno.DeviceStaging, juno.WeightDequant and
+                    juno.DeviceCompute (host-device copy, dequantization and device
+                    kernel totals per site and phase; results gain a device_staging
+                    object). Costs 4% to 7% of TinyLlama prefill, so a
                     spans run is for attribution and staged bytes, not for a ratio
   --pin-gpu-mhz N   GPU graphics clock to lock at with --pin-clocks (default: the card's
                     maximum graphics clock)
@@ -556,6 +558,42 @@ run_selftest() {
     "$(jq -r '.device_staging' <<<"$(DEVICE_SPANS=0 jfr_summary_json "$d/staging.json" 128 1 782)")"
   selftest_expect "prefill staging is surfaced per prompt token" 31496.06 \
     "$(jq -r '.device_staging.prefill_bytes_per_token * 100 | round / 100' <<<"$sj")"
+  selftest_expect "a build without compute keys reports no compute figure" null \
+    "$(jq -r '.device_staging.prefill_compute_ms' <<<"$sj")"
+  jq '.models[0].metrics += { "juno.DeviceCompute.prefill.total_ms": 410.5,
+      "juno.DeviceCompute.site.gemm_half.prefill.total_ms": 370.5,
+      "juno.DeviceCompute.site.gqa_attention.prefill.total_ms": 40,
+      "juno.DeviceCompute.site.gemm_half.decode.total_ms": 0,
+      "juno.DeviceStaging.HOST.prefill.total_ms": 55.25 }' "$d/staging.json" >"$d/compute.json"
+  sj="$(DEVICE_SPANS=1 jfr_summary_json "$d/compute.json" 128 1 782)"
+  selftest_expect "prefill kernel time is surfaced" 410.5 "$(jq -r '.device_staging.prefill_compute_ms' <<<"$sj")"
+  selftest_expect "and split per kernel site, prefill only" '{"gemm_half":370.5,"gqa_attention":40}' \
+    "$(jq -c '.device_staging.prefill_compute_ms_by_site' <<<"$sj")"
+  selftest_expect "host FP16 packing is surfaced apart from the copies" 55.25 \
+    "$(jq -r '.device_staging.prefill_pack_host_ms' <<<"$sj")"
+
+  log "selftest: Juno's hot path runs the reference tool's -t"
+  local saved_threads="$N_THREADS" saved_pool="$JUNO_POOL_PARALLELISM" saved_juno_threads="$JUNO_THREADS"
+  local saved_flags=("${JUNO_JVM_FLAGS[@]}")
+  N_THREADS=4
+  JUNO_JVM_FLAGS=(-XX:+UseG1GC)
+  resolve_thread_parity
+  selftest_expect "the common pool is given -t minus the calling thread" \
+    "-Djava.util.concurrent.ForkJoinPool.common.parallelism=3" "${JUNO_JVM_FLAGS[-1]}"
+  local hj
+  hj="$(host_meta_json)"
+  selftest_expect "host.json records juno_threads" 4 "$(jq -r '.juno_threads' <<<"$hj")"
+  selftest_expect "host.json records the pool property" 3 "$(jq -r '.juno_common_pool_parallelism' <<<"$hj")"
+  selftest_expect "and the JVM flags it ran with carry it" true \
+    "$(jq -r '.juno_jvm_flags | test("common.parallelism=3")' <<<"$hj")"
+  N_THREADS=1
+  JUNO_JVM_FLAGS=()
+  resolve_thread_parity
+  selftest_expect "-t 1 still leaves the pool one worker" 1 "$JUNO_POOL_PARALLELISM"
+  N_THREADS="$saved_threads"
+  JUNO_POOL_PARALLELISM="$saved_pool"
+  JUNO_THREADS="$saved_juno_threads"
+  JUNO_JVM_FLAGS=("${saved_flags[@]}")
 
   log "selftest: GPU attention as the engine resolved it, not as the flag asked"
   # Read off the engine log: the published default lane passed no flag at all, and
@@ -672,6 +710,15 @@ if [[ -n "$JUNO_JAR_EXPLICIT" ]]; then
     printf '[compare] --juno-jar given: not publishing (a published sweep is always this tree'"'"'s build)\n' >&2
   fi
 fi
+
+# Thread parity with the reference tool's -t (see JUNO_POOL_PARALLELISM above).
+resolve_thread_parity() {
+  JUNO_POOL_PARALLELISM=$(( N_THREADS - 1 ))
+  (( JUNO_POOL_PARALLELISM < 1 )) && JUNO_POOL_PARALLELISM=1
+  JUNO_THREADS=$(( JUNO_POOL_PARALLELISM + 1 ))
+  JUNO_JVM_FLAGS+=("-Djava.util.concurrent.ForkJoinPool.common.parallelism=${JUNO_POOL_PARALLELISM}")
+}
+resolve_thread_parity
 
 # Generation parity defaults to the requested token count; resolved here because it
 # follows --n-gen, which may itself have been set on the command line.
@@ -1034,7 +1081,8 @@ host_meta_json() {
   "cpu": "$(json_escape "$cpu")",
   "mem_total": "$(json_escape "$mem")",
   "n_threads": ${N_THREADS},
-  "juno_effective_parallelism": ${JUNO_EFFECTIVE_PARALLELISM},
+  "juno_threads": ${JUNO_THREADS},
+  "juno_common_pool_parallelism": ${JUNO_POOL_PARALLELISM},
   "cpu_governor": "$(json_escape "$(cpu_governor_state)")",
   "cpu_turbo": "$(json_escape "$(cpu_turbo_state)")",
   "gpu_clocks": $(gpu_clock_json),
@@ -1401,7 +1449,16 @@ jfr_summary_json() {
             decode_h2d_ms: ($m."juno.DeviceStaging.H2D.decode.total_ms" // null),
             decode_d2h_ms: ($m."juno.DeviceStaging.D2H.decode.total_ms" // null),
             dequant_device_count: ($m."juno.WeightDequant.device.count" // null),
-            dequant_device_ms: ($m."juno.WeightDequant.device.total_ms" // null)
+            dequant_device_ms: ($m."juno.WeightDequant.device.total_ms" // null),
+            # Host FP16 packing of each activation window: host work done only to stage
+            # the upload, kept apart from the bytes that cross the bus (null before it existed).
+            prefill_pack_host_ms: ($m."juno.DeviceStaging.HOST.prefill.total_ms" // null),
+            # Device kernels timed at prefill width: the GEMM term, read rather than inferred.
+            prefill_compute_ms: ($m."juno.DeviceCompute.prefill.total_ms" // null),
+            prefill_compute_ms_by_site: ([$m | to_entries[]
+                | select(.key | test("^juno\\.DeviceCompute\\.site\\..*\\.prefill\\.total_ms$"))
+                | { key: (.key | sub("^juno\\.DeviceCompute\\.site\\."; "") | sub("\\.prefill\\.total_ms$"; "")),
+                    value: .value }] | if length == 0 then null else from_entries end)
           } end)
     }
   '
@@ -2387,10 +2444,14 @@ write_run_index() {
     echo "- Clock state this run: CPU governor $(cpu_governor_state), turbo $(cpu_turbo_state),"
     echo "  GPU clocks $(gpu_clock_json). A throttled run and a regression look the same"
     echo "  without this."
-    echo "- Thread counts are not matched: the reference tool ran with -t ${N_THREADS}, while Juno"
-    echo "  dispatches its kernels on the common pool at an effective parallelism of"
-    echo "  ${JUNO_EFFECTIVE_PARALLELISM}. Juno has no thread-count control reaching the hot path yet, so this"
-    echo "  mismatch is recorded rather than removed."
+    if (( JUNO_THREADS == N_THREADS )); then
+      echo "- Thread counts are matched: the reference tool ran with -t ${N_THREADS}, and Juno's CPU kernels"
+      echo "  ran on ${JUNO_THREADS} threads (common pool parallelism ${JUNO_POOL_PARALLELISM} plus the calling thread)."
+    else
+      echo "- Thread counts are not matched: the reference tool ran with -t ${N_THREADS}, while Juno's CPU"
+      echo "  kernels ran on ${JUNO_THREADS} threads (common pool parallelism ${JUNO_POOL_PARALLELISM} plus the calling"
+      echo "  thread; the pool needs at least one worker)."
+    fi
     if (( ${#noise_notes[@]} > 0 )); then
       echo "- Rows marked NOISY are not scorable and should be re-run:"
       local nnote

@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20260927T094414Z (cpu)
 
+> **Superseded as reference on 2026-10-01** by [`20261001T180241Z`](../20261001T180241Z/INDEX.md), the first pinned-clock CPU sweep with the thread count recorded as matched. Kept as the unpinned reading; compare ratios, not absolute t/s, across the two.
+
 > **CPU reference sweep from 2026-09-27** (supersedes [`20260925T174146Z`](../20260925T174146Z/INDEX.md) as reference). Taken after the scalar CPU RoPE began reading a per-position table, a measurement boundary; every row within 1% spread.
 
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |

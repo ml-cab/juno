@@ -131,12 +131,47 @@ changes** (README execution rule 9) and tick item 7 here.
 6. **Default of `--gpu-residency`.** After item 4 (and 5 if wired), re-measure the region on vs off on
    all four sweep models (full `compare-llama-cpp.sh --gpu` sweeps, both published) and put the default
    to the owner with the numbers; do not change it unasked.
-7. **Phi-3.5 LongRoPE factor selection** (defect found 2026-09-28, see "Why this tier, why now").
+7. *Moved 2026-09-30 (plan review): the factor-selection fix is now
+   [Tier 01B](TIER-01B-prefill-throughput.md) scope item 8, an out-of-tier correctness fix, because
+   Phi-3.5-mini is a sweep model and the defect affects every reply. What remains here: if the owner
+   chose option (a) there, decide whether option (b) is still wanted; and explain the long-factor gap
+   (0.502 against the reference's 0.675). Verify 01B's fix against current code before relying on it.*
+   *Reduced 2026-10-01: Tier 01B shipped option (a) as a fixed cap (owner decision; Juno has no
+   per-session context setting to configure "above 4096" with): `Phi3RopeConfig.selectFactors()`
+   returns the short factors whenever the file has them, and `requirePosition` fails closed at
+   `original_context_length` on every `Phi3Rope` caller. `Phi3EndOfTurnLiveTest` reads P(32007) =
+   0.9924 (0.5016 before). What remains here: (1) whether option (b) is wanted, which would lift
+   the 4096-token cap and needs the context-shift machinery; and (2) the long-factor gap (0.502
+   against 0.675), which now matters only to option (b), since no Juno sequence rotates with the
+   long factors any more. The rest of this item's original text is kept below as the record.*
+   **Phi-3.5 LongRoPE factor selection** (defect found 2026-09-28, see "Why this tier, why now").
    Replace `Phi3RopeConfig.selectFactors()`'s trained-context test with the policy the owner picks
    (option a or b), applied identically on every path that calls `Phi3Rope` (CPU, GPU, batched prefill,
    LoRA training's `ropeExtBackward`), and explain the long-factor 0.502 vs 0.675 gap. Files:
    `Phi3RopeConfig`, `Phi3Rope`, `Phi3TransformerHandler`; test `Phi3RopeLoadTest` plus the live test
    below.
+8. **The whole decode layer inside the region, on every handler with a device weight path** (added
+   2026-09-30; the README's "Program objective: the layer runs on the device"). After item 4 the region
+   covers norm, Q/K/V, RoPE, the KV append and attention, and the layer then leaves the device for the
+   output projection, the residual add, the second norm and the FFN, each through today's
+   op-at-a-time `MatVec` with its own upload and download. Extend the region through the rest of the
+   layer: output projection (packed GEMV, as Q/K/V already are), both residual adds, the FFN norm, gate
+   and up, SwiGLU (Tier 01B item 6's kernel at width 1) and down, so one decode layer is one upload of
+   the residual row and one download of the layer output. Where the region also spans the next layer
+   (the residual stream never leaving the device between layers), take it: the threshold below is the
+   minimum, the objective is one crossing per forward pass.
+
+   Then give the region to `Phi3TransformerHandler` and `Qwen3TransformerHandler`, the other two
+   handlers with device weights, through the same `ResidentChain` and the same flag. That needs the
+   split-half RoPE mode (Tier 01B item 6 builds it) and, for Phi-3, its LongRoPE factors folded into the
+   inverse-frequency table the kernel already takes from the host, selected by the policy Tier 01B item
+   8 fixed. Q/K/V biases (Qwen2) and Qwen3's per-head Q/K norms are the two operations the region does
+   not have today; add them, or keep the model on the op-at-a-time path and announce it (log and
+   console, as `GpuResidencyOptions.consoleNotice` does). This is the decode lever the 0.70x GPU tg
+   end-of-plan target on Phi-3.5-mini depends on, and before this item no tier owned it.
+
+   Order within the tier: item 4, then this item, then item 5 (graph replay pays more once the region
+   issues more launches per wait), then item 6 (the default is put to the owner on the final region).
 
 ### Out of scope
 
@@ -220,9 +255,10 @@ changes** (README execution rule 9) and tick item 7 here.
    requesting any new download.
 5. Run the full cross-surface smoke matrix, including a long-context stress case (loop conversation
    turns until the shift boundary is hit) for both static and continuous schedules.
-6. Scope items 4 to 6, in that order: attention inside the decode residency region, then the
-   `CudaGraphSession` measurement and its wire-or-delete decision, then the two on/off sweeps and the
-   flag default put to the owner. Item 4 is independent of the tiled kernel (item 1) at decode width
+6. Scope items 4, 8, 5 and 6, in that order: attention inside the decode residency region, then the
+   rest of the layer and the Phi-3 and Qwen3 handlers (item 8), then the `CudaGraphSession`
+   measurement and its wire-or-delete decision, then the two on/off sweeps and the flag default put to
+   the owner. Item 4 is independent of the tiled kernel (item 1) at decode width
    and may land before it; if it does, item 1 must keep the region's bit-identity test passing.
 
 ## Tests to write/upgrade before implementation
@@ -264,6 +300,19 @@ changes** (README execution rule 9) and tick item 7 here.
     double** it, which is the property the rewrite exists to buy and the one a percentage alone does
     not capture.
 
+  **Milestone (README milestone table, added 2026-09-30).** The GPU pp ratio at `n_prompt=2048` over
+  the ratio at `n_prompt=512` is **>= 0.90** on every sweep model, from this tier's closing
+  `compare-llama-cpp.sh --gpu --pin-clocks` sweeps at both lengths. Tier 01B established that prefill
+  does not fall off between 128 and 512 once attention is on the GPU; nothing has measured 2048, which
+  is where a full-materialization attention kernel's cost shows and where the tiled kernel has to earn
+  its place in throughput as well as in memory. The reference is Tier 01C's first 2048 sweep.
+
+  **End-of-plan tg targets (raised to 0.70x on 2026-09-30).** Record the GPU tg ratio on Phi-3.5-mini
+  and mistral-7b after items 4 to 6 against the 0.70x end-of-plan targets. Items 4 and 5 are the plan's
+  main decode levers, so state per model how far they moved it and, if 0.70x is out of reach on what is
+  left in the plan (in particular, the residency region does not reach the Phi-3 and Qwen3 handlers),
+  say which mechanism is missing and that no tier owns it.
+
   Throughput must not regress: Juno tg and pp t/s **>= 0.95x** the pre-tier build on every sweep
   model, from a same-hour interleaved A/B with pinned clocks against the pre-tier build (README, "No-regression gates tighter than the floor are Juno-against-Juno"). The llama.cpp-relative ratios are recorded against the program target, not
   gated.
@@ -281,6 +330,20 @@ changes** (README execution rule 9) and tick item 7 here.
   replay against plain launches, plus greedy parity with replay on. **Threshold**: the decision rule in
   scope item 5 (at least 5% of decode forward-pass time on tinyllama and mistral-7b with greedy output
   unchanged, or delete the class and its test).
+- **The whole decode layer (scope item 8)**: extend `ResidentQkvPathTest` (or its successor) with
+  bit-identity of the full-layer region against the op-at-a-time path at several positions and across
+  concurrent threads, per handler; greedy parity on/off on tinyllama, mistral-7b, Phi-3.5-mini and
+  Qwen3-1.7B; per-request device memory flat in `smoke-gpu-residency.sh`, which gains the two new
+  handlers. A `@Tag("gpu")` test reads the decode-phase copy counts off `juno.DeviceStaging` for one
+  generated token and asserts the threshold below, so the property is held by a test and not only by a
+  sweep.
+  **Threshold** (from a `--device-spans` run, decode phase, per generated token, on every model where
+  the region runs): host-to-device copies **<= 1 x layers** and device-to-host copies **<= 1 x layers
+  + 1** (the `+ 1` is the logits); the end-to-end tg with the region on **>= 1.0x** region-off from a
+  same-hour pinned A/B alternating the flag; greedy output identical on/off. On a prefill window, the
+  same run shows **0** activation device-to-host copies inside the window apart from the window's
+  final hidden rows and logits, which Tier 01B items 2 and 6 deliver and this tier re-verifies after
+  its own kernel changes. Record the GPU tg ratios against the 0.70x end-of-plan targets.
 - **Flag default (scope item 6)**: two published `compare-llama-cpp.sh --gpu` sweeps on all four sweep
   models, `--gpu-residency on` and `off`, read side by side.
 
@@ -295,9 +358,9 @@ why this tier ships against synthetic fixtures and Tier 08 carries the real-mode
 
 ## Exit criteria
 
-- [ ] Phi-3.5 selects its RoPE factors by the owner-chosen context policy, not the trained context
-      length; the end-of-turn live test reads P(`<|end|>`) >= 0.95; the long-factor gap to the
-      reference engine is explained or fixed (scope item 7).
+- [ ] Phi-3.5's factor-selection fix verified as landed by Tier 01B item 8 (end-of-turn live test
+      still >= 0.95), option (b) decided if 01B shipped option (a), and the long-factor gap to the
+      reference engine explained or fixed (scope item 7).
 - [ ] Tiled attention kernel numerically matches the CPU oracle at all tested sequence lengths and
       reduces peak GPU memory at long context vs. the old full-materialization kernel (measured).
 - [ ] Context-shift works correctly, opt-in only, for both dense and paged KV, both schedules.
@@ -318,6 +381,12 @@ why this tier ships against synthetic fixtures and Tier 08 carries the real-mode
       mistral-7b and llama-1-30b; per-request device memory flat in `smoke-gpu-residency.sh`.
       **Threshold**: end-to-end tg with the region on >= 1.0x the region-off run on every model where
       it runs, and >= 0.95x everywhere.
+- [ ] The whole decode layer runs inside the region (scope item 8) on the LLaMA family, Phi-3 and
+      Qwen3, or the handler or operation that cannot is announced: decode-phase copies per generated
+      token <= 1 x layers host-to-device and <= 1 x layers + 1 device-to-host, read off
+      `juno.DeviceStaging` by test and by a published `--device-spans` run; tg region-on >= 1.0x
+      region-off (same-hour pinned A/B); greedy output identical; per-request device memory flat; zero
+      activation device-to-host copies inside a prefill window re-verified.
 - [ ] `CudaGraphSession` decided by measurement (scope item 5): wired behind `--gpu-residency` if it
       saves at least 5% of decode forward-pass time on tinyllama and mistral-7b with greedy output
       unchanged, otherwise deleted with `CudaGraphSessionTest` and the measurement recorded. Not
@@ -326,6 +395,9 @@ why this tier ships against synthetic fixtures and Tier 08 carries the real-mode
       on all four sweep models; changed only on the owner's decision.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, both memory thresholds above met, no throughput regression.
+- [ ] Milestone (pp ratio at 2048 over 512 >= 0.90 on every sweep model) reported met or missed with
+      its number; GPU tg ratios recorded against the 0.70x end-of-plan targets, with the missing
+      mechanism named if they are out of reach.
 - [ ] The context-shift opt-in is in `api/src/main/resources/openapi.yaml` and `juno-api.yaml`
       alongside the code that reads it (README feature-complete rule).
 - [ ] Docs (`docs/howto.md`, `docs/agent-arch.txt`, `docs/performance.md`) updated, Juno-native

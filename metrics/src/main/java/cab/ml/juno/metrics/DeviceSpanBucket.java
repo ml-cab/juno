@@ -23,9 +23,9 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * Host-device copies ({@code juno.DeviceStaging}) and weight dequantizations
- * ({@code juno.WeightDequant}): the terms {@code juno.MatVec} otherwise hides inside
- * its own span.
+ * Host-device copies ({@code juno.DeviceStaging}), weight dequantizations
+ * ({@code juno.WeightDequant}) and device kernels ({@code juno.DeviceCompute}): the
+ * terms {@code juno.MatVec} otherwise hides inside its own span.
  *
  * <p>Both events are totals, not one event per copy: the engine counts every copy
  * and commits one event per site and phase at the end of each recording chunk, so
@@ -43,8 +43,15 @@ import java.util.TreeMap;
  * growth). As with the other window-split events, a multi-session decode step also
  * covers more than one row, so the split reads as prefill only under single-stream
  * traffic, which is how every benchmark in this repository drives the engine. Per
- * site: {@code juno.DeviceStaging.site.<site>.<phase>.*}, for attribution. Every
- * direction, phase and dequant key is written on every run, zero or not, so a
+ * site: {@code juno.DeviceStaging.site.<site>.<phase>.*}, for attribution. The
+ * {@code HOST} direction is host work that exists only to stage a copy (packing an
+ * activation window to FP16); it is timed like a copy but moves nothing across the
+ * bus, so it stays out of the H2D and D2H totals.
+ *
+ * <p>Device kernels are split the same way: {@code juno.DeviceCompute},
+ * {@code juno.DeviceCompute.<phase>} and {@code juno.DeviceCompute.site.<site>.<phase>},
+ * each as {@code count}/{@code timed_count}/{@code total_ms}. Every direction, phase,
+ * dequant key and known compute site is written on every run, zero or not, so a
  * consumer never has to tell "absent" from "none".
  *
  * @author Yevhen Soldatov
@@ -53,8 +60,12 @@ final class DeviceSpanBucket {
 
     static final String DEVICE_STAGING = "juno.DeviceStaging";
     static final String WEIGHT_DEQUANT = "juno.WeightDequant";
+    static final String DEVICE_COMPUTE = "juno.DeviceCompute";
 
-    private static final List<String> DIRECTIONS = List.of("H2D", "D2H", "D2D");
+    private static final List<String> DIRECTIONS = List.of("H2D", "D2H", "D2D", "HOST");
+    /** Every kernel site the engine times today; always written, so a zero is visible. */
+    private static final List<String> COMPUTE_SITES = List.of("gemm_half", "gemv_half_batched", "gemm_fp32",
+            "mmq_packed", "gqa_attention");
     private static final List<String> PHASES = List.of("prefill", "decode", "other");
     private static final List<String> TIMINGS = List.of("device", "host");
     /** Every format the engine dequantizes today; always written, so a zero is visible. */
@@ -69,6 +80,9 @@ final class DeviceSpanBucket {
     private final Map<String, long[]> bySite = new TreeMap<>();
     /** Key prefix to {count, timed count, nanos}. */
     private final Map<String, long[]> dequant = new LinkedHashMap<>();
+    /** Key prefix to {count, timed count, nanos}: totals and per phase, then per site and phase. */
+    private final Map<String, long[]> compute = new LinkedHashMap<>();
+    private final Map<String, long[]> computeBySite = new TreeMap<>();
 
     DeviceSpanBucket() {
         for (String dir : DIRECTIONS) {
@@ -81,6 +95,12 @@ final class DeviceSpanBucket {
             dequant.put(WEIGHT_DEQUANT + "." + timing, new long[3]);
         for (String format : FORMATS)
             dequant.put(WEIGHT_DEQUANT + ".format." + format, new long[3]);
+        compute.put(DEVICE_COMPUTE, new long[3]);
+        for (String phase : PHASES) {
+            compute.put(DEVICE_COMPUTE + "." + phase, new long[3]);
+            for (String site : COMPUTE_SITES)
+                computeBySite.put(DEVICE_COMPUTE + ".site." + site + "." + phase, new long[3]);
+        }
     }
 
     /**
@@ -116,6 +136,15 @@ final class DeviceSpanBucket {
                     add(dequant.computeIfAbsent(WEIGHT_DEQUANT + ".format." + format, k -> new long[3]), v);
                 return true;
             }
+            case DEVICE_COMPUTE -> {
+                String phase = text(ev, "phase", "other");
+                long[] v = { longField(ev, "count"), longField(ev, "timedCount"), longField(ev, "computeNanos") };
+                add(compute.get(DEVICE_COMPUTE), v);
+                add(compute.computeIfAbsent(DEVICE_COMPUTE + "." + phase, k -> new long[3]), v);
+                add(computeBySite.computeIfAbsent(DEVICE_COMPUTE + ".site." + siteKey(text(ev, "site", "unknown"))
+                        + "." + phase, k -> new long[3]), v);
+                return true;
+            }
             default -> {
                 return false;
             }
@@ -125,7 +154,13 @@ final class DeviceSpanBucket {
     void putInto(Map<String, Double> m) {
         putStaging(m, staging);
         putStaging(m, bySite);
-        for (Map.Entry<String, long[]> e : dequant.entrySet()) {
+        putCounted(m, dequant);
+        putCounted(m, compute);
+        putCounted(m, computeBySite);
+    }
+
+    private static void putCounted(Map<String, Double> m, Map<String, long[]> cells) {
+        for (Map.Entry<String, long[]> e : cells.entrySet()) {
             long[] v = e.getValue();
             m.put(e.getKey() + ".count", (double) v[0]);
             m.put(e.getKey() + ".timed_count", (double) v[1]);

@@ -128,6 +128,25 @@ handler that exists when this tier starts**, including `gemma4`, `mistral3`, `qw
   byte-identical to `--spec-type none` in greedy output; a speedup bought with a correctness change
   is a failure, not a trade.
 
+  **Decompose the ask before implementing it, and escalate if it does not add up** (added 2026-09-30,
+  matching Tiers 01B and 10). Going from 0.52x to >= 1.20x is about a 2.3x move on the draft path, and
+  the lever this tier was written around has been measured since: Tier 01's decode residency region
+  (`--gpu-residency`, norm + Q/K/V + RoPE) made decode **3.6% to 5.4%** faster end to end, and the
+  primitive alone read 0.26x the CPU chain at decode width. Residency through attention (Tier 02 item
+  4) and CUDA graph replay (Tier 02 item 5) will have their own measured numbers by the time this tier
+  starts. Before implementing anything beyond step 1's re-measurement, write down, read off measurements
+  rather than estimated:
+  - the draft model's per-token forward time with every Tier 01/02 residency and graph option on, as
+    a fraction of the target's verify-batch time;
+  - the acceptance rate on the benchmark prompts at the draft window being used;
+  - the expected speedup those two imply (the standard speculative-decoding formula from acceptance
+    rate, window length and the draft-to-target cost ratio), against the 1.20x threshold.
+
+  If they do not plausibly reach 1.20x, say so in this file **before** implementing items 2 to 5 and
+  escalate to the owner: lookahead decoding (no draft model) and n-gram drafting may carry the tier
+  where draft-model decoding cannot, and wiring draft-model decoding into batch, continuous and eight
+  handlers is not worth doing for a strategy that stays below 1.0x.
+
 ## Models needed
 
 `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf` as the draft model and `mistral-7b-instruct-v0.1-q4_k_m
@@ -149,6 +168,8 @@ new download.
 - [ ] Draft-model speculative decoding measured *faster* than `--spec-type none` on the GTX 1080
       benchmark hardware (not just improved — actually positive), or the tier documents explicitly
       why residency alone wasn't sufficient and what alternative was shipped instead.
+- [ ] The decomposition (draft cost ratio, acceptance rate, implied speedup against 1.20x) recorded in
+      this file before items 2 to 5 were implemented, with the escalation recorded if it did not add up.
 - [ ] Lookahead decoding implemented, correctness-verified (byte-identical to `--spec-type none`).
 - [ ] `generateBatch()` and `ContinuousBatchEngine` both support speculative decoding.
 - [ ] Every `ForwardPassHandler` implementation has a `forwardVerify` override — Phi-2, Phi-3,

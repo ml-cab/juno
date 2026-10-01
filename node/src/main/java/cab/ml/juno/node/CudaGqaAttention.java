@@ -188,8 +188,10 @@ final class CudaGqaAttention {
 				hostSeqLens.setAtIndex(JAVA_INT, b, seqLens[b]);
 			DeviceStaging.copy(gpu, s.dSeqLens, hostSeqLens, seqLensBytes, GpuBindings.H2D, batch, "memcpy(gqa seqLens H2D)");
 
+			long t0 = DeviceComputeClock.start(gpu, batch);
 			kernel.launch(s.dQ, s.dKPtrs, s.dVPtrs, s.dSeqLens, s.dScores, s.dOut,
 					batch, numHeads, gqaRatio, headDim, kvDim, maxSeqLen, null);
+			DeviceComputeClock.done(gpu, DeviceComputeEvent.GQA_ATTENTION, batch, t0);
 
 			MemorySegment hostOut = staging.allocate(outBytes);
 			DeviceStaging.copy(gpu, hostOut, s.dOut, outBytes, GpuBindings.D2H, batch, "memcpy(gqa outBatch D2H)");

@@ -179,6 +179,15 @@ build without them reads 0.999x TinyLlama prefill and 1.000x Mistral 7B, generat
 0.998x (`docs/perf-compare/20260930T030253Z-tier01b-step1-spans/`). Read throughput from a run without
 the flag and staged bytes from a run with it; bytes are exact either way.
 
+**Device kernel totals.** `juno.DeviceCompute` times the kernels themselves, per site and phase: the
+tiled FP16 GEMM (`gemm_half`, on FP16 weights and on K-quant weights dequantized just before it), the
+batched FP16 GEMV for two- to eight-row windows, the FP32 BLAS GEMM, the attention kernel, and the
+packed decode GEMV (counted, untimed). The host FP16 packing of each activation window is counted as
+`juno.DeviceStaging` site `pack_fp16_host` under its own direction, `HOST`, so it stays out of the
+bytes that cross the bus. Together with the copy and dequantization totals this names every GPU term
+of a prefill window instead of leaving the GEMM as whatever `juno.MatVec` has left over. It is off in
+`juno-perf.jfc` and on under `--device-spans`, like the other two.
+
 ## OpenAI field parity (`stop` / `seed` / `presence_penalty`)
 
 **Plan:** [`infra-plan/PLAN-Infra-Tier2.md`](infra-plan/PLAN-Infra-Tier2.md) (P2 step 1 — **feature complete**).

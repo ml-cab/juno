@@ -55,6 +55,10 @@ public final class DeviceStagingEvent extends Event {
 	static final String H2D = "H2D";
 	static final String D2H = "D2H";
 	static final String D2D = "D2D";
+	/** Host work that exists only to stage a copy (packing an activation window to FP16); crosses no bus. */
+	static final String HOST = "HOST";
+	/** The memcpy-kind code {@link DeviceSpanTally#staging} takes for {@link #HOST} work. */
+	static final int HOST_WORK = -1;
 	static final String TIMING_DEVICE = "device";
 	static final String TIMING_HOST = "host";
 
@@ -63,7 +67,7 @@ public final class DeviceStagingEvent extends Event {
 	public String site;
 
 	@Label("Direction")
-	@Description("H2D (host to device), D2H (device to host) or D2D")
+	@Description("H2D (host to device), D2H (device to host), D2D, or HOST (host work done only to stage a copy)")
 	public String direction;
 
 	@Label("Phase")
@@ -92,6 +96,7 @@ public final class DeviceStagingEvent extends Event {
 		return switch (kind) {
 		case GpuBindings.H2D -> H2D;
 		case GpuBindings.D2H -> D2H;
+		case HOST_WORK -> HOST;
 		default -> D2D;
 		};
 	}

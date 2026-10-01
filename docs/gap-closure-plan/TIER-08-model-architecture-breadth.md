@@ -185,7 +185,11 @@ paragraph when deciding whether to ask; this section was stale once.
       never a silent resolution to the scalar path.
 - [ ] Phi-2 and Qwen3-MoE run their matmuls on the device on a GPU run, Qwen3-MoE prefills as a
       batched window and honors `--gpu-layers`, both report GPU attention through Tier 01B's mechanism,
-      and each has a measured prefill gain against its own CPU-path baseline (scope item 6).
+      and each has a measured prefill gain against its own CPU-path baseline (scope item 6). Their
+      device weights go through `Q4KResidentUpload` (packed where a packed kernel exists, Tier 01C's
+      tiled GEMM for prefill windows) rather than a handler-local upload, and so do the device weights
+      of every handler this tier adds — the part of Tier 04C item 3 that could not run before these
+      handlers had a device path.
 - [ ] Cross-surface checklist fully resolved, LoRA-trainability gap (if any) explicitly documented
       per architecture rather than silently absent.
 - [ ] Perf gate published for at least the largest new model (`Devstral`, 24B).

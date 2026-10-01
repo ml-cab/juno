@@ -47,15 +47,37 @@ record Phi3RopeConfig(
 	}
 
 	/**
-	 * Frequency factors for RoPE — same rule as {@code llama_model::get_rope_factors}:
-	 * uses configured model context length vs original training context, not the
-	 * live sequence length.
+	 * Frequency factors for RoPE. A model that carries both sets rotates with the
+	 * short ones: the long ones are for sequences configured beyond
+	 * {@link #originalContextLength}, and rotating a short sequence with them
+	 * measurably damages it (Phi-3.5-mini's end-of-turn probability falls from
+	 * about 0.99 to 0.50). Juno has no per-session context setting, so a sequence
+	 * never starts on the long factors; {@link #requirePosition} refuses the
+	 * positions that would need them. The trained {@link #contextLength} is not
+	 * the selector: for Phi-3.5 it is 131072, which would pick the long factors
+	 * for every request.
 	 */
 	float[] selectFactors() {
-		if (contextLength > originalContextLength && ropeFactorsLong != null)
-			return ropeFactorsLong;
-		if (ropeFactorsShort != null)
-			return ropeFactorsShort;
-		return ropeFactorsLong;
+		return ropeFactorsShort != null ? ropeFactorsShort : ropeFactorsLong;
+	}
+
+	/**
+	 * Fails closed when {@code pos} is at or beyond the original training context
+	 * of a model whose long-context factors {@link #selectFactors} holds back.
+	 * Rotating those positions with the short factors would be silently wrong,
+	 * and switching factors mid-sequence would leave the cached keys rotated
+	 * with the other set.
+	 *
+	 * @throws IllegalStateException when the position needs the long factors
+	 */
+	void requirePosition(int pos) {
+		if (pos >= originalContextLength && holdsBackLongFactors())
+			throw new IllegalStateException("Phi-3 position " + pos + " reaches the model's original context length of "
+					+ originalContextLength + " tokens. Positions beyond it need the long-context RoPE factors, which "
+					+ "Juno does not use; keep the prompt and generated tokens within " + originalContextLength + ".");
+	}
+
+	private boolean holdsBackLongFactors() {
+		return ropeFactorsShort != null && ropeFactorsLong != null && contextLength > originalContextLength;
 	}
 }

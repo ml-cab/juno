@@ -28,7 +28,7 @@ import java.util.Arrays;
  *
  * <p>An asynchronous operation returns as soon as it is queued, so a host clock
  * around it measures the enqueue. The caller brackets the operation with
- * {@link #begin} and {@link #staging} (or {@link #dequant}), which record a stream
+ * {@link #begin} and {@link #staging} (or {@link #dequant}, {@link #compute}), which record a stream
  * event on each side, and after the stream has synchronized calls {@link #commit},
  * which reads each span's elapsed time off the device and adds it to the tally.
  *
@@ -49,6 +49,7 @@ final class DeviceSpanTimer implements AutoCloseable {
 
 	private static final int KIND_STAGING = 0;
 	private static final int KIND_DEQUANT = 1;
+	private static final int KIND_COMPUTE = 2;
 
 	private final GpuBindings gpu;
 	private final Arena arena = Arena.ofShared();
@@ -83,7 +84,7 @@ final class DeviceSpanTimer implements AutoCloseable {
 	int begin(MemorySegment stream, int windowSize) {
 		if (windowSize == 1 || closed)
 			return -1;
-		if (!DeviceSpanTally.stagingWanted() && !DeviceSpanTally.dequantWanted())
+		if (!DeviceSpanTally.stagingWanted() && !DeviceSpanTally.dequantWanted() && !DeviceSpanTally.computeWanted())
 			return -1;
 		return mark(stream);
 	}
@@ -120,6 +121,21 @@ final class DeviceSpanTimer implements AutoCloseable {
 		to[i] = endMark;
 	}
 
+	/** Closes a kernel launch's span, or counts it untimed if {@code beginMark} is {@code -1}. */
+	void compute(String computeSite, int windowSize, int beginMark, MemorySegment stream) {
+		int endMark = beginMark < 0 ? -1 : mark(stream);
+		if (endMark < 0) {
+			DeviceSpanTally.compute(computeSite, windowSize, -1L);
+			return;
+		}
+		int i = nextPending();
+		kind[i] = KIND_COMPUTE;
+		window[i] = windowSize;
+		site[i] = computeSite;
+		from[i] = beginMark;
+		to[i] = endMark;
+	}
+
 	/**
 	 * Adds every open span to the tally and starts a new set. Call only after the
 	 * stream the marks were recorded on has synchronized; a span the device has not
@@ -128,10 +144,11 @@ final class DeviceSpanTimer implements AutoCloseable {
 	void commit() {
 		for (int i = 0; i < pending; i++) {
 			long nanos = elapsedNanos(from[i], to[i]);
-			if (kind[i] == KIND_STAGING)
-				DeviceSpanTally.staging(site[i], code[i], window[i], bytes[i], nanos);
-			else
-				DeviceSpanTally.dequant(code[i], DeviceStagingEvent.TIMING_DEVICE, nanos);
+			switch (kind[i]) {
+			case KIND_STAGING -> DeviceSpanTally.staging(site[i], code[i], window[i], bytes[i], nanos);
+			case KIND_COMPUTE -> DeviceSpanTally.compute(site[i], window[i], nanos);
+			default -> DeviceSpanTally.dequant(code[i], DeviceStagingEvent.TIMING_DEVICE, nanos);
+			}
 		}
 		reset();
 	}

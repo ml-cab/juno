@@ -8,6 +8,16 @@ Gap analysis refs: none directly — adjacent to §1.1, but the gap analysis tre
 All line numbers below are a snapshot taken at branch `67-gap-inference`, HEAD `1f90b68`. Re-verify
 each one against current source before acting on it (README, opening paragraph).
 
+**Split 2026-09-30 (plan review): read this first.** The Q4_K/Q5_K/Q6_K tiled packed GEMM, the
+measurement that justifies it and the shrinking of the forward-pass reserve moved to
+[Tier 01C](TIER-01C-packed-kquant-matmul.md), which runs directly after Tier 01B, because prompt
+processing is the program's largest gap and every sweep model is Q4_K_M. This tier keeps what depends
+on [Tier 04](TIER-04-quantization-coverage.md): extending 01C's kernel to the formats Tier 04 adds
+kernels for, packed residency for those formats and for ROCm, the explicit and budgeted FP16 fallback,
+and the `--mmq` documentation audit. The analysis below (the three regimes) is kept as written; read
+"this tier" in the scope as amended. Start from Tier 01C's execution record, not from this file's
+description of the pre-01C code.
+
 ## Objective
 
 Make packed quantized weights the compute and residency representation on the GPU for every
@@ -110,9 +120,22 @@ table agree. It sits there for three reasons:
 The 04B adjacency carries no dependency — tokenizer fidelity and packed matmul are unrelated, and
 04C could equally run immediately after 04 if 04B slips.
 
+*Amended 2026-09-30.* The first reason no longer holds as written: the plan review judged that writing
+the kernel once against eight types was not worth leaving every tier between 01B and here without a
+prefill GEMM, so Tier 01C writes it against Q4_K/Q5_K/Q6_K and this tier extends it. The tier still
+sits after Tier 04 for the reason that remains true: the formats it extends to do not exist until
+Tier 04 lands their kernels.
+
 ## Scope
 
 ### In scope
+
+*Items 0 to 2 as amended 2026-09-30: item 0's reserve shipped in `c91f879` and its shrink is Tier
+01C item 3; this tier verifies the reserve still covers every format still on the FP16 fallback after
+Tier 04 (item 4 below). Items 1 and 2 apply to the formats Tier 04 added packed kernels for (Q2_K,
+Q3_K, Q8_0, Q4_0, IQ4_NL at minimum), by extending Tier 01C's tiled kernel rather than writing a second
+one; Q4_K, Q5_K and Q6_K are done there. Read "the tiled packed GEMM" below as "Tier 01C's kernel,
+widened".*
 
 0. **Reserve device memory for the forward pass before the upload consumes it.** The upload loop
    must stop at a budget that leaves room for the widest matmul the model can take, rather than at
@@ -173,8 +196,11 @@ The 04B adjacency carries no dependency — tokenizer fidelity and packed matmul
 3. **Packed residency for every format that has a packed kernel, on every backend.** Widen
    `DeviceQ4KMatrix.supportsType` and `Q4KResidentUpload.preferPacked` to the formats Tier 04 added
    kernels for, and make `Q4KResidentUpload` the single decision point for packed-versus-FP16 across
-   all handlers (Llama, Phi-2, Phi-3, Qwen3, Qwen3-MoE) rather than a helper three of them happen to
-   call. Give `RocmMatVec` the `uploadKQuant` override and `supportsQ4KMmq` truthfulness that
+   every handler that has a device weight path when this tier runs (today Llama, Phi-3 and Qwen3)
+   rather than a helper some of them happen to call. *Amended 2026-09-30:* Phi-2 and Qwen3-MoE have no
+   device weight path until [Tier 08](TIER-08-model-architecture-breadth.md) item 6, which runs after
+   this tier, so they are not in this item's set; Tier 08 item 6 routes them through
+   `Q4KResidentUpload` when it gives them one, as do the handlers Tier 08 adds. Give `RocmMatVec` the `uploadKQuant` override and `supportsQ4KMmq` truthfulness that
    Tier 04 item 4's kernels make possible (`NEEDS-AMD-HARDWARE` per the README's ROCm rule).
 4. **Make the remaining FP16 fallback explicit and budgeted.** A format or backend with no packed
    path still needs to run. When that is the case it must: log once, naming the format, the backend
@@ -283,6 +309,13 @@ The 04B adjacency carries no dependency — tokenizer fidelity and packed matmul
   resident weight bytes for fully-offloaded layers are **<= 1.20x** the corresponding on-disk tensor
   bytes for every format with a packed kernel, against roughly **3.56x** for Q4_K today.
 
+  *Amended 2026-09-30: every threshold below applies to the formats this tier adds to the packed path
+  (Tier 04's formats), not to Q4_K/Q5_K/Q6_K, which Tier 01C gates. Read "tinyllama-1.1b and
+  mistral-7b Q4_K_M" as the files Tier 04 ended with in each added format (for example the Q2_K
+  TinyLlama and the Q8_0 Llama 3.2 on disk), and "the current dequant path" as that format's FP16
+  path. The VRAM and load thresholds name `mistral-7b`/`llama-1-30b` Q4_K_M as the models that motivated
+  them; Tier 01C meets them for Q4_K, and this tier reports them for the largest added-format file.*
+
   **Threshold, throughput (item 2).** The tiled packed GEMM's pp t/s is **>= 0.95x** the current
   dequant-plus-`cublasGemmEx` path at a 512-token window, and **>= 1.10x** at the 16-to-64 widths
   the continuous schedule runs, on `tinyllama-1.1b` and `mistral-7b` Q4_K_M, both read as Juno
@@ -322,8 +355,11 @@ ended with. No AMD hardware exists here, so item 3's ROCm half is unit-tested an
       per-shard cluster paths.
 - [ ] A tiled packed-weight GEMM exists and is the default for batch > `HALF_SGEMM_BATCH_MAX` on
       every packed format; `Q4KDequantScratch` is off the default path.
-- [ ] `Q4KResidentUpload` is the single packed-versus-FP16 decision point, used by every handler,
-      and covers every format with a packed kernel.
+- [ ] `Q4KResidentUpload` is the single packed-versus-FP16 decision point, used by every handler with
+      a device weight path when this tier runs, and covers every format with a packed kernel. Phi-2,
+      Qwen3-MoE and Tier 08's new handlers are Tier 08's to route through it.
+- [ ] Tier 01C's tiled kernel extended to every format Tier 04 added a packed kernel for (not a second
+      kernel), with Tier 01C's correctness matrix re-run per added format.
 - [ ] `RocmMatVec` reports `supportsQ4KMmq` truthfully and uploads packed where Tier 04's kernels
       allow; marked `NEEDS-AMD-HARDWARE`.
 - [ ] Every remaining FP16-resident case logs once with format, backend and bytes-per-weight, and is

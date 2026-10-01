@@ -336,6 +336,7 @@ public final class CudaMatVec implements GpuMatVec {
                         spans.staging(CudaBindings.H2D, bytesX, 1, "cudaMemcpyAsync(x H2D q4k)", h2dMark, stream);
                     }
                     kernel.launch(A, scratch.dX, scratch.dQ8, scratch.dY, stream);
+                    spans.compute(DeviceComputeEvent.MMQ_PACKED, 1, -1, stream);
                     MemorySegment stagingY = resultArena.allocate(bytesY);
                     int d2hMark = spans.begin(stream, 1);
                     CudaBindings.check(
@@ -663,6 +664,7 @@ public final class CudaMatVec implements GpuMatVec {
                         long bytesY = (long) rows * Float.BYTES;
                         MemorySegment dYi = scratch.dY.asSlice((long) yOffElems[i] * Float.BYTES, bytesY);
                         kernel.launchPacked(A.devicePointer(), scratch.dQ8, dYi, rows, cols, A.quantType(), stream);
+                        spans.compute(DeviceComputeEvent.MMQ_PACKED, 1, -1, stream);
                         stagingY[i] = callArena.allocate(bytesY);
                         int d2hMark = spans.begin(stream, 1);
                         CudaBindings.check(
@@ -756,7 +758,7 @@ public final class CudaMatVec implements GpuMatVec {
                     ensureFp16Scratch(scratch, bytesXh, bytesY);
 
                     MemorySegment stagingXh = scratch.hXh;
-                    packFp16Rows(stagingXh, X, batch, cols);
+                    packFp16Window(stagingXh, X, batch, cols, bytesXh);
 
                     int h2dMark = spans.begin(stream, batch);
                     CudaBindings.check(
@@ -765,8 +767,10 @@ public final class CudaMatVec implements GpuMatVec {
                             "cudaMemcpyAsync(xh H2D batched)");
                     spans.staging(CudaBindings.H2D, bytesXh, batch, "cudaMemcpyAsync(xh H2D batched)", h2dMark, stream);
 
+                    int gemvMark = spans.begin(stream, batch);
                     callSgemvFp16(CudaBindings.CUBLAS_OP_T, A.devicePointer(), cols, scratch.dXh, scratch.dY,
                             rows, cols, batch);
+                    spans.compute(DeviceComputeEvent.GEMV_HALF_BATCHED, batch, gemvMark, stream);
 
                     MemorySegment stagingY = scratch.hY;
                     int d2hMark = spans.begin(stream, batch);
@@ -832,7 +836,7 @@ public final class CudaMatVec implements GpuMatVec {
                     ensureFp16Scratch(scratch, bytesXh, bytesY);
 
                     MemorySegment stagingXh = scratch.hXh;
-                    packFp16Rows(stagingXh, X, batch, cols);
+                    packFp16Window(stagingXh, X, batch, cols, bytesXh);
 
                     int h2dMark = spans.begin(stream, batch);
                     CudaBindings.check(
@@ -841,7 +845,9 @@ public final class CudaMatVec implements GpuMatVec {
                             "cudaMemcpyAsync(xh H2D batched-gemm)");
                     spans.staging(CudaBindings.H2D, bytesXh, batch, "cudaMemcpyAsync(xh H2D batched-gemm)", h2dMark, stream);
 
+                    int gemmMark = spans.begin(stream, batch);
                     fp16GemmOps().gemmHalf(A.devicePointer(), scratch.dXh, scratch.dY, rows, cols, batch);
+                    spans.compute(DeviceComputeEvent.GEMM_HALF, batch, gemmMark, stream);
 
                     MemorySegment stagingY = scratch.hY;
                     int d2hMark = spans.begin(stream, batch);
@@ -871,6 +877,25 @@ public final class CudaMatVec implements GpuMatVec {
             evt.cols = cols;
             evt.commit();
         }
+    }
+
+    /** The {@code juno.DeviceStaging} site of the host FP16 packing {@link #packFp16Window} times. */
+    static final String PACK_FP16_HOST = "pack_fp16_host";
+
+    /**
+     * {@link #packFp16Rows}, counted as {@code HOST} staging work (timed on the host
+     * clock) when a recording asks for {@code juno.DeviceStaging}: it exists only to
+     * stage the window's upload, and is otherwise inside {@code juno.MatVec} with no
+     * span of its own.
+     */
+    private static void packFp16Window(MemorySegment dst, float[][] X, int batch, int cols, long bytes) {
+        if (!DeviceSpanTally.stagingWanted()) {
+            packFp16Rows(dst, X, batch, cols);
+            return;
+        }
+        long t0 = System.nanoTime();
+        packFp16Rows(dst, X, batch, cols);
+        DeviceSpanTally.staging(PACK_FP16_HOST, DeviceStagingEvent.HOST_WORK, batch, bytes, System.nanoTime() - t0);
     }
 
     /**
@@ -952,7 +977,7 @@ public final class CudaMatVec implements GpuMatVec {
                     spans.dequant(A.quantType(), dequantMark, stream);
 
                     MemorySegment stagingXh = scratch.hXh;
-                    packFp16Rows(stagingXh, X, batch, cols);
+                    packFp16Window(stagingXh, X, batch, cols, bytesXh);
 
                     int h2dMark = spans.begin(stream, batch);
                     CudaBindings.check(
@@ -961,7 +986,9 @@ public final class CudaMatVec implements GpuMatVec {
                             "cudaMemcpyAsync(xh H2D q4k-batched-gemm)");
                     spans.staging(CudaBindings.H2D, bytesXh, batch, "cudaMemcpyAsync(xh H2D q4k-batched-gemm)", h2dMark, stream);
 
+                    int gemmMark = spans.begin(stream, batch);
                     fp16GemmOps().gemmHalf(dW, scratch.dXh, scratch.dY, rows, cols, batch);
+                    spans.compute(DeviceComputeEvent.GEMM_HALF, batch, gemmMark, stream);
 
                     MemorySegment stagingY = scratch.hY;
                     int d2hMark = spans.begin(stream, batch);

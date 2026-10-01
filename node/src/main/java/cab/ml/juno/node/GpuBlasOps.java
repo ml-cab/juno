@@ -80,12 +80,14 @@ final class GpuBlasOps implements AutoCloseable {
 			MemorySegment dX = scratch.ensureInput(bytesX);
 			MemorySegment dY = scratch.ensureOutput(bytesY);
 			scratch.copyH2D(dX, packedX, batch);
+			long t0 = DeviceComputeClock.start(gpu, batch);
 			callSgemm(
 					gpu.opTranspose(), gpu.opNoTranspose(),
 					rows, batch, cols,
 					W.devicePointer(), cols,
 					dX, cols,
 					dY, rows);
+			DeviceComputeClock.done(gpu, DeviceComputeEvent.GEMM_FP32, batch, t0);
 			float[] packedY = scratch.copyD2H(dY, rows * batch, batch);
 			float[][] Y = new float[batch][];
 			DeviceActivationBatch.unpackColumns(packedY, Y, batch, rows);

@@ -17,6 +17,12 @@
 #      an active milestone asks for more than its reference reading — a milestone
 #      already met before its tier starts measures nothing. A retired row must show
 #      a reference that really does meet it.
+#   4. Every ticked exit criterion ("- [x]", read with its indented notes) that
+#      states a threshold (it contains Threshold, perf gate, >=, <=, or their
+#      Unicode forms) cites a docs/perf-compare/<dir> or ../perf-compare/<dir>
+#      that exists on disk, or carries an explicit **Evidence (not published):**
+#      marker naming the evidence it was scored on. Checks 1 to 3 prove a number
+#      was written down; this one proves something was scored against it.
 #
 # The documentation-hardening tier file (TIER-14-*) is excluded from check 1: it names
 # the string to describe this check.
@@ -24,16 +30,19 @@
 # Usage:
 #   ./scripts/performance-tests/check-plan-thresholds.sh            # check the plan tree
 #   ./scripts/performance-tests/check-plan-thresholds.sh --plan DIR # check another copy
+#   ... --perf-compare DIR   # resolve check 4's citations here (default docs/perf-compare)
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PLAN_DIR="${ROOT}/docs/gap-closure-plan"
+PERF_DIR="${ROOT}/docs/perf-compare"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --plan) PLAN_DIR="$2"; shift 2 ;;
-    -h|--help) sed -n '2,25p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    --perf-compare) PERF_DIR="$2"; shift 2 ;;
+    -h|--help) sed -n '2,33p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) printf 'check-plan-thresholds: unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -59,6 +68,32 @@ threshold_blocks_ok() {
   ' "$1"
 }
 
+# Check 4. Prints one line per ticked criterion that states a threshold:
+# "<line number>\t<first 70 chars>\t<space-separated cited perf-compare dirs>",
+# or "<line number>\tEVIDENCE" when it carries the not-published marker. A criterion
+# runs from its "- [x]" line through the indented or blank lines below it.
+ticked_threshold_criteria() {
+  awk '
+    function flush() {
+      if (!open) return
+      open = 0
+      if (crit !~ /Threshold|[Pp]erf gate|>=|<=|≥|≤/) return
+      if (crit ~ /\*\*Evidence \(not published\):\*\*/) { printf "%d\tEVIDENCE\n", start; return }
+      dirs = ""; rest = crit
+      while (match(rest, /(docs\/|\.\.\/)perf-compare\/[A-Za-z0-9._-]+/)) {
+        d = substr(rest, RSTART, RLENGTH); sub(/.*perf-compare\//, "", d)
+        dirs = dirs " " d
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      printf "%d\t%s\t%s\n", start, substr(head, 1, 70), dirs
+    }
+    /^- \[x\]/ { flush(); open = 1; start = NR; head = $0; crit = $0; next }
+    open && (/^[ \t]/ || /^$/) { crit = crit " " $0; next }
+    { flush() }
+    END { flush() }
+  ' "$1"
+}
+
 tier_count=0
 for f in "$PLAN_DIR"/TIER-*.md; do
   [[ -f "$f" ]] || continue
@@ -68,6 +103,18 @@ for f in "$PLAN_DIR"/TIER-*.md; do
   if grep -qE '^- \[[ x]\].*[Nn]o unexplained regression' "$f"; then
     fail "${name}: an exit criterion says 'no unexplained regression' instead of stating its number"
   fi
+
+  while IFS=$'\t' read -r line head dirs; do
+    [[ -n "$line" ]] || continue
+    [[ "$head" == EVIDENCE ]] && continue
+    for d in $dirs; do
+      [[ -d "${PERF_DIR}/${d}" ]] \
+        || fail "${name}:${line}: ticked threshold criterion cites docs/perf-compare/${d}, which does not exist"
+    done
+    if [[ -z "${dirs// /}" ]]; then
+      fail "${name}:${line}: ticked threshold criterion cites no docs/perf-compare/<dir> and has no **Evidence (not published):** marker: ${head}"
+    fi
+  done < <(ticked_threshold_criteria "$f")
 
   [[ "$name" == TIER-14-* ]] && continue
   grep -qi 'perf gate' "$f" || continue

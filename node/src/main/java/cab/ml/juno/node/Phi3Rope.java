@@ -69,6 +69,7 @@ final class Phi3Rope {
 	}
 
 	private static float[] buildCache(int pos, int headDim, Phi3RopeConfig cfg) {
+		cfg.requirePosition(pos);
 		float[] freqFactors = cfg.selectFactors();
 		float thetaScale = (float) Math.pow(cfg.freqBase(), -2.0 / headDim);
 		float[] corrDims = new float[2];

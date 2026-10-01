@@ -1,6 +1,6 @@
 # Tier 01B: Prefill throughput
 
-Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); step 4 (the per-term prefill breakdown) next
+Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); plan amended 2026-09-30 after the plan review (scope items 6 to 10, step 3a, the `juno.DeviceCompute` span); step 3a complete 2026-10-01: items 1a-ii, 7, 8 and 9 (pinned gate and CPU reference taken by the owner); item 10 (CI) removed as an exit criterion by the owner; step 4 (the per-term prefill breakdown) next
 Gap analysis refs: none directly — this tier exists because the gap analysis has no prefill section
 at all, while the published measurements under `docs/perf-compare/` show prompt processing to be the
 single largest gap Juno has. See "Why this tier, why now".
@@ -172,12 +172,29 @@ on today's op-at-a-time GPU path either way.
    Register both in `scripts/performance-tests/juno-perf.jfc` and in `JfrMetricsExtractor`, with
    tests in the `metrics` module, following the pattern Tier 01 established for `JdkEventBucket` —
    including its rule that every key is written on every run, zero or not, so a consumer never has to
-   distinguish "absent" from "none". [Tier 04C](TIER-04C-packed-weight-matmul.md) item 1 reads its
+   distinguish "absent" from "none". [Tier 01C](TIER-01C-packed-kquant-matmul.md) item 1 (split out of Tier 04C on 2026-09-30) reads its
    `launchDequant`-versus-`gemmHalf`-versus-staging split off these same two spans; it was written
    believing Tier 01 had widened the extractor far enough for that, and Tier 01 widened only the
    `jdk.*` bucket. Building them here covers both tiers, and `metrics` must be in this tier's own
    `mvn test -pl` line (the documented command omits it — see [`README.md`](README.md)'s test
    infrastructure section).
+
+   **1a-ii. Add the span that times the GEMM itself (amended 2026-09-30, plan review).** The two
+   spans above time copies and dequantization; nothing times the matmul kernels, so 1b's "no
+   unattributed residue" cannot be met: the GEMM would be whatever is left of `juno.MatVec` after
+   staging and dequantization are subtracted, which also contains the host FP16 packing of the
+   activation window (`packFp16Rows`, 17 to 38 ms per matmul when it was deoptimizing in Tier 01's
+   close-out). Add **`juno.DeviceCompute`** — `site` (`gemm_half`, `gemm_fp32`, `mmq_packed`,
+   `gqa_attention`, and the item 6 kernels as they land), `phase`, `count`, `timedCount`,
+   `computeNanos` — timed with the same `DeviceSpanTimer` stream events, aggregated the same way
+   (totals per site and phase, periodic), registered disabled in `juno-perf.jfc` and enabled by
+   `juno-perf-spans.jfc`, and extracted by `DeviceSpanBucket` as
+   `juno.DeviceCompute.site.<site>.<phase>.total_ms` with every key written on every run. Add the host
+   packing as a `site=pack_fp16_host` entry of `juno.DeviceStaging` timed on the host clock (it is
+   host work that exists only to stage). Same evidence standard as step 1: `metrics` tests that fail on
+   the build without the keys, a `@Tag("gpu")` test that a 32-row FP16 GEMM's compute time is non-zero
+   and its output bit-identical with and without a recording, and a same-hour pinned A/B with the
+   spans **off**: prefill **>= 0.98x** the build without the new event.
 
    **1b. Produce the breakdown.** A per-term breakdown of prefill wall time for all four sweep models
    at `n_prompt` of 128 and 512, on GPU, from the four existing spans plus the two added in 1a.
@@ -262,6 +279,80 @@ on today's op-at-a-time GPU path either way.
    For the scripts this tier cannot fully exercise (no AMD hardware, or a model this host will not fit),
    run them far enough to launch and stop an engine at least once — which is all that is needed to
    demonstrate the leak is gone, since the leak is per engine launch rather than per run.
+
+   *Items 6 to 10 were added on 2026-09-30 by the plan review. Item 6 is forward-pass work and the
+   tier's largest remaining lever; items 7 to 10 are small harness, correctness and repository items
+   the review found unowned or stuck. See "2026-09-30 — plan-review amendments" in the execution
+   record.*
+6. **Keep the prefill window's elementwise work and its KV append on the device.** This tier's own
+   records show where prefill time goes, and staging is not most of it. Step 2's spans run puts
+   staging plus dequantization at 12% to 15% of prefill on the three Llama-family models, so removing
+   both entirely is worth at most about 1.13x to 1.18x, against the 1.6x the non-Phi milestone asks.
+   Step 1's record puts `juno.SwiGlu` at about 35 ms per layer on TinyLlama at a 512-token window, about
+   770 ms of a 2,157 ms prefill (about 36%). The code explains it: the prefill window's SwiGLU is a
+   single-threaded scalar loop over `W x I` elements calling `Math.exp` in double precision
+   (`LlamaTransformerHandler`, the window path after the gate and up projections), and both RMS norms
+   take the CPU fallback because `rmsNormGpu` is null. The gate and up outputs (the widest tensors in
+   the layer) are copied device-to-host only to be multiplied on the host and copied straight back for
+   the down projection, which is why device-to-host bytes (898 MB) exceed host-to-device bytes (507 MB)
+   on TinyLlama. Separately, `DeviceKvCache.appendToken` copies one K row and one V row per token per
+   layer, 22,528 of the 22,902 host-to-device copies in a TinyLlama window.
+
+   Scope, built on item 2's prefill-window region and Tier 01's `ResidentChain`:
+   - SwiGLU on the device for the window (a fused `silu(gate) * up` kernel), so gate and up are never
+     materialized to host;
+   - both RMS norms on the device through `CudaRmsNorm.normalizeResident`, which already runs at batch
+     512 (Tier 01's microbenchmark);
+   - the residual adds on the device, so the residual stream crosses the boundary once per layer at
+     most, and once per window where item 2's boundary permits;
+   - RoPE on the device for the window through `CudaRope`, which first needs the split-half pairing Tier
+     01 left unbuilt (Qwen2 and Qwen3 use it); until it has it, those models keep the CPU table rotation
+     and the startup log says so;
+   - the KV mirror appended once per layer per window (`DeviceKvCache` gains a window append taking the
+     `W` rows as one contiguous copy), keeping the host KV written first and the written-prefix
+     watermark (`c91f879`) intact.
+
+   Phi-3 and Qwen3 take the same path where their handlers share the operation (norm, SwiGLU, residual);
+   their own RoPE variants stay on the host and are announced if not moved. Phi-2 and Qwen3-MoE run on
+   the CPU (Tier 08 item 6) and are unaffected. The CPU backend's window path is unchanged, so the CPU
+   remains the correctness oracle. This item and item 2 meet at the same region: implement them as one
+   design (item 2 moves the matmul operands, item 6 moves the operations between them), and measure them
+   separately, item 6 first, because the breakdown says it is the larger term.
+7. **Matched thread count in the comparison harness, now** (README benchmark-parity precondition 4,
+   amended 2026-09-30). `compare-llama-cpp.sh` passes
+   `-Djava.util.concurrent.ForkJoinPool.common.parallelism=$((N_THREADS - 1))` to Juno, so the
+   common-pool hot path runs the same thread count the reference tool is given with `-t`, records
+   `juno_threads` and the property in `host.json` and `INDEX.md`, and drops the stated-mismatch note
+   when they match. A `--selftest` case asserts the property is passed and recorded. One CPU sweep is
+   re-taken with it as the new CPU reference (a measurement boundary for CPU readings), and the
+   README's reference column moves in the same change. Tier 10 item 5 still owns the product
+   `--threads` flag.
+8. **Phi-3.5 LongRoPE factor selection — carried here as an out-of-tier correctness fix.** Found
+   2026-09-28 and filed as [Tier 02](TIER-02-attention-long-context.md) scope item 7, which has not
+   started: `Phi3RopeConfig.selectFactors()` always returns the long-context factors, so Phi-3.5
+   rarely produces `<|end|>` (P = 0.502 against 0.992 with the short factors) and about half of its
+   console replies run on to the token limit. Phi-3.5-mini is a sweep model and the binding model on
+   two of this tier's milestones. The Qwen RoPE-pairing defect was fixed out of tier in Tier 01 on the
+   same reasoning. The owner picks the policy first (Tier 02 item 7: option (a), short factors unless
+   the session is configured above 4096 tokens and fail closed at the crossing; or option (b),
+   per-sequence switching with re-rotation, which shares machinery with context shift). Recommendation:
+   (a) here, since it is small and complete, with (b) left to Tier 02 if wanted. Applied identically on
+   every `Phi3Rope` caller (CPU, GPU, batched prefill, LoRA `ropeExtBackward`). The long-factor gap to
+   the reference engine (0.502 against 0.675) stays Tier 02's to explain. Recorded under "Out-of-tier
+   changes" with its measurement-boundary reading: rotation angles change, work does not, so throughput
+   readings stand and greedy-parity readings on Phi-3.5 do not.
+9. **Rule 7's results-side check** (README execution rule 7, check 4). Extend
+   `check-plan-thresholds.sh` so a ticked exit criterion that states a threshold must cite a
+   `docs/perf-compare/<dir>` that exists, or carry an explicit `**Evidence (not published):**` marker.
+   Write the check against a scratch copy with planted defects first (a ticked threshold criterion with
+   no citation, one citing a directory that does not exist), show it failing on both, then bring the
+   tree's existing ticked criteria into compliance by adding citations or markers. Do not weaken the
+   check to make the tree pass.
+10. **CI that actually runs.** `.github/workflows/ci.yml` is untracked (README, "Checked 2026-09-30").
+    The owner commits it (git writes are the owner's), and this tier records the first green run of both
+    jobs with its URL. If the `build-and-test` job fails on the hosted runner (no GPU, no model files),
+    that is a finding to fix here: every GPU-, ROCm- and model-gated test must skip rather than fail.
+    *Removed as an exit criterion 2026-10-01 (owner decision).* CI is not a gate of this tier or of the plan. `.github/workflows/ci.yml` stays in the working tree, uncommitted, and nothing in the plan relies on it running: rule 7's check, `compare-llama-cpp.sh --selftest` and the unit and stub-IT runs are executed by hand at each step, as they have been throughout.
 
 ### Out of scope
 
@@ -356,15 +447,31 @@ on today's op-at-a-time GPU path either way.
    has its own attributable number, and record that number per architecture: the Llama-family 3.85x
    says nothing about what these four will do. All four have a real file to measure on — see
    "Models needed", and check `models/` rather than trusting any table.
+3a. **Before the breakdown (added 2026-09-30):** land the `juno.DeviceCompute` span (scope item
+   1a-ii) with its A/B gate, and the small items that do not touch the forward pass: item 7 (matched
+   thread count, with its CPU re-baseline), item 9 (rule 7 check 4) and item 10 (CI committed and
+   green). Item 8 (Phi-3.5 LongRoPE) lands here too once the owner has picked the policy; it changes
+   rotation angles, not work, so it does not move the breakdown, but it does move Phi-3.5 greedy
+   output and must be in before any divergence or greedy-parity reading this tier takes.
 4. Produce the per-term prefill breakdown (scope item 1b) and publish it.
-   Decide which of scope items 2, 3 and 4 the breakdown actually justifies, and record the decision here
-   — item 0 may well have moved which term dominates, which is the point of sequencing it here. The
-   expected ranking going in is that host-device staging (item 2) dominates once attention is on the
-   GPU, since a 512-token window moves roughly 8 MB each way per matmul; if the breakdown says
-   otherwise, follow the breakdown.
+   Decide which of scope items 2, 3, 4 and 6 the breakdown actually justifies, and record the decision
+   here — item 0 may well have moved which term dominates, which is the point of sequencing it here.
+   *The expected ranking going in was that host-device staging (item 2) dominates. Step 2's spans run
+   already contradicts that (staging plus dequantization 12% to 15% of prefill), and step 1's record
+   puts host SwiGLU alone at about 36% on TinyLlama.* The expected ranking is now: host elementwise work
+   (item 6) first, staging and the per-token KV copies (items 2 and 6) second, and the GEMM compute
+   itself — read from `juno.DeviceCompute`, not inferred — third on the small models and larger on
+   mistral-7b, where the roofline in the README's "Post-plan anchor" puts the FP32-compute GEMM floor
+   at about 0.8 to 1.1 s of a 7.5 s window. If the breakdown says otherwise, follow the breakdown.
+   Whatever the GEMM's measured share is, record it per model: it is the number
+   [Tier 01C](TIER-01C-packed-kquant-matmul.md)'s throughput threshold is conditioned on.
 5. Write down the expected contribution of each remaining item against the threshold, per the
    "Decompose the ask before implementing it" clause below, and escalate here if they do not sum.
-6. Implement in the order the breakdown ranks, largest term first.
+   Item 6 is one of the named items, and the GEMM term is attributed to Tier 01C (the next tier) rather
+   than to "a tier that does not exist yet".
+6. Implement in the order the breakdown ranks, largest term first. Items 2 and 6 share the
+   prefill-window region; land item 6's operations and item 2's operand residency as separately
+   measured changes on that one region, not as two regions.
 7. Re-measure after each change rather than only at the end, so a negative result is attributable to
    one change instead of the batch.
 8. Run the full cross-surface smoke matrix, including the vision gate.
@@ -398,6 +505,25 @@ on today's op-at-a-time GPU path either way.
   direction, `juno.WeightDequant` aggregates per format, and both emit their keys on every run
   including when the count is zero. These must fail on the pre-item-1a build for the right reason
   (the keys do not exist), the same evidence standard Tier 01 applied to `JdkEventBucket`.
+- **Item 6 tests (added 2026-09-30)**: the device SwiGLU, norm and residual kernels against the CPU
+  window path within float tolerance at `W` = 1, 8, 9, 32, 512 and `I` from every sweep model; the
+  split-half RoPE mode bit-identical to the CPU table rotation (the adjacent mode already is); the
+  window KV append leaves the host KV and the device mirror equal and the watermark at the window end,
+  including when a device allocation fails mid-window (host written first, mirror retired, CPU
+  continues); a `@Tag("gpu")` handler test that gate and up produce no device-to-host copy on the
+  window path (read off `juno.DeviceStaging`); device memory returns to its starting level across
+  repeated windows.
+- **`juno.DeviceCompute` tests (item 1a-ii)**: as described in that item; must fail on the build
+  without the keys.
+- **Item 7 (thread parity)**: a `compare-llama-cpp.sh --selftest` case that the common-pool property
+  is passed with `N_THREADS - 1` and recorded, and a live check that a CPU run's
+  `jdk.ExecutionSample` threads on the matmul methods number `N_THREADS`, not
+  `availableProcessors()`.
+- **Item 8 (Phi-3.5 LongRoPE)**: Tier 02's end-of-turn live test, moved here — teacher-force the 19 ids
+  listed in Tier 02 and assert P(32007) **>= 0.95** at the last position (0.502 before the fix); a unit
+  test of the chosen policy's factor selection at and across 4096 tokens.
+- **Item 9 (rule 7 check 4)**: the planted-defect scratch copy described in that item, failing before
+  and passing after.
 - **A staged-bytes assertion**: read H2D/D2H bytes per prefill window off `juno.DeviceStaging` and
   assert the post-item-2 figure against the pre-item-2 baseline, so item 2's win is measured in bytes
   moved and not only in wall time.
@@ -451,6 +577,28 @@ on today's op-at-a-time GPU path either way.
   number because it is the one that is not confounded by clock state or noise: a residency change
   either stops moving the bytes or it does not.
 
+  **Threshold, item 6 on its own** (added 2026-09-30). At `n_prompt=512` on tinyllama, qwen2.5-3b
+  and mistral-7b, from a `--device-spans` run:
+  - host elementwise time — `juno.SwiGlu` + `juno.RmsNorm` + `juno.Rope` + `juno.ResidualAdd` within
+    the prefill window — **<= 10%** of `juno.ForwardPass` prefill time on each model (step 1's record
+    puts SwiGLU alone at about 36% on TinyLlama);
+  - KV mirror host-to-device copies per window
+    (`juno.DeviceStaging.H2D.site.memcpy_k_row_h2d.prefill.count` plus the V-row site, or their window
+    replacement) **<= 2 x the layer count** — one K and one V copy per layer, against 22,528 today on
+    TinyLlama;
+  - Juno prefill t/s **>= 1.25x** the pre-item-6 build on tinyllama (the model where the measured
+    elementwise share is largest), from a same-hour pinned A/B, Juno absolute t/s (README,
+    "No-regression gates tighter than the floor"); on qwen2.5-3b and mistral-7b the gain is recorded,
+    not gated, until the breakdown gives their elementwise shares;
+  - greedy output: identical to the pre-item-6 build over 64 tokens on tinyllama and mistral-7b, or
+    characterised the way item 0 characterised the FP16 KV mirror (first divergent step per prompt over
+    six prompts), never earlier than the item-0 baseline's earliest divergence.
+
+  **Threshold, the GEMM compute span (item 1a-ii).** Same-hour pinned A/B with the spans off: prefill
+  **>= 0.98x** the build without `juno.DeviceCompute`; with `--device-spans`, the per-term breakdown's
+  unattributed residue (`juno.ForwardPass` prefill minus every named term) **<= 5%** of prefill on
+  each sweep model.
+
   **Threshold, the tier overall** (the README's Tier 01B milestone rows, restated 2026-09-27).
   At `n_prompt=512`, GPU:
   - pp ratio **>= 0.10x** llama.cpp on every sweep model except Phi-3.5-mini (tinyllama, qwen2.5-3b,
@@ -501,11 +649,14 @@ on today's op-at-a-time GPU path either way.
   four items that were never expected to reach the number and reporting the miss afterwards is the
   outcome this clause exists to prevent; reporting up front that the number needs a mechanism no item
   here owns is a useful result, and it is what tells the user whether the missing mechanism belongs
-  to [Tier 04C](TIER-04C-packed-weight-matmul.md), to Tier 02, or to a tier that does not exist yet.
+  to [Tier 01C](TIER-01C-packed-kquant-matmul.md) (the GEMM operand and kernel, next in the running
+  order), to [Tier 04C](TIER-04C-packed-weight-matmul.md) (formats beyond Q4_K/Q5_K/Q6_K), to Tier 02
+  (attention at long context), or to a tier that does not exist yet.
 
   **Contingency, in the same spirit as Tier 01's.** If the breakdown in step 4 shows prefill time is
   dominated by a term this tier cannot move without work owned by a later tier (for example: residual
-  attention at long context, which is Tier 02; or per-format kernels, which is Tier 04), do not
+  attention at long context, which is Tier 02; the GEMM kernel itself, which is Tier 01C and runs
+  next; or per-format kernels, which is Tier 04), do not
   iterate indefinitely. Publish the breakdown, ship whatever items the breakdown does justify, state
   the measured ratio honestly, and mark the tier **partial-complete** with a named successor tier for
   the dominant term — then escalate to the user, since that re-scopes another tier. Item 0 is
@@ -563,8 +714,10 @@ Status of the tier: in progress. Implementation steps 0 (threshold check, keepal
 prefill repetition), 1 (the copy and dequantization spans, opt-in, gate met) and 2 (the pinned
 re-baseline at 128 and 512, with a spans run for staged bytes) are complete. Step 3 (item 0) is
 implemented and tested for Phi-3 and Qwen3 under an owner-amended scope. The default and the ROCm
-answer are decided; its pinned gate is met (see its record). Step 4 (the per-term prefill breakdown)
-is next.
+answer are decided; its pinned gate is met (see its record). Step 3a (2026-10-01) landed the
+`juno.DeviceCompute` span (pinned gate met), harness thread parity with a pinned CPU reference, the
+Phi-3.5 LongRoPE fix and rule 7 check 4; item 10 (CI) was removed as an exit criterion by the owner. Step 4 (the
+per-term prefill breakdown) is next.
 The two milestone decisions step 2 raised were taken by the owner on 2026-09-30 (recorded under step 2). This section also records the
 plan-review pass of 2026-09-27, which landed ahead of step 1.
 
@@ -1201,7 +1354,9 @@ Against the milestones (read, not gated: ratios are reported, never gated below 
 - Program end-of-plan target GPU tg Phi-3.5-mini >= 0.50x: **met at 0.534x** (from 0.394x), because
   decode attention on Phi-3 now runs on the GPU. Recorded here and not moved into the README's
   reference column: that column moves with the tier's closing sweep, and step 2 stays the baseline
-  every gate in this tier is scored against.
+  every gate in this tier is scored against. *(2026-09-30: because this reading met the target, the
+  owner raised both GPU tg end-of-plan targets to 0.70x and the GPU pp target to 0.25x; README, "End-of-plan
+  targets raised".)*
 
 **Verification, on the final tree (2026-09-30).** `mvn test` on the eleven unit-test modules: 1,843
 tests, 0 failures, 0 errors, 49 skipped (existing assumptions), 26:07, GPU-tagged tests included (CUDA
@@ -1239,10 +1394,182 @@ the tier's gate lists them. `ModelLiveRunnerIT` and `smoke-tier01b-prefill.sh` a
 3. **Where a ROCm port of the kernel lives** (recommendation: Tier 10, beside its other hardware-gated
    ROCm work).
 
+### 2026-09-30 — plan-review amendments
+
+Plan text only; no code changed. A plan review taken after step 3 found that this tier's own
+measurements contradict the ranking its remaining items were written around, and that several small
+items were unowned. The owner approved the following:
+
+| Change | Where | Why |
+|---|---|---|
+| Scope item 6: prefill-window SwiGLU, norms, residual adds and RoPE on the device; KV mirror appended once per layer per window | Scope, steps 4 to 6, Threshold, tests, exit criteria | Staging plus dequantization is 12% to 15% of prefill (step 2), while host SwiGLU alone is about 36% on TinyLlama (step 1's record). Items 2 to 4 could not reach the non-Phi milestone, and nothing in the plan owned the largest term |
+| `juno.DeviceCompute` span (item 1a-ii), new step 3a | Scope item 1, steps | No event timed the GEMM, so the breakdown's "no unattributed residue" could not be met |
+| Tier 01C split out of Tier 04C and placed next | README index, new [`TIER-01C`](TIER-01C-packed-kquant-matmul.md), Tier 04C | The GEMM term is the successor this tier's contingency names; it now runs next instead of after Tiers 02 to 04B |
+| Scope item 7: harness thread parity via the common-pool property | README precondition 4 | Precondition 4 waited for Tier 10 although the hot path already honours the JVM property |
+| Scope item 8: Phi-3.5 LongRoPE fix carried here, out of tier | Tier 02 item 7 | A correctness defect on the binding sweep model, in every reply, parked in a tier that has not started |
+| Scope item 9: rule 7 check 4 | README rule 7 | The check proved a threshold was written down, not that a ticked box was scored |
+| Scope item 10: CI committed and green | README CI note | The workflow is untracked and has never run |
+
+Not changed: items 0 to 5, the milestone thresholds, the reference column.
+
+### 2026-10-01 — implementation step 3a: `juno.DeviceCompute`, thread parity, Phi-3.5 LongRoPE, rule 7 check 4
+
+Scope: step 3a as amended by the plan review (scope items 1a-ii, 7, 8, 9 and 10). Run on HEAD
+`807bfea` plus the uncommitted plan-review tree. **Items 1a-ii, 7, 8 and 9 are complete**, the first two
+with pinned measurements the owner ran from a local terminal (recorded at the end of this section).
+**Item 10 (CI) was removed as an exit criterion by the owner on 2026-10-01**; see scope item 10.
+
+**Plan-versus-code check before starting.** The prompt that started this session expected Tier 00;
+Tier 00 (11 of 11) and Tier 01 (14 of 14) are ticked, and Tier 00's findings are still fixed in code
+(`generateBatch` gated on `sessionId`, loader fails closed for unverified architectures, no `Tier NN`
+or `com.hazelcast` in any `src/main`, `CLAUDE.md` lists `vision` and `metrics`). Step 3a's own
+preconditions held: no `DeviceCompute` anywhere, the step-1 span classes present, `packFp16Rows`
+present, no common-pool property in the harness, `check-plan-thresholds.sh` without check 4,
+`.github/` untracked. Two drifts, both raised with the owner and decided:
+- **Item 8: Juno has no configured session context.** Option (a) reads "short factors unless the
+  session is configured above 4096 tokens", but nothing configures a context size: the KV cache grows
+  on demand to `DenseKvTensor.MAX_SEQ_LEN` (32768) and no flag, request field or facade setting sets
+  one. **Owner decision (2026-10-01): option (a) as a fixed cap.** A Phi-3 file carrying both factor
+  sets uses the short set, and a position at or beyond `original_context_length` fails closed. A
+  `--ctx-size` flag across every surface was the alternative, rejected as too large for a correctness
+  fix.
+- **Item 7: the default thread count already matched.** At the harness default `--threads` (`nproc`,
+  12 here) the property is 11, which is the JVM's own default, and the calling thread joins as the
+  twelfth. So every default-thread run already ran Juno's kernels on 12 threads, matching `-t 12`; the
+  old INDEX note ("effective parallelism of 11") left out the calling thread. The change is a boundary
+  only for runs with an explicit `--threads`. Recorded in the README at precondition 4.
+
+**Item 9 (rule 7 check 4) — done.** `check-plan-thresholds.sh` reads each ticked criterion with its
+indented notes; one that contains `Threshold`, `perf gate`, `>=`, `<=`, `≥` or `≤` must cite a
+`docs/perf-compare/<dir>` or `../perf-compare/<dir>` that exists (new `--perf-compare DIR` to resolve
+against another tree), or carry `**Evidence (not published):**`. Written against a scratch copy first:
+a planted tier file with a ticked threshold criterion citing nothing and one citing a directory that
+does not exist failed with exactly those two (`FAIL TIER-99-planted.md:5 ... cites no
+docs/perf-compare/<dir>`, `FAIL ...:7 ... 20990101T000000Z-missing, which does not exist`), while four
+controls passed (a real citation, the marker, a ticked criterion with no threshold, an unticked one).
+On this tree it passes unchanged: only one ticked criterion in the tree states a threshold by those
+patterns (Tier 01's RMSNorm/RoPE criterion), and it cites two existing directories. No criterion
+needed editing, and the check was not weakened.
+
+**Item 8 (Phi-3.5 LongRoPE) — done.** `Phi3RopeConfig.selectFactors()` returns the short factors
+whenever the file has them; `requirePosition(pos)` throws `IllegalStateException` naming the limit at
+`pos >= original_context_length` when the file also has long factors and its trained context exceeds
+the original (Phi-3.5-mini: 4096). `Phi3Rope.buildCache` calls it, and every rotation goes through
+there: the CPU and GPU handlers' three call sites, the batched prefill, LoRA forward and
+`ropeExtBackward`. No other code reads the factor tensors. A file with only long factors, or trained
+at its original context, is unchanged. Tests first, against a no-op `requirePosition` stub:
+`Phi3RopeFactorPolicyTest` (5 cases, CPU) failed 2 (long factors selected; no throw at 4096), and
+`Phi3EndOfTurnLiveTest` (the 19 teacher-forced ids, CPU, real file) read **P(32007) = 0.5016**
+against `>= 0.95`. After the fix: 5 of 5, and **0.9924** (the recorded short-factor reading was 0.992;
+the reference engine reads 0.996). All 29 Phi-3 tests in `node` pass, including
+`Phi3GreedyDecodeIntegrationTest`'s reference continuation. Recorded under "Out-of-tier changes"
+below; Tier 02 item 7 reduced to option (b) and the long-factor gap.
+
+Because the change moves Phi-3.5 greedy output, step 3's divergence characterisation was re-taken on
+the final tree (`GpuAttentionDivergenceIT`, `-Pgpu`, 3 of 3 pass, six prompts, 64 greedy tokens, kernel
+`on` against `off`): **Phi-3.5-mini 4 of 6 identical, first divergence at steps 37 and 40** (was 26 and
+50 on the long factors); TinyLlama and Qwen3-1.7B unchanged (3 of 6, earliest 8; 3 of 6, earliest 20).
+Phi-3.5 still diverges no earlier than the LLaMA-family default.
+
+**Item 1a-ii (`juno.DeviceCompute`) — implemented and tested; the pinned A/B gate is owed.**
+- `DeviceComputeEvent` (`site`, `phase`, `count`, `timedCount`, `computeNanos`), periodic through
+  `DeviceSpanTally` like the other two. `DeviceSpanTimer.compute` brackets `CudaMatVec`'s asynchronous
+  kernels with stream events: `gemm_half` (the tiled FP16 GEMM on FP16 weights and on K-quant weights
+  after `launchDequant`), `gemv_half_batched` (2 to 8 rows) and `mmq_packed` (decode GEMV, counted
+  untimed). `DeviceComputeClock` (new) times the two default-stream kernels that sit between
+  synchronous copies, on the host between two drains of the default stream: `gemm_fp32`
+  (`GpuBlasOps.forward`) and `gqa_attention` (`CudaGqaAttention`, which also covers the Phi-3 and Qwen3
+  mirrors). The host FP16 packing is `juno.DeviceStaging` site `pack_fp16_host` under a new direction
+  `HOST`, so it stays out of the H2D/D2H bytes item 2's threshold is scored on. ROCm has no batched GEMM
+  and so no compute site.
+- `metrics`: `DeviceSpanBucket` writes `juno.DeviceCompute`, `.<phase>` and `.site.<site>.<phase>`
+  (`count`, `timed_count`, `total_ms`) for the five known sites on every run, and `HOST` beside the
+  three bus directions. `JfrMetricsExtractorDeviceComputeTest` (5 cases) failed 4 on the unchanged
+  extractor with the keys absent; the fifth (the HOST case) passed already because the bucket creates
+  unseen directions on demand, and its always-written zero key is asserted by the first case. All pass.
+- `DeviceComputeSpansTest` (`node`, `@Tag("gpu")`, 7 cases, GTX 1080): each site's event with a
+  measured duration at prefill width, `mmq_packed` counted and untimed at decode width, the packing as a
+  HOST site with exact bytes, and a 32-row FP16 GEMM bit-identical with and without a recording. Before
+  any instrumentation: 6 failed (no events), the bit-identity control passed. After: 7 of 7, and
+  `DeviceStagingSpansTest` still 6 of 6.
+- Registered disabled in `juno-perf.jfc`, enabled in `juno-perf-spans.jfc`. `compare-llama-cpp.sh`
+  adds `prefill_compute_ms`, `prefill_compute_ms_by_site` and `prefill_pack_host_ms` to the
+  `device_staging` object, with four new `--selftest` cases (written with the change, not shown failing
+  first).
+
+**Item 7 (thread parity) — harness done; the CPU reference sweep is owed.** `compare-llama-cpp.sh`
+passes `-Djava.util.concurrent.ForkJoinPool.common.parallelism=$((N_THREADS - 1))` (at least 1),
+records `juno_threads` and `juno_common_pool_parallelism` in `host.json` (replacing
+`juno_effective_parallelism`) and the flag in `juno_jvm_flags`, and the INDEX states whether the counts
+match instead of always calling them mismatched. Five new `--selftest` cases (the flag at `-t 4`, both
+`host.json` fields, the JVM flags, `-t 1` keeping one worker). **Live check**, unpublished run
+`--cpu --threads 4` on tinyllama at `n_prompt` 128: in the prefill repetition's recording, the
+`jdk.ExecutionSample` events whose stack is in the CPU matmul kernels came from exactly four threads (the
+request thread 3,913 samples, `commonPool-worker-1` to `-3` 3,905, 3,884 and 3,858), not twelve.
+
+**Verification, on the final tree.** `mvn test` on the eleven unit-test modules: **1,861 tests, 0
+failures, 0 errors, 49 skipped** (step 3: 1,843; the 18 new tests are this step's), 28:32, GPU-tagged
+tests included (CUDA present). `mvn install -DskipTests`, then `mvn verify -pl juno-master`: 20 ITs, 0
+failures. `GpuAttentionDivergenceIT`: 3 of 3. `compare-llama-cpp.sh --selftest` and
+`check-plan-thresholds.sh` pass. Candidate jar sha256 `30d4d4937d1e3994`. No `compare-lora.sh`,
+`compare-vision.sh` or `compare-llama-cpp.sh` sweep was taken in this step: with the events off every
+new site is one enabled check before the plain call, and the step's own gate is the pinned A/B below,
+which needs prompt-free sudo. No unpinned A/B was run as a substitute, since it could not score a 0.98x
+gate. Item 8 changes rotation angles on Phi-3 only (no sweep work changes).
+
+**Item 10 (CI) — owner action.** `.github/workflows/ci.yml` is still untracked (`git ls-files .github`
+is empty). Committing it is a git write and the owner's.
+
+**Pinned measurements, run by the owner on 2026-10-01** (the agent shell has no prompt-free sudo):
+
+*1a-ii gate:* [`20261001T172351Z-tier01b-step3a-compute-ab`](../perf-compare/20261001T172351Z-tier01b-step3a-compute-ab/INDEX.md),
+six pinned runs alternated A B A B A B, A = jar `fc01f42184810aa6` (before), B = `30d4d4937d1e3994`
+(this step), `n_prompt` 512, spans off. Juno t/s, median of three (min / max):
+
+| Model | Prefill A | Prefill B | B/A | Generation B/A |
+|---|---|---|---|---|
+| TinyLlama | 252.76 (249.60 / 254.69) | 251.36 (247.45 / 259.28) | **0.994** | 1.011 |
+| Mistral 7B | 67.13 (66.97 / 68.05) | 68.23 (65.31 / 68.60) | **1.016** | 0.996 |
+
+**Gate (>= 0.98x) met on both.** Every invocation pinned, every prefill 512 of 512, no repetition
+withheld.
+
+*Item 7's CPU reference:* [`20261001T180241Z`](../perf-compare/20261001T180241Z/INDEX.md), the four sweep
+models at `n_prompt` 128, `--cpu --pin-clocks --reps 3 --juno-reps 3`, `juno_threads` 12 against `-t
+12`, INDEX "Thread counts are matched", every row scorable, every prefill 128 of 128. Ratios against the
+previous CPU reference (`20260927T094414Z`, unpinned):
+
+| Model | pp ratio | tg ratio |
+|---|---|---|
+| tinyllama-1.1b | 0.090x → 0.103x | 0.135x → 0.121x |
+| qwen2.5-3b | 0.077x → 0.076x | 0.094x → 0.099x |
+| Phi-3.5-mini | 0.048x → 0.049x | 0.095x → 0.100x |
+| mistral-7b | 0.075x → 0.075x | 0.090x → 0.092x |
+
+Juno's own absolute t/s fell 3% to 7% (turbo off) and the reference tool's tinyllama prefill by 16%;
+tinyllama's ratio moves are the reference tool's, inside the 15% noise floor. Since thread count did not
+change at this default (see the drift note above), the boundary here is the clock pinning. The
+README's program-target table gains this as the current CPU column and the Tier 10 milestone references
+move to it (tg 0.092x on mistral-7b; pp 0.049x on Phi-3.5-mini), in the same change; the previous
+reference carries a superseded banner.
+
+**The original hand-off text, kept as the record of what was asked:**
+1. *The 1a-ii gate.* Same-hour pinned A/B with the spans **off**, prefill `>= 0.98x` the build without
+   `juno.DeviceCompute`, tinyllama and mistral-7b at `n_prompt` 512. Baseline jar: the build of this
+   tree before step 3a (sha256 `fc01f42184810aa6`, saved as `target/tier01b-step3a-ab/baseline-shaded.jar`,
+   which a root `mvn clean` deletes); candidate: this tree's build. Per pair, alternating A B A B A B:
+   `compare-llama-cpp.sh --gpu --pin-clocks --models tinyllama-1.1b-chat-v1.0.Q4_K_M,mistral-7b-instruct-v0.1-q4_k_m --n-prompt 512 --juno-warmup 2 --juno-reps 1 --reps 1 --no-tuned-lane --no-publish --juno-jar <jar>`.
+2. *The CPU reference for item 7.* `compare-llama-cpp.sh --cpu --pin-clocks --n-prompt 128 --reps 3
+   --juno-reps 3` on the four sweep models, published, and the README's CPU row gains it as the
+   reference column in the same change.
+3. *Item 10.* Commit `.github/workflows/ci.yml`, push, and record the first green run of both jobs here.
+   *Withdrawn 2026-10-01: the owner removed item 10 as an exit criterion.*
+
 ### Out-of-tier changes (recorded per execution rule 9)
 
 | Change | What it touched | Measurement boundary? |
 |---|---|---|
+| Working tree, 2026-10-01 (scope item 8, carried here from Tier 02 item 7): Phi-3 LongRoPE factor selection | `Phi3RopeConfig.selectFactors()` returns the short factors when the file has them (it chose the long ones whenever the trained context exceeded the original, which is every Phi-3.5 request); `requirePosition` fails closed at `original_context_length` (4096 on Phi-3.5-mini); called from `Phi3Rope.buildCache`, so every CPU, GPU, batched-prefill and LoRA rotation. Tests: `Phi3RopeFactorPolicyTest`, `Phi3EndOfTurnLiveTest` (P(`<\|end\|>`) 0.5016 before, 0.9924 after). | **For Phi-3.5 output, yes; for throughput, no.** Rotation angles change, work does not, so every throughput reading stands. Phi-3.5 greedy output changes: step 3's `GpuAttentionDivergenceIT` Phi-3.5-mini row (4 of 6 identical, earliest divergence 26) was taken on the long factors; re-taken on this build at 4 of 6, earliest 37 (step 3a record). Any later Phi-3.5 divergence or greedy-parity reading is taken after this change. A Phi-3.5 sequence longer than 4096 tokens now fails with an error; no published run uses one (the sweeps prefill 128 and 512). |
 | Working tree, 2026-09-28: architecture checked first at every entry point | `ModelFileGate.requireLoadable` (new, `node`) reads `general.architecture` and refuses an unverified one with `UnsupportedModelException` (new, an `IOException`, now also what `LlamaFamilyArchitectures` throws) before the config or tokenizer is read; called once in `ConsoleMain.main` before the mode dispatch (covers local, cluster, lora and their JFR variants), and in `CoordinatorMain`, `JunoPlayer.build` and `LoraTrainer.open`. The tokenizer's refusal becomes `UnsupportedPreTokenizerException` (new, still an `IllegalArgumentException`). `ConsoleMain` prints either as one `ERROR:` line and exits 1; cluster mode now refuses before forking nodes. Tests first: `ModelFileGateTest` (4 cases) and `BpePreTokenizerTest` tightened to the new type, both failing to compile before the change and passing after; `smoke-tier00-consistency.sh`, unmodified, 54 of 54 checks with the GPU legs (was 33 of 36 without them).; `mvn test` on the eleven unit-test modules passes (25:20 min), and `mvn verify -pl juno-master` passes, including `ThreeNodeClusterIT`, `TensorParallelClusterIT` and the unsupported-architecture IT. | **No.** One metadata read per model load, before any weights; nothing in the forward pass, MatVec, KV, batching or quantization. No published baseline is affected. |
 | Working tree, 2026-09-27: `compare-llama-cpp.sh` heap and clock pinning | Juno launched with `-Xms` equal to `-Xmx` (was `-Xms512m`); optional `--pin-clocks`. | **Yes, for Juno readings from this harness**: a fixed-size heap changes when and how often G1 collects, and a pinned run runs at different clocks from an unpinned one (turbo off lowers absolute throughput for both engines). No published reference is invalidated by the code change itself, because none has been taken with it; the **step 2 re-baseline is the first run on this side of it** and every gate in this tier reads against that run, so no gate straddles the boundary. Do not compare a pinned run's absolute t/s with an unpinned run's. |
 
@@ -1308,8 +1635,43 @@ the tier's gate lists them. `ModelLiveRunnerIT` and `smoke-tier01b-prefill.sh` a
       (`compare-llama-cpp.sh --device-spans`), because counting every copy costs about 6% of TinyLlama
       prefill. Step 1's gate is met on that design (prefill 0.999x and 1.000x, pinned A/B). Every run
       that feeds the breakdown or the item-2 staged-bytes threshold passes `--device-spans`.*
+- [x] `juno.DeviceCompute` exists (item 1a-ii), is registered disabled in `juno-perf.jfc` and enabled
+      by `juno-perf-spans.jfc`, is extracted with keys on every run, has `metrics` tests that failed on
+      the build without it, and passed its same-hour pinned A/B (prefill >= 0.98x with the spans off).
+      *Checked 2026-10-01: prefill 0.994x (TinyLlama) and 1.016x (Mistral 7B), pinned,
+      [`docs/perf-compare/20261001T172351Z-tier01b-step3a-compute-ab`](../perf-compare/20261001T172351Z-tier01b-step3a-compute-ab/INDEX.md);
+      `JfrMetricsExtractorDeviceComputeTest` failed 4 of 5 on the extractor without the keys.*
 - [ ] Per-term prefill breakdown published for all four sweep models at `n_prompt` 128 and 512, with
-      no unattributed residue — every term named, including host-device staging and dequantization.
+      no unattributed residue — every term named, including host-device staging and dequantization,
+      the GEMM compute read from `juno.DeviceCompute`, the host FP16 packing, and the host elementwise
+      spans; residue <= 5% of prefill per model. The GEMM's measured share per model is recorded for
+      Tier 01C.
+- [ ] Item 6: SwiGLU, both norms and the residual adds run on the device for the prefill window (and
+      RoPE where the kernel supports the model's pairing, announced otherwise), the KV mirror is appended
+      once per layer per window, and the item 6 threshold is met: host elementwise <= 10% of prefill and
+      KV H2D copies <= 2 x layers per window on tinyllama, qwen2.5-3b and mistral-7b; tinyllama
+      prefill >= 1.25x the pre-item-6 build (same-hour pinned A/B); greedy output identical or
+      characterised no worse than item 0's baseline.
+- [x] Item 7: `compare-llama-cpp.sh` runs Juno's hot path at the reference tool's `-t`, records
+      `juno_threads`, and a CPU sweep taken with it is published as the new CPU reference, with the
+      README's reference column moved in the same change.
+      *Checked 2026-10-01: [`docs/perf-compare/20261001T180241Z`](../perf-compare/20261001T180241Z/INDEX.md),
+      pinned, 12 threads against `-t 12`; live check at `--threads 4` found matmul samples on exactly four
+      threads (step 3a record).*
+- [x] Item 8: Phi-3.5 selects its RoPE factors by the owner-chosen policy on every `Phi3Rope` caller;
+      the end-of-turn live test reads P(`<|end|>`) >= 0.95; recorded under "Out-of-tier changes", and
+      Tier 02 item 7 reduced to the long-factor gap explanation.
+      *Checked 2026-10-01: option (a) as a fixed 4096 cap (owner decision), in `Phi3RopeConfig`, reached by
+      every rotation through `Phi3Rope.buildCache`.*
+      **Evidence (not published):** `Phi3EndOfTurnLiveTest` (CPU, real file) 0.5016 before and 0.9924
+      after; `Phi3RopeFactorPolicyTest` 2 of 5 failing before, 5 of 5 after; step 3a record.
+- [x] Item 9: `check-plan-thresholds.sh` implements rule 7 check 4, was shown failing on a scratch copy
+      with both planted defects, and passes on this tree without the check being weakened.
+      *Checked 2026-10-01: both planted defects named, four controls passing; the tree passes with no
+      criterion edited (step 3a record).*
+- ~~Item 10: `.github/workflows/ci.yml` committed by the owner, and the first green run of both jobs
+      recorded here with its URL.~~ **Not an exit criterion** (owner decision, 2026-10-01): see scope
+      item 10. Written without a checkbox so it counts neither as met nor as open.
 - [ ] The threshold decomposition written down before implementation, with each item's expected
       contribution read off the breakdown, and an escalation recorded here if they did not sum.
 - [ ] Prefill activations stay device-resident across a layer's projections, with the materialization

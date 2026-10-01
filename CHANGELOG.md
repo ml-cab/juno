@@ -1,5 +1,33 @@
 ## Status 
 
+**Session 101** — Phi-3.5 ends its turns again, GPU kernels can be timed on their own, and the CPU comparison runs both engines on the same thread count
+
+- **Phi-3.5 rotates short sequences with the short RoPE factors.** A Phi-3 model whose file carries
+  both LongRoPE factor sets chose between them by its trained context length (131,072 on
+  Phi-3.5-mini), so every request was rotated with the long-context factors. The model then rarely
+  ended its turn: the probability of `<|end|>` after a finished one-line answer was 0.50, and about
+  half of sampled console replies ran on to the token limit. It now uses the short factors, which put
+  that probability at 0.99, and a sequence that reaches the original training context (4,096 tokens on
+  Phi-3.5-mini) fails with an error naming the limit instead of continuing on factors it did not
+  start with. Juno has no per-session context setting, so a Phi-3.5 sequence never starts on the long
+  factors. This applies on every Phi-3 path: CPU and GPU, batched prefill, and LoRA training.
+- **GPU kernels have their own recording event.** `juno.DeviceCompute` totals the device kernels per
+  site and phase: the tiled FP16 GEMM, the batched FP16 GEMV for two- to eight-row windows, the FP32
+  BLAS GEMM, the attention kernel, and the packed decode GEMV (counted, untimed). The host FP16 packing
+  of each activation window is now its own `juno.DeviceStaging` site under a `HOST` direction, kept out
+  of the bytes that cross the bus. With the copy and dequantization totals, every GPU term of a prefill
+  window is named rather than left inside the matmul span. Off by default like the other two;
+  `compare-llama-cpp.sh --device-spans` turns it on and adds prefill kernel time, per site, to every
+  result. With it off, a same-hour pinned comparison against the build without it reads 0.994x and
+  1.016x prefill, and 1.011x and 0.996x generation, on TinyLlama and Mistral 7B.
+- **The comparison harness matches the reference tool's thread count.** `compare-llama-cpp.sh` sets the
+  common fork-join pool's parallelism to `--threads` minus one, since the calling thread joins the work,
+  so Juno's CPU kernels run on the same thread count the reference tool is given. `host.json` records
+  `juno_threads`, and the index states whether the counts match. At the default `--threads` (the
+  processor count) this equals what the JVM already did; the old index note gave Juno one thread too
+  few. A pinned CPU sweep taken with it is the new CPU reference: Juno reads 0.092x to 0.121x of the
+  reference tool's generation and 0.049x to 0.103x of its prompt processing.
+
 **Session 100** — The GPU attention kernel reaches the Phi-3 and Qwen3 handlers, and every launch that cannot use it says so
 
 - **Phi-3 and Qwen3 run attention on the GPU.** The GPU-resident attention kernel behind

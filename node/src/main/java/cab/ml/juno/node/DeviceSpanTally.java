@@ -21,14 +21,15 @@ import java.util.concurrent.atomic.LongAdder;
 import jdk.jfr.FlightRecorder;
 
 /**
- * Running totals behind {@link DeviceStagingEvent} and {@link WeightDequantEvent}.
+ * Running totals behind {@link DeviceStagingEvent}, {@link WeightDequantEvent} and
+ * {@link DeviceComputeEvent}.
  *
  * <p>A prefill window issues tens of thousands of copies (every KV row of every
  * layer is its own copy) and a decoded token several hundred, so one JFR event per
  * copy costs a measurable share of the work it describes. Instead each copy adds to
  * lock-free counters keyed by its site and phase, and both events are periodic:
  * JFR calls {@link #emitStaging} and {@link #emitDequant} at the end of every chunk,
- * which commit one event per non-empty cell carrying the totals since the previous
+ * (and {@link #emitCompute}), which commit one event per non-empty cell carrying the totals since the previous
  * emission. Starting a recording ends the chunk before it, so the totals a
  * recording holds are exactly the work done while it ran.
  *
@@ -44,11 +45,13 @@ final class DeviceSpanTally {
 
 	private static final ConcurrentHashMap<String, StagingCell> STAGING = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<String, DequantCell> DEQUANT = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<String, ComputeCell> COMPUTE = new ConcurrentHashMap<>();
 
 	static {
 		if (FlightRecorder.isAvailable()) {
 			FlightRecorder.addPeriodicEvent(DeviceStagingEvent.class, DeviceSpanTally::emitStaging);
 			FlightRecorder.addPeriodicEvent(WeightDequantEvent.class, DeviceSpanTally::emitDequant);
+			FlightRecorder.addPeriodicEvent(DeviceComputeEvent.class, DeviceSpanTally::emitCompute);
 		}
 	}
 
@@ -63,6 +66,11 @@ final class DeviceSpanTally {
 	/** Whether a running recording wants {@code juno.WeightDequant}. */
 	static boolean dequantWanted() {
 		return new WeightDequantEvent().isEnabled();
+	}
+
+	/** Whether a running recording wants {@code juno.DeviceCompute}. */
+	static boolean computeWanted() {
+		return new DeviceComputeEvent().isEnabled();
 	}
 
 	/** The phase of a copy issued by a forward call over {@code windowSize} rows (0: outside a forward call). */
@@ -110,6 +118,25 @@ final class DeviceSpanTally {
 		}
 	}
 
+	/**
+	 * Adds one kernel launch.
+	 *
+	 * @param nanos measured duration, or {@code -1} for a launch that was counted but not timed
+	 */
+	static void compute(String site, int windowSize, long nanos) {
+		if (!computeWanted())
+			return;
+		ComputeCell cell = COMPUTE.get(site);
+		if (cell == null)
+			cell = COMPUTE.computeIfAbsent(site, ComputeCell::new);
+		int p = phase(windowSize);
+		cell.count[p].increment();
+		if (nanos >= 0) {
+			cell.timed[p].increment();
+			cell.nanos[p].add(nanos);
+		}
+	}
+
 	/** Periodic hook: commits one event per non-empty site and phase, and starts the next totals. */
 	static void emitStaging() {
 		for (StagingCell cell : STAGING.values()) {
@@ -148,6 +175,37 @@ final class DeviceSpanTally {
 			ev.timedCount = timed;
 			ev.dequantNanos = nanos;
 			ev.commit();
+		}
+	}
+
+	/** Periodic hook: commits one compute event per non-empty site and phase. */
+	static void emitCompute() {
+		for (ComputeCell cell : COMPUTE.values()) {
+			for (int p = 0; p < PHASES.length; p++) {
+				long count = cell.count[p].sumThenReset();
+				long timed = cell.timed[p].sumThenReset();
+				long nanos = cell.nanos[p].sumThenReset();
+				if (count == 0)
+					continue;
+				DeviceComputeEvent ev = new DeviceComputeEvent();
+				ev.site = cell.site;
+				ev.phase = PHASES[p];
+				ev.count = count;
+				ev.timedCount = timed;
+				ev.computeNanos = nanos;
+				ev.commit();
+			}
+		}
+	}
+
+	private static final class ComputeCell {
+		final String site;
+		final LongAdder[] count = StagingCell.adders();
+		final LongAdder[] timed = StagingCell.adders();
+		final LongAdder[] nanos = StagingCell.adders();
+
+		ComputeCell(String site) {
+			this.site = site;
 		}
 	}
 

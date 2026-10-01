@@ -86,9 +86,13 @@ result, which is the pattern this plan exists to stop repeating.
    matching `JUNO_THREADS` env var, following the existing flag conventions) that actually governs
    the hot path, replacing the current situation where `-Djuno.simd.pool.size` sizes a pool the
    kernels do not use. This flag is a precondition of the benchmark-parity work in
-   [`README.md`](README.md)'s "Benchmark parity preconditions" — until it exists, Juno and llama.cpp
-   cannot be run at matched parallelism, so every published ratio carries an unquantified thread-count
-   mismatch.
+   [`README.md`](README.md)'s "Benchmark parity preconditions".
+   *Amended 2026-09-30:* the harness no longer waits for it. [Tier 01B](TIER-01B-prefill-throughput.md)
+   item 7 matches the thread count by passing
+   `-Djava.util.concurrent.ForkJoinPool.common.parallelism` to Juno, which the common-pool hot path
+   already honours. When this item replaces the common pool or ships `--threads`, switch
+   `compare-llama-cpp.sh` to the flag in the same change and confirm on one CPU sweep that the thread
+   count on the hot path is unchanged, so the switch is not a second measurement boundary.
 6. **Backend-breadth decision**: explicitly evaluate whether Metal/Vulkan/SYCL/CANN support is
    worth pursuing given Juno's target audience and the JVM/Panama-FFI architecture, and record the
    decision (pursue as a new, separately-scoped future tier; or explicitly decline with reasoning)
@@ -119,6 +123,17 @@ result, which is the pattern this plan exists to stop repeating.
    PTX. It sits here because item 1 is what gives ROCm a batched prefill at all; until then ROCm prefill
    is a serial matrix-vector loop and attention is not its dominant term. Once ported, the ROCm row of
    the startup notice goes, and `GpuAttentionSupportTest` is updated to match.
+9. **Restate the CPU tg end-of-plan target against the memory-bandwidth roofline** (added 2026-09-30;
+   README, "CPU tg: the memory-bandwidth roofline"). Measure the host's attainable read bandwidth
+   (a multi-threaded sequential-read microbenchmark over a buffer much larger than the last-level cache,
+   at the thread count `--threads` defaults to, median of three; record the DIMM speed if it can be read)
+   and publish it with the step-2 breakdown. From then on every CPU tg reading this tier publishes
+   carries Juno's attained weight bandwidth (model weight bytes read per token x tg) and its share of the
+   measured bandwidth, beside the reference tool's share. After the step-2 breakdown, and before
+   implementing items 3 to 5, restate the README's CPU tg end-of-plan row: the ratio Juno would read at
+   the bandwidth share the breakdown says the three items can plausibly reach, never below the 0.25x
+   placeholder. The README's roofline estimate puts a third of the roofline at about 0.4x to 0.7x;
+   if the restated number is below 0.40x, say which term in the breakdown holds it there.
 
 ### Out of scope
 
@@ -151,7 +166,9 @@ result, which is the pattern this plan exists to stop repeating.
    (`B≈741`) that broke the general-purpose `dot()` before, so any new SIMD hot-path change is
    automatically checked against the specific failure this codebase already hit once.
 2. **Establish the CPU cost breakdown before choosing what to fix.** Capture a JFR recording of a
-   steady-state CPU decode run on `mistral-7b` using the shared `juno-perf.jfc` configuration Tier 01
+   steady-state CPU decode run on `mistral-7b`, and a second of a 128-token CPU prefill on the same
+   model and on Phi-3.5-mini (the binding model for the CPU pp milestone), using the shared
+   `juno-perf.jfc` configuration Tier 01
    added, and read five things off it via the `jdk.*` metrics Tier 01 taught `JfrMetricsExtractor` to
    emit: `jdk.ExecutionSample` hot methods, `jdk.ThreadAllocationStatistics` allocation *rate*,
    `jdk.ObjectAllocationSample` allocation *attribution* (the sampled event gives you the call sites,
@@ -191,8 +208,10 @@ result, which is the pattern this plan exists to stop repeating.
   allocating `sgemv` for every backend implementation, and the retained allocating form still works
   for any caller that was not converted.
 - **New allocation-rate assertion**: a steady-state CPU decode run over N tokens allocates below a
-  stated bytes-per-token ceiling, read from JFR `jdk.ObjectAllocationSample`. Set the ceiling from
-  the step-2 baseline measurement, not from a guess.
+  stated bytes-per-token ceiling, read from JFR `jdk.ThreadAllocationStatistics` (the
+  `allocated_bytes_per_token` figure the harness publishes; `jdk.ObjectAllocationSample` is sampled
+  and gives attribution, not a rate — corrected 2026-09-30, this line previously named it). Set the
+  ceiling from the step-2 baseline measurement, not from a guess.
 - **New threading tests**: correctness under `--threads 1`, `--threads 2` and
   `--threads <availableProcessors>` (a row-parallel reduction must produce the same result at every
   thread count, within float tolerance); and a test that `--threads N` actually changes the observed
@@ -212,7 +231,10 @@ result, which is the pattern this plan exists to stop repeating.
 
   **Threshold**: CPU tg ratio >= **0.20x** llama.cpp on every sweep model, up from 0.106x to 0.147x
   — this is the intermediate milestone the program target in [`README.md`](README.md) assigns to this
-  tier. Allocation rate during steady-state CPU decode must drop by >= **50%** against the step-2
+  tier. CPU pp ratio at `n_prompt=128` >= **0.10x** on every sweep model, up from 0.048x
+  (Phi-3.5-mini, binding) to 0.090x (`20260927T094414Z`) — the second milestone row for this tier,
+  added 2026-09-30 because CPU prefill was otherwise scored by no tier. Both ratios are read at matched
+  thread counts (Tier 01B item 7, then this tier's `--threads`). Allocation rate during steady-state CPU decode must drop by >= **50%** against the step-2
   baseline, measured from `jdk.ThreadAllocationStatistics` rather than from the sampled allocation
   event. Vision gate unchanged from the existing rule: `latency_ms` <= 1.25x baseline, decode tps
   >= 0.80x baseline. Every throughput number here is a median of at least three runs with min/max
@@ -241,6 +263,9 @@ vision-scale batch-width regression guard (already present).
       leaves no property (`juno.simd.pool.size`) that silently does nothing.
 - [ ] CPU tg ratio milestone met (>= 0.20x on every sweep model), or missed and reported plainly with
       the breakdown explaining which term remained dominant.
+- [ ] CPU pp ratio milestone met (>= 0.10x at `n_prompt=128` on every sweep model), or missed and
+      reported plainly with the term that remained dominant; the step-2 breakdown covers a CPU prefill
+      run as well as the decode run, so the pp milestone has its own attribution.
 - [ ] Every earlier tier's CPU-inference ("row 1") correctness result re-verified under the new CPU
       defaults — SIMD, allocation and threading together — with any output changes (even
       within-tolerance ones) explicitly documented rather than assumed away.
@@ -252,6 +277,10 @@ vision-scale batch-width regression guard (already present).
       announced, never silent.
 - [ ] Metal/Vulkan/SYCL/CANN decision made and recorded (pursue as a new tier, or explicitly
       declined with reasoning) — not left open.
+- [ ] Host attainable read bandwidth measured and published; every CPU tg reading carries Juno's
+      attained weight bandwidth and its share; the README's CPU tg end-of-plan row restated against the
+      roofline after the step-2 breakdown (scope item 9), never below 0.25x, with the holding term
+      named if it is below 0.40x.
 - [ ] Every CPU conclusion in the execution record carries a `host-specific` or `expected-general`
       marker, and each host-specific one names what to re-measure on an AVX-512/VNNI host.
 - [ ] Cross-surface checklist fully resolved, vision regression guard explicitly passing.
