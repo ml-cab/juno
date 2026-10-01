@@ -186,6 +186,12 @@ Module dependency (excerpt):
         juno.DeviceCompute is summed overall, per phase and per kernel site
         (gemm_half, gemv_half_batched, gemm_fp32, mmq_packed, gqa_attention, always
         written) into count/timed_count/total_ms.
+        WindowStepBucket sums juno.WindowStep per step (embed, projection, bias_add,
+        kv_write, lm_head, always written; any other step under its own name) into
+        count and prefill/decode count/total_ms, a window wider than one row being
+        prefill. juno.MatVec is also split into prefill/decode by its windowSize
+        field (the call's batch width); a recording without the field counts only in
+        the total.
         Recorded durations are only as good as the recorder's clock: on a host
         whose kernel rejected the CPU timestamp counter, a span crossing two
         cores whose counters disagree is misread, so the comparison harnesses
@@ -516,6 +522,19 @@ GPU FFI (node module — Panama project, JEP 454):
         CudaGqaAttention). CudaMatVec.packFp16Window counts the host FP16 packing of each window as a
         juno.DeviceStaging site (pack_fp16_host) with direction HOST. Off in juno-perf.jfc, on in
         juno-perf-spans.jfc. RocmMatVec has no batched GEMM, so it has no compute site yet.
+  Prefill window spans — WindowStepEvent (juno.WindowStep: step, windowSize, startPosition)
+        covers the window work no per-op event covers, one event per call site per layer:
+        embed, projection (each sgemm*Into call through the handler's projectWindow wrapper or an
+        inline span, so the backend's juno.MatVec plus the copy-out), bias_add, kv_write (host
+        KV rows plus the device mirror append) and lm_head. Emitted by the forwardBatch window
+        path of LlamaTransformerHandler, Phi3TransformerHandler and Qwen3TransformerHandler; the
+        Phi-3 and Qwen3 window paths also emit juno.RmsNorm (Qwen3's per-head Q/K norm included),
+        Rope, Attention, ResidualAdd and SwiGlu, as the LLaMA-family path already did. Decode
+        paths are unchanged. MatVecEvent carries windowSize (the batch of CudaMatVec's batched
+        GEMM and GEMV, 1 elsewhere). On in juno-perf.jfc.
+        scripts/performance-tests/prefill-breakdown.sh reads a --device-spans run and reports
+        each non-overlapping term of juno.ForwardPass prefill time, nested device terms
+        subtracted from their parent span, with the unspanned remainder as residue.
   DeviceFloatMatrix / DeviceHalfMatrix / DeviceQ4KMatrix — VRAM buffer wrappers using GpuBindings
         deviceMalloc / deviceFree; explicit lifecycle via releaseGpuResources().
         Vendor-neutral half/float; Q4_K path is CUDA-only.

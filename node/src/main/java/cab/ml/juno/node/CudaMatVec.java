@@ -743,6 +743,7 @@ public final class CudaMatVec implements GpuMatVec {
         }
 
         MatVecEvent evt = new MatVecEvent();
+        evt.windowSize = batch;
         evt.begin();
 
         long bytesXh = (long) cols * batch * Short.BYTES;
@@ -821,6 +822,7 @@ public final class CudaMatVec implements GpuMatVec {
         }
 
         MatVecEvent evt = new MatVecEvent();
+        evt.windowSize = batch;
         evt.begin();
 
         long bytesXh = (long) cols * batch * Short.BYTES;
@@ -958,6 +960,7 @@ public final class CudaMatVec implements GpuMatVec {
             throw new IllegalStateException("Q4_K MMQ kernel is not loaded");
 
         MatVecEvent evt = new MatVecEvent();
+        evt.windowSize = batch;
         evt.begin();
 
         long bytesXh = (long) cols * batch * Short.BYTES;

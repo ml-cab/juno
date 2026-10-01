@@ -98,6 +98,9 @@ final class JfrMetricsExtractor {
         DurationBucket rope = new DurationBucket();
         DurationBucket residualAdd = new DurationBucket();
         DurationBucket swiglu = new DurationBucket();
+        WindowStepBucket windowSteps = new WindowStepBucket();
+        List<Long> matVecPrefill = new ArrayList<>();
+        List<Long> matVecDecode = new ArrayList<>();
 
         List<Long> tokEncode = new ArrayList<>();
         List<Long> tokDecodeToken = new ArrayList<>();
@@ -182,6 +185,10 @@ final class JfrMetricsExtractor {
                     switch (type) {
                         case MAT_VEC -> {
                             matVecAll.add(nano);
+                            // The call's own batch width: a build without the field is
+                            // counted in the total only, never guessed into a phase.
+                            if (ev.hasField("windowSize"))
+                                (ev.getInt("windowSize") > 1 ? matVecPrefill : matVecDecode).add(nano);
                             if (ev.hasField("backend")) {
                                 String b = sanitizeBackend(ev.getString("backend"));
                                 matVecByBackend.computeIfAbsent(b, k -> new ArrayList<>()).add(nano);
@@ -219,6 +226,7 @@ final class JfrMetricsExtractor {
                         case ROPE -> rope.add(nano, isWindowPrefill(ev));
                         case RESIDUAL_ADD -> residualAdd.add(nano, isWindowPrefill(ev));
                         case SWIGLU -> swiglu.add(nano, isWindowPrefill(ev));
+                        case WindowStepBucket.EVENT -> windowSteps.accept(ev, nano);
                         case TOKENIZER -> {
                             if (ev.hasField("operation")) {
                                 String op = ev.getString("operation");
@@ -362,6 +370,10 @@ final class JfrMetricsExtractor {
         m.put("juno.MatVec.count", (double) matVecAll.size());
         m.put("juno.MatVec.duration.total_ms", JfrPercentiles.sumNanosToMs(matVecAll));
         m.put("juno.MatVec.duration.p95_ms", JfrPercentiles.p95NanosToMs(matVecAll));
+        m.put("juno.MatVec.prefill.count", (double) matVecPrefill.size());
+        m.put("juno.MatVec.decode.count", (double) matVecDecode.size());
+        m.put("juno.MatVec.prefill.total_ms", JfrPercentiles.sumNanosToMs(matVecPrefill));
+        m.put("juno.MatVec.decode.total_ms", JfrPercentiles.sumNanosToMs(matVecDecode));
 
         List<String> legacyBackends = List.of("cpu", "cuda", "cuda_resident");
         for (String backend : legacyBackends) {
@@ -393,6 +405,7 @@ final class JfrMetricsExtractor {
         putDurationBucket(m, "juno.Rope", rope);
         putDurationBucket(m, "juno.ResidualAdd", residualAdd);
         putDurationBucket(m, "juno.SwiGlu", swiglu);
+        windowSteps.putInto(m);
 
         m.put("juno.Tokenizer.encode.count", (double) tokEncode.size());
         m.put("juno.Tokenizer.encode.p95_ms", JfrPercentiles.p95NanosToMs(tokEncode));

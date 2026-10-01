@@ -188,6 +188,13 @@ bytes that cross the bus. Together with the copy and dequantization totals this 
 of a prefill window instead of leaving the GEMM as whatever `juno.MatVec` has left over. It is off in
 `juno-perf.jfc` and on under `--device-spans`, like the other two.
 
+**Prefill window breakdown.** `juno.WindowStep` spans the window work no per-op event covers (the
+embedding, each projection call with its copy-out, bias adds, the KV write, the LM head), and the
+Phi-3 and Qwen3 window paths emit the same per-op events as the LLaMA-family path. With them,
+`scripts/performance-tests/prefill-breakdown.sh` splits a `--device-spans` run's prefill time into
+terms that do not overlap and reports what no span covers as residue; on the four sweep models at
+512 tokens the residue is under 2% of the window.
+
 ## OpenAI field parity (`stop` / `seed` / `presence_penalty`)
 
 **Plan:** [`infra-plan/PLAN-Infra-Tier2.md`](infra-plan/PLAN-Infra-Tier2.md) (P2 step 1 — **feature complete**).

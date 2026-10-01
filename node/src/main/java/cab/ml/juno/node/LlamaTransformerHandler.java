@@ -1126,6 +1126,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				+ " isFirstNode=" + request.isFirstNode() + " usingActivations=" + usingActivations
 				+ " hasOutputProj=" + hasOutputProj);
 
+		WindowStepEvent embedEvt = WindowStepEvent.start();
 		float[][] x;
 		// See getInitialActivation() for why this checks request.isFirstNode()
 		// rather than relying on hasEmbeddings alone: node 0 may still receive
@@ -1147,14 +1148,17 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				System.arraycopy(flat, b * H, x[b], 0, H);
 			}
 		}
+		embedEvt.end(WindowStepEvent.EMBED, W, request.startPosition());
 
 		x = runLayersBatch(x, request.requestId(), request.startPosition());
 
 		if (hasOutputProj) {
 			// Only the last position's logits are needed after prefill
 			long projStart = System.nanoTime();
+			WindowStepEvent headEvt = WindowStepEvent.start();
 			float[] lastX = x[W - 1];
 			float[] logits = outputProjection(lastX);
+			headEvt.end(WindowStepEvent.LM_HEAD, W, request.startPosition());
 			log.info("[prefill] forwardBatch EXIT (final node) requestId=" + request.requestId() + " outputProjMs="
 					+ ms(projStart, System.nanoTime()) + " totalMs=" + ms(start, System.nanoTime()));
 			return new BatchForwardResult(request.requestId(), null, logits, W, System.nanoTime() - start);
@@ -1603,16 +1607,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		normEvt1.dimension = H;
 		normEvt1.commit();
 
-		sgemmLayerInto(wq[li], wqDev, wqDevFp32, wqQ4Dev, li, ws.norm1, ws.q,    H,     H);
-		sgemmLayerInto(wk[li], wkDev, wkDevFp32, wkQ4Dev, li, ws.norm1, ws.k,    kvDim, H);
-		sgemmLayerInto(wv[li], wvDev, wvDevFp32, wvQ4Dev, li, ws.norm1, ws.v,    kvDim, H);
+		projectWindow(wq[li], wqDev, wqDevFp32, wqQ4Dev, li, ws.norm1, ws.q,    H,     H, startPos);
+		projectWindow(wk[li], wkDev, wkDevFp32, wkQ4Dev, li, ws.norm1, ws.k,    kvDim, H, startPos);
+		projectWindow(wv[li], wvDev, wvDevFp32, wvQ4Dev, li, ws.norm1, ws.v,    kvDim, H, startPos);
 
 		if (bq != null) {
+			WindowStepEvent biasEvt = WindowStepEvent.start();
 			for (int b = 0; b < W; b++) {
 				addInPlace(ws.q[b], bq[li]);
 				addInPlace(ws.k[b], bk[li]);
 				addInPlace(ws.v[b], bv[li]);
 			}
+			biasEvt.end(WindowStepEvent.BIAS_ADD, W, startPos);
 		}
 
 		long t1 = System.nanoTime(); // qkv projection done
@@ -1628,6 +1634,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
 		ropeEvt.commit();
 
+		WindowStepEvent kvEvt = WindowStepEvent.start();
 		for (int b = 0; b < W; b++) {
 			// The CPU tensors are written first and unconditionally: the device cache
 			// is a mirror of them, never the only copy. That is what makes dropping
@@ -1655,6 +1662,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				}
 			}
 		}
+
+		kvEvt.end(WindowStepEvent.KV_WRITE, W, startPos);
 
 		long t2 = System.nanoTime(); // rope + cache write done
 
@@ -1700,7 +1709,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		long t3 = System.nanoTime(); // attention (gqaInto over all W positions) done
 
-		sgemmLayerInto(wo[li], woDev, woDevFp32, woQ4Dev, li, ws.attnOut, ws.attnProj, H, H);
+		projectWindow(wo[li], woDev, woDevFp32, woQ4Dev, li, ws.attnOut, ws.attnProj, H, H, startPos);
 
 		// First residual — in-place (eliminates x2 allocation)
 		ResidualAddEvent residEvt1 = new ResidualAddEvent();
@@ -1719,8 +1728,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		normEvt2.dimension = H;
 		normEvt2.commit();
 
-		sgemmLayerInto(wGate[li], wGateDev, wGateDevFp32, wGateQ4Dev, li, ws.norm2, ws.gate, I, H);
-		sgemmLayerInto(wUp[li],   wUpDev,   wUpDevFp32,   wUpQ4Dev, li, ws.norm2, ws.up,   I, H);
+		projectWindow(wGate[li], wGateDev, wGateDevFp32, wGateQ4Dev, li, ws.norm2, ws.gate, I, H, startPos);
+		projectWindow(wUp[li],   wUpDev,   wUpDevFp32,   wUpQ4Dev, li, ws.norm2, ws.up,   I, H, startPos);
 
 		SwiGluEvent swigluEvt = new SwiGluEvent();
 		swigluEvt.begin();
@@ -1731,7 +1740,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		swigluEvt.dimension = I;
 		swigluEvt.commit();
 
-		sgemmLayerInto(wDown[li], wDownDev, wDownDevFp32, wDownQ4Dev, li, ws.hidden, ws.ffnOut, H, I);
+		projectWindow(wDown[li], wDownDev, wDownDevFp32, wDownQ4Dev, li, ws.hidden, ws.ffnOut, H, I, startPos);
 
 		// Second residual — in-place (eliminates x3 allocation)
 		ResidualAddEvent residEvt2 = new ResidualAddEvent();
@@ -1775,6 +1784,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 *
 	 * <p>GPU paths: copy from sgemm result (GPU is fast; copy is negligible).
 	 */
+	/** {@link #sgemmLayerInto} inside a {@code juno.WindowStep} projection span, for the prefill window. */
+	private void projectWindow(GgufReader.QuantizedTensor quant,
+			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32, DeviceQ4KMatrix[] devQ4,
+			int li, float[][] X, float[][] Y, int rows, int cols, int startPos) {
+		WindowStepEvent evt = WindowStepEvent.start();
+		sgemmLayerInto(quant, devHalf, devFp32, devQ4, li, X, Y, rows, cols);
+		evt.end(WindowStepEvent.PROJECTION, X.length, startPos);
+	}
+
 	private void sgemmLayerInto(GgufReader.QuantizedTensor quant,
 			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32, DeviceQ4KMatrix[] devQ4,
 			int li, float[][] X, float[][] Y, int rows, int cols) {

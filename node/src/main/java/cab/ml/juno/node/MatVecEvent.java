@@ -70,4 +70,8 @@ public final class MatVecEvent extends Event {
     @Label("Cols")
     @Description("Number of input elements (inner dimension of A, length of x)")
     public int cols;
+
+    @Label("Window Size")
+    @Description("Number of input vectors in this call: the batch of a GEMM, 1 for a single matrix-vector product")
+    public int windowSize = 1;
 }

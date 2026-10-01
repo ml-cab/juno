@@ -1110,6 +1110,38 @@ clock would only see them being queued. The attention kernel and the FP32 BLAS G
 default stream between two synchronous copies; they are timed on the host between two drains of
 that stream. With the events off, every copy and kernel site is the plain call.
 
+### Prefill window breakdown
+
+A prefill window is covered by spans end to end on the LLaMA-family, Phi-3 and Qwen3 handlers. The
+per-op events (`juno.RmsNorm`, `juno.Rope`, `juno.Attention`, `juno.ResidualAdd`, `juno.SwiGlu`)
+cover the operations between the matmuls, and `juno.WindowStep` covers the rest of the window, one
+event per call site per layer, with a `step` field:
+
+| Step | What it spans |
+|---|---|
+| `embed` | The token embedding lookup (or the incoming activations on a later cluster node) |
+| `projection` | One projection call: the matmul dispatch, the backend's own `juno.MatVec` span, and the copy of its result into the layer workspace |
+| `bias_add` | The Q/K/V bias adds, on models that have them |
+| `kv_write` | Writing the window's K and V rows to the host cache, and to the device mirror when GPU attention runs |
+| `lm_head` | The final norm and the output projection of the last position |
+
+Both are on in `juno-perf.jfc`. `juno.MatVec` also records the call's batch width (`windowSize`:
+the window for a batched GEMM, 1 for a single matrix-vector product), so its time splits by phase.
+
+| Key | Meaning |
+|---|---|
+| `juno.WindowStep.<step>.{count,prefill.count,decode.count,prefill.total_ms,decode.total_ms}` | Per step; written for every step on every run. `prefill`: the window held more than one row |
+| `juno.MatVec.{prefill,decode}.{count,total_ms}` | Matmul calls by batch width; a recording from a build without the field counts only in `juno.MatVec.count` |
+
+`scripts/performance-tests/prefill-breakdown.sh RUN_DIR` turns the prefill repetitions of a
+`compare-llama-cpp.sh --device-spans` run into a per-term table of `juno.ForwardPass` prefill time.
+The terms do not overlap: a nested term (the GEMM kernel, the device dequantization, the copies and
+the host FP16 packing inside a projection; the KV mirror copies inside the KV write; the attention
+kernel and its copies inside `juno.Attention`) is subtracted from its parent, and what the spans do
+not cover is reported as `residue`. Each term is the median over the run's repetitions. The script
+exits 1 when any model's residue is above `--max-residue-pct` (default 5); `--json OUT` writes the
+breakdown with its per-site detail.
+
 ### JFR durations on a host whose kernel rejected the CPU timestamp counter
 
 The JVM stamps recorded events with the CPU's timestamp counter whenever the processor advertises an

@@ -551,6 +551,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		int W = request.windowSize();
 		int H = cfg.hiddenDim();
 
+		WindowStepEvent embedEvt = WindowStepEvent.start();
 		float[][] x;
 		if (hasEmbeddings) {
 			x = new float[W][H];
@@ -565,12 +566,15 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			float[] flat = request.activations();
 			for (int b = 0; b < W; b++) System.arraycopy(flat, b * H, x[b], 0, H);
 		}
+		embedEvt.end(WindowStepEvent.EMBED, W, request.startPosition());
 
 		x = runLayersBatch(x, request.requestId(), request.startPosition());
 
 		if (hasOutputProj) {
+			WindowStepEvent headEvt = WindowStepEvent.start();
 			float[] lastX = x[W - 1];
 			float[] logits = outputProjection(lastX);
+			headEvt.end(WindowStepEvent.LM_HEAD, W, request.startPosition());
 			return new BatchForwardResult(request.requestId(), null, logits, W, System.nanoTime() - start);
 		}
 
@@ -842,25 +846,43 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		int kvDim = cfg.kvDim();
 		int I    = cfg.intermediateSize();
 
+		RmsNormEvent normEvt1 = new RmsNormEvent();
+		normEvt1.begin();
 		for (int b = 0; b < W; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
+		normEvt1.windowSize = W;
+		normEvt1.startPosition = startPos;
+		normEvt1.dimension = H;
+		normEvt1.commit();
 
+		WindowStepEvent qkvEvt = WindowStepEvent.start();
 		sgemmQkvInto(li, ws.norm1, ws.q, ws.k, ws.v, H, kvDim);
+		qkvEvt.end(WindowStepEvent.PROJECTION, W, startPos);
 
+		RopeEvent ropeEvt = new RopeEvent();
+		ropeEvt.begin();
 		for (int b = 0; b < W; b++) {
 			Phi3Rope.ropeExt(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), ropeCfg);
 			Phi3Rope.ropeExt(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
 		}
+		ropeEvt.windowSize = W;
+		ropeEvt.startPosition = startPos;
+		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
+		ropeEvt.commit();
 
 		// Host KV first and always; a device mirror only copies it.
 		GpuAttentionMirror g = gpuAttention;
+		WindowStepEvent kvEvt = WindowStepEvent.start();
 		for (int b = 0; b < W; b++) {
 			kCacheLayer.writeToken(startPos + b, ws.k[b]);
 			vCacheLayer.writeToken(startPos + b, ws.v[b]);
 			if (g != null)
 				mirror = g.append(mirror, startPos + b, ws.k[b], ws.v[b], W);
 		}
+		kvEvt.end(WindowStepEvent.KV_WRITE, W, startPos);
 
+		AttentionEvent attnEvt = new AttentionEvent();
+		attnEvt.begin();
 		if (g == null || !g.attendWindow(mirror, startPos, ws.q, ws.attnOut)) {
 			for (int b = 0; b < W; b++) {
 				int seqLen = startPos + b + 1;
@@ -869,22 +891,56 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
 			}
 		}
+		attnEvt.windowSize = W;
+		attnEvt.startPosition = startPos;
+		attnEvt.contextLength = startPos + W;
+		attnEvt.commit();
 
+		WindowStepEvent woEvt = WindowStepEvent.start();
 		sgemmProjInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, H);
+		woEvt.end(WindowStepEvent.PROJECTION, W, startPos);
 
+		ResidualAddEvent residEvt1 = new ResidualAddEvent();
+		residEvt1.begin();
 		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.attnProj[b][d];
+		residEvt1.windowSize = W;
+		residEvt1.startPosition = startPos;
+		residEvt1.dimension = H;
+		residEvt1.commit();
 
+		RmsNormEvent normEvt2 = new RmsNormEvent();
+		normEvt2.begin();
 		for (int b = 0; b < W; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
+		normEvt2.windowSize = W;
+		normEvt2.startPosition = startPos;
+		normEvt2.dimension = H;
+		normEvt2.commit();
 
+		WindowStepEvent gateUpEvt = WindowStepEvent.start();
 		sgemmGateUpInto(li, ws.norm2, ws.gate, ws.up, I, H);
+		gateUpEvt.end(WindowStepEvent.PROJECTION, W, startPos);
 
+		SwiGluEvent swigluEvt = new SwiGluEvent();
+		swigluEvt.begin();
 		for (int b = 0; b < W; b++)
 			for (int i = 0; i < I; i++) ws.hidden[b][i] = LlamaTransformerHandler.silu(ws.gate[b][i]) * ws.up[b][i];
+		swigluEvt.windowSize = W;
+		swigluEvt.startPosition = startPos;
+		swigluEvt.dimension = I;
+		swigluEvt.commit();
 
+		WindowStepEvent downEvt = WindowStepEvent.start();
 		sgemmProjInto(wDown[li], wDownQ4Dev, wDownDev, li, ws.hidden, ws.ffnOut, H, I);
+		downEvt.end(WindowStepEvent.PROJECTION, W, startPos);
 
+		ResidualAddEvent residEvt2 = new ResidualAddEvent();
+		residEvt2.begin();
 		for (int b = 0; b < W; b++) for (int d = 0; d < H; d++) x[b][d] += ws.ffnOut[b][d];
+		residEvt2.windowSize = W;
+		residEvt2.startPosition = startPos;
+		residEvt2.dimension = H;
+		residEvt2.commit();
 		return x;
 	}
 

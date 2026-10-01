@@ -1,5 +1,21 @@
 ## Status 
 
+**Session 102** — A prefill window is now accounted for end to end in a recording
+
+- **Every part of a prefill window has a span.** `juno.WindowStep` covers the window work no per-op
+  event covered: the embedding lookup, each projection call (the matmul with the copy of its result
+  into the layer workspace), bias adds, the KV write to the host cache and the device mirror, and the
+  final norm with the LM head. The Phi-3 and Qwen3 window paths now emit the same `juno.RmsNorm`,
+  `juno.Rope`, `juno.Attention`, `juno.ResidualAdd` and `juno.SwiGlu` events as the LLaMA-family path;
+  before, they recorded only the forward pass as a whole. `juno.MatVec` records the call's batch width,
+  so matmul time splits into prefill and decode.
+- **A per-term prefill breakdown from one command.** `scripts/performance-tests/prefill-breakdown.sh`
+  reads a `compare-llama-cpp.sh --device-spans` run and splits prefill time into terms that do not
+  overlap (the GEMM kernel, dequantization, copies and host packing apart from the rest of each
+  projection; the attention kernel; host SwiGLU, norms, RoPE and residual adds; the KV write), and
+  reports what no span covers. On the four sweep models at 512 tokens that remainder is under 2% of
+  the window, where it was 7% to 45% before.
+
 **Session 101** — Phi-3.5 ends its turns again, GPU kernels can be timed on their own, and the CPU comparison runs both engines on the same thread count
 
 - **Phi-3.5 rotates short sequences with the short RoPE factors.** A Phi-3 model whose file carries

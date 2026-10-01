@@ -117,6 +117,24 @@ class DeviceComputeSpansTest {
 	}
 
 	@Test
+	@DisplayName("juno.MatVec carries its batch width: a GEMM its window, a GEMV one row")
+	void matVec_recordsTheCallsBatchWidth() throws Exception {
+		DeviceHalfMatrix a = mv.uploadHalf(randomFloats(ROWS * COLS, 11), ROWS, COLS);
+		float[][] x = randomRows(32, COLS, 12);
+		float[][] small = randomRows(4, COLS, 13);
+		List<RecordedEvent> events = record(() -> {
+			mv.sgemm(a, x);
+			mv.sgemm(a, small);
+			mv.sgemv(a, x[0]);
+		});
+		a.close();
+
+		List<Integer> widths = events.stream().filter(e -> e.getEventType().getName().equals("juno.MatVec"))
+				.map(e -> e.hasField("windowSize") ? e.getInt("windowSize") : -1).toList();
+		assertThat(widths).containsExactly(32, 4, 1);
+	}
+
+	@Test
 	@DisplayName("decode-width packed GEMVs are counted, untimed")
 	void decodeQ4kGemv_isCountedNotTimed() throws Exception {
 		assumeTrue(Q4KMmqKernel.tryLoad() != null, "Q4_K MMQ kernel failed to load");
@@ -184,6 +202,7 @@ class DeviceComputeSpansTest {
 		try (Recording rec = new Recording()) {
 			rec.enable("juno.DeviceCompute").withThreshold(java.time.Duration.ZERO);
 			rec.enable("juno.DeviceStaging").withThreshold(java.time.Duration.ZERO);
+			rec.enable("juno.MatVec").withThreshold(java.time.Duration.ZERO);
 			rec.setDestination(jfr);
 			rec.start();
 			body.run();

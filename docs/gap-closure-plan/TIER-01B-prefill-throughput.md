@@ -1,6 +1,6 @@
 # Tier 01B: Prefill throughput
 
-Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); plan amended 2026-09-30 after the plan review (scope items 6 to 10, step 3a, the `juno.DeviceCompute` span); step 3a complete 2026-10-01: items 1a-ii, 7, 8 and 9 (pinned gate and CPU reference taken by the owner); item 10 (CI) removed as an exit criterion by the owner; step 4 (the per-term prefill breakdown) next
+Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); plan amended 2026-09-30 after the plan review (scope items 6 to 10, step 3a, the `juno.DeviceCompute` span); step 3a complete 2026-10-01: items 1a-ii, 7, 8 and 9 (pinned gate and CPU reference taken by the owner); item 10 (CI) removed as an exit criterion by the owner; step 4a (spans for the whole prefill window, added 2026-10-01 by owner decision) implemented and tested, its pinned A/B gate owed by the owner; step 4 (the per-term prefill breakdown) after it
 Gap analysis refs: none directly — this tier exists because the gap analysis has no prefill section
 at all, while the published measurements under `docs/perf-compare/` show prompt processing to be the
 single largest gap Juno has. See "Why this tier, why now".
@@ -453,6 +453,13 @@ on today's op-at-a-time GPU path either way.
    green). Item 8 (Phi-3.5 LongRoPE) lands here too once the owner has picked the policy; it changes
    rotation angles, not work, so it does not move the breakdown, but it does move Phi-3.5 greedy
    output and must be in before any divergence or greedy-parity reading this tier takes.
+4a. **Spans for the whole prefill window (added 2026-10-01, owner decision; see "before step 4" in the
+   execution record).** The per-op spans existed on the LLaMA-family handler only, and the KV write,
+   each matmul's copy-out, the embedding and the LM head sat outside every span, so the breakdown's
+   `<= 5%` residue bound was unreachable (7.0% on TinyLlama, 44.8% on Phi-3.5-mini). Add
+   `juno.WindowStep`, put the per-op events on the Phi-3 and Qwen3 window paths, split `juno.MatVec`
+   by phase, tests first, and pass a same-hour pinned A/B (prefill **>= 0.98x** the build without them,
+   spans off) before the breakdown is taken on top of them.
 4. Produce the per-term prefill breakdown (scope item 1b) and publish it.
    Decide which of scope items 2, 3, 4 and 6 the breakdown actually justifies, and record the decision
    here — item 0 may well have moved which term dominates, which is the point of sequencing it here.
@@ -1565,6 +1572,135 @@ reference carries a superseded banner.
 3. *Item 10.* Commit `.github/workflows/ci.yml`, push, and record the first green run of both jobs here.
    *Withdrawn 2026-10-01: the owner removed item 10 as an exit criterion.*
 
+### 2026-10-01 — before step 4: the breakdown cannot reach its residue bound on today's spans
+
+Read-only pass over what step 4 (scope item 1b) depends on, against HEAD `d47957f` (jar sha256
+`2c163485a0071c66`, built from it; the tree is dirty only in `.gitignore` and the untracked `.github/`).
+Tier 00's fixes re-checked and still in place. No code changed. **Step 4 is on hold for an owner
+decision on instrumentation scope.**
+
+**Drift that blocks the criterion "no unattributed residue, <= 5% of prefill per model":**
+1. **`Phi3TransformerHandler` and `Qwen3TransformerHandler` emit only `juno.ForwardPass`.** Their window
+   paths run RMS norm, `Phi3Rope.ropeExt`, the host KV write, attention, both residual adds and SwiGLU
+   with no `juno.RmsNorm`, `Rope`, `Attention`, `ResidualAdd` or `SwiGlu` span. Item 1b's "four
+   existing spans" exist on the LLaMA-family handler only. Phi-3.5-mini is a sweep model and the
+   binding one on two milestones.
+2. **Three pieces of LLaMA-family window work sit outside every span**: the per-token loop writing
+   the host KV and calling `DeviceKvCache.appendToken` (only the mirror's copy time is seen, as
+   `memcpy_k_row_h2d`/`memcpy_v_row_h2d`), `sgemmLayerInto`'s copy of each matmul result into the
+   workspace (`juno.MatVec` is emitted inside `CudaMatVec.sgemm`), and the embedding lookup and
+   final-norm/LM-head projection.
+3. **`juno.MatVec` has no prefill/decode split** (no `windowSize` field; the extractor writes only a
+   total), and a prefill repetition's recording also holds the decode-width pass at the last prompt
+   position, so the MatVec term carries a few decode calls.
+4. Nesting: `juno.DeviceStaging`, `WeightDequant` and `DeviceCompute` matmul terms are inside
+   `juno.MatVec`, and the `gqa` copy and compute terms inside `juno.Attention`. Not a defect, but the
+   breakdown has to subtract them from their parents rather than sum all spans.
+
+**Diagnostic reading** (unpinned, unpublished, `--device-spans`, `n_prompt` 512, one repetition each,
+nested terms subtracted from their parents; scratch only, not a gate reading):
+
+| Term, share of prefill | TinyLlama (2,205 ms) | Phi-3.5-mini (5,700 ms) |
+|---|---|---|
+| GEMM compute (`gemm_half`) | 8.4% | 19.8% |
+| Weight dequant (device) | 1.8% | 1.8% |
+| Matmul staging copies | 5.4% | 4.4% |
+| Host FP16 pack | 3.5% | 2.0% |
+| `juno.MatVec` host remainder | 10.3% | 7.7% |
+| Attention compute (`gqa_attention`) | 13.3% | 13.8% |
+| Attention copies plus remainder | 4.1% | 1.3% (no `juno.Attention` span) |
+| KV mirror row copies | 7.0% | 4.5% |
+| Host SwiGLU / RmsNorm / Rope / ResidualAdd | 34.0 / 3.0 / 1.1 / 1.1% | not spanned |
+| **Unattributed** | **7.0%** | **44.8%** |
+
+Applying the same subtraction to step 2's spans run (no compute span then) gives 6.6% on TinyLlama,
+9.2% on mistral-7b and 10.4% on qwen2.5-3b unattributed. The ranking step 4 expected holds where it can
+be read: host SwiGLU is the largest single term on the LLaMA family, and the GEMM's share is larger on
+the bigger model.
+
+**Owner decisions (2026-10-01):** (1) **add the spans first**, as a new step 4a before the breakdown:
+per-op spans on the Phi-3 and Qwen3 window paths, spans for the window work outside every span on all
+three handlers, and a prefill/decode split for `juno.MatVec`, tests first, then a same-hour pinned A/B
+(prefill >= 0.98x, the 1a-ii standard) run by the owner, then the breakdown. (2) The breakdown sweeps
+themselves may be taken **unpinned** by the agent and published labelled as unpinned, since they report
+shares within one run; any A/B gate still needs pinned clocks.
+
+### 2026-10-01 — implementation step 4a: spans for the whole prefill window
+
+Scope as decided above. No change to what any window computes; one new event, one new field, and the
+existing per-op events placed on two more handlers. Build of this step: jar sha256 `513f57643c8fe97c`
+(baseline, HEAD `d47957f`: `2c163485a0071c66`, saved as `target/tier01b-step4a-ab/baseline-shaded.jar`,
+candidate as `candidate-shaded.jar` beside it; a root `mvn clean` deletes both).
+
+**What shipped.**
+- `node`: `WindowStepEvent` (`juno.WindowStep`: `step`, `windowSize`, `startPosition`), one event per
+  call site per layer for `embed`, `projection` (each matmul call including its copy-out into the
+  workspace; the backend's `juno.MatVec` nests inside it), `bias_add`, `kv_write` (host KV rows plus the
+  device mirror append) and `lm_head`, on the `forwardBatch` window path of the LLaMA-family, Phi-3 and
+  Qwen3 handlers (a `projectWindow` wrapper in the first and last, inline spans around Phi-3's fused
+  calls). The Phi-3 and Qwen3 window paths gain `juno.RmsNorm` (Qwen3's per-head Q/K norm as a third),
+  `Rope`, `Attention`, `ResidualAdd` and `SwiGlu` at the LLaMA-family granularity. Decode and
+  multi-decode paths are unchanged. `MatVecEvent.windowSize` (default 1; the batch in `CudaMatVec`'s
+  three batched paths).
+- `metrics`: `WindowStepBucket` (`juno.WindowStep.<step>.{count,prefill.*,decode.*}`, every known
+  step written on every run); `juno.MatVec.{prefill,decode}.{count,total_ms}` by the call's width, a
+  recording without the field counting only in the total.
+- Harness: `juno.WindowStep` enabled in `juno-perf.jfc` (like the per-op events, so the A/B's
+  spans-off side carries its cost); `prefill-breakdown.sh` (new): reads a `--device-spans` run's prefill
+  repetitions, subtracts each nested device term from its parent span, reports the per-term median and
+  the residue, exits 1 above `--max-residue-pct` (default 5).
+- Docs: `docs/howto.md` (prefill window breakdown section, keys), `docs/performance.md`,
+  `docs/agent-arch.txt`, `CHANGELOG.md` (Session 102).
+
+**Tests, written first and shown failing for the right reason.**
+- `JfrMetricsExtractorWindowStepTest` (`metrics`, 5 cases): 5 of 5 failed on the unchanged extractor
+  (keys absent); pass. `metrics` 82 of 82.
+- `PrefillWindowSpansTest` (`node`, CPU, synthetic LLaMA, Phi-3 and Qwen3 models, 3 cases): event
+  counts and window fields per handler; 3 of 3 failed before the change (no events), pass.
+- `DeviceComputeSpansTest.matVec_recordsTheCallsBatchWidth` (`@Tag("gpu")`): widths 32, 4 and 1 for a
+  GEMM, a small batch and a GEMV; failed before (field absent), passes. The class's other 7 still pass.
+- `prefill-breakdown.sh --selftest` (10 cases, a synthetic 1,000 ms window whose terms are known):
+  written with the script, not shown failing first.
+
+**Residue, candidate build** (unpinned, unpublished, `--device-spans`, `n_prompt` 512, one repetition;
+`prefill-breakdown.sh`, exit 0):
+
+| Model | Prefill ms | Residue | Largest terms |
+|---|---|---|---|
+| tinyllama-1.1b | 2,064 | **0.7%** | host SwiGLU 36.9%, projection dispatch and copy-out 13.1%, attention kernel 12.1%, GEMM 7.9%, KV mirror copies 7.2% |
+| qwen2.5-3b | 5,581 | **0.6%** | host SwiGLU 46.1%, projection dispatch and copy-out 13.7%, GEMM 10.7%, attention kernel 7.7% |
+| Phi-3.5-mini | 6,375 | **1.5%** | host SwiGLU 28.4%, GEMM 18.9%, attention kernel 13.5%, projection dispatch and copy-out 12.2%, KV mirror copies 5.2% |
+| mistral-7b | 7,553 | **0.5%** | host SwiGLU 38.2%, GEMM 17.1%, projection dispatch and copy-out 11.5%, attention kernel 9.9% |
+
+Preliminary, not the step 4 artifact: one unpinned repetition at one prompt length. It shows the
+instrumentation meets the `<= 5%` residue bound on all four sweep models, and that the ranking step 4
+expected holds: host SwiGLU first everywhere, then the host side of each projection (dispatch, result
+allocation and copy-out, which item 2's non-allocating form removes), then the GEMM and the attention
+kernel.
+
+**Informational A/B, unpinned** (spans off; three interleaved runs per side, A = baseline, B =
+candidate, `n_prompt` 512; not scorable against a 0.98x gate): TinyLlama prefill 254.93 (254.20 to
+255.73) against 248.22 (245.53 to 257.91), **0.974x**; Phi-3.5-mini 88.31 (85.63 to 90.65) against 89.87
+(88.89 to 90.06), **1.018x**. The candidate's TinyLlama spread (5%) is wider than the gap. If the pinned
+gate misses, the fallback is the step 1 design: move `juno.WindowStep` into `juno-perf-spans.jfc` so
+it is on only for breakdown runs.
+
+**Verification, on the final tree.** `mvn test` on the eleven unit-test modules: **1,870 tests, 0
+failures, 0 errors, 49 skipped** (step 3a: 1,861; the 9 new tests are this step's), 28:32, GPU-tagged
+tests included. `mvn install -DskipTests`, then `mvn verify -pl juno-master`: 20 ITs, 0 failures.
+`compare-llama-cpp.sh --selftest`, `prefill-breakdown.sh --selftest` and `check-plan-thresholds.sh`
+pass. The `install` rebuilt the working-tree jar from the same sources (sha256 `92643aec3c3b226a`; the
+build is not byte-reproducible); the A/B uses the saved `candidate-shaded.jar`. Not run:
+`compare-lora.sh` and `compare-vision.sh` (the LoRA handlers and the vision encoder are untouched, and
+moondream2's text half runs the unchanged Phi-2 handler; both remain in step 8's closing matrix).
+
+**Owed, for the owner (pinned, needs prompt-free sudo):** the step 4a gate, same-hour, alternating A B
+A B A B, prefill `>= 0.98x` on both models:
+`scripts/performance-tests/compare-llama-cpp.sh --gpu --pin-clocks --models tinyllama-1.1b-chat-v1.0.Q4_K_M,Phi-3.5-mini-instruct-Q4_K_M --n-prompt 512 --juno-warmup 2 --juno-reps 1 --reps 1 --no-tuned-lane --no-publish --juno-jar target/tier01b-step4a-ab/{baseline|candidate}-shaded.jar`.
+Phi-3.5-mini stands in for Mistral 7B here because its handler is the one whose window path gained the
+most spans. Then step 4 proper: `compare-llama-cpp.sh --gpu --device-spans --juno-reps 3` on the four
+sweep models at `n_prompt` 128 and 512, published, and `prefill-breakdown.sh` on each.
+
 ### Out-of-tier changes (recorded per execution rule 9)
 
 | Change | What it touched | Measurement boundary? |
@@ -1641,6 +1777,10 @@ reference carries a superseded banner.
       *Checked 2026-10-01: prefill 0.994x (TinyLlama) and 1.016x (Mistral 7B), pinned,
       [`docs/perf-compare/20261001T172351Z-tier01b-step3a-compute-ab`](../perf-compare/20261001T172351Z-tier01b-step3a-compute-ab/INDEX.md);
       `JfrMetricsExtractorDeviceComputeTest` failed 4 of 5 on the extractor without the keys.*
+- [ ] Step 4a: `juno.WindowStep` exists, the Phi-3 and Qwen3 window paths emit the per-op events,
+      `juno.MatVec` splits by phase, all extracted with keys on every run, with `metrics` and `node`
+      tests that failed on the build without them; and its same-hour pinned A/B passed (prefill >= 0.98x
+      with the device spans off) before the breakdown below is taken.
 - [ ] Per-term prefill breakdown published for all four sweep models at `n_prompt` 128 and 512, with
       no unattributed residue — every term named, including host-device staging and dequantization,
       the GEMM compute read from `juno.DeviceCompute`, the host FP16 packing, and the host elementwise
