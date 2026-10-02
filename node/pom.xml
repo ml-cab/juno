@@ -68,12 +68,19 @@
 					Loom/Netty sun.misc.Unsafe warnings. jdk.incubator.vector is
 					required at test run time for VectorQuantKernelsTest and any
 					test that exercises LlamaTransformerHandler's SIMD-backed
-					sgemm*WeightStationary kernels (see VectorQuantKernels). -->
+					sgemm*WeightStationary kernels (see VectorQuantKernels).
+					The two timestamp flags make JFR read the operating-system clock, as
+					the performance harness does on a host whose kernel rejected the CPU
+					timestamp counter: otherwise a span that starts and ends on cores whose
+					counters disagree reads a negative duration and JFR drops it, and tests
+					that count recorded events fail intermittently. Harmless elsewhere. -->
 					<argLine>
 						--enable-native-access=ALL-UNNAMED
 						--add-opens java.base/java.lang=ALL-UNNAMED
 						--add-opens java.base/java.nio=ALL-UNNAMED
 						--add-modules jdk.incubator.vector
+						-XX:+UnlockExperimentalVMOptions
+						-XX:-UseFastUnorderedTimeStamps
 					</argLine>
 				</configuration>
 			</plugin>

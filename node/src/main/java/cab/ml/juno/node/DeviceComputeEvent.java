@@ -38,6 +38,14 @@ import jdk.jfr.Timespan;
  * (the FP32 BLAS GEMM), {@code mmq_packed} (the packed integer-dot GEMV at decode
  * width) and {@code gqa_attention} (the attention kernel).
  *
+ * <p>The prefill-window device region ({@link PrefillWindowRegion}) runs its GEMMs as
+ * {@code gemm_half} and adds one site per operation between them: {@code rms_norm},
+ * {@code convert_fp16} (the FP16 cast of a GEMM input), {@code bias_add}, {@code rope},
+ * {@code kv_append} (the cast of a window's K and V rows into the attention KV
+ * mirror), {@code gqa_attention_region} (the attention kernel run inside the region,
+ * apart from {@code gqa_attention} so that site stays the one nested in
+ * {@code juno.Attention}), {@code swiglu} and {@code residual_add}.
+ *
  * <p>Asynchronous kernels are timed on the device between two stream events
  * ({@link DeviceSpanTimer}); kernels on the default stream are timed on the host
  * between two drains of that stream ({@link DeviceComputeClock}). As with copies,
@@ -56,9 +64,19 @@ public final class DeviceComputeEvent extends Event {
 	static final String GEMM_FP32 = "gemm_fp32";
 	static final String MMQ_PACKED = "mmq_packed";
 	static final String GQA_ATTENTION = "gqa_attention";
+	static final String RMS_NORM = "rms_norm";
+	static final String CONVERT_FP16 = "convert_fp16";
+	static final String BIAS_ADD = "bias_add";
+	static final String ROPE = "rope";
+	static final String KV_APPEND = "kv_append";
+	static final String GQA_ATTENTION_REGION = "gqa_attention_region";
+	static final String SWIGLU = "swiglu";
+	static final String RESIDUAL_ADD = "residual_add";
 
 	@Label("Site")
-	@Description("The kernel: gemm_half, gemv_half_batched, gemm_fp32, mmq_packed or gqa_attention")
+	@Description("The kernel: gemm_half, gemv_half_batched, gemm_fp32, mmq_packed, gqa_attention, or one of the "
+			+ "prefill-window region's rms_norm, convert_fp16, bias_add, rope, kv_append, gqa_attention_region, "
+			+ "swiglu, residual_add")
 	public String site;
 
 	@Label("Phase")

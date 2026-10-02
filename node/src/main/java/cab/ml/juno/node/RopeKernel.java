@@ -38,9 +38,11 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  * expression ({@link #inverseFrequencies}); see {@code rope.cu} for why that
  * precision is needed and how the rotation avoids fused multiply-adds.
  *
- * <p>Split-half (NeoX) pairing, which {@link Phi3Rope} and {@link Phi2Rope}
- * apply on the CPU, is not implemented here: nothing on the device path uses it
- * yet.
+ * <p>{@link #launchSplitHalf} rotates the split-half (rotate-half) pairs
+ * {@code (x[i], x[i + headDim/2])} with the same arithmetic: the pairing
+ * {@link RopePairing#SPLIT_HALF} selects for the Qwen2 family on the CPU.
+ * {@link Phi3Rope} and {@link Phi2Rope} also pair split-half, but scale their
+ * frequencies in their own ways, and stay on the CPU.
  *
  * <p>One module per process; the function handle is cached. Requires an active
  * CUDA primary context, the same loading convention as {@link RmsNormKernel}.
@@ -52,17 +54,20 @@ final class RopeKernel {
 	private static final Logger log = Logger.getLogger(RopeKernel.class.getName());
 	private static final String RESOURCE = "/cab/ml/juno/node/rope.ptx";
 	private static final String ENTRY = "rope";
+	private static final String ENTRY_SPLIT_HALF = "rope_split_half";
 	private static final int ROPE_THREADS = 256;
 
 	private static final AtomicReference<RopeKernel> INSTANCE = new AtomicReference<>();
 
 	private static final ThreadLocal<KernelParams> PARAMS = ThreadLocal.withInitial(() -> new KernelParams(6));
 
-	private final MemorySegment fn;     // CUfunction
-	private final Arena moduleArena;    // keeps module/function slots alive
+	private final MemorySegment fn;          // CUfunction, adjacent pairs
+	private final MemorySegment fnSplitHalf; // CUfunction, split-half pairs
+	private final Arena moduleArena;         // keeps module/function slots alive
 
-	private RopeKernel(MemorySegment fn, Arena moduleArena) {
+	private RopeKernel(MemorySegment fn, MemorySegment fnSplitHalf, Arena moduleArena) {
 		this.fn = fn;
+		this.fnSplitHalf = fnSplitHalf;
 		this.moduleArena = moduleArena;
 	}
 
@@ -127,12 +132,16 @@ final class RopeKernel {
 				"cuModuleLoadData");
 		MemorySegment module = moduleSlot.get(ADDRESS, 0);
 
-		MemorySegment name = arena.allocateFrom(ENTRY);
+		return new RopeKernel(function(drv, arena, module, ENTRY), function(drv, arena, module, ENTRY_SPLIT_HALF),
+				arena);
+	}
+
+	private static MemorySegment function(CudaDriverBindings drv, Arena arena, MemorySegment module, String entry) {
 		MemorySegment fnSlot = arena.allocate(ADDRESS);
 		CudaDriverBindings.check(
-				CudaDriverBindings.callInt(drv.cuModuleGetFunction, fnSlot, module, name),
-				"cuModuleGetFunction(" + ENTRY + ")");
-		return new RopeKernel(fnSlot.get(ADDRESS, 0), arena);
+				CudaDriverBindings.callInt(drv.cuModuleGetFunction, fnSlot, module, arena.allocateFrom(entry)),
+				"cuModuleGetFunction(" + entry + ")");
+		return fnSlot.get(ADDRESS, 0);
 	}
 
 	private static byte[] readResource(String path) throws IOException {
@@ -152,6 +161,18 @@ final class RopeKernel {
 	 */
 	void launch(MemorySegment x, MemorySegment invFreq, int rows, int nHeads, int headDim, int startPos,
 			MemorySegment stream) {
+		launchWith(fn, "cuLaunchKernel(rope)", x, invFreq, rows, nHeads, headDim, startPos, stream);
+	}
+
+	/** As {@link #launch}, rotating the split-half pairs {@code (x[i], x[i + headDim/2])} of each head. */
+	void launchSplitHalf(MemorySegment x, MemorySegment invFreq, int rows, int nHeads, int headDim, int startPos,
+			MemorySegment stream) {
+		launchWith(fnSplitHalf, "cuLaunchKernel(rope_split_half)", x, invFreq, rows, nHeads, headDim, startPos,
+				stream);
+	}
+
+	private void launchWith(MemorySegment function, String what, MemorySegment x, MemorySegment invFreq, int rows,
+			int nHeads, int headDim, int startPos, MemorySegment stream) {
 		Objects.requireNonNull(x, "x");
 		Objects.requireNonNull(invFreq, "invFreq");
 		if (rows <= 0 || nHeads <= 0 || headDim <= 0 || (headDim & 1) != 0)
@@ -170,6 +191,6 @@ final class RopeKernel {
 				.i32(3, nHeads)
 				.i32(4, headDim)
 				.i32(5, startPos)
-				.launch(fn, (int) blocks, ROPE_THREADS, stream, "cuLaunchKernel(rope)");
+				.launch(function, (int) blocks, ROPE_THREADS, stream, what);
 	}
 }

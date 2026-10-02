@@ -1,6 +1,6 @@
 # Tier 01B: Prefill throughput
 
-Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); plan amended 2026-09-30 after the plan review (scope items 6 to 10, step 3a, the `juno.DeviceCompute` span); step 3a complete 2026-10-01: items 1a-ii, 7, 8 and 9 (pinned gate and CPU reference taken by the owner); item 10 (CI) removed as an exit criterion by the owner; step 4a (spans for the whole prefill window, added 2026-10-01 by owner decision) implemented and tested, its pinned A/B gate owed by the owner; step 4 (the per-term prefill breakdown) after it
+Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); plan amended 2026-09-30 after the plan review (scope items 6 to 10, step 3a, the `juno.DeviceCompute` span); step 3a complete 2026-10-01: items 1a-ii, 7, 8 and 9 (pinned gate and CPU reference taken by the owner); item 10 (CI) removed as an exit criterion by the owner; step 4a (spans for the whole prefill window, added 2026-10-01 by owner decision) implemented and tested, its pinned A/B gate met 2026-10-02 (owner run); steps 4 (the per-term prefill breakdown, published unpinned, taken ahead of the 4a gate by owner decision) and 5 (the threshold decomposition) complete 2026-10-01, with the third milestone row (512 over 128) moved to Tier 02 by owner decision because no item here moves it; step 6 started 2026-10-02 under the owner's "one region, one change" decision: the prefill-window device region (item 6 with item 2's operand residency) is implemented and tested, logits bit-identical to the host path, its unpinned breakdown published, and its pinned A/B gate met 2026-10-02 (TinyLlama prefill 3.899x, owner run); item 6 is complete, and item 2's remainder (the non-allocating `MatVec` form) is the next change
 Gap analysis refs: none directly — this tier exists because the gap analysis has no prefill section
 at all, while the published measurements under `docs/perf-compare/` show prompt processing to be the
 single largest gap Juno has. See "Why this tier, why now".
@@ -613,8 +613,9 @@ on today's op-at-a-time GPU path either way.
   - pp ratio **>= 0.08x** on Phi-3.5-mini (reference 0.040x at `n_prompt=128`) — the model whose
     handler item 0 newly gives the GPU attention kernel, and the binding constraint on the program's
     end-of-plan pp target;
-  - pp must not fall with prompt length: the 512-token ratio **>= 1.00x** the 128-token ratio for
-    every sweep model.
+  - ~~pp must not fall with prompt length: the 512-token ratio **>= 1.00x** the 128-token ratio for
+    every sweep model.~~ *Moved to [Tier 02](TIER-02-attention-long-context.md) on 2026-10-01 (owner
+    decision, step 5 record): attention is what falls with prompt length, and no item here moves it.*
 
   All three are measured under the parity-corrected harness (`RAW_PROMPT=1`, warmup, median of three,
   `--pin-clocks`), and **the first two are re-read against step 2's 512-token re-baseline before
@@ -723,8 +724,12 @@ re-baseline at 128 and 512, with a spans run for staged bytes) are complete. Ste
 implemented and tested for Phi-3 and Qwen3 under an owner-amended scope. The default and the ROCm
 answer are decided; its pinned gate is met (see its record). Step 3a (2026-10-01) landed the
 `juno.DeviceCompute` span (pinned gate met), harness thread parity with a pinned CPU reference, the
-Phi-3.5 LongRoPE fix and rule 7 check 4; item 10 (CI) was removed as an exit criterion by the owner. Step 4 (the
-per-term prefill breakdown) is next.
+Phi-3.5 LongRoPE fix and rule 7 check 4; item 10 (CI) was removed as an exit criterion by the owner. Step 4a (spans for the whole window) is
+complete, its pinned gate met (0.993x and 1.005x). Steps 4 (the breakdown, residue 0.4% to 2.2%) and 5 (the threshold
+decomposition) are complete; the decomposition's third row moved to Tier 02 (owner decision). Step 6's first
+change (the prefill-window device region, items 6 and 2 as one region by owner decision) is implemented,
+tested, measured, and its pinned gate met (TinyLlama prefill 3.899x); item 6 is complete, and item 2's
+remainder follows.
 The two milestone decisions step 2 raised were taken by the owner on 2026-09-30 (recorded under step 2). This section also records the
 plan-review pass of 2026-09-27, which landed ahead of step 1.
 
@@ -1701,6 +1706,360 @@ Phi-3.5-mini stands in for Mistral 7B here because its handler is the one whose 
 most spans. Then step 4 proper: `compare-llama-cpp.sh --gpu --device-spans --juno-reps 3` on the four
 sweep models at `n_prompt` 128 and 512, published, and `prefill-breakdown.sh` on each.
 
+**Step 4a gate, taken by the owner 2026-10-01/02 (pinned, 23:59 to 00:09 UTC): met.** The command
+above, alternating A B A B A B, `--out target/perf-compare/step4a-ab-{baseline|candidate}-{1|2|3}`.
+Prefill B/A **0.993** on TinyLlama (251.67 against 249.88 t/s) and **1.005** on Phi-3.5-mini (89.13
+against 89.58); generation 0.999 and 0.987, recorded, not gated. All six runs pinned (governor
+performance, turbo off, GPU locked at 1911 MHz), jar hashes `2c163485a0071c66` and `513f57643c8fe97c`
+as expected, every prefill 512 of 512, every row scorable, GC pause at most 9 ms. Published:
+[`20261001T235933Z-tier01b-step4a-ab`](../perf-compare/20261001T235933Z-tier01b-step4a-ab/INDEX.md).
+`juno.WindowStep` stays in the base `juno-perf.jfc`; the fallback is not needed. This was taken after
+the step 4 breakdown (owner decision, step 4 record), on the same jars, so nothing the breakdown read
+changes.
+
+### 2026-10-01 — implementation step 4: the per-term prefill breakdown
+
+**Owner decision (2026-10-01, this session): step 4 is taken before step 4a's pinned A/B gate**, which is
+still owed (it needs prompt-free sudo; this session had none). Why the order does not affect the
+breakdown: a breakdown run passes `--device-spans`, which records `juno.WindowStep` whichever `.jfc`
+holds it, and step 4a's documented fallback (moving `juno.WindowStep` into `juno-perf-spans.jfc` if the
+gate misses) changes only spans-off runs, through a harness file rather than the jar. The gate still
+decides whether the spans-off build carries the event; it no longer orders this step. Taken **unpinned**
+under the owner's 2026-10-01 decision (2): a breakdown reports shares within one run.
+
+Build: HEAD `c42de6e` (step 4a), working-tree jar sha256 `92643aec3c3b226a`, tree dirty only in
+`.gitignore` and the untracked `.github/`. Command, once per prompt length:
+`compare-llama-cpp.sh --gpu --device-spans --models <the four sweep models> --n-prompt {512|128}
+--juno-reps 3 --no-tuned-lane` (the tuned lane was skipped because the breakdown reads the default lane),
+then `prefill-breakdown.sh RUN_DIR --json ...`. Both runs exit 0, every row scorable, prompt tokens
+512/512 and 128/128; `prefill-breakdown.sh` exits 0 on both (every model under the `<= 5%` residue
+bound). Published: [`20261001T224724Z`](../perf-compare/20261001T224724Z/INDEX.md) and
+[`20261001T225929Z`](../perf-compare/20261001T225929Z/INDEX.md), each with `prefill-breakdown.md` and
+`.json` beside the run, an INDEX banner saying unpinned and not a ratio reference, and a row in
+`docs/perf-compare/README.md`. Each term is the median of three repetitions; nested device terms are
+subtracted from their parent spans (see the script header), so the terms and the residue add up to the
+window.
+
+`n_prompt=512` ([`20261001T224724Z`](../perf-compare/20261001T224724Z/prefill-breakdown.md)), share of prefill:
+
+| Term | tinyllama-1.1b (2,194 ms) | qwen2.5-3b (5,617 ms) | Phi-3.5-mini (5,920 ms) | mistral-7b (7,791 ms) |
+|---|---|---|---|---|
+| GEMM compute (`juno.DeviceCompute`) | 8.3% | 11.1% | 19.7% | 17.6% |
+| Weight dequant (device) | 1.9% | 1.8% | 1.8% | 2.7% |
+| Matmul staging copies | 5.5% | 5.1% | 4.3% | 5.0% |
+| Host FP16 pack | 3.7% | 3.2% | 2.0% | 3.7% |
+| Projection dispatch and copy-out | 12.3% | 13.2% | 12.2% | 11.5% |
+| Attention kernel | 13.3% | 8.8% | 13.8% | 10.4% |
+| Attention copies | 1.5% | 1.0% | 1.3% | 1.3% |
+| Attention host part | 2.5% | 1.6% | 1.9% | 1.8% |
+| KV mirror row copies | 7.4% | 4.1% | 4.7% | 2.8% |
+| Host KV write | 1.1% | 0.4% | 2.8% | 0.8% |
+| Host SwiGLU | 36.0% | 45.3% | 28.0% | 37.2% |
+| Host RMS norm | 3.0% | 2.1% | 2.5% | 2.6% |
+| Host RoPE | 1.1% | 0.6% | 2.8% | 0.9% |
+| Host residual add | 1.1% | 0.8% | 1.0% | 1.1% |
+| Bias add | 0.0% | 0.4% | 0.0% | 0.0% |
+| Embedding | 0.0% | 0.0% | 0.0% | 0.0% |
+| LM head | 0.0% | 0.0% | 0.0% | 0.0% |
+| **Unattributed residue** | 0.8% | 0.4% | 1.3% | 0.5% |
+
+`n_prompt=128` ([`20261001T225929Z`](../perf-compare/20261001T225929Z/prefill-breakdown.md)), share of prefill:
+
+| Term | tinyllama-1.1b (524 ms) | qwen2.5-3b (1,334 ms) | Phi-3.5-mini (1,306 ms) | mistral-7b (1,916 ms) |
+|---|---|---|---|---|
+| GEMM compute (`juno.DeviceCompute`) | 10.9% | 11.6% | 18.4% | 20.4% |
+| Weight dequant (device) | 6.7% | 6.9% | 7.8% | 10.1% |
+| Matmul staging copies | 5.9% | 5.5% | 4.8% | 5.1% |
+| Host FP16 pack | 2.9% | 2.6% | 1.7% | 2.9% |
+| Projection dispatch and copy-out | 14.6% | 12.0% | 14.0% | 11.1% |
+| Attention kernel | 4.0% | 2.6% | 2.8% | 2.5% |
+| Attention copies | 2.2% | 1.5% | 1.7% | 1.4% |
+| Attention host part | 2.7% | 1.5% | 2.3% | 1.9% |
+| KV mirror row copies | 6.7% | 4.2% | 4.9% | 2.7% |
+| Host KV write | 0.2% | 0.1% | 2.8% | 0.5% |
+| Host SwiGLU | 36.8% | 46.3% | 29.8% | 36.1% |
+| Host RMS norm | 3.1% | 2.0% | 2.8% | 2.5% |
+| Host RoPE | 1.0% | 0.6% | 3.1% | 0.9% |
+| Host residual add | 1.1% | 0.7% | 0.9% | 0.8% |
+| Bias add | 0.0% | 0.2% | 0.0% | 0.0% |
+| Embedding | 0.0% | 0.0% | 0.0% | 0.0% |
+| LM head | 0.1% | 0.2% | 0.1% | 0.1% |
+| **Unattributed residue** | 1.6% | 1.0% | 2.2% | 1.0% |
+
+**GEMM share per model, for [Tier 01C](TIER-01C-packed-kquant-matmul.md)** (the number its throughput
+threshold is conditioned on): 8.3% / 11.1% / 19.7% / 17.6% of a 512-token window (tinyllama, qwen2.5-3b,
+Phi-3.5-mini, mistral-7b) and 10.9% / 11.6% / 18.4% / 20.4% at 128. The device dequantization in front
+of it (the work a packed integer GEMM removes) adds 1.8% to 2.7% at 512 and 6.7% to 10.1% at 128. Both
+shares grow once items 6 and 2 remove the host terms: on the step 5 estimate below the GEMM becomes about
+20%, 30%, 36% and 39% of the 512-token window.
+
+**What the breakdown justifies (the step 4 decision).**
+- **Item 6: yes, first.** Host SwiGLU is the largest term on every model at both lengths (28.0% to 46.3%),
+  and the elementwise group plus the KV mirror row copies is 39% to 53% of a 512-token window. The
+  ranking the step text expected going in holds.
+- **Item 2: yes, second, on the same region.** Matmul staging plus host FP16 pack plus projection
+  dispatch and copy-out is 18.5% to 21.5% at 512. Only part of the dispatch term is removable (the result
+  allocation and copy-out are; the launch is not).
+- **Item 3: no throughput lever on the sweep shape.** The GPU static local surface already prefills a
+  512-token prompt as one window, so the sweep contains no per-chunk cost to remove. What the breakdown
+  does show is the size of the per-window cost a fixed `32` pays repeatedly: device weight dequantization
+  falls from 6.7% to 10.1% of a 128-token window to 1.8% to 2.7% of a 512-token one, so a 32-token chunk
+  pays it at a larger share again. That is the measured reason item 3's per-surface review starts from,
+  and the term itself is removed by Tier 01C's packed GEMM rather than by chunk sizing. Item 3 stays a
+  review, not an implementation item, unless that review finds a surface where the VRAM query is
+  meaningful and the default is still `32`.
+- **Item 4: attention is still material at 512 tokens on every architecture, and the remainder is Tier
+  02's.** Kernel, copies and host part together: 17.3% (tinyllama), 11.4% (qwen2.5-3b), 17.0%
+  (Phi-3.5-mini), 13.4% (mistral-7b) of a 512-token window, against 5.6% to 8.8% at 128. Per prefilled
+  token it roughly triples from 128 to 512 (Phi-3.5-mini 0.69 to 1.97 ms per token). Item 0 already put
+  Phi-3 and Qwen3 on the kernel; nothing in this tier changes the kernel itself, so these are the numbers
+  Tier 02's tiled kernel is held to, and Tier 02 is not to be credited with the item-0 gain.
+
+### 2026-10-01 — implementation step 5: the threshold decomposition, and an escalation
+
+Read off the 512 and 128 breakdowns above, against the pinned post-item-0 reference ratios
+([`20260930T215547Z`](../perf-compare/20260930T215547Z/INDEX.md) at 512,
+[`20260930T211637Z`](../perf-compare/20260930T211637Z/INDEX.md) at 128). A removed share `f` of the
+window is worth `1 / (1 - f)` on Juno's prefill t/s with the reference tool unchanged. Assumed removal
+per term, stated so the estimate can be checked against the result: item 6 removes 95% of host SwiGLU,
+RMS norm and residual add, 95% of host RoPE except on Phi-3.5-mini (its rotation stays on the host,
+scope item 6) and 80% of the KV mirror row copies (one contiguous copy per layer keeps the bytes and
+drops the per-row calls); item 2 removes 70% of matmul staging (the `>= 70%` bytes threshold), all of the
+host FP16 pack, and half of projection dispatch and copy-out (allocation and copy-out go, the launch
+stays). The shares come from a spans run, which inflates spanned host time by a few percent, so treat
+every multiple below as an estimate with that much give.
+
+| Model | Reference 512 ratio | Threshold | Multiple needed | Item 6 alone | Item 2 alone | Items 6 + 2 | Projected 512 ratio |
+|---|---|---|---|---|---|---|---|
+| tinyllama-1.1b | 0.067x | >= 0.10x | 1.49x | 1.82x | 1.16x | 2.42x | 0.163x |
+| qwen2.5-3b | 0.061x | >= 0.10x | 1.65x | 1.99x | 1.16x | 2.71x | 0.164x |
+| Phi-3.5-mini | 0.075x | >= 0.08x | 1.07x | 1.51x | 1.12x | 1.81x | 0.136x |
+| mistral-7b | 0.100x | >= 0.10x | 1.00x | 1.73x | 1.15x | 2.23x | 0.222x |
+
+**The first two threshold rows sum, with margin, on item 6 alone.** Items 6 and 2 together are
+estimated at 1.8x to 2.7x. mistral-7b already reads 0.0999x at the reference, so its row is met within
+noise before any work; Phi-3.5-mini needs only 1.07x after item 0.
+
+**The third row does not sum, and no item in this tier owns what it needs.** The third row is the 512
+ratio at least 1.00 times the 128 ratio, on every model.
+
+| Model | Reference 512/128 | After item 6 | After items 6 + 2 |
+|---|---|---|---|
+| tinyllama-1.1b | 1.021 | 1.016 | 1.000 |
+| qwen2.5-3b | 0.911 | 0.895 | 0.913 |
+| Phi-3.5-mini | 0.916 | 0.888 | 0.866 |
+| mistral-7b | 0.961 | 0.988 | 1.018 |
+
+The cause is attention, which grows with context. Items 6 and 2 remove costs that are fixed per token.
+That makes the growing term a larger share of what remains, so on Phi-3.5-mini the row gets *worse* as
+the tier's own items land. Mistral 7B is the exception: its per-window weight dequantization amortizes
+at 512. Reaching 1.00 on qwen2.5-3b and Phi-3.5-mini needs attention whose per-token cost does not
+roughly triple from 128 to 512 tokens. That is the tiled long-context kernel, which is
+[Tier 02](TIER-02-attention-long-context.md)'s, and item 4 hands it there rather than building it. Every
+model's reference reading already failed this row before step 5 except tinyllama, which passes by
+0.021.
+
+**Escalated to the owner, 2026-10-01; decided the same day: option 1, the row moves to Tier 02.** Per the decomposition clause, this is
+recorded before items 6 and 2 are implemented. The options:
+1. Re-home the third milestone row to Tier 02, whose own `>= 0.90` 2048-over-512 milestone measures the
+   same mechanism.
+2. Keep the row here and accept that the tier closes **partial-complete** on it under the contingency,
+   with Tier 02 named as the successor for the attention term.
+3. Pull a long-context attention item forward into this tier.
+
+Implementation of items 6 and 2 (step 6) is not blocked by the decision. They are justified by the
+first two rows whichever way the third goes.
+
+**Owner decision (2026-10-01): option 1.** The 512-over-128 row moved to Tier 02, unchanged at `>= 1.00`, in
+the README milestone table and in Tier 02's milestone and exit criteria. Its reference reading there is
+the pinned post-item-0 one (0.911, qwen2.5-3b). Tier 01B is now scored on the first two rows only. This
+tier still publishes the 512-over-128 reading in its closing sweeps, so Tier 02 starts from a number taken
+after items 6 and 2 rather than from the estimate above.
+
+### 2026-10-02 — before step 6: item 6 cannot be measured ahead of item 2, raised with the owner
+
+Read-only pass over what item 6 depends on, against HEAD `c42de6e` plus the uncommitted step 4/5 tree.
+Confirmed as the plan states: the window SwiGLU is a single-threaded scalar loop calling `Math.exp` in
+double precision (`LlamaTransformerHandler.silu`, used by all three window paths); `rmsNormGpu` is left
+null on purpose (the constructor comment cites the round-trip A/B), so both norms run on the host;
+`DeviceKvCache.appendToken` copies one K row and one V row per token per layer; `CudaRmsNorm.normalizeResident`,
+`ResidentChain` and `ResidentActivation` exist; `CudaRope` rotates adjacent pairs only; Phi-3
+(`Phi3Rope.ropeExt`) and Qwen3 (`Qwen3Rope`, per-head Q/K norm) keep their own rotations. All four sweep
+models are on disk; `nvcc` 12.0 is installed.
+
+**Not as the plan states: "measure them separately, item 6 first."** Every operation item 6 moves sits
+between two GEMMs, and `MatVec.sgemm` takes a host `float[][]` and returns a new host `float[][]`,
+packing the input to FP16 on the host because `cublasGemmEx` runs on FP16 operands. A device SwiGLU fed
+by host-returned gate and up outputs would add copies rather than remove them (Tier 01 measured the
+round-trip norm slower than the CPU for the same reason). So item 6 needs GEMMs that read and write
+device buffers, which is item 2's mechanism. Estimate for one region per layer (residual uploaded once,
+q, k and v downloaded for the host KV, attention output uploaded, residual downloaded): TinyLlama's
+staged bytes per 512-token window fall by about 71%, which would already meet item 2's `>= 70%`.
+
+**Owner decision (2026-10-02): one region, one change.** The prefill-window region is built with
+device-in, device-out GEMMs and item 6's operations in one change, and item 6's thresholds and item 2's
+bytes threshold are scored off the same measurement; `>= 1.25x` on TinyLlama stays the speed gate.
+Item 2's remainder (the residual kept on the device across layers, the non-allocating `MatVec` form and
+its contract with Tier 10 item 4) follows as a second measured change. Step 7's "re-measure after each
+change" applies to those two changes.
+
+### 2026-10-02 — implementation step 6, first change: the prefill-window device region (item 6 with item 2's operand residency)
+
+Scope as decided above (one region, one change). Build: HEAD `c42de6e` plus this change; baseline jar
+`92643aec3c3b226a` (HEAD's build, saved as `target/tier01b-item6-ab/baseline-shaded.jar`), candidate as
+`candidate-shaded.jar` beside it (a root `mvn clean` deletes both).
+
+**What shipped.**
+- `node`: `PrefillWindowRegion` (new). Per layer of a prefill window wider than 8 rows: upload the residual
+  once, RMS norm, FP16 cast, Q/K/V GEMMs on device operands, bias add, RoPE, then either attention inside
+  the region (the window's K and V cast straight into the `DeviceKvCache` mirror, the existing attention
+  kernel reading it) followed by the rest of the layer and one download of k, v and x; or a download of q,
+  k and v for the handler's own RoPE and attention, then `finishLayer` (O GEMM, residual add, norm, gate and
+  up side by side, SwiGLU written as FP16, down GEMM, residual add, download x). LLaMA family and Qwen2
+  run the whole layer in the region (adjacent and split-half RoPE, biases); Phi-3 (LongRoPE) and Qwen3
+  (per-head Q/K norm) keep RoPE and attention on the host between the two calls. Pooled per concurrent
+  prefill; each operation holds the serialization lock and waits for its stream before releasing it;
+  device OOM redoes the layer on the host path, a mirror OOM retires the mirror. `PrefillWindowKernels`
+  and `prefill_window.cu` (new): FP16 cast, SwiGLU to FP16, residual add, bias add, and an RMS norm in the
+  host loop's order. `rope.cu` gains `rope_split_half`; `CudaRope` takes a pairing. `CudaMatVec` gains
+  `gemmOnStream` / `dequantOnStream` / `gemmHalfOnStream` (device operands, caller's stream, a chosen output
+  row stride; `CudaFp16GemmOps.gemmHalf` takes `ldc`). `DeviceKvCache` gains `appendWindow` (one copy per
+  tensor), `writeWindowOnDevice` and `markWritten`; its `grow` no longer leaks the K buffer when the V
+  allocation fails. Every window path (region or host, all three handlers) now appends the mirror once per
+  layer per window. `ResidentActivation.materializeAll`, `KernelParams.i64`,
+  `ForwardPassHandler.prefillRegionActive()`, `PrefillRegionOptions` (`JUNO_PREFILL_REGION`, on by
+  default, forwarded by `ClusterHarness`). JFR: `juno.WindowStep` step `device_layer`; `juno.DeviceCompute`
+  sites `rms_norm`, `convert_fp16`, `bias_add`, `rope`, `kv_append`, `gqa_attention_region`, `swiglu`,
+  `residual_add`.
+- `metrics`: the new sites and step written on every run.
+- Harness: `prefill-breakdown.sh` treats `device_layer` as a parent beside `projection` (term
+  `projection_and_region_host`, was `projection_dispatch_and_copy_out`) with `device_elementwise` and
+  `region_attention_compute` as new terms; `compare-llama-cpp.sh` reads `gqa_attention_region` as evidence
+  that GPU attention resolved on (in-region attention issues no `memcpy_gqa_*` copies, so a spans run would
+  otherwise have read the LLaMA-family prefill lane as off).
+
+**Bit identity, and how the first version missed it.** The region was first built on the existing device
+norm (`rms_norm.cu`: tree reduction, `rsqrtf`). Prefill logits matched the host path within 0.002 to
+0.005 relative L2, but one Qwen2.5-3B decode step after a region prefill read 0.090 with top-1 equal, at
+the level of Tier 00's planted-fault calibration. Diagnosis, not a looser bound: the region's KV mirror
+held exactly the FP16 of the host KV (0 mismatches over 36 layers x 64 positions), the host path is
+bit-deterministic run to run, and per-layer K/V differed by a smooth 1e-6 to 1.3e-3 growing with depth
+(no localized jump), so the cause was the norm's few-ulp difference flipping FP16 roundings of the GEMM
+inputs. The accepted GPU attention kernel reads 0.0246 at the same step, so that step is sensitive to any
+change. `rms_norm_host_order` sums in the host loop's order and is bit-identical to `rmsNormInto`; with it
+**the region's logits equal the host path's bit for bit** on all four architectures, at every site.
+
+**Tests, written first and shown failing for the right reason.**
+- `PrefillWindowKernelsParityTest` (`node`, `@Tag("gpu")`, 49 cases): 29 failed against a throwing
+  skeleton, then 20 more for the host-order norm; all pass. FP16 cast bit-identical to
+  `Float.floatToFloat16` over 1M values (ties, subnormals, overflow); SwiGLU at W = 1, 8, 9, 32, 512 and
+  I = 5632, 11008, 8192, 14336, 6144 bit-identical to the host loop then cast (bound was one FP16 ulp);
+  residual and bias adds bit-identical; split-half RoPE max difference 0; norm bit-identical at 20 shapes.
+  `RopeKernelParityTest` still 6 of 6.
+- `DeviceKvWindowAppendTest` (`@Tag("gpu")`, 6 cases): 6 failed against the skeleton; pass. Window append
+  equals per-token append; 2 copies for a 512-row window; device write casts in place with 0 host copies
+  and leaves the watermark until marked; growth across a window keeps the prefix; a window past the prefix
+  is not readable; a growth OOM (device filled to 4 MiB free) is a recognized VRAM OOM and leaves the
+  watermark.
+- `GemmOnStreamTest` (`@Tag("gpu")`, 7 cases): 7 failed against the skeleton; pass. Bit-identical to
+  `sgemm` for FP16 and Q4_K weights at W = 9, 32, 512, and side by side with a doubled row stride.
+- `PrefillRegionHandlerParityTest` (`@Tag("gpu")`, TinyLlama, Qwen2.5-3B, Phi-3.5-mini, Qwen3-1.7B): 4
+  failed on "the default must build the region" before the wiring; all pass. Region on against off on one
+  CUDA backend: logits **bit-identical** at two fresh windows, a continuation window at position 48, a
+  single decode and a two-stream decode; from a recording of the first window, no `juno.SwiGlu` or
+  `juno.ResidualAdd` events, no matmul device-to-host copy (the item's "gate and up produce no
+  device-to-host copy"), KV mirror copies <= 2 x layers; device memory back to its start after release,
+  and no growth across a repeated window.
+- `PrefillRegionGreedyIT` (`juno-master`, `-Pgpu`): six prompts, 64 greedy tokens, region on against off:
+  **6 of 6 identical on TinyLlama and on Mistral 7B**.
+- `metrics`: `JfrMetricsExtractorDeviceComputeTest` and `JfrMetricsExtractorWindowStepTest` failed on the
+  absent keys; 82 of 82 pass. `prefill-breakdown.sh --selftest`: 6 of 16 failed on the old script; 16 of 16
+  pass. `compare-llama-cpp.sh --selftest`: the new case failed (read `off`); all pass.
+
+**Test-suite hygiene found on the way.** The first eleven-module reactor run with this change failed in
+`PrefillRegionHandlerParityTest`: the region fell back on device OOM even on TinyLlama, and the Phi-3.5 and
+Qwen3 cases ran out of memory on the host path. Two existing test classes loaded real models on CUDA and
+never released them (`LlamaTransformerHandlerGpuAttentionLiveTest`, four TinyLlama loads;
+`LlamaTransformerHandlerGpuResidencyTest`, two TinyLlama and one Qwen2.5-3B), and device matrices have no
+GC cleaner, so about 6 GB stayed allocated for the rest of the test JVM. Both now release every handler
+and backend after each test. No product code changed for this.
+
+The rerun then failed once in `PrefillWindowSpansTest` (step 4a's CPU test: 13 projection events where 14
+were expected). Not this change: alone it failed 3 of 6 runs, and 0 of 6 with JFR on the operating-system
+clock. It is step 0's timestamp-counter skew (this host's kernel clocksource is `hpet`): a span crossing
+cores reads a negative duration and JFR drops the event. The harness already passes
+`-XX:-UseFastUnorderedTimeStamps` for perf runs; `node`'s surefire `argLine` now does too (6 of 6 pass).
+
+**Verification, on the final tree (2026-10-02).** `mvn test` on the eleven unit-test modules: **1,936 tests,
+0 failures, 0 errors, 49 skipped** (step 4a: 1,870), 29:53, GPU-tagged tests included. `mvn install
+-DskipTests`, then `mvn verify -pl juno-master`: 20 ITs, 0 failures (three-node pipeline, tensor-parallel,
+in-process, unsupported architecture). `-Pgpu`: `PrefillRegionGreedyIT` 2 of 2, `GpuAttentionDivergenceIT` 3
+of 3 with the region on and the same divergence steps as step 3a (TinyLlama 8, 13, 23; Phi-3.5-mini 37, 40;
+Qwen3-1.7B 20, 23, 32), `GpuForwardPassIT` 5 of 5 on TinyLlama against the CPU oracle (top-1 equal, top-5
+overlap 5, logits relative L2 0.009). `check-plan-thresholds.sh`, `compare-llama-cpp.sh --selftest`,
+`prefill-breakdown.sh --selftest` and `selftest-engine-stdin.sh` pass. Not run in this step, and owed to the
+closing matrix (step 8): `compare-lora.sh` (the LoRA handlers are separate classes the region does not
+touch), `compare-vision.sh` (moondream2's text half runs the Phi-2 handler, which has no device path),
+`compare-prefill-batch.sh`, `ModelLiveRunnerIT`'s 512-token check and `smoke-tier01b-prefill.sh` (neither
+exists yet).
+
+**Measurement (agent, unpinned; the gates that need pinned clocks are owed to the owner).**
+
+*Breakdown*, published as [`20261002T014419Z`](../perf-compare/20261002T014419Z/INDEX.md) (`--gpu
+--device-spans --juno-reps 3 --no-tuned-lane`, `n_prompt=512`, unpinned under the owner's 2026-10-01
+decision; jar `fb6d32e6c41cb3dd`; `prefill-breakdown.sh` exit 0, residue 1.1% to 2.8%). Per window, all
+three repetitions identical in bytes and counts:
+
+| Model | Prefill ms (step 4 → now) | Host elementwise share | KV mirror H2D copies (limit) | H2D + D2H MB (step 2 → now) | Bytes change |
+|---|---|---|---|---|---|
+| tinyllama-1.1b | 2,194 → 556 | 41.2% → **0%** | **0** (44) | 1,405 → 207 | **-85.3%** |
+| qwen2.5-3b | 5,617 → 1,260 | 48.8% → **0%** | **0** (72) | 3,288 → 339 | **-89.7%** |
+| Phi-3.5-mini | 5,920 → 3,121 | 34.3% → 5.3% (host RoPE) | **64** (64) | 2,645 → 1,809 | -31.6% |
+| mistral-7b | 7,791 → 2,741 | 41.8% → **0%** | **0** (64) | 4,689 → 670 | **-85.7%** |
+
+What remains on the region models is the GEMM (29.8% to 50.8%) and the attention kernel (30.2% to
+46.3%), now the two dominant terms: the GEMM is Tier 01C's, attention at long context Tier 02's.
+GPU attention resolved `on` for all four rows (the harness fix above).
+
+*Informational A/B* (not a gate: unpinned), alternating baseline and candidate jars three times each,
+`n_prompt=512`, median (min to max), Juno t/s, logs under `target/perf-compare/item6-unpinned-ab/`:
+
+| Model | Prefill baseline | Prefill candidate | B/A | Generation B/A |
+|---|---|---|---|---|
+| TinyLlama | 258.97 (258.75 to 262.10) | 932.04 (872.80 to 934.18) | 3.60x | 0.995x |
+| Mistral 7B | 68.80 (48.80 to 69.09) | 188.09 (187.38 to 193.59) | 2.73x | 0.997x |
+
+Against step 5's estimate (items 6 and 2 together: 2.42x TinyLlama, 2.23x Mistral) the change reads
+above it; the estimate assumed item 6 left attention and the GEMM where they were, and moving the
+attention input and output onto the device removed copies the estimate charged to item 2's remainder.
+The unpinned sweep above reads pp ratios of 0.230x, 0.259x, 0.143x and 0.283x at 512 (spans on): not a
+milestone score, which comes from the tier's pinned closing sweep.
+
+**Item 6 threshold, scored as far as an unpinned agent can:** host elementwise <= 10% of prefill on
+tinyllama, qwen2.5-3b and mistral-7b: **met (0%)**; KV mirror H2D copies <= 2 x layers per window: **met
+(0)**; greedy output identical over 64 tokens on tinyllama and mistral-7b: **met (6 of 6 each)**; TinyLlama
+prefill >= 1.25x the pre-item-6 build from a same-hour **pinned** A/B: **owed** (the unpinned A/B reads
+3.60x). **Item 2's bytes threshold** (>= 70% against step 2): met on tinyllama, qwen2.5-3b and mistral-7b,
+**missed on Phi-3.5-mini (-31.6%)**, whose LongRoPE and attention keep Q, K and V crossing the bus every
+layer; moving them needs a device LongRoPE kernel, which no item in this tier owns. Item 2's
+non-allocating `MatVec` form (its contract with Tier 10 item 4) is the second change of step 6 and is
+not done.
+
+**Owed, for the owner (pinned, needs prompt-free sudo):** the item 6 gate, same-hour, alternating A B A B A B,
+prefill `>= 1.25x` on TinyLlama (Mistral 7B recorded, not gated), and decode `>= 0.95x` on both:
+`scripts/performance-tests/compare-llama-cpp.sh --gpu --pin-clocks --models tinyllama-1.1b-chat-v1.0.Q4_K_M,mistral-7b-instruct-v0.1-q4_k_m --n-prompt 512 --juno-warmup 2 --juno-reps 1 --reps 1 --no-tuned-lane --no-publish --juno-jar target/tier01b-item6-ab/{baseline|candidate}-shaded.jar --out target/perf-compare/item6-ab-{baseline|candidate}-{1|2|3}`
+(baseline `92643aec3c3b226a`, candidate `fb6d32e6c41cb3dd`).
+
+**Item 6 gate, taken by the owner 2026-10-02 (pinned, 03:05 to 03:16 UTC): met.** The command above, driven
+by `target/tier01b-item6-ab/run-gate.sh`, alternating A B A B A B. Prefill B/A **3.899** on TinyLlama
+(240.00 against 935.81 t/s) and **2.806** on Mistral 7B (68.35 against 191.76); generation **1.023** and
+**1.003**. All six runs pinned (governor performance, turbo off, GPU locked at 1911 MHz), jar hashes
+`92643aec3c3b226a` and `fb6d32e6c41cb3dd` as expected, every prefill 512 of 512, every row scorable, no
+repetition withheld, GC pause at most 14.7 ms (Mistral, both sides alike). Published:
+[`20261002T030500Z-tier01b-step6-region-ab`](../perf-compare/20261002T030500Z-tier01b-step6-region-ab/INDEX.md).
+Every item 6 threshold is now met; the exit criterion is ticked. Item 2's criterion stays open (Phi-3.5-mini
+bytes, the non-allocating form).
+
 ### Out-of-tier changes (recorded per execution rule 9)
 
 | Change | What it touched | Measurement boundary? |
@@ -1777,21 +2136,40 @@ sweep models at `n_prompt` 128 and 512, published, and `prefill-breakdown.sh` on
       *Checked 2026-10-01: prefill 0.994x (TinyLlama) and 1.016x (Mistral 7B), pinned,
       [`docs/perf-compare/20261001T172351Z-tier01b-step3a-compute-ab`](../perf-compare/20261001T172351Z-tier01b-step3a-compute-ab/INDEX.md);
       `JfrMetricsExtractorDeviceComputeTest` failed 4 of 5 on the extractor without the keys.*
-- [ ] Step 4a: `juno.WindowStep` exists, the Phi-3 and Qwen3 window paths emit the per-op events,
+- [x] Step 4a: `juno.WindowStep` exists, the Phi-3 and Qwen3 window paths emit the per-op events,
       `juno.MatVec` splits by phase, all extracted with keys on every run, with `metrics` and `node`
       tests that failed on the build without them; and its same-hour pinned A/B passed (prefill >= 0.98x
       with the device spans off) before the breakdown below is taken.
-- [ ] Per-term prefill breakdown published for all four sweep models at `n_prompt` 128 and 512, with
+      *Amended 2026-10-01 (owner decision): the breakdown was taken first (step 4 record).*
+      *Checked 2026-10-02: the gate is met, prefill 0.993x (TinyLlama) and 1.005x (Phi-3.5-mini),
+      pinned, [`docs/perf-compare/20261001T235933Z-tier01b-step4a-ab`](../perf-compare/20261001T235933Z-tier01b-step4a-ab/INDEX.md);
+      `JfrMetricsExtractorWindowStepTest` failed 5 of 5 and `PrefillWindowSpansTest` 3 of 3 on the build
+      without the change (step 4a record).*
+- [x] Per-term prefill breakdown published for all four sweep models at `n_prompt` 128 and 512, with
       no unattributed residue — every term named, including host-device staging and dequantization,
       the GEMM compute read from `juno.DeviceCompute`, the host FP16 packing, and the host elementwise
       spans; residue <= 5% of prefill per model. The GEMM's measured share per model is recorded for
       Tier 01C.
-- [ ] Item 6: SwiGLU, both norms and the residual adds run on the device for the prefill window (and
+      *Checked 2026-10-01: residue 0.4% to 1.3% at 512 and 1.0% to 2.2% at 128,
+      [`docs/perf-compare/20261001T224724Z`](../perf-compare/20261001T224724Z/prefill-breakdown.md) and
+      [`docs/perf-compare/20261001T225929Z`](../perf-compare/20261001T225929Z/prefill-breakdown.md),
+      unpinned by owner decision; GEMM share recorded in the step 4 record. Taken ahead of step 4a's
+      pinned gate by owner decision (the step 4 record says why that order does not change the
+      breakdown).*
+- [x] Item 6: SwiGLU, both norms and the residual adds run on the device for the prefill window (and
       RoPE where the kernel supports the model's pairing, announced otherwise), the KV mirror is appended
       once per layer per window, and the item 6 threshold is met: host elementwise <= 10% of prefill and
       KV H2D copies <= 2 x layers per window on tinyllama, qwen2.5-3b and mistral-7b; tinyllama
       prefill >= 1.25x the pre-item-6 build (same-hour pinned A/B); greedy output identical or
       characterised no worse than item 0's baseline.
+      *Checked 2026-10-02: host elementwise 0% and KV mirror copies 0 on tinyllama, qwen2.5-3b and mistral-7b
+      ([`docs/perf-compare/20261002T014419Z`](../perf-compare/20261002T014419Z/INDEX.md)); TinyLlama prefill
+      3.899x the pre-item-6 build, pinned same-hour A/B, generation 1.023x and 1.003x
+      ([`docs/perf-compare/20261002T030500Z-tier01b-step6-region-ab`](../perf-compare/20261002T030500Z-tier01b-step6-region-ab/INDEX.md));
+      greedy output identical over 64 tokens on 6 of 6 prompts on tinyllama and mistral-7b
+      (`PrefillRegionGreedyIT`; logits bit-identical, step 6 record). RoPE on the device for the LLaMA family
+      and Qwen2 (both pairings); Phi-3 and Qwen3 keep their own rotations on the host, announced in the
+      region's startup log line.*
 - [x] Item 7: `compare-llama-cpp.sh` runs Juno's hot path at the reference tool's `-t`, records
       `juno_threads`, and a CPU sweep taken with it is published as the new CPU reference, with the
       README's reference column moved in the same change.
@@ -1812,12 +2190,18 @@ sweep models at `n_prompt` 128 and 512, published, and `prefill-breakdown.sh` on
 - ~~Item 10: `.github/workflows/ci.yml` committed by the owner, and the first green run of both jobs
       recorded here with its URL.~~ **Not an exit criterion** (owner decision, 2026-10-01): see scope
       item 10. Written without a checkbox so it counts neither as met nor as open.
-- [ ] The threshold decomposition written down before implementation, with each item's expected
+- [x] The threshold decomposition written down before implementation, with each item's expected
       contribution read off the breakdown, and an escalation recorded here if they did not sum.
+      *Checked 2026-10-01 (step 5 record): rows 1 and 2 sum on item 6 alone (estimated 1.5x to 2.0x
+      against 1.00x to 1.65x needed); row 3 (512 over 128) does not, because attention grows with
+      context, so it moved to Tier 02 (owner decision, 2026-10-01).*
 - [ ] Prefill activations stay device-resident across a layer's projections, with the materialization
       boundary documented; bytes staged per 512-token window down >= 70% against the step-2 baseline;
       `sgemmLayerInto`'s per-matmul allocate-and-copy removed via the non-allocating batched form,
       whose contract matches the one Tier 10 item 4 adds for CPU.
+      *2026-10-02, open: residency and the boundary are done in the device region (documented in its class
+      and `docs/howto.md`); bytes down 85% to 90% on TinyLlama, Qwen2.5-3B and Mistral 7B but 31.6% on
+      Phi-3.5-mini, whose LongRoPE and attention stay on the host; the non-allocating form is not done.*
 - [ ] Chunk-sizing defaults reviewed per surface; any surface still pinned at `32` has a measured
       reason, not an inherited one.
 - [x] `scripts/performance-tests/check-plan-thresholds.sh` exists, passes against this tree, and fails
@@ -1835,10 +2219,13 @@ sweep models at `n_prompt` 128 and 512, published, and `prefill-breakdown.sh` on
       ten scripts on the helper with `compare-llama-cpp.sh`; `selftest-engine-stdin.sh` passes and fails
       against Tier 01's helper; all ten ran to completion leaving zero new loops, pipes, descriptors and
       engines (table in the execution record). The 24 pre-existing orphans are not removed by this.*
-- [ ] Prefill throughput no longer degrades with prompt length: the `n_prompt=512` pp ratio is greater
+- ~~Prefill throughput no longer degrades with prompt length: the `n_prompt=512` pp ratio is greater
       than or equal to the `n_prompt=128` pp ratio for every sweep model — **both measured under
       `RAW_PROMPT=1` with the same `--vector` setting**, which no published pair of runs has ever
-      been. Step 2 establishes whether the degradation is real before this criterion can be scored.
+      been. Step 2 establishes whether the degradation is real before this criterion can be scored.~~
+      **Moved to [Tier 02](TIER-02-attention-long-context.md)** (owner decision, 2026-10-01; step 5
+      record). Written without a checkbox, so it counts as neither met nor open here. The closing sweeps
+      still publish the reading for Tier 02.
 - [ ] Threshold above met, or the tier is explicitly marked partial-complete with the dominant term
       named and assigned to a successor tier (not silently marked complete).
 - [ ] Decode (tg) and vision both verified not regressed, with published numbers.

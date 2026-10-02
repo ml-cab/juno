@@ -42,8 +42,10 @@ import jdk.jfr.StackTrace;
  */
 class JfrMetricsExtractorDeviceComputeTest {
 
+	/** The matmul and attention sites, then the prefill-window device region's own operations. */
 	private static final List<String> SITES = List.of("gemm_half", "gemv_half_batched", "gemm_fp32", "mmq_packed",
-			"gqa_attention");
+			"gqa_attention", "rms_norm", "convert_fp16", "bias_add", "rope", "kv_append", "gqa_attention_region",
+			"swiglu", "residual_add");
 	private static final List<String> PHASES = List.of("prefill", "decode", "other");
 
 	@TempDir

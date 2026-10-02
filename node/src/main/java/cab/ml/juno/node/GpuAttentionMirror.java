@@ -145,6 +145,30 @@ final class GpuAttentionMirror {
 	}
 
 	/**
+	 * Appends a prefill window's K and V rows ({@code width} of them, from
+	 * {@code startPos}) as one copy per tensor, after the host KV tensors hold them.
+	 * Same contract as {@link #append}: returns the mirror, or {@code null} once it has
+	 * been retired for running out of device memory.
+	 */
+	DeviceKvCache appendWindow(DeviceKvCache mirror, int startPos, float[][] k, float[][] v, int width) {
+		if (mirror == null)
+			return null;
+		try {
+			mirror.appendWindow(startPos, k, v, width);
+			return mirror;
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			if (growthWarned.compareAndSet(false, true))
+				log.warning(handler + ": out of device memory growing the attention KV mirror - attention"
+						+ " continues on the CPU, which holds the same history. Lower --gpu-layers, or pass"
+						+ " --gpu-attention off, to keep it on the GPU.");
+			mirror.close();
+			return null;
+		}
+	}
+
+	/**
 	 * Attention for a prefill window: row {@code b} of {@code q} sits at position
 	 * {@code startPos + b} and attends over positions {@code [0, startPos + b]}.
 	 *

@@ -184,10 +184,12 @@ Module dependency (excerpt):
         each site's measured mean scaled to all of its copies. The HOST direction
         (host FP16 packing, site pack_fp16_host) is kept apart from H2D/D2H.
         juno.DeviceCompute is summed overall, per phase and per kernel site
-        (gemm_half, gemv_half_batched, gemm_fp32, mmq_packed, gqa_attention, always
-        written) into count/timed_count/total_ms.
+        (gemm_half, gemv_half_batched, gemm_fp32, mmq_packed, gqa_attention, and the
+        prefill-window region's rms_norm, convert_fp16, bias_add, rope, kv_append,
+        gqa_attention_region, swiglu, residual_add, always written) into
+        count/timed_count/total_ms.
         WindowStepBucket sums juno.WindowStep per step (embed, projection, bias_add,
-        kv_write, lm_head, always written; any other step under its own name) into
+        kv_write, lm_head, device_layer, always written; any other step under its own name) into
         count and prefill/decode count/total_ms, a window wider than one row being
         prefill. juno.MatVec is also split into prefill/decode by its windowSize
         field (the call's batch width); a recording without the field counts only in
@@ -329,7 +331,12 @@ GPU FFI (node module — Panama project, JEP 454):
         and the GPU kernel's parity test.
   DeviceKvCache — device-resident FP16 KV mirror kept alongside the host SessionKvTensor
         (dual-write); grow-and-preserve via D2D copy; lifecycle tied to
-        LlamaTransformerHandler.evict(). CUDA only.
+        LlamaTransformerHandler.evict(). CUDA only. appendToken writes one row (decode);
+        appendWindow writes a prefill window's rows from the host as one copy per tensor;
+        writeWindowOnDevice casts a window's FP32 device rows into the mirror on a stream
+        (PrefillWindowKernels.toHalf, no host copy) and leaves the watermark for markWritten,
+        which the handler calls once the host KV holds the same rows. A grow whose second
+        allocation fails frees the first.
   GqaAttentionKernel — PTX loader/launcher (CUDA Driver API) for gqa_attention.ptx; one block
         per (batch-row, head), 3-pass QK^T+max / softmax / weighted-V-sum.
   CudaGqaAttention — handler-facing attendBatched(...); real dispatch against DeviceKvCache,
@@ -378,9 +385,11 @@ GPU FFI (node module — Panama project, JEP 454):
         be reading the staging buffer waits for it first (tested by queueing device work ahead of
         the transfer, the only way to make the race observable).
         Operations that run on it today: CudaRmsNorm.normalizeResident, CudaRope.applyResident,
-        and the K-quant MMQ quantize/project kernels inside ResidentQkvPath.
+        the K-quant MMQ quantize/project kernels inside ResidentQkvPath, and the prefill-window
+        region's GEMMs and PrefillWindowKernels.
         materializeRows(acts, out): several single-row activations of one chain downloaded with
-        one wait - the region's exit when it produces more than one result.
+        one wait - the region's exit when it produces more than one result; materializeAll is the
+        multi-row form (PrefillWindowRegion's k, v and x).
   ResidentQkvPath — the decode-time attention entry as one residency region (--gpu-residency):
         upload the residual row, RMS norm (CudaRmsNorm.normalizeResident with the layer's norm
         weight uploaded once), quantize to Q8_1 and project to Q, K and V (Q4KMmqKernel.quantizeX
@@ -406,8 +415,9 @@ GPU FFI (node module — Panama project, JEP 454):
         file's general.architecture). ConsoleMain sets the property; ClusterHarness forwards it to
         forked nodes.
   KernelParams — a cuLaunchKernel parameter block allocated once and rewritten in place, launched
-        through invokeExact: a launch allocates nothing and boxes nothing. Used by the resident
-        path (RmsNormKernel.launchResident, RopeKernel.launch); the older per-call launch builds an
+        through invokeExact: a launch allocates nothing and boxes nothing (pointer, i32, i64, f32
+        slots). Used by the resident paths (RmsNormKernel.launchResident, RopeKernel,
+        PrefillWindowKernels); the older per-call launch builds an
         arena and boxes its arguments through invokeWithArguments, which is cheap next to a
         synchronous round trip and not once the round trip is gone.
   Phi3RopeConfig — Phi-3 LongRoPE factors. selectFactors() returns the short set whenever the
@@ -443,15 +453,53 @@ GPU FFI (node module — Panama project, JEP 454):
         backward rotation, Qwen3's YaRN path or the Phi rotations.
   RopeKernel — PTX loader/launcher for rope.ptx (rope.cu): rotary position embedding in place on
         a device-resident [rows][nHeads*headDim] batch, row r at position startPos + r, one thread
-        per rotated pair. Adjacent-pair rotation, the same math as LlamaTransformerHandler.rope;
-        split-half pairing (Phi2Rope/Phi3Rope) is not implemented on the device. Angle, sine and
+        per rotated pair. launch rotates adjacent pairs and launchSplitHalf the split-half pairs
+        (rope_split_half, the RopePairing.SPLIT_HALF layout of the Qwen2 family), the same math as
+        LlamaTransformerHandler.rope; the scaled split-half rotations of Phi2Rope/Phi3Rope stay on the
+        host. Angle, sine and
         cosine in double from a host-computed inverse-frequency table, rotation with separately
         rounded float multiplies and adds: bit-identical to the CPU rotation in the parity tests,
         including at position 30000.
-  CudaRope — handler-facing: uploads the model's inverse-frequency table once (tryCreate) and
+  CudaRope — handler-facing: uploads the model's inverse-frequency table once (tryCreate, with a
+        RopePairing; adjacent by default) and
         rotates a ResidentActivation in place (applyResident). No host-array entry point: RoPE on
         the device only pays when the activation is already there. Built by ResidentQkvPath, which
         LlamaTransformerHandler constructs under --gpu-residency.
+  PrefillWindowRegion — the prefill-window device region (on by default on CUDA; PrefillRegionOptions):
+        a transformer layer over a prefill window of more than 8 rows with the activations on the
+        device between its operations. Per layer: upload the residual once, RMS norm (host-order
+        kernel), FP16 cast, Q/K/V GEMMs (CudaMatVec.gemmOnStream on the window's own stream; a fused
+        Q/K/V matrix as one GEMM, split on the host), bias add, RoPE (CudaRope, either pairing), then
+        either attention inside the region (K and V cast straight into the DeviceKvCache mirror with
+        writeWindowOnDevice, the gqa_attention kernel reading it with device pointer tables) followed
+        by the rest of the layer and one download of k, v and x (runLayer returns true), or a download
+        of q, k and v for the handler's own RoPE/attention (runLayer returns false) and finishLayer:
+        upload the attention output, FP16 cast, O GEMM, residual add, norm, gate and up GEMMs side by
+        side in one [W][2I] buffer (ldc 2I, or one fused matrix), SwiGLU written as FP16, down GEMM,
+        residual add, download x. Every operation reproduces the host window path's arithmetic, so
+        the logits are bit-identical to it (PrefillRegionHandlerParityTest, four architectures).
+        Layer weights: Layer.separate / Layer.mixed over Matrix (packed K-quant or FP16 device
+        matrix); a layer with any projection off the device is ineligible and keeps the host path.
+        Windows (open/close) are pooled per concurrent prefill: a ResidentChain stream, ResidentActivation
+        x/q/k/v/attn plus chain scratch, grown to the widest window seen (rounded to 64 rows). Each
+        operation holds the context's serialization lock and waits for its stream before releasing
+        it (the dequantization scratch is CudaMatVec's own); a failure drains the stream first. A
+        device OOM anywhere surfaces as the allocator's IllegalStateException and the handler redoes
+        that layer on the host path from the untouched host residual; a mirror OOM inside the
+        region retires the mirror and continues with host attention. Built by LlamaTransformerHandler
+        (RoPE and attention inside), Phi3TransformerHandler and Qwen3TransformerHandler (RoPE and
+        attention on the host); timed as juno.DeviceCompute sites (rms_norm, convert_fp16, bias_add,
+        rope, kv_append, gqa_attention_region, swiglu, residual_add, and gemm_half) under
+        juno.WindowStep device_layer spans. ForwardPassHandler.prefillRegionActive() reports it.
+  PrefillWindowKernels — PTX loader/launcher for prefill_window.ptx (prefill_window.cu): to_half
+        (FP32 to FP16, round to nearest even, bit-identical to Float.floatToFloat16), swiglu_half
+        (silu(gate) * up from a [rows][2I] buffer, exponential in double, written as FP16;
+        bit-identical to the host loop then cast in the parity test), add_inplace, add_bias, and
+        rms_norm_host_order (squares summed one after another in float, 1 / sqrt in double: bit-identical
+        to LlamaTransformerHandler.rmsNormInto, unlike rms_norm.cu's tree reduction and rsqrtf). Every
+        operation rounded separately, no contraction into fused multiply-adds.
+  PrefillRegionOptions — JUNO_PREFILL_REGION (system property, then env): on by default, off keeps
+        every prefill window on the host path. Diagnostic; ClusterHarness forwards it to forked nodes.
   ResidentChainMicrobench — standalone main class timing RMS norm then RoPE four ways at decode and
         prefill width: scalar CPU, op-at-a-time (each operation stages its own activation), resident
         chain (upload once, both operations, download once) and device-only (both operations on
@@ -481,7 +529,11 @@ GPU FFI (node module — Panama project, JEP 454):
         the instance, not to a thread; every use is under GpuContext.cublasSerializationLock()
         and each call synchronizes its stream before releasing it, so one set serves every
         caller. Grown on demand, kept at the largest size; releaseScratch() frees the set and
-        the next call grows it again; scratchDeviceBytes() reports it (tests). The batched
+        the next call grows it again; scratchDeviceBytes() reports it (tests).
+        gemmOnStream / dequantOnStream / gemmHalfOnStream: the prefill-window region's matmul on
+        device operands (FP16 input rows on the device, FP32 output at a caller-chosen row stride),
+        issued on the caller's stream into this instance's dequantization scratch; the caller holds
+        the lock and synchronizes before releasing it. Same kernels and bits as sgemm. The batched
         FP16 pack of the activation window is its own method (packFp16Rows) so it stays compiled
         when the large batched caller is deoptimized - inline, it fell back to the interpreter.
   RocmMatVec — implements GpuMatVec; rocblas_sgemv (FP32) / rocblas_hssgemv_strided_batched (FP16);
@@ -519,14 +571,17 @@ GPU FFI (node module — Panama project, JEP 454):
         for 2 to 8 rows; mmq_packed: the packed decode GEMV, counted untimed at width 1).
         DeviceComputeClock times the default-stream kernels between two synchronous copies on the
         host, between two drains of that stream (gemm_fp32 in GpuBlasOps.forward, gqa_attention in
-        CudaGqaAttention). CudaMatVec.packFp16Window counts the host FP16 packing of each window as a
+        CudaGqaAttention). The prefill-window region adds rms_norm, convert_fp16, bias_add, rope,
+        kv_append, gqa_attention_region, swiglu and residual_add, timed on its window's stream
+        (its matmuls count as gemm_half). CudaMatVec.packFp16Window counts the host FP16 packing of each window as a
         juno.DeviceStaging site (pack_fp16_host) with direction HOST. Off in juno-perf.jfc, on in
         juno-perf-spans.jfc. RocmMatVec has no batched GEMM, so it has no compute site yet.
   Prefill window spans — WindowStepEvent (juno.WindowStep: step, windowSize, startPosition)
         covers the window work no per-op event covers, one event per call site per layer:
         embed, projection (each sgemm*Into call through the handler's projectWindow wrapper or an
         inline span, so the backend's juno.MatVec plus the copy-out), bias_add, kv_write (host
-        KV rows plus the device mirror append) and lm_head. Emitted by the forwardBatch window
+        KV rows plus the device mirror append), lm_head and device_layer (each call into the
+        prefill-window device region, its device work nested inside). Emitted by the forwardBatch window
         path of LlamaTransformerHandler, Phi3TransformerHandler and Qwen3TransformerHandler; the
         Phi-3 and Qwen3 window paths also emit juno.RmsNorm (Qwen3's per-head Q/K norm included),
         Rope, Attention, ResidualAdd and SwiGlu, as the LLaMA-family path already did. Decode

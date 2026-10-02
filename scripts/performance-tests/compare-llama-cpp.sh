@@ -609,6 +609,11 @@ run_selftest() {
                                   "juno.DeviceStaging.site.memcpy_k_row_h2d.prefill.count": 11242 } } ] }' >"$d/attn-gqa.json"
   jq -n '{ models: [ { metrics: { "juno.DeviceStaging.site.cudamemcpyasync_xh_h2d_q4k_batched_gemm.prefill.count": 128 } } ] }' >"$d/attn-nogqa.json"
   jq -n '{ models: [ { metrics: { "juno.DeviceStaging.H2D.count": 0 } } ] }' >"$d/attn-nospans.json"
+  # The prefill-window device region runs attention inside itself: no memcpy_gqa_* copies,
+  # only its own compute site.
+  jq -n '{ models: [ { metrics: { "juno.DeviceCompute.site.gqa_attention_region.prefill.count": 22,
+                                  "juno.DeviceStaging.site.upload_resident_activation.prefill.count": 22 } } ] }' \
+    >"$d/attn-region.json"
   selftest_expect "an activation line reads on" on "$(gpu_attention_resolved_from_log "$d/attn-on.log" 1)"
   selftest_expect "a backend fallback reads off, naming it" off-backend-fallback \
     "$(gpu_attention_resolved_from_log "$d/attn-fallback.log" 1)"
@@ -618,6 +623,8 @@ run_selftest() {
     "$(DEVICE_SPANS=0 gpu_attention_resolved_from_log "$d/attn-silent.log" 1 "$d/attn-nospans.json")"
   selftest_expect "attention-kernel copy sites in a spans run read on" on \
     "$(DEVICE_SPANS=1 gpu_attention_resolved_from_log "$d/attn-silent.log" 1 "$d/attn-gqa.json")"
+  selftest_expect "attention inside the prefill-window device region reads on" on \
+    "$(DEVICE_SPANS=1 gpu_attention_resolved_from_log "$d/attn-silent.log" 1 "$d/attn-region.json")"
   selftest_expect "a spans run without attention-kernel copies reads off" off \
     "$(DEVICE_SPANS=1 gpu_attention_resolved_from_log "$d/attn-silent.log" 1 "$d/attn-nogqa.json")"
   selftest_expect "a CPU run has no GPU attention to resolve" n/a "$(gpu_attention_resolved_from_log "$d/attn-on.log" 0)"
@@ -1482,8 +1489,10 @@ jfr_summary_json() {
 # LlamaTransformerHandler's activation or fallback line in the engine log (only
 # written under --verbose; the console turns library logging off otherwise), then,
 # on a --device-spans run, the attention kernel's own copy sites (memcpy_gqa_*) in
-# the recording. on, off-backend-fallback, off (spans run, no kernel copies),
-# unknown (nothing observable: a silent log is the normal case), or n/a on CPU.
+# the recording, or its launches inside the prefill-window device region
+# (juno.DeviceCompute site gqa_attention_region), which copy nothing. on,
+# off-backend-fallback, off (spans run, no kernel evidence), unknown (nothing
+# observable: a silent log is the normal case), or n/a on CPU.
 gpu_attention_resolved_from_log() {
   local logf="$1" use_gpu="$2" jfr_json="${3:-}"
   local gqa_copies
@@ -1495,7 +1504,9 @@ gpu_attention_resolved_from_log() {
     echo "off-backend-fallback"
   elif [[ "${DEVICE_SPANS:-0}" == "1" && -f "$jfr_json" ]]; then
     gqa_copies="$(jq -r '[.models[0].metrics // {} | to_entries[]
-                          | select(.key | test("^juno\\.DeviceStaging\\.site\\.memcpy_gqa_.*\\.count$")) | .value]
+                          | select(.key | test("^juno\\.DeviceStaging\\.site\\.memcpy_gqa_.*\\.count$")
+                                          or test("^juno\\.DeviceCompute\\.site\\.gqa_attention_region\\..*\\.count$"))
+                          | .value]
                          | add // 0' "$jfr_json" 2>/dev/null || echo 0)"
     if awk -v n="$gqa_copies" 'BEGIN { exit !(n > 0) }'; then
       echo "on"

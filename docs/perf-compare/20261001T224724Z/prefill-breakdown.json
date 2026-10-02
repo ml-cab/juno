@@ -1,0 +1,570 @@
+{
+  "mistral-7b-instruct-v0.1-q4_k_m": {
+    "repetitions": 3,
+    "forward_pass_ms": 7791.110103,
+    "terms": {
+      "gemm_compute": {
+        "ms": 1370.727456,
+        "pct": 17.593480747656173
+      },
+      "weight_dequant": {
+        "ms": 214.18192,
+        "pct": 2.749055233060156
+      },
+      "matmul_staging": {
+        "ms": 393.168576,
+        "pct": 5.046374275324498
+      },
+      "host_fp16_pack": {
+        "ms": 288.318471,
+        "pct": 3.7006083496237814
+      },
+      "projection_dispatch_and_copy_out": {
+        "ms": 895.701229,
+        "pct": 11.496451945340965
+      },
+      "attention_compute": {
+        "ms": 807.524311,
+        "pct": 10.364688732727052
+      },
+      "attention_copies": {
+        "ms": 97.395647,
+        "pct": 1.2500869030524595
+      },
+      "attention_host": {
+        "ms": 139.79408499999985,
+        "pct": 1.7942768508196483
+      },
+      "kv_mirror_copies": {
+        "ms": 219.90503999999999,
+        "pct": 2.822512287630547
+      },
+      "kv_host_write": {
+        "ms": 63.96315800000002,
+        "pct": 0.8209761786753692
+      },
+      "swiglu_host": {
+        "ms": 2901.992553,
+        "pct": 37.24748482097019
+      },
+      "rmsnorm_host": {
+        "ms": 202.168752,
+        "pct": 2.5948645228637455
+      },
+      "rope_host": {
+        "ms": 72.910462,
+        "pct": 0.9358160908536707
+      },
+      "residual_add_host": {
+        "ms": 88.67752,
+        "pct": 1.13818851007964
+      },
+      "bias_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "embed": {
+        "ms": 1.624475,
+        "pct": 0.020850366360173615
+      },
+      "lm_head": {
+        "ms": 1.303073,
+        "pct": 0.016725126237123078
+      },
+      "residue": {
+        "ms": 39.64349800000036,
+        "pct": 0.5088299032603257
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "cudamemcpyasync_xh_h2d_q4k_batched_gemm",
+        "ms": 123.541248
+      },
+      {
+        "site": "cudamemcpyasync_y_d2h_q4k_batched_gemm",
+        "ms": 269.627328
+      },
+      {
+        "site": "memcpy_gqa_kptrs_h2d",
+        "ms": 2.914288
+      },
+      {
+        "site": "memcpy_gqa_outbatch_d2h",
+        "ms": 63.513477
+      },
+      {
+        "site": "memcpy_gqa_qbatch_h2d",
+        "ms": 41.656747
+      },
+      {
+        "site": "memcpy_gqa_seqlens_h2d",
+        "ms": 0.21344
+      },
+      {
+        "site": "memcpy_gqa_vptrs_h2d",
+        "ms": 1.46272
+      },
+      {
+        "site": "memcpy_k_row_h2d",
+        "ms": 114.967424
+      },
+      {
+        "site": "memcpy_v_row_h2d",
+        "ms": 104.937616
+      },
+      {
+        "site": "pack_fp16_host",
+        "ms": 281.732843
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 1344.452352
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 781.735128
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      }
+    ]
+  },
+  "Phi-3.5-mini-instruct-Q4_K_M": {
+    "repetitions": 3,
+    "forward_pass_ms": 5920.235999,
+    "terms": {
+      "gemm_compute": {
+        "ms": 1164.233697,
+        "pct": 19.66532579438815
+      },
+      "weight_dequant": {
+        "ms": 106.79088,
+        "pct": 1.8038280909416158
+      },
+      "matmul_staging": {
+        "ms": 253.7336,
+        "pct": 4.285869685648658
+      },
+      "host_fp16_pack": {
+        "ms": 116.787989,
+        "pct": 1.9726914437148604
+      },
+      "projection_dispatch_and_copy_out": {
+        "ms": 723.1978950000001,
+        "pct": 12.21569368386931
+      },
+      "attention_compute": {
+        "ms": 816.47778,
+        "pct": 13.791304605727086
+      },
+      "attention_copies": {
+        "ms": 77.69889100000002,
+        "pct": 1.312428947310957
+      },
+      "attention_host": {
+        "ms": 113.00200400000008,
+        "pct": 1.9087415437338562
+      },
+      "kv_mirror_copies": {
+        "ms": 276.41968,
+        "pct": 4.669065220485986
+      },
+      "kv_host_write": {
+        "ms": 168.272695,
+        "pct": 2.84233086364164
+      },
+      "swiglu_host": {
+        "ms": 1658.485559,
+        "pct": 28.01384200359814
+      },
+      "rmsnorm_host": {
+        "ms": 149.495196,
+        "pct": 2.525156024612052
+      },
+      "rope_host": {
+        "ms": 166.767611,
+        "pct": 2.816908160893739
+      },
+      "residual_add_host": {
+        "ms": 60.61762,
+        "pct": 1.0239054661037001
+      },
+      "bias_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "embed": {
+        "ms": 0.942626,
+        "pct": 0.015922101756741133
+      },
+      "lm_head": {
+        "ms": 1.472641,
+        "pct": 0.02487470094517764
+      },
+      "residue": {
+        "ms": 76.05249800000001,
+        "pct": 1.2846193633639977
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "cudamemcpyasync_xh_h2d_q4k_batched_gemm",
+        "ms": 55.212672
+      },
+      {
+        "site": "cudamemcpyasync_y_d2h_q4k_batched_gemm",
+        "ms": 198.147072
+      },
+      {
+        "site": "memcpy_gqa_kptrs_h2d",
+        "ms": 0.401168
+      },
+      {
+        "site": "memcpy_gqa_outbatch_d2h",
+        "ms": 41.849539
+      },
+      {
+        "site": "memcpy_gqa_qbatch_h2d",
+        "ms": 29.189212
+      },
+      {
+        "site": "memcpy_gqa_seqlens_h2d",
+        "ms": 0.7688
+      },
+      {
+        "site": "memcpy_gqa_vptrs_h2d",
+        "ms": 0.779968
+      },
+      {
+        "site": "memcpy_k_row_h2d",
+        "ms": 139.31512
+      },
+      {
+        "site": "memcpy_v_row_h2d",
+        "ms": 113.86304
+      },
+      {
+        "site": "pack_fp16_host",
+        "ms": 114.499423
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 1120.285148
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 783.412341
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      }
+    ]
+  },
+  "qwen2.5-3b-instruct-q4_k_m": {
+    "repetitions": 3,
+    "forward_pass_ms": 5616.993746,
+    "terms": {
+      "gemm_compute": {
+        "ms": 621.583744,
+        "pct": 11.066128468500525
+      },
+      "weight_dequant": {
+        "ms": 103.102464,
+        "pct": 1.8355452874310534
+      },
+      "matmul_staging": {
+        "ms": 287.418272,
+        "pct": 5.116941285624141
+      },
+      "host_fp16_pack": {
+        "ms": 182.235746,
+        "pct": 3.2443644098727114
+      },
+      "projection_dispatch_and_copy_out": {
+        "ms": 743.8241169999998,
+        "pct": 13.242388199732202
+      },
+      "attention_compute": {
+        "ms": 493.164293,
+        "pct": 8.779861885215636
+      },
+      "attention_copies": {
+        "ms": 55.071156,
+        "pct": 0.9804382644936632
+      },
+      "attention_host": {
+        "ms": 89.41157799999999,
+        "pct": 1.5918048344574387
+      },
+      "kv_mirror_copies": {
+        "ms": 232.398636,
+        "pct": 4.137420237747226
+      },
+      "kv_host_write": {
+        "ms": 24.181797000000017,
+        "pct": 0.43051137482964924
+      },
+      "swiglu_host": {
+        "ms": 2545.174349,
+        "pct": 45.31203814874249
+      },
+      "rmsnorm_host": {
+        "ms": 115.31411,
+        "pct": 2.0529506567835867
+      },
+      "rope_host": {
+        "ms": 35.171091,
+        "pct": 0.6261550678251369
+      },
+      "residual_add_host": {
+        "ms": 42.828147,
+        "pct": 0.762474535965061
+      },
+      "bias_add_host": {
+        "ms": 20.003352,
+        "pct": 0.35612202727205955
+      },
+      "embed": {
+        "ms": 0.637984,
+        "pct": 0.011358104154100655
+      },
+      "lm_head": {
+        "ms": 2.469456,
+        "pct": 0.04396401547996311
+      },
+      "residue": {
+        "ms": 23.031404000000293,
+        "pct": 0.41003079300918793
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "cudamemcpyasync_xh_h2d_q4k_batched_gemm",
+        "ms": 84.348416
+      },
+      {
+        "site": "cudamemcpyasync_y_d2h_q4k_batched_gemm",
+        "ms": 202.97536
+      },
+      {
+        "site": "memcpy_gqa_kptrs_h2d",
+        "ms": 0.54306
+      },
+      {
+        "site": "memcpy_gqa_outbatch_d2h",
+        "ms": 31.527182
+      },
+      {
+        "site": "memcpy_gqa_qbatch_h2d",
+        "ms": 21.176848
+      },
+      {
+        "site": "memcpy_gqa_seqlens_h2d",
+        "ms": 0.94032
+      },
+      {
+        "site": "memcpy_gqa_vptrs_h2d",
+        "ms": 0.883746
+      },
+      {
+        "site": "memcpy_k_row_h2d",
+        "ms": 118.969299
+      },
+      {
+        "site": "memcpy_v_row_h2d",
+        "ms": 124.591405
+      },
+      {
+        "site": "pack_fp16_host",
+        "ms": 182.235746
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 621.583744
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 498.222625
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      }
+    ]
+  },
+  "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+    "repetitions": 3,
+    "forward_pass_ms": 2193.674135,
+    "terms": {
+      "gemm_compute": {
+        "ms": 182.427296,
+        "pct": 8.316061765481864
+      },
+      "weight_dequant": {
+        "ms": 41.399584,
+        "pct": 1.8872257888932074
+      },
+      "matmul_staging": {
+        "ms": 119.784192,
+        "pct": 5.460436903040751
+      },
+      "host_fp16_pack": {
+        "ms": 80.86842,
+        "pct": 3.6864372292013186
+      },
+      "projection_dispatch_and_copy_out": {
+        "ms": 270.021439,
+        "pct": 12.30909526131601
+      },
+      "attention_compute": {
+        "ms": 291.947458,
+        "pct": 13.308606476321513
+      },
+      "attention_copies": {
+        "ms": 32.048061,
+        "pct": 1.4609307959041964
+      },
+      "attention_host": {
+        "ms": 55.09301400000001,
+        "pct": 2.51144931332292
+      },
+      "kv_mirror_copies": {
+        "ms": 161.439326,
+        "pct": 7.359312097646626
+      },
+      "kv_host_write": {
+        "ms": 24.994898000000006,
+        "pct": 1.1394079731901476
+      },
+      "swiglu_host": {
+        "ms": 789.964178,
+        "pct": 36.01100844451539
+      },
+      "rmsnorm_host": {
+        "ms": 66.760727,
+        "pct": 3.04332926822789
+      },
+      "rope_host": {
+        "ms": 23.386569,
+        "pct": 1.0660912952780015
+      },
+      "residual_add_host": {
+        "ms": 24.465321,
+        "pct": 1.1152668762263542
+      },
+      "bias_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "embed": {
+        "ms": 0.635398,
+        "pct": 0.02896501307383104
+      },
+      "lm_head": {
+        "ms": 0.719902,
+        "pct": 0.032817180478813456
+      },
+      "residue": {
+        "ms": 16.904221000000234,
+        "pct": 0.7705894294094976
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "cudamemcpyasync_xh_h2d_q4k_batched_gemm",
+        "ms": 41.311104
+      },
+      {
+        "site": "cudamemcpyasync_y_d2h_q4k_batched_gemm",
+        "ms": 78.473088
+      },
+      {
+        "site": "memcpy_gqa_kptrs_h2d",
+        "ms": 0.307285
+      },
+      {
+        "site": "memcpy_gqa_outbatch_d2h",
+        "ms": 20.499402
+      },
+      {
+        "site": "memcpy_gqa_qbatch_h2d",
+        "ms": 13.696928
+      },
+      {
+        "site": "memcpy_gqa_seqlens_h2d",
+        "ms": 0.182842
+      },
+      {
+        "site": "memcpy_gqa_vptrs_h2d",
+        "ms": 1.090892
+      },
+      {
+        "site": "memcpy_k_row_h2d",
+        "ms": 75.523804
+      },
+      {
+        "site": "memcpy_v_row_h2d",
+        "ms": 85.915522
+      },
+      {
+        "site": "pack_fp16_host",
+        "ms": 82.557718
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 183.189408
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 298.722728
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      }
+    ]
+  }
+}

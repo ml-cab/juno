@@ -21,6 +21,7 @@ import java.lang.foreign.MemorySegment;
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * A {@code cuLaunchKernel} parameter block allocated once and rewritten in place,
@@ -67,6 +68,11 @@ final class KernelParams {
 
 	KernelParams i32(int index, int value) {
 		slots.set(JAVA_INT, offset(index), value);
+		return this;
+	}
+
+	KernelParams i64(int index, long value) {
+		slots.set(JAVA_LONG, offset(index), value);
 		return this;
 	}
 

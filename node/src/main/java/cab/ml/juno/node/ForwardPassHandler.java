@@ -64,6 +64,16 @@ public interface ForwardPassHandler {
 	}
 
 	/**
+	 * Whether this handler runs its prefill windows through the prefill-window device
+	 * region: the layer's norms, matmuls, SwiGLU and residual adds on the GPU with
+	 * the activations kept on the device between them. A handler that does not
+	 * override this runs its window on the host between device matmuls, or on the CPU.
+	 */
+	default boolean prefillRegionActive() {
+		return false;
+	}
+
+	/**
 	 * RMS-normalized final hidden state at the current position, immediately before
 	 * the LM head. Only the shard that owns the output projection returns a value;
 	 * intermediate shards return empty.

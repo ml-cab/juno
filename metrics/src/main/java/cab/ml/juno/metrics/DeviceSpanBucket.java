@@ -63,9 +63,13 @@ final class DeviceSpanBucket {
     static final String DEVICE_COMPUTE = "juno.DeviceCompute";
 
     private static final List<String> DIRECTIONS = List.of("H2D", "D2H", "D2D", "HOST");
-    /** Every kernel site the engine times today; always written, so a zero is visible. */
+    /**
+     * Every kernel site the engine times today; always written, so a zero is visible. The
+     * matmul and attention sites first, then the prefill-window device region's operations.
+     */
     private static final List<String> COMPUTE_SITES = List.of("gemm_half", "gemv_half_batched", "gemm_fp32",
-            "mmq_packed", "gqa_attention");
+            "mmq_packed", "gqa_attention", "rms_norm", "convert_fp16", "bias_add", "rope", "kv_append",
+            "gqa_attention_region", "swiglu", "residual_add");
     private static final List<String> PHASES = List.of("prefill", "decode", "other");
     private static final List<String> TIMINGS = List.of("device", "host");
     /** Every format the engine dequantizes today; always written, so a zero is visible. */

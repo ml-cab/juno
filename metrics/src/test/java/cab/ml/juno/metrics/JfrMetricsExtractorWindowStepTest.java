@@ -42,7 +42,8 @@ import jdk.jfr.StackTrace;
  */
 class JfrMetricsExtractorWindowStepTest {
 
-	private static final List<String> STEPS = List.of("embed", "projection", "bias_add", "kv_write", "lm_head");
+	private static final List<String> STEPS = List.of("embed", "projection", "bias_add", "kv_write", "lm_head",
+			"device_layer");
 
 	@TempDir
 	Path tmp;

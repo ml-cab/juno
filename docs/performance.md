@@ -600,6 +600,42 @@ buffers.
 ./scripts/performance-tests/compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32
 ```
 
+## Prefill window on the device
+
+**Breakdown run:** [`perf-compare/20261002T014419Z/`](perf-compare/20261002T014419Z/) (`n_prompt=512`,
+`--device-spans`, clocks not pinned; a breakdown reports shares within one run)
+
+On CUDA a prefill window of more than eight positions runs each layer as one device region (see
+`docs/howto.md`, "Prefill windows on the device"). Before it, a 512-token window spent 28% to 45% of its
+time in single-threaded host SwiGLU and another 3.5% to 6.3% in host norms, RoPE and residual adds, and
+moved the gate and up projections to the host and back for every layer. The per-term breakdown before
+and after, share of prefill:
+
+| Term | TinyLlama | Qwen2.5-3B | Phi-3.5-mini | Mistral 7B |
+|---|---|---|---|---|
+| Prefill window, before / after (ms) | 2,194 / 556 | 5,617 / 1,260 | 5,920 / 3,121 | 7,791 / 2,741 |
+| Host SwiGLU, norms, RoPE, residual adds | 41.2% / 0% | 48.8% / 0% | 34.3% / 5.3% (RoPE) | 41.8% / 0% |
+| GEMM compute | 8.3% / 29.8% | 11.1% / 46.5% | 19.7% / 36.4% | 17.6% / 50.8% |
+| Attention kernel | 13.3% / 46.3% | 8.8% / 33.9% | 13.8% / 25.9% | 10.4% / 30.2% |
+| Device elementwise kernels | - / 5.1% | - / 4.5% | - / 1.4% | - / 2.9% |
+| Residue | 0.8% / 2.2% | 0.4% / 1.5% | 1.3% / 2.8% | 0.5% / 1.1% |
+
+Bytes crossing the bus per window fall from 1,405 to 207 MB on TinyLlama, 3,288 to 339 MB on Qwen2.5-3B
+and 4,689 to 670 MB on Mistral 7B. On Phi-3.5-mini they fall from 2,645 to 1,809 MB: its LongRoPE and
+attention stay on the host, so Q, K and V still come back every layer. The attention cache is written
+without a copy on the LLaMA family and Qwen2.5 (cast in place on the device) and with one copy per tensor
+per layer on Phi-3.5-mini, where it was one per position.
+
+What is left on the region models is the matmuls and attention: the FP16 GEMM over weights dequantized
+per window, and an attention kernel whose cost grows with the context it attends over.
+
+Logits are bit-identical to the host window path on all four architectures, and greedy output over 64
+tokens matched on every test prompt on TinyLlama and Mistral 7B. Against the build before the region,
+same-hour interleaved A/B with pinned clocks, median of three, `n_prompt=512`
+([`perf-compare/20261002T030500Z-tier01b-step6-region-ab/`](perf-compare/20261002T030500Z-tier01b-step6-region-ab/)):
+TinyLlama prefill 240.0 to 935.8 t/s (3.90x), Mistral 7B 68.4 to 191.8 t/s (2.81x); generation 1.023x and
+1.003x.
+
 ## Prefill GPU-residency fixes: pinned staging memory + adaptive chunk sizing
 
 **Run:** [`perf-compare/20260918T153900Z-prefill-adaptive/`](perf-compare/20260918T153900Z-prefill-adaptive/)

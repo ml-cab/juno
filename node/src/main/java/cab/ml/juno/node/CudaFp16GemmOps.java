@@ -65,6 +65,19 @@ final class CudaFp16GemmOps {
      */
     void gemmHalf(MemorySegment dA, MemorySegment dXh, MemorySegment dY,
                   int rows, int cols, int batch) {
+        gemmHalf(dA, dXh, dY, rows, cols, batch, rows);
+    }
+
+    /**
+     * As {@link #gemmHalf(MemorySegment, MemorySegment, MemorySegment, int, int, int)},
+     * with output column {@code b} starting {@code ldc} floats after column
+     * {@code b - 1}: {@code ldc > rows} writes the result into the first {@code rows}
+     * of each {@code ldc}-wide output row and leaves the rest untouched, so two
+     * projections can fill one activation side by side.
+     */
+    void gemmHalf(MemorySegment dA, MemorySegment dXh, MemorySegment dY,
+                  int rows, int cols, int batch, int ldc) {
+        if (ldc < rows) throw new IllegalArgumentException("ldc " + ldc + " < rows " + rows);
         try (Arena scalars = Arena.ofConfined()) {
             MemorySegment alpha = scalars.allocateFrom(JAVA_FLOAT, 1.0f);
             MemorySegment beta  = scalars.allocateFrom(JAVA_FLOAT, 0.0f);
@@ -79,7 +92,7 @@ final class CudaFp16GemmOps {
                     dA, CudaBindings.CUDA_R_16F, cols,
                     dXh, CudaBindings.CUDA_R_16F, cols,
                     beta,
-                    dY, CudaBindings.CUDA_R_32F, rows,
+                    dY, CudaBindings.CUDA_R_32F, ldc,
                     CudaBindings.CUBLAS_COMPUTE_32F, CudaBindings.CUBLAS_GEMM_DEFAULT),
                 "cublasGemmEx");
         }

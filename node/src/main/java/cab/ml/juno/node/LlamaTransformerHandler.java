@@ -176,6 +176,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	private final ResidentQkvPath residentQkv;
 
+	/**
+	 * The prefill-window device region: a prefill window's norms, matmuls, SwiGLU,
+	 * residual adds, RoPE and (with {@code --gpu-attention}) attention on the device,
+	 * with the activations kept there between them. Non-null on a CUDA backend unless
+	 * turned off ({@link PrefillWindowRegion#ENV_PROPERTY}); null after
+	 * {@link #releaseGpuResources}.
+	 */
+	private PrefillWindowRegion prefillRegion;
+
 	// ── KV cache adapter (optional — null = dev/stub mode, no eviction) ──────
 	// When non-null, every completed forward pass flushes key/value data into
 	// the KVCacheManager (GPU + CPU tiers). Eviction under real memory pressure
@@ -303,6 +312,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.gqaGpu = null;
 		this.rmsNormGpu = null;
 		this.residentQkv = null;
+		this.prefillRegion = null;
 		log.info(kvLayout.policySummary());
 	}
 
@@ -415,6 +425,40 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.gqaGpu = gqa;
 		this.rmsNormGpu = rmsNorm;
 		this.residentQkv = GpuResidencyOptions.fromEnv().requested() ? openResidentQkv(backend, L) : null;
+		this.prefillRegion = openPrefillRegion(backend, L, gqa != null);
+	}
+
+	/**
+	 * Builds the prefill-window device region over every layer whose seven
+	 * projections are on the device, or returns null (the host window path) when the
+	 * backend is not CUDA, the region is turned off, or no layer qualifies. RoPE runs
+	 * on the device in the model's own pairing, and attention moves into the region
+	 * whenever the attention kernel is active.
+	 */
+	private PrefillWindowRegion openPrefillRegion(MatVec backend, int L, boolean attentionKernel) {
+		if (!(backend instanceof CudaMatVec))
+			return null;
+		PrefillWindowRegion.Layer[] layers = new PrefillWindowRegion.Layer[L];
+		for (int li = 0; li < L; li++) {
+			layers[li] = PrefillWindowRegion.Layer.separate(
+					PrefillWindowRegion.Matrix.of(wqQ4Dev, wqDev, li), PrefillWindowRegion.Matrix.of(wkQ4Dev, wkDev, li),
+					PrefillWindowRegion.Matrix.of(wvQ4Dev, wvDev, li), PrefillWindowRegion.Matrix.of(woQ4Dev, woDev, li),
+					PrefillWindowRegion.Matrix.of(wGateQ4Dev, wGateDev, li),
+					PrefillWindowRegion.Matrix.of(wUpQ4Dev, wUpDev, li),
+					PrefillWindowRegion.Matrix.of(wDownQ4Dev, wDownDev, li), attnNorm[li], ffnNorm[li],
+					bq != null ? bq[li] : null, bk != null ? bk[li] : null, bv != null ? bv[li] : null);
+		}
+		PrefillWindowRegion.Shape shape = new PrefillWindowRegion.Shape(cfg.hiddenDim(),
+				cfg.numHeads() * cfg.headDim(), cfg.kvDim(), cfg.intermediateSize(), cfg.numHeads(),
+				cfg.numKvHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.rmsNormEps());
+		return PrefillWindowRegion.create("Llama", backend, shape, layers, ropePairing, cfg.ropeTheta(),
+				attentionKernel);
+	}
+
+	/** Whether prefill windows run through the prefill-window device region. */
+	@Override
+	public boolean prefillRegionActive() {
+		return prefillRegion != null;
 	}
 
 	/**
@@ -476,6 +520,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	/** Guards {@link #warnKvMirrorFellBackOnce} so the per-request path logs once. */
 	private final java.util.concurrent.atomic.AtomicBoolean kvMirrorFallbackWarned =
+			new java.util.concurrent.atomic.AtomicBoolean();
+
+	/** Guards {@link #warnPrefillRegionFellBackOnce} so the hot path logs once. */
+	private final java.util.concurrent.atomic.AtomicBoolean prefillRegionFallbackWarned =
 			new java.util.concurrent.atomic.AtomicBoolean();
 
 	/** Guards {@link #warnDeviceMatmulFellBackOnce} so the hot path logs once, not per matmul. */
@@ -848,6 +896,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public void releaseGpuResources() {
+		// The region holds references to the device matrices below; close it first.
+		if (prefillRegion != null)
+			prefillRegion.close();
+		prefillRegion = null;
 		closeDeviceHalfMatrixArray(wqDev);
 		closeDeviceHalfMatrixArray(wkDev);
 		closeDeviceHalfMatrixArray(wvDev);
@@ -1525,15 +1577,21 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		log.info("[prefill] runLayersBatch START requestId=" + requestId + " W=" + W + " L=" + L
 				+ " startPos=" + startPos + " lastPos=" + lastPos + " kvDim=" + kvDim);
 		long layersStart = System.nanoTime();
-		for (int li = 0; li < L; li++) {
-			long layerStart = System.nanoTime();
-			DeviceKvCache dev = (devCache != null && layerGpuResident(li) && devCache[li].live())
-					? devCache[li]
-					: null;
-			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws, dev);
-			double layerMs = (System.nanoTime() - layerStart) / 1_000_000.0;
-			log.info("[prefill] layer " + (li + 1) + "/" + L + " done in " + String.format("%.1f", layerMs)
-					+ "ms  requestId=" + requestId);
+		PrefillWindowRegion.Window win = openPrefillWindow(W);
+		try {
+			for (int li = 0; li < L; li++) {
+				long layerStart = System.nanoTime();
+				DeviceKvCache dev = (devCache != null && layerGpuResident(li) && devCache[li].live())
+						? devCache[li]
+						: null;
+				x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws, dev, win);
+				double layerMs = (System.nanoTime() - layerStart) / 1_000_000.0;
+				log.info("[prefill] layer " + (li + 1) + "/" + L + " done in " + String.format("%.1f", layerMs)
+						+ "ms  requestId=" + requestId);
+			}
+		} finally {
+			if (win != null)
+				win.close();
 		}
 		log.info("[prefill] runLayersBatch DONE requestId=" + requestId + " totalMs="
 				+ String.format("%.1f", (System.nanoTime() - layersStart) / 1_000_000.0));
@@ -1591,7 +1649,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * allocation on the CPU Q4_K / Q8_0 path.
 	 */
 	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache deviceKv) {
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache deviceKv,
+			PrefillWindowRegion.Window win) {
+		if (win != null && prefillRegion != null && prefillRegion.eligible(li))
+			return transformerLayerOnDevice(x, li, startPos, kCacheLayer, vCacheLayer, ws, deviceKv, win);
 		int W    = x.length;
 		int H    = cfg.hiddenDim();
 		int I    = cfg.intermediateSize();
@@ -1635,34 +1696,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		ropeEvt.commit();
 
 		WindowStepEvent kvEvt = WindowStepEvent.start();
+		// The CPU tensors are written first and unconditionally: the device cache
+		// is a mirror of them, never the only copy. That is what makes dropping
+		// the mirror safe at any point -- no KV history is lost with it.
 		for (int b = 0; b < W; b++) {
-			// The CPU tensors are written first and unconditionally: the device cache
-			// is a mirror of them, never the only copy. That is what makes dropping
-			// the mirror below safe at any point -- no KV history is lost with it.
 			kCacheLayer.writeToken(startPos + b, ws.k[b]);
 			vCacheLayer.writeToken(startPos + b, ws.v[b]);
-			if (deviceKv != null) {
-				try {
-					deviceKv.appendToken(startPos + b, ws.k[b], ws.v[b], W);
-				} catch (IllegalStateException ex) {
-					if (!GpuLayerOffload.isVramOom(ex))
-						throw ex;
-					// The mirror grows as a conversation lengthens, and growth cannot be
-					// reserved for up front without pinning memory a short conversation
-					// would never use. So it is handled where it happens: give up the
-					// mirror and let attention run from the CPU tensors above.
-					//
-					// Closing it is what retires it: the array stays mapped under this
-					// request, so the next token finds a closed mirror rather than a
-					// freshly allocated empty one, and this layer stays on the CPU for
-					// the rest of the request.
-					warnKvMirrorGrowthFellBackOnce();
-					deviceKv.close();
-					deviceKv = null;
-				}
-			}
 		}
-
+		if (deviceKv != null)
+			deviceKv = appendKvWindow(deviceKv, startPos, ws.k, ws.v, W);
 		kvEvt.end(WindowStepEvent.KV_WRITE, W, startPos);
 
 		long t2 = System.nanoTime(); // rope + cache write done
@@ -1757,6 +1799,148 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				+ ms(t1, t2) + " attention(gqa,W=" + W + ")=" + ms(t2, t3) + " woProj+ffn+residuals=" + ms(t3, t4));
 
 		return x;
+	}
+
+	/**
+	 * Copies a window's K and V rows into the device mirror, one transfer per tensor,
+	 * after the host KV tensors already hold them. Returns the mirror, or null once it
+	 * has been retired for running out of device memory: the mirror grows as a
+	 * conversation lengthens, and growth cannot be reserved for up front without
+	 * pinning memory a short conversation would never use, so it is handled where it
+	 * happens. Closing it is what retires it: the array stays mapped under the request,
+	 * so the next token finds a closed mirror rather than a freshly allocated empty one,
+	 * and this layer's attention stays on the CPU for the rest of the request.
+	 */
+	private DeviceKvCache appendKvWindow(DeviceKvCache deviceKv, int startPos, float[][] k, float[][] v, int W) {
+		try {
+			deviceKv.appendWindow(startPos, k, v, W);
+			return deviceKv;
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			warnKvMirrorGrowthFellBackOnce();
+			deviceKv.close();
+			return null;
+		}
+	}
+
+	/** Takes a prefill-window region window for {@code W} rows, or null for the host path. */
+	private PrefillWindowRegion.Window openPrefillWindow(int W) {
+		PrefillWindowRegion region = prefillRegion;
+		if (region == null || W <= PrefillWindowRegion.MAX_HOST_WINDOW)
+			return null;
+		try {
+			return region.open(W);
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			warnPrefillRegionFellBackOnce();
+			return null;
+		}
+	}
+
+	/**
+	 * {@link #transformerLayerBatch} through the prefill-window device region. The
+	 * whole layer runs on the device when attention can (see
+	 * {@link PrefillWindowRegion.Window#runLayer}); otherwise the region returns Q, K
+	 * and V, attention runs here exactly as on the host path, and the region finishes
+	 * the layer. The host KV tensors are written from the region's K and V rows before
+	 * the device mirror's watermark covers the window, so the mirror stays a copy of
+	 * them. Running out of device memory anywhere in the region redoes the layer on
+	 * the host path, from the host residual, which the region has not touched.
+	 */
+	private float[][] transformerLayerOnDevice(float[][] x, int li, int startPos, SessionKvTensor kCacheLayer,
+			SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache deviceKv, PrefillWindowRegion.Window win) {
+		int W = x.length;
+		WindowStepEvent devEvt = WindowStepEvent.start();
+		boolean whole;
+		try {
+			whole = win.runLayer(li, x, startPos, deviceKv, ws.q, ws.k, ws.v);
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			warnPrefillRegionFellBackOnce();
+			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, deviceKv, null);
+		}
+		devEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
+
+		if (!whole && !prefillRegion.ropeOnDevice()) {
+			RopeEvent ropeEvt = new RopeEvent();
+			ropeEvt.begin();
+			for (int b = 0; b < W; b++) {
+				rope(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
+				rope(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
+			}
+			ropeEvt.windowSize = W;
+			ropeEvt.startPosition = startPos;
+			ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
+			ropeEvt.commit();
+		}
+
+		WindowStepEvent kvEvt = WindowStepEvent.start();
+		for (int b = 0; b < W; b++) {
+			kCacheLayer.writeToken(startPos + b, ws.k[b]);
+			vCacheLayer.writeToken(startPos + b, ws.v[b]);
+		}
+		if (whole)
+			deviceKv.markWritten(startPos, W);
+		else if (deviceKv != null && deviceKv.live())
+			deviceKv = appendKvWindow(deviceKv, startPos, ws.k, ws.v, W);
+		kvEvt.end(WindowStepEvent.KV_WRITE, W, startPos);
+		if (whole)
+			return x;
+
+		AttentionEvent attnEvt = new AttentionEvent();
+		attnEvt.begin();
+		boolean gpuAttnDispatched = false;
+		if (deviceKv != null && deviceKv.readableThrough(startPos + W)) {
+			int[] seqLens = new int[W];
+			DeviceKvCache[] kvPerB = new DeviceKvCache[W];
+			for (int b = 0; b < W; b++) {
+				seqLens[b] = startPos + b + 1;
+				kvPerB[b] = deviceKv;
+			}
+			try {
+				gpuAttnDispatched = gqaGpu.attendBatched(kvPerB, ws.q, seqLens, ws.attnOut,
+						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+			} catch (IllegalStateException ex) {
+				if (!GpuLayerOffload.isVramOom(ex))
+					throw ex;
+				warnGpuAttentionFellBackOnce();
+				deviceKv.close();
+				gpuAttnDispatched = false;
+			}
+		}
+		if (!gpuAttnDispatched) {
+			for (int b = 0; b < W; b++) {
+				int seqLen = startPos + b + 1;
+				float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
+				float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
+				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+			}
+		}
+		attnEvt.windowSize = W;
+		attnEvt.startPosition = startPos;
+		attnEvt.contextLength = startPos + W;
+		attnEvt.commit();
+
+		WindowStepEvent finishEvt = WindowStepEvent.start();
+		try {
+			win.finishLayer(li, ws.attnOut, x);
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			warnPrefillRegionFellBackOnce();
+			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, deviceKv, null);
+		}
+		finishEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
+		return x;
+	}
+
+	private void warnPrefillRegionFellBackOnce() {
+		if (prefillRegionFallbackWarned.compareAndSet(false, true))
+			log.warning("Llama: out of device memory in the prefill-window device region - this window's layer runs"
+					+ " on the host path between device matmuls. Lower --gpu-layers to leave the region room.");
 	}
 
 	private static double ms(long fromNanos, long toNanos) {

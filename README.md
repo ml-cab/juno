@@ -76,6 +76,14 @@ Features:
   `--model-draft` (must share the target's vocabulary). `--local` single-request
   decoding only for now. See `docs/howto.md`.
 
+### GPU prefill
+
+- On CUDA, a prefill window runs each transformer layer on the device: norms,
+  matmuls, SwiGLU, residual adds, and on the LLaMA family and Qwen2 also RoPE
+  and attention, with the activations kept on the GPU between them. The logits
+  are bit-identical to the host window path. `-DJUNO_PREFILL_REGION=off`
+  compares against it. See `docs/howto.md`.
+
 ### Vision (image-to-text)
 
 - `POST /v1/vision/chat` (blocking + SSE), registered automatically on

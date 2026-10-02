@@ -8,18 +8,25 @@
 #
 #   top-level spans inside the window   nested terms subtracted from their parent
 #   ---------------------------------   -----------------------------------------
-#   juno.WindowStep projection          GEMM compute (juno.DeviceCompute, every site
-#                                         but gqa_attention), device weight dequant,
-#                                         matmul staging copies, host FP16 packing;
-#                                         what is left is dispatch and copy-out
-#   juno.WindowStep kv_write            KV mirror row copies (memcpy_k_row/v_row);
+#   juno.WindowStep projection and      GEMM compute (juno.DeviceCompute gemm sites),
+#   juno.WindowStep device_layer          device weight dequant, matmul and region
+#   (the prefill-window device region)    staging copies, host FP16 packing, the
+#                                         region's elementwise kernels (rms_norm,
+#                                         convert_fp16, bias_add, rope, kv_append,
+#                                         swiglu, residual_add) and its attention
+#                                         (gqa_attention_region); what is left is the
+#                                         host's side of both: dispatch, copy-out and
+#                                         waiting (projection_and_region_host)
+#   juno.WindowStep kv_write            KV mirror copies (memcpy_k/v_row, k/v_window);
 #                                         what is left is the host KV write
 #   juno.Attention                      gqa_attention compute and gqa_* copies
 #   juno.RmsNorm, Rope, ResidualAdd, SwiGlu, WindowStep embed, bias_add, lm_head
 #
 # residue = ForwardPass prefill - every top-level term. A staging site that is not a
-# gqa_*, a KV row or the host packing is counted under projection staging; the
-# per-site list in the JSON shows which sites that was.
+# gqa_*, a KV mirror copy or the host packing is counted under matmul staging; the
+# per-site list in the JSON shows which sites that was. The host part of the
+# projection spans was called projection_dispatch_and_copy_out before the device
+# region existed; breakdowns published before 2026-10-02 carry that key.
 #
 # Each term is the median over the run's repetitions. A model whose residue is above
 # --max-residue-pct (default 5) is flagged and the script exits 1.
@@ -46,14 +53,18 @@ def sites($ev; $suffix):
 . as $m
 | (sites("DeviceStaging"; "estimated_total_ms")) as $staging
 | (sites("DeviceCompute"; "total_ms")) as $compute
-| ([$staging[] | select(.site | test("k_row|v_row")) | .ms] | add // 0) as $kv_copy
+| "^(rms_norm|convert_fp16|bias_add|rope|kv_append|swiglu|residual_add)$" as $elementwise_sites
+| ([$staging[] | select(.site | test("k_row|v_row|k_window|v_window")) | .ms] | add // 0) as $kv_copy
 | ([$staging[] | select(.site | test("gqa")) | .ms] | add // 0) as $gqa_copy
 | ([$staging[] | select(.site == "pack_fp16_host") | .ms] | add // 0) as $pack
-| ([$staging[] | select(.site | test("k_row|v_row|gqa|pack_fp16_host") | not) | .ms] | add // 0) as $mm_copy
+| ([$staging[] | select(.site | test("k_row|v_row|k_window|v_window|gqa|pack_fp16_host") | not) | .ms] | add // 0) as $mm_copy
 | ([$compute[] | select(.site == "gqa_attention") | .ms] | add // 0) as $gqa_compute
-| ([$compute[] | select(.site != "gqa_attention") | .ms] | add // 0) as $gemm
+| ([$compute[] | select(.site == "gqa_attention_region") | .ms] | add // 0) as $region_attn
+| ([$compute[] | select(.site | test($elementwise_sites)) | .ms] | add // 0) as $elementwise
+| ([$compute[] | select(.site | test("^gqa_attention|" + $elementwise_sites) | not) | .ms] | add // 0) as $gemm
 | ($m | g("juno.WeightDequant.device.total_ms")) as $dequant
-| ($m | g("juno.WindowStep.projection.prefill.total_ms")) as $proj
+| ($m | g("juno.WindowStep.projection.prefill.total_ms")
+   + g("juno.WindowStep.device_layer.prefill.total_ms")) as $proj
 | ($m | g("juno.WindowStep.kv_write.prefill.total_ms")) as $kv
 | ($m | g("juno.Attention.prefill.total_ms")) as $attn
 | ($m | g("juno.ForwardPass.prefill.total_ms")) as $fp
@@ -64,7 +75,9 @@ def sites($ev; $suffix):
       weight_dequant: $dequant,
       matmul_staging: $mm_copy,
       host_fp16_pack: $pack,
-      projection_dispatch_and_copy_out: ($proj - $gemm - $dequant - $mm_copy - $pack),
+      projection_and_region_host: ($proj - $gemm - $dequant - $mm_copy - $pack - $elementwise - $region_attn),
+      device_elementwise: $elementwise,
+      region_attention_compute: $region_attn,
       attention_compute: $gqa_compute,
       attention_copies: $gqa_copy,
       attention_host: ($attn - $gqa_compute - $gqa_copy),
@@ -182,11 +195,37 @@ selftest() {
   expect "median window" 1000 "$(jq -r '.forward_pass_ms' <<<"$got")"
   expect "residue is the unspanned time" 70 "$(jq -r '.terms.residue.ms' <<<"$got")"
   expect "residue share" 7 "$(jq -r '.terms.residue.pct' <<<"$got")"
-  expect "projection keeps only its host part" 240 "$(jq -r '.terms.projection_dispatch_and_copy_out.ms' <<<"$got")"
+  expect "projection keeps only its host part" 240 "$(jq -r '.terms.projection_and_region_host.ms' <<<"$got")"
   expect "GEMM compute excludes attention" 100 "$(jq -r '.terms.gemm_compute.ms' <<<"$got")"
   expect "KV host write is kv_write minus mirror copies" 20 "$(jq -r '.terms.kv_host_write.ms' <<<"$got")"
   expect "attention host part" 40 "$(jq -r '.terms.attention_host.ms' <<<"$got")"
   expect "terms plus residue add up to the window" 1000 "$(jq -r '[.terms[].ms] | add' <<<"$got")"
+
+  # A device-region window: device_layer 900 holding 200 GEMM, 20 dequant, 30 activation copies,
+  # 50 elementwise kernels and 100 attention; kv_write 40 (host write only); embed 5, lm_head 15;
+  # 40 ms unspanned.
+  jq -n '{models: [{metrics: {
+    "juno.ForwardPass.prefill.total_ms": 1000,
+    "juno.WindowStep.device_layer.prefill.total_ms": 900,
+    "juno.WindowStep.kv_write.prefill.total_ms": 40,
+    "juno.WindowStep.embed.prefill.total_ms": 5,
+    "juno.WindowStep.lm_head.prefill.total_ms": 15,
+    "juno.WeightDequant.device.total_ms": 20,
+    "juno.DeviceCompute.site.gemm_half.prefill.total_ms": 200,
+    "juno.DeviceCompute.site.swiglu.prefill.total_ms": 30,
+    "juno.DeviceCompute.site.rms_norm.prefill.total_ms": 10,
+    "juno.DeviceCompute.site.residual_add.prefill.total_ms": 10,
+    "juno.DeviceCompute.site.gqa_attention_region.prefill.total_ms": 100,
+    "juno.DeviceStaging.site.upload_resident_activation.prefill.estimated_total_ms": 20,
+    "juno.DeviceStaging.site.materialize_resident_activation.prefill.estimated_total_ms": 10
+  }}]}' >"$d/region.json"
+  got=$(breakdown_files "$d/region.json")
+  expect "region: GEMM compute excludes the region's elementwise and attention kernels" 200 "$(jq -r '.terms.gemm_compute.ms' <<<"$got")"
+  expect "region: elementwise kernels are their own term" 50 "$(jq -r '.terms.device_elementwise.ms' <<<"$got")"
+  expect "region: attention inside the region is its own term" 100 "$(jq -r '.terms.region_attention_compute.ms' <<<"$got")"
+  expect "region: host part of the region spans" 500 "$(jq -r '.terms.projection_and_region_host.ms' <<<"$got")"
+  expect "region: residue is the unspanned time" 40 "$(jq -r '.terms.residue.ms' <<<"$got")"
+  expect "region: terms plus residue add up to the window" 1000 "$(jq -r '[.terms[].ms] | add' <<<"$got")"
   RUN_DIR="$d/run"
   if run >/dev/null 2>&1; then got=0; else got=$?; fi
   expect "residue over 5% fails the run" 1 "$got"

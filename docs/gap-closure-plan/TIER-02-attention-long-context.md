@@ -302,10 +302,26 @@ changes** (README execution rule 9) and tick item 7 here.
 
   **Milestone (README milestone table, added 2026-09-30).** The GPU pp ratio at `n_prompt=2048` over
   the ratio at `n_prompt=512` is **>= 0.90** on every sweep model, from this tier's closing
-  `compare-llama-cpp.sh --gpu --pin-clocks` sweeps at both lengths. Tier 01B established that prefill
-  does not fall off between 128 and 512 once attention is on the GPU; nothing has measured 2048, which
+  `compare-llama-cpp.sh --gpu --pin-clocks` sweeps at both lengths. Nothing has measured 2048, which
   is where a full-materialization attention kernel's cost shows and where the tiled kernel has to earn
   its place in throughput as well as in memory. The reference is Tier 01C's first 2048 sweep.
+  *Corrected 2026-10-01:* this paragraph said Tier 01B had established that prefill does not fall off
+  between 128 and 512 once attention is on the GPU. Tier 01B's step 4 breakdown showed that it does, on
+  three of the four sweep models, and that attention is the term responsible.
+
+  **Milestone moved here from Tier 01B (2026-10-01, owner decision).** The GPU pp ratio at
+  `n_prompt=512` over the ratio at `n_prompt=128` is **>= 1.00** on every sweep model, from the same
+  closing sweeps at 128 and 512. Reference: 0.911 (qwen2.5-3b), 0.916 (Phi-3.5-mini), 0.961 (mistral-7b)
+  and 1.021 (tinyllama), from the pinned post-item-0 sweeps `20260930T211637Z` and `20260930T215547Z`;
+  read the starting point off Tier 01B's closing sweeps instead, which are taken after its items 6 and 2.
+  Tier 01B's step 5 projects those two items to lower the row on Phi-3.5-mini (to about 0.87), because
+  they shrink fixed per-token costs and leave attention a larger share. The attention numbers this
+  tier's kernel is held to come from Tier 01B's step 4 breakdown (`docs/perf-compare/20261001T224724Z/`
+  and `20261001T225929Z/`, unpinned, with spans on). Kernel, copies and host part take 17.3%
+  (tinyllama), 11.4% (qwen2.5-3b), 17.0% (Phi-3.5-mini) and 13.4% (mistral-7b) of a 512-token window,
+  against 5.6% to 8.8% at 128. Per prefilled token, attention roughly triples from 128 to 512 (on
+  Phi-3.5-mini, 0.69 to 1.97 ms). Item 0 of Tier 01B, which put the kernel on Phi-3 and Qwen3, is not
+  credited here.
 
   **End-of-plan tg targets (raised to 0.70x on 2026-09-30).** Record the GPU tg ratio on Phi-3.5-mini
   and mistral-7b after items 4 to 6 against the 0.70x end-of-plan targets. Items 4 and 5 are the plan's
@@ -395,6 +411,9 @@ why this tier ships against synthetic fixtures and Tier 08 carries the real-mode
       on all four sweep models; changed only on the owner's decision.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, both memory thresholds above met, no throughput regression.
+- [ ] Milestone (pp ratio at 512 over 128 >= 1.00 on every sweep model, moved here from Tier 01B on
+      2026-10-01) reported met or missed with its number, and the attention share of a 512-token window
+      per model read against Tier 01B's step 4 figures.
 - [ ] Milestone (pp ratio at 2048 over 512 >= 0.90 on every sweep model) reported met or missed with
       its number; GPU tg ratios recorded against the 0.70x end-of-plan targets, with the missing
       mechanism named if they are out of reach.

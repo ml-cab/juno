@@ -73,6 +73,26 @@ class LlamaTransformerHandlerGpuResidencyTest {
 			ctx.close();
 	}
 
+	/** Handlers and backends this test loaded, released after each test so their device memory does not outlive it. */
+	private final java.util.List<LlamaTransformerHandler> loaded = new java.util.ArrayList<>();
+	private final java.util.List<CudaMatVec> backends = new java.util.ArrayList<>();
+
+	private LlamaTransformerHandler loadOnCuda(java.nio.file.Path model, ShardContext shard) throws Exception {
+		CudaMatVec backend = new CudaMatVec(ctx);
+		backends.add(backend);
+		LlamaTransformerHandler h = LlamaTransformerHandler.load(model, shard, backend);
+		loaded.add(h);
+		return h;
+	}
+
+	@AfterEach
+	void releaseDevice() {
+		loaded.forEach(LlamaTransformerHandler::releaseGpuResources);
+		loaded.clear();
+		backends.forEach(CudaMatVec::releaseScratch);
+		backends.clear();
+	}
+
 	@AfterEach
 	void restore() {
 		if (saved == null)
@@ -89,12 +109,12 @@ class LlamaTransformerHandlerGpuResidencyTest {
 
 		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "off");
 		ShardContext shard = shard(TINYLLAMA);
-		LlamaTransformerHandler off = LlamaTransformerHandler.load(TINYLLAMA, shard, new CudaMatVec(ctx));
+		LlamaTransformerHandler off = loadOnCuda(TINYLLAMA, shard);
 		assertThat(off.gpuResidencyActive()).isFalse();
 		float[][] offLogits = decode(off, shard, "res-off");
 
 		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "on");
-		LlamaTransformerHandler on = LlamaTransformerHandler.load(TINYLLAMA, shard, new CudaMatVec(ctx));
+		LlamaTransformerHandler on = loadOnCuda(TINYLLAMA, shard);
 		assertThat(on.gpuResidencyActive()).as("--gpu-residency on must activate on CUDA with MMQ weights").isTrue();
 		float[][] onLogits = decode(on, shard, "res-on");
 
@@ -116,7 +136,7 @@ class LlamaTransformerHandlerGpuResidencyTest {
 		saved = System.getProperty(GpuResidencyOptions.ENV_PROPERTY);
 		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "on");
 		ShardContext shard = shard(QWEN25);
-		LlamaTransformerHandler on = LlamaTransformerHandler.load(QWEN25, shard, new CudaMatVec(ctx));
+		LlamaTransformerHandler on = loadOnCuda(QWEN25, shard);
 		assertThat(on.gpuResidencyActive()).isFalse();
 		float[] logits = on.forward(ForwardRequest.withTokens("res-qwen", new int[] { 9707 }, 0), shard).logits();
 		assertThat(logits).hasSize(shard.vocabSize());

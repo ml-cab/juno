@@ -71,6 +71,26 @@ class LlamaTransformerHandlerGpuAttentionLiveTest {
 			ctx.close();
 	}
 
+	/** Handlers and backends this test loaded, released after each test so their device memory does not outlive it. */
+	private final java.util.List<LlamaTransformerHandler> loaded = new java.util.ArrayList<>();
+	private final java.util.List<CudaMatVec> backends = new java.util.ArrayList<>();
+
+	private LlamaTransformerHandler loadOnCuda(java.nio.file.Path model, ShardContext shard) throws Exception {
+		CudaMatVec backend = new CudaMatVec(ctx);
+		backends.add(backend);
+		LlamaTransformerHandler h = LlamaTransformerHandler.load(model, shard, backend);
+		loaded.add(h);
+		return h;
+	}
+
+	@AfterEach
+	void releaseDevice() {
+		loaded.forEach(LlamaTransformerHandler::releaseGpuResources);
+		loaded.clear();
+		backends.forEach(CudaMatVec::releaseScratch);
+		backends.clear();
+	}
+
 	@AfterEach
 	void restoreProperty() {
 		if (savedProperty == null)
@@ -88,14 +108,14 @@ class LlamaTransformerHandlerGpuAttentionLiveTest {
 		// Default (auto): on CUDA with a supported architecture, the GPU path activates.
 		System.clearProperty(GpuAttentionOptions.ENV_PROPERTY);
 		ShardContext shardAuto = shardContext();
-		LlamaTransformerHandler auto = LlamaTransformerHandler.load(MODEL, shardAuto, new CudaMatVec(ctx));
+		LlamaTransformerHandler auto = loadOnCuda(MODEL, shardAuto);
 		assertThat(auto.gpuAttentionActive()).as("default (auto) must activate on CUDA for a supported architecture")
 				.isTrue();
 
 		// Explicit off: no device KV mirror should ever be allocated.
 		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "off");
 		ShardContext shardOff = shardContext();
-		LlamaTransformerHandler off = LlamaTransformerHandler.load(MODEL, shardOff, new CudaMatVec(ctx));
+		LlamaTransformerHandler off = loadOnCuda(MODEL, shardOff);
 		assertThat(off.gpuAttentionActive()).as("--gpu-attention off must disable the GPU path").isFalse();
 
 		long baselineBytes = DeviceKvCache.allocatedBytes();
@@ -110,7 +130,7 @@ class LlamaTransformerHandlerGpuAttentionLiveTest {
 		// allocate device KV bytes, then free them fully on evict().
 		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "on");
 		ShardContext shardOn = shardContext();
-		LlamaTransformerHandler on = LlamaTransformerHandler.load(MODEL, shardOn, new CudaMatVec(ctx));
+		LlamaTransformerHandler on = loadOnCuda(MODEL, shardOn);
 		assertThat(on.gpuAttentionActive()).as("--gpu-attention on must activate the GPU path on CUDA").isTrue();
 
 		long beforeForward = DeviceKvCache.allocatedBytes();
@@ -130,7 +150,7 @@ class LlamaTransformerHandlerGpuAttentionLiveTest {
 		// covers FP16 K/V rounding, not an algorithmic difference).
 		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "off");
 		ShardContext shardRef = shardContext();
-		LlamaTransformerHandler ref = LlamaTransformerHandler.load(MODEL, shardRef, new CudaMatVec(ctx));
+		LlamaTransformerHandler ref = loadOnCuda(MODEL, shardRef);
 		float[] refLogits = ref.forwardBatch(BatchForwardRequest.withTokens("live-ref", prompt, 0), shardRef)
 				.lastLogits();
 		ref.evict("live-ref");

@@ -180,7 +180,15 @@ final class DeviceKvCache implements AutoCloseable {
 		long oldBytes = bytesFor(capacityTokens);
 		long newBytes = bytesFor(newCap);
 		MemorySegment newK = gpu.deviceMalloc(ctx.deviceIndex(), newBytes);
-		MemorySegment newV = gpu.deviceMalloc(ctx.deviceIndex(), newBytes);
+		MemorySegment newV;
+		try {
+			newV = gpu.deviceMalloc(ctx.deviceIndex(), newBytes);
+		} catch (RuntimeException e) {
+			// Out of memory for the second tensor: give the first one back, or it leaks
+			// for the life of the process. The mirror itself is unchanged.
+			gpu.deviceFree(newK);
+			throw e;
+		}
 		DeviceStaging.copy(gpu, newK, dK, oldBytes, GpuBindings.D2D, 0, "memcpy(K D2D grow)");
 		DeviceStaging.copy(gpu, newV, dV, oldBytes, GpuBindings.D2D, 0, "memcpy(V D2D grow)");
 		gpu.deviceFree(dK);
@@ -225,6 +233,75 @@ final class DeviceKvCache implements AutoCloseable {
 		// the gap is filled in order.
 		if (pos == validTokens)
 			validTokens = pos + 1;
+	}
+
+	/**
+	 * Appends {@code count} K/V rows at positions {@code [startPos, startPos + count)}
+	 * from host rows: packed to FP16 on the host and copied as one contiguous
+	 * transfer per tensor, where {@link #appendToken} pays one per row. Grows first
+	 * if needed. The watermark moves exactly as {@code count} calls to
+	 * {@link #appendToken} would move it.
+	 */
+	void appendWindow(int startPos, float[][] k, float[][] v, int count) {
+		if (count < 1 || k.length < count || v.length < count)
+			throw new IllegalArgumentException("window of " + count + " rows from " + k.length + " K and "
+					+ v.length + " V rows");
+		ensureCapacity(startPos + count - 1);
+		long rowBytes = (long) kvDim * Short.BYTES;
+		long bytes = rowBytes * count;
+		long offset = (long) startPos * rowBytes;
+		try (Arena staging = Arena.ofConfined()) {
+			MemorySegment stagingK = staging.allocate(bytes);
+			MemorySegment stagingV = staging.allocate(bytes);
+			for (int r = 0; r < count; r++) {
+				if (k[r].length < kvDim || v[r].length < kvDim)
+					throw new IllegalArgumentException("k/v rows must hold at least kvDim=" + kvDim + " floats");
+				long base = (long) r * kvDim;
+				for (int i = 0; i < kvDim; i++) {
+					stagingK.setAtIndex(JAVA_SHORT, base + i, Float.floatToFloat16(k[r][i]));
+					stagingV.setAtIndex(JAVA_SHORT, base + i, Float.floatToFloat16(v[r][i]));
+				}
+			}
+			DeviceStaging.copy(gpu, dK.asSlice(offset, bytes), stagingK, bytes, GpuBindings.H2D, count,
+					"memcpy(K window H2D)");
+			DeviceStaging.copy(gpu, dV.asSlice(offset, bytes), stagingV, bytes, GpuBindings.H2D, count,
+					"memcpy(V window H2D)");
+		}
+		markWritten(startPos, count);
+	}
+
+	/**
+	 * Writes {@code count} K/V rows at {@code [startPos, startPos + count)} from
+	 * device FP32 rows ({@code [count][kvDim]}, row-major), cast to FP16 straight
+	 * into this mirror on {@code stream}: nothing crosses the host. Grows first if
+	 * needed. Asynchronous, so the watermark does not move here; the caller marks
+	 * the window with {@link #markWritten} once the stream has completed and the
+	 * host KV tensors hold the same rows, which keeps the mirror a copy of the host
+	 * KV rather than the only one.
+	 */
+	void writeWindowOnDevice(int startPos, int count, MemorySegment dK32, MemorySegment dV32,
+			PrefillWindowKernels kernels, MemorySegment stream) {
+		if (count < 1)
+			throw new IllegalArgumentException("window of " + count + " rows");
+		ensureCapacity(startPos + count - 1);
+		long rowBytes = (long) kvDim * Short.BYTES;
+		long bytes = rowBytes * count;
+		long offset = (long) startPos * rowBytes;
+		long elements = (long) count * kvDim;
+		kernels.toHalf(dK32, dK.asSlice(offset, bytes), elements, stream);
+		kernels.toHalf(dV32, dV.asSlice(offset, bytes), elements, stream);
+	}
+
+	/**
+	 * Extends the watermark over a window of rows already written to positions
+	 * {@code [startPos, startPos + count)}, by the rule {@link #appendToken} applies
+	 * per row: only a window that starts within the written prefix extends it.
+	 */
+	void markWritten(int startPos, int count) {
+		if (closed)
+			throw new IllegalStateException("DeviceKvCache already closed");
+		if (startPos <= validTokens && startPos + count > validTokens)
+			validTokens = startPos + count;
 	}
 
 	/**

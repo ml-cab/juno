@@ -30,27 +30,28 @@ import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
  * the activation is rotated as position {@code startPos + r}, which covers one
  * decode row and a prefill window of consecutive positions.
  *
- * <p>Same math as {@link LlamaTransformerHandler#rope} (adjacent-pair
- * rotation). There is deliberately no host-array entry point: moving RoPE to the
- * device only pays when the activation is already there.
+ * <p>Same math as {@link LlamaTransformerHandler#rope} with the model's
+ * {@link RopePairing}: adjacent pairs, or the split-half pairs of the Qwen2 family.
+ * There is deliberately no host-array entry point: moving RoPE to the device only
+ * pays when the activation is already there.
  *
- * <p><b>Not constructed by any handler yet.</b> It exists as the second
- * operation of the device-resident chain (after RMS norm) and is exercised by
- * {@code ResidentChainMicrobench} and the unit tests until the decode path is
- * wired through it.
+ * <p>Used by the decode residency region ({@link ResidentQkvPath}, adjacent pairs
+ * only) and the prefill-window device region ({@link PrefillWindowRegion}).
  */
 final class CudaRope implements AutoCloseable {
 
 	private final GpuContext ctx;
 	private final int headDim;
 	private final float ropeTheta;
+	private final RopePairing pairing;
 	private final MemorySegment invFreq; // device double[headDim / 2]
 	private boolean closed;
 
-	private CudaRope(GpuContext ctx, int headDim, float ropeTheta, MemorySegment invFreq) {
+	private CudaRope(GpuContext ctx, int headDim, float ropeTheta, RopePairing pairing, MemorySegment invFreq) {
 		this.ctx = ctx;
 		this.headDim = headDim;
 		this.ropeTheta = ropeTheta;
+		this.pairing = pairing;
 		this.invFreq = invFreq;
 	}
 
@@ -60,6 +61,12 @@ final class CudaRope implements AutoCloseable {
 	 * same contract as {@link CudaRmsNorm#tryCreate}.
 	 */
 	static CudaRope tryCreate(GpuContext ctx, int headDim, float ropeTheta) {
+		return tryCreate(ctx, headDim, ropeTheta, RopePairing.ADJACENT);
+	}
+
+	/** As {@link #tryCreate(GpuContext, int, float)}, rotating the pairs {@code pairing} names. */
+	static CudaRope tryCreate(GpuContext ctx, int headDim, float ropeTheta, RopePairing pairing) {
+		java.util.Objects.requireNonNull(pairing, "pairing");
 		if (ctx == null || !"cuda".equals(ctx.backendLabel()))
 			return null;
 		double[] table = RopeKernel.inverseFrequencies(headDim, ropeTheta);
@@ -74,7 +81,7 @@ final class CudaRope implements AutoCloseable {
 			gpu.deviceFree(device);
 			throw e;
 		}
-		return new CudaRope(ctx, headDim, ropeTheta, device);
+		return new CudaRope(ctx, headDim, ropeTheta, pairing, device);
 	}
 
 	/**
@@ -100,8 +107,17 @@ final class CudaRope implements AutoCloseable {
 		RopeKernel kernel = RopeKernel.tryLoad();
 		if (kernel == null)
 			return false;
-		kernel.launch(x.devicePointer(), invFreq, x.rows(), x.dim() / headDim, headDim, startPos, x.chain().stream());
+		if (pairing == RopePairing.SPLIT_HALF)
+			kernel.launchSplitHalf(x.devicePointer(), invFreq, x.rows(), x.dim() / headDim, headDim, startPos,
+					x.chain().stream());
+		else
+			kernel.launch(x.devicePointer(), invFreq, x.rows(), x.dim() / headDim, headDim, startPos,
+					x.chain().stream());
 		return true;
+	}
+
+	RopePairing pairing() {
+		return pairing;
 	}
 
 	int headDim() {

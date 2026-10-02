@@ -161,6 +161,41 @@ final class ResidentActivation implements AutoCloseable {
 			MemorySegment.copy(acts[i].staging, JAVA_FLOAT, 0, out[i], 0, acts[i].dim);
 	}
 
+	/**
+	 * Materializes several activations of one chain with one wait: every download is
+	 * queued, the chain is synchronized once, then activation {@code i}'s valid rows
+	 * are copied into {@code out[i]}, reusing each row array when it is already the
+	 * activation's width. The multi-row form of {@link #materializeRows}; the exit of
+	 * a region that hands several results back at once.
+	 */
+	static void materializeAll(ResidentActivation[] acts, float[][][] out) {
+		if (acts.length != out.length)
+			throw new IllegalArgumentException(acts.length + " activations, " + out.length + " outputs");
+		ResidentChain chain = acts[0].chain;
+		for (int i = 0; i < acts.length; i++) {
+			ResidentActivation a = acts[i];
+			a.requireOpen();
+			if (a.chain != chain)
+				throw new IllegalArgumentException("activation " + i + " is on another chain");
+			if (a.rows == 0)
+				throw new IllegalStateException("activation " + i + " holds no rows");
+			if (out[i].length < a.rows)
+				throw new IllegalArgumentException("materialize of " + a.rows + " rows into " + out[i].length);
+			a.copyAsync(a.staging, a.device, (long) a.rows * a.dim * Float.BYTES, GpuBindings.D2H, a.rows,
+					"materialize(resident activation)");
+		}
+		chain.sync();
+		for (int i = 0; i < acts.length; i++) {
+			ResidentActivation a = acts[i];
+			float[][] rowsOut = out[i];
+			for (int b = 0; b < a.rows; b++) {
+				if (rowsOut[b] == null || rowsOut[b].length != a.dim)
+					rowsOut[b] = new float[a.dim];
+				MemorySegment.copy(a.staging, JAVA_FLOAT, (long) b * a.dim * Float.BYTES, rowsOut[b], 0, a.dim);
+			}
+		}
+	}
+
 	/** Valid rows: the last upload, or the last operation that wrote into this activation. */
 	int rows() {
 		return rows;

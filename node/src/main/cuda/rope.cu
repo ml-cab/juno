@@ -6,7 +6,9 @@
  * (x[2i], x[2i+1]) within each head, by angle pos * invFreq[i] with
  * invFreq[i] = 1 / theta^(2i / headDim), where row r sits at position
  * startPos + r. One launch covers a single decode row (rows = 1) and a
- * prefill window of consecutive positions (rows = window size).
+ * prefill window of consecutive positions (rows = window size). A second
+ * entry, rope_split_half below, rotates the split-half pairs (x[i],
+ * x[i + headDim/2]) with the same arithmetic.
  *
  * Precision follows the CPU path step by step so the two agree to within one
  * float rounding of a sine or cosine:
@@ -60,4 +62,44 @@ rope(
     const float x1 = pair[1];
     pair[0] = __fsub_rn(__fmul_rn(x0, cosA), __fmul_rn(x1, sinA));
     pair[1] = __fadd_rn(__fmul_rn(x0, sinA), __fmul_rn(x1, cosA));
+}
+
+/*
+ * Split-half (rotate-half) pairing: pair i of a head is (x[i], x[i + headDim/2])
+ * rather than (x[2i], x[2i+1]). Same frequencies, same double-precision angle and
+ * the same separately rounded rotation as rope above; only the pair members
+ * differ. Same math as LlamaTransformerHandler.rope with RopePairing.SPLIT_HALF,
+ * which the Qwen2 family uses.
+ */
+extern "C" __global__ void __launch_bounds__(ROPE_THREADS)
+rope_split_half(
+        float* __restrict__ x,              // [rows][nHeads * headDim], rotated in place
+        const double* __restrict__ invFreq, // [headDim / 2]
+        int rows,
+        int nHeads,
+        int headDim,
+        int startPos) {
+    const int half = headDim >> 1;
+    const long long pairsPerRow = (long long)nHeads * half;
+    const long long total = (long long)rows * pairsPerRow;
+    const long long p = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (p >= total)
+        return;
+
+    const int row = (int)(p / pairsPerRow);
+    const int rem = (int)(p - (long long)row * pairsPerRow);
+    const int h = rem / half;
+    const int i = rem - h * half;
+
+    double s;
+    double c;
+    sincos((double)(startPos + row) * invFreq[i], &s, &c);
+    const float sinA = (float)s;
+    const float cosA = (float)c;
+
+    float* head = x + (size_t)row * nHeads * headDim + (size_t)h * headDim;
+    const float x0 = head[i];
+    const float x1 = head[i + half];
+    head[i] = __fsub_rn(__fmul_rn(x0, cosA), __fmul_rn(x1, sinA));
+    head[i + half] = __fadd_rn(__fmul_rn(x0, sinA), __fmul_rn(x1, cosA));
 }

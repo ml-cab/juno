@@ -27,14 +27,17 @@ import jdk.jfr.StackTrace;
  * prefill window's time can be broken down with nothing left unnamed: the token embedding
  * lookup, each projection call (the matmul dispatch, the backend's own {@code juno.MatVec}
  * span inside it, and the copy of its result into the layer workspace), bias adds, the
- * per-token KV write (host cache plus any device mirror), and the final norm with the LM
- * head.
+ * per-token KV write (host cache plus any device mirror), the final norm with the LM
+ * head, and each call into the prefill-window device region ({@code device_layer}: the
+ * host's side of a layer whose norms, matmuls and elementwise work run on the device,
+ * with the device time inside it counted by {@code juno.DeviceCompute} and
+ * {@code juno.DeviceStaging}).
  *
  * <p>One event per call site per layer, the same granularity as {@link SwiGluEvent}.
  */
 @Name("juno.WindowStep")
 @Label("Window Step")
-@Description("Forward-window work outside the per-op events: embed, projection, bias_add, kv_write, lm_head")
+@Description("Forward-window work outside the per-op events: embed, projection, bias_add, kv_write, lm_head, device_layer")
 @Category({ "Juno", "Inference" })
 @StackTrace(false)
 public final class WindowStepEvent extends Event {
@@ -44,9 +47,10 @@ public final class WindowStepEvent extends Event {
     public static final String BIAS_ADD = "bias_add";
     public static final String KV_WRITE = "kv_write";
     public static final String LM_HEAD = "lm_head";
+    public static final String DEVICE_LAYER = "device_layer";
 
     @Label("Step")
-    @Description("embed, projection, bias_add, kv_write or lm_head")
+    @Description("embed, projection, bias_add, kv_write, lm_head or device_layer")
     public String step;
 
     @Label("Window Size")

@@ -1,5 +1,33 @@
 ## Status 
 
+**Session 103** — A prefill window's layer runs on the GPU, not between GPU matmuls
+
+- **The prefill window stays on the device across a layer.** On CUDA, a prefill window of more than
+  eight positions now runs each transformer layer as one device region: the window is uploaded once
+  per layer, and the RMS norms, the FP16 cast of every matmul input, the matmuls, the Q/K/V bias adds,
+  SwiGLU and both residual adds run on the GPU with the activations kept there. Before, every matmul
+  uploaded its input and downloaded its result, and the norms, SwiGLU (single-threaded) and residual
+  adds ran on the CPU in between: host SwiGLU alone was 28% to 45% of a 512-token prefill. On the LLaMA
+  family and Qwen2 the region also rotates Q and K (adjacent and split-half pairing) and runs attention,
+  casting the window's K and V rows straight into the attention cache on the device; Phi-3 and Qwen3 keep
+  RoPE and attention on the host between the region's two halves. In a pinned same-hour comparison
+  at a 512-token prompt, TinyLlama prefill rose from 240 to 936 t/s (3.90x) and Mistral 7B from 68.4 to
+  191.8 t/s (2.81x); generation read 1.02x and 1.00x.
+- **Same logits, bit for bit.** Every operation in the region reproduces the host window path's
+  arithmetic: the matmuls see the same FP16 bits, the RMS norm sums in the host loop's order, and SwiGLU
+  and the adds round step by step as the host does. On TinyLlama, Qwen2.5-3B, Phi-3.5-mini and
+  Qwen3-1.7B the logits after a prefill, a continued prefill and the decode steps that follow equal the
+  host path's exactly, and 64 greedy tokens matched on all six test prompts on TinyLlama and Mistral 7B.
+- **The attention cache is written once per layer per window.** Every prefill window path now copies
+  its K and V rows to the device attention cache as one transfer per tensor instead of one per position
+  (22,528 copies per 512-token TinyLlama window before), and the device region writes them without a
+  copy at all. A cache growth that ran out of device memory for the second of its two buffers no longer
+  leaks the first.
+- **Off switch and accounting.** `-DJUNO_PREFILL_REGION=off` keeps every window on the previous path,
+  for comparison; cluster launchers forward it. The region's work is recorded as `juno.WindowStep`
+  `device_layer` spans with `juno.DeviceCompute` sites per operation, and `prefill-breakdown.sh` splits
+  it out.
+
 **Session 102** — A prefill window is now accounted for end to end in a recording
 
 - **Every part of a prefill window has a span.** `juno.WindowStep` covers the window work no per-op

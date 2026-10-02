@@ -37,7 +37,8 @@ final class WindowStepBucket {
 
 	static final String EVENT = "juno.WindowStep";
 
-	static final List<String> KNOWN_STEPS = List.of("embed", "projection", "bias_add", "kv_write", "lm_head");
+	static final List<String> KNOWN_STEPS = List.of("embed", "projection", "bias_add", "kv_write", "lm_head",
+			"device_layer");
 
 	private final Map<String, List<Long>> prefill = new TreeMap<>();
 	private final Map<String, List<Long>> decode = new TreeMap<>();

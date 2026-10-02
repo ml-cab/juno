@@ -983,6 +983,44 @@ on the GPU with a lower `--gpu-layers`, and a model far larger than the card wil
 Treat it as a prompt to set `--gpu-layers` explicitly, or to pass `--gpu-attention off`, or to use a
 smaller model or quantization.
 
+### Prefill windows on the device
+
+On a CUDA backend, a prefill window of more than eight positions runs each transformer layer as one
+device region: the window's residual stream is uploaded once per layer, and the RMS norms, the FP16
+cast of every matmul input, the matmuls, the Q/K/V bias adds, SwiGLU and both residual adds run on the
+GPU with the activations kept there between them. The host sees the layer's input, its K and V rows
+(the host KV cache stays the source of truth) and its output. Before, every matmul uploaded its input
+and downloaded its result, and the norms, SwiGLU and residual adds ran on the CPU between them.
+
+What else moves into the region depends on the architecture:
+
+| Handler | RoPE | Attention |
+|---|---|---|
+| LLaMA family (Llama, Mistral, TinyLlama) | on the device | inside the region, with `--gpu-attention` (the default on CUDA): the window's K and V rows are cast straight into the attention KV mirror and the attention kernel reads them there |
+| Qwen2 / Qwen2.5 (split-half RoPE, Q/K/V biases) | on the device | inside the region, as above |
+| Phi-3 (LongRoPE) | on the host | on the host side of the region: the region returns Q, K and V, RoPE and attention run as before, and the region finishes the layer |
+| Qwen3 (per-head Q/K norm) | on the host | on the host side of the region, as for Phi-3 |
+
+The region computes the same logits as the host window path, bit for bit: the matmuls are the same
+FP16 GEMMs fed the same bits, the norms sum in the same order, and SwiGLU and the adds reproduce the
+host arithmetic. Greedy output is therefore unchanged. Windows of eight positions or fewer (where the
+packed matrix-vector kernel needs no dequantized weights), layers whose projections are not all on the
+device (`--gpu-layers` below the layer count), Phi-2, Qwen3-MoE, LoRA training and `--lora-play` keep
+the existing path. ROCm keeps the existing path; the region's kernels are CUDA-only.
+
+The region's buffers grow to the widest prefill window it has served and stay allocated for reuse:
+about 85 MiB for TinyLlama and 155 MiB for Mistral 7B for a 512-position window, per concurrent
+prefill. The attention-scores part of that grows with the context the window attends over. When the
+device cannot hold them, or runs out of memory inside a layer, that layer runs on the existing path and
+the log says so once:
+
+```
+Llama: out of device memory in the prefill-window device region - this window's layer runs on the host path between device matmuls.
+```
+
+`-DJUNO_PREFILL_REGION=off` (or the environment variable of the same name) keeps every window on the
+existing path, for comparison; cluster launchers forward it to every node.
+
 ### Heap sizing
 
 Juno reads GGUF tensors onto the Java heap, so a model only opens if it fits in `-Xmx`. Every
@@ -1124,6 +1162,7 @@ event per call site per layer, with a `step` field:
 | `bias_add` | The Q/K/V bias adds, on models that have them |
 | `kv_write` | Writing the window's K and V rows to the host cache, and to the device mirror when GPU attention runs |
 | `lm_head` | The final norm and the output projection of the last position |
+| `device_layer` | One call into the prefill-window device region (see "Prefill windows on the device"): the host's side of a layer whose norms, matmuls and elementwise work run on the device, including the wait for them |
 
 Both are on in `juno-perf.jfc`. `juno.MatVec` also records the call's batch width (`windowSize`:
 the window for a batched GEMM, 1 for a single matrix-vector product), so its time splits by phase.
@@ -1133,12 +1172,19 @@ the window for a batched GEMM, 1 for a single matrix-vector product), so its tim
 | `juno.WindowStep.<step>.{count,prefill.count,decode.count,prefill.total_ms,decode.total_ms}` | Per step; written for every step on every run. `prefill`: the window held more than one row |
 | `juno.MatVec.{prefill,decode}.{count,total_ms}` | Matmul calls by batch width; a recording from a build without the field counts only in `juno.MatVec.count` |
 
+Inside a `device_layer` span the device work is counted by `juno.DeviceCompute` under its own sites:
+`gemm_half` for the matmuls, and `rms_norm`, `convert_fp16`, `bias_add`, `rope`, `kv_append`,
+`gqa_attention_region`, `swiglu` and `residual_add` for the operations between them; the region's
+uploads and downloads are `juno.DeviceStaging` sites like any other copy.
+
 `scripts/performance-tests/prefill-breakdown.sh RUN_DIR` turns the prefill repetitions of a
 `compare-llama-cpp.sh --device-spans` run into a per-term table of `juno.ForwardPass` prefill time.
 The terms do not overlap: a nested term (the GEMM kernel, the device dequantization, the copies and
-the host FP16 packing inside a projection; the KV mirror copies inside the KV write; the attention
-kernel and its copies inside `juno.Attention`) is subtracted from its parent, and what the spans do
-not cover is reported as `residue`. Each term is the median over the run's repetitions. The script
+the host FP16 packing inside a projection or a `device_layer` span, and the region's elementwise
+kernels and attention kernel inside `device_layer`; the KV mirror copies inside the KV write; the
+attention kernel and its copies inside `juno.Attention`) is subtracted from its parent, and what the
+spans do not cover is reported as `residue`. `projection_and_region_host` is what is left of the
+projection and `device_layer` spans: dispatch, copy-out and waiting on the host. Each term is the median over the run's repetitions. The script
 exits 1 when any model's residue is above `--max-residue-pct` (default 5); `--json OUT` writes the
 breakdown with its per-site detail.
 

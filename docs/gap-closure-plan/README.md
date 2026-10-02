@@ -195,12 +195,22 @@ ask for more than its reference reading. For an "every model" scope the referenc
 |---|---|---|---|---|---|
 | 01B | GPU pp ratio, `n_prompt=512` | every sweep model except Phi-3.5-mini | >= 0.10x | 0.064x (qwen2.5-3b at `n_prompt=512`, step 2 re-baseline) | active |
 | 01B | GPU pp ratio, `n_prompt=512` | Phi-3.5-mini | >= 0.08x | 0.011x (at `n_prompt=512`, step 2 re-baseline; threshold kept by owner decision, see below) | active |
-| 01B | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 0.30 (Phi-3.5-mini; the others 0.955 to 0.979) | active |
 | 01C | GPU pp ratio, `n_prompt=512` | every sweep model | >= 0.20x | 0.011x (Phi-3.5-mini, step 2 re-baseline; 0.075x after Tier 01B item 0, `20260930T215547Z`; the others 0.061x to 0.100x) | active |
+| 02 | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 0.911 (qwen2.5-3b, pinned post-item-0 sweeps `20260930T211637Z`/`20260930T215547Z`; Phi-3.5-mini 0.916, mistral-7b 0.961, tinyllama 1.021; was 0.30 on Phi-3.5-mini before Tier 01B item 0) | active |
 | 02 | GPU pp ratio at 2048 over ratio at 512 | every sweep model | >= 0.90 | unmeasured (no parity-corrected `n_prompt=2048` reading exists; Tier 01C's closing sweep takes the first) | active |
 | 04 | GPU tg ratio | Phi-3.5-mini | >= 0.40x | 0.416x | retired: met on arrival |
 | 10 | CPU tg ratio | every sweep model | >= 0.20x | 0.092x (mistral-7b, `20261001T180241Z`; was 0.090x) | active |
 | 10 | CPU pp ratio, `n_prompt=128` | every sweep model | >= 0.10x | 0.049x (Phi-3.5-mini, `20261001T180241Z`; the others 0.075x to 0.103x; was 0.048x at `20260927T094414Z`) | active |
+
+**Why the 512-over-128 row moved from Tier 01B to Tier 02 (2026-10-01, owner decision).** Tier 01B's
+step 5 decomposition showed that no item in that tier can meet it. The term that grows with prompt length
+is attention: kernel, copies and host part go from 5.6% to 8.8% of a 128-token window to 11.4% to 17.3% of a
+512-token one (`docs/perf-compare/20261001T225929Z/`, `20261001T224724Z/`). Tier 01B's items remove
+costs that are fixed per token, which raises attention's share of what remains, so the row is projected
+to get worse as they land (Phi-3.5-mini 0.916 to about 0.87). The mechanism that moves it is the
+tiled long-context kernel, which is Tier 02's, and Tier 02's 2048-over-512 row measures the same cause
+one step further out. Moved rather than kept as a known Tier 01B miss, so Tier 01B is scored on what its
+own items can move. Threshold unchanged.
 
 **Why the CPU pp row exists (added 2026-09-30).** CPU prefill is 0.048x to 0.090x of the reference
 tool and was owned by nothing: Tier 01B scopes it out to "re-measure at the end of Tier 10", and Tier
@@ -260,7 +270,7 @@ inside the decode residency region and CUDA graph replay (Tier 02 items 4 and 5)
 default (Tier 02 item 6), and the residency region reaching the Phi-3 and Qwen3 handlers (no tier owns
 that yet; Tier 02 records whether its items reach 0.70x without it, and names the gap if not). The pp
 path is the milestone ladder above: 0.10x after Tier 01B, 0.20x after Tier 01C, and no fall-off from
-512 to 2048 tokens after Tier 02. The previous targets stay recorded in the table's first column so
+128 to 512 or from 512 to 2048 tokens after Tier 02. The previous targets stay recorded in the table's first column so
 Tier 14 can report both.
 
 **Program objective: the layer runs on the device (added 2026-09-30).** Every GPU tier in this plan

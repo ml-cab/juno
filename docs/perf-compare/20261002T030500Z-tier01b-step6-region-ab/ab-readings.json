@@ -1,0 +1,134 @@
+[
+  {
+    "pass": 1,
+    "side": "A",
+    "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+    "prefill_tps": 234.2895841508463,
+    "gen_tps": 63.08699429379123,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 7.986799,
+    "jar_sha256_16": "92643aec3c3b226a",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  },
+  {
+    "pass": 1,
+    "side": "A",
+    "model": "mistral-7b-instruct-v0.1-q4_k_m",
+    "prefill_tps": 68.46484478730048,
+    "gen_tps": 22.826015810140973,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 13.825721,
+    "jar_sha256_16": "92643aec3c3b226a",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  },
+  {
+    "pass": 1,
+    "side": "B",
+    "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+    "prefill_tps": 960.0254082724618,
+    "gen_tps": 69.22333687417913,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 6.950297,
+    "jar_sha256_16": "fb6d32e6c41cb3dd",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  },
+  {
+    "pass": 1,
+    "side": "B",
+    "model": "mistral-7b-instruct-v0.1-q4_k_m",
+    "prefill_tps": 197.3403983559918,
+    "gen_tps": 22.891558623192598,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 14.702305,
+    "jar_sha256_16": "fb6d32e6c41cb3dd",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  },
+  {
+    "pass": 2,
+    "side": "A",
+    "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+    "prefill_tps": 239.99652946268665,
+    "gen_tps": 66.9637417506595,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 6.750068,
+    "jar_sha256_16": "92643aec3c3b226a",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  },
+  {
+    "pass": 2,
+    "side": "A",
+    "model": "mistral-7b-instruct-v0.1-q4_k_m",
+    "prefill_tps": 68.34938583649468,
+    "gen_tps": 22.83785964510049,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 13.688853,
+    "jar_sha256_16": "92643aec3c3b226a",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  },
+  {
+    "pass": 2,
+    "side": "B",
+    "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+    "prefill_tps": 924.5993041693175,
+    "gen_tps": 68.4802376455991,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 6.864332,
+    "jar_sha256_16": "fb6d32e6c41cb3dd",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  },
+  {
+    "pass": 2,
+    "side": "B",
+    "model": "mistral-7b-instruct-v0.1-q4_k_m",
+    "prefill_tps": 191.7561759340413,
+    "gen_tps": 23.002183131091016,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 13.762262,
+    "jar_sha256_16": "fb6d32e6c41cb3dd",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  },
+  {
+    "pass": 3,
+    "side": "A",
+    "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+    "prefill_tps": 253.17974273907893,
+    "gen_tps": 68.90725964326602,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 6.893808,
+    "jar_sha256_16": "92643aec3c3b226a",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  },
+  {
+    "pass": 3,
+    "side": "A",
+    "model": "mistral-7b-instruct-v0.1-q4_k_m",
+    "prefill_tps": 68.09987618659095,
+    "gen_tps": 22.568842355189627,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 13.2562,
+    "jar_sha256_16": "92643aec3c3b226a",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  },
+  {
+    "pass": 3,
+    "side": "B",
+    "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+    "prefill_tps": 935.8091047832418,
+    "gen_tps": 65.33911263365627,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 6.973152,
+    "jar_sha256_16": "fb6d32e6c41cb3dd",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  },
+  {
+    "pass": 3,
+    "side": "B",
+    "model": "mistral-7b-instruct-v0.1-q4_k_m",
+    "prefill_tps": 190.5185773157709,
+    "gen_tps": 22.239794880314637,
+    "prompt_tokens": 512,
+    "gc_pause_max_ms": 13.734896,
+    "jar_sha256_16": "fb6d32e6c41cb3dd",
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz"
+  }
+]

@@ -145,6 +145,17 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	 */
 	private GpuAttentionMirror gpuAttention;
 
+	/**
+	 * The prefill-window device region (norms, matmuls, SwiGLU and residual adds on the
+	 * device; RoPE and attention stay here), or null on the CPU backend, when turned off,
+	 * or after {@link #releaseGpuResources}.
+	 */
+	private PrefillWindowRegion prefillRegion;
+
+	/** Guards {@link #warnPrefillRegionFellBackOnce} so the hot path logs once. */
+	private final java.util.concurrent.atomic.AtomicBoolean prefillRegionFallbackWarned =
+			new java.util.concurrent.atomic.AtomicBoolean();
+
 	// Per-request KV cache — lazily allocated and grown on demand.
 	// Starts at INITIAL_SEQ_CAPACITY slots, doubles until MAX_SEQ_LEN.
 	// Avoids the 554 MB eager pre-allocation that caused node JVM OOM during
@@ -257,6 +268,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		// CpuMatVec: device fields stay null (defaults above).
 		this.gpuAttention = GpuAttentionMirror.open(backend, "Phi-3", L, kvDim, cfg.numHeads(), cfg.headDim(),
 				cfg.gqaRatio());
+		this.prefillRegion = openPrefillRegion(backend, L);
 
 		log.info("Phi-3 shard loaded — " + L + " layers, " + (hasEmbeddings ? "with embeddings, " : "")
 				+ (hasOutputProj ? "with output projection" : "no output projection"));
@@ -400,8 +412,39 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 	}
 
+	/**
+	 * Builds the prefill-window device region over every layer whose projections are on
+	 * the device: the fused Q/K/V and gate/up projections where they are packed, their
+	 * FP16 row slices otherwise. RoPE (LongRoPE) and attention stay on the host.
+	 */
+	private PrefillWindowRegion openPrefillRegion(MatVec backend, int L) {
+		if (!(backend instanceof CudaMatVec))
+			return null;
+		PrefillWindowRegion.Layer[] layers = new PrefillWindowRegion.Layer[L];
+		for (int li = 0; li < L; li++)
+			layers[li] = PrefillWindowRegion.Layer.mixed(PrefillWindowRegion.Matrix.of(attnQkvQ4Dev, null, li),
+					PrefillWindowRegion.Matrix.of(null, attnQDev, li), PrefillWindowRegion.Matrix.of(null, attnKDev, li),
+					PrefillWindowRegion.Matrix.of(null, attnVDev, li), PrefillWindowRegion.Matrix.of(woQ4Dev, woDev, li),
+					PrefillWindowRegion.Matrix.of(ffnGateUpQ4Dev, null, li),
+					PrefillWindowRegion.Matrix.of(null, ffnGateDev, li), PrefillWindowRegion.Matrix.of(null, ffnUpDev, li),
+					PrefillWindowRegion.Matrix.of(wDownQ4Dev, wDownDev, li), attnNorm[li], ffnNorm[li]);
+		PrefillWindowRegion.Shape shape = new PrefillWindowRegion.Shape(cfg.hiddenDim(), cfg.hiddenDim(), cfg.kvDim(),
+				cfg.intermediateSize(), cfg.numHeads(), cfg.numKvHeads(), cfg.headDim(), cfg.gqaRatio(),
+				cfg.rmsNormEps());
+		return PrefillWindowRegion.create("Phi-3", backend, shape, layers, null, 0f, false);
+	}
+
+	@Override
+	public boolean prefillRegionActive() {
+		return prefillRegion != null;
+	}
+
 	@Override
 	public void releaseGpuResources() {
+		// The region holds references to the device matrices below; close it first.
+		if (prefillRegion != null)
+			prefillRegion.close();
+		prefillRegion = null;
 		closeDeviceHalfMatrixArray(attnQDev);
 		closeDeviceHalfMatrixArray(attnKDev);
 		closeDeviceHalfMatrixArray(attnVDev);
@@ -795,9 +838,15 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 				kvDim, cfg.numHeads(), lastPos + 1, kvLayout.needsAttentionScratch());
 		DeviceKvCache[] mirrors = mirrorsFor(requestId);
 
-		for (int li = 0; li < L; li++) {
-			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws,
-					GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)));
+		PrefillWindowRegion.Window win = openPrefillWindow(W);
+		try {
+			for (int li = 0; li < L; li++) {
+				x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws,
+						GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)), win);
+			}
+		} finally {
+			if (win != null)
+				win.close();
 		}
 
 		if (a != null) {
@@ -840,7 +889,10 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	}
 
 	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror) {
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror,
+			PrefillWindowRegion.Window win) {
+		if (win != null && prefillRegion != null && prefillRegion.eligible(li))
+			return transformerLayerOnDevice(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, win);
 		int W    = x.length;
 		int H    = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
@@ -870,31 +922,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
 		ropeEvt.commit();
 
-		// Host KV first and always; a device mirror only copies it.
-		GpuAttentionMirror g = gpuAttention;
-		WindowStepEvent kvEvt = WindowStepEvent.start();
-		for (int b = 0; b < W; b++) {
-			kCacheLayer.writeToken(startPos + b, ws.k[b]);
-			vCacheLayer.writeToken(startPos + b, ws.v[b]);
-			if (g != null)
-				mirror = g.append(mirror, startPos + b, ws.k[b], ws.v[b], W);
-		}
-		kvEvt.end(WindowStepEvent.KV_WRITE, W, startPos);
-
-		AttentionEvent attnEvt = new AttentionEvent();
-		attnEvt.begin();
-		if (g == null || !g.attendWindow(mirror, startPos, ws.q, ws.attnOut)) {
-			for (int b = 0; b < W; b++) {
-				int seqLen = startPos + b + 1;
-				float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
-				float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
-				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
-			}
-		}
-		attnEvt.windowSize = W;
-		attnEvt.startPosition = startPos;
-		attnEvt.contextLength = startPos + W;
-		attnEvt.commit();
+		writeKvAndAttend(startPos, kCacheLayer, vCacheLayer, ws, mirror, W);
 
 		WindowStepEvent woEvt = WindowStepEvent.start();
 		sgemmProjInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, H);
@@ -942,6 +970,107 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		residEvt2.dimension = H;
 		residEvt2.commit();
 		return x;
+	}
+
+	/**
+	 * The window's KV write and attention, shared by the host and device-region window
+	 * paths: host KV first and always, then the device mirror as one copy per tensor, then
+	 * attention on the kernel when the mirror is readable and on the CPU otherwise.
+	 */
+	private void writeKvAndAttend(int startPos, SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
+			BatchWorkspace ws, DeviceKvCache mirror, int W) {
+		GpuAttentionMirror g = gpuAttention;
+		WindowStepEvent kvEvt = WindowStepEvent.start();
+		for (int b = 0; b < W; b++) {
+			kCacheLayer.writeToken(startPos + b, ws.k[b]);
+			vCacheLayer.writeToken(startPos + b, ws.v[b]);
+		}
+		if (g != null)
+			mirror = g.appendWindow(mirror, startPos, ws.k, ws.v, W);
+		kvEvt.end(WindowStepEvent.KV_WRITE, W, startPos);
+
+		AttentionEvent attnEvt = new AttentionEvent();
+		attnEvt.begin();
+		if (g == null || !g.attendWindow(mirror, startPos, ws.q, ws.attnOut)) {
+			for (int b = 0; b < W; b++) {
+				int seqLen = startPos + b + 1;
+				float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
+				float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
+				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+			}
+		}
+		attnEvt.windowSize = W;
+		attnEvt.startPosition = startPos;
+		attnEvt.contextLength = startPos + W;
+		attnEvt.commit();
+	}
+
+	/** Takes a prefill-window region window for {@code W} rows, or null for the host path. */
+	private PrefillWindowRegion.Window openPrefillWindow(int W) {
+		PrefillWindowRegion region = prefillRegion;
+		if (region == null || W <= PrefillWindowRegion.MAX_HOST_WINDOW)
+			return null;
+		try {
+			return region.open(W);
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			warnPrefillRegionFellBackOnce();
+			return null;
+		}
+	}
+
+	/**
+	 * {@link #transformerLayerBatch} through the prefill-window device region: the
+	 * region runs the norm and the Q/K/V projection, RoPE, the KV write and attention run
+	 * here as on the host path, and the region finishes the layer. Running out of device
+	 * memory in the region redoes the layer on the host path from the host residual,
+	 * which the region has not touched.
+	 */
+	private float[][] transformerLayerOnDevice(float[][] x, int li, int startPos, SessionKvTensor kCacheLayer,
+			SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror, PrefillWindowRegion.Window win) {
+		int W = x.length;
+		WindowStepEvent devEvt = WindowStepEvent.start();
+		try {
+			win.runLayer(li, x, startPos, null, ws.q, ws.k, ws.v);
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			warnPrefillRegionFellBackOnce();
+			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, null);
+		}
+		devEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
+
+		RopeEvent ropeEvt = new RopeEvent();
+		ropeEvt.begin();
+		for (int b = 0; b < W; b++) {
+			Phi3Rope.ropeExt(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), ropeCfg);
+			Phi3Rope.ropeExt(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
+		}
+		ropeEvt.windowSize = W;
+		ropeEvt.startPosition = startPos;
+		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
+		ropeEvt.commit();
+
+		writeKvAndAttend(startPos, kCacheLayer, vCacheLayer, ws, mirror, W);
+
+		WindowStepEvent finishEvt = WindowStepEvent.start();
+		try {
+			win.finishLayer(li, ws.attnOut, x);
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			warnPrefillRegionFellBackOnce();
+			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, null);
+		}
+		finishEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
+		return x;
+	}
+
+	private void warnPrefillRegionFellBackOnce() {
+		if (prefillRegionFallbackWarned.compareAndSet(false, true))
+			log.warning("Phi-3: out of device memory in the prefill-window device region - this window's layer runs"
+					+ " on the host path between device matmuls. Lower --gpu-layers to leave the region room.");
 	}
 
 	/** Zero-allocation gqa: writes into pre-allocated out[] using shared scores scratch. */

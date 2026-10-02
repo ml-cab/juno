@@ -1023,6 +1023,71 @@ public final class CudaMatVec implements GpuMatVec {
         }
     }
 
+    /**
+     * {@code Y = A X} on operands already on the device, issued on {@code stream}
+     * without waiting: the prefill-window region's matmul. {@code dXh} holds
+     * {@code batch} FP16 input rows of {@code A.cols()} values; row {@code b} of the
+     * FP32 result is written at {@code dY + b * ldc} floats. The weights are
+     * dequantized into this backend's FP16 scratch first, the same kernels and the
+     * same bits as {@link #sgemm(DeviceQ4KMatrix, float[][])}'s batched path.
+     *
+     * <p>The caller holds {@link GpuContext#cublasSerializationLock()} and
+     * synchronizes {@code stream} before releasing it: the dequantization scratch is
+     * shared with this backend's own calls, which run on another stream. Device time
+     * is counted on {@code timer} (the caller's stream timer), not on this backend's.
+     */
+    void gemmOnStream(DeviceQ4KMatrix A, MemorySegment dXh, MemorySegment dY, int ldc, int batch,
+            MemorySegment stream, DeviceSpanTimer timer) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        MemorySegment dW = dequantOnStream(A, batch, stream, timer);
+        gemmHalfOnStream(dW, A.rows(), A.cols(), dXh, dY, ldc, batch, stream, timer);
+    }
+
+    /**
+     * Dequantizes {@code A} to FP16 into this backend's scratch on {@code stream} and
+     * returns the scratch: row-major {@code A.rows() x A.cols()} halves, valid until
+     * the next dequantization on this backend. Lets a caller multiply row ranges of
+     * one fused matrix (Q, K and V side by side) with
+     * {@link #gemmHalfOnStream} without dequantizing it once per range. Same locking
+     * contract as {@link #gemmOnStream}.
+     */
+    MemorySegment dequantOnStream(DeviceQ4KMatrix A, int batch, MemorySegment stream, DeviceSpanTimer timer) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        if (A.isClosed()) throw new IllegalStateException("DeviceQ4KMatrix is closed");
+        Q4KMmqKernel kernel = Q4KMmqKernel.tryLoad();
+        if (kernel == null)
+            throw new IllegalStateException("Q4_K MMQ kernel is not loaded");
+        MemorySegment dW = dequantScratch.ensure(cuda, ctx.deviceIndex(), A.rows(), A.cols());
+        int dequantMark = timer.begin(stream, batch);
+        kernel.launchDequant(A, dW, stream);
+        timer.dequant(A.quantType(), dequantMark, stream);
+        return dW;
+    }
+
+    /** As {@link #gemmOnStream(DeviceQ4KMatrix, MemorySegment, MemorySegment, int, int, MemorySegment, DeviceSpanTimer)}, for FP16 weights. */
+    void gemmOnStream(DeviceHalfMatrix A, MemorySegment dXh, MemorySegment dY, int ldc, int batch,
+            MemorySegment stream, DeviceSpanTimer timer) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        gemmHalfOnStream(A.devicePointer(), A.rows(), A.cols(), dXh, dY, ldc, batch, stream, timer);
+    }
+
+    /**
+     * {@code Y = A X} for FP16 weights {@code dA} (row-major {@code rows x cols},
+     * which may be a row range of a larger matrix) on device operands, issued on
+     * {@code stream}. Same layout and locking contract as {@link #gemmOnStream}.
+     */
+    void gemmHalfOnStream(MemorySegment dA, int rows, int cols, MemorySegment dXh, MemorySegment dY, int ldc,
+            int batch, MemorySegment stream, DeviceSpanTimer timer) {
+        bindStream(stream);
+        try {
+            int gemmMark = timer.begin(stream, batch);
+            fp16GemmOps().gemmHalf(dA, dXh, dY, rows, cols, batch, ldc);
+            timer.compute(DeviceComputeEvent.GEMM_HALF, batch, gemmMark, stream);
+        } finally {
+            unbindStream();
+        }
+    }
+
     private GpuBlasOps blasOps() {
         if (blasOps == null)
             blasOps = new GpuBlasOps(ctx);

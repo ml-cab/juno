@@ -84,6 +84,17 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	 */
 	private GpuAttentionMirror gpuAttention;
 
+	/**
+	 * The prefill-window device region (norms, matmuls, SwiGLU and residual adds on the
+	 * device; the per-head Q/K norm, RoPE and attention stay here), or null on the CPU
+	 * backend, when turned off, or after {@link #releaseGpuResources}.
+	 */
+	private PrefillWindowRegion prefillRegion;
+
+	/** Guards {@link #warnPrefillRegionFellBackOnce} so the hot path logs once. */
+	private final java.util.concurrent.atomic.AtomicBoolean prefillRegionFallbackWarned =
+			new java.util.concurrent.atomic.AtomicBoolean();
+
 	private final Map<String, SessionKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
 	private final Map<String, SessionKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
 	private final SessionKvLayout kvLayout;
@@ -180,6 +191,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		this.gpuLayersResolved = resolved;
 		this.gpuAttention = GpuAttentionMirror.open(backend, "Qwen3", L, kvDim, cfg.numHeads(), cfg.headDim(),
 				cfg.gqaRatio());
+		this.prefillRegion = openPrefillRegion(backend, L);
 
 		log.info("Qwen3 shard loaded — " + L + " layers");
 	}
@@ -313,8 +325,38 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		return r.tensor("token_embd.weight");
 	}
 
+	/**
+	 * Builds the prefill-window device region over every layer whose seven projections
+	 * are on the device. The per-head Q/K norm, RoPE and attention stay on the host.
+	 */
+	private PrefillWindowRegion openPrefillRegion(MatVec backend, int L) {
+		if (!(backend instanceof CudaMatVec))
+			return null;
+		PrefillWindowRegion.Layer[] layers = new PrefillWindowRegion.Layer[L];
+		for (int li = 0; li < L; li++)
+			layers[li] = PrefillWindowRegion.Layer.separate(PrefillWindowRegion.Matrix.of(attnQQ4Dev, attnQDev, li),
+					PrefillWindowRegion.Matrix.of(attnKQ4Dev, attnKDev, li),
+					PrefillWindowRegion.Matrix.of(attnVQ4Dev, attnVDev, li), PrefillWindowRegion.Matrix.of(woQ4Dev, woDev, li),
+					PrefillWindowRegion.Matrix.of(ffnGateQ4Dev, ffnGateDev, li),
+					PrefillWindowRegion.Matrix.of(ffnUpQ4Dev, ffnUpDev, li),
+					PrefillWindowRegion.Matrix.of(wDownQ4Dev, wDownDev, li), attnNorm[li], ffnNorm[li], null, null, null);
+		PrefillWindowRegion.Shape shape = new PrefillWindowRegion.Shape(cfg.hiddenDim(), cfg.qDim(), cfg.kvDim(),
+				cfg.intermediateSize(), cfg.numHeads(), cfg.numKvHeads(), cfg.headDim(), cfg.gqaRatio(),
+				cfg.rmsNormEps());
+		return PrefillWindowRegion.create("Qwen3", backend, shape, layers, null, 0f, false);
+	}
+
+	@Override
+	public boolean prefillRegionActive() {
+		return prefillRegion != null;
+	}
+
 	@Override
 	public void releaseGpuResources() {
+		// The region holds references to the device matrices below; close it first.
+		if (prefillRegion != null)
+			prefillRegion.close();
+		prefillRegion = null;
 		closeDeviceHalfMatrixArray(attnQDev);
 		closeDeviceHalfMatrixArray(attnKDev);
 		closeDeviceHalfMatrixArray(attnVDev);
@@ -502,9 +544,15 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 				cfg.kvDim(), cfg.numHeads(), lastPos + 1, kvLayout.needsAttentionScratch());
 		DeviceKvCache[] mirrors = mirrorsFor(requestId);
 
-		for (int li = 0; li < L; li++)
-			x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws,
-					GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)));
+		PrefillWindowRegion.Window win = openPrefillWindow(W);
+		try {
+			for (int li = 0; li < L; li++)
+				x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws,
+						GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)), win);
+		} finally {
+			if (win != null)
+				win.close();
+		}
 
 		if (a != null) {
 			int seqLen = lastPos + 1;
@@ -609,7 +657,10 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	}
 
 	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
-			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror) {
+			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror,
+			PrefillWindowRegion.Window win) {
+		if (win != null && prefillRegion != null && prefillRegion.eligible(li))
+			return transformerLayerOnDevice(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, win);
 		int W = x.length;
 		int H = cfg.hiddenDim();
 		int qDim = cfg.qDim();
@@ -629,53 +680,8 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		projectWindow(attnK[li], attnKQ4Dev, attnKDev, li, ws.norm1, ws.k, kvDim, H, startPos);
 		projectWindow(attnV[li], attnVQ4Dev, attnVDev, li, ws.norm1, ws.v, kvDim, H, startPos);
 
-		RmsNormEvent qkNormEvt = new RmsNormEvent();
-		qkNormEvt.begin();
-		for (int b = 0; b < W; b++) {
-			rmsNormPerHead(ws.q[b], qNorm[li], cfg.numHeads(), cfg.headDim(), cfg.rmsNormEps());
-			rmsNormPerHead(ws.k[b], kNorm[li], cfg.numKvHeads(), cfg.headDim(), cfg.rmsNormEps());
-		}
-		qkNormEvt.windowSize = W;
-		qkNormEvt.startPosition = startPos;
-		qkNormEvt.dimension = cfg.headDim();
-		qkNormEvt.commit();
-
-		RopeEvent ropeEvt = new RopeEvent();
-		ropeEvt.begin();
-		for (int b = 0; b < W; b++) {
-			Qwen3Rope.apply(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.rope());
-			Qwen3Rope.apply(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.rope());
-		}
-		ropeEvt.windowSize = W;
-		ropeEvt.startPosition = startPos;
-		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
-		ropeEvt.commit();
-
-		// Host KV first and always; a device mirror only copies it.
-		GpuAttentionMirror g = gpuAttention;
-		WindowStepEvent kvEvt = WindowStepEvent.start();
-		for (int b = 0; b < W; b++) {
-			kCacheLayer.writeToken(startPos + b, ws.k[b]);
-			vCacheLayer.writeToken(startPos + b, ws.v[b]);
-			if (g != null)
-				mirror = g.append(mirror, startPos + b, ws.k[b], ws.v[b], W);
-		}
-		kvEvt.end(WindowStepEvent.KV_WRITE, W, startPos);
-
-		AttentionEvent attnEvt = new AttentionEvent();
-		attnEvt.begin();
-		if (g == null || !g.attendWindow(mirror, startPos, ws.q, ws.attnOut)) {
-			for (int b = 0; b < W; b++) {
-				int seqLen = startPos + b + 1;
-				float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
-				float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
-				gqaInto(cfg, ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
-			}
-		}
-		attnEvt.windowSize = W;
-		attnEvt.startPosition = startPos;
-		attnEvt.contextLength = startPos + W;
-		attnEvt.commit();
+		normalizeAndRotateQk(li, startPos, ws, W);
+		writeKvAndAttend(startPos, kCacheLayer, vCacheLayer, ws, mirror, W);
 
 		projectWindow(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, qDim, startPos);
 
@@ -724,6 +730,122 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		residEvt2.commit();
 
 		return x;
+	}
+
+	/** The per-head Q/K norm and RoPE over a window, shared by the host and device-region window paths. */
+	private void normalizeAndRotateQk(int li, int startPos, BatchWorkspace ws, int W) {
+		RmsNormEvent qkNormEvt = new RmsNormEvent();
+		qkNormEvt.begin();
+		for (int b = 0; b < W; b++) {
+			rmsNormPerHead(ws.q[b], qNorm[li], cfg.numHeads(), cfg.headDim(), cfg.rmsNormEps());
+			rmsNormPerHead(ws.k[b], kNorm[li], cfg.numKvHeads(), cfg.headDim(), cfg.rmsNormEps());
+		}
+		qkNormEvt.windowSize = W;
+		qkNormEvt.startPosition = startPos;
+		qkNormEvt.dimension = cfg.headDim();
+		qkNormEvt.commit();
+
+		RopeEvent ropeEvt = new RopeEvent();
+		ropeEvt.begin();
+		for (int b = 0; b < W; b++) {
+			Qwen3Rope.apply(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), cfg.rope());
+			Qwen3Rope.apply(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), cfg.rope());
+		}
+		ropeEvt.windowSize = W;
+		ropeEvt.startPosition = startPos;
+		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
+		ropeEvt.commit();
+	}
+
+	/**
+	 * The window's KV write and attention, shared by the host and device-region window
+	 * paths: host KV first and always, then the device mirror as one copy per tensor, then
+	 * attention on the kernel when the mirror is readable and on the CPU otherwise.
+	 */
+	private void writeKvAndAttend(int startPos, SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
+			BatchWorkspace ws, DeviceKvCache mirror, int W) {
+		GpuAttentionMirror g = gpuAttention;
+		WindowStepEvent kvEvt = WindowStepEvent.start();
+		for (int b = 0; b < W; b++) {
+			kCacheLayer.writeToken(startPos + b, ws.k[b]);
+			vCacheLayer.writeToken(startPos + b, ws.v[b]);
+		}
+		if (g != null)
+			mirror = g.appendWindow(mirror, startPos, ws.k, ws.v, W);
+		kvEvt.end(WindowStepEvent.KV_WRITE, W, startPos);
+
+		AttentionEvent attnEvt = new AttentionEvent();
+		attnEvt.begin();
+		if (g == null || !g.attendWindow(mirror, startPos, ws.q, ws.attnOut)) {
+			for (int b = 0; b < W; b++) {
+				int seqLen = startPos + b + 1;
+				float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
+				float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
+				gqaInto(cfg, ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+			}
+		}
+		attnEvt.windowSize = W;
+		attnEvt.startPosition = startPos;
+		attnEvt.contextLength = startPos + W;
+		attnEvt.commit();
+	}
+
+	/** Takes a prefill-window region window for {@code W} rows, or null for the host path. */
+	private PrefillWindowRegion.Window openPrefillWindow(int W) {
+		PrefillWindowRegion region = prefillRegion;
+		if (region == null || W <= PrefillWindowRegion.MAX_HOST_WINDOW)
+			return null;
+		try {
+			return region.open(W);
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			warnPrefillRegionFellBackOnce();
+			return null;
+		}
+	}
+
+	/**
+	 * {@link #transformerLayerBatch} through the prefill-window device region: the
+	 * region runs the norm and the Q/K/V projections, the per-head norm, RoPE, the KV
+	 * write and attention run here as on the host path, and the region finishes the
+	 * layer. Running out of device memory in the region redoes the layer on the host
+	 * path from the host residual, which the region has not touched.
+	 */
+	private float[][] transformerLayerOnDevice(float[][] x, int li, int startPos, SessionKvTensor kCacheLayer,
+			SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror, PrefillWindowRegion.Window win) {
+		int W = x.length;
+		WindowStepEvent devEvt = WindowStepEvent.start();
+		try {
+			win.runLayer(li, x, startPos, null, ws.q, ws.k, ws.v);
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			warnPrefillRegionFellBackOnce();
+			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, null);
+		}
+		devEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
+
+		normalizeAndRotateQk(li, startPos, ws, W);
+		writeKvAndAttend(startPos, kCacheLayer, vCacheLayer, ws, mirror, W);
+
+		WindowStepEvent finishEvt = WindowStepEvent.start();
+		try {
+			win.finishLayer(li, ws.attnOut, x);
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			warnPrefillRegionFellBackOnce();
+			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, null);
+		}
+		finishEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
+		return x;
+	}
+
+	private void warnPrefillRegionFellBackOnce() {
+		if (prefillRegionFallbackWarned.compareAndSet(false, true))
+			log.warning("Qwen3: out of device memory in the prefill-window device region - this window's layer runs"
+					+ " on the host path between device matmuls. Lower --gpu-layers to leave the region room.");
 	}
 
 	private float[][] transformerLayerMultiDecode(float[][] x, int li, int[] positions,
