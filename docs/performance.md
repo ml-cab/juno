@@ -521,6 +521,21 @@ mixed load; re-run gate ≤ **1.25×** that max (**≤ 5702 ms**).
 
 Workload: raw 256-token user prompt (`compare-prefill-batch.sh`), `max_tokens=8`, JFR on. API reported 273 prompt tokens (chat template).
 
+**Default per surface (2026-10-02):** [`perf-compare/20261002T194000Z-tier01b-item3-chunk-review`](perf-compare/20261002T194000Z-tier01b-item3-chunk-review/INDEX.md).
+TinyLlama Q4_K_M, one 512-token prefill per request after two warm-ups, median of three, unpinned:
+
+| Surface | `32` | Wider window | Default |
+|---------|-----:|-------------:|---------|
+| GPU local, `static` | 1,417 ms | 549 ms (whole prompt), 2.58x | sized to the prompt |
+| GPU `JunoPlayer`-shaped (3 in-process shards), `static` | 1,433 ms | 575 ms, 2.49x | sized to the prompt |
+| CPU local | 90.4 s | 90.6 s (128), 91.2 s (512) | `32` |
+| `--lora-play` (LoRA handler) | 19.1 s | 18.9 s, 1.01x | `32` in `juno lora` |
+| `cluster --pType pipeline` / `tensor` | 20.3 s / 28.8 s | 21.3 s / 29.7 s at 512 | `32` (nodes prefill one token per call) |
+
+Under `--schedule continuous` with three short streaming requests beside the 512-token prompt, the
+short requests' mean time to first token is 898 ms at `32`, 1,004 ms at `128` and 1,336 ms at `512`,
+and the long prompt's is 3,539, 1,978 and 1,478 ms; `32` stays the default as the fairness setting.
+
 **JFR:** `juno.PrefillBatch` events populate `ForwardPass.prefill.*` on the API path (replacing the prior `prefill.count=0` gap on batched prefill).
 
 **Parity:** `LlamaTransformerHandlerPrefillChunkParityTest` — chunked `forwardBatch` prefill matches whole-window logits within `1e-4`. `GenerationLoopTest.prefill_chunk_sizes_produce_same_tokens_as_whole_window` — chunk sizes 1 / 32 / whole window produce identical greedy decode.

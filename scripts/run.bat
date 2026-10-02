@@ -138,6 +138,7 @@ set "CACHE_TYPE_K_CLUSTER=%JUNO_CACHE_TYPE_K%"
 set "CACHE_TYPE_V_CLUSTER=%JUNO_CACHE_TYPE_V%"
 set "SCHEDULE_CLUSTER=%JUNO_SCHEDULE%"
 set "KV_PAGE_SIZE_CLUSTER=%JUNO_KV_PAGE_SIZE%"
+set "PREFILL_BATCH_CLUSTER=%JUNO_PREFILL_BATCH%"
 set "GRAMMAR_FILE_CLUSTER=%JUNO_GRAMMAR_FILE%"
 set "JSON_SCHEMA_FILE_CLUSTER=%JUNO_JSON_SCHEMA_FILE%"
 set "USE_GPU=true"
@@ -173,6 +174,7 @@ if /i "%~1"=="--cache-type-k" ( set "CACHE_TYPE_K_CLUSTER=%~2" & shift & shift &
 if /i "%~1"=="--cache-type-v" ( set "CACHE_TYPE_V_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--schedule" ( set "SCHEDULE_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--kv-page-size" ( set "KV_PAGE_SIZE_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
+if /i "%~1"=="--prefill-batch" ( set "PREFILL_BATCH_CLUSTER=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--float16" ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--fp16"    ( set "DTYPE=FLOAT16" & shift & goto :cluster_parse )
 if /i "%~1"=="--float32" ( set "DTYPE=FLOAT32" & shift & goto :cluster_parse )
@@ -214,6 +216,7 @@ if /i "%~1"=="--help" (
   echo   --cache-type-v f16^|q8_0 V cache type (default f16)
   echo   --schedule static^|continuous  serving schedule (default static; cluster falls back)
   echo   --kv-page-size N           page size when continuous (default 16)
+  echo   --prefill-batch N          max prompt tokens per prefill window (default 32)
   echo   --heap SIZE       (default: derived from model size)
   echo   --jfr DURATION    Java Flight Recording  e.g. 5m 30s 1h
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
@@ -284,6 +287,8 @@ set "SCHEDULE_ARG_CLUSTER="
 if not "%SCHEDULE_CLUSTER%"=="" set "SCHEDULE_ARG_CLUSTER=--schedule %SCHEDULE_CLUSTER%"
 set "KV_PAGE_SIZE_ARG_CLUSTER="
 if not "%KV_PAGE_SIZE_CLUSTER%"=="" set "KV_PAGE_SIZE_ARG_CLUSTER=--kv-page-size %KV_PAGE_SIZE_CLUSTER%"
+set "PREFILL_BATCH_ARG_CLUSTER="
+if not "%PREFILL_BATCH_CLUSTER%"=="" set "PREFILL_BATCH_ARG_CLUSTER=--prefill-batch %PREFILL_BATCH_CLUSTER%"
 if not "%GRAMMAR_FILE_CLUSTER%"=="" if not "%JSON_SCHEMA_FILE_CLUSTER%"=="" (
   echo [ERR] --grammar-file and --json-schema-file are mutually exclusive
   exit /b 1
@@ -299,7 +304,7 @@ if not "%HF%"=="" ( set "HF_ARG_CLUSTER=--hf %HF%" & echo [WARN] Resolving --hf 
 
 call :prepend_cuda_path
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG_CLUSTER% %HF_ARG_CLUSTER% --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %EMBEDDINGS_ARG_CLUSTER% %POOLING_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %GRAMMAR_FILE_ARG_CLUSTER% %JSON_SCHEMA_FILE_ARG_CLUSTER% %VERBOSE_FLAG%
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-Djuno.node.heap=%HEAP%" "-Djuno.byteOrder=%BYTE_ORDER%" -jar "%JUNO_PLAYER_JAR%" %MODEL_ARG_CLUSTER% %HF_ARG_CLUSTER% --pType "%PTYPE%" --dtype "%DTYPE%" --byteOrder "%BYTE_ORDER%" --max-tokens %MAX_TOKENS% --temperature %TEMPERATURE% --top-k %TOP_K% --top-p %TOP_P% %GPU_FLAG% %JFR_ARG_CLUSTER% %LORA_PLAY_ARG_CLUSTER% %API_PORT_ARG_CLUSTER% %EMBEDDINGS_ARG_CLUSTER% %POOLING_ARG_CLUSTER% %CACHE_TYPE_K_ARG_CLUSTER% %CACHE_TYPE_V_ARG_CLUSTER% %SCHEDULE_ARG_CLUSTER% %KV_PAGE_SIZE_ARG_CLUSTER% %PREFILL_BATCH_ARG_CLUSTER% %GRAMMAR_FILE_ARG_CLUSTER% %JSON_SCHEMA_FILE_ARG_CLUSTER% %VERBOSE_FLAG%
 goto :eof
 
 rem ============================================================================
@@ -426,7 +431,8 @@ if /i "%~1"=="--help" (
   echo   --gpu-layers N^|all^|auto    GPU-resident transformer layers (default auto)
   echo   --parallel N               static micro-batch size (default 1)
   echo   --batch-window-ms M        batch window when parallel^>1 (default 50)
-  echo   --prefill-batch N          prefill microbatch chunk size (default 32)
+  echo   --prefill-batch N          max prompt tokens per prefill window (default: sized to
+  echo                              the whole prompt on GPU with --schedule static; 32 otherwise)
   echo   --spec-type none^|ngram-simple^|draft-simple  speculative decoding (default none)
   echo   --spec-ngram-n N           ngram order for the draft cache (default 3; ngram-simple only)
   echo   --spec-ngram-m N           max tokens drafted per verify round (default 4)

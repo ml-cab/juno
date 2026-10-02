@@ -27,7 +27,7 @@ import java.util.concurrent.Flow;
 import cab.ml.juno.coordinator.GenerationLoop;
 import cab.ml.juno.coordinator.GenerationResult;
 import cab.ml.juno.coordinator.InferenceRequest;
-import cab.ml.juno.coordinator.PrefillBatchOptions;
+import cab.ml.juno.coordinator.PrefillChunkDefaults;
 import cab.ml.juno.coordinator.PublisherTokenConsumer;
 import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.coordinator.BatchConfig;
@@ -271,10 +271,11 @@ public final class JunoPlayer implements AutoCloseable {
 			var pipeline = LocalInferencePipeline.from(shardMap, new ArrayList<>(handlers), config.vocabSize(),
 					config.hiddenDim(), config.numHeads());
 			var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-			var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache,
-					cab.ml.juno.coordinator.PrefillMode.BATCHED,
-					PrefillBatchOptions.resolve(prefillBatch).chunkSize(), specOptions);
 			var schedule = cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv();
+			int chunkSize = PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.EMBEDDED, prefillBatch,
+					schedule.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.STATIC, gpuCtx);
+			var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache,
+					cab.ml.juno.coordinator.PrefillMode.BATCHED, chunkSize, specOptions);
 			BatchConfig batch = ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig();
 			if (schedule.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.CONTINUOUS)
 				batch = cab.ml.juno.coordinator.ServeSchedulePolicy.runningSetConfig(batch);

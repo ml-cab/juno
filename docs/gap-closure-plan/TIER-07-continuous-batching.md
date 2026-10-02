@@ -64,6 +64,23 @@ actually help rather than hurt.
    name what changed since the README's original judgement, or state that nothing did, and record the
    measured smoke-matrix duration that supports the call.
 
+6. **Load-dependent prefill chunk sizing under `continuous` (added 2026-10-02, owner decision; handed
+   over by [Tier 01B](TIER-01B-prefill-throughput.md) item 3).** `continuous` keeps the fixed
+   `--prefill-batch` default of 32 because that is the decode-interleaving fairness unit: under mixed
+   load (one 512-token prompt plus three short streaming requests, TinyLlama, GPU) 32 gives the short
+   requests the lowest time to first token (898 ms, against 1,004 ms at 128 and 1,336 ms at 512). The
+   cost is paid when nothing needs protecting: a 512-token prompt arriving alone takes 2,235 ms under
+   `continuous` at 32, against 600 ms at 512 and 549 ms under `static` with whole-prompt sizing
+   ([`20261002T194000Z-tier01b-item3-chunk-review`](../perf-compare/20261002T194000Z-tier01b-item3-chunk-review/INDEX.md)).
+   A fixed number cannot be right for both cases, so the chunk becomes a function of the step's load,
+   built on item 1's token budget: a prefill whose step has no decoding member takes the whole
+   remaining prompt (bounded by the free-VRAM sizing `static` already uses), and one that shares the
+   step with decoders takes what the step's budget leaves. The owner chose this over moving the fixed
+   default to 128 (short-request TTFT +12% on TinyLlama, more on larger models) and over free-VRAM sizing
+   for `continuous` (interleaving disappears). An explicit `--prefill-batch N` keeps meaning a fixed `N`
+   on `continuous`. `PrefillChunkDefaults` (coordinator) is where the default lives today; its
+   `continuous` reason and `docs/howto.md`'s `--prefill-batch` row change in the same change.
+
 ### Out of scope
 
 - Any change to the `static` schedule itself, beyond what's needed to keep the Tier-00 prefix-cache
@@ -94,6 +111,8 @@ actually help rather than hurt.
 1. Write the throughput benchmark reproduction first (confirm the 0.86x baseline still holds on
    current HEAD, accounting for whatever Tiers 01-03 already changed) as the before-measurement.
 2. Implement token-budget sizing in `ContinuousMixedStepPolicy`.
+2a. On top of it, item 6: the load-dependent prefill chunk, measured on its own against fixed 32
+    before step 3 changes the concurrency ceiling.
 3. Raise/validate the concurrency ceiling.
 4. Re-run the benchmark; iterate until continuous beats static or the ceiling of what's achievable
    without further architectural change is well-understood and documented.
@@ -104,6 +123,11 @@ actually help rather than hurt.
 - **Reproduce the existing 0.86x benchmark** as an automated, re-runnable check (if it isn't
   already one) rather than a one-off manual measurement — this becomes the tier's primary
   regression/success gate.
+- **Item 6 (load-dependent chunk)**: `ContinuousMixedStepPolicyTest` cases that a prefill with no
+  decoding member in its step receives its whole remaining prompt (capped by the sizing bound), that one
+  sharing a step with decoders receives no more than the budget leaves, and that an explicit
+  `--prefill-batch N` still yields fixed `N`-token chunks; and a `PrefillChunkDefaults` test for the new
+  `continuous` default.
 - **`ContinuousMixedStepPolicyTest`**: token-budget sizing correctness — a step's actual token cost
   stays within budget across varied decode/prefill-chunk mixes.
 - **New concurrency-ceiling test**: correctness (not just throughput) at the new higher ceiling —
@@ -125,6 +149,14 @@ actually help rather than hurt.
     that wins on aggregate tokens by starving individual streams has not improved the product.
   - Correctness at the raised concurrency ceiling: no request starvation (every admitted request
     completes) and no KV cross-contamination, asserted by test rather than by throughput alone.
+  - Item 6, a prompt alone: a 512-token prefill under `continuous` with no other request in flight takes
+    **<= 1.25x** the time it takes under `static` on the same build (2,235 ms against 549 ms today on
+    TinyLlama, 4.07x), median of three, TinyLlama and Mistral 7B.
+  - Item 6, under mixed load: on `compare-mixed-prefill.sh --n-prompt 512` (three short streams), the
+    short requests' mean TTFT **<= 1.10x** the fixed-32 reading and the long prompt's TTFT **<= 0.75x**
+    it, from a same-hour interleaved A/B with pinned clocks (fixed `--prefill-batch 32` against the new
+    default; README, "No-regression gates tighter than the floor are Juno-against-Juno"), TinyLlama and
+    Mistral 7B.
   - `static` must be untouched: Juno tg and pp t/s **>= 0.98x** the pre-tier build, from a same-hour interleaved A/B with pinned clocks against the pre-tier build (README, "No-regression gates tighter than the floor are Juno-against-Juno"), since
     this tier is scoped to change only `continuous`. If the A/B's own spread on this host is wider than
     2%, record the spread and score against it rather than claiming a resolution the harness lacks.
@@ -141,6 +173,10 @@ comparison.
       documents precisely why not, with a concrete follow-up path, rather than shipping silently
       unchanged).
 - [ ] Token-budget scheduling implemented and correctness-tested.
+- [ ] Item 6: the `continuous` prefill chunk follows the step's load, an explicit `--prefill-batch N`
+      still fixes it, and both item 6 thresholds are met (a prompt alone within 1.25x of `static`;
+      under mixed load short-request TTFT within 1.10x of fixed 32 and the long prompt's at most 0.75x
+      of it), with the run directory cited.
 - [ ] Concurrency ceiling raised and validated, or kept at 8 with a documented, measured reason.
 - [ ] Cluster-support decision made and executed (real support, or a closed, technically-grounded
       "not now" note replacing the open-ended "v1 scope" comment).

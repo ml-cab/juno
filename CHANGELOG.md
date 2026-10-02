@@ -1,5 +1,21 @@
 ## Status 
 
+**Session 105** — The prefill window default reviewed on every surface
+
+- **The `JunoPlayer` facade sizes its prefill window like local mode.** On a GPU with the `static`
+  schedule, an embedder that does not set `.prefillBatch(N)` now gets a window covering the whole
+  prompt when free VRAM allows, instead of a fixed 32 tokens. A 512-token TinyLlama prefill through
+  the same in-process three-shard pipeline took 575 ms against 1,433 ms at 32.
+- **One resolver for every entry point.** `PrefillChunkDefaults` decides the default chunk size for
+  local mode, the facade, the cluster REPL, the standalone coordinator and `juno lora`. Every surface
+  that keeps 32 does so on a measurement: on CPU a wider window does not change prefill time; under
+  `--schedule continuous` 32 gives concurrent requests the lowest time to first token; cluster nodes
+  prefill one token per call, so the size does not change the work; and the LoRA handler's prefill
+  does not speed up with window width.
+- **`juno cluster --prefill-batch N` is accepted.** The cluster launchers (`run.sh` and `run.bat`)
+  rejected the flag as unknown although the engine reads it; they now pass it through, as
+  `JUNO_PREFILL_BATCH` already did. Launcher help no longer states a fixed default of 32 for local mode.
+
 **Session 104** — A prefill window's residual stays on the GPU from layer to layer
 
 - **One upload and one download per window.** On CUDA, the prefill-window device region now keeps the

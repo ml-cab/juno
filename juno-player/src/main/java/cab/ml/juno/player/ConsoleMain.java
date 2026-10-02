@@ -67,6 +67,7 @@ import cab.ml.juno.node.MmqOptions;
 import cab.ml.juno.node.PoolingMode;
 import cab.ml.juno.coordinator.BatchConfig;
 import cab.ml.juno.coordinator.PrefillBatchOptions;
+import cab.ml.juno.coordinator.PrefillChunkDefaults;
 import cab.ml.juno.coordinator.ServeBatchOptions;
 
 import cab.ml.juno.node.LlamaConfig;
@@ -1293,7 +1294,7 @@ public final class ConsoleMain {
 				config.numHeads());
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
-				PrefillBatchOptions.resolve(prefillBatch).chunkSize(),
+				PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.LORA_REPL, prefillBatch, true, null),
 				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
 
 		LoraAdamOptimizer optimizer = LoraAdamOptimizer.defaults(loraLr);
@@ -2221,7 +2222,7 @@ public final class ConsoleMain {
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
-				PrefillBatchOptions.resolve(prefillBatch).chunkSize(),
+				PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.CLUSTER_REPL, prefillBatch, true, null),
 				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
 
 		startRepl(loop, tokenizer); // calls System.exit(0) on quit — shutdown hook fires from there
@@ -2368,13 +2369,10 @@ public final class ConsoleMain {
 		}
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
-		// Adaptive whole-prompt chunk sizing applies to the static schedule only —
-		// continuous keeps fixed-size chunking for decode-interleaving fairness.
 		boolean staticSchedule = cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv()
 				.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.STATIC;
-		int resolvedPrefillBatch = staticSchedule
-				? PrefillBatchOptions.resolveAdaptive(prefillBatch, gpuCtx).chunkSize()
-				: PrefillBatchOptions.resolve(prefillBatch).chunkSize();
+		int resolvedPrefillBatch = PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.LOCAL_REPL, prefillBatch,
+				staticSchedule, gpuCtx);
 		if (prefillBatch == null && staticSchedule && gpuCtx != null)
 			log.info("Prefill chunk size resolved to " + resolvedPrefillBatch
 					+ " (adaptive, free VRAM=" + (gpuCtx.freeVramBytes() / (1024 * 1024)) + " MiB)");
@@ -2641,7 +2639,7 @@ public final class ConsoleMain {
 
 		var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 		var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache, prefillMode,
-				PrefillBatchOptions.resolve(prefillBatch).chunkSize(),
+				PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.CLUSTER_REPL, prefillBatch, true, null),
 				cab.ml.juno.coordinator.SpeculativeDecodeOptions.resolve(specType, specNgramN, specNgramM));
 		var scheduler = new cab.ml.juno.coordinator.RequestScheduler(1000, loop, resolveBatchConfig(),
 				cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv());

@@ -623,6 +623,14 @@ GPU FFI (node module — Panama project, JEP 454):
         createMatVec() delegates to GpuBindings.createMatVec(GpuContext) — no instanceof checks.
         freeVramBytes() — live free-VRAM query (GpuBindings.memGetInfo), used by coordinator's
         PrefillBatchOptions.resolveAdaptive for whole-prompt prefill chunk sizing on static schedule.
+  PrefillChunkDefaults (coordinator) — the one place every GenerationLoop entry point resolves its
+        prefill chunk size: Surface LOCAL_REPL / EMBEDDED (JunoPlayer) / CLUSTER_REPL / COORDINATOR /
+        LORA_REPL. An explicit --prefill-batch / JUNO_PREFILL_BATCH / builder value wins everywhere;
+        otherwise LOCAL_REPL and EMBEDDED on a GPU with the static schedule size from free VRAM, and
+        every other case uses the fixed 32 (CPU: window width does not change prefill time; continuous:
+        32 is the decode-interleaving fairness unit; cluster and coordinator: the gRPC pipeline clients
+        prefill one token per forward call, so the chunk is inert; LoRA REPL: the LoRA handler's prefill
+        does not speed up with window width).
 
 Third-party JVM integration (juno-player module): JunoPlayer (facade), LoraTrainer,
 LocalInferencePipeline.embedLastToken/embedTokens, PublisherTokenConsumer → Flow.Publisher,

@@ -10,7 +10,8 @@ javadoc has described since before this plan existed but that no handler actuall
 (§2.2) — replace the current "broadcast full computation to every node, AllReduce a mathematically
 inert sum" stub path with genuine tensor-sliced compute. Separately, evaluate and, if justified,
 implement a single-process multi-GPU path (so one JVM can use more than one local GPU without a
-gRPC round trip per exchange), addressing §1.8.
+gRPC round trip per exchange), addressing §1.8. And make prompt processing on every cluster path batched rather
+than one gRPC round trip per prompt token (scope item 5, added 2026-10-02).
 
 ## Why this tier, why now
 
@@ -53,6 +54,33 @@ against the existing (correct, if slow) single-node dense computation.
    only has one GPU, so this is a design-and-unit-test effort here, validated for real once
    multi-GPU hardware is available — flag that constraint explicitly), implement it.
 
+5. **Batched prefill on every cluster path (added 2026-10-02, owner decision; found by
+   [Tier 01B](TIER-01B-prefill-throughput.md) item 3).** Neither gRPC pipeline client
+   (`ProcessPipelineClient` for `--pType pipeline`, `TensorParallelPipelineClient` for `--pType tensor`)
+   overrides `InferencePipeline.prefillBatch`, so a cluster prefill runs the interface default: one
+   `ForwardPass` call per prompt token, whatever `--prefill-batch` says. Nothing single-node prefill has
+   gained (batched GEMMs, the prefill-window device region, whole-window attention) reaches a cluster
+   node. Measured on TinyLlama, three forked nodes on this host's one GPU, a 512-token prompt
+   ([`20261002T194000Z-tier01b-item3-chunk-review`](../perf-compare/20261002T194000Z-tier01b-item3-chunk-review/INDEX.md)):
+   local 0.55 s; pipeline 20.3 s at chunk 32 and 21.3 s at 512; tensor 28.8 s and 29.7 s. The scope is
+   **both cluster modes and the standalone coordinator** (`juno-master`'s `CoordinatorMain` builds the
+   same two clients), not tensor mode alone:
+   - a window forward on the node contract: `api/src/main/proto/inference.proto` gains the window shape
+     (token ids or a `W x hidden` activation, start position, window width) in the same change as the code,
+     per the README's feature-complete rule. `ForwardRequest.batch_size` exists today but no node treats
+     it as a prefill window; reuse it only if the node's semantics for it are made explicit and tested;
+   - the node runs its handler's batched window path (`forwardBatch`) for a window request, so a GPU node
+     takes the prefill-window device region exactly as a local run does;
+   - `ProcessPipelineClient` passes a window's activations from shard to shard, one call per shard per
+     window; `TensorParallelPipelineClient` exchanges and reduces once per layer per window rather than
+     per token (with item 1's per-layer AllReduce once it lands);
+   - both clients override `prefillBatch`; a node that does not support window requests fails the
+     request with an error naming the node, rather than the coordinator silently falling back to
+     per-token calls;
+   - `--prefill-batch` then matters on cluster surfaces, so `PrefillChunkDefaults` (coordinator) re-reads
+     the cluster default (it is 32 today because the value is inert there) and `docs/howto.md`'s
+     `--prefill-batch` row changes with it.
+
 ### Out of scope
 
 - NCCL/RCCL integration — the gap analysis notes this is a deliberate design choice (Java
@@ -74,8 +102,8 @@ against the existing (correct, if slow) single-node dense computation.
 | 4 | Static schedule | tensor-parallel + static batching interaction must be retested now that per-layer AllReduce replaces the old whole-output reduction |
 | 5 | Continuous schedule | tensor-parallel + continuous is currently auto-fallback to static (Tier 07's territory) — confirm this tier's changes don't accidentally make that combination reachable in a half-working state; keep the fallback until Tier 07 (or a later revisit) explicitly re-evaluates it |
 | 6 | Single-node local mode | single-process multi-GPU (if built) is exercised here, even with only one physical GPU available — design for N≥2 and validate what's testable with N=1 (i.e., the code path compiles/runs correctly in a single-GPU degenerate case) |
-| 7 | Pipeline-parallel cluster | must remain unaffected — this tier only changes the tensor-parallel path |
-| 8 | Tensor-parallel cluster | primary target of this entire tier |
+| 7 | Pipeline-parallel cluster | unaffected by the slicing work (items 1 to 4); **a primary target of item 5** (batched prefill), with greedy output identical to its per-token prefill and prefill time held to the item 5 threshold |
+| 8 | Tensor-parallel cluster | primary target of this entire tier, item 5 included |
 | 9 | LoRA training | confirm LoRA training still works (or is still explicitly unsupported) for tensor-parallel-sharded models |
 | 10 | LoRA playback | same |
 | 11 | Vision | vision is local-mode only; N/A for cluster/tensor-parallel this tier |
@@ -108,6 +136,9 @@ against the existing (correct, if slow) single-node dense computation.
 2. Implement real column-/row-parallel slicing for `LlamaTransformerHandler`; get the parity test
    passing at every split width step 0 made available.
 3. Replace `TensorParallelClusterIT`'s stub handler with the real sliced computation.
+3a. Item 5, batched cluster prefill, tests first. The contract change and the pipeline-mode and
+    coordinator half do not depend on slicing and are measured on their own, as a separate change; the
+    tensor-mode half lands after step 3 so it batches the real per-layer exchange rather than the stub.
 4. Extend to the remaining handlers, one at a time, each gated by its own parity test.
 5. Evaluate and, if justified, implement single-process multi-GPU addressing.
 6. Full cross-surface smoke matrix, with particular focus on the numerical-parity gate — this
@@ -128,6 +159,12 @@ against the existing (correct, if slow) single-node dense computation.
   limitation explicitly rather than claiming full validation).
 - **`ModelLiveRunnerIT`**: the existing 2 tensor-parallel checks get upgraded from stub-based to
   real-slicing-based; add checks for the other newly-sliced architectures.
+- **Item 5 (batched cluster prefill)**: a node-level test that a window request equals the same tokens
+  sent one per request (logits and KV within float tolerance, at window widths 1, 8, 9, 32 and 512); a
+  client test counting `ForwardPass` calls per prefill (one per shard per window in pipeline mode, not
+  one per token); a node that rejects window requests surfaces an error naming it; and a cluster IT
+  (both `--pType` values, and `CoordinatorMain`) whose greedy output over 64 tokens equals the per-token
+  prefill's on six prompts. `ThreeNodeClusterIT` and `TensorParallelClusterIT` keep passing.
 - **New bash smoke script**: `scripts/performance-tests/smoke-tier09-tensor-parallel.sh` — runs
   the 3-node tensor-parallel cluster against a real model and diffs output against a single-node
   dense run of the same model/prompt/seed.
@@ -153,6 +190,13 @@ against the existing (correct, if slow) single-node dense computation.
   - **Gate:** single-node throughput must not regress — Juno tg and pp t/s **>= 0.95x** the pre-tier
     build, from a same-hour interleaved A/B with pinned clocks against the pre-tier build (README, "No-regression gates tighter than the floor are Juno-against-Juno"), since this tier rewrites the projection path that single-node inference
     also uses.
+  - **Gate, item 5:** a 512-token prefill on TinyLlama through `./juno cluster` takes **<= 0.20x** the
+    per-token reading in each mode (pipeline 20.3 s, tensor 28.8 s at
+    `20261002T194000Z-tier01b-item3-chunk-review`, re-read on the pre-item-5 build before implementation),
+    median of three, with gRPC `ForwardPass` calls per prefill **<= ceil(512 / chunk) x nodes** read off the
+    run. Set well outside the noise floor on purpose: removing 511 of every 512 round trips per shard and
+    reaching the device region should be worth far more than 5x, and anything less means the window path
+    is not what runs.
   - **Recorded, no threshold:** 2- and 3-way TP throughput against single-node dense on this host.
     Expect it to be below 1.0x. Report the number and the reason plainly rather than omitting it.
 
@@ -171,6 +215,11 @@ tier reaches that point).
 - [ ] Real column-/row-parallel slicing implemented for every currently-supported transformer
       handler, numerically validated against single-node dense output.
 - [ ] `TensorParallelClusterIT` exercises real slicing, not a dummy-fixed-logit stub.
+- [ ] Item 5: prefill on `--pType pipeline`, `--pType tensor` and the standalone coordinator is batched
+      per window through a contract change recorded in `inference.proto`; greedy output equals the
+      per-token prefill's; the item 5 gate is met (512-token TinyLlama prefill <= 0.20x the per-token
+      reading in each mode, `ForwardPass` calls per prefill <= ceil(512 / chunk) x nodes), with the run
+      directory cited; the cluster `--prefill-batch` default re-read and documented.
 - [ ] Single-process multi-GPU evaluated; implemented if justified, with N=1 degenerate-case
       validation and an explicit note about what couldn't be validated without a second physical
       GPU.

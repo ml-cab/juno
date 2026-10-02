@@ -1,0 +1,16 @@
+cpu-local-static-32 {"prompt_tokens": 512, "ms": [90432.5, 90251.5, 90615.2], "median_ms": 90432.5, "min_ms": 90251.5, "max_ms": 90615.2, "spread_pct": 0.4, "prefill_tps_at_median": 5.66}
+cpu-local-static-128 {"prompt_tokens": 512, "ms": [91221.7, 90608.0, 90448.6], "median_ms": 90608.0, "min_ms": 90448.6, "max_ms": 91221.7, "spread_pct": 0.9, "prefill_tps_at_median": 5.65}
+cpu-local-static-512 {"prompt_tokens": 512, "ms": [91219.2, 91066.2, 91168.7], "median_ms": 91168.7, "min_ms": 91066.2, "max_ms": 91219.2, "spread_pct": 0.2, "prefill_tps_at_median": 5.62}
+gpu-cluster-pipeline-32 {"prompt_tokens": 512, "ms": [19906.7, 20291.4, 20586.8], "median_ms": 20291.4, "min_ms": 19906.7, "max_ms": 20586.8, "spread_pct": 3.4, "prefill_tps_at_median": 25.23}
+gpu-cluster-pipeline-512 {"prompt_tokens": 512, "ms": [21097.2, 21612.0, 21292.0], "median_ms": 21292.0, "min_ms": 21097.2, "max_ms": 21612.0, "spread_pct": 2.4, "prefill_tps_at_median": 24.05}
+gpu-cluster-tensor-32 {"prompt_tokens": 512, "ms": [28791.9, 28788.6, 28830.0], "median_ms": 28791.9, "min_ms": 28788.6, "max_ms": 28830.0, "spread_pct": 0.1, "prefill_tps_at_median": 17.78}
+gpu-cluster-tensor-512 {"prompt_tokens": 512, "ms": [29368.9, 29729.4, 29971.5], "median_ms": 29729.4, "min_ms": 29368.9, "max_ms": 29971.5, "spread_pct": 2.0, "prefill_tps_at_median": 17.22}
+gpu-local-static-adaptive {"prompt_tokens": 512, "ms": [548.7, 555.9, 535.8], "median_ms": 548.7, "min_ms": 535.8, "max_ms": 555.9, "spread_pct": 3.7, "prefill_tps_at_median": 933.11}
+gpu-local-static-32 {"prompt_tokens": 512, "ms": [1417.0, 1426.2, 1413.2], "median_ms": 1417.0, "min_ms": 1413.2, "max_ms": 1426.2, "spread_pct": 0.9, "prefill_tps_at_median": 361.33}
+gpu-local3-static-adaptive {"prompt_tokens": 512, "ms": [574.7, 566.5, 587.5], "median_ms": 574.7, "min_ms": 566.5, "max_ms": 587.5, "spread_pct": 3.7, "prefill_tps_at_median": 890.9}
+gpu-local3-static-32 {"prompt_tokens": 512, "ms": [1457.6, 1433.2, 1418.2], "median_ms": 1433.2, "min_ms": 1418.2, "max_ms": 1457.6, "spread_pct": 2.7, "prefill_tps_at_median": 357.24}
+gpu-local-continuous-32 {"prompt_tokens": 512, "ms": [2252.4, 2210.1, 2235.2], "median_ms": 2235.2, "min_ms": 2210.1, "max_ms": 2252.4, "spread_pct": 1.9, "prefill_tps_at_median": 229.06}
+gpu-local-continuous-128 {"prompt_tokens": 512, "ms": [873.0, 883.7, 874.5], "median_ms": 874.5, "min_ms": 873.0, "max_ms": 883.7, "spread_pct": 1.2, "prefill_tps_at_median": 585.48}
+gpu-local-continuous-512 {"prompt_tokens": 512, "ms": [599.9, 615.4, 586.6], "median_ms": 599.9, "min_ms": 586.6, "max_ms": 615.4, "spread_pct": 4.8, "prefill_tps_at_median": 853.48}
+gpu-loraplay-adaptive {"prompt_tokens": 512, "ms": [18858.3, 18869.5, 18847.7], "median_ms": 18858.3, "min_ms": 18847.7, "max_ms": 18869.5, "spread_pct": 0.1, "prefill_tps_at_median": 27.15}
+gpu-loraplay-32 {"prompt_tokens": 512, "ms": [19134.9, 19154.2, 19096.6], "median_ms": 19134.9, "min_ms": 19096.6, "max_ms": 19154.2, "spread_pct": 0.3, "prefill_tps_at_median": 26.76}

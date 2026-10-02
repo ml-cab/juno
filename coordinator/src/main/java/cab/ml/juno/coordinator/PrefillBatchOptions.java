@@ -15,6 +15,8 @@
  */
 package cab.ml.juno.coordinator;
 
+import java.util.function.LongSupplier;
+
 import cab.ml.juno.node.GpuContext;
 
 /**
@@ -89,13 +91,22 @@ public final class PrefillBatchOptions {
 	 * @param gpuCtx the GPU context prefill will run on, or null for CPU-only
 	 */
 	public static PrefillBatchOptions resolveAdaptive(Integer cliArg, GpuContext gpuCtx) {
+		return resolveAdaptiveFrom(cliArg, gpuCtx == null ? null : gpuCtx::freeVramBytes);
+	}
+
+	/**
+	 * As {@link #resolveAdaptive(Integer, GpuContext)}, with the live free-VRAM query
+	 * passed as a supplier ({@code null} for CPU-only) so callers without a
+	 * {@link GpuContext} instance, and tests, can drive it.
+	 */
+	static PrefillBatchOptions resolveAdaptiveFrom(Integer cliArg, LongSupplier freeVramBytes) {
 		if (cliArg != null)
 			return of(cliArg);
 		String env = env(ENV_PREFILL_BATCH);
 		if (env != null)
 			return of(parsePositiveInt(env));
-		if (gpuCtx != null) {
-			long freeBytes = gpuCtx.freeVramBytes();
+		if (freeVramBytes != null) {
+			long freeBytes = freeVramBytes.getAsLong();
 			if (freeBytes > 0)
 				return of(adaptiveChunkSize(freeBytes));
 		}

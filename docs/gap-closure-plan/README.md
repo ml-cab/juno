@@ -393,7 +393,7 @@ documentation audit.
 | [08](TIER-08-model-architecture-breadth.md) | Model architecture breadth | §1.9, real files in `models/` |
 | [06](TIER-06-speculative-decoding.md) | Speculative decoding expansion | §1.5 |
 | [07](TIER-07-continuous-batching.md) | Continuous batching maturity | §1.3 (scheduling half) |
-| [09](TIER-09-tensor-parallelism-multi-gpu.md) | Tensor parallelism & multi-GPU | §1.8, §2.2 |
+| [09](TIER-09-tensor-parallelism-multi-gpu.md) | Tensor parallelism & multi-GPU (and batched prefill on every cluster path, added 2026-10-02) | §1.8, §2.2 |
 | [10](TIER-10-gpu-backend-breadth-cpu-simd.md) | GPU backend breadth & CPU hot path (SIMD, allocation, threading) | §1.7 |
 | [11](TIER-11-vision.md) | Vision | §1.10 |
 | [12](TIER-12-lora.md) | LoRA | §1.11 |

@@ -1,6 +1,6 @@
 # Tier 01B: Prefill throughput
 
-Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); plan amended 2026-09-30 after the plan review (scope items 6 to 10, step 3a, the `juno.DeviceCompute` span); step 3a complete 2026-10-01: items 1a-ii, 7, 8 and 9 (pinned gate and CPU reference taken by the owner); item 10 (CI) removed as an exit criterion by the owner; step 4a (spans for the whole prefill window, added 2026-10-01 by owner decision) implemented and tested, its pinned A/B gate met 2026-10-02 (owner run); steps 4 (the per-term prefill breakdown, published unpinned, taken ahead of the 4a gate by owner decision) and 5 (the threshold decomposition) complete 2026-10-01, with the third milestone row (512 over 128) moved to Tier 02 by owner decision because no item here moves it; step 6 started 2026-10-02 under the owner's "one region, one change" decision: the prefill-window device region (item 6 with item 2's operand residency) is implemented and tested, logits bit-identical to the host path, its unpinned breakdown published, and its pinned A/B gate met 2026-10-02 (TinyLlama prefill 3.899x, owner run); item 6 is complete; item 2's remainder (the residual kept on the device across layers and the non-allocating `MatVec` form) implemented and tested 2026-10-02, measured unpinned (prefill 1.045x and 1.047x, staged bytes down 97% to 99% on the three region models); item 2's criterion met (owner decision 2026-10-02: its bytes threshold is scored on the three models whose attention runs in the region; Phi-3.5-mini's prefill bytes moved to Tier 02 item 8); this change's pinned no-regression gate met 2026-10-02 (owner run: generation 0.997x and 0.993x, prefill 1.073x and 1.049x)
+Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); plan amended 2026-09-30 after the plan review (scope items 6 to 10, step 3a, the `juno.DeviceCompute` span); step 3a complete 2026-10-01: items 1a-ii, 7, 8 and 9 (pinned gate and CPU reference taken by the owner); item 10 (CI) removed as an exit criterion by the owner; step 4a (spans for the whole prefill window, added 2026-10-01 by owner decision) implemented and tested, its pinned A/B gate met 2026-10-02 (owner run); steps 4 (the per-term prefill breakdown, published unpinned, taken ahead of the 4a gate by owner decision) and 5 (the threshold decomposition) complete 2026-10-01, with the third milestone row (512 over 128) moved to Tier 02 by owner decision because no item here moves it; step 6 started 2026-10-02 under the owner's "one region, one change" decision: the prefill-window device region (item 6 with item 2's operand residency) is implemented and tested, logits bit-identical to the host path, its unpinned breakdown published, and its pinned A/B gate met 2026-10-02 (TinyLlama prefill 3.899x, owner run); item 6 is complete; item 2's remainder (the residual kept on the device across layers and the non-allocating `MatVec` form) implemented and tested 2026-10-02, measured unpinned (prefill 1.045x and 1.047x, staged bytes down 97% to 99% on the three region models); item 2's criterion met (owner decision 2026-10-02: its bytes threshold is scored on the three models whose attention runs in the region; Phi-3.5-mini's prefill bytes moved to Tier 02 item 8); this change's pinned no-regression gate met 2026-10-02 (owner run: generation 0.997x and 0.993x, prefill 1.073x and 1.049x); item 3 (the chunk-sizing review per surface) complete 2026-10-02: the `JunoPlayer` facade sizes from free VRAM, every other fixed-32 surface has a measured reason, cluster launchers accept `--prefill-batch`; item 4 recorded in the step 4 record; remaining: step 8, the closing cross-surface matrix and pinned closing sweeps (threshold, decode and vision criteria, docs and CHANGELOG close-out)
 Gap analysis refs: none directly — this tier exists because the gap analysis has no prefill section
 at all, while the published measurements under `docs/perf-compare/` show prompt processing to be the
 single largest gap Juno has. See "Why this tier, why now".
@@ -374,7 +374,7 @@ on today's op-at-a-time GPU path either way.
 | 4 | Static schedule | primary target — this is where adaptive whole-prompt prefill already runs |
 | 5 | Continuous schedule | chunked prefill mixed with decode is the continuous engine's core loop; any per-chunk cost reduction must be verified there too, and the fixed-`32` default re-examined |
 | 6 | Single-node local mode | primary dev/test surface |
-| 7 | Pipeline-parallel cluster | prefill chunks cross the gRPC boundary per shard — confirm the per-chunk fixed cost being reduced here is not simply relocated into serialization |
+| 7 | Pipeline-parallel cluster | ~~prefill chunks cross the gRPC boundary per shard — confirm the per-chunk fixed cost being reduced here is not simply relocated into serialization~~ *Corrected 2026-10-02 (item 3 record): cluster prefill is not chunked at all; the gRPC clients send one `ForwardPass` per prompt token, so nothing this tier builds reaches a cluster node. Batched cluster prefill is [Tier 09](TIER-09-tensor-parallelism-multi-gpu.md) item 5 (owner decision). This tier's closing matrix records the row as correct but not reached, owned by Tier 09, not as a prefill PASS* |
 | 8 | Tensor-parallel cluster | same |
 | 9 | LoRA training | training prefills its own microbatches; confirm unaffected, or improved, but not silently changed in numerics. Training's existing `--gpu-attention` exemption (attention stays scalar CPU, REPL warns) is **re-verified and kept** by item 0, not quietly swept into the new default |
 | 10 | LoRA playback | playback prefills a LoRA-modified prefix; confirm the delta-add still composes correctly against a wider batched path. Same `--gpu-attention` exemption as row 9 — re-verified, kept, and still warned about |
@@ -2221,6 +2221,97 @@ the region's host side were 11.1% and 6.5% of the window before and 3.5% and 2.1
 1.05x. The decode criterion below stays open: it asks for every sweep model against the step-2 build, and for
 vision, which the closing matrix (step 8) takes.
 
+### 2026-10-02 — implementation step 6, item 3: the chunk-sizing review per surface
+
+**Plan-versus-code check before starting.** The tier's recorded state matched the code (items 0, 1, 2, 6 to 9
+done; HEAD `dec2b3e`; tree dirty only in `.gitignore` and the untracked `.github/`). This session's starting
+prompt again expected Tier 00, which has been complete since 2026-09-24; the plan, not the prompt, was right.
+Item 3's description held: adaptive sizing ran only in `ConsoleMain.runLocalRepl` on GPU plus `static`, and
+every other `GenerationLoop` construction took the fixed 32. Four things it did not say:
+- **The `JunoPlayer` facade was one of the fixed-32 surfaces**, although it builds the same in-process GPU
+  pipeline as the local REPL (`LocalInferencePipeline`, three shards by default, shared `GpuContext`). It is
+  a surface where the VRAM query is meaningful and the default was inherited, which is exactly the case
+  the step 4 decision says turns item 3 from a review into an implementation item.
+- **`docs/howto.md` said "local single-shard"**; the code applies the adaptive default at any `--nodes`.
+- **`./juno cluster --prefill-batch N` failed with "Unknown cluster flag"** (`run.sh`, and `run.bat` likewise
+  had no case for it), while `docs/howto.md` lists the flag for cluster. Not a silent no-op, but the
+  documented surface did not exist; only `JUNO_PREFILL_BATCH` reached the cluster REPL.
+- **Cross-surface row 7's premise is wrong: cluster prefill is not chunked at all.** Neither
+  `ProcessPipelineClient` nor `TensorParallelPipelineClient` overrides `InferencePipeline.prefillBatch`, so a
+  cluster prefill runs the interface default, one `forward` gRPC round trip per prompt token. Row 7 asks
+  that the per-chunk cost "not simply be relocated into serialization"; there is no per-chunk cost on that
+  path to relocate, and the batched prefill and the device region never reach a cluster node. Making
+  cluster prefill batched is a gRPC contract change and is not in item 3's scope; **raised with the owner
+  for a home** (Tier 09, tensor parallelism, or Tier 13, the cluster surface).
+
+**Measurement** (agent, unpinned: these readings choose defaults and gate nothing), published as
+[`20261002T194000Z-tier01b-item3-chunk-review`](../perf-compare/20261002T194000Z-tier01b-item3-chunk-review/INDEX.md).
+TinyLlama Q4_K_M, a raw prompt calibrated to 512 prompt tokens, two discarded warm-ups then three measured
+requests (`max_tokens=1`), median request wall time; jar `2267dbd7f9855ae5` (HEAD). Every spread under 5%.
+
+| Surface | 32 | Wider | Wider over 32 | Default decided |
+|---|---|---|---|---|
+| GPU local, static, 1 shard | 1,417 ms | adaptive 549 ms | 2.58x | adaptive (unchanged) |
+| GPU local, static, 3 in-process shards (the facade's shape) | 1,433 ms | adaptive 575 ms | 2.49x | **adaptive for the facade (was 32)** |
+| CPU local, static | 90,433 ms | 128: 90,608; 512: 91,169 ms | 1.00x; 0.99x | 32: window width does not move CPU prefill |
+| GPU `--lora-play` (the LoRA handler `juno lora` also runs) | 19,135 ms | adaptive 18,858 ms | 1.01x | 32 in `juno lora`: no gain, and no `GpuContext` there to size from |
+| GPU cluster, pipeline | 20,291 ms | 512: 21,292 ms | 0.95x | 32: inert (per-token gRPC prefill, above) |
+| GPU cluster, tensor | 28,792 ms | 512: 29,729 ms | 0.97x | 32: inert; the standalone coordinator builds the same two clients |
+| GPU local, continuous, request alone | 2,235 ms | 128: 875; 512: 600 ms | 2.56x; 3.73x | see mixed load below |
+
+Continuous under mixed load (`compare-mixed-prefill.sh --gpu --n-prompt 512`, three short streaming requests
+beside the long prompt, two cold runs per value):
+
+| Chunk | Short requests' mean TTFT | Short mean TPOT | Long prompt's TTFT |
+|---|---|---|---|
+| 32 | 898 / 904 ms | 196 / 197 ms | 3,539 / 3,544 ms |
+| 128 | 1,004 / 1,033 ms | 202 / 202 ms | 1,978 / 2,000 ms |
+| 512 | 1,336 / 1,383 ms | 124 / 126 ms | 1,478 / 1,533 ms |
+
+32 is the setting that gives short requests their lowest TTFT, which is what the continuous schedule's
+mixed stepping exists for, so 32 now has a measured reason there. 128 would shorten the long prompt's TTFT
+1.78x for about 13% more short-request TTFT; at 512 interleaving disappears (mixed over admit-time 1.00x and
+1.04x). Which trade the continuous schedule should make is a policy decision, **raised with the owner**; the
+default stays 32 until then. Only TinyLlama was read; a larger model makes each chunk's step longer, so a
+change of this default would be re-read on Mistral 7B first.
+
+**What shipped.**
+- `coordinator`: `PrefillChunkDefaults` (new): `Surface` (`LOCAL_REPL`, `EMBEDDED`, `CLUSTER_REPL`,
+  `COORDINATOR`, `LORA_REPL`) and one `resolve` every `GenerationLoop` entry point now calls (both
+  `ConsoleMain` cluster paths, its local and LoRA REPLs, `JunoPlayer`, `CoordinatorMain`); the javadoc carries
+  each fixed default's measured reason. `PrefillBatchOptions.resolveAdaptiveFrom` takes the free-VRAM query
+  as a supplier so the resolver is testable without a device.
+- `JunoPlayer`: sized from free VRAM on GPU plus `static` (the only behaviour change).
+- Launchers: `run.sh` and `run.bat` cluster accept `--prefill-batch` (and `JUNO_PREFILL_BATCH`), with help
+  text; the local help's "(default 32)" corrected. Checked live: `./juno cluster --prefill-batch 64` reaches
+  the engine's command line.
+- Docs: `docs/howto.md` (the flag's row, the facade section), `docs/agent-arch.txt`, `docs/performance.md`,
+  `CHANGELOG.md`.
+
+**Tests, written first.** `PrefillChunkDefaultsTest` (`coordinator`, 15 cases): the default per surface on
+GPU, CPU, static and continuous, a failed VRAM query, and an explicit value overriding on every surface,
+backend and schedule (the plan's "assert the new default per surface, and assert that an explicit
+`--prefill-batch N` still overrides on every surface"). Against a skeleton that reproduced the old
+resolution, exactly one case failed, for the right reason (`embedded_static_gpu_sizes_from_free_vram`:
+expected 16,384, got 32); 15 of 15 pass after. `PrefillBatchOptionsTest` 9 of 9.
+
+**Verification (2026-10-02).** `mvn test` on the eleven unit-test modules: **1,983 tests, 0 failures, 0 errors,
+49 skipped** (step 6 second change: 1,968), 27:24, GPU-tagged tests included. `mvn install -DskipTests`, then
+`mvn verify -pl juno-master`: 20 ITs, 0 failures. `check-plan-thresholds.sh` passes. No pinned gate: the only
+behaviour change is the facade's default, and its reading is the 2.49x above.
+
+**Owner decisions (2026-10-02) on the two questions raised.**
+1. *`continuous` default:* kept at 32 now; a load-dependent chunk (the whole remaining prompt when no
+   request in the step is decoding, the step's token budget otherwise) is
+   [Tier 07](TIER-07-continuous-batching.md) scope item 6, with thresholds (a prompt alone within 1.25x of
+   `static`, 4.07x today; under mixed load short-request TTFT within 1.10x of fixed 32 and the long prompt's at
+   most 0.75x of it). Rejected: a fixed 128 (one number for every model and load) and free-VRAM sizing for
+   `continuous` (interleaving disappears).
+2. *Batched cluster prefill:* [Tier 09](TIER-09-tensor-parallelism-multi-gpu.md) scope item 5, widened to both
+   cluster modes and the standalone coordinator, with a contract change in `inference.proto` and a gate (512-token
+   TinyLlama prefill <= 0.20x the per-token reading in each mode). Cross-surface row 7 above is corrected; rows 7
+   and 8 of this tier's closing matrix read "correct, not reached: per-token prefill, Tier 09 item 5".
+
 ### Out-of-tier changes (recorded per execution rule 9)
 
 | Change | What it touched | Measurement boundary? |
@@ -2375,8 +2466,16 @@ vision, which the closing matrix (step 8) takes.
       with the same threshold. Residency across layers and the materialization boundary documented
       (`PrefillWindowRegion`, `docs/agent-arch.txt`, `docs/howto.md`); `MatVec.sgemmInto` in, named in Tier 10
       item 4. The change's pinned no-regression gate belongs to the decode criterion below and is owed.*
-- [ ] Chunk-sizing defaults reviewed per surface; any surface still pinned at `32` has a measured
+- [x] Chunk-sizing defaults reviewed per surface; any surface still pinned at `32` has a measured
       reason, not an inherited one.
+      *Checked 2026-10-02 (item 3 record): every `GenerationLoop` entry point resolves through
+      `PrefillChunkDefaults`; the `JunoPlayer` facade moved to free-VRAM sizing on GPU plus `static`
+      (2.49x on its pipeline shape), and CPU (1.00x), `continuous` (32 lowest short-request TTFT under mixed
+      load), cluster and coordinator (per-token gRPC prefill, 0.95x and 0.97x) and `juno lora` (1.01x) keep 32
+      on a reading
+      ([`docs/perf-compare/20261002T194000Z-tier01b-item3-chunk-review`](../perf-compare/20261002T194000Z-tier01b-item3-chunk-review/INDEX.md),
+      unpinned). The two questions it raised are decided (owner, 2026-10-02): the load-dependent `continuous`
+      chunk is Tier 07 item 6, batched cluster prefill is Tier 09 item 5.*
 - [x] `scripts/performance-tests/check-plan-thresholds.sh` exists, passes against this tree, and fails
       against a deliberately broken copy of a tier file with its threshold block removed — a check that
       cannot fail is not a check. Recorded here as shipped, so later tiers run it rather than re-deriving

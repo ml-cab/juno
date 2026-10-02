@@ -231,6 +231,7 @@ cmd_cluster() {
   local embeddings="${JUNO_EMBEDDINGS:-}"
   local pooling="${JUNO_POOLING:-}"
   local prefill_mode="${PREFILL_MODE:-}"
+  local prefill_batch="${JUNO_PREFILL_BATCH:-}"
   local gpu_residency="${JUNO_GPU_RESIDENCY:-}"
   local cache_type_k="${JUNO_CACHE_TYPE_K:-}"
   local cache_type_v="${JUNO_CACHE_TYPE_V:-}"
@@ -273,6 +274,7 @@ cmd_cluster() {
       --embeddings)       embeddings="true"; shift   ;;
       --pooling)          pooling="$2";      shift 2 ;;
       --prefill)          prefill_mode="$2"; shift 2 ;;
+      --prefill-batch)    prefill_batch="$2"; shift 2 ;;
       --gpu-residency)    gpu_residency="$2"; shift 2 ;;
       --cache-type-k)     cache_type_k="$2"; shift 2 ;;
       --cache-type-v)     cache_type_v="$2"; shift 2 ;;
@@ -327,6 +329,7 @@ cmd_cluster() {
         echo "                               with one upload and one download per layer (default off; CUDA only)"
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
         echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
+        echo "    --prefill-batch N          max prompt tokens per prefill window (default 32)"
         echo ""
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
@@ -407,6 +410,8 @@ cmd_cluster() {
   [[ -n "$pooling" ]] && pooling_arg="--pooling $pooling"
   local prefill_mode_arg=""
   [[ -n "$prefill_mode" ]] && prefill_mode_arg="--prefill $prefill_mode"
+  local prefill_batch_arg=""
+  [[ -n "$prefill_batch" ]] && prefill_batch_arg="--prefill-batch $prefill_batch"
   local gpu_residency_arg=""
   [[ -n "$gpu_residency" ]] && gpu_residency_arg="--gpu-residency $gpu_residency"
   local cache_type_k_arg=""
@@ -452,6 +457,7 @@ cmd_cluster() {
     ${embeddings_arg} \
     ${pooling_arg} \
     ${prefill_mode_arg} \
+    ${prefill_batch_arg} \
     ${gpu_residency_arg} \
     ${cache_type_k_arg} \
     ${cache_type_v_arg} \
@@ -612,7 +618,8 @@ cmd_local() {
         echo "    --cache-type-v f16|q8_0    V cache type (default f16)"
         echo "    --schedule static|continuous  serving schedule (default static; cluster falls back)"
         echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
-        echo "    --prefill-batch N          prefill microbatch chunk size (default 32)"
+        echo "    --prefill-batch N          max prompt tokens per prefill window (default: sized to"
+        echo "                               the whole prompt on GPU with --schedule static; 32 otherwise)"
         echo "    --spec-type none|ngram-simple|draft-simple  speculative decoding (default none; --local only)"
         echo "    --spec-ngram-n N           ngram order for the draft cache (default 3; ngram-simple only)"
         echo "    --spec-ngram-m N           max tokens drafted per verify round (default 4)"
