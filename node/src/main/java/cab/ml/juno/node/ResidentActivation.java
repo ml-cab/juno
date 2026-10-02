@@ -48,6 +48,9 @@ final class ResidentActivation implements AutoCloseable {
 	private final long bytes;
 	private final MemorySegment device;
 	private final MemorySegment staging;
+	/** The {@code juno.DeviceStaging} sites of this activation's upload and download. */
+	private final String uploadSite;
+	private final String materializeSite;
 
 	private int rows;
 
@@ -56,16 +59,28 @@ final class ResidentActivation implements AutoCloseable {
 	private boolean closed;
 
 	private ResidentActivation(ResidentChain chain, int capacityRows, int dim, long bytes, MemorySegment device,
-			MemorySegment staging) {
+			MemorySegment staging, String name) {
 		this.chain = chain;
 		this.capacityRows = capacityRows;
 		this.dim = dim;
 		this.bytes = bytes;
 		this.device = device;
 		this.staging = staging;
+		this.uploadSite = "upload(" + name + ")";
+		this.materializeSite = "materialize(" + name + ")";
 	}
 
 	static ResidentActivation allocate(ResidentChain chain, int capacityRows, int dim) {
+		return allocate(chain, capacityRows, dim, "resident activation");
+	}
+
+	/**
+	 * Allocates an activation whose copies are recorded under their own
+	 * {@code juno.DeviceStaging} sites, {@code upload(name)} and
+	 * {@code materialize(name)}, so a recording can count them apart from other
+	 * activations' copies.
+	 */
+	static ResidentActivation allocate(ResidentChain chain, int capacityRows, int dim, String name) {
 		if (capacityRows <= 0 || dim <= 0)
 			throw new IllegalArgumentException("capacityRows and dim must be positive: " + capacityRows + ", " + dim);
 		long bytes = (long) capacityRows * dim * Float.BYTES;
@@ -79,7 +94,7 @@ final class ResidentActivation implements AutoCloseable {
 			gpu.deviceFree(device);
 			throw e;
 		}
-		return new ResidentActivation(chain, capacityRows, dim, bytes, device, staging);
+		return new ResidentActivation(chain, capacityRows, dim, bytes, device, staging, name);
 	}
 
 	/** Uploads every row of {@code x}. */
@@ -109,7 +124,7 @@ final class ResidentActivation implements AutoCloseable {
 			chain.sync();
 		for (int b = 0; b < count; b++)
 			MemorySegment.copy(x[b], 0, staging, JAVA_FLOAT, (long) b * dim * Float.BYTES, dim);
-		copyAsync(device, staging, (long) count * dim * Float.BYTES, GpuBindings.H2D, count, "upload(resident activation)");
+		copyAsync(device, staging, (long) count * dim * Float.BYTES, GpuBindings.H2D, count, uploadSite);
 		rows = count;
 		uploadEpoch = chain.syncEpoch();
 	}
@@ -125,7 +140,7 @@ final class ResidentActivation implements AutoCloseable {
 			throw new IllegalStateException("nothing has been uploaded to or written into this activation");
 		if (out.length < rows)
 			throw new IllegalArgumentException("materialize of " + rows + " rows into " + out.length);
-		copyAsync(staging, device, (long) rows * dim * Float.BYTES, GpuBindings.D2H, rows, "materialize(resident activation)");
+		copyAsync(staging, device, (long) rows * dim * Float.BYTES, GpuBindings.D2H, rows, materializeSite);
 		chain.sync();
 		for (int b = 0; b < rows; b++) {
 			if (out[b] == null || out[b].length != dim)
@@ -182,7 +197,7 @@ final class ResidentActivation implements AutoCloseable {
 			if (out[i].length < a.rows)
 				throw new IllegalArgumentException("materialize of " + a.rows + " rows into " + out[i].length);
 			a.copyAsync(a.staging, a.device, (long) a.rows * a.dim * Float.BYTES, GpuBindings.D2H, a.rows,
-					"materialize(resident activation)");
+					a.materializeSite);
 		}
 		chain.sync();
 		for (int i = 0; i < acts.length; i++) {

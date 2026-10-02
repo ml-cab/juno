@@ -30,19 +30,22 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * the activations kept on the device between its operations.
  *
  * <pre>
- *   upload x -> norm -> fp16 -> Q, K, V -> [bias] -> [RoPE] -> | KV mirror append -> attention | -> fp16 -> O
- *            -> x += O -> norm -> fp16 -> gate, up -> SwiGLU (fp16) -> down -> x += down -> download x, k, v
+ *   [upload x] -> norm -> fp16 -> Q, K, V -> [bias] -> [RoPE] -> | KV mirror append -> attention | -> fp16 -> O
+ *              -> x += O -> norm -> fp16 -> gate, up -> SwiGLU (fp16) -> down -> x += down -> download k, v
+ *   (x is uploaded at the window's first layer and downloaded once, at the end of the window)
  * </pre>
  *
  * <p>On the host path every matmul uploads its input and downloads its result, and
  * the norms, SwiGLU and residual adds run on the host between them, single-threaded
- * for SwiGLU. Here the window's residual stream is uploaded once per layer and the
- * work between the matmuls runs on the device, so the host sees the layer's input,
- * its K and V rows (the host KV tensors stay the source of truth) and its output.
- * When attention cannot run inside the region (RoPE on the host, the attention
- * kernel off, or no usable KV mirror), the layer splits in two: {@link Window#runLayer}
- * returns Q, K and V, the caller runs RoPE and attention, and {@link Window#finishLayer}
- * runs the rest. The residual stays on the device between the two halves.
+ * for SwiGLU. Here the work between the matmuls runs on the device, and the window's
+ * residual stream stays there from layer to layer: it is uploaded at the window's
+ * first layer and downloaded once, when the caller takes it
+ * ({@link Window#materializeResidual}) at the end of the window or before a layer
+ * that runs on the host. Per layer the host sees only the K and V rows (the host KV
+ * tensors stay the source of truth). When attention cannot run inside the region
+ * (RoPE on the host, the attention kernel off, or no usable KV mirror), the layer
+ * splits in two: {@link Window#runLayer} returns Q, K and V, the caller runs RoPE
+ * and attention, and {@link Window#finishLayer} runs the rest.
  *
  * <p>Every operation matches the host window path step for step: the matmuls are the
  * same cuBLAS FP16 GEMMs fed the same FP16 bits ({@link CudaMatVec#gemmOnStream}), the
@@ -71,7 +74,10 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * the K-quant dequantization scratch is the matmul backend's own. A window's buffers
  * grow to the widest prefill window it has served and are freed by {@link #close}.
  * Running out of device memory anywhere in a call surfaces as the allocator's own
- * {@link IllegalStateException}; the caller runs that layer on the host path instead.
+ * {@link IllegalStateException}; the caller takes the layer's input back
+ * ({@link Window#recoverLayerInput}; a layer whose input is only on the device first
+ * copies it aside, device to device, before updating the residual in place) and runs
+ * that layer on the host path instead.
  */
 final class PrefillWindowRegion implements AutoCloseable {
 
@@ -82,6 +88,9 @@ final class PrefillWindowRegion implements AutoCloseable {
 
 	/** Windows of at most this many rows keep the host path (the backend's packed GEMV threshold). */
 	static final int MAX_HOST_WINDOW = 8;
+
+	/** The residual stream's staging-site name: its copies are {@code upload(prefill residual)} and {@code materialize(prefill residual)}. */
+	static final String RESIDUAL = "prefill residual";
 
 	/** Window capacities are rounded up to this, so windows of slightly different widths share buffers. */
 	private static final int CAPACITY_STEP = 64;
@@ -373,9 +382,18 @@ final class PrefillWindowRegion implements AutoCloseable {
 		private final long tablesBytes;
 		private MemorySegment scores;
 		private long scoresBytes;
+		/** The layer's input, copied here before the layer updates the residual in place; see {@link #recoverLayerInput}. */
+		private final MemorySegment xIn;
 		private final ResidentActivation[] qkvActs;
-		private final ResidentActivation[] kvxActs;
+		private final ResidentActivation[] kvActs;
 		private final float[][][] outs = new float[3][][];
+		private final float[][][] kvOuts = new float[2][][];
+		/** The device residual {@link #x} is newer than the caller's host rows. */
+		private boolean hostStale;
+		/** The current layer's input is on the host (it was uploaded, not carried over from the last layer). */
+		private boolean inputOnHost;
+		/** {@link #xIn} holds the current layer's input. */
+		private boolean inputSaved;
 		private boolean freed;
 
 		private Window(int capacity) {
@@ -384,13 +402,14 @@ final class PrefillWindowRegion implements AutoCloseable {
 			MemorySegment host = null;
 			try {
 				int widestIn = Math.max(shape.hidden(), Math.max(shape.qDim(), shape.inter()));
-				this.x = c.allocate(capacity, shape.hidden());
+				this.x = c.allocate(capacity, shape.hidden(), RESIDUAL);
 				this.q = c.allocate(capacity, shape.qDim());
 				this.k = c.allocate(capacity, shape.kvDim());
 				this.v = c.allocate(capacity, shape.kvDim());
 				this.attn = c.allocate(capacity, shape.qDim());
 				this.qkv = fusedQkv ? c.allocate(capacity, shape.qDim() + 2 * shape.kvDim()) : null;
 				this.xn = c.allocateScratch((long) capacity * shape.hidden() * Float.BYTES);
+				this.xIn = c.allocateScratch((long) capacity * shape.hidden() * Float.BYTES);
 				this.xh = c.allocateScratch((long) capacity * widestIn * Short.BYTES);
 				this.proj = c.allocateScratch((long) capacity * shape.hidden() * Float.BYTES);
 				this.gateUp = c.allocateScratch((long) capacity * 2 * shape.inter() * Float.BYTES);
@@ -407,27 +426,37 @@ final class PrefillWindowRegion implements AutoCloseable {
 			this.spans = c.spans();
 			this.qkvHost = fusedQkv ? new float[capacity][shape.qDim() + 2 * shape.kvDim()] : null;
 			this.qkvActs = new ResidentActivation[] { q, k, v };
-			this.kvxActs = new ResidentActivation[] { k, v, x };
+			this.kvActs = new ResidentActivation[] { k, v };
 		}
 
 		/**
 		 * Runs layer {@code li} over the window {@code xHost} (rows at positions
 		 * {@code startPos, startPos + 1, ...}).
 		 *
+		 * <p>The residual stream stays on the device from one layer to the next: it is
+		 * uploaded from {@code xHost} only when the device does not already hold it (the
+		 * window's first layer, or the first after the caller ran a layer on the host),
+		 * and the layer's output is left on the device. {@code xHost} is not written;
+		 * the caller takes the residual with {@link #materializeResidual} before
+		 * anything on the host reads it, and at the end of the window.
+		 *
 		 * <p>When attention runs inside the region (device RoPE, the attention kernel,
 		 * and a live {@code mirror} holding every position before {@code startPos}),
 		 * the whole layer runs: the window's K and V rows are cast into the mirror,
-		 * attention reads it, and the method returns {@code true} with the layer's
-		 * output in {@code xHost} and the window's K and V rows (rotated) in
-		 * {@code kOut}/{@code vOut}. The mirror's watermark is not moved: the caller
-		 * writes the host KV tensors from {@code kOut}/{@code vOut} first and then
-		 * marks the window ({@link DeviceKvCache#markWritten}).
+		 * attention reads it, and the method returns {@code true} with the window's K
+		 * and V rows (rotated) in {@code kOut}/{@code vOut}. The mirror's watermark is
+		 * not moved: the caller writes the host KV tensors from {@code kOut}/{@code vOut}
+		 * first and then marks the window ({@link DeviceKvCache#markWritten}).
 		 *
 		 * <p>Otherwise it returns {@code false} with Q, K and V in {@code qOut},
-		 * {@code kOut}, {@code vOut} (rotated if {@link #ropeOnDevice}) and
-		 * {@code xHost} unchanged; the caller runs attention and then
-		 * {@link #finishLayer}. A mirror that runs out of device memory here is retired
-		 * (closed), as on the host path, and the layer takes this second form.
+		 * {@code kOut}, {@code vOut} (rotated if {@link #ropeOnDevice}); the caller runs
+		 * attention and then {@link #finishLayer}. A mirror that runs out of device
+		 * memory here is retired (closed), as on the host path, and the layer takes this
+		 * second form.
+		 *
+		 * <p>Any other device out-of-memory error surfaces as the allocator's
+		 * {@link IllegalStateException}; the caller then takes the layer's input with
+		 * {@link #recoverLayerInput} and runs the layer on the host path.
 		 */
 		boolean runLayer(int li, float[][] xHost, int startPos, DeviceKvCache mirror, float[][] qOut,
 				float[][] kOut, float[][] vOut) {
@@ -437,7 +466,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 			synchronized (ctx.cublasSerializationLock()) {
 				boolean done = false;
 				try {
-					x.upload(xHost, w);
+					enterLayer(xHost, w);
 					attentionInputs(li, w, startPos);
 					if (inside)
 						inside = attendInside(mirror, startPos, w);
@@ -450,7 +479,13 @@ final class PrefillWindowRegion implements AutoCloseable {
 						return false;
 					}
 					feedForward(li, w);
-					download(kvxActs, kOut, vOut, xHost);
+					kvOuts[0] = kOut;
+					kvOuts[1] = vOut;
+					try {
+						ResidentActivation.materializeAll(kvActs, kvOuts);
+					} finally {
+						kvOuts[0] = kvOuts[1] = null;
+					}
 					done = true;
 					return true;
 				} finally {
@@ -463,8 +498,8 @@ final class PrefillWindowRegion implements AutoCloseable {
 		/**
 		 * Finishes layer {@code li} after {@link #runLayer} returned {@code false}: uploads
 		 * the attention output, runs the output projection, both residual adds, the
-		 * second norm and the feed-forward block, and writes the layer's output into
-		 * {@code xHost}.
+		 * second norm and the feed-forward block, and leaves the layer's output on the
+		 * device, as {@link #runLayer} does.
 		 */
 		void finishLayer(int li, float[][] attnHost, float[][] xHost) {
 			int w = requireWindow(li, xHost.length);
@@ -473,7 +508,6 @@ final class PrefillWindowRegion implements AutoCloseable {
 				try {
 					attn.upload(attnHost, w);
 					feedForward(li, w);
-					x.materialize(xHost);
 					done = true;
 				} finally {
 					if (!done)
@@ -482,9 +516,56 @@ final class PrefillWindowRegion implements AutoCloseable {
 			}
 		}
 
+		/**
+		 * The materialization boundary of the residual stream: writes it into
+		 * {@code xHost} when the device holds a newer one than the host, after which the
+		 * host rows are current and the next {@link #runLayer} uploads them. Call it
+		 * before the host reads the residual (a layer that does not run on the region,
+		 * the LM head, the hand-off to the next node) and at the end of the window. A
+		 * no-op when the host is already current.
+		 */
+		void materializeResidual(float[][] xHost) {
+			if (!hostStale)
+				return;
+			synchronized (ctx.cublasSerializationLock()) {
+				x.materialize(xHost);
+			}
+			hostStale = false;
+		}
+
+		/**
+		 * After {@link #runLayer} or {@link #finishLayer} failed with a device
+		 * out-of-memory error, writes the failed layer's input into {@code xHost}, so the
+		 * caller can run that layer on the host path: from the host rows themselves when
+		 * the layer uploaded them, from the device residual when the layer had not yet
+		 * updated it, and otherwise from the copy taken before it did. Afterwards the
+		 * host rows are current, as after {@link #materializeResidual}.
+		 */
+		void recoverLayerInput(float[][] xHost) {
+			if (inputOnHost) {
+				hostStale = false;
+				return;
+			}
+			int w = x.rows();
+			synchronized (ctx.cublasSerializationLock()) {
+				if (inputSaved) {
+					copyDeviceToDevice(x.devicePointer(), xIn, (long) w * shape.hidden() * Float.BYTES, w,
+							"memcpy(prefill residual layer input restore)");
+					x.markWritten(w);
+				}
+				x.materialize(xHost);
+			}
+			hostStale = false;
+			inputOnHost = true;
+			inputSaved = false;
+		}
+
 		/** Returns the window to the pool, or frees it when the region has been closed. */
 		@Override
 		public void close() {
+			hostStale = false;
+			inputOnHost = false;
+			inputSaved = false;
 			if (closed) {
 				synchronized (ctx.cublasSerializationLock()) {
 					free();
@@ -528,11 +609,38 @@ final class PrefillWindowRegion implements AutoCloseable {
 			}
 		}
 
-		/** fp16(attn) -> O -> x += O -> norm -> fp16 -> gate, up -> SwiGLU -> down -> x += down. */
+		/**
+		 * Starts a layer: uploads the residual from {@code xHost} unless the device
+		 * already holds it from the previous layer.
+		 */
+		private void enterLayer(float[][] xHost, int w) {
+			if (hostStale) {
+				if (x.rows() != w)
+					throw new IllegalStateException(
+							"the device residual holds " + x.rows() + " rows, the layer was given " + w);
+				inputOnHost = false;
+			} else {
+				x.upload(xHost, w);
+				inputOnHost = true;
+			}
+			inputSaved = false;
+		}
+
+		/**
+		 * fp16(attn) -> O -> x += O -> norm -> fp16 -> gate, up -> SwiGLU -> down -> x += down.
+		 * When the layer's input exists only on the device, it is copied aside first
+		 * (device to device), so a failure after the residual has been updated in place
+		 * can still hand the caller the input ({@link #recoverLayerInput}).
+		 */
 		private void feedForward(int li, int w) {
 			Layer l = layers[li];
 			int h = shape.hidden();
 			int inter = shape.inter();
+			if (!inputOnHost && !inputSaved) {
+				copyDeviceToDevice(xIn, x.devicePointer(), (long) w * h * Float.BYTES, w,
+						"memcpy(prefill residual layer input D2D)");
+				inputSaved = true;
+			}
 			toHalf(attn.devicePointer(), (long) w * shape.qDim(), w);
 			gemm(l.o(), proj, h, w);
 			addInPlace(x.devicePointer(), proj, (long) w * h, w);
@@ -550,6 +658,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 			gemm(l.down(), proj, h, w);
 			addInPlace(x.devicePointer(), proj, (long) w * h, w);
 			x.markWritten(w);
+			hostStale = true;
 		}
 
 		/**
@@ -626,6 +735,18 @@ final class PrefillWindowRegion implements AutoCloseable {
 				mv.gemmOnStream(a.q4(), xh, out, ldc, w, stream, spans);
 			else
 				mv.gemmOnStream(a.half(), xh, out, ldc, w, stream, spans);
+		}
+
+		private void copyDeviceToDevice(MemorySegment dst, MemorySegment src, long bytes, int w, String site) {
+			int mark = spans.begin(stream, w);
+			int rc;
+			try {
+				rc = (int) ctx.bindings().gpuMemcpyAsync().invokeExact(dst, src, bytes, GpuBindings.D2D, stream);
+			} catch (Throwable t) {
+				throw new IllegalStateException(site + ": native call failed", t);
+			}
+			GpuBindings.check(rc, site);
+			spans.staging(GpuBindings.D2D, bytes, w, site, mark, stream);
 		}
 
 		private void copyTables(long bytes, int w) {

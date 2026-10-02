@@ -192,4 +192,42 @@ public interface MatVec {
         for (int b = 0; b < X.length; b++) Y[b] = sgemv(A, X[b]);
         return Y;
     }
+
+    // ── Non-allocating batched form ──────────────────────────────────────────
+    //
+    // Contract, for every overload below:
+    //  - writes A * X[b] into Y[b][0, rows) for every b < X.length, where rows is
+    //    the weight matrix's row count; Y[b] past rows is left untouched;
+    //  - Y.length >= X.length and every Y[b] is at least rows long, or the call
+    //    throws IllegalArgumentException before computing anything;
+    //  - no Y[b] may be one of the X rows;
+    //  - the result is bit-identical to the allocating sgemm on the same backend.
+    //
+    // The defaults copy from the allocating form, so every backend is correct
+    // without overriding them. A backend that overrides one makes its allocating
+    // form allocate Y and delegate here instead, so the two cannot drift.
+
+    /** {@link #sgemm(float[], float[][], int, int)} into caller-supplied rows. */
+    default void sgemmInto(float[] A, float[][] X, float[][] Y, int rows, int cols) {
+        SgemmOutput.require(X, Y, rows);
+        SgemmOutput.copy(sgemm(A, X, rows, cols), Y, rows);
+    }
+
+    /** {@link #sgemm(DeviceFloatMatrix, float[][])} into caller-supplied rows. */
+    default void sgemmInto(DeviceFloatMatrix A, float[][] X, float[][] Y) {
+        SgemmOutput.require(X, Y, A.rows());
+        SgemmOutput.copy(sgemm(A, X), Y, A.rows());
+    }
+
+    /** {@link #sgemm(DeviceHalfMatrix, float[][])} into caller-supplied rows. */
+    default void sgemmInto(DeviceHalfMatrix A, float[][] X, float[][] Y) {
+        SgemmOutput.require(X, Y, A.rows());
+        SgemmOutput.copy(sgemm(A, X), Y, A.rows());
+    }
+
+    /** {@link #sgemm(DeviceQ4KMatrix, float[][])} into caller-supplied rows. */
+    default void sgemmInto(DeviceQ4KMatrix A, float[][] X, float[][] Y) {
+        SgemmOutput.require(X, Y, A.rows());
+        SgemmOutput.copy(sgemm(A, X), Y, A.rows());
+    }
 }

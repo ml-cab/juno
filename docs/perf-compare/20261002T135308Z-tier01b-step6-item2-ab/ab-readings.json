@@ -1,0 +1,126 @@
+{
+  "run": "tier01b step 6 second change: residual across layers and MatVec.sgemmInto",
+  "n_prompt": 512,
+  "readings": [
+    {
+      "side": "baseline",
+      "pass": 1,
+      "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+      "jar_sha256_16": "d287e929f78c11ff",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 965.9380801995749,
+      "token_gen_tps": 68.62179186904163
+    },
+    {
+      "side": "baseline",
+      "pass": 1,
+      "model": "mistral-7b-instruct-v0.1-q4_k_m",
+      "jar_sha256_16": "d287e929f78c11ff",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 194.62535868313222,
+      "token_gen_tps": 22.890488813802428
+    },
+    {
+      "side": "baseline",
+      "pass": 2,
+      "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+      "jar_sha256_16": "d287e929f78c11ff",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 959.5420381720139,
+      "token_gen_tps": 67.673790483922
+    },
+    {
+      "side": "baseline",
+      "pass": 2,
+      "model": "mistral-7b-instruct-v0.1-q4_k_m",
+      "jar_sha256_16": "d287e929f78c11ff",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 196.39274754064851,
+      "token_gen_tps": 22.9379654501612
+    },
+    {
+      "side": "baseline",
+      "pass": 3,
+      "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+      "jar_sha256_16": "d287e929f78c11ff",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 941.688479077834,
+      "token_gen_tps": 67.91115729975289
+    },
+    {
+      "side": "baseline",
+      "pass": 3,
+      "model": "mistral-7b-instruct-v0.1-q4_k_m",
+      "jar_sha256_16": "d287e929f78c11ff",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 191.16588006107443,
+      "token_gen_tps": 22.471725793709783
+    },
+    {
+      "side": "candidate",
+      "pass": 1,
+      "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+      "jar_sha256_16": "ba4ee78b6a77541e",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 1029.418595957962,
+      "token_gen_tps": 68.21940622675167
+    },
+    {
+      "side": "candidate",
+      "pass": 1,
+      "model": "mistral-7b-instruct-v0.1-q4_k_m",
+      "jar_sha256_16": "ba4ee78b6a77541e",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 207.49385545953467,
+      "token_gen_tps": 22.728024761776712
+    },
+    {
+      "side": "candidate",
+      "pass": 2,
+      "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+      "jar_sha256_16": "ba4ee78b6a77541e",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 1030.5501126217166,
+      "token_gen_tps": 66.9750779707114
+    },
+    {
+      "side": "candidate",
+      "pass": 2,
+      "model": "mistral-7b-instruct-v0.1-q4_k_m",
+      "jar_sha256_16": "ba4ee78b6a77541e",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 204.1797494542038,
+      "token_gen_tps": 22.879790924813726
+    },
+    {
+      "side": "candidate",
+      "pass": 3,
+      "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M",
+      "jar_sha256_16": "ba4ee78b6a77541e",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 983.1015330327856,
+      "token_gen_tps": 67.72589744517936
+    },
+    {
+      "side": "candidate",
+      "pass": 3,
+      "model": "mistral-7b-instruct-v0.1-q4_k_m",
+      "jar_sha256_16": "ba4ee78b6a77541e",
+      "clock_pinned": true,
+      "prompt_tokens": 512,
+      "prompt_eval_tps": 200.4728177248239,
+      "token_gen_tps": 22.686388463581828
+    }
+  ]
+}

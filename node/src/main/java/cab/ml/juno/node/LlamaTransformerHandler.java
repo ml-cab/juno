@@ -1589,6 +1589,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				log.info("[prefill] layer " + (li + 1) + "/" + L + " done in " + String.format("%.1f", layerMs)
 						+ "ms  requestId=" + requestId);
 			}
+			if (win != null)
+				materializeResidual(win, x, startPos);
 		} finally {
 			if (win != null)
 				win.close();
@@ -1653,6 +1655,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			PrefillWindowRegion.Window win) {
 		if (win != null && prefillRegion != null && prefillRegion.eligible(li))
 			return transformerLayerOnDevice(x, li, startPos, kCacheLayer, vCacheLayer, ws, deviceKv, win);
+		if (win != null)
+			materializeResidual(win, x, startPos); // this layer reads the residual on the host
 		int W    = x.length;
 		int H    = cfg.hiddenDim();
 		int I    = cfg.intermediateSize();
@@ -1846,8 +1850,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * and V, attention runs here exactly as on the host path, and the region finishes
 	 * the layer. The host KV tensors are written from the region's K and V rows before
 	 * the device mirror's watermark covers the window, so the mirror stays a copy of
-	 * them. Running out of device memory anywhere in the region redoes the layer on
-	 * the host path, from the host residual, which the region has not touched.
+	 * them. The residual stays on the device between layers; the window loop takes it
+	 * back at the end. Running out of device memory anywhere in the region redoes the
+	 * layer on the host path, from the layer's input, which the region hands back.
 	 */
 	private float[][] transformerLayerOnDevice(float[][] x, int li, int startPos, SessionKvTensor kCacheLayer,
 			SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache deviceKv, PrefillWindowRegion.Window win) {
@@ -1860,6 +1865,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;
 			warnPrefillRegionFellBackOnce();
+			win.recoverLayerInput(x);
 			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, deviceKv, null);
 		}
 		devEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
@@ -1931,10 +1937,22 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;
 			warnPrefillRegionFellBackOnce();
+			win.recoverLayerInput(x);
 			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, deviceKv, null);
 		}
 		finishEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
 		return x;
+	}
+
+	/**
+	 * Takes the window's residual back from the prefill-window region (a no-op when the
+	 * host rows are current), inside a {@code juno.WindowStep} {@code device_layer} span
+	 * so the download is attributed to the region rather than left outside every span.
+	 */
+	private static void materializeResidual(PrefillWindowRegion.Window win, float[][] x, int startPos) {
+		WindowStepEvent evt = WindowStepEvent.start();
+		win.materializeResidual(x);
+		evt.end(WindowStepEvent.DEVICE_LAYER, x.length, startPos);
 	}
 
 	private void warnPrefillRegionFellBackOnce() {
@@ -1966,7 +1984,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * This reduces DRAM weight reads from B × weight_bytes to 1 × weight_bytes —
 	 * the actual compute speedup for prefill on bandwidth-bound CPU hardware.
 	 *
-	 * <p>GPU paths: copy from sgemm result (GPU is fast; copy is negligible).
+	 * <p>GPU paths: the backend's non-allocating batched form writes straight into
+	 * {@code Y}, so no result batch is allocated or copied per matmul.
 	 */
 	/** {@link #sgemmLayerInto} inside a {@code juno.WindowStep} projection span, for the prefill window. */
 	private void projectWindow(GgufReader.QuantizedTensor quant,
@@ -1990,18 +2009,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		// never-uploaded layer takes.
 		try {
 			if (devQ4 != null && devQ4[li] != null) {
-				float[][] tmp = backend.sgemm(devQ4[li], X);
-				for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+				backend.sgemmInto(devQ4[li], X, Y);
 				return;
 			}
 			if (devHalf != null && devHalf[li] != null) {
-				float[][] tmp = backend.sgemm(devHalf[li], X);
-				for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+				backend.sgemmInto(devHalf[li], X, Y);
 				return;
 			}
 			if (devFp32 != null && devFp32[li] != null) {
-				float[][] tmp = backend.sgemm(devFp32[li], X);
-				for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+				backend.sgemmInto(devFp32[li], X, Y);
 				return;
 			}
 		} catch (IllegalStateException ex) {

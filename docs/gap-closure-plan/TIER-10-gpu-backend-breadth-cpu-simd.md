@@ -70,6 +70,13 @@ result, which is the pattern this plan exists to stop repeating.
    batched half of this contract** (`sgemm` writing into a caller-supplied buffer, so
    `sgemmLayerInto` stops allocating and copying on the GPU path); match that spelling rather than
    introducing a second one, and check what it left to do before designing.
+   *Landed 2026-10-02 (Tier 01B step 6, second change):* the spelling is `MatVec.sgemmInto(A, X, Y)`, one
+   overload per weight type, writing `Y[b][0, rows)`, checking `Y` first (`SgemmOutput`), bit-identical to
+   `sgemm`; interface defaults copy from `sgemm`, `CpuMatVec` and `CudaMatVec` implement it and their `sgemm`
+   delegates. Left for this item: `sgemvInto` in the contract (`CudaMatVec` has private ones), the handlers'
+   CPU window paths (they call their own weight-stationary kernels, and `Qwen3`/`Qwen3Moe` still copy from
+   the allocating `matVec`), `sgemvSameX`, `GpuBlasOps`' packed host copies, and the vision encoder's
+   `sgemm` calls.
 
    Then route the transformer handlers' CPU decode and prefill paths through the non-allocating form
    with a reusable per-request (or per-slot) buffer. Hoist the per-row dequant scratch in `sgemmQ4KWeightStationary`,

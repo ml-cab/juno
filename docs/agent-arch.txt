@@ -301,6 +301,16 @@ GPU FFI (node module — Panama project, JEP 454):
         totalGlobalMem@288 (ROCm 7.2.x, Linux x86_64).
   CudaAvailability — detection via CudaBindings.isAvailable(); zero heap allocation.
   RocmAvailability — detection via RocmBindings.isAvailable(); mirrors CudaAvailability.
+  MatVec — the compute-backend contract (CpuMatVec, CudaMatVec, RocmMatVec). Batched form, two
+        spellings: sgemm(A, X) allocates and returns Y; sgemmInto(A, X, Y) (one overload per weight
+        type: host float[], DeviceFloatMatrix, DeviceHalfMatrix, DeviceQ4KMatrix) writes Y[b][0, rows)
+        into the caller's rows without allocating them, checks Y before computing (SgemmOutput), and
+        is bit-identical to sgemm. The interface defaults copy from sgemm, so a backend that does not
+        override them (RocmMatVec today) is correct; CpuMatVec and CudaMatVec implement sgemmInto
+        natively and their sgemm allocates and delegates to it. The transformer handlers' window
+        projections (sgemmLayerInto, Phi-3's sgemmProjInto/sgemmFusedInto and its fused Q/K/V and
+        gate/up GEMMs through a per-call workspace buffer) use sgemmInto. The single-row output-
+        parameter form (sgemvInto) is not in the contract yet; CudaMatVec has it privately.
   GpuMatVec — sealed interface (permits CudaMatVec, RocmMatVec) extending MatVec.
         Exposes upload / uploadHalf / uploadQ4K; supportsQ4KMmq() for fused path.
         Transformer handlers depend on GpuMatVec, not a concrete vendor class.
@@ -389,7 +399,9 @@ GPU FFI (node module — Panama project, JEP 454):
         region's GEMMs and PrefillWindowKernels.
         materializeRows(acts, out): several single-row activations of one chain downloaded with
         one wait - the region's exit when it produces more than one result; materializeAll is the
-        multi-row form (PrefillWindowRegion's k, v and x).
+        multi-row form (PrefillWindowRegion's k and v). An activation allocated with a name
+        (ResidentChain.allocate(rows, dim, name)) records its copies as juno.DeviceStaging sites
+        upload(name) / materialize(name) instead of upload/materialize(resident activation).
   ResidentQkvPath — the decode-time attention entry as one residency region (--gpu-residency):
         upload the residual row, RMS norm (CudaRmsNorm.normalizeResident with the layer's norm
         weight uploaded once), quantize to Q8_1 and project to Q, K and V (Q4KMmqKernel.quantizeX
@@ -467,16 +479,21 @@ GPU FFI (node module — Panama project, JEP 454):
         LlamaTransformerHandler constructs under --gpu-residency.
   PrefillWindowRegion — the prefill-window device region (on by default on CUDA; PrefillRegionOptions):
         a transformer layer over a prefill window of more than 8 rows with the activations on the
-        device between its operations. Per layer: upload the residual once, RMS norm (host-order
-        kernel), FP16 cast, Q/K/V GEMMs (CudaMatVec.gemmOnStream on the window's own stream; a fused
+        device between its operations. The residual stream x stays on the device across layers: it
+        is uploaded at the window's first layer (or the first after a layer that ran on the host)
+        and downloaded once, by Window.materializeResidual, which the handlers call at the end of
+        the window and before any layer that runs on the host (both inside a juno.WindowStep
+        device_layer span); runLayer and finishLayer never write the host rows. Its copies are the
+        staging sites upload(prefill residual) / materialize(prefill residual). Per layer: RMS norm
+        (host-order kernel), FP16 cast, Q/K/V GEMMs (CudaMatVec.gemmOnStream on the window's own stream; a fused
         Q/K/V matrix as one GEMM, split on the host), bias add, RoPE (CudaRope, either pairing), then
         either attention inside the region (K and V cast straight into the DeviceKvCache mirror with
         writeWindowOnDevice, the gqa_attention kernel reading it with device pointer tables) followed
-        by the rest of the layer and one download of k, v and x (runLayer returns true), or a download
+        by the rest of the layer and one download of k and v (runLayer returns true), or a download
         of q, k and v for the handler's own RoPE/attention (runLayer returns false) and finishLayer:
         upload the attention output, FP16 cast, O GEMM, residual add, norm, gate and up GEMMs side by
         side in one [W][2I] buffer (ldc 2I, or one fused matrix), SwiGLU written as FP16, down GEMM,
-        residual add, download x. Every operation reproduces the host window path's arithmetic, so
+        residual add (x stays on the device). Every operation reproduces the host window path's arithmetic, so
         the logits are bit-identical to it (PrefillRegionHandlerParityTest, four architectures).
         Layer weights: Layer.separate / Layer.mixed over Matrix (packed K-quant or FP16 device
         matrix); a layer with any projection off the device is ineligible and keeps the host path.
@@ -484,8 +501,12 @@ GPU FFI (node module — Panama project, JEP 454):
         x/q/k/v/attn plus chain scratch, grown to the widest window seen (rounded to 64 rows). Each
         operation holds the context's serialization lock and waits for its stream before releasing
         it (the dequantization scratch is CudaMatVec's own); a failure drains the stream first. A
-        device OOM anywhere surfaces as the allocator's IllegalStateException and the handler redoes
-        that layer on the host path from the untouched host residual; a mirror OOM inside the
+        device OOM anywhere surfaces as the allocator's IllegalStateException; the handler takes the
+        failed layer's input back with Window.recoverLayerInput and redoes that layer on the host
+        path. The input comes from the host rows when the layer uploaded them, from x when the layer
+        had not yet updated it, and otherwise from xIn, a device-to-device copy of x taken before the
+        first in-place residual add of a layer whose input exists only on the device (staging site
+        memcpy(prefill residual layer input D2D), one W x hidden copy per layer); a mirror OOM inside the
         region retires the mirror and continues with host attention. Built by LlamaTransformerHandler
         (RoPE and attention inside), Phi3TransformerHandler and Qwen3TransformerHandler (RoPE and
         attention on the host); timed as juno.DeviceCompute sites (rms_norm, convert_fp16, bias_add,
@@ -529,7 +550,10 @@ GPU FFI (node module — Panama project, JEP 454):
         the instance, not to a thread; every use is under GpuContext.cublasSerializationLock()
         and each call synchronizes its stream before releasing it, so one set serves every
         caller. Grown on demand, kept at the largest size; releaseScratch() frees the set and
-        the next call grows it again; scratchDeviceBytes() reports it (tests).
+        the next call grows it again; scratchDeviceBytes() reports it (tests). sgemmInto (see
+        MatVec) is the batched implementation for all three device weight types and writes into
+        the caller's rows from the pinned staging buffer; sgemm allocates the rows and delegates.
+        The FP32 batched path (GpuBlasOps.forwardInto) still allocates its packed host copies.
         gemmOnStream / dequantOnStream / gemmHalfOnStream: the prefill-window region's matmul on
         device operands (FP16 input rows on the device, FP32 output at a caller-chosen row stride),
         issued on the caller's stream into this instance's dequantization scratch; the caller holds

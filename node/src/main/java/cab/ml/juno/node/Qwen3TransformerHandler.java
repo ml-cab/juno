@@ -549,6 +549,8 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			for (int li = 0; li < L; li++)
 				x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws,
 						GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)), win);
+			if (win != null)
+				materializeResidual(win, x, startPos);
 		} finally {
 			if (win != null)
 				win.close();
@@ -661,6 +663,8 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			PrefillWindowRegion.Window win) {
 		if (win != null && prefillRegion != null && prefillRegion.eligible(li))
 			return transformerLayerOnDevice(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, win);
+		if (win != null)
+			materializeResidual(win, x, startPos); // this layer reads the residual on the host
 		int W = x.length;
 		int H = cfg.hiddenDim();
 		int qDim = cfg.qDim();
@@ -809,8 +813,9 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	 * {@link #transformerLayerBatch} through the prefill-window device region: the
 	 * region runs the norm and the Q/K/V projections, the per-head norm, RoPE, the KV
 	 * write and attention run here as on the host path, and the region finishes the
-	 * layer. Running out of device memory in the region redoes the layer on the host
-	 * path from the host residual, which the region has not touched.
+	 * layer. The residual stays on the device between layers; the window loop takes it
+	 * back at the end. Running out of device memory in the region redoes the layer on
+	 * the host path from the layer's input, which the region hands back.
 	 */
 	private float[][] transformerLayerOnDevice(float[][] x, int li, int startPos, SessionKvTensor kCacheLayer,
 			SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror, PrefillWindowRegion.Window win) {
@@ -822,6 +827,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;
 			warnPrefillRegionFellBackOnce();
+			win.recoverLayerInput(x);
 			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, null);
 		}
 		devEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
@@ -836,10 +842,22 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;
 			warnPrefillRegionFellBackOnce();
+			win.recoverLayerInput(x);
 			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, null);
 		}
 		finishEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
 		return x;
+	}
+
+	/**
+	 * Takes the window's residual back from the prefill-window region (a no-op when the
+	 * host rows are current), inside a {@code juno.WindowStep} {@code device_layer} span
+	 * so the download is attributed to the region rather than left outside every span.
+	 */
+	private static void materializeResidual(PrefillWindowRegion.Window win, float[][] x, int startPos) {
+		WindowStepEvent evt = WindowStepEvent.start();
+		win.materializeResidual(x);
+		evt.end(WindowStepEvent.DEVICE_LAYER, x.length, startPos);
 	}
 
 	private void warnPrefillRegionFellBackOnce() {
@@ -930,15 +948,11 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	private void sgemmLayerInto(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix[] q4,
 			DeviceHalfMatrix[] half, int li, float[][] X, float[][] Y, int rows, int cols) {
 		if (q4 != null && q4[li] != null) {
-			float[][] tmp = backend.sgemm(q4[li], X);
-			for (int b = 0; b < X.length; b++)
-				System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			backend.sgemmInto(q4[li], X, Y);
 			return;
 		}
 		if (half != null && half[li] != null) {
-			float[][] tmp = backend.sgemm(half[li], X);
-			for (int b = 0; b < X.length; b++)
-				System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			backend.sgemmInto(half[li], X, Y);
 			return;
 		}
 		for (int b = 0; b < X.length; b++)

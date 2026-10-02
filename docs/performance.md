@@ -636,6 +636,27 @@ same-hour interleaved A/B with pinned clocks, median of three, `n_prompt=512`
 TinyLlama prefill 240.0 to 935.8 t/s (3.90x), Mistral 7B 68.4 to 191.8 t/s (2.81x); generation 1.023x and
 1.003x.
 
+**The residual stream across layers.** The region first uploaded the window's residual at every layer and
+downloaded it at the end of every layer. It now stays on the device for the whole window: one upload at the
+first layer, one download at the end. Breakdown run
+[`perf-compare/20261002T050741Z/`](perf-compare/20261002T050741Z/) (same method as above, clocks not pinned):
+
+| | TinyLlama | Qwen2.5-3B | Phi-3.5-mini | Mistral 7B |
+|---|---|---|---|---|
+| Prefill window (ms) | 556 to 501 | 1,260 to 1,172 | 3,121 to 3,012 | 2,741 to 2,583 |
+| Bytes crossing the bus per window (MB) | 207 to 31 | 339 to 45 | 1,809 to 1,419 | 670 to 150 |
+| Staging share of the window | 3.8% to 0.9% | 2.7% to 0.6% | 3.7% to 2.6% | 2.4% to 0.7% |
+
+On the LLaMA family and Qwen2.5 what still crosses per layer is the K and V rows the host KV cache keeps.
+Phi-3.5-mini still sends Q, K and V up and the attention output down every layer, because its RoPE and
+attention run on the host. A layer whose input exists only on the device copies it aside on the device
+(one hidden-width copy per layer, 87 to 259 MB per window, device to device) so that an out-of-memory
+error inside the layer can still be redone on the host from the same input. Against the build before,
+same-hour interleaved A/B with pinned clocks, median of three, `n_prompt=512`
+([`perf-compare/20261002T135308Z-tier01b-step6-item2-ab/`](perf-compare/20261002T135308Z-tier01b-step6-item2-ab/)):
+TinyLlama prefill 959.5 to 1029.4 t/s (1.073x), Mistral 7B 194.6 to 204.2 t/s (1.049x); generation 0.997x and
+0.993x. Logits stay bit-identical to the host window path.
+
 ## Prefill GPU-residency fixes: pinned staging memory + adaptive chunk sizing
 
 **Run:** [`perf-compare/20260918T153900Z-prefill-adaptive/`](perf-compare/20260918T153900Z-prefill-adaptive/)

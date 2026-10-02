@@ -63,6 +63,19 @@ final class GpuBlasOps implements AutoCloseable {
 	 * @return length {@code batch}; each row length {@code W.rows()}
 	 */
 	float[][] forward(DeviceFloatMatrix W, float[][] X, int batch) {
+		if (W == null || W.isClosed())
+			throw new IllegalStateException("W must be an open DeviceFloatMatrix");
+		float[][] Y = new float[Math.max(batch, 0)][W.rows()];
+		forwardInto(W, X, batch, Y);
+		return Y;
+	}
+
+	/**
+	 * {@link #forward} into the caller's rows: {@code Y[b][0, W.rows())} for
+	 * {@code b in [0, batch)}. The packed host copies of {@code X} and of the
+	 * result are still allocated per call.
+	 */
+	void forwardInto(DeviceFloatMatrix W, float[][] X, int batch, float[][] Y) {
 		ensureOpen();
 		if (W == null || W.isClosed())
 			throw new IllegalStateException("W must be an open DeviceFloatMatrix");
@@ -89,9 +102,8 @@ final class GpuBlasOps implements AutoCloseable {
 					dY, rows);
 			DeviceComputeClock.done(gpu, DeviceComputeEvent.GEMM_FP32, batch, t0);
 			float[] packedY = scratch.copyD2H(dY, rows * batch, batch);
-			float[][] Y = new float[batch][];
-			DeviceActivationBatch.unpackColumns(packedY, Y, batch, rows);
-			return Y;
+			for (int b = 0; b < batch; b++)
+				System.arraycopy(packedY, b * rows, Y[b], 0, rows);
 		}
 	}
 

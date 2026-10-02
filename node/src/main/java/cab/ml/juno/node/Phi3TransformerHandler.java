@@ -741,7 +741,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < N; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
 
-		sgemmQkvInto(li, ws.norm1, ws.q, ws.k, ws.v, H, kvDim);
+		sgemmQkvInto(li, ws.norm1, ws.q, ws.k, ws.v, H, kvDim, ws);
 
 		for (int b = 0; b < N; b++) {
 			int pos = positions[b];
@@ -777,7 +777,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < N; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
 
-		sgemmGateUpInto(li, ws.norm2, ws.gate, ws.up, I, H);
+		sgemmGateUpInto(li, ws.norm2, ws.gate, ws.up, I, H, ws);
 
 		for (int b = 0; b < N; b++)
 			for (int i = 0; i < I; i++)
@@ -844,6 +844,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 				x = transformerLayerBatch(x, li, startPos, kCache[li], vCache[li], ws,
 						GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)), win);
 			}
+			if (win != null)
+				materializeResidual(win, x, startPos);
 		} finally {
 			if (win != null)
 				win.close();
@@ -886,6 +888,21 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 				vDequant = null;
 			}
 		}
+
+		/**
+		 * Rows for a fused projection's output ({@code [q; k; v]} or {@code [gate; up]})
+		 * before it is split: allocated on first use and reused by every later layer of
+		 * this call, so the fused GEMM writes into it instead of a new batch per matmul.
+		 */
+		private float[][] fused;
+
+		float[][] fused(int rows, int width) {
+			if (fused == null || fused.length < rows || fused[0].length < width) {
+				int w = fused == null ? width : Math.max(width, fused[0].length);
+				fused = new float[rows][w];
+			}
+			return fused;
+		}
 	}
 
 	private float[][] transformerLayerBatch(float[][] x, int li, int startPos,
@@ -893,6 +910,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			PrefillWindowRegion.Window win) {
 		if (win != null && prefillRegion != null && prefillRegion.eligible(li))
 			return transformerLayerOnDevice(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, win);
+		if (win != null)
+			materializeResidual(win, x, startPos); // this layer reads the residual on the host
 		int W    = x.length;
 		int H    = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
@@ -908,7 +927,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		normEvt1.commit();
 
 		WindowStepEvent qkvEvt = WindowStepEvent.start();
-		sgemmQkvInto(li, ws.norm1, ws.q, ws.k, ws.v, H, kvDim);
+		sgemmQkvInto(li, ws.norm1, ws.q, ws.k, ws.v, H, kvDim, ws);
 		qkvEvt.end(WindowStepEvent.PROJECTION, W, startPos);
 
 		RopeEvent ropeEvt = new RopeEvent();
@@ -946,7 +965,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		normEvt2.commit();
 
 		WindowStepEvent gateUpEvt = WindowStepEvent.start();
-		sgemmGateUpInto(li, ws.norm2, ws.gate, ws.up, I, H);
+		sgemmGateUpInto(li, ws.norm2, ws.gate, ws.up, I, H, ws);
 		gateUpEvt.end(WindowStepEvent.PROJECTION, W, startPos);
 
 		SwiGluEvent swigluEvt = new SwiGluEvent();
@@ -1023,9 +1042,10 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	/**
 	 * {@link #transformerLayerBatch} through the prefill-window device region: the
 	 * region runs the norm and the Q/K/V projection, RoPE, the KV write and attention run
-	 * here as on the host path, and the region finishes the layer. Running out of device
-	 * memory in the region redoes the layer on the host path from the host residual,
-	 * which the region has not touched.
+	 * here as on the host path, and the region finishes the layer. The residual stays on
+	 * the device between layers; the window loop takes it back at the end. Running out
+	 * of device memory in the region redoes the layer on the host path from the layer's
+	 * input, which the region hands back.
 	 */
 	private float[][] transformerLayerOnDevice(float[][] x, int li, int startPos, SessionKvTensor kCacheLayer,
 			SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror, PrefillWindowRegion.Window win) {
@@ -1037,6 +1057,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;
 			warnPrefillRegionFellBackOnce();
+			win.recoverLayerInput(x);
 			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, null);
 		}
 		devEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
@@ -1061,10 +1082,22 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;
 			warnPrefillRegionFellBackOnce();
+			win.recoverLayerInput(x);
 			return transformerLayerBatch(x, li, startPos, kCacheLayer, vCacheLayer, ws, mirror, null);
 		}
 		finishEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
 		return x;
+	}
+
+	/**
+	 * Takes the window's residual back from the prefill-window region (a no-op when the
+	 * host rows are current), inside a {@code juno.WindowStep} {@code device_layer} span
+	 * so the download is attributed to the region rather than left outside every span.
+	 */
+	private static void materializeResidual(PrefillWindowRegion.Window win, float[][] x, int startPos) {
+		WindowStepEvent evt = WindowStepEvent.start();
+		win.materializeResidual(x);
+		evt.end(WindowStepEvent.DEVICE_LAYER, x.length, startPos);
 	}
 
 	private void warnPrefillRegionFellBackOnce() {
@@ -1104,10 +1137,12 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 	}
 
-	/** Fused QKV: one Q4 GEMM + host slice, else three FP16/CPU row-range GEMMs. */
-	private void sgemmQkvInto(int li, float[][] X, float[][] Q, float[][] K, float[][] V, int H, int kvDim) {
+	/** Fused QKV: one Q4 GEMM into the workspace's fused rows + host slice, else three FP16/CPU row-range GEMMs. */
+	private void sgemmQkvInto(int li, float[][] X, float[][] Q, float[][] K, float[][] V, int H, int kvDim,
+			BatchWorkspace ws) {
 		if (attnQkvQ4Dev != null && attnQkvQ4Dev[li] != null) {
-			float[][] qkv = backend.sgemm(attnQkvQ4Dev[li], X);
+			float[][] qkv = ws.fused(X.length, H + 2 * kvDim);
+			backend.sgemmInto(attnQkvQ4Dev[li], X, qkv);
 			for (int b = 0; b < X.length; b++) {
 				System.arraycopy(qkv[b], 0, Q[b], 0, H);
 				System.arraycopy(qkv[b], H, K[b], 0, kvDim);
@@ -1120,10 +1155,11 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		sgemmFusedInto(attnQkv[li], attnVDev != null ? attnVDev[li] : null, X, V, H + kvDim, H + 2 * kvDim, H);
 	}
 
-	/** Fused gate_up: one Q4 GEMM + host slice, else two FP16/CPU row-range GEMMs. */
-	private void sgemmGateUpInto(int li, float[][] X, float[][] gate, float[][] up, int I, int H) {
+	/** Fused gate_up: one Q4 GEMM into the workspace's fused rows + host slice, else two FP16/CPU row-range GEMMs. */
+	private void sgemmGateUpInto(int li, float[][] X, float[][] gate, float[][] up, int I, int H, BatchWorkspace ws) {
 		if (ffnGateUpQ4Dev != null && ffnGateUpQ4Dev[li] != null) {
-			float[][] gu = backend.sgemm(ffnGateUpQ4Dev[li], X);
+			float[][] gu = ws.fused(X.length, 2 * I);
+			backend.sgemmInto(ffnGateUpQ4Dev[li], X, gu);
 			for (int b = 0; b < X.length; b++) {
 				System.arraycopy(gu[b], 0, gate[b], 0, I);
 				System.arraycopy(gu[b], I, up[b], 0, I);
@@ -1137,9 +1173,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	private void sgemmProjInto(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix[] q4, DeviceHalfMatrix[] half,
 			int li, float[][] X, float[][] Y, int rows, int cols) {
 		if (q4 != null && q4[li] != null) {
-			float[][] tmp = backend.sgemm(q4[li], X);
-			for (int b = 0; b < X.length; b++)
-				System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			backend.sgemmInto(q4[li], X, Y);
 			return;
 		}
 		sgemmFusedInto(quant, half != null ? half[li] : null, X, Y, 0, rows, cols);
@@ -1149,9 +1183,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	private void sgemmFusedInto(GgufReader.QuantizedTensor quant, DeviceHalfMatrix half,
 			float[][] X, float[][] Y, int rowStart, int rowEnd, int cols) {
 		if (half != null) {
-			float[][] tmp = backend.sgemm(half, X);
-			int rows = rowEnd - rowStart;
-			for (int b = 0; b < X.length; b++) System.arraycopy(tmp[b], 0, Y[b], 0, rows);
+			backend.sgemmInto(half, X, Y);
 			return;
 		}
 		for (int b = 0; b < X.length; b++)

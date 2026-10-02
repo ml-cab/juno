@@ -50,8 +50,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * not rounding - an earlier region with a tree-reduced device norm moved one
  * Qwen2.5 decode step's logits by 0.09 relative L2 through flipped FP16 roundings.
  * From a JFR recording of the region's first window: no host SwiGLU or residual
- * add, no matmul result copied back to the host, and the KV mirror written with at
- * most one K and one V copy per layer. Device memory returns to where it started
+ * add, no matmul result copied back to the host, the KV mirror written with at
+ * most one K and one V copy per layer, and the residual stream uploaded once and
+ * downloaded once for the whole window rather than once per layer. Device memory returns to where it started
  * once the handler is released, and a repeated window allocates nothing new.
  */
 @Tag("gpu")
@@ -160,6 +161,10 @@ class PrefillRegionHandlerParityTest {
 					.filter(e -> e.getString("site").startsWith("memcpy(K ") || e.getString("site").startsWith("memcpy(V "))
 					.mapToLong(e -> e.getLong("copies")).sum();
 			assertThat(kvH2d).as("KV mirror host-to-device copies for one window").isLessThanOrEqualTo(2L * layers);
+			assertThat(copies(events, "H2D", "upload(prefill residual)"))
+					.as("residual uploads for one window (kept on the device across layers)").isEqualTo(1);
+			assertThat(copies(events, "D2H", "materialize(prefill residual)"))
+					.as("residual downloads for one window (kept on the device across layers)").isEqualTo(1);
 			assertThat(freeAfterRepeat).as("a repeated window allocates no new device memory")
 					.isGreaterThanOrEqualTo(freeAfterFirstWindow - VRAM_SLACK);
 		}
@@ -208,6 +213,11 @@ class PrefillRegionHandlerParityTest {
 
 	private static List<RecordedEvent> staging(List<RecordedEvent> events) {
 		return events.stream().filter(e -> e.getEventType().getName().equals("juno.DeviceStaging")).toList();
+	}
+
+	private static long copies(List<RecordedEvent> events, String direction, String site) {
+		return staging(events).stream().filter(e -> direction.equals(e.getString("direction")))
+				.filter(e -> site.equals(e.getString("site"))).mapToLong(e -> e.getLong("copies")).sum();
 	}
 
 	private static long count(List<RecordedEvent> events, String name) {

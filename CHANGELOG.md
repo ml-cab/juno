@@ -1,5 +1,22 @@
 ## Status 
 
+**Session 104** — A prefill window's residual stays on the GPU from layer to layer
+
+- **One upload and one download per window.** On CUDA, the prefill-window device region now keeps the
+  window's residual stream on the device across layers instead of uploading it at every layer and
+  downloading it after each one. Per layer only the K and V rows the host KV cache keeps cross the bus.
+  Bytes moved per 512-token window fell from 207 to 31 MB on TinyLlama, 339 to 45 MB on Qwen2.5-3B and
+  670 to 150 MB on Mistral 7B (1,809 to 1,419 MB on Phi-3.5-mini, whose RoPE and attention stay on the
+  host). In a pinned same-hour comparison at a 512-token prompt, TinyLlama prefill rose from 959.5 to
+  1029.4 t/s (1.073x) and Mistral 7B from 194.6 to 204.2 t/s (1.049x); generation read 0.997x and 0.993x. Logits remain bit-identical to the host window path.
+- **Out of device memory inside a layer is still recoverable.** A layer whose input exists only on the
+  device copies it aside on the device before updating the residual, so the layer can be redone on the
+  host path from the same input, as before.
+- **Batched matmul into the caller's buffer.** `MatVec.sgemmInto(A, X, Y)` writes a batched product into
+  rows the caller owns, bit-identical to `sgemm`, which now allocates and delegates to it on the CPU and
+  CUDA backends. Backends that do not implement it get a correct default. The transformer handlers'
+  window projections use it, so a matmul no longer allocates a result batch and copies it out.
+
 **Session 103** — A prefill window's layer runs on the GPU, not between GPU matmuls
 
 - **The prefill window stays on the device across a layer.** On CUDA, a prefill window of more than

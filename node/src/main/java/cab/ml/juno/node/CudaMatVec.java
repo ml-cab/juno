@@ -232,6 +232,14 @@ public final class CudaMatVec implements GpuMatVec {
     @Override
     public float[] sgemv(DeviceFloatMatrix A, float[] x) {
         if (A == null) throw new IllegalArgumentException("A must not be null");
+        float[] y = new float[A.rows()];
+        sgemvInto(A, x, y);
+        return y;
+    }
+
+    /** {@link #sgemv(DeviceFloatMatrix, float[])} into {@code y[0, rows)}. */
+    private void sgemvInto(DeviceFloatMatrix A, float[] x, float[] y) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
         if (A.isClosed()) throw new IllegalStateException("DeviceFloatMatrix is closed");
         int rows = A.rows(), cols = A.cols();
         if (x.length != cols)
@@ -281,9 +289,7 @@ public final class CudaMatVec implements GpuMatVec {
                         "cudaStreamSynchronize");
                     spans.commit();
 
-                    float[] y = new float[rows];
                     MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
-                    return y;
                 } finally {
                     unbindStream();
                 }
@@ -302,6 +308,14 @@ public final class CudaMatVec implements GpuMatVec {
      */
     @Override
     public float[] sgemv(DeviceQ4KMatrix A, float[] x) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        float[] y = new float[A.rows()];
+        sgemvInto(A, x, y);
+        return y;
+    }
+
+    /** {@link #sgemv(DeviceQ4KMatrix, float[])} into {@code y[0, rows)}. */
+    private void sgemvInto(DeviceQ4KMatrix A, float[] x, float[] y) {
         if (A == null) throw new IllegalArgumentException("A must not be null");
         if (A.isClosed()) throw new IllegalStateException("DeviceQ4KMatrix is closed");
         int rows = A.rows(), cols = A.cols();
@@ -348,9 +362,7 @@ public final class CudaMatVec implements GpuMatVec {
                             CudaBindings.callInt(cuda.cudaStreamSynchronize, stream),
                             "cudaStreamSynchronize");
                     spans.commit();
-                    float[] y = new float[rows];
                     MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
-                    return y;
                 } finally {
                     // no cuBLAS stream bind for this path
                 }
@@ -371,6 +383,14 @@ public final class CudaMatVec implements GpuMatVec {
      */
     @Override
     public float[] sgemv(DeviceHalfMatrix A, float[] x) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        float[] y = new float[A.rows()];
+        sgemvInto(A, x, y);
+        return y;
+    }
+
+    /** {@link #sgemv(DeviceHalfMatrix, float[])} into {@code y[0, rows)}. */
+    private void sgemvInto(DeviceHalfMatrix A, float[] x, float[] y) {
         if (A == null) throw new IllegalArgumentException("A must not be null");
         if (A.isClosed()) throw new IllegalStateException("DeviceHalfMatrix is closed");
         int rows = A.rows(), cols = A.cols();
@@ -420,9 +440,7 @@ public final class CudaMatVec implements GpuMatVec {
                         "cudaStreamSynchronize");
                     spans.commit();
 
-                    float[] y = new float[rows];
                     MemorySegment.copy(stagingY, JAVA_FLOAT, 0, y, 0, rows);
-                    return y;
                 } finally {
                     unbindStream();
                 }
@@ -701,13 +719,27 @@ public final class CudaMatVec implements GpuMatVec {
      */
     @Override
     public float[][] sgemm(DeviceFloatMatrix A, float[][] X) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        float[][] Y = new float[X.length][A.rows()];
+        sgemmInto(A, X, Y);
+        return Y;
+    }
+
+    /**
+     * {@link #sgemm(DeviceFloatMatrix, float[][])} into the caller's rows. The rows
+     * are not allocated; the FP32 GEMM's own packed host staging still is
+     * ({@link GpuBlasOps#forwardInto}).
+     */
+    @Override
+    public void sgemmInto(DeviceFloatMatrix A, float[][] X, float[][] Y) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        SgemmOutput.require(X, Y, A.rows());
         if (X.length <= 1) {
-            float[][] Y = new float[X.length][];
             for (int b = 0; b < X.length; b++)
-                Y[b] = sgemv(A, X[b]);
-            return Y;
+                sgemvInto(A, X[b], Y[b]);
+            return;
         }
-        return blasOps().forward(A, X, X.length);
+        blasOps().forwardInto(A, X, X.length, Y);
     }
 
     /** Max batch for the strided-batched GEMV kernel (multi-request decode); larger (prefill) windows use the tiled GEMM. */
@@ -722,18 +754,29 @@ public final class CudaMatVec implements GpuMatVec {
      */
     @Override
     public float[][] sgemm(DeviceHalfMatrix A, float[][] X) {
-        if (X.length <= 1) {
-            float[][] Y = new float[X.length][];
-            for (int b = 0; b < X.length; b++)
-                Y[b] = sgemv(A, X[b]);
-            return Y;
-        }
-        if (X.length > HALF_SGEMM_BATCH_MAX)
-            return sgemmHalfBatchedGemm(A, X);
-        return sgemmHalfBatched(A, X);
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        float[][] Y = new float[X.length][A.rows()];
+        sgemmInto(A, X, Y);
+        return Y;
     }
 
-    private float[][] sgemmHalfBatched(DeviceHalfMatrix A, float[][] X) {
+    /** {@link #sgemm(DeviceHalfMatrix, float[][])} into the caller's rows, without allocating them. */
+    @Override
+    public void sgemmInto(DeviceHalfMatrix A, float[][] X, float[][] Y) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        SgemmOutput.require(X, Y, A.rows());
+        if (X.length <= 1) {
+            for (int b = 0; b < X.length; b++)
+                sgemvInto(A, X[b], Y[b]);
+            return;
+        }
+        if (X.length > HALF_SGEMM_BATCH_MAX)
+            sgemmHalfBatchedGemm(A, X, Y);
+        else
+            sgemmHalfBatched(A, X, Y);
+    }
+
+    private void sgemmHalfBatched(DeviceHalfMatrix A, float[][] X, float[][] Y) {
         int batch = X.length;
         int rows = A.rows();
         int cols = A.cols();
@@ -785,12 +828,8 @@ public final class CudaMatVec implements GpuMatVec {
                             "cudaStreamSynchronize");
                     spans.commit();
 
-                    float[][] Y = new float[batch][];
-                    for (int b = 0; b < batch; b++) {
-                        Y[b] = new float[rows];
+                    for (int b = 0; b < batch; b++)
                         MemorySegment.copy(stagingY, JAVA_FLOAT, (long) b * rows * Float.BYTES, Y[b], 0, rows);
-                    }
-                    return Y;
                 } finally {
                     unbindStream();
                 }
@@ -812,7 +851,7 @@ public final class CudaMatVec implements GpuMatVec {
      * {@code cublasHSSgemvStridedBatched}, which does not gain compute/bandwidth reuse
      * across the batch as batch size grows.
      */
-    private float[][] sgemmHalfBatchedGemm(DeviceHalfMatrix A, float[][] X) {
+    private void sgemmHalfBatchedGemm(DeviceHalfMatrix A, float[][] X, float[][] Y) {
         int batch = X.length;
         int rows = A.rows();
         int cols = A.cols();
@@ -863,12 +902,8 @@ public final class CudaMatVec implements GpuMatVec {
                             "cudaStreamSynchronize");
                     spans.commit();
 
-                    float[][] Y = new float[batch][];
-                    for (int b = 0; b < batch; b++) {
-                        Y[b] = new float[rows];
+                    for (int b = 0; b < batch; b++)
                         MemorySegment.copy(stagingY, JAVA_FLOAT, (long) b * rows * Float.BYTES, Y[b], 0, rows);
-                    }
-                    return Y;
                 } finally {
                     unbindStream();
                 }
@@ -937,17 +972,26 @@ public final class CudaMatVec implements GpuMatVec {
     @Override
     public float[][] sgemm(DeviceQ4KMatrix A, float[][] X) {
         if (A == null) throw new IllegalArgumentException("A must not be null");
-        if (A.isClosed()) throw new IllegalStateException("DeviceQ4KMatrix is closed");
-        if (X.length <= HALF_SGEMM_BATCH_MAX) {
-            float[][] Y = new float[X.length][];
-            for (int b = 0; b < X.length; b++)
-                Y[b] = sgemv(A, X[b]);
-            return Y;
-        }
-        return sgemmQ4KBatchedGemm(A, X);
+        float[][] Y = new float[X.length][A.rows()];
+        sgemmInto(A, X, Y);
+        return Y;
     }
 
-    private float[][] sgemmQ4KBatchedGemm(DeviceQ4KMatrix A, float[][] X) {
+    /** {@link #sgemm(DeviceQ4KMatrix, float[][])} into the caller's rows, without allocating them. */
+    @Override
+    public void sgemmInto(DeviceQ4KMatrix A, float[][] X, float[][] Y) {
+        if (A == null) throw new IllegalArgumentException("A must not be null");
+        if (A.isClosed()) throw new IllegalStateException("DeviceQ4KMatrix is closed");
+        SgemmOutput.require(X, Y, A.rows());
+        if (X.length <= HALF_SGEMM_BATCH_MAX) {
+            for (int b = 0; b < X.length; b++)
+                sgemvInto(A, X[b], Y[b]);
+            return;
+        }
+        sgemmQ4KBatchedGemm(A, X, Y);
+    }
+
+    private void sgemmQ4KBatchedGemm(DeviceQ4KMatrix A, float[][] X, float[][] Y) {
         int batch = X.length;
         int rows = A.rows();
         int cols = A.cols();
@@ -1005,12 +1049,8 @@ public final class CudaMatVec implements GpuMatVec {
                             "cudaStreamSynchronize");
                     spans.commit();
 
-                    float[][] Y = new float[batch][];
-                    for (int b = 0; b < batch; b++) {
-                        Y[b] = new float[rows];
+                    for (int b = 0; b < batch; b++)
                         MemorySegment.copy(stagingY, JAVA_FLOAT, (long) b * rows * Float.BYTES, Y[b], 0, rows);
-                    }
-                    return Y;
                 } finally {
                     unbindStream();
                 }

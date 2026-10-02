@@ -90,8 +90,13 @@ final class ResidentChain implements AutoCloseable {
 
 	/** Allocates a device buffer of {@code capacityRows x dim} floats on this chain. */
 	ResidentActivation allocate(int capacityRows, int dim) {
+		return allocate(capacityRows, dim, "resident activation");
+	}
+
+	/** {@link #allocate(int, int)} with its own staging-site name (see {@link ResidentActivation}). */
+	ResidentActivation allocate(int capacityRows, int dim, String name) {
 		requireOpen();
-		ResidentActivation a = ResidentActivation.allocate(this, capacityRows, dim);
+		ResidentActivation a = ResidentActivation.allocate(this, capacityRows, dim, name);
 		activations.add(a);
 		return a;
 	}

@@ -986,11 +986,13 @@ smaller model or quantization.
 ### Prefill windows on the device
 
 On a CUDA backend, a prefill window of more than eight positions runs each transformer layer as one
-device region: the window's residual stream is uploaded once per layer, and the RMS norms, the FP16
-cast of every matmul input, the matmuls, the Q/K/V bias adds, SwiGLU and both residual adds run on the
-GPU with the activations kept there between them. The host sees the layer's input, its K and V rows
-(the host KV cache stays the source of truth) and its output. Before, every matmul uploaded its input
-and downloaded its result, and the norms, SwiGLU and residual adds ran on the CPU between them.
+device region: the RMS norms, the FP16 cast of every matmul input, the matmuls, the Q/K/V bias adds,
+SwiGLU and both residual adds run on the GPU with the activations kept there between them. The
+window's residual stream stays on the device from layer to layer: it is uploaded once, at the first
+layer, and downloaded once, at the end of the window or before a layer that runs on the host. Per
+layer the host sees only the K and V rows (the host KV cache stays the source of truth), and Q as
+well where RoPE and attention run on the host. Before, every matmul uploaded its input and downloaded
+its result, and the norms, SwiGLU and residual adds ran on the CPU between them.
 
 What else moves into the region depends on the architecture:
 
@@ -1012,7 +1014,8 @@ The region's buffers grow to the widest prefill window it has served and stay al
 about 85 MiB for TinyLlama and 155 MiB for Mistral 7B for a 512-position window, per concurrent
 prefill. The attention-scores part of that grows with the context the window attends over. When the
 device cannot hold them, or runs out of memory inside a layer, that layer runs on the existing path and
-the log says so once:
+the log says so once (a layer whose input is only on the device keeps a device-side copy of it, so the
+existing path starts from the same input):
 
 ```
 Llama: out of device memory in the prefill-window device region - this window's layer runs on the host path between device matmuls.

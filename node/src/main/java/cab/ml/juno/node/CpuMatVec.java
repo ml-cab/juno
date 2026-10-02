@@ -66,15 +66,23 @@ public final class CpuMatVec implements MatVec {
 	 */
 	@Override
 	public float[][] sgemm(float[] A, float[][] X, int rows, int cols) {
+		float[][] Y = new float[X.length][rows];
+		sgemmInto(A, X, Y, rows, cols);
+		return Y;
+	}
+
+	/** {@link #sgemm} into the caller's rows; see {@link MatVec}'s non-allocating batched form. */
+	@Override
+	public void sgemmInto(float[] A, float[][] X, float[][] Y, int rows, int cols) {
 		if (A.length != (long) rows * cols)
 			throw new IllegalArgumentException("A.length=" + A.length + " != rows*cols=" + ((long) rows * cols));
 		int B = X.length;
-		if (B == 0) return new float[0][];
 		for (int b = 0; b < B; b++) {
 			if (X[b].length != cols)
 				throw new IllegalArgumentException("X[" + b + "].length=" + X[b].length + " != cols=" + cols);
 		}
-		float[][] Y = new float[B][rows];
+		SgemmOutput.require(X, Y, rows);
+		if (B == 0) return;
 		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
 			int base = r * cols;
 			for (int b = 0; b < B; b++) {
@@ -86,6 +94,5 @@ public final class CpuMatVec implements MatVec {
 				Y[b][r] = acc;
 			}
 		});
-		return Y;
 	}
 }

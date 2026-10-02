@@ -1,6 +1,6 @@
 # Tier 01B: Prefill throughput
 
-Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); plan amended 2026-09-30 after the plan review (scope items 6 to 10, step 3a, the `juno.DeviceCompute` span); step 3a complete 2026-10-01: items 1a-ii, 7, 8 and 9 (pinned gate and CPU reference taken by the owner); item 10 (CI) removed as an exit criterion by the owner; step 4a (spans for the whole prefill window, added 2026-10-01 by owner decision) implemented and tested, its pinned A/B gate met 2026-10-02 (owner run); steps 4 (the per-term prefill breakdown, published unpinned, taken ahead of the 4a gate by owner decision) and 5 (the threshold decomposition) complete 2026-10-01, with the third milestone row (512 over 128) moved to Tier 02 by owner decision because no item here moves it; step 6 started 2026-10-02 under the owner's "one region, one change" decision: the prefill-window device region (item 6 with item 2's operand residency) is implemented and tested, logits bit-identical to the host path, its unpinned breakdown published, and its pinned A/B gate met 2026-10-02 (TinyLlama prefill 3.899x, owner run); item 6 is complete, and item 2's remainder (the non-allocating `MatVec` form) is the next change
+Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); plan amended 2026-09-30 after the plan review (scope items 6 to 10, step 3a, the `juno.DeviceCompute` span); step 3a complete 2026-10-01: items 1a-ii, 7, 8 and 9 (pinned gate and CPU reference taken by the owner); item 10 (CI) removed as an exit criterion by the owner; step 4a (spans for the whole prefill window, added 2026-10-01 by owner decision) implemented and tested, its pinned A/B gate met 2026-10-02 (owner run); steps 4 (the per-term prefill breakdown, published unpinned, taken ahead of the 4a gate by owner decision) and 5 (the threshold decomposition) complete 2026-10-01, with the third milestone row (512 over 128) moved to Tier 02 by owner decision because no item here moves it; step 6 started 2026-10-02 under the owner's "one region, one change" decision: the prefill-window device region (item 6 with item 2's operand residency) is implemented and tested, logits bit-identical to the host path, its unpinned breakdown published, and its pinned A/B gate met 2026-10-02 (TinyLlama prefill 3.899x, owner run); item 6 is complete; item 2's remainder (the residual kept on the device across layers and the non-allocating `MatVec` form) implemented and tested 2026-10-02, measured unpinned (prefill 1.045x and 1.047x, staged bytes down 97% to 99% on the three region models); item 2's criterion met (owner decision 2026-10-02: its bytes threshold is scored on the three models whose attention runs in the region; Phi-3.5-mini's prefill bytes moved to Tier 02 item 8); this change's pinned no-regression gate met 2026-10-02 (owner run: generation 0.997x and 0.993x, prefill 1.073x and 1.049x)
 Gap analysis refs: none directly — this tier exists because the gap analysis has no prefill section
 at all, while the published measurements under `docs/perf-compare/` show prompt processing to be the
 single largest gap Juno has. See "Why this tier, why now".
@@ -728,8 +728,10 @@ Phi-3.5 LongRoPE fix and rule 7 check 4; item 10 (CI) was removed as an exit cri
 complete, its pinned gate met (0.993x and 1.005x). Steps 4 (the breakdown, residue 0.4% to 2.2%) and 5 (the threshold
 decomposition) are complete; the decomposition's third row moved to Tier 02 (owner decision). Step 6's first
 change (the prefill-window device region, items 6 and 2 as one region by owner decision) is implemented,
-tested, measured, and its pinned gate met (TinyLlama prefill 3.899x); item 6 is complete, and item 2's
-remainder follows.
+tested, measured, and its pinned gate met (TinyLlama prefill 3.899x); item 6 is complete. Step 6's second
+change (item 2's remainder) is implemented, tested and measured unpinned, and item 2's criterion is met under
+the owner's decision on Phi-3.5-mini's bytes (moved to Tier 02 item 8); its pinned gate is met (owner run).
+Next: item 3 (chunk sizing per surface), then step 8's closing matrix.
 The two milestone decisions step 2 raised were taken by the owner on 2026-09-30 (recorded under step 2). This section also records the
 plan-review pass of 2026-09-27, which landed ahead of step 1.
 
@@ -2060,6 +2062,165 @@ repetition withheld, GC pause at most 14.7 ms (Mistral, both sides alike). Publi
 Every item 6 threshold is now met; the exit criterion is ticked. Item 2's criterion stays open (Phi-3.5-mini
 bytes, the non-allocating form).
 
+### 2026-10-02 — implementation step 6, second change: item 2's remainder (the residual across layers, the non-allocating `MatVec` form)
+
+Scope as the owner decided before step 6: the residual kept on the device across layers, and the
+non-allocating batched `MatVec` form with its contract for Tier 10 item 4. Build: HEAD `61c31cc` plus this
+change. Baseline jar `d287e929f78c11ff` (HEAD, built from a `git archive` export), candidate `caaf5810752a1ecb`
+(this tree; the jar the published sweep below measured). A root `mvn clean` deleted `target/` before the owner
+ran the gate, so the jars and `run-gate.sh` now live in `dist/tier01b-item2-ab/` (gitignored, untouched by
+`mvn clean`), with the candidate rebuilt from the same sources as `ba4ee78b6a77541e` (jar builds here are not
+byte-reproducible: entry timestamps; no Java source changed between the two builds, only docs).
+
+**Plan-versus-code check before starting (no drift found).** The tier's recorded state matched the code:
+the region committed in `61c31cc`; `MatVec.sgemm` allocating its result batch and every handler's
+`sgemmLayerInto` (and Phi-3's `sgemmProjInto`/`sgemmFusedInto`/fused Q/K/V and gate/up paths) copying it
+into the workspace; `PrefillWindowRegion.Window` uploading x at every `runLayer` and downloading it at the end
+of every layer. Tiers 00 and 01 are complete (all boxes ticked); the prompt that started this session
+expected Tier 00 and was wrong about it, not the plan.
+
+**What shipped.**
+- `MatVec`: `sgemmInto(A, X, Y)` for all four batched overloads (host `float[]`, `DeviceFloatMatrix`,
+  `DeviceHalfMatrix`, `DeviceQ4KMatrix`). Contract: writes `Y[b][0, rows)`, leaves the rest of the row alone,
+  checks `Y` before computing (`SgemmOutput`, new), bit-identical to `sgemm`. The interface defaults copy from
+  `sgemm`, so `RocmMatVec` (no override) stays correct; `CpuMatVec` and `CudaMatVec` implement it natively and
+  their `sgemm` allocates and delegates, so the two cannot drift. This is the batched half Tier 10 item 4 names;
+  its single-row `sgemvInto` is not in the contract (`CudaMatVec` has private ones for its small-batch
+  branches). `GpuBlasOps.forwardInto` writes the FP32 path into the caller's rows; its packed host copies are
+  still allocated (the FP32 device path is not used by any CUDA sweep model; Tier 10's allocation item).
+- Handlers: `LlamaTransformerHandler.sgemmLayerInto`, `Qwen3TransformerHandler.sgemmLayerInto` and Phi-3's
+  `sgemmProjInto`/`sgemmFusedInto` call `sgemmInto`; Phi-3's fused Q4_K Q/K/V and gate/up GEMMs write into a
+  workspace buffer allocated once per call (it was one new batch per layer each) and are split from it.
+- `PrefillWindowRegion.Window`: x is uploaded only when the device does not hold it (the window's first layer,
+  or the first after a host-path layer) and is no longer downloaded per layer; `materializeResidual` is the
+  boundary, called by the handlers at the end of the window and before any layer that runs on the host, inside a
+  `juno.WindowStep` `device_layer` span. `recoverLayerInput` hands a failed layer's input back for the host
+  redo: from the host rows when the layer uploaded them, from x before the layer's first in-place residual add,
+  and otherwise from `xIn`, a device-to-device copy taken before that add (one W x hidden copy per layer, staging
+  site `memcpy(prefill residual layer input D2D)`). The residual's copies are their own staging sites
+  (`upload(prefill residual)`, `materialize(prefill residual)`; `ResidentChain.allocate(rows, dim, name)`).
+- Docs: `docs/agent-arch.txt` (`MatVec`, `CudaMatVec`, `ResidentActivation`, `PrefillWindowRegion`),
+  `docs/howto.md` ("Prefill windows on the device"), `docs/performance.md`, `CHANGELOG.md`.
+
+**Tests, written first and shown failing for the right reason.**
+- `MatVecSgemmIntoTest` (`node`, CPU, 9 cases): bit-identical to `sgemm` at B = 1, 2, 8, 9, 32, the caller's
+  rows written in place, a wider row's tail untouched, a short/null/missing row rejected, the interface default
+  correct for a backend that does not override it. Against the interface default, the allocation case failed:
+  50,664 bytes for one call against a 49,152-byte output (bound: an eighth of it); passes on `CpuMatVec`'s own form.
+- `CudaSgemmIntoTest` (`node`, `@Tag("gpu")`, 20 cases): FP16 and Q4_K at W = 1, 2, 8, 9, 32, 512 and 741 (the
+  vision width), FP32 at 1, 2, 9, 32, 512, bit-identical to `sgemm`; at W = 512 the output is not allocated.
+  Against the default the allocation case failed (537,960 bytes for a 524,288-byte output).
+- `PrefillWindowRegionResidualTest` (`node`, `@Tag("gpu")`, 3 cases, synthetic layers): three layers with the
+  residual kept on the device equal, bit for bit, the same layers with a download and upload after each, with 1
+  residual upload and 1 download per window against 3 and 3; a device OOM after the layer's first residual add
+  (a Q4_K gate whose dequantization scratch cannot grow, device filled to 2 MiB free) and one before it (a fused
+  Q4_K Q/K/V) both recover the layer's input bit for bit, and the window then finishes the layer equal to a clean
+  run. All three errored on the throwing skeleton.
+- `PrefillRegionHandlerParityTest` extended: one residual upload and one download per region window. It failed
+  before the change with one upload per layer (22, 36, 32 and 28 on TinyLlama, Qwen2.5-3B, Phi-3.5-mini and
+  Qwen3-1.7B); passes after, logits still bit-identical region on against off on all four, at all six sites.
+
+**Test-suite hygiene found on the way (no product change).** (1) The device-memory-returns-to-start checks in
+`PrefillRegionHandlerParityTest` and `GpuAttentionHandlerParityTest` failed intermittently by 53 to 165 MiB.
+The display server, desktop and two browser processes share this card (about 400 to 630 MiB between them,
+moving during a run); the unchanged HEAD build failed `GpuAttentionHandlerParityTest` 1 of 3 runs alone, and this
+tree passed `PrefillRegionHandlerParityTest` 3 of 3 with VRAM traced before and after each half (back to within
+17 MiB, in both directions). The checks are left as they are; a failure of that size on this host should be
+re-run before it is read as a leak. (2) `DeviceKvWindowAppendTest.windowGrowthOutOfMemory_isAVramOom` failed 3 of
+3 alone on HEAD as well as here: its device-fill helper backed off in 16 MiB steps when the single allocation of
+"free minus 4 MiB" was refused, leaving more than the 8 MiB the test expects to fail. The helper now fills in
+halving chunks down to 1 MiB (as the new region test does); 3 of 3 pass.
+
+**Verification (2026-10-02).** `mvn test` on the eleven unit-test modules: **1,968 tests, 0 failures, 0 errors,
+49 skipped** (step 6: 1,936), 27:39, GPU-tagged tests included. `mvn install -DskipTests`, then `mvn verify -pl
+juno-master`: 20 ITs, 0 failures. `-Pgpu`: `PrefillRegionGreedyIT` 2 of 2 (6 of 6 prompts identical over 64
+tokens on TinyLlama and Mistral 7B), `GpuAttentionDivergenceIT` 3 of 3 with the same first-divergence steps as
+step 6 (TinyLlama 8, 13, 23; Phi-3.5-mini 37, 40; Qwen3-1.7B 20, 23, 32), `GpuForwardPassIT` 5 of 5 on TinyLlama
+against the CPU oracle (top-1 equal, top-5 overlap 5, logits relative L2 0.009; it needs `-Djuno.gpu.test=true
+-Dit.model.path=...`, without which `-Pgpu` reports 0 tests, not a failure). `check-plan-thresholds.sh`,
+`compare-llama-cpp.sh --selftest`, `prefill-breakdown.sh --selftest` (16 of 16) and `selftest-engine-stdin.sh`
+pass. Not run, owed to the closing matrix (step 8) as before: `compare-lora.sh` (the LoRA handlers are separate
+classes and do not use the region or `sgemmLayerInto`), `compare-vision.sh` (moondream2's text half is Phi-2,
+CPU-only; the vision encoder still calls the allocating `sgemm`, which on CUDA now delegates to `sgemmInto`:
+same kernels and bits, covered by `CudaSgemmIntoTest` at the vision width), `compare-prefill-batch.sh`.
+
+**Measurement (agent, unpinned; the pinned gate is owed to the owner).**
+
+*Breakdown*, published as [`20261002T050741Z`](../perf-compare/20261002T050741Z/INDEX.md) (`--gpu --device-spans
+--juno-reps 3 --no-tuned-lane`, `n_prompt=512`, jar `caaf5810752a1ecb`; `prefill-breakdown.sh` exit 0, residue
+1.3% to 2.9%; every prefill 512 of 512, every row scorable). Per window, all three repetitions identical:
+
+| Model | Prefill ms (step 6 → now) | H2D + D2H MB (step 2 → step 6 → now) | Bytes against step 2 | Residual D2D MB | Matmul and region staging share |
+|---|---|---|---|---|---|
+| tinyllama-1.1b | 556 → 501 | 1,405 → 207 → **31** | **-97.8%** | 87 | 3.8% → 0.9% |
+| qwen2.5-3b | 1,260 → 1,172 | 3,288 → 339 → **45** | **-98.6%** | 146 | 2.7% → 0.6% |
+| Phi-3.5-mini | 3,121 → 3,012 | 2,645 → 1,809 → **1,419** | **-46.4%** | 194 | 3.7% → 2.6% |
+| mistral-7b | 2,741 → 2,583 | 4,689 → 670 → **150** | **-96.8%** | 259 | 2.4% → 0.7% |
+
+What remains crossing the bus on the region models is each layer's K and V rows for the host KV cache, plus
+one upload and one download of the residual per window. The host side of the region
+(`projection_and_region_host`) fell from 7.3% to 2.6% on TinyLlama and from 4.1% to 1.4% on Mistral 7B: the
+per-layer residual copy-out and its host-array writes are gone. On Phi-3.5-mini, Q, K and V still come back and
+the attention output still goes up every layer, because its LongRoPE and attention run on the host.
+
+*Informational A/B* (not a gate: unpinned), alternating baseline and candidate three times each
+(`PIN=0`, the script then in `target/tier01b-item2-ab/`, jars `d287e929f78c11ff` and `caaf5810752a1ecb`),
+`n_prompt=512`, median (min to max), Juno t/s, logs under `target/perf-compare/item2-ab-unpinned-*` (since
+deleted by `mvn clean`; the readings are reproduced here):
+
+| Model | Prefill baseline | Prefill candidate | B/A | Generation B/A |
+|---|---|---|---|---|
+| TinyLlama | 916.23 (856.14 to 917.45) | 957.64 (935.55 to 1,014.33) | 1.045x | 1.007x |
+| Mistral 7B | 190.32 (190.26 to 196.45) | 199.23 (198.25 to 200.67) | 1.047x | 1.001x |
+
+Read against step 5's estimate for item 2 alone (1.16x and 1.15x, most of which the first change of step 6
+already took by moving the attention input and output onto the device): the remainder was 2% to 4% of the
+window in the post-region breakdown, and it moved prefill by about that.
+
+**Item 2's threshold, scored as far as an unpinned agent can.** Residency across a layer's projections, with
+the materialization boundary documented (`PrefillWindowRegion` and `ResidentActivation` javadoc,
+`docs/agent-arch.txt`, `docs/howto.md`): **met**. Bytes per 512-token window `>= 70%` below step 2: **met on
+tinyllama, qwen2.5-3b and mistral-7b (97% to 99%), missed on Phi-3.5-mini (46.4%, was 31.6%)**. `sgemmLayerInto`'s
+per-matmul allocate-and-copy removed through the non-allocating form whose contract Tier 10 item 4 adopts:
+**met** (Tier 10 item 4 now names this spelling and what it leaves for that item).
+
+**Raised with the owner (2026-10-02): Phi-3.5-mini's bytes. Decided the same day: option 1.** Item 2's bytes
+threshold is scored on tinyllama, qwen2.5-3b and mistral-7b, the three sweep models whose attention runs in the
+region, and Phi-3.5-mini's prefill bytes moved to [Tier 02](TIER-02-attention-long-context.md) item 8 with its own
+exit criterion (the same `>= 70%` against 2,645 MB). The criterion is ticked. The analysis as raised: Reaching 70% on Phi-3.5-mini needs its RoPE and
+attention inside the region: LongRoPE on the device (its short factors folded into the inverse-frequency table
+`CudaRope` takes) and the fused Q/K/V split on the device. No item in this tier owns either. Tier 02 item 8 already
+owns the same LongRoPE folding for the decode region. Options: (1) score item 2's bytes threshold on the three
+models whose handler runs attention in the region, and hand Phi-3.5-mini's prefill bytes to Tier 02 item 8
+alongside its decode work (recommended: one LongRoPE kernel serves both, and Phi-3.5-mini's remaining host RoPE,
+attention copies and attention host work are about 11% of its window, which the tier's milestones do not need:
+the unpinned sweep reads its pp ratio at 0.142x against the 0.08x row); (2) pull the device LongRoPE and the
+Phi-3 in-region attention into this tier as a new step; (3) keep the criterion open and close the tier
+partial-complete on it.
+
+**Owed, for the owner (pinned, needs prompt-free sudo):** this change's no-regression gate, same-hour, alternating
+A B A B A B, generation `>= 0.95x` on TinyLlama and Mistral 7B, prefill recorded:
+`bash dist/tier01b-item2-ab/run-gate.sh` (baseline `d287e929f78c11ff`, candidate `ba4ee78b6a77541e`; the six
+runs land in `dist/tier01b-item2-ab/runs/`; it publishes nothing, so copy them under
+`docs/perf-compare/<timestamp>-tier01b-step6-item2-ab/` as the step 6 gate was). It scores the decode
+criterion below, not item 2's.
+
+**Gate taken by the owner 2026-10-02 (pinned, 13:52 to 14:00 UTC): met.** Published:
+[`20261002T135308Z-tier01b-step6-item2-ab`](../perf-compare/20261002T135308Z-tier01b-step6-item2-ab/INDEX.md).
+All six runs pinned (governor performance, turbo off, GPU locked at 1860 MHz), jar hashes `d287e929f78c11ff` and
+`ba4ee78b6a77541e` as expected, every prefill 512 of 512, every row scorable, no repetition withheld, GC pause at
+most 16 ms (both sides alike). Median (min / max) of three:
+
+| Model | Prefill A | Prefill B | B/A | Generation A | Generation B | B/A |
+|---|---|---|---|---|---|---|
+| TinyLlama | 959.54 (941.69 / 965.94) | 1029.42 (983.10 / 1030.55) | **1.073** | 67.91 (67.67 / 68.62) | 67.73 (66.98 / 68.22) | **0.997** |
+| Mistral 7B | 194.63 (191.17 / 196.39) | 204.18 (200.47 / 207.49) | **1.049** | 22.89 (22.47 / 22.94) | 22.73 (22.69 / 22.88) | **0.993** |
+
+Generation `>= 0.95x` met on both. Prefill moved by what the breakdowns predict: matmul and region staging plus
+the region's host side were 11.1% and 6.5% of the window before and 3.5% and 2.1% after, worth about 1.08x and
+1.05x. The decode criterion below stays open: it asks for every sweep model against the step-2 build, and for
+vision, which the closing matrix (step 8) takes.
+
 ### Out-of-tier changes (recorded per execution rule 9)
 
 | Change | What it touched | Measurement boundary? |
@@ -2195,13 +2356,25 @@ bytes, the non-allocating form).
       *Checked 2026-10-01 (step 5 record): rows 1 and 2 sum on item 6 alone (estimated 1.5x to 2.0x
       against 1.00x to 1.65x needed); row 3 (512 over 128) does not, because attention grows with
       context, so it moved to Tier 02 (owner decision, 2026-10-01).*
-- [ ] Prefill activations stay device-resident across a layer's projections, with the materialization
+- [x] Prefill activations stay device-resident across a layer's projections, with the materialization
       boundary documented; bytes staged per 512-token window down >= 70% against the step-2 baseline;
       `sgemmLayerInto`'s per-matmul allocate-and-copy removed via the non-allocating batched form,
       whose contract matches the one Tier 10 item 4 adds for CPU.
       *2026-10-02, open: residency and the boundary are done in the device region (documented in its class
       and `docs/howto.md`); bytes down 85% to 90% on TinyLlama, Qwen2.5-3B and Mistral 7B but 31.6% on
       Phi-3.5-mini, whose LongRoPE and attention stay on the host; the non-allocating form is not done.*
+      *2026-10-02, second change: the residual stays on the device across layers and `MatVec.sgemmInto` is in
+      (step 6 second-change record). Bytes down 97.8%, 98.6% and 96.8% on TinyLlama, Qwen2.5-3B and Mistral 7B,
+      46.4% on Phi-3.5-mini ([`docs/perf-compare/20261002T050741Z`](../perf-compare/20261002T050741Z/INDEX.md),
+      unpinned). Still open on Phi-3.5-mini's bytes, with the owner's decision pending (options in that record);
+      the change's pinned no-regression gate is owed.*
+      *Checked 2026-10-02 (owner decision: option 1): bytes scored on tinyllama, qwen2.5-3b and mistral-7b,
+      down 97.8%, 98.6% and 96.8% against `>= 70%`
+      ([`docs/perf-compare/20261002T050741Z`](../perf-compare/20261002T050741Z/INDEX.md); bytes do not depend
+      on clock state, identical in all three repetitions); Phi-3.5-mini's prefill bytes moved to Tier 02 item 8
+      with the same threshold. Residency across layers and the materialization boundary documented
+      (`PrefillWindowRegion`, `docs/agent-arch.txt`, `docs/howto.md`); `MatVec.sgemmInto` in, named in Tier 10
+      item 4. The change's pinned no-regression gate belongs to the decode criterion below and is owed.*
 - [ ] Chunk-sizing defaults reviewed per surface; any surface still pinned at `32` has a measured
       reason, not an inherited one.
 - [x] `scripts/performance-tests/check-plan-thresholds.sh` exists, passes against this tree, and fails

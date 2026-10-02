@@ -171,7 +171,7 @@ class DeviceKvWindowAppendTest {
 		GpuBindings gpu = ctx.bindings();
 		try (DeviceKvCache cache = new DeviceKvCache(ctx, KV_DIM)) {
 			cache.appendWindow(0, rows(64, 13), rows(64, 14), 64);
-			MemorySegment ballast = fillDevice(gpu, 4L << 20);
+			List<MemorySegment> ballast = fillDevice(gpu, 4L << 20);
 			try {
 				// 8192 positions of 256 FP16 values per tensor need 4 MiB each, more than is left.
 				assertThatThrownBy(() -> cache.appendWindow(64, rows(8128, 15), rows(8128, 16), 8128))
@@ -179,26 +179,39 @@ class DeviceKvWindowAppendTest {
 						.matches(ex -> GpuLayerOffload.isVramOom((IllegalStateException) ex), "is a VRAM OOM");
 				assertThat(cache.validTokens()).as("the failed window does not move the watermark").isEqualTo(64);
 			} finally {
-				gpu.deviceFree(ballast);
+				for (MemorySegment b : ballast)
+					gpu.deviceFree(b);
 			}
 		}
 	}
 
 	// ── helpers ────────────────────────────────────────────────────────────────
 
-	/** Allocates all but about {@code leave} bytes of free device memory and returns the allocation. */
-	private static MemorySegment fillDevice(GpuBindings gpu, long leave) {
-		long free = gpu.memGetInfo(ctx.deviceIndex())[0];
-		assumeTrue(free > leave + (64L << 20), "not enough free device memory to set up the test");
-		long bytes = free - leave;
-		while (true) {
+	/**
+	 * Allocates device memory in shrinking chunks until about {@code leave} bytes are free,
+	 * and returns the allocations. One allocation of "free minus leave" is refused when the
+	 * allocator keeps part of what memGetInfo reports, and backing it off in fixed steps could
+	 * leave several times {@code leave} free; chunks halving down to 1 MiB stop within 1 MiB
+	 * (plus allocator granularity) of it.
+	 */
+	private static List<MemorySegment> fillDevice(GpuBindings gpu, long leave) {
+		assumeTrue(gpu.memGetInfo(ctx.deviceIndex())[0] > leave + (64L << 20),
+				"not enough free device memory to set up the test");
+		List<MemorySegment> held = new java.util.ArrayList<>();
+		long chunk = 256L << 20;
+		while (chunk >= (1L << 20)) {
+			long free = gpu.memGetInfo(ctx.deviceIndex())[0];
+			if (free - chunk < leave) {
+				chunk >>= 1;
+				continue;
+			}
 			try {
-				return gpu.deviceMalloc(ctx.deviceIndex(), bytes);
+				held.add(gpu.deviceMalloc(ctx.deviceIndex(), chunk));
 			} catch (IllegalStateException ex) {
-				bytes -= 16L << 20; // the allocator keeps some of what memGetInfo reports for itself
-				assumeTrue(bytes > 0, "could not reserve device memory");
+				chunk >>= 1;
 			}
 		}
+		return held;
 	}
 
 	private List<RecordedEvent> record(Runnable body) throws Exception {

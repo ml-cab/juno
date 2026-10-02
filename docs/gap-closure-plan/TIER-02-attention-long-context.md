@@ -173,6 +173,18 @@ changes** (README execution rule 9) and tick item 7 here.
    Order within the tier: item 4, then this item, then item 5 (graph replay pays more once the region
    issues more launches per wait), then item 6 (the default is put to the owner on the final region).
 
+   *Added 2026-10-02 (owner decision, Tier 01B step 6 second change): Phi-3.5-mini's prefill bytes.* Tier
+   01B's prefill-window region runs RoPE and attention inside it on the LLaMA family and Qwen2 only; on
+   Phi-3 the region hands Q, K and V back to the host every layer and takes the attention output up again,
+   so a 512-token Phi-3.5-mini window still moves 1,419 MB (46.4% below Tier 01B's step 2 baseline of
+   2,645 MB, against the 70% that tier held its other three sweep models to; `docs/perf-compare/20261002T050741Z`).
+   The LongRoPE folding this item builds for decode serves the prefill window as well. With it, move Phi-3's
+   RoPE and attention into the prefill region too: split the fused Q/K/V on the device, rotate with the
+   LongRoPE table, cast K and V into the mirror and run the attention kernel there, as the LLaMA family
+   does. Host RoPE, attention copies and attention host work were 11.0% of that window. Do the same for
+   Qwen3 if its per-head Q/K norm is added to the region (it is not a sweep model, so it has no bytes
+   threshold); otherwise it stays announced.
+
 ### Out of scope
 
 - Extending the tiled attention kernel to ROCm (tracked in Tier 10, same reasoning as Tier 01).
@@ -403,6 +415,11 @@ why this tier ships against synthetic fixtures and Tier 08 carries the real-mode
       `juno.DeviceStaging` by test and by a published `--device-spans` run; tg region-on >= 1.0x
       region-off (same-hour pinned A/B); greedy output identical; per-request device memory flat; zero
       activation device-to-host copies inside a prefill window re-verified.
+- [ ] Phi-3.5-mini's prefill window runs RoPE and attention inside the prefill region (scope item 8,
+      added 2026-10-02): **Threshold: H2D + D2H bytes per 512-token window >= 70% below 2,645 MB**
+      (Tier 01B's step 2 baseline; 1,419 MB at `docs/perf-compare/20261002T050741Z`), from a published
+      `--device-spans` run; logits bit-identical region on against off (`PrefillRegionHandlerParityTest`)
+      or characterised no worse than the existing GPU-attention divergence (Phi-3.5-mini earliest 37).
 - [ ] `CudaGraphSession` decided by measurement (scope item 5): wired behind `--gpu-residency` if it
       saves at least 5% of decode forward-pass time on tinyllama and mistral-7b with greedy output
       unchanged, otherwise deleted with `CudaGraphSessionTest` and the measurement recorded. Not
