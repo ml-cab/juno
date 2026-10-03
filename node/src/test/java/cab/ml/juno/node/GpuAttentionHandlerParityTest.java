@@ -51,6 +51,15 @@ import org.junit.jupiter.params.provider.ValueSource;
  * the largest at the second multi-decode stream. Planted fault (one head's output
  * zeroed after every kernel launch): 0.153 and 0.090 at the first prefill window,
  * with top-1 unchanged, so the L2 bound is the check that catches it.
+ *
+ * <p>Both runs multiply prefill windows on the FP16 dequant route
+ * ({@link CudaMatVec#dequantizeBatchedKQuant}), as the calibration did. On the
+ * default tiled integer route each matmul rounds its input to 8 bits, and the
+ * attention difference this test measures (3e-4 at the prefill windows) comes back
+ * as whole rounding steps: 0.008 to 0.009 at the prefill windows and 0.038 at the
+ * second multi-decode stream on Qwen3-1.7B, measured. That is the 8-bit rounding's
+ * doing, which the packed matmul's own parity and quality tests bound, not the
+ * attention kernel's.
  */
 @Tag("gpu")
 @DisplayName("Phi-3 and Qwen3 handlers - GPU attention against scalar attention on a real model")
@@ -97,6 +106,7 @@ class GpuAttentionHandlerParityTest {
 
 		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "off");
 		CudaMatVec offBackend = new CudaMatVec(gpu);
+		offBackend.dequantizeBatchedKQuant(true);
 		ForwardPassHandler off = ForwardPassHandlerLoader.load(model, shard, offBackend);
 		float[][] ref;
 		try {
@@ -111,6 +121,7 @@ class GpuAttentionHandlerParityTest {
 
 		System.clearProperty(GpuAttentionOptions.ENV_PROPERTY); // the default, auto
 		CudaMatVec onBackend = new CudaMatVec(gpu);
+		onBackend.dequantizeBatchedKQuant(true);
 		ForwardPassHandler on = ForwardPassHandlerLoader.load(model, shard, onBackend);
 		float[][] got;
 		try {

@@ -1,0 +1,826 @@
+{
+ "gate": "confirmation, rule declared before the run: part P, five alternations, median of five; generation B/A >= 0.95 on every sweep model; prefill B/A >= 1.30 mistral-7b, >= 1.10 tinyllama",
+ "order": "A B x5",
+ "runs": [
+  {
+   "side": "baseline",
+   "rep": 1,
+   "timestamp_utc": "2026-10-03T21:48:50Z",
+   "clock_pinned": true,
+   "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz",
+   "juno_jar_sha256_16": "c9f8e7a74c4187b7",
+   "models": {
+    "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+     "prompt_eval_tps": 1054.4074273711292,
+     "token_gen_tps": 64.07313756433557,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 2554318200.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 9.837065,
+      "jdk.GCPhasePause.in_token_span.max_ms": 9.837065,
+      "jdk.ThreadAllocationStatistics.bytes_total": 3029814704.0
+     }
+    },
+    "qwen2.5-3b-instruct-q4_k_m": {
+     "prompt_eval_tps": 443.32611698567325,
+     "token_gen_tps": 29.268178197949304,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 7537965520.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9188800840.0
+     }
+    },
+    "Phi-3.5-mini-instruct-Q4_K_M": {
+     "prompt_eval_tps": 175.23402775643137,
+     "token_gen_tps": 31.82087127844618,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 9.0,
+      "jdk.GCPhasePause.max_ms": 7.971955,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9066462024.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 3.0,
+      "jdk.GCPhasePause.max_ms": 8.483682,
+      "jdk.GCPhasePause.in_token_span.max_ms": 8.483682,
+      "jdk.ThreadAllocationStatistics.bytes_total": 13269997144.0
+     }
+    },
+    "mistral-7b-instruct-v0.1-q4_k_m": {
+     "prompt_eval_tps": 204.10465641979278,
+     "token_gen_tps": 22.575061808023626,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 11937684216.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 13.634333,
+      "jdk.GCPhasePause.in_token_span.max_ms": 13.634333,
+      "jdk.ThreadAllocationStatistics.bytes_total": 14261550688.0
+     }
+    }
+   }
+  },
+  {
+   "side": "candidate",
+   "rep": 1,
+   "timestamp_utc": "2026-10-03T21:52:03Z",
+   "clock_pinned": true,
+   "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz",
+   "juno_jar_sha256_16": "5393faf01b594879",
+   "models": {
+    "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+     "prompt_eval_tps": 1225.9001616085984,
+     "token_gen_tps": 62.60784029297152,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 2559130944.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 7.252033,
+      "jdk.GCPhasePause.in_token_span.max_ms": 7.252033,
+      "jdk.ThreadAllocationStatistics.bytes_total": 3048197080.0
+     }
+    },
+    "qwen2.5-3b-instruct-q4_k_m": {
+     "prompt_eval_tps": 656.0925234183287,
+     "token_gen_tps": 27.196361230893388,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 7529900856.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9123360088.0
+     }
+    },
+    "Phi-3.5-mini-instruct-Q4_K_M": {
+     "prompt_eval_tps": 226.03253836660969,
+     "token_gen_tps": 28.324392150334802,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 9.0,
+      "jdk.GCPhasePause.max_ms": 9.485415,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9028451928.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 3.0,
+      "jdk.GCPhasePause.max_ms": 10.968773,
+      "jdk.GCPhasePause.in_token_span.max_ms": 10.968773,
+      "jdk.ThreadAllocationStatistics.bytes_total": 13577454408.0
+     }
+    },
+    "mistral-7b-instruct-v0.1-q4_k_m": {
+     "prompt_eval_tps": 281.7978351838984,
+     "token_gen_tps": 20.31242003224384,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 11955993120.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 14.844821,
+      "jdk.GCPhasePause.in_token_span.max_ms": 14.844821,
+      "jdk.ThreadAllocationStatistics.bytes_total": 14242333000.0
+     }
+    }
+   }
+  },
+  {
+   "side": "baseline",
+   "rep": 2,
+   "timestamp_utc": "2026-10-03T21:55:12Z",
+   "clock_pinned": true,
+   "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz",
+   "juno_jar_sha256_16": "c9f8e7a74c4187b7",
+   "models": {
+    "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+     "prompt_eval_tps": 915.1054755754365,
+     "token_gen_tps": 59.18126180843602,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 2553990392.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 7.543131,
+      "jdk.GCPhasePause.in_token_span.max_ms": 7.543131,
+      "jdk.ThreadAllocationStatistics.bytes_total": 3102681544.0
+     }
+    },
+    "qwen2.5-3b-instruct-q4_k_m": {
+     "prompt_eval_tps": 360.5080971266326,
+     "token_gen_tps": 25.33853332667442,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 7545173552.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9181945832.0
+     }
+    },
+    "Phi-3.5-mini-instruct-Q4_K_M": {
+     "prompt_eval_tps": 155.1937553645946,
+     "token_gen_tps": 27.79823038611038,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 9.0,
+      "jdk.GCPhasePause.max_ms": 9.607567,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9066464112.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 3.0,
+      "jdk.GCPhasePause.max_ms": 9.959707,
+      "jdk.GCPhasePause.in_token_span.max_ms": 9.959707,
+      "jdk.ThreadAllocationStatistics.bytes_total": 13575319552.0
+     }
+    },
+    "mistral-7b-instruct-v0.1-q4_k_m": {
+     "prompt_eval_tps": 177.1253605593851,
+     "token_gen_tps": 19.10136366202092,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 11956051136.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 16.006769,
+      "jdk.GCPhasePause.in_token_span.max_ms": 16.006769,
+      "jdk.ThreadAllocationStatistics.bytes_total": 14347899048.0
+     }
+    }
+   }
+  },
+  {
+   "side": "candidate",
+   "rep": 2,
+   "timestamp_utc": "2026-10-03T21:58:36Z",
+   "clock_pinned": true,
+   "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz",
+   "juno_jar_sha256_16": "5393faf01b594879",
+   "models": {
+    "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+     "prompt_eval_tps": 1131.099587351674,
+     "token_gen_tps": 55.44257071925997,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 2553641496.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 8.922286,
+      "jdk.GCPhasePause.in_token_span.max_ms": 8.922286,
+      "jdk.ThreadAllocationStatistics.bytes_total": 3104233632.0
+     }
+    },
+    "qwen2.5-3b-instruct-q4_k_m": {
+     "prompt_eval_tps": 555.2442524672018,
+     "token_gen_tps": 25.443360606711625,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 7534417048.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9186282288.0
+     }
+    },
+    "Phi-3.5-mini-instruct-Q4_K_M": {
+     "prompt_eval_tps": 222.92331197467638,
+     "token_gen_tps": 27.843454383828753,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 9.0,
+      "jdk.GCPhasePause.max_ms": 8.354198,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9066411248.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 3.0,
+      "jdk.GCPhasePause.max_ms": 9.438343,
+      "jdk.GCPhasePause.in_token_span.max_ms": 9.438343,
+      "jdk.ThreadAllocationStatistics.bytes_total": 13575982432.0
+     }
+    },
+    "mistral-7b-instruct-v0.1-q4_k_m": {
+     "prompt_eval_tps": 277.58979803882676,
+     "token_gen_tps": 19.52160189150462,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 11956101600.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 16.079894,
+      "jdk.GCPhasePause.in_token_span.max_ms": 16.079894,
+      "jdk.ThreadAllocationStatistics.bytes_total": 14326481960.0
+     }
+    }
+   }
+  },
+  {
+   "side": "baseline",
+   "rep": 3,
+   "timestamp_utc": "2026-10-03T22:01:48Z",
+   "clock_pinned": true,
+   "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz",
+   "juno_jar_sha256_16": "c9f8e7a74c4187b7",
+   "models": {
+    "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+     "prompt_eval_tps": 898.3192856725054,
+     "token_gen_tps": 57.38145471353428,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 2559596680.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 7.583639,
+      "jdk.GCPhasePause.in_token_span.max_ms": 7.583639,
+      "jdk.ThreadAllocationStatistics.bytes_total": 3084766792.0
+     }
+    },
+    "qwen2.5-3b-instruct-q4_k_m": {
+     "prompt_eval_tps": 374.57659319607967,
+     "token_gen_tps": 25.507084974262234,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 7545340792.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9186277072.0
+     }
+    },
+    "Phi-3.5-mini-instruct-Q4_K_M": {
+     "prompt_eval_tps": 155.62846101853296,
+     "token_gen_tps": 30.029725026544703,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 9.0,
+      "jdk.GCPhasePause.max_ms": 9.047231,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9066509736.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 3.0,
+      "jdk.GCPhasePause.max_ms": 9.666374,
+      "jdk.GCPhasePause.in_token_span.max_ms": 9.666374,
+      "jdk.ThreadAllocationStatistics.bytes_total": 13422522136.0
+     }
+    },
+    "mistral-7b-instruct-v0.1-q4_k_m": {
+     "prompt_eval_tps": 186.64348498201304,
+     "token_gen_tps": 19.220653951571197,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 11937916992.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 13.977463,
+      "jdk.GCPhasePause.in_token_span.max_ms": 13.977463,
+      "jdk.ThreadAllocationStatistics.bytes_total": 14263077472.0
+     }
+    }
+   }
+  },
+  {
+   "side": "candidate",
+   "rep": 3,
+   "timestamp_utc": "2026-10-03T22:05:12Z",
+   "clock_pinned": true,
+   "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz",
+   "juno_jar_sha256_16": "5393faf01b594879",
+   "models": {
+    "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+     "prompt_eval_tps": 1005.8872201802745,
+     "token_gen_tps": 57.151783179793895,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 2553706960.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 7.301691,
+      "jdk.GCPhasePause.in_token_span.max_ms": 7.301691,
+      "jdk.ThreadAllocationStatistics.bytes_total": 3104110200.0
+     }
+    },
+    "qwen2.5-3b-instruct-q4_k_m": {
+     "prompt_eval_tps": 569.4280493065835,
+     "token_gen_tps": 24.21746149772221,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 7543547184.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9148475224.0
+     }
+    },
+    "Phi-3.5-mini-instruct-Q4_K_M": {
+     "prompt_eval_tps": 231.40775258862962,
+     "token_gen_tps": 30.095137609544132,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 9.0,
+      "jdk.GCPhasePause.max_ms": 8.455258,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9029543560.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 3.0,
+      "jdk.GCPhasePause.max_ms": 8.733854,
+      "jdk.GCPhasePause.in_token_span.max_ms": 8.733854,
+      "jdk.ThreadAllocationStatistics.bytes_total": 13536327488.0
+     }
+    },
+    "mistral-7b-instruct-v0.1-q4_k_m": {
+     "prompt_eval_tps": 292.81141144998713,
+     "token_gen_tps": 20.618079037795848,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 11936349840.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 14.750815,
+      "jdk.GCPhasePause.in_token_span.max_ms": 14.750815,
+      "jdk.ThreadAllocationStatistics.bytes_total": 14265671984.0
+     }
+    }
+   }
+  },
+  {
+   "side": "baseline",
+   "rep": 4,
+   "timestamp_utc": "2026-10-03T22:08:23Z",
+   "clock_pinned": true,
+   "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz",
+   "juno_jar_sha256_16": "c9f8e7a74c4187b7",
+   "models": {
+    "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+     "prompt_eval_tps": 923.6230068537969,
+     "token_gen_tps": 62.42863784846161,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 2554018232.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 6.709925,
+      "jdk.GCPhasePause.in_token_span.max_ms": 6.709925,
+      "jdk.ThreadAllocationStatistics.bytes_total": 3102926760.0
+     }
+    },
+    "qwen2.5-3b-instruct-q4_k_m": {
+     "prompt_eval_tps": 393.4437380776029,
+     "token_gen_tps": 27.57130343051346,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 7531552680.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9182646176.0
+     }
+    },
+    "Phi-3.5-mini-instruct-Q4_K_M": {
+     "prompt_eval_tps": 157.71549917592822,
+     "token_gen_tps": 27.921409763252218,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 9.0,
+      "jdk.GCPhasePause.max_ms": 7.150414,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9029575464.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 3.0,
+      "jdk.GCPhasePause.max_ms": 10.615796,
+      "jdk.GCPhasePause.in_token_span.max_ms": 10.615796,
+      "jdk.ThreadAllocationStatistics.bytes_total": 13575710256.0
+     }
+    },
+    "mistral-7b-instruct-v0.1-q4_k_m": {
+     "prompt_eval_tps": 187.86256739375597,
+     "token_gen_tps": 20.513192524826742,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 11937676128.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 18.002693,
+      "jdk.GCPhasePause.in_token_span.max_ms": 18.002693,
+      "jdk.ThreadAllocationStatistics.bytes_total": 14351146488.0
+     }
+    }
+   }
+  },
+  {
+   "side": "candidate",
+   "rep": 4,
+   "timestamp_utc": "2026-10-03T22:11:44Z",
+   "clock_pinned": true,
+   "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz",
+   "juno_jar_sha256_16": "5393faf01b594879",
+   "models": {
+    "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+     "prompt_eval_tps": 1091.8016208993486,
+     "token_gen_tps": 62.1995785865814,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 2556585848.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 9.647727,
+      "jdk.GCPhasePause.in_token_span.max_ms": 9.647727,
+      "jdk.ThreadAllocationStatistics.bytes_total": 3023857880.0
+     }
+    },
+    "qwen2.5-3b-instruct-q4_k_m": {
+     "prompt_eval_tps": 559.7483164287538,
+     "token_gen_tps": 25.637181060183345,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 7538950320.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9093984440.0
+     }
+    },
+    "Phi-3.5-mini-instruct-Q4_K_M": {
+     "prompt_eval_tps": 221.30388295487978,
+     "token_gen_tps": 28.428538992750653,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 9.0,
+      "jdk.GCPhasePause.max_ms": 8.878985,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9065926480.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 3.0,
+      "jdk.GCPhasePause.max_ms": 13.255724,
+      "jdk.GCPhasePause.in_token_span.max_ms": 13.255724,
+      "jdk.ThreadAllocationStatistics.bytes_total": 13575891688.0
+     }
+    },
+    "mistral-7b-instruct-v0.1-q4_k_m": {
+     "prompt_eval_tps": 268.05594113465565,
+     "token_gen_tps": 19.784975849934483,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 11954692840.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 15.630605,
+      "jdk.GCPhasePause.in_token_span.max_ms": 15.630605,
+      "jdk.ThreadAllocationStatistics.bytes_total": 14348053880.0
+     }
+    }
+   }
+  },
+  {
+   "side": "baseline",
+   "rep": 5,
+   "timestamp_utc": "2026-10-03T22:14:55Z",
+   "clock_pinned": true,
+   "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz",
+   "juno_jar_sha256_16": "c9f8e7a74c4187b7",
+   "models": {
+    "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+     "prompt_eval_tps": 858.3062639826493,
+     "token_gen_tps": 58.31233204824039,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 2559382328.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 6.97204,
+      "jdk.GCPhasePause.in_token_span.max_ms": 6.97204,
+      "jdk.ThreadAllocationStatistics.bytes_total": 3102263656.0
+     }
+    },
+    "qwen2.5-3b-instruct-q4_k_m": {
+     "prompt_eval_tps": 371.41462795968346,
+     "token_gen_tps": 25.66805926984294,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 7543978008.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9083273312.0
+     }
+    },
+    "Phi-3.5-mini-instruct-Q4_K_M": {
+     "prompt_eval_tps": 152.78365567551919,
+     "token_gen_tps": 28.08524219790666,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 9.0,
+      "jdk.GCPhasePause.max_ms": 8.338623,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9066385472.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 3.0,
+      "jdk.GCPhasePause.max_ms": 8.806909,
+      "jdk.GCPhasePause.in_token_span.max_ms": 8.806909,
+      "jdk.ThreadAllocationStatistics.bytes_total": 13575406320.0
+     }
+    },
+    "mistral-7b-instruct-v0.1-q4_k_m": {
+     "prompt_eval_tps": 176.27768728261634,
+     "token_gen_tps": 19.478930251993496,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 11957522096.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 17.198331,
+      "jdk.GCPhasePause.in_token_span.max_ms": 17.198331,
+      "jdk.ThreadAllocationStatistics.bytes_total": 14338122136.0
+     }
+    }
+   }
+  },
+  {
+   "side": "candidate",
+   "rep": 5,
+   "timestamp_utc": "2026-10-03T22:18:19Z",
+   "clock_pinned": true,
+   "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off, gpu graphics clock locked at 1911 MHz",
+   "juno_jar_sha256_16": "5393faf01b594879",
+   "models": {
+    "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+     "prompt_eval_tps": 1122.54623725198,
+     "token_gen_tps": 58.55660783386073,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 2553408144.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 8.041169,
+      "jdk.GCPhasePause.in_token_span.max_ms": 8.041169,
+      "jdk.ThreadAllocationStatistics.bytes_total": 3104095856.0
+     }
+    },
+    "qwen2.5-3b-instruct-q4_k_m": {
+     "prompt_eval_tps": 549.7918801494936,
+     "token_gen_tps": 25.67640930696515,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 7535066296.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9097578624.0
+     }
+    },
+    "Phi-3.5-mini-instruct-Q4_K_M": {
+     "prompt_eval_tps": 225.12022111216666,
+     "token_gen_tps": 27.78803132011935,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 9.0,
+      "jdk.GCPhasePause.max_ms": 8.702287,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 9066258272.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 3.0,
+      "jdk.GCPhasePause.max_ms": 9.38247,
+      "jdk.GCPhasePause.in_token_span.max_ms": 9.38247,
+      "jdk.ThreadAllocationStatistics.bytes_total": 13575889032.0
+     }
+    },
+    "mistral-7b-instruct-v0.1-q4_k_m": {
+     "prompt_eval_tps": 271.1673025572572,
+     "token_gen_tps": 19.340918779425042,
+     "prompt_tokens": 512,
+     "completion_tokens": 64,
+     "prefill_jfr": {
+      "jdk.GCPhasePause.count": 0.0,
+      "jdk.GCPhasePause.max_ms": 0.0,
+      "jdk.GCPhasePause.in_token_span.max_ms": 0.0,
+      "jdk.ThreadAllocationStatistics.bytes_total": 11955753632.0
+     },
+     "generate_jfr": {
+      "jdk.GCPhasePause.count": 1.0,
+      "jdk.GCPhasePause.max_ms": 14.853203,
+      "jdk.GCPhasePause.in_token_span.max_ms": 14.853203,
+      "jdk.ThreadAllocationStatistics.bytes_total": 14348132456.0
+     }
+    }
+   }
+  }
+ ]
+}

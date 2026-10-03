@@ -47,7 +47,7 @@ class CudaMatVecScratchLifetimeTest {
 
 	private static final int ROWS = 512;
 	private static final int COLS = 512; // two Q4_K super-blocks per row
-	private static final int PREFILL = 16; // above the batched-GEMM threshold: dequant path
+	private static final int PREFILL = 16; // above the batched-GEMM threshold: packed batched path
 	private static final int SMALL_BATCH = 4; // strided-batched GEMV path
 
 	private static GpuContext ctx;
@@ -107,14 +107,14 @@ class CudaMatVecScratchLifetimeTest {
 	}
 
 	@Test
-	@DisplayName("the batched-prefill dequant scratch (a whole weight matrix) is not kept per thread")
-	void dequantScratchIsNotPerThread() throws Exception {
+	@DisplayName("the batched-prefill scratch is not kept per thread, and holds no copy of the weight")
+	void batchedScratchIsNotPerThread() throws Exception {
 		CudaMatVec mv = new CudaMatVec(ctx);
 		try {
 			mv.sgemm(wQ4k, xBatch);
 			long oneSet = mv.scratchDeviceBytes();
-			assertThat(oneSet).as("dequant scratch holds at least the FP16 weight")
-					.isGreaterThanOrEqualTo((long) ROWS * COLS * Short.BYTES);
+			assertThat(oneSet).as("the packed batched path keeps window-sized scratch, not an FP16 weight")
+					.isPositive().isLessThan((long) ROWS * COLS * Short.BYTES);
 			for (int t = 0; t < 50; t++)
 				runOnNewThread(() -> mv.sgemm(wQ4k, xBatch));
 			assertThat(mv.scratchDeviceBytes()).as("device scratch after 50 sequential short-lived threads")
@@ -132,7 +132,9 @@ class CudaMatVecScratchLifetimeTest {
 		// the scratch kept per thread (the code before this test), 60 threads took
 		// 44,040,192 bytes (42 MiB); with one set per instance, six runs read between
 		// -3.0 MiB and +2.4 MiB (most of them 0) as the driver's pool settles, not
-		// with the thread count. The bound sits between the two.
+		// with the thread count. The bound sits between the two. (Those readings
+		// predate the packed batched GEMM, which keeps no FP16 weight buffer, so one
+		// set is now smaller; the per-thread failure mode is the same.)
 		CudaMatVec mv = new CudaMatVec(ctx);
 		try {
 			for (int w = 0; w < 3; w++)

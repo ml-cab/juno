@@ -69,6 +69,8 @@ public final class CudaMatVec implements GpuMatVec {
 
     @SuppressWarnings("unused")
     private static final Logger log = Logger.getLogger(CudaMatVec.class.getName());
+    private static final java.util.concurrent.atomic.AtomicBoolean tiledFallbackWarned =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     private static final int STREAM_NON_BLOCKING = CudaBindings.STREAM_NON_BLOCKING;
 
@@ -82,6 +84,9 @@ public final class CudaMatVec implements GpuMatVec {
     private final Fp32Scratch       fp32Scratch    = new Fp32Scratch();
     private final Fp16Scratch       fp16Scratch    = new Fp16Scratch();
     private final Q4KDequantScratch dequantScratch = new Q4KDequantScratch();
+    private final Q8WindowScratch q8WindowScratch = new Q8WindowScratch();
+    /** {@link #dequantizeBatchedKQuant}: batched K-quant matmuls take the FP16 dequant route. */
+    private volatile boolean dequantBatchedKQuant;
     private MemorySegment           stream;
     /** Device-side timing of this instance's copies and dequantizations; see {@link DeviceSpanTimer}. */
     private final DeviceSpanTimer   spans;
@@ -962,11 +967,10 @@ public final class CudaMatVec implements GpuMatVec {
 
     /**
      * Batched Q4_K/Q5_K/Q6_K GEMM: {@code batch <= HALF_SGEMM_BATCH_MAX} stays serial
-     * {@link #sgemv(DeviceQ4KMatrix, float[])} (dequant has fixed per-call overhead not
-     * worth paying for small batches); {@code batch > HALF_SGEMM_BATCH_MAX} dequantizes
-     * the packed weights once into a device FP16 scratch buffer ({@link Q4KDequantScratch})
-     * and reuses the {@link CudaFp16GemmOps} tiled-GEMM path from
-     * {@link #sgemmHalfBatchedGemm}. Does not touch the single-token
+     * {@link #sgemv(DeviceQ4KMatrix, float[])}; {@code batch > HALF_SGEMM_BATCH_MAX}
+     * stages the window as FP16, as the FP16-weight path does, and multiplies the
+     * still-packed weights with the tiled integer kernel ({@link KQuantGemmKernel}):
+     * no FP16 copy of the weights is made. Does not touch the single-token
      * {@link #sgemv(DeviceQ4KMatrix, float[])} decode path.
      */
     @Override
@@ -999,9 +1003,6 @@ public final class CudaMatVec implements GpuMatVec {
             if (X[b].length != cols)
                 throw new IllegalArgumentException("X[" + b + "].length != cols");
         }
-        Q4KMmqKernel kernel = Q4KMmqKernel.tryLoad();
-        if (kernel == null)
-            throw new IllegalStateException("Q4_K MMQ kernel is not loaded");
 
         MatVecEvent evt = new MatVecEvent();
         evt.windowSize = batch;
@@ -1018,10 +1019,6 @@ public final class CudaMatVec implements GpuMatVec {
                 bindStream(stream);
                 try {
                     ensureFp16Scratch(scratch, bytesXh, bytesY);
-                    MemorySegment dW = dequantScratch.ensure(cuda, ctx.deviceIndex(), rows, cols);
-                    int dequantMark = spans.begin(stream, batch);
-                    kernel.launchDequant(A, dW, stream);
-                    spans.dequant(A.quantType(), dequantMark, stream);
 
                     MemorySegment stagingXh = scratch.hXh;
                     packFp16Window(stagingXh, X, batch, cols, bytesXh);
@@ -1033,9 +1030,7 @@ public final class CudaMatVec implements GpuMatVec {
                             "cudaMemcpyAsync(xh H2D q4k-batched-gemm)");
                     spans.staging(CudaBindings.H2D, bytesXh, batch, "cudaMemcpyAsync(xh H2D q4k-batched-gemm)", h2dMark, stream);
 
-                    int gemmMark = spans.begin(stream, batch);
-                    fp16GemmOps().gemmHalf(dW, scratch.dXh, scratch.dY, rows, cols, batch);
-                    spans.compute(DeviceComputeEvent.GEMM_HALF, batch, gemmMark, stream);
+                    gemmPackedOnStream(A, scratch.dXh, scratch.dY, rows, batch, stream, spans);
 
                     MemorySegment stagingY = scratch.hY;
                     int d2hMark = spans.begin(stream, batch);
@@ -1067,28 +1062,66 @@ public final class CudaMatVec implements GpuMatVec {
      * {@code Y = A X} on operands already on the device, issued on {@code stream}
      * without waiting: the prefill-window region's matmul. {@code dXh} holds
      * {@code batch} FP16 input rows of {@code A.cols()} values; row {@code b} of the
-     * FP32 result is written at {@code dY + b * ldc} floats. The weights are
-     * dequantized into this backend's FP16 scratch first, the same kernels and the
+     * FP32 result is written at {@code dY + b * ldc} floats. The packed weights are
+     * multiplied as they are ({@link #gemmPackedOnStream}): the same kernels and the
      * same bits as {@link #sgemm(DeviceQ4KMatrix, float[][])}'s batched path.
      *
      * <p>The caller holds {@link GpuContext#cublasSerializationLock()} and
-     * synchronizes {@code stream} before releasing it: the dequantization scratch is
+     * synchronizes {@code stream} before releasing it: the Q8_1 window scratch is
      * shared with this backend's own calls, which run on another stream. Device time
      * is counted on {@code timer} (the caller's stream timer), not on this backend's.
      */
     void gemmOnStream(DeviceQ4KMatrix A, MemorySegment dXh, MemorySegment dY, int ldc, int batch,
             MemorySegment stream, DeviceSpanTimer timer) {
         if (A == null) throw new IllegalArgumentException("A must not be null");
-        MemorySegment dW = dequantOnStream(A, batch, stream, timer);
-        gemmHalfOnStream(dW, A.rows(), A.cols(), dXh, dY, ldc, batch, stream, timer);
+        if (A.isClosed()) throw new IllegalStateException("DeviceQ4KMatrix is closed");
+        gemmPackedOnStream(A, dXh, dY, ldc, batch, stream, timer);
+    }
+
+    /**
+     * The batched K-quant matmul both prefill paths share: packs the FP16 window
+     * {@code dXh} as Q8_1 into this backend's scratch and multiplies the still-packed
+     * weights with the tiled integer kernel ({@link KQuantGemmKernel}), timed as one
+     * {@code gemm_kquant} site. Nothing is dequantized. When the tiled kernel's module
+     * did not load, falls back to dequantizing to FP16 and the FP16 GEMM, which gives
+     * the same product at higher precision, and says so once. Same locking contract
+     * as {@link #gemmOnStream}.
+     */
+    private void gemmPackedOnStream(DeviceQ4KMatrix A, MemorySegment dXh, MemorySegment dY, int ldc, int batch,
+            MemorySegment stream, DeviceSpanTimer timer) {
+        KQuantGemmKernel tiled = dequantBatchedKQuant ? null : KQuantGemmKernel.tryLoad();
+        if (tiled == null) {
+            if (!dequantBatchedKQuant && tiledFallbackWarned.compareAndSet(false, true))
+                log.warning("Tiled K-quant GEMM kernel unavailable: batched K-quant matmuls dequantize their"
+                        + " weights to FP16 instead (slower, more device memory)");
+            MemorySegment dW = dequantOnStream(A, batch, stream, timer);
+            gemmHalfOnStream(dW, A.rows(), A.cols(), dXh, dY, ldc, batch, stream, timer);
+            return;
+        }
+        MemorySegment dQ8 = q8WindowScratch.ensure(cuda, ctx.deviceIndex(), KQuantGemmKernel.q8Bytes(batch, A.cols()));
+        int mark = timer.begin(stream, batch);
+        tiled.multiplyHalf(A, dXh, dQ8, dY, batch, ldc, stream);
+        timer.compute(DeviceComputeEvent.GEMM_KQUANT, batch, mark, stream);
+    }
+
+    /**
+     * Sends this backend's batched K-quant matmuls down the FP16 dequant route
+     * instead of the tiled integer kernel. Not a product setting: for parity tests
+     * that compare two runs differing in some other operation (attention on or off,
+     * say) and were calibrated with FP16 activations. The tiled kernel rounds each
+     * matmul's input to 8 bits, which turns a difference of 3e-4 between the two
+     * runs into whole rounding steps, and would hide what such a test measures.
+     */
+    void dequantizeBatchedKQuant(boolean on) {
+        dequantBatchedKQuant = on;
     }
 
     /**
      * Dequantizes {@code A} to FP16 into this backend's scratch on {@code stream} and
      * returns the scratch: row-major {@code A.rows() x A.cols()} halves, valid until
-     * the next dequantization on this backend. Lets a caller multiply row ranges of
-     * one fused matrix (Q, K and V side by side) with
-     * {@link #gemmHalfOnStream} without dequantizing it once per range. Same locking
+     * the next dequantization on this backend. The route batched K-quant matmuls
+     * took before the tiled kernel; kept as {@link #gemmPackedOnStream}'s fallback
+     * and as the higher-precision reference the tests compare against. Same locking
      * contract as {@link #gemmOnStream}.
      */
     MemorySegment dequantOnStream(DeviceQ4KMatrix A, int batch, MemorySegment stream, DeviceSpanTimer timer) {
@@ -1394,6 +1427,7 @@ public final class CudaMatVec implements GpuMatVec {
             fp16Scratch.hXh = fp16Scratch.hY = null;
             fp16Scratch.hXhBytes = fp16Scratch.hYBytes = 0L;
             dequantScratch.release(cuda);
+            q8WindowScratch.release(cuda);
             spans.releaseEvents();
             if (stream != null) {
                 CudaBindings.callInt(cuda.cudaStreamDestroy, stream);
@@ -1406,7 +1440,8 @@ public final class CudaMatVec implements GpuMatVec {
     long scratchDeviceBytes() {
         synchronized (ctx.cublasSerializationLock()) {
             return fp32Scratch.dXBytes + fp32Scratch.dYBytes + fp32Scratch.dQ8Bytes
-                    + fp16Scratch.dXhBytes + fp16Scratch.dYBytes + dequantScratch.heldBytes();
+                    + fp16Scratch.dXhBytes + fp16Scratch.dYBytes + dequantScratch.heldBytes()
+                    + q8WindowScratch.heldBytes();
         }
     }
 

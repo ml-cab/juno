@@ -430,8 +430,9 @@ GPU FFI (node module — Panama project, JEP 454):
         forked nodes.
   KernelParams — a cuLaunchKernel parameter block allocated once and rewritten in place, launched
         through invokeExact: a launch allocates nothing and boxes nothing (pointer, i32, i64, f32
-        slots). Used by the resident paths (RmsNormKernel.launchResident, RopeKernel,
-        PrefillWindowKernels); the older per-call launch builds an
+        slots; one- or two-dimensional grid). Used by the resident paths
+        (RmsNormKernel.launchResident, RopeKernel, PrefillWindowKernels) and KQuantGemmKernel; the
+        older per-call launch builds an
         arena and boxes its arguments through invokeWithArguments, which is cheap next to a
         synchronous round trip and not once the round trip is gone.
   Phi3RopeConfig — Phi-3 LongRoPE factors. selectFactors() returns the short set whenever the
@@ -541,14 +542,26 @@ GPU FFI (node module — Panama project, JEP 454):
   LoraMmqPolicy — playback-only MMQ gate (juno.lora.play.path); train stays FP residency.
   LoraResidentUpload.runPlayback — play Q4 OOM closes packed buffers and falls to CPU
         without the train FP16 microbatch retry.
-  ResidentQ4KWeight — LoRA play wrapper around DeviceQ4KMatrix (forward-only).
+  CudaDriverBindings / Q4KMmqKernel / DeviceQ4KMatrix — PTX fused K-quant dequant+GEMV
         (classpath q4k_gemv.ptx); JFR backend cuda-resident-q4k.
+  KQuantGemmKernel — PTX tiled matmul over packed Q4_K / Q5_K / Q6_K weights for batches of
+        activation rows (classpath kquant_gemm.ptx, kquant_gemm.cu): the batch is quantized to
+        Q8_1 once (Q4KMmqKernel.quantizeX over batch * cols), then each 256-thread block unpacks
+        one super-block of 64 weight rows to int8 in shared memory and dp4a-dots it against a
+        16-, 32- or 64-row column tile (columnTile picks the narrowest that covers the batch).
+        FP32 output at a caller-chosen row stride; no FP16 copy of the weights. Same integer
+        products as the GEMV kernels (parity within float accumulation order). quantize_q8_1_half
+        packs an FP16 window (the prefill paths' GEMM input) to the same bytes. Routed by
+        CudaMatVec for every batched K-quant matmul wider than 8 rows (host-staged sgemm and the
+        region's gemmOnStream), timed as juno.DeviceCompute site gemm_kquant; Q8WindowScratch
+        holds the window's Q8_1 copy.
   ResidentQ4KWeight — LoRA play wrapper around DeviceQ4KMatrix (forward-only).
   CudaMatVec — implements GpuMatVec; cublasSgemv_v2 (FP32) / cublasHSSgemvStridedBatched (FP16)
         / fused Q4_K GEMV when --mmq; async H2D/D2H on one CUDA stream per instance;
         sgemvSameX uploads shared activations once for Q/K/V and gate/up groups. Scratch
-        lifetime: the FP32/FP16 staging, the Q4KDequantScratch (one whole weight matrix in FP16
-        for batched prefill, the figure DeviceScratchBudget reserves) and the stream belong to
+        lifetime: the FP32/FP16 staging, the Q8WindowScratch (a prefill window as Q8_1), the
+        Q4KDequantScratch (one whole weight matrix in FP16, now only on the fallback route; still
+        the figure DeviceScratchBudget reserves until the reserve is shrunk) and the stream belong to
         the instance, not to a thread; every use is under GpuContext.cublasSerializationLock()
         and each call synchronizes its stream before releasing it, so one set serves every
         caller. Grown on demand, kept at the largest size; releaseScratch() frees the set and
@@ -558,8 +571,11 @@ GPU FFI (node module — Panama project, JEP 454):
         The FP32 batched path (GpuBlasOps.forwardInto) still allocates its packed host copies.
         gemmOnStream / dequantOnStream / gemmHalfOnStream: the prefill-window region's matmul on
         device operands (FP16 input rows on the device, FP32 output at a caller-chosen row stride),
-        issued on the caller's stream into this instance's dequantization scratch; the caller holds
-        the lock and synchronizes before releasing it. Same kernels and bits as sgemm. The batched
+        issued on the caller's stream; packed K-quant weights go through the tiled integer kernel
+        (KQuantGemmKernel) via this instance's Q8_1 window scratch, dequantOnStream /
+        gemmHalfOnStream are the FP16 fallback (kernel not loaded, or dequantizeBatchedKQuant set
+        by a parity test). The caller holds the lock and synchronizes before releasing it. Same
+        kernels and bits as sgemm. The batched
         FP16 pack of the activation window is its own method (packFp16Rows) so it stays compiled
         when the large batched caller is deoptimized - inline, it fell back to the interpreter.
   RocmMatVec — implements GpuMatVec; rocblas_sgemv (FP32) / rocblas_hssgemv_strided_batched (FP16);

@@ -32,14 +32,17 @@ import jdk.jfr.Timespan;
  * dequantization and the GEMM. {@link DeviceStagingEvent} and
  * {@link WeightDequantEvent} take the first three out of it; this event times the
  * kernel itself, so a prefill breakdown reads the GEMM rather than inferring it as a
- * residue. Sites: {@code gemm_half} (the tiled FP16 GEMM, on FP16 weights or on
- * packed K-quant weights dequantized just before it), {@code gemv_half_batched} (the
+ * residue. Sites: {@code gemm_half} (the tiled FP16 GEMM, on FP16 weights, or on
+ * packed K-quant weights dequantized just before it where the tiled integer kernel
+ * is unavailable), {@code gemm_kquant} (the tiled integer GEMM over packed K-quant
+ * weights for windows wider than eight rows, its Q8_1 packing of the window
+ * included), {@code gemv_half_batched} (the
  * strided batched FP16 GEMV for windows of two to eight rows), {@code gemm_fp32}
  * (the FP32 BLAS GEMM), {@code mmq_packed} (the packed integer-dot GEMV at decode
  * width) and {@code gqa_attention} (the attention kernel).
  *
  * <p>The prefill-window device region ({@link PrefillWindowRegion}) runs its GEMMs as
- * {@code gemm_half} and adds one site per operation between them: {@code rms_norm},
+ * {@code gemm_kquant} (packed weights) or {@code gemm_half} (FP16 weights) and adds one site per operation between them: {@code rms_norm},
  * {@code convert_fp16} (the FP16 cast of a GEMM input), {@code bias_add}, {@code rope},
  * {@code kv_append} (the cast of a window's K and V rows into the attention KV
  * mirror), {@code gqa_attention_region} (the attention kernel run inside the region,
@@ -60,6 +63,7 @@ import jdk.jfr.Timespan;
 public final class DeviceComputeEvent extends Event {
 
 	static final String GEMM_HALF = "gemm_half";
+	static final String GEMM_KQUANT = "gemm_kquant";
 	static final String GEMV_HALF_BATCHED = "gemv_half_batched";
 	static final String GEMM_FP32 = "gemm_fp32";
 	static final String MMQ_PACKED = "mmq_packed";

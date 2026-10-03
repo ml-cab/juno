@@ -1,0 +1,150 @@
+{
+  "model": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 3997.697044,
+    "token_gen_tps": 181.787351
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 746.1594343230087,
+    "token_gen_tps": 68.526819471966,
+    "api_token_gen_tps": 62.1963,
+    "latency_ms": 1029,
+    "n_prompt": 512,
+    "prompt_tokens": 512,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 1.0,
+    "gc_pause_max_ms": 7.4682,
+    "gc_pause_total_ms": 6.977426,
+    "allocated_bytes_total": 3060121432,
+    "allocated_bytes_per_token": 48205733.5,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 512,
+        "n_prompt": 512,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 746.1594343230087,
+        "latency_ms": 731,
+        "status": "success",
+        "gc_pause_max_ms": 0.0,
+        "gpu_attention_resolved": "on"
+      },
+      "generate": {
+        "prompt_tokens": 19,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 68.526819471966,
+        "latency_ms": 1029,
+        "status": "success",
+        "gc_pause_max_ms": 7.4682,
+        "gpu_attention_resolved": "on"
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "4g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 746.1594343230087,
+        "min": 719.1451581059802,
+        "max": 749.0098254684661,
+        "values": [
+          749.0098254684661,
+          746.1594343230087,
+          719.1451581059802
+        ]
+      },
+      "token_gen_tps": {
+        "median": 68.526819471966,
+        "min": 68.00828292430117,
+        "max": 69.57025458021532,
+        "values": [
+          68.526819471966,
+          69.57025458021532,
+          68.00828292430117
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 62.1963,
+        "min": 62.1359,
+        "max": 63.3663,
+        "values": [
+          62.1963,
+          63.3663,
+          62.1359
+        ]
+      },
+      "latency_ms": {
+        "median": 1029,
+        "min": 1010,
+        "max": 1030,
+        "values": [
+          1029,
+          1010,
+          1030
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 6.977426,
+        "min": 6.801425,
+        "max": 7.4682,
+        "values": [
+          6.977426,
+          6.801425,
+          7.4682
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 48065737.375,
+        "min": 47814397.375,
+        "max": 48205733.5,
+        "values": [
+          47814397.375,
+          48205733.5,
+          48065737.375
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.18664731872138549,
+  "noise": {
+    "ok": true,
+    "basis": "repetition dispersion",
+    "condition": null,
+    "rep_spread": 0.022793581665542566,
+    "rep_spread_tolerance": 0.15,
+    "gc_pause_max_ms": 7.4682,
+    "gc_pause_max_ms_in_token_span": 7.4682,
+    "reason": null
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.37696142825672174,
+  "result_files": {
+    "llama_cpp_raw": "target/perf-compare/kquant-width/w128/tinyllama-1.1b-chat-v1.0.Q4_K_M-llama-cpp.raw.json",
+    "juno_response": "target/perf-compare/kquant-width/w128/tinyllama-1.1b-chat-v1.0.Q4_K_M-generate-rep1-juno-response.json",
+    "llama_result": "target/perf-compare/kquant-width/w128/tinyllama-1.1b-chat-v1.0.Q4_K_M-llama-cpp.json",
+    "juno_result": "target/perf-compare/kquant-width/w128/tinyllama-1.1b-chat-v1.0.Q4_K_M-juno.json",
+    "juno_jfr": "target/perf-compare/kquant-width/w128/tinyllama-1.1b-chat-v1.0.Q4_K_M-juno-jfr.json"
+  }
+}

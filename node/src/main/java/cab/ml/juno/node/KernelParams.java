@@ -86,11 +86,16 @@ final class KernelParams {
 	 * values. {@code stream} may be {@code null} for the default stream.
 	 */
 	void launch(MemorySegment function, int gridX, int blockX, MemorySegment stream, String what) {
+		launch(function, gridX, 1, blockX, stream, what);
+	}
+
+	/** {@link #launch(MemorySegment, int, int, MemorySegment, String)} on a two-dimensional grid. */
+	void launch(MemorySegment function, int gridX, int gridY, int blockX, MemorySegment stream, String what) {
 		MemorySegment onStream = stream == null ? MemorySegment.NULL : stream;
 		int rc;
 		try {
 			rc = (int) CudaDriverBindings.instance().cuLaunchKernel.invokeExact(
-					function, gridX, 1, 1, blockX, 1, 1, 0, onStream, pointers, MemorySegment.NULL);
+					function, gridX, gridY, 1, blockX, 1, 1, 0, onStream, pointers, MemorySegment.NULL);
 		} catch (Throwable t) {
 			throw new IllegalStateException(what + ": native call failed", t);
 		}

@@ -67,7 +67,7 @@ final class DeviceSpanBucket {
      * Every kernel site the engine times today; always written, so a zero is visible. The
      * matmul and attention sites first, then the prefill-window device region's operations.
      */
-    private static final List<String> COMPUTE_SITES = List.of("gemm_half", "gemv_half_batched", "gemm_fp32",
+    private static final List<String> COMPUTE_SITES = List.of("gemm_half", "gemm_kquant", "gemv_half_batched", "gemm_fp32",
             "mmq_packed", "gqa_attention", "rms_norm", "convert_fp16", "bias_add", "rope", "kv_append",
             "gqa_attention_region", "swiglu", "residual_add");
     private static final List<String> PHASES = List.of("prefill", "decode", "other");

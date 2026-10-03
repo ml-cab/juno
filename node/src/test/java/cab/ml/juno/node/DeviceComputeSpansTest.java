@@ -77,17 +77,19 @@ class DeviceComputeSpansTest {
 	}
 
 	@Test
-	@DisplayName("a batched Q4_K GEMM: the GEMM is gemm_half, apart from its dequantization")
-	void q4kGemm_isGemmHalf() throws Exception {
+	@DisplayName("a batched Q4_K GEMM: the packed kernel is gemm_kquant, and no FP16 GEMM runs")
+	void q4kGemm_isGemmKquant() throws Exception {
 		assumeTrue(Q4KMmqKernel.tryLoad() != null, "Q4_K MMQ kernel failed to load");
 		DeviceQ4KMatrix a = mv.uploadQ4K(randomQ4K(ROWS, COLS, 3), ROWS, COLS);
 		float[][] x = randomRows(16, COLS, 4);
 		List<RecordedEvent> events = record(() -> mv.sgemm(a, x));
 		a.close();
 
-		RecordedEvent gemm = compute(events, "gemm_half", "prefill");
+		RecordedEvent gemm = compute(events, "gemm_kquant", "prefill");
 		assertThat(gemm.getLong("timedCount")).isEqualTo(1);
 		assertThat(gemm.getLong("computeNanos")).isPositive();
+		assertThat(events.stream().filter(e -> e.getEventType().getName().equals("juno.DeviceCompute")
+				&& "gemm_half".equals(e.getString("site")))).as("no FP16 GEMM").isEmpty();
 	}
 
 	@Test

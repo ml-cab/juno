@@ -143,7 +143,7 @@ class PrefillWindowRegionResidualTest {
 	@DisplayName("out of device memory after the layer has updated the residual: the layer's input is recovered")
 	void oomAfterResidualUpdate_recoversLayerInput() {
 		// Layer 1's gate, up and down are packed K-quant: their first GEMM grows the backend's
-		// dequantization scratch, after the output projection has already been added to the residual.
+		// Q8_1 window scratch, after the output projection has already been added to the residual.
 		PrefillWindowRegion region = region(halfLayer(10), splitFfnQ4kLayer(40));
 		assertRecoversLayerOneInput(region, false);
 	}
@@ -157,8 +157,9 @@ class PrefillWindowRegionResidualTest {
 	}
 
 	/**
-	 * Layer 0 on the device, then layer 1 with almost no device memory left, so its first
-	 * packed K-quant GEMM fails; the recovered rows must equal layer 0's output, and after
+	 * Layer 0 on the device, then layer 1 with no device memory left, so its first packed
+	 * K-quant GEMM fails growing the backend's Q8_1 window scratch (layer 0 has FP16
+	 * weights and never grew it); the recovered rows must equal layer 0's output, and after
 	 * the memory is back the window must run layer 1 to the same result as a clean run.
 	 */
 	private void assertRecoversLayerOneInput(PrefillWindowRegion region, boolean failsInRunLayer) {
@@ -174,7 +175,9 @@ class PrefillWindowRegionResidualTest {
 		float[][] q = new float[W][H], k = new float[W][H], v = new float[W][H];
 		try (PrefillWindowRegion.Window win = region.open(W)) {
 			runSplit(win, 0, x);
-			List<MemorySegment> ballast = fillDevice(2L << 20);
+			// No headroom: the scratch the first packed GEMM grows is a window's Q8_1 copy, 46 KB
+			// here, not the whole FP16 weight matrix the dequantizing route needed.
+			List<MemorySegment> ballast = fillDevice(0);
 			try {
 				assertThatThrownBy(() -> {
 					if (failsInRunLayer) {
@@ -263,7 +266,7 @@ class PrefillWindowRegionResidualTest {
 		GpuBindings gpu = ctx.bindings();
 		List<MemorySegment> held = new ArrayList<>();
 		long chunk = 256L << 20;
-		while (chunk >= (1L << 20)) {
+		while (chunk >= (4L << 10)) {
 			long free = gpu.memGetInfo(ctx.deviceIndex())[0];
 			if (free - chunk < leave) {
 				chunk >>= 1;

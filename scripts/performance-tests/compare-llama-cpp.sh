@@ -182,6 +182,9 @@ Options:
   --cache-type-k f16|q8_0  Juno --cache-type-k (default f16)
   --cache-type-v f16|q8_0  Juno --cache-type-v (default f16)
   --kv-page-size N  Juno --kv-page-size (default 16, schedule=continuous only)
+  --prefill-batch N Juno --prefill-batch: the prefill window width (default: the engine's own
+                    choice; also read from JUNO_PREFILL_BATCH). Recorded in host.json, as are
+                    JUNO_SPEC_TYPE, JUNO_SPEC_NGRAM_N, JUNO_SPEC_NGRAM_M and JUNO_MODEL_DRAFT
   --raw-prompt      Repeat a minimal token pattern (~1 tok/word) for prompt-length parity
                     (default: on; a prefill ratio needs it)
   --no-raw-prompt   Use the fixed prompt sentence instead. Juno then prefills far
@@ -586,6 +589,23 @@ run_selftest() {
   selftest_expect "host.json records the pool property" 3 "$(jq -r '.juno_common_pool_parallelism' <<<"$hj")"
   selftest_expect "and the JVM flags it ran with carry it" true \
     "$(jq -r '.juno_jvm_flags | test("common.parallelism=3")' <<<"$hj")"
+
+  # Settings set only through the environment reach the engine's command line;
+  # without these fields a run's window width or speculation mode would be
+  # recorded nowhere but the directory name it was published under.
+  local saved_pb="${JUNO_PREFILL_BATCH:-}" saved_st="${JUNO_SPEC_TYPE:-}" saved_sn="${JUNO_SPEC_NGRAM_N:-}"
+  local saved_sm="${JUNO_SPEC_NGRAM_M:-}" saved_md="${JUNO_MODEL_DRAFT:-}"
+  JUNO_PREFILL_BATCH=9 JUNO_SPEC_TYPE=ngram JUNO_SPEC_NGRAM_N=3 JUNO_SPEC_NGRAM_M=4 JUNO_MODEL_DRAFT=draft.gguf
+  hj="$(host_meta_json)"
+  selftest_expect "host.json records the prefill window width" 9 "$(jq -r '.juno_prefill_batch' <<<"$hj")"
+  selftest_expect "host.json records the speculation settings" "ngram,3,4,draft.gguf" \
+    "$(jq -r '[.juno_spec_type, .juno_spec_ngram_n, .juno_spec_ngram_m, .juno_model_draft] | join(",")' <<<"$hj")"
+  JUNO_PREFILL_BATCH="" JUNO_SPEC_TYPE="" JUNO_SPEC_NGRAM_N="" JUNO_SPEC_NGRAM_M="" JUNO_MODEL_DRAFT=""
+  hj="$(host_meta_json)"
+  selftest_expect "an unset width is recorded as the engine default, not omitted" '""' \
+    "$(jq -c '.juno_prefill_batch' <<<"$hj")"
+  JUNO_PREFILL_BATCH="$saved_pb" JUNO_SPEC_TYPE="$saved_st" JUNO_SPEC_NGRAM_N="$saved_sn"
+  JUNO_SPEC_NGRAM_M="$saved_sm" JUNO_MODEL_DRAFT="$saved_md"
   N_THREADS=1
   JUNO_JVM_FLAGS=()
   resolve_thread_parity
@@ -687,6 +707,7 @@ while [[ $# -gt 0 ]]; do
     --cache-type-k) JUNO_CACHE_TYPE_K="$2"; shift 2 ;;
     --cache-type-v) JUNO_CACHE_TYPE_V="$2"; shift 2 ;;
     --kv-page-size) JUNO_KV_PAGE_SIZE="$2"; shift 2 ;;
+    --prefill-batch) JUNO_PREFILL_BATCH="$2"; shift 2 ;;
     --raw-prompt) RAW_PROMPT=1; shift ;;
     --no-raw-prompt) RAW_PROMPT=0; shift ;;
     --api-port) API_PORT="$2"; shift 2 ;;
@@ -1124,6 +1145,11 @@ host_meta_json() {
   "juno_cache_type_k": "$(json_escape "${JUNO_CACHE_TYPE_K:-}")",
   "juno_cache_type_v": "$(json_escape "${JUNO_CACHE_TYPE_V:-}")",
   "juno_kv_page_size": "$(json_escape "${JUNO_KV_PAGE_SIZE:-}")",
+  "juno_prefill_batch": "$(json_escape "${JUNO_PREFILL_BATCH:-}")",
+  "juno_spec_type": "$(json_escape "${JUNO_SPEC_TYPE:-}")",
+  "juno_spec_ngram_n": "$(json_escape "${JUNO_SPEC_NGRAM_N:-}")",
+  "juno_spec_ngram_m": "$(json_escape "${JUNO_SPEC_NGRAM_M:-}")",
+  "juno_model_draft": "$(json_escape "${JUNO_MODEL_DRAFT:-}")",
   "juno_use_vector": ${JUNO_USE_VECTOR},
   "juno_jfr": ${USE_JFR},
   "jfr_duration": "$(json_escape "${JFR_DURATION}")",

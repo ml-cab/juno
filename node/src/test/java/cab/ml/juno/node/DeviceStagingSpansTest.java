@@ -111,21 +111,15 @@ class DeviceStagingSpansTest {
 	}
 
 	@Test
-	@DisplayName("a batched Q4_K GEMM counts the device dequantization apart from the copies")
-	void q4kGemm_countsDeviceDequant() throws Exception {
+	@DisplayName("a batched Q4_K GEMM multiplies the packed weights: no dequantization, the FP16 window still staged")
+	void q4kGemm_dequantizesNothing() throws Exception {
 		assumeTrue(Q4KMmqKernel.tryLoad() != null, "Q4_K MMQ kernel failed to load");
 		DeviceQ4KMatrix a = mv.uploadQ4K(randomQ4K(ROWS, COLS, 5), ROWS, COLS);
 		float[][] x = randomRows(16, COLS, 6);
 		List<RecordedEvent> events = record(() -> mv.sgemm(a, x));
 		a.close();
 
-		List<RecordedEvent> dq = named(events, "juno.WeightDequant");
-		assertThat(dq).hasSize(1);
-		assertThat(dq.get(0).getString("format")).isEqualTo("Q4_K");
-		assertThat(dq.get(0).getString("timing")).isEqualTo("device");
-		assertThat(dq.get(0).getLong("count")).isEqualTo(1);
-		assertThat(dq.get(0).getLong("timedCount")).isEqualTo(1);
-		assertThat(dq.get(0).getLong("dequantNanos")).isPositive();
+		assertThat(named(events, "juno.WeightDequant")).isEmpty();
 		assertThat(cell(events, "cudaMemcpyAsync(xh H2D q4k-batched-gemm)", "prefill").getLong("bytes"))
 				.isEqualTo((long) COLS * 16 * Short.BYTES);
 	}

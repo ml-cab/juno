@@ -1,5 +1,19 @@
 ## Status 
 
+**Session 107** — Prefill multiplies packed K-quant weights directly
+
+- **No FP16 copy of the weights during prefill.** On CUDA with packed weights (`--mmq on|auto`, the
+  default), a prefill window wider than 8 rows used to expand each Q4_K, Q5_K or Q6_K matrix to FP16 on the
+  device and multiply it with an FP16 GEMM. It now runs a tiled integer kernel over the still-packed weights:
+  the window is rounded to 8-bit activations once per matmul, as decode already does for every token, and
+  each block of 64 weight rows is unpacked in on-chip memory and multiplied with 4-way integer dot products.
+  Both prefill paths take it, the window staged from the host and the device-resident prefill region; the
+  JFR compute site is `gemm_kquant`. `--mmq off` keeps FP16 weights and the FP16 GEMM. If the kernel cannot
+  load, Juno says so once and falls back to the FP16 expansion.
+- **Accuracy.** The kernel's output equals the decode kernel's integer products to within float
+  accumulation order, for all three formats at window widths 1 to 741. Against an FP32 reference its mean
+  relative error is 0.37%, the decode kernel's own figure; the FP16 route's is 0.026%.
+
 **Session 106** — Long-prompt prefill checked end to end on both schedules
 
 - **Where GPU prefill stands now.** Pinned comparison sweeps against the reference engine put Juno's
