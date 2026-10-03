@@ -111,7 +111,7 @@ handler that exists when this tier starts**, including `gemma4`, `mistral3`, `qw
 - **New LoRA-playback+speculative-decoding test**.
 - **`ModelLiveRunnerIT`**: add checks for each newly-wired surface (batch, continuous, each
   architecture, cluster).
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier06-speculative-decoding.sh` —
+- **New bash smoke script**: `scripts/performance-tests/smoke-speculative-decoding.sh` —
   exercises `lookahead`, batch-mode drafting, and continuous-mode drafting end to end, diffing
   output against `--spec-type none` for correctness.
 - **Perf gate (required)**: this tier's entire point is a performance fix — full

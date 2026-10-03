@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20260930T135225Z (gpu)
 
+> **Superseded as the GPU reference on 2026-10-03** by [`20261003T042440Z`](../20261003T042440Z/INDEX.md), the pinned closing sweep of the prefill-throughput work. Kept as the before-reading of that work.
+
 > **GPU reference from 2026-09-30 at `n_prompt=128`** (supersedes [`20260927T232837Z`](../20260927T232837Z/INDEX.md) + [`20260927T234659Z`](../20260927T234659Z/INDEX.md) as reference). Tier 01B step 2 re-baseline: pinned clocks, operating-system JFR clock, warm-up recording, fixed heap. A measurement boundary: compare ratios across it, not absolute t/s. Its 512-token pair is [`20260930T141026Z`](../20260930T141026Z/INDEX.md).
 
 > **Mislabelled lanes in earlier runs.** From commit `8776a3f` (2026-09-17) the engine defaults `--gpu-attention` to `auto`, which is on under CUDA for Llama-family handlers. Every GPU run of this harness since then, including its default lanes, ran the attention kernel on `tinyllama`, `qwen2.5-3b` and `mistral-7b`, while the harness help and the tuned-lane comment described the default lane as `--gpu-attention off`. `Phi-3.5-mini` ran scalar attention on every lane, because its handler has no kernel. The result data recorded the flag as passed (empty, not `off`), so only the description was wrong, and no published figure changes. Runs before `8776a3f` were described correctly. From this run on, each result records the resolved value; see the list below the table.

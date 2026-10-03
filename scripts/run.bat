@@ -811,7 +811,7 @@ if /i "%~1"=="--help" (
   echo   Usage: run.bat test --model-path PATH [flags]
   echo      or: run.bat test PATH
   echo.
-  echo   Runs ModelLiveRunner - 8 real-model checks, exits 0 or 1.
+  echo   Runs ModelLiveRunner - 9 real-model checks, exits 0 or 1.
   echo.
   echo   Pipeline-parallel (tests 1-6):
   echo     1. hello greeting coherence
@@ -823,6 +823,9 @@ if /i "%~1"=="--help" (
   echo   Tensor-parallel (tests 7-8):
   echo     7. tensor-parallel generation via AllReduce
   echo     8. tensor-parallel greedy determinism
+  echo   In-process (test 9, every --pType; on the GPU when one is present):
+  echo     9. a 512-token prompt prefilled as one window, in 32-token chunks and
+  echo        one token at a time gives the same first token
   echo.
   echo   --pType pipeline^|tensor^|all   filter cluster tests (default: all)
   echo   --heap SIZE                    (default: derived from model size)
@@ -863,7 +866,7 @@ set "JFR_FLAG_TEST=-XX:StartFlightRecording=duration=%JFR_DURATION_TEST%,filenam
 echo [WARN] JFR enabled -- duration=%JFR_DURATION_TEST%  output=juno-!JFR_TS!.jfr
 :test_jfr_skip
 
-"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-DpType=%PTYPE%" "-Djuno.node.heap=%HEAP%" %JFR_FLAG_TEST% -jar "%LIVE_JAR%" "%MODEL%"
+"%JAVA%" %JVM_BASE% -Xms512m "-Xmx%HEAP%" "-DpType=%PTYPE%" "-Djuno.node.heap=%HEAP%" %JFR_FLAG_TEST% -cp "%LIVE_JAR%" cab.ml.juno.master.ModelLiveRunner "%MODEL%"
 goto :eof
 
 rem ============================================================================

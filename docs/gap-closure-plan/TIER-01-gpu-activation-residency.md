@@ -916,7 +916,7 @@ releases both with the engine. Verified live: a three-repetition GPU run left **
 and **zero** leftover pipes, where the same run previously left six.
 
 **The same one-line pattern is in eight sibling scripts** — `smoke-tools.sh`, `smoke-grammar.sh`,
-`smoke-tier00-consistency.sh`, `compare-vision.sh`, `compare-parallel.sh`, `compare-schedule.sh`,
+`smoke-consistency.sh`, `compare-vision.sh`, `compare-parallel.sh`, `compare-schedule.sh`,
 `compare-prefill-batch.sh` and `compare-mixed-prefill.sh` — and they are **not** fixed here. The change
 is mechanical, but none of them source `perf-lib.sh` today, so the fix is either eight separate edits or
 eight scripts newly sourcing a shared helper, and several cannot be exercised without a GPU, real models

@@ -157,7 +157,7 @@ this tier is what makes those files work.
   still-unimplemented one still does. A GGUF with no pre-type key still loads on the pre-existing path.
 - **`ModelLiveRunnerIT`**: assert `usage.prompt_tokens` for a fixed prompt per model matches the
   parity corpus expectation, so a future regression in this area shows up against a real model.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier04b-tokenizer.sh` — runs
+- **New bash smoke script**: `scripts/performance-tests/smoke-tokenizer.sh` — runs
   `./juno gguf-info` across `models/` reporting each file's declared pre-type, and drives a fixed
   prompt through `/v1/chat/completions` per sweep model asserting the expected `prompt_tokens`.
 - **Perf gate (required)**: this is not a forward-pass change, but it changes token counts, which

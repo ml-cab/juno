@@ -132,7 +132,7 @@ this tier's exit criteria, not Tier 02's.
 - **`ModelLiveRunnerIT`**: add a load-and-generate check for each of the four real files
   (`gemma-4-E4B`, `Devstral-Small`, `Qwen3.5-0.8B`, `minimax-m2.5-tiny`), replacing whatever
   placeholder/rejection check Tier 00 added for them.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier08-architecture-breadth.sh` —
+- **New bash smoke script**: `scripts/performance-tests/smoke-architecture-breadth.sh` —
   end-to-end chat completion against all four real files, asserting coherent (not just
   non-crashing) output.
 - **Perf gate**: new forward-pass code is a hot-path change by definition — `compare-lora.sh` at

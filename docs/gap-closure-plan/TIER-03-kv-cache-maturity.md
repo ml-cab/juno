@@ -107,7 +107,7 @@ that touches KV.
 - **New session persistence test**: save mid-generation, restart process, restore, continue
   generating, confirm output is consistent with an uninterrupted run.
 - **`ModelLiveRunnerIT`**: add a cross-session-sharing check and a save/restore check.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier03-kv-cache.sh` — drives two
+- **New bash smoke script**: `scripts/performance-tests/smoke-kv-cache.sh` — drives two
   concurrent clients sharing a system prompt (expect the *shared*-prefill-skip this time, not just
   correctness), a defragmentation stress loop, and a save/kill-process/restore/continue sequence.
 - **Perf gate (required)**: block-table attention and defrag are hot-path changes —

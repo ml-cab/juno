@@ -227,7 +227,7 @@ result, which is the pattern this plan exists to stop repeating.
   strided-batched-GEMV oracle, at multiple batch sizes crossing the new tiled-GEMM threshold.
 - **`ModelLiveRunnerIT`**: add a CPU-hot-path-enabled check (correctness + basic timing sanity) and,
   when AMD hardware becomes available, a ROCm tiled-GEMM check.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier10-backend-breadth.sh` — runs
+- **New bash smoke script**: `scripts/performance-tests/smoke-backend-breadth.sh` — runs
   the CPU decode path at more than one `--threads` value and (where available) the ROCm path, plus
   the vision smoke case specifically, asserting no regression in either correctness or the
   previously-fixed pathological slowdown.

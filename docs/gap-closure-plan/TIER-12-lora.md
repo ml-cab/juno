@@ -99,7 +99,7 @@ interim one).
 - **New QLoRA-style training test**: correctness of a quantized-frozen-weight training run compared
   to the existing FP16/FP32-frozen-weight run, and a memory-usage comparison.
 - **`ModelLiveRunnerIT`**: add a native-GGUF-LoRA-inference check and a per-request hot-swap check.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier12-lora.sh` — drives
+- **New bash smoke script**: `scripts/performance-tests/smoke-lora.sh` — drives
   multi-adapter hot-swapped requests through both schedules, and a QLoRA-style training run,
   end to end.
 - **Perf gate (required)**: `compare-lora.sh` rerun (this script already exists specifically for

@@ -80,7 +80,7 @@ before acting on it — both documents are snapshots, not ground truth that stay
    and 05 and all three milestone rows).
 
    **Every tier from 01B on runs it as the first item of its own test list.** It was originally
-   specified inside Tier 14's `smoke-tier14-doc-consistency.sh`, which meant a rule governing seventeen
+   specified inside Tier 14's `smoke-doc-consistency.sh`, which meant a rule governing seventeen
    tiers was enforced by nothing until the last of them — the same deferral shape this rule exists to
    prevent. Tier 14 keeps the check as one input to its doc-consistency script rather than as its
    origin: that script calls this one instead of restating it, so there is one implementation and one
@@ -120,14 +120,19 @@ tier can fail on it and the final scorecard in Tier 14 can only report a directi
 four-model sweep (`tinyllama-1.1b`, `qwen2.5-3b`, `Phi-3.5-mini`, `mistral-7b`, all Q4_K_M) on the
 `docs/perf-compare/README.md` baseline host, under the benchmark-parity preconditions below:
 
-| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) | Reference 2026-09-27, late | Reference 2026-09-30 (pinned GPU re-baseline) | **Current reference** (2026-10-01: pinned CPU) |
-|---|---|---|---|---|---|---|---|
-| GPU tg, Phi-3.5-mini | >= **0.70x** (was 0.50x, met 2026-09-30) | 0.330x | 0.423x | 0.415x (0.414x tuned) | 0.416x (0.417x tuned) | 0.394x (0.396x tuned) | **0.394x** (0.396x tuned; GPU unchanged) |
-| GPU tg, mistral-7b | >= **0.70x** (was 0.60x, met 2026-09-27) | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) | 0.639x (0.643x tuned) | 0.610x (0.610x tuned) | **0.610x** (0.610x tuned) |
-| GPU pp, every sweep model | >= **0.25x** (was 0.15x) | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | 0.040x to 0.101x, median 0.064x (Phi-3.5-mini 0.040x binding) | 0.037x to 0.101x at `n_prompt=128`, median 0.067x; 0.011x to 0.098x at 512 (Phi-3.5-mini binding at both) | **0.037x to 0.101x** at `n_prompt=128`; **0.011x to 0.098x** at 512 (GPU unchanged) |
-| CPU tg, every sweep model | >= **0.25x** (placeholder; Tier 10 restates it against the bandwidth roofline, never lower) | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | 0.090x to 0.135x (CPU not re-measured) | **0.092x to 0.121x** (mistral-7b binding; pp 0.049x to 0.103x, Phi-3.5-mini binding) |
+| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) | Reference 2026-09-27, late | Reference 2026-09-30 (pinned GPU re-baseline) | Reference 2026-10-01 (pinned CPU) | **Current reference** (2026-10-03: Tier 01B closing sweeps, pinned) |
+|---|---|---|---|---|---|---|---|---|
+| GPU tg, Phi-3.5-mini | >= **0.70x** (was 0.50x, met 2026-09-30) | 0.330x | 0.423x | 0.415x (0.414x tuned) | 0.416x (0.417x tuned) | 0.394x (0.396x tuned) | 0.394x (0.396x tuned; GPU unchanged) | **0.535x** (0.537x tuned) |
+| GPU tg, mistral-7b | >= **0.70x** (was 0.60x, met 2026-09-27) | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) | 0.639x (0.643x tuned) | 0.610x (0.610x tuned) | 0.610x (0.610x tuned) | **0.611x** (0.607x tuned) |
+| GPU pp, every sweep model | >= **0.25x** (was 0.15x) | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | 0.040x to 0.101x, median 0.064x (Phi-3.5-mini 0.040x binding) | 0.037x to 0.101x at `n_prompt=128`, median 0.067x; 0.011x to 0.098x at 512 (Phi-3.5-mini binding at both) | 0.037x to 0.101x at `n_prompt=128`; 0.011x to 0.098x at 512 (GPU unchanged) | **0.173x to 0.299x** at `n_prompt=128`, median 0.289x; **0.146x to 0.285x** at 512, median 0.268x (Phi-3.5-mini binding at both) |
+| CPU tg, every sweep model | >= **0.25x** (placeholder; Tier 10 restates it against the bandwidth roofline, never lower) | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | 0.090x to 0.135x (CPU not re-measured) | 0.092x to 0.121x (mistral-7b binding; pp 0.049x to 0.103x, Phi-3.5-mini binding) | **0.092x to 0.121x** (CPU not re-measured) |
 
-**Score every later tier against the right-most column.** Its CPU row is Tier 01B step 3a's pinned
+**Score every later tier against the right-most column.** Its GPU rows are Tier 01B's closing sweeps
+(2026-10-03, owner run, clocks pinned, HEAD `1ac490a`): `docs/perf-compare/20261003T042440Z/`
+(`n_prompt=128`) and `20261003T044014Z/` (`n_prompt=512`), same method and harness as the 2026-09-30 GPU
+re-baseline, so ratios compare across the two directly; every row scorable, every prefill at its
+`n_prompt`. Its CPU row is unchanged from the column to its left, described next, which was the reference
+until then. **That column's** CPU row is Tier 01B step 3a's pinned
 CPU sweep (2026-10-01, `docs/perf-compare/20261001T180241Z/`): clocks pinned, Juno's common-pool
 parallelism set from `--threads` so its kernels run the reference tool's `-t 12`. Pinning is a
 measurement boundary for CPU readings (both engines' absolute t/s fell; tinyllama's reference prefill
@@ -193,10 +198,10 @@ ask for more than its reference reading. For an "every model" scope the referenc
 
 | After | Metric | Scope | Threshold | Reference reading | Status |
 |---|---|---|---|---|---|
-| 01B | GPU pp ratio, `n_prompt=512` | every sweep model except Phi-3.5-mini | >= 0.10x | 0.064x (qwen2.5-3b at `n_prompt=512`, step 2 re-baseline) | active |
-| 01B | GPU pp ratio, `n_prompt=512` | Phi-3.5-mini | >= 0.08x | 0.011x (at `n_prompt=512`, step 2 re-baseline; threshold kept by owner decision, see below) | active |
-| 01C | GPU pp ratio, `n_prompt=512` | every sweep model | >= 0.20x | 0.011x (Phi-3.5-mini, step 2 re-baseline; 0.075x after Tier 01B item 0, `20260930T215547Z`; the others 0.061x to 0.100x) | active |
-| 02 | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 0.911 (qwen2.5-3b, pinned post-item-0 sweeps `20260930T211637Z`/`20260930T215547Z`; Phi-3.5-mini 0.916, mistral-7b 0.961, tinyllama 1.021; was 0.30 on Phi-3.5-mini before Tier 01B item 0) | active |
+| 01B | GPU pp ratio, `n_prompt=512` | every sweep model except Phi-3.5-mini | >= 0.10x | 0.254x (tinyllama, binding; qwen2.5-3b 0.281x, mistral-7b 0.285x; Tier 01B closing sweep `20261003T044014Z`; was 0.064x at the step 2 re-baseline) | retired: met by Tier 01B |
+| 01B | GPU pp ratio, `n_prompt=512` | Phi-3.5-mini | >= 0.08x | 0.146x (Tier 01B closing sweep `20261003T044014Z`; was 0.011x at the step 2 re-baseline; threshold kept by owner decision, see below) | retired: met by Tier 01B |
+| 01C | GPU pp ratio, `n_prompt=512` | every sweep model | >= 0.20x | 0.146x (Phi-3.5-mini, Tier 01B closing sweep `20261003T044014Z`; the others 0.254x to 0.285x; was 0.011x at the step 2 re-baseline) | active |
+| 02 | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 0.845 (Phi-3.5-mini, Tier 01B closing sweeps `20261003T042440Z`/`20261003T044014Z`; tinyllama 0.851, mistral-7b 0.973, qwen2.5-3b 0.984; was 0.911 after Tier 01B item 0, as the step 5 decomposition projected) | active |
 | 02 | GPU pp ratio at 2048 over ratio at 512 | every sweep model | >= 0.90 | unmeasured (no parity-corrected `n_prompt=2048` reading exists; Tier 01C's closing sweep takes the first) | active |
 | 04 | GPU tg ratio | Phi-3.5-mini | >= 0.40x | 0.416x | retired: met on arrival |
 | 10 | CPU tg ratio | every sweep model | >= 0.20x | 0.092x (mistral-7b, `20261001T180241Z`; was 0.090x) | active |
@@ -460,19 +465,31 @@ Three layers, all of which get extended (never replaced) tier over tier:
    commands rather than assuming the documented command covers them; Tier 00 corrects the documented
    command itself.
 2. **Integration tests**: `ModelLiveRunnerIT` (`juno-master/src/test/java/cab/ml/juno/master/`,
-   run via `./juno test --model-path ...`, 8 checks today — 6 pipeline-parallel + 2 tensor-parallel)
-   and the forked-JVM cluster ITs (`ThreeNodeClusterIT`, `TensorParallelClusterIT`, `mvn verify -pl
+   run via `mvn verify -pl juno-master -Pintegration -DMODELS=...` for several models, or `./juno test
+   --model-path ...` for one; 9 checks — 6 pipeline-parallel, 2 tensor-parallel and, since Tier 01B, an
+   in-process 512-token prefill on both schedules; both run the same `ModelLiveChecks`) and the
+   forked-JVM cluster ITs (`ThreeNodeClusterIT`, `TensorParallelClusterIT`, `mvn verify -pl
    juno-master`). Every tier that changes forward-pass, batching, or cluster behavior adds a new
    check to `ModelLiveRunnerIT` rather than only relying on unit tests — this is the one test class
    that runs against a real model file end to end.
+   *Corrected 2026-10-03 (Tier 01B step 8): this item said the IT runs via `./juno test`. It does not,
+   and that command runs no check at all: commit `55122e8` removed the `ModelLiveRunner` main class, and
+   `./juno test` had started `CoordinatorMain`, which exits 1 without `JUNO_NODE_ADDRESSES`. Restored
+   2026-10-03 (owner decision): `ModelLiveRunner` runs the checks again, sharing `ModelLiveChecks` with the IT.*
 3. **Bash smoke scripts** under `scripts/performance-tests/`, following the existing
-   `smoke-grammar.sh` / `smoke-tools.sh` convention: one `smoke-tierNN-<short-name>.sh` per tier,
+   `smoke-grammar.sh` / `smoke-tools.sh` convention: one `smoke-<short-name>.sh` per tier, named for what
+   it checks and never for the tier (`CLAUDE.md` keeps tier numbers out of shipped files and docs, and the
+   script is named in `docs/howto.md`),
    written in bash, that drives `./juno local`/`cluster` against the real model matrix (see
    `INVENTORY.md`) and asserts on process exit code, HTTP status, and response shape — not just
    "does it crash," but "is the output the specific thing this tier promised." Each smoke script
    must be runnable standalone and re-run (unmodified) by every later tier as a regression check —
-   later tiers only ever *add* a new `smoke-tierNN` script, never edit an earlier one except to fix
+   later tiers only ever *add* a new smoke script, never edit an earlier one except to fix
    a bug in the script itself.
+   *Corrected 2026-10-03 (owner decision): this item prescribed `smoke-tierNN-<short-name>.sh`. Tier 01
+   already had to rename its script for this reason (`smoke-gpu-residency.sh`); Tier 00's and Tier 01B's were
+   renamed to `smoke-consistency.sh` and `smoke-long-prompt-prefill.sh`, and every later tier's planned
+   script name drops its tier number.*
 
 Performance regression gates stay governed by the existing rule in the root `CLAUDE.md`
 ("Performance gates on hot-path changes"): any tier touching the forward pass, MatVec, GPU

@@ -293,7 +293,7 @@ widened".*
   peak device bytes during a wide prefill asserted against the decode-time figure.
 - **`ModelLiveRunnerIT`**: a 512-token prefill check on a model whose FP16 residency would not fit
   in the available VRAM — the end-to-end form of the whole tier.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier04c-packed-matmul.sh` — drives
+- **New bash smoke script**: `scripts/performance-tests/smoke-packed-matmul.sh` — drives
   `./juno local` on both schedules across every packed format, asserts correct output, asserts the
   fallback notice appears exactly when a format has no packed path, and records peak VRAM.
 - **Perf gate (required)**: this is a MatVec and forward-pass change by definition.

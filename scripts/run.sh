@@ -1112,7 +1112,7 @@ cmd_lora() {
 }
 
 # ---------------------------------------------------------------------------
-# live — ModelLiveRunner: 8 real-model smoke checks, exits 0/1
+# live — ModelLiveRunner: 9 real-model smoke checks, exits 0/1
 #        Use this as a quick regression check after any code change.
 # ---------------------------------------------------------------------------
 cmd_test() {
@@ -1133,7 +1133,7 @@ cmd_test() {
         echo "     or: MODEL_PATH=/path/to/model.gguf $0 test [flags]"
         echo "     or: $0 test /path/to/model.gguf"
         echo ""
-        echo "  Runs ModelLiveRunner — 8 automated real-model checks:"
+        echo "  Runs ModelLiveRunner — 9 automated real-model checks:"
         echo "    Pipeline-parallel (tests 1-6):"
         echo "    1. hello greeting coherence"
         echo "    2. no raw SentencePiece ▁ markers in output"
@@ -1144,8 +1144,11 @@ cmd_test() {
         echo "    Tensor-parallel (tests 7-8):"
         echo "    7. tensor-parallel generation via AllReduce (3-node cluster)"
         echo "    8. tensor-parallel greedy determinism"
+        echo "    In-process (test 9, every --pType; on the GPU when one is present):"
+        echo "    9. a 512-token prompt prefilled as one window (static schedule), in 32-token"
+        echo "       chunks (continuous schedule) and one token at a time gives the same first token"
         echo ""
-        echo "  Exits 0 if all 8 pass, 1 if any fail."
+        echo "  Exits 0 if all pass, 1 if any fail or the model cannot be loaded."
         echo ""
         echo "  Required:"
         echo "    --model-path PATH  or  MODEL_PATH env var  or  positional arg"
@@ -1202,7 +1205,7 @@ cmd_test() {
     "-DpType=${ptype}" \
     "-Djuno.node.heap=${heap}" \
     ${jfr_flag:+"$jfr_flag"} \
-    -jar "$LIVE_JAR" \
+    -cp "$LIVE_JAR" cab.ml.juno.master.ModelLiveRunner \
     "$model"
 }
 

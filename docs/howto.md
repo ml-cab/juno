@@ -1295,6 +1295,24 @@ and leave no node process behind. Requires a CUDA device; run it on an otherwise
 ./scripts/performance-tests/smoke-gpu-residency.sh --models tinyllama-1.1b-chat-v1.0.Q4_K_M --requests 8
 # -> target/gpu-residency-smoke/<stamp>/summary.md
 ```
+
+### Long-prompt prefill smoke test
+
+Drives `/v1/chat/completions` with long prompts on TinyLlama and Mistral 7B, on the `static` and
+`continuous` schedules, at 128, 512 and 2048 prompt tokens (a length the model's context cannot hold
+together with the generated tokens is capped to fit, and the cap is logged). The prompt is calibrated
+against the server's own `usage.prompt_tokens`. Every request must answer with HTTP 200 and non-empty
+text, report a prompt length within 10% of the one asked for, and stream exactly the text it returns
+unstreamed; time to first token is recorded. With `--baseline-jar`, the same requests are sent to that
+build too and every greedy answer must be identical, which shows a prefill change left the output
+unchanged. GPU by default (`--cpu` for the CPU backend).
+
+```bash
+./scripts/performance-tests/smoke-long-prompt-prefill.sh
+./scripts/performance-tests/smoke-long-prompt-prefill.sh --baseline-jar /path/to/earlier-shaded.jar
+./scripts/performance-tests/smoke-long-prompt-prefill.sh --models tinyllama --lengths "128 512"
+# -> target/prefill-smoke/<stamp>/results.json
+```
 ---
 
 ### Build and Test
@@ -1311,9 +1329,10 @@ mvn verify -pl juno-master             # integration tests — forks 3 JVM nodes
                                        # includes ThreeNodeClusterIT and TensorParallelClusterIT
 
 mvn verify -pl juno-master -Pintegration -DMODELS=/abs/a.gguf,/abs/b.gguf
-                                       # ModelLiveRunnerIT — requires real model files (comma-separated absolute paths)
+                                       # ModelLiveRunnerIT — requires real model files (comma-separated absolute paths);
+                                       # includes a 512-token prefill on both schedules, on the GPU when one is present
 
-./juno test --model-path /path/to/model.gguf   # real-model smoke test (8 checks, exits 0/1)
+./juno test --model-path /path/to/model.gguf   # real-model smoke test (9 checks, exits 0/1)
 ```
 
 **Windows (Command Prompt):**

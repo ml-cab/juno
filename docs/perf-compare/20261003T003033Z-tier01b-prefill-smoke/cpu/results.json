@@ -1,0 +1,98 @@
+[
+  {
+    "model": "tinyllama",
+    "schedule": "static",
+    "build": "candidate",
+    "requested_tokens": 128,
+    "target_tokens": 128,
+    "prompt_tokens": 128,
+    "http": "200",
+    "ttft_ms": 21813.83984375,
+    "answer_names_colour": true,
+    "text": "The orchard in district 7 was painted white in the year 18"
+  },
+  {
+    "model": "tinyllama",
+    "schedule": "static",
+    "build": "candidate",
+    "requested_tokens": 512,
+    "target_tokens": 512,
+    "prompt_tokens": 512,
+    "http": "200",
+    "ttft_ms": 96959.47778320312,
+    "answer_names_colour": true,
+    "text": "The orchard in district 7 was painted white in the year 18"
+  },
+  {
+    "model": "tinyllama",
+    "schedule": "static",
+    "build": "baseline",
+    "requested_tokens": 128,
+    "target_tokens": 128,
+    "prompt_tokens": 128,
+    "http": "200",
+    "ttft_ms": 21614.4423828125,
+    "answer_names_colour": true,
+    "text": "The orchard in district 7 was painted white in the year 18"
+  },
+  {
+    "model": "tinyllama",
+    "schedule": "static",
+    "build": "baseline",
+    "requested_tokens": 512,
+    "target_tokens": 512,
+    "prompt_tokens": 512,
+    "http": "200",
+    "ttft_ms": 95886.57739257812,
+    "answer_names_colour": true,
+    "text": "The orchard in district 7 was painted white in the year 18"
+  },
+  {
+    "model": "tinyllama",
+    "schedule": "continuous",
+    "build": "candidate",
+    "requested_tokens": 128,
+    "target_tokens": 128,
+    "prompt_tokens": 128,
+    "http": "200",
+    "ttft_ms": 20848.5458984375,
+    "answer_names_colour": true,
+    "text": "The orchard in district 7 was painted white in the year 18"
+  },
+  {
+    "model": "tinyllama",
+    "schedule": "continuous",
+    "build": "candidate",
+    "requested_tokens": 512,
+    "target_tokens": 512,
+    "prompt_tokens": 512,
+    "http": "200",
+    "ttft_ms": 93398.94067382812,
+    "answer_names_colour": true,
+    "text": "The orchard in district 7 was painted white in the year 18"
+  },
+  {
+    "model": "tinyllama",
+    "schedule": "continuous",
+    "build": "baseline",
+    "requested_tokens": 128,
+    "target_tokens": 128,
+    "prompt_tokens": 128,
+    "http": "200",
+    "ttft_ms": 20835.453125,
+    "answer_names_colour": true,
+    "text": "The orchard in district 7 was painted white in the year 18"
+  },
+  {
+    "model": "tinyllama",
+    "schedule": "continuous",
+    "build": "baseline",
+    "requested_tokens": 512,
+    "target_tokens": 512,
+    "prompt_tokens": 512,
+    "http": "200",
+    "ttft_ms": 92580.44750976562,
+    "answer_names_colour": true,
+    "text": "The orchard in district 7 was painted white in the year 18"
+  }
+]

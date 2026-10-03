@@ -108,7 +108,7 @@ the finished system.
   correctly.
 - **`ModelLiveRunnerIT`**: add checks for elastic cluster sizes, a node-failure scenario, reranking,
   and each newly-supported tool-calling template.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier13-server-clustering.sh` —
+- **New bash smoke script**: `scripts/performance-tests/smoke-server-clustering.sh` —
   drives an elastic-sized cluster, kills a node mid-run, exercises reranking, and exercises tool
   calling on each newly-supported template.
 - **Perf gate**: only required if the fault-tolerance wiring or elastic clustering changes the

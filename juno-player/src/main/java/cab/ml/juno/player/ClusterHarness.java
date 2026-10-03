@@ -431,10 +431,11 @@ public final class ClusterHarness implements AutoCloseable {
 		String classpath = System.getProperty("java.class.path");
 		boolean verbose = "true".equalsIgnoreCase(System.getProperty("JUNO_VERBOSE"));
 
-		// Inherit heap from coordinator via -Djuno.node.heap=<size>; default 4g.
-		// Large models (phi-3.5-mini, Llama-7B) need >=6g on node-0 which eagerly
-		// dequantises token_embd.weight to float[vocabSize * hiddenDim].
-		String nodeHeap = System.getProperty("juno.node.heap", "4g");
+		// Inherit heap from coordinator via -Djuno.node.heap=<size>; otherwise derive
+		// it from the model file as the launchers do. Large models (phi-3.5-mini,
+		// Llama-7B) need >=6g on node-0 which eagerly dequantises token_embd.weight
+		// to float[vocabSize * hiddenDim], and a tensor-parallel node loads every layer.
+		String nodeHeap = NodeHeapSize.resolve(System.getProperty(NodeHeapSize.PROPERTY), modelPath);
 
 		// --add-modules jdk.incubator.vector: Vector API is still incubating as
 		// of JDK 25/26 (JEP 508 / JEP 529) -- required in each forked node JVM

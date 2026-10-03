@@ -1,5 +1,42 @@
 ## Status 
 
+**Session 106** — Long-prompt prefill checked end to end on both schedules
+
+- **Where GPU prefill stands now.** Pinned comparison sweeps against the reference engine put Juno's
+  prompt processing at a 512-token prompt at 0.254x (TinyLlama), 0.281x (Qwen2.5-3B), 0.146x (Phi-3.5-mini)
+  and 0.285x (Mistral 7B), against 0.011x to 0.098x on 2026-09-30. In a pinned same-hour comparison with the
+  build of that date, Juno's own prefill rose 2.96x to 13.91x and generation read 0.994x to 1.361x, the top
+  figure on Phi-3.5-mini, whose decode now runs the GPU attention kernel.
+
+- **A smoke test for long prompts.** `scripts/performance-tests/smoke-long-prompt-prefill.sh` sends 128-, 512-
+  and 2048-token prompts (calibrated against the server's own `usage.prompt_tokens`, and capped to fit a
+  shorter context) to `/v1/chat/completions` on TinyLlama and Mistral 7B, on the `static` and `continuous`
+  schedules. Each request must answer, report the prompt length it was given, and stream exactly the text it
+  returns unstreamed; time to first token is recorded. With `--baseline-jar` every greedy answer must also
+  match an earlier build's. Against the build from before the prefill work began, all 12 greedy answers were
+  identical, and time to first token on the `static` schedule fell 2.7x to 4.6x at 128 and 512 tokens
+  (TinyLlama, 512 tokens: 2,072 to 655 ms; Mistral 7B: 7,584 to 2,839 ms) and 1.6x to 2.0x at about 2,048.
+- **`ModelLiveRunnerIT` prefills a 512-token prompt in-process.** The new check runs the prompt as one
+  batched window on `static`, in 32-token chunks on `continuous`, and one token at a time, on the GPU when
+  one is present, and requires the same first greedy token from all three. On TinyLlama, Qwen2.5-3B,
+  Phi-3.5-mini and Mistral 7B all 16 generated tokens agreed.
+- **`./juno test` runs its checks again.** Since the coordinator executable replaced the old
+  integration runner, the command had started the coordinator instead and always exited 1 without
+  `JUNO_NODE_ADDRESSES`. It now runs `ModelLiveRunner` from `juno-master.jar`: nine checks (pipeline-parallel
+  1-6, tensor-parallel 7-8, the in-process long-prompt prefill 9), one `PASS`/`FAIL` line each, exit 0 only
+  when all pass. The checks live in one class, `ModelLiveChecks`, which `ModelLiveRunnerIT` runs as well, so
+  the command and the integration test cannot drift apart. `--pType pipeline|tensor` limits the cluster
+  checks; an unsupported architecture exits 1 with the loader's error.
+- **Forked test nodes size their heap from the model.** `ClusterHarness` used a fixed 4 GB node heap when
+  no `-Djuno.node.heap` was given, which a tensor-parallel Mistral 7B node outgrew. It now derives the heap
+  the way the launchers do (1.5 times the model file plus 2 GB, 4 to 48 GB), so `ModelLiveRunnerIT` runs a
+  7B model without extra flags.
+- **Smoke scripts are named for what they check.** `smoke-tier00-consistency.sh` is now
+  `scripts/performance-tests/smoke-consistency.sh`; its checks are unchanged.
+- **Vision and LoRA unchanged.** Against the same earlier build, moondream2 vision latency read 0.995x and
+  decode 1.013x with byte-identical captions, and LoRA train-qa read 1.00x train time and 0.978x playback
+  with the same final loss.
+
 **Session 105** — The prefill window default reviewed on every surface
 
 - **The `JunoPlayer` facade sizes its prefill window like local mode.** On a GPU with the `static`
@@ -767,7 +804,7 @@
   including two exception messages and two CUDA kernel headers.
 - Tests: `StaticBatchPrefixCacheSessionGatingTest`, `ContinuousPrefixCacheGatingTest`,
   `TinyLlamaStaticBatchLiveTest`, `ForwardPassHandlerLoaderArchitectureTest`, plus
-  `scripts/performance-tests/smoke-tier00-consistency.sh` (real-file architecture audit and a batching check over
+  `scripts/performance-tests/smoke-consistency.sh` (real-file architecture audit and a batching check over
   both REST surfaces on CPU and GPU). No performance run: the change removes a trie lookup and write from the
   batch path and one redundant write per continuous slot, and touches no MatVec, KV-layout, GPU-residency or
   quantization code.

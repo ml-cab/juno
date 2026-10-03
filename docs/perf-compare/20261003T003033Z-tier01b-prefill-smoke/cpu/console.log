@@ -1,0 +1,35 @@
+[prefill-smoke] candidate jar: /home/medion/Repo/juno/juno-player/target/juno-player-0.1.2-shaded.jar (66f02ee7c2908f78)
+[prefill-smoke] baseline jar: /home/medion/Repo/juno/dist/tier01b-close/baseline-shaded.jar (bd19a9306ea7901f)
+[prefill-smoke] up: tinyllama-static-candidate (pid 594991)
+[prefill-smoke] tinyllama: 128 -> 2 notes + 19 filler words (target 128 prompt tokens)
+[prefill-smoke] tinyllama: 512 -> 17 notes + 21 filler words (target 512 prompt tokens)
+[prefill-smoke] PASS: tinyllama-static-candidate 128: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-static-candidate 128: prompt_tokens 128 within 10% of 128
+[prefill-smoke] PASS: tinyllama-static-candidate 128: streamed text equals non-streamed (TTFT 21813.83984375 ms)
+[prefill-smoke] PASS: tinyllama-static-candidate 512: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-static-candidate 512: prompt_tokens 512 within 10% of 512
+[prefill-smoke] PASS: tinyllama-static-candidate 512: streamed text equals non-streamed (TTFT 96959.47778320312 ms)
+[prefill-smoke] up: tinyllama-static-baseline (pid 613176)
+[prefill-smoke] PASS: tinyllama static 128: greedy text identical to the baseline build
+[prefill-smoke] PASS: tinyllama static 512: greedy text identical to the baseline build
+[prefill-smoke] up: tinyllama-continuous-candidate (pid 619764)
+[prefill-smoke] PASS: tinyllama-continuous-candidate 128: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-continuous-candidate 128: prompt_tokens 128 within 10% of 128
+[prefill-smoke] PASS: tinyllama-continuous-candidate 128: streamed text equals non-streamed (TTFT 20848.5458984375 ms)
+[prefill-smoke] PASS: tinyllama-continuous-candidate 512: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-continuous-candidate 512: prompt_tokens 512 within 10% of 512
+[prefill-smoke] PASS: tinyllama-continuous-candidate 512: streamed text equals non-streamed (TTFT 93398.94067382812 ms)
+[prefill-smoke] up: tinyllama-continuous-baseline (pid 626072)
+[prefill-smoke] PASS: tinyllama continuous 128: greedy text identical to the baseline build
+[prefill-smoke] PASS: tinyllama continuous 512: greedy text identical to the baseline build
+
+model      schedule    build       tokens   actual    ttft_ms  recall
+tinyllama  static      candidate      128      128      21814    true
+tinyllama  static      candidate      512      512      96959    true
+tinyllama  static      baseline       128      128      21614    true
+tinyllama  static      baseline       512      512      95887    true
+tinyllama  continuous  candidate      128      128      20849    true
+tinyllama  continuous  candidate      512      512      93399    true
+tinyllama  continuous  baseline       128      128      20835    true
+tinyllama  continuous  baseline       512      512      92580    true
+[prefill-smoke] all checks passed. Output: /home/medion/Repo/juno/target/prefill-smoke/20261003T022217Z

@@ -154,7 +154,7 @@ runs first — see its own note.
 - **`ModelLiveRunnerIT`**: add a load-and-generate check for `Devstral-Small` and
   `minimax-m2.5-tiny` (post-quantization-fix; architecture-routing outcome documented per Tier 00's
   audit).
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier04-quant-coverage.sh` — runs
+- **New bash smoke script**: `scripts/performance-tests/smoke-quant-coverage.sh` — runs
   `./juno gguf-info` and `./juno local` against every quant format now supported, plus a
   `./juno quantize` round-trip for each newly-encodable format.
 - **New `GgufReaderTest`/load-time test**: mapped-load path produces identical tensor values to the

@@ -49,7 +49,7 @@ actually help rather than hurt.
    accepted trade-off quietly becomes an omission. It is now this tier's item.
 
    Re-examine and record the outcome here with a date. Two things have changed since that judgement was
-   made and both bear on it: six tiers have landed, each adding a `smoke-tierNN-*.sh` script that every
+   made and both bear on it: six tiers have landed, each adding a smoke script that every
    later tier is required to re-run unmodified as a regression check, so the procedural matrix is
    monotonically growing; and this tier is the one whose own gate is a concurrency benchmark that has to
    be re-run after every change in it. Time the full smoke matrix as part of this tier's exit work and
@@ -58,7 +58,7 @@ actually help rather than hurt.
    Either outcome is acceptable and both must be written down. If CI is adopted: wire `mvn test` across
    every unit-test-bearing module (including `vision` and `metrics`, which the documented command
    omitted until Tier 00 fixed it), `mvn verify -pl juno-master`, `check-plan-thresholds.sh`, and the
-   accumulated `smoke-tierNN-*.sh` scripts that can run without a GPU or a real model. The GPU-gated and
+   accumulated per-tier smoke scripts that can run without a GPU or a real model. The GPU-gated and
    real-model gates stay manual — this host's GTX 1080 is not a CI runner — so state plainly which
    fraction of the matrix CI actually covers rather than implying it covers the gate. If CI is declined:
    name what changed since the README's original judgement, or state that nothing did, and record the
@@ -133,7 +133,7 @@ actually help rather than hurt.
 - **New concurrency-ceiling test**: correctness (not just throughput) at the new higher ceiling —
   confirm no request starvation, no KV corruption, under real concurrent load.
 - **`ModelLiveRunnerIT`**: add a continuous-schedule multi-session throughput check.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier07-continuous-batching.sh` —
+- **New bash smoke script**: `scripts/performance-tests/smoke-continuous-batching.sh` —
   drives N concurrent SSE streams under `continuous`, asserts correctness and captures TTFT/TPOT.
 - **Perf gate (required)**: this is entirely a batching/scheduling hot-path change —
   `compare-schedule.sh` (already exists per `scripts/performance-tests/`) rerun, plus

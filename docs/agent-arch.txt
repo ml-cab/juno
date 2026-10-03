@@ -116,7 +116,9 @@ Module dependency (excerpt):
   juno-player — ConsoleMain REPL, ClusterHarness, LoraMergeMain,
         ProcessPipelineClient, TensorParallelPipelineClient
         juno-player depends on coordinator (and transitively on node)
-  juno-master — CoordinatorMain standalone executable (production coordinator)
+  juno-master — CoordinatorMain standalone executable (production coordinator); also carries
+                ModelLiveRunner (./juno test) over ModelLiveChecks, the nine real-model checks
+                ModelLiveRunnerIT runs too (one implementation for the command and the IT)
         depends on juno-player, coordinator, node, kvcache, tokenizer, sampler,
         health, registry, api
   juno-node — NodeMain standalone executable

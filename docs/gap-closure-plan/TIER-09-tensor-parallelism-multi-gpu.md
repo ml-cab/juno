@@ -165,7 +165,7 @@ against the existing (correct, if slow) single-node dense computation.
   one per token); a node that rejects window requests surfaces an error naming it; and a cluster IT
   (both `--pType` values, and `CoordinatorMain`) whose greedy output over 64 tokens equals the per-token
   prefill's on six prompts. `ThreeNodeClusterIT` and `TensorParallelClusterIT` keep passing.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier09-tensor-parallel.sh` — runs
+- **New bash smoke script**: `scripts/performance-tests/smoke-tensor-parallel.sh` — runs
   the 3-node tensor-parallel cluster against a real model and diffs output against a single-node
   dense run of the same model/prompt/seed.
 - **Perf gate (required)**: tensor parallelism is explicitly a forward-pass/GPU-residency change —

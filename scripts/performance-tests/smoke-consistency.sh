@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# smoke-tier00-consistency.sh — correctness / fail-closed checks against real model files
+# smoke-consistency.sh — correctness / fail-closed checks against real model files
 #
 # 1. gguf-info reports the expected general.architecture for each audited file.
 # 2. Local mode and cluster mode (pipeline and tensor) reject the four architectures that have
@@ -21,9 +21,9 @@
 # Exits 0 when every check passes, 1 otherwise.
 #
 # Usage:
-#   ./scripts/performance-tests/smoke-tier00-consistency.sh
-#   ./scripts/performance-tests/smoke-tier00-consistency.sh --no-gpu --api-port 18090
-#   ./scripts/performance-tests/smoke-tier00-consistency.sh --skip-audit   # only the batching checks
+#   ./scripts/performance-tests/smoke-consistency.sh
+#   ./scripts/performance-tests/smoke-consistency.sh --no-gpu --api-port 18090
+#   ./scripts/performance-tests/smoke-consistency.sh --skip-audit   # only the batching checks
 set -uo pipefail
 
 PERF_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

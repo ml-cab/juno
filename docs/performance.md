@@ -672,6 +672,34 @@ same-hour interleaved A/B with pinned clocks, median of three, `n_prompt=512`
 TinyLlama prefill 959.5 to 1029.4 t/s (1.073x), Mistral 7B 194.6 to 204.2 t/s (1.049x); generation 0.997x and
 0.993x. Logits stay bit-identical to the host window path.
 
+**Where prefill stands after this work (2026-10-03, pinned).** The comparison sweeps against the reference
+engine, same method as the 2026-09-30 reference, clocks pinned
+([`perf-compare/20261003T042440Z/`](perf-compare/20261003T042440Z/) at 128 prompt tokens,
+[`perf-compare/20261003T044014Z/`](perf-compare/20261003T044014Z/) at 512), are now the GPU reference:
+
+| Model | pp ratio at 512, 2026-09-30 | pp ratio at 512, now | pp ratio at 128, now | tg ratio at 128, now |
+|---|---|---|---|---|
+| TinyLlama | 0.066x | **0.254x** | 0.299x | 0.374x |
+| Qwen2.5-3B | 0.064x | **0.281x** | 0.285x | 0.420x |
+| Phi-3.5-mini | 0.011x | **0.146x** | 0.173x | 0.535x |
+| Mistral 7B | 0.098x | **0.285x** | 0.293x | 0.611x |
+
+Against the build of 2026-09-30, in a same-hour interleaved A/B with pinned clocks, median of three,
+`n_prompt=512` ([`perf-compare/20261003T040258Z-tier01b-close-decode-ab/`](perf-compare/20261003T040258Z-tier01b-close-decode-ab/)),
+Juno's own prefill rose 4.07x (TinyLlama), 4.58x (Qwen2.5-3B), 13.91x (Phi-3.5-mini) and 2.96x (Mistral 7B),
+and generation read 1.014x, 0.994x, 1.361x and 1.005x (Phi-3.5-mini's decode now runs the GPU attention
+kernel). Vision, LoRA train and LoRA playback were unchanged against the same build
+([`perf-compare/20261003T005029Z-tier01b-close-vision/`](perf-compare/20261003T005029Z-tier01b-close-vision/),
+[`perf-compare/20261003T014703Z-tier01b-close-lora/`](perf-compare/20261003T014703Z-tier01b-close-lora/)),
+and greedy output on TinyLlama and Mistral 7B matched it token for token at 128, 512 and about 2,048 prompt
+tokens on both schedules
+([`perf-compare/20261003T003033Z-tier01b-prefill-smoke/`](perf-compare/20261003T003033Z-tier01b-prefill-smoke/)).
+
+The ratio now falls with prompt length on every model (512 over 128: 0.85 on TinyLlama and Phi-3.5-mini, 0.97
+on Mistral 7B, 0.98 on Qwen2.5-3B): the costs removed were fixed per token, so attention, which grows with
+the context, is a larger share of what remains. Phi-3.5-mini binds because its LongRoPE and attention still
+run on the host between the region's two halves.
+
 ## Prefill GPU-residency fixes: pinned staging memory + adaptive chunk sizing
 
 **Run:** [`perf-compare/20260918T153900Z-prefill-adaptive/`](perf-compare/20260918T153900Z-prefill-adaptive/)

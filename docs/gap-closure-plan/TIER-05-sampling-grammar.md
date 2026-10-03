@@ -101,7 +101,7 @@ baseline avoids compounding the confusion Tier 00 fixed).
 - **`JsonSchemaToGbnfTest`**: `$ref`/`$defs` resolution cases, including a schema that would have
   been rejected before this tier.
 - **`ModelLiveRunnerIT`**: add a mixed-sampler-chain static-batch check.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier05-sampling-grammar.sh` —
+- **New bash smoke script**: `scripts/performance-tests/smoke-sampling-grammar.sh` —
   exercises each new sampler step and the widened grammar support end-to-end via
   `/v1/chat/completions`, plus the existing `smoke-grammar.sh`/`smoke-tools.sh` scripts must still
   pass unmodified (regression guard for existing grammar/tools behavior).

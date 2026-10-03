@@ -150,9 +150,8 @@ cannot call.
 This tier is documentation-only, so "tests" here means verification tooling rather than JUnit
 cases:
 
-- **New bash script**: `scripts/performance-tests/smoke-tier14-doc-consistency.sh` (naming kept
-  consistent with the rest of the plan's smoke-script convention even though this one checks docs,
-  not runtime behavior). It must fail, not warn, on each of:
+- **New bash script**: `scripts/performance-tests/smoke-doc-consistency.sh` (named, like every smoke
+  script, for what it checks, even though this one checks docs rather than runtime behavior). It must fail, not warn, on each of:
   - a competitor product name outside the allowed directories;
   - `Tier [0-9]+`/`Infra tier` outside the allowed directories;
   - **the execution-rule-7 threshold check** — by invoking
@@ -195,10 +194,10 @@ None — this tier is documentation and static analysis only.
       audited against the implemented surface: every endpoint, field and RPC the code serves is
       declared, and nothing declared is unimplemented. Six tiers added surface here; this is the
       backstop for any that skipped the feature-complete rule.
-- [ ] `smoke-tier14-doc-consistency.sh` invokes `check-plan-thresholds.sh` rather than restating its
+- [ ] `smoke-doc-consistency.sh` invokes `check-plan-thresholds.sh` rather than restating its
       logic, and the rule-7 check passes — every tier file with a `Perf gate` has a numeric threshold.
       If the script was missing on arrival, the tiers that skipped it are named in the scorecard.
-- [ ] `smoke-tier14-doc-consistency.sh`'s tier-list check passes — this file's scorecard tier list
+- [ ] `smoke-doc-consistency.sh`'s tier-list check passes — this file's scorecard tier list
       and [`README.md`](README.md)'s llama.cpp-relative gate list are identical.
 - [ ] `docs/howto.md`, `docs/performance.md`, `README.md` read-through complete, drift corrected.
 - [ ] Competitor-product-name grep *and* `Tier [0-9]+`/`Infra tier` grep both pass clean outside the

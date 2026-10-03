@@ -96,7 +96,7 @@ tensor-parallel path that's actually real, rather than the current stub.
   a vision request routed through the pipeline-parallel cluster.
 - **`ModelLiveRunnerIT`**: add a tiled/high-res image check and a multi-image check, using
   `moondream2-q5_k.llamafile`.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier11-vision.sh` — drives
+- **New bash smoke script**: `scripts/performance-tests/smoke-vision.sh` — drives
   `/v1/vision/chat` with a high-resolution image (tiling path), multiple images, and a cluster-mode
   request, asserting coherent output in each case; the existing `compare-vision.sh` must continue
   passing unmodified as a regression guard for the pre-existing single-image local-mode path.

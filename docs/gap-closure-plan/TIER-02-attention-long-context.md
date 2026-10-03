@@ -296,7 +296,7 @@ changes** (README execution rule 9) and tick item 7 here.
   on `Phi-3.5-mini-instruct-Q4_K_M.gguf` and assert P(32007) at the last position is **>= 0.95**
   (0.502 before the fix, 0.992 with short factors); a unit test that a short session selects the short
   factors and, under option (b), that crossing 4096 switches to the long ones.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier02-attention-context.sh` —
+- **New bash smoke script**: `scripts/performance-tests/smoke-attention-context.sh` —
   drives a long multi-turn conversation via the REST API until the shift boundary, asserts the
   server keeps responding instead of erroring, and asserts a second run *without* the opt-in flag
   still gets the documented hard error at the same point.

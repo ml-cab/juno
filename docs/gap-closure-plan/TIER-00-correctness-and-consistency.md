@@ -161,7 +161,7 @@ time before discovering it's unwired).
 - **`ModelLiveRunnerIT`**: for each model whose architecture has no verified handler, assert in-process
   that the loader rejects it with an error naming the architecture (a cluster node would swallow the
   failure, see the execution record), instead of running the suite on it.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier00-consistency.sh` — runs
+- **New bash smoke script**: `scripts/performance-tests/smoke-consistency.sh` — runs
   `./juno gguf-info` and `./juno local --model-path` against all four architecture-mismatched
   files plus one known-good file (`tinyllama`), asserting exit codes and log output match what
   step 2's audit table says they should.
@@ -233,7 +233,7 @@ tier (cluster nodes swallowing model-load failures, the dead `RegistryService`/H
 | `ContinuousPrefixCacheGatingTest` (2 cases) | 1 fails (session request resumes from a stateless slot's dangling entry) | 2 pass |
 | `TinyLlamaStaticBatchLiveTest` (real tinyllama Q4_K_M, CPU) | fails: repeated prompt in a later batch decodes `[22443, 23600, 6845, 15945, 13, 13]`, single-request output is `[1576, 7483, 310, 3444, 338, 3681]` | passes |
 
-Over REST on real tinyllama (`scripts/performance-tests/smoke-tier00-consistency.sh`, `--parallel 2`, top-k pinned
+Over REST on real tinyllama (`scripts/performance-tests/smoke-consistency.sh`, `--parallel 2`, top-k pinned
 to 1 because a REST `temperature` of 0 is not greedy, see decision 3), run against the original build and against
 the fixed build:
 
@@ -368,7 +368,7 @@ is timing-dependent independent of this tier. Not edited. The second full run pa
   -Dit.test=ModelLiveRunnerIT`: 5 cases, 0 failures (tinyllama full cluster suite 41 s; each rejected file 15 to
   21 s, because it also forks and fails a pipeline and a tensor cluster). A first attempt used
   `-Dtest=NoSuchTest`, which also filtered failsafe and silently ran nothing; that run was discarded.
-- `scripts/performance-tests/smoke-tier00-consistency.sh`: 54 of 54 checks pass (4 `gguf-info`; 4 local rejections plus the tinyllama control; 8 `./juno cluster` rejections, both `--pType` values, with no leftover `NodeMain` process; 16 CPU and 16 GPU batched-versus-single comparisons over both REST surfaces; 3 session checks on the static and continuous schedules; 2 zero-prefix-cache-hit checks) on the fixed build; 5 failures on the
+- `scripts/performance-tests/smoke-consistency.sh`: 54 of 54 checks pass (4 `gguf-info`; 4 local rejections plus the tinyllama control; 8 `./juno cluster` rejections, both `--pType` values, with no leftover `NodeMain` process; 16 CPU and 16 GPU batched-versus-single comparisons over both REST surfaces; 3 session checks on the static and continuous schedules; 2 zero-prefix-cache-hit checks) on the fixed build; 5 failures on the
   original build (the same batching and session checks, run against a build of the original source with
   `JUNO_JAR`).
 

@@ -1,0 +1,92 @@
+[prefill-smoke] candidate jar: /home/medion/Repo/juno/juno-player/target/juno-player-0.1.2-shaded.jar (66f02ee7c2908f78)
+[prefill-smoke] baseline jar: /home/medion/Repo/juno/dist/tier01b-close/baseline-shaded.jar (bd19a9306ea7901f)
+[prefill-smoke] up: tinyllama-static-candidate (pid 417731)
+[prefill-smoke] tinyllama: 128 -> 2 notes + 19 filler words (target 128 prompt tokens)
+[prefill-smoke] tinyllama: 512 -> 17 notes + 21 filler words (target 512 prompt tokens)
+[prefill-smoke] tinyllama: 2048-token length capped at 2024 (context 2048, 16 generated tokens)
+[prefill-smoke] tinyllama: 2048 -> 76 notes + 4 filler words (target 2024 prompt tokens)
+[prefill-smoke] PASS: tinyllama-static-candidate 128: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-static-candidate 128: prompt_tokens 128 within 10% of 128
+[prefill-smoke] PASS: tinyllama-static-candidate 128: streamed text equals non-streamed (TTFT 129.65869140625 ms)
+[prefill-smoke] PASS: tinyllama-static-candidate 512: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-static-candidate 512: prompt_tokens 512 within 10% of 512
+[prefill-smoke] PASS: tinyllama-static-candidate 512: streamed text equals non-streamed (TTFT 654.8369140625 ms)
+[prefill-smoke] PASS: tinyllama-static-candidate 2048: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-static-candidate 2048: prompt_tokens 2024 within 10% of 2024
+[prefill-smoke] PASS: tinyllama-static-candidate 2048: streamed text equals non-streamed (TTFT 5963.21142578125 ms)
+[prefill-smoke] up: tinyllama-static-baseline (pid 419160)
+[prefill-smoke] PASS: tinyllama static 128: greedy text identical to the baseline build
+[prefill-smoke] PASS: tinyllama static 512: greedy text identical to the baseline build
+[prefill-smoke] PASS: tinyllama static 2048: greedy text identical to the baseline build
+[prefill-smoke] up: tinyllama-continuous-candidate (pid 420323)
+[prefill-smoke] PASS: tinyllama-continuous-candidate 128: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-continuous-candidate 128: prompt_tokens 128 within 10% of 128
+[prefill-smoke] PASS: tinyllama-continuous-candidate 128: streamed text equals non-streamed (TTFT 536.171142578125 ms)
+[prefill-smoke] PASS: tinyllama-continuous-candidate 512: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-continuous-candidate 512: prompt_tokens 512 within 10% of 512
+[prefill-smoke] PASS: tinyllama-continuous-candidate 512: streamed text equals non-streamed (TTFT 2362.552490234375 ms)
+[prefill-smoke] PASS: tinyllama-continuous-candidate 2048: HTTP 200, non-empty answer
+[prefill-smoke] PASS: tinyllama-continuous-candidate 2048: prompt_tokens 2024 within 10% of 2024
+[prefill-smoke] PASS: tinyllama-continuous-candidate 2048: streamed text equals non-streamed (TTFT 13359.2568359375 ms)
+[prefill-smoke] up: tinyllama-continuous-baseline (pid 421544)
+[prefill-smoke] PASS: tinyllama continuous 128: greedy text identical to the baseline build
+[prefill-smoke] PASS: tinyllama continuous 512: greedy text identical to the baseline build
+[prefill-smoke] PASS: tinyllama continuous 2048: greedy text identical to the baseline build
+[prefill-smoke] up: mistral-static-candidate (pid 423225)
+[prefill-smoke] mistral: 128 -> 3 notes + 6 filler words (target 128 prompt tokens)
+[prefill-smoke] mistral: 512 -> 18 notes + 14 filler words (target 512 prompt tokens)
+[prefill-smoke] mistral: 2048 -> 79 notes + 0 filler words (target 2048 prompt tokens)
+[prefill-smoke] PASS: mistral-static-candidate 128: HTTP 200, non-empty answer
+[prefill-smoke] PASS: mistral-static-candidate 128: prompt_tokens 128 within 10% of 128
+[prefill-smoke] PASS: mistral-static-candidate 128: streamed text equals non-streamed (TTFT 741.640625 ms)
+[prefill-smoke] PASS: mistral-static-candidate 512: HTTP 200, non-empty answer
+[prefill-smoke] PASS: mistral-static-candidate 512: prompt_tokens 512 within 10% of 512
+[prefill-smoke] PASS: mistral-static-candidate 512: streamed text equals non-streamed (TTFT 2839.230712890625 ms)
+[prefill-smoke] PASS: mistral-static-candidate 2048: HTTP 200, non-empty answer
+[prefill-smoke] PASS: mistral-static-candidate 2048: prompt_tokens 2044 within 10% of 2048
+[prefill-smoke] PASS: mistral-static-candidate 2048: streamed text equals non-streamed (TTFT 31192.0419921875 ms)
+[prefill-smoke] up: mistral-static-baseline (pid 427265)
+[prefill-smoke] PASS: mistral static 128: greedy text identical to the baseline build
+[prefill-smoke] PASS: mistral static 512: greedy text identical to the baseline build
+[prefill-smoke] PASS: mistral static 2048: greedy text identical to the baseline build
+[prefill-smoke] up: mistral-continuous-candidate (pid 430756)
+[prefill-smoke] PASS: mistral-continuous-candidate 128: HTTP 200, non-empty answer
+[prefill-smoke] PASS: mistral-continuous-candidate 128: prompt_tokens 128 within 10% of 128
+[prefill-smoke] PASS: mistral-continuous-candidate 128: streamed text equals non-streamed (TTFT 2242.403076171875 ms)
+[prefill-smoke] PASS: mistral-continuous-candidate 512: HTTP 200, non-empty answer
+[prefill-smoke] PASS: mistral-continuous-candidate 512: prompt_tokens 512 within 10% of 512
+[prefill-smoke] PASS: mistral-continuous-candidate 512: streamed text equals non-streamed (TTFT 9554.7978515625 ms)
+[prefill-smoke] PASS: mistral-continuous-candidate 2048: HTTP 200, non-empty answer
+[prefill-smoke] PASS: mistral-continuous-candidate 2048: prompt_tokens 2044 within 10% of 2048
+[prefill-smoke] PASS: mistral-continuous-candidate 2048: streamed text equals non-streamed (TTFT 51826.46923828125 ms)
+[prefill-smoke] up: mistral-continuous-baseline (pid 434446)
+[prefill-smoke] PASS: mistral continuous 128: greedy text identical to the baseline build
+[prefill-smoke] PASS: mistral continuous 512: greedy text identical to the baseline build
+[prefill-smoke] PASS: mistral continuous 2048: greedy text identical to the baseline build
+
+model      schedule    build       tokens   actual    ttft_ms  recall
+tinyllama  static      candidate      128      128        130    true
+tinyllama  static      candidate      512      512        655    true
+tinyllama  static      candidate     2024     2024       5963    true
+tinyllama  static      baseline       128      128        594    true
+tinyllama  static      baseline       512      512       2072    true
+tinyllama  static      baseline      2024     2024      11684    true
+tinyllama  continuous  candidate      128      128        536    true
+tinyllama  continuous  candidate      512      512       2363    true
+tinyllama  continuous  candidate     2024     2024      13359    true
+tinyllama  continuous  baseline       128      128       1011    true
+tinyllama  continuous  baseline       512      512       3761    true
+tinyllama  continuous  baseline      2024     2024      18640    true
+mistral    static      candidate      128      128        742   false
+mistral    static      candidate      512      512       2839   false
+mistral    static      candidate     2048     2044      31192    true
+mistral    static      baseline       128      128       1985   false
+mistral    static      baseline       512      512       7584   false
+mistral    static      baseline      2048     2044      49125    true
+mistral    continuous  candidate      128      128       2242   false
+mistral    continuous  candidate      512      512       9555   false
+mistral    continuous  candidate     2048     2044      51826    true
+mistral    continuous  baseline       128      128       3429   false
+mistral    continuous  baseline       512      512      14183   false
+mistral    continuous  baseline      2048     2044      68192    true
+[prefill-smoke] all checks passed. Output: /home/medion/Repo/juno/target/prefill-smoke/20261003T003033Z

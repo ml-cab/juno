@@ -1,6 +1,6 @@
 # Tier 01B: Prefill throughput
 
-Status: in progress — implementation steps 0 to 3 complete (2026-09-30; step 3 is item 0, pinned gate met); plan amended 2026-09-30 after the plan review (scope items 6 to 10, step 3a, the `juno.DeviceCompute` span); step 3a complete 2026-10-01: items 1a-ii, 7, 8 and 9 (pinned gate and CPU reference taken by the owner); item 10 (CI) removed as an exit criterion by the owner; step 4a (spans for the whole prefill window, added 2026-10-01 by owner decision) implemented and tested, its pinned A/B gate met 2026-10-02 (owner run); steps 4 (the per-term prefill breakdown, published unpinned, taken ahead of the 4a gate by owner decision) and 5 (the threshold decomposition) complete 2026-10-01, with the third milestone row (512 over 128) moved to Tier 02 by owner decision because no item here moves it; step 6 started 2026-10-02 under the owner's "one region, one change" decision: the prefill-window device region (item 6 with item 2's operand residency) is implemented and tested, logits bit-identical to the host path, its unpinned breakdown published, and its pinned A/B gate met 2026-10-02 (TinyLlama prefill 3.899x, owner run); item 6 is complete; item 2's remainder (the residual kept on the device across layers and the non-allocating `MatVec` form) implemented and tested 2026-10-02, measured unpinned (prefill 1.045x and 1.047x, staged bytes down 97% to 99% on the three region models); item 2's criterion met (owner decision 2026-10-02: its bytes threshold is scored on the three models whose attention runs in the region; Phi-3.5-mini's prefill bytes moved to Tier 02 item 8); this change's pinned no-regression gate met 2026-10-02 (owner run: generation 0.997x and 0.993x, prefill 1.073x and 1.049x); item 3 (the chunk-sizing review per surface) complete 2026-10-02: the `JunoPlayer` facade sizes from free VRAM, every other fixed-32 surface has a measured reason, cluster launchers accept `--prefill-batch`; item 4 recorded in the step 4 record; remaining: step 8, the closing cross-surface matrix and pinned closing sweeps (threshold, decode and vision criteria, docs and CHANGELOG close-out)
+Status: **complete** (2026-10-03). Every exit criterion is checked. The threshold is met on the owner's pinned closing sweep (pp ratio at 512: 0.254x to 0.285x on tinyllama, qwen2.5-3b and mistral-7b against `>= 0.10x`; 0.146x on Phi-3.5-mini against `>= 0.08x`), decode is not regressed on any sweep model (pinned A/B 0.994x to 1.361x), vision and LoRA are unchanged, and the closing cross-surface matrix is resolved. Carried to later tiers by owner decision: the 512-over-128 milestone and Phi-3.5-mini's prefill bytes (Tier 02), batched cluster prefill (Tier 09 item 5), the load-dependent `continuous` chunk (Tier 07 item 6), the GPU path for Phi-2 and Qwen3-MoE (Tier 08 item 6), the ROCm attention port (Tier 10 item 8). The step-by-step history is in the execution record.
 Gap analysis refs: none directly — this tier exists because the gap analysis has no prefill section
 at all, while the published measurements under `docs/perf-compare/` show prompt processing to be the
 single largest gap Juno has. See "Why this tier, why now".
@@ -257,7 +257,7 @@ on today's op-at-a-time GPU path either way.
    `< <(while true; do sleep 3600; done)` — a process substitution whose subshell nothing reaps, which
    respawns a fresh `sleep` every hour and therefore persists indefinitely:
    `compare-vision.sh`, `compare-prefill-batch.sh`, `compare-schedule.sh`, `compare-parallel.sh`,
-   `compare-mixed-prefill.sh`, `smoke-tools.sh`, `smoke-grammar.sh` and `smoke-tier00-consistency.sh`.
+   `compare-mixed-prefill.sh`, `smoke-tools.sh`, `smoke-grammar.sh` and `smoke-consistency.sh`.
    [Tier 01](TIER-01-gpu-activation-residency.md) fixed the same line in `compare-llama-cpp.sh` — it
    now holds a named pipe open on a descriptor it owns and releases both with the engine — and
    deliberately left these eight, because none of them sources `perf-lib.sh` today and several cannot be
@@ -539,7 +539,7 @@ on today's op-at-a-time GPU path either way.
   surface.
 - **`ModelLiveRunnerIT`**: add a long-prompt (512-token) prefill check asserting correct output, for
   both schedules.
-- **New bash smoke script**: `scripts/performance-tests/smoke-tier01b-prefill.sh` — drives
+- **New bash smoke script**: `scripts/performance-tests/smoke-long-prompt-prefill.sh` — drives
   `/v1/chat/completions` with 128-, 512- and 2048-token prompts against `tinyllama` and `mistral-7b`,
   on both schedules, asserting correct output and recording TTFT; and asserts greedy-decode output is
   identical to the pre-tier build for the same prompt and seed.
@@ -718,7 +718,7 @@ architectures' defaults off on a false premise.
 
 ## Execution record
 
-Status of the tier: in progress. Implementation steps 0 (threshold check, keepalive reaping, the fast
+Status of the tier: complete (2026-10-03; see the step 8 record). Implementation steps 0 (threshold check, keepalive reaping, the fast
 prefill repetition), 1 (the copy and dequantization spans, opt-in, gate met) and 2 (the pinned
 re-baseline at 128 and 512, with a spans run for staged bytes) are complete. Step 3 (item 0) is
 implemented and tested for Phi-3 and Qwen3 under an owner-amended scope. The default and the ROCm
@@ -731,7 +731,9 @@ change (the prefill-window device region, items 6 and 2 as one region by owner d
 tested, measured, and its pinned gate met (TinyLlama prefill 3.899x); item 6 is complete. Step 6's second
 change (item 2's remainder) is implemented, tested and measured unpinned, and item 2's criterion is met under
 the owner's decision on Phi-3.5-mini's bytes (moved to Tier 02 item 8); its pinned gate is met (owner run).
-Next: item 3 (chunk sizing per surface), then step 8's closing matrix.
+Item 3 (chunk sizing per surface) is complete. Step 8's agent part (2026-10-03) is complete: the two step-8
+tests, the closing matrix and the unpinned gates; the owner's pinned closing runs met both remaining gates
+(step 8 record, "Closing gates").
 The two milestone decisions step 2 raised were taken by the owner on 2026-09-30 (recorded under step 2). This section also records the
 plan-review pass of 2026-09-27, which landed ahead of step 1.
 
@@ -839,7 +841,7 @@ after another, checked 3 s after each returned:
 | `compare-schedule.sh` (`--mode tps`) | 0 | 37 s | 0 | 0 | 0 | 0 |
 | `smoke-grammar.sh` | 0 | 117 s | 0 | 0 | 0 | 0 |
 | `smoke-tools.sh` | 0 | 510 s | 0 | 0 | 0 | 0 |
-| `smoke-tier00-consistency.sh` (`--no-gpu`) | 1 (see below) | 350 s | 0 | 0 | 0 | 0 |
+| `smoke-consistency.sh` (`--no-gpu`) | 1 (see below) | 350 s | 0 | 0 | 0 | 0 |
 | `smoke-gpu-residency.sh` (tinyllama, 2 requests, no cluster) | 0 | 30 s | 0 | 0 | 0 | 0 |
 | `compare-vision.sh` (moondream2, GPU, `--skip-build`) | 0 | 552 s | 0 | 0 | 0 | 0 |
 | `compare-llama-cpp.sh` (tinyllama, CPU) | 0 | 47 s | 0 | 0 | 0 | 0 |
@@ -934,7 +936,7 @@ bounds were calibrated on and hid the mistake. The leg now subtracts one mean de
 the four evidence sweeps it withholds the same 23 repetitions, and healthy token-span residuals sit at
 -1 to 29 ms (one at 267 ms, inside the bound).
 
-**Found while verifying: `smoke-tier00-consistency.sh` failed 3 of 36 checks at HEAD** (fixed the
+**Found while verifying: `smoke-consistency.sh` failed 3 of 36 checks at HEAD** (fixed the
 same day at the owner's direction; recorded under "Out-of-tier changes" below). Its local-mode audit
 expects `Unsupported model architecture '<arch>'` for qwen35, mistral3 and minimax-m2. Since commit
 `a906a8d` (Tier 01, pre-tokenizer dispatch), `ConsoleMain`'s local REPL loaded the tokenizer before the
@@ -1385,7 +1387,7 @@ failures (in-process, unsupported-architecture, three-node pipeline, tensor-para
 The change does not touch the LLaMA-family handler's forward path, the LoRA handlers' compute or the
 vision encoder, and moondream2's text half runs the unchanged Phi-2 handler, so both are expected
 flat. Both belong to the tier's closing matrix (implementation step 8), and are needed there because
-the tier's gate lists them. `ModelLiveRunnerIT` and `smoke-tier01b-prefill.sh` also belong to step 8
+the tier's gate lists them. `ModelLiveRunnerIT` and `smoke-long-prompt-prefill.sh` also belong to step 8
 (the latter does not exist yet).
 
 **Owner decisions, 2026-09-30:** (2) keep `auto`, and restate exit criterion 1 as behaviour;
@@ -2002,7 +2004,7 @@ overlap 5, logits relative L2 0.009). `check-plan-thresholds.sh`, `compare-llama
 `prefill-breakdown.sh --selftest` and `selftest-engine-stdin.sh` pass. Not run in this step, and owed to the
 closing matrix (step 8): `compare-lora.sh` (the LoRA handlers are separate classes the region does not
 touch), `compare-vision.sh` (moondream2's text half runs the Phi-2 handler, which has no device path),
-`compare-prefill-batch.sh`, `ModelLiveRunnerIT`'s 512-token check and `smoke-tier01b-prefill.sh` (neither
+`compare-prefill-batch.sh`, `ModelLiveRunnerIT`'s 512-token check and `smoke-long-prompt-prefill.sh` (neither
 exists yet).
 
 **Measurement (agent, unpinned; the gates that need pinned clocks are owed to the owner).**
@@ -2312,12 +2314,161 @@ behaviour change is the facade's default, and its reading is the 2.49x above.
    TinyLlama prefill <= 0.20x the per-token reading in each mode). Cross-surface row 7 above is corrected; rows 7
    and 8 of this tier's closing matrix read "correct, not reached: per-token prefill, Tier 09 item 5".
 
+### 2026-10-02 to 2026-10-03 — implementation step 8: the closing matrix (agent part)
+
+**Plan-versus-code check before starting.** The recorded state matched the code at HEAD `1ac490a` (tree: only
+the untracked `.github/` and `CLAUDE.md`): `PrefillChunkDefaults` is the resolver at every `GenerationLoop`
+entry point, `PrefillWindowRegion` and `MatVec.sgemmInto` are in, both launchers accept cluster
+`--prefill-batch`, and neither gRPC client overrides `prefillBatch`. This session's starting prompt again
+expected Tier 00; Tier 00's claims were re-checked and still hold in the code (`generateBatch` caches no
+prefix without a session, `ModelFileGate` refuses unverified architectures, no tier numbers, competitor names
+or `com.hazelcast` usage in any `src/main`), so the plan, not the prompt, was right. Two things the plan did
+not say:
+- **`./juno test` has not run any check since commit `55122e8`.** That commit removed the `ModelLiveRunner`
+  main class when `integration` became `juno-master`; `run.sh test` still launches `juno-master.jar`, whose
+  main class is `CoordinatorMain`, which reads only environment variables. Run on 2026-10-02, `./juno test
+  --model-path models/tinyllama-...gguf` prints "Running ModelLiveRunner" and exits 1 with
+  `JUNO_NODE_ADDRESSES is not set`. `CLAUDE.md`, `docs/howto.md`, `run.sh test --help` and this tree's README
+  ("Test infrastructure", corrected there) all describe eight real-model checks behind that command. The
+  checks themselves live on as `ModelLiveRunnerIT`, run with `mvn verify -pl juno-master -Pintegration
+  -DMODELS=...`, which is how this step ran them. **Raised with the owner; decided 2026-10-03: restore it.**
+  `ModelLiveChecks` (new, `juno-master` `src/main`) holds the nine checks once; `ModelLiveRunner` (new) is the
+  command's entry point and `ModelLiveRunnerIT` calls the same class; `run.sh`/`run.bat test` run
+  `-cp juno-master.jar cab.ml.juno.master.ModelLiveRunner`. `ModelLiveRunnerTest` (8 cases: `pType`
+  selection, exit codes, missing and unreadable files) passes; it was written before the classes but not
+  run until they compiled, so it was not watched failing. Verified live: `./juno test` on TinyLlama 9 of 9,
+  exit 0; on `Qwen3.5-0.8B` exit 1 with the loader's `Unsupported model architecture 'qwen35'` error;
+  `ModelLiveRunnerIT` on Mistral 7B 9 of 9; `mvn verify -pl juno-master` 20 of 20. Not a forward-pass change.
+- **`ModelLiveRunnerIT` cannot run a tensor-parallel 7B model at its defaults.** `ClusterHarness` forks nodes
+  with `-Xmx` from `juno.node.heap`, default 4 GB; a tensor-parallel Mistral 7B node loads all 32 layers and
+  ran out of Java heap (pipeline-parallel tests 1 to 6 passed first). Re-run with `-Djuno.node.heap=12g`, it
+  passes. **Fixed 2026-10-03 (owner decision):** `NodeHeapSize` (new, `juno-player`) gives `ClusterHarness`
+  the launchers' rule when the property is unset (1.5 times the model file plus 2 GiB, 4 to 48 GiB; 9 GiB for
+  Mistral 7B); `NodeHeapSizeTest` 6 of 6; `ModelLiveRunnerIT` on Mistral 7B passes 9 of 9 with no flag.
+
+**Tests, written for this step** (the two the test list assigned to it):
+- `ModelLiveRunnerIT` test 9, the 512-token prefill check, both schedules. Cluster prefill is one forward
+  pass per prompt token, so the batched window is only reached in-process: the check loads the model
+  single-shard (CUDA when a device is present, else CPU), builds a prompt of at least 512 tokens from distinct
+  numbered notes, and generates 16 greedy tokens three ways: `PrefillMode.SINGLE` (one token per forward
+  pass, the oracle), `static` with one window over the whole prompt, and `continuous` through
+  `RequestScheduler` with 32-token chunks (the handler loaded under `JUNO_SCHEDULE=continuous`, so paged KV).
+  It asserts the prompt length, that all three prefilled the same prompt, and that the first greedy token
+  agrees; later steps may part within float noise, so the first divergent step is printed, not asserted.
+  It was written after the region it checks had landed (step 6), so it is a regression test that passed on its
+  first run, not a test watched failing.
+- `scripts/performance-tests/smoke-long-prompt-prefill.sh`, described in its header and in `docs/howto.md`. One
+  defect found on its first run and fixed before the run recorded below: a note is about 24 tokens, so
+  calibrating by whole notes landed TinyLlama's 128-token case at 104; a filler-word remark with one
+  correction now makes up the remainder, and every case lands exactly. Bash re-reads a script as it runs,
+  so the run that was going while the fix was saved printed its summary twice; it was discarded and the
+  run below taken from scratch.
+
+**Renamed 2026-10-03 (owner decision): no tier number in a script name.** The new smoke script is
+`smoke-long-prompt-prefill.sh` (it was first written as `smoke-tier01b-prefill.sh`, the README's convention
+then), and Tier 00's `smoke-tier00-consistency.sh` is now `smoke-consistency.sh`; content unchanged. The
+README's convention and every later tier's planned script name were corrected with it. Published
+`docs/perf-compare/` records keep the names they ran under.
+
+**Reference build for every comparison in this step:** `ffd0ca7`, the build the step-2 reference sweeps
+measured (`20260930T135225Z`, `20260930T141026Z`), the last before any forward-pass change of this tier.
+Rebuilt from `git archive ffd0ca7` in a scratch directory (no git write, nothing installed into the local
+Maven repository); jar `bd19a9306ea7901f`, which does not hash like the published `dc94bd797c8a3219`
+because jar builds are not byte-reproducible. Copied to `dist/tier01b-close/baseline-shaded.jar` beside the
+candidate (HEAD, `66f02ee7c2908f78`) for the owner's pinned runs. The vision and LoRA gates ran each build's
+own `compare-*.sh --skip-build` from its own tree, rather than `--baseline <ref>`, which stages a git worktree.
+
+**Results (agent, unpinned).**
+
+| Check | Result |
+|---|---|
+| `ModelLiveRunnerIT`, `-Pintegration`, tinyllama, qwen2.5-3b, Phi-3.5-mini; then mistral-7b with `-Djuno.node.heap=12g` | 4 of 4 models pass tests 1 to 9. Test 9 on CUDA: prompts of 573, 560, 583 and 561 tokens; on every model all 16 greedy tokens identical across per-token, static-window and continuous-chunked prefill |
+| `smoke-long-prompt-prefill.sh --baseline-jar` (GPU; TinyLlama, Mistral 7B; both schedules; 128, 512, about 2,048) | 48 of 48 checks; greedy text identical to `ffd0ca7` on all 12 cells; static TTFT 2.7x to 4.6x lower at 128 and 512, 1.6x to 2.0x at about 2,048 ([`20261003T003033Z-tier01b-prefill-smoke`](../perf-compare/20261003T003033Z-tier01b-prefill-smoke/INDEX.md)) |
+| `smoke-long-prompt-prefill.sh --cpu --models tinyllama --lengths "128 512" --baseline-jar` | 16 of 16 checks; greedy text identical to `ffd0ca7` on all 4 cells; TTFT unchanged, as expected on CPU (512 tokens, static: 96,959 against 95,887 ms) (`cpu/` in the same directory) |
+| `compare-vision.sh --gpu`, three runs per build, alternated | latency 0.995x, decode 1.013x against `ffd0ca7`; gate (latency `<= 1.25x`, decode `>= 0.80x`) met; six captions byte-identical ([`20261003T005029Z-tier01b-close-vision`](../perf-compare/20261003T005029Z-tier01b-close-vision/INDEX.md)) |
+| `compare-lora.sh --gpu --reps 3`, per build | train 1.00x, playback 0.978x against `ffd0ca7`; gate (train `<= 1.25x`, playback `>= 0.80x`) met; every repetition 15 passes to loss 1.1797, recall true ([`20261003T014703Z-tier01b-close-lora`](../perf-compare/20261003T014703Z-tier01b-close-lora/INDEX.md)) |
+| `compare-prefill-batch.sh --gpu --n-prompt 512 --prefill-values 1,32,512`, per build | TinyLlama, single readings: 0.99x at width 1 (the decode path), 2.22x at 32, 4.00x at 512 against `ffd0ca7`; an earlier HEAD reading at 32 was 43% lower, so indicative only ([`20261003T024818Z-tier01b-close-prefill-batch`](../perf-compare/20261003T024818Z-tier01b-close-prefill-batch/INDEX.md)) |
+| `-Pgpu` ITs (`PrefillRegionGreedyIT`, `GpuAttentionDivergenceIT`, `GpuForwardPassIT`) | 10 of 10; region greedy 6 of 6 identical over 64 tokens on TinyLlama and Mistral 7B; GPU-attention first divergence unchanged from step 6 (TinyLlama 8, 13, 23; Phi-3.5-mini 37, 40; Qwen3-1.7B 20, 23, 32) |
+| `smoke-consistency.sh` (unmodified) | 54 of 54 |
+| `smoke-grammar.sh`, `smoke-tools.sh` (unmodified) | 0 failures each |
+| `smoke-gpu-residency.sh --models tinyllama...,mistral...` (unmodified; llama-1-30b left out, the region does not change decode residency) | 0 failures: region active on 8 of 8 and 11 of 11 layers, no per-request device memory growth, greedy identical on vs off; cluster pipeline and tensor answer with local mode's output and leave no node JVM |
+| `check-plan-thresholds.sh` | passes |
+| `mvn test`, eleven unit-test modules | **1,983 tests, 0 failures, 49 skipped** (as at item 3), but not in one green run. Run 1 failed one case in `node`, the device-wide memory check below, and skipped the six modules after it. Run 2 passed `node` and every module through `vision`, then failed `metrics`' `JfrMetricsExtractorJdkEventsTest.monitorContentionAndParkTimeAreSummed` ("a 120ms held monitor produced no JavaMonitorEnter event": a timing-dependent JFR test; `metrics` is untouched by this tier since step 4a), which passed 3 of 3 re-run alone; `juno-player` then 112 of 112 |
+| `mvn verify -pl juno-master` (after `mvn install -DskipTests` of HEAD) | 20 ITs, 0 failures (`ThreeNodeClusterIT` 8, `TensorParallelClusterIT` 5, in-process, unsupported architecture) |
+
+**A flaky assertion in the unit suite, raised with the owner.** The first `mvn test` run failed one case:
+`PrefillRegionHandlerParityTest.region_matches_hostPath[4]` (Qwen3-1.7B), on its last check, that free device
+memory returns to within 16 MiB of where the case started (7,888,371,712 bytes against at least 7,903,117,312).
+Parity itself held in every case. Re-run alone five times: runs 1, 2, 4 and 5 passed, run 3 failed the same
+check on a different case (Phi-3.5-mini, 9.6 MB beyond the slack). During runs 4 and 5 the device was sampled
+every 200 ms with `nvidia-smi`: the test JVM's own memory returned to the same 118 MiB (CUDA context and cuBLAS)
+after every one of eight load-and-release cycles, while the memory held by the desktop's graphics processes
+(Xorg, the shell, two browser processes, a system monitor: none of them Juno) moved between 366 and 454 MiB at
+those same points. The check reads device-wide free memory (`cudaMemGetInfo`), so on this host, whose GTX 1080
+also drives the display, it can fail with no leak; nothing is leaking. Not changed, because widening the slack
+would weaken the check: the options are per-process accounting (NVML's running-process query, not bound
+today), taking the free reading on an idle device (no display, as `smoke-gpu-residency.sh` already asks), or
+reading the process's own allocations from the backends' accounting. The owner decides.
+
+**Closing cross-surface matrix.**
+
+| # | Surface | Resolution | Evidence |
+|---|---|---|---|
+| 1 | CPU inference | PASS (correctness; CPU prefill speed is Tier 10's) | the region is CUDA-only; CPU leg of the prefill smoke (greedy identical to `ffd0ca7`, TTFT unchanged); `smoke-consistency.sh` CPU legs; the unit suites |
+| 2 | CUDA GPU inference | PASS | `ModelLiveRunnerIT` test 9 on four models; prefill smoke; `-Pgpu` ITs; throughput read by the owner's pinned closing sweeps |
+| 3 | ROCm GPU inference | NEEDS-AMD-HARDWARE | the region, the GPU attention kernel and `sgemmInto`'s fast path are CUDA-only; ROCm takes `MatVec.sgemmInto`'s default (`MatVecSgemmIntoTest`) and announces its scalar attention (`GpuAttentionSupportTest`); the port is Tier 10 scope item 8 |
+| 4 | Static schedule | PASS | test 9 (static window), prefill smoke (`static` cells) |
+| 5 | Continuous schedule | PASS | test 9 (32-token chunks through `RequestScheduler`), prefill smoke (`continuous` cells); its fixed 32 has a measured reason, and the load-dependent chunk is Tier 07 item 6 |
+| 6 | Single-node local mode | PASS | prefill smoke and every smoke above run `./juno local` |
+| 7 | Pipeline-parallel cluster | correct, not reached: per-token prefill, Tier 09 item 5 | `ModelLiveRunnerIT` tests 1 to 6 on four models; residency smoke's cluster leg; `ThreeNodeClusterIT` |
+| 8 | Tensor-parallel cluster | correct, not reached: per-token prefill, Tier 09 item 5 | `ModelLiveRunnerIT` tests 7 and 8 on four models; residency smoke's cluster leg; `TensorParallelClusterIT` |
+| 9 | LoRA training | PASS (unchanged; scalar attention kept and announced) | `compare-lora.sh` train 1.00x, same loss; `LoraGpuAttentionNoticeTest` |
+| 10 | LoRA playback | PASS (unchanged) | `compare-lora.sh` playback 0.978x, recall true; `smoke-tools.sh` starts a `--lora-play` server (its tools request fails closed, as before) |
+| 11 | Vision | PASS (unchanged) | `compare-vision.sh` 0.995x latency, 1.013x decode, captions identical |
+| 12 | OpenAI REST surface | PASS | prefill smoke over `/v1/chat/completions`, streamed and unstreamed, TTFT recorded; `smoke-grammar.sh`, `smoke-tools.sh` |
+| 13 | Native REST surface | PASS | `smoke-consistency.sh` `/v1/inference` rounds on CPU and GPU |
+| 14 | CLI | PASS | `--prefill-batch` per-surface defaults documented (item 3); cluster launchers accept it |
+| 15 | JVM embedding facade | PASS (the README marks it N/A for this tier, but item 3 changed its default) | `PrefillChunkDefaultsTest` `embedded_*` cases; the facade's pipeline shape measured at 2.49x in item 3 |
+
+**Owed to the owner (pinned; needs prompt-free sudo):** `bash dist/tier01b-close/run-gate.sh` (about 1.5 to
+2 hours). Part A is the decode criterion's same-hour A/B: `ffd0ca7` against HEAD, alternated three times,
+`n_prompt=512`, all four sweep models, generation `>= 0.95x` on each. Part B takes the closing sweeps with this
+tree's jar (the script refuses if it is not the candidate) at `n_prompt` 128 and 512, published under
+`docs/perf-compare/`; the 512 sweep scores the tier's threshold (`>= 0.10x` on tinyllama, qwen2.5-3b and
+mistral-7b, `>= 0.08x` on Phi-3.5-mini), and the pair gives Tier 02 its 512-over-128 reading. Then
+`docs/performance.md` gets the closing figures, and the README's reference column moves if the owner makes
+the closing sweep the new reference.
+
+**Closing gates, owner run 2026-10-02 23:02 to 23:58 -0500 (pinned, `dist/tier01b-close/run-gate.sh`).**
+- *Part A, decode no-regression:* six runs alternated, all pinned, every row scorable, GC pause at most 30 ms.
+  Generation B/A 1.014 (TinyLlama), 0.994 (Qwen2.5-3B), 1.361 (Phi-3.5-mini), 1.005 (Mistral 7B): **met**.
+  Prefill B/A 4.07, 4.58, 13.91 and 2.96 across the whole tier. Published as
+  [`20261003T040258Z-tier01b-close-decode-ab`](../perf-compare/20261003T040258Z-tier01b-close-decode-ab/INDEX.md).
+- *Part B, closing sweeps:* [`20261003T042440Z`](../perf-compare/20261003T042440Z/INDEX.md) (`n_prompt=128`)
+  and [`20261003T044014Z`](../perf-compare/20261003T044014Z/INDEX.md) (512), the tree's jar `66f02ee7c2908f78`
+  (the candidate), every row scorable at its `n_prompt`.
+
+| Model | pp ratio 512 (step 2) | pp ratio 512 (closing) | Threshold | pp ratio 128 (closing) | 512 over 128 | tg ratio 128 |
+|---|---|---|---|---|---|---|
+| tinyllama | 0.066x | **0.254x** | >= 0.10x, met | 0.299x | 0.851 | 0.374x |
+| qwen2.5-3b | 0.064x | **0.281x** | >= 0.10x, met | 0.285x | 0.984 | 0.420x |
+| Phi-3.5-mini | 0.011x | **0.146x** | >= 0.08x, met | 0.173x | 0.845 | 0.535x |
+| mistral-7b | 0.098x | **0.285x** | >= 0.10x, met | 0.293x | 0.973 | 0.611x |
+
+Read against the program target (README): the 01B milestone rows are met and marked retired. Tier 01C's row
+(`>= 0.20x` on every model at 512) is met on three models and binds on Phi-3.5-mini (0.146x). The end-of-plan
+GPU pp target (`>= 0.25x`) is met on three models at 512, not on Phi-3.5-mini; GPU tg (`>= 0.70x`) is met on
+none (0.535x and 0.611x on its two rows). The 512-over-128 row moved to Tier 02 fell from 0.911 to 0.845
+(binding: Phi-3.5-mini), as the step 5 decomposition projected; Tier 02 reads from here. These sweeps
+are the new GPU reference column in the README, and the two 2026-09-30 sweeps are marked superseded.
+
 ### Out-of-tier changes (recorded per execution rule 9)
 
 | Change | What it touched | Measurement boundary? |
 |---|---|---|
+| Working tree, 2026-10-03 (owner decisions during step 8): `./juno test` restored, forked test-node heap derived | `ModelLiveChecks` and `ModelLiveRunner` (new, `juno-master`); `run.sh`/`run.bat test` run `ModelLiveRunner` from `juno-master.jar` instead of the jar's coordinator main class; `ModelLiveRunnerIT` calls the shared checks; `NodeHeapSize` (new, `juno-player`) sizes `ClusterHarness`'s forked nodes from the model file when `juno.node.heap` is unset (was a fixed 4 GB). Tests: `ModelLiveRunnerTest` 8, `NodeHeapSizeTest` 6; live: `./juno test` TinyLlama 9 of 9, Mistral 7B IT 9 of 9 without a heap flag. | **No.** Test tooling and the test launcher; nothing in the forward pass, MatVec, KV, batching or quantization. Built after the closing gates ran, so no published reading uses it. |
 | Working tree, 2026-10-01 (scope item 8, carried here from Tier 02 item 7): Phi-3 LongRoPE factor selection | `Phi3RopeConfig.selectFactors()` returns the short factors when the file has them (it chose the long ones whenever the trained context exceeded the original, which is every Phi-3.5 request); `requirePosition` fails closed at `original_context_length` (4096 on Phi-3.5-mini); called from `Phi3Rope.buildCache`, so every CPU, GPU, batched-prefill and LoRA rotation. Tests: `Phi3RopeFactorPolicyTest`, `Phi3EndOfTurnLiveTest` (P(`<\|end\|>`) 0.5016 before, 0.9924 after). | **For Phi-3.5 output, yes; for throughput, no.** Rotation angles change, work does not, so every throughput reading stands. Phi-3.5 greedy output changes: step 3's `GpuAttentionDivergenceIT` Phi-3.5-mini row (4 of 6 identical, earliest divergence 26) was taken on the long factors; re-taken on this build at 4 of 6, earliest 37 (step 3a record). Any later Phi-3.5 divergence or greedy-parity reading is taken after this change. A Phi-3.5 sequence longer than 4096 tokens now fails with an error; no published run uses one (the sweeps prefill 128 and 512). |
-| Working tree, 2026-09-28: architecture checked first at every entry point | `ModelFileGate.requireLoadable` (new, `node`) reads `general.architecture` and refuses an unverified one with `UnsupportedModelException` (new, an `IOException`, now also what `LlamaFamilyArchitectures` throws) before the config or tokenizer is read; called once in `ConsoleMain.main` before the mode dispatch (covers local, cluster, lora and their JFR variants), and in `CoordinatorMain`, `JunoPlayer.build` and `LoraTrainer.open`. The tokenizer's refusal becomes `UnsupportedPreTokenizerException` (new, still an `IllegalArgumentException`). `ConsoleMain` prints either as one `ERROR:` line and exits 1; cluster mode now refuses before forking nodes. Tests first: `ModelFileGateTest` (4 cases) and `BpePreTokenizerTest` tightened to the new type, both failing to compile before the change and passing after; `smoke-tier00-consistency.sh`, unmodified, 54 of 54 checks with the GPU legs (was 33 of 36 without them).; `mvn test` on the eleven unit-test modules passes (25:20 min), and `mvn verify -pl juno-master` passes, including `ThreeNodeClusterIT`, `TensorParallelClusterIT` and the unsupported-architecture IT. | **No.** One metadata read per model load, before any weights; nothing in the forward pass, MatVec, KV, batching or quantization. No published baseline is affected. |
+| Working tree, 2026-09-28: architecture checked first at every entry point | `ModelFileGate.requireLoadable` (new, `node`) reads `general.architecture` and refuses an unverified one with `UnsupportedModelException` (new, an `IOException`, now also what `LlamaFamilyArchitectures` throws) before the config or tokenizer is read; called once in `ConsoleMain.main` before the mode dispatch (covers local, cluster, lora and their JFR variants), and in `CoordinatorMain`, `JunoPlayer.build` and `LoraTrainer.open`. The tokenizer's refusal becomes `UnsupportedPreTokenizerException` (new, still an `IllegalArgumentException`). `ConsoleMain` prints either as one `ERROR:` line and exits 1; cluster mode now refuses before forking nodes. Tests first: `ModelFileGateTest` (4 cases) and `BpePreTokenizerTest` tightened to the new type, both failing to compile before the change and passing after; `smoke-consistency.sh`, unmodified, 54 of 54 checks with the GPU legs (was 33 of 36 without them).; `mvn test` on the eleven unit-test modules passes (25:20 min), and `mvn verify -pl juno-master` passes, including `ThreeNodeClusterIT`, `TensorParallelClusterIT` and the unsupported-architecture IT. | **No.** One metadata read per model load, before any weights; nothing in the forward pass, MatVec, KV, batching or quantization. No published baseline is affected. |
 | Working tree, 2026-09-27: `compare-llama-cpp.sh` heap and clock pinning | Juno launched with `-Xms` equal to `-Xmx` (was `-Xms512m`); optional `--pin-clocks`. | **Yes, for Juno readings from this harness**: a fixed-size heap changes when and how often G1 collects, and a pinned run runs at different clocks from an unpinned one (turbo off lowers absolute throughput for both engines). No published reference is invalidated by the code change itself, because none has been taken with it; the **step 2 re-baseline is the first run on this side of it** and every gate in this tier reads against that run, so no gate straddles the boundary. Do not compare a pinned run's absolute t/s with an unpinned run's. |
 
 ## Exit criteria
@@ -2498,10 +2649,26 @@ behaviour change is the facade's default, and its reading is the 2.49x above.
       **Moved to [Tier 02](TIER-02-attention-long-context.md)** (owner decision, 2026-10-01; step 5
       record). Written without a checkbox, so it counts as neither met nor open here. The closing sweeps
       still publish the reading for Tier 02.
-- [ ] Threshold above met, or the tier is explicitly marked partial-complete with the dominant term
+- [x] Threshold above met, or the tier is explicitly marked partial-complete with the dominant term
       named and assigned to a successor tier (not silently marked complete).
-- [ ] Decode (tg) and vision both verified not regressed, with published numbers.
-- [ ] Cross-surface checklist fully resolved.
-- [ ] Docs (`docs/howto.md` for any `--prefill-batch` default change, `docs/performance.md`,
+      *Checked 2026-10-03, owner's pinned closing sweep at `n_prompt=512`
+      ([`docs/perf-compare/20261003T044014Z`](../perf-compare/20261003T044014Z/INDEX.md)): pp ratio 0.254x
+      (tinyllama), 0.281x (qwen2.5-3b), 0.285x (mistral-7b) against `>= 0.10x`; 0.146x (Phi-3.5-mini) against
+      `>= 0.08x`. Every row scorable, every prefill 512 of 512.*
+- [x] Decode (tg) and vision both verified not regressed, with published numbers.
+      *Checked 2026-10-03. Decode: owner's pinned same-hour A/B against the step-2 build, median of three,
+      generation 1.014x, 0.994x, 1.361x and 1.005x against `>= 0.95x`
+      ([`docs/perf-compare/20261003T040258Z-tier01b-close-decode-ab`](../perf-compare/20261003T040258Z-tier01b-close-decode-ab/INDEX.md)).
+      Vision: latency 0.995x against `<= 1.25x`, decode 1.013x against `>= 0.80x`, captions identical
+      ([`docs/perf-compare/20261003T005029Z-tier01b-close-vision`](../perf-compare/20261003T005029Z-tier01b-close-vision/INDEX.md)).*
+- [x] Cross-surface checklist fully resolved.
+      *Checked 2026-10-03: every row PASS, NEEDS-AMD-HARDWARE (row 3) or "correct, not reached" with an owner
+      (rows 7 and 8, Tier 09 item 5), each with its evidence, in the step 8 record's closing matrix.*
+- [x] Docs (`docs/howto.md` for any `--prefill-batch` default change, `docs/performance.md`,
       `docs/agent-arch.txt`) updated, Juno-native language only.
-- [ ] `CHANGELOG.md` entry added.
+      *2026-10-03: `docs/howto.md` and `docs/agent-arch.txt` are current through item 3 and step 8 (the
+      long-prompt smoke and the IT's check documented). `docs/performance.md` carries the closing figures
+      ("Where prefill stands after this work"). Checked 2026-10-03.*
+- [x] `CHANGELOG.md` entry added.
+      *Checked 2026-10-03: one entry per change of this tier (Sessions 98 to 106, the last for step 8). The
+      closing sweep's figures are appended to it when taken.*

@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20260930T141026Z (gpu)
 
+> **Superseded as the GPU reference on 2026-10-03** by [`20261003T044014Z`](../20261003T044014Z/INDEX.md), the pinned closing sweep of the prefill-throughput work. Kept as the before-reading of that work.
+
 > **GPU reference from 2026-09-30 at `n_prompt=512`**, the first parity-corrected 512-token sweep (Tier 01B step 2). Same build and method as [`20260930T135225Z`](../20260930T135225Z/INDEX.md) (`n_prompt=128`). Staged bytes for the same shape are in [`20260930T144658Z`](../20260930T144658Z/INDEX.md).
 
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |
