@@ -120,14 +120,27 @@ tier can fail on it and the final scorecard in Tier 14 can only report a directi
 four-model sweep (`tinyllama-1.1b`, `qwen2.5-3b`, `Phi-3.5-mini`, `mistral-7b`, all Q4_K_M) on the
 `docs/perf-compare/README.md` baseline host, under the benchmark-parity preconditions below:
 
-| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) | Reference 2026-09-27, late | Reference 2026-09-30 (pinned GPU re-baseline) | Reference 2026-10-01 (pinned CPU) | **Current reference** (2026-10-03: Tier 01B closing sweeps, pinned) |
+| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) | Reference 2026-09-27, late | Reference 2026-09-30 (pinned GPU re-baseline) | Reference 2026-10-01 (pinned CPU) | Reference 2026-10-03 (Tier 01B closing sweeps, pinned) | **Current reference** (2026-10-04: Tier 01C closing sweeps, pinned) |
 |---|---|---|---|---|---|---|---|---|
-| GPU tg, Phi-3.5-mini | >= **0.70x** (was 0.50x, met 2026-09-30) | 0.330x | 0.423x | 0.415x (0.414x tuned) | 0.416x (0.417x tuned) | 0.394x (0.396x tuned) | 0.394x (0.396x tuned; GPU unchanged) | **0.535x** (0.537x tuned) |
-| GPU tg, mistral-7b | >= **0.70x** (was 0.60x, met 2026-09-27) | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) | 0.639x (0.643x tuned) | 0.610x (0.610x tuned) | 0.610x (0.610x tuned) | **0.611x** (0.607x tuned) |
-| GPU pp, every sweep model | >= **0.25x** (was 0.15x) | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | 0.040x to 0.101x, median 0.064x (Phi-3.5-mini 0.040x binding) | 0.037x to 0.101x at `n_prompt=128`, median 0.067x; 0.011x to 0.098x at 512 (Phi-3.5-mini binding at both) | 0.037x to 0.101x at `n_prompt=128`; 0.011x to 0.098x at 512 (GPU unchanged) | **0.173x to 0.299x** at `n_prompt=128`, median 0.289x; **0.146x to 0.285x** at 512, median 0.268x (Phi-3.5-mini binding at both) |
-| CPU tg, every sweep model | >= **0.25x** (placeholder; Tier 10 restates it against the bandwidth roofline, never lower) | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | 0.090x to 0.135x (CPU not re-measured) | 0.092x to 0.121x (mistral-7b binding; pp 0.049x to 0.103x, Phi-3.5-mini binding) | **0.092x to 0.121x** (CPU not re-measured) |
+| GPU tg, Phi-3.5-mini | >= **0.70x** (was 0.50x, met 2026-09-30) | 0.330x | 0.423x | 0.415x (0.414x tuned) | 0.416x (0.417x tuned) | 0.394x (0.396x tuned) | 0.394x (0.396x tuned; GPU unchanged) | 0.535x (0.537x tuned) | **0.545x** (0.547x tuned) |
+| GPU tg, mistral-7b | >= **0.70x** (was 0.60x, met 2026-09-27) | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) | 0.639x (0.643x tuned) | 0.610x (0.610x tuned) | 0.610x (0.610x tuned) | 0.611x (0.607x tuned) | **0.627x** (0.619x tuned) |
+| GPU pp, every sweep model | >= **0.25x** (was 0.15x) | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | 0.040x to 0.101x, median 0.064x (Phi-3.5-mini 0.040x binding) | 0.037x to 0.101x at `n_prompt=128`, median 0.067x; 0.011x to 0.098x at 512 (Phi-3.5-mini binding at both) | 0.037x to 0.101x at `n_prompt=128`; 0.011x to 0.098x at 512 (GPU unchanged) | 0.173x to 0.299x at `n_prompt=128`, median 0.289x; 0.146x to 0.285x at 512, median 0.268x (Phi-3.5-mini binding at both) | **0.303x to 0.729x** at `n_prompt=128`, median 0.570x; **0.226x to 0.468x** at 512, median 0.373x (Phi-3.5-mini binding at both); **0.099x to 0.180x** at 2048, median 0.138x (Phi-3.5-mini binding) |
+| CPU tg, every sweep model | >= **0.25x** (placeholder; Tier 10 restates it against the bandwidth roofline, never lower) | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | 0.090x to 0.135x (CPU not re-measured) | 0.092x to 0.121x (mistral-7b binding; pp 0.049x to 0.103x, Phi-3.5-mini binding) | 0.092x to 0.121x (CPU not re-measured) | **0.092x to 0.121x** (CPU not re-measured) |
 
-**Score every later tier against the right-most column.** Its GPU rows are Tier 01B's closing sweeps
+**Score every later tier against the right-most column.** Its GPU rows are Tier 01C's closing sweeps
+(2026-10-04, owner run, clocks pinned, HEAD `59c53cc` plus Tier 01C's two out-of-tier fixes, jar
+`5ab4c78c505a4cef`): `docs/perf-compare/20261004T113210Z/` (`n_prompt=128`) and `20261004T114812Z/`
+(`n_prompt=512`), same method and harness as the column to its left, so ratios compare across the two
+directly; every row scorable, every prefill at its `n_prompt`. Its CPU row is unchanged (no CPU path
+changed). Its 2048 figures are from the 2048 re-run on the same code (jar `a90122b2855bb826`, which adds two
+fixes that do not touch throughput: an out-of-heap request fails instead of hanging, and prompt encoding
+is recorded so the harness's span check can subtract it): `docs/perf-compare/20261004T220015Z/`
+(TinyLlama, Qwen2.5-3B, Mistral 7B at their fixed heaps) and `20261004T222758Z/` (Phi-3.5-mini at an
+explicit 8 GiB heap, since its 2048-token live set of about 6.1 GB does not fit the fixed 6 GiB). The
+interrupted first attempt, `20261004T120622Z-partial`, is superseded by them. Made the reference by
+owner decision (Tier 01C decision 6).
+
+**The column to its left** was the reference until then. Its GPU rows are Tier 01B's closing sweeps
 (2026-10-03, owner run, clocks pinned, HEAD `1ac490a`): `docs/perf-compare/20261003T042440Z/`
 (`n_prompt=128`) and `20261003T044014Z/` (`n_prompt=512`), same method and harness as the 2026-09-30 GPU
 re-baseline, so ratios compare across the two directly; every row scorable, every prefill at its
@@ -200,9 +213,9 @@ ask for more than its reference reading. For an "every model" scope the referenc
 |---|---|---|---|---|---|
 | 01B | GPU pp ratio, `n_prompt=512` | every sweep model except Phi-3.5-mini | >= 0.10x | 0.254x (tinyllama, binding; qwen2.5-3b 0.281x, mistral-7b 0.285x; Tier 01B closing sweep `20261003T044014Z`; was 0.064x at the step 2 re-baseline) | retired: met by Tier 01B |
 | 01B | GPU pp ratio, `n_prompt=512` | Phi-3.5-mini | >= 0.08x | 0.146x (Tier 01B closing sweep `20261003T044014Z`; was 0.011x at the step 2 re-baseline; threshold kept by owner decision, see below) | retired: met by Tier 01B |
-| 01C | GPU pp ratio, `n_prompt=512` | every sweep model | >= 0.20x | 0.146x (Phi-3.5-mini, Tier 01B closing sweep `20261003T044014Z`; the others 0.254x to 0.285x; was 0.011x at the step 2 re-baseline) | active |
-| 02 | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 0.845 (Phi-3.5-mini, Tier 01B closing sweeps `20261003T042440Z`/`20261003T044014Z`; tinyllama 0.851, mistral-7b 0.973, qwen2.5-3b 0.984; was 0.911 after Tier 01B item 0, as the step 5 decomposition projected) | active |
-| 02 | GPU pp ratio at 2048 over ratio at 512 | every sweep model | >= 0.90 | unmeasured (no parity-corrected `n_prompt=2048` reading exists; Tier 01C's closing sweep takes the first) | active |
+| 01C | GPU pp ratio, `n_prompt=512` | every sweep model | >= 0.20x | 0.226x (Phi-3.5-mini, binding; tinyllama 0.317x, qwen2.5-3b 0.429x, mistral-7b 0.468x; Tier 01C closing sweep `20261004T114812Z`; was 0.146x at Tier 01B's close) | retired: met by Tier 01C |
+| 02 | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 0.606 (tinyllama, binding; mistral-7b 0.642, qwen2.5-3b 0.697, Phi-3.5-mini 0.743; Tier 01C closing sweeps `20261004T113210Z`/`20261004T114812Z`; was 0.845 at Tier 01B's close: the packed matmul removed fixed per-token cost, so attention's share of a long window grew) | active |
+| 02 | GPU pp ratio at 2048 over ratio at 512 | every sweep model | >= 0.90 | 0.329 (mistral-7b, binding; tinyllama 0.381, qwen2.5-3b 0.420, Phi-3.5-mini 0.441; Tier 01C's 2048 sweeps `20261004T220015Z`/`20261004T222758Z` over its 512 sweep `20261004T114812Z`; Phi-3.5-mini at an explicit 8 GiB heap, see Tier 01C's record) | active |
 | 04 | GPU tg ratio | Phi-3.5-mini | >= 0.40x | 0.416x | retired: met on arrival |
 | 10 | CPU tg ratio | every sweep model | >= 0.20x | 0.092x (mistral-7b, `20261001T180241Z`; was 0.090x) | active |
 | 10 | CPU pp ratio, `n_prompt=128` | every sweep model | >= 0.10x | 0.049x (Phi-3.5-mini, `20261001T180241Z`; the others 0.075x to 0.103x; was 0.048x at `20260927T094414Z`) | active |

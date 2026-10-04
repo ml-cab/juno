@@ -233,7 +233,7 @@ public final class GenerationLoop {
 			// model saw foreign tokens and generated garbage.
 			ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(req.modelId());
 			String prompt = formatter.format(req.messages());
-			int[] promptIds = tokenizer.encode(prompt);
+			int[] promptIds = PromptEncoder.encode(tokenizer, prompt, req.requestId());
 
 			// No prefix-cache lookup on this path. Each batched request's pipeline KV is
 			// keyed by its own request id and evicted when it finishes, so a trie hit
@@ -411,7 +411,7 @@ public final class GenerationLoop {
 		// modelId is the canonical type key set by the caller ("phi3", "tinyllama", …).
 		ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(request.modelId());
 		String prompt = formatter.format(request.messages());
-		int[] promptIds = tokenizer.encode(prompt);
+		int[] promptIds = PromptEncoder.encode(tokenizer, prompt, request.requestId());
 
 		// ── Step 2: Determine prefill start position ──────────────────────────
 		// For session requests: consult the prefix cache. The session key is stable

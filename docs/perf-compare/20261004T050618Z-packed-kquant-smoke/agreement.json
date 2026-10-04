@@ -1,0 +1,74 @@
+[
+  {
+    "prefix": 24,
+    "positionwise": 33,
+    "of": 512,
+    "first_difference": 24,
+    "model": "tinyllama",
+    "schedule": "static",
+    "agreement": 0.0469
+  },
+  {
+    "prefix": 24,
+    "positionwise": 32,
+    "of": 512,
+    "first_difference": 24,
+    "model": "tinyllama",
+    "schedule": "continuous",
+    "agreement": 0.0469
+  },
+  {
+    "prefix": 0,
+    "positionwise": 4,
+    "of": 512,
+    "first_difference": 0,
+    "model": "qwen",
+    "schedule": "static",
+    "agreement": 0.0000
+  },
+  {
+    "prefix": 0,
+    "positionwise": 16,
+    "of": 512,
+    "first_difference": 0,
+    "model": "qwen",
+    "schedule": "continuous",
+    "agreement": 0.0000
+  },
+  {
+    "prefix": 66,
+    "positionwise": 68,
+    "of": 512,
+    "first_difference": 66,
+    "model": "phi35",
+    "schedule": "static",
+    "agreement": 0.1289
+  },
+  {
+    "prefix": 66,
+    "positionwise": 70,
+    "of": 512,
+    "first_difference": 66,
+    "model": "phi35",
+    "schedule": "continuous",
+    "agreement": 0.1289
+  },
+  {
+    "prefix": 68,
+    "positionwise": 74,
+    "of": 512,
+    "first_difference": 68,
+    "model": "mistral",
+    "schedule": "static",
+    "agreement": 0.1328
+  },
+  {
+    "prefix": 99,
+    "positionwise": 101,
+    "of": 512,
+    "first_difference": 99,
+    "model": "mistral",
+    "schedule": "continuous",
+    "agreement": 0.1934
+  }
+]

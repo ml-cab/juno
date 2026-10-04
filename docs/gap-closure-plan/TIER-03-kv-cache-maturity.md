@@ -50,6 +50,15 @@ that touches KV.
    the earlier three-tier-to-two-tier simplification (`CHANGELOG.md:1758`) — this time scoped
    narrowly (explicit save/restore commands, not always-on disk IO) so it doesn't reintroduce the
    complexity that motivated removing the old design.
+6. **Host KV footprint: exact growth and real FP16 storage** *(added 2026-10-04 from Tier 01C step 6)*.
+   `DenseKvTensor` doubles its capacity, and its `f16` element type stores 32-bit floats. A 2,048-token
+   prompt plus one generated token doubles every layer's K and V to 4,096 positions. On Phi-3.5-mini (32
+   KV heads) that is 3.2 GB of host KV where 1.6 GB holds the request, and 0.8 GB with real FP16. With
+   about 2.2 GB of retained host weights, it exhausted the comparison harness's fixed 6 GiB heap at 2048
+   tokens (Tier 01C record; the sweep used an explicit 8 GiB for that model). Grow toward the known
+   request length (prompt plus `max_tokens`) instead of doubling past it, store `f16` as FP16 or rename
+   the type for what it is, and measure Phi-3.5-mini's live heap at 2048 tokens before and after. Real
+   FP16 storage changes KV rounding, so it carries a greedy-parity check.
 
 ### Out of scope
 

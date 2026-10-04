@@ -996,6 +996,18 @@ on the GPU with a lower `--gpu-layers`, and a model far larger than the card wil
 Treat it as a prompt to set `--gpu-layers` explicitly, or to pass `--gpu-attention off`, or to use a
 smaller model or quantization.
 
+The small working buffers a single-token matmul needs are allocated with the weights, during the
+upload, so generation itself allocates nothing for them. This matters when several Juno processes share
+one GPU, as the nodes of a tensor-parallel cluster on one machine do: each process stops uploading when
+the memory left on the device reaches its reserve, so together they leave one reserve between them, not
+one each, and a buffer allocated later could find nothing left. If a resident-weight matmul still runs
+out of device memory, that matmul runs on the CPU from the quantized weights instead of failing the
+request, and the log says so once:
+
+```
+Llama: out of device memory in a resident-weight matmul - that matmul runs on the CPU from the quantized weights. Lower --gpu-layers to keep it on the GPU.
+```
+
 ### Prefill windows on the device
 
 On a CUDA backend, a prefill window of more than eight positions runs each transformer layer as one

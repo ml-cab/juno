@@ -48,6 +48,13 @@ static __device__ __forceinline__ float warp_max(float v) {
  * q4k_gemv.cu's reduce_and_store (single writer to global y[]), both the
  * softmax max and the exp-sum computed here are needed by every thread in
  * the pass that follows.
+ *
+ * The kernel reduces twice through the one warpVals array (max, then sum), so
+ * every thread must have read the result before any warp writes the array
+ * again: the closing barrier. Without it a warp that finishes the next pass
+ * early overwrites warpVals[0] while a slower warp has yet to read the max,
+ * which then scales that warp's share of the softmax by the wrong value and
+ * makes the output depend on warp timing.
  */
 static __device__ __forceinline__ float block_reduce(float v, bool isMax) {
     v = isMax ? warp_max(v) : warp_sum(v);
@@ -64,7 +71,9 @@ static __device__ __forceinline__ float block_reduce(float v, bool isMax) {
             warpVals[0] = w;
     }
     __syncthreads();
-    return warpVals[0];
+    const float result = warpVals[0];
+    __syncthreads();
+    return result;
 }
 
 extern "C" __global__ void __launch_bounds__(GQA_THREADS)

@@ -339,8 +339,9 @@ $L__BB0_22:
 $L__BB0_24:
 	setp.ge.s32 	%p27, %r218, %r3;
 	bar.sync 	0;
-	mov.f32 	%f229, 0f00000000;
 	ld.shared.f32 	%f25, [_ZZN47_INTERNAL_7f4de5af_16_gqa_attention_cu_f474960112block_reduceEfbE8warpVals];
+	bar.sync 	0;
+	mov.f32 	%f229, 0f00000000;
 	@%p27 bra 	$L__BB0_31;
 
 	mov.u32 	%r28, %ntid.x;
@@ -561,6 +562,7 @@ $L__BB0_36:
 $L__BB0_38:
 	bar.sync 	0;
 	ld.shared.f32 	%f192, [_ZZN47_INTERNAL_7f4de5af_16_gqa_attention_cu_f474960112block_reduceEfbE8warpVals];
+	bar.sync 	0;
 	rcp.rn.f32 	%f37, %f192;
 	bar.sync 	0;
 	setp.ge.s32 	%p46, %r218, %r65;

@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20261003T044014Z (gpu)
 
+> **Superseded as the GPU reference on 2026-10-04** by [`20261004T114812Z`](../20261004T114812Z/INDEX.md), the pinned closing sweep of the packed K-quant prefill work. Kept as the before-reading of that work.
+
 > **GPU reference from 2026-10-03 at `n_prompt=512`**: the closing sweep of the prefill-throughput work, owner run with pinned clocks, HEAD `1ac490a` (jar `66f02ee7c2908f78`; the tree was dirty only with test, script and doc changes, none in the jar). Same method as the 2026-09-30 references ([`20260930T135225Z`](../20260930T135225Z/INDEX.md), [`20260930T141026Z`](../20260930T141026Z/INDEX.md)), which it supersedes as the GPU reference. Paired with [`20261003T042440Z`](../20261003T042440Z/INDEX.md).
 
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |

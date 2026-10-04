@@ -1,0 +1,195 @@
+{
+ "part_a": {
+  "prefix-1": {
+   "jar": "425285a3daef839e",
+   "clock_pinned": true,
+   "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+    "prompt_eval_tps": 1076.112893254948,
+    "token_gen_tps": 54.83457410580048,
+    "prompt_tokens": 512
+   },
+   "qwen2.5-3b-instruct-q4_k_m": {
+    "prompt_eval_tps": 551.7851191056362,
+    "token_gen_tps": 25.02472441794965,
+    "prompt_tokens": 512
+   },
+   "Phi-3.5-mini-instruct-Q4_K_M": {
+    "prompt_eval_tps": 216.51128058722358,
+    "token_gen_tps": 26.422096148364762,
+    "prompt_tokens": 512
+   },
+   "mistral-7b-instruct-v0.1-q4_k_m": {
+    "prompt_eval_tps": 279.0647212580945,
+    "token_gen_tps": 18.391073815540896,
+    "prompt_tokens": 512
+   }
+  },
+  "prefix-2": {
+   "jar": "425285a3daef839e",
+   "clock_pinned": true,
+   "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+    "prompt_eval_tps": 1043.1652786870443,
+    "token_gen_tps": 54.53775214153477,
+    "prompt_tokens": 512
+   },
+   "qwen2.5-3b-instruct-q4_k_m": {
+    "prompt_eval_tps": 534.9615758205995,
+    "token_gen_tps": 24.221480093733646,
+    "prompt_tokens": 512
+   },
+   "Phi-3.5-mini-instruct-Q4_K_M": {
+    "prompt_eval_tps": 214.07888570949873,
+    "token_gen_tps": 25.710345367414803,
+    "prompt_tokens": 512
+   },
+   "mistral-7b-instruct-v0.1-q4_k_m": {
+    "prompt_eval_tps": 260.47933032945684,
+    "token_gen_tps": 18.42973851656909,
+    "prompt_tokens": 512
+   }
+  },
+  "prefix-3": {
+   "jar": "425285a3daef839e",
+   "clock_pinned": true,
+   "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+    "prompt_eval_tps": 1028.0908475047625,
+    "token_gen_tps": 54.67631087875635,
+    "prompt_tokens": 512
+   },
+   "qwen2.5-3b-instruct-q4_k_m": {
+    "prompt_eval_tps": 520.7486285131349,
+    "token_gen_tps": 25.10021248067184,
+    "prompt_tokens": 512
+   },
+   "Phi-3.5-mini-instruct-Q4_K_M": {
+    "prompt_eval_tps": 214.18622224560553,
+    "token_gen_tps": 26.248644049903945,
+    "prompt_tokens": 512
+   },
+   "mistral-7b-instruct-v0.1-q4_k_m": {
+    "prompt_eval_tps": 250.75499746273897,
+    "token_gen_tps": 18.32212531663184,
+    "prompt_tokens": 512
+   }
+  },
+  "candidate-1": {
+   "jar": "5ab4c78c505a4cef",
+   "clock_pinned": true,
+   "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+    "prompt_eval_tps": 1060.0219851044137,
+    "token_gen_tps": 55.21825994347022,
+    "prompt_tokens": 512
+   },
+   "qwen2.5-3b-instruct-q4_k_m": {
+    "prompt_eval_tps": 536.8641771799422,
+    "token_gen_tps": 23.8284428307631,
+    "prompt_tokens": 512
+   },
+   "Phi-3.5-mini-instruct-Q4_K_M": {
+    "prompt_eval_tps": 215.97248269626144,
+    "token_gen_tps": 25.868796058123202,
+    "prompt_tokens": 512
+   },
+   "mistral-7b-instruct-v0.1-q4_k_m": {
+    "prompt_eval_tps": 270.8871999959642,
+    "token_gen_tps": 18.418395550062915,
+    "prompt_tokens": 512
+   }
+  },
+  "candidate-2": {
+   "jar": "5ab4c78c505a4cef",
+   "clock_pinned": true,
+   "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+    "prompt_eval_tps": 1038.8507411759745,
+    "token_gen_tps": 55.018279419296576,
+    "prompt_tokens": 512
+   },
+   "qwen2.5-3b-instruct-q4_k_m": {
+    "prompt_eval_tps": 527.0556161634629,
+    "token_gen_tps": 23.294292832558835,
+    "prompt_tokens": 512
+   },
+   "Phi-3.5-mini-instruct-Q4_K_M": {
+    "prompt_eval_tps": 212.92015662383432,
+    "token_gen_tps": 26.413925853577695,
+    "prompt_tokens": 512
+   },
+   "mistral-7b-instruct-v0.1-q4_k_m": {
+    "prompt_eval_tps": 253.21638343433295,
+    "token_gen_tps": 18.325100660171632,
+    "prompt_tokens": 512
+   }
+  },
+  "candidate-3": {
+   "jar": "5ab4c78c505a4cef",
+   "clock_pinned": true,
+   "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+    "prompt_eval_tps": 1034.785061793534,
+    "token_gen_tps": 54.551641088994664,
+    "prompt_tokens": 512
+   },
+   "qwen2.5-3b-instruct-q4_k_m": {
+    "prompt_eval_tps": 512.1978927778536,
+    "token_gen_tps": 24.689512293141952,
+    "prompt_tokens": 512
+   },
+   "Phi-3.5-mini-instruct-Q4_K_M": {
+    "prompt_eval_tps": 216.86977168146552,
+    "token_gen_tps": 26.22097455905846,
+    "prompt_tokens": 512
+   },
+   "mistral-7b-instruct-v0.1-q4_k_m": {
+    "prompt_eval_tps": 249.52272090760513,
+    "token_gen_tps": 18.12447648830239,
+    "prompt_tokens": 512
+   }
+  }
+ },
+ "part_l": {
+  "baseline-1": {
+   "train_ms_per_pass": 3333.333333,
+   "train_total_ms": 50000,
+   "playback_tps": 10.719755,
+   "final_loss": 1.1797
+  },
+  "baseline-2": {
+   "train_ms_per_pass": 3400.0,
+   "train_total_ms": 51000,
+   "playback_tps": 10.447761,
+   "final_loss": 1.1797
+  },
+  "baseline-3": {
+   "train_ms_per_pass": 3400.0,
+   "train_total_ms": 51000,
+   "playback_tps": 10.920437,
+   "final_loss": 1.1797
+  },
+  "candidate-1": {
+   "train_ms_per_pass": 3400.0,
+   "train_total_ms": 51000,
+   "playback_tps": 10.989011,
+   "final_loss": 1.1797
+  },
+  "candidate-2": {
+   "train_ms_per_pass": 3333.333333,
+   "train_total_ms": 50000,
+   "playback_tps": 11.041009,
+   "final_loss": 1.1797
+  },
+  "candidate-3": {
+   "train_ms_per_pass": 3400.0,
+   "train_total_ms": 51000,
+   "playback_tps": 11.400651,
+   "final_loss": 1.1797
+  },
+  "pinning": [
+   "performance 1 baseline-1",
+   "performance 1 candidate-1",
+   "performance 1 baseline-2",
+   "performance 1 candidate-2",
+   "performance 1 baseline-3",
+   "performance 1 candidate-3",
+   ""
+  ]
+ }
+}

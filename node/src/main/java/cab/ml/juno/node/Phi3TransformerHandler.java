@@ -112,6 +112,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	private final GgufReader.QuantizedTensor[] wDown;
 
 	private final MatVec backend;
+	private final DeviceMatVecFallback matVecFallback = new DeviceMatVecFallback("Phi-3");
 	/**
 	 * Populated when {@link #backend} is {@link CudaMatVec} and upload succeeds;
 	 * weights are stored in FP16 on the device (~half the VRAM of FP32). Cleared
@@ -503,15 +504,29 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	 */
 	private float[] matVecFused(GgufReader.QuantizedTensor quant, DeviceHalfMatrix half,
 			float[] x, int rowStart, int rowEnd, int cols) {
-		if (half != null)
-			return backend.sgemv(half, x);
+		if (half != null) {
+			try {
+				return backend.sgemv(half, x);
+			} catch (IllegalStateException ex) {
+				matVecFallback.absorb(ex);
+			}
+		}
 		return LlamaTransformerHandler.matVec(quant, x, rowStart, rowEnd, cols);
 	}
 
-	/** One fused Q4 GEMV then host-slice into {@code outA}/{@code outB} (and optional {@code outC}). */
-	private void projectFusedQ4(DeviceQ4KMatrix q4, float[] x, float[] outA, int aLen,
-			float[] outB, int bLen, float[] outC, int cLen) {
-		float[] full = backend.sgemv(q4, x);
+	/**
+	 * One fused Q4 GEMV then host-slice into {@code outA}/{@code outB} (and optional {@code outC});
+	 * on the CPU from {@code quant} when the device runs out of memory.
+	 */
+	private void projectFusedQ4(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix q4, float[] x, float[] outA,
+			int aLen, float[] outB, int bLen, float[] outC, int cLen) {
+		float[] full;
+		try {
+			full = backend.sgemv(q4, x);
+		} catch (IllegalStateException ex) {
+			matVecFallback.absorb(ex);
+			full = LlamaTransformerHandler.matVec(quant, x, 0, aLen + bLen + cLen, x.length);
+		}
 		System.arraycopy(full, 0, outA, 0, aLen);
 		System.arraycopy(full, aLen, outB, 0, bLen);
 		if (outC != null)
@@ -521,10 +536,14 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	/** Non-fused projection (wo / down): Q4, FP16, or CPU. */
 	private float[] matVecProj(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix q4, DeviceHalfMatrix half,
 			float[] x, int rows, int cols) {
-		if (q4 != null)
-			return backend.sgemv(q4, x);
-		if (half != null)
-			return backend.sgemv(half, x);
+		try {
+			if (q4 != null)
+				return backend.sgemv(q4, x);
+			if (half != null)
+				return backend.sgemv(half, x);
+		} catch (IllegalStateException ex) {
+			matVecFallback.absorb(ex);
+		}
 		return LlamaTransformerHandler.matVec(quant, x, 0, rows, cols);
 	}
 
@@ -1332,7 +1351,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			q = new float[H];
 			k = new float[kvDim];
 			v = new float[kvDim];
-			projectFusedQ4(attnQkvQ4Dev[li], xNorm, q, H, k, kvDim, v, kvDim);
+			projectFusedQ4(attnQkv[li], attnQkvQ4Dev[li], xNorm, q, H, k, kvDim, v, kvDim);
 		} else {
 			q = matVecFused(attnQkv[li], attnQDev != null ? attnQDev[li] : null, xNorm, 0, H, H);
 			k = matVecFused(attnQkv[li], attnKDev != null ? attnKDev[li] : null, xNorm, H, H + kvDim, H);
@@ -1387,7 +1406,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		if (ffnGateUpQ4Dev != null && ffnGateUpQ4Dev[li] != null) {
 			gate = new float[I];
 			up = new float[I];
-			projectFusedQ4(ffnGateUpQ4Dev[li], x, gate, I, up, I, null, 0);
+			projectFusedQ4(ffnGateUp[li], ffnGateUpQ4Dev[li], x, gate, I, up, I, null, 0);
 		} else {
 			gate = matVecFused(ffnGateUp[li], ffnGateDev != null ? ffnGateDev[li] : null, x, 0, I, H);
 			up = matVecFused(ffnGateUp[li], ffnUpDev != null ? ffnUpDev[li] : null, x, I, 2 * I, H);
@@ -1403,8 +1422,13 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 	private float[] outputProjection(float[] x) {
 		float[] xNorm = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
-		if (outputProjDev != null)
-			return backend.sgemv(outputProjDev, xNorm);
+		if (outputProjDev != null) {
+			try {
+				return backend.sgemv(outputProjDev, xNorm);
+			} catch (IllegalStateException ex) {
+				matVecFallback.absorb(ex);
+			}
+		}
 		// Use actual tensor dimensions, not cfg.vocabSize(). For phi3,
 		// cfg.vocabSize() may be the arch-metadata base count (32000) while
 		// outputProj.length encodes the full tokenizer vocab (32064), so using

@@ -95,6 +95,14 @@ than 2.2%, and one non-reference generation row (all three repetitions misread) 
 taken with the operating-system clock are a measurement boundary for generation figures read under the
 recorder.
 
+*Since 2026-10-04 the check first subtracts prompt encoding*, which the engine now records per request
+as `juno.PromptEncode`. Encoding runs before the first forward pass, so no span covers it, and on the
+three SentencePiece sweep models it grows with the square of the prompt: about 260 ms at 2,048 tokens,
+against 5 ms on Qwen2.5-3B. That alone filled the allowance and withheld Phi-3.5-mini's 2048-token
+reading. The allowance is unchanged, so a misread clock is still caught. Each repetition's result file
+records `prompt_encode_ms` beside the residual. Runs from builds that do not record the event subtract
+nothing, which is the previous rule.
+
 **`min_tokens` makes the generation column like-for-like.** A request can now state the number of
 tokens it must produce before the model may end it, so Juno generates the count the
 reference tool was given instead of stopping wherever the model preferred. The comparison passes it by
@@ -180,7 +188,8 @@ build without them reads 0.999x TinyLlama prefill and 1.000x Mistral 7B, generat
 the flag and staged bytes from a run with it; bytes are exact either way.
 
 **Device kernel totals.** `juno.DeviceCompute` times the kernels themselves, per site and phase: the
-tiled FP16 GEMM (`gemm_half`, on FP16 weights and on K-quant weights dequantized just before it), the
+tiled FP16 GEMM (`gemm_half`, on FP16 weights, and on K-quant weights only when the packed kernel
+cannot load), the tiled packed K-quant GEMM (`gemm_kquant`, the 8-bit window copy included), the
 batched FP16 GEMV for two- to eight-row windows, the FP32 BLAS GEMM, the attention kernel, and the
 packed decode GEMV (counted, untimed). The host FP16 packing of each activation window is counted as
 `juno.DeviceStaging` site `pack_fp16_host` under its own direction, `HOST`, so it stays out of the
@@ -461,7 +470,9 @@ mixed load; re-run gate ≤ **1.25×** that max (**≤ 5702 ms**).
 
 **Plan:** [`infra-plan/PLAN-Infra-Tier13.md`](infra-plan/PLAN-Infra-Tier13.md) Phase B (**feature complete** as VRAM-fit); LoRA play [`infra-plan/PLAN-Infra-LoRA-MMQ.md`](infra-plan/PLAN-Infra-LoRA-MMQ.md) Phase 1 (**complete**).
 
-**What:** When `--mmq on` (or `auto` with CUDA + kernel load), Q4_K / Q5_K / Q6_K projection weights stay packed on the device (`DeviceQ4KMatrix` / `ResidentQ4KWeight`). Decode/prefill GEMV quantizes the activation to Q8_1 and integer-dots packed weights (`quantize_q8_1` + `q4k_gemv` / `q5k_gemv` / `q6k_gemv`) instead of host dequant → FP16-resident cuBLAS. Non-K-quant tensors still use the FP16 path. Default remains `--mmq off`.
+**What:** When `--mmq on` (or `auto` with CUDA + kernel load), Q4_K / Q5_K / Q6_K projection weights stay packed on the device (`DeviceQ4KMatrix` / `ResidentQ4KWeight`). Decode/prefill GEMV quantizes the activation to Q8_1 and integer-dots packed weights (`quantize_q8_1` + `q4k_gemv` / `q5k_gemv` / `q6k_gemv`) instead of host dequant → FP16-resident cuBLAS. Non-K-quant tensors still use the FP16 path. Default remains `--mmq off`. *(Superseded: the default is
+now `auto`, and prefill windows wider than 8 rows multiply the packed weights too; see "Packed K-quant
+prefill matmul" below.)*
 
 **Claim (honest):** `--mmq on` is both **VRAM fit** (packed Q4 residency) and a **measured decode-throughput win** vs `--mmq off` on CUDA (Q8_1 activation + `dp4a` integer-dot GEMV). Default remains **off**. P0 Phi-3.5 ≥ 0.5× peer is still **unmet**.
 
@@ -543,7 +554,8 @@ and the long prompt's is 3,539, 1,978 and 1,478 ms; `32` stays the default as th
 **GPU (batched-prefill GEMM):** prefill windows above `HALF_SGEMM_BATCH_MAX` (8) now
 route through a real tiled GEMM (`cublasGemmEx`, FP16-resident weights directly; Q4_K/Q5_K/Q6_K
 weights dequantized once to an FP16 scratch buffer then the same GEMM) instead of one serial
-`sgemv` call per prefill token. Before this fix, GPU prefill and decode throughput sat within
+`sgemv` call per prefill token. *(Since Session 107, K-quant weights are multiplied packed by a tiled
+integer kernel instead; see "Packed K-quant prefill matmul" below.)* Before this fix, GPU prefill and decode throughput sat within
 roughly 1x of each other on every model — the fingerprint of prefill never getting a batched
 kernel at all.
 
@@ -1146,3 +1158,42 @@ and a case that starves the session of an `observe()` call between rounds to pro
 and two new `GenerationLoopSpeculativeDecodeTest` cases (full agreement and a scripted divergence
 between an independent draft pipeline and the target, plus dedicated cases for the missing-draft-pipeline
 and vocab-mismatch fail-closed constructor checks).
+
+## Packed K-quant prefill matmul
+
+**What:** on CUDA with packed weights (`--mmq auto`, the default, or `on`), a prefill window wider than 8
+rows multiplies Q4_K, Q5_K and Q6_K weights as they are stored: the window is rounded to 8-bit
+activations once per matmul (the decode kernel's rounding), and a tiled kernel integer-dots 64-row blocks
+of unpacked weights in on-chip memory. No FP16 copy of the weights is made. `--mmq off` keeps FP16 weights
+and the FP16 GEMM. JFR compute site: `gemm_kquant`.
+
+**Measured** (same-hour A/B against the FP16-expansion build, clocks pinned, median of three;
+`docs/perf-compare/20261003T195923Z-packed-kquant-ab/`): prefill at a 512-token prompt 1.23x (TinyLlama),
+1.41x (Qwen2.5-3B), 1.37x (Phi-3.5-mini), 1.55x (Mistral 7B); at window widths 16 and 64, 1.8x to 5.1x.
+Generation 0.99x to 1.02x on a declared five-alternation confirmation run. Device memory: what a 512-token
+prefill adds over decode is now window-shaped, 1.04x of the decode peak on Mistral 7B
+(`docs/perf-compare/20261003T235146Z-packed-kquant-reserve/`).
+
+**Accuracy:** the kernel's mean relative error against an FP32 reference equals the decode kernel's
+(0.37%, against 0.026% for the FP16 route). Greedy output is deterministic, two identical requests give
+the same tokens, and over 512 tokens it parts from the FP16 route's output where a near-tie flips (token
+0 to 99 on the four sweep models;
+`docs/perf-compare/20261004T050618Z-packed-kquant-smoke/`).
+
+**Against the reference engine** (closing sweeps, clocks pinned, `docs/perf-compare/20261004T113210Z/`,
+`20261004T114812Z/`; the previous figures from `20261003T044014Z/` in brackets):
+
+| Model | Prompt processing, 128 tokens | Prompt processing, 512 tokens | Generation |
+|---|---|---|---|
+| TinyLlama 1.1B | 0.524x | 0.317x (0.254x) | 0.363x |
+| Qwen2.5-3B | 0.616x | 0.429x (0.281x) | 0.432x |
+| Phi-3.5-mini | 0.303x | 0.226x (0.146x) | 0.545x |
+| Mistral 7B | 0.729x | 0.468x (0.285x) | 0.627x |
+
+At 2048 tokens (`20261004T220015Z/`, `20261004T222758Z/`): TinyLlama 0.121x, Qwen2.5-3B 0.180x,
+Phi-3.5-mini 0.099x, Mistral 7B 0.154x. Prompt processing falls with prompt length: at 512 tokens the ratio
+is 0.61 to 0.74 of the 128-token one, and at 2048 it is 0.33 to 0.44 of the 512-token one. The matmuls got
+faster and attention did not, so attention's share of a long window grew. Phi-3.5-mini needs more than a
+6 GiB Java heap at 2048 tokens (its host key/value cache grows to 4,096 positions); its 2048 figure was
+taken with 8 GiB.
+

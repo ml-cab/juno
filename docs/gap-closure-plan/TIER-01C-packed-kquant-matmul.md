@@ -1,19 +1,14 @@
 # Tier 01C: Packed K-quant prefill matmul
 
-Status: **in progress** (2026-10-03). Steps 1 to 3 done: the per-width breakdown is published, the
-throughput branch is chosen (GEMM 53.3% of a 512-token Mistral 7B window, against the 30% line), and the
-tiled kernel exists for Q4_K, Q5_K and Q6_K, validated at every test width but not yet routed. The
-numerical-quality threshold was raised with the owner (the packed route's error is 14x the FP16 route's by
-construction) and resolved the same day: restated against the fused decode GEMV (owner
-decision). Step 4's switch is implemented (both prefill paths multiply packed weights; greedy answers
-identical to the pre-switch build on 12 of 12 smoke requests); its pinned same-hour A/B is met
-(prefill Mistral 7B 1.49x to 1.55x, TinyLlama 1.23x at 512; 1.8x to 5.1x at widths 16 and 64; generation
-0.989x to 1.016x on the owner's pre-declared five-alternation confirmation, after a first run read 0.945x on
-Qwen2.5-3B). Step 5 is done (2026-10-04): the forward-pass reserve is sized from the prefill window,
-not a weight matrix, and the adaptive prefill chunk from each shard's real window footprint (owner
-decision); llama-1-30b gains one GPU layer, models that fit whole are unchanged, and the VRAM threshold
-reads 1.043 (Mistral 7B) and 1.012 (30B) against `<= 1.05x`. Next: step 6, the full cross-surface
-matrix and closing sweeps. See "Execution record".
+Status: **complete** (2026-10-04). Every exit criterion is checked. The tiled packed K-quant GEMM
+is the default prefill matmul on CUDA. On the owner's pinned gates: prefill 1.23x to 1.55x at 512 tokens
+against the FP16-expansion build; GPU pp 0.226x (Phi-3.5-mini, binding) to 0.468x of the reference engine
+at 512 tokens, meeting the `>= 0.20x` milestone; decode, vision and LoRA not regressed. The first complete
+2048 reading (0.099x to 0.180x) is Tier 02's starting point. Four out-of-tier fixes, each by owner decision:
+a race in the GPU attention kernel, the decode GEMV scratch held at upload, out-of-memory requests failing
+instead of hanging, and recorded prompt encoding. Carried to later tiers: playback prefill on the tiled kernel
+(Tier 12 item 5), the quadratic SentencePiece encoder (Tier 04B item 5), and the host KV footprint (Tier 03
+item 6). See "Execution record".
 Gap analysis refs: none directly — adjacent to §1.1. Split out of
 [Tier 04C](TIER-04C-packed-weight-matmul.md) on 2026-09-30 by the plan review; see "Why this tier, why
 now".
@@ -112,7 +107,7 @@ threshold) and says so, rather than proceeding on a throughput premise the data 
 | 7 | Pipeline-parallel cluster | each shard runs the kernel on its own layers; verify output against local mode and that the reserve is computed per shard |
 | 8 | Tensor-parallel cluster | same; nodes still load the whole model until Tier 09 |
 | 9 | LoRA training | exempt (FP32-resident frozen weights, `LoraMmqPolicy`); re-verify the exemption and its notice |
-| 10 | LoRA playback | MMQ is allowed in playback; the delta-add must compose against the packed batched path at every width, within the numerical-quality threshold |
+| 10 | LoRA playback | MMQ is allowed in playback; the delta-add must compose against the packed batched path at every width, within the numerical-quality threshold. *Corrected 2026-10-04 (step 6 plan-versus-code check): playback never reaches the batched packed path. `LoraTrainableHandler.forwardBatch` multiplies through `LoraResidentWeights.matVecBatch`, which runs one packed decode GEMV per row whenever the weights are Q4-resident ("Q4 residency always uses sequential GEMV"); it holds `ResidentQ4KWeight`, not the `CudaMatVec.sgemm(DeviceQ4KMatrix, ...)` route this tier switched. Playback numerics and speed are therefore unchanged by this tier, and the row is resolved as unchanged, guarded by `compare-lora.sh` playback and `LoraQ4KPlaybackParityTest`. Whether playback prefill should take the tiled kernel is raised with the owner (step 6 record).* |
 | 11 | Vision | the CLIP encoder is pinned to `CpuMatVec.INSTANCE`; verify that still holds. moondream2's text half is Phi-2 (CPU). `compare-vision.sh` is still a required gate |
 | 12 | OpenAI REST surface | N/A directly; verified through TTFT |
 | 13 | Native REST surface | same |
@@ -169,8 +164,16 @@ threshold) and says so, rather than proceeding on a throughput premise the data 
   **Threshold, numerical quality** (restated 2026-10-03, owner decision; see the step 3 record).
   Mean relative error against the FP32 oracle **<= 1.001x** that of the fused decode GEMV (the same
   Q8_1 activation rounding; the 0.1% admits float accumulation order only) and **<= 0.5%** absolute,
-  on every tested shape of `KQuantGemmQualityTest`; greedy decode agrees with the FP16 path on
-  **>= 99%** of the first 512 tokens at temperature 0. *Was: mean relative error <= 1.0x that of the
+  on every tested shape of `KQuantGemmQualityTest`. End to end, greedy decode at temperature 0 is
+  deterministic: two identical requests in one process give the same 512 tokens, on every sweep model and
+  both schedules (`smoke-packed-kquant-matmul.sh`, **100%** of cells). The first divergence from the FP16
+  route over 512 tokens is recorded per model and schedule and the outputs read for coherence; it is not
+  a gate. *Restated 2026-10-04, owner decision 3 (a). Was: "greedy decode agrees with the FP16 path on
+  >= 99% of the first 512 tokens". No route meets that against any other: the FP16 route parts from
+  per-token prefill at token 0 to 244 and the packed route at 24 to 512
+  (`docs/perf-compare/20261004T050618Z-packed-kquant-smoke`). Over 512 greedy tokens, any change in
+  rounding flips a near-tie somewhere, so the clause measured where, not which route is more accurate.
+  The kernel-level clause above stays the binding accuracy gate.* *Was: mean relative error <= 1.0x that of the
   dequant-to-FP16 path. No integer-activation kernel can meet that: 8-bit activations put the packed
   route at about 14x the FP16 route's error by construction (0.37% against 0.026%,
   `docs/perf-compare/20261003T171753Z-packed-kquant-kernel`), the same rounding decode already ships
@@ -298,7 +301,7 @@ so "engine default" reads differently from "not recorded".
   its `host.json`.
 - `docs/howto.md` (prefill breakdown section) documents the option and the recorded fields.
 - **Not a measurement boundary.** The engine's command line is unchanged for any given setting; only
-  the metadata gains fields. The step 2 run predates it. Its width is in its directory names, and its
+  the metadata gains fields. (Tooling only; this entry states no performance conclusion to mark.) The step 2 run predates it. Its width is in its directory names, and its
   INDEX gives the pass counts that confirm it.
 
 ### 2026-10-03: implementation step 3, the tiled kernel for Q4_K, Q5_K and Q6_K
@@ -656,6 +659,567 @@ and `CHANGELOG.md` (Session 108).
 [Tier 10](TIER-10-gpu-backend-breadth-cpu-simd.md) (item 10) and on any other GPU.
 
 
+### 2026-10-04: before step 6, greedy output is not reproducible on the batched prefill path, raised with the owner
+
+**Step 1 check.** `check-plan-thresholds.sh`: ok (19 tier files, milestone table checked).
+
+**Plan against code (re-verified at HEAD `59c53cc`, tree: only the untracked `.github/`).** Step 5's state
+holds: `CudaMatVec.sgemmInto(DeviceQ4KMatrix, ...)` and `gemmOnStream` both reach `gemmPackedOnStream`, which
+runs the tiled kernel and dequantizes only when the module fails to load or under the test-only
+`dequantizeBatchedKQuant`; `--mmq` help text says `off` and `auto` differ in prefill; the CLIP encoder is
+built on `CpuMatVec.INSTANCE` (`LlavaHandlerFactory`). One claim was false: checklist row 10 assumed LoRA
+playback composes its delta against the batched packed path. It does not reach that path at all (row 10
+corrected in place). Not a scope change for this step; whether playback should take the tiled kernel is a
+decision below.
+
+**What was built.** `scripts/performance-tests/smoke-packed-kquant-matmul.sh` (the tier's smoke script):
+the four sweep models, both schedules, a 512-token prompt, exactly 512 greedy tokens (`min_tokens` =
+`max_tokens`). It asserts HTTP 200, prompt length within 10%, 512 tokens with one stream chunk each,
+streamed text equal to unstreamed, and the server log showing packed residency with the tiled kernel loaded
+and no dequantizing fallback. It records TTFT and the engine's peak device memory. With `--baseline-jar` it
+scores token agreement with that build (agreeing prefix over 512, `--min-agreement` 0.99). Test first: run
+against the pre-switch jar posing as the candidate (TinyLlama, static), the packed-path assertion failed
+for the right reason (no tiled module in that build).
+
+**Found by that first run: two identical greedy requests in one process can give different text.**
+Streamed and unstreamed answers parted at about token 50 on the pre-switch build. Both requests prefilled
+the same 506-row window from position 0, so this is not prefix reuse. A determinism study followed:
+TinyLlama, 512-token prompt, 512 greedy tokens, 2 fresh servers x 5 identical requests per configuration,
+unpinned (raw outputs in `dist/packed-kquant-close/determinism/`, git-ignored):
+
+| Configuration | Distinct outputs of 10 | First difference (tokens) |
+|---|---|---|
+| candidate `59c53cc` (packed GEMM, GPU attention) | 4 (7 identical) | 24, 24, 94 |
+| pre-switch `f02bdae` (FP16 dequant GEMM, GPU attention) | 3 (8 identical) | 46, 46 |
+| candidate, `--prefill-batch 1` (per-token prefill) | 1 | none |
+| candidate, `--gpu-attention off` | 1 | none |
+
+- **The variance predates this tier and is not the packed kernel.** Both builds show it at similar rates.
+  It disappears with per-token prefill, and with GPU attention off while the window still runs batched.
+  It sits in the GPU attention step of the batched prefill window (Tier 01B's region), which per-token
+  prefill does not use. No CUDA source in `node/src/main/cuda/` uses atomics, so an unsynchronized read
+  (for example of the window's K/V or score buffers) is the likely mechanism. Not yet located.
+  `expected-general` for "a race gives run-to-run variance"; `host-specific` for the rates.
+- **Consequence for this tier.** The greedy threshold ("agrees with the FP16 path on >= 99% of the
+  first 512 tokens") cannot be scored as written: the FP16 route disagrees with itself at token 46 in 2
+  of 10 requests, so a candidate-against-FP16 reading measures the shared variance, not the packed
+  route. The new smoke script's streamed-against-unstreamed and agreement checks inherit the same flake.
+  Step 4's 12-of-12 identical answers (16 tokens) and step 5's (16 tokens) stopped before the earliest
+  divergence seen here (token 24).
+
+**Raised with the owner** (step 6 not continued past this point):
+1. The prefill-window attention variance. (a) Locate and fix it now as an out-of-tier change (rule 9),
+   then score the greedy threshold unchanged (recommended: it is a likely race in shipped code, on the
+   default GPU path of every sweep model); (b) move it to Tier 02 (attention) and restate this tier's
+   greedy threshold against noise: candidate-against-FP16 agreement no lower than FP16-against-FP16
+   agreement over the same repeats, both with GPU attention off; (c) score the threshold with
+   `--gpu-attention off` on both sides and record the variance as a Tier 02 item.
+2. LoRA playback prefill on the tiled kernel. (a) Leave playback on per-row GEMV; record the missed
+   speed-up as a Tier 12 item (recommended: playback numerics stay what `compare-lora.sh` measures, and
+   this tier's scope named the `DeviceQ4KMatrix` route only); (b) route `matVecBatch` for Q4-resident
+   weights through the tiled kernel in this tier.
+
+Prepared for the owner, not yet run: `dist/packed-kquant-close/run-gate.sh` (part L: LoRA train and
+playback, same-hour A/B against `f02bdae` with governor and turbo pinned; part B: closing sweeps at
+`n_prompt` 128, 512 and 2048). Its baseline tree and candidate jar (`425285a3daef839e`, HEAD) are staged.
+Not to be run until decision 1 is made, because a fix would change the candidate.
+
+*Owner decisions 2026-10-04: 1 (a), locate and fix the prefill-window attention variance now as an
+out-of-tier change, then score the greedy threshold unchanged; 2 (a), LoRA playback stays on per-row GEMV,
+and the tiled-kernel route for Q4-resident playback is recorded as a Tier 12 item.*
+
+### 2026-10-04: the prefill-window attention variance located and fixed (owner decision 1 (a))
+
+Decision 2 (a) is recorded as [Tier 12](TIER-12-lora.md) scope item 5.
+
+**Cause.** `gqa_attention.cu`'s `block_reduce` is called twice per block, for the softmax maximum and
+then the sum of exponents, and both calls go through one `__shared__ warpVals` array. The function ended
+with every thread reading `warpVals[0]` after a barrier, with no barrier after that read. Warp 0 could run
+through pass 2 and write its partial sum into `warpVals[0]` before a slower warp had read the maximum.
+That warp then exponentiated its scores against a partial sum, so its share of the softmax was scaled
+inconsistently with the others'. The outcome depends on warp scheduling. A 512-row window launches
+512 x heads blocks per layer, which is why it showed there; per-token prefill and decode launch
+`heads` blocks and never showed it in the study. `expected-general`: a shared-memory reuse race with no
+barrier is a defect on any CUDA device; `host-specific`: how often it fires.
+
+**Tests first.** `GqaAttentionReproducibilityTest` (new, `gpu`) launches a TinyLlama-shaped 512-row
+window 100 times with fixed inputs, asserts every output is bit-identical to the first, and checks
+sampled rows against the `GqaMath` CPU oracle. Before the fix it failed for the right reason: the output
+differed from launch 46 on. After the fix it passed 6 of 6 runs. `GqaAttentionKernelParityTest` passes
+(2 of 2).
+
+**Fix.** `block_reduce` reads the result into a register, then runs a second `__syncthreads()` before
+returning. The PTX was regenerated with the compiler that built the committed file (CUDA 12.0,
+`CL-32267302`). Recompiling the unmodified source first reproduced the committed PTX byte for byte, so
+the PTX diff is exactly two added `bar.sync 0` instructions, one per call.
+
+**End to end** (TinyLlama, the step's determinism setup: 2 servers x 5 identical requests, 512-token
+prompt, 512 greedy tokens; outputs in `dist/packed-kquant-close/determinism/`):
+
+| Build | Distinct outputs of 10 (before the fix) | After the fix |
+|---|---|---|
+| candidate (packed GEMM) | 4 | **1** (`cff55ad0807c6ea7`) |
+| pre-switch `f02bdae` (FP16 GEMM) | 3 | **1** (`f02bdae` plus only this fix, `463af3e52bc9801d`) |
+
+**What this does to the greedy threshold.** With the variance gone, the packed route's output parts from
+the FP16 route's at token **24 of 512** on TinyLlama, static. Agreement is 0.047 against `>= 0.99`.
+Both are now deterministic, so this is the routes' real difference, and every numerically different pair
+of routes parts early on this prompt:
+
+| TinyLlama, 512 greedy tokens, first difference at token | |
+|---|---|
+| packed route against FP16 route | 24 |
+| packed route against per-token prefill (decode kernels throughout) | 24 |
+| FP16 route against per-token prefill | 63 |
+| FP16 route against CPU attention (`--gpu-attention off`) | 46 |
+
+So the pre-tier FP16 path does not meet ">= 99% of 512 tokens" against its own per-token oracle either.
+The scored reading on every model and schedule comes from `smoke-packed-kquant-matmul.sh --baseline-jar`
+(the fixed reference), below.
+
+**Scored reading: the greedy threshold is missed on every cell.** `smoke-packed-kquant-matmul.sh
+--baseline-jar` (candidate `cff55ad0807c6ea7` against `f02bdae` plus the fix, `463af3e52bc9801d`),
+published as
+[`20261004T050618Z-packed-kquant-smoke`](../perf-compare/20261004T050618Z-packed-kquant-smoke/INDEX.md).
+All 48 candidate checks pass (packed path active, 512 tokens, streamed equal to unstreamed, VRAM and TTFT
+recorded). Agreement with the FP16 route, as the agreeing prefix of 512 tokens (threshold `>= 0.99`):
+
+| Model | static | continuous | packed vs per-token (static) | FP16 vs per-token (static) |
+|---|---|---|---|---|
+| tinyllama | 24 (0.047) | 24 | 24 | 63 |
+| qwen2.5-3b | 0 (0.000) | 0 | 30 | 0 |
+| Phi-3.5-mini | 66 (0.129) | 66 | 66 | 244 |
+| mistral-7b | 68 (0.133) | 99 (0.193) | **512** | 68 |
+
+Per-token prefill (`--prefill-batch 1`) runs the decode kernels, with the same Q8_1 activation rounding
+decode uses for every token. Neither prefill route consistently tracks it better. The packed route
+reproduces it for all 512 tokens on Mistral 7B, where the FP16 route parts at 68. On Qwen2.5-3B the FP16
+route parts from it at the first token, between two equally plausible openings. `expected-general`: a
+greedy sequence of 512 tokens crosses near-ties, and any change in rounding flips the first of them.
+The threshold as written measures where that happens, not which route is closer to the model. The
+kernel-level guard, packed error equal to the decode GEMV's within 0.1% (restated by the owner at step
+3), is met.
+
+**Raised with the owner (decision 3), options:**
+- (a) Replace the greedy clause with what the data can score: the candidate is deterministic (10 of 10
+  identical requests on TinyLlama, the study above, extended to one repeat on every sweep model in the
+  closing smoke), and the first divergence from the FP16 route is recorded per model and schedule, with
+  the outputs read for coherence. The kernel-level numerical-quality threshold stays the binding accuracy
+  gate. Recommended.
+- (b) Replace it with a teacher-forced top-1 agreement over the FP16 route's 512 tokens (`>= 99%` per
+  position), which is insensitive to a single flip. This needs per-position logits that no API or test
+  harness exposes today, so it means a new in-process GPU test before the tier can close.
+- (c) Keep it: the tier cannot close on it, and the miss is reported with the numbers above.
+
+**Out-of-tier changes** (rule 9). The attention barrier fix (`node/src/main/cuda/gqa_attention.cu`, its
+PTX; `GqaAttentionReproducibilityTest`) is outside this tier's scope: the attention kernel is Tier 02's,
+and the defect dates from Tier 01B's region (present at `f02bdae`). Made by owner decision 1 (a).
+**It is a measurement boundary for output, and nominally for throughput.** Output: GPU-attention greedy
+text can change wherever the race used to fire, so every earlier greedy-identity reading longer than about
+24 tokens with GPU attention on is pre-fix. The step 4 and step 5 16-token identities and Tier 01B's
+64-token region-greedy IT are below or near that. Throughput: two barriers per attention block, decode
+included. The owner's closing gate gains a part A, a pinned A/B of the pre-fix HEAD jar against the fixed
+jar on every sweep model, generation and prefill `>= 0.95x`. It invalidates no published reference until
+then.
+
+### 2026-10-04: step 6 regression runs on the fixed build; a step 5 regression found on tensor-parallel
+
+**Unit suite, eleven modules** (fixed tree). Run 1: registry 93, lora 116, kvcache 78, health 23 pass; node
+889 run, **1 failure**, 44 skipped; the six modules after it were skipped. The failure was
+`PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`: with the device full, the
+free-memory query reported 71,172,096 bytes against the 64 MiB (67,108,864) allowance. It failed 3 of 3 re-run
+alone (70.9 to 71.2 MiB), and **2 of 2 on a clean HEAD `59c53cc` tree** (71.3 and 73.7 MiB), so it is not the
+attention fix. At step 5 the same reading was 44 to 54 MiB and passed 3 of 3. The driver now withholds about
+70 MiB on this host (desktop session sharing the card). Not loosened: it is the constant the owner kept at
+64 MiB pending Tier 10. The six skipped modules then ran: 860 run, 0 failures, 5 skipped. **Total 2,059 run,
+1 failure (above), 49 skipped.** `GqaAttentionReproducibilityTest` is in node's 889.
+
+**`ModelLiveRunnerIT`** (`-Pintegration`, the four sweep models, after `mvn install -DskipTests` of the fixed
+tree): 35 of 36 checks pass. Check 9 (512-token prefill, both schedules, packed path active) passes on all
+four (prompts of 573, 560, 583 and 561 tokens), with all 16 greedy tokens identical across per-token,
+static-window and continuous prefill (first divergence -1). The failure: **Phi-3.5-mini, checks 7 and 8
+(tensor-parallel)**, `cudaMalloc failed: rc=2` on one node.
+
+**Cause, located** (`ModelLiveRunner`, Phi-3.5-mini, `JUNO_VERBOSE`; intermittent: 9 of 9 alone in tensor
+mode; with all checks 1 pass and 1 fail, then 1 pass and 1 fail with a temporary stack-trace line in
+`EmbeddedNodeServer`, since reverted). The failing allocation is `CudaMatVec.ensureFp32Scratch` in
+`sgemvInto`, the decode GEMV's lazily grown FP32 scratch, from `Phi3TransformerHandler.projectFusedQ4`. A
+tensor-parallel cluster on one card runs three node processes that each load the whole model (until Tier
+09), concurrently. They uploaded 32, 32 and 31 layers. Each stops when device-wide free memory falls below
+its own reserve, so the three share one reserve between them, not three. Since step 5 that reserve is a
+64-row window plus the 64 MiB allowance, which the driver does not hand out (about 70 MiB now, above). The
+KV mirror then falls back to the CPU (handled, warned), but the scratch has no fallback, and the forward
+pass fails. Before step 5 the reserve also carried the widest FP16 weight matrix plus 40% (about 140 MiB
+for Phi-3.5-mini), which absorbed it. **A step 5 regression for several processes on one device**:
+checklist row 8, whose note asks that the reserve be computed per shard. It does not occur with one
+process per device. `host-specific`: the margins; `expected-general`: lazily grown buffers outside the
+reserve fail when the reserve is shared.
+
+**Raised with the owner (decision 4), options:**
+- (a) Allocate the decode GEMV's scratch at upload time, sized for the widest matrix the backend holds,
+  so it is held before the stop rule runs and is part of each process's own footprint; and turn a
+  device-memory failure in a forward pass into the existing fallback-and-warn path rather than a failed
+  request. Fixes the failure for any number of processes per device. Then re-run `ModelLiveRunnerIT`.
+  Recommended.
+- (b) Add the scratch to the reserve's arithmetic only. Still one reserve shared by every process on the
+  device, so it narrows the window but does not close it.
+- (c) Declare several node processes on one device unsupported with `--gpu-layers auto` (fail closed at
+  load with an explicit error), and run the tensor-parallel IT with an explicit `--gpu-layers`. Tier 09
+  owns multi-GPU tensor parallelism.
+
+**Not yet run** (all after decision 4, since (a) or (c) changes the candidate): `mvn verify -pl
+juno-master`, the `-Pgpu` ITs, the vision gate, the unpinned LoRA readings, the earlier tiers' smoke
+scripts, and a short unpublished `n_prompt=2048` check of the closing sweep on TinyLlama (2048-token
+context).
+
+*Owner decisions 2026-10-04: decision 3 (a), the greedy clause is replaced (threshold block restated);
+decision 4 (a), the decode GEMV scratch is allocated at upload and a device-memory failure in a forward
+pass falls back instead of failing the request.*
+
+### 2026-10-04: decision 4 (a) implemented, the decode GEMV scratch held at upload
+
+**Tests first.** `GemvScratchHeldAtUploadTest` (new, `gpu`): for packed K-quant, FP16 and FP32 uploads, the
+single-row products and the shared-input `sgemvSameX` product leave `CudaMatVec.scratchDeviceBytes()`
+exactly where the uploads left it. It failed 3 of 3 for the right reason (the uploads held no scratch).
+`DeviceMatVecFallbackTest` (new, 2 cases: device allocation failures are absorbed, anything else is
+rethrown unchanged) was written after the class it tests and passed on its first run. It is a
+regression test, not one watched failing.
+
+**What changed.**
+- `CudaMatVec.holdGemvScratch`, called from `upload`, `uploadHalf` and `uploadKQuant`, grows the
+  product scratch to that matrix's need: input `max(rows, cols)`, output three times that (the widest
+  `sgemvSameX` group, separate Q, K and V with multi-head attention), and the Q8_1 input for packed
+  weights. At most a few hundred KB per backend. It is held before the handler's stop rule reads the free
+  memory. A failure frees the matrix and rethrows into the existing per-layer upload handling.
+- `DeviceMatVecFallback` (new): Llama's `matVecProjection`, `matVecProjectionSameX` (falls back to the
+  per-matrix path) and `matVecLayer`, Phi-3's `matVecFused`, `projectFusedQ4` (now passed the fused
+  quantized tensor), `matVecProj` and output projection, and Qwen3's `matVecLayer` and output projection.
+  Each catches a device out-of-memory failure, warns once per handler, and computes that product on the
+  CPU from the quantized tensor. Nothing else is caught.
+- ROCm is unchanged (`RocmMatVec` has its own scratch). `NEEDS-AMD-HARDWARE` to verify whether it has
+  the same exposure.
+
+**Result.** `GemvScratchHeldAtUploadTest` 3 of 3; `CudaMatVecScratchLifetimeTest` 5 of 5;
+`CudaAttentionNormScratchLifetimeTest` 4 of 4. `ModelLiveRunner` on Phi-3.5-mini with every check, the
+configuration that failed 2 of 4 before: **4 of 4 runs, 9 of 9 checks each**. The tensor-parallel nodes held
+32, 32 and 32 layers, the KV mirror fell back to the CPU as before (handled), and the new CPU fallback never
+fired. Holding the scratch is what fixed it; the fallback is the guard. Jar `5ab4c78c505a4cef`.
+`expected-general`: a buffer grown lazily outside a reserve that several processes share fails on any
+device. `host-specific`: the layer counts (32, 32, 32) and how often the old code failed (2 of 4).
+
+**Out-of-tier change** (rule 9): a decode-path change in `CudaMatVec` and three handlers, outside the
+tier's GEMM scope; made by owner decision 4 (a) to repair a step 5 regression. **Not a measurement
+boundary by design:** decode allocates less, never more, and a `try` costs nothing until it throws.
+It is covered anyway by part A of the owner's closing gate (the pre-fix HEAD jar against this build,
+generation `>= 0.95x`).
+
+
+### 2026-10-04: step 6, the closing matrix (agent part)
+
+All runs below are on the closing build: HEAD `59c53cc` plus the attention barrier fix and the decode
+GEMV scratch held at upload (jar `5ab4c78c505a4cef`, staged for the owner as
+`dist/packed-kquant-close/candidate-shaded.jar`). The reference for vision and LoRA is `f02bdae`, the last
+build before this tier (`cdd4de12314667d2`, `git archive`, package only). The greedy reference is `f02bdae`
+plus only the attention fix (`463af3e52bc9801d`). One sequential chain, 07:29Z to 10:20Z.
+
+| Check | Result |
+|---|---|
+| `check-plan-thresholds.sh` | ok |
+| `mvn test`, eleven unit-test modules | **2,064 run, 0 failures, 49 skipped**, one green run. `PrefillReserveDeviceTest`'s allocator check passed this time (it failed earlier the same day at 71 MiB, on clean HEAD too: it moves with the desktop's use of the card) |
+| `ModelLiveRunnerIT`, `-Pintegration`, four sweep models | **36 of 36**, Phi-3.5-mini tensor-parallel included. Check 9 (512-token prefill, both schedules, packed path): prompts of 573, 560, 583 and 561 tokens, 16 greedy tokens identical across per-token, static-window and continuous prefill on every model |
+| `mvn verify -pl juno-master` (stub cluster ITs) | 20 of 20 |
+| `mvn verify -pl juno-master -Pgpu` (TinyLlama) | 10 of 10 (`PrefillRegionGreedyIT`, `GpuAttentionDivergenceIT`, `GpuForwardPassIT`) |
+| `smoke-packed-kquant-matmul.sh --baseline-jar` (this tier's script; four models, both schedules) | **48 of 48**: packed path active, no fallback, 512 tokens, streamed equal to unstreamed (determinism, 100% of cells); agreeing prefixes with the FP16 route as published (24, 0, 66, 68 static; 99 Mistral 7B continuous), unchanged by the decode change ([`20261004T050618Z-packed-kquant-smoke`](../perf-compare/20261004T050618Z-packed-kquant-smoke/INDEX.md)) |
+| `smoke-long-prompt-prefill.sh --baseline-jar` (unmodified, against the fixed reference) | 48 of 48; greedy text (16 tokens) identical on all 12 cells |
+| `smoke-consistency.sh`, `smoke-grammar.sh`, `smoke-tools.sh` (unmodified) | 54, 19 and 14 PASS, 0 failures each |
+| `smoke-gpu-residency.sh --models tinyllama...,mistral...` (unmodified) | 0 failures: decode region active on 8 of 8 and 11 of 11 layers, no per-request memory growth, greedy identical on against off. Cluster pipeline and tensor answer and leave no node JVM; their text differs from local mode's from word 21 (reported by the script, not a failure). Expected from this tier: cluster prefill runs one token per pass (decode kernels), local prefill now runs the packed route, and the two part at token 24 on TinyLlama (determinism table above). At Tier 01B's close they matched, when local prefill ran the FP16 route. `expected-general` for the mechanism; `host-specific` for the word |
+| `compare-vision.sh --gpu`, three runs per build, alternated | latency 1.002x, decode 0.995x; gate (`<= 1.25x`, `>= 0.80x`) **met**; six captions identical |
+| `compare-lora.sh --gpu --reps 3`, per build | playback 1.023x; gate (`>= 0.80x`) **met**. Train 1.000x, every repetition 15 passes to loss 1.1797: reading only, since the train gate (`>= 0.95x`) is pinned and owed ([`20261004T091233Z-packed-kquant-close-vision-lora`](../perf-compare/20261004T091233Z-packed-kquant-close-vision-lora/INDEX.md)) |
+| `compare-llama-cpp.sh --gpu --n-prompt 2048`, TinyLlama, unpinned, unpublished | the closing sweep's 2048 setting works on the 2048-context model: 2,048 of 2,048 prompt tokens, parity ok. Single reading pp 0.123x, for information only. It covered only TinyLlama, which is why the owner's first 2048 sweep met Phi-3.5-mini's heap limit (owner-gate record below) |
+
+Vision and LoRA unchanged: `expected-general`, since neither reaches the changed code (the CLIP encoder and
+Phi-2 run on the CPU; LoRA keeps FP32-resident frozen weights and per-row playback GEMVs). The ratios
+themselves are `host-specific`.
+
+**Closing cross-surface matrix.**
+
+| # | Surface | Resolution | Evidence |
+|---|---|---|---|
+| 1 | CPU inference | N/A for the kernel (CUDA-only); correctness unchanged | unit suites; `smoke-consistency.sh` CPU legs |
+| 2 | CUDA GPU inference | PASS | `ModelLiveRunnerIT` check 9 on four models; packed smoke 48 of 48; `-Pgpu` ITs; throughput by the step 4 pinned A/B and the owner's closing sweeps |
+| 3 | ROCm GPU inference | NEEDS-AMD-HARDWARE | the kernel, the attention fix's PTX and the scratch hold are CUDA-only; `RocmMatVec` is unchanged and its non-hardware tests pass in the unit suite; whether ROCm's lazily grown GEMV scratch has the same multi-process exposure needs a device |
+| 4 | Static schedule | PASS | check 9 (static window); packed and long-prompt smokes (`static` cells) |
+| 5 | Continuous schedule | PASS | check 9 (32-token chunks); packed smoke (`continuous` cells, widths where the old dequant amortized worst); the step 4 width 16 and 64 A/B |
+| 6 | Single-node local mode | PASS | every smoke above runs `./juno local` |
+| 7 | Pipeline-parallel cluster | PASS (correct; per-token prefill, so the kernel is not reached until Tier 09 item 5) | `ModelLiveRunnerIT` checks 1 to 6 on four models; residency smoke's cluster leg; `ThreeNodeClusterIT`. The reserve is computed per node process (step 5 record) |
+| 8 | Tensor-parallel cluster | PASS after the decision 4 fix | `ModelLiveRunnerIT` checks 7 and 8 on four models (Phi-3.5-mini: 4 of 4 runs alone, then in the IT); `TensorParallelClusterIT`; residency smoke's cluster leg |
+| 9 | LoRA training | PASS (exempt, unchanged) | `compare-lora.sh` train 1.000x, same loss; `LoraMmqPolicyTest` in the unit suite |
+| 10 | LoRA playback | PASS (unchanged; does not reach the tiled kernel, row 10 note; Tier 12 item 5) | `compare-lora.sh` playback 1.023x; `LoraQ4KPlaybackParityTest` |
+| 11 | Vision | PASS (unchanged; CLIP on `CpuMatVec.INSTANCE`, Phi-2 text half on the CPU) | `compare-vision.sh` 1.002x / 0.995x, captions identical |
+| 12 | OpenAI REST surface | PASS | packed and long-prompt smokes over `/v1/chat/completions`, streamed and not; grammar and tools smokes |
+| 13 | Native REST surface | PASS | `smoke-consistency.sh` `/v1/inference` rounds |
+| 14 | CLI | PASS | `--mmq` help says `off` multiplies FP16 weights in prefill and `auto` the packed ones; `docs/howto.md` |
+| 15 | JVM embedding facade | N/A: no new embedder-invocable capability; the facade's prefill takes the same kernel through the same handlers | `juno-player` unit tests |
+
+**Owed to the owner (pinned; needs prompt-free sudo):** `sudo -v && bash dist/packed-kquant-close/run-gate.sh`
+(about 3 to 4 hours). Part A: pre-fix HEAD `59c53cc` (`425285a3daef839e`) against the closing build,
+alternated three times, four sweep models at 512, generation and prefill `>= 0.95x`. Part L: LoRA train
+speed `>= 0.95x` and playback `>= 0.80x` against `f02bdae`, governor and turbo pinned. Part B: closing
+sweeps at `n_prompt` 128, 512 and 2048, published. The 512 sweep scores the milestone (`>= 0.20x` on every
+sweep model), and the 2048 sweep fills the README's Tier 02 reference cell. The script refuses to run if the
+tree's jar is not the staged candidate; re-copy it after any rebuild.
+
+
+### 2026-10-04: the owner's closing gate (pinned), and two defects it exposed
+
+Owner run of `dist/packed-kquant-close/run-gate.sh`, 11:05Z onward, clocks pinned throughout.
+
+**Part A, the two out-of-tier fixes** (pre-fix HEAD `425285a3daef839e` against the closing build
+`5ab4c78c505a4cef`, alternated three times, n_prompt 512; [`20261004T110558Z-packed-kquant-close-ab`](../perf-compare/20261004T110558Z-packed-kquant-close-ab/INDEX.md)):
+prefill 0.996 / 0.985 / 1.008 / 0.972, generation 1.006 / **0.952** / 0.999 / 0.996 (TinyLlama, Qwen2.5-3B,
+Phi-3.5-mini, Mistral 7B). Gate `>= 0.95x`: **met**. Qwen2.5-3B generation is lower in all three pairs, so
+0.952 is not one outlier. No mechanism is known (the fixes add two barriers per attention block and take
+work out of decode). Step 4 saw the same pattern on this model and its declared confirmation read 0.999.
+Recorded, not explained. `host-specific`.
+
+**Part L, LoRA** (same directory): train speed 1.000x, playback 1.030x against `f02bdae`. Gates met.
+
+**Part B, closing sweeps** ([`20261004T113210Z`](../perf-compare/20261004T113210Z/INDEX.md) at 128,
+[`20261004T114812Z`](../perf-compare/20261004T114812Z/INDEX.md) at 512; every row scorable, prompt-token
+parity exact, the staged candidate jar):
+
+| Model | pp 512 (Tier 01B close) | **pp 512 (closing)** | pp 128 | 512 over 128 | pp 2048 | 2048 over 512 | tg 128 |
+|---|---|---|---|---|---|---|---|
+| tinyllama | 0.254x | **0.317x** | 0.524x | 0.606 | 0.121x | 0.382 | 0.363x |
+| qwen2.5-3b | 0.281x | **0.429x** | 0.616x | 0.697 | 0.170x | 0.395 | 0.432x |
+| Phi-3.5-mini | 0.146x | **0.226x** | 0.303x | 0.743 | not measured | - | 0.545x |
+| mistral-7b | 0.285x | **0.468x** | 0.729x | 0.642 | not reached | - | 0.627x |
+
+Read against the program target (README):
+- **This tier's milestone, GPU pp `>= 0.20x` at 512 on every sweep model: met**, binding on
+  Phi-3.5-mini at 0.226x. Retired in the README's table.
+- Tier 01B's milestone rows (retired) stay met.
+- **End-of-plan GPU pp `>= 0.25x`: met on three models at 512, missed on Phi-3.5-mini (0.226x).**
+- **Post-plan anchor `0.40x`: reached at 512 on Qwen2.5-3B (0.429x) and Mistral 7B (0.468x)**, not on
+  TinyLlama or Phi-3.5-mini. Reported, not a gate.
+- End-of-plan GPU tg `>= 0.70x`: missed (Phi-3.5-mini 0.545x, Mistral 7B 0.627x). No tg work in this tier.
+- **Tier 02's rows moved the wrong way, as Tier 01B's decomposition predicted for this kind of change:**
+  512 over 128 fell from 0.845 to 0.606 (binding TinyLlama), and 2048 over 512 reads 0.38 to 0.40 on the
+  two models measured. The matmuls got 1.2x to 1.6x faster while attention did not, so attention's share
+  of a long window grew. `expected-general`. Both rows are Tier 02's, and their reference cells are updated.
+
+**The 2048 sweep did not finish.** TinyLlama and Qwen2.5-3B completed (published by hand as
+[`20261004T120622Z-partial`](../perf-compare/20261004T120622Z-partial/INDEX.md)). On Phi-3.5-mini every
+prefill request died with `java.lang.OutOfMemoryError: Java heap space` (6 GiB fixed heap) and returned no
+response. Each one waited out the harness's 7,200-second `curl` timeout, three of them in the first
+repetition (07:21 to 13:21 local). The owner stopped the run during the second repetition; clocks, governor
+and turbo were restored. Mistral 7B was not reached. **The agent's 2048 pre-check had covered only
+TinyLlama**, which is why this was not caught before the owner's run.
+
+**Defect 1: an `Error` in a generation thread leaves the request unanswered.**
+`RequestScheduler.dispatchSingle` and the batch path catch `Exception` only. An `OutOfMemoryError` escapes,
+the request's future is never completed, and the HTTP client waits until its own timeout. A fail-closed
+violation: the server should answer with an error. `expected-general`. Pre-existing, not introduced by
+this tier.
+
+**Defect 2: Phi-3.5-mini cannot prefill a 2048-token prompt in a 6 GiB heap** with the default prefill
+window (one 2048-row window, since step 5's chunk sizing gives Phi-3.5-mini 3,659 rows). Phi-3's region
+returns Q, K and V to the host for host-side RoPE and attention (32 heads, `kvHeads=32`, head dim 96), and
+the host window, its attention scores and the host KV cache are all sized by the window. Not yet measured
+term by term. First exercised by this sweep: no earlier run prefilled 2048 tokens on Phi-3.5-mini.
+
+**Raised with the owner (decision 5), options:**
+- (a) Fix defect 1 now (complete the future on any `Throwable`, map an `OutOfMemoryError` to an HTTP error,
+  in every dispatch path including the continuous engine), measure Phi-3.5-mini's 2048-row host footprint
+  term by term, then decide between a smaller footprint and a larger fixed sweep heap for that model. Then
+  re-run part B at 2048 only. Recommended.
+- (b) Fix defect 1 only; give Phi-3.5-mini a larger fixed heap in the sweep (`COMPARE_HEAP` per model) and
+  re-run part B at 2048; record the footprint as a Tier 02 item.
+- (c) Close the tier with the 2048 reading on two models, and move both defects to later tiers.
+
+**Raised with the owner (decision 6):** whether the two closing sweeps become the new GPU reference column in
+the README's program-target table, as Tier 01B's did. Recommended: yes, for 128 and 512, with the 2048
+column added when complete.
+
+*Owner decisions 2026-10-04: decision 5 (a), fix defect 1 in every dispatch path, then measure Phi-3.5-mini's
+2048-row host footprint and choose between a smaller footprint and a larger sweep heap; decision 6, the 128
+and 512 closing sweeps become the GPU reference column.*
+
+
+### 2026-10-04: decision 5 (a), defect 1 fixed, Phi-3.5-mini's 2048-token footprint measured, and a third blocker
+
+**Defect 1 fixed: an `Error` in generation now fails the request on every dispatch path.**
+- Tests first: `RequestSchedulerErrorTest` (new, coordinator, 3 cases). A pipeline throws
+  `OutOfMemoryError` from every forward pass; on single dispatch, batched dispatch and the continuous
+  schedule, the request must end within 10 s with the error as its cause, and the next request must be
+  served. Before the fix all three timed out at 10 s: the request never ended.
+- Fix: `RequestScheduler`'s single path, batch path and batch collector loop, and `ContinuousBatchEngine`'s
+  admit, slot finish and engine loop catch `Throwable`, complete the futures exceptionally, and keep
+  serving. Before, an `Error` escaping the continuous engine's loop ended its thread, so every later
+  request on that schedule hung. The HTTP handlers already turn a failed future into HTTP 500 (unstreamed)
+  or a closed stream (streamed).
+- Result: coordinator 372 run, 0 failures. End to end, Phi-3.5-mini at a 2056-token prompt with a 6 GiB
+  heap now answers **HTTP 500 with `java.lang.OutOfMemoryError: Java heap space` in 4.6 s**, where the sweep
+  waited 7,200 s per request.
+- `expected-general`. Out of tier (coordinator), by owner decision 5 (a); not a measurement boundary
+  (nothing changes unless a request throws an `Error`).
+
+**Phi-3.5-mini's 2048-token footprint, measured** (one engine, `--gpu`, one greedy request of 2,056 prompt
+tokens, `-Xlog:gc` and JFR; jar `bd3e162c95e530bc`):
+
+| Fixed heap | Result | Live heap after GC, peak |
+|---|---|---|
+| 6 GiB (the sweep's) | HTTP 500, out of heap, in 4.6 s | 6,128 MB, 6 full collections |
+| 8 GiB | HTTP 200, 35 s | 6,185 MB, no full collection |
+| 10 GiB | HTTP 200, 33 s | 7,114 MB (garbage not yet collected) |
+
+The live set is about 6.1 GB. Two terms make up most of it:
+- **The host KV cache, about 3.2 GB.** `DenseKvTensor` doubles its capacity, and its `f16` element type
+  stores 32-bit floats. A 2,048-token prompt plus one generated token needs position 2,048, one past
+  2,048, so every layer's K and V double to 4,096 positions: 2 x 32 layers x 3,072 x 4 bytes x 4,096 =
+  3.2 GB, where 1.6 GB would hold it. Phi-3.5-mini has 32 KV heads, so its per-token KV is three times
+  Mistral 7B's. `expected-general`.
+- **Host copies of the quantized weights, about 2.2 GB**, kept for the CPU fallbacks (including the new
+  `DeviceMatVecFallback`).
+
+Choice made under decision 5 (a): **a larger sweep heap for Phi-3.5-mini at 2048**, not a smaller
+footprint in this tier. Exact-size KV growth and real FP16 KV storage are KV-cache work (Tier 03), and they
+change memory behaviour on every model. The 2048 re-run passes `COMPARE_HEAP=8g` for Phi-3.5-mini only,
+which the harness records as an `explicit` heap. The fixed table, and so the 128 and 512 references, are
+unchanged. Mistral 7B at 2048 runs at its fixed 9 GiB (checked unpinned: pp 0.157x, no error).
+
+**A third blocker: the harness withholds Phi-3.5-mini's 2048 reading, and the cause is the tokenizer.**
+Unpinned, with 8 GiB, the harness ran Phi-3.5-mini at 2048 to completion but withheld the prefill
+figure. 322 ms of the 30,195 ms request fell outside the forward-pass spans, against the integrity
+check's fixed allowance of `300 + 3 x generated tokens` ms (303). That residual, per model and prompt
+length, from the published sweeps:
+
+| Model | 128 | 512 | 2048 |
+|---|---|---|---|
+| tinyllama | 5 ms | 17 ms | 277 to 284 ms |
+| mistral-7b | 6 ms | 18 to 22 ms | 286 ms |
+| Phi-3.5-mini | 8 ms | 25 to 26 ms | 322 ms |
+| qwen2.5-3b | 4 ms | 5 to 7 ms | 12 to 14 ms |
+
+It grows with the square of the prompt on the three SentencePiece models and not on Qwen2.5-3B (GPT-2 BPE
+with a pre-tokenizer split). Timing `GgufTokenizer.encode` directly on the harness's prompt (`x x x ...`):
+
+| Model | 128 words | 512 words | 2048 words |
+|---|---|---|---|
+| tinyllama | 4.3 ms | 23.7 ms | 262 ms |
+| Phi-3.5-mini | 0.9 ms | 13.5 ms | 270 ms |
+| mistral-7b | 0.8 ms | 13.7 ms | 253 ms |
+| qwen2.5-3b | 0.8 ms | 2.6 ms | 5.0 ms |
+
+The SentencePiece path merges over the whole unsplit text (`GgufTokenizer.mergeWholeRuns` /
+`mergeInPlace`), so the work is quadratic in prompt length. It accounts for almost all of the residual.
+Tokenization runs before the forward-pass span, so it does not enter the prefill figure. It does
+enter time to first token, about 0.25 s at 2,048 tokens and, extrapolated at x16 per x4, several seconds at
+8,192. `expected-general`. With turbo off (pinned) the tokenizer runs slower, so the owner's re-run would
+withhold Phi-3.5-mini again, and TinyLlama and Mistral 7B (about 20 ms under the allowance unpinned)
+could follow.
+
+**Raised with the owner (decision 7), options:**
+- (a) Make the SentencePiece merge sub-quadratic (a priority queue over adjacent pairs, the same
+  highest-score, leftmost-first order), with a parity test that it produces identical tokens to the current
+  implementation over a corpus that includes the sweep prompts. Out of tier: tokenizer work is Tier 04B's.
+  It also cuts time to first token on every SentencePiece model.
+- (b) Measure tokenization: a JFR span around prompt encoding, which the harness subtracts from the
+  residual before applying the unchanged allowance. The integrity check still catches a misread clock. The
+  quadratic tokenizer is recorded as a Tier 04B item with these numbers. Smaller change, no change to tokens.
+  Recommended.
+- (c) Close this tier with the 2048 reading on two models, and carry the Phi-3.5-mini and Mistral 7B 2048
+  readings, the tokenizer and the KV footprint to Tiers 02, 03 and 04B.
+
+*Owner decision 2026-10-04: decision 7 (b), a JFR span around prompt encoding that the harness subtracts
+from the residual; the quadratic tokenizer is recorded as a Tier 04B item.*
+
+
+### 2026-10-04: decision 7 (b), prompt encoding recorded and subtracted by the span check
+
+**Tests first, each seen failing for the right reason:**
+- `JfrMetricsExtractorPromptEncodeTest` (metrics, 2): `juno.PromptEncode.count` and `.total_ms` absent
+  before. The duration case first asserted `>= 50.0` for sleeps of 30 and 20 ms, and read 49.89 in the full
+  suite. That was a defect in the test, not the product (sleep granularity against the recorder's clock),
+  so it now checks a 45-to-250 ms band;
+- `PromptEncodeEventTest` (coordinator, 2): one `juno.PromptEncode` event per request carrying the
+  prompt's token count, on the static and continuous schedules; 0 events before;
+- `compare-llama-cpp.sh --selftest` (5 new checks, the exact Phi-3.5-mini 2048 shape: prefill 29,799 ms,
+  request 30,195 ms). Without an encode figure the request is still withheld, and a 633 ms clock misread
+  is still caught with one; with 270 ms recorded it passes, its prefill reading is published, and
+  `prompt_encode_ms` is in the check. Three failed before the change; the two guards already held.
+
+**What changed.** `PromptEncodeEvent` and `PromptEncoder` (new, coordinator): every generation path
+(`GenerationLoop`'s single and batch paths, `ContinuousBatchEngine`) encodes through it.
+`JfrMetricsExtractor` emits `juno.PromptEncode.count` / `.total_ms`. `juno-perf.jfc` enables the event.
+`compare-llama-cpp.sh` subtracts the encode time from both residuals before the unchanged allowance
+(`300 + 3 x generated tokens` ms, `-25` floor) and records `prompt_encode_ms`. A build without the event
+contributes 0, which is the previous rule, so earlier published runs are unchanged.
+
+**End to end** (unpinned, `--no-publish`, `COMPARE_HEAP=8g`, jar `4f851a1fb94abbd1`): Phi-3.5-mini at 2048
+now publishes its reading. Encoding 306 ms, residual after it 25.7 ms (allowance 303), prompt 2,048 of 2,048
+tokens; pp 0.074x for information (a third of its 0.226x at 512, the long-context gap Tier 02 owns).
+`expected-general`: encoding outside every forward-pass span, and its quadratic growth on an unsplit
+SentencePiece merge. `host-specific`: the 306 ms.
+
+**Regression runs** (this build; the jar staged for the owner is `a90122b2855bb826`, the same source
+rebuilt by `install`):
+- `compare-llama-cpp.sh --selftest`: 97 ok, exit 0.
+- Unit suite: **2,071 run, 1 failure**, across runs. Registry, lora, kvcache and health pass; node 889 with
+  1 failure; tokenizer, sampler, coordinator (374) and vision pass; metrics 84 and juno-player 118 after the
+  test fix above. The node failure is `GpuAttentionHandlerParityTest`'s device-wide free-memory check
+  (106 MB short). Re-run alone: fail (22 MB short), pass, pass. node is unchanged since the green run of the
+  same day. It is the same environment-sensitive class as `PrefillRegionHandlerParityTest`'s check (the
+  card also drives the desktop), and it is not loosened.
+- `mvn verify -pl juno-master` 20 of 20; `ModelLiveRunnerIT` four sweep models **36 of 36**.
+
+**Out-of-tier change** (rule 9): coordinator, metrics and the harness, by owner decision 7 (b). **Not a
+measurement boundary for throughput:** one JFR event per request. It changes which repetitions the
+harness publishes on long SentencePiece prompts, and only by removing a known non-clock term from the
+check. Docs: `docs/agent-arch.txt`, `docs/performance.md` (span check), Tier 04B item 5 (the quadratic
+tokenizer), Tier 03 item 6 (the host KV footprint).
+
+**Owed to the owner (pinned):** `sudo -v && bash dist/packed-kquant-close/run-2048.sh` (about 1 to 1.5
+hours). It runs all four sweep models at 2048 on this build, in two published invocations
+(TinyLlama, Qwen2.5-3B and Mistral 7B at their fixed heaps; Phi-3.5-mini with an explicit 8 GiB). The
+script refuses to run unless the tree's jar is the staged candidate.
+
+
+### 2026-10-04: the 2048 re-run (owner run, pinned), and the tier closed
+
+Owner run of `dist/packed-kquant-close/run-2048.sh`, jar `a90122b2855bb826` (the staged candidate),
+clocks pinned, both invocations published:
+[`20261004T220015Z`](../perf-compare/20261004T220015Z/INDEX.md) (TinyLlama, Qwen2.5-3B, Mistral 7B at their
+fixed heaps) and [`20261004T222758Z`](../perf-compare/20261004T222758Z/INDEX.md) (Phi-3.5-mini, explicit
+8 GiB heap, recorded as `explicit` in every result file). Every row is scorable, every prefill is at 2,048 of
+2,048 prompt tokens, and no repetition was withheld. Phi-3.5-mini's three repetitions recorded 266 to 269 ms
+of prompt encoding, subtracted by the span check, leaving residuals of 26 to 27 ms.
+
+| Model | pp 512 | **pp 2048** | 2048 over 512 | tg (2048 run) |
+|---|---|---|---|---|
+| tinyllama | 0.317x | **0.121x** | 0.381 | 0.323x |
+| qwen2.5-3b | 0.429x | **0.180x** | 0.420 | 0.442x |
+| Phi-3.5-mini | 0.226x | **0.099x** | 0.441 | 0.589x |
+| mistral-7b | 0.468x | **0.154x** | 0.329 | 0.598x |
+
+- **The first parity-corrected 2048 reading is now complete**, and it fills the README's Tier 02 milestone
+  cell (2048 over 512 `>= 0.90`: reference 0.329, binding Mistral 7B). The two partial readings from the
+  interrupted sweep agree to within 0.01 (TinyLlama 0.121x against 0.121x, Qwen2.5-3B 0.180x against
+  0.170x). The 2048 figures are in the README's reference column (decision 6) and in `docs/performance.md`.
+- Read against the program target: at 2048 no model reaches the end-of-plan `>= 0.25x`. Prefill falls to
+  0.33 to 0.44 of its 512-token ratio, as attention grows with context. The tiled long-context attention
+  kernel is Tier 02's, and this is its starting point. `expected-general` for the direction;
+  `host-specific` for the factors.
+
+**Marker audit** (the exit criterion). Every execution-record entry was checked for conclusions without a
+`host-specific` or `expected-general` marker. The conclusions scope item 4 names are all marked: the
+integer GEMM over `cublasGemmEx` (step 2, `host-specific`), the width at which dequantization stops
+mattering (step 1, `expected-general`), and the packed path winning on compute (steps 3 and 4,
+`host-specific`). Four entries had none. Markers were added to three: the scratch fix, the closing
+matrix's cluster divergence and vision/LoRA lines, and the encoding figures. The fourth, the harness's
+recorded window width, is tooling with no performance conclusion and now says so.
+
+
 ## Exit criteria
 
 - [x] Item 1's per-width breakdown published, with the GEMM's share at 512 per sweep model and the
@@ -664,9 +1228,14 @@ and `CHANGELOG.md` (Session 108).
       Qwen2.5-3B, Phi-3.5-mini, Mistral 7B), widths 9 to 512, unpinned attribution run
       [`docs/perf-compare/20261003T060301Z-packed-kquant-width-breakdown`](../perf-compare/20261003T060301Z-packed-kquant-width-breakdown/INDEX.md);
       throughput branch chosen (Mistral 7B >= 30%) in the step 2 record, no kernel code written.*
-- [ ] A tiled packed GEMM for Q4_K, Q5_K and Q6_K is the default for batch > `HALF_SGEMM_BATCH_MAX`,
+- [x] A tiled packed GEMM for Q4_K, Q5_K and Q6_K is the default for batch > `HALF_SGEMM_BATCH_MAX`,
       reading and writing through Tier 01B's prefill-window region; `Q4KDequantScratch` is off the
       default path for these formats; `--mmq off` still gives the FP16 baseline.
+      *Checked 2026-10-04: `CudaMatVec.gemmPackedOnStream` serves both `sgemmInto(DeviceQ4KMatrix, ...)`
+      and the region's `gemmOnStream`; dequantization only when the module fails to load
+      (`KQuantGemmParityTest.batchedSgemmRunsThisKernel`, `DeviceStagingSpansTest`: no
+      `juno.WeightDequant`); `--mmq off` uploads FP16 weights and never a `DeviceQ4KMatrix`. End to end the
+      packed smoke asserts the kernel loaded with no fallback on every model and schedule, 48 of 48.*
 - [x] The forward-pass reserve shrunk, proven by the fits-only-under-the-new-budget test.
       *Checked 2026-10-04: the reserve is the 64-row prefill window plus margin and a 64 MiB allocator
       allowance; the weight matrix is reserved only when the tiled kernel cannot load.
@@ -675,19 +1244,60 @@ and `CHANGELOG.md` (Session 108).
       dequant route does not). On a real model, llama-1-30b on one node holds 23 GPU layers instead of 22
       (197 MiB kept free instead of 416), in
       [`docs/perf-compare/20261003T235146Z-packed-kquant-reserve`](../perf-compare/20261003T235146Z-packed-kquant-reserve/INDEX.md).*
-- [ ] Every threshold above met, or reported missed with its number.
+- [x] Every threshold above met, or reported missed with its number.
       *2026-10-04: the VRAM threshold is met (prefill peak over decode peak 1.043 on Mistral 7B, 1.012 on
       llama-1-30b, against <= 1.05x;
       [`docs/perf-compare/20261003T235146Z-packed-kquant-reserve`](../perf-compare/20261003T235146Z-packed-kquant-reserve/INDEX.md)).
       Still owed at step 6, by the executor: the scored greedy-decode agreement over 512 tokens, and the
       vision and LoRA gates.*
-- [ ] The milestone (GPU pp >= 0.20x at `n_prompt=512` on every sweep model) read from the closing
+      *2026-10-04, step 6: met. Throughput (step 4 pinned A/B, `20261003T195923Z-packed-kquant-ab`);
+      numerical quality, kernel clause (`KQuantGemmQualityTest`) and the restated greedy clause (determinism
+      on 100% of cells, divergence recorded:
+      [`docs/perf-compare/20261004T050618Z-packed-kquant-smoke`](../perf-compare/20261004T050618Z-packed-kquant-smoke/INDEX.md));
+      vision 1.002x / 0.995x and LoRA playback 1.023x
+      ([`docs/perf-compare/20261004T091233Z-packed-kquant-close-vision-lora`](../perf-compare/20261004T091233Z-packed-kquant-close-vision-lora/INDEX.md)).
+      **Still owed, by the owner (pinned):** LoRA train `>= 0.95x` (unpinned 1.000x) and the decode
+      no-regression of the two out-of-tier fixes (gate part A), both in `dist/packed-kquant-close/run-gate.sh`.*
+      *2026-10-04, owner gate: both met. Part A generation 0.952x to 1.006x and prefill 0.972x to 1.008x;
+      LoRA train 1.000x, playback 1.030x
+      ([`docs/perf-compare/20261004T110558Z-packed-kquant-close-ab`](../perf-compare/20261004T110558Z-packed-kquant-close-ab/INDEX.md)).
+      Every threshold is met.*
+- [x] The milestone (GPU pp >= 0.20x at `n_prompt=512` on every sweep model) read from the closing
       sweep and reported met or missed with the number; the first `n_prompt=2048` sweep published and
       the README's Tier 02 milestone reference cell filled from it in the same change.
-- [ ] Every conclusion in the execution record carries a `host-specific` or `expected-general` marker.
-- [ ] Cross-surface checklist fully resolved.
-- [ ] Perf gate published; `compare-llama-cpp.sh` pp and tg ratios recorded in this file against the
+      *2026-10-04: the milestone is met, 0.226x (Phi-3.5-mini, binding) to 0.468x
+      ([`docs/perf-compare/20261004T114812Z`](../perf-compare/20261004T114812Z/INDEX.md)), and retired in
+      the README. The 2048 half is incomplete: two of four models
+      ([`docs/perf-compare/20261004T120622Z-partial`](../perf-compare/20261004T120622Z-partial/INDEX.md)),
+      with the README cell filled from them. Phi-3.5-mini ran out of Java heap and Mistral 7B was not
+      reached. Owed after decision 5.*
+      *Checked 2026-10-04: the 2048 sweep is complete on all four models, 0.099x to 0.180x
+      ([`docs/perf-compare/20261004T220015Z`](../perf-compare/20261004T220015Z/INDEX.md),
+      [`docs/perf-compare/20261004T222758Z`](../perf-compare/20261004T222758Z/INDEX.md)), and the
+      README's Tier 02 cell is filled from it (0.329, binding Mistral 7B).*
+- [x] Every conclusion in the execution record carries a `host-specific` or `expected-general` marker.
+      *2026-10-04: open. The step 6 entries mark their conclusions, but the record has not been audited
+      end to end; done at close, after the owner's gate, so the sweep's conclusions are marked in the same pass.*
+      *Checked 2026-10-04: audited end to end; markers added where missing (closing entry, "Marker audit").*
+- [x] Cross-surface checklist fully resolved.
+      *Checked 2026-10-04: the closing matrix in the step 6 record. 12 PASS, 2 N/A with reasons, ROCm
+      NEEDS-AMD-HARDWARE. Throughput on row 2 is read by the owner's closing sweep, the other rows on
+      correctness. Evidence (not published): the unit suite, ITs and earlier smokes listed there.*
+- [x] Perf gate published; `compare-llama-cpp.sh` pp and tg ratios recorded in this file against the
       program target, Tier 01B's milestone rows and the post-plan anchor.
-- [ ] Docs (`docs/agent-arch.txt`, `docs/howto.md`, `docs/performance.md`) updated in Juno-native
+      *Checked 2026-10-04: the owner-gate record above, from
+      [`docs/perf-compare/20261004T113210Z`](../perf-compare/20261004T113210Z/INDEX.md) and
+      [`docs/perf-compare/20261004T114812Z`](../perf-compare/20261004T114812Z/INDEX.md) (pinned); compare-lora
+      and compare-vision in `20261004T110558Z-packed-kquant-close-ab` and
+      `20261004T091233Z-packed-kquant-close-vision-lora`.*
+- [x] Docs (`docs/agent-arch.txt`, `docs/howto.md`, `docs/performance.md`) updated in Juno-native
       language; the `--mmq` help text says `off` and `auto` now differ in prefill.
-- [ ] `CHANGELOG.md` entry added.
+      *2026-10-04: done except the closing sweep figures, which `docs/performance.md`'s new "Packed K-quant
+      prefill matmul" section receives after the owner's gate part B. `agent-arch.txt`, `howto.md` and the
+      help text are updated.*
+      *2026-10-04, after the gate: the 128 and 512 figures are in `docs/performance.md`. Kept open for the
+      2048 figures (decision 5).*
+      *Checked 2026-10-04: the 2048 figures are in `docs/performance.md` too.*
+- [x] `CHANGELOG.md` entry added.
+      *Checked 2026-10-04: Sessions 107 (the packed prefill matmul), 108 (the reserve) and 109 (the
+      attention race and the multi-process scratch fix).*

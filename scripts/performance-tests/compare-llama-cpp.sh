@@ -538,6 +538,27 @@ run_selftest() {
   sj="$(jfr_summary_json "$d/gen-tok-ok.json" 11 64 2361)"
   selftest_expect "a token span that leaves a first-token gap passes" true \
     "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
+  # Prompt encoding runs before the first forward pass, outside every span. On the three
+  # SentencePiece sweep models it grows with the square of the prompt: 253 to 270 ms at 2048
+  # tokens (2026-10-04), which alone fills the allowance. The engine records it as
+  # juno.PromptEncode, and the check subtracts it; a misread clock is still caught.
+  log "selftest: span check subtracts the recorded prompt encoding"
+  selftest_metrics "$d/enc-none.json" 29799 73.5 2047 0
+  sj="$(jfr_summary_json "$d/enc-none.json" 2048 1 30195)"
+  selftest_expect "a 2048-token request leaving 322 ms unaccounted, encoding not recorded, is withheld" false \
+    "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
+  jq '.models[0].metrics["juno.PromptEncode.total_ms"] = 270' "$d/enc-none.json" >"$d/enc.json"
+  sj="$(jfr_summary_json "$d/enc.json" 2048 1 30195)"
+  selftest_expect "the same request with 270 ms of recorded encoding passes" true \
+    "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
+  selftest_expect "and its prefill reading is published" true \
+    "$(jq -r '.prompt_eval_tps != null' <<<"$sj")"
+  selftest_expect "and the encoding time is recorded in the check" 270 \
+    "$(jq -r '.span_check.prompt_encode_ms' <<<"$sj")"
+  jq '.models[0].metrics["juno.ForwardPass.prefill.total_ms"] = 29166' "$d/enc.json" >"$d/enc-short.json"
+  sj="$(jfr_summary_json "$d/enc-short.json" 2048 1 30195)"
+  selftest_expect "a prefill span 633 ms short is still caught with encoding recorded" false \
+    "$(jq -r '.span_check.timestamps_consistent' <<<"$sj")"
   selftest_metrics "$d/reuse.json" 200 23 27 100
   sj="$(jfr_summary_json "$d/reuse.json" 128 1 240)"
   selftest_expect "a prefill resumed at position 100 is not a full prefill" false \
@@ -1365,8 +1386,13 @@ jfr_summary_json() {
     # CPU timestamp counter that disagrees between cores leaves hundreds of ms either
     # side of that. Spans exceeding their request are impossible, so the lower bound
     # is tight; the upper bound allows per-token sampling and detokenization.
+    # Prompt encoding (juno.PromptEncode) runs before the first forward pass, outside every
+    # span, and grows with the square of the prompt on SentencePiece vocabularies (about
+    # 260 ms at 2048 tokens), so it is subtracted before the allowance applies. A build that
+    # does not record it contributes 0, which is the previous rule.
+    ($m."juno.PromptEncode.total_ms" // 0) as $encode_ms |
     (if $latency_ms > 0 and ($prefill_ms + $decode_ms) > 0
-     then ($latency_ms - $prefill_ms - $decode_ms) else null end) as $resid |
+     then ($latency_ms - $prefill_ms - $decode_ms - $encode_ms) else null end) as $resid |
     (300 + 3 * $ct) as $resid_max |
     # The generation figure is read off the first-to-last token span, which is a
     # separate pair of timestamps and is misread separately. What the request leaves
@@ -1378,7 +1404,7 @@ jfr_summary_json() {
     ($m."juno.ForwardPass.decode.count" // 0) as $decode_n |
     (if $decode_n > 0 then ($decode_ms / $decode_n) else 0 end) as $decode_step_ms |
     (if $ct >= 2 and $tok_span_s != null and $tok_span_s > 0 and $latency_ms > 0
-     then ($latency_ms - $prefill_ms - ($tok_span_s * 1000) - $decode_step_ms) else null end) as $tok_resid |
+     then ($latency_ms - $prefill_ms - ($tok_span_s * 1000) - $decode_step_ms - $encode_ms) else null end) as $tok_resid |
     (if $resid == null and $tok_resid == null then null
      else (($resid == null or ($resid >= -25 and $resid <= $resid_max))
            and ($tok_resid == null or ($tok_resid >= -25 and $tok_resid <= $resid_max))) end) as $clock_ok |
@@ -1401,6 +1427,7 @@ jfr_summary_json() {
       span_check: {
         timestamps_consistent: $clock_ok,
         span_residual_ms: $resid,
+        prompt_encode_ms: $encode_ms,
         token_span_residual_ms: $tok_resid,
         span_residual_min_ms: -25,
         span_residual_max_ms: $resid_max,

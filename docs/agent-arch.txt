@@ -184,7 +184,10 @@ Module dependency (excerpt):
         coverage of the recorded prefill windows (juno.PrefillBatch.tokens, the
         sum of their window sizes, and juno.PrefillBatch.min_start_position, -1
         when there were none), which a harness reads to confirm a measured
-        request prefilled its whole prompt rather than resuming from reused KV.
+        request prefilled its whole prompt rather than resuming from reused KV,
+        and juno.PromptEncode.count / .total_ms (prompt encoding, which runs
+        before the first forward pass; the harness subtracts it before checking
+        that the spans account for their request).
         DeviceSpanBucket sums the juno.DeviceStaging totals per direction (H2D,
         D2H, D2D), per phase (prefill, decode, other) and per site into
         count/bytes/timed_count/total_ms, and juno.WeightDequant overall, per
@@ -265,6 +268,15 @@ Prefix cache and KV ownership: prefix reuse is session-scoped. A PrefixCache tri
   GenerationLoop.generateBatch() (static multi-request batching) keys each request's KV by
   its own request id and evicts it on completion, so it never reads or writes the trie and
   prefills every prompt in full.
+
+Generation failures and prompt encoding: every dispatch path (RequestScheduler's single and
+  batch paths and its batch collector, ContinuousBatchEngine's admit, slot finish and engine loop)
+  catches Throwable, so an Error such as running out of Java heap completes the request's future
+  exceptionally (HTTP 500, or a closed stream) and the scheduler keeps serving; before, an Error
+  left the future open, and on the continuous schedule ended the engine thread
+  (RequestSchedulerErrorTest). Every path encodes its formatted prompt through PromptEncoder,
+  which times it as juno.PromptEncode (request id, characters, tokens; PromptEncodeEventTest),
+  since encoding runs before the first forward pass and no forward-pass span covers it.
 
 Tensor parallelism (current state): the gRPC transport, the coordinator-side star AllReduce
   (TensorParallelPipelineClient: broadcast the tokens to every node, element-wise sum of the
@@ -358,7 +370,10 @@ GPU FFI (node module — Panama project, JEP 454):
         which the handler calls once the host KV holds the same rows. A grow whose second
         allocation fails frees the first.
   GqaAttentionKernel — PTX loader/launcher (CUDA Driver API) for gqa_attention.ptx; one block
-        per (batch-row, head), 3-pass QK^T+max / softmax / weighted-V-sum.
+        per (batch-row, head), 3-pass QK^T+max / softmax / weighted-V-sum. Both block
+        reductions share one shared-memory array and end with a barrier after every thread
+        has read the result, so output is bit-identical launch to launch
+        (GqaAttentionReproducibilityTest).
   CudaGqaAttention — handler-facing attendBatched(...); real dispatch against DeviceKvCache,
         grow-and-keep-max scratch taken from a DeviceScratchPool (runs outside the context lock,
         so concurrent callers each hold an entry; the pool is sized by concurrent calls, not by
@@ -578,7 +593,15 @@ GPU FFI (node module — Panama project, JEP 454):
         the instance, not to a thread; every use is under GpuContext.cublasSerializationLock()
         and each call synchronizes its stream before releasing it, so one set serves every
         caller. Grown on demand, kept at the largest size; releaseScratch() frees the set and
-        the next call grows it again; scratchDeviceBytes() reports it (tests). sgemmInto (see
+        the next call grows it again; scratchDeviceBytes() reports it (tests). The single-row
+        product scratch is held at upload (holdGemvScratch: input max(rows, cols), output three
+        times that for sgemvSameX, Q8_1 input for packed weights), so decode allocates nothing
+        and the scratch counts before the upload stop rule reads free memory; a failure there
+        frees the matrix and rethrows into the handler's per-layer upload handling
+        (GemvScratchHeldAtUploadTest).
+  DeviceMatVecFallback — per handler (Llama, Phi-3, Qwen3): a resident-weight product whose
+        device call runs out of memory (GpuLayerOffload.isVramOom) finishes on the CPU from the
+        quantized tensor, warned once; any other failure is rethrown (DeviceMatVecFallbackTest). sgemmInto (see
         MatVec) is the batched implementation for all three device weight types and writes into
         the caller's rows from the pinned staging buffer; sgemm allocates the rows and delegates.
         The FP32 batched path (GpuBlasOps.forwardInto) still allocates its packed host copies.

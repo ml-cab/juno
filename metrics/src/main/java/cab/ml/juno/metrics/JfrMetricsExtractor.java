@@ -39,6 +39,7 @@ final class JfrMetricsExtractor {
     private static final String MAT_VEC = "juno.MatVec";
     private static final String FORWARD = "juno.ForwardPass";
     private static final String PREFILL_BATCH = "juno.PrefillBatch";
+    private static final String PROMPT_ENCODE = "juno.PromptEncode";
     private static final String ATTENTION = "juno.Attention";
     private static final String RMS_NORM = "juno.RmsNorm";
     private static final String ROPE = "juno.Rope";
@@ -92,6 +93,10 @@ final class JfrMetricsExtractor {
         // prompt starts at position 0; one that resumed from reused KV starts later.
         long prefillBatchTokens = 0;
         int prefillBatchMinStart = -1;
+        // Prompt encoding runs before the first forward pass, so it is part of a request's
+        // latency that no forward-pass span covers; a benchmark subtracts it when it checks
+        // that the spans account for their request.
+        List<Long> promptEncode = new ArrayList<>();
 
         DurationBucket attention = new DurationBucket();
         DurationBucket rmsNorm = new DurationBucket();
@@ -205,6 +210,7 @@ final class JfrMetricsExtractor {
                                 }
                             }
                         }
+                        case PROMPT_ENCODE -> promptEncode.add(nano);
                         case PREFILL_BATCH -> {
                             forwardAll.add(nano);
                             forwardPrefill.add(nano);
@@ -397,6 +403,8 @@ final class JfrMetricsExtractor {
         m.put("juno.ForwardPass.decode.total_ms", JfrPercentiles.sumNanosToMs(forwardDecode));
         m.put("juno.PrefillBatch.tokens", (double) prefillBatchTokens);
         m.put("juno.PrefillBatch.min_start_position", (double) prefillBatchMinStart);
+        m.put("juno.PromptEncode.count", (double) promptEncode.size());
+        m.put("juno.PromptEncode.total_ms", JfrPercentiles.sumNanosToMs(promptEncode));
 
         deviceSpans.putInto(m);
 

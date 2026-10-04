@@ -117,6 +117,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	// ── MatVec backend (CPU or CUDA) ─────────────────────────────────────────
 	private final MatVec backend;
+	private final DeviceMatVecFallback matVecFallback = new DeviceMatVecFallback("Llama");
 
 	// ── Device-resident weight matrices (non-null only when backend is CudaMatVec) ──
 	// Weights are dequantized to float32 once, converted to FP16, and uploaded to GPU
@@ -2689,12 +2690,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private float[] matVecProjection(GgufReader.QuantizedTensor quant,
 			DeviceQ4KMatrix[] q4, DeviceHalfMatrix[] half, DeviceFloatMatrix[] fp32,
 			int li, float[] x, int rows, int cols) {
-		if (q4 != null && q4[li] != null)
-			return backend.sgemv(q4[li], x);
-		if (half != null && half[li] != null)
-			return backend.sgemv(half[li], x);
-		if (fp32 != null && fp32[li] != null)
-			return backend.sgemv(fp32[li], x);
+		try {
+			if (q4 != null && q4[li] != null)
+				return backend.sgemv(q4[li], x);
+			if (half != null && half[li] != null)
+				return backend.sgemv(half[li], x);
+			if (fp32 != null && fp32[li] != null)
+				return backend.sgemv(fp32[li], x);
+		} catch (IllegalStateException ex) {
+			matVecFallback.absorb(ex);
+		}
 		return matVec(quant, x, rows, cols);
 	}
 
@@ -2705,6 +2710,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	private float[][] matVecProjectionSameX(
 			GgufReader.QuantizedTensor qa, GgufReader.QuantizedTensor qb, GgufReader.QuantizedTensor qc,
+			DeviceQ4KMatrix[] q4a, DeviceQ4KMatrix[] q4b, DeviceQ4KMatrix[] q4c,
+			DeviceHalfMatrix[] ha, DeviceHalfMatrix[] hb, DeviceHalfMatrix[] hc,
+			DeviceFloatMatrix[] fa, DeviceFloatMatrix[] fb, DeviceFloatMatrix[] fc,
+			int li, float[] x) {
+		try {
+			return sameXOnDevice(qc, q4a, q4b, q4c, ha, hb, hc, fa, fb, fc, li, x);
+		} catch (IllegalStateException ex) {
+			matVecFallback.absorb(ex);
+			return null;
+		}
+	}
+
+	private float[][] sameXOnDevice(GgufReader.QuantizedTensor qc,
 			DeviceQ4KMatrix[] q4a, DeviceQ4KMatrix[] q4b, DeviceQ4KMatrix[] q4c,
 			DeviceHalfMatrix[] ha, DeviceHalfMatrix[] hb, DeviceHalfMatrix[] hc,
 			DeviceFloatMatrix[] fa, DeviceFloatMatrix[] fb, DeviceFloatMatrix[] fc,
@@ -2740,8 +2758,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceHalfMatrix dev,
 			float[] x, int rows, int cols) {
-		if (dev != null)
-			return backend.sgemv(dev, x);
+		if (dev != null) {
+			try {
+				return backend.sgemv(dev, x);
+			} catch (IllegalStateException ex) {
+				matVecFallback.absorb(ex);
+			}
+		}
 		return matVec(quant, x, rows, cols);
 	}
 
@@ -2787,8 +2810,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceFloatMatrix dev,
 			float[] x, int rows, int cols) {
-		if (dev != null)
-			return backend.sgemv(dev, x);
+		if (dev != null) {
+			try {
+				return backend.sgemv(dev, x);
+			} catch (IllegalStateException ex) {
+				matVecFallback.absorb(ex);
+			}
+		}
 		return matVec(quant, x, rows, cols);
 	}
 

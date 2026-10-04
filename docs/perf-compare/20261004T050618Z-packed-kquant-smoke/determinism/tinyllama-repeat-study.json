@@ -1,0 +1,153 @@
+{
+ "candidate_59c53cc_before_fix": {
+  "requests": 10,
+  "distinct_outputs": 4,
+  "groups": [
+   {
+    "requests": [
+     "s1-1",
+     "s1-2",
+     "s1-3",
+     "s1-5",
+     "s2-2",
+     "s2-3",
+     "s2-5"
+    ],
+    "first_difference_from_majority": null
+   },
+   {
+    "requests": [
+     "s1-4"
+    ],
+    "first_difference_from_majority": 24
+   },
+   {
+    "requests": [
+     "s2-1"
+    ],
+    "first_difference_from_majority": 94
+   },
+   {
+    "requests": [
+     "s2-4"
+    ],
+    "first_difference_from_majority": 24
+   }
+  ]
+ },
+ "pre_switch_f02bdae_before_fix": {
+  "requests": 10,
+  "distinct_outputs": 3,
+  "groups": [
+   {
+    "requests": [
+     "s1-1",
+     "s1-2",
+     "s1-3",
+     "s1-4",
+     "s1-5",
+     "s2-1",
+     "s2-4",
+     "s2-5"
+    ],
+    "first_difference_from_majority": null
+   },
+   {
+    "requests": [
+     "s2-2"
+    ],
+    "first_difference_from_majority": 46
+   },
+   {
+    "requests": [
+     "s2-3"
+    ],
+    "first_difference_from_majority": 46
+   }
+  ]
+ },
+ "candidate_prefill_batch_1": {
+  "requests": 10,
+  "distinct_outputs": 1,
+  "groups": [
+   {
+    "requests": [
+     "s1-1",
+     "s1-2",
+     "s1-3",
+     "s1-4",
+     "s1-5",
+     "s2-1",
+     "s2-2",
+     "s2-3",
+     "s2-4",
+     "s2-5"
+    ],
+    "first_difference_from_majority": null
+   }
+  ]
+ },
+ "candidate_gpu_attention_off": {
+  "requests": 10,
+  "distinct_outputs": 1,
+  "groups": [
+   {
+    "requests": [
+     "s1-1",
+     "s1-2",
+     "s1-3",
+     "s1-4",
+     "s1-5",
+     "s2-1",
+     "s2-2",
+     "s2-3",
+     "s2-4",
+     "s2-5"
+    ],
+    "first_difference_from_majority": null
+   }
+  ]
+ },
+ "candidate_after_fix": {
+  "requests": 10,
+  "distinct_outputs": 1,
+  "groups": [
+   {
+    "requests": [
+     "s1-1",
+     "s1-2",
+     "s1-3",
+     "s1-4",
+     "s1-5",
+     "s2-1",
+     "s2-2",
+     "s2-3",
+     "s2-4",
+     "s2-5"
+    ],
+    "first_difference_from_majority": null
+   }
+  ]
+ },
+ "pre_switch_plus_fix": {
+  "requests": 10,
+  "distinct_outputs": 1,
+  "groups": [
+   {
+    "requests": [
+     "s1-1",
+     "s1-2",
+     "s1-3",
+     "s1-4",
+     "s1-5",
+     "s2-1",
+     "s2-2",
+     "s2-3",
+     "s2-4",
+     "s2-5"
+    ],
+    "first_difference_from_majority": null
+   }
+  ]
+ }
+}

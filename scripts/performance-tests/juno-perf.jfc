@@ -1247,6 +1247,12 @@
       <setting name="threshold">0 ms</setting>
     </event>
 
+    <event name="juno.PromptEncode">
+      <setting name="enabled">true</setting>
+      <setting name="stackTrace">false</setting>
+      <setting name="threshold">0 ms</setting>
+    </event>
+
     <event name="juno.Attention">
       <setting name="enabled">true</setting>
       <setting name="stackTrace">false</setting>

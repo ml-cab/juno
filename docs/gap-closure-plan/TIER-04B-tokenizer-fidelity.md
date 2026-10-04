@@ -93,6 +93,17 @@ this tier is what makes those files work.
    remains after item 2, document it per model rather than leaving it unstated. This is the item that
    turns Tier 01's "the token counts match" into "the tokens match", and it is the substantive half of
    what is left here: a count can agree while the split underneath it does not.
+5. **SentencePiece encoding in better than quadratic time** *(added 2026-10-04 by owner decision during
+   Tier 01C step 6)*. `GgufTokenizer`'s SentencePiece path merges over the whole unsplit text
+   (`mergeWholeRuns` / `mergeInPlace`), so encoding is quadratic in prompt length. Measured on the
+   comparison harness's prompt (`x x x ...`): TinyLlama 4.3 / 23.7 / 262 ms, Phi-3.5-mini 0.9 / 13.5 /
+   270 ms, Mistral 7B 0.8 / 13.7 / 253 ms at 128 / 512 / 2048 words, against 0.8 / 2.6 / 5.0 ms for
+   Qwen2.5-3B's pre-split BPE. It enters time to first token, about 0.25 s at 2,048 tokens and several
+   seconds at 8,192 (x16 per x4). Fix with a priority queue over adjacent pairs in the same
+   highest-score, leftmost-first order, held to identical tokens against the current implementation over
+   a corpus that includes the sweep prompts, with time to first token measured before and after.
+   `juno.PromptEncode` (shipped in Tier 01C) times encoding per request, so the gain is readable from
+   any `compare-llama-cpp.sh` run.
 
 ### Out of scope
 

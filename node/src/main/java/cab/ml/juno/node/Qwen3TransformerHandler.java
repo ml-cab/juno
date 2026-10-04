@@ -57,6 +57,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	private final GgufReader.QuantizedTensor[] wDown;
 
 	private final MatVec backend;
+	private final DeviceMatVecFallback matVecFallback = new DeviceMatVecFallback("Qwen3");
 	private DeviceHalfMatrix[] attnQDev = null;
 	private DeviceHalfMatrix[] attnKDev = null;
 	private DeviceHalfMatrix[] attnVDev = null;
@@ -1171,18 +1172,27 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	private float[] outputProjection(float[] x) {
 		float[] xNorm = LlamaTransformerHandler.rmsNorm(x, outputNorm, cfg.rmsNormEps());
-		if (outputProjDev != null)
-			return backend.sgemv(outputProjDev, xNorm);
+		if (outputProjDev != null) {
+			try {
+				return backend.sgemv(outputProjDev, xNorm);
+			} catch (IllegalStateException ex) {
+				matVecFallback.absorb(ex);
+			}
+		}
 		int actualVocab = outputProj.length / cfg.hiddenDim();
 		return LlamaTransformerHandler.matVec(outputProj, xNorm, actualVocab, cfg.hiddenDim());
 	}
 
 	private float[] matVecLayer(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix[] q4, DeviceHalfMatrix[] half,
 			int li, float[] x, int rows, int cols) {
-		if (q4 != null && q4[li] != null)
-			return backend.sgemv(q4[li], x);
-		if (half != null && half[li] != null)
-			return backend.sgemv(half[li], x);
+		try {
+			if (q4 != null && q4[li] != null)
+				return backend.sgemv(q4[li], x);
+			if (half != null && half[li] != null)
+				return backend.sgemv(half[li], x);
+		} catch (IllegalStateException ex) {
+			matVecFallback.absorb(ex);
+		}
 		return LlamaTransformerHandler.matVec(quant, x, rows, cols);
 	}
 

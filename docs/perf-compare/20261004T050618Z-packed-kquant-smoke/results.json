@@ -1,0 +1,162 @@
+[
+  {
+    "model": "tinyllama",
+    "schedule": "static",
+    "build": "candidate",
+    "prompt_tokens": 507,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 592.519775390625,
+    "peak_vram_mib": 1208
+  },
+  {
+    "model": "tinyllama",
+    "schedule": "static",
+    "build": "baseline",
+    "prompt_tokens": 507,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 1002.017578125,
+    "peak_vram_mib": 1042
+  },
+  {
+    "model": "tinyllama",
+    "schedule": "continuous",
+    "build": "candidate",
+    "prompt_tokens": 507,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 2073.79638671875,
+    "peak_vram_mib": 946
+  },
+  {
+    "model": "tinyllama",
+    "schedule": "continuous",
+    "build": "baseline",
+    "prompt_tokens": 507,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 3074.70263671875,
+    "peak_vram_mib": 968
+  },
+  {
+    "model": "qwen",
+    "schedule": "static",
+    "build": "candidate",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 1119.461669921875,
+    "peak_vram_mib": 2578
+  },
+  {
+    "model": "qwen",
+    "schedule": "static",
+    "build": "baseline",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 1861.666259765625,
+    "peak_vram_mib": 2488
+  },
+  {
+    "model": "qwen",
+    "schedule": "continuous",
+    "build": "candidate",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 2781.677734375,
+    "peak_vram_mib": 2360
+  },
+  {
+    "model": "qwen",
+    "schedule": "continuous",
+    "build": "baseline",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 6239.561279296875,
+    "peak_vram_mib": 2404
+  },
+  {
+    "model": "phi35",
+    "schedule": "static",
+    "build": "candidate",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 2579.397705078125,
+    "peak_vram_mib": 3410
+  },
+  {
+    "model": "phi35",
+    "schedule": "static",
+    "build": "baseline",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 4276.61328125,
+    "peak_vram_mib": 3242
+  },
+  {
+    "model": "phi35",
+    "schedule": "continuous",
+    "build": "candidate",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 4365.7470703125,
+    "peak_vram_mib": 3018
+  },
+  {
+    "model": "phi35",
+    "schedule": "continuous",
+    "build": "baseline",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 8849.134765625,
+    "peak_vram_mib": 3114
+  },
+  {
+    "model": "mistral",
+    "schedule": "static",
+    "build": "candidate",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 2339.6435546875,
+    "peak_vram_mib": 5040
+  },
+  {
+    "model": "mistral",
+    "schedule": "static",
+    "build": "baseline",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 3865.567626953125,
+    "peak_vram_mib": 4878
+  },
+  {
+    "model": "mistral",
+    "schedule": "continuous",
+    "build": "candidate",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 4518.691650390625,
+    "peak_vram_mib": 4634
+  },
+  {
+    "model": "mistral",
+    "schedule": "continuous",
+    "build": "baseline",
+    "prompt_tokens": 512,
+    "completion_tokens": 512,
+    "http": "200",
+    "ttft_ms": 12417.5478515625,
+    "peak_vram_mib": 4744
+  }
+]

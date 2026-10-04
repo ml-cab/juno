@@ -220,8 +220,9 @@ public final class RequestScheduler {
 				} catch (InterruptedException e) {
 					Thread.currentThread().interrupt();
 					break;
-				} catch (Exception e) {
-					log.warning("Batch dispatch error: " + e.getMessage());
+				} catch (Throwable t) {
+					// Throwable: an Error escaping would stop collection, and every later request would wait.
+					log.warning("Batch dispatch error: " + t);
 				}
 			}
 			log.fine("Batch dispatch loop stopped");
@@ -275,12 +276,14 @@ public final class RequestScheduler {
 					if (inflt != null)
 						inflt.future().complete(results.get(i));
 				}
-			} catch (Exception e) {
-				log.warning("Batch generation failed: " + e.getMessage());
+			} catch (Throwable t) {
+				// Throwable, not Exception: an Error (out of Java heap, say) must end the
+				// requests too, or their futures are never completed and the clients wait.
+				log.warning("Batch generation failed: " + t);
 				for (BatchEntry entry : entries) {
 					InflightEntry inflt = inflight.remove(entry.request().requestId());
 					if (inflt != null)
-						inflt.future().completeExceptionally(e);
+						inflt.future().completeExceptionally(t);
 				}
 			}
 		});
@@ -294,9 +297,10 @@ public final class RequestScheduler {
 			try {
 				GenerationResult result = generationLoop.generate(request, consumer);
 				future.complete(result);
-			} catch (Exception e) {
-				log.warning("Generation failed for " + request.requestId() + ": " + e.getMessage());
-				future.completeExceptionally(e);
+			} catch (Throwable t) {
+				// Throwable, not Exception: an Error must end the request too (see the batch path).
+				log.warning("Generation failed for " + request.requestId() + ": " + t);
+				future.completeExceptionally(t);
 			} finally {
 				queue.remove(request);
 				inflight.remove(request.requestId());

@@ -41,6 +41,13 @@ interim one).
    quantized form during training (not dequantized to FP16/FP32), closing the gap flagged in
    `LoraMmqPolicy`'s existing "training ignores --mmq" comment and `QaLoraAdapter`'s explicit "this
    is not QLoRA" disclaimer.
+5. **Playback prefill on the tiled packed matmul** *(added 2026-10-04, owner decision during Tier 01C
+   step 6)*. With Q4-resident weights, `--lora-play` prefill multiplies one row at a time with the
+   packed decode GEMV (`LoraResidentWeights.matVecBatch`), so it never reaches the tiled integer GEMM
+   that the inference handlers' prefill windows use (`CudaMatVec.sgemm(DeviceQ4KMatrix, ...)`). Route
+   batched playback wider than 8 rows through that kernel, with the delta-add composed per row, and
+   measure it with `compare-lora.sh` (playback wall-clock tps `>= 0.80x` as a floor; the speed-up is
+   reported) and a parity test against the per-row path at widths 9, 64 and 512.
 
 ### Out of scope
 

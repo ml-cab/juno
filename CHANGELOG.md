@@ -1,5 +1,43 @@
 ## Status 
 
+**Session 109** — GPU attention gives the same answer every time; several processes share a GPU safely; an out-of-memory request fails instead of hanging
+
+- **Fixed: a race in the GPU attention kernel.** Each attention block reduces twice through one
+  on-chip array (the softmax maximum, then the sum of exponents), with no barrier between the two. A
+  warp that finished early could overwrite the maximum before a slower warp had read it, and that warp's
+  part of the softmax was then scaled by the wrong value. It was rare per block but showed in long
+  prompts: on a GPU prefill window, two identical greedy requests in one process gave different text in
+  2 to 3 of 10 requests (TinyLlama, 512-token prompt, 512 tokens, first difference at token 24 to
+  94). The kernel now waits until every thread has read a reduced value before the array is written
+  again. With the fix, 10 of 10 identical requests give identical text; prefill with GPU attention off
+  and token-by-token prefill were never affected. Decode uses the same kernel and gets the same barrier.
+- Covered by the GPU test `GqaAttentionReproducibilityTest`: a 512-row prefill window launched 100
+  times gives bit-identical output on every launch (it failed at launch 46 before the fix) and matches
+  the CPU reference.
+- **Fixed: several processes on one GPU could fail a request after loading.** A tensor-parallel
+  cluster on one machine runs three node processes on the same card, and each stops uploading weights
+  when the free memory reaches its own reserve, so together they leave one reserve between them. Since
+  the reserve shrank to a prefill window, the small buffer a single-token matmul allocates on first use
+  could find nothing left, and the request failed with `cudaMalloc failed` (Phi-3.5-mini, 2 of 4 runs).
+  The buffer is now allocated with the weights during the upload, so generation allocates nothing for it.
+  If a resident-weight matmul still runs out of device memory, it runs on the CPU from the quantized
+  weights instead of failing the request, and the log says so once. Phi-3.5-mini tensor-parallel: 4 of 4
+  runs pass.
+- Covered by the GPU test `GemvScratchHeldAtUploadTest` (packed, FP16 and FP32 weights: matrix-vector
+  products after the upload leave device memory as the upload left it) and `DeviceMatVecFallbackTest`.
+- **Fixed: a request that ran out of Java heap never got an answer.** Generation caught exceptions but
+  not errors, so an `OutOfMemoryError` left the request open and the client waited until its own timeout;
+  on the `continuous` schedule the engine thread itself stopped, and every later request waited too. Every
+  dispatch path now ends the request with the error (HTTP 500, or a closed stream) and keeps serving. A
+  2,056-token prompt on Phi-3.5-mini with a 6 GiB heap now fails in under 5 seconds instead of hanging.
+  Covered by `RequestSchedulerErrorTest` (single, batched and continuous dispatch).
+- **Prompt encoding is recorded.** Each request's tokenization is a JFR event, `juno.PromptEncode`
+  (characters, tokens, duration), summed by the metrics extractor as `juno.PromptEncode.count` and
+  `.total_ms`. On SentencePiece vocabularies encoding grows with the square of the prompt, about 260 ms at
+  2,048 tokens, and it runs before the first forward pass. The comparison harness now subtracts it before
+  checking that a request's spans account for its time, so long prompts are no longer withheld as clock
+  errors. Covered by `PromptEncodeEventTest` and `JfrMetricsExtractorPromptEncodeTest`.
+
 **Session 108** — `--gpu-layers auto` keeps a prefill window free, not a weight matrix
 
 - **Smaller reserve.** With prefill multiplying packed weights directly, `auto` no longer keeps a whole

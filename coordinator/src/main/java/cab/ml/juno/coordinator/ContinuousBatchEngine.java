@@ -107,9 +107,12 @@ final class ContinuousBatchEngine {
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 				break;
-			} catch (Exception e) {
-				log.warning("Continuous engine error: " + e.getMessage());
-				failAllRunning(e);
+			} catch (Throwable t) {
+				// Throwable, not Exception: an Error escaping here would end this thread, and
+				// every running and later request would wait forever. Fail the running ones and
+				// keep serving; an out-of-heap error frees its memory as the step unwinds.
+				log.warning("Continuous engine error: " + t);
+				failAllRunning(t);
 			}
 		}
 		log.fine("Continuous engine loop stopped");
@@ -139,9 +142,9 @@ final class ContinuousBatchEngine {
 			Slot slot = createSlot(pending);
 			running.add(slot);
 			admittedSinceLastStep++;
-		} catch (Exception e) {
-			log.warning("Admit failed for " + pending.request().requestId() + ": " + e.getMessage());
-			pending.future().completeExceptionally(e);
+		} catch (Throwable t) {
+			log.warning("Admit failed for " + pending.request().requestId() + ": " + t);
+			pending.future().completeExceptionally(t);
 		}
 	}
 
@@ -159,7 +162,7 @@ final class ContinuousBatchEngine {
 
 		ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(request.modelId());
 		String prompt = formatter.format(request.messages());
-		int[] promptIds = tokenizer.encode(prompt);
+		int[] promptIds = PromptEncoder.encode(tokenizer, prompt, request.requestId());
 
 		final String kvKey = request.kvCacheKey();
 		final boolean hasSession = request.sessionId() != null;
@@ -368,16 +371,16 @@ final class ContinuousBatchEngine {
 
 			s.future.complete(new GenerationResult(s.kvKey, s.stopFilter.text(), s.generated, s.promptLen,
 					s.generated.size(), s.reason, Instant.now(), Duration.between(s.start, Instant.now())));
-		} catch (Exception e) {
-			s.future.completeExceptionally(e);
+		} catch (Throwable t) {
+			s.future.completeExceptionally(t);
 		}
 	}
 
-	private void failAllRunning(Exception e) {
+	private void failAllRunning(Throwable t) {
 		List<Slot> copy = new ArrayList<>(running);
 		running.clear();
 		for (Slot s : copy)
-			s.future.completeExceptionally(e);
+			s.future.completeExceptionally(t);
 	}
 
 	private record Pending(InferenceRequest request, TokenConsumer consumer,

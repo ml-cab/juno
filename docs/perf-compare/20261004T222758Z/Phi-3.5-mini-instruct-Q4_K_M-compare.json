@@ -1,0 +1,150 @@
+{
+  "model": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 859.258015,
+    "token_gen_tps": 53.401330
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 85.38268091192455,
+    "token_gen_tps": 31.450027859073504,
+    "api_token_gen_tps": 30.0752,
+    "latency_ms": 2128,
+    "n_prompt": 2048,
+    "prompt_tokens": 2048,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 1.0,
+    "gc_pause_max_ms": 12.570253,
+    "gc_pause_total_ms": 10.658671,
+    "allocated_bytes_total": 13280764152,
+    "allocated_bytes_per_token": 212126444.625,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 2048,
+        "n_prompt": 2048,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 85.38268091192455,
+        "latency_ms": 24340,
+        "status": "success",
+        "gc_pause_max_ms": 12.570253,
+        "gpu_attention_resolved": "unknown"
+      },
+      "generate": {
+        "prompt_tokens": 10,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 31.450027859073504,
+        "latency_ms": 2128,
+        "status": "success",
+        "gc_pause_max_ms": 11.239128,
+        "gpu_attention_resolved": "unknown"
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "8g",
+    "heap_source": "explicit",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 85.38268091192455,
+        "min": 85.32833824085549,
+        "max": 85.51571741078291,
+        "values": [
+          85.38268091192455,
+          85.51571741078291,
+          85.32833824085549
+        ]
+      },
+      "token_gen_tps": {
+        "median": 31.450027859073504,
+        "min": 31.433925083489022,
+        "max": 31.60313224233458,
+        "values": [
+          31.433925083489022,
+          31.450027859073504,
+          31.60313224233458
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 30.0752,
+        "min": 29.9766,
+        "max": 30.2172,
+        "values": [
+          29.9766,
+          30.0752,
+          30.2172
+        ]
+      },
+      "latency_ms": {
+        "median": 2128,
+        "min": 2118,
+        "max": 2135,
+        "values": [
+          2135,
+          2128,
+          2118
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 10.658671,
+        "min": 9.793117,
+        "max": 11.239128,
+        "values": [
+          10.658671,
+          11.239128,
+          9.793117
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 208040886.75,
+        "min": 207511939.875,
+        "max": 212126444.625,
+        "values": [
+          207511939.875,
+          212126444.625,
+          208040886.75
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.09936791908996573,
+  "noise": {
+    "ok": true,
+    "basis": "repetition dispersion",
+    "condition": null,
+    "rep_spread": 0.005380191063860754,
+    "rep_spread_tolerance": 0.15,
+    "gc_pause_max_ms": 12.570253,
+    "gc_pause_max_ms_in_token_span": 11.239128,
+    "reason": null
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.5889371642817417,
+  "result_files": {
+    "llama_cpp_raw": "/home/medion/Repo/juno/target/perf-compare/20261004T222758Z/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.raw.json",
+    "juno_response": "/home/medion/Repo/juno/target/perf-compare/20261004T222758Z/Phi-3.5-mini-instruct-Q4_K_M-generate-rep1-juno-response.json",
+    "llama_result": "/home/medion/Repo/juno/target/perf-compare/20261004T222758Z/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.json",
+    "juno_result": "/home/medion/Repo/juno/target/perf-compare/20261004T222758Z/Phi-3.5-mini-instruct-Q4_K_M-juno.json",
+    "juno_jfr": "/home/medion/Repo/juno/target/perf-compare/20261004T222758Z/Phi-3.5-mini-instruct-Q4_K_M-juno-jfr.json"
+  }
+}

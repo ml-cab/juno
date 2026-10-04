@@ -132,12 +132,16 @@ public final class CudaMatVec implements GpuMatVec {
 
     @Override
     public DeviceFloatMatrix upload(float[] host, int rows, int cols) {
-        return DeviceFloatMatrix.upload(ctx, host, rows, cols);
+        DeviceFloatMatrix m = DeviceFloatMatrix.upload(ctx, host, rows, cols);
+        holdGemvScratch(m, rows, cols, false, false);
+        return m;
     }
 
     @Override
     public DeviceHalfMatrix uploadHalf(float[] host, int rows, int cols) {
-        return DeviceHalfMatrix.uploadFromFloat32(ctx, host, rows, cols);
+        DeviceHalfMatrix m = DeviceHalfMatrix.uploadFromFloat32(ctx, host, rows, cols);
+        holdGemvScratch(m, rows, cols, true, false);
+        return m;
     }
 
     @Override
@@ -149,7 +153,50 @@ public final class CudaMatVec implements GpuMatVec {
     public DeviceQ4KMatrix uploadKQuant(byte[] raw, int rows, int cols, int typeId) {
         if (!supportsQ4KMmq())
             throw new UnsupportedOperationException("K-quant MMQ kernel is not available");
-        return DeviceQ4KMatrix.upload(ctx, raw, rows, cols, typeId);
+        DeviceQ4KMatrix m = DeviceQ4KMatrix.upload(ctx, raw, rows, cols, typeId);
+        holdGemvScratch(m, rows, cols, false, true);
+        return m;
+    }
+
+    /**
+     * Output rows a shared-input product can write at once, in units of the widest
+     * matrix's rows: {@link #sgemvSameX} over separate Q, K and V matrices writes up to
+     * three times the query projection's rows (multi-head attention, where K and V are
+     * as wide as Q), and gate with up writes two.
+     */
+    private static final int SAME_X_MAX_MATRICES = 3;
+
+    /**
+     * Holds the single-row product scratch an uploaded matrix needs, so a decode
+     * product allocates no device memory: the input sized for {@code max(rows, cols)}
+     * (the transposed product reads {@code rows}), the output for
+     * {@link #SAME_X_MAX_MATRICES} times that, and for packed weights the input's
+     * 8-bit copy. It is held before the caller's upload stop rule reads the free
+     * memory, which makes it part of this process's footprint. Grown lazily on the
+     * first product, it could find nothing left when several processes share a device
+     * and fill it down to one reserve between them, and fail a request after the
+     * weights had loaded. A failure here frees the matrix and rethrows, so the caller's
+     * upload handling sees one out-of-memory error for the layer.
+     */
+    private void holdGemvScratch(AutoCloseable matrix, int rows, int cols, boolean half, boolean packed) {
+        long widest = Math.max(rows, cols);
+        long bytesX = widest * Float.BYTES;
+        long bytesY = SAME_X_MAX_MATRICES * widest * Float.BYTES;
+        try {
+            synchronized (ctx.cublasSerializationLock()) {
+                if (half)
+                    ensureFp16Scratch(fp16Scratch, widest * Short.BYTES, bytesY);
+                else
+                    ensureFp32Scratch(fp32Scratch, bytesX, bytesY, packed ? Q4KMmqKernel.q8Bytes(cols) : 0);
+            }
+        } catch (RuntimeException ex) {
+            try {
+                matrix.close();
+            } catch (Exception closeFailure) {
+                ex.addSuppressed(closeFailure);
+            }
+            throw ex;
+        }
     }
 
     @Override

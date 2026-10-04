@@ -1,0 +1,22 @@
+{
+ "tinyllama": {
+  "packed_vs_fp16": 24,
+  "packed_vs_per_token": 24,
+  "fp16_vs_per_token": 63
+ },
+ "qwen": {
+  "packed_vs_fp16": 0,
+  "packed_vs_per_token": 30,
+  "fp16_vs_per_token": 0
+ },
+ "phi35": {
+  "packed_vs_fp16": 66,
+  "packed_vs_per_token": 66,
+  "fp16_vs_per_token": 244
+ },
+ "mistral": {
+  "packed_vs_fp16": 68,
+  "packed_vs_per_token": 512,
+  "fp16_vs_per_token": 68
+ }
+}
