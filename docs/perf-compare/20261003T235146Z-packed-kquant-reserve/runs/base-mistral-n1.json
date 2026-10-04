@@ -1,0 +1,21 @@
+{
+  "run": "base-mistral-n1",
+  "vram": {
+    "after_load_mib": 4484,
+    "decode_peak_mib": 4518,
+    "prefill_peak_mib": 4712,
+    "samples": 177,
+    "prefill_over_decode": 1.0429
+  },
+  "timing": "decode 200 4.551198;prefill 200 1.990545;",
+  "decode_usage": {
+    "completion_tokens": 64,
+    "prompt_tokens": 16,
+    "total_tokens": 80
+  },
+  "prefill_usage": {
+    "completion_tokens": 1,
+    "prompt_tokens": 493,
+    "total_tokens": 494
+  }
+}

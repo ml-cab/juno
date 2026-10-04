@@ -2372,7 +2372,7 @@ public final class ConsoleMain {
 		boolean staticSchedule = cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv()
 				.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.STATIC;
 		int resolvedPrefillBatch = PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.LOCAL_REPL, prefillBatch,
-				staticSchedule, gpuCtx);
+				staticSchedule, gpuCtx, handlers);
 		if (prefillBatch == null && staticSchedule && gpuCtx != null)
 			log.info("Prefill chunk size resolved to " + resolvedPrefillBatch
 					+ " (adaptive, free VRAM=" + (gpuCtx.freeVramBytes() / (1024 * 1024)) + " MiB)");

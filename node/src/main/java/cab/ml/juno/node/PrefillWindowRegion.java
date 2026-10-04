@@ -93,7 +93,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 	static final String RESIDUAL = "prefill residual";
 
 	/** Window capacities are rounded up to this, so windows of slightly different widths share buffers. */
-	private static final int CAPACITY_STEP = 64;
+	static final int CAPACITY_STEP = 64;
 
 	/** One device weight matrix: packed K-quant or FP16. */
 	record Matrix(DeviceQ4KMatrix q4, DeviceHalfMatrix half) {
@@ -282,6 +282,14 @@ final class PrefillWindowRegion implements AutoCloseable {
 				rope, attentionOnDevice, kernels, attention);
 	}
 
+	/**
+	 * Device bytes a window of {@code rows} rows attending over {@code seqLen}
+	 * positions holds on this region ({@link PrefillWindowFootprint}).
+	 */
+	long windowDeviceBytes(int rows, int seqLen) {
+		return PrefillWindowFootprint.bytes(shape, fusedQkv, rows, seqLen);
+	}
+
 	/** Whether layer {@code li} (0-based within the shard) runs on the region. */
 	boolean eligible(int li) {
 		return li >= 0 && li < layers.length && layers[li] != null;
@@ -309,7 +317,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 			w = idle.poll();
 		}
 		if (w == null) {
-			int capacity = (rows + CAPACITY_STEP - 1) / CAPACITY_STEP * CAPACITY_STEP;
+			int capacity = PrefillWindowFootprint.capacity(rows);
 			synchronized (ctx.cublasSerializationLock()) {
 				w = new Window(capacity);
 			}
@@ -427,6 +435,11 @@ final class PrefillWindowRegion implements AutoCloseable {
 			this.qkvHost = fusedQkv ? new float[capacity][shape.qDim() + 2 * shape.kvDim()] : null;
 			this.qkvActs = new ResidentActivation[] { q, k, v };
 			this.kvActs = new ResidentActivation[] { k, v };
+		}
+
+		/** Device bytes this window holds now: its buffers and the attention scores grown so far. */
+		long deviceBytes() {
+			return chain.deviceBytes() + scoresBytes;
 		}
 
 		/**

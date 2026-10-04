@@ -1,0 +1,3 @@
+INFO: Phi-3 GPU weight upload complete (resolved gpu-layers=32+Q4K).
+INFO: Phi-3: prefill windows of more than 8 rows run on the device (32 of 32 layers): norms, matmuls, SwiGLU and residual adds; RoPE and attention stay on the host
+INFO: Prefill chunk size resolved to 3659 (adaptive, free VRAM=4871 MiB)

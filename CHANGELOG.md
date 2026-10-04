@@ -1,5 +1,25 @@
 ## Status 
 
+**Session 108** — `--gpu-layers auto` keeps a prefill window free, not a weight matrix
+
+- **Smaller reserve.** With prefill multiplying packed weights directly, `auto` no longer keeps a whole
+  FP16 weight matrix free after the upload. It keeps the narrowest prefill window (64 rows) with a 40%
+  margin, the key/value mirror at its starting size, and 64 MiB for memory the driver reports free but
+  will not hand out (44 to 54 MiB measured on a GTX 1080 with the card full). The weight matrix is still
+  reserved when the packed prefill kernel cannot load. A 30B Llama on an 8 GiB card keeps 197 MiB free
+  instead of 416 MiB and holds 23 layers on the GPU instead of 22; models that fit whole are unchanged.
+- **Prefill window sized from what it really costs.** The default `--prefill-batch` on a GPU with the
+  `static` schedule (local mode and `JunoPlayer`) is now the widest window whose device footprint (the
+  window's buffers, its attention scores and its 8-bit copy, added up over every in-process node) fits
+  half of the free memory. It used to divide by a fixed 64 KiB a token, the host-staged figure, while a
+  window on the device costs 114 to 412 KB a row before attention scores, so on a nearly full card it
+  could pick a window that did not fit. On the sweep models the window is now 2,601 to 5,213 rows, still
+  one window for every prompt up to 2,048 tokens.
+- Covered by `PrefillWindowFootprintTest`, `DeviceScratchBudgetTest`, `PrefillBatchOptionsTest`,
+  `PrefillChunkDefaultsTest` and the GPU test `PrefillReserveDeviceTest`, which holds the footprint equal to
+  what a window allocates and runs a wide window in exactly what the reserve guarantees, where the
+  FP16-expansion route runs out of memory.
+
 **Session 107** — Prefill multiplies packed K-quant weights directly
 
 - **No FP16 copy of the weights during prefill.** On CUDA with packed weights (`--mmq on|auto`, the

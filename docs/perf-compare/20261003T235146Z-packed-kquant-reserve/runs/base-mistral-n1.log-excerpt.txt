@@ -1,0 +1,3 @@
+INFO: GPU weight upload complete (FP16+Q4K, resolved gpu-layers=32).
+INFO: Llama: prefill windows of more than 8 rows run on the device (32 of 32 layers): norms, matmuls, SwiGLU and residual adds, RoPE, attention
+INFO: Prefill chunk size resolved to 23880 (adaptive, free VRAM=2985 MiB)

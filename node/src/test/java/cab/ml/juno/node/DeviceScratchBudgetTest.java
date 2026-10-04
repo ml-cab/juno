@@ -16,83 +16,141 @@
 package cab.ml.juno.node;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 
 /**
- * Sizing the device memory that must stay free for inference, so filling VRAM
- * with weights does not leave the first prefill with nowhere to put its
- * dequantized weight matrix.
+ * Sizing the device memory that must stay free for inference once the weights are
+ * uploaded, so filling VRAM with weights does not leave the first prefill window
+ * with nowhere to run.
  *
  * <p>The numbers below are taken from the model that exposed this: a 30B Llama
- * with hidden 6656, FFN 17920 and 60 layers on an 8 GiB card. Uploading layers
- * until the card was full loaded fine and decoded fine, then died on the first
- * prompt longer than eight tokens, because that is the batch width at which the
- * Q4_K path stops going row-by-row and dequantizes the whole weight matrix into
- * a device scratch buffer.
+ * with hidden 6656, FFN 17920, 52 heads and 60 layers on an 8 GiB card. Uploading
+ * layers until the card was full loaded fine and decoded fine, then died on the
+ * first prompt longer than eight tokens, the width at which the batched path
+ * starts. The batched path then dequantized a whole weight matrix into a device
+ * scratch buffer; it now multiplies the packed weights directly, so what has to
+ * stay free is the prefill window, and the weight-shaped term remains only for the
+ * dequantizing fallback.
  */
 class DeviceScratchBudgetTest {
 
 	private static final long MIB = 1024L * 1024L;
 
-	/** hidden 6656, kv 6656, ffn 17920 -- the file this bug was found on. */
-	private static long thirtyB() {
-		return DeviceScratchBudget.reserveBytes(6656, 6656, 17920);
+	private static final PrefillWindowRegion.Shape THIRTY_B = new PrefillWindowRegion.Shape(6656, 6656, 6656, 17920,
+			52, 52, 128, 1, 1e-5f);
+
+	/** The 30B model's region window at the reserved width, at the KV mirror's initial context. */
+	private static long thirtyBWindow() {
+		return PrefillWindowFootprint.bytes(THIRTY_B, false, DeviceScratchBudget.RESERVED_WINDOW_ROWS,
+				DeviceKvCache.INITIAL_SEQ_CAPACITY);
+	}
+
+	private static long thirtyBDequant() {
+		return DeviceScratchBudget.dequantScratchBytes(6656, 6656, 17920);
+	}
+
+	// ── the dequantizing fallback's weight-shaped term ───────────────────────
+
+	@Test
+	void dequantScratchIsTheLargestFp16WeightMatrix() {
+		// The widest matmul is the FFN pair: 6656 x 17920 halves = 227.5 MiB, and the
+		// dequantizing route holds one whole dequantized matrix at a time.
+		assertThat(thirtyBDequant()).isEqualTo(6656L * 17920L * Short.BYTES).isEqualTo(238_551_040L);
 	}
 
 	@Test
-	void reserveCoversTheLargestDequantizedWeightMatrix() {
-		// The widest matmul is the FFN pair: 6656 x 17920 halves = 227.5 MiB, and
-		// the scratch holds one whole dequantized matrix at a time.
-		long largestMatrix = 6656L * 17920L * Short.BYTES;
-		assertThat(largestMatrix).isEqualTo(238_551_040L);
-		assertThat(thirtyB()).isGreaterThanOrEqualTo(largestMatrix);
-	}
-
-	@Test
-	void reserveIsDrivenByTheWidestDimensionNotTheHiddenSize() {
-		// A wider FFN reserves more...
-		assertThat(DeviceScratchBudget.reserveBytes(4096, 4096, 28672))
-				.isGreaterThan(DeviceScratchBudget.reserveBytes(4096, 4096, 11008));
-		// ...and so does a KV wide enough to overtake the FFN.
-		assertThat(DeviceScratchBudget.reserveBytes(4096, 16384, 11008))
-				.isGreaterThan(DeviceScratchBudget.reserveBytes(4096, 1024, 11008));
-		// Below that, the FFN sets the figure and the KV does not move it: the
-		// scratch holds one matrix, so only the widest one matters.
-		assertThat(DeviceScratchBudget.reserveBytes(4096, 8192, 11008))
-				.isEqualTo(DeviceScratchBudget.reserveBytes(4096, 1024, 11008));
-	}
-
-	@Test
-	void reserveLeavesHeadroomBeyondTheBareMatrix() {
-		// Staging buffers and per-request activations share the same device, so a
-		// reserve exactly equal to the matrix would still fail.
-		long largestMatrix = 6656L * 17920L * Short.BYTES;
-		assertThat(thirtyB()).isGreaterThan(largestMatrix);
-	}
-
-	@Test
-	void reserveStaysAPlausibleFractionOfASmallCard() {
-		// It has to fit on the 8 GiB card this was found on, with room for weights:
-		// a reserve that swallows the card would offload nothing at all.
-		assertThat(thirtyB()).isLessThan(1024 * MIB);
-	}
-
-	@Test
-	void smallModelsReserveProportionallyLess() {
-		long tiny = DeviceScratchBudget.reserveBytes(2048, 256, 5632);   // TinyLlama shape
-		assertThat(tiny).isLessThan(thirtyB());
-		assertThat(tiny).isGreaterThan(0L);
+	void dequantScratchIsDrivenByTheWidestDimensionNotTheHiddenSize() {
+		assertThat(DeviceScratchBudget.dequantScratchBytes(4096, 4096, 28672))
+				.isGreaterThan(DeviceScratchBudget.dequantScratchBytes(4096, 4096, 11008));
+		assertThat(DeviceScratchBudget.dequantScratchBytes(4096, 16384, 11008))
+				.isGreaterThan(DeviceScratchBudget.dequantScratchBytes(4096, 1024, 11008));
+		// Below that, the FFN sets the figure: the scratch holds one matrix.
+		assertThat(DeviceScratchBudget.dequantScratchBytes(4096, 8192, 11008))
+				.isEqualTo(DeviceScratchBudget.dequantScratchBytes(4096, 1024, 11008));
 	}
 
 	@Test
 	void invalidDimensionsAreRejectedRatherThanSilentlyReservingNothing() {
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-				() -> DeviceScratchBudget.reserveBytes(0, 256, 5632));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-				() -> DeviceScratchBudget.reserveBytes(2048, 0, 5632));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-				() -> DeviceScratchBudget.reserveBytes(2048, 256, 0));
+		assertThrows(IllegalArgumentException.class, () -> DeviceScratchBudget.dequantScratchBytes(0, 256, 5632));
+		assertThrows(IllegalArgumentException.class, () -> DeviceScratchBudget.dequantScratchBytes(2048, 0, 5632));
+		assertThrows(IllegalArgumentException.class, () -> DeviceScratchBudget.dequantScratchBytes(2048, 256, 0));
+	}
+
+	// ── the reserve ──────────────────────────────────────────────────────────
+
+	@Test
+	void theReservedWindowIsTheRegionsSmallestWindow() {
+		// Any window wider than the host path's eight rows allocates at least this many
+		// rows, so reserving fewer would guarantee nothing.
+		assertThat(DeviceScratchBudget.RESERVED_WINDOW_ROWS)
+				.isEqualTo(PrefillWindowFootprint.capacity(PrefillWindowRegion.MAX_HOST_WINDOW + 1));
+	}
+
+	@Test
+	void reserveCoversTheWindowWithHeadroom() {
+		// Host staging and the matmul library's workspace share the device, so a reserve
+		// exactly equal to the window would still fail.
+		long window = thirtyBWindow();
+		assertThat(DeviceScratchBudget.reserveBytes(window, 0L)).isGreaterThan(window);
+	}
+
+	@Test
+	void reserveIncludesWhatTheAllocatorWithholds() {
+		// With the card full, the free-memory query still reports 44 to 54 MiB that no
+		// allocation can obtain (GTX 1080, measured by PrefillReserveDeviceTest). The
+		// upload stop rule reads that same query, so without this allowance a reserve
+		// the size of a window would leave nothing allocatable.
+		assertThat(DeviceScratchBudget.ALLOCATOR_HOLDBACK_BYTES).isGreaterThanOrEqualTo(54 * MIB);
+		assertThat(DeviceScratchBudget.reserveBytes(1L, 0L))
+				.isGreaterThan(DeviceScratchBudget.ALLOCATOR_HOLDBACK_BYTES);
+		long window = thirtyBWindow();
+		assertThat(DeviceScratchBudget.reserveBytes(window, 0L))
+				.isGreaterThanOrEqualTo(window + DeviceScratchBudget.ALLOCATOR_HOLDBACK_BYTES);
+	}
+
+	@Test
+	void thePackedRouteNoLongerReservesAWeightMatrix() {
+		// The tiled kernel multiplies the packed weights, so the reserve is window-shaped:
+		// smaller than the one FP16 matrix the old reserve was built around.
+		long packed = DeviceScratchBudget.reserveBytes(thirtyBWindow(), 0L);
+		assertThat(packed).isLessThan(thirtyBDequant());
+		assertThat(packed).isLessThan(128 * MIB);
+	}
+
+	@Test
+	void theDequantizingFallbackStillReservesItsMatrix() {
+		// Without the tiled kernel the batched path dequantizes, and needs both.
+		long window = thirtyBWindow();
+		assertThat(DeviceScratchBudget.reserveBytes(window, thirtyBDequant()))
+				.isGreaterThanOrEqualTo(window + thirtyBDequant());
+	}
+
+	@Test
+	void aWindowOfZeroBytesIsRejectedRatherThanReservingNothing() {
+		assertThrows(IllegalArgumentException.class, () -> DeviceScratchBudget.reserveBytes(0L, 0L));
+		assertThrows(IllegalArgumentException.class, () -> DeviceScratchBudget.reserveBytes(1L, -1L));
+	}
+
+	@Test
+	void aLayerThatFitsOnlyUnderTheShrunkReserveIsUploaded() {
+		// One 30B Q4_K_M layer is about 310 MiB. With that layer plus the shrunk reserve
+		// free, the packed route uploads it; the dequantizing route's reserve does not.
+		long layer = 310 * MIB;
+		long packedReserve = DeviceScratchBudget.reserveBytes(thirtyBWindow(), 0L);
+		long dequantReserve = DeviceScratchBudget.reserveBytes(thirtyBWindow(), thirtyBDequant());
+		long free = layer + packedReserve + MIB;
+		assertThat(DeviceScratchBudget.canUploadAnotherLayer(free, layer, packedReserve)).isTrue();
+		assertThat(DeviceScratchBudget.canUploadAnotherLayer(free, layer, dequantReserve)).isFalse();
+	}
+
+	@Test
+	void smallModelsReserveProportionallyLess() {
+		PrefillWindowRegion.Shape tiny = new PrefillWindowRegion.Shape(2048, 2048, 256, 5632, 32, 4, 64, 8, 1e-5f);
+		long tinyReserve = DeviceScratchBudget.reserveBytes(PrefillWindowFootprint.bytes(tiny, false,
+				DeviceScratchBudget.RESERVED_WINDOW_ROWS, DeviceKvCache.INITIAL_SEQ_CAPACITY), 0L);
+		assertThat(tinyReserve).isGreaterThan(0L).isLessThan(DeviceScratchBudget.reserveBytes(thirtyBWindow(), 0L));
 	}
 
 	// ── the GPU-attention KV mirror ──────────────────────────────────────────
@@ -120,12 +178,12 @@ class DeviceScratchBudgetTest {
 	}
 
 	@Test
-	void theTwoReservesAddUpForAShardOfTheThirtyBModel() {
-		// A 3-node local pipeline gives each handler 20 of the 60 layers, and all
-		// three share one card: matmul scratch plus that shard's KV mirror.
-		long total = thirtyB() + DeviceScratchBudget.kvMirrorBytes(20, 6656, 64);
-		assertThat(total).isGreaterThan(thirtyB());
-		assertThat(total).isLessThan(1024 * MIB);
+	void theReservesAddUpForAShardOfTheThirtyBModel() {
+		// A 3-node local pipeline gives each handler 20 of the 60 layers, and all three
+		// share one card: the window plus that shard's KV mirror.
+		long reserve = DeviceScratchBudget.reserveBytes(thirtyBWindow(), 0L);
+		long total = reserve + DeviceScratchBudget.kvMirrorBytes(20, 6656, 64);
+		assertThat(total).isGreaterThan(reserve).isLessThan(1024 * MIB);
 	}
 
 	// ── the upload stop rule ─────────────────────────────────────────────────

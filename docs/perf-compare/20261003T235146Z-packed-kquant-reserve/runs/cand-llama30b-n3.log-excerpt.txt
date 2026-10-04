@@ -1,0 +1,14 @@
+INFO: GPU weight upload complete (FP16+Q4K, resolved gpu-layers=20).
+INFO: Llama: prefill windows of more than 8 rows run on the device (20 of 20 layers): norms, matmuls, SwiGLU and residual adds, RoPE, attention
+INFO: Llama: stopping GPU upload at global layer 23 to keep 132 MiB free for the forward pass — remainder on CPU
+INFO: GPU weight upload complete (FP16+Q4K, resolved gpu-layers=23).
+INFO: Llama: prefill windows of more than 8 rows run on the device (3 of 20 layers): norms, matmuls, SwiGLU and residual adds, RoPE, attention
+WARNING: Llama: OOM at global layer 40 (Q4K/FP16) — keeping earlier layers on GPU, remainder on CPU
+INFO: GPU weight upload complete (FP16+Q4K, resolved gpu-layers=0).
+INFO: Prefill chunk size resolved to 32 (adaptive, free VRAM=77 MiB)
+WARNING: Llama: out of device memory for the attention KV mirror — running attention on the CPU for this request. Lower --gpu-layers, or pass --gpu-attention off.
+WARNING: Llama: out of device memory in the prefill-window device region - this window's layer runs on the host path between device matmuls. Lower --gpu-layers to leave the region room.
+WARNING: Llama: out of device memory in a batched matmul at layer 0 — using the CPU path for it. Lower --gpu-layers to keep more device memory free.
+WARNING: Llama: out of device memory for the attention KV mirror — running attention on the CPU for this request. Lower --gpu-layers, or pass --gpu-attention off.
+WARNING: Llama: out of device memory in the prefill-window device region - this window's layer runs on the host path between device matmuls. Lower --gpu-layers to leave the region room.
+WARNING: Llama: out of device memory for the attention KV mirror — running attention on the CPU for this request. Lower --gpu-layers, or pass --gpu-attention off.

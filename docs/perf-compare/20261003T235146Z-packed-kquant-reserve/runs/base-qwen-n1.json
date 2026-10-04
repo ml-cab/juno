@@ -1,0 +1,21 @@
+{
+  "run": "base-qwen-n1",
+  "vram": {
+    "after_load_mib": 2310,
+    "decode_peak_mib": 2326,
+    "prefill_peak_mib": 2430,
+    "samples": 139,
+    "prefill_over_decode": 1.0447
+  },
+  "timing": "decode 200 3.737089;prefill 200 0.912749;",
+  "decode_usage": {
+    "total_tokens": 80,
+    "prompt_tokens": 16,
+    "completion_tokens": 64
+  },
+  "prefill_usage": {
+    "total_tokens": 465,
+    "prompt_tokens": 464,
+    "completion_tokens": 1
+  }
+}

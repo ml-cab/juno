@@ -24,35 +24,56 @@ package cab.ml.juno.node;
  * only the upload was ever written to expect the device to run out. Uploading
  * layers until the allocator refuses therefore ends with a card that is full and
  * a model that loads, decodes single tokens, and then fails on the first prompt
- * wide enough to take the batched path -- because that path dequantizes a whole
- * packed weight matrix into a device scratch buffer, and by then nothing is
- * left to put it in.
+ * wide enough to take the batched path, because by then nothing is left for the
+ * prefill window.
  *
- * <p>The dominant term is that scratch buffer. It holds one dequantized matrix
- * at a time, so the figure to reserve is the widest matmul in the model: for a
- * 30B Llama, the FFN pair at 6656 x 17920 halves, which is 227 MiB. Staging
- * buffers and per-request activations share the same device and are much
- * smaller, so they are covered by a proportional margin rather than modelled
- * individually.
+ * <p>What the batched path needs is window-shaped. Batched K-quant matmuls
+ * multiply the packed weights directly, so the term is the prefill window
+ * ({@link PrefillWindowFootprint}) at its narrowest capacity,
+ * {@link #RESERVED_WINDOW_ROWS} rows; a wider window, which the adaptive prefill
+ * chunk sizes from whatever is free after the upload, is not reserved for. Only
+ * when the tiled kernel cannot load do batched K-quant matmuls dequantize a whole
+ * weight matrix into an FP16 scratch first, and then that matrix is reserved for
+ * as well ({@link #dequantScratchBytes}): for a 30B Llama, the FFN pair at
+ * 6656 x 17920 halves, 227 MiB, against a 26 MiB window. Host staging and the
+ * matmul library's workspace share the device and are covered by a proportional
+ * margin rather than modelled individually; memory the allocator withholds is a
+ * fixed allowance ({@link #ALLOCATOR_HOLDBACK_BYTES}).
  *
  * @author Yevhen Soldatov
  */
 final class DeviceScratchBudget {
 
     /**
-     * Extra fraction of the largest matrix kept free on top of it, covering the
-     * FP16 staging buffers and per-request activations that share the device.
+     * Prefill window rows kept free: the region's smallest window capacity, which
+     * every window wider than the host path's {@link PrefillWindowRegion#MAX_HOST_WINDOW}
+     * rows allocates at least.
+     */
+    static final int RESERVED_WINDOW_ROWS = PrefillWindowRegion.CAPACITY_STEP;
+
+    /**
+     * Extra fraction kept free on top of the window and any dequant scratch,
+     * covering host-staged matmul buffers and the matmul library's workspace.
      */
     private static final long MARGIN_PERCENT = 40;
+
+    /**
+     * Device memory the free-memory query reports that no allocation can obtain:
+     * with the device full, it still read 44 to 54 MiB free on a GTX 1080, a figure
+     * that differs between processes and holds within one. The upload stop rule reads
+     * that query, so this is kept free on top of everything else. A larger reserve hid
+     * it; one sized to a prefill window does not.
+     */
+    static final long ALLOCATOR_HOLDBACK_BYTES = 64L * 1024 * 1024;
 
     private DeviceScratchBudget() {
     }
 
     /**
-     * Device bytes to keep free for the forward pass, for a model of these
-     * dimensions.
+     * Device bytes of the FP16 scratch the dequantizing route expands one packed
+     * weight matrix into: the widest matmul in the model.
      *
-     * <p>Every matmul that can take the batched dequant path is one of
+     * <p>Every matmul that can take the batched path is one of
      * {@code hidden x hidden}, {@code kvDim x hidden}, {@code ffn x hidden} or
      * {@code hidden x ffn}, so the widest is {@code hidden} times the largest of
      * the three dimensions.
@@ -60,7 +81,7 @@ final class DeviceScratchBudget {
      * @throws IllegalArgumentException if any dimension is not positive, which
      *                                  would otherwise reserve nothing at all
      */
-    static long reserveBytes(int hiddenDim, int kvDim, int ffnDim) {
+    static long dequantScratchBytes(int hiddenDim, int kvDim, int ffnDim) {
         if (hiddenDim < 1)
             throw new IllegalArgumentException("hiddenDim must be >= 1 (got " + hiddenDim + ")");
         if (kvDim < 1)
@@ -68,8 +89,26 @@ final class DeviceScratchBudget {
         if (ffnDim < 1)
             throw new IllegalArgumentException("ffnDim must be >= 1 (got " + ffnDim + ")");
         long widest = Math.max(hiddenDim, Math.max(kvDim, ffnDim));
-        long largestMatrixBytes = (long) hiddenDim * widest * Short.BYTES;
-        return largestMatrixBytes + largestMatrixBytes * MARGIN_PERCENT / 100;
+        return (long) hiddenDim * widest * Short.BYTES;
+    }
+
+    /**
+     * Device bytes to keep free for the forward pass: the reserved prefill window,
+     * plus the dequant scratch when batched K-quant matmuls take the dequantizing
+     * route, plus the margin, plus {@link #ALLOCATOR_HOLDBACK_BYTES}.
+     *
+     * @param windowBytes         the window at {@link #RESERVED_WINDOW_ROWS} rows
+     * @param dequantScratchBytes {@link #dequantScratchBytes}, or 0 when no matmul dequantizes
+     * @throws IllegalArgumentException if {@code windowBytes} is not positive or
+     *                                  {@code dequantScratchBytes} is negative
+     */
+    static long reserveBytes(long windowBytes, long dequantScratchBytes) {
+        if (windowBytes < 1)
+            throw new IllegalArgumentException("windowBytes must be >= 1 (got " + windowBytes + ")");
+        if (dequantScratchBytes < 0)
+            throw new IllegalArgumentException("dequantScratchBytes must be >= 0 (got " + dequantScratchBytes + ")");
+        long needed = windowBytes + dequantScratchBytes;
+        return needed + needed * MARGIN_PERCENT / 100 + ALLOCATOR_HOLDBACK_BYTES;
     }
 
     /**

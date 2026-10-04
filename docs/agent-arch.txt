@@ -125,13 +125,21 @@ Module dependency (excerpt):
   juno-bom — Maven BOM (dependencyManagement for cab.ml artifacts)
   DeviceScratchBudget (node module): sizes the device memory kept free for the
         forward pass when --gpu-layers auto decides how many weight layers to
-        upload. Weight upload, the Q4_K dequant scratch and the GPU attention KV
+        upload. Weight upload, the prefill window and the GPU attention KV
         mirror all allocate from one device, but only the upload was written to
         expect it to run out; filling the card therefore loaded and decoded and
         then failed on the first prompt wide enough to take the batched path.
-        The reserve is the widest matmul in the model (hidden x max(hidden, kv,
-        ffn) halves) plus a margin, plus the KV mirror at its initial capacity
-        when --gpu-attention is active. LlamaTransformerHandler learns the
+        The reserve is the prefill-window region's narrowest window
+        (RESERVED_WINDOW_ROWS = 64 rows at 64 positions, PrefillWindowFootprint)
+        plus a 40% margin, plus ALLOCATOR_HOLDBACK_BYTES (64 MiB: with the card
+        full the free-memory query still reports 44 to 54 MiB no allocation can
+        obtain), plus the KV mirror at its initial capacity when --gpu-attention
+        is active. The widest FP16 weight matrix (hidden x max(hidden, kv, ffn)
+        halves, dequantScratchBytes) is added only when packed K-quant weights
+        are uploaded and the tiled K-quant GEMM cannot load, the one case in
+        which a batched matmul still dequantizes. A wider window is not reserved
+        for: the adaptive prefill chunk is sized from what is free after the
+        upload (PrefillChunkDefaults). LlamaTransformerHandler learns the
         per-layer cost by measuring free VRAM across the first upload and stops
         while the reserve is still intact. Every device allocation on the
         inference path falls back to its CPU equivalent on VRAM exhaustion
@@ -480,6 +488,11 @@ GPU FFI (node module — Panama project, JEP 454):
         rotates a ResidentActivation in place (applyResident). No host-array entry point: RoPE on
         the device only pays when the activation is already there. Built by ResidentQkvPath, which
         LlamaTransformerHandler constructs under --gpu-residency.
+  PrefillWindowFootprint — device bytes of one PrefillWindowRegion window of a given width, term for
+        term with Window's buffers (capacity rounded up to 64 rows), plus the attention scores (rows x
+        heads x context x 4) and the backend's Q8_1 copy of the window. PrefillReserveDeviceTest holds
+        it equal to what a window allocates. Read by DeviceScratchBudget and, through
+        ForwardPassHandler.prefillWindowDeviceBytes, by the adaptive prefill chunk.
   PrefillWindowRegion — the prefill-window device region (on by default on CUDA; PrefillRegionOptions):
         a transformer layer over a prefill window of more than 8 rows with the activations on the
         device between its operations. The residual stream x stays on the device across layers: it
@@ -560,8 +573,8 @@ GPU FFI (node module — Panama project, JEP 454):
         / fused Q4_K GEMV when --mmq; async H2D/D2H on one CUDA stream per instance;
         sgemvSameX uploads shared activations once for Q/K/V and gate/up groups. Scratch
         lifetime: the FP32/FP16 staging, the Q8WindowScratch (a prefill window as Q8_1), the
-        Q4KDequantScratch (one whole weight matrix in FP16, now only on the fallback route; still
-        the figure DeviceScratchBudget reserves until the reserve is shrunk) and the stream belong to
+        Q4KDequantScratch (one whole weight matrix in FP16, only on the fallback route, the one
+        case in which DeviceScratchBudget reserves it) and the stream belong to
         the instance, not to a thread; every use is under GpuContext.cublasSerializationLock()
         and each call synchronizes its stream before releasing it, so one set serves every
         caller. Grown on demand, kept at the largest size; releaseScratch() frees the set and
@@ -640,12 +653,17 @@ GPU FFI (node module — Panama project, JEP 454):
         Override: -Djuno.gpu.backend=cuda|rocm|auto.
         createMatVec() delegates to GpuBindings.createMatVec(GpuContext) — no instanceof checks.
         freeVramBytes() — live free-VRAM query (GpuBindings.memGetInfo), used by coordinator's
-        PrefillBatchOptions.resolveAdaptive for whole-prompt prefill chunk sizing on static schedule.
+        PrefillChunkDefaults / PrefillBatchOptions for whole-prompt prefill chunk sizing on static schedule.
   PrefillChunkDefaults (coordinator) — the one place every GenerationLoop entry point resolves its
         prefill chunk size: Surface LOCAL_REPL / EMBEDDED (JunoPlayer) / CLUSTER_REPL / COORDINATOR /
         LORA_REPL. An explicit --prefill-batch / JUNO_PREFILL_BATCH / builder value wins everywhere;
-        otherwise LOCAL_REPL and EMBEDDED on a GPU with the static schedule size from free VRAM, and
-        every other case uses the fixed 32 (CPU: window width does not change prefill time; continuous:
+        otherwise LOCAL_REPL and EMBEDDED on a GPU with the static schedule size from free VRAM: the
+        widest window whose footprint, summed over every shard's
+        ForwardPassHandler.prefillWindowDeviceBytes (each in-process shard keeps its own region
+        window; PrefillWindowFootprint: window buffers, attention scores growing with rows x context,
+        the Q8_1 copy), fits half of what is free, between 32 and 65536 rows; with no shard on the
+        device region, the host-staged path's 64 KiB a token applies instead.
+        Every other case uses the fixed 32 (CPU: window width does not change prefill time; continuous:
         32 is the decode-interleaving fairness unit; cluster and coordinator: the gRPC pipeline clients
         prefill one token per forward call, so the chunk is inert; LoRA REPL: the LoRA handler's prefill
         does not speed up with window width).

@@ -15,8 +15,11 @@
  */
 package cab.ml.juno.coordinator;
 
+import java.util.List;
+import java.util.function.IntToLongFunction;
 import java.util.function.LongSupplier;
 
+import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.GpuContext;
 
 /**
@@ -25,8 +28,9 @@ import cab.ml.juno.node.GpuContext;
  *
  * <p>An explicit value (CLI, builder or {@code JUNO_PREFILL_BATCH}) wins on every
  * surface. Without one, the in-process surfaces on a GPU with the {@code static}
- * schedule size the chunk from free device memory
- * ({@link PrefillBatchOptions#resolveAdaptive}), which normally covers the whole
+ * schedule size the chunk from free device memory and the prefill-window footprint
+ * their shards report ({@link #resolve(Surface, Integer, boolean, GpuContext, List)}):
+ * the widest window that fits half of what is free, which normally covers the whole
  * prompt in one window; everything else uses the fixed
  * {@value PrefillBatchOptions#DEFAULT_CHUNK_SIZE}. Each fixed default rests on a
  * measurement of window width on that surface (512-token prompt, TinyLlama):
@@ -70,10 +74,44 @@ public final class PrefillChunkDefaults {
 		return resolveFrom(surface, cliArg, staticSchedule, gpuCtx == null ? null : gpuCtx::freeVramBytes);
 	}
 
-	static int resolveFrom(Surface surface, Integer cliArg, boolean staticSchedule, LongSupplier freeVramBytes) {
+	/**
+	 * As {@link #resolve(Surface, Integer, boolean, GpuContext)}, sizing the adaptive
+	 * chunk from the prefill-window footprint {@code handlers} report: every
+	 * in-process shard keeps its own window on the device, so their footprints add up.
+	 */
+	public static int resolve(Surface surface, Integer cliArg, boolean staticSchedule, GpuContext gpuCtx,
+			List<? extends ForwardPassHandler> handlers) {
+		return resolveFrom(surface, cliArg, staticSchedule, gpuCtx == null ? null : gpuCtx::freeVramBytes,
+				windowBytesOf(handlers));
+	}
+
+	/**
+	 * The summed prefill-window footprint of {@code handlers}, by window rows, or
+	 * null when none of them runs its prefill windows on the device region.
+	 */
+	static IntToLongFunction windowBytesOf(List<? extends ForwardPassHandler> handlers) {
+		List<ForwardPassHandler> regions = handlers.stream()
+				.filter(h -> h.prefillWindowDeviceBytes(PrefillBatchOptions.DEFAULT_CHUNK_SIZE) > 0)
+				.map(h -> (ForwardPassHandler) h).toList();
+		if (regions.isEmpty())
+			return null;
+		return rows -> {
+			long total = 0;
+			for (ForwardPassHandler h : regions)
+				total += h.prefillWindowDeviceBytes(rows);
+			return total;
+		};
+	}
+
+	static int resolveFrom(Surface surface, Integer cliArg, boolean staticSchedule, LongSupplier freeVramBytes,
+			IntToLongFunction windowBytes) {
 		if (sizesFromDeviceMemory(surface) && staticSchedule)
-			return PrefillBatchOptions.resolveAdaptiveFrom(cliArg, freeVramBytes).chunkSize();
+			return PrefillBatchOptions.resolveAdaptiveFrom(cliArg, freeVramBytes, windowBytes).chunkSize();
 		return PrefillBatchOptions.resolve(cliArg).chunkSize();
+	}
+
+	static int resolveFrom(Surface surface, Integer cliArg, boolean staticSchedule, LongSupplier freeVramBytes) {
+		return resolveFrom(surface, cliArg, staticSchedule, freeVramBytes, null);
 	}
 
 	private static boolean sizesFromDeviceMemory(Surface surface) {

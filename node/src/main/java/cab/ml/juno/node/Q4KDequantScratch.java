@@ -22,7 +22,7 @@ import java.lang.foreign.MemorySegment;
  * whichever {@link DeviceQ4KMatrix} projection is mid-prefill. One per
  * {@link CudaMatVec} instance, used under the context's serialization lock, so
  * the device holds one such matrix per backend - the figure
- * {@link DeviceScratchBudget#reserveBytes} reserves - not one per thread.
+ * {@link DeviceScratchBudget#dequantScratchBytes} reserves - not one per thread.
  *
  * <p>Unlike {@code Fp16Scratch}'s {@code dXh}/{@code dY} (sized by batch), this
  * buffer is sized by {@code rows * cols} of the weight matrix being dequantized —

@@ -61,7 +61,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--kv-page-size N` | `16` | cluster, local, lora | Tokens per KV page when `schedule=continuous` (`JUNO_KV_PAGE_SIZE`). Ignored under `static` (dense; startup note). |
 | `--parallel N` | `1` | cluster, local, master | Static micro-batch size (`JUNO_PARALLEL`). `1` disables batching; recommend `8` for API servers. |
 | `--batch-window-ms M` | `50` when parallel>1 | cluster, local, master | Batch collect window (`JUNO_BATCH_WINDOW_MS`). |
-| `--prefill-batch N` | sized to the prompt (GPU + `static` schedule, local mode and the `JunoPlayer` facade); `32` otherwise | cluster, local, master | Max prompt tokens per prefill window (`JUNO_PREFILL_BATCH`). In local mode and in the `JunoPlayer` embedding facade, with `--schedule static` and a GPU backend, the default sizes the window to cover the whole prompt when there is enough free VRAM (queried live), falling back to `32` when VRAM is tight. Every other surface defaults to `32`, each for a measured reason: on CPU a wider window does not change prefill time; under `--schedule continuous` the chunk is the unit decode steps interleave with, and `32` gives concurrent requests the lowest time to first token (a wider chunk shortens a long prompt's prefill at their expense); in cluster mode and on a standalone coordinator the nodes prefill one token per call, so the chunk size does not change the work; in `juno lora` the LoRA handler's prefill does not speed up with window width. Pass an explicit `N` to override on any surface; use `1` for per-token batched prefill.
+| `--prefill-batch N` | sized to the prompt (GPU + `static` schedule, local mode and the `JunoPlayer` facade); `32` otherwise | cluster, local, master | Max prompt tokens per prefill window (`JUNO_PREFILL_BATCH`). In local mode and in the `JunoPlayer` embedding facade, with `--schedule static` and a GPU backend, the default is the widest window whose device footprint fits half of the free VRAM (queried live after the weights are uploaded), which normally covers the whole prompt; the footprint is the prefill window's own buffers plus its attention scores, added up over every in-process node, and it falls back to `32` when VRAM is tight. Every other surface defaults to `32`, each for a measured reason: on CPU a wider window does not change prefill time; under `--schedule continuous` the chunk is the unit decode steps interleave with, and `32` gives concurrent requests the lowest time to first token (a wider chunk shortens a long prompt's prefill at their expense); in cluster mode and on a standalone coordinator the nodes prefill one token per call, so the chunk size does not change the work; in `juno lora` the LoRA handler's prefill does not speed up with window width. Pass an explicit `N` to override on any surface; use `1` for per-token batched prefill.
 | `--prefill single\|batched` | `batched` | cluster, local | Prefill strategy: windowed GEMM vs per-token sequential loop. |
 | `--spec-type none\|ngram-simple\|draft-simple` | `none` | local | Speculative decoding (`JUNO_SPEC_TYPE`). `ngram-simple` drafts up to `--spec-ngram-m` tokens from an in-request ngram cache (prompt + generated tokens, no second model). `draft-simple` drafts from a second, smaller GGUF model given via `--model-draft` (must share the target's vocabulary — fails closed at startup otherwise). Both verify the whole draft window against the target model in one batched pass and emit the target model's own prediction at the first mismatch — output is byte-for-byte identical to `none` regardless of draft accuracy (a wrong or low-quality draft only costs acceptance rate, never correctness). `ngram-simple` drafts well on repetitive output (templated JSON, echoed context) and mostly falls back to plain decoding on free-form novel text. Wired only for single-request decoding (REPL turns, and API requests that are not sharing a `--parallel` static batch with another in-flight request) — a request that lands in a concurrent batch decodes without speculation (startup WARNING when both are configured together); `draft-simple` is local-mode only — LoRA train/play and cluster/tensor-parallel launches fail closed with an explicit error rather than silently ignoring `--model-draft`; cluster / tensor-parallel pipelines that do reach the verify path (`ngram-simple`) fall back to the correctness-preserving serial verify path (no speed benefit there yet). |
 | `--spec-ngram-n N` | `3` | local | Ngram order for the speculative draft cache (`JUNO_SPEC_NGRAM_N`) — number of trailing tokens used as the lookup key. Only meaningful with `--spec-type ngram-simple`. |
@@ -773,8 +773,8 @@ try (JunoPlayer player = JunoPlayer.builder(Path.of("/path/to/model.gguf"))
 ```
 
 The facade sizes its prefill window the way local mode does: on a GPU with the `static` schedule the
-default covers the whole prompt when free VRAM allows (`32` otherwise, and on CPU or the `continuous`
-schedule). `.prefillBatch(N)` or `JUNO_PREFILL_BATCH` fixes it to `N`.
+default is the widest window that fits half of the free VRAM, which normally covers the whole prompt
+(`32` when VRAM is tight, and on CPU or the `continuous` schedule). `.prefillBatch(N)` or `JUNO_PREFILL_BATCH` fixes it to `N`.
 
 #### Programmatic LoRA (`LoraTrainer`)
 
@@ -959,20 +959,29 @@ downloads").
 ### Device memory with `--gpu-layers auto`
 
 Weight upload is not the only thing that allocates on the GPU. The forward pass also needs device
-memory: a scratch buffer to dequantize a packed weight matrix into when a prompt is wide enough to
-take the batched path, and a key/value mirror when the GPU-resident attention path is active. Those
-allocations happen after the upload, at the first real request.
+memory: a prefill window's buffers when a prompt is wide enough to take the batched path, and a
+key/value mirror when the GPU-resident attention path is active. Those allocations happen after the
+upload, at the first real request.
 
 So `auto` stops uploading while enough device memory is still free for them, rather than filling the
-card. It reports what it kept back:
+card. What it keeps free is the narrowest prefill window (64 rows), with a margin, plus the key/value
+mirror at its starting size, plus 64 MiB for memory the driver reports free but will not hand out. It
+does not keep a whole weight matrix free: prefill multiplies the packed weights directly. The one
+exception is a run where the packed prefill kernel cannot load; those matmuls expand each weight matrix
+to FP16 first, and the reserve then covers the widest one too. It reports what it kept back:
 
 ```
-Llama: stopping GPU upload at global layer 23 to keep 351 MiB free for the forward pass — remainder on CPU
+Llama: stopping GPU upload at global layer 23 to keep 197 MiB free for the forward pass — remainder on CPU
 ```
 
 On a card that is comfortably larger than the model this changes nothing: the reserve is far smaller
 than one layer, so the same layers are resident as before. It matters when the model is close to, or
 larger than, the card.
+
+A prefill window wider than 64 rows is not reserved for. Its width comes from the default
+`--prefill-batch` sizing, which picks the widest window whose device footprint fits half of the memory
+that is free after the upload (see `--prefill-batch` above), so a card filled close to the reserve
+prefills in narrower windows rather than running out of memory.
 
 If device memory runs short anyway — a long conversation grows the key/value mirror, and that growth
 cannot be reserved for in advance without pinning memory a short conversation would never use — the

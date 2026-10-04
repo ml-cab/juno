@@ -74,6 +74,16 @@ public interface ForwardPassHandler {
 	}
 
 	/**
+	 * Device bytes this handler's prefill-window region holds for a window of
+	 * {@code rows} rows that starts the prompt; 0 when its prefill windows do not run
+	 * on the region. The adaptive prefill chunk adds this up over every shard on the
+	 * device, since each shard keeps its own window.
+	 */
+	default long prefillWindowDeviceBytes(int rows) {
+		return 0L;
+	}
+
+	/**
 	 * RMS-normalized final hidden state at the current position, immediately before
 	 * the LM head. Only the shard that owns the output projection returns a value;
 	 * intermediate shards return empty.

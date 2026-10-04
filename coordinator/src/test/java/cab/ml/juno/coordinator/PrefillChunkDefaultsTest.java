@@ -2,6 +2,8 @@ package cab.ml.juno.coordinator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.List;
+import java.util.function.IntToLongFunction;
 import java.util.function.LongSupplier;
 
 import org.junit.jupiter.api.Test;
@@ -9,6 +11,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import cab.ml.juno.coordinator.PrefillChunkDefaults.Surface;
+import cab.ml.juno.node.ForwardPassHandler;
+import cab.ml.juno.node.ForwardRequest;
+import cab.ml.juno.node.ForwardResult;
+import cab.ml.juno.node.ShardContext;
 
 class PrefillChunkDefaultsTest {
 
@@ -64,5 +70,57 @@ class PrefillChunkDefaultsTest {
 			assertThat(PrefillChunkDefaults.resolveFrom(surface, 7, staticSchedule, GPU_WITH_HEADROOM)).isEqualTo(7);
 			assertThat(PrefillChunkDefaults.resolveFrom(surface, 7, staticSchedule, NO_GPU)).isEqualTo(7);
 		}
+	}
+
+	// ── the handlers' prefill-window footprint ───────────────────────────────
+
+	private static final long MIB = 1024L * 1024L;
+	private static final IntToLongFunction ONE_MIB_PER_ROW = rows -> rows * MIB;
+
+	@ParameterizedTest
+	@EnumSource(value = Surface.class, names = { "LOCAL_REPL", "EMBEDDED" })
+	void inProcess_static_gpu_sizes_from_the_window_footprint(Surface surface) {
+		// 2 GiB free, 1 GiB headroom, 1 MiB a row.
+		assertThat(PrefillChunkDefaults.resolveFrom(surface, null, true, GPU_WITH_HEADROOM, ONE_MIB_PER_ROW))
+				.isEqualTo(1024);
+	}
+
+	@Test
+	void continuous_schedule_ignores_the_footprint() {
+		assertThat(PrefillChunkDefaults.resolveFrom(Surface.LOCAL_REPL, null, false, GPU_WITH_HEADROOM,
+				ONE_MIB_PER_ROW)).isEqualTo(PrefillBatchOptions.DEFAULT_CHUNK_SIZE);
+	}
+
+	@Test
+	void windowBytesOf_sums_every_shard_that_holds_a_window() {
+		IntToLongFunction f = PrefillChunkDefaults.windowBytesOf(List.of(handler(MIB), handler(0), handler(2 * MIB)));
+		assertThat(f).isNotNull();
+		assertThat(f.applyAsLong(100)).isEqualTo(300 * MIB);
+	}
+
+	@Test
+	void windowBytesOf_is_absent_when_no_shard_runs_the_device_region() {
+		assertThat(PrefillChunkDefaults.windowBytesOf(List.of(handler(0), handler(0)))).isNull();
+		assertThat(PrefillChunkDefaults.windowBytesOf(List.of())).isNull();
+	}
+
+	/** A handler whose prefill windows cost {@code perRow} device bytes a row. */
+	private static ForwardPassHandler handler(long perRow) {
+		return new ForwardPassHandler() {
+			@Override
+			public ForwardResult forward(ForwardRequest request, ShardContext context) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public boolean isReady() {
+				return true;
+			}
+
+			@Override
+			public long prefillWindowDeviceBytes(int rows) {
+				return rows * perRow;
+			}
+		};
 	}
 }

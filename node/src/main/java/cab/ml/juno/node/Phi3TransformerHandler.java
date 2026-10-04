@@ -440,6 +440,12 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	}
 
 	@Override
+	public long prefillWindowDeviceBytes(int rows) {
+		PrefillWindowRegion region = prefillRegion;
+		return region == null ? 0L : region.windowDeviceBytes(rows, rows);
+	}
+
+	@Override
 	public void releaseGpuResources() {
 		// The region holds references to the device matrices below; close it first.
 		if (prefillRegion != null)

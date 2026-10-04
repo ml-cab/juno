@@ -273,7 +273,7 @@ public final class JunoPlayer implements AutoCloseable {
 			var kvCache = new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(4096));
 			var schedule = cab.ml.juno.kvcache.ServeScheduleOptions.fromEnv();
 			int chunkSize = PrefillChunkDefaults.resolve(PrefillChunkDefaults.Surface.EMBEDDED, prefillBatch,
-					schedule.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.STATIC, gpuCtx);
+					schedule.mode() == cab.ml.juno.kvcache.ServeScheduleOptions.Mode.STATIC, gpuCtx, handlers);
 			var loop = new GenerationLoop(tokenizer, Sampler.create(), pipeline, kvCache,
 					cab.ml.juno.coordinator.PrefillMode.BATCHED, chunkSize, specOptions);
 			BatchConfig batch = ServeBatchOptions.resolve(parallel, batchWindowMs).toBatchConfig();

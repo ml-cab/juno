@@ -185,6 +185,19 @@ changes** (README execution rule 9) and tick item 7 here.
    Qwen3 if its per-head Q/K norm is added to the region (it is not a sweep model, so it has no bytes
    threshold); otherwise it stays announced.
 
+   *Added 2026-10-04 (owner decision, Tier 01C step 5): the KV mirror's run-time growth on a nearly full
+   card.* `DeviceScratchBudget` reserves the GPU-attention KV mirror only at its initial 64 positions, by
+   design: growth to a long context cannot be reserved up front without pinning memory a short request
+   never uses. Since Tier 01C shrank the upload reserve to a prefill window, a partially offloaded model
+   reaches the growth with almost nothing free. On llama-1-30b (23 of 60 layers on the GPU, 197 MiB kept
+   free) a 508-token prompt's mirror needs about 311 MiB, its growth fails, and attention falls back to
+   the CPU for the request (the pre-change build fell back too, in region attention;
+   `docs/perf-compare/20261003T235146Z-packed-kquant-reserve`). This tier owns long-context attention and
+   its memory: decide how mirror growth is budgeted against weight layers on a card the model does not fit
+   (for example, reserving for a stated context, or trading a layer for mirror capacity when a long prompt
+   arrives), and either keep a 512-token prompt's attention on the device for llama-1-30b at `auto` or
+   state why not with the number.
+
 ### Out of scope
 
 - Extending the tiled attention kernel to ROCm (tracked in Tier 10, same reasoning as Tier 01).

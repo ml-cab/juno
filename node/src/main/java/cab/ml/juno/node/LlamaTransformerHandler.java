@@ -448,17 +448,26 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					PrefillWindowRegion.Matrix.of(wDownQ4Dev, wDownDev, li), attnNorm[li], ffnNorm[li],
 					bq != null ? bq[li] : null, bk != null ? bk[li] : null, bv != null ? bv[li] : null);
 		}
-		PrefillWindowRegion.Shape shape = new PrefillWindowRegion.Shape(cfg.hiddenDim(),
-				cfg.numHeads() * cfg.headDim(), cfg.kvDim(), cfg.intermediateSize(), cfg.numHeads(),
-				cfg.numKvHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.rmsNormEps());
-		return PrefillWindowRegion.create("Llama", backend, shape, layers, ropePairing, cfg.ropeTheta(),
-				attentionKernel);
+		return PrefillWindowRegion.create("Llama", backend, prefillRegionShape(), layers, ropePairing,
+				cfg.ropeTheta(), attentionKernel);
+	}
+
+	private PrefillWindowRegion.Shape prefillRegionShape() {
+		return new PrefillWindowRegion.Shape(cfg.hiddenDim(), cfg.numHeads() * cfg.headDim(), cfg.kvDim(),
+				cfg.intermediateSize(), cfg.numHeads(), cfg.numKvHeads(), cfg.headDim(), cfg.gqaRatio(),
+				cfg.rmsNormEps());
 	}
 
 	/** Whether prefill windows run through the prefill-window device region. */
 	@Override
 	public boolean prefillRegionActive() {
 		return prefillRegion != null;
+	}
+
+	@Override
+	public long prefillWindowDeviceBytes(int rows) {
+		PrefillWindowRegion region = prefillRegion;
+		return region == null ? 0L : region.windowDeviceBytes(rows, rows);
 	}
 
 	/**
@@ -573,7 +582,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		DeviceQ4KMatrix outQ4 = null;
 		int resolvedGlobal = 0;
 		try {
-			long reserve = inferenceReserveBytes(L);
+			long reserve = inferenceReserveBytes(L, tryMmq);
 			long layerBytes = 0L;
 			for (int li = 0; li < L; li++) {
 				int global = startLayer + li;
@@ -728,7 +737,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		DeviceFloatMatrix outD = null;
 		int resolvedGlobal = 0;
 		try {
-			long reserve = inferenceReserveBytes(L);
+			long reserve = inferenceReserveBytes(L, false);
 			long layerBytes = 0L;
 			for (int li = 0; li < L; li++) {
 				int global = startLayer + li;
@@ -833,17 +842,24 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * Device bytes that must stay free once the weights are up: the scratch the
-	 * first wide prefill dequantizes a packed weight matrix into, plus the KV
-	 * mirror the GPU-resident attention path allocates at the first token.
+	 * Device bytes that must stay free once the weights are up: the narrowest
+	 * prefill window, the dequant scratch when packed K-quant weights cannot be
+	 * multiplied by the tiled kernel, and the KV mirror the GPU-resident attention
+	 * path allocates at the first token.
 	 *
-	 * <p>Both are allocated after the upload finishes, which is why a card filled
-	 * to the brim with weights loads and decodes and then fails on a real prompt.
+	 * <p>All of them are allocated after the upload finishes, which is why a card
+	 * filled to the brim with weights loads and decodes and then fails on a real prompt.
 	 *
-	 * @param layerCount layers this handler owns, for sizing the KV mirror
+	 * @param layerCount   layers this handler owns, for sizing the KV mirror
+	 * @param packedKQuant whether K-quant weights are uploaded packed
 	 */
-	private long inferenceReserveBytes(int layerCount) {
-		long scratch = DeviceScratchBudget.reserveBytes(cfg.hiddenDim(), cfg.kvDim(), cfg.intermediateSize());
+	private long inferenceReserveBytes(int layerCount, boolean packedKQuant) {
+		long window = PrefillWindowFootprint.bytes(prefillRegionShape(), false,
+				DeviceScratchBudget.RESERVED_WINDOW_ROWS, DeviceKvCache.INITIAL_SEQ_CAPACITY);
+		long dequant = packedKQuant && KQuantGemmKernel.tryLoad() == null
+				? DeviceScratchBudget.dequantScratchBytes(cfg.hiddenDim(), cfg.kvDim(), cfg.intermediateSize())
+				: 0L;
+		long scratch = DeviceScratchBudget.reserveBytes(window, dequant);
 		int mirrorLayers = GpuAttentionOptions.fromEnv().preferGpuAttention() ? layerCount : 0;
 		return scratch + DeviceScratchBudget.kvMirrorBytes(
 				mirrorLayers, cfg.kvDim(), DeviceKvCache.INITIAL_SEQ_CAPACITY);
@@ -1999,10 +2015,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private void sgemmLayerInto(GgufReader.QuantizedTensor quant,
 			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32, DeviceQ4KMatrix[] devQ4,
 			int li, float[][] X, float[][] Y, int rows, int cols) {
-		// A device matmul can still run out of device memory: the batched packed path
-		// dequantizes the whole weight matrix into a scratch buffer, and a request
-		// wide enough to take that path may arrive when the card is fuller than it
-		// was at upload time. The upload reserve (see DeviceScratchBudget) is what
+		// A device matmul can still run out of device memory: the batched path grows
+		// window-sized scratch (and a whole FP16 weight matrix when the tiled K-quant
+		// kernel is unavailable), and a request wide enough to take that path may
+		// arrive when the card is fuller than it was at upload time. The upload reserve (see DeviceScratchBudget) is what
 		// should prevent it; this is the net under that, so a reserve that turns out
 		// to be too small costs throughput on one matmul instead of ending the
 		// process. The CPU weight-stationary path below is the same fallback a

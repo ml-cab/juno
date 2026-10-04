@@ -9,7 +9,11 @@ decision). Step 4's switch is implemented (both prefill paths multiply packed we
 identical to the pre-switch build on 12 of 12 smoke requests); its pinned same-hour A/B is met
 (prefill Mistral 7B 1.49x to 1.55x, TinyLlama 1.23x at 512; 1.8x to 5.1x at widths 16 and 64; generation
 0.989x to 1.016x on the owner's pre-declared five-alternation confirmation, after a first run read 0.945x on
-Qwen2.5-3B). Next: step 5, shrinking the forward-pass reserve. See "Execution record".
+Qwen2.5-3B). Step 5 is done (2026-10-04): the forward-pass reserve is sized from the prefill window,
+not a weight matrix, and the adaptive prefill chunk from each shard's real window footprint (owner
+decision); llama-1-30b gains one GPU layer, models that fit whole are unchanged, and the VRAM threshold
+reads 1.043 (Mistral 7B) and 1.012 (30B) against `<= 1.05x`. Next: step 6, the full cross-surface
+matrix and closing sweeps. See "Execution record".
 Gap analysis refs: none directly — adjacent to §1.1. Split out of
 [Tier 04C](TIER-04C-packed-weight-matmul.md) on 2026-09-30 by the plan review; see "Why this tier, why
 now".
@@ -520,6 +524,138 @@ Still owed before the tier closes:
   sweeps (step 6).
 
 
+### 2026-10-04: implementation step 5, the reserve sized from the prefill window
+
+**Step 1 check.** `check-plan-thresholds.sh`: ok (19 tier files, milestone table checked).
+
+**Plan against code (re-verified at HEAD `5a77981`).** Batched K-quant matmuls take the tiled kernel
+on both prefill paths, and `Q4KDequantScratch` is reached only when the tiled module fails to load (or
+through the test-only `dequantizeBatchedKQuant`). `DeviceScratchBudget.reserveBytes` still reserved the
+widest FP16 weight matrix plus 40%, on every upload path, including `--mmq off` and FP32 residency, which
+never dequantize. Two claims did not hold, and they changed what this step could deliver:
+- **The reserve's javadoc said staging and activations were "much smaller" than the weight term.**
+  False since Tier 01B's prefill-window region. Worked out from `PrefillWindowRegion.Window`'s buffers, a
+  512-row window with its attention scores needs 88 / 101 / 162 / 253 MiB (TinyLlama, Qwen2.5-3B,
+  Mistral 7B, 30B), against the old reserve's 31 / 60 / 157 / 319 MiB. "Remove the weight term" shrinks
+  the reserve only if it promises a window narrower than 512.
+- **`PrefillBatchOptions.ADAPTIVE_BYTES_PER_TOKEN` (64 KiB, documented as a conservative worst case)
+  is 1.7x to 6.3x below a region window's cost per row** (114 to 412 KB before scores), so the adaptive
+  chunk could choose a window the free memory could not hold.
+
+Raised with the owner, options: (a) reserve the region's narrowest window (64 rows) and correct the chunk
+sizer to the real footprint; (b) the same reserve without the sizer fix; (c) reserve a 512-row window
+(barely a shrink); (d) stop and re-plan. *Owner decision 2026-10-03: (a).* The sizer fix is outside
+step 5's literal scope and is recorded under "Out-of-tier changes" below.
+
+**What changed.**
+- `PrefillWindowFootprint` (new): device bytes of a region window of `rows` rows, term for term with the
+  `Window` constructor at its capacity (rows rounded up to 64), plus attention scores (rows x heads x
+  context x 4) and the backend's Q8_1 copy at the widest matmul input. `PrefillWindowRegion.open` takes
+  its capacity from it, and `Window.deviceBytes()` reports what a window holds.
+- `DeviceScratchBudget`: `reserveBytes(windowBytes, dequantScratchBytes)` = (window + dequant) x 1.4 +
+  `ALLOCATOR_HOLDBACK_BYTES`. The window term is `RESERVED_WINDOW_ROWS = 64` rows at the KV mirror's
+  initial 64 positions. `dequantScratchBytes` (the old weight-shaped term, no margin) is added only when
+  K-quant weights are uploaded packed and `KQuantGemmKernel.tryLoad()` fails. The KV mirror term is
+  unchanged.
+- `ForwardPassHandler.prefillWindowDeviceBytes(rows)` (default 0). Llama, Phi-3 and Qwen3 report their
+  region's footprint, and `VisionAwareForwardPassHandler` delegates.
+- `PrefillChunkDefaults.resolve(..., handlers)` and `PrefillBatchOptions.adaptiveChunkSize(free,
+  windowBytes)`: the widest window (32 to 65536 rows, binary search) whose summed footprint fits half
+  of free VRAM. With no shard on the region, the 64 KiB a token still applies. `ConsoleMain` local mode
+  and `JunoPlayer` pass their handlers.
+
+**Found by the GPU test: the allocator withholds memory the free-memory query reports.** The first run
+of `PrefillReserveDeviceTest` filled the device down to the shrunk reserve, and the window's first
+256 KB allocation failed. With the device filled to allocation failure, `memGetInfo` still reported 44,
+52 and 54 MiB free in three processes (stable within one process), and not even 64 KiB could be
+allocated. The upload stop rule reads that query, so a window-sized reserve would have left nothing
+allocatable after the upload. The old 157 to 319 MiB reserve hid this. Hence
+`ALLOCATOR_HOLDBACK_BYTES = 64 MiB`. `host-specific`: measured on this GTX 1080, driver 580.173.02,
+with a desktop session.
+
+**Tests first.**
+- `PrefillWindowFootprintTest` (7, new): hand-computed Mistral 7B figures, capacity rounding, the fused
+  Q/K/V term, quadratic scores, monotonicity. 5 of 7 failed against stubs, on value.
+- `DeviceScratchBudgetTest` (19, rewritten): the window-shaped reserve, the dequant term only for the
+  fallback, the holdback, and **`aLayerThatFitsOnlyUnderTheShrunkReserveIsUploaded`**: a 30B layer that
+  the packed reserve uploads and the dequant reserve does not. 9 failed against stubs; the holdback case
+  was added after the GPU finding and failed against a zero constant.
+- `PrefillBatchOptionsTest` (+7) and `PrefillChunkDefaultsTest` (+5). On the first run they never
+  executed: node's failures stopped the reactor. They were then run against the stub behaviour put back
+  temporarily, and 9 failed on value; the implementation was restored.
+- `PrefillReserveDeviceTest` (3, new, `gpu`):
+  - **The footprint equals what a window allocates**, at 9, 64, 65 and 512 rows, separate and fused.
+    It passed on its first run against the stubs, because both sides returned 0, so it was not seen
+    failing.
+  - **What the reserve guarantees beyond the holdback** (a hole of that size, the rest of the device
+    filled, the hole freed) runs a 64-row window through two packed layers bit-identical to an
+    unconstrained run, while the dequant route in the same state runs out of memory. This is the
+    device-OOM regression test the tier asks for.
+  - **With the device full, the query reports no more than the holdback.**
+  - Measuring by filling down to a `memGetInfo` target was tried first and dropped: the leftover came
+    back in fragments smaller than 2 MiB. The hole method passed 3 of 3 runs.
+
+**Measured** (unpinned; VRAM and layer counts, not timings). HEAD `5a77981` (`ce4db246795fd33f`)
+against this change (`2d55d27b07a8a564`), one engine at a time, published as
+[`20261003T235146Z-packed-kquant-reserve`](../perf-compare/20261003T235146Z-packed-kquant-reserve/INDEX.md).
+Peak per-process VRAM during a 512-token prefill over peak during a short-prompt decode, same process:
+
+| Model, nodes | GPU layers (base / cand) | Kept free | Chunk (base / cand) | Prefill / decode peak (base / cand) |
+|---|---|---|---|---|
+| tinyllama-1.1b, 1 | 22 / 22 | not binding | 52202 / 4738 | 1.098 / 1.098 |
+| qwen2.5-3b, 1 | 36 / 36 | not binding | 40266 / 5213 | 1.045 / 1.045 |
+| Phi-3.5-mini, 1 | 32 / 32 | not binding | 38848 / 3659 | 1.125 / 1.126 |
+| mistral-7b, 1 | 32 / 32 | not binding | 23880 / 2601 | **1.043 / 1.043** |
+| llama-1-30b, 1 | 22 / **23** | 416 / 197 MiB | 3471 / 320 | **1.034 / 1.012** |
+| llama-1-30b, 3 | 23 / 23 | 351 / 132 MiB | 2480 / 32 | 1.007 / 1.001 |
+
+- **VRAM threshold (`<= 1.05x` on mistral-7b and llama-1-30b): met**, on both builds. The baseline
+  already met it, because step 4 removed the dequant scratch from prefill. `expected-general`: what a
+  prefill adds over decode is now window-shaped on any device.
+- **The shrink is proven on a real model.** The 30B on one node holds 23 layers instead of 22.
+  `host-specific` for the count. On three nodes the total stays 23: the third shard's first layer,
+  uploaded before its per-layer cost is measured, meets the allocator's refusal (handled) instead of
+  the stop rule. That behaviour predates this change; it is now visible because less is held back.
+- **Models that fit whole: no change** in layers, peaks or fallbacks. Their chunk is now 2601 to 5213
+  rows, so every 128-, 512- and 2048-token prompt is still one window. No sweep reading moves, so no
+  pinned A/B was owed for this step.
+- **Fallbacks on the 30B remain, on both builds.** A 508-token prompt's KV mirror on 23 layers needs
+  about 311 MiB, which no reserve on this card holds. The mirror grows at run time and was never
+  reserved for, by design. Each fallback lands on a correct path. The 30B wall times (1 node: prefill
+  2467 / 2118 s, decode 189 / 168 s; 3 nodes: 2450 / 1967 s and 167 / 196 s) are single unpinned readings
+  dominated by the 37 CPU layers. They are recorded, not scored.
+
+**Out-of-tier changes.** The adaptive prefill chunk sizer (`coordinator`: `PrefillBatchOptions`,
+`PrefillChunkDefaults`; call sites in `ConsoleMain` and `JunoPlayer`) is a batching change outside step
+5's literal scope, made by owner decision. It is a measurement boundary only for prompts longer than the
+new adaptive width (2601 rows or more on the sweep models), and for partially offloaded models. It
+invalidates no published baseline: every published sweep and smoke prompt is 2048 tokens or shorter, and
+no prior 30B reading is used as a reference.
+
+**Regression runs.**
+- Unit suite, all eleven modules: 2,058 run, 0 failures, 49 skipped, BUILD SUCCESS. The node module's
+  888 include every GPU-tagged test, and the known free-VRAM check in
+  `PrefillRegionHandlerParityTest` passed this time.
+- `smoke-long-prompt-prefill.sh --baseline-jar` (the HEAD `5a77981` jar), run unmodified: exit 0, 48 PASS
+  checks. Every greedy answer is identical to the baseline's on TinyLlama and Mistral 7B, `static` and
+  `continuous`, at 128, 512 and 2048 tokens.
+
+**Docs.** `docs/agent-arch.txt` (`DeviceScratchBudget`, `PrefillWindowFootprint`, `CudaMatVec`
+scratch, `GpuContext`, `PrefillChunkDefaults`), `docs/howto.md` (device memory with `--gpu-layers
+auto`, the `--prefill-batch` row, the facade), `docs/performance.md` (the superseded per-token figure)
+and `CHANGELOG.md` (Session 108).
+
+**Raised with the owner, not acted on.**
+- The KV mirror's run-time growth is outside both the reserve and the chunk sizer. On a card filled to
+  the reserve, it falls back for any prompt longer than the reserve's 64 positions.
+- `ALLOCATOR_HOLDBACK_BYTES` is a constant measured on one card and driver.
+
+*Owner decisions 2026-10-04, both as recommended:* the KV mirror's growth on a nearly full card moves to
+[Tier 02](TIER-02-attention-long-context.md) (a dated scope note after its item 8), and
+`ALLOCATOR_HOLDBACK_BYTES` stays at 64 MiB, to be re-measured in
+[Tier 10](TIER-10-gpu-backend-breadth-cpu-simd.md) (item 10) and on any other GPU.
+
+
 ## Exit criteria
 
 - [x] Item 1's per-width breakdown published, with the GEMM's share at 512 per sweep model and the
@@ -531,8 +667,20 @@ Still owed before the tier closes:
 - [ ] A tiled packed GEMM for Q4_K, Q5_K and Q6_K is the default for batch > `HALF_SGEMM_BATCH_MAX`,
       reading and writing through Tier 01B's prefill-window region; `Q4KDequantScratch` is off the
       default path for these formats; `--mmq off` still gives the FP16 baseline.
-- [ ] The forward-pass reserve shrunk, proven by the fits-only-under-the-new-budget test.
+- [x] The forward-pass reserve shrunk, proven by the fits-only-under-the-new-budget test.
+      *Checked 2026-10-04: the reserve is the 64-row prefill window plus margin and a 64 MiB allocator
+      allowance; the weight matrix is reserved only when the tiled kernel cannot load.
+      `DeviceScratchBudgetTest.aLayerThatFitsOnlyUnderTheShrunkReserveIsUploaded` (unit) and
+      `PrefillReserveDeviceTest` (GPU: a wide window runs in exactly what the reserve guarantees; the
+      dequant route does not). On a real model, llama-1-30b on one node holds 23 GPU layers instead of 22
+      (197 MiB kept free instead of 416), in
+      [`docs/perf-compare/20261003T235146Z-packed-kquant-reserve`](../perf-compare/20261003T235146Z-packed-kquant-reserve/INDEX.md).*
 - [ ] Every threshold above met, or reported missed with its number.
+      *2026-10-04: the VRAM threshold is met (prefill peak over decode peak 1.043 on Mistral 7B, 1.012 on
+      llama-1-30b, against <= 1.05x;
+      [`docs/perf-compare/20261003T235146Z-packed-kquant-reserve`](../perf-compare/20261003T235146Z-packed-kquant-reserve/INDEX.md)).
+      Still owed at step 6, by the executor: the scored greedy-decode agreement over 512 tokens, and the
+      vision and LoRA gates.*
 - [ ] The milestone (GPU pp >= 0.20x at `n_prompt=512` on every sweep model) read from the closing
       sweep and reported met or missed with the number; the first `n_prompt=2048` sweep published and
       the README's Tier 02 milestone reference cell filled from it in the same change.

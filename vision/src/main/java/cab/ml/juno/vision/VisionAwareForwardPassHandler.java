@@ -276,6 +276,11 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
     }
 
     @Override
+    public long prefillWindowDeviceBytes(int rows) {
+        return textHandler.prefillWindowDeviceBytes(rows);
+    }
+
+    @Override
     public Optional<float[]> lastRmsHiddenForEmbedding(ForwardRequest request, ShardContext context) {
         return textHandler.lastRmsHiddenForEmbedding(request, context);
     }

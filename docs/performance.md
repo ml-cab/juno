@@ -723,6 +723,12 @@ Two independent fixes to the `static`-schedule prefill path, found by profiling 
    schedule is unchanged: its own chunking exists for decode-interleaving fairness. CPU-only runs
    keep the fixed 32-token default. `--prefill-batch N` still works as an explicit override on every
    surface.
+   *Since superseded:* the 65536 bytes a token was the host-staged matmul's figure. Once prefill windows
+   ran on the device region, a window cost 114 to 412 KB a row before attention scores, so the
+   per-token figure could choose a window the free memory could not hold. The default is now the
+   widest window whose actual device footprint (window buffers, attention scores, the Q8_1 copy),
+   added up over every in-process node, fits half of the free VRAM; the per-token figure applies only
+   when no node runs its windows on the device region.
 
 Real GTX 1080, `mistral-7b-instruct-v0.1-q4_k_m.gguf`, `--gpu-layers auto --mmq auto`, a real 488-token
 chat prompt, `max_tokens=16`:

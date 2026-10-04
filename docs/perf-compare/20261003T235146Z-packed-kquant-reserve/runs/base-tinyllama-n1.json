@@ -1,0 +1,21 @@
+{
+  "run": "base-tinyllama-n1",
+  "vram": {
+    "after_load_mib": 912,
+    "decode_peak_mib": 922,
+    "prefill_peak_mib": 1012,
+    "samples": 102,
+    "prefill_over_decode": 1.0976
+  },
+  "timing": "decode 200 1.816551;prefill 200 0.701627;",
+  "decode_usage": {
+    "completion_tokens": 64,
+    "total_tokens": 89,
+    "prompt_tokens": 25
+  },
+  "prefill_usage": {
+    "completion_tokens": 1,
+    "total_tokens": 513,
+    "prompt_tokens": 512
+  }
+}

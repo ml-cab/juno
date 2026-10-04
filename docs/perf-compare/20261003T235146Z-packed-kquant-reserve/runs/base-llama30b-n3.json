@@ -1,0 +1,21 @@
+{
+  "run": "base-llama30b-n3",
+  "vram": {
+    "after_load_mib": 7342,
+    "decode_peak_mib": 7552,
+    "prefill_peak_mib": 7602,
+    "samples": 32489,
+    "prefill_over_decode": 1.0066
+  },
+  "timing": "decode 200 166.528424;prefill 200 2449.609492;",
+  "decode_usage": {
+    "completion_tokens": 8,
+    "prompt_tokens": 35,
+    "total_tokens": 43
+  },
+  "prefill_usage": {
+    "completion_tokens": 1,
+    "prompt_tokens": 508,
+    "total_tokens": 509
+  }
+}

@@ -15,6 +15,7 @@
  */
 package cab.ml.juno.coordinator;
 
+import java.util.function.IntToLongFunction;
 import java.util.function.LongSupplier;
 
 import cab.ml.juno.node.GpuContext;
@@ -40,13 +41,14 @@ public final class PrefillBatchOptions {
 	static final double ADAPTIVE_HEADROOM_FRACTION = 0.5;
 
 	/**
-	 * Conservative worst-case scratch bytes per prefill token across the default
-	 * supported model set: the largest FFN gate/up projection seen (mistral-7b,
-	 * hidden=4096 to intermediate=14336) needs {@code cols(hidden)} FP16 x-elements
-	 * plus {@code rows(intermediate)} FP32 y-elements per batched token
-	 * ({@code 4096*2 + 14336*4 = 65536} bytes/token). Using this fixed constant
-	 * rather than the actual loaded model's dimensions keeps this resolver
-	 * decoupled from any specific handler/config type.
+	 * Scratch bytes per prefill token of the host-staged batched matmul, used only
+	 * when no handler reports a prefill-window footprint (its windows do not run on
+	 * the device region): the largest FFN gate/up projection of the sweep models
+	 * (mistral-7b, hidden=4096 to intermediate=14336) stages {@code cols(hidden)} FP16
+	 * x-elements plus {@code rows(intermediate)} FP32 y-elements per batched token
+	 * ({@code 4096*2 + 14336*4 = 65536} bytes/token). A window on the device region
+	 * costs several times this (114 to 412 KB a row across the sweep models and a 30B
+	 * Llama, before attention scores), which is why a reported footprint replaces it.
 	 */
 	static final long ADAPTIVE_BYTES_PER_TOKEN = 65536L;
 
@@ -100,6 +102,15 @@ public final class PrefillBatchOptions {
 	 * {@link GpuContext} instance, and tests, can drive it.
 	 */
 	static PrefillBatchOptions resolveAdaptiveFrom(Integer cliArg, LongSupplier freeVramBytes) {
+		return resolveAdaptiveFrom(cliArg, freeVramBytes, null);
+	}
+
+	/**
+	 * As {@link #resolveAdaptiveFrom(Integer, LongSupplier)}, sizing the adaptive
+	 * chunk from {@code windowBytes} when given ({@link #adaptiveChunkSize(long, IntToLongFunction)}).
+	 */
+	static PrefillBatchOptions resolveAdaptiveFrom(Integer cliArg, LongSupplier freeVramBytes,
+			IntToLongFunction windowBytes) {
 		if (cliArg != null)
 			return of(cliArg);
 		String env = env(ENV_PREFILL_BATCH);
@@ -108,9 +119,36 @@ public final class PrefillBatchOptions {
 		if (freeVramBytes != null) {
 			long freeBytes = freeVramBytes.getAsLong();
 			if (freeBytes > 0)
-				return of(adaptiveChunkSize(freeBytes));
+				return of(adaptiveChunkSize(freeBytes, windowBytes));
 		}
 		return defaults();
+	}
+
+	/**
+	 * The widest window, between {@value #DEFAULT_CHUNK_SIZE} and
+	 * {@link #ADAPTIVE_CHUNK_CEILING} rows, whose device footprint fits the headroom.
+	 *
+	 * @param windowBytes device bytes all prefill regions on the device hold for a
+	 *                    window of the given rows (non-decreasing in rows), or null;
+	 *                    null or zero at the floor means no region, and the per-token
+	 *                    figure {@link #ADAPTIVE_BYTES_PER_TOKEN} applies
+	 */
+	static int adaptiveChunkSize(long freeVramBytes, IntToLongFunction windowBytes) {
+		if (windowBytes == null || windowBytes.applyAsLong(DEFAULT_CHUNK_SIZE) <= 0)
+			return adaptiveChunkSize(freeVramBytes);
+		long headroomBytes = (long) (freeVramBytes * ADAPTIVE_HEADROOM_FRACTION);
+		int lo = DEFAULT_CHUNK_SIZE;
+		int hi = ADAPTIVE_CHUNK_CEILING;
+		if (windowBytes.applyAsLong(lo) > headroomBytes)
+			return lo;
+		while (lo < hi) {
+			int mid = lo + (hi - lo + 1) / 2;
+			if (windowBytes.applyAsLong(mid) <= headroomBytes)
+				lo = mid;
+			else
+				hi = mid - 1;
+		}
+		return lo;
 	}
 
 	static int adaptiveChunkSize(long freeVramBytes) {

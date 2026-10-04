@@ -141,6 +141,14 @@ result, which is the pattern this plan exists to stop repeating.
    the bandwidth share the breakdown says the three items can plausibly reach, never below the 0.25x
    placeholder. The README's roofline estimate puts a third of the roofline at about 0.4x to 0.7x;
    if the restated number is below 0.40x, say which term in the breakdown holds it there.
+10. **Re-measure the allocator holdback** (added 2026-10-04, owner decision, Tier 01C step 5).
+   `DeviceScratchBudget.ALLOCATOR_HOLDBACK_BYTES` is 64 MiB because, with the device full, the free-memory
+   query still reported 44 to 54 MiB that no allocation could obtain, on one GTX 1080 (driver 580.173.02,
+   desktop session). The upload stop rule reads that query, so the allowance must cover the holdback on
+   every device Juno runs on. Re-measure it with `PrefillReserveDeviceTest`'s
+   `theAllocatorWithholdsNoMoreThanTheReservesAllowance` on any other GPU this tier brings up (ROCm
+   included, through `RocmBindings.memGetInfo`), and either confirm 64 MiB with the readings or make it
+   per-device. The test already runs on every CUDA GPU test pass.
 
 ### Out of scope
 

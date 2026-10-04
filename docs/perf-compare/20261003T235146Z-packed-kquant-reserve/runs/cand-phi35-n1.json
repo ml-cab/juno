@@ -1,0 +1,21 @@
+{
+  "run": "cand-phi35-n1",
+  "vram": {
+    "after_load_mib": 2610,
+    "decode_peak_mib": 2692,
+    "prefill_peak_mib": 3030,
+    "samples": 177,
+    "prefill_over_decode": 1.1256
+  },
+  "timing": "decode 200 4.082496;prefill 200 2.450790;",
+  "decode_usage": {
+    "total_tokens": 81,
+    "prompt_tokens": 17,
+    "completion_tokens": 64
+  },
+  "prefill_usage": {
+    "total_tokens": 491,
+    "prompt_tokens": 490,
+    "completion_tokens": 1
+  }
+}
