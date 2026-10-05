@@ -1,7 +1,11 @@
 # Tier 02: Attention & long context
 
-Status: not started
-Gap analysis refs: §1.2
+Status: **in progress** (2026-10-05). Implementation steps 1 and 2 done: the plan check passes and the
+2048-over-512 milestone is decomposed. Owner decisions taken the same day: the milestone restated as a
+clock-normalised attention speedup at 2048 (`>= 6.0x`), Mistral 7B's non-attention growth attributed to the
+card's thermal clock, and the comparison harness records the in-window GPU clock. Next: implementation step 3
+(oracle tests for the scalar attention path). Open with the owner: whether the 512-over-128 row gets the same
+restatement.
 
 **Split 2026-10-04 (plan review): read this first.** This tier held nine items, and under execution
 rule 1 every later tier, including every remaining GPU throughput lever, waited on all of them. Its
@@ -219,12 +223,23 @@ The Phi-3.5 LongRoPE defect found on 2026-09-28 and its remainder are recorded i
     double** it, which is the property the rewrite exists to buy and the one a percentage alone does
     not capture.
 
-  **Milestone (README milestone table, added 2026-09-30).** The GPU pp ratio at `n_prompt=2048` over
-  the ratio at `n_prompt=512` is **>= 0.90** on every sweep model, from this tier's closing
-  `compare-llama-cpp.sh --gpu --pin-clocks` sweeps at both lengths. That is where a full-materialization
-  attention kernel's cost shows and where the tiled kernel has to earn its place in throughput as well as
-  in memory. The reference is Tier 01C's 2048 sweep: 0.329 (mistral-7b, binding) to 0.441. Implementation
-  step 2 decomposes this ask before the kernel is built.
+  **Milestone (README milestone table; restated 2026-10-05, owner decision 1).** Attention at
+  `n_prompt=2048` is **>= 6.0x** faster than on the pre-tier build on every sweep model, clock-normalised:
+  attention time per prefill window (kernel, copies and host part, as `prefill-breakdown.sh` reads them) times
+  the in-window median SM clock that `compare-llama-cpp.sh` records, pre-tier over candidate. Read from a
+  same-session A/B alternating the pre-tier jar and the candidate (A B A B A B), each invocation
+  `compare-llama-cpp.sh --gpu --device-spans --n-prompt 2048 --no-tuned-lane --juno-jar <jar> --juno-reps 1
+  --juno-warmup 2 --reps 1 --no-publish` (Phi-3.5-mini with `COMPARE_HEAP=8g`), median of three per side, all
+  six readings published. Pinning is not required: the threshold is far outside the 15% noise floor, and
+  `--pin-clocks` cannot hold this card's GPU clock, which the normalisation accounts for instead. Step 2's
+  pre-tier readings: tinyllama 4,459 ms, qwen2.5-3b 7,417 ms, Phi-3.5-mini 19,900 ms, mistral-7b 19,253 ms
+  (`docs/perf-compare/20261005T004009Z`, `20261005T005334Z`). The GPU pp ratio at 2048 over the ratio at 512
+  is still published from the closing sweeps, as a reading, not a gate.
+  *Was, until 2026-10-05:* the GPU pp ratio at `n_prompt=2048` over the ratio at `n_prompt=512` **>= 0.90** on
+  every sweep model (reference 0.329, mistral-7b binding). Restated because a ratio of ratios does not score
+  the kernel: the kernel also speeds 512, so a 10x kernel would read 0.69 on mistral-7b while lifting its pp
+  ratio at 2048 from 0.14x to about 0.57x (step 2 record, decision 1; README "Why the 2048-over-512 row became
+  an attention-speedup row").
   *Corrected 2026-10-01:* this paragraph said Tier 01B had established that prefill does not fall off
   between 128 and 512 once attention is on the GPU. Tier 01B's step 4 breakdown showed that it does, on
   three of the four sweep models, and that attention is the term responsible.
@@ -287,8 +302,12 @@ budget. No download is needed.
 
 ## Exit criteria
 
-- [ ] The 2048-over-512 milestone decomposed before the kernel was built (implementation step 2), with
+- [x] The 2048-over-512 milestone decomposed before the kernel was built (implementation step 2), with
       the escalation recorded if the required attention speedup exceeded 4x on any sweep model.
+      *2026-10-05:* decomposed from `docs/perf-compare/20261005T003146Z` (512) and `20261005T004009Z`/
+      `20261005T005334Z` (2048); [`milestone-decomposition.md`](../perf-compare/20261005T003146Z/milestone-decomposition.md).
+      Escalation recorded below (Mistral 7B: 4.86x required, non-attention +19.2% per token); the owner's
+      decision is open.
 - [ ] Tiled attention kernel numerically matches the CPU oracle at all tested sequence lengths and
       reduces peak GPU memory at long context vs. the old full-materialization kernel (measured), and
       takes the per-layer window parameter Tier 02B needs.
@@ -324,9 +343,148 @@ budget. No download is needed.
 - [ ] Milestone (pp ratio at 512 over 128 >= 1.00 on every sweep model, moved here from Tier 01B on
       2026-10-01) reported met or missed with its number, and the attention share of a 512-token window
       per model read against implementation step 2's figures.
-- [ ] Milestone (pp ratio at 2048 over 512 >= 0.90 on every sweep model) reported met or missed with
-      its number; GPU tg ratios recorded against the 0.70x end-of-plan targets and GPU pp ratios against
+- [ ] Milestone (attention at 2048 >= 6.0x faster than the pre-tier build, clock-normalised, on every
+      sweep model; restated 2026-10-05 from pp ratio at 2048 over 512 >= 0.90) reported met or missed with
+      its number, and 2048 over 512 published as a reading; GPU tg ratios recorded against the 0.70x end-of-plan targets and GPU pp ratios against
       the per-length end-of-plan rows, with the missing mechanism named if they are out of reach.
 - [ ] Docs (`docs/howto.md`, `docs/agent-arch.txt`, `docs/performance.md`) updated, Juno-native
       language only.
 - [ ] `CHANGELOG.md` entry added.
+
+## Execution record
+
+### 2026-10-05: implementation steps 1 and 2 (plan check; milestone decomposition), and an escalation
+
+**Step 1.** `scripts/performance-tests/check-plan-thresholds.sh` passes (21 tier files, milestone and
+end-of-plan tables checked).
+
+**Step 2: pre-tier build and method.** HEAD `05a17de`, clean tree; its engine code is identical to `127c9a0`
+(only plan files and the plan check changed since), so it is the pre-tier build. Jar `3306ea4261f84a49`,
+built with `mvn -q package -DskipTests`. Three `compare-llama-cpp.sh --gpu --device-spans --no-tuned-lane`
+runs, published, unpinned (a breakdown reports shares within one run, as Tier 01B's step 4 did):
+`docs/perf-compare/20261005T003146Z` (512, four models), `20261005T004009Z` (2048, TinyLlama, Qwen2.5-3B,
+Mistral 7B at their fixed heaps) and `20261005T005334Z` (2048, Phi-3.5-mini, `COMPARE_HEAP=8g` as in Tier
+01C's reference). `prefill-breakdown.sh` on each: residue 1.9% to 4.0% at 512, 0.5% to 1.0% at 2048, inside
+its 5% bound. Every row scorable, prompt tokens 512/512 and 2048/2048. Attention is kernel plus copies plus
+host part (`region_attention_compute`, `attention_compute`, `attention_copies`, `attention_host`); on the
+LLaMA-family models it runs inside the prefill region, whose host dispatch stays in the region's host term
+(0.4% to 3.4%). The arithmetic and how to read each column are in
+[`milestone-decomposition.md`](../perf-compare/20261005T003146Z/milestone-decomposition.md).
+
+| Model | Prefill ms 512 / 2048 | Attention ms 512 / 2048 | Attention share 512 / 2048 | Non-attention ms per token 512 / 2048 (growth) | pp ratio 512 / 2048 (2048 over 512) | Attention speedup at 2048 needed, 512 held | Speedup needed at both lengths | 2048 over 512 with attention at zero |
+|---|---|---|---|---|---|---|---|---|
+| Phi-3.5-mini-instruct-Q4_K_M | 2072 / 24334 | 943 / 19900 | 45.5% / 81.8% | 2.206 / 2.165 (-1.9%) | 0.200x / 0.091x (0.452) | 2.56x | 6.44x | 1.352 |
+| mistral-7b-instruct-v0.1-q4_k_m | 1591 / 23226 | 757 / 19253 | 47.6% / 82.9% | 1.628 / 1.940 (+19.2%) | 0.468x / 0.144x (0.307) | 4.86x | 84.35x | 0.942 |
+| qwen2.5-3b-instruct-q4_k_m | 765 / 8933 | 408 / 7417 | 53.3% / 83.0% | 0.697 / 0.740 (+6.1%) | 0.415x / 0.169x (0.407) | 2.94x | 14.24x | 1.119 |
+| tinyllama-1.1b-chat-v1.0.Q4_K_M | 400 / 5060 | 248 / 4459 | 62.1% / 88.1% | 0.296 / 0.294 (-0.7%) | 0.330x / 0.125x (0.378) | 2.93x | 15.48x | 1.204 |
+
+The 2048-over-512 readings here (0.307 to 0.452) agree with the pinned reference (0.329 to 0.441) within the
+noise floor.
+
+**Findings.**
+
+- **Attention is now most of the prefill window at both lengths.** 45.5% to 62.1% of a 512-token window
+  (11% to 17% at Tier 01B's step 4, before the packed GEMM removed most of everything else) and 81.8% to
+  88.1% of a 2048-token one. Per prefilled token it grows 4.5x (TinyLlama) to 6.4x (Mistral 7B) from 512 to
+  2048, so the kernel's cost per call grows 18x to 25x for 4x the length.
+- **Trigger 1 fired: the required attention speedup exceeds 4x on Mistral 7B** (4.86x with everything else,
+  the 512 reading included, held fixed; 2.56x to 2.94x on the other three).
+- **Trigger 2 fired: Mistral 7B's non-attention time per token grows 19.2%** from 512 to 2048 (limit 10%;
+  Qwen2.5-3B +6.1%, TinyLlama -0.7%, Phi-3.5-mini -1.9%). Both lengths run one window with the same launch
+  counts (224 packed GEMMs, 32 attention calls), yet GEMM compute grows 4.98x for 4x the rows and each
+  elementwise kernel 4x to 6x. Not attributed: a GPU clock that sags over a 23-second window (unpinned; the
+  card refuses clock locking) and the GEMM's behaviour at 2048 rows both fit. *Attributed 2026-10-05 to the card's
+  thermal clock; see the decision 2 record below.* With attention at zero at both
+  lengths Mistral 7B's milestone ratio could reach only 0.942.
+- **"Everything else held fixed" understates the ask.** The faster kernel also runs at 512 and raises the
+  512 ratio the milestone divides by. With the same attention speedup at both lengths, 0.90 needs 6.4x
+  (Phi-3.5-mini), 14.2x (Qwen2.5-3B), 15.5x (TinyLlama) and 84x (Mistral 7B). The reference tool keeps 75%
+  to 89% of its prefill t/s from 512 to 2048 and Juno 27% to 34%; the milestone asks for at least 0.90 of the
+  reference tool's retention, which an exact-attention kernel can approach only by also matching the
+  reference tool's attention cost per token, not just its scaling.
+- **Not decomposed by this step, flagged:** the 512-over-128 row (>= 1.00) depends on the same term. At
+  45.5% to 62.1% attention at 512 it carries the same both-lengths effect between 128 and 512.
+
+**Raised with the owner (2026-10-05). Decided the same day: decision 1 (b), with the 6.0x clock-normalised
+threshold, and decision 2 (a); see the records below.**
+
+- *Decision 1: the 2048-over-512 milestone.* (a) Keep `>= 0.90` and build the kernel, reporting a probable
+  miss on Mistral 7B. (b) Restate the row as something the kernel owns: attention milliseconds per
+  prefilled token at 2048 reduced by a stated factor against this decomposition on every sweep model
+  (Juno-against-Juno), with 2048 over 512 reported but not gated. (c) Keep the number but re-own it to Tier 14
+  as a reported distance. Recommended: (b). The decomposition says no one kernel delivers the ratio as
+  written, and the end-of-plan row (pp at 2048 `>= 0.25x`) already scores the absolute outcome.
+- *Decision 2: Mistral 7B's non-attention growth.* (a) Attribute it before the kernel: re-run Mistral 7B at
+  512 and 2048 with `--device-spans` while sampling `nvidia-smi` clocks during the window (no harness
+  change, no sudo). (b) Leave it and let the closing sweep show it. Recommended: (a). It caps Mistral 7B's
+  milestone at 0.942 whatever attention does, and it is cheap to read.
+
+**Out-of-tier changes.** None.
+
+### 2026-10-05: decision 2 taken (a); Mistral 7B's non-attention growth is the GPU's thermal clock
+
+Owner decision: attribute it before the kernel. Mistral 7B re-run at 512 and 2048 with `--device-spans`
+(`docs/perf-compare/20261005T012110Z`, `20261005T012348Z`; jar `3306ea4261f84a49`, unpinned), with
+`nvidia-smi` sampling the SM clock, temperature, power and clock event reasons every 100 ms. Each measured
+prefill window (its `juno.PrefillBatch` event) joined to the samples inside it
+([`gpu-clocks.md`](../perf-compare/20261005T012348Z/gpu-clocks.md)):
+
+| Length | SM clock in window (median) | Temperature | Power | Clock event reasons | GEMM ms per row (median) |
+|---|---|---|---|---|---|
+| 512 | about 1845 MHz (1809 to 1860) | 52 to 67 C | about 160 W | none, or software power cap (`0x4`) | 1.199 |
+| 2048 | 1607 MHz (low 1354) | 79 to 93 C | about 110 W | software thermal slowdown (`0x20`) | 1.361 |
+
+GEMM time per row rises 13.3% against a 14.8% clock drop: clock-normalised it is flat (within 1.3%), so the
+growth is the 21-second window heating the card, not the packed GEMM at 2048 rows. On this pair the
+non-attention time per token grows 9.3% (under the 10% trigger; about -5% clock-normalised). The attention
+speedup the milestone needs with everything else held fixed reads 4.98x, so trigger 1 still fires; decision 1
+stays open.
+
+Consequences recorded for later steps:
+- The thermal clock inflates every 2048 reading of Juno, attention included (about 15% on Mistral 7B). The
+  reference tool prefills 2048 tokens in about 3.3 s and does not heat the card the same way, so part of the
+  2048 gap is a duration effect that a faster kernel removes on its own.
+- `--pin-clocks` cannot hold this card's clock (the driver refuses locking), and the harness records GPU
+  clocks only at idle, before the run. A 2048 gate reading on this host therefore carries an unrecorded clock.
+  Raised with the owner as decision 3: (a) have `compare-llama-cpp.sh` sample the GPU clock during each
+  measured window and publish the in-window median and the throttle reasons beside every result (a harness
+  change, recorded here as this tier's measurement infrastructure); (b) leave it and read 2048 gates with this
+  caveat. Recommended: (a).
+
+### 2026-10-05: decision 1 taken (b), decision 3 taken (a)
+
+**Decision 1 (b).** The 2048-over-512 milestone is restated as attention at `n_prompt=2048` **>= 6.0x**
+faster than the pre-tier build on every sweep model, clock-normalised, from a same-session A/B (the milestone
+paragraph under "Tests to write/upgrade before implementation", the exit criterion, and the README milestone
+table and its "Why the 2048-over-512 row became an attention-speedup row" paragraph). The 2048-over-512 ratio
+stays published as a reading. Not decided: whether the 512-over-128 row (`>= 1.00`), which has the same
+ratio-of-ratios form, gets the same treatment; it stays as written until the owner decides.
+
+**Decision 3 (a), landed the same day.** `compare-llama-cpp.sh` runs `nvidia-smi` every 100 ms while each
+measured request is in flight (GPU runs only) and records `gpu_clock_in_window` in every per-repetition
+result: median, lowest and highest SM clock over samples the driver does not flag idle, hottest sample,
+median power and the clock event reasons seen. The aggregate carries the median of the per-rep medians, the
+lowest minimum, the hottest sample and every reason, per lane (`lanes.prefill`, `lanes.generate`), and
+`INDEX.md` lists them per model; the raw samples are kept as `<rep>-gpu-clocks.csv`. Measurement
+infrastructure for this tier's gates (the attention-speedup milestone is clock-normalised from these
+figures), so not an out-of-tier change. Docs: `docs/howto.md` (the device-span section), `CHANGELOG.md`.
+
+Tests, written first: 18 new `compare-llama-cpp.sh --selftest` checks (summary of a sample file, idle and
+missing files, rep aggregation, lane merge). Seen failing first for the right reason (the summary function
+did not exist, then the aggregate did not carry the clock). One design change came from a real run: busy
+was first "utilization >= 50%", and an end-to-end TinyLlama run read no clock for the generate lane,
+because utilization is a trailing average (1% to 37% through a one-second decode at a full 1885 MHz). Busy
+is now "not flagged idle by the driver" (`gpu_idle` in the event reason mask), with a check for it, seen
+failing first. Full selftest: 114 checks, all pass.
+
+| Check | Result |
+|---|---|
+| `compare-llama-cpp.sh --selftest` | pass, 114 checks (96 before) |
+| `check-plan-thresholds.sh` | pass |
+| End to end, unpublished: `--gpu --n-prompt 512 --no-tuned-lane --models tinyllama --juno-reps 1 --juno-warmup 1 --reps 1 --no-publish` | pass: prefill 1873 MHz (low 1860, 58 C, no event reasons); generate 1860 MHz (low 1860, 54 C); sampler process gone after the run |
+
+The published note `docs/perf-compare/20261005T012348Z/gpu-clocks.md` and the decision 2 table above first
+called clock event reason `0x4` the applications-clock setting; it is the software power cap (`0x2` is the
+applications-clock setting). Both corrected 2026-10-05. That note's medians use the earlier
+utilization-over-50% filter, which its method paragraph states; its 2048 windows run at near-full
+utilization, so the reading does not change.

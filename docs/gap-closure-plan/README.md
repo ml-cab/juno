@@ -166,7 +166,7 @@ it. Its replacements name their length. At 512 the target is the old post-plan a
 roofline below puts under the FP32-compute ceiling and which Tier 01C's packed GEMM now makes reachable
 (three of four models already read 0.317x to 0.468x; Phi-3.5-mini binds at 0.226x). At 2048 it is 0.25x,
 where prefill reads 0.099x to 0.180x today and attention is the term that grows; Tier 02's tiled kernel and
-its 2048-over-512 milestone are the lever.
+its attention-speedup milestone at 2048 are the lever.
 
 **Score every later tier against the right-most column.** Its GPU rows are Tier 01C's closing sweeps
 (2026-10-04, owner run, clocks pinned, HEAD `59c53cc` plus Tier 01C's two out-of-tier fixes, jar
@@ -256,7 +256,7 @@ ask for more than its reference reading. For an "every model" scope the referenc
 | 01B | GPU pp ratio, `n_prompt=512` | Phi-3.5-mini | >= 0.08x | 0.146x (Tier 01B closing sweep `20261003T044014Z`; was 0.011x at the step 2 re-baseline; threshold kept by owner decision, see below) | retired: met by Tier 01B |
 | 01C | GPU pp ratio, `n_prompt=512` | every sweep model | >= 0.20x | 0.226x (Phi-3.5-mini, binding; tinyllama 0.317x, qwen2.5-3b 0.429x, mistral-7b 0.468x; Tier 01C closing sweep `20261004T114812Z`; was 0.146x at Tier 01B's close) | retired: met by Tier 01C |
 | 02 | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 0.606 (tinyllama, binding; mistral-7b 0.642, qwen2.5-3b 0.697, Phi-3.5-mini 0.743; Tier 01C closing sweeps `20261004T113210Z`/`20261004T114812Z`; was 0.845 at Tier 01B's close: the packed matmul removed fixed per-token cost, so attention's share of a long window grew) | active |
-| 02 | GPU pp ratio at 2048 over ratio at 512 | every sweep model | >= 0.90 | 0.329 (mistral-7b, binding; tinyllama 0.381, qwen2.5-3b 0.420, Phi-3.5-mini 0.441; Tier 01C's 2048 sweeps `20261004T220015Z`/`20261004T222758Z` over its 512 sweep `20261004T114812Z`; Phi-3.5-mini at an explicit 8 GiB heap, see Tier 01C's record) | active |
+| 02 | Attention speedup at `n_prompt=2048`: the pre-tier build's attention time per prefill window over the candidate's, clock-normalised (GPU ms x in-window median SM MHz), same-session A/B | every sweep model | >= 6.0x | 1.0x (the pre-tier build, by definition; its attention per 2048-token window, unpinned: tinyllama 4,459 ms, qwen2.5-3b 7,417 ms, Phi-3.5-mini 19,900 ms, mistral-7b 19,253 ms, `20261005T004009Z`/`20261005T005334Z`; restated 2026-10-05 from "GPU pp ratio at 2048 over ratio at 512 >= 0.90", see below) | active |
 | 04 | GPU tg ratio | Phi-3.5-mini | >= 0.40x | 0.416x | retired: met on arrival |
 | 02C | CPU tg ratio | every sweep model | >= 0.20x | 0.092x (mistral-7b, `20261001T180241Z`; was 0.090x) | active |
 | 02C | CPU pp ratio, `n_prompt=128` | every sweep model | >= 0.10x | 0.049x (Phi-3.5-mini, `20261001T180241Z`; the others 0.075x to 0.103x; was 0.048x at `20260927T094414Z`) | active |
@@ -270,6 +270,23 @@ to get worse as they land (Phi-3.5-mini 0.916 to about 0.87). The mechanism that
 tiled long-context kernel, which is Tier 02's, and Tier 02's 2048-over-512 row measures the same cause
 one step further out. Moved rather than kept as a known Tier 01B miss, so Tier 01B is scored on what its
 own items can move. Threshold unchanged.
+
+**Why the 2048-over-512 row became an attention-speedup row (2026-10-05, owner decision).** It read "GPU pp
+ratio at 2048 over ratio at 512 >= 0.90" (reference 0.329, mistral-7b binding). Tier 02's step 2 decomposition
+(`docs/perf-compare/20261005T003146Z/milestone-decomposition.md`) showed that a ratio of two ratios does not
+score the kernel meant to move it. The tiled kernel speeds attention at 512 as well, which raises the
+denominator: with the same attention speedup at both lengths, 0.90 needs 6.4x (Phi-3.5-mini) to 84x
+(mistral-7b), and a 10x kernel that lifts mistral-7b's pp ratio at 2048 from 0.14x to about 0.57x would still
+read 0.69. The row also falls when anything else gets faster (Tier 01C's packed GEMM moved the 512-over-128 row
+from 0.845 to 0.606) and moves with the reference tool's own scaling. The replacement is Juno against Juno and
+moves only with the kernel. It is clock-normalised because a 2048-token window heats this host's card into
+thermal slowdown (1607 MHz against about 1845 MHz at 512; `docs/perf-compare/20261005T012348Z/gpu-clocks.md`),
+so a faster, shorter window would otherwise be credited with the clock it no longer loses. 6.0x is where the
+binding model, Phi-3.5-mini, reaches the `>= 0.25x` end-of-plan row at 2048 (about 5x by the same
+decomposition), and still about 25 times above mistral-7b's FP32 compute floor for exact attention (about 1.1
+TFLOP per 2048-token window). The outcome against the reference tool stays scored by the end-of-plan rows at 512
+and 2048. The 2048-over-512 ratio is still published by every tier that sweeps both lengths, as a reading,
+not a gate.
 
 **Why the CPU pp row exists (added 2026-09-30).** CPU prefill is 0.048x to 0.090x of the reference
 tool and was owned by nothing: Tier 01B scopes it out to "re-measure at the end of Tier 10", and Tier
@@ -330,7 +347,8 @@ inside the decode residency region and CUDA graph replay (Tier 02 items 4 and 5)
 default (Tier 02 item 6), and the residency region reaching the Phi-3 and Qwen3 handlers (no tier owns
 that yet; Tier 02 records whether its items reach 0.70x without it, and names the gap if not). The pp
 path is the milestone ladder above: 0.10x after Tier 01B, 0.20x after Tier 01C, and no fall-off from
-128 to 512 or from 512 to 2048 tokens after Tier 02. The previous targets stay recorded in the table's first column so
+128 to 512 or from 512 to 2048 tokens after Tier 02 (*2026-10-05: the 512-to-2048 step is now an attention
+speedup of >= 6.0x at 2048; see "Why the 2048-over-512 row became an attention-speedup row"*). The previous targets stay recorded in the table's first column so
 Tier 14 can report both.
 
 **Program objective: the layer runs on the device (added 2026-09-30).** Every GPU tier in this plan

@@ -1176,6 +1176,17 @@ clock would only see them being queued. The attention kernel and the FP32 BLAS G
 default stream between two synchronous copies; they are timed on the host between two drains of
 that stream. With the events off, every copy and kernel site is the plain call.
 
+On every GPU run (with or without `--device-spans`), `compare-llama-cpp.sh` also samples the GPU
+with `nvidia-smi` every 100 ms while each measured request is in flight and records the result as
+`gpu_clock_in_window` in each result file, per lane under `lanes.prefill` and `lanes.generate`:
+the median, lowest and highest SM clock over samples the driver does not flag idle, the hottest
+sample, the median power, and the clock event reasons seen (for example `sw_thermal_slowdown`,
+`sw_power_cap`). `INDEX.md` lists them per model. The clocks in `host.json` are read once before
+the run, usually at idle; a long prefill can heat a consumer card into thermal slowdown, and
+`--pin-clocks` cannot lock the clock on every card, so a figure taken over a long window should
+be read with the in-window clock beside it. The raw samples are kept as
+`<rep>-gpu-clocks.csv` in the run directory.
+
 ### Prefill window breakdown
 
 A prefill window is covered by spans end to end on the LLaMA-family, Phi-3 and Qwen3 handlers. The

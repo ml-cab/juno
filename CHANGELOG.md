@@ -1,5 +1,18 @@
 ## Status 
 
+**Session 110** — Comparison runs record the GPU clock while each measured request runs
+
+- **The comparison harness samples the GPU during the measured request.** A 2048-token prefill
+  window on Mistral 7B (about 21 seconds on the GTX 1080) heats the card from about 60 C to 93 C, and
+  the driver's software thermal slowdown holds the SM clock at 1607 MHz, against about 1845 MHz in a
+  512-token window. That cost alone accounts for the packed GEMM's 13% slower time per row at 2048,
+  and the clock `host.json` records is read once before the run, at idle, so it showed none of it.
+  `compare-llama-cpp.sh` now runs `nvidia-smi` every 100 ms while each measured request is in flight
+  and records `gpu_clock_in_window` in every result, per lane: median, lowest and highest SM clock over
+  samples the driver does not flag idle, the hottest sample, median power, and the clock event
+  reasons seen. `INDEX.md` lists them per model, and the raw samples stay beside each result. Covered
+  by 18 new `--selftest` checks.
+
 **Session 109** — GPU attention gives the same answer every time; several processes share a GPU safely; an out-of-memory request fails instead of hanging
 
 - **Fixed: a race in the GPU attention kernel.** Each attention block reduces twice through one

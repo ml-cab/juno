@@ -684,6 +684,52 @@ run_selftest() {
   selftest_expect "lanes that disagree read mixed at the top" mixed \
     "$(jq -r '.gpu_attention_resolved' "$d/attn-lanes.json")"
 
+  # GPU clock during the measured request. A long prefill can heat the card into
+  # thermal slowdown, so the clock read at idle before the run says nothing about the
+  # window; the samples taken during the request do. Only busy samples describe the
+  # work: an idle tail at 139 MHz would drag a median down.
+  cat >"$d/clocks.csv" <<'CSV'
+2026/10/04 20:21:10.100, 139, 405, 40, 11.00, 5, 0x0000000000000001
+2026/10/04 20:21:10.200, 1860, 5005, 60, 160.00, 99, 0x0000000000000004
+2026/10/04 20:21:10.300, 1607, 5005, 85, 110.00, 99, 0x0000000000000020
+2026/10/04 20:21:10.400, 1700, 5005, 80, 120.00, 98, 0x0000000000000000
+CSV
+  printf '2026/10/04 20:21:10.100, 139, 405, 40, 11.00, 5, 0x0000000000000001\n' >"$d/clocks-idle.csv"
+  # Utilization is a trailing average and reads 1% to 37% through a short decode that
+  # runs at full clock, so it cannot decide what is busy; the driver's idle bit can.
+  printf '2026/10/04 22:10:37.101, 1885, 4513, 49, 86.60, 35, 0x0000000000000000\n' >"$d/clocks-decode.csv"
+  local clk
+  clk="$(gpu_clock_window_json "$d/clocks.csv")"
+  selftest_expect "clock window counts every sample" 4 "$(jq -r '.samples' <<<"$clk")"
+  selftest_expect "clock window counts busy samples only for the clock" 3 "$(jq -r '.busy_samples' <<<"$clk")"
+  selftest_expect "clock window median SM clock is over busy samples" 1700 "$(jq -r '.sm_mhz_median' <<<"$clk")"
+  selftest_expect "clock window minimum SM clock" 1607 "$(jq -r '.sm_mhz_min' <<<"$clk")"
+  selftest_expect "clock window hottest sample" 85 "$(jq -r '.temp_c_max' <<<"$clk")"
+  selftest_expect "clock window median power over busy samples" 120 "$(jq -r '.power_w_median' <<<"$clk")"
+  selftest_expect "clock window names the busy samples' event reasons" "sw_power_cap,sw_thermal_slowdown" \
+    "$(jq -r '.clock_event_reasons | join(",")' <<<"$clk")"
+  selftest_expect "an idle-only window has no clock reading" null \
+    "$(gpu_clock_window_json "$d/clocks-idle.csv" | jq -r '.sm_mhz_median')"
+  selftest_expect "no samples, no clock block" null "$(gpu_clock_window_json "$d/no-such.csv")"
+  selftest_expect "a low-utilization sample the driver does not flag idle is busy" 1885 \
+    "$(gpu_clock_window_json "$d/clocks-decode.csv" | jq -r '.sm_mhz_median')"
+  jq --argjson c "$clk" '.gpu_clock_in_window = $c' "$d/a1.json" >"$d/c1.json"
+  jq --argjson c "$clk" '.gpu_clock_in_window = ($c | .sm_mhz_median = 1800 | .sm_mhz_min = 1750
+                          | .temp_c_max = 70 | .clock_event_reasons = ["sw_power_cap"])' "$d/a2.json" >"$d/c2.json"
+  aggregate_juno_reps_json "$d/clk-agg.json" "$d/c1.json" "$d/c2.json"
+  selftest_expect "reps' in-window clocks: median of medians" 1750 "$(jq -r '.gpu_clock_in_window.sm_mhz_median' "$d/clk-agg.json")"
+  selftest_expect "reps' in-window clocks: lowest minimum" 1607 "$(jq -r '.gpu_clock_in_window.sm_mhz_min' "$d/clk-agg.json")"
+  selftest_expect "reps' in-window clocks: hottest rep" 85 "$(jq -r '.gpu_clock_in_window.temp_c_max' "$d/clk-agg.json")"
+  selftest_expect "reps' in-window clocks: every reason seen" "sw_power_cap,sw_thermal_slowdown" \
+    "$(jq -r '.gpu_clock_in_window.clock_event_reasons | join(",")' "$d/clk-agg.json")"
+  aggregate_juno_reps_json "$d/clk-none.json" "$d/a1.json" "$d/a2.json"
+  selftest_expect "reps without clock samples aggregate to null" null "$(jq -r '.gpu_clock_in_window' "$d/clk-none.json")"
+  merge_juno_lanes_json "$d/clk-lanes.json" "$d/clk-agg.json" "$d/clk-none.json"
+  selftest_expect "the prefill lane keeps its in-window clock" 1750 \
+    "$(jq -r '.lanes.prefill.gpu_clock_in_window.sm_mhz_median' "$d/clk-lanes.json")"
+  selftest_expect "the generate lane keeps its own (none here)" null \
+    "$(jq -r '.lanes.generate.gpu_clock_in_window' "$d/clk-lanes.json")"
+
   if (( SELFTEST_FAILURES > 0 )); then
     die "selftest: ${SELFTEST_FAILURES} check(s) failed"
   fi
@@ -1006,6 +1052,75 @@ gpu_clock_json() {
     | paste -sd, - || true)"
   printf '{"graphics_mhz": %s, "sm_mhz": %s, "memory_mhz": %s, "active_throttle_reasons": "%s"}' \
     "${graphics:-null}" "${sm:-null}" "${mem:-null}" "$(json_escape "${throttle:-none}")"
+}
+
+# GPU clock during the measured request, which gpu_clock_json (read before the run,
+# usually at idle) cannot show. A 2048-token prefill heats this host's card into
+# software thermal slowdown within seconds (1607 MHz against about 1845 MHz in a
+# 512-token window, docs/perf-compare/20261005T012348Z/gpu-clocks.md), and
+# --pin-clocks cannot lock the clock on such a card, so a gate reading has to say
+# which clock it ran at. The sampler writes one nvidia-smi line every 100 ms while
+# the measured request is in flight.
+GPU_CLOCK_SAMPLER_PID=""
+GPU_CLOCK_QUERY="timestamp,clocks.sm,clocks.mem,temperature.gpu,power.draw,utilization.gpu"
+
+gpu_clock_sampler_start() { # csv-path
+  GPU_CLOCK_SAMPLER_PID=""
+  [[ "$USE_GPU" -eq 1 ]] || return 0
+  command -v nvidia-smi >/dev/null 2>&1 || return 0
+  local reasons=clocks_event_reasons.active
+  # Drivers before the rename only know the older field name.
+  nvidia-smi --query-gpu="$reasons" --format=csv,noheader >/dev/null 2>&1 \
+    || reasons=clocks_throttle_reasons.active
+  nvidia-smi --query-gpu="${GPU_CLOCK_QUERY},${reasons}" --format=csv,noheader,nounits -lms 100 \
+    >"$1" 2>/dev/null &
+  GPU_CLOCK_SAMPLER_PID=$!
+}
+
+gpu_clock_sampler_stop() {
+  [[ -n "$GPU_CLOCK_SAMPLER_PID" ]] || return 0
+  kill "$GPU_CLOCK_SAMPLER_PID" 2>/dev/null || true
+  wait "$GPU_CLOCK_SAMPLER_PID" 2>/dev/null || true
+  GPU_CLOCK_SAMPLER_PID=""
+}
+
+# Summary of one sampler file, or null when there is none. The clock and power are
+# read over busy samples only: the request's own idle edges sit at the idle clock and
+# would pull a median toward it. Busy means the driver does not flag the sample idle
+# (gpu_idle in the event reason mask); utilization cannot decide it, being a trailing
+# average that reads 1% to 37% through a short decode at full clock. The event
+# reasons are the named bits of that mask seen on busy samples.
+gpu_clock_window_json() { # csv-path
+  if [[ ! -s "$1" ]]; then
+    printf 'null'
+    return
+  fi
+  jq -R -s -c '
+    def median: sort as $s | ($s | length) as $n |
+      if $n == 0 then null elif ($n % 2) == 1 then $s[($n - 1) / 2]
+      else (($s[$n / 2 - 1] + $s[$n / 2]) / 2) end;
+    def hexnum: ascii_downcase | ltrimstr("0x")
+      | explode | reduce .[] as $c (0; . * 16 + (if $c >= 97 then $c - 87 else $c - 48 end));
+    def reason_names: . as $mask
+      | [[1, "gpu_idle"], [2, "applications_clocks_setting"], [4, "sw_power_cap"], [8, "hw_slowdown"],
+         [16, "sync_boost"], [32, "sw_thermal_slowdown"], [64, "hw_thermal_slowdown"],
+         [128, "hw_power_brake_slowdown"], [256, "display_clock_setting"]]
+      | map(select((($mask / .[0]) | floor) % 2 == 1) | .[1]);
+    def num: tonumber? // null;
+    [split("\n")[] | select(length > 0) | split(",") | map(gsub("^\\s+|\\s+$"; ""))
+     | select(length >= 6)
+     | { sm: (.[1] | num), temp: (.[3] | num), power: (.[4] | num), util: (.[5] | num),
+         reasons: (if length >= 7 then (.[6] | hexnum | reason_names) else [] end) }] as $all
+    | ($all | map(select(.reasons | index("gpu_idle") | not))) as $busy
+    | { samples: ($all | length),
+        busy_samples: ($busy | length),
+        sm_mhz_median: ($busy | map(.sm | select(. != null)) | median),
+        sm_mhz_min: ($busy | map(.sm | select(. != null)) | min),
+        sm_mhz_max: ($busy | map(.sm | select(. != null)) | max),
+        temp_c_max: ($all | map(.temp | select(. != null)) | max),
+        power_w_median: ($busy | map(.power | select(. != null)) | median | if . == null then null else (. * 10 | round) / 10 end),
+        clock_event_reasons: ($busy | map(.reasons[]) | unique) }
+  ' "$1"
 }
 
 pin_clocks() {
@@ -1811,6 +1926,9 @@ EOF
     USE_JFR_THIS_REP=0
   fi
 
+  local clock_csv="${OUT_ROOT}/${rep_label}-gpu-clocks.csv"
+  rm -f "$clock_csv"
+  gpu_clock_sampler_start "$clock_csv"
   start_ns="$(date +%s%N)"
   set +e
   curl -sS --max-time 7200 -o "$resp" -w '%{http_code}' \
@@ -1824,6 +1942,7 @@ EOF
   rc=$?
   set -e
   end_ns="$(date +%s%N)"
+  gpu_clock_sampler_stop
   wall_ms=$(( (end_ns - start_ns) / 1000000 ))
 
   local http_code
@@ -1933,6 +2052,7 @@ EOF
     --arg gpu_attention_requested "${JUNO_GPU_ATTENTION:-engine default}" \
     --arg gpu_attention_resolved "$(gpu_attention_resolved_from_log "$logf" "$USE_GPU" "$jfr_metrics")" \
     --argjson jfr "$jfr_block" \
+    --argjson gpu_clock_in_window "$(gpu_clock_window_json "$clock_csv")" \
     --argjson host "$(host_meta_json)" \
     '{
       engine: $engine,
@@ -1966,6 +2086,9 @@ EOF
       # log shows it ran: see gpu_attention_resolved_from_log.
       gpu_attention_requested: $gpu_attention_requested,
       gpu_attention_resolved: $gpu_attention_resolved,
+      # The GPU clock while the measured request ran (gpu_clock_window_json); null on
+      # a CPU run or without nvidia-smi.
+      gpu_clock_in_window: $gpu_clock_in_window,
       backend: $backend,
       use_gpu: $use_gpu,
       heap: $heap,
@@ -2108,6 +2231,16 @@ aggregate_juno_reps_json() {
     (spread(.jfr.gc_pause_max_ms_in_token_span)) as $gc_in_span |
     (spread(.jfr.allocated_bytes_per_token)) as $alloc |
     (map(.status)) as $rep_status |
+    # The in-window GPU clock of each rep, summarized: the median of the per-rep medians
+    # is the clock the published median ran at, and the extremes keep the worst rep
+    # visible. Null when no rep was sampled (CPU runs, no nvidia-smi).
+    (map(.gpu_clock_in_window | select(. != null))) as $clk |
+    (if ($clk | length) == 0 then null else
+       { sm_mhz_median: ($clk | map(.sm_mhz_median | select(. != null)) | median),
+         sm_mhz_min: ($clk | map(.sm_mhz_min | select(. != null)) | min),
+         temp_c_max: ($clk | map(.temp_c_max | select(. != null)) | max),
+         clock_event_reasons: ($clk | map(.clock_event_reasons[]) | unique),
+         reps: $clk } end) as $clock |
     # The record everything else is grafted onto is the first rep that succeeded.
     # A rep that died before its first request writes only a stub, and building the
     # aggregate on that would drop the model id, the recording and the flags from a
@@ -2120,6 +2253,7 @@ aggregate_juno_reps_json() {
       | .juno_reps = $reps
       | .juno_warmup = $warmup
       | .rep_status = $rep_status
+      | .gpu_clock_in_window = $clock
       | .gpu_attention_resolved = ($all_reps | map(.gpu_attention_resolved) | unique
           | if length == 1 then .[0] else "mixed" end)
       | .reps = { prompt_eval_tps: $pp, token_gen_tps: $tg, api_token_gen_tps: $api_tg,
@@ -2178,12 +2312,14 @@ merge_juno_lanes_json() {
                             n_gen: $pre.n_gen, completion_tokens: $pre.completion_tokens,
                             prompt_eval_tps: $pre.prompt_eval_tps, latency_ms: $pre.latency_ms,
                             status: $pre.status, gc_pause_max_ms: ($pre.jfr.gc_pause_max_ms // null),
-                            gpu_attention_resolved: ($pre.gpu_attention_resolved // null) },
+                            gpu_attention_resolved: ($pre.gpu_attention_resolved // null),
+                            gpu_clock_in_window: ($pre.gpu_clock_in_window // null) },
                  generate: { prompt_tokens: $gen.prompt_tokens, n_prompt: $gen.n_prompt,
                              n_gen: $gen.n_gen, completion_tokens: $gen.completion_tokens,
                              token_gen_tps: $gen.token_gen_tps, latency_ms: $gen.latency_ms,
                              status: $gen.status, gc_pause_max_ms: ($gen.jfr.gc_pause_max_ms // null),
-                             gpu_attention_resolved: ($gen.gpu_attention_resolved // null) } }
+                             gpu_attention_resolved: ($gen.gpu_attention_resolved // null),
+                             gpu_clock_in_window: ($gen.gpu_clock_in_window // null) } }
     | .status = (if ($pre.status == "success" and $gen.status == "success") then "success" else "failure" end)
   ' >"$out_json"
 }
@@ -2449,6 +2585,24 @@ write_run_index() {
       echo "- ${stem}: $(jq -r '"\(.gpu_attention_resolved // "not recorded") (requested: \(.gpu_attention_requested // "not recorded"))"' "$juno_f" 2>/dev/null || echo "not recorded")"
     done
     echo
+    if [[ "$USE_GPU" -eq 1 ]]; then
+      echo "GPU clock while the measured requests ran (sampled every 100 ms; SM clock median over busy"
+      echo "samples, median across reps; lowest SM clock and hottest sample of any rep; clock event"
+      echo "reasons seen). The clock under \"Clock state\" below is read once before the run and says"
+      echo "nothing about a long window, which can heat the card into thermal slowdown:"
+      for stem in "${STEMS[@]}"; do
+        juno_f="${OUT_ROOT}/${stem}-juno.json"
+        [[ -f "$juno_f" ]] || continue
+        echo "- ${stem}: $(jq -r '
+            def one($c): if $c == null then "not sampled"
+              else "\($c.sm_mhz_median // "-") MHz (low \($c.sm_mhz_min // "-"), \($c.temp_c_max // "-") C, \(
+                if ($c.clock_event_reasons | length) == 0 then "no event reasons"
+                else ($c.clock_event_reasons | join(", ")) end))" end;
+            "prefill \(one(.lanes.prefill.gpu_clock_in_window)); generate \(one(.lanes.generate.gpu_clock_in_window))"
+          ' "$juno_f" 2>/dev/null || echo "not recorded")"
+      done
+      echo
+    fi
     echo "Host meta: see any *-llama-cpp.json .host field."
     echo
     echo "Notes:"
@@ -2639,7 +2793,7 @@ if [[ "$USE_GPU" -eq 1 ]]; then
 fi
 
 mkdir -p "$OUT_ROOT"
-trap 'stop_juno; restore_clocks' EXIT
+trap 'gpu_clock_sampler_stop; stop_juno; restore_clocks' EXIT
 pin_clocks
 host_meta_json >"${OUT_ROOT}/host.json"
 log "output: ${OUT_ROOT}"

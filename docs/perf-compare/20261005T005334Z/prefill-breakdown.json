@@ -1,0 +1,196 @@
+{
+  "Phi-3.5-mini-instruct-Q4_K_M": {
+    "repetitions": 3,
+    "forward_pass_ms": 24333.700444,
+    "terms": {
+      "gemm_compute": {
+        "ms": 1448.688033,
+        "pct": 5.953422646645613
+      },
+      "weight_dequant": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "matmul_staging": {
+        "ms": 316.0344,
+        "pct": 1.2987519129172365
+      },
+      "host_fp16_pack": {
+        "ms": 0,
+        "pct": 0
+      },
+      "projection_and_region_host": {
+        "ms": 888.2282529999998,
+        "pct": 3.650198024932997
+      },
+      "device_elementwise": {
+        "ms": 167.883776,
+        "pct": 0.6899229173399124
+      },
+      "region_attention_compute": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "attention_compute": {
+        "ms": 19045.533327,
+        "pct": 78.26813423149578
+      },
+      "attention_copies": {
+        "ms": 251.878377,
+        "pct": 1.0351010015088193
+      },
+      "attention_host": {
+        "ms": 602.4558699999994,
+        "pct": 2.4758086892145825
+      },
+      "kv_mirror_copies": {
+        "ms": 128.951231,
+        "pct": 0.5299285708590028
+      },
+      "kv_host_write": {
+        "ms": 644.911905,
+        "pct": 2.650282913131764
+      },
+      "swiglu_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rmsnorm_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rope_host": {
+        "ms": 650.226179,
+        "pct": 2.6721220658419313
+      },
+      "residual_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "bias_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "embed": {
+        "ms": 4.44889,
+        "pct": 0.018282833760686693
+      },
+      "lm_head": {
+        "ms": 1.531385,
+        "pct": 0.006293268068801251
+      },
+      "residue": {
+        "ms": 228.33315999999832,
+        "pct": 0.9383412955438876
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "materialize_prefill_residual",
+        "ms": 2.436256
+      },
+      {
+        "site": "materialize_resident_activation",
+        "ms": 228.278336
+      },
+      {
+        "site": "memcpy_gqa_kptrs_h2d",
+        "ms": 2.513104
+      },
+      {
+        "site": "memcpy_gqa_outbatch_d2h",
+        "ms": 122.54724
+      },
+      {
+        "site": "memcpy_gqa_qbatch_h2d",
+        "ms": 126.868957
+      },
+      {
+        "site": "memcpy_gqa_seqlens_h2d",
+        "ms": 0.395568
+      },
+      {
+        "site": "memcpy_gqa_vptrs_h2d",
+        "ms": 1.089488
+      },
+      {
+        "site": "memcpy_k_window_h2d",
+        "ms": 64.714209
+      },
+      {
+        "site": "memcpy_prefill_residual_layer_input_d2d",
+        "ms": 6.834272
+      },
+      {
+        "site": "memcpy_v_window_h2d",
+        "ms": 64.063799
+      },
+      {
+        "site": "upload_prefill_residual",
+        "ms": 2.421536
+      },
+      {
+        "site": "upload_resident_activation",
+        "ms": 76.064
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "bias_add",
+        "ms": 0.0
+      },
+      {
+        "site": "convert_fp16",
+        "ms": 15.48784
+      },
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_kquant",
+        "ms": 1461.699065
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 19045.533327
+      },
+      {
+        "site": "gqa_attention_region",
+        "ms": 0.0
+      },
+      {
+        "site": "kv_append",
+        "ms": 0.0
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      },
+      {
+        "site": "residual_add",
+        "ms": 19.917824
+      },
+      {
+        "site": "rms_norm",
+        "ms": 54.928576
+      },
+      {
+        "site": "rope",
+        "ms": 0.0
+      },
+      {
+        "site": "swiglu",
+        "ms": 77.193472
+      }
+    ]
+  }
+}
