@@ -28,11 +28,11 @@ four more that either need the same work again or silently lack it. Running this
 Tier 06 covers every handler in one pass, against a stable and final set. The dependency direction
 was right in the prose and wrong in the ordering; the ordering is now the one the prose implies.
 
-This tier also carries an obligation handed over from Tier 02. Tier 02 ships sliding-window
+This tier also carries an obligation handed over from Tier 02B (split out of Tier 02 on 2026-10-04). Tier 02B ships sliding-window
 attention validated against a synthetic windowed-metadata fixture, because the only real windowed
 file on disk (`gemma-4-E4B`, patterned 512-token window per Tier 00's audit) is not loadable until
 this tier's Gemma handler exists. Real-model validation of the windowed path is therefore one of
-this tier's exit criteria, not Tier 02's.
+this tier's exit criteria, not Tier 02B's.
 
 ## Scope
 
@@ -45,9 +45,9 @@ this tier's exit criteria, not Tier 02's.
    KV sharing would have loaded and run silently wrong under the old fallback, which is why the
    architecture guard rejects it by name today.
 
-   **This handler is where Tier 02's sliding-window mechanism gets its real-model validation.** Use
-   the window metadata read Tier 02 added; do not implement a second windowing path here. If the
-   window key Tier 02 chose is not the one this file declares, that is a Tier 02 defect surfacing
+   **This handler is where Tier 02B's sliding-window mechanism gets its real-model validation.** Use
+   the window metadata read Tier 02B added; do not implement a second windowing path here. If the
+   window key Tier 02B chose is not the one this file declares, that is a Tier 02B defect surfacing
    late — fix it in the shared mechanism, not with a Gemma-local special case.
 
 2. **Mistral3 handler** (or confirmed-safe extension of the existing Llama-family path) for
@@ -119,6 +119,8 @@ this tier's exit criteria, not Tier 02's.
 
 ## Tests to write/upgrade before implementation
 
+- **Plan check, first**: `scripts/performance-tests/check-plan-thresholds.sh` passes before any other
+  test or code in this tier (README execution rule 7).
 - **New handler unit tests** per architecture (`Gemma4TransformerHandlerTest`,
   `Mistral3TransformerHandlerTest` or equivalent, `Qwen35TransformerHandlerTest`,
   `MinimaxM2TransformerHandlerTest`), each validating forward-pass output against known-correct
@@ -135,6 +137,8 @@ this tier's exit criteria, not Tier 02's.
 - **New bash smoke script**: `scripts/performance-tests/smoke-architecture-breadth.sh` —
   end-to-end chat completion against all four real files, asserting coherent (not just
   non-crashing) output.
+- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+  and score it before closing this tier.
 - **Perf gate**: new forward-pass code is a hot-path change by definition — `compare-lora.sh` at
   minimum; a dedicated per-architecture microbenchmark if these models are large enough to matter
   (`Devstral` at 24B is the one most worth measuring for memory/GPU-layer-offload behavior), plus
@@ -176,8 +180,8 @@ paragraph when deciding whether to ask; this section was stale once.
       (synthetic fixture at minimum, real Mixtral file if available) and either routes correctly or
       fails closed with a clear error — never silently drops expert tensors.
 - [ ] Chat templates correctly detected for all four architectures.
-- [ ] **Sliding-window attention validated end to end on `gemma-4-E4B`**, using Tier 02's mechanism
-      and window-metadata read — the real-model half of Tier 02's sliding-window work, handed over
+- [ ] **Sliding-window attention validated end to end on `gemma-4-E4B`**, using Tier 02B's mechanism
+      and window-metadata read — the real-model half of Tier 02B's sliding-window work, handed over
       because this tier is what makes that file loadable. A non-windowed model's output stays
       bit-identical.
 - [ ] Each new handler either supports GPU-resident attention and reports that capability through
@@ -190,6 +194,8 @@ paragraph when deciding whether to ask; this section was stale once.
       tiled GEMM for prefill windows) rather than a handler-local upload, and so do the device weights
       of every handler this tier adds — the part of Tier 04C item 3 that could not run before these
       handlers had a device path.
+- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+      >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved, LoRA-trainability gap (if any) explicitly documented
       per architecture rather than silently absent.
 - [ ] Perf gate published for at least the largest new model (`Devstral`, 24B).

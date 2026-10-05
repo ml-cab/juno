@@ -57,6 +57,14 @@ runs first — see its own note.
    tensor-loading code twice. It stays in this tier rather than becoming its own only because that
    code is the code this tier already modifies.
 
+   *Added 2026-10-04 (plan review).* The CPU kernels this accessor reaches are
+   [Tier 02C](TIER-02C-cpu-hot-path.md)'s integer kernels, which run before this tier; convert those,
+   not the scalar float kernels they replaced. Reading packed bytes through `MemorySegment.get` in a
+   scalar inner loop is not free for C2 (bounds and liveness checks the `byte[]` form does not pay), so
+   this item is the change in the plan most likely to cost CPU throughput. It is held by the standing CPU
+   and allocation gate (README, "Test infrastructure") on the mapped path with `--mmap-weights on`, not
+   only on the default.
+
 1. Implement **Q4_0**, Q4_1, Q5_0 and Q5_1 dequantization — simpler, non-K-quant legacy formats, good
    validation targets before the harder IQ family.
 
@@ -141,6 +149,8 @@ runs first — see its own note.
 
 ## Tests to write/upgrade before implementation
 
+- **Plan check, first**: `scripts/performance-tests/check-plan-thresholds.sh` passes before any other
+  test or code in this tier (README execution rule 7).
 - **`GgufReaderTest`**: one golden-value test per new format (Q4_0, Q4_1, Q5_0, Q5_1, IQ1_S, IQ2_*,
   IQ3_*, IQ4_NL, IQ4_XS), following the existing Q6_K regression-test pattern. Q4_0 is the one case
   with an independent in-repo oracle — assert the new `dequantize` path against `GgufReader.loadQ4_0`'s
@@ -161,6 +171,8 @@ runs first — see its own note.
   existing read-and-copy path for at least one model per quant family; a separate microbenchmark
   records load-time and peak-RSS improvement for `llama-1-30b.Q4_K_M.gguf`, published alongside this
   tier's other perf-compare results.
+- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+  and score it before closing this tier.
 - **Perf gate (required)**: new MMQ kernels are hot-path changes — `compare-lora.sh` plus a
   per-format microbenchmark, plus `compare-llama-cpp.sh` for a llama.cpp-relative reading (per
   README's llama.cpp-relative gate); publish under `docs/perf-compare/`.
@@ -210,6 +222,8 @@ user for a small model download in that format at the point this tier starts.
       correctness-verified against the existing read-and-copy path, with the quantized bytes read in
       place through a `MemorySegment` accessor rather than copied into `byte[]` — the load-time, RSS
       and page-cache-sharing thresholds above all met on `llama-1-30b.Q4_K_M.gguf`.
+- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+      >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, with the mapped-loading thresholds (TTFT >= 50% lower, RSS >= 40% lower,
       shared-page-cache RSS below two loads) and the per-kernel MMQ threshold (>= 0.85x the Q4_K

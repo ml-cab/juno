@@ -191,7 +191,7 @@ widened".*
    whether it is expected to hold on a host with FP16 or int8 tensor cores or should be re-derived
    there — a one-line `host-specific` / `expected-general` marker per finding, not an essay. A future
    reader on a Turing-or-later GPU needs to know which of these to re-measure and which to trust.
-   [Tier 10](TIER-10-gpu-backend-breadth-cpu-simd.md) carries the same obligation for its CPU
+   [Tier 02C](TIER-02C-cpu-hot-path.md) carries the same obligation for its CPU
    findings on this host's AVX2-without-AVX-512, no-VNNI Xeon.
 3. **Packed residency for every format that has a packed kernel, on every backend.** Widen
    `DeviceQ4KMatrix.supportsType` and `Q4KResidentUpload.preferPacked` to the formats Tier 04 added
@@ -227,7 +227,7 @@ widened".*
   `q4k_gemv.cu` and stays.
 - **CPU packed matmul.** `CpuMatVec` already dots packed bytes directly
   (`matVecQ4KrawInto`/`matVecQ8_0rawInto`) and never builds an FP16 copy; CPU kernel work is
-  Tier 10's.
+  Tier 02C's.
 - **LoRA training residency.** Training deliberately ignores MMQ (`LoraMmqPolicy.java:58`, `:84`
   gate it to playback) and keeps FP32-resident frozen weights so `ResidentWeightMatrix`'s batched
   `sgemmBatch` path stays available. That exemption is re-verified here, not changed; Tier 12 owns
@@ -274,6 +274,8 @@ widened".*
 
 ## Tests to write/upgrade before implementation
 
+- **Plan check, first**: `scripts/performance-tests/check-plan-thresholds.sh` passes before any other
+  test or code in this tier (README execution rule 7).
 - **`DeviceScratchBudgetTest`** (exists in the working tree at time of writing): reserve is positive
   for every architecture in `models/`, follows the widest matmul rather than the hidden dimension
   alone, and rejects non-positive dimensions instead of reserving nothing.
@@ -296,9 +298,12 @@ widened".*
 - **New bash smoke script**: `scripts/performance-tests/smoke-packed-matmul.sh` — drives
   `./juno local` on both schedules across every packed format, asserts correct output, asserts the
   fallback notice appears exactly when a format has no packed path, and records peak VRAM.
+- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+  and score it before closing this tier.
 - **Perf gate (required)**: this is a MatVec and forward-pass change by definition.
   `compare-lora.sh`, `compare-vision.sh` (required, not optional), and `compare-llama-cpp.sh` at
-  `n_prompt` 128 and 512; publish under `docs/perf-compare/<timestamp>-tier04c-packed-matmul/`.
+  `n_prompt` 128 and 512; publish under `docs/perf-compare/<timestamp>-packed-matmul-formats/` (no tier
+  number in the directory name, README execution rule 7 check 6).
 
   Every number below is a median of at least three runs with min/max published, per the README's
   noise-floor rule — this host resolves to about ±15% and two of these sit inside that.
@@ -370,6 +375,8 @@ ended with. No AMD hardware exists here, so item 3's ROCm half is unit-tested an
 - [ ] Item 1's per-batch-width breakdown published, and item 2's justification recorded against it —
       including the case where the breakdown did not support the throughput premise.
 - [ ] All thresholds above met or explicitly reported as missed with the measured number.
+- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+      >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, with every threshold above (VRAM, throughput, numerical quality, load)
       met or reported missed with its number; `compare-llama-cpp.sh` pp and tg ratios recorded in this

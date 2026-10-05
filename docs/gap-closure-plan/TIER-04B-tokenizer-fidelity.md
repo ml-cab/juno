@@ -156,6 +156,8 @@ this tier is what makes those files work.
 
 ## Tests to write/upgrade before implementation
 
+- **Plan check, first**: `scripts/performance-tests/check-plan-thresholds.sh` passes before any other
+  test or code in this tier (README execution rule 7).
 - **New `GgufTokenizerPreTokenizerTest`**: one case per implemented pre-type, asserting the split
   boundaries directly (not just the final IDs), including the cases that distinguish the families —
   digit runs, contractions, punctuation runs, leading/trailing whitespace, CJK, emoji, and mixed
@@ -171,9 +173,12 @@ this tier is what makes those files work.
 - **New bash smoke script**: `scripts/performance-tests/smoke-tokenizer.sh` — runs
   `./juno gguf-info` across `models/` reporting each file's declared pre-type, and drives a fixed
   prompt through `/v1/chat/completions` per sweep model asserting the expected `prompt_tokens`.
+- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+  and score it before closing this tier.
 - **Perf gate (required)**: this is not a forward-pass change, but it changes token counts, which
   is the denominator of every pp and tg figure this plan publishes. Re-run `compare-llama-cpp.sh`
-  on all four sweep models and publish under `docs/perf-compare/<timestamp>-tier04b-tokenizer/`.
+  on all four sweep models and publish under `docs/perf-compare/<timestamp>-tokenizer-parity/` (named for what it
+  measures; tier numbers stay out of directory names, README execution rule 7 check 6).
 
   **Threshold.** Token-count mismatch between Juno and the reference tokenizer is **<= 0 tokens**
   per parity-corpus line on every sweep model — exact equality, not a tolerance, since that is the
@@ -219,6 +224,8 @@ that point rather than asserting against Juno's own output and calling it parity
       version, or accept-and-warn — not left implicit, and covering both Tier 01's precondition-7
       change and any further change this tier made, since the adapter on disk may already be on the far
       side of the first one.
+- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+      >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published; the run is marked as the new reference for any model whose token count
       changed, and the shift is explained.

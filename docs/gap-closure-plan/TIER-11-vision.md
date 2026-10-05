@@ -87,6 +87,8 @@ tensor-parallel path that's actually real, rather than the current stub.
 
 ## Tests to write/upgrade before implementation
 
+- **Plan check, first**: `scripts/performance-tests/check-plan-thresholds.sh` passes before any other
+  test or code in this tier (README execution rule 7).
 - **`ImagePatchEmbedderTest`**: new tiling cases — high-aspect-ratio images, tile-count boundary
   cases, thumbnail composition correctness.
 - **`VisionEncoderTest`**: confirm per-tile encoding is independent and correctly recombined.
@@ -100,6 +102,8 @@ tensor-parallel path that's actually real, rather than the current stub.
   `/v1/vision/chat` with a high-resolution image (tiling path), multiple images, and a cluster-mode
   request, asserting coherent output in each case; the existing `compare-vision.sh` must continue
   passing unmodified as a regression guard for the pre-existing single-image local-mode path.
+- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+  and score it before closing this tier.
 - **Perf gate (required)**: `compare-vision.sh` rerun, plus a new tiling-specific latency
   measurement (N tiles vs. single fixed-resize); publish under `docs/perf-compare/`.
 
@@ -135,6 +139,8 @@ can be validated against the model family that actually needs them.
       `api/src/main/resources/openapi.yaml` and `juno-api.yaml` (README feature-complete rule).
 - [ ] Native dynamic-resolution ViT evaluated; implemented only if a suitable model was obtained,
       otherwise explicitly deferred with reasoning (not silently dropped).
+- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+      >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] `compare-vision.sh` passes with no regression; new tiling perf data published.
 - [ ] Docs (`docs/howto.md`, `assets/Vision-I2T.md`-style tracking) updated, Juno-native language

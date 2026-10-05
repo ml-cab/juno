@@ -120,6 +120,8 @@ actually help rather than hurt.
 
 ## Tests to write/upgrade before implementation
 
+- **Plan check, first**: `scripts/performance-tests/check-plan-thresholds.sh` passes before any other
+  test or code in this tier (README execution rule 7).
 - **Reproduce the existing 0.86x benchmark** as an automated, re-runnable check (if it isn't
   already one) rather than a one-off manual measurement — this becomes the tier's primary
   regression/success gate.
@@ -135,6 +137,8 @@ actually help rather than hurt.
 - **`ModelLiveRunnerIT`**: add a continuous-schedule multi-session throughput check.
 - **New bash smoke script**: `scripts/performance-tests/smoke-continuous-batching.sh` —
   drives N concurrent SSE streams under `continuous`, asserts correctness and captures TTFT/TPOT.
+- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+  and score it before closing this tier.
 - **Perf gate (required)**: this is entirely a batching/scheduling hot-path change —
   `compare-schedule.sh` (already exists per `scripts/performance-tests/`) rerun, plus
   `compare-lora.sh`, plus `compare-llama-cpp.sh` for a llama.cpp-relative reading (per README's
@@ -188,6 +192,8 @@ comparison.
       of this tier's full smoke matrix is recorded either way, since the README's thirty-minute revisit
       condition cannot be evaluated without it. An unrecorded revisit is a missed exit criterion, not a
       deferral.
+- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+      >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published showing the throughput result against every threshold above, or the
       miss reported plainly with its number.

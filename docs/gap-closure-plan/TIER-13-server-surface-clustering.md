@@ -95,6 +95,8 @@ the finished system.
 
 ## Tests to write/upgrade before implementation
 
+- **Plan check, first**: `scripts/performance-tests/check-plan-thresholds.sh` passes before any other
+  test or code in this tier (README execution rule 7).
 - **New `FaultTolerantPipeline`/`CoordinatorMain` integration test**: kill a node mid-request in a
   forked-JVM cluster test, confirm the documented failover/failure-reporting behavior actually
   triggers (this test must fail against today's unwired state, confirming it's testing something
@@ -111,6 +113,8 @@ the finished system.
 - **New bash smoke script**: `scripts/performance-tests/smoke-server-clustering.sh` —
   drives an elastic-sized cluster, kills a node mid-run, exercises reranking, and exercises tool
   calling on each newly-supported template.
+- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+  and score it before closing this tier if the perf gate applies.
 - **Perf gate**: only required if the fault-tolerance wiring or elastic clustering changes the
   per-request hot path (it shouldn't for the happy path, but confirm); reranking is a new
   code path, not a hot-path *change*, so the existing rule's "optional" carve-out likely applies —
@@ -145,6 +149,8 @@ and fault-tolerance testing use the existing forked-JVM harness and don't need n
 - [ ] Tool calling works on at least one additional chat template beyond
       `{llama3, chatml, qwen3}`, with the remaining unsupported templates still failing closed
       correctly.
+- [ ] Standing CPU and allocation gate met if the perf gate applies (README, "Test infrastructure"): CPU tg and pp
+      >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Docs (`docs/howto.md`, `docs/agent-arch.txt`) updated, Juno-native language only.
 - [ ] `CHANGELOG.md` entry added.

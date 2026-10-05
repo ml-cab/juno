@@ -23,14 +23,23 @@
 #      that exists on disk, or carries an explicit **Evidence (not published):**
 #      marker naming the evidence it was scored on. Checks 1 to 3 prove a number
 #      was written down; this one proves something was scored against it.
+#   5. A tier whose Status line does not say "complete" names this script in its
+#      own file, and, if it has a perf gate, names the README's "Standing CPU and
+#      allocation gate". A rule stated only in the README is a rule the executor
+#      of a tier does not read.
+#   6. No perf-compare/ path carrying a tier number (-tier04b-...) that does not
+#      exist on disk: that is a prescription for a new tier-numbered directory,
+#      and docs/perf-compare/ is linked from a shipped doc.
+#   7. The README's end-of-plan target table obeys check 3's rules: well formed,
+#      and no active target already met by its reference reading.
 #
-# The documentation-hardening tier file (TIER-14-*) is excluded from check 1: it names
-# the string to describe this check.
+# The documentation-hardening tier file (TIER-14-*) is excluded from checks 1 and
+# the standing-gate half of 5: it names the strings to describe them.
 #
 # Usage:
 #   ./scripts/performance-tests/check-plan-thresholds.sh            # check the plan tree
 #   ./scripts/performance-tests/check-plan-thresholds.sh --plan DIR # check another copy
-#   ... --perf-compare DIR   # resolve check 4's citations here (default docs/perf-compare)
+#   ... --perf-compare DIR   # resolve checks 4 and 6 here (default docs/perf-compare)
 
 set -euo pipefail
 
@@ -42,7 +51,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --plan) PLAN_DIR="$2"; shift 2 ;;
     --perf-compare) PERF_DIR="$2"; shift 2 ;;
-    -h|--help) sed -n '2,33p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    -h|--help) sed -n '2,42p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) printf 'check-plan-thresholds: unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -116,11 +125,22 @@ for f in "$PLAN_DIR"/TIER-*.md; do
     fi
   done < <(ticked_threshold_criteria "$f")
 
-  [[ "$name" == TIER-14-* ]] && continue
-  grep -qi 'perf gate' "$f" || continue
-  if grep -q '\*\*No perf gate' "$f"; then
-    continue
+  # Check 5: an open tier carries the README's per-tier obligations in its own file.
+  has_gate=0
+  if grep -qi 'perf gate' "$f" && ! grep -q '\*\*No perf gate' "$f"; then
+    has_gate=1
   fi
+  if ! grep -m1 '^Status' "$f" | grep -qi 'complete'; then
+    grep -q 'check-plan-thresholds\.sh' "$f" \
+      || fail "${name}: open tier never names check-plan-thresholds.sh (execution rule 7: it is each tier's first test)"
+    if (( has_gate )) && [[ "$name" != TIER-14-* ]] \
+        && ! grep -q 'Standing CPU and allocation gate' "$f"; then
+      fail "${name}: open tier with a perf gate never names the Standing CPU and allocation gate (README, Test infrastructure)"
+    fi
+  fi
+
+  [[ "$name" == TIER-14-* ]] && continue
+  (( has_gate )) || continue
   if ! grep -q '\*\*Threshold' "$f"; then
     fail "${name}: mentions a perf gate but has no **Threshold block (or an explicit **No perf gate declaration)"
   elif ! threshold_blocks_ok "$f"; then
@@ -130,56 +150,77 @@ done
 
 (( tier_count > 0 )) || fail "no TIER-*.md files under ${PLAN_DIR}"
 
-# Milestone table: the rows between the "Intermediate milestones" marker and the
-# end of that table. Columns: After | Metric | Scope | Threshold | Reference | Status.
-readme="${PLAN_DIR}/README.md"
-if [[ ! -f "$readme" ]]; then
-  fail "README.md missing under ${PLAN_DIR}"
-else
-  rows="$(awk '
-    /\*\*Intermediate milestones\*\*/ { armed = 1; next }
+# Check 6: a tier-numbered perf-compare directory that does not exist is a
+# prescription for one. Citing an existing directory stays allowed.
+while IFS=: read -r src path; do
+  [[ -n "$path" ]] || continue
+  # A closed tier's record is history, not a prescription.
+  if [[ "$(basename "$src")" == TIER-* ]] && grep -m1 '^Status' "$src" | grep -qi 'complete'; then
+    continue
+  fi
+  dir="${path#*perf-compare/}"; dir="${dir%%/*}"
+  [[ -d "${PERF_DIR}/${dir}" ]] \
+    || fail "$(basename "$src"): prescribes a tier-numbered perf-compare directory '${dir}'; name it for what it measures"
+done < <(grep -oE 'perf-compare/[A-Za-z0-9<>._-]*-[Tt]ier[0-9][A-Za-z0-9<>._-]*' \
+           "$PLAN_DIR"/README.md "$PLAN_DIR"/TIER-*.md 2>/dev/null | sort -u)
+
+# Checks 3 and 7: a threshold table in the README, read from the rows after its
+# marker to the end of that table. Columns: <kind> | Metric | Scope | Threshold |
+# Reference | Status. $1 is the marker regex, $2 the label used in messages.
+check_threshold_table() {
+  local marker="$1" what="$2" rows row after metric scope threshold reference status thr ref label
+  rows="$(awk -v m="$marker" '
+    $0 ~ m { armed = 1; next }
     armed && /^\|/ { intable = 1; print; next }
     intable && !/^\|/ { exit }
   ' "$readme" | tail -n +3)"
   if [[ -z "$rows" ]]; then
-    fail "README.md: no intermediate-milestone table found after the **Intermediate milestones** marker"
-  else
-    while IFS= read -r row; do
-      IFS='|' read -r _ after metric scope threshold reference status _ <<<"$row"
-      after="$(xargs <<<"$after")"; status="$(xargs <<<"$status")"
-      thr="$(grep -oE '[0-9]+(\.[0-9]+)?' <<<"$threshold" | head -1 || true)"
-      ref="$(grep -oE '[0-9]+(\.[0-9]+)?' <<<"$reference" | head -1 || true)"
-      label="milestone row (after ${after}): $(xargs <<<"$metric") ($(xargs <<<"$scope"))"
-      if [[ -z "$thr" ]] || ! grep -qE '>=|≥' <<<"$threshold"; then
-        fail "${label}: threshold '$(xargs <<<"$threshold")' is not of the form '>= number'"
-        continue
-      fi
-      case "$status" in
-        active)
-          if grep -qi 'unmeasured' <<<"$reference"; then
-            continue
-          fi
-          if [[ -z "$ref" ]]; then
-            fail "${label}: reference reading '$(xargs <<<"$reference")' is neither a number nor 'unmeasured'"
-          elif awk -v t="$thr" -v r="$ref" 'BEGIN { exit !(r >= t) }'; then
-            fail "${label}: already met before its tier starts (reference ${ref} >= threshold ${thr}); retire it or raise it"
-          fi
-          ;;
-        retired*)
-          if [[ -z "$ref" ]] || ! awk -v t="$thr" -v r="$ref" 'BEGIN { exit !(r >= t) }'; then
-            fail "${label}: marked retired but the reference reading does not meet it"
-          fi
-          ;;
-        *)
-          fail "${label}: status '${status}' is neither 'active' nor 'retired'"
-          ;;
-      esac
-    done <<<"$rows"
+    fail "README.md: no ${what} table found after its marker"
+    return
   fi
+  while IFS= read -r row; do
+    IFS='|' read -r _ after metric scope threshold reference status _ <<<"$row"
+    after="$(xargs <<<"$after")"; status="$(xargs <<<"$status")"
+    thr="$(grep -oE '[0-9]+(\.[0-9]+)?' <<<"$threshold" | head -1 || true)"
+    ref="$(grep -oE '[0-9]+(\.[0-9]+)?' <<<"$reference" | head -1 || true)"
+    label="${what} row (${after}): $(xargs <<<"$metric") ($(xargs <<<"$scope"))"
+    if [[ -z "$thr" ]] || ! grep -qE '>=|≥' <<<"$threshold"; then
+      fail "${label}: threshold '$(xargs <<<"$threshold")' is not of the form '>= number'"
+      continue
+    fi
+    case "$status" in
+      active)
+        if grep -qi 'unmeasured' <<<"$reference"; then
+          continue
+        fi
+        if [[ -z "$ref" ]]; then
+          fail "${label}: reference reading '$(xargs <<<"$reference")' is neither a number nor 'unmeasured'"
+        elif awk -v t="$thr" -v r="$ref" 'BEGIN { exit !(r >= t) }'; then
+          fail "${label}: already met by its reference reading (reference ${ref} >= threshold ${thr}); retire it or raise it"
+        fi
+        ;;
+      retired*)
+        if [[ -z "$ref" ]] || ! awk -v t="$thr" -v r="$ref" 'BEGIN { exit !(r >= t) }'; then
+          fail "${label}: marked retired but the reference reading does not meet it"
+        fi
+        ;;
+      *)
+        fail "${label}: status '${status}' is neither 'active' nor 'retired'"
+        ;;
+    esac
+  done <<<"$rows"
+}
+
+readme="${PLAN_DIR}/README.md"
+if [[ ! -f "$readme" ]]; then
+  fail "README.md missing under ${PLAN_DIR}"
+else
+  check_threshold_table '\\*\\*Intermediate milestones\\*\\*' "milestone"
+  check_threshold_table '^\\*\\*End-of-plan targets, machine-read' "end-of-plan target"
 fi
 
 if (( failures > 0 )); then
   printf 'check-plan-thresholds: %d failure(s)\n' "$failures"
   exit 1
 fi
-printf 'check-plan-thresholds: ok (%d tier files, milestone table checked)\n' "$tier_count"
+printf 'check-plan-thresholds: ok (%d tier files, milestone and end-of-plan tables checked)\n' "$tier_count"

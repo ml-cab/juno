@@ -47,7 +47,7 @@ happened to touch, but that Tier 03's changes quietly invalidated).
 3. **Full doc consistency pass**: `docs/howto.md`, `docs/performance.md`, `README.md`,
    `docs/agent-arch.txt` all get read end-to-end against current source and corrected where drifted.
 4. **Final llama.cpp-relative scorecard**: pull every `compare-llama-cpp.sh` run published per tier
-   under README's "llama.cpp-relative gate" (Tiers 01, 01B, 01C, 02, 03, 04, 04B, 04C, 06, 07, 08, 09, 10
+   under README's "llama.cpp-relative gate" (Tiers 01, 01B, 01C, 02, 02B, 02C, 03, 04, 04B, 04C, 06, 07, 08, 09, 10
    — this list must match the one in [`README.md`](README.md)'s llama.cpp-relative gate paragraph
    verbatim; 04C was missing from it once already, which would have dropped the tier that changes the
    GEMM operand for every later pp figure out of the plan's single final answer)
@@ -59,7 +59,7 @@ happened to touch, but that Tier 03's changes quietly invalidated).
    continuous) — an unchanged or worsened ratio on some workload is a valid, reportable outcome here,
    not a reason to withhold the table. **Score the final row against the program target table in
    [`README.md`](README.md)**, per metric, as met or missed with the actual number — including the
-   intermediate milestones assigned to Tiers 01B, 01C, 02, 04 and 10, so a milestone that was missed mid-plan
+   intermediate milestones assigned to Tiers 01B, 01C, 02, 02C and 04, so a milestone that was missed mid-plan
    and never recovered is visible rather than averaged away. Mark clearly which runs were taken
    before the benchmark-parity preconditions landed and which after; do not compare across that
    boundary in the same column. **The tokenization boundary is Tier 01's, not Tier 04B's** — reading
@@ -84,9 +84,9 @@ happened to touch, but that Tier 03's changes quietly invalidated).
    *2026-09-30: the end-of-plan targets were raised after the plan review (GPU tg 0.70x on both rows,
    GPU pp 0.25x; README, "End-of-plan targets raised"). Score against the raised targets and report the
    previous ones beside them, so a reader can see both what was asked and what the plan first asked;
-   report the post-plan anchor (GPU pp 0.40x) as a distance, never as met or missed. Also report, per
+   report the post-plan anchor (GPU pp 0.40x, restated on 2026-10-04 at `n_prompt=2048` when 0.40x at 512 became an end-of-plan target) as a distance, never as met or missed. Score the end-of-plan rows from the README's machine-read end-of-plan target table, per prompt length for GPU pp; the unqualified GPU pp row is reported as retired, met at `n_prompt=128`. Also report, per
    handler, the decode and prefill copy counts against the README's "Program objective: the layer runs
-   on the device", and the CPU tg row against the target Tier 10 restated from the bandwidth roofline,
+   on the device", and the CPU tg row against the target Tier 02C restated from the bandwidth roofline,
    with Juno's attained share of the measured bandwidth.* The paragraph
    below predates that change: Tier 01 kept 0.15x, and the raise replaced it.
 

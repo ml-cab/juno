@@ -9,14 +9,14 @@ before acting on it — both documents are snapshots, not ground truth that stay
 
 1. **One tier at a time, to feature-complete.** Do not start the next tier's work until the current
    tier's exit criteria (bottom of its file) are all checked off. "Next" means the next row of the
-   tier index below, not the next integer — the index is the running order. Five rows carry a
+   tier index below, not the next integer — the index is the running order. Seven rows carry a
    non-integer number or sit out of integer order: Tier 01B sits between 01 and 02, Tier 01C between
-   01B and 02, Tier 04B between 04 and 05, Tier 04C between 04B and 05, and Tier 08 runs before
-   Tier 06. Only the last of those actually breaks the order — 01B, 01C, 04B and 04C read in
-   sequence — but all five are enumerated here because this list, not the numbering, is what a
-   reader builds the running order from, and 04C and 01C were added to the tree after the first
-   three were written. Partial, half-wired features are not acceptable stopping points between
-   tiers.
+   01B and 02, Tier 02B and then Tier 02C between 02 and 03, Tier 04B between 04 and 05, Tier 04C
+   between 04B and 05, and Tier 08 runs before Tier 06. Only the last of those actually breaks the
+   order — the lettered tiers read in sequence — but all seven are enumerated here because this list,
+   not the numbering, is what a reader builds the running order from, and several were added to the
+   tree after the first three were written (02B and 02C on 2026-10-04, split out of Tiers 02 and 10).
+   Partial, half-wired features are not acceptable stopping points between tiers.
 2. **No surface left aside.** A tier is not complete until its change has been carried through
    every product surface it touches — see "Cross-surface compatibility checklist" below. If a
    surface can't reasonably support the new feature yet (e.g. continuous schedule doesn't support
@@ -74,10 +74,25 @@ before acting on it — both documents are snapshots, not ground truth that stay
      an unpublished A/B) names that evidence with an explicit `**Evidence (not published):**` marker,
      which exempts it, so the exemption is visible rather than silent.
 
+   - *(check 5, added 2026-10-04 by the plan review)* a tier whose `Status` line does not say
+     `complete` and whose file never names `check-plan-thresholds.sh`, or one that has a perf gate (no
+     `**No perf gate` declaration) and never names the **Standing CPU and allocation gate** (see "Test
+     infrastructure"). Rules stated only in this README were skipped twice (this check's own
+     invocation, and the CI revisit Tier 07 now carries); the tier file is what an executor reads;
+   - *(check 6, added 2026-10-04)* a `perf-compare/` path containing a tier number (`-tier04b-...`) that
+     does not exist on disk, which can only be a prescription for a new tier-numbered directory.
+     `docs/performance.md` is shipped and links into `docs/perf-compare/`, so a tier number in a
+     directory name ends up in a shipped doc. Existing directories may still be cited;
+   - *(added 2026-10-04)* a row of the machine-read end-of-plan target table (see "Program target") that is
+     malformed, or `active` while its reference reading already meets it — the milestone rule applied to
+     end-of-plan targets, which it did not cover before; the unqualified GPU pp target was met at
+     `n_prompt=128` on 2026-10-04 without the check noticing.
+
    Tier 14's own file is excluded from the first check, since it names the string to describe it. The
    script exits non-zero listing every failure; it passes against this tree and was shown failing
    against the tree as it stood before the fixes that made it pass (seven failures: Tiers 04, 04B, 04C
-   and 05 and all three milestone rows).
+   and 05 and all three milestone rows). Checks 5 and 6 and the end-of-plan table check were likewise
+   shown failing before the tier files, directory names and table were corrected.
 
    **Every tier from 01B on runs it as the first item of its own test list.** It was originally
    specified inside Tier 14's `smoke-doc-consistency.sh`, which meant a rule governing seventeen
@@ -121,11 +136,37 @@ four-model sweep (`tinyllama-1.1b`, `qwen2.5-3b`, `Phi-3.5-mini`, `mistral-7b`, 
 `docs/perf-compare/README.md` baseline host, under the benchmark-parity preconditions below:
 
 | Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) | Reference 2026-09-27, late | Reference 2026-09-30 (pinned GPU re-baseline) | Reference 2026-10-01 (pinned CPU) | Reference 2026-10-03 (Tier 01B closing sweeps, pinned) | **Current reference** (2026-10-04: Tier 01C closing sweeps, pinned) |
-|---|---|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|---|---|---|
 | GPU tg, Phi-3.5-mini | >= **0.70x** (was 0.50x, met 2026-09-30) | 0.330x | 0.423x | 0.415x (0.414x tuned) | 0.416x (0.417x tuned) | 0.394x (0.396x tuned) | 0.394x (0.396x tuned; GPU unchanged) | 0.535x (0.537x tuned) | **0.545x** (0.547x tuned) |
 | GPU tg, mistral-7b | >= **0.70x** (was 0.60x, met 2026-09-27) | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) | 0.639x (0.643x tuned) | 0.610x (0.610x tuned) | 0.610x (0.610x tuned) | 0.611x (0.607x tuned) | **0.627x** (0.619x tuned) |
-| GPU pp, every sweep model | >= **0.25x** (was 0.15x) | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | 0.040x to 0.101x, median 0.064x (Phi-3.5-mini 0.040x binding) | 0.037x to 0.101x at `n_prompt=128`, median 0.067x; 0.011x to 0.098x at 512 (Phi-3.5-mini binding at both) | 0.037x to 0.101x at `n_prompt=128`; 0.011x to 0.098x at 512 (GPU unchanged) | 0.173x to 0.299x at `n_prompt=128`, median 0.289x; 0.146x to 0.285x at 512, median 0.268x (Phi-3.5-mini binding at both) | **0.303x to 0.729x** at `n_prompt=128`, median 0.570x; **0.226x to 0.468x** at 512, median 0.373x (Phi-3.5-mini binding at both); **0.099x to 0.180x** at 2048, median 0.138x (Phi-3.5-mini binding) |
-| CPU tg, every sweep model | >= **0.25x** (placeholder; Tier 10 restates it against the bandwidth roofline, never lower) | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | 0.090x to 0.135x (CPU not re-measured) | 0.092x to 0.121x (mistral-7b binding; pp 0.049x to 0.103x, Phi-3.5-mini binding) | 0.092x to 0.121x (CPU not re-measured) | **0.092x to 0.121x** (CPU not re-measured) |
+| GPU pp, every sweep model | retired 2026-10-04: met at `n_prompt=128` (was >= 0.25x unqualified, before that 0.15x); replaced by the per-length rows of the end-of-plan target table below | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | 0.040x to 0.101x, median 0.064x (Phi-3.5-mini 0.040x binding) | 0.037x to 0.101x at `n_prompt=128`, median 0.067x; 0.011x to 0.098x at 512 (Phi-3.5-mini binding at both) | 0.037x to 0.101x at `n_prompt=128`; 0.011x to 0.098x at 512 (GPU unchanged) | 0.173x to 0.299x at `n_prompt=128`, median 0.289x; 0.146x to 0.285x at 512, median 0.268x (Phi-3.5-mini binding at both) | **0.303x to 0.729x** at `n_prompt=128`, median 0.570x; **0.226x to 0.468x** at 512, median 0.373x (Phi-3.5-mini binding at both); **0.099x to 0.180x** at 2048, median 0.138x (Phi-3.5-mini binding) |
+| CPU tg, every sweep model | >= **0.25x** (placeholder; Tier 02C restates it against the bandwidth roofline, never lower) | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | 0.090x to 0.135x (CPU not re-measured) | 0.090x to 0.135x (CPU not re-measured) | 0.092x to 0.121x (mistral-7b binding; pp 0.049x to 0.103x, Phi-3.5-mini binding) | 0.092x to 0.121x (CPU not re-measured) | **0.092x to 0.121x** (CPU not re-measured) |
+
+The table above is the history of readings. The table below is what Tier 14 scores and what
+`check-plan-thresholds.sh` reads (execution rule 7): every threshold is `>= number`, an `active` row
+must ask for more than its reference reading, a retired row must really be met, and for an "every sweep
+model" scope the reference is the binding (lowest) model's reading.
+
+**End-of-plan targets, machine-read** (added 2026-10-04, plan review)
+
+| Kind | Metric | Scope | Threshold | Reference reading | Status |
+|---|---|---|---|---|---|
+| end | GPU tg | Phi-3.5-mini | >= 0.70x | 0.545x (`20261004T113210Z`) | active |
+| end | GPU tg | mistral-7b | >= 0.70x | 0.627x (`20261004T113210Z`) | active |
+| end | GPU pp, `n_prompt=512` | every sweep model | >= 0.40x | 0.226x (Phi-3.5-mini, binding; `20261004T114812Z`) | active |
+| end | GPU pp, `n_prompt=2048` | every sweep model | >= 0.25x | 0.099x (Phi-3.5-mini, binding; `20261004T222758Z`) | active |
+| end | GPU pp, prompt length unstated | every sweep model | >= 0.25x | 0.303x (Phi-3.5-mini, binding, at `n_prompt=128`; `20261004T113210Z`) | retired: met at `n_prompt=128` on 2026-10-04 |
+| end | CPU tg | every sweep model | >= 0.25x | 0.092x (mistral-7b, binding; `20261001T180241Z`) | active |
+
+**Why the GPU pp target became two rows (2026-10-04, plan review).** The target read "GPU pp, every sweep
+model >= 0.25x" and named no prompt length. At `n_prompt=128` Tier 01C's closing sweep already meets it on
+every model (0.303x to 0.729x), so by this plan's own rule (a target met before the work meant to reach
+it measures nothing) it no longer asks anything. It is retired rather than deleted, so Tier 14 can report
+it. Its replacements name their length. At 512 the target is the old post-plan anchor, 0.40x, which the
+roofline below puts under the FP32-compute ceiling and which Tier 01C's packed GEMM now makes reachable
+(three of four models already read 0.317x to 0.468x; Phi-3.5-mini binds at 0.226x). At 2048 it is 0.25x,
+where prefill reads 0.099x to 0.180x today and attention is the term that grows; Tier 02's tiled kernel and
+its 2048-over-512 milestone are the lever.
 
 **Score every later tier against the right-most column.** Its GPU rows are Tier 01C's closing sweeps
 (2026-10-04, owner run, clocks pinned, HEAD `59c53cc` plus Tier 01C's two out-of-tier fixes, jar
@@ -217,8 +258,8 @@ ask for more than its reference reading. For an "every model" scope the referenc
 | 02 | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 0.606 (tinyllama, binding; mistral-7b 0.642, qwen2.5-3b 0.697, Phi-3.5-mini 0.743; Tier 01C closing sweeps `20261004T113210Z`/`20261004T114812Z`; was 0.845 at Tier 01B's close: the packed matmul removed fixed per-token cost, so attention's share of a long window grew) | active |
 | 02 | GPU pp ratio at 2048 over ratio at 512 | every sweep model | >= 0.90 | 0.329 (mistral-7b, binding; tinyllama 0.381, qwen2.5-3b 0.420, Phi-3.5-mini 0.441; Tier 01C's 2048 sweeps `20261004T220015Z`/`20261004T222758Z` over its 512 sweep `20261004T114812Z`; Phi-3.5-mini at an explicit 8 GiB heap, see Tier 01C's record) | active |
 | 04 | GPU tg ratio | Phi-3.5-mini | >= 0.40x | 0.416x | retired: met on arrival |
-| 10 | CPU tg ratio | every sweep model | >= 0.20x | 0.092x (mistral-7b, `20261001T180241Z`; was 0.090x) | active |
-| 10 | CPU pp ratio, `n_prompt=128` | every sweep model | >= 0.10x | 0.049x (Phi-3.5-mini, `20261001T180241Z`; the others 0.075x to 0.103x; was 0.048x at `20260927T094414Z`) | active |
+| 02C | CPU tg ratio | every sweep model | >= 0.20x | 0.092x (mistral-7b, `20261001T180241Z`; was 0.090x) | active |
+| 02C | CPU pp ratio, `n_prompt=128` | every sweep model | >= 0.10x | 0.049x (Phi-3.5-mini, `20261001T180241Z`; the others 0.075x to 0.103x; was 0.048x at `20260927T094414Z`) | active |
 
 **Why the 512-over-128 row moved from Tier 01B to Tier 02 (2026-10-01, owner decision).** Tier 01B's
 step 5 decomposition showed that no item in that tier can meet it. The term that grows with prompt length
@@ -233,9 +274,10 @@ own items can move. Threshold unchanged.
 **Why the CPU pp row exists (added 2026-09-30).** CPU prefill is 0.048x to 0.090x of the reference
 tool and was owned by nothing: Tier 01B scopes it out to "re-measure at the end of Tier 10", and Tier
 10 had no prefill number. 0.10x is roughly a 2x move on the binding model (Phi-3.5-mini, whose CPU
-attention is scalar and quadratic), and about 1.1x to 1.3x on the other three. It sits on Tier 10
-because the costs it turns on — allocation per matmul, the common-pool dispatch, and the SIMD kernel
-at prefill batch widths — are that tier's items 3 to 5.
+attention is scalar and quadratic), and about 1.1x to 1.3x on the other three. It sat on Tier 10
+because the costs it turns on — allocation per matmul, the common-pool dispatch, and the kernel at
+prefill batch widths — were that tier's items 3 to 5. *Moved 2026-10-04 with those items to
+[Tier 02C](TIER-02C-cpu-hot-path.md) (items 1 to 3 there), and so are both CPU milestone rows.*
 
 **Why the Tier 01B milestone changed shape (2026-09-27).** It read "GPU pp >= 0.10x on mistral-7b".
 Under the current reference mistral-7b already reads 0.101x at `n_prompt=128` — the out-of-tier
@@ -305,11 +347,19 @@ one download per layer and a prefill window to none inside it; one crossing per 
 objective. Tier 14's scorecard reports the copy counts per handler at the end of the plan next to the
 ratios, so how close the plan got to the objective is a number, like everything else in it.
 
+**Why the CPU work runs third, not tenth (2026-10-04, plan review).** CPU reads about 0.1x on both tg and
+pp, the largest gap in the program, and as Tier 10 it ran after nine tiers none of which moves a CPU
+number. The CPU items moved to [Tier 02C](TIER-02C-cpu-hot-path.md), after Tier 02B and before Tier 03,
+and the lever was restated: the decode kernel accumulates each row into one serial float, so the fix is
+integer dot products over a once-quantized activation with split accumulators, not a wider float dot.
+It also runs before Tier 04, whose mapped weight loading threads a `MemorySegment` accessor through the
+same kernels and so should convert the new ones, not the old.
+
 **CPU tg: the memory-bandwidth roofline (added 2026-09-30).** CPU decode reads every weight once per
 token, so its ceiling is memory bandwidth divided by the bytes read per token. This host runs four
 populated DDR3 channels (eight 8 GiB DIMMs, two per channel, read from the EDAC controller): about 51 to
 60 GB/s peak depending on the DIMM speed, which is not recorded; take about 40 GB/s as attainable until
-Tier 10 measures it. Using the file size as the bytes read per token (an overestimate: not every
+Tier 02C measures it. Using the file size as the bytes read per token (an overestimate: not every
 embedding row is read):
 
 | Model | Weights per token | Roofline tg at 40 GB/s | Reference tool tg (`20260927T094414Z`) | Juno tg | Juno's share of the roofline |
@@ -322,12 +372,17 @@ embedding row is read):
 Juno reads its weights at about 6% of attainable bandwidth on every model; the reference tool at 42% to
 64%. That uniform 6% says the CPU gap is a per-byte cost in Juno's kernels and dispatch, not a
 model-specific one, and that a JVM engine attaining even a third of the roofline would read about 0.4x
-to 0.7x. So 0.25x is a placeholder, not an ambition. [Tier 10](TIER-10-gpu-backend-breadth-cpu-simd.md)
+to 0.7x. So 0.25x is a placeholder, not an ambition. [Tier 02C](TIER-02C-cpu-hot-path.md)
 measures the host's attainable bandwidth, publishes Juno's attained weight bandwidth (bytes per token x
 tg) beside every CPU tg reading, and restates this row after its step-2 breakdown, at the level the
 breakdown supports and never below 0.25x.
 
-**Post-plan anchor: GPU pp >= 0.40x (added 2026-09-30; not a gate of this plan).** The end-of-plan
+**Post-plan anchor: GPU pp >= 0.40x (added 2026-09-30; not a gate of this plan).** *Promoted
+2026-10-04 (plan review): 0.40x at `n_prompt=512` is now an end-of-plan target (see "End-of-plan targets,
+machine-read" above), since Tier 01C's packed GEMM made it reachable and the unqualified 0.25x was met at
+`n_prompt=128`. The post-plan anchor is restated as GPU pp >= 0.40x at `n_prompt=2048`, reported in Tier
+14 as a distance, never as met or missed. The rest of this paragraph is the 2026-09-30 reasoning, kept as
+the record.* The end-of-plan
 `>= 0.25x` still leaves Juno about four times slower at prompt processing, and nothing about the JVM
 explains a gap of that size on the GPU path: prefill is a handful of device kernels per layer, and the
 kernels are CUDA whichever language launches them. So the 0.25x is a milestone on the way, not the
@@ -373,14 +428,14 @@ tier here has to go read the infra tree to know what gate it is being held to.
 
 Ordering: correctness-and-consistency first, then the shared architectural root cause behind three
 independent measured regressions, then the largest measured gap in the repository (prompt
-processing), then outward through the feature surface in the order a request actually flows
+processing) and the largest remaining one (CPU, Tier 02C), then outward through the feature surface in the order a request actually flows
 (attention/context → KV → quantization → tokenization → sampling → model coverage → speculative
 decoding → scheduling → parallelism → backend breadth → vision → LoRA → server/cluster surface),
 closing with a documentation hardening pass.
 
-Two rows do not sit where their integer would put them, and the table below — not the numbering —
-is the running order (execution rule 1). **Tier 01B** sits between 01 and 02, and **Tier 04B**
-between 04 and 05. **Tier 08 runs before Tier 06**: Tier 06 adds a `forwardVerify` override per
+Seven rows do not sit where their integer would put them, and the table below — not the numbering —
+is the running order (execution rule 1). **Tiers 01B and 01C** sit between 01 and 02, **Tiers 02B and
+02C** between 02 and 03, and **Tiers 04B and 04C** between 04 and 05. **Tier 08 runs before Tier 06**: Tier 06 adds a `forwardVerify` override per
 architecture, so running it first would mean adding verify support to four handlers and then having
 Tier 08 introduce four more that either need the same work again or silently lack it. Tier 08 first
 means Tier 06 covers every handler in one pass. Tier 08's own file previously argued the opposite
@@ -396,13 +451,24 @@ plan was not working on. What stays in 04C is the part that does depend on Tier 
 packed path and residency to Tier 04's new formats, the explicit FP16 fallback, and the `--mmq`
 documentation audit.
 
+**Tiers 02B and 02C sit between 02 and 03 (added 2026-10-04, plan review).** Tier 02 held nine items,
+three of which (context shifting, sliding windows, the Phi-3.5 LongRoPE remainder) carry no throughput
+target, and under execution rule 1 every remaining GPU throughput lever waited on them. They became
+**Tier 02B**, which runs after Tier 02 so that windowing is a parameter of Tier 02's tiled kernel, and
+before Tier 03 because they settle what the KV cache holds. **Tier 02C** is Tier 10's CPU half (kernels,
+allocation, threading, the bandwidth roofline), moved forward because CPU is now the largest gap in the
+program (see "Why the CPU work runs third, not tenth" above). Tier 10 keeps ROCm and the backend
+decision.
+
 | Tier | Title | Gap analysis refs |
 |---|---|---|
 | [00](TIER-00-correctness-and-consistency.md) | Correctness & consistency audit | §2.1, §2.4, §2.5, §2.6, §2.7, §2.9 |
 | [01](TIER-01-gpu-activation-residency.md) | GPU activation-residency redesign | §1.6, §2.8 |
 | [01B](TIER-01B-prefill-throughput.md) | Prefill throughput | none — see that file's "Why this tier, why now" |
 | [01C](TIER-01C-packed-kquant-matmul.md) | Packed K-quant prefill matmul (tiled `dp4a` GEMM for Q4_K/Q5_K/Q6_K; split out of 04C) | none — adjacent to §1.1; see that file's "Why this tier, why now" |
-| [02](TIER-02-attention-long-context.md) | Attention & long context | §1.2 |
+| [02](TIER-02-attention-long-context.md) | Attention & long context (tiled kernel, decode region; context policy split out to 02B) | §1.2 |
+| [02B](TIER-02B-context-policy.md) | Context policy (context shifting, sliding windows, Phi-3.5 LongRoPE remainder; split out of 02) | §1.2 |
+| [02C](TIER-02C-cpu-hot-path.md) | CPU hot path (integer kernels, allocation, threading; split out of 10) | §1.7 |
 | [03](TIER-03-kv-cache-maturity.md) | KV cache maturity | §1.3 |
 | [04](TIER-04-quantization-coverage.md) | Quantization coverage (mapped weight loading first) | §1.1 |
 | [04B](TIER-04B-tokenizer-fidelity.md) | Tokenizer fidelity (per-family splits and cross-engine parity; the key read and fail-closed path moved to Tier 01 as parity precondition 7) | none — see that file's "Why this tier, why now" |
@@ -412,7 +478,7 @@ documentation audit.
 | [06](TIER-06-speculative-decoding.md) | Speculative decoding expansion | §1.5 |
 | [07](TIER-07-continuous-batching.md) | Continuous batching maturity | §1.3 (scheduling half) |
 | [09](TIER-09-tensor-parallelism-multi-gpu.md) | Tensor parallelism & multi-GPU (and batched prefill on every cluster path, added 2026-10-02) | §1.8, §2.2 |
-| [10](TIER-10-gpu-backend-breadth-cpu-simd.md) | GPU backend breadth & CPU hot path (SIMD, allocation, threading) | §1.7 |
+| [10](TIER-10-gpu-backend-breadth-cpu-simd.md) | GPU backend breadth (ROCm parity, backend decision; CPU half moved to 02C) | §1.7 |
 | [11](TIER-11-vision.md) | Vision | §1.10 |
 | [12](TIER-12-lora.md) | LoRA | §1.11 |
 | [13](TIER-13-server-surface-clustering.md) | Server surface & clustering | §1.12, §2.3, §2.6 |
@@ -445,13 +511,15 @@ rejection is itself tested).
 | 14 | CLI direct usage | `./juno local`/`cluster`/`lora`/`merge`/`lora-import`/`gguf-info`/`test` |
 | 15 | JVM embedding facade | `JunoPlayer`, `LoraTrainer`, `JunoHttpClient` (`juno-player`) — an embedder cannot reach a new capability through CLI or REST alone |
 
-**Row 1 caveat (CPU inference) before Tier 10 lands:** every tier from 00 through 09, Tier 01B
-included, uses row 1 as a *correctness* oracle only — `CpuMatVec`'s scalar path, not a SIMD path,
-since Tier 10 is what makes CPU inference actually fast. A tier's row-1 "PASS" before Tier 10 means
-"correct," not "final-performance-path verified." Tier 10 re-verifies, rather than assumes, that its
-CPU changes preserve every earlier tier's row-1 correctness result — vectorized float accumulation
-can legitimately reorder floating-point sums vs. the scalar path, and so can a different thread count
-or work-splitting strategy, which Tier 10 now also changes — see that tier's own exit criteria.
+**Row 1 caveat (CPU inference) before Tier 02C lands:** every tier from 00 through 02B, Tiers 01B and
+01C included, uses row 1 as a *correctness* oracle only — `CpuMatVec`'s scalar path, since Tier 02C
+(moved forward from Tier 10 on 2026-10-04) is what makes CPU inference actually fast. A tier's row-1
+"PASS" before Tier 02C means "correct," not "final-performance-path verified." Tier 02C re-verifies,
+rather than assumes, that its CPU changes preserve every earlier tier's row-1 correctness result —
+integer accumulation over a quantized activation changes the numerics outright, and a different thread
+count or work-splitting strategy can reorder a reduction — see that tier's own exit criteria. From Tier
+02C on, row 1 is the final CPU path, and the standing CPU gate (see "Test infrastructure") holds its
+throughput.
 
 **Row 15 (JVM embedding facade) was added late — read this before marking it N/A.** `JunoPlayer`,
 `LoraTrainer` and `JunoHttpClient` in `juno-player` are a public surface `CLAUDE.md` names, and a
@@ -461,8 +529,8 @@ Tier 00's execution record. Tiers 00 and 01 were written and executed without it
 it. Tier 01B's scope is internal throughput with no new embedder-invocable capability, so it is N/A
 there. From Tier 02 onward the row is resolved like any other — PASS, N/A with a reason, or
 FAIL-CLOSED. Its table row is already present in the three tiers where it is most clearly
-load-bearing: Tier 02 (context-shift opt-in), Tier 05 (sampler-chain selection) and Tier 12
-(per-request LoRA selection). Any other tier from 02 onward that adds a user-invocable capability
+load-bearing: Tier 02B (context-shift opt-in, moved from Tier 02 on 2026-10-04), Tier 05
+(sampler-chain selection) and Tier 12 (per-request LoRA selection); Tier 02C carries it for `--threads`. Any other tier from 02 onward that adds a user-invocable capability
 adds the row to its own table rather than leaving it off.
 
 ## Test infrastructure
@@ -511,11 +579,37 @@ residency, batching, or KV paths runs `scripts/performance-tests/compare-lora.sh
 `docs/perf-compare/`, and publishes a new timestamped result directory there — that mechanism
 already exists and this plan doesn't change it, it just says explicitly, per tier, when it applies.
 
+**Standing CPU and allocation gate (added 2026-10-04, plan review; every tier with a perf gate from
+Tier 02 on).** Two kinds of regression had no gate. CPU throughput: row 1 was "correctness only" until
+the CPU tier, and every per-tier no-regression A/B read the GPU lane, so a CPU regression introduced in
+Tier 03 or 04 would first be seen when the CPU tier measured it. And host allocation and GC: every result
+JSON publishes `jfr.allocated_bytes_per_token`, `jfr.gc_pause_total_ms_in_token_span` and
+`jfr.top_methods`, and no tier held them to a number. Tiers 03 (KV storage), 04 (mapped loading, which
+threads a `MemorySegment` accessor through every CPU kernel; a `MemorySegment` read in a scalar loop is
+not free for C2) and 07 (the scheduler) all change one or the other. So every such tier, before it
+closes, runs this gate against the pre-tier jar and records it in its own file:
+
+- **CPU lane, same-hour interleaved A/B**: the pre-tier jar and the candidate, alternating A B A B A B,
+  each invocation `compare-llama-cpp.sh --cpu --pin-clocks --juno-jar <jar> --juno-reps 1 --juno-warmup 2
+  --reps 1 --no-publish`, on tinyllama and mistral-7b at `n_prompt=128`. **Threshold**: Juno CPU tg and
+  pp t/s **>= 0.95x** the pre-tier medians.
+- **Allocation and GC, both lanes**: from those CPU runs and from the tier's own GPU A/B, per model and
+  lane, medians of three: `jfr.allocated_bytes_per_token` **<= 1.10x** the pre-tier reading, and
+  `jfr.gc_pause_total_ms_in_token_span` **<= 1.25x** the pre-tier reading (where the pre-tier reading is
+  under 5 ms, the bound is **<= 5 ms**, since a ratio of near-zero pause totals measures nothing).
+- **Hot methods, both lanes**: the top 10 of `jfr.top_methods` (`jdk.ExecutionSample`) for both jars,
+  side by side in the tier's record, so a shift in where time goes is visible even where throughput
+  holds. Reported, not gated.
+
+A tier whose change is scoped to the CPU path (Tier 02C) scores its CPU half under its own, stricter
+thresholds; the allocation half still applies. `check-plan-thresholds.sh` check 5 fails an open tier with
+a perf gate that never names this gate.
+
 **llama.cpp-relative gate (applies from Tier 01 onward).** `compare-lora.sh`/`compare-vision.sh`
 only ever compare Juno against its own prior baseline — neither tells you whether the actual stated
 goal of this plan (closing the gap with llama.cpp) is moving. Every tier whose scope includes the
 forward pass, MatVec, GPU residency, batching, quantization, or KV paths (at minimum: Tiers 01, 01B, 01C,
-02, 03, 04, 04B, 04C, 06, 07, 08, 09, 10) additionally re-runs
+02, 02B, 02C, 03, 04, 04B, 04C, 06, 07, 08, 09, 10) additionally re-runs
 `scripts/performance-tests/compare-llama-cpp.sh` on the same host/model/quant/flags as the last
 published run under `docs/perf-compare/`, and records the resulting Juno/llama.cpp tg and pp ratios
 in that tier's own file (not just in `docs/performance.md`, so the trend across tiers is visible
@@ -558,7 +652,7 @@ moves:
    note that `compare-lora.sh` itself defaults to `REPS=1` — every gate run in this plan passes
    `--reps 3` explicitly to both scripts.
 4. A Juno thread-count control that actually reaches the hot path, set equal to llama-bench's `-t`
-   (this requires the hot-path threading work in Tier 10 item 5 to expose one — until it does,
+   (this requires the hot-path threading work in Tier 02C item 3, formerly Tier 10 item 5, to expose one — until it does,
    record the effective Juno parallelism in the run metadata and state the mismatch in every
    published INDEX rather than leaving it implicit).
    *Amended 2026-09-30: the interim does not have to wait for Tier 10.* Every CPU hot-path kernel
@@ -568,7 +662,7 @@ moves:
    more worker, so passing `N_THREADS - 1` gives `N_THREADS` threads on the hot path, matching the
    reference tool's `-t`. [Tier 01B](TIER-01B-prefill-throughput.md) item 7 wires that into
    `compare-llama-cpp.sh` and records `juno_threads` in `host.json`. It is a harness setting, not
-   the product control: Tier 10 item 5 still ships `--threads` and may replace the common pool, at
+   the product control: Tier 02C item 3 (formerly Tier 10 item 5) still ships `--threads` and may replace the common pool, at
    which point the harness switches to the flag. Changing the effective parallelism is a measurement
    boundary for CPU readings (GPU readings are unaffected unless a CPU-side term is material), so the
    first run with it is re-baselined against itself.
@@ -813,13 +907,13 @@ works":
   (`mvn test` across all unit-test-bearing modules, `mvn verify -pl juno-master`).
 - Any hot-path change has a published `docs/perf-compare/` entry per the existing performance-gate
   rule, against a concrete numeric threshold stated in that tier's own file (execution rule 7 — not
-  just "no unexplained regression"), and, for Tiers 01, 01B, 01C, 02, 03, 04, 04B, 04C, 06, 07, 08, 09, 10, an
+  just "no unexplained regression"), and, for Tiers 01, 01B, 01C, 02, 02B, 02C, 03, 04, 04B, 04C, 06, 07, 08, 09, 10, an
   accompanying `compare-llama-cpp.sh` run recording the current Juno/llama.cpp ratio and reading it
   against the program target and that tier's intermediate milestone, if it has one.
 - **The published API contract is updated in the same change as the code.**
   `api/src/main/resources/openapi.yaml`, `api/src/main/resources/juno-api.yaml` and
   `api/src/main/proto/inference.proto` are the contract, and no tier may add an endpoint, a request
-  or response field, or an RPC without updating them. This is load-bearing for Tiers 02 (context-shift
+  or response field, or an RPC without updating them. This is load-bearing for Tiers 02B (context-shift
   opt-in), 03 (session save/restore), 05 (`x_juno_samplers`, widened `json_schema`), 12
   (`x_juno_loras`) and 13 (`/v1/rerank`), and for Tiers 06 and 09 where the gRPC semantics change
   rather than the shape. Before this was written, the `api` module appeared in this plan exactly

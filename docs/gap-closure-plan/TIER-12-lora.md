@@ -91,6 +91,8 @@ interim one).
 
 ## Tests to write/upgrade before implementation
 
+- **Plan check, first**: `scripts/performance-tests/check-plan-thresholds.sh` passes before any other
+  test or code in this tier (README execution rule 7).
 - **New `GgufLoraImporterTest`-adjacent test** (or a new `NativeGgufLoraInferenceTest`): load a
   real converter-produced GGUF-LoRA file directly (not via the offline importer) and confirm output
   matches the equivalent offline-converted-then-loaded `.lora` path bit-for-bit — this also finally
@@ -109,6 +111,8 @@ interim one).
 - **New bash smoke script**: `scripts/performance-tests/smoke-lora.sh` — drives
   multi-adapter hot-swapped requests through both schedules, and a QLoRA-style training run,
   end to end.
+- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+  and score it before closing this tier.
 - **Perf gate (required)**: `compare-lora.sh` rerun (this script already exists specifically for
   LoRA train+playback comparisons, and it takes `--reps`; pass `--reps 3` per the README's
   noise-floor rule, since it defaults to 1) plus new checkpointing/QLoRA-specific memory and
@@ -148,6 +152,8 @@ against a truly independent real-world file.
       fail-closed restrictions re-justified and re-documented.
 - [ ] Gradient/activation checkpointing implemented, measured to reduce peak training memory.
 - [ ] QLoRA-style quantized-base-weight training implemented and correctness-validated.
+- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+      >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, every threshold above met or explicitly missed with its number.
 - [ ] `x_juno_loras`'s now-working request shape, and any new LoRA fields, are declared in

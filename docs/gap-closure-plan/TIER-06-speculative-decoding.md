@@ -96,6 +96,8 @@ handler that exists when this tier starts**, including `gemma4`, `mistral3`, `qw
 
 ## Tests to write/upgrade before implementation
 
+- **Plan check, first**: `scripts/performance-tests/check-plan-thresholds.sh` passes before any other
+  test or code in this tier (README execution rule 7).
 - **Re-run existing draft-simple JFR-based benchmark** (the one that produced the 0.52x finding) as
   a before/after comparison — this is a test in the sense of a go/no-go gate, tracked the same way
   as a perf-compare run.
@@ -114,6 +116,8 @@ handler that exists when this tier starts**, including `gemma4`, `mistral3`, `qw
 - **New bash smoke script**: `scripts/performance-tests/smoke-speculative-decoding.sh` —
   exercises `lookahead`, batch-mode drafting, and continuous-mode drafting end to end, diffing
   output against `--spec-type none` for correctness.
+- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+  and score it before closing this tier.
 - **Perf gate (required)**: this tier's entire point is a performance fix — full
   `compare-lora.sh` plus the dedicated draft-model/ngram/lookahead comparison, plus
   `compare-llama-cpp.sh` for a llama.cpp-relative reading (per README's llama.cpp-relative gate, and
@@ -177,6 +181,8 @@ new download.
       time, not from a list written before Tier 08 ran.
 - [ ] Cluster/tensor-parallel verify path works or is explicitly, documentedly constrained.
 - [ ] Grammar + speculative decoding interaction tested and correct.
+- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+      >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published showing the fix.
 - [ ] Docs updated.

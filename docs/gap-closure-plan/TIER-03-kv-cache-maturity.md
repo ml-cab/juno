@@ -12,8 +12,8 @@ disk-backed session/prompt-cache persistence.
 
 ## Why this tier, why now
 
-This follows Tier 02 because the shape of KV storage (dense vs. paged, windowed vs. not,
-shift-capable or not) needs to be settled before investing in a block-table-aware attention kernel
+This follows Tiers 02 and 02B because the shape of KV storage (dense vs. paged, windowed vs. not,
+shift-capable or not, the last two settled by Tier 02B) needs to be settled before investing in a block-table-aware attention kernel
 that reads pages directly — building the fused kernel against a KV layout that's about to change
 again would be wasted work. It precedes quantization-coverage (Tier 04) because KV quantization
 (Q4_0 KV tier) shares code paths with general quantization work and benefits from Tier 04's
@@ -103,6 +103,8 @@ that touches KV.
 
 ## Tests to write/upgrade before implementation
 
+- **Plan check, first**: `scripts/performance-tests/check-plan-thresholds.sh` passes before any other
+  test or code in this tier (README execution rule 7).
 - **`KvBlockPoolTest`/`KvPageTableTest`**: refcounting correctness — page freed only when last
   reference drops; concurrent access from two sessions sharing a page.
 - **New attention-kernel test**: block-table read path matches the gather-based oracle bit-for-bit
@@ -119,6 +121,8 @@ that touches KV.
 - **New bash smoke script**: `scripts/performance-tests/smoke-kv-cache.sh` — drives two
   concurrent clients sharing a system prompt (expect the *shared*-prefill-skip this time, not just
   correctness), a defragmentation stress loop, and a save/kill-process/restore/continue sequence.
+- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+  and score it before closing this tier.
 - **Perf gate (required)**: block-table attention and defrag are hot-path changes —
   `compare-lora.sh` plus a dedicated "gather tax" re-measurement (reuse
   `scripts/performance-tests/gather-tax-microbench.sh` and the methodology in
@@ -150,6 +154,8 @@ tier specifically.
 - [ ] Defragmentation reclaims fragmented pages without corrupting live sessions.
 - [ ] Q4_0 KV tier available alongside F16/Q8_0.
 - [ ] Disk-backed session save/restore round-trips correctly across a process restart.
+- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+      >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved, vision/LoRA-play exclusions explicit and tested.
 - [ ] Perf gate published; `gather_ms` at zero, `paged_vs_dense%` <= 2% at ctx 8192 / batch 8, defrag
       pause within budget.
