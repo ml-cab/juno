@@ -355,7 +355,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	@Override
 	public long prefillWindowDeviceBytes(int rows) {
 		PrefillWindowRegion region = prefillRegion;
-		return region == null ? 0L : region.windowDeviceBytes(rows, rows);
+		return region == null ? 0L : region.windowDeviceBytes(rows);
 	}
 
 	@Override

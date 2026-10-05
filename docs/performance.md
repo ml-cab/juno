@@ -978,18 +978,24 @@ occasionally diverge between `--gpu-attention on` and `off` — FP16 KV rounding
 close greedy decision, the same class of tradeoff already accepted for `--mmq` and other
 reduced-precision paths in this codebase. Single-step logits match tightly (parity tests); this is not
 bit-identical-generation territory, here or anywhere else in Juno. Measured per architecture
-(2026-09-30, `GpuAttentionDivergenceIT`: six real prompts, 64 greedy tokens, `on` against `off` on
-the same CUDA build, GTX 1080):
+(2026-10-05, after the tiled online-softmax kernel replaced the full-materialization one;
+`GpuAttentionDivergenceIT`: six real prompts, 64 greedy tokens, `on` against `off` on the same CUDA
+build, GTX 1080; the 2026-09-30 figures for the earlier kernel in brackets):
 
 | Model | Prompts identical over 64 tokens | First divergent step on the others |
 |---|---:|---|
-| TinyLlama-1.1B Q4_K_M (Llama family) | 3 of 6 | 8, 13, 23 |
-| Phi-3.5-mini Q4_K_M | 4 of 6 | 26, 50 |
-| Qwen3-1.7B Q4_K_M | 3 of 6 | 20, 23, 32 |
+| TinyLlama-1.1B Q4_K_M (Llama family) | 4 of 6 (3) | 8, 23 (8, 13, 23) |
+| Phi-3.5-mini Q4_K_M | 4 of 6 (4) | 13, 19 (26, 50) |
+| Qwen3-1.7B Q4_K_M | 3 of 6 (3) | 40, 44, 53 (20, 23, 32) |
 
-The first generated token agreed on every prompt for all three. Logits of the Phi-3 and Qwen3
-handlers stay within 0.015 relative L2 of `off` at each of the three attention call sites (prefill
-window, single-token decode, multi-stream decode; `GpuAttentionHandlerParityTest`). Pass `off` for the
+The first generated token agreed on every prompt for all three. Where a step diverges depends on where
+a near-tie meets the rounding, and both kernels round differently from the scalar path; the current one
+is the closer of the two to exact attention (about 1.4x to 5x lower error against a double-precision
+reference over the same FP16 cache). The kernel itself is held, at every launch on real Phi-3.5-mini and
+Qwen3-1.7B runs, to the scalar attention over the same FP16 rows it read (worst row 3.5e-6 relative L2;
+`GpuAttentionHandlerParityTest`), and the handlers' logits stay within 0.0005 relative L2 of `off` at the
+prefill windows. At the decode call sites the difference from `off` is the FP16 cache's rounding carried
+through the model (0.001 to 0.022 there), so it is reported rather than bounded. Pass `off` for the
 bit-identical CPU-parity baseline.
 
 ```bash

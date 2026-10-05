@@ -46,13 +46,10 @@ class PrefillWindowFootprintTest {
 	}
 
 	@Test
-	void scoresAndTheQ8CopyAreCountedAtTheWindowsOwnWidth() {
-		// Attention scores: rows x heads x context x 4.
-		assertThat(PrefillWindowFootprint.scoresBytes(MISTRAL, 64, 64)).isEqualTo(64L * 32 * 64 * 4);
+	void theQ8CopyIsCountedAtTheWindowsOwnWidth() {
 		// The backend's Q8_1 copy of the widest matmul input: 36 bytes per 32 values.
 		assertThat(PrefillWindowFootprint.q8Bytes(MISTRAL, 64)).isEqualTo(64L * 14336 / 32 * 36);
-		assertThat(PrefillWindowFootprint.bytes(MISTRAL, false, 64, 64))
-				.isEqualTo(15_992_064L + 524_288L + 1_032_192L);
+		assertThat(PrefillWindowFootprint.bytes(MISTRAL, false, 64)).isEqualTo(15_992_064L + 1_032_192L);
 	}
 
 	@Test
@@ -65,8 +62,6 @@ class PrefillWindowFootprintTest {
 				.isEqualTo(PrefillWindowFootprint.windowBytes(MISTRAL, false, 64));
 		assertThat(PrefillWindowFootprint.windowBytes(MISTRAL, false, 65))
 				.isEqualTo(PrefillWindowFootprint.windowBytes(MISTRAL, false, 128));
-		// The scores buffer is grown to the rows actually used, not the capacity.
-		assertThat(PrefillWindowFootprint.scoresBytes(MISTRAL, 65, 65)).isEqualTo(65L * 32 * 65 * 4);
 	}
 
 	@Test
@@ -77,11 +72,12 @@ class PrefillWindowFootprintTest {
 	}
 
 	@Test
-	void scoresGrowWithTheSquareOfAWindowThatStartsThePrompt() {
-		// A window covering the start of the prompt attends over its own width, so
-		// doubling it quadruples the scores: the term that dominates wide windows.
-		assertThat(PrefillWindowFootprint.scoresBytes(MISTRAL, 1024, 1024))
-				.isEqualTo(4 * PrefillWindowFootprint.scoresBytes(MISTRAL, 512, 512));
+	void attentionAddsNoTermThatGrowsWithTheSquareOfTheWindow() {
+		// The attention kernel streams the keys and keeps no scores buffer, so a window
+		// covering the start of the prompt costs linearly in its width: doubling the
+		// rows doubles the footprint at most (the row buffers), never quadruples it.
+		assertThat(PrefillWindowFootprint.bytes(MISTRAL, false, 1024))
+				.isLessThanOrEqualTo(2 * PrefillWindowFootprint.bytes(MISTRAL, false, 512));
 	}
 
 	@Test
@@ -89,7 +85,7 @@ class PrefillWindowFootprintTest {
 		// The adaptive chunk size searches this function, so it must be monotonic.
 		long previous = 0;
 		for (int rows = 9; rows <= 700; rows++) {
-			long b = PrefillWindowFootprint.bytes(MISTRAL, false, rows, rows);
+			long b = PrefillWindowFootprint.bytes(MISTRAL, false, rows);
 			assertThat(b).as("rows " + rows).isGreaterThanOrEqualTo(previous);
 			previous = b;
 		}
@@ -98,6 +94,6 @@ class PrefillWindowFootprintTest {
 	@Test
 	void nonPositiveWidthsAreRejected() {
 		assertThrows(IllegalArgumentException.class, () -> PrefillWindowFootprint.capacity(0));
-		assertThrows(IllegalArgumentException.class, () -> PrefillWindowFootprint.bytes(MISTRAL, false, 64, 0));
+		assertThrows(IllegalArgumentException.class, () -> PrefillWindowFootprint.bytes(MISTRAL, false, 0));
 	}
 }

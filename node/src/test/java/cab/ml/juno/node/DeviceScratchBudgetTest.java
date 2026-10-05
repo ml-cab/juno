@@ -41,10 +41,9 @@ class DeviceScratchBudgetTest {
 	private static final PrefillWindowRegion.Shape THIRTY_B = new PrefillWindowRegion.Shape(6656, 6656, 6656, 17920,
 			52, 52, 128, 1, 1e-5f);
 
-	/** The 30B model's region window at the reserved width, at the KV mirror's initial context. */
+	/** The 30B model's region window at the reserved width. */
 	private static long thirtyBWindow() {
-		return PrefillWindowFootprint.bytes(THIRTY_B, false, DeviceScratchBudget.RESERVED_WINDOW_ROWS,
-				DeviceKvCache.INITIAL_SEQ_CAPACITY);
+		return PrefillWindowFootprint.bytes(THIRTY_B, false, DeviceScratchBudget.RESERVED_WINDOW_ROWS);
 	}
 
 	private static long thirtyBDequant() {
@@ -149,7 +148,7 @@ class DeviceScratchBudgetTest {
 	void smallModelsReserveProportionallyLess() {
 		PrefillWindowRegion.Shape tiny = new PrefillWindowRegion.Shape(2048, 2048, 256, 5632, 32, 4, 64, 8, 1e-5f);
 		long tinyReserve = DeviceScratchBudget.reserveBytes(PrefillWindowFootprint.bytes(tiny, false,
-				DeviceScratchBudget.RESERVED_WINDOW_ROWS, DeviceKvCache.INITIAL_SEQ_CAPACITY), 0L);
+				DeviceScratchBudget.RESERVED_WINDOW_ROWS), 0L);
 		assertThat(tinyReserve).isGreaterThan(0L).isLessThan(DeviceScratchBudget.reserveBytes(thirtyBWindow(), 0L));
 	}
 

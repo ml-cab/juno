@@ -29,33 +29,65 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
 
 /**
  * Loads the classpath PTX module {@code gqa_attention.ptx} and launches the
- * GPU-resident grouped-query attention kernel ({@code gqa_attention}).
+ * GPU-resident grouped-query attention kernel: tiled, with an online softmax, so
+ * it keeps no score row and needs no device scratch that grows with the context.
  *
- * <p>One module per process; the function handle is cached. Requires an
+ * <p>One module per process; the function handles are cached. Requires an
  * active CUDA primary context (any prior cudart allocation / {@code
- * cudaSetDevice} is enough) — same loading convention as {@link Q4KMmqKernel}.
+ * cudaSetDevice} is enough) - same loading convention as {@link Q4KMmqKernel}.
  *
- * <p>Launch geometry: one block of {@code GQA_THREADS} (128) threads per
- * {@code (b, h)} pair, grid size {@code B * numHeads}. See {@code
- * gqa_attention.cu} for the kernel itself.
+ * <p>Launch geometry: blocks of {@code GQA_THREADS} (128) threads, grid
+ * {@code ceil(B / rowsPerBlock) x numHeads}. A block takes {@code rowsPerBlock}
+ * query rows of one head; see {@link #rowsPerBlock} and {@code gqa_attention.cu}.
+ * Three entries bound the head width held in registers ({@code gqa_attention_d64},
+ * {@code gqa_attention_d128}, {@code gqa_attention_d256}); {@link #supportsHeadDim} says which widths run.
  */
 final class GqaAttentionKernel {
 
 	private static final Logger log = Logger.getLogger(GqaAttentionKernel.class.getName());
 	private static final String RESOURCE = "/cab/ml/juno/node/gqa_attention.ptx";
-	private static final String ENTRY = "gqa_attention";
+	private static final String ENTRY_D64 = "gqa_attention_d64";
+	private static final String ENTRY_D128 = "gqa_attention_d128";
+	private static final String ENTRY_D256 = "gqa_attention_d256";
 	private static final int GQA_THREADS = 128;
+	/** Query rows a block can take: the kernel's 32 slots of 4 lanes. */
+	static final int MAX_ROWS_PER_BLOCK = 32;
+	/** Widest head the kernel holds in registers. */
+	static final int MAX_HEAD_DIM = 256;
 
 	private static final AtomicReference<GqaAttentionKernel> INSTANCE = new AtomicReference<>();
 
 	private final MemorySegment module; // CUmodule (opaque pointer value)
-	private final MemorySegment fn;     // CUfunction
+	private final MemorySegment fnD64;  // CUfunction, headDim <= 64
+	private final MemorySegment fnD128; // CUfunction, headDim <= 128
+	private final MemorySegment fnD256; // CUfunction, headDim <= 256
 	private final Arena moduleArena;    // keeps module/function slots alive
 
-	private GqaAttentionKernel(MemorySegment module, MemorySegment fn, Arena moduleArena) {
+	private GqaAttentionKernel(MemorySegment module, MemorySegment fnD64, MemorySegment fnD128, MemorySegment fnD256,
+			Arena moduleArena) {
 		this.module = module;
-		this.fn = fn;
+		this.fnD64 = fnD64;
+		this.fnD128 = fnD128;
+		this.fnD256 = fnD256;
 		this.moduleArena = moduleArena;
+	}
+
+	/** Whether the kernel runs heads of {@code headDim} values: a multiple of 4, at most {@link #MAX_HEAD_DIM}. */
+	static boolean supportsHeadDim(int headDim) {
+		return headDim > 0 && headDim <= MAX_HEAD_DIM && (headDim & 3) == 0;
+	}
+
+	/**
+	 * Query rows per block: a tile of consecutive rows reads each staged key once,
+	 * which needs every row of it to attend over the same cache. So a window of
+	 * {@code batch} rows over one cache takes the smallest power of two covering it,
+	 * up to {@link #MAX_ROWS_PER_BLOCK}; rows over different caches take one row a
+	 * block, which spreads that row's keys over all of the block's slots.
+	 */
+	static int rowsPerBlock(boolean oneCache, int batch) {
+		if (!oneCache || batch <= 1)
+			return 1;
+		return Math.min(MAX_ROWS_PER_BLOCK, Integer.highestOneBit(batch - 1) << 1);
 	}
 
 	static boolean isAvailable() {
@@ -105,14 +137,17 @@ final class GqaAttentionKernel {
 				"cuModuleLoadData");
 		MemorySegment module = moduleSlot.get(ADDRESS, 0);
 
-		MemorySegment name = arena.allocateFrom(ENTRY);
+		return new GqaAttentionKernel(module, function(drv, arena, module, ENTRY_D64),
+				function(drv, arena, module, ENTRY_D128),
+				function(drv, arena, module, ENTRY_D256), arena);
+	}
+
+	private static MemorySegment function(CudaDriverBindings drv, Arena arena, MemorySegment module, String entry) {
 		MemorySegment fnSlot = arena.allocate(ADDRESS);
 		CudaDriverBindings.check(
-				CudaDriverBindings.callInt(drv.cuModuleGetFunction, fnSlot, module, name),
-				"cuModuleGetFunction(" + ENTRY + ")");
-		MemorySegment fn = fnSlot.get(ADDRESS, 0);
-
-		return new GqaAttentionKernel(module, fn, arena);
+				CudaDriverBindings.callInt(drv.cuModuleGetFunction, fnSlot, module, arena.allocateFrom(entry)),
+				"cuModuleGetFunction(" + entry + ")");
+		return fnSlot.get(ADDRESS, 0);
 	}
 
 	private static byte[] readResource(String path) throws IOException {
@@ -124,67 +159,54 @@ final class GqaAttentionKernel {
 	}
 
 	/**
-	 * Launches {@code gqa_attention} for {@code B} (batch-row, head) pairs
-	 * (grid = {@code B * numHeads}). All device pointer arguments must already
-	 * be resident; {@code stream} may be {@code null} for the default stream.
+	 * Launches the kernel for {@code batch} query rows of {@code numHeads} heads.
+	 * Row {@code b} attends over keys {@code [max(0, seqLens[b] - window), seqLens[b])}
+	 * of the cache {@code kPtrs[b]}/{@code vPtrs[b]}; {@code window} 0 means no
+	 * window. With {@code rowsPerBlock > 1} every row of a block reads the first
+	 * row's cache, so pass {@link #rowsPerBlock}. All device pointer arguments must
+	 * already be resident; {@code stream} may be {@code null} for the default stream.
 	 */
 	void launch(MemorySegment qBatch, MemorySegment kPtrs, MemorySegment vPtrs, MemorySegment seqLens,
-			MemorySegment scoresScratch, MemorySegment outBatch,
-			int batch, int numHeads, int gqaRatio, int headDim, int kvDim, int rowStride,
-			MemorySegment stream) {
+			MemorySegment outBatch, int batch, int numHeads, int gqaRatio, int headDim, int kvDim,
+			int rowsPerBlock, int window, MemorySegment stream) {
 		Objects.requireNonNull(qBatch, "qBatch");
 		Objects.requireNonNull(kPtrs, "kPtrs");
 		Objects.requireNonNull(vPtrs, "vPtrs");
 		Objects.requireNonNull(seqLens, "seqLens");
-		Objects.requireNonNull(scoresScratch, "scoresScratch");
 		Objects.requireNonNull(outBatch, "outBatch");
+		if (!supportsHeadDim(headDim))
+			throw new IllegalArgumentException("attention kernel runs head widths that are multiples of 4 up to " + MAX_HEAD_DIM
+					+ " (got " + headDim + ")");
+		if (rowsPerBlock < 1 || rowsPerBlock > MAX_ROWS_PER_BLOCK || Integer.bitCount(rowsPerBlock) != 1)
+			throw new IllegalArgumentException("rowsPerBlock must be a power of two up to " + MAX_ROWS_PER_BLOCK
+					+ " (got " + rowsPerBlock + ")");
+		if (window < 0)
+			throw new IllegalArgumentException("window must be >= 0 (got " + window + ")");
 
 		CudaDriverBindings drv = CudaDriverBindings.instance();
-		int grid = batch * numHeads;
+		MemorySegment fn = headDim <= 64 ? fnD64 : headDim <= 128 ? fnD128 : fnD256;
+		int gridX = (batch + rowsPerBlock - 1) / rowsPerBlock;
 
 		try (Arena arena = Arena.ofConfined()) {
-			MemorySegment pQ = arena.allocate(ADDRESS);
-			MemorySegment pK = arena.allocate(ADDRESS);
-			MemorySegment pV = arena.allocate(ADDRESS);
-			MemorySegment pSeqLens = arena.allocate(ADDRESS);
-			MemorySegment pScores = arena.allocate(ADDRESS);
-			MemorySegment pOut = arena.allocate(ADDRESS);
-			MemorySegment pNumHeads = arena.allocate(JAVA_INT);
-			MemorySegment pGqaRatio = arena.allocate(JAVA_INT);
-			MemorySegment pHeadDim = arena.allocate(JAVA_INT);
-			MemorySegment pKvDim = arena.allocate(JAVA_INT);
-			MemorySegment pRowStride = arena.allocate(JAVA_INT);
-
-			pQ.set(ADDRESS, 0, qBatch);
-			pK.set(ADDRESS, 0, kPtrs);
-			pV.set(ADDRESS, 0, vPtrs);
-			pSeqLens.set(ADDRESS, 0, seqLens);
-			pScores.set(ADDRESS, 0, scoresScratch);
-			pOut.set(ADDRESS, 0, outBatch);
-			pNumHeads.set(JAVA_INT, 0, numHeads);
-			pGqaRatio.set(JAVA_INT, 0, gqaRatio);
-			pHeadDim.set(JAVA_INT, 0, headDim);
-			pKvDim.set(JAVA_INT, 0, kvDim);
-			pRowStride.set(JAVA_INT, 0, rowStride);
-
-			MemorySegment params = arena.allocate(ADDRESS, 11);
-			params.setAtIndex(ADDRESS, 0, pQ);
-			params.setAtIndex(ADDRESS, 1, pK);
-			params.setAtIndex(ADDRESS, 2, pV);
-			params.setAtIndex(ADDRESS, 3, pSeqLens);
-			params.setAtIndex(ADDRESS, 4, pScores);
-			params.setAtIndex(ADDRESS, 5, pOut);
-			params.setAtIndex(ADDRESS, 6, pNumHeads);
-			params.setAtIndex(ADDRESS, 7, pGqaRatio);
-			params.setAtIndex(ADDRESS, 8, pHeadDim);
-			params.setAtIndex(ADDRESS, 9, pKvDim);
-			params.setAtIndex(ADDRESS, 10, pRowStride);
+			MemorySegment params = arena.allocate(ADDRESS, 12);
+			params.setAtIndex(ADDRESS, 0, pointerArg(arena, qBatch));
+			params.setAtIndex(ADDRESS, 1, pointerArg(arena, kPtrs));
+			params.setAtIndex(ADDRESS, 2, pointerArg(arena, vPtrs));
+			params.setAtIndex(ADDRESS, 3, pointerArg(arena, seqLens));
+			params.setAtIndex(ADDRESS, 4, pointerArg(arena, outBatch));
+			params.setAtIndex(ADDRESS, 5, intArg(arena, batch));
+			params.setAtIndex(ADDRESS, 6, intArg(arena, numHeads));
+			params.setAtIndex(ADDRESS, 7, intArg(arena, gqaRatio));
+			params.setAtIndex(ADDRESS, 8, intArg(arena, headDim));
+			params.setAtIndex(ADDRESS, 9, intArg(arena, kvDim));
+			params.setAtIndex(ADDRESS, 10, intArg(arena, rowsPerBlock));
+			params.setAtIndex(ADDRESS, 11, intArg(arena, window));
 
 			MemorySegment streamOrNull = stream == null ? MemorySegment.NULL : stream;
 			CudaDriverBindings.check(
 					CudaDriverBindings.callInt(drv.cuLaunchKernel,
 							fn,
-							grid, 1, 1,
+							gridX, numHeads, 1,
 							GQA_THREADS, 1, 1,
 							0,
 							streamOrNull,
@@ -192,5 +214,17 @@ final class GqaAttentionKernel {
 							MemorySegment.NULL),
 					"cuLaunchKernel(gqa_attention)");
 		}
+	}
+
+	private static MemorySegment pointerArg(Arena arena, MemorySegment value) {
+		MemorySegment slot = arena.allocate(ADDRESS);
+		slot.set(ADDRESS, 0, value);
+		return slot;
+	}
+
+	private static MemorySegment intArg(Arena arena, int value) {
+		MemorySegment slot = arena.allocate(JAVA_INT);
+		slot.set(JAVA_INT, 0, value);
+		return slot;
 	}
 }

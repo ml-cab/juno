@@ -357,7 +357,10 @@ GPU FFI (node module — Panama project, JEP 454):
         first and always; the kernel reads a mirror only through its written-prefix watermark; a
         device OOM while allocating, growing or attending retires the mirrors by closing them in place
         and the request continues on the CPU, logged once per kind. Mirrors serve only layers whose
-        Q/K/V weights are on the device; freed on evict() and releaseGpuResources().
+        Q/K/V weights are on the device; freed on evict() and releaseGpuResources(). A package-private
+        DispatchObserver (tests only, null otherwise) sees each successful launch's inputs and output;
+        GpuAttentionHandlerParityTest uses it to hold the kernel at every real call site to GqaMath over
+        the same FP16 mirror rows.
   GqaMath — attention math (QK^T + softmax + weighted-V-sum) extracted from
         LlamaTransformerHandler.gqaInto/gqa; scalar CPU oracle used by both the fallback path
         and the GPU kernel's parity test.
@@ -369,11 +372,20 @@ GPU FFI (node module — Panama project, JEP 454):
         (PrefillWindowKernels.toHalf, no host copy) and leaves the watermark for markWritten,
         which the handler calls once the host KV holds the same rows. A grow whose second
         allocation fails frees the first.
-  GqaAttentionKernel — PTX loader/launcher (CUDA Driver API) for gqa_attention.ptx; one block
-        per (batch-row, head), 3-pass QK^T+max / softmax / weighted-V-sum. Both block
-        reductions share one shared-memory array and end with a barrier after every thread
-        has read the result, so output is bit-identical launch to launch
-        (GqaAttentionReproducibilityTest).
+  GqaAttentionKernel — PTX loader/launcher (CUDA Driver API) for gqa_attention.ptx: a tiled,
+        online-softmax kernel (running max, running sum, rescaled accumulator) that streams K/V
+        through shared memory in 32-key tiles (16 for heads over 128), converted from FP16 to FP32
+        once per block as staged, read four values at a time, and keeps no score row, so its device scratch
+        does not grow with the context. Grid ceil(B / rowsPerBlock) x numHeads, 128 threads = 32
+        slots of 4 lanes; rowsPerBlock(oneCache, B) gives a prefill window (rows sharing one
+        cache) up to 32 rows a block, each staged key read once for all of them, and a decode row
+        or --parallel streams one row a block with its keys split over the 32 slots and merged at
+        the end. A per-launch attention window (0 = none) restricts row b to its last `window`
+        keys. Entries gqa_attention_d64 / _d128 / _d256 bound the head width held in registers
+        (supportsHeadDim: a multiple of 4, <= 256; otherwise the caller stays on GqaMath). Fixed reduction
+        order, so output is bit-identical launch to launch (GqaAttentionReproducibilityTest);
+        held to GqaMath from 1 key to MAX_SEQ_LEN, at head widths 64/80/96/128/256 and with the
+        window, by GqaAttentionTiledTest.
   CudaGqaAttention — handler-facing attendBatched(...); real dispatch against DeviceKvCache,
         grow-and-keep-max scratch taken from a DeviceScratchPool (runs outside the context lock,
         so concurrent callers each hold an entry; the pool is sized by concurrent calls, not by
@@ -504,8 +516,9 @@ GPU FFI (node module — Panama project, JEP 454):
         the device only pays when the activation is already there. Built by ResidentQkvPath, which
         LlamaTransformerHandler constructs under --gpu-residency.
   PrefillWindowFootprint — device bytes of one PrefillWindowRegion window of a given width, term for
-        term with Window's buffers (capacity rounded up to 64 rows), plus the attention scores (rows x
-        heads x context x 4) and the backend's Q8_1 copy of the window. PrefillReserveDeviceTest holds
+        term with Window's buffers (capacity rounded up to 64 rows), plus the backend's Q8_1 copy of
+        the window; attention adds no term (the kernel keeps no score row), so it does not depend
+        on the context the window attends over. PrefillReserveDeviceTest holds
         it equal to what a window allocates. Read by DeviceScratchBudget and, through
         ForwardPassHandler.prefillWindowDeviceBytes, by the adaptive prefill chunk.
   PrefillWindowRegion — the prefill-window device region (on by default on CUDA; PrefillRegionOptions):
@@ -683,8 +696,7 @@ GPU FFI (node module — Panama project, JEP 454):
         otherwise LOCAL_REPL and EMBEDDED on a GPU with the static schedule size from free VRAM: the
         widest window whose footprint, summed over every shard's
         ForwardPassHandler.prefillWindowDeviceBytes (each in-process shard keeps its own region
-        window; PrefillWindowFootprint: window buffers, attention scores growing with rows x context,
-        the Q8_1 copy), fits half of what is free, between 32 and 65536 rows; with no shard on the
+        window; PrefillWindowFootprint: window buffers and the Q8_1 copy), fits half of what is free, between 32 and 65536 rows; with no shard on the
         device region, the host-staged path's 64 KiB a token applies instead.
         Every other case uses the fixed 32 (CPU: window width does not change prefill time; continuous:
         32 is the decode-interleaving fairness unit; cluster and coordinator: the gRPC pipeline clients

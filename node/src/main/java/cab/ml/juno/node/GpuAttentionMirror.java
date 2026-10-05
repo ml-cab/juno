@@ -45,6 +45,19 @@ final class GpuAttentionMirror {
 
 	private static final Logger log = Logger.getLogger(GpuAttentionMirror.class.getName());
 
+	/**
+	 * Sees every kernel launch that succeeded, with the mirrors it read, its
+	 * queries, lengths and output, so a test can hold the kernel at a real call
+	 * site to the scalar oracle over the same FP16 rows. Tests only; {@code null}
+	 * otherwise, which costs one volatile read per launch.
+	 */
+	interface DispatchObserver {
+		void dispatched(DeviceKvCache[] mirrors, float[][] q, int[] seqLens, float[][] out, int numHeads,
+				int headDim, int gqaRatio, int kvDim);
+	}
+
+	static volatile DispatchObserver observer;
+
 	private final CudaGqaAttention gqa;
 	private final String handler;
 	private final int layers;
@@ -221,7 +234,11 @@ final class GpuAttentionMirror {
 	 */
 	private boolean dispatch(DeviceKvCache[] mirrors, float[][] q, int[] seqLens, float[][] out) {
 		try {
-			return gqa.attendBatched(mirrors, q, seqLens, out, numHeads, headDim, gqaRatio, kvDim);
+			boolean ok = gqa.attendBatched(mirrors, q, seqLens, out, numHeads, headDim, gqaRatio, kvDim);
+			DispatchObserver o = observer;
+			if (ok && o != null)
+				o.dispatched(mirrors, q, seqLens, out, numHeads, headDim, gqaRatio, kvDim);
+			return ok;
 		} catch (IllegalStateException ex) {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;

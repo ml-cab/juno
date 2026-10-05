@@ -105,8 +105,8 @@ class PrefillReserveDeviceTest {
 					assertThat(win.deviceBytes()).as("fused=" + fused + ", rows=" + rows)
 							.isEqualTo(PrefillWindowFootprint.windowBytes(SHAPE, fused, rows));
 				}
-				assertThat(region.windowDeviceBytes(rows, rows))
-						.isEqualTo(PrefillWindowFootprint.bytes(SHAPE, fused, rows, rows));
+				assertThat(region.windowDeviceBytes(rows))
+						.isEqualTo(PrefillWindowFootprint.bytes(SHAPE, fused, rows));
 			}
 		}
 	}
@@ -140,10 +140,10 @@ class PrefillReserveDeviceTest {
 			runSplit(win, 1, expected);
 			win.materializeResidual(expected);
 		}
-		long reserve = DeviceScratchBudget.reserveBytes(first.windowDeviceBytes(w, w), 0L);
+		long reserve = DeviceScratchBudget.reserveBytes(first.windowDeviceBytes(w), 0L);
 		long dequant = DeviceScratchBudget.dequantScratchBytes(H, H, I);
 		assertThat(reserve).as("shrunk reserve below the dequant route's need").isLessThan(
-				DeviceScratchBudget.reserveBytes(first.windowDeviceBytes(w, w), dequant));
+				DeviceScratchBudget.reserveBytes(first.windowDeviceBytes(w), dequant));
 		first.close();
 		mv.releaseScratch();
 

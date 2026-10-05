@@ -233,7 +233,9 @@ final class PrefillWindowRegion implements AutoCloseable {
 		if (eligible == 0)
 			return null;
 		PrefillWindowKernels kernels = PrefillWindowKernels.tryLoad();
-		GqaAttentionKernel attention = attentionKernel ? GqaAttentionKernel.tryLoad() : null;
+		GqaAttentionKernel attention = attentionKernel && GqaAttentionKernel.supportsHeadDim(shape.headDim())
+				? GqaAttentionKernel.tryLoad()
+				: null;
 		if (kernels == null) {
 			log.warning(handler + ": prefill-window device region unavailable (its kernels did not load);"
 					+ " prefill windows stay on the host path");
@@ -282,12 +284,9 @@ final class PrefillWindowRegion implements AutoCloseable {
 				rope, attentionOnDevice, kernels, attention);
 	}
 
-	/**
-	 * Device bytes a window of {@code rows} rows attending over {@code seqLen}
-	 * positions holds on this region ({@link PrefillWindowFootprint}).
-	 */
-	long windowDeviceBytes(int rows, int seqLen) {
-		return PrefillWindowFootprint.bytes(shape, fusedQkv, rows, seqLen);
+	/** Device bytes a window of {@code rows} rows holds on this region ({@link PrefillWindowFootprint}). */
+	long windowDeviceBytes(int rows) {
+		return PrefillWindowFootprint.bytes(shape, fusedQkv, rows);
 	}
 
 	/** Whether layer {@code li} (0-based within the shard) runs on the region. */
@@ -388,8 +387,6 @@ final class PrefillWindowRegion implements AutoCloseable {
 		/** Pinned host copy of {@link #tables}, written before each attention launch. */
 		private final MemorySegment tablesHost;
 		private final long tablesBytes;
-		private MemorySegment scores;
-		private long scoresBytes;
 		/** The layer's input, copied here before the layer updates the residual in place; see {@link #recoverLayerInput}. */
 		private final MemorySegment xIn;
 		private final ResidentActivation[] qkvActs;
@@ -437,9 +434,9 @@ final class PrefillWindowRegion implements AutoCloseable {
 			this.kvActs = new ResidentActivation[] { k, v };
 		}
 
-		/** Device bytes this window holds now: its buffers and the attention scores grown so far. */
+		/** Device bytes this window holds: its buffers (attention keeps no scratch of its own). */
 		long deviceBytes() {
-			return chain.deviceBytes() + scoresBytes;
+			return chain.deviceBytes();
 		}
 
 		/**
@@ -677,15 +674,13 @@ final class PrefillWindowRegion implements AutoCloseable {
 		/**
 		 * Casts the window's K and V rows into the mirror and runs attention over the
 		 * mirror into {@link #attn}. Returns {@code false}, retiring the mirror, when
-		 * the device runs out of memory for the mirror's growth or the kernel's scratch.
+		 * the device runs out of memory for the mirror's growth.
 		 */
 		private boolean attendInside(DeviceKvCache mirror, int startPos, int w) {
 			try {
 				int mark = spans.begin(stream, w);
 				mirror.writeWindowOnDevice(startPos, w, k.devicePointer(), v.devicePointer(), kernels, stream);
 				spans.compute(DeviceComputeEvent.KV_APPEND, w, mark, stream);
-				int seqLen = startPos + w;
-				ensureScores((long) w * shape.numHeads() * seqLen * Float.BYTES);
 				long ptrBytes = (long) w * ADDRESS.byteSize();
 				MemorySegment kPtr = mirror.kPointer();
 				MemorySegment vPtr = mirror.vPointer();
@@ -698,8 +693,8 @@ final class PrefillWindowRegion implements AutoCloseable {
 				copyTables(used, w);
 				mark = spans.begin(stream, w);
 				attention.launch(q.devicePointer(), tables, tables.asSlice(ptrBytes), tables.asSlice(2 * ptrBytes),
-						scores, attn.devicePointer(), w, shape.numHeads(), shape.gqaRatio(), shape.headDim(),
-						shape.kvDim(), seqLen, stream);
+						attn.devicePointer(), w, shape.numHeads(), shape.gqaRatio(), shape.headDim(), shape.kvDim(),
+						GqaAttentionKernel.rowsPerBlock(true, w), 0, stream);
 				spans.compute(DeviceComputeEvent.GQA_ATTENTION_REGION, w, mark, stream);
 				attn.markWritten(w);
 				return true;
@@ -775,20 +770,6 @@ final class PrefillWindowRegion implements AutoCloseable {
 			spans.staging(GpuBindings.H2D, bytes, w, "memcpy(region attention tables H2D)", mark, stream);
 		}
 
-		private void ensureScores(long bytes) {
-			if (scoresBytes >= bytes)
-				return;
-			MemorySegment previous = scores;
-			scores = null;
-			scoresBytes = 0;
-			if (previous != null) {
-				chain.sync();
-				ctx.bindings().deviceFree(previous);
-			}
-			scores = ctx.bindings().deviceMalloc(ctx.deviceIndex(), bytes);
-			scoresBytes = bytes;
-		}
-
 		/** Downloads the fused Q/K/V rows and splits them into the three host outputs. */
 		private void downloadFused(int w, float[][] qOut, float[][] kOut, float[][] vOut) {
 			qkv.materialize(qkvHost);
@@ -838,10 +819,6 @@ final class PrefillWindowRegion implements AutoCloseable {
 			freed = true;
 			chain.close();
 			ctx.bindings().hostFree(tablesHost);
-			if (scores != null)
-				ctx.bindings().deviceFree(scores);
-			scores = null;
-			scoresBytes = 0;
 		}
 	}
 }

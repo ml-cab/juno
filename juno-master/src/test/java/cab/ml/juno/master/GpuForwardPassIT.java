@@ -41,7 +41,8 @@ import cab.ml.juno.tokenizer.GgufTokenizer;
  * <li>hidden state: cosine similarity, and relative L2 error
  * {@code ||gpu - cpu|| / ||cpu||};</li>
  * <li>logits: the same top-1 token, top-5 overlap, and relative L2 error;</li>
- * <li>generation: a greedy decode that must produce the same tokens.</li>
+ * <li>generation: a teacher-forced decode (the GPU run fed the CPU's greedy tokens),
+ * every step held to the logits bounds, with top-1 required except at a near-tie.</li>
  * </ul>
  * Each bound was calibrated on the reference host: the measured value, and the
  * value with a deliberately planted fault, are recorded beside it.
@@ -81,6 +82,17 @@ class GpuForwardPassIT {
 	 * 5 and moves relative L2 only from 0.00904 to 0.00912; the top-1 check catches it.)
 	 */
 	private static final int LOGITS_TOP5_OVERLAP_MIN = 4;
+
+	/**
+	 * Teacher-forced decode: the CPU's top-two logit gap below which a step's top-1 is
+	 * a near-tie and is not required to agree (relative L2 and top-5 still apply at
+	 * every step). A flip needs the errors on the two candidates to add up to the gap.
+	 * Measured largest logit error per step 0.18 to 0.41 (tinyllama) and 0.08 to 0.12
+	 * (mistral-7b), so at 1.0 a flip is beyond any measured error. Measured: tinyllama
+	 * flips at step 13, CPU gap 0.123; nothing flips on mistral-7b. Top-1 is held at 6
+	 * of 16 steps on tinyllama and 9 of 16 on mistral-7b.
+	 */
+	private static final double NEAR_TIE_MARGIN = 1.0;
 
 	private static GpuContext gpuCtx;
 	private static Path modelPath;
@@ -180,27 +192,45 @@ class GpuForwardPassIT {
 	}
 
 	@Test
-	@DisplayName("greedy decode over the whole model produces the same tokens on GPU and CPU")
+	@DisplayName("teacher-forced decode over the whole model: every step's logits agree on GPU and CPU")
 	void greedy_decode_agrees() throws Exception {
 		ShardContext ctx = wholeModel();
 		int[] prompt = tokenizer.encode(PROMPT);
-		int[] cpuTokens;
-		int[] gpuTokens;
+		int[] tokens = new int[GREEDY_STEPS];
+		float[][] cpuLogits;
+		float[][] gpuLogits;
 		ForwardPassHandler cpu = LlamaTransformerHandler.load(modelPath, ctx);
 		try {
-			cpuTokens = greedy(cpu, ctx, prompt, "it-g-cpu");
+			cpuLogits = decode(cpu, ctx, prompt, tokens, true, "it-g-cpu");
 		} finally {
 			cpu.releaseGpuResources();
 		}
+		// The GPU run is fed the CPU's greedy tokens, so both see the same sequence and
+		// a near-tie decided differently at one step cannot change every later step.
 		ForwardPassHandler gpu = LlamaTransformerHandler.load(modelPath, ctx, new CudaMatVec(gpuCtx));
 		try {
-			gpuTokens = greedy(gpu, ctx, prompt, "it-g-gpu");
+			gpuLogits = decode(gpu, ctx, prompt, tokens, false, "it-g-gpu");
 		} finally {
 			gpu.releaseGpuResources();
 		}
-		System.out.println("GPU-IT greedy cpu=" + Arrays.toString(cpuTokens) + " gpu=" + Arrays.toString(gpuTokens));
-		// Measured: identical over all 16 steps on tinyllama and mistral-7b.
-		assertThat(gpuTokens).as("greedy tokens GPU vs CPU after \"" + PROMPT + "\"").containsExactly(cpuTokens);
+		System.out.println("GPU-IT teacher-forced tokens=" + Arrays.toString(tokens));
+		for (int s = 0; s < GREEDY_STEPS; s++) {
+			float[] c = cpuLogits[s];
+			float[] g = gpuLogits[s];
+			double rel = relativeL2(g, c);
+			int overlap = topKOverlap(g, c, 5);
+			double margin = topTwoMargin(c);
+			System.out.printf(Locale.ROOT,
+					"GPU-IT step %2d: top1 cpu=%d gpu=%d cpuMargin=%.4f maxAbs=%.4f top5overlap=%d relL2=%.6f%n", s,
+					argmax(c), argmax(g), margin, maxAbsDiff(g, c), overlap, rel);
+			assertThat(rel).as("step %d: logits, relative L2 error GPU vs CPU", s)
+					.isLessThanOrEqualTo(LOGITS_REL_L2_MAX);
+			assertThat(overlap).as("step %d: top-5 overlap GPU vs CPU", s)
+					.isGreaterThanOrEqualTo(LOGITS_TOP5_OVERLAP_MIN);
+			if (margin >= NEAR_TIE_MARGIN)
+				assertThat(argmax(g)).as("step %d: top-1 token GPU vs CPU (CPU margin %.4f)", s, margin)
+						.isEqualTo(argmax(c));
+		}
 	}
 
 	@Test
@@ -263,9 +293,15 @@ class GpuForwardPassIT {
 				cfg.numHeads());
 	}
 
-	/** Feeds the prompt one position at a time, then decodes {@link #GREEDY_STEPS} tokens by argmax. */
-	private static int[] greedy(ForwardPassHandler h, ShardContext ctx, int[] prompt, String kv) {
-		int[] out = new int[GREEDY_STEPS];
+	/**
+	 * Feeds the prompt one position at a time, then {@link #GREEDY_STEPS} decode
+	 * steps, and returns the logits each step's token is chosen from. With
+	 * {@code choose} the token is the argmax and is written to {@code tokens};
+	 * otherwise {@code tokens} is fed as given (teacher forcing).
+	 */
+	private static float[][] decode(ForwardPassHandler h, ShardContext ctx, int[] prompt, int[] tokens,
+			boolean choose, String kv) {
+		float[][] steps = new float[GREEDY_STEPS][];
 		int[] one = new int[1];
 		float[] logits = null;
 		int pos = 0;
@@ -274,12 +310,28 @@ class GpuForwardPassIT {
 			logits = h.forward(ForwardRequest.withTokens(kv, one, pos++), ctx).logits();
 		}
 		for (int s = 0; s < GREEDY_STEPS; s++) {
-			out[s] = argmax(logits);
-			one[0] = out[s];
+			steps[s] = logits.clone();
+			if (choose)
+				tokens[s] = argmax(logits);
+			one[0] = tokens[s];
 			logits = h.forward(ForwardRequest.withTokens(kv, one, pos++), ctx).logits();
 		}
 		h.evict(kv);
-		return out;
+		return steps;
+	}
+
+	/** The gap between the largest and second-largest logit. */
+	static double topTwoMargin(float[] a) {
+		float first = Float.NEGATIVE_INFINITY, second = Float.NEGATIVE_INFINITY;
+		for (float v : a) {
+			if (v > first) {
+				second = first;
+				first = v;
+			} else if (v > second) {
+				second = v;
+			}
+		}
+		return (double) first - second;
 	}
 
 	static double cosine(float[] a, float[] b) {

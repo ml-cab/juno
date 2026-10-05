@@ -1,5 +1,37 @@
 ## Status 
 
+**Session 111** — GPU attention streams the keys: no score buffer, 10x to 17x faster on a 2048-token prompt
+
+- **New GPU attention kernel.** Attention on the GPU no longer writes out a full row of scores per query
+  and head. The new kernel reads the cached keys and values in tiles through on-chip memory and keeps a
+  running maximum, sum and output per query row (an online softmax). Up to 32 rows of a prefill window share
+  each tile they read, and a single decode row spreads its keys over the whole block. On a 2048-token prompt
+  (GTX 1080, one unpinned reading per model) attention per prefill window fell from 4.5 s to 0.29 s on
+  TinyLlama, from 19.3 s to 1.14 s on Mistral 7B and from 19.9 s to 1.97 s on Phi-3.5-mini. Prefill of the
+  whole prompt fell from 5.1 s to 0.86 s, 23.2 s to 4.4 s and 24.3 s to 6.3 s.
+- **Device memory for attention no longer grows with the context.** The old kernel held
+  `rows x heads x context` floats per call: 257 MiB for a 64-token window at 32768 tokens, 544 MiB for a
+  2048-token window on TinyLlama. The new one needs only the query and output rows (1 MiB and 32 MiB). The
+  prefill window's device footprint, which sizes the default prefill chunk and the memory kept free after
+  the weights upload, drops the scores term with it.
+- **Closer to exact attention.** Against a double-precision reference over the same FP16 cache, the new
+  kernel's error is 1.4x to 5x lower than the old kernel's and than the CPU path's. Greedy output with GPU
+  attention on still parts from GPU attention off after enough tokens, as before, at different steps:
+  TinyLlama 4 of 6 test prompts identical over 64 tokens (was 3), Qwen3-1.7B 3 of 6 with later divergence,
+  Phi-3.5-mini 4 of 6 with earlier divergence (steps 13 and 19, was 37 and 40).
+- The kernel takes a per-call attention window (attend over the last N keys only; off by default) for
+  sliding-window models. Head widths must be a multiple of 4, up to 256 (every supported model); any other
+  width keeps attention on the CPU.
+- Covered by the GPU test `GqaAttentionTiledTest`: 2048-token windows, a decode row at 32768 tokens, head
+  widths 64 to 256, windows off a tile boundary, the attention window, and a device-scratch check that fails
+  on the old kernel.
+- **The GPU attention handler test now checks the kernel, not the scalar path's rounding order.** On real
+  Phi-3.5-mini and Qwen3-1.7B runs, every kernel launch (prefill window, single decode, multi-stream
+  decode) is held to the CPU attention over the same FP16 rows it read: worst row 3.5e-6 relative L2,
+  bound 1e-3; one head zeroed reads 0.71 to 0.91. The logits bound against `--gpu-attention off` stays at
+  the prefill windows; at the decode sites the difference is the FP16 cache's rounding carried through
+  the model, and it is now reported rather than bounded.
+
 **Session 110** — Comparison runs record the GPU clock while each measured request runs
 
 - **The comparison harness samples the GPU during the measured request.** A 2048-token prefill

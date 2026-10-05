@@ -50,11 +50,11 @@ final class CudaGqaAttention {
 	private final DeviceScratchPool<GqaScratch> scratch;
 
 	private static final class GqaScratch {
-		MemorySegment dQ, dOut, dScores, dKPtrs, dVPtrs, dSeqLens;
-		long qBytes, outBytes, scoresBytes, ptrBytes, seqLensBytes;
+		MemorySegment dQ, dOut, dKPtrs, dVPtrs, dSeqLens;
+		long qBytes, outBytes, ptrBytes, seqLensBytes;
 
 		long deviceBytes() {
-			return qBytes + outBytes + scoresBytes + 2 * ptrBytes + seqLensBytes;
+			return qBytes + outBytes + 2 * ptrBytes + seqLensBytes;
 		}
 	}
 
@@ -67,12 +67,11 @@ final class CudaGqaAttention {
 	private void free(GqaScratch s) {
 		gpu.deviceFree(s.dQ);
 		gpu.deviceFree(s.dOut);
-		gpu.deviceFree(s.dScores);
 		gpu.deviceFree(s.dKPtrs);
 		gpu.deviceFree(s.dVPtrs);
 		gpu.deviceFree(s.dSeqLens);
-		s.dQ = s.dOut = s.dScores = s.dKPtrs = s.dVPtrs = s.dSeqLens = null;
-		s.qBytes = s.outBytes = s.scoresBytes = s.ptrBytes = s.seqLensBytes = 0L;
+		s.dQ = s.dOut = s.dKPtrs = s.dVPtrs = s.dSeqLens = null;
+		s.qBytes = s.outBytes = s.ptrBytes = s.seqLensBytes = 0L;
 	}
 
 	/** Frees the pooled device scratch. A call after this still works and frees its own. */
@@ -105,31 +104,44 @@ final class CudaGqaAttention {
 	 * {@code --parallel} decode streams) — the kernel takes one device pointer
 	 * per {@code b} either way.
 	 *
-	 * @return {@code false} (writing nothing) if the kernel failed to load —
-	 *         caller must fall back to the scalar {@link GqaMath} path
+	 * @return {@code false} (writing nothing) if the kernel failed to load or does
+	 *         not run heads of {@code headDim} values — caller must fall back to the
+	 *         scalar {@link GqaMath} path
 	 */
 	boolean attendBatched(DeviceKvCache[] kv, float[][] qBatch, int[] seqLens, float[][] outBatch,
 			int numHeads, int headDim, int gqaRatio, int kvDim) {
+		return attendBatched(kv, qBatch, seqLens, outBatch, numHeads, headDim, gqaRatio, kvDim, 0);
+	}
+
+	/**
+	 * As {@link #attendBatched(DeviceKvCache[], float[][], int[], float[][], int, int, int, int)},
+	 * with row {@code b} attending over its last {@code window} keys only
+	 * ({@code 0}: no window).
+	 */
+	boolean attendBatched(DeviceKvCache[] kv, float[][] qBatch, int[] seqLens, float[][] outBatch,
+			int numHeads, int headDim, int gqaRatio, int kvDim, int window) {
+		if (!GqaAttentionKernel.supportsHeadDim(headDim))
+			return false;
 		GqaAttentionKernel kernel = GqaAttentionKernel.tryLoad();
 		if (kernel == null)
 			return false;
 
 		int batch = qBatch.length;
 		int rowDim = numHeads * headDim;
-		int maxSeqLen = 1;
-		for (int s : seqLens)
-			maxSeqLen = Math.max(maxSeqLen, s);
+		boolean oneCache = true;
+		for (int b = 1; b < batch && oneCache; b++)
+			oneCache = kv[b] == kv[0];
 
 		long qBytes = (long) batch * rowDim * Float.BYTES;
 		long outBytes = qBytes;
-		long scoresBytes = (long) batch * numHeads * maxSeqLen * Float.BYTES;
 		long ptrBytes = (long) batch * ADDRESS.byteSize();
 		long seqLensBytes = (long) batch * Integer.BYTES;
 
 		GqaScratch s = scratch.acquire();
 		try {
 			return attendWith(s, kernel, kv, qBatch, seqLens, outBatch, batch, numHeads, headDim, gqaRatio, kvDim,
-					rowDim, maxSeqLen, qBytes, outBytes, scoresBytes, ptrBytes, seqLensBytes);
+					rowDim, GqaAttentionKernel.rowsPerBlock(oneCache, batch), window, qBytes, outBytes, ptrBytes,
+					seqLensBytes);
 		} finally {
 			scratch.release(s);
 		}
@@ -137,7 +149,7 @@ final class CudaGqaAttention {
 
 	private boolean attendWith(GqaScratch s, GqaAttentionKernel kernel, DeviceKvCache[] kv, float[][] qBatch,
 			int[] seqLens, float[][] outBatch, int batch, int numHeads, int headDim, int gqaRatio, int kvDim,
-			int rowDim, int maxSeqLen, long qBytes, long outBytes, long scoresBytes, long ptrBytes,
+			int rowDim, int rowsPerBlock, int window, long qBytes, long outBytes, long ptrBytes,
 			long seqLensBytes) {
 		int dev = ctx.deviceIndex();
 		if (s.qBytes < qBytes) {
@@ -149,11 +161,6 @@ final class CudaGqaAttention {
 			gpu.deviceFree(s.dOut);
 			s.dOut = gpu.deviceMalloc(dev, outBytes);
 			s.outBytes = outBytes;
-		}
-		if (s.scoresBytes < scoresBytes) {
-			gpu.deviceFree(s.dScores);
-			s.dScores = gpu.deviceMalloc(dev, scoresBytes);
-			s.scoresBytes = scoresBytes;
 		}
 		if (s.ptrBytes < ptrBytes) {
 			gpu.deviceFree(s.dKPtrs);
@@ -189,8 +196,8 @@ final class CudaGqaAttention {
 			DeviceStaging.copy(gpu, s.dSeqLens, hostSeqLens, seqLensBytes, GpuBindings.H2D, batch, "memcpy(gqa seqLens H2D)");
 
 			long t0 = DeviceComputeClock.start(gpu, batch);
-			kernel.launch(s.dQ, s.dKPtrs, s.dVPtrs, s.dSeqLens, s.dScores, s.dOut,
-					batch, numHeads, gqaRatio, headDim, kvDim, maxSeqLen, null);
+			kernel.launch(s.dQ, s.dKPtrs, s.dVPtrs, s.dSeqLens, s.dOut,
+					batch, numHeads, gqaRatio, headDim, kvDim, rowsPerBlock, window, null);
 			DeviceComputeClock.done(gpu, DeviceComputeEvent.GQA_ATTENTION, batch, t0);
 
 			MemorySegment hostOut = staging.allocate(outBytes);

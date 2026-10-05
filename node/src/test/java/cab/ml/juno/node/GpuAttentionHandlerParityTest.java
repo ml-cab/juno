@@ -43,14 +43,27 @@ import org.junit.jupiter.params.provider.ValueSource;
  * positions. It also checks that the handler reports the kernel truthfully and
  * that {@code evict} frees every device KV byte.
  *
- * <p>Bound: logits relative L2 at most {@value #LOGITS_REL_L2_MAX} and the same
- * top-1 token at every step. That is the bound {@code GpuForwardPassIT} holds the
- * whole GPU path to against the CPU; attention alone must not need more.
- * Calibrated on the reference host (GTX 1080): measured 0.00012 to 0.0099 on
- * Phi-3.5-mini and 0.00029 to 0.0149 on Qwen3-1.7B across the five call sites,
- * the largest at the second multi-decode stream. Planted fault (one head's output
- * zeroed after every kernel launch): 0.153 and 0.090 at the first prefill window,
- * with top-1 unchanged, so the L2 bound is the check that catches it.
+ * <p>Two checks, each measuring one thing (restated 2026-10-05; until then every
+ * site held the logits bound below, which compared the kernel's rounding order with
+ * the scalar path's as much as it checked the kernel):
+ * <ul>
+ * <li><b>The kernel, at every launch.</b> A {@link GpuAttentionMirror.DispatchObserver}
+ * sees each launch's queries, lengths, mirrors and output, and the output is held to
+ * {@link GqaMath#attend} over the same FP16 rows read back from the mirror: relative
+ * L2 at most {@value #KERNEL_REL_L2_MAX} per row, on every launch of every call site
+ * kind (prefill window, single decode, multi-stream decode), each of which must be
+ * seen. This isolates the kernel from the FP16 rounding of the cache, which is the
+ * same on both sides. Measured 8.3e-7 to 3.5e-6; planted fault (below) 0.71 and 0.91.</li>
+ * <li><b>The integration, at the prefill windows.</b> Logits relative L2 at most
+ * {@value #LOGITS_REL_L2_MAX} and the same top-1 token, kernel on against off. That
+ * is the bound {@code GpuForwardPassIT} holds the whole GPU path to against the CPU.
+ * Measured 0.0001 to 0.0006 there; planted fault (one head's output zeroed after
+ * every launch) 0.153 and 0.090 at the first window, top-1 unchanged.</li>
+ * </ul>
+ * The three decode sites' logits are printed, not bounded. There, on against off is
+ * dominated by the FP16 cache's rounding amplified through the model, and it moved from
+ * 0.0149 to between 0.0223 and 0.0368 on Qwen3-1.7B's second stream across attention
+ * kernels whose own error is about 1e-6, so a bound there passes or fails by draw.
  *
  * <p>Both runs multiply prefill windows on the FP16 dequant route
  * ({@link CudaMatVec#dequantizeBatchedKQuant}), as the calibration did. On the
@@ -66,6 +79,15 @@ import org.junit.jupiter.params.provider.ValueSource;
 class GpuAttentionHandlerParityTest {
 
 	private static final double LOGITS_REL_L2_MAX = 0.025;
+	/** The first two sites are prefill windows, where the logits bound applies. */
+	private static final int PREFILL_SITES = 2;
+	/**
+	 * Kernel output against {@link GqaMath#attend} over the same FP16 rows, worst row.
+	 * Measured on the reference host: 8.3e-7 to 3.5e-6 across all three call-site kinds
+	 * on both models. Planted fault (one head's output zeroed after every launch): 0.91
+	 * (Phi-3.5-mini) and 0.71 (Qwen3-1.7B) at the first prefill window.
+	 */
+	private static final double KERNEL_REL_L2_MAX = 1e-3;
 	private static final int PROMPT_A = 48;
 	private static final int PROMPT_B = 24;
 	/** Allocator granularity and driver bookkeeping; far below one layer of either model. */
@@ -96,7 +118,7 @@ class GpuAttentionHandlerParityTest {
 
 	@ParameterizedTest(name = "{0}")
 	@ValueSource(strings = { "Phi-3.5-mini-instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf" })
-	@DisplayName("kernel on matches kernel off at every call site, reports itself, and frees its mirror")
+	@DisplayName("kernel matches the oracle at every launch, prefill logits match kernel off, reports itself, frees its mirror")
 	void kernel_matches_scalar_attention(String file) throws Exception {
 		Path model = model(file);
 		assumeTrue(model.toFile().exists(), "Skipping - model not found: " + model);
@@ -124,12 +146,15 @@ class GpuAttentionHandlerParityTest {
 		onBackend.dequantizeBatchedKQuant(true);
 		ForwardPassHandler on = ForwardPassHandlerLoader.load(model, shard, onBackend);
 		float[][] got;
+		KernelCheck check = new KernelCheck();
+		GpuAttentionMirror.observer = check;
 		try {
 			assertThat(on.gpuAttentionActive()).as("the default must activate the kernel on CUDA").isTrue();
 			long before = DeviceKvCache.allocatedBytes();
 			got = run(on, shard, before);
 			assertThat(DeviceKvCache.allocatedBytes()).as("evict frees every device KV byte").isEqualTo(before);
 		} finally {
+			GpuAttentionMirror.observer = null;
 			on.releaseGpuResources();
 			onBackend.releaseScratch();
 		}
@@ -138,12 +163,67 @@ class GpuAttentionHandlerParityTest {
 
 		String[] site = { "prefill window A", "prefill window B", "single decode", "multi-decode A",
 				"multi-decode B" };
+		for (Kind kind : Kind.values()) {
+			System.out.printf(Locale.ROOT, "GPU-ATTN-KERNEL %s %-12s launches=%d rows=%d max-relL2=%.3e%n", file, kind,
+					check.launches[kind.ordinal()], check.rows[kind.ordinal()], check.maxRel[kind.ordinal()]);
+			assertThat(check.launches[kind.ordinal()]).as(kind + ": launches seen").isPositive();
+			assertThat(check.maxRel[kind.ordinal()]).as(kind + ": kernel against GqaMath over the mirror's rows")
+					.isLessThanOrEqualTo(KERNEL_REL_L2_MAX);
+		}
 		for (int i = 0; i < ref.length; i++) {
 			double rel = relativeL2(got[i], ref[i]);
-			System.out.printf(Locale.ROOT, "GPU-ATTN %s %-16s top1 off=%d on=%d relL2=%.6f%n", file, site[i],
-					argmax(ref[i]), argmax(got[i]), rel);
-			assertThat(argmax(got[i])).as(site[i] + ": top-1 token, kernel on vs off").isEqualTo(argmax(ref[i]));
-			assertThat(rel).as(site[i] + ": logits relative L2, kernel on vs off").isLessThanOrEqualTo(LOGITS_REL_L2_MAX);
+			System.out.printf(Locale.ROOT, "GPU-ATTN %s %-16s top1 off=%d on=%d relL2=%.6f%s%n", file, site[i],
+					argmax(ref[i]), argmax(got[i]), rel, i < PREFILL_SITES ? "" : " (reported)");
+			if (i < PREFILL_SITES) {
+				assertThat(argmax(got[i])).as(site[i] + ": top-1 token, kernel on vs off").isEqualTo(argmax(ref[i]));
+				assertThat(rel).as(site[i] + ": logits relative L2, kernel on vs off")
+						.isLessThanOrEqualTo(LOGITS_REL_L2_MAX);
+			}
+		}
+	}
+
+	private enum Kind {
+		WINDOW, DECODE, STREAMS
+	}
+
+	/** Holds every launch's output to {@link GqaMath#attend} over the rows the kernel read. */
+	private static final class KernelCheck implements GpuAttentionMirror.DispatchObserver {
+		final int[] launches = new int[Kind.values().length];
+		final long[] rows = new long[Kind.values().length];
+		final double[] maxRel = new double[Kind.values().length];
+
+		@Override
+		public void dispatched(DeviceKvCache[] mirrors, float[][] q, int[] seqLens, float[][] out, int numHeads,
+				int headDim, int gqaRatio, int kvDim) {
+			boolean oneCache = true;
+			for (DeviceKvCache m : mirrors)
+				oneCache &= m == mirrors[0];
+			Kind kind = !oneCache ? Kind.STREAMS : q.length == 1 ? Kind.DECODE : Kind.WINDOW;
+			int k = kind.ordinal();
+			launches[k]++;
+			DeviceKvCache cached = null;
+			float[] kRows = null;
+			float[] vRows = null;
+			for (int b = 0; b < q.length; b++) {
+				if (mirrors[b] != cached || kRows.length < seqLens[b] * kvDim) {
+					int len = oneCache ? max(seqLens) : seqLens[b];
+					cached = mirrors[b];
+					kRows = cached.downloadK(len);
+					vRows = cached.downloadV(len);
+				}
+				float[] expected = new float[numHeads * headDim];
+				GqaMath.attend(q[b], kRows, vRows, seqLens[b], expected, new float[seqLens[b]], numHeads, headDim,
+						gqaRatio, kvDim);
+				maxRel[k] = Math.max(maxRel[k], relativeL2(out[b], expected));
+				rows[k]++;
+			}
+		}
+
+		private static int max(int[] v) {
+			int m = 0;
+			for (int x : v)
+				m = Math.max(m, x);
+			return m;
 		}
 	}
 

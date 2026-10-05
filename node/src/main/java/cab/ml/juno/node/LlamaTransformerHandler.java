@@ -468,7 +468,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	@Override
 	public long prefillWindowDeviceBytes(int rows) {
 		PrefillWindowRegion region = prefillRegion;
-		return region == null ? 0L : region.windowDeviceBytes(rows, rows);
+		return region == null ? 0L : region.windowDeviceBytes(rows);
 	}
 
 	/**
@@ -856,7 +856,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	private long inferenceReserveBytes(int layerCount, boolean packedKQuant) {
 		long window = PrefillWindowFootprint.bytes(prefillRegionShape(), false,
-				DeviceScratchBudget.RESERVED_WINDOW_ROWS, DeviceKvCache.INITIAL_SEQ_CAPACITY);
+				DeviceScratchBudget.RESERVED_WINDOW_ROWS);
 		long dequant = packedKQuant && KQuantGemmKernel.tryLoad() == null
 				? DeviceScratchBudget.dequantScratchBytes(cfg.hiddenDim(), cfg.kvDim(), cfg.intermediateSize())
 				: 0L;

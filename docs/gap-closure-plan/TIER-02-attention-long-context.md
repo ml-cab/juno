@@ -1,11 +1,14 @@
 # Tier 02: Attention & long context
 
-Status: **in progress** (2026-10-05). Implementation steps 1 and 2 done: the plan check passes and the
-2048-over-512 milestone is decomposed. Owner decisions taken the same day: the milestone restated as a
-clock-normalised attention speedup at 2048 (`>= 6.0x`), Mistral 7B's non-attention growth attributed to the
-card's thermal clock, and the comparison harness records the in-window GPU clock. Next: implementation step 3
-(oracle tests for the scalar attention path). Open with the owner: whether the 512-over-128 row gets the same
-restatement.
+Status: **in progress** (2026-10-05). Implementation steps 1 to 4 done: the plan check passes, the
+2048-over-512 milestone is decomposed, the scalar attention oracle is held to an independent reference
+(`GqaMathOracleTest`), and the tiled online-softmax kernel replaces the full-materialization one on every
+CUDA attention path (validated against the oracle from one key to `MAX_SEQ_LEN`; no score scratch; per-layer
+window parameter; indicative 2048-token attention 10x to 17x faster, `docs/perf-compare/20261005T043507Z-tiled-attention-2048`).
+Decisions 4 and 4b taken (a) the same day: the attention checks restated as kernel properties and
+`GpuForwardPassIT`'s greedy check as a teacher-forced decode; every `-Pgpu` IT passes (10 of 10). Open with the
+owner: whether the 512-over-128 row gets the 2048 row's restatement. Next: implementation step 5 (scope item 4,
+attention inside the decode residency region).
 
 **Split 2026-10-04 (plan review): read this first.** This tier held nine items, and under execution
 rule 1 every later tier, including every remaining GPU throughput lever, waited on all of them. Its
@@ -193,6 +196,12 @@ The Phi-3.5 LongRoPE defect found on 2026-09-28 and its remainder are recorded i
 4. Design and implement the tiled/online-softmax kernel using Tier 01's residency primitive;
    validate numerically against the oracle at multiple sequence lengths, including lengths that
    would have overflowed the old kernel's scratch buffer.
+   *Corrected 2026-10-05 (step 3): the old kernel has no fixed scratch buffer to overflow.*
+   `CudaGqaAttention.attendBatched` sizes its scores scratch per call to `B x numHeads x maxSeqLen`
+   floats, so at long context it fails on the device allocation instead: a 2048-row window at 2048 tokens
+   on a 32-head model needs 512 MiB, and a 512-row window at `MAX_SEQ_LEN` (32768) needs 2 GiB. Read
+   "would have overflowed" as "whose scores scratch would not fit next to the model on this host's 8 GiB
+   card"; the peak-scratch thresholds under "Tests to write/upgrade" measure exactly that.
 5. Scope items 4, 8, 5 and 6, in that order: attention inside the decode residency region, then the
    rest of the layer and the Phi-3 and Qwen3 handlers (item 8), then the `CudaGraphSession`
    measurement and its wire-or-delete decision, then the two on/off sweeps and the flag default put to
@@ -308,9 +317,16 @@ budget. No download is needed.
       `20261005T005334Z` (2048); [`milestone-decomposition.md`](../perf-compare/20261005T003146Z/milestone-decomposition.md).
       Escalation recorded below (Mistral 7B: 4.86x required, non-attention +19.2% per token); the owner's
       decision is open.
-- [ ] Tiled attention kernel numerically matches the CPU oracle at all tested sequence lengths and
+- [x] Tiled attention kernel numerically matches the CPU oracle at all tested sequence lengths and
       reduces peak GPU memory at long context vs. the old full-materialization kernel (measured), and
       takes the per-layer window parameter Tier 02B needs.
+      *2026-10-05 (step 4):* **Evidence (not published):** `GqaAttentionTiledTest` (8 cases, `@Tag("gpu")`)
+      and `GqaAttentionKernelParityTest`, against `GqaMath` from 1 key to 32768, head widths 64/80/96/128/256,
+      2048-row windows; peak scratch measured on both kernels (old: exactly `rows x heads x seqLen` floats
+      plus the rows, 257 MiB at 64 rows x 32768; new: 1.0 MiB, flat from 1024 to 32768); `window` argument
+      on the kernel, `GqaAttentionKernel.launch` and `CudaGqaAttention.attendBatched`, with window 0
+      bit-identical to an unbounding window. The greedy-divergence re-characterisation scope item 1 asks for
+      was run; its result is decision 4 in the step 4 record.
 - [ ] Attention inside the decode residency region (scope item 4): k and v appended to the device
       mirror and attention read from the region, one download of the attention output per layer;
       bit-identical to the op-at-a-time path by test; greedy output identical on/off on tinyllama,
@@ -340,6 +356,10 @@ budget. No download is needed.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, both memory thresholds above met, Juno t/s >= 0.95x the pre-tier build, and
       the standing CPU and allocation gate met.
+      *2026-10-05 (step 4): the two memory thresholds are met by test (peak scratch -99.6% at 64 rows x
+      32768 and -94.1% at a 2048-row window; the context-dependent part does not grow at all), see the step 4
+      record; the 0.95x A/B, the standing CPU and allocation gate and the long-context microbenchmark's
+      publication are owed at the tier's close.*
 - [ ] Milestone (pp ratio at 512 over 128 >= 1.00 on every sweep model, moved here from Tier 01B on
       2026-10-01) reported met or missed with its number, and the attention share of a 512-token window
       per model read against implementation step 2's figures.
@@ -488,3 +508,270 @@ called clock event reason `0x4` the applications-clock setting; it is the softwa
 applications-clock setting). Both corrected 2026-10-05. That note's medians use the earlier
 utilization-over-50% filter, which its method paragraph states; its 2048 windows run at near-full
 utilization, so the reading does not change.
+
+### 2026-10-05: implementation step 3 (the scalar attention oracle)
+
+**What the oracle is.** `GqaMath.attend` is the method every GPU attention parity test compares the kernel
+against (`GqaAttentionKernelParityTest`, `GqaAttentionReproducibilityTest`,
+`LlamaTransformerHandlerGpuAttentionLiveTest`), and `LlamaTransformerHandler`'s CPU path calls it. The other
+handlers keep private copies (`Phi2TransformerHandler.gqa`, `Phi3TransformerHandler.gqaInto`/`gqa`,
+`Qwen3TransformerHandler.gqaInto`/`gqa`, `Qwen3MoeTransformerHandler.gqaInto`, and the two LoRA-trainable
+handlers); read on 2026-10-05, each has the same loop order and calls the same
+`LlamaTransformerHandler.softmax`, so the oracle stands for all of them by identical arithmetic, not by a
+shared call.
+
+**Coverage before this step.** None on the CPU. The oracle ran only inside `@Tag("gpu")` tests, as the
+expected side of a comparison with a kernel written to the same algorithm, so a defect shared by both (a
+wrong head mapping, a wrong scale) passed them. Nothing checked it at long context except as the GPU
+parity test's reference at 8192 tokens.
+
+**Test added: `node/src/test/java/cab/ml/juno/node/GqaMathOracleTest.java`** (CPU only, untagged, runs in
+the normal `mvn test -pl node`). Seven cases:
+
+| Case | What it holds |
+|---|---|
+| `matchesReferenceAcrossShapesAndLengths` | against an attention written from its definition in double, sharing no code with `GqaMath`: five head shapes (TinyLlama 32/4/64, Mistral 7B 32/8/128, Qwen2.5-3B 16/2/128, Phi-3.5-mini plain multi-head 32/32/96, Qwen3-1.7B 16/8/128) at 1, 2, 17, 128, 513 and 2048 keys, each with a flat and a peaked query (scale 1 and 6) |
+| `matchesReferenceAtMaxSeqLen` | the same at `DenseKvTensor.MAX_SEQ_LEN` (32768 keys), TinyLlama shape, flat and peaked |
+| `largeLogitsAreStable` | logits in the thousands: output finite and within tolerance (the max subtraction) |
+| `singleKeyReturnsValueRow` | one key: every head returns its KV head's value row bit for bit |
+| `zeroQueryAveragesValues` | equal scores: the output is the mean value row |
+| `groupedHeadsReadOnlyTheirKvHead` | changing one KV head changes exactly the query heads `h / gqaRatio` maps to it and leaves the others bit-identical |
+| `rowsPastSeqLenAreIgnored` | NaN in the K/V rows past `seqLen`, in `out` and in the scores scratch: output bit-identical to the unpadded call |
+
+Tolerance is absolute on value rows in [-1, 1]: `2e-6 + 2e-6 x sqrt(seqLen)` (about 3.6e-4 at 32768),
+covering float rounding in the dot products and in the two length-long float sums. The tiled kernel's
+oracle test in step 4 compares against `GqaMath` at the same lengths, so the oracle's own error is bounded
+at every length the kernel is tested at.
+
+**Seen failing?** No: the code under test already exists, so this is a regression test, and it passed on
+its first run. To show it can fail for the right reason, four defects were put into the oracle one at a
+time, the class re-run, and the file restored (`git diff` empty afterwards):
+
+| Injected defect | Cases failing (of 7) |
+|---|---|
+| grouped-query mapping `h % numKvHeads` instead of `h / gqaRatio` | 6 |
+| scale `1 / headDim` instead of `1 / sqrt(headDim)` | 3 |
+| last key dropped from the weighted value sum | 4 |
+| softmax without the max subtraction | 1 (`largeLogitsAreStable`) |
+
+| Command | Result |
+|---|---|
+| `scripts/performance-tests/check-plan-thresholds.sh` | pass (21 tier files) |
+| `mvn -q test -pl node -Dtest=GqaMathOracleTest` | pass, 7 tests, 4.2 s |
+| the same, once per injected defect | fail, as tabled above |
+
+**Plan correction.** Implementation step 4 said the tiled kernel is validated "including lengths that would
+have overflowed the old kernel's scratch buffer". The old kernel has no fixed buffer; its scratch is sized
+per call and fails on the device allocation at long context. Corrected in place in step 4, dated.
+
+**Not done here, by design.** No windowed oracle: the per-layer window parameter's test in this tier is
+the kernel with "no window" against the kernel unwindowed, which needs no oracle; the windowed case belongs
+to Tier 02B item 2, where the oracle is `GqaMath.attend` over the last `window` rows. No CHANGELOG entry:
+this step adds a test only and ships nothing.
+
+**Out-of-tier changes.** None.
+
+### 2026-10-05: implementation step 4 (the tiled online-softmax kernel)
+
+**Plan versus code, re-verified first.** `gqa_attention.cu` was the one-block-per-(row, head) kernel with a
+`B x numHeads x seqLen` float scores scratch; both call sites launched it with that scratch,
+`CudaGqaAttention.attendBatched` (decode, `--parallel` multi-decode, Phi-3 and Qwen3 prefill) and
+`PrefillWindowRegion.attendInside` (the LLaMA-family prefill region), and `PrefillWindowFootprint` budgeted the
+region's scores into the upload reserve and the adaptive prefill chunk. Every claim step 4 depends on held.
+
+**Design.** `gqa_attention.cu` is rewritten in place (same file, same `GqaAttentionKernel`/`CudaGqaAttention`
+entry points, so every caller keeps its call). A block of 128 threads is 32 slots of 4 lanes; it owns one
+query head and a tile of up to 32 consecutive query rows that share one KV cache. K and V are staged through
+shared memory in 32-key tiles (16 for heads over 128), converted from FP16 to FP32 once per block, and each
+slot keeps a running maximum, running sum and rescaled output accumulator in registers (online softmax), so
+no score row exists anywhere. At decode width (one row, or `--parallel` streams over different caches) the
+32 slots split one row's keys and are merged in shared memory at the end. `rowsPerBlock` is chosen by the
+caller (`GqaAttentionKernel.rowsPerBlock(oneCache, B)`). A `window` argument (0 = none) restricts row `b` to
+its last `window` keys: the parameter Tier 02B item 2 needs. Entries `gqa_attention_d64`, `_d128` and `_d256`
+bound the head width held in registers (no register spills on sm_61); a head width that is not a multiple of
+4 or exceeds 256 keeps the caller on `GqaMath` (`supportsHeadDim`; no supported model has one). The region's
+scores buffer and `PrefillWindowFootprint.scoresBytes` are removed, so a window's footprint no longer depends
+on its context.
+
+**Tests, written first** (README rule 3).
+
+| Test | Seen failing first? | Now |
+|---|---|---|
+| `GqaAttentionTiledTest` (new, `@Tag("gpu")`, 8 cases): 2048-row windows from position 0 (TinyLlama and Mistral 7B shapes); windows off the key-tile boundary at head widths 64, 80, 96, 128, 256; one decode row at 32768 keys; a 64-row window at 8192; five `--parallel` streams of 1 to 4097 keys; window 0 bit-identical to an unbounding window; a window shorter than the context against the oracle over the last rows; device scratch | yes, on the old kernel with only the `window` overload added: the window case (window ignored) and the scratch case (context-dependent scratch doubles with the context). The six oracle-parity cases passed on the old kernel too, so for them this is a regression test of both | pass, 8 of 8 |
+| `PrefillWindowFootprintTest` (changed): no term growing with rows x context | yes (the scores term) | pass, 7 of 7 |
+| `GqaAttentionKernelParityTest`, `GqaAttentionReproducibilityTest` (existing) | n/a | pass |
+
+The scratch case first asserted "doubling the context less than doubles the scratch", and that passed on the
+old kernel, because the fixed query and output rows dilute the ratio. Tightened before the implementation to
+"the scratch beyond the query, output and table rows does not grow with the context", which is stricter than
+the plan's threshold and failed on the old kernel.
+
+**Peak attention scratch, measured on both kernels** (TinyLlama shape, 32 heads; the perf gate's memory
+thresholds):
+
+| Rows x context | Old kernel | New kernel | Change |
+|---|---|---|---|
+| 64 x 1024 | 9,438,464 B | 1,049,856 B | -88.9% |
+| 64 x 32768 | 269,485,312 B | 1,049,856 B | -99.6% |
+| 2048 x 2048 | 570,466,304 B (formula; the old kernel's reading matched it exactly at every measured length) | 33,595,392 B | -94.1% |
+
+Both thresholds are met: >= 80% lower at the longest tested length, and doubling the context leaves the
+context-dependent part unchanged (it is zero).
+
+**Accuracy against exact attention.** A probe (not kept) compared both kernels and `GqaMath` with a
+double-precision attention over the same FP16 K/V (TinyLlama shape, Gaussian data, 10 trials per cell):
+
+| Scores | Keys | New kernel | Old kernel | `GqaMath` |
+|---|---|---|---|---|
+| flat | 25 / 600 / 4000 | 1.6e-7 / 2.2e-7 / 2.9e-7 | 2.2e-7 / 5.3e-7 / 1.2e-6 | 2.3e-7 / 6.5e-7 / 1.5e-6 |
+| peaked (query x 8) | 25 / 600 / 4000 | 2.9e-7 / 4.8e-7 / 6.3e-7 | 5.2e-7 / 1.1e-6 / 1.4e-6 | 5.3e-7 / 1.2e-6 / 2.3e-6 |
+
+(relative L2). The new kernel is 1.4x to 5x closer to exact attention than the old one and than the CPU
+oracle. The old kernel was close to `GqaMath` because it summed in the same order (sequential dot, sequential
+weighted-V sum), not because it was more accurate.
+
+**Indicative speed at 2048 tokens** (unpinned, one repetition, candidate only; published as
+[`20261005T043507Z-tiled-attention-2048`](../perf-compare/20261005T043507Z-tiled-attention-2048/INDEX.md); not
+the milestone reading):
+
+| Model | Attention ms per window, pre-tier / now | Raw | Clock-normalised | Prefill ms, pre-tier / now | pp ratio at 2048, pre-tier / now |
+|---|---|---|---|---|---|
+| tinyllama-1.1b | 4459 / 291 | 15.3x | no pre-tier clock | 5060 / 855 | 0.125x / 0.672x |
+| mistral-7b | 19253 / 1141 | 16.9x | 15.5x | 23226 / 4375 | 0.144x / 0.729x |
+| Phi-3.5-mini | 19900 / 1973 (kernel 1036, copies 250, host 687) | 10.1x | no pre-tier clock | 24334 / 6325 | 0.091x / 0.304x |
+
+Qwen2.5-3B was not read. Two design iterations are behind these numbers: the first version kept the tiles in
+FP16 and converted per row (TinyLlama 3.2x, `target/` only, not published), and the 64-wide variant moved
+TinyLlama from 6.8x to 15.3x (the 128-wide variant needs 211 registers, so 2 blocks per SM). Every model reads
+well above the `>= 6.0x` milestone here; it is scored only by the same-session A/B at the tier's close.
+
+**Regression runs on the final kernel.**
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass |
+| `mvn test -pl node` | 909 run, 0 failures, 44 skipped |
+| `mvn test -pl node -Dgroups=gpu` | 301 run, 2 failures, 7 skipped. The two failures, `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance` (71 MiB reported free on a full device against a 64 MiB bound) and `ResidentActivationTest.openChain_isVisibleToMemGetInfo_andCloseReturnsIt` (free bytes after close 448 KiB lower than before), are device-wide free-VRAM readings; both classes passed alone twice in a row afterwards, and both passed in the first full run on this change. Environment, not this change |
+| `mvn verify -pl juno-master -Pgpu` (after `mvn install -DskipTests`) | 10 run, 1 failure: `GpuForwardPassIT.greedy_decode_agrees` (decision 4). `PrefillRegionGreedyIT` 2 of 2, region greedy identical on 6 of 6 prompts over 64 tokens on TinyLlama and Mistral 7B. `GpuAttentionDivergenceIT` 3 of 3 |
+
+Not run in this step: the 11-module unit reactor (no other module changed), the real-model `ModelLiveRunnerIT`,
+and the smoke scripts. Those belong to the tier's closing matrix (implementation step 6).
+
+**Greedy divergence, re-characterised (scope item 1)** (`GpuAttentionDivergenceIT`, six prompts, 64 greedy
+tokens, kernel on against off; first token equal on every prompt for every model):
+
+| Model | Identical over 64, before / now | First divergent step, before / now |
+|---|---|---|
+| TinyLlama-1.1B | 3 / 4 of 6 | 8, 13, 23 / 8, 23 |
+| Phi-3.5-mini | 4 / 4 of 6 | 37, 40 / 13, 19 |
+| Qwen3-1.7B | 3 / 3 of 6 | 20, 23, 32 / 40, 44, 53 |
+
+**Raised with the owner (2026-10-05): decision 4, three checks the new summation order moves.**
+
+1. `GpuForwardPassIT.greedy_decode_agrees` (TinyLlama, "The capital of France is", 16 greedy tokens, CPU
+   backend against CUDA with GPU attention at its default) now parts at step 13 of 16; the pre-change tree
+   passes it (run on a `git archive` of HEAD, in-reactor).
+2. Phi-3.5-mini's earliest greedy divergence moved from step 37 to 13 (still 4 of 6 identical); Tier 01B's
+   rule for that architecture was "never earlier than the item-0 baseline's earliest divergence" (26).
+   *Corrected 2026-10-05: that rule governed Tier 01B item 6's own change, on TinyLlama and Mistral 7B; it
+   is not a standing rule for Phi-3.5-mini. The earlier divergence is still a change to report.*
+3. `GpuAttentionHandlerParityTest` (logits relative L2 kernel on against off, bound 0.025) passes on the final
+   kernel, but its Qwen3-1.7B multi-decode B site reads 0.0149 (old kernel), 0.0317 (first version of this
+   kernel), 0.0368 (the same with the scale applied after the dot), 0.0223 (final): a site that moves 2.5x
+   between kernels whose own error is about 1e-6 is measuring the FP16 mirror's rounding amplified by the
+   model, so it will pass or fail by draw. The planted-fault reference reads 0.090.
+
+All three compare against the scalar path's rounding (float KV, `GqaMath`'s order), which the old kernel
+reproduced and an online-softmax kernel cannot; the accuracy probe above shows the new kernel is the closer of
+the two to exact attention. Options: (a) restate the three as kernel properties, not order agreement: hold the
+kernel to exact attention over the FP16 mirror (as `GqaAttentionTiledTest` does against `GqaMath`), take this
+step's divergence table as the new characterisation baseline for scope item 1, and have `GpuForwardPassIT`
+compare greedy tokens with GPU attention off (its purpose is the CUDA matmul path; GPU attention has its own
+divergence IT); (b) reproduce the scalar order at decode width (one slot sums every key sequentially), giving up
+the decode split and some accuracy, and accept that prefill windows still differ; (c) keep the checks as they
+are and widen bounds. Recommended: (a).
+
+**Out-of-tier changes.** None. The removal of the scores term from `PrefillWindowFootprint` is this tier's
+kernel change, but it is a measurement boundary for one thing outside attention: the adaptive prefill chunk
+and the upload reserve are sized from the footprint, so on a card the window does not fit easily a wider
+window can now be chosen (the reserved 64-row window shrinks by 0.5 MiB on Mistral 7B). The 512 and 2048
+sweeps in this tier's decomposition ran one window per prompt and are unaffected.
+
+### 2026-10-05: decision 4 taken (a); the attention checks restated; decision 4b raised
+
+Owner decision: restate the three checks as properties of the kernel rather than agreement with the scalar
+path's rounding order.
+
+**`GpuAttentionHandlerParityTest`, restated.** `GpuAttentionMirror` gains a package-private
+`DispatchObserver` (tests only; `null` in production, one volatile read per launch) that sees each successful
+launch's mirrors, queries, lengths and output. The test now holds the kernel, at every launch on the real
+Phi-3.5-mini and Qwen3-1.7B runs, to `GqaMath.attend` over the same FP16 rows read back from the mirror
+(relative L2 per row <= 1e-3), and requires every call-site kind to be seen (prefill window, single decode,
+multi-stream decode). The logits bound (0.025) and top-1 check stay at the two prefill windows, where on
+against off reads 0.0001 to 0.0006. The three decode sites' logits are printed, not bounded.
+
+| Reading | Phi-3.5-mini | Qwen3-1.7B |
+|---|---|---|
+| Kernel against `GqaMath` over the mirror, worst row: window / decode / streams | 1.7e-6 / 8.3e-7 / 1.0e-6 (64, 32, 32 launches) | 3.5e-6 / 1.4e-6 / 1.8e-6 (56, 28, 28 launches) |
+| Logits, prefill windows A / B (bounded) | 0.000088 / 0.000226 | 0.000304 / 0.000411 |
+| Logits, decode sites (reported) | 0.0052, 0.0011, 0.0036 | 0.0045, 0.0057, 0.0223 |
+| Planted fault (one head zeroed after every launch), kernel check alone | 0.91, fails | 0.71, fails |
+
+The planted fault was put into `CudaGqaAttention` temporarily, the class run, the file restored. On the first
+planted run the logits check failed first (0.118 and 0.090 at window A), so the kernel check was moved ahead
+of it and the fault planted again to show the kernel check catches it by itself.
+
+One environment note: in 2 of 5 runs of the restated class the Qwen3-1.7B case failed its pre-existing
+free-VRAM check ("device memory back to where the test started", 16 MiB slack), 76 and 90 MiB short, while
+the desktop's own GPU use moved between 736 and 874 MiB across samples. The observer allocates nothing on the
+device (its reads stage through host memory). The same class of device-wide check as
+`PrefillRegionHandlerParityTest`'s; not loosened.
+
+**Divergence baseline.** This step's `GpuAttentionDivergenceIT` table (re-run on the final kernel, same
+figures) is the characterisation for scope item 1 and now stands in `docs/performance.md` and the
+`--gpu-attention` row of `docs/howto.md`, with the earlier kernel's figures beside it.
+
+**Decision 4b, raised: `GpuForwardPassIT.greedy_decode_agrees`.** The plan for this check was to run its GPU
+leg with GPU attention off, so it would compare the CUDA matmul path alone. Done, and it fails earlier: the
+GPU leg parts from the CPU at step 8 of 16 (CPU `29907`, GPU `315`). The pre-change tree with the same edit
+fails identically (same step, same tokens; scratch copy, in-reactor), so the CUDA path without GPU attention
+never matched the CPU token for token on this prompt. The check passed before only because the old kernel's
+rounding happened to land the GPU-on run on the CPU's choice at that near-tie (the same prompt diverges at
+step 8 in `GpuAttentionDivergenceIT`, on against off). A free-running greedy comparison over 16 steps measures
+where near-ties fall, whichever path is compared. Options:
+- (a) Teacher-forced decode: feed the CPU's greedy tokens to both runs and hold every step's logits to the
+  bounds the test already applies to one forward pass (relative L2 <= 0.025, top-5 overlap >= 4), with top-1
+  required only where the CPU's top-two margin is clear of a near-tie. This tests 16 decode steps over a
+  growing KV cache without compounding.
+- (b) Keep free-running greedy, but require only the tokens up to the first near-tie on the CPU's own
+  trajectory.
+- (c) Drop the greedy case; the single-pass hidden-state and logits cases and `GpuAttentionDivergenceIT`
+  remain.
+Recommended: (a).
+
+### 2026-10-05: decision 4b taken (a); `GpuForwardPassIT`'s greedy check is a teacher-forced decode
+
+Owner decision: teacher-forced decode. `greedy_decode_agrees` now decodes 16 greedy tokens on the CPU, keeping
+the logits each token was chosen from, and feeds those same tokens to the GPU run, which takes the whole
+default GPU path again (GPU attention at its default; the attention-off edit of decision 4 is reverted). Every
+step is held to the bounds the test already applies to one forward pass: logits relative L2 <= 0.025 and top-5
+overlap >= 4. Top-1 must agree wherever the CPU's top-two logit gap is at least `NEAR_TIE_MARGIN` = 1.0. A flip
+needs the errors on the two candidates to add up to the gap, and the largest logit error measured at any step is
+0.41 (TinyLlama) and 0.12 (Mistral 7B), so 1.0 is beyond any measured error; the margin was read from a
+calibration run with it at 0, which printed every step's gap and error.
+
+| Model | Relative L2 per step | Largest logit error per step | Top-1 held (gap >= 1.0) | Top-1 flips |
+|---|---|---|---|---|
+| tinyllama-1.1b | 0.0072 to 0.0220 | 0.17 to 0.41 | 6 of 16 steps, all agree | step 13 only, CPU gap 0.123 (a near-tie; the step at which the free-running check used to part) |
+| mistral-7b | 0.0040 to 0.0075 | 0.08 to 0.12 | 9 of 16 steps, all agree | none |
+
+**Seen failing for the right reason.** One head's attention output zeroed after every launch (planted in
+`CudaGqaAttention`, installed, run, file restored and reinstalled): the teacher-forced check fails at step 0,
+relative L2 0.086 (bound 0.025), as do the two single-pass cases (hidden state, logits).
+
+| Command | Result |
+|---|---|
+| `mvn verify -pl juno-master -Pgpu -Dit.model.path=<tinyllama> -Dit.test=GpuForwardPassIT`, margin 0 (calibration) | tinyllama fails at step 13 (the near-tie), mistral-7b passes all 16 steps |
+| the same, margin 1.0, tinyllama | 5 of 5 |
+| the same with the planted fault | 3 of 5 fail, the teacher-forced case at step 0 |
+| `mvn verify -pl juno-master -Pgpu -Dit.model.path=<tinyllama>` (restored tree, after `mvn install -pl node -DskipTests`) | 10 of 10: `GpuForwardPassIT` 5, `GpuAttentionDivergenceIT` 3 (same figures as the step 4 record), `PrefillRegionGreedyIT` 2 |
