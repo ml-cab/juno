@@ -10,8 +10,12 @@ Decisions 4 and 4b taken (a) the same day: the attention checks restated as kern
 item (scope item 4, attention inside the decode residency region) is done: pinned A/B met, tg region on/off
 1.145 and 1.096 (`docs/perf-compare/20261006T033707Z-gpu-residency-attention-ab`). Decision 5 taken (b): the llama-1-30b
 region-off memory creep moves to item 8's mirror budget. Decision 6 taken (a): the 512-over-128 row stays
-`>= 1.00` as written, scored by the closing sweeps (read 2026-10-06: 1.015 to 1.171, unpinned). Next:
-scope item 8 (the whole decode layer in the region, Phi-3 and Qwen3).
+`>= 1.00` as written, scored by the closing sweeps (read 2026-10-06: 1.015 to 1.171, unpinned). Scope item 8's
+first part is done (2026-10-06): the whole decode layer runs in the region on the LLaMA family, the residual row
+stays on the device between layers (TinyLlama: 2 uploads and 23 downloads per token on 22 layers), bit-identical to
+the op-at-a-time GPU path by test; its pinned A/B is met (owner run, tg on/off 2.208 and 1.716 where the region runs,
+`docs/perf-compare/20261006T080204Z-gpu-residency-whole-layer-ab`). Next: item 8's second part (the region for
+Phi-3 and Qwen3).
 
 **Split 2026-10-04 (plan review): read this first.** This tier held nine items, and under execution
 rule 1 every later tier, including every remaining GPU throughput lever, waited on all of them. Its
@@ -351,6 +355,15 @@ budget. No download is needed.
       `juno.DeviceStaging` by test and by a published `--device-spans` run; tg region-on >= 1.0x
       region-off (same-hour pinned A/B); greedy output identical; per-request device memory flat; zero
       activation device-to-host copies inside a prefill window re-verified.
+      *2026-10-06 (first part): LLaMA family done and held by test (`decodeRunsTheWholeLayerInTheRegion`: 2 H2D,
+      23 D2H per token on TinyLlama's 22 layers; bit-identity in `ResidentQkvPathTest`); greedy identical and memory
+      flat on TinyLlama and Mistral 7B (`smoke-gpu-residency.sh`). Still owed: Phi-3 and Qwen3 (next, executor), the
+      published `--device-spans` run and the prefill-window re-verification (executor, at the item's end), and the
+      pinned A/B on the final region (owner, at the item's end).*
+      *2026-10-06: the first part's pinned A/B is met (owner run), tg region on/off 2.208 (TinyLlama) and 1.716
+      (Mistral 7B), 0.959 and 0.991 where declined,
+      [`20261006T080204Z-gpu-residency-whole-layer-ab`](../perf-compare/20261006T080204Z-gpu-residency-whole-layer-ab/INDEX.md).
+      Not ticked: the criterion covers Phi-3 and Qwen3 too.*
 - [ ] Phi-3.5-mini's prefill window runs RoPE and attention inside the prefill region (scope item 8,
       added 2026-10-02): **Threshold: H2D + D2H bytes per 512-token window >= 70% below 2,645 MB**
       (Tier 01B's step 2 baseline; 1,419 MB at `docs/perf-compare/20261002T050741Z`), from a published
@@ -953,3 +966,153 @@ models and 0.307x on Phi-3.5-mini, which binds.
 file and in the README milestone table, and the tier's pinned closing sweeps at 128 and 512 score it. Decision 1's
 open question is closed. Phi-3.5-mini's margin (1.015 unpinned) is the one to watch; scope item 8's Phi-3 prefill
 work is expected to widen it.
+
+### 2026-10-06: implementation step 5, scope item 8, first part (the whole decode layer in the region, LLaMA family)
+
+**Plan versus code, re-verified first** (HEAD `d3ad6ee`, tree clean apart from the untracked `.github/`).
+After the region (`ResidentQkvPath.run`, attending), `LlamaTransformerHandler.transformerLayer` ran the output
+projection (`matVecProjection`, `CudaMatVec.sgemv` over the K-quant matrix: its own upload and download), the
+residual add on the host, the FFN norm (`rmsNormGpuOrCpu`, on the CPU in production since `rmsNormGpu` is never
+constructed), gate and up (`sgemvSameX`: one upload, two downloads), SwiGLU on the host and the down projection
+(`sgemv`), each with a host wait. Every device kernel the rest of the layer needs existed (MMQ quantize and GEMV,
+`rms_norm.cu`, `add_inplace`) except one. Two drifts from the item's wording, neither changing scope:
+- **SwiGLU.** The item says "Tier 01B item 6's kernel at width 1". That kernel (`swiglu_half`) writes FP16 for the
+  prefill GEMM; the decode down projection quantizes an FP32 row to Q8_1. Added `swiglu`, the same arithmetic
+  without the cast.
+- **The copy threshold needs the residual to stay on the device between layers.** Per layer the region made two
+  uploads (the residual row and the 20-byte attention table) and, per token, the LM head adds one upload. One upload
+  per layer plus the LM head's is `layers + 1`, over the `<= 1 x layers` threshold. So the item's optional "where the
+  region also spans the next layer, take it" is what the threshold requires, and the table is now written by a kernel
+  from its launch arguments (`decode_attention_table`) instead of copied up.
+
+Item 8 has four parts (the LLaMA-family whole layer; the Phi-3 and Qwen3 handlers; Phi-3's prefill RoPE and
+attention; the KV mirror budget on a partially offloaded model). This step is the first, per the item's own order
+(the rest of the layer, then the other handlers). Its exit criteria stay open until the other parts land.
+
+**Design.** New class `ResidentLayerTail` issues the rest of the layer on the region's stream: output projection,
+`add_inplace`, FFN norm (`CudaRmsNorm.normalizeResident`, the tree-reduction kernel the attention norm already uses
+in the region), gate and up sharing one Q8_1 quantization, `swiglu`, down projection, and `residual_add_both`, which
+writes the layer output into the residual activation (the next layer's input) and into the packed download row in
+one launch. `ResidentQkvPath.create(..., ResidentLayerTail.Weights)` builds it; a layer runs whole only when its four
+matrices are K-quant on the device with the model's shape (`runsWholeLayer`), otherwise it leaves the region after
+attention (announced once, with the count). The packed row widens to k, v, attention, layer output; one download per
+layer. `ResidentQkvPath.Lease` holds one region for a token's layer loop (`LlamaTransformerHandler.runLayers`,
+try-with-resources); a layer run whole records (next layer, position), and the next call in the lease with exactly
+that layer and position skips its upload. Any other call (a layer the region declines, one run partly or not at all)
+breaks the chain and the next layer uploads. `runLayers` copies the last layer's output, since the thread-owned row is
+overwritten by the next call. Allocation: the handler path that ran per layer (several fresh arrays per op) now
+returns the region's row; one `hidden`-wide copy per token.
+
+**Tests, written first** (README rule 3), against stubs of the new API (`Weights` accepted, the tail never run):
+
+| Test | Seen failing first? | Now |
+|---|---|---|
+| `ResidentQkvPathTest.wholeLayerMatchesBitForBit`: one layer at positions 0, 1, 63, 64, 517, 4096; k, v, attention and layer output against the op-at-a-time GPU path (MMQ GEMVs through `CudaMatVec`, round-trip GPU norm, host adds and SwiGLU) | yes (`layerDone` false) | pass |
+| `layersInALeaseMatchStepForStep`: 40 tokens through four layers, one lease per token, layer 2 without a device down projection (leaves the region after attention, its tail on the host) | yes | pass |
+| `concurrentLeasesEachMatch`: three threads, 15 tokens each | yes | pass |
+| `aLayerOutsideTheRegionBreaksTheChain`: layer 1 run entirely on the host between two region layers in one lease | written after a planted fault went uncaught (below); passed on the implementation, then failed with the fault | pass |
+| `wholeLayerNeedsItsWeightsAndAMirror`, `wholeLayerAllocatesNothingPerCall` | no: the stub already answered `runsWholeLayer` and ran the head only, so regression tests | pass |
+| `LlamaTransformerHandlerGpuResidencyTest.decodeRunsTheWholeLayerInTheRegion` (real TinyLlama, JFR; replaces `decodeAttendsInsideTheRegion`): zero decode copies at every op-at-a-time site of the layer and at the old table copy; the residual row uploaded once per token; one packed download per layer and token; the single-row K-quant sites carry only the LM head; per token H2D `<= layers` and D2H `<= layers + 1` | yes (whole layer not active) | pass: **2 H2D and 23 D2H per token on 22 layers** |
+
+Planted faults, each in its own run, file restored after (`cmp` against a saved copy):
+- FFN norm reading another layer's weight: 3 of the whole-layer cases fail.
+- The lease skipping the upload on position alone (layer index not checked): **not caught** by the first four
+  cases, because every region call already resets the lease, so the index check only matters when a layer never
+  reaches the region. `aLayerOutsideTheRegionBreaksTheChain` was added for it and fails with the fault.
+- The residual uploaded at every layer: the handler test fails at the once-per-token upload count.
+
+`wholeLayerAllocatesNothingPerCall` failed once in a group run on its first version, with the device-wide free
+memory lower after the loop; the loop then included the test's own reference calls on layer 2 (`CudaMatVec`, round-trip
+norm). It passed six times alone. Rewritten so only region work (layers 0 and 1) runs between the two readings; three
+group runs pass. The region's own bytes are held exactly by `deviceBytes()` either way.
+
+**Regression runs.**
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass |
+| `mvn test -pl node` | 922 run, 0 failures, 44 skipped |
+| `mvn test -pl node -Dgroups=gpu` | 313 run, 0 failures, 7 skipped |
+| `mvn verify -pl juno-master -Pgpu -Dit.model.path=<tinyllama>` (after `mvn install -DskipTests`) | 10 of 10 |
+| `smoke-gpu-residency.sh --models tinyllama...,mistral...` (unmodified) | 0 failures: every layer of every node runs whole (8 of 8, 7 of 7, 22 of 22 in cluster, 11 of 11 and 10 of 10 on Mistral 7B); greedy identical on against off (32 tokens); GPU memory flat both modes; cluster pipeline and tensor answer, equal local mode's output, no node JVM left |
+| `smoke-gpu-residency.sh --models llama-1-30b --no-cluster --requests 8` | 0 failures: region active and whole on 20 of 20 GPU layers; greedy identical on against off; GPU MiB per request off 7434 7482 7502 7508 7522 7524 7524 7534 (26 MiB over requests 4 to 8), on 7528 7528 7530 7530 7530 7534 7538 7538 (8 MiB); limit 32. The region-off creep read 40 MiB at scope item 4 and 92 on the pre-change build; it passing here is the reading moving, not a fix, and it stays with the mirror-budget criterion (decision 5) |
+
+Not run in this step: the 11-module unit reactor (only `node`, and help text in `juno-player`, changed; `juno-player`
+compiled in `mvn install`), the real-model `ModelLiveRunnerIT`, the other smoke scripts, and the vision and LoRA gates
+(LoRA playback announces the region as unsupported and keeps its path). Those belong to the tier's closing matrix.
+
+**Indicative throughput, not scorable** (`PIN=0 bash dist/gpu-residency-whole-layer-ab/run-gate.sh`, clocks not
+pinned, one repetition per run, published as
+[`20261006T073749Z-gpu-residency-whole-layer-ab-unpinned`](../perf-compare/20261006T073749Z-gpu-residency-whole-layer-ab-unpinned/INDEX.md)),
+medians of three:
+
+| Model | Region | tg off | tg on | tg on/off | alloc/token off / on | GC pause in span, ms, off / on | GPU tg ratio off / on |
+|---|---|---|---|---|---|---|---|
+| tinyllama-1.1b | whole layer | 60.33 | 116.91 | 1.938 | 47.7M / 38.1M | 8.0 / 0.0 | 0.311x / 0.649x |
+| mistral-7b | whole layer | 21.90 | 36.36 | 1.660 | 223.7M / 193.6M | 14.1 / 0.0 | 0.587x / 0.990x |
+| qwen2.5-3b | declined | 27.42 | 26.30 | 0.959 | 143.3M / 143.6M | 0.0 / 0.0 | 0.404x / 0.378x |
+| Phi-3.5-mini | declined | 29.78 | 29.52 | 0.991 | 211.6M / 212.2M | 12.2 / 11.6 | 0.494x / 0.494x |
+
+Every on repetition is far above every off repetition on both region models. Against the attention-only region's
+unpinned reading (scope item 4: 73.83 and 24.34 t/s on) generation is about 1.6x (TinyLlama) and 1.5x (Mistral 7B)
+faster. **Read against the 0.70x end-of-plan tg target, not scored** (unpinned, one repetition; the closing sweeps
+score it): Mistral 7B reads 0.990x with the region on, above the target, but only with `--gpu-residency on`, which is
+off by default (item 6 puts the default to the owner). Phi-3.5-mini stays at 0.494x until item 8's second part
+gives its handler the region. Qwen2.5-3B (0.959, bound 0.95) is the closest declined row and the one to watch in the
+pinned run; TinyLlama's pp on/off reads 0.923, as the attention-only region's unpinned reading did (0.903, then 0.970
+pinned), although prefill does not run the region. Greedy text parts on against off after about 20 to 30 tokens on
+this harness's prompt on both region models, as it already did with the attention-only region (the region's norms sum
+in a different order than the default path's CPU norms); each mode is identical across its three runs.
+
+**Owed to the owner: the pinned A/B.** The item's tg threshold (region on `>= 1.0x` region off, same-hour, pinned) is
+scored when the item's other parts have landed; reading it now tells whether this part holds before Phi-3 and Qwen3
+are built on it. Prepared at `dist/gpu-residency-whole-layer-ab/`: `candidate-shaded.jar` (sha256 `ade0bb660c5e2065`,
+this working tree) and `run-gate.sh`, the item 4 gate with its paths renamed (A B A B A B, `--gpu-residency off`/`on`,
+four sweep models at `n_prompt=128`, `--pin-clocks`; tg >= 1.00 on TinyLlama and Mistral 7B, >= 0.95 on Qwen2.5-3B and
+Phi-3.5-mini). Command: `bash dist/gpu-residency-whole-layer-ab/run-gate.sh`.
+
+**Docs.** `docs/howto.md` (the `--gpu-residency` row), `docs/agent-arch.txt` (`ResidentQkvPath`, new `ResidentLayerTail`,
+`PrefillWindowKernels`, `GpuResidencyOptions`), the flag's help in `ConsoleMain`, `scripts/run.sh` and
+`compare-llama-cpp.sh`, the `--gpu-attention off` console notice, `CHANGELOG.md`.
+
+**Out-of-tier changes.** None. The table kernel changes the attention-only region (the `--gpu-attention on` decode
+path with some layers' tails off the device) as well: one upload fewer per layer.
+
+**Next.** Scope item 8's second part: the region for `Phi3TransformerHandler` and `Qwen3TransformerHandler` (split-half
+RoPE through `rope_split_half`, Phi-3's LongRoPE factors folded into the inverse-frequency table, Qwen3's per-head Q/K
+norms added or announced), then Phi-3's prefill RoPE and attention in the prefill region, then the KV mirror budget.
+
+### 2026-10-06: scope item 8, first part: pinned A/B (owner run): met
+
+`bash dist/gpu-residency-whole-layer-ab/run-gate.sh`, clocks pinned on all six runs (08:02Z to 08:19Z), jar
+`ade0bb660c5e2065` on both sides, the flag alternated off, on, off, on, off, on; published as
+[`20261006T080204Z-gpu-residency-whole-layer-ab`](../perf-compare/20261006T080204Z-gpu-residency-whole-layer-ab/INDEX.md).
+Re-scored from the run files with the script's method (medians of three), since its console output was not kept.
+
+| Model | Region | tg off | tg on | tg on/off | Threshold | pp on/off (not gated) | alloc/token off / on | GPU tg ratio off / on |
+|---|---|---|---|---|---|---|---|---|
+| tinyllama-1.1b | whole layer | 55.24 | 121.95 | **2.208** | >= 1.00, met | 0.901 | 48.1M / 38.5M | 0.323x / 0.677x |
+| mistral-7b | whole layer | 20.20 | 34.66 | **1.716** | >= 1.00, met | 0.958 | 223.0M / 193.1M | 0.546x / 1.008x |
+| qwen2.5-3b | declined | 26.58 | 25.48 | **0.959** | >= 0.95, met | 0.978 | 143.2M / 143.1M | 0.392x / 0.377x |
+| Phi-3.5-mini | declined | 28.71 | 28.46 | **0.991** | >= 0.95, met | 0.993 | 210.3M / 209.3M | 0.515x / 0.498x |
+
+On both region models every on repetition is far above every off repetition. GC pause inside the token span falls
+from 8.3 and 15.8 ms to 0. The gain over region off was +14.5% (TinyLlama) and +9.6% (Mistral 7B) with the
+attention-only region (scope item 4's pinned gate) and is +120.8% and +71.6% with the whole layer.
+
+**Read against the 0.70x end-of-plan GPU tg targets, not scored** (a gate A/B at `n_prompt=128`, one repetition per
+run; the closing sweeps score them): Mistral 7B reads 1.008x with `--gpu-residency on`, above its target, but the flag
+is off by default and the default path reads 0.546x; item 6 puts the default to the owner. Phi-3.5-mini reads 0.498x
+and moves only when item 8's second part gives its handler the region.
+
+**Two readings noted, not attributed, not gated.**
+- Qwen2.5-3B reads 0.959 against its 0.95 bound, the same as unpinned. It declines the region (the handler never
+  builds it), so on and off run the same code; the attention-only region's pinned gate read 1.022 on this model. Its
+  lowest repetition is the last (`on-3` 24.30). If item 8's later gates read it below 0.95, the first thing to check
+  is whether anything runs for a declined model under the flag.
+- TinyLlama prefill on/off reads 0.901 (Mistral 7B 0.958, the declined models 0.978 and 0.993), although the
+  prefill window does not run the decode region. In `on-1` against `off-1` the measured prefill forward pass reads
+  59.4 against 51.6 ms, while the whole request reads 79 against 89 ms. The off side spreads 13% by itself. The
+  `--device-spans` run owed at the end of item 8 reads the prefill window and should attribute it.
+
+**Out-of-tier changes.** None.

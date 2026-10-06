@@ -170,8 +170,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private final CudaRmsNorm rmsNormGpu;
 
 	/**
-	 * The device-resident decode region (norm, Q/K/V projection and RoPE with one
-	 * upload in and one download out), non-null only with {@code --gpu-residency}
+	 * The device-resident decode region (norm, Q/K/V projection and RoPE, and with
+	 * GPU attention the KV append, attention and, where the layer's other weights are
+	 * on the device, the rest of the layer), non-null only with {@code --gpu-residency}
 	 * on a CUDA backend whose Q/K/V projections are K-quant MMQ matrices on the
 	 * device. Single-sequence decode only.
 	 */
@@ -492,7 +493,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 		ResidentQkvPath path;
 		try {
-			path = ResidentQkvPath.create(cuda.gpuContext(), cfg, attnNorm, wqQ4Dev, wkQ4Dev, wvQ4Dev);
+			path = ResidentQkvPath.create(cuda.gpuContext(), cfg, attnNorm, wqQ4Dev, wkQ4Dev, wvQ4Dev,
+					new ResidentLayerTail.Weights(ffnNorm, woQ4Dev, wGateQ4Dev, wUpQ4Dev, wDownQ4Dev));
 		} catch (RuntimeException e) {
 			GpuResidencyOptions.announceUnsupported(log, "the device-resident decode region",
 					"could not be built (" + e.getMessage() + ")");
@@ -509,6 +511,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			return null;
 		}
 		boolean attends = gqaGpu != null && path.attendsOnDevice();
+		int whole = 0;
+		if (attends)
+			for (int li = 0; li < L; li++)
+				if (path.runsWholeLayer(li))
+					whole++;
+		if (attends && whole < eligible)
+			GpuResidencyOptions.announceUnsupported(log, (eligible - whole) + " of " + eligible + " region layers",
+					"leave the region after attention: their output projection, FFN norm or FFN weights are not"
+							+ " K-quant MMQ matrices on the device");
 		if (gqaGpu == null)
 			GpuResidencyOptions.announceUnsupported(log, "the KV append and attention",
 					"stay outside the region: --gpu-attention is off, so attention runs on the CPU");
@@ -517,10 +528,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					"stay outside the region: the attention kernel does not run " + cfg.headDim() + "-wide heads");
 		log.info("GPU-resident decode region active (gpu-residency=" + GpuResidencyOptions.fromEnv().policyLabel()
 				+ ") on " + eligible + " of " + L + " layers: "
-				+ (attends
-						? "norm, Q/K/V projection, RoPE, the KV append and attention, with the residual row and the"
-								+ " attention table uploaded and k, v and the attention output downloaded in one copy"
-						: "norm, Q/K/V projection and RoPE with one upload and one download")
+				+ (whole > 0
+						? "the whole layer (norm, Q/K/V projection, RoPE, the KV append, attention, output projection,"
+								+ " residual adds, FFN norm and SwiGLU FFN) on " + whole + " of them, the residual row"
+								+ " staying on the device between such layers and k, v and the layer output downloaded"
+								+ " in one copy"
+						: attends
+								? "norm, Q/K/V projection, RoPE, the KV append and attention, with the residual row"
+										+ " uploaded and k, v and the attention output downloaded in one copy"
+								: "norm, Q/K/V projection and RoPE with one upload and one download")
 				+ " per layer. Single-sequence decode only; prefill windows and batched decode"
 				+ " (--parallel above 1, continuous schedule) keep the existing path.");
 		return path;
@@ -537,6 +553,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	boolean gpuResidencyAttentionActive() {
 		return residentQkv != null && gqaGpu != null && residentQkv.attendsOnDevice();
+	}
+
+	/**
+	 * Whether the decode region runs whole layers: it attends on the device, and at
+	 * least one layer's output projection, FFN norm and FFN are on the device too.
+	 */
+	boolean gpuResidencyWholeLayerActive() {
+		if (!gpuResidencyAttentionActive())
+			return false;
+		for (int li = 0; li < endLayer - startLayer; li++)
+			if (residentQkv.runsWholeLayer(li))
+				return true;
+		return false;
 	}
 
 	/** Guards {@link #warnGpuAttentionFellBackOnce} so the hot path logs once. */
@@ -2329,12 +2358,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			vScratch = new float[(pos + 1) * kvDim];
 		}
 
-		for (int li = 0; li < L; li++) {
-			DeviceKvCache dev = (devCache != null && layerGpuResident(li) && devCache[li].live())
-					? devCache[li]
-					: null;
-			x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch, dev);
+		// One device region for the whole token: a layer the region runs whole leaves
+		// its output there, and the next layer reads it without an upload.
+		try (ResidentQkvPath.Lease lease = residentQkv != null ? residentQkv.lease() : null) {
+			for (int li = 0; li < L; li++) {
+				DeviceKvCache dev = (devCache != null && layerGpuResident(li) && devCache[li].live())
+						? devCache[li]
+						: null;
+				x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch, dev, lease);
+			}
 		}
+		if (residentQkv != null && residentQkv.ownsResult(x))
+			x = x.clone(); // the region's row is overwritten by this thread's next call
 
 		if (a != null) {
 			int seqLen = pos + 1;
@@ -2501,7 +2536,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	private float[] transformerLayer(float[] x, int li, int pos,
 			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kScratch, float[] vScratch, DeviceKvCache deviceKv) {
+			float[] kScratch, float[] vScratch, DeviceKvCache deviceKv, ResidentQkvPath.Lease lease) {
 		int H = cfg.hiddenDim();
 
 		// ── Attention sub-layer ───────────────────────────────────────────────
@@ -2530,7 +2565,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					regionKv = null;
 				}
 			}
-			resident = residentQkv.run(li, x, pos, regionKv);
+			resident = residentQkv.run(li, x, pos, regionKv, lease);
 		}
 		if (resident != null) {
 			q = resident.q;
@@ -2553,6 +2588,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			// The region already cast the row into the mirror; it becomes readable now
 			// that the host tensors hold it too.
 			deviceKv.markWritten(pos, 1);
+			if (resident.layerDone)
+				return resident.layer; // the region ran the rest of the layer as well
 		} else if (deviceKv != null) {
 			try {
 				deviceKv.appendToken(pos, k, v);

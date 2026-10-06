@@ -16,7 +16,18 @@
  *               to float, then x / (1 + e) in float. The double exponential costs
  *               a few hundred microseconds per layer on a consumer card and keeps
  *               the result within one FP16 ulp of the host loop.
+ *   swiglu      out[r][i] = silu(gu[r][i]) * gu[r][I + i] in float: swiglu_half
+ *               without the FP16 cast, for the decode region, whose down
+ *               projection quantizes an FP32 row.
  *   add_inplace x[i] += y[i], the residual add.
+ *   residual_add_both
+ *               s = x[i] + y[i]; x[i] = s; y[i] = s - the decode region's second
+ *               residual add, which leaves the layer output both in the residual
+ *               row (the next layer's input) and in the row it downloads.
+ *   decode_attention_table
+ *               writes one decode row's attention table (K pointer, V pointer,
+ *               sequence length) from launch arguments, so the table needs no
+ *               host-to-device copy.
  *   add_bias    x[r][j] += bias[j], the Q/K/V bias of Qwen2-family models.
  *   rms_norm_host_order
  *               out[r][i] = (w[i] * x[r][i]) * scale, scale = 1 / sqrt(ss / n + eps),
@@ -63,6 +74,41 @@ swiglu_half(const float* __restrict__ gateUp, __half* __restrict__ out, int rows
     const float e = (float)exp(-(double)g);
     const float silu = __fdiv_rn(g, __fadd_rn(1.0f, e));
     out[i] = __float2half_rn(__fmul_rn(silu, u));
+}
+
+extern "C" __global__ void __launch_bounds__(PW_THREADS)
+swiglu(const float* __restrict__ gateUp, float* __restrict__ out, int rows, int inter) {
+    const long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    const long long total = (long long)rows * inter;
+    if (i >= total)
+        return;
+    const long long r = i / inter;
+    const int c = (int)(i - r * inter);
+    const float* row = gateUp + r * 2LL * inter;
+    const float g = row[c];
+    const float u = row[inter + c];
+    const float e = (float)exp(-(double)g);
+    const float silu = __fdiv_rn(g, __fadd_rn(1.0f, e));
+    out[i] = __fmul_rn(silu, u);
+}
+
+extern "C" __global__ void __launch_bounds__(PW_THREADS)
+residual_add_both(float* __restrict__ x, float* __restrict__ y, long long n) {
+    const long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        const float s = __fadd_rn(x[i], y[i]);
+        x[i] = s;
+        y[i] = s;
+    }
+}
+
+extern "C" __global__ void
+decode_attention_table(void** table, void* k, void* v, int seqLen) {
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        table[0] = k;
+        table[1] = v;
+        *(int*)(table + 2) = seqLen;
+    }
 }
 
 extern "C" __global__ void __launch_bounds__(PW_THREADS)

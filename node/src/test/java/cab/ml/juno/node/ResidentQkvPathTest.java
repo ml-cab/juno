@@ -94,6 +94,14 @@ class ResidentQkvPathTest {
 				for (DeviceQ4KMatrix m : a)
 					if (m != null)
 						m.close();
+		if (wholeLoaded)
+			for (DeviceQ4KMatrix[] a : new DeviceQ4KMatrix[][] { Whole.WQ, Whole.WK, Whole.WV, Whole.WO, Whole.GATE,
+					Whole.UP, Whole.DOWN })
+				for (DeviceQ4KMatrix m : a)
+					if (m != null)
+						m.close();
+		if (offRegionDown != null)
+			offRegionDown.close();
 		if (gqa != null)
 			gqa.close();
 		if (ctx != null)
@@ -368,6 +376,286 @@ class ResidentQkvPathTest {
 		assertThat(ResidentQkvPath.unsupportedReason(ctx, RopePairing.ADJACENT, true)).contains("bias");
 		assertThat(ResidentQkvPath.unsupportedReason(null, RopePairing.ADJACENT, false)).contains("CUDA");
 	}
+
+	// ── The whole decode layer in the region ─────────────────────────────────
+
+	/** Layers of the whole-layer model: 0, 1 and 3 run whole; layer 2 has no device down projection. */
+	private static final int TAIL_LAYERS = 4;
+	private static final int HEAD_ONLY_LAYER = 2;
+	private static final int INTER = 4 * H;
+
+	/** The four-layer model the whole-layer cases run, built on first use. */
+	private static final class Whole {
+		static final LlamaConfig CFG = new LlamaConfig(H, TAIL_LAYERS, HEADS, KV_HEADS, HEAD_DIM, INTER, 1000, EPS,
+				THETA, "llama");
+		static final float[][] ATTN_NORM = new float[TAIL_LAYERS][];
+		static final float[][] FFN_NORM = new float[TAIL_LAYERS][];
+		static final DeviceQ4KMatrix[] WQ = new DeviceQ4KMatrix[TAIL_LAYERS];
+		static final DeviceQ4KMatrix[] WK = new DeviceQ4KMatrix[TAIL_LAYERS];
+		static final DeviceQ4KMatrix[] WV = new DeviceQ4KMatrix[TAIL_LAYERS];
+		static final DeviceQ4KMatrix[] WO = new DeviceQ4KMatrix[TAIL_LAYERS];
+		static final DeviceQ4KMatrix[] GATE = new DeviceQ4KMatrix[TAIL_LAYERS];
+		static final DeviceQ4KMatrix[] UP = new DeviceQ4KMatrix[TAIL_LAYERS];
+		static final DeviceQ4KMatrix[] DOWN = new DeviceQ4KMatrix[TAIL_LAYERS];
+		static {
+			Random rnd = new Random(77);
+			for (int li = 0; li < TAIL_LAYERS; li++) {
+				ATTN_NORM[li] = randomVec(H, rnd, 0.5f, 1.5f);
+				FFN_NORM[li] = randomVec(H, rnd, 0.5f, 1.5f);
+				WQ[li] = q4k(H, H, rnd);
+				WK[li] = q4k(KV, H, rnd);
+				WV[li] = q4k(KV, H, rnd);
+				WO[li] = q4k(H, H, rnd);
+				GATE[li] = q4k(INTER, H, rnd);
+				UP[li] = q4k(INTER, H, rnd);
+				// Layer 2 keeps its down projection off the device: the region runs only its attention half.
+				DOWN[li] = li == HEAD_ONLY_LAYER ? null : q4k(H, INTER, rnd);
+			}
+		}
+
+		static ResidentQkvPath path() {
+			wholeLoaded = true;
+			return ResidentQkvPath.create(ctx, CFG, ATTN_NORM, WQ, WK, WV,
+					new ResidentLayerTail.Weights(FFN_NORM, WO, GATE, UP, DOWN));
+		}
+	}
+
+	@Test
+	@DisplayName("whole layer: the layer output, k, v and attention match the op-at-a-time path bit for bit")
+	void wholeLayerMatchesBitForBit() {
+		try (ResidentQkvPath path = Whole.path()) {
+			assertThat(path.runsWholeLayer(0)).isTrue();
+			Random rnd = new Random(61);
+			for (int pos : new int[] { 0, 1, 63, 64, 517, 4096 }) {
+				DeviceKvCache mine = mirrorWithHistory(pos, 700 + pos);
+				DeviceKvCache ref = mirrorWithHistory(pos, 700 + pos);
+				try {
+					float[] x = randomVec(H, rnd, -2f, 2f);
+					float[][] expected = todaysLayer(0, x, pos, ref);
+					mine.ensureCapacity(pos);
+					ResidentQkvPath.Output got = path.run(0, x, pos, mine);
+					assertThat(got.layerDone).as("whole layer at pos %d", pos).isTrue();
+					assertThat(got.k).as("k at pos %d", pos).containsExactly(expected[0]);
+					assertThat(got.v).as("v at pos %d", pos).containsExactly(expected[1]);
+					assertThat(got.attn).as("attention at pos %d", pos).containsExactly(expected[2]);
+					assertThat(got.layer).as("layer output at pos %d", pos).containsExactly(expected[3]);
+					assertThat(mine.validTokens()).as("watermark before the host write").isEqualTo(pos);
+				} finally {
+					mine.close();
+					ref.close();
+				}
+			}
+		}
+	}
+
+	@Test
+	@DisplayName("whole layer: which layers run whole, and a call that cannot attend runs only the attention half's head")
+	void wholeLayerNeedsItsWeightsAndAMirror() {
+		try (ResidentQkvPath path = Whole.path()) {
+			for (int li = 0; li < TAIL_LAYERS; li++)
+				assertThat(path.runsWholeLayer(li)).as("layer %d", li).isEqualTo(li != HEAD_ONLY_LAYER);
+			float[] x = randomVec(H, new Random(62), -2f, 2f);
+			ResidentQkvPath.Output got = path.run(0, x, 3, null);
+			assertThat(got.attended).isFalse();
+			assertThat(got.layerDone).as("no mirror: attention and the tail stay outside").isFalse();
+		}
+		try (ResidentQkvPath headOnly = ResidentQkvPath.create(ctx, Whole.CFG, Whole.ATTN_NORM, Whole.WQ, Whole.WK,
+				Whole.WV)) {
+			assertThat(headOnly.runsWholeLayer(0)).as("no tail weights given").isFalse();
+		}
+	}
+
+	@Test
+	@DisplayName("whole layer: a 40-token decode through four layers in a lease matches layer for layer")
+	void layersInALeaseMatchStepForStep() {
+		try (ResidentQkvPath path = Whole.path()) {
+			assertThat(leasedDecodeMatches(path, 40, new Random(63))).isTrue();
+		}
+	}
+
+	@Test
+	@DisplayName("whole layer: a layer the region never sees (declined, run on the host) makes the next one upload its input")
+	void aLayerOutsideTheRegionBreaksTheChain() {
+		try (ResidentQkvPath path = Whole.path()) {
+			Random rnd = new Random(65);
+			int pos = 9;
+			DeviceKvCache[] mine = { mirrorWithHistory(pos, 65), null, mirrorWithHistory(pos, 67) };
+			DeviceKvCache[] ref = { mirrorWithHistory(pos, 65), mirrorWithHistory(pos, 66), mirrorWithHistory(pos, 67) };
+			try {
+				float[] x = randomVec(H, rnd, -2f, 2f);
+				try (ResidentQkvPath.Lease lease = path.lease()) {
+					mine[0].ensureCapacity(pos);
+					ResidentQkvPath.Output got = path.run(0, x, pos, mine[0], lease);
+					assertThat(got.layerDone).isTrue();
+					// Layer 1 as a layer whose head the region declines: the handler runs it
+					// op at a time and never calls the region, so the device still holds layer 0's output.
+					float[] afterLayer1 = todaysLayer(1, got.layer.clone(), pos, ref[1])[3];
+					float[][] expected = todaysLayer(2, afterLayer1, pos, ref[2]);
+					mine[2].ensureCapacity(pos);
+					got = path.run(2, afterLayer1, pos, mine[2], lease);
+					assertThat(got.k).as("layer 2 reads the row it was given").containsExactly(expected[0]);
+					assertThat(got.attn).containsExactly(expected[2]);
+				}
+			} finally {
+				for (DeviceKvCache m : mine)
+					if (m != null)
+						m.close();
+				for (DeviceKvCache m : ref)
+					m.close();
+			}
+		}
+	}
+
+	@Test
+	@DisplayName("whole layer: threads decoding in leases of their own each match")
+	void concurrentLeasesEachMatch() throws Exception {
+		try (ResidentQkvPath path = Whole.path()) {
+			ExecutorService pool = Executors.newFixedThreadPool(3);
+			List<Future<Boolean>> results = new ArrayList<>();
+			for (int t = 0; t < 3; t++) {
+				long seed = 300 + t;
+				results.add(pool.submit(() -> leasedDecodeMatches(path, 15, new Random(seed))));
+			}
+			for (Future<Boolean> f : results)
+				assertThat(f.get(120, TimeUnit.SECONDS)).isTrue();
+			pool.shutdown();
+			assertThat(pool.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+		}
+	}
+
+	@Test
+	@DisplayName("whole layer: decoding in leases allocates no device memory per call")
+	void wholeLayerAllocatesNothingPerCall() {
+		try (ResidentQkvPath path = Whole.path()) {
+			DeviceKvCache[] mirrors = new DeviceKvCache[TAIL_LAYERS];
+			for (int li = 0; li < TAIL_LAYERS; li++) {
+				mirrors[li] = new DeviceKvCache(ctx, KV);
+				mirrors[li].ensureCapacity(255);
+			}
+			try {
+				// Layers 0 and 1 only, both run whole: nothing but region work runs between
+				// the two device-wide readings (layer 2's host tail would use the test's own
+				// GPU reference path).
+				Random rnd = new Random(64);
+				wholeLayersToken(path, mirrors, 0, randomVec(H, rnd, -2f, 2f));
+				long afterFirst = freeBytes();
+				long bytes = path.deviceBytes();
+				for (int pos = 1; pos < 100; pos++)
+					wholeLayersToken(path, mirrors, pos, randomVec(H, rnd, -2f, 2f));
+				assertThat(path.deviceBytes()).isEqualTo(bytes).isPositive();
+				assertThat(freeBytes()).isGreaterThanOrEqualTo(afterFirst);
+			} finally {
+				for (DeviceKvCache m : mirrors)
+					m.close();
+			}
+		}
+	}
+
+	/** One token through layers 0 and 1 in one lease, each layer's output feeding the next. */
+	private static void wholeLayersToken(ResidentQkvPath path, DeviceKvCache[] mirrors, int pos, float[] x) {
+		try (ResidentQkvPath.Lease lease = path.lease()) {
+			for (int li = 0; li < 2; li++) {
+				ResidentQkvPath.Output got = path.run(li, x, pos, mirrors[li], lease);
+				assertThat(got.layerDone).isTrue();
+				mirrors[li].markWritten(pos, 1);
+				x = got.layer;
+			}
+		}
+	}
+
+	/**
+	 * Decodes {@code steps} positions through all four layers, one lease per token,
+	 * against the op-at-a-time path on mirrors of its own. True when every layer's k,
+	 * v, attention and output matched bit for bit and exactly the eligible layers ran whole.
+	 */
+	private static boolean leasedDecodeMatches(ResidentQkvPath path, int steps, Random rnd) {
+		DeviceKvCache[] mine = new DeviceKvCache[TAIL_LAYERS];
+		DeviceKvCache[] ref = new DeviceKvCache[TAIL_LAYERS];
+		for (int li = 0; li < TAIL_LAYERS; li++) {
+			mine[li] = new DeviceKvCache(ctx, KV);
+			ref[li] = new DeviceKvCache(ctx, KV);
+		}
+		try {
+			for (int pos = 0; pos < steps; pos++) {
+				float[] x = randomVec(H, rnd, -2f, 2f);
+				float[] expectedX = x;
+				try (ResidentQkvPath.Lease lease = path.lease()) {
+					for (int li = 0; li < TAIL_LAYERS; li++) {
+						float[][] expected = todaysLayer(li, expectedX, pos, ref[li]);
+						mine[li].ensureCapacity(pos);
+						ResidentQkvPath.Output got = path.run(li, x, pos, mine[li], lease);
+						if (got.layerDone != (li != HEAD_ONLY_LAYER) || !java.util.Arrays.equals(got.k, expected[0])
+								|| !java.util.Arrays.equals(got.v, expected[1])
+								|| !java.util.Arrays.equals(got.attn, expected[2]))
+							return false;
+						mine[li].markWritten(pos, 1);
+						x = got.layerDone ? got.layer : todaysTail(li, x, got.attn);
+						if (!java.util.Arrays.equals(x, expected[3]))
+							return false;
+						expectedX = expected[3];
+					}
+				}
+			}
+			for (int li = 0; li < TAIL_LAYERS; li++)
+				if (!java.util.Arrays.equals(mine[li].downloadK(steps), ref[li].downloadK(steps)))
+					return false;
+			return true;
+		} finally {
+			for (int li = 0; li < TAIL_LAYERS; li++) {
+				mine[li].close();
+				ref[li].close();
+			}
+		}
+	}
+
+	/**
+	 * Today's whole decode layer {@code li} of the four-layer model, op at a time:
+	 * the attention half as {@link #todaysPathWithAttention}, then {@link #todaysTail}.
+	 * Returns {k, v, attention, layer output}.
+	 */
+	private static float[][] todaysLayer(int li, float[] x, int pos, DeviceKvCache mirror) {
+		float[][] xn = new float[1][];
+		assertThat(roundTripNorm.normalizeBatch(new float[][] { x }, Whole.ATTN_NORM[li], EPS, xn)).isTrue();
+		float[][] qkv = mv.sgemvSameX(new DeviceQ4KMatrix[] { Whole.WQ[li], Whole.WK[li], Whole.WV[li] }, xn[0]);
+		LlamaTransformerHandler.rope(qkv[0], pos, HEADS, HEAD_DIM, THETA);
+		LlamaTransformerHandler.rope(qkv[1], pos, KV_HEADS, HEAD_DIM, THETA);
+		mirror.appendToken(pos, qkv[1], qkv[2]);
+		float[][] attn = new float[1][];
+		assertThat(gqa.attendBatched(new DeviceKvCache[] { mirror }, new float[][] { qkv[0] }, new int[] { pos + 1 },
+				attn, HEADS, HEAD_DIM, HEADS / KV_HEADS, KV)).isTrue();
+		return new float[][] { qkv[1], qkv[2], attn[0], todaysTail(li, x, attn[0]) };
+	}
+
+	/**
+	 * Today's rest of layer {@code li} after attention, op at a time: the K-quant
+	 * GEMVs through {@link CudaMatVec}, the round-trip GPU norm, and the host's
+	 * residual adds and SwiGLU. Layer 2's down projection, kept off the region, runs
+	 * from the same weights through the same GEMV.
+	 */
+	private static float[] todaysTail(int li, float[] x, float[] attn) {
+		float[] x2 = LlamaTransformerHandler.add(x, mv.sgemv(Whole.WO[li], attn));
+		float[][] xn = new float[1][];
+		assertThat(roundTripNorm.normalizeBatch(new float[][] { x2 }, Whole.FFN_NORM[li], EPS, xn)).isTrue();
+		float[][] gu = mv.sgemvSameX(new DeviceQ4KMatrix[] { Whole.GATE[li], Whole.UP[li] }, xn[0]);
+		float[] hidden = new float[INTER];
+		for (int i = 0; i < INTER; i++)
+			hidden[i] = LlamaTransformerHandler.silu(gu[0][i]) * gu[1][i];
+		return LlamaTransformerHandler.add(x2, mv.sgemv(downOf(li), hidden));
+	}
+
+	/** Layer {@code li}'s down projection; layer 2's lives only here, off the region. */
+	private static DeviceQ4KMatrix downOf(int li) {
+		if (li != HEAD_ONLY_LAYER)
+			return Whole.DOWN[li];
+		synchronized (ResidentQkvPathTest.class) {
+			if (offRegionDown == null)
+				offRegionDown = q4k(H, INTER, new Random(78));
+			return offRegionDown;
+		}
+	}
+
+	private static DeviceQ4KMatrix offRegionDown;
+	private static volatile boolean wholeLoaded;
 
 	/**
 	 * Today's decode with GPU attention after the region: q, k and v as {@link #todaysPath},

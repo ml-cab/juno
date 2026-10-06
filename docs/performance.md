@@ -873,6 +873,23 @@ per layer. Greedy output matched the region-off run token for token over 32 toke
 Mistral-7B and LLaMA-30B (the last with only part of its layers on the GPU, where the region runs on
 those layers and the rest keep the host path). It is off by default.
 
+**The decode region through attention, then through the whole layer.** With GPU attention on, the
+region first went on to cast K and V into the device KV cache and attend there, one download per
+layer bringing back K, V and the attention output: generation with the region on read 1.145x the
+region-off rate on TinyLlama and 1.096x on Mistral-7B (clocks pinned, same-hour A/B, medians of three,
+[`perf-compare/20261006T033707Z-gpu-residency-attention-ab/`](perf-compare/20261006T033707Z-gpu-residency-attention-ab/INDEX.md)).
+It now runs the rest of the layer too (output projection, residual adds, feed-forward norm, SwiGLU
+feed-forward), and the residual row stays on the GPU between layers: per generated token, one upload
+of the residual row plus the LM head's input, and one download per layer plus the logits (TinyLlama: 2
+and 23 on 22 layers). Generation with the region on reads 2.208x the region-off rate on TinyLlama
+(121.95 against 55.24 t/s) and 1.716x on Mistral-7B (34.66 against 20.20), with allocation per token
+13% to 20% lower and no GC pause inside the token span; models that decline the region read 0.959
+(Qwen2.5-3B) and 0.991 (Phi-3.5-mini) on against off, running the same code either way (clocks pinned,
+same-hour A/B, medians of three,
+[`perf-compare/20261006T080204Z-gpu-residency-whole-layer-ab/`](perf-compare/20261006T080204Z-gpu-residency-whole-layer-ab/INDEX.md)).
+The layer output is bit-identical to the GPU op-at-a-time path; against the default path only the two
+norms' summation order differs.
+
 **Device scratch per backend instead of per thread, and the prefill FP16 packing compiled on its own
 (a measurement boundary for GPU prefill).** The GPU matrix-vector backend kept its device scratch per
 thread, and the server runs every request on a new thread, so device memory grew with every request

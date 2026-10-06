@@ -1072,9 +1072,10 @@ public final class ConsoleMain {
 		System.out.println("                             Llama-family, Mistral, Qwen2, Phi-3 and Qwen3; Phi-2 and Qwen3-MoE run on");
 		System.out.println("                             the CPU and say so at startup. Reads an FP16 KV copy, so greedy output can");
 		System.out.println("                             part from off after some tokens; off is the bit-identical CPU-parity baseline");
-		System.out.println("  --gpu-residency on|off|auto  Keep the decode activation on the GPU from RMS norm through the Q/K/V");
-		System.out.println("                             projection and RoPE: one upload and one download per layer instead of");
-		System.out.println("                             a round trip per operation (default: off; CUDA, K-quant MMQ weights,");
+		System.out.println("  --gpu-residency on|off|auto  Keep the decode activation on the GPU through the whole layer (norm,");
+		System.out.println("                             Q/K/V, RoPE, KV append and attention with --gpu-attention on, output");
+		System.out.println("                             projection and FFN): one upload per token and one download per layer");
+		System.out.println("                             instead of a round trip per operation (default: off; CUDA, K-quant MMQ weights,");
 		System.out.println("                             LLaMA-family adjacent RoPE, single-sequence decode; elsewhere it says so");
 		System.out.println("                             once and keeps the existing path; env JUNO_GPU_RESIDENCY)");
 		System.out.println("  --cache-type-k f16|q8_0    K cache element type (default: f16 = current float path)");

@@ -448,10 +448,22 @@ GPU FFI (node module — Panama project, JEP 454):
         DeviceKvCache it can attend through (attendsOnDevice(): GqaAttentionKernel runs the head
         width and PrefillWindowKernels loaded; the mirror is live, readableThrough(pos) and already
         has room for pos) goes on: DeviceKvCache.writeWindowOnDevice casts k and v to FP16 into the
-        mirror at pos, a 20-byte table (K pointer, V pointer, pos + 1) is copied up from a pinned
-        buffer, and GqaAttentionKernel.launch reads q and the mirror. K, V and the attention
-        output share one activation row ("decode region k, v, attention"), so the region leaves
-        the device in one copy and one wait per layer. The mirror's watermark is not moved:
+        mirror at pos, PrefillWindowKernels.decodeAttentionTable writes the 20-byte table (K
+        pointer, V pointer, pos + 1) on the device, and GqaAttentionKernel.launch reads q and the
+        mirror. K, V and the attention output share one activation row ("decode region k, v,
+        attention"), so the region leaves the device in one copy and one wait per layer. Built with
+        ResidentLayerTail.Weights (create(..., tailWeights), as LlamaTransformerHandler does) the
+        region runs the whole layer where runsWholeLayer(li): after attention, ResidentLayerTail
+        issues the rest of the layer on the same stream, the packed row widens to k, v, attention
+        and layer output ("decode region k, v, attention, layer output"), and Output.layerDone /
+        Output.layer carry the layer output. lease() holds one region across a token's layer loop
+        (Lease, try-with-resources in LlamaTransformerHandler.runLayers): a layer run whole leaves
+        its output in the region's residual activation, and the next layer's call in the same lease
+        (same layer index and position, checked) skips its upload; a layer the region does not run
+        whole, or one it never sees (declined head), makes the next one upload again. Per token
+        with every layer whole: one upload of the residual row, one download per layer.
+        ownsResult(row) tells the caller the row is the thread's Output.layer, overwritten by its
+        next call (runLayers copies the last layer's output). The mirror's watermark is not moved:
         LlamaTransformerHandler writes the returned k and v into its host KV tensors first and then
         calls DeviceKvCache.markWritten(pos, 1). The handler grows the mirror (ensureCapacity)
         before the call, so growth, and running out of device memory for it, never happens inside
@@ -466,12 +478,25 @@ GPU FFI (node module — Panama project, JEP 454):
         eligible(li) is false for a layer without all three K-quant projections on the device.
         Device regions come from a pool (bounded by concurrent calls, not by threads ever seen);
         results are copied into per-thread host arrays (Output). Issued under the context's
-        serialization lock. close() frees every region (stream, buffers, pinned table) and the norm
-        weights.
+        serialization lock. close() frees every region (stream, buffers) and the norm
+        weights, and the tail's.
+  ResidentLayerTail — the rest of a decode layer after attention, issued on the decode region's
+        stream: output projection, first residual add (PrefillWindowKernels.addInPlace), FFN RMS norm
+        (CudaRmsNorm.normalizeResident, FFN norm weight uploaded once per layer), gate and up
+        projections sharing one Q8_1 quantization, SwiGLU (PrefillWindowKernels.swiglu), down
+        projection, second residual add (residualAddBoth). Projections are Q4KMmqKernel.quantizeX plus
+        launchPacked, the kernels CudaMatVec.sgemv / sgemvSameX run, so the layer output is
+        bit-identical to the GPU op-at-a-time path (ResidentQkvPathTest whole-layer cases: single
+        layer at positions 0 to 4096, a 40-token decode over four layers in leases with one layer
+        leaving the region after attention, concurrent leases, a declined layer between two region
+        layers, no device allocation per call). Weights(ffnNorm, wo, wGate, wUp, wDown): a layer runs
+        whole only when all four matrices are K-quant on the device with the model's shape. Holds
+        only the FFN norm weights; its scratch belongs to the caller's region.
   GpuResidencyOptions — --gpu-residency on|off|auto / JUNO_GPU_RESIDENCY (system property, then
         env); default off. announceUnsupported(log, surface, reason) logs once per surface per
         process where the flag was requested but cannot run: LlamaTransformerHandler (CPU backend,
-        qwen2 split-half and biases, no K-quant device projections), ForwardPassHandlerLoader
+        qwen2 split-half and biases, no K-quant device projections, region layers whose tail weights
+        are not K-quant on the device and so leave the region after attention), ForwardPassHandlerLoader
         (phi2, phi3, qwen3, qwen3moe handlers), LoraTrainingHandlerFactory (LoRA training and
         --lora-play). Because the console front end turns library logging off unless --verbose,
         ConsoleMain also prints consoleNotice(architecture, lora, cpu) at startup: one warning when
@@ -577,8 +602,12 @@ GPU FFI (node module — Panama project, JEP 454):
         (silu(gate) * up from a [rows][2I] buffer, exponential in double, written as FP16;
         bit-identical to the host loop then cast in the parity test), add_inplace, add_bias, and
         rms_norm_host_order (squares summed one after another in float, 1 / sqrt in double: bit-identical
-        to LlamaTransformerHandler.rmsNormInto, unlike rms_norm.cu's tree reduction and rsqrtf). Every
-        operation rounded separately, no contraction into fused multiply-adds.
+        to LlamaTransformerHandler.rmsNormInto, unlike rms_norm.cu's tree reduction and rsqrtf). For the
+        decode region: swiglu (swiglu_half without the FP16 cast), residual_add_both (x + y into both
+        x and y: the layer output into the residual row and the download row in one launch), and
+        decode_attention_table (writes one decode row's K pointer, V pointer and length from launch
+        arguments, so the attention table costs no host-to-device copy). Every operation rounded
+        separately, no contraction into fused multiply-adds.
   PrefillRegionOptions — JUNO_PREFILL_REGION (system property, then env): on by default, off keeps
         every prefill window on the host path. Diagnostic; ClusterHarness forwards it to forked nodes.
   ResidentChainMicrobench — standalone main class timing RMS norm then RoPE four ways at decode and

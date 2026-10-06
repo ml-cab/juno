@@ -215,6 +215,233 @@ $L__BB1_8:
 	ret;
 
 }
+	// .globl	swiglu
+.visible .entry swiglu(
+	.param .u64 swiglu_param_0,
+	.param .u64 swiglu_param_1,
+	.param .u32 swiglu_param_2,
+	.param .u32 swiglu_param_3
+)
+.maxntid 256, 1, 1
+{
+	.reg .pred 	%p<6>;
+	.reg .f32 	%f<10>;
+	.reg .b32 	%r<29>;
+	.reg .f64 	%fd<44>;
+	.reg .b64 	%rd<33>;
+
+
+	ld.param.u64 	%rd6, [swiglu_param_0];
+	ld.param.u32 	%r5, [swiglu_param_2];
+	ld.param.u32 	%r4, [swiglu_param_3];
+	mov.u32 	%r6, %ctaid.x;
+	mov.u32 	%r7, %ntid.x;
+	mul.wide.u32 	%rd8, %r6, %r7;
+	mov.u32 	%r8, %tid.x;
+	cvt.u64.u32 	%rd9, %r8;
+	add.s64 	%rd1, %rd8, %rd9;
+	cvt.s64.s32 	%rd2, %r4;
+	mul.wide.s32 	%rd10, %r4, %r5;
+	setp.ge.s64 	%p1, %rd1, %rd10;
+	@%p1 bra 	$L__BB2_8;
+
+	or.b64  	%rd11, %rd1, %rd2;
+	and.b64  	%rd12, %rd11, -4294967296;
+	setp.eq.s64 	%p2, %rd12, 0;
+	@%p2 bra 	$L__BB2_3;
+
+	div.s64 	%rd32, %rd1, %rd2;
+	bra.uni 	$L__BB2_4;
+
+$L__BB2_3:
+	cvt.u32.u64 	%r9, %rd2;
+	cvt.u32.u64 	%r10, %rd1;
+	div.u32 	%r11, %r10, %r9;
+	cvt.u64.u32 	%rd32, %r11;
+
+$L__BB2_4:
+	cvta.to.global.u64 	%rd13, %rd6;
+	mul.lo.s64 	%rd14, %rd32, %rd2;
+	sub.s64 	%rd15, %rd1, %rd14;
+	cvt.u32.u64 	%r12, %rd15;
+	shl.b64 	%rd16, %rd14, 1;
+	cvt.s64.s32 	%rd17, %rd15;
+	add.s64 	%rd18, %rd17, %rd16;
+	shl.b64 	%rd19, %rd18, 2;
+	add.s64 	%rd20, %rd13, %rd19;
+	add.s32 	%r13, %r12, %r4;
+	cvt.s64.s32 	%rd21, %r13;
+	add.s64 	%rd22, %rd16, %rd21;
+	shl.b64 	%rd23, %rd22, 2;
+	add.s64 	%rd24, %rd13, %rd23;
+	ld.global.nc.f32 	%f1, [%rd24];
+	ld.global.nc.f32 	%f2, [%rd20];
+	cvt.f64.f32 	%fd5, %f2;
+	neg.f64 	%fd6, %fd5;
+	mov.f64 	%fd7, 0d4338000000000000;
+	mov.f64 	%fd8, 0d3FF71547652B82FE;
+	fma.rn.f64 	%fd9, %fd6, %fd8, %fd7;
+	{
+	.reg .b32 %temp; 
+	mov.b64 	{%r1, %temp}, %fd9;
+	}
+	mov.f64 	%fd10, 0dC338000000000000;
+	add.rn.f64 	%fd11, %fd9, %fd10;
+	mov.f64 	%fd12, 0dBFE62E42FEFA39EF;
+	fma.rn.f64 	%fd13, %fd11, %fd12, %fd6;
+	mov.f64 	%fd14, 0dBC7ABC9E3B39803F;
+	fma.rn.f64 	%fd15, %fd11, %fd14, %fd13;
+	mov.f64 	%fd16, 0d3E928AF3FCA213EA;
+	mov.f64 	%fd17, 0d3E5ADE1569CE2BDF;
+	fma.rn.f64 	%fd18, %fd17, %fd15, %fd16;
+	mov.f64 	%fd19, 0d3EC71DEE62401315;
+	fma.rn.f64 	%fd20, %fd18, %fd15, %fd19;
+	mov.f64 	%fd21, 0d3EFA01997C89EB71;
+	fma.rn.f64 	%fd22, %fd20, %fd15, %fd21;
+	mov.f64 	%fd23, 0d3F2A01A014761F65;
+	fma.rn.f64 	%fd24, %fd22, %fd15, %fd23;
+	mov.f64 	%fd25, 0d3F56C16C1852B7AF;
+	fma.rn.f64 	%fd26, %fd24, %fd15, %fd25;
+	mov.f64 	%fd27, 0d3F81111111122322;
+	fma.rn.f64 	%fd28, %fd26, %fd15, %fd27;
+	mov.f64 	%fd29, 0d3FA55555555502A1;
+	fma.rn.f64 	%fd30, %fd28, %fd15, %fd29;
+	mov.f64 	%fd31, 0d3FC5555555555511;
+	fma.rn.f64 	%fd32, %fd30, %fd15, %fd31;
+	mov.f64 	%fd33, 0d3FE000000000000B;
+	fma.rn.f64 	%fd34, %fd32, %fd15, %fd33;
+	mov.f64 	%fd35, 0d3FF0000000000000;
+	fma.rn.f64 	%fd36, %fd34, %fd15, %fd35;
+	fma.rn.f64 	%fd37, %fd36, %fd15, %fd35;
+	{
+	.reg .b32 %temp; 
+	mov.b64 	{%r2, %temp}, %fd37;
+	}
+	{
+	.reg .b32 %temp; 
+	mov.b64 	{%temp, %r3}, %fd37;
+	}
+	shl.b32 	%r14, %r1, 20;
+	add.s32 	%r15, %r3, %r14;
+	mov.b64 	%fd43, {%r2, %r15};
+	{
+	.reg .b32 %temp; 
+	mov.b64 	{%temp, %r16}, %fd6;
+	}
+	mov.b32 	%f4, %r16;
+	abs.f32 	%f3, %f4;
+	setp.lt.f32 	%p3, %f3, 0f4086232B;
+	@%p3 bra 	$L__BB2_7;
+
+	setp.gt.f32 	%p4, %f2, 0f80000000;
+	mov.f64 	%fd39, 0d7FF0000000000000;
+	sub.f64 	%fd40, %fd39, %fd5;
+	selp.f64 	%fd43, 0d0000000000000000, %fd40, %p4;
+	setp.geu.f32 	%p5, %f3, 0f40874800;
+	@%p5 bra 	$L__BB2_7;
+
+	shr.u32 	%r17, %r1, 31;
+	add.s32 	%r18, %r1, %r17;
+	shr.s32 	%r19, %r18, 1;
+	shl.b32 	%r20, %r19, 20;
+	add.s32 	%r21, %r3, %r20;
+	mov.b64 	%fd41, {%r2, %r21};
+	sub.s32 	%r22, %r1, %r19;
+	shl.b32 	%r23, %r22, 20;
+	add.s32 	%r24, %r23, 1072693248;
+	mov.u32 	%r25, 0;
+	mov.b64 	%fd42, {%r25, %r24};
+	mul.f64 	%fd43, %fd41, %fd42;
+
+$L__BB2_7:
+	ld.param.u64 	%rd31, [swiglu_param_1];
+	cvt.rn.f32.f64 	%f5, %fd43;
+	mov.f32 	%f6, 0f3F800000;
+	add.rn.f32 	%f7, %f6, %f5;
+	div.rn.f32 	%f8, %f2, %f7;
+	mul.rn.f32 	%f9, %f8, %f1;
+	cvta.to.global.u64 	%rd28, %rd31;
+	shl.b64 	%rd29, %rd1, 2;
+	add.s64 	%rd30, %rd28, %rd29;
+	st.global.f32 	[%rd30], %f9;
+
+$L__BB2_8:
+	ret;
+
+}
+	// .globl	residual_add_both
+.visible .entry residual_add_both(
+	.param .u64 residual_add_both_param_0,
+	.param .u64 residual_add_both_param_1,
+	.param .u64 residual_add_both_param_2
+)
+.maxntid 256, 1, 1
+{
+	.reg .pred 	%p<2>;
+	.reg .f32 	%f<4>;
+	.reg .b32 	%r<4>;
+	.reg .b64 	%rd<12>;
+
+
+	ld.param.u64 	%rd2, [residual_add_both_param_0];
+	ld.param.u64 	%rd3, [residual_add_both_param_1];
+	ld.param.u64 	%rd4, [residual_add_both_param_2];
+	mov.u32 	%r1, %ctaid.x;
+	mov.u32 	%r2, %ntid.x;
+	mul.wide.u32 	%rd5, %r1, %r2;
+	mov.u32 	%r3, %tid.x;
+	cvt.u64.u32 	%rd6, %r3;
+	add.s64 	%rd1, %rd5, %rd6;
+	setp.ge.s64 	%p1, %rd1, %rd4;
+	@%p1 bra 	$L__BB3_2;
+
+	cvta.to.global.u64 	%rd7, %rd2;
+	shl.b64 	%rd8, %rd1, 2;
+	add.s64 	%rd9, %rd7, %rd8;
+	cvta.to.global.u64 	%rd10, %rd3;
+	add.s64 	%rd11, %rd10, %rd8;
+	ld.global.f32 	%f1, [%rd11];
+	ld.global.f32 	%f2, [%rd9];
+	add.rn.f32 	%f3, %f2, %f1;
+	st.global.f32 	[%rd9], %f3;
+	st.global.f32 	[%rd11], %f3;
+
+$L__BB3_2:
+	ret;
+
+}
+	// .globl	decode_attention_table
+.visible .entry decode_attention_table(
+	.param .u64 decode_attention_table_param_0,
+	.param .u64 decode_attention_table_param_1,
+	.param .u64 decode_attention_table_param_2,
+	.param .u32 decode_attention_table_param_3
+)
+{
+	.reg .pred 	%p<2>;
+	.reg .b32 	%r<5>;
+	.reg .b64 	%rd<5>;
+
+
+	ld.param.u64 	%rd1, [decode_attention_table_param_0];
+	ld.param.u64 	%rd2, [decode_attention_table_param_1];
+	ld.param.u64 	%rd3, [decode_attention_table_param_2];
+	ld.param.u32 	%r1, [decode_attention_table_param_3];
+	mov.u32 	%r2, %tid.x;
+	mov.u32 	%r3, %ctaid.x;
+	or.b32  	%r4, %r3, %r2;
+	setp.ne.s32 	%p1, %r4, 0;
+	@%p1 bra 	$L__BB4_2;
+
+	cvta.to.global.u64 	%rd4, %rd1;
+	st.global.u64 	[%rd4], %rd2;
+	st.global.u64 	[%rd4+8], %rd3;
+	st.global.u32 	[%rd4+16], %r1;
+
+$L__BB4_2:
+	ret;
+
+}
 	// .globl	add_inplace
 .visible .entry add_inplace(
 	.param .u64 add_inplace_param_0,
@@ -239,7 +466,7 @@ $L__BB1_8:
 	cvt.u64.u32 	%rd6, %r3;
 	add.s64 	%rd1, %rd5, %rd6;
 	setp.ge.s64 	%p1, %rd1, %rd4;
-	@%p1 bra 	$L__BB2_2;
+	@%p1 bra 	$L__BB5_2;
 
 	cvta.to.global.u64 	%rd7, %rd2;
 	shl.b64 	%rd8, %rd1, 2;
@@ -251,7 +478,7 @@ $L__BB1_8:
 	add.rn.f32 	%f3, %f2, %f1;
 	st.global.f32 	[%rd9], %f3;
 
-$L__BB2_2:
+$L__BB5_2:
 	ret;
 
 }
@@ -283,23 +510,23 @@ $L__BB2_2:
 	cvt.s64.s32 	%rd2, %r2;
 	mul.wide.s32 	%rd10, %r2, %r1;
 	setp.ge.s64 	%p1, %rd1, %rd10;
-	@%p1 bra 	$L__BB3_5;
+	@%p1 bra 	$L__BB6_5;
 
 	or.b64  	%rd11, %rd1, %rd2;
 	and.b64  	%rd12, %rd11, -4294967296;
 	setp.eq.s64 	%p2, %rd12, 0;
-	@%p2 bra 	$L__BB3_3;
+	@%p2 bra 	$L__BB6_3;
 
 	rem.s64 	%rd20, %rd1, %rd2;
-	bra.uni 	$L__BB3_4;
+	bra.uni 	$L__BB6_4;
 
-$L__BB3_3:
+$L__BB6_3:
 	cvt.u32.u64 	%r6, %rd2;
 	cvt.u32.u64 	%r7, %rd1;
 	rem.u32 	%r8, %r7, %r6;
 	cvt.u64.u32 	%rd20, %r8;
 
-$L__BB3_4:
+$L__BB6_4:
 	cvta.to.global.u64 	%rd13, %rd6;
 	shl.b64 	%rd14, %rd1, 2;
 	add.s64 	%rd15, %rd13, %rd14;
@@ -312,7 +539,7 @@ $L__BB3_4:
 	add.rn.f32 	%f3, %f2, %f1;
 	st.global.f32 	[%rd15], %f3;
 
-$L__BB3_5:
+$L__BB6_5:
 	ret;
 
 }
@@ -346,18 +573,18 @@ $L__BB3_5:
 	mul.lo.s64 	%rd2, %rd26, %rd25;
 	mov.u32 	%r41, %tid.x;
 	setp.ne.s32 	%p1, %r41, 0;
-	@%p1 bra 	$L__BB4_9;
+	@%p1 bra 	$L__BB7_9;
 
 	setp.lt.s32 	%p2, %r23, 1;
 	mov.f32 	%f57, 0f00000000;
-	@%p2 bra 	$L__BB4_8;
+	@%p2 bra 	$L__BB7_8;
 
 	add.s32 	%r26, %r23, -1;
 	and.b32  	%r38, %r23, 3;
 	setp.lt.u32 	%p3, %r26, 3;
 	mov.f32 	%f57, 0f00000000;
 	mov.u32 	%r37, 0;
-	@%p3 bra 	$L__BB4_5;
+	@%p3 bra 	$L__BB7_5;
 
 	sub.s32 	%r36, %r23, %r38;
 	cvta.to.global.u64 	%rd27, %rd22;
@@ -365,7 +592,7 @@ $L__BB3_5:
 	add.s64 	%rd29, %rd27, %rd28;
 	add.s64 	%rd56, %rd29, 8;
 
-$L__BB4_4:
+$L__BB7_4:
 	ld.global.nc.f32 	%f14, [%rd56+-8];
 	mul.rn.f32 	%f15, %f14, %f14;
 	add.rn.f32 	%f16, %f57, %f15;
@@ -382,11 +609,11 @@ $L__BB4_4:
 	add.s64 	%rd56, %rd56, 16;
 	add.s32 	%r36, %r36, -4;
 	setp.ne.s32 	%p4, %r36, 0;
-	@%p4 bra 	$L__BB4_4;
+	@%p4 bra 	$L__BB7_4;
 
-$L__BB4_5:
+$L__BB7_5:
 	setp.eq.s32 	%p5, %r38, 0;
-	@%p5 bra 	$L__BB4_8;
+	@%p5 bra 	$L__BB7_8;
 
 	cvt.s64.s32 	%rd30, %r37;
 	add.s64 	%rd31, %rd2, %rd30;
@@ -394,7 +621,7 @@ $L__BB4_5:
 	shl.b64 	%rd33, %rd31, 2;
 	add.s64 	%rd57, %rd32, %rd33;
 
-$L__BB4_7:
+$L__BB7_7:
 	.pragma "nounroll";
 	ld.global.nc.f32 	%f25, [%rd57];
 	mul.rn.f32 	%f26, %f25, %f25;
@@ -402,9 +629,9 @@ $L__BB4_7:
 	add.s64 	%rd57, %rd57, 4;
 	add.s32 	%r38, %r38, -1;
 	setp.ne.s32 	%p6, %r38, 0;
-	@%p6 bra 	$L__BB4_7;
+	@%p6 bra 	$L__BB7_7;
 
-$L__BB4_8:
+$L__BB7_8:
 	cvt.rn.f32.s32 	%f27, %r23;
 	div.rn.f32 	%f28, %f57, %f27;
 	add.rn.f32 	%f29, %f28, %f9;
@@ -415,11 +642,11 @@ $L__BB4_8:
 	div.rn.f32 	%f32, %f31, %f30;
 	st.shared.f32 	[_ZZ19rms_norm_host_orderE5scale], %f32;
 
-$L__BB4_9:
+$L__BB7_9:
 	bar.sync 	0;
 	ld.shared.f32 	%f8, [_ZZ19rms_norm_host_orderE5scale];
 	setp.ge.s32 	%p7, %r41, %r23;
-	@%p7 bra 	$L__BB4_16;
+	@%p7 bra 	$L__BB7_16;
 
 	mov.u32 	%r12, %ntid.x;
 	not.b32 	%r28, %r41;
@@ -428,7 +655,7 @@ $L__BB4_9:
 	add.s32 	%r30, %r13, 1;
 	and.b32  	%r40, %r30, 3;
 	setp.eq.s32 	%p8, %r40, 0;
-	@%p8 bra 	$L__BB4_13;
+	@%p8 bra 	$L__BB7_13;
 
 	mov.u32 	%r41, %tid.x;
 	cvt.s64.s32 	%rd34, %r41;
@@ -442,7 +669,7 @@ $L__BB4_9:
 	mul.wide.s32 	%rd39, %r41, 4;
 	add.s64 	%rd58, %rd1, %rd39;
 
-$L__BB4_12:
+$L__BB7_12:
 	.pragma "nounroll";
 	ld.global.nc.f32 	%f33, [%rd59];
 	ld.global.nc.f32 	%f34, [%rd58];
@@ -455,17 +682,17 @@ $L__BB4_12:
 	add.s64 	%rd58, %rd58, %rd10;
 	add.s32 	%r40, %r40, -1;
 	setp.ne.s32 	%p9, %r40, 0;
-	@%p9 bra 	$L__BB4_12;
+	@%p9 bra 	$L__BB7_12;
 
-$L__BB4_13:
+$L__BB7_13:
 	setp.lt.u32 	%p10, %r13, 3;
-	@%p10 bra 	$L__BB4_16;
+	@%p10 bra 	$L__BB7_16;
 
 	mul.wide.s32 	%rd19, %r12, 4;
 	cvta.to.global.u64 	%rd20, %rd22;
 	cvta.to.global.u64 	%rd21, %rd23;
 
-$L__BB4_15:
+$L__BB7_15:
 	cvt.s64.s32 	%rd40, %r41;
 	mul.wide.s32 	%rd41, %r41, 4;
 	add.s64 	%rd42, %rd1, %rd41;
@@ -507,9 +734,9 @@ $L__BB4_15:
 	st.global.f32 	[%rd55], %f52;
 	add.s32 	%r41, %r34, %r12;
 	setp.lt.s32 	%p11, %r41, %r23;
-	@%p11 bra 	$L__BB4_15;
+	@%p11 bra 	$L__BB7_15;
 
-$L__BB4_16:
+$L__BB7_16:
 	ret;
 
 }

@@ -128,9 +128,9 @@ public final class GpuResidencyOptions {
 		if (reason != null)
 			return prefix + "architecture " + architecture + " " + reason + "; the existing path is used";
 		if (GpuAttentionOptions.fromEnv().mode() == GpuAttentionOptions.Mode.OFF)
-			return "--gpu-residency=" + opts.policyLabel() + " with --gpu-attention off: the KV append and attention"
-					+ " stay outside the device region (attention runs on the CPU); norm, Q/K/V projection and RoPE"
-					+ " still run in it";
+			return "--gpu-residency=" + opts.policyLabel() + " with --gpu-attention off: the KV append, attention"
+					+ " and the rest of the layer stay outside the device region (attention runs on the CPU); norm,"
+					+ " Q/K/V projection and RoPE still run in it";
 		return null;
 	}
 

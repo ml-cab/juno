@@ -140,29 +140,43 @@ class LlamaTransformerHandlerGpuResidencyTest {
 	}
 
 	@Test
-	@DisplayName("tinyllama: with GPU attention the region appends K/V and attends on the device, one download per layer")
-	void decodeAttendsInsideTheRegion() throws Exception {
+	@DisplayName("tinyllama: the whole decode layer runs in the region: per token at most one upload per layer and one download per layer plus the logits")
+	void decodeRunsTheWholeLayerInTheRegion() throws Exception {
 		assumeTrue(TINYLLAMA.toFile().exists(), "model not present");
 		saved = System.getProperty(GpuResidencyOptions.ENV_PROPERTY);
 		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "on");
 		ShardContext shard = shard(TINYLLAMA);
 		LlamaTransformerHandler on = loadOnCuda(TINYLLAMA, shard);
 		assertThat(on.gpuResidencyAttentionActive()).as("GPU attention is on by default on CUDA").isTrue();
+		assertThat(on.gpuResidencyWholeLayerActive()).as("every layer's tail weights are K-quant on the device").isTrue();
 		int layers = shard.endLayer() - shard.startLayer();
-		long steps = (long) layers * TOKENS.length;
+		long tokens = TOKENS.length;
+		long steps = (long) layers * tokens;
 
-		List<RecordedEvent> events = record(() -> decode(on, shard, "res-attn"));
+		List<RecordedEvent> events = record(() -> decode(on, shard, "res-layer"));
 
-		// The op-at-a-time sites after the region: host FP16 pack plus two row copies, four
-		// attention uploads and one download. None may run in decode with the region on.
+		// The op-at-a-time sites: the KV append and attention after the region, the
+		// attention table copy, and every GEMV and norm of the layer's tail. None may
+		// run in decode with the whole layer in the region.
 		for (String site : new String[] { "memcpy(K row H2D)", "memcpy(V row H2D)", "memcpy(gqa qBatch H2D)",
-				"memcpy(gqa kPtrs H2D)", "memcpy(gqa outBatch D2H)", "materializeRows(resident activation)" })
+				"memcpy(gqa kPtrs H2D)", "memcpy(gqa outBatch D2H)", "materializeRows(resident activation)",
+				"memcpy(decode region attention table H2D)", "materialize(decode region k, v, attention)",
+				"cudaMemcpyAsync(x H2D q4k sameX)", "cudaMemcpyAsync(y D2H q4k sameX)", "memcpy(rmsNorm xBatch H2D)" })
 			assertThat(decodeCopies(events, site)).as(site).isZero();
-		assertThat(decodeCopies(events, "upload(decode region input)")).as("residual row in").isEqualTo(steps);
-		assertThat(decodeCopies(events, "memcpy(decode region attention table H2D)")).as("attention table in")
-				.isEqualTo(steps);
-		assertThat(decodeCopies(events, "materialize(decode region k, v, attention)"))
+		// The single-row K-quant GEMV sites now carry only the LM head, once per token.
+		assertThat(decodeCopies(events, "cudaMemcpyAsync(x H2D q4k)")).as("LM head input").isEqualTo(tokens);
+		assertThat(decodeCopies(events, "cudaMemcpyAsync(y D2H q4k)")).as("logits").isEqualTo(tokens);
+		assertThat(decodeCopies(events, "upload(decode region input)"))
+				.as("the residual row goes up once per token: each later layer reads it on the device").isEqualTo(tokens);
+		assertThat(decodeCopies(events, "materialize(decode region k, v, attention, layer output)"))
 				.as("one download per layer and token").isEqualTo(steps);
+		long h2d = decodeCopiesByDirection(events, "H2D");
+		long d2h = decodeCopiesByDirection(events, "D2H");
+		System.out.printf(java.util.Locale.ROOT, "GPU-RESIDENCY whole layer: per token %d H2D, %d D2H, %d layers%n",
+				h2d / tokens, d2h / tokens, layers);
+		assertThat(h2d).as("host-to-device copies, <= 1 x layers per token").isLessThanOrEqualTo(steps);
+		assertThat(d2h).as("device-to-host copies, <= 1 x layers + 1 (the logits) per token")
+				.isLessThanOrEqualTo(steps + tokens);
 	}
 
 	@Test
@@ -196,6 +210,13 @@ class LlamaTransformerHandlerGpuResidencyTest {
 	private static long decodeCopies(List<RecordedEvent> events, String site) {
 		return events.stream().filter(e -> e.getEventType().getName().equals("juno.DeviceStaging"))
 				.filter(e -> site.equals(e.getString("site")) && "decode".equals(e.getString("phase")))
+				.mapToLong(e -> e.getLong("copies")).sum();
+	}
+
+	/** Decode-phase copies in {@code direction} (H2D or D2H) over every site. */
+	private static long decodeCopiesByDirection(List<RecordedEvent> events, String direction) {
+		return events.stream().filter(e -> e.getEventType().getName().equals("juno.DeviceStaging"))
+				.filter(e -> direction.equals(e.getString("direction")) && "decode".equals(e.getString("phase")))
 				.mapToLong(e -> e.getLong("copies")).sum();
 	}
 

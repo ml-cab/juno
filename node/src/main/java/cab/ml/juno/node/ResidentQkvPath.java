@@ -22,7 +22,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
-import static java.lang.foreign.ValueLayout.JAVA_INT;
 
 /**
  * The decode-time attention block as one residency region: the residual row is
@@ -31,10 +30,16 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * ({@link DeviceKvCache}) the region then goes on: K and V are cast to FP16 into
  * the mirror at the token's position and the attention kernel reads Q and the
  * mirror there, so one download brings back K, V and the attention output.
+ * Given the rest of the layer's weights ({@link ResidentLayerTail}), it goes on
+ * through the output projection and the FFN, so one download brings back K, V
+ * and the layer output, and the layer output stays on the device: inside a
+ * {@link Lease}, the next layer reads it there and uploads nothing.
  *
  * <pre>
- *   upload x -> norm -> quantize to Q8_1 -> W_q, W_k, W_v -> RoPE(q), RoPE(k)
- *       with a mirror:    -> fp16(k, v) into the mirror -> attention(q, mirror) -> download k, v, attention
+ *   upload x (unless the previous layer left it) -> norm -> quantize to Q8_1 -> W_q, W_k, W_v -> RoPE(q), RoPE(k)
+ *       with a mirror:    -> fp16(k, v) into the mirror -> attention(q, mirror)
+ *           and a tail:   -> W_o, residual, norm, SwiGLU FFN, residual -> download k, v, attention, layer output
+ *           without one:  -> download k, v, attention
  *       without one:      -> download q, k, v
  * </pre>
  *
@@ -75,7 +80,6 @@ final class ResidentQkvPath implements AutoCloseable {
 
 	/** The attention table a decode row's launch reads: K pointer, V pointer, sequence length. */
 	private static final long TABLE_BYTES = 2 * ADDRESS.byteSize() + Integer.BYTES;
-	private static final String TABLE_SITE = "memcpy(decode region attention table H2D)";
 
 	/**
 	 * One call's results, owned by the calling thread and overwritten by its next
@@ -89,20 +93,28 @@ final class ResidentQkvPath implements AutoCloseable {
 		final float[] k;
 		final float[] v;
 		final float[] attn;
+		/** The layer's output row (the residual stream after the FFN) when {@link #layerDone}. */
+		final float[] layer;
 		boolean attended;
+		/**
+		 * The region ran the whole layer: output projection, both residual adds, the
+		 * FFN norm and the SwiGLU FFN as well. {@link #layer} is the layer's output.
+		 */
+		boolean layerDone;
 		/** {q, k, v}, the arrays above, for the call without a mirror. */
 		final float[][] qkv;
 		/** The packed row the region downloads: k, v, then the attention output. */
 		final float[][] packed;
 		final float[][] qAndPacked;
 
-		private Output(int hidden, int kvDim) {
+		private Output(int hidden, int kvDim, int packedWidth) {
 			q = new float[hidden];
 			k = new float[kvDim];
 			v = new float[kvDim];
 			attn = new float[hidden];
+			layer = new float[hidden];
 			qkv = new float[][] { q, k, v };
-			packed = new float[][] { new float[2 * kvDim + hidden] };
+			packed = new float[][] { new float[packedWidth] };
 			qAndPacked = new float[][] { q, packed[0] };
 		}
 	}
@@ -125,6 +137,8 @@ final class ResidentQkvPath implements AutoCloseable {
 	private final DeviceQ4KMatrix[] wv;
 	/** Per layer: the norm weight as a 1 x hidden device matrix, null where the layer is not eligible. */
 	private final DeviceFloatMatrix[] normWeight;
+	/** The rest of the layer after attention, or null when the region stops at attention. */
+	private final ResidentLayerTail tail;
 
 	/** Every region ever opened, for {@link #close} and {@link #deviceBytes}. */
 	private final List<Region> regions = new CopyOnWriteArrayList<>();
@@ -136,7 +150,7 @@ final class ResidentQkvPath implements AutoCloseable {
 
 	private ResidentQkvPath(GpuContext ctx, Q4KMmqKernel mmq, CudaRmsNorm norm, CudaRope rope,
 			GqaAttentionKernel attention, PrefillWindowKernels kernels, LlamaConfig cfg, DeviceQ4KMatrix[] wq,
-			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, DeviceFloatMatrix[] normWeight) {
+			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, DeviceFloatMatrix[] normWeight, ResidentLayerTail tail) {
 		this.ctx = ctx;
 		this.mmq = mmq;
 		this.norm = norm;
@@ -153,9 +167,11 @@ final class ResidentQkvPath implements AutoCloseable {
 		this.wk = wk;
 		this.wv = wv;
 		this.normWeight = normWeight;
+		this.tail = tail;
 		int h = hidden;
 		int kv = kvDim;
-		this.results = ThreadLocal.withInitial(() -> new Output(h, kv));
+		int width = packedWidth();
+		this.results = ThreadLocal.withInitial(() -> new Output(h, kv, width));
 	}
 
 	/**
@@ -195,6 +211,19 @@ final class ResidentQkvPath implements AutoCloseable {
 	 */
 	static ResidentQkvPath create(GpuContext ctx, LlamaConfig cfg, float[][] attnNorm, DeviceQ4KMatrix[] wq,
 			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv) {
+		return create(ctx, cfg, attnNorm, wq, wk, wv, null);
+	}
+
+	/**
+	 * As {@link #create(GpuContext, LlamaConfig, float[][], DeviceQ4KMatrix[], DeviceQ4KMatrix[], DeviceQ4KMatrix[])},
+	 * and when {@code tail} is given and the region attends on the device, the
+	 * region runs the rest of each layer whose tail weights are all on the device
+	 * ({@link ResidentLayerTail.Weights}): one decode layer is then one upload of the
+	 * residual row (none when the previous layer ran in the same {@link Lease}) and
+	 * one download of k, v and the layer output.
+	 */
+	static ResidentQkvPath create(GpuContext ctx, LlamaConfig cfg, float[][] attnNorm, DeviceQ4KMatrix[] wq,
+			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, ResidentLayerTail.Weights tailWeights) {
 		Q4KMmqKernel mmq = Q4KMmqKernel.tryLoad();
 		if (mmq == null)
 			throw new IllegalStateException("Q4_K MMQ kernel is not loaded");
@@ -230,7 +259,71 @@ final class ResidentQkvPath implements AutoCloseable {
 			rope.close();
 			throw e;
 		}
-		return new ResidentQkvPath(ctx, mmq, norm, rope, attention, kernels, cfg, wq, wk, wv, weights);
+		ResidentLayerTail tail = null;
+		if (tailWeights != null && attention != null) {
+			try {
+				tail = ResidentLayerTail.create(ctx, cfg, mmq, norm, kernels, tailWeights, weights);
+			} catch (RuntimeException e) {
+				for (DeviceFloatMatrix w : weights)
+					if (w != null)
+						w.close();
+				rope.close();
+				throw e;
+			}
+		}
+		return new ResidentQkvPath(ctx, mmq, norm, rope, attention, kernels, cfg, wq, wk, wv, weights, tail);
+	}
+
+	/** The packed download row: k, v and the attention output, then the layer output when the tail runs. */
+	private int packedWidth() {
+		return 2 * kvDim + (tail != null ? 2 : 1) * hidden;
+	}
+
+	/**
+	 * Whether the region runs the whole of layer {@code li} when it attends: the
+	 * layer is {@link #eligible} and its output projection, FFN norm and FFN
+	 * weights are on the device.
+	 */
+	boolean runsWholeLayer(int li) {
+		return tail != null && eligible(li) && tail.eligible(li);
+	}
+
+	/**
+	 * Holds one device region across a token's layer loop, so that a layer the
+	 * region runs whole leaves its output on the device for the next layer and the
+	 * next layer skips its upload. Used by one thread at a time; closing it returns
+	 * the region to the pool.
+	 */
+	final class Lease implements AutoCloseable {
+		private Region region;
+		/** The layer and position whose input is already on the device, or -1. */
+		private int nextLayer = -1;
+		private int nextPos = -1;
+
+		private Lease() {
+		}
+
+		@Override
+		public void close() {
+			if (region != null) {
+				free.offer(region);
+				region = null;
+			}
+			nextLayer = -1;
+		}
+	}
+
+	/**
+	 * Whether {@code row} is the calling thread's {@link Output#layer}, which its
+	 * next call overwrites; a caller keeping a layer output past that copies it.
+	 */
+	boolean ownsResult(float[] row) {
+		return row == results.get().layer;
+	}
+
+	/** A lease over one device region for a token's layer loop; see {@link Lease}. */
+	Lease lease() {
+		return new Lease();
 	}
 
 	private static boolean layerHasWeights(DeviceQ4KMatrix[] wq, DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv,
@@ -273,34 +366,64 @@ final class ResidentQkvPath implements AutoCloseable {
 	 * {@link #eligible}. {@code x} is not modified.
 	 */
 	Output run(int li, float[] x, int pos, DeviceKvCache mirror) {
+		return run(li, x, pos, mirror, null);
+	}
+
+	/**
+	 * As {@link #run(int, float[], int, DeviceKvCache)}, inside {@code lease} when it
+	 * is not null. When the call attends and {@link #runsWholeLayer} holds, the region
+	 * runs the whole layer and {@link Output#layer} is its output; the caller passes
+	 * that row as {@code x} to the next layer's call in the same lease, which then
+	 * reads it from the device instead of uploading it.
+	 */
+	Output run(int li, float[] x, int pos, DeviceKvCache mirror, Lease lease) {
 		if (!eligible(li))
 			return null;
 		if (closed)
 			throw new IllegalStateException("resident QKV path is closed");
 		boolean attend = attention != null && mirror != null && mirror.readableThrough(pos)
 				&& mirror.capacityTokens() > pos;
-		Region r = free.poll();
-		if (r == null) {
-			r = openRegion();
-			regions.add(r);
-		}
+		Region r = lease != null ? lease.region : null;
+		if (r == null)
+			r = takeRegion();
 		Output out = results.get();
+		if (lease != null) {
+			lease.region = r;
+			runOn(r, li, x, pos, attend ? mirror : null, out, lease);
+			return out;
+		}
 		try {
-			runOn(r, li, x, pos, attend ? mirror : null, out);
+			runOn(r, li, x, pos, attend ? mirror : null, out, null);
 		} finally {
 			free.offer(r);
 		}
 		return out;
 	}
 
-	private void runOn(Region r, int li, float[] x, int pos, DeviceKvCache mirror, Output out) {
+	private Region takeRegion() {
+		Region r = free.poll();
+		if (r == null) {
+			r = openRegion();
+			regions.add(r);
+		}
+		return r;
+	}
+
+	private void runOn(Region r, int li, float[] x, int pos, DeviceKvCache mirror, Output out, Lease lease) {
+		boolean whole = mirror != null && tail != null && tail.eligible(li);
+		boolean inputOnDevice = lease != null && lease.nextLayer == li && lease.nextPos == pos;
+		if (lease != null)
+			lease.nextLayer = -1;
 		MemorySegment stream = r.chain.stream();
 		MemorySegment packed = r.packed.devicePointer();
 		long kvBytes = (long) kvDim * Float.BYTES;
 		synchronized (ctx.cublasSerializationLock()) {
-			r.in[0] = x;
-			r.x.upload(r.in, 1);
-			r.in[0] = null;
+			// The previous layer in this lease left its output, which is x, in r.x.
+			if (!inputOnDevice) {
+				r.in[0] = x;
+				r.x.upload(r.in, 1);
+				r.in[0] = null;
+			}
 			if (!norm.normalizeResident(r.x, normWeight[li], eps, r.xn))
 				throw new IllegalStateException("RMS-norm kernel failed to load after the path was built");
 			mmq.quantizeX(r.xn.devicePointer(), r.q8, hidden, stream);
@@ -313,6 +436,9 @@ final class ResidentQkvPath implements AutoCloseable {
 				throw new IllegalStateException("RoPE kernel failed to load after the path was built");
 			if (mirror != null) {
 				attend(r, mirror, pos, packed, kvBytes, stream);
+				if (whole)
+					tail.issue(li, r.x, r.xn, packed.asSlice(2 * kvBytes), packed.asSlice(2 * kvBytes + hiddenBytes()),
+							r.q8, r.tailScratch, stream);
 				r.packed.materialize(out.packed);
 			} else {
 				ResidentActivation.materializeRows(r.qAndPacked, out.qAndPacked);
@@ -323,14 +449,25 @@ final class ResidentQkvPath implements AutoCloseable {
 		System.arraycopy(row, kvDim, out.v, 0, kvDim);
 		if (mirror != null)
 			System.arraycopy(row, 2 * kvDim, out.attn, 0, hidden);
+		if (whole)
+			System.arraycopy(row, 2 * kvDim + hidden, out.layer, 0, hidden);
 		out.attended = mirror != null;
+		out.layerDone = whole;
+		if (whole && lease != null) {
+			lease.nextLayer = li + 1;
+			lease.nextPos = pos;
+		}
+	}
+
+	private long hiddenBytes() {
+		return (long) hidden * Float.BYTES;
 	}
 
 	/**
 	 * fp16(k, v) into the mirror at {@code pos}, then attention over positions
-	 * {@code [0, pos]} into the packed row's last {@code hidden} columns. The table's
-	 * pinned host buffer is free to overwrite: the previous call on this region
-	 * waited for its stream before returning.
+	 * {@code [0, pos]} into the packed row's attention columns. The attention table
+	 * (K pointer, V pointer, length) is written by a kernel from its launch
+	 * arguments, so it costs no host-to-device copy.
 	 */
 	private void attend(Region r, DeviceKvCache mirror, int pos, MemorySegment packed, long kvBytes,
 			MemorySegment stream) {
@@ -338,19 +475,7 @@ final class ResidentQkvPath implements AutoCloseable {
 		int mark = spans.begin(stream, 1);
 		mirror.writeWindowOnDevice(pos, 1, packed, packed.asSlice(kvBytes), kernels, stream);
 		spans.compute(DeviceComputeEvent.KV_APPEND, 1, mark, stream);
-		r.tableHost.set(ADDRESS, 0, mirror.kPointer());
-		r.tableHost.set(ADDRESS, ADDRESS.byteSize(), mirror.vPointer());
-		r.tableHost.set(JAVA_INT, 2 * ADDRESS.byteSize(), pos + 1);
-		mark = spans.begin(stream, 1);
-		int rc;
-		try {
-			rc = (int) ctx.bindings().gpuMemcpyAsync().invokeExact(r.table, r.tableHost, TABLE_BYTES,
-					GpuBindings.H2D, stream);
-		} catch (Throwable t) {
-			throw new IllegalStateException(TABLE_SITE + ": native call failed", t);
-		}
-		GpuBindings.check(rc, TABLE_SITE);
-		spans.staging(GpuBindings.H2D, TABLE_BYTES, 1, TABLE_SITE, mark, stream);
+		kernels.decodeAttentionTable(r.table, mirror.kPointer(), mirror.vPointer(), pos + 1, stream);
 		mark = spans.begin(stream, 1);
 		attention.launch(r.q.devicePointer(), r.table, r.table.asSlice(ADDRESS.byteSize()),
 				r.table.asSlice(2 * ADDRESS.byteSize()), packed.asSlice(2 * kvBytes), 1, numHeads, gqaRatio,
@@ -370,6 +495,8 @@ final class ResidentQkvPath implements AutoCloseable {
 		for (DeviceFloatMatrix w : normWeight)
 			if (w != null)
 				total += (long) w.rows() * w.cols() * Float.BYTES;
+		if (tail != null)
+			total += tail.deviceBytes();
 		return total;
 	}
 
@@ -386,6 +513,8 @@ final class ResidentQkvPath implements AutoCloseable {
 			for (DeviceFloatMatrix w : normWeight)
 				if (w != null)
 					w.close();
+			if (tail != null)
+				tail.close();
 			rope.close();
 		}
 	}
@@ -409,8 +538,9 @@ final class ResidentQkvPath implements AutoCloseable {
 		/** One row of k, v and the attention output, so an attended call leaves the device in one copy. */
 		final ResidentActivation packed;
 		final MemorySegment q8;
+		/** The tail's scratch ({@link ResidentLayerTail#scratchBytes}), null without a tail. */
+		final MemorySegment tailScratch;
 		final MemorySegment table;
-		final MemorySegment tableHost;
 		final ResidentActivation[] qAndPacked;
 		final float[][] in = new float[1][];
 
@@ -419,16 +549,16 @@ final class ResidentQkvPath implements AutoCloseable {
 			this.x = chain.allocate(1, hidden, "decode region input");
 			this.xn = chain.allocate(1, hidden);
 			this.q = chain.allocate(1, hidden, "decode region q");
-			this.packed = chain.allocate(1, 2 * kvDim + hidden, "decode region k, v, attention");
-			this.q8 = chain.allocateScratch(Q4KMmqKernel.q8Bytes(hidden));
+			this.packed = chain.allocate(1, packedWidth(),
+					tail != null ? "decode region k, v, attention, layer output" : "decode region k, v, attention");
+			this.q8 = chain.allocateScratch(tail != null ? tail.q8Bytes() : Q4KMmqKernel.q8Bytes(hidden));
+			this.tailScratch = tail != null ? chain.allocateScratch(tail.scratchBytes()) : null;
 			this.table = chain.allocateScratch(TABLE_BYTES);
-			this.tableHost = ctx.bindings().hostMalloc(ctx.deviceIndex(), TABLE_BYTES).reinterpret(TABLE_BYTES);
 			this.qAndPacked = new ResidentActivation[] { q, packed };
 		}
 
 		void close() {
 			chain.close();
-			ctx.bindings().hostFree(tableHost);
 		}
 	}
 }

@@ -1,5 +1,34 @@
 ## Status 
 
+**Session 113** — The device-resident decode region now runs the whole transformer layer on the GPU
+
+- **`--gpu-residency` covers the whole layer.** With GPU attention on (the default on CUDA), the
+  decode region no longer stops after attention. It goes on through the output projection, the
+  residual add, the FFN RMS norm, the gate and up projections, SwiGLU, the down projection and the
+  second residual add, all on the GPU. One download per layer brings back K and V (for the host KV
+  cache, which stays the source of truth) and the layer output. The layer output also stays on the
+  GPU, so the next layer reads it there: a decoded token uploads its residual row once, not once per
+  layer. On TinyLlama a recording shows 2 uploads (the residual row and the LM head's input) and 23
+  downloads (22 layers and the logits) per generated token. Before, each layer added round trips for
+  the output projection, the gate and up projections and the down projection, plus a copy of the
+  attention table. Decode with `--gpu-residency on` is 2.21x the flag-off rate on TinyLlama (121.9
+  against 55.2 tokens/s) and 1.72x on Mistral 7B (34.7 against 20.2) on a GTX 1080 (clocks pinned,
+  same-hour A/B, medians of three); models the region does not run read the same either way within
+  the spread. Allocation per generated token falls 13% to 20%.
+- **Same numbers as the op-at-a-time GPU path.** The projections, the norm, SwiGLU and the residual
+  adds are the kernels and roundings the default path uses, so the layer output is bit-identical to
+  it, checked at positions 0 to 4096, over a 40-token decode through four layers, across concurrent
+  threads, and with layers that leave the region after attention, or are never in it, between
+  layers that run whole (`ResidentQkvPathTest`).
+  On TinyLlama, greedy tokens over a 24-position decode match the flag-off run.
+- **Fails over per layer, and says so.** A layer whose output projection, FFN norm or FFN weights are
+  not K-quant matrices on the device leaves the region after attention and the next layer uploads its
+  input again; the count of such layers is announced once at startup. `--gpu-attention off` keeps the
+  region at norm, projection and RoPE, as before.
+- **The attention table is written by a kernel.** The 20-byte table the attention launch reads (K
+  pointer, V pointer, length) is now written on the device from launch arguments instead of copied up
+  from host memory: one fewer upload per layer, whole layer or not.
+
 **Session 112** — The device-resident decode region now appends K/V and runs attention on the GPU
 
 - **`--gpu-residency` reaches attention.** With GPU attention on (the default on CUDA), the decode
