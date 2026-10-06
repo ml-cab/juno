@@ -38,7 +38,7 @@ import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
  * <p>Used by the decode residency region ({@link ResidentQkvPath}, adjacent pairs
  * only) and the prefill-window device region ({@link PrefillWindowRegion}).
  */
-final class CudaRope implements AutoCloseable {
+final class CudaRope implements ResidentRope {
 
 	private final GpuContext ctx;
 	private final int headDim;
@@ -91,7 +91,8 @@ final class CudaRope implements AutoCloseable {
 	 *
 	 * @return {@code false} (doing nothing) if the kernel failed to load
 	 */
-	boolean applyResident(ResidentActivation x, int startPos) {
+	@Override
+	public boolean applyResident(ResidentActivation x, int startPos) {
 		requireOpen();
 		x.requireOpen();
 		if (x.dim() % headDim != 0)
@@ -124,7 +125,8 @@ final class CudaRope implements AutoCloseable {
 	 *
 	 * @return {@code false} (doing nothing) if the kernel failed to load
 	 */
-	boolean applyResidentColumns(ResidentActivation x, int from, int width, int pos) {
+	@Override
+	public boolean applyResidentColumns(ResidentActivation x, int from, int width, int pos) {
 		requireOpen();
 		x.requireOpen();
 		if (x.rows() != 1)
@@ -149,7 +151,8 @@ final class CudaRope implements AutoCloseable {
 		return pairing;
 	}
 
-	int headDim() {
+	@Override
+	public int headDim() {
 		return headDim;
 	}
 

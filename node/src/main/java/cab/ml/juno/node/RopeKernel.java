@@ -41,8 +41,10 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  * <p>{@link #launchSplitHalf} rotates the split-half (rotate-half) pairs
  * {@code (x[i], x[i + headDim/2])} with the same arithmetic: the pairing
  * {@link RopePairing#SPLIT_HALF} selects for the Qwen2 family on the CPU.
- * {@link Phi3Rope} and {@link Phi2Rope} also pair split-half, but scale their
- * frequencies in their own ways, and stay on the CPU.
+ * {@link #launchExtSplitHalf} is {@link Phi3Rope}'s extended rotation: split-half
+ * pairs with per-pair frequency factors and a magnitude scale, its angle built in
+ * float exactly as the CPU builds it. {@link Phi2Rope} scales its frequencies in
+ * its own way and stays on the CPU.
  *
  * <p>One module per process; the function handle is cached. Requires an active
  * CUDA primary context, the same loading convention as {@link RmsNormKernel}.
@@ -55,19 +57,23 @@ final class RopeKernel {
 	private static final String RESOURCE = "/cab/ml/juno/node/rope.ptx";
 	private static final String ENTRY = "rope";
 	private static final String ENTRY_SPLIT_HALF = "rope_split_half";
+	private static final String ENTRY_EXT_SPLIT_HALF = "rope_ext_split_half";
 	private static final int ROPE_THREADS = 256;
 
 	private static final AtomicReference<RopeKernel> INSTANCE = new AtomicReference<>();
 
 	private static final ThreadLocal<KernelParams> PARAMS = ThreadLocal.withInitial(() -> new KernelParams(6));
+	private static final ThreadLocal<KernelParams> EXT_PARAMS = ThreadLocal.withInitial(() -> new KernelParams(9));
 
 	private final MemorySegment fn;          // CUfunction, adjacent pairs
 	private final MemorySegment fnSplitHalf; // CUfunction, split-half pairs
+	private final MemorySegment fnExt;       // CUfunction, extended split-half rotation
 	private final Arena moduleArena;         // keeps module/function slots alive
 
-	private RopeKernel(MemorySegment fn, MemorySegment fnSplitHalf, Arena moduleArena) {
+	private RopeKernel(MemorySegment fn, MemorySegment fnSplitHalf, MemorySegment fnExt, Arena moduleArena) {
 		this.fn = fn;
 		this.fnSplitHalf = fnSplitHalf;
+		this.fnExt = fnExt;
 		this.moduleArena = moduleArena;
 	}
 
@@ -133,7 +139,7 @@ final class RopeKernel {
 		MemorySegment module = moduleSlot.get(ADDRESS, 0);
 
 		return new RopeKernel(function(drv, arena, module, ENTRY), function(drv, arena, module, ENTRY_SPLIT_HALF),
-				arena);
+				function(drv, arena, module, ENTRY_EXT_SPLIT_HALF), arena);
 	}
 
 	private static MemorySegment function(CudaDriverBindings drv, Arena arena, MemorySegment module, String entry) {
@@ -171,10 +177,31 @@ final class RopeKernel {
 				stream);
 	}
 
-	private void launchWith(MemorySegment function, String what, MemorySegment x, MemorySegment invFreq, int rows,
-			int nHeads, int headDim, int startPos, MemorySegment stream) {
+	/**
+	 * {@link Phi3Rope#ropeExt}'s rotation in place: split-half pairs, pair {@code i}
+	 * of row {@code r} turned by {@code freqScale * (pos * thetaScale^i / factors[i])}
+	 * with that product built in float as the CPU builds it, and cos and sin scaled by
+	 * {@code mscale}. {@code factors} is a device table of {@code headDim / 2} floats,
+	 * or {@code null} for factor 1. Asynchronous on {@code stream}.
+	 */
+	void launchExtSplitHalf(MemorySegment x, MemorySegment factors, int rows, int nHeads, int headDim, int startPos,
+			float thetaScale, float freqScale, float mscale, MemorySegment stream) {
 		Objects.requireNonNull(x, "x");
-		Objects.requireNonNull(invFreq, "invFreq");
+		int blocks = blocks(rows, nHeads, headDim, startPos);
+		EXT_PARAMS.get()
+				.pointer(0, x)
+				.pointer(1, factors != null ? factors : MemorySegment.NULL)
+				.i32(2, rows)
+				.i32(3, nHeads)
+				.i32(4, headDim)
+				.i32(5, startPos)
+				.f32(6, thetaScale)
+				.f32(7, freqScale)
+				.f32(8, mscale)
+				.launch(fnExt, blocks, ROPE_THREADS, stream, "cuLaunchKernel(rope_ext_split_half)");
+	}
+
+	private static int blocks(int rows, int nHeads, int headDim, int startPos) {
 		if (rows <= 0 || nHeads <= 0 || headDim <= 0 || (headDim & 1) != 0)
 			throw new IllegalArgumentException(
 					"rows, nHeads and an even headDim must be positive: " + rows + ", " + nHeads + ", " + headDim);
@@ -184,6 +211,14 @@ final class RopeKernel {
 		long blocks = (pairs + ROPE_THREADS - 1) / ROPE_THREADS;
 		if (blocks > Integer.MAX_VALUE)
 			throw new IllegalArgumentException("too many pairs for one launch: " + pairs);
+		return (int) blocks;
+	}
+
+	private void launchWith(MemorySegment function, String what, MemorySegment x, MemorySegment invFreq, int rows,
+			int nHeads, int headDim, int startPos, MemorySegment stream) {
+		Objects.requireNonNull(x, "x");
+		Objects.requireNonNull(invFreq, "invFreq");
+		int blocks = blocks(rows, nHeads, headDim, startPos);
 		PARAMS.get()
 				.pointer(0, x)
 				.pointer(1, invFreq)
@@ -191,6 +226,6 @@ final class RopeKernel {
 				.i32(3, nHeads)
 				.i32(4, headDim)
 				.i32(5, startPos)
-				.launch(function, (int) blocks, ROPE_THREADS, stream, what);
+				.launch(function, blocks, ROPE_THREADS, stream, what);
 	}
 }

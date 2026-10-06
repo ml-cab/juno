@@ -500,46 +500,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					"could not be built (" + e.getMessage() + ")");
 			return null;
 		}
-		int eligible = 0;
-		for (int li = 0; li < L; li++)
-			if (path.eligible(li))
-				eligible++;
-		if (eligible == 0) {
-			path.close();
-			GpuResidencyOptions.announceUnsupported(log, "this shard",
-					"has no layer whose Q/K/V projections are all K-quant MMQ matrices on the device");
-			return null;
-		}
-		boolean attends = gqaGpu != null && path.attendsOnDevice();
-		int whole = 0;
-		if (attends)
-			for (int li = 0; li < L; li++)
-				if (path.runsWholeLayer(li))
-					whole++;
-		if (attends && whole < eligible)
-			GpuResidencyOptions.announceUnsupported(log, (eligible - whole) + " of " + eligible + " region layers",
-					"leave the region after attention: their output projection, FFN norm or FFN weights are not"
-							+ " K-quant MMQ matrices on the device");
-		if (gqaGpu == null)
-			GpuResidencyOptions.announceUnsupported(log, "the KV append and attention",
-					"stay outside the region: --gpu-attention is off, so attention runs on the CPU");
-		else if (!attends)
-			GpuResidencyOptions.announceUnsupported(log, "the KV append and attention",
-					"stay outside the region: the attention kernel does not run " + cfg.headDim() + "-wide heads");
-		log.info("GPU-resident decode region active (gpu-residency=" + GpuResidencyOptions.fromEnv().policyLabel()
-				+ ") on " + eligible + " of " + L + " layers: "
-				+ (whole > 0
-						? "the whole layer (norm, Q/K/V projection, RoPE, the KV append, attention, output projection,"
-								+ " residual adds, FFN norm and SwiGLU FFN) on " + whole + " of them, the residual row"
-								+ " staying on the device between such layers and k, v and the layer output downloaded"
-								+ " in one copy"
-						: attends
-								? "norm, Q/K/V projection, RoPE, the KV append and attention, with the residual row"
-										+ " uploaded and k, v and the attention output downloaded in one copy"
-								: "norm, Q/K/V projection and RoPE with one upload and one download")
-				+ " per layer. Single-sequence decode only; prefill windows and batched decode"
-				+ " (--parallel above 1, continuous schedule) keep the existing path.");
-		return path;
+		return ResidentQkvPath.activate(log, path, L, gqaGpu != null);
 	}
 
 	/** Whether the device-resident decode region ({@code --gpu-residency}) is active for this handler. */

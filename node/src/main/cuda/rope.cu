@@ -103,3 +103,59 @@ rope_split_half(
     head[i] = __fsub_rn(__fmul_rn(x0, cosA), __fmul_rn(x1, sinA));
     head[i + half] = __fadd_rn(__fmul_rn(x0, sinA), __fmul_rn(x1, cosA));
 }
+
+/*
+ * Extended RoPE with per-pair frequency factors and a magnitude scale, split-half
+ * pairs: the Phi-3 family's rotation (Phi3Rope.ropeExt, LongRoPE with linear
+ * scaling and no YaRN ramp). Not expressible as an inverse-frequency table: the
+ * CPU path builds the angle in float, scales cos and sin by attnFactor, and both
+ * change the bits. So this entry repeats that arithmetic step for step:
+ *   theta  = (float) pos, multiplied by thetaScale once per earlier pair (float);
+ *   angle  = freqScale * (theta / factor[i])                         (float);
+ *   cos, sin of the angle in double, each rounded to float, then times mscale;
+ * and rotates (x[i], x[i + headDim/2]) with separately rounded operations, as rope
+ * above. thetaScale is the host's (float) Math.pow(freqBase, -2.0 / headDim);
+ * factors is null for a model without them (factor 1). Each thread walks the
+ * product chain up to its own pair: at most headDim / 2 - 1 multiplies.
+ */
+extern "C" __global__ void __launch_bounds__(ROPE_THREADS)
+rope_ext_split_half(
+        float* __restrict__ x,              // [rows][nHeads * headDim], rotated in place
+        const float* __restrict__ factors,  // [headDim / 2], or null
+        int rows,
+        int nHeads,
+        int headDim,
+        int startPos,
+        float thetaScale,
+        float freqScale,
+        float mscale) {
+    const int half = headDim >> 1;
+    const long long pairsPerRow = (long long)nHeads * half;
+    const long long total = (long long)rows * pairsPerRow;
+    const long long p = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (p >= total)
+        return;
+
+    const int row = (int)(p / pairsPerRow);
+    const int rem = (int)(p - (long long)row * pairsPerRow);
+    const int h = rem / half;
+    const int i = rem - h * half;
+
+    float theta = (float)(startPos + row);
+    for (int j = 0; j < i; j++)
+        theta = __fmul_rn(theta, thetaScale);
+    const float ff = factors != nullptr ? factors[i] : 1.0f;
+    const float angle = __fmul_rn(freqScale, __fdiv_rn(theta, ff));
+
+    double s;
+    double c;
+    sincos((double)angle, &s, &c);
+    const float cosA = __fmul_rn((float)c, mscale);
+    const float sinA = __fmul_rn((float)s, mscale);
+
+    float* head = x + (size_t)row * nHeads * headDim + (size_t)h * headDim;
+    const float x0 = head[i];
+    const float x1 = head[i + half];
+    head[i] = __fsub_rn(__fmul_rn(x0, cosA), __fmul_rn(x1, sinA));
+    head[i + half] = __fadd_rn(__fmul_rn(x0, sinA), __fmul_rn(x1, cosA));
+}

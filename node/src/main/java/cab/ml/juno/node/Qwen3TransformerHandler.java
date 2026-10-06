@@ -92,6 +92,15 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	 */
 	private PrefillWindowRegion prefillRegion;
 
+	/**
+	 * The device-resident decode region ({@code --gpu-residency}): norm, the Q/K/V
+	 * projections, the per-head Q/K norms, split-half RoPE, the KV append, attention
+	 * and, where the layer's weights are on the device, the rest of the layer, with
+	 * the residual row kept on the device between layers. Null when not requested or
+	 * not runnable here, and after {@link #releaseGpuResources}.
+	 */
+	private ResidentQkvPath residentQkv;
+
 	/** Guards {@link #warnPrefillRegionFellBackOnce} so the hot path logs once. */
 	private final java.util.concurrent.atomic.AtomicBoolean prefillRegionFallbackWarned =
 			new java.util.concurrent.atomic.AtomicBoolean();
@@ -193,6 +202,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		this.gpuAttention = GpuAttentionMirror.open(backend, "Qwen3", L, kvDim, cfg.numHeads(), cfg.headDim(),
 				cfg.gqaRatio());
 		this.prefillRegion = openPrefillRegion(backend, L);
+		this.residentQkv = GpuResidencyOptions.fromEnv().requested() ? openResidentQkv(backend, L) : null;
 
 		log.info("Qwen3 shard loaded — " + L + " layers");
 	}
@@ -360,7 +370,10 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public void releaseGpuResources() {
-		// The region holds references to the device matrices below; close it first.
+		// The regions hold references to the device matrices below; close them first.
+		if (residentQkv != null)
+			residentQkv.close();
+		residentQkv = null;
 		if (prefillRegion != null)
 			prefillRegion.close();
 		prefillRegion = null;
@@ -394,6 +407,59 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	@Override
 	public boolean gpuAttentionActive() {
 		return gpuAttention != null;
+	}
+
+	/** Whether the device-resident decode region ({@code --gpu-residency}) is active for this handler. */
+	boolean gpuResidencyActive() {
+		return residentQkv != null;
+	}
+
+	/** Whether the decode region runs whole layers: it attends on the device and at least one layer runs whole. */
+	boolean gpuResidencyWholeLayerActive() {
+		ResidentQkvPath path = residentQkv;
+		if (path == null || gpuAttention == null || !path.attendsOnDevice())
+			return false;
+		for (int li = 0; li < endLayer - startLayer; li++)
+			if (path.runsWholeLayer(li))
+				return true;
+		return false;
+	}
+
+	/**
+	 * Builds the device-resident decode region when this model and backend can run
+	 * it, and otherwise says once why not and returns null (today's path). The
+	 * per-head Q/K norms run in the region; YaRN-scaled RoPE does not, and declines it.
+	 */
+	private ResidentQkvPath openResidentQkv(MatVec backend, int L) {
+		if (!(backend instanceof GpuMatVec cuda)) {
+			GpuResidencyOptions.announceUnsupported(log, "the CPU backend", "has no device to keep activations on");
+			return null;
+		}
+		String reason = ResidentQkvPath.unsupportedReason(cuda.gpuContext(), cfg.base());
+		if (reason == null && cfg.rope().yarn())
+			reason = "uses YaRN-scaled RoPE, which the device RoPE kernel does not implement";
+		if (reason != null) {
+			GpuResidencyOptions.announceUnsupported(log, "architecture " + cfg.base().architecture(), reason);
+			return null;
+		}
+		if (attnQQ4Dev == null || attnKQ4Dev == null || attnVQ4Dev == null) {
+			GpuResidencyOptions.announceUnsupported(log, "this model's Q/K/V projections",
+					"are not K-quant MMQ matrices on the device (needs a K-quant file and --mmq on or auto)");
+			return null;
+		}
+		CudaRope rope = CudaRope.tryCreate(cuda.gpuContext(), cfg.headDim(), cfg.rope().freqBase(),
+				cfg.rope().pairing());
+		ResidentQkvPath path;
+		try {
+			path = ResidentQkvPath.create(cuda.gpuContext(), cfg.base(), attnNorm, attnQQ4Dev, attnKQ4Dev, attnVQ4Dev,
+					new ResidentLayerTail.Weights(ffnNorm, woQ4Dev, ffnGateQ4Dev, ffnUpQ4Dev, wDownQ4Dev), rope,
+					new ResidentQkvPath.HeadNorms(qNorm, kNorm));
+		} catch (RuntimeException e) {
+			GpuResidencyOptions.announceUnsupported(log, "the device-resident decode region",
+					"could not be built (" + e.getMessage() + ")");
+			return null;
+		}
+		return ResidentQkvPath.activate(log, path, L, gpuAttention != null);
 	}
 
 	/** Whether layer {@code li}'s Q/K/V projections run on the device (a layer the KV mirror serves). */
@@ -1083,9 +1149,16 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		}
 
 		DeviceKvCache[] mirrors = mirrorsFor(requestId);
-		for (int li = 0; li < L; li++)
-			x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch,
-					GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)));
+		ResidentQkvPath region = residentQkv;
+		// One device region for the whole token: a layer the region runs whole leaves
+		// its output there, and the next layer reads it without an upload.
+		try (ResidentQkvPath.Lease lease = region != null ? region.lease() : null) {
+			for (int li = 0; li < L; li++)
+				x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch,
+						GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)), region, lease);
+		}
+		if (region != null && region.ownsResult(x))
+			x = x.clone(); // the region's row is overwritten by this thread's next call
 
 		if (a != null) {
 			int seqLen = pos + 1;
@@ -1097,15 +1170,59 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	private float[] transformerLayer(float[] x, int li, int pos,
 			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kScratch, float[] vScratch, DeviceKvCache mirror) {
-		float[] xNorm = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
-		float[] attnProj = attentionLayer(new LayerWeights(li), cfg, xNorm, pos, kCacheLayer, vCacheLayer,
-				kScratch, vScratch, gpuAttention, mirror);
+			float[] kScratch, float[] vScratch, DeviceKvCache mirror, ResidentQkvPath region,
+			ResidentQkvPath.Lease lease) {
+		float[] attnProj = null;
+		if (region != null && region.eligible(li)) {
+			// The device region runs norm, the projections, the per-head norms and RoPE, and
+			// with a mirror it can attend through, the KV append, attention and the rest of
+			// the layer; its arrays belong to this thread's region until its next call.
+			GpuAttentionMirror g = gpuAttention;
+			DeviceKvCache regionKv = null;
+			if (g != null && region.attendsOnDevice() && mirror != null && mirror.readableThrough(pos)) {
+				// Grown here, not inside the region; null once retired for running out of device memory.
+				regionKv = g.reserve(mirror, pos);
+				mirror = regionKv;
+			}
+			ResidentQkvPath.Output resident = region.run(li, x, pos, regionKv, lease);
+			if (resident != null)
+				attnProj = afterRegion(resident, li, pos, kCacheLayer, vCacheLayer, kScratch, vScratch, g, mirror);
+			if (resident != null && attnProj == null)
+				return resident.layer; // the region ran the rest of the layer as well
+		}
+		if (attnProj == null) {
+			float[] xNorm = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
+			attnProj = attentionLayer(new LayerWeights(li), cfg, xNorm, pos, kCacheLayer, vCacheLayer, kScratch,
+					vScratch, gpuAttention, mirror);
+		}
 		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
 
 		float[] xNorm2 = LlamaTransformerHandler.rmsNorm(x2, ffnNorm[li], cfg.rmsNormEps());
 		float[] ffnOut = denseFfn(xNorm2, li);
 		return LlamaTransformerHandler.add(x2, ffnOut);
+	}
+
+	/**
+	 * The attention half after a region call: the host KV write, then the output
+	 * projection of the region's attention, or the KV append and attention outside the
+	 * region when it did not attend. Returns {@code null} when the region ran the whole
+	 * layer ({@link ResidentQkvPath.Output#layer} is then the layer output).
+	 */
+	private float[] afterRegion(ResidentQkvPath.Output resident, int li, int pos, SessionKvTensor kCacheLayer,
+			SessionKvTensor vCacheLayer, float[] kScratch, float[] vScratch, GpuAttentionMirror g,
+			DeviceKvCache mirror) {
+		// Host KV first and always; a device mirror only copies it.
+		kCacheLayer.writeToken(pos, resident.k);
+		vCacheLayer.writeToken(pos, resident.v);
+		LayerWeights w = new LayerWeights(li);
+		if (resident.attended) {
+			// The region already cast the row into the mirror; it becomes readable now
+			// that the host tensors hold it too.
+			mirror.markWritten(pos, 1);
+			return resident.layerDone ? null : w.matVecWo(resident.attn, cfg.hiddenDim(), cfg.qDim());
+		}
+		return attendAndProject(w, cfg, resident.q, resident.k, resident.v, pos, kCacheLayer, vCacheLayer, kScratch,
+				vScratch, g, mirror);
 	}
 
 	/**
@@ -1141,6 +1258,20 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 		kCacheLayer.writeToken(pos, k);
 		vCacheLayer.writeToken(pos, v);
+		return attendAndProject(w, cfg, q, k, v, pos, kCacheLayer, vCacheLayer, kScratch, vScratch, gpu, mirror);
+	}
+
+	/**
+	 * The rest of {@link #attentionLayer} once q, k and v are rotated and the host KV
+	 * tensors hold k and v: the device mirror append, attention (on the GPU kernel
+	 * when the mirror holds the whole history, on the CPU otherwise) and the output
+	 * projection.
+	 */
+	private static float[] attendAndProject(Qwen3AttentionWeights w, Qwen3Config cfg, float[] q, float[] k,
+			float[] v, int pos, SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer, float[] kScratch,
+			float[] vScratch, GpuAttentionMirror gpu, DeviceKvCache mirror) {
+		int H = cfg.hiddenDim();
+		int qDim = cfg.qDim();
 		if (gpu != null)
 			mirror = gpu.append(mirror, pos, k, v, 1);
 

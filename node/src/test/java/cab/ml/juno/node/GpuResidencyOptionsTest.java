@@ -74,11 +74,11 @@ class GpuResidencyOptionsTest {
 
 	@Test
 	void names_every_architecture_the_region_cannot_run_and_none_it_can() {
-		for (String arch : new String[] { "llama", "mistral", "tinyllama" })
+		for (String arch : new String[] { "llama", "mistral", "tinyllama", "phi3", "qwen3" })
 			assertThat(GpuResidencyOptions.unsupportedArchitectureReason(arch)).as(arch).isNull();
 		assertThat(GpuResidencyOptions.unsupportedArchitectureReason("qwen2")).contains("split-half");
 		assertThat(GpuResidencyOptions.unsupportedArchitectureReason("qwen2.5")).contains("split-half");
-		for (String arch : new String[] { "phi2", "phi3", "qwen3", "qwen3moe" })
+		for (String arch : new String[] { "phi2", "qwen3moe" })
 			assertThat(GpuResidencyOptions.unsupportedArchitectureReason(arch)).as(arch).isNotNull();
 	}
 
@@ -88,9 +88,11 @@ class GpuResidencyOptionsTest {
 		assertThat(GpuResidencyOptions.consoleNotice("llama", false, false)).isNull();
 		assertThat(GpuResidencyOptions.consoleNotice("llama", true, false)).contains("LoRA");
 		assertThat(GpuResidencyOptions.consoleNotice("llama", false, true)).contains("CPU");
-		assertThat(GpuResidencyOptions.consoleNotice("phi3", false, false)).contains("phi3");
+		assertThat(GpuResidencyOptions.consoleNotice("phi2", false, false)).contains("phi2");
+		assertThat(GpuResidencyOptions.consoleNotice("phi3", false, false)).as("the Phi-3 handler runs the region")
+				.isNull();
 		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "off");
-		assertThat(GpuResidencyOptions.consoleNotice("phi3", true, true)).isNull();
+		assertThat(GpuResidencyOptions.consoleNotice("phi2", true, true)).isNull();
 	}
 
 	@Test

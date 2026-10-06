@@ -212,9 +212,9 @@ public final class ForwardPassHandlerLoader {
 			return LoraTrainingHandlerFactory.create(modelPath, context, adapters, backend);
 		}
 
-		if (DEDICATED_HANDLER_ARCHITECTURES.contains(arch))
+		if (DEDICATED_HANDLER_ARCHITECTURES.contains(arch) && GpuResidencyOptions.unsupportedArchitectureReason(arch) != null)
 			GpuResidencyOptions.announceUnsupported(log, "the " + arch + " handler",
-					"has no device-resident decode region (only the LLaMA-family handler does)");
+					"has no device-resident decode region (the LLaMA-family, Phi-3 and Qwen3 handlers do)");
 		if (backend instanceof GpuMatVec)
 			GpuAttentionSupport.announceCpuOnlyHandler(arch);
 

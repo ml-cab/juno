@@ -356,7 +356,9 @@ GPU FFI (node module — Panama project, JEP 454):
         multi-stream decode). Same contract as LlamaTransformerHandler's inline path: host KV written
         first and always; the kernel reads a mirror only through its written-prefix watermark; a
         device OOM while allocating, growing or attending retires the mirrors by closing them in place
-        and the request continues on the CPU, logged once per kind. Mirrors serve only layers whose
+        and the request continues on the CPU, logged once per kind. reserve(mirror, pos) grows a
+        mirror before the decode residency region writes into it, with the same retire-on-OOM
+        contract. Mirrors serve only layers whose
         Q/K/V weights are on the device; freed on evict() and releaseGpuResources(). A package-private
         DispatchObserver (tests only, null otherwise) sees each successful launch's inputs and output;
         GpuAttentionHandlerParityTest uses it to hold the kernel at every real call site to GqaMath over
@@ -443,8 +445,13 @@ GPU FFI (node module — Panama project, JEP 454):
         upload the residual row, RMS norm (CudaRmsNorm.normalizeResident with the layer's norm
         weight uploaded once), quantize to Q8_1 and project to Q, K and V (Q4KMmqKernel.quantizeX
         and launchPacked on the chain's stream, chain-owned Q8_1 scratch so a kernel on another
-        stream cannot overwrite it mid-use), RoPE on q and k (CudaRope.applyResident, and
-        applyResidentColumns for k, which sits in a packed row). run(li, x, pos, mirror) with a
+        stream cannot overwrite it mid-use), RoPE on q and k (the caller's ResidentRope:
+        applyResident, and applyResidentColumns for k, which sits in a packed row; CudaRope with
+        adjacent pairs by default, create(..., rope) for another). With HeadNorms (Qwen3's per-head
+        Q and K norm weights, create(..., rope, headNorms)) q and k are projected into region
+        scratch first and RmsNormKernel.launchResident normalizes each head into place (one row per
+        head) before the rotation; a layer without both norms is not eligible. The projections may
+        be row views of one fused tensor (DeviceQ4KMatrix.rowSlice; Phi-3's Q/K/V and gate/up). run(li, x, pos, mirror) with a
         DeviceKvCache it can attend through (attendsOnDevice(): GqaAttentionKernel runs the head
         width and PrefillWindowKernels loaded; the mirror is live, readableThrough(pos) and already
         has room for pos) goes on: DeviceKvCache.writeWindowOnDevice casts k and v to FP16 into the
@@ -457,29 +464,52 @@ GPU FFI (node module — Panama project, JEP 454):
         issues the rest of the layer on the same stream, the packed row widens to k, v, attention
         and layer output ("decode region k, v, attention, layer output"), and Output.layerDone /
         Output.layer carry the layer output. lease() holds one region across a token's layer loop
-        (Lease, try-with-resources in LlamaTransformerHandler.runLayers): a layer run whole leaves
+        (Lease, try-with-resources in each handler's runLayers): a layer run whole leaves
         its output in the region's residual activation, and the next layer's call in the same lease
         (same layer index and position, checked) skips its upload; a layer the region does not run
         whole, or one it never sees (declined head), makes the next one upload again. Per token
         with every layer whole: one upload of the residual row, one download per layer.
         ownsResult(row) tells the caller the row is the thread's Output.layer, overwritten by its
         next call (runLayers copies the last layer's output). The mirror's watermark is not moved:
-        LlamaTransformerHandler writes the returned k and v into its host KV tensors first and then
-        calls DeviceKvCache.markWritten(pos, 1). The handler grows the mirror (ensureCapacity)
-        before the call, so growth, and running out of device memory for it, never happens inside
-        the region. Without such a mirror (null, closed, short of its history, --gpu-attention off)
+        the handler writes the returned k and v into its host KV tensors first and then calls
+        DeviceKvCache.markWritten(pos, 1). The handler grows the mirror (ensureCapacity, or
+        GpuAttentionMirror.reserve in the Phi-3 and Qwen3 handlers) before the call, so growth, and
+        running out of device memory for it, never happens inside the region. Built by
+        LlamaTransformerHandler (adjacent CudaRope), Phi3TransformerHandler (row views of the fused
+        tensors, CudaPhi3Rope; positions past the original training context refused before any
+        device work, as Phi3Rope does) and Qwen3TransformerHandler (split-half CudaRope, HeadNorms;
+        YaRN-scaled RoPE declines it). activate(log, path, layers, gpuAttention) is the shared
+        startup notice: the active-region log line, and once each, layers that leave after
+        attention and attention left outside; a shard with no eligible layer closes the path. Without such a mirror (null, closed, short of its history, --gpu-attention off)
         the region stops after RoPE and returns q, k and v (Output.attended false; one wait, the q
         row and the packed row). Bit-identical to the GPU op-at-a-time path, attention included
         (ResidentQkvPathTest: k, v and the attention output against host FP16 pack plus
-        CudaGqaAttention.attendBatched at one row, a 100-token decode, concurrent threads); against
-        the default path, whose norm runs on the CPU, only the norm's summation order differs.
-        unsupportedReason(ctx, pairing, qkvBias, cfg) names what it cannot run for a whole model
-        (non-CUDA, split-half RoPE, Q/K/V biases, query width different from hidden size);
+        CudaGqaAttention.attendBatched at one row, a 100-token decode, concurrent threads;
+        ResidentQkvPathPhi3Test and ResidentQkvPathQwen3Test: the same on each family's layout,
+        against that family's host rotation); against the default path, whose norms run on the CPU,
+        only the norms' summation order differs. unsupportedReason(ctx, pairing, qkvBias, cfg) names
+        what it cannot run for a whole LLaMA-family model (non-CUDA, split-half RoPE, Q/K/V biases,
+        query width different from hidden size), unsupportedReason(ctx, cfg) the shape-only part for
+        a handler that brings its own rotation;
         eligible(li) is false for a layer without all three K-quant projections on the device.
-        Device regions come from a pool (bounded by concurrent calls, not by threads ever seen);
+        Device regions come from a pool (bounded by concurrent calls, not by threads ever seen),
+        opened on first use; when opening one runs out of device memory (a card that filled after
+        the path was built, e.g. three tensor-parallel nodes on one device) run returns null, which
+        every handler reads as "keep the existing path", the path stops opening regions and says so
+        once in the log (ResidentQkvPathDeviceFullTest fills the real card);
         results are copied into per-thread host arrays (Output). Issued under the context's
-        serialization lock. close() frees every region (stream, buffers) and the norm
-        weights, and the tail's.
+        serialization lock. close() frees every region (stream, buffers), the norm and head-norm
+        weights, the tail's and the rotation's.
+  ResidentRope — what the decode region rotates q and k with: applyResident(x, startPos) and
+        applyResidentColumns(x, from, width, pos) in place on the activation's chain. CudaRope and
+        CudaPhi3Rope implement it.
+  CudaPhi3Rope — the Phi-3 family's rotation on a device-resident activation (Phi3Rope.ropeExt):
+        split-half pairs, the frequency factors Phi3RopeConfig.selectFactors picks (uploaded once,
+        padded with 1 to headDim / 2) and the magnitude scale rope.scaling.attn_factor (about 1.19
+        on Phi-3.5-mini). Not CudaRope with a folded table: the CPU builds the angle in float and
+        scales cos and sin, so RopeKernel.launchExtSplitHalf repeats that arithmetic step for step
+        and the two agree bit for bit (CudaPhi3RopeTest, positions 0 to 4095, a window, a column
+        range). Refuses positions Phi3RopeConfig.requirePosition refuses.
   ResidentLayerTail — the rest of a decode layer after attention, issued on the decode region's
         stream: output projection, first residual add (PrefillWindowKernels.addInPlace), FFN RMS norm
         (CudaRmsNorm.normalizeResident, FFN norm weight uploaded once per layer), gate and up
@@ -496,8 +526,11 @@ GPU FFI (node module — Panama project, JEP 454):
         env); default off. announceUnsupported(log, surface, reason) logs once per surface per
         process where the flag was requested but cannot run: LlamaTransformerHandler (CPU backend,
         qwen2 split-half and biases, no K-quant device projections, region layers whose tail weights
-        are not K-quant on the device and so leave the region after attention), ForwardPassHandlerLoader
-        (phi2, phi3, qwen3, qwen3moe handlers), LoraTrainingHandlerFactory (LoRA training and
+        are not K-quant on the device and so leave the region after attention), Phi3TransformerHandler
+        and Qwen3TransformerHandler (CPU backend, query width different from hidden size, no K-quant
+        device projections, Qwen3 YaRN RoPE, and the same partial-layer notices through
+        ResidentQkvPath.activate), ForwardPassHandlerLoader (the phi2 and qwen3moe handlers, which
+        have no region: unsupportedArchitectureReason), LoraTrainingHandlerFactory (LoRA training and
         --lora-play). Because the console front end turns library logging off unless --verbose,
         ConsoleMain also prints consoleNotice(architecture, lora, cpu) at startup: one warning when
         the launch cannot use the region (LoRA, CPU backend, or unsupportedArchitectureReason of the
@@ -546,16 +579,18 @@ GPU FFI (node module — Panama project, JEP 454):
         a device-resident [rows][nHeads*headDim] batch, row r at position startPos + r, one thread
         per rotated pair. launch rotates adjacent pairs and launchSplitHalf the split-half pairs
         (rope_split_half, the RopePairing.SPLIT_HALF layout of the Qwen2 family), the same math as
-        LlamaTransformerHandler.rope; the scaled split-half rotations of Phi2Rope/Phi3Rope stay on the
-        host. Angle, sine and
+        LlamaTransformerHandler.rope. launchExtSplitHalf (rope_ext_split_half) is Phi3Rope's
+        rotation: split-half pairs, per-pair frequency factors and a magnitude scale, the angle built
+        in float as the CPU builds it (CudaPhi3Rope); Phi2Rope's rotation stays on the host. Angle, sine and
         cosine in double from a host-computed inverse-frequency table, rotation with separately
         rounded float multiplies and adds: bit-identical to the CPU rotation in the parity tests,
         including at position 30000.
   CudaRope — handler-facing: uploads the model's inverse-frequency table once (tryCreate, with a
         RopePairing; adjacent by default) and
         rotates a ResidentActivation in place (applyResident). No host-array entry point: RoPE on
-        the device only pays when the activation is already there. Built by ResidentQkvPath, which
-        LlamaTransformerHandler constructs under --gpu-residency.
+        the device only pays when the activation is already there. A ResidentRope: built by
+        ResidentQkvPath for LlamaTransformerHandler (adjacent) and by Qwen3TransformerHandler
+        (split-half) under --gpu-residency.
   PrefillWindowFootprint — device bytes of one PrefillWindowRegion window of a given width, term for
         term with Window's buffers (capacity rounded up to 64 rows), plus the backend's Q8_1 copy of
         the window; attention adds no term (the kernel keeps no score row), so it does not depend
@@ -629,7 +664,11 @@ GPU FFI (node module — Panama project, JEP 454):
   LoraResidentUpload.runPlayback — play Q4 OOM closes packed buffers and falls to CPU
         without the train FP16 microbatch retry.
   CudaDriverBindings / Q4KMmqKernel / DeviceQ4KMatrix — PTX fused K-quant dequant+GEMV
-        (classpath q4k_gemv.ptx); JFR backend cuda-resident-q4k.
+        (classpath q4k_gemv.ptx); JFR backend cuda-resident-q4k. DeviceQ4KMatrix.rowSlice(start, n)
+        is a view of a row range sharing the matrix's device memory (rows are stored one after
+        another, Q6_K in padded slots): it owns nothing, frees nothing on close and is retired when
+        its matrix closes (DeviceQ4KMatrixRowSliceTest: each part's product equals its rows of the
+        fused product, Q4_K, Q5_K and Q6_K).
   KQuantGemmKernel — PTX tiled matmul over packed Q4_K / Q5_K / Q6_K weights for batches of
         activation rows (classpath kquant_gemm.ptx, kquant_gemm.cu): the batch is quantized to
         Q8_1 once (Q4KMmqKernel.quantizeX over batch * cols), then each 256-thread block unpacks

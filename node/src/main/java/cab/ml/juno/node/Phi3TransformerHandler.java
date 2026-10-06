@@ -153,6 +153,15 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	 */
 	private PrefillWindowRegion prefillRegion;
 
+	/**
+	 * The device-resident decode region ({@code --gpu-residency}): norm, the fused
+	 * Q/K/V projection read through row views, the extended RoPE, the KV append,
+	 * attention and, where the layer's weights are on the device, the rest of the
+	 * layer, with the residual row kept on the device between layers. Null when not
+	 * requested or not runnable here, and after {@link #releaseGpuResources}.
+	 */
+	private ResidentQkvPath residentQkv;
+
 	/** Guards {@link #warnPrefillRegionFellBackOnce} so the hot path logs once. */
 	private final java.util.concurrent.atomic.AtomicBoolean prefillRegionFallbackWarned =
 			new java.util.concurrent.atomic.AtomicBoolean();
@@ -270,6 +279,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		this.gpuAttention = GpuAttentionMirror.open(backend, "Phi-3", L, kvDim, cfg.numHeads(), cfg.headDim(),
 				cfg.gqaRatio());
 		this.prefillRegion = openPrefillRegion(backend, L);
+		this.residentQkv = GpuResidencyOptions.fromEnv().requested() ? openResidentQkv(backend, L) : null;
 
 		log.info("Phi-3 shard loaded — " + L + " layers, " + (hasEmbeddings ? "with embeddings, " : "")
 				+ (hasOutputProj ? "with output projection" : "no output projection"));
@@ -448,7 +458,10 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public void releaseGpuResources() {
-		// The region holds references to the device matrices below; close it first.
+		// The regions hold references to the device matrices below; close them first.
+		if (residentQkv != null)
+			residentQkv.close();
+		residentQkv = null;
 		if (prefillRegion != null)
 			prefillRegion.close();
 		prefillRegion = null;
@@ -478,6 +491,77 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	@Override
 	public boolean gpuAttentionActive() {
 		return gpuAttention != null;
+	}
+
+	/** Whether the device-resident decode region ({@code --gpu-residency}) is active for this handler. */
+	boolean gpuResidencyActive() {
+		return residentQkv != null;
+	}
+
+	/** Whether the decode region runs whole layers: it attends on the device and at least one layer runs whole. */
+	boolean gpuResidencyWholeLayerActive() {
+		ResidentQkvPath path = residentQkv;
+		if (path == null || gpuAttention == null || !path.attendsOnDevice())
+			return false;
+		for (int li = 0; li < endLayer - startLayer; li++)
+			if (path.runsWholeLayer(li))
+				return true;
+		return false;
+	}
+
+	/**
+	 * Builds the device-resident decode region when this model and backend can run
+	 * it, and otherwise says once why not and returns null (today's path). The fused
+	 * Q/K/V and gate/up tensors are read through row views; the rotation is the
+	 * extended RoPE on the device ({@link CudaPhi3Rope}).
+	 */
+	private ResidentQkvPath openResidentQkv(MatVec backend, int L) {
+		if (!(backend instanceof GpuMatVec cuda)) {
+			GpuResidencyOptions.announceUnsupported(log, "the CPU backend", "has no device to keep activations on");
+			return null;
+		}
+		String reason = ResidentQkvPath.unsupportedReason(cuda.gpuContext(), cfg);
+		if (reason != null) {
+			GpuResidencyOptions.announceUnsupported(log, "architecture " + cfg.architecture(), reason);
+			return null;
+		}
+		if (attnQkvQ4Dev == null) {
+			GpuResidencyOptions.announceUnsupported(log, "this model's fused Q/K/V projections",
+					"are not K-quant MMQ matrices on the device (needs a K-quant file and --mmq on or auto)");
+			return null;
+		}
+		int H = cfg.hiddenDim();
+		int kvDim = cfg.kvDim();
+		int I = cfg.intermediateSize();
+		DeviceQ4KMatrix[] wq = new DeviceQ4KMatrix[L];
+		DeviceQ4KMatrix[] wk = new DeviceQ4KMatrix[L];
+		DeviceQ4KMatrix[] wv = new DeviceQ4KMatrix[L];
+		DeviceQ4KMatrix[] gate = new DeviceQ4KMatrix[L];
+		DeviceQ4KMatrix[] up = new DeviceQ4KMatrix[L];
+		for (int li = 0; li < L; li++) {
+			DeviceQ4KMatrix qkv = attnQkvQ4Dev[li];
+			if (qkv != null && qkv.rows() == H + 2 * kvDim) {
+				wq[li] = qkv.rowSlice(0, H);
+				wk[li] = qkv.rowSlice(H, kvDim);
+				wv[li] = qkv.rowSlice(H + kvDim, kvDim);
+			}
+			DeviceQ4KMatrix gateUp = ffnGateUpQ4Dev != null ? ffnGateUpQ4Dev[li] : null;
+			if (gateUp != null && gateUp.rows() == 2 * I) {
+				gate[li] = gateUp.rowSlice(0, I);
+				up[li] = gateUp.rowSlice(I, I);
+			}
+		}
+		CudaPhi3Rope rope = CudaPhi3Rope.tryCreate(cuda.gpuContext(), cfg.headDim(), ropeCfg);
+		ResidentQkvPath path;
+		try {
+			path = ResidentQkvPath.create(cuda.gpuContext(), cfg, attnNorm, wq, wk, wv,
+					new ResidentLayerTail.Weights(ffnNorm, woQ4Dev, gate, up, wDownQ4Dev), rope);
+		} catch (RuntimeException e) {
+			GpuResidencyOptions.announceUnsupported(log, "the device-resident decode region",
+					"could not be built (" + e.getMessage() + ")");
+			return null;
+		}
+		return ResidentQkvPath.activate(log, path, L, gpuAttention != null);
 	}
 
 	/** Whether layer {@code li}'s Q/K/V projection runs on the device (a layer the KV mirror serves). */
@@ -1271,9 +1355,18 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 
 		DeviceKvCache[] mirrors = mirrorsFor(requestId);
-		for (int li = 0; li < L; li++)
-			x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch,
-					GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)));
+		ResidentQkvPath region = residentQkv;
+		if (region != null)
+			ropeCfg.requirePosition(pos); // fail closed before any device work, as the host rotation does
+		// One device region for the whole token: a layer the region runs whole leaves
+		// its output there, and the next layer reads it without an upload.
+		try (ResidentQkvPath.Lease lease = region != null ? region.lease() : null) {
+			for (int li = 0; li < L; li++)
+				x = transformerLayer(x, li, pos, kCache[li], vCache[li], kScratch, vScratch,
+						GpuAttentionMirror.layer(mirrors, li, layerOnDevice(li)), region, lease);
+		}
+		if (region != null && region.ownsResult(x))
+			x = x.clone(); // the region's row is overwritten by this thread's next call
 
 		if (a != null) {
 			int seqLen = pos + 1;
@@ -1337,39 +1430,68 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 	private float[] transformerLayer(float[] x, int li, int pos,
 			SessionKvTensor kCacheLayer, SessionKvTensor vCacheLayer,
-			float[] kScratch, float[] vScratch, DeviceKvCache mirror) {
+			float[] kScratch, float[] vScratch, DeviceKvCache mirror, ResidentQkvPath region,
+			ResidentQkvPath.Lease lease) {
 		int H = cfg.hiddenDim();
 		int kvDim = cfg.kvDim();
+		GpuAttentionMirror g = gpuAttention;
 
 		// ── Attention sub-layer ───────────────────────────────────────────────
-		float[] xNorm = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
-
+		// The device region runs norm, the fused projection and RoPE, and with a mirror
+		// it can attend through, the KV append, attention and the rest of the layer; its
+		// arrays belong to this thread's region until its next call.
 		float[] q;
 		float[] k;
 		float[] v;
-		if (attnQkvQ4Dev != null && attnQkvQ4Dev[li] != null) {
-			q = new float[H];
-			k = new float[kvDim];
-			v = new float[kvDim];
-			projectFusedQ4(attnQkv[li], attnQkvQ4Dev[li], xNorm, q, H, k, kvDim, v, kvDim);
+		float[] attnOut = null;
+		ResidentQkvPath.Output resident = null;
+		if (region != null && region.eligible(li)) {
+			DeviceKvCache regionKv = null;
+			if (g != null && region.attendsOnDevice() && mirror != null && mirror.readableThrough(pos)) {
+				// Grown here, not inside the region; null once retired for running out of device memory.
+				regionKv = g.reserve(mirror, pos);
+				mirror = regionKv;
+			}
+			resident = region.run(li, x, pos, regionKv, lease);
+		}
+		if (resident != null) {
+			q = resident.q;
+			k = resident.k;
+			v = resident.v;
+			if (resident.attended)
+				attnOut = resident.attn;
 		} else {
-			q = matVecFused(attnQkv[li], attnQDev != null ? attnQDev[li] : null, xNorm, 0, H, H);
-			k = matVecFused(attnQkv[li], attnKDev != null ? attnKDev[li] : null, xNorm, H, H + kvDim, H);
-			v = matVecFused(attnQkv[li], attnVDev != null ? attnVDev[li] : null, xNorm, H + kvDim, H + 2 * kvDim, H);
+			float[] xNorm = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
+			if (attnQkvQ4Dev != null && attnQkvQ4Dev[li] != null) {
+				q = new float[H];
+				k = new float[kvDim];
+				v = new float[kvDim];
+				projectFusedQ4(attnQkv[li], attnQkvQ4Dev[li], xNorm, q, H, k, kvDim, v, kvDim);
+			} else {
+				q = matVecFused(attnQkv[li], attnQDev != null ? attnQDev[li] : null, xNorm, 0, H, H);
+				k = matVecFused(attnQkv[li], attnKDev != null ? attnKDev[li] : null, xNorm, H, H + kvDim, H);
+				v = matVecFused(attnQkv[li], attnVDev != null ? attnVDev[li] : null, xNorm, H + kvDim, H + 2 * kvDim,
+						H);
+			}
+			Phi3Rope.ropeExt(q, pos, cfg.numHeads(), cfg.headDim(), ropeCfg);
+			Phi3Rope.ropeExt(k, pos, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
 		}
 
-		Phi3Rope.ropeExt(q, pos, cfg.numHeads(), cfg.headDim(), ropeCfg);
-		Phi3Rope.ropeExt(k, pos, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
-
+		// Host KV first and always; a device mirror only copies it.
 		kCacheLayer.writeToken(pos, k);
 		vCacheLayer.writeToken(pos, v);
-		GpuAttentionMirror g = gpuAttention;
-		if (g != null)
+		if (attnOut != null) {
+			// The region already cast the row into the mirror; it becomes readable now
+			// that the host tensors hold it too.
+			mirror.markWritten(pos, 1);
+			if (resident.layerDone)
+				return resident.layer; // the region ran the rest of the layer as well
+		} else if (g != null) {
 			mirror = g.append(mirror, pos, k, v, 1);
+		}
 
 		int seqLen = pos + 1;
-		float[] attnOut = null;
-		if (g != null) {
+		if (attnOut == null && g != null) {
 			float[] out = new float[H];
 			if (g.attendOne(mirror, pos, q, out))
 				attnOut = out;

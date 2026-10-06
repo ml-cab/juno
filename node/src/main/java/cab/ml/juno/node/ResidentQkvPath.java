@@ -60,11 +60,13 @@ import static java.lang.foreign.ValueLayout.ADDRESS;
  * out of device memory, inside the region; the caller grows it first.
  *
  * <p>Scope. Single-sequence decode (one row) on CUDA, for a layer whose Q, K and
- * V projections are all K-quant MMQ matrices on the device, with adjacent-pair
- * RoPE and no Q/K/V bias. {@link #unsupportedReason} names what the device path
- * cannot run for a whole model, and {@link #eligible} for one layer; the caller
- * keeps its existing path there. Attention moves in when the attention kernel
- * runs this head width ({@link #attendsOnDevice}).
+ * V projections are all K-quant MMQ matrices on the device (row views of one fused
+ * tensor will do, {@link DeviceQ4KMatrix#rowSlice}), with no Q/K/V bias. The
+ * rotation is the caller's {@link ResidentRope}: adjacent pairs by default, or the
+ * Phi-3 family's extended rotation. {@link #unsupportedReason} names what the
+ * device path cannot run for a whole model, and {@link #eligible} for one layer;
+ * the caller keeps its existing path there. Attention moves in when the attention
+ * kernel runs this head width ({@link #attendsOnDevice}).
  *
  * <p>Concurrency. A call takes a device region (chain, activations, Q8_1 scratch
  * and the attention table) from a pool and returns it when done, so there are
@@ -122,7 +124,7 @@ final class ResidentQkvPath implements AutoCloseable {
 	private final GpuContext ctx;
 	private final Q4KMmqKernel mmq;
 	private final CudaRmsNorm norm;
-	private final CudaRope rope;
+	private final ResidentRope rope;
 	/** Null when attention stays outside the region (kernel missing or head width it does not run). */
 	private final GqaAttentionKernel attention;
 	private final PrefillWindowKernels kernels;
@@ -137,6 +139,9 @@ final class ResidentQkvPath implements AutoCloseable {
 	private final DeviceQ4KMatrix[] wv;
 	/** Per layer: the norm weight as a 1 x hidden device matrix, null where the layer is not eligible. */
 	private final DeviceFloatMatrix[] normWeight;
+	/** Per layer: the per-head q and k norm weights as 1 x headDim device matrices, or null without head norms. */
+	private final DeviceFloatMatrix[] qNormWeight;
+	private final DeviceFloatMatrix[] kNormWeight;
 	/** The rest of the layer after attention, or null when the region stops at attention. */
 	private final ResidentLayerTail tail;
 
@@ -147,10 +152,17 @@ final class ResidentQkvPath implements AutoCloseable {
 	/** Per calling thread: the host arrays the results are copied into. */
 	private final ThreadLocal<Output> results;
 	private volatile boolean closed;
+	/**
+	 * Set once opening a region ran out of device memory: no new region is opened
+	 * after that (the pool's regions are still used), so a full card costs one failed
+	 * allocation, not one per layer and token.
+	 */
+	private volatile boolean deviceFull;
 
-	private ResidentQkvPath(GpuContext ctx, Q4KMmqKernel mmq, CudaRmsNorm norm, CudaRope rope,
+	private ResidentQkvPath(GpuContext ctx, Q4KMmqKernel mmq, CudaRmsNorm norm, ResidentRope rope,
 			GqaAttentionKernel attention, PrefillWindowKernels kernels, LlamaConfig cfg, DeviceQ4KMatrix[] wq,
-			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, DeviceFloatMatrix[] normWeight, ResidentLayerTail tail) {
+			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, DeviceFloatMatrix[] normWeight, DeviceFloatMatrix[] qNormWeight,
+			DeviceFloatMatrix[] kNormWeight, ResidentLayerTail tail) {
 		this.ctx = ctx;
 		this.mmq = mmq;
 		this.norm = norm;
@@ -167,6 +179,8 @@ final class ResidentQkvPath implements AutoCloseable {
 		this.wk = wk;
 		this.wv = wv;
 		this.normWeight = normWeight;
+		this.qNormWeight = qNormWeight;
+		this.kNormWeight = kNormWeight;
 		this.tail = tail;
 		int h = hidden;
 		int kv = kvDim;
@@ -192,8 +206,17 @@ final class ResidentQkvPath implements AutoCloseable {
 	/** As {@link #unsupportedReason(GpuContext, RopePairing, boolean)}, plus the model's shape. */
 	static String unsupportedReason(GpuContext ctx, RopePairing pairing, boolean qkvBias, LlamaConfig cfg) {
 		String reason = unsupportedReason(ctx, pairing, qkvBias);
-		if (reason != null)
-			return reason;
+		return reason != null ? reason : unsupportedReason(ctx, cfg);
+	}
+
+	/**
+	 * Why the device region cannot run a model of this shape, for a handler that
+	 * gives the region its own rotation ({@link ResidentRope}) and has no Q/K/V
+	 * biases: not a CUDA context, or a query width different from the hidden size.
+	 */
+	static String unsupportedReason(GpuContext ctx, LlamaConfig cfg) {
+		if (ctx == null || !"cuda".equals(ctx.backendLabel()))
+			return "needs a CUDA backend (the device RoPE and MMQ kernels are CUDA-only)";
 		if (cfg.numHeads() * cfg.headDim() != cfg.hiddenDim())
 			return "has a query width different from its hidden size";
 		return null;
@@ -224,21 +247,68 @@ final class ResidentQkvPath implements AutoCloseable {
 	 */
 	static ResidentQkvPath create(GpuContext ctx, LlamaConfig cfg, float[][] attnNorm, DeviceQ4KMatrix[] wq,
 			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, ResidentLayerTail.Weights tailWeights) {
+		CudaRope rope = CudaRope.tryCreate(ctx, cfg.headDim(), cfg.ropeTheta());
+		if (rope == null)
+			throw new IllegalStateException("resident norm and RoPE need a CUDA context");
+		return create(ctx, cfg, attnNorm, wq, wk, wv, tailWeights, rope);
+	}
+
+	/**
+	 * As {@link #create(GpuContext, LlamaConfig, float[][], DeviceQ4KMatrix[], DeviceQ4KMatrix[], DeviceQ4KMatrix[], ResidentLayerTail.Weights)},
+	 * rotating q and k with {@code rope} (adjacent or split-half pairs from an
+	 * inverse-frequency table, or the Phi-3 family's extended rotation). The path
+	 * owns {@code rope} from here on and closes it, including when this throws.
+	 */
+	static ResidentQkvPath create(GpuContext ctx, LlamaConfig cfg, float[][] attnNorm, DeviceQ4KMatrix[] wq,
+			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, ResidentLayerTail.Weights tailWeights, ResidentRope rope) {
+		return create(ctx, cfg, attnNorm, wq, wk, wv, tailWeights, rope, null);
+	}
+
+	/**
+	 * Per-layer RMS-norm weights applied to each head of q and of k after the
+	 * projection and before RoPE ({@code headDim} floats each; Qwen3). A layer
+	 * without both is not eligible.
+	 */
+	record HeadNorms(float[][] q, float[][] k) {
+		boolean covers(int li, int headDim) {
+			return q != null && k != null && li < q.length && li < k.length && q[li] != null && k[li] != null
+					&& q[li].length == headDim && k[li].length == headDim;
+		}
+	}
+
+	/**
+	 * As {@link #create(GpuContext, LlamaConfig, float[][], DeviceQ4KMatrix[], DeviceQ4KMatrix[], DeviceQ4KMatrix[], ResidentLayerTail.Weights, ResidentRope)},
+	 * normalizing each head of q and k with {@code headNorms} before the rotation.
+	 */
+	static ResidentQkvPath create(GpuContext ctx, LlamaConfig cfg, float[][] attnNorm, DeviceQ4KMatrix[] wq,
+			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, ResidentLayerTail.Weights tailWeights, ResidentRope rope,
+			HeadNorms headNorms) {
+		java.util.Objects.requireNonNull(rope, "rope");
+		try {
+			return build(ctx, cfg, attnNorm, wq, wk, wv, tailWeights, rope, headNorms);
+		} catch (RuntimeException e) {
+			rope.close();
+			throw e;
+		}
+	}
+
+	private static ResidentQkvPath build(GpuContext ctx, LlamaConfig cfg, float[][] attnNorm, DeviceQ4KMatrix[] wq,
+			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, ResidentLayerTail.Weights tailWeights, ResidentRope rope,
+			HeadNorms headNorms) {
 		Q4KMmqKernel mmq = Q4KMmqKernel.tryLoad();
 		if (mmq == null)
 			throw new IllegalStateException("Q4_K MMQ kernel is not loaded");
 		if (RmsNormKernel.tryLoad() == null || RopeKernel.tryLoad() == null)
 			throw new IllegalStateException("RMS-norm or RoPE kernel is not loaded");
+		if (rope.headDim() != cfg.headDim())
+			throw new IllegalArgumentException("RoPE head width " + rope.headDim() + " differs from the model's "
+					+ cfg.headDim());
 		CudaRmsNorm norm = CudaRmsNorm.tryCreate(ctx);
-		CudaRope rope = CudaRope.tryCreate(ctx, cfg.headDim(), cfg.ropeTheta());
 		if (cfg.numHeads() * cfg.headDim() != cfg.hiddenDim())
 			throw new IllegalArgumentException("query width " + cfg.numHeads() * cfg.headDim()
 					+ " differs from hidden size " + cfg.hiddenDim());
-		if (norm == null || rope == null) {
-			if (rope != null)
-				rope.close();
+		if (norm == null)
 			throw new IllegalStateException("resident norm and RoPE need a CUDA context");
-		}
 		GqaAttentionKernel attention = GqaAttentionKernel.supportsHeadDim(cfg.headDim())
 				? GqaAttentionKernel.tryLoad()
 				: null;
@@ -247,16 +317,22 @@ final class ResidentQkvPath implements AutoCloseable {
 			attention = null;
 		int layers = wq.length;
 		DeviceFloatMatrix[] weights = new DeviceFloatMatrix[layers];
+		DeviceFloatMatrix[] qNormW = headNorms != null ? new DeviceFloatMatrix[layers] : null;
+		DeviceFloatMatrix[] kNormW = headNorms != null ? new DeviceFloatMatrix[layers] : null;
 		try {
 			for (int li = 0; li < layers; li++) {
-				if (layerHasWeights(wq, wk, wv, li))
-					weights[li] = DeviceFloatMatrix.upload(ctx, attnNorm[li], 1, cfg.hiddenDim());
+				if (!layerHasWeights(wq, wk, wv, li) || (headNorms != null && !headNorms.covers(li, cfg.headDim())))
+					continue;
+				weights[li] = DeviceFloatMatrix.upload(ctx, attnNorm[li], 1, cfg.hiddenDim());
+				if (headNorms != null) {
+					qNormW[li] = DeviceFloatMatrix.upload(ctx, headNorms.q()[li], 1, cfg.headDim());
+					kNormW[li] = DeviceFloatMatrix.upload(ctx, headNorms.k()[li], 1, cfg.headDim());
+				}
 			}
 		} catch (RuntimeException e) {
-			for (DeviceFloatMatrix w : weights)
-				if (w != null)
-					w.close();
-			rope.close();
+			closeAll(weights);
+			closeAll(qNormW);
+			closeAll(kNormW);
 			throw e;
 		}
 		ResidentLayerTail tail = null;
@@ -264,14 +340,73 @@ final class ResidentQkvPath implements AutoCloseable {
 			try {
 				tail = ResidentLayerTail.create(ctx, cfg, mmq, norm, kernels, tailWeights, weights);
 			} catch (RuntimeException e) {
-				for (DeviceFloatMatrix w : weights)
-					if (w != null)
-						w.close();
-				rope.close();
+				closeAll(weights);
+				closeAll(qNormW);
+				closeAll(kNormW);
 				throw e;
 			}
 		}
-		return new ResidentQkvPath(ctx, mmq, norm, rope, attention, kernels, cfg, wq, wk, wv, weights, tail);
+		return new ResidentQkvPath(ctx, mmq, norm, rope, attention, kernels, cfg, wq, wk, wv, weights, qNormW, kNormW,
+				tail);
+	}
+
+	private static void closeAll(DeviceFloatMatrix[] matrices) {
+		if (matrices != null)
+			for (DeviceFloatMatrix m : matrices)
+				if (m != null)
+					m.close();
+	}
+
+	/**
+	 * Logs what {@code path} runs on a shard of {@code layers} layers and announces,
+	 * once, what it leaves outside: layers that leave the region after attention,
+	 * and attention itself when {@code gpuAttention} (the handler's GPU attention) is
+	 * off or the kernel does not run this head width. Returns {@code path}, or closes
+	 * it and returns {@code null} when no layer is eligible. Shared by every handler
+	 * that builds a region, so the notices read the same whichever runs.
+	 */
+	static ResidentQkvPath activate(java.util.logging.Logger log, ResidentQkvPath path, int layers,
+			boolean gpuAttention) {
+		int eligible = 0;
+		for (int li = 0; li < layers; li++)
+			if (path.eligible(li))
+				eligible++;
+		if (eligible == 0) {
+			path.close();
+			GpuResidencyOptions.announceUnsupported(log, "this shard",
+					"has no layer whose Q/K/V projections are all K-quant MMQ matrices on the device");
+			return null;
+		}
+		boolean attends = gpuAttention && path.attendsOnDevice();
+		int whole = 0;
+		if (attends)
+			for (int li = 0; li < layers; li++)
+				if (path.runsWholeLayer(li))
+					whole++;
+		if (attends && whole < eligible)
+			GpuResidencyOptions.announceUnsupported(log, (eligible - whole) + " of " + eligible + " region layers",
+					"leave the region after attention: their output projection, FFN norm or FFN weights are not"
+							+ " K-quant MMQ matrices on the device");
+		if (!gpuAttention)
+			GpuResidencyOptions.announceUnsupported(log, "the KV append and attention",
+					"stay outside the region: --gpu-attention is off, so attention runs on the CPU");
+		else if (!attends)
+			GpuResidencyOptions.announceUnsupported(log, "the KV append and attention",
+					"stay outside the region: the attention kernel does not run " + path.headDim + "-wide heads");
+		log.info("GPU-resident decode region active (gpu-residency=" + GpuResidencyOptions.fromEnv().policyLabel()
+				+ ") on " + eligible + " of " + layers + " layers: "
+				+ (whole > 0
+						? "the whole layer (norm, Q/K/V projection, RoPE, the KV append, attention, output projection,"
+								+ " residual adds, FFN norm and SwiGLU FFN) on " + whole + " of them, the residual row"
+								+ " staying on the device between such layers and k, v and the layer output downloaded"
+								+ " in one copy"
+						: attends
+								? "norm, Q/K/V projection, RoPE, the KV append and attention, with the residual row"
+										+ " uploaded and k, v and the attention output downloaded in one copy"
+								: "norm, Q/K/V projection and RoPE with one upload and one download")
+				+ " per layer. Single-sequence decode only; prefill windows and batched decode"
+				+ " (--parallel above 1, continuous schedule) keep the existing path.");
+		return path;
 	}
 
 	/** The packed download row: k, v and the attention output, then the layer output when the tail runs. */
@@ -346,8 +481,9 @@ final class ResidentQkvPath implements AutoCloseable {
 	 * Runs the region for layer {@code li} on the residual row {@code x} at
 	 * {@code pos} without attention. Returns {q, k, v}, RoPE already applied to q
 	 * and k, in arrays owned by the calling thread and overwritten by its next
-	 * call; or {@code null} when the layer is not {@link #eligible} and the caller
-	 * must use its existing path. {@code x} is not modified.
+	 * call; or {@code null} when the layer is not {@link #eligible}, or no device
+	 * region could be allocated, and the caller must use its existing path. {@code x}
+	 * is not modified.
 	 */
 	float[][] run(int li, float[] x, int pos) {
 		Output out = run(li, x, pos, null);
@@ -363,7 +499,8 @@ final class ResidentQkvPath implements AutoCloseable {
 	 * leaves the mirror untouched. After an attended call the caller writes
 	 * {@link Output#k} and {@link Output#v} to its host KV tensors and then marks
 	 * the row in the mirror. Returns {@code null} when the layer is not
-	 * {@link #eligible}. {@code x} is not modified.
+	 * {@link #eligible}, or when no device region could be allocated (the card is
+	 * full; the mirror is then untouched). {@code x} is not modified.
 	 */
 	Output run(int li, float[] x, int pos, DeviceKvCache mirror) {
 		return run(li, x, pos, mirror, null);
@@ -386,6 +523,8 @@ final class ResidentQkvPath implements AutoCloseable {
 		Region r = lease != null ? lease.region : null;
 		if (r == null)
 			r = takeRegion();
+		if (r == null)
+			return null; // no region could be opened: the caller keeps its existing path
 		Output out = results.get();
 		if (lease != null) {
 			lease.region = r;
@@ -400,12 +539,27 @@ final class ResidentQkvPath implements AutoCloseable {
 		return out;
 	}
 
+	/**
+	 * A region from the pool, or a new one; {@code null} when the pool is empty and
+	 * a new one cannot be allocated because the device is out of memory (a card that
+	 * filled after the path was built), which is logged once.
+	 */
 	private Region takeRegion() {
 		Region r = free.poll();
-		if (r == null) {
+		if (r != null || deviceFull)
+			return r;
+		try {
 			r = openRegion();
-			regions.add(r);
+		} catch (IllegalStateException e) {
+			if (!GpuLayerOffload.isVramOom(e))
+				throw e;
+			deviceFull = true;
+			java.util.logging.Logger.getLogger(ResidentQkvPath.class.getName())
+					.warning("out of device memory opening a device-resident decode region (" + e.getMessage()
+							+ "); decode calls that find no free region use the existing path from now on");
+			return null;
 		}
+		regions.add(r);
 		return r;
 	}
 
@@ -427,8 +581,16 @@ final class ResidentQkvPath implements AutoCloseable {
 			if (!norm.normalizeResident(r.x, normWeight[li], eps, r.xn))
 				throw new IllegalStateException("RMS-norm kernel failed to load after the path was built");
 			mmq.quantizeX(r.xn.devicePointer(), r.q8, hidden, stream);
-			project(wq[li], r.q.devicePointer(), r.q8, stream);
-			project(wk[li], packed, r.q8, stream);
+			if (qNormWeight == null) {
+				project(wq[li], r.q.devicePointer(), r.q8, stream);
+				project(wk[li], packed, r.q8, stream);
+			} else {
+				// q and k land in scratch first: each head is normalized from there into place.
+				project(wq[li], r.headNormIn, r.q8, stream);
+				project(wk[li], r.headNormIn.asSlice(hiddenBytes()), r.q8, stream);
+				headNorm(r.headNormIn, qNormWeight[li], r.q.devicePointer(), numHeads, stream);
+				headNorm(r.headNormIn.asSlice(hiddenBytes()), kNormWeight[li], packed, kvDim / headDim, stream);
+			}
 			project(wv[li], packed.asSlice(kvBytes), r.q8, stream);
 			r.q.markWritten(1);
 			r.packed.markWritten(1);
@@ -483,6 +645,16 @@ final class ResidentQkvPath implements AutoCloseable {
 		spans.compute(DeviceComputeEvent.GQA_ATTENTION_REGION, 1, mark, stream);
 	}
 
+	/** RMS norm over each {@code headDim}-wide head of {@code in} into {@code out}: one row per head, one launch. */
+	private void headNorm(MemorySegment in, DeviceFloatMatrix weight, MemorySegment out, int heads,
+			MemorySegment stream) {
+		RmsNormKernel kernel = RmsNormKernel.tryLoad();
+		if (kernel == null)
+			throw new IllegalStateException("RMS-norm kernel failed to load after the path was built");
+		kernel.launchResident(in, weight.devicePointer(), out, heads, headDim, eps, stream);
+		DeviceSpanTally.compute(DeviceComputeEvent.RMS_NORM, 1, -1L);
+	}
+
 	private void project(DeviceQ4KMatrix w, MemorySegment y, MemorySegment q8, MemorySegment stream) {
 		mmq.launchPacked(w.devicePointer(), q8, y, w.rows(), w.cols(), w.quantType(), stream);
 	}
@@ -492,9 +664,11 @@ final class ResidentQkvPath implements AutoCloseable {
 		long total = 0;
 		for (Region r : regions)
 			total += r.chain.deviceBytes();
-		for (DeviceFloatMatrix w : normWeight)
-			if (w != null)
-				total += (long) w.rows() * w.cols() * Float.BYTES;
+		for (DeviceFloatMatrix[] ws : new DeviceFloatMatrix[][] { normWeight, qNormWeight, kNormWeight })
+			if (ws != null)
+				for (DeviceFloatMatrix w : ws)
+					if (w != null)
+						total += (long) w.rows() * w.cols() * Float.BYTES;
 		if (tail != null)
 			total += tail.deviceBytes();
 		return total;
@@ -510,9 +684,9 @@ final class ResidentQkvPath implements AutoCloseable {
 				r.close();
 			regions.clear();
 			free.clear();
-			for (DeviceFloatMatrix w : normWeight)
-				if (w != null)
-					w.close();
+			closeAll(normWeight);
+			closeAll(qNormWeight);
+			closeAll(kNormWeight);
 			if (tail != null)
 				tail.close();
 			rope.close();
@@ -541,6 +715,8 @@ final class ResidentQkvPath implements AutoCloseable {
 		/** The tail's scratch ({@link ResidentLayerTail#scratchBytes}), null without a tail. */
 		final MemorySegment tailScratch;
 		final MemorySegment table;
+		/** Projected q then k before their per-head norms, null without head norms. */
+		final MemorySegment headNormIn;
 		final ResidentActivation[] qAndPacked;
 		final float[][] in = new float[1][];
 
@@ -554,6 +730,7 @@ final class ResidentQkvPath implements AutoCloseable {
 			this.q8 = chain.allocateScratch(tail != null ? tail.q8Bytes() : Q4KMmqKernel.q8Bytes(hidden));
 			this.tailScratch = tail != null ? chain.allocateScratch(tail.scratchBytes()) : null;
 			this.table = chain.allocateScratch(TABLE_BYTES);
+			this.headNormIn = qNormWeight != null ? chain.allocateScratch((long) (hidden + kvDim) * Float.BYTES) : null;
 			this.qAndPacked = new ResidentActivation[] { q, packed };
 		}
 

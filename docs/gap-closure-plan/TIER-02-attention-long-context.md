@@ -14,8 +14,11 @@ region-off memory creep moves to item 8's mirror budget. Decision 6 taken (a): t
 first part is done (2026-10-06): the whole decode layer runs in the region on the LLaMA family, the residual row
 stays on the device between layers (TinyLlama: 2 uploads and 23 downloads per token on 22 layers), bit-identical to
 the op-at-a-time GPU path by test; its pinned A/B is met (owner run, tg on/off 2.208 and 1.716 where the region runs,
-`docs/perf-compare/20261006T080204Z-gpu-residency-whole-layer-ab`). Next: item 8's second part (the region for
-Phi-3 and Qwen3).
+`docs/perf-compare/20261006T080204Z-gpu-residency-whole-layer-ab`). Item 8's second part is done (2026-10-06): the
+whole decode layer runs in the region on Phi-3 and dense Qwen3 too (Phi-3.5-mini 2 H2D and 33 D2H per token on 32
+layers, Qwen3-1.7B 2 and 29 on 28; greedy identical on against off), with a device LongRoPE kernel bit-identical to
+the host rotation; unpinned tg on/off 1.538 and 1.699, the pinned A/B owed by the owner. Next: item 8's third part
+(Phi-3's prefill RoPE and attention in the prefill region).
 
 **Split 2026-10-04 (plan review): read this first.** This tier held nine items, and under execution
 rule 1 every later tier, including every remaining GPU throughput lever, waited on all of them. Its
@@ -129,6 +132,16 @@ The Phi-3.5 LongRoPE defect found on 2026-09-28 and its remainder are recorded i
    not have today; add them, or keep the model on the op-at-a-time path and announce it (log and
    console, as `GpuResidencyOptions.consoleNotice` does). This is the decode lever the 0.70x GPU tg
    end-of-plan target on Phi-3.5-mini depends on, and before this item no tier owned it.
+
+   *Corrected 2026-10-06 (item 8, second part): LongRoPE cannot be folded into the inverse-frequency
+   table.* Phi-3.5-mini declares `rope.scaling.attn_factor = 1.1902381`, and `Phi3Rope.ropeExt` scales
+   both cos and sin by it; a table of frequencies cannot carry a magnitude. It also builds the angle in
+   float (`theta *= thetaScale` once per pair, then `/ factor`, then `* freqScale`), where `CudaRope`
+   computes `pos * invFreq` in double, so even a folded table would change the angle's bits and lose
+   bit-identity with the host rotation. The device rotation is instead a dedicated kernel entry
+   (`rope_ext_split_half`, `CudaPhi3Rope`) that repeats the host arithmetic step for step and takes the
+   selected factors and the scale as arguments. Scope and order unchanged; only the mechanism differs
+   from the sentence above.
 
    Order within the tier: item 4, then this item, then item 5 (graph replay pays more once the region
    issues more launches per wait), then item 6 (the default is put to the owner on the final region).
@@ -364,6 +377,12 @@ budget. No download is needed.
       (Mistral 7B), 0.959 and 0.991 where declined,
       [`20261006T080204Z-gpu-residency-whole-layer-ab`](../perf-compare/20261006T080204Z-gpu-residency-whole-layer-ab/INDEX.md).
       Not ticked: the criterion covers Phi-3 and Qwen3 too.*
+      *2026-10-06 (second part): Phi-3 and Qwen3 done and held by test (`Phi3TransformerHandlerGpuResidencyTest`: 2 H2D,
+      33 D2H per token on Phi-3.5-mini's 32 layers; `Qwen3TransformerHandlerGpuResidencyTest`: 2 and 29 on Qwen3-1.7B's
+      28; bit-identity in `ResidentQkvPathPhi3Test` and `ResidentQkvPathQwen3Test`); greedy identical and memory flat on
+      both (`smoke-gpu-residency.sh`). Still owed: the published `--device-spans` run and the prefill-window
+      re-verification (executor, at the item's end), and the pinned A/B (owner; prepared,
+      `bash dist/gpu-residency-phi3-qwen3-ab/run-gate.sh`). Not ticked.*
 - [ ] Phi-3.5-mini's prefill window runs RoPE and attention inside the prefill region (scope item 8,
       added 2026-10-02): **Threshold: H2D + D2H bytes per 512-token window >= 70% below 2,645 MB**
       (Tier 01B's step 2 baseline; 1,419 MB at `docs/perf-compare/20261002T050741Z`), from a published
@@ -1116,3 +1135,137 @@ and moves only when item 8's second part gives its handler the region.
   `--device-spans` run owed at the end of item 8 reads the prefill window and should attribute it.
 
 **Out-of-tier changes.** None.
+
+### 2026-10-06: implementation step 5, scope item 8, second part (the region for the Phi-3 and Qwen3 handlers)
+
+**Plan versus code, re-verified first** (HEAD `3761abc`, tree clean apart from the untracked `.github/`; no gate or
+sweep running; `check-plan-thresholds.sh` passes). `Phi3TransformerHandler` and `Qwen3TransformerHandler` had no
+decode region: every decode layer round-tripped each projection, rotated on the host and went through
+`GpuAttentionMirror` for the KV append and attention. The split-half device RoPE (`rope_split_half`) existed, as the
+item says. One claim was false, corrected in scope item 8's text: Phi-3's LongRoPE cannot be folded into the
+inverse-frequency table (Phi-3.5-mini's `rope.scaling.attn_factor = 1.1902381` scales cos and sin, and the host
+builds the angle in float). It changes the mechanism, not the scope or the order, so it was corrected rather than
+escalated. Qwen3-1.7B declares no YaRN scaling and every projection is K-quant (`Q4_K`, `Q6_K` for V and down);
+Phi-3.5-mini's fused Q/K/V is `Q5_K`, gate/up `Q4_K`, down `Q6_K`, all on the packed path.
+
+**Design.**
+- `ResidentRope` (new interface): what the region rotates q and k with. `CudaRope` implements it; new `CudaPhi3Rope`
+  is Phi-3's rotation, a new kernel entry `rope_ext_split_half` (`RopeKernel.launchExtSplitHalf`) that repeats
+  `Phi3Rope.ropeExt`'s float arithmetic step for step, with the selected factors uploaded once and the magnitude
+  scale as an argument. It refuses the positions `Phi3RopeConfig.requirePosition` refuses; the handler also checks
+  before any device work. The two existing PTX entries compile to the same code (diffed).
+- `DeviceQ4KMatrix.rowSlice` (non-owning row view): the region multiplies Phi-3's fused Q/K/V and gate/up through
+  views, so the region and `ResidentLayerTail` needed no Phi-3 code at all.
+- `ResidentQkvPath.HeadNorms` (Qwen3): q and k are projected into region scratch and each head is normalized into
+  place by the existing norm kernel (`RmsNormKernel.launchResident`, one row per head) before RoPE; a layer without
+  both norms is not eligible. `create(..., rope)` and `create(..., rope, headNorms)` overloads; the LLaMA handler's
+  path is unchanged. `ResidentQkvPath.activate` is the startup notice all three handlers share (moved out of
+  `LlamaTransformerHandler`, text unchanged); `unsupportedReason(ctx, cfg)` is the shape-only check.
+- Handlers: each builds the region under `--gpu-residency`, leases one region per token, grows the mirror before the
+  call (`GpuAttentionMirror.reserve`, new, the mirrors' retire-on-OOM contract), writes host KV first and marks the
+  mirror, and returns the region's layer output when the layer ran whole. Qwen3's shared static attention helper is
+  split (`attendAndProject`) so the region's q, k and v can feed it when the region does not attend; the MoE handler
+  calls it unchanged. Qwen3 YaRN files, a query width different from the hidden size, and non-K-quant weights
+  decline the region with a log notice.
+- `GpuResidencyOptions.unsupportedArchitectureReason` no longer lists `phi3` and `qwen3`; `ForwardPassHandlerLoader`
+  announced "has no device-resident decode region" for every dedicated handler and now does so only for those
+  without one (`phi2`, `qwen3moe`); before this fix it would have printed a false notice for Phi-3 and Qwen3.
+
+**Defect found by the smoke and fixed in this step.** `smoke-gpu-residency.sh`'s tensor-parallel cluster on
+Phi-3.5-mini failed: `cudaMalloc failed: rc=2` out of the forward pass. On this host each tensor-parallel node loads
+the whole Phi-3 model, three copies fill the card, and the region opens its per-call buffers on first use. The same
+launch with the region off answers (a scratch copy of the smoke with the cluster's flag switched; the shipped script
+was not edited). Fix: `ResidentQkvPath.run` returns `null` (every handler's "keep the existing path") when opening a
+region runs out of device memory, logs once and stops opening regions. Test first:
+`ResidentQkvPathDeviceFullTest` fills the real card and was seen failing with the same `rc=2`; its fill needed two
+corrections before it was reliable (collect and top up, since earlier tests' cleaners free memory; fill down to
+256-byte requests, since the runtime places small requests in pages it already holds), and a planted fault (the
+out-of-memory error rethrown) fails it again.
+
+**Tests, written first** (README rule 3):
+
+| Test | Seen failing first? | Now |
+|---|---|---|
+| `CudaPhi3RopeTest` (5): one row at positions 0 to 4095 with factors and the 1.19 scale, a model without factors and with a linear scale, a 37-row window, a column range, positions needing the long factors refused | yes, 4 of 5 against a stub that does not launch (the refusal case passes on the stub) | pass, bit-identical to `Phi3Rope.ropeExt` |
+| `DeviceQ4KMatrixRowSliceTest` (3): each part's product equals its rows of the fused product for Q4_K, Q5_K, Q6_K; a view owns nothing; ranges outside refused | no: `rowSlice` was written first, so a regression test that passed on its first run | pass |
+| `ResidentQkvPathPhi3Test` (5): Phi-3 layout (fused Q5_K Q/K/V and Q4_K gate/up through views, Q6_K down, 96-wide heads, GQA 2, extended RoPE): q/k/v and the whole layer bit for bit at positions 0 to 4095, a 30-token leased decode through three layers, concurrent leases, refusal at 4096 | no: composes pieces tested above; passed on its first run | pass |
+| `ResidentQkvPathQwen3Test` (5): Qwen3 layout (per-head norms, split-half, 128-wide heads, Q6_K V and down): q/k/v and the whole layer bit for bit at positions 0 to 30000, leased decode, concurrent leases, a layer without both head norms declined | yes, 5 of 5 against a stub that ignored the head norms | pass |
+| `Phi3TransformerHandlerGpuResidencyTest` (2, real Phi-3.5-mini): greedy token equal on against off at all 24 positions, logits within 0.5 (measured 0.301); whole layer: zero op-at-a-time decode copies, residual uploaded once per token, one packed download per layer | yes (region not active) | pass: **2 H2D and 33 D2H per token on 32 layers** |
+| `Qwen3TransformerHandlerGpuResidencyTest` (2, real Qwen3-1.7B): the same | yes (region not active) | pass: **2 H2D and 29 D2H per token on 28 layers** |
+| `ResidentQkvPathDeviceFullTest` (1): above | yes (`rc=2`) | pass |
+| `GpuResidencyOptionsTest`: `phi3` and `qwen3` run the region, `phi2` and `qwen3moe` decline | updated with the code | pass, 7 of 7 |
+
+**Two Qwen3 handler-test decisions, recorded.** (1) Its first input reused the TinyLlama token ids the LLaMA and
+Phi-3 tests use, which are gibberish in Qwen3's vocabulary; greedy tokens parted at position 13, where the flag-off
+run's own top two logits were 0.0078 apart and the on/off difference (0.196) sat in the same 0.12 to 0.31 band as
+every other position. The input was changed, not the check: the test now decodes the flag-off handler's own greedy
+continuation of five opening tokens ("The capital of France is Paris. The capital of Germany is ...") and requires
+the region to reproduce every token, which it does. (2) On that text the largest logit difference is 0.644 (logits of
+magnitude 15 to 32, three CPU-against-GPU norms per layer); the bound is 1.3, about twice the measurement, the
+LLaMA-family test's convention. Both are in the test's comments.
+
+Planted faults, each in its own run, file restored after (`cmp` against a saved copy): the RoPE magnitude scale
+dropped (`CudaPhi3RopeTest` 2 of 5, `ResidentQkvPathPhi3Test` 4 of 5 fail); K read from the V rows of the fused tensor
+(Phi-3 handler test fails at position 1); K heads normalized with Q's weights (Qwen3 handler test fails at position 1);
+Qwen3 rotated with base 1e4 instead of 1e6 (fails at position 9); the region's out-of-memory error rethrown
+(`ResidentQkvPathDeviceFullTest` fails).
+
+**Regression runs.**
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass |
+| `mvn test -pl node` (before the device-full fix) | 944 run, 0 failures, 44 skipped |
+| `mvn test -pl node -Dgroups=gpu` (before the device-full fix) | 335 run, 0 failures, 7 skipped |
+| after the fix: the eight residency classes above plus `ResidentQkvPathTest` and `LlamaTransformerHandlerGpuResidencyTest` | 0 failures |
+| `mvn test -pl node` (after the fix) | 945 run, 0 failures, 44 skipped |
+| `mvn test -pl node -Dgroups=gpu` (after the fix) | 336 run, 0 failures, 7 skipped |
+| `smoke-gpu-residency.sh --models Phi-3.5-mini-instruct-Q4_K_M,Qwen3-1.7B-Q4_K_M` (unmodified, after the fix, `20261006T152413Z`) | 0 failures: region active and whole on every layer of every node (Phi-3.5-mini 11 of 11, Qwen3-1.7B 10 of 10); greedy identical on against off (32 tokens); GPU memory flat in both modes; cluster pipeline and tensor answer with local mode's output, no node JVM left. Before the fix (`20261006T150246Z`) the tensor cluster failed as described |
+| `smoke-gpu-residency.sh --models tinyllama...,mistral...` (unmodified, `20261006T152632Z`) | 0 failures |
+
+Not run in this step: the eleven-module unit reactor (only `node` and help text in `juno-player` changed;
+`juno-player` compiled in `mvn install`), the real-model `ModelLiveRunnerIT` and `-Pgpu` ITs, `smoke-gpu-residency.sh`
+on llama-1-30b, the other smoke scripts, and the vision and LoRA gates. They belong to the tier's closing matrix.
+
+**Indicative throughput, not scorable** (`PIN=0 bash dist/gpu-residency-phi3-qwen3-ab/run-gate.sh`, clocks not
+pinned, published as
+[`20261006T152821Z-gpu-residency-phi3-qwen3-ab-unpinned`](../perf-compare/20261006T152821Z-gpu-residency-phi3-qwen3-ab-unpinned/INDEX.md)),
+medians of three:
+
+| Model | Region | tg off | tg on | tg on/off | alloc/token off / on | GC pause in span, ms, off / on | GPU tg ratio off / on |
+|---|---|---|---|---|---|---|---|
+| tinyllama-1.1b | whole layer | 66.03 | 130.62 | 1.978 | 48.0M / 38.8M | 7.1 / 0.0 | 0.340x / 0.676x |
+| mistral-7b | whole layer | 22.28 | 36.36 | 1.632 | 223.9M / 193.6M | 14.2 / 0.0 | 0.605x / 0.985x |
+| Phi-3.5-mini | whole layer (new) | 31.34 | 48.20 | 1.538 | 207.5M / 174.1M | 11.5 / 13.2 | 0.524x / 0.805x |
+| Qwen3-1.7B | whole layer (new) | 37.62 | 63.93 | 1.699 | 111.9M / 97.5M | 0.0 / 16.4 | 0.327x / 0.557x |
+| qwen2.5-3b | declined | 29.21 | 29.35 | 1.005 | 143.5M / 143.3M | 0.0 / 0.0 | 0.412x / 0.413x |
+
+**Read against the 0.70x end-of-plan GPU tg targets, not scored** (unpinned, one repetition; the closing sweeps score
+them): Phi-3.5-mini reads 0.805x and Mistral 7B 0.985x with `--gpu-residency on`, both above target, but the flag is off
+by default and the default path reads 0.524x and 0.605x; scope item 6 puts the default to the owner. **One reading
+to carry to the standing allocation gate:** the GC pause in the token span rises on Qwen3-1.7B on every repetition
+(one young collection now inside the 64-token span, 1 against 0, in a 4 GiB heap while allocation per token falls by
+13%), and slightly on Phi-3.5-mini; a threshold effect, not gated here.
+
+**Owed to the owner: the pinned A/B for this part.** Prepared at `dist/gpu-residency-phi3-qwen3-ab/`:
+`candidate-shaded.jar` (sha256 `9659ff62d527578b`, this working tree) and `run-gate.sh` (A B A B A B,
+`--gpu-residency off`/`on`, the four sweep models plus Qwen3-1.7B at `n_prompt=128`, `--pin-clocks`; tg >= 1.00 on
+TinyLlama, Mistral 7B, Phi-3.5-mini and Qwen3-1.7B, >= 0.95 on Qwen2.5-3B). Command:
+`bash dist/gpu-residency-phi3-qwen3-ab/run-gate.sh`.
+
+**Docs.** `docs/howto.md` (the `--gpu-residency` row: the Phi-3 and Qwen3 handlers, what still declines, and that
+file-dependent declines are log-only), `docs/agent-arch.txt` (`ResidentQkvPath`, new `ResidentRope` and
+`CudaPhi3Rope`, `RopeKernel`, `CudaRope`, `DeviceQ4KMatrix.rowSlice`, `GpuAttentionMirror.reserve`,
+`GpuResidencyOptions`), `ConsoleMain` help, `CHANGELOG.md`.
+
+**Known limitation, recorded.** A decline that depends on the file rather than the architecture (non-K-quant weights,
+a Qwen3 file with YaRN RoPE, a query width different from the hidden size) is announced in the log only, which the
+console shows with `--verbose`; the console's startup notice reads the architecture. This is the existing behaviour
+for LLaMA-family files without K-quant weights; no YaRN Qwen3 file is on disk.
+
+**Out-of-tier changes.** None. The device-full fallback also covers the LLaMA-family region (the same `run`), where a
+full card would have failed the request in the same way.
+
+**Next.** Scope item 8's third part: Phi-3's RoPE and attention inside the prefill-window region (the 70% bytes
+threshold), then the KV mirror budget on a partially offloaded model, then the published `--device-spans` run, the
+prefill-window re-verification and the pinned A/B on the final region.

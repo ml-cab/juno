@@ -1,5 +1,32 @@
 ## Status 
 
+**Session 114** — The device-resident decode region now runs Phi-3 and Qwen3 layers too
+
+- **`--gpu-residency` reaches the Phi-3 and Qwen3 handlers.** The whole decode layer (norm, Q/K/V
+  projection, RoPE, the KV append, attention, output projection, residual adds, FFN norm and SwiGLU FFN)
+  now runs on the GPU for Phi-3 and dense Qwen3 models, as it already did for the LLaMA family. On
+  Phi-3.5-mini a recording shows 2 uploads and 33 downloads per generated token on 32 layers; on
+  Qwen3-1.7B, 2 and 29 on 28 layers. In an unpinned same-hour A/B on a GTX 1080, decode with the flag on
+  is 1.54x the flag-off rate on Phi-3.5-mini (48.2 against 31.3 tokens/s) and 1.70x on Qwen3-1.7B (63.9
+  against 37.6); allocation per generated token falls 13% to 19%. The clock-pinned reading is pending.
+- **Phi-3's fused tensors are read in place.** Q, K and V, and gate and up, are multiplied straight out of
+  the model's fused weight tensors through row views of the packed matrix, with no copy and no new matrix
+  kernel.
+- **Phi-3's extended RoPE runs on the GPU, bit for bit.** Its per-pair frequency factors and attention
+  magnitude scale (about 1.19 on Phi-3.5-mini) cannot be expressed as a frequency table, so a dedicated
+  kernel repeats the CPU rotation's float arithmetic step for step; it matches the CPU rotation exactly
+  at positions 0 to 4095. Positions beyond the original training context are refused, as on the CPU.
+- **Qwen3's per-head Q/K norms run on the GPU.** Each head of q and k is normalized on the device between
+  the projection and RoPE. A Qwen3 file with YaRN-scaled RoPE keeps the existing path and says so in the log.
+- **Same numbers as the op-at-a-time GPU path.** On each family's layout the layer output is bit-identical
+  to the op-at-a-time GPU path at positions 0 to 4095, over multi-layer decodes and across concurrent
+  threads. Against the default path, whose norms run on the CPU, greedy output matched token for token on
+  Phi-3.5-mini and Qwen3-1.7B (32 tokens in the smoke test, 24 positions in the handler tests).
+- **A full card falls back instead of failing.** The region allocates its buffers on first use. When the
+  card has filled since the model loaded (three tensor-parallel nodes sharing one GPU), opening a region
+  now falls back to the existing path, says so once in the log, and stops trying; before, the request
+  failed with an allocation error.
+
 **Session 113** — The device-resident decode region now runs the whole transformer layer on the GPU
 
 - **`--gpu-residency` covers the whole layer.** With GPU attention on (the default on CUDA), the

@@ -158,6 +158,31 @@ final class GpuAttentionMirror {
 	}
 
 	/**
+	 * Grows {@code mirror} to hold position {@code pos} before the decode residency
+	 * region casts the row into it ({@link ResidentQkvPath} never grows a mirror, so
+	 * running out of device memory cannot happen inside the region). Same contract as
+	 * {@link #append}: returns the mirror, or {@code null} once it has been retired for
+	 * running out of device memory, before any of the layer's device work is issued.
+	 */
+	DeviceKvCache reserve(DeviceKvCache mirror, int pos) {
+		if (mirror == null)
+			return null;
+		try {
+			mirror.ensureCapacity(pos);
+			return mirror;
+		} catch (IllegalStateException ex) {
+			if (!GpuLayerOffload.isVramOom(ex))
+				throw ex;
+			if (growthWarned.compareAndSet(false, true))
+				log.warning(handler + ": out of device memory growing the attention KV mirror - attention"
+						+ " continues on the CPU, which holds the same history. Lower --gpu-layers, or pass"
+						+ " --gpu-attention off, to keep it on the GPU.");
+			mirror.close();
+			return null;
+		}
+	}
+
+	/**
 	 * Appends a prefill window's K and V rows ({@code width} of them, from
 	 * {@code startPos}) as one copy per tensor, after the host KV tensors hold them.
 	 * Same contract as {@link #append}: returns the mirror, or {@code null} once it has

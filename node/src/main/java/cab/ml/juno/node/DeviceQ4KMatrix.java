@@ -31,6 +31,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>The class name predates Q5_K / Q6_K support and is kept to avoid churn in
  * the handler / MatVec surface; {@link #quantType()} tells the kernel which
  * decode to run.
+ *
+ * <p>Rows are stored one after another, so a contiguous range of rows is itself a
+ * packed matrix: {@link #rowSlice} returns one as a view, for a fused tensor (Phi-3's
+ * Q/K/V and gate/up) whose parts a caller multiplies separately.
  */
 public final class DeviceQ4KMatrix implements AutoCloseable {
 
@@ -44,10 +48,12 @@ public final class DeviceQ4KMatrix implements AutoCloseable {
 	private final int cols;
 	private final int quantType;
 	private final long byteLength;
+	/** The matrix whose memory this view shares, or null when this matrix owns its memory. */
+	private final DeviceQ4KMatrix owner;
 	private final AtomicBoolean closed = new AtomicBoolean();
 
 	private DeviceQ4KMatrix(GpuContext ctx, MemorySegment dA, int rows, int cols, int quantType,
-			long byteLength) {
+			long byteLength, DeviceQ4KMatrix owner) {
 		this.ctx = ctx;
 		this.gpu = ctx.bindings();
 		this.dA = dA;
@@ -55,6 +61,7 @@ public final class DeviceQ4KMatrix implements AutoCloseable {
 		this.cols = cols;
 		this.quantType = quantType;
 		this.byteLength = byteLength;
+		this.owner = owner;
 	}
 
 	/** True when {@code typeId} has a fused device GEMV kernel. */
@@ -97,7 +104,21 @@ public final class DeviceQ4KMatrix implements AutoCloseable {
 			MemorySegment.copy(MemorySegment.ofArray(deviceBytes), 0, host, 0, deviceLength);
 			DeviceStaging.copy(gpu, dA, host, deviceLength, GpuBindings.H2D, 0, "memcpy(" + layout.name() + " H2D)");
 		}
-		return new DeviceQ4KMatrix(ctx, dA, rows, cols, typeId, deviceLength);
+		return new DeviceQ4KMatrix(ctx, dA, rows, cols, typeId, deviceLength, null);
+	}
+
+	/**
+	 * Rows {@code [rowStart, rowStart + rowCount)} as a matrix sharing this one's
+	 * device memory. The view owns nothing: closing it frees nothing, and it is
+	 * usable only while this matrix is open.
+	 */
+	DeviceQ4KMatrix rowSlice(int rowStart, int rowCount) {
+		if (rowStart < 0 || rowCount <= 0 || rowStart + rowCount > rows)
+			throw new IllegalArgumentException("rows [" + rowStart + ", " + (rowStart + rowCount) + ") are not inside a "
+					+ rows + "-row matrix");
+		long rowBytes = byteLength / rows;
+		return new DeviceQ4KMatrix(ctx, devicePointer().asSlice(rowStart * rowBytes, rowCount * rowBytes), rowCount,
+				cols, quantType, rowCount * rowBytes, owner != null ? owner : this);
 	}
 
 	/**
@@ -137,18 +158,18 @@ public final class DeviceQ4KMatrix implements AutoCloseable {
 	}
 
 	MemorySegment devicePointer() {
-		if (closed.get())
+		if (isClosed())
 			throw new IllegalStateException("DeviceQ4KMatrix already closed");
 		return dA;
 	}
 
 	public boolean isClosed() {
-		return closed.get();
+		return closed.get() || (owner != null && owner.isClosed());
 	}
 
 	@Override
 	public void close() {
-		if (closed.compareAndSet(false, true)) {
+		if (closed.compareAndSet(false, true) && owner == null) {
 			GpuBindings.callInt(gpu.gpuSetDevice(), ctx.deviceIndex());
 			gpu.deviceFree(dA);
 		}
