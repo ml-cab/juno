@@ -148,8 +148,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 	/**
 	 * The prefill-window device region (norms, matmuls, SwiGLU and residual adds on the
-	 * device; RoPE and attention stay here), or null on the CPU backend, when turned off,
-	 * or after {@link #releaseGpuResources}.
+	 * device, and RoPE and attention too when the GPU attention mirror is active), or null
+	 * on the CPU backend, when turned off, or after {@link #releaseGpuResources}.
 	 */
 	private PrefillWindowRegion prefillRegion;
 
@@ -426,7 +426,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	/**
 	 * Builds the prefill-window device region over every layer whose projections are on
 	 * the device: the fused Q/K/V and gate/up projections where they are packed, their
-	 * FP16 row slices otherwise. RoPE (LongRoPE) and attention stay on the host.
+	 * FP16 row slices otherwise. The extended RoPE runs on the device, and attention moves
+	 * into the region whenever the GPU attention mirror is active.
 	 */
 	private PrefillWindowRegion openPrefillRegion(MatVec backend, int L) {
 		if (!(backend instanceof CudaMatVec))
@@ -442,7 +443,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		PrefillWindowRegion.Shape shape = new PrefillWindowRegion.Shape(cfg.hiddenDim(), cfg.hiddenDim(), cfg.kvDim(),
 				cfg.intermediateSize(), cfg.numHeads(), cfg.numKvHeads(), cfg.headDim(), cfg.gqaRatio(),
 				cfg.rmsNormEps());
-		return PrefillWindowRegion.create("Phi-3", backend, shape, layers, null, 0f, false);
+		return PrefillWindowRegion.create("Phi-3", backend, shape, layers, ropeCfg, gpuAttention != null);
 	}
 
 	@Override
@@ -1149,19 +1150,25 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * {@link #transformerLayerBatch} through the prefill-window device region: the
-	 * region runs the norm and the Q/K/V projection, RoPE, the KV write and attention run
-	 * here as on the host path, and the region finishes the layer. The residual stays on
-	 * the device between layers; the window loop takes it back at the end. Running out
-	 * of device memory in the region redoes the layer on the host path from the layer's
-	 * input, which the region hands back.
+	 * {@link #transformerLayerBatch} through the prefill-window device region. The whole
+	 * layer runs on the device when attention can (see
+	 * {@link PrefillWindowRegion.Window#runLayer}); otherwise the region returns Q, K and V
+	 * (rotated when RoPE runs on the device), the KV write and attention run here as on
+	 * the host path, and the region finishes the layer. The host KV tensors are written
+	 * from the region's K and V rows before the mirror's watermark covers the window, so
+	 * the mirror stays a copy of them. The residual stays on the device between layers;
+	 * the window loop takes it back at the end. Running out of device memory in the
+	 * region redoes the layer on the host path from the layer's input, which the region
+	 * hands back.
 	 */
 	private float[][] transformerLayerOnDevice(float[][] x, int li, int startPos, SessionKvTensor kCacheLayer,
 			SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror, PrefillWindowRegion.Window win) {
 		int W = x.length;
+		ropeCfg.requirePosition(startPos + W - 1); // fail closed before any device work, as the host rotation does
 		WindowStepEvent devEvt = WindowStepEvent.start();
+		boolean whole;
 		try {
-			win.runLayer(li, x, startPos, null, ws.q, ws.k, ws.v);
+			whole = win.runLayer(li, x, startPos, mirror, ws.q, ws.k, ws.v);
 		} catch (IllegalStateException ex) {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;
@@ -1171,18 +1178,31 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 		devEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
 
-		RopeEvent ropeEvt = new RopeEvent();
-		ropeEvt.begin();
-		for (int b = 0; b < W; b++) {
-			Phi3Rope.ropeExt(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), ropeCfg);
-			Phi3Rope.ropeExt(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
+		if (whole) {
+			WindowStepEvent kvEvt = WindowStepEvent.start();
+			for (int b = 0; b < W; b++) {
+				kCacheLayer.writeToken(startPos + b, ws.k[b]);
+				vCacheLayer.writeToken(startPos + b, ws.v[b]);
+			}
+			mirror.markWritten(startPos, W);
+			kvEvt.end(WindowStepEvent.KV_WRITE, W, startPos);
+			return x;
 		}
-		ropeEvt.windowSize = W;
-		ropeEvt.startPosition = startPos;
-		ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
-		ropeEvt.commit();
 
-		writeKvAndAttend(startPos, kCacheLayer, vCacheLayer, ws, mirror, W);
+		if (!prefillRegion.ropeOnDevice()) {
+			RopeEvent ropeEvt = new RopeEvent();
+			ropeEvt.begin();
+			for (int b = 0; b < W; b++) {
+				Phi3Rope.ropeExt(ws.q[b], startPos + b, cfg.numHeads(), cfg.headDim(), ropeCfg);
+				Phi3Rope.ropeExt(ws.k[b], startPos + b, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
+			}
+			ropeEvt.windowSize = W;
+			ropeEvt.startPosition = startPos;
+			ropeEvt.dimension = cfg.numHeads() * cfg.headDim() + cfg.numKvHeads() * cfg.headDim();
+			ropeEvt.commit();
+		}
+
+		writeKvAndAttend(startPos, kCacheLayer, vCacheLayer, ws, mirror != null && mirror.live() ? mirror : null, W);
 
 		WindowStepEvent finishEvt = WindowStepEvent.start();
 		try {

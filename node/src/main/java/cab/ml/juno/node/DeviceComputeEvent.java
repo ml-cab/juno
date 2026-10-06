@@ -71,6 +71,7 @@ public final class DeviceComputeEvent extends Event {
 	static final String RMS_NORM = "rms_norm";
 	static final String CONVERT_FP16 = "convert_fp16";
 	static final String BIAS_ADD = "bias_add";
+	static final String SPLIT_QKV = "split_qkv";
 	static final String ROPE = "rope";
 	static final String KV_APPEND = "kv_append";
 	static final String GQA_ATTENTION_REGION = "gqa_attention_region";
@@ -79,7 +80,7 @@ public final class DeviceComputeEvent extends Event {
 
 	@Label("Site")
 	@Description("The kernel: gemm_half, gemv_half_batched, gemm_fp32, mmq_packed, gqa_attention, or one of the "
-			+ "prefill-window region's rms_norm, convert_fp16, bias_add, rope, kv_append, gqa_attention_region, "
+			+ "prefill-window region's rms_norm, convert_fp16, bias_add, split_qkv, rope, kv_append, gqa_attention_region, "
 			+ "swiglu, residual_add")
 	public String site;
 

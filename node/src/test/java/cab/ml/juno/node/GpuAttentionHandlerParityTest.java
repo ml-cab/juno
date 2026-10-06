@@ -65,6 +65,12 @@ import org.junit.jupiter.params.provider.ValueSource;
  * 0.0149 to between 0.0223 and 0.0368 on Qwen3-1.7B's second stream across attention
  * kernels whose own error is about 1e-6, so a bound there passes or fails by draw.
  *
+ * <p>Both runs keep the prefill-window device region off ({@link PrefillWindowRegion#ENV_PROPERTY}).
+ * Where the region attends inside itself (Phi-3), it launches the kernel on its own
+ * stream, past the dispatch observer, so the prefill window would go unchecked here;
+ * {@link PrefillRegionHandlerParityTest} holds the region's logits bit-identical to this
+ * region-off path, so the kernel check here covers the region's attention too.
+ *
  * <p>Both runs multiply prefill windows on the FP16 dequant route
  * ({@link CudaMatVec#dequantizeBatchedKQuant}), as the calibration did. On the
  * default tiled integer route each matmul rounds its input to 8 bits, and the
@@ -95,6 +101,7 @@ class GpuAttentionHandlerParityTest {
 
 	private static GpuContext gpu;
 	private String saved;
+	private String savedRegion;
 
 	@BeforeAll
 	static void init() {
@@ -114,6 +121,10 @@ class GpuAttentionHandlerParityTest {
 			System.clearProperty(GpuAttentionOptions.ENV_PROPERTY);
 		else
 			System.setProperty(GpuAttentionOptions.ENV_PROPERTY, saved);
+		if (savedRegion == null)
+			System.clearProperty(PrefillWindowRegion.ENV_PROPERTY);
+		else
+			System.setProperty(PrefillWindowRegion.ENV_PROPERTY, savedRegion);
 	}
 
 	@ParameterizedTest(name = "{0}")
@@ -123,6 +134,8 @@ class GpuAttentionHandlerParityTest {
 		Path model = model(file);
 		assumeTrue(model.toFile().exists(), "Skipping - model not found: " + model);
 		saved = System.getProperty(GpuAttentionOptions.ENV_PROPERTY);
+		savedRegion = System.getProperty(PrefillWindowRegion.ENV_PROPERTY);
+		System.setProperty(PrefillWindowRegion.ENV_PROPERTY, "off"); // see the class comment
 		ShardContext shard = wholeModel(model);
 		long freeAtStart = gpu.freeVramBytes();
 

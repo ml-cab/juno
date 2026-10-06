@@ -57,8 +57,10 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * it to bit identity.
  *
  * <p>A fused {@code [q; k; v]} projection (Phi-3) runs as one GEMM, as on the host
- * path, and is split into Q, K and V on its way to the host; such a model rotates and
- * attends on the host, so the region does not apply RoPE or Q/K/V biases to it.
+ * path. With device RoPE it is split into Q, K and V on the device ({@code split_qkv},
+ * exact copies) and the layer rotates and attends here like any other; without it the
+ * fused rows are split on their way to the host, which rotates and attends. The region
+ * applies no Q/K/V biases to a fused projection (no fused model has them).
  *
  * <p>Scope: CUDA only (the kernels are PTX). A layer runs here when all of its
  * projections are device matrices (packed K-quant or FP16); any other layer, and any
@@ -165,7 +167,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 	private final DeviceFloatMatrix[] bkDev;
 	private final DeviceFloatMatrix[] bvDev;
 	/** Device RoPE, or {@code null} when the caller rotates on the host. */
-	private final CudaRope rope;
+	private final ResidentRope rope;
 	/** Whether attention runs inside the region (device RoPE and the attention kernel both available). */
 	private final boolean attentionOnDevice;
 	private final PrefillWindowKernels kernels;
@@ -181,7 +183,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 
 	private PrefillWindowRegion(String handler, CudaMatVec mv, Shape shape, Layer[] layers,
 			DeviceFloatMatrix[] attnNormDev, DeviceFloatMatrix[] ffnNormDev, DeviceFloatMatrix[] bqDev,
-			DeviceFloatMatrix[] bkDev, DeviceFloatMatrix[] bvDev, CudaRope rope, boolean attentionOnDevice,
+			DeviceFloatMatrix[] bkDev, DeviceFloatMatrix[] bvDev, ResidentRope rope, boolean attentionOnDevice,
 			PrefillWindowKernels kernels, GqaAttentionKernel attention) {
 		this.handler = handler;
 		this.ctx = mv.gpuContext();
@@ -215,6 +217,30 @@ final class PrefillWindowRegion implements AutoCloseable {
 	 */
 	static PrefillWindowRegion create(String handler, MatVec backend, Shape shape, Layer[] layers,
 			RopePairing ropePairing, float ropeTheta, boolean attentionKernel) {
+		java.util.function.Function<GpuContext, ResidentRope> rope = ropePairing == null ? null
+				: ctx -> RopeKernel.tryLoad() != null ? CudaRope.tryCreate(ctx, shape.headDim(), ropeTheta, ropePairing)
+						: null;
+		return create(handler, backend, shape, layers, rope, attentionKernel);
+	}
+
+	/**
+	 * {@link #create(String, MatVec, Shape, Layer[], RopePairing, float, boolean)} for the
+	 * Phi-3 family: RoPE on the device is its extended rotation ({@link CudaPhi3Rope}).
+	 */
+	static PrefillWindowRegion create(String handler, MatVec backend, Shape shape, Layer[] layers,
+			Phi3RopeConfig phi3Rope, boolean attentionKernel) {
+		java.util.Objects.requireNonNull(phi3Rope, "phi3Rope");
+		return create(handler, backend, shape, layers,
+				ctx -> RopeKernel.tryLoad() != null ? CudaPhi3Rope.tryCreate(ctx, shape.headDim(), phi3Rope) : null,
+				attentionKernel);
+	}
+
+	/**
+	 * @param ropeFactory the device rotation for the region's context ({@code null} result: the
+	 *                    caller rotates), or {@code null} to leave RoPE to the caller
+	 */
+	private static PrefillWindowRegion create(String handler, MatVec backend, Shape shape, Layer[] layers,
+			java.util.function.Function<GpuContext, ResidentRope> ropeFactory, boolean attentionKernel) {
 		if (!PrefillRegionOptions.requested()) {
 			log.info(handler + ": prefill-window device region off (" + ENV_PROPERTY + "=off)");
 			return null;
@@ -226,9 +252,8 @@ final class PrefillWindowRegion implements AutoCloseable {
 			if (l == null)
 				continue;
 			eligible++;
-			if (l.qkv() != null && (ropePairing != null || l.bq() != null))
-				throw new IllegalArgumentException(
-						"a fused Q/K/V projection is split on the host, so RoPE and biases stay there too");
+			if (l.qkv() != null && l.bq() != null)
+				throw new IllegalArgumentException("the region applies no Q/K/V biases to a fused projection");
 		}
 		if (eligible == 0)
 			return null;
@@ -248,10 +273,10 @@ final class PrefillWindowRegion implements AutoCloseable {
 		DeviceFloatMatrix[] bqDev = new DeviceFloatMatrix[n];
 		DeviceFloatMatrix[] bkDev = new DeviceFloatMatrix[n];
 		DeviceFloatMatrix[] bvDev = new DeviceFloatMatrix[n];
-		CudaRope rope = null;
+		ResidentRope rope = null;
 		try {
-			if (ropePairing != null && RopeKernel.tryLoad() != null)
-				rope = CudaRope.tryCreate(ctx, shape.headDim(), ropeTheta, ropePairing);
+			if (ropeFactory != null)
+				rope = ropeFactory.apply(ctx);
 			for (int li = 0; li < n; li++) {
 				Layer l = layers[li];
 				if (l == null)
@@ -408,11 +433,11 @@ final class PrefillWindowRegion implements AutoCloseable {
 			try {
 				int widestIn = Math.max(shape.hidden(), Math.max(shape.qDim(), shape.inter()));
 				this.x = c.allocate(capacity, shape.hidden(), RESIDUAL);
-				this.q = c.allocate(capacity, shape.qDim());
-				this.k = c.allocate(capacity, shape.kvDim());
-				this.v = c.allocate(capacity, shape.kvDim());
-				this.attn = c.allocate(capacity, shape.qDim());
-				this.qkv = fusedQkv ? c.allocate(capacity, shape.qDim() + 2 * shape.kvDim()) : null;
+				this.q = c.allocate(capacity, shape.qDim(), "prefill q");
+				this.k = c.allocate(capacity, shape.kvDim(), "prefill k");
+				this.v = c.allocate(capacity, shape.kvDim(), "prefill v");
+				this.attn = c.allocate(capacity, shape.qDim(), "prefill attention");
+				this.qkv = fusedQkv ? c.allocate(capacity, shape.qDim() + 2 * shape.kvDim(), "prefill qkv") : null;
 				this.xn = c.allocateScratch((long) capacity * shape.hidden() * Float.BYTES);
 				this.xIn = c.allocateScratch((long) capacity * shape.hidden() * Float.BYTES);
 				this.xh = c.allocateScratch((long) capacity * widestIn * Short.BYTES);
@@ -471,8 +496,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 		boolean runLayer(int li, float[][] xHost, int startPos, DeviceKvCache mirror, float[][] qOut,
 				float[][] kOut, float[][] vOut) {
 			int w = requireWindow(li, xHost.length);
-			boolean inside = attentionOnDevice && layers[li].qkv() == null && mirror != null && mirror.live()
-					&& mirror.readableThrough(startPos);
+			boolean inside = attentionOnDevice && mirror != null && mirror.live() && mirror.readableThrough(startPos);
 			synchronized (ctx.cublasSerializationLock()) {
 				boolean done = false;
 				try {
@@ -481,7 +505,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 					if (inside)
 						inside = attendInside(mirror, startPos, w);
 					if (!inside) {
-						if (layers[li].qkv() != null)
+						if (layers[li].qkv() != null && rope == null)
 							downloadFused(w, qOut, kOut, vOut);
 						else
 							download(qkvActs, qOut, kOut, vOut);
@@ -587,7 +611,10 @@ final class PrefillWindowRegion implements AutoCloseable {
 
 		// ── the layer, issued on this window's stream ────────────────────────────
 
-		/** norm -> fp16 -> Q, K, V -> bias -> RoPE; for a fused projection, norm -> fp16 -> QKV. */
+		/**
+		 * norm -> fp16 -> Q, K, V -> bias -> RoPE; for a fused projection, norm -> fp16 -> QKV,
+		 * then, with device RoPE, split -> RoPE.
+		 */
 		private void attentionInputs(int li, int w, int startPos) {
 			Layer l = layers[li];
 			int h = shape.hidden();
@@ -598,11 +625,17 @@ final class PrefillWindowRegion implements AutoCloseable {
 				// range could take another cuBLAS algorithm and round differently.
 				gemm(l.qkv(), qkv.devicePointer(), qkv.dim(), w);
 				qkv.markWritten(w);
-				return;
+				if (rope == null)
+					return;
+				int mark = spans.begin(stream, w);
+				kernels.splitQkv(qkv.devicePointer(), q.devicePointer(), k.devicePointer(), v.devicePointer(), w,
+						shape.qDim(), shape.kvDim(), stream);
+				spans.compute(DeviceComputeEvent.SPLIT_QKV, w, mark, stream);
+			} else {
+				gemm(l.q(), q.devicePointer(), shape.qDim(), w);
+				gemm(l.k(), k.devicePointer(), shape.kvDim(), w);
+				gemm(l.v(), v.devicePointer(), shape.kvDim(), w);
 			}
-			gemm(l.q(), q.devicePointer(), shape.qDim(), w);
-			gemm(l.k(), k.devicePointer(), shape.kvDim(), w);
-			gemm(l.v(), v.devicePointer(), shape.kvDim(), w);
 			q.markWritten(w);
 			k.markWritten(w);
 			v.markWritten(w);

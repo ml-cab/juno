@@ -267,6 +267,16 @@ class PrefillWindowKernelsParityTest {
 	}
 
 	@Test
+	@DisplayName("the fused Q/K/V split copies each part of every row bit for bit")
+	void splitQkv_copiesEachPart() {
+		// Phi-3.5-mini (3072 + 2 x 3072), a GQA shape (2048 + 2 x 256), and the window widths.
+		int[][] shapes = { { 3072, 3072 }, { 2048, 256 } };
+		for (int[] shape : shapes)
+			for (int rows : WINDOWS)
+				splitQkv(rows, shape[0], shape[1], 71L + rows + shape[1]);
+	}
+
+	@Test
 	@DisplayName("split-half RoPE matches the CPU rotate-half rotation within one float rounding")
 	void splitHalfRope_matchesCpu() {
 		// Qwen2.5-3B: 16 query heads and 2 KV heads of 128, base 1e6; a 512-wide window at 0 and a later chunk.
@@ -342,6 +352,53 @@ class PrefillWindowKernelsParityTest {
 				nHeads, headDim, startPos, maxDiff);
 		assertThat(maxDiff).as("largest divergence from the CPU rotate-half rotation").isLessThanOrEqualTo(1e-6f);
 		return maxDiff;
+	}
+
+	private static void splitQkv(int rows, int qDim, int kvDim, long seed) {
+		int width = qDim + 2 * kvDim;
+		Random rng = new Random(seed);
+		float[] fused = new float[rows * width];
+		for (int i = 0; i < fused.length; i++)
+			fused[i] = (float) rng.nextGaussian();
+		GpuBindings gpu = ctx.bindings();
+		long fusedBytes = (long) fused.length * Float.BYTES;
+		long qBytes = (long) rows * qDim * Float.BYTES;
+		long kvBytes = (long) rows * kvDim * Float.BYTES;
+		MemorySegment dFused = gpu.deviceMalloc(ctx.deviceIndex(), fusedBytes);
+		MemorySegment dq = gpu.deviceMalloc(ctx.deviceIndex(), qBytes);
+		MemorySegment dk = gpu.deviceMalloc(ctx.deviceIndex(), kvBytes);
+		MemorySegment dv = gpu.deviceMalloc(ctx.deviceIndex(), kvBytes);
+		float[] q = new float[rows * qDim];
+		float[] k = new float[rows * kvDim];
+		float[] v = new float[rows * kvDim];
+		try (Arena a = Arena.ofConfined()) {
+			MemorySegment h = a.allocate(fusedBytes);
+			MemorySegment.copy(fused, 0, h, JAVA_FLOAT, 0, fused.length);
+			copy(gpu, dFused, h, fusedBytes, GpuBindings.H2D);
+			kernels.splitQkv(dFused, dq, dk, dv, rows, qDim, kvDim, null);
+			MemorySegment hq = a.allocate(qBytes);
+			MemorySegment hk = a.allocate(kvBytes);
+			MemorySegment hv = a.allocate(kvBytes);
+			copy(gpu, hq, dq, qBytes, GpuBindings.D2H);
+			copy(gpu, hk, dk, kvBytes, GpuBindings.D2H);
+			copy(gpu, hv, dv, kvBytes, GpuBindings.D2H);
+			MemorySegment.copy(hq, JAVA_FLOAT, 0, q, 0, q.length);
+			MemorySegment.copy(hk, JAVA_FLOAT, 0, k, 0, k.length);
+			MemorySegment.copy(hv, JAVA_FLOAT, 0, v, 0, v.length);
+		} finally {
+			gpu.deviceFree(dFused);
+			gpu.deviceFree(dq);
+			gpu.deviceFree(dk);
+			gpu.deviceFree(dv);
+		}
+		for (int r = 0; r < rows; r++) {
+			assertThat(java.util.Arrays.copyOfRange(q, r * qDim, (r + 1) * qDim)).as("q row %d of %d", r, rows)
+					.containsExactly(java.util.Arrays.copyOfRange(fused, r * width, r * width + qDim));
+			assertThat(java.util.Arrays.copyOfRange(k, r * kvDim, (r + 1) * kvDim)).as("k row %d of %d", r, rows)
+					.containsExactly(java.util.Arrays.copyOfRange(fused, r * width + qDim, r * width + qDim + kvDim));
+			assertThat(java.util.Arrays.copyOfRange(v, r * kvDim, (r + 1) * kvDim)).as("v row %d of %d", r, rows)
+					.containsExactly(java.util.Arrays.copyOfRange(fused, r * width + qDim + kvDim, (r + 1) * width));
+		}
 	}
 
 	/** FP16 bits mapped to a monotonic integer, so the difference of two is their ulp distance. */

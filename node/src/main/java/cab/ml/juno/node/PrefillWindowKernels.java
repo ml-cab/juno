@@ -30,7 +30,7 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  * Loads the classpath PTX module {@code prefill_window.ptx} and launches the
  * elementwise kernels of the prefill-window device region: the FP16 cast of a
  * GEMM input, SwiGLU (written as FP16 for the down projection), the residual add,
- * the Q/K/V bias add, and the RMS norm in the host loop's order. See {@code prefill_window.cu} for what each computes
+ * the Q/K/V bias add, the fused Q/K/V split, and the RMS norm in the host loop's order. See {@code prefill_window.cu} for what each computes
  * and how it matches the CPU window path.
  *
  * <p>Every launch is asynchronous on the given stream ({@code null} for the
@@ -50,6 +50,7 @@ final class PrefillWindowKernels {
 
 	private static final ThreadLocal<KernelParams> PARAMS = ThreadLocal.withInitial(() -> new KernelParams(4));
 	private static final ThreadLocal<KernelParams> NORM_PARAMS = ThreadLocal.withInitial(() -> new KernelParams(5));
+	private static final ThreadLocal<KernelParams> SPLIT_PARAMS = ThreadLocal.withInitial(() -> new KernelParams(7));
 
 	private final MemorySegment toHalf;
 	private final MemorySegment swigluHalf;
@@ -59,12 +60,13 @@ final class PrefillWindowKernels {
 	private final MemorySegment swiglu;
 	private final MemorySegment residualAddBoth;
 	private final MemorySegment decodeAttentionTable;
+	private final MemorySegment splitQkv;
 	@SuppressWarnings("unused")
 	private final Arena moduleArena; // keeps the module and function slots alive
 
 	private PrefillWindowKernels(MemorySegment toHalf, MemorySegment swigluHalf, MemorySegment addInPlace,
 			MemorySegment addBias, MemorySegment rmsNormHostOrder, MemorySegment swiglu, MemorySegment residualAddBoth,
-			MemorySegment decodeAttentionTable, Arena moduleArena) {
+			MemorySegment decodeAttentionTable, MemorySegment splitQkv, Arena moduleArena) {
 		this.toHalf = toHalf;
 		this.swigluHalf = swigluHalf;
 		this.addInPlace = addInPlace;
@@ -73,6 +75,7 @@ final class PrefillWindowKernels {
 		this.swiglu = swiglu;
 		this.residualAddBoth = residualAddBoth;
 		this.decodeAttentionTable = decodeAttentionTable;
+		this.splitQkv = splitQkv;
 		this.moduleArena = moduleArena;
 	}
 
@@ -125,7 +128,8 @@ final class PrefillWindowKernels {
 				function(drv, arena, module, "swiglu_half"), function(drv, arena, module, "add_inplace"),
 				function(drv, arena, module, "add_bias"), function(drv, arena, module, "rms_norm_host_order"),
 				function(drv, arena, module, "swiglu"), function(drv, arena, module, "residual_add_both"),
-				function(drv, arena, module, "decode_attention_table"), arena);
+				function(drv, arena, module, "decode_attention_table"), function(drv, arena, module, "split_qkv"),
+				arena);
 	}
 
 	private static MemorySegment function(CudaDriverBindings drv, Arena arena, MemorySegment module, String entry) {
@@ -218,6 +222,23 @@ final class PrefillWindowKernels {
 		requirePositive(rows, dim);
 		NORM_PARAMS.get().pointer(0, x).pointer(1, weight).pointer(2, out).i32(3, dim).f32(4, eps)
 				.launch(rmsNormHostOrder, rows, NORM_THREADS, stream, "cuLaunchKernel(rms_norm_host_order)");
+	}
+
+	/**
+	 * Splits {@code rows} fused {@code [q; k; v]} rows ({@code qDim + 2 kvDim} floats
+	 * each) into the row-major {@code q}, {@code k} and {@code v} buffers: exact copies.
+	 */
+	void splitQkv(MemorySegment qkv, MemorySegment q, MemorySegment k, MemorySegment v, int rows, int qDim,
+			int kvDim, MemorySegment stream) {
+		Objects.requireNonNull(qkv, "qkv");
+		Objects.requireNonNull(q, "q");
+		Objects.requireNonNull(k, "k");
+		Objects.requireNonNull(v, "v");
+		requirePositive(rows, qDim);
+		requirePositive(rows, kvDim);
+		SPLIT_PARAMS.get().pointer(0, qkv).pointer(1, q).pointer(2, k).pointer(3, v).i32(4, rows).i32(5, qDim)
+				.i32(6, kvDim).launch(splitQkv, grid((long) rows * (qDim + 2L * kvDim)), THREADS, stream,
+						"cuLaunchKernel(split_qkv)");
 	}
 
 	/** {@code x[r][j] += bias[j]} for {@code rows x dim}. */

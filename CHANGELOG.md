@@ -1,14 +1,33 @@
 ## Status 
 
+**Session 115** — Phi-3 prefill windows rotate and attend on the GPU inside the device region
+
+- **Phi-3's prefill RoPE and attention move into the prefill-window device region.** Until now the region
+  ran Phi-3's norms, matmuls, SwiGLU and residual adds on the GPU but handed Q, K and V back to the host
+  every layer, rotated and attended there, and took the attention output up again. The fused Q/K/V rows
+  are now split on the GPU (a new `split_qkv` kernel, exact copies), rotated with Phi-3's extended RoPE
+  (the same kernel the decode region uses, bit-identical to the CPU rotation), cast straight into the
+  attention KV mirror and attended there, as on the LLaMA family. Per layer only the K and V rows for the
+  host KV cache come back.
+- **A 512-token Phi-3.5-mini window moves 415 MB across the bus instead of 1,419 MB** (2,645 MB before the
+  region existed), and its prefill breakdown shows no host RoPE, host attention or attention copies.
+  In a clock-pinned same-session A/B on a GTX 1080, Phi-3.5-mini prefills a 512-token prompt 1.90x faster
+  (719 against 379 tokens/s); generation is unchanged (0.99x, within run-to-run spread).
+- **Same logits as before, bit for bit.** Region on against region off gives identical logits on every
+  prefill window, continuation window and decode step of the parity test. Positions beyond Phi-3's
+  original training context are refused before any GPU work, as on the CPU path.
+- **The new kernel is a timed site.** `split_qkv` appears among the `juno.DeviceCompute` sites and in the
+  prefill breakdown's device elementwise term.
+
 **Session 114** — The device-resident decode region now runs Phi-3 and Qwen3 layers too
 
 - **`--gpu-residency` reaches the Phi-3 and Qwen3 handlers.** The whole decode layer (norm, Q/K/V
   projection, RoPE, the KV append, attention, output projection, residual adds, FFN norm and SwiGLU FFN)
   now runs on the GPU for Phi-3 and dense Qwen3 models, as it already did for the LLaMA family. On
   Phi-3.5-mini a recording shows 2 uploads and 33 downloads per generated token on 32 layers; on
-  Qwen3-1.7B, 2 and 29 on 28 layers. In an unpinned same-hour A/B on a GTX 1080, decode with the flag on
-  is 1.54x the flag-off rate on Phi-3.5-mini (48.2 against 31.3 tokens/s) and 1.70x on Qwen3-1.7B (63.9
-  against 37.6); allocation per generated token falls 13% to 19%. The clock-pinned reading is pending.
+  Qwen3-1.7B, 2 and 29 on 28 layers. In a clock-pinned same-hour A/B on a GTX 1080, decode with the flag
+  on is 1.55x the flag-off rate on Phi-3.5-mini (48.2 against 31.2 tokens/s) and 1.70x on Qwen3-1.7B (63.2
+  against 37.3); allocation per generated token falls 13% to 14%.
 - **Phi-3's fused tensors are read in place.** Q, K and V, and gate and up, are multiplied straight out of
   the model's fused weight tensors through row views of the packed matrix, with no copy and no new matrix
   kernel.

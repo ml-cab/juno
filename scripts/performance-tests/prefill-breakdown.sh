@@ -12,7 +12,7 @@
 #   juno.WindowStep device_layer          device weight dequant, matmul and region
 #   (the prefill-window device region)    staging copies, host FP16 packing, the
 #                                         region's elementwise kernels (rms_norm,
-#                                         convert_fp16, bias_add, rope, kv_append,
+#                                         convert_fp16, bias_add, split_qkv, rope, kv_append,
 #                                         swiglu, residual_add) and its attention
 #                                         (gqa_attention_region); what is left is the
 #                                         host's side of both: dispatch, copy-out and
@@ -53,7 +53,7 @@ def sites($ev; $suffix):
 . as $m
 | (sites("DeviceStaging"; "estimated_total_ms")) as $staging
 | (sites("DeviceCompute"; "total_ms")) as $compute
-| "^(rms_norm|convert_fp16|bias_add|rope|kv_append|swiglu|residual_add)$" as $elementwise_sites
+| "^(rms_norm|convert_fp16|bias_add|split_qkv|rope|kv_append|swiglu|residual_add)$" as $elementwise_sites
 | ([$staging[] | select(.site | test("k_row|v_row|k_window|v_window")) | .ms] | add // 0) as $kv_copy
 | ([$staging[] | select(.site | test("gqa")) | .ms] | add // 0) as $gqa_copy
 | ([$staging[] | select(.site == "pack_fp16_host") | .ms] | add // 0) as $pack

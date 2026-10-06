@@ -1025,8 +1025,8 @@ What else moves into the region depends on the architecture:
 |---|---|---|
 | LLaMA family (Llama, Mistral, TinyLlama) | on the device | inside the region, with `--gpu-attention` (the default on CUDA): the window's K and V rows are cast straight into the attention KV mirror and the attention kernel reads them there |
 | Qwen2 / Qwen2.5 (split-half RoPE, Q/K/V biases) | on the device | inside the region, as above |
-| Phi-3 (LongRoPE) | on the host | on the host side of the region: the region returns Q, K and V, RoPE and attention run as before, and the region finishes the layer |
-| Qwen3 (per-head Q/K norm) | on the host | on the host side of the region, as for Phi-3 |
+| Phi-3 (LongRoPE) | on the device: the fused Q/K/V rows are split on the GPU and rotated with Phi-3's extended RoPE (per-pair frequency factors and the attention magnitude scale), with the same arithmetic as the CPU rotation | inside the region, as for the LLaMA family |
+| Qwen3 (per-head Q/K norm) | on the host | on the host side of the region: the region returns Q, K and V, RoPE and attention run as before, and the region finishes the layer |
 
 The region computes the same logits as the host window path, bit for bit: the matmuls are the same
 FP16 GEMMs fed the same bits, the norms sum in the same order, and SwiGLU and the adds reproduce the
@@ -1212,7 +1212,7 @@ the window for a batched GEMM, 1 for a single matrix-vector product), so its tim
 | `juno.MatVec.{prefill,decode}.{count,total_ms}` | Matmul calls by batch width; a recording from a build without the field counts only in `juno.MatVec.count` |
 
 Inside a `device_layer` span the device work is counted by `juno.DeviceCompute` under its own sites:
-`gemm_half` for the matmuls, and `rms_norm`, `convert_fp16`, `bias_add`, `rope`, `kv_append`,
+`gemm_half` for the matmuls, and `rms_norm`, `convert_fp16`, `bias_add`, `split_qkv`, `rope`, `kv_append`,
 `gqa_attention_region`, `swiglu` and `residual_add` for the operations between them; the region's
 uploads and downloads are `juno.DeviceStaging` sites like any other copy.
 

@@ -198,7 +198,7 @@ Module dependency (excerpt):
         (host FP16 packing, site pack_fp16_host) is kept apart from H2D/D2H.
         juno.DeviceCompute is summed overall, per phase and per kernel site
         (gemm_half, gemv_half_batched, gemm_fp32, mmq_packed, gqa_attention, and the
-        prefill-window region's rms_norm, convert_fp16, bias_add, rope, kv_append,
+        prefill-window region's rms_norm, convert_fp16, bias_add, split_qkv, rope, kv_append,
         gqa_attention_region, swiglu, residual_add, always written) into
         count/timed_count/total_ms.
         WindowStepBucket sums juno.WindowStep per step (embed, projection, bias_add,
@@ -606,7 +606,9 @@ GPU FFI (node module — Panama project, JEP 454):
         device_layer span); runLayer and finishLayer never write the host rows. Its copies are the
         staging sites upload(prefill residual) / materialize(prefill residual). Per layer: RMS norm
         (host-order kernel), FP16 cast, Q/K/V GEMMs (CudaMatVec.gemmOnStream on the window's own stream; a fused
-        Q/K/V matrix as one GEMM, split on the host), bias add, RoPE (CudaRope, either pairing), then
+        Q/K/V matrix as one GEMM, split on the device by split_qkv when RoPE runs there and on the host
+        otherwise), bias add, RoPE (a ResidentRope: CudaRope, either pairing, or CudaPhi3Rope for
+        Phi-3's extended rotation), then
         either attention inside the region (K and V cast straight into the DeviceKvCache mirror with
         writeWindowOnDevice, the gqa_attention kernel reading it with device pointer tables) followed
         by the rest of the layer and one download of k and v (runLayer returns true), or a download
@@ -628,9 +630,10 @@ GPU FFI (node module — Panama project, JEP 454):
         first in-place residual add of a layer whose input exists only on the device (staging site
         memcpy(prefill residual layer input D2D), one W x hidden copy per layer); a mirror OOM inside the
         region retires the mirror and continues with host attention. Built by LlamaTransformerHandler
-        (RoPE and attention inside), Phi3TransformerHandler and Qwen3TransformerHandler (RoPE and
-        attention on the host); timed as juno.DeviceCompute sites (rms_norm, convert_fp16, bias_add,
-        rope, kv_append, gqa_attention_region, swiglu, residual_add, and gemm_half) under
+        and Phi3TransformerHandler (RoPE and attention inside; Phi-3 checks its RoPE position limit
+        before any device work) and Qwen3TransformerHandler (RoPE and attention on the host); timed as
+        juno.DeviceCompute sites (rms_norm, convert_fp16, bias_add, split_qkv, rope, kv_append,
+        gqa_attention_region, swiglu, residual_add, and gemm_half) under
         juno.WindowStep device_layer spans. ForwardPassHandler.prefillRegionActive() reports it.
   PrefillWindowKernels — PTX loader/launcher for prefill_window.ptx (prefill_window.cu): to_half
         (FP32 to FP16, round to nearest even, bit-identical to Float.floatToFloat16), swiglu_half
@@ -641,7 +644,8 @@ GPU FFI (node module — Panama project, JEP 454):
         decode region: swiglu (swiglu_half without the FP16 cast), residual_add_both (x + y into both
         x and y: the layer output into the residual row and the download row in one launch), and
         decode_attention_table (writes one decode row's K pointer, V pointer and length from launch
-        arguments, so the attention table costs no host-to-device copy). Every operation rounded
+        arguments, so the attention table costs no host-to-device copy). split_qkv splits fused
+        [q; k; v] rows into the region's q, k and v buffers (exact copies). Every operation rounded
         separately, no contraction into fused multiply-adds.
   PrefillRegionOptions — JUNO_PREFILL_REGION (system property, then env): on by default, off keeps
         every prefill window on the host path. Diagnostic; ClusterHarness forwards it to forked nodes.
@@ -746,7 +750,7 @@ GPU FFI (node module — Panama project, JEP 454):
         for 2 to 8 rows; mmq_packed: the packed decode GEMV, counted untimed at width 1).
         DeviceComputeClock times the default-stream kernels between two synchronous copies on the
         host, between two drains of that stream (gemm_fp32 in GpuBlasOps.forward, gqa_attention in
-        CudaGqaAttention). The prefill-window region adds rms_norm, convert_fp16, bias_add, rope,
+        CudaGqaAttention). The prefill-window region adds rms_norm, convert_fp16, bias_add, split_qkv, rope,
         kv_append, gqa_attention_region, swiglu and residual_add, timed on its window's stream
         (its matmuls count as gemm_half). CudaMatVec.packFp16Window counts the host FP16 packing of each window as a
         juno.DeviceStaging site (pack_fp16_host) with direction HOST. Off in juno-perf.jfc, on in

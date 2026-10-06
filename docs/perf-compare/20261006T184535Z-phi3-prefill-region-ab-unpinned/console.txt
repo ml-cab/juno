@@ -1,0 +1,19 @@
+baseline jar sha256: a4f334f20440e3e1
+candidate jar sha256: 326cbb9ff2bd86e2
+=== baseline 1 (13:45:35)
+    exit=0  (log: dist/phi3-prefill-region-ab/runs/phi3-prefill-region-ab-unpinned-baseline-1.log)
+=== candidate 1 (13:46:19)
+    exit=0  (log: dist/phi3-prefill-region-ab/runs/phi3-prefill-region-ab-unpinned-candidate-1.log)
+=== baseline 2 (13:46:59)
+    exit=0  (log: dist/phi3-prefill-region-ab/runs/phi3-prefill-region-ab-unpinned-baseline-2.log)
+=== candidate 2 (13:47:39)
+    exit=0  (log: dist/phi3-prefill-region-ab/runs/phi3-prefill-region-ab-unpinned-candidate-2.log)
+=== baseline 3 (13:48:16)
+    exit=0  (log: dist/phi3-prefill-region-ab/runs/phi3-prefill-region-ab-unpinned-baseline-3.log)
+=== candidate 3 (13:48:58)
+    exit=0  (log: dist/phi3-prefill-region-ab/runs/phi3-prefill-region-ab-unpinned-candidate-3.log)
+
+clock_pinned values across all six runs: false (must be only: true for a gate reading)
+prompt_eval_tps  baseline   375.67 [373.22860355990935 375.66815938947866 381.61769761911296 ]  candidate   705.19 [712.3060430816246 680.2575409345175 705.1891500622099 ]  B/A 1.877 (bound 0.95)
+token_gen_tps    baseline    31.03 [30.673697435339612 31.028766621178207 31.192913221998737 ]  candidate    31.26 [31.50809195051373 31.258080900735905 31.197649202146764 ]  B/A 1.007 (bound 0.95)
+BOUND MET

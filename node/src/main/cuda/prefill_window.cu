@@ -28,6 +28,9 @@
  *               writes one decode row's attention table (K pointer, V pointer,
  *               sequence length) from launch arguments, so the table needs no
  *               host-to-device copy.
+ *   split_qkv   q[r] = qkv[r][0, qDim), k[r] = qkv[r][qDim, qDim + kvDim),
+ *               v[r] = the rest: a fused [q; k; v] projection (Phi-3) split into
+ *               the three row-major buffers RoPE and attention read. Copies only.
  *   add_bias    x[r][j] += bias[j], the Q/K/V bias of Qwen2-family models.
  *   rms_norm_host_order
  *               out[r][i] = (w[i] * x[r][i]) * scale, scale = 1 / sqrt(ss / n + eps),
@@ -116,6 +119,24 @@ add_inplace(float* __restrict__ x, const float* __restrict__ y, long long n) {
     const long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n)
         x[i] = __fadd_rn(x[i], y[i]);
+}
+
+extern "C" __global__ void __launch_bounds__(PW_THREADS)
+split_qkv(const float* __restrict__ qkv, float* __restrict__ q, float* __restrict__ k, float* __restrict__ v,
+          int rows, int qDim, int kvDim) {
+    const int width = qDim + 2 * kvDim;
+    const long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= (long long)rows * width)
+        return;
+    const long long r = i / width;
+    const int c = (int)(i - r * width);
+    const float x = qkv[i];
+    if (c < qDim)
+        q[r * qDim + c] = x;
+    else if (c < qDim + kvDim)
+        k[r * kvDim + (c - qDim)] = x;
+    else
+        v[r * kvDim + (c - qDim - kvDim)] = x;
 }
 
 extern "C" __global__ void __launch_bounds__(PW_THREADS)

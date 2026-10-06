@@ -17,8 +17,14 @@ the op-at-a-time GPU path by test; its pinned A/B is met (owner run, tg on/off 2
 `docs/perf-compare/20261006T080204Z-gpu-residency-whole-layer-ab`). Item 8's second part is done (2026-10-06): the
 whole decode layer runs in the region on Phi-3 and dense Qwen3 too (Phi-3.5-mini 2 H2D and 33 D2H per token on 32
 layers, Qwen3-1.7B 2 and 29 on 28; greedy identical on against off), with a device LongRoPE kernel bit-identical to
-the host rotation; unpinned tg on/off 1.538 and 1.699, the pinned A/B owed by the owner. Next: item 8's third part
-(Phi-3's prefill RoPE and attention in the prefill region).
+the host rotation; its pinned A/B is met (owner run, tg on/off 1.545 and 1.699 where new,
+`docs/perf-compare/20261006T200344Z-gpu-residency-phi3-qwen3-ab`). Item 8's third part is done
+(2026-10-06): Phi-3's prefill window splits its fused Q/K/V on the device, rotates and attends inside the prefill region;
+a 512-token Phi-3.5-mini window moves 414.8 MB (84.3% below 2,645 MB, threshold 70%,
+`docs/perf-compare/20261006T184154Z-phi3-prefill-region-attention`), logits bit-identical region on against off;
+pp 1.897x and tg 0.990x the pre-change build on the owner's pinned A/B
+(`docs/perf-compare/20261006T192743Z-phi3-prefill-region-ab`). Next: item 8's fourth part (the KV mirror budget on a partially offloaded
+model).
 
 **Split 2026-10-04 (plan review): read this first.** This tier held nine items, and under execution
 rule 1 every later tier, including every remaining GPU throughput lever, waited on all of them. Its
@@ -383,11 +389,27 @@ budget. No download is needed.
       both (`smoke-gpu-residency.sh`). Still owed: the published `--device-spans` run and the prefill-window
       re-verification (executor, at the item's end), and the pinned A/B (owner; prepared,
       `bash dist/gpu-residency-phi3-qwen3-ab/run-gate.sh`). Not ticked.*
-- [ ] Phi-3.5-mini's prefill window runs RoPE and attention inside the prefill region (scope item 8,
+      *2026-10-06 (third part): Phi-3's prefill window rotates and attends inside the prefill region; on
+      Phi-3.5-mini the window's only downloads are the K and V rows and the final residual
+      ([`20261006T184154Z-phi3-prefill-region-attention`](../perf-compare/20261006T184154Z-phi3-prefill-region-attention/INDEX.md)).
+      Still owed: the KV mirror budget part (executor, next), the `--device-spans` run and prefill-window
+      re-verification on the other sweep models (executor, at the item's end), the pinned A/B on the final region
+      (owner, at the item's end). Not ticked.*
+      *2026-10-06: the second part's pinned A/B is met (owner run), tg region on/off 1.545 (Phi-3.5-mini), 1.696
+      (Qwen3-1.7B), 2.054 (TinyLlama), 1.649 (Mistral 7B); 1.006 where declined (Qwen2.5-3B),
+      [`20261006T200344Z-gpu-residency-phi3-qwen3-ab`](../perf-compare/20261006T200344Z-gpu-residency-phi3-qwen3-ab/INDEX.md).
+      The copy-count, greedy and memory parts hold by test and smoke for every handler; not ticked until the
+      fourth part, the published `--device-spans` run and the final region's pinned A/B.*
+- [x] Phi-3.5-mini's prefill window runs RoPE and attention inside the prefill region (scope item 8,
       added 2026-10-02): **Threshold: H2D + D2H bytes per 512-token window >= 70% below 2,645 MB**
       (Tier 01B's step 2 baseline; 1,419 MB at `docs/perf-compare/20261002T050741Z`), from a published
       `--device-spans` run; logits bit-identical region on against off (`PrefillRegionHandlerParityTest`)
       or characterised no worse than the existing GPU-attention divergence (Phi-3.5-mini earliest 37).
+      *2026-10-06 (item 8, third part): met.* 414.8 MB per 512-token window (6.6 H2D, 408.1 D2H; identical
+      on three repetitions), 84.3% below 2,645 MB, [`20261006T184154Z-phi3-prefill-region-attention`](../perf-compare/20261006T184154Z-phi3-prefill-region-attention/INDEX.md);
+      held by test as well (`Phi3PrefillRegionAttentionTest`: <= 793.5 MB, no host RoPE or attention, no
+      fused Q/K/V download or attention upload). Logits bit-identical region on against off on every site of
+      `PrefillRegionHandlerParityTest` (Phi-3.5-mini relative L2 0.000000 at all six).
 - [ ] KV mirror growth on a partially offloaded model budgeted (scope item 8, 2026-10-04 addition): a
       512-token prompt's attention stays on the device for llama-1-30b at `auto`, or the reason is
       stated with the number.
@@ -1269,3 +1291,188 @@ full card would have failed the request in the same way.
 **Next.** Scope item 8's third part: Phi-3's RoPE and attention inside the prefill-window region (the 70% bytes
 threshold), then the KV mirror budget on a partially offloaded model, then the published `--device-spans` run, the
 prefill-window re-verification and the pinned A/B on the final region.
+
+### 2026-10-06: implementation step 5, scope item 8, third part (Phi-3's prefill RoPE and attention in the prefill region)
+
+**Plan versus code, re-verified first** (HEAD `5e4c913`, tree clean apart from the untracked `.github/`; no gate,
+sweep or mvn run in flight, the matching `pgrep` lines were idle wait loops of earlier sessions; `check-plan-thresholds.sh`
+passes). `Phi3TransformerHandler.openPrefillRegion` built the region with no RoPE and no attention
+(`create(..., null, 0f, false)`); `PrefillWindowRegion.create` refused a fused Q/K/V projection with device RoPE, and
+`runLayer` kept attention out of the region for a fused layer (`layers[li].qkv() == null`). The window therefore
+downloaded the fused Q/K/V rows, rotated with `Phi3Rope.ropeExt` and attended on the host side, and uploaded the
+attention output, every layer. The device LongRoPE kernel the item calls for exists since the second part
+(`CudaPhi3Rope`, `rope_ext_split_half`, bit-identical to the host rotation on a 37-row window by `CudaPhi3RopeTest`).
+GQA attention takes Phi-3.5-mini's 96-wide heads (`GqaAttentionTiledTest`). No drift that changes scope; the item
+said the LongRoPE "folding" serves the prefill window, and per the 2026-10-06 correction it is the dedicated kernel
+that does.
+
+**Design.**
+- `PrefillWindowRegion`'s RoPE is a `ResidentRope` (was `CudaRope`), built by a factory: the existing
+  `create(..., RopePairing, theta, attentionKernel)` builds `CudaRope` as before; a new
+  `create(..., Phi3RopeConfig, attentionKernel)` builds `CudaPhi3Rope`. A fused projection with device RoPE is
+  now accepted (a fused projection with biases is still refused).
+- A fused layer keeps its one GEMM (as on the host path; a GEMM per row range could round differently) and,
+  with device RoPE, is split on the device by a new kernel, `split_qkv` in `prefill_window.cu` (exact copies,
+  timed as the `juno.DeviceCompute` site `split_qkv`), into the region's q, k and v buffers; from there the
+  layer runs as on the LLaMA family: RoPE, K and V cast into the mirror, attention, the rest of the layer, one
+  download of k and v. Without device RoPE the fused rows still come back to the host as before.
+- `Phi3TransformerHandler`: the region gets `ropeCfg` and `attentionKernel = gpuAttention != null`; the
+  per-layer path is the LLaMA handler's (host KV written from the region's rows, then `markWritten`; a layer the
+  region does not attend falls back to rotated q/k/v and `writeKvAndAttend`, with a mirror the region retired
+  passed as `null`). `ropeCfg.requirePosition(startPos + W - 1)` runs before any device work, as on decode.
+- The region's activations are named (`prefill q`, `prefill k`, `prefill v`, `prefill qkv`, `prefill attention`;
+  were all `resident activation`), so their copies are separate `juno.DeviceStaging` sites.
+- `split_qkv` added to the metrics extractor's always-written compute sites (`DeviceSpanBucket`) and to
+  `prefill-breakdown.sh`'s device-elementwise term, so the breakdown does not count it as GEMM time.
+- The regenerated `prefill_window.ptx` differs from the committed one only by the new entry and renumbered block
+  labels (`diff` with labels normalised: no other line); the committed PTX was first reproduced byte for byte by
+  the local `nvcc` 12.0.
+
+**Tests, written first** (README rule 3):
+
+| Test | Seen failing first? | Now |
+|---|---|---|
+| `Phi3PrefillRegionAttentionTest` (new, `@Tag("gpu")`, real Phi-3.5-mini, one 512-token window under JFR): no `juno.Rope` or `juno.Attention` event, no `materialize(prefill qkv)` or `upload(prefill attention)` copy, H2D + D2H <= 793.5 MB | yes: a host RoPE event, 1,422.3 MB (the published 1,419 MB) | pass, 415.7 MB |
+| `PrefillWindowKernelsParityTest.splitQkv_copiesEachPart`: Phi-3.5-mini's and a GQA shape at 1, 8, 9, 32 and 512 rows, every q, k, v row bit for bit | yes, against a stub that launched nothing | pass |
+| `JfrMetricsExtractorDeviceComputeTest` (`split_qkv` added to its site list) | yes, the key missing | pass, 5 of 5 |
+| `PrefillRegionHandlerParityTest` (unchanged; Phi-3.5-mini now attends inside the region) | regression test | pass: logits bit-identical region on against off at all six sites on all four models |
+
+Planted fault, file restored after (`cmp` against a saved copy): K and V swapped in the split. First run
+inconclusive: three cases failed on the test's device-wide free-memory check, which runs before the logits
+comparison. Second run: only Phi-3.5-mini fails, at the logits (first window, relative L2 1.137, top-1 267 against 18041).
+
+**One existing test changed, recorded.** `GpuAttentionHandlerParityTest` (Phi-3.5-mini and Qwen3-1.7B, GPU attention
+on against off) failed on Phi-3.5-mini with "WINDOW: launches seen 0": the region now launches the kernel on its own
+stream, past the dispatch observer the test holds each launch to the oracle through. The test now runs both sides
+with the prefill region off, so its window check again sees every launch; the region's attention is held to that
+region-off path bit for bit by `PrefillRegionHandlerParityTest`, so the kernel check still covers it. Not loosened:
+same bounds, and the window check now reads 64 launches, worst relative L2 1.7e-6 (Qwen3-1.7B: 56, 3.5e-6).
+
+**Regression runs.**
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass |
+| `prefill-breakdown.sh --selftest`, `compare-llama-cpp.sh --selftest` | 16 of 16; all checks passed |
+| `mvn test -pl metrics,node` | metrics pass; node 947 run, 5 failures, 44 skipped, before the test change above. One was `GpuAttentionHandlerParityTest` (above); four were device-wide free-memory checks: `PrefillRegionHandlerParityTest` (Phi-3.5-mini case, at the free-VRAM check, before its logits), `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`, `ResidentQkvPathTest.attentionAllocatesNothingPerCall` and `noDeviceMemoryRetained` |
+| re-runs of the four classes, `-Dgroups=gpu`, desktop GPU use moving between 684 and 1,020 MiB | `GpuAttentionHandlerParityTest` 2 of 2; `ResidentQkvPathTest` 19 of 19 and `PrefillRegionHandlerParityTest` 4 of 4 on the third run (each failed one free-memory check on an earlier one: `noDeviceAllocationPerCall`, then two parity cases); `PrefillReserveDeviceTest` fails on every run (92.5 MB and 93.7 MB reported free with the card full, bound 64 MiB) |
+| `PrefillReserveDeviceTest` on the pre-change build (`git archive 5e4c913`, built in a scratch tree) | fails the same way: 94.3 MB against 64 MiB. The test fills the card and reads the driver's free figure, with no Juno code between; it moves with the desktop's own GPU use and is not this change's |
+| `smoke-long-prompt-prefill.sh --baseline-jar <pre-change jar>` (unmodified) | it accepts only `tinyllama` and `mistral`, so it cannot take Phi-3.5-mini (`--models Phi-3.5-mini` exits on an unknown key); on its defaults, TinyLlama and Mistral 7B, static and continuous, 128/512/2048: 48 checks pass, greedy text identical to the pre-change jar everywhere (the region's RoPE factory refactor touches their path) |
+| greedy text, Phi-3.5-mini, pre-change jar against candidate | identical on all six A/B runs: the 512-token prefill request and the 64-token generation request |
+
+Not run in this step: the eleven-module unit reactor (only `node`, `metrics` and a harness script changed), the
+real-model `ModelLiveRunnerIT` and `-Pgpu` ITs, `smoke-gpu-residency.sh` (decode-only), the vision and LoRA gates.
+They belong to the tier's closing matrix.
+
+**Measurements.**
+
+*Published `--device-spans` run*, [`20261006T184154Z-phi3-prefill-region-attention`](../perf-compare/20261006T184154Z-phi3-prefill-region-attention/INDEX.md)
+(unpinned; jar `326cbb9ff2bd86e2`, this tree): per 512-token window 6.6 MB H2D and 408.1 MB D2H, **414.8 MB**,
+identical on three repetitions; **-84.3% against 2,645 MB** (threshold -70%), from 1,419 MB. What still crosses: K and
+V rows for the host KV cache (200.9 MB each), the residual once each way (6.3 MB each), the attention tables
+(0.3 MB). Breakdown: prefill 763.7 ms; host RoPE, host attention, attention copies, KV mirror copies 0; region
+attention 73.7 ms (9.7%). `prefill-breakdown.sh` exits 1 on its residue flag (10.9% against 5%): 83.6 ms, against
+88.7 ms (2.9% of 3,012 ms) at `20261002T050741Z`, so the absolute residue did not grow and its share rose with the
+faster window. Reported, flag not relaxed. The prefill-window re-verification of scope item 8's main criterion
+("zero activation device-to-host copies inside a prefill window") holds on Phi-3.5-mini in this run: the only
+downloads are the K and V rows and the final residual. The other three sweep models are still owed it, with the
+item's closing `--device-spans` run.
+
+*Indicative A/B* (`PIN=0 bash dist/phi3-prefill-region-ab/run-gate.sh`, unpinned, Phi-3.5-mini, `n_prompt=512`,
+pre-change jar `a4f334f20440e3e1` against candidate `326cbb9ff2bd86e2`, A B A B A B), published as
+[`20261006T184535Z-phi3-prefill-region-ab-unpinned`](../perf-compare/20261006T184535Z-phi3-prefill-region-ab-unpinned/INDEX.md):
+
+| Metric | Pre-change | Candidate | B/A |
+|---|---|---|---|
+| pp t/s, median (all three) | 375.67 (373.23, 375.67, 381.62) | 705.19 (712.31, 680.26, 705.19) | **1.877** |
+| tg t/s, median | 31.03 | 31.26 | 1.007 |
+| GPU pp ratio at 512, median | 0.306x | 0.578x | |
+| GC max pause, ms | 8 to 9 | 8 | |
+| Allocated bytes per generated token | 207.5M | 207.6M | |
+
+**Read against the end-of-plan rows, not scored** (unpinned; the closing sweeps score them): Phi-3.5-mini, the binding
+model of the GPU pp row at 512 (>= 0.40x; reference 0.226x), reads 0.578x on the candidate here against 0.306x on the
+pre-change build in the same session.
+
+**Owed.**
+- The owner: the pinned form of the A/B above, `bash dist/phi3-prefill-region-ab/run-gate.sh` (prepared: both jars
+  and the script; bound pp and tg >= 0.95). Not a criterion of this part (its threshold is the bytes figure); it
+  is read with the tier's closing no-regression gate. Also still owed from the second part:
+  `bash dist/gpu-residency-phi3-qwen3-ab/run-gate.sh`.
+- The executor, at item 8's end: the published `--device-spans` run and the prefill-window re-verification on the
+  other sweep models.
+
+**Docs.** `docs/howto.md` (the prefill-region table's Phi-3 row; `split_qkv` among the `device_layer` sites),
+`docs/agent-arch.txt` (`PrefillWindowRegion`, `PrefillWindowKernels`, the `juno.DeviceCompute` site lists),
+`prefill-breakdown.sh` comment, `CHANGELOG.md`.
+
+**Out-of-tier changes.** None. The region's activation names change the site names its copies are recorded under
+(`materialize(resident activation)` becomes `materialize(prefill k)` and so on) for every model; the totals and the
+breakdown's terms do not move.
+
+**Next.** Scope item 8's fourth part: the KV mirror budget on a partially offloaded model (llama-1-30b at `auto`), then
+the published `--device-spans` run, the prefill-window re-verification and the pinned A/B on the final region.
+
+### 2026-10-06: scope item 8, third part: pinned A/B (owner run): bound met
+
+`bash dist/phi3-prefill-region-ab/run-gate.sh`, clocks pinned on all six runs (19:27Z to 19:31Z), pre-change jar
+`a4f334f20440e3e1` against candidate `326cbb9ff2bd86e2`, alternated A B A B A B, Phi-3.5-mini at `n_prompt=512`;
+published as [`20261006T192743Z-phi3-prefill-region-ab`](../perf-compare/20261006T192743Z-phi3-prefill-region-ab/INDEX.md).
+Re-scored from the run files with the script's method (medians of three), since its console output was not kept.
+Every row scorable, every prefill 512 of 512.
+
+| Metric | Pre-change | Candidate | B/A | Bound |
+|---|---|---|---|---|
+| pp t/s | 378.93 (378.93, 375.88, 380.39) | 718.79 (718.79, 723.40, 706.62) | **1.897** | >= 0.95, met |
+| tg t/s | 31.21 (31.00, 31.23, 31.21) | 30.89 (30.67, 31.17, 30.89) | **0.990** | >= 0.95, met |
+| GPU pp ratio at 512 | 0.303x | 0.577x | | reading |
+| GC max pause, ms | 8 to 10 | 8 | | reading |
+| Allocated bytes per generated token | 206.7M | 207.6M | | reading |
+
+Every candidate prefill reading is above every pre-change one; the unpinned reading (1.877, 1.007) agrees.
+Generation does not run through the prefill region; 0.990 sits inside either side's own spread (30.67 to 31.23).
+
+**Read against the end-of-plan rows, not scored** (a gate A/B, one repetition per run; the closing sweeps score
+them): Phi-3.5-mini, the binding model of the GPU pp row at `n_prompt=512` (>= 0.40x; reference 0.226x), reads
+0.577x on the candidate against 0.303x on the pre-change build, pinned, same session. This is not the tier's closing
+0.95x gate (that is read on every sweep model against the pre-tier jar at the tier's close); it confirms this part
+holds before the next is built on it.
+
+**Out-of-tier changes.** None.
+
+**Still owed to the owner:** nothing from item 8's first three parts (the second part's pinned A/B is recorded below).
+
+### 2026-10-06: scope item 8, second part: pinned A/B (owner run): met
+
+`bash dist/gpu-residency-phi3-qwen3-ab/run-gate.sh`, clocks pinned on all six runs (20:03Z to 20:20Z), jar
+`9659ff62d527578b` on both sides (the second part's tree, committed as `5e4c913`), the flag alternated off, on, off,
+on, off, on; published as
+[`20261006T200344Z-gpu-residency-phi3-qwen3-ab`](../perf-compare/20261006T200344Z-gpu-residency-phi3-qwen3-ab/INDEX.md).
+Re-scored from the run files with the script's method (medians of three), since its console output was not kept.
+Every row scorable on all six runs.
+
+| Model | Region | tg off | tg on | tg on/off | Threshold | pp on/off (not gated) | alloc/token off / on | GPU tg ratio off / on |
+|---|---|---|---|---|---|---|---|---|
+| tinyllama-1.1b | whole layer | 64.00 | 131.47 | **2.054** | >= 1.00, met | 0.913 | 47.9M / 38.8M | 0.329x / 0.672x |
+| mistral-7b | whole layer | 22.16 | 36.54 | **1.649** | >= 1.00, met | 0.990 | 223.8M / 191.7M | 0.596x / 0.982x |
+| Phi-3.5-mini | whole layer (new) | 31.22 | 48.22 | **1.545** | >= 1.00, met | 1.001 | 207.5M / 180.7M | 0.515x / 0.799x |
+| Qwen3-1.7B | whole layer (new) | 37.25 | 63.18 | **1.696** | >= 1.00, met | 0.972 | 111.8M / 97.7M | 0.320x / 0.546x |
+| qwen2.5-3b | declined | 28.78 | 28.95 | **1.006** | >= 0.95, met | 0.989 | 143.3M / 143.2M | 0.404x / 0.407x |
+
+On every region model every on repetition is above every off repetition. The pinned figures agree with the unpinned
+ones (1.538 and 1.699 on the two new handlers).
+
+**Read against the 0.70x end-of-plan GPU tg targets, not scored** (a gate A/B at `n_prompt=128`, one repetition per
+run; the closing sweeps score them): with `--gpu-residency on`, Phi-3.5-mini reads 0.799x and Mistral 7B 0.982x, both
+above 0.70x; the default path (flag off) reads 0.515x and 0.596x. The flag is off by default; scope item 6 puts the
+default to the owner on the final region.
+
+**Readings carried to the standing allocation gate, not gated here.**
+- Qwen3-1.7B's GC max pause rises from 0 to 15-19 ms with the region on, on every repetition, while allocation per
+  generated token falls 13% (111.8M to 97.7M): one young collection now lands inside the 64-token span. The unpinned
+  run showed the same. The standing gate bounds GC pause in the token span at <= 5 ms where the pre-tier reading is
+  under 5 ms, so this is the reading to check first at the tier's close.
+- TinyLlama's pp on/off reads 0.913 although prefill does not run the decode region (0.901 on the whole-layer gate);
+  the item's closing `--device-spans` run is to attribute it, as recorded at the first part's gate.
+
+**Out-of-tier changes.** None.
