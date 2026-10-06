@@ -116,6 +116,35 @@ final class CudaRope implements AutoCloseable {
 		return true;
 	}
 
+	/**
+	 * Rotates columns {@code [from, from + width)} of the one valid row of {@code x}
+	 * in place at {@code pos}, treating them as {@code width / headDim} heads: for an
+	 * activation that packs several results into one row, so they leave the device
+	 * in one copy. Asynchronous on {@code x}'s chain.
+	 *
+	 * @return {@code false} (doing nothing) if the kernel failed to load
+	 */
+	boolean applyResidentColumns(ResidentActivation x, int from, int width, int pos) {
+		requireOpen();
+		x.requireOpen();
+		if (x.rows() != 1)
+			throw new IllegalStateException("column rotation needs one row, the activation holds " + x.rows());
+		if (from < 0 || width <= 0 || from + width > x.dim() || width % headDim != 0)
+			throw new IllegalArgumentException("columns [" + from + ", " + (from + width) + ") of a " + x.dim()
+					+ "-wide row are not whole " + headDim + "-wide heads inside it");
+		if (pos < 0)
+			throw new IllegalArgumentException("pos must not be negative: " + pos);
+		RopeKernel kernel = RopeKernel.tryLoad();
+		if (kernel == null)
+			return false;
+		MemorySegment cols = x.devicePointer().asSlice((long) from * Float.BYTES, (long) width * Float.BYTES);
+		if (pairing == RopePairing.SPLIT_HALF)
+			kernel.launchSplitHalf(cols, invFreq, 1, width / headDim, headDim, pos, x.chain().stream());
+		else
+			kernel.launch(cols, invFreq, 1, width / headDim, headDim, pos, x.chain().stream());
+		return true;
+	}
+
 	RopePairing pairing() {
 		return pairing;
 	}

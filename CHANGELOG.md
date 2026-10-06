@@ -1,5 +1,29 @@
 ## Status 
 
+**Session 112** — The device-resident decode region now appends K/V and runs attention on the GPU
+
+- **`--gpu-residency` reaches attention.** With GPU attention on (the default on CUDA), the decode
+  region no longer stops after RoPE. Per layer it casts the new K and V rows to FP16 straight into the
+  device KV cache and runs the attention kernel there on the query it just rotated, and K, V and the
+  attention output come back in one copy. That copy is the layer's only download. Before, the layer
+  downloaded q, k and v, packed K and V to FP16 on the host, copied them up in two synchronous copies,
+  then uploaded the query and three small tables and downloaded the attention output: seven
+  synchronous copies after the region. Now the region issues two uploads (the residual row and a
+  20-byte attention table) and one download, with one host wait. Decode with `--gpu-residency on` is
+  14.5% faster than with it off on TinyLlama and 9.6% on Mistral 7B (GTX 1080, clocks pinned, same-hour
+  A/B, medians of three); models the region does not run read the same either way.
+- **Same numbers as before.** Every kernel is the one the default path runs, fed the same bits, so K, V
+  and the attention output are bit-identical to the op-at-a-time path, checked at positions 0 to 4096,
+  over a 100-token decode and across concurrent threads (`ResidentQkvPathTest`). On TinyLlama, greedy
+  tokens over a 24-position decode match the flag-off run, and a recording shows no host-staged K/V row
+  or attention query during decode.
+- **The host KV cache stays the source of truth.** The handler writes the returned K and V into its
+  host KV cache first and only then marks the row readable in the device copy. The device copy is grown
+  before the region runs, so running out of device memory while growing it never happens inside the
+  region: as before, the device copy is given up and attention continues on the CPU.
+- With `--gpu-attention off`, the region stops after RoPE as before, and the console says once at
+  startup that the KV append and attention stay outside it.
+
 **Session 111** — GPU attention streams the keys: no score buffer, 10x to 17x faster on a 2048-token prompt
 
 - **New GPU attention kernel.** Attention on the GPU no longer writes out a full row of scores per query

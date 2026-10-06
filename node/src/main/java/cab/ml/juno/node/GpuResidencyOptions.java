@@ -23,8 +23,10 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Policy for the device-resident decode region ({@code --gpu-residency} /
  * {@code JUNO_GPU_RESIDENCY}): RMS norm, the Q/K/V projection and RoPE run on
- * one activation that stays on the GPU between them, with one upload in and one
- * download of q, k and v out, instead of a host round trip around each.
+ * one activation that stays on the GPU between them, and with GPU attention on,
+ * the KV append into the device KV mirror and attention as well, with one
+ * download of k, v and the attention output, instead of a host round trip
+ * around each.
  *
  * <p>Default {@link Mode#OFF}: the path is opt-in until it has been measured end
  * to end. {@link Mode#AUTO} enables it wherever CUDA is present. Surfaces that
@@ -123,8 +125,13 @@ public final class GpuResidencyOptions {
 		if (cpu)
 			return prefix + "the CPU backend has no device to keep activations on; the existing path is used";
 		String reason = unsupportedArchitectureReason(architecture);
-		return reason == null ? null
-				: prefix + "architecture " + architecture + " " + reason + "; the existing path is used";
+		if (reason != null)
+			return prefix + "architecture " + architecture + " " + reason + "; the existing path is used";
+		if (GpuAttentionOptions.fromEnv().mode() == GpuAttentionOptions.Mode.OFF)
+			return "--gpu-residency=" + opts.policyLabel() + " with --gpu-attention off: the KV append and attention"
+					+ " stay outside the device region (attention runs on the CPU); norm, Q/K/V projection and RoPE"
+					+ " still run in it";
+		return null;
 	}
 
 	/**

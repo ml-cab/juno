@@ -6,9 +6,12 @@ Status: **in progress** (2026-10-05). Implementation steps 1 to 4 done: the plan
 CUDA attention path (validated against the oracle from one key to `MAX_SEQ_LEN`; no score scratch; per-layer
 window parameter; indicative 2048-token attention 10x to 17x faster, `docs/perf-compare/20261005T043507Z-tiled-attention-2048`).
 Decisions 4 and 4b taken (a) the same day: the attention checks restated as kernel properties and
-`GpuForwardPassIT`'s greedy check as a teacher-forced decode; every `-Pgpu` IT passes (10 of 10). Open with the
-owner: whether the 512-over-128 row gets the 2048 row's restatement. Next: implementation step 5 (scope item 4,
-attention inside the decode residency region).
+`GpuForwardPassIT`'s greedy check as a teacher-forced decode; every `-Pgpu` IT passes (10 of 10). Step 5's first
+item (scope item 4, attention inside the decode residency region) is done: pinned A/B met, tg region on/off
+1.145 and 1.096 (`docs/perf-compare/20261006T033707Z-gpu-residency-attention-ab`). Decision 5 taken (b): the llama-1-30b
+region-off memory creep moves to item 8's mirror budget. Decision 6 taken (a): the 512-over-128 row stays
+`>= 1.00` as written, scored by the closing sweeps (read 2026-10-06: 1.015 to 1.171, unpinned). Next:
+scope item 8 (the whole decode layer in the region, Phi-3 and Qwen3).
 
 **Split 2026-10-04 (plan review): read this first.** This tier held nine items, and under execution
 rule 1 every later tier, including every remaining GPU throughput lever, waited on all of them. Its
@@ -327,12 +330,21 @@ budget. No download is needed.
       on the kernel, `GqaAttentionKernel.launch` and `CudaGqaAttention.attendBatched`, with window 0
       bit-identical to an unbounding window. The greedy-divergence re-characterisation scope item 1 asks for
       was run; its result is decision 4 in the step 4 record.
-- [ ] Attention inside the decode residency region (scope item 4): k and v appended to the device
+- [x] Attention inside the decode residency region (scope item 4): k and v appended to the device
       mirror and attention read from the region, one download of the attention output per layer;
       bit-identical to the op-at-a-time path by test; greedy output identical on/off on tinyllama,
       mistral-7b and llama-1-30b; per-request device memory flat in `smoke-gpu-residency.sh`.
       **Threshold**: end-to-end tg with the region on >= 1.0x the region-off run on every model where
       it runs, and >= 0.95x everywhere.
+      *2026-10-05: implemented; bit-identity by test (`ResidentQkvPathTest`, 13 cases), greedy identical on
+      against off on all three models, per-request device memory flat with the region on on all three
+      (`smoke-gpu-residency.sh`; llama-1-30b's region-off check fails on the pre-change build too, decision 5).
+      Owed by the owner: the pinned A/B threshold, `bash dist/gpu-residency-attention-ab/run-gate.sh`
+      (indicative unpinned reading 1.122 and 1.097 on the two models where the region runs).*
+      *2026-10-06: threshold met on the owner's pinned A/B,
+      [`20261006T033707Z-gpu-residency-attention-ab`](../perf-compare/20261006T033707Z-gpu-residency-attention-ab/INDEX.md):
+      tg on/off 1.145 (TinyLlama) and 1.096 (Mistral 7B) where the region runs (>= 1.00), 1.022 (Qwen2.5-3B)
+      and 1.001 (Phi-3.5-mini) where it is declined (>= 0.95).*
 - [ ] The whole decode layer runs inside the region (scope item 8) on the LLaMA family, Phi-3 and
       Qwen3, or the handler or operation that cannot is announced: decode-phase copies per generated
       token <= 1 x layers host-to-device and <= 1 x layers + 1 device-to-host, read off
@@ -347,6 +359,9 @@ budget. No download is needed.
 - [ ] KV mirror growth on a partially offloaded model budgeted (scope item 8, 2026-10-04 addition): a
       512-token prompt's attention stays on the device for llama-1-30b at `auto`, or the reason is
       stated with the number.
+      *2026-10-05 (decision 5 (b)): also carries the region-off device-memory creep on llama-1-30b
+      (`smoke-gpu-residency.sh`: 92 MiB over requests 4 to 8 on the pre-change build, 40 MiB after scope
+      item 4; limit 32). Closing this criterion re-runs that smoke at `--requests 8` and reads both modes.*
 - [ ] `CudaGraphSession` decided by measurement (scope item 5): wired behind `--gpu-residency` if it
       saves at least 5% of decode forward-pass time on tinyllama and mistral-7b with greedy output
       unchanged, otherwise deleted with `CudaGraphSessionTest` and the measurement recorded. Not
@@ -775,3 +790,166 @@ relative L2 0.086 (bound 0.025), as do the two single-pass cases (hidden state, 
 | the same, margin 1.0, tinyllama | 5 of 5 |
 | the same with the planted fault | 3 of 5 fail, the teacher-forced case at step 0 |
 | `mvn verify -pl juno-master -Pgpu -Dit.model.path=<tinyllama>` (restored tree, after `mvn install -pl node -DskipTests`) | 10 of 10: `GpuForwardPassIT` 5, `GpuAttentionDivergenceIT` 3 (same figures as the step 4 record), `PrefillRegionGreedyIT` 2 |
+
+### 2026-10-05: implementation step 5, scope item 4 (attention inside the decode residency region)
+
+**Plan versus code, re-verified first.** After the region (`ResidentQkvPath.run`, which downloaded q, k and v
+with one wait), `LlamaTransformerHandler.transformerLayer` packed K and V to FP16 on the host and copied them in
+two synchronous copies (`DeviceKvCache.appendToken`), then `CudaGqaAttention.attendBatched` made four
+synchronous uploads (query, K and V pointer tables, lengths) and one download. GPU attention defaults to `auto`
+(on under CUDA), so the item's path is the default whenever `--gpu-residency` is on. Every claim the item depends
+on held. One wording point, recorded rather than escalated: the item says "downloading only the attention output"
+and also "keep the CPU KV tensors written". The host tensors need k and v, so the one per-layer download carries
+k, v and the attention output, packed into one activation row so it is one copy.
+
+**Design.** `ResidentQkvPath.run(li, x, pos, mirror)` goes on after RoPE when it is given a mirror it can attend
+through (`attendsOnDevice()`: the attention kernel runs the head width and `PrefillWindowKernels` loaded; the
+mirror is live, `readableThrough(pos)` and already has room for `pos`). It casts k and v into the mirror at
+`pos` (`DeviceKvCache.writeWindowOnDevice`, the cast the prefill region uses), copies a 20-byte table (K pointer,
+V pointer, `pos + 1`) up from a pinned buffer, and launches the tiled kernel at one row on the region's stream.
+K, V and the attention output share one activation (`decode region k, v, attention`); k is rotated in place
+there (`CudaRope.applyResidentColumns`, new). The watermark (`c91f879`) is not moved by the region: the handler
+writes k and v into the host KV tensors first and then calls `markWritten(pos, 1)`. The handler grows the mirror
+before the call (`ensureCapacity`, with the existing out-of-memory retire-and-warn), so growth, and running out
+of device memory for it, never happens inside the region. Any mirror the region cannot read (null, closed, short
+of its history) gives the old exit: q, k and v back, the handler attends as before. `--gpu-attention off` is
+announced once, in the log and on the console (`GpuResidencyOptions.consoleNotice`), as attention staying outside
+the region. Per layer and token, with the region attending: two uploads (residual row, table) and one download,
+one host wait, where the path before made one upload and three downloads in the region and seven synchronous
+copies after it. No allocation per call: the region's buffers are pooled; the per-thread `Output` is reused.
+
+**Tests, written first** (README rule 3). Against a stub of the new API (`attendsOnDevice` false, never attends):
+
+| Test | Seen failing first? | Now |
+|---|---|---|
+| `ResidentQkvPathTest.attentionInsideTheRegionMatchesBitForBit`: k, v and attention output against host FP16 pack plus `attendBatched` at one row, positions 0, 1, 63, 64, 517, 4096; watermark not moved by the region; mirrors bit-identical after `markWritten` | yes (not attended) | pass |
+| `decodeRunMatchesStepForStep`: 100-token decode from 0, growth past 64, every step bit-identical, mirrors identical at the end | yes | pass |
+| `concurrentDecodersEachMatch`: three threads, own mirrors, 30 steps each | yes | pass |
+| `attentionAllocatesNothingPerCall`: 200 attended calls, region bytes unchanged, device free memory not lower | yes | pass (see below) |
+| `aMirrorItCannotReadIsNotAttended`: a short, a closed and a null mirror give q, k, v as without one and leave the mirror unwritten | no: the stub's behaviour, so a regression test of the fallback | pass |
+| pooling and retention cases extended: half the short-lived threads attend; every other of 300 create-run-close cycles attends | no (stub never attends) | pass |
+| `LlamaTransformerHandlerGpuResidencyTest.decodeAttendsInsideTheRegion` (real TinyLlama, JFR): zero decode copies at `memcpy(K row H2D)`, `memcpy(V row H2D)`, `memcpy(gqa qBatch H2D)`, `memcpy(gqa kPtrs H2D)`, `memcpy(gqa outBatch D2H)`, `materializeRows(resident activation)`; exactly layers x tokens at the region's input upload, table upload and packed download | yes (at its first assertion, attention not active; its copy-count assertions were not run against the old code) | pass, 3 of 3 in the class; greedy token equal at all 24 positions, largest logit difference on against off 0.2256 (bound 0.5) |
+| `GpuResidencyOptionsTest`: console notice for `--gpu-attention off` | yes (null) | pass, 7 of 7 |
+
+Planted fault: the table's length set to `pos` instead of `pos + 1` (last key dropped) fails 3 of 13 cases
+(bit-identity, 100-token decode, concurrent decoders); file restored.
+
+`attentionAllocatesNothingPerCall` first asserted the device-wide free-memory reading equal before and after,
+copying the existing `noDeviceAllocationPerCall`. It passed alone and failed once in the full GPU group with free
+memory 320 KiB *higher* at the end (7,694,385,152 to 7,694,712,832 bytes): something else released memory
+during the run. An allocation per call can only lower that reading, so this new test asserts "not lower". It
+passed alone twice before and after the change. The existing test keeps its strict equality.
+
+**Regression runs.**
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass |
+| `mvn test -pl node` | 916 run, 0 failures, 44 skipped |
+| `mvn test -pl node -Dgroups=gpu` | 307 run, 1 failure (`attentionAllocatesNothingPerCall`, above), 7 skipped; that class then 13 of 13, three times |
+| `mvn verify -pl juno-master -Pgpu -Dit.model.path=<tinyllama>` (after `mvn install -DskipTests`) | 10 of 10: `GpuForwardPassIT` 5, `GpuAttentionDivergenceIT` 3, `PrefillRegionGreedyIT` 2 |
+| `smoke-gpu-residency.sh --models tinyllama...,mistral...` (unmodified) | 0 failures: region active with the KV append and attention on 8 of 8 and 11 of 11 layers per node, greedy identical on against off (32 tokens), GPU memory flat (0 MiB growth) both modes. Cluster pipeline and tensor answer and leave no node JVM; their text differs from local mode's from word 21, as recorded at Tier 01C's close (cluster prefill runs a different kernel route) |
+| `smoke-gpu-residency.sh --models llama-1-30b --no-cluster` | region active on 20 of 20 GPU layers, greedy identical on against off. **1 failure, in the region-off mode**: off grows 18 MiB over requests 2 to 4 (7470 to 7488; limit 16), on 2 MiB |
+| the same on the pre-change build (`ffb9583`, `git archive`, its own script) | 0 failures: off grows 10 MiB (7444 to 7454), on 2 MiB |
+| candidate, `--requests 8` | off 7436 7484 7492 7508 7534 7544 7548 7548 (40 MiB over requests 4 to 8, limit 32: fail); on 7514 7526 7538 7538 7550 7550 7554 7564 (26 MiB: pass); greedy identical |
+| pre-change build, `--requests 8` | off 7294 7328 7404 7422 7422 7470 7510 7514 (**92 MiB** over requests 4 to 8: fail); on 7514 7518 7522 7524 7530 7532 7536 7540 (16 MiB: pass); greedy identical |
+
+**Reading of the llama-1-30b memory check.** The failure is in the region-off mode, whose code this change only
+restructures around the JFR attention event, and it reproduces on the pre-change build, more strongly (92 MiB
+against 40 over requests 4 to 8). So it is not introduced here: the default decode path on this partially
+offloaded model, with about 200 MiB free on the card, keeps gaining device memory across requests. With the
+region on, both builds stay inside the limit (16 and 26 MiB over requests 4 to 8). The item's own criterion,
+"per-request device memory flat" for the region, holds on all three models; the off-mode creep is raised with
+the owner below rather than fixed here, since it is outside this item.
+
+Not run in this step: the 11-module unit reactor (only `node` changed), the real-model `ModelLiveRunnerIT`, the
+other smoke scripts, and the vision and LoRA gates. Those belong to the tier's closing matrix (implementation
+step 6). `compare-llama-cpp.sh`'s `--gpu-residency` help text now names the KV append and attention.
+
+**Owed to the owner: the item's threshold.** End-to-end tg with the region on >= 1.0x region-off on every model
+where it runs, >= 0.95x everywhere, is a pinned same-hour A/B (tighter than 0.90x). Prepared at
+`dist/gpu-residency-attention-ab/`: `candidate-shaded.jar` (sha256 `ace9e5a64b1192eb`, this working tree) and
+`run-gate.sh`, which alternates `--gpu-residency off` and `on` (A B A B A B) over the four sweep models at
+`n_prompt=128` with `--pin-clocks`, and scores tg medians: >= 1.00 on TinyLlama and Mistral 7B (region runs),
+>= 0.95 on Qwen2.5-3B and Phi-3.5-mini (region declined). Command: `bash dist/gpu-residency-attention-ab/run-gate.sh`.
+llama-1-30b is not a sweep model and the harness carries no reference reading for it; its greedy parity is held
+by the smoke above.
+
+**Indicative reading, not scorable** (the same script with `PIN=0`, clocks not pinned, published as
+[`20261006T025445Z-gpu-residency-attention-ab-unpinned`](../perf-compare/20261006T025445Z-gpu-residency-attention-ab-unpinned/INDEX.md)):
+tg on/off 1.122 (TinyLlama), 1.097 (Mistral 7B), 0.994 (Qwen2.5-3B) and 1.004 (Phi-3.5-mini), medians of three.
+TinyLlama pp on/off reads 0.903, with one low run (`on-3`, low on both lanes of both models) and prefill not
+running the region; the pinned run records pp beside tg.
+
+**Raised with the owner (2026-10-05).**
+- *Decision 5: the region-off device-memory creep on llama-1-30b.* The default decode path (region off) gains
+  device memory across requests on this partially offloaded model: 92 MiB over requests 4 to 8 on the pre-change
+  build, 40 MiB on this one, so `smoke-gpu-residency.sh --models llama-1-30b` fails its region-off check on
+  both. (a) Attribute it now, as an out-of-tier item recorded here (per-request reading of `DeviceKvCache`
+  allocations and the allocator's free bytes across 16 requests). (b) Leave it to scope item 8's mirror-budget
+  work, which already owns KV mirror growth on this model, and carry the smoke's region-off failure on
+  llama-1-30b as known until then. Recommended: (b). The growth is bounded by the mirror's growth on a
+  near-full card, item 8 changes exactly that budget, and the region-on mode this item adds passes.
+- *Still open from decision 1:* whether the 512-over-128 milestone row gets the 2048 row's restatement.
+
+**Decision 5 taken (b) the same day (owner).** The region-off device-memory creep on llama-1-30b goes to scope
+item 8's KV-mirror budget work. Until that lands, `smoke-gpu-residency.sh --models llama-1-30b`'s region-off
+memory check is a known failure, reproduced on the pre-change build; its region-on check and greedy parity
+still hold. The mirror-budget exit criterion now carries it.
+
+**Out-of-tier changes.** None.
+
+### 2026-10-06: scope item 4's pinned gate (owner run): met
+
+`bash dist/gpu-residency-attention-ab/run-gate.sh`, clocks pinned on all six runs (03:37Z to 03:50Z), jar
+`ace9e5a64b1192eb` on both sides, the flag alternated off, on, off, on, off, on; published as
+[`20261006T033707Z-gpu-residency-attention-ab`](../perf-compare/20261006T033707Z-gpu-residency-attention-ab/INDEX.md).
+
+| Model | Region | tg off median | tg on median | tg on/off | Threshold | pp on/off (not gated) |
+|---|---|---|---|---|---|---|
+| tinyllama-1.1b | runs | 61.31 | 70.23 | **1.145** | >= 1.00, met | 0.970 |
+| mistral-7b | runs | 20.96 | 22.98 | **1.096** | >= 1.00, met | 0.989 |
+| qwen2.5-3b | declined | 26.84 | 27.43 | 1.022 | >= 0.95, met | 0.989 |
+| Phi-3.5-mini | declined | 29.55 | 29.60 | 1.001 | >= 0.95, met | 0.991 |
+
+On both region models every on repetition is above every off repetition. Allocation per generated token falls
+about 3% with the region on (TinyLlama 47.4M to 46.5M bytes, Mistral 7B 224.3M to 218.3M, medians); GC pause in
+the token span unchanged (7 and 14 ms). The unpinned TinyLlama pp reading of 0.903 was noise: pinned, pp on/off
+is 0.970 to 0.991 on every model, inside the off side's own spread.
+
+Scope item 4's exit criterion is ticked. Against the 0.70x end-of-plan tg targets, the 1.096x on Mistral 7B is a
+Juno-against-Juno figure; the llama.cpp-relative tg ratios are read after items 8, 5 and 6 from the closing
+sweeps, as the tier's milestone paragraph says.
+
+### 2026-10-06: the 512-over-128 milestone read before deciding its form (owner request)
+
+Owner decision on the question left open by decision 1: read the current number first. Two unpinned GPU sweeps
+on the current build (jar `ace9e5a64b1192eb`), `n_prompt=128` then 512, four sweep models, every row scorable;
+published as [`20261006T045710Z-pp-length-scaling`](../perf-compare/20261006T045710Z-pp-length-scaling/INDEX.md).
+
+| Model | pp ratio 128 | pp ratio 512 | 512 over 128 | Before the kernel (Tier 01C close, pinned) |
+|---|---|---|---|---|
+| tinyllama-1.1b | 0.623x | 0.730x | 1.171 | 0.606 |
+| qwen2.5-3b | 0.734x | 0.842x | 1.147 | 0.697 |
+| Phi-3.5-mini | 0.303x | 0.307x | 1.015 | 0.743 |
+| mistral-7b | 0.775x | 0.826x | 1.067 | 0.642 |
+
+Every model reads above `>= 1.00`. Unlike the 2048 row, this one is met by the kernel it was moved here to
+score, so the ratio-of-ratios objection does not bite in practice: the kernel speeds 128 as well, and the row
+still rose 0.27 to 0.57. Phi-3.5-mini is the exception to watch. It clears by 1.5%, inside the 15% noise floor,
+and its prefill attention still runs outside the region with host copies (scope item 8's Phi-3 prefill
+addition), so its pinned closing reading could land either side of 1.00.
+
+**Raised with the owner (decision 6): the row's form.** (a) Keep `>= 1.00` as written; the tier's pinned
+closing sweeps at 128 and 512 score it, with item 8's Phi-3 prefill work expected to widen Phi-3.5-mini's
+margin. (b) Restate it as the 2048 row was (an attention speedup at 512). (c) Re-own it to Tier 14 as a
+reported distance. Recommended: (a). The row measures what it was meant to and is met on three models by a
+clear margin; restating a row that its kernel met would only remove the check on Phi-3.5-mini.
+
+Also read here, not scored: the end-of-plan GPU pp target at 512 (`>= 0.40x`) reads 0.730x to 0.842x on three
+models and 0.307x on Phi-3.5-mini, which binds.
+
+**Decision 6 taken (a) the same day (owner).** The 512-over-128 milestone row keeps `>= 1.00` as written, in this
+file and in the README milestone table, and the tier's pinned closing sweeps at 128 and 512 score it. Decision 1's
+open question is closed. Phi-3.5-mini's margin (1.015 unpinned) is the one to watch; scope item 8's Phi-3 prefill
+work is expected to widen it.

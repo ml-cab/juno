@@ -18,7 +18,9 @@ package cab.ml.juno.node;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -26,6 +28,11 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import jdk.jfr.Recording;
+import jdk.jfr.consumer.RecordedEvent;
+import jdk.jfr.consumer.RecordingFile;
 
 /**
  * {@code --gpu-residency} on a real GGUF-loaded, CUDA-backed handler. The region
@@ -60,6 +67,9 @@ class LlamaTransformerHandlerGpuResidencyTest {
 
 	private static GpuContext ctx;
 	private String saved;
+
+	@TempDir
+	Path tmp;
 
 	@BeforeAll
 	static void init() {
@@ -130,6 +140,32 @@ class LlamaTransformerHandlerGpuResidencyTest {
 	}
 
 	@Test
+	@DisplayName("tinyllama: with GPU attention the region appends K/V and attends on the device, one download per layer")
+	void decodeAttendsInsideTheRegion() throws Exception {
+		assumeTrue(TINYLLAMA.toFile().exists(), "model not present");
+		saved = System.getProperty(GpuResidencyOptions.ENV_PROPERTY);
+		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "on");
+		ShardContext shard = shard(TINYLLAMA);
+		LlamaTransformerHandler on = loadOnCuda(TINYLLAMA, shard);
+		assertThat(on.gpuResidencyAttentionActive()).as("GPU attention is on by default on CUDA").isTrue();
+		int layers = shard.endLayer() - shard.startLayer();
+		long steps = (long) layers * TOKENS.length;
+
+		List<RecordedEvent> events = record(() -> decode(on, shard, "res-attn"));
+
+		// The op-at-a-time sites after the region: host FP16 pack plus two row copies, four
+		// attention uploads and one download. None may run in decode with the region on.
+		for (String site : new String[] { "memcpy(K row H2D)", "memcpy(V row H2D)", "memcpy(gqa qBatch H2D)",
+				"memcpy(gqa kPtrs H2D)", "memcpy(gqa outBatch D2H)", "materializeRows(resident activation)" })
+			assertThat(decodeCopies(events, site)).as(site).isZero();
+		assertThat(decodeCopies(events, "upload(decode region input)")).as("residual row in").isEqualTo(steps);
+		assertThat(decodeCopies(events, "memcpy(decode region attention table H2D)")).as("attention table in")
+				.isEqualTo(steps);
+		assertThat(decodeCopies(events, "materialize(decode region k, v, attention)"))
+				.as("one download per layer and token").isEqualTo(steps);
+	}
+
+	@Test
 	@DisplayName("qwen2.5: on is declined (split-half RoPE, Q/K/V biases) and decode is unchanged")
 	void aModelTheRegionCannotRunDeclinesIt() throws Exception {
 		assumeTrue(QWEN25.toFile().exists(), "model not present");
@@ -141,6 +177,26 @@ class LlamaTransformerHandlerGpuResidencyTest {
 		float[] logits = on.forward(ForwardRequest.withTokens("res-qwen", new int[] { 9707 }, 0), shard).logits();
 		assertThat(logits).hasSize(shard.vocabSize());
 		on.evict("res-qwen");
+	}
+
+	private List<RecordedEvent> record(Runnable body) throws Exception {
+		Path jfr = tmp.resolve("residency-" + System.nanoTime() + ".jfr");
+		try (Recording rec = new Recording()) {
+			rec.enable("juno.DeviceStaging").withThreshold(java.time.Duration.ZERO);
+			rec.setDestination(jfr);
+			rec.start();
+			body.run();
+			rec.stop();
+		}
+		assertThat(Files.size(jfr)).isPositive();
+		return RecordingFile.readAllEvents(jfr);
+	}
+
+	/** Decode-phase copies recorded under {@code site}, summed over the recording's emissions. */
+	private static long decodeCopies(List<RecordedEvent> events, String site) {
+		return events.stream().filter(e -> e.getEventType().getName().equals("juno.DeviceStaging"))
+				.filter(e -> site.equals(e.getString("site")) && "decode".equals(e.getString("phase")))
+				.mapToLong(e -> e.getLong("copies")).sum();
 	}
 
 	private static int argmax(float[] a) {

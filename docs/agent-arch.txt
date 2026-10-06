@@ -439,20 +439,35 @@ GPU FFI (node module — Panama project, JEP 454):
         multi-row form (PrefillWindowRegion's k and v). An activation allocated with a name
         (ResidentChain.allocate(rows, dim, name)) records its copies as juno.DeviceStaging sites
         upload(name) / materialize(name) instead of upload/materialize(resident activation).
-  ResidentQkvPath — the decode-time attention entry as one residency region (--gpu-residency):
+  ResidentQkvPath — the decode-time attention block as one residency region (--gpu-residency):
         upload the residual row, RMS norm (CudaRmsNorm.normalizeResident with the layer's norm
         weight uploaded once), quantize to Q8_1 and project to Q, K and V (Q4KMmqKernel.quantizeX
         and launchPacked on the chain's stream, chain-owned Q8_1 scratch so a kernel on another
-        stream cannot overwrite it mid-use), RoPE on q and k (CudaRope), then q, k and v in one
-        materializeRows - one wait per layer, as the op-at-a-time QKV projection already pays,
-        with the norm and RoPE moved inside it. Bit-identical to the GPU op-at-a-time path
-        (ResidentQkvPathTest); against the default path, whose norm runs on the CPU, only the
-        norm's summation order differs. unsupportedReason(ctx, pairing, qkvBias, cfg) names what
-        it cannot run for a whole model (non-CUDA, split-half RoPE, Q/K/V biases, query width
-        different from hidden size); eligible(li) is false for a layer without all three K-quant
-        projections on the device. Device regions come from a pool (bounded by concurrent calls,
-        not by threads ever seen); results are copied into per-thread host arrays. Issued under
-        the context's serialization lock. close() frees every region and the norm weights.
+        stream cannot overwrite it mid-use), RoPE on q and k (CudaRope.applyResident, and
+        applyResidentColumns for k, which sits in a packed row). run(li, x, pos, mirror) with a
+        DeviceKvCache it can attend through (attendsOnDevice(): GqaAttentionKernel runs the head
+        width and PrefillWindowKernels loaded; the mirror is live, readableThrough(pos) and already
+        has room for pos) goes on: DeviceKvCache.writeWindowOnDevice casts k and v to FP16 into the
+        mirror at pos, a 20-byte table (K pointer, V pointer, pos + 1) is copied up from a pinned
+        buffer, and GqaAttentionKernel.launch reads q and the mirror. K, V and the attention
+        output share one activation row ("decode region k, v, attention"), so the region leaves
+        the device in one copy and one wait per layer. The mirror's watermark is not moved:
+        LlamaTransformerHandler writes the returned k and v into its host KV tensors first and then
+        calls DeviceKvCache.markWritten(pos, 1). The handler grows the mirror (ensureCapacity)
+        before the call, so growth, and running out of device memory for it, never happens inside
+        the region. Without such a mirror (null, closed, short of its history, --gpu-attention off)
+        the region stops after RoPE and returns q, k and v (Output.attended false; one wait, the q
+        row and the packed row). Bit-identical to the GPU op-at-a-time path, attention included
+        (ResidentQkvPathTest: k, v and the attention output against host FP16 pack plus
+        CudaGqaAttention.attendBatched at one row, a 100-token decode, concurrent threads); against
+        the default path, whose norm runs on the CPU, only the norm's summation order differs.
+        unsupportedReason(ctx, pairing, qkvBias, cfg) names what it cannot run for a whole model
+        (non-CUDA, split-half RoPE, Q/K/V biases, query width different from hidden size);
+        eligible(li) is false for a layer without all three K-quant projections on the device.
+        Device regions come from a pool (bounded by concurrent calls, not by threads ever seen);
+        results are copied into per-thread host arrays (Output). Issued under the context's
+        serialization lock. close() frees every region (stream, buffers, pinned table) and the norm
+        weights.
   GpuResidencyOptions — --gpu-residency on|off|auto / JUNO_GPU_RESIDENCY (system property, then
         env); default off. announceUnsupported(log, surface, reason) logs once per surface per
         process where the flag was requested but cannot run: LlamaTransformerHandler (CPU backend,
@@ -461,8 +476,9 @@ GPU FFI (node module — Panama project, JEP 454):
         --lora-play). Because the console front end turns library logging off unless --verbose,
         ConsoleMain also prints consoleNotice(architecture, lora, cpu) at startup: one warning when
         the launch cannot use the region (LoRA, CPU backend, or unsupportedArchitectureReason of the
-        file's general.architecture). ConsoleMain sets the property; ClusterHarness forwards it to
-        forked nodes.
+        file's general.architecture), or a note that the KV append and attention stay outside the
+        region when --gpu-attention is off. ConsoleMain sets the property; ClusterHarness forwards
+        it to forked nodes.
   KernelParams — a cuLaunchKernel parameter block allocated once and rewritten in place, launched
         through invokeExact: a launch allocates nothing and boxes nothing (pointer, i32, i64, f32
         slots; one- or two-dimensional grid). Used by the resident paths

@@ -177,7 +177,8 @@ Options:
                     for Llama-family handlers, scalar elsewhere); each result records the
                     value the engine actually resolved
   --gpu-residency on|off|auto  Juno --gpu-residency (device-resident decode region: norm, Q/K/V
-                    projection and RoPE with one upload and one download; default off)
+                    projection, RoPE and, with GPU attention on, the KV append and attention,
+                    with one download per layer; default off)
   --schedule static|continuous  Juno --schedule (default static)
   --cache-type-k f16|q8_0  Juno --cache-type-k (default f16)
   --cache-type-v f16|q8_0  Juno --cache-type-v (default f16)

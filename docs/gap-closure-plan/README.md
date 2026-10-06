@@ -269,7 +269,10 @@ costs that are fixed per token, which raises attention's share of what remains, 
 to get worse as they land (Phi-3.5-mini 0.916 to about 0.87). The mechanism that moves it is the
 tiled long-context kernel, which is Tier 02's, and Tier 02's 2048-over-512 row measures the same cause
 one step further out. Moved rather than kept as a known Tier 01B miss, so Tier 01B is scored on what its
-own items can move. Threshold unchanged.
+own items can move. Threshold unchanged. *Kept as written 2026-10-06 (owner decision, Tier 02 decision 6):* unlike the 2048 row it was not restated,
+because the tiled kernel meets it on the current build, unpinned, on every sweep model (1.015 to 1.171,
+`docs/perf-compare/20261006T045710Z-pp-length-scaling`; Phi-3.5-mini binding). The reference cell keeps the pre-tier
+reading; Tier 02's pinned closing sweeps score the row.
 
 **Why the 2048-over-512 row became an attention-speedup row (2026-10-05, owner decision).** It read "GPU pp
 ratio at 2048 over ratio at 512 >= 0.90" (reference 0.329, mistral-7b binding). Tier 02's step 2 decomposition

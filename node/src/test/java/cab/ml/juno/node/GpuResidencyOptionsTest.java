@@ -30,6 +30,7 @@ class GpuResidencyOptionsTest {
 	@AfterEach
 	void clear() {
 		System.clearProperty(GpuResidencyOptions.ENV_PROPERTY);
+		System.clearProperty(GpuAttentionOptions.ENV_PROPERTY);
 	}
 
 	@Test
@@ -90,5 +91,18 @@ class GpuResidencyOptionsTest {
 		assertThat(GpuResidencyOptions.consoleNotice("phi3", false, false)).contains("phi3");
 		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "off");
 		assertThat(GpuResidencyOptions.consoleNotice("phi3", true, true)).isNull();
+	}
+
+	@Test
+	void the_console_notice_says_attention_stays_outside_the_region_with_gpu_attention_off() {
+		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "on");
+		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "off");
+		assertThat(GpuResidencyOptions.consoleNotice("llama", false, false)).contains("--gpu-attention off")
+				.contains("attention");
+		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "on");
+		assertThat(GpuResidencyOptions.consoleNotice("llama", false, false)).isNull();
+		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "off");
+		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "off");
+		assertThat(GpuResidencyOptions.consoleNotice("llama", false, false)).as("residency not requested").isNull();
 	}
 }

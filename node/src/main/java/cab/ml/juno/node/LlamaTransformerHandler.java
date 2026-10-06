@@ -508,9 +508,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					"has no layer whose Q/K/V projections are all K-quant MMQ matrices on the device");
 			return null;
 		}
+		boolean attends = gqaGpu != null && path.attendsOnDevice();
+		if (gqaGpu == null)
+			GpuResidencyOptions.announceUnsupported(log, "the KV append and attention",
+					"stay outside the region: --gpu-attention is off, so attention runs on the CPU");
+		else if (!attends)
+			GpuResidencyOptions.announceUnsupported(log, "the KV append and attention",
+					"stay outside the region: the attention kernel does not run " + cfg.headDim() + "-wide heads");
 		log.info("GPU-resident decode region active (gpu-residency=" + GpuResidencyOptions.fromEnv().policyLabel()
-				+ ") on " + eligible + " of " + L + " layers: norm, Q/K/V projection and RoPE with one upload and one"
-				+ " download per layer. Single-sequence decode only; prefill windows and batched decode"
+				+ ") on " + eligible + " of " + L + " layers: "
+				+ (attends
+						? "norm, Q/K/V projection, RoPE, the KV append and attention, with the residual row and the"
+								+ " attention table uploaded and k, v and the attention output downloaded in one copy"
+						: "norm, Q/K/V projection and RoPE with one upload and one download")
+				+ " per layer. Single-sequence decode only; prefill windows and batched decode"
 				+ " (--parallel above 1, continuous schedule) keep the existing path.");
 		return path;
 	}
@@ -518,6 +529,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	/** Whether the device-resident decode region ({@code --gpu-residency}) is active for this handler. */
 	boolean gpuResidencyActive() {
 		return residentQkv != null;
+	}
+
+	/**
+	 * Whether the decode region also runs the KV append and attention: the region is
+	 * active, GPU attention is on, and the attention kernel runs this head width.
+	 */
+	boolean gpuResidencyAttentionActive() {
+		return residentQkv != null && gqaGpu != null && residentQkv.attendsOnDevice();
 	}
 
 	/** Guards {@link #warnGpuAttentionFellBackOnce} so the hot path logs once. */
@@ -2487,18 +2506,54 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		// ── Attention sub-layer ───────────────────────────────────────────────
 		// The device region runs norm, projection and RoPE with one upload and one
-		// download; its arrays belong to this thread's region until its next call.
-		float[][] resident = residentQkv != null ? residentQkv.run(li, x, pos) : null;
-		float[][] qkvRotated = resident != null ? resident : normProjectRope(x, li, pos);
-		float[] q = qkvRotated[0];
-		float[] k = qkvRotated[1];
-		float[] v = qkvRotated[2];
+		// download, and with a mirror it can attend through, the KV append and
+		// attention too; its arrays belong to this thread's region until its next call.
+		float[] q;
+		float[] k;
+		float[] v;
+		float[] attnOut = null;
+		ResidentQkvPath.Output resident = null;
+		if (residentQkv != null && residentQkv.eligible(li)) {
+			DeviceKvCache regionKv = residentQkv.attendsOnDevice() && deviceKv != null
+					&& deviceKv.readableThrough(pos) ? deviceKv : null;
+			if (regionKv != null) {
+				// Grown here, not inside the region, so running out of device memory
+				// retires the mirror before any of the layer's device work is issued.
+				try {
+					regionKv.ensureCapacity(pos);
+				} catch (IllegalStateException ex) {
+					if (!GpuLayerOffload.isVramOom(ex))
+						throw ex;
+					warnKvMirrorGrowthFellBackOnce();
+					deviceKv.close();
+					deviceKv = null;
+					regionKv = null;
+				}
+			}
+			resident = residentQkv.run(li, x, pos, regionKv);
+		}
+		if (resident != null) {
+			q = resident.q;
+			k = resident.k;
+			v = resident.v;
+			if (resident.attended)
+				attnOut = resident.attn;
+		} else {
+			float[][] qkvRotated = normProjectRope(x, li, pos);
+			q = qkvRotated[0];
+			k = qkvRotated[1];
+			v = qkvRotated[2];
+		}
 
 		// CPU tensors first and unconditionally, as in the batched path: the device
 		// cache mirrors them, so it can be given up at any point without losing KV.
 		kCacheLayer.writeToken(pos, k);
 		vCacheLayer.writeToken(pos, v);
-		if (deviceKv != null) {
+		if (attnOut != null) {
+			// The region already cast the row into the mirror; it becomes readable now
+			// that the host tensors hold it too.
+			deviceKv.markWritten(pos, 1);
+		} else if (deviceKv != null) {
 			try {
 				deviceKv.appendToken(pos, k, v);
 			} catch (IllegalStateException ex) {
@@ -2511,35 +2566,36 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 
 		int seqLen = pos + 1;
-		AttentionEvent attnEvt = new AttentionEvent();
-		attnEvt.begin();
-		float[] attnOut = null;
-		if (deviceKv != null && deviceKv.readableThrough(seqLen)) {
-			float[][] outBatch = new float[1][];
-			// Guarded at the dispatch boundary -- see the batched path.
-			try {
-				boolean dispatched = gqaGpu.attendBatched(
-						new DeviceKvCache[] { deviceKv }, new float[][] { q }, new int[] { seqLen }, outBatch,
-						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
-				if (dispatched)
-					attnOut = outBatch[0];
-			} catch (IllegalStateException ex) {
-				if (!GpuLayerOffload.isVramOom(ex))
-					throw ex;
-				warnGpuAttentionFellBackOnce();
-				deviceKv.close();
-				attnOut = null;
-			}
-		}
 		if (attnOut == null) {
-			float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
-			float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
-			attnOut = gqa(q, kView, vView, seqLen);
+			AttentionEvent attnEvt = new AttentionEvent();
+			attnEvt.begin();
+			if (deviceKv != null && deviceKv.readableThrough(seqLen)) {
+				float[][] outBatch = new float[1][];
+				// Guarded at the dispatch boundary -- see the batched path.
+				try {
+					boolean dispatched = gqaGpu.attendBatched(
+							new DeviceKvCache[] { deviceKv }, new float[][] { q }, new int[] { seqLen }, outBatch,
+							cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+					if (dispatched)
+						attnOut = outBatch[0];
+				} catch (IllegalStateException ex) {
+					if (!GpuLayerOffload.isVramOom(ex))
+						throw ex;
+					warnGpuAttentionFellBackOnce();
+					deviceKv.close();
+					attnOut = null;
+				}
+			}
+			if (attnOut == null) {
+				float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
+				float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
+				attnOut = gqa(q, kView, vView, seqLen);
+			}
+			attnEvt.windowSize = 1;
+			attnEvt.startPosition = pos;
+			attnEvt.contextLength = seqLen;
+			attnEvt.commit();
 		}
-		attnEvt.windowSize = 1;
-		attnEvt.startPosition = pos;
-		attnEvt.contextLength = seqLen;
-		attnEvt.commit();
 
 		// Output projection + residual
 		float[] attnProj = matVecProjection(wo[li], woQ4Dev, woDev, woDevFp32, li, attnOut, H, H);

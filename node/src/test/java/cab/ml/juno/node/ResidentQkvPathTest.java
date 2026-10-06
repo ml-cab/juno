@@ -57,6 +57,7 @@ class ResidentQkvPathTest {
 	private static GpuContext ctx;
 	private static CudaMatVec mv;
 	private static CudaRmsNorm roundTripNorm;
+	private static CudaGqaAttention gqa;
 	private static LlamaConfig cfg;
 	private static float[][] attnNorm;
 	private static DeviceQ4KMatrix[] wq;
@@ -74,6 +75,8 @@ class ResidentQkvPathTest {
 		mv = new CudaMatVec(ctx);
 		roundTripNorm = CudaRmsNorm.tryCreate(ctx);
 		assumeTrue(roundTripNorm != null, "CUDA backend required");
+		assumeTrue(GqaAttentionKernel.tryLoad() != null, "attention kernel failed to load");
+		gqa = CudaGqaAttention.tryCreate(ctx);
 
 		cfg = new LlamaConfig(H, 2, HEADS, KV_HEADS, HEAD_DIM, 4 * H, 1000, EPS, THETA, "llama");
 		Random rnd = new Random(7);
@@ -91,6 +94,8 @@ class ResidentQkvPathTest {
 				for (DeviceQ4KMatrix m : a)
 					if (m != null)
 						m.close();
+		if (gqa != null)
+			gqa.close();
 		if (ctx != null)
 			ctx.close();
 	}
@@ -199,7 +204,7 @@ class ResidentQkvPathTest {
 	@Test
 	@DisplayName("device memory returns to where it started across 300 create-run-close cycles")
 	void noDeviceMemoryRetained() {
-		// One region is a few kilobytes (a stream, six small buffers, the norm
+		// One region is a few kilobytes (a stream, a few small buffers, the norm
 		// weight), below what one device-memory reading resolves, so one cycle
 		// cannot show a leak. Measured on the reference host: with every region
 		// deliberately leaked, 300 cycles hold 48 MB; without a leak the reading
@@ -207,17 +212,152 @@ class ResidentQkvPathTest {
 		// with the cycle count. The bound sits between the two.
 		float[] x = randomVec(H, new Random(6), -2f, 2f);
 		for (int w = 0; w < 5; w++)
-			try (ResidentQkvPath warm = ResidentQkvPath.create(ctx, cfg, attnNorm, wq, wk, wv)) {
+			try (ResidentQkvPath warm = ResidentQkvPath.create(ctx, cfg, attnNorm, wq, wk, wv);
+					DeviceKvCache m = new DeviceKvCache(ctx, KV)) {
 				warm.run(0, x, 0);
+				warm.run(0, x, 0, m);
 			}
 		long before = freeBytes();
 		for (int c = 0; c < 300; c++) {
-			try (ResidentQkvPath path = ResidentQkvPath.create(ctx, cfg, attnNorm, wq, wk, wv)) {
+			// Every other cycle also attends through the region, which adds its attention buffers.
+			try (ResidentQkvPath path = ResidentQkvPath.create(ctx, cfg, attnNorm, wq, wk, wv);
+					DeviceKvCache m = new DeviceKvCache(ctx, KV)) {
 				path.run(0, x, c);
+				if (c % 2 == 1)
+					path.run(0, x, 0, m);
 			}
 		}
 		assertThat(Math.abs(before - freeBytes())).as("device bytes not returned after 300 cycles")
 				.isLessThanOrEqualTo(4L * 1024 * 1024);
+	}
+
+	@Test
+	@DisplayName("with a mirror: k, v and the attention output match the op-at-a-time path bit for bit, at several positions")
+	void attentionInsideTheRegionMatchesBitForBit() {
+		try (ResidentQkvPath path = ResidentQkvPath.create(ctx, cfg, attnNorm, wq, wk, wv)) {
+			assertThat(path.attendsOnDevice()).as("attention kernel and FP16 cast loaded").isTrue();
+			Random rnd = new Random(21);
+			for (int pos : new int[] { 0, 1, 63, 64, 517, 4096 }) {
+				DeviceKvCache mine = mirrorWithHistory(pos, 900 + pos);
+				DeviceKvCache ref = mirrorWithHistory(pos, 900 + pos);
+				try {
+					float[] x = randomVec(H, rnd, -2f, 2f);
+					float[][] expected = todaysPathWithAttention(x, pos, ref);
+					mine.ensureCapacity(pos);
+					ResidentQkvPath.Output got = path.run(0, x, pos, mine);
+					assertThat(got.attended).as("attended at pos %d", pos).isTrue();
+					assertThat(got.k).as("k at pos %d", pos).containsExactly(expected[1]);
+					assertThat(got.v).as("v at pos %d", pos).containsExactly(expected[2]);
+					assertThat(got.attn).as("attention at pos %d", pos).containsExactly(expected[3]);
+					// The row is on the device, but the watermark waits for the host KV write.
+					assertThat(mine.validTokens()).as("watermark before the host write").isEqualTo(pos);
+					mine.markWritten(pos, 1);
+					assertThat(mine.downloadK(pos + 1)).containsExactly(ref.downloadK(pos + 1));
+					assertThat(mine.downloadV(pos + 1)).containsExactly(ref.downloadV(pos + 1));
+				} finally {
+					mine.close();
+					ref.close();
+				}
+			}
+		}
+	}
+
+	@Test
+	@DisplayName("a 100-token decode through the region matches step for step and leaves the same mirror")
+	void decodeRunMatchesStepForStep() {
+		try (ResidentQkvPath path = ResidentQkvPath.create(ctx, cfg, attnNorm, wq, wk, wv)) {
+			DeviceKvCache mine = new DeviceKvCache(ctx, KV);
+			DeviceKvCache ref = new DeviceKvCache(ctx, KV);
+			try {
+				assertThat(decodeMatches(path, mine, ref, 100, new Random(31))).isTrue();
+				assertThat(mine.validTokens()).isEqualTo(100);
+				assertThat(mine.downloadK(100)).containsExactly(ref.downloadK(100));
+				assertThat(mine.downloadV(100)).containsExactly(ref.downloadV(100));
+			} finally {
+				mine.close();
+				ref.close();
+			}
+		}
+	}
+
+	@Test
+	@DisplayName("a mirror short of its history, or closed, is not attended: q, k, v come back as without one")
+	void aMirrorItCannotReadIsNotAttended() {
+		try (ResidentQkvPath path = ResidentQkvPath.create(ctx, cfg, attnNorm, wq, wk, wv)) {
+			Random rnd = new Random(41);
+			DeviceKvCache shortOne = mirrorWithHistory(5, 41);
+			DeviceKvCache closed = mirrorWithHistory(3, 42);
+			closed.close();
+			try {
+				shortOne.ensureCapacity(10);
+				for (DeviceKvCache m : new DeviceKvCache[] { shortOne, closed, null }) {
+					int pos = 10;
+					float[] x = randomVec(H, rnd, -2f, 2f);
+					float[][] expected = todaysPath(x, 0, pos);
+					ResidentQkvPath.Output got = path.run(0, x, pos, m);
+					assertThat(got.attended).isFalse();
+					assertThat(got.q).containsExactly(expected[0]);
+					assertThat(got.k).containsExactly(expected[1]);
+					assertThat(got.v).containsExactly(expected[2]);
+				}
+				assertThat(shortOne.validTokens()).as("the short mirror is not written").isEqualTo(5);
+			} finally {
+				shortOne.close();
+			}
+		}
+	}
+
+	@Test
+	@DisplayName("threads decoding through the region with mirrors of their own each match")
+	void concurrentDecodersEachMatch() throws Exception {
+		try (ResidentQkvPath path = ResidentQkvPath.create(ctx, cfg, attnNorm, wq, wk, wv)) {
+			ExecutorService pool = Executors.newFixedThreadPool(3);
+			List<Future<Boolean>> results = new ArrayList<>();
+			for (int t = 0; t < 3; t++) {
+				long seed = 200 + t;
+				results.add(pool.submit(() -> {
+					DeviceKvCache mine = new DeviceKvCache(ctx, KV);
+					DeviceKvCache ref = new DeviceKvCache(ctx, KV);
+					try {
+						return decodeMatches(path, mine, ref, 30, new Random(seed));
+					} finally {
+						mine.close();
+						ref.close();
+					}
+				}));
+			}
+			for (Future<Boolean> f : results)
+				assertThat(f.get(60, TimeUnit.SECONDS)).isTrue();
+			pool.shutdown();
+			assertThat(pool.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+		}
+	}
+
+	@Test
+	@DisplayName("attending through the region allocates no device memory per call")
+	void attentionAllocatesNothingPerCall() {
+		try (ResidentQkvPath path = ResidentQkvPath.create(ctx, cfg, attnNorm, wq, wk, wv)) {
+			DeviceKvCache mine = new DeviceKvCache(ctx, KV);
+			try {
+				mine.ensureCapacity(255);
+				float[] x = randomVec(H, new Random(51), -2f, 2f);
+				assertThat(path.run(0, x, 0, mine).attended).isTrue();
+				mine.markWritten(0, 1);
+				long afterFirst = freeBytes();
+				long bytes = path.deviceBytes();
+				for (int pos = 1; pos < 200; pos++) {
+					assertThat(path.run(0, x, pos, mine).attended).isTrue();
+					mine.markWritten(pos, 1);
+				}
+				assertThat(path.deviceBytes()).isEqualTo(bytes).isPositive();
+				// Device-wide reading: another process or an earlier test's teardown can return
+				// memory meanwhile (seen once in the full GPU group, +320 KiB), but an allocation
+				// per call can only lower it.
+				assertThat(freeBytes()).isGreaterThanOrEqualTo(afterFirst);
+			} finally {
+				mine.close();
+			}
+		}
 	}
 
 	@Test
@@ -227,6 +367,57 @@ class ResidentQkvPathTest {
 		assertThat(ResidentQkvPath.unsupportedReason(ctx, RopePairing.SPLIT_HALF, false)).contains("split-half");
 		assertThat(ResidentQkvPath.unsupportedReason(ctx, RopePairing.ADJACENT, true)).contains("bias");
 		assertThat(ResidentQkvPath.unsupportedReason(null, RopePairing.ADJACENT, false)).contains("CUDA");
+	}
+
+	/**
+	 * Today's decode with GPU attention after the region: q, k and v as {@link #todaysPath},
+	 * the row appended to {@code mirror} through the host (FP16 pack, two copies), then the
+	 * kernel through {@link CudaGqaAttention#attendBatched}. Returns {q, k, v, attention}.
+	 */
+	private static float[][] todaysPathWithAttention(float[] x, int pos, DeviceKvCache mirror) {
+		float[][] qkv = todaysPath(x, 0, pos);
+		mirror.appendToken(pos, qkv[1], qkv[2]);
+		float[][] out = new float[1][];
+		assertThat(gqa.attendBatched(new DeviceKvCache[] { mirror }, new float[][] { qkv[0] }, new int[] { pos + 1 },
+				out, HEADS, HEAD_DIM, HEADS / KV_HEADS, KV)).isTrue();
+		return new float[][] { qkv[0], qkv[1], qkv[2], out[0] };
+	}
+
+	/**
+	 * Decodes {@code steps} positions from 0 through the region into {@code mine} and the
+	 * op-at-a-time path into {@code ref}, marking each region row after it is read back as
+	 * the handler does after its host KV write. True when every k, v and attention output
+	 * matched bit for bit.
+	 */
+	private static boolean decodeMatches(ResidentQkvPath path, DeviceKvCache mine, DeviceKvCache ref, int steps,
+			Random rnd) {
+		for (int pos = 0; pos < steps; pos++) {
+			float[] x = randomVec(H, rnd, -2f, 2f);
+			float[][] expected = todaysPathWithAttention(x, pos, ref);
+			mine.ensureCapacity(pos);
+			ResidentQkvPath.Output got = path.run(0, x, pos, mine);
+			if (!got.attended || !java.util.Arrays.equals(got.k, expected[1])
+					|| !java.util.Arrays.equals(got.v, expected[2]) || !java.util.Arrays.equals(got.attn, expected[3]))
+				return false;
+			mine.markWritten(pos, 1);
+		}
+		return true;
+	}
+
+	/** A mirror holding {@code tokens} random K/V rows at positions {@code [0, tokens)}. */
+	private static DeviceKvCache mirrorWithHistory(int tokens, long seed) {
+		DeviceKvCache m = new DeviceKvCache(ctx, KV);
+		if (tokens > 0) {
+			Random rnd = new Random(seed);
+			float[][] k = new float[tokens][];
+			float[][] v = new float[tokens][];
+			for (int t = 0; t < tokens; t++) {
+				k[t] = randomVec(KV, rnd, -1f, 1f);
+				v[t] = randomVec(KV, rnd, -1f, 1f);
+			}
+			m.appendWindow(0, k, v, tokens);
+		}
+		return m;
 	}
 
 	/** Today's single-decode path: round-trip GPU norm, sgemvSameX over K-quant weights, CPU rotation. */
