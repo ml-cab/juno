@@ -621,8 +621,11 @@ GPU FFI (node module — Panama project, JEP 454):
         staging sites upload(prefill residual) / materialize(prefill residual). Per layer: RMS norm
         (host-order kernel), FP16 cast, Q/K/V GEMMs (CudaMatVec.gemmOnStream on the window's own stream; a fused
         Q/K/V matrix as one GEMM, split on the device by split_qkv when RoPE runs there and on the host
-        otherwise), bias add, RoPE (a ResidentRope: CudaRope, either pairing, or CudaPhi3Rope for
-        Phi-3's extended rotation), then
+        otherwise), bias add or, for a layer given per-head Q/K norm weights (Layer.withHeadNorms,
+        Qwen3), Q and K projected into the attn and proj scratch and each head normalized from there
+        into q and k by the host-order norm (rows x heads rows of headDim; bit-identical to
+        Qwen3TransformerHandler.rmsNormPerHead, timed as rms_norm), RoPE (a ResidentRope: CudaRope,
+        either pairing, or CudaPhi3Rope for Phi-3's extended rotation), then
         either attention inside the region (K and V cast straight into the DeviceKvCache mirror with
         writeWindowOnDevice, the gqa_attention kernel reading it with device pointer tables) followed
         by the rest of the layer and one download of k and v (runLayer returns true), or a download
@@ -643,9 +646,10 @@ GPU FFI (node module — Panama project, JEP 454):
         had not yet updated it, and otherwise from xIn, a device-to-device copy of x taken before the
         first in-place residual add of a layer whose input exists only on the device (staging site
         memcpy(prefill residual layer input D2D), one W x hidden copy per layer); a mirror OOM inside the
-        region retires the mirror and continues with host attention. Built by LlamaTransformerHandler
-        and Phi3TransformerHandler (RoPE and attention inside; Phi-3 checks its RoPE position limit
-        before any device work) and Qwen3TransformerHandler (RoPE and attention on the host); timed as
+        region retires the mirror and continues with host attention. Built by LlamaTransformerHandler,
+        Phi3TransformerHandler (RoPE and attention inside; Phi-3 checks its RoPE position limit
+        before any device work) and Qwen3TransformerHandler (per-head Q/K norms, RoPE and attention
+        inside; a YaRN file keeps the device norm and rotates and attends on the host); timed as
         juno.DeviceCompute sites (rms_norm, convert_fp16, bias_add, split_qkv, rope, kv_append,
         gqa_attention_region, swiglu, residual_add, and gemm_half) under
         juno.WindowStep device_layer spans. ForwardPassHandler.prefillRegionActive() reports it.

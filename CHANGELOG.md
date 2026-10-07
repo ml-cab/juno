@@ -1,5 +1,20 @@
 ## Status 
 
+**Session 117** — Qwen3 prefill windows normalize, rotate and attend on the GPU inside the device region
+
+- **Qwen3's per-head Q/K norm, prefill RoPE and attention move into the prefill-window device region.** Until
+  now the region ran Qwen3's layer norms, matmuls, SwiGLU and residual adds on the GPU but handed Q, K and V back
+  to the host every layer, where each Q and K head was RMS-normalized, rotated and attended, and the attention
+  output was uploaded again. The region now normalizes each head on the GPU with the same arithmetic as the CPU
+  norm (bit-identical), rotates with the device RoPE kernel, casts K and V straight into the attention KV mirror
+  and attends there, as on the LLaMA family. Logits are bit-identical to the region-off path, and greedy output
+  is unchanged.
+- **A 512-token Qwen3-1.7B window moves 125.9 MB across the bus instead of 653.3 MB**: per layer only the K and V
+  rows for the host KV cache, plus the residual once each way. Prompt processing at 512 tokens is about 2x faster
+  (1690 against 849 t/s, unpinned, same session); generation is unchanged.
+- A Qwen3 file with YaRN-scaled RoPE (no device kernel for that rotation) keeps the per-head norm on the GPU and
+  rotates and attends on the host, as before.
+
 **Session 116** — `--gpu-layers auto` keeps room for a 512-token prompt's attention on a model larger than the card
 
 - **The attention key/value mirror is reserved for 512 positions, not 64.** When `--gpu-layers auto`

@@ -86,9 +86,10 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	private GpuAttentionMirror gpuAttention;
 
 	/**
-	 * The prefill-window device region (norms, matmuls, SwiGLU and residual adds on the
-	 * device; the per-head Q/K norm, RoPE and attention stay here), or null on the CPU
-	 * backend, when turned off, or after {@link #releaseGpuResources}.
+	 * The prefill-window device region (norms including the per-head Q/K norm, matmuls,
+	 * RoPE where the file's rotation has a device kernel, attention where the GPU
+	 * attention mirror is active, SwiGLU and residual adds on the device), or null on the
+	 * CPU backend, when turned off, or after {@link #releaseGpuResources}.
 	 */
 	private PrefillWindowRegion prefillRegion;
 
@@ -338,7 +339,9 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	/**
 	 * Builds the prefill-window device region over every layer whose seven projections
-	 * are on the device. The per-head Q/K norm, RoPE and attention stay on the host.
+	 * are on the device, with the per-head Q/K norm. RoPE runs on the device unless the
+	 * file declares YaRN scaling (no device kernel; the host rotates), and attention moves
+	 * into the region whenever RoPE does and the GPU attention mirror is active.
 	 */
 	private PrefillWindowRegion openPrefillRegion(MatVec backend, int L) {
 		if (!(backend instanceof CudaMatVec))
@@ -351,10 +354,14 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 					PrefillWindowRegion.Matrix.of(ffnGateQ4Dev, ffnGateDev, li),
 					PrefillWindowRegion.Matrix.of(ffnUpQ4Dev, ffnUpDev, li),
 					PrefillWindowRegion.Matrix.of(wDownQ4Dev, wDownDev, li), attnNorm[li], ffnNorm[li], null, null, null);
+		for (int li = 0; li < L; li++)
+			layers[li] = PrefillWindowRegion.Layer.withHeadNorms(layers[li], qNorm[li], kNorm[li]);
 		PrefillWindowRegion.Shape shape = new PrefillWindowRegion.Shape(cfg.hiddenDim(), cfg.qDim(), cfg.kvDim(),
 				cfg.intermediateSize(), cfg.numHeads(), cfg.numKvHeads(), cfg.headDim(), cfg.gqaRatio(),
 				cfg.rmsNormEps());
-		return PrefillWindowRegion.create("Qwen3", backend, shape, layers, null, 0f, false);
+		Qwen3RopeConfig rope = cfg.rope();
+		return PrefillWindowRegion.create("Qwen3", backend, shape, layers, rope.yarn() ? null : rope.pairing(),
+				rope.freqBase(), gpuAttention != null);
 	}
 
 	@Override
@@ -809,8 +816,13 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		return x;
 	}
 
-	/** The per-head Q/K norm and RoPE over a window, shared by the host and device-region window paths. */
+	/** The per-head Q/K norm and RoPE over a window on the host. */
 	private void normalizeAndRotateQk(int li, int startPos, BatchWorkspace ws, int W) {
+		normalizeQkHeads(li, startPos, ws, W);
+		rotateQk(startPos, ws, W);
+	}
+
+	private void normalizeQkHeads(int li, int startPos, BatchWorkspace ws, int W) {
 		RmsNormEvent qkNormEvt = new RmsNormEvent();
 		qkNormEvt.begin();
 		for (int b = 0; b < W; b++) {
@@ -821,7 +833,9 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		qkNormEvt.startPosition = startPos;
 		qkNormEvt.dimension = cfg.headDim();
 		qkNormEvt.commit();
+	}
 
+	private void rotateQk(int startPos, BatchWorkspace ws, int W) {
 		RopeEvent ropeEvt = new RopeEvent();
 		ropeEvt.begin();
 		for (int b = 0; b < W; b++) {
@@ -883,19 +897,24 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * {@link #transformerLayerBatch} through the prefill-window device region: the
-	 * region runs the norm and the Q/K/V projections, the per-head norm, RoPE, the KV
-	 * write and attention run here as on the host path, and the region finishes the
-	 * layer. The residual stays on the device between layers; the window loop takes it
-	 * back at the end. Running out of device memory in the region redoes the layer on
-	 * the host path from the layer's input, which the region hands back.
+	 * {@link #transformerLayerBatch} through the prefill-window device region. The whole
+	 * layer runs on the device when attention can (see
+	 * {@link PrefillWindowRegion.Window#runLayer}); otherwise the region returns Q, K and V
+	 * with each head already normalized (and rotated when RoPE runs on the device), the
+	 * KV write and attention run here as on the host path, and the region finishes the
+	 * layer. The host KV tensors are written from the region's K and V rows before the
+	 * mirror's watermark covers the window, so the mirror stays a copy of them. The
+	 * residual stays on the device between layers; the window loop takes it back at the
+	 * end. Running out of device memory in the region redoes the layer on the host path
+	 * from the layer's input, which the region hands back.
 	 */
 	private float[][] transformerLayerOnDevice(float[][] x, int li, int startPos, SessionKvTensor kCacheLayer,
 			SessionKvTensor vCacheLayer, BatchWorkspace ws, DeviceKvCache mirror, PrefillWindowRegion.Window win) {
 		int W = x.length;
 		WindowStepEvent devEvt = WindowStepEvent.start();
+		boolean whole;
 		try {
-			win.runLayer(li, x, startPos, null, ws.q, ws.k, ws.v);
+			whole = win.runLayer(li, x, startPos, mirror, ws.q, ws.k, ws.v);
 		} catch (IllegalStateException ex) {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;
@@ -905,8 +924,20 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		}
 		devEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
 
-		normalizeAndRotateQk(li, startPos, ws, W);
-		writeKvAndAttend(startPos, kCacheLayer, vCacheLayer, ws, mirror, W);
+		if (whole) {
+			WindowStepEvent kvEvt = WindowStepEvent.start();
+			for (int b = 0; b < W; b++) {
+				kCacheLayer.writeToken(startPos + b, ws.k[b]);
+				vCacheLayer.writeToken(startPos + b, ws.v[b]);
+			}
+			mirror.markWritten(startPos, W);
+			kvEvt.end(WindowStepEvent.KV_WRITE, W, startPos);
+			return x;
+		}
+
+		if (!prefillRegion.ropeOnDevice())
+			rotateQk(startPos, ws, W);
+		writeKvAndAttend(startPos, kCacheLayer, vCacheLayer, ws, mirror != null && mirror.live() ? mirror : null, W);
 
 		WindowStepEvent finishEvt = WindowStepEvent.start();
 		try {

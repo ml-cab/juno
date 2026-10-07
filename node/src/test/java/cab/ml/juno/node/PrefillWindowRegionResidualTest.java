@@ -156,6 +156,44 @@ class PrefillWindowRegionResidualTest {
 		assertRecoversLayerOneInput(region, true);
 	}
 
+	@Test
+	@DisplayName("per-head Q/K norms, split form: Q and K are the raw projections normalized as the host does, bit for bit")
+	void headNorms_splitForm_matchTheHostPerHeadNorm() {
+		// The split form (no RoPE on the device) is what a Qwen3 file with YaRN-scaled RoPE runs:
+		// the region normalizes each head and the host rotates and attends.
+		PrefillWindowRegion.Layer plain = q4kLayer(60);
+		float[] qNorm = headNorm(70);
+		float[] kNorm = headNorm(71);
+		PrefillWindowRegion raw = region(plain);
+		PrefillWindowRegion normed = region(PrefillWindowRegion.Layer.withHeadNorms(plain, qNorm, kNorm));
+		float[][] input = rows(W, H, 3);
+
+		float[][] q0 = new float[W][H], k0 = new float[W][H], v0 = new float[W][H];
+		try (PrefillWindowRegion.Window win = raw.open(W)) {
+			assertThat(win.runLayer(0, copy(input), 0, null, q0, k0, v0)).isFalse();
+		}
+		float[][] q1 = new float[W][H], k1 = new float[W][H], v1 = new float[W][H];
+		try (PrefillWindowRegion.Window win = normed.open(W)) {
+			assertThat(win.runLayer(0, copy(input), 0, null, q1, k1, v1)).isFalse();
+		}
+		for (int b = 0; b < W; b++) {
+			Qwen3TransformerHandler.rmsNormPerHead(q0[b], qNorm, HEADS, HEAD_DIM, SHAPE.eps());
+			Qwen3TransformerHandler.rmsNormPerHead(k0[b], kNorm, HEADS, HEAD_DIM, SHAPE.eps());
+			assertThat(q1[b]).as("Q, row " + b).containsExactly(q0[b]);
+			assertThat(k1[b]).as("K, row " + b).containsExactly(k0[b]);
+			assertThat(v1[b]).as("V, row " + b).containsExactly(v0[b]);
+		}
+	}
+
+	@Test
+	@DisplayName("per-head Q/K norms on a fused Q/K/V projection are refused when the region is built")
+	void headNorms_onAFusedProjection_areRefused() {
+		PrefillWindowRegion.Layer fused = PrefillWindowRegion.Layer.withHeadNorms(fusedQkvQ4kLayer(80), headNorm(90),
+				headNorm(91));
+		assertThatThrownBy(() -> PrefillWindowRegion.create("test", mv, SHAPE, new PrefillWindowRegion.Layer[] { fused },
+				null, 0f, false)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("per-head");
+	}
+
 	/**
 	 * Layer 0 on the device, then layer 1 with no device memory left, so its first packed
 	 * K-quant GEMM fails growing the backend's Q8_1 window scratch (layer 0 has FP16
@@ -312,6 +350,14 @@ class PrefillWindowRegionResidualTest {
 		float[] v = new float[H];
 		for (int i = 0; i < H; i++)
 			v[i] = 0.5f + r.nextFloat();
+		return v;
+	}
+
+	private static float[] headNorm(long seed) {
+		Random r = new Random(seed);
+		float[] v = new float[HEAD_DIM];
+		for (int i = 0; i < HEAD_DIM; i++)
+			v[i] = 0.25f + 2f * r.nextFloat();
 		return v;
 	}
 

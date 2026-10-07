@@ -1,0 +1,19 @@
+baseline jar sha256: 652bf47e12609973
+candidate jar sha256: 533b1864d682bea5
+=== baseline 1 (01:54:42)
+    exit=0  (log: dist/qwen3-prefill-region-ab/runs/qwen3-prefill-region-ab-unpinned-baseline-1.log)
+=== candidate 1 (01:55:25)
+    exit=0  (log: dist/qwen3-prefill-region-ab/runs/qwen3-prefill-region-ab-unpinned-candidate-1.log)
+=== baseline 2 (01:56:06)
+    exit=0  (log: dist/qwen3-prefill-region-ab/runs/qwen3-prefill-region-ab-unpinned-baseline-2.log)
+=== candidate 2 (01:56:49)
+    exit=0  (log: dist/qwen3-prefill-region-ab/runs/qwen3-prefill-region-ab-unpinned-candidate-2.log)
+=== baseline 3 (01:57:30)
+    exit=0  (log: dist/qwen3-prefill-region-ab/runs/qwen3-prefill-region-ab-unpinned-baseline-3.log)
+=== candidate 3 (01:58:13)
+    exit=0  (log: dist/qwen3-prefill-region-ab/runs/qwen3-prefill-region-ab-unpinned-candidate-3.log)
+
+clock_pinned values across all six runs: false (must be only: true for a gate reading)
+prompt_eval_tps  baseline   849.10 [849.7038699863994 848.8018194982116 849.0961496695281 ]  candidate  1690.02 [1720.886159706847 1687.691756971306 1690.0180342418578 ]  B/A 1.990 (bound 0.95)
+token_gen_tps    baseline    37.27 [37.66524371182948 37.26993331031747 36.930702073863706 ]  candidate    37.16 [37.44983350924497 36.786907623118815 37.16335465791 ]  B/A 0.997 (bound 0.95)
+BOUND MET

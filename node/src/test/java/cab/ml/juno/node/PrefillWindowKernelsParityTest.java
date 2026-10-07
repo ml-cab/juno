@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.lang.foreign.Arena;
@@ -218,6 +219,55 @@ class PrefillWindowKernelsParityTest {
 					mismatches++;
 		}
 		assertThat(mismatches).as("elements whose bits differ from the host norm").isZero();
+	}
+
+	@ParameterizedTest(name = "W={0} heads={1}")
+	@CsvSource({ "9,16", "9,8", "512,16", "512,8" })
+	@DisplayName("the host-order RMS norm over head-wide rows equals Qwen3's per-head Q/K norm bit for bit")
+	void rmsNormHostOrder_perHeadIsQwen3sHeadNorm(int rows, int heads) {
+		int headDim = 128;
+		int width = heads * headDim;
+		Random rng = new Random(37L * rows + heads);
+		float[] x = new float[rows * width];
+		float[] w = new float[headDim];
+		for (int i = 0; i < x.length; i++)
+			x[i] = (float) rng.nextGaussian() * (i % 61 == 0 ? 30f : 2f);
+		for (int i = 0; i < headDim; i++)
+			w[i] = 0.25f + 2f * rng.nextFloat();
+		float eps = 1e-6f;
+
+		GpuBindings gpu = ctx.bindings();
+		long xBytes = (long) x.length * Float.BYTES;
+		long wBytes = (long) headDim * Float.BYTES;
+		MemorySegment dx = gpu.deviceMalloc(ctx.deviceIndex(), xBytes);
+		MemorySegment dw = gpu.deviceMalloc(ctx.deviceIndex(), wBytes);
+		MemorySegment dOut = gpu.deviceMalloc(ctx.deviceIndex(), xBytes);
+		float[] actual = new float[x.length];
+		try (Arena a = Arena.ofConfined()) {
+			MemorySegment hx = a.allocate(xBytes);
+			MemorySegment hw = a.allocate(wBytes);
+			MemorySegment.copy(x, 0, hx, JAVA_FLOAT, 0, x.length);
+			MemorySegment.copy(w, 0, hw, JAVA_FLOAT, 0, headDim);
+			copy(gpu, dx, hx, xBytes, GpuBindings.H2D);
+			copy(gpu, dw, hw, wBytes, GpuBindings.H2D);
+			kernels.rmsNormHostOrder(dx, dw, dOut, rows * heads, headDim, eps, null);
+			copy(gpu, hx, dOut, xBytes, GpuBindings.D2H);
+			MemorySegment.copy(hx, JAVA_FLOAT, 0, actual, 0, x.length);
+		} finally {
+			gpu.deviceFree(dx);
+			gpu.deviceFree(dw);
+			gpu.deviceFree(dOut);
+		}
+		float[] row = new float[width];
+		int mismatches = 0;
+		for (int r = 0; r < rows; r++) {
+			System.arraycopy(x, r * width, row, 0, width);
+			Qwen3TransformerHandler.rmsNormPerHead(row, w, heads, headDim, eps);
+			for (int i = 0; i < width; i++)
+				if (Float.floatToRawIntBits(actual[r * width + i]) != Float.floatToRawIntBits(row[i]))
+					mismatches++;
+		}
+		assertThat(mismatches).as("elements whose bits differ from the host per-head norm").isZero();
 	}
 
 	static Stream<Arguments> normShapes() {

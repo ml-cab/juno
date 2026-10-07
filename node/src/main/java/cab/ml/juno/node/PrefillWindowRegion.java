@@ -30,7 +30,7 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * the activations kept on the device between its operations.
  *
  * <pre>
- *   [upload x] -> norm -> fp16 -> Q, K, V -> [bias] -> [RoPE] -> | KV mirror append -> attention | -> fp16 -> O
+ *   [upload x] -> norm -> fp16 -> Q, K, V -> [bias | head norms] -> [RoPE] -> | KV mirror append -> attention | -> fp16 -> O
  *              -> x += O -> norm -> fp16 -> gate, up -> SwiGLU (fp16) -> down -> x += down -> download k, v
  *   (x is uploaded at the window's first layer and downloaded once, at the end of the window)
  * </pre>
@@ -121,17 +121,31 @@ final class PrefillWindowRegion implements AutoCloseable {
 	/**
 	 * One layer's weights. Q, K and V are three matrices or one fused {@code [q; k; v]}
 	 * matrix ({@code qkv}); gate and up are two matrices or one fused {@code [gate; up]}
-	 * matrix ({@code gateUp}). The biases are null for a model without them.
+	 * matrix ({@code gateUp}). The biases are null for a model without them, and so are
+	 * the per-head Q and K norm weights ({@code headDim} floats each; Qwen3).
 	 */
 	record Layer(Matrix q, Matrix k, Matrix v, Matrix qkv, Matrix o, Matrix gate, Matrix up, Matrix gateUp,
-			Matrix down, float[] attnNorm, float[] ffnNorm, float[] bq, float[] bk, float[] bv) {
+			Matrix down, float[] attnNorm, float[] ffnNorm, float[] bq, float[] bk, float[] bv, float[] qNorm,
+			float[] kNorm) {
 
 		/** A layer with separate projections, or {@code null} when any of them is not on the device. */
 		static Layer separate(Matrix q, Matrix k, Matrix v, Matrix o, Matrix gate, Matrix up, Matrix down,
 				float[] attnNorm, float[] ffnNorm, float[] bq, float[] bk, float[] bv) {
 			if (q == null || k == null || v == null || o == null || gate == null || up == null || down == null)
 				return null;
-			return new Layer(q, k, v, null, o, gate, up, null, down, attnNorm, ffnNorm, bq, bk, bv);
+			return new Layer(q, k, v, null, o, gate, up, null, down, attnNorm, ffnNorm, bq, bk, bv, null, null);
+		}
+
+		/**
+		 * This layer with each Q and K head RMS-normalized by {@code qNorm} and {@code kNorm}
+		 * between the projections and RoPE, as Qwen3 does; {@code null} stays {@code null}.
+		 */
+		static Layer withHeadNorms(Layer l, float[] qNorm, float[] kNorm) {
+			if (l == null)
+				return null;
+			return new Layer(l.q(), l.k(), l.v(), l.qkv(), l.o(), l.gate(), l.up(), l.gateUp(), l.down(), l.attnNorm(),
+					l.ffnNorm(), l.bq(), l.bk(), l.bv(), java.util.Objects.requireNonNull(qNorm, "qNorm"),
+					java.util.Objects.requireNonNull(kNorm, "kNorm"));
 		}
 
 		/**
@@ -147,7 +161,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 				return null;
 			return new Layer(qkv != null ? null : q, qkv != null ? null : k, qkv != null ? null : v, qkv, o,
 					gateUp != null ? null : gate, gateUp != null ? null : up, gateUp, down, attnNorm, ffnNorm, null,
-					null, null);
+					null, null, null, null);
 		}
 	}
 
@@ -166,6 +180,9 @@ final class PrefillWindowRegion implements AutoCloseable {
 	private final DeviceFloatMatrix[] bqDev;
 	private final DeviceFloatMatrix[] bkDev;
 	private final DeviceFloatMatrix[] bvDev;
+	/** Per-head Q and K norm weights on the device; null entries where a layer has none. */
+	private final DeviceFloatMatrix[] qNormDev;
+	private final DeviceFloatMatrix[] kNormDev;
 	/** Device RoPE, or {@code null} when the caller rotates on the host. */
 	private final ResidentRope rope;
 	/** Whether attention runs inside the region (device RoPE and the attention kernel both available). */
@@ -183,8 +200,9 @@ final class PrefillWindowRegion implements AutoCloseable {
 
 	private PrefillWindowRegion(String handler, CudaMatVec mv, Shape shape, Layer[] layers,
 			DeviceFloatMatrix[] attnNormDev, DeviceFloatMatrix[] ffnNormDev, DeviceFloatMatrix[] bqDev,
-			DeviceFloatMatrix[] bkDev, DeviceFloatMatrix[] bvDev, ResidentRope rope, boolean attentionOnDevice,
-			PrefillWindowKernels kernels, GqaAttentionKernel attention) {
+			DeviceFloatMatrix[] bkDev, DeviceFloatMatrix[] bvDev, DeviceFloatMatrix[] qNormDev,
+			DeviceFloatMatrix[] kNormDev, ResidentRope rope, boolean attentionOnDevice, PrefillWindowKernels kernels,
+			GqaAttentionKernel attention) {
 		this.handler = handler;
 		this.ctx = mv.gpuContext();
 		this.mv = mv;
@@ -195,6 +213,8 @@ final class PrefillWindowRegion implements AutoCloseable {
 		this.bqDev = bqDev;
 		this.bkDev = bkDev;
 		this.bvDev = bvDev;
+		this.qNormDev = qNormDev;
+		this.kNormDev = kNormDev;
 		this.rope = rope;
 		this.attentionOnDevice = attentionOnDevice;
 		this.kernels = kernels;
@@ -254,6 +274,16 @@ final class PrefillWindowRegion implements AutoCloseable {
 			eligible++;
 			if (l.qkv() != null && l.bq() != null)
 				throw new IllegalArgumentException("the region applies no Q/K/V biases to a fused projection");
+			if (l.qNorm() != null) {
+				// Q and K are projected into the attention-output and projection scratch and
+				// normalized from there into q and k; see Window#attentionInputs.
+				if (l.qkv() != null || l.bq() != null)
+					throw new IllegalArgumentException("the region's per-head Q/K norm takes separate projections without biases");
+				if (shape.kvDim() > shape.hidden())
+					throw new IllegalArgumentException("the region's per-head Q/K norm needs kvDim <= hidden");
+				if (l.qNorm().length != shape.headDim() || l.kNorm().length != shape.headDim())
+					throw new IllegalArgumentException("per-head norm weights must be headDim (" + shape.headDim() + ") wide");
+			}
 		}
 		if (eligible == 0)
 			return null;
@@ -273,6 +303,9 @@ final class PrefillWindowRegion implements AutoCloseable {
 		DeviceFloatMatrix[] bqDev = new DeviceFloatMatrix[n];
 		DeviceFloatMatrix[] bkDev = new DeviceFloatMatrix[n];
 		DeviceFloatMatrix[] bvDev = new DeviceFloatMatrix[n];
+		DeviceFloatMatrix[] qNormDev = new DeviceFloatMatrix[n];
+		DeviceFloatMatrix[] kNormDev = new DeviceFloatMatrix[n];
+		boolean headNorms = false;
 		ResidentRope rope = null;
 		try {
 			if (ropeFactory != null)
@@ -288,9 +321,14 @@ final class PrefillWindowRegion implements AutoCloseable {
 					bkDev[li] = DeviceFloatMatrix.upload(ctx, l.bk(), 1, shape.kvDim());
 					bvDev[li] = DeviceFloatMatrix.upload(ctx, l.bv(), 1, shape.kvDim());
 				}
+				if (l.qNorm() != null) {
+					qNormDev[li] = DeviceFloatMatrix.upload(ctx, l.qNorm(), 1, shape.headDim());
+					kNormDev[li] = DeviceFloatMatrix.upload(ctx, l.kNorm(), 1, shape.headDim());
+					headNorms = true;
+				}
 			}
 		} catch (IllegalStateException ex) {
-			closeAll(attnNormDev, ffnNormDev, bqDev, bkDev, bvDev);
+			closeAll(attnNormDev, ffnNormDev, bqDev, bkDev, bvDev, qNormDev, kNormDev);
 			if (rope != null)
 				rope.close();
 			if (!GpuLayerOffload.isVramOom(ex))
@@ -302,11 +340,11 @@ final class PrefillWindowRegion implements AutoCloseable {
 		boolean attentionOnDevice = rope != null && attention != null;
 		log.info(handler + ": prefill windows of more than " + MAX_HOST_WINDOW + " rows run on the device ("
 				+ eligible + " of " + n + " layers): norms, matmuls, SwiGLU and residual adds"
-				+ (rope != null ? ", RoPE" : "") + (attentionOnDevice ? ", attention" : "")
+				+ (headNorms ? ", per-head Q/K norms" : "") + (rope != null ? ", RoPE" : "") + (attentionOnDevice ? ", attention" : "")
 				+ (rope == null ? "; RoPE and attention stay on the host" : "")
 				+ (rope != null && !attentionOnDevice ? "; attention stays on the host" : ""));
 		return new PrefillWindowRegion(handler, mv, shape, layers, attnNormDev, ffnNormDev, bqDev, bkDev, bvDev,
-				rope, attentionOnDevice, kernels, attention);
+				qNormDev, kNormDev, rope, attentionOnDevice, kernels, attention);
 	}
 
 	/** Device bytes a window of {@code rows} rows holds on this region ({@link PrefillWindowFootprint}). */
@@ -360,7 +398,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 				w.free();
 			windows.clear();
 			idle.clear();
-			closeAll(attnNormDev, ffnNormDev, bqDev, bkDev, bvDev);
+			closeAll(attnNormDev, ffnNormDev, bqDev, bkDev, bvDev, qNormDev, kNormDev);
 			if (rope != null)
 				rope.close();
 		}
@@ -613,7 +651,10 @@ final class PrefillWindowRegion implements AutoCloseable {
 
 		/**
 		 * norm -> fp16 -> Q, K, V -> bias -> RoPE; for a fused projection, norm -> fp16 -> QKV,
-		 * then, with device RoPE, split -> RoPE.
+		 * then, with device RoPE, split -> RoPE. With per-head norms, Q and K are projected
+		 * into scratch ({@link #attn} and {@link #proj}, both written again later in the
+		 * layer) and each head is normalized from there into {@link #q} and {@link #k}
+		 * before RoPE: out of place, so the kernel never reads a row it is writing.
 		 */
 		private void attentionInputs(int li, int w, int startPos) {
 			Layer l = layers[li];
@@ -631,6 +672,12 @@ final class PrefillWindowRegion implements AutoCloseable {
 				kernels.splitQkv(qkv.devicePointer(), q.devicePointer(), k.devicePointer(), v.devicePointer(), w,
 						shape.qDim(), shape.kvDim(), stream);
 				spans.compute(DeviceComputeEvent.SPLIT_QKV, w, mark, stream);
+			} else if (qNormDev[li] != null) {
+				gemm(l.q(), attn.devicePointer(), shape.qDim(), w);
+				gemm(l.k(), proj, shape.kvDim(), w);
+				gemm(l.v(), v.devicePointer(), shape.kvDim(), w);
+				normalizeHeads(attn.devicePointer(), qNormDev[li], q.devicePointer(), w, shape.numHeads());
+				normalizeHeads(proj, kNormDev[li], k.devicePointer(), w, shape.numKvHeads());
 			} else {
 				gemm(l.q(), q.devicePointer(), shape.qDim(), w);
 				gemm(l.k(), k.devicePointer(), shape.kvDim(), w);
@@ -749,6 +796,17 @@ final class PrefillWindowRegion implements AutoCloseable {
 		private void normalize(MemorySegment in, DeviceFloatMatrix weight, int w) {
 			int mark = spans.begin(stream, w);
 			kernels.rmsNormHostOrder(in, weight.devicePointer(), xn, w, shape.hidden(), shape.eps(), stream);
+			spans.compute(DeviceComputeEvent.RMS_NORM, w, mark, stream);
+		}
+
+		/**
+		 * Each of the window's {@code w x heads} head rows of {@code in}, normalized by
+		 * {@code weight} into {@code out}: the host-order norm, so bit for bit what
+		 * {@code Qwen3TransformerHandler.rmsNormPerHead} computes on the host.
+		 */
+		private void normalizeHeads(MemorySegment in, DeviceFloatMatrix weight, MemorySegment out, int w, int heads) {
+			int mark = spans.begin(stream, w);
+			kernels.rmsNormHostOrder(in, weight.devicePointer(), out, w * heads, shape.headDim(), shape.eps(), stream);
 			spans.compute(DeviceComputeEvent.RMS_NORM, w, mark, stream);
 		}
 

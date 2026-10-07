@@ -30,8 +30,17 @@ device layers, and llama-1-30b's 508-token prompt keeps its attention on the dev
 requests 4 to 8, limit 32). Decision 7 taken (a) (2026-10-07): the creep was a `DeviceKvCache` leak when a request's
 mirror allocation ran out part-way; fixed, smoke flat in both modes, the mirror-budget criterion ticked. Decision 8
 taken (a) (2026-10-07): a failed scratch growth no longer leaves a freed pointer behind (`DeviceScratchSlot`, three
-classes) and `sgemv` no longer leaks on a partial allocation (CUDA and ROCm). Next: item 8's closing `--device-spans`
-run with the prefill-window re-verification, and the pinned A/B on the final region (owner).
+classes) and `sgemv` no longer leaks on a partial allocation (CUDA and ROCm). Item 8's closing `--device-spans` run is
+published (2026-10-07): 2 H2D and layers + 1 D2H per decoded token on every region model, and a 512-token window on every
+sweep model downloads only K and V rows and its final residual
+(`docs/perf-compare/20261007T054314Z-gpu-residency-final-region-spans`). Next: the pinned A/B on the final region (owner,
+prepared) and decision 9 (Qwen3's prefill RoPE and attention), then scope item 5. Decision 9 taken (a); item 8's fifth
+part is done (2026-10-07): Qwen3's prefill window normalizes each head, rotates and attends inside the prefill region
+(125.9 MB per 512-token window, was 653.3 MB; logits bit-identical; unpinned pp 1.990x,
+`docs/perf-compare/20261007T065243Z-qwen3-prefill-region-attention`). Scope item 8 is complete (2026-10-07): the final
+region's pinned A/B is met (owner run, tg on/off 1.641 to 2.046 where the region runs, 1.017 where declined,
+`docs/perf-compare/20261007T174646Z-gpu-residency-final-region-ab`); its criterion is ticked. Next: scope item 5
+(`CudaGraphSession`, measured, then wired or deleted).
 
 **Split 2026-10-04 (plan review): read this first.** This tier held nine items, and under execution
 rule 1 every later tier, including every remaining GPU throughput lever, waited on all of them. Its
@@ -375,7 +384,7 @@ budget. No download is needed.
       [`20261006T033707Z-gpu-residency-attention-ab`](../perf-compare/20261006T033707Z-gpu-residency-attention-ab/INDEX.md):
       tg on/off 1.145 (TinyLlama) and 1.096 (Mistral 7B) where the region runs (>= 1.00), 1.022 (Qwen2.5-3B)
       and 1.001 (Phi-3.5-mini) where it is declined (>= 0.95).*
-- [ ] The whole decode layer runs inside the region (scope item 8) on the LLaMA family, Phi-3 and
+- [x] The whole decode layer runs inside the region (scope item 8) on the LLaMA family, Phi-3 and
       Qwen3, or the handler or operation that cannot is announced: decode-phase copies per generated
       token <= 1 x layers host-to-device and <= 1 x layers + 1 device-to-host, read off
       `juno.DeviceStaging` by test and by a published `--device-spans` run; tg region-on >= 1.0x
@@ -407,6 +416,23 @@ budget. No download is needed.
       [`20261006T200344Z-gpu-residency-phi3-qwen3-ab`](../perf-compare/20261006T200344Z-gpu-residency-phi3-qwen3-ab/INDEX.md).
       The copy-count, greedy and memory parts hold by test and smoke for every handler; not ticked until the
       fourth part, the published `--device-spans` run and the final region's pinned A/B.*
+      *2026-10-07 (close): the published `--device-spans` run on the final region reads 2 H2D and layers + 1 D2H per
+      decoded token on every region model (TinyLlama 2/23, Mistral 7B 2/33, Phi-3.5-mini 2/33, Qwen3-1.7B 2/29), net of
+      two phase-tagging exclusions attributed to the byte; a 512-token window downloads only K and V rows and the final
+      residual on all four sweep models,
+      [`20261007T054314Z-gpu-residency-final-region-spans`](../perf-compare/20261007T054314Z-gpu-residency-final-region-spans/INDEX.md).
+      Not ticked: owed by the owner, the pinned A/B on the final region (`bash dist/gpu-residency-final-region-ab/run-gate.sh`),
+      and decision 9 (Qwen3's prefill region).*
+      *2026-10-07 (fifth part, decision 9 (a)): Qwen3's prefill window normalizes each head, rotates and attends inside the
+      region; a 512-token Qwen3-1.7B window downloads only K and V rows and the final residual (125.9 MB, was 653.3 MB),
+      logits bit-identical region on against off,
+      [`20261007T065243Z-qwen3-prefill-region-attention`](../perf-compare/20261007T065243Z-qwen3-prefill-region-attention/INDEX.md).
+      Not ticked: owed by the owner, the pinned A/B on the final region, re-staged on this tree (jar `533b1864d682bea5`).*
+      *2026-10-07: the final region's pinned A/B is met (owner run), tg region on/off 2.046 (TinyLlama), 1.669 (Mistral 7B),
+      1.641 (Phi-3.5-mini), 1.923 (Qwen3-1.7B), >= 1.00; 1.017 where declined (Qwen2.5-3B), >= 0.95,
+      [`20261007T174646Z-gpu-residency-final-region-ab`](../perf-compare/20261007T174646Z-gpu-residency-final-region-ab/INDEX.md);
+      copy counts by test and by [`20261007T054314Z-gpu-residency-final-region-spans`](../perf-compare/20261007T054314Z-gpu-residency-final-region-spans/INDEX.md).
+      Ticked.*
 - [x] Phi-3.5-mini's prefill window runs RoPE and attention inside the prefill region (scope item 8,
       added 2026-10-02): **Threshold: H2D + D2H bytes per 512-token window >= 70% below 2,645 MB**
       (Tier 01B's step 2 baseline; 1,419 MB at `docs/perf-compare/20261002T050741Z`), from a published
@@ -1701,3 +1727,232 @@ differently. No published baseline is invalidated.
 
 **Next.** Scope item 8's close: the published `--device-spans` run with the prefill-window re-verification on the other
 sweep models (executor), and the pinned A/B on the final region (owner, prepared then), then scope item 5.
+
+### 2026-10-07: implementation step 5, scope item 8, close (the published `--device-spans` run and the prefill-window re-verification)
+
+**Plan versus code, re-verified first** (HEAD `d05d1fe`, tree clean apart from the untracked `.github/`; no gate, sweep
+or mvn run in flight, the matching `pgrep` lines were idle wait loops of earlier sessions; `check-plan-thresholds.sh`
+passes). HEAD carries the fourth part and decisions 7 and 8 (`DeviceScratchSlot`, the `DeviceKvCache` fix), so the
+tree is the final region. The copy-count tests named by the criterion exist (`LlamaTransformerHandlerGpuResidencyTest.
+decodeRunsTheWholeLayerInTheRegion`, `Phi3TransformerHandlerGpuResidencyTest`, `Qwen3TransformerHandlerGpuResidencyTest`);
+Qwen2.5-3B still declines the region with the announced reason (`GpuResidencyOptions.unsupportedArchitectureReason`). No
+drift that changes scope.
+
+**Measurement**, [`20261007T054314Z-gpu-residency-final-region-spans`](../perf-compare/20261007T054314Z-gpu-residency-final-region-spans/INDEX.md):
+`compare-llama-cpp.sh --gpu --device-spans --gpu-residency on --n-prompt 512 --juno-reps 3 --no-tuned-lane`, the four
+sweep models and Qwen3-1.7B, jar `652bf47e12609973` (HEAD, clean), unpinned (counts and bytes do not depend on clocks;
+identical on all three repetitions of every model).
+
+| Model | Layers | Decode H2D / D2H per token | Threshold (<= layers / <= layers + 1) | 512-token window H2D / D2H MB | What the window downloads |
+|---|---|---|---|---|---|
+| tinyllama-1.1b | 22 | **2 / 23** | met | 4.4 / 27.2 | K and V rows, final residual |
+| mistral-7b | 32 | **2 / 33** | met | 8.7 / 142.3 | K and V rows, final residual |
+| Phi-3.5-mini | 32 | **2 / 33** | met | 6.6 / 408.1 | K and V rows, final residual |
+| Qwen3-1.7B | 28 | **2 / 29** | met | 297.5 / 355.8 | Q rows, attention copies, K and V rows, final residual (prefill attention on the host side, documented) |
+| qwen2.5-3b | 36 | 392.5 / 320.5 (declined) | not applicable | 4.6 / 41.9 | K and V rows, final residual |
+
+**Two exclusions, from the harness's phase rule, both attributed to the byte.** `DeviceSpanBucket` tags a copy with the
+row count of the call that issued it (one row: decode). (1) The prefill window's LM head runs on its last row, so its
+one upload and one logits download land in the decode bucket: every model shows 65 LM-head pairs against 64 decode
+passes and none in the prefill phase. (2) Mistral 7B's raw reading was 30.016 H2D and 61.016 D2H per decode pass. Its
+generate request's prompt is 9 tokens, the prefill window is the first 8, and a window of 8 rows or fewer runs on the
+host path one row at a time (`PrefillWindowRegion.MAX_HOST_WINDOW = 8`), so its 8 x 32 x 7 = 1,792 projection
+GEMVs are one-row calls tagged decode. The bytes match exactly (downloads 172,032 B per row and layer, 44,040,192 B
+measured; uploads 155,648 B, 39,845,888 B measured). Net of both, every region model reads 1 residual upload plus the LM
+head's, and one download per layer plus the logits, per token; the region sites are exact (64 uploads, 64 x layers
+downloads). The other models' generate prompts (10 to 19 tokens) give windows of 9 rows or more, which run on the device.
+
+**Prefill-window re-verification: met on the four sweep models.** Inside a 512-token window the only downloads are the
+K and V rows for the host KV cache (the source of truth) and the window's final residual; the uploads are the residual
+once and the attention tables. Qwen3-1.7B is not a sweep model and runs RoPE and attention on the host side of the
+prefill region, as `docs/howto.md` states (decision 9 below).
+
+**Attention share of a 512-token window** (`prefill-breakdown.sh`), against implementation step 2's pre-tier figures:
+TinyLlama 12.6% (62.1%), Qwen2.5-3B 11.3% (53.3%), Phi-3.5-mini 10.0% (45.5%), Mistral 7B 8.9% (47.6%); Qwen3-1.7B 23.1%
+(compute, copies and host part). The breakdown's residue flag fires on Phi-3.5-mini (10.8%, as in the third part's run)
+and TinyLlama (6.8%); reported, not relaxed. This is a reading for the milestone criterion; the tier's closing sweeps
+score it.
+
+**TinyLlama's prefill on/off (0.901 and 0.913 on two pinned gates), attributed.**
+[`20261007T055454Z-tinyllama-prefill-residency-flag`](../perf-compare/20261007T055454Z-tinyllama-prefill-residency-flag/INDEX.md):
+the same jar at `n_prompt=128`, `--device-spans`, three repetitions per setting, off then on, unpinned. The window moves
+identical bytes (1.10 MB up, 6.76 MB down) and every breakdown term agrees within each side's spread; pp on/off reads
+1.064 this time. The prefill path does the same work under either setting, and the earlier readings are TinyLlama's own
+prefill spread at a 60 ms window. The closing pinned gate re-reads it.
+
+**Unpinned throughput, a reading** (span recording on; not comparable with the pinned sweeps): GPU tg ratio with the
+region on TinyLlama 0.679x, Mistral 7B 1.000x, Phi-3.5-mini 0.843x, Qwen3-1.7B 0.630x; Qwen2.5-3B (declined) 0.410x. GPU
+pp ratio at 512: 0.604x (Phi-3.5-mini) to 0.793x (Mistral 7B) on the sweep models; Qwen3-1.7B 0.316x.
+
+**Regression runs.** None: this step changed no source (two published result directories, their
+`docs/perf-compare/README.md` rows and this file). `check-plan-thresholds.sh`: pass after the edits.
+
+**Owed to the owner: the pinned A/B on the final region**, the last part of the item 8 criterion. Prepared at
+`dist/gpu-residency-final-region-ab/`: `candidate-shaded.jar` (sha256 `652bf47e12609973`, HEAD `d05d1fe`) and
+`run-gate.sh`, the second part's gate with its paths renamed (A B A B A B, `--gpu-residency off`/`on`, the four sweep
+models plus Qwen3-1.7B at `n_prompt=128`, `--pin-clocks`; tg >= 1.00 on TinyLlama, Mistral 7B, Phi-3.5-mini and
+Qwen3-1.7B, >= 0.95 on Qwen2.5-3B). Command: `bash dist/gpu-residency-final-region-ab/run-gate.sh`.
+
+**Raised with the owner (decision 9): Qwen3's prefill RoPE and attention.** Scope item 8 says to move Qwen3's prefill
+RoPE and attention into the prefill region "if its per-head Q/K norm is added to the region (it is not a sweep model, so
+it has no bytes threshold); otherwise it stays announced". The second part added that norm to the *decode* region, not to
+the prefill region, so whether the condition fired is a reading of the sentence. Qwen3-1.7B's 512-token window moves 653
+MB, and attention outside the region is 23.1% of it (157 ms); its GPU pp ratio at 512 reads 0.316x, the lowest of the five
+models. (a) Do it as item 8's fifth part before scope item 5: the per-head norm over a window's rows in the prefill region
+(the decode region's norm kernel at rows x heads), then RoPE, the mirror cast and attention as on the LLaMA family, tests
+first after `Phi3PrefillRegionAttentionTest` and `PrefillRegionHandlerParityTest`. (b) Keep it announced, as now, and record
+it as a known gap carried to the tier's close with these numbers. Recommended: (a). The mechanism is the existing norm
+kernel and the existing region path, the program objective names Qwen3, and the cost is one part, not a new design.
+
+**Out-of-tier changes.** None.
+
+**Next.** The owner's pinned A/B on the final region and decision 9. Then, per decision 9, either Qwen3's prefill region
+(a) or scope item 5, the `CudaGraphSession` measurement.
+
+**Decision 9 taken (a) the same day (owner).** Qwen3's prefill RoPE and attention move into the prefill region as scope
+item 8's fifth part, tests first, before scope item 5. The final region's pinned A/B waits for it, so that it measures
+the final tree; its jar is re-staged when this part lands.
+
+### 2026-10-07: implementation step 5, scope item 8, fifth part (Qwen3's prefill per-head norm, RoPE and attention in the prefill region; decision 9 (a))
+
+**Plan versus code, re-verified first** (HEAD `d05d1fe` plus this step's uncommitted record; no gate, sweep or mvn run
+in flight; the final region's pinned A/B not yet run). `Qwen3TransformerHandler.openPrefillRegion` built the region
+with no RoPE and no attention (`create(..., null, 0f, false)`), and `transformerLayerOnDevice` downloaded Q, K and V
+every layer, normalized each head (`rmsNormPerHead`), rotated (`Qwen3Rope.apply`) and attended on the host
+(`writeKvAndAttend`). Non-YaRN `Qwen3Rope.apply` is `LlamaTransformerHandler.rope` with the file's pairing, the host
+rotation `CudaRope` is already held to (Qwen2.5's prefill region uses it); `rmsNormPerHead` is `rmsNormInto` per
+`headDim` slice, the arithmetic of the region's `rms_norm_host_order` kernel. No drift.
+
+**Design.**
+- `PrefillWindowRegion.Layer` gains `qNorm`/`kNorm` (`Layer.withHeadNorms`). For such a layer Q is projected into the
+  window's `attn` scratch and K into its `proj` scratch (both written again later in the layer), and each head is
+  normalized from there into `q` and `k` by the existing host-order norm over `rows x heads` rows of `headDim`: out
+  of place, since that kernel declares its input and output `__restrict__`, so no new kernel, buffer or copy. Timed as
+  the `rms_norm` site. Built only for separate projections without biases and `kvDim <= hidden`; anything else is
+  refused when the region is built.
+- `Qwen3TransformerHandler`: the region gets the head norms, the file's RoPE pairing and base (none for a YaRN file,
+  which has no device kernel; the host rotates after the device norm) and the attention kernel when the GPU attention
+  mirror is active. The layer runs as Phi-3's does: whole in the region with the host KV written from the region's K and
+  V rows before `markWritten`, or, when the region does not attend, host RoPE only if needed, host attention, and
+  `finishLayer`. The shared host helper is split into `normalizeQkHeads` and `rotateQk`.
+
+**Tests, written first** (README rule 3):
+
+| Test | Seen failing first? | Now |
+|---|---|---|
+| `Qwen3PrefillRegionAttentionTest` (new, `@Tag("gpu")`, real Qwen3-1.7B, one 512-token window under JFR): no host `RmsNorm`, `Rope` or `Attention` event, no `materialize(prefill q)`, `upload(prefill attention)` or `memcpy(gqa qBatch H2D)` copy, H2D + D2H <= 130 MB (K and V rows plus the residual, from the shape) | yes: 28 host norm events, 655.2 MB | pass, 126.7 MB |
+| `PrefillWindowKernelsParityTest.rmsNormHostOrder_perHeadIsQwen3sHeadNorm` (4 cases: 9 and 512 rows, 16 and 8 heads of 128): the kernel over head rows against `rmsNormPerHead`, bit for bit | no: the kernel exists, so a regression test that passed on its first run | pass |
+| `PrefillWindowRegionResidualTest.headNorms_splitForm_matchTheHostPerHeadNorm` (synthetic layer, no device RoPE, the shape a YaRN file runs): Q and K equal the raw projections normalized on the host, V unchanged, bit for bit | no: written after the implementation (no YaRN Qwen3 file exists to cover the path), shown to catch the planted fault below | pass |
+| `PrefillWindowRegionResidualTest.headNorms_onAFusedProjection_areRefused` | no: written with the implementation | pass |
+| `PrefillRegionHandlerParityTest` (unchanged; Qwen3-1.7B now normalizes, rotates and attends inside the region) | regression test | pass: logits bit-identical region on against off at every site on all four models |
+
+Planted fault, file restored after (`cmp` against a saved copy): K normalized with Q's head-norm weights.
+`PrefillRegionHandlerParityTest` fails on Qwen3-1.7B only (first window, relative L2 1.32, top-1 11 against 37571);
+`headNorms_splitForm_matchTheHostPerHeadNorm` fails at K, row 0.
+
+**Regression runs** (candidate jar `533b1864d682bea5`).
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass |
+| targeted: the five classes above, `GpuAttentionHandlerParityTest`, `Qwen3TransformerHandlerGpuResidencyTest`, `Phi3PrefillRegionAttentionTest` | 0 failures |
+| `mvn test -pl node -Dgroups=gpu` | 350 run, 2 failures, 7 skipped: `PrefillRegionHandlerParityTest` on Qwen2.5-3B and Phi-3.5-mini, both at its device-wide free-memory check (110 MB and 6 MB short of the start reading); that check runs before the test's logits comparison, so neither model's logits were compared in that run |
+| `mvn test -pl node` | 966 run, 1 failure, 44 skipped: `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance` (74.0 MB reported free with the card full, bound 64 MiB), the known desktop-dependent check |
+| re-run of `PrefillRegionHandlerParityTest` and `PrefillReserveDeviceTest` alone, desktop GPU use about 610 MiB | 4 of 4 (logits compared, bit-identical on all four models) and 3 of 3. Neither model touched by the failures runs the new code (their layers carry no head norms) |
+| `smoke-gpu-residency.sh --models Qwen3-1.7B-Q4_K_M` (unmodified) | 0 failures: region whole on every layer, greedy identical on against off, memory flat both modes, cluster pipeline and tensor answer with local mode's output, no node JVM left |
+| `smoke-long-prompt-prefill.sh --baseline-jar <d05d1fe jar>` (unmodified; TinyLlama and Mistral 7B, both schedules, 128/512/2048) | all checks passed |
+
+Not run in this step: the eleven-module unit reactor (only `node` changed; `juno-player` compiled in `mvn package`),
+`ModelLiveRunnerIT` and the `-Pgpu` ITs (TinyLlama, whose path this does not touch), the vision and LoRA gates.
+
+**Measurements.**
+
+*Published `--device-spans` run*, [`20261007T065243Z-qwen3-prefill-region-attention`](../perf-compare/20261007T065243Z-qwen3-prefill-region-attention/INDEX.md)
+(unpinned): per 512-token window 4.5 MB H2D and 121.4 MB D2H, **125.9 MB** (was 653.3 MB, -80.7%), identical on three
+repetitions; only the K and V rows and the final residual come back. Breakdown: prefill 306.8 ms, host norm, RoPE and
+attention 0, region attention 12.4% (was 23.1% for compute, copies and host part). Residue flag 8.5%, reported.
+
+*Indicative A/B* (`PIN=0 bash dist/qwen3-prefill-region-ab/run-gate.sh`, d05d1fe jar `652bf47e12609973` against
+candidate `533b1864d682bea5`, A B A B A B, `n_prompt=512`),
+[`20261007T065442Z-qwen3-prefill-region-ab-unpinned`](../perf-compare/20261007T065442Z-qwen3-prefill-region-ab-unpinned/INDEX.md):
+pp **1.990x** (849.1 to 1690.0 t/s; every candidate reading above every baseline one), tg 0.997x; greedy text
+identical on all six runs. Qwen3-1.7B's GPU pp ratio at 512 reads 0.595x (0.316x before); not a sweep model.
+
+**Docs.** `docs/howto.md` (the prefill-region table's Qwen3 row), `docs/agent-arch.txt` (`PrefillWindowRegion`),
+`CHANGELOG.md` (Session 117).
+
+**Out-of-tier changes.** None: scope item 8's Qwen3 prefill sentence, by decision 9 (a). A measurement boundary for
+Qwen3 prefill only; no published sweep or gate uses Qwen3-1.7B's prefill.
+
+**Owed to the owner: the pinned A/B on the final region**, re-staged on this tree:
+`dist/gpu-residency-final-region-ab/candidate-shaded.jar` is now `533b1864d682bea5` (decode code is unchanged from
+`d05d1fe`; the jar is the final tree). Command: `bash dist/gpu-residency-final-region-ab/run-gate.sh`. Optional, not a
+criterion: the pinned form of the Qwen3 prefill A/B, `bash dist/qwen3-prefill-region-ab/run-gate.sh` (the tier's
+closing no-regression gate reads prefill on the sweep models in any case).
+
+**Next.** The owner's pinned A/B on the final region; when met, scope item 8's criterion is ticked. Then scope item 5
+(`CudaGraphSession`, measure and wire or delete).
+
+### 2026-10-07: scope item 8, the final region's pinned A/B (owner run): met
+
+`bash dist/gpu-residency-final-region-ab/run-gate.sh`, clocks pinned on all six runs (started 17:46Z to 18:03Z), jar
+`533b1864d682bea5` on both sides (HEAD `d05d1fe` plus the fifth part; decode code as at `d05d1fe`), the flag alternated
+off, on, off, on, off, on; published as
+[`20261007T174646Z-gpu-residency-final-region-ab`](../perf-compare/20261007T174646Z-gpu-residency-final-region-ab/INDEX.md).
+Re-scored from the run files with the script's method (medians of three), since its console output was not kept. Every
+row scorable on all six runs.
+
+| Model | Region | tg off | tg on | tg on/off | Threshold | pp on/off (not gated) | alloc/token off / on | GPU tg ratio off / on |
+|---|---|---|---|---|---|---|---|---|
+| tinyllama-1.1b | whole layer | 61.05 | 124.89 | **2.046** | >= 1.00, met | 1.020 | 47.6M / 38.7M | 0.331x / 0.679x |
+| mistral-7b | whole layer | 21.03 | 35.09 | **1.669** | >= 1.00, met | 0.968 | 223.9M / 193.6M | 0.642x / 1.002x |
+| Phi-3.5-mini | whole layer | 28.84 | 47.31 | **1.641** | >= 1.00, met | 0.974 | 209.1M / 180.7M | 0.505x / 0.829x |
+| Qwen3-1.7B | whole layer | 31.49 | 60.54 | **1.923** | >= 1.00, met | 1.036 | 111.1M / 97.2M | 0.289x / 0.551x |
+| qwen2.5-3b | declined | 27.19 | 27.67 | **1.017** | >= 0.95, met | 0.967 | 143.6M / 143.6M | 0.404x / 0.416x |
+
+On every region model every on repetition is above every off repetition. Greedy text over the 64 generated tokens is
+identical on against off on Phi-3.5-mini, Qwen3-1.7B and Qwen2.5-3B; on TinyLlama and Mistral 7B it parts within the 64
+tokens, as at every earlier gate of this region (the norms' summation order), and each mode is identical across its three
+runs; the criterion's greedy check is the 32-token one of `smoke-gpu-residency.sh`, which holds on every handler.
+
+**Read against the 0.70x end-of-plan GPU tg targets, not scored** (a gate A/B at `n_prompt=128`, one repetition per run;
+the closing sweeps score them): with `--gpu-residency on`, Mistral 7B reads 1.002x and Phi-3.5-mini 0.829x, both above
+0.70x; the default path (flag off) reads 0.642x and 0.505x. The flag is off by default; scope item 6 puts the default to
+the owner.
+
+**Reading carried to the standing allocation gate, not gated here:** Qwen3-1.7B's GC max pause 0 to 17 ms with the region
+on, as at the second part's gate.
+
+**Scope item 8's criterion is ticked.** Copy counts by test and by the published `--device-spans` run
+(`20261007T054314Z-gpu-residency-final-region-spans`), tg on/off by this pinned A/B, greedy and memory by
+`smoke-gpu-residency.sh` on every handler (llama-1-30b flat in both modes since decision 7), the prefill window
+re-verified on every sweep model, and Qwen3's prefill in the region by decision 9 (a).
+
+**Out-of-tier changes.** None.
+
+**Next.** Scope item 5: the `CudaGraphSession` measurement (one layer's region captured as a CUDA graph and replayed
+against plain launches at decode width, on TinyLlama and Mistral 7B), wired behind `--gpu-residency` if it saves at
+least 5% of decode forward-pass time with greedy output unchanged, otherwise deleted with its test.
+
+### 2026-10-07: scope item 8, fifth part: pinned A/B (owner run): bound met
+
+`bash dist/qwen3-prefill-region-ab/run-gate.sh`, clocks pinned on all six runs (started 20:16Z to 20:20Z), baseline jar
+`652bf47e12609973` (`d05d1fe`) against candidate `533b1864d682bea5`, alternated A B A B A B, Qwen3-1.7B at
+`n_prompt=512`; published as
+[`20261007T201648Z-qwen3-prefill-region-ab`](../perf-compare/20261007T201648Z-qwen3-prefill-region-ab/INDEX.md).
+Re-scored from the run files with the script's method (medians of three), since its console output was not kept.
+Every row scorable, every prefill 512 of 512.
+
+| Metric | Baseline | Candidate | B/A | Bound |
+|---|---|---|---|---|
+| pp t/s | 815.96 (815.96, 813.44, 835.72) | 1721.50 (1656.62, 1721.50, 1725.45) | **2.110** | >= 0.95, met |
+| tg t/s | 36.71 (36.59, 37.83, 36.71) | 36.21 (36.21, 36.02, 36.43) | **0.986** | >= 0.95, met |
+| GPU pp ratio at 512 | 0.293x (median) | 0.608x (median) | | reading |
+
+Every candidate prefill reading is above every baseline one; the unpinned reading (1.990, 0.997) agrees. Generation does
+not run through the prefill region; 0.986 sits inside the baseline's own spread. Greedy text identical on all six runs.
+Not a criterion of this tier (Qwen3-1.7B is not a sweep model); it confirms the fifth part holds before scope item 5.
+
+**Out-of-tier changes.** None.
+
+**Still owed to the owner:** nothing from scope item 8. **Next:** scope item 5 (`CudaGraphSession`).
