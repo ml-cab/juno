@@ -147,10 +147,15 @@ public final class RocmMatVec implements GpuMatVec {
         // hipMalloc / hipFree interleaved with compute require serialization:
         // hipSetDevice inside deviceMalloc is a per-device global state write.
         synchronized (ctx.cublasSerializationLock()) {
-        MemorySegment dA = rocm.deviceMalloc(ctx.deviceIndex(), bytesA);
-        MemorySegment dX = rocm.deviceMalloc(ctx.deviceIndex(), bytesX);
-        MemorySegment dY = rocm.deviceMalloc(ctx.deviceIndex(), bytesY);
+        // Allocated inside the try, so the finally frees whichever succeeded when a
+        // later one runs out of device memory (deviceFree ignores null).
+        MemorySegment dA = null;
+        MemorySegment dX = null;
+        MemorySegment dY = null;
         try {
+            dA = rocm.deviceMalloc(ctx.deviceIndex(), bytesA);
+            dX = rocm.deviceMalloc(ctx.deviceIndex(), bytesX);
+            dY = rocm.deviceMalloc(ctx.deviceIndex(), bytesY);
             // H2D — copy Java heap arrays into native (off-heap) staging buffers first;
             // Panama FFI (Java 25) forbids passing heap-backed MemorySegments directly
             // to native downcalls ("Heap segment not allowed").

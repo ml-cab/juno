@@ -592,13 +592,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		DeviceQ4KMatrix outQ4 = null;
 		int resolvedGlobal = 0;
 		try {
-			long reserve = inferenceReserveBytes(L, tryMmq);
+			long scratch = scratchReserveBytes(tryMmq);
 			long layerBytes = 0L;
+			int uploaded = 0;
 			for (int li = 0; li < L; li++) {
 				int global = startLayer + li;
 				if (!policy.isAuto() && !policy.residentForGlobalLayer(global, totalLayers))
 					continue;
 				long freeBefore = cuda.gpuContext().freeVramBytes();
+				long reserve = scratch + mirrorReserveBytes(uploaded + 1, L);
 				if (policy.isAuto()
 						&& !DeviceScratchBudget.canUploadAnotherLayer(freeBefore, layerBytes, reserve)) {
 					log.info("Llama: stopping GPU upload at global layer " + global
@@ -611,6 +613,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 							wqD, wkD, wvD, woD, wGateD, wUpD, wDownD,
 							wqQ4, wkQ4, wvQ4, woQ4, wGateQ4, wUpQ4, wDownQ4);
 					resolvedGlobal = Math.max(resolvedGlobal, global + 1);
+					uploaded++;
 					layerBytes = noteLayerUploadCost(cuda, freeBefore, layerBytes);
 				} catch (IllegalStateException ex) {
 					if (!handleLayerUploadOom(policy, ex, global, tryMmq ? "Q4K/FP16" : "FP16"))
@@ -747,13 +750,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		DeviceFloatMatrix outD = null;
 		int resolvedGlobal = 0;
 		try {
-			long reserve = inferenceReserveBytes(L, false);
+			long scratch = scratchReserveBytes(false);
 			long layerBytes = 0L;
+			int uploaded = 0;
 			for (int li = 0; li < L; li++) {
 				int global = startLayer + li;
 				if (!policy.isAuto() && !policy.residentForGlobalLayer(global, totalLayers))
 					continue;
 				long freeBefore = cuda.gpuContext().freeVramBytes();
+				long reserve = scratch + mirrorReserveBytes(uploaded + 1, L);
 				if (policy.isAuto()
 						&& !DeviceScratchBudget.canUploadAnotherLayer(freeBefore, layerBytes, reserve)) {
 					log.info("Llama: stopping GPU upload at global layer " + global
@@ -764,6 +769,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				try {
 					uploadFp32Layer(cuda, li, H, KV, I, wqD, wkD, wvD, woD, wGateD, wUpD, wDownD);
 					resolvedGlobal = Math.max(resolvedGlobal, global + 1);
+					uploaded++;
 					layerBytes = noteLayerUploadCost(cuda, freeBefore, layerBytes);
 				} catch (IllegalStateException ex) {
 					if (!handleLayerUploadOom(policy, ex, global, "FP32"))
@@ -852,27 +858,48 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * Device bytes that must stay free once the weights are up: the narrowest
-	 * prefill window, the dequant scratch when packed K-quant weights cannot be
-	 * multiplied by the tiled kernel, and the KV mirror the GPU-resident attention
-	 * path allocates at the first token.
+	 * Device bytes that must stay free once the weights are up, apart from the KV
+	 * mirror: the narrowest prefill window and the dequant scratch when packed
+	 * K-quant weights cannot be multiplied by the tiled kernel.
 	 *
-	 * <p>All of them are allocated after the upload finishes, which is why a card
-	 * filled to the brim with weights loads and decodes and then fails on a real prompt.
+	 * <p>Both are allocated after the upload finishes, which is why a card filled to
+	 * the brim with weights loads and decodes and then fails on a real prompt.
 	 *
-	 * @param layerCount   layers this handler owns, for sizing the KV mirror
 	 * @param packedKQuant whether K-quant weights are uploaded packed
 	 */
-	private long inferenceReserveBytes(int layerCount, boolean packedKQuant) {
+	private long scratchReserveBytes(boolean packedKQuant) {
 		long window = PrefillWindowFootprint.bytes(prefillRegionShape(), false,
 				DeviceScratchBudget.RESERVED_WINDOW_ROWS);
 		long dequant = packedKQuant && KQuantGemmKernel.tryLoad() == null
 				? DeviceScratchBudget.dequantScratchBytes(cfg.hiddenDim(), cfg.kvDim(), cfg.intermediateSize())
 				: 0L;
-		long scratch = DeviceScratchBudget.reserveBytes(window, dequant);
-		int mirrorLayers = GpuAttentionOptions.fromEnv().preferGpuAttention() ? layerCount : 0;
-		return scratch + DeviceScratchBudget.kvMirrorBytes(
-				mirrorLayers, cfg.kvDim(), DeviceKvCache.INITIAL_SEQ_CAPACITY);
+		return DeviceScratchBudget.reserveBytes(window, dequant);
+	}
+
+	/**
+	 * Device bytes kept free for one request's GPU-attention KV mirror with
+	 * {@code deviceLayers} of this shard's {@code layerCount} layers on the device
+	 * ({@link DeviceScratchBudget#kvMirrorReserveBytes}); 0 under
+	 * {@code --gpu-attention off}. The upload stop rule asks it with the layer about
+	 * to be uploaded counted, so a weight layer is not uploaded into the memory a
+	 * 512-token prompt's mirror grows into.
+	 */
+	private long mirrorReserveBytes(int deviceLayers, int layerCount) {
+		if (!GpuAttentionOptions.fromEnv().preferGpuAttention())
+			return 0L;
+		return DeviceScratchBudget.kvMirrorReserveBytes(deviceLayers, layerCount - deviceLayers, cfg.kvDim());
+	}
+
+	@Override
+	public long kvMirrorReserveDeviceBytes() {
+		if (gqaGpu == null)
+			return 0L;
+		int L = endLayer - startLayer;
+		int deviceLayers = 0;
+		for (int li = 0; li < L; li++)
+			if (layerGpuResident(li))
+				deviceLayers++;
+		return DeviceScratchBudget.kvMirrorReserveBytes(deviceLayers, L - deviceLayers, cfg.kvDim());
 	}
 
 	/**

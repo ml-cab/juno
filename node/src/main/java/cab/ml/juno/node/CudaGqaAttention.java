@@ -50,28 +50,33 @@ final class CudaGqaAttention {
 	private final DeviceScratchPool<GqaScratch> scratch;
 
 	private static final class GqaScratch {
-		MemorySegment dQ, dOut, dKPtrs, dVPtrs, dSeqLens;
-		long qBytes, outBytes, ptrBytes, seqLensBytes;
+		final DeviceScratchSlot q, out, kPtrs, vPtrs, seqLens;
+
+		GqaScratch(GpuContext ctx) {
+			q = DeviceScratchSlot.device(ctx);
+			out = DeviceScratchSlot.device(ctx);
+			kPtrs = DeviceScratchSlot.device(ctx);
+			vPtrs = DeviceScratchSlot.device(ctx);
+			seqLens = DeviceScratchSlot.device(ctx);
+		}
 
 		long deviceBytes() {
-			return qBytes + outBytes + 2 * ptrBytes + seqLensBytes;
+			return q.bytes() + out.bytes() + kPtrs.bytes() + vPtrs.bytes() + seqLens.bytes();
 		}
 	}
 
 	private CudaGqaAttention(GpuContext ctx) {
 		this.ctx = ctx;
 		this.gpu = ctx.bindings();
-		this.scratch = new DeviceScratchPool<>(GqaScratch::new, this::free);
+		this.scratch = new DeviceScratchPool<>(() -> new GqaScratch(ctx), CudaGqaAttention::free);
 	}
 
-	private void free(GqaScratch s) {
-		gpu.deviceFree(s.dQ);
-		gpu.deviceFree(s.dOut);
-		gpu.deviceFree(s.dKPtrs);
-		gpu.deviceFree(s.dVPtrs);
-		gpu.deviceFree(s.dSeqLens);
-		s.dQ = s.dOut = s.dKPtrs = s.dVPtrs = s.dSeqLens = null;
-		s.qBytes = s.outBytes = s.ptrBytes = s.seqLensBytes = 0L;
+	private static void free(GqaScratch s) {
+		s.q.free();
+		s.out.free();
+		s.kPtrs.free();
+		s.vPtrs.free();
+		s.seqLens.free();
 	}
 
 	/** Frees the pooled device scratch. A call after this still works and frees its own. */
@@ -151,35 +156,17 @@ final class CudaGqaAttention {
 			int[] seqLens, float[][] outBatch, int batch, int numHeads, int headDim, int gqaRatio, int kvDim,
 			int rowDim, int rowsPerBlock, int window, long qBytes, long outBytes, long ptrBytes,
 			long seqLensBytes) {
-		int dev = ctx.deviceIndex();
-		if (s.qBytes < qBytes) {
-			gpu.deviceFree(s.dQ);
-			s.dQ = gpu.deviceMalloc(dev, qBytes);
-			s.qBytes = qBytes;
-		}
-		if (s.outBytes < outBytes) {
-			gpu.deviceFree(s.dOut);
-			s.dOut = gpu.deviceMalloc(dev, outBytes);
-			s.outBytes = outBytes;
-		}
-		if (s.ptrBytes < ptrBytes) {
-			gpu.deviceFree(s.dKPtrs);
-			gpu.deviceFree(s.dVPtrs);
-			s.dKPtrs = gpu.deviceMalloc(dev, ptrBytes);
-			s.dVPtrs = gpu.deviceMalloc(dev, ptrBytes);
-			s.ptrBytes = ptrBytes;
-		}
-		if (s.seqLensBytes < seqLensBytes) {
-			gpu.deviceFree(s.dSeqLens);
-			s.dSeqLens = gpu.deviceMalloc(dev, seqLensBytes);
-			s.seqLensBytes = seqLensBytes;
-		}
+		MemorySegment dQ = s.q.ensure(qBytes);
+		MemorySegment dOut = s.out.ensure(outBytes);
+		MemorySegment dKPtrs = s.kPtrs.ensure(ptrBytes);
+		MemorySegment dVPtrs = s.vPtrs.ensure(ptrBytes);
+		MemorySegment dSeqLens = s.seqLens.ensure(seqLensBytes);
 
 		try (Arena staging = Arena.ofConfined()) {
 			MemorySegment hostQ = staging.allocate(qBytes);
 			for (int b = 0; b < batch; b++)
 				MemorySegment.copy(qBatch[b], 0, hostQ, JAVA_FLOAT, (long) b * rowDim * Float.BYTES, rowDim);
-			DeviceStaging.copy(gpu, s.dQ, hostQ, qBytes, GpuBindings.H2D, batch, "memcpy(gqa qBatch H2D)");
+			DeviceStaging.copy(gpu, dQ, hostQ, qBytes, GpuBindings.H2D, batch, "memcpy(gqa qBatch H2D)");
 
 			MemorySegment hostKPtrs = staging.allocate(ptrBytes);
 			MemorySegment hostVPtrs = staging.allocate(ptrBytes);
@@ -187,21 +174,21 @@ final class CudaGqaAttention {
 				hostKPtrs.setAtIndex(ADDRESS, b, kv[b].kPointer());
 				hostVPtrs.setAtIndex(ADDRESS, b, kv[b].vPointer());
 			}
-			DeviceStaging.copy(gpu, s.dKPtrs, hostKPtrs, ptrBytes, GpuBindings.H2D, batch, "memcpy(gqa kPtrs H2D)");
-			DeviceStaging.copy(gpu, s.dVPtrs, hostVPtrs, ptrBytes, GpuBindings.H2D, batch, "memcpy(gqa vPtrs H2D)");
+			DeviceStaging.copy(gpu, dKPtrs, hostKPtrs, ptrBytes, GpuBindings.H2D, batch, "memcpy(gqa kPtrs H2D)");
+			DeviceStaging.copy(gpu, dVPtrs, hostVPtrs, ptrBytes, GpuBindings.H2D, batch, "memcpy(gqa vPtrs H2D)");
 
 			MemorySegment hostSeqLens = staging.allocate(seqLensBytes);
 			for (int b = 0; b < batch; b++)
 				hostSeqLens.setAtIndex(JAVA_INT, b, seqLens[b]);
-			DeviceStaging.copy(gpu, s.dSeqLens, hostSeqLens, seqLensBytes, GpuBindings.H2D, batch, "memcpy(gqa seqLens H2D)");
+			DeviceStaging.copy(gpu, dSeqLens, hostSeqLens, seqLensBytes, GpuBindings.H2D, batch, "memcpy(gqa seqLens H2D)");
 
 			long t0 = DeviceComputeClock.start(gpu, batch);
-			kernel.launch(s.dQ, s.dKPtrs, s.dVPtrs, s.dSeqLens, s.dOut,
+			kernel.launch(dQ, dKPtrs, dVPtrs, dSeqLens, dOut,
 					batch, numHeads, gqaRatio, headDim, kvDim, rowsPerBlock, window, null);
 			DeviceComputeClock.done(gpu, DeviceComputeEvent.GQA_ATTENTION, batch, t0);
 
 			MemorySegment hostOut = staging.allocate(outBytes);
-			DeviceStaging.copy(gpu, hostOut, s.dOut, outBytes, GpuBindings.D2H, batch, "memcpy(gqa outBatch D2H)");
+			DeviceStaging.copy(gpu, hostOut, dOut, outBytes, GpuBindings.D2H, batch, "memcpy(gqa outBatch D2H)");
 			for (int b = 0; b < batch; b++) {
 				if (outBatch[b] == null || outBatch[b].length != rowDim)
 					outBatch[b] = new float[rowDim];

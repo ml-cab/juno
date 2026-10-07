@@ -112,6 +112,47 @@ class DeviceKvCacheLifecycleTest {
 		}
 	}
 
+	/**
+	 * Device memory leaked by a failed allocation is gigabytes here, and the desktop's
+	 * own use of the card moves the free figure by tens of MiB between two readings.
+	 */
+	private static final long FREE_TOLERANCE_BYTES = 256L * 1024 * 1024;
+
+	/** kvDim at which one K (or V) tensor at the initial capacity is {@code bytes} long. */
+	private static int kvDimForTensorBytes(long bytes) {
+		return (int) (bytes / ((long) DeviceKvCache.INITIAL_SEQ_CAPACITY * Short.BYTES));
+	}
+
+	@Test
+	@DisplayName("A request's mirrors that run out of memory part-way are all released")
+	void a_partly_allocated_set_of_layers_is_released_when_one_runs_out() {
+		// On a card at its capacity, allocating a request's mirrors layer by layer can
+		// succeed for the first layers and fail on a later one. The request then runs
+		// attention on the CPU; the layers already allocated must not stay behind, or
+		// every such request takes device memory for good.
+		long baselineBytes = DeviceKvCache.allocatedBytes();
+		long freeBefore = ctx.freeVramBytes();
+		int kvDim = kvDimForTensorBytes(freeBefore / 12); // each layer about a sixth of free memory
+		IllegalStateException oom = org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+				() -> DeviceKvCache.newLayers(ctx, 12, kvDim));
+		assertThat(GpuLayerOffload.isVramOom(oom)).as("the failure is the allocator's").isTrue();
+		assertThat(DeviceKvCache.allocatedBytes()).as("no mirror bytes left counted").isEqualTo(baselineBytes);
+		assertThat(ctx.freeVramBytes()).as("device memory given back")
+				.isGreaterThan(freeBefore - FREE_TOLERANCE_BYTES);
+	}
+
+	@Test
+	@DisplayName("A mirror whose V tensor does not fit gives its K tensor back")
+	void a_mirror_whose_second_tensor_does_not_fit_releases_the_first() {
+		long freeBefore = ctx.freeVramBytes();
+		int kvDim = kvDimForTensorBytes(freeBefore * 6 / 10); // K fits, K and V do not
+		IllegalStateException oom = org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+				() -> new DeviceKvCache(ctx, kvDim));
+		assertThat(GpuLayerOffload.isVramOom(oom)).as("the failure is the allocator's").isTrue();
+		assertThat(ctx.freeVramBytes()).as("device memory given back")
+				.isGreaterThan(freeBefore - FREE_TOLERANCE_BYTES);
+	}
+
 	private static float[] randomRow(Random rng, int kvDim) {
 		float[] row = new float[kvDim];
 		for (int i = 0; i < kvDim; i++)

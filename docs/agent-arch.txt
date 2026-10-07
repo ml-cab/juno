@@ -133,13 +133,20 @@ Module dependency (excerpt):
         (RESERVED_WINDOW_ROWS = 64 rows at 64 positions, PrefillWindowFootprint)
         plus a 40% margin, plus ALLOCATOR_HOLDBACK_BYTES (64 MiB: with the card
         full the free-memory query still reports 44 to 54 MiB no allocation can
-        obtain), plus the KV mirror at its initial capacity when --gpu-attention
-        is active. The widest FP16 weight matrix (hidden x max(hidden, kv, ffn)
+        obtain), plus, when --gpu-attention is active, one request's KV mirror
+        (kvMirrorReserveBytes): grown to RESERVED_MIRROR_TOKENS = 512 positions on
+        the layers whose weights are on the device, at its initial 64 positions on
+        the shard's other layers (allocated, never written), and the old buffer one
+        layer holds while it grows. The stop rule evaluates the mirror term with
+        the layer about to be uploaded counted, so on a card the model does not fit
+        a 512-token prompt's attention stays on the device; growth past 512
+        positions is not reserved for and falls back to CPU attention. The widest FP16 weight matrix (hidden x max(hidden, kv, ffn)
         halves, dequantScratchBytes) is added only when packed K-quant weights
         are uploaded and the tiled K-quant GEMM cannot load, the one case in
         which a batched matmul still dequantizes. A wider window is not reserved
         for: the adaptive prefill chunk is sized from what is free after the
-        upload (PrefillChunkDefaults). LlamaTransformerHandler learns the
+        upload less the mirror reserve (PrefillChunkDefaults, through
+        ForwardPassHandler.kvMirrorReserveDeviceBytes). LlamaTransformerHandler learns the
         per-layer cost by measuring free VRAM across the first upload and stops
         while the reserve is still intact. Every device allocation on the
         inference path falls back to its CPU equivalent on VRAM exhaustion
@@ -373,7 +380,9 @@ GPU FFI (node module — Panama project, JEP 454):
         writeWindowOnDevice casts a window's FP32 device rows into the mirror on a stream
         (PrefillWindowKernels.toHalf, no host copy) and leaves the watermark for markWritten,
         which the handler calls once the host KV holds the same rows. A grow whose second
-        allocation fails frees the first.
+        allocation fails frees the first; so does the constructor, and newLayers is all or
+        nothing (a request whose mirror set runs out part-way closes the layers it got before
+        the out-of-memory error reaches the caller's CPU-attention fallback).
   GqaAttentionKernel — PTX loader/launcher (CUDA Driver API) for gqa_attention.ptx: a tiled,
         online-softmax kernel (running max, running sum, rescaled accumulator) that streams K/V
         through shared memory in 32-key tiles (16 for heads over 128), converted from FP16 to FP32
@@ -400,6 +409,11 @@ GPU FFI (node module — Panama project, JEP 454):
         call once grown; close() frees idle entries and any entry released afterwards. Exists
         because the request scheduler runs every request on a new thread, so scratch kept per
         thread is never used again and nothing frees device memory on GC.
+  DeviceScratchSlot — one grow-on-demand scratch buffer, device or pinned host: ensure(bytes)
+        reuses it when large enough, otherwise empties the slot, frees, then allocates, so an
+        allocation that runs out of memory leaves no freed pointer or stale size behind (no
+        later reuse, no double free). The entries of CudaGqaAttention, CudaRmsNorm and
+        DeviceActivationBatch are built from it.
   RmsNormKernel — PTX loader/launcher (CUDA Driver API) for rms_norm.ptx; one block per batch
         row, block-wide sum-of-squares reduction then normalize+scale.
   CudaRmsNorm — handler-facing GPU RMS norm, two paths over the same kernel. normalizeBatch(...):
@@ -784,7 +798,9 @@ GPU FFI (node module — Panama project, JEP 454):
         otherwise LOCAL_REPL and EMBEDDED on a GPU with the static schedule size from free VRAM: the
         widest window whose footprint, summed over every shard's
         ForwardPassHandler.prefillWindowDeviceBytes (each in-process shard keeps its own region
-        window; PrefillWindowFootprint: window buffers and the Q8_1 copy), fits half of what is free, between 32 and 65536 rows; with no shard on the
+        window; PrefillWindowFootprint: window buffers and the Q8_1 copy), fits half of what is free
+        once every shard's ForwardPassHandler.kvMirrorReserveDeviceBytes (the KV mirror growth
+        the upload kept free) is set aside, between 32 and 65536 rows; with no shard on the
         device region, the host-staged path's 64 KiB a token applies instead.
         Every other case uses the fixed 32 (CPU: window width does not change prefill time; continuous:
         32 is the decode-interleaving fairness unit; cluster and coordinator: the gRPC pipeline clients

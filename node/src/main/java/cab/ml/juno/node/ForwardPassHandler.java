@@ -84,6 +84,16 @@ public interface ForwardPassHandler {
 	}
 
 	/**
+	 * Device bytes this handler keeps free for one request's GPU-attention KV mirror
+	 * to grow into; 0 when it allocates no mirror or keeps no reserve for it. The
+	 * adaptive prefill chunk subtracts this, summed over every shard on the device,
+	 * before sizing the window, so a wide window does not take the mirror's memory.
+	 */
+	default long kvMirrorReserveDeviceBytes() {
+		return 0L;
+	}
+
+	/**
 	 * RMS-normalized final hidden state at the current position, immediately before
 	 * the LM head. Only the shard that owns the output projection returns a value;
 	 * intermediate shards return empty.

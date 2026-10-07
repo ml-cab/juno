@@ -104,8 +104,36 @@ class PrefillChunkDefaultsTest {
 		assertThat(PrefillChunkDefaults.windowBytesOf(List.of())).isNull();
 	}
 
+	// ── the KV mirror the handlers keep free for ─────────────────────────────
+
+	@Test
+	void the_window_is_sized_from_what_the_reserved_kv_mirror_leaves() {
+		// 2 GiB free, of which 1 GiB is held for the KV mirror's growth: the window gets
+		// half of the remaining 1 GiB, 512 rows at 1 MiB a row, and does not eat the mirror.
+		assertThat(PrefillChunkDefaults.resolveFrom(Surface.LOCAL_REPL, null, true, GPU_WITH_HEADROOM,
+				ONE_MIB_PER_ROW, 1024 * MIB)).isEqualTo(512);
+	}
+
+	@Test
+	void a_mirror_reserve_larger_than_free_memory_gives_the_smallest_window() {
+		assertThat(PrefillChunkDefaults.resolveFrom(Surface.LOCAL_REPL, null, true, GPU_WITH_HEADROOM,
+				ONE_MIB_PER_ROW, 4 * TWO_GIB)).isEqualTo(PrefillBatchOptions.DEFAULT_CHUNK_SIZE);
+	}
+
+	@Test
+	void mirrorReserveOf_sums_every_shard() {
+		assertThat(PrefillChunkDefaults.mirrorReserveOf(
+				List.of(handler(MIB, 100 * MIB), handler(0, 0), handler(MIB, 200 * MIB)))).isEqualTo(300 * MIB);
+		assertThat(PrefillChunkDefaults.mirrorReserveOf(List.of())).isZero();
+	}
+
 	/** A handler whose prefill windows cost {@code perRow} device bytes a row. */
 	private static ForwardPassHandler handler(long perRow) {
+		return handler(perRow, 0L);
+	}
+
+	/** As {@link #handler(long)}, holding {@code mirrorReserve} device bytes for its KV mirror. */
+	private static ForwardPassHandler handler(long perRow, long mirrorReserve) {
 		return new ForwardPassHandler() {
 			@Override
 			public ForwardResult forward(ForwardRequest request, ShardContext context) {
@@ -120,6 +148,11 @@ class PrefillChunkDefaultsTest {
 			@Override
 			public long prefillWindowDeviceBytes(int rows) {
 				return rows * perRow;
+			}
+
+			@Override
+			public long kvMirrorReserveDeviceBytes() {
+				return mirrorReserve;
 			}
 		};
 	}

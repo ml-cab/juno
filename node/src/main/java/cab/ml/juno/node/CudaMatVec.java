@@ -233,10 +233,15 @@ public final class CudaMatVec implements GpuMatVec {
         long bytesX = (long) cols  * Float.BYTES;
         long bytesY = (long) rows  * Float.BYTES;
 
-        MemorySegment dA = cuda.deviceMalloc(ctx.deviceIndex(), bytesA);
-        MemorySegment dX = cuda.deviceMalloc(ctx.deviceIndex(), bytesX);
-        MemorySegment dY = cuda.deviceMalloc(ctx.deviceIndex(), bytesY);
+        // Allocated inside the try, so the finally frees whichever succeeded when a
+        // later one runs out of device memory (deviceFree ignores null).
+        MemorySegment dA = null;
+        MemorySegment dX = null;
+        MemorySegment dY = null;
         try {
+            dA = cuda.deviceMalloc(ctx.deviceIndex(), bytesA);
+            dX = cuda.deviceMalloc(ctx.deviceIndex(), bytesX);
+            dY = cuda.deviceMalloc(ctx.deviceIndex(), bytesY);
             // H2D — copy heap arrays into confined off-heap staging first.
             // Panama FFI (Java 25) rejects heap-backed MemorySegments in native downcalls;
             // MemorySegment.copyFrom is a pure Java copy and is not subject to that restriction.

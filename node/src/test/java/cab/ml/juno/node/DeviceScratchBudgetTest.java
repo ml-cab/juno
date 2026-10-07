@@ -185,6 +185,75 @@ class DeviceScratchBudgetTest {
 		assertThat(total).isGreaterThan(reserve).isLessThan(1024 * MIB);
 	}
 
+	// ── the mirror's reserved context on a card the model does not fit ───────
+
+	/** One 30B layer's K and V mirror rows: 2 x 6656 halves a position. */
+	private static final long THIRTY_B_MIRROR_ROW = 2L * 6656L * Short.BYTES;
+
+	@Test
+	void theMirrorIsReservedForAFiveHundredTwelveTokenPrompt() {
+		// The context the reserve holds a mirror for: a 512-token prompt's attention must
+		// stay on the device on a partially offloaded model, not only its first 64 tokens.
+		assertThat(DeviceScratchBudget.RESERVED_MIRROR_TOKENS).isEqualTo(512);
+		assertThat(DeviceScratchBudget.RESERVED_MIRROR_TOKENS).isGreaterThan(DeviceKvCache.INITIAL_SEQ_CAPACITY);
+	}
+
+	@Test
+	void onlyDeviceLayersAreReservedTheirGrownMirror() {
+		// Every layer of the shard gets a mirror at its initial 64 positions, but only the
+		// layers whose weights are on the device ever write to it, so only they grow. The
+		// 30B at auto: 23 device layers, 37 host layers. Growing a buffer holds the old one
+		// until the copy is done, which on the way to 512 is at most 256 positions of one layer.
+		long expected = 23 * 512 * THIRTY_B_MIRROR_ROW + 37 * 64 * THIRTY_B_MIRROR_ROW + 256 * THIRTY_B_MIRROR_ROW;
+		assertThat(DeviceScratchBudget.kvMirrorReserveBytes(23, 37, 6656)).isEqualTo(expected);
+	}
+
+	@Test
+	void theReservedMirrorHoldsTheThirtyBsFiveHundredTwelveTokenPrompt() {
+		// A 508-token prompt's mirror on 23 device layers grows to 512 positions: about
+		// 299 MiB, which the 64-token reserve never held, so attention fell back to the CPU.
+		long grown = 23 * 512 * THIRTY_B_MIRROR_ROW;
+		assertThat(grown / MIB).isEqualTo(299);
+		assertThat(DeviceScratchBudget.kvMirrorReserveBytes(23, 37, 6656)).isGreaterThan(grown);
+		assertThat(DeviceScratchBudget.kvMirrorBytes(60, 6656, DeviceKvCache.INITIAL_SEQ_CAPACITY)).isLessThan(grown);
+	}
+
+	@Test
+	void aLayerThatWouldLeaveNoRoomForTheGrownMirrorIsNotUploaded() {
+		// One 30B Q4_K_M layer is about 310 MiB. With room for that layer and the old
+		// 64-token mirror term but not the grown mirror, the 23rd layer stays on the CPU.
+		long layer = 310 * MIB;
+		long scratch = DeviceScratchBudget.reserveBytes(thirtyBWindow(), 0L);
+		long oldReserve = scratch + DeviceScratchBudget.kvMirrorBytes(60, 6656, DeviceKvCache.INITIAL_SEQ_CAPACITY);
+		long newReserve = scratch + DeviceScratchBudget.kvMirrorReserveBytes(23, 37, 6656);
+		long free = layer + oldReserve + MIB;
+		assertThat(DeviceScratchBudget.canUploadAnotherLayer(free, layer, oldReserve)).isTrue();
+		assertThat(DeviceScratchBudget.canUploadAnotherLayer(free, layer, newReserve)).isFalse();
+	}
+
+	@Test
+	void aModelThatFitsWholeReservesLittleForItsMirror() {
+		// Mistral 7B: 32 layers, kvDim 1024, all on the device. Its 512-token mirror is
+		// 64 MiB plus 1 MiB for the layer that is growing, which a card holding the whole
+		// 4.1 GB model has free anyway.
+		long mirror = DeviceScratchBudget.kvMirrorReserveBytes(32, 0, 1024);
+		assertThat(mirror).isEqualTo(65 * MIB);
+	}
+
+	@Test
+	void noDeviceLayersReserveOnlyTheInitialMirror() {
+		// No layer on the device: nothing grows, so no growth term.
+		assertThat(DeviceScratchBudget.kvMirrorReserveBytes(0, 60, 6656))
+				.isEqualTo(DeviceScratchBudget.kvMirrorBytes(60, 6656, DeviceKvCache.INITIAL_SEQ_CAPACITY));
+		assertThat(DeviceScratchBudget.kvMirrorReserveBytes(0, 0, 6656)).isZero();
+	}
+
+	@Test
+	void negativeLayerCountsAreRejected() {
+		assertThrows(IllegalArgumentException.class, () -> DeviceScratchBudget.kvMirrorReserveBytes(-1, 60, 6656));
+		assertThrows(IllegalArgumentException.class, () -> DeviceScratchBudget.kvMirrorReserveBytes(23, -1, 6656));
+	}
+
 	// ── the upload stop rule ─────────────────────────────────────────────────
 
 	@Test

@@ -1,0 +1,17 @@
+{
+  "run": "heap22g-cand-llama30b-n1",
+  "vram": {
+    "after_load_mib": 6716,
+    "decode_peak_mib": 6868,
+    "prefill_peak_mib": 6868,
+    "samples": 8373,
+    "prefill_over_decode": 1.0
+  },
+  "timing": "decode 200 175.978274;prefill 000 435.640808;",
+  "decode_usage": {
+    "prompt_tokens": 35,
+    "completion_tokens": 8,
+    "total_tokens": 43
+  },
+  "prefill_usage": null
+}

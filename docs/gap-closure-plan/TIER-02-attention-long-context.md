@@ -23,8 +23,15 @@ the host rotation; its pinned A/B is met (owner run, tg on/off 1.545 and 1.699 w
 a 512-token Phi-3.5-mini window moves 414.8 MB (84.3% below 2,645 MB, threshold 70%,
 `docs/perf-compare/20261006T184154Z-phi3-prefill-region-attention`), logits bit-identical region on against off;
 pp 1.897x and tg 0.990x the pre-change build on the owner's pinned A/B
-(`docs/perf-compare/20261006T192743Z-phi3-prefill-region-ab`). Next: item 8's fourth part (the KV mirror budget on a partially offloaded
-model).
+(`docs/perf-compare/20261006T192743Z-phi3-prefill-region-ab`). Item 8's fourth part is done (2026-10-06, owner
+decision: a fixed 512-token reserve): `--gpu-layers auto` keeps one request's KV mirror free at 512 positions on the
+device layers, and llama-1-30b's 508-token prompt keeps its attention on the device at one GPU layer fewer (22 to 21,
+`docs/perf-compare/20261006T212419Z-kv-mirror-reserve`); the region-off memory creep it carried remains (64 MiB over
+requests 4 to 8, limit 32). Decision 7 taken (a) (2026-10-07): the creep was a `DeviceKvCache` leak when a request's
+mirror allocation ran out part-way; fixed, smoke flat in both modes, the mirror-budget criterion ticked. Decision 8
+taken (a) (2026-10-07): a failed scratch growth no longer leaves a freed pointer behind (`DeviceScratchSlot`, three
+classes) and `sgemv` no longer leaks on a partial allocation (CUDA and ROCm). Next: item 8's closing `--device-spans`
+run with the prefill-window re-verification, and the pinned A/B on the final region (owner).
 
 **Split 2026-10-04 (plan review): read this first.** This tier held nine items, and under execution
 rule 1 every later tier, including every remaining GPU throughput lever, waited on all of them. Its
@@ -410,12 +417,22 @@ budget. No download is needed.
       held by test as well (`Phi3PrefillRegionAttentionTest`: <= 793.5 MB, no host RoPE or attention, no
       fused Q/K/V download or attention upload). Logits bit-identical region on against off on every site of
       `PrefillRegionHandlerParityTest` (Phi-3.5-mini relative L2 0.000000 at all six).
-- [ ] KV mirror growth on a partially offloaded model budgeted (scope item 8, 2026-10-04 addition): a
+- [x] KV mirror growth on a partially offloaded model budgeted (scope item 8, 2026-10-04 addition): a
       512-token prompt's attention stays on the device for llama-1-30b at `auto`, or the reason is
       stated with the number.
       *2026-10-05 (decision 5 (b)): also carries the region-off device-memory creep on llama-1-30b
       (`smoke-gpu-residency.sh`: 92 MiB over requests 4 to 8 on the pre-change build, 40 MiB after scope
       item 4; limit 32). Closing this criterion re-runs that smoke at `--requests 8` and reads both modes.*
+      *2026-10-06 (item 8, fourth part): the 512-token part is met. `--gpu-layers auto` keeps one request's
+      mirror free at 512 positions on the device layers; llama-1-30b, one node: 22 to 21 GPU layers, and a
+      508-token prompt runs with no device-memory fallback where the pre-change build moved region prefill
+      attention to the CPU,
+      [`20261006T212419Z-kv-mirror-reserve`](../perf-compare/20261006T212419Z-kv-mirror-reserve/INDEX.md).
+      Not ticked: the region-off creep this criterion carries is not removed (smoke at `--requests 8`: off 64
+      MiB over requests 4 to 8, fail; on 14 MiB, pass). Owed: the owner's decision 7, then its outcome.*
+      *2026-10-07 (decision 7 (a)): the creep was a device-memory leak in `DeviceKvCache` when a request's mirror
+      allocation ran out part-way; fixed, tests first. The smoke at `--requests 8` now reads 0 MiB over requests 4
+      to 8 in both modes (`20261007T023945Z`, 0 failures). Ticked.*
 - [ ] `CudaGraphSession` decided by measurement (scope item 5): wired behind `--gpu-residency` if it
       saves at least 5% of decode forward-pass time on tinyllama and mistral-7b with greedy output
       unchanged, otherwise deleted with `CudaGraphSessionTest` and the measurement recorded. Not
@@ -1476,3 +1493,211 @@ default to the owner on the final region.
   the item's closing `--device-spans` run is to attribute it, as recorded at the first part's gate.
 
 **Out-of-tier changes.** None.
+
+### 2026-10-06: implementation step 5, scope item 8, fourth part (the KV mirror budget on a partially offloaded model)
+
+**Plan versus code, re-verified first** (HEAD `3b27aa3`, tree clean apart from the untracked `.github/`; no gate,
+sweep or mvn run in flight, the matching `pgrep` lines were idle wait loops of earlier sessions;
+`check-plan-thresholds.sh` passes). `LlamaTransformerHandler.inferenceReserveBytes` kept the GPU-attention KV
+mirror free at `DeviceKvCache.INITIAL_SEQ_CAPACITY` (64 positions) on every layer of the shard and nothing for
+its growth; growth that ran out of device memory retired the mirror and attention fell back to the CPU, as the
+item says. Mirrors are allocated for all of a shard's layers at 64 positions but only GPU-resident layers write
+to them, so only those grow. The adaptive prefill chunk (`PrefillChunkDefaults`) took half of whatever was free
+after the upload, so any reserve kept for the mirror would have gone to a wider window. No context-size flag
+exists anywhere, and no later tier plans one. No drift that changes scope.
+
+**Owner decision (2026-10-06, before implementation), as recommended:** a fixed 512-token reserve. The other
+options put to the owner were a new context flag, trading a weight layer at run time when a long prompt
+arrives, and stating the number without a code change.
+
+**Design.**
+- `DeviceScratchBudget.RESERVED_MIRROR_TOKENS = 512` and `kvMirrorReserveBytes(deviceLayers, hostLayers, kvDim)`:
+  the device layers' mirrors at 512 positions, the host layers' at their initial 64, and the old buffer one
+  layer holds while it grows (at most 256 positions).
+- `LlamaTransformerHandler`: both `auto` upload loops evaluate the reserve per layer with the layer about to be
+  uploaded counted (`scratchReserveBytes` + `mirrorReserveBytes(uploaded + 1, L)`), since the device-layer
+  count is only known there. 0 under `--gpu-attention off`, as before.
+- `ForwardPassHandler.kvMirrorReserveDeviceBytes()` (default 0; `LlamaTransformerHandler` reports its resolved
+  device layers' reserve, `VisionAwareForwardPassHandler` delegates), and `PrefillChunkDefaults` sizes the window
+  from free memory less the shards' summed reserve. A failed free-memory query stays a failed query.
+- Phi-3 and Qwen3 handlers have no `auto` stop rule (`DeviceScratchBudget` is the LLaMA handler's only), so
+  they report 0 and are unchanged; their partially offloaded case (Qwen3-30B-A3B) is not covered by this part.
+
+**Tests, written first** (README rule 3), against stubs of the new API that kept today's behaviour (64-token
+constant, today's mirror term, chunk sizer ignoring the reserve):
+
+| Test | Seen failing first? | Now |
+|---|---|---|
+| `DeviceScratchBudgetTest.theMirrorIsReservedForAFiveHundredTwelveTokenPrompt` | yes (64) | pass |
+| `onlyDeviceLayersAreReservedTheirGrownMirror`: 23 device and 37 host layers of the 30B, exact bytes | yes | pass |
+| `theReservedMirrorHoldsTheThirtyBsFiveHundredTwelveTokenPrompt`: 299 MiB grown mirror covered | yes | pass |
+| `aLayerThatWouldLeaveNoRoomForTheGrownMirrorIsNotUploaded`: a 310 MiB layer the old reserve uploads is refused | yes | pass |
+| `negativeLayerCountsAreRejected` | yes | pass |
+| `aModelThatFitsWholeReservesLittleForItsMirror` (Mistral 7B: 65 MiB), `noDeviceLayersReserveOnlyTheInitialMirror` | no: the stub's arithmetic agrees for these, so regression tests | pass. The Mistral case first asserted < 33 MiB, which was the executor's arithmetic error (32 x 512 x 2 x 1024 x 2 B = 64 MiB, plus 1 MiB growing); corrected to the exact 65 MiB |
+| `PrefillChunkDefaultsTest.the_window_is_sized_from_what_the_reserved_kv_mirror_leaves`, `a_mirror_reserve_larger_than_free_memory_gives_the_smallest_window`, `mirrorReserveOf_sums_every_shard` | yes, 3 of 3 | pass |
+
+The handler's per-layer stop rule has no unit test of its own (it needs a card filled to the reserve); it is
+held by the real-model measurement below.
+
+**Measurement**, [`20261006T212419Z-kv-mirror-reserve`](../perf-compare/20261006T212419Z-kv-mirror-reserve/INDEX.md)
+(unpinned; layer counts and fallbacks do not depend on clocks): Tier 01C's `measure-reserve.sh`, llama-1-30b, one
+node, `auto`, 30 GiB heap, a short request then a 508-token prompt, pre-change jar `1a959d18cab40409` (`3b27aa3`)
+and candidate `fe69862b55a1a935`, one engine at a time.
+
+| Build | GPU layers | Kept free | Free after load | Chunk | Fallbacks on the 508-token prompt | Prefill / 8 tokens, wall (single, unpinned) |
+|---|---|---|---|---|---|---|
+| pre-change | 22 | 196 MiB | 382 MiB | 448 | region prefill attention to the CPU | 2030 s / 160 s |
+| candidate | **21** | 453 MiB | 697 MiB | 448 | **none** | 2127 s / 171 s |
+
+The 512-token part of the criterion is met: the candidate logs no device-memory fallback of any kind on the
+prompt. The cost is one weight layer, as forecast (a 512-token mirror on 22 layers is 286 MiB, one 30B layer is
+about 310 MiB), and on this model it does not pay in wall time: both readings are about 5% slower, because the
+39th CPU layer costs more than CPU attention over 508 positions. Single unpinned readings, recorded, not scored.
+A first candidate attempt at a 22 GiB heap (the residency smoke's heap rule, below the launcher's 30 GiB for this
+file) ran out of Java heap in the prompt's first window and was killed; it is published as a superseded attempt.
+The baseline was not run at 22 GiB, so whether the extra CPU layer is what crossed that heap is not known.
+
+**Regression runs.**
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass |
+| unit reactor, `mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player` | 2,134 run, 0 failures, 49 skipped, BUILD SUCCESS (node 954) |
+| `mvn test -pl node -Dgroups=gpu` | 338 run, 0 failures, 7 skipped (the known free-VRAM checks passed this time) |
+| `smoke-gpu-residency.sh --models llama-1-30b --no-cluster --requests 8` (unmodified; decision 5's closing read) | region on: active on 20 of 20 GPU layers, GPU MiB 7424 7456 7456 7456 7456 7466 7466 7470 (14 MiB over requests 4 to 8: pass); greedy identical on against off. **Region off: 7416 7450 7450 7482 7502 7516 7538 7546, 64 MiB over requests 4 to 8, limit 32: fail** |
+
+**Reading of the region-off creep (decision 5).** It is not fixed by this part. Its readings over requests 4 to 8
+are now 92 (pre-scope-item-4 build), 40, 26 and 64 MiB: it moves between runs by more than the limit and has never
+been attributed. The smoke runs three in-process nodes (20 GPU layers), not the one-node configuration measured
+above, and its requests are short, so the mirror's growth reserve is not what it reads. With the region on, every
+reading since scope item 4 passes.
+
+Not run in this step: the real-model `ModelLiveRunnerIT` and `-Pgpu` ITs, the other smoke scripts, the vision and
+LoRA gates, and a re-read of the sweep models' resolved prefill chunk. By arithmetic the reserve lowers the
+adaptive chunk only slightly on the LLaMA-handler sweep models (Mistral 7B: 65 MiB less free out of several GiB,
+about 50 rows off the 2601 Tier 01C read; Qwen2.5-3B 18 MiB), so every 2048-token prompt stays one window; the
+tier's closing sweeps and `smoke-long-prompt-prefill.sh` re-read it.
+
+**Docs.** `docs/howto.md` (device memory with `--gpu-layers auto`, the `--prefill-batch` row),
+`docs/agent-arch.txt` (`DeviceScratchBudget`, `PrefillChunkDefaults`), `CHANGELOG.md` (Session 116).
+
+**Out-of-tier changes.** None outside scope item 8's text ("decide how mirror growth is budgeted against weight
+layers"). Recorded because it touches the launcher-facing chunk sizer in `coordinator` and the
+`ForwardPassHandler` interface: a measurement boundary for partially offloaded models (one GPU layer fewer on
+llama-1-30b at `auto`), none for models that fit whole (layer count unchanged; adaptive chunk a few percent
+narrower, still above every published prompt length). No published baseline is invalidated: no sweep or gate uses
+a partially offloaded model.
+
+**Raised with the owner (decision 7): the region-off device-memory creep on llama-1-30b.** Decision 5 (b) moved it
+here; the mirror budget does not remove it (64 MiB this run). (a) Attribute it now as its own item before the
+tier's closing matrix: a per-request reading of `DeviceKvCache.allocatedBytes()`, the allocator's free bytes and
+the region-off path's per-call device buffers across 16 requests, on three nodes. (b) Record it as a known
+limitation of the region-off path on a model the card does not fit, carried to the tier's close, where item 6
+(the `--gpu-residency` default) may make the region-on path the default and the off path the fallback.
+Recommended: (a). An unattributed per-request device-memory growth on the default path is a leak until shown
+otherwise, its readings straddle the limit, and item 6's default question should not be answered with it open.
+
+**Next.** Decision 7. Then scope item 8's close: the published `--device-spans` run with the prefill-window
+re-verification on the other sweep models, and the pinned A/B on the final region (owner), then scope item 5.
+
+**Decision 7 taken (a) the same day (owner).** The region-off device-memory creep on llama-1-30b is attributed now,
+as its own item, before the tier's closing matrix.
+
+### 2026-10-07: decision 7 (a): the region-off device-memory creep attributed and fixed
+
+**Cause.** On llama-1-30b at the card's capacity, the request's KV mirror allocation fails request after request
+(the smoke's region-off log: "out of device memory for the attention KV mirror - running attention on the CPU for
+this request" on all three shards; region on, one). `DeviceKvCache` leaked on exactly that path, in two places:
+`newLayers` allocated one mirror per layer in a loop and, when layer *k* ran out, never closed layers 0 to *k*-1; and
+the constructor allocated K, then V, and never freed K when V ran out. Every failed request therefore kept part of a
+mirror set, and the next request started from a fuller card, so the leak also made the next failure more likely. The
+region-off mode creeps more because its shards hit the failure more often. This matches every reading on record: a
+creep only on the one model at the card's capacity, varying between runs (92, 40, 26, 64 MiB) with how many layers'
+allocations happened to succeed before each failure.
+
+**Fix** (`DeviceKvCache`): `newLayers` is all or nothing (closes the layers it allocated before rethrowing); the
+constructor frees K when V fails. `grow` already freed its first tensor on failure.
+
+**Tests, written first** (`DeviceKvCacheLifecycleTest`, `@Tag("gpu")`, the real card; sizes taken from the device's free
+memory so the failure lands at a chosen point without filling the card; tolerance 256 MiB on the free reading against
+leaks of gigabytes):
+
+| Test | Seen failing first? | Now |
+|---|---|---|
+| `a_partly_allocated_set_of_layers_is_released_when_one_runs_out`: 12 layers each about a sixth of free memory | yes: mirror bytes still counted after the failure | pass |
+| `a_mirror_whose_second_tensor_does_not_fit_releases_the_first`: one tensor at 60% of free memory | yes: device memory not given back | pass |
+
+**Attribution run.** `smoke-gpu-residency.sh --models llama-1-30b --no-cluster --requests 8` (unmodified, jar
+`3b8b2f53d1bd0a04`, `20261007T023945Z`): **0 failures**. Region off, GPU MiB 7348 7382 7412 7412 7412 7412 7412 7412
+(**0 MiB** over requests 4 to 8, was 64 on the run before the fix); region on 7422 throughout (0 MiB); region active
+on 20 of 20 GPU layers; greedy identical on against off. The same mirror-allocation fallbacks are logged as before
+(off: three shards; on: one), so the run exercises the failing path and it no longer leaks. One run; the readings
+before the fix never read flat on this model.
+
+| Command | Result |
+|---|---|
+| `mvn test -pl node -Dgroups=gpu` | 340 run, 0 failures, 7 skipped |
+| `mvn test -pl node` | 956 run, 0 failures, 44 skipped |
+
+**Out-of-tier changes.** None: the mirror's memory on a partially offloaded model is scope item 8's (decision 5). A
+measurement boundary only for a run that hits the mirror-allocation fallback (a model at the card's capacity); no
+published baseline is such a run.
+
+**Found while attributing, not changed: decision 8 raised with the owner.** Three scratch-growth sites free the old
+device buffer and then allocate the new one without clearing the field: `CudaGqaAttention` (query, output, pointer
+tables, lengths), `CudaRmsNorm` and `DeviceActivationBatch`. If that allocation runs out of memory, the field keeps the
+freed pointer and the recorded size stays at the old one, so a later call that fits the old size writes through a
+pointer the allocator may have handed to something else (a KV mirror, a weight), and `close` frees it a second time.
+`CudaMatVec`'s scratch already clears its field first, which is the fix. Separately, `CudaMatVec.sgemv(float[] A, ...)`
+allocates its three buffers before its `try`, so a failure on the second or third leaks the first. All four sit on
+fallback paths a card at its capacity takes (the attention one is this tier's kernel path); none is known to have
+produced a wrong output. (a) Fix all four in this tier now, tests first on the real card (fail a growth at a chosen
+size, then assert the field is cleared and a following call reallocates); (b) fix only `CudaGqaAttention` here, as
+attention is this tier's, and record the other three for Tier 14's audit; (c) record all four for later. Recommended:
+(a). A use-after-free on a fallback is a silent-corruption risk on exactly the near-full card this tier has been
+budgeting, the fix is one pattern already in the codebase, and the three non-attention sites share the same tests.
+
+**Decision 8 taken (a) the same day (owner):** fix all four in this tier, tests first on the real card.
+
+### 2026-10-07: decision 8 (a): no freed pointer kept after a failed scratch growth; one leak per backend
+
+**Design.** New class `DeviceScratchSlot`: one grow-on-demand buffer, on the device or in pinned host memory.
+`ensure(bytes)` returns the buffer when it is large enough; otherwise it empties the slot (pointer `null`, size 0),
+frees the old buffer and allocates the new one, so an allocation that runs out of memory leaves nothing freed behind.
+`free()` empties the slot before freeing. The scratch entries of `CudaGqaAttention` (query, output, both pointer
+tables, lengths), `CudaRmsNorm` (three device and three pinned host buffers) and `DeviceActivationBatch` (input,
+output) are built from slots; their fast path is the same single size comparison as before. `CudaMatVec.sgemv(float[]
+A, ...)` and its ROCm twin `RocmMatVec.sgemv` (same pattern, found while fixing the CUDA one) now allocate their three
+buffers inside the `try` whose `finally` frees them. Every other growth site in `node` already cleared its field
+before freeing (`CudaMatVec`'s and `RocmMatVec`'s scratch, `Q4KDequantScratch`, `Q8WindowScratch`), checked by grep.
+
+**Tests, written first** (`DeviceScratchSlotTest`, `@Tag("gpu")`, the real card; a request larger than the whole
+device fails in the allocator, which is what a full card does at a smaller size):
+
+| Test | Seen failing first? | Now |
+|---|---|---|
+| `aGrowthThatRunsOutLeavesTheSlotEmptyNotDangling`: grow, then fail; no pointer, no size; the next small request allocates afresh | yes, against a stub with today's free-then-allocate growth: the old size kept for a freed buffer | pass |
+| `aPinnedHostGrowthThatRunsOutLeavesTheSlotEmpty` | yes, same | pass |
+| `aRequestThatFitsKeepsTheBuffer` | no: both versions reuse a large enough buffer, so a regression test | pass |
+
+Not tested by a dedicated case: the three call sites' conversion (held by their existing tests below, which exercise
+every slot on every call) and the two `sgemv` fixes, whose failing case needs a host matrix about the size of the card;
+the ROCm one is compiled only (NEEDS-AMD-HARDWARE).
+
+**Regression runs** (jar `57cb08a0fa77e9a5`).
+
+| Command | Result |
+|---|---|
+| `mvn test -pl node -Dgroups=gpu` | 343 run, 1 failure, 7 skipped: `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance` (130.9 MB reported free with the card full, bound 64 MiB) |
+| unit reactor, eleven modules | 2,139 run, 1 failure (the same test, node 959), 49 skipped |
+| `PrefillReserveDeviceTest` re-run right after, pre-change tree (`3b27aa3`, scratch build) and this tree | 3 of 3 pass on both. It fills the card through the bindings with none of the changed classes in between and reads the driver's free figure; the known desktop-dependent check (third part's record), not loosened |
+| `mvn verify -pl juno-master -Pgpu -Dit.model.path=<tinyllama>` (after `mvn install -DskipTests`) | 10 of 10 |
+| `smoke-gpu-residency.sh --models tinyllama...,mistral...` (unmodified) | 0 failures: region active on every layer, greedy identical on against off, memory flat both modes, cluster pipeline and tensor answer with local mode's output, no node JVM left |
+
+**Out-of-tier changes.** `CudaRmsNorm`, `DeviceActivationBatch`, `CudaMatVec.sgemv` and `RocmMatVec.sgemv` are outside
+this tier's attention scope, changed by owner decision 8 (a) because they share the defect and the test. Not a
+measurement boundary: the allocation pattern on every successful call is unchanged; only a failed allocation behaves
+differently. No published baseline is invalidated.
+
+**Next.** Scope item 8's close: the published `--device-spans` run with the prefill-window re-verification on the other
+sweep models (executor), and the pinned A/B on the final region (owner, prepared then), then scope item 5.

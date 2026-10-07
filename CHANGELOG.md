@@ -1,5 +1,35 @@
 ## Status 
 
+**Session 116** — `--gpu-layers auto` keeps room for a 512-token prompt's attention on a model larger than the card
+
+- **The attention key/value mirror is reserved for 512 positions, not 64.** When `--gpu-layers auto`
+  decides how many weight layers fit, it now keeps one request's GPU-attention key/value mirror free at
+  512 positions on the layers that go to the GPU (and at its starting 64 positions on the others, which
+  are allocated but never written). Before, only the starting size was kept free, so on a card the model
+  did not fit, any prompt longer than 64 tokens ran out of device memory growing the mirror and moved its
+  attention to the CPU.
+- **On an 8 GiB card, LLaMA-30B Q4_K_M keeps one layer fewer on the GPU (21 instead of 22), and a
+  508-token prompt now runs with no device-memory fallback**, where the previous build moved the prefill
+  attention to the CPU. With most of that model's layers on the CPU either way, single wall-time readings
+  were about 5% slower; `--gpu-layers` set explicitly still chooses the other side of the trade. Models
+  that fit on the card are unchanged: the reserve is far smaller than one of their layers (65 MiB on
+  Mistral 7B).
+- **The default prefill window no longer takes the mirror's room.** The adaptive `--prefill-batch` width
+  is sized from free device memory less the mirror reserve, in local mode and in the `JunoPlayer` facade.
+- Longer conversations, and several concurrent requests each with its own mirror, are not reserved for;
+  they still fall back to CPU attention and say so once.
+- **Fixed: device memory leaked when a request's key/value mirror could not be allocated.** On a card at
+  its capacity, a request whose mirror allocation ran out part-way kept the layers it had already
+  allocated, so device memory grew with every such request (up to 92 MiB over five requests on
+  LLaMA-30B). The allocation is now all or nothing, and the request's attention runs on the CPU as
+  before; device memory stays flat across requests.
+- **Fixed: a scratch buffer that failed to grow could be reused after it was freed.** The GPU attention
+  kernel, the GPU RMS norm and the batched-activation staging grew their scratch by freeing the old
+  buffer and allocating a larger one; when that allocation ran out of device memory, the freed buffer
+  was kept and could be written by a later call and freed again. A failed growth now leaves the scratch
+  empty, and the next call allocates afresh. The generic GPU matrix-vector product (CUDA and ROCm) no
+  longer leaks its first buffer when a later one fails to allocate.
+
 **Session 115** — Phi-3 prefill windows rotate and attend on the GPU inside the device region
 
 - **Phi-3's prefill RoPE and attention move into the prefill-window device region.** Until now the region

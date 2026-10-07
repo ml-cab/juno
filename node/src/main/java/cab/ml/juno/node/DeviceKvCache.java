@@ -99,17 +99,38 @@ final class DeviceKvCache implements AutoCloseable {
 		this.capacityTokens = initialTokens;
 		long bytes = bytesFor(initialTokens);
 		this.dK = gpu.deviceMalloc(ctx.deviceIndex(), bytes);
-		this.dV = gpu.deviceMalloc(ctx.deviceIndex(), bytes);
+		try {
+			this.dV = gpu.deviceMalloc(ctx.deviceIndex(), bytes);
+		} catch (RuntimeException e) {
+			// Out of memory for V: give K back, or it leaks for the life of the process
+			// (no mirror exists to close it).
+			gpu.deviceFree(dK);
+			throw e;
+		}
 		ALLOCATED_BYTES.addAndGet(2 * bytes);
 	}
 
-	/** Allocate one device mirror per layer, same granularity as {@code SessionKvTensor[]}. */
+	/**
+	 * Allocate one device mirror per layer, same granularity as {@code SessionKvTensor[]}.
+	 * All or nothing: when a layer runs out of device memory, the layers already
+	 * allocated are closed before the error propagates. The callers treat that error
+	 * as "this request runs attention on the CPU", and on a card at its capacity it
+	 * recurs request after request, so a partial set left behind would take device
+	 * memory for good each time.
+	 */
 	static DeviceKvCache[] newLayers(GpuContext ctx, int layerCount, int kvDim) {
 		if (layerCount < 1)
 			throw new IllegalArgumentException("layerCount must be >= 1");
 		DeviceKvCache[] out = new DeviceKvCache[layerCount];
-		for (int i = 0; i < layerCount; i++)
-			out[i] = new DeviceKvCache(ctx, kvDim);
+		int i = 0;
+		try {
+			for (; i < layerCount; i++)
+				out[i] = new DeviceKvCache(ctx, kvDim);
+		} catch (RuntimeException e) {
+			for (int j = 0; j < i; j++)
+				out[j].close();
+			throw e;
+		}
 		return out;
 	}
 

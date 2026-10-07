@@ -57,31 +57,36 @@ final class CudaRmsNorm {
 	private final DeviceScratchPool<RmsNormScratch> scratch;
 
 	private static final class RmsNormScratch {
-		MemorySegment dX, dWeight, dOut;
-		long xBytes, weightBytes, outBytes;
-		MemorySegment hX, hWeight, hOut;      // pinned host staging, grown as needed
-		long hXBytes, hWeightBytes, hOutBytes;
+		final DeviceScratchSlot dX, dWeight, dOut;
+		final DeviceScratchSlot hX, hWeight, hOut; // pinned host staging, grown as needed
+
+		RmsNormScratch(GpuContext ctx) {
+			dX = DeviceScratchSlot.device(ctx);
+			dWeight = DeviceScratchSlot.device(ctx);
+			dOut = DeviceScratchSlot.device(ctx);
+			hX = DeviceScratchSlot.pinnedHost(ctx);
+			hWeight = DeviceScratchSlot.pinnedHost(ctx);
+			hOut = DeviceScratchSlot.pinnedHost(ctx);
+		}
 
 		long deviceBytes() {
-			return xBytes + weightBytes + outBytes;
+			return dX.bytes() + dWeight.bytes() + dOut.bytes();
 		}
 	}
 
 	private CudaRmsNorm(GpuContext ctx) {
 		this.ctx = ctx;
 		this.gpu = ctx.bindings();
-		this.scratch = new DeviceScratchPool<>(RmsNormScratch::new, this::free);
+		this.scratch = new DeviceScratchPool<>(() -> new RmsNormScratch(ctx), CudaRmsNorm::free);
 	}
 
-	private void free(RmsNormScratch s) {
-		gpu.deviceFree(s.dX);
-		gpu.deviceFree(s.dWeight);
-		gpu.deviceFree(s.dOut);
-		gpu.hostFree(s.hX);
-		gpu.hostFree(s.hWeight);
-		gpu.hostFree(s.hOut);
-		s.dX = s.dWeight = s.dOut = s.hX = s.hWeight = s.hOut = null;
-		s.xBytes = s.weightBytes = s.outBytes = s.hXBytes = s.hWeightBytes = s.hOutBytes = 0L;
+	private static void free(RmsNormScratch s) {
+		s.dX.free();
+		s.dWeight.free();
+		s.dOut.free();
+		s.hX.free();
+		s.hWeight.free();
+		s.hOut.free();
 	}
 
 	/** Frees the pooled round-trip scratch. A call after this still works and frees its own. */
@@ -134,51 +139,26 @@ final class CudaRmsNorm {
 
 	private void normalizeWith(RmsNormScratch s, RmsNormKernel kernel, float[][] x, float[] weight, float eps,
 			float[][] out, int batch, int dim, long xBytes, long weightBytes, long outBytes) {
-		int dev = ctx.deviceIndex();
-		if (s.xBytes < xBytes) {
-			gpu.deviceFree(s.dX);
-			s.dX = gpu.deviceMalloc(dev, xBytes);
-			s.xBytes = xBytes;
-		}
-		if (s.weightBytes < weightBytes) {
-			gpu.deviceFree(s.dWeight);
-			s.dWeight = gpu.deviceMalloc(dev, weightBytes);
-			s.weightBytes = weightBytes;
-		}
-		if (s.outBytes < outBytes) {
-			gpu.deviceFree(s.dOut);
-			s.dOut = gpu.deviceMalloc(dev, outBytes);
-			s.outBytes = outBytes;
-		}
-		if (s.hXBytes < xBytes) {
-			gpu.hostFree(s.hX);
-			s.hX = gpu.hostMalloc(dev, xBytes);
-			s.hXBytes = xBytes;
-		}
-		if (s.hWeightBytes < weightBytes) {
-			gpu.hostFree(s.hWeight);
-			s.hWeight = gpu.hostMalloc(dev, weightBytes);
-			s.hWeightBytes = weightBytes;
-		}
-		if (s.hOutBytes < outBytes) {
-			gpu.hostFree(s.hOut);
-			s.hOut = gpu.hostMalloc(dev, outBytes);
-			s.hOutBytes = outBytes;
-		}
+		MemorySegment dX = s.dX.ensure(xBytes);
+		MemorySegment dWeight = s.dWeight.ensure(weightBytes);
+		MemorySegment dOut = s.dOut.ensure(outBytes);
+		MemorySegment hX = s.hX.ensure(xBytes);
+		MemorySegment hWeight = s.hWeight.ensure(weightBytes);
+		MemorySegment hOut = s.hOut.ensure(outBytes);
 
-		MemorySegment hostX = s.hX;
+		MemorySegment hostX = hX;
 		for (int b = 0; b < batch; b++)
 			MemorySegment.copy(x[b], 0, hostX, JAVA_FLOAT, (long) b * dim * Float.BYTES, dim);
-		DeviceStaging.copy(gpu, s.dX, hostX, xBytes, GpuBindings.H2D, batch, "memcpy(rmsNorm xBatch H2D)");
+		DeviceStaging.copy(gpu, dX, hostX, xBytes, GpuBindings.H2D, batch, "memcpy(rmsNorm xBatch H2D)");
 
-		MemorySegment hostWeight = s.hWeight;
+		MemorySegment hostWeight = hWeight;
 		MemorySegment.copy(weight, 0, hostWeight, JAVA_FLOAT, 0, dim);
-		DeviceStaging.copy(gpu, s.dWeight, hostWeight, weightBytes, GpuBindings.H2D, batch, "memcpy(rmsNorm weight H2D)");
+		DeviceStaging.copy(gpu, dWeight, hostWeight, weightBytes, GpuBindings.H2D, batch, "memcpy(rmsNorm weight H2D)");
 
-		kernel.launch(s.dX, s.dWeight, s.dOut, batch, dim, eps, null);
+		kernel.launch(dX, dWeight, dOut, batch, dim, eps, null);
 
-		MemorySegment hostOut = s.hOut;
-		DeviceStaging.copy(gpu, hostOut, s.dOut, outBytes, GpuBindings.D2H, batch, "memcpy(rmsNorm outBatch D2H)");
+		MemorySegment hostOut = hOut;
+		DeviceStaging.copy(gpu, hostOut, dOut, outBytes, GpuBindings.D2H, batch, "memcpy(rmsNorm outBatch D2H)");
 		for (int b = 0; b < batch; b++) {
 			if (out[b] == null || out[b].length != dim)
 				out[b] = new float[dim];

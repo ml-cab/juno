@@ -1,0 +1,5 @@
+INFO: Llama: stopping GPU upload at global layer 21 to keep 453 MiB free for the forward pass — remainder on CPU
+INFO: GPU weight upload complete (FP16+Q4K, resolved gpu-layers=21).
+INFO: GPU-resident attention path active (gpu-attention=auto)
+INFO: Llama: prefill windows of more than 8 rows run on the device (21 of 60 layers): norms, matmuls, SwiGLU and residual adds, RoPE, attention
+INFO: Prefill chunk size resolved to 448 (adaptive, free VRAM=697 MiB)

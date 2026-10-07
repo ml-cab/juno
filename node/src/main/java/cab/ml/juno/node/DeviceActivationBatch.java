@@ -31,10 +31,8 @@ final class DeviceActivationBatch implements AutoCloseable {
 
 	private final GpuContext ctx;
 	private final GpuBindings gpu;
-	private MemorySegment dIn;
-	private MemorySegment dOut;
-	private long dInBytes;
-	private long dOutBytes;
+	private final DeviceScratchSlot dIn;
+	private final DeviceScratchSlot dOut;
 	private boolean closed;
 
 	DeviceActivationBatch(GpuContext ctx) {
@@ -42,6 +40,8 @@ final class DeviceActivationBatch implements AutoCloseable {
 			throw new IllegalArgumentException("ctx must not be null");
 		this.ctx = ctx;
 		this.gpu = ctx.bindings();
+		this.dIn = DeviceScratchSlot.device(ctx);
+		this.dOut = DeviceScratchSlot.device(ctx);
 	}
 
 	/**
@@ -82,24 +82,12 @@ final class DeviceActivationBatch implements AutoCloseable {
 
 	MemorySegment ensureInput(long bytes) {
 		ensureOpen();
-		if (dIn == null || dInBytes < bytes) {
-			if (dIn != null)
-				gpu.deviceFree(dIn);
-			dIn = gpu.deviceMalloc(ctx.deviceIndex(), bytes);
-			dInBytes = bytes;
-		}
-		return dIn;
+		return dIn.ensure(bytes);
 	}
 
 	MemorySegment ensureOutput(long bytes) {
 		ensureOpen();
-		if (dOut == null || dOutBytes < bytes) {
-			if (dOut != null)
-				gpu.deviceFree(dOut);
-			dOut = gpu.deviceMalloc(ctx.deviceIndex(), bytes);
-			dOutBytes = bytes;
-		}
-		return dOut;
+		return dOut.ensure(bytes);
 	}
 
 	/** Synchronous H2D of a host float array into {@code dest}; {@code windowSize} is the activation rows it holds. */
@@ -131,14 +119,8 @@ final class DeviceActivationBatch implements AutoCloseable {
 		if (closed)
 			return;
 		closed = true;
-		if (dIn != null) {
-			gpu.deviceFree(dIn);
-			dIn = null;
-		}
-		if (dOut != null) {
-			gpu.deviceFree(dOut);
-			dOut = null;
-		}
+		dIn.free();
+		dOut.free();
 	}
 
 	private void ensureOpen() {

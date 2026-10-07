@@ -66,7 +66,36 @@ final class DeviceScratchBudget {
      */
     static final long ALLOCATOR_HOLDBACK_BYTES = 64L * 1024 * 1024;
 
+    /**
+     * Context the GPU-attention KV mirror is reserved for on the layers whose weights
+     * are on the device: a 512-token prompt keeps its attention on the device on a
+     * card the model does not fit. A longer context grows the mirror past the
+     * reserve, and running out then falls back to CPU attention, announced.
+     */
+    static final int RESERVED_MIRROR_TOKENS = 512;
+
     private DeviceScratchBudget() {
+    }
+
+    /**
+     * Device bytes to keep free for one request's KV mirror: the layers whose weights
+     * are on the device at {@link #RESERVED_MIRROR_TOKENS}, the rest at the
+     * {@link DeviceKvCache#INITIAL_SEQ_CAPACITY} every layer is allocated at and only
+     * device layers grow from, and the old buffer a layer holds while it grows (at most
+     * half the reserved context).
+     *
+     * @param deviceLayers layers whose weights are on the device
+     * @param hostLayers   the shard's other layers
+     * @param kvDim        key/value width
+     */
+    static long kvMirrorReserveBytes(int deviceLayers, int hostLayers, int kvDim) {
+        if (deviceLayers < 0)
+            throw new IllegalArgumentException("deviceLayers must be >= 0 (got " + deviceLayers + ")");
+        if (hostLayers < 0)
+            throw new IllegalArgumentException("hostLayers must be >= 0 (got " + hostLayers + ")");
+        long grown = kvMirrorBytes(deviceLayers, kvDim, RESERVED_MIRROR_TOKENS);
+        long growing = kvMirrorBytes(Math.min(deviceLayers, 1), kvDim, RESERVED_MIRROR_TOKENS / 2);
+        return grown + growing + kvMirrorBytes(hostLayers, kvDim, DeviceKvCache.INITIAL_SEQ_CAPACITY);
     }
 
     /**
@@ -117,10 +146,10 @@ final class DeviceScratchBudget {
      *
      * <p>This is the allocation that runs at the first token rather than at load,
      * which is why filling the card with weights defers the failure to the first
-     * prompt instead of failing the load. Only the initial capacity is reserved.
-     * The mirror grows as a conversation lengthens, and that growth is a runtime
-     * concern: it cannot be reserved for up front without pinning gigabytes that
-     * a short conversation would never use.
+     * prompt instead of failing the load. {@link #kvMirrorReserveBytes} builds the
+     * reserve from it: growth to {@link #RESERVED_MIRROR_TOKENS} is held free, growth
+     * beyond it is a runtime concern, since reserving a long context up front would
+     * pin memory that a short conversation never uses.
      *
      * @param layerCount   layers this handler owns, or 0 when no mirror is allocated
      * @param kvDim        key/value width

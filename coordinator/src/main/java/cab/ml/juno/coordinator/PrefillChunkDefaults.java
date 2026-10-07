@@ -78,11 +78,12 @@ public final class PrefillChunkDefaults {
 	 * As {@link #resolve(Surface, Integer, boolean, GpuContext)}, sizing the adaptive
 	 * chunk from the prefill-window footprint {@code handlers} report: every
 	 * in-process shard keeps its own window on the device, so their footprints add up.
+	 * The memory they keep free for their KV mirrors is not offered to the window.
 	 */
 	public static int resolve(Surface surface, Integer cliArg, boolean staticSchedule, GpuContext gpuCtx,
 			List<? extends ForwardPassHandler> handlers) {
 		return resolveFrom(surface, cliArg, staticSchedule, gpuCtx == null ? null : gpuCtx::freeVramBytes,
-				windowBytesOf(handlers));
+				windowBytesOf(handlers), mirrorReserveOf(handlers));
 	}
 
 	/**
@@ -108,6 +109,28 @@ public final class PrefillChunkDefaults {
 		if (sizesFromDeviceMemory(surface) && staticSchedule)
 			return PrefillBatchOptions.resolveAdaptiveFrom(cliArg, freeVramBytes, windowBytes).chunkSize();
 		return PrefillBatchOptions.resolve(cliArg).chunkSize();
+	}
+
+	/**
+	 * As {@link #resolveFrom(Surface, Integer, boolean, LongSupplier, IntToLongFunction)},
+	 * with {@code reservedBytes} of the free memory held for the shards' KV mirrors and
+	 * not offered to the window. A failed free-memory query (0) stays a failed query.
+	 */
+	static int resolveFrom(Surface surface, Integer cliArg, boolean staticSchedule, LongSupplier freeVramBytes,
+			IntToLongFunction windowBytes, long reservedBytes) {
+		LongSupplier offered = freeVramBytes == null || reservedBytes <= 0 ? freeVramBytes : () -> {
+			long free = freeVramBytes.getAsLong();
+			return free <= 0 ? free : Math.max(1L, free - reservedBytes);
+		};
+		return resolveFrom(surface, cliArg, staticSchedule, offered, windowBytes);
+	}
+
+	/** The KV-mirror reserve of {@code handlers}, summed over every shard on the device. */
+	static long mirrorReserveOf(List<? extends ForwardPassHandler> handlers) {
+		long total = 0;
+		for (ForwardPassHandler h : handlers)
+			total += h.kvMirrorReserveDeviceBytes();
+		return total;
 	}
 
 	static int resolveFrom(Surface surface, Integer cliArg, boolean staticSchedule, LongSupplier freeVramBytes) {
