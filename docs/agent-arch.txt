@@ -674,14 +674,12 @@ GPU FFI (node module — Panama project, JEP 454):
         op-at-a-time, with the same repetition-dispersion rule, correctness check and device-memory
         reading as RmsNormRoundTripMicrobench, whose scoring records it reuses. Driven by
         scripts/performance-tests/resident-chain-microbench.sh.
-  CudaGraphSession — generic CUDA driver graph capture/replay wrapper (cuStreamBeginCapture /
-        cuStreamEndCapture / cuGraphInstantiate / cuGraphLaunch); captures a fixed async op
-        sequence once, replays it against fresh data in the same fixed buffers. Tested against
-        RmsNormKernel's launch sequence: cut ad-hoc per-call overhead ~3.2x but still left it
-        slower than CPU for a single isolated op (the sync-point cost only amortizes across a
-        chain of graphed ops). Not wired into any handler, and not used by the resident path:
-        a captured graph fixes its kernel arguments, and the RoPE position changes every decode
-        step.
+  No CUDA graph replay. The decode region (ResidentQkvPath) launches its kernels one by one on
+        its stream. Capturing a whole decode layer as a CUDA graph and replaying it was measured
+        on real models (docs/perf-compare/20261007T213904Z-cuda-graph-replay-decode): bit-identical,
+        but even with every kernel argument held fixed it saved 2.0% to 3.1% of a TinyLlama decode
+        token and nothing on Mistral 7B, because the device work, not the launch calls, sets a
+        decode layer's time. The capture/replay wrapper and its driver bindings were removed.
   LoraMmqPolicy — playback-only MMQ gate (juno.lora.play.path); train stays FP residency.
   LoraResidentUpload.runPlayback — play Q4 OOM closes packed buffers and falls to CPU
         without the train FP16 microbatch retry.

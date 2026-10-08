@@ -1,0 +1,573 @@
+diff --git a/node/src/main/java/cab/ml/juno/node/CudaDriverBindings.java b/node/src/main/java/cab/ml/juno/node/CudaDriverBindings.java
+index eaeaa20..cd440c8 100644
+--- a/node/src/main/java/cab/ml/juno/node/CudaDriverBindings.java
++++ b/node/src/main/java/cab/ml/juno/node/CudaDriverBindings.java
+@@ -110,8 +110,10 @@ final class CudaDriverBindings {
+ 		// CUresult cuStreamEndCapture(CUstream hStream, CUgraph *phGraph)
+ 		cuStreamEndCapture = bind(linker, cuda, "cuStreamEndCapture",
+ 				FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+-		// CUresult cuGraphInstantiate(CUgraphExec *phGraphExec, CUgraph hGraph, unsigned long long flags)
+-		cuGraphInstantiate = bind(linker, cuda, "cuGraphInstantiate",
++		// CUresult cuGraphInstantiateWithFlags(CUgraphExec *phGraphExec, CUgraph hGraph, unsigned long long flags).
++		// The exported "cuGraphInstantiate" is the five-argument legacy form; the CUDA 12 header maps the
++		// three-argument name to this symbol.
++		cuGraphInstantiate = bind(linker, cuda, "cuGraphInstantiateWithFlags",
+ 				FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
+ 		// CUresult cuGraphLaunch(CUgraphExec hGraphExec, CUstream hStream)
+ 		cuGraphLaunch = bind(linker, cuda, "cuGraphLaunch",
+diff --git a/node/src/main/java/cab/ml/juno/node/CudaGraphSession.java b/node/src/main/java/cab/ml/juno/node/CudaGraphSession.java
+index cdf90ee..c07d0ad 100644
+--- a/node/src/main/java/cab/ml/juno/node/CudaGraphSession.java
++++ b/node/src/main/java/cab/ml/juno/node/CudaGraphSession.java
+@@ -47,6 +47,7 @@ final class CudaGraphSession implements AutoCloseable {
+ 	private final CudaBindings cuda;
+ 	private final CudaDriverBindings drv;
+ 	private final MemorySegment stream; // cudaStream_t / CUstream — same ABI handle, cudart- and driver-API-compatible
++	private final boolean ownsStream;
+ 	private MemorySegment graphExec;    // CUgraphExec, null until endCaptureAndInstantiate()
+ 
+ 	private static final int CU_STREAM_CAPTURE_MODE_THREAD_LOCAL = 1;
+@@ -61,6 +62,19 @@ final class CudaGraphSession implements AutoCloseable {
+ 					"cudaStreamCreateWithFlags");
+ 			this.stream = slot.get(ADDRESS, 0);
+ 		}
++		this.ownsStream = true;
++	}
++
++	/**
++	 * A session that captures and replays on {@code stream}, which the caller owns
++	 * and keeps alive for as long as this session: a residency region's stream, so
++	 * the graph is ordered with the region's own uploads and downloads.
++	 */
++	CudaGraphSession(MemorySegment stream) {
++		this.cuda = CudaBindings.instance();
++		this.drv = CudaDriverBindings.instance();
++		this.stream = java.util.Objects.requireNonNull(stream, "stream");
++		this.ownsStream = false;
+ 	}
+ 
+ 	/** The stream to issue the captured operation sequence on. */
+@@ -101,14 +115,19 @@ final class CudaGraphSession implements AutoCloseable {
+ 
+ 	/** Replays the captured sequence and blocks until it completes. */
+ 	void launchAndSync() {
++		launch();
++		CudaBindings.check(
++				CudaBindings.callInt(cuda.cudaStreamSynchronize, stream),
++				"cudaStreamSynchronize");
++	}
++
++	/** Queues one replay of the captured sequence on {@link #stream()} and returns without waiting. */
++	void launch() {
+ 		if (graphExec == null)
+ 			throw new IllegalStateException("graph not captured — call beginCapture()/endCaptureAndInstantiate() first");
+ 		CudaDriverBindings.check(
+ 				CudaDriverBindings.callInt(drv.cuGraphLaunch, graphExec, stream),
+ 				"cuGraphLaunch");
+-		CudaBindings.check(
+-				CudaBindings.callInt(cuda.cudaStreamSynchronize, stream),
+-				"cudaStreamSynchronize");
+ 	}
+ 
+ 	@Override
+@@ -117,6 +136,7 @@ final class CudaGraphSession implements AutoCloseable {
+ 			CudaDriverBindings.callInt(drv.cuGraphExecDestroy, graphExec);
+ 			graphExec = null;
+ 		}
+-		CudaBindings.callInt(cuda.cudaStreamDestroy, stream);
++		if (ownsStream)
++			CudaBindings.callInt(cuda.cudaStreamDestroy, stream);
+ 	}
+ }
+diff --git a/node/src/main/java/cab/ml/juno/node/LlamaTransformerHandler.java b/node/src/main/java/cab/ml/juno/node/LlamaTransformerHandler.java
+index 00e2d42..713987c 100644
+--- a/node/src/main/java/cab/ml/juno/node/LlamaTransformerHandler.java
++++ b/node/src/main/java/cab/ml/juno/node/LlamaTransformerHandler.java
+@@ -508,6 +508,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
+ 		return residentQkv != null;
+ 	}
+ 
++	/** The device-resident decode region, or null when it is not active; for measurements of it. */
++	ResidentQkvPath residentQkvPath() {
++		return residentQkv;
++	}
++
+ 	/**
+ 	 * Whether the decode region also runs the KV append and attention: the region is
+ 	 * active, GPU attention is on, and the attention kernel runs this head width.
+diff --git a/node/src/main/java/cab/ml/juno/node/ResidentQkvPath.java b/node/src/main/java/cab/ml/juno/node/ResidentQkvPath.java
+index 35aec53..0dd9954 100644
+--- a/node/src/main/java/cab/ml/juno/node/ResidentQkvPath.java
++++ b/node/src/main/java/cab/ml/juno/node/ResidentQkvPath.java
+@@ -568,52 +568,123 @@ final class ResidentQkvPath implements AutoCloseable {
+ 		boolean inputOnDevice = lease != null && lease.nextLayer == li && lease.nextPos == pos;
+ 		if (lease != null)
+ 			lease.nextLayer = -1;
+-		MemorySegment stream = r.chain.stream();
+-		MemorySegment packed = r.packed.devicePointer();
+-		long kvBytes = (long) kvDim * Float.BYTES;
+ 		synchronized (ctx.cublasSerializationLock()) {
+ 			// The previous layer in this lease left its output, which is x, in r.x.
+-			if (!inputOnDevice) {
+-				r.in[0] = x;
+-				r.x.upload(r.in, 1);
+-				r.in[0] = null;
+-			}
+-			if (!norm.normalizeResident(r.x, normWeight[li], eps, r.xn))
+-				throw new IllegalStateException("RMS-norm kernel failed to load after the path was built");
+-			mmq.quantizeX(r.xn.devicePointer(), r.q8, hidden, stream);
+-			if (qNormWeight == null) {
+-				project(wq[li], r.q.devicePointer(), r.q8, stream);
+-				project(wk[li], packed, r.q8, stream);
+-			} else {
+-				// q and k land in scratch first: each head is normalized from there into place.
+-				project(wq[li], r.headNormIn, r.q8, stream);
+-				project(wk[li], r.headNormIn.asSlice(hiddenBytes()), r.q8, stream);
+-				headNorm(r.headNormIn, qNormWeight[li], r.q.devicePointer(), numHeads, stream);
+-				headNorm(r.headNormIn.asSlice(hiddenBytes()), kNormWeight[li], packed, kvDim / headDim, stream);
+-			}
+-			project(wv[li], packed.asSlice(kvBytes), r.q8, stream);
+-			r.q.markWritten(1);
+-			r.packed.markWritten(1);
+-			if (!rope.applyResident(r.q, pos) || !rope.applyResidentColumns(r.packed, 0, kvDim, pos))
+-				throw new IllegalStateException("RoPE kernel failed to load after the path was built");
+-			if (mirror != null) {
+-				attend(r, mirror, pos, packed, kvBytes, stream);
+-				if (whole)
+-					tail.issue(li, r.x, r.xn, packed.asSlice(2 * kvBytes), packed.asSlice(2 * kvBytes + hiddenBytes()),
+-							r.q8, r.tailScratch, stream);
++			if (!inputOnDevice)
++				upload(r, x);
++			issueLayer(r, li, pos, mirror, whole);
++			if (mirror != null)
+ 				r.packed.materialize(out.packed);
+-			} else {
++			else
+ 				ResidentActivation.materializeRows(r.qAndPacked, out.qAndPacked);
++		}
++		unpack(out, mirror != null, whole, li, pos, lease);
++	}
++
++	private static void upload(Region r, float[] x) {
++		r.in[0] = x;
++		r.x.upload(r.in, 1);
++		r.in[0] = null;
++	}
++
++	/**
++	 * Issues layer {@code li}'s device work on {@code r}'s stream, from the norm of
++	 * the input row in {@code r.x} through the attention (with a mirror) and the tail
++	 * (when {@code whole}), without waiting and without the download.
++	 */
++	private void issueLayer(Region r, int li, int pos, DeviceKvCache mirror, boolean whole) {
++		MemorySegment stream = r.chain.stream();
++		MemorySegment packed = r.packed.devicePointer();
++		long kvBytes = (long) kvDim * Float.BYTES;
++		if (!norm.normalizeResident(r.x, normWeight[li], eps, r.xn))
++			throw new IllegalStateException("RMS-norm kernel failed to load after the path was built");
++		mmq.quantizeX(r.xn.devicePointer(), r.q8, hidden, stream);
++		if (qNormWeight == null) {
++			project(wq[li], r.q.devicePointer(), r.q8, stream);
++			project(wk[li], packed, r.q8, stream);
++		} else {
++			// q and k land in scratch first: each head is normalized from there into place.
++			project(wq[li], r.headNormIn, r.q8, stream);
++			project(wk[li], r.headNormIn.asSlice(hiddenBytes()), r.q8, stream);
++			headNorm(r.headNormIn, qNormWeight[li], r.q.devicePointer(), numHeads, stream);
++			headNorm(r.headNormIn.asSlice(hiddenBytes()), kNormWeight[li], packed, kvDim / headDim, stream);
++		}
++		project(wv[li], packed.asSlice(kvBytes), r.q8, stream);
++		r.q.markWritten(1);
++		r.packed.markWritten(1);
++		if (!rope.applyResident(r.q, pos) || !rope.applyResidentColumns(r.packed, 0, kvDim, pos))
++			throw new IllegalStateException("RoPE kernel failed to load after the path was built");
++		if (mirror != null) {
++			attend(r, mirror, pos, packed, kvBytes, stream);
++			if (whole)
++				tail.issue(li, r.x, r.xn, packed.asSlice(2 * kvBytes), packed.asSlice(2 * kvBytes + hiddenBytes()),
++						r.q8, r.tailScratch, stream);
++		}
++	}
++
++	/**
++	 * Measurement only, for the graph-replay decision: {@link #run(int, float[], int, DeviceKvCache, Lease)}
++	 * for a layer the region runs whole, with the layer's device work replayed from
++	 * {@code graphs[li]} instead of launched kernel by kernel. The input upload (when
++	 * the previous layer did not leave it on the device) and the download are issued
++	 * as {@code run} issues them, around the replay. On first use for a layer the
++	 * work is captured into a new {@link CudaGraphSession} on the lease's region
++	 * stream and stored in {@code graphs[li]}; the caller closes it.
++	 *
++	 * <p>A captured graph fixes every kernel argument, so a replay is valid only for
++	 * the same lease (its region's buffers), the same {@code pos} and the same
++	 * {@code mirror} without growth. That is what makes this a ceiling for what graph
++	 * replay can save: a decode that wires it must also move the position, the
++	 * mirror offset and the attention length every token.
++	 */
++	Output runReplayed(int li, float[] x, int pos, DeviceKvCache mirror, Lease lease, CudaGraphSession[] graphs) {
++		if (lease == null || !runsWholeLayer(li) || attention == null || mirror == null
++				|| !mirror.readableThrough(pos) || mirror.capacityTokens() <= pos)
++			throw new IllegalStateException("replay covers a whole layer attending through a ready mirror in a lease");
++		if (lease.region == null) {
++			lease.region = takeRegion();
++			if (lease.region == null)
++				throw new IllegalStateException("no device region could be opened");
++		}
++		Region r = lease.region;
++		boolean inputOnDevice = lease.nextLayer == li && lease.nextPos == pos;
++		lease.nextLayer = -1;
++		Output out = results.get();
++		synchronized (ctx.cublasSerializationLock()) {
++			if (!inputOnDevice)
++				upload(r, x);
++			CudaGraphSession graph = graphs[li];
++			if (graph == null) {
++				graph = new CudaGraphSession(r.chain.stream());
++				try {
++					graph.beginCapture();
++					issueLayer(r, li, pos, mirror, true);
++					graph.endCaptureAndInstantiate();
++				} catch (RuntimeException e) {
++					graph.close();
++					throw e;
++				}
++				graphs[li] = graph;
++			} else if (!graph.stream().equals(r.chain.stream())) {
++				throw new IllegalStateException("graph for layer " + li + " was captured on another region");
+ 			}
++			graph.launch();
++			r.packed.materialize(out.packed);
+ 		}
++		unpack(out, true, true, li, pos, lease);
++		return out;
++	}
++
++	/** Copies the downloaded row into {@code out}'s arrays and records the lease's next layer. */
++	private void unpack(Output out, boolean attended, boolean whole, int li, int pos, Lease lease) {
+ 		float[] row = out.packed[0];
+ 		System.arraycopy(row, 0, out.k, 0, kvDim);
+ 		System.arraycopy(row, kvDim, out.v, 0, kvDim);
+-		if (mirror != null)
++		if (attended)
+ 			System.arraycopy(row, 2 * kvDim, out.attn, 0, hidden);
+ 		if (whole)
+ 			System.arraycopy(row, 2 * kvDim + hidden, out.layer, 0, hidden);
+-		out.attended = mirror != null;
++		out.attended = attended;
+ 		out.layerDone = whole;
+ 		if (whole && lease != null) {
+ 			lease.nextLayer = li + 1;
+diff --git a/node/src/test/java/cab/ml/juno/node/ResidentQkvPathTest.java b/node/src/test/java/cab/ml/juno/node/ResidentQkvPathTest.java
+index da2b6d5..3f81f47 100644
+--- a/node/src/test/java/cab/ml/juno/node/ResidentQkvPathTest.java
++++ b/node/src/test/java/cab/ml/juno/node/ResidentQkvPathTest.java
+@@ -551,6 +551,57 @@ class ResidentQkvPathTest {
+ 		}
+ 	}
+ 
++	@Test
++	@DisplayName("whole layer: a captured graph of each layer replays bit for bit against launched layers, and reads a new input")
++	void aCapturedLayerReplaysBitForBit() {
++		int pos = 517;
++		try (ResidentQkvPath path = Whole.path()) {
++			DeviceKvCache[] mirrors = { mirrorWithHistory(pos, 81), mirrorWithHistory(pos, 82) };
++			CudaGraphSession[] graphs = new CudaGraphSession[2];
++			try (ResidentQkvPath.Lease lease = path.lease()) {
++				for (DeviceKvCache m : mirrors)
++					m.ensureCapacity(pos);
++				Random rnd = new Random(83);
++				for (int input = 0; input < 2; input++) {
++					float[] x0 = randomVec(H, rnd, -2f, 2f);
++					float[][][] launched = twoLayers(path, mirrors, pos, x0, lease, null);
++					// The first input captures each layer's graph; the second replays it on a new input.
++					float[][][] replayed = twoLayers(path, mirrors, pos, x0, lease, graphs);
++					for (int li = 0; li < 2; li++)
++						for (int part = 0; part < 4; part++)
++							assertThat(replayed[li][part]).as("input %d, layer %d, part %d", input, li, part)
++									.containsExactly(launched[li][part]);
++					assertThat(graphs).as("one captured graph per layer").doesNotContainNull();
++				}
++			} finally {
++				for (CudaGraphSession g : graphs)
++					if (g != null)
++						g.close();
++				for (DeviceKvCache m : mirrors)
++					m.close();
++			}
++		}
++	}
++
++	/**
++	 * One token through layers 0 and 1 in {@code lease}, launched when {@code graphs}
++	 * is null and replayed (captured on first use) otherwise. Per layer: copies of k,
++	 * v, attention and the layer output.
++	 */
++	private static float[][][] twoLayers(ResidentQkvPath path, DeviceKvCache[] mirrors, int pos, float[] x,
++			ResidentQkvPath.Lease lease, CudaGraphSession[] graphs) {
++		float[][][] out = new float[2][][];
++		for (int li = 0; li < 2; li++) {
++			ResidentQkvPath.Output got = graphs == null
++					? path.run(li, x, pos, mirrors[li], lease)
++					: path.runReplayed(li, x, pos, mirrors[li], lease, graphs);
++			assertThat(got.layerDone).isTrue();
++			out[li] = new float[][] { got.k.clone(), got.v.clone(), got.attn.clone(), got.layer.clone() };
++			x = got.layer;
++		}
++		return out;
++	}
++
+ 	/** One token through layers 0 and 1 in one lease, each layer's output feeding the next. */
+ 	private static void wholeLayersToken(ResidentQkvPath path, DeviceKvCache[] mirrors, int pos, float[] x) {
+ 		try (ResidentQkvPath.Lease lease = path.lease()) {
+--- /dev/null
++++ b/node/src/test/java/cab/ml/juno/node/DecodeLayerGraphReplayBench.java
+@@ -0,0 +1,249 @@
++/*
++ * Copyright 2026 Dmytro Soloviov (soulaway)
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package cab.ml.juno.node;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.junit.jupiter.api.Assumptions.assumeTrue;
++
++import java.io.IOException;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.List;
++import java.util.Locale;
++import java.util.Random;
++
++import org.junit.jupiter.api.AfterAll;
++import org.junit.jupiter.api.BeforeAll;
++import org.junit.jupiter.api.DisplayName;
++import org.junit.jupiter.api.Tag;
++import org.junit.jupiter.api.Test;
++
++/**
++ * Decode-width microbenchmark: a real model's decode region, every layer run
++ * whole in one lease, with each layer's device work launched kernel by kernel
++ * ({@link ResidentQkvPath#run}) against the same work replayed from a captured
++ * CUDA graph ({@link ResidentQkvPath#runReplayed}). Both lanes upload the token's
++ * input once and download each layer's packed row as the region does.
++ *
++ * <p>The replayed lane holds the position fixed (a captured graph fixes every
++ * kernel argument), so it is the ceiling of what graph replay can save: a decode
++ * that wires it also pays to move the position, the mirror offset and the
++ * attention length every token. Before timing, one token is run both ways and
++ * every layer's k, v, attention output and layer output are compared bit for bit.
++ *
++ * <p>Runs only when {@value #MODELS_PROPERTY} names model files (comma-separated);
++ * a measurement, not a regression test. Options: {@code juno.graphReplay.pos}
++ * (default 512), {@code .tokens} per timed block (200), {@code .reps} (5),
++ * {@code .warmup} tokens per lane (100), {@code .out} (report path).
++ */
++@Tag("gpu")
++@DisplayName("decode layer: graph replay against launched kernels (measurement)")
++class DecodeLayerGraphReplayBench {
++
++	static final String MODELS_PROPERTY = "juno.graphReplay.models";
++
++	private static GpuContext ctx;
++
++	@BeforeAll
++	static void init() {
++		assumeTrue(System.getProperty(MODELS_PROPERTY) != null, "no models named in " + MODELS_PROPERTY);
++		assumeTrue(CudaAvailability.isAvailable(), "Skipping - no CUDA device");
++		assumeTrue(CudaDriverBindings.isAvailable(), "No CUDA driver API - skipping");
++		ctx = GpuContext.init(0);
++	}
++
++	@AfterAll
++	static void destroy() {
++		if (ctx != null)
++			ctx.close();
++	}
++
++	record Row(String model, int layers, int pos, double[] launchedMs, double[] replayedMs) {
++		double launched() {
++			return median(launchedMs);
++		}
++
++		double replayed() {
++			return median(replayedMs);
++		}
++	}
++
++	@Test
++	void graphReplayAgainstLaunchedLayers() throws Exception {
++		int pos = Integer.getInteger("juno.graphReplay.pos", 512);
++		int tokens = Integer.getInteger("juno.graphReplay.tokens", 200);
++		int reps = Integer.getInteger("juno.graphReplay.reps", 5);
++		int warmup = Integer.getInteger("juno.graphReplay.warmup", 100);
++		String saved = System.getProperty(GpuResidencyOptions.ENV_PROPERTY);
++		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "on");
++		List<Row> rows = new ArrayList<>();
++		try {
++			for (String m : System.getProperty(MODELS_PROPERTY).split(","))
++				rows.add(measure(Path.of(m.trim()), pos, tokens, reps, warmup));
++		} finally {
++			if (saved == null)
++				System.clearProperty(GpuResidencyOptions.ENV_PROPERTY);
++			else
++				System.setProperty(GpuResidencyOptions.ENV_PROPERTY, saved);
++		}
++		String report = report(rows, tokens, reps, warmup);
++		System.out.println(report);
++		String out = System.getProperty("juno.graphReplay.out");
++		if (out != null)
++			Files.writeString(Path.of(out), report);
++	}
++
++	private static Row measure(Path model, int pos, int tokens, int reps, int warmup) throws IOException {
++		LlamaConfig cfg;
++		try (GgufReader r = GgufReader.open(model)) {
++			cfg = LlamaConfig.from(r);
++		}
++		ShardContext shard = new ShardContext("n0", 0, cfg.numLayers(), true, true, cfg.vocabSize(), cfg.hiddenDim(),
++				cfg.numHeads());
++		CudaMatVec backend = new CudaMatVec(ctx);
++		LlamaTransformerHandler handler = LlamaTransformerHandler.load(model, shard, backend);
++		int layers = cfg.numLayers();
++		DeviceKvCache[] mirrors = new DeviceKvCache[layers];
++		CudaGraphSession[] graphs = new CudaGraphSession[layers];
++		try {
++			ResidentQkvPath path = handler.residentQkvPath();
++			assertThat(path).as("decode region active on " + model.getFileName()).isNotNull();
++			for (int li = 0; li < layers; li++)
++				assertThat(path.runsWholeLayer(li)).as("layer %d runs whole", li).isTrue();
++			Random rnd = new Random(5);
++			for (int li = 0; li < layers; li++)
++				mirrors[li] = mirrorWithHistory(cfg.kvDim(), pos, rnd);
++			float[] x0 = new float[cfg.hiddenDim()];
++			for (int i = 0; i < x0.length; i++)
++				x0[i] = rnd.nextFloat() * 2f - 1f;
++
++			try (ResidentQkvPath.Lease lease = path.lease()) {
++				float[][][] launched = token(path, mirrors, pos, x0, lease, null, true);
++				float[][][] replayed = token(path, mirrors, pos, x0, lease, graphs, true);
++				for (int li = 0; li < layers; li++)
++					for (int part = 0; part < 4; part++)
++						assertThat(replayed[li][part]).as("%s layer %d part %d", model.getFileName(), li, part)
++								.containsExactly(launched[li][part]);
++
++				for (int t = 0; t < warmup; t++) {
++					token(path, mirrors, pos, x0, lease, null, false);
++					token(path, mirrors, pos, x0, lease, graphs, false);
++				}
++				double[] launchedMs = new double[reps];
++				double[] replayedMs = new double[reps];
++				for (int rep = 0; rep < reps; rep++) {
++					// Alternate which lane goes first, so drift within a rep does not favour one.
++					boolean launchedFirst = rep % 2 == 0;
++					double a = block(path, mirrors, pos, x0, lease, launchedFirst ? null : graphs, tokens);
++					double b = block(path, mirrors, pos, x0, lease, launchedFirst ? graphs : null, tokens);
++					launchedMs[rep] = launchedFirst ? a : b;
++					replayedMs[rep] = launchedFirst ? b : a;
++				}
++				return new Row(model.getFileName().toString(), layers, pos, launchedMs, replayedMs);
++			}
++		} finally {
++			for (CudaGraphSession g : graphs)
++				if (g != null)
++					g.close();
++			for (DeviceKvCache m : mirrors)
++				if (m != null)
++					m.close();
++			handler.releaseGpuResources();
++			backend.releaseScratch();
++		}
++	}
++
++	/** Milliseconds per token over {@code tokens} tokens of one lane. */
++	private static double block(ResidentQkvPath path, DeviceKvCache[] mirrors, int pos, float[] x0,
++			ResidentQkvPath.Lease lease, CudaGraphSession[] graphs, int tokens) {
++		long t0 = System.nanoTime();
++		for (int t = 0; t < tokens; t++)
++			token(path, mirrors, pos, x0, lease, graphs, false);
++		return (System.nanoTime() - t0) / 1e6 / tokens;
++	}
++
++	/**
++	 * One token through every layer in {@code lease}: launched when {@code graphs} is
++	 * null, replayed otherwise. With {@code keep}, copies of each layer's k, v,
++	 * attention and output.
++	 */
++	private static float[][][] token(ResidentQkvPath path, DeviceKvCache[] mirrors, int pos, float[] x0,
++			ResidentQkvPath.Lease lease, CudaGraphSession[] graphs, boolean keep) {
++		float[][][] out = keep ? new float[mirrors.length][][] : null;
++		float[] x = x0;
++		for (int li = 0; li < mirrors.length; li++) {
++			ResidentQkvPath.Output got = graphs == null
++					? path.run(li, x, pos, mirrors[li], lease)
++					: path.runReplayed(li, x, pos, mirrors[li], lease, graphs);
++			if (keep)
++				out[li] = new float[][] { got.k.clone(), got.v.clone(), got.attn.clone(), got.layer.clone() };
++			x = got.layer;
++		}
++		return out;
++	}
++
++	private static DeviceKvCache mirrorWithHistory(int kvDim, int tokens, Random rnd) {
++		DeviceKvCache m = new DeviceKvCache(ctx, kvDim);
++		float[][] k = new float[tokens][kvDim];
++		float[][] v = new float[tokens][kvDim];
++		for (int t = 0; t < tokens; t++)
++			for (int i = 0; i < kvDim; i++) {
++				k[t][i] = rnd.nextFloat() * 2f - 1f;
++				v[t][i] = rnd.nextFloat() * 2f - 1f;
++			}
++		m.appendWindow(0, k, v, tokens);
++		m.ensureCapacity(tokens);
++		return m;
++	}
++
++	static double median(double[] xs) {
++		double[] s = xs.clone();
++		Arrays.sort(s);
++		int n = s.length;
++		return n % 2 == 1 ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
++	}
++
++	private static double spreadPct(double[] xs) {
++		return (Arrays.stream(xs).max().orElse(0) - Arrays.stream(xs).min().orElse(0)) / median(xs) * 100;
++	}
++
++	private static String report(List<Row> rows, int tokens, int reps, int warmup) {
++		StringBuilder sb = new StringBuilder();
++		sb.append(String.format(Locale.ROOT,
++				"Decode layer graph replay: %d reps of %d tokens per lane, lanes alternated, %d warm-up tokens per lane%n%n",
++				reps, tokens, warmup));
++		sb.append("| Model | Layers | Pos | Launched ms/token (min-max, spread) | Replayed ms/token (min-max, spread)"
++				+ " | Saved ms/token | Saved us/layer | Replayed/launched | Parity |\n");
++		sb.append("|---|---|---|---|---|---|---|---|---|\n");
++		for (Row r : rows) {
++			double l = r.launched();
++			double g = r.replayed();
++			sb.append(String.format(Locale.ROOT,
++					"| %s | %d | %d | %.3f (%.3f-%.3f, %.1f%%) | %.3f (%.3f-%.3f, %.1f%%) | %.3f | %.1f | %.3f | bit-identical |%n",
++					r.model(), r.layers(), r.pos(), l, Arrays.stream(r.launchedMs()).min().orElse(0),
++					Arrays.stream(r.launchedMs()).max().orElse(0), spreadPct(r.launchedMs()), g,
++					Arrays.stream(r.replayedMs()).min().orElse(0), Arrays.stream(r.replayedMs()).max().orElse(0),
++					spreadPct(r.replayedMs()), l - g, (l - g) * 1000 / r.layers(), g / l));
++		}
++		sb.append("\nPer-rep readings (ms/token):\n");
++		for (Row r : rows)
++			sb.append(String.format(Locale.ROOT, "- %s launched %s replayed %s%n", r.model(),
++					Arrays.toString(r.launchedMs()), Arrays.toString(r.replayedMs())));
++		return sb.toString();
++	}
++}

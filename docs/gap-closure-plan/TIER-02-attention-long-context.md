@@ -39,8 +39,11 @@ part is done (2026-10-07): Qwen3's prefill window normalizes each head, rotates 
 (125.9 MB per 512-token window, was 653.3 MB; logits bit-identical; unpinned pp 1.990x,
 `docs/perf-compare/20261007T065243Z-qwen3-prefill-region-attention`). Scope item 8 is complete (2026-10-07): the final
 region's pinned A/B is met (owner run, tg on/off 1.641 to 2.046 where the region runs, 1.017 where declined,
-`docs/perf-compare/20261007T174646Z-gpu-residency-final-region-ab`); its criterion is ticked. Next: scope item 5
-(`CudaGraphSession`, measured, then wired or deleted).
+`docs/perf-compare/20261007T174646Z-gpu-residency-final-region-ab`); its criterion is ticked. Scope item 5 is done
+(2026-10-07): graph replay of a whole decode layer, bit-identical, saves at most 2.0% to 3.1% of a TinyLlama decode
+forward pass and nothing on Mistral 7B, against >= 5% on both (`docs/perf-compare/20261007T213904Z-cuda-graph-replay-decode`),
+so `CudaGraphSession` and its test are deleted and the criterion is ticked. Next: scope item 6 (the `--gpu-residency`
+default, two published on/off sweeps put to the owner).
 
 **Split 2026-10-04 (plan review): read this first.** This tier held nine items, and under execution
 rule 1 every later tier, including every remaining GPU throughput lever, waited on all of them. Its
@@ -459,10 +462,17 @@ budget. No download is needed.
       *2026-10-07 (decision 7 (a)): the creep was a device-memory leak in `DeviceKvCache` when a request's mirror
       allocation ran out part-way; fixed, tests first. The smoke at `--requests 8` now reads 0 MiB over requests 4
       to 8 in both modes (`20261007T023945Z`, 0 failures). Ticked.*
-- [ ] `CudaGraphSession` decided by measurement (scope item 5): wired behind `--gpu-residency` if it
+- [x] `CudaGraphSession` decided by measurement (scope item 5): wired behind `--gpu-residency` if it
       saves at least 5% of decode forward-pass time on tinyllama and mistral-7b with greedy output
       unchanged, otherwise deleted with `CudaGraphSessionTest` and the measurement recorded. Not
       dormant either way.
+      *2026-10-07: deleted.* Every whole decode layer replayed from a captured graph against its launched kernels,
+      real models, bit-identical on every layer; even with every kernel argument held fixed (the ceiling) it saved
+      2.0% (pos 128) and 3.1% (pos 512) of TinyLlama's pinned decode forward pass and -2.0% and -2.8% of Mistral 7B's,
+      against >= 5% on both,
+      [`20261007T213904Z-cuda-graph-replay-decode`](../perf-compare/20261007T213904Z-cuda-graph-replay-decode/INDEX.md).
+      `CudaGraphSession`, `CudaGraphSessionTest` and the six graph driver handles removed; the measured code kept as
+      that directory's `measurement.patch`.
 - [ ] `--gpu-residency` default put to the owner (scope item 6) with the two published on/off sweeps
       on all four sweep models; changed only on the owner's decision.
 - [ ] Cross-surface checklist fully resolved.
@@ -1956,3 +1966,96 @@ Not a criterion of this tier (Qwen3-1.7B is not a sweep model); it confirms the 
 **Out-of-tier changes.** None.
 
 **Still owed to the owner:** nothing from scope item 8. **Next:** scope item 5 (`CudaGraphSession`).
+
+### 2026-10-07: implementation step 5, scope item 5 (`CudaGraphSession` measured; not wired, deleted)
+
+**Plan versus code, re-verified first** (HEAD `0a149c1`, tree clean apart from the untracked `.github/`; no gate,
+sweep or mvn run in flight, the matching `pgrep` lines were idle wait loops of earlier sessions;
+`check-plan-thresholds.sh` passes). `CudaGraphSession` and `CudaGraphSessionTest` existed and nothing in `src/main`
+used them, so the class was dormant as the item says. The decode region issues, per whole layer, about 24
+asynchronous kernel launches on its `ResidentChain` stream (norm, Q8_1 quantize, three projections, two RoPE, two FP16
+casts, the attention table, attention, then the tail's 13) and waits once, at the packed row's download. Three
+arguments change every token: the RoPE position, the mirror write offset and the attention length. At decode width
+`DeviceSpanTimer` records no events (`windowSize == 1`), and the issue path makes no synchronous call once the mirror
+has room, so a layer's work can be captured as it stands. No drift that changes scope. Two findings, recorded here and
+not acted on beyond the deletion:
+- `CudaDriverBindings` bound the exported `cuGraphInstantiate` with the three-argument `(exec, graph, flags)` signature.
+  Since CUDA 12 that export is the legacy five-argument form (error node, log buffer, size), and the three-argument name
+  is a header macro for `cuGraphInstantiateWithFlags`. It worked only because nothing writes the log buffer on success.
+  The measurement bound `cuGraphInstantiateWithFlags`; the deletion removes the binding.
+- Every kernel launch goes through `CudaDriverBindings.callInt`, which is `invokeWithArguments` (varargs, boxed). That is
+  host launch cost, which is exactly what graph replay removes; the measurement below shows it is hidden behind device
+  work at decode width, so it is not a decode lever on this card.
+
+**Measurement design.** Scope item 5's microbenchmark, on real models rather than one synthetic layer, since the
+decision rule is a share of real decode time: `DecodeLayerGraphReplayBench` (`@Tag("gpu")`, test scope, runs only when
+`juno.graphReplay.models` names files) loads TinyLlama and Mistral 7B through `LlamaTransformerHandler` with
+`--gpu-residency on`, holds one lease, and runs every layer whole at a fixed position through either
+`ResidentQkvPath.run` (the shipped launches) or a new `ResidentQkvPath.runReplayed`, which captures the layer's issued
+work once into a `CudaGraphSession` on the region's stream and replays it with one `cuGraphLaunch`, the input upload
+and the download issued around it as `run` issues them. A captured graph fixes every argument, so the replayed lane
+also holds the position, mirror offset and attention length fixed: it is the **ceiling** of what replay can save, since
+a wired version would pay to move them every token. If the ceiling misses the rule, no wiring can meet it.
+
+**Tests, written first** (README rule 3):
+
+| Test | Seen failing first? | Result |
+|---|---|---|
+| `ResidentQkvPathTest.aCapturedLayerReplaysBitForBit` (synthetic two-layer whole region, pos 517: each layer's k, v, attention and output replayed against launched, bit for bit, on a first input that captures and a second that replays) | yes: `cannot find symbol` for `runReplayed`, the only compile error | pass; planted fault (a replay after capture skipped, so a stale row is downloaded) fails it at input 1, layer 0; file restored, `cmp`-checked |
+| `ResidentQkvPathTest` (all 20 cases, after `runOn` was split into `upload`/`issueLayer`/`unpack` for the hook) | regression | 20 of 20 |
+| `CudaGraphSessionTest` (with the external-stream constructor and the corrected instantiate binding) | regression | 3 of 3 |
+| `DecodeLayerGraphReplayBench` parity (every layer's k, v, attention and output, one token both ways) | measurement precondition | bit-identical on all 22 (TinyLlama) and 32 (Mistral 7B) layers, at both positions |
+
+**Measurement**, [`20261007T213904Z-cuda-graph-replay-decode`](../perf-compare/20261007T213904Z-cuda-graph-replay-decode/INDEX.md):
+lanes alternated in one process, five repetitions of 200 tokens per lane after 100 warm-up tokens, median with
+min/max; unpinned (no prompt-free sudo; the card was at 1607 of 1911 MHz, 83 C). Scored against the decode
+forward-pass time of the owner's pinned final-region A/B (`jfr.forward_pass_decode_total_ms / count`, median of the
+three region-on runs, `20261007T174646Z-gpu-residency-final-region-ab`): TinyLlama 7.552 ms, Mistral 7B 28.344 ms.
+
+| Model | Pos | Launched ms/token | Replayed ms/token | Saved ms/token | Saved, share of forward pass | Threshold |
+|---|---|---|---|---|---|---|
+| tinyllama-1.1b | 128 | 7.042 (7.002-7.434) | 6.891 (6.836-6.961) | 0.152 | **2.0%** | >= 5%, missed |
+| tinyllama-1.1b | 512 | 9.532 (9.466-9.697) | 9.301 (9.265-9.555) | 0.231 | **3.1%** | >= 5%, missed |
+| mistral-7b | 128 | 29.423 (28.632-29.496) | 29.990 (29.385-30.057) | -0.567 | **-2.0%** | >= 5%, missed |
+| mistral-7b | 512 | 34.761 (33.543-35.143) | 35.565 (33.709-35.845) | -0.804 | **-2.8%** | >= 5%, missed |
+
+Replacing about 24 launch calls per layer with one graph launch changes a TinyLlama layer by 7 to 11 us out of about
+320 to 430 us, and Mistral 7B's not for the better. The host issues a layer's launches while the device runs the
+earlier ones, so a decode layer's time is the device work and the one wait per layer, not the launch calls. Pinning
+cannot turn the outcome: the rule needs >= 5% on both models and Mistral 7B reads a loss at both positions.
+
+**Decision (scope item 5's rule): not wired; deleted.** Removed: `CudaGraphSession`, `CudaGraphSessionTest`, and the
+six graph handles in `CudaDriverBindings` (`cuStreamBeginCapture`, `cuStreamEndCapture`, `cuGraphInstantiate`,
+`cuGraphLaunch`, `cuGraphDestroy`, `cuGraphExecDestroy`; nothing else used them). The measurement hooks
+(`runReplayed`, the `runOn` split, `LlamaTransformerHandler.residentQkvPath()`, the bench and the replay test case)
+went with it, so `ResidentQkvPath`, `LlamaTransformerHandler` and `ResidentQkvPathTest` are byte-identical to HEAD.
+The measured tree is kept as [`measurement.patch`](../perf-compare/20261007T213904Z-cuda-graph-replay-decode/measurement.patch)
+against `0a149c1` (sha256 `266be5ce...`, `git apply --check -R` verified against the measured tree), with the command
+to re-run it in the INDEX.
+
+**Read against the end-of-plan targets** (scope "End-of-plan targets": state how far items 4 and 5 moved tg). Item 5
+moves GPU tg by nothing on either model; graph replay is not a lever for the 0.70x tg rows on this card. With
+`--gpu-residency on`, the final region's pinned A/B already reads Mistral 7B 1.002x and Phi-3.5-mini 0.829x, both
+above 0.70x, and the default path 0.642x and 0.505x; the remaining tg lever in this tier is item 6, the flag default.
+
+**Regression runs** (after the deletion):
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass (before and after the edits) |
+| `mvn -o -q test-compile` (whole reactor) | pass: nothing referenced the deleted class or handles |
+| `mvn -o -pl node test` | 963 run, 0 failures, 44 skipped (13 min 47 s; 966 before, less the 3 deleted `CudaGraphSessionTest` cases). `PrefillReserveDeviceTest`'s desktop-dependent free-memory check passed this time |
+
+Not run: the eleven-module reactor (only `node` changed, and only by deletion of code nothing called), the `-Pgpu`
+ITs, the smoke scripts and the vision and LoRA gates. No shipped path changed: `ResidentQkvPath`, every handler and
+every kernel are byte-identical to HEAD, and the removed bindings were never called outside the removed class.
+
+**Docs.** `docs/agent-arch.txt` (the `CudaGraphSession` entry replaced by a note that the region does not use graph
+replay, with the measurement), `CHANGELOG.md` (Session 118), `docs/perf-compare/README.md` (the new row).
+`docs/howto.md` and `docs/performance.md` never named the class.
+
+**Out-of-tier changes.** None: the deletion is scope item 5's own outcome.
+
+**Next.** Scope item 6: the `--gpu-residency` default. Two published `compare-llama-cpp.sh --gpu` sweeps on all four
+sweep models, region on and off, read side by side and put to the owner; the default is changed only on the owner's
+decision.

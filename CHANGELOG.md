@@ -1,5 +1,15 @@
 ## Status 
 
+**Session 118** — CUDA graph replay measured for the decode region and not adopted
+
+- **The decode region keeps launching its kernels one by one.** Each decode layer's device work was
+  captured as a CUDA graph and replayed, against the shipped launches, on TinyLlama and Mistral 7B. Output
+  was bit-identical, but even with every kernel argument held fixed, the most replay could save, it saved
+  2% to 3% of a TinyLlama decode step and nothing on Mistral 7B. A decode layer's time is set by the
+  device work, not by the launch calls. No behaviour change.
+- The unused graph capture/replay wrapper and its CUDA driver bindings are removed. The wrapper also bound
+  the driver's graph-instantiate entry point with the wrong signature for CUDA 12; that defect goes with it.
+
 **Session 117** — Qwen3 prefill windows normalize, rotate and attend on the GPU inside the device region
 
 - **Qwen3's per-head Q/K norm, prefill RoPE and attention move into the prefill-window device region.** Until
