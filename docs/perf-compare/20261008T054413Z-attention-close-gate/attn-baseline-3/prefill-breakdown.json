@@ -1,0 +1,500 @@
+{
+  "mistral-7b-instruct-v0.1-q4_k_m": {
+    "repetitions": 1,
+    "forward_pass_ms": 21631.419976,
+    "terms": {
+      "gemm_compute": {
+        "ms": 2950.354498,
+        "pct": 13.639208620023142
+      },
+      "weight_dequant": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "matmul_staging": {
+        "ms": 65.645696,
+        "pct": 0.30347381758956976
+      },
+      "host_fp16_pack": {
+        "ms": 0,
+        "pct": 0
+      },
+      "projection_and_region_host": {
+        "ms": 95.17610799999602,
+        "pct": 0.43999010747141726
+      },
+      "device_elementwise": {
+        "ms": 316.19136000000003,
+        "pct": 1.461722625471714
+      },
+      "region_attention_compute": {
+        "ms": 18004.72345,
+        "pct": 83.23412642339797
+      },
+      "attention_compute": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "attention_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "attention_host": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_mirror_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_host_write": {
+        "ms": 82.080136,
+        "pct": 0.379448672768906
+      },
+      "swiglu_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rmsnorm_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rope_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "residual_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "bias_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "embed": {
+        "ms": 5.974527,
+        "pct": 0.027619670861315258
+      },
+      "lm_head": {
+        "ms": 1.422098,
+        "pct": 0.006574223983343737
+      },
+      "residue": {
+        "ms": 109.85210300000108,
+        "pct": 0.507835838432621
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "materialize_prefill_residual",
+        "ms": 3.22576
+      },
+      {
+        "site": "materialize_resident_activation",
+        "ms": 50.383072
+      },
+      {
+        "site": "memcpy_prefill_residual_layer_input_d2d",
+        "ms": 8.649728
+      },
+      {
+        "site": "memcpy_region_attention_tables_h2d",
+        "ms": 0.317056
+      },
+      {
+        "site": "upload_prefill_residual",
+        "ms": 3.07008
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "bias_add",
+        "ms": 0.0
+      },
+      {
+        "site": "convert_fp16",
+        "ms": 20.288448
+      },
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_kquant",
+        "ms": 2950.354498
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention_region",
+        "ms": 18004.72345
+      },
+      {
+        "site": "kv_append",
+        "ms": 7.803904
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      },
+      {
+        "site": "residual_add",
+        "ms": 26.933376
+      },
+      {
+        "site": "rms_norm",
+        "ms": 74.807712
+      },
+      {
+        "site": "rope",
+        "ms": 40.017952
+      },
+      {
+        "site": "swiglu",
+        "ms": 146.339968
+      }
+    ]
+  },
+  "qwen2.5-3b-instruct-q4_k_m": {
+    "repetitions": 1,
+    "forward_pass_ms": 8942.935357,
+    "terms": {
+      "gemm_compute": {
+        "ms": 1152.365568,
+        "pct": 12.885764259695742
+      },
+      "weight_dequant": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "matmul_staging": {
+        "ms": 23.082304,
+        "pct": 0.2581065732733105
+      },
+      "host_fp16_pack": {
+        "ms": 0,
+        "pct": 0
+      },
+      "projection_and_region_host": {
+        "ms": 33.74820400000135,
+        "pct": 0.37737278256836837
+      },
+      "device_elementwise": {
+        "ms": 220.54048,
+        "pct": 2.466086035469036
+      },
+      "region_attention_compute": {
+        "ms": 7423.468248,
+        "pct": 83.00930233370578
+      },
+      "attention_compute": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "attention_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "attention_host": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_mirror_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_host_write": {
+        "ms": 17.760358,
+        "pct": 0.1985965154729453
+      },
+      "swiglu_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rmsnorm_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rope_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "residual_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "bias_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "embed": {
+        "ms": 3.259956,
+        "pct": 0.036452863292233226
+      },
+      "lm_head": {
+        "ms": 2.553866,
+        "pct": 0.028557357266381055
+      },
+      "residue": {
+        "ms": 66.1563729999998,
+        "pct": 0.7397612792562177
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "materialize_prefill_residual",
+        "ms": 1.602976
+      },
+      {
+        "site": "materialize_resident_activation",
+        "ms": 14.52496
+      },
+      {
+        "site": "memcpy_prefill_residual_layer_input_d2d",
+        "ms": 4.938752
+      },
+      {
+        "site": "memcpy_region_attention_tables_h2d",
+        "ms": 0.453952
+      },
+      {
+        "site": "upload_prefill_residual",
+        "ms": 1.561664
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "bias_add",
+        "ms": 6.516736
+      },
+      {
+        "site": "convert_fp16",
+        "ms": 11.602944
+      },
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_kquant",
+        "ms": 1152.365568
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention_region",
+        "ms": 7423.468248
+      },
+      {
+        "site": "kv_append",
+        "ms": 9.133216
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      },
+      {
+        "site": "residual_add",
+        "ms": 15.363104
+      },
+      {
+        "site": "rms_norm",
+        "ms": 41.301376
+      },
+      {
+        "site": "rope",
+        "ms": 17.875968
+      },
+      {
+        "site": "swiglu",
+        "ms": 118.747136
+      }
+    ]
+  },
+  "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+    "repetitions": 1,
+    "forward_pass_ms": 5158.396358,
+    "terms": {
+      "gemm_compute": {
+        "ms": 410.349152,
+        "pct": 7.95497521945172
+      },
+      "weight_dequant": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "matmul_staging": {
+        "ms": 15.406752,
+        "pct": 0.298673287796238
+      },
+      "host_fp16_pack": {
+        "ms": 0,
+        "pct": 0
+      },
+      "projection_and_region_host": {
+        "ms": 23.91250400000081,
+        "pct": 0.4635646883341105
+      },
+      "device_elementwise": {
+        "ms": 90.6136,
+        "pct": 1.7566234486706345
+      },
+      "region_attention_compute": {
+        "ms": 4547.738495,
+        "pct": 88.16186619601362
+      },
+      "attention_compute": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "attention_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "attention_host": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_mirror_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_host_write": {
+        "ms": 11.544885,
+        "pct": 0.22380763707882567
+      },
+      "swiglu_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rmsnorm_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rope_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "residual_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "bias_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "embed": {
+        "ms": 3.18795,
+        "pct": 0.061801183522004956
+      },
+      "lm_head": {
+        "ms": 1.046005,
+        "pct": 0.020277716705072165
+      },
+      "residue": {
+        "ms": 54.59701500000028,
+        "pct": 1.0584106224277907
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "materialize_prefill_residual",
+        "ms": 1.614912
+      },
+      {
+        "site": "materialize_resident_activation",
+        "ms": 8.986976
+      },
+      {
+        "site": "memcpy_prefill_residual_layer_input_d2d",
+        "ms": 2.931712
+      },
+      {
+        "site": "memcpy_region_attention_tables_h2d",
+        "ms": 0.317024
+      },
+      {
+        "site": "upload_prefill_residual",
+        "ms": 1.556128
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "bias_add",
+        "ms": 0.0
+      },
+      {
+        "site": "convert_fp16",
+        "ms": 7.2248
+      },
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_kquant",
+        "ms": 410.349152
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention_region",
+        "ms": 4547.738495
+      },
+      {
+        "site": "kv_append",
+        "ms": 1.95072
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      },
+      {
+        "site": "residual_add",
+        "ms": 9.155584
+      },
+      {
+        "site": "rms_norm",
+        "ms": 24.857728
+      },
+      {
+        "site": "rope",
+        "ms": 10.911744
+      },
+      {
+        "site": "swiglu",
+        "ms": 36.513024
+      }
+    ]
+  }
+}

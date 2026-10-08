@@ -391,7 +391,11 @@ GPU FFI (node module — Panama project, JEP 454):
         slots of 4 lanes; rowsPerBlock(oneCache, B) gives a prefill window (rows sharing one
         cache) up to 32 rows a block, each staged key read once for all of them, and a decode row
         or --parallel streams one row a block with its keys split over the 32 slots and merged at
-        the end. A per-launch attention window (0 = none) restricts row b to its last `window`
+        the end; such a row shares its keys with no other row, so each slot reads its keys straight
+        from global memory, with no staging and no barrier per tile (same keys, order and arithmetic
+        as a 32-key tile, so bit-identical to it; 3.6x to 18x faster at decode than staging, and the
+        path that gives 256-wide heads a key per slot at decode). GqaAttentionDecodeBench (test
+        scope, opt-in) times one decode row per launch on device events. A per-launch attention window (0 = none) restricts row b to its last `window`
         keys. Entries gqa_attention_d64 / _d128 / _d256 bound the head width held in registers
         (supportsHeadDim: a multiple of 4, <= 256; otherwise the caller stays on GqaMath). Fixed reduction
         order, so output is bit-identical launch to launch (GqaAttentionReproducibilityTest);

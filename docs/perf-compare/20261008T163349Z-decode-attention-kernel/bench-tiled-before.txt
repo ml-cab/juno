@@ -1,0 +1,21 @@
+lanes current; us per launch, median of 5 x 100
+tinyllama 32/4/64      ctx    64  current    27,84
+tinyllama 32/4/64      ctx   256  current    92,21
+tinyllama 32/4/64      ctx   576  current   193,22
+tinyllama 32/4/64      ctx  1024  current   338,38
+tinyllama 32/4/64      ctx  2048  current   710,77
+qwen2.5-3b 16/2/128    ctx    64  current    36,36
+qwen2.5-3b 16/2/128    ctx   256  current   128,87
+qwen2.5-3b 16/2/128    ctx   576  current   275,33
+qwen2.5-3b 16/2/128    ctx  1024  current   487,69
+qwen2.5-3b 16/2/128    ctx  2048  current  1094,76
+phi-3.5-mini 32/32/96  ctx    64  current    34,55
+phi-3.5-mini 32/32/96  ctx   256  current   135,71
+phi-3.5-mini 32/32/96  ctx   576  current   296,04
+phi-3.5-mini 32/32/96  ctx  1024  current   517,09
+phi-3.5-mini 32/32/96  ctx  2048  current  1025,46
+mistral-7b 32/8/128    ctx    64  current    36,53
+mistral-7b 32/8/128    ctx   256  current   126,58
+mistral-7b 32/8/128    ctx   576  current   325,02
+mistral-7b 32/8/128    ctx  1024  current   566,30
+mistral-7b 32/8/128    ctx  2048  current  1126,77

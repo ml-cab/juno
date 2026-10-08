@@ -1,0 +1,524 @@
+{
+  "mistral-7b-instruct-v0.1-q4_k_m": {
+    "repetitions": 1,
+    "forward_pass_ms": 4788.148048,
+    "terms": {
+      "gemm_compute": {
+        "ms": 2848.900162,
+        "pct": 59.49899905851867
+      },
+      "weight_dequant": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "matmul_staging": {
+        "ms": 66.069408,
+        "pct": 1.3798530734152437
+      },
+      "host_fp16_pack": {
+        "ms": 0,
+        "pct": 0
+      },
+      "projection_and_region_host": {
+        "ms": 95.01746400000047,
+        "pct": 1.984430369476338
+      },
+      "device_elementwise": {
+        "ms": 317.254816,
+        "pct": 6.6258355593770055
+      },
+      "region_attention_compute": {
+        "ms": 1260.034783,
+        "pct": 26.31570223745095
+      },
+      "attention_compute": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "attention_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "attention_host": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_mirror_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_host_write": {
+        "ms": 81.557478,
+        "pct": 1.7033198886585472
+      },
+      "swiglu_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rmsnorm_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rope_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "residual_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "bias_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "embed": {
+        "ms": 6.065806,
+        "pct": 0.12668376038484597
+      },
+      "lm_head": {
+        "ms": 1.495918,
+        "pct": 0.031242099972761745
+      },
+      "residue": {
+        "ms": 111.75221299999976,
+        "pct": 2.3339339527456433
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "materialize_prefill_k",
+        "ms": 25.420032
+      },
+      {
+        "site": "materialize_prefill_residual",
+        "ms": 3.172928
+      },
+      {
+        "site": "materialize_prefill_v",
+        "ms": 25.203936
+      },
+      {
+        "site": "memcpy_prefill_residual_layer_input_d2d",
+        "ms": 8.786944
+      },
+      {
+        "site": "memcpy_region_attention_tables_h2d",
+        "ms": 0.338688
+      },
+      {
+        "site": "upload_prefill_residual",
+        "ms": 3.14688
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "bias_add",
+        "ms": 0.0
+      },
+      {
+        "site": "convert_fp16",
+        "ms": 20.319232
+      },
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_kquant",
+        "ms": 2848.900162
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention_region",
+        "ms": 1260.034783
+      },
+      {
+        "site": "kv_append",
+        "ms": 22.4512
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      },
+      {
+        "site": "residual_add",
+        "ms": 26.734592
+      },
+      {
+        "site": "rms_norm",
+        "ms": 72.959136
+      },
+      {
+        "site": "rope",
+        "ms": 36.86912
+      },
+      {
+        "site": "split_qkv",
+        "ms": 0.0
+      },
+      {
+        "site": "swiglu",
+        "ms": 137.921536
+      }
+    ]
+  },
+  "qwen2.5-3b-instruct-q4_k_m": {
+    "repetitions": 1,
+    "forward_pass_ms": 2271.358329,
+    "terms": {
+      "gemm_compute": {
+        "ms": 1155.357984,
+        "pct": 50.866389915177486
+      },
+      "weight_dequant": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "matmul_staging": {
+        "ms": 23.31072,
+        "pct": 1.0262898505434366
+      },
+      "host_fp16_pack": {
+        "ms": 0,
+        "pct": 0
+      },
+      "projection_and_region_host": {
+        "ms": 33.206368999999995,
+        "pct": 1.4619608265253154
+      },
+      "device_elementwise": {
+        "ms": 230.00576,
+        "pct": 10.126352899203866
+      },
+      "region_attention_compute": {
+        "ms": 712.311813,
+        "pct": 31.360609372172732
+      },
+      "attention_compute": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "attention_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "attention_host": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_mirror_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_host_write": {
+        "ms": 18.451564,
+        "pct": 0.8123581279279514
+      },
+      "swiglu_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rmsnorm_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rope_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "residual_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "bias_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "embed": {
+        "ms": 3.424011,
+        "pct": 0.15074728440172946
+      },
+      "lm_head": {
+        "ms": 2.619446,
+        "pct": 0.1153250883647782
+      },
+      "residue": {
+        "ms": 92.670662,
+        "pct": 4.079966635682696
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "materialize_prefill_k",
+        "ms": 7.513824
+      },
+      {
+        "site": "materialize_prefill_residual",
+        "ms": 1.574912
+      },
+      {
+        "site": "materialize_prefill_v",
+        "ms": 7.25984
+      },
+      {
+        "site": "memcpy_prefill_residual_layer_input_d2d",
+        "ms": 4.959232
+      },
+      {
+        "site": "memcpy_region_attention_tables_h2d",
+        "ms": 0.44384
+      },
+      {
+        "site": "upload_prefill_residual",
+        "ms": 1.559072
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "bias_add",
+        "ms": 6.519808
+      },
+      {
+        "site": "convert_fp16",
+        "ms": 11.866112
+      },
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_kquant",
+        "ms": 1155.357984
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention_region",
+        "ms": 712.311813
+      },
+      {
+        "site": "kv_append",
+        "ms": 19.965952
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      },
+      {
+        "site": "residual_add",
+        "ms": 14.997504
+      },
+      {
+        "site": "rms_norm",
+        "ms": 41.67168
+      },
+      {
+        "site": "rope",
+        "ms": 17.862656
+      },
+      {
+        "site": "split_qkv",
+        "ms": 0.0
+      },
+      {
+        "site": "swiglu",
+        "ms": 117.122048
+      }
+    ]
+  },
+  "tinyllama-1.1b-chat-v1.0.Q4_K_M": {
+    "repetitions": 1,
+    "forward_pass_ms": 939.499514,
+    "terms": {
+      "gemm_compute": {
+        "ms": 412.745888,
+        "pct": 43.932528101339706
+      },
+      "weight_dequant": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "matmul_staging": {
+        "ms": 15.516032,
+        "pct": 1.6515210246292902
+      },
+      "host_fp16_pack": {
+        "ms": 0,
+        "pct": 0
+      },
+      "projection_and_region_host": {
+        "ms": 23.077067999999997,
+        "pct": 2.45631505457064
+      },
+      "device_elementwise": {
+        "ms": 107.202529,
+        "pct": 11.410599729166012
+      },
+      "region_attention_compute": {
+        "ms": 321.375424,
+        "pct": 34.207087838898026
+      },
+      "attention_compute": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "attention_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "attention_host": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_mirror_copies": {
+        "ms": 0,
+        "pct": 0
+      },
+      "kv_host_write": {
+        "ms": 11.465118,
+        "pct": 1.2203431538975762
+      },
+      "swiglu_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rmsnorm_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rope_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "residual_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "bias_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "embed": {
+        "ms": 3.188298,
+        "pct": 0.3393613250980352
+      },
+      "lm_head": {
+        "ms": 1.168924,
+        "pct": 0.12441986212671954
+      },
+      "residue": {
+        "ms": 43.760233000000085,
+        "pct": 4.657823910274006
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "materialize_prefill_k",
+        "ms": 4.50096
+      },
+      {
+        "site": "materialize_prefill_residual",
+        "ms": 1.584896
+      },
+      {
+        "site": "materialize_prefill_v",
+        "ms": 4.427104
+      },
+      {
+        "site": "memcpy_prefill_residual_layer_input_d2d",
+        "ms": 3.004416
+      },
+      {
+        "site": "memcpy_region_attention_tables_h2d",
+        "ms": 0.3496
+      },
+      {
+        "site": "upload_prefill_residual",
+        "ms": 1.649056
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "bias_add",
+        "ms": 0.0
+      },
+      {
+        "site": "convert_fp16",
+        "ms": 7.04
+      },
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_kquant",
+        "ms": 412.745888
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention_region",
+        "ms": 321.375424
+      },
+      {
+        "site": "kv_append",
+        "ms": 18.381825
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      },
+      {
+        "site": "residual_add",
+        "ms": 9.124256
+      },
+      {
+        "site": "rms_norm",
+        "ms": 25.013824
+      },
+      {
+        "site": "rope",
+        "ms": 10.903552
+      },
+      {
+        "site": "split_qkv",
+        "ms": 0.0
+      },
+      {
+        "site": "swiglu",
+        "ms": 36.739072
+      }
+    ]
+  }
+}

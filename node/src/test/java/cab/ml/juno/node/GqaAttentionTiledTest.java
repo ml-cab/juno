@@ -87,6 +87,7 @@ class GqaAttentionTiledTest {
 
 	private static final Shape TINYLLAMA = new Shape("TinyLlama 32/4/64", 32, 4, 64);
 	private static final Shape MISTRAL = new Shape("Mistral 7B 32/8/128", 32, 8, 128);
+	private static final Shape QWEN2 = new Shape("Qwen2.5-3B 16/2/128", 16, 2, 128);
 	private static final Shape PHI3 = new Shape("Phi-3.5-mini 32/32/96", 32, 32, 96);
 	private static final Shape PHI2 = new Shape("Phi-2 32/32/80", 32, 32, 80);
 	private static final Shape WIDE = new Shape("256-wide heads 8/2/256", 8, 2, 256);
@@ -115,6 +116,14 @@ class GqaAttentionTiledTest {
 	void decodeAtMaxSeqLenMatchesOracle() {
 		runWindow(TINYLLAMA, DeviceKvCache.MAX_SEQ_LEN - 1, 1, 0, TOL_LONG);
 		runWindow(MISTRAL, DeviceKvCache.MAX_SEQ_LEN - 1, 1, 0, TOL_LONG);
+	}
+
+	@Test
+	@DisplayName("a decode row matches the oracle at every head width and short to long context")
+	void decodeRowMatchesOracleAtEveryHeadWidth() {
+		for (Shape shape : new Shape[] { TINYLLAMA, QWEN2, MISTRAL, PHI3, PHI2, WIDE })
+			for (int seqLen : new int[] { 1, 31, 33, 576, 2049 })
+				runWindow(shape, seqLen - 1, 1, 0, seqLen > 1024 ? TOL_LONG : TOL);
 	}
 
 	@Test

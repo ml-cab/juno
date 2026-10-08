@@ -72,7 +72,9 @@ import cab.ml.juno.tokenizer.GgufTokenizer;
  * <li>Long-prompt prefill: a prompt of at least 512 tokens, prefilled in-process as
  * one window on the {@code static} schedule and in 32-token chunks on the
  * {@code continuous} schedule, gives the same first greedy token as one-token-at-a-time
- * prefill ({@link PrefillMode#SINGLE}); on the GPU when one is present</li>
+ * prefill ({@link PrefillMode#SINGLE}); on the GPU when one is present. On the GPU
+ * the same comparison runs again at 2048 tokens, capped where the model's context
+ * cannot hold that prompt and the generated tokens</li>
  * </ol>
  *
  * Checks 1-6 run on a three-node pipeline-parallel cluster of forked JVMs, 7-8 on a
@@ -121,9 +123,11 @@ public final class ModelLiveChecks {
 	public static List<LiveCheck> run(String modelPath, Set<Suite> suites, PrintStream progress) throws IOException {
 		LlamaConfig cfg;
 		GgufTokenizer tokenizer;
+		int contextLength;
 		try (GgufReader reader = GgufReader.open(Path.of(modelPath))) {
 			cfg = LlamaConfig.from(reader);
 			tokenizer = GgufTokenizer.load(reader);
+			contextLength = reader.metaInt(cfg.architecture() + ".context_length", 0);
 		}
 		List<LiveCheck> results = new ArrayList<>();
 		if (suites.contains(Suite.PIPELINE))
@@ -132,7 +136,7 @@ public final class ModelLiveChecks {
 			runTensor(modelPath, cfg, tokenizer, results, progress);
 		if (suites.contains(Suite.PREFILL))
 			record(results, progress, 9, "long-prompt prefill, both schedules",
-					() -> longPromptPrefill(modelPath, cfg, tokenizer));
+					() -> longPromptPrefill(modelPath, cfg, tokenizer, contextLength));
 		return results;
 	}
 
@@ -270,7 +274,50 @@ public final class ModelLiveChecks {
 
 	// ── Check 9 ───────────────────────────────────────────────────────────────
 
+	/** Prompt length of check 9's first leg, run on every backend. */
+	static final int PROMPT_TOKENS = 512;
+
+	/** Prompt length of check 9's second leg, run on the GPU only. */
+	static final int LONG_PROMPT_TOKENS = 2048;
+
+	/** Generated tokens per request in check 9. */
+	private static final int GENERATED_TOKENS = 16;
+
 	/**
+	 * Room left in the context for the chat template's tokens and for the one
+	 * numbered note by which {@link #longPrompt} may overshoot its target.
+	 */
+	private static final int CONTEXT_MARGIN = 64;
+
+	/**
+	 * Runs the comparison at {@link #PROMPT_TOKENS} and, on the GPU, again at
+	 * {@link #longPromptTarget}. The second leg is skipped on the CPU, where three
+	 * 2048-token prefills of a 7B model take hours, and the detail says so.
+	 */
+	private static String longPromptPrefill(String modelPath, LlamaConfig cfg, GgufTokenizer tokenizer,
+			int contextLength) throws IOException {
+		String detail = prefillLeg(modelPath, cfg, tokenizer, PROMPT_TOKENS, contextLength);
+		if (!CudaAvailability.isAvailable())
+			return detail + "; " + LONG_PROMPT_TOKENS + "-token leg not run on the CPU backend";
+		int target = longPromptTarget(contextLength);
+		String cap = target < LONG_PROMPT_TOKENS
+				? " (" + LONG_PROMPT_TOKENS + " capped at " + target + ", context " + contextLength + ")"
+				: "";
+		return detail + "; " + prefillLeg(modelPath, cfg, tokenizer, target, contextLength) + cap;
+	}
+
+	/**
+	 * {@link #LONG_PROMPT_TOKENS}, or less where the model's context (0 when the
+	 * file does not state one) cannot also hold the generated tokens and the margin.
+	 */
+	static int longPromptTarget(int contextLength) {
+		if (contextLength <= 0)
+			return LONG_PROMPT_TOKENS;
+		return Math.min(LONG_PROMPT_TOKENS, contextLength - GENERATED_TOKENS - CONTEXT_MARGIN);
+	}
+
+	/**
+	 * One leg of check 9 at a user message of at least {@code minTokens} tokens.
 	 * The oracle is {@link PrefillMode#SINGLE}, the path that predates batched
 	 * prefill. The first greedy token is compared exactly; later tokens may part
 	 * where two candidates are within float noise (the windowed and per-token paths
@@ -278,9 +325,9 @@ public final class ModelLiveChecks {
 	 * asserted. On the CPU a 512-token prefill of TinyLlama takes about 90 s, and
 	 * three are run.
 	 */
-	private static String longPromptPrefill(String modelPath, LlamaConfig cfg, GgufTokenizer tokenizer)
-			throws IOException {
-		String prompt = longPrompt(tokenizer);
+	private static String prefillLeg(String modelPath, LlamaConfig cfg, GgufTokenizer tokenizer, int minTokens,
+			int contextLength) throws IOException {
+		String prompt = longPrompt(tokenizer, minTokens);
 		String savedSchedule = System.getProperty(ServeScheduleOptions.ENV);
 		GpuContext gpu = CudaAvailability.isAvailable() ? GpuContext.init(0) : null;
 		try {
@@ -321,8 +368,11 @@ public final class ModelLiveChecks {
 					gpu != null ? "cuda" : "cpu", oracle.promptTokens(),
 					firstDifference(oracle.tokenIds(), window.tokenIds()),
 					firstDifference(oracle.tokenIds(), chunked.tokenIds()));
-			check(oracle.promptTokens() >= 512, "prompt must be at least 512 tokens but was " + oracle.promptTokens()
-					+ " (" + detail + ")");
+			check(oracle.promptTokens() >= minTokens, "prompt must be at least " + minTokens + " tokens but was "
+					+ oracle.promptTokens() + " (" + detail + ")");
+			check(contextLength <= 0 || oracle.promptTokens() + GENERATED_TOKENS <= contextLength,
+					"prompt of " + oracle.promptTokens() + " tokens and " + GENERATED_TOKENS
+							+ " generated tokens exceed the model's context of " + contextLength);
 			check(window.promptTokens() == oracle.promptTokens() && chunked.promptTokens() == oracle.promptTokens(),
 					"every path must prefill the same prompt: per-token " + oracle.promptTokens() + ", static "
 							+ window.promptTokens() + ", continuous " + chunked.promptTokens());
@@ -359,19 +409,19 @@ public final class ModelLiveChecks {
 
 	private static InferenceRequest longPromptRequest(String prompt) {
 		return InferenceRequest.of("model", List.of(ChatMessage.user(prompt)),
-				SamplingParams.deterministic().withMaxTokens(16), RequestPriority.NORMAL);
+				SamplingParams.deterministic().withMaxTokens(GENERATED_TOKENS), RequestPriority.NORMAL);
 	}
 
 	/**
-	 * A user message of at least 512 tokens on its own (the chat template adds
-	 * more), from distinct numbered sentences so the prompt does not collapse into a
-	 * repetition, ending in a question answered by its first sentence.
+	 * A user message of at least {@code minTokens} tokens on its own (the chat
+	 * template adds more), from distinct numbered sentences so the prompt does not
+	 * collapse into a repetition, ending in a question answered by its first sentence.
 	 */
-	private static String longPrompt(GgufTokenizer tokenizer) {
+	private static String longPrompt(GgufTokenizer tokenizer, int minTokens) {
 		String[] places = { "harbour", "orchard", "library", "bridge", "market", "lighthouse", "mill", "chapel" };
 		String[] colours = { "red", "green", "blue", "white", "yellow", "grey", "black", "orange" };
 		StringBuilder sb = new StringBuilder("Read the notes below, then answer the question at the end.\n");
-		for (int i = 1; tokenizer.encode(sb.toString()).length < 512; i++) {
+		for (int i = 1; tokenizer.encode(sb.toString()).length < minTokens; i++) {
 			sb.append("Note ").append(i).append(": the ").append(places[i % places.length]).append(" in district ")
 					.append(i * 7 % 31).append(" was painted ").append(colours[(i * 3) % colours.length])
 					.append(" in the year ").append(1800 + i * 13).append(".\n");

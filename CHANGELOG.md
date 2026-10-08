@@ -1,5 +1,44 @@
 ## Status 
 
+**Session 122** — Long prompts and GPU decode, measured at the close
+
+- **Prompt processing no longer slows down as the prompt grows.** Against the reference engine on the GTX 1080, with
+  clocks pinned, a 2048-token prompt is now processed at 0.54x to 0.71x the reference engine's speed, up from 0.10x to 0.18x, and a
+  512-token prompt at 0.59x to 0.83x, up from 0.23x to 0.47x. GPU attention over a 2048-token prompt is 10x to 17x
+  faster than before this work, and attention is now 9% to 13% of a 512-token prompt's time instead of about half.
+- **Generation with the default flags**, now running each decode layer on the GPU: 0.77x of the reference engine on
+  TinyLlama (was 0.36x), 0.86x on Phi-3.5-mini (was 0.55x), 1.03x on Mistral 7B (was 0.63x). Qwen2.5-3B, whose layout
+  the device-resident decode path does not cover, is unchanged at 0.42x.
+- Against the build before this work, in a same-hour comparison: generation 1.00x to 2.32x, prompt processing 1.71x to
+  2.71x, 0.81x to 1.00x the memory allocated per generated token. CPU inference, vision and LoRA are unchanged.
+
+**Session 121** — GPU attention at decode reads its keys directly
+
+- **Decode attention on CUDA is 3.6x to 18x faster per layer.** For one decoded token the GPU attention kernel
+  staged every 32 keys through shared memory between two synchronisations, work that only pays off when many
+  prompt rows share the keys. A decoded row now reads its keys directly. Measured on the GTX 1080 at one decoded
+  token: Qwen2.5-3B attention per layer 19 us instead of 275 us at 576 keys of context, Mistral 7B 34 us instead
+  of 325 us, and 61 us and 107 us at 2048 keys. Output is unchanged to the bit, and prompt processing is
+  unchanged.
+- This removes a generation slowdown on Qwen2.5-3B, the one standard model that does not use the device-resident
+  decode region: generation read 0.95x of the build before the tiled attention kernel and reads about 1.01x in an unpinned check.
+  The other models gain most at long contexts.
+- Attention heads 256 values wide no longer produce invalid output when decoding on the GPU. No supported model has
+  heads that wide.
+
+**Session 120** — The real-model check prefills 2048 tokens on the GPU
+
+- **`./juno test` and `ModelLiveRunnerIT` check 9 add a 2048-token leg on the GPU.** The long-prompt check already
+  prefilled 512 tokens three ways, one token at a time, as one static window and in 32-token continuous chunks, and
+  required the same first greedy token. It now does the same at 2048 tokens when CUDA is present, capped where the
+  model's context cannot hold the prompt and the generated tokens (TinyLlama: about 2,000 tokens), and both lengths
+  also require the prompt and the generated tokens to fit the model's context. On the CPU backend the 2048 leg is not
+  run, because three 2048-token prefills of a 7B model take hours; the check's output says so. All five standard GPU
+  models pass both legs.
+- The full product matrix was re-run with the decode region on by default (CPU and CUDA, both schedules, local mode,
+  pipeline and tensor clusters, LoRA training and playback, vision, both REST surfaces). Every check passes. Vision
+  and LoRA speeds are unchanged against the build before the attention work, and vision captions are identical.
+
 **Session 119** — The device-resident decode region is on by default
 
 - **`--gpu-residency` defaults to `auto`.** On CUDA, single-sequence decode now keeps the whole layer on the

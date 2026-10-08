@@ -1,0 +1,21 @@
+lanes current, materializing; us per launch, median of 5 x 100
+tinyllama 32/4/64      ctx    64  current     7,82  materializing    14,69  current/materializing 0,532
+tinyllama 32/4/64      ctx   256  current    12,43  materializing    43,81  current/materializing 0,284
+tinyllama 32/4/64      ctx   576  current    21,94  materializing    98,88  current/materializing 0,222
+tinyllama 32/4/64      ctx  1024  current    38,24  materializing   166,26  current/materializing 0,230
+tinyllama 32/4/64      ctx  2048  current    87,14  materializing   472,52  current/materializing 0,184
+qwen2.5-3b 16/2/128    ctx    64  current     7,12  materializing    18,08  current/materializing 0,394
+qwen2.5-3b 16/2/128    ctx   256  current    11,97  materializing    45,49  current/materializing 0,263
+qwen2.5-3b 16/2/128    ctx   576  current    19,17  materializing   102,48  current/materializing 0,187
+qwen2.5-3b 16/2/128    ctx  1024  current    28,93  materializing   172,04  current/materializing 0,168
+qwen2.5-3b 16/2/128    ctx  2048  current    60,86  materializing   513,96  current/materializing 0,118
+phi-3.5-mini 32/32/96  ctx    64  current     7,84  materializing    17,81  current/materializing 0,440
+phi-3.5-mini 32/32/96  ctx   256  current    28,03  materializing    77,45  current/materializing 0,362
+phi-3.5-mini 32/32/96  ctx   576  current    53,34  materializing   171,13  current/materializing 0,312
+phi-3.5-mini 32/32/96  ctx  1024  current    86,69  materializing   296,79  current/materializing 0,292
+phi-3.5-mini 32/32/96  ctx  2048  current   173,84  materializing   603,85  current/materializing 0,288
+mistral-7b 32/8/128    ctx    64  current     7,90  materializing    20,90  current/materializing 0,378
+mistral-7b 32/8/128    ctx   256  current    15,38  materializing    64,25  current/materializing 0,239
+mistral-7b 32/8/128    ctx   576  current    33,74  materializing   181,53  current/materializing 0,186
+mistral-7b 32/8/128    ctx  1024  current    55,22  materializing   322,99  current/materializing 0,171
+mistral-7b 32/8/128    ctx  2048  current   107,07  materializing   635,39  current/materializing 0,169

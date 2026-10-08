@@ -1,0 +1,196 @@
+{
+  "Phi-3.5-mini-instruct-Q4_K_M": {
+    "repetitions": 1,
+    "forward_pass_ms": 24055.35407,
+    "terms": {
+      "gemm_compute": {
+        "ms": 1462.451432,
+        "pct": 6.079525696210216
+      },
+      "weight_dequant": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "matmul_staging": {
+        "ms": 310.75388799999996,
+        "pct": 1.2918283684194383
+      },
+      "host_fp16_pack": {
+        "ms": 0,
+        "pct": 0
+      },
+      "projection_and_region_host": {
+        "ms": 858.7209819999998,
+        "pct": 3.569770702610156
+      },
+      "device_elementwise": {
+        "ms": 167.5472,
+        "pct": 0.6965068961880385
+      },
+      "region_attention_compute": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "attention_compute": {
+        "ms": 18995.282657,
+        "pct": 78.96488491387231
+      },
+      "attention_copies": {
+        "ms": 250.334184,
+        "pct": 1.0406589039244185
+      },
+      "attention_host": {
+        "ms": 401.4133009999999,
+        "pct": 1.6687066830606823
+      },
+      "kv_mirror_copies": {
+        "ms": 124.206576,
+        "pct": 0.5163365113586125
+      },
+      "kv_host_write": {
+        "ms": 620.8495459999999,
+        "pct": 2.5809204229268694
+      },
+      "swiglu_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rmsnorm_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "rope_host": {
+        "ms": 620.59973,
+        "pct": 2.579881918154614
+      },
+      "residual_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "bias_add_host": {
+        "ms": 0.0,
+        "pct": 0
+      },
+      "embed": {
+        "ms": 4.359665,
+        "pct": 0.018123470506040237
+      },
+      "lm_head": {
+        "ms": 1.494591,
+        "pct": 0.006213132409736341
+      },
+      "residue": {
+        "ms": 237.3403180000023,
+        "pct": 0.9866423803588699
+      }
+    },
+    "staging_sites": [
+      {
+        "site": "materialize_prefill_residual",
+        "ms": 2.339584
+      },
+      {
+        "site": "materialize_resident_activation",
+        "ms": 224.822528
+      },
+      {
+        "site": "memcpy_gqa_kptrs_h2d",
+        "ms": 2.251648
+      },
+      {
+        "site": "memcpy_gqa_outbatch_d2h",
+        "ms": 123.889991
+      },
+      {
+        "site": "memcpy_gqa_qbatch_h2d",
+        "ms": 122.098433
+      },
+      {
+        "site": "memcpy_gqa_seqlens_h2d",
+        "ms": 0.354224
+      },
+      {
+        "site": "memcpy_gqa_vptrs_h2d",
+        "ms": 1.739888
+      },
+      {
+        "site": "memcpy_k_window_h2d",
+        "ms": 61.902741
+      },
+      {
+        "site": "memcpy_prefill_residual_layer_input_d2d",
+        "ms": 6.653504
+      },
+      {
+        "site": "memcpy_v_window_h2d",
+        "ms": 62.303835
+      },
+      {
+        "site": "upload_prefill_residual",
+        "ms": 2.305536
+      },
+      {
+        "site": "upload_resident_activation",
+        "ms": 74.632736
+      }
+    ],
+    "compute_sites": [
+      {
+        "site": "bias_add",
+        "ms": 0.0
+      },
+      {
+        "site": "convert_fp16",
+        "ms": 15.275328
+      },
+      {
+        "site": "gemm_fp32",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_half",
+        "ms": 0.0
+      },
+      {
+        "site": "gemm_kquant",
+        "ms": 1462.451432
+      },
+      {
+        "site": "gemv_half_batched",
+        "ms": 0.0
+      },
+      {
+        "site": "gqa_attention",
+        "ms": 18995.282657
+      },
+      {
+        "site": "gqa_attention_region",
+        "ms": 0.0
+      },
+      {
+        "site": "kv_append",
+        "ms": 0.0
+      },
+      {
+        "site": "mmq_packed",
+        "ms": 0.0
+      },
+      {
+        "site": "residual_add",
+        "ms": 20.087904
+      },
+      {
+        "site": "rms_norm",
+        "ms": 54.200224
+      },
+      {
+        "site": "rope",
+        "ms": 0.0
+      },
+      {
+        "site": "swiglu",
+        "ms": 77.983744
+      }
+    ]
+  }
+}

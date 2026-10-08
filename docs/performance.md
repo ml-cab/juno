@@ -1232,3 +1232,44 @@ faster and attention did not, so attention's share of a long window grew. Phi-3.
 6 GiB Java heap at 2048 tokens (its host key/value cache grows to 4,096 positions); its 2048 figure was
 taken with 8 GiB.
 
+
+## Tiled GPU attention and the decode layer on the device
+
+**What:** three changes to CUDA attention and decode, measured together at the close.
+- **Tiled attention.** The GPU attention kernel streams keys and values through on-chip memory with an online
+  softmax (running maximum, running sum, rescaled accumulator) and keeps no score row, so its device scratch does not
+  grow with the context: 1.0 MiB at 64 rows over 32,768 keys, against 257 MiB for the earlier kernel (-99.6%). It
+  takes a per-layer attention window (none by default). A decoded row reads its keys straight from device memory,
+  since no other row shares them; that path gives the same result to the bit and is 3.6x to 18x faster per decode
+  launch than staging them (`docs/perf-compare/20261008T163349Z-decode-attention-kernel/`).
+- **The whole decode layer on the device** (`--gpu-residency`, default `auto`): see `docs/howto.md`. Per decoded
+  token, one upload and one download per layer plus the logits.
+- **Graph replay** of a decode layer was measured and not adopted: at most 2% to 3% of a TinyLlama decode step and
+  nothing on Mistral 7B (`docs/perf-compare/20261007T213904Z-cuda-graph-replay-decode/`).
+
+**Attention at 2048 tokens** (same-session A/B against the build before this work, three runs a side, attention time
+per prefill window scaled by the in-window SM clock; `docs/perf-compare/20261008T054413Z-attention-close-gate/`): 14.1x
+faster on TinyLlama, 10.4x on Qwen2.5-3B, 17.1x on Phi-3.5-mini, 14.1x on Mistral 7B. Attention is now 9% to 13% of a
+512-token prefill window, from 46% to 62%.
+
+**No regression** (same-hour A/B against that build, clocks pinned, median of three, `n_prompt=512`;
+`docs/perf-compare/20261008T171427Z-attention-decode-close-gate/`): generation 2.32x (TinyLlama), 1.00x (Qwen2.5-3B,
+which the decode region does not cover), 1.75x (Phi-3.5-mini), 1.76x (Mistral 7B); prompt processing 1.71x to 2.71x;
+allocation per generated token 0.81x to 1.00x. The CPU path is unchanged (CPU A/B 0.997x to 1.001x, same
+directory as the 2048 A/B). Vision and LoRA are unchanged
+(`docs/perf-compare/20261008T032309Z-cross-surface-residency-default/`).
+
+**Against the reference engine** (closing sweeps, clocks pinned, `docs/perf-compare/20261008T173153Z/`,
+`20261008T174605Z/`, `20261008T180014Z/`, `20261008T181417Z/`; the previous figures in brackets):
+
+| Model | Prompt processing, 128 | 512 | 2048 | Generation |
+|---|---|---|---|---|
+| TinyLlama 1.1B | 0.648x (0.524x) | 0.747x (0.317x) | 0.696x (0.121x) | 0.770x (0.363x) |
+| Qwen2.5-3B | 0.713x (0.616x) | 0.825x (0.429x) | 0.682x (0.180x) | 0.416x (0.432x) |
+| Phi-3.5-mini | 0.584x (0.303x) | 0.594x (0.226x) | 0.540x (0.099x) | 0.858x (0.545x) |
+| Mistral 7B | 0.807x (0.729x) | 0.805x (0.468x) | 0.706x (0.154x) | 1.030x (0.627x) |
+
+Prompt processing no longer falls off with length: at 512 tokens the ratio is 0.998 to 1.157 of the 128-token one,
+and at 2048 it is 0.83 to 0.93 of the 512-token one (it was 0.33 to 0.44). Generation is now ahead of the reference
+engine on Mistral 7B. Qwen2.5-3B's generation is unchanged: the decode region does not cover its layout (Q/K/V biases,
+split-half rotation).

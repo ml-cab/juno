@@ -22,7 +22,16 @@
  *                                   reading each staged key once.
  *   rowsPerBlock = 1,  splits = 32: a decode row (or --parallel streams, one
  *                                   block per row), the keys spread over the
- *                                   32 slots and merged at the end.
+ *                                   32 slots and merged at the end. No other
+ *                                   row shares a key, so this case reads its
+ *                                   keys straight from global memory instead
+ *                                   of staging tiles between barriers (same
+ *                                   keys, order and arithmetic as a 32-key
+ *                                   tile, so the same result to the bit
+ *                                   where the tile is 32 keys; the 16-key
+ *                                   tiles of 256-wide heads gave a slot no
+ *                                   key here, so this path is what makes
+ *                                   them correct at decode).
  *
  * A tile of rows shares one K/V pointer (kPtrs[first row of the tile]): the
  * caller passes rowsPerBlock > 1 only when every row attends over the same
@@ -147,7 +156,61 @@ static __device__ __forceinline__ void gqa_attention_tiled(
     const half2* Vg = reinterpret_cast<const half2*>(vPtrs[b0]);
     const int tileElems = TILE * nPairs;
 
-    for (int t0 = (rangeLo / TILE) * TILE; t0 < hi; t0 += TILE) {
+    if (rowsPerBlock == 1) {
+        // Decode: one row, so no other row shares a staged key. Each slot reads its keys
+        // straight from global memory: slot s takes keys base + s, base + s + 32, ... with
+        // the same arithmetic, in the same order, as the tile loop below at splits = 32 and
+        // TILE = 32, so the result is the same to the bit; staging those keys through
+        // shared memory between two barriers serialises the loads and buys nothing here.
+        // The loop is uniform across the block (every lane reaches the shuffles); a slot
+        // whose key is outside [lo, seqLen) changes nothing.
+        for (int base = (rangeLo / GQA_SLOTS) * GQA_SLOTS; base < hi; base += GQA_SLOTS) {
+            const int pos = base + split;
+            const bool valid = pos >= lo && pos < seqLen;
+            const size_t row = (size_t)(valid ? pos : lo) * kvPairs + kPairBase;
+            float part = 0.f;
+#pragma unroll
+            for (int i = 0; i < QUADS; i++) {
+                const int c = lane + GQA_LANES * i;
+                if (valid && c < nQuads) {
+                    const float2 k0 = __half22float2(Kg[row + 2 * c]);
+                    const float2 k1 = __half22float2(Kg[row + 2 * c + 1]);
+                    part = fmaf(qv[i].x, k0.x, part);
+                    part = fmaf(qv[i].y, k0.y, part);
+                    part = fmaf(qv[i].z, k1.x, part);
+                    part = fmaf(qv[i].w, k1.y, part);
+                }
+            }
+            part += __shfl_xor_sync(GQA_FULL_MASK, part, 1);
+            part += __shfl_xor_sync(GQA_FULL_MASK, part, 2);
+            if (valid) {
+                const float newMax = fmaxf(runMax, part);
+                const float corr = exp2f(runMax - newMax);
+                runSum *= corr;
+                const float w = exp2f(part - newMax);
+                runSum += w;
+#pragma unroll
+                for (int i = 0; i < QUADS; i++) {
+                    const int c = lane + GQA_LANES * i;
+                    acc[i].x *= corr;
+                    acc[i].y *= corr;
+                    acc[i].z *= corr;
+                    acc[i].w *= corr;
+                    if (c < nQuads) {
+                        const float2 v0 = __half22float2(Vg[row + 2 * c]);
+                        const float2 v1 = __half22float2(Vg[row + 2 * c + 1]);
+                        acc[i].x = fmaf(w, v0.x, acc[i].x);
+                        acc[i].y = fmaf(w, v0.y, acc[i].y);
+                        acc[i].z = fmaf(w, v1.x, acc[i].z);
+                        acc[i].w = fmaf(w, v1.y, acc[i].w);
+                    }
+                }
+                runMax = newMax;
+            }
+        }
+    }
+
+    for (int t0 = (rangeLo / TILE) * TILE; rowsPerBlock > 1 && t0 < hi; t0 += TILE) {
         __syncthreads(); // the previous tile is no longer read
         for (int e = tid; e < tileElems; e += GQA_THREADS) {
             const int t = e / nPairs;

@@ -1,0 +1,12 @@
+    tinyllama-1.1b-chat-v1.0.Q4_K_M run 1: A 3894.4 ms @ 1873 MHz, B 324.4 ms @ 1607 MHz
+    tinyllama-1.1b-chat-v1.0.Q4_K_M run 2: A 4541.6 ms @ 1607 MHz, B 321.4 ms @ 1607 MHz
+    tinyllama-1.1b-chat-v1.0.Q4_K_M run 3: A 4547.7 ms @ 1607 MHz, B 323.0 ms @ 1607 MHz
+    qwen2.5-3b-instruct-q4_k_m run 1: A 6512.3 ms @ 1828 MHz, B 713.4 ms @ 1607 MHz
+    qwen2.5-3b-instruct-q4_k_m run 2: A 7379.5 ms @ 1607 MHz, B 712.3 ms @ 1607 MHz
+    qwen2.5-3b-instruct-q4_k_m run 3: A 7423.5 ms @ 1607 MHz, B 712.6 ms @ 1607 MHz
+    Phi-3.5-mini-instruct-Q4_K_M run 1: A 19661.4 ms @ 1607 MHz, B 1138.6 ms @ 1607 MHz
+    Phi-3.5-mini-instruct-Q4_K_M run 2: A 19647.0 ms @ 1607 MHz, B 1149.8 ms @ 1607 MHz
+    Phi-3.5-mini-instruct-Q4_K_M run 3: A 19689.8 ms @ 1607 MHz, B 1148.5 ms @ 1607 MHz
+    mistral-7b-instruct-v0.1-q4_k_m run 1: A 17668.0 ms @ 1607 MHz, B 1223.1 ms @ 1607 MHz
+    mistral-7b-instruct-v0.1-q4_k_m run 2: A 18928.1 ms @ 1506 MHz, B 1260.0 ms @ 1607 MHz
+    mistral-7b-instruct-v0.1-q4_k_m run 3: A 18004.7 ms @ 1607 MHz, B 1266.9 ms @ 1607 MHz

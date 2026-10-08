@@ -1,6 +1,8 @@
 # Tier 02: Attention & long context
 
-Status: **in progress** (2026-10-05). Implementation steps 1 to 4 done: the plan check passes, the
+Status: **complete** (2026-10-08). Every exit criterion is checked. Attention at 2048 tokens 10.40x to 17.12x faster than the pre-tier build (milestone `>= 6.0x`, met); no regression against it on any sweep model after the decode-width attention fix (pinned, tg 1.000x to 2.315x, pp 1.706x to 2.711x; CPU 0.997x to 1.001x); every GPU end-of-plan row met on the closing sweeps (tg 0.858x Phi-3.5-mini, 1.030x Mistral 7B; pp 0.594x at 512, 0.540x at 2048), which are now the reference column. The 512-over-128 milestone is missed on Mistral 7B (0.998), reported by owner decision 13. Decision 15 (raising the met GPU targets) is open for the owner. The step-by-step history is below; the paragraph that follows is the in-progress summary it replaced.
+
+In-progress summary (2026-10-05 onward): Implementation steps 1 to 4 done: the plan check passes, the
 2048-over-512 milestone is decomposed, the scalar attention oracle is held to an independent reference
 (`GqaMathOracleTest`), and the tiled online-softmax kernel replaces the full-materialization one on every
 CUDA attention path (validated against the oracle from one key to `MAX_SEQ_LEN`; no score scratch; per-layer
@@ -45,8 +47,17 @@ forward pass and nothing on Mistral 7B, against >= 5% on both (`docs/perf-compar
 so `CudaGraphSession` and its test are deleted and the criterion is ticked. Scope item 6's two sweeps are published
 (2026-10-08, unpinned, `docs/perf-compare/20261008T002907Z` off and `20261008T004314Z` on: tg on/off 1.56 to 1.99 where the
 region runs, 0.995 where declined). Decision 10 taken (a): `--gpu-residency` defaults to `auto`, silent where the region
-is declined; implemented tests first, the item 6 criterion is ticked. Next: implementation step 6 (the cross-surface
-smoke matrix on the new default) and the closing gates.
+is declined; implemented tests first, the item 6 criterion is ticked. Implementation step 6 is done (2026-10-08): decision 11
+taken (a), `ModelLiveRunnerIT` check 9 gains a 2048-token leg on the GPU (45 of 45 checks on five models); the cross-surface
+matrix passes on the new default and its criterion is ticked
+(`docs/perf-compare/20261008T032309Z-cross-surface-residency-default`). The owner's closing gates ran (2026-10-08,
+`docs/perf-compare/20261008T054413Z-attention-close-gate`): CPU gate met, attention at 2048 10.40x to 17.12x (met), every
+end-of-plan GPU row met; **missed**: Qwen2.5-3B GPU generation 0.948x against `>= 0.95x` (in the attention kernel at
+decode width, by diagnostic) and the 512-over-128 milestone on Mistral 7B (0.975). Decisions taken 2026-10-08: 12 (a),
+the decode-width path is in (bit-identical, 3.6x to 18x faster per decode launch, Qwen2.5-3B tg 1.009x unpinned,
+`docs/perf-compare/20261008T163349Z-decode-attention-kernel`); 13 (a), the milestone is reported missed and its
+criterion ticked; 14, the reference column moves at the close. Next: the owner's pinned re-run
+(`bash dist/attention-decode-close/run-gate.sh`), then the perf-gate criterion and the closing docs.
 
 **Split 2026-10-04 (plan review): read this first.** This tier held nine items, and under execution
 rule 1 every later tier, including every remaining GPU throughput lever, waited on all of them. Its
@@ -266,6 +277,14 @@ The Phi-3.5 LongRoPE defect found on 2026-09-28 and its remainder are recorded i
   per-layer window parameter set to "no window" bit-identical to the unwindowed call.
 - **`ModelLiveRunnerIT`**: the existing 512-token prefill check extended to 2048 tokens on both
   schedules, greedy output identical to the per-token prefill over the first 64 generated tokens.
+  *Corrected 2026-10-08 (owner decision 11 (a), implementation step 6): first greedy token exact, not 64
+  tokens.* The windowed and per-token paths sum in different orders, so a free-running 64-token identity
+  check measures where near-ties fall, the defect decision 4b removed from `GpuForwardPassIT`. Check 9 keeps
+  its 512-token contract and adds a 2048-token leg on the GPU: prompt of at least the target on every path,
+  equal `prompt_tokens`, first greedy token exact on the static window and the continuous chunks, first
+  divergence reported, not asserted. The target is capped where the model's context cannot hold the prompt
+  and the 16 generated tokens (TinyLlama, 2048-token context: 1968), and the leg is not run on the CPU
+  backend, where three 2048-token prefills of a 7B model take hours; the check's detail states both.
 - **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
   and score it before closing this tier.
 - **Perf gate (required)**: the tiled kernel is a hot-path change — `compare-lora.sh` plus a
@@ -485,23 +504,54 @@ budget. No download is needed.
       *2026-10-08: decided (owner, decision 10 (a)): the default is `auto`, and `auto` gives no notice where the user
       never asked for the region. Implemented tests first; every unit module, the residency smoke and the `-Pgpu` ITs
       pass on it. Ticked.*
-- [ ] Cross-surface checklist fully resolved.
-- [ ] Perf gate published, both memory thresholds above met, Juno t/s >= 0.95x the pre-tier build, and
+- [x] Cross-surface checklist fully resolved.
+      *2026-10-08 (implementation step 6): resolved on the `--gpu-residency auto` default; 13 rows PASS, ROCm
+      NEEDS-AMD-HARDWARE, vision and the facade N/A with reasons (the closing table in the step 6 record). Vision and LoRA
+      gates met: [`20261008T032309Z-cross-surface-residency-default`](../perf-compare/20261008T032309Z-cross-surface-residency-default/INDEX.md).
+      Throughput rows are scored by the owner's closing gates, which belong to the perf-gate criterion below.*
+- [x] Perf gate published, both memory thresholds above met, Juno t/s >= 0.95x the pre-tier build, and
       the standing CPU and allocation gate met.
       *2026-10-05 (step 4): the two memory thresholds are met by test (peak scratch -99.6% at 64 rows x
       32768 and -94.1% at a 2048-row window; the context-dependent part does not grow at all), see the step 4
       record; the 0.95x A/B, the standing CPU and allocation gate and the long-context microbenchmark's
       publication are owed at the tier's close.*
-- [ ] Milestone (pp ratio at 512 over 128 >= 1.00 on every sweep model, moved here from Tier 01B on
+      *2026-10-08 (close): met.* Memory thresholds: **Evidence (not published):** `GqaAttentionTiledTest`'s scratch case
+      (above). Throughput >= 0.95x on every sweep model, pinned, after the decode-width fix: tg 1.000x to 2.315x, pp 1.706x
+      to 2.711x, allocation 0.81x to 1.00x, GC within bounds,
+      [`20261008T171427Z-attention-decode-close-gate`](../perf-compare/20261008T171427Z-attention-decode-close-gate/INDEX.md)
+      (the first gate missed on Qwen2.5-3B, 0.948x, decision 12). Standing CPU gate: CPU tg and pp 0.997x to 1.001x,
+      allocation 1.000x, hot methods unchanged, pinned,
+      [`20261008T054413Z-attention-close-gate`](../perf-compare/20261008T054413Z-attention-close-gate/INDEX.md). Long-context
+      and decode microbenchmarks published: part S of that gate (attention at 2048) and
+      [`20261008T163349Z-decode-attention-kernel`](../perf-compare/20261008T163349Z-decode-attention-kernel/INDEX.md).
+      Vision and LoRA gates: [`20261008T032309Z-cross-surface-residency-default`](../perf-compare/20261008T032309Z-cross-surface-residency-default/INDEX.md).*
+- [x] Milestone (pp ratio at 512 over 128 >= 1.00 on every sweep model, moved here from Tier 01B on
       2026-10-01) reported met or missed with its number, and the attention share of a 512-token window
       per model read against implementation step 2's figures.
-- [ ] Milestone (attention at 2048 >= 6.0x faster than the pre-tier build, clock-normalised, on every
+      *2026-10-08 (owner decision 13 (a)): **missed on Mistral 7B, 0.975**; met on TinyLlama 1.214, Qwen2.5-3B 1.100,
+      Phi-3.5-mini 1.017, from the pinned closing sweeps [`20261008T083312Z`](../perf-compare/20261008T083312Z/INDEX.md)
+      and [`20261008T084614Z`](../perf-compare/20261008T084614Z/INDEX.md). Juno's own pp at 512 over 128 is 1.031 on
+      Mistral 7B; the reference tool's is 1.057. Attention share of a 512-token window 9.1% to 13.0% against step 2's
+      45.5% to 62.1% (`spans512/` in [`20261008T054413Z-attention-close-gate`](../perf-compare/20261008T054413Z-attention-close-gate/INDEX.md)).
+      The decode-width fix after these sweeps does not change prefill.*
+- [x] Milestone (attention at 2048 >= 6.0x faster than the pre-tier build, clock-normalised, on every
       sweep model; restated 2026-10-05 from pp ratio at 2048 over 512 >= 0.90) reported met or missed with
       its number, and 2048 over 512 published as a reading; GPU tg ratios recorded against the 0.70x end-of-plan targets and GPU pp ratios against
       the per-length end-of-plan rows, with the missing mechanism named if they are out of reach.
-- [ ] Docs (`docs/howto.md`, `docs/agent-arch.txt`, `docs/performance.md`) updated, Juno-native
+      *2026-10-08 (owner's closing gate): met, 10.40x (Qwen2.5-3B, binding) to 17.12x,
+      [`20261008T054413Z-attention-close-gate`](../perf-compare/20261008T054413Z-attention-close-gate/INDEX.md). 2048 over 512:
+      0.827 to 0.925 (reading). GPU tg 0.835x (Phi-3.5-mini) and 0.986x (Mistral 7B), both `>= 0.70x`; GPU pp `>= 0.40x` at
+      512 (binding 0.597x) and `>= 0.25x` at 2048 (binding 0.552x), all met, from the pinned closing sweeps
+      [`20261008T083312Z`](../perf-compare/20261008T083312Z/INDEX.md), [`20261008T084614Z`](../perf-compare/20261008T084614Z/INDEX.md),
+      [`20261008T090011Z`](../perf-compare/20261008T090011Z/INDEX.md), [`20261008T091353Z`](../perf-compare/20261008T091353Z/INDEX.md).*
+- [x] Docs (`docs/howto.md`, `docs/agent-arch.txt`, `docs/performance.md`) updated, Juno-native
       language only.
-- [ ] `CHANGELOG.md` entry added.
+      *2026-10-08: `docs/performance.md` "Tiled GPU attention and the decode layer on the device"; `docs/howto.md`
+      `--gpu-attention` and `--gpu-residency` rows (the latter at decision 10); `docs/agent-arch.txt`
+      `GqaAttentionKernel` and `GpuResidencyOptions`. No product names other than Juno's.*
+- [x] `CHANGELOG.md` entry added.
+      *2026-10-08: Sessions 118 to 122 (graph replay, the region default, check 9 at 2048, the decode-width kernel, the
+      close).*
 
 ## Execution record
 
@@ -2211,3 +2261,333 @@ two sweeps), `CHANGELOG.md` (Session 119), `--help` in `ConsoleMain` and `script
 `smoke-long-prompt-prefill.sh` at 2048 tokens. Then the tier's closing gates, owed by the owner and staged under
 `dist/` by the executor: the pinned 0.95x A/B against the pre-tier build, the standing CPU and allocation gate, the
 2048-token attention-speedup A/B and the pinned closing sweeps at 128, 512 and 2048.
+
+### 2026-10-08: implementation step 6 (the cross-surface matrix on the `auto` default); decision 11 taken (a)
+
+**Plan versus code, re-verified first** (HEAD `51fa5d4`, tree clean apart from the untracked `.github/`; no gate, sweep
+or mvn run in flight, the matching `pgrep` lines were idle wait loops of earlier sessions whose own command lines match
+their patterns; `check-plan-thresholds.sh` passes). `GpuResidencyOptions.parse` maps a blank value to `AUTO`; the smoke
+scripts the step names exist, and `smoke-long-prompt-prefill.sh` runs 128, 512 and 2048 by default and caps a length the
+model's context cannot hold. Every model the step needs is on disk. **One drift, raised and decided:** the test list's
+`ModelLiveRunnerIT` item (check 9 extended to 2048 tokens, greedy output identical to per-token prefill over 64 tokens)
+was never written; `ModelLiveChecks` check 9 still ran 512 tokens with the first token exact.
+
+**Decision 11 (raised with the owner): check 9 at 2048.** A free-running 64-token identity check measures where
+near-ties fall (the windowed and per-token paths sum in different orders), the defect decision 4b removed from
+`GpuForwardPassIT`. Options: (a) extend with the existing contract, first token exact, first divergence reported;
+(b) teacher-forced over 64 tokens; (c) as written; (d) withdraw. **Owner decision: (a).** The test-list item is
+corrected in place (dated).
+
+**Test** (README rule 3). Check 9 gains a second leg at 2048 tokens on the GPU: user message of at least the target on
+every path, equal `prompt_tokens`, first greedy token exact on the static window and the 32-token continuous chunks,
+and the prompt plus 16 generated tokens inside the model's `context_length` (a new assertion on both legs). The target is
+capped at context - 16 - 64 (TinyLlama: 1968; the margin covers the chat template and one note of overshoot), and the
+leg is not run on the CPU backend, where three 2048-token prefills of a 7B model take hours; the check's detail says
+both. The code under test already existed, so this is a regression check that passed on its first run; it was not seen
+failing.
+
+**Matrix** (candidate jar `fefd30371caf535a`, HEAD `51fa5d4` plus the check 9 change, installed; pre-tier build `05a17de`,
+jar `d1f50669dfc23d55`, from `git archive` under `dist/attention-long-context-close/baseline-tree/`; one GPU workload at a
+time; unpinned):
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass (before any edit, and after this record) |
+| `mvn -o test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player` | `node` 966 run, 1 failure, 44 skipped: `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance` (free bytes 74,579,968 against 67,108,864 with the device full; the known desktop-dependent check, as at decision 10). The six modules after `node` were skipped |
+| `mvn -o test -pl node -Dtest=PrefillReserveDeviceTest` (re-run alone) | 3 of 3 |
+| `mvn -o test -pl tokenizer,sampler,coordinator,vision,metrics,juno-player` (the skipped modules) | BUILD SUCCESS, 870 run, 0 failures, 5 skipped |
+| `mvn -o verify -pl juno-master` (stub cluster ITs) | 20 of 20 (plus `ModelLiveRunnerTest` 8 of 8) |
+| `mvn -o verify -pl juno-master -Pgpu -Dit.model.path=<tinyllama>` | 10 of 10 (`GpuForwardPassIT` 5, `GpuAttentionDivergenceIT` 3, `PrefillRegionGreedyIT` 2) |
+| `mvn -o verify -pl juno-master -Pintegration -DMODELS=<tinyllama, qwen2.5-3b, Phi-3.5-mini, mistral-7b, Qwen3-1.7B>` | 5 of 5, **45 of 45 checks** (21 min). Check 9 at 2048: TinyLlama 2,025 prompt tokens (capped, context 2048), Qwen2.5-3B 2,091, Phi-3.5-mini 2,101, Mistral 7B 2,114, Qwen3-1.7B 2,091; first token exact on both schedules on all five; first divergence over 16 tokens: none, except Qwen2.5-3B at token 12 on both schedules (reported). At 512: no divergence on any model |
+| `smoke-long-prompt-prefill.sh` (unmodified, defaults) | 36 PASS, 0 FAIL: TinyLlama (2048 capped at 2024) and Mistral 7B (2,044 tokens) at 128, 512 and 2048 on both schedules; streamed equals unstreamed; TTFT at 2048: TinyLlama 1,577 ms static, 5,959 ms continuous; Mistral 7B 5,559 and 12,099 ms |
+| `smoke-consistency.sh`, `smoke-grammar.sh`, `smoke-tools.sh` (unmodified) | 54, 19 and 14 PASS, 0 failures each |
+| `smoke-gpu-residency.sh --models tinyllama,mistral-7b,Phi-3.5-mini,Qwen3-1.7B,qwen2.5-3b` (unmodified) | 17 PASS, 0 FAIL. The key `tinyllama` matched `tinyllama-1.1b-chat-v1.0.Q2_K.gguf` first (an invocation error of this step), whose Q/K/V are not K-quant, so the region was declined there; re-run below |
+| `smoke-gpu-residency.sh --models tinyllama-1.1b-chat-v1.0.Q4_K_M` | 7 PASS, 0 FAIL: region active on 8 of 8 layers, memory flat both modes, greedy identical on against off, pipeline and tensor cluster answer with local mode's output and leave no node JVM |
+| `smoke-packed-kquant-matmul.sh` (unmodified, no baseline jar) | 48 PASS, 0 FAIL |
+| `compare-vision.sh --gpu`, three runs per build, alternated | latency 0.983x, decode 1.003x; gate (`<= 1.25x`, `>= 0.80x`) **met**; six captions identical |
+| `compare-lora.sh --gpu --reps 3`, per build | playback 0.938x, gate (`>= 0.80x`) **met**; train 1.000x (2,733 ms per pass, loss 1.1797 every repetition) |
+
+Vision and LoRA readings and the two smoke summaries:
+[`20261008T032309Z-cross-surface-residency-default`](../perf-compare/20261008T032309Z-cross-surface-residency-default/INDEX.md).
+
+**Closing cross-surface matrix.**
+
+| # | Surface | Resolution | Evidence |
+|---|---|---|---|
+| 1 | CPU inference | PASS (correctness; no CPU path changed in this tier; `auto` silent on `--cpu`) | unit suites; `smoke-consistency.sh` CPU legs; decision 10's live default check |
+| 2 | CUDA GPU inference | PASS | `ModelLiveRunnerIT` 45 of 45 on five models, check 9 at 512 and 2048; `-Pgpu` ITs 10 of 10; residency, packed and long-prompt smokes; throughput by the owner's closing gates (below) |
+| 3 | ROCm GPU inference | NEEDS-AMD-HARDWARE | the tiled kernel and the decode region are CUDA-only (ROCm port: Tier 10); `auto` resolves off where `CudaAvailability` is false, and the startup notice that ROCm runs attention on the CPU stays; the ROCm `sgemv` leak fix (decision 8) is compiled only |
+| 4 | Static schedule | PASS | check 9 static window at 512 and 2048 on five models; long-prompt smoke static cells; `smoke-consistency.sh` batching rounds |
+| 5 | Continuous schedule | PASS | check 9 32-token chunks at 512 and 2048, first token equal to static and per-token; long-prompt smoke continuous cells |
+| 6 | Single-node local mode | PASS | every smoke above runs `./juno local` |
+| 7 | Pipeline-parallel cluster | PASS | `ModelLiveRunnerIT` checks 1 to 6 on five models; `ThreeNodeClusterIT`; residency smoke's cluster leg, output equal to local mode's |
+| 8 | Tensor-parallel cluster | PASS | checks 7 and 8 on five models; `TensorParallelClusterIT`; residency smoke's cluster leg |
+| 9 | LoRA training | PASS (unchanged; declines the region silently under `auto`) | `compare-lora.sh` train 1.000x, same loss; `GpuResidencyOptionsTest` LoRA case |
+| 10 | LoRA playback | PASS (declines the region; gate met) | `compare-lora.sh` playback 0.938x |
+| 11 | Vision | N/A (moondream2's Phi-2 text half has no region or device weight path; CLIP on the CPU), verified untouched | `compare-vision.sh` 0.983x / 1.003x, captions identical. A LLaVA (LLaMA-backbone) model would decode in the region by default; none is on disk (INVENTORY, Tier 11) |
+| 12 | OpenAI REST surface | PASS | long-prompt, packed, grammar and tools smokes over `/v1/chat/completions`, streamed and not |
+| 13 | Native REST surface | PASS | `smoke-consistency.sh` `/v1/inference` rounds |
+| 14 | CLI | PASS | `--help` (`ConsoleMain`, `scripts/run.sh`) and `docs/howto.md` state `--gpu-residency` default `auto` (decision 10); `./juno test` runs check 9's 2048 leg on the GPU |
+| 15 | JVM embedding facade | N/A: no new embedder-invocable capability; the facade's decode takes the same handlers and default | `juno-player` unit tests |
+
+**Staged for the owner (not run here; needs prompt-free sudo for parts A, C and B):**
+`sudo -v && bash dist/attention-long-context-close/run-gate.sh` (about 4 to 5 hours; `PART=A|C|S|B` runs one part).
+Baseline `dist/attention-long-context-close/baseline-shaded.jar` (`d1f50669dfc23d55`, HEAD `05a17de`), candidate
+`candidate-shaded.jar` (`fefd30371caf535a`; the script refuses to run if the tree's jar differs; re-copy after any rebuild).
+- Part A, pinned: GPU A/B at `n_prompt=512` on the four sweep models, default flags, alternated three times. Juno tg and
+  pp t/s `>= 0.95x`, allocation per token `<= 1.10x`, GC pause in the token span `<= 1.25x` (`<= 5 ms` under a 5 ms
+  baseline).
+- Part C, pinned: the standing CPU and allocation gate, `--cpu` at `n_prompt=128` on TinyLlama and Mistral 7B, same
+  thresholds; top 10 hot methods of both jars printed.
+- Part S, unpinned by the milestone's own rule: the 2048-token attention speedup, `--device-spans`, Phi-3.5-mini at
+  `COMPARE_HEAP=8g`; attention per window (`prefill-breakdown.sh`'s four attention terms) times the in-window median SM
+  MHz, baseline over candidate `>= 6.0x` on every sweep model.
+- Part B, pinned: the closing sweeps at 128, 512 and 2048 (Phi-3.5-mini at 2048 in its own sweep at 8 GiB), published.
+  They score the 512-over-128 milestone (`>= 1.00`), the 2048-over-512 reading, and the end-of-plan rows (GPU tg `>= 0.70x`;
+  GPU pp `>= 0.40x` at 512 and `>= 0.25x` at 2048).
+
+The script was syntax-checked and its readers were checked against existing result files' fields; it has not been run.
+
+**Docs.** `docs/howto.md` (the IT line names the 2048 leg), `docs/perf-compare/README.md` (the new row), `CHANGELOG.md`
+(Session 120). `docs/agent-arch.txt` and `docs/performance.md` change at the tier's close, with the closing numbers.
+
+**Out-of-tier changes.** None. The check 9 change is this tier's own test item.
+
+**Next.** The owner's closing gates above. Then this tier's remaining criteria: the perf gate, the two milestones and the
+end-of-plan readings from parts A, C, S and B, and the closing docs (`docs/agent-arch.txt`, `docs/performance.md`) and
+CHANGELOG entry with those numbers.
+
+### 2026-10-08: the closing gates (owner run): one gate row and one milestone missed; decisions 12 and 13 raised
+
+Owner run of `dist/attention-long-context-close/run-gate.sh`, all four parts, from 05:44Z; baseline jar `d1f50669dfc23d55`
+(`05a17de`), candidate `fefd30371caf535a` (verified in every run's `host.json`). The script exits non-zero.
+Readings: [`20261008T054413Z-attention-close-gate`](../perf-compare/20261008T054413Z-attention-close-gate/INDEX.md); closing
+sweeps [`20261008T083312Z`](../perf-compare/20261008T083312Z/INDEX.md) (128), [`20261008T084614Z`](../perf-compare/20261008T084614Z/INDEX.md)
+(512), [`20261008T090011Z`](../perf-compare/20261008T090011Z/INDEX.md) and [`20261008T091353Z`](../perf-compare/20261008T091353Z/INDEX.md)
+(2048). Local paths in the four auto-published sweeps were made repository-relative and every JSON re-validated.
+
+**Part A (pinned, GPU, `n_prompt=512`): missed on one row.** tg B/A 1.875 (TinyLlama), **0.948 (Qwen2.5-3B)**, 1.471
+(Phi-3.5-mini), 1.546 (Mistral 7B); pp B/A 1.733 to 2.790. Qwen2.5-3B is lower in all three pairs (A 29.71 / 30.38 /
+30.59, B 29.06 / 28.64 / 28.81 t/s), so it is not one outlier. Allocation per token 0.803x to 0.998x; GC pause in the
+token span within bounds (Phi-3.5-mini 10.7 to 11.9 ms, 1.11x; the others at or under 5 ms).
+
+**Part C (pinned, CPU, standing gate): met.** tg and pp 0.997x to 1.001x, allocation 1.000x, GC 7.5 to 7.4 ms
+(TinyLlama), 0 (Mistral 7B). Top 10 hot methods identical in order on both jars.
+
+**Part S (unpinned by the milestone's rule, attention at 2048, clock-normalised): met.** 14.06x (TinyLlama), 10.40x
+(Qwen2.5-3B, binding), 17.12x (Phi-3.5-mini), 14.08x (Mistral 7B), against `>= 6.0x`.
+
+**Part B (pinned closing sweeps), read against the plan.** Every row scorable, prompt parity exact.
+
+| Model | pp 128 | pp 512 | pp 2048 | 512 over 128 (milestone `>= 1.00`) | 2048 over 512 (reading) | tg 128 (end `>= 0.70x` where set) |
+|---|---|---|---|---|---|---|
+| tinyllama-1.1b | 0.660x | 0.801x | 0.692x | 1.214 | 0.864 | 0.685x |
+| qwen2.5-3b | 0.753x | 0.828x | 0.685x | 1.100 | 0.827 | 0.434x |
+| Phi-3.5-mini | 0.587x | 0.597x | 0.552x | 1.017 | 0.925 | **0.835x** |
+| mistral-7b | 0.827x | 0.806x | 0.708x | **0.975 (missed)** | 0.878 | **0.986x** |
+
+- End-of-plan GPU tg `>= 0.70x`: met on both scored models (Phi-3.5-mini 0.835x, Mistral 7B 0.986x).
+- End-of-plan GPU pp `>= 0.40x` at 512: met on every sweep model (Phi-3.5-mini binding, 0.597x). `>= 0.25x` at 2048: met
+  (Phi-3.5-mini binding, 0.552x). The retired unqualified row stays met (0.587x at 128).
+- **512-over-128 milestone: missed on Mistral 7B, 0.975.** Juno's own prefill does not fall off: its pp t/s at 512 over
+  128 is 1.031 (519.5 to 535.5). The reference tool's is 1.057, so the ratio of ratios reads under 1.00. The other three
+  read 1.017 to 1.214. Juno's own 512-over-128: TinyLlama 1.336, Qwen2.5-3B 1.160, Phi-3.5-mini 1.006, Mistral 7B 1.031.
+- Attention share of a 512-token window (candidate, `--device-spans`, unpinned, `spans512/` in the gate directory): 13.0%,
+  11.7%, 10.1%, 9.1% (TinyLlama, Qwen2.5-3B, Phi-3.5-mini, Mistral 7B), against step 2's 62.1%, 53.3%, 45.5%, 47.6%.
+  `prefill-breakdown.sh` flags unattributed residue above 5% on Phi-3.5-mini (12.0%) and TinyLlama (6.2%).
+
+**Diagnostic of the part A miss (executor, unpinned).** Qwen2.5-3B only, `n_prompt=512`, both jars, `--gpu-attention on`
+and `off`, alternated three times. Attention off: decode 33.54 against 33.44 ms per token (B/A 0.997). Attention on:
+31.07 against 32.29 ms (B/A 1.039, tg 0.965x). The miss is in the GPU attention kernel at decode width, about 1.2 ms
+per token over 36 layers; nothing else in the decode path moved. Qwen2.5-3B is the only sweep model whose decode the
+region declines (Q/K/V biases, split-half RoPE), so it is the only one where that cost is not offset. Both kernels
+launch one block per (row, head), so at decode the block count is the same; the difference is per-block work (the
+tiled kernel stages K/V tiles in shared memory and merges online-softmax partials across 32 slots). No kernel profile
+was taken, so which part costs the time is not established. `expected-general` for the attribution, `host-specific` for
+the size.
+
+**Decision 12 (raised with the owner): the Qwen2.5-3B decode regression, 0.948x against `>= 0.95x`.**
+- (a) **Fix the kernel at decode width in this tier** (recommended): first a kernel-only microbenchmark at one query row
+  and short contexts (64 to 2048 keys) on all four sweep shapes, old kernel against tiled, to find the per-block cost;
+  then a decode-width variant of the tiled kernel (for example splitting the key range across more blocks and merging,
+  or a smaller tile when there is one row), tests first against `GqaMath`, keeping the window parameter and bit-for-bit
+  behaviour at prefill widths. Re-run part A on Qwen2.5-3B (pinned, owner). Removes the cost on every model, including
+  under the region.
+- (b) Take Qwen2 into the decode region (Q/K/V bias and split-half RoPE in the region), which the item 8 text allowed and
+  which would lift Qwen2.5-3B's decode about 1.5x end to end. It hides the kernel cost rather than removing it, and is
+  larger work.
+- (c) Accept the miss as recorded (0.2% under, consistent across pairs) and carry the decode-width kernel cost to a later
+  tier by name.
+
+**Decision 13 (raised with the owner): the 512-over-128 milestone on Mistral 7B, 0.975 against `>= 1.00`.**
+- (a) **Report it as missed and tick the criterion on that report** (recommended): the criterion asks for "met or missed
+  with its number", the README accepts a missed milestone reported plainly, and the miss is the reference tool scaling
+  2.5% better from 128 to 512 while Juno's own throughput rises 3.1%.
+- (b) Restate the row as Juno's own pp at 512 over 128 `>= 1.00` (met on all four), as the 2048 row was restated on
+  2026-10-05 for the same reason (a ratio of ratios moves with the reference tool), and rescore.
+- (c) Keep the milestone open and re-measure after decision 12's kernel change.
+
+**Also for the owner (decision 14, procedural): the reference column.** Whether the four closing sweeps become the
+README program-target table's reference column (as Tier 01C's did by its decision 6), and the 2048 attention-speedup
+milestone row is retired as met. Recommended: yes, both, in the change that closes the tier.
+
+**Criteria.** Ticked: the 2048 attention-speedup milestone (met, 10.40x to 17.12x; 2048 over 512 published as a reading;
+tg and pp end-of-plan rows recorded, all met, so no missing mechanism to name). Not ticked: the perf gate (part A row,
+decision 12), the 512-over-128 milestone (decision 13), the docs and CHANGELOG criteria (written with the closing
+numbers once decisions 12 to 14 are taken).
+
+**Out-of-tier changes.** None. **Owed:** decisions 12, 13 and 14 (owner).
+
+### 2026-10-08: decisions 12 (a), 13 (a), 14 taken; the decode-width attention path
+
+**Owner decisions (2026-10-08).** 12: (a), fix the kernel at decode width in this tier. 13: (a), report the
+512-over-128 milestone as missed on Mistral 7B (0.975) and tick its criterion on that report. 14: yes, the closing
+sweeps become the README reference column and the 2048 attention-speedup row is retired as met, in the change that
+closes the tier. The closing sweeps that column takes are the re-run below, since this change moves every model's
+generation.
+
+**Kernel-only measurement first** (decision 12's first step). `GqaAttentionDecodeBench` (new, node test scope,
+`@Tag("gpu")`, opt-in by `-Djuno.attentionBench=true`) times one query row per launch on the four sweep shapes at 64
+to 2048 keys, device time from CUDA events around 100 back-to-back launches queued behind 200 long ones, median of
+five; with `-Djuno.attentionBench.oldPtx` it also runs the pre-tier kernel's PTX in the same process. Two first
+versions of its method were wrong and are not used: per-launch event pairs on an idle device timed host launch
+latency (Qwen2.5-3B at 576 keys read 271 us, which would be 9.8 ms of attention per token), and a 40-launch busy
+prefix let the first cell starve while the JVM compiled the launch path. The final method's readings agree with the
+end-to-end ones (a short-context decode delta of about 18 us per layer against 1.2 ms per token measured end to end
+at about 36 layers, with launch overhead on top) and with the graph-replay record (Mistral 7B decode growing 5.4 ms
+from position 128 to 512).
+
+**Finding.** The tiled kernel was slower than the pre-tier one at decode on **every** shape, 1.5x to 2.9x (Qwen2.5-3B
+2.0x at 64 keys, 2.7x at 576), not on Qwen2.5-3B alone; the region's gains hid it on the other three models. Cause,
+read from the code and confirmed by the fix: at one row a block, each 32-key tile was staged by a 16-iteration copy
+loop whose global loads serialise behind their shared-memory stores, with two barriers per tile, and then each of
+the 32 slots scored one key. The staging only pays when rows share a tile.
+
+**Second defect found, same path.** At 256-wide heads the tile is 16 keys, so at one row a block (`splits = 32`)
+`keysPerSlot = TILE / splits = 0`: no slot scored a key and the output was 0/0 = NaN. No supported model has 256-wide
+heads, and the tests ran 256-wide heads only in prefill windows (32 rows a block). `expected-general`.
+
+**Tests, written first** (README rule 3):
+
+| Test | Seen failing first? | Result |
+|---|---|---|
+| `GqaAttentionTiledTest.decodeRowMatchesOracleAtEveryHeadWidth` (new: one decode row against `GqaMath` at TinyLlama, Qwen2.5-3B, Mistral 7B, Phi-3.5-mini, Phi-2 and 256-wide shapes, contexts 1, 31, 33, 576, 2049) | yes: every shape passed except the 256-wide one, `NaN` at row 0 element 0 | pass after the change; class 9 of 9 |
+| One-off bit-identity check (`dist/attention-long-context-close/decode-kernel/GqaDecodeBitIdentityOnceTest.java`, with the saved pre-change PTX): the new kernel against the pre-change kernel's `gqa_attention_d64`/`_d128` at one row a block, five head shapes, contexts 1 to 4,097, windows 0, 1, 33, 100 | the reference is the pre-change kernel itself, so the test cannot fail before the change; shown able to fail by a planted one-ulp fault in the new path (`w * 1.0000001f`), which fails at the first launch (TinyLlama shape, context 2) | 200 of 200 launches bit-identical; kept outside the tree because it needs the saved PTX |
+
+**Implementation.** `gqa_attention.cu`: at `rowsPerBlock == 1` each slot reads its keys `base + slot, base + slot +
+32, ...` straight from global memory (K as two `half2` per quad, V the same in the update), in a loop uniform across
+the block so every lane reaches the shuffles; same keys, order and operations as a 32-key tile, so bit-identical to
+it where the tile is 32 keys. The tile loop runs only when `rowsPerBlock > 1`. Prefill windows of more than one row,
+the merge and the launch geometry are unchanged; no Java dispatch changed. PTX rebuilt with the header's command
+(sm_61); a comment-only rebuild left it byte-identical.
+
+**Readings**, [`20261008T163349Z-decode-attention-kernel`](../perf-compare/20261008T163349Z-decode-attention-kernel/INDEX.md)
+(unpinned):
+
+| Decode, device us per launch | 64 keys: pre-tier / before / after | 576 keys | 2048 keys |
+|---|---|---|---|
+| tinyllama 32/4/64 | 14.7 / 27.8 / 7.8 | 98.9 / 193.2 / 21.9 | 472.5 / 710.8 / 87.1 |
+| qwen2.5-3b 16/2/128 | 18.1 / 36.4 / 7.1 | 102.5 / 275.3 / 19.2 | 514.0 / 1094.8 / 60.9 |
+| phi-3.5-mini 32/32/96 | 17.8 / 34.5 / 7.8 | 171.1 / 296.0 / 53.3 | 603.9 / 1025.5 / 173.8 |
+| mistral-7b 32/8/128 | 20.9 / 36.5 / 7.9 | 181.5 / 325.0 / 33.7 | 635.4 / 1126.8 / 107.1 |
+
+Qwen2.5-3B end to end, three builds alternated three times at `n_prompt=512`: tg median 28.58 (pre-tier), 27.65
+(before), **28.83 (after; 1.009x the pre-tier build)**; decode 33.40, 34.59, 33.05 ms per token. Indicative: the gate
+is the owner's pinned re-run.
+
+**Regression runs** (jar `43b22345f1175c8f`, installed):
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass (before the edits and after this record) |
+| `mvn -o test -pl node` | 967 run, 0 failures, 44 skipped (966 before, plus the new decode case) |
+| `mvn -o verify -pl juno-master -Pgpu -Dit.model.path=<tinyllama>` | 10 of 10 |
+| `smoke-gpu-residency.sh --models tinyllama-1.1b-chat-v1.0.Q4_K_M,mistral-7b,Phi-3.5-mini,Qwen3-1.7B,qwen2.5-3b` | 18 PASS, 0 FAIL |
+| `smoke-long-prompt-prefill.sh --baseline-jar <previous candidate fefd30371caf535a>` | 48 PASS, 0 FAIL: greedy text identical to the previous candidate on all 12 cells, as a bit-identical kernel requires |
+
+Not re-run: the other ten unit modules (only the CUDA kernel and `node` tests changed), the real-model
+`ModelLiveRunnerIT`, vision and LoRA (neither reaches the kernel: CLIP on the CPU, Phi-2 without a device path; LoRA
+declines GPU attention's region and its readings stand), and the CPU gate (no CPU path changed).
+
+**Docs.** `docs/agent-arch.txt` (`GqaAttentionKernel`: the decode path and the bench), `CHANGELOG.md` (Session 121),
+`docs/perf-compare/README.md` (the new row).
+
+**Out-of-tier changes.** None: decision 12's own scope. The 256-wide fix is in the same kernel path.
+
+**Staged for the owner (pinned):** `sudo -v && bash dist/attention-decode-close/run-gate.sh` (about 2 to 2.5 hours).
+Baseline `d1f50669dfc23d55` (`05a17de`), candidate `43b22345f1175c8f`. Part A: the GPU no-regression A/B at 512 on the
+four sweep models (tg and pp `>= 0.95x`, allocation and GC bounds). Part B: the closing sweeps at 128, 512 and 2048,
+which become the reference column (decision 14). Parts C and S are not re-run (no CPU path changed; prefill windows of
+more than one row unchanged), and their readings in `20261008T054413Z-attention-close-gate` stand.
+
+**Next.** The owner's re-run. Then: score part A, read the 512-over-128 milestone and the end-of-plan rows on the new
+sweeps, move the reference column and retire the 2048 row (decision 14), and write the closing docs
+(`docs/howto.md`, `docs/performance.md`) and CHANGELOG entry for the tier.
+
+### 2026-10-08: the closing gate re-run (owner run): met; the tier closes
+
+Owner run of `dist/attention-decode-close/run-gate.sh` (parts A and B), 17:14Z onward, clocks pinned; baseline
+`d1f50669dfc23d55` (`05a17de`), candidate `43b22345f1175c8f` (verified in every run's `host.json`).
+
+**Part A (GPU no-regression, `n_prompt=512`): met on every model.**
+[`20261008T171427Z-attention-decode-close-gate`](../perf-compare/20261008T171427Z-attention-decode-close-gate/INDEX.md).
+tg B/A 2.315 (TinyLlama), **1.000 (Qwen2.5-3B; 0.948 before the decode-width fix)**, 1.750 (Phi-3.5-mini), 1.762
+(Mistral 7B); pp B/A 1.706 to 2.711; allocation per token 0.812x to 0.998x; GC pause in the token span 0 ms where the
+baseline read 7.4 and 14.8 ms, Phi-3.5-mini 11.7 to 12.2 ms (1.04x, `<= 1.25x`), Qwen2.5-3B 0 and 0. The CPU gate and the
+2048 attention speedup stand from the first gate (`20261008T054413Z-attention-close-gate`): the fix reaches neither.
+
+**Part B (closing sweeps), the new reference column (decision 14).** Every row scorable, prompt parity exact.
+
+| Model | pp 128 | pp 512 | pp 2048 | 512 over 128 | 2048 over 512 | tg 128 |
+|---|---|---|---|---|---|---|
+| tinyllama-1.1b | 0.648x | 0.747x | 0.696x | 1.153 | 0.932 | 0.770x |
+| qwen2.5-3b | 0.713x | 0.825x | 0.682x | 1.157 | 0.827 | 0.416x |
+| Phi-3.5-mini | 0.584x | 0.594x | 0.540x | 1.017 | 0.909 | 0.858x |
+| mistral-7b | 0.807x | 0.805x | 0.706x | **0.998** | 0.877 | 1.030x |
+
+[`20261008T173153Z`](../perf-compare/20261008T173153Z/INDEX.md), [`20261008T174605Z`](../perf-compare/20261008T174605Z/INDEX.md),
+[`20261008T180014Z`](../perf-compare/20261008T180014Z/INDEX.md), [`20261008T181417Z`](../perf-compare/20261008T181417Z/INDEX.md).
+- End-of-plan rows: GPU tg Phi-3.5-mini 0.858x and Mistral 7B 1.030x (`>= 0.70x`), GPU pp at 512 0.594x (`>= 0.40x`)
+  and at 2048 0.540x (`>= 0.25x`), Phi-3.5-mini binding: **all met**, so all four are retired in the README's machine-read
+  table (its checker fails an active row its reference meets). Only the CPU rows remain active.
+- 512-over-128 on Mistral 7B reads 0.998 on this run (0.975 on the first): still missed, as reported under decision 13.
+  The milestone row stays active with that reading.
+- The first gate's sweeps (`20261008T083312Z` and the three after it) are marked superseded in their INDEX and in
+  `docs/perf-compare/README.md`; they were never a reference column.
+
+**Decision 14 applied.** README program-target table: new right-most column "Reference 2026-10-08 (Tier 02 closing
+sweeps, pinned)" and the paragraph naming it; end-of-plan rows retired as above; the 2048 attention-speedup milestone
+retired as met (10.40x binding); the 512-over-128 milestone's reference cell set to 0.998.
+
+**Raised with the owner (decision 15, for the next tier to start): the GPU end-of-plan targets.** All four are met with
+room (tg 0.858x and 1.030x against 0.70x; pp 0.594x and 0.540x against 0.40x and 0.25x). The plan raised met targets once
+before (2026-09-30), on the rule that a target met before the work meant to reach it measures nothing. Options: (a) raise
+them before Tier 02B starts (for example tg `>= 0.90x` on Phi-3.5-mini, pp `>= 0.70x` at 512 and `>= 0.60x` at 2048) and
+state which later tier owns each lever, recommended; (b) leave them retired and let Tier 14 report the distance to the
+post-plan anchor only. Qwen2.5-3B's generation (0.416x) has no owner: the decode region does not cover Qwen2's Q/K/V
+biases and split-half rotation, and no later tier names that work.
+
+**Docs.** `docs/performance.md` (new section, "Tiled GPU attention and the decode layer on the device"), `docs/howto.md`
+(the `--gpu-attention` row: streaming kernel, measured gains), `docs/agent-arch.txt` (the decode path, earlier today),
+`CHANGELOG.md` (Session 122), `docs/perf-compare/README.md` (five rows, four superseded marks), plan README (decision 14).
+
+**Out-of-tier changes.** None.
+
+**Tier status: complete.** Every exit criterion is checked.
+
+### 2026-10-08: decision 15 taken (a); the GPU targets raised; Tier 02D added
+
+**Owner decisions (2026-10-08).** 15: (a), raise the met GPU end-of-plan targets. Placement of the work (asked as a
+follow-up, since no later tier owned the levers): a new tier after 02C and before 03.
+
+**Done.** README "End-of-plan targets, machine-read": four new active rows, GPU tg `>= 0.70x` on every sweep model
+(reference 0.416x, Qwen2.5-3B binding), GPU tg `>= 0.90x` on Phi-3.5-mini (0.858x), GPU pp `>= 0.70x` at 512 (0.594x)
+and `>= 0.60x` at 2048 (0.540x), Phi-3.5-mini binding; the four met rows stay retired; a dated paragraph ("GPU targets
+raised again") gives the reasoning and notes that the post-plan anchor (GPU pp 0.40x at 2048) was passed. New
+[Tier 02D](TIER-02D-gpu-host-overhead.md), "GPU host overhead and decode-region coverage": Qwen2 in the decode region
+(the device already has `rope_split_half`, used by Qwen3's region, and the prefill window's `bias_add`), Phi-3's
+prefill-window host work (35.9% of its 512 window host-side or unattributed: residue 12.0%, region host 9.9%, host KV
+write 8.2%, staging 5.8%), and Phi-3's decode step, with a decomposition step first. README execution rule 1, the tier index, the
+ordering rationale and both tier lists name 02D. `check-plan-thresholds.sh` passes (22 tier files).
+
+**Not changed:** Tier 02's own status and criteria (complete); the running order before 02D (02B, then 02C).
