@@ -70,6 +70,11 @@ import org.junit.jupiter.params.provider.ValueSource;
  * stream, past the dispatch observer, so the prefill window would go unchecked here;
  * {@link PrefillRegionHandlerParityTest} holds the region's logits bit-identical to this
  * region-off path, so the kernel check here covers the region's attention too.
+ * For the same reason both runs keep the decode residency region off
+ * ({@link GpuResidencyOptions#ENV_PROPERTY}, {@code auto} by default): it attends a
+ * single decoded token on its own stream, so the single-decode site would go
+ * unchecked. {@code ResidentQkvPathPhi3Test} and {@code ResidentQkvPathQwen3Test}
+ * hold the region's attention output bit-identical to this op-at-a-time path.
  *
  * <p>Both runs multiply prefill windows on the FP16 dequant route
  * ({@link CudaMatVec#dequantizeBatchedKQuant}), as the calibration did. On the
@@ -102,6 +107,7 @@ class GpuAttentionHandlerParityTest {
 	private static GpuContext gpu;
 	private String saved;
 	private String savedRegion;
+	private String savedResidency;
 
 	@BeforeAll
 	static void init() {
@@ -125,6 +131,10 @@ class GpuAttentionHandlerParityTest {
 			System.clearProperty(PrefillWindowRegion.ENV_PROPERTY);
 		else
 			System.setProperty(PrefillWindowRegion.ENV_PROPERTY, savedRegion);
+		if (savedResidency == null)
+			System.clearProperty(GpuResidencyOptions.ENV_PROPERTY);
+		else
+			System.setProperty(GpuResidencyOptions.ENV_PROPERTY, savedResidency);
 	}
 
 	@ParameterizedTest(name = "{0}")
@@ -135,7 +145,9 @@ class GpuAttentionHandlerParityTest {
 		assumeTrue(model.toFile().exists(), "Skipping - model not found: " + model);
 		saved = System.getProperty(GpuAttentionOptions.ENV_PROPERTY);
 		savedRegion = System.getProperty(PrefillWindowRegion.ENV_PROPERTY);
+		savedResidency = System.getProperty(GpuResidencyOptions.ENV_PROPERTY);
 		System.setProperty(PrefillWindowRegion.ENV_PROPERTY, "off"); // see the class comment
+		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "off"); // see the class comment
 		ShardContext shard = wholeModel(model);
 		long freeAtStart = gpu.freeVramBytes();
 

@@ -518,7 +518,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	 */
 	private ResidentQkvPath openResidentQkv(MatVec backend, int L) {
 		if (!(backend instanceof GpuMatVec cuda)) {
-			GpuResidencyOptions.announceUnsupported(log, "the CPU backend", "has no device to keep activations on");
+			GpuResidencyOptions.announceIfExplicit(log, "the CPU backend", "has no device to keep activations on");
 			return null;
 		}
 		String reason = ResidentQkvPath.unsupportedReason(cuda.gpuContext(), cfg);

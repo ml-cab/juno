@@ -28,11 +28,18 @@ import java.util.concurrent.ConcurrentHashMap;
  * download of k, v and the attention output, instead of a host round trip
  * around each.
  *
- * <p>Default {@link Mode#OFF}: the path is opt-in until it has been measured end
- * to end. {@link Mode#AUTO} enables it wherever CUDA is present. Surfaces that
- * cannot run it (another handler family, LoRA playback, a backend or layout the
- * kernels do not cover) say so once, through {@link #announceOnce}, and keep
- * today's path; the flag never silently does nothing.
+ * <p>Default {@link Mode#AUTO}: the region runs wherever CUDA is present and the
+ * handler and its weights qualify (measured at 1.56x to 1.99x decode where it
+ * runs, prefill unchanged); everywhere else today's path is kept. {@link Mode#OFF}
+ * keeps the op-at-a-time path, whose greedy output can differ from the region's
+ * after some tokens because the region's norms sum in a different order.
+ *
+ * <p>Surfaces that cannot run the region (another handler family, LoRA, a backend
+ * or layout the kernels do not cover) keep today's path. Under an explicit
+ * {@link Mode#ON} each says so once, in the log and on the console, so the flag
+ * never silently does nothing. Under {@link Mode#AUTO} the console stays quiet,
+ * and the CPU backend and LoRA, which the user did not ask the region for, stay
+ * out of the log too ({@link #announceIfExplicit}).
  */
 public final class GpuResidencyOptions {
 
@@ -56,11 +63,11 @@ public final class GpuResidencyOptions {
 	/**
 	 * Parse CLI / env value: {@code on|off|auto}.
 	 *
-	 * @param spec raw value; blank means {@code off}
+	 * @param spec raw value; blank means {@code auto}
 	 */
 	public static GpuResidencyOptions parse(String spec) {
 		if (spec == null || spec.isBlank())
-			return new GpuResidencyOptions(Mode.OFF);
+			return new GpuResidencyOptions(Mode.AUTO);
 		String s = spec.strip().toLowerCase(Locale.ROOT);
 		return switch (s) {
 		case OFF, "0", "false", "no" -> new GpuResidencyOptions(Mode.OFF);
@@ -70,7 +77,7 @@ public final class GpuResidencyOptions {
 		};
 	}
 
-	/** Reads {@link #ENV_PROPERTY} (system property, falling back to the env var); defaults to {@code off}. */
+	/** Reads {@link #ENV_PROPERTY} (system property, falling back to the env var); defaults to {@code auto}. */
 	public static GpuResidencyOptions fromEnv() {
 		String prop = System.getProperty(ENV_PROPERTY);
 		String raw = prop != null && !prop.isBlank() ? prop : System.getenv(ENV_PROPERTY);
@@ -112,13 +119,14 @@ public final class GpuResidencyOptions {
 
 	/**
 	 * The one-line notice a console front end prints at startup when the region was
-	 * requested where it will not run, or {@code null} when it was not requested or
-	 * nothing about this launch rules it out. Console front ends disable library
-	 * logging unless asked to be verbose, so the log line alone would be silent.
+	 * explicitly requested ({@code on}) where it will not run, or {@code null} when it
+	 * was not, under {@code auto}, or when nothing about this launch rules it out.
+	 * Console front ends disable library logging unless asked to be verbose, so the
+	 * log line alone would be silent.
 	 */
 	public static String consoleNotice(String architecture, boolean lora, boolean cpu) {
 		GpuResidencyOptions opts = fromEnv();
-		if (!opts.requested())
+		if (opts.mode() != Mode.ON)
 			return null;
 		String prefix = "--gpu-residency=" + opts.policyLabel() + " has no effect here: ";
 		if (lora)
@@ -155,5 +163,14 @@ public final class GpuResidencyOptions {
 			return;
 		log.warning("--gpu-residency=" + opts.policyLabel() + " requested, but " + surface + " " + reason
 				+ "; using the existing path there");
+	}
+
+	/**
+	 * {@link #announceUnsupported} for a surface the default never meant to run the
+	 * region on (the CPU backend, LoRA): logged only under an explicit {@code on}.
+	 */
+	static void announceIfExplicit(java.util.logging.Logger log, String surface, String reason) {
+		if (fromEnv().mode() == Mode.ON)
+			announceUnsupported(log, surface, reason);
 	}
 }

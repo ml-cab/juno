@@ -1,0 +1,230 @@
+{
+  "model": "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 658.892244,
+    "token_gen_tps": 36.815573
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 512.7572460540596,
+    "token_gen_tps": 22.13863817047393,
+    "api_token_gen_tps": 19.5122,
+    "latency_ms": 3280,
+    "n_prompt": 128,
+    "prompt_tokens": 128,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 1.0,
+    "gc_pause_max_ms": 14.41723,
+    "gc_pause_total_ms": 14.41723,
+    "allocated_bytes_total": 14309060024,
+    "allocated_bytes_per_token": 223588036.125,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 128,
+        "n_prompt": 128,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 512.7572460540596,
+        "latency_ms": 321,
+        "status": "success",
+        "gc_pause_max_ms": 0.0,
+        "gpu_attention_resolved": "unknown",
+        "gpu_clock_in_window": {
+          "sm_mhz_median": 1809,
+          "sm_mhz_min": 1809,
+          "temp_c_max": 83,
+          "clock_event_reasons": [],
+          "reps": [
+            {
+              "samples": 4,
+              "busy_samples": 4,
+              "sm_mhz_median": 1809,
+              "sm_mhz_min": 1809,
+              "sm_mhz_max": 1809,
+              "temp_c_max": 83,
+              "power_w_median": 136.8,
+              "clock_event_reasons": []
+            },
+            {
+              "samples": 4,
+              "busy_samples": 4,
+              "sm_mhz_median": 1809,
+              "sm_mhz_min": 1809,
+              "sm_mhz_max": 1822,
+              "temp_c_max": 82,
+              "power_w_median": 137.8,
+              "clock_event_reasons": []
+            },
+            {
+              "samples": 4,
+              "busy_samples": 4,
+              "sm_mhz_median": 1815.5,
+              "sm_mhz_min": 1809,
+              "sm_mhz_max": 1822,
+              "temp_c_max": 82,
+              "power_w_median": 138.5,
+              "clock_event_reasons": []
+            }
+          ]
+        }
+      },
+      "generate": {
+        "prompt_tokens": 9,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 22.13863817047393,
+        "latency_ms": 3280,
+        "status": "success",
+        "gc_pause_max_ms": 14.41723,
+        "gpu_attention_resolved": "unknown",
+        "gpu_clock_in_window": {
+          "sm_mhz_median": 1809,
+          "sm_mhz_min": 1733,
+          "temp_c_max": 83,
+          "clock_event_reasons": [
+            "sw_thermal_slowdown"
+          ],
+          "reps": [
+            {
+              "samples": 32,
+              "busy_samples": 32,
+              "sm_mhz_median": 1822,
+              "sm_mhz_min": 1822,
+              "sm_mhz_max": 1822,
+              "temp_c_max": 82,
+              "power_w_median": 125.5,
+              "clock_event_reasons": []
+            },
+            {
+              "samples": 32,
+              "busy_samples": 32,
+              "sm_mhz_median": 1809,
+              "sm_mhz_min": 1809,
+              "sm_mhz_max": 1822,
+              "temp_c_max": 82,
+              "power_w_median": 125.7,
+              "clock_event_reasons": []
+            },
+            {
+              "samples": 32,
+              "busy_samples": 32,
+              "sm_mhz_median": 1759,
+              "sm_mhz_min": 1733,
+              "sm_mhz_max": 1809,
+              "temp_c_max": 83,
+              "power_w_median": 115.6,
+              "clock_event_reasons": [
+                "sw_thermal_slowdown"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "9g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 512.7572460540596,
+        "min": 512.7399596472851,
+        "max": 518.3756745216659,
+        "values": [
+          518.3756745216659,
+          512.7399596472851,
+          512.7572460540596
+        ]
+      },
+      "token_gen_tps": {
+        "median": 22.13863817047393,
+        "min": 22.13435846447239,
+        "max": 22.375592668834667,
+        "values": [
+          22.375592668834667,
+          22.13863817047393,
+          22.13435846447239
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 19.5122,
+        "min": 19.5062,
+        "max": 19.6319,
+        "values": [
+          19.6319,
+          19.5062,
+          19.5122
+        ]
+      },
+      "latency_ms": {
+        "median": 3280,
+        "min": 3260,
+        "max": 3281,
+        "values": [
+          3260,
+          3281,
+          3280
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 14.075026,
+        "min": 14.002524,
+        "max": 14.41723,
+        "values": [
+          14.41723,
+          14.002524,
+          14.075026
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 223579062.875,
+        "min": 223551079.875,
+        "max": 223588036.125,
+        "values": [
+          223579062.875,
+          223551079.875,
+          223588036.125
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.778211081892868,
+  "noise": {
+    "ok": true,
+    "basis": "repetition dispersion",
+    "condition": null,
+    "rep_spread": 0.010896524099843239,
+    "rep_spread_tolerance": 0.15,
+    "gc_pause_max_ms": 14.41723,
+    "gc_pause_max_ms_in_token_span": 14.41723,
+    "reason": null
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.6013389543189761,
+  "result_files": {
+    "llama_cpp_raw": "target/perf-compare/20261008T002907Z/mistral-7b-instruct-v0.1-q4_k_m-llama-cpp.raw.json",
+    "juno_response": "target/perf-compare/20261008T002907Z/mistral-7b-instruct-v0.1-q4_k_m-tuned-generate-rep1-juno-response.json",
+    "llama_result": "target/perf-compare/20261008T002907Z/mistral-7b-instruct-v0.1-q4_k_m-tuned-llama-cpp.json",
+    "juno_result": "target/perf-compare/20261008T002907Z/mistral-7b-instruct-v0.1-q4_k_m-tuned-juno.json",
+    "juno_jfr": "target/perf-compare/20261008T002907Z/mistral-7b-instruct-v0.1-q4_k_m-tuned-juno-jfr.json"
+  }
+}

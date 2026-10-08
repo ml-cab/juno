@@ -18,12 +18,21 @@ package cab.ml.juno.node;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@code --gpu-residency} / {@code JUNO_GPU_RESIDENCY}: off unless asked for,
- * because the path has not yet been measured end to end.
+ * {@code --gpu-residency} / {@code JUNO_GPU_RESIDENCY}: {@code auto} unless set,
+ * so the region runs wherever CUDA is present and the handler qualifies. Under
+ * {@code auto} a surface that declines the region says nothing on the console,
+ * and the CPU backend and LoRA say nothing in the log either: the user did not
+ * ask for the region there. An explicit {@code on} announces every decline.
  */
 class GpuResidencyOptionsTest {
 
@@ -41,18 +50,19 @@ class GpuResidencyOptionsTest {
 		assertThat(GpuResidencyOptions.parse("off").mode()).isEqualTo(GpuResidencyOptions.Mode.OFF);
 		assertThat(GpuResidencyOptions.parse("no").mode()).isEqualTo(GpuResidencyOptions.Mode.OFF);
 		assertThat(GpuResidencyOptions.parse("auto").mode()).isEqualTo(GpuResidencyOptions.Mode.AUTO);
-		assertThat(GpuResidencyOptions.parse("").mode()).isEqualTo(GpuResidencyOptions.Mode.OFF);
+		assertThat(GpuResidencyOptions.parse("").mode()).isEqualTo(GpuResidencyOptions.Mode.AUTO);
+		assertThat(GpuResidencyOptions.parse(null).mode()).isEqualTo(GpuResidencyOptions.Mode.AUTO);
 		assertThatThrownBy(() -> GpuResidencyOptions.parse("sometimes"))
 				.isInstanceOf(IllegalArgumentException.class).hasMessageContaining("--gpu-residency");
 	}
 
 	@Test
-	void defaults_to_off_when_nothing_is_set() {
+	void defaults_to_auto_when_nothing_is_set() {
 		// The environment variable could be set on a developer machine; the
 		// property wins over it, so clear only what this test controls.
 		if (System.getenv(GpuResidencyOptions.ENV_PROPERTY) == null) {
-			assertThat(GpuResidencyOptions.fromEnv().mode()).isEqualTo(GpuResidencyOptions.Mode.OFF);
-			assertThat(GpuResidencyOptions.fromEnv().requested()).isFalse();
+			assertThat(GpuResidencyOptions.fromEnv().mode()).isEqualTo(GpuResidencyOptions.Mode.AUTO);
+			assertThat(GpuResidencyOptions.fromEnv().requested()).isEqualTo(CudaAvailability.isAvailable());
 		}
 	}
 
@@ -106,5 +116,65 @@ class GpuResidencyOptionsTest {
 		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "off");
 		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "off");
 		assertThat(GpuResidencyOptions.consoleNotice("llama", false, false)).as("residency not requested").isNull();
+	}
+
+	@Test
+	void auto_says_nothing_on_the_console_wherever_the_region_is_declined() {
+		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "auto");
+		assertThat(GpuResidencyOptions.consoleNotice("llama", true, false)).as("LoRA").isNull();
+		assertThat(GpuResidencyOptions.consoleNotice("llama", false, true)).as("CPU backend").isNull();
+		assertThat(GpuResidencyOptions.consoleNotice("qwen2", false, false)).as("qwen2").isNull();
+		assertThat(GpuResidencyOptions.consoleNotice("phi2", false, false)).as("phi2").isNull();
+		System.setProperty(GpuAttentionOptions.ENV_PROPERTY, "off");
+		assertThat(GpuResidencyOptions.consoleNotice("llama", false, false)).as("--gpu-attention off").isNull();
+	}
+
+	@Test
+	void a_surface_the_user_did_not_ask_for_is_logged_only_under_an_explicit_on() {
+		List<LogRecord> records = new ArrayList<>();
+		Logger log = capturing(records);
+		String surface = "explicit-only-surface-" + System.nanoTime();
+
+		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "auto");
+		GpuResidencyOptions.announceIfExplicit(log, surface, "has no device");
+		assertThat(records).as("auto").isEmpty();
+		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "off");
+		GpuResidencyOptions.announceIfExplicit(log, surface, "has no device");
+		assertThat(records).as("off").isEmpty();
+
+		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "on");
+		GpuResidencyOptions.announceIfExplicit(log, surface, "has no device");
+		GpuResidencyOptions.announceIfExplicit(log, surface, "has no device");
+		assertThat(records).as("on, once").hasSize(1);
+		assertThat(records.get(0).getMessage()).contains("--gpu-residency=on").contains(surface);
+	}
+
+	@Test
+	void an_unsupported_model_is_still_logged_under_auto_where_cuda_is_present() {
+		List<LogRecord> records = new ArrayList<>();
+		Logger log = capturing(records);
+		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "auto");
+		GpuResidencyOptions.announceUnsupported(log, "architecture-" + System.nanoTime(), "is not covered");
+		assertThat(records).hasSize(CudaAvailability.isAvailable() ? 1 : 0);
+	}
+
+	private static Logger capturing(List<LogRecord> records) {
+		Logger log = Logger.getAnonymousLogger();
+		log.setUseParentHandlers(false);
+		log.addHandler(new Handler() {
+			@Override
+			public void publish(LogRecord r) {
+				records.add(r);
+			}
+
+			@Override
+			public void flush() {
+			}
+
+			@Override
+			public void close() {
+			}
+		});
+		return log;
 	}
 }

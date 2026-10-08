@@ -537,16 +537,21 @@ GPU FFI (node module — Panama project, JEP 454):
         whole only when all four matrices are K-quant on the device with the model's shape. Holds
         only the FFN norm weights; its scratch belongs to the caller's region.
   GpuResidencyOptions — --gpu-residency on|off|auto / JUNO_GPU_RESIDENCY (system property, then
-        env); default off. announceUnsupported(log, surface, reason) logs once per surface per
-        process where the flag was requested but cannot run: LlamaTransformerHandler (CPU backend,
-        qwen2 split-half and biases, no K-quant device projections, region layers whose tail weights
+        env); default auto (on wherever CUDA is present; decode 1.56x to 1.99x off where the region
+        runs, prefill unchanged; off keeps the op-at-a-time path). consoleNotice speaks only under
+        an explicit on. announceIfExplicit(log, surface, reason) is for surfaces the default never
+        meant to run the region on (the CPU backend, LoRA training and playback) and logs only under
+        an explicit on. announceUnsupported(log, surface, reason) logs once per surface per
+        process where the flag was requested (on, or auto with CUDA present) but cannot run:
+        LlamaTransformerHandler (CPU backend through announceIfExplicit, qwen2 split-half and biases, no K-quant device projections, region layers whose tail weights
         are not K-quant on the device and so leave the region after attention), Phi3TransformerHandler
-        and Qwen3TransformerHandler (CPU backend, query width different from hidden size, no K-quant
+        and Qwen3TransformerHandler (CPU backend through announceIfExplicit, query width different from hidden size, no K-quant
         device projections, Qwen3 YaRN RoPE, and the same partial-layer notices through
         ResidentQkvPath.activate), ForwardPassHandlerLoader (the phi2 and qwen3moe handlers, which
         have no region: unsupportedArchitectureReason), LoraTrainingHandlerFactory (LoRA training and
-        --lora-play). Because the console front end turns library logging off unless --verbose,
-        ConsoleMain also prints consoleNotice(architecture, lora, cpu) at startup: one warning when
+        --lora-play, through announceIfExplicit). Because the console front end turns library
+        logging off unless --verbose, ConsoleMain also prints consoleNotice(architecture, lora, cpu)
+        at startup under an explicit on: one warning when
         the launch cannot use the region (LoRA, CPU backend, or unsupportedArchitectureReason of the
         file's general.architecture), or a note that the KV append and attention stay outside the
         region when --gpu-attention is off. ConsoleMain sets the property; ClusterHarness forwards

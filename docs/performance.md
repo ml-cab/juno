@@ -871,7 +871,7 @@ repetition spread. The JFR spans agree: with the region on, decode emits no `jun
 many `juno.RmsNorm` spans (only the feed-forward norm is left on the host) and one `juno.MatVec` fewer
 per layer. Greedy output matched the region-off run token for token over 32 tokens on TinyLlama,
 Mistral-7B and LLaMA-30B (the last with only part of its layers on the GPU, where the region runs on
-those layers and the rest keep the host path). It is off by default.
+those layers and the rest keep the host path). It was off by default at that point; see below for the default.
 
 **The decode region through attention, then through the whole layer.** With GPU attention on, the
 region first went on to cast K and V into the device KV cache and attend there, one download per
@@ -887,8 +887,20 @@ and 23 on 22 layers). Generation with the region on reads 2.208x the region-off 
 (Qwen2.5-3B) and 0.991 (Phi-3.5-mini) on against off, running the same code either way (clocks pinned,
 same-hour A/B, medians of three,
 [`perf-compare/20261006T080204Z-gpu-residency-whole-layer-ab/`](perf-compare/20261006T080204Z-gpu-residency-whole-layer-ab/INDEX.md)).
-The layer output is bit-identical to the GPU op-at-a-time path; against the default path only the two
-norms' summation order differs.
+The layer output is bit-identical to the GPU op-at-a-time path; against the op-at-a-time path only the
+two norms' summation order differs.
+
+**The region is on by default (`--gpu-residency auto`).** It was put to a default on two full GPU sweeps
+of the four standing models, region off and then on, from one jar in one session (clocks not pinned;
+[`perf-compare/20261008T002907Z/`](perf-compare/20261008T002907Z/INDEX.md) off,
+[`perf-compare/20261008T004314Z/`](perf-compare/20261008T004314Z/INDEX.md) on). Generation with the region
+on read 1.994x the off rate on TinyLlama, 1.561x on Phi-3.5-mini and 1.583x on Mistral-7B, and 0.995x on
+Qwen2.5-3B, which declines the region; prefill read 0.979x to 1.014x, since prefill does not run the
+decode region. `auto` runs it wherever CUDA is present and the handler and weights qualify, and says
+nothing on the console where it is declined. `--gpu-residency off` keeps the op-at-a-time path: its greedy
+output is the same as the region's over 64 tokens on Phi-3.5-mini and Qwen2.5-3B, and parts from it after
+a few dozen tokens on TinyLlama and Mistral-7B (the norms' summation order). A GPU measurement taken with
+the engine's defaults runs the region from this change on.
 
 **Device scratch per backend instead of per thread, and the prefill FP16 packing compiled on its own
 (a measurement boundary for GPU prefill).** The GPU matrix-vector backend kept its device scratch per

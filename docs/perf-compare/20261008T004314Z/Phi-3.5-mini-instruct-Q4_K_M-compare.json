@@ -1,0 +1,226 @@
+{
+  "model": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 1178.309247,
+    "token_gen_tps": 59.523766
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 680.6075547555558,
+    "token_gen_tps": 48.59877786344865,
+    "api_token_gen_tps": 46.3432,
+    "latency_ms": 1381,
+    "n_prompt": 128,
+    "prompt_tokens": 128,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 3.0,
+    "gc_pause_max_ms": 9.892395,
+    "gc_pause_total_ms": 12.400255,
+    "allocated_bytes_total": 11176628752,
+    "allocated_bytes_per_token": 175032293.625,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 128,
+        "n_prompt": 128,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 680.6075547555558,
+        "latency_ms": 221,
+        "status": "success",
+        "gc_pause_max_ms": 0.0,
+        "gpu_attention_resolved": "unknown",
+        "gpu_clock_in_window": {
+          "sm_mhz_median": 1822,
+          "sm_mhz_min": 1822,
+          "temp_c_max": 80,
+          "clock_event_reasons": [],
+          "reps": [
+            {
+              "samples": 3,
+              "busy_samples": 3,
+              "sm_mhz_median": 1822,
+              "sm_mhz_min": 1822,
+              "sm_mhz_max": 1822,
+              "temp_c_max": 80,
+              "power_w_median": 133.8,
+              "clock_event_reasons": []
+            },
+            {
+              "samples": 3,
+              "busy_samples": 3,
+              "sm_mhz_median": 1822,
+              "sm_mhz_min": 1822,
+              "sm_mhz_max": 1822,
+              "temp_c_max": 79,
+              "power_w_median": 135.6,
+              "clock_event_reasons": []
+            },
+            {
+              "samples": 3,
+              "busy_samples": 3,
+              "sm_mhz_median": 1822,
+              "sm_mhz_min": 1822,
+              "sm_mhz_max": 1822,
+              "temp_c_max": 79,
+              "power_w_median": 134.4,
+              "clock_event_reasons": []
+            }
+          ]
+        }
+      },
+      "generate": {
+        "prompt_tokens": 10,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 48.59877786344865,
+        "latency_ms": 1381,
+        "status": "success",
+        "gc_pause_max_ms": 9.892395,
+        "gpu_attention_resolved": "unknown",
+        "gpu_clock_in_window": {
+          "sm_mhz_median": 1822,
+          "sm_mhz_min": 1809,
+          "temp_c_max": 82,
+          "clock_event_reasons": [],
+          "reps": [
+            {
+              "samples": 14,
+              "busy_samples": 14,
+              "sm_mhz_median": 1822,
+              "sm_mhz_min": 1822,
+              "sm_mhz_max": 1822,
+              "temp_c_max": 81,
+              "power_w_median": 137.6,
+              "clock_event_reasons": []
+            },
+            {
+              "samples": 14,
+              "busy_samples": 14,
+              "sm_mhz_median": 1822,
+              "sm_mhz_min": 1809,
+              "sm_mhz_max": 1822,
+              "temp_c_max": 82,
+              "power_w_median": 142.7,
+              "clock_event_reasons": []
+            },
+            {
+              "samples": 14,
+              "busy_samples": 14,
+              "sm_mhz_median": 1809,
+              "sm_mhz_min": 1809,
+              "sm_mhz_max": 1809,
+              "temp_c_max": 82,
+              "power_w_median": 141.6,
+              "clock_event_reasons": []
+            }
+          ]
+        }
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "6g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 680.6075547555558,
+        "min": 678.2255445194718,
+        "max": 682.423181715021,
+        "values": [
+          678.2255445194718,
+          682.423181715021,
+          680.6075547555558
+        ]
+      },
+      "token_gen_tps": {
+        "median": 48.59877786344865,
+        "min": 48.310249752442054,
+        "max": 48.751933440740345,
+        "values": [
+          48.310249752442054,
+          48.751933440740345,
+          48.59877786344865
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 46.3432,
+        "min": 46.0432,
+        "max": 46.3768,
+        "values": [
+          46.0432,
+          46.3768,
+          46.3432
+        ]
+      },
+      "latency_ms": {
+        "median": 1381,
+        "min": 1380,
+        "max": 1390,
+        "values": [
+          1390,
+          1380,
+          1381
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 9.549682,
+        "min": 8.926561,
+        "max": 9.892395,
+        "values": [
+          9.549682,
+          9.892395,
+          8.926561
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 174634824.25,
+        "min": 174632740.625,
+        "max": 175032293.625,
+        "values": [
+          174634824.25,
+          175032293.625,
+          174632740.625
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.5776136922360552,
+  "noise": {
+    "ok": true,
+    "basis": "repetition dispersion",
+    "condition": null,
+    "rep_spread": 0.009088370278349793,
+    "rep_spread_tolerance": 0.15,
+    "gc_pause_max_ms": 9.892395,
+    "gc_pause_max_ms_in_token_span": 9.892395,
+    "reason": null
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.8164600651015369,
+  "result_files": {
+    "llama_cpp_raw": "target/perf-compare/20261008T004314Z/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.raw.json",
+    "juno_response": "target/perf-compare/20261008T004314Z/Phi-3.5-mini-instruct-Q4_K_M-generate-rep1-juno-response.json",
+    "llama_result": "target/perf-compare/20261008T004314Z/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.json",
+    "juno_result": "target/perf-compare/20261008T004314Z/Phi-3.5-mini-instruct-Q4_K_M-juno.json",
+    "juno_jfr": "target/perf-compare/20261008T004314Z/Phi-3.5-mini-instruct-Q4_K_M-juno-jfr.json"
+  }
+}

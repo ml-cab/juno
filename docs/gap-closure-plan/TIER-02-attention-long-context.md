@@ -42,8 +42,11 @@ region's pinned A/B is met (owner run, tg on/off 1.641 to 2.046 where the region
 `docs/perf-compare/20261007T174646Z-gpu-residency-final-region-ab`); its criterion is ticked. Scope item 5 is done
 (2026-10-07): graph replay of a whole decode layer, bit-identical, saves at most 2.0% to 3.1% of a TinyLlama decode
 forward pass and nothing on Mistral 7B, against >= 5% on both (`docs/perf-compare/20261007T213904Z-cuda-graph-replay-decode`),
-so `CudaGraphSession` and its test are deleted and the criterion is ticked. Next: scope item 6 (the `--gpu-residency`
-default, two published on/off sweeps put to the owner).
+so `CudaGraphSession` and its test are deleted and the criterion is ticked. Scope item 6's two sweeps are published
+(2026-10-08, unpinned, `docs/perf-compare/20261008T002907Z` off and `20261008T004314Z` on: tg on/off 1.56 to 1.99 where the
+region runs, 0.995 where declined). Decision 10 taken (a): `--gpu-residency` defaults to `auto`, silent where the region
+is declined; implemented tests first, the item 6 criterion is ticked. Next: implementation step 6 (the cross-surface
+smoke matrix on the new default) and the closing gates.
 
 **Split 2026-10-04 (plan review): read this first.** This tier held nine items, and under execution
 rule 1 every later tier, including every remaining GPU throughput lever, waited on all of them. Its
@@ -473,8 +476,15 @@ budget. No download is needed.
       [`20261007T213904Z-cuda-graph-replay-decode`](../perf-compare/20261007T213904Z-cuda-graph-replay-decode/INDEX.md).
       `CudaGraphSession`, `CudaGraphSessionTest` and the six graph driver handles removed; the measured code kept as
       that directory's `measurement.patch`.
-- [ ] `--gpu-residency` default put to the owner (scope item 6) with the two published on/off sweeps
+- [x] `--gpu-residency` default put to the owner (scope item 6) with the two published on/off sweeps
       on all four sweep models; changed only on the owner's decision.
+      *2026-10-08: put to the owner as decision 10, on two unpinned full sweeps from one session and one jar,
+      [`20261008T002907Z`](../perf-compare/20261008T002907Z/INDEX.md) (off) and
+      [`20261008T004314Z`](../perf-compare/20261008T004314Z/INDEX.md) (on): tg on/off 1.994 (TinyLlama), 1.561
+      (Phi-3.5-mini), 1.583 (Mistral 7B), 0.995 where declined (Qwen2.5-3B); pp unchanged.*
+      *2026-10-08: decided (owner, decision 10 (a)): the default is `auto`, and `auto` gives no notice where the user
+      never asked for the region. Implemented tests first; every unit module, the residency smoke and the `-Pgpu` ITs
+      pass on it. Ticked.*
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, both memory thresholds above met, Juno t/s >= 0.95x the pre-tier build, and
       the standing CPU and allocation gate met.
@@ -2059,3 +2069,145 @@ replay, with the measurement), `CHANGELOG.md` (Session 118), `docs/perf-compare/
 **Next.** Scope item 6: the `--gpu-residency` default. Two published `compare-llama-cpp.sh --gpu` sweeps on all four
 sweep models, region on and off, read side by side and put to the owner; the default is changed only on the owner's
 decision.
+
+### 2026-10-08: implementation step 5, scope item 6 (the `--gpu-residency` default: two sweeps, put to the owner; decision 10 raised)
+
+**Plan versus code, re-verified first** (HEAD `2acc808`, tree clean apart from the untracked `.github/`; no gate, sweep or
+mvn run in flight; `check-plan-thresholds.sh` passes). `GpuResidencyOptions.parse` maps a blank value to `OFF`, so the
+default is off; `--help` (`ConsoleMain`), `docs/howto.md`'s flag table and `compare-llama-cpp.sh --help` all say
+`default: off`. `compare-llama-cpp.sh` passes `--gpu-residency` to both lanes (the tuned lane overrides only `--mmq`,
+`--gpu-attention` and `--gpu-layers`) and records it as `juno_gpu_residency` in `host.json`. The four sweep models are
+on disk. No drift that changes scope.
+
+**Method.** Scope item 6 asks for two full `compare-llama-cpp.sh --gpu` sweeps on the four sweep models, region on and
+off, read side by side. It scores no threshold (the region's throughput threshold was met on the owner's pinned A/B,
+`20261007T174646Z-gpu-residency-final-region-ab`), so both sweeps were taken in this session, unpinned (no prompt-free
+sudo), back to back on one jar: `scripts/performance-tests/compare-llama-cpp.sh --gpu --gpu-residency off`, then the same
+with `on`; script defaults otherwise (`n_prompt=128`, `n_gen=64`, `--juno-reps 3`, `--juno-warmup 2`, default and tuned
+lanes). Jar sha256 `94ac42bac3d03b4a` (built from HEAD `2acc808` immediately before, `juno_tree_dirty: false`).
+Governor `schedutil`, turbo on: the reference tool read 12% to 28% faster than in the pinned reference sweeps, so these
+GPU ratios are not comparable with the reference column and score nothing.
+
+**Reading**, [`20261008T002907Z`](../perf-compare/20261008T002907Z/INDEX.md) (off) and
+[`20261008T004314Z`](../perf-compare/20261008T004314Z/INDEX.md) (on, which carries the side-by-side table); Juno medians of
+three, every row scorable in both runs:
+
+| Model (default lane) | Region | tg off | tg on | tg on/off | pp on/off | GPU tg ratio off / on | alloc/token off / on | GC max ms off / on | Greedy text on vs off |
+|---|---|---|---|---|---|---|---|---|---|
+| tinyllama-1.1b | whole layer | 64.45 | 128.51 | **1.994** | 0.995 | 0.340x / 0.701x | 48.2M / 38.9M | 8 / 0 | parts at char 93 of 223 |
+| qwen2.5-3b | declined (qwen2, announced) | 29.21 | 29.06 | **0.995** | 0.987 | 0.409x / 0.420x | 143.3M / 143.6M | 0 / 0 | identical |
+| Phi-3.5-mini | whole layer | 31.13 | 48.60 | **1.561** | 0.995 | 0.517x / 0.816x | 207.6M / 175.0M | 9 / 10 | identical |
+| mistral-7b | whole layer | 22.26 | 35.22 | **1.583** | 0.998 | 0.605x / 0.977x | 224.1M / 193.6M | 14 / 0 | parts at char 152 of 263 |
+
+The tuned lanes agree within 1.5% (tg on/off 2.007, 1.011, 1.554, 1.574). On every region model every on repetition is
+above every off repetition. Prefill is unchanged (0.979 to 1.014; prefill does not run the decode region). Each mode's
+greedy text is identical across its three repetitions and both lanes; TinyLlama and Mistral 7B part on against off, as at
+every gate of this region (the region's norms sum in a different order than the default path's CPU norms). These on/off
+ratios agree with the owner's pinned A/B of 2026-10-07 (2.046, 1.669, 1.641; 1.017 declined) within 6%.
+
+**Read against the end-of-plan targets (informational, unpinned).** With the region on, GPU tg reads 0.816x on
+Phi-3.5-mini and 0.977x on Mistral 7B, above the 0.70x rows; with it off, 0.517x and 0.605x, below them. On this card the
+flag default, not any remaining kernel, is what decides whether the shipped engine meets the tg targets. The pinned closing
+sweeps score them.
+
+**What a default change would touch** (read, not changed): `GpuResidencyOptions.parse` (blank to the new mode) and its
+javadoc; `ConsoleMain --help`; `docs/howto.md`'s flag table; `compare-llama-cpp.sh --help`; `CHANGELOG.md`. And the
+notices: `consoleNotice` and `announceUnsupported` fire whenever `requested()`, which an `auto` default makes true on every
+CUDA host. A `--cpu` run, a LoRA run and a Qwen2 run would then each print a WARNING about a flag the user never passed.
+GPU attention's `auto` default stays silent on `--cpu` and LoRA (`GpuAttentionSupport.consoleNotice`), and the region's
+notices would need the same rule, with a unit test, before the default moves. Cluster mode needs nothing new:
+`ClusterHarness` forwards the property to forked nodes, and `smoke-gpu-residency.sh` already runs the region in both
+cluster modes.
+
+**Decision 10 (raised with the owner): the `--gpu-residency` default.**
+- (a) **`auto`** (recommended): the region runs wherever CUDA is present and the handler and weights qualify, and every
+  other surface keeps today's path. In the same change, `auto` stops announcing on `--cpu` and LoRA, as GPU attention's
+  `auto` does (tests first). A Qwen2 or other unsupported architecture keeps a notice in the log. `off` stays the
+  op-at-a-time path, and the release note says that greedy text on TinyLlama-class and Mistral models differs from it
+  after some tokens. Pro: 1.56x to 1.99x decode on three of four sweep models, and both 0.70x tg targets met on the
+  default flags; prefill unchanged; 13% to 19% less allocation per token. Con: the default greedy text changes on LLaMA
+  and Mistral models. The default path already uses GPU attention, so it was never CPU-bit-identical.
+- (b) **`on`**: the same throughput, but an explicit `on` warns on every surface that declines it, so the noise problem
+  is worse than under (a).
+- (c) **keep `off`**: no output change. The shipped default then stays at 0.517x and 0.605x tg against the 0.70x targets,
+  and reaching them depends on users passing a flag.
+
+**Tests and commands run**
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass (before any edit; again after this record) |
+| `mvn -q -o package -DskipTests` | pass; shaded jar `94ac42bac3d03b4a` |
+| `compare-llama-cpp.sh --gpu --gpu-residency off` | pass, published `20261008T002907Z`, 8 of 8 rows scorable |
+| `compare-llama-cpp.sh --gpu --gpu-residency on` | pass, published `20261008T004314Z`, 8 of 8 rows scorable |
+
+No code changed, so no unit test was run. Local paths in both published directories were made repository-relative and
+every JSON re-validated with `jq`.
+
+**Docs.** `docs/perf-compare/README.md` (two rows). Nothing shipped, so this step adds no CHANGELOG entry and no
+howto change. Both follow the owner's decision.
+
+**Out-of-tier changes.** None.
+
+**Next.** The owner's decision 10. If (a) or (b), implement it, tests first: the notice rule and the default, then the
+docs and CHANGELOG, then re-run `smoke-gpu-residency.sh`, the console-notice tests and the `-Pgpu` ITs. Then implementation
+step 6 (the cross-surface smoke matrix, including `smoke-long-prompt-prefill.sh` at 2048) and the tier's closing gates,
+owed by the owner: the pinned 0.95x A/B, the standing CPU and allocation gate, the 2048 attention-speedup A/B and the
+pinned closing sweeps at 128, 512 and 2048, all on the final default.
+
+### 2026-10-08: decision 10 taken (a); `--gpu-residency` defaults to `auto`
+
+**Owner decision (2026-10-08): (a).** The region runs by default wherever CUDA is present and the handler and weights
+qualify, and `auto` stops announcing on surfaces the user never asked the region for.
+
+**Tests, written first** (README rule 3):
+
+| Test | Seen failing first? | Result |
+|---|---|---|
+| `GpuResidencyOptionsTest` (10 cases: a blank or missing value parses to `AUTO`; `fromEnv` defaults to `AUTO`; `auto` gives no console notice for LoRA, the CPU backend, Qwen2, Phi-2 or `--gpu-attention off`; `announceIfExplicit` logs nothing under `auto` or `off` and once under `on`; an unsupported model is still logged under `auto` where CUDA is present) | yes: first a compile error (`announceIfExplicit` missing), then, with a stub that delegated to today's announcer, 4 failures for the intended reasons (`expected: AUTO but was: OFF` twice, the LoRA console notice under `auto(on)`, a log record under `auto`); the unsupported-model case passed as a regression case | 10 of 10 |
+| `GpuAttentionHandlerParityTest` | failed in the `node` run after the change: `DECODE: launches seen` was 0 on both models, because the region now attends the single-decode site on its own stream, past the dispatch observer. That is the same reason the test already pins the prefill-window region off. It now pins `--gpu-residency off` too, with the reason in its class comment; `ResidentQkvPathPhi3Test` and `ResidentQkvPathQwen3Test` hold the region's attention bit-identical to that path. No bound was changed | 2 of 2 |
+
+**Implementation.** `GpuResidencyOptions.parse` maps a blank value to `AUTO`. `consoleNotice` returns a notice only under
+`ON`. The new `announceIfExplicit` logs only under `ON`, and the four call sites for surfaces the default never meant to
+run the region on use it: the CPU backend in `LlamaTransformerHandler`, `Phi3TransformerHandler` and
+`Qwen3TransformerHandler`, and LoRA in `LoraTrainingHandlerFactory`. Unsupported architectures, files and shards keep
+`announceUnsupported` and stay in the log under `auto`. `--help` (`ConsoleMain`, `scripts/run.sh`) and
+`compare-llama-cpp.sh --help` state the new default.
+
+**Surfaces.** Prefill windows, `--parallel` above 1 and `--schedule continuous` never ran the decode region and are
+unchanged. LoRA training and playback decline it, as before, now without a notice under `auto`. The CPU backend is
+unchanged. A ROCm-only host resolves `auto` to off, since `CudaAvailability` is false there. Cluster nodes read the same
+default and receive an explicit value from `ClusterHarness`. Vision: the only vision model on disk, moondream2, has a
+Phi-2 backbone, whose handler has no region, so `compare-vision.sh`'s path is unchanged. A LLaVA (LLaMA-backbone) model
+would decode in the region by default, and none is on disk to verify it (INVENTORY).
+
+**Measurement boundary.** From this change on, a GPU run with the engine's defaults runs the region:
+`compare-llama-cpp.sh` without `--gpu-residency`, and its tuned lane. `compare-lora.sh` runs `./juno lora` (training
+and adapter playback), which declines the region, so it is unaffected. GPU tg readings taken with default flags before and after this change are not comparable. The
+reference column (`20261004T113210Z`) was taken with the region off. The tier's closing sweeps run on this default.
+
+**Regression runs** (build `7efea584d4854f0a`, installed for the ITs):
+
+| Command | Result |
+|---|---|
+| `check-plan-thresholds.sh` | pass (before the edits and after this record) |
+| `mvn -o test -pl node` (after the change, before the parity test was pinned) | 966 run, 3 failures: `GpuAttentionHandlerParityTest` (2, the default change, fixed as above) and `PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance` (free bytes 72,417,280 against 67,108,864 with the device full; the known desktop-dependent check, passed on its re-run with no change) |
+| `mvn -o test -pl node -Dtest=GpuAttentionHandlerParityTest,PrefillReserveDeviceTest,GpuResidencyOptionsTest` | 15 of 15 |
+| `mvn -o test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player` | BUILD SUCCESS, 2,146 run, 0 failures, 49 skipped, 32 min |
+| Live default check, `./juno`-equivalent launches of the shaded jar, no flag against explicit values | TinyLlama on GPU with no flag: `decode region active (gpu-residency=auto(on))`, no console notice; 32-token output identical with no flag, `on` and `off`. `--cpu` with no flag: no notice; `--cpu --gpu-residency on`: the CPU-backend warning. Qwen2.5-3B with no flag: no console notice; with `on`: the qwen2 warning |
+| `smoke-gpu-residency.sh --models tinyllama,mistral-7b,Phi-3.5-mini,Qwen3-1.7B,qwen2.5-3b` (explicit on/off, unmodified script) | 18 PASS, 0 FAIL: region active and greedy output identical on vs off over 32 tokens on the four region models, memory flat in both modes, Qwen2.5-3B declined with the logged reason, pipeline and tensor cluster answer with local mode's output and leave no node JVM |
+| `mvn -o verify -pl juno-master -Pgpu -Dit.model.path=<tinyllama>` (now on the region by default) | 10 of 10 (`GpuForwardPassIT` 5, `GpuAttentionDivergenceIT` 3, `PrefillRegionGreedyIT` 2) |
+
+Not run: the stub-mode cluster ITs (`mvn verify -pl juno-master` without a profile), `compare-vision.sh` (path unchanged,
+see above) and `compare-lora.sh` (LoRA declines the region). The full cross-surface matrix is implementation step 6.
+
+**Docs.** `docs/howto.md` (flag table: default `auto`, the notice rule, the measured decode gain, the greedy-output
+note), `docs/agent-arch.txt` (`GpuResidencyOptions`, `announceIfExplicit`), `docs/performance.md` (the default and its
+two sweeps), `CHANGELOG.md` (Session 119), `--help` in `ConsoleMain` and `scripts/run.sh`, and `compare-llama-cpp.sh --help`.
+
+**Out-of-tier changes.** None: the default is scope item 6's own outcome.
+
+**Next.** Implementation step 6: the full cross-surface smoke matrix on the new default, including
+`smoke-long-prompt-prefill.sh` at 2048 tokens. Then the tier's closing gates, owed by the owner and staged under
+`dist/` by the executor: the pinned 0.95x A/B against the pre-tier build, the standing CPU and allocation gate, the
+2048-token attention-speedup A/B and the pinned closing sweeps at 128, 512 and 2048.

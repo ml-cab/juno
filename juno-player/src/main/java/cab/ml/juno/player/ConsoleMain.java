@@ -154,7 +154,7 @@ public final class ConsoleMain {
 	 */
 	/**
 	 * Says on the console when this launch cannot run a GPU path it asked for, or
-	 * that applies by default: --gpu-residency where it will not run (LoRA training
+	 * that applies by default: an explicit --gpu-residency on where it will not run (LoRA training
 	 * or playback, the CPU backend, an architecture without the device region), and
 	 * GPU attention where it will not run (a handler that computes on the CPU, a
 	 * backend without the kernel, an explicit on with the CPU backend). Library
@@ -1075,9 +1075,10 @@ public final class ConsoleMain {
 		System.out.println("  --gpu-residency on|off|auto  Keep the decode activation on the GPU through the whole layer (norm,");
 		System.out.println("                             Q/K/V, RoPE, KV append and attention with --gpu-attention on, output");
 		System.out.println("                             projection and FFN): one upload per token and one download per layer");
-		System.out.println("                             instead of a round trip per operation (default: off; CUDA, K-quant MMQ weights,");
-		System.out.println("                             LLaMA family, Phi-3 and Qwen3, single-sequence decode; elsewhere it says so");
-		System.out.println("                             once and keeps the existing path; env JUNO_GPU_RESIDENCY)");
+		System.out.println("                             instead of a round trip per operation (default: auto, on wherever CUDA is present;");
+		System.out.println("                             CUDA, K-quant MMQ weights, LLaMA family, Phi-3 and Qwen3, single-sequence");
+		System.out.println("                             decode; elsewhere the existing path, said once only with an explicit on;");
+		System.out.println("                             off keeps the op-at-a-time path; env JUNO_GPU_RESIDENCY)");
 		System.out.println("  --cache-type-k f16|q8_0    K cache element type (default: f16 = current float path)");
 		System.out.println("                             env JUNO_CACHE_TYPE_K; q8_0 packs KV (~3.8× smaller vs float)");
 		System.out.println("  --cache-type-v f16|q8_0    V cache element type (default: f16)");

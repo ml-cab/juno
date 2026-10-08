@@ -1,5 +1,23 @@
 ## Status 
 
+**Session 119** — The device-resident decode region is on by default
+
+- **`--gpu-residency` defaults to `auto`.** On CUDA, single-sequence decode now keeps the whole layer on the
+  GPU by default on the LLaMA family (Llama, Mistral, TinyLlama), Phi-3 and Qwen3 with K-quant weights. In two
+  full GPU sweeps of the four standing models, region off and then on, from one build in one session, generation
+  ran 1.99x faster on TinyLlama, 1.56x on Phi-3.5-mini and 1.58x on Mistral 7B. Qwen2.5-3B, which the region does
+  not cover, and prompt processing are unchanged. Allocation per generated token is 13% to 19% lower.
+- **Greedy output can change on LLaMA-family models.** The region sums its RMS norms in a different order than
+  the previous default path. Over 64 generated tokens the text is unchanged on Phi-3.5-mini and Qwen2.5-3B, but
+  on TinyLlama and Mistral 7B it parts from the previous default after a few dozen tokens.
+  `--gpu-residency off` restores the previous path.
+- **`auto` is quiet where the region does not apply.** Under `auto`, a launch that cannot use the region (the CPU
+  backend, LoRA training or `--lora-play`, Qwen2 and the other uncovered architectures) prints nothing on the
+  console, and the CPU backend and LoRA log nothing. An explicit `--gpu-residency on` still says each decline
+  once, on the console and in the log.
+- A GPU benchmark taken with the engine's defaults now runs the region, so its generation figures are not
+  comparable with earlier default-flag runs.
+
 **Session 118** — CUDA graph replay measured for the decode region and not adopted
 
 - **The decode region keeps launching its kernels one by one.** Each decode layer's device work was

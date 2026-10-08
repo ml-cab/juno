@@ -76,7 +76,7 @@ public final class LoraTrainingHandlerFactory {
 		requireSupported(arch);
 		log.info("LoRA factory: arch=" + arch + " backend=" + backend.getClass().getSimpleName() + " file="
 				+ modelPath);
-		GpuResidencyOptions.announceUnsupported(log, "LoRA training and playback (--lora-play)",
+		GpuResidencyOptions.announceIfExplicit(log, "LoRA training and playback (--lora-play)",
 				"apply adapters to Q/K/V on the host, so the device-resident decode region does not run there");
 		noteGpuAttentionIgnored(backend instanceof GpuMatVec);
 		String a = normalize(arch);
