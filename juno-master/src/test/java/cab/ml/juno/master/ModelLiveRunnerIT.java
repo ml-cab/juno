@@ -53,7 +53,7 @@ import cab.ml.juno.player.ClusterHarness;
  *       -DMODELS=/data/tinyllama.Q4_K_M.gguf,/data/phi-3.5.Q4_K_M.gguf
  * </pre>
  *
- * <p>The nine checks are {@link ModelLiveChecks}, the same ones {@code ./juno test}
+ * <p>The ten checks are {@link ModelLiveChecks}, the same ones {@code ./juno test}
  * runs through {@link ModelLiveRunner}; see that class for the list. Every check is
  * attempted even when an earlier one fails, and each failure is reported with its
  * reason. Forked cluster nodes size their heap from the model file unless

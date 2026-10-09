@@ -253,6 +253,7 @@ public final class ConsoleMain {
 	private static String gpuLayers = null; // null → env or default auto
 	private static String mmq = null; // null → env or default auto
 	private static String gpuAttention = null; // null → env or default auto
+	private static String contextShift = null; // --context-shift on|off; null → env or default off
 	private static String gpuResidency = null; // null → env or default off
 	private static String cacheTypeK = null; // null → env or default f16
 	private static String cacheTypeV = null; // null → env or default f16
@@ -419,6 +420,22 @@ public final class ConsoleMain {
 			System.exit(1);
 		}
 
+		// Context shift rewrites a request's KV in place on every stage that holds it;
+		// the cluster pipelines have no call for that, so refuse it here rather than
+		// let the first long request fail mid-stream.
+		try {
+			String shiftSpec = contextShift != null ? contextShift
+					: System.getenv(cab.ml.juno.coordinator.ContextShiftOptions.PROPERTY);
+			if (cab.ml.juno.coordinator.ContextShiftOptions.parse(shiftSpec) && clusterLaunch) {
+				System.err.println("ERROR: --context-shift is local-mode only: the cluster pipelines cannot shift a"
+						+ " request's KV cache (see docs/howto.md)");
+				System.exit(1);
+			}
+		} catch (IllegalArgumentException e) {
+			System.err.println("ERROR: " + e.getMessage());
+			System.exit(1);
+		}
+
 		var scheduleResolution = cab.ml.juno.coordinator.ServeSchedulePolicy.resolve(requestedSchedule,
 				clusterLaunch ? cab.ml.juno.coordinator.ServeSchedulePolicy.Topology.CLUSTER
 						: cab.ml.juno.coordinator.ServeSchedulePolicy.Topology.LOCAL);
@@ -435,6 +452,8 @@ public final class ConsoleMain {
 			System.setProperty(MmqOptions.ENV_PROPERTY, mmq);
 		if (gpuAttention != null)
 			System.setProperty(cab.ml.juno.node.GpuAttentionOptions.ENV_PROPERTY, gpuAttention);
+		if (contextShift != null)
+			System.setProperty(cab.ml.juno.coordinator.ContextShiftOptions.PROPERTY, contextShift);
 		if (gpuResidency != null)
 			System.setProperty(cab.ml.juno.node.GpuResidencyOptions.ENV_PROPERTY, gpuResidency);
 		if (cacheTypeK != null)
@@ -795,6 +814,10 @@ public final class ConsoleMain {
 				if (i + 1 < args.length)
 					gpuAttention = args[++i];
 				break;
+			case "--context-shift":
+				if (i + 1 < args.length)
+					contextShift = args[++i];
+				break;
 			case "--gpu-residency":
 				if (i + 1 < args.length) {
 					gpuResidency = args[++i];
@@ -1046,6 +1069,9 @@ public final class ConsoleMain {
 		System.out.println("                             env JUNO_PREFILL_BATCH; use 1 for per-token batched");
 		System.out.println();
 		System.out.println("Speculative decoding:");
+		System.out.println("  --context-shift on|off     When a request fills the context, drop the oldest tokens after the");
+		System.out.println("                             system prompt and continue instead of failing (default: off; local");
+		System.out.println("                             mode only; a request's x_juno_context_shift / contextShift overrides it)");
 		System.out.println("  --spec-type none|ngram-simple|draft-simple  Speculative decoding (default: none)");
 		System.out.println("                             env JUNO_SPEC_TYPE; ngram-simple drafts tokens from");
 		System.out.println("                             an in-request ngram cache; draft-simple drafts from a");

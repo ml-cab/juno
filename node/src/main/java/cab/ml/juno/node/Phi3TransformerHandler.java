@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Logger;
 
+import cab.ml.juno.kvcache.DenseKvTensor;
 import cab.ml.juno.kvcache.SessionKvLayout;
 import cab.ml.juno.kvcache.SessionKvTensor;
 
@@ -1416,6 +1417,44 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	 *
 	 * @param requestId the request or session identifier
 	 */
+	@Override
+	public int contextLimit() {
+		return Math.min(DenseKvTensor.MAX_SEQ_LEN, ropeCfg.positionLimit());
+	}
+
+	@Override
+	public void shiftKv(String requestId, int seqLen, int keep, int discard) {
+		HandlerContextShift.shiftHost(kvCacheK, kvCacheV, requestId, seqLen, keep, discard,
+				Phi3Rope.shift(cfg.headDim(), ropeCfg), cfg.numKvHeads());
+		GpuAttentionMirror g = gpuAttention;
+		if (g != null)
+			HandlerContextShift.rewriteMirrors("Phi-3", g.existing(requestId), kvCacheK.get(requestId),
+					kvCacheV.get(requestId), seqLen - discard);
+		NodeKVCacheAdapter a = kvAdapter;
+		if (a != null)
+			a.evict(requestId);
+	}
+
+	/** Package-private for testing: the request's host K (index 0) and V (index 1) layers, or null. */
+	SessionKvTensor[][] hostKv(String requestId) {
+		SessionKvTensor[] k = kvCacheK.get(requestId);
+		return k == null ? null : new SessionKvTensor[][] { k, kvCacheV.get(requestId) };
+	}
+
+	/** Package-private for testing: each layer's device-mirror watermark, -1 where closed; null without mirrors. */
+	int[] deviceKvWatermarks(String requestId) {
+		GpuAttentionMirror g = gpuAttention;
+		return g == null ? null : g.watermarks(requestId);
+	}
+
+	/** Package-private for testing: retire the request's device mirrors, so it attends on the host. */
+	void retireDeviceKv(String requestId) {
+		GpuAttentionMirror g = gpuAttention;
+		if (g != null)
+			g.retire(requestId);
+	}
+
+
 	@Override
 	public void evict(String requestId) {
 		SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));

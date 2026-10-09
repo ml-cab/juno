@@ -292,6 +292,32 @@ final class DeviceKvCache implements AutoCloseable {
 	}
 
 	/**
+	 * Replaces the whole written history with positions {@code [0, seqLen)} from
+	 * host rows ({@code seqLen * kvDim} floats each, row-major), one transfer per
+	 * tensor; the watermark becomes {@code seqLen}. Used after a context shift,
+	 * when every kept row has moved and its key has been re-rotated on the host.
+	 */
+	void replacePrefix(float[] k, float[] v, int seqLen) {
+		if (seqLen < 1 || k.length < seqLen * kvDim || v.length < seqLen * kvDim)
+			throw new IllegalArgumentException("prefix of " + seqLen + " rows from " + k.length + " K and "
+					+ v.length + " V floats");
+		ensureCapacity(seqLen - 1);
+		long n = (long) seqLen * kvDim;
+		long bytes = n * Short.BYTES;
+		try (Arena staging = Arena.ofConfined()) {
+			MemorySegment stagingK = staging.allocate(bytes);
+			MemorySegment stagingV = staging.allocate(bytes);
+			for (long i = 0; i < n; i++) {
+				stagingK.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(k[(int) i]));
+				stagingV.setAtIndex(JAVA_SHORT, i, Float.floatToFloat16(v[(int) i]));
+			}
+			DeviceStaging.copy(gpu, dK, stagingK, bytes, GpuBindings.H2D, seqLen, "memcpy(K prefix H2D)");
+			DeviceStaging.copy(gpu, dV, stagingV, bytes, GpuBindings.H2D, seqLen, "memcpy(V prefix H2D)");
+		}
+		validTokens = seqLen;
+	}
+
+	/**
 	 * Writes {@code count} K/V rows at {@code [startPos, startPos + count)} from
 	 * device FP32 rows ({@code [count][kvDim]}, row-major), cast to FP16 straight
 	 * into this mirror on {@code stream}: nothing crosses the host. Grows first if

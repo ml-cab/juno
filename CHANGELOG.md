@@ -1,5 +1,30 @@
 ## Status 
 
+**Session 123** — Context shifting: long conversations continue instead of failing at the context limit
+
+- **Opt in with `--context-shift on`**, or per request with `x_juno_context_shift` (chat completions),
+  `contextShift` (native API), `JunoPlayer.Builder.contextShift(true)` or `JunoHttpClient.withContextShift(true)`. A
+  request that reaches the context limit drops the oldest half of the tokens after its system prompt and continues.
+  Off by default: without the opt-in a request still fails at the limit, as before.
+- **The kept keys are rotated to their new positions, not recomputed.** Every handler family shifts: LLaMA, Mistral,
+  Qwen2, Phi-2, Phi-3, Qwen3, Qwen3-MoE, and `--lora-play`. On real models the shifted request's next-token logits match
+  an independently rotated cache to within 1e-4 on the CPU. On CUDA the device copy attention reads is rebuilt after the
+  shift, so GPU attention and the device-resident decode region keep running; there the difference is no larger than
+  between device and host attention without a shift.
+- **Phi-3.5-mini shifts at 4096 tokens**, its original training context, so a long Phi-3.5 conversation never reaches
+  the long-context RoPE factors.
+- A prompt longer than the context is cut to its system prompt plus its latest tokens before the first forward pass.
+  Static `--parallel` batches shift only the member that reaches the limit; `--schedule continuous` shifts per slot.
+- Refused up front, with HTTP 400 or a startup error: cluster and tensor-parallel deployments, `--spec-type
+  draft-simple`, and a system prompt filling half the context. A request with an image fails at the limit rather than
+  drop its image tokens.
+- `./juno test` runs a tenth check: context shift past a 192-token limit on both schedules, on the real model.
+- **A request that fails mid-generation now releases its KV cache.** Before, a request without a session that
+  failed (for example at the context limit) kept its cache for the life of the server: about 3 GB of heap on
+  Phi-3.5-mini near 4096 tokens, enough to make the next request run out of memory. This applies to single requests,
+  `--parallel` batches and `--schedule continuous`.
+- Ending a session of several thousand tokens no longer fails with a stack overflow.
+
 **Session 122** — Long prompts and GPU decode, measured at the close
 
 - **Prompt processing no longer slows down as the prompt grows.** Against the reference engine on the GTX 1080, with

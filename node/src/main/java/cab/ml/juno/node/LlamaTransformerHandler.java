@@ -1054,6 +1054,17 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 	}
 
+	@Override
+	public void shiftKv(String requestId, int seqLen, int keep, int discard) {
+		HandlerContextShift.shiftHost(kvCacheK, kvCacheV, requestId, seqLen, keep, discard,
+				RopeShift.standard(cfg.headDim(), cfg.ropeTheta(), ropePairing), cfg.numKvHeads());
+		HandlerContextShift.rewriteMirrors("Llama", kvCacheDev.get(requestId), kvCacheK.get(requestId),
+				kvCacheV.get(requestId), seqLen - discard);
+		NodeKVCacheAdapter a = kvAdapter;
+		if (a != null)
+			a.evict(requestId);
+	}
+
 	/**
 	 * Build a minimal {@link LlamaTransformerHandler} with random F32 weights for
 	 * unit tests — bypasses GGUF loading entirely.
@@ -1079,6 +1090,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			int numLayers, int startLayer, int endLayer,
 			boolean hasEmbd, boolean hasOutProj,
 			NodeKVCacheAdapter adapter) {
+		return newTestInstance(vocabSize, hiddenDim, numHeads, numKvHeads, numLayers, startLayer, endLayer, hasEmbd,
+				hasOutProj, adapter, 0.02f);
+	}
+
+	/**
+	 * As above, with every weight drawn from {@code [-weightRange/2, weightRange/2)}.
+	 * The default (0.02) keeps attention close to uniform; a test that must see
+	 * how keys are positioned needs a wider range.
+	 */
+	static LlamaTransformerHandler newTestInstance(
+			int vocabSize, int hiddenDim, int numHeads, int numKvHeads,
+			int numLayers, int startLayer, int endLayer,
+			boolean hasEmbd, boolean hasOutProj,
+			NodeKVCacheAdapter adapter, float weightRange) {
 
 		LlamaConfig cfg = LlamaConfig.synthetic(
 				vocabSize, hiddenDim, numHeads, numKvHeads, numLayers);
@@ -1091,10 +1116,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		java.util.Random rng = new java.util.Random(42);
 
 		// Embedding / output weights
-		float[] tokenEmbd   = hasEmbd     ? randF32(vocabSize * H, rng) : null;
-		float[] outputNorm  = hasOutProj  ? randF32(H, rng)             : null;
+		float[] tokenEmbd   = hasEmbd     ? randF32(vocabSize * H, rng, weightRange) : null;
+		float[] outputNorm  = hasOutProj  ? randF32(H, rng, weightRange)             : null;
 		GgufReader.QuantizedTensor outputProj =
-				hasOutProj ? f32Tensor("output.weight", vocabSize, H, rng) : null;
+				hasOutProj ? f32Tensor("output.weight", vocabSize, H, rng, weightRange) : null;
 
 		// Per-layer weights
 		float[][] attnNorm = new float[L][];
@@ -1108,15 +1133,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		GgufReader.QuantizedTensor[] wDown  = new GgufReader.QuantizedTensor[L];
 
 		for (int li = 0; li < L; li++) {
-			attnNorm[li] = randF32(H, rng);
-			ffnNorm[li]  = randF32(H, rng);
-			wq[li]   = f32Tensor("wq."   + li, H,     H,    rng);
-			wk[li]   = f32Tensor("wk."   + li, kvDim, H,    rng);
-			wv[li]   = f32Tensor("wv."   + li, kvDim, H,    rng);
-			wo[li]   = f32Tensor("wo."   + li, H,     H,    rng);
-			wGate[li]= f32Tensor("wGate."+ li, I,     H,    rng);
-			wUp[li]  = f32Tensor("wUp."  + li, I,     H,    rng);
-			wDown[li]= f32Tensor("wDown."+ li, H,     I,    rng);
+			attnNorm[li] = randF32(H, rng, weightRange);
+			ffnNorm[li]  = randF32(H, rng, weightRange);
+			wq[li]   = f32Tensor("wq."   + li, H,     H,    rng, weightRange);
+			wk[li]   = f32Tensor("wk."   + li, kvDim, H,    rng, weightRange);
+			wv[li]   = f32Tensor("wv."   + li, kvDim, H,    rng, weightRange);
+			wo[li]   = f32Tensor("wo."   + li, H,     H,    rng, weightRange);
+			wGate[li]= f32Tensor("wGate."+ li, I,     H,    rng, weightRange);
+			wUp[li]  = f32Tensor("wUp."  + li, I,     H,    rng, weightRange);
+			wDown[li]= f32Tensor("wDown."+ li, H,     I,    rng, weightRange);
 		}
 
 		LlamaTransformerHandler h = new LlamaTransformerHandler(
@@ -1130,20 +1155,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/** Random F32 float array. */
-	private static float[] randF32(int n, java.util.Random rng) {
+	private static float[] randF32(int n, java.util.Random rng, float range) {
 		float[] a = new float[n];
-		for (int i = 0; i < n; i++) a[i] = (rng.nextFloat() - 0.5f) * 0.02f;
+		for (int i = 0; i < n; i++) a[i] = (rng.nextFloat() - 0.5f) * range;
 		return a;
 	}
 
 	/** Create a type-0 (F32) QuantizedTensor with random values, shape rows×cols. */
 	private static GgufReader.QuantizedTensor f32Tensor(String name, int rows, int cols,
-			java.util.Random rng) {
+			java.util.Random rng, float range) {
 		int n = rows * cols;
 		java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(n * 4)
 				.order(java.nio.ByteOrder.LITTLE_ENDIAN);
 		for (int i = 0; i < n; i++)
-			bb.putFloat((rng.nextFloat() - 0.5f) * 0.02f);
+			bb.putFloat((rng.nextFloat() - 0.5f) * range);
 		return new GgufReader.QuantizedTensor(name, 0, n, bb.array());
 	}
 
@@ -2459,6 +2484,28 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int seqLen = pair.k().length / kvDim;
 		k.loadFloatPrefix(pair.k(), seqLen);
 		v.loadFloatPrefix(pair.v(), seqLen);
+	}
+
+	/** Package-private for testing: the request's host K (index 0) and V (index 1) layers, or null. */
+	SessionKvTensor[][] hostKv(String requestId) {
+		SessionKvTensor[] k = kvCacheK.get(requestId);
+		return k == null ? null : new SessionKvTensor[][] { k, kvCacheV.get(requestId) };
+	}
+
+	/** Package-private for testing: retire the request's device mirrors, so it attends on the host. */
+	void retireDeviceKv(String requestId) {
+		retireMirrors(kvCacheDev.get(requestId));
+	}
+
+	/** Package-private for testing: each layer's device-mirror watermark, -1 where closed; null without mirrors. */
+	int[] deviceKvWatermarks(String requestId) {
+		DeviceKvCache[] dev = kvCacheDev.get(requestId);
+		if (dev == null)
+			return null;
+		int[] out = new int[dev.length];
+		for (int i = 0; i < dev.length; i++)
+			out[i] = dev[i].live() ? dev[i].validTokens() : -1;
+		return out;
 	}
 
 	/** Package-private for testing: allocated KV cache slots for a request. */

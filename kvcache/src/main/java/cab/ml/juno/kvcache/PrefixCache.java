@@ -133,12 +133,28 @@ public final class PrefixCache {
 		}
 	}
 
-	private boolean invalidateNode(TrieNode node, String cacheKey) {
-		if (cacheKey.equals(node.cacheKey)) {
-			node.cacheKey = null;
+	/**
+	 * Clears {@code cacheKey} everywhere below {@code start} and prunes the branches
+	 * left empty. Iterative, children before parents: the trie is one node deep per
+	 * cached token, and a recursive walk over a session of a few thousand tokens
+	 * overflowed a virtual thread's stack.
+	 */
+	private void invalidateNode(TrieNode start, String cacheKey) {
+		java.util.ArrayDeque<TrieNode> pending = new java.util.ArrayDeque<>();
+		java.util.ArrayList<TrieNode> order = new java.util.ArrayList<>();
+		pending.push(start);
+		while (!pending.isEmpty()) {
+			TrieNode node = pending.pop();
+			order.add(node);
+			if (cacheKey.equals(node.cacheKey))
+				node.cacheKey = null;
+			for (TrieNode child : node.children.values())
+				pending.push(child);
 		}
-		node.children.values().removeIf(child -> invalidateNode(child, cacheKey));
-		return node.cacheKey == null && node.children.isEmpty();
+		// Every child was visited after its parent, so walking the visit order backwards
+		// settles each node's children before the node itself.
+		for (int i = order.size() - 1; i >= 0; i--)
+			order.get(i).children.values().removeIf(c -> c.cacheKey == null && c.children.isEmpty());
 	}
 
 	// ── Inner types ───────────────────────────────────────────────────────────

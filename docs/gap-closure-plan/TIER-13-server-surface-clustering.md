@@ -49,6 +49,16 @@ the finished system.
    (Phi-3, Mistral, Gemma, TinyLlama) where a correct tool-call prompt/parse format can be
    established for each.
 
+5. **Context shift and eviction on the cluster** (handed over by Tier 02B, 2026-10-08, owner decision
+   there). Context shifting is local-mode only: a cluster or tensor-parallel launch refuses
+   `--context-shift on` and a request opting in gets HTTP 400, because the nodes have no call to shift a
+   request's KV. The cluster pipeline clients (`ProcessPipelineClient`, `TensorParallelPipelineClient`)
+   do not forward `evict` to the nodes either, so a finished request's KV stays on every node. Add a node
+   RPC for each (evict, and shift with `seqLen`/`keep`/`discard`; on a tensor-parallel node the shift
+   rotates its own heads), wire both clients and `FaultTolerantPipeline`, report `contextLimit()` and
+   `supportsContextShift()` truthfully, update `inference.proto`, and turn rows 7 and 8 of Tier 02B's
+   context-shift column from FAIL-CLOSED to PASS by running `smoke-context-policy.sh` against a cluster.
+
 ### Out of scope
 
 - A legacy `/v1/completions` endpoint — the gap analysis notes this exists in some other systems
@@ -151,6 +161,8 @@ and fault-tolerance testing use the existing forked-JVM harness and don't need n
       correctly.
 - [ ] Standing CPU and allocation gate met if the perf gate applies (README, "Test infrastructure"): CPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Cluster and tensor-parallel requests evict their KV on every node and support context shift
+      (item 5), with the context-shift smoke passing against a cluster.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Docs (`docs/howto.md`, `docs/agent-arch.txt`) updated, Juno-native language only.
 - [ ] `CHANGELOG.md` entry added.

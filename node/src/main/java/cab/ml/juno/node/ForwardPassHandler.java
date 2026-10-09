@@ -21,6 +21,8 @@ package cab.ml.juno.node;
 
 import java.util.Optional;
 
+import cab.ml.juno.kvcache.DenseKvTensor;
+
 /**
  * Executes the transformer forward pass for this node's assigned layers.
  *
@@ -42,6 +44,31 @@ public interface ForwardPassHandler {
 
 	/** Whether this handler is ready to serve (shard loaded, GPU initialized). */
 	boolean isReady();
+
+	/**
+	 * Number of positions a request may occupy on this handler: positions
+	 * {@code [0, contextLimit())}. The KV cap by default; lower where the model
+	 * itself refuses later positions (Phi-3.5 with its long-context factors held
+	 * back). A caller that opted in to context shifting shifts before reaching it.
+	 */
+	default int contextLimit() {
+		return DenseKvTensor.MAX_SEQ_LEN;
+	}
+
+	/**
+	 * Context shift for one request: of the {@code seqLen} positions written, drop
+	 * {@code [keep, keep + discard)} and move the rest down by {@code discard},
+	 * re-rotating their cached keys for the new positions, so the request continues
+	 * at position {@code seqLen - discard} as if it had only ever seen the kept
+	 * tokens. Covers host KV, its device mirror and any copy held by the KV
+	 * adapter. Handlers that cannot do this fail closed.
+	 *
+	 * @throws UnsupportedOperationException when this handler has no context shift
+	 * @throws IllegalStateException         when the request holds no KV here
+	 */
+	default void shiftKv(String requestId, int seqLen, int keep, int discard) {
+		throw new UnsupportedOperationException(getClass().getSimpleName() + " does not support context shift");
+	}
 
 	/**
 	 * Frees GPU-resident weight buffers ({@link DeviceHalfMatrix}, {@link DeviceFloatMatrix}, …)

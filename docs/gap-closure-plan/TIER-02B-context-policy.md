@@ -1,6 +1,10 @@
 # Tier 02B: Context policy (context shifting, sliding windows, Phi-3.5 LongRoPE)
 
-Status: not started
+Status: **in progress** (2026-10-08). Steps 1, 2 and 4 done: Tier 01B's Phi-3.5 fix verified; item 3
+closed by owner decision 1 (option (b) declined, 4096 cap kept); context shifting shipped as an opt-in on every
+handler, both schedules, the CLI, both REST surfaces and the facade (cluster fail-closed by owner decision 2;
+the cluster RPC is Tier 13's). A failed request now releases its KV (out-of-tier change, owner decision 4).
+Step 3 (sliding windows) and step 5 (full cross-surface matrix, perf gate) not started.
 Gap analysis refs: §1.2 (the context half)
 
 **Split out of [Tier 02](TIER-02-attention-long-context.md) on 2026-10-04 (plan review).** This tier's
@@ -59,7 +63,9 @@ item 3 below.
    an explicit, opt-in shift policy (drop oldest N non-system tokens, keep going) — opt-in because
    silently dropping context is itself a form of silent degrade the project's fail-closed philosophy
    would otherwise reject; the default behavior stays a clear error unless the caller opts in via a
-   flag/request parameter. Shifting re-rotates the cached K of the kept positions by the shift distance
+   flag/request parameter. The boundary is the lower of `MAX_SEQ_LEN` and the handler's own position
+   limit: for Phi-3.5 that is its 4096-token cap (`Phi3RopeConfig.requirePosition`), so a Phi-3.5 session
+   shifts at 4096, not at 32768 (owner decision 1, 2026-10-08). Shifting re-rotates the cached K of the kept positions by the shift distance
    (or recomputes it); state which, and keep the CPU KV tensors and the device mirror's written-prefix
    watermark consistent across a shift.
 2. **Sliding-window attention** for model families that need it — add the windowing option to the
@@ -71,6 +77,8 @@ item 3 below.
    would strand Tier 08. On the GPU, the window is Tier 02's tiled kernel's per-layer window parameter;
    on the CPU, the scalar attention path takes the same per-layer window.
 3. **Phi-3.5 LongRoPE remainder.** Tier 01B shipped option (a), a fixed cap at 4096 tokens. What remains:
+   *Closed 2026-10-08 (owner decision 1): option (b) declined; the fixed 4096 cap stays and item 1 shifts
+   Phi-3.5 sessions at 4096.* As written before the decision:
    (a) decide with the owner whether option (b) is wanted — the model author's per-sequence semantics,
    short factors until the sequence crosses 4096 and long after, which needs cached K re-rotated at the
    crossing and so shares machinery with item 1; and (b) explain the long-factor gap (0.502 against the
@@ -84,6 +92,18 @@ item 3 below.
 - Automatic (non-opt-in) context management heuristics — this tier ships the mechanism and an
   explicit opt-in flag, not a policy for when to use it automatically.
 - Any attention-kernel performance work — Tier 02.
+- *Added 2026-10-08 (step 2), confirmed by the owner the same day (decision 2):* **context shift in
+  cluster and tensor-parallel mode** is FAIL-CLOSED, not implemented; the node RPC moved to
+  [Tier 13](TIER-13-server-surface-clustering.md) item 5. The nodes have no call to shift a request's KV
+  (the node RPCs carry forward passes only, and the cluster pipeline clients do not even forward
+  `evict`). `./juno cluster --context-shift on` exits with an explicit error (launcher and
+  `ConsoleMain`), and a request opting in on a cluster pipeline gets HTTP 400 naming the field. Rows 7
+  and 8 of the checklist are therefore FAIL-CLOSED for context shift; their sliding-window half (item 2)
+  is unaffected.
+- *Added 2026-10-08 (step 2):* **context shift with `--spec-type draft-simple`** is FAIL-CLOSED (HTTP
+  400 / error before any forward pass): the draft model keeps its own KV at positions tied to token
+  indices, which a shift of the target's KV would leave misaligned. `ngram-simple` keeps no KV and is
+  supported.
 
 ## Cross-surface compatibility checklist
 
@@ -146,7 +166,7 @@ item 3 below.
      behaviour. That is sufficient to prove the mechanism and to ship it.
    - **Tier 08** carries the end-to-end validation on `gemma-4-E4B` as one of its own exit criteria,
      once its handler makes that file loadable.
-4. Item 3: put option (b) to the owner with what it costs (the re-rotation machinery item 1 builds) and,
+4. *Done 2026-10-08: option (b) declined (owner decision 1); nothing further to build.* Item 3: put option (b) to the owner with what it costs (the re-rotation machinery item 1 builds) and,
    if taken, explain or fix the long-factor gap.
 5. Run the full cross-surface smoke matrix, including a long-context stress case (loop conversation
    turns until the shift boundary is hit) for both static and continuous schedules.
@@ -161,6 +181,21 @@ item 3 below.
   behavior still throws (no silent regression of the existing fail-closed guarantee). A shifted
   session's next-token logits match a fresh session prefilled with the kept tokens at their shifted
   positions, within float tolerance.
+  *Corrected 2026-10-08 (step 2), two claims that do not hold as written.* (1) **The fresh-session oracle
+  is false for any model with more than one layer.** In every layer after the first, the kept tokens'
+  keys and values were computed while they attended to the discarded tokens, and a shift keeps them; only
+  a recompute would match a fresh session. Measured on CUDA TinyLlama: max logit difference 1.48 against
+  the fresh session; it passed on the synthetic CPU model only because that model's 0.02-range weights
+  make attention inert (a negative control, keys moved with no rotation at all, also stayed within
+  1e-3 there). The criterion is now: the shifted request's next logits match a request holding the
+  **oracle KV** (the pre-shift KV with the discarded rows removed and each kept key unrotated at its old
+  position and rotated at its new one with the handler's own forward rotation, independent of the
+  shift's rotation code), within float tolerance on the CPU, and on the GPU within the device-vs-host
+  attention difference the same handler shows without a shift. (2) **The opt-in is not a KV-class
+  property.** The decision to shift belongs to the generation layer, which knows the request's choice,
+  its system prompt and the pipeline's limit. The KV classes gain the primitive (move rows, re-rotate
+  keys, truncate), and their tests fill to `MAX_SEQ_LEN`, shift, and keep writing, beside a test that
+  the same write without a shift still throws.
 - **New unit tests** for sliding-window, one per metadata shape: (a) a *uniform* windowed fixture —
   attention ignores exactly the tokens outside the window, on every layer; (b) a *patterned* windowed
   fixture declaring both `sliding_window` and `sliding_window_pattern` — asserting **which** layers
@@ -202,13 +237,25 @@ and none would help** (see implementation step 3).
 
 ## Exit criteria
 
-- [ ] Phi-3.5's factor-selection fix verified as landed by Tier 01B item 8 (end-of-turn live test
+- [x] Phi-3.5's factor-selection fix verified as landed by Tier 01B item 8 (end-of-turn live test
       still >= 0.95), option (b) decided with the owner, and, if taken, the long-factor gap explained or
       fixed (item 3).
-- [ ] Context-shift works correctly, opt-in only, for dense KV, paged KV and the device mirror, both
-      schedules.
-- [ ] Default (non-opt-in) behavior is unchanged — still a clear, documented error past
+      *Met 2026-10-08.* The live test reads 0.9924 on HEAD `de98ff6` (execution record, step 1).
+      **Evidence (not published):** `Phi3EndOfTurnLiveTest`, a unit-level test. Option (b) declined by the
+      owner (decision 1), so the long-factor gap needs no explanation; the shift boundary at 4096 for
+      Phi-3.5 is carried by the context-shift criterion below.
+- [x] Context-shift works correctly, opt-in only, for dense KV, paged KV and the device mirror, both
+      schedules, and fires at the lower of `MAX_SEQ_LEN` and the handler's own position limit (Phi-3.5:
+      4096, owner decision 1), with a Phi-3.5 test at that boundary.
+      *Met 2026-10-08 (step 2 record):* `KvContextShiftTest`, `ContextShiftLiveTest` (every handler family
+      against the oracle KV), the CUDA mirror tests, `GenerationLoopContextShiftTest` (both schedules),
+      `Phi3ContextShiftAtLimitTest` (real Phi-3.5 on CUDA across 4096) and `smoke-context-policy.sh` (7 of 7).
+- [x] Default (non-opt-in) behavior is unchanged — still a clear, documented error past
       `MAX_SEQ_LEN`.
+      *Met 2026-10-08:* the KV cap still throws without a shift (`KvContextShiftTest`, 4 cases); a request
+      without the opt-in fails at the limit on every path (`GenerationLoopContextShiftTest`,
+      `ContextShiftRequestFieldTest`, `Phi3ContextShiftAtLimitTest`, smoke turn 7 on both schedules); the error
+      is documented in `docs/howto.md` ("Maximum sequence length", "Context shifting").
 - [ ] Both window keys are read — `<arch>.attention.sliding_window` and
       `<arch>.attention.sliding_window_pattern` — and the patterned case is covered by a unit test
       asserting which layers attend globally and which are windowed, not only that a window is applied.
@@ -220,7 +267,173 @@ and none would help** (see implementation step 3).
 - [ ] Cross-surface checklist fully resolved, including row 15 (facade).
 - [ ] Perf gate published: Juno t/s >= 0.95x the pre-tier build, the shift step <= 3.0x the median
       decode step, and the standing CPU and allocation gate met.
-- [ ] The context-shift opt-in is in `api/src/main/resources/openapi.yaml` and `juno-api.yaml`
+- [x] The context-shift opt-in is in `api/src/main/resources/openapi.yaml` and `juno-api.yaml`
       alongside the code that reads it (README feature-complete rule).
+      *Met 2026-10-08:* `contextShift` (native `InferenceRequest`) and `x_juno_context_shift` (chat
+      completions, schema and extension table). `inference.proto` is unchanged: no RPC shape changed, the
+      cluster path refuses the opt-in, and nothing implements its client-facing `InferenceService`.
 - [ ] Docs (`docs/howto.md`, `docs/agent-arch.txt`) updated, Juno-native language only.
+      *2026-10-08: context-shift half done* (howto "Context shifting", flag row, facade; agent-arch class
+      map; README). Owed: sliding windows (step 3).
 - [ ] `CHANGELOG.md` entry added.
+      *2026-10-08: context-shift entry added (Session 123).* Owed: sliding windows (step 3).
+
+## Execution record
+
+### 2026-10-08: implementation step 1 (plan check; Phi-3.5 factor fix verified)
+
+**Plan check.** `scripts/performance-tests/check-plan-thresholds.sh` passes (22 tier files, milestone and
+end-of-plan tables checked).
+
+**Tier 01B's Phi-3.5 fix, verified against current code** (HEAD `de98ff6`, clean tree apart from the
+untracked `.github/`). `Phi3RopeConfig.selectFactors()` returns the short factors whenever the file carries
+them, and `requirePosition` fails closed at `original_context_length` when the file holds long factors back.
+Every rotation path calls it: the host rotation (`Phi3Rope.ropeExt`/`ropeExtBackward`), the device rotation
+(`CudaPhi3Rope`, prefill window and decode), and the two device-region entry points in
+`Phi3TransformerHandler` (prefill window and decode layer), which check before any device work. So no Juno
+sequence rotates with the long factors, on either backend.
+
+| Test (`mvn -q test -pl node -am -Dtest=...`) | Tests | Result | Reading |
+|---|---|---|---|
+| `Phi3EndOfTurnLiveTest` (CPU, real `Phi-3.5-mini-instruct-Q4_K_M.gguf`) | 1 | pass | P(`<\|end\|>`) = **0.9924** (>= 0.95; Tier 01B read 0.9924) |
+| `Phi3RopeFactorPolicyTest` | 5 | pass | short factors selected; 4095 accepted, 4096 refused on host forward and backward |
+| `Phi3RopeLoadTest` | 1 | pass | short[0..2] = 1.00, 1.02, 1.03; long[0..2] = 1.08, 1.11, 1.14 |
+
+All three are regression tests for code that already exists; they passed on their first run and were not
+seen failing in this tier.
+
+**Plan-versus-code check for the later steps** (read-only, nothing changed in code). Every claim the later
+steps start from holds on `de98ff6`: no GGUF window key is read anywhere (`sliding` appears only in comments,
+in `LlamaFamilyArchitectures` and `LlamaTransformerHandler`); `DenseKvTensor`, `PagedKvTensor`, `KvPageTable`
+and `DeviceKvCache` each throw `IllegalStateException` past `MAX_SEQ_LEN`; Tier 02's tiled kernel already
+takes a per-call `window` (`GqaAttentionKernel`, keys `[max(0, seqLen - window), seqLen)`, 0 meaning none); no
+context-shift code, flag or request field exists yet.
+
+**Finding that item 1 must absorb (not a scope change).** `MAX_SEQ_LEN` is 32768 (`DenseKvTensor`,
+`DeviceKvCache`), but Phi-3.5-mini fails closed at position 4096 (`requirePosition`). Item 1 as written
+shifts "when a session's KV would exceed `MAX_SEQ_LEN`", so a Phi-3.5 session would hit the 4096 error and
+never shift. The shift boundary has to be the lower of the KV limit and the handler's own position limit,
+and step 2's tests need a Phi-3.5 case at 4096 beside the dense models at `MAX_SEQ_LEN`. Under option (a)
+this is the only way a long Phi-3.5 conversation survives at all, which is the main input to decision 1.
+Note also for step 5 and the perf gate: the shift-step bound is read "at `MAX_SEQ_LEN`", which on
+mistral-7b is a 32768-token session (about 4 GiB of F16 KV on its own); the dense-model stress cases are
+long runs, to be budgeted accordingly.
+
+**Decision raised with the owner.**
+
+1. *Item 3, option (b): per-sequence LongRoPE (short factors until a sequence crosses 4096, long after,
+   cached K re-rotated at the crossing).* Recommendation: **decline (b) and keep the fixed 4096 cap**, with
+   item 1's context shift made to fire at the 4096 limit for Phi-3.5 (finding above). Reasons: with shifting,
+   a long Phi-3.5 conversation keeps going without ever using the long factors; (b) would also need the
+   long-factor gap explained first (Juno 0.502 against the reference's 0.675 at matched long factors), since
+   switching to factors Juno reads worse than the reference would trade a clear error for silently weaker
+   output past 4096; and (b) adds a second re-rotation trigger to every Phi-3 rotation path (host, device,
+   region). If declined, the long-factor gap needs no explanation (the item says so), and the first exit
+   criterion closes on that decision. If taken, step 4 builds it on step 2's re-rotation machinery and
+   explains or fixes the gap before it ships.
+
+   **Owner decision (2026-10-08): option (b) declined.** The 4096 cap stays, and context shifting fires at
+   4096 for Phi-3.5. Recorded in item 1's scope, implementation step 4 and the first two exit criteria; the
+   first exit criterion is ticked.
+
+**Out-of-tier changes.** None.
+
+### 2026-10-08: implementation step 2 (context shift: KV, handlers, generation loop, surfaces)
+
+**What shipped.** Context shifting as an opt-in, re-rotating the cached keys (not recomputing them).
+
+| Layer | Change |
+|---|---|
+| KV (`kvcache`) | `SessionKvTensor.readToken`/`compact` (dense: one array copy; paged: `KvPageTable.compact` copies rows slot to slot with `KvBlockPool.copyToken` and returns freed pages); `KvContextShift.shift` moves both tensors and passes each moved K row through the caller's rotation, layers in parallel. Stored bytes are moved, not re-encoded; a q8_0 K row is re-encoded once after rotation |
+| Rotation (`node`) | `RopeShift`: a pure rotation by `-discard * freq[i]` per pair, built from each handler's own config: `standard` (LLaMA family, both pair layouts), `partialSplitHalf` (Phi-2), `Phi3Rope.shift` (LongRoPE factors and frequency scale), `Qwen3Rope.shift` (YaRN ramp). Attention-magnitude factors are not reapplied, because the moved key already carries them |
+| Handlers | `ForwardPassHandler.contextLimit()` and `shiftKv(...)` (default throws: fail closed). Implemented on Llama, Phi-2, Phi-3, Qwen3, Qwen3-MoE and the three LoRA handlers through `HandlerContextShift`; `Qwen2LoraTrainableHandler` and the vision decorator delegate (the latter refuses a request that carried an image). After the host shift every in-use device mirror is rewritten from the host rows (`DeviceKvCache.replacePrefix`, one upload per tensor, watermark set to the new length; retired on out-of-memory) and the KV adapter's copy is evicted. Phi-3's limit is `Phi3RopeConfig.positionLimit()` (4096 on Phi-3.5, owner decision 1) |
+| Pipeline | `InferencePipeline.contextLimit()`/`supportsContextShift()`/`shiftKv(...)`; `LocalInferencePipeline` shifts each distinct handler once and reports the lowest limit. The cluster and tensor-parallel clients keep the defaults (cannot shift) |
+| Generation (`coordinator`) | `ContextWindow`, one per request, used by `GenerationLoop.generate`, `.generateBatch` and each `ContinuousBatchEngine` slot: before any forward that would cross the limit it shifts (discard = the larger of the overflow and half of what follows the kept prefix) and records `juno.ContextShift`; it cuts an over-long prompt to the kept prefix plus the latest tokens; it refuses up front a pipeline that cannot shift, `--spec-type draft-simple`, and a kept prefix over half the limit. A session whose KV was shifted or cut drops it instead of offering it as a prefix |
+| Surfaces | `--context-shift on\|off` (`ConsoleMain`, `run.sh local`; `run.sh cluster` and a cluster launch refuse `on`), `JUNO_CONTEXT_SHIFT` (`ContextShiftOptions`); `x_juno_context_shift` (chat completions) and `contextShift` (native), each answering 400 where shifting cannot work; `JunoPlayer.Builder.contextShift`, `JunoHttpClient.withContextShift`; `openapi.yaml`/`juno-api.yaml`. `./juno test` check 10 (`ContextShiftCheck`) |
+
+**Tests.** Unless marked, written first and seen failing for the right reason (methods stubbed to throw, or
+the behaviour absent), then passing:
+
+| Test | Count | Result | Reading |
+|---|---|---|---|
+| `KvContextShiftTest` (kvcache) | 17 | pass | dense and paged, f16 and q8_0, filled to `MAX_SEQ_LEN`: a write at the cap still throws without a shift (4, regression guard, passed before the change); after a shift the prefix is untouched, moved V rows byte-exact, moved K rows rotated, writing continues to the cap; `KvPageTable` returns the pages past the new length |
+| `RopeShiftTest` (node) | 5 | pass | rotation at p, then shift back by d, equals rotation at p - d within 2e-3, for standard adjacent, standard split-half, Qwen3 YaRN, Phi-3 LongRoPE with attention factor, Phi-2 partial |
+| `LlamaTransformerHandlerContextShiftTest` | 6 | pass | dense and paged KV match the oracle KV to 1e-4; a negative control (keys moved without rotation) differs by more than 1e-3, so the tolerance sees a missing rotation; unknown request and unsupporting handler fail closed. The synthetic model needed a wider weight range (`newTestInstance(..., weightRange)`, default unchanged) for the control to bite |
+| `ContextShiftLiveTest` (real models, CPU) | 9 + 1 opt-in | pass | max logit difference against the oracle: TinyLlama 3e-5, Qwen2.5-3B 3e-5, Phi-3.5-mini 6e-5 (and `contextLimit()` 4096), Qwen3-1.7B 3e-5, Phi-2 handler (moondream2 backbone) 2e-5; LoRA playback: TinyLlama with its trained adapter 3e-5, Qwen2.5-3B 2e-5, Phi-3.5 5e-5, Qwen3 4e-5; Qwen3-Coder-30B-A3B 2e-5 (opt-in, `-Djuno.test.largeModels=true` and a 40 GB heap: the model does not fit the default test heap). Same greedy token in every case. Written after the handler code it scores (the handler code was driven by the synthetic test above), passed on first run except Phi-2, see below |
+| `LlamaTransformerHandlerContextShiftGpuTest` (CUDA TinyLlama) | 1 | pass | mirror watermarks equal the shifted length after the shift and grow on the next decode; max logit difference against the oracle attended on the host 0.146, against 0.160 for device-vs-host attention without a shift; same greedy token |
+| `ContextShiftLiveGpuTest` (CUDA) | 2 | pass | Phi-3.5: no mirror retired, watermarks at the shifted length, difference 0.225 against a 0.159 control; Qwen3-1.7B: 0.127 against 0.125. Regression tests over the mirror code already driven by the TinyLlama GPU test; passed on first run |
+| `LocalInferencePipelineContextShiftTest` | 2 | pass | each distinct handler shifted once, also when one handler serves two stages; limit is the lowest |
+| `GenerationLoopContextShiftTest` (coordinator) | 10 | pass | default still fails at the limit (regression guard, passed before the change); opt-in shifts and keeps the system prompt, positions stay under the limit; an over-long prompt is cut only with the opt-in; server default and explicit `false`; static batch shifts one member; continuous slot shifts; a session after a shift restarts from an empty KV; unsupported pipeline, draft-model speculation and an over-long system prompt fail closed before any forward |
+| `ContextShiftRequestFieldTest` (coordinator, HTTP) | 3 | pass | `x_juno_context_shift` and `contextShift` run past the limit (200, all tokens); absent, the request fails there (500); a deployment that cannot shift answers 400 naming the field |
+| `VisionAwareForwardPassHandlerContextShiftTest` | 2 | pass | text-only delegates; an image request fails closed until evicted. **Written after the code; passed on first run** |
+| `JunoHttpClientContextShiftTest` (juno-player) | 4 | pass | both body shapes carry the field; a plain client sends none; `JunoPlayer.request` carries the builder's choice. **Written with the code; passed on first run** |
+| `ContextShiftCheckTest` (juno-master, check 10, CUDA TinyLlama) | 1 | pass | 192-position limit: 200 tokens generated on each schedule, 3 shifts each, highest position 191 |
+| `ModelLiveRunnerTest` | 8 | pass | suite selection now includes check 10 for `pipeline` and `tensor` |
+| `Phi3EndOfTurnLiveTest`, `Phi3RopeFactorPolicyTest`, `Phi3RopeLoadTest` | 7 | pass | unchanged (step 1) |
+| `ContextWindowKeepTest` (coordinator) | 6 | pass | the kept prefix holds the system prompt on six chat templates. Seen failing on Mistral and Phi-3 (kept prefix 0: those templates fold the system text into the first user turn, so the system messages formatted alone render none of it); fixed by formatting the system messages followed by an empty user turn |
+| `PrefixCacheDeepInvalidateTest` (kvcache) | 1 | pass | a 20000-token prefix invalidated on a virtual thread; another key's prefix survives. Seen failing with `StackOverflowError` |
+| `Phi3ContextShiftAtLimitTest` (juno-master, CUDA Phi-3.5) | 1 | pass | 3994-token prompt held open for 200 tokens crosses 4096 with the opt-in; without it the same request fails with the original-context-length error. Written after the code; passed on first run |
+| `smoke-context-policy.sh` (new; Phi-3.5, CUDA, 16 GiB heap) | 7 checks | pass | both schedules: with the opt-in all 10 turns answer (turns 7 to 10 past the limit, their prompts cut to 2058 tokens); a request held open past the limit shifts during decode (4238 positions); without the opt-in turn 7 fails at 4096 with the documented error; `--context-shift on` answers the crossing turn by default and fails it with an explicit false. Run `target/context-policy-smoke/20261009T012313Z/` (not published: a smoke result, not a measurement) |
+
+**Full unit reactor** (`mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player`):
+registry, lora, kvcache, health pass; node 993 run, 1 failure, 45 skipped. The failure is
+`PrefillReserveDeviceTest.theAllocatorWithholdsNoMoreThanTheReservesAllowance`, a device-wide free-VRAM check
+(reads 84 MB free with the card filled, bound 64 MiB). **It fails identically on a clean export of HEAD
+`de98ff6`** (72 MB), so it is environmental on this host today, not this change; reported, not loosened. The
+failure skipped the later modules, which were then run with `-fae`: tokenizer, sampler, vision, metrics pass;
+coordinator showed only the new `ContextWindowKeepTest` failing (the seen-failing run above); after the fix
+coordinator (396) and juno-player (122) pass. kvcache re-run after the `PrefixCache` fix: 96 pass. Then
+`mvn verify -pl juno-master`: 10 unit tests and 20 ITs pass.
+
+**Defects found while doing this step.**
+- *Fixed (in scope: context shift calls it on the request path):* `PrefixCache.invalidate` recursed once per
+  cached token (three frames each) and overflowed a virtual thread's stack for a session of about 4000 tokens.
+  Pre-existing: ending such a session (`evictSession`) would have hit it too. Now iterative.
+- *Fixed by owner decision 4 (out-of-tier change below):* a stateless request that fails mid-generation was never evicted
+  (`GenerationLoop.generate` evicts only on the success path), so its KV stays held for the life of the
+  process. On Phi-3.5 near 4096 tokens that is about 3 GB of heap per failed request; the first smoke run ran
+  out of heap on the request after such a failure. Pre-existing, outside this tier's scope (decision 4).
+- *Handed to Tier 08 item 7 (owner decision 3):* `models/phi-2.Q4_K_M.gguf` cannot be loaded at all (separate Q/K/V tensors; the
+  handler reads only a fused one). Recorded in `INVENTORY.md`; the Phi-2 handler was scored on moondream2's
+  backbone instead (decision 3).
+
+**Measurement boundary.** None for a request that does not opt in: with shifting off, `ContextWindow.place`
+returns the position unchanged (one subtraction and a comparison per forward), and no forward, MatVec, KV write
+or attention path changed. The tier's perf gate still has to show it (step 5, owner's pinned run).
+
+**Decisions raised with the owner.**
+
+2. *Context shift in cluster and tensor-parallel mode.* Implemented as FAIL-CLOSED (startup error for the flag,
+   HTTP 400 for the request field), recorded under "Out of scope" pending your confirmation. Doing it for real
+   needs a node RPC that shifts a request's KV on every node, and the cluster clients do not yet forward even
+   `evict`. Recommendation: **confirm fail-closed for this tier**, and give the RPC to the tier that owns the
+   cluster surface (Tier 13), which also owns the missing cluster `evict`.
+3. *`phi-2.Q4_K_M.gguf` does not load.* Recommendation: **give it to Tier 08** (architecture breadth: teach the
+   Phi-2 handler the split Q/K/V layout), and until then stop counting the file as a Phi-2 test model.
+4. *Failed stateless requests leak their KV.* Recommendation: **fix it as an out-of-tier change now** (evict in
+   a `finally` on the stateless path of `generate`, `generateBatch` and the continuous engine), recorded under
+   this tier's out-of-tier heading, because context shifting makes long requests near the limit more likely
+   and each leaked one costs gigabytes.
+
+**Owner decisions (2026-10-08).** 2: fail-closed confirmed; the cluster shift RPC and the missing cluster
+`evict` are [Tier 13](TIER-13-server-surface-clustering.md) item 5. 3: the split-Q/K/V Phi-2 file is
+[Tier 08](TIER-08-model-architecture-breadth.md) item 7. 4: fix the failed-request KV leak now, as an
+out-of-tier change (below).
+
+**Out-of-tier changes.**
+- *2026-10-08, owner decision 4: a request that fails mid-generation releases its KV.* `GenerationLoop.generate`
+  and `.generateBatch` now run their bodies through a wrapper that, on failure, evicts a stateless request's
+  KV (every member of a failed static batch), drops a session's KV when the request had context shifting on
+  (it may no longer line up with the session's prompt), and evicts the draft model's KV; a session that never
+  opted in keeps its KV as before. `ContinuousBatchEngine` does the same on a failed admit, a failed slot
+  completion and a failed engine step (which fails every running slot). A failure while releasing is attached
+  to the original exception. Touches the coordinator's request lifecycle only; no forward, MatVec, KV write or
+  attention path, so not a measurement boundary and no published baseline is affected.
+  `GenerationFailureEvictionTest` (3: single request, static batch, continuous slot) seen failing first (the
+  KV stayed held), then passing.
+- (`LlamaTransformerHandler.newTestInstance` gained a weight-range overload for tests; the default draws
+  exactly the weights it drew before. Not a product change.)
+
+**Next:** implementation step 3, sliding-window attention (both window keys, synthetic uniform and patterned
+fixtures, CPU and GPU).
+

@@ -23,7 +23,7 @@ mvn verify -pl juno-master             # integration tests — forks 3 JVM nodes
 mvn verify -pl juno-master -Pintegration -DMODELS=/abs/a.gguf,/abs/b.gguf
                                         # ModelLiveRunnerIT — requires real model files
 
-./juno test --model-path /path/to/model.gguf   # real-model smoke test (9 checks, exits 0/1)
+./juno test --model-path /path/to/model.gguf   # real-model smoke test (10 checks, exits 0/1)
 ```
 
 GPU tests (require the corresponding vendor toolkit + GPU):

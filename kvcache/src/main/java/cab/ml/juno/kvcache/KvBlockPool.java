@@ -169,6 +169,21 @@ public final class KvBlockPool {
 		}
 	}
 
+	/** Copy one stored row between slots, byte for byte (no re-encoding). */
+	public void copyToken(int srcBlock, int srcSlot, int dstBlock, int dstSlot) {
+		if (srcSlot < 0 || srcSlot >= pageSize || dstSlot < 0 || dstSlot >= pageSize)
+			throw new IllegalArgumentException("slot out of range: " + srcSlot + " -> " + dstSlot);
+		byte[] src;
+		byte[] dst;
+		synchronized (lock) {
+			checkLive(srcBlock);
+			checkLive(dstBlock);
+			src = pages.get(srcBlock);
+			dst = pages.get(dstBlock);
+		}
+		System.arraycopy(src, srcSlot * bytesPerToken, dst, dstSlot * bytesPerToken, bytesPerToken);
+	}
+
 	private void checkLive(int blockId) {
 		if (blockId < 0 || blockId >= pages.size() || !live.get(blockId))
 			throw new IllegalStateException("block not live: " + blockId);

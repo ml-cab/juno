@@ -278,6 +278,34 @@ final class GpuAttentionMirror {
 		}
 	}
 
+	/** Tests only: each layer's watermark, -1 where closed; {@code null} without mirrors. */
+	int[] watermarks(String requestId) {
+		DeviceKvCache[] mirrors = byRequest.get(requestId);
+		if (mirrors == null)
+			return null;
+		int[] out = new int[mirrors.length];
+		for (int i = 0; i < mirrors.length; i++)
+			out[i] = mirrors[i] == null || !mirrors[i].live() ? -1 : mirrors[i].validTokens();
+		return out;
+	}
+
+	/** The request's mirrors if it has any; never allocates. */
+	DeviceKvCache[] existing(String requestId) {
+		return byRequest.get(requestId);
+	}
+
+	/**
+	 * Closes the request's mirrors but keeps them mapped, so the request goes on
+	 * attending on the host instead of being handed fresh, unwritten mirrors.
+	 */
+	void retire(String requestId) {
+		DeviceKvCache[] mirrors = byRequest.get(requestId);
+		if (mirrors != null)
+			for (DeviceKvCache m : mirrors)
+				if (m != null)
+					m.close();
+	}
+
 	/** Frees the request's mirrors. Safe for a request that never had any. */
 	void evict(String requestId) {
 		DeviceKvCache[] mirrors = byRequest.remove(requestId);

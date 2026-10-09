@@ -77,6 +77,15 @@ record Phi3RopeConfig(
 					+ "Juno does not use; keep the prompt and generated tokens within " + originalContextLength + ".");
 	}
 
+	/**
+	 * Positions a sequence may occupy, {@code [0, positionLimit())}: the original
+	 * training context when the long factors are held back (see
+	 * {@link #requirePosition}), otherwise unbounded here.
+	 */
+	int positionLimit() {
+		return holdsBackLongFactors() ? originalContextLength : Integer.MAX_VALUE;
+	}
+
 	private boolean holdsBackLongFactors() {
 		return ropeFactorsShort != null && ropeFactorsLong != null && contextLength > originalContextLength;
 	}

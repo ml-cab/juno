@@ -141,6 +141,14 @@ public final class OpenAiChatHandler {
 		InferenceRequest request = (body.xJunoSessionId() != null && !body.xJunoSessionId().isBlank())
 				? InferenceRequest.ofSession(body.xJunoSessionId().strip(), modelId, messages, sampling, priority)
 				: InferenceRequest.of(modelId, messages, sampling, priority);
+		if (body.xJunoContextShift() != null)
+			request = request.withContextShift(body.xJunoContextShift());
+		try {
+			scheduler.requireContextShiftSupported(request);
+		} catch (IllegalArgumentException e) {
+			openAiError(ctx, 400, "invalid_request_error", "invalid_request", e.getMessage(), "x_juno_context_shift");
+			return;
+		}
 
 		boolean disclosureEnabled = AiDisclosure.isEnabled(body.xJunoDisclosure());
 
@@ -493,7 +501,8 @@ public final class OpenAiChatHandler {
 			@JsonProperty("x_juno_priority") String xJunoPriority,
 			@JsonProperty("x_juno_session_id") String xJunoSessionId, @JsonProperty("x_juno_top_k") Integer xJunoTopK,
 			@JsonProperty("x_juno_disclosure") Boolean xJunoDisclosure, @JsonProperty("x_juno_loras") JsonNode xJunoLoras,
-			@JsonProperty("x_juno_grammar") String xJunoGrammar) {
+			@JsonProperty("x_juno_grammar") String xJunoGrammar,
+			@JsonProperty("x_juno_context_shift") Boolean xJunoContextShift) {
 	}
 
 	@JsonIgnoreProperties(ignoreUnknown = true)

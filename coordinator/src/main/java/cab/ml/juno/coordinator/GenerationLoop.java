@@ -190,8 +190,18 @@ public final class GenerationLoop {
 	 * @param entries one entry per request (request + consumer pair)
 	 * @return one GenerationResult per entry, in the same order
 	 */
-	@SuppressWarnings("unchecked")
 	public List<GenerationResult> generateBatch(List<BatchEntry> entries) {
+		try {
+			return generateBatchOnce(entries);
+		} catch (RuntimeException | Error e) {
+			for (BatchEntry entry : entries)
+				releaseAfterFailure(entry.request(), e);
+			throw e;
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private List<GenerationResult> generateBatchOnce(List<BatchEntry> entries) {
 		if (entries.isEmpty())
 			return List.of();
 		if (entries.size() == 1) {
@@ -217,6 +227,7 @@ public final class GenerationLoop {
 		GrammarSession[] grammars = new GrammarSession[n];
 		MinTokenFloor[] floors = new MinTokenFloor[n];
 		GenerationResult.StopReason[] reasons = new GenerationResult.StopReason[n];
+		ContextWindow[] windows = new ContextWindow[n];
 		boolean[] active = new boolean[n];
 		Instant[] starts = new Instant[n];
 
@@ -234,6 +245,8 @@ public final class GenerationLoop {
 			ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(req.modelId());
 			String prompt = formatter.format(req.messages());
 			int[] promptIds = PromptEncoder.encode(tokenizer, prompt, req.requestId());
+			windows[i] = ContextWindow.open(req, promptIds, tokenizer, pipeline, specOptions);
+			promptIds = windows[i].fitPrompt(promptIds);
 
 			// No prefix-cache lookup on this path. Each batched request's pipeline KV is
 			// keyed by its own request id and evicted when it finishes, so a trie hit
@@ -301,7 +314,7 @@ public final class GenerationLoop {
 				}
 				batchIds.add(requestIds[i]);
 				batchToks.add(allTokens[i]);
-				batchPos.add(startPos[i] + generated[i].size());
+				batchPos.add(windows[i].place(pipeline, requestIds[i], startPos[i] + generated[i].size(), 1));
 				batchIdx.add(i);
 			}
 
@@ -405,6 +418,15 @@ public final class GenerationLoop {
 	 * @return final GenerationResult with full text + stats
 	 */
 	public GenerationResult generate(InferenceRequest request, TokenConsumer consumer) {
+		try {
+			return generateOnce(request, consumer);
+		} catch (RuntimeException | Error e) {
+			releaseAfterFailure(request, e);
+			throw e;
+		}
+	}
+
+	private GenerationResult generateOnce(InferenceRequest request, TokenConsumer consumer) {
 		Instant start = Instant.now();
 
 		// ── Step 1: Encode prompt ─────────────────────────────────────────────
@@ -412,6 +434,8 @@ public final class GenerationLoop {
 		ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(request.modelId());
 		String prompt = formatter.format(request.messages());
 		int[] promptIds = PromptEncoder.encode(tokenizer, prompt, request.requestId());
+		ContextWindow window = ContextWindow.open(request, promptIds, tokenizer, pipeline, specOptions);
+		promptIds = window.fitPrompt(promptIds);
 
 		// ── Step 2: Determine prefill start position ──────────────────────────
 		// For session requests: consult the prefix cache. The session key is stable
@@ -425,7 +449,11 @@ public final class GenerationLoop {
 		final boolean hasSession = request.sessionId() != null;
 
 		int startPos = 0;
-		if (hasSession) {
+		if (hasSession && window.movedKv()) {
+			// The prompt was cut to fit the context, so the session's KV from earlier
+			// turns no longer lines up with it: start this turn from an empty KV.
+			dropSessionKv(kvKey);
+		} else if (hasSession) {
 			var prefixMatch = kvCache.findLongestPrefix(promptIds);
 			if (prefixMatch.isHit()) {
 				startPos = prefixMatch.matchedTokens();
@@ -506,7 +534,8 @@ public final class GenerationLoop {
 				int[] verifyWindow = new int[draft.length];
 				verifyWindow[0] = allTokens[allTokens.length - 1];
 				System.arraycopy(draft, 0, verifyWindow, 1, draft.length - 1);
-				float[][] verifyLogits = pipeline.verifyDraft(kvKey, verifyWindow, startPos + step);
+				float[][] verifyLogits = pipeline.verifyDraft(kvKey, verifyWindow,
+						window.place(pipeline, kvKey, startPos + step, verifyWindow.length));
 				int accepted = 0;
 				stop = false;
 
@@ -546,7 +575,7 @@ public final class GenerationLoop {
 					draftProposer.observe(allTokens);
 			} else {
 				// Fallback: plain single-token decode (also covers --spec-type none).
-				float[] logits = pipeline.forward(kvKey, allTokens, startPos + step);
+				float[] logits = pipeline.forward(kvKey, allTokens, window.place(pipeline, kvKey, startPos + step, 1));
 				int[] historyArr = historyBuf.toTrimmedArray();
 				int nextToken = sampler.sample(logits, params, historyArr, rng, grammar, floor);
 
@@ -571,7 +600,12 @@ public final class GenerationLoop {
 			draftProposer.close();
 
 		// ── Post-generation: cache or evict ───────────────────────────────────
-		if (hasSession) {
+		if (hasSession && window.movedKv()) {
+			// Shifted or cut: the KV no longer holds the prompt's tokens at their
+			// positions, so it cannot serve the next turn as a prefix. The next turn
+			// starts from an empty KV and is cut to fit in turn.
+			dropSessionKv(kvKey);
+		} else if (hasSession) {
 			// Cache the current formatted prompt token sequence (NOT the generated
 			// tokens). The next turn's formatted prompt begins with ALL of the current
 			// turn's prompt tokens (the conversation grows monotonically), so
@@ -674,6 +708,52 @@ public final class GenerationLoop {
 		kvCache.evict(sessionId);
 		kvCache.invalidatePrefix(sessionId);
 		pipeline.evict(sessionId);
+	}
+
+	/**
+	 * Refuses a request that asks for context shifting (itself or through the server
+	 * default) where a shift could not work: a pipeline that cannot shift, draft-model
+	 * speculation, or a system prompt filling half the context. Generation checks the
+	 * same again; the surfaces call this first so the caller gets a request error
+	 * before any work is queued.
+	 *
+	 * @throws IllegalArgumentException naming why
+	 */
+	public void requireContextShiftSupported(InferenceRequest request) {
+		if (!ContextShiftOptions.enabledFor(request))
+			return;
+		String prompt = ChatTemplateFormatter.forModelType(request.modelId()).format(request.messages());
+		ContextWindow.open(request, tokenizer.encode(prompt), tokenizer, pipeline, specOptions);
+	}
+
+	/**
+	 * Releases what a request that failed mid-generation holds, as its success path
+	 * would have: a stateless request's KV (otherwise held for the life of the
+	 * process), and a session's KV when it may have been shifted or cut, since it
+	 * may no longer line up with the session's prompt. A session that never opted in
+	 * keeps its KV, as before. A failure here is attached to the original one.
+	 */
+	void releaseAfterFailure(InferenceRequest request, Throwable failure) {
+		try {
+			String kvKey = request.kvCacheKey();
+			if (request.sessionId() == null) {
+				kvCache.evict(kvKey);
+				pipeline.evict(kvKey);
+			} else if (ContextShiftOptions.enabledFor(request)) {
+				dropSessionKv(kvKey);
+			}
+			if (draftPipeline != null)
+				draftPipeline.evict(kvKey + "#draft");
+		} catch (RuntimeException e) {
+			failure.addSuppressed(e);
+		}
+	}
+
+	/** Releases a session's KV everywhere and forgets its prefix, keeping the session id usable. */
+	private void dropSessionKv(String kvKey) {
+		kvCache.evict(kvKey);
+		kvCache.invalidatePrefix(kvKey);
+		pipeline.evict(kvKey);
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────────

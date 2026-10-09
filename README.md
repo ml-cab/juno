@@ -64,6 +64,15 @@ Features:
 - Dense KV under `static`; paged KV (`--kv-page-size`) under `continuous`.
   See `docs/howto.md`.
 
+### Context shifting
+
+- `--context-shift on` (`JUNO_CONTEXT_SHIFT`, default `off`), or per request
+  `x_juno_context_shift` / `contextShift`: a request that fills the context
+  drops the oldest half of the tokens after its system prompt and continues
+  instead of failing. Kept keys are rotated to their new positions, on the CPU
+  and in the GPU's KV copy. Local mode, every handler family, both schedules,
+  `--lora-play`; cluster mode refuses it. See `docs/howto.md`.
+
 ### Speculative decoding
 
 - `--spec-type none|ngram-simple|draft-simple` (`JUNO_SPEC_TYPE`, default

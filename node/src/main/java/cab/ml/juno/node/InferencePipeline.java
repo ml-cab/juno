@@ -18,6 +18,8 @@ package cab.ml.juno.node;
 
 import java.util.List;
 
+import cab.ml.juno.kvcache.DenseKvTensor;
+
 /**
  * Contract for executing a forward pass through a pipeline of transformer
  * layers.
@@ -161,6 +163,33 @@ public interface InferencePipeline {
 	 * overrides this to call {@code evict} on every stage's handler.
 	 */
 	default void evict(String requestId) {
+	}
+
+	/**
+	 * Positions a request may occupy across the whole pipeline: the lowest
+	 * {@link ForwardPassHandler#contextLimit()} of its handlers.
+	 */
+	default int contextLimit() {
+		return DenseKvTensor.MAX_SEQ_LEN;
+	}
+
+	/**
+	 * Whether {@link #shiftKv} can run on this pipeline. A request that opted in
+	 * to context shifting is refused up front where this is false, rather than
+	 * failing once it reaches the limit.
+	 */
+	default boolean supportsContextShift() {
+		return false;
+	}
+
+	/**
+	 * Context shift for one request on every stage: see
+	 * {@link ForwardPassHandler#shiftKv}.
+	 *
+	 * @throws UnsupportedOperationException when this pipeline cannot shift
+	 */
+	default void shiftKv(String requestId, int seqLen, int keep, int discard) {
+		throw new UnsupportedOperationException(getClass().getSimpleName() + " does not support context shift");
 	}
 
 	/**

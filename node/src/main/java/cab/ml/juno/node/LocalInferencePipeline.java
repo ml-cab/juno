@@ -17,7 +17,10 @@ package cab.ml.juno.node;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 
 import cab.ml.juno.registry.ShardAssignment;
 import cab.ml.juno.registry.ShardMap;
@@ -150,6 +153,32 @@ public final class LocalInferencePipeline implements InferencePipeline {
 	public void evict(String requestId) {
 		for (NodeStage stage : stages)
 			stage.handler().evict(requestId);
+	}
+
+	@Override
+	public int contextLimit() {
+		int limit = Integer.MAX_VALUE;
+		for (NodeStage stage : stages)
+			limit = Math.min(limit, stage.handler().contextLimit());
+		return limit;
+	}
+
+	@Override
+	public boolean supportsContextShift() {
+		return true;
+	}
+
+	/**
+	 * Shifts every distinct handler once: a handler serving several stages holds
+	 * all of their layers under the one request id, and a second shift would move
+	 * the rows again. A handler that cannot shift fails closed.
+	 */
+	@Override
+	public void shiftKv(String requestId, int seqLen, int keep, int discard) {
+		Set<ForwardPassHandler> done = Collections.newSetFromMap(new IdentityHashMap<>());
+		for (NodeStage stage : stages)
+			if (done.add(stage.handler()))
+				stage.handler().shiftKv(requestId, seqLen, keep, discard);
 	}
 
 	/**

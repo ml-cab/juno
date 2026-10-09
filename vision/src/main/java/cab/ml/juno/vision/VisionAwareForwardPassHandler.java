@@ -87,6 +87,13 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
     private final ConcurrentHashMap<String, float[][]> patchEmbeddings = new ConcurrentHashMap<>();
 
     /**
+     * Requests that were given image embeddings, until evicted. Their image tokens sit
+     * in the KV cache for the life of the request, so a context shift would move or
+     * drop them; {@link #shiftKv} refuses those requests.
+     */
+    private final java.util.Set<String> requestsWithImages = ConcurrentHashMap.newKeySet();
+
+    /**
      * @param textHandler           underlying text-only forward-pass handler
      * @param imageTokenId          special token ID used to mark image positions;
      *                              every token of this ID in the prefill sequence is
@@ -132,6 +139,7 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
         if (patchVectors == null || patchVectors.length == 0)
             throw new IllegalArgumentException("patchVectors must not be empty");
         patchEmbeddings.put(requestId, patchVectors);
+        requestsWithImages.add(requestId);
     }
 
     /**
@@ -345,6 +353,26 @@ public final class VisionAwareForwardPassHandler implements ForwardPassHandler {
      */
     @Override
     public void evict(String requestId) {
+        requestsWithImages.remove(requestId);
         textHandler.evict(requestId);
+    }
+
+    @Override
+    public int contextLimit() {
+        return textHandler.contextLimit();
+    }
+
+    /**
+     * Delegates for a text-only request. A request that carries an image fails
+     * closed: shifting would drop or move image-token positions, and the image
+     * cannot be re-encoded into the shifted context.
+     */
+    @Override
+    public void shiftKv(String requestId, int seqLen, int keep, int discard) {
+        if (requestsWithImages.contains(requestId))
+            throw new IllegalStateException("context shift is not supported for a request with an image ("
+                    + requestId + "): it would move or drop the image tokens. Keep image requests within the"
+                    + " context limit of " + textHandler.contextLimit() + " tokens.");
+        textHandler.shiftKv(requestId, seqLen, keep, discard);
     }
 }

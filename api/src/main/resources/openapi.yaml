@@ -464,6 +464,19 @@ components:
           description: |
             If true and calling /inference (not /inference/stream),
             this is ignored — use /inference/stream for SSE.
+        contextShift:
+          type: boolean
+          description: |
+            When the request fills the model's context, drop the oldest tokens
+            after the system prompt and continue instead of failing. Omitted:
+            the server default (`--context-shift`, off unless set). false: fail
+            at the context limit whatever the server default. Kept tokens keep
+            the cache entries they were computed with; a request whose prompt
+            alone exceeds the context is cut to its system prompt plus its latest
+            tokens before the first forward pass. Answers 400 where shifting
+            cannot work: cluster deployments, `--spec-type draft-simple`, or a
+            system prompt filling half the context or more. A request with an
+            image fails when it reaches the limit rather than drop image tokens.
 
     InferenceResponse:
       type: object

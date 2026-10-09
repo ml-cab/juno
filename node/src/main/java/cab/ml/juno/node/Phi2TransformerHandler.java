@@ -704,6 +704,22 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
     }
 
     @Override
+    public void shiftKv(String requestId, int seqLen, int keep, int discard) {
+        HandlerContextShift.shiftHost(kvCacheK, kvCacheV, requestId, seqLen, keep, discard,
+                RopeShift.partialSplitHalf(cfg.headDim(), ropeDim, cfg.ropeTheta()), cfg.numKvHeads());
+        NodeKVCacheAdapter a = kvAdapter;
+        if (a != null)
+            a.evict(requestId);
+    }
+
+    /** Package-private for testing: the request's host K (index 0) and V (index 1) layers, or null. */
+    SessionKvTensor[][] hostKv(String requestId) {
+        SessionKvTensor[] k = kvCacheK.get(requestId);
+        return k == null ? null : new SessionKvTensor[][] { k, kvCacheV.get(requestId) };
+    }
+
+
+    @Override
     public void evict(String requestId) {
         SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
         SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));

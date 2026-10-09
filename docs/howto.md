@@ -63,6 +63,7 @@ Unified stand-alone launchers at the project root. `juno.bat` delegates to `scri
 | `--batch-window-ms M` | `50` when parallel>1 | cluster, local, master | Batch collect window (`JUNO_BATCH_WINDOW_MS`). |
 | `--prefill-batch N` | sized to the prompt (GPU + `static` schedule, local mode and the `JunoPlayer` facade); `32` otherwise | cluster, local, master | Max prompt tokens per prefill window (`JUNO_PREFILL_BATCH`). In local mode and in the `JunoPlayer` embedding facade, with `--schedule static` and a GPU backend, the default is the widest window whose device footprint fits half of the free VRAM (queried live after the weights are uploaded, less the room held for one request's attention key/value mirror to grow to 512 positions), which normally covers the whole prompt; the footprint is the prefill window's own buffers and its 8-bit copy, added up over every in-process node (attention keeps no per-window scratch, so the footprint does not grow with the context), and it falls back to `32` when VRAM is tight. Every other surface defaults to `32`, each for a measured reason: on CPU a wider window does not change prefill time; under `--schedule continuous` the chunk is the unit decode steps interleave with, and `32` gives concurrent requests the lowest time to first token (a wider chunk shortens a long prompt's prefill at their expense); in cluster mode and on a standalone coordinator the nodes prefill one token per call, so the chunk size does not change the work; in `juno lora` the LoRA handler's prefill does not speed up with window width. Pass an explicit `N` to override on any surface; use `1` for per-token batched prefill.
 | `--prefill single\|batched` | `batched` | cluster, local | Prefill strategy: windowed GEMM vs per-token sequential loop. |
+| `--context-shift on\|off` | `off` | local | Context shifting (`JUNO_CONTEXT_SHIFT`): when a request fills the context, drop the oldest tokens after its system prompt and continue instead of failing. Sets the default for every request; a request's own `x_juno_context_shift` (chat completions) or `contextShift` (native API) overrides it either way. See "Context shifting" below. Cluster and tensor-parallel launches refuse `on` with an explicit error. |
 | `--spec-type none\|ngram-simple\|draft-simple` | `none` | local | Speculative decoding (`JUNO_SPEC_TYPE`). `ngram-simple` drafts up to `--spec-ngram-m` tokens from an in-request ngram cache (prompt + generated tokens, no second model). `draft-simple` drafts from a second, smaller GGUF model given via `--model-draft` (must share the target's vocabulary — fails closed at startup otherwise). Both verify the whole draft window against the target model in one batched pass and emit the target model's own prediction at the first mismatch — output is byte-for-byte identical to `none` regardless of draft accuracy (a wrong or low-quality draft only costs acceptance rate, never correctness). `ngram-simple` drafts well on repetitive output (templated JSON, echoed context) and mostly falls back to plain decoding on free-form novel text. Wired only for single-request decoding (REPL turns, and API requests that are not sharing a `--parallel` static batch with another in-flight request) — a request that lands in a concurrent batch decodes without speculation (startup WARNING when both are configured together); `draft-simple` is local-mode only — LoRA train/play and cluster/tensor-parallel launches fail closed with an explicit error rather than silently ignoring `--model-draft`; cluster / tensor-parallel pipelines that do reach the verify path (`ngram-simple`) fall back to the correctness-preserving serial verify path (no speed benefit there yet). |
 | `--spec-ngram-n N` | `3` | local | Ngram order for the speculative draft cache (`JUNO_SPEC_NGRAM_N`) — number of trailing tokens used as the lookup key. Only meaningful with `--spec-type ngram-simple`. |
 | `--spec-ngram-m N` | `4` | local | Max tokens drafted per verify round (`JUNO_SPEC_NGRAM_M`). Applies to both `ngram-simple` and `draft-simple`. |
@@ -468,6 +469,47 @@ short sequence with them damages it: Phi-3.5-mini then rarely ends its turn. A s
 the limit fails with an error naming it rather than continuing on factors it did not start with. This
 applies on every path, CPU and GPU, local and cluster, inference and LoRA training.
 
+### Context shifting
+
+By default a request that reaches its limit fails with an error. With context shifting on
+(`--context-shift on` for every request, or per request with `x_juno_context_shift: true` on chat
+completions, `contextShift: true` on `/v1/inference`, `JunoPlayer.Builder.contextShift(true)` or
+`JunoHttpClient.withContextShift(true)`), the request continues instead: before the position that would
+cross the limit, Juno drops the oldest half of the tokens after the system prompt from the request's KV
+cache and moves the rest down. A request's own `false` keeps the failing behaviour even when the server
+default is on.
+
+- **Limit.** The lowest limit of the handlers serving the request: 32,768 positions, or 4,096 on
+  Phi-3.5-mini (see "Maximum sequence length"). A Phi-3.5 conversation therefore shifts at 4,096 and
+  never reaches the long-context factors.
+- **What is kept.** The system prompt: the tokens the conversation shares with its leading system
+  messages followed by an empty user turn (which also covers chat templates that fold the system text
+  into the first user turn, as Mistral's and Phi-3's do), or only the BOS token when there is none. A system prompt filling half
+  the context or more is refused with HTTP 400, since a shift would have no room to work.
+- **The kept keys are rotated, not recomputed.** Each kept key is turned back to its new position, which
+  is exact for rotary position embeddings and takes milliseconds where recomputing would re-run the kept
+  tokens. The kept tokens keep the keys and values they were computed with, including what they took
+  from the tokens since dropped; that is what a shift is, and it is why the result is not the same as a
+  fresh request given only the kept tokens. With `--cache-type-k q8_0` each shift re-encodes the moved
+  keys once.
+- **Prompts longer than the context** are cut before the first forward pass to the system prompt plus
+  the latest tokens, filling half of the context after the system prompt, so generation has room.
+- **GPU.** The host KV cache is shifted and the device copy attention reads is rebuilt from it, so GPU
+  attention and the device-resident decode region keep running after a shift.
+- **Sessions** (`x_juno_session_id`). A turn that shifted, or whose prompt was cut, no longer offers its
+  KV to the next turn as a reusable prefix: the next turn prefills from the start (and is cut to fit in
+  turn).
+- **Surfaces.** Single requests, `--parallel` static batches (only the member that reaches the limit
+  shifts) and `--schedule continuous` all shift; so do `--lora-play` and every handler family (LLaMA,
+  Mistral, Qwen2, Phi-2, Phi-3, Qwen3, Qwen3-MoE).
+- **Refused up front (HTTP 400, or an error at startup for the flag):** cluster and tensor-parallel
+  deployments, whose nodes have no call to shift a request's cache; `--spec-type draft-simple`, whose
+  draft model's cache would no longer line up with the target's (`ngram-simple` works).
+- **Images.** A request carrying an image fails when it reaches the limit rather than drop or move its
+  image tokens; text-only requests on a vision model shift normally.
+- **Observability.** Each shift records a `juno.ContextShift` JFR event: positions before, tokens kept,
+  tokens dropped, and its duration.
+
 ### OpenAI-compatible REST API (`--api-port`)
 
 Pass `--api-port N` to any `local` or cluster invocation to start an OpenAI wire-compatible
@@ -606,7 +648,7 @@ for user_input in ["My name is Alice.", "What is my name?"]:
 
 | HTTP | `code` | Cause |
 |------|--------|-------|
-| 400 | `invalid_request` | Missing/empty messages, `n` > 1, or invalid body |
+| 400 | `invalid_request` | Missing/empty messages, `n` > 1, invalid body, or `x_juno_context_shift` where shifting cannot work (see "Context shifting") |
 | 503 | `service_unavailable` | No model loaded or model not ready |
 | 429 | `rate_limit_exceeded` | Scheduler queue full; `Retry-After` header set |
 | 500 | `internal_error` | Unexpected inference error |
@@ -772,6 +814,9 @@ try (JunoPlayer player = JunoPlayer.builder(Path.of("/path/to/model.gguf"))
 }
 ```
 
+`.contextShift(true)` on the builder opts every request the player sends in to context shifting (see
+"Context shifting"); left unset, `JUNO_CONTEXT_SHIFT` (off by default) applies.
+
 The facade sizes its prefill window the way local mode does: on a GPU with the `static` schedule the
 default is the widest window that fits half of the free VRAM, which normally covers the whole prompt
 (`32` when VRAM is tight, and on CPU or the `continuous` schedule). `.prefillBatch(N)` or `JUNO_PREFILL_BATCH` fixes it to `N`.
@@ -856,6 +901,9 @@ String openAiText = http.blockingOpenAiChat("tinyllama-1.1b-chat-v1.0.Q4_K_M.ggu
 // ... with a minimum token count (min_tokens)
 String openAiFull = http.blockingOpenAiChat("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
         List.of(ChatMessage.user("Ping")), 64, 0.7f, 64);
+// A client whose every request opts in to context shifting (see "Context shifting")
+String longChat = http.withContextShift(true).blockingOpenAiChat("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        List.of(ChatMessage.user("Ping")), 64, 0.7f);
 Flow.Publisher<String> openAiSse = http.streamingOpenAiChat("tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
         List.of(ChatMessage.user("Stream")), 32, 0.7f);
 ```
@@ -1373,9 +1421,10 @@ mvn verify -pl juno-master             # integration tests — forks 3 JVM nodes
 mvn verify -pl juno-master -Pintegration -DMODELS=/abs/a.gguf,/abs/b.gguf
                                        # ModelLiveRunnerIT — requires real model files (comma-separated absolute paths);
                                        # includes a 512-token prefill on both schedules, on the GPU when one is present,
-                                       # and on the GPU a 2048-token one (capped to the model's context)
+                                       # and on the GPU a 2048-token one (capped to the model's context),
+                                       # and a context-shift run past a 192-token limit on both schedules
 
-./juno test --model-path /path/to/model.gguf   # real-model smoke test (9 checks, exits 0/1)
+./juno test --model-path /path/to/model.gguf   # real-model smoke test (10 checks, exits 0/1)
 ```
 
 **Windows (Command Prompt):**

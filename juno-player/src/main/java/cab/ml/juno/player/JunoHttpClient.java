@@ -44,12 +44,31 @@ public final class JunoHttpClient {
 	private final HttpClient http = HttpClient.newHttpClient();
 	private final String baseV1;
 	private final ObjectMapper json = new ObjectMapper();
+	/** Context-shift choice sent with every request; null sends none (the server default applies). */
+	private final Boolean contextShift;
 
 	public JunoHttpClient(URI base) {
 		String s = base.toString();
 		if (s.endsWith("/"))
 			s = s.substring(0, s.length() - 1);
 		baseV1 = s.endsWith("/v1") ? s : s + "/v1";
+		contextShift = null;
+	}
+
+	private JunoHttpClient(String baseV1, Boolean contextShift) {
+		this.baseV1 = baseV1;
+		this.contextShift = contextShift;
+	}
+
+	/**
+	 * A client that sends this context-shift choice with every request
+	 * ({@code contextShift} on the native API, {@code x_juno_context_shift} on chat
+	 * completions): {@code true} lets a request that fills the context continue by
+	 * dropping its oldest tokens after the system prompt; {@code false} fails it at
+	 * the limit whatever the server default.
+	 */
+	public JunoHttpClient withContextShift(boolean shift) {
+		return new JunoHttpClient(baseV1, shift);
 	}
 
 	/**
@@ -203,6 +222,8 @@ public final class JunoHttpClient {
 				if (minTokens != null)
 					sampling.put("minTokens", minTokens);
 			}
+			if (contextShift != null)
+				root.put("contextShift", contextShift);
 			return json.writeValueAsString(root);
 		} catch (Exception e) {
 			throw new IllegalStateException(e);
@@ -233,6 +254,8 @@ public final class JunoHttpClient {
 				root.put("min_tokens", minTokens);
 			if (temperature != null)
 				root.put("temperature", temperature);
+			if (contextShift != null)
+				root.put("x_juno_context_shift", contextShift);
 			return json.writeValueAsString(root);
 		} catch (Exception e) {
 			throw new IllegalStateException(e);

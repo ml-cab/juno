@@ -78,6 +78,13 @@ this tier's exit criteria, not Tier 02B's.
    not fit this host's 8 GiB card. Phi-2 is the text half of moondream2, so this item changes the vision
    gate as well; run `compare-vision.sh`. Measure each against its own CPU-path baseline.
 
+7. **Load Phi-2 files with split Q/K/V tensors** (handed over by Tier 02B, 2026-10-08, owner decision
+   there). `models/phi-2.Q4_K_M.gguf` stores `attn_q`/`attn_k`/`attn_v` separately, while
+   `Phi2TransformerHandler` reads only a fused `attn_qkv`, so the file fails at load (`Tensor not found:
+   blk.0.attn_qkv.weight`) and the only Phi-2 weights the handler runs today are moondream2's backbone.
+   Read either layout. Until this lands, do not count the file as a Phi-2 test model (Tiers 01B, 04B and
+   06 name it). Re-run the Phi-2 case of `ContextShiftLiveTest` on it once it loads.
+
 ### Out of scope
 
 - DeepSeek-MoE-specific optimizations (e.g. its particular shared-expert design) beyond what the
@@ -201,4 +208,6 @@ paragraph when deciding whether to ask; this section was stale once.
 - [ ] Perf gate published for at least the largest new model (`Devstral`, 24B).
 - [ ] Docs (`docs/agent-arch.txt`'s architecture table, `docs/howto.md`) updated with the newly
       supported families, Juno-native language only.
+- [ ] `models/phi-2.Q4_K_M.gguf` loads and generates (item 7), and the Phi-2 context-shift live test
+      runs on it.
 - [ ] `CHANGELOG.md` entry added.

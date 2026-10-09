@@ -88,6 +88,7 @@ info:
     | x_juno_top_k         | integer | Top-K sampling cutoff (0 = disabled; default 50)         |
     | x_juno_grammar       | string  | Raw GBNF; cannot be combined with json_object/json_schema |
     | x_juno_disclosure    | boolean | EU AI Act Article 50 transparency opt-out; true (default) includes `x_juno_ai_disclosure` in the response, false omits it. Set to false only for API-to-API integrations with no human end-user present. |
+    | x_juno_context_shift | boolean | true: when the context fills, drop the oldest tokens after the system prompt and continue; false: fail at the limit; omitted: the server default (`--context-shift`, off unless set). 400 where shifting cannot work |
 
     ## Streaming (SSE)
 
@@ -757,6 +758,20 @@ components:
             Juno-specific. Raw GBNF grammar for constrained decoding.
             Cannot be combined with `response_format` types `json_object` or
             `json_schema`. Invalid grammar text returns HTTP 400.
+
+        x_juno_context_shift:
+          type: boolean
+          description: |
+            Juno-specific. When the request fills the model's context, drop the
+            oldest tokens after the system prompt and continue instead of
+            failing. Omitted: the server default (`--context-shift`, off unless
+            set). false: fail at the context limit whatever the server default.
+            The kept tokens keep the cache entries they were computed with; a
+            prompt that alone exceeds the context is cut to its system prompt
+            plus its latest tokens before the first forward pass. Returns HTTP
+            400 where shifting cannot work: cluster deployments,
+            `--spec-type draft-simple`, or a system prompt filling half the
+            context or more.
 
         x_juno_disclosure:
           type: boolean

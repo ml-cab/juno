@@ -992,7 +992,11 @@ public final class InferenceApiServer {
 		SamplingParams params = buildSamplingParams(body.sampling());
 		RequestPriority priority = parsePriority(body.sampling() != null ? body.sampling().priority() : null);
 
-		return InferenceRequest.of(modelId, messages, params, priority);
+		InferenceRequest request = InferenceRequest.of(modelId, messages, params, priority);
+		if (body.contextShift() != null)
+			request = request.withContextShift(body.contextShift());
+		scheduler.requireContextShiftSupported(request);
+		return request;
 	}
 
 	SamplingParams buildSamplingParams(ApiSampling s) {
@@ -1055,7 +1059,7 @@ public final class InferenceApiServer {
 	// ── DTOs (parsed by Javalin/Jackson from request body) ───────────────────
 
 	public record ApiInferenceRequest(String requestId, String modelId, List<ApiMessage> messages,
-			ApiSampling sampling) {
+			ApiSampling sampling, Boolean contextShift) {
 	}
 
 	public record ApiMessage(String role, String content) {

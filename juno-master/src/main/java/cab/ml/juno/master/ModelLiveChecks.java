@@ -90,7 +90,9 @@ public final class ModelLiveChecks {
 		/** Checks 7-8, tensor-parallel cluster. */
 		TENSOR,
 		/** Check 9, in-process long-prompt prefill. */
-		PREFILL
+		PREFILL,
+		/** Check 10, in-process context shift past the context limit. */
+		CONTEXT_SHIFT
 	}
 
 	/** One check's outcome. */
@@ -137,6 +139,9 @@ public final class ModelLiveChecks {
 		if (suites.contains(Suite.PREFILL))
 			record(results, progress, 9, "long-prompt prefill, both schedules",
 					() -> longPromptPrefill(modelPath, cfg, tokenizer, contextLength));
+		if (suites.contains(Suite.CONTEXT_SHIFT))
+			record(results, progress, 10, "context shift past the context limit, both schedules",
+					() -> ContextShiftCheck.run(modelPath, cfg, tokenizer));
 		return results;
 	}
 
@@ -395,14 +400,14 @@ public final class ModelLiveChecks {
 		}
 	}
 
-	private static ForwardPassHandler loadSingleShard(String modelPath, LlamaConfig cfg, MatVec backend)
+	static ForwardPassHandler loadSingleShard(String modelPath, LlamaConfig cfg, MatVec backend)
 			throws IOException {
 		ShardContext context = new ShardContext("long-prompt", 0, cfg.numLayers(), true, true, cfg.vocabSize(),
 				cfg.hiddenDim(), cfg.numHeads());
 		return ForwardPassHandlerLoader.load(Path.of(modelPath), context, backend);
 	}
 
-	private static LocalInferencePipeline singleShardPipeline(LlamaConfig cfg, ForwardPassHandler handler) {
+	static LocalInferencePipeline singleShardPipeline(LlamaConfig cfg, ForwardPassHandler handler) {
 		return LocalInferencePipeline.from(ShardMap.evenSplit("model", cfg.numLayers(), 1), handler, cfg.vocabSize(),
 				cfg.hiddenDim(), cfg.numHeads());
 	}
@@ -417,7 +422,7 @@ public final class ModelLiveChecks {
 	 * template adds more), from distinct numbered sentences so the prompt does not
 	 * collapse into a repetition, ending in a question answered by its first sentence.
 	 */
-	private static String longPrompt(GgufTokenizer tokenizer, int minTokens) {
+	static String longPrompt(GgufTokenizer tokenizer, int minTokens) {
 		String[] places = { "harbour", "orchard", "library", "bridge", "market", "lighthouse", "mill", "chapel" };
 		String[] colours = { "red", "green", "blue", "white", "yellow", "grey", "black", "orange" };
 		StringBuilder sb = new StringBuilder("Read the notes below, then answer the question at the end.\n");
@@ -445,7 +450,7 @@ public final class ModelLiveChecks {
 		}
 	}
 
-	private static void check(boolean condition, String failure) {
+	static void check(boolean condition, String failure) {
 		if (!condition)
 			throw new CheckFailed(failure);
 	}
@@ -477,7 +482,7 @@ public final class ModelLiveChecks {
 		}
 	}
 
-	private static KVCacheManager newKvCache(int cpuEntries) {
+	static KVCacheManager newKvCache(int cpuEntries) {
 		return new KVCacheManager(new GpuKVCache(512L * 1024 * 1024), new CpuKVCache(cpuEntries));
 	}
 
@@ -486,7 +491,7 @@ public final class ModelLiveChecks {
 				SamplingParams.defaults().withMaxTokens(maxTokens).withTemperature(0.7f), RequestPriority.NORMAL);
 	}
 
-	private static String cleanText(String raw) {
+	static String cleanText(String raw) {
 		for (String marker : TEMPLATE_MARKERS) {
 			int idx = raw.indexOf(marker);
 			if (idx >= 0)

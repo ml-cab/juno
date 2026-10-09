@@ -158,6 +158,38 @@ public final class KvPageTable {
 		}
 	}
 
+	/** Copy the float row at {@code pos} (must be written) into {@code dst[0, kvDim)}. */
+	public void readToken(int pos, float[] dst) {
+		if (pos < 0 || pos >= seqLen)
+			throw new IllegalArgumentException("pos " + pos + " outside [0, " + seqLen + ")");
+		int pageSize = pool.pageSize();
+		pool.readToken(blockIds.get(pos / pageSize), pos % pageSize, dst);
+	}
+
+	/**
+	 * Context shift over the written positions: drop {@code [keep, keep + discard)},
+	 * move the rest down byte for byte, and return the pages past the new length.
+	 */
+	public void compact(int keep, int discard) {
+		KvContextShift.checkRange(keep, discard, seqLen);
+		int pageSize = pool.pageSize();
+		for (int dst = keep; dst + discard < seqLen; dst++) {
+			int src = dst + discard;
+			pool.copyToken(blockIds.get(src / pageSize), src % pageSize, blockIds.get(dst / pageSize), dst % pageSize);
+		}
+		truncate(seqLen - discard);
+	}
+
+	/** Keep positions {@code [0, len)} and return every page past them to the pool. */
+	public void truncate(int len) {
+		if (len < 0 || len > seqLen)
+			throw new IllegalArgumentException("len " + len + " outside [0, " + seqLen + "]");
+		int pages = (len + pool.pageSize() - 1) / pool.pageSize();
+		while (blockIds.size() > pages)
+			pool.free(blockIds.remove(blockIds.size() - 1));
+		seqLen = len;
+	}
+
 	/** Free all pages back to the pool and reset. */
 	public void release() {
 		for (int id : blockIds)

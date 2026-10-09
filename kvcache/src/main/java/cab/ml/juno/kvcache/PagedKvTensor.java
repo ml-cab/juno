@@ -141,6 +141,24 @@ public final class PagedKvTensor implements SessionKvTensor {
 	}
 
 	@Override
+	public void readToken(int pos, float[] dst) {
+		table.readToken(pos, dst);
+	}
+
+	/**
+	 * Rows written past {@code seqLen} (a rejected draft window) are dropped first,
+	 * so the table ends at {@code seqLen - discard} like the dense tensor.
+	 */
+	@Override
+	public void compact(int keep, int discard, int seqLen) {
+		KvContextShift.checkRange(keep, discard, seqLen);
+		if (seqLen > table.seqLen())
+			throw new IllegalArgumentException("seqLen " + seqLen + " > stored " + table.seqLen());
+		table.truncate(seqLen);
+		table.compact(keep, discard);
+	}
+
+	@Override
 	public void release() {
 		table.release();
 	}

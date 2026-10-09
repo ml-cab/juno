@@ -8,7 +8,7 @@ Module dependency (excerpt):
         typed payloads into the manager.
         KvBlockPool / KvPageTable / PagedKvTensor / PagedKvArena / PagedKvCodec /
         KvPageSizeOptions / ServeScheduleOptions / SessionKvTensor /
-        SessionKvLayout / GatherTaxMicrobench
+        SessionKvLayout / GatherTaxMicrobench / KvContextShift
         (paged KV for continuous schedule; dense remains default static path;
         handlers dual-path via SessionKvLayout; manager may hold a shared
         PagedKvArena; adapter flushes dense or paged blobs; gather-tax gate
@@ -117,7 +117,7 @@ Module dependency (excerpt):
         ProcessPipelineClient, TensorParallelPipelineClient
         juno-player depends on coordinator (and transitively on node)
   juno-master — CoordinatorMain standalone executable (production coordinator); also carries
-                ModelLiveRunner (./juno test) over ModelLiveChecks, the nine real-model checks
+                ModelLiveRunner (./juno test) over ModelLiveChecks, the ten real-model checks
                 ModelLiveRunnerIT runs too (one implementation for the command and the IT)
         depends on juno-player, coordinator, node, kvcache, tokenizer, sampler,
         health, registry, api
@@ -585,6 +585,33 @@ GPU FFI (node module — Panama project, JEP 454):
         Qwen2LoraTrainableHandler) and Qwen3LoraTrainableHandler use the same layout
         forward and backward (LoraTrainingMath.ropeBackward(..., RopePairing),
         Qwen3Rope.applyBackward). Package-private forced-layout loads exist for tests.
+  Context shift (opt-in: --context-shift, x_juno_context_shift, contextShift, JunoPlayer.Builder
+        .contextShift, JunoHttpClient.withContextShift; ContextShiftOptions resolves request choice
+        over the JUNO_CONTEXT_SHIFT default). ContextWindow (coordinator) is one request's view of
+        InferencePipeline.contextLimit(): GenerationLoop.generate/.generateBatch and each
+        ContinuousBatchEngine slot ask it for every forward position (place(pos, width)); past the
+        limit it calls InferencePipeline.shiftKv(id, seqLen, keep, discard) first, discard =
+        max(overflow, half of what follows the kept prefix), and times it as juno.ContextShift. keep =
+        tokens shared with the leading system messages plus an empty user turn (else BOS; the
+        empty turn covers templates folding the system text into the first user turn). It also cuts an
+        over-long prompt to keep + latest tokens before prefill, and refuses up front (400 via
+        GenerationLoop.requireContextShiftSupported) a pipeline with supportsContextShift() false
+        (cluster/TP clients; ConsoleMain refuses the flag for a cluster launch), --spec-type
+        draft-simple, or keep above half the limit. A session whose KV was shifted or cut drops it
+        (evict + invalidatePrefix) instead of offering it as a prefix. LocalInferencePipeline shifts
+        each distinct handler once and reports the lowest ForwardPassHandler.contextLimit() (Phi-3
+        with held-back long factors: Phi3RopeConfig.positionLimit(), 4096 on Phi-3.5). Handlers
+        (Llama, Phi-2, Phi-3, Qwen3, Qwen3-MoE and the three LoRA handlers; Qwen2Lora and the vision
+        decorator delegate, the latter refusing a request that carried an image) implement shiftKv
+        through HandlerContextShift: KvContextShift (kvcache) moves the rows byte for byte
+        (SessionKvTensor.compact; KvPageTable.compact returns freed pages) and passes each moved K row
+        through the handler's RopeShift, a pure rotation by -discard * freq[i] per pair built from the
+        handler's own config (RopeShift.standard / partialSplitHalf, Phi3Rope.shift, Qwen3Rope.shift;
+        magnitude factors are not reapplied); then every in-use DeviceKvCache mirror is rewritten
+        from the host rows (replacePrefix: one H2D per tensor, watermark = new length) or retired on
+        OOM, and the KV adapter's copy is evicted. Default handler/pipeline shiftKv throws
+        (fail closed). ModelLiveChecks check 10 (ContextShiftCheck) runs it on a real model behind a
+        192-position limit on both schedules.
   RopeTable — RoPE cosines and sines per position, shared per (headDim, base):
         LlamaTransformerHandler.rope (both layouts) reads them instead of evaluating
         pow/cos/sin for every pair of every head of every layer. Entries use exactly

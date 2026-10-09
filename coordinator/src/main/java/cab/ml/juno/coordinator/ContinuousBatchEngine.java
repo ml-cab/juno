@@ -144,6 +144,7 @@ final class ContinuousBatchEngine {
 			admittedSinceLastStep++;
 		} catch (Throwable t) {
 			log.warning("Admit failed for " + pending.request().requestId() + ": " + t);
+			loop.releaseAfterFailure(pending.request(), t);
 			pending.future().completeExceptionally(t);
 		}
 	}
@@ -163,6 +164,8 @@ final class ContinuousBatchEngine {
 		ChatTemplateFormatter formatter = ChatTemplateFormatter.forModelType(request.modelId());
 		String prompt = formatter.format(request.messages());
 		int[] promptIds = PromptEncoder.encode(tokenizer, prompt, request.requestId());
+		ContextWindow window = ContextWindow.open(request, promptIds, tokenizer, pipeline, null);
+		promptIds = window.fitPrompt(promptIds);
 
 		final String kvKey = request.kvCacheKey();
 		final boolean hasSession = request.sessionId() != null;
@@ -170,8 +173,10 @@ final class ContinuousBatchEngine {
 				&& !System.getProperty(LORA_PLAY_PROPERTY).isBlank();
 
 		int startPos = 0;
+		if (hasSession && window.movedKv())
+			dropSessionKv(kvCache, pipeline, kvKey);
 		var prefixMatch = kvCache.findLongestPrefix(promptIds);
-		if (hasSession && !loraPlay && prefixMatch.isHit()) {
+		if (hasSession && !loraPlay && !window.movedKv() && prefixMatch.isHit()) {
 			startPos = prefixMatch.matchedTokens();
 			log.info("Prefix cache hit: " + startPos + "/" + promptIds.length + " tokens cached (session=" + kvKey
 					+ ")");
@@ -197,6 +202,7 @@ final class ContinuousBatchEngine {
 				GrammarBinding.open(tokenizer, params, kvKey),
 				loop.minTokenFloor(request.samplingParams()));
 		slot.stream = tokenizer.openStreamContext();
+		slot.window = window;
 		if (prefill.isComplete()) {
 			slot.phase = Phase.DECODE;
 			if (mixedPrefill)
@@ -280,7 +286,7 @@ final class ContinuousBatchEngine {
 			active.add(s);
 			ids.add(s.kvKey);
 			toks.add(s.allTokens);
-			pos.add(s.decodeBase + s.generated.size());
+			pos.add(s.window.place(loop.pipeline(), s.kvKey, s.decodeBase + s.generated.size(), 1));
 		}
 		if (active.isEmpty())
 			return List.of();
@@ -359,7 +365,11 @@ final class ContinuousBatchEngine {
 			else if (flushedStop.stop())
 				s.reason = GenerationResult.StopReason.STOP_TOKEN;
 
-			if (s.hasSession) {
+			if (s.hasSession && s.window.movedKv()) {
+				// Shifted or cut: this KV no longer lines up with the prompt, so it cannot
+				// serve the session's next turn as a prefix.
+				dropSessionKv(kvCache, pipeline, s.kvKey);
+			} else if (s.hasSession) {
 				kvCache.cachePrefix(java.util.Arrays.copyOf(s.allTokens, s.promptLen), s.promptLen, s.kvKey);
 			} else {
 				// No cachePrefix call: the KV released here is the only KV this slot owned, so
@@ -372,15 +382,24 @@ final class ContinuousBatchEngine {
 			s.future.complete(new GenerationResult(s.kvKey, s.stopFilter.text(), s.generated, s.promptLen,
 					s.generated.size(), s.reason, Instant.now(), Duration.between(s.start, Instant.now())));
 		} catch (Throwable t) {
+			loop.releaseAfterFailure(s.request, t);
 			s.future.completeExceptionally(t);
 		}
+	}
+
+	private static void dropSessionKv(KVCacheManager kvCache, InferencePipeline pipeline, String kvKey) {
+		kvCache.evict(kvKey);
+		kvCache.invalidatePrefix(kvKey);
+		pipeline.evict(kvKey);
 	}
 
 	private void failAllRunning(Throwable t) {
 		List<Slot> copy = new ArrayList<>(running);
 		running.clear();
-		for (Slot s : copy)
+		for (Slot s : copy) {
+			loop.releaseAfterFailure(s.request, t);
 			s.future.completeExceptionally(t);
+		}
 	}
 
 	private record Pending(InferenceRequest request, TokenConsumer consumer,
@@ -419,6 +438,7 @@ final class ContinuousBatchEngine {
 		Tokenizer.StreamContext stream;
 		GenerationResult.StopReason reason = GenerationResult.StopReason.MAX_TOKENS;
 		Phase phase;
+		ContextWindow window;
 
 		Slot(InferenceRequest request, TokenConsumer consumer, CompletableFuture<GenerationResult> future,
 				Instant start, String kvKey, boolean hasSession, int[] allTokens, int promptLen, int decodeBase,

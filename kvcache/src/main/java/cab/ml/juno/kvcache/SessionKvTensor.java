@@ -59,4 +59,19 @@ public interface SessionKvTensor {
 
 	/** Return pages to the pool (paged); no-op for dense. */
 	void release();
+
+	/** Copy the float row stored at {@code pos} into {@code dst[0, kvDim)}. */
+	void readToken(int pos, float[] dst);
+
+	/**
+	 * Context shift: drop positions {@code [keep, keep + discard)} of the
+	 * {@code seqLen} written ones and move {@code [keep + discard, seqLen)} down to
+	 * start at {@code keep}, unchanged (stored bytes are copied, not re-encoded).
+	 * Afterwards {@code seqLen - discard} positions are written. The caller
+	 * re-rotates moved keys; see {@link KvContextShift}.
+	 *
+	 * @throws IllegalArgumentException unless {@code keep >= 0}, {@code discard >= 1}
+	 *                                  and {@code keep + discard <= seqLen}
+	 */
+	void compact(int keep, int discard, int seqLen);
 }

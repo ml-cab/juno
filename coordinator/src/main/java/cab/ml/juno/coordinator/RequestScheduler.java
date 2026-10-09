@@ -163,6 +163,16 @@ public final class RequestScheduler {
 		return submit(request, TokenConsumer.discard()).join();
 	}
 
+	/**
+	 * Refuses, before anything is queued, a request that asks for context shifting
+	 * where it cannot work; see {@link GenerationLoop#requireContextShiftSupported}.
+	 *
+	 * @throws IllegalArgumentException naming why
+	 */
+	public void requireContextShiftSupported(InferenceRequest request) {
+		generationLoop.requireContextShiftSupported(request);
+	}
+
 	/** Stop the batch dispatch loop / continuous engine. No-op if neither was started. */
 	public void shutdown() {
 		running = false;

@@ -80,10 +80,12 @@ public final class JunoPlayer implements AutoCloseable {
 	private final ModelRegistry modelRegistry;
 	private final List<ForwardPassHandler> handlers;
 	private final GpuContext gpuContext;
+	/** Context-shift choice for every request this player sends; null leaves the server default. */
+	private final Boolean contextShift;
 
 	private JunoPlayer(String modelId, SamplingParams samplingParams, String byteOrder, Tokenizer tokenizer,
 			LocalInferencePipeline pipeline, GenerationLoop loop, RequestScheduler scheduler, ModelRegistry registry,
-			List<ForwardPassHandler> handlers, GpuContext gpuContext) {
+			List<ForwardPassHandler> handlers, GpuContext gpuContext, Boolean contextShift) {
 		this.modelId = modelId;
 		this.samplingParams = samplingParams;
 		this.byteOrder = byteOrder;
@@ -94,14 +96,22 @@ public final class JunoPlayer implements AutoCloseable {
 		this.modelRegistry = registry;
 		this.handlers = handlers;
 		this.gpuContext = gpuContext;
+		this.contextShift = contextShift;
 	}
 
 	public static Builder builder(Path modelPath) {
 		return new Builder(modelPath);
 	}
 
+	/** A request for this player's model, with its context-shift choice when one was set. */
+	static InferenceRequest request(String modelId, List<ChatMessage> messages, SamplingParams params,
+			Boolean contextShift) {
+		InferenceRequest req = InferenceRequest.of(modelId, messages, params, RequestPriority.NORMAL);
+		return contextShift == null ? req : req.withContextShift(contextShift);
+	}
+
 	public GenerationResult chat(List<ChatMessage> messages) {
-		InferenceRequest req = InferenceRequest.of(modelId, messages, samplingParams, RequestPriority.NORMAL);
+		InferenceRequest req = request(modelId, messages, samplingParams, contextShift);
 		return scheduler.submitAndWait(req);
 	}
 
@@ -110,7 +120,7 @@ public final class JunoPlayer implements AutoCloseable {
 	 * heavy callers dispatch work; the publisher completes when generation finishes.
 	 */
 	public Flow.Publisher<String> streamPublisher(List<ChatMessage> messages) {
-		InferenceRequest req = InferenceRequest.of(modelId, messages, samplingParams, RequestPriority.NORMAL);
+		InferenceRequest req = request(modelId, messages, samplingParams, contextShift);
 		PublisherTokenConsumer bridge = new PublisherTokenConsumer();
 		scheduler.submit(req, bridge).whenComplete((res, err) -> bridge.finish());
 		return bridge.publisher();
@@ -180,6 +190,7 @@ public final class JunoPlayer implements AutoCloseable {
 		private Integer parallel = null;
 		private Long batchWindowMs = null;
 		private Integer prefillBatch = null;
+		private Boolean contextShift = null;
 		private cab.ml.juno.coordinator.SpeculativeDecodeOptions specOptions =
 				cab.ml.juno.coordinator.SpeculativeDecodeOptions.disabled();
 
@@ -230,6 +241,17 @@ public final class JunoPlayer implements AutoCloseable {
 		/** Ngram speculative decoding; {@link cab.ml.juno.coordinator.SpeculativeDecodeOptions#disabled()} (default) matches plain decoding exactly. */
 		public Builder speculativeDecode(cab.ml.juno.coordinator.SpeculativeDecodeOptions specOptions) {
 			this.specOptions = specOptions;
+			return this;
+		}
+
+		/**
+		 * Context shifting for every request this player sends: {@code true} lets a
+		 * request that fills the context continue by dropping its oldest tokens after
+		 * the system prompt instead of failing; {@code false} fails it at the limit.
+		 * Unset, the process default applies ({@code JUNO_CONTEXT_SHIFT}, off).
+		 */
+		public Builder contextShift(boolean contextShift) {
+			this.contextShift = contextShift;
 			return this;
 		}
 
@@ -293,7 +315,7 @@ public final class JunoPlayer implements AutoCloseable {
 			registry.putLoaded(descriptor);
 
 			return new JunoPlayer(inferenceModelId, samplingParams, byteOrder, tokenizer, pipeline, loop, scheduler,
-					registry, List.copyOf(handlers), gpuCtx);
+					registry, List.copyOf(handlers), gpuCtx, contextShift);
 		}
 
 		private static long estimateVramPerLayer(int hiddenDim) {

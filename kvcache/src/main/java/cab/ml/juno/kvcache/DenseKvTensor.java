@@ -185,6 +185,31 @@ public final class DenseKvTensor implements SessionKvTensor {
 	}
 
 	@Override
+	public void readToken(int pos, float[] dst) {
+		if (pos < 0 || pos >= capacityTokens)
+			throw new IllegalArgumentException("pos " + pos + " outside [0, " + capacityTokens + ")");
+		switch (type) {
+		case F16 -> System.arraycopy(f32, pos * kvDim, dst, 0, kvDim);
+		case Q8_0 -> Q8_0KvCodec.decode(q8, pos * bytesPerToken(), dst, 0, kvDim);
+		}
+	}
+
+	@Override
+	public void compact(int keep, int discard, int seqLen) {
+		KvContextShift.checkRange(keep, discard, seqLen);
+		if (seqLen > capacityTokens)
+			throw new IllegalArgumentException("seqLen " + seqLen + " > capacity " + capacityTokens);
+		int moved = seqLen - keep - discard;
+		switch (type) {
+		case F16 -> System.arraycopy(f32, (keep + discard) * kvDim, f32, keep * kvDim, moved * kvDim);
+		case Q8_0 -> {
+			int bpt = bytesPerToken();
+			System.arraycopy(q8, (keep + discard) * bpt, q8, keep * bpt, moved * bpt);
+		}
+		}
+	}
+
+	@Override
 	public void release() {
 		// dense storage is GC'd with the tensor
 	}

@@ -357,6 +357,10 @@ cmd_cluster() {
         echo "    PTYPE=tensor MODEL_PATH=/models/tiny.gguf $0"
         echo ""
         exit 0 ;;
+      --context-shift)
+        [[ "${2:-}" =~ ^(off|false|0|no)$ ]] \
+          || err "--context-shift is local-mode only: the cluster pipelines cannot shift a request's KV cache. Use: $0 local"
+        shift 2 ;;
       *) err "Unknown cluster flag: $1.  Run: $0 cluster --help" ;;
     esac
   done
@@ -509,6 +513,7 @@ cmd_local() {
   local kv_page_size="${JUNO_KV_PAGE_SIZE:-}"
   local prefill_batch="${JUNO_PREFILL_BATCH:-}"
   local spec_type="${JUNO_SPEC_TYPE:-}"
+  local context_shift="${JUNO_CONTEXT_SHIFT:-}"
   local spec_ngram_n="${JUNO_SPEC_NGRAM_N:-}"
   local spec_ngram_m="${JUNO_SPEC_NGRAM_M:-}"
   local model_draft="${JUNO_MODEL_DRAFT:-}"
@@ -562,6 +567,7 @@ cmd_local() {
       --kv-page-size)     kv_page_size="$2"; shift 2 ;;
       --prefill-batch)    prefill_batch="$2"; shift 2 ;;
       --spec-type)        spec_type="$2";     shift 2 ;;
+      --context-shift)    context_shift="$2"; shift 2 ;;
       --spec-ngram-n)     spec_ngram_n="$2";  shift 2 ;;
       --spec-ngram-m)     spec_ngram_m="$2";  shift 2 ;;
       --model-draft)      model_draft="$2";  shift 2 ;;
@@ -622,6 +628,9 @@ cmd_local() {
         echo "    --kv-page-size N           page size when schedule=continuous (default 16)"
         echo "    --prefill-batch N          max prompt tokens per prefill window (default: sized to"
         echo "                               the whole prompt on GPU with --schedule static; 32 otherwise)"
+        echo "    --context-shift on|off     when a request fills the context, drop the oldest tokens after"
+        echo "                               the system prompt and continue instead of failing (default off;"
+        echo "                               a request's x_juno_context_shift / contextShift overrides it)"
         echo "    --spec-type none|ngram-simple|draft-simple  speculative decoding (default none; --local only)"
         echo "    --spec-ngram-n N           ngram order for the draft cache (default 3; ngram-simple only)"
         echo "    --spec-ngram-m N           max tokens drafted per verify round (default 4)"
@@ -728,6 +737,8 @@ cmd_local() {
   [[ -n "$prefill_batch" ]] && prefill_batch_arg="--prefill-batch $prefill_batch"
   local spec_type_arg=""
   [[ -n "$spec_type" ]] && spec_type_arg="--spec-type $spec_type"
+  local context_shift_arg=""
+  [[ -n "$context_shift" ]] && context_shift_arg="--context-shift $context_shift"
   local spec_ngram_n_arg=""
   [[ -n "$spec_ngram_n" ]] && spec_ngram_n_arg="--spec-ngram-n $spec_ngram_n"
   local spec_ngram_m_arg=""
@@ -783,6 +794,7 @@ cmd_local() {
     ${kv_page_size_arg} \
     ${prefill_batch_arg} \
     ${spec_type_arg} \
+    ${context_shift_arg} \
     ${spec_ngram_n_arg} \
     ${spec_ngram_m_arg} \
     ${model_draft_arg} \

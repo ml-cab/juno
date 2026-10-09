@@ -68,6 +68,21 @@ final class Phi3Rope {
 		}
 	}
 
+	/**
+	 * Context-shift rotation for this config: per pair, the angle per position
+	 * {@link #ropeExt} uses (frequency scale over the selected factor), without its
+	 * attention factor. See {@link RopeShift}.
+	 */
+	static RopeShift shift(int headDim, Phi3RopeConfig cfg) {
+		float[] factors = cfg.selectFactors();
+		double[] f = RopeShift.baseFrequencies(headDim / 2, headDim, cfg.freqBase());
+		for (int i = 0; i < f.length; i++) {
+			double ff = factors != null && i < factors.length ? factors[i] : 1.0;
+			f[i] *= cfg.freqScale() / ff;
+		}
+		return RopeShift.of(headDim, RopePairing.SPLIT_HALF, f);
+	}
+
 	private static float[] buildCache(int pos, int headDim, Phi3RopeConfig cfg) {
 		cfg.requirePosition(pos);
 		float[] freqFactors = cfg.selectFactors();

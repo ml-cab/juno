@@ -55,6 +55,24 @@ final class Qwen3Rope {
 		}
 	}
 
+	/**
+	 * Context-shift rotation for this config: per pair, the angle per position the
+	 * forward rotation uses (YaRN's ramp between interpolated and extrapolated
+	 * frequencies), without its attention factor. See {@link RopeShift}.
+	 */
+	static RopeShift shift(int headDim, Qwen3RopeConfig cfg) {
+		if (!cfg.yarn())
+			return RopeShift.standard(headDim, cfg.freqBase(), cfg.pairing());
+		float[] corrDims = new float[2];
+		ropeYarnCorrDims(headDim, cfg.originalContextLength(), cfg.freqBase(), 1.0f, 1.0f, corrDims);
+		double[] f = RopeShift.baseFrequencies(headDim / 2, headDim, cfg.freqBase());
+		for (int i = 0; i < f.length; i++) {
+			double ramp = ropeYarnRamp(corrDims[0], corrDims[1], 2 * i);
+			f[i] *= cfg.freqScale() * (1 - ramp) + ramp;
+		}
+		return RopeShift.of(headDim, cfg.pairing(), f);
+	}
+
 	private static void ropeYarn(float[] x, int pos, int nHeads, int headDim, Qwen3RopeConfig cfg) {
 		float[] cache = buildYarnCache(pos, headDim, cfg);
 		if (cfg.pairing() == RopePairing.SPLIT_HALF) {

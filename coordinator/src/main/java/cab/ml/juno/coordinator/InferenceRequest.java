@@ -44,7 +44,7 @@ import cab.ml.juno.tokenizer.ChatMessage;
  * conversation ends to release KV memory.
  */
 public record InferenceRequest(String requestId, String sessionId, String modelId, List<ChatMessage> messages,
-		SamplingParams samplingParams, RequestPriority priority, Instant receivedAt)
+		SamplingParams samplingParams, RequestPriority priority, Instant receivedAt, Boolean contextShift)
 		implements Comparable<InferenceRequest> {
 
 	public InferenceRequest {
@@ -67,6 +67,22 @@ public record InferenceRequest(String requestId, String sessionId, String modelI
 	 * Factory for stateless single-turn requests. Generates a random requestId;
 	 * sessionId is null.
 	 */
+	/** Without a context-shift choice: the server default applies ({@link ContextShiftOptions}). */
+	public InferenceRequest(String requestId, String sessionId, String modelId, List<ChatMessage> messages,
+			SamplingParams samplingParams, RequestPriority priority, Instant receivedAt) {
+		this(requestId, sessionId, modelId, messages, samplingParams, priority, receivedAt, null);
+	}
+
+	/**
+	 * This request with an explicit context-shift choice: {@code true} drops the
+	 * oldest tokens after the system prompt when the context fills instead of
+	 * failing, {@code false} fails at the limit whatever the server default.
+	 */
+	public InferenceRequest withContextShift(boolean shift) {
+		return new InferenceRequest(requestId, sessionId, modelId, messages, samplingParams, priority, receivedAt,
+				shift);
+	}
+
 	public static InferenceRequest of(String modelId, List<ChatMessage> messages, SamplingParams params,
 			RequestPriority priority) {
 		return new InferenceRequest(UUID.randomUUID().toString(), null, modelId, messages, params, priority,

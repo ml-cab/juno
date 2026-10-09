@@ -77,6 +77,16 @@ public final class Qwen2LoraTrainableHandler implements LoraTrainingHandler {
 	}
 
 	@Override
+	public int contextLimit() {
+		return delegate.contextLimit();
+	}
+
+	@Override
+	public void shiftKv(String requestId, int seqLen, int keep, int discard) {
+		delegate.shiftKv(requestId, seqLen, keep, discard);
+	}
+
+	@Override
 	public Optional<float[]> lastRmsHiddenForEmbedding(ForwardRequest request, ShardContext context) {
 		return delegate.lastRmsHiddenForEmbedding(request, context);
 	}
