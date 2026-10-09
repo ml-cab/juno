@@ -52,6 +52,39 @@ final class HandlerContextShift {
 	}
 
 	/**
+	 * Applies the shift to every mirror that was in use, on the device
+	 * ({@link DeviceKvCache#shiftInPlace}): rows moved and keys rotated in place, no
+	 * upload. A mirror that cannot be shifted in place (it does not hold all
+	 * {@code seqLen} rows, or the kernel cannot load) is rewritten from the shifted
+	 * host KV instead, as {@link #rewriteMirrors} does, and retired if the card cannot
+	 * hold it.
+	 *
+	 * @param mirrors one per layer, entries may be {@code null}; {@code null} for none
+	 */
+	static void shiftMirrors(String handler, DeviceKvCache[] mirrors, SessionKvTensor[] k, SessionKvTensor[] v,
+			int seqLen, int keep, int discard, RopeShift rope, int numKvHeads) {
+		if (mirrors == null)
+			return;
+		for (int li = 0; li < mirrors.length; li++) {
+			DeviceKvCache m = mirrors[li];
+			if (m == null || !m.live() || m.validTokens() == 0)
+				continue;
+			try {
+				if (!m.shiftInPlace(keep, discard, seqLen, rope, numKvHeads))
+					m.replacePrefix(k[li].toFloatArray(seqLen - discard), v[li].toFloatArray(seqLen - discard),
+							seqLen - discard);
+			} catch (IllegalStateException ex) {
+				if (!GpuLayerOffload.isVramOom(ex))
+					throw ex;
+				m.close();
+				if (mirrorWarned.compareAndSet(false, true))
+					log.warning(handler + ": out of device memory shifting the attention KV mirror - attention"
+							+ " continues on the CPU for this request, which holds the same history.");
+			}
+		}
+	}
+
+	/**
 	 * Rewrites every mirror that was in use (live, with rows written) from the
 	 * shifted host KV of the same layer. A mirror the card cannot hold is retired;
 	 * the request continues with host attention, which has the same history.

@@ -1,0 +1,267 @@
+WARNING: Using incubator modules: jdk.incubator.vector
+жовт. 09, 2026 2:42:38 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=201 metadata=23
+жовт. 09, 2026 2:42:39 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 1709440
+жовт. 09, 2026 2:42:39 ПП cab.ml.juno.node.CudaBindings <init>
+INFO: CudaBindings ready — Panama FFI (cudart + cublas)
+жовт. 09, 2026 2:42:39 ПП cab.ml.juno.node.GpuContext create
+INFO: GpuContext ready — [cuda] device 0: NVIDIA GeForce GTX 1080, 8,5 GB VRAM (shared=false)
+жовт. 09, 2026 2:42:39 ПП cab.ml.juno.node.LlamaTransformerHandler load
+INFO: Loading GGUF shard: layers 0–22  embd=true  outProj=true  backend=CudaMatVec  file=models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+жовт. 09, 2026 2:42:39 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=201 metadata=23
+жовт. 09, 2026 2:42:39 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 1709440
+жовт. 09, 2026 2:42:39 ПП cab.ml.juno.node.LlamaTransformerHandler load
+INFO: Model: LlamaConfig{arch=llama hidden=2048 layers=22 heads=32 kvHeads=4 headDim=64 ffn=5632 vocab=32000 eps=1,0e-05 ropeTheta=10000}
+жовт. 09, 2026 2:42:39 ПП cab.ml.juno.node.LlamaTransformerHandler <init>
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+жовт. 09, 2026 2:42:40 ПП cab.ml.juno.node.LlamaTransformerHandler <init>
+INFO: Shard loaded — 22 layers, with embeddings, with output projection
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.CudaAvailability detect
+INFO: CUDA available — 1 device(s)
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.CudaDriverBindings <init>
+INFO: CudaDriverBindings ready — Panama FFI (libcuda)
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.Q4KMmqKernel tryLoad
+INFO: K-quant MMQ kernels loaded from /cab/ml/juno/node/q4k_gemv.ptx (Q4_K, Q5_K, Q6_K)
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler uploadFp16Resident
+INFO: Fused Q4_K MMQ enabled (mmq=auto)
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler uploadFp16Resident
+INFO: Uploading dequantized weights to GPU (FP16 device-resident, Q4_K packed when available, gpu-layers=auto:0)…
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.KQuantGemmKernel tryLoad
+INFO: Tiled K-quant GEMM kernels loaded from /cab/ml/juno/node/kquant_gemm.ptx (Q4_K, Q5_K, Q6_K)
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler uploadFp16Resident
+INFO: GPU weight upload complete (FP16+Q4K, resolved gpu-layers=22).
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler <init>
+INFO: GPU-resident attention path active (gpu-attention=auto)
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.RmsNormKernel tryLoad
+INFO: GPU-resident RMS-norm kernel loaded from /cab/ml/juno/node/rms_norm.ptx
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.RopeKernel tryLoad
+INFO: GPU RoPE kernel loaded from /cab/ml/juno/node/rope.ptx
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.GqaAttentionKernel tryLoad
+INFO: GPU-resident attention kernel loaded from /cab/ml/juno/node/gqa_attention.ptx
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.PrefillWindowKernels tryLoad
+INFO: GPU prefill-window kernels loaded from /cab/ml/juno/node/prefill_window.ptx
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.ResidentQkvPath activate
+INFO: GPU-resident decode region active (gpu-residency=auto(on)) on 22 of 22 layers: the whole layer (norm, Q/K/V projection, RoPE, the KV append, attention, output projection, residual adds, FFN norm and SwiGLU FFN) on 22 of them, the residual row staying on the device between such layers and k, v and the layer output downloaded in one copy per layer. Single-sequence decode only; prefill windows and batched decode (--parallel above 1, continuous schedule) keep the existing path.
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.PrefillWindowRegion create
+INFO: Llama: prefill windows of more than 8 rows run on the device (22 of 22 layers): norms, matmuls, SwiGLU and residual adds, RoPE, attention
+model=tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf backend=gpu depth=32768 keep=32 discard=16368 layers=22 kvDim=256 gpuAttention=true residency=true
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch ENTER requestId=bench--1 W=32 startPos=0 hasEmbeddings=true isFirstNode=true usingActivations=false hasOutputProj=true
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch START requestId=bench--1 W=32 L=22 startPos=0 lastPos=31 kvDim=256
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 1/22 done in 10,5ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 2/22 done in 1,8ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 3/22 done in 1,5ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 4/22 done in 1,5ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 5/22 done in 2,1ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 6/22 done in 1,2ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 7/22 done in 1,3ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 8/22 done in 1,7ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 9/22 done in 1,6ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 10/22 done in 1,6ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 11/22 done in 1,2ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 12/22 done in 1,2ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 13/22 done in 1,1ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 14/22 done in 1,0ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 15/22 done in 1,1ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 16/22 done in 1,0ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 17/22 done in 1,1ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 18/22 done in 1,0ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 19/22 done in 1,1ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 20/22 done in 1,0ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 21/22 done in 1,1ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 22/22 done in 1,0ms  requestId=bench--1
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch DONE requestId=bench--1 totalMs=56,4
+жовт. 09, 2026 2:42:41 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch EXIT (final node) requestId=bench--1 outputProjMs=6.528223 totalMs=78.145911
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.KvShiftKernel tryLoad
+INFO: GPU KV shift kernel loaded from /cab/ml/juno/node/kv_shift.ptx
+warmup depth=4096 decode_ms=[24.21, 18.41, 19.58, 16.18, 16.44] median_decode_ms=18.41 shift_ms=43.24 shift_step_ms=57.97 ratio=3.148
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch ENTER requestId=bench-1 W=32 startPos=0 hasEmbeddings=true isFirstNode=true usingActivations=false hasOutputProj=true
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch START requestId=bench-1 W=32 L=22 startPos=0 lastPos=31 kvDim=256
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 1/22 done in 1,1ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 2/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 3/22 done in 0,8ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 4/22 done in 0,8ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 5/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 6/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 7/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 8/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 9/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 10/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 11/22 done in 0,8ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 12/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 13/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 14/22 done in 0,8ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 15/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 16/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 17/22 done in 0,8ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 18/22 done in 0,8ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 19/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 20/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 21/22 done in 0,9ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 22/22 done in 0,8ms  requestId=bench-1
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch DONE requestId=bench-1 totalMs=26,5
+жовт. 09, 2026 2:42:42 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch EXIT (final node) requestId=bench-1 outputProjMs=0.804295 totalMs=32.836671
+rep 1 depth=32768 decode_ms=[51.36, 50.57, 51.10, 47.67, 46.65] median_decode_ms=50.57 shift_ms=92.16 shift_step_ms=119.45 ratio=2.362
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch ENTER requestId=bench-2 W=32 startPos=0 hasEmbeddings=true isFirstNode=true usingActivations=false hasOutputProj=true
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch START requestId=bench-2 W=32 L=22 startPos=0 lastPos=31 kvDim=256
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 1/22 done in 1,0ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 2/22 done in 0,8ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 3/22 done in 0,7ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 4/22 done in 0,7ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 5/22 done in 0,8ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 6/22 done in 0,7ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 7/22 done in 0,7ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 8/22 done in 0,8ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 9/22 done in 0,8ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 10/22 done in 0,8ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 11/22 done in 0,7ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 12/22 done in 0,8ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 13/22 done in 0,8ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 14/22 done in 0,8ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 15/22 done in 0,7ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 16/22 done in 0,8ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 17/22 done in 0,7ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 18/22 done in 0,7ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 19/22 done in 0,8ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 20/22 done in 0,7ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 21/22 done in 0,7ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 22/22 done in 0,7ms  requestId=bench-2
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch DONE requestId=bench-2 totalMs=22,7
+жовт. 09, 2026 2:42:50 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch EXIT (final node) requestId=bench-2 outputProjMs=0.757571 totalMs=26.805231
+rep 2 depth=32768 decode_ms=[50.89, 49.99, 48.94, 46.56, 45.81] median_decode_ms=48.94 shift_ms=88.75 shift_step_ms=115.52 ratio=2.361
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch ENTER requestId=bench-3 W=32 startPos=0 hasEmbeddings=true isFirstNode=true usingActivations=false hasOutputProj=true
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch START requestId=bench-3 W=32 L=22 startPos=0 lastPos=31 kvDim=256
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 1/22 done in 1,0ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 2/22 done in 0,8ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 3/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 4/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 5/22 done in 0,8ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 6/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 7/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 8/22 done in 0,8ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 9/22 done in 0,8ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 10/22 done in 0,8ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 11/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 12/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 13/22 done in 0,8ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 14/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 15/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 16/22 done in 0,8ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 17/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 18/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 19/22 done in 0,8ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 20/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 21/22 done in 0,8ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 22/22 done in 0,7ms  requestId=bench-3
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch DONE requestId=bench-3 totalMs=21,9
+жовт. 09, 2026 2:42:57 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch EXIT (final node) requestId=bench-3 outputProjMs=0.686542 totalMs=25.387451
+rep 3 depth=32768 decode_ms=[44.38, 43.82, 44.00, 43.66, 43.26] median_decode_ms=43.82 shift_ms=89.22 shift_step_ms=114.82 ratio=2.620
+RESULT median_ratio=2.362 min=2.361 max=2.620 reps=3
+жовт. 09, 2026 2:43:03 ПП cab.ml.juno.node.GpuContext close
+INFO: GpuContext closed — device 0

@@ -494,8 +494,14 @@ default is on.
   keys once.
 - **Prompts longer than the context** are cut before the first forward pass to the system prompt plus
   the latest tokens, filling half of the context after the system prompt, so generation has room.
-- **GPU.** The host KV cache is shifted and the device copy attention reads is rebuilt from it, so GPU
-  attention and the device-resident decode region keep running after a shift.
+- **GPU.** The host KV cache is shifted, and the device copy attention reads is shifted in place on the
+  GPU: the kept rows move down on the device and the moved keys are rotated there, with nothing
+  re-uploaded. GPU attention and the device-resident decode region keep running after a shift. A device
+  copy that does not hold the request's whole history is rebuilt from the host rows instead.
+- **Latency.** At 32,768 positions, with clocks pinned, the step that shifts takes 0.54 to 2.4 times an
+  ordinary decode step at the same depth on TinyLlama and Mistral 7B, CPU and GPU (the shift itself: about
+  80 ms to 0.5 s). The step after a shift attends over half the context, which pays for most of it.
+  Measure it on your host with `scripts/performance-tests/context-shift-step-bench.sh`.
 - **Sessions** (`x_juno_session_id`). A turn that shifted, or whose prompt was cut, no longer offers its
   KV to the next turn as a reusable prefix: the next turn prefills from the start (and is cut to fit in
   turn).
@@ -509,6 +515,31 @@ default is on.
   image tokens; text-only requests on a vision model shift normally.
 - **Observability.** Each shift records a `juno.ContextShift` JFR event: positions before, tokens kept,
   tokens dropped, and its duration.
+
+### Sliding-window attention
+
+A model file can declare that some or all of its layers attend only to the most recent tokens. Juno
+applies the window exactly where the file declares it, with no flag: a windowed layer's token at context
+length `n` attends to the last `W` keys, positions `n - W` to `n - 1`, and a global layer to all of them.
+A file that declares no window computes exactly what it did before.
+
+- **Keys.** `<arch>.attention.sliding_window` is the width `W`; absent or 0 means no window.
+  `<arch>.attention.sliding_window_pattern` says which layers: absent means every layer is windowed; a
+  boolean array with one entry per layer (`true` = windowed) must have `<arch>.block_count` entries; an
+  integer period `N` makes the last layer of each period global (layer `i` is global when `i % N == N -
+  1`; `N = 1` is every layer global, `N = 0` every layer windowed).
+- **Malformed keys are refused at load**, naming the key: another value type, a pattern array of the
+  wrong length, a negative width or period. Juno does not guess which layers a file meant to window.
+- **A window wider than any context the model reaches changes nothing.** Phi-3.5-mini declares a
+  262,144-token window on every layer against its 4,096-token limit, so its output is unchanged.
+- **Every path.** CPU and CUDA attention (prefill, single-token decode, `--parallel` multi-stream decode,
+  the device-resident decode and prefill regions), dense and paged KV (`--schedule static` and
+  `continuous`), every handler family, `--lora-play`, and LoRA training, whose backward pass gives the
+  keys outside a windowed layer's window no gradient. Pipeline and tensor-parallel nodes read the
+  pattern at the model's own layer numbers, so a shard windows the same layers the whole model does.
+  ROCm runs attention on the CPU path, which applies the window the same way.
+- **Memory.** The KV cache still stores every position; the window narrows what attention reads, not
+  what is kept. Context shifting (above) applies to windowed models as to any other.
 
 ### OpenAI-compatible REST API (`--api-port`)
 

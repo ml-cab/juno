@@ -19,6 +19,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 
 /**
@@ -380,6 +381,63 @@ final class DeviceKvCache implements AutoCloseable {
 				out[i] = Float.float16ToFloat(stagingHost.getAtIndex(JAVA_SHORT, i));
 		}
 		return out;
+	}
+
+	/**
+	 * Applies a context shift to this mirror on the device: the first {@code keep}
+	 * rows stay, rows {@code [keep + discard, seqLen)} move down to {@code keep}, and
+	 * each moved K row is rotated back by {@code discard} positions with
+	 * {@code rope}'s table ({@link RopeShift#cosSin}, the table the host shift
+	 * applies), so the mirror matches the shifted host rows without re-uploading
+	 * them. The watermark becomes {@code seqLen - discard}. Nothing is allocated but
+	 * the table itself.
+	 *
+	 * @return {@code false}, with the mirror unchanged, when it does not hold all
+	 *         {@code seqLen} rows or the shift kernel cannot load; the caller then
+	 *         rewrites it from the host rows
+	 */
+	boolean shiftInPlace(int keep, int discard, int seqLen, RopeShift rope, int numKvHeads) {
+		if (keep < 0 || discard < 1 || keep + discard > seqLen)
+			throw new IllegalArgumentException("keep=" + keep + " discard=" + discard + " seqLen=" + seqLen);
+		if (rope.headDim() * numKvHeads != kvDim)
+			throw new IllegalArgumentException(numKvHeads + " heads of " + rope.headDim() + " for kvDim " + kvDim);
+		if (closed || validTokens < seqLen)
+			return false;
+		KvShiftKernel kernel = KvShiftKernel.tryLoad();
+		if (kernel == null)
+			return false;
+		GpuBindings.callInt(gpu.gpuSetDevice(), ctx.deviceIndex());
+		int newLen = seqLen - discard;
+		int moved = newLen - keep;
+		long rowBytes = (long) kvDim * Short.BYTES;
+		// Chunks no longer than the distance moved: each chunk's source starts at or after
+		// its destination's end, and lies past every earlier destination, so no copy overlaps.
+		for (int done = 0; done < moved; done += discard) {
+			long bytes = Math.min(discard, moved - done) * rowBytes;
+			long dst = (keep + done) * rowBytes;
+			long src = (long) (keep + discard + done) * rowBytes;
+			DeviceStaging.copy(gpu, dK.asSlice(dst, bytes), dK.asSlice(src, bytes), bytes, GpuBindings.D2D, 0,
+					"memcpy(K shift D2D)");
+			DeviceStaging.copy(gpu, dV.asSlice(dst, bytes), dV.asSlice(src, bytes), bytes, GpuBindings.D2D, 0,
+					"memcpy(V shift D2D)");
+		}
+		if (moved > 0) {
+			float[] cs = rope.cosSin(discard);
+			long tableBytes = (long) cs.length * Float.BYTES;
+			MemorySegment table = gpu.deviceMalloc(ctx.deviceIndex(), tableBytes);
+			try (Arena staging = Arena.ofConfined()) {
+				DeviceStaging.copy(gpu, table, staging.allocateFrom(JAVA_FLOAT, cs), tableBytes, GpuBindings.H2D, 0,
+						"memcpy(shift table H2D)");
+				kernel.rotate(dK.asSlice(keep * rowBytes), moved, kvDim, rope.headDim(), rope.pairs(),
+						rope.splitHalf(), table);
+				GpuBindings.check(GpuBindings.callInt(gpu.gpuStreamSynchronize(), MemorySegment.NULL),
+						"streamSynchronize(after KV shift)");
+			} finally {
+				gpu.deviceFree(table);
+			}
+		}
+		validTokens = newLen;
+		return true;
 	}
 
 	/** Device pointer for K, valid until {@link #close()}. For the real kernel path (Stage 2+). */

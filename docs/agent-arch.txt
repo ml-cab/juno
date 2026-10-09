@@ -372,7 +372,22 @@ GPU FFI (node module — Panama project, JEP 454):
         the same FP16 mirror rows.
   GqaMath — attention math (QK^T + softmax + weighted-V-sum) extracted from
         LlamaTransformerHandler.gqaInto/gqa; scalar CPU oracle used by both the fallback path
-        and the GPU kernel's parity test.
+        and the GPU kernel's parity test. attend(..., window): a row at seqLen reads keys
+        [firstKey(seqLen, window), seqLen), the GPU kernel's window contract; window 0 (and any
+        window >= seqLen) runs the unwindowed arithmetic bit for bit. Every handler's CPU attention
+        (Llama, Phi-2, Phi-3, Qwen3, Qwen3-MoE, the LoRA handlers' inference) delegates here.
+  SlidingWindow — the file's sliding-window attention: <arch>.attention.sliding_window (width;
+        absent/0 = none) and <arch>.attention.sliding_window_pattern (absent = every layer; boolean
+        array of block_count entries, true = windowed; or integer period N, layer i global when
+        i % N == N - 1). Malformed keys throw UnsupportedModelException at load. Every handler reads
+        forShard(GgufReader, ShardContext, log) once at load into int[] layerWindows (local layer ->
+        window, read at global layer index, so pipeline shards window the model's layers) and passes
+        layerWindows[li] to GqaMath, CudaGqaAttention.attendBatched, GpuAttentionMirror.attendWindow/
+        attendOne/attendStreams and Qwen3AttentionWeights.attentionWindow(); ResidentQkvPath and
+        PrefillWindowRegion take the array once via withWindows(int[]) and pass each layer's window to
+        GqaAttentionKernel.launch. LoRA training's inline attention starts at the same first key, so
+        attnW stays 0 outside the window and the backward pass sends those keys no gradient. KV storage
+        is unchanged (every row kept). testOverride (tests only) forces a window on a real file.
   DeviceKvCache — device-resident FP16 KV mirror kept alongside the host SessionKvTensor
         (dual-write); grow-and-preserve via D2D copy; lifecycle tied to
         LlamaTransformerHandler.evict(). CUDA only. appendToken writes one row (decode);
@@ -607,9 +622,16 @@ GPU FFI (node module — Panama project, JEP 454):
         (SessionKvTensor.compact; KvPageTable.compact returns freed pages) and passes each moved K row
         through the handler's RopeShift, a pure rotation by -discard * freq[i] per pair built from the
         handler's own config (RopeShift.standard / partialSplitHalf, Phi3Rope.shift, Qwen3Rope.shift;
-        magnitude factors are not reapplied); then every in-use DeviceKvCache mirror is rewritten
-        from the host rows (replacePrefix: one H2D per tensor, watermark = new length) or retired on
-        OOM, and the KV adapter's copy is evicted. Default handler/pipeline shiftKv throws
+        magnitude factors are not reapplied); then HandlerContextShift.shiftMirrors shifts every in-use
+        DeviceKvCache mirror in place (DeviceKvCache.shiftInPlace: D2D row moves chunked by the shift
+        distance, then KvShiftKernel (kv_shift.cu, kv_rotate_half) rotates the moved FP16 K rows with
+        RopeShift.cosSin, the table RopeShift.back applies on the host, separately rounded so the
+        result equals the host rotation rounded to FP16; no allocation but the table, watermark = new
+        length). A mirror short of the full history, or no kernel, falls back to rewriteMirrors
+        (replacePrefix from the host rows); OOM retires it. The KV adapter's copy is evicted.
+        ContextShiftStepBench (node, main) + scripts/performance-tests/context-shift-step-bench.sh
+        time the shift step against the median decode step at the context limit (host KV filled
+        directly; LlamaTransformerHandler.rewriteDeviceKv rebuilds the mirror for it). Default handler/pipeline shiftKv throws
         (fail closed). ModelLiveChecks check 10 (ContextShiftCheck) runs it on a real model behind a
         192-position limit on both schedules.
   RopeTable — RoPE cosines and sines per position, shared per (headDim, base):

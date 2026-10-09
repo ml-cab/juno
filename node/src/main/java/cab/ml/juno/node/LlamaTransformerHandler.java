@@ -104,6 +104,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private final float[][] bk; // [L][kvDim]
 	private final float[][] bv; // [L][kvDim]
 
+	/** Per local layer: its attention window ({@link SlidingWindow}), 0 for none. */
+	private final int[] layerWindows;
+
 	// Per-request KV cache — lazily allocated and grown on demand.
 	private final Map<String, SessionKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
 	private final Map<String, SessionKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
@@ -279,7 +282,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			GgufReader.QuantizedTensor[] wUp,
 			GgufReader.QuantizedTensor[] wDown,
 			float[][] bq, float[][] bk, float[][] bv,
-			MatVec backend) {
+			MatVec backend, SlidingWindow window) {
 		this.cfg          = cfg;
 		this.ropePairing  = ropePairingFor(cfg);
 		this.backend      = backend;
@@ -302,6 +305,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		this.bq           = bq;
 		this.bk           = bk;
 		this.bv           = bv;
+		this.layerWindows = window.forShard(startLayer, endLayer - startLayer);
 		this.kvLayout = SessionKvLayout.fromEnv(cfg.kvDim());
 		// Direct (test) constructor: no GPU upload — device matrices are unused.
 		this.wqDev = this.wkDev = this.wvDev = this.woDev =
@@ -331,6 +335,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		log.info(kvLayout.policySummary());
 
 		int L = endLayer - startLayer;
+		this.layerWindows = SlidingWindow.forShard(r, ctx, log);
 
 		// Embedding / output projection (conditional on shard position)
 		this.tokenEmbd = hasEmbeddings ? r.tensor("token_embd.weight") : null;
@@ -450,8 +455,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					PrefillWindowRegion.Matrix.of(wDownQ4Dev, wDownDev, li), attnNorm[li], ffnNorm[li],
 					bq != null ? bq[li] : null, bk != null ? bk[li] : null, bv != null ? bv[li] : null);
 		}
-		return PrefillWindowRegion.create("Llama", backend, prefillRegionShape(), layers, ropePairing,
-				cfg.ropeTheta(), attentionKernel);
+		PrefillWindowRegion region = PrefillWindowRegion.create("Llama", backend, prefillRegionShape(), layers,
+				ropePairing, cfg.ropeTheta(), attentionKernel);
+		return region == null ? null : region.withWindows(layerWindows);
 	}
 
 	private PrefillWindowRegion.Shape prefillRegionShape() {
@@ -500,7 +506,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					"could not be built (" + e.getMessage() + ")");
 			return null;
 		}
-		return ResidentQkvPath.activate(log, path, L, gqaGpu != null);
+		return ResidentQkvPath.activate(log, path.withWindows(layerWindows), L, gqaGpu != null);
 	}
 
 	/** Whether the device-resident decode region ({@code --gpu-residency}) is active for this handler. */
@@ -1056,13 +1062,23 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public void shiftKv(String requestId, int seqLen, int keep, int discard) {
-		HandlerContextShift.shiftHost(kvCacheK, kvCacheV, requestId, seqLen, keep, discard,
-				RopeShift.standard(cfg.headDim(), cfg.ropeTheta(), ropePairing), cfg.numKvHeads());
-		HandlerContextShift.rewriteMirrors("Llama", kvCacheDev.get(requestId), kvCacheK.get(requestId),
-				kvCacheV.get(requestId), seqLen - discard);
+		RopeShift rope = RopeShift.standard(cfg.headDim(), cfg.ropeTheta(), ropePairing);
+		HandlerContextShift.shiftHost(kvCacheK, kvCacheV, requestId, seqLen, keep, discard, rope, cfg.numKvHeads());
+		HandlerContextShift.shiftMirrors("Llama", kvCacheDev.get(requestId), kvCacheK.get(requestId),
+				kvCacheV.get(requestId), seqLen, keep, discard, rope, cfg.numKvHeads());
 		NodeKVCacheAdapter a = kvAdapter;
 		if (a != null)
 			a.evict(requestId);
+	}
+
+	/**
+	 * Benchmarks only ({@link ContextShiftStepBench}): rebuilds the request's device
+	 * KV mirrors from its host rows {@code [0, seqLen)}, as a shift does after moving
+	 * them, so a cache filled directly on the host is read by device attention.
+	 */
+	void rewriteDeviceKv(String requestId, int seqLen) {
+		HandlerContextShift.rewriteMirrors("Llama", kvCacheDev.get(requestId), kvCacheK.get(requestId),
+				kvCacheV.get(requestId), seqLen);
 	}
 
 	/**
@@ -1104,6 +1120,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			int numLayers, int startLayer, int endLayer,
 			boolean hasEmbd, boolean hasOutProj,
 			NodeKVCacheAdapter adapter, float weightRange) {
+		return newTestInstance(vocabSize, hiddenDim, numHeads, numKvHeads, numLayers, startLayer, endLayer, hasEmbd,
+				hasOutProj, adapter, weightRange, SlidingWindow.NONE);
+	}
+
+	/** As above, under {@code window} (read at global layer indices, as a file's would be). */
+	static LlamaTransformerHandler newTestInstance(
+			int vocabSize, int hiddenDim, int numHeads, int numKvHeads,
+			int numLayers, int startLayer, int endLayer,
+			boolean hasEmbd, boolean hasOutProj,
+			NodeKVCacheAdapter adapter, float weightRange, SlidingWindow window) {
 
 		LlamaConfig cfg = LlamaConfig.synthetic(
 				vocabSize, hiddenDim, numHeads, numKvHeads, numLayers);
@@ -1149,9 +1175,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				tokenEmbd, outputNorm, outputProj,
 				attnNorm, ffnNorm, wq, wk, wv, wo, wGate, wUp, wDown,
 				null, null, null,
-				CpuMatVec.INSTANCE);
+				CpuMatVec.INSTANCE, window);
 		h.kvAdapter = adapter;
 		return h;
+	}
+
+	/** Package-private for testing: each local layer's attention window, 0 for none. */
+	int[] attentionWindows() {
+		return layerWindows.clone();
 	}
 
 	/** Random F32 float array. */
@@ -1547,7 +1578,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			// layer's attention from the CPU tensors, which hold the same history.
 			try {
 				gpuAttnDispatched = gqaGpu.attendBatched(deviceKvLayers, ws.q, seqLens, ws.attnOut,
-						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim(), layerWindows[li]);
 			} catch (IllegalStateException ex) {
 				if (!GpuLayerOffload.isVramOom(ex))
 					throw ex;
@@ -1565,7 +1596,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				int seqLen = positions[b] + 1;
 				float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
 				float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
-				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores, layerWindows[li]);
 			}
 		}
 
@@ -1809,7 +1840,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			// layer's attention from the CPU tensors, which hold the same history.
 			try {
 				gpuAttnDispatched = gqaGpu.attendBatched(kvPerB, ws.q, seqLens, ws.attnOut,
-						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim(), layerWindows[li]);
 			} catch (IllegalStateException ex) {
 				if (!GpuLayerOffload.isVramOom(ex))
 					throw ex;
@@ -1823,7 +1854,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				int seqLen = startPos + b + 1;
 				float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
 				float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
-				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores, layerWindows[li]);
 			}
 		}
 		attnEvt.windowSize = W;
@@ -1986,7 +2017,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			}
 			try {
 				gpuAttnDispatched = gqaGpu.attendBatched(kvPerB, ws.q, seqLens, ws.attnOut,
-						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim(), layerWindows[li]);
 			} catch (IllegalStateException ex) {
 				if (!GpuLayerOffload.isVramOom(ex))
 					throw ex;
@@ -2000,7 +2031,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				int seqLen = startPos + b + 1;
 				float[] kView = kCacheLayer.viewForAttention(seqLen, ws.kDequant);
 				float[] vView = vCacheLayer.viewForAttention(seqLen, ws.vDequant);
-				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores, layerWindows[li]);
 			}
 		}
 		attnEvt.windowSize = W;
@@ -2048,9 +2079,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * {@code out} buffer; reuses the shared {@code scores} scratch array.
 	 */
 	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen,
-			float[] out, float[] scores) {
+			float[] out, float[] scores, int window) {
 		GqaMath.attend(q, kCache, vCache, seqLen, out, scores,
-				cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+				cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim(), window);
 	}
 
 	/**
@@ -2647,7 +2678,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				try {
 					boolean dispatched = gqaGpu.attendBatched(
 							new DeviceKvCache[] { deviceKv }, new float[][] { q }, new int[] { seqLen }, outBatch,
-							cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+							cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim(), layerWindows[li]);
 					if (dispatched)
 						attnOut = outBatch[0];
 				} catch (IllegalStateException ex) {
@@ -2661,7 +2692,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			if (attnOut == null) {
 				float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
 				float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
-				attnOut = gqa(q, kView, vView, seqLen);
+				attnOut = gqa(q, kView, vView, seqLen, layerWindows[li]);
 			}
 			attnEvt.windowSize = 1;
 			attnEvt.startPosition = pos;
@@ -3792,14 +3823,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	/**
 	 * Grouped-query attention (GQA). q[numHeads * headDim], kCache/vCache contain
-	 * the keys/values for all positions 0..seqLen-1. Returns the attended output,
-	 * same shape as q.
+	 * the keys/values for all positions 0..seqLen-1; the row attends over the last
+	 * {@code window} of them (0: all). Returns the attended output, same shape as q.
 	 */
-	private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen) {
+	private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen, int window) {
 		float[] out = new float[cfg.numHeads() * cfg.headDim()];
 		float[] scores = new float[seqLen];
 		GqaMath.attend(q, kCache, vCache, seqLen, out, scores,
-				cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim());
+				cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim(), window);
 		return out;
 	}
 

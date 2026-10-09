@@ -1,0 +1,44 @@
+baseline jar sha256: 620a5caf606538b6
+candidate jar sha256: 16f8794d833b1dff
+=== gpu-ab: baseline 1 (14:24:16)
+    exit=0  (log: dist/context-policy-final/runs/gpu-ab-baseline-1.log)
+=== gpu-ab: candidate 1 (14:26:58)
+    exit=0  (log: dist/context-policy-final/runs/gpu-ab-candidate-1.log)
+=== gpu-ab: baseline 2 (14:29:39)
+    exit=0  (log: dist/context-policy-final/runs/gpu-ab-baseline-2.log)
+=== gpu-ab: candidate 2 (14:32:20)
+    exit=0  (log: dist/context-policy-final/runs/gpu-ab-candidate-2.log)
+=== gpu-ab: baseline 3 (14:35:01)
+    exit=0  (log: dist/context-policy-final/runs/gpu-ab-baseline-3.log)
+=== gpu-ab: candidate 3 (14:37:43)
+    exit=0  (log: dist/context-policy-final/runs/gpu-ab-candidate-3.log)
+
+gpu-ab: clock_pinned across the six runs: true (must be only: true)
+model              pp_A       pp_B  pp_B/A       tg_A     tg_B  tg_B/A    alloc/tok_A  alloc/tok_B    B/A      gc_A    gc_B
+tinyllama       3017.24    2997.75   0.994     140.97   145.29   1.031       39014807     39016222  1.000       0.0     0.0
+qwen2.5         1246.47    1246.05   1.000      29.85    29.61   0.992      143499706    142606091  0.994       0.0     0.0
+Phi              700.92     699.52   0.998      50.88    50.73   0.997      177467015    178228890  1.004      13.7    13.5
+mistral          557.22     551.90   0.990      37.66    37.66   1.000      192703377    192846068  1.001       0.0     0.0
+
+gpu-ab: greedy output (temperature 0), candidate vs baseline per run, and baseline run 1 vs runs 2..3
+  tinyllama: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  qwen2.5: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  Phi: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  mistral: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+=== D: shift-step latency (14:40:22)
+# Context-shift step latency
+
+- Jar: `candidate-shaded.jar` sha256 `16f8794d833b1dff`; commit 0f87603 (dirty tree)
+- Clocks: cpu governor performance (was schedutil), turbo off, gpu clock recorded, not fixed
+- Depth 32768, keep 32, 3 repetitions, heap 16g; gate: median ratio <= 3.0
+
+| Model | Backend | Median ratio | Min | Max | Result | Log |
+|---|---|---|---|---|---|---|
+| tinyllama-1.1b-chat-v1.0.Q4_K_M | cpu | 0.541 | 0.539 | 0.542 | met | `tinyllama-1.1b-chat-v1.0.Q4_K_M-cpu.log` |
+| tinyllama-1.1b-chat-v1.0.Q4_K_M | gpu | 2.362 | 2.361 | 2.620 | met | `tinyllama-1.1b-chat-v1.0.Q4_K_M-gpu.log` |
+| mistral-7b-instruct-v0.1-q4_k_m | cpu | 0.581 | 0.580 | 0.586 | met | `mistral-7b-instruct-v0.1-q4_k_m-cpu.log` |
+| mistral-7b-instruct-v0.1-q4_k_m | gpu | 0.630 | 0.630 | 0.631 | met | `mistral-7b-instruct-v0.1-q4_k_m-gpu.log` |
+GATE MET
+=== L: reference-relative sweep n_prompt=512 (14:55:29)
+    exit=0  (log: dist/context-policy-final/runs/sweep-512.log; published under docs/perf-compare/)
+GATES MET

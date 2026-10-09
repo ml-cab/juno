@@ -219,7 +219,7 @@ class GpuAttentionHandlerParityTest {
 
 		@Override
 		public void dispatched(DeviceKvCache[] mirrors, float[][] q, int[] seqLens, float[][] out, int numHeads,
-				int headDim, int gqaRatio, int kvDim) {
+				int headDim, int gqaRatio, int kvDim, int window) {
 			boolean oneCache = true;
 			for (DeviceKvCache m : mirrors)
 				oneCache &= m == mirrors[0];
@@ -238,7 +238,7 @@ class GpuAttentionHandlerParityTest {
 				}
 				float[] expected = new float[numHeads * headDim];
 				GqaMath.attend(q[b], kRows, vRows, seqLens[b], expected, new float[seqLens[b]], numHeads, headDim,
-						gqaRatio, kvDim);
+						gqaRatio, kvDim, window);
 				maxRel[k] = Math.max(maxRel[k], relativeL2(out[b], expected));
 				rows[k]++;
 			}

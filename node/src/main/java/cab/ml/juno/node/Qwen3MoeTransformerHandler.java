@@ -35,6 +35,8 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 
 	private static final Logger log = Logger.getLogger(Qwen3MoeTransformerHandler.class.getName());
 	private final Qwen3Config cfg;
+	/** Per local layer: its attention window ({@link SlidingWindow}), 0 for none. */
+	private final int[] layerWindows;
 	private final int startLayer;
 	private final int endLayer;
 	private final boolean hasEmbeddings;
@@ -89,6 +91,7 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
 		this.hasOutputProj = ctx.hasOutputProjection();
+		this.layerWindows = SlidingWindow.forShard(r, ctx, log);
 		this.kvLayout = SessionKvLayout.fromEnv(cfg.kvDim());
 		log.info(kvLayout.policySummary());
 
@@ -341,7 +344,7 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 			int seqLen = positions[b] + 1;
 			float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
 			float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
-			gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores);
+			gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores, layerWindows[li]);
 		}
 
 		sgemmLayerInto(wo[li], ws.attnOut, ws.attnProj, H, qDim);
@@ -365,35 +368,10 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 			System.arraycopy(LlamaTransformerHandler.matVec(quant, X[b], rows, cols), 0, Y[b], 0, rows);
 	}
 
-	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen, float[] out, float[] scores) {
-		int H = cfg.numHeads();
-		int Hd = cfg.headDim();
-		int gqaR = cfg.gqaRatio();
-		float scale = (float) (1.0 / Math.sqrt(Hd));
-		java.util.Arrays.fill(out, 0f);
-
-		for (int h = 0; h < H; h++) {
-			int kvHead = h / gqaR;
-			int qBase = h * Hd;
-			int kBase = kvHead * Hd;
-
-			for (int t = 0; t < seqLen; t++) {
-				float dot = 0f;
-				int kOffset = t * cfg.kvDim() + kBase;
-				for (int d = 0; d < Hd; d++)
-					dot += q[qBase + d] * kCache[kOffset + d];
-				scores[t] = dot * scale;
-			}
-			LlamaTransformerHandler.softmax(scores, seqLen);
-
-			int outBase = h * Hd;
-			for (int t = 0; t < seqLen; t++) {
-				int vOffset = t * cfg.kvDim() + kBase;
-				float w = scores[t];
-				for (int d = 0; d < Hd; d++)
-					out[outBase + d] += w * vCache[vOffset + d];
-			}
-		}
+	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen, float[] out, float[] scores,
+			int window) {
+		GqaMath.attend(q, kCache, vCache, seqLen, out, scores, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
+				cfg.kvDim(), window);
 	}
 
 	private float[][] outputProjectionBatch(float[][] x) {
@@ -620,6 +598,11 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		@Override
 		public float[] matVecWo(float[] x, int rows, int cols) {
 			return LlamaTransformerHandler.matVec(wo[li], x, cfg.hiddenDim(), cfg.qDim());
+		}
+
+		@Override
+		public int attentionWindow() {
+			return layerWindows[li];
 		}
 	}
 }

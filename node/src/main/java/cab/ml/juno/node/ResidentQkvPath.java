@@ -144,6 +144,11 @@ final class ResidentQkvPath implements AutoCloseable {
 	private final DeviceFloatMatrix[] kNormWeight;
 	/** The rest of the layer after attention, or null when the region stops at attention. */
 	private final ResidentLayerTail tail;
+	/**
+	 * Per layer: the attention window ({@link SlidingWindow}), 0 for none. Set once
+	 * by {@link #withWindows} before the handler that opened the path is used.
+	 */
+	private int[] attentionWindows;
 
 	/** Every region ever opened, for {@link #close} and {@link #deviceBytes}. */
 	private final List<Region> regions = new CopyOnWriteArrayList<>();
@@ -472,6 +477,18 @@ final class ResidentQkvPath implements AutoCloseable {
 		return li >= 0 && li < normWeight.length && normWeight[li] != null;
 	}
 
+	/**
+	 * Gives each layer, indexed like {@code wq}, its attention window
+	 * ({@link SlidingWindow#forShard}); returns this. Call once, right after
+	 * building the path and before it runs.
+	 */
+	ResidentQkvPath withWindows(int[] layerWindows) {
+		if (layerWindows.length != wq.length)
+			throw new IllegalArgumentException("windows for " + layerWindows.length + " layers, path has " + wq.length);
+		this.attentionWindows = layerWindows.clone();
+		return this;
+	}
+
 	/** Whether the region runs the KV append and attention when it is given a mirror. */
 	boolean attendsOnDevice() {
 		return attention != null;
@@ -597,7 +614,7 @@ final class ResidentQkvPath implements AutoCloseable {
 			if (!rope.applyResident(r.q, pos) || !rope.applyResidentColumns(r.packed, 0, kvDim, pos))
 				throw new IllegalStateException("RoPE kernel failed to load after the path was built");
 			if (mirror != null) {
-				attend(r, mirror, pos, packed, kvBytes, stream);
+				attend(r, mirror, pos, packed, kvBytes, attentionWindows == null ? 0 : attentionWindows[li], stream);
 				if (whole)
 					tail.issue(li, r.x, r.xn, packed.asSlice(2 * kvBytes), packed.asSlice(2 * kvBytes + hiddenBytes()),
 							r.q8, r.tailScratch, stream);
@@ -627,11 +644,12 @@ final class ResidentQkvPath implements AutoCloseable {
 
 	/**
 	 * fp16(k, v) into the mirror at {@code pos}, then attention over positions
-	 * {@code [0, pos]} into the packed row's attention columns. The attention table
+	 * {@code [0, pos]} (its last {@code window} of them; 0: all) into the packed
+	 * row's attention columns. The attention table
 	 * (K pointer, V pointer, length) is written by a kernel from its launch
 	 * arguments, so it costs no host-to-device copy.
 	 */
-	private void attend(Region r, DeviceKvCache mirror, int pos, MemorySegment packed, long kvBytes,
+	private void attend(Region r, DeviceKvCache mirror, int pos, MemorySegment packed, long kvBytes, int window,
 			MemorySegment stream) {
 		DeviceSpanTimer spans = r.chain.spans();
 		int mark = spans.begin(stream, 1);
@@ -641,7 +659,7 @@ final class ResidentQkvPath implements AutoCloseable {
 		mark = spans.begin(stream, 1);
 		attention.launch(r.q.devicePointer(), r.table, r.table.asSlice(ADDRESS.byteSize()),
 				r.table.asSlice(2 * ADDRESS.byteSize()), packed.asSlice(2 * kvBytes), 1, numHeads, gqaRatio,
-				headDim, kvDim, GqaAttentionKernel.rowsPerBlock(true, 1), 0, stream);
+				headDim, kvDim, GqaAttentionKernel.rowsPerBlock(true, 1), window, stream);
 		spans.compute(DeviceComputeEvent.GQA_ATTENTION_REGION, 1, mark, stream);
 	}
 

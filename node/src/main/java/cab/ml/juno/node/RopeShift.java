@@ -76,13 +76,7 @@ final class RopeShift {
 	 */
 	KvContextShift.KeyRotation back(int delta, int nKvHeads) {
 		int pairs = freq.length;
-		float[] cos = new float[pairs];
-		float[] sin = new float[pairs];
-		for (int i = 0; i < pairs; i++) {
-			double a = -(double) delta * freq[i];
-			cos[i] = (float) Math.cos(a);
-			sin[i] = (float) Math.sin(a);
-		}
+		float[] cs = cosSin(delta);
 		int half = pairs;
 		return row -> {
 			for (int h = 0; h < nKvHeads; h++) {
@@ -92,10 +86,40 @@ final class RopeShift {
 					int i1 = splitHalf ? base + i + half : base + 2 * i + 1;
 					float x0 = row[i0];
 					float x1 = row[i1];
-					row[i0] = x0 * cos[i] - x1 * sin[i];
-					row[i1] = x0 * sin[i] + x1 * cos[i];
+					row[i0] = x0 * cs[2 * i] - x1 * cs[2 * i + 1];
+					row[i1] = x0 * cs[2 * i + 1] + x1 * cs[2 * i];
 				}
 			}
 		};
+	}
+
+	/**
+	 * The table {@link #back} applies for a shift of {@code delta}: cos and sin of
+	 * pair {@code i}'s rotation at {@code 2i} and {@code 2i + 1}. The device shift
+	 * ({@link DeviceKvCache#shiftInPlace}) applies the same table.
+	 */
+	float[] cosSin(int delta) {
+		float[] cs = new float[2 * freq.length];
+		for (int i = 0; i < freq.length; i++) {
+			double a = -(double) delta * freq[i];
+			cs[2 * i] = (float) Math.cos(a);
+			cs[2 * i + 1] = (float) Math.sin(a);
+		}
+		return cs;
+	}
+
+	/** Rotated pairs per head. */
+	int pairs() {
+		return freq.length;
+	}
+
+	/** Head width the pairs index into. */
+	int headDim() {
+		return headDim;
+	}
+
+	/** Whether pair {@code i} is {@code (i, i + pairs)} rather than {@code (2i, 2i + 1)}. */
+	boolean splitHalf() {
+		return splitHalf;
 	}
 }

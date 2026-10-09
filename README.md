@@ -73,6 +73,14 @@ Features:
   and in the GPU's KV copy. Local mode, every handler family, both schedules,
   `--lora-play`; cluster mode refuses it. See `docs/howto.md`.
 
+### Sliding-window attention
+
+- Applied where the model file declares it (`<arch>.attention.sliding_window`
+  and `sliding_window_pattern`, uniform or per-layer), with no flag; a file
+  that declares none is unchanged. CPU and GPU attention, both schedules,
+  every handler family, LoRA play and training, cluster shards. Malformed
+  window keys are refused at load. See `docs/howto.md`.
+
 ### Speculative decoding
 
 - `--spec-type none|ngram-simple|draft-simple` (`JUNO_SPEC_TYPE`, default

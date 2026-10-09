@@ -49,6 +49,11 @@ this tier's exit criteria, not Tier 02B's.
    the window metadata read Tier 02B added; do not implement a second windowing path here. If the
    window key Tier 02B chose is not the one this file declares, that is a Tier 02B defect surfacing
    late — fix it in the shared mechanism, not with a Gemma-local special case.
+   *Noted 2026-10-08 (Tier 02B step 3):* the mechanism (`SlidingWindow`) reads this file's
+   per-layer boolean `sliding_window_pattern` and its 512 width. The file also declares
+   `attention.key_length_swa`/`value_length_swa` (256), `rope.freq_base_swa` and
+   `rope.dimension_count_swa`: the windowed layers have their own head width and rotation. That is
+   this handler's layer shape, not the window mechanism; read it here.
 
 2. **Mistral3 handler** (or confirmed-safe extension of the existing Llama-family path) for
    `Devstral-Small` and any other `mistral3`-architecture file.

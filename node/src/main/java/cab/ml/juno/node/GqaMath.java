@@ -37,33 +37,53 @@ final class GqaMath {
 	 * scratch array (both must be at least {@code numHeads * headDim} and
 	 * {@code seqLen} long, respectively).
 	 *
+	 * <p>With {@code window > 0} the row attends over its last {@code window} keys
+	 * only, {@code [max(0, seqLen - window), seqLen)}, the GPU kernel's contract
+	 * ({@link GqaAttentionKernel}); 0 means every key. Rows before the window are
+	 * not read. A window no shorter than {@code seqLen} runs exactly the
+	 * arithmetic of no window.
+	 *
 	 * @param kCache  row-major, stride {@code kvDim}, at least {@code seqLen} rows
 	 * @param vCache  row-major, stride {@code kvDim}, at least {@code seqLen} rows
+	 * @param window  keys a row attends over, counted back from its own; 0 for all
 	 */
 	static void attend(float[] q, float[] kCache, float[] vCache, int seqLen,
-			float[] out, float[] scores, int numHeads, int headDim, int gqaRatio, int kvDim) {
+			float[] out, float[] scores, int numHeads, int headDim, int gqaRatio, int kvDim, int window) {
 		float scale = (float) (1.0 / Math.sqrt(headDim));
 		Arrays.fill(out, 0f);
+		int lo = firstKey(seqLen, window);
+		int n = seqLen - lo;
 
 		for (int h = 0; h < numHeads; h++) {
 			int kvHead = h / gqaRatio;
 			int qBase = h * headDim;
 			int kBase = kvHead * headDim;
 
-			for (int t = 0; t < seqLen; t++) {
+			for (int t = lo; t < seqLen; t++) {
 				float dot = 0f;
 				int kOffset = t * kvDim + kBase;
 				for (int d = 0; d < headDim; d++) dot += q[qBase + d] * kCache[kOffset + d];
-				scores[t] = dot * scale;
+				scores[t - lo] = dot * scale;
 			}
-			LlamaTransformerHandler.softmax(scores, seqLen);
+			LlamaTransformerHandler.softmax(scores, n);
 
 			int outBase = h * headDim;
-			for (int t = 0; t < seqLen; t++) {
+			for (int t = lo; t < seqLen; t++) {
 				int vOffset = t * kvDim + kBase;
-				float w = scores[t];
+				float w = scores[t - lo];
 				for (int d = 0; d < headDim; d++) out[outBase + d] += w * vCache[vOffset + d];
 			}
 		}
+	}
+
+	/** As {@link #attend(float[], float[], float[], int, float[], float[], int, int, int, int, int)} with no window. */
+	static void attend(float[] q, float[] kCache, float[] vCache, int seqLen,
+			float[] out, float[] scores, int numHeads, int headDim, int gqaRatio, int kvDim) {
+		attend(q, kCache, vCache, seqLen, out, scores, numHeads, headDim, gqaRatio, kvDim, 0);
+	}
+
+	/** The first key a row at context length {@code seqLen} attends to under {@code window} (0: none). */
+	static int firstKey(int seqLen, int window) {
+		return window > 0 && seqLen > window ? seqLen - window : 0;
 	}
 }

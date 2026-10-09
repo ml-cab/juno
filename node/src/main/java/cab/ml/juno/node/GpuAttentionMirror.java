@@ -53,7 +53,7 @@ final class GpuAttentionMirror {
 	 */
 	interface DispatchObserver {
 		void dispatched(DeviceKvCache[] mirrors, float[][] q, int[] seqLens, float[][] out, int numHeads,
-				int headDim, int gqaRatio, int kvDim);
+				int headDim, int gqaRatio, int kvDim, int window);
 	}
 
 	static volatile DispatchObserver observer;
@@ -208,12 +208,13 @@ final class GpuAttentionMirror {
 
 	/**
 	 * Attention for a prefill window: row {@code b} of {@code q} sits at position
-	 * {@code startPos + b} and attends over positions {@code [0, startPos + b]}.
+	 * {@code startPos + b} and attends over positions {@code [0, startPos + b]}, or
+	 * over the last {@code window} of them ({@link SlidingWindow}; 0: all).
 	 *
 	 * @return {@code true} when the kernel wrote every row of {@code out}; on
 	 *         {@code false} nothing usable was written and the caller runs its own path
 	 */
-	boolean attendWindow(DeviceKvCache mirror, int startPos, float[][] q, float[][] out) {
+	boolean attendWindow(DeviceKvCache mirror, int startPos, float[][] q, float[][] out, int window) {
 		int w = q.length;
 		if (mirror == null || !mirror.readableThrough(startPos + w))
 			return false;
@@ -223,23 +224,24 @@ final class GpuAttentionMirror {
 			seqLens[b] = startPos + b + 1;
 			perRow[b] = mirror;
 		}
-		return dispatch(perRow, q, seqLens, out);
+		return dispatch(perRow, q, seqLens, out, window);
 	}
 
-	/** Attention for one decode row at {@code pos}, written into {@code out}. */
-	boolean attendOne(DeviceKvCache mirror, int pos, float[] q, float[] out) {
+	/** Attention for one decode row at {@code pos} under {@code window}, written into {@code out}. */
+	boolean attendOne(DeviceKvCache mirror, int pos, float[] q, float[] out, int window) {
 		if (mirror == null || !mirror.readableThrough(pos + 1))
 			return false;
 		return dispatch(new DeviceKvCache[] { mirror }, new float[][] { q }, new int[] { pos + 1 },
-				new float[][] { out });
+				new float[][] { out }, window);
 	}
 
 	/**
 	 * Attention for independent decode streams in one launch; stream {@code b} sits
 	 * at {@code positions[b]} and reads {@code mirrors[b]}. Uses the kernel only when
-	 * every stream's mirror holds its whole history.
+	 * every stream's mirror holds its whole history. Each stream attends under
+	 * {@code window} at its own position.
 	 */
-	boolean attendStreams(DeviceKvCache[] mirrors, int[] positions, float[][] q, float[][] out) {
+	boolean attendStreams(DeviceKvCache[] mirrors, int[] positions, float[][] q, float[][] out, int window) {
 		int n = q.length;
 		int[] seqLens = new int[n];
 		for (int b = 0; b < n; b++) {
@@ -247,7 +249,7 @@ final class GpuAttentionMirror {
 				return false;
 			seqLens[b] = positions[b] + 1;
 		}
-		return dispatch(mirrors, q, seqLens, out);
+		return dispatch(mirrors, q, seqLens, out, window);
 	}
 
 	/**
@@ -257,12 +259,12 @@ final class GpuAttentionMirror {
 	 * Over-retiring costs throughput, under-retiring would leave one read past its
 	 * written prefix.
 	 */
-	private boolean dispatch(DeviceKvCache[] mirrors, float[][] q, int[] seqLens, float[][] out) {
+	private boolean dispatch(DeviceKvCache[] mirrors, float[][] q, int[] seqLens, float[][] out, int window) {
 		try {
-			boolean ok = gqa.attendBatched(mirrors, q, seqLens, out, numHeads, headDim, gqaRatio, kvDim);
+			boolean ok = gqa.attendBatched(mirrors, q, seqLens, out, numHeads, headDim, gqaRatio, kvDim, window);
 			DispatchObserver o = observer;
 			if (ok && o != null)
-				o.dispatched(mirrors, q, seqLens, out, numHeads, headDim, gqaRatio, kvDim);
+				o.dispatched(mirrors, q, seqLens, out, numHeads, headDim, gqaRatio, kvDim, window);
 			return ok;
 		} catch (IllegalStateException ex) {
 			if (!GpuLayerOffload.isVramOom(ex))

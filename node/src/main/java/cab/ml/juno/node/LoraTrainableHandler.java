@@ -101,6 +101,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private final LlamaConfig cfg;
 	/** Same layout the inference handler uses for this architecture; forward and backward must agree. */
 	private final RopePairing ropePairing;
+	/** Per local layer: its attention window ({@link SlidingWindow}), 0 for none. */
+	private final int[] layerWindows;
 	private final int startLayer, endLayer;
 	private final boolean hasEmbeddings, hasOutputProj;
 
@@ -198,6 +200,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		this.loraAdapters = adapters;
 		this.backend = backend;
 		this.startLayer = ctx.startLayer();
+		this.layerWindows = SlidingWindow.forShard(r, ctx, log);
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
 		this.hasOutputProj = ctx.hasOutputProjection();
@@ -707,7 +710,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			int seqLen = startPos + b + 1;
 			float[] kView = kCacheLayer.viewForAttention(seqLen, kDequant);
 			float[] vView = vCacheLayer.viewForAttention(seqLen, vDequant);
-			attnOut[b] = gqa(Q[b], kView, vView, seqLen);
+			attnOut[b] = gqa(Q[b], kView, vView, seqLen, layerWindows[li]);
 		}
 
 		float[][] attnProj = sgemmBatch(wo[li], woQ4Dev, woDev, li, attnOut, H, H);
@@ -893,13 +896,15 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 						float scale = (float) (1.0 / Math.sqrt(Hd));
 						float[] attnOut = new float[H];
 						float[][] attnW = new float[NH][seqLen];
+						// Rows before the layer's window keep weight 0, so backward sends them no gradient.
+						int lo = GqaMath.firstKey(seqLen, layerWindows[li]);
 						float[] scores = new float[seqLen];
 						int gqaR = cfg.gqaRatio();
 						for (int h = 0; h < NH; h++) {
 							int kvHead = h / gqaR;
 							int qBase = h * Hd;
 							int kBase = kvHead * Hd;
-							for (int t = 0; t < seqLen; t++) {
+							for (int t = lo; t < seqLen; t++) {
 								float dot = 0f;
 								int kOff = t * kvDim + kBase;
 								for (int d = 0; d < Hd; d++)
@@ -907,20 +912,20 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 								scores[t] = dot * scale;
 							}
 							float max = Float.NEGATIVE_INFINITY;
-							for (int t = 0; t < seqLen; t++)
+							for (int t = lo; t < seqLen; t++)
 								if (scores[t] > max)
 									max = scores[t];
 							float sum = 0f;
-							for (int t = 0; t < seqLen; t++) {
+							for (int t = lo; t < seqLen; t++) {
 								scores[t] = (float) Math.exp(scores[t] - max);
 								sum += scores[t];
 							}
-							for (int t = 0; t < seqLen; t++) {
+							for (int t = lo; t < seqLen; t++) {
 								scores[t] /= sum;
 								attnW[h][t] = scores[t];
 							}
 							int outBase = h * Hd;
-							for (int t = 0; t < seqLen; t++) {
+							for (int t = lo; t < seqLen; t++) {
 								int vOff = t * kvDim + kBase;
 								float w = scores[t];
 								for (int d = 0; d < Hd; d++)
@@ -1223,7 +1228,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		int seqLen = pos + 1;
 		float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
 		float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
-		float[] attnOut = gqa(q, kView, vView, seqLen);
+		float[] attnOut = gqa(q, kView, vView, seqLen, layerWindows[li]);
 		float[] attnProj = matVecLayer(wo[li], q4At(woQ4Dev, li), fpAt(woDev, li), attnOut, H, H);
 		applyLoraInPlace(attnProj, li, "wo", attnOut);
 		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
@@ -1257,7 +1262,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		System.arraycopy(k, 0, kCacheLayer, pos * kvDim, kvDim);
 		System.arraycopy(v, 0, vCacheLayer, pos * kvDim, kvDim);
 
-		float[] attnOut = gqa(q, kCacheLayer, vCacheLayer, pos + 1);
+		float[] attnOut = gqa(q, kCacheLayer, vCacheLayer, pos + 1, layerWindows[li]);
 		float[] attnProj = matVecLayer(wo[li], q4At(woQ4Dev, li), fpAt(woDev, li), attnOut, H, H);
 		applyLoraInPlace(attnProj, li, "wo", attnOut);
 		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
@@ -1450,6 +1455,8 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		float scale = (float) (1.0 / Math.sqrt(Hd));
 		float[] attnOut = new float[H];
 		float[][] attnW = new float[NH][seqLen];
+		// Rows before the layer's window keep weight 0, so backward sends them no gradient.
+		int lo = GqaMath.firstKey(seqLen, layerWindows[li]);
 		float[] scores = new float[seqLen];
 
 		int gqaR = cfg.gqaRatio();
@@ -1457,7 +1464,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			int kvHead = h / gqaR;
 			int qBase = h * Hd;
 			int kBase = kvHead * Hd;
-			for (int t = 0; t < seqLen; t++) {
+			for (int t = lo; t < seqLen; t++) {
 				float dot = 0f;
 				int kOff = t * kvDim + kBase;
 				for (int d = 0; d < Hd; d++)
@@ -1466,22 +1473,22 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 			}
 			// softmax in-place on scores[0..seqLen)
 			float max = Float.NEGATIVE_INFINITY;
-			for (int t = 0; t < seqLen; t++)
+			for (int t = lo; t < seqLen; t++)
 				if (scores[t] > max)
 					max = scores[t];
 			float sum = 0f;
-			for (int t = 0; t < seqLen; t++) {
+			for (int t = lo; t < seqLen; t++) {
 				scores[t] = (float) Math.exp(scores[t] - max);
 				sum += scores[t];
 			}
-			for (int t = 0; t < seqLen; t++) {
+			for (int t = lo; t < seqLen; t++) {
 				scores[t] /= sum;
 				attnW[h][t] = scores[t];
 			}
 
 			// weighted sum of values
 			int outBase = h * Hd;
-			for (int t = 0; t < seqLen; t++) {
+			for (int t = lo; t < seqLen; t++) {
 				int vOff = t * kvDim + kBase;
 				float w = scores[t];
 				for (int d = 0; d < Hd; d++)
@@ -1665,33 +1672,10 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	/**
 	 * Grouped-query attention (inference, same as LlamaTransformerHandler).
 	 */
-	private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen) {
-		int H = cfg.numHeads();
-		int Hd = cfg.headDim();
-		int gqaR = cfg.gqaRatio();
-		float scale = (float) (1.0 / Math.sqrt(Hd));
-		float[] out = new float[H * Hd];
-		float[] scores = new float[seqLen];
-		for (int h = 0; h < H; h++) {
-			int kvHead = h / gqaR;
-			int qBase = h * Hd;
-			int kBase = kvHead * Hd;
-			for (int t = 0; t < seqLen; t++) {
-				float dot = 0f;
-				int kOff = t * cfg.kvDim() + kBase;
-				for (int d = 0; d < Hd; d++)
-					dot += q[qBase + d] * kCache[kOff + d];
-				scores[t] = dot * scale;
-			}
-			LlamaTransformerHandler.softmax(scores, seqLen);
-			int outBase = h * Hd;
-			for (int t = 0; t < seqLen; t++) {
-				int vOff = t * cfg.kvDim() + kBase;
-				float w = scores[t];
-				for (int d = 0; d < Hd; d++)
-					out[outBase + d] += w * vCache[vOff + d];
-			}
-		}
+	private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen, int window) {
+		float[] out = new float[cfg.numHeads() * cfg.headDim()];
+		GqaMath.attend(q, kCache, vCache, seqLen, out, new float[seqLen], cfg.numHeads(), cfg.headDim(),
+				cfg.gqaRatio(), cfg.kvDim(), window);
 		return out;
 	}
 

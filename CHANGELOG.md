@@ -1,5 +1,24 @@
 ## Status 
 
+**Session 124** — Sliding-window attention where a model file declares it
+
+- **Juno reads a model's sliding window and applies it**, with no flag: `<arch>.attention.sliding_window` gives
+  the width, and `<arch>.attention.sliding_window_pattern` which layers use it, either one boolean per layer or an
+  integer period whose last layer attends globally. A windowed layer's token attends to the last `W` keys only.
+- **Every path honours it**: CPU and CUDA attention at prefill, decode and `--parallel` multi-stream decode, the
+  device-resident decode and prefill regions, dense and paged KV, every handler family, `--lora-play`, and LoRA
+  training, whose backward pass sends the keys outside the window no gradient. Pipeline and tensor-parallel shards
+  read the pattern at the model's own layer numbers.
+- **Nothing changes for a model that declares no window**, and the CPU attention is bit-for-bit the same.
+  Phi-3.5-mini declares a 262,144-token window against its 4,096-token limit, which therefore never applies.
+- **A malformed window is refused at load**, naming the key (for example a pattern with the wrong number of
+  layers), rather than guessed at.
+- **Context shifting on the GPU no longer stalls the stream.** The device copy of the KV cache is now shifted in
+  place on the GPU (kept rows moved, moved keys rotated there) instead of being converted and re-uploaded from the
+  host. At 32,768 positions the shifting step drops from 16x an ordinary decode step to 2.5x on TinyLlama, and the
+  shift itself from 2.9 s to 0.5 s on Mistral 7B. `scripts/performance-tests/context-shift-step-bench.sh` measures
+  it.
+
 **Session 123** — Context shifting: long conversations continue instead of failing at the context limit
 
 - **Opt in with `--context-shift on`**, or per request with `x_juno_context_shift` (chat completions),

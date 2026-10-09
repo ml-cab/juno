@@ -1,10 +1,11 @@
 # Tier 02B: Context policy (context shifting, sliding windows, Phi-3.5 LongRoPE)
 
-Status: **in progress** (2026-10-08). Steps 1, 2 and 4 done: Tier 01B's Phi-3.5 fix verified; item 3
-closed by owner decision 1 (option (b) declined, 4096 cap kept); context shifting shipped as an opt-in on every
-handler, both schedules, the CLI, both REST surfaces and the facade (cluster fail-closed by owner decision 2;
-the cluster RPC is Tier 13's). A failed request now releases its KV (out-of-tier change, owner decision 4).
-Step 3 (sliding windows) and step 5 (full cross-surface matrix, perf gate) not started.
+Status: **complete** (2026-10-09). Every exit criterion is checked. Context shifting is an opt-in on every handler,
+both schedules, the CLI, both REST surfaces and the facade (cluster fail-closed, owner decision 2), with the device KV
+copy shifted in place on the GPU; the shifting step takes 0.54x to 2.36x a decode step at 32,768 positions (pinned,
+`<= 3.0x`). Sliding-window attention is read from both GGUF keys and applied on every CPU and GPU path, every handler,
+LoRA play and training. No regression against the pre-tier build (pinned GPU and CPU, LoRA, vision; greedy output
+identical). Phi-3.5's 4096 cap kept (owner decision 1).
 Gap analysis refs: §1.2 (the context half)
 
 **Split out of [Tier 02](TIER-02-attention-long-context.md) on 2026-10-04 (plan review).** This tier's
@@ -146,6 +147,25 @@ item 3 below.
    is what a Mistral-style exporter writes), and treat an absent width as today's unwindowed behaviour
    whatever the period says.
 
+   *Corrected 2026-10-08 (step 3, plan-versus-code check), two claims that do not hold as written.*
+   (1) **The pattern key is not a period on the only file that declares it.** `gemma-4-E4B` stores
+   `gemma4.attention.sliding_window_pattern` as an array of 42 booleans, one per layer (`true` =
+   windowed, `false` = global; the array repeats five windowed layers then one global), with
+   `sliding_window = 512`. So the mechanism reads the pattern in both forms: a boolean array whose
+   length must equal `<arch>.block_count` (the form this file writes), and an integer period `N`, under
+   which the last layer of each period is global (`il % N == N - 1`), the same layers the array names
+   for `N = 6`. Any other value type, an array of the wrong length, or a negative width or period is
+   rejected at load rather than guessed at. (2) **Gemma 4 is not the only windowed file on disk.**
+   `Phi-3.5-mini-instruct-Q4_K_M.gguf` declares `phi3.attention.sliding_window = 262144` with no
+   pattern key, which under the rule above is a uniform window on every layer. It never binds: 262144
+   exceeds the handler's 4096-token cap, and a window no shorter than the context attends over exactly
+   the keys of no window (the kernel's documented contract, and the CPU path's by construction). So
+   the Phi-3 handler reads and applies it, and the sweep model's output must stay bit-identical; the
+   no-op guard covers it. Found by reading every file's metadata keys (`./juno gguf-info`), not tensor
+   data. Gemma 4 also declares `key_length_swa`, `value_length_swa`, `rope.freq_base_swa` and
+   `rope.dimension_count_swa` (windowed layers with their own head width and rotation); those are
+   handler shape, Tier 08's, and not part of the window mechanism.
+
    This matters because [Tier 08](TIER-08-model-architecture-breadth.md) carries the real-model
    validation on that exact file and is explicitly forbidden from adding a second windowing path. A
    mechanism built here for a single uniform window would make Tier 08's exit criterion unreachable
@@ -256,27 +276,53 @@ and none would help** (see implementation step 3).
       without the opt-in fails at the limit on every path (`GenerationLoopContextShiftTest`,
       `ContextShiftRequestFieldTest`, `Phi3ContextShiftAtLimitTest`, smoke turn 7 on both schedules); the error
       is documented in `docs/howto.md` ("Maximum sequence length", "Context shifting").
-- [ ] Both window keys are read — `<arch>.attention.sliding_window` and
+- [x] Both window keys are read — `<arch>.attention.sliding_window` and
       `<arch>.attention.sliding_window_pattern` — and the patterned case is covered by a unit test
       asserting which layers attend globally and which are windowed, not only that a window is applied.
       A present width with an absent period resolves to the uniform case.
-- [ ] Sliding-window attention verified correct against synthetic uniform and patterned
+      *Met 2026-10-09 (step 3 record):* `SlidingWindowTest` (boolean-array and integer-period patterns name the
+      global layers; width without pattern is uniform; real gemma-4-E4B header), and per handler layer the KV
+      overwrite oracle (`LlamaTransformerHandlerSlidingWindowTest`, `SlidingWindowLiveTest`).
+- [x] Sliding-window attention verified correct against synthetic uniform and patterned
       windowed-metadata fixtures on the CPU and GPU paths, and a no-op (bit-identical) for non-windowed
       models. Real-model validation on `gemma-4-E4B` is Tier 08's exit criterion, not this tier's —
       confirm it is listed there before closing this one.
-- [ ] Cross-surface checklist fully resolved, including row 15 (facade).
-- [ ] Perf gate published: Juno t/s >= 0.95x the pre-tier build, the shift step <= 3.0x the median
+      *Met 2026-10-09 (step 3 record).* **Evidence (not published):** unit and real-model tests. CPU exact (`LlamaTransformerHandlerSlidingWindowTest`, `SlidingWindowLiveTest`
+      on every handler family and LoRA play and training); GPU (`SlidingWindowGpuTest`: decode within 5% of the
+      window's effect of host attention, prefill matching width W over W - 1 and W + 1 by 2.17x to 7.3x); no-op bit
+      for bit on the CPU (`GqaMathWindowTest`, wide-window handler test) and unchanged launch arguments on the GPU.
+      End-to-end greedy bit-identity on the sweep models is scored by the perf gate below. Tier 08 lists the
+      gemma-4-E4B criterion (its exit criteria, "Sliding-window attention validated end to end").
+- [x] Cross-surface checklist fully resolved, including row 15 (facade).
+      *Met 2026-10-09 (step 5 record, table):* PASS, N/A with reason, or FAIL-CLOSED (tested) on every row for both
+      items; ROCm rows NEEDS-AMD-HARDWARE.
+- [x] Perf gate published: Juno t/s >= 0.95x the pre-tier build, the shift step <= 3.0x the median
       decode step, and the standing CPU and allocation gate met.
+      *Met 2026-10-09 (owner runs, pinned):* `docs/perf-compare/20261009T151747Z-context-policy-close-gate` (GPU and
+      CPU, allocation, GC, greedy output; Mistral 7B CPU generation on the request-timed median by owner decision 5),
+      `docs/perf-compare/20261009T195800Z-context-policy-final-gate` (GPU re-run on the final jar: tg 0.992x to 1.031x,
+      pp 0.990x to 1.000x; shift step 0.541 / 2.362 / 0.581 / 0.630 against `<= 3.0`), LoRA and vision
+      `docs/perf-compare/20261009T192344Z-context-policy-lora-vision`, reference-relative reading
+      `docs/perf-compare/20261009T195529Z`.
+      *2026-10-09, first two parts read (owner run, pinned):* `docs/perf-compare/20261009T151747Z-context-policy-close-gate`:
+      GPU tg 0.978x to 1.005x, pp 0.983x to 0.999x; CPU tg 0.999x and 1.003x, pp 0.993x to 1.001x; allocation 0.998x
+      to 1.000x; GC unchanged; greedy output equal on every run. Mistral 7B CPU generation scored on the request-timed
+      median of three, 1.002x (owner decision 5). Parts A and C met; still open: the shift step's `<= 3.0x` bound
+      (step 5).
 - [x] The context-shift opt-in is in `api/src/main/resources/openapi.yaml` and `juno-api.yaml`
       alongside the code that reads it (README feature-complete rule).
       *Met 2026-10-08:* `contextShift` (native `InferenceRequest`) and `x_juno_context_shift` (chat
       completions, schema and extension table). `inference.proto` is unchanged: no RPC shape changed, the
       cluster path refuses the opt-in, and nothing implements its client-facing `InferenceService`.
-- [ ] Docs (`docs/howto.md`, `docs/agent-arch.txt`) updated, Juno-native language only.
+- [x] Docs (`docs/howto.md`, `docs/agent-arch.txt`) updated, Juno-native language only.
       *2026-10-08: context-shift half done* (howto "Context shifting", flag row, facade; agent-arch class
-      map; README). Owed: sliding windows (step 3).
-- [ ] `CHANGELOG.md` entry added.
-      *2026-10-08: context-shift entry added (Session 123).* Owed: sliding windows (step 3).
+      map; README). *2026-10-09: sliding-window half done* (howto "Sliding-window attention", agent-arch
+      `SlidingWindow`/`GqaMath`, README). *2026-10-09, step 5:* the in-place device shift and its latency (howto, measured
+      on the pinned gate), agent-arch (`DeviceKvCache.shiftInPlace`, `KvShiftKernel`, `ContextShiftStepBench`); the
+      surface claims match the step 5 matrix.
+- [x] `CHANGELOG.md` entry added.
+      *2026-10-08: context-shift entry added (Session 123).* *2026-10-09: sliding-window entry added (Session
+      124), extended with the in-place device shift in step 5.*
 
 ## Execution record
 
@@ -437,3 +483,209 @@ out-of-tier change (below).
 **Next:** implementation step 3, sliding-window attention (both window keys, synthetic uniform and patterned
 fixtures, CPU and GPU).
 
+
+### 2026-10-09: implementation step 3 (sliding-window attention)
+
+**Plan check.** `check-plan-thresholds.sh` passes (22 tier files). **Plan-versus-code check**: no window key was read
+anywhere; the GPU kernel already took a per-call window, and `GqaAttentionTiledTest` already held it (window 1 to 500,
+off-tile, deep into a long prompt); every other claim of step 3 held. Two claims did not (corrected in step 3 above,
+dated): the only patterned file stores its pattern as a per-layer boolean array, not a period, and Phi-3.5-mini
+declares a uniform 262144-token window. Read off every model file's metadata keys with `./juno gguf-info`, no tensor
+data read.
+
+**What shipped.**
+
+| Layer | Change |
+|---|---|
+| Metadata (`node`) | `SlidingWindow`: width from `<arch>.attention.sliding_window` (absent or 0: none); layers from `<arch>.attention.sliding_window_pattern`: absent = every layer, boolean array of `block_count` entries (`true` = windowed), or integer period `N` (layer `i` global when `i % N == N - 1`; `N = 1` all global, `N = 0` all windowed). Another type, a wrong-length array, a negative width or period: `UnsupportedModelException` naming the key, at load. `forShard` reads the pattern at global layer indices |
+| CPU attention | `GqaMath.attend(..., window)`: keys `[firstKey(seqLen, window), seqLen)`, the kernel's contract. Every handler's private copy (Phi-2, Phi-3, Qwen3, Qwen3-MoE, LoRA inference) now delegates to it; each copy ran the same arithmetic, so window 0 is bit-identical (`GqaMathWindowTest` against a copy of the old loop) |
+| GPU attention | `layerWindows[li]` passed to `CudaGqaAttention.attendBatched` (four Llama sites), `GpuAttentionMirror.attendWindow`/`attendOne`/`attendStreams` (Phi-3, Qwen3), and through `Qwen3AttentionWeights.attentionWindow()` (abstract, so the MoE handler cannot inherit 0); `ResidentQkvPath` and `PrefillWindowRegion` take the array once (`withWindows`) and pass each layer's window to `GqaAttentionKernel.launch` (both passed 0 before) |
+| Handlers | Llama, Phi-2, Phi-3, Qwen3, Qwen3-MoE and the three LoRA handlers read `SlidingWindow.forShard(r, ctx, log)` at load (logged when declared); Qwen2Lora and the vision decorator delegate |
+| LoRA training | the four inline training attention loops start at the window's first key, so the stored attention weights are 0 outside it and the backward pass sends those keys no gradient |
+| KV | unchanged: every row is stored; the window narrows what attention reads |
+
+**Tests.** Written first and seen failing against stubs that threw (19 of 19), then passing, unless marked:
+
+| Test | Count | Result | Reading |
+|---|---|---|---|
+| `SlidingWindowTest` (synthetic metadata GGUFs, `MetadataOnlyGguf` widened to typed keys) | 9 | pass | (a) uniform, (b) boolean pattern names layers 5, 11, ..., 41 global on a Gemma-shaped 42-layer file, integer period 6 names the same layers, (c) width without pattern is uniform, absent width is none whatever the pattern, (e) a shard of global layers 10..17 gets local `[512, 0, 512, 512, 512, 512, 512, 0]`; six malformed shapes refused naming the key. Real headers: Phi-3.5-mini 262144 on every layer; gemma-4-E4B 512 with layers 5, 11, 17, 23, 29, 35, 41 global; Mistral 7B v0.1 none |
+| `GqaMathWindowTest` | 3 | pass | (d) window 0, window = seqLen and window 262144 bit-identical to the old loop, seqLen 1..40; a window equals attending over its last rows alone, bit for bit; NaN in the rows before the window leaves the output unchanged |
+| `LlamaTransformerHandlerSlidingWindowTest` (synthetic, period 2 over 4 layers) | 7 | pass | overwriting the rows before the window: layers 0 and 2 (windowed) logits bit-identical, layers 1 and 3 (global) moved, dense and paged KV; prefill equals token-by-token decode to 1e-4 and differs from no window; multi-stream decode equals single decode; a 4096 window bit-identical to none (prefill and decode); a shard of global layers 1..2 gets `[0, W]` |
+| `SlidingWindowLiveTest` (real models, CPU, forced period-2 window of 6, 24-token prompt) | 9 (1 opt-in skipped) | pass | windowed-layer overwrite moves the logits by exactly 0 and a global-layer overwrite by 13.1 to 36.9 on TinyLlama, Qwen2.5-3B, Phi-3.5-mini, Qwen3-1.7B, the Phi-2 handler (moondream2 backbone), LoRA playback on all four families; LoRA training: windowed training loss equals windowed inference loss to every printed digit (TinyLlama 267.62387, Phi-3.5 386.19543, Qwen3 375.97375; no window 245.4 to 250.9). Qwen3-MoE skipped (opt-in, large heap). Written after the code |
+| `SlidingWindowGpuTest` (CUDA, same forced window of 8, 48-token prompt) | 5 | pass | decode and multi-stream decode, device against host attention in the same handler: 2.7% to 5.0% of the window's effect (bound 10%); prefill GPU against CPU at widths 7, 8, 9: width 8 closest on every model, by 2.17x (Qwen2.5-3B) to 7.3x (TinyLlama) (bound 1.5x). GPU attention and the prefill region active on every model; TinyLlama again with both regions off. Written after the code; see the finding below |
+| `GpuAttentionHandlerParityTest`, `ContextShiftLiveGpuTest`, `LlamaTransformerHandlerContextShiftGpuTest`, `GqaAttentionTiledTest`, `GqaAttentionKernelParityTest` | 16 | pass | regression: the observer now carries the window and the parity oracle applies it |
+
+**Finding: the GPU test's first bound was wrong, and was replaced, not loosened by hand.** The first version borrowed
+the context-shift GPU tests' bound (`2 * control + 0.02`, control = the same comparison without a window) and failed 5
+of 5. The windowed differences were 0.21 to 3.6 against windowed-versus-unwindowed effects of 7.6 to 25, so no path
+ignored the window; but an 8-key window averages each row over fewer FP16 keys and moves the logits far from their
+unwindowed values, so rounding grows with it. A tenth of the effect then passed decode on every model but failed prefill
+on three (12% to 15%: rounding compounds over 48 tokens and 28 to 36 layers), which is also what an off-by-one could
+look like. A diagnostic settled it before any bound changed: GPU prefill under width 8 against CPU prefill under 7, 8
+and 9 (Qwen2.5-3B 2.18 / 1.01 / 2.62; Qwen3-1.7B 9.07 / 3.11 / 14.02), so the GPU applies exactly 8. The prefill
+criterion is now that discrimination (width W closest by >= 1.5x), which fails for an ignored window and an off-by-one
+alike. The diagnostic class was deleted after use.
+
+**Measurement boundary.** None for a model that declares no window: `GqaMath` with window 0 is the old arithmetic bit
+for bit, and every GPU launch receives the 0 it received before. Phi-3.5-mini now reads 262144, which reaches the kernel
+and `GqaMath` as a window wider than any context it can reach (4096 cap), so the same keys are read. The tier's perf
+gate (step 5) still has to show it: prepared as `dist/context-policy-close/run-gate.sh` parts A (GPU, four sweep
+models, 512) and C (CPU and allocation), baseline `de98ff6` (`620a5caf606538b6`), started by the owner's waiter
+(`wait-and-run.sh`) once `READY` is written. The shift-step latency bound is not in it (no harness yet; step 5).
+
+**Cross-surface (sliding windows; the context-shift half is in step 2's record).** 1 CPU PASS (`SlidingWindowLiveTest`);
+2 CUDA PASS (`SlidingWindowGpuTest`); 3 ROCm NEEDS-AMD-HARDWARE (attention runs on the CPU path there, which applies
+the window); 4 static and 5 continuous PASS (dense and paged KV, multi-stream decode); 6 local PASS; 7 pipeline: shard
+indexing PASS at unit level (`SlidingWindowTest`, `LlamaTransformerHandlerSlidingWindowTest`), each node reads its own
+file at load; 8 tensor-parallel: every node runs the full model through the same handlers (`TensorShardContext`), so
+global indices apply; no windowed cluster run (no real windowed model loads before Tier 08); 9 LoRA training PASS; 10
+LoRA playback PASS; 11 vision N/A (moondream2 declares no window; the decorator delegates); 12-15 N/A (no flag, field or
+facade setting: the window is model metadata). Rows 7, 8 and 12 to 15 are to be confirmed in step 5's matrix.
+
+**Out-of-tier changes.** None.
+
+**Next:** step 5: the cross-surface smoke matrix with a long-context stress case on both schedules, the shift-step
+latency harness, and scoring the owner's gate.
+
+### 2026-10-09: the owner's pinned no-regression gate (parts A and C)
+
+Run by the owner through `dist/context-policy-close/wait-and-run.sh`, started automatically when step 3's tests had
+passed and `READY` was written (04:35 to 06:56). Published: `docs/perf-compare/20261009T151747Z-context-policy-close-gate`
+(baseline `de98ff6`, `620a5caf606538b6`; candidate `0f87603` plus step 3, `b12fbfb34a342e70`).
+
+| Lane | Model | pp B/A | tg B/A | alloc/token B/A | GC ms A / B | Greedy equal |
+|---|---|---|---|---|---|---|
+| GPU, 512 | TinyLlama | 0.998 | 1.005 | 1.000 | 0.0 / 0.0 | 3 of 3 |
+| GPU, 512 | Qwen2.5-3B | 0.999 | 0.999 | 1.000 | 0.0 / 0.0 | 3 of 3 |
+| GPU, 512 | Phi-3.5-mini | 0.983 | 0.997 | 1.000 | 11.9 / 11.5 | 3 of 3 |
+| GPU, 512 | Mistral 7B | 0.987 | 0.978 | 0.998 | 0.0 / 0.0 | 3 of 3 |
+| CPU, 128 | TinyLlama | 0.993 | 0.999 | 1.000 | 7.7 / 7.6 | 3 of 3 |
+| CPU, 128 | Mistral 7B | 1.001 | 1.003 (1 run per side) | 1.000 | 0.0 / 0.0 | 3 of 3 |
+
+Every reading meets its threshold (tg and pp >= 0.95x, allocation <= 1.10x, GC <= 5 ms under a 5 ms baseline or
+<= 1.25x, greedy output equal). Hot methods (CPU, top 10): same kernels, same order on both builds.
+
+**Defect in the gate script, found in scoring (fixed).** The script printed `FAIL: mistral generation below 0.95x` and
+`GATES MISSED`. The harness's span check had withheld Mistral 7B's CPU generation reading on two of three runs per side
+(JFR timestamps about 89 ms off the engine clock on a 137-second request; `token_gen_tps: null`), and the scorer, copied
+from the previous gate's script, turned each `null` into 0, so both medians were 0 and the ratio 0/0. The scorer now
+takes the median over the readings that exist and reports the withheld ones; the saved runs were rescored without a
+rerun (the table above). The previous gate's script has the same scorer; its published readings had no withheld
+repetition (all its ratios are non-zero), so nothing published earlier is affected.
+
+**Decision raised with the owner.**
+
+5. *Mistral 7B CPU generation is one scorable run per side, not a median of three.* The engine-timed reading is
+   0.5193 to 0.5207 t/s (1.003x); the request-timed rate, which the span check does not withhold, is a full median of
+   three, 0.4739 to 0.4748 t/s (1.002x); prefill 1.001x; and the CPU path's only change is one integer comparison per
+   attention call when no window is declared. Options: (a) accept the request-timed median of three as the reading for
+   this row, recorded as such; (b) re-run part C on Mistral 7B alone (about 2 hours pinned, the span check may withhold
+   again on a run this long). Recommendation: **(a)**.
+
+   **Owner decision (2026-10-09): (a).** Mistral 7B's CPU generation row is scored on the request-timed rate, median
+   of three: 0.4739 to 0.4748 t/s, **1.002x**, met. Parts A and C of the gate are met on every row.
+
+**Next:** step 5 (cross-surface matrix with the long-context stress case on both schedules; the shift-step latency
+harness, run by the owner as part D through the same waiter).
+
+### 2026-10-09: implementation step 5 (cross-surface matrix, shift-step latency, closing gates)
+
+**Plan check.** `check-plan-thresholds.sh` passes.
+
+**Shift-step latency: a harness, a miss on the GPU, and the fix.** No harness existed for the bound (the decode step
+that performs a shift `<= 3.0x` the median decode step at the same depth, at `MAX_SEQ_LEN`). Prefilling 32,768 tokens
+on the CPU is not practical (Mistral 7B prefills at 0.87 t/s: about 10 hours per repetition), and what a step costs
+does not depend on what the cache holds, so `ContextShiftStepBench` (`node`, a `main` like the other microbenches)
+prefills a 32-token system prompt, fills the host KV directly to the limit, rebuilds the device mirror from it
+(`LlamaTransformerHandler.rewriteDeviceKv`, benchmarks only), times five decode steps ending at the limit, then the
+shift the generation loop performs (keep the prompt, discard half of what follows) plus the next decode step.
+`scripts/performance-tests/context-shift-step-bench.sh` drives it per model and backend, pins clocks on request and
+scores the median of three. First reading, 32,768 positions, unpinned, one repetition:
+
+| Model | Backend | Median decode | Shift | Shift step | Ratio |
+|---|---|---|---|---|---|
+| TinyLlama | CPU | 5,217 ms | 84 ms | 2,847 ms | 0.55 |
+| TinyLlama | GPU | 47.8 ms | 754 ms | 781 ms | **16.3** |
+| Mistral 7B | CPU | 16,786 ms | 471 ms | 9,819 ms | 0.59 |
+| Mistral 7B | GPU | 3,801 ms | 2,937 ms | 4,867 ms | 1.28 (the mirror does not fit at 32,768 next to the weights, so decode already attends on the host; the shift spent about 2.5 s trying to rebuild the mirror before retiring it) |
+
+The cost was the device mirror rebuild: every row converted to FP16 in Java and re-uploaded, layer by layer. Per the
+threshold's own instruction (above the bound, move the re-rotation off the decode step), the shift now runs on the
+device: `DeviceKvCache.shiftInPlace` moves the kept rows down with device-to-device copies (chunked by the shift
+distance, so overlapping ranges move intact) and `KvShiftKernel` (`kv_shift.cu`) rotates the moved FP16 K rows in place
+with `RopeShift.cosSin`, the table the host shift applies (a shift rotates every moved key by the same distance, so one
+per-pair table serves every RoPE variant, and no magnitude factor can be re-applied). Each product and sum is rounded
+separately, so the device result equals the host rotation rounded to FP16. Nothing is allocated but the table.
+`HandlerContextShift.shiftMirrors` replaces the rebuild in the Llama, Phi-3 and Qwen3 handlers and falls back to it for
+a mirror short of the full history or without the kernel. After the fix, same conditions: TinyLlama GPU shift 754 ms
+to 101 ms, ratio **2.54**; Mistral 7B GPU shift 2,937 ms to 495 ms, ratio 0.63. The remaining TinyLlama cost is the host
+shift (moving about 1.5 GB of float rows), near memory bandwidth; a ring-buffer KV layout that would avoid moving rows
+is Tier 03's territory. The pinned reading is part D of the owner's final gate.
+
+**Tests (step 5 additions).**
+
+| Test | Count | Result | Reading |
+|---|---|---|---|
+| `DeviceKvShiftTest` (CUDA) | 4 | pass | adjacent pairs, split-half with arbitrary per-pair frequencies, partial rotation, a discard shorter than the moved rows: K and V bit-identical to the host shift rounded to FP16, watermark at the new length. Written first, seen failing against a stub that threw |
+| `ContextShiftLiveGpuTest`, `LlamaTransformerHandlerContextShiftGpuTest` | 3 | pass | regression through the new path: shifted request against the oracle KV: Phi-3.5 0.226 (control 0.159), Qwen3 0.161 (0.125), TinyLlama 0.158 (0.160), each within `2 * control + 0.02` |
+| Unit reactor (11 modules) | 2,256 | 1 environmental failure | node 1,030 run, 1 failure, 46 skipped: `PrefillRegionHandlerParityTest`'s device-wide free-VRAM check (case 3 short by 12 MB, re-run alone: case 1 short by 0.4 MB). **It fails the same way on the pre-tier tree `de98ff6`, twice in two runs**, so environmental, not this change; reported, not loosened. The modules it skipped were run after: tokenizer 109, coordinator 399, vision 97, juno-player 122, all pass |
+| `mvn verify -pl juno-master` (after `mvn install`) | 10 + 20 | pass | ThreeNodeClusterIT, TensorParallelClusterIT, InProcessClusterIT, UnsupportedArchitectureClusterIT |
+| Earlier smoke scripts, unmodified | 188 checks | pass | `smoke-consistency.sh` 54, `smoke-grammar.sh` 19, `smoke-tools.sh` 14, `smoke-context-policy.sh` 7 (the long-context stress case: conversations past the 4096 limit on both schedules, with and without the opt-in), `smoke-long-prompt-prefill.sh` 36, `smoke-packed-kquant-matmul.sh` 48, `smoke-gpu-residency.sh` 10 (run with `--models tinyllama...,mistral...`: its default list also loads llama-1-30b, a 3-hour run). No FAIL line in any. Outputs under `target/` (smoke results, not measurements) |
+
+**Gates read in this step.**
+
+| Gate | Reading | Threshold | Result | Where |
+|---|---|---|---|---|
+| LoRA train / playback, unpinned, median of three, both builds | 0.932x / 1.067x | `<= 1.25x` / `>= 0.80x` | met | `docs/perf-compare/20261009T192344Z-context-policy-lora-vision` |
+| Vision latency / decode, unpinned, median of three, alternating | 0.996x / 1.026x | `<= 1.25x` / `>= 0.80x` | met | same |
+| GPU and CPU no-regression, allocation, greedy output (parts A and C, pinned, owner) | see the gate entry above | | met | `docs/perf-compare/20261009T151747Z-context-policy-close-gate` |
+| Shift step, pinned, median of three; GPU no-regression re-run on the final jar; reference-relative sweep at 512 | owed | `<= 3.0x`; `>= 0.95x` | running (owner, started 14:24 via `dist/context-policy-final/wait-and-run.sh`) | |
+
+**Cross-surface checklist (both items).**
+
+| # | Surface | Context shift | Sliding window |
+|---|---|---|---|
+| 1 | CPU | PASS (`ContextShiftLiveTest`, bench CPU lanes) | PASS (`SlidingWindowLiveTest`) |
+| 2 | CUDA | PASS (GPU shift tests, `DeviceKvShiftTest`, smoke on Phi-3.5) | PASS (`SlidingWindowGpuTest`) |
+| 3 | ROCm | NEEDS-AMD-HARDWARE (KV-level; attention on the CPU path there; the device shift is CUDA-only and falls back to the host rebuild) | NEEDS-AMD-HARDWARE (CPU attention path applies it) |
+| 4 | Static | PASS (`GenerationLoopContextShiftTest`, smoke static) | PASS (dense KV, multi-stream decode) |
+| 5 | Continuous | PASS (slot shift, smoke continuous) | PASS (paged KV) |
+| 6 | Local | PASS | PASS |
+| 7 | Pipeline cluster | FAIL-CLOSED (owner decision 2; startup error and HTTP 400 tested) | PASS at unit level (shard reads global layer indices; each node reads its own file); no real windowed model loads before Tier 08 |
+| 8 | Tensor-parallel | FAIL-CLOSED (same) | PASS by construction (every node runs the full model through the same handlers); same caveat |
+| 9 | LoRA training | N/A (training does not use context shift) | PASS (training loss equals windowed inference loss) |
+| 10 | LoRA playback | PASS (`ContextShiftLiveTest` LoRA cases) | PASS |
+| 11 | Vision | FAIL-CLOSED for a request carrying an image (tested); text-only requests shift | N/A (moondream2 declares no window; decorator delegates) |
+| 12 | OpenAI REST | PASS (`x_juno_context_shift`, smoke) | N/A (model metadata, no request field) |
+| 13 | Native REST | PASS (`contextShift`) | N/A |
+| 14 | CLI | PASS (`--context-shift`, smoke) | N/A (no flag) |
+| 15 | Facade | PASS (`JunoPlayer.Builder.contextShift`, `JunoHttpClient.withContextShift`) | N/A |
+
+**Measurement boundary.** The in-place device shift runs only when a request shifts; no forward, MatVec, attention or
+KV-write path changed for a request that does not opt in. Part A of the final gate re-runs the GPU no-regression on
+the final jar to show it.
+
+**Out-of-tier changes.** None.
+
+**Next:** score the owner's final gate (parts A, D, L); then tick the perf-gate, docs and CHANGELOG boxes and close the
+tier, or record what missed.
+
+### 2026-10-09: the owner's final gate (parts A, D, L) and close
+
+Run by the owner through `dist/context-policy-final/wait-and-run.sh` (14:24 to about 15:20), on the final jar
+`16f8794d833b1dff` against `de98ff6`. Published: `docs/perf-compare/20261009T195800Z-context-policy-final-gate` (A and D)
+and `docs/perf-compare/20261009T195529Z` (L, published by hand: the harness does not publish a `--juno-jar` run; the jar
+is the tree's own build).
+
+- **Part A (GPU no-regression, pinned):** tg 0.992x to 1.031x, pp 0.990x to 1.000x, allocation 0.994x to 1.004x, GC
+  unchanged, greedy output equal on every run. Met.
+- **Part D (shift step at 32,768, pinned, median of three):** TinyLlama CPU 0.541, GPU 2.362; Mistral 7B CPU 0.581, GPU
+  0.630. Met. The tight lane is TinyLlama GPU, whose remaining cost is the host shift (about 90 ms).
+- **Part L (reference-relative, GPU, `n_prompt=512`, pinned):** pp 0.735 (TinyLlama), 0.779 (Qwen2.5-3B), 0.584
+  (Phi-3.5-mini, binding), 0.802 (Mistral 7B); tg 0.738, 0.412, 0.827, 1.014. Against the active end-of-plan rows: GPU
+  tg every model `>= 0.70x` (Qwen2.5-3B 0.412, binding, unchanged: this tier does not touch it; Tier 02D's); Phi-3.5
+  tg `>= 0.90x` (0.827); GPU pp at 512 `>= 0.70x` (0.584, Phi-3.5 binding). None moves in this tier, as expected of a
+  tier with no throughput target; the reading stays a reading and the reference column is unchanged. Milestone rows for
+  02B: none.
+
+**Tier closed.** Every exit criterion checked. **Next tier:** [Tier 02C](TIER-02C-cpu-hot-path.md).

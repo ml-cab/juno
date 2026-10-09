@@ -1,0 +1,573 @@
+WARNING: Using incubator modules: jdk.incubator.vector
+жовт. 09, 2026 2:43:03 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=291 metadata=38
+жовт. 09, 2026 2:43:04 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 736800
+жовт. 09, 2026 2:43:04 ПП cab.ml.juno.node.LlamaTransformerHandler load
+INFO: Loading GGUF shard: layers 0–32  embd=true  outProj=true  backend=CpuMatVec  file=models/mistral-7b-instruct-v0.1-q4_k_m.gguf
+жовт. 09, 2026 2:43:04 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: GGUF v3 — tensors=291 metadata=38
+жовт. 09, 2026 2:43:04 ПП cab.ml.juno.node.GgufReader parseGgufFromChannel
+INFO: Data section starts at byte 736800
+жовт. 09, 2026 2:43:04 ПП cab.ml.juno.node.LlamaTransformerHandler load
+INFO: Model: LlamaConfig{arch=llama hidden=4096 layers=32 heads=32 kvHeads=8 headDim=128 ffn=14336 vocab=32000 eps=1,0e-05 ropeTheta=10000}
+жовт. 09, 2026 2:43:04 ПП cab.ml.juno.node.LlamaTransformerHandler <init>
+INFO: schedule=static cache-type-k=f16 cache-type-v=f16 kv-page-size ignored (dense)
+жовт. 09, 2026 2:43:09 ПП cab.ml.juno.node.LlamaTransformerHandler <init>
+INFO: Shard loaded — 32 layers, with embeddings, with output projection
+жовт. 09, 2026 2:43:10 ПП cab.ml.juno.node.CudaBindings <init>
+INFO: CudaBindings ready — Panama FFI (cudart + cublas)
+жовт. 09, 2026 2:43:10 ПП cab.ml.juno.node.CudaAvailability detect
+INFO: CUDA available — 1 device(s)
+model=mistral-7b-instruct-v0.1-q4_k_m.gguf backend=cpu depth=32768 keep=32 discard=16368 layers=32 kvDim=1024 gpuAttention=false residency=false
+жовт. 09, 2026 2:43:10 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch ENTER requestId=bench--1 W=32 startPos=0 hasEmbeddings=true isFirstNode=true usingActivations=false hasOutputProj=true
+жовт. 09, 2026 2:43:10 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch START requestId=bench--1 W=32 L=32 startPos=0 lastPos=31 kvDim=1024
+жовт. 09, 2026 2:43:10 ПП cab.ml.juno.node.SimdThreadPool build
+INFO: SIMD row-parallel pool: parallelism=12 (default, matches Runtime.getRuntime().availableProcessors())
+жовт. 09, 2026 2:43:11 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 0 breakdown (ms): qkvProj=362.151619 rope+cacheWrite=14.542327 attention(gqa,W=32)=25.076169 woProj+ffn+residuals=1366.459826
+жовт. 09, 2026 2:43:11 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 1/32 done in 1771,6ms  requestId=bench--1
+жовт. 09, 2026 2:43:13 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 1 breakdown (ms): qkvProj=142.756717 rope+cacheWrite=0.592745 attention(gqa,W=32)=7.068518 woProj+ffn+residuals=1337.06223
+жовт. 09, 2026 2:43:13 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 2/32 done in 1488,3ms  requestId=bench--1
+жовт. 09, 2026 2:43:14 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 2 breakdown (ms): qkvProj=139.675939 rope+cacheWrite=1.562424 attention(gqa,W=32)=4.541653 woProj+ffn+residuals=1326.85456
+жовт. 09, 2026 2:43:14 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 3/32 done in 1473,5ms  requestId=bench--1
+жовт. 09, 2026 2:43:16 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 3 breakdown (ms): qkvProj=162.412002 rope+cacheWrite=0.289773 attention(gqa,W=32)=4.473138 woProj+ffn+residuals=1314.821793
+жовт. 09, 2026 2:43:16 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 4/32 done in 1482,7ms  requestId=bench--1
+жовт. 09, 2026 2:43:17 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 4 breakdown (ms): qkvProj=92.803148 rope+cacheWrite=0.776079 attention(gqa,W=32)=4.567704 woProj+ffn+residuals=720.130662
+жовт. 09, 2026 2:43:17 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 5/32 done in 819,0ms  requestId=bench--1
+жовт. 09, 2026 2:43:18 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 5 breakdown (ms): qkvProj=94.200188 rope+cacheWrite=0.224331 attention(gqa,W=32)=4.458472 woProj+ffn+residuals=712.389434
+жовт. 09, 2026 2:43:18 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 6/32 done in 812,0ms  requestId=bench--1
+жовт. 09, 2026 2:43:19 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 6 breakdown (ms): qkvProj=140.047572 rope+cacheWrite=0.194369 attention(gqa,W=32)=4.527195 woProj+ffn+residuals=1326.175467
+жовт. 09, 2026 2:43:19 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 7/32 done in 1471,8ms  requestId=bench--1
+жовт. 09, 2026 2:43:20 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 7 breakdown (ms): qkvProj=94.15186 rope+cacheWrite=0.191365 attention(gqa,W=32)=4.455678 woProj+ffn+residuals=729.560051
+жовт. 09, 2026 2:43:20 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 8/32 done in 829,0ms  requestId=bench--1
+жовт. 09, 2026 2:43:21 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 8 breakdown (ms): qkvProj=95.802844 rope+cacheWrite=0.191226 attention(gqa,W=32)=4.524332 woProj+ffn+residuals=717.953444
+жовт. 09, 2026 2:43:21 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 9/32 done in 819,2ms  requestId=bench--1
+жовт. 09, 2026 2:43:22 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 9 breakdown (ms): qkvProj=137.642513 rope+cacheWrite=0.194159 attention(gqa,W=32)=4.474117 woProj+ffn+residuals=1335.915383
+жовт. 09, 2026 2:43:22 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 10/32 done in 1478,9ms  requestId=bench--1
+жовт. 09, 2026 2:43:23 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 10 breakdown (ms): qkvProj=92.176674 rope+cacheWrite=0.207639 attention(gqa,W=32)=4.515253 woProj+ffn+residuals=715.949076
+жовт. 09, 2026 2:43:23 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 11/32 done in 813,5ms  requestId=bench--1
+жовт. 09, 2026 2:43:24 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 11 breakdown (ms): qkvProj=97.529607 rope+cacheWrite=0.1936 attention(gqa,W=32)=4.456028 woProj+ffn+residuals=711.245534
+жовт. 09, 2026 2:43:24 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 12/32 done in 814,1ms  requestId=bench--1
+жовт. 09, 2026 2:43:25 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 12 breakdown (ms): qkvProj=139.535919 rope+cacheWrite=0.195346 attention(gqa,W=32)=4.553666 woProj+ffn+residuals=1331.466231
+жовт. 09, 2026 2:43:25 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 13/32 done in 1476,8ms  requestId=bench--1
+жовт. 09, 2026 2:43:26 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 13 breakdown (ms): qkvProj=95.656668 rope+cacheWrite=0.208198 attention(gqa,W=32)=4.446319 woProj+ffn+residuals=716.190116
+жовт. 09, 2026 2:43:26 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 14/32 done in 817,1ms  requestId=bench--1
+жовт. 09, 2026 2:43:27 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 14 breakdown (ms): qkvProj=92.031336 rope+cacheWrite=0.207569 attention(gqa,W=32)=4.459241 woProj+ffn+residuals=730.394065
+жовт. 09, 2026 2:43:27 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 15/32 done in 827,8ms  requestId=bench--1
+жовт. 09, 2026 2:43:28 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 15 breakdown (ms): qkvProj=134.940072 rope+cacheWrite=0.212388 attention(gqa,W=32)=4.449113 woProj+ffn+residuals=1315.460893
+жовт. 09, 2026 2:43:28 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 16/32 done in 1455,7ms  requestId=bench--1
+жовт. 09, 2026 2:43:29 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 16 breakdown (ms): qkvProj=93.85888 rope+cacheWrite=0.216998 attention(gqa,W=32)=4.524053 woProj+ffn+residuals=716.778128
+жовт. 09, 2026 2:43:29 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 17/32 done in 816,0ms  requestId=bench--1
+жовт. 09, 2026 2:43:30 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 17 breakdown (ms): qkvProj=91.481546 rope+cacheWrite=0.206242 attention(gqa,W=32)=5.859702 woProj+ffn+residuals=733.469204
+жовт. 09, 2026 2:43:30 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 18/32 done in 831,7ms  requestId=bench--1
+жовт. 09, 2026 2:43:31 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 18 breakdown (ms): qkvProj=136.435521 rope+cacheWrite=0.211969 attention(gqa,W=32)=4.491647 woProj+ffn+residuals=1314.401566
+жовт. 09, 2026 2:43:31 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 19/32 done in 1456,1ms  requestId=bench--1
+жовт. 09, 2026 2:43:32 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 19 breakdown (ms): qkvProj=98.389571 rope+cacheWrite=0.19856 attention(gqa,W=32)=4.518955 woProj+ffn+residuals=721.637296
+жовт. 09, 2026 2:43:32 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 20/32 done in 825,4ms  requestId=bench--1
+жовт. 09, 2026 2:43:33 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 20 breakdown (ms): qkvProj=92.513875 rope+cacheWrite=0.197861 attention(gqa,W=32)=4.502542 woProj+ffn+residuals=706.814419
+жовт. 09, 2026 2:43:33 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 21/32 done in 804,6ms  requestId=bench--1
+жовт. 09, 2026 2:43:35 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 21 breakdown (ms): qkvProj=136.982662 rope+cacheWrite=0.203379 attention(gqa,W=32)=4.529221 woProj+ffn+residuals=1344.930227
+жовт. 09, 2026 2:43:35 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 22/32 done in 1487,4ms  requestId=bench--1
+жовт. 09, 2026 2:43:35 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 22 breakdown (ms): qkvProj=97.394192 rope+cacheWrite=0.195976 attention(gqa,W=32)=5.469917 woProj+ffn+residuals=705.291465
+жовт. 09, 2026 2:43:35 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 23/32 done in 808,9ms  requestId=bench--1
+жовт. 09, 2026 2:43:36 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 23 breakdown (ms): qkvProj=92.714393 rope+cacheWrite=0.194648 attention(gqa,W=32)=4.49905 woProj+ffn+residuals=706.036261
+жовт. 09, 2026 2:43:36 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 24/32 done in 804,0ms  requestId=bench--1
+жовт. 09, 2026 2:43:38 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 24 breakdown (ms): qkvProj=137.366374 rope+cacheWrite=0.207639 attention(gqa,W=32)=4.509666 woProj+ffn+residuals=1330.338619
+жовт. 09, 2026 2:43:38 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 25/32 done in 1473,0ms  requestId=bench--1
+жовт. 09, 2026 2:43:38 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 25 breakdown (ms): qkvProj=90.830769 rope+cacheWrite=0.199467 attention(gqa,W=32)=4.462034 woProj+ffn+residuals=711.889967
+жовт. 09, 2026 2:43:38 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 26/32 done in 808,3ms  requestId=bench--1
+жовт. 09, 2026 2:43:39 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 26 breakdown (ms): qkvProj=93.346879 rope+cacheWrite=0.197372 attention(gqa,W=32)=4.475514 woProj+ffn+residuals=706.725961
+жовт. 09, 2026 2:43:39 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 27/32 done in 805,4ms  requestId=bench--1
+жовт. 09, 2026 2:43:41 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 27 breakdown (ms): qkvProj=147.099001 rope+cacheWrite=0.208756 attention(gqa,W=32)=4.516651 woProj+ffn+residuals=1376.471342
+жовт. 09, 2026 2:43:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 28/32 done in 1528,9ms  requestId=bench--1
+жовт. 09, 2026 2:43:42 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 28 breakdown (ms): qkvProj=140.281355 rope+cacheWrite=0.21574 attention(gqa,W=32)=4.881223 woProj+ffn+residuals=1335.983813
+жовт. 09, 2026 2:43:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 29/32 done in 1481,9ms  requestId=bench--1
+жовт. 09, 2026 2:43:44 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 29 breakdown (ms): qkvProj=138.064796 rope+cacheWrite=0.200724 attention(gqa,W=32)=4.508828 woProj+ffn+residuals=1343.594318
+жовт. 09, 2026 2:43:44 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 30/32 done in 1487,0ms  requestId=bench--1
+жовт. 09, 2026 2:43:45 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 30 breakdown (ms): qkvProj=175.944599 rope+cacheWrite=0.202191 attention(gqa,W=32)=4.517907 woProj+ffn+residuals=1339.78287
+жовт. 09, 2026 2:43:45 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 31/32 done in 1521,0ms  requestId=bench--1
+жовт. 09, 2026 2:43:47 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 31 breakdown (ms): qkvProj=142.208286 rope+cacheWrite=0.216858 attention(gqa,W=32)=4.587819 woProj+ffn+residuals=1312.800873
+жовт. 09, 2026 2:43:47 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 32/32 done in 1460,3ms  requestId=bench--1
+жовт. 09, 2026 2:43:47 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch DONE requestId=bench--1 totalMs=37065,3
+жовт. 09, 2026 2:43:47 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch EXIT (final node) requestId=bench--1 outputProjMs=58.766815 totalMs=37232.706447
+warmup depth=4096 decode_ms=[4081.88, 3891.46, 3892.24, 3948.14, 3887.17] median_decode_ms=3892.24 shift_ms=98.94 shift_step_ms=3002.03 ratio=0.771
+жовт. 09, 2026 2:44:13 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch ENTER requestId=bench-1 W=32 startPos=0 hasEmbeddings=true isFirstNode=true usingActivations=false hasOutputProj=true
+жовт. 09, 2026 2:44:13 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch START requestId=bench-1 W=32 L=32 startPos=0 lastPos=31 kvDim=1024
+жовт. 09, 2026 2:44:14 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 0 breakdown (ms): qkvProj=135.954633 rope+cacheWrite=0.251918 attention(gqa,W=32)=4.682805 woProj+ffn+residuals=1347.777267
+жовт. 09, 2026 2:44:14 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 1/32 done in 1489,2ms  requestId=bench-1
+жовт. 09, 2026 2:44:16 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 1 breakdown (ms): qkvProj=149.017654 rope+cacheWrite=0.195347 attention(gqa,W=32)=4.481172 woProj+ffn+residuals=1336.732822
+жовт. 09, 2026 2:44:16 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 2/32 done in 1491,0ms  requestId=bench-1
+жовт. 09, 2026 2:44:17 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 2 breakdown (ms): qkvProj=137.527257 rope+cacheWrite=0.195766 attention(gqa,W=32)=4.476632 woProj+ffn+residuals=1311.963187
+жовт. 09, 2026 2:44:17 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 3/32 done in 1454,7ms  requestId=bench-1
+жовт. 09, 2026 2:44:19 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 3 breakdown (ms): qkvProj=137.513919 rope+cacheWrite=0.193531 attention(gqa,W=32)=4.454632 woProj+ffn+residuals=1320.345162
+жовт. 09, 2026 2:44:19 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 4/32 done in 1463,1ms  requestId=bench-1
+жовт. 09, 2026 2:44:20 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 4 breakdown (ms): qkvProj=90.95183 rope+cacheWrite=0.206102 attention(gqa,W=32)=4.475864 woProj+ffn+residuals=752.26367
+жовт. 09, 2026 2:44:20 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 5/32 done in 848,4ms  requestId=bench-1
+жовт. 09, 2026 2:44:21 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 5 breakdown (ms): qkvProj=92.148705 rope+cacheWrite=0.204216 attention(gqa,W=32)=4.495979 woProj+ffn+residuals=716.90186
+жовт. 09, 2026 2:44:21 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 6/32 done in 814,3ms  requestId=bench-1
+жовт. 09, 2026 2:44:22 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 6 breakdown (ms): qkvProj=135.868665 rope+cacheWrite=0.191855 attention(gqa,W=32)=4.497166 woProj+ffn+residuals=1322.774975
+жовт. 09, 2026 2:44:22 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 7/32 done in 1464,0ms  requestId=bench-1
+жовт. 09, 2026 2:44:23 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 7 breakdown (ms): qkvProj=90.95693 rope+cacheWrite=0.194089 attention(gqa,W=32)=4.442411 woProj+ffn+residuals=714.992613
+жовт. 09, 2026 2:44:23 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 8/32 done in 811,2ms  requestId=bench-1
+жовт. 09, 2026 2:44:24 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 8 breakdown (ms): qkvProj=91.032778 rope+cacheWrite=0.208477 attention(gqa,W=32)=4.481801 woProj+ffn+residuals=716.762611
+жовт. 09, 2026 2:44:24 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 9/32 done in 813,0ms  requestId=bench-1
+жовт. 09, 2026 2:44:25 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 9 breakdown (ms): qkvProj=138.183007 rope+cacheWrite=0.194718 attention(gqa,W=32)=4.465877 woProj+ffn+residuals=1364.38966
+жовт. 09, 2026 2:44:25 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 10/32 done in 1507,8ms  requestId=bench-1
+жовт. 09, 2026 2:44:26 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 10 breakdown (ms): qkvProj=90.531736 rope+cacheWrite=0.193182 attention(gqa,W=32)=4.52601 woProj+ffn+residuals=716.284766
+жовт. 09, 2026 2:44:26 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 11/32 done in 812,0ms  requestId=bench-1
+жовт. 09, 2026 2:44:27 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 11 breakdown (ms): qkvProj=90.41587 rope+cacheWrite=0.208617 attention(gqa,W=32)=4.436054 woProj+ffn+residuals=723.198523
+жовт. 09, 2026 2:44:27 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 12/32 done in 818,8ms  requestId=bench-1
+жовт. 09, 2026 2:44:28 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 12 breakdown (ms): qkvProj=137.754671 rope+cacheWrite=0.192553 attention(gqa,W=32)=4.571198 woProj+ffn+residuals=1309.422794
+жовт. 09, 2026 2:44:28 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 13/32 done in 1452,4ms  requestId=bench-1
+жовт. 09, 2026 2:44:29 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 13 breakdown (ms): qkvProj=90.944432 rope+cacheWrite=0.201563 attention(gqa,W=32)=4.459871 woProj+ffn+residuals=724.681409
+жовт. 09, 2026 2:44:29 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 14/32 done in 820,8ms  requestId=bench-1
+жовт. 09, 2026 2:44:30 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 14 breakdown (ms): qkvProj=92.516146 rope+cacheWrite=0.190807 attention(gqa,W=32)=4.552062 woProj+ffn+residuals=757.807741
+жовт. 09, 2026 2:44:30 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 15/32 done in 855,6ms  requestId=bench-1
+жовт. 09, 2026 2:44:31 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 15 breakdown (ms): qkvProj=135.482449 rope+cacheWrite=0.194369 attention(gqa,W=32)=4.469579 woProj+ffn+residuals=1320.050327
+жовт. 09, 2026 2:44:31 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 16/32 done in 1460,7ms  requestId=bench-1
+жовт. 09, 2026 2:44:32 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 16 breakdown (ms): qkvProj=93.478145 rope+cacheWrite=0.191226 attention(gqa,W=32)=4.494372 woProj+ffn+residuals=711.250408
+жовт. 09, 2026 2:44:32 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 17/32 done in 809,9ms  requestId=bench-1
+жовт. 09, 2026 2:44:33 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 17 breakdown (ms): qkvProj=91.109679 rope+cacheWrite=0.193671 attention(gqa,W=32)=4.44681 woProj+ffn+residuals=717.40834
+жовт. 09, 2026 2:44:33 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 18/32 done in 813,7ms  requestId=bench-1
+жовт. 09, 2026 2:44:34 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 18 breakdown (ms): qkvProj=137.067785 rope+cacheWrite=0.194439 attention(gqa,W=32)=4.490391 woProj+ffn+residuals=1331.544664
+жовт. 09, 2026 2:44:34 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 19/32 done in 1473,8ms  requestId=bench-1
+жовт. 09, 2026 2:44:35 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 19 breakdown (ms): qkvProj=95.177671 rope+cacheWrite=0.191994 attention(gqa,W=32)=4.538652 woProj+ffn+residuals=739.350815
+жовт. 09, 2026 2:44:35 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 20/32 done in 839,8ms  requestId=bench-1
+жовт. 09, 2026 2:44:36 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 20 breakdown (ms): qkvProj=91.438216 rope+cacheWrite=0.202889 attention(gqa,W=32)=4.478449 woProj+ffn+residuals=716.085276
+жовт. 09, 2026 2:44:36 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 21/32 done in 812,7ms  requestId=bench-1
+жовт. 09, 2026 2:44:38 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 21 breakdown (ms): qkvProj=177.80901 rope+cacheWrite=0.192902 attention(gqa,W=32)=4.550176 woProj+ffn+residuals=1357.701325
+жовт. 09, 2026 2:44:38 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 22/32 done in 1540,8ms  requestId=bench-1
+жовт. 09, 2026 2:44:38 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 22 breakdown (ms): qkvProj=92.046886 rope+cacheWrite=0.190598 attention(gqa,W=32)=4.487249 woProj+ffn+residuals=724.093107
+жовт. 09, 2026 2:44:38 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 23/32 done in 821,4ms  requestId=bench-1
+жовт. 09, 2026 2:44:39 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 23 breakdown (ms): qkvProj=92.42878 rope+cacheWrite=0.193741 attention(gqa,W=32)=4.706272 woProj+ffn+residuals=718.396975
+жовт. 09, 2026 2:44:39 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 24/32 done in 816,6ms  requestId=bench-1
+жовт. 09, 2026 2:44:41 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 24 breakdown (ms): qkvProj=150.296127 rope+cacheWrite=0.197372 attention(gqa,W=32)=4.794761 woProj+ffn+residuals=1400.638464
+жовт. 09, 2026 2:44:41 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 25/32 done in 1556,4ms  requestId=bench-1
+жовт. 09, 2026 2:44:42 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 25 breakdown (ms): qkvProj=94.406554 rope+cacheWrite=0.208337 attention(gqa,W=32)=4.496119 woProj+ffn+residuals=723.322979
+жовт. 09, 2026 2:44:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 26/32 done in 822,9ms  requestId=bench-1
+жовт. 09, 2026 2:44:42 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 26 breakdown (ms): qkvProj=92.42557 rope+cacheWrite=0.193461 attention(gqa,W=32)=4.495211 woProj+ffn+residuals=722.252661
+жовт. 09, 2026 2:44:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 27/32 done in 819,9ms  requestId=bench-1
+жовт. 09, 2026 2:44:44 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 27 breakdown (ms): qkvProj=137.800501 rope+cacheWrite=0.191994 attention(gqa,W=32)=4.468322 woProj+ffn+residuals=1319.597371
+жовт. 09, 2026 2:44:44 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 28/32 done in 1462,6ms  requestId=bench-1
+жовт. 09, 2026 2:44:45 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 28 breakdown (ms): qkvProj=137.04342 rope+cacheWrite=0.191017 attention(gqa,W=32)=4.49556 woProj+ffn+residuals=1397.452123
+жовт. 09, 2026 2:44:45 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 29/32 done in 1539,7ms  requestId=bench-1
+жовт. 09, 2026 2:44:47 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 29 breakdown (ms): qkvProj=137.805462 rope+cacheWrite=0.199677 attention(gqa,W=32)=4.466017 woProj+ffn+residuals=1323.118178
+жовт. 09, 2026 2:44:47 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 30/32 done in 1466,1ms  requestId=bench-1
+жовт. 09, 2026 2:44:48 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 30 breakdown (ms): qkvProj=138.553955 rope+cacheWrite=0.1936 attention(gqa,W=32)=4.509948 woProj+ffn+residuals=1341.10092
+жовт. 09, 2026 2:44:48 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 31/32 done in 1484,8ms  requestId=bench-1
+жовт. 09, 2026 2:44:50 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 31 breakdown (ms): qkvProj=137.162224 rope+cacheWrite=0.195766 attention(gqa,W=32)=4.474049 woProj+ffn+residuals=1364.126922
+жовт. 09, 2026 2:44:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 32/32 done in 1506,5ms  requestId=bench-1
+жовт. 09, 2026 2:44:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch DONE requestId=bench-1 totalMs=36973,1
+жовт. 09, 2026 2:44:50 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch EXIT (final node) requestId=bench-1 outputProjMs=58.874116 totalMs=37034.981522
+rep 1 depth=32768 decode_ms=[17319.33, 17420.86, 17271.26, 17300.43, 17330.78] median_decode_ms=17319.33 shift_ms=471.22 shift_step_ms=10155.37 ratio=0.586
+жовт. 09, 2026 2:46:59 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch ENTER requestId=bench-2 W=32 startPos=0 hasEmbeddings=true isFirstNode=true usingActivations=false hasOutputProj=true
+жовт. 09, 2026 2:46:59 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch START requestId=bench-2 W=32 L=32 startPos=0 lastPos=31 kvDim=1024
+жовт. 09, 2026 2:47:00 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 0 breakdown (ms): qkvProj=136.578027 rope+cacheWrite=0.20289 attention(gqa,W=32)=4.556256 woProj+ffn+residuals=1376.213353
+жовт. 09, 2026 2:47:00 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 1/32 done in 1518,1ms  requestId=bench-2
+жовт. 09, 2026 2:47:02 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 1 breakdown (ms): qkvProj=137.541284 rope+cacheWrite=0.191366 attention(gqa,W=32)=4.486693 woProj+ffn+residuals=1328.927254
+жовт. 09, 2026 2:47:02 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 2/32 done in 1471,7ms  requestId=bench-2
+жовт. 09, 2026 2:47:03 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 2 breakdown (ms): qkvProj=136.964533 rope+cacheWrite=0.191645 attention(gqa,W=32)=4.460084 woProj+ffn+residuals=1305.955035
+жовт. 09, 2026 2:47:03 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 3/32 done in 1448,2ms  requestId=bench-2
+жовт. 09, 2026 2:47:05 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 3 breakdown (ms): qkvProj=144.480676 rope+cacheWrite=0.192204 attention(gqa,W=32)=4.521056 woProj+ffn+residuals=1350.702274
+жовт. 09, 2026 2:47:05 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 4/32 done in 1500,4ms  requestId=bench-2
+жовт. 09, 2026 2:47:06 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 4 breakdown (ms): qkvProj=91.586844 rope+cacheWrite=0.192204 attention(gqa,W=32)=4.468186 woProj+ffn+residuals=722.046986
+жовт. 09, 2026 2:47:06 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 5/32 done in 818,8ms  requestId=bench-2
+жовт. 09, 2026 2:47:06 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 5 breakdown (ms): qkvProj=96.365477 rope+cacheWrite=0.21148 attention(gqa,W=32)=5.146138 woProj+ffn+residuals=719.579834
+жовт. 09, 2026 2:47:06 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 6/32 done in 821,8ms  requestId=bench-2
+жовт. 09, 2026 2:47:08 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 6 breakdown (ms): qkvProj=137.782311 rope+cacheWrite=0.190108 attention(gqa,W=32)=4.452821 woProj+ffn+residuals=1318.922972
+жовт. 09, 2026 2:47:08 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 7/32 done in 1461,9ms  requestId=bench-2
+жовт. 09, 2026 2:47:09 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 7 breakdown (ms): qkvProj=92.859778 rope+cacheWrite=0.217138 attention(gqa,W=32)=4.523989 woProj+ffn+residuals=723.435867
+жовт. 09, 2026 2:47:09 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 8/32 done in 821,5ms  requestId=bench-2
+жовт. 09, 2026 2:47:10 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 8 breakdown (ms): qkvProj=92.468945 rope+cacheWrite=0.236903 attention(gqa,W=32)=4.442415 woProj+ffn+residuals=721.044562
+жовт. 09, 2026 2:47:10 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 9/32 done in 818,8ms  requestId=bench-2
+жовт. 09, 2026 2:47:11 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 9 breakdown (ms): qkvProj=146.94113 rope+cacheWrite=0.190318 attention(gqa,W=32)=4.478313 woProj+ffn+residuals=1348.255414
+жовт. 09, 2026 2:47:11 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 10/32 done in 1500,3ms  requestId=bench-2
+жовт. 09, 2026 2:47:12 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 10 breakdown (ms): qkvProj=99.855603 rope+cacheWrite=0.203868 attention(gqa,W=32)=4.544453 woProj+ffn+residuals=713.182153
+жовт. 09, 2026 2:47:12 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 11/32 done in 818,2ms  requestId=bench-2
+жовт. 09, 2026 2:47:13 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 11 breakdown (ms): qkvProj=92.898612 rope+cacheWrite=0.188223 attention(gqa,W=32)=4.556885 woProj+ffn+residuals=717.230454
+жовт. 09, 2026 2:47:13 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 12/32 done in 815,3ms  requestId=bench-2
+жовт. 09, 2026 2:47:14 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 12 breakdown (ms): qkvProj=135.6196 rope+cacheWrite=0.187735 attention(gqa,W=32)=7.487019 woProj+ffn+residuals=1322.541573
+жовт. 09, 2026 2:47:14 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 13/32 done in 1466,3ms  requestId=bench-2
+жовт. 09, 2026 2:47:15 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 13 breakdown (ms): qkvProj=92.234908 rope+cacheWrite=0.200725 attention(gqa,W=32)=4.561564 woProj+ffn+residuals=731.140185
+жовт. 09, 2026 2:47:15 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 14/32 done in 828,6ms  requestId=bench-2
+жовт. 09, 2026 2:47:16 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 14 breakdown (ms): qkvProj=92.96161 rope+cacheWrite=0.189411 attention(gqa,W=32)=4.451913 woProj+ffn+residuals=722.870942
+жовт. 09, 2026 2:47:16 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 15/32 done in 821,0ms  requestId=bench-2
+жовт. 09, 2026 2:47:17 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 15 breakdown (ms): qkvProj=138.38484 rope+cacheWrite=0.27343 attention(gqa,W=32)=4.728206 woProj+ffn+residuals=1320.017796
+жовт. 09, 2026 2:47:17 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 16/32 done in 1463,8ms  requestId=bench-2
+жовт. 09, 2026 2:47:18 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 16 breakdown (ms): qkvProj=94.732515 rope+cacheWrite=0.188572 attention(gqa,W=32)=4.482504 woProj+ffn+residuals=712.707112
+жовт. 09, 2026 2:47:18 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 17/32 done in 812,6ms  requestId=bench-2
+жовт. 09, 2026 2:47:19 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 17 breakdown (ms): qkvProj=92.108217 rope+cacheWrite=0.188153 attention(gqa,W=32)=4.490536 woProj+ffn+residuals=720.770816
+жовт. 09, 2026 2:47:19 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 18/32 done in 818,1ms  requestId=bench-2
+жовт. 09, 2026 2:47:20 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 18 breakdown (ms): qkvProj=137.606248 rope+cacheWrite=0.189411 attention(gqa,W=32)=4.516097 woProj+ffn+residuals=1346.018865
+жовт. 09, 2026 2:47:20 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 19/32 done in 1488,8ms  requestId=bench-2
+жовт. 09, 2026 2:47:21 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 19 breakdown (ms): qkvProj=93.61994 rope+cacheWrite=0.192832 attention(gqa,W=32)=4.695591 woProj+ffn+residuals=725.308362
+жовт. 09, 2026 2:47:21 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 20/32 done in 824,3ms  requestId=bench-2
+жовт. 09, 2026 2:47:22 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 20 breakdown (ms): qkvProj=92.943524 rope+cacheWrite=0.264002 attention(gqa,W=32)=6.379611 woProj+ffn+residuals=709.210295
+жовт. 09, 2026 2:47:22 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 21/32 done in 809,3ms  requestId=bench-2
+жовт. 09, 2026 2:47:24 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 21 breakdown (ms): qkvProj=137.969775 rope+cacheWrite=0.190877 attention(gqa,W=32)=4.48879 woProj+ffn+residuals=1321.770299
+жовт. 09, 2026 2:47:24 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 22/32 done in 1464,9ms  requestId=bench-2
+жовт. 09, 2026 2:47:24 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 22 breakdown (ms): qkvProj=93.01672 rope+cacheWrite=0.190039 attention(gqa,W=32)=4.504853 woProj+ffn+residuals=711.631222
+жовт. 09, 2026 2:47:24 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 23/32 done in 809,8ms  requestId=bench-2
+жовт. 09, 2026 2:47:25 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 23 breakdown (ms): qkvProj=104.378341 rope+cacheWrite=0.190039 attention(gqa,W=32)=4.486695 woProj+ffn+residuals=731.613745
+жовт. 09, 2026 2:47:25 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 24/32 done in 841,1ms  requestId=bench-2
+жовт. 09, 2026 2:47:27 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 24 breakdown (ms): qkvProj=136.917614 rope+cacheWrite=0.298642 attention(gqa,W=32)=4.612479 woProj+ffn+residuals=1332.580402
+жовт. 09, 2026 2:47:27 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 25/32 done in 1474,9ms  requestId=bench-2
+жовт. 09, 2026 2:47:27 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 25 breakdown (ms): qkvProj=91.10327 rope+cacheWrite=0.206522 attention(gqa,W=32)=4.43124 woProj+ffn+residuals=716.220803
+жовт. 09, 2026 2:47:27 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 26/32 done in 812,4ms  requestId=bench-2
+жовт. 09, 2026 2:47:28 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 26 breakdown (ms): qkvProj=93.542978 rope+cacheWrite=0.18969 attention(gqa,W=32)=4.469304 woProj+ffn+residuals=720.48722
+жовт. 09, 2026 2:47:28 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 27/32 done in 819,1ms  requestId=bench-2
+жовт. 09, 2026 2:47:30 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 27 breakdown (ms): qkvProj=195.110895 rope+cacheWrite=0.204286 attention(gqa,W=32)=4.433545 woProj+ffn+residuals=1352.109461
+жовт. 09, 2026 2:47:30 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 28/32 done in 1552,4ms  requestId=bench-2
+жовт. 09, 2026 2:47:31 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 28 breakdown (ms): qkvProj=138.619238 rope+cacheWrite=0.190248 attention(gqa,W=32)=4.55514 woProj+ffn+residuals=1384.199799
+жовт. 09, 2026 2:47:31 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 29/32 done in 1528,0ms  requestId=bench-2
+жовт. 09, 2026 2:47:33 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 29 breakdown (ms): qkvProj=139.96313 rope+cacheWrite=0.189201 attention(gqa,W=32)=4.467209 woProj+ffn+residuals=1311.775883
+жовт. 09, 2026 2:47:33 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 30/32 done in 1457,0ms  requestId=bench-2
+жовт. 09, 2026 2:47:34 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 30 breakdown (ms): qkvProj=138.557988 rope+cacheWrite=0.188223 attention(gqa,W=32)=4.499895 woProj+ffn+residuals=1315.894311
+жовт. 09, 2026 2:47:34 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 31/32 done in 1459,6ms  requestId=bench-2
+жовт. 09, 2026 2:47:36 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 31 breakdown (ms): qkvProj=145.637972 rope+cacheWrite=0.191785 attention(gqa,W=32)=4.489768 woProj+ffn+residuals=1344.164665
+жовт. 09, 2026 2:47:36 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 32/32 done in 1495,0ms  requestId=bench-2
+жовт. 09, 2026 2:47:36 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch DONE requestId=bench-2 totalMs=36871,0
+жовт. 09, 2026 2:47:36 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch EXIT (final node) requestId=bench-2 outputProjMs=54.45508 totalMs=36929.816432
+rep 2 depth=32768 decode_ms=[17368.16, 17369.11, 17369.57, 17349.62, 17262.10] median_decode_ms=17368.16 shift_ms=467.39 shift_step_ms=10070.34 ratio=0.580
+жовт. 09, 2026 2:49:40 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch ENTER requestId=bench-3 W=32 startPos=0 hasEmbeddings=true isFirstNode=true usingActivations=false hasOutputProj=true
+жовт. 09, 2026 2:49:40 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch START requestId=bench-3 W=32 L=32 startPos=0 lastPos=31 kvDim=1024
+жовт. 09, 2026 2:49:42 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 0 breakdown (ms): qkvProj=138.706053 rope+cacheWrite=0.192204 attention(gqa,W=32)=4.481529 woProj+ffn+residuals=1471.78815
+жовт. 09, 2026 2:49:42 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 1/32 done in 1615,7ms  requestId=bench-3
+жовт. 09, 2026 2:49:43 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 1 breakdown (ms): qkvProj=142.693662 rope+cacheWrite=0.190528 attention(gqa,W=32)=4.490469 woProj+ffn+residuals=1311.44251
+жовт. 09, 2026 2:49:43 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 2/32 done in 1459,3ms  requestId=bench-3
+жовт. 09, 2026 2:49:45 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 2 breakdown (ms): qkvProj=138.409018 rope+cacheWrite=0.190458 attention(gqa,W=32)=4.456246 woProj+ffn+residuals=1329.792499
+жовт. 09, 2026 2:49:45 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 3/32 done in 1473,5ms  requestId=bench-3
+жовт. 09, 2026 2:49:46 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 3 breakdown (ms): qkvProj=155.601796 rope+cacheWrite=0.18948 attention(gqa,W=32)=4.496196 woProj+ffn+residuals=1312.395303
+жовт. 09, 2026 2:49:46 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 4/32 done in 1473,1ms  requestId=bench-3
+жовт. 09, 2026 2:49:47 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 4 breakdown (ms): qkvProj=94.719511 rope+cacheWrite=0.193741 attention(gqa,W=32)=4.495986 woProj+ffn+residuals=729.912676
+жовт. 09, 2026 2:49:47 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 5/32 done in 829,8ms  requestId=bench-3
+жовт. 09, 2026 2:49:48 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 5 breakdown (ms): qkvProj=92.720574 rope+cacheWrite=0.192344 attention(gqa,W=32)=4.492005 woProj+ffn+residuals=713.219269
+жовт. 09, 2026 2:49:48 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 6/32 done in 811,1ms  requestId=bench-3
+жовт. 09, 2026 2:49:49 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 6 breakdown (ms): qkvProj=136.924955 rope+cacheWrite=0.191506 attention(gqa,W=32)=4.433548 woProj+ffn+residuals=1329.179311
+жовт. 09, 2026 2:49:49 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 7/32 done in 1471,2ms  requestId=bench-3
+жовт. 09, 2026 2:49:50 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 7 breakdown (ms): qkvProj=93.014329 rope+cacheWrite=0.188432 attention(gqa,W=32)=4.486977 woProj+ffn+residuals=730.238216
+жовт. 09, 2026 2:49:50 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 8/32 done in 828,5ms  requestId=bench-3
+жовт. 09, 2026 2:49:51 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 8 breakdown (ms): qkvProj=91.51015 rope+cacheWrite=0.189201 attention(gqa,W=32)=4.582589 woProj+ffn+residuals=712.967219
+жовт. 09, 2026 2:49:51 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 9/32 done in 809,7ms  requestId=bench-3
+жовт. 09, 2026 2:49:52 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 9 breakdown (ms): qkvProj=137.830593 rope+cacheWrite=0.191855 attention(gqa,W=32)=4.626241 woProj+ffn+residuals=1330.806984
+жовт. 09, 2026 2:49:52 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 10/32 done in 1473,9ms  requestId=bench-3
+жовт. 09, 2026 2:49:53 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 10 breakdown (ms): qkvProj=94.795711 rope+cacheWrite=0.18941 attention(gqa,W=32)=4.635529 woProj+ffn+residuals=706.075671
+жовт. 09, 2026 2:49:53 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 11/32 done in 806,1ms  requestId=bench-3
+жовт. 09, 2026 2:49:54 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 11 breakdown (ms): qkvProj=92.442746 rope+cacheWrite=0.192624 attention(gqa,W=32)=4.779752 woProj+ffn+residuals=710.554896
+жовт. 09, 2026 2:49:54 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 12/32 done in 808,4ms  requestId=bench-3
+жовт. 09, 2026 2:49:55 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 12 breakdown (ms): qkvProj=140.405586 rope+cacheWrite=0.19402 attention(gqa,W=32)=4.47224 woProj+ffn+residuals=1344.774838
+жовт. 09, 2026 2:49:55 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 13/32 done in 1490,3ms  requestId=bench-3
+жовт. 09, 2026 2:49:56 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 13 breakdown (ms): qkvProj=93.146751 rope+cacheWrite=0.211829 attention(gqa,W=32)=4.484253 woProj+ffn+residuals=711.571098
+жовт. 09, 2026 2:49:56 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 14/32 done in 809,9ms  requestId=bench-3
+жовт. 09, 2026 2:49:57 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 14 breakdown (ms): qkvProj=93.535559 rope+cacheWrite=0.188922 attention(gqa,W=32)=4.457503 woProj+ffn+residuals=716.627495
+жовт. 09, 2026 2:49:57 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 15/32 done in 815,3ms  requestId=bench-3
+жовт. 09, 2026 2:49:58 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 15 breakdown (ms): qkvProj=138.593127 rope+cacheWrite=0.196395 attention(gqa,W=32)=4.535027 woProj+ffn+residuals=1316.50072
+жовт. 09, 2026 2:49:58 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 16/32 done in 1460,3ms  requestId=bench-3
+жовт. 09, 2026 2:49:59 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 16 breakdown (ms): qkvProj=93.033888 rope+cacheWrite=0.2119 attention(gqa,W=32)=4.481878 woProj+ffn+residuals=710.67336
+жовт. 09, 2026 2:49:59 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 17/32 done in 808,8ms  requestId=bench-3
+жовт. 09, 2026 2:50:00 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 17 breakdown (ms): qkvProj=94.110916 rope+cacheWrite=0.192065 attention(gqa,W=32)=4.463719 woProj+ffn+residuals=733.825658
+жовт. 09, 2026 2:50:00 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 18/32 done in 833,0ms  requestId=bench-3
+жовт. 09, 2026 2:50:02 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 18 breakdown (ms): qkvProj=136.955761 rope+cacheWrite=0.189969 attention(gqa,W=32)=4.526856 woProj+ffn+residuals=1326.401486
+жовт. 09, 2026 2:50:02 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 19/32 done in 1468,6ms  requestId=bench-3
+жовт. 09, 2026 2:50:02 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 19 breakdown (ms): qkvProj=93.587314 rope+cacheWrite=0.194719 attention(gqa,W=32)=5.646906 woProj+ffn+residuals=719.781417
+жовт. 09, 2026 2:50:02 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 20/32 done in 819,9ms  requestId=bench-3
+жовт. 09, 2026 2:50:03 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 20 breakdown (ms): qkvProj=92.56141 rope+cacheWrite=0.188712 attention(gqa,W=32)=4.478037 woProj+ffn+residuals=707.570306
+жовт. 09, 2026 2:50:03 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 21/32 done in 805,3ms  requestId=bench-3
+жовт. 09, 2026 2:50:05 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 21 breakdown (ms): qkvProj=138.36782 rope+cacheWrite=0.196046 attention(gqa,W=32)=4.479783 woProj+ffn+residuals=1339.377798
+жовт. 09, 2026 2:50:05 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 22/32 done in 1482,9ms  requestId=bench-3
+жовт. 09, 2026 2:50:06 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 22 breakdown (ms): qkvProj=101.785606 rope+cacheWrite=0.188363 attention(gqa,W=32)=4.567085 woProj+ffn+residuals=711.801178
+жовт. 09, 2026 2:50:06 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 23/32 done in 818,8ms  requestId=bench-3
+жовт. 09, 2026 2:50:06 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 23 breakdown (ms): qkvProj=94.029343 rope+cacheWrite=0.18962 attention(gqa,W=32)=4.480621 woProj+ffn+residuals=708.29904
+жовт. 09, 2026 2:50:06 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 24/32 done in 807,4ms  requestId=bench-3
+жовт. 09, 2026 2:50:08 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 24 breakdown (ms): qkvProj=146.379008 rope+cacheWrite=0.192693 attention(gqa,W=32)=4.522945 woProj+ffn+residuals=1403.635827
+жовт. 09, 2026 2:50:08 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 25/32 done in 1555,2ms  requestId=bench-3
+жовт. 09, 2026 2:50:09 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 25 breakdown (ms): qkvProj=103.367101 rope+cacheWrite=0.190039 attention(gqa,W=32)=4.439135 woProj+ffn+residuals=758.803147
+жовт. 09, 2026 2:50:09 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 26/32 done in 867,3ms  requestId=bench-3
+жовт. 09, 2026 2:50:10 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 26 breakdown (ms): qkvProj=93.566782 rope+cacheWrite=0.191157 attention(gqa,W=32)=4.52518 woProj+ffn+residuals=719.241557
+жовт. 09, 2026 2:50:10 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 27/32 done in 818,0ms  requestId=bench-3
+жовт. 09, 2026 2:50:11 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 27 breakdown (ms): qkvProj=157.829827 rope+cacheWrite=0.18997 attention(gqa,W=32)=4.475592 woProj+ffn+residuals=1321.809649
+жовт. 09, 2026 2:50:11 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 28/32 done in 1484,8ms  requestId=bench-3
+жовт. 09, 2026 2:50:13 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 28 breakdown (ms): qkvProj=140.538363 rope+cacheWrite=0.209875 attention(gqa,W=32)=4.518265 woProj+ffn+residuals=1338.409408
+жовт. 09, 2026 2:50:13 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 29/32 done in 1484,2ms  requestId=bench-3
+жовт. 09, 2026 2:50:14 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 29 breakdown (ms): qkvProj=137.643079 rope+cacheWrite=0.190039 attention(gqa,W=32)=4.490329 woProj+ffn+residuals=1319.191508
+жовт. 09, 2026 2:50:14 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 30/32 done in 1461,9ms  requestId=bench-3
+жовт. 09, 2026 2:50:15 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 30 breakdown (ms): qkvProj=138.617649 rope+cacheWrite=0.190039 attention(gqa,W=32)=4.522107 woProj+ffn+residuals=1353.020363
+жовт. 09, 2026 2:50:15 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 31/32 done in 1496,8ms  requestId=bench-3
+жовт. 09, 2026 2:50:17 ПП cab.ml.juno.node.LlamaTransformerHandler transformerLayerBatch
+INFO: [prefill]   layer 31 breakdown (ms): qkvProj=143.228107 rope+cacheWrite=0.273011 attention(gqa,W=32)=4.535098 woProj+ffn+residuals=1327.487591
+жовт. 09, 2026 2:50:17 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] layer 32/32 done in 1475,9ms  requestId=bench-3
+жовт. 09, 2026 2:50:17 ПП cab.ml.juno.node.LlamaTransformerHandler runLayersBatch
+INFO: [prefill] runLayersBatch DONE requestId=bench-3 totalMs=36932,4
+жовт. 09, 2026 2:50:17 ПП cab.ml.juno.node.LlamaTransformerHandler forwardBatch
+INFO: [prefill] forwardBatch EXIT (final node) requestId=bench-3 outputProjMs=58.710984 totalMs=36993.991345
+rep 3 depth=32768 decode_ms=[17341.81, 17379.54, 17322.82, 17301.75, 17243.82] median_decode_ms=17322.82 shift_ms=473.29 shift_step_ms=10066.48 ratio=0.581
+RESULT median_ratio=0.581 min=0.580 max=0.586 reps=3

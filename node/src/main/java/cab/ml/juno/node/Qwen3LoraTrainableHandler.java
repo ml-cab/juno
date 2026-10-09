@@ -67,6 +67,8 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 	// ── Frozen weights ────────────────────────────────────────────────────────
 
 	private final Qwen3Config cfg;
+	/** Per local layer: its attention window ({@link SlidingWindow}), 0 for none. */
+	private final int[] layerWindows;
 	private final int startLayer, endLayer;
 	private final boolean hasEmbeddings, hasOutputProj;
 
@@ -133,6 +135,7 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		this.cfg = cfg;
 		this.loraAdapters = adapters;
 		this.startLayer = ctx.startLayer();
+		this.layerWindows = SlidingWindow.forShard(r, ctx, log);
 		this.endLayer = ctx.endLayer();
 		this.hasEmbeddings = ctx.hasEmbeddings();
 		this.hasOutputProj = ctx.hasOutputProjection();
@@ -385,7 +388,7 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		int seqLen = pos + 1;
 		float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
 		float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
-		float[] attnOut = Qwen3TransformerHandler.gqa(cfg, q, kView, vView, seqLen);
+		float[] attnOut = Qwen3TransformerHandler.gqa(cfg, q, kView, vView, seqLen, layerWindows[li]);
 		float[] attnProj = LoraResidentWeights.matVec(wo[li], woDev != null ? woDev[li] : null, attnOut, H, qDim);
 		applyLoraInPlace(attnProj, li, "wo", attnOut);
 		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
@@ -420,7 +423,7 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		System.arraycopy(k, 0, kCacheLayer, pos * kvDim, kvDim);
 		System.arraycopy(v, 0, vCacheLayer, pos * kvDim, kvDim);
 
-		float[] attnOut = Qwen3TransformerHandler.gqa(cfg, q, kCacheLayer, vCacheLayer, pos + 1);
+		float[] attnOut = Qwen3TransformerHandler.gqa(cfg, q, kCacheLayer, vCacheLayer, pos + 1, layerWindows[li]);
 		float[] attnProj = LoraResidentWeights.matVec(wo[li], woDev != null ? woDev[li] : null, attnOut, H, qDim);
 		applyLoraInPlace(attnProj, li, "wo", attnOut);
 		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
@@ -659,12 +662,14 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 		float scale = (float) (1.0 / Math.sqrt(Hd));
 		float[] attnOut = new float[qDim];
 		float[][] attnW = new float[NH][seqLen];
+		// Rows before the layer's window keep weight 0, so backward sends them no gradient.
+		int lo = GqaMath.firstKey(seqLen, layerWindows[li]);
 		float[] scores = new float[seqLen];
 		for (int h = 0; h < NH; h++) {
 			int kvHead = h / gqaR;
 			int qBase = h * Hd;
 			int kBase = kvHead * Hd;
-			for (int t = 0; t < seqLen; t++) {
+			for (int t = lo; t < seqLen; t++) {
 				float dot = 0f;
 				int kOff = t * kvDim + kBase;
 				for (int d = 0; d < Hd; d++)
@@ -672,20 +677,20 @@ public final class Qwen3LoraTrainableHandler implements LoraTrainingHandler {
 				scores[t] = dot * scale;
 			}
 			float max = Float.NEGATIVE_INFINITY;
-			for (int t = 0; t < seqLen; t++)
+			for (int t = lo; t < seqLen; t++)
 				if (scores[t] > max)
 					max = scores[t];
 			float sum = 0f;
-			for (int t = 0; t < seqLen; t++) {
+			for (int t = lo; t < seqLen; t++) {
 				scores[t] = (float) Math.exp(scores[t] - max);
 				sum += scores[t];
 			}
-			for (int t = 0; t < seqLen; t++) {
+			for (int t = lo; t < seqLen; t++) {
 				scores[t] /= sum;
 				attnW[h][t] = scores[t];
 			}
 			int outBase = h * Hd;
-			for (int t = 0; t < seqLen; t++) {
+			for (int t = lo; t < seqLen; t++) {
 				int vOff = t * kvDim + kBase;
 				float w = scores[t];
 				for (int d = 0; d < Hd; d++)

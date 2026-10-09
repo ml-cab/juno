@@ -175,6 +175,11 @@ final class PrefillWindowRegion implements AutoCloseable {
 	private final CudaMatVec mv;
 	private final Shape shape;
 	private final Layer[] layers;
+	/**
+	 * Per layer: the attention window ({@link SlidingWindow}), 0 for none. Set once
+	 * by {@link #withWindows} before the handler that opened the region is used.
+	 */
+	private int[] attentionWindows;
 	private final DeviceFloatMatrix[] attnNormDev;
 	private final DeviceFloatMatrix[] ffnNormDev;
 	private final DeviceFloatMatrix[] bqDev;
@@ -350,6 +355,18 @@ final class PrefillWindowRegion implements AutoCloseable {
 	/** Device bytes a window of {@code rows} rows holds on this region ({@link PrefillWindowFootprint}). */
 	long windowDeviceBytes(int rows) {
 		return PrefillWindowFootprint.bytes(shape, fusedQkv, rows);
+	}
+
+	/**
+	 * Gives each layer its attention window ({@link SlidingWindow#forShard}); returns
+	 * this. Call once, right after creating the region and before it runs.
+	 */
+	PrefillWindowRegion withWindows(int[] layerWindows) {
+		if (layerWindows.length != layers.length)
+			throw new IllegalArgumentException("windows for " + layerWindows.length + " layers, region has "
+					+ layers.length);
+		this.attentionWindows = layerWindows.clone();
+		return this;
 	}
 
 	/** Whether layer {@code li} (0-based within the shard) runs on the region. */
@@ -541,7 +558,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 					enterLayer(xHost, w);
 					attentionInputs(li, w, startPos);
 					if (inside)
-						inside = attendInside(mirror, startPos, w);
+						inside = attendInside(mirror, startPos, w, attentionWindows == null ? 0 : attentionWindows[li]);
 					if (!inside) {
 						if (layers[li].qkv() != null && rope == null)
 							downloadFused(w, qOut, kOut, vOut);
@@ -756,7 +773,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 		 * mirror into {@link #attn}. Returns {@code false}, retiring the mirror, when
 		 * the device runs out of memory for the mirror's growth.
 		 */
-		private boolean attendInside(DeviceKvCache mirror, int startPos, int w) {
+		private boolean attendInside(DeviceKvCache mirror, int startPos, int w, int window) {
 			try {
 				int mark = spans.begin(stream, w);
 				mirror.writeWindowOnDevice(startPos, w, k.devicePointer(), v.devicePointer(), kernels, stream);
@@ -774,7 +791,7 @@ final class PrefillWindowRegion implements AutoCloseable {
 				mark = spans.begin(stream, w);
 				attention.launch(q.devicePointer(), tables, tables.asSlice(ptrBytes), tables.asSlice(2 * ptrBytes),
 						attn.devicePointer(), w, shape.numHeads(), shape.gqaRatio(), shape.headDim(), shape.kvDim(),
-						GqaAttentionKernel.rowsPerBlock(true, w), 0, stream);
+						GqaAttentionKernel.rowsPerBlock(true, w), window, stream);
 				spans.compute(DeviceComputeEvent.GQA_ATTENTION_REGION, w, mark, stream);
 				attn.markWritten(w);
 				return true;

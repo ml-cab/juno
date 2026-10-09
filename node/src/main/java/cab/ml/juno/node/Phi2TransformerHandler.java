@@ -77,6 +77,8 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
     private final LlamaConfig cfg;
     /** Number of head dimensions that receive RoPE (phi2.rope.dimension_count). */
     private final int ropeDim;
+    /** Per local layer: its attention window ({@link SlidingWindow}), 0 for none. */
+    private final int[] layerWindows;
     private final int startLayer;
     private final int endLayer;
     private final boolean hasEmbeddings;
@@ -149,6 +151,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         this.endLayer   = ctx.endLayer();
         this.hasEmbeddings  = ctx.hasEmbeddings();
         this.hasOutputProj  = ctx.hasOutputProjection();
+        this.layerWindows = SlidingWindow.forShard(r, ctx, log);
         this.kvLayout = SessionKvLayout.fromEnv(cfg.kvDim());
         log.info(kvLayout.policySummary());
 
@@ -438,7 +441,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
             int seqLen = positions[b] + 1;
             float[] kView = kCacheLayers[b].viewForAttention(seqLen, kDequant);
             float[] vView = vCacheLayers[b].viewForAttention(seqLen, vDequant);
-            attnOut[b] = gqa(q[b], kView, vView, seqLen);
+            attnOut[b] = gqa(q[b], kView, vView, seqLen, layerWindows[li]);
         }
 
         float[][] attnProj = new float[N][H];
@@ -620,7 +623,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
             int seqLen = startPos + b + 1;
             float[] kView = kCacheLayer.viewForAttention(seqLen, kDequant);
             float[] vView = vCacheLayer.viewForAttention(seqLen, vDequant);
-            attnOut[b] = gqa(q[b], kView, vView, seqLen);
+            attnOut[b] = gqa(q[b], kView, vView, seqLen, layerWindows[li]);
         }
 
         long t3 = System.nanoTime(); // attention (gqa over all W positions) done
@@ -857,7 +860,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         int seqLen = pos + 1;
         float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
         float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
-        float[] attnOut  = gqa(q, kView, vView, seqLen);
+        float[] attnOut  = gqa(q, kView, vView, seqLen, layerWindows[li]);
         float[] attnProj = LlamaTransformerHandler.matVec(wo[li], attnOut, H, H);
         if (woBias[li] != null)
             for (int i = 0; i < H; i++) attnProj[i] += woBias[li][i];
@@ -922,38 +925,12 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         return logits;
     }
 
-    // ── GQA (identical logic to LlamaTransformerHandler) ─────────────────────
+    // ── GQA (GqaMath; window 0 for all keys) ─────────────────────────────────
 
-    private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen) {
-        int H    = cfg.numHeads();
-        int Hd   = cfg.headDim();
-        int gqaR = cfg.gqaRatio();
-        float scale  = (float)(1.0 / Math.sqrt(Hd));
-        float[] out    = new float[H * Hd];
-        float[] scores = new float[seqLen];
-
-        for (int h = 0; h < H; h++) {
-            int kvHead = h / gqaR;
-            int qBase  = h * Hd;
-            int kBase  = kvHead * Hd;
-
-            for (int t = 0; t < seqLen; t++) {
-                float dot = 0f;
-                int kOff = t * cfg.kvDim() + kBase;
-                for (int d = 0; d < Hd; d++)
-                    dot += q[qBase + d] * kCache[kOff + d];
-                scores[t] = dot * scale;
-            }
-            LlamaTransformerHandler.softmax(scores, seqLen);
-
-            int outBase = h * Hd;
-            for (int t = 0; t < seqLen; t++) {
-                int vOff = t * cfg.kvDim() + kBase;
-                float w = scores[t];
-                for (int d = 0; d < Hd; d++)
-                    out[outBase + d] += w * vCache[vOff + d];
-            }
-        }
+    private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen, int window) {
+        float[] out = new float[cfg.numHeads() * cfg.headDim()];
+        GqaMath.attend(q, kCache, vCache, seqLen, out, new float[seqLen], cfg.numHeads(), cfg.headDim(),
+                cfg.gqaRatio(), cfg.kvDim(), window);
         return out;
     }
 

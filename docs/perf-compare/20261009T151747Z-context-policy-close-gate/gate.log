@@ -1,0 +1,96 @@
+baseline jar sha256: 620a5caf606538b6
+candidate jar sha256: b12fbfb34a342e70
+=== gpu-ab: baseline 1 (04:35:19)
+    exit=0  (log: dist/context-policy-close/runs/gpu-ab-baseline-1.log)
+=== gpu-ab: candidate 1 (04:37:51)
+    exit=0  (log: dist/context-policy-close/runs/gpu-ab-candidate-1.log)
+=== gpu-ab: baseline 2 (04:40:25)
+    exit=0  (log: dist/context-policy-close/runs/gpu-ab-baseline-2.log)
+=== gpu-ab: candidate 2 (04:42:53)
+    exit=0  (log: dist/context-policy-close/runs/gpu-ab-candidate-2.log)
+=== gpu-ab: baseline 3 (04:45:26)
+    exit=0  (log: dist/context-policy-close/runs/gpu-ab-baseline-3.log)
+=== gpu-ab: candidate 3 (04:47:59)
+    exit=0  (log: dist/context-policy-close/runs/gpu-ab-candidate-3.log)
+
+gpu-ab: clock_pinned across the six runs: true (must be only: true)
+model              pp_A       pp_B  pp_B/A       tg_A     tg_B  tg_B/A    alloc/tok_A  alloc/tok_B    B/A      gc_A    gc_B
+tinyllama       3050.27    3043.07   0.998     147.69   148.39   1.005       39016376     39006430  1.000       0.0     0.0
+qwen2.5         1267.22    1266.44   0.999      30.49    30.47   0.999      143549156    143563196  1.000       0.0     0.0
+Phi              713.94     702.16   0.983      51.62    51.46   0.997      179043702    179042731  1.000      11.9    11.5
+mistral          557.47     550.08   0.987      37.98    37.14   0.978      192985419    192559364  0.998       0.0     0.0
+
+gpu-ab: greedy output (temperature 0), candidate vs baseline per run, and baseline run 1 vs runs 2..3
+  tinyllama: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  qwen2.5: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  Phi: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  mistral: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+=== cpu-ab: baseline 1 (04:50:36)
+    exit=0  (log: dist/context-policy-close/runs/cpu-ab-baseline-1.log)
+=== cpu-ab: candidate 1 (05:11:31)
+    exit=0  (log: dist/context-policy-close/runs/cpu-ab-candidate-1.log)
+=== cpu-ab: baseline 2 (05:32:27)
+    exit=0  (log: dist/context-policy-close/runs/cpu-ab-baseline-2.log)
+=== cpu-ab: candidate 2 (05:53:17)
+    exit=0  (log: dist/context-policy-close/runs/cpu-ab-candidate-2.log)
+=== cpu-ab: baseline 3 (06:14:08)
+    exit=0  (log: dist/context-policy-close/runs/cpu-ab-baseline-3.log)
+=== cpu-ab: candidate 3 (06:35:04)
+    exit=0  (log: dist/context-policy-close/runs/cpu-ab-candidate-3.log)
+
+cpu-ab: clock_pinned across the six runs: true (must be only: true)
+model              pp_A       pp_B  pp_B/A       tg_A     tg_B  tg_B/A    alloc/tok_A  alloc/tok_B    B/A      gc_A    gc_B
+tinyllama          6.21       6.16   0.993       3.33     3.33   0.999       65159433     65136550  1.000       7.7     7.6
+mistral            0.87       0.87   1.001       0.00     0.00   0.000      273138873    273118698  1.000       0.0     0.0
+  FAIL: mistral generation below 0.95x
+
+cpu-ab: greedy output (temperature 0), candidate vs baseline per run, and baseline run 1 vs runs 2..3
+  tinyllama: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  mistral: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+
+Top 10 hot methods (jdk.ExecutionSample), run 1 of each jar, reported not gated:
+--- tinyllama baseline
+2991.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecQ6Kraw_0
+1976.0	cab_ml_juno_node_GgufReader_f16ToF32
+1704.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecQ4KrawInto_0
+604.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_sgemmQ4KWeightStationary_0
+34.0	java_util_concurrent_ForkJoinPool_deactivate
+23.0	cab_ml_juno_node_GqaMath_attend
+15.0	java_util_concurrent_ForkJoinPool_awaitWork
+9.0	java_util_concurrent_ForkJoinPool_runWorker
+5.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+5.0	cab_ml_juno_node_LlamaTransformerHandler_softmax
+--- tinyllama candidate
+2932.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecQ6Kraw_0
+2046.0	cab_ml_juno_node_GgufReader_f16ToF32
+1701.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecQ4KrawInto_0
+595.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_sgemmQ4KWeightStationary_0
+36.0	cab_ml_juno_node_GqaMath_attend
+15.0	java_util_concurrent_ForkJoinPool_awaitWork
+15.0	java_util_concurrent_ForkJoinPool_runWorker
+12.0	java_util_concurrent_ForkJoinPool_deactivate
+11.0	cab_ml_juno_node_LlamaTransformerHandler_ffn
+9.0	java_util_concurrent_ForkJoinTask_doExec
+--- mistral baseline
+32214.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecQ4KrawInto_0
+9712.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecQ6Kraw_0
+1727.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_sgemmQ4KWeightStationary_0
+953.0	cab_ml_juno_node_GgufReader_f16ToF32
+79.0	cab_ml_juno_node_GqaMath_attend
+78.0	java_util_concurrent_ForkJoinPool_deactivate
+29.0	java_util_concurrent_ForkJoinPool_runWorker
+29.0	java_util_stream_ForEachOps_ForEachOp_OfInt_accept
+24.0	cab_ml_juno_node_LlamaTransformerHandler__Lambda_0x000000003930ede8_accept
+16.0	java_util_concurrent_ForkJoinPool_awaitWork
+--- mistral candidate
+32467.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecQ4KrawInto_0
+9407.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_matVecQ6Kraw_0
+1693.0	cab_ml_juno_node_LlamaTransformerHandler_lambda_sgemmQ4KWeightStationary_0
+980.0	cab_ml_juno_node_GgufReader_f16ToF32
+65.0	java_util_concurrent_ForkJoinPool_deactivate
+50.0	cab_ml_juno_node_GqaMath_attend
+34.0	java_util_stream_ForEachOps_ForEachOp_OfInt_accept
+28.0	java_util_concurrent_ForkJoinPool_runWorker
+22.0	java_util_concurrent_ForkJoinPool_awaitWork
+17.0	cab_ml_juno_node_LlamaTransformerHandler__Lambda_0x000000009130fd88_accept
+GATES MISSED (see FAIL lines)
