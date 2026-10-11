@@ -604,7 +604,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		int kvDim = cfg.kvDim();
 		int lastPos = startPos + W - 1;
 
-		boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+		boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 		SessionKvTensor[] kCache = kvCacheK.get(requestId);
 		SessionKvTensor[] vCache = kvCacheV.get(requestId);
@@ -665,7 +665,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			String requestId = requestIds.get(i);
 			int pos = positions[i];
 
-			boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+			boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 			SessionKvTensor[] kCache = kvCacheK.get(requestId);
 			SessionKvTensor[] vCache = kvCacheV.get(requestId);
@@ -1064,6 +1064,10 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			backend.sgemmInto(half[li], X, Y);
 			return;
 		}
+		if (CpuKernelSelection.integerGemm(quant.type(), cols)) {
+			CpuIntegerGemm.sgemmInto(quant, X, Y, 0, rows, cols);
+			return;
+		}
 		for (int b = 0; b < X.length; b++)
 			System.arraycopy(LlamaTransformerHandler.matVec(quant, X[b], rows, cols), 0, Y[b], 0, rows);
 	}
@@ -1164,7 +1168,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		int L = endLayer - startLayer;
 		int kvDim = cfg.kvDim();
 
-		boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+		boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 		SessionKvTensor[] kCache = kvCacheK.get(requestId);
 		SessionKvTensor[] vCache = kvCacheV.get(requestId);

@@ -453,14 +453,16 @@ public final class ClusterHarness implements AutoCloseable {
 		// N_nodes × (cores-1) threads to contend for the same physical cores.
 		int coresPerNode = Math.max(1, Runtime.getRuntime().availableProcessors() / specs.size());
 		cmd.add("-Djava.util.concurrent.ForkJoinPool.common.parallelism=" + coresPerNode);
+		// CPU matmul threads per node: --threads (recorded as -Djuno.threads by
+		// ConsoleMain) applies to every node; without it each node takes the same
+		// even share of the cores as the common pool above.
+		cmd.add("-D" + cab.ml.juno.node.CpuThreads.PROPERTY + "=" + nodeThreads(coresPerNode));
 
 		// JUNO_JVM_OPTS: optional, space-separated extra JVM arguments, same
 		// mechanism as scripts/run.sh and scripts/run.bat use for the
 		// coordinator JVM. Each forked node JVM here needs it applied
 		// independently too, since it is a separate process not inherited
-		// from the coordinator. Useful, for example, to override
-		// SimdThreadPool's row-parallel pool size per node:
-		// JUNO_JVM_OPTS="-Djuno.simd.pool.size=4" for cluster mode.
+		// from the coordinator.
 		String extraJvmOpts = System.getenv("JUNO_JVM_OPTS");
 		if (extraJvmOpts != null && !extraJvmOpts.isBlank()) {
 			for (String opt : extraJvmOpts.trim().split("\\s+")) {
@@ -581,5 +583,26 @@ public final class ClusterHarness implements AutoCloseable {
 	}
 
 	private record NodeSpec(String nodeId, String host, int port, ProcessPipelineClient.ShardConfig pipelineShard) {
+	}
+
+	/**
+	 * CPU matmul threads for one forked node: the {@code --threads} value when one
+	 * was given ({@code -Djuno.threads} or {@code JUNO_THREADS}), else
+	 * {@code evenShare}.
+	 */
+	static int nodeThreads(int evenShare) {
+		String explicit = System.getProperty(cab.ml.juno.node.CpuThreads.PROPERTY);
+		if (explicit == null || explicit.isBlank())
+			explicit = System.getenv(cab.ml.juno.node.CpuThreads.ENV);
+		if (explicit != null && !explicit.isBlank()) {
+			try {
+				int n = Integer.parseInt(explicit.strip());
+				if (n >= 1)
+					return n;
+			} catch (NumberFormatException ignored) {
+				// ConsoleMain has already refused it; fall back to the even share
+			}
+		}
+		return evenShare;
 	}
 }

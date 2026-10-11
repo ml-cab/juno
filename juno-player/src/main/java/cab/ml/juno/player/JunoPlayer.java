@@ -191,6 +191,7 @@ public final class JunoPlayer implements AutoCloseable {
 		private Long batchWindowMs = null;
 		private Integer prefillBatch = null;
 		private Boolean contextShift = null;
+		private Integer threads = null;
 		private cab.ml.juno.coordinator.SpeculativeDecodeOptions specOptions =
 				cab.ml.juno.coordinator.SpeculativeDecodeOptions.disabled();
 
@@ -255,8 +256,25 @@ public final class JunoPlayer implements AutoCloseable {
 			return this;
 		}
 
+		/**
+		 * CPU matmul threads (the {@code --threads} of the launchers). CPU matmuls share
+		 * one pool per JVM, so this applies to the whole JVM from {@link #build()} on.
+		 * Unset, the JVM's setting stays: {@code -Djuno.threads}, else
+		 * {@code JUNO_THREADS}, else every available processor.
+		 *
+		 * @throws IllegalArgumentException if {@code threads < 1}
+		 */
+		public Builder threads(int threads) {
+			if (threads < 1)
+				throw new IllegalArgumentException("threads must be >= 1, got " + threads);
+			this.threads = threads;
+			return this;
+		}
+
 		public JunoPlayer build() throws IOException {
 			System.setProperty("juno.byteOrder", byteOrder);
+			if (threads != null)
+				cab.ml.juno.node.CpuThreads.setThreads(threads);
 
 			LlamaConfig config;
 			Tokenizer tokenizer;

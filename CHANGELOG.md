@@ -1,5 +1,43 @@
 ## Status 
 
+**Session 125** - CPU inference runs integer dot products: about 2.5x faster generation, 3x to 5x faster prompt processing
+
+- **CPU matmuls over Q4_K, Q5_K, Q6_K and Q8_0 weights quantize the activation to 8 bits once per matmul and run
+  integer dot products** over the packed weights, scaled once per weight block, instead of expanding every weight
+  to a float. Decode uses 128-bit Vector API lanes (Q4_K, Q5_K) or scalar integer loops (Q6_K, Q8_0); prompt
+  processing uses a new cache-blocked matmul that unpacks each weight block once and multiplies it against every
+  prompt row while it is in cache.
+- **Measured on the four standard models (CPU, 12 threads, unpinned):** generation 7.75 t/s on TinyLlama 1.1B (was
+  3.14), 2.58 on Qwen2.5-3B (1.08), 2.22 on Phi-3.5-mini (0.90), 1.30 on Mistral 7B (0.51); 128-token prompt
+  processing 16.8, 6.24, 4.86 and 2.65 t/s (was 6.11, 1.99, 0.91 and 0.86). Phi-3's CPU prompt processing and every
+  model's Q6_K weights now take the batched path; before, they were processed one prompt token at a time.
+- **Pinned closing reading:** against the reference engine at 12 threads, CPU generation 0.215x to 0.238x and prompt
+  processing 0.224x to 0.256x (were 0.092x to 0.121x and 0.049x to 0.103x). GPU, LoRA and vision throughput are unchanged or
+  faster, and GPU greedy output is identical to the previous build.
+- **Output quality is unchanged within measurement:** over 2,048 tokens of text, the mean negative log-likelihood
+  with the integer kernels is within 0.1% of the float kernels on all four models (0.99935x to 1.00061x), and the
+  most likely next token agrees at 98.8% to 99.8% of positions.
+- **Results are bitwise repeatable.** The same request gives the same logits on every run.
+- **Needs `--add-modules jdk.incubator.vector`**, which the launchers pass. A JVM without it (an embedder's, for
+  example) uses the float kernels as before; the startup log names the kernels in use. `-Djuno.cpu.integerKernels=false`
+  selects the float kernels explicitly.
+- **LoRA training is unchanged**: its frozen forward stays on the float activation, which its backward pass
+  differentiates exactly. LoRA playback, vision (the moondream2 text prefill), both schedules and cluster nodes use
+  the integer kernels.
+- **CPU decode allocates about 0.2 MB per generated token instead of about 20 MB** on Mistral 7B: per-layer
+  arrays now live in per-thread buffers, and every handler stopped building (and discarding) a full set of KV
+  tensors on each call for a request that already had one. `MatVec` gains `sgemvInto`, the non-allocating form of
+  `sgemv`.
+- **`--threads N` (`JUNO_THREADS`) sets the CPU matmul thread count** for `local`, `cluster` (per node; without it
+  each node takes an even share of the cores) and `lora`, and `JunoPlayer.Builder.threads(N)` for embedders. Every CPU
+  matmul runs on one persistent pool of exactly that many threads; it measured the same speed as the previous
+  fork-join dispatch, and unlike it can be sized at any time. A value that is not a positive integer is refused at
+  startup. The former `-Djuno.simd.pool.size`, which sized a pool nothing used, is refused with an error naming
+  `--threads`.
+- New measurement tools: `scripts/performance-tests/cpu-decode-kernel-variants.sh`,
+  `cpu-prefill-kernel-variants.sh`, `cpu-dispatch-microbench.sh`, `read-bandwidth-microbench.sh` and
+  `JfrSpanBreakdown.java`.
+
 **Session 124** — Sliding-window attention where a model file declares it
 
 - **Juno reads a model's sliding window and applies it**, with no flag: `<arch>.attention.sliding_window` gives

@@ -28,9 +28,30 @@ Module dependency (excerpt):
         (CpuMatVec / CudaMatVec / RocmMatVec), GpuBindings, GpuMatVec,
         CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
         DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
-        LoraTrainableHandler, LoraMerge, LoraQvInitializer, VectorQuantKernels,
-        SimdThreadPool
+        LoraTrainableHandler, LoraMerge, LoraQvInitializer, CpuKernelSelection,
+        CpuIntegerKernels, CpuIntegerGemm, CpuThreads, CpuWorkerPool,
+        CpuDecodeScratch, VectorQuantKernels, SimdThreadPool
         node depends on lora
+
+  CpuKernelSelection / CpuIntegerKernels / CpuIntegerGemm (node module): the
+        default CPU matmul for Q4_K, Q5_K, Q6_K and Q8_0 weights. The activation
+        row is quantized once per matmul to 8 bits with one float scale per 32
+        values; each weight sub-block is an integer dot product scaled once.
+        CpuIntegerKernels is the decode-width matVec (Q4_K/Q5_K over 128-bit
+        Vector API lanes, Q6_K/Q8_0 scalar integer loops); CpuIntegerGemm is the
+        prefill-width matmul (row tiles, each 256-column block unpacked once to
+        16-bit lanes and dotted against every activation row, one write per
+        output). Every CPU dispatch point asks CpuKernelSelection, which loads no
+        Vector API type: the float-activation kernels run when
+        jdk.incubator.vector is absent or -Djuno.cpu.integerKernels=false.
+        Dispatch points: LlamaTransformerHandler.matVecInto /
+        matVecQuantizedNoEvent / sgemmLayerInto, Phi2TransformerHandler.
+        sgemmQuantBatch, Phi3TransformerHandler.sgemmFusedInto, Qwen3 and Qwen3-MoE
+        sgemmLayerInto. LoRA training's frozen forward uses
+        LlamaTransformerHandler.matVecFloatActivation (its backward pass
+        differentiates that product). Lane sums use a fixed order and reentrant
+        calls on one thread get their own activation buffer, so results are
+        bitwise repeatable.
 
   VectorQuantKernels (node module): JDK Vector API helpers for CPU quantized
         matmul. Production policy (policySummary / docs/performance.md):
@@ -41,16 +62,39 @@ Module dependency (excerpt):
         over the full signed-byte range passes. Built on jdk.incubator.vector
         (still incubating as of JDK 25/26); needs --add-modules
         jdk.incubator.vector. All Vector API types live in a nested Simd class
-        so a JVM without the module falls back cleanly. Used by
-        LlamaTransformerHandler / Phi2TransformerHandler.sgemmQuantBatch.
+        so a JVM without the module falls back cleanly. Its float
+        weight-stationary kernels are the fallback when the integer kernels do
+        not run.
 
-  SimdThreadPool (node module): forEachRow runs the weight-stationary
-        row-parallel loop via IntStream.parallel() on ForkJoinPool.commonPool()
-        (same dispatch as matVecQ*raw). A dedicated ForkJoinPool (POOL) is
-        still built from -Djuno.simd.pool.size for diagnostics / future pinned
-        dispatch, but wrapping parallel streams in POOL.submit().join() was
-        pathologically slow at vision-scale B and must not be used on the hot
-        path. Not core-affinity pinning.
+  CpuThreads / CpuWorkerPool (node module): the CPU thread count and the one
+        place a CPU matmul loop runs in parallel. Every row loop (integer and
+        float-activation kernels, CpuIntegerGemm tiles, CpuMatVec's F32 sgemm for
+        the vision encoder, LoRA training's transposes, SimdThreadPool.forEachRow)
+        calls CpuThreads.forEach, which runs it on a CpuWorkerPool of exactly
+        CpuThreads.threads() threads (caller included): persistent daemon workers,
+        chunks claimed from a shared counter, spin-then-park between jobs, one job
+        at a time (nested calls inline, concurrent callers wait). The count comes
+        from --threads (ConsoleMain sets -Djuno.threads; ClusterHarness passes it to
+        every forked node, or an even share of the cores), else JUNO_THREADS, else
+        availableProcessors(); JunoPlayer.Builder.threads(n) / CpuThreads.setThreads
+        for embedders. Measured at parity with common-pool parallel streams
+        (decode layer 0.97x to 1.00x, prefill 0.99x to 1.00x), and unlike the common
+        pool it can be sized at any time. -Djuno.simd.pool.size is no longer read
+        (ConsoleMain refuses it).
+
+  CpuDecodeScratch (node module): per-thread, per-handler buffers for the
+        single-token CPU decode path (LlamaTransformerHandler, Phi3TransformerHandler):
+        norm, Q/K/V, attention output and scores, projections, gate/up/hidden, and
+        the residual stream, which flows through one buffer with in-place adds and
+        is copied once before the handler returns. With MatVec.sgemvInto (the
+        non-allocating sgemv; CpuMatVec writes in place, CudaMatVec overrides it,
+        the interface default copies) and the matVecProjectionInto /
+        matVecEventInto helpers, a CPU decode step allocates about 0.2 MB per token
+        (the logits array and small event objects).
+
+  SimdThreadPool (node module): forEachRow (the float weight-stationary
+        kernels' row loop) delegates to CpuThreads; diagnosticSummary reports the
+        CPU matmul thread count.
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
         ServeBatchOptions — CLI/env resolution for --parallel / --batch-window-ms
         (maps to BatchConfig; streaming consumers bypass static batches)

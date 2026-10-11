@@ -1,0 +1,20 @@
+date_utc: 2026-10-09T22:02:10Z
+cpu: Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz
+logical_cpus: 12
+simd_flags: sse4_2 avx
+governor: schedutil
+no_turbo: 0
+loadavg_before: 1.23 1.03 0.86
+jvm: openjdk version "25.0.3" 2026-04-21
+jvm_use_avx: 1
+memory_controller: Ivy Bridge SrcID#0_Ha#0
+dimm: CPU_SrcID#0_Ha#0_Chan#0_DIMM#0 size_mb=8192 type=Unknown
+dimm: CPU_SrcID#0_Ha#0_Chan#0_DIMM#1 size_mb=8192 type=Unknown
+dimm: CPU_SrcID#0_Ha#0_Chan#3_DIMM#1 size_mb=8192 type=Unknown
+dimm: CPU_SrcID#0_Ha#0_Chan#1_DIMM#0 size_mb=8192 type=Unknown
+dimm: CPU_SrcID#0_Ha#0_Chan#1_DIMM#1 size_mb=8192 type=Unknown
+dimm: CPU_SrcID#0_Ha#0_Chan#2_DIMM#0 size_mb=8192 type=Unknown
+dimm: CPU_SrcID#0_Ha#0_Chan#2_DIMM#1 size_mb=8192 type=Unknown
+dimm: CPU_SrcID#0_Ha#0_Chan#3_DIMM#0 size_mb=8192 type=Unknown
+dimm_speed: not read (dmidecode needs root; run: sudo dmidecode -t memory | grep -i speed)
+loadavg_after: 2.18 1.27 0.94

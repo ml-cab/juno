@@ -89,8 +89,9 @@ class LoraResidentWeightsTest {
 		float[] x = new float[cols];
 		for (int i = 0; i < cols; i++)
 			x[i] = ((i % 5) - 2) * 0.1f;
-		float[] expected = new float[rows];
-		LlamaTransformerHandler.matVecInto(t, x, expected, rows, cols);
+		// Training's frozen forward runs over the float activation (its backward pass
+		// differentiates exactly that product), not the integer-dot inference default.
+		float[] expected = LlamaTransformerHandler.matVecFloatActivation(t, x, 0, rows, cols);
 		float[] got = LoraResidentWeights.matVec(t, null, null, x, rows, cols);
 		assertThat(got).containsExactly(expected);
 	}

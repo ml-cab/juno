@@ -1435,7 +1435,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			String requestId = requestIds.get(i);
 			int pos = positions[i];
 
-			boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+			boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 			SessionKvTensor[] kCache = kvCacheK.get(requestId);
 			SessionKvTensor[] vCache = kvCacheV.get(requestId);
@@ -1659,7 +1659,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int kvDim = cfg.kvDim();
 		int lastPos = startPos + W - 1;
 
-		boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+		boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
 		SessionKvTensor[] kCache = kvCacheK.get(requestId);
@@ -2134,12 +2134,32 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				throw ex;
 			warnDeviceMatmulFellBackOnce(li);
 		}
+		if (CpuKernelSelection.integerGemm(quant.type(), cols)) {
+			CpuIntegerGemm.sgemmInto(quant, X, Y, 0, rows, cols);
+			return;
+		}
 		switch (quant.type()) {
 		case 12 -> sgemmQ4KWeightStationary(quant.data(), X, Y, 0, rows, cols);
 		case 13 -> sgemmQ5KWeightStationary(quant.data(), X, Y, 0, rows, cols);
 		case 8  -> sgemmQ8_0WeightStationary(quant.data(), X, Y, 0, rows, cols);
 		default -> { for (int b = 0; b < X.length; b++) matVecInto(quant, X[b], Y[b], rows, cols); }
 		}
+	}
+
+	/**
+	 * Per-thread block-dequantization scratch for the float weight-stationary kernels:
+	 * their rows run on the CPU worker pool, whose threads persist, so each thread
+	 * allocates its block buffer once instead of once per row.
+	 */
+	private static final ThreadLocal<float[]> DEQUANT_SCRATCH = ThreadLocal.withInitial(() -> new float[256]);
+
+	private static float[] dequantScratch(int n) {
+		float[] b = DEQUANT_SCRATCH.get();
+		if (b.length < n) {
+			b = new float[n];
+			DEQUANT_SCRATCH.set(b);
+		}
+		return b;
 	}
 
 	/**
@@ -2166,9 +2186,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		SimdThreadPool.forEachRow(rows, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
-			// Per-row dequant scratch: reused across all blocks in this row.
+			// Per-thread dequant scratch (see dequantScratch), reused across rows and blocks.
 			// 256 floats = 1 KB — stays in L1 cache while multiplied against B inputs.
-			float[] dq = new float[BLOCK_SIZE];
+			float[] dq = dequantScratch(BLOCK_SIZE);
 
 			for (int blk = 0; blk < blocksPerRow; blk++) {
 				int bo     = rowByteOffset + blk * BLOCK_BYTES;
@@ -2226,7 +2246,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		SimdThreadPool.forEachRow(rows, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
-			float[] dq = new float[BLOCK_SIZE]; // 32 floats = 128 B, always in L1
+			float[] dq = dequantScratch(BLOCK_SIZE);
 
 			for (int blk = 0; blk < blocksPerRow; blk++) {
 				int bo    = rowByteOffset + blk * BLOCK_BYTES;
@@ -2276,9 +2296,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 		SimdThreadPool.forEachRow(rows, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
-			// Per-row dequant scratch: reused across all blocks in this row.
+			// Per-thread dequant scratch (see dequantScratch), reused across rows and blocks.
 			// 256 floats = 1 KB — stays in L1 cache while multiplied against B inputs.
-			float[] dq = new float[BLOCK_SIZE];
+			float[] dq = dequantScratch(BLOCK_SIZE);
 
 			for (int blk = 0; blk < blocksPerRow; blk++) {
 				int bo     = rowByteOffset + blk * BLOCK_BYTES;
@@ -2374,7 +2394,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int L = endLayer - startLayer;
 		int kvDim = cfg.kvDim();
 
-		boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+		boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
 		SessionKvTensor[] kCache = kvCacheK.get(requestId);
@@ -2414,6 +2434,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 		if (residentQkv != null && residentQkv.ownsResult(x))
 			x = x.clone(); // the region's row is overwritten by this thread's next call
+		if (x == decodeScratch.get().resid)
+			x = x.clone(); // the decode scratch is overwritten by this thread's next token
 
 		if (a != null) {
 			int seqLen = pos + 1;
@@ -2549,14 +2571,22 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * The attention entry op at a time: RMS norm, the Q/K/V projection (plus
 	 * biases), then RoPE on Q and K. Returns {q, k, v}.
 	 */
+	private final ThreadLocal<CpuDecodeScratch> decodeScratch = ThreadLocal.withInitial(this::newDecodeScratch);
+
+	private CpuDecodeScratch newDecodeScratch() {
+		return new CpuDecodeScratch(cfg);
+	}
+
 	private float[][] normProjectRope(float[] x, int li, int pos) {
 		int H = cfg.hiddenDim();
 		float[] q;
 		float[] k;
 		float[] v;
+		CpuDecodeScratch ds = decodeScratch.get();
 		RmsNormEvent normEvt1 = new RmsNormEvent();
 		normEvt1.begin();
-		float[] xNorm = rmsNormGpuOrCpu(x, attnNorm[li], cfg.rmsNormEps());
+		float[] xNorm = rmsNormGpu != null ? rmsNormGpuOrCpu(x, attnNorm[li], cfg.rmsNormEps())
+				: rmsNormIntoReturn(x, attnNorm[li], cfg.rmsNormEps(), ds.xNorm);
 		normEvt1.windowSize = 1;
 		normEvt1.startPosition = pos;
 		normEvt1.dimension = H;
@@ -2574,9 +2604,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			k = qkv[1];
 			v = qkv[2];
 		} else {
-			q = matVecProjection(wq[li], wqQ4Dev, wqDev, wqDevFp32, li, xNorm, H, H);
-			k = matVecProjection(wk[li], wkQ4Dev, wkDev, wkDevFp32, li, xNorm, cfg.kvDim(), H);
-			v = matVecProjection(wv[li], wvQ4Dev, wvDev, wvDevFp32, li, xNorm, cfg.kvDim(), H);
+			q = matVecProjectionInto(wq[li], wqQ4Dev, wqDev, wqDevFp32, li, xNorm, ds.q, H, H);
+			k = matVecProjectionInto(wk[li], wkQ4Dev, wkDev, wkDevFp32, li, xNorm, ds.k, cfg.kvDim(), H);
+			v = matVecProjectionInto(wv[li], wvQ4Dev, wvDev, wvDevFp32, li, xNorm, ds.v, cfg.kvDim(), H);
 		}
 
 		if (bq != null) {
@@ -2692,7 +2722,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			if (attnOut == null) {
 				float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
 				float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
-				attnOut = gqa(q, kView, vView, seqLen, layerWindows[li]);
+				CpuDecodeScratch ds = decodeScratch.get();
+				GqaMath.attend(q, kView, vView, seqLen, ds.attnOut, ds.scores(seqLen),
+						cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(), cfg.kvDim(), layerWindows[li]);
+				attnOut = ds.attnOut;
 			}
 			attnEvt.windowSize = 1;
 			attnEvt.startPosition = pos;
@@ -2700,11 +2733,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			attnEvt.commit();
 		}
 
-		// Output projection + residual
-		float[] attnProj = matVecProjection(wo[li], woQ4Dev, woDev, woDevFp32, li, attnOut, H, H);
+		// Output projection + residual. The residual stream lives in the scratch: x2
+		// overwrites this layer's input once that input has been read.
+		CpuDecodeScratch ds = decodeScratch.get();
+		float[] attnProj = matVecProjectionInto(wo[li], woQ4Dev, woDev, woDevFp32, li, attnOut, ds.attnProj, H, H);
 		ResidualAddEvent residEvt1 = new ResidualAddEvent();
 		residEvt1.begin();
-		float[] x2 = add(x, attnProj);
+		float[] x2 = ds.resid;
+		for (int i = 0; i < H; i++)
+			x2[i] = x[i] + attnProj[i];
 		residEvt1.windowSize = 1;
 		residEvt1.startPosition = pos;
 		residEvt1.dimension = H;
@@ -2713,15 +2750,18 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		// ── FFN sub-layer ─────────────────────────────────────────────────────
 		RmsNormEvent normEvt2 = new RmsNormEvent();
 		normEvt2.begin();
-		float[] xNorm2 = rmsNormGpuOrCpu(x2, ffnNorm[li], cfg.rmsNormEps());
+		float[] xNorm2 = rmsNormGpu != null ? rmsNormGpuOrCpu(x2, ffnNorm[li], cfg.rmsNormEps())
+				: rmsNormIntoReturn(x2, ffnNorm[li], cfg.rmsNormEps(), ds.xNorm);
 		normEvt2.windowSize = 1;
 		normEvt2.startPosition = pos;
 		normEvt2.dimension = H;
 		normEvt2.commit();
-		float[] ffnOut = ffn(xNorm2, li, pos);
+		float[] ffnOut = ffn(xNorm2, li, pos, ds);
 		ResidualAddEvent residEvt2 = new ResidualAddEvent();
 		residEvt2.begin();
-		float[] out = add(x2, ffnOut);
+		float[] out = x2;
+		for (int i = 0; i < H; i++)
+			out[i] += ffnOut[i];
 		residEvt2.windowSize = 1;
 		residEvt2.startPosition = pos;
 		residEvt2.dimension = H;
@@ -2730,7 +2770,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	}
 
 	/** SwiGLU feed-forward: silu(gate(x)) * up(x) → down. */
-	private float[] ffn(float[] x, int li, int pos) {
+	private float[] ffn(float[] x, int li, int pos, CpuDecodeScratch ds) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
 		float[] gate;
@@ -2745,20 +2785,20 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			gate = gateUp[0];
 			up = gateUp[1];
 		} else {
-			gate = matVecProjection(wGate[li], wGateQ4Dev, wGateDev, wGateDevFp32, li, x, I, H);
-			up = matVecProjection(wUp[li], wUpQ4Dev, wUpDev, wUpDevFp32, li, x, I, H);
+			gate = matVecProjectionInto(wGate[li], wGateQ4Dev, wGateDev, wGateDevFp32, li, x, ds.gate, I, H);
+			up = matVecProjectionInto(wUp[li], wUpQ4Dev, wUpDev, wUpDevFp32, li, x, ds.up, I, H);
 		}
 		// SiLU(gate) * up
 		SwiGluEvent swigluEvt = new SwiGluEvent();
 		swigluEvt.begin();
-		float[] hidden = new float[I];
+		float[] hidden = ds.hidden;
 		for (int i = 0; i < I; i++)
 			hidden[i] = silu(gate[i]) * up[i];
 		swigluEvt.windowSize = 1;
 		swigluEvt.startPosition = pos;
 		swigluEvt.dimension = I;
 		swigluEvt.commit();
-		return matVecProjection(wDown[li], wDownQ4Dev, wDownDev, wDownDevFp32, li, hidden, H, I);
+		return matVecProjectionInto(wDown[li], wDownQ4Dev, wDownDev, wDownDevFp32, li, hidden, ds.ffnOut, H, I);
 	}
 
 	/** Final RMS norm + output projection → float[vocabSize] logits. */
@@ -2807,6 +2847,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * Zero-allocation variant of {@link #rmsNorm}: writes into {@code out} instead
 	 * of allocating. Used by {@link #transformerLayerBatch} to reuse workspace rows.
 	 */
+	/** {@link #rmsNormInto} returning {@code out}. */
+	static float[] rmsNormIntoReturn(float[] x, float[] w, float eps, float[] out) {
+		rmsNormInto(x, w, eps, out);
+		return out;
+	}
+
 	static void rmsNormInto(float[] x, float[] w, float eps, float[] out) {
 		int n = x.length;
 		float ss = 0f;
@@ -2860,6 +2906,62 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			matVecFallback.absorb(ex);
 		}
 		return matVec(quant, x, rows, cols);
+	}
+
+	/**
+	 * {@link #matVecProjection} into {@code out[0, rows)}: the same backend choice, and on
+	 * the CPU path no allocation. Returns {@code out}.
+	 */
+	private float[] matVecProjectionInto(GgufReader.QuantizedTensor quant,
+			DeviceQ4KMatrix[] q4, DeviceHalfMatrix[] half, DeviceFloatMatrix[] fp32,
+			int li, float[] x, float[] out, int rows, int cols) {
+		try {
+			if (q4 != null && q4[li] != null) {
+				backend.sgemvInto(q4[li], x, out);
+				return out;
+			}
+			if (half != null && half[li] != null) {
+				backend.sgemvInto(half[li], x, out);
+				return out;
+			}
+			if (fp32 != null && fp32[li] != null) {
+				backend.sgemvInto(fp32[li], x, out);
+				return out;
+			}
+		} catch (IllegalStateException ex) {
+			matVecFallback.absorb(ex);
+		}
+		matVecEventInto(quant, x, out, rows, cols);
+		return out;
+	}
+
+	/** Row-range {@link #matVecEventInto}: rows {@code [rowStart, rowEnd)} into {@code out[0, rowEnd - rowStart)}. */
+	static void matVecEventInto(GgufReader.QuantizedTensor A, float[] x, float[] out, int rowStart, int rowEnd,
+			int cols) {
+		MatVecEvent evt = new MatVecEvent();
+		evt.begin();
+		try {
+			matVecInto(A, x, out, rowStart, rowEnd, cols);
+			evt.backend(matVecQuantBackend(A.type()));
+			evt.rows = rowEnd - rowStart;
+			evt.cols = cols;
+		} finally {
+			evt.commit();
+		}
+	}
+
+	/** {@link #matVec(GgufReader.QuantizedTensor, float[], int, int)} into {@code out[0, rows)}, with its JFR event. */
+	static void matVecEventInto(GgufReader.QuantizedTensor A, float[] x, float[] out, int rows, int cols) {
+		MatVecEvent evt = new MatVecEvent();
+		evt.begin();
+		try {
+			matVecInto(A, x, out, rows, cols);
+			evt.backend(matVecQuantBackend(A.type()));
+			evt.rows = rows;
+			evt.cols = cols;
+		} finally {
+			evt.commit();
+		}
 	}
 
 	/**
@@ -2929,13 +3031,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	/**
 	 * Zero-allocation matrix-vector multiply into a caller-provided buffer.
-	 * Fast paths for Q4_K (type 12) and Q8_0 (type 8) — no heap allocation.
+	 * Q4_K, Q5_K, Q6_K and Q8_0 take the integer-dot kernels
+	 * ({@link CpuIntegerKernels}) unless they are switched off; otherwise fast
+	 * paths for Q4_K (type 12) and Q8_0 (type 8) — no heap allocation.
 	 * Allocate-and-copy fallback for other quantisation types.
 	 *
 	 * <p>Used by {@link #sgemmLayerInto} to eliminate per-matVec allocation in
 	 * the CPU quantized batched-prefill path.
 	 */
 	static void matVecInto(GgufReader.QuantizedTensor A, float[] x, float[] out, int rows, int cols) {
+		if (CpuKernelSelection.integerMatVec(A.type())) {
+			CpuIntegerKernels.matVecInto(A, x, 0, rows, out, cols);
+			return;
+		}
 		switch (A.type()) {
 		case 12 -> matVecQ4KrawInto(A.data(), x, 0, rows, out, cols);
 		case 8  -> matVecQ8_0rawInto(A.data(), x, 0, rows, out, cols);
@@ -2949,6 +3057,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	/** Row-range variant of {@link #matVecInto} — used by Phi3 fused-tensor paths. */
 	static void matVecInto(GgufReader.QuantizedTensor A, float[] x, float[] out,
 			int rowStart, int rowEnd, int cols) {
+		if (CpuKernelSelection.integerMatVec(A.type())) {
+			CpuIntegerKernels.matVecInto(A, x, rowStart, rowEnd, out, cols);
+			return;
+		}
 		switch (A.type()) {
 		case 12 -> matVecQ4KrawInto(A.data(), x, rowStart, rowEnd, out, cols);
 		case 8  -> matVecQ8_0rawInto(A.data(), x, rowStart, rowEnd, out, cols);
@@ -3169,8 +3281,14 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	static float[] matVec(float[] A, float[] x, int rows, int cols) {
 		float[] y = new float[rows];
+		matVecInto(A, x, y, rows, cols);
+		return y;
+	}
+
+	/** {@link #matVec(float[], float[], int, int)} into {@code y[0, rows)}, no allocation. */
+	static void matVecInto(float[] A, float[] x, float[] y, int rows, int cols) {
 		if (rows >= 256) {
-			java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+			CpuThreads.forEach(rows, r -> {
 				float acc = 0f;
 				int base = r * cols;
 				for (int c = 0; c < cols; c++)
@@ -3186,7 +3304,6 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				y[r] = acc;
 			}
 		}
-		return y;
 	}
 
 	// ── Quantized matVec overloads ────────────────────────────────────────────
@@ -3249,6 +3366,21 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	/** Quantized matVec without JFR (inner implementation for {@link #matVec(GgufReader.QuantizedTensor, float[], int, int, int)}). */
 	private static float[] matVecQuantizedNoEvent(GgufReader.QuantizedTensor A, float[] x, int rowStart, int rowEnd,
 			int cols) {
+		if (CpuKernelSelection.integerMatVec(A.type())) {
+			float[] y = new float[rowEnd - rowStart];
+			CpuIntegerKernels.matVecInto(A, x, rowStart, rowEnd, y, cols);
+			return y;
+		}
+		return matVecFloatActivation(A, x, rowStart, rowEnd, cols);
+	}
+
+	/**
+	 * Quantized matVec over the float activation, never the integer-dot kernels.
+	 * For callers whose result must be exactly differentiable by a float backward
+	 * pass (LoRA training), and for comparisons against the integer kernels.
+	 */
+	static float[] matVecFloatActivation(GgufReader.QuantizedTensor A, float[] x, int rowStart, int rowEnd,
+			int cols) {
 		return switch (A.type()) {
 		case 0  -> ActivationCodec.matVecF32raw(A.data(), x, rowStart, rowEnd, cols);
 		case 1  -> matVecF16raw(A.data(), x, rowStart, rowEnd, cols);
@@ -3280,7 +3412,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		// Read floats directly from the raw byte array using bit manipulation.
 		// Avoids allocating a ByteBuffer wrapper per row inside the parallel lambda
 		// (which caused 2048+ heap allocations per matVec call on large weight shapes).
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+		CpuThreads.forEach(rows, r -> {
 			float acc = 0f;
 			int base = ((rowStart + r) * cols) * 4;
 			for (int c = 0; c < cols; c++, base += 4) {
@@ -3312,7 +3444,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private static float[] matVecF16raw(byte[] raw, float[] x, int rowStart, int rowEnd, int cols) {
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+		CpuThreads.forEach(rows, r -> {
 			float acc = 0f;
 			int base = ((rowStart + r) * cols) * 2;
 			for (int c = 0; c < cols; c++, base += 2) {
@@ -3356,7 +3488,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+		CpuThreads.forEach(rows, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			float acc = 0f;
 			int xBase = 0;
@@ -3411,7 +3543,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+		CpuThreads.forEach(rows, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			float acc = 0f;
 			int   xBase = 0;
@@ -3496,7 +3628,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		final int blocksPerRow = cols / BLOCK_SIZE;
 		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 
-		java.util.stream.IntStream.range(0, rowEnd - rowStart).parallel().forEach(r -> {
+		CpuThreads.forEach(rowEnd - rowStart, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			float acc = 0f;
 			int xBase = 0;
@@ -3565,7 +3697,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		final int blocksPerRow = cols / BLOCK_SIZE;
 		final int bytesPerRow = blocksPerRow * BLOCK_BYTES;
 
-		java.util.stream.IntStream.range(0, rowEnd - rowStart).parallel().forEach(r -> {
+		CpuThreads.forEach(rowEnd - rowStart, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			float acc = 0f;
 			int xBase = 0;
@@ -3604,7 +3736,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+		CpuThreads.forEach(rows, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			float acc = 0f;
 			int xBase = 0;
@@ -3665,7 +3797,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		int rows = rowEnd - rowStart;
 		float[] y = new float[rows];
 
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+		CpuThreads.forEach(rows, r -> {
 			int rowByteOffset = (rowStart + r) * bytesPerRow;
 			float acc = 0f;
 			int xBase = 0;

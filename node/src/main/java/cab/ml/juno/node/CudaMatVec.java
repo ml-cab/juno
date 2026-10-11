@@ -295,7 +295,8 @@ public final class CudaMatVec implements GpuMatVec {
     }
 
     /** {@link #sgemv(DeviceFloatMatrix, float[])} into {@code y[0, rows)}. */
-    private void sgemvInto(DeviceFloatMatrix A, float[] x, float[] y) {
+    @Override
+    public void sgemvInto(DeviceFloatMatrix A, float[] x, float[] y) {
         if (A == null) throw new IllegalArgumentException("A must not be null");
         if (A.isClosed()) throw new IllegalStateException("DeviceFloatMatrix is closed");
         int rows = A.rows(), cols = A.cols();
@@ -372,7 +373,8 @@ public final class CudaMatVec implements GpuMatVec {
     }
 
     /** {@link #sgemv(DeviceQ4KMatrix, float[])} into {@code y[0, rows)}. */
-    private void sgemvInto(DeviceQ4KMatrix A, float[] x, float[] y) {
+    @Override
+    public void sgemvInto(DeviceQ4KMatrix A, float[] x, float[] y) {
         if (A == null) throw new IllegalArgumentException("A must not be null");
         if (A.isClosed()) throw new IllegalStateException("DeviceQ4KMatrix is closed");
         int rows = A.rows(), cols = A.cols();
@@ -447,7 +449,8 @@ public final class CudaMatVec implements GpuMatVec {
     }
 
     /** {@link #sgemv(DeviceHalfMatrix, float[])} into {@code y[0, rows)}. */
-    private void sgemvInto(DeviceHalfMatrix A, float[] x, float[] y) {
+    @Override
+    public void sgemvInto(DeviceHalfMatrix A, float[] x, float[] y) {
         if (A == null) throw new IllegalArgumentException("A must not be null");
         if (A.isClosed()) throw new IllegalStateException("DeviceHalfMatrix is closed");
         int rows = A.rows(), cols = A.cols();

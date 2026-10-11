@@ -251,6 +251,7 @@ public final class ConsoleMain {
 	// ── GPU arguments ─────────────────────────────────────────────────────────
 	private static boolean useGpu = true; // use CPU
 	private static String gpuLayers = null; // null → env or default auto
+	private static String threads = null; // null → env JUNO_THREADS or all processors
 	private static String mmq = null; // null → env or default auto
 	private static String gpuAttention = null; // null → env or default auto
 	private static String contextShift = null; // --context-shift on|off; null → env or default off
@@ -445,6 +446,7 @@ public final class ConsoleMain {
 			System.out.println(String.format("  %sWARNING: %s%s%n", Color.YELLOW, scheduleResolution.warning(),
 					Color.RESET));
 
+		applyCpuThreads();
 		System.setProperty("JUNO_USE_GPU", String.valueOf(useGpu));
 		if (gpuLayers != null)
 			System.setProperty(GpuLayerOffload.ENV_PROPERTY, gpuLayers);
@@ -492,8 +494,7 @@ public final class ConsoleMain {
 				String.format("  %s%s%s%n", Color.GREEN, cab.ml.juno.node.VectorQuantKernels.policySummary(),
 						Color.RESET));
 
-		// Row-parallel dispatch for weight-stationary kernels (common-pool
-		// IntStream.parallel; diagnostic POOL sized via -Djuno.simd.pool.size).
+		// CPU matmul thread count (--threads / JUNO_THREADS) and kernel choice.
 		System.out.println(
 				String.format("  %s%s%s%n", Color.GREEN, cab.ml.juno.node.SimdThreadPool.diagnosticSummary(),
 						Color.RESET));
@@ -561,7 +562,54 @@ public final class ConsoleMain {
 				String.format("  %s--hf %s resolved to %s%s", Color.GREEN, hfSpec, modelPath, Color.RESET));
 	}
 
+	/**
+	 * Applies {@code --threads} (or {@code JUNO_THREADS}) to every CPU matmul in this
+	 * JVM, and records it as {@code -Djuno.threads} so forked cluster nodes receive it.
+	 * Fails closed on a value that is not a positive integer, and on the removed
+	 * {@code -Djuno.simd.pool.size}, which no longer sizes anything.
+	 */
+	private static void applyCpuThreads() {
+		if (System.getProperty(cab.ml.juno.node.SimdThreadPool.REMOVED_POOL_SIZE_PROPERTY) != null) {
+			System.err.println("ERROR: -D" + cab.ml.juno.node.SimdThreadPool.REMOVED_POOL_SIZE_PROPERTY
+					+ " is no longer read; set the CPU matmul thread count with --threads N (or JUNO_THREADS).");
+			System.exit(1);
+		}
+		if (threads == null)
+			return;
+		int n;
+		try {
+			n = parseThreads(threads);
+		} catch (IllegalArgumentException e) {
+			System.err.println("ERROR: " + e.getMessage());
+			System.exit(1);
+			return;
+		}
+		System.setProperty(cab.ml.juno.node.CpuThreads.PROPERTY, String.valueOf(n));
+		cab.ml.juno.node.CpuThreads.setThreads(n);
+	}
+
+	/**
+	 * The {@code --threads} value as a positive count.
+	 *
+	 * @throws IllegalArgumentException naming the value if it is not a positive integer
+	 */
+	static int parseThreads(String value) {
+		try {
+			int n = Integer.parseInt(value.strip());
+			if (n >= 1)
+				return n;
+		} catch (NumberFormatException ignored) {
+			// reported below
+		}
+		throw new IllegalArgumentException("--threads must be a positive integer, got '" + value + "'");
+	}
+
 	private static void applyGpuEnvDefaults() {
+		if (threads == null) {
+			String env = System.getenv(cab.ml.juno.node.CpuThreads.ENV);
+			if (env != null && !env.isBlank())
+				threads = env.strip();
+		}
 		if (gpuLayers == null) {
 			String env = System.getenv(GpuLayerOffload.ENV_PROPERTY);
 			if (env != null && !env.isBlank())
@@ -801,6 +849,10 @@ public final class ConsoleMain {
 				break;
 			case "--cpu":
 				useGpu = false;
+				break;
+			case "--threads":
+				if (i + 1 < args.length)
+					threads = args[++i];
 				break;
 			case "--gpu-layers":
 				if (i + 1 < args.length)
@@ -1089,6 +1141,8 @@ public final class ConsoleMain {
 		System.out.println("Inference options:");
 		System.out.println("  --gpu                      Use GPU (default, no need to set)");
 		System.out.println("  --cpu                      Force to use CPU");
+		System.out.println("  --threads N                CPU matmul threads per JVM (default: all processors)");
+		System.out.println("                             env JUNO_THREADS; cluster nodes default to an even share");
 		System.out.println("  --gpu-layers N|all|auto    GPU-resident transformer layers (default: auto)");
 		System.out.println("                             env JUNO_GPU_LAYERS; auto fits until VRAM OOM");
 		System.out.println("  --mmq on|off|auto          Packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; prefill windows over 8 rows multiply the packed weights directly, off multiplies FP16 weights; default: auto; LoRA play when CUDA kernel loads; ignored for LoRA train)");

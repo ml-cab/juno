@@ -24,6 +24,26 @@ class ContextShiftLiveTest {
 	/** Absolute logit tolerance: only the re-rotation's float rounding separates the two requests. */
 	private static final double TOLERANCE = 0.01;
 
+	/**
+	 * The comparison runs on the float-activation CPU kernels. With the integer-dot
+	 * default, the activation's 8-bit rounding is discontinuous, so a float-rounding
+	 * difference between the two requests' keys can flip one quantization step and
+	 * move a logit by 0.08 to 0.25 (measured) without saying anything about the re-rotation this
+	 * test checks. (Under the integer default the greedy token still agreed on every
+	 * model, 2026-10-10.)
+	 */
+	private static boolean integerKernelsWere;
+
+	@org.junit.jupiter.api.BeforeAll
+	static void floatActivationKernels() {
+		integerKernelsWere = CpuKernelSelection.setIntegerEnabled(false);
+	}
+
+	@org.junit.jupiter.api.AfterAll
+	static void restoreKernels() {
+		CpuKernelSelection.setIntegerEnabled(integerKernelsWere);
+	}
+
 	static Path model(String file) {
 		Path p = Path.of("models", file);
 		return p.toFile().exists() ? p : Path.of("..", "models", file);

@@ -402,7 +402,7 @@ class PhiQuantizedMatVecTest {
 		try (GgufReader r = GgufReader.open(gguf)) {
 			GgufReader.QuantizedTensor qt = r.tensorRaw("wq5k_multi");
 			for (int b = 0; b < B; b++)
-				expected[b] = LlamaTransformerHandler.matVec(qt, X[b], 0, rows, cols);
+				expected[b] = floatPerRowMatVec(qt, X[b], rows, cols);
 			LlamaTransformerHandler.sgemmQ5KWeightStationary(qt.data(), X, actual, 0, rows, cols);
 		}
 
@@ -452,7 +452,7 @@ class PhiQuantizedMatVecTest {
 		try (GgufReader r = GgufReader.open(gguf)) {
 			GgufReader.QuantizedTensor qt = r.tensorRaw("wq4k_multi");
 			for (int b = 0; b < B; b++)
-				expected[b] = LlamaTransformerHandler.matVec(qt, X[b], 0, rows, cols);
+				expected[b] = floatPerRowMatVec(qt, X[b], rows, cols);
 			LlamaTransformerHandler.sgemmQ4KWeightStationary(qt.data(), X, actual, 0, rows, cols);
 		}
 
@@ -492,7 +492,7 @@ class PhiQuantizedMatVecTest {
 		try (GgufReader r = GgufReader.open(gguf)) {
 			GgufReader.QuantizedTensor qt = r.tensorRaw("wq8_0_multi");
 			for (int b = 0; b < B; b++)
-				expected[b] = LlamaTransformerHandler.matVec(qt, X[b], 0, rows, cols);
+				expected[b] = floatPerRowMatVec(qt, X[b], rows, cols);
 			LlamaTransformerHandler.sgemmQ8_0WeightStationary(qt.data(), X, actual, 0, rows, cols);
 		}
 
@@ -554,5 +554,21 @@ class PhiQuantizedMatVecTest {
 		Path gguf = dir.resolve(name + ".gguf");
 		Files.write(gguf, buf.array());
 		return gguf;
+	}
+
+	/**
+	 * The per-row reference for the weight-stationary kernels: the float-activation
+	 * matVec, which is what those kernels compute. The CPU default is the
+	 * integer-dot kernel, whose activation quantization would put the comparison
+	 * outside these tests' float tolerance without saying anything about the
+	 * batched kernels.
+	 */
+	private static float[] floatPerRowMatVec(GgufReader.QuantizedTensor qt, float[] x, int rows, int cols) {
+		boolean was = CpuKernelSelection.setIntegerEnabled(false);
+		try {
+			return LlamaTransformerHandler.matVec(qt, x, 0, rows, cols);
+		} finally {
+			CpuKernelSelection.setIntegerEnabled(was);
+		}
 	}
 }

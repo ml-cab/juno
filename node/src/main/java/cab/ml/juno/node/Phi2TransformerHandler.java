@@ -351,7 +351,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
             String requestId = requestIds.get(i);
             int pos = positions[i];
 
-            boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+            boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
             kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
             SessionKvTensor[] kCache = kvCacheK.get(requestId);
             SessionKvTensor[] vCache = kvCacheV.get(requestId);
@@ -496,7 +496,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         int W     = x.length;
         int lastPos = startPos + W - 1;
 
-        boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+        boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
         kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
         SessionKvTensor[] kCache = kvCacheK.get(requestId);
@@ -550,9 +550,16 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
      * {@code matVecInto} call per row, which is always correct, just without
      * the speedup — the same correctness-preserving default
      * {@link ForwardPassHandler#forwardBatch} documents at the handler level.
+     *
+     * <p>Package-private so the vision-width kernel guard can time the exact
+     * dispatch the vision prefill takes.
      */
-    private static void sgemmQuantBatch(GgufReader.QuantizedTensor quant, float[][] X, float[][] Y,
+    static void sgemmQuantBatch(GgufReader.QuantizedTensor quant, float[][] X, float[][] Y,
             int rowStart, int rowEnd, int cols) {
+        if (CpuKernelSelection.integerGemm(quant.type(), cols)) {
+            CpuIntegerGemm.sgemmInto(quant, X, Y, rowStart, rowEnd, cols);
+            return;
+        }
         switch (quant.type()) {
         case 12 -> LlamaTransformerHandler.sgemmQ4KWeightStationary(quant.data(), X, Y, rowStart, rowEnd, cols);
         case 13 -> LlamaTransformerHandler.sgemmQ5KWeightStationary(quant.data(), X, Y, rowStart, rowEnd, cols);
@@ -752,7 +759,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         int L     = endLayer - startLayer;
         int kvDim = cfg.kvDim();
 
-        boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+        boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
         kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
         SessionKvTensor[] kCache = kvCacheK.get(requestId);

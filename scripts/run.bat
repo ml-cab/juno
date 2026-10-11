@@ -53,7 +53,7 @@ set "JVM_BASE=--enable-preview --enable-native-access=ALL-UNNAMED --add-opens ja
 rem JUNO_JVM_OPTS: optional, space-separated extra JVM arguments appended to
 rem every java invocation below. Exists for one-off experiments that
 rem shouldn't need a dedicated CLI flag or a script edit, e.g.:
-rem   set JUNO_JVM_OPTS=-Djuno.simd.pool.size=8
+rem   set JUNO_JVM_OPTS=-XX:+UseZGC
 rem   juno.bat local --model-path ...
 rem to override SimdThreadPool's row-parallel pool size (see node's
 rem SimdThreadPool.java for what that controls).
@@ -182,6 +182,7 @@ if /i "%~1"=="--int8"    ( set "DTYPE=INT8"    & shift & goto :cluster_parse )
 if /i "%~1"=="--verbose" ( set "VERBOSE=true"  & shift & goto :cluster_parse )
 if /i "%~1"=="-v"        ( set "VERBOSE=true"  & shift & goto :cluster_parse )
 if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :cluster_parse )
+if /i "%~1"=="--threads" ( set "JUNO_THREADS=%~2" & shift & shift & goto :cluster_parse )
 if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :cluster_parse )
 if /i "%~1"=="--help" (
   echo.
@@ -222,6 +223,7 @@ if /i "%~1"=="--help" (
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
   echo   --gpu             use GPU when available (default)
   echo   --cpu             use CPU only
+  echo   --threads N       CPU matmul threads per JVM (default: all processors; env JUNO_THREADS)
   echo   --verbose / -v
   goto :eof
 )
@@ -394,6 +396,7 @@ if /i "%~1"=="--int8"    ( set "DTYPE=INT8"    & shift & goto :local_parse )
 if /i "%~1"=="--verbose" ( set "VERBOSE=true"  & shift & goto :local_parse )
 if /i "%~1"=="-v"        ( set "VERBOSE=true"  & shift & goto :local_parse )
 if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :local_parse )
+if /i "%~1"=="--threads" ( set "JUNO_THREADS=%~2" & shift & shift & goto :local_parse )
 if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :local_parse )
 if /i "%~1"=="--help" (
   echo.
@@ -423,6 +426,7 @@ if /i "%~1"=="--help" (
   echo                     Records from start, writes juno-^<timestamp^>.jfr on exit
   echo   --gpu             use GPU when available (default)
   echo   --cpu             use CPU only
+  echo   --threads N       CPU matmul threads per JVM (default: all processors; env JUNO_THREADS)
   echo   --mmq on^|off^|auto packed Q4_K GPU weights (VRAM fit + measured CUDA decode win vs off; default auto)
   echo   --cache-type-k f16^|q8_0 K cache type (default f16)
   echo   --cache-type-v f16^|q8_0 V cache type (default f16)
@@ -657,6 +661,7 @@ if /i "%~1"=="--ptype"       ( shift & shift & goto :lora_parse )
 if /i "%~1"=="--verbose" ( set "VERBOSE=true" & shift & goto :lora_parse )
 if /i "%~1"=="-v"        ( set "VERBOSE=true" & shift & goto :lora_parse )
 if /i "%~1"=="--gpu"     ( set "USE_GPU=true"  & shift & goto :lora_parse )
+if /i "%~1"=="--threads" ( set "JUNO_THREADS=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--cpu"     ( set "USE_GPU=false" & shift & goto :lora_parse )
 if /i "%~1"=="--cache-type-k" ( set "CACHE_TYPE_K=%~2" & shift & shift & goto :lora_parse )
 if /i "%~1"=="--cache-type-v" ( set "CACHE_TYPE_V=%~2" & shift & shift & goto :lora_parse )

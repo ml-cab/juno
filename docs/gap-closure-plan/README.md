@@ -136,12 +136,12 @@ tier can fail on it and the final scorecard in Tier 14 can only report a directi
 four-model sweep (`tinyllama-1.1b`, `qwen2.5-3b`, `Phi-3.5-mini`, `mistral-7b`, all Q4_K_M) on the
 `docs/perf-compare/README.md` baseline host, under the benchmark-parity preconditions below:
 
-| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) | Reference 2026-09-27, late | Reference 2026-09-30 (pinned GPU re-baseline) | Reference 2026-10-01 (pinned CPU) | Reference 2026-10-03 (Tier 01B closing sweeps, pinned) | Reference 2026-10-04 (Tier 01C closing sweeps, pinned) | **Current reference** (2026-10-08: Tier 02 closing sweeps, pinned) |
-|---|---|---|---|---|---|---|---|---|---|
-| GPU tg, Phi-3.5-mini | >= **0.70x** (was 0.50x, met 2026-09-30) | 0.330x | 0.423x | 0.415x (0.414x tuned) | 0.416x (0.417x tuned) | 0.394x (0.396x tuned) | 0.394x (0.396x tuned; GPU unchanged) | 0.535x (0.537x tuned) | 0.545x (0.547x tuned) | **0.858x** (0.895x tuned) |
-| GPU tg, mistral-7b | >= **0.70x** (was 0.60x, met 2026-09-27) | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) | 0.639x (0.643x tuned) | 0.610x (0.610x tuned) | 0.610x (0.610x tuned) | 0.611x (0.607x tuned) | 0.627x (0.619x tuned) | **1.030x** (1.037x tuned) |
-| GPU pp, every sweep model | retired 2026-10-04: met at `n_prompt=128` (was >= 0.25x unqualified, before that 0.15x); replaced by the per-length rows of the end-of-plan target table below | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | 0.040x to 0.101x, median 0.064x (Phi-3.5-mini 0.040x binding) | 0.037x to 0.101x at `n_prompt=128`, median 0.067x; 0.011x to 0.098x at 512 (Phi-3.5-mini binding at both) | 0.037x to 0.101x at `n_prompt=128`; 0.011x to 0.098x at 512 (GPU unchanged) | 0.173x to 0.299x at `n_prompt=128`, median 0.289x; 0.146x to 0.285x at 512, median 0.268x (Phi-3.5-mini binding at both) | 0.303x to 0.729x at `n_prompt=128`, median 0.570x; 0.226x to 0.468x at 512, median 0.373x (Phi-3.5-mini binding at both); 0.099x to 0.180x at 2048, median 0.138x (Phi-3.5-mini binding) | **0.584x to 0.807x** at `n_prompt=128`, median 0.681x; **0.594x to 0.825x** at 512, median 0.776x; **0.540x to 0.706x** at 2048, median 0.689x (Phi-3.5-mini binding at all three) |
-| CPU tg, every sweep model | >= **0.25x** (placeholder; Tier 02C restates it against the bandwidth roofline, never lower) | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | 0.090x to 0.135x (CPU not re-measured) | 0.090x to 0.135x (CPU not re-measured) | 0.092x to 0.121x (mistral-7b binding; pp 0.049x to 0.103x, Phi-3.5-mini binding) | 0.092x to 0.121x (CPU not re-measured) | 0.092x to 0.121x (CPU not re-measured) | **0.092x to 0.121x** (CPU not re-measured; Tier 02's pinned CPU A/B 0.997x to 1.001x the pre-tier build) |
+| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) | Reference 2026-09-27, late | Reference 2026-09-30 (pinned GPU re-baseline) | Reference 2026-10-01 (pinned CPU) | Reference 2026-10-03 (Tier 01B closing sweeps, pinned) | Reference 2026-10-04 (Tier 01C closing sweeps, pinned) | Reference 2026-10-08 (Tier 02 closing sweeps, pinned) | **Current reference** (2026-10-11: Tier 02C closing sweep, pinned CPU; GPU unchanged) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| GPU tg, Phi-3.5-mini | >= **0.70x** (was 0.50x, met 2026-09-30) | 0.330x | 0.423x | 0.415x (0.414x tuned) | 0.416x (0.417x tuned) | 0.394x (0.396x tuned) | 0.394x (0.396x tuned; GPU unchanged) | 0.535x (0.537x tuned) | 0.545x (0.547x tuned) | **0.858x** (0.895x tuned) | 0.858x (GPU unchanged: Tier 02C's pinned GPU A/B read tg 1.127x the pre-tier build on this model; ratio not re-measured) |
+| GPU tg, mistral-7b | >= **0.70x** (was 0.60x, met 2026-09-27) | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) | 0.639x (0.643x tuned) | 0.610x (0.610x tuned) | 0.610x (0.610x tuned) | 0.611x (0.607x tuned) | 0.627x (0.619x tuned) | **1.030x** (1.037x tuned) | 1.030x (GPU unchanged: Tier 02C's pinned GPU A/B read tg 1.021x; ratio not re-measured) |
+| GPU pp, every sweep model | retired 2026-10-04: met at `n_prompt=128` (was >= 0.25x unqualified, before that 0.15x); replaced by the per-length rows of the end-of-plan target table below | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | 0.040x to 0.101x, median 0.064x (Phi-3.5-mini 0.040x binding) | 0.037x to 0.101x at `n_prompt=128`, median 0.067x; 0.011x to 0.098x at 512 (Phi-3.5-mini binding at both) | 0.037x to 0.101x at `n_prompt=128`; 0.011x to 0.098x at 512 (GPU unchanged) | 0.173x to 0.299x at `n_prompt=128`, median 0.289x; 0.146x to 0.285x at 512, median 0.268x (Phi-3.5-mini binding at both) | 0.303x to 0.729x at `n_prompt=128`, median 0.570x; 0.226x to 0.468x at 512, median 0.373x (Phi-3.5-mini binding at both); 0.099x to 0.180x at 2048, median 0.138x (Phi-3.5-mini binding) | **0.584x to 0.807x** at `n_prompt=128`, median 0.681x; **0.594x to 0.825x** at 512, median 0.776x; **0.540x to 0.706x** at 2048, median 0.689x (Phi-3.5-mini binding at all three) | unchanged (Tier 02C's pinned GPU A/B read pp 0.973x to 1.039x the pre-tier build) |
+| CPU tg, every sweep model | >= **0.25x** (restated again 2026-10-11 from Tier 02C's closing sweep; was 0.40x from 2026-10-10, and a 0.25x placeholder before that) | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | 0.090x to 0.135x (CPU not re-measured) | 0.090x to 0.135x (CPU not re-measured) | 0.092x to 0.121x (mistral-7b binding; pp 0.049x to 0.103x, Phi-3.5-mini binding) | 0.092x to 0.121x (CPU not re-measured) | 0.092x to 0.121x (CPU not re-measured) | **0.092x to 0.121x** (CPU not re-measured; Tier 02's pinned CPU A/B 0.997x to 1.001x the pre-tier build) | **0.215x to 0.238x** (Qwen2.5-3B binding; pp 0.224x to 0.256x, TinyLlama binding; Tier 02C closing sweep `20261011T013059Z`, pinned) |
 
 The table above is the history of readings. The table below is what Tier 14 scores and what
 `check-plan-thresholds.sh` reads (execution rule 7): every threshold is `>= number`, an `active` row
@@ -161,7 +161,7 @@ model" scope the reference is the binding (lowest) model's reading.
 | end | GPU tg, raised 2026-10-08 | Phi-3.5-mini | >= 0.90x | 0.858x (`20261008T173153Z`) | active |
 | end | GPU pp, `n_prompt=512`, raised 2026-10-08 | every sweep model | >= 0.70x | 0.594x (Phi-3.5-mini, binding; `20261008T174605Z`) | active |
 | end | GPU pp, `n_prompt=2048`, raised 2026-10-08 | every sweep model | >= 0.60x | 0.540x (Phi-3.5-mini, binding; `20261008T181417Z`) | active |
-| end | CPU tg | every sweep model | >= 0.25x | 0.092x (mistral-7b, binding; `20261001T180241Z`) | active |
+| end | CPU tg, restated 2026-10-11 | every sweep model | >= 0.25x | 0.215x (qwen2.5-3b, binding; Tier 02C closing sweep `20261011T013059Z`; was 0.092x at `20261001T180241Z`) | active |
 
 **Why the GPU pp target became two rows (2026-10-04, plan review).** The target read "GPU pp, every sweep
 model >= 0.25x" and named no prompt length. At `n_prompt=128` Tier 01C's closing sweep already meets it on
@@ -182,7 +182,16 @@ at 512 and 0.60x at 2048. All four are [Tier 02D](TIER-02D-gpu-host-overhead.md)
 restates any row the decomposition puts out of reach. The post-plan anchor below (GPU pp 0.40x at 2048) was passed by
 the same sweeps (0.540x); it stays recorded as written and Tier 14 reports it as passed.
 
-**Score every later tier against the right-most column.** Its GPU rows are Tier 02's closing sweeps (2026-10-08,
+**Score every later tier against the right-most column.** Its CPU row is Tier 02C's closing sweep (2026-10-11, owner
+run, clocks pinned, jar `6ae135b0e21839cf`: `aabc42cb` plus the CPU integer kernels, the CPU worker pool and the decode
+allocation work): `docs/perf-compare/20261011T013059Z/`, four sweep models at `n_prompt=128`, `-t 12` against Juno
+`--threads 12`, every row scorable, prompt parity exact. It is a measurement boundary for CPU readings: the default CPU
+matmul is now integer dot products over an 8-bit activation, on a dedicated pool of `--threads` threads. Its GPU rows
+are unchanged from the column to its left; Tier 02C's pinned GPU A/B against the pre-tier build read tg 1.020x to 1.127x
+and pp 0.973x to 1.039x (`docs/perf-compare/20261011T052951Z-cpu-hot-path-close-gate/`). Both CPU milestones are met and
+retired; the end-of-plan CPU tg row is restated (see "Restated again 2026-10-11").
+
+**The 2026-10-08 column** was the reference until then. Its GPU rows are Tier 02's closing sweeps (2026-10-08,
 owner run, clocks pinned, HEAD `51fa5d4` plus Tier 02's decode-width attention path and test-only changes, jar
 `43b22345f1175c8f`): `docs/perf-compare/20261008T173153Z/` (`n_prompt=128`), `20261008T174605Z/` (512),
 `20261008T180014Z/` (2048; TinyLlama, Qwen2.5-3B, Mistral 7B) and `20261008T181417Z/` (2048, Phi-3.5-mini at an
@@ -282,8 +291,8 @@ ask for more than its reference reading. For an "every model" scope the referenc
 | 02 | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 0.998 (mistral-7b, binding; missed at Tier 02's close, reported by owner decision 13; tinyllama 1.153, qwen2.5-3b 1.157, Phi-3.5-mini 1.017; Tier 02 closing sweeps `20261008T173153Z`/`20261008T174605Z`; was 0.606 at Tier 01C's close) | active |
 | 02 | Attention speedup at `n_prompt=2048`: the pre-tier build's attention time per prefill window over the candidate's, clock-normalised (GPU ms x in-window median SM MHz), same-session A/B | every sweep model | >= 6.0x | 10.40x (qwen2.5-3b, binding; tinyllama 14.06x, Phi-3.5-mini 17.12x, mistral-7b 14.08x; Tier 02 closing A/B `20261008T054413Z-attention-close-gate`; the pre-tier build reads 1.0x by definition) | retired: met by Tier 02 |
 | 04 | GPU tg ratio | Phi-3.5-mini | >= 0.40x | 0.416x | retired: met on arrival |
-| 02C | CPU tg ratio | every sweep model | >= 0.20x | 0.092x (mistral-7b, `20261001T180241Z`; was 0.090x) | active |
-| 02C | CPU pp ratio, `n_prompt=128` | every sweep model | >= 0.10x | 0.049x (Phi-3.5-mini, `20261001T180241Z`; the others 0.075x to 0.103x; was 0.048x at `20260927T094414Z`) | active |
+| 02C | CPU tg ratio | every sweep model | >= 0.20x | 0.215x (qwen2.5-3b, binding; tinyllama 0.238x, Phi-3.5-mini 0.222x, mistral-7b 0.224x; Tier 02C closing sweep `20261011T013059Z`, pinned; was 0.092x) | retired: met by Tier 02C |
+| 02C | CPU pp ratio, `n_prompt=128` | every sweep model | >= 0.10x | 0.224x (tinyllama, binding; qwen2.5-3b 0.230x, Phi-3.5-mini 0.256x, mistral-7b 0.226x; Tier 02C closing sweep `20261011T013059Z`, pinned; was 0.049x) | retired: met by Tier 02C |
 
 **Why the 512-over-128 row moved from Tier 01B to Tier 02 (2026-10-01, owner decision).** Tier 01B's
 step 5 decomposition showed that no item in that tier can meet it. The term that grows with prompt length
@@ -421,6 +430,43 @@ to 0.7x. So 0.25x is a placeholder, not an ambition. [Tier 02C](TIER-02C-cpu-hot
 measures the host's attainable bandwidth, publishes Juno's attained weight bandwidth (bytes per token x
 tg) beside every CPU tg reading, and restates this row after its step-2 breakdown, at the level the
 breakdown supports and never below 0.25x.
+
+**Restated 2026-10-10 (Tier 02C step 4): CPU tg >= 0.40x on every sweep model.** Two inputs. The host's
+measured attainable read bandwidth is 42.4 GB/s (`docs/perf-compare/20261009T220314Z-host-read-bandwidth/`).
+The CPU cost breakdown (`docs/perf-compare/20261010T032108Z-cpu-cost-breakdown/`) shows that about 99% of CPU
+decode time is in the quantized matmul kernels. Those kernels are bound by instructions per weight (about 4 to
+5 core cycles each), not by memory and not by the float add chain (splitting it recovers about 3.5%), and they
+scale 5.9x from 1 to 12 threads. At the pinned CPU reference (`20261001T180241Z`), file size as bytes per token:
+
+| Model | Reference tool share of 42.4 GB/s | Juno share | Juno tg ratio at a 25% share |
+|---|---|---|---|
+| tinyllama-1.1b | 40.8% | 5.0% | 0.61x |
+| qwen2.5-3b | 54.3% | 5.4% | 0.46x |
+| Phi-3.5-mini | 50.4% | 5.1% | 0.50x |
+| mistral-7b | 57.3% | 5.3% | **0.44x** (binding) |
+
+A tg ratio is Juno's bandwidth share over the reference tool's, so the model the reference tool runs closest
+to the roofline binds. **25% is the share items 1 to 3 can plausibly reach.** It needs about 1.1 core cycles
+per weight across six cores at the pinned 3.5 GHz. Integer dots over a once-quantized activation at this
+host's 128-bit integer width should cost roughly 0.4 to 0.7, if C2 compiles them to packed multiply-adds;
+Tier 02C item 1 measures that. Above it, the reference tool's 57% on the same host is the ceiling, and
+reaching it needs native-quality code, which nothing measured yet supports. At 25% the binding model reads 0.44x. The
+non-kernel time (about 1% today) grows to about 4% once the kernels are 4.6x faster, and adding
+per-dispatch cost puts the reading near 0.41x. Hence 0.40x, not 0.44x. The restated row is at least 0.40x,
+so no holding term is owed under the restatement rule. The term that would hold it lower is the instruction
+count per weight at 128-bit integer width. If item 1's measurement shows the kernel cannot reach about 1.1
+cycles per weight, the row is restated again (never below 0.25x) with that term named. `host-specific`: an
+AVX2 host doubles the integer width and changes the cycle budget.
+
+**Restated again 2026-10-11 (Tier 02C closing sweep, owner decision 4): CPU tg >= 0.25x on every sweep model.** The 0.40x
+row assumed items 1 to 3 could reach a 25% bandwidth share, about 1.1 core cycles per weight. They reached 12.2% to 13.3%
+(`docs/perf-compare/20261011T013059Z/`, pinned): the shipped Q4_K decode kernel runs at about 1.5 cycles per weight on one
+thread and the Q6_K scalar kernel at about 2.7, and those two kernels are about 93% of Mistral 7B decode. So, as this row's
+own rule says, it is restated, to its floor: 0.25x, against 0.215x today (Qwen2.5-3B binding). **The term that holds it
+below 0.40x is per-weight instruction cost in the Q4_K vector and Q6_K scalar decode kernels** on a host with 128-bit integer
+SIMD and 16 vector registers. A faster Q6_K decode kernel and a Q4_K kernel nearer one cycle per weight are the levers;
+no tier owns them yet, and Tier 14 reports the row's distance. `host-specific`: an AVX2 or AVX-512/VNNI host widens the
+integer lanes and moves the budget.
 
 **Post-plan anchor: GPU pp >= 0.40x (added 2026-09-30; not a gate of this plan).** *Promoted
 2026-10-04 (plan review): 0.40x at `n_prompt=512` is now an end-of-plan target (see "End-of-plan targets,

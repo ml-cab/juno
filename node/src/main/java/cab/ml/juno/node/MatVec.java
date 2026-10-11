@@ -100,6 +100,33 @@ public interface MatVec {
     }
 
     /**
+     * {@link #sgemv(float[], float[], int, int)} into a caller-provided {@code out[0, rows)},
+     * bit-identical to it. The default copies from the allocating form; a backend that can
+     * write in place overrides it.
+     */
+    default void sgemvInto(float[] A, float[] x, float[] out, int rows, int cols) {
+        System.arraycopy(sgemv(A, x, rows, cols), 0, out, 0, rows);
+    }
+
+    /** {@link #sgemv(DeviceFloatMatrix, float[])} into {@code out[0, A.rows())}; same contract. */
+    default void sgemvInto(DeviceFloatMatrix A, float[] x, float[] out) {
+        float[] y = sgemv(A, x);
+        System.arraycopy(y, 0, out, 0, y.length);
+    }
+
+    /** {@link #sgemv(DeviceHalfMatrix, float[])} into {@code out[0, A.rows())}; same contract. */
+    default void sgemvInto(DeviceHalfMatrix A, float[] x, float[] out) {
+        float[] y = sgemv(A, x);
+        System.arraycopy(y, 0, out, 0, y.length);
+    }
+
+    /** {@link #sgemv(DeviceQ4KMatrix, float[])} into {@code out[0, A.rows())}; same contract. */
+    default void sgemvInto(DeviceQ4KMatrix A, float[] x, float[] out) {
+        float[] y = sgemv(A, x);
+        System.arraycopy(y, 0, out, 0, y.length);
+    }
+
+    /**
      * Several device-resident GEMVs that share the same host activation {@code x}
      * (e.g. Q/K/V or gate/up). Default: serial {@link #sgemv} calls.
      *

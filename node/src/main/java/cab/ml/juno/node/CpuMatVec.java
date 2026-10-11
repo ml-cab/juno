@@ -38,18 +38,27 @@ public final class CpuMatVec implements MatVec {
 
 	@Override
 	public float[] sgemv(float[] A, float[] x, int rows, int cols) {
+		float[] result = new float[rows];
+		sgemvInto(A, x, result, rows, cols);
+		return result;
+	}
+
+	/** In place: no allocation; bit-identical to {@link #sgemv(float[], float[], int, int)}. */
+	@Override
+	public void sgemvInto(float[] A, float[] x, float[] out, int rows, int cols) {
 		if (A.length != (long) rows * cols)
 			throw new IllegalArgumentException("A.length=" + A.length + " != rows*cols=" + ((long) rows * cols));
 		if (x.length != cols)
 			throw new IllegalArgumentException("x.length=" + x.length + " != cols=" + cols);
+		if (out.length < rows)
+			throw new IllegalArgumentException("out.length=" + out.length + " < rows=" + rows);
 		MatVecEvent evt = new MatVecEvent();
 		evt.begin();
-		float[] result = LlamaTransformerHandler.matVec(A, x, rows, cols);
+		LlamaTransformerHandler.matVecInto(A, x, out, rows, cols);
 		evt.backend(MatVecBackend.CPU);
 		evt.rows = rows;
 		evt.cols = cols;
 		evt.commit();
-		return result;
 	}
 
 	/**
@@ -83,7 +92,7 @@ public final class CpuMatVec implements MatVec {
 		}
 		SgemmOutput.require(X, Y, rows);
 		if (B == 0) return;
-		java.util.stream.IntStream.range(0, rows).parallel().forEach(r -> {
+		CpuThreads.forEach(rows, r -> {
 			int base = r * cols;
 			for (int b = 0; b < B; b++) {
 				float acc = 0f;

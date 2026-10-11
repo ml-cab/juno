@@ -590,22 +590,6 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	}
 
 	/**
-	 * Matrix–vector for a row-range of a fused tensor via FP16 slice or CPU.
-	 * Prefer {@link #projectFusedQ4} when a packed Q4 fused matrix is resident.
-	 */
-	private float[] matVecFused(GgufReader.QuantizedTensor quant, DeviceHalfMatrix half,
-			float[] x, int rowStart, int rowEnd, int cols) {
-		if (half != null) {
-			try {
-				return backend.sgemv(half, x);
-			} catch (IllegalStateException ex) {
-				matVecFallback.absorb(ex);
-			}
-		}
-		return LlamaTransformerHandler.matVec(quant, x, rowStart, rowEnd, cols);
-	}
-
-	/**
 	 * One fused Q4 GEMV then host-slice into {@code outA}/{@code outB} (and optional {@code outC});
 	 * on the CPU from {@code quant} when the device runs out of memory.
 	 */
@@ -624,18 +608,44 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			System.arraycopy(full, aLen + bLen, outC, 0, cLen);
 	}
 
-	/** Non-fused projection (wo / down): Q4, FP16, or CPU. */
-	private float[] matVecProj(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix q4, DeviceHalfMatrix half,
-			float[] x, int rows, int cols) {
+	/** Fused-row projection into {@code out[0, rowEnd - rowStart)}; no allocation on the CPU path. */
+	private float[] matVecFusedInto(GgufReader.QuantizedTensor quant, DeviceHalfMatrix half,
+			float[] x, float[] out, int rowStart, int rowEnd, int cols) {
+		if (half != null) {
+			try {
+				backend.sgemvInto(half, x, out);
+				return out;
+			} catch (IllegalStateException ex) {
+				matVecFallback.absorb(ex);
+			}
+		}
+		LlamaTransformerHandler.matVecEventInto(quant, x, out, rowStart, rowEnd, cols);
+		return out;
+	}
+
+	/** Non-fused projection (wo / down: Q4, FP16 or CPU) into {@code out[0, rows)}; no allocation on the CPU path. */
+	private float[] matVecProjInto(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix q4, DeviceHalfMatrix half,
+			float[] x, float[] out, int rows, int cols) {
 		try {
-			if (q4 != null)
-				return backend.sgemv(q4, x);
-			if (half != null)
-				return backend.sgemv(half, x);
+			if (q4 != null) {
+				backend.sgemvInto(q4, x, out);
+				return out;
+			}
+			if (half != null) {
+				backend.sgemvInto(half, x, out);
+				return out;
+			}
 		} catch (IllegalStateException ex) {
 			matVecFallback.absorb(ex);
 		}
-		return LlamaTransformerHandler.matVec(quant, x, 0, rows, cols);
+		LlamaTransformerHandler.matVecEventInto(quant, x, out, 0, rows, cols);
+		return out;
+	}
+
+	private final ThreadLocal<CpuDecodeScratch> decodeScratch = ThreadLocal.withInitial(this::newDecodeScratch);
+
+	private CpuDecodeScratch newDecodeScratch() {
+		return new CpuDecodeScratch(cfg);
 	}
 
 	private static void logLayerMemory(int layer, int H, int kvDim, int I, GgufReader.QuantizedTensor qkv,
@@ -795,7 +805,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			String requestId = requestIds.get(i);
 			int pos = positions[i];
 
-			boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+			boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 			SessionKvTensor[] kCache = kvCacheK.get(requestId);
 			SessionKvTensor[] vCache = kvCacheV.get(requestId);
@@ -929,7 +939,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		int kvDim = cfg.kvDim();
 		int lastPos = startPos + W - 1;
 
-		boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+		boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
 		SessionKvTensor[] kCache = kvCacheK.get(requestId);
@@ -1298,6 +1308,10 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			backend.sgemmInto(half, X, Y);
 			return;
 		}
+		if (CpuKernelSelection.integerGemm(quant.type(), cols)) {
+			CpuIntegerGemm.sgemmInto(quant, X, Y, rowStart, rowEnd, cols);
+			return;
+		}
 		for (int b = 0; b < X.length; b++)
 			LlamaTransformerHandler.matVecInto(quant, X[b], Y[b], rowStart, rowEnd, cols);
 	}
@@ -1329,7 +1343,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 		// Lazy initial allocation — 64 slots, grows on demand to avoid OOM.
 		// phi-3.5-mini: eager 2048 slots = 554 MB per request; lazy = 17 MB initially.
-		boolean isNew = kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
+		boolean isNew = !kvCacheK.containsKey(requestId) && kvCacheK.putIfAbsent(requestId, newKLayers(L)) == null;
 		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 
 		SessionKvTensor[] kCache = kvCacheK.get(requestId);
@@ -1370,6 +1384,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 		if (region != null && region.ownsResult(x))
 			x = x.clone(); // the region's row is overwritten by this thread's next call
+		if (x == decodeScratch.get().resid)
+			x = x.clone(); // the decode scratch is overwritten by this thread's next token
 
 		if (a != null) {
 			int seqLen = pos + 1;
@@ -1502,17 +1518,18 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			if (resident.attended)
 				attnOut = resident.attn;
 		} else {
-			float[] xNorm = LlamaTransformerHandler.rmsNorm(x, attnNorm[li], cfg.rmsNormEps());
+			CpuDecodeScratch ds = decodeScratch.get();
+			float[] xNorm = LlamaTransformerHandler.rmsNormIntoReturn(x, attnNorm[li], cfg.rmsNormEps(), ds.xNorm);
 			if (attnQkvQ4Dev != null && attnQkvQ4Dev[li] != null) {
-				q = new float[H];
-				k = new float[kvDim];
-				v = new float[kvDim];
+				q = ds.q;
+				k = ds.k;
+				v = ds.v;
 				projectFusedQ4(attnQkv[li], attnQkvQ4Dev[li], xNorm, q, H, k, kvDim, v, kvDim);
 			} else {
-				q = matVecFused(attnQkv[li], attnQDev != null ? attnQDev[li] : null, xNorm, 0, H, H);
-				k = matVecFused(attnQkv[li], attnKDev != null ? attnKDev[li] : null, xNorm, H, H + kvDim, H);
-				v = matVecFused(attnQkv[li], attnVDev != null ? attnVDev[li] : null, xNorm, H + kvDim, H + 2 * kvDim,
-						H);
+				q = matVecFusedInto(attnQkv[li], attnQDev != null ? attnQDev[li] : null, xNorm, ds.q, 0, H, H);
+				k = matVecFusedInto(attnQkv[li], attnKDev != null ? attnKDev[li] : null, xNorm, ds.k, H, H + kvDim, H);
+				v = matVecFusedInto(attnQkv[li], attnVDev != null ? attnVDev[li] : null, xNorm, ds.v, H + kvDim,
+						H + 2 * kvDim, H);
 			}
 			Phi3Rope.ropeExt(q, pos, cfg.numHeads(), cfg.headDim(), ropeCfg);
 			Phi3Rope.ropeExt(k, pos, cfg.numKvHeads(), cfg.headDim(), ropeCfg);
@@ -1532,26 +1549,34 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		}
 
 		int seqLen = pos + 1;
+		CpuDecodeScratch ds = decodeScratch.get();
 		if (attnOut == null && g != null) {
-			float[] out = new float[H];
-			if (g.attendOne(mirror, pos, q, out, layerWindows[li]))
-				attnOut = out;
+			if (g.attendOne(mirror, pos, q, ds.attnOut, layerWindows[li]))
+				attnOut = ds.attnOut;
 		}
 		if (attnOut == null) {
 			float[] kView = kCacheLayer.viewForAttention(seqLen, kScratch);
 			float[] vView = vCacheLayer.viewForAttention(seqLen, vScratch);
-			attnOut = gqa(q, kView, vView, seqLen, layerWindows[li]);
+			GqaMath.attend(q, kView, vView, seqLen, ds.attnOut, ds.scores(seqLen), cfg.numHeads(), cfg.headDim(),
+					cfg.gqaRatio(), cfg.kvDim(), layerWindows[li]);
+			attnOut = ds.attnOut;
 		}
-		float[] attnProj = matVecProj(wo[li],
+		float[] attnProj = matVecProjInto(wo[li],
 				woQ4Dev != null ? woQ4Dev[li] : null,
 				woDev != null ? woDev[li] : null,
-				attnOut, H, H);
-		float[] x2 = LlamaTransformerHandler.add(x, attnProj);
+				attnOut, ds.attnProj, H, H);
+		// The residual stream lives in the scratch: x2 overwrites this layer's input
+		// once that input has been read.
+		float[] x2 = ds.resid;
+		for (int i = 0; i < H; i++)
+			x2[i] = x[i] + attnProj[i];
 
 		// ── FFN sub-layer ─────────────────────────────────────────────────────
-		float[] xNorm2 = LlamaTransformerHandler.rmsNorm(x2, ffnNorm[li], cfg.rmsNormEps());
-		float[] ffnOut = ffn(xNorm2, li);
-		return LlamaTransformerHandler.add(x2, ffnOut);
+		float[] xNorm2 = LlamaTransformerHandler.rmsNormIntoReturn(x2, ffnNorm[li], cfg.rmsNormEps(), ds.xNorm);
+		float[] ffnOut = ffn(xNorm2, li, ds);
+		for (int i = 0; i < H; i++)
+			x2[i] += ffnOut[i];
+		return x2;
 	}
 
 	/**
@@ -1561,26 +1586,26 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	 * (or one Q4 GEMV + host slice when packed residency is active).
 	 * ffnGateUp rows: [0, I) → gate projection (SiLU input) [I, 2I) → up projection
 	 */
-	private float[] ffn(float[] x, int li) {
+	private float[] ffn(float[] x, int li, CpuDecodeScratch ds) {
 		int H = cfg.hiddenDim();
 		int I = cfg.intermediateSize();
 		float[] gate;
 		float[] up;
 		if (ffnGateUpQ4Dev != null && ffnGateUpQ4Dev[li] != null) {
-			gate = new float[I];
-			up = new float[I];
+			gate = ds.gate;
+			up = ds.up;
 			projectFusedQ4(ffnGateUp[li], ffnGateUpQ4Dev[li], x, gate, I, up, I, null, 0);
 		} else {
-			gate = matVecFused(ffnGateUp[li], ffnGateDev != null ? ffnGateDev[li] : null, x, 0, I, H);
-			up = matVecFused(ffnGateUp[li], ffnUpDev != null ? ffnUpDev[li] : null, x, I, 2 * I, H);
+			gate = matVecFusedInto(ffnGateUp[li], ffnGateDev != null ? ffnGateDev[li] : null, x, ds.gate, 0, I, H);
+			up = matVecFusedInto(ffnGateUp[li], ffnUpDev != null ? ffnUpDev[li] : null, x, ds.up, I, 2 * I, H);
 		}
-		float[] hidden = new float[I];
+		float[] hidden = ds.hidden;
 		for (int i = 0; i < I; i++)
 			hidden[i] = LlamaTransformerHandler.silu(gate[i]) * up[i];
-		return matVecProj(wDown[li],
+		return matVecProjInto(wDown[li],
 				wDownQ4Dev != null ? wDownQ4Dev[li] : null,
 				wDownDev != null ? wDownDev[li] : null,
-				hidden, H, I);
+				hidden, ds.ffnOut, H, I);
 	}
 
 	private float[] outputProjection(float[] x) {
@@ -1598,13 +1623,5 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		// cfg.vocabSize() would omit the special-token logits including EOS.
 		int actualVocab = outputProj.length / cfg.hiddenDim();
 		return LlamaTransformerHandler.matVec(outputProj, xNorm, actualVocab, cfg.hiddenDim());
-	}
-
-	/** Grouped-query attention over {@code [0, seqLen)}, or its last {@code window} keys (0: all). */
-	private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen, int window) {
-		float[] out = new float[cfg.numHeads() * cfg.headDim()];
-		GqaMath.attend(q, kCache, vCache, seqLen, out, new float[seqLen], cfg.numHeads(), cfg.headDim(),
-				cfg.gqaRatio(), cfg.kvDim(), window);
-		return out;
 	}
 }

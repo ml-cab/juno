@@ -46,6 +46,10 @@ import cab.ml.juno.tokenizer.Tokenizer;
 /**
  * Programmatic LoRA fine-tuning on a single full-model shard (same layout as the
  * {@code ./juno lora} REPL).
+ *
+ * <p>CPU work runs on the JVM's CPU matmul threads: {@code -Djuno.threads}, else
+ * {@code JUNO_THREADS}, else every available processor; an embedder can change
+ * it at any time with {@link cab.ml.juno.node.CpuThreads#setThreads(int)}.
  */
 public final class LoraTrainer implements AutoCloseable {
 

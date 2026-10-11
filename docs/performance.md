@@ -501,6 +501,10 @@ prefill matmul" below.)*
 
 ## Vector SIMD / CPU MatVec
 
+*Superseded for Q4_K, Q5_K, Q6_K and Q8_0 weights by the CPU integer kernels below: the float weight-stationary
+kernels this section describes now run only when the integer kernels do not (no `jdk.incubator.vector`, or
+`-Djuno.cpu.integerKernels=false`), and their rows run on the CPU worker pool, not the common pool.*
+
 **Plan:** [`infra-plan/PLAN-Infra-Vector-SIMD.md`](infra-plan/PLAN-Infra-Vector-SIMD.md) (P0 step 4).
 
 **Policy** (`VectorQuantKernels.policySummary()`, logged at startup):
@@ -520,6 +524,45 @@ prefill matmul" below.)*
 **Vision gate:** [`scripts/performance-tests/compare-vision.sh`](../scripts/performance-tests/compare-vision.sh) vs `47-vision` / [`perf-compare/20260904T141315Z-vision/`](perf-compare/20260904T141315Z-vision/). Default `--prefill single`. Module flag `--vector 0|1` in compare scripts only controls whether `--add-modules jdk.incubator.vector` is passed; with the scalar accumulate policy, Q4_K_M CPU tg should be near-parity between the two.
 
 **Bake-off:** [`perf-compare/20260904T194612Z`](perf-compare/20260904T194612Z/) (`--vector 0`) vs [`perf-compare/20260904T195731Z`](perf-compare/20260904T195731Z/) (`--vector 1`). Juno tg v1/v0 ≈ **0.99–1.03** on the default Q4_K_M set — near-parity under the scalar accumulate policy. Track **feature complete**.
+
+## CPU integer kernels and `--threads`
+
+CPU matmuls over Q4_K, Q5_K, Q6_K and Q8_0 weights quantize the activation row to 8 bits once per matmul (one float
+scale per 32 values) and run integer dot products over the packed weights, scaling each weight sub-block once.
+
+| Width | Kernel | Measured against the previous float kernel (12 threads, this host) |
+|---|---|---|
+| Decode, Q4_K / Q5_K | `CpuIntegerKernels`, 128-bit Vector API lanes | Q4_K 0.33x the time; Q5_K 3.5 ms against 11 ms per call at Phi-3.5-mini's FFN shape |
+| Decode, Q6_K / Q8_0 | `CpuIntegerKernels`, scalar integer loops | Q6_K 0.65x the time |
+| Prefill, every format | `CpuIntegerGemm`, cache-blocked (16-row tiles, each 256-column block unpacked once) | Q4_K/Q5_K 0.22x to 0.33x, Q6_K 0.14x (previously one row-pass per prompt token) |
+
+End to end on the four standard models (CPU, 12 threads, unpinned, `perf-compare/20261010T085329Z-cpu-integer-kernels/`):
+generation 2.4x to 2.5x faster, 128-token prompt processing 2.8x to 5.4x faster, which moves the ratio against the
+reference tool from 0.09x to 0.12x to 0.24x to 0.31x (generation) and from 0.05x to 0.10x to 0.23x to 0.26x (prompt).
+Mean negative log-likelihood over 2,048 tokens is 0.99935x to 1.00061x the float kernels' on all four models
+(`ModelQualityNllLiveTest`). Results are bitwise repeatable at any thread count.
+
+**Pinned closing reading** (clocks pinned, `perf-compare/20261011T013059Z/`, the CPU reference from 2026-10-11): against the
+reference tool at `-t 12`, generation 0.215x to 0.238x and 128-token prompt processing 0.224x to 0.256x on the four standard
+models (TinyLlama 7.74 / 16.52 t/s, Qwen2.5-3B 2.59 / 6.18, Phi-3.5-mini 2.29 / 4.85, Mistral 7B 1.29 / 2.62). GPU throughput
+is unchanged by this work (pinned A/B against the previous build: generation 1.02x to 1.13x, prompt 0.97x to 1.04x, greedy
+output identical), and so are LoRA training and playback (`perf-compare/20261011T052951Z-cpu-hot-path-close-gate/`).
+
+**Threads.** Every CPU matmul runs on one persistent pool of `--threads` threads (`JUNO_THREADS`; default: every
+available processor). It measured the same speed as the previous fork-join dispatch (decode layer 0.97x to 1.01x,
+`perf-compare/20261010T145223Z-cpu-threads/`) and, unlike it, can be sized at any time, including in an embedder's
+JVM (`JunoPlayer.Builder.threads`) and per cluster node.
+
+**Allocation.** Steady-state CPU decode allocates 0.87 MB per token on Mistral 7B instead of 20.8 MB, with no GC
+pause in the decode span (`perf-compare/20261010T184826Z-cpu-decode-allocation/`).
+
+**Fallbacks.** Without `--add-modules jdk.incubator.vector` (the launchers pass it) every CPU matmul takes the float
+kernels; `-Djuno.cpu.integerKernels=false` selects them explicitly. LoRA training's frozen forward always uses the float
+activation. The startup log names the kernels and thread count in use.
+
+**What bounds it now.** Mistral 7B decode reads its weights at 13.3% of this host's 42.4 GB/s (pinned: 40.34 GB/s,
+DDR3-1600); decode time is the
+Q4_K vector kernel (about 57%) and the Q6_K scalar kernel (about 36%).
 
 ## Prefill microbatching (`--prefill-batch`)
 

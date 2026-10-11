@@ -192,7 +192,8 @@ widened".*
    there — a one-line `host-specific` / `expected-general` marker per finding, not an essay. A future
    reader on a Turing-or-later GPU needs to know which of these to re-measure and which to trust.
    [Tier 02C](TIER-02C-cpu-hot-path.md) carries the same obligation for its CPU
-   findings on this host's AVX2-without-AVX-512, no-VNNI Xeon.
+   findings on this host's AVX-only Xeon (no AVX2, no FMA, no AVX-512, no VNNI; corrected 2026-10-09 by Tier
+   02C, it said AVX2).
 3. **Packed residency for every format that has a packed kernel, on every backend.** Widen
    `DeviceQ4KMatrix.supportsType` and `Q4KResidentUpload.preferPacked` to the formats Tier 04 added
    kernels for, and make `Q4KResidentUpload` the single decision point for packed-versus-FP16 across

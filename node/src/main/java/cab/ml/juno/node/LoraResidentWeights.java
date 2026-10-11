@@ -140,7 +140,7 @@ final class LoraResidentWeights {
 		return true;
 	}
 
-	/** Frozen forward {@code W*x}: resident GPU when {@code dev != null}, else quantized CPU. */
+	/** Frozen forward {@code W*x}: resident GPU when {@code dev != null}, else quantized CPU over the float activation. */
 	static float[] matVec(GgufReader.QuantizedTensor quant, ResidentWeightMatrix dev, float[] x, int rows, int cols) {
 		return matVec(quant, null, dev, x, rows, cols);
 	}
@@ -155,7 +155,8 @@ final class LoraResidentWeights {
 			return q4.sgemv(x);
 		if (fp != null)
 			return fp.sgemv(x);
-		return LlamaTransformerHandler.matVec(quant, x, rows, cols);
+		// Float activation: the backward pass differentiates exactly this product.
+		return LlamaTransformerHandler.matVecFloatActivation(quant, x, 0, rows, cols);
 	}
 
 	/** Frozen transpose {@code W^T*g}: resident GPU when {@code dev != null}, else quantized CPU. */

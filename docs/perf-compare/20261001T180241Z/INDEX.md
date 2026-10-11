@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20261001T180241Z (cpu)
 
+> **Superseded as CPU reference on 2026-10-11** by [`20261011T013059Z`](../20261011T013059Z/INDEX.md) (kept as the pre-integer-kernel reading).
+>
 > **CPU reference from 2026-10-01** (supersedes [`20260927T094414Z`](../20260927T094414Z/INDEX.md) as reference). The first CPU sweep with pinned clocks (governor performance, turbo off) and with Juno's common-pool parallelism set from `--threads` (12 threads, matching the reference tool's `-t 12`). At this default the pool size equals the JVM's own default, so thread count did not change; the clock pinning did, and it lowers both engines' absolute throughput. Compare ratios across this boundary, never absolute t/s. Every row scorable, every prefill 128 of 128 tokens.
 
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |

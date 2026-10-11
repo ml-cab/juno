@@ -28,6 +28,13 @@ Features:
 
 ## 1.1 What's new?
 
+### Faster CPU inference
+
+- CPU matmuls over Q4_K, Q5_K, Q6_K and Q8_0 weights run integer dot products on an 8-bit activation, with a
+  cache-blocked matmul for prompt processing: about 2.5x faster generation and 3x to 5x faster prompt processing on
+  the CPU, at the same output quality. `--threads N` (`JUNO_THREADS`) sets how many threads CPU matmuls use. See
+  `docs/howto.md`.
+
 ### Embeddings API
 
 - `POST /v1/embeddings` (OpenAI wire-compatible), opt-in via `--embeddings`;

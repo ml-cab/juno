@@ -1,0 +1,74 @@
+baseline jar sha256: 7ba4a3142c3ab0f4
+candidate jar sha256: 6ae135b0e21839cf
+
+=== Part D: pinned host read bandwidth (20:14:53)
+{"tool":"java","threads":1,"buffer_bytes":3221225472,"passes":4,"gbs":[13.08,13.11,13.08],"median_gbs":13.08}
+{"tool":"java","threads":2,"buffer_bytes":3221225472,"passes":4,"gbs":[25.25,24.58,24.72],"median_gbs":24.72}
+{"tool":"java","threads":3,"buffer_bytes":3221225472,"passes":4,"gbs":[33.42,33.00,31.77],"median_gbs":33.00}
+{"tool":"java","threads":4,"buffer_bytes":3221225472,"passes":4,"gbs":[36.80,36.50,35.66],"median_gbs":36.50}
+{"tool":"java","threads":6,"buffer_bytes":3221225472,"passes":4,"gbs":[39.00,37.34,36.52],"median_gbs":37.34}
+{"tool":"java","threads":8,"buffer_bytes":3221225472,"passes":4,"gbs":[40.58,38.75,39.35],"median_gbs":39.35}
+{"tool":"java","threads":12,"buffer_bytes":3221225472,"passes":4,"gbs":[40.22,41.34,41.79],"median_gbs":41.34}
+{"tool":"c","threads":1,"buffer_bytes":3221225472,"passes":4,"gbs":[16.00,15.90,15.97],"median_gbs":15.97}
+{"tool":"c","threads":2,"buffer_bytes":3221225472,"passes":4,"gbs":[27.21,28.33,29.18],"median_gbs":28.33}
+{"tool":"c","threads":3,"buffer_bytes":3221225472,"passes":4,"gbs":[36.28,37.33,37.59],"median_gbs":37.33}
+{"tool":"c","threads":4,"buffer_bytes":3221225472,"passes":4,"gbs":[40.88,40.99,38.52],"median_gbs":40.88}
+{"tool":"c","threads":6,"buffer_bytes":3221225472,"passes":4,"gbs":[38.64,40.34,42.23],"median_gbs":40.34}
+{"tool":"c","threads":8,"buffer_bytes":3221225472,"passes":4,"gbs":[40.63,39.06,38.27],"median_gbs":39.06}
+{"tool":"c","threads":12,"buffer_bytes":3221225472,"passes":4,"gbs":[39.20,39.09,35.99],"median_gbs":39.09}
+pinned 6-thread peak median (JVM or native, whichever is higher): 40.34 GB/s (step 2, unpinned: 42.4)
+DIMM speed:
+      8 	Configured Memory Speed: 1600 MT/s
+      8 	Speed: 1600 MT/s
+=== gpu-ab: baseline 1 (20:15:17)
+    exit=0  (log: dist/cpu-hot-path-close/runs/gpu-ab-baseline-1.log)
+=== gpu-ab: candidate 1 (20:18:05)
+    exit=0  (log: dist/cpu-hot-path-close/runs/gpu-ab-candidate-1.log)
+=== gpu-ab: baseline 2 (20:20:38)
+    exit=0  (log: dist/cpu-hot-path-close/runs/gpu-ab-baseline-2.log)
+=== gpu-ab: candidate 2 (20:23:13)
+    exit=0  (log: dist/cpu-hot-path-close/runs/gpu-ab-candidate-2.log)
+=== gpu-ab: baseline 3 (20:25:49)
+    exit=0  (log: dist/cpu-hot-path-close/runs/gpu-ab-baseline-3.log)
+=== gpu-ab: candidate 3 (20:28:22)
+    exit=0  (log: dist/cpu-hot-path-close/runs/gpu-ab-candidate-3.log)
+
+gpu-ab: clock_pinned across the six runs: true (must be only: true)
+model              pp_A       pp_B  pp_B/A       tg_A     tg_B  tg_B/A    alloc/tok_A  alloc/tok_B    B/A      gc_A    gc_B
+tinyllama       2907.96    3021.96   1.039     147.84   151.98   1.028       39003172     34685785  0.889       0.0     0.0
+qwen2.5         1257.20    1263.61   1.005      30.64    31.24   1.020      141847928    125507904  0.885       0.0     0.0
+Phi              702.21     703.21   1.001      51.26    57.76   1.127      178677246    105175587  0.589      12.3     0.0
+mistral          568.50     553.00   0.973      38.22    39.01   1.021      192839063    168398630  0.873       0.0     0.0
+
+gpu-ab: greedy output (temperature 0), candidate vs baseline per run, and baseline run 1 vs runs 2..3
+  tinyllama: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  qwen2.5: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  Phi: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+  mistral: candidate equals baseline in 3 of 3 runs; baseline equals its run 1 in 3 of 3
+
+=== Part C: CPU closing sweep, pinned (20:30:59)
+clock_pinned: true  (must be true)
+model        pp_ratio tg_ratio   juno_tg   bw_GB/s   bw_share
+tinyllama       0.224    0.238     7.739      5.18      12.2%
+qwen2.5         0.230    0.215     2.592      5.46      12.9%
+Phi             0.256    0.222     2.285      5.47      12.9%
+mistral         0.226    0.224     1.290      5.64      13.3%
+  MISSED: Mistral 7B attained bandwidth below 25% of 42.4 GB/s (reported as a miss, see the tier)
+published under docs/perf-compare/ (see dist/cpu-hot-path-close/runs/cpu-close.log for the directory)
+
+=== Part L: LoRA, pinned by hand (21:19:25)
+--- lora gpu: baseline 1 (21:19:25)
+--- lora gpu: candidate 1 (21:20:24)
+--- lora gpu: baseline 2 (21:21:22)
+--- lora gpu: candidate 2 (21:22:20)
+--- lora gpu: baseline 3 (21:23:19)
+--- lora gpu: candidate 3 (21:24:17)
+--- lora cpu: baseline 1 (21:25:15)
+--- lora cpu: candidate 1 (21:39:12)
+--- lora cpu: baseline 2 (21:52:50)
+--- lora cpu: candidate 2 (22:06:47)
+--- lora cpu: baseline 3 (22:20:25)
+--- lora cpu: candidate 3 (22:34:26)
+LoRA results: per-run JSON under dist/cpu-hot-path-close/runs/lora-*; read train ms per pass and playback wall-clock tps from each run's
+result JSON (median of three per side), gate: train B/A >= 0.95, playback B/A >= 0.80.
+GATES MISSED (see FAIL / MISSED lines)

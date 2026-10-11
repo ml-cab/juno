@@ -7,16 +7,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Unit tests for {@link SimdThreadPool}.
- *
- * <p>
- * {@link SimdThreadPool#POOL} is built once at class-init from whatever
- * {@code juno.simd.pool.size} happened to be set (or unset) when the JVM
- * started, so these tests do not attempt to exercise every value of that
- * property; that parsing logic is simple enough to review directly. What
- * they do verify is the property that actually matters for correctness:
- * {@link SimdThreadPool#forEachRow} must run the body exactly once for every
- * index in range and must not return until all of them have completed.
+ * Unit tests for {@link SimdThreadPool}: {@link SimdThreadPool#forEachRow} runs
+ * the body exactly once for every index in range and does not return until all
+ * of them have completed, on {@link CpuThreads}.
  */
 @DisplayName("SimdThreadPool")
 class SimdThreadPoolTest {
@@ -64,26 +57,10 @@ class SimdThreadPoolTest {
 	}
 
 	@Test
-	@DisplayName("diagnosticSummary reports common-pool dispatch and diagnostic pool parallelism")
-	void diagnosticSummary_reportsActualParallelism() {
+	@DisplayName("diagnosticSummary reports the CPU matmul thread count")
+	void diagnosticSummary_reportsCpuThreads() {
 		String summary = SimdThreadPool.diagnosticSummary();
-
-		assertThat(summary).contains("commonPool()");
-		assertThat(summary).contains("parallelism=" + SimdThreadPool.POOL.getParallelism());
-		assertThat(summary).contains("juno.simd.pool.size");
-	}
-
-	@Test
-	@DisplayName("pool parallelism matches availableProcessors when the property was not set for this JVM")
-	void poolParallelism_matchesFallback_whenPropertyUnset() {
-		// This test only asserts the fallback behavior when the property was
-		// genuinely absent for this JVM run; if a developer or CI job passed
-		// -Djuno.simd.pool.size explicitly, the pool legitimately reflects
-		// that override instead, so the assertion is skipped in that case
-		// rather than asserting a false expectation.
-		org.junit.jupiter.api.Assumptions.assumeTrue(System.getProperty("juno.simd.pool.size") == null,
-				"juno.simd.pool.size was explicitly set for this JVM; fallback behavior is not applicable");
-
-		assertThat(SimdThreadPool.POOL.getParallelism()).isEqualTo(Runtime.getRuntime().availableProcessors());
+		assertThat(summary).contains("CPU matmul threads: " + CpuThreads.threads());
+		assertThat(summary).contains("--threads");
 	}
 }

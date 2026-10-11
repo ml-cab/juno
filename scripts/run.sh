@@ -194,7 +194,7 @@ JVM_BASE=(
 # every java invocation below (all cmd_* functions share JVM_BASE). Exists
 # for one-off experiments that shouldn't need a dedicated CLI flag or a
 # script edit, e.g.:
-#   JUNO_JVM_OPTS="-Djuno.simd.pool.size=8" ./juno local --model-path ...
+#   JUNO_JVM_OPTS="-XX:+UseZGC" ./juno local --model-path ...
 # to override SimdThreadPool's row-parallel pool size (see node's
 # SimdThreadPool.java for what that controls). Uses plain shell
 # word-splitting, so this only supports simple space-separated flags with no
@@ -267,6 +267,7 @@ cmd_cluster() {
       --float32)          dtype="FLOAT32";   shift   ;;
       --int8)             dtype="INT8";      shift   ;;
       --gpu)              use_gpu="true";    shift   ;;
+      --threads)          export JUNO_THREADS="$2"; shift 2 ;;
       --cpu)              use_gpu="false";   shift   ;;
       --health)           health="true";     shift   ;;
       --health-port)      health_port="$2";  shift 2 ;;
@@ -335,6 +336,7 @@ cmd_cluster() {
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
         echo "    --cpu                      use CPU only"
+        echo "    --threads N                CPU matmul threads per JVM (default: all processors; env JUNO_THREADS)"
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE                JVM heap  e.g. 4g 8g 16g"
@@ -548,6 +550,7 @@ cmd_local() {
       --float32)          dtype="FLOAT32";   shift   ;;
       --int8)             dtype="INT8";      shift   ;;
       --gpu)              use_gpu="true";    shift   ;;
+      --threads)          export JUNO_THREADS="$2"; shift 2 ;;
       --cpu)              use_gpu="false";   shift   ;;
       --health)           health="true";     shift   ;;
       --health-port)      health_port="$2";  shift 2 ;;
@@ -639,6 +642,7 @@ cmd_local() {
         echo "  Backend:"
         echo "    --gpu                      use GPU when available (default)"
         echo "    --cpu                      use CPU only"
+        echo "    --threads N                CPU matmul threads per JVM (default: all processors; env JUNO_THREADS)"
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE                e.g. 4g 8g 16g"
@@ -911,6 +915,7 @@ cmd_lora() {
       --health)       health="true";     shift   ;;
       --health-port)  health_port="$2";  shift 2 ;;
       --gpu)          use_gpu="true";    shift   ;;
+      --threads)          export JUNO_THREADS="$2"; shift 2 ;;
       --cpu)          use_gpu="false";   shift   ;;
       --cache-type-k) cache_type_k="$2"; shift 2 ;;
       --cache-type-v) cache_type_v="$2"; shift 2 ;;
@@ -979,6 +984,7 @@ cmd_lora() {
         echo "  Backend:"
         echo "    --gpu                   use GPU when available (default)"
         echo "    --cpu                   use CPU only"
+        echo "    --threads N                CPU matmul threads per JVM (default: all processors; env JUNO_THREADS)"
         echo ""
         echo "  JVM:"
         echo "    --heap SIZE             e.g. 4g 8g 16g  (default: derived from model size)"
@@ -1400,6 +1406,7 @@ usage() {
   echo "    --jfr DURATION                 Java Flight Recording     e.g. 5m 30s 1h"
   echo "    --gpu                          use GPU when available (default)"
   echo "    --cpu                          use CPU only"
+  echo "    --threads N                CPU matmul threads per JVM (default: all processors; env JUNO_THREADS)"
   echo "    --verbose / -v                 show gRPC / node logs"
   echo ""
   echo "  local only:"

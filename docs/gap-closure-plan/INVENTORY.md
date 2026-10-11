@@ -7,7 +7,7 @@ files get added/removed between sessions and this is not auto-maintained.
 
 | Backend | Available | Notes |
 |---|---|---|
-| CPU | yes | Intel Xeon E5-1650 v2, 12 threads (per `docs/perf-compare/README.md` baseline host) |
+| CPU | yes | Intel Xeon E5-1650 v2 (Ivy Bridge-EP), 6 cores, 12 threads (per `docs/perf-compare/README.md` baseline host). SIMD: SSE4.2 and AVX only, **no AVX2, no FMA, no AVX-512** (checked 2026-10-09 from `/proc/cpuinfo`; the JVM reports `UseAVX=1` and a 128-bit preferred Vector API species). Eight 8 GiB DIMMs on four channels; measured sequential read bandwidth 42.4 GB/s unpinned (`docs/perf-compare/20261009T220314Z-host-read-bandwidth/`), 40.34 GB/s pinned at 6 threads; DIMMs DDR3-1600, 51.2 GB/s theoretical (`docs/perf-compare/20261011T052951Z-cpu-hot-path-close-gate/`) |
 | CUDA | yes | 1x NVIDIA GeForce GTX 1080 (8 GiB) |
 | ROCm | **no** | no AMD GPU present in this environment |
 | Metal / Vulkan / SYCL | no | not applicable to this host; only relevant if Tier 10 scope is later extended to new backends |

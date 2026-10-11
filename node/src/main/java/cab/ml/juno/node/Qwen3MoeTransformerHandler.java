@@ -247,7 +247,8 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 			String requestId = requestIds.get(i);
 			int pos = positions[i];
 
-			kvCacheK.putIfAbsent(requestId, newKLayers(L));
+			if (!kvCacheK.containsKey(requestId))
+				kvCacheK.putIfAbsent(requestId, newKLayers(L));
 			kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 			SessionKvTensor[] kCache = kvCacheK.get(requestId);
 			SessionKvTensor[] vCache = kvCacheV.get(requestId);
@@ -364,6 +365,10 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 	}
 
 	private void sgemmLayerInto(GgufReader.QuantizedTensor quant, float[][] X, float[][] Y, int rows, int cols) {
+		if (CpuKernelSelection.integerGemm(quant.type(), cols)) {
+			CpuIntegerGemm.sgemmInto(quant, X, Y, 0, rows, cols);
+			return;
+		}
 		for (int b = 0; b < X.length; b++)
 			System.arraycopy(LlamaTransformerHandler.matVec(quant, X[b], rows, cols), 0, Y[b], 0, rows);
 	}
@@ -438,7 +443,8 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		int L = endLayer - startLayer;
 		int kvDim = cfg.kvDim();
 
-		kvCacheK.putIfAbsent(requestId, newKLayers(L));
+		if (!kvCacheK.containsKey(requestId))
+			kvCacheK.putIfAbsent(requestId, newKLayers(L));
 		kvCacheV.computeIfAbsent(requestId, k -> newVLayers(L));
 		SessionKvTensor[] kCache = kvCacheK.get(requestId);
 		SessionKvTensor[] vCache = kvCacheV.get(requestId);

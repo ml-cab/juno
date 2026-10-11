@@ -56,10 +56,13 @@ JUNO_MIN_TOKENS=""
 # at the shallow context the reference tool measures its own generation at.
 GENERATE_LANE_PROMPT="Hi"
 N_THREADS="$(nproc 2>/dev/null || echo 6)"
-# Juno's CPU kernels dispatch on the common fork-join pool, and the calling thread joins
-# the work as one more worker. Juno is launched with the pool's parallelism set to
-# N_THREADS - 1 (resolved after the flags are parsed), so its hot path runs the same
-# N_THREADS threads the reference tool is given with -t. Recorded as juno_threads.
+# Juno's CPU matmuls run on a worker pool of exactly --threads threads; the harness
+# passes it as -Djuno.threads=N_THREADS (the property --threads sets, which a build
+# without the flag ignores), so Juno's hot path runs the N_THREADS threads the
+# reference tool is given with -t. Recorded as juno_threads. Builds from before the
+# worker pool dispatched on the common fork-join pool with the calling thread as one
+# more worker, so the pool's parallelism is also set to N_THREADS - 1 for them
+# (recorded as juno_common_pool_parallelism).
 JUNO_POOL_PARALLELISM=""
 JUNO_THREADS=""
 NGL=""
@@ -603,14 +606,15 @@ run_selftest() {
   N_THREADS=4
   JUNO_JVM_FLAGS=(-XX:+UseG1GC)
   resolve_thread_parity
-  selftest_expect "the common pool is given -t minus the calling thread" \
+  selftest_expect "Juno's worker pool is given -t" "-Djuno.threads=4" "${JUNO_JVM_FLAGS[-2]}"
+  selftest_expect "a build without the worker pool gets -t minus the calling thread on the common pool" \
     "-Djava.util.concurrent.ForkJoinPool.common.parallelism=3" "${JUNO_JVM_FLAGS[-1]}"
   local hj
   hj="$(host_meta_json)"
   selftest_expect "host.json records juno_threads" 4 "$(jq -r '.juno_threads' <<<"$hj")"
   selftest_expect "host.json records the pool property" 3 "$(jq -r '.juno_common_pool_parallelism' <<<"$hj")"
-  selftest_expect "and the JVM flags it ran with carry it" true \
-    "$(jq -r '.juno_jvm_flags | test("common.parallelism=3")' <<<"$hj")"
+  selftest_expect "and the JVM flags it ran with carry both" true \
+    "$(jq -r '.juno_jvm_flags | test("juno.threads=4") and test("common.parallelism=3")' <<<"$hj")"
 
   # Settings set only through the environment reach the engine's command line;
   # without these fields a run's window width or speculation mode would be
@@ -631,7 +635,8 @@ run_selftest() {
   N_THREADS=1
   JUNO_JVM_FLAGS=()
   resolve_thread_parity
-  selftest_expect "-t 1 still leaves the pool one worker" 1 "$JUNO_POOL_PARALLELISM"
+  selftest_expect "-t 1 runs Juno's matmuls on one thread" 1 "$JUNO_THREADS"
+  selftest_expect "-t 1 still leaves the common pool one worker" 1 "$JUNO_POOL_PARALLELISM"
   N_THREADS="$saved_threads"
   JUNO_POOL_PARALLELISM="$saved_pool"
   JUNO_THREADS="$saved_juno_threads"
@@ -807,11 +812,12 @@ if [[ -n "$JUNO_JAR_EXPLICIT" ]]; then
   fi
 fi
 
-# Thread parity with the reference tool's -t (see JUNO_POOL_PARALLELISM above).
+# Thread parity with the reference tool's -t (see JUNO_THREADS above).
 resolve_thread_parity() {
+  JUNO_THREADS=$(( N_THREADS < 1 ? 1 : N_THREADS ))
   JUNO_POOL_PARALLELISM=$(( N_THREADS - 1 ))
   (( JUNO_POOL_PARALLELISM < 1 )) && JUNO_POOL_PARALLELISM=1
-  JUNO_THREADS=$(( JUNO_POOL_PARALLELISM + 1 ))
+  JUNO_JVM_FLAGS+=("-Djuno.threads=${JUNO_THREADS}")
   JUNO_JVM_FLAGS+=("-Djava.util.concurrent.ForkJoinPool.common.parallelism=${JUNO_POOL_PARALLELISM}")
 }
 resolve_thread_parity
@@ -2663,14 +2669,10 @@ write_run_index() {
     echo "- Clock state this run: CPU governor $(cpu_governor_state), turbo $(cpu_turbo_state),"
     echo "  GPU clocks $(gpu_clock_json). A throttled run and a regression look the same"
     echo "  without this."
-    if (( JUNO_THREADS == N_THREADS )); then
-      echo "- Thread counts are matched: the reference tool ran with -t ${N_THREADS}, and Juno's CPU kernels"
-      echo "  ran on ${JUNO_THREADS} threads (common pool parallelism ${JUNO_POOL_PARALLELISM} plus the calling thread)."
-    else
-      echo "- Thread counts are not matched: the reference tool ran with -t ${N_THREADS}, while Juno's CPU"
-      echo "  kernels ran on ${JUNO_THREADS} threads (common pool parallelism ${JUNO_POOL_PARALLELISM} plus the calling"
-      echo "  thread; the pool needs at least one worker)."
-    fi
+    echo "- Thread counts are matched: the reference tool ran with -t ${N_THREADS}, and Juno's CPU matmuls ran"
+    echo "  on ${JUNO_THREADS} threads (-Djuno.threads=${JUNO_THREADS}, the property --threads sets). A build from"
+    echo "  before the worker pool runs them on common pool parallelism ${JUNO_POOL_PARALLELISM} plus the calling thread."
+
     if (( ${#noise_notes[@]} > 0 )); then
       echo "- Rows marked NOISY are not scorable and should be re-run:"
       local nnote

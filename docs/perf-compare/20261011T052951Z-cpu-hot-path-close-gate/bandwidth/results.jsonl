@@ -1,0 +1,14 @@
+{"tool":"java","threads":1,"buffer_bytes":3221225472,"passes":4,"gbs":[13.08,13.11,13.08],"median_gbs":13.08}
+{"tool":"java","threads":2,"buffer_bytes":3221225472,"passes":4,"gbs":[25.25,24.58,24.72],"median_gbs":24.72}
+{"tool":"java","threads":3,"buffer_bytes":3221225472,"passes":4,"gbs":[33.42,33.00,31.77],"median_gbs":33.00}
+{"tool":"java","threads":4,"buffer_bytes":3221225472,"passes":4,"gbs":[36.80,36.50,35.66],"median_gbs":36.50}
+{"tool":"java","threads":6,"buffer_bytes":3221225472,"passes":4,"gbs":[39.00,37.34,36.52],"median_gbs":37.34}
+{"tool":"java","threads":8,"buffer_bytes":3221225472,"passes":4,"gbs":[40.58,38.75,39.35],"median_gbs":39.35}
+{"tool":"java","threads":12,"buffer_bytes":3221225472,"passes":4,"gbs":[40.22,41.34,41.79],"median_gbs":41.34}
+{"tool":"c","threads":1,"buffer_bytes":3221225472,"passes":4,"gbs":[16.00,15.90,15.97],"median_gbs":15.97}
+{"tool":"c","threads":2,"buffer_bytes":3221225472,"passes":4,"gbs":[27.21,28.33,29.18],"median_gbs":28.33}
+{"tool":"c","threads":3,"buffer_bytes":3221225472,"passes":4,"gbs":[36.28,37.33,37.59],"median_gbs":37.33}
+{"tool":"c","threads":4,"buffer_bytes":3221225472,"passes":4,"gbs":[40.88,40.99,38.52],"median_gbs":40.88}
+{"tool":"c","threads":6,"buffer_bytes":3221225472,"passes":4,"gbs":[38.64,40.34,42.23],"median_gbs":40.34}
+{"tool":"c","threads":8,"buffer_bytes":3221225472,"passes":4,"gbs":[40.63,39.06,38.27],"median_gbs":39.06}
+{"tool":"c","threads":12,"buffer_bytes":3221225472,"passes":4,"gbs":[39.20,39.09,35.99],"median_gbs":39.09}

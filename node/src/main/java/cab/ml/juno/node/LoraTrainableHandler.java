@@ -756,7 +756,7 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 		int B = X.length;
 		float[][] Y = new float[B][];
 		for (int b = 0; b < B; b++)
-			Y[b] = LlamaTransformerHandler.matVec(quant, X[b], rows, cols);
+			Y[b] = LlamaTransformerHandler.matVecFloatActivation(quant, X[b], 0, rows, cols);
 		return Y;
 	}
 
@@ -1726,11 +1726,11 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 
 	/** F32 transpose matVec — parallel scatter-reduce over row chunks. */
 	private static float[] transposedF32(byte[] raw, float[] v, int rows, int cols) {
-		int nT = Math.min(rows, Runtime.getRuntime().availableProcessors());
+		int nT = Math.min(rows, CpuThreads.threads());
 		int rpt = (rows + nT - 1) / nT;
 		float[][] locals = new float[nT][cols];
 
-		IntStream.range(0, nT).parallel().forEach(tid -> {
+		CpuThreads.forEach(nT, tid -> {
 			int rStart = tid * rpt, rEnd = Math.min(rStart + rpt, rows);
 			float[] loc = locals[tid];
 			for (int r = rStart; r < rEnd; r++) {
@@ -1753,11 +1753,11 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private static float[] transposedQ8_0(byte[] raw, float[] v, int rows, int cols) {
 		final int BS = 32, BB = 34;
 		final int bpr = cols / BS, bpRow = bpr * BB;
-		int nT = Math.min(rows, Runtime.getRuntime().availableProcessors());
+		int nT = Math.min(rows, CpuThreads.threads());
 		int rpt = (rows + nT - 1) / nT;
 		float[][] locals = new float[nT][cols];
 
-		IntStream.range(0, nT).parallel().forEach(tid -> {
+		CpuThreads.forEach(nT, tid -> {
 			int rStart = tid * rpt, rEnd = Math.min(rStart + rpt, rows);
 			float[] loc = locals[tid];
 			for (int r = rStart; r < rEnd; r++) {
@@ -1781,11 +1781,11 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private static float[] transposedQ4K(byte[] raw, float[] v, int rows, int cols) {
 		final int BLOCK_SIZE = 256, BLOCK_BYTES = 144;
 		final int bpr = cols / BLOCK_SIZE, bpRow = bpr * BLOCK_BYTES;
-		int nT = Math.min(rows, Runtime.getRuntime().availableProcessors());
+		int nT = Math.min(rows, CpuThreads.threads());
 		int rpt = (rows + nT - 1) / nT;
 		float[][] locals = new float[nT][cols];
 
-		IntStream.range(0, nT).parallel().forEach(tid -> {
+		CpuThreads.forEach(nT, tid -> {
 			int rStart = tid * rpt, rEnd = Math.min(rStart + rpt, rows);
 			float[] loc = locals[tid];
 			for (int r = rStart; r < rEnd; r++) {
@@ -1827,11 +1827,11 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private static float[] transposedQ5K(byte[] raw, float[] v, int rows, int cols) {
 		final int BLOCK_SIZE = 256, BLOCK_BYTES = 176;
 		final int bpr = cols / BLOCK_SIZE, bpRow = bpr * BLOCK_BYTES;
-		int nT = Math.min(rows, Runtime.getRuntime().availableProcessors());
+		int nT = Math.min(rows, CpuThreads.threads());
 		int rpt = (rows + nT - 1) / nT;
 		float[][] locals = new float[nT][cols];
 
-		IntStream.range(0, nT).parallel().forEach(tid -> {
+		CpuThreads.forEach(nT, tid -> {
 			int rStart = tid * rpt, rEnd = Math.min(rStart + rpt, rows);
 			float[] loc = locals[tid];
 			for (int r = rStart; r < rEnd; r++) {
@@ -1879,11 +1879,11 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 	private static float[] transposedQ6K(byte[] raw, float[] v, int rows, int cols) {
 		final int BLOCK_SIZE = 256, BLOCK_BYTES = 210;
 		final int bpr = cols / BLOCK_SIZE, bpRow = bpr * BLOCK_BYTES;
-		int nT = Math.min(rows, Runtime.getRuntime().availableProcessors());
+		int nT = Math.min(rows, CpuThreads.threads());
 		int rpt = (rows + nT - 1) / nT;
 		float[][] locals = new float[nT][cols];
 
-		IntStream.range(0, nT).parallel().forEach(tid -> {
+		CpuThreads.forEach(nT, tid -> {
 			int rStart = tid * rpt, rEnd = Math.min(rStart + rpt, rows);
 			float[] loc = locals[tid];
 			for (int r = rStart; r < rEnd; r++) {
@@ -1960,10 +1960,10 @@ public final class LoraTrainableHandler implements LoraTrainingHandler {
 				.warning("transposedFallback: no dedicated transpose for GGUF tensor type=" + A.type() + " (" + rows + "x"
 						+ cols + "). Training will be slow — add a transposedTypeXxx case.");
 		float[] y = new float[cols];
-		IntStream.range(0, cols).parallel().forEach(c -> {
+		CpuThreads.forEach(cols, c -> {
 			float[] ec = new float[cols];
 			ec[c] = 1f;
-			float[] column = LlamaTransformerHandler.matVec(A, ec, rows, cols);
+			float[] column = LlamaTransformerHandler.matVecFloatActivation(A, ec, 0, rows, cols);
 			float acc = 0f;
 			for (int r = 0; r < rows; r++)
 				acc += column[r] * v[r];

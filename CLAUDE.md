@@ -46,11 +46,16 @@ use for GPU deployments and multi-node scenarios. `./juno lora ...` is the LoRA 
 `--help` with full flag docs. `models/` holds local `.gguf`/`.llamafile` test fixtures — do not
 commit changes there or read them into context; they are large binaries.
 
-`--add-modules jdk.incubator.vector` is required at compile and run time for `VectorQuantKernels`;
-already wired into `pom.xml`, `scripts/run.sh`/`run.bat`, and `mvn test`'s surefire `argLine`.
-Today only its Q8_0 dequantize step is on the default CPU path (the general SIMD dot-product kernel
-is implemented and tested but deliberately not used there, see the `node` row below). Without the module the
-kernels fall back to a scalar path (correctness-preserving, slower).
+`--add-modules jdk.incubator.vector` is required at compile and run time for the CPU integer
+kernels (`CpuIntegerKernels`, `CpuIntegerGemm`) and `VectorQuantKernels`; already wired into
+`pom.xml`, `scripts/run.sh`/`run.bat`, `ClusterHarness`, and the `node` module's surefire `argLine`
+(other modules' tests run without it). The default CPU path for Q4_K/Q5_K/Q6_K/Q8_0 weights quantizes
+the activation to 8 bits once per matmul and runs integer dot products: at decode width
+`CpuIntegerKernels`, at prefill width the cache-blocked `CpuIntegerGemm`. `CpuKernelSelection` chooses,
+and references no Vector API type: without the module (or with `-Djuno.cpu.integerKernels=false`)
+every CPU matmul takes the float-activation kernels, which are correctness-preserving and slower.
+LoRA training's frozen forward always uses the float-activation kernels, because its backward pass
+differentiates that exact product.
 
 ## Architecture
 
@@ -64,7 +69,7 @@ Module dependency graph (acyclic): `node` depends on `api, lora, registry, kvcac
 | `api` | OpenAPI spec, protobuf/gRPC contracts |
 | `registry` | Shard planning, model registry (`ModelIdResolver` — shared model-id-to-loaded-model resolution logic used by REST handlers) |
 | `coordinator` | `Scheduler`, `GenerationLoop`, REST (`InferenceApiServer`); `ContinuousBatchEngine`/`ContinuousPrefillState` for the `continuous` schedule (paged KV, mixed prefill/decode steps); `ServeSchedulePolicy` auto-falls back cluster mode to `static` |
-| `node` | `GgufReader`, transformer handlers (`LlamaTransformerHandler`, `Phi2TransformerHandler`, `Phi3TransformerHandler`), `MatVec` backends (`CpuMatVec`/`CudaMatVec`/`RocmMatVec`), GPU FFI (`GpuBindings`→`CudaBindings`/`RocmBindings`, vendor-neutral), `VectorQuantKernels`/`SimdThreadPool` (JDK Vector API helpers; the default CPU matmul path is thread-parallel scalar Java via `SimdThreadPool.forEachRow` on the common pool, with only the Q8_0 dequantize step vectorized, because the general SIMD dot kernel regressed at vision-scale batch widths on narrow-vector hosts) |
+| `node` | `GgufReader`, transformer handlers (`LlamaTransformerHandler`, `Phi2TransformerHandler`, `Phi3TransformerHandler`), `MatVec` backends (`CpuMatVec`/`CudaMatVec`/`RocmMatVec`), GPU FFI (`GpuBindings`→`CudaBindings`/`RocmBindings`, vendor-neutral), `CpuIntegerKernels`/`CpuIntegerGemm`/`CpuKernelSelection` (default CPU matmul for Q4_K/Q5_K/Q6_K/Q8_0: 8-bit activation, integer dots over 128-bit Vector API lanes; float-activation kernels when the Vector API is absent or switched off), `CpuThreads`/`CpuWorkerPool` (every CPU matmul loop runs on one persistent pool of `--threads` threads), `VectorQuantKernels`/`SimdThreadPool` (older JDK Vector API helpers and the float weight-stationary kernels' row loop) |
 | `kvcache` | Dense KV (`DenseKvTensor`, `Q8_0KvCodec`) for `static` schedule; paged KV (`KvPageTable`/`PagedKvTensor`/`PagedKvArena`) for `continuous`; handlers dual-path via `SessionKvLayout` |
 | `lora` | Adapter tensors, `.lora` checkpoint format, AdamW optimizer with LoRA+ learning-rate groups (no GGUF, no CUDA) |
 | `vision` | Image-to-text: GGUF-based CLIP ViT encoder + `ForwardPassHandler` decorator. `LlavaHandlerFactory` is the only place that knows "this is a vision model" — kept out of `node` to avoid a dependency cycle. Serves `POST /v1/vision/chat` |
