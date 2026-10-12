@@ -32,7 +32,10 @@ This tier also carries an obligation handed over from Tier 02B (split out of Tie
 attention validated against a synthetic windowed-metadata fixture, because the only real windowed
 file on disk (`gemma-4-E4B`, patterned 512-token window per Tier 00's audit) is not loadable until
 this tier's Gemma handler exists. Real-model validation of the windowed path is therefore one of
-this tier's exit criteria, not Tier 02B's.
+this tier's exit criteria, not Tier 02B's. *(2026-10-11, plan review: [Tier 03](TIER-03-kv-cache-maturity.md)
+item 0 tries to bring the first trained-window validation forward on a Phi-3-mini-4k file. If it does, this
+tier still validates Gemma's patterned window, which a uniform Phi-3 window does not exercise; read Tier 03's
+record first.)*
 
 ## Scope
 
@@ -149,7 +152,7 @@ this tier's exit criteria, not Tier 02B's.
 - **New bash smoke script**: `scripts/performance-tests/smoke-architecture-breadth.sh` —
   end-to-end chat completion against all four real files, asserting coherent (not just
   non-crashing) output.
-- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+- **Standing throughput and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
   and score it before closing this tier.
 - **Perf gate**: new forward-pass code is a hot-path change by definition — `compare-lora.sh` at
   minimum; a dedicated per-architecture microbenchmark if these models are large enough to matter
@@ -206,7 +209,7 @@ paragraph when deciding whether to ask; this section was stale once.
       tiled GEMM for prefill windows) rather than a handler-local upload, and so do the device weights
       of every handler this tier adds — the part of Tier 04C item 3 that could not run before these
       handlers had a device path.
-- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+- [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved, LoRA-trainability gap (if any) explicitly documented
       per architecture rather than silently absent.

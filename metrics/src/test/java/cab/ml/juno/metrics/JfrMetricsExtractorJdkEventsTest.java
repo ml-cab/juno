@@ -56,6 +56,7 @@ class JfrMetricsExtractorJdkEventsTest {
 	private static final String THREAD_ALLOC = "jdk.ThreadAllocationStatistics";
 	private static final String ALLOC_SAMPLE = "jdk.ObjectAllocationSample";
 	private static final String EXEC_SAMPLE = "jdk.ExecutionSample";
+	private static final String NATIVE_SAMPLE = "jdk.NativeMethodSample";
 	private static final String MONITOR_ENTER = "jdk.JavaMonitorEnter";
 	private static final String THREAD_PARK = "jdk.ThreadPark";
 
@@ -71,8 +72,8 @@ class JfrMetricsExtractorJdkEventsTest {
 		// recording that genuinely contains none has to turn them off by name.
 		Path jfr = record(rec -> {
 			rec.enable("juno.TokenProduced");
-			for (String jdkEvent : List.of(GC_PAUSE, THREAD_ALLOC, ALLOC_SAMPLE, EXEC_SAMPLE, MONITOR_ENTER,
-					THREAD_PARK))
+			for (String jdkEvent : List.of(GC_PAUSE, THREAD_ALLOC, ALLOC_SAMPLE, EXEC_SAMPLE, NATIVE_SAMPLE,
+					MONITOR_ENTER, THREAD_PARK))
 				rec.disable(jdkEvent);
 		}, () -> {
 		});
@@ -82,7 +83,7 @@ class JfrMetricsExtractorJdkEventsTest {
 				"jdk.GCPhasePause.count", "jdk.GCPhasePause.max_ms", "jdk.GCPhasePause.total_ms",
 				"jdk.ThreadAllocationStatistics.bytes_total",
 				"jdk.ObjectAllocationSample.count", "jdk.ObjectAllocationSample.weight_total_bytes",
-				"jdk.ExecutionSample.count",
+				"jdk.ExecutionSample.count", "jdk.NativeMethodSample.count",
 				"jdk.JavaMonitorEnter.count", "jdk.JavaMonitorEnter.total_ms",
 				"jdk.ThreadPark.count", "jdk.ThreadPark.total_ms");
 		assertThat(m.get("jdk.GCPhasePause.count")).isZero();
@@ -91,6 +92,7 @@ class JfrMetricsExtractorJdkEventsTest {
 		assertThat(m.get("jdk.ThreadAllocationStatistics.bytes_total")).isZero();
 		assertThat(m.get("jdk.ObjectAllocationSample.count")).isZero();
 		assertThat(m.get("jdk.ExecutionSample.count")).isZero();
+		assertThat(m.get("jdk.NativeMethodSample.count")).isZero();
 		assertThat(m.get("jdk.JavaMonitorEnter.total_ms")).isZero();
 		assertThat(m.get("jdk.ThreadPark.total_ms")).isZero();
 	}
@@ -205,6 +207,35 @@ class JfrMetricsExtractorJdkEventsTest {
 				.map(Map.Entry::getKey)
 				.orElseThrow();
 		assertThat(methods).containsKey(expectedTop);
+	}
+
+	/**
+	 * A thread inside a native call is invisible to {@code jdk.ExecutionSample}; on a
+	 * GPU run that is most of the forward pass. A timed {@code accept()} waits in a
+	 * native poll, so its thread is sampled by {@code jdk.NativeMethodSample} and the
+	 * extractor must attribute it there.
+	 */
+	@Test
+	void nativeMethodSamples_areCountedAndAttributedSeparatelyFromJavaSamples() throws Exception {
+		Path jfr = record(
+				rec -> rec.enable(NATIVE_SAMPLE).with("period", "20 ms"),
+				JfrMetricsExtractorJdkEventsTest::blockInNativeAccept);
+
+		List<RecordedEvent> samples = eventsOfType(jfr, NATIVE_SAMPLE);
+		Map<String, Double> m = extract(jfr);
+
+		assertThat(m.get("jdk.NativeMethodSample.count")).isEqualTo((double) samples.size());
+		assertThat(samples).as("400ms in a native accept produced no NativeMethodSample events").isNotEmpty();
+
+		Map<String, Double> methods = labelsUnder(m, "jdk.NativeMethodSample.top_methods.", ".samples");
+		assertThat(methods).isNotEmpty().hasSizeLessThanOrEqualTo(10);
+		assertThat(methods.keySet()).allSatisfy(k -> assertThat(k).matches("[A-Za-z0-9_]+"));
+		String expectedTop = topFrameHistogram(samples).entrySet().stream()
+				.max(Map.Entry.comparingByValue())
+				.map(Map.Entry::getKey)
+				.orElseThrow();
+		assertThat(methods).containsKey(expectedTop);
+		assertThat(labelsUnder(m, "jdk.ExecutionSample.top_methods.", ".samples")).doesNotContainKey(expectedTop);
 	}
 
 	/**
@@ -339,6 +370,15 @@ class JfrMetricsExtractorJdkEventsTest {
 			byte[] b = new byte[1024 * 1024];
 			b[0] = (byte) i;
 			blackhole = b;
+		}
+	}
+
+	private static void blockInNativeAccept() throws Exception {
+		try (java.net.ServerSocket server = new java.net.ServerSocket(0)) {
+			server.setSoTimeout(400);
+			server.accept().close();
+		} catch (java.net.SocketTimeoutException expected) {
+			// The wait is the point; nobody connects.
 		}
 	}
 

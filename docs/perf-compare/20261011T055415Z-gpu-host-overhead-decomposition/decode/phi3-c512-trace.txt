@@ -1,0 +1,5 @@
+phi3-c512-traced.sqlite: 127 decode intervals, logits 128256 B, 32 layers
+  wall 21.277 ms  busy 17.421  idle 3.810  (kernel 17.234, copy 0.175)
+  launches 705  copies 35 (h2d 2, d2h 33)  per layer: busy 544.4 us, launches 22.0
+  kernels: q4k_gemv 6.876, q5k_gemv 4.104, q6k_gemv 2.090, gqa_attention_d128 1.823, gemv2T_kernel_val 0.934, rms_norm 0.404, quantize_q8_1 0.267, rope_ext_split_half 0.266, swiglu 0.134, to_half 0.111
+  api: cudaStreamSynchronize_v3020 10.002 (33), cuLaunchKernel 5.656 (704), cudaMemcpyAsync_v3020 1.410 (36), cudaLaunchKernel_v7000 0.019 (1), cudaFree_v3020 0.000 (0), cudaMalloc_v3020 0.000 (0), cudaMemcpy_v3020 0.000 (0)

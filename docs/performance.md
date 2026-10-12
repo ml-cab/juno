@@ -1314,5 +1314,50 @@ directory as the 2048 A/B). Vision and LoRA are unchanged
 
 Prompt processing no longer falls off with length: at 512 tokens the ratio is 0.998 to 1.157 of the 128-token one,
 and at 2048 it is 0.83 to 0.93 of the 512-token one (it was 0.33 to 0.44). Generation is now ahead of the reference
-engine on Mistral 7B. Qwen2.5-3B's generation is unchanged: the decode region does not cover its layout (Q/K/V biases,
-split-half rotation).
+engine on Mistral 7B. Qwen2.5-3B's generation was unchanged by this work: the decode region did not cover its layout (Q/K/V biases,
+split-half rotation) until the change in the next section.
+
+## Qwen2 decode on the device and host KV reuse
+
+**What:** three changes to the GPU path, measured together at the close.
+- **Qwen2 and Qwen2.5 in the decode region** (`--gpu-residency`, default `auto`): the region rotates the split-half
+  pair layout and adds the Q, K and V biases on the GPU, so the whole decode layer runs there as on the other
+  LLaMA-family models. Per decoded token, 2 uploads and one download per layer plus the logits, from 361 and 289.
+- **Host KV tensors are reused across requests.** A finished request's dense host KV cache goes to the next request
+  instead of being allocated again; positions the new request has not written read as zero. This removed the
+  allocation, and the garbage collections it caused, from the first prefill window (11% of a 512-token window on
+  Phi-3.5-mini). An idle server keeps one request's host KV on the heap. The continuous schedule's paged KV is unchanged.
+- **K and V are copied once.** The GPU prefill window writes K and V into the host KV cache straight from its
+  download (9% of a 512-token Phi-3.5-mini window).
+
+**Where the time went first** (`docs/perf-compare/20261011T055415Z-gpu-host-overhead-decomposition/`): a Qwen2.5-3B
+decode step spent 54% of its time on the host, outside the region. A Phi-3.5-mini decode step is 94% device kernels,
+so its generation is bound by the quantized matrix-vector kernels (`q4k_gemv` 43% of kernel time) and was left
+unchanged (`docs/perf-compare/20261011T183740Z-phi3-decode-kernel-bound/`).
+
+**No regression** (same-hour A/B against the build before this work, clocks pinned, median of three, `n_prompt=512`;
+`docs/perf-compare/20261012T002824Z-gpu-host-overhead-close-gate/`):
+- Generation: 1.84x on Qwen2.5-3B, 0.999x to 1.007x on the other three models.
+- Prompt processing: 1.20x on Phi-3.5-mini, 1.017x to 1.030x on the other three.
+- Allocation per generated token: 0.90x to 0.99x, with no GC pause in the measured span.
+- CPU path (A/B on TinyLlama and Mistral 7B): unchanged, 0.983x to 1.030x.
+- Vision and LoRA (`docs/perf-compare/20261011T201902Z-gpu-host-overhead-vision-lora/`): unchanged, vision latency
+  0.997x, LoRA playback 0.983x (GPU).
+
+Greedy output is unchanged on TinyLlama, Phi-3.5-mini and Mistral 7B. On Qwen2.5-3B it agrees for about 48 tokens of
+the benchmark reply, then takes the other of two near-equal continuations, because the region's RMS norms sum in a
+different order; `--gpu-residency off` keeps the earlier path.
+
+**Against the reference engine** (closing sweeps, clocks pinned, `docs/perf-compare/20261012T013642Z/`,
+`20261012T015002Z/`, `20261012T020410Z/`, `20261012T021800Z/`; the previous figures in brackets):
+
+| Model | Prompt processing, 128 | 512 | 2048 | Generation |
+|---|---|---|---|---|
+| TinyLlama 1.1B | 0.681x (0.648x) | 0.782x (0.747x) | 0.713x (0.696x) | 0.776x (0.770x) |
+| Qwen2.5-3B | 0.760x (0.713x) | 0.833x (0.825x) | 0.680x (0.682x) | 0.828x (0.416x) |
+| Phi-3.5-mini | 0.695x (0.584x) | 0.726x (0.594x) | 0.602x (0.540x) | 0.973x (0.858x) |
+| Mistral 7B | 0.785x (0.807x) | 0.813x (0.805x) | 0.730x (0.706x) | 1.066x (1.030x) |
+
+Generation is at least 0.77x of the reference engine on every model and ahead of it on Mistral 7B. Prompt processing
+is at least 0.73x at 512 tokens and 0.60x at 2048, with Phi-3.5-mini lowest at both. Ratios move with the reference
+engine's own readings as well as Juno's; the A/B above is the like-for-like comparison.

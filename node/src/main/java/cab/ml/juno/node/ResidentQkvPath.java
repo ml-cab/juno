@@ -61,8 +61,9 @@ import static java.lang.foreign.ValueLayout.ADDRESS;
  *
  * <p>Scope. Single-sequence decode (one row) on CUDA, for a layer whose Q, K and
  * V projections are all K-quant MMQ matrices on the device (row views of one fused
- * tensor will do, {@link DeviceQ4KMatrix#rowSlice}), with no Q/K/V bias. The
- * rotation is the caller's {@link ResidentRope}: adjacent pairs by default, or the
+ * tensor will do, {@link DeviceQ4KMatrix#rowSlice}). Q/K/V biases ({@link Biases};
+ * Qwen2) are added on the device after the projections, as the host adds them. The
+ * rotation is the caller's {@link ResidentRope}: adjacent or split-half pairs, or the
  * Phi-3 family's extended rotation. {@link #unsupportedReason} names what the
  * device path cannot run for a whole model, and {@link #eligible} for one layer;
  * the caller keeps its existing path there. Attention moves in when the attention
@@ -142,6 +143,12 @@ final class ResidentQkvPath implements AutoCloseable {
 	/** Per layer: the per-head q and k norm weights as 1 x headDim device matrices, or null without head norms. */
 	private final DeviceFloatMatrix[] qNormWeight;
 	private final DeviceFloatMatrix[] kNormWeight;
+	/** Per layer: the Q, K and V biases as 1 x width device matrices, or null without biases. */
+	private final DeviceFloatMatrix[] qBias;
+	private final DeviceFloatMatrix[] kBias;
+	private final DeviceFloatMatrix[] vBias;
+	/** The bias-add kernel, loaded when the path has biases. */
+	private final PrefillWindowKernels biasKernels;
 	/** The rest of the layer after attention, or null when the region stops at attention. */
 	private final ResidentLayerTail tail;
 	/**
@@ -167,7 +174,8 @@ final class ResidentQkvPath implements AutoCloseable {
 	private ResidentQkvPath(GpuContext ctx, Q4KMmqKernel mmq, CudaRmsNorm norm, ResidentRope rope,
 			GqaAttentionKernel attention, PrefillWindowKernels kernels, LlamaConfig cfg, DeviceQ4KMatrix[] wq,
 			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, DeviceFloatMatrix[] normWeight, DeviceFloatMatrix[] qNormWeight,
-			DeviceFloatMatrix[] kNormWeight, ResidentLayerTail tail) {
+			DeviceFloatMatrix[] kNormWeight, DeviceFloatMatrix[][] biases, PrefillWindowKernels biasKernels,
+			ResidentLayerTail tail) {
 		this.ctx = ctx;
 		this.mmq = mmq;
 		this.norm = norm;
@@ -186,6 +194,10 @@ final class ResidentQkvPath implements AutoCloseable {
 		this.normWeight = normWeight;
 		this.qNormWeight = qNormWeight;
 		this.kNormWeight = kNormWeight;
+		this.qBias = biases != null ? biases[0] : null;
+		this.kBias = biases != null ? biases[1] : null;
+		this.vBias = biases != null ? biases[2] : null;
+		this.biasKernels = biasKernels;
 		this.tail = tail;
 		int h = hidden;
 		int kv = kvDim;
@@ -194,30 +206,10 @@ final class ResidentQkvPath implements AutoCloseable {
 	}
 
 	/**
-	 * Why the device region cannot run this model at all, or {@code null} when it
-	 * can: not a CUDA context, a split-half RoPE layout (the device RoPE kernel
-	 * rotates adjacent pairs only), or Q/K/V biases (no bias-add inside the region).
-	 */
-	static String unsupportedReason(GpuContext ctx, RopePairing pairing, boolean qkvBias) {
-		if (ctx == null || !"cuda".equals(ctx.backendLabel()))
-			return "needs a CUDA backend (the device RoPE and MMQ kernels are CUDA-only)";
-		if (pairing != RopePairing.ADJACENT)
-			return "uses the split-half RoPE layout, which the device RoPE kernel does not implement";
-		if (qkvBias)
-			return "has Q/K/V projection biases, which the device region does not add";
-		return null;
-	}
-
-	/** As {@link #unsupportedReason(GpuContext, RopePairing, boolean)}, plus the model's shape. */
-	static String unsupportedReason(GpuContext ctx, RopePairing pairing, boolean qkvBias, LlamaConfig cfg) {
-		String reason = unsupportedReason(ctx, pairing, qkvBias);
-		return reason != null ? reason : unsupportedReason(ctx, cfg);
-	}
-
-	/**
-	 * Why the device region cannot run a model of this shape, for a handler that
-	 * gives the region its own rotation ({@link ResidentRope}) and has no Q/K/V
-	 * biases: not a CUDA context, or a query width different from the hidden size.
+	 * Why the device region cannot run a model of this shape, or {@code null} when it
+	 * can: not a CUDA context, or a query width different from the hidden size. The
+	 * rotation layout and Q/K/V biases are not reasons: the region runs every
+	 * {@link ResidentRope} and adds {@link Biases}.
 	 */
 	static String unsupportedReason(GpuContext ctx, LlamaConfig cfg) {
 		if (ctx == null || !"cuda".equals(ctx.backendLabel()))
@@ -282,15 +274,41 @@ final class ResidentQkvPath implements AutoCloseable {
 	}
 
 	/**
+	 * Per-layer Q, K and V projection biases ({@code hidden}, {@code kvDim} and
+	 * {@code kvDim} floats; Qwen2), added after the projection and before RoPE. A
+	 * layer without all three is not eligible.
+	 */
+	record Biases(float[][] q, float[][] k, float[][] v) {
+		boolean covers(int li, int hidden, int kvDim) {
+			return has(q, li, hidden) && has(k, li, kvDim) && has(v, li, kvDim);
+		}
+
+		private static boolean has(float[][] b, int li, int width) {
+			return b != null && li < b.length && b[li] != null && b[li].length == width;
+		}
+	}
+
+	/**
 	 * As {@link #create(GpuContext, LlamaConfig, float[][], DeviceQ4KMatrix[], DeviceQ4KMatrix[], DeviceQ4KMatrix[], ResidentLayerTail.Weights, ResidentRope)},
 	 * normalizing each head of q and k with {@code headNorms} before the rotation.
 	 */
 	static ResidentQkvPath create(GpuContext ctx, LlamaConfig cfg, float[][] attnNorm, DeviceQ4KMatrix[] wq,
 			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, ResidentLayerTail.Weights tailWeights, ResidentRope rope,
 			HeadNorms headNorms) {
+		return create(ctx, cfg, attnNorm, wq, wk, wv, tailWeights, rope, headNorms, null);
+	}
+
+	/**
+	 * As {@link #create(GpuContext, LlamaConfig, float[][], DeviceQ4KMatrix[], DeviceQ4KMatrix[], DeviceQ4KMatrix[], ResidentLayerTail.Weights, ResidentRope, HeadNorms)},
+	 * adding {@code biases} to q, k and v after the projection. A model has head norms
+	 * or biases, not both; asking for both throws.
+	 */
+	static ResidentQkvPath create(GpuContext ctx, LlamaConfig cfg, float[][] attnNorm, DeviceQ4KMatrix[] wq,
+			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, ResidentLayerTail.Weights tailWeights, ResidentRope rope,
+			HeadNorms headNorms, Biases biases) {
 		java.util.Objects.requireNonNull(rope, "rope");
 		try {
-			return build(ctx, cfg, attnNorm, wq, wk, wv, tailWeights, rope, headNorms);
+			return build(ctx, cfg, attnNorm, wq, wk, wv, tailWeights, rope, headNorms, biases);
 		} catch (RuntimeException e) {
 			rope.close();
 			throw e;
@@ -299,7 +317,9 @@ final class ResidentQkvPath implements AutoCloseable {
 
 	private static ResidentQkvPath build(GpuContext ctx, LlamaConfig cfg, float[][] attnNorm, DeviceQ4KMatrix[] wq,
 			DeviceQ4KMatrix[] wk, DeviceQ4KMatrix[] wv, ResidentLayerTail.Weights tailWeights, ResidentRope rope,
-			HeadNorms headNorms) {
+			HeadNorms headNorms, Biases biases) {
+		if (headNorms != null && biases != null)
+			throw new IllegalArgumentException("the region takes per-head Q/K norms or Q/K/V biases, not both");
 		Q4KMmqKernel mmq = Q4KMmqKernel.tryLoad();
 		if (mmq == null)
 			throw new IllegalStateException("Q4_K MMQ kernel is not loaded");
@@ -320,24 +340,41 @@ final class ResidentQkvPath implements AutoCloseable {
 		PrefillWindowKernels kernels = attention != null ? PrefillWindowKernels.tryLoad() : null;
 		if (kernels == null)
 			attention = null;
+		PrefillWindowKernels biasKernels = null;
+		if (biases != null) {
+			biasKernels = PrefillWindowKernels.tryLoad();
+			if (biasKernels == null)
+				throw new IllegalStateException("bias-add kernel is not loaded");
+		}
 		int layers = wq.length;
 		DeviceFloatMatrix[] weights = new DeviceFloatMatrix[layers];
 		DeviceFloatMatrix[] qNormW = headNorms != null ? new DeviceFloatMatrix[layers] : null;
 		DeviceFloatMatrix[] kNormW = headNorms != null ? new DeviceFloatMatrix[layers] : null;
+		DeviceFloatMatrix[][] biasW = biases != null
+				? new DeviceFloatMatrix[][] { new DeviceFloatMatrix[layers], new DeviceFloatMatrix[layers],
+						new DeviceFloatMatrix[layers] }
+				: null;
 		try {
 			for (int li = 0; li < layers; li++) {
-				if (!layerHasWeights(wq, wk, wv, li) || (headNorms != null && !headNorms.covers(li, cfg.headDim())))
+				if (!layerHasWeights(wq, wk, wv, li) || (headNorms != null && !headNorms.covers(li, cfg.headDim()))
+						|| (biases != null && !biases.covers(li, cfg.hiddenDim(), cfg.kvDim())))
 					continue;
 				weights[li] = DeviceFloatMatrix.upload(ctx, attnNorm[li], 1, cfg.hiddenDim());
 				if (headNorms != null) {
 					qNormW[li] = DeviceFloatMatrix.upload(ctx, headNorms.q()[li], 1, cfg.headDim());
 					kNormW[li] = DeviceFloatMatrix.upload(ctx, headNorms.k()[li], 1, cfg.headDim());
 				}
+				if (biases != null) {
+					biasW[0][li] = DeviceFloatMatrix.upload(ctx, biases.q()[li], 1, cfg.hiddenDim());
+					biasW[1][li] = DeviceFloatMatrix.upload(ctx, biases.k()[li], 1, cfg.kvDim());
+					biasW[2][li] = DeviceFloatMatrix.upload(ctx, biases.v()[li], 1, cfg.kvDim());
+				}
 			}
 		} catch (RuntimeException e) {
 			closeAll(weights);
 			closeAll(qNormW);
 			closeAll(kNormW);
+			closeBiases(biasW);
 			throw e;
 		}
 		ResidentLayerTail tail = null;
@@ -348,11 +385,18 @@ final class ResidentQkvPath implements AutoCloseable {
 				closeAll(weights);
 				closeAll(qNormW);
 				closeAll(kNormW);
+				closeBiases(biasW);
 				throw e;
 			}
 		}
 		return new ResidentQkvPath(ctx, mmq, norm, rope, attention, kernels, cfg, wq, wk, wv, weights, qNormW, kNormW,
-				tail);
+				biasW, biasKernels, tail);
+	}
+
+	private static void closeBiases(DeviceFloatMatrix[][] biases) {
+		if (biases != null)
+			for (DeviceFloatMatrix[] b : biases)
+				closeAll(b);
 	}
 
 	private static void closeAll(DeviceFloatMatrix[] matrices) {
@@ -609,6 +653,13 @@ final class ResidentQkvPath implements AutoCloseable {
 				headNorm(r.headNormIn.asSlice(hiddenBytes()), kNormWeight[li], packed, kvDim / headDim, stream);
 			}
 			project(wv[li], packed.asSlice(kvBytes), r.q8, stream);
+			if (qBias != null) {
+				biasKernels.addBias(r.q.devicePointer(), qBias[li].devicePointer(), 1, hidden, stream);
+				biasKernels.addBias(packed, kBias[li].devicePointer(), 1, kvDim, stream);
+				biasKernels.addBias(packed.asSlice(kvBytes), vBias[li].devicePointer(), 1, kvDim, stream);
+				for (int i = 0; i < 3; i++)
+					DeviceSpanTally.compute(DeviceComputeEvent.BIAS_ADD, 1, -1L);
+			}
 			r.q.markWritten(1);
 			r.packed.markWritten(1);
 			if (!rope.applyResident(r.q, pos) || !rope.applyResidentColumns(r.packed, 0, kvDim, pos))
@@ -682,7 +733,8 @@ final class ResidentQkvPath implements AutoCloseable {
 		long total = 0;
 		for (Region r : regions)
 			total += r.chain.deviceBytes();
-		for (DeviceFloatMatrix[] ws : new DeviceFloatMatrix[][] { normWeight, qNormWeight, kNormWeight })
+		for (DeviceFloatMatrix[] ws : new DeviceFloatMatrix[][] { normWeight, qNormWeight, kNormWeight, qBias, kBias,
+				vBias })
 			if (ws != null)
 				for (DeviceFloatMatrix w : ws)
 					if (w != null)
@@ -705,6 +757,9 @@ final class ResidentQkvPath implements AutoCloseable {
 			closeAll(normWeight);
 			closeAll(qNormWeight);
 			closeAll(kNormWeight);
+			closeAll(qBias);
+			closeAll(kBias);
+			closeAll(vBias);
 			if (tail != null)
 				tail.close();
 			rope.close();

@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20261008T180014Z (gpu)
 
+> **Superseded as GPU reference on 2026-10-12** by [`20261012T020410Z`](../20261012T020410Z/INDEX.md) (kept as the pre-host-overhead reading).
+
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |
 |-------|------------------|------------------|-------------|-------------|-----------------|---------------|---------------|-----------------|--------------|-----------|-------------|----------|---------|
 | tinyllama-1.1b-chat-v1.0.Q4_K_M | 3310.435825 | 183.152290 | 2304.5481696219563 | 145.2925818697478 | 144.58 / 147.2 | 0.6961464566744641 | 0.7932883714953703 | 2048/2048 | 64/64 | 17 | 39042614 | yes | tinyllama-1.1b-chat-v1.0.Q4_K_M-*.json |

@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20261008T181417Z (gpu)
 
+> **Superseded as GPU reference on 2026-10-12** by [`20261012T021800Z`](../20261012T021800Z/INDEX.md) (kept as the pre-host-overhead reading).
+
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |
 |-------|------------------|------------------|-------------|-------------|-----------------|---------------|---------------|-----------------|--------------|-----------|-------------|----------|---------|
 | Phi-3.5-mini-instruct-Q4_K_M | 1010.958335 | 58.166834 | 545.5762872866438 | 49.51114137919726 | 49.4 / 49.57 | 0.5396624849891997 | 0.8511919589640595 | 2048/2048 | 64/64 | 13 | 177322677 | yes | Phi-3.5-mini-instruct-Q4_K_M-*.json |

@@ -80,6 +80,16 @@ against the existing (correct, if slow) single-node dense computation.
    - `--prefill-batch` then matters on cluster surfaces, so `PrefillChunkDefaults` (coordinator) re-reads
      the cluster default (it is 32 today because the value is inert there) and `docs/howto.md`'s
      `--prefill-batch` row changes with it.
+6. **The activation codec runs on the `--threads` pool** *(added 2026-10-11, plan review)*.
+   `ActivationLECodec` (`node`), which encodes and decodes every activation crossing the gRPC boundary,
+   still splits its loops with `IntStream.range(...).parallel()` on `ForkJoinPool.commonPool()` (eight
+   call sites). Every CPU matmul moved to the `--threads` worker pool in Tier 02C, so on a cluster node the
+   codec runs on a second, differently sized pool (`ClusterHarness` still sets the common pool's
+   parallelism per node for it) that `--threads` does not govern and that contends with the matmul
+   workers. Item 5 makes the codec carry a whole prefill window per call, so its cost grows here. Route it
+   through `CpuThreads.forEach` with a size threshold below which it runs serially (a 2048-float decode
+   activation is not worth a dispatch), or measure that the common pool is no worse and record why it
+   stays; either way, `ClusterHarness`'s common-pool sizing goes if nothing else needs it.
 
 ### Out of scope
 
@@ -170,7 +180,7 @@ against the existing (correct, if slow) single-node dense computation.
 - **New bash smoke script**: `scripts/performance-tests/smoke-tensor-parallel.sh` — runs
   the 3-node tensor-parallel cluster against a real model and diffs output against a single-node
   dense run of the same model/prompt/seed.
-- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+- **Standing throughput and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
   and score it before closing this tier.
 - **Perf gate (required)**: tensor parallelism is explicitly a forward-pass/GPU-residency change —
   full `compare-lora.sh`, plus a dedicated tensor-parallel-vs-single-node throughput/latency
@@ -224,10 +234,13 @@ tier reaches that point).
       per-token prefill's; the item 5 gate is met (512-token TinyLlama prefill <= 0.20x the per-token
       reading in each mode, `ForwardPass` calls per prefill <= ceil(512 / chunk) x nodes), with the run
       directory cited; the cluster `--prefill-batch` default re-read and documented.
+- [ ] `ActivationLECodec` runs on the `--threads` pool with a serial cutoff, or stays on the common pool
+      on a recorded same-hour measurement (item 6); codec time per prefill window on a 512-token
+      pipeline prefill **<= 1.0x** the pre-tier build.
 - [ ] Single-process multi-GPU evaluated; implemented if justified, with N=1 degenerate-case
       validation and an explicit note about what couldn't be validated without a second physical
       GPU.
-- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+- [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved; continuous+tensor-parallel fallback-to-static
       behavior explicitly confirmed unchanged (not silently made reachable in a half-working state).

@@ -1,0 +1,5 @@
+qwen2-c64-traced.sqlite: 127 decode intervals, logits 607744 B, 36 layers
+  wall 39.570 ms  busy 14.347  idle 25.170  (kernel 13.279, copy 1.065)
+  launches 434  copies 650 (h2d 361, d2h 289)  per layer: busy 398.5 us, launches 12.1
+  kernels: q4k_gemv 8.349, q6k_gemv 4.182, gqa_attention_d128 0.425, quantize_q8_1 0.298
+  api: cudaMemcpyAsync_v3020 17.419 (399), cuLaunchKernel 3.964 (434), cudaMemcpy_v3020 2.757 (252), cudaStreamSynchronize_v3020 0.772 (145), cudaFree_v3020 0.000 (0), cudaMalloc_v3020 0.000 (0)

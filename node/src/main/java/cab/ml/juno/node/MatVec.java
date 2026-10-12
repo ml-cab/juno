@@ -35,9 +35,9 @@ package cab.ml.juno.node;
  * <p>
  * Implementations:
  * <ul>
- * <li>{@link CpuMatVec} — parallel {@code IntStream} across
- * {@code ForkJoinPool.commonPool()}; used on CPU-only nodes and as the
- * reference implementation in tests.
+ * <li>{@link CpuMatVec} — rows split across the {@code --threads} worker pool
+ * ({@link CpuThreads}); used on CPU-only nodes and as the reference
+ * implementation in tests.
  * <li>{@link CudaMatVec} — {@code cublasSgemv_v2} via JCublas2; used on
  * Nvidia GPU nodes (CUDA 12.x).
  * </ul>

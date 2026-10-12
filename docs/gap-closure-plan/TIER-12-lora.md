@@ -111,7 +111,7 @@ interim one).
 - **New bash smoke script**: `scripts/performance-tests/smoke-lora.sh` — drives
   multi-adapter hot-swapped requests through both schedules, and a QLoRA-style training run,
   end to end.
-- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+- **Standing throughput and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
   and score it before closing this tier.
 - **Perf gate (required)**: `compare-lora.sh` rerun (this script already exists specifically for
   LoRA train+playback comparisons, and it takes `--reps`; pass `--reps 3` per the README's
@@ -152,7 +152,7 @@ against a truly independent real-world file.
       fail-closed restrictions re-justified and re-documented.
 - [ ] Gradient/activation checkpointing implemented, measured to reduce peak training memory.
 - [ ] QLoRA-style quantized-base-weight training implemented and correctness-validated.
-- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+- [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, every threshold above met or explicitly missed with its number.

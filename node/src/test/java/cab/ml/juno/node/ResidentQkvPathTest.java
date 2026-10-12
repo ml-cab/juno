@@ -371,10 +371,11 @@ class ResidentQkvPathTest {
 	@Test
 	@DisplayName("architectures and layouts the device path cannot run are named, not silently accepted")
 	void namesWhatItCannotRun() {
-		assertThat(ResidentQkvPath.unsupportedReason(ctx, RopePairing.ADJACENT, false)).isNull();
-		assertThat(ResidentQkvPath.unsupportedReason(ctx, RopePairing.SPLIT_HALF, false)).contains("split-half");
-		assertThat(ResidentQkvPath.unsupportedReason(ctx, RopePairing.ADJACENT, true)).contains("bias");
-		assertThat(ResidentQkvPath.unsupportedReason(null, RopePairing.ADJACENT, false)).contains("CUDA");
+		LlamaConfig square = new LlamaConfig(256, 1, 4, 2, 64, 512, 1000, 1e-5f, 10_000f, "llama");
+		LlamaConfig wideQuery = new LlamaConfig(256, 1, 8, 2, 64, 512, 1000, 1e-5f, 10_000f, "llama");
+		assertThat(ResidentQkvPath.unsupportedReason(ctx, square)).isNull();
+		assertThat(ResidentQkvPath.unsupportedReason(ctx, wideQuery)).contains("query width");
+		assertThat(ResidentQkvPath.unsupportedReason(null, square)).contains("CUDA");
 	}
 
 	// ── The whole decode layer in the region ─────────────────────────────────

@@ -111,6 +111,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private final Map<String, SessionKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
 	private final Map<String, SessionKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
 	private final SessionKvLayout kvLayout;
+	/** Passes running per request, so evict reuses a request's KV tensors only once none is. */
+	private final InFlightRequests inFlight = new InFlightRequests();
 
 	// Device-resident KV mirror for the GPU-resident attention path (--gpu-attention).
 	// Dual-write alongside kvCacheK/V above, not a replacement — null entries when the
@@ -487,7 +489,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			GpuResidencyOptions.announceIfExplicit(log, "the CPU backend", "has no device to keep activations on");
 			return null;
 		}
-		String reason = ResidentQkvPath.unsupportedReason(cuda.gpuContext(), ropePairing, bq != null, cfg);
+		String reason = ResidentQkvPath.unsupportedReason(cuda.gpuContext(), cfg);
 		if (reason != null) {
 			GpuResidencyOptions.announceUnsupported(log, "architecture " + cfg.architecture(), reason);
 			return null;
@@ -497,10 +499,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 					"are not K-quant MMQ matrices on the device (needs a K-quant file and --mmq on or auto)");
 			return null;
 		}
+		// The file's own pair layout (split-half on Qwen2) and its Q/K/V biases, as the host path applies them.
+		CudaRope rope = CudaRope.tryCreate(cuda.gpuContext(), cfg.headDim(), cfg.ropeTheta(), ropePairing);
 		ResidentQkvPath path;
 		try {
 			path = ResidentQkvPath.create(cuda.gpuContext(), cfg, attnNorm, wqQ4Dev, wkQ4Dev, wvQ4Dev,
-					new ResidentLayerTail.Weights(ffnNorm, woQ4Dev, wGateQ4Dev, wUpQ4Dev, wDownQ4Dev));
+					new ResidentLayerTail.Weights(ffnNorm, woQ4Dev, wGateQ4Dev, wUpQ4Dev, wDownQ4Dev), rope, null,
+					bq != null ? new ResidentQkvPath.Biases(bq, bk, bv) : null);
 		} catch (RuntimeException e) {
 			GpuResidencyOptions.announceUnsupported(log, "the device-resident decode region",
 					"could not be built (" + e.getMessage() + ")");
@@ -1048,8 +1053,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	@Override
 	public void evict(String requestId) {
-		SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
-		SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));
+		SessionKvTensor[] k = kvCacheK.remove(requestId);
+		SessionKvTensor[] v = kvCacheV.remove(requestId);
+		if (inFlight.idle(requestId)) {
+			// The next request takes them instead of allocating (see InFlightRequests).
+			kvLayout.retireKLayers(k);
+			kvLayout.retireVLayers(v);
+		} else {
+			SessionKvLayout.releaseLayers(k);
+			SessionKvLayout.releaseLayers(v);
+		}
 		DeviceKvCache[] dev = kvCacheDev.remove(requestId);
 		if (dev != null)
 			for (DeviceKvCache d : dev)
@@ -1062,6 +1075,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public void shiftKv(String requestId, int seqLen, int keep, int discard) {
+		String id = requestId;
+		inFlight.enter(id);
+		try {
+			shiftKvUnguarded(requestId, seqLen, keep, discard);
+		} finally {
+			inFlight.exit(id);
+		}
+	}
+
+	private void shiftKvUnguarded(String requestId, int seqLen, int keep, int discard) {
 		RopeShift rope = RopeShift.standard(cfg.headDim(), cfg.ropeTheta(), ropePairing);
 		HandlerContextShift.shiftHost(kvCacheK, kvCacheV, requestId, seqLen, keep, discard, rope, cfg.numKvHeads());
 		HandlerContextShift.shiftMirrors("Llama", kvCacheDev.get(requestId), kvCacheK.get(requestId),
@@ -1207,6 +1230,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public ForwardResult forward(ForwardRequest request, ShardContext context) {
+		String id = request.requestId();
+		inFlight.enter(id);
+		try {
+			return forwardUnguarded(request, context);
+		} finally {
+			inFlight.exit(id);
+		}
+	}
+
+	private ForwardResult forwardUnguarded(ForwardRequest request, ShardContext context) {
 		long start = System.nanoTime();
 
 		ForwardPassEvent evt = new ForwardPassEvent();
@@ -1236,6 +1269,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public Optional<float[]> lastRmsHiddenForEmbedding(ForwardRequest request, ShardContext context) {
+		String id = request.requestId();
+		inFlight.enter(id);
+		try {
+			return lastRmsHiddenForEmbeddingUnguarded(request, context);
+		} finally {
+			inFlight.exit(id);
+		}
+	}
+
+	private Optional<float[]> lastRmsHiddenForEmbeddingUnguarded(ForwardRequest request, ShardContext context) {
 		if (!hasOutputProj)
 			return Optional.empty();
 		float[] x = getInitialActivation(request);
@@ -1278,6 +1321,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+		String id = request.requestId();
+		inFlight.enter(id);
+		try {
+			return forwardBatchUnguarded(request, context);
+		} finally {
+			inFlight.exit(id);
+		}
+	}
+
+	private BatchForwardResult forwardBatchUnguarded(BatchForwardRequest request, ShardContext context) {
 		long start = System.nanoTime();
 		int W = request.windowSize();
 		int H = cfg.hiddenDim();
@@ -1342,6 +1395,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 */
 	@Override
 	public VerifyBatchResult forwardVerify(BatchForwardRequest request, ShardContext context) {
+		String id = request.requestId();
+		inFlight.enter(id);
+		try {
+			return forwardVerifyUnguarded(request, context);
+		} finally {
+			inFlight.exit(id);
+		}
+	}
+
+	private VerifyBatchResult forwardVerifyUnguarded(BatchForwardRequest request, ShardContext context) {
 		long start = System.nanoTime();
 		int W = request.windowSize();
 		int H = cfg.hiddenDim();
@@ -1381,6 +1444,16 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public MultiDecodeForwardResult forwardMultiDecode(MultiDecodeForwardRequest request, ShardContext context) {
+		java.util.List<String> ids = request.requestIds();
+		inFlight.enterAll(ids);
+		try {
+			return forwardMultiDecodeUnguarded(request, context);
+		} finally {
+			inFlight.exitAll(ids);
+		}
+	}
+
+	private MultiDecodeForwardResult forwardMultiDecodeUnguarded(MultiDecodeForwardRequest request, ShardContext context) {
 		long start = System.nanoTime();
 		int N = request.batchSize();
 		int H = cfg.hiddenDim();
@@ -1969,7 +2042,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		WindowStepEvent devEvt = WindowStepEvent.start();
 		boolean whole;
 		try {
-			whole = win.runLayer(li, x, startPos, deviceKv, ws.q, ws.k, ws.v);
+			whole = win.runLayer(li, x, startPos, deviceKv, ws.q, ws.k, ws.v, kCacheLayer, vCacheLayer);
 		} catch (IllegalStateException ex) {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;
@@ -1993,10 +2066,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		}
 
 		WindowStepEvent kvEvt = WindowStepEvent.start();
-		for (int b = 0; b < W; b++) {
-			kCacheLayer.writeToken(startPos + b, ws.k[b]);
-			vCacheLayer.writeToken(startPos + b, ws.v[b]);
-		}
+		if (!whole) // a whole-layer window's K and V went into the host tensors inside the region
+			for (int b = 0; b < W; b++) {
+				kCacheLayer.writeToken(startPos + b, ws.k[b]);
+				vCacheLayer.writeToken(startPos + b, ws.v[b]);
+			}
 		if (whole)
 			deviceKv.markWritten(startPos, W);
 		else if (deviceKv != null && deviceKv.live())
@@ -3269,9 +3343,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * row-major: A[r, c] = weights[r * cols + c]
 	 *
 	 * Implementation: for large matrices (rows ≥ 256) the outer loop runs in
-	 * parallel across ForkJoinPool.commonPool() using IntStream.parallel(). This
-	 * gives a linear speedup with available CPU cores for the dominant matmul
-	 * operations (Q/K/V projection, FFN gate/up/down, output projection).
+	 * parallel on the {@code --threads} worker pool via {@link CpuThreads#forEach}.
+	 * This spreads the dominant matmul operations (Q/K/V projection, FFN
+	 * gate/up/down, output projection) across the configured CPU threads.
 	 *
 	 * For small matrices the parallel overhead exceeds the gain; a plain loop is
 	 * used below the threshold.
@@ -3351,7 +3425,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 *
 	 * <p>All quantized overloads (matVecQ4Kraw, matVecQ6Kraw, etc.)
 	 * are pure-Java CPU computations executed on
-	 * ForkJoinPool.commonPool(). They never touch a GPU, so they are labelled
+	 * the {@code --threads} worker pool. They never touch a GPU, so they are labelled
 	 * {@link MatVecBackend#CPU} — the same label used by {@link CpuMatVec#sgemv}.
 	 * This ensures juno.MatVec.backend.cpu.count reflects the true number of
 	 * CPU-side matrix multiplies, including quantized ones.

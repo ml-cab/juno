@@ -1,5 +1,40 @@
 ## Status 
 
+**Session 126** - Qwen2 and Qwen2.5 decode run in the GPU-resident region (about 2x faster generation); faster GPU prompt processing on Phi-3.5-mini
+
+- **The device-resident decode region (`--gpu-residency`, on by default on CUDA) now covers Qwen2 and Qwen2.5.** It
+  rotates their split-half RoPE pair layout and adds their Q, K and V projection biases on the GPU, so the whole
+  decode layer runs there as on the other LLaMA-family models. Before, these models kept the op-at-a-time path.
+- **Measured on Qwen2.5-3B (GPU, unpinned):** 17.1 ms per generated token, was 36.2 (2.1x); per token 2 host-to-device
+  copies and 37 device-to-host copies (one per layer plus the logits), were 361 and 289.
+- **Output:** the region's kernels compute what the op-at-a-time path computes, bit for bit, apart from the RMS norm's
+  summation order (GPU against CPU). Greedy output matched over 32 tokens on the residency smoke; on a degenerate
+  prompt it can part after a few tokens, as on TinyLlama and Mistral 7B. `--gpu-residency off` keeps the old path.
+- **GPU prompt processing on Phi-3.5-mini: a 512-token window takes 21% less time, a 2048-token window 15% less**
+  (unpinned: 767 to 602 ms, and 3.63 to 3.10 s). Two host costs are gone:
+  - **Host KV memory is reused across requests.** A finished request's host KV cache now goes to the next request
+    instead of being allocated again, which removed the allocation and the garbage collections it caused (11% of a
+    512-token window). An idle server keeps one request's host KV on the heap. A reused cache never exposes an
+    earlier request's values: positions the new request has not written read as zero. The continuous schedule's paged
+    KV is unchanged.
+  - **K and V are copied once.** The GPU prefill window writes K and V into the host KV cache straight from the
+    download, not through a second copy (9% of the window).
+  - **Same output:** logits and the host KV cache are bit-identical to the GPU path without the window region, on
+    TinyLlama, Qwen2.5-3B, Phi-3.5-mini and Qwen3-1.7B. The LLaMA family and Qwen3 take both changes too.
+- **Pinned closing measurement** (same-hour A/B against the previous build, median of three, 512-token prompt):
+  - Qwen2.5-3B generation is 1.84x and Phi-3.5-mini prompt processing 1.20x.
+  - Every other model reads 0.999x to 1.030x.
+  - Allocation per token is 0.90x to 0.99x.
+  - The CPU path, vision and LoRA are unchanged.
+- **Against the reference engine (GPU):** generation is now 0.78x to 1.07x on the four standard models, Qwen2.5-3B
+  0.83x from 0.42x. Prompt processing is 0.73x to 0.83x at 512 tokens and 0.60x to 0.73x at 2048, Phi-3.5-mini
+  lowest at both. Details are in `docs/performance.md`, "Qwen2 decode on the device and host KV reuse".
+- **JFR metrics report native-call samples.** The metrics extractor now reads `jdk.NativeMethodSample` as well as
+  `jdk.ExecutionSample`: `jdk.NativeMethodSample.count` and `.top_methods.<method>.samples`, ten entries at most, and
+  `compare-llama-cpp.sh` result files carry them as `native_sample_count` and `top_native_methods`. A thread inside a
+  native call, such as a GPU driver call, is invisible to the Java-side sampler, so on a GPU run the old hot-method list
+  showed only the host work between device calls. Idle native waits are counted too: compare runs by method name.
+
 **Session 125** - CPU inference runs integer dot products: about 2.5x faster generation, 3x to 5x faster prompt processing
 
 - **CPU matmuls over Q4_K, Q5_K, Q6_K and Q8_0 weights quantize the activation to 8 bits once per matmul and run

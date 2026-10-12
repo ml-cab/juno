@@ -40,8 +40,8 @@ import jdk.jfr.consumer.RecordingFile;
  * but the handler's default decode normalizes on the CPU, and the GPU norm sums
  * in a different order (about 6e-7 apart), which can move a Q8_1 rounding of the
  * projection input. So against the flag-off run this asserts what that allows:
- * the same greedy token at every position and logits within a measured bound. A
- * model the region cannot run (split-half RoPE, Q/K/V biases) must decline it.
+ * the same greedy token at every position and logits within a measured bound.
+ * Qwen2.5 (split-half RoPE, Q/K/V biases) runs the region too.
  */
 @Tag("gpu")
 @DisplayName("LlamaTransformerHandler - --gpu-residency decode region on a real model")
@@ -64,6 +64,22 @@ class LlamaTransformerHandlerGpuResidencyTest {
 	 * layers. The bound is about twice that.
 	 */
 	private static final double LOGIT_TOL = 0.5;
+
+	/**
+	 * As {@link #LOGIT_TOL}, for Qwen2.5-3B. Measured over this run: 0.507, the
+	 * CPU-versus-GPU norm compounded through 36 layers. The bound is about twice that.
+	 */
+	private static final double QWEN_LOGIT_TOL = 1.0;
+
+	/**
+	 * Qwen2.5's opening tokens ("The capital of France is"); the rest of its run is the
+	 * flag-off handler's own greedy continuation. {@link #TOKENS} are another
+	 * vocabulary's ids: on Qwen2.5 they put a near tie at one position (top two logits
+	 * 0.026 apart, under the CPU-versus-GPU norm's 0.2 to 0.4), where the two paths
+	 * picked different tokens. Greedy parity is a property of generated text.
+	 */
+	private static final int[] QWEN_PROMPT = { 785, 6722, 315, 9625, 374 };
+	private static final int QWEN_STEPS = 24;
 
 	private static GpuContext ctx;
 	private String saved;
@@ -180,17 +196,56 @@ class LlamaTransformerHandlerGpuResidencyTest {
 	}
 
 	@Test
-	@DisplayName("qwen2.5: on is declined (split-half RoPE, Q/K/V biases) and decode is unchanged")
-	void aModelTheRegionCannotRunDeclinesIt() throws Exception {
+	@DisplayName("qwen2.5: on activates the region (split-half RoPE, Q/K/V biases) and greedy decode equals the flag-off run")
+	void qwen25DecodesInTheRegion() throws Exception {
+		assumeTrue(QWEN25.toFile().exists(), "model not present");
+		saved = System.getProperty(GpuResidencyOptions.ENV_PROPERTY);
+
+		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "off");
+		ShardContext shard = shard(QWEN25);
+		LlamaTransformerHandler off = loadOnCuda(QWEN25, shard);
+		assertThat(off.gpuResidencyActive()).isFalse();
+		int[] tokens = greedyRun(off, shard);
+		float[][] offLogits = decode(off, shard, "res-qwen-off", tokens);
+		releaseDevice();
+
+		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "on");
+		LlamaTransformerHandler on = loadOnCuda(QWEN25, shard);
+		assertThat(on.gpuResidencyActive()).as("the region runs split-half RoPE and adds the biases").isTrue();
+		assertThat(on.gpuResidencyWholeLayerActive()).isTrue();
+		float[][] onLogits = decode(on, shard, "res-qwen-on", tokens);
+
+		double worst = 0;
+		for (int p = 0; p < tokens.length; p++) {
+			assertThat(argmax(onLogits[p])).as("greedy token at position %d", p).isEqualTo(argmax(offLogits[p]));
+			for (int i = 0; i < offLogits[p].length; i++)
+				worst = Math.max(worst, Math.abs(onLogits[p][i] - offLogits[p][i]));
+		}
+		System.out.printf(java.util.Locale.ROOT, "GPU-RESIDENCY qwen2.5 max|logit on - off| over %d positions = %.6f%n",
+				tokens.length, worst);
+		assertThat(worst).as("largest logit difference, on vs off").isLessThan(QWEN_LOGIT_TOL);
+	}
+
+	@Test
+	@DisplayName("qwen2.5: a decoded token makes 2 uploads and layers + 1 downloads")
+	void qwen25DecodeCopiesPerToken() throws Exception {
 		assumeTrue(QWEN25.toFile().exists(), "model not present");
 		saved = System.getProperty(GpuResidencyOptions.ENV_PROPERTY);
 		System.setProperty(GpuResidencyOptions.ENV_PROPERTY, "on");
 		ShardContext shard = shard(QWEN25);
 		LlamaTransformerHandler on = loadOnCuda(QWEN25, shard);
-		assertThat(on.gpuResidencyActive()).isFalse();
-		float[] logits = on.forward(ForwardRequest.withTokens("res-qwen", new int[] { 9707 }, 0), shard).logits();
-		assertThat(logits).hasSize(shard.vocabSize());
-		on.evict("res-qwen");
+		assertThat(on.gpuResidencyWholeLayerActive()).isTrue();
+		int layers = shard.endLayer() - shard.startLayer();
+		long tokens = TOKENS.length;
+
+		List<RecordedEvent> events = record(() -> decode(on, shard, "res-qwen-copies"));
+
+		assertThat(decodeCopies(events, "upload(decode region input)")).as("residual row, once per token")
+				.isEqualTo(tokens);
+		assertThat(decodeCopiesByDirection(events, "H2D")).as("residual row and LM head input")
+				.isEqualTo(2 * tokens);
+		assertThat(decodeCopiesByDirection(events, "D2H")).as("one download per layer, plus the logits")
+				.isEqualTo((layers + 1L) * tokens);
 	}
 
 	private List<RecordedEvent> record(Runnable body) throws Exception {
@@ -229,14 +284,33 @@ class LlamaTransformerHandlerGpuResidencyTest {
 	}
 
 	private static float[][] decode(LlamaTransformerHandler h, ShardContext shard, String kv) {
-		float[][] out = new float[TOKENS.length][];
+		return decode(h, shard, kv, TOKENS);
+	}
+
+	private static float[][] decode(LlamaTransformerHandler h, ShardContext shard, String kv, int[] tokens) {
+		float[][] out = new float[tokens.length][];
 		int[] one = new int[1];
-		for (int p = 0; p < TOKENS.length; p++) {
-			one[0] = TOKENS[p];
+		for (int p = 0; p < tokens.length; p++) {
+			one[0] = tokens[p];
 			out[p] = h.forward(ForwardRequest.withTokens(kv, one, p), shard).logits();
 		}
 		h.evict(kv);
 		return out;
+	}
+
+	/** {@link #QWEN_PROMPT} followed by the handler's greedy continuation, {@link #QWEN_STEPS} tokens in all. */
+	private static int[] greedyRun(LlamaTransformerHandler h, ShardContext shard) {
+		int[] run = new int[QWEN_STEPS];
+		System.arraycopy(QWEN_PROMPT, 0, run, 0, QWEN_PROMPT.length);
+		int[] one = new int[1];
+		for (int p = 0; p < QWEN_STEPS - 1; p++) {
+			one[0] = run[p];
+			float[] logits = h.forward(ForwardRequest.withTokens("qwen-greedy", one, p), shard).logits();
+			if (p + 1 >= QWEN_PROMPT.length)
+				run[p + 1] = argmax(logits);
+		}
+		h.evict("qwen-greedy");
+		return run;
 	}
 
 	private static ShardContext shard(Path model) throws Exception {

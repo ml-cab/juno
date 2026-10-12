@@ -44,6 +44,17 @@ baseline avoids compounding the confusion Tier 00 fixed).
    real-world need), and re-evaluate `minLength`/`maxLength`/`minimum`/`maximum` numeric/string
    bounds as a stretch goal within this tier if `$ref` lands with room to spare — otherwise file
    those explicitly as follow-up scope, not silently dropped.
+6. **Greedy decoding skips the softmax, and sampling gets a per-token budget** *(handed over by
+   [Tier 02D](TIER-02D-gpu-host-overhead.md), 2026-10-11, owner decision there; added to this file
+   2026-10-11, plan review, because a handoff recorded only in the closed tier's record is one this
+   tier's executor never reads)*. `Sampler` always runs `SoftmaxStep`, and greedy decoding then takes
+   the argmax without reading the probabilities. Tier 02D measured it as the most-sampled frame between
+   GPU passes: about 2 ms of Qwen2.5-3B's 2.26 ms of between-pass host time (151,936-entry vocabulary),
+   about 12% of the projected decode step, and about 0.5 ms on Phi-3.5-mini (32,064 entries). At
+   temperature 0 with no step that reads probabilities, take the argmax of the masked logits directly.
+   Add a `juno.Sample` JFR event (duration per sampled token, the active chain's step count) and its
+   extractor key `juno.Sample.mean_ms`, so this item and item 2's new steps are measured rather than
+   assumed: every step in item 2 runs once per generated token over the full vocabulary.
 
 ### Out of scope
 
@@ -89,6 +100,8 @@ baseline avoids compounding the confusion Tier 00 fixed).
 
 ## Tests to write/upgrade before implementation
 
+- **Plan check, first**: `scripts/performance-tests/check-plan-thresholds.sh` passes before any other
+  test or code in this tier (README execution rule 7).
 - **`SamplerTest`**: baseline regression — default chain produces bit-identical output to
   pre-refactor, for a fixed seed, before any new step lands.
 - **New per-step unit tests**: `MinPStepTest`, `TypicalPStepTest`, `TailFreeStepTest`,
@@ -105,12 +118,23 @@ baseline avoids compounding the confusion Tier 00 fixed).
   exercises each new sampler step and the widened grammar support end-to-end via
   `/v1/chat/completions`, plus the existing `smoke-grammar.sh`/`smoke-tools.sh` scripts must still
   pass unmodified (regression guard for existing grammar/tools behavior).
-- **No perf gate** (declared for `check-plan-thresholds.sh`): this tier is not a
-  forward-pass/MatVec/GPU-residency/batching/KV change per the existing `CLAUDE.md` rule — confirm
-  that classification still holds at implementation time before skipping the gate. Note the one
-  per-token cost it does add: every sampler step runs once per generated token over the full
-  vocabulary, so if a later review gives this tier a per-token sampler budget, replace this
-  declaration with a numeric threshold block rather than keeping both.
+- **`SamplerTest`**: greedy output (token IDs) identical with and without the softmax-free path,
+  including with a grammar mask and with a repetition penalty active.
+- **Standing throughput and allocation gate** (README, "Test infrastructure"): run against the pre-tier
+  jar and score it before closing this tier.
+- **Perf gate (required)** *(2026-10-11, plan review: replaces the "No perf gate" declaration this tier
+  carried; item 6 changes the per-token host path every GPU decode step waits on)*: `compare-llama-cpp.sh
+  --gpu --pin-clocks` same-hour A/B against the pre-tier build on all four sweep models; publish under
+  `docs/perf-compare/` with a descriptive directory name.
+
+  **Threshold.**
+  - Greedy GPU tg on Qwen2.5-3B **>= 1.05x** the pre-tier build (item 6; about 1.12x projected by Tier
+    02D's decomposition), median of three per side, pinned.
+  - `juno.Sample.mean_ms` at temperature 0 on Qwen2.5-3B **<= 0.5 ms** (about 2 ms today).
+  - With the default (non-greedy) chain, `juno.Sample.mean_ms` **<= 1.10x** the pre-tier build on
+    Qwen2.5-3B, so the configurable chain costs nothing when it is not reconfigured; each new step's
+    own `juno.Sample.mean_ms` on Qwen2.5-3B's vocabulary published beside it.
+  - Every other sweep model's GPU tg and pp **>= 0.95x** the pre-tier build (the standing gate).
 
 ## Models needed
 
@@ -128,6 +152,13 @@ not model-architecture-dependent.
 - [ ] GBNF supports full Unicode char classes; repetition cap removed or justified.
 - [ ] `$ref`/`$defs` supported in JSON-Schema-to-grammar; remaining unsupported keywords
       (`pattern`/`format`/`oneOf`/etc.) still fail closed with a clear error, not silently ignored.
+- [ ] Greedy decoding skips the full-vocabulary softmax with identical output; `juno.Sample` recorded and
+      extracted (item 6).
+- [ ] Perf gate published and every threshold above met: greedy Qwen2.5-3B GPU tg >= 1.05x, greedy
+      `juno.Sample.mean_ms` <= 0.5 ms, default-chain sampling <= 1.10x. A miss keeps the tier open;
+      closing on one takes an explicit **Owner decision** recorded here with the measured number.
+- [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
+      >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Existing `smoke-grammar.sh`/`smoke-tools.sh` still pass unmodified.
 - [ ] `x_juno_samplers`, the new `frequency_penalty` semantics and the widened `json_schema` support

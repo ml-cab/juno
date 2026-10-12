@@ -52,8 +52,7 @@ fail-closed path went to Tier 01 as precondition 7. The consequence for this tie
 from a codebase that already reads the key for the pre-types the sweep models declare, and its job is
 the rest of the families plus the evidence.
 
-Sequenced here because what remains needs nothing from Tiers 00-04 and nothing later depends on it,
-but it must land before Tier 08 adds four new architecture families — each of which brings its own
+Sequenced here because what remains needs nothing from Tiers 00-04, and it must land before Tier 08 adds four new architecture families — each of which brings its own
 pre-tokenizer type. Tier 01 implemented the types the four sweep models declare, not every type;
 Tier 08's families may well declare others, and adding handlers for them against a pre-tokenizer that
 only covers the sweep set would bake fresh divergences in. Tier 01's fail-closed path means such a
@@ -107,10 +106,12 @@ this tier is what makes those files work.
 
 ### Out of scope
 
-- Tokenizer *performance*. `juno.Tokenizer.encode` spans already exist and encode time is not a
-  measured bottleneck; this tier is about producing the right tokens, not producing them faster.
-  If the pre-tokenizer regex turns out to be hot for long prompts, record the measurement and file
-  it rather than optimizing here.
+- Tokenizer performance **other than item 5**. Item 5 (SentencePiece encoding in better than quadratic
+  time) is in scope because it was measured as a time-to-first-token cost at long prompts. Everything
+  else stays out: if the pre-tokenizer regex turns out to be hot for long prompts, record the
+  measurement and file it rather than optimizing here. *(Corrected 2026-10-11, plan review: this bullet
+  said tokenizer performance was out of scope and encode time "not a measured bottleneck", which item 5,
+  added 2026-10-04, contradicts.)*
 - Chat-template correctness (`ChatTemplate`, `MiniJinjaTemplate`) — a separate concern, already
   partly covered by Tier 08's template work and Tier 13's tool-calling templates.
 - Adding new tokenizer model types (WordPiece, Unigram) beyond what files on disk declare.
@@ -173,7 +174,7 @@ this tier is what makes those files work.
 - **New bash smoke script**: `scripts/performance-tests/smoke-tokenizer.sh` — runs
   `./juno gguf-info` across `models/` reporting each file's declared pre-type, and drives a fixed
   prompt through `/v1/chat/completions` per sweep model asserting the expected `prompt_tokens`.
-- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+- **Standing throughput and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
   and score it before closing this tier.
 - **Perf gate (required)**: this is not a forward-pass change, but it changes token counts, which
   is the denominator of every pp and tg figure this plan publishes. Re-run `compare-llama-cpp.sh`
@@ -191,6 +192,10 @@ this tier is what makes those files work.
   item 4's stronger claim: the token **IDs** must match the reference for the parity corpus, not only
   the count, on every sweep model — equal counts with a different split is the failure this item
   exists to catch and is invisible to precondition 7's check.
+
+  Item 5 (SentencePiece encoding): `juno.PromptEncode` time on the comparison harness's 2048-word prompt
+  **<= 20 ms** on TinyLlama, Phi-3.5-mini and Mistral 7B (about 250 to 270 ms today), with token IDs
+  identical to the pre-tier implementation over the parity corpus and the sweep prompts; median of three.
 
   Throughput must not regress: Juno tg and pp t/s **>= 0.95x** the pre-tier build on every sweep
   model, from a same-hour interleaved A/B with pinned clocks against the pre-tier build (README, "No-regression gates tighter than the floor are Juno-against-Juno"). If any sweep model's token count moves
@@ -218,13 +223,15 @@ that point rather than asserting against Juno's own output and calling it parity
       still loads bit-identically.
 - [ ] Token-ID parity evidence published per sweep model, with any remaining divergence documented
       per model rather than unstated.
+- [ ] SentencePiece encoding is no longer quadratic (item 5): `juno.PromptEncode` at 2048 words <= 20 ms
+      on the three SentencePiece sweep models, token IDs identical to the pre-tier implementation.
 - [ ] Juno's token count equals the reference tokenizer's (`llama-tokenize`, not `llama-bench`,
       which never tokenizes text) on every parity-corpus line for every sweep model.
 - [ ] The LoRA-adapter question (checklist rows 9 and 10) is resolved and documented — re-train,
       version, or accept-and-warn — not left implicit, and covering both Tier 01's precondition-7
       change and any further change this tier made, since the adapter on disk may already be on the far
       side of the first one.
-- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+- [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published; the run is marked as the new reference for any model whose token count

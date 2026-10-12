@@ -1,0 +1,47 @@
+{
+ "intervals": 127,
+ "layers": 32,
+ "logit_bytes": 128256,
+ "wall_ms": 18.961458,
+ "device_busy_ms": 16.322427,
+ "device_idle_ms": 2.661545,
+ "kernel_ms": 16.149445,
+ "copy_ms": 0.171871,
+ "launches": 705,
+ "copies": 35,
+ "h2d": 2,
+ "d2h": 33,
+ "kernels_ms": {
+  "q4k_gemv": 6.976247,
+  "q5k_gemv": 4.155347,
+  "q6k_gemv": 2.089368,
+  "gemv2T_kernel_val": 0.933698,
+  "gqa_attention_d128": 0.610887,
+  "rms_norm": 0.399022,
+  "rope_ext_split_half": 0.265448,
+  "quantize_q8_1": 0.253994,
+  "swiglu": 0.133287,
+  "to_half": 0.109612,
+  "residual_add_both": 0.072913,
+  "add_inplace": 0.072179,
+  "decode_attention_table": 0.054647
+ },
+ "api_ms": {
+  "cudaStreamSynchronize_v3020": 9.447837,
+  "cuLaunchKernel": 5.049941,
+  "cudaMemcpyAsync_v3020": 1.315331,
+  "cudaLaunchKernel_v7000": 0.015501,
+  "cudaFree_v3020": 0.0,
+  "cudaMalloc_v3020": 0.0,
+  "cudaMemcpy_v3020": 0.0
+ },
+ "api_count": {
+  "cuLaunchKernel": 704,
+  "cudaFree_v3020": 0,
+  "cudaLaunchKernel_v7000": 1,
+  "cudaMalloc_v3020": 0,
+  "cudaMemcpyAsync_v3020": 36,
+  "cudaMemcpy_v3020": 0,
+  "cudaStreamSynchronize_v3020": 33
+ }
+}

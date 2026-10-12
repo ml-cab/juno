@@ -32,6 +32,14 @@ import java.util.Map;
  * {@link JfrMetricsExtractor}: garbage-collection pauses, allocation volume and
  * its attribution, hot methods, and time lost to monitor contention or parking.
  *
+ * <p>Hot methods come in two halves. {@code jdk.ExecutionSample} samples threads
+ * running Java code; a thread inside a native call (a Panama downcall into the
+ * GPU driver, a socket poll) is invisible to it and is sampled by
+ * {@code jdk.NativeMethodSample} instead. On a GPU run most of the forward pass
+ * is spent in downcalls, so the Java-side histogram alone describes the host
+ * work between them, not where the time went. The native histogram also counts
+ * threads idle in a native wait, so it is read, never gated.
+ *
  * <p>These are the numbers a throughput comparison needs in order to be read
  * honestly. A short measurement window that happens to contain one long
  * collection pause reports a throughput drop that looks exactly like a code
@@ -54,6 +62,7 @@ final class JdkEventBucket {
     static final String THREAD_ALLOCATION_STATISTICS = "jdk.ThreadAllocationStatistics";
     static final String OBJECT_ALLOCATION_SAMPLE = "jdk.ObjectAllocationSample";
     static final String EXECUTION_SAMPLE = "jdk.ExecutionSample";
+    static final String NATIVE_METHOD_SAMPLE = "jdk.NativeMethodSample";
     static final String JAVA_MONITOR_ENTER = "jdk.JavaMonitorEnter";
     static final String THREAD_PARK = "jdk.ThreadPark";
 
@@ -83,6 +92,9 @@ final class JdkEventBucket {
 
     private int executionSampleCount;
     private final Map<String, Long> executionSamplesByMethod = new HashMap<>();
+
+    private int nativeSampleCount;
+    private final Map<String, Long> nativeSamplesByMethod = new HashMap<>();
 
     private int monitorEnterCount;
     private long monitorEnterTotalNanos;
@@ -124,6 +136,12 @@ final class JdkEventBucket {
                 String method = topMethod(ev);
                 if (method != null)
                     executionSamplesByMethod.merge(method, 1L, Long::sum);
+            }
+            case NATIVE_METHOD_SAMPLE -> {
+                nativeSampleCount++;
+                String method = topMethod(ev);
+                if (method != null)
+                    nativeSamplesByMethod.merge(method, 1L, Long::sum);
             }
             case JAVA_MONITOR_ENTER -> {
                 monitorEnterCount++;
@@ -180,6 +198,9 @@ final class JdkEventBucket {
 
         m.put("jdk.ExecutionSample.count", (double) executionSampleCount);
         putTopN(m, "jdk.ExecutionSample.top_methods.", ".samples", executionSamplesByMethod);
+
+        m.put("jdk.NativeMethodSample.count", (double) nativeSampleCount);
+        putTopN(m, "jdk.NativeMethodSample.top_methods.", ".samples", nativeSamplesByMethod);
 
         m.put("jdk.JavaMonitorEnter.count", (double) monitorEnterCount);
         m.put("jdk.JavaMonitorEnter.total_ms", monitorEnterTotalNanos / NANOS_PER_MS);

@@ -61,7 +61,7 @@ runs first — see its own note.
    [Tier 02C](TIER-02C-cpu-hot-path.md)'s integer kernels, which run before this tier; convert those,
    not the scalar float kernels they replaced. Reading packed bytes through `MemorySegment.get` in a
    scalar inner loop is not free for C2 (bounds and liveness checks the `byte[]` form does not pay), so
-   this item is the change in the plan most likely to cost CPU throughput. It is held by the standing CPU
+   this item is the change in the plan most likely to cost CPU throughput. It is held by the standing throughput
    and allocation gate (README, "Test infrastructure") on the mapped path with `--mmap-weights on`, not
    only on the default.
 
@@ -171,7 +171,7 @@ runs first — see its own note.
   existing read-and-copy path for at least one model per quant family; a separate microbenchmark
   records load-time and peak-RSS improvement for `llama-1-30b.Q4_K_M.gguf`, published alongside this
   tier's other perf-compare results.
-- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+- **Standing throughput and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
   and score it before closing this tier.
 - **Perf gate (required)**: new MMQ kernels are hot-path changes — `compare-lora.sh` plus a
   per-format microbenchmark, plus `compare-llama-cpp.sh` for a llama.cpp-relative reading (per
@@ -222,11 +222,13 @@ user for a small model download in that format at the point this tier starts.
       correctness-verified against the existing read-and-copy path, with the quantized bytes read in
       place through a `MemorySegment` accessor rather than copied into `byte[]` — the load-time, RSS
       and page-cache-sharing thresholds above all met on `llama-1-30b.Q4_K_M.gguf`.
-- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+- [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, with the mapped-loading thresholds (TTFT >= 50% lower, RSS >= 40% lower,
       shared-page-cache RSS below two loads) and the per-kernel MMQ threshold (>= 0.85x the Q4_K
-      kernel) each met or reported missed with its number.
+      kernel) each met. A miss keeps the tier open; closing on a miss takes an explicit **Owner decision**
+      recorded in this file with the measured number. The MMQ threshold sits inside the noise floor, so a
+      miss there is first re-run as a median of three before it is reported.
 - [ ] Docs (`docs/howto.md` new `quantize` command docs, `docs/agent-arch.txt`) updated.
 - [ ] `CHANGELOG.md` entry added.

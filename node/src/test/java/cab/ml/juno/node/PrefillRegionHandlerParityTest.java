@@ -33,6 +33,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+import cab.ml.juno.kvcache.SessionKvTensor;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -111,9 +113,11 @@ class PrefillRegionHandlerParityTest {
 		CudaMatVec offBackend = new CudaMatVec(gpu);
 		ForwardPassHandler off = ForwardPassHandlerLoader.load(model, shard, offBackend);
 		float[][] ref;
+		List<float[]> refKv = new java.util.ArrayList<>();
+		List<float[]> gotKv = new java.util.ArrayList<>();
 		try {
 			assertThat(off.prefillRegionActive()).as("off must not build the region").isFalse();
-			ref = run(off, shard, null);
+			ref = run(off, shard, null, refKv);
 		} finally {
 			off.releaseGpuResources();
 			offBackend.releaseScratch();
@@ -125,7 +129,7 @@ class PrefillRegionHandlerParityTest {
 		float[][] got;
 		try {
 			assertThat(on.prefillRegionActive()).as("the default must build the region on CUDA").isTrue();
-			got = run(on, shard, new Recorded(layers));
+			got = run(on, shard, new Recorded(layers), gotKv);
 		} finally {
 			on.releaseGpuResources();
 			onBackend.releaseScratch();
@@ -141,6 +145,11 @@ class PrefillRegionHandlerParityTest {
 					argmax(ref[i]), argmax(got[i]), rel);
 			assertThat(got[i]).as(site[i] + ": logits, region on vs off").containsExactly(ref[i]);
 		}
+		// The host KV tensors are the source of truth (the device mirror is a copy the region
+		// fills itself), so the region's writes into them are held bit for bit too.
+		assertThat(gotKv).hasSameSizeAs(refKv);
+		for (int i = 0; i < refKv.size(); i++)
+			assertThat(gotKv.get(i)).as("host KV tensor %d, region on vs off", i).containsExactly(refKv.get(i));
 	}
 
 	/** What the region run records about its first window, checked inside {@link #run}. */
@@ -175,7 +184,8 @@ class PrefillRegionHandlerParityTest {
 	 * alone and then both together at their different positions, and returns the six
 	 * logit vectors. With {@code recorded}, records the first window and checks it.
 	 */
-	private float[][] run(ForwardPassHandler h, ShardContext shard, Recorded recorded) throws Exception {
+	private float[][] run(ForwardPassHandler h, ShardContext shard, Recorded recorded, List<float[]> kvOut)
+			throws Exception {
 		int[] a = tokens(PROMPT_A, 300, shard.vocabSize());
 		int[] b = tokens(PROMPT_B, 900, shard.vocabSize());
 		int[] c = tokens(CONTINUATION, 1700, shard.vocabSize());
@@ -206,9 +216,24 @@ class PrefillRegionHandlerParityTest {
 		float[] da = h.forward(ForwardRequest.withTokens("a", new int[] { argmax(pc) }, posA), shard).logits();
 		float[][] md = h.forwardMultiDecode(MultiDecodeForwardRequest.withTokens(List.of("a", "b"),
 				new int[] { argmax(da), argmax(pb) }, new int[] { posA + 1, PROMPT_B }), shard).logits();
+		snapshotHostKv(h, "a", posA + 2, kvOut);
+		snapshotHostKv(h, "b", PROMPT_B + 1, kvOut);
 		h.evict("a");
 		h.evict("b");
 		return new float[][] { pa, pb, pc, da, md[0], md[1] };
+	}
+
+	/** Every layer's host K and V of {@code requestId}, positions {@code [0, seqLen)}, appended to {@code out}. */
+	private static void snapshotHostKv(ForwardPassHandler h, String requestId, int seqLen, List<float[]> out) {
+		SessionKvTensor[][] kv = switch (h) {
+		case LlamaTransformerHandler l -> l.hostKv(requestId);
+		case Phi3TransformerHandler p -> p.hostKv(requestId);
+		case Qwen3TransformerHandler q -> q.hostKv(requestId);
+		default -> throw new IllegalStateException("no host KV accessor for " + h.getClass().getSimpleName());
+		};
+		for (SessionKvTensor[] side : kv)
+			for (SessionKvTensor t : side)
+				out.add(t.toFloatArray(seqLen));
 	}
 
 	private static List<RecordedEvent> staging(List<RecordedEvent> events) {

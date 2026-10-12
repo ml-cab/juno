@@ -111,6 +111,8 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 	private final Map<String, SessionKvTensor[]> kvCacheK = new ConcurrentHashMap<>();
 	private final Map<String, SessionKvTensor[]> kvCacheV = new ConcurrentHashMap<>();
 	private final SessionKvLayout kvLayout;
+	/** Passes running per request, so evict reuses a request's KV tensors only once none is. */
+	private final InFlightRequests inFlight = new InFlightRequests();
 	private volatile NodeKVCacheAdapter kvAdapter;
 
 	public static Qwen3TransformerHandler load(Path modelPath, ShardContext context) throws IOException {
@@ -486,6 +488,16 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public ForwardResult forward(ForwardRequest request, ShardContext context) {
+		String id = request.requestId();
+		inFlight.enter(id);
+		try {
+			return forwardUnguarded(request, context);
+		} finally {
+			inFlight.exit(id);
+		}
+	}
+
+	private ForwardResult forwardUnguarded(ForwardRequest request, ShardContext context) {
 		long start = System.nanoTime();
 		ForwardPassEvent evt = new ForwardPassEvent();
 		evt.begin();
@@ -512,6 +524,16 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public Optional<float[]> lastRmsHiddenForEmbedding(ForwardRequest request, ShardContext context) {
+		String id = request.requestId();
+		inFlight.enter(id);
+		try {
+			return lastRmsHiddenForEmbeddingUnguarded(request, context);
+		} finally {
+			inFlight.exit(id);
+		}
+	}
+
+	private Optional<float[]> lastRmsHiddenForEmbeddingUnguarded(ForwardRequest request, ShardContext context) {
 		if (!hasOutputProj)
 			return Optional.empty();
 		float[] x = getInitialActivation(request);
@@ -526,6 +548,16 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public BatchForwardResult forwardBatch(BatchForwardRequest request, ShardContext context) {
+		String id = request.requestId();
+		inFlight.enter(id);
+		try {
+			return forwardBatchUnguarded(request, context);
+		} finally {
+			inFlight.exit(id);
+		}
+	}
+
+	private BatchForwardResult forwardBatchUnguarded(BatchForwardRequest request, ShardContext context) {
 		long start = System.nanoTime();
 		int W = request.windowSize();
 		int H = cfg.hiddenDim();
@@ -564,6 +596,16 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public MultiDecodeForwardResult forwardMultiDecode(MultiDecodeForwardRequest request, ShardContext context) {
+		java.util.List<String> ids = request.requestIds();
+		inFlight.enterAll(ids);
+		try {
+			return forwardMultiDecodeUnguarded(request, context);
+		} finally {
+			inFlight.exitAll(ids);
+		}
+	}
+
+	private MultiDecodeForwardResult forwardMultiDecodeUnguarded(MultiDecodeForwardRequest request, ShardContext context) {
 		long start = System.nanoTime();
 		int N = request.batchSize();
 		int H = cfg.hiddenDim();
@@ -918,7 +960,7 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		WindowStepEvent devEvt = WindowStepEvent.start();
 		boolean whole;
 		try {
-			whole = win.runLayer(li, x, startPos, mirror, ws.q, ws.k, ws.v);
+			whole = win.runLayer(li, x, startPos, mirror, ws.q, ws.k, ws.v, kCacheLayer, vCacheLayer);
 		} catch (IllegalStateException ex) {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;
@@ -929,11 +971,8 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		devEvt.end(WindowStepEvent.DEVICE_LAYER, W, startPos);
 
 		if (whole) {
+			// The region wrote the window's K and V into the host tensors itself.
 			WindowStepEvent kvEvt = WindowStepEvent.start();
-			for (int b = 0; b < W; b++) {
-				kCacheLayer.writeToken(startPos + b, ws.k[b]);
-				vCacheLayer.writeToken(startPos + b, ws.v[b]);
-			}
 			mirror.markWritten(startPos, W);
 			kvEvt.end(WindowStepEvent.KV_WRITE, W, startPos);
 			return x;
@@ -1101,6 +1140,16 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public void shiftKv(String requestId, int seqLen, int keep, int discard) {
+		String id = requestId;
+		inFlight.enter(id);
+		try {
+			shiftKvUnguarded(requestId, seqLen, keep, discard);
+		} finally {
+			inFlight.exit(id);
+		}
+	}
+
+	private void shiftKvUnguarded(String requestId, int seqLen, int keep, int discard) {
 		RopeShift rope = Qwen3Rope.shift(cfg.headDim(), cfg.rope());
 		HandlerContextShift.shiftHost(kvCacheK, kvCacheV, requestId, seqLen, keep, discard, rope, cfg.numKvHeads());
 		GpuAttentionMirror g = gpuAttention;
@@ -1134,8 +1183,16 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	@Override
 	public void evict(String requestId) {
-		SessionKvLayout.releaseLayers(kvCacheK.remove(requestId));
-		SessionKvLayout.releaseLayers(kvCacheV.remove(requestId));
+		SessionKvTensor[] k = kvCacheK.remove(requestId);
+		SessionKvTensor[] v = kvCacheV.remove(requestId);
+		if (inFlight.idle(requestId)) {
+			// The next request takes them instead of allocating (see InFlightRequests).
+			kvLayout.retireKLayers(k);
+			kvLayout.retireVLayers(v);
+		} else {
+			SessionKvLayout.releaseLayers(k);
+			SessionKvLayout.releaseLayers(v);
+		}
 		GpuAttentionMirror g = gpuAttention;
 		if (g != null)
 			g.evict(requestId);

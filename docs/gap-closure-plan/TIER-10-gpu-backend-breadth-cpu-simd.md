@@ -82,7 +82,7 @@ proven out, so ROCm parity work is porting a known-good design rather than co-de
 
 | # | Surface | Notes |
 |---|---|---|
-| 1 | CPU inference | must remain unaffected; re-measured by the standing CPU gate |
+| 1 | CPU inference | must remain unaffected; re-measured by the CPU lane of the standing throughput and allocation gate |
 | 2 | CUDA GPU inference | must remain unaffected — this tier's GPU work targets ROCm specifically |
 | 3 | ROCm GPU inference | primary target for the tiled-GEMM, MMQ and attention work, NEEDS-AMD-HARDWARE for final validation |
 | 4 | Static schedule | the ROCm tiled-GEMM must work under static micro-batching |
@@ -118,7 +118,7 @@ proven out, so ROCm parity work is porting a known-good design rather than co-de
 - **`ModelLiveRunnerIT`**: when AMD hardware becomes available, a ROCm tiled-GEMM check.
 - **New bash smoke script**: `scripts/performance-tests/smoke-backend-breadth.sh` — runs the ROCm path
   where available and otherwise asserts the documented fail-closed notices.
-- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar.
+- **Standing throughput and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar.
 - **Perf gate (required)**: `MatVec` and the attention loader change — `compare-lora.sh`,
   `compare-llama-cpp.sh --gpu` (per README's llama.cpp-relative gate); publish under
   `docs/perf-compare/`.
@@ -149,6 +149,6 @@ Existing models suffice. ROCm validation needs an AMD GPU, which is not present.
 - [ ] Every ROCm conclusion in the execution record carries a `host-specific` or `expected-general`
       marker.
 - [ ] Cross-surface checklist fully resolved.
-- [ ] Perf gate published: CUDA and CPU >= 0.95x the pre-tier build, and the standing CPU and
+- [ ] Perf gate published: CUDA and CPU >= 0.95x the pre-tier build, and the standing throughput and
       allocation gate met.
 - [ ] `CHANGELOG.md` entry added.

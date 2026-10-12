@@ -68,8 +68,8 @@ public final class CpuMatVec implements MatVec {
 	 * full weight matrix from memory B times), this halves memory bandwidth for
 	 * {@code B &ge; 2} and scales near-linearly with B on DRAM-bound workloads.
 	 *
-	 * <p>Row parallelism: {@code IntStream.parallel()} over rows via
-	 * {@code ForkJoinPool.commonPool()} — same pool as {@link LlamaTransformerHandler#matVec}.
+	 * <p>Row parallelism: rows split across the {@code --threads} worker pool via
+	 * {@link CpuThreads#forEach} — same pool as {@link LlamaTransformerHandler#matVec}.
 	 * Each parallel task now does {@code cols * B} multiply-adds instead of {@code cols},
 	 * improving the compute-per-task-dispatch ratio.
 	 */

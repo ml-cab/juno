@@ -15,6 +15,8 @@
  */
 package cab.ml.juno.node;
 
+import cab.ml.juno.kvcache.SessionKvTensor;
+
 import java.lang.foreign.MemorySegment;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -550,6 +552,18 @@ final class PrefillWindowRegion implements AutoCloseable {
 		 */
 		boolean runLayer(int li, float[][] xHost, int startPos, DeviceKvCache mirror, float[][] qOut,
 				float[][] kOut, float[][] vOut) {
+			return runLayer(li, xHost, startPos, mirror, qOut, kOut, vOut, null, null);
+		}
+
+		/**
+		 * As {@link #runLayer(int, float[][], int, DeviceKvCache, float[][], float[][], float[][])};
+		 * when the whole layer runs and {@code kHost}/{@code vHost} are given, the window's K and
+		 * V rows go straight from the download into those host KV tensors at
+		 * {@code startPos} ({@link ResidentActivation#materializeToKv}) instead of into
+		 * {@code kOut}/{@code vOut}, and the caller does not write them again.
+		 */
+		boolean runLayer(int li, float[][] xHost, int startPos, DeviceKvCache mirror, float[][] qOut,
+				float[][] kOut, float[][] vOut, SessionKvTensor kHost, SessionKvTensor vHost) {
 			int w = requireWindow(li, xHost.length);
 			boolean inside = attentionOnDevice && mirror != null && mirror.live() && mirror.readableThrough(startPos);
 			synchronized (ctx.cublasSerializationLock()) {
@@ -568,12 +582,16 @@ final class PrefillWindowRegion implements AutoCloseable {
 						return false;
 					}
 					feedForward(li, w);
-					kvOuts[0] = kOut;
-					kvOuts[1] = vOut;
-					try {
-						ResidentActivation.materializeAll(kvActs, kvOuts);
-					} finally {
-						kvOuts[0] = kvOuts[1] = null;
+					if (kHost != null && vHost != null) {
+						ResidentActivation.materializeToKv(kvActs[0], kvActs[1], kHost, vHost, startPos);
+					} else {
+						kvOuts[0] = kOut;
+						kvOuts[1] = vOut;
+						try {
+							ResidentActivation.materializeAll(kvActs, kvOuts);
+						} finally {
+							kvOuts[0] = kvOuts[1] = null;
+						}
 					}
 					done = true;
 					return true;

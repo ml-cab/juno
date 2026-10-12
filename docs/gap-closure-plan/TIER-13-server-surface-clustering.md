@@ -123,7 +123,7 @@ the finished system.
 - **New bash smoke script**: `scripts/performance-tests/smoke-server-clustering.sh` —
   drives an elastic-sized cluster, kills a node mid-run, exercises reranking, and exercises tool
   calling on each newly-supported template.
-- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+- **Standing throughput and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
   and score it before closing this tier if the perf gate applies.
 - **Perf gate**: only required if the fault-tolerance wiring or elastic clustering changes the
   per-request hot path (it shouldn't for the happy path, but confirm); reranking is a new
@@ -159,7 +159,7 @@ and fault-tolerance testing use the existing forked-JVM harness and don't need n
 - [ ] Tool calling works on at least one additional chat template beyond
       `{llama3, chatml, qwen3}`, with the remaining unsupported templates still failing closed
       correctly.
-- [ ] Standing CPU and allocation gate met if the perf gate applies (README, "Test infrastructure"): CPU tg and pp
+- [ ] Standing throughput and allocation gate met if the perf gate applies (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cluster and tensor-parallel requests evict their KV on every node and support context shift
       (item 5), with the context-shift smoke passing against a cluster.

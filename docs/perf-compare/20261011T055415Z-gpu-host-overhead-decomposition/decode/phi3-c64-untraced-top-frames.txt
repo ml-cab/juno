@@ -1,0 +1,7 @@
+      5 cab.ml.juno.sampler.SoftmaxStep.apply(float[], SamplingParams, int[]) line: 46
+      3 java.util.concurrent.ConcurrentHashMap.get(Object) line: 958
+      2 cab.ml.juno.kvcache.DenseKvTensor.grow(int) line: 227
+      1 jdk.internal.classfile.impl.BufWriterImpl.cpIndexOrZero(PoolEntry) line: 391
+      1 java.lang.foreign.SegmentAllocator.allocate(MemoryLayout) line: 611
+      1 cab.ml.juno.node.ResidentActivation.copyAsync(MemorySegment, MemorySegment, long, int, int, String) line: 284
+      1 cab.ml.juno.node.DeviceQ4KMatrix.isClosed() line: 167

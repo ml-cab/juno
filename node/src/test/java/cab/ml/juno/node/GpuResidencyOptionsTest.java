@@ -84,10 +84,8 @@ class GpuResidencyOptionsTest {
 
 	@Test
 	void names_every_architecture_the_region_cannot_run_and_none_it_can() {
-		for (String arch : new String[] { "llama", "mistral", "tinyllama", "phi3", "qwen3" })
+		for (String arch : new String[] { "llama", "mistral", "tinyllama", "phi3", "qwen3", "qwen2", "qwen2.5" })
 			assertThat(GpuResidencyOptions.unsupportedArchitectureReason(arch)).as(arch).isNull();
-		assertThat(GpuResidencyOptions.unsupportedArchitectureReason("qwen2")).contains("split-half");
-		assertThat(GpuResidencyOptions.unsupportedArchitectureReason("qwen2.5")).contains("split-half");
 		for (String arch : new String[] { "phi2", "qwen3moe" })
 			assertThat(GpuResidencyOptions.unsupportedArchitectureReason(arch)).as(arch).isNotNull();
 	}

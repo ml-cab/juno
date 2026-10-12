@@ -1,0 +1,15 @@
+     87 cab.ml.juno.node.LlamaTransformerHandler.ffn(float[], int, int, CpuDecodeScratch) line: 2795
+     25 cab.ml.juno.sampler.SoftmaxStep.apply(float[], SamplingParams, int[]) line: 46
+      5 cab.ml.juno.sampler.SampleStep.greedy(float[]) line: 62
+      3 jdk.internal.misc.ScopedMemoryAccess.copyMemoryInternal(MemorySessionImpl, MemorySessionImpl, Object, long, Object, long, long) line: 148
+      3 java.lang.invoke.MethodHandle.asSpreader(int, Class, int) line: 1127
+      2 jdk.internal.misc.Unsafe.allocateMemory0(long)
+      2 jdk.internal.foreign.SegmentFactories.initNativeMemory(long, long) line: 242
+      2 jdk.internal.foreign.AbstractMemorySegmentImpl.setAtIndex(AddressLayout, long, MemorySegment) line: 924
+      2 java.util.concurrent.ConcurrentHashMap.get(Object) line: 958
+      2 java.lang.invoke.MethodTypeForm.canonicalizeAll(Class[], int) line: 291
+      2 cab.ml.juno.node.LlamaTransformerHandler.rmsNormInto(float[], float[], float, float[]) line: 2859
+      1 jdk.jfr.internal.event.EventWriter.putUncheckedLong(long) line: 337
+      1 jdk.internal.foreign.SegmentBulkOperations.copy(AbstractMemorySegmentImpl, long, AbstractMemorySegmentImpl, long, long) line: 114
+      1 jdk.internal.foreign.MemorySessionImpl.checkValidStateRaw() line: 200
+      1 jdk.internal.foreign.ArenaImpl.allocate(long, long) line: 56

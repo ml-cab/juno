@@ -105,13 +105,12 @@ public final class GpuResidencyOptions {
 	/**
 	 * Why the device region cannot run a model of this {@code general.architecture}
 	 * at all, or {@code null} when a handler with the region serves it: the
-	 * LLaMA-family handler with adjacent RoPE, or the Phi-3 or dense Qwen3 handler
+	 * LLaMA-family handler (Qwen2 included), or the Phi-3 or dense Qwen3 handler
 	 * (whether each layer then qualifies depends on its weights).
 	 */
 	public static String unsupportedArchitectureReason(String architecture) {
 		String a = architecture == null ? "" : architecture.strip().toLowerCase(Locale.ROOT);
 		return switch (a) {
-		case "qwen2", "qwen2.5" -> "uses the split-half RoPE layout (and Q/K/V biases), which the device region does not implement";
 		case "phi2", "qwen3moe" -> "is served by a handler without a device-resident decode region";
 		default -> null;
 		};

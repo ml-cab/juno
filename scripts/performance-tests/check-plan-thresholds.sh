@@ -24,14 +24,23 @@
 #      marker naming the evidence it was scored on. Checks 1 to 3 prove a number
 #      was written down; this one proves something was scored against it.
 #   5. A tier whose Status line does not say "complete" names this script in its
-#      own file, and, if it has a perf gate, names the README's "Standing CPU and
-#      allocation gate". A rule stated only in the README is a rule the executor
-#      of a tier does not read.
+#      own file, and, if it has a perf gate, names the README's "Standing
+#      throughput and allocation gate". A rule stated only in the README is a rule
+#      the executor of a tier does not read.
 #   6. No perf-compare/ path carrying a tier number (-tier04b-...) that does not
 #      exist on disk: that is a prescription for a new tier-numbered directory,
 #      and docs/perf-compare/ is linked from a shipped doc.
 #   7. The README's end-of-plan target table obeys check 3's rules: well formed,
 #      and no active target already met by its reference reading.
+#   8. No exit criterion of an open tier (read with its indented notes) lets a
+#      threshold close as "reported missed" ("met or reported missed", "reported
+#      as missed", "the miss reported plainly", "documents precisely why not")
+#      unless it cites an **Owner decision. A threshold a tier may
+#      close on by writing its miss down is a report, not a gate.
+#   9. Every paragraph of the README or of an open tier file that says "no tier
+#      owns" or "unowned" links a tier file (](TIER-...md)): the tier that owns
+#      the work, or the tier record where the owner decided to leave it unowned.
+#      An unowned carry-forward with no link is work nobody reads again.
 #
 # The documentation-hardening tier file (TIER-14-*) is excluded from checks 1 and
 # the standing-gate half of 5: it names the strings to describe them.
@@ -51,7 +60,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --plan) PLAN_DIR="$2"; shift 2 ;;
     --perf-compare) PERF_DIR="$2"; shift 2 ;;
-    -h|--help) sed -n '2,42p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    -h|--help) sed -n '2,50p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) printf 'check-plan-thresholds: unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -103,6 +112,40 @@ ticked_threshold_criteria() {
   ' "$1"
 }
 
+# Check 8. Prints "<line number>\t<first 70 chars>" for each exit criterion
+# ("- [ ]" or "- [x]", with its indented notes) that accepts a reported miss in
+# place of meeting its threshold and cites no **Owner decision.
+missed_escape_criteria() {
+  awk '
+    function flush() {
+      if (!open) return
+      open = 0
+      if (crit !~ /reported (as )?missed|met or (explicitly )?reported|miss(ed)? (is )?reported|documents? (precisely )?why not/) return
+      if (crit ~ /\*\*Owner decision/) return
+      printf "%d\t%s\n", start, substr(head, 1, 70)
+    }
+    /^- \[[ x]\]/ { flush(); open = 1; start = NR; head = $0; crit = $0; next }
+    open && /^[ \t]/ { crit = crit " " $0; next }
+    { flush() }
+    END { flush() }
+  ' "$1"
+}
+
+# Check 9. Prints "<line number>\t<first 70 chars>" for each paragraph (blank-line
+# separated) that says "no tier owns" or "unowned" without linking a tier file.
+unlinked_unowned_paragraphs() {
+  awk '
+    function flush() {
+      if (para != "" && para ~ /[Nn]o tier owns|[Uu]nowned/ && para !~ /\]\(TIER-[A-Za-z0-9._-]+\.md/)
+        printf "%d\t%s\n", start, substr(first, 1, 70)
+      para = ""
+    }
+    /^[ \t]*$/ { flush(); next }
+    { if (para == "") { start = NR; first = $0 } para = para " " $0 }
+    END { flush() }
+  ' "$1"
+}
+
 tier_count=0
 for f in "$PLAN_DIR"/TIER-*.md; do
   [[ -f "$f" ]] || continue
@@ -125,6 +168,14 @@ for f in "$PLAN_DIR"/TIER-*.md; do
     fi
   done < <(ticked_threshold_criteria "$f")
 
+  # Check 8: an open tier's exit criterion may not close a threshold as "reported missed".
+  if ! grep -m1 '^Status' "$f" | grep -qi 'complete'; then
+    while IFS=$'\t' read -r line head; do
+      [[ -n "$line" ]] || continue
+      fail "${name}:${line}: exit criterion lets a threshold close as reported missed without an **Owner decision: ${head}"
+    done < <(missed_escape_criteria "$f")
+  fi
+
   # Check 5: an open tier carries the README's per-tier obligations in its own file.
   has_gate=0
   if grep -qi 'perf gate' "$f" && ! grep -q '\*\*No perf gate' "$f"; then
@@ -134,8 +185,8 @@ for f in "$PLAN_DIR"/TIER-*.md; do
     grep -q 'check-plan-thresholds\.sh' "$f" \
       || fail "${name}: open tier never names check-plan-thresholds.sh (execution rule 7: it is each tier's first test)"
     if (( has_gate )) && [[ "$name" != TIER-14-* ]] \
-        && ! grep -q 'Standing CPU and allocation gate' "$f"; then
-      fail "${name}: open tier with a perf gate never names the Standing CPU and allocation gate (README, Test infrastructure)"
+        && ! grep -q 'Standing throughput and allocation gate' "$f"; then
+      fail "${name}: open tier with a perf gate never names the Standing throughput and allocation gate (README, Test infrastructure)"
     fi
   fi
 
@@ -163,6 +214,18 @@ while IFS=: read -r src path; do
     || fail "$(basename "$src"): prescribes a tier-numbered perf-compare directory '${dir}'; name it for what it measures"
 done < <(grep -oE 'perf-compare/[A-Za-z0-9<>._-]*-[Tt]ier[0-9][A-Za-z0-9<>._-]*' \
            "$PLAN_DIR"/README.md "$PLAN_DIR"/TIER-*.md 2>/dev/null | sort -u)
+
+# Check 9: an unowned carry-forward links the tier that owns it or decided it.
+for f in "$PLAN_DIR"/README.md "$PLAN_DIR"/TIER-*.md; do
+  [[ -f "$f" ]] || continue
+  if [[ "$(basename "$f")" == TIER-* ]] && grep -m1 '^Status' "$f" | grep -qi 'complete'; then
+    continue
+  fi
+  while IFS=$'\t' read -r line head; do
+    [[ -n "$line" ]] || continue
+    fail "$(basename "$f"):${line}: says 'no tier owns'/'unowned' but links no TIER-*.md owner or decision record: ${head}"
+  done < <(unlinked_unowned_paragraphs "$f")
+done
 
 # Checks 3 and 7: a threshold table in the README, read from the rows after its
 # marker to the end of that table. Columns: <kind> | Metric | Scope | Threshold |

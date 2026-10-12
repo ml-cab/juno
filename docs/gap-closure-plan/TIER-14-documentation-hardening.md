@@ -47,7 +47,7 @@ happened to touch, but that Tier 03's changes quietly invalidated).
 3. **Full doc consistency pass**: `docs/howto.md`, `docs/performance.md`, `README.md`,
    `docs/agent-arch.txt` all get read end-to-end against current source and corrected where drifted.
 4. **Final llama.cpp-relative scorecard**: pull every `compare-llama-cpp.sh` run published per tier
-   under README's "llama.cpp-relative gate" (Tiers 01, 01B, 01C, 02, 02B, 02C, 03, 04, 04B, 04C, 06, 07, 08, 09, 10
+   under README's "llama.cpp-relative gate" (Tiers 01, 01B, 01C, 02, 02B, 02C, 02D, 02E, 03, 04, 04B, 04C, 06, 07, 08, 09, 10
    — this list must match the one in [`README.md`](README.md)'s llama.cpp-relative gate paragraph
    verbatim; 04C was missing from it once already, which would have dropped the tier that changes the
    GEMM operand for every later pp figure out of the plan's single final answer)

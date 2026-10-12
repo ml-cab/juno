@@ -1599,6 +1599,14 @@ jfr_summary_json() {
                      | { method: (.key | ltrimstr("jdk.ExecutionSample.top_methods.") | rtrimstr(".samples")),
                          samples: .value } ]
                    | sort_by(-.samples),
+      # Threads inside a native call (GPU driver downcalls, socket polls), which
+      # ExecutionSample cannot see. Includes idle native waits: read, never gated.
+      native_sample_count: ($m."jdk.NativeMethodSample.count" // null),
+      top_native_methods: [ $m | to_entries[]
+                     | select(.key | startswith("jdk.NativeMethodSample.top_methods."))
+                     | { method: (.key | ltrimstr("jdk.NativeMethodSample.top_methods.") | rtrimstr(".samples")),
+                         samples: .value } ]
+                   | sort_by(-.samples),
       top_allocation_sites: [ $m | to_entries[]
                      | select(.key | startswith("jdk.ObjectAllocationSample.top_sites."))
                      | { site: (.key | ltrimstr("jdk.ObjectAllocationSample.top_sites.") | rtrimstr(".bytes")),

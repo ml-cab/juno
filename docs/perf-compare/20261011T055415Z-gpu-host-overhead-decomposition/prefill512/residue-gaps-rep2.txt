@@ -1,0 +1,17 @@
+window 737.8 ms, uncovered 84.3 ms in 68 gaps
+      82.8 ms  embed -> device_layer
+       0.8 ms  kv_write -> device_layer
+       0.7 ms  device_layer -> kv_write
+       0.0 ms  device_layer -> lm_head
+       0.0 ms  lm_head -> window end
+       0.0 ms  window start -> embed
+  largest: 82.8 ms at +1.1 ms (embed -> device_layer)
+  largest: 0.1 ms at +323.0 ms (device_layer -> kv_write)
+  largest: 0.1 ms at +224.9 ms (device_layer -> kv_write)
+  largest: 0.0 ms at +578.0 ms (kv_write -> device_layer)
+  largest: 0.0 ms at +187.3 ms (kv_write -> device_layer)
+GC pause inside window 24.3 ms, inside uncovered gaps 24.3 ms
+allocation samples (weight MB) by site, inside gaps vs spans:
+  gap      159.9  cab/ml/juno/kvcache/DenseKvTensor.grow:227
+  gap       49.5  cab/ml/juno/kvcache/DenseKvTensor.allocate:220
+  span       6.3  cab/ml/juno/node/Phi3TransformerHandler.forwardBatch:726

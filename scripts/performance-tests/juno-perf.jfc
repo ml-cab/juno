@@ -24,6 +24,8 @@
      20 ms period. Tightening native-thread stack sampling was behind a JFR
      sampler crash observed while a GPU quantized-matmul LoRA playback run sat
      inside a native downcall, so the Java-side sampler is the one tightened here.
+     Its samples are still extracted (jdk.NativeMethodSample.top_methods): on a
+     GPU run they are where the time spent in driver downcalls shows up.
 
      Recommended way to edit .jfc files is the configure command of the 'jfr'
      tool, i.e. jfr configure, or JDK Mission Control

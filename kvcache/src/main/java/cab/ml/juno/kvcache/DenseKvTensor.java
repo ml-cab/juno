@@ -15,6 +15,8 @@
  */
 package cab.ml.juno.kvcache;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.Arrays;
 
 /**
@@ -24,6 +26,11 @@ import java.util.Arrays;
  * <p>Attention always consumes float views. For {@code F16}, {@link #viewForAttention}
  * returns the backing array (bit-compatible). For {@code Q8_0}, it dequants into
  * the provided scratch buffer.
+ *
+ * <p>A tensor can serve several requests one after another ({@link SessionKvLayout#retireKLayers}).
+ * Positions below {@link #writtenTokens} hold the current request's values; everything at
+ * or above it reads as zero, as on a new tensor: a write or read past it first zeroes the
+ * gap, so a request never sees an earlier request's values.
  */
 public final class DenseKvTensor implements SessionKvTensor {
 
@@ -40,6 +47,8 @@ public final class DenseKvTensor implements SessionKvTensor {
 	private float[] f32;
 	private byte[] q8;
 	private int capacityTokens;
+	/** Positions {@code [0, writtenTokens)} belong to the current request; see the class comment. */
+	private int writtenTokens;
 
 	public DenseKvTensor(KvElementType type, int kvDim) {
 		this(type, kvDim, INITIAL_SEQ_CAPACITY);
@@ -105,10 +114,27 @@ public final class DenseKvTensor implements SessionKvTensor {
 		ensureCapacity(pos);
 		if (srcOff < 0 || srcOff + kvDim > src.length)
 			throw new IllegalArgumentException("src too small for kvDim=" + kvDim);
+		exposeThrough(pos);
+		writtenTokens = Math.max(writtenTokens, pos + 1);
 		switch (type) {
 		case F16 -> System.arraycopy(src, srcOff, f32, pos * kvDim, kvDim);
 		case Q8_0 -> Q8_0KvCodec.encode(src, srcOff, kvDim, q8, pos * bytesPerToken());
 		}
+	}
+
+	/** F16 is one bulk copy into the backing array; Q8_0 encodes a row at a time. */
+	@Override
+	public void writeRows(int startPos, int rows, MemorySegment src, long srcOffset) {
+		if (rows < 1)
+			return;
+		if (type != KvElementType.F16) {
+			SessionKvTensor.super.writeRows(startPos, rows, src, srcOffset);
+			return;
+		}
+		ensureCapacity(startPos + rows - 1);
+		exposeThrough(startPos);
+		MemorySegment.copy(src, ValueLayout.JAVA_FLOAT, srcOffset, f32, startPos * kvDim, rows * kvDim);
+		writtenTokens = Math.max(writtenTokens, startPos + rows);
 	}
 
 	/**
@@ -129,6 +155,7 @@ public final class DenseKvTensor implements SessionKvTensor {
 				Q8_0KvCodec.encode(src, p * kvDim, kvDim, q8, p * bytesPerToken());
 		}
 		}
+		writtenTokens = Math.max(writtenTokens, seqLen);
 	}
 
 	/**
@@ -141,6 +168,7 @@ public final class DenseKvTensor implements SessionKvTensor {
 		if (seqLen < 1)
 			throw new IllegalArgumentException("seqLen must be >= 1");
 		ensureCapacity(seqLen - 1);
+		exposeThrough(seqLen);
 		int n = seqLen * kvDim;
 		return switch (type) {
 		case F16 -> f32;
@@ -188,6 +216,7 @@ public final class DenseKvTensor implements SessionKvTensor {
 	public void readToken(int pos, float[] dst) {
 		if (pos < 0 || pos >= capacityTokens)
 			throw new IllegalArgumentException("pos " + pos + " outside [0, " + capacityTokens + ")");
+		exposeThrough(pos + 1);
 		switch (type) {
 		case F16 -> System.arraycopy(f32, pos * kvDim, dst, 0, kvDim);
 		case Q8_0 -> Q8_0KvCodec.decode(q8, pos * bytesPerToken(), dst, 0, kvDim);
@@ -212,6 +241,26 @@ public final class DenseKvTensor implements SessionKvTensor {
 	@Override
 	public void release() {
 		// dense storage is GC'd with the tensor
+	}
+
+	/** Hands the tensor to a new request: its earlier values become unreadable (see the class comment). */
+	void reuse() {
+		writtenTokens = 0;
+	}
+
+	/**
+	 * Zeroes positions {@code [writtenTokens, tokens)} and makes them part of the current
+	 * request, so nothing an earlier request wrote there can be read. A no-op in the
+	 * usual order, where every position is written before it is read.
+	 */
+	private void exposeThrough(int tokens) {
+		if (tokens <= writtenTokens)
+			return;
+		switch (type) {
+		case F16 -> Arrays.fill(f32, writtenTokens * kvDim, tokens * kvDim, 0f);
+		case Q8_0 -> Arrays.fill(q8, writtenTokens * bytesPerToken(), tokens * bytesPerToken(), (byte) 0);
+		}
+		writtenTokens = tokens;
 	}
 
 	private void allocate(int tokens) {

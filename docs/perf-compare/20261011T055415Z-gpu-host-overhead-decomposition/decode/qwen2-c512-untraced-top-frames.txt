@@ -1,0 +1,15 @@
+     80 cab.ml.juno.node.LlamaTransformerHandler.ffn(float[], int, int, CpuDecodeScratch) line: 2795
+     26 cab.ml.juno.sampler.SoftmaxStep.apply(float[], SamplingParams, int[]) line: 46
+      3 java.util.concurrent.ConcurrentHashMap.get(Object) line: 958
+      3 java.lang.invoke.MethodHandle.invokeWithArguments(Object[]) line: 735
+      3 cab.ml.juno.sampler.SampleStep.greedy(float[]) line: 62
+      2 jdk.internal.foreign.SegmentFactories.initNativeMemory(long, long) line: 242
+      2 jdk.internal.foreign.MemorySessionImpl.checkValidStateRaw() line: 200
+      2 java.util.concurrent.ConcurrentHashMap.get(Object) line: 952
+      2 java.lang.invoke.MethodHandle.asSpreader(int, Class, int) line: 1127
+      2 cab.ml.juno.node.DeviceKvCache.appendToken(int, float[], float[], int) line: 243
+      1 jdk.internal.util.ArraysSupport.utf16hashCode(int, byte[], int, int) line: 422
+      1 jdk.internal.misc.Unsafe.allocateMemory0(long)
+      1 jdk.internal.foreign.ArenaImpl.allocate(long, long) line: 56
+      1 jdk.internal.foreign.abi.SharedUtils.checkSymbol(MemorySegment) line: 372
+      1 jdk.internal.classfile.impl.BufWriterImpl.writeIndex(int, PoolEntry) line: 403

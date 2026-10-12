@@ -31,6 +31,9 @@ public final class SessionKvLayout {
 	private final CacheTypeOptions cacheTypes;
 	private final int kvDim;
 	private volatile PagedKvArena arena;
+	/** Released dense layers kept for the next request (static schedule); unused when paged. */
+	private final DenseKvRecycler retiredK = new DenseKvRecycler();
+	private final DenseKvRecycler retiredV = new DenseKvRecycler();
 
 	private SessionKvLayout(ServeScheduleOptions schedule, KvPageSizeOptions pageSize,
 			CacheTypeOptions cacheTypes, int kvDim, PagedKvArena arena) {
@@ -106,16 +109,46 @@ public final class SessionKvLayout {
 		return usesPaged() || cacheTypes.usesQuantized();
 	}
 
+	/**
+	 * A request's K layers: paged from the arena, or dense, the layers a released request
+	 * left ({@link #retireKLayers}) when there are some, else new ones.
+	 */
 	public SessionKvTensor[] newKLayers(int layerCount) {
 		if (usesPaged())
 			return arenaOrThrow().newKLayers(layerCount);
-		return DenseKvTensor.layers(layerCount, cacheTypes.typeK(), kvDim);
+		SessionKvTensor[] reused = retiredK.take(layerCount, cacheTypes.typeK());
+		return reused != null ? reused : DenseKvTensor.layers(layerCount, cacheTypes.typeK(), kvDim);
 	}
 
+	/** As {@link #newKLayers}, for V. */
 	public SessionKvTensor[] newVLayers(int layerCount) {
 		if (usesPaged())
 			return arenaOrThrow().newVLayers(layerCount);
-		return DenseKvTensor.layers(layerCount, cacheTypes.typeV(), kvDim);
+		SessionKvTensor[] reused = retiredV.take(layerCount, cacheTypes.typeV());
+		return reused != null ? reused : DenseKvTensor.layers(layerCount, cacheTypes.typeV(), kvDim);
+	}
+
+	/**
+	 * Ends a request's K layers from {@link #newKLayers}: paged layers return their pages,
+	 * dense layers are kept for the next request (one set at most, the larger). The caller
+	 * holds no reference to them afterwards.
+	 */
+	public void retireKLayers(SessionKvTensor[] layers) {
+		retire(layers, retiredK);
+	}
+
+	/** As {@link #retireKLayers}, for V. */
+	public void retireVLayers(SessionKvTensor[] layers) {
+		retire(layers, retiredV);
+	}
+
+	private void retire(SessionKvTensor[] layers, DenseKvRecycler recycler) {
+		if (layers == null)
+			return;
+		if (usesPaged())
+			releaseLayers(layers);
+		else
+			recycler.offer(layers);
 	}
 
 	/** Release all tensors in a request's layer array (paged returns pages). */

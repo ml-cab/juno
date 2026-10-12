@@ -29,8 +29,23 @@ actually help rather than hurt.
    and "one prefill chunk participant" as equal-cost slots to sizing each step by an actual token
    budget (configurable, analogous in purpose to `--prefill-batch` but governing the whole step,
    not just prefill chunks).
-2. Raise (or make properly configurable and validated at higher values) the concurrency ceiling
-   past 8, bounded by real measured memory/throughput limits rather than an arbitrary constant.
+2. **Concurrency ceiling, with a number** *(restated 2026-10-11, plan review: this read "raise past 8",
+   and the exit criterion allowed keeping 8, so the plan could end at today's ceiling)*. Today the
+   running set is `--parallel`, 8 when unset (`ServeSchedulePolicy.DEFAULT_RUNNING_SET`), and nothing
+   checks whether the sessions it admits fit in device memory. Two changes:
+   - **Admission by memory, not by a constant.** Admit a request only when its KV (host and, on a GPU
+     run, the device copy at its real stored size, Tier 03 item 7) fits the budget for its prompt plus
+     `max_tokens`; otherwise it waits in the queue. An over-subscribed server queues; it never fails a
+     request on out-of-memory and never evicts a running one to make room. `--parallel` stays as an
+     explicit upper bound, validated up to at least 128, and the unset default becomes what the memory
+     budget admits, capped at 64.
+   - **Measure the capacity and publish it.** A capacity sweep at N = 8, 16, 32, 64 concurrent sessions
+     of 2,048 tokens each (1,920-token prompt, 128 generated), per sweep model on the GTX 1080, recording
+     for each N whether every request completed, aggregate tokens per second, and p95 TTFT and TPOT.
+     Expected from the KV arithmetic (FP16 device copy, about 2.5 to 6 GB free after weights): TinyLlama
+     about 130 sessions and Qwen2.5-3B about 60 by memory, so the scheduler binds; Mistral 7B about 9
+     and Phi-3.5-mini about 5 at FP16, about 17 and 10 with Tier 03's `q8_0` device KV. The thresholds
+     below are set inside those figures.
 3. Re-run the exact multi-session throughput benchmark that produced the 0.86x finding
    (`docs/performance.md:177`) after every other change in this tier lands, as the tier's go/no-go
    checkpoint — continuous must beat static before this tier is called complete, or the tier
@@ -134,10 +149,15 @@ actually help rather than hurt.
   stays within budget across varied decode/prefill-chunk mixes.
 - **New concurrency-ceiling test**: correctness (not just throughput) at the new higher ceiling —
   confirm no request starvation, no KV corruption, under real concurrent load.
+- **Admission test**: offer twice the capacity the memory budget admits; every request completes, none
+  fails on out-of-memory, none running is evicted, and the queue drains in arrival order.
+- **New capacity script**: `scripts/performance-tests/concurrency-capacity.sh` — the item 2 sweep (N = 8,
+  16, 32, 64, 2,048-token sessions, `continuous`, GPU), one row per model and N, published under
+  `docs/perf-compare/<timestamp>-concurrency-capacity/`.
 - **`ModelLiveRunnerIT`**: add a continuous-schedule multi-session throughput check.
 - **New bash smoke script**: `scripts/performance-tests/smoke-continuous-batching.sh` —
   drives N concurrent SSE streams under `continuous`, asserts correctness and captures TTFT/TPOT.
-- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+- **Standing throughput and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
   and score it before closing this tier.
 - **Perf gate (required)**: this is entirely a batching/scheduling hot-path change —
   `compare-schedule.sh` (already exists per `scripts/performance-tests/`) rerun, plus
@@ -153,6 +173,13 @@ actually help rather than hurt.
     that wins on aggregate tokens by starving individual streams has not improved the product.
   - Correctness at the raised concurrency ceiling: no request starvation (every admitted request
     completes) and no KV cross-contamination, asserted by test rather than by throughput alone.
+  - Concurrency (item 2), 2,048-token sessions on the GTX 1080, every request completing: TinyLlama
+    **>= 32** and Qwen2.5-3B **>= 32** concurrent sessions with the FP16 device KV; Mistral 7B **>= 12**
+    and Phi-3.5-mini **>= 8** with `q8_0` device KV (Tier 03 item 7). The measured maximum per sweep
+    model, at both device KV types, is published beside them.
+  - Scaling: on TinyLlama, aggregate tokens per second at 32 sessions **>= 2.0x** the 8-session reading,
+    with p95 TPOT at 32 **<= 2.5x** the 8-session p95, so the extra sessions add throughput rather than
+    only queueing behind each other.
   - Item 6, a prompt alone: a 512-token prefill under `continuous` with no other request in flight takes
     **<= 1.25x** the time it takes under `static` on the same build (2,235 ms against 549 ms today on
     TinyLlama, 4.07x), median of three, TinyLlama and Mistral 7B.
@@ -173,15 +200,20 @@ comparison.
 
 ## Exit criteria
 
-- [ ] Continuous scheduling beats static on the multi-session throughput benchmark (or the tier
-      documents precisely why not, with a concrete follow-up path, rather than shipping silently
-      unchanged).
+- [ ] Continuous scheduling beats static on the multi-session throughput benchmark (>= 1.10x). A miss
+      keeps the tier open; closing on one takes an explicit **Owner decision** recorded here with the
+      measured number and the follow-up path.
 - [ ] Token-budget scheduling implemented and correctness-tested.
 - [ ] Item 6: the `continuous` prefill chunk follows the step's load, an explicit `--prefill-batch N`
       still fixes it, and both item 6 thresholds are met (a prompt alone within 1.25x of `static`;
       under mixed load short-request TTFT within 1.10x of fixed 32 and the long prompt's at most 0.75x
       of it), with the run directory cited.
-- [ ] Concurrency ceiling raised and validated, or kept at 8 with a documented, measured reason.
+- [ ] Admission by memory budget: over-subscription queues, never fails or evicts (admission test passing);
+      `--parallel` validated to at least 128; the unset default is what the budget admits, capped at 64.
+- [ ] Concurrency thresholds met on the capacity sweep: TinyLlama and Qwen2.5-3B >= 32 concurrent
+      2,048-token sessions (FP16 device KV), Mistral 7B >= 12 and Phi-3.5-mini >= 8 (`q8_0` device KV);
+      TinyLlama aggregate tokens per second at 32 >= 2.0x the 8-session reading with p95 TPOT <= 2.5x;
+      measured maximum per model published.
 - [ ] Cluster-support decision made and executed (real support, or a closed, technically-grounded
       "not now" note replacing the open-ended "v1 scope" comment).
 - [ ] **The CI re-examination is recorded in this file with a date and an outcome** — either a
@@ -192,11 +224,11 @@ comparison.
       of this tier's full smoke matrix is recorded either way, since the README's thirty-minute revisit
       condition cannot be evaluated without it. An unrecorded revisit is a missed exit criterion, not a
       deferral.
-- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+- [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
-- [ ] Perf gate published showing the throughput result against every threshold above, or the
-      miss reported plainly with its number.
+- [ ] Perf gate published showing the result against every threshold above. A miss keeps the tier open;
+      closing on one takes an explicit **Owner decision** recorded here with the measured number.
 - [ ] Docs (`docs/howto.md`, `docs/performance.md`) updated with the new `--parallel` semantics
       under `continuous`.
 - [ ] `CHANGELOG.md` entry added.

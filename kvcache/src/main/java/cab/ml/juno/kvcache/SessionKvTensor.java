@@ -15,6 +15,9 @@
  */
 package cab.ml.juno.kvcache;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+
 /**
  * Handler-facing per-layer KV tensor for one request.
  *
@@ -33,6 +36,22 @@ public interface SessionKvTensor {
 	void writeToken(int pos, float[] src);
 
 	void writeToken(int pos, float[] src, int srcOff);
+
+	/**
+	 * Writes {@code rows} consecutive positions from {@code startPos}, read as
+	 * {@code rows x kvDim} native-order floats from {@code src} at byte offset
+	 * {@code srcOffset}: a window's K or V rows straight from where a device download
+	 * landed, without a per-row Java copy in between. Holds exactly what
+	 * {@link #writeToken} of each row holds. This default goes a row at a time.
+	 */
+	default void writeRows(int startPos, int rows, MemorySegment src, long srcOffset) {
+		int dim = kvDim();
+		float[] row = new float[dim];
+		for (int r = 0; r < rows; r++) {
+			MemorySegment.copy(src, ValueLayout.JAVA_FLOAT, srcOffset + (long) r * dim * Float.BYTES, row, 0, dim);
+			writeToken(startPos + r, row);
+		}
+	}
 
 	/**
 	 * Float view of positions {@code [0, seqLen)} for attention.

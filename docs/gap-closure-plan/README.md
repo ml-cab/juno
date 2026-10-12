@@ -9,14 +9,15 @@ before acting on it — both documents are snapshots, not ground truth that stay
 
 1. **One tier at a time, to feature-complete.** Do not start the next tier's work until the current
    tier's exit criteria (bottom of its file) are all checked off. "Next" means the next row of the
-   tier index below, not the next integer — the index is the running order. Eight rows carry a
+   tier index below, not the next integer — the index is the running order. Nine rows carry a
    non-integer number or sit out of integer order: Tier 01B sits between 01 and 02, Tier 01C between
-   01B and 02, Tiers 02B, 02C and then 02D between 02 and 03, Tier 04B between 04 and 05, Tier 04C
+   01B and 02, Tiers 02B, 02C, 02D and then 02E between 02 and 03, Tier 04B between 04 and 05, Tier 04C
    between 04B and 05, and Tier 08 runs before Tier 06. Only the last of those actually breaks the
-   order — the lettered tiers read in sequence — but all eight are enumerated here because this list,
+   order — the lettered tiers read in sequence — but all nine are enumerated here because this list,
    not the numbering, is what a reader builds the running order from, and several were added to the
    tree after the first three were written (02B and 02C on 2026-10-04, split out of Tiers 02 and 10;
-   02D on 2026-10-08, by owner decision when Tier 02 closed).
+   02D on 2026-10-08, by owner decision when Tier 02 closed; 02E on 2026-10-11, plan review, to own the
+   CPU kernel work the only active end-of-plan row turns on).
    Partial, half-wired features are not acceptable stopping points between tiers.
 2. **No surface left aside.** A tier is not complete until its change has been carried through
    every product surface it touches — see "Cross-surface compatibility checklist" below. If a
@@ -77,17 +78,27 @@ before acting on it — both documents are snapshots, not ground truth that stay
 
    - *(check 5, added 2026-10-04 by the plan review)* a tier whose `Status` line does not say
      `complete` and whose file never names `check-plan-thresholds.sh`, or one that has a perf gate (no
-     `**No perf gate` declaration) and never names the **Standing CPU and allocation gate** (see "Test
+     `**No perf gate` declaration) and never names the **Standing throughput and allocation gate** (see "Test
      infrastructure"). Rules stated only in this README were skipped twice (this check's own
      invocation, and the CI revisit Tier 07 now carries); the tier file is what an executor reads;
    - *(check 6, added 2026-10-04)* a `perf-compare/` path containing a tier number (`-tier04b-...`) that
      does not exist on disk, which can only be a prescription for a new tier-numbered directory.
      `docs/performance.md` is shipped and links into `docs/perf-compare/`, so a tier number in a
      directory name ends up in a shipped doc. Existing directories may still be cited;
-   - *(added 2026-10-04)* a row of the machine-read end-of-plan target table (see "Program target") that is
+   - *(check 7, added 2026-10-04)* a row of the machine-read end-of-plan target table (see "Program target") that is
      malformed, or `active` while its reference reading already meets it — the milestone rule applied to
      end-of-plan targets, which it did not cover before; the unqualified GPU pp target was met at
-     `n_prompt=128` on 2026-10-04 without the check noticing.
+     `n_prompt=128` on 2026-10-04 without the check noticing;
+   - *(check 8, added 2026-10-11, plan review)* an exit criterion of an open tier, read with its indented
+     notes, that lets a threshold close as "met or reported missed" / "reported as missed" / "the miss
+     reported plainly" / "documents precisely why not" without citing an `**Owner decision`. Checks 1 to 4 prove a number exists and was scored; a criterion that may close
+     on a written-down miss turns the number back into a report. Tiers 04, 04C and 07 carried that wording and
+     were corrected: a miss keeps the tier open, and closing on one is the owner's recorded decision;
+   - *(check 9, added 2026-10-11, plan review)* a paragraph of this README or of an open tier file that says
+     "no tier owns" or "unowned" without linking a tier file: the tier that owns the work, or the tier
+     record where the owner decided to leave it unowned. The only active end-of-plan row sat for a tier with
+     its levers described as owned by no tier, and Tier 02D's greedy-softmax handoff to Tier 05 existed only
+     in Tier 02D's record; both are now linked ([Tier 02E](TIER-02E-cpu-decode-kernels.md) and [Tier 05](TIER-05-sampling-grammar.md)).
 
    Tier 14's own file is excluded from the first check, since it names the string to describe it. The
    script exits non-zero listing every failure; it passes against this tree and was shown failing
@@ -136,14 +147,18 @@ tier can fail on it and the final scorecard in Tier 14 can only report a directi
 four-model sweep (`tinyllama-1.1b`, `qwen2.5-3b`, `Phi-3.5-mini`, `mistral-7b`, all Q4_K_M) on the
 `docs/perf-compare/README.md` baseline host, under the benchmark-parity preconditions below:
 
-| Metric | Target at end of plan | Reading when this plan was written | Parity-corrected reading (2026-09-25) | After the CPU RoPE table (2026-09-27) | Reference 2026-09-27, late | Reference 2026-09-30 (pinned GPU re-baseline) | Reference 2026-10-01 (pinned CPU) | Reference 2026-10-03 (Tier 01B closing sweeps, pinned) | Reference 2026-10-04 (Tier 01C closing sweeps, pinned) | Reference 2026-10-08 (Tier 02 closing sweeps, pinned) | **Current reference** (2026-10-11: Tier 02C closing sweep, pinned CPU; GPU unchanged) |
-|---|---|---|---|---|---|---|---|---|---|---|
-| GPU tg, Phi-3.5-mini | >= **0.70x** (was 0.50x, met 2026-09-30) | 0.330x | 0.423x | 0.415x (0.414x tuned) | 0.416x (0.417x tuned) | 0.394x (0.396x tuned) | 0.394x (0.396x tuned; GPU unchanged) | 0.535x (0.537x tuned) | 0.545x (0.547x tuned) | **0.858x** (0.895x tuned) | 0.858x (GPU unchanged: Tier 02C's pinned GPU A/B read tg 1.127x the pre-tier build on this model; ratio not re-measured) |
-| GPU tg, mistral-7b | >= **0.70x** (was 0.60x, met 2026-09-27) | 0.513x | 0.581x (0.631x tuned) | **0.646x** (0.638x tuned) | 0.639x (0.643x tuned) | 0.610x (0.610x tuned) | 0.610x (0.610x tuned) | 0.611x (0.607x tuned) | 0.627x (0.619x tuned) | **1.030x** (1.037x tuned) | 1.030x (GPU unchanged: Tier 02C's pinned GPU A/B read tg 1.021x; ratio not re-measured) |
-| GPU pp, every sweep model | retired 2026-10-04: met at `n_prompt=128` (was >= 0.25x unqualified, before that 0.15x); replaced by the per-length rows of the end-of-plan target table below | see the caveat below — not 0.016x to 0.031x | 0.036x to 0.073x, median 0.045x | 0.039x to 0.091x, median 0.051x | 0.040x to 0.101x, median 0.064x (Phi-3.5-mini 0.040x binding) | 0.037x to 0.101x at `n_prompt=128`, median 0.067x; 0.011x to 0.098x at 512 (Phi-3.5-mini binding at both) | 0.037x to 0.101x at `n_prompt=128`; 0.011x to 0.098x at 512 (GPU unchanged) | 0.173x to 0.299x at `n_prompt=128`, median 0.289x; 0.146x to 0.285x at 512, median 0.268x (Phi-3.5-mini binding at both) | 0.303x to 0.729x at `n_prompt=128`, median 0.570x; 0.226x to 0.468x at 512, median 0.373x (Phi-3.5-mini binding at both); 0.099x to 0.180x at 2048, median 0.138x (Phi-3.5-mini binding) | **0.584x to 0.807x** at `n_prompt=128`, median 0.681x; **0.594x to 0.825x** at 512, median 0.776x; **0.540x to 0.706x** at 2048, median 0.689x (Phi-3.5-mini binding at all three) | unchanged (Tier 02C's pinned GPU A/B read pp 0.973x to 1.039x the pre-tier build) |
-| CPU tg, every sweep model | >= **0.25x** (restated again 2026-10-11 from Tier 02C's closing sweep; was 0.40x from 2026-10-10, and a 0.25x placeholder before that) | 0.106x to 0.147x | 0.079x to 0.128x | 0.090x to 0.135x | 0.090x to 0.135x (CPU not re-measured) | 0.090x to 0.135x (CPU not re-measured) | 0.092x to 0.121x (mistral-7b binding; pp 0.049x to 0.103x, Phi-3.5-mini binding) | 0.092x to 0.121x (CPU not re-measured) | 0.092x to 0.121x (CPU not re-measured) | **0.092x to 0.121x** (CPU not re-measured; Tier 02's pinned CPU A/B 0.997x to 1.001x the pre-tier build) | **0.215x to 0.238x** (Qwen2.5-3B binding; pp 0.224x to 0.256x, TinyLlama binding; Tier 02C closing sweep `20261011T013059Z`, pinned) |
+| Metric | Target at end of plan | Current reference (GPU: Tier 02D closing sweeps, 2026-10-12; CPU: Tier 02C closing sweep, 2026-10-11) |
+|---|---|---|
+| GPU tg, Phi-3.5-mini | >= **0.70x** (was 0.50x, met 2026-09-30) | **0.973x** (0.972x tuned) |
+| GPU tg, mistral-7b | >= **0.70x** (was 0.60x, met 2026-09-27) | 1.066x (1.061x tuned) |
+| GPU pp, every sweep model | retired 2026-10-04: met at `n_prompt=128` (was >= 0.25x unqualified, before that 0.15x); replaced by the per-length rows of the end-of-plan target table below | **0.681x to 0.785x** at `n_prompt=128`, median 0.728x (TinyLlama binding); **0.726x to 0.833x** at 512, median 0.798x; **0.602x to 0.730x** at 2048, median 0.697x (Phi-3.5-mini binding at 512 and 2048) |
+| CPU tg, every sweep model | >= **0.25x** (restated again 2026-10-11 from Tier 02C's closing sweep; was 0.40x from 2026-10-10, and a 0.25x placeholder before that) | 0.215x to 0.238x (CPU not re-measured; the Tier 02D pinned CPU A/B read tg 0.999x to 1.005x and pp 0.983x to 1.030x the pre-tier build) |
 
-The table above is the history of readings. The table below is what Tier 14 scores and what
+The full history of readings, one column per reference since the plan was written, and the provenance of
+every superseded column, are in [`TARGET-HISTORY.md`](TARGET-HISTORY.md) (moved 2026-10-11, plan review: the table
+had grown to thirteen columns). Compare ratios across a measurement boundary named there, never absolute t/s.
+
+The table above is the current reading against each target. The table below is what Tier 14 scores and what
 `check-plan-thresholds.sh` reads (execution rule 7): every threshold is `>= number`, an `active` row
 must ask for more than its reference reading, a retired row must really be met, and for an "every sweep
 model" scope the reference is the binding (lowest) model's reading.
@@ -157,11 +172,12 @@ model" scope the reference is the binding (lowest) model's reading.
 | end | GPU pp, `n_prompt=512` | every sweep model | >= 0.40x | 0.594x (Phi-3.5-mini, binding; Tier 02 closing sweep `20261008T174605Z`; was 0.226x at `20261004T114812Z`) | retired: met by Tier 02 (2026-10-08) |
 | end | GPU pp, `n_prompt=2048` | every sweep model | >= 0.25x | 0.540x (Phi-3.5-mini, binding; Tier 02 closing sweeps `20261008T180014Z`/`20261008T181417Z`; was 0.099x at `20261004T222758Z`) | retired: met by Tier 02 (2026-10-08) |
 | end | GPU pp, prompt length unstated | every sweep model | >= 0.25x | 0.303x (Phi-3.5-mini, binding, at `n_prompt=128`; `20261004T113210Z`) | retired: met at `n_prompt=128` on 2026-10-04 |
-| end | GPU tg, raised 2026-10-08 | every sweep model | >= 0.70x | 0.416x (qwen2.5-3b, binding; TinyLlama 0.770x, Phi-3.5-mini 0.858x, Mistral 7B 1.030x; `20261008T173153Z`) | active |
-| end | GPU tg, raised 2026-10-08 | Phi-3.5-mini | >= 0.90x | 0.858x (`20261008T173153Z`) | active |
-| end | GPU pp, `n_prompt=512`, raised 2026-10-08 | every sweep model | >= 0.70x | 0.594x (Phi-3.5-mini, binding; `20261008T174605Z`) | active |
-| end | GPU pp, `n_prompt=2048`, raised 2026-10-08 | every sweep model | >= 0.60x | 0.540x (Phi-3.5-mini, binding; `20261008T181417Z`) | active |
+| end | GPU tg, raised 2026-10-08 | every sweep model | >= 0.70x | 0.776x (TinyLlama, binding; Qwen2.5-3B 0.828x, Phi-3.5-mini 0.973x, Mistral 7B 1.066x; Tier 02D closing sweep `20261012T013642Z`; was 0.416x, Qwen2.5-3B, at `20261008T173153Z`) | retired: met by Tier 02D (Qwen2 in the decode region, 2026-10-12) |
+| end | GPU tg, raised 2026-10-08 | Phi-3.5-mini | >= 0.90x | 0.973x (Tier 02D closing sweep `20261012T013642Z`, pinned; projected 0.967x on arrival from the Tier 02C pinned A/B `20261011T052951Z-cpu-hot-path-close-gate`) | retired: met on arrival at Tier 02D (owner decision 1, 2026-10-11), confirmed by the Tier 02D pinned closing sweep |
+| end | GPU pp, `n_prompt=512`, raised 2026-10-08 | every sweep model | >= 0.70x | 0.726x (Phi-3.5-mini, binding; TinyLlama 0.782x, Mistral 7B 0.813x, Qwen2.5-3B 0.833x; Tier 02D closing sweep `20261012T015002Z`; was 0.594x at `20261008T174605Z`) | retired: met by Tier 02D (host KV reuse and direct K/V write, 2026-10-12) |
+| end | GPU pp, `n_prompt=2048`, raised 2026-10-08 | every sweep model | >= 0.60x | 0.602x (Phi-3.5-mini, binding, 0.3% above the row; Qwen2.5-3B 0.680x, TinyLlama 0.713x, Mistral 7B 0.730x; Tier 02D closing sweeps `20261012T021800Z`/`20261012T020410Z`; was 0.540x at `20261008T181417Z`) | retired: met by Tier 02D (2026-10-12) |
 | end | CPU tg, restated 2026-10-11 | every sweep model | >= 0.25x | 0.215x (qwen2.5-3b, binding; Tier 02C closing sweep `20261011T013059Z`; was 0.092x at `20261001T180241Z`) | active |
+| end | CPU pp, `n_prompt=512`, added 2026-10-11 | every sweep model | >= 0.30x | unmeasured (no CPU sweep above `n_prompt=128` exists; Tier 02E step 2 takes it; 0.224x at 128, TinyLlama binding, `20261011T013059Z`) | active |
 
 **Why the GPU pp target became two rows (2026-10-04, plan review).** The target read "GPU pp, every sweep
 model >= 0.25x" and named no prompt length. At `n_prompt=128` Tier 01C's closing sweep already meets it on
@@ -182,7 +198,27 @@ at 512 and 0.60x at 2048. All four are [Tier 02D](TIER-02D-gpu-host-overhead.md)
 restates any row the decomposition puts out of reach. The post-plan anchor below (GPU pp 0.40x at 2048) was passed by
 the same sweeps (0.540x); it stays recorded as written and Tier 14 reports it as passed.
 
-**Score every later tier against the right-most column.** Its CPU row is Tier 02C's closing sweep (2026-10-11, owner
+**Phi-3.5-mini GPU tg row retired on arrival (2026-10-11, owner decision, Tier 02D decision 1).** Tier 02D's decomposition (`docs/perf-compare/20261011T055415Z-gpu-host-overhead-decomposition/`) found the row met before the tier's work: Tier 02C's pinned GPU A/B read Phi-3.5-mini tg at 1.127x the build the 0.858x reference was taken on (0.967x projected), and two unpinned same-session runs read 0.977x and 0.955x. The step is 93.7% device kernels, so a raised row would be scored on kernel work no tier owns (left unowned by owner decision 4 in [Tier 02D](TIER-02D-gpu-host-overhead.md)'s closing record). Retired, not raised; Tier 02D's pinned closing sweep reports the measured ratio. *Confirmed 2026-10-12: the pinned closing sweep reads 0.973x (`docs/perf-compare/20261012T013642Z/`).*
+
+**Every GPU end-of-plan row is met (2026-10-12, Tier 02D close).** Tier 02D's pinned closing sweeps met the three
+remaining GPU rows: tg 0.776x to 1.066x on every sweep model against 0.70x (TinyLlama binding; Qwen2.5-3B 0.416x to
+0.828x), pp 0.726x at 512 against 0.70x and 0.602x at 2048 against 0.60x (Phi-3.5-mini binding at both; the 2048 margin
+is 0.3%). All three are retired. The 512-over-128 milestone is met on every model (1.036 to 1.149) and retired. The only
+active end-of-plan row is CPU tg. Whether to raise the GPU rows again, as Tier 02 decision 15 did, is the owner's
+decision, recorded in Tier 02D's closing record. *2026-10-11 (plan review): a CPU pp row at `n_prompt=512` is added, since
+CPU prefill had no end-of-plan target once its milestone retired; both CPU rows are [Tier 02E](TIER-02E-cpu-decode-kernels.md)'s.*
+
+**Score every later tier against the current reference** (the right-most column of the history table in
+[`TARGET-HISTORY.md`](TARGET-HISTORY.md)). Its GPU rows are Tier 02D's closing sweeps (2026-10-12, owner
+run, clocks pinned, jar `921ab742ba3f362a`: `198467ad` plus Qwen2 in the decode region, host KV reuse and the direct K/V
+write): `docs/perf-compare/20261012T013642Z/` (`n_prompt=128`), `20261012T015002Z/` (512), `20261012T020410Z/` (2048;
+TinyLlama, Qwen2.5-3B, Mistral 7B) and `20261012T021800Z/` (2048, Phi-3.5-mini at an explicit 8 GiB heap); every row
+scorable, prompt parity exact, same harness as the column to its left. It is a measurement boundary for Qwen2.5-3B
+generation (it now decodes in the device region) and for GPU prefill on every handler that reuses host KV. Its CPU row is
+unchanged: the Tier 02D pinned CPU A/B read 0.983x to 1.030x the pre-tier build
+(`docs/perf-compare/20261012T002824Z-gpu-host-overhead-close-gate/`).
+
+**The 2026-10-11 column** was the reference until then. Its CPU row is Tier 02C's closing sweep (2026-10-11, owner
 run, clocks pinned, jar `6ae135b0e21839cf`: `aabc42cb` plus the CPU integer kernels, the CPU worker pool and the decode
 allocation work): `docs/perf-compare/20261011T013059Z/`, four sweep models at `n_prompt=128`, `-t 12` against Juno
 `--threads 12`, every row scorable, prompt parity exact. It is a measurement boundary for CPU readings: the default CPU
@@ -191,91 +227,13 @@ are unchanged from the column to its left; Tier 02C's pinned GPU A/B against the
 and pp 0.973x to 1.039x (`docs/perf-compare/20261011T052951Z-cpu-hot-path-close-gate/`). Both CPU milestones are met and
 retired; the end-of-plan CPU tg row is restated (see "Restated again 2026-10-11").
 
-**The 2026-10-08 column** was the reference until then. Its GPU rows are Tier 02's closing sweeps (2026-10-08,
-owner run, clocks pinned, HEAD `51fa5d4` plus Tier 02's decode-width attention path and test-only changes, jar
-`43b22345f1175c8f`): `docs/perf-compare/20261008T173153Z/` (`n_prompt=128`), `20261008T174605Z/` (512),
-`20261008T180014Z/` (2048; TinyLlama, Qwen2.5-3B, Mistral 7B) and `20261008T181417Z/` (2048, Phi-3.5-mini at an
-explicit 8 GiB heap); every row scorable, prompt parity exact, same harness as the column to its left. It is a
-measurement boundary for GPU generation: from Tier 02 on the engine's defaults run the device-resident decode region
-(`--gpu-residency auto`), which the column to its left did not. Its CPU row is unchanged (no CPU path changed; Tier 02's
-pinned CPU A/B read 0.997x to 1.001x). Made the reference by owner decision (Tier 02 decision 14). With it every GPU
-end-of-plan row is met and retired; the CPU rows are what remains.
-
-**The column to its left** was the reference until then. Its GPU rows are Tier 01C's closing sweeps
-(2026-10-04, owner run, clocks pinned, HEAD `59c53cc` plus Tier 01C's two out-of-tier fixes, jar
-`5ab4c78c505a4cef`): `docs/perf-compare/20261004T113210Z/` (`n_prompt=128`) and `20261004T114812Z/`
-(`n_prompt=512`), same method and harness as the column to its left, so ratios compare across the two
-directly; every row scorable, every prefill at its `n_prompt`. Its CPU row is unchanged (no CPU path
-changed). Its 2048 figures are from the 2048 re-run on the same code (jar `a90122b2855bb826`, which adds two
-fixes that do not touch throughput: an out-of-heap request fails instead of hanging, and prompt encoding
-is recorded so the harness's span check can subtract it): `docs/perf-compare/20261004T220015Z/`
-(TinyLlama, Qwen2.5-3B, Mistral 7B at their fixed heaps) and `20261004T222758Z/` (Phi-3.5-mini at an
-explicit 8 GiB heap, since its 2048-token live set of about 6.1 GB does not fit the fixed 6 GiB). The
-interrupted first attempt, `20261004T120622Z-partial`, is superseded by them. Made the reference by
-owner decision (Tier 01C decision 6).
-
-**The column left of that** was the reference before it. Its GPU rows are Tier 01B's closing sweeps
-(2026-10-03, owner run, clocks pinned, HEAD `1ac490a`): `docs/perf-compare/20261003T042440Z/`
-(`n_prompt=128`) and `20261003T044014Z/` (`n_prompt=512`), same method and harness as the 2026-09-30 GPU
-re-baseline, so ratios compare across the two directly; every row scorable, every prefill at its
-`n_prompt`. Its CPU row is unchanged from the column to its left, described next, which was the reference
-until then. **That column's** CPU row is Tier 01B step 3a's pinned
-CPU sweep (2026-10-01, `docs/perf-compare/20261001T180241Z/`): clocks pinned, Juno's common-pool
-parallelism set from `--threads` so its kernels run the reference tool's `-t 12`. Pinning is a
-measurement boundary for CPU readings (both engines' absolute t/s fell; tinyllama's reference prefill
-by 16%), so compare CPU ratios across it, never absolute t/s. Its GPU rows are unchanged from the
-column to its left, Tier 01B's step 2 re-baseline (2026-09-30): GPU `docs/perf-compare/20260930T135225Z/` (`n_prompt=128`) and `20260930T141026Z/`
-(`n_prompt=512`), both with pinned clocks, the operating-system JFR clock and the warm-up recording;
-CPU unchanged from `20260927T094414Z/`. It is a measurement boundary against every column to its left
-(turbo off lowers both engines' absolute throughput, and the harness changes of 2026-09-28 and
-2026-09-29 apply), so compare ratios across it, never absolute t/s. Tier 01B's execution record derives
-it. The column to its left, described next, was the reference until then.
-
-The previous reference was from late 2026-09-27:
-GPU `docs/perf-compare/20260927T232837Z/` with the `qwen2.5-3b` tuned and both `Phi-3.5-mini` rows
-from its re-run `20260927T234659Z/`; CPU `20260927T094414Z/`, which the change behind it did not touch.
-It follows the per-request device-memory fix and the extracted FP16 pack loop, a GPU-prefill
-measurement boundary recorded in Tier 01's "Out-of-tier changes" (GPU pp +10% to +34% on tinyllama,
-qwen2.5-3b and mistral-7b; generation within the gate). The column to its left was the reference for
-most of that day and is now superseded; it is kept, not overwritten, for the same reason the older
-columns are.
-
 **Rule: the reference column moves in the same change that supersedes it.** Whenever a run is marked
 superseded-as-reference in `docs/perf-compare/` (its `INDEX.md` banner and `docs/perf-compare/README.md`),
-the same change adds the new column here and names it as the one to score against. The 2026-09-27
-column went stale for a day because this rule did not exist: Tier 01's out-of-tier table superseded
-its source while this table still told every later tier to score against it.
-
-**The 2026-09-27 (RoPE table) column** was taken after the scalar CPU RoPE stopped
-recomputing its angles for every head of every layer, which is a measurement boundary (Tier 01's
-"Out-of-tier changes"). Sources: GPU `docs/perf-compare/20260927T091155Z/` with the `tinyllama`,
-`qwen2.5-3b` and `Phi-3.5-mini` rows from its re-run `20260927T093054Z/`; CPU `20260927T094414Z/`.
-Juno's GPU throughput rose where the rotation runs on the CPU path (tinyllama tg +26%, mistral-7b
-+17%, qwen2.5-3b +12%; pp +22% to +35%) and held on Phi-3.5-mini, which has its own rotation; its
-ratio moved only with the reference tool's own reading. CPU throughput did not move (the rotation was
-never a visible share of a CPU forward pass); the CPU ratios moved with the reference tool's readings.
-The mistral-7b GPU tg row met its end-of-plan target on the default flags from this column on.
-
-**The 2026-09-25 column was the reference until the morning of 2026-09-27, and the two columns
-before it are not comparable with it.**
-Those readings come from `docs/perf-compare/20260925T172231Z/` (GPU) and `20260925T174146Z/` (CPU),
-the first sweep taken with prompt-token parity, warm repeated measurement, a fixed heap, `min_tokens`
-generation parity, and prefill and generation measured in two separate runs as the reference tool
-measures them. Tier 01's execution record derives them and explains each correction. The generation
-figures moved up mainly because the measurement stopped penalizing Juno, not because the engine got
-faster — score a later tier against the right-hand column, never against the middle one.
-
-**The pp row's starting reading is not yet known, and the target is provisional until it is.** The
-0.016x-to-0.031x figures widely quoted from `docs/perf-compare/20260918T204809Z/` were taken with
-`raw_prompt: 0`, meaning llama-bench prefilled 128 tokens while Juno prefilled 20 to 30 — they are
-not a like-for-like prefill measurement (see "Benchmark parity preconditions" below). The only
-parity-corrected prefill figures on record are worse and narrower: at a real 512-token prompt,
-`20260915T043143Z` puts mistral-7b at 0.0166x and tinyllama at 0.0075x, and the best GPU prefill
-number anywhere in this repository — TinyLlama at 119.56 t/s with `--gpu-attention on` and
-`--prefill-batch 32`, `20260916T040113Z-prefill/` — is about **0.028x** of llama.cpp's 4225 t/s on
-the same shape. Tier 01's re-baseline establishes the real starting reading under parity; **the
-0.15x target is re-derived from that number in Tier 01's own file before any later tier is scored
-against it.** A target anchored to a measurement that was never like-for-like is not a target.
+the same change adds the new column to [`TARGET-HISTORY.md`](TARGET-HISTORY.md), updates the
+current-reference table at the top of this section and the "Score every later tier" paragraph, and moves
+the superseded column's provenance paragraph into `TARGET-HISTORY.md`. The 2026-09-27 column went stale
+for a day because this rule did not exist: Tier 01's out-of-tier table superseded its source while this
+table still told every later tier to score against it.
 
 **Intermediate milestones**, so the trend is checkable before Tier 14 rather than only at the end.
 This table is machine-read by `scripts/performance-tests/check-plan-thresholds.sh` (execution rule 7):
@@ -288,7 +246,7 @@ ask for more than its reference reading. For an "every model" scope the referenc
 | 01B | GPU pp ratio, `n_prompt=512` | every sweep model except Phi-3.5-mini | >= 0.10x | 0.254x (tinyllama, binding; qwen2.5-3b 0.281x, mistral-7b 0.285x; Tier 01B closing sweep `20261003T044014Z`; was 0.064x at the step 2 re-baseline) | retired: met by Tier 01B |
 | 01B | GPU pp ratio, `n_prompt=512` | Phi-3.5-mini | >= 0.08x | 0.146x (Tier 01B closing sweep `20261003T044014Z`; was 0.011x at the step 2 re-baseline; threshold kept by owner decision, see below) | retired: met by Tier 01B |
 | 01C | GPU pp ratio, `n_prompt=512` | every sweep model | >= 0.20x | 0.226x (Phi-3.5-mini, binding; tinyllama 0.317x, qwen2.5-3b 0.429x, mistral-7b 0.468x; Tier 01C closing sweep `20261004T114812Z`; was 0.146x at Tier 01B's close) | retired: met by Tier 01C |
-| 02 | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 0.998 (mistral-7b, binding; missed at Tier 02's close, reported by owner decision 13; tinyllama 1.153, qwen2.5-3b 1.157, Phi-3.5-mini 1.017; Tier 02 closing sweeps `20261008T173153Z`/`20261008T174605Z`; was 0.606 at Tier 01C's close) | active |
+| 02 | GPU pp ratio at 512 over ratio at 128 | every sweep model | >= 1.00 | 1.036 (mistral-7b, binding; tinyllama 1.149, qwen2.5-3b 1.097, Phi-3.5-mini 1.044; Tier 02D closing sweeps `20261012T013642Z`/`20261012T015002Z`; 0.998 at the Tier 02 close, missed and reported by owner decision 13; was 0.606 at the Tier 01C close) | retired: met at the Tier 02D close |
 | 02 | Attention speedup at `n_prompt=2048`: the pre-tier build's attention time per prefill window over the candidate's, clock-normalised (GPU ms x in-window median SM MHz), same-session A/B | every sweep model | >= 6.0x | 10.40x (qwen2.5-3b, binding; tinyllama 14.06x, Phi-3.5-mini 17.12x, mistral-7b 14.08x; Tier 02 closing A/B `20261008T054413Z-attention-close-gate`; the pre-tier build reads 1.0x by definition) | retired: met by Tier 02 |
 | 04 | GPU tg ratio | Phi-3.5-mini | >= 0.40x | 0.416x | retired: met on arrival |
 | 02C | CPU tg ratio | every sweep model | >= 0.20x | 0.215x (qwen2.5-3b, binding; tinyllama 0.238x, Phi-3.5-mini 0.222x, mistral-7b 0.224x; Tier 02C closing sweep `20261011T013059Z`, pinned; was 0.092x) | retired: met by Tier 02C |
@@ -355,7 +313,7 @@ and nothing in Tier 04 touches that model's decode path (its Q4_K_M weights alre
 MMQ route). A milestone met before its tier begins, by work its tier does not contain, measures
 nothing. It is kept as a retired row so the history stays visible. Phi-3.5-mini's decode is still the
 binding constraint on the 0.50x end-of-plan target; giving that a milestone belongs with whichever tier
-takes non-Llama decode residency, which no tier owns yet. *(2026-09-30: Tier 01B item 0 put GPU
+takes non-Llama decode residency, which no tier owns yet. *(2026-09-30: [Tier 01B](TIER-01B-prefill-throughput.md) item 0 put GPU
 attention on Phi-3's decode path and its tg ratio reached 0.534x, meeting that 0.50x target; the target
 is now 0.70x, see "End-of-plan targets raised" below.)*
 
@@ -380,8 +338,8 @@ not.
 
 The tg levers for 0.70x are the ones already in the plan, now with a number to be read against: attention
 inside the decode residency region and CUDA graph replay (Tier 02 items 4 and 5), the `--gpu-residency`
-default (Tier 02 item 6), and the residency region reaching the Phi-3 and Qwen3 handlers (no tier owns
-that yet; Tier 02 records whether its items reach 0.70x without it, and names the gap if not). The pp
+default (Tier 02 item 6), and the residency region reaching the Phi-3 and Qwen3 handlers (no tier owned
+that when this was written; [Tier 02](TIER-02-attention-long-context.md) item 8 and [Tier 02D](TIER-02D-gpu-host-overhead.md) later took it; Tier 02 records whether its items reach 0.70x without it, and names the gap if not). The pp
 path is the milestone ladder above: 0.10x after Tier 01B, 0.20x after Tier 01C, and no fall-off from
 128 to 512 or from 512 to 2048 tokens after Tier 02 (*2026-10-05: the 512-to-2048 step is now an attention
 speedup of >= 6.0x at 2048; see "Why the 2048-over-512 row became an attention-speedup row"*). The previous targets stay recorded in the table's first column so
@@ -464,8 +422,9 @@ row assumed items 1 to 3 could reach a 25% bandwidth share, about 1.1 core cycle
 thread and the Q6_K scalar kernel at about 2.7, and those two kernels are about 93% of Mistral 7B decode. So, as this row's
 own rule says, it is restated, to its floor: 0.25x, against 0.215x today (Qwen2.5-3B binding). **The term that holds it
 below 0.40x is per-weight instruction cost in the Q4_K vector and Q6_K scalar decode kernels** on a host with 128-bit integer
-SIMD and 16 vector registers. A faster Q6_K decode kernel and a Q4_K kernel nearer one cycle per weight are the levers;
-no tier owns them yet, and Tier 14 reports the row's distance. `host-specific`: an AVX2 or AVX-512/VNNI host widens the
+SIMD and 16 vector registers. A faster Q6_K decode kernel and a Q4_K kernel nearer one cycle per weight are the levers.
+*2026-10-11 (plan review): no tier owned them when this was written; [Tier 02E](TIER-02E-cpu-decode-kernels.md) now
+does, and restates this row from its measured cycles per weight.* Tier 14 reports the row's distance. `host-specific`: an AVX2 or AVX-512/VNNI host widens the
 integer lanes and moves the budget.
 
 **Post-plan anchor: GPU pp >= 0.40x (added 2026-09-30; not a gate of this plan).** *Promoted
@@ -524,9 +483,9 @@ processing) and the largest remaining one (CPU, Tier 02C), then outward through 
 decoding → scheduling → parallelism → backend breadth → vision → LoRA → server/cluster surface),
 closing with a documentation hardening pass.
 
-Eight rows do not sit where their integer would put them, and the table below — not the numbering —
+Nine rows do not sit where their integer would put them, and the table below — not the numbering —
 is the running order (execution rule 1). **Tiers 01B and 01C** sit between 01 and 02, **Tiers 02B,
-02C and 02D** between 02 and 03, and **Tiers 04B and 04C** between 04 and 05. **Tier 08 runs before Tier 06**: Tier 06 adds a `forwardVerify` override per
+02C, 02D and 02E** between 02 and 03, and **Tiers 04B and 04C** between 04 and 05. **Tier 08 runs before Tier 06**: Tier 06 adds a `forwardVerify` override per
 architecture, so running it first would mean adding verify support to four handlers and then having
 Tier 08 introduce four more that either need the same work again or silently lack it. Tier 08 first
 means Tier 06 covers every handler in one pass. Tier 08's own file previously argued the opposite
@@ -558,6 +517,15 @@ the host work around Phi-3's prefill window, and Phi-3's remaining decode cost. 
 runs after Tier 02C because CPU is still the largest gap, and before Tier 03 because Tier 03 changes the
 KV layout the prefill window's host KV write sits on.
 
+**Tier 02E sits between 02D and 03 (added 2026-10-11, plan review).** Tier 02D closed with every GPU
+end-of-plan row met and retired. The only active row left is CPU tg (>= 0.25x, 0.215x today), and this README
+named its levers, a vector Q6_K decode kernel and a Q4_K kernel nearer one cycle per weight, while saying no
+tier owned them. Every row after Tier 02D is feature breadth that cannot move a CPU number, so the plan would
+have closed on its own largest gap without working on it. [Tier 02E](TIER-02E-cpu-decode-kernels.md) owns the
+two kernels, the CPU integer kernels' fixed 128-bit SIMD width, and CPU prefill at 512 and 2048 tokens, which
+had never been measured. It runs before Tier 03 for the reason Tier 02C did: Tier 04's mapped weight loading
+threads a `MemorySegment` accessor through these kernels and should convert the ones this tier leaves.
+
 | Tier | Title | Gap analysis refs |
 |---|---|---|
 | [00](TIER-00-correctness-and-consistency.md) | Correctness & consistency audit | §2.1, §2.4, §2.5, §2.6, §2.7, §2.9 |
@@ -568,6 +536,7 @@ KV layout the prefill window's host KV write sits on.
 | [02B](TIER-02B-context-policy.md) | Context policy (context shifting, sliding windows, Phi-3.5 LongRoPE remainder; split out of 02) | §1.2 |
 | [02C](TIER-02C-cpu-hot-path.md) | CPU hot path (integer kernels, allocation, threading; split out of 10) | §1.7 |
 | [02D](TIER-02D-gpu-host-overhead.md) | GPU host overhead and decode-region coverage (Qwen2 in the region, Phi-3's prefill host work and decode cost; added 2026-10-08) | none — see that file's "Why this tier, why now" |
+| [02E](TIER-02E-cpu-decode-kernels.md) | CPU decode and prefill kernels (vector Q6_K, Q4_K instruction cost, host SIMD width, CPU prefill length profile; added 2026-10-11) | §1.7 (CPU half, continued) |
 | [03](TIER-03-kv-cache-maturity.md) | KV cache maturity | §1.3 |
 | [04](TIER-04-quantization-coverage.md) | Quantization coverage (mapped weight loading first) | §1.1 |
 | [04B](TIER-04B-tokenizer-fidelity.md) | Tokenizer fidelity (per-family splits and cross-engine parity; the key read and fail-closed path moved to Tier 01 as parity precondition 7) | none — see that file's "Why this tier, why now" |
@@ -678,8 +647,13 @@ residency, batching, or KV paths runs `scripts/performance-tests/compare-lora.sh
 `docs/perf-compare/`, and publishes a new timestamped result directory there — that mechanism
 already exists and this plan doesn't change it, it just says explicitly, per tier, when it applies.
 
-**Standing CPU and allocation gate (added 2026-10-04, plan review; every tier with a perf gate from
-Tier 02 on).** Two kinds of regression had no gate. CPU throughput: row 1 was "correctness only" until
+**Standing throughput and allocation gate (added 2026-10-04 as the "Standing CPU and allocation gate",
+plan review; GPU lane and the binding CPU models added 2026-10-11, plan review; every tier with a perf
+gate from Tier 02 on).** Closed tiers' records cite it by its earlier name. Three kinds of regression had
+no gate. GPU throughput: once every GPU end-of-plan row was retired (Tier 02D), llama.cpp-relative ratios
+are reported and never gated, and only four of the then-open tiers (04B, 08, 09, 10) held GPU t/s to a
+number, so a GPU regression in Tier 03 (whose own gate sits on the paged path, while every sweep reads
+`static` dense KV) or Tier 04 would close cleanly. CPU throughput: row 1 was "correctness only" until
 the CPU tier, and every per-tier no-regression A/B read the GPU lane, so a CPU regression introduced in
 Tier 03 or 04 would first be seen when the CPU tier measured it. And host allocation and GC: every result
 JSON publishes `jfr.allocated_bytes_per_token`, `jfr.gc_pause_total_ms_in_token_span` and
@@ -690,15 +664,27 @@ closes, runs this gate against the pre-tier jar and records it in its own file:
 
 - **CPU lane, same-hour interleaved A/B**: the pre-tier jar and the candidate, alternating A B A B A B,
   each invocation `compare-llama-cpp.sh --cpu --pin-clocks --juno-jar <jar> --juno-reps 1 --juno-warmup 2
-  --reps 1 --no-publish`, on tinyllama and mistral-7b at `n_prompt=128`. **Threshold**: Juno CPU tg and
-  pp t/s **>= 0.95x** the pre-tier medians.
+  --reps 1 --no-publish`, on all four sweep models at `n_prompt=128`. **Threshold**: Juno CPU tg and
+  pp t/s **>= 0.95x** the pre-tier medians. *(2026-10-11: was tinyllama and mistral-7b only. Qwen2.5-3B
+  binds the CPU tg row and Phi-3.5-mini runs its own handler, so a regression on either passed.)*
+- **GPU lane, same-hour interleaved A/B** *(added 2026-10-11)*: the same alternation, each invocation
+  `compare-llama-cpp.sh --gpu --pin-clocks --juno-jar <jar> --juno-reps 1 --juno-warmup 2 --reps 1
+  --no-publish`, on all four sweep models at `n_prompt=512` (the length the GPU pp rows were scored at, and
+  long enough that a prefill-window regression is not lost in the first decode steps). **Threshold**: Juno
+  GPU tg and pp t/s **>= 0.95x** the pre-tier medians. A tier whose own threshold already holds GPU t/s
+  on every sweep model to at least this bound from the same A/B (Tiers 04B, 08, 09, 10) scores it once.
 - **Allocation and GC, both lanes**: from those CPU runs and from the tier's own GPU A/B, per model and
   lane, medians of three: `jfr.allocated_bytes_per_token` **<= 1.10x** the pre-tier reading, and
   `jfr.gc_pause_total_ms_in_token_span` **<= 1.25x** the pre-tier reading (where the pre-tier reading is
   under 5 ms, the bound is **<= 5 ms**, since a ratio of near-zero pause totals measures nothing).
 - **Hot methods, both lanes**: the top 10 of `jfr.top_methods` (`jdk.ExecutionSample`) for both jars,
   side by side in the tier's record, so a shift in where time goes is visible even where throughput
-  holds. Reported, not gated.
+  holds; on the GPU lane also the top 10 of `jfr.top_native_methods` (`jdk.NativeMethodSample`, added
+  2026-10-11). `ExecutionSample` does not sample a thread inside a native call, and on a GPU run most of
+  the forward pass is driver downcalls, so the Java histogram alone describes only the host work between
+  them. The native histogram also counts threads idle in a native wait (socket polls, the gRPC event
+  loop), so compare the two jars' rows by name rather than reading the top entry as the cost. Reported,
+  not gated.
 
 A tier whose change is scoped to the CPU path (Tier 02C) scores its CPU half under its own, stricter
 thresholds; the allocation half still applies. `check-plan-thresholds.sh` check 5 fails an open tier with
@@ -708,7 +694,7 @@ a perf gate that never names this gate.
 only ever compare Juno against its own prior baseline — neither tells you whether the actual stated
 goal of this plan (closing the gap with llama.cpp) is moving. Every tier whose scope includes the
 forward pass, MatVec, GPU residency, batching, quantization, or KV paths (at minimum: Tiers 01, 01B, 01C,
-02, 02B, 02C, 02D, 03, 04, 04B, 04C, 06, 07, 08, 09, 10) additionally re-runs
+02, 02B, 02C, 02D, 02E, 03, 04, 04B, 04C, 06, 07, 08, 09, 10) additionally re-runs
 `scripts/performance-tests/compare-llama-cpp.sh` on the same host/model/quant/flags as the last
 published run under `docs/perf-compare/`, and records the resulting Juno/llama.cpp tg and pp ratios
 in that tier's own file (not just in `docs/performance.md`, so the trend across tiers is visible
@@ -960,8 +946,9 @@ attributes to CI (rule 7's `check-plan-thresholds.sh`, `compare-llama-cpp.sh --s
 exactly as before CI was adopted. Rule 7 says "machine-checked": that means the script, not where it
 runs.
 
-**No CI exists in this repository today** (confirmed: `.github/` holds only a `modernize/`
-directory, no workflows) — tier-gating (execution rule 1: don't start Tier N+1 until Tier N's exit
+**No CI runs in this repository today.** `.github/workflows/ci.yml` exists in the working tree but is
+untracked, so it has never run (see the 2026-09-30 and 2026-10-01 notes above; *corrected 2026-10-11, plan
+review: this paragraph said `.github/` held only a `modernize/` directory*) — tier-gating (execution rule 1: don't start Tier N+1 until Tier N's exit
 criteria are all checked) is enforced procedurally, by whoever executes the plan re-reading the
 checklist, not automatically. This is an accepted, explicit trade-off rather than a silent gap; if a
 CI pipeline is added during this plan's execution, wiring `mvn test` plus the relevant
@@ -1006,7 +993,7 @@ works":
   (`mvn test` across all unit-test-bearing modules, `mvn verify -pl juno-master`).
 - Any hot-path change has a published `docs/perf-compare/` entry per the existing performance-gate
   rule, against a concrete numeric threshold stated in that tier's own file (execution rule 7 — not
-  just "no unexplained regression"), and, for Tiers 01, 01B, 01C, 02, 02B, 02C, 02D, 03, 04, 04B, 04C, 06, 07, 08, 09, 10, an
+  just "no unexplained regression"), and, for Tiers 01, 01B, 01C, 02, 02B, 02C, 02D, 02E, 03, 04, 04B, 04C, 06, 07, 08, 09, 10, an
   accompanying `compare-llama-cpp.sh` run recording the current Juno/llama.cpp ratio and reading it
   against the program target and that tier's intermediate milestone, if it has one.
 - **The published API contract is updated in the same change as the code.**

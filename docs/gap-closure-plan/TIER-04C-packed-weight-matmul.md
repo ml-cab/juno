@@ -117,8 +117,10 @@ table agree. It sits there for three reasons:
 - **Before Tier 05 and everything after it**, because every later tier that publishes a
   `compare-llama-cpp.sh` pp ratio is measuring a path that this tier changes.
 
-The 04B adjacency carries no dependency — tokenizer fidelity and packed matmul are unrelated, and
-04C could equally run immediately after 04 if 04B slips.
+The 04B adjacency carries no dependency — tokenizer fidelity and packed matmul are unrelated. It is
+still not a slip mechanism: execution rule 1 runs Tier 04B to completion first, and changing that is
+an owner decision recorded in the README's tier index, not an executor's choice. *(Corrected 2026-10-11,
+plan review: this said 04C "could equally run immediately after 04 if 04B slips".)*
 
 *Amended 2026-09-30.* The first reason no longer holds as written: the plan review judged that writing
 the kernel once against eight types was not worth leaving every tier between 01B and here without a
@@ -299,7 +301,7 @@ widened".*
 - **New bash smoke script**: `scripts/performance-tests/smoke-packed-matmul.sh` — drives
   `./juno local` on both schedules across every packed format, asserts correct output, asserts the
   fallback notice appears exactly when a format has no packed path, and records peak VRAM.
-- **Standing CPU and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
+- **Standing throughput and allocation gate** (README, "Test infrastructure"): run against the pre-tier jar
   and score it before closing this tier.
 - **Perf gate (required)**: this is a MatVec and forward-pass change by definition.
   `compare-lora.sh`, `compare-vision.sh` (required, not optional), and `compare-llama-cpp.sh` at
@@ -375,12 +377,13 @@ ended with. No AMD hardware exists here, so item 3's ROCm half is unit-tested an
       `CHANGELOG.md`), audited by grep rather than by the cited line.
 - [ ] Item 1's per-batch-width breakdown published, and item 2's justification recorded against it —
       including the case where the breakdown did not support the throughput premise.
-- [ ] All thresholds above met or explicitly reported as missed with the measured number.
-- [ ] Standing CPU and allocation gate met (README, "Test infrastructure"): CPU tg and pp
+- [ ] All thresholds above met. A miss keeps the tier open; closing on a miss takes an explicit
+      **Owner decision** recorded in this file with the measured number and the term that held it.
+- [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, with every threshold above (VRAM, throughput, numerical quality, load)
-      met or reported missed with its number; `compare-llama-cpp.sh` pp and tg ratios recorded in this
+      scored against its number; `compare-llama-cpp.sh` pp and tg ratios recorded in this
       file against the program target and Tier 01B's pp milestone rows.
 - [ ] Docs (`docs/agent-arch.txt`, `docs/howto.md`, `README.md`) updated in Juno-native language.
 - [ ] `CHANGELOG.md` entry added.

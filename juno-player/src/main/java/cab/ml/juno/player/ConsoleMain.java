@@ -1156,7 +1156,7 @@ public final class ConsoleMain {
 		System.out.println("                             Q/K/V, RoPE, KV append and attention with --gpu-attention on, output");
 		System.out.println("                             projection and FFN): one upload per token and one download per layer");
 		System.out.println("                             instead of a round trip per operation (default: auto, on wherever CUDA is present;");
-		System.out.println("                             CUDA, K-quant MMQ weights, LLaMA family, Phi-3 and Qwen3, single-sequence");
+		System.out.println("                             CUDA, K-quant MMQ weights, LLaMA family (Qwen2 included), Phi-3 and Qwen3, single-sequence");
 		System.out.println("                             decode; elsewhere the existing path, said once only with an explicit on;");
 		System.out.println("                             off keeps the op-at-a-time path; env JUNO_GPU_RESIDENCY)");
 		System.out.println("  --cache-type-k f16|q8_0    K cache element type (default: f16 = current float path)");

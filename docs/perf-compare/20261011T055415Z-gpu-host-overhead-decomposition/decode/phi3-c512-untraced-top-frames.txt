@@ -1,0 +1,15 @@
+      8 cab.ml.juno.kvcache.DenseKvTensor.grow(int) line: 227
+      5 cab.ml.juno.kvcache.DenseKvTensor.writeToken(int, float[]) line: 101
+      4 cab.ml.juno.sampler.SoftmaxStep.apply(float[], SamplingParams, int[]) line: 46
+      2 jdk.internal.misc.ScopedMemoryAccess.copyMemoryInternal(MemorySessionImpl, MemorySessionImpl, Object, long, Object, long, long) line: 148
+      2 cab.ml.juno.node.ResidentActivation.materializeAll(ResidentActivation[], float[][][]) line: 206
+      2 cab.ml.juno.node.Phi3TransformerHandler.transformerLayerOnDevice(float[][], int, int, SessionKvTensor, SessionKvTensor, Phi3TransformerHandler$BatchWorkspace, DeviceKvCache, PrefillWindowRegion$Window) line: 1201
+      2 cab.ml.juno.node.KernelParams.launch(MemorySegment, int, int, int, MemorySegment, String) line: 97
+      1 jdk.internal.util.ArraysSupport.unsignedHashCode(int, byte[], int, int) line: 378
+      1 jdk.internal.foreign.MemorySessionImpl.addOrCleanupIfFail(MemorySessionImpl$ResourceList$ResourceCleanup) line: 120
+      1 jdk.internal.foreign.ArenaImpl.allocate(long, long) line: 56
+      1 java.lang.String.isEmpty() line: 1601
+      1 java.lang.invoke.MethodType.equals(MethodType) line: 902
+      1 java.lang.Integer.parseInt(String, int) line: 540
+      1 cab.ml.juno.sampler.SoftmaxStep.apply(float[], SamplingParams, int[]) line: 53
+      1 cab.ml.juno.node.ResidentActivation.requireOpen() line: 264

@@ -15,6 +15,8 @@
  */
 package cab.ml.juno.node;
 
+import cab.ml.juno.kvcache.SessionKvTensor;
+
 import java.lang.foreign.MemorySegment;
 
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
@@ -209,6 +211,29 @@ final class ResidentActivation implements AutoCloseable {
 				MemorySegment.copy(a.staging, JAVA_FLOAT, (long) b * a.dim * Float.BYTES, rowsOut[b], 0, a.dim);
 			}
 		}
+	}
+
+	/**
+	 * Downloads the window's K and V rows with one wait and writes them into the host KV
+	 * tensors at {@code startPos} straight from the download buffers
+	 * ({@link SessionKvTensor#writeRows}): one copy into each tensor, where
+	 * {@link #materializeAll} into row arrays and a write per row would make two.
+	 */
+	static void materializeToKv(ResidentActivation k, ResidentActivation v, SessionKvTensor kHost,
+			SessionKvTensor vHost, int startPos) {
+		k.requireOpen();
+		v.requireOpen();
+		if (k.chain != v.chain)
+			throw new IllegalArgumentException("K and V are on different chains");
+		if (k.rows == 0 || k.rows != v.rows)
+			throw new IllegalStateException("K holds " + k.rows + " rows and V " + v.rows);
+		k.copyAsync(k.staging, k.device, (long) k.rows * k.dim * Float.BYTES, GpuBindings.D2H, k.rows,
+				k.materializeSite);
+		v.copyAsync(v.staging, v.device, (long) v.rows * v.dim * Float.BYTES, GpuBindings.D2H, v.rows,
+				v.materializeSite);
+		k.chain.sync();
+		kHost.writeRows(startPos, k.rows, k.staging, 0);
+		vHost.writeRows(startPos, v.rows, v.staging, 0);
 	}
 
 	/** Valid rows: the last upload, or the last operation that wrote into this activation. */

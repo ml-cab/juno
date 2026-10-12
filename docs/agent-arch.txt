@@ -13,6 +13,15 @@ Module dependency (excerpt):
         handlers dual-path via SessionKvLayout; manager may hold a shared
         PagedKvArena; adapter flushes dense or paged blobs; gather-tax gate
         PASS — see docs/performance.md / perf-compare/*-gather-tax.md).
+        Dense host KV is reused across requests: SessionKvLayout.retireKLayers/retireVLayers
+        hand an evicted request's dense layers to a DenseKvRecycler (one set per side, the
+        larger capacity kept), and newKLayers/newVLayers take them before allocating; paged
+        layers return their pages as before. DenseKvTensor keeps a written watermark and
+        zeroes any gap before it is written past or read, so a reused tensor never shows an
+        earlier request's values. SessionKvTensor.writeRows writes a window's rows from native
+        memory in one call (DenseKvTensor F16: one bulk copy). Handlers (LLaMA family, Phi-3,
+        Qwen3) count running passes per request (node InFlightRequests) and reuse only when
+        none is running; otherwise the layers are dropped as before.
   lora — LoRA adapter tensors, .lora checkpoint format, AdamW with LoRA+ learning-rate
         groups (no GGUF, no CUDA).
         LoraPlaySpec parses --lora-play's "path[:scale][,path[:scale]]" syntax
@@ -265,11 +274,13 @@ Module dependency (excerpt):
         operating-system clock there and check each span against its request.
         JdkEventBucket takes
         the JVM events in the same pass — GC pauses (count/max_ms/total_ms),
-        allocated bytes, hot methods and lock/park time — so a throughput number
+        allocated bytes, hot methods (Java-side ExecutionSample and, separately,
+        NativeMethodSample for threads inside a native call such as a GPU driver
+        downcall) and lock/park time — so a throughput number
         can be read against the pauses and allocation that produced it. Its
         ThreadAllocationStatistics figure sums each thread's own running total
         rather than every sample, since the field is cumulative per thread. The
-        two attribution histograms (top_sites, top_methods) are bounded to ten
+        attribution histograms (top_sites, and top_methods for each sampler) are bounded to ten
         entries and are for reading, not for gating.
         GcPauseSpans records when each collection pause happened, so the pauses
         can be attributed to the window a throughput figure was measured over
@@ -564,10 +575,12 @@ GPU FFI (node module — Panama project, JEP 454):
         CudaGqaAttention.attendBatched at one row, a 100-token decode, concurrent threads;
         ResidentQkvPathPhi3Test and ResidentQkvPathQwen3Test: the same on each family's layout,
         against that family's host rotation); against the default path, whose norms run on the CPU,
-        only the norms' summation order differs. unsupportedReason(ctx, pairing, qkvBias, cfg) names
-        what it cannot run for a whole LLaMA-family model (non-CUDA, split-half RoPE, Q/K/V biases,
-        query width different from hidden size), unsupportedReason(ctx, cfg) the shape-only part for
-        a handler that brings its own rotation;
+        only the norms' summation order differs. unsupportedReason(ctx, cfg) names what it cannot
+        run for a whole model (non-CUDA, query width different from hidden size); the rotation is the
+        caller's ResidentRope (LlamaTransformerHandler passes a CudaRope in the file's RopePairing,
+        split-half on Qwen2) and Biases (Qwen2's Q/K/V biases, uploaded per layer, added by
+        PrefillWindowKernels.addBias after the projections and before RoPE; a model has HeadNorms or
+        Biases, not both; ResidentQkvPathQwen2Test holds that layout bit for bit);
         eligible(li) is false for a layer without all three K-quant projections on the device.
         Device regions come from a pool (bounded by concurrent calls, not by threads ever seen),
         opened on first use; when opening one runs out of device memory (a card that filled after
@@ -606,7 +619,7 @@ GPU FFI (node module — Panama project, JEP 454):
         meant to run the region on (the CPU backend, LoRA training and playback) and logs only under
         an explicit on. announceUnsupported(log, surface, reason) logs once per surface per
         process where the flag was requested (on, or auto with CUDA present) but cannot run:
-        LlamaTransformerHandler (CPU backend through announceIfExplicit, qwen2 split-half and biases, no K-quant device projections, region layers whose tail weights
+        LlamaTransformerHandler (CPU backend through announceIfExplicit, no K-quant device projections, region layers whose tail weights
         are not K-quant on the device and so leave the region after attention), Phi3TransformerHandler
         and Qwen3TransformerHandler (CPU backend through announceIfExplicit, query width different from hidden size, no K-quant
         device projections, Qwen3 YaRN RoPE, and the same partial-layer notices through
@@ -714,6 +727,9 @@ GPU FFI (node module — Panama project, JEP 454):
         it equal to what a window allocates. Read by DeviceScratchBudget and, through
         ForwardPassHandler.prefillWindowDeviceBytes, by the adaptive prefill chunk.
   PrefillWindowRegion — the prefill-window device region (on by default on CUDA; PrefillRegionOptions):
+        a whole-layer window's K and V rows go from the download buffer straight into the
+        request's host KV tensors (runLayer with kHost/vHost, ResidentActivation.materializeToKv
+        then SessionKvTensor.writeRows), one copy, not a row array and then the tensor;
         a transformer layer over a prefill window of more than 8 rows with the activations on the
         device between its operations. The residual stream x stays on the device across layers: it
         is uploaded at the window's first layer (or the first after a layer that ran on the host)
