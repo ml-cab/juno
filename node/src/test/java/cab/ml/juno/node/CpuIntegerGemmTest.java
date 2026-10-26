@@ -142,6 +142,29 @@ class CpuIntegerGemmTest {
 	}
 
 	@Test
+	void aBatchNotAMultipleOfFourIsPaddedWithoutChangingItsRows() {
+		// The batch is padded with zero rows to a multiple of four; a real row's arithmetic does not depend on its
+		// position or on the padding, and the reused buffers must not carry an earlier call's rows into the padding.
+		for (int type : new int[] { 8, 12, 13, 14 }) {
+			Random rnd = new Random(19 + type);
+			int rows = 40, cols = 512;
+			GgufReader.QuantizedTensor w = CpuIntegerKernelsTest.synthetic(type, rows, cols, rnd);
+			float[][] eight = activations(8, cols, rnd);
+			float[][] five = java.util.Arrays.copyOf(eight, 5);
+			float[][] y5 = new float[5][rows];
+			CpuIntegerGemm.sgemmInto(w, five, y5, 0, rows, cols);
+			float[][] y8 = new float[8][rows];
+			CpuIntegerGemm.sgemmInto(w, eight, y8, 0, rows, cols);
+			float[][] y5Again = new float[5][rows];
+			CpuIntegerGemm.sgemmInto(w, five, y5Again, 0, rows, cols);
+			for (int b = 0; b < 5; b++) {
+				assertThat(y5[b]).as("type %d row %d alone against inside a batch of 8", type, b).isEqualTo(y8[b]);
+				assertThat(y5Again[b]).as("type %d row %d after a larger call", type, b).isEqualTo(y5[b]);
+			}
+		}
+	}
+
+	@Test
 	void rejectsWidthsThatAreNotWholeSuperBlocks() {
 		assertThat(CpuIntegerGemm.supports(8, 96)).isFalse();
 		assertThat(CpuIntegerGemm.supports(12, 4096)).isTrue();

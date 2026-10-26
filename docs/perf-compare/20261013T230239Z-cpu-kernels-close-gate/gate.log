@@ -1,0 +1,133 @@
+baseline jar sha256: b9a0440b3a1b597a
+candidate jar sha256: e37e16c004f4c213
+
+=== Part K: kernel microbenchmark, pinned (18:02:39)
+classes sha256: d3b0bd59d30aa136
+--- kernel run 1 (18:02:39)
+    mean core MHz after run: 3492
+--- kernel run 2 (18:06:17)
+    mean core MHz after run: 3496
+--- kernel run 3 (18:09:55)
+    mean core MHz after run: 3494
+kernel   threads     run1_ms    run2_ms    run3_ms  cycles/weight   gate
+Q4_K     1            15.704     15.449     15.626           0.93    1.1
+Q6_K     1            35.713     35.405     36.071           2.13    2.7
+Q4_K     12            3.108      3.082      3.029           1.10    1.1
+Q6_K     12            6.534      6.964      7.232           2.49    2.7
+
+=== Part S: closing sweeps, pinned and published (18:13:40)
+--- sweep-128: n_prompt=128 (18:13:40)
+    clock_pinned: true (must be true)
+--- sweep-512: n_prompt=512 (18:52:35)
+    clock_pinned: true (must be true)
+--- sweep-2048: n_prompt=2048 (20:19:10)
+    clock_pinned: true (must be true)
+--- sweep-2048-phi: n_prompt=2048 (00:02:10)
+    clock_pinned: true (must be true)
+model          tg@128   pp@128   pp@512  pp@2048    pp512_pre  pp512_now     B/A   pp2048_pre pp2048_now     B/A
+tinyllama       0.391    0.321    0.321    0.315       12.383     24.808   2.003        6.099     22.124   3.628
+qwen2.5         0.366    0.320    0.312    0.313        5.139      8.558   1.665        3.183      8.137   2.556
+Phi             0.308    0.348    0.369    0.314        3.807      7.067   1.856        1.678      5.703   3.398
+mistral         0.351    0.315    0.319    0.328        2.245      3.697   1.647        1.294      3.335   2.577
+(pp2048 B/A reads these sweeps against the step 2 sweeps of the baseline jar: the 2048 host-attention gate, owner
+ decision 5; pp512 B/A against the step 2 sweep at 512 is reported, the 512 gate is Part C's same-hour A/B)
+
+=== Part C: CPU same-hour A/B, pinned (01:37:23)
+=== cpu128: baseline 1 (01:37:23)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-baseline-1.log)
+=== cpu128: candidate 1 (01:53:50)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-candidate-1.log)
+=== cpu128: baseline 2 (02:06:33)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-baseline-2.log)
+=== cpu128: candidate 2 (02:22:59)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-candidate-2.log)
+=== cpu128: baseline 3 (02:38:24)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-baseline-3.log)
+=== cpu128: candidate 3 (02:54:50)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-candidate-3.log)
+
+cpu128: clock_pinned across the runs: true (must be only: true)
+model             pp_A      pp_B     B/A   gate       tg_A     tg_B     B/A   gate    alloc/tok_A  alloc/tok_B    B/A      gc_A    gc_B
+tinyllama       16.628    24.283   1.460   0.95      7.870   11.935   1.516   0.95       77204919    543424375  7.039       0.0     0.0
+    runs: pp A 16.628276134141966 16.478173254759803 16.73519546823427 | B 24.1634976006738 24.413843119625653 24.28271599659849 
+  FAIL: tinyllama allocation per token above 1.10x
+qwen2.5          6.187     8.301   1.342   1.10      2.593    4.169   1.608   1.10      145667886    180598852  1.240       0.0     0.0
+    runs: pp A 6.186272985430635 6.18703817576768 6.213622480079372 | B 8.248583194416044 10.805655971716863 8.300527392372791 
+  FAIL: qwen2.5 allocation per token above 1.10x
+Phi              4.838     6.961   1.439   0.95      2.286    3.002   1.313   0.95      162355328    919180971  5.662       0.0     0.0
+    runs: pp A 4.837677699148072 4.8765887599200735 4.82035505053149 | B 6.961279941949469 1.3755115454860622 7.070895552927468 
+  FAIL: Phi allocation per token above 1.10x
+mistral          2.591     3.634   1.403   1.10      1.281    2.127   1.661   1.10      217245859    331819652  1.527       0.0     0.0
+    runs: pp A 2.552901777818552 2.5927941634780263 2.590710431666364 | B 3.5645377506648495 3.6337792508545532 3.634465921975126 
+  FAIL: mistral allocation per token above 1.10x
+=== cpu512: baseline 1 (03:07:24)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-baseline-1.log)
+=== cpu512: candidate 1 (03:52:34)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-candidate-1.log)
+=== cpu512: baseline 2 (04:24:55)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-baseline-2.log)
+=== cpu512: candidate 2 (05:10:15)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-candidate-2.log)
+=== cpu512: baseline 3 (05:39:29)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-baseline-3.log)
+=== cpu512: candidate 3 (06:24:37)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-candidate-3.log)
+
+cpu512: clock_pinned across the runs: true (must be only: true)
+model             pp_A      pp_B     B/A   gate       tg_A     tg_B     B/A   gate    alloc/tok_A  alloc/tok_B    B/A      gc_A    gc_B
+tinyllama       12.447    25.098   2.016   1.10      7.800   11.923   1.529      -       79941741    502332945  6.284       0.0     0.0
+    runs: pp A 12.398461579330602 12.49043786722551 12.446756937226278 | B 25.09845429613799 29.908585282391694 24.70846746113361 
+qwen2.5          5.092     8.414   1.652   1.10      2.597    4.260   1.640      -      148035692    199718604  1.349       0.0     0.0
+    runs: pp A 5.123329806612178 5.092152792925755 5.08749166437382 | B 8.39492224368514 8.414221879070679 10.967919514296343 
+Phi              3.839     6.894   1.796   1.10      2.317    3.012   1.300      -      171215047    914013064  5.338       0.0     0.0
+    runs: pp A 3.8350471304650204 3.8435204644595933 3.8389510615770086 | B 3.5152878601267568 7.12628126192424 6.893791181138859 
+mistral          2.285     3.553   1.555   1.10      1.284    2.122   1.653      -      200040642    338566040  1.692       0.0     0.0
+    runs: pp A 2.2838844721005587 2.2845359059186827 2.2876024302659697 | B 3.5527049366619083 3.5498874214422513 3.654918986780874 
+
+=== Part A: GPU same-hour A/B, pinned (06:53:31)
+=== gpu512: baseline 1 (06:53:31)
+    exit=0  (log: dist/cpu-kernels-close/runs/gpu512-baseline-1.log)
+=== gpu512: candidate 1 (06:56:01)
+    exit=0  (log: dist/cpu-kernels-close/runs/gpu512-candidate-1.log)
+=== gpu512: baseline 2 (06:58:32)
+    exit=0  (log: dist/cpu-kernels-close/runs/gpu512-baseline-2.log)
+=== gpu512: candidate 2 (07:01:04)
+    exit=0  (log: dist/cpu-kernels-close/runs/gpu512-candidate-2.log)
+=== gpu512: baseline 3 (07:03:37)
+    exit=0  (log: dist/cpu-kernels-close/runs/gpu512-baseline-3.log)
+=== gpu512: candidate 3 (07:06:09)
+    exit=0  (log: dist/cpu-kernels-close/runs/gpu512-candidate-3.log)
+
+gpu512: clock_pinned across the runs: true (must be only: true)
+model             pp_A      pp_B     B/A   gate       tg_A     tg_B     B/A   gate    alloc/tok_A  alloc/tok_B    B/A      gc_A    gc_B
+tinyllama     3172.591  3197.656   1.008   0.95    150.486  152.490   1.013   0.95       34429643     34418827  1.000       0.0     0.0
+    runs: pp A 3273.5639380104635 3172.5908573478787 3160.0907595347885 | B 3242.6837707426625 3197.656098094746 3177.525895548282 
+qwen2.5       1286.170  1280.407   0.996   0.95     58.799   58.941   1.002   0.95      113522315    113542466  1.000       0.0     0.0
+    runs: pp A 1326.7514541176502 1211.0550192371595 1286.169921098173 | B 1291.8562562443715 1280.4073776122796 1254.3507043936224 
+Phi            863.228   848.466   0.983   0.95     58.122   58.474   1.006   0.95      100457971    100461477  1.000       0.0     0.0
+    runs: pp A 880.6299816363021 863.228213335496 849.771432811845 | B 875.8703713766329 848.46550150291 835.0826670595558 
+mistral        582.967   564.793   0.969   0.95     39.557   38.996   0.986   0.95      166829253    166806862  1.000       0.0     0.0
+    runs: pp A 590.0681771225718 582.9668517533286 563.2702258280591 | B 606.2540181720024 564.7925233948287 563.4959577127717 
+
+gpu512: greedy output (temperature 0), candidate vs baseline per run
+  tinyllama: candidate equals baseline in 3 of 3 runs (reported, not gated)
+  qwen2.5: candidate equals baseline in 3 of 3 runs (reported, not gated)
+  Phi: candidate equals baseline in 3 of 3 runs (reported, not gated)
+  mistral: candidate equals baseline in 3 of 3 runs (reported, not gated)
+
+=== Part L: LoRA, pinned by hand (07:08:44)
+--- lora gpu: baseline 1 (07:08:44)
+--- lora gpu: candidate 1 (07:09:42)
+--- lora gpu: baseline 2 (07:10:40)
+--- lora gpu: candidate 2 (07:11:38)
+--- lora gpu: baseline 3 (07:12:36)
+--- lora gpu: candidate 3 (07:13:36)
+--- lora cpu: baseline 1 (07:14:35)
+--- lora cpu: candidate 1 (07:28:20)
+--- lora cpu: baseline 2 (07:42:00)
+--- lora cpu: candidate 2 (07:55:40)
+--- lora cpu: baseline 3 (08:09:24)
+--- lora cpu: candidate 3 (08:23:06)
+LoRA results: per-run JSON under dist/cpu-kernels-close/runs/lora-*; train ms per pass and playback wall-clock tps are read from each
+run's result JSON (median of three per side); gates: train B/A >= 0.95, playback B/A >= 0.80.
+GATES MISSED (see FAIL lines)

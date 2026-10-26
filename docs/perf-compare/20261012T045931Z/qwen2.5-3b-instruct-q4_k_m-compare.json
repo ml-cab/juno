@@ -1,0 +1,152 @@
+{
+  "model": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 27.666326,
+    "token_gen_tps": 13.353985
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 5.139171756193438,
+    "token_gen_tps": 2.5930221764157073,
+    "api_token_gen_tps": 2.4215,
+    "latency_ms": 26430,
+    "n_prompt": 512,
+    "prompt_tokens": 512,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 0.0,
+    "gc_pause_max_ms": 0.0,
+    "gc_pause_total_ms": 0.0,
+    "allocated_bytes_total": 8895310864,
+    "allocated_bytes_per_token": 158069631.375,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 512,
+        "n_prompt": 512,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 5.139171756193438,
+        "latency_ms": 100086,
+        "status": "success",
+        "gc_pause_max_ms": 0.0,
+        "gpu_attention_resolved": "n/a",
+        "gpu_clock_in_window": null
+      },
+      "generate": {
+        "prompt_tokens": 9,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 2.5930221764157073,
+        "latency_ms": 26430,
+        "status": "success",
+        "gc_pause_max_ms": 0.0,
+        "gpu_attention_resolved": "n/a",
+        "gpu_clock_in_window": null
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "5g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 5.139171756193438,
+        "min": 5.129710527665681,
+        "max": 5.148484647745444,
+        "values": [
+          5.129710527665681,
+          5.148484647745444,
+          5.139171756193438
+        ]
+      },
+      "token_gen_tps": {
+        "median": 2.5930221764157073,
+        "min": 2.576531220954507,
+        "max": 2.6032890592186755,
+        "values": [
+          2.5930221764157073,
+          2.576531220954507,
+          2.6032890592186755
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 2.4215,
+        "min": 2.3797,
+        "max": 2.4268,
+        "values": [
+          2.4215,
+          2.3797,
+          2.4268
+        ]
+      },
+      "latency_ms": {
+        "median": 26430,
+        "min": 26372,
+        "max": 26894,
+        "values": [
+          26430,
+          26894,
+          26372
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 144738372,
+        "min": 138989232.25,
+        "max": 158069631.375,
+        "values": [
+          138989232.25,
+          144738372,
+          158069631.375
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.1857554832612555,
+  "noise": {
+    "ok": true,
+    "basis": "repetition dispersion",
+    "condition": null,
+    "rep_spread": 0.01031917062165492,
+    "rep_spread_tolerance": 0.15,
+    "gc_pause_max_ms": 0.0,
+    "gc_pause_max_ms_in_token_span": 0.0,
+    "reason": null
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.19417590902009454,
+  "result_files": {
+    "llama_cpp_raw": "dist/cpu-prefill-length/runs/cpu-512/qwen2.5-3b-instruct-q4_k_m-llama-cpp.raw.json",
+    "juno_response": "dist/cpu-prefill-length/runs/cpu-512/qwen2.5-3b-instruct-q4_k_m-generate-rep1-juno-response.json",
+    "llama_result": "dist/cpu-prefill-length/runs/cpu-512/qwen2.5-3b-instruct-q4_k_m-llama-cpp.json",
+    "juno_result": "dist/cpu-prefill-length/runs/cpu-512/qwen2.5-3b-instruct-q4_k_m-juno.json",
+    "juno_jfr": "dist/cpu-prefill-length/runs/cpu-512/qwen2.5-3b-instruct-q4_k_m-juno-jfr.json"
+  }
+}

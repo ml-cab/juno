@@ -165,6 +165,14 @@ uses the float-activation kernels instead, with the same results as before and l
 The startup log names the kernels in use (`CPU quantized matmul: ...`). LoRA training always
 runs its frozen forward over the float activation.
 
+The integer kernels run on 128-bit lanes by default, on every CPU. 256-bit kernels exist for CPUs with
+256-bit integer instructions (AVX2 or wider) and are selected with `-Djuno.cpu.integerWidth=256`; they
+are not the default until their throughput has been measured on such a CPU. `auto` (the default)
+selects 128 and `128` forces it; any other value stops startup with an error naming the property.
+The startup `SIMD available` line ends with the width chosen and the CPU's preferred width, for
+example `CPU integer kernels: 128-bit lanes (host preferred 256-bit)`. Forcing 256 on a CPU without
+256-bit integer instructions gives the same results much more slowly.
+
 ---
 
 ### `local` — in-process REPL, fastest mode of juno-player console, operates within same JVM, GRPC off, uses LocalInferencePipeline.java instead

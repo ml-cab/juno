@@ -8,7 +8,8 @@ files get added/removed between sessions and this is not auto-maintained.
 | Backend | Available | Notes |
 |---|---|---|
 | CPU | yes | Intel Xeon E5-1650 v2 (Ivy Bridge-EP), 6 cores, 12 threads (per `docs/perf-compare/README.md` baseline host). SIMD: SSE4.2 and AVX only, **no AVX2, no FMA, no AVX-512** (checked 2026-10-09 from `/proc/cpuinfo`; the JVM reports `UseAVX=1` and a 128-bit preferred Vector API species). Eight 8 GiB DIMMs on four channels; measured sequential read bandwidth 42.4 GB/s unpinned (`docs/perf-compare/20261009T220314Z-host-read-bandwidth/`), 40.34 GB/s pinned at 6 threads; DIMMs DDR3-1600, 51.2 GB/s theoretical (`docs/perf-compare/20261011T052951Z-cpu-hot-path-close-gate/`) |
-| CUDA | yes | 1x NVIDIA GeForce GTX 1080 (8 GiB) |
+| CUDA | yes | 1x NVIDIA GeForce GTX 1080 (8 GiB). Pascal, compute capability 6.1: CUDA 12.x is the last runtime that supports it (CUDA 13 removed Maxwell, Pascal and Volta), which matters for Windows library names (Tier 02G) |
+| Windows | installed, not activated | a Windows install on this host (2026-10-13, owner). Owner decision, 2026-10-13: [Tier 02G](TIER-02G-cuda-on-windows.md)'s same-machine readings use the Windows 11 Enterprise 90-day evaluation, installed on this host when that tier starts, with the CUDA 12.x runtime; the unactivated install is not used |
 | ROCm | **no** | no AMD GPU present in this environment |
 | Metal / Vulkan / SYCL | no | not applicable to this host; only relevant if Tier 10 scope is later extended to new backends |
 

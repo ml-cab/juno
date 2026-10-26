@@ -1,0 +1,228 @@
+{
+  "engine": "juno",
+  "tool": "local-api+jfr",
+  "status": "success",
+  "exit_code": 0,
+  "http_code": "200",
+  "model": "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "model_path": "<repo>/models/mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "model_id": "mistral-7b-instruct-v0.1-q4_k_m.gguf",
+  "n_gen": 1,
+  "n_prompt": 2048,
+  "prompt_tokens": 2048,
+  "prompt_token_deviation": 0,
+  "prompt_parity_tolerance": 0.10,
+  "completion_tokens": 1,
+  "finish_reason": "length",
+  "load_ms": 6220,
+  "latency_ms": 1609582,
+  "wall_ms": 1609598,
+  "api_token_gen_tps": 0.0006,
+  "prompt_eval_tps": 1.273976391672517,
+  "token_gen_tps": 0.5720982480614754,
+  "juno_use_vector": 1,
+  "gpu_attention_requested": "engine default",
+  "gpu_attention_resolved": "n/a",
+  "gpu_clock_in_window": null,
+  "backend": "cpu",
+  "use_gpu": 0,
+  "heap": "9g",
+  "heap_source": "fixed",
+  "threads_hint": 12,
+  "use_jfr": 1,
+  "rep_label": "mistral-7b-instruct-v0.1-q4_k_m-prefill-rep2",
+  "lane": "prefill",
+  "juno_warmup": 2,
+  "calibrated_prompt_words": 2040,
+  "jfr_scoped_to_measured_request": 1,
+  "jfr_duration": "120m",
+  "jfr": {
+    "metrics_file": "dist/cpu-prefill-length/runs/cpu-2048/mistral-7b-instruct-v0.1-q4_k_m-prefill-rep2-juno-jfr.json",
+    "jfr_file": "mistral-7b-instruct-v0.1-q4_k_m-prefill-rep2-measured.jfr",
+    "prompt_eval_tps": 1.273976391672517,
+    "prompt_eval_tps_source": "jfr_prefill_total_ms",
+    "token_gen_tps": 0.5720982480614754,
+    "span_check": {
+      "timestamps_consistent": true,
+      "span_residual_ms": 2.2601489999473756,
+      "prompt_encode_ms": 266.676935,
+      "token_span_residual_ms": null,
+      "span_residual_min_ms": -25,
+      "span_residual_max_ms": 303,
+      "prefill_tokens": 2047.0,
+      "prefill_min_start_position": 0.0,
+      "full_prefill": true,
+      "reason": null
+    },
+    "token_gen_tps_source": "ForwardPass.decode.total_ms",
+    "token_gen_tps_decode_derived": 0.5720982480614754,
+    "forward_pass_prefill_total_ms": 1607565.1114,
+    "forward_pass_decode_total_ms": 1747.951516,
+    "forward_pass_prefill_p95_ms": 40812.751365,
+    "forward_pass_decode_p95_ms": 1747.951516,
+    "forward_pass_prefill_count": 64.0,
+    "forward_pass_decode_count": 1.0,
+    "token_produced_count": 1.0,
+    "token_produced_tps": 0.0,
+    "token_produced_elapsed_s": 0.0,
+    "gc_pause_count": 0.0,
+    "gc_pause_max_ms": 0.0,
+    "gc_pause_total_ms": 0.0,
+    "gc_pause_count_in_token_span": 0.0,
+    "gc_pause_max_ms_in_token_span": 0.0,
+    "gc_pause_total_ms_in_token_span": 0.0,
+    "allocated_bytes_total": 1.936594812E+10,
+    "allocated_bytes_per_token": 19365948120,
+    "execution_sample_count": 308249.0,
+    "top_methods": [
+      {
+        "method": "cab_ml_juno_node_CpuIntegerGemm_tile",
+        "samples": 198790.0
+      },
+      {
+        "method": "cab_ml_juno_node_GqaMath_attend",
+        "samples": 71712.0
+      },
+      {
+        "method": "cab_ml_juno_node_CpuIntegerGemm_unpack",
+        "samples": 16732.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_softmax",
+        "samples": 9006.0
+      },
+      {
+        "method": "cab_ml_juno_node_CpuWorkerPool_forEach",
+        "samples": 6543.0
+      },
+      {
+        "method": "cab_ml_juno_node_LlamaTransformerHandler_transformerLayerBatch",
+        "samples": 1788.0
+      },
+      {
+        "method": "cab_ml_juno_node_CpuWorkerPool_Worker_run",
+        "samples": 1108.0
+      },
+      {
+        "method": "cab_ml_juno_node_GgufReader_f16ToF32",
+        "samples": 1088.0
+      },
+      {
+        "method": "cab_ml_juno_node_CpuIntegerKernels_q6kRow",
+        "samples": 762.0
+      },
+      {
+        "method": "cab_ml_juno_node_CpuIntegerGemm_Activations_lambda_quantize_0",
+        "samples": 245.0
+      }
+    ],
+    "native_sample_count": 77178.0,
+    "top_native_methods": [
+      {
+        "method": "java_io_FileInputStream_readBytes",
+        "samples": 38584.0
+      },
+      {
+        "method": "sun_nio_ch_EPoll_wait",
+        "samples": 38584.0
+      },
+      {
+        "method": "jdk_jfr_internal_JVM_emitEvent",
+        "samples": 9.0
+      },
+      {
+        "method": "jdk_jfr_internal_JVM_getEventWriter",
+        "samples": 1.0
+      }
+    ],
+    "top_allocation_sites": [
+      {
+        "site": "jdk_internal_misc_Unsafe_allocateUninitializedArray",
+        "bytes": 990495656
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_BatchWorkspace__init_",
+        "bytes": 616898968
+      },
+      {
+        "site": "java_lang_StringConcatHelper_doConcat",
+        "bytes": 1.9736292E+8
+      },
+      {
+        "site": "cab_ml_juno_node_CpuIntegerGemm_Activations_quantize",
+        "bytes": 65498296
+      },
+      {
+        "site": "cab_ml_juno_node_LlamaTransformerHandler_forwardBatchUnguarded",
+        "bytes": 1421072.0
+      },
+      {
+        "site": "java_util_concurrent_ConcurrentLinkedQueue_offer",
+        "bytes": 522224.0
+      }
+    ],
+    "monitor_enter_total_ms": 0.0,
+    "thread_park_total_ms": 17902689.93583,
+    "device_staging": null
+  },
+  "response_json": "dist/cpu-prefill-length/runs/cpu-2048/mistral-7b-instruct-v0.1-q4_k_m-prefill-rep2-juno-response.json",
+  "log": "dist/cpu-prefill-length/runs/cpu-2048/mistral-7b-instruct-v0.1-q4_k_m-prefill-rep2-juno.log",
+  "host": {
+    "run_id": "20261012T071213Z",
+    "timestamp_utc": "2026-10-12T14:29:09Z",
+    "hostname": "medion-Precision-T3610",
+    "cpu": "Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz",
+    "mem_total": "62.7 GiB",
+    "n_threads": 12,
+    "juno_threads": 12,
+    "juno_common_pool_parallelism": 11,
+    "cpu_governor": "performance",
+    "cpu_turbo": "disabled",
+    "gpu_clocks": {
+      "graphics_mhz": 139,
+      "sm_mhz": 139,
+      "memory_mhz": 405,
+      "active_throttle_reasons": "Idle"
+    },
+    "clock_pinned": true,
+    "clock_pin_state": "pinned: cpu governor performance (was schedutil), turbo off",
+    "juno_commit": "01027ee9a2f3",
+    "juno_tree_dirty": true,
+    "juno_jar": "<repo>/juno-player/target/juno-player-0.1.2-shaded.jar",
+    "juno_jar_sha256_16": "b9a0440b3a1b597a",
+    "java_version": "OpenJDK Runtime Environment (build 25.0.3+9-2-24.04.2-Ubuntu)",
+    "juno_jvm_flags": "-XX:+UseG1GC -XX:+AlwaysPreTouch -XX:+UnlockExperimentalVMOptions -XX:-UseFastUnorderedTimeStamps -Djuno.threads=12 -Djava.util.concurrent.ForkJoinPool.common.parallelism=11 -Xms=-Xmx (fixed per model)",
+    "jfr_timestamp_source": "os-clock (kernel clocksource hpet, PERF_JFR_OS_CLOCK=auto)",
+    "device_spans": 0,
+    "gpu_driver": "580.173.02",
+    "llama_build_commit": "379ac6673",
+    "n_prompt": 2048,
+    "n_gen": 64,
+    "reps": 3,
+    "juno_warmup": 2,
+    "juno_reps": 3,
+    "juno_min_tokens": 64,
+    "ngl": 0,
+    "backend": "cpu",
+    "use_gpu": 0,
+    "prompt": "x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x",
+    "raw_prompt": 1,
+    "juno_gpu_layers": "",
+    "juno_mmq": "",
+    "juno_gpu_attention": "",
+    "juno_gpu_residency": "",
+    "juno_schedule": "",
+    "juno_cache_type_k": "",
+    "juno_cache_type_v": "",
+    "juno_kv_page_size": "",
+    "juno_prefill_batch": "",
+    "juno_spec_type": "",
+    "juno_spec_ngram_n": "",
+    "juno_spec_ngram_m": "",
+    "juno_model_draft": "",
+    "juno_use_vector": 1,
+    "juno_jfr": 1,
+    "jfr_duration": "120m",
+    "llama_cpp_bin": "<home>/Repo/llama.cpp-bin/llama-b9551"
+  }
+}

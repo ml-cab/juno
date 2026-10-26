@@ -936,8 +936,9 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
 
     private float[] gqa(float[] q, float[] kCache, float[] vCache, int seqLen, int window) {
         float[] out = new float[cfg.numHeads() * cfg.headDim()];
-        GqaMath.attend(q, kCache, vCache, seqLen, out, new float[seqLen], cfg.numHeads(), cfg.headDim(),
-                cfg.gqaRatio(), cfg.kvDim(), window);
+        // heads on the worker pool, bit-identical to the serial loop
+        GqaMath.attendPooled(q, kCache, vCache, seqLen, out, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
+                cfg.kvDim(), window);
         return out;
     }
 

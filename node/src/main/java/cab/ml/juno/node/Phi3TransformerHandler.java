@@ -1294,7 +1294,8 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	/** Zero-allocation gqa: writes into pre-allocated out[] using shared scores scratch; {@code window} 0 for all keys. */
 	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen,
 			float[] out, float[] scores, int window) {
-		GqaMath.attend(q, kCache, vCache, seqLen, out, scores, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
+		// heads on the worker pool, bit-identical to the serial loop; scores is the serial form's scratch, unused here
+		GqaMath.attendPooled(q, kCache, vCache, seqLen, out, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
 				cfg.kvDim(), window);
 	}
 

@@ -189,6 +189,12 @@ public final class VectorQuantKernels {
 		}
 		try {
 			return Simd.diagnosticSummary();
+		} catch (ExceptionInInitializerError e) {
+			// An unsupported -Djuno.cpu.integerWidth: fail at startup with the property named.
+			if (e.getCause() instanceof IllegalArgumentException iae)
+				throw iae;
+			return "SIMD available=true but reading the diagnostic failed: "
+					+ e.getClass().getSimpleName() + ". Kernels still run correctly via the scalar fallback.";
 		} catch (Throwable t) {
 			return "SIMD available=true but reading the diagnostic failed: "
 					+ t.getClass().getSimpleName() + ". Kernels still run correctly via the scalar fallback.";
@@ -242,7 +248,7 @@ public final class VectorQuantKernels {
 			// the P-cores support it in silicon, so 256-bit here is the
 			// expected/correct result on that class of CPU, not a fallback.
 			return "SIMD available: FloatVector.SPECIES_PREFERRED=" + bits + "-bit (" + lanes
-					+ " float lanes per instruction)";
+					+ " float lanes per instruction); " + CpuIntegerWidth.summary();
 		}
 
 		static float dot(float[] dq, int dqOffset, float[] xp, int xOffset, int len) {

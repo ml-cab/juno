@@ -38,7 +38,8 @@ Module dependency (excerpt):
         CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
         DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
         LoraTrainableHandler, LoraMerge, LoraQvInitializer, CpuKernelSelection,
-        CpuIntegerKernels, CpuIntegerGemm, CpuThreads, CpuWorkerPool,
+        CpuIntegerKernels, CpuIntegerGemm, CpuIntegerWidth, CpuIntegerKernels256,
+        CpuIntegerGemm256, CpuThreads, CpuWorkerPool,
         CpuDecodeScratch, VectorQuantKernels, SimdThreadPool
         node depends on lora
 
@@ -46,11 +47,20 @@ Module dependency (excerpt):
         default CPU matmul for Q4_K, Q5_K, Q6_K and Q8_0 weights. The activation
         row is quantized once per matmul to 8 bits with one float scale per 32
         values; each weight sub-block is an integer dot product scaled once.
-        CpuIntegerKernels is the decode-width matVec (Q4_K/Q5_K over 128-bit
-        Vector API lanes, Q6_K/Q8_0 scalar integer loops); CpuIntegerGemm is the
+        CpuIntegerKernels is the decode-width matVec (Q4_K/Q5_K/Q6_K over 128-bit
+        Vector API lanes, Q8_0 a scalar integer loop); CpuIntegerGemm is the
         prefill-width matmul (row tiles, each 256-column block unpacked once to
         16-bit lanes and dotted against every activation row, one write per
-        output). Every CPU dispatch point asks CpuKernelSelection, which loads no
+        output). CpuIntegerWidth picks the lane width once per JVM: 128 by default
+        (auto) on every host until the 256-bit kernels are measured on an AVX2
+        host; -Djuno.cpu.integerWidth=256 selects them, 128|auto the default, and
+        any other value fails with the property named. The host's preferred
+        integer width (ByteVector.SPECIES_PREFERRED) is reported beside it. At 256 bits the decode kernels
+        run CpuIntegerKernels256 and the matmul tiles run CpuIntegerGemm256 (same
+        activations, scratch and task split); the 128-bit classes are their test
+        reference (CpuIntegerWidthParityTest: unpack, Q5_K, Q6_K, Q8_0 identical;
+        Q4_K and the matmul within float rounding). The selected width is printed
+        in the startup "SIMD available" line. Every CPU dispatch point asks CpuKernelSelection, which loads no
         Vector API type: the float-activation kernels run when
         jdk.incubator.vector is absent or -Djuno.cpu.integerKernels=false.
         Dispatch points: LlamaTransformerHandler.matVecInto /
@@ -431,6 +441,13 @@ GPU FFI (node module — Panama project, JEP 454):
         [firstKey(seqLen, window), seqLen), the GPU kernel's window contract; window 0 (and any
         window >= seqLen) runs the unwindowed arithmetic bit for bit. Every handler's CPU attention
         (Llama, Phi-2, Phi-3, Qwen3, Qwen3-MoE, the LoRA handlers' inference) delegates here.
+        attendPooled(...) spreads a row's query heads over the CPU worker pool (CpuThreads); with
+        jdk.incubator.vector present (VECTOR_HEAD) each head runs GqaVectorHead: each key's dot
+        product in four 128-bit float accumulators with a fixed-order lane sum, and the weighted value
+        sum held in 128-bit vectors across every key (blocks of 32, then 16, then a scalar tail) and
+        stored once. Its output is within attend's oracle bound and the same bits on every call and
+        thread count (GqaVectorHeadTest); without the module each head runs the serial body,
+        bit-identical to attend (GqaMathPooledTest). attend itself stays the scalar oracle.
   SlidingWindow — the file's sliding-window attention: <arch>.attention.sliding_window (width;
         absent/0 = none) and <arch>.attention.sliding_window_pattern (absent = every layer; boolean
         array of block_count entries, true = windowed; or integer period N, layer i global when

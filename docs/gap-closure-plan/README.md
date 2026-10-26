@@ -9,15 +9,16 @@ before acting on it — both documents are snapshots, not ground truth that stay
 
 1. **One tier at a time, to feature-complete.** Do not start the next tier's work until the current
    tier's exit criteria (bottom of its file) are all checked off. "Next" means the next row of the
-   tier index below, not the next integer — the index is the running order. Nine rows carry a
+   tier index below, not the next integer — the index is the running order. Eleven rows carry a
    non-integer number or sit out of integer order: Tier 01B sits between 01 and 02, Tier 01C between
-   01B and 02, Tiers 02B, 02C, 02D and then 02E between 02 and 03, Tier 04B between 04 and 05, Tier 04C
-   between 04B and 05, and Tier 08 runs before Tier 06. Only the last of those actually breaks the
-   order — the lettered tiers read in sequence — but all nine are enumerated here because this list,
-   not the numbering, is what a reader builds the running order from, and several were added to the
-   tree after the first three were written (02B and 02C on 2026-10-04, split out of Tiers 02 and 10;
+   01B and 02, Tiers 02B, 02C, 02D, 02E, 02F and then 02G between 02 and 03, Tier 04B between 04 and 05,
+   Tier 04C between 04B and 05, and Tier 08 runs before Tier 06. Only the last of those actually breaks
+   the order — the lettered tiers read in sequence — but all eleven are enumerated here because this
+   list, not the numbering, is what a reader builds the running order from, and several were added to
+   the tree after the first three were written (02B and 02C on 2026-10-04, split out of Tiers 02 and 10;
    02D on 2026-10-08, by owner decision when Tier 02 closed; 02E on 2026-10-11, plan review, to own the
-   CPU kernel work the only active end-of-plan row turns on).
+   CPU kernel work the only active end-of-plan row turns on; 02F and 02G on 2026-10-13, by owner
+   decision, for the hardware validation kit and CUDA on Windows).
    Partial, half-wired features are not acceptable stopping points between tiers.
 2. **No surface left aside.** A tier is not complete until its change has been carried through
    every product surface it touches — see "Cross-surface compatibility checklist" below. If a
@@ -153,6 +154,7 @@ four-model sweep (`tinyllama-1.1b`, `qwen2.5-3b`, `Phi-3.5-mini`, `mistral-7b`, 
 | GPU tg, mistral-7b | >= **0.70x** (was 0.60x, met 2026-09-27) | 1.066x (1.061x tuned) |
 | GPU pp, every sweep model | retired 2026-10-04: met at `n_prompt=128` (was >= 0.25x unqualified, before that 0.15x); replaced by the per-length rows of the end-of-plan target table below | **0.681x to 0.785x** at `n_prompt=128`, median 0.728x (TinyLlama binding); **0.726x to 0.833x** at 512, median 0.798x; **0.602x to 0.730x** at 2048, median 0.697x (Phi-3.5-mini binding at 512 and 2048) |
 | CPU tg, every sweep model | >= **0.25x** (restated again 2026-10-11 from Tier 02C's closing sweep; was 0.40x from 2026-10-10, and a 0.25x placeholder before that) | 0.215x to 0.238x (CPU not re-measured; the Tier 02D pinned CPU A/B read tg 0.999x to 1.005x and pp 0.983x to 1.030x the pre-tier build) |
+| CPU pp, `n_prompt=512`, every sweep model | >= **0.30x** (added 2026-10-11) | 0.165x to 0.198x (Tier 02E step 2, pinned, 2026-10-12; 0.086x to 0.122x at 2048) |
 
 The full history of readings, one column per reference since the plan was written, and the provenance of
 every superseded column, are in [`TARGET-HISTORY.md`](TARGET-HISTORY.md) (moved 2026-10-11, plan review: the table
@@ -177,7 +179,7 @@ model" scope the reference is the binding (lowest) model's reading.
 | end | GPU pp, `n_prompt=512`, raised 2026-10-08 | every sweep model | >= 0.70x | 0.726x (Phi-3.5-mini, binding; TinyLlama 0.782x, Mistral 7B 0.813x, Qwen2.5-3B 0.833x; Tier 02D closing sweep `20261012T015002Z`; was 0.594x at `20261008T174605Z`) | retired: met by Tier 02D (host KV reuse and direct K/V write, 2026-10-12) |
 | end | GPU pp, `n_prompt=2048`, raised 2026-10-08 | every sweep model | >= 0.60x | 0.602x (Phi-3.5-mini, binding, 0.3% above the row; Qwen2.5-3B 0.680x, TinyLlama 0.713x, Mistral 7B 0.730x; Tier 02D closing sweeps `20261012T021800Z`/`20261012T020410Z`; was 0.540x at `20261008T181417Z`) | retired: met by Tier 02D (2026-10-12) |
 | end | CPU tg, restated 2026-10-11 | every sweep model | >= 0.25x | 0.215x (qwen2.5-3b, binding; Tier 02C closing sweep `20261011T013059Z`; was 0.092x at `20261001T180241Z`) | active |
-| end | CPU pp, `n_prompt=512`, added 2026-10-11 | every sweep model | >= 0.30x | unmeasured (no CPU sweep above `n_prompt=128` exists; Tier 02E step 2 takes it; 0.224x at 128, TinyLlama binding, `20261011T013059Z`) | active |
+| end | CPU pp, `n_prompt=512`, added 2026-10-11 | every sweep model | >= 0.30x | 0.165x (TinyLlama, binding; Qwen2.5-3B 0.186x, Mistral 7B 0.192x, Phi-3.5-mini 0.198x; Tier 02E step 2 sweep `20261012T045931Z`, pinned, before any kernel change; 0.224x at 128, `20261011T013059Z`; at 2048 0.086x to 0.122x, `20261012T071213Z`/`20261012T162344Z`, with host attention on one thread at least half of the cost, `20261012T205149Z-cpu-prefill-length`) | active |
 
 **Why the GPU pp target became two rows (2026-10-04, plan review).** The target read "GPU pp, every sweep
 model >= 0.25x" and named no prompt length. At `n_prompt=128` Tier 01C's closing sweep already meets it on
@@ -419,7 +421,7 @@ AVX2 host doubles the integer width and changes the cycle budget.
 **Restated again 2026-10-11 (Tier 02C closing sweep, owner decision 4): CPU tg >= 0.25x on every sweep model.** The 0.40x
 row assumed items 1 to 3 could reach a 25% bandwidth share, about 1.1 core cycles per weight. They reached 12.2% to 13.3%
 (`docs/perf-compare/20261011T013059Z/`, pinned): the shipped Q4_K decode kernel runs at about 1.5 cycles per weight on one
-thread and the Q6_K scalar kernel at about 2.7, and those two kernels are about 93% of Mistral 7B decode. So, as this row's
+thread and the Q6_K scalar kernel at about 2.7 (*corrected 2026-10-12: about 5.1 measured on one thread, `20261010T085329Z-cpu-integer-kernels`; see Tier 02E*), and those two kernels are about 93% of Mistral 7B decode. So, as this row's
 own rule says, it is restated, to its floor: 0.25x, against 0.215x today (Qwen2.5-3B binding). **The term that holds it
 below 0.40x is per-weight instruction cost in the Q4_K vector and Q6_K scalar decode kernels** on a host with 128-bit integer
 SIMD and 16 vector registers. A faster Q6_K decode kernel and a Q4_K kernel nearer one cycle per weight are the levers.
@@ -483,9 +485,9 @@ processing) and the largest remaining one (CPU, Tier 02C), then outward through 
 decoding → scheduling → parallelism → backend breadth → vision → LoRA → server/cluster surface),
 closing with a documentation hardening pass.
 
-Nine rows do not sit where their integer would put them, and the table below — not the numbering —
+Eleven rows do not sit where their integer would put them, and the table below — not the numbering —
 is the running order (execution rule 1). **Tiers 01B and 01C** sit between 01 and 02, **Tiers 02B,
-02C, 02D and 02E** between 02 and 03, and **Tiers 04B and 04C** between 04 and 05. **Tier 08 runs before Tier 06**: Tier 06 adds a `forwardVerify` override per
+02C, 02D, 02E, 02F and 02G** between 02 and 03, and **Tiers 04B and 04C** between 04 and 05. **Tier 08 runs before Tier 06**: Tier 06 adds a `forwardVerify` override per
 architecture, so running it first would mean adding verify support to four handlers and then having
 Tier 08 introduce four more that either need the same work again or silently lack it. Tier 08 first
 means Tier 06 covers every handler in one pass. Tier 08's own file previously argued the opposite
@@ -526,6 +528,15 @@ two kernels, the CPU integer kernels' fixed 128-bit SIMD width, and CPU prefill 
 had never been measured. It runs before Tier 03 for the reason Tier 02C did: Tier 04's mapped weight loading
 threads a `MemorySegment` accessor through these kernels and should convert the ones this tier leaves.
 
+**Tiers 02F and 02G sit between 02E and 03 (added 2026-10-13, owner decision).** This host has no AVX2,
+no AMD GPU and no Windows CUDA install, so 18 tier files close hardware-dependent rows as
+`NEEDS-AMD-HARDWARE` and Tier 02E closes its width row as `NEEDS-AVX2-HARDWARE`, and the bash harness that
+would measure them does not run on Windows. [Tier 02F](TIER-02F-hardware-validation-kit.md) builds a Java
+kit that a tester with that hardware runs with one command on Windows, Linux or macOS, returning one zip of
+scrubbed results. [Tier 02G](TIER-02G-cuda-on-windows.md) makes Juno's CUDA backend run on Windows, and is
+verified through the kit. Both run before Tier 03 so that every later tier adds the kit probes for its own
+feature as it lands (Tier 02F's scope item 13), instead of having them retrofitted at Tier 14.
+
 | Tier | Title | Gap analysis refs |
 |---|---|---|
 | [00](TIER-00-correctness-and-consistency.md) | Correctness & consistency audit | §2.1, §2.4, §2.5, §2.6, §2.7, §2.9 |
@@ -537,6 +548,8 @@ threads a `MemorySegment` accessor through these kernels and should convert the 
 | [02C](TIER-02C-cpu-hot-path.md) | CPU hot path (integer kernels, allocation, threading; split out of 10) | §1.7 |
 | [02D](TIER-02D-gpu-host-overhead.md) | GPU host overhead and decode-region coverage (Qwen2 in the region, Phi-3's prefill host work and decode cost; added 2026-10-08) | none — see that file's "Why this tier, why now" |
 | [02E](TIER-02E-cpu-decode-kernels.md) | CPU decode and prefill kernels (vector Q6_K, Q4_K instruction cost, host SIMD width, CPU prefill length profile; added 2026-10-11) | §1.7 (CPU half, continued) |
+| [02F](TIER-02F-hardware-validation-kit.md) | Hardware validation kit (one command on Windows, Linux or macOS, run by testers on hardware this host lacks; added 2026-10-13) | none — see that file's "Why this tier, why now" |
+| [02G](TIER-02G-cuda-on-windows.md) | CUDA on Windows (library resolution per OS, display-driver behaviour, Windows launchers; added 2026-10-13) | none — see that file's "Why this tier, why now" |
 | [03](TIER-03-kv-cache-maturity.md) | KV cache maturity | §1.3 |
 | [04](TIER-04-quantization-coverage.md) | Quantization coverage (mapped weight loading first) | §1.1 |
 | [04B](TIER-04B-tokenizer-fidelity.md) | Tokenizer fidelity (per-family splits and cross-engine parity; the key read and fail-closed path moved to Tier 01 as parity precondition 7) | none — see that file's "Why this tier, why now" |
@@ -946,6 +959,13 @@ attributes to CI (rule 7's `check-plan-thresholds.sh`, `compare-llama-cpp.sh --s
 exactly as before CI was adopted. Rule 7 says "machine-checked": that means the script, not where it
 runs.
 
+*Decided 2026-10-13 (owner, recorded in [Tier 02E](TIER-02E-cpu-decode-kernels.md)'s record and
+[Tier 02F](TIER-02F-hardware-validation-kit.md)'s scope item 14): a workflow for the hardware validation kit
+on free hosted runners is approved, as part of Tier 02F.* It runs the kit's `quick` CPU suite on Linux x64
+and arm64, Windows and macOS on manual dispatch and weekly, and the kit probes' self-tests on pull requests
+that touch the kit. The 2026-10-01 decision stands for `ci.yml` itself, and CI is still not an exit
+criterion for any other tier. Committing the workflow file is the owner's action.
+
 **No CI runs in this repository today.** `.github/workflows/ci.yml` exists in the working tree but is
 untracked, so it has never run (see the 2026-09-30 and 2026-10-01 notes above; *corrected 2026-10-11, plan
 review: this paragraph said `.github/` held only a `modernize/` directory*) — tier-gating (execution rule 1: don't start Tier N+1 until Tier N's exit
@@ -976,7 +996,9 @@ condition is about how expensive the matrix has become, and that only grows.
 ## Model and hardware inventory
 
 See [`INVENTORY.md`](INVENTORY.md). Summary: one NVIDIA GTX 1080 (CUDA) is the only GPU available
-in this environment; there is no ROCm/AMD hardware. Tiers that touch ROCm code paths are
+in this environment; there is no ROCm/AMD hardware. *(2026-10-13: hardware this host lacks is reached
+through [Tier 02F](TIER-02F-hardware-validation-kit.md)'s kit, run by testers; their hosts are recorded in
+`INVENTORY.md`'s "Borrowed hardware" table once the first results arrive.)* Tiers that touch ROCm code paths are
 implemented and unit-tested to the extent possible without hardware, and their exit criteria
 include an explicit `FAIL-CLOSED` or `NEEDS-AMD-HARDWARE` marker rather than a false `PASS` for row
 3 of the compatibility checklist — flag this to the user when a tier reaches that point rather than

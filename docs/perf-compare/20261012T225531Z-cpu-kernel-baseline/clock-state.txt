@@ -1,0 +1,5 @@
+governor: performance
+no_turbo: 1
+scaling_max_freq kHz: 3500000
+classes sha256: 1d8e89c50bfa406d
+git HEAD: 01027ee9
