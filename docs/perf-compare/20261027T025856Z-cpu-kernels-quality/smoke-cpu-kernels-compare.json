@@ -1,0 +1,119 @@
+{
+  "run_id": "20261026T220558Z",
+  "baseline_jar": "dist/cpu-kernels-close/baseline-shaded.jar",
+  "candidate_jar": "juno-player/target/juno-player-0.1.2-shaded.jar",
+  "baseline_exit": 0,
+  "candidate_exit": 0,
+  "replies_identical": 18,
+  "replies_different": 0,
+  "replies": [
+    {
+      "reply": "mistral-threads12.short.json",
+      "identical": true,
+      "baseline": " 1. Red\n2. Blue\n3. Yellow",
+      "candidate": " 1. Red\n2. Blue\n3. Yellow"
+    },
+    {
+      "reply": "mistral-threads4.short.json",
+      "identical": true,
+      "baseline": " 1. Red\n2. Blue\n3. Yellow",
+      "candidate": " 1. Red\n2. Blue\n3. Yellow"
+    },
+    {
+      "reply": "phi35-threads12.short.json",
+      "identical": true,
+      "baseline": "1. Red\n2. Blue\n3. Yellow",
+      "candidate": "1. Red\n2. Blue\n3. Yellow"
+    },
+    {
+      "reply": "phi35-threads4.short.json",
+      "identical": true,
+      "baseline": "1. Red\n2. Blue\n3. Yellow",
+      "candidate": "1. Red\n2. Blue\n3. Yellow"
+    },
+    {
+      "reply": "qwen25-threads12.short.json",
+      "identical": true,
+      "baseline": "Sure, here are three colors:\n\n1. Red\n2. Blue\n3",
+      "candidate": "Sure, here are three colors:\n\n1. Red\n2. Blue\n3"
+    },
+    {
+      "reply": "qwen25-threads4.short.json",
+      "identical": true,
+      "baseline": "Sure, here are three colors:\n\n1. Red\n2. Blue\n3",
+      "candidate": "Sure, here are three colors:\n\n1. Red\n2. Blue\n3"
+    },
+    {
+      "reply": "tinyllama-threads12.short.json",
+      "identical": true,
+      "baseline": "1. Red\n2. Blue\n3. Green",
+      "candidate": "1. Red\n2. Blue\n3. Green"
+    },
+    {
+      "reply": "tinyllama-threads4.short.json",
+      "identical": true,
+      "baseline": "1. Red\n2. Blue\n3. Green",
+      "candidate": "1. Red\n2. Blue\n3. Green"
+    },
+    {
+      "reply": "mistral-threads12.long.json",
+      "identical": true,
+      "baseline": " The bridge in district",
+      "candidate": " The bridge in district"
+    },
+    {
+      "reply": "mistral-threads4.long.json",
+      "identical": true,
+      "baseline": " The bridge in district",
+      "candidate": " The bridge in district"
+    },
+    {
+      "reply": "phi35-threads12.long.json",
+      "identical": true,
+      "baseline": "The bridge in note",
+      "candidate": "The bridge in note"
+    },
+    {
+      "reply": "phi35-threads4.long.json",
+      "identical": true,
+      "baseline": "The bridge in note",
+      "candidate": "The bridge in note"
+    },
+    {
+      "reply": "qwen25-threads12.long.json",
+      "identical": true,
+      "baseline": "The bridge in note",
+      "candidate": "The bridge in note"
+    },
+    {
+      "reply": "qwen25-threads4.long.json",
+      "identical": true,
+      "baseline": "The bridge in note",
+      "candidate": "The bridge in note"
+    },
+    {
+      "reply": "tinyllama-threads12.long.json",
+      "identical": true,
+      "baseline": "The bridge in note",
+      "candidate": "The bridge in note"
+    },
+    {
+      "reply": "tinyllama-threads4.long.json",
+      "identical": true,
+      "baseline": "The bridge in note",
+      "candidate": "The bridge in note"
+    },
+    {
+      "reply": "vision-threads12.json",
+      "identical": true,
+      "baseline": " A black and white image with a dark background.",
+      "candidate": " A black and white image with a dark background."
+    },
+    {
+      "reply": "vision-threads4.json",
+      "identical": true,
+      "baseline": " A black and white image with a dark background.",
+      "candidate": " A black and white image with a dark background."
+    }
+  ]
+}

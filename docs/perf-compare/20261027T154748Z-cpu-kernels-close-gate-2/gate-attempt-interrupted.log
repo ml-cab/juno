@@ -1,0 +1,11 @@
+baseline jar sha256: b9a0440b3a1b597a
+candidate jar sha256: 4e480ab9131887eb
+
+=== Part S: closing sweeps, pinned and published (00:38:23)
+--- sweep-128: n_prompt=128 (00:38:23)
+    clock_pinned: true (must be true)
+--- sweep-512: n_prompt=512 (01:09:52)
+    clock_pinned: true (must be true)
+--- sweep-2048: n_prompt=2048 (02:18:20)
+    clock_pinned: true (must be true)
+--- sweep-2048-phi: n_prompt=2048 (05:14:37)

@@ -81,7 +81,7 @@ class JfrMetricsExtractorJdkEventsTest {
 
 		assertThat(m).containsKeys(
 				"jdk.GCPhasePause.count", "jdk.GCPhasePause.max_ms", "jdk.GCPhasePause.total_ms",
-				"jdk.ThreadAllocationStatistics.bytes_total",
+				"jdk.ThreadAllocationStatistics.bytes_total", "jdk.ThreadAllocationStatistics.bytes_in_recording",
 				"jdk.ObjectAllocationSample.count", "jdk.ObjectAllocationSample.weight_total_bytes",
 				"jdk.ExecutionSample.count", "jdk.NativeMethodSample.count",
 				"jdk.JavaMonitorEnter.count", "jdk.JavaMonitorEnter.total_ms",
@@ -90,6 +90,7 @@ class JfrMetricsExtractorJdkEventsTest {
 		assertThat(m.get("jdk.GCPhasePause.max_ms")).isZero();
 		assertThat(m.get("jdk.GCPhasePause.total_ms")).isZero();
 		assertThat(m.get("jdk.ThreadAllocationStatistics.bytes_total")).isZero();
+		assertThat(m.get("jdk.ThreadAllocationStatistics.bytes_in_recording")).isZero();
 		assertThat(m.get("jdk.ObjectAllocationSample.count")).isZero();
 		assertThat(m.get("jdk.ExecutionSample.count")).isZero();
 		assertThat(m.get("jdk.NativeMethodSample.count")).isZero();
@@ -161,6 +162,54 @@ class JfrMetricsExtractorJdkEventsTest {
 		// more than once, the naive sum is strictly larger and would be wrong.
 		if (events.size() > maxPerThread.size())
 			assertThat(m.get("jdk.ThreadAllocationStatistics.bytes_total")).isLessThan(naiveSum);
+	}
+
+	/**
+	 * A running total counts from the thread's start, so in a long-lived process a
+	 * recording of one measured request carries model load and the warmup requests
+	 * in every long-lived thread's total. The in-recording figure is what each
+	 * thread allocated while the recording ran: its largest sample minus its
+	 * smallest. Allocation made by this thread before the recording starts must be
+	 * in the running total and not in the window.
+	 */
+	@Test
+	void threadAllocationStatistics_inRecordingCountsOnlyEachThreadsGrowthInsideTheRecording() throws Exception {
+		long beforeRecording = 256L * 1024 * 1024;
+		allocateHard((int) (beforeRecording / (1024 * 1024)));
+		Path jfr = record(
+				rec -> rec.enable(THREAD_ALLOC).with("period", "100 ms"),
+				() -> {
+					for (int i = 0; i < 40; i++) {
+						blackhole = new byte[1024 * 1024];
+						Thread.sleep(10);
+					}
+				});
+
+		List<RecordedEvent> events = eventsOfType(jfr, THREAD_ALLOC);
+		Map<String, Double> m = extract(jfr);
+
+		Map<Long, Long> maxPerThread = new HashMap<>();
+		Map<Long, Long> minPerThread = new HashMap<>();
+		Map<Long, Integer> samplesPerThread = new HashMap<>();
+		for (RecordedEvent ev : events) {
+			long allocated = ev.getLong("allocated");
+			long threadId = ev.getThread("thread") == null ? -1L : ev.getThread("thread").getJavaThreadId();
+			maxPerThread.merge(threadId, allocated, Math::max);
+			minPerThread.merge(threadId, allocated, Math::min);
+			samplesPerThread.merge(threadId, 1, Integer::sum);
+		}
+		double expected = 0.0;
+		for (Map.Entry<Long, Long> e : maxPerThread.entrySet())
+			expected += e.getValue() - minPerThread.get(e.getKey());
+
+		long self = Thread.currentThread().threadId();
+		assertThat(samplesPerThread.getOrDefault(self, 0))
+				.as("the test thread was not sampled twice in the window; the growth assertions would be vacuous")
+				.isGreaterThanOrEqualTo(2);
+		assertThat(m.get("jdk.ThreadAllocationStatistics.bytes_in_recording")).isEqualTo(expected);
+		assertThat(maxPerThread.get(self) - minPerThread.get(self)).isGreaterThan(0L);
+		assertThat(m.get("jdk.ThreadAllocationStatistics.bytes_in_recording"))
+				.isLessThanOrEqualTo(m.get("jdk.ThreadAllocationStatistics.bytes_total") - beforeRecording);
 	}
 
 	@Test

@@ -86,6 +86,15 @@ final class JdkEventBucket {
      */
     private final Map<Long, Long> allocatedByThread = new HashMap<>();
 
+    /**
+     * Each thread's smallest running total in the recording. The largest minus the
+     * smallest is what the thread allocated while the recording ran; the largest
+     * alone also carries everything since the thread started, which in a
+     * long-lived server includes model load and any warmup requests before a
+     * recording scoped to one measured request.
+     */
+    private final Map<Long, Long> allocatedMinByThread = new HashMap<>();
+
     private int allocationSampleCount;
     private long allocationSampleWeightBytes;
     private final Map<String, Long> allocationBytesBySite = new HashMap<>();
@@ -122,7 +131,9 @@ final class JdkEventBucket {
                 if (!ev.hasField("allocated"))
                     return true;
                 long allocated = ev.getLong("allocated");
-                allocatedByThread.merge(threadKey(ev, "thread"), allocated, Math::max);
+                long thread = threadKey(ev, "thread");
+                allocatedByThread.merge(thread, allocated, Math::max);
+                allocatedMinByThread.merge(thread, allocated, Math::min);
             }
             case OBJECT_ALLOCATION_SAMPLE -> {
                 allocationSampleCount++;
@@ -191,6 +202,12 @@ final class JdkEventBucket {
         for (long perThread : allocatedByThread.values())
             allocatedBytes += perThread;
         m.put("jdk.ThreadAllocationStatistics.bytes_total", allocatedBytes);
+        // A thread sampled once contributes nothing: its growth inside the window is
+        // not observable from one running total.
+        double allocatedInRecording = 0.0;
+        for (Map.Entry<Long, Long> e : allocatedByThread.entrySet())
+            allocatedInRecording += e.getValue() - allocatedMinByThread.get(e.getKey());
+        m.put("jdk.ThreadAllocationStatistics.bytes_in_recording", allocatedInRecording);
 
         m.put("jdk.ObjectAllocationSample.count", (double) allocationSampleCount);
         m.put("jdk.ObjectAllocationSample.weight_total_bytes", (double) allocationSampleWeightBytes);

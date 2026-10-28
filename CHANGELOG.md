@@ -1,5 +1,33 @@
 ## Status 
 
+**Session 127** - Faster CPU kernels: 1.3x to 1.7x faster CPU generation, 2x to 4x faster CPU prompt processing
+
+- **Q6_K weights decode in 128-bit vector lanes** instead of a scalar integer loop, with output bit-identical to the
+  loop it replaces, and the **Q4_K decode kernel does less work per weight** (sub-block sums scaled in float lanes, one
+  horizontal sum per row, scales decoded once per block). Pinned at 3.5 GHz on Mistral 7B's shapes, Q4_K costs 0.93
+  core cycles per weight on one thread (was 1.52) and Q6_K 2.13 (was 5.41).
+- **CPU prompt processing:** prompt attention now runs on the `--threads` pool in every CPU model handler, with each
+  attention head's dot products and value sums in vector lanes. The prompt matmul takes four prompt rows per pass and
+  unpacks its weights in vector lanes. Long prompts gain most: attention took at least 48% to 65% of the CPU time of a
+  2048-token prompt, on one thread.
+- **Measured, pinned, against the previous build** (four standard models, 12 threads, median of three): prompt
+  processing 1.9x to 2.1x at 128 tokens, 2.3x to 2.7x at 512 and 3.3x to 4.4x at 2048; generation 1.3x to 1.7x.
+- **Against the reference engine** (pinned, 12 threads): CPU generation 0.26x to 0.34x (was 0.215x to 0.238x); prompt
+  processing 0.43x to 0.52x at 128 tokens (was 0.22x to 0.26x), 0.42x to 0.51x at 512 (was 0.17x to 0.20x) and 0.38x
+  to 0.41x at 2048 (was 0.09x to 0.12x). Details are in `docs/performance.md`, "CPU decode and prefill kernels".
+- **Output quality is unchanged within measurement:** mean negative log-likelihood over 2,048 tokens is within 0.21% of
+  the float kernels' on all four models, and greedy replies are identical to the previous build's on the CPU smoke.
+- **CPU lane width per JVM:** the integer kernels run 128-bit lanes on every host by default; 256-bit kernels exist for
+  hosts with AVX2 and are opt-in with `-Djuno.cpu.integerWidth=256` until measured on such a host. The startup line
+  names the width in use and the host's preferred width; any other value is refused at startup.
+- **Unchanged:** GPU throughput (0.97x to 1.01x), LoRA training and playback. CPU vision answers in 0.56x the time.
+- **Allocation is counted inside the measured request.** The JFR metrics extractor adds
+  `jdk.ThreadAllocationStatistics.bytes_in_recording` (each thread's growth inside the recording), and
+  `compare-llama-cpp.sh` result files carry `allocated_bytes_per_token_in_recording` beside the whole-thread figure,
+  which also counts model load and warmup. Recordings are read by the harness tree's own jar whichever jar ran, so
+  both sides of an A/B share one definition. Measured requests allocate what the previous build's do (0.98x to 1.01x).
+- New `smoke-cpu-kernels.sh` compares CPU greedy output against an earlier build.
+
 **Session 126** - Qwen2 and Qwen2.5 decode run in the GPU-resident region (about 2x faster generation); faster GPU prompt processing on Phi-3.5-mini
 
 - **The device-resident decode region (`--gpu-residency`, on by default on CUDA) now covers Qwen2 and Qwen2.5.** It

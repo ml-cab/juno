@@ -261,11 +261,14 @@ selftest_expect() {
 # reads, so a case states its inputs instead of hiding them in a big fixture.
 selftest_rep() {
   local path="$1" status="$2" pp="$3" tg="$4" api_tg="$5" latency="$6" gc_max="$7" alloc_per_tok="$8"
+  local alloc_in_rec="${9:-null}"
   jq -n --arg status "$status" --argjson pp "$pp" --argjson tg "$tg" --argjson api_tg "$api_tg" \
     --argjson latency "$latency" --argjson gc_max "$gc_max" --argjson alloc "$alloc_per_tok" \
+    --argjson alloc_rec "$alloc_in_rec" \
     '{ engine: "juno", status: $status, model: "selftest.gguf",
        prompt_eval_tps: $pp, token_gen_tps: $tg, api_token_gen_tps: $api_tg, latency_ms: $latency,
-       jfr: { gc_pause_max_ms: $gc_max, allocated_bytes_per_token: $alloc } }' >"$path"
+       jfr: { gc_pause_max_ms: $gc_max, allocated_bytes_per_token: $alloc,
+              allocated_bytes_per_token_in_recording: $alloc_rec } }' >"$path"
 }
 
 run_selftest() {
@@ -277,9 +280,9 @@ run_selftest() {
 
   # Odd rep count: the median is the middle reading, not the mean, so one wild
   # run cannot drag the published number with it.
-  selftest_rep "$d/r1.json" success 10 5.0 4.0 1000 12 100
-  selftest_rep "$d/r2.json" success 20 6.0 5.0 2000 300 200
-  selftest_rep "$d/r3.json" success 90 7.0 6.0 3000 30 300
+  selftest_rep "$d/r1.json" success 10 5.0 4.0 1000 12 100 10
+  selftest_rep "$d/r2.json" success 20 6.0 5.0 2000 300 200 30
+  selftest_rep "$d/r3.json" success 90 7.0 6.0 3000 30 300 20
   aggregate_juno_reps_json "$d/odd.json" "$d/r1.json" "$d/r2.json" "$d/r3.json"
   selftest_expect "median of 3 pp readings" 20 "$(jq -r '.prompt_eval_tps' "$d/odd.json")"
   selftest_expect "median of 3 tg readings" 6.0 "$(jq -r '.token_gen_tps' "$d/odd.json")"
@@ -293,6 +296,30 @@ run_selftest() {
   # hide exactly the outlier the rule exists to catch.
   selftest_expect "worst GC pause across reps, not the median" 300 "$(jq -r '.jfr.gc_pause_max_ms' "$d/odd.json")"
   selftest_expect "GC pause median still recorded" 30 "$(jq -r '.reps.gc_pause_max_ms.median' "$d/odd.json")"
+  # Allocation inside the measured recording is aggregated like the whole-thread
+  # figure beside it: the worst rep stands, and every rep's reading is kept.
+  selftest_expect "worst in-recording allocation across reps" 30 \
+    "$(jq -r '.jfr.allocated_bytes_per_token_in_recording' "$d/odd.json")"
+  selftest_expect "every in-recording allocation reading kept" "10,30,20" \
+    "$(jq -r '.reps.allocated_bytes_per_token_in_recording.values | join(",")' "$d/odd.json")"
+  selftest_expect "the whole-thread figure is unchanged beside it" 300 \
+    "$(jq -r '.jfr.allocated_bytes_per_token' "$d/odd.json")"
+
+  # Bytes per token from the extractor's metrics. The whole-thread total counts each
+  # thread's running total from its start, so it carries model load and warmups; the
+  # in-recording figure is each thread's growth inside the measured recording.
+  jq -n '{ models: [ { metrics: { "jdk.ThreadAllocationStatistics.bytes_total": 6400,
+                                   "jdk.ThreadAllocationStatistics.bytes_in_recording": 640 } } ] }' >"$d/jfr-alloc.json"
+  jfr_summary_json "$d/jfr-alloc.json" 128 64 1000 >"$d/jfr-alloc-summary.json"
+  selftest_expect "whole-thread bytes per token" 100 "$(jq -r '.allocated_bytes_per_token' "$d/jfr-alloc-summary.json")"
+  selftest_expect "in-recording bytes" 640 "$(jq -r '.allocated_bytes_in_recording' "$d/jfr-alloc-summary.json")"
+  selftest_expect "in-recording bytes per token" 10 \
+    "$(jq -r '.allocated_bytes_per_token_in_recording' "$d/jfr-alloc-summary.json")"
+  # A recording from an extractor that predates the field reads null, not zero.
+  jq -n '{ models: [ { metrics: { "jdk.ThreadAllocationStatistics.bytes_total": 6400 } } ] }' >"$d/jfr-old.json"
+  jfr_summary_json "$d/jfr-old.json" 128 64 1000 >"$d/jfr-old-summary.json"
+  selftest_expect "an older extractor leaves the in-recording figure null" null \
+    "$(jq -r '.allocated_bytes_per_token_in_recording' "$d/jfr-old-summary.json")"
 
   # Even rep count: the two middle readings average, matching the median the LoRA
   # comparison already publishes.
@@ -368,14 +395,17 @@ run_selftest() {
            response_json: "p.json", use_jfr: 1, juno_reps: 3,
            reps: { prompt_eval_tps: { median: 50, min: 48, max: 52, values: [48,50,52] },
                    token_gen_tps: { median: 999, min: 999, max: 999, values: [999] } },
-           jfr: { gc_pause_max_ms: 12, allocated_bytes_per_token: 100 } }' >"$d/lane-prefill.json"
+           jfr: { gc_pause_max_ms: 12, allocated_bytes_per_token: 100,
+                  allocated_bytes_per_token_in_recording: 10 } }' >"$d/lane-prefill.json"
   jq -n '{ status: "success", model: "selftest.gguf", prompt_eval_tps: 777, token_gen_tps: 32,
            n_gen: 64, completion_tokens: 64, prompt_tokens: 21, n_prompt: 0, finish_reason: "length",
            prompt_token_deviation: null, prompt_parity_tolerance: 0.10, latency_ms: 4000,
            response_json: "g.json", use_jfr: 1, juno_reps: 3,
            reps: { prompt_eval_tps: { median: 777, min: 777, max: 777, values: [777] },
-                   token_gen_tps: { median: 32, min: 31, max: 33, values: [31,32,33] } },
-           jfr: { gc_pause_max_ms: 300, allocated_bytes_per_token: 200 } }' >"$d/lane-generate.json"
+                   token_gen_tps: { median: 32, min: 31, max: 33, values: [31,32,33] },
+                   allocated_bytes_per_token_in_recording: { median: 20, min: 20, max: 20, values: [20] } },
+           jfr: { gc_pause_max_ms: 300, allocated_bytes_per_token: 200,
+                  allocated_bytes_per_token_in_recording: 20 } }' >"$d/lane-generate.json"
   merge_juno_lanes_json "$d/merged.json" "$d/lane-prefill.json" "$d/lane-generate.json"
   selftest_expect "prefill figure comes from the prefill lane" 50 \
     "$(jq -r '.prompt_eval_tps' "$d/merged.json")"
@@ -395,6 +425,11 @@ run_selftest() {
     "$(jq -r '.jfr.gc_pause_max_ms' "$d/merged.json")"
   selftest_expect "the generation lane prompt length is visible" 21 \
     "$(jq -r '.lanes.generate.prompt_tokens' "$d/merged.json")"
+  # Bytes per token is a generation-lane figure, as the whole-thread one already is.
+  selftest_expect "in-recording allocation comes from the generation lane" 20 \
+    "$(jq -r '.jfr.allocated_bytes_per_token_in_recording' "$d/merged.json")"
+  selftest_expect "and its rep spread survives the merge" 20 \
+    "$(jq -r '.reps.allocated_bytes_per_token_in_recording.values | join(",")' "$d/merged.json")"
   selftest_expect "both lanes must succeed" success "$(jq -r '.status' "$d/merged.json")"
 
   jq -n '{ status: "failure", model: "selftest.gguf" }' >"$d/lane-broken.json"
@@ -442,11 +477,14 @@ run_selftest() {
            n_gen: 64, completion_tokens: 64, prompt_tokens: 128, n_prompt: 128, finish_reason: "length",
            prompt_token_deviation: 0, prompt_parity_tolerance: 0.10, latency_ms: 1000,
            response_json: "resp.json", use_jfr: 1, juno_reps: 1,
-           jfr: { gc_pause_max_ms: 4, allocated_bytes_per_token: 100 } }' >"$d/single-juno.json"
+           jfr: { gc_pause_max_ms: 4, allocated_bytes_per_token: 100,
+                  allocated_bytes_per_token_in_recording: 40 } }' >"$d/single-juno.json"
   cp "$d/disp-llama-cpp.json" "$d/single-llama-cpp.json"
   OUT_ROOT="$d" write_pair_summary single
   selftest_expect "a single reading is not judged by dispersion" "not assessable" \
     "$(jq -r '.noise.basis' "$d/single-compare.json")"
+  selftest_expect "the compare record carries in-recording allocation" 40 \
+    "$(jq -r '.juno.allocated_bytes_per_token_in_recording' "$d/single-compare.json")"
 
   # Collection pauses are reported, not gated on, and the share of them that landed
   # inside the measured token span is reported beside the whole-recording figure so
@@ -459,6 +497,18 @@ run_selftest() {
     "$(jq -r '.noise.gc_pause_max_ms_in_token_span' "$d/inspan-compare.json")"
   selftest_expect "a pause alone does not disqualify a stable reading" true \
     "$(jq -r '.noise.ok' "$d/inspan-compare.json")"
+
+  # The extractor is part of the measurement, not of the build under test: both sides
+  # of an A/B are read by this tree's jar, so a baseline jar that predates a metric
+  # still gets it and both sides are scored under one definition.
+  mkdir -p "$d/root/juno-player/target"
+  : >"$d/root/juno-player/target/juno-player-0.0.0-shaded.jar"
+  : >"$d/baseline.jar"
+  selftest_expect "the tree jar extracts whichever jar was launched" \
+    "$d/root/juno-player/target/juno-player-0.0.0-shaded.jar" \
+    "$(ROOT="$d/root" JUNO_JAR_EXPLICIT="$d/baseline.jar" find_extractor_jar)"
+  selftest_expect "without a tree jar the launched jar extracts" "$d/baseline.jar" \
+    "$(ROOT="$d/empty" JUNO_JAR_EXPLICIT="$d/baseline.jar" find_extractor_jar)"
 
   # A first rep that died before writing a full record must not strip the aggregate.
   jq -n '{ engine: "juno", status: "failure", model: "selftest.gguf" }' >"$d/stub.json"
@@ -1009,6 +1059,23 @@ find_juno_jar() {
   printf '%s' "$ROOT/juno-player/target/juno-player.jar"
 }
 
+# The jar whose extractor turns a recording into metrics. A metric definition is part
+# of the measurement, not of the build under test: in an A/B against a jar that
+# predates a metric, extracting with each side's own jar would leave that side
+# without it, or score the two sides under different definitions. So this tree's own
+# jar extracts whenever it exists, whichever jar --juno-jar launched; without one,
+# the launched jar does.
+find_extractor_jar() {
+  shopt -s nullglob
+  local jars=( "$ROOT/juno-player/target/"juno-player-*-shaded.jar )
+  shopt -u nullglob
+  if [[ ${#jars[@]} -gt 0 ]]; then
+    printf '%s' "${jars[0]}"
+    return
+  fi
+  find_juno_jar
+}
+
 find_java() {
   if [[ -n "${JAVA_HOME:-}" && -x "${JAVA_HOME}/bin/java" ]]; then
     printf '%s' "${JAVA_HOME}/bin/java"
@@ -1202,6 +1269,17 @@ juno_tree_dirty() {
   fi
 }
 
+# Hashes the jar whose extractor read every recording (find_extractor_jar).
+extractor_jar_sha256() {
+  local jar
+  jar="$(find_extractor_jar 2>/dev/null || true)"
+  if [[ -n "$jar" && -f "$jar" ]]; then
+    sha256sum "$jar" 2>/dev/null | cut -c1-16
+  else
+    printf 'missing'
+  fi
+}
+
 # Hashes the jar the engine is actually launched from (find_juno_jar), not a fixed
 # name the build does not produce: that recorded `missing` on every run until 2026-09-30.
 juno_jar_sha256() {
@@ -1263,6 +1341,8 @@ host_meta_json() {
   "juno_tree_dirty": $(juno_tree_dirty),
   "juno_jar": "$(json_escape "$(find_juno_jar 2>/dev/null || echo missing)")",
   "juno_jar_sha256_16": "$(json_escape "$(juno_jar_sha256)")",
+  "jfr_extractor_jar": "$(json_escape "$(find_extractor_jar 2>/dev/null || echo missing)")",
+  "jfr_extractor_jar_sha256_16": "$(json_escape "$(extractor_jar_sha256)")",
   "java_version": "$(json_escape "$(java_version_line)")",
   "juno_jvm_flags": "$(json_escape "${JUNO_JVM_FLAGS[*]} -Xms=-Xmx (fixed per model)")",
   "jfr_timestamp_source": "$(json_escape "$(perf_jfr_clock_label)")",
@@ -1475,7 +1555,7 @@ extract_jfr_metrics() {
   local jfr_file="$1" dest="$2" model_stem="$3" model_filename="$4" logf="$5"
   local java_bin jar
   java_bin="$(find_java)"
-  jar="$(find_juno_jar)"
+  jar="$(find_extractor_jar)"
   [[ -s "$jfr_file" ]] || return 1
   "$java_bin" -cp "$jar" cab.ml.juno.metrics.JfrMetricsCli \
     "$jfr_file" "$dest" "$model_stem" "$model_filename" >>"$logf" 2>&1 || return 1
@@ -1592,6 +1672,14 @@ jfr_summary_json() {
       allocated_bytes_total: ($m."jdk.ThreadAllocationStatistics.bytes_total" // null),
       allocated_bytes_per_token:
         (($m."jdk.ThreadAllocationStatistics.bytes_total" // null) as $bytes
+         | if $bytes != null and $ct > 0 then ($bytes / $ct) else null end),
+      # The figure above sums the running total of each thread since it started, so
+      # a long-lived server thread brings model load and the warmup requests into it.
+      # This one is the growth of each thread inside the measured recording, which
+      # holds the measured request only. Null from an extractor older than the field.
+      allocated_bytes_in_recording: ($m."jdk.ThreadAllocationStatistics.bytes_in_recording" // null),
+      allocated_bytes_per_token_in_recording:
+        (($m."jdk.ThreadAllocationStatistics.bytes_in_recording" // null) as $bytes
          | if $bytes != null and $ct > 0 then ($bytes / $ct) else null end),
       execution_sample_count: ($m."jdk.ExecutionSample.count" // null),
       top_methods: [ $m | to_entries[]
@@ -2245,6 +2333,7 @@ aggregate_juno_reps_json() {
     (spread(.jfr.gc_pause_max_ms)) as $gc |
     (spread(.jfr.gc_pause_max_ms_in_token_span)) as $gc_in_span |
     (spread(.jfr.allocated_bytes_per_token)) as $alloc |
+    (spread(.jfr.allocated_bytes_per_token_in_recording)) as $alloc_rec |
     (map(.status)) as $rep_status |
     # The in-window GPU clock of each rep, summarized: the median of the per-rep medians
     # is the clock the published median ran at, and the extremes keep the worst rep
@@ -2272,10 +2361,12 @@ aggregate_juno_reps_json() {
       | .gpu_attention_resolved = ($all_reps | map(.gpu_attention_resolved) | unique
           | if length == 1 then .[0] else "mixed" end)
       | .reps = { prompt_eval_tps: $pp, token_gen_tps: $tg, api_token_gen_tps: $api_tg,
-                  latency_ms: $latency, gc_pause_max_ms: $gc, allocated_bytes_per_token: $alloc }
+                  latency_ms: $latency, gc_pause_max_ms: $gc, allocated_bytes_per_token: $alloc,
+                  allocated_bytes_per_token_in_recording: $alloc_rec }
       | (if .jfr != null then .jfr.gc_pause_max_ms = $gc.max else . end)
       | (if .jfr != null then .jfr.gc_pause_max_ms_in_token_span = $gc_in_span.max else . end)
       | (if .jfr != null then .jfr.allocated_bytes_per_token = $alloc.max else . end)
+      | (if .jfr != null then .jfr.allocated_bytes_per_token_in_recording = $alloc_rec.max else . end)
       | .status = (if ($rep_status | all(. == "success")) then "success" else "failure" end))
   ' "${rep_jsons[@]}" >"$out_json"
 }
@@ -2314,7 +2405,8 @@ merge_juno_lanes_json() {
                 api_token_gen_tps: ($gen.reps.api_token_gen_tps // null),
                 latency_ms: ($gen.reps.latency_ms // null),
                 gc_pause_max_ms: ($gen.reps.gc_pause_max_ms // null),
-                allocated_bytes_per_token: ($gen.reps.allocated_bytes_per_token // null) }
+                allocated_bytes_per_token: ($gen.reps.allocated_bytes_per_token // null),
+                allocated_bytes_per_token_in_recording: ($gen.reps.allocated_bytes_per_token_in_recording // null) }
     # A pause in either lane disqualifies the row, so the worse of the two stands.
     | (if .jfr != null then
          .jfr.gc_pause_max_ms = ([($pre.jfr.gc_pause_max_ms // 0), ($gen.jfr.gc_pause_max_ms // 0)] | max)
@@ -2410,6 +2502,8 @@ write_pair_summary() {
         gc_pause_total_ms: ($j[0].jfr.gc_pause_total_ms // null),
         allocated_bytes_total: ($j[0].jfr.allocated_bytes_total // null),
         allocated_bytes_per_token: ($j[0].jfr.allocated_bytes_per_token // null),
+        allocated_bytes_in_recording: ($j[0].jfr.allocated_bytes_in_recording // null),
+        allocated_bytes_per_token_in_recording: ($j[0].jfr.allocated_bytes_per_token_in_recording // null),
         # The published readings are medians of this many cycles, each preceded by
         # this many discarded requests. The spread belongs next to the median: a
         # difference between two medians whose own reps span more than it is not a
@@ -2534,9 +2628,9 @@ write_run_index() {
   {
     echo "# llama.cpp vs Juno - ${RUN_ID} ($(backend_label))"
     echo
-    echo "| Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |"
-    echo "|-------|------------------|------------------|-------------|-------------|-----------------|---------------|---------------|-----------------|--------------|-----------|-------------|----------|---------|"
-    local stem llama_f juno_f cmp pp tg jpp jt ratio_pp ratio_tg ptok gcmax allocpt tgspread gtok noise
+    echo "| Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Alloc B/tok in request | Scorable | Results |"
+    echo "|-------|------------------|------------------|-------------|-------------|-----------------|---------------|---------------|-----------------|--------------|-----------|-------------|------------------------|----------|---------|"
+    local stem llama_f juno_f cmp pp tg jpp jt ratio_pp ratio_tg ptok gcmax allocpt allocrec tgspread gtok noise
     local -a parity_notes=()
     local -a gen_notes=()
     local -a noise_notes=()
@@ -2564,6 +2658,7 @@ write_run_index() {
                                + (.reps.token_gen_tps.max * 100 | round / 100 | tostring)) end' \
                  "$juno_f" 2>/dev/null || echo -)"
       allocpt="$(jq -r 'if (.jfr.allocated_bytes_per_token // null) == null then "-" else (.jfr.allocated_bytes_per_token | floor) end' "$juno_f" 2>/dev/null || echo -)"
+      allocrec="$(jq -r 'if (.jfr.allocated_bytes_per_token_in_recording // null) == null then "-" else (.jfr.allocated_bytes_per_token_in_recording | floor) end' "$juno_f" 2>/dev/null || echo -)"
       if [[ -f "$cmp" ]]; then
         ratio_pp="$(jq -r 'if .ratio_juno_over_llamacpp_pp == null then "withheld" else .ratio_juno_over_llamacpp_pp end' "$cmp" 2>/dev/null || echo -)"
         ratio_tg="$(jq -r 'if .ratio_juno_over_llamacpp_tg == null then
@@ -2588,9 +2683,9 @@ write_run_index() {
         ratio_tg="-"
         noise="-"
       fi
-      printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s-*.json |\n' \
+      printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s-*.json |\n' \
         "$stem" "$pp" "$tg" "$jpp" "$jt" "$tgspread" "$ratio_pp" "$ratio_tg" "$ptok" "$gtok" "$gcmax" "$allocpt" \
-        "$noise" "$stem"
+        "$allocrec" "$noise" "$stem"
     done
     echo
     echo "GPU attention per row, as the engine resolved it (read from its log, not from the flag):"
@@ -2710,6 +2805,11 @@ write_run_index() {
     echo "- GC max ms and Alloc B/tok come from the recording taken alongside each run. A"
     echo "  result whose GC max is a large fraction of its measurement window should be"
     echo "  re-run rather than scored: one long pause looks exactly like a regression."
+    echo "- Alloc B/tok sums each thread's running allocation total since the thread started, so"
+    echo "  model load and the warmup requests are in it. Alloc B/tok in request is each thread's"
+    echo "  growth inside the recording of the measured request (its last running total minus"
+    echo "  its first; a thread sampled once adds nothing), which is what an allocation gate reads."
+    echo "  Both are generation-lane figures, read by the extractor in host.json (jfr_extractor_jar)."
     if [[ "$USE_JFR" -eq 1 ]]; then
       echo "- Juno pp/tg from JFR (--jfr ${JFR_DURATION}): TokenProduced.tps + ForwardPass decode total_ms for tg; pp from ForwardPass prefill total_ms when present, else (API latency − decode total_ms)."
     else

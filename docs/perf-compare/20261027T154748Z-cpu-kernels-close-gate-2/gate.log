@@ -1,0 +1,84 @@
+baseline jar sha256: b9a0440b3a1b597a
+candidate jar sha256: 4e480ab9131887eb
+
+=== Part S: closing sweeps, pinned and published (10:47:48)
+--- sweep-128: n_prompt=128 (10:47:48)
+    clock_pinned: true (must be true)
+--- sweep-512: n_prompt=512 (11:19:27)
+    clock_pinned: true (must be true)
+--- sweep-2048: n_prompt=2048 (12:26:46)
+    clock_pinned: true (must be true)
+--- sweep-2048-phi: n_prompt=2048 (15:26:04)
+    clock_pinned: true (must be true)
+model          tg@128   pp@128   pp@512  pp@2048    pp512_pre  pp512_now     B/A   pp2048_pre pp2048_now     B/A
+tinyllama       0.337    0.436    0.429    0.378       12.383     33.997   2.745        6.099     26.731   4.383
+qwen2.5         0.275    0.431    0.422    0.397        5.139     11.901   2.316        3.183     10.396   3.266
+Phi             0.259    0.516    0.512    0.388        3.807     10.000   2.627        1.678      6.505   3.875
+mistral         0.309    0.455    0.436    0.411        2.245      5.172   2.304        1.294      4.447   3.436
+(pp2048 B/A reads these sweeps against the step 2 sweeps of the baseline jar: the 2048 host-attention gate, owner
+ decision 5; pp512 B/A against the step 2 sweep at 512 is reported, the 512 gate is Part C's same-hour A/B)
+
+=== Part C: CPU same-hour A/B, pinned (16:43:49)
+=== cpu128: baseline 1 (16:43:49)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-baseline-1.log)
+=== cpu128: candidate 1 (17:00:40)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-candidate-1.log)
+=== cpu128: baseline 2 (17:11:21)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-baseline-2.log)
+=== cpu128: candidate 2 (17:27:31)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-candidate-2.log)
+=== cpu128: baseline 3 (17:38:14)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-baseline-3.log)
+=== cpu128: candidate 3 (17:54:25)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu128-candidate-3.log)
+
+cpu128: clock_pinned across the runs: true (must be only: true)
+model             pp_A      pp_B     B/A   gate       tg_A     tg_B     B/A   gate    inrec/tok_A  inrec/tok_B    B/A      gc_A    gc_B
+tinyllama       16.631    34.129   2.052   0.95      7.977   12.138   1.522   0.95         305959       300048  0.981       0.0     0.0
+    runs: pp A 14.213779969719532 16.634920858782444 16.63071057451489 | B 35.263511712747594 33.52478266364008 34.12873739373796 
+    alloc/tok in recording, runs: A 311644 295710.625 305959.625 | B 291323.5 300048.375 304846.375 
+    whole-thread alloc/tok (reported, not gated): A 79471927 B 126450030 B/A 1.591
+qwen2.5          6.152    12.426   2.020   1.10      2.614    4.304   1.646   1.10        1276865      1268606  0.994       0.0     0.0
+    runs: pp A 6.078639725421481 6.151972339675375 6.257202393450133 | B 11.741375304500403 12.42642909234968 12.48816051283797 
+    alloc/tok in recording, runs: A 1288884.375 1269663.875 1276865.25 | B 1268606.625 1268478.375 1269511.625 
+    whole-thread alloc/tok (reported, not gated): A 145128978 B 200218171 B/A 1.380
+Phi              4.953    10.038   2.027   0.95      2.343    3.080   1.314   0.95         347721       352367  1.013       0.0     0.0
+    runs: pp A 4.855759319090955 4.9531169979643845 4.976559973877928 | B 10.038404124997587 9.769453926502576 10.27227599492848 
+    alloc/tok in recording, runs: A 347721.875 352658.75 342110.125 | B 341308.5 352462.125 352367.875 
+    whole-thread alloc/tok (reported, not gated): A 166273802 B 244423087 B/A 1.470
+mistral          2.628     5.033   1.916   1.10      1.298    2.119   1.633   1.10         346834       347861  1.003       0.0     0.0
+    runs: pp A 2.6110627508620086 2.6275596092473017 2.628630841305815 | B 5.2719048250514335 5.033191453787346 5.029091551534638 
+    alloc/tok in recording, runs: A 346834.25 347003.625 342270.375 | B 349894.875 347861.375 343399.125 
+    whole-thread alloc/tok (reported, not gated): A 202238266 B 271554853 B/A 1.343
+=== cpu512: baseline 1 (18:05:07)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-baseline-1.log)
+=== cpu512: candidate 1 (18:49:58)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-candidate-1.log)
+=== cpu512: baseline 2 (19:13:37)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-baseline-2.log)
+=== cpu512: candidate 2 (19:58:15)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-candidate-2.log)
+=== cpu512: baseline 3 (20:21:57)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-baseline-3.log)
+=== cpu512: candidate 3 (21:06:35)
+    exit=0  (log: dist/cpu-kernels-close/runs/cpu512-candidate-3.log)
+
+cpu512: clock_pinned across the runs: true (must be only: true)
+model             pp_A      pp_B     B/A   gate       tg_A     tg_B     B/A   gate    inrec/tok_A  inrec/tok_B    B/A      gc_A    gc_B
+tinyllama       12.581    33.765   2.684   1.10      7.981   12.125   1.519      -         299257       295589  0.988       0.0     0.0
+    runs: pp A 12.605832218844895 12.581334554415413 12.544147667191236 | B 33.864889942693594 33.76472772868263 33.45731835279761 
+    alloc/tok in recording, runs: A 299257.125 294865 306025.125 | B 295589.125 292035 300003.75 
+    whole-thread alloc/tok (reported, not gated): A 79579218 B 140808635 B/A 1.769
+qwen2.5          5.177    11.736   2.267   1.10      2.623    4.310   1.643      -        1288569      1269487  0.985       0.0     0.0
+    runs: pp A 5.1766366285411305 5.188761996485762 5.154142884921175 | B 11.936091836489775 11.73599936094366 11.359228447257518 
+    alloc/tok in recording, runs: A 1293183.5 1288569 1269973.25 | B 1250132.875 1270504.75 1269487.125 
+    whole-thread alloc/tok (reported, not gated): A 150786641 B 197439884 B/A 1.309
+Phi              3.910     9.394   2.402   1.10      2.328    3.082   1.324      -         341531       342218  1.002       0.0     0.0
+    runs: pp A 3.9302584809705334 3.8871849787827784 3.910114304286687 | B 9.943665545642153 9.201380188668672 9.393551328359734 
+    alloc/tok in recording, runs: A 342279.875 341048.25 341531.5 | B 341476.875 347442.125 342218.5 
+    whole-thread alloc/tok (reported, not gated): A 166315136 B 229659767 B/A 1.381
+mistral          2.276     5.124   2.252   1.10      1.300    2.158   1.660      -         347367       347660  1.001       0.0     0.0
+    runs: pp A 2.240266584533704 2.301867788937617 2.2756474267191042 | B 5.123947983782729 5.17612823740574 5.089312700357433 
+    alloc/tok in recording, runs: A 386537 347367.375 342217.375 | B 393424.875 342667.5 347660.125 
+    whole-thread alloc/tok (reported, not gated): A 196063381 B 272616442 B/A 1.390
+GATES MET

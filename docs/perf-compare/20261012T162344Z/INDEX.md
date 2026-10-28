@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20261012T162344Z (cpu)
 
+> **Superseded as the CPU reference at `n_prompt=2048` (Phi-3.5-mini) on 2026-10-27** by [`20261027T202604Z`](../20261027T202604Z/INDEX.md), the pinned closing sweep of the CPU decode and prefill kernel work. Kept as the before-reading of that work.
+
 > **CPU reference at `n_prompt=2048` from 2026-10-12, Phi-3.5-mini** at an explicit 8 GiB heap (its float KV at 2049 positions needs about 3.2 GB): owner run, pinned clocks, jar `b9a0440b3a1b597a` (HEAD `01027ee9`), `--threads 12` against `-t 12`. pp ratio 0.092x. Length profile and decomposition: [`20261012T205149Z-cpu-prefill-length`](../20261012T205149Z-cpu-prefill-length/INDEX.md). Local paths are replaced by `<repo>` and `<home>`.
 
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |

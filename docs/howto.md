@@ -1213,7 +1213,8 @@ code regression, and these are what tell the two apart:
 | Field | Description |
 |-------|-------------|
 | `jdk.GCPhasePause.count` / `.max_ms` / `.total_ms` | Collection pauses in the window. Re-run rather than score a result whose `max_ms` is a large fraction of its window |
-| `jdk.ThreadAllocationStatistics.bytes_total` | Bytes allocated across all threads. The sum of each thread's own running total, not of every sample |
+| `jdk.ThreadAllocationStatistics.bytes_total` | Bytes allocated across all threads. The sum of each thread's own running total, not of every sample. A running total counts from the thread's start, so in a long-lived server it includes model load and every earlier request |
+| `jdk.ThreadAllocationStatistics.bytes_in_recording` | Bytes allocated while the recording ran: each thread's last running total in the recording minus its first. A thread sampled only once adds nothing, so a recording shorter than about two sampling periods undercounts. This is the figure to compare when the recording covers one request |
 | `jdk.ObjectAllocationSample.count` / `.weight_total_bytes` | Sampled allocation volume |
 | `jdk.ObjectAllocationSample.top_sites.<method>.bytes` | Where those bytes were allocated, ten entries at most |
 | `jdk.ExecutionSample.count` and `.top_methods.<method>.samples` | Where CPU time went, ten entries at most |

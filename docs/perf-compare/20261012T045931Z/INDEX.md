@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20261012T045931Z (cpu)
 
+> **Superseded as the CPU reference at `n_prompt=512` on 2026-10-27** by [`20261027T161927Z`](../20261027T161927Z/INDEX.md), the pinned closing sweep of the CPU decode and prefill kernel work. Kept as the before-reading of that work.
+
 > **CPU reference at `n_prompt=512` from 2026-10-12**, the first CPU sweep above 128 tokens: owner run, pinned clocks, jar `b9a0440b3a1b597a` (HEAD `01027ee9`, no CPU kernel change), `--threads 12` against `-t 12`. pp ratio 0.165x (TinyLlama, binding) to 0.198x. The generation columns are not a reference (see the length profile). Length profile and decomposition: [`20261012T205149Z-cpu-prefill-length`](../20261012T205149Z-cpu-prefill-length/INDEX.md). Local paths are replaced by `<repo>` and `<home>`.
 
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |

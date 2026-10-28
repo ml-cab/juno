@@ -1,0 +1,4 @@
+QUALITY-NLL tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf tokens=2048 nll_int=2.45609 nll_float=2.45566 ratio=1.00017 ppl_int=11.6591 ppl_float=11.6541 argmax_agree_first512=507 (99.0%) int_s=82.0 float_s=371.1
+QUALITY-NLL qwen2.5-3b-instruct-q4_k_m.gguf tokens=2048 nll_int=1.69656 nll_float=1.69766 ratio=0.99935 ppl_int=5.4552 ppl_float=5.4611 argmax_agree_first512=512 (100.0%) int_s=232.5 float_s=1187.7
+QUALITY-NLL Phi-3.5-mini-instruct-Q4_K_M.gguf tokens=2048 nll_int=1.36110 nll_float=1.35826 ratio=1.00209 ppl_int=3.9005 ppl_float=3.8894 argmax_agree_first512=509 (99.4%) int_s=1392.6 float_s=2818.9
+QUALITY-NLL mistral-7b-instruct-v0.1-q4_k_m.gguf tokens=2048 nll_int=1.53013 nll_float=1.52891 ratio=1.00080 ppl_int=4.6188 ppl_float=4.6132 argmax_agree_first512=510 (99.6%) int_s=433.0 float_s=2396.2

@@ -527,6 +527,10 @@ kernels this section describes now run only when the integer kernels do not (no 
 
 ## CPU integer kernels and `--threads`
 
+*Kernels and readings as of 2026-10-11. The next section, "CPU decode and prefill kernels", replaces the kernel rows
+below (Q6_K decode now runs in vector lanes, the prefill tile takes four activation rows per pass) and the pinned
+reading; threads, fallbacks and the activation format are unchanged.*
+
 CPU matmuls over Q4_K, Q5_K, Q6_K and Q8_0 weights quantize the activation row to 8 bits once per matmul (one float
 scale per 32 values) and run integer dot products over the packed weights, scaling each weight sub-block once.
 
@@ -560,9 +564,67 @@ pause in the decode span (`perf-compare/20261010T184826Z-cpu-decode-allocation/`
 kernels; `-Djuno.cpu.integerKernels=false` selects them explicitly. LoRA training's frozen forward always uses the float
 activation. The startup log names the kernels and thread count in use.
 
-**What bounds it now.** Mistral 7B decode reads its weights at 13.3% of this host's 42.4 GB/s (pinned: 40.34 GB/s,
-DDR3-1600); decode time is the
+**What bounded it then.** Mistral 7B decode read its weights at 13.3% of this host's 42.4 GB/s (pinned: 40.34 GB/s,
+DDR3-1600); decode time was the
 Q4_K vector kernel (about 57%) and the Q6_K scalar kernel (about 36%).
+
+## CPU decode and prefill kernels
+
+The CPU integer kernels above, made cheaper per weight, plus CPU prompt processing measured and sped up at 512 and 2048
+tokens. Same activation format, same `--threads` pool, same fallbacks.
+
+| Change | Where | Correctness |
+|---|---|---|
+| Q6_K decode in 128-bit vector lanes (was a scalar loop) | `CpuIntegerKernels.q6kRow` | bit-identical to the scalar kernel (`CpuQ6kKernelParityTest`) |
+| Q4_K decode: sub-block sums scaled in float lanes, one horizontal sum per row, scales decoded once per block | `CpuIntegerKernels.q4kRow` | within 1e-6 of the row's term magnitude (`CpuQ4kKernelParityTest`) |
+| Prefill tile: four activation rows per pass, offset term in float lanes, weight unpack in vector lanes; a batch padded with zero rows to a multiple of four | `CpuIntegerGemm` | unpack exact (`CpuIntegerGemmUnpackParityTest`); the matmul within 1e-5 of an exact reference (`CpuIntegerGemmTest`) |
+| Prefill attention on the worker pool, each head's dot and value sums in vector lanes | `GqaMath.attendPooled`, `GqaVectorHead`, every CPU handler's prefill window | within the attention oracle's bound (`GqaVectorHeadTest`); bit-identical without the Vector API module (`GqaMathPooledTest`) |
+| Lane width chosen per JVM | `CpuIntegerWidth`; `-Djuno.cpu.integerWidth=128\|256\|auto` | 128 bits on every host by default until the 256-bit kernels are measured on an AVX2 host; 256 is opt-in (`CpuIntegerWidthParityTest`) |
+
+**Decode kernel cost** (pinned at 3.5 GHz, Mistral 7B's FFN shapes, median of three, core cycles per weight;
+`perf-compare/20261013T230239Z-cpu-kernels-close-gate/`):
+
+| Kernel | One thread, before -> after | Per core at 12 threads, before -> after |
+|---|---|---|
+| Q4_K | 1.52 -> 0.93 | 1.52 -> 1.10 |
+| Q6_K | 5.41 -> 2.13 | 5.24 -> 2.49 |
+
+**Against the previous build** (pinned, same-hour A B A B A B, median of three, 12 threads;
+`perf-compare/20261027T154748Z-cpu-kernels-close-gate-2/`): prompt processing 1.92x to 2.05x at 128 tokens and 2.25x to
+2.68x at 512, generation 1.31x to 1.66x, on the four standard models. At 2048 tokens prompt processing is 3.27x to 4.38x
+the previous build's pinned sweeps: host attention, which took at least 48% to 65% of a 2048-token CPU prefill on one
+thread, now runs on every pool thread.
+
+**Pinned closing reading** (`perf-compare/20261027T154748Z/`, `20261027T161927Z/`, `20261027T172646Z/`,
+`20261027T202604Z/`, the CPU reference from 2026-10-27), against the reference tool at `-t 12`:
+
+| Model | Generation t/s (ratio) | Prompt t/s at 128 (ratio) | Prompt ratio at 512 | Prompt ratio at 2048 |
+|---|---|---|---|---|
+| TinyLlama 1.1B | 12.51 (0.337x) | 35.69 (0.436x) | 0.429x | 0.378x |
+| Qwen2.5-3B | 4.41 (0.275x) | 12.36 (0.431x) | 0.422x | 0.397x |
+| Phi-3.5-mini | 3.10 (0.259x) | 10.18 (0.516x) | 0.512x | 0.388x |
+| Mistral 7B | 2.17 (0.309x) | 5.40 (0.455x) | 0.436x | 0.411x |
+
+The reference tool's CPU generation reading moves by up to a third between pinned sessions on this host (TinyLlama read
+27.7 and 37.1 t/s on the same day, Juno 11.7 and 12.5); these are the low ratios of the two sessions of the closing run.
+
+**Output and quality.** Mean negative log-likelihood over 2,048 tokens is 0.99935x to 1.00209x the float kernels' on the
+four models (`ModelQualityNllLiveTest`, `perf-compare/20261027T025856Z-cpu-kernels-quality/`). Greedy replies are
+identical to the previous build's on every case of `smoke-cpu-kernels.sh` (four models at 4 and 12 threads, short and
+512-token prompts, CPU vision).
+
+**Allocation.** A measured request allocates what the previous build's does (0.98x to 1.01x per token, counted inside
+the recording). Each vector kernel allocates once per JVM while it runs before the JIT compiles it, during model load
+and warmup; the whole-thread figure, which counts that, reads 1.3x to 1.8x.
+
+**Unchanged.** GPU generation and prompt processing 0.969x to 1.013x the previous build, LoRA training 1.024x (GPU) and
+0.999x (CPU), playback 0.977x and 0.995x (`perf-compare/20261013T230239Z-cpu-kernels-close-gate/`). Vision on the CPU lane
+runs at 0.56x the latency with 2.1x the decode rate (`perf-compare/20261027T035713Z-cpu-kernels-vision/`).
+
+**What bounds it now.** CPU generation reads the weights at 17% to 22% of this host's 42.4 GB/s. The Q4_K kernel is at
+about 1.1 cycles per weight per core at 12 threads; 128-bit integer lanes have no pairwise 16-bit multiply-add into 32
+bits, so the widening stays explicit. A host with 256-bit integer lanes would double the lane count; the 256-bit kernels
+exist but are unmeasured, so they stay opt-in.
 
 ## Prefill microbatching (`--prefill-batch`)
 

@@ -1,5 +1,7 @@
 # llama.cpp vs Juno - 20261011T013059Z (cpu)
 
+> **Superseded as the CPU reference on 2026-10-27** by [`20261027T154748Z`](../20261027T154748Z/INDEX.md), the pinned closing sweep of the CPU decode and prefill kernel work. Kept as the before-reading of that work.
+
 > **CPU reference from 2026-10-11** (supersedes [`20261001T180241Z`](../20261001T180241Z/INDEX.md) as reference). The closing sweep of the CPU work, pinned clocks, jar `6ae135b0e21839cf`: CPU matmuls run integer dot products over an 8-bit activation on a pool of `--threads 12` threads (the reference tool runs `-t 12`). A measurement boundary for CPU readings; compare ratios across it. Every row scorable, every prefill 128 of 128 tokens. Gate results: [`20261011T052951Z-cpu-hot-path-close-gate`](../20261011T052951Z-cpu-hot-path-close-gate/INDEX.md).
 
 | Model | llama.cpp pp t/s | llama.cpp tg t/s | Juno pp t/s | Juno tg t/s | Juno tg min/max | Juno/llama pp | Juno/llama tg | Juno prompt tok | Juno gen tok | GC max ms | Alloc B/tok | Scorable | Results |

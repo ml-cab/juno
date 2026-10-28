@@ -51,7 +51,13 @@ Module dependency (excerpt):
         Vector API lanes, Q8_0 a scalar integer loop); CpuIntegerGemm is the
         prefill-width matmul (row tiles, each 256-column block unpacked once to
         16-bit lanes and dotted against every activation row, one write per
-        output). CpuIntegerWidth picks the lane width once per JVM: 128 by default
+        output). The tile takes four activation rows per pass (fourRows16 and
+        fourRows32, by sub-block width); Activations pads a batch that is not a
+        multiple of four with zero rows and only the real rows are written, so a
+        row's output does not depend on its position in the batch. No production
+        kernel class declares a method that takes or returns a Vector API type
+        (CpuKernelVectorEscapeTest): a vector handed to a helper C2 does not
+        inline is boxed and allocates on every lane operation. CpuIntegerWidth picks the lane width once per JVM: 128 by default
         (auto) on every host until the 256-bit kernels are measured on an AVX2
         host; -Djuno.cpu.integerWidth=256 selects them, 128|auto the default, and
         any other value fails with the property named. The host's preferred
@@ -289,7 +295,12 @@ Module dependency (excerpt):
         downcall) and lock/park time — so a throughput number
         can be read against the pauses and allocation that produced it. Its
         ThreadAllocationStatistics figure sums each thread's own running total
-        rather than every sample, since the field is cumulative per thread. The
+        rather than every sample, since the field is cumulative per thread
+        (bytes_total); bytes_in_recording sums each thread's growth inside the
+        recording (largest sample minus smallest), which excludes model load and
+        earlier requests from a recording scoped to one request. The
+        comparison harness extracts every recording with the tree's own jar,
+        whichever jar it launched, so both sides of an A/B share one definition. The
         attribution histograms (top_sites, and top_methods for each sampler) are bounded to ten
         entries and are for reading, not for gating.
         GcPauseSpans records when each collection pause happened, so the pauses

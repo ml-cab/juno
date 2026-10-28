@@ -1,6 +1,12 @@
 # Tier 02E: CPU decode and prefill kernels (Q6_K vector kernel, Q4_K instruction cost, SIMD width)
 
-Status: **in progress** (2026-10-13). Steps 1 to 3 closed. Items 1 (vector Q6_K), 2 (Q4_K candidate 3 adopted;
+Status: **complete** (2026-10-27). Every exit criterion is checked. The owner's pinned closing gate run 2
+(`docs/perf-compare/20261027T154748Z-cpu-kernels-close-gate-2/`) met every gate: CPU tg 0.259x to 0.337x against 0.25x and
+pp at 512 0.422x to 0.512x against 0.30x on every sweep model (both end-of-plan CPU rows retired as met, owner decision
+9), pp at 2048 3.27x to 4.38x the pre-tier build, same-hour pp 1.92x to 2.68x and tg 1.31x to 1.65x, allocation 0.98x to
+1.01x; Q6_K 2.13 and Q4_K 0.93 cycles per weight on one thread; NLL within 1.0021x the float kernels; GPU, LoRA and vision
+unchanged or faster; context shift re-verified on the CPU. 256-bit throughput is `NEEDS-AVX2-HARDWARE`. The history of
+the tier follows. As of 2026-10-26: Steps 1 to 3 closed. Items 1 (vector Q6_K), 2 (Q4_K candidate 3 adopted;
 `<= 1.1` not yet met), 6 (pooled prefill attention) and 7 (gemm tile G1 to G3) implemented and unit-tested; unpinned
 CPU pp at 512 about 0.27x to 0.28x against `>= 0.30x`. Open: item 7 and item 2 candidates, item 3, the smoke script,
 quality and live tests, the owner's pinned closing gate, docs. *2026-10-12, later: item 7's weight unpack vectorised
@@ -10,7 +16,12 @@ per call) adopted, exact; Q4_K about 0.91 cycles per weight on one thread and 1.
 this host, 256-bit throughput `NEEDS-AVX2-HARDWARE`; owner decision 4: `auto` is 128 on every host until 256 is measured.
 2026-10-13, later: item 6's vectorization candidate run (the record had dropped it): `GqaVectorHead` adopted (value sums
 in registers, A1, and the dot in vector lanes, A2); unpinned CPU pp at 512 about 0.34x to 0.40x on the three models
-read. `smoke-cpu-kernels.sh` written; the closing gate drafted under `dist/cpu-kernels-close/`, not yet READY.*
+read. `smoke-cpu-kernels.sh` written; the closing gate drafted under `dist/cpu-kernels-close/`, not yet READY.
+2026-10-14: gate run 1 (owner, pinned) met every throughput, kernel and LoRA bar on the final numbers' terms but missed
+allocation; the miss traced to boxed vectors in the prefill tile's leftover rows (fixed, same bits) and to a metric that
+charged warmup to the measured tokens. 2026-10-26: owner decisions 6 to 8 (allocation counted inside the recording; Q4_K
+1.102 met within resolution; re-run Parts S and C); the extractor and harness carry the new field, the gate's run 2 is
+prepared; pre-gate checks in progress, then READY.*
 Gap analysis refs: §1.7 (the CPU half, continued from [Tier 02C](TIER-02C-cpu-hot-path.md))
 
 **Added 2026-10-11 (plan review).** The only active end-of-plan row is CPU tg (>= 0.25x on every sweep
@@ -227,33 +238,86 @@ vision guard. All present. An AVX2 or AVX-512 host for the width threshold is no
 - [x] Kernel baseline published (cycles per weight, Q4_K and Q6_K, single thread, pinned) before item 1.
       *2026-10-12:* [`20261012T225531Z-cpu-kernel-baseline`](../perf-compare/20261012T225531Z-cpu-kernel-baseline/INDEX.md):
       Q4_K 1.52, Q6_K 5.41 cycles per weight on one thread (1.52 and 5.24 per core at 12).
-- [ ] Q6_K runs a vector integer kernel at decode and prefill width, bit-identical to the scalar kernel it
+- [x] Q6_K runs a vector integer kernel at decode and prefill width, bit-identical to the scalar kernel it
       replaced.
+      *2026-10-27:* decode: `CpuIntegerKernels.q6kRow` in 128-bit lanes, raw float bits equal to a frozen copy of the
+      scalar loop (`CpuQ6kKernelParityTest`, 11 tests, B = 1 to 741, real TinyLlama rows). Prefill: `CpuIntegerGemm`'s
+      shared vector tile with the Q6_K unpack in vector lanes, exact against the scalar unpack
+      (`CpuIntegerGemmUnpackParityTest`); the tile's G2 candidate reorders the float offset term for every format by
+      design, held to `CpuIntegerGemmTest`'s exact-reference bound and to the NLL threshold (item 1's correction: the
+      prefill half is the unpack). Pinned: 2.13 cycles per weight on one thread, 2.49 per core at 12 (was 5.41 and 5.24).
 - [x] Item 2's candidates measured one at a time and adopted on measurement, each recorded.
       *2026-10-13:* candidates 1 to 5, each measured alone and recorded in the execution record (3 and 5 adopted,
       1, 2 and 4 rejected). This box records the process only; the Q4_K kernel bound is scored by the pinned kernel
       microbenchmark in the closing gate, under the threshold criterion below, owed to the owner.
-- [ ] Item 7's tile decomposition published and its candidates measured one at a time, each recorded; the CPU pp
+- [x] Item 7's tile decomposition published and its candidates measured one at a time, each recorded; the CPU pp
       row at 512 scored on the pinned closing sweep.
-- [ ] Host prefill attention runs on the worker pool in every handler with a host window loop, bit-identical
+      *2026-10-27:* the decomposition is in this record (2026-10-12, item 7: unpack about 8% of gemm samples in the
+      published 2048-token recordings, the multiply loop about 92%, the scalar offset term 17% of Q4_K and 29% of Q6_K
+      gemm time; an unpinned probe). Candidates G1 to G4 measured one at a time and recorded (all adopted; G2 within float
+      rounding, stated), then the padded tile after gate run 1 (same output bits). CPU pp at 512 on the pinned closing
+      sweep: 0.422x to 0.512x against 0.30x ([`20261027T161927Z`](../perf-compare/20261027T161927Z/INDEX.md)).
+- [x] Host prefill attention runs on the worker pool in every handler with a host window loop, bit-identical
       to the row-by-row loop (or within the oracle bound where vectorized, stated), and its threshold above met.
+      *2026-10-27:* `GqaMath.attendPooled` in the LLaMA-family, Phi-3, Qwen3 and Qwen3-MoE window loops and in `gqa` of the
+      Phi-2 and LoRA trainable handlers; the split bit-identical (`GqaMathPooledTest`), the vector head `GqaVectorHead`
+      (candidates A1 and A2) within `GqaMathOracleTest`'s bound (`GqaVectorHeadTest`), stated. Threshold: pp at 2048 3.27x
+      to 4.38x the pre-tier build (Part S against the step 2 sweeps, >= 1.50x;
+      [`20261027T172646Z`](../perf-compare/20261027T172646Z/INDEX.md), [`20261027T202604Z`](../perf-compare/20261027T202604Z/INDEX.md))
+      and at 512 2.252x to 2.684x same hour (Part C, >= 1.10x;
+      [`20261027T154748Z-cpu-kernels-close-gate-2`](../perf-compare/20261027T154748Z-cpu-kernels-close-gate-2/INDEX.md)): met.
 - [x] Integer species chosen from the host's preferred width, 128 bits on this host, forced-width parity
       tests passing; the selected width is printed at startup.
       *2026-10-13:* `CpuIntegerWidth`, `CpuIntegerKernels256`, `CpuIntegerGemm256`; `CpuIntegerWidthTest` and
       `CpuIntegerWidthParityTest` pass; startup line `CPU integer kernels: 128-bit lanes (host preferred 128-bit)`.
       The 256-bit throughput row is `NEEDS-AVX2-HARDWARE`. Owner decision 4 (2026-10-13): `auto` resolves to 128
       on every host until the 256-bit kernels are measured on an AVX2 host; 256 is an explicit opt-in.
-- [ ] The README's CPU tg and CPU pp rows restated from this tier's measurements, never below 0.25x.
-- [ ] Every threshold above met on the pinned closing sweeps. A miss keeps the tier open; closing on a miss
+- [x] The README's CPU tg and CPU pp rows restated from this tier's measurements, never below 0.25x.
+      *2026-10-27:* **Owner decision 9**: both rows kept at the values written (0.25x and 0.30x) and retired as met by
+      this tier's closing sweeps (tg 0.259x, Phi-3.5-mini binding; pp at 512 0.422x, Qwen2.5-3B binding), not raised;
+      the reference column moved to those sweeps; `check-plan-thresholds.sh` passes.
+- [x] Every threshold above met on the pinned closing sweeps. A miss keeps the tier open; closing on a miss
       takes an explicit **Owner decision** recorded here with the measured number and the term that held it.
-- [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): GPU tg and pp >= 0.95x
+      *2026-10-26:* **Owner decision 7**: Q4_K at 12 threads, 1.102 cycles per weight per core against `<= 1.1` (Part K of
+      run 1, [`20261013T230239Z-cpu-kernels-close-gate`](../perf-compare/20261013T230239Z-cpu-kernels-close-gate/INDEX.md)),
+      is met within measurement resolution; the other Part K bounds were met. Owed: the owner's gate run 2 (Parts S and C,
+      owner decision 8) on the final build, then the scoring here.
+      *2026-10-27:* gate run 2 met every bar; every threshold is scored in the 2026-10-27 record (the width row
+      `NEEDS-AVX2-HARDWARE`, as recorded at step 5),
+      [`20261027T154748Z-cpu-kernels-close-gate-2`](../perf-compare/20261027T154748Z-cpu-kernels-close-gate-2/INDEX.md).
+- [x] Standing throughput and allocation gate met (README, "Test infrastructure"): GPU tg and pp >= 0.95x
       the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
-- [ ] Every earlier tier's CPU row-1 correctness result re-verified under the new kernels.
-- [ ] Every conclusion carries a `host-specific` or `expected-general` marker (Tier 02C item 4's rule).
-- [ ] Cross-surface checklist fully resolved.
-- [ ] Docs (`docs/howto.md` startup line, `docs/agent-arch.txt`, `docs/performance.md`) updated,
+      *2026-10-26:* allocation is read inside the recording (**Owner decision 6**). GPU lane met in run 1 (tg and pp
+      0.969x to 1.013x; allocation 0.930x to 0.999x on the new figure,
+      [`20261026T204605Z-cpu-kernels-allocation-reread`](../perf-compare/20261026T204605Z-cpu-kernels-allocation-reread/INDEX.md)).
+      Owed: the CPU lane's allocation half on gate run 2.
+      *2026-10-27:* CPU lane on gate run 2: allocation per token in the recording 0.981x to 1.013x, in-span GC 0 ms on
+      every run of both builds: met.
+- [x] Every earlier tier's CPU row-1 correctness result re-verified under the new kernels.
+      *2026-10-26, final build `4e480ab9131887eb`, all but one re-verified:* `ModelLiveRunnerIT` checks 1 to 8 on the CPU backend, five models, all
+      PASS; `smoke-cpu-kernels.sh` 18 of 18 greedy replies identical to the pre-tier build (four sweep models at 4 and 12
+      threads, short and 512-token prompts, CPU vision at the 741 width); `smoke-consistency.sh` CPU half,
+      `smoke-grammar.sh`, `smoke-tools.sh` and `smoke-long-prompt-prefill.sh --cpu` all pass; NLL 0.99935x to 1.00209x
+      ([`20261027T025856Z-cpu-kernels-quality`](../perf-compare/20261027T025856Z-cpu-kernels-quality/INDEX.md)).
+      Not re-verified on the CPU backend: context shifting. `smoke-context-policy.sh --cpu` was not run (Tier 02C stopped
+      its 4,096-token CPU run after 76 minutes), and `ModelLiveRunnerIT`'s context-shift check 10 took CUDA on this host.
+      Owed (executor, after the gate): a CPU context-shift check on TinyLlama, then tick.
+      *2026-10-27:* check 10 on the CPU backend, TinyLlama at a 192-position limit, both schedules: PASS (200 of 200
+      tokens, 3 shifts each, highest position 191), from the candidate build's `juno-master.jar` with CUDA hidden and the
+      integer kernels on
+      ([`20261027T025856Z-cpu-kernels-quality`](../perf-compare/20261027T025856Z-cpu-kernels-quality/INDEX.md),
+      "Context shift on the CPU"). Every CPU row-1 result is re-verified.
+- [x] Every conclusion carries a `host-specific` or `expected-general` marker (Tier 02C item 4's rule).
+      *2026-10-27:* checked over the whole record; the one unmarked conclusion (item 2 candidate 3's speedup) is marked.
+- [x] Cross-surface checklist fully resolved.
+      *2026-10-27:* every row PASS, row 3 `NEEDS-AMD-HARDWARE`, row 15 N/A (cross-surface record, 2026-10-27).
+- [x] Docs (`docs/howto.md` startup line, `docs/agent-arch.txt`, `docs/performance.md`) updated,
       Juno-native language only.
-- [ ] `CHANGELOG.md` entry added.
+      *2026-10-27:* `docs/performance.md` "CPU decode and prefill kernels"; `docs/agent-arch.txt` (width, attention head,
+      four-row padded tile, the Vector API signature rule); `docs/howto.md` (width property and startup line, since
+      2026-10-13; the in-recording allocation field, 2026-10-26).
+- [x] `CHANGELOG.md` entry added.
+      *2026-10-27:* Session 127.
 
 ## Execution record
 
@@ -465,7 +529,8 @@ and the file was restored. `CpuIntegerKernelsTest`'s exact-reference check (1e-5
 (`ModelQualityNllLiveTest`) is owed with the closing work.
 
 Production `q4kRow` after adoption (probe): **1.29 to 1.30** cycles per weight on one thread, 1.22 to 1.42
-(median 1.31) per core at 12; about 12% faster, 0 bytes allocated. **Still above the `<= 1.1` bound**; the
+(median 1.31) per core at 12; about 12% faster (magnitude `host-specific`; the direction, one horizontal sum per row
+and one scale decode per block, `expected-general`), 0 bytes allocated. **Still above the `<= 1.1` bound**; the
 remaining cost is the vector core (about 0.8) plus the per-sub-block widening, conversion and scalar factor
 work. Further candidates are owed before item 2 closes. *Assessment, not a measurement: the vector core alone is
 about 0.8 cycles per weight, and 128-bit Vector API code on this host has no instruction for a pairwise 16-bit
@@ -1031,3 +1096,227 @@ so the charge grew. `expected-general` (C2 and the incubating Vector API's inter
 free-memory equality on the GPU, which read 4 MiB *more* free memory after the calls than after the first (another
 process on the device released memory mid-test; nothing on this tier's CPU path reaches it). The class alone straight
 after: 19 of 19 pass. Recorded as environment-sensitive with the other device-wide checks, not loosened.
+
+### 2026-10-26: owner decisions 6 to 8; allocation counted inside the recording; closing gate run 2 prepared
+
+**Plan against code, re-verified at HEAD `c2633a68`** (the owner's commit of this tier's work through 2026-10-14).
+`scripts/performance-tests/check-plan-thresholds.sh` passes (25 tier files). The tree is the padded build of 2026-10-14:
+`CpuIntegerGemm` and `CpuIntegerGemm256` run only `fourRows16` and `fourRows32` over a batch padded to a multiple of four
+(`Activations.padded`), the five helpers that took a vector are gone, `CpuKernelVectorEscapeTest` and
+`CpuIntegerGemmTest.aBatchNotAMultipleOfFourIsPaddedWithoutChangingItsRows` exist, and no source file is newer than the
+tree jar `b40e1ce4154d1af5`. The gate script compares the kernel cycles unrounded. No drift. The three questions raised on
+2026-10-14 had no recorded answer and were put to the owner.
+
+**Owner decision 6 (2026-10-26): allocation is counted inside the recording (choice (a)).** The allocation half of the
+standing gate reads each thread's growth inside the measured recording; the old whole-thread figure stays published
+beside it, so history stays comparable, and both sides of an A/B are read by the same extractor.
+
+**Owner decision 7 (2026-10-26): Q4_K at 12 threads is met within measurement resolution (choice (a)).** Part K of run 1
+read 1.102 cycles per weight per core against `<= 1.1` (median of 1.083, 1.102 and 1.111; 0.2% above the bound), 0.931 on
+one thread. The bound is not restated; the threshold criterion records this decision with the number.
+
+**Owner decision 8 (2026-10-26): the re-run covers Parts S and C (choice (a)), about eleven hours,** so the README's CPU
+rows and the exit criteria read the final build. Parts K (decode kernels), A (GPU) and L (LoRA) stand from run 1: what
+changed after run 1 is the prefill matmul tile's row handling (same output bits) and the metrics extractor.
+
+**Implementation, tests first.**
+- `metrics`: `JdkEventBucket` keeps each thread's smallest `jdk.ThreadAllocationStatistics` running total beside its
+  largest and emits `jdk.ThreadAllocationStatistics.bytes_in_recording`, the sum of each thread's largest minus smallest;
+  `bytes_total` is unchanged. A thread sampled once adds nothing. Test:
+  `JfrMetricsExtractorJdkEventsTest.threadAllocationStatistics_inRecordingCountsOnlyEachThreadsGrowthInsideTheRecording`
+  (256 MB allocated by the test thread before the recording starts must be in `bytes_total` and not in the new figure;
+  the value must equal the per-thread growth recomputed from the same recording; the test fails as vacuous if the test
+  thread was sampled fewer than twice), and the no-events test now requires the new key at zero. Seen failing first (2
+  of 10, the key missing), then passing; `metrics` module 86 tests, 0 failures. Mutation check (each thread's whole
+  running total summed into the new figure): the new test failed; the file was restored.
+- Harness, `compare-llama-cpp.sh`: `allocated_bytes_in_recording` and `allocated_bytes_per_token_in_recording` in every
+  per-rep result, the rep aggregate (worst rep, every reading kept, as for the old figure), the lane merge (generation
+  lane, as for the old figure) and the compare record; an `Alloc B/tok in request` column and a note in `INDEX.md`.
+  Recordings are now extracted by the harness tree's own jar whichever jar `--juno-jar` launched (`find_extractor_jar`;
+  `host.json` records `jfr_extractor_jar` and its hash), so a pre-tier jar that predates the field still gets it and both
+  sides share one definition. Self-test cases written first: 8 failed against the old script (6 for the fields, 2 for
+  the extractor jar), then `--selftest` passed, 128 checks.
+- The README's standing gate names `jfr.allocated_bytes_per_token_in_recording`, with a dated note; `docs/howto.md` and
+  `docs/agent-arch.txt` describe the new field. Tree jar after the change: `5d68f809c10e2292`.
+
+**Run 1 re-read with the new extractor** (offline, all 216 measured recordings, both sides, extractor jar
+`5d68f809c10e2292`): [`20261026T204605Z-cpu-kernels-allocation-reread`](../perf-compare/20261026T204605Z-cpu-kernels-allocation-reread/INDEX.md).
+Generation lane, bytes per token, median of three per side, candidate over baseline:
+
+| Part | TinyLlama | Qwen2.5-3B | Phi-3.5-mini | Mistral 7B |
+|---|---|---|---|---|
+| cpu128, whole-thread (run 1's gate figure) | 7.04x | 1.24x | 5.66x | 1.53x |
+| cpu128, in the recording | **332x** | **1.000x** | **468x** | **1.003x** |
+| cpu512, in the recording (not gated at 512) | 325x | 0.991x | 482x | 1.001x |
+| gpu512, in the recording (Part A) | 0.930x | 0.995x | 0.991x | 0.999x |
+
+- Run 1's candidate fails on the new figure too: its leftover-row defect allocated inside the measured request, and the
+  new figure reads it 50 to 80 times more sharply than the old one did, whose warmup bytes diluted it. Qwen2.5-3B and
+  Mistral 7B, whose generation lanes did not reach that path, read 1.00x; the old figure's 1.24x and 1.53x there was
+  warmup. So the change makes the gate stricter where the request itself allocates, not looser (`expected-general`).
+- Part A's allocation half re-reads at 0.930x to 0.999x on the new figure: met, as on the old one.
+- The re-read `bytes_total` equals run 1's published figure on all 216 recordings.
+- Known limit (`expected-general`): threads are sampled every 500 ms under `juno-perf.jfc`, so a request shorter than about a
+  second undercounts (the GPU prefill lanes read 0 to 3 MB). Both sides of an A/B are read the same way; the gate reads
+  the generation lane, which runs for seconds on the CPU.
+
+**Closing gate run 2, prepared** (`dist/cpu-kernels-close/`, git-ignored). Run 1's outputs, candidate jar, READY and log
+are in `run1/`. `run-gate.sh`: default `PART=SC`; allocation scored on `jfr.allocated_bytes_per_token_in_recording`, the
+whole-thread figure printed beside it and not gated; a side without a reading, or a baseline reading of 0, fails as not
+scorable (before, a missing reading was read as 0 and passed); every ratio gate compares the unrounded B/A (the table
+still prints three places). Checked offline on run 1's Part C results with the re-read values put in: TinyLlama and
+Phi-3.5-mini fail allocation (332x, 468x), Qwen2.5-3B and Mistral 7B pass, throughput as in run 1; with every baseline
+reading of one model removed, that model fails as not scorable. `wait-and-run.sh` defaults to `PART=SC`. The baseline jar
+is unchanged (`b9a0440b3a1b597a`); the candidate jar and READY are written after the pre-gate checks below pass.
+
+**Pre-gate checks on this tree (padded tile plus the in-recording field).**
+- Full unit suite (`mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player`,
+  `-Dmaven.test.failure.ignore=true` so that no module is skipped, results read from every module's surefire reports):
+  **2,437 tests, 0 failures, 0 errors, 52 skipped**, BUILD SUCCESS, 1 h 01 min (`node` 1,197 with 47 skipped, `metrics` 86).
+  The device-wide free-memory checks passed in this run. The SEVERE lines in the log are the loader's negative tests.
+- `ModelLiveRunnerIT` (`mvn install -DskipTests`, then `mvn verify -pl juno-master -Pintegration`) on TinyLlama,
+  Qwen2.5-3B, Phi-3.5-mini, Mistral 7B and Qwen3-1.7B: **5 of 5 models, every check PASS**, 0 FAIL, 14 min in the IT.
+  Checks 1 to 8 run in forked cluster JVMs on the CPU backend (pipeline and tensor parallel), so they cover the padded
+  tile; checks 9 and 10 took CUDA on this host.
+- `smoke-cpu-kernels.sh --baseline-jar <pre-tier b9a0440b3a1b597a>` (candidate: the tree jar `4e480ab9131887eb`, the same
+  source rebuilt by the IT's `mvn install`): both builds pass every check of `smoke-cpu-hot-path.sh` (four sweep models
+  at `--threads` 4 and 12, short decode and a prompt of about 512 tokens, and the moondream2 CPU vision case at the
+  741 width), and **all 18 greedy replies are identical between the builds** (0 different), 78 min.
+- `ModelQualityNllLiveTest` (`mvn test -pl node -Dtest=ModelQualityNllLiveTest -Djuno.test.modelQuality=true`), 2,048
+  tokens per model, the integer kernels against the float-activation kernels: 4 tests, 0 failures, 148 min. Mean NLL
+  ratio **1.00017** (TinyLlama), **0.99935** (Qwen2.5-3B), **1.00209** (Phi-3.5-mini), **1.00080** (Mistral 7B), against
+  `<= 1.01`; greedy argmax agreement over the first 512 positions 507, 512, 509 and 510. Phi-3.5-mini moved from Tier 02C's
+  reading (0.99935 to 1.00061 across the four) as expected from this tier's float-lane scaling and vector attention dot
+  (`host-specific` magnitudes). Published with the smoke comparison above:
+  [`20261027T025856Z-cpu-kernels-quality`](../perf-compare/20261027T025856Z-cpu-kernels-quality/INDEX.md).
+- Earlier tiers' smokes, unmodified, one at a time: `smoke-consistency.sh` (CPU and GPU) **54 PASS, 0 FAIL**;
+  `smoke-grammar.sh` **19 PASS, 0 failures**; `smoke-tools.sh` **14 PASS, 0 failures**;
+  `smoke-long-prompt-prefill.sh --cpu --lengths "128 512"` (TinyLlama and Mistral 7B, both schedules) **all checks
+  pass**; GPU regression: `smoke-packed-kquant-matmul.sh` (four sweep models, both schedules) **all checks pass**,
+  `smoke-context-policy.sh` (Phi-3.5-mini, both schedules) **all checks pass**.
+- `smoke-gpu-residency.sh` (default models: TinyLlama with its cluster runs, Mistral 7B, llama-1-30b) **13 PASS, 0 FAIL**,
+  15 min. llama-1-30b runs at partial offload (20 layers on the device, the rest on the CPU, so on this tier's
+  kernels): greedy output identical with the region on and off over 32 tokens, no device-memory growth (cross-surface
+  row 2).
+- Vision gate (unpinned, median of three, each tree's own `compare-vision.sh --skip-build`, A B alternating; baseline
+  tree `01027ee9`, jar `d3c4f655130ad917`): GPU lane latency **0.556x**, decode **2.106x**; CPU lane latency **0.555x**,
+  decode **2.104x** (gates `<= 1.25x`, `>= 0.80x`): **met**. Each build's reply is identical across its six runs; the
+  builds part after about 28 tokens (float rounding, by design).
+  [`20261027T035713Z-cpu-kernels-vision`](../perf-compare/20261027T035713Z-cpu-kernels-vision/INDEX.md).
+- Harness end to end (scratch, unpinned, not a reading): `compare-llama-cpp.sh --cpu --juno-jar <pre-tier jar>` on
+  TinyLlama, 128 + 16 tokens. The pre-tier jar ran (`juno_jar_sha256_16` `b9a0440b3a1b597a`), the tree jar extracted
+  (`jfr_extractor_jar_sha256_16` `4e480ab9131887eb`), and the new figure is present in the per-rep, aggregate, compare and
+  `INDEX.md` outputs (0.34 MB per token in the request against 338 MB on the whole-thread figure). `--selftest` and
+  `check-plan-thresholds.sh` pass.
+
+**Gate run 2 released (2026-10-26).** Jars: baseline `b9a0440b3a1b597a` (unchanged), candidate `4e480ab9131887eb` (equal
+to the tree's shaded jar). `dist/cpu-kernels-close/READY` written last. Owner command:
+`bash dist/cpu-kernels-close/wait-and-run.sh` (default `PART=SC`, about eleven hours; Part S publishes its four sweeps to
+`docs/perf-compare/` itself). Nothing that builds, tests or loads the CPU or GPU runs on this host until the gate ends.
+
+**Next:** after the owner's run: publish Part C (and the gate log) under `docs/perf-compare/<UTC>-cpu-kernels-close-gate-2/`
+and Part S's sweeps; score every threshold on the final build; restate the README's CPU tg and CPU pp rows from the
+sweeps (item 5) and move the reference column (README rule) if they supersede the current CPU reference; add
+`docs/performance.md`'s section and the `CHANGELOG.md` entry; resolve the cross-surface checklist; tick the exit criteria
+with evidence.
+
+### 2026-10-27: closing gate run 2 (owner, pinned): results; owner decisions 9 and 10
+
+**Run.** `bash dist/cpu-kernels-close/wait-and-run.sh` (`PART=SC`), 2026-10-27 10:47 to 21:30 local, jars baseline
+`b9a0440b3a1b597a`, candidate `4e480ab9131887eb` (equal to the tree's shaded jar). A first start at 00:38 local was cut
+off at about 05:56 by a host reset during Part S's last sweep (Phi-3.5-mini at 2048, Juno repetition 2 of 3): the
+system journal stops mid-stream with no panic, oops, out-of-memory kill, lockup, machine-check, thermal or GPU message,
+and the kernel on this host does not reboot on panic (`kernel.panic = 0`), so the reset came from below the operating
+system (hardware, firmware or power). Not diagnosed further; the gate was re-run whole and completed. Published:
+[`20261027T154748Z-cpu-kernels-close-gate-2`](../perf-compare/20261027T154748Z-cpu-kernels-close-gate-2/INDEX.md) (Part C,
+both gate logs) and the four closing sweeps [`20261027T154748Z`](../perf-compare/20261027T154748Z/INDEX.md) (128),
+[`20261027T161927Z`](../perf-compare/20261027T161927Z/INDEX.md) (512), [`20261027T172646Z`](../perf-compare/20261027T172646Z/INDEX.md)
+and [`20261027T202604Z`](../perf-compare/20261027T202604Z/INDEX.md) (2048); the interrupted attempt's three finished sweeps
+(`20261027T053823Z`, `20261027T060952Z`, `20261027T071820Z`) are published marked not scored (owner decision 10). Local
+paths scrubbed in every one. The gate printed `GATES MET`; every run reports `clock_pinned: true`.
+
+| Part | Gate | Result |
+|---|---|---|
+| S | CPU tg >= 0.25x; CPU pp at 512 >= 0.30x; pp at 2048 >= 1.50x the step 2 sweeps | met: tg 0.259x (Phi-3.5-mini, binding) to 0.337x; pp at 512 0.422x (Qwen2.5-3B, binding) to 0.512x; 2048 3.27x to 4.38x |
+| C | CPU tg and pp >= 1.10x (Mistral 7B, Qwen2.5-3B) and >= 0.95x (TinyLlama, Phi-3.5-mini) at 128; pp >= 1.10x at 512; allocation in the recording <= 1.10x; GC <= 1.25x | met: 128 pp 1.916x to 2.052x, tg 1.314x to 1.646x; 512 pp 2.252x to 2.684x; allocation 0.981x to 1.013x; GC 0 ms on every run |
+
+**Two readings to note.** (1) Phi-3.5-mini's 2048 sweep is flagged `NOISY` on its generation lane only (2.52 to 2.96
+t/s, 15.9% of the median against 15%); the 2048 bar reads its prefill lane, three readings 6.34 to 6.54 t/s (3.1%),
+scorable. (2) The reference tool's CPU decode reading moved 13% to 34% between the interrupted attempt and the complete
+run on the same jar (TinyLlama 27.75 and 37.08 t/s), Juno's 2% to 7%; the reference tool's own within-sweep deviation is
+1.7% to 4.8% on three models and 16.5% on TinyLlama. The scored tg ratios are the complete run's, the lower pair
+(Phi-3.5-mini 0.259x; 0.301x in the interrupted attempt). `host-specific`. Against run 1, prefill rose on every model
+(Part C pp at 128 1.34x to 1.46x, now 1.92x to 2.05x): run 1's candidate boxed vectors in the tile's leftover rows, and
+the padded tile removes that allocation and its time (`expected-general` mechanism, `host-specific` magnitudes).
+
+**Every threshold, scored on the final build** (Parts K, A and L from run 1, which the tile fix and the extractor
+change do not reach; owner decision 8):
+
+| Threshold | Reading | Source | Result |
+|---|---|---|---|
+| CPU tg ratio >= 0.25x, every sweep model | 0.259x to 0.337x | Part S, `20261027T154748Z` | met |
+| CPU pp ratio at 512 >= 0.30x, every sweep model | 0.422x to 0.512x | Part S, `20261027T161927Z` | met |
+| Q6_K <= 2.7 cycles per weight, 1 thread and per core at 12 | 2.13 and 2.49 | Part K, run 1 | met |
+| Q4_K <= 1.1 cycles per weight, 1 thread and per core at 12 | 0.931 and 1.102 | Part K, run 1 | met (12 threads within measurement resolution, owner decision 7) |
+| Prefill attention: pp at 2048 >= 1.50x the pre-tier build | 3.27x to 4.38x | Part S against the step 2 sweeps | met |
+| Prefill attention: pp at 512 >= 1.10x, same hour | 2.252x to 2.684x | Part C | met |
+| Mean NLL <= 1.01x the float-activation kernels | 0.99935x to 1.00209x | `20261027T025856Z-cpu-kernels-quality` | met |
+| CPU tg and pp >= 1.10x (Mistral 7B, Qwen2.5-3B), >= 0.95x (others), same hour | pp 1.916x to 2.052x, tg 1.314x to 1.646x | Part C | met |
+| Vision latency <= 1.25x, decode >= 0.80x | GPU lane 0.556x and 2.106x, CPU lane 0.555x and 2.104x | `20261027T035713Z-cpu-kernels-vision` | met |
+| LoRA training >= 0.95x, playback >= 0.80x | 1.024x (GPU) and 0.999x (CPU); 0.977x and 0.995x | Part L, run 1 | met |
+| 256-bit Q4_K >= 1.5x the 128-bit kernel on an AVX2 host | not measurable here | | `NEEDS-AVX2-HARDWARE`; forced-width parity tests pass |
+| Every throughput number a median of at least three, min/max published | sweeps publish min/max; Part C's per-run files and ranges are in the gate folder | | met |
+
+Standing gate: GPU tg and pp 0.969x to 1.013x (Part A, run 1), allocation in the recording 0.930x to 0.999x (GPU, run 1
+re-read) and 0.981x to 1.013x (CPU, run 2), in-span GC 0 ms on both lanes: met.
+
+**Owner decision 9 (2026-10-27): both CPU end-of-plan rows retired as met, not raised (choice (a)).** CPU tg (>= 0.25x)
+reads 0.259x, CPU pp at 512 (>= 0.30x) reads 0.422x. Item 5's restatement keeps both at the values written and retires
+them, as Tier 02D's close did for the GPU rows: no later tier owns CPU kernel work, no further Q4_K candidate is in hand,
+and the term that would hold a higher tg row is still the decode kernels' instruction cost at 128-bit integer width.
+Tier 14 reports the distances. The README's current-reference table, its end-of-plan rows and the "Restated again
+2026-10-11" paragraph are updated, the reference column moves to these sweeps (README rule: the new column in
+`TARGET-HISTORY.md`, the 2026-10-11 column's provenance moved there, superseded banners on `20261011T013059Z`,
+`20261012T045931Z`, `20261012T071213Z` and `20261012T162344Z`), and `check-plan-thresholds.sh` passes.
+
+**Owner decision 10 (2026-10-27): the interrupted attempt's sweeps are kept, marked not scored (choice (a)),** as the
+record of the reference tool's movement between sessions.
+
+**CPU context shift (after the gate).** The one CPU row-1 result left unverified on 2026-10-26: check 10 of
+`ModelLiveChecks` on TinyLlama with the handler's limit lowered to 192 positions, run on the CPU backend (CUDA hidden;
+the log names the integer-dot kernels, 12 threads) from `juno-master.jar`, built in the same package run as the candidate
+jar, its kernel classes byte-identical. Static and continuous both return 200 of 200 tokens over 3 shifts, highest
+position 191: **PASS**, about 65 s. Published in
+[`20261027T025856Z-cpu-kernels-quality`](../perf-compare/20261027T025856Z-cpu-kernels-quality/INDEX.md). A first try ran
+`smoke-context-policy.sh --cpu` on TinyLlama with the limit set to 2,048 through a temporary environment override; it is
+not evidence and the override was removed: TinyLlama's handler limit is the 32,768-position KV cap (only Phi-3.5-mini's
+is lower), so no request reached a limit and nothing shifted.
+
+**Cross-surface record (closing).**
+
+| # | Surface | Status | Evidence |
+|---|---|---|---|
+| 1 | CPU inference | PASS | kernels parity-tested (`CpuQ6kKernelParityTest` bit-identical, `CpuQ4kKernelParityTest`, `CpuIntegerGemmUnpackParityTest`, `CpuIntegerGemmTest`, `GqaVectorHeadTest`, `GqaMathPooledTest`); NLL 0.99935x to 1.00209x; `smoke-cpu-kernels.sh` 18 of 18 greedy replies identical to the pre-tier build; context-shift check 10 on the CPU, both schedules; closing gate |
+| 2 | CUDA GPU inference | PASS | Part A (run 1): tg and pp 0.969x to 1.013x, greedy equal in 3 of 3 runs per model; `smoke-gpu-residency.sh` 13 PASS with llama-1-30b at partial offload (its CPU layers on these kernels, output identical with the region on and off); `smoke-packed-kquant-matmul.sh` and `smoke-context-policy.sh` on the GPU pass |
+| 3 | ROCm GPU inference | NEEDS-AMD-HARDWARE | ROCm's host-side CPU work runs the same kernels and pool, unit-tested; no AMD device here |
+| 4 | Static schedule | PASS | `smoke-consistency.sh` (static at `--parallel 2`, CPU and GPU, 54 PASS); `smoke-long-prompt-prefill.sh --cpu` static |
+| 5 | Continuous schedule | PASS | `smoke-consistency.sh` continuous; `smoke-long-prompt-prefill.sh --cpu` continuous; continuous prefill chunks run `CpuIntegerGemm` and the pooled attention |
+| 6 | Single-node local mode | PASS | every smoke above and the closing gate |
+| 7 | Pipeline-parallel cluster | PASS | `ModelLiveRunnerIT` checks 1 to 6 in forked node JVMs on the CPU backend, five models; each node JVM selects its own width at class initialisation |
+| 8 | Tensor-parallel cluster | PASS | `ModelLiveRunnerIT` checks 7 and 8 on the CPU backend, five models |
+| 9 | LoRA training | PASS | the frozen forward stays on the float-activation kernels (items 1 to 3 do not reach it); the trainable handlers' attention takes the pooled window entry point, bit-identical; Part L training 1.024x (GPU) and 0.999x (CPU) |
+| 10 | LoRA playback | PASS | playback composes against the integer kernels; `LoraQ4KPlaybackParityTest` and the LoRA suites pass in the full unit suite on the final build (2,437 tests, 0 failures); Part L playback 0.977x and 0.995x, recall in every run |
+| 11 | Vision | PASS | `VisionWidthCpuKernelGuardTest` at B = 741; `smoke-cpu-kernels.sh`'s CPU vision case identical to the pre-tier build; `compare-vision.sh` A/B: CPU lane latency 0.555x, decode 2.104x |
+| 12 | OpenAI REST surface | PASS | the smokes run `/v1/chat/completions` (consistency, grammar 19 PASS, tools 14 PASS, long prompt) |
+| 13 | Native REST surface | PASS | `smoke-consistency.sh` checks `/v1/inference` against the single-request response |
+| 14 | CLI | PASS | no new flag; the width ends the startup `SIMD available` line (`CPU integer kernels: 128-bit lanes (host preferred 128-bit)`); `-Djuno.cpu.integerWidth` other than `128`, `256` or `auto` fails closed (`CpuIntegerWidthTest`) |
+| 15 | JVM embedding facade | N/A | no new capability; the width is chosen per JVM at class initialisation, the same in an embedder |
+
+**Docs.** `docs/performance.md`: new section "CPU decode and prefill kernels" (changes, kernel cost, the same-hour
+A/B, the pinned closing reading, quality, allocation, what bounds it now), with a dated pointer on the 2026-10-11
+section. `CHANGELOG.md`: Session 127. `docs/agent-arch.txt`: the four-row tile, the zero-row padding and the rule that no
+production kernel method takes or returns a Vector API type (`CpuKernelVectorEscapeTest`). `docs/howto.md` has carried
+the width property and the startup line since 2026-10-13. Juno-native language throughout.
+
+**Markers.** Every adopted or rejected candidate in this record carries `host-specific` or `expected-general`; the one
+without (item 2 candidate 3's speedup, 2026-10-12) is marked in place.

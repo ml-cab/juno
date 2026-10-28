@@ -1,0 +1,164 @@
+{
+  "model": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+  "llama_cpp": {
+    "status": "success",
+    "prompt_eval_tps": 19.337959,
+    "token_gen_tps": 10.827088
+  },
+  "juno": {
+    "status": "success",
+    "prompt_eval_tps": 9.486731951754148,
+    "token_gen_tps": 3.062383448323674,
+    "api_token_gen_tps": 2.8221,
+    "latency_ms": 22678,
+    "n_prompt": 512,
+    "prompt_tokens": 512,
+    "prompt_token_deviation": 0,
+    "completion_tokens": 64,
+    "juno_use_vector": 1,
+    "use_jfr": 1,
+    "gc_pause_count": 0.0,
+    "gc_pause_max_ms": 0.0,
+    "gc_pause_total_ms": 0.0,
+    "allocated_bytes_total": 17164644712,
+    "allocated_bytes_per_token": 268197573.625,
+    "allocated_bytes_in_recording": 2.19088E+7,
+    "allocated_bytes_per_token_in_recording": 380182.25,
+    "juno_reps": 3,
+    "lanes": {
+      "prefill": {
+        "prompt_tokens": 512,
+        "n_prompt": 512,
+        "n_gen": 1,
+        "completion_tokens": 1,
+        "prompt_eval_tps": 9.486731951754148,
+        "latency_ms": 54491,
+        "status": "success",
+        "gc_pause_max_ms": 0.0,
+        "gpu_attention_resolved": "n/a",
+        "gpu_clock_in_window": null
+      },
+      "generate": {
+        "prompt_tokens": 10,
+        "n_prompt": 0,
+        "n_gen": 64,
+        "completion_tokens": 64,
+        "token_gen_tps": 3.062383448323674,
+        "latency_ms": 22678,
+        "status": "success",
+        "gc_pause_max_ms": 0.0,
+        "gpu_attention_resolved": "n/a",
+        "gpu_clock_in_window": null
+      }
+    },
+    "juno_warmup": 2,
+    "rep_status": [
+      "success",
+      "success",
+      "success"
+    ],
+    "heap": "6g",
+    "heap_source": "fixed",
+    "reps": {
+      "prompt_eval_tps": {
+        "median": 9.486731951754148,
+        "min": 9.21410413904784,
+        "max": 9.572317230871633,
+        "values": [
+          9.486731951754148,
+          9.572317230871633,
+          9.21410413904784
+        ]
+      },
+      "token_gen_tps": {
+        "median": 3.062383448323674,
+        "min": 3.014309387711507,
+        "max": 3.100242974756521,
+        "values": [
+          3.014309387711507,
+          3.062383448323674,
+          3.100242974756521
+        ]
+      },
+      "api_token_gen_tps": {
+        "median": 2.8221,
+        "min": 2.7765,
+        "max": 2.8602,
+        "values": [
+          2.7765,
+          2.8221,
+          2.8602
+        ]
+      },
+      "latency_ms": {
+        "median": 22678,
+        "min": 22376,
+        "max": 23051,
+        "values": [
+          23051,
+          22678,
+          22376
+        ]
+      },
+      "gc_pause_max_ms": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "values": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "allocated_bytes_per_token": {
+        "median": 247104108.375,
+        "min": 232594593.125,
+        "max": 268197573.625,
+        "values": [
+          268197573.625,
+          247104108.375,
+          232594593.125
+        ]
+      },
+      "allocated_bytes_per_token_in_recording": {
+        "median": 342325,
+        "min": 342041.5,
+        "max": 380182.25,
+        "values": [
+          342325,
+          380182.25,
+          342041.5
+        ]
+      }
+    }
+  },
+  "prompt_parity": {
+    "ok": true,
+    "deviation": 0,
+    "tolerance": 0.10
+  },
+  "ratio_juno_over_llamacpp_pp": 0.49057565753211846,
+  "noise": {
+    "ok": true,
+    "basis": "repetition dispersion",
+    "condition": null,
+    "rep_spread": 0.02806101472761473,
+    "rep_spread_tolerance": 0.15,
+    "gc_pause_max_ms": 0.0,
+    "gc_pause_max_ms_in_token_span": 0.0,
+    "reason": null
+  },
+  "generation_parity": {
+    "ok": true,
+    "juno_completion_tokens": 64,
+    "requested": 64
+  },
+  "ratio_juno_over_llamacpp_tg": 0.2828446068161332,
+  "result_files": {
+    "llama_cpp_raw": "dist/cpu-kernels-close/runs/sweep-512/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.raw.json",
+    "juno_response": "dist/cpu-kernels-close/runs/sweep-512/Phi-3.5-mini-instruct-Q4_K_M-generate-rep1-juno-response.json",
+    "llama_result": "dist/cpu-kernels-close/runs/sweep-512/Phi-3.5-mini-instruct-Q4_K_M-llama-cpp.json",
+    "juno_result": "dist/cpu-kernels-close/runs/sweep-512/Phi-3.5-mini-instruct-Q4_K_M-juno.json",
+    "juno_jfr": "dist/cpu-kernels-close/runs/sweep-512/Phi-3.5-mini-instruct-Q4_K_M-juno-jfr.json"
+  }
+}
