@@ -318,9 +318,9 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < N; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
 
-		sgemmLayerInto(attnQ[li], ws.norm1, ws.q, qDim, H);
-		sgemmLayerInto(attnK[li], ws.norm1, ws.k, kvDim, H);
-		sgemmLayerInto(attnV[li], ws.norm1, ws.v, kvDim, H);
+		decodeBatchLayerInto(attnQ[li], ws.norm1, ws.q, qDim, H);
+		decodeBatchLayerInto(attnK[li], ws.norm1, ws.k, kvDim, H);
+		decodeBatchLayerInto(attnV[li], ws.norm1, ws.v, kvDim, H);
 
 		for (int b = 0; b < N; b++) {
 			Qwen3TransformerHandler.rmsNormPerHead(ws.q[b], qNorm[li], cfg.numHeads(), cfg.headDim(),
@@ -345,10 +345,10 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 			int seqLen = positions[b] + 1;
 			float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
 			float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
-			gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores, layerWindows[li]);
+			decodeBatchAttend(ws.q[b], kView, vView, seqLen, ws.attnOut[b], layerWindows[li]);
 		}
 
-		sgemmLayerInto(wo[li], ws.attnOut, ws.attnProj, H, qDim);
+		decodeBatchLayerInto(wo[li], ws.attnOut, ws.attnProj, H, qDim);
 
 		for (int b = 0; b < N; b++)
 			for (int d = 0; d < H; d++)
@@ -365,12 +365,36 @@ public final class Qwen3MoeTransformerHandler implements ForwardPassHandler {
 	}
 
 	private void sgemmLayerInto(GgufReader.QuantizedTensor quant, float[][] X, float[][] Y, int rows, int cols) {
+		sgemmLayerInto(quant, X, Y, rows, cols, false);
+	}
+
+	/**
+	 * {@link #sgemmLayerInto} for one decode step of several requests ({@code X} holds one row per request): where
+	 * the CPU integer kernels run, each row is computed by {@link CpuIntegerDecodeBatch}, bit for bit the
+	 * single-request decode's, so a request's output does not depend on what else is in its batch.
+	 */
+	private void decodeBatchLayerInto(GgufReader.QuantizedTensor quant, float[][] X, float[][] Y, int rows, int cols) {
+		sgemmLayerInto(quant, X, Y, rows, cols, true);
+	}
+
+	private void sgemmLayerInto(GgufReader.QuantizedTensor quant, float[][] X, float[][] Y, int rows, int cols,
+			boolean decodeBatch) {
+		if (decodeBatch && CpuKernelSelection.integerMatVec(quant.type())) {
+			CpuIntegerDecodeBatch.matmulInto(quant, X, Y, 0, rows, cols);
+			return;
+		}
 		if (CpuKernelSelection.integerGemm(quant.type(), cols)) {
 			CpuIntegerGemm.sgemmInto(quant, X, Y, 0, rows, cols);
 			return;
 		}
 		for (int b = 0; b < X.length; b++)
 			System.arraycopy(LlamaTransformerHandler.matVec(quant, X[b], rows, cols), 0, Y[b], 0, rows);
+	}
+
+	/** A decode batch's attention for one request: {@link GqaMath#attendPooledAsSerial}, its single-request decode's bits. */
+	private void decodeBatchAttend(float[] q, float[] kCache, float[] vCache, int seqLen, float[] out, int window) {
+		GqaMath.attendPooledAsSerial(q, kCache, vCache, seqLen, out, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
+				cfg.kvDim(), window);
 	}
 
 	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen, float[] out, float[] scores,

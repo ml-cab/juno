@@ -29,6 +29,8 @@ API_PORT=18082
 USE_GPU=0
 PROMPT_TEXT="could you please write me a short poem about love and war"
 PUBLISH=1
+JUNO_JAR=""
+WARMUP_ROUNDS=0
 
 log()  { printf '[parallel] %s\n' "$*"; }
 warn() { printf '[parallel] warn: %s\n' "$*" >&2; }
@@ -49,6 +51,8 @@ Options:
   --api-port N           REST port (default: ${API_PORT})
   --cpu / --gpu          Backend (default: CPU)
   --prompt TEXT          User prompt
+  --juno-jar PATH        Juno shaded jar to run (default: juno-player/target)
+  --warmup-rounds N      Untimed rounds of the same concurrent requests before the timed one (default: 0)
   --out DIR              Output directory
   --no-publish           Skip docs/perf-compare copy
   -h, --help             This help
@@ -66,6 +70,8 @@ while [[ $# -gt 0 ]]; do
     --cpu) USE_GPU=0; shift ;;
     --gpu) USE_GPU=1; shift ;;
     --prompt) PROMPT_TEXT="$2"; shift 2 ;;
+    --juno-jar) JUNO_JAR="$2"; shift 2 ;;
+    --warmup-rounds) WARMUP_ROUNDS="$2"; shift 2 ;;
     --out) OUT_ROOT="$2"; shift 2 ;;
     --no-publish) PUBLISH=0; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -82,6 +88,10 @@ MODEL_PATH="${MODELS_DIR}/${MODEL}"
 [[ -f "$MODEL_PATH" ]] || die "model not found: ${MODEL_PATH}"
 
 find_juno_jar() {
+  if [[ -n "$JUNO_JAR" ]]; then
+    [[ -f "$JUNO_JAR" ]] || die "jar not found: ${JUNO_JAR}"
+    printf '%s' "$JUNO_JAR"; return
+  fi
   shopt -s nullglob
   local jars=( "$ROOT/juno-player/target/"juno-player-*-shaded.jar )
   shopt -u nullglob
@@ -151,6 +161,7 @@ run_parallel_value() {
     --enable-preview --enable-native-access=ALL-UNNAMED
     --add-opens java.base/java.lang=ALL-UNNAMED
     --add-opens java.base/java.nio=ALL-UNNAMED
+    --add-modules jdk.incubator.vector
     -XX:+UseG1GC -XX:+AlwaysPreTouch -Xms512m -Xmx"${heap}"
     -Djuno.byteOrder=BE
     -jar "$jar"
@@ -184,6 +195,21 @@ run_parallel_value() {
   model_id="$(curl -sf "http://127.0.0.1:${API_PORT}/v1/models" \
     | jq -r '.data[0].id // .models[0].modelId // empty' 2>/dev/null || true)"
   [[ -n "$model_id" ]] || model_id="${MODEL%.gguf}"
+
+  local body w wpids
+  body="$(jq -nc --arg m "$model_id" --arg p "$PROMPT_TEXT" --argjson n "$MAX_TOKENS" \
+    '{model:$m,messages:[{role:"user",content:$p}],max_tokens:$n,temperature:0,stream:false}')"
+  for w in $(seq 1 "$WARMUP_ROUNDS"); do
+    log "warmup round ${w}/${WARMUP_ROUNDS}"
+    wpids=()
+    for i in $(seq 1 "$SESSIONS"); do
+      curl -sS --max-time 7200 -o /dev/null -X POST "http://127.0.0.1:${API_PORT}/v1/chat/completions" \
+        -H 'Content-Type: application/json' -d "$body" &
+      wpids+=($!)
+    done
+    # the server is a child of this shell too: wait for the warmup requests only
+    for p in "${wpids[@]}"; do wait "$p" || true; done
+  done
 
   local start_ns end_ns wall_ms
   start_ns="$(date +%s%N)"

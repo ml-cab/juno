@@ -49,9 +49,12 @@ commit changes there or read them into context; they are large binaries.
 `--add-modules jdk.incubator.vector` is required at compile and run time for the CPU integer
 kernels (`CpuIntegerKernels`, `CpuIntegerGemm`) and `VectorQuantKernels`; already wired into
 `pom.xml`, `scripts/run.sh`/`run.bat`, `ClusterHarness`, and the `node` module's surefire `argLine`
-(other modules' tests run without it). The default CPU path for Q4_K/Q5_K/Q6_K/Q8_0 weights quantizes
+(other modules' tests run without it, except `coordinator`'s `static-batch-integer-kernels` execution of
+`TinyLlamaStaticBatchLiveTest`). The default CPU path for Q4_K/Q5_K/Q6_K/Q8_0 weights quantizes
 the activation to 8 bits once per matmul and runs integer dot products: at decode width
-`CpuIntegerKernels`, at prefill width the cache-blocked `CpuIntegerGemm`. `CpuKernelSelection` chooses,
+`CpuIntegerKernels`, at prefill width the cache-blocked `CpuIntegerGemm`, and for a decode batch
+(`--parallel`, continuous) `CpuIntegerDecodeBatch`, whose every row is bit for bit the single-request decode's, so a
+request's greedy output does not depend on what else is batched with it. `CpuKernelSelection` chooses,
 and references no Vector API type: without the module (or with `-Djuno.cpu.integerKernels=false`)
 every CPU matmul takes the float-activation kernels, which are correctness-preserving and slower.
 LoRA training's frozen forward always uses the float-activation kernels, because its backward pass

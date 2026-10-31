@@ -196,6 +196,20 @@ runs first — see its own note.
   the row as `retired: met on arrival`. Still record the Phi-3.5-mini tg ratio from this tier's
   `compare-llama-cpp.sh` run against the program target, so a regression below 0.40x would show.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `quality.*`, `cpu.live.*`, `gpu.live.*`, `cpu.throughput.*`, `gpu.throughput.*` (mapped
+  loading, item 0, changes every load), `cpu.unit-tests`, `gpu.unit-tests`, `rocm.unit-tests`.
+- Add:
+  - Per new format (Q4_0, Q4_1, Q5_0, Q5_1, the IQ family): a model of that format in the catalog, with its
+    pinned SHA-256, and a live and a quality check on it, CPU and GPU.
+  - The new GPU kernels (Q2_K, Q3_K, Q8_0, Q4_0, item 3) and ROCm's (item 4): output against the dequantize
+    path, in `gpu.unit-tests` and `rocm.unit-tests`.
+  - Mapped loading: load time and resident memory per sweep model, as a reading.
+  - `./juno quantize` (item 5): quantize a small F16 model, load the result, mean NLL within the tier's bound.
+
 ## Models needed
 
 `Devstral-Small-2-24B-Instruct-2512-UD-IQ1_S.gguf` and
@@ -224,6 +238,8 @@ user for a small model download in that format at the point this tier starts.
       and page-cache-sharing thresholds above all met on `llama-1-30b.Q4_K_M.gguf`.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, with the mapped-loading thresholds (TTFT >= 50% lower, RSS >= 40% lower,
       shared-page-cache RSS below two loads) and the per-kernel MMQ threshold (>= 0.85x the Q4_K

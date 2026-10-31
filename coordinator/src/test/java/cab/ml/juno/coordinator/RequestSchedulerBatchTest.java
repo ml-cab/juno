@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -149,6 +150,58 @@ class RequestSchedulerBatchTest {
 		// At least some batching occurred — fewer calls than serial would make
 		// (can't assert exact number due to timing, but verify all completed)
 		futures.forEach(f -> assertThat(f.join().generatedTokens()).isGreaterThan(0));
+	}
+
+	/** BatchConfig's contract: a batch dispatches once the window has passed since its first request, or when full. */
+	@Test
+	void a_request_arriving_inside_the_window_joins_the_first_requests_batch() throws Exception {
+		List<Integer> widths = new CopyOnWriteArrayList<>();
+		scheduler = new RequestScheduler(64, recordingLoop(widths), BatchConfig.of(8, 1000));
+
+		CompletableFuture<GenerationResult> first = scheduler.submit(req("first"), TokenConsumer.discard());
+		Thread.sleep(50);
+		CompletableFuture<GenerationResult> second = scheduler.submit(req("second"), TokenConsumer.discard());
+		CompletableFuture.allOf(first, second).get(30, TimeUnit.SECONDS);
+
+		// A batch of one takes generate()'s fast path and never calls forwardBatch.
+		assertThat(widths).contains(2);
+	}
+
+	@Test
+	void a_full_batch_dispatches_without_waiting_out_the_window() throws Exception {
+		scheduler = new RequestScheduler(64, loop, BatchConfig.of(2, 120_000));
+
+		CompletableFuture.allOf(scheduler.submit(req("a"), TokenConsumer.discard()),
+				scheduler.submit(req("b"), TokenConsumer.discard())).get(30, TimeUnit.SECONDS);
+	}
+
+	/** A loop whose pipeline records how many requests each forwardBatch call carries. */
+	private static GenerationLoop recordingLoop(List<Integer> widths) {
+		InferencePipeline pipeline = new InferencePipeline() {
+			@Override
+			public float[] forward(String requestId, int[] tokens, int startPos) {
+				float[] logits = new float[1000];
+				logits[42] = 100.0f;
+				return logits;
+			}
+
+			@Override
+			public float[][] forwardBatch(List<String> requestIds, List<int[]> allTokens,
+					List<Integer> startPositions) {
+				widths.add(requestIds.size());
+				float[][] results = new float[requestIds.size()][];
+				for (int i = 0; i < requestIds.size(); i++)
+					results[i] = forward(requestIds.get(i), allTokens.get(i), startPositions.get(i));
+				return results;
+			}
+
+			@Override
+			public int vocabSize() {
+				return 1000;
+			}
+		};
+		return new GenerationLoop(new SimpleTokenizer(), Sampler.create(), pipeline,
+				new KVCacheManager(new GpuKVCache(64 * 1024 * 1024), new CpuKVCache(1000)));
 	}
 
 	@Test

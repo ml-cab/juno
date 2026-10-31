@@ -204,6 +204,15 @@ this tier is what makes those files work.
   under this tier's execution record, since the whole reason precondition 7 was hoisted into Tier 01
   was to avoid creating one at this point in the running order.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `cpu.live.*`, `quality.*`, `grammar.tinyllama`, `tools.qwen2.5-3b`.
+- Add: a tokenizer probe: per sweep model and per pre-tokenizer type on disk, Juno's token IDs for fixed strings
+  against the reference IDs the tier records (item 4), kept in the kit as data; SentencePiece encoding time on a
+  long input (item 5), as a reading.
+
 ## Models needed
 
 The four sweep models plus `Phi-3.5-mini` and `moondream2-q5_k.llamafile` cover the pre-types
@@ -233,6 +242,8 @@ that point rather than asserting against Juno's own output and calling it parity
       side of the first one.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published; the run is marked as the new reference for any model whose token count
       changed, and the shift is explained.

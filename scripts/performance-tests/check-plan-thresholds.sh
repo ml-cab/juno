@@ -41,6 +41,10 @@
 #      owns" or "unowned" links a tier file (](TIER-...md)): the tier that owns
 #      the work, or the tier record where the owner decided to leave it unowned.
 #      An unowned carry-forward with no link is work nobody reads again.
+#  10. A tier whose Status line does not say "complete" has a "## Kit probes"
+#      section with at least one list item: the hardware validation kit's probes
+#      that cover its change and the ones it adds (execution rule 10). A kit that
+#      no tier is told to extend falls behind the code it measures.
 #
 # The documentation-hardening tier file (TIER-14-*) is excluded from checks 1 and
 # the standing-gate half of 5: it names the strings to describe them.
@@ -60,7 +64,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --plan) PLAN_DIR="$2"; shift 2 ;;
     --perf-compare) PERF_DIR="$2"; shift 2 ;;
-    -h|--help) sed -n '2,50p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    -h|--help) sed -n '2,55p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) printf 'check-plan-thresholds: unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -131,6 +135,17 @@ missed_escape_criteria() {
   ' "$1"
 }
 
+# Check 10. Succeeds when the file has a "## Kit probes" heading followed, before
+# the next heading, by at least one list item.
+kit_probes_section_ok() {
+  awk '
+    /^## Kit probes[[:space:]]*$/ { insec = 1; next }
+    insec && /^#/ { insec = 0 }
+    insec && /^- / { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "$1"
+}
+
 # Check 9. Prints "<line number>\t<first 70 chars>" for each paragraph (blank-line
 # separated) that says "no tier owns" or "unowned" without linking a tier file.
 unlinked_unowned_paragraphs() {
@@ -188,6 +203,9 @@ for f in "$PLAN_DIR"/TIER-*.md; do
         && ! grep -q 'Standing throughput and allocation gate' "$f"; then
       fail "${name}: open tier with a perf gate never names the Standing throughput and allocation gate (README, Test infrastructure)"
     fi
+    # Check 10: an open tier names the kit probes for its change.
+    kit_probes_section_ok "$f" \
+      || fail "${name}: open tier has no '## Kit probes' section listing its kit probes (execution rule 10)"
   fi
 
   [[ "$name" == TIER-14-* ]] && continue

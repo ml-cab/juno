@@ -21,6 +21,12 @@ and attention work for the same reason underlying every batching improvement: mo
 sequences means more attention calls, and those need to be cheap per-call for a bigger batch to
 actually help rather than hurt.
 
+*(Added 2026-10-31.)* On the GPU the running set's decode step goes through the same `forwardBatch` call as a
+static batch, and that step ran outside the device-resident decode region until
+[Tier 02H](TIER-02H-batched-gpu-decode.md): on 2026-10-31 a static batch of 8 read 0.748x and 0.676x of 8
+requests decoded one at a time (`docs/perf-compare/20261031T040116Z-gpu-parallel-window/`). This tier's GPU
+gate is measured on Tier 02H's batched region.
+
 ## Scope
 
 ### In scope
@@ -192,6 +198,17 @@ actually help rather than hurt.
     this tier is scoped to change only `continuous`. If the A/B's own spread on this host is wider than
     2%, record the spread and score against it rather than claiming a resolution the harness lacks.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `schedule.tinyllama`, `gpu.schedule.tinyllama`, `mixed-prefill.*`,
+  `gpu.mixed-prefill.tinyllama`, `prefill-batch.*`, `gpu.prefill-batch.tinyllama`, `long-prompt.*`,
+  `gpu.long-prompt.*`, and the continuous checks in `consistency.tinyllama`.
+- Add: the capacity sweep (item 2) as a GPU reading; the admission check (twice the admitted capacity offered:
+  every request completes, none fails on memory, none running is evicted, arrival order kept); continuous
+  against static on the 8x64 benchmark as a reading; item 6's prompt-alone and mixed-load readings.
+
 ## Models needed
 
 Existing models are sufficient (this is a scheduling change, not architecture-dependent). Reuse the
@@ -226,6 +243,8 @@ comparison.
       deferral.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published showing the result against every threshold above. A miss keeps the tier open;
       closing on one takes an explicit **Owner decision** recorded here with the measured number.

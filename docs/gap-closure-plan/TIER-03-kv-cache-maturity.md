@@ -200,6 +200,24 @@ ordering note both withdraw.)*
   - defragmentation's pause: a compaction pass over a fragmented pool adds **<= 5 ms** to any single
     decode step at ctx 8192, or it runs off the decode path entirely.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `schedule.tinyllama`, `gpu.schedule.tinyllama` (session reuse on paged KV),
+  `mixed-prefill.*`, `gpu.mixed-prefill.tinyllama`, `long-prompt.*`, `gpu.long-prompt.*`, `context-policy.*`,
+  `gpu.context-policy.*`, `consistency.tinyllama`, `gpu.consistency.tinyllama`, `cpu.unit-tests`,
+  `gpu.unit-tests`.
+- Add:
+  - A change, item 2: the consistency probes assert "no prefix-cache hit for stateless traffic". With
+    cross-session prefix sharing a shared prefix is meant to hit, so the check becomes: a shared-prefix hit is
+    counted, and the reply equals the unshared reply.
+  - Q4_0 KV (item 4) and the quantized device KV (item 7): mean NLL against F16 KV per sweep model, and batched
+    equal to single on the device at each `--cache-type-k`/`--cache-type-v`.
+  - Session save and restore (item 5): a restored session continues with the reply the unbroken session gives.
+  - Defragmentation (item 3): replies unchanged under page churn, with the compaction counted.
+  - The host KV footprint per session (item 6), as a reading.
+
 ## Models needed
 
 Existing models suffice for correctness and defrag testing. No new downloads required for this
@@ -225,6 +243,8 @@ tier specifically.
 - [ ] Disk-backed session save/restore round-trips correctly across a process restart.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved, vision/LoRA-play exclusions explicit and tested.
 - [ ] Perf gate published; `paged_vs_dense%` <= 2% at ctx 8192 / batch 8, defrag pause within budget.
 - [ ] The session save/restore surface is in `api/src/main/resources/openapi.yaml` and

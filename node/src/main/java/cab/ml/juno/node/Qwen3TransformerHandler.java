@@ -1026,9 +1026,9 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < N; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
 
-		sgemmLayerInto(attnQ[li], attnQQ4Dev, attnQDev, li, ws.norm1, ws.q, qDim, H);
-		sgemmLayerInto(attnK[li], attnKQ4Dev, attnKDev, li, ws.norm1, ws.k, kvDim, H);
-		sgemmLayerInto(attnV[li], attnVQ4Dev, attnVDev, li, ws.norm1, ws.v, kvDim, H);
+		decodeBatchLayerInto(attnQ[li], attnQQ4Dev, attnQDev, li, ws.norm1, ws.q, qDim, H);
+		decodeBatchLayerInto(attnK[li], attnKQ4Dev, attnKDev, li, ws.norm1, ws.k, kvDim, H);
+		decodeBatchLayerInto(attnV[li], attnVQ4Dev, attnVDev, li, ws.norm1, ws.v, kvDim, H);
 
 		for (int b = 0; b < N; b++) {
 			rmsNormPerHead(ws.q[b], qNorm[li], cfg.numHeads(), cfg.headDim(), cfg.rmsNormEps());
@@ -1056,11 +1056,11 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 				int seqLen = positions[b] + 1;
 				float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
 				float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
-				gqaInto(cfg, ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores, layerWindows[li]);
+				decodeBatchAttend(ws.q[b], kView, vView, seqLen, ws.attnOut[b], layerWindows[li]);
 			}
 		}
 
-		sgemmLayerInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, qDim);
+		decodeBatchLayerInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, qDim);
 
 		for (int b = 0; b < N; b++)
 			for (int d = 0; d < H; d++)
@@ -1069,14 +1069,14 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < N; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
 
-		sgemmLayerInto(ffnGate[li], ffnGateQ4Dev, ffnGateDev, li, ws.norm2, ws.gate, I, H);
-		sgemmLayerInto(ffnUp[li], ffnUpQ4Dev, ffnUpDev, li, ws.norm2, ws.up, I, H);
+		decodeBatchLayerInto(ffnGate[li], ffnGateQ4Dev, ffnGateDev, li, ws.norm2, ws.gate, I, H);
+		decodeBatchLayerInto(ffnUp[li], ffnUpQ4Dev, ffnUpDev, li, ws.norm2, ws.up, I, H);
 
 		for (int b = 0; b < N; b++)
 			for (int i = 0; i < I; i++)
 				ws.hidden[b][i] = LlamaTransformerHandler.silu(ws.gate[b][i]) * ws.up[b][i];
 
-		sgemmLayerInto(wDown[li], wDownQ4Dev, wDownDev, li, ws.hidden, ws.ffnOut, H, I);
+		decodeBatchLayerInto(wDown[li], wDownQ4Dev, wDownDev, li, ws.hidden, ws.ffnOut, H, I);
 
 		for (int b = 0; b < N; b++)
 			for (int d = 0; d < H; d++)
@@ -1095,6 +1095,21 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 
 	private void sgemmLayerInto(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix[] q4,
 			DeviceHalfMatrix[] half, int li, float[][] X, float[][] Y, int rows, int cols) {
+		sgemmLayerInto(quant, q4, half, li, X, Y, rows, cols, false);
+	}
+
+	/**
+	 * {@link #sgemmLayerInto} for one decode step of several requests ({@code X} holds one row per request): where
+	 * the CPU integer kernels run, each row is computed by {@link CpuIntegerDecodeBatch}, bit for bit the
+	 * single-request decode's, so a request's output does not depend on what else is in its batch.
+	 */
+	private void decodeBatchLayerInto(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix[] q4,
+			DeviceHalfMatrix[] half, int li, float[][] X, float[][] Y, int rows, int cols) {
+		sgemmLayerInto(quant, q4, half, li, X, Y, rows, cols, true);
+	}
+
+	private void sgemmLayerInto(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix[] q4,
+			DeviceHalfMatrix[] half, int li, float[][] X, float[][] Y, int rows, int cols, boolean decodeBatch) {
 		if (q4 != null && q4[li] != null) {
 			backend.sgemmInto(q4[li], X, Y);
 			return;
@@ -1103,12 +1118,22 @@ public final class Qwen3TransformerHandler implements ForwardPassHandler {
 			backend.sgemmInto(half[li], X, Y);
 			return;
 		}
+		if (decodeBatch && CpuKernelSelection.integerMatVec(quant.type())) {
+			CpuIntegerDecodeBatch.matmulInto(quant, X, Y, 0, rows, cols);
+			return;
+		}
 		if (CpuKernelSelection.integerGemm(quant.type(), cols)) {
 			CpuIntegerGemm.sgemmInto(quant, X, Y, 0, rows, cols);
 			return;
 		}
 		for (int b = 0; b < X.length; b++)
 			System.arraycopy(LlamaTransformerHandler.matVec(quant, X[b], rows, cols), 0, Y[b], 0, rows);
+	}
+
+	/** A decode batch's attention for one request: {@link GqaMath#attendPooledAsSerial}, its single-request decode's bits. */
+	private void decodeBatchAttend(float[] q, float[] kCache, float[] vCache, int seqLen, float[] out, int window) {
+		GqaMath.attendPooledAsSerial(q, kCache, vCache, seqLen, out, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
+				cfg.kvDim(), window);
 	}
 
 	private static void gqaInto(Qwen3Config cfg, float[] q, float[] kCache, float[] vCache, int seqLen,

@@ -130,6 +130,17 @@ proven out, so ROCm parity work is porting a known-good design rather than co-de
   512-token window must be **>= 5x** today's GEMV-looped ROCm prefill, recorded as `NEEDS-AMD-HARDWARE`
   until then.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `rocm.unit-tests`, and on a tester's AMD GPU the `gpu` suite on the backend that loads
+  (`gpu.throughput.*`, `gpu.consistency.tinyllama`, `gpu.long-prompt.*`, `gpu.lora.tinyllama`).
+- Add: ROCm tiled-GEMM prefill (item 1) at 512 and 2048 tokens as a reading on AMD; the ROCm attention kernel
+  (item 8) against the CPU attention, in `rocm.unit-tests`; the allocator holdback (item 10) as a reading. The
+  `NEEDS-AMD-HARDWARE` rows are scored from testers' zips, their hosts in `INVENTORY.md`'s "Borrowed hardware"
+  table.
+
 ## Models needed
 
 Existing models suffice. ROCm validation needs an AMD GPU, which is not present.
@@ -148,6 +159,8 @@ Existing models suffice. ROCm validation needs an AMD GPU, which is not present.
       declined with reasoning) — not left open.
 - [ ] Every ROCm conclusion in the execution record carries a `host-specific` or `expected-general`
       marker.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published: CUDA and CPU >= 0.95x the pre-tier build, and the standing throughput and
       allocation gate met.

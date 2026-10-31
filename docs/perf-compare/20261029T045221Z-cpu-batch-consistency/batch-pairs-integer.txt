@@ -1,0 +1,9 @@
+INFO: CPU quantized matmul: integer-dot kernels for Q4_K, Q5_K, Q6_K, Q8_0
+INFO: CPU matmul threads: 12
+single 0: 'The capital of France is Paris.' [1576, 7483, 310, 3444, 338, 3681, 29889]
+single 1: 'Red.' [9039, 21106, 29879]
+single 2: 'A spider has six legs.' [29909, 805, 1241, 756, 4832, 21152, 29889]
+MISMATCH seq [1,2] row 1 prompt 2 at token 4: single 'A spider has six legs.' batched 'A spider has eight legs.'
+MISMATCH seq [2,1] row 0 prompt 2 at token 4: single 'A spider has six legs.' batched 'A spider has eight legs.'
+SEQUENTIAL mismatches: 2
+CONCURRENT mismatches: 0

@@ -277,6 +277,35 @@ class HfGgufFetcherTest {
 	}
 
 	@Test
+	void downloadPinned_fetches_the_named_file_at_the_pinned_revision_not_main(@TempDir Path destDir)
+			throws Exception {
+		startServer();
+		byte[] llamafile = "LLAMAFILE-BYTES".getBytes(StandardCharsets.UTF_8);
+		server.createContext("/" + REPO + "/resolve/0123abcd/vision.llamafile", ex -> serveAsset(ex, llamafile, "\"x\""));
+		HfGgufFetcher f = fetcher(destDir);
+
+		Path got = f.downloadPinned(REPO, "0123abcd", "vision.llamafile", destDir);
+
+		assertThat(got).isEqualTo(destDir.resolve("vision.llamafile"));
+		assertThat(Files.readAllBytes(got)).isEqualTo(llamafile);
+		assertThat(destDir.resolve("vision.llamafile.part")).doesNotExist();
+	}
+
+	@Test
+	void downloadPinned_resumes_a_partial_file(@TempDir Path destDir) throws Exception {
+		startServer();
+		server.createContext("/" + REPO + "/resolve/0123abcd/tiny-model.Q4_K_M.gguf",
+				ex -> serveAsset(ex, Q4_CONTENT, Q4_ETAG));
+		Files.write(destDir.resolve("tiny-model.Q4_K_M.gguf.part"), java.util.Arrays.copyOf(Q4_CONTENT, 6));
+		HfGgufFetcher f = fetcher(destDir);
+
+		Path got = f.downloadPinned(REPO, "0123abcd", "tiny-model.Q4_K_M.gguf", destDir);
+
+		assertThat(Files.readAllBytes(got)).isEqualTo(Q4_CONTENT);
+		assertThat(fullGetCount.get()).isZero();
+	}
+
+	@Test
 	void defaultCacheDir_is_under_user_home_cache_juno_models_not_the_fixtures_dir() {
 		Path dir = HfGgufFetcher.defaultCacheDir();
 		assertThat(dir.toString()).contains(".cache").contains("juno").contains("models");

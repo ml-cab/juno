@@ -99,7 +99,10 @@ public final class SseTokenConsumer implements TokenConsumer {
 		sb.append('"').append(key).append("\":").append(value);
 	}
 
-	/** Minimal JSON string escaping — handles the common cases. */
+	/**
+	 * JSON string escaping. Other control characters go out as six-character unicode escapes: JSON allows none
+	 * raw, and a byte-fallback token can decode to one.
+	 */
 	private static String escape(String s) {
 		if (s == null)
 			return "";
@@ -112,7 +115,12 @@ public final class SseTokenConsumer implements TokenConsumer {
 			case '\n' -> out.append("\\n");
 			case '\r' -> out.append("\\r");
 			case '\t' -> out.append("\\t");
-			default -> out.append(c);
+			default -> {
+				if (c < 0x20)
+					out.append(String.format("\\u%04x", (int) c));
+				else
+					out.append(c);
+			}
 			}
 		}
 		return out.toString();

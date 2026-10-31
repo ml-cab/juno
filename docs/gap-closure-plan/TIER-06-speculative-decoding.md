@@ -151,6 +151,16 @@ handler that exists when this tier starts**, including `gemma4`, `mistral3`, `qw
   where draft-model decoding cannot, and wiring draft-model decoding into batch, continuous and eight
   handlers is not worth doing for a strategy that stays below 1.0x.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `consistency.*`, `gpu.consistency.tinyllama`, `grammar.tinyllama` (grammar with speculation,
+  item 4), `schedule.tinyllama`, `gpu.schedule.tinyllama`, `cpu.throughput.*`, `gpu.throughput.*`.
+- Add: a speculative-decoding probe: per `--spec-type` (draft model, lookahead), greedy output equal to
+  generation without speculation, on a single request, a static batch and the continuous schedule, and per
+  architecture with a verify path; the generation speedup as a reading, CPU and GPU.
+
 ## Models needed
 
 `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf` as the draft model and `mistral-7b-instruct-v0.1-q4_k_m
@@ -183,6 +193,8 @@ new download.
 - [ ] Grammar + speculative decoding interaction tested and correct.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published showing the fix.
 - [ ] Docs updated.

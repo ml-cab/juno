@@ -415,9 +415,9 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         float[][] q = new float[N][H];
         float[][] k = new float[N][kvDim];
         float[][] v = new float[N][kvDim];
-        sgemmQuantBatch(attnQkv[li], xNorm, q, 0, H, H);
-        sgemmQuantBatch(attnQkv[li], xNorm, k, H, H + kvDim, H);
-        sgemmQuantBatch(attnQkv[li], xNorm, v, H + kvDim, H + 2 * kvDim, H);
+        decodeBatchQuantInto(attnQkv[li], xNorm, q, 0, H, H);
+        decodeBatchQuantInto(attnQkv[li], xNorm, k, H, H + kvDim, H);
+        decodeBatchQuantInto(attnQkv[li], xNorm, v, H + kvDim, H + 2 * kvDim, H);
 
         if (attnQkvBias[li] != null) {
             float[] bqkv = attnQkvBias[li];
@@ -445,13 +445,13 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         }
 
         float[][] attnProj = new float[N][H];
-        sgemmQuantBatch(wo[li], attnOut, attnProj, 0, H, H);
+        decodeBatchQuantInto(wo[li], attnOut, attnProj, 0, H, H);
         if (woBias[li] != null)
             for (int b = 0; b < N; b++)
                 for (int i = 0; i < H; i++) attnProj[b][i] += woBias[li][i];
 
         float[][] up = new float[N][I];
-        sgemmQuantBatch(wUp[li], xNorm, up, 0, I, H);
+        decodeBatchQuantInto(wUp[li], xNorm, up, 0, I, H);
         if (wUpBias[li] != null)
             for (int b = 0; b < N; b++)
                 for (int i = 0; i < I; i++) up[b][i] += wUpBias[li][i];
@@ -462,7 +462,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
                 hidden[b][i] = gelu(up[b][i]);
 
         float[][] ffnOut = new float[N][H];
-        sgemmQuantBatch(wDown[li], hidden, ffnOut, 0, H, I);
+        decodeBatchQuantInto(wDown[li], hidden, ffnOut, 0, H, I);
         if (wDownBias[li] != null)
             for (int b = 0; b < N; b++)
                 for (int i = 0; i < H; i++) ffnOut[b][i] += wDownBias[li][i];
@@ -482,7 +482,7 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
         for (int b = 0; b < N; b++)
             xNorm[b] = layerNorm(x[b], outputNorm, outputNormBias, cfg.rmsNormEps());
         float[][] logits = new float[N][vocab];
-        sgemmQuantBatch(outputProj, xNorm, logits, 0, vocab, H);
+        decodeBatchQuantInto(outputProj, xNorm, logits, 0, vocab, H);
         if (outputBias != null)
             for (int b = 0; b < N; b++)
                 for (int i = 0; i < vocab; i++)
@@ -536,6 +536,20 @@ public final class Phi2TransformerHandler implements ForwardPassHandler {
                 a.flush(requestId, startLayer + li, kCache[li], vCache[li], seqLen);
         }
         return x;
+    }
+
+    /**
+     * {@link #sgemmQuantBatch} for one decode step of several requests ({@code X} holds one row per request):
+     * where the CPU integer kernels run, each row is computed by {@link CpuIntegerDecodeBatch}, bit for bit the
+     * single-request decode's, so a request's output does not depend on what else is in its batch.
+     */
+    private static void decodeBatchQuantInto(GgufReader.QuantizedTensor quant, float[][] X, float[][] Y,
+            int rowStart, int rowEnd, int cols) {
+        if (CpuKernelSelection.integerMatVec(quant.type())) {
+            CpuIntegerDecodeBatch.matmulInto(quant, X, Y, rowStart, rowEnd, cols);
+            return;
+        }
+        sgemmQuantBatch(quant, X, Y, rowStart, rowEnd, cols);
     }
 
     /**

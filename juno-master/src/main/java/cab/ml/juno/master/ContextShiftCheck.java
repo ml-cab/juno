@@ -30,7 +30,6 @@ import cab.ml.juno.coordinator.RequestPriority;
 import cab.ml.juno.coordinator.RequestScheduler;
 import cab.ml.juno.coordinator.TokenConsumer;
 import cab.ml.juno.kvcache.ServeScheduleOptions;
-import cab.ml.juno.node.CudaAvailability;
 import cab.ml.juno.node.ForwardPassHandler;
 import cab.ml.juno.node.ForwardPassHandlerLoader;
 import cab.ml.juno.node.GpuContext;
@@ -124,14 +123,14 @@ final class ContextShiftCheck {
 		}
 	}
 
-	static String run(String modelPath, LlamaConfig cfg, GgufTokenizer tokenizer) throws IOException {
+	static String run(String modelPath, LlamaConfig cfg, GgufTokenizer tokenizer, boolean cuda) throws IOException {
 		InferenceRequest request = InferenceRequest.of("model",
 				List.of(ChatMessage.system("You are a careful assistant. Answer in complete sentences."),
 						ChatMessage.user(ModelLiveChecks.longPrompt(tokenizer, PROMPT_TOKENS))),
 				SamplingParams.deterministic().withMaxTokens(GENERATED).withMinTokens(GENERATED),
 				RequestPriority.NORMAL).withContextShift(true);
 		String savedSchedule = System.getProperty(ServeScheduleOptions.ENV);
-		GpuContext gpu = CudaAvailability.isAvailable() ? GpuContext.init(0) : null;
+		GpuContext gpu = cuda ? GpuContext.init(0) : null;
 		try {
 			MatVec backend = gpu != null ? gpu.createMatVec() : ForwardPassHandlerLoader.selectBackend();
 

@@ -28,11 +28,20 @@ import cab.ml.juno.tokenizer.ChatMessage;
 import cab.ml.juno.tokenizer.GgufTokenizer;
 
 /**
- * End-to-end check on a real model (CPU path) that static micro-batching never
- * resumes from KV it did not write. A repeated prompt in a later batch used to
- * match a stale prefix-cache entry, skip prefill, and decode over zeroed KV; the
- * greedy output then diverged from the single-request output for the same prompt.
- * Skipped when the model file is not present.
+ * End-to-end check on a real model (CPU path) that a static micro-batch gives
+ * every request its single-request greedy output:
+ * <ul>
+ * <li>it never resumes from KV it did not write. A repeated prompt in a later
+ * batch used to match a stale prefix-cache entry, skip prefill, and decode over
+ * zeroed KV;</li>
+ * <li>its arithmetic does not depend on the batch. The colour answer ends after
+ * three tokens, so the spider request then decodes alone; while the batched decode
+ * ran another matmul than the single-request decode, that switch flipped the spider
+ * answer's near tie at its fifth token ("six" to "eight") on the CPU's default
+ * integer kernels.</li>
+ * </ul>
+ * Runs on those kernels in its own surefire execution (the Vector API module is on);
+ * skipped when the model file is not present.
  */
 class TinyLlamaStaticBatchLiveTest {
 
@@ -74,7 +83,13 @@ class TinyLlamaStaticBatchLiveTest {
 		BatchEntry c2 = stateless("How many legs does a spider have?");
 		List<GenerationResult> round2 = loop.generateBatch(List.of(a2, c2));
 
+		BatchEntry b3 = stateless("Name one primary color.");
+		BatchEntry c3 = stateless("How many legs does a spider have?");
+		List<GenerationResult> round3 = loop.generateBatch(List.of(b3, c3));
+
 		List<Integer> aSingle = loop.generate(stateless("What is the capital of France?").request(),
+				TokenConsumer.discard()).tokenIds();
+		List<Integer> bSingle = loop.generate(stateless("Name one primary color.").request(),
 				TokenConsumer.discard()).tokenIds();
 		List<Integer> cSingle = loop.generate(stateless("How many legs does a spider have?").request(),
 				TokenConsumer.discard()).tokenIds();
@@ -82,6 +97,8 @@ class TinyLlamaStaticBatchLiveTest {
 		assertThat(round1.get(0).tokenIds()).isEqualTo(aSingle);
 		assertThat(round2.get(0).tokenIds()).as("repeated prompt in a later batch").isEqualTo(aSingle);
 		assertThat(round2.get(1).tokenIds()).isEqualTo(cSingle);
+		assertThat(round3.get(0).tokenIds()).isEqualTo(bSingle);
+		assertThat(round3.get(1).tokenIds()).as("a request that finishes its decode batch alone").isEqualTo(cSingle);
 	}
 
 	private static LocalInferencePipeline singleNodePipeline(LlamaConfig config) throws Exception {

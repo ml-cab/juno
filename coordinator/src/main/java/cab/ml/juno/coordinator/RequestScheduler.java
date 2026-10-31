@@ -36,8 +36,9 @@ import cab.ml.juno.kvcache.ServeScheduleOptions;
  * ── Batching enabled (BatchConfig with maxBatchSize > 1) ─────────────────────
  * A single background virtual thread runs the batch-collect loop:
  *
- * loop: 1. Block on queue.poll(batchWindowMs) — wait for first request 2. Drain
- * up to (maxBatchSize - 1) more with non-blocking poll() 3. Dispatch the batch
+ * loop: 1. Block on queue.poll(batchWindowMs) — wait for first request 2. Keep
+ * collecting until batchWindowMs has passed since the first request or
+ * maxBatchSize requests have arrived, whichever comes first 3. Dispatch the batch
  * on a new virtual thread via generateBatch() 4. Each result completes the
  * corresponding CompletableFuture 5. Immediately resume collecting the next
  * batch
@@ -241,7 +242,8 @@ public final class RequestScheduler {
 
 	/**
 	 * Collect up to maxBatchSize requests. Blocks up to batchWindowMs for the
-	 * first, then drains the rest immediately.
+	 * first, then holds the batch open until batchWindowMs has passed since the
+	 * first arrived or the batch is full, whichever comes first.
 	 */
 	private List<InferenceRequest> collectBatch() throws InterruptedException {
 		List<InferenceRequest> batch = new ArrayList<>(batchConfig.maxBatchSize());
@@ -253,8 +255,10 @@ public final class RequestScheduler {
 			return batch;
 		batch.add(first);
 
+		long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(windowMs);
 		while (batch.size() < batchConfig.maxBatchSize()) {
-			InferenceRequest next = queue.poll();
+			long remaining = deadline - System.nanoTime();
+			InferenceRequest next = remaining > 0 ? queue.poll(remaining, TimeUnit.NANOSECONDS) : queue.poll();
 			if (next == null)
 				break;
 			batch.add(next);

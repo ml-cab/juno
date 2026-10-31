@@ -214,6 +214,16 @@ against the existing (correct, if slow) single-node dense computation.
   - **Recorded, no threshold:** 2- and 3-way TP throughput against single-node dense on this host.
     Expect it to be below 1.0x. Report the number and the reason plainly rather than omitting it.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `cpu.live.*` and `gpu.live.*` (live checks 7 and 8 are the tensor-parallel cluster), and the
+  pipeline-cluster checks they hold.
+- Add: real tensor-parallel slicing (items 1 and 3): greedy output equal to single-node output per handler;
+  batched prefill on every cluster path (item 5) as a reading; single-process multi-GPU (item 4), runnable only
+  on a host with two or more GPUs, so a tester's run scores it.
+
 ## Models needed
 
 Existing dense models suffice for parity testing across the simulated shard counts step 0 makes
@@ -242,6 +252,8 @@ tier reaches that point).
       GPU.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved; continuous+tensor-parallel fallback-to-static
       behavior explicitly confirmed unchanged (not silently made reachable in a half-working state).
 - [ ] Perf gate published: parity gate met, single-node Juno t/s >= 0.95x the pre-tier build (same-hour A/B), AllReduce/gRPC

@@ -54,6 +54,8 @@
 		<module>juno-player</module>
 		<module>juno-master</module>
 		<module>juno-node</module>
+		<!-- hardware validation kit: built and tested, never installed or deployed -->
+		<module>juno-kit</module>
 	</modules>
 	<properties>
 		<!-- Java -->
@@ -492,6 +494,10 @@
 							<checksums>required</checksums>
 							<deploymentName>
 								${project.groupId}:${project.artifactId}:${project.version}</deploymentName>
+							<!-- the hardware validation kit is a tool run from a checkout -->
+							<excludeArtifacts>
+								<artifact>juno-kit</artifact>
+							</excludeArtifacts>
 						</configuration>
 					</plugin>
 				</plugins>

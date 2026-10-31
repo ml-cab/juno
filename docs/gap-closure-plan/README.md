@@ -9,16 +9,17 @@ before acting on it — both documents are snapshots, not ground truth that stay
 
 1. **One tier at a time, to feature-complete.** Do not start the next tier's work until the current
    tier's exit criteria (bottom of its file) are all checked off. "Next" means the next row of the
-   tier index below, not the next integer — the index is the running order. Eleven rows carry a
+   tier index below, not the next integer — the index is the running order. Twelve rows carry a
    non-integer number or sit out of integer order: Tier 01B sits between 01 and 02, Tier 01C between
-   01B and 02, Tiers 02B, 02C, 02D, 02E, 02F and then 02G between 02 and 03, Tier 04B between 04 and 05,
+   01B and 02, Tiers 02B, 02C, 02D, 02E, 02F, 02G and then 02H between 02 and 03, Tier 04B between 04 and 05,
    Tier 04C between 04B and 05, and Tier 08 runs before Tier 06. Only the last of those actually breaks
-   the order — the lettered tiers read in sequence — but all eleven are enumerated here because this
+   the order — the lettered tiers read in sequence — but all twelve are enumerated here because this
    list, not the numbering, is what a reader builds the running order from, and several were added to
    the tree after the first three were written (02B and 02C on 2026-10-04, split out of Tiers 02 and 10;
    02D on 2026-10-08, by owner decision when Tier 02 closed; 02E on 2026-10-11, plan review, to own the
    CPU kernel work the only active end-of-plan row turns on; 02F and 02G on 2026-10-13, by owner
-   decision, for the hardware validation kit and CUDA on Windows).
+   decision, for the hardware validation kit and CUDA on Windows; 02H on 2026-10-31, by owner decision,
+   for batched GPU decode).
    Partial, half-wired features are not acceptable stopping points between tiers.
 2. **No surface left aside.** A tier is not complete until its change has been carried through
    every product surface it touches — see "Cross-surface compatibility checklist" below. If a
@@ -100,6 +101,9 @@ before acting on it — both documents are snapshots, not ground truth that stay
      record where the owner decided to leave it unowned. The only active end-of-plan row sat for a tier with
      its levers described as owned by no tier, and Tier 02D's greedy-softmax handoff to Tier 05 existed only
      in Tier 02D's record; both are now linked ([Tier 02E](TIER-02E-cpu-decode-kernels.md) and [Tier 05](TIER-05-sampling-grammar.md)).
+   - *(check 10, added 2026-10-31 by [Tier 02F](TIER-02F-hardware-validation-kit.md) step 7)* an open tier file
+     without a `## Kit probes` section holding at least one list item (execution rule 10). It was shown failing on
+     all 17 open tier files before the sections were written.
 
    Tier 14's own file is excluded from the first check, since it names the string to describe it. The
    script exits non-zero listing every failure; it passes against this tree and was shown failing
@@ -138,6 +142,21 @@ before acting on it — both documents are snapshots, not ground truth that stay
    commit `1f90b68` changed both launchers to derive the JVM heap from the model file size. Both
    landed while Tier 01 sat at eight unticked exit criteria, and neither was recorded in any tier
    file. Both are now in Tier 01's execution record. A third occurrence should not need a new rule.
+10. **Every tier names its kit probes** *(added 2026-10-31 by [Tier 02F](TIER-02F-hardware-validation-kit.md)
+   step 7)*. The hardware validation kit (`juno-kit`) is how hardware this host lacks gets measured, and it
+   measures only what its catalog holds. Every open tier file carries a `## Kit probes` section with two lists:
+   - **Keep passing**: the catalog probes (`./juno-kit.sh --list`) that cover what the tier changes. They pass
+     on the tier's build before it closes.
+   - **Add**: a probe or check for each feature, flag or threshold the tier introduces. Each gets a self-test
+     that runs in `mvn test` with no model and no GPU, and its line in
+     `juno-kit/src/main/resources/cab/ml/juno/kit/coverage.tsv`; `CoverageTest` fails while a catalog probe, a
+     supported architecture, a smoke or compare script or a cross-surface row has no line. A probe whose
+     expectation the tier changes (a refusal that becomes support, a cache miss that becomes a hit) is listed
+     here as a change, so that it is not left to fail. A tier that adds nothing says so and why.
+
+   Check 10 of `check-plan-thresholds.sh` fails an open tier file without the section. It checks that the
+   section exists and lists something; whether the named probes are the right ones is the tier's review, and
+   whether the catalog and the coverage file agree is `CoverageTest`'s.
 
 ## Program target
 
@@ -506,9 +525,9 @@ processing) and the largest remaining one (CPU, Tier 02C), then outward through 
 decoding → scheduling → parallelism → backend breadth → vision → LoRA → server/cluster surface),
 closing with a documentation hardening pass.
 
-Eleven rows do not sit where their integer would put them, and the table below — not the numbering —
+Twelve rows do not sit where their integer would put them, and the table below — not the numbering —
 is the running order (execution rule 1). **Tiers 01B and 01C** sit between 01 and 02, **Tiers 02B,
-02C, 02D, 02E, 02F and 02G** between 02 and 03, and **Tiers 04B and 04C** between 04 and 05. **Tier 08 runs before Tier 06**: Tier 06 adds a `forwardVerify` override per
+02C, 02D, 02E, 02F, 02G and 02H** between 02 and 03, and **Tiers 04B and 04C** between 04 and 05. **Tier 08 runs before Tier 06**: Tier 06 adds a `forwardVerify` override per
 architecture, so running it first would mean adding verify support to four handlers and then having
 Tier 08 introduce four more that either need the same work again or silently lack it. Tier 08 first
 means Tier 06 covers every handler in one pass. Tier 08's own file previously argued the opposite
@@ -558,6 +577,13 @@ scrubbed results. [Tier 02G](TIER-02G-cuda-on-windows.md) makes Juno's CUDA back
 verified through the kit. Both run before Tier 03 so that every later tier adds the kit probes for its own
 feature as it lands (Tier 02F's scope item 13), instead of having them retrofitted at Tier 14.
 
+**Tier 02H sits between 02G and 03 (added 2026-10-31, owner decision).** Once static batches fill (Tier 02F's
+record of 2026-10-31), a batch of 8 on the GPU reads 0.748x and 0.676x of 8 requests decoded one at a time,
+because a batched decode step runs outside the device-resident region that one request's step uses. The
+continuous schedule decodes its running set through the same step, so Tier 07's GPU gate is measured on it.
+[Tier 02H](TIER-02H-batched-gpu-decode.md) puts the batched step in the region. It runs before Tier 03 for
+the reason Tier 02D did: Tier 03 changes the device KV the batched attention reads.
+
 | Tier | Title | Gap analysis refs |
 |---|---|---|
 | [00](TIER-00-correctness-and-consistency.md) | Correctness & consistency audit | §2.1, §2.4, §2.5, §2.6, §2.7, §2.9 |
@@ -571,6 +597,7 @@ feature as it lands (Tier 02F's scope item 13), instead of having them retrofitt
 | [02E](TIER-02E-cpu-decode-kernels.md) | CPU decode and prefill kernels (vector Q6_K, Q4_K instruction cost, host SIMD width, CPU prefill length profile; added 2026-10-11) | §1.7 (CPU half, continued) |
 | [02F](TIER-02F-hardware-validation-kit.md) | Hardware validation kit (one command on Windows, Linux or macOS, run by testers on hardware this host lacks; added 2026-10-13) | none — see that file's "Why this tier, why now" |
 | [02G](TIER-02G-cuda-on-windows.md) | CUDA on Windows (library resolution per OS, display-driver behaviour, Windows launchers; added 2026-10-13) | none — see that file's "Why this tier, why now" |
+| [02H](TIER-02H-batched-gpu-decode.md) | Batched GPU decode (a static batch's and the continuous running set's decode step in the device-resident region; added 2026-10-31) | none — see that file's "Why this tier, why now" |
 | [03](TIER-03-kv-cache-maturity.md) | KV cache maturity | §1.3 |
 | [04](TIER-04-quantization-coverage.md) | Quantization coverage (mapped weight loading first) | §1.1 |
 | [04B](TIER-04B-tokenizer-fidelity.md) | Tokenizer fidelity (per-family splits and cross-engine parity; the key read and fail-closed path moved to Tier 01 as parity precondition 7) | none — see that file's "Why this tier, why now" |
@@ -999,6 +1026,9 @@ on free hosted runners is approved, as part of Tier 02F.* It runs the kit's `qui
 and arm64, Windows and macOS on manual dispatch and weekly, and the kit probes' self-tests on pull requests
 that touch the kit. The 2026-10-01 decision stands for `ci.yml` itself, and CI is still not an exit
 criterion for any other tier. Committing the workflow file is the owner's action.
+
+*Written 2026-10-31 (Tier 02F step 8): `.github/workflows/kit.yml`, a file of its own beside `ci.yml`.* Until the
+owner commits it, it is untracked like `ci.yml` and has never run; Tier 02F records its first green run.
 
 **No CI runs in this repository today.** `.github/workflows/ci.yml` exists in the working tree but is
 untracked, so it has never run (see the 2026-09-30 and 2026-10-01 notes above; *corrected 2026-10-11, plan

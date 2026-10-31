@@ -56,6 +56,10 @@ final class LlamaFamilyArchitectures {
 		return VERIFIED.contains(architecture);
 	}
 
+	static Set<String> verified() {
+		return VERIFIED;
+	}
+
 	/**
 	 * @throws UnsupportedModelException naming the architecture when it is not verified
 	 */

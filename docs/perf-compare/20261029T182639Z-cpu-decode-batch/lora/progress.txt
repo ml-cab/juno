@@ -1,0 +1,13 @@
+18:32:45 lora gpu A run1 done
+18:33:43 lora gpu B run1 done
+18:34:40 lora gpu B run2 done
+18:35:37 lora gpu A run2 done
+18:36:34 lora gpu A run3 done
+18:37:31 lora gpu B run3 done
+18:50:39 lora cpu A run1 done
+19:03:47 lora cpu B run1 done
+19:17:05 lora cpu B run2 done
+19:30:10 lora cpu A run2 done
+19:44:32 lora cpu A run3 done
+19:59:24 lora cpu B run3 done
+done

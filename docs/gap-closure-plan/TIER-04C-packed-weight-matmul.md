@@ -347,6 +347,16 @@ widened".*
   that figure would show. It reports the pp ratio on every sweep model against Tier 01B's milestone
   rows in the README and its re-baselined prefill number, met or missed with the actual value.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `gpu.packed-kquant.*`, `gpu.throughput.*`, `gpu.residency.tinyllama`, `gpu.live.*`,
+  `gpu.prefill-batch.tinyllama`, `gpu.unit-tests`.
+- Add: the packed path on Tier 04's formats (a `gpu.packed-kquant` entry per format with a packed kernel);
+  a check that an FP16 fallback is announced at startup and counted in the device memory budget (item 4);
+  the effective `--mmq` mode in the `env` reading (item 5).
+
 ## Models needed
 
 Everything required is on disk per [`INVENTORY.md`](INVENTORY.md): `tinyllama-1.1b` and `mistral-7b`
@@ -381,6 +391,8 @@ ended with. No AMD hardware exists here, so item 3's ROCm half is unit-tested an
       **Owner decision** recorded in this file with the measured number and the term that held it.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, with every threshold above (VRAM, throughput, numerical quality, load)
       scored against its number; `compare-llama-cpp.sh` pp and tg ratios recorded in this

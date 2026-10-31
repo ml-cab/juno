@@ -176,7 +176,7 @@ public final class GbnfGrammar {
 			}
 			int kind = r[pc] >>> 24;
 			int val = r[pc] & 0xFFFFFF;
-			int npc = skipToAlt(r, pc);
+			int npc = nextAlternative(r, pc);
 			switch (kind) {
 			case REF -> {
 				if (!leftRec(stack, sp, val)) {
@@ -217,7 +217,7 @@ public final class GbnfGrammar {
 			}
 			int kind = r[pc] >>> 24;
 			int val = r[pc] & 0xFFFFFF;
-			int npc = skipToAlt(r, pc);
+			int npc = nextAlternative(r, pc);
 			switch (kind) {
 			case REF -> {
 				if (!leftRec(stack, sp, val)) {
@@ -254,7 +254,7 @@ public final class GbnfGrammar {
 		}
 
 		private void tryAlt(int[] stack, int sp, int rule, int pc, int b, List<int[]> out, Holder h) {
-			int npc = skipToAlt(g.rules.get(rule), pc);
+			int npc = nextAlternative(g.rules.get(rule), pc);
 			if (npc < 0)
 				return;
 			stack[sp - 1] = pack(rule, npc);
@@ -284,6 +284,15 @@ public final class GbnfGrammar {
 			int ppc = parent & 0xFFFF;
 			stack[sp - 2] = pack(pr, ppc + 1);
 			matchChar(stack, sp - 1, b, out, h);
+		}
+
+		/**
+		 * The start of the alternative after the one {@code pc} begins, or -1. An alternative is chosen
+		 * at its first element only: once one has matched anything, the others are closed.
+		 */
+		private static int nextAlternative(int[] r, int pc) {
+			boolean atStart = pc == 0 || (r[pc - 1] >>> 24) == ALT;
+			return atStart ? skipToAlt(r, pc) : -1;
 		}
 
 		private static int skipToAlt(int[] r, int pc) {

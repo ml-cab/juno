@@ -157,6 +157,18 @@ message.
     allocation per token **<= 1.10x**, in-span GC pause total **<= 1.25x**.
   - Every throughput number is a median of at least three runs, with min and max published.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing, on Windows and on this host's Linux: the `gpu` suite (`gpu.unit-tests`, `gpu.live.*`,
+  `gpu.residency.tinyllama`, `gpu.packed-kquant.*`, `gpu.throughput.*`, `gpu.consistency.tinyllama`,
+  `gpu.long-prompt.*`, `gpu.schedule.tinyllama`, `gpu.lora.tinyllama`, `gpu.vision.moondream2`) and
+  `launcher.tinyllama`.
+- Add: the kernel-timing probe (the longest single kernel at shipped shapes, CUDA events, against the
+  watchdog); the launcher probe's Windows checks (`juno.bat` local mode, one REST request, exit code 0, no
+  `[DBG]` output, no registry write); the CUDA libraries resolved and where from, in the `env` reading.
+
 ## Models needed
 
 The four sweep models, all present here; the kit downloads them on Windows. Hardware: this host's GTX

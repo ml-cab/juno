@@ -1,0 +1,65 @@
+# What the kit covers. One line per item, tab-separated: key, title, probes (comma-separated; a trailing * names
+# every catalog probe with that prefix), note. Keys: surface:<cross-surface row>, family:<general.architecture>,
+# script:<smoke or compare script>, feature:<name>. CoverageTest fails when an item has no probe, names a probe,
+# script, architecture or row that does not exist, or when a catalog probe, a smoke or compare script, a
+# supported architecture or a cross-surface row has no line. A change that adds one of these adds its line here.
+
+surface:1	CPU inference	cpu.live.*, cpu.throughput.*, cpu.hot-path.*, quality.*, cpu.kernel-width, cpu.unit-tests	the integer kernels by default; the width comparison only on 256-bit integer hosts
+surface:2	CUDA GPU inference	gpu.live.*, gpu.throughput.*, gpu.residency.tinyllama, gpu.packed-kquant.*, gpu.unit-tests
+surface:3	ROCm GPU inference	rocm.unit-tests, gpu.throughput.*, gpu.consistency.tinyllama, gpu.long-prompt.*, gpu.lora.tinyllama	the live, residency, packed K-quant and CUDA unit-test probes need CUDA; the other GPU probes run on the backend that loads
+surface:4	Static schedule	consistency.tinyllama, gpu.consistency.tinyllama, parallel.tinyllama, gpu.parallel.tinyllama, schedule.tinyllama, gpu.schedule.tinyllama, gpu.packed-kquant.tinyllama.static	the default of every other probe
+surface:5	Continuous schedule	schedule.tinyllama, gpu.schedule.tinyllama, mixed-prefill.tinyllama, gpu.mixed-prefill.tinyllama, long-prompt.*, gpu.long-prompt.*, context-policy.*, gpu.context-policy.*, gpu.packed-kquant.tinyllama.continuous
+surface:6	Single-node local mode	launcher.tinyllama, grammar.tinyllama, cpu.live.*	the default of every probe but the cluster live checks
+surface:7	Pipeline-parallel cluster	cpu.live.*, gpu.live.*	live checks 1 to 6, local forked JVMs
+surface:8	Tensor-parallel cluster	cpu.live.*, gpu.live.*	live checks 7 and 8
+surface:9	LoRA training	lora.tinyllama, gpu.lora.tinyllama	trains to the REPL's loss target
+surface:10	LoRA playback	lora.tinyllama, gpu.lora.tinyllama, grammar.tinyllama	the trained reply with --lora-play and from the merged GGUF; grammar with an adapter overlay
+surface:11	Vision	vision.moondream2, gpu.vision.moondream2	phi2 has no device path: the GPU entry checks captions and gives no readings
+surface:12	OpenAI-compatible REST surface	grammar.tinyllama, tools.qwen2.5-3b, launcher.tinyllama, context-policy.*, gpu.context-policy.*, long-prompt.*, gpu.long-prompt.*, schedule.tinyllama, gpu.schedule.tinyllama	streaming in the long-prompt and schedule probes
+surface:13	Native REST surface	consistency.tinyllama, gpu.consistency.tinyllama	POST /v1/inference under static batching; /v1/inference/stream joined and compared with the blocking answer
+surface:14	CLI direct usage	launcher.tinyllama, grammar.tinyllama	juno or juno.bat local mode, juno lora --help; the kit's own CLI
+surface:15	JVM embedding facade	cpu.throughput.*, gpu.throughput.*, lora.tinyllama, gpu.lora.tinyllama, consistency.tinyllama, schedule.tinyllama, long-prompt.*	JunoPlayer (throughput), LoraTrainer (LoRA), JunoHttpClient (consistency, schedule, long prompt)
+
+family:llama	Llama family	cpu.live.tinyllama, gpu.live.tinyllama, cpu.live.mistral-7b, gpu.live.mistral-7b, quality.tinyllama-1.1b, quality.mistral-7b	TinyLlama 1.1B and Mistral 7B declare llama
+family:mistral	Mistral (Llama-family handler)	cpu.live.mistral-7b, gpu.live.mistral-7b	no kit model declares mistral; the kit's Mistral 7B declares llama, through the same handler
+family:tinyllama	TinyLlama (Llama-family handler)	cpu.live.tinyllama, gpu.live.tinyllama	no kit model declares tinyllama; the kit's TinyLlama declares llama, through the same handler
+family:qwen2	Qwen2 family	cpu.live.qwen2.5-3b, gpu.live.qwen2.5-3b, tools.qwen2.5-3b, quality.qwen2.5-3b	Qwen2.5-3B declares qwen2
+family:qwen2.5	Qwen2.5 (Llama-family handler)	cpu.live.qwen2.5-3b, gpu.live.qwen2.5-3b	no kit model declares qwen2.5; the kit's Qwen2.5-3B declares qwen2, through the same handler
+family:phi2	Phi-2	vision.moondream2, gpu.vision.moondream2	moondream2's text model; CPU only
+family:phi3	Phi-3	cpu.live.phi-3.5-mini, gpu.live.phi-3.5-mini, context-policy.*, gpu.context-policy.*, quality.phi-3.5-mini
+family:qwen3	Qwen3	cpu.live.qwen3-1.7b, gpu.live.qwen3-1.7b
+family:qwen3moe	Qwen3 mixture of experts	cpu.unit-tests, gpu.unit-tests	the handler's synthetic-model unit tests only; the one real qwen3moe file is 18.6 GB, beyond the kit's downloads
+
+script:compare-llama-cpp.sh	Throughput, Juno lanes	cpu.throughput.*, gpu.throughput.*	prefill at 128, 512 and 2048 prompt tokens, generation, JFR allocation and GC
+script:compare-lora.sh	LoRA training and playback	lora.tinyllama, gpu.lora.tinyllama
+script:compare-mixed-prefill.sh	Mixed prefill	mixed-prefill.tinyllama, gpu.mixed-prefill.tinyllama
+script:compare-parallel.sh	Static micro-batching under load	parallel.tinyllama, gpu.parallel.tinyllama
+script:compare-prefill-batch.sh	Prefill batch size	prefill-batch.tinyllama, gpu.prefill-batch.tinyllama
+script:compare-schedule.sh	Static against continuous	schedule.tinyllama, gpu.schedule.tinyllama
+script:compare-vision.sh	Vision latency and decode	vision.moondream2, gpu.vision.moondream2
+script:smoke-consistency.sh	Batched equals single requests	consistency.tinyllama, gpu.consistency.tinyllama
+script:smoke-context-policy.sh	Context policy	context-policy.*, gpu.context-policy.*
+script:smoke-cpu-hot-path.sh	CPU hot path	cpu.hot-path.*
+script:smoke-cpu-kernels.sh	CPU kernels against the previous build	cpu.hot-path.*	the two-build comparison is ingest's comparison of the recorded replies with the reference run's
+script:smoke-gpu-residency.sh	GPU residency	gpu.residency.tinyllama
+script:smoke-grammar.sh	Constrained decoding	grammar.tinyllama
+script:smoke-long-prompt-prefill.sh	Long-prompt prefill	long-prompt.*, gpu.long-prompt.*
+script:smoke-packed-kquant-matmul.sh	Packed K-quant matmul	gpu.packed-kquant.*
+script:smoke-tools.sh	Tool calling	tools.qwen2.5-3b
+
+feature:grammar	Constrained decoding: response_format, x_juno_grammar, the CLI grammar file	grammar.tinyllama
+feature:tools	Tool calling, and its refusal on templates without tool support	tools.qwen2.5-3b
+feature:context-shift	Context shift opt-in, decode-time shift and the limit error	context-policy.*, gpu.context-policy.*
+feature:long-prompt	Long prompts, streamed text equal to blocking	long-prompt.*, gpu.long-prompt.*
+feature:static-batching	--parallel micro-batching: batched replies equal single ones	consistency.tinyllama, gpu.consistency.tinyllama, parallel.tinyllama, gpu.parallel.tinyllama
+feature:session-reuse	x_juno_session_id prefix reuse	schedule.tinyllama, gpu.schedule.tinyllama
+feature:mixed-prefill	Prefill chunks inside continuous decode steps	mixed-prefill.tinyllama, gpu.mixed-prefill.tinyllama
+feature:prefill-batch	--prefill-batch	prefill-batch.tinyllama, gpu.prefill-batch.tinyllama
+feature:gpu-residency	Device-resident decode	gpu.residency.tinyllama
+feature:packed-kquant	Packed K-quant matmul	gpu.packed-kquant.*
+feature:cpu-integer-kernels	CPU integer kernels and their vector width	cpu.hot-path.*, cpu.kernel-width
+feature:quality	Mean NLL per model	quality.*
+feature:throughput	Prefill and generation throughput, allocation and GC	cpu.throughput.*, gpu.throughput.*
+feature:lora-merge	A trained adapter merged into a GGUF and served	lora.tinyllama, gpu.lora.tinyllama
+feature:unit-tests	Every module's unit tests and the GPU test groups	cpu.unit-tests, gpu.unit-tests, rocm.unit-tests
+feature:kit-environment	The host's description and the calibration that scales estimates	env, calibration

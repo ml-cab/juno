@@ -18,6 +18,19 @@ to run/build the unsupported path) or `NEEDS-AMD-HARDWARE` (implemented, unit-te
 hardware, needs real-device validation) rather than `PASS` — do not claim ROCm parity without
 having run on real AMD hardware.
 
+## Borrowed hardware
+
+*(Added 2026-10-31 by [Tier 02F](TIER-02F-hardware-validation-kit.md) step 7.)* Hosts other than this one whose
+hardware validation kit runs were ingested (`./juno-kit.sh ingest <zip>`, one
+`docs/perf-compare/<UTC>-remote-<host label>/` entry per run). A host is recorded by its hardware and OS, never by
+the person who ran it. A row is added when its first zip is ingested and published. A tier that scores a
+`NEEDS-AMD-HARDWARE` or `NEEDS-AVX2-HARDWARE` row, or Tier 02G's Windows rows, from a tester's run cites that
+entry.
+
+| Host label | OS | CPU (cores, threads, integer vector width) | GPU and backend | Ingested runs | Rows it scores |
+|---|---|---|---|---|---|
+| none yet | | | | | |
+
 ## Models present in `models/` (2026-09-18, re-checked 2026-09-24)
 
 | File | GGUF `general.architecture` | Family / notes | Used by |

@@ -21,7 +21,9 @@ package cab.ml.juno.node;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.logging.Logger;
 
 import cab.ml.juno.lora.LoraAdapterSet;
@@ -249,6 +251,13 @@ public final class ForwardPassHandlerLoader {
 	 */
 	public static boolean isSupportedArchitecture(String architecture) {
 		return DEDICATED_HANDLER_ARCHITECTURES.contains(architecture) || LlamaFamilyArchitectures.isVerified(architecture);
+	}
+
+	/** Every {@code general.architecture} value {@link #load} has a verified handler for. */
+	public static Set<String> supportedArchitectures() {
+		Set<String> all = new TreeSet<>(DEDICATED_HANDLER_ARCHITECTURES);
+		all.addAll(LlamaFamilyArchitectures.verified());
+		return Collections.unmodifiableSet(all);
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────────

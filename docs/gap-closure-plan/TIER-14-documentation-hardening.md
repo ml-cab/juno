@@ -177,6 +177,15 @@ cases:
   audit reveals a real behavioral bug, that goes into a newly-filed tier's test plan instead, not
   here.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: the `all` suite, as the closing record at the tier's commit; `launcher.tinyllama`.
+- Add: none planned. The audit and scorecard are documentation; the scorecard reads the published kit runs (the
+  reference runs and testers' ingested zips) for every hardware row. A probe is added only if the
+  doc-consistency script gains a check that needs a running server.
+
 ## Models needed
 
 None — this tier is documentation and static analysis only.
@@ -213,3 +222,5 @@ None — this tier is documentation and static analysis only.
 - [ ] This plan tree (`docs/gap-closure-plan/`) is itself left in place as a historical record —
       not deleted — since it documents the reasoning behind thirteen tiers of real change; consider
       whether to add a final "plan complete" note to this README once Tier 14 closes.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.

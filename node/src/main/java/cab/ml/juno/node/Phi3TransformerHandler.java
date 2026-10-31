@@ -909,7 +909,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < N; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], attnNorm[li], cfg.rmsNormEps(), ws.norm1[b]);
 
-		sgemmQkvInto(li, ws.norm1, ws.q, ws.k, ws.v, H, kvDim, ws);
+		sgemmQkvInto(li, ws.norm1, ws.q, ws.k, ws.v, H, kvDim, ws, true);
 
 		for (int b = 0; b < N; b++) {
 			int pos = positions[b];
@@ -932,11 +932,11 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 				int seqLen = positions[b] + 1;
 				float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
 				float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
-				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores, layerWindows[li]);
+				decodeBatchAttend(ws.q[b], kView, vView, seqLen, ws.attnOut[b], layerWindows[li]);
 			}
 		}
 
-		sgemmProjInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, H);
+		sgemmProjInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, H, true);
 
 		for (int b = 0; b < N; b++)
 			for (int d = 0; d < H; d++)
@@ -945,13 +945,13 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		for (int b = 0; b < N; b++)
 			LlamaTransformerHandler.rmsNormInto(x[b], ffnNorm[li], cfg.rmsNormEps(), ws.norm2[b]);
 
-		sgemmGateUpInto(li, ws.norm2, ws.gate, ws.up, I, H, ws);
+		sgemmGateUpInto(li, ws.norm2, ws.gate, ws.up, I, H, ws, true);
 
 		for (int b = 0; b < N; b++)
 			for (int i = 0; i < I; i++)
 				ws.hidden[b][i] = LlamaTransformerHandler.silu(ws.gate[b][i]) * ws.up[b][i];
 
-		sgemmProjInto(wDown[li], wDownQ4Dev, wDownDev, li, ws.hidden, ws.ffnOut, H, I);
+		sgemmProjInto(wDown[li], wDownQ4Dev, wDownDev, li, ws.hidden, ws.ffnOut, H, I, true);
 
 		for (int b = 0; b < N; b++)
 			for (int d = 0; d < H; d++)
@@ -1095,7 +1095,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		normEvt1.commit();
 
 		WindowStepEvent qkvEvt = WindowStepEvent.start();
-		sgemmQkvInto(li, ws.norm1, ws.q, ws.k, ws.v, H, kvDim, ws);
+		sgemmQkvInto(li, ws.norm1, ws.q, ws.k, ws.v, H, kvDim, ws, false);
 		qkvEvt.end(WindowStepEvent.PROJECTION, W, startPos);
 
 		RopeEvent ropeEvt = new RopeEvent();
@@ -1112,7 +1112,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		writeKvAndAttend(startPos, kCacheLayer, vCacheLayer, ws, mirror, W, layerWindows[li]);
 
 		WindowStepEvent woEvt = WindowStepEvent.start();
-		sgemmProjInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, H);
+		sgemmProjInto(wo[li], woQ4Dev, woDev, li, ws.attnOut, ws.attnProj, H, H, false);
 		woEvt.end(WindowStepEvent.PROJECTION, W, startPos);
 
 		ResidualAddEvent residEvt1 = new ResidualAddEvent();
@@ -1133,7 +1133,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		normEvt2.commit();
 
 		WindowStepEvent gateUpEvt = WindowStepEvent.start();
-		sgemmGateUpInto(li, ws.norm2, ws.gate, ws.up, I, H, ws);
+		sgemmGateUpInto(li, ws.norm2, ws.gate, ws.up, I, H, ws, false);
 		gateUpEvt.end(WindowStepEvent.PROJECTION, W, startPos);
 
 		SwiGluEvent swigluEvt = new SwiGluEvent();
@@ -1146,7 +1146,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 		swigluEvt.commit();
 
 		WindowStepEvent downEvt = WindowStepEvent.start();
-		sgemmProjInto(wDown[li], wDownQ4Dev, wDownDev, li, ws.hidden, ws.ffnOut, H, I);
+		sgemmProjInto(wDown[li], wDownQ4Dev, wDownDev, li, ws.hidden, ws.ffnOut, H, I, false);
 		downEvt.end(WindowStepEvent.PROJECTION, W, startPos);
 
 		ResidualAddEvent residEvt2 = new ResidualAddEvent();
@@ -1292,6 +1292,12 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 	}
 
 	/** Zero-allocation gqa: writes into pre-allocated out[] using shared scores scratch; {@code window} 0 for all keys. */
+	/** A decode batch's attention for one request: {@link GqaMath#attendPooledAsSerial}, its single-request decode's bits. */
+	private void decodeBatchAttend(float[] q, float[] kCache, float[] vCache, int seqLen, float[] out, int window) {
+		GqaMath.attendPooledAsSerial(q, kCache, vCache, seqLen, out, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
+				cfg.kvDim(), window);
+	}
+
 	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen,
 			float[] out, float[] scores, int window) {
 		// heads on the worker pool, bit-identical to the serial loop; scores is the serial form's scratch, unused here
@@ -1301,7 +1307,7 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 
 	/** Fused QKV: one Q4 GEMM into the workspace's fused rows + host slice, else three FP16/CPU row-range GEMMs. */
 	private void sgemmQkvInto(int li, float[][] X, float[][] Q, float[][] K, float[][] V, int H, int kvDim,
-			BatchWorkspace ws) {
+			BatchWorkspace ws, boolean decodeBatch) {
 		if (attnQkvQ4Dev != null && attnQkvQ4Dev[li] != null) {
 			float[][] qkv = ws.fused(X.length, H + 2 * kvDim);
 			backend.sgemmInto(attnQkvQ4Dev[li], X, qkv);
@@ -1312,13 +1318,15 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			}
 			return;
 		}
-		sgemmFusedInto(attnQkv[li], attnQDev != null ? attnQDev[li] : null, X, Q, 0, H, H);
-		sgemmFusedInto(attnQkv[li], attnKDev != null ? attnKDev[li] : null, X, K, H, H + kvDim, H);
-		sgemmFusedInto(attnQkv[li], attnVDev != null ? attnVDev[li] : null, X, V, H + kvDim, H + 2 * kvDim, H);
+		sgemmFusedInto(attnQkv[li], attnQDev != null ? attnQDev[li] : null, X, Q, 0, H, H, decodeBatch);
+		sgemmFusedInto(attnQkv[li], attnKDev != null ? attnKDev[li] : null, X, K, H, H + kvDim, H, decodeBatch);
+		sgemmFusedInto(attnQkv[li], attnVDev != null ? attnVDev[li] : null, X, V, H + kvDim, H + 2 * kvDim, H,
+				decodeBatch);
 	}
 
 	/** Fused gate_up: one Q4 GEMM into the workspace's fused rows + host slice, else two FP16/CPU row-range GEMMs. */
-	private void sgemmGateUpInto(int li, float[][] X, float[][] gate, float[][] up, int I, int H, BatchWorkspace ws) {
+	private void sgemmGateUpInto(int li, float[][] X, float[][] gate, float[][] up, int I, int H, BatchWorkspace ws,
+			boolean decodeBatch) {
 		if (ffnGateUpQ4Dev != null && ffnGateUpQ4Dev[li] != null) {
 			float[][] gu = ws.fused(X.length, 2 * I);
 			backend.sgemmInto(ffnGateUpQ4Dev[li], X, gu);
@@ -1328,24 +1336,33 @@ public final class Phi3TransformerHandler implements ForwardPassHandler {
 			}
 			return;
 		}
-		sgemmFusedInto(ffnGateUp[li], ffnGateDev != null ? ffnGateDev[li] : null, X, gate, 0, I, H);
-		sgemmFusedInto(ffnGateUp[li], ffnUpDev != null ? ffnUpDev[li] : null, X, up, I, 2 * I, H);
+		sgemmFusedInto(ffnGateUp[li], ffnGateDev != null ? ffnGateDev[li] : null, X, gate, 0, I, H, decodeBatch);
+		sgemmFusedInto(ffnGateUp[li], ffnUpDev != null ? ffnUpDev[li] : null, X, up, I, 2 * I, H, decodeBatch);
 	}
 
 	private void sgemmProjInto(GgufReader.QuantizedTensor quant, DeviceQ4KMatrix[] q4, DeviceHalfMatrix[] half,
-			int li, float[][] X, float[][] Y, int rows, int cols) {
+			int li, float[][] X, float[][] Y, int rows, int cols, boolean decodeBatch) {
 		if (q4 != null && q4[li] != null) {
 			backend.sgemmInto(q4[li], X, Y);
 			return;
 		}
-		sgemmFusedInto(quant, half != null ? half[li] : null, X, Y, 0, rows, cols);
+		sgemmFusedInto(quant, half != null ? half[li] : null, X, Y, 0, rows, cols, decodeBatch);
 	}
 
-	/** Zero-allocation sgemmFused: writes into pre-allocated rows Y[b]. */
+	/**
+	 * Zero-allocation sgemmFused: writes into pre-allocated rows Y[b]. With {@code decodeBatch} ({@code X} holds one
+	 * row per request of a decode step), where the CPU integer kernels run, each row is computed by
+	 * {@link CpuIntegerDecodeBatch}, bit for bit the single-request decode's, so a request's output does not depend on
+	 * what else is in its batch.
+	 */
 	private void sgemmFusedInto(GgufReader.QuantizedTensor quant, DeviceHalfMatrix half,
-			float[][] X, float[][] Y, int rowStart, int rowEnd, int cols) {
+			float[][] X, float[][] Y, int rowStart, int rowEnd, int cols, boolean decodeBatch) {
 		if (half != null) {
 			backend.sgemmInto(half, X, Y);
+			return;
+		}
+		if (decodeBatch && CpuKernelSelection.integerMatVec(quant.type())) {
+			CpuIntegerDecodeBatch.matmulInto(quant, X, Y, rowStart, rowEnd, cols);
 			return;
 		}
 		if (CpuKernelSelection.integerGemm(quant.type(), cols)) {

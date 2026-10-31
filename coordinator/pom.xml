@@ -98,6 +98,34 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-javadoc-plugin</artifactId>
 			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<!-- runs in its own execution below, on the CPU's default kernels -->
+					<excludes>
+						<exclude>**/TinyLlamaStaticBatchLiveTest.java</exclude>
+					</excludes>
+				</configuration>
+				<executions>
+					<!-- Static batching on the CPU's default integer-dot kernels, which need the Vector API
+						module (this module's other tests run without it): a request's greedy output must not
+						depend on what else is in its decode batch. -->
+					<execution>
+						<id>static-batch-integer-kernels</id>
+						<goals>
+							<goal>test</goal>
+						</goals>
+						<configuration>
+							<excludes combine.self="override" />
+							<includes>
+								<include>**/TinyLlamaStaticBatchLiveTest.java</include>
+							</includes>
+							<argLine>--add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED</argLine>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
 		</plugins>
 	</build>
 </project>

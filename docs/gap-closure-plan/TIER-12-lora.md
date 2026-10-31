@@ -135,6 +135,17 @@ interim one).
     selected per-request **>= 0.95x** the `--lora-play` startup-flag path it replaces, both paths
     alternated in one session with pinned clocks.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `lora.tinyllama`, `gpu.lora.tinyllama`, `grammar.tinyllama` (grammar with an adapter overlay).
+- Add: a GGUF-LoRA adapter served directly (item 1), its reply equal to the converted adapter's; per-request
+  `x_juno_loras` (item 2), two requests with different adapters on one server, each reply equal to its
+  single-adapter server's, on every schedule the tier supports and refused on the others; checkpointing (item 3)
+  training memory as a reading; QLoRA-style training (item 4) to the loss target; playback prefill (item 5) as a
+  reading.
+
 ## Models needed
 
 `tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf` and its existing `.lora` adapter cover the regression oracle
@@ -154,6 +165,8 @@ against a truly independent real-world file.
 - [ ] QLoRA-style quantized-base-weight training implemented and correctness-validated.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Perf gate published, every threshold above met or explicitly missed with its number.
 - [ ] `x_juno_loras`'s now-working request shape, and any new LoRA fields, are declared in

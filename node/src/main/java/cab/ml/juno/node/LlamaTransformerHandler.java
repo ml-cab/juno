@@ -1153,6 +1153,19 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			int numLayers, int startLayer, int endLayer,
 			boolean hasEmbd, boolean hasOutProj,
 			NodeKVCacheAdapter adapter, float weightRange, SlidingWindow window) {
+		return newTestInstance(vocabSize, hiddenDim, numHeads, numKvHeads, numLayers, startLayer, endLayer, hasEmbd,
+				hasOutProj, adapter, weightRange, window, 0);
+	}
+
+	/**
+	 * As above, with every layer's projection weights re-encoded as GGUF tensor type {@code weightType} (0 keeps
+	 * F32); the embedding and output projection stay F32. Lets a test run the CPU integer kernels on random weights.
+	 */
+	static LlamaTransformerHandler newTestInstance(
+			int vocabSize, int hiddenDim, int numHeads, int numKvHeads,
+			int numLayers, int startLayer, int endLayer,
+			boolean hasEmbd, boolean hasOutProj,
+			NodeKVCacheAdapter adapter, float weightRange, SlidingWindow window, int weightType) {
 
 		LlamaConfig cfg = LlamaConfig.synthetic(
 				vocabSize, hiddenDim, numHeads, numKvHeads, numLayers);
@@ -1184,13 +1197,13 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		for (int li = 0; li < L; li++) {
 			attnNorm[li] = randF32(H, rng, weightRange);
 			ffnNorm[li]  = randF32(H, rng, weightRange);
-			wq[li]   = f32Tensor("wq."   + li, H,     H,    rng, weightRange);
-			wk[li]   = f32Tensor("wk."   + li, kvDim, H,    rng, weightRange);
-			wv[li]   = f32Tensor("wv."   + li, kvDim, H,    rng, weightRange);
-			wo[li]   = f32Tensor("wo."   + li, H,     H,    rng, weightRange);
-			wGate[li]= f32Tensor("wGate."+ li, I,     H,    rng, weightRange);
-			wUp[li]  = f32Tensor("wUp."  + li, I,     H,    rng, weightRange);
-			wDown[li]= f32Tensor("wDown."+ li, H,     I,    rng, weightRange);
+			wq[li]   = asType(f32Tensor("wq."   + li, H,     H,    rng, weightRange), weightType);
+			wk[li]   = asType(f32Tensor("wk."   + li, kvDim, H,    rng, weightRange), weightType);
+			wv[li]   = asType(f32Tensor("wv."   + li, kvDim, H,    rng, weightRange), weightType);
+			wo[li]   = asType(f32Tensor("wo."   + li, H,     H,    rng, weightRange), weightType);
+			wGate[li]= asType(f32Tensor("wGate."+ li, I,     H,    rng, weightRange), weightType);
+			wUp[li]  = asType(f32Tensor("wUp."  + li, I,     H,    rng, weightRange), weightType);
+			wDown[li]= asType(f32Tensor("wDown."+ li, H,     I,    rng, weightRange), weightType);
 		}
 
 		LlamaTransformerHandler h = new LlamaTransformerHandler(
@@ -1213,6 +1226,15 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		float[] a = new float[n];
 		for (int i = 0; i < n; i++) a[i] = (rng.nextFloat() - 0.5f) * range;
 		return a;
+	}
+
+	/** An F32 tensor re-encoded as GGUF tensor type {@code type}; 0 returns it unchanged. */
+	private static GgufReader.QuantizedTensor asType(GgufReader.QuantizedTensor f32, int type) {
+		if (type == 0)
+			return f32;
+		float[] v = new float[(int) f32.nelems()];
+		java.nio.ByteBuffer.wrap(f32.data()).order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(v);
+		return new GgufReader.QuantizedTensor(f32.name(), type, f32.nelems(), LoraMerge.requantize(v, type, 0, 0));
 	}
 
 	/** Create a type-0 (F32) QuantizedTensor with random values, shape rows×cols. */
@@ -1586,9 +1608,9 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		normEvt1.dimension = H;
 		normEvt1.commit();
 
-		sgemmLayerInto(wq[li], wqDev, wqDevFp32, wqQ4Dev, li, ws.norm1, ws.q, H, H);
-		sgemmLayerInto(wk[li], wkDev, wkDevFp32, wkQ4Dev, li, ws.norm1, ws.k, kvDim, H);
-		sgemmLayerInto(wv[li], wvDev, wvDevFp32, wvQ4Dev, li, ws.norm1, ws.v, kvDim, H);
+		decodeBatchLayerInto(wq[li], wqDev, wqDevFp32, wqQ4Dev, li, ws.norm1, ws.q, H, H);
+		decodeBatchLayerInto(wk[li], wkDev, wkDevFp32, wkQ4Dev, li, ws.norm1, ws.k, kvDim, H);
+		decodeBatchLayerInto(wv[li], wvDev, wvDevFp32, wvQ4Dev, li, ws.norm1, ws.v, kvDim, H);
 
 		if (bq != null) {
 			for (int b = 0; b < N; b++) {
@@ -1669,11 +1691,11 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 				int seqLen = positions[b] + 1;
 				float[] kView = kCacheLayers[b].viewForAttention(seqLen, ws.kDequant);
 				float[] vView = vCacheLayers[b].viewForAttention(seqLen, ws.vDequant);
-				gqaInto(ws.q[b], kView, vView, seqLen, ws.attnOut[b], ws.scores, layerWindows[li]);
+				decodeBatchAttend(ws.q[b], kView, vView, seqLen, ws.attnOut[b], layerWindows[li]);
 			}
 		}
 
-		sgemmLayerInto(wo[li], woDev, woDevFp32, woQ4Dev, li, ws.attnOut, ws.attnProj, H, H);
+		decodeBatchLayerInto(wo[li], woDev, woDevFp32, woQ4Dev, li, ws.attnOut, ws.attnProj, H, H);
 
 		ResidualAddEvent residEvt1 = new ResidualAddEvent();
 		residEvt1.begin();
@@ -1693,8 +1715,8 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		normEvt2.dimension = H;
 		normEvt2.commit();
 
-		sgemmLayerInto(wGate[li], wGateDev, wGateDevFp32, wGateQ4Dev, li, ws.norm2, ws.gate, I, H);
-		sgemmLayerInto(wUp[li], wUpDev, wUpDevFp32, wUpQ4Dev, li, ws.norm2, ws.up, I, H);
+		decodeBatchLayerInto(wGate[li], wGateDev, wGateDevFp32, wGateQ4Dev, li, ws.norm2, ws.gate, I, H);
+		decodeBatchLayerInto(wUp[li], wUpDev, wUpDevFp32, wUpQ4Dev, li, ws.norm2, ws.up, I, H);
 
 		SwiGluEvent swigluEvt = new SwiGluEvent();
 		swigluEvt.begin();
@@ -1706,7 +1728,7 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 		swigluEvt.dimension = I;
 		swigluEvt.commit();
 
-		sgemmLayerInto(wDown[li], wDownDev, wDownDevFp32, wDownQ4Dev, li, ws.hidden, ws.ffnOut, H, I);
+		decodeBatchLayerInto(wDown[li], wDownDev, wDownDevFp32, wDownQ4Dev, li, ws.hidden, ws.ffnOut, H, I);
 
 		ResidualAddEvent residEvt2 = new ResidualAddEvent();
 		residEvt2.begin();
@@ -2152,6 +2174,12 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	 * Zero-allocation grouped-query attention. Writes output into the pre-allocated
 	 * {@code out} buffer; reuses the shared {@code scores} scratch array.
 	 */
+	/** A decode batch's attention for one request: {@link GqaMath#attendPooledAsSerial}, its single-request decode's bits. */
+	private void decodeBatchAttend(float[] q, float[] kCache, float[] vCache, int seqLen, float[] out, int window) {
+		GqaMath.attendPooledAsSerial(q, kCache, vCache, seqLen, out, cfg.numHeads(), cfg.headDim(), cfg.gqaRatio(),
+				cfg.kvDim(), window);
+	}
+
 	private void gqaInto(float[] q, float[] kCache, float[] vCache, int seqLen,
 			float[] out, float[] scores, int window) {
 		// heads on the worker pool, bit-identical to the serial loop; scores is the serial form's scratch, unused here
@@ -2183,6 +2211,23 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 	private void sgemmLayerInto(GgufReader.QuantizedTensor quant,
 			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32, DeviceQ4KMatrix[] devQ4,
 			int li, float[][] X, float[][] Y, int rows, int cols) {
+		sgemmLayerInto(quant, devHalf, devFp32, devQ4, li, X, Y, rows, cols, false);
+	}
+
+	/**
+	 * {@link #sgemmLayerInto} for one decode step of several requests ({@code X} holds one row per request): where
+	 * the CPU integer kernels run, each row is computed by {@link CpuIntegerDecodeBatch}, bit for bit the
+	 * single-request decode's, so a request's output does not depend on what else is in its batch.
+	 */
+	private void decodeBatchLayerInto(GgufReader.QuantizedTensor quant,
+			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32, DeviceQ4KMatrix[] devQ4,
+			int li, float[][] X, float[][] Y, int rows, int cols) {
+		sgemmLayerInto(quant, devHalf, devFp32, devQ4, li, X, Y, rows, cols, true);
+	}
+
+	private void sgemmLayerInto(GgufReader.QuantizedTensor quant,
+			DeviceHalfMatrix[] devHalf, DeviceFloatMatrix[] devFp32, DeviceQ4KMatrix[] devQ4,
+			int li, float[][] X, float[][] Y, int rows, int cols, boolean decodeBatch) {
 		// A device matmul can still run out of device memory: the batched path grows
 		// window-sized scratch (and a whole FP16 weight matrix when the tiled K-quant
 		// kernel is unavailable), and a request wide enough to take that path may
@@ -2208,6 +2253,10 @@ public final class LlamaTransformerHandler implements ForwardPassHandler {
 			if (!GpuLayerOffload.isVramOom(ex))
 				throw ex;
 			warnDeviceMatmulFellBackOnce(li);
+		}
+		if (decodeBatch && CpuKernelSelection.integerMatVec(quant.type())) {
+			CpuIntegerDecodeBatch.matmulInto(quant, X, Y, 0, rows, cols);
+			return;
 		}
 		if (CpuKernelSelection.integerGemm(quant.type(), cols)) {
 			CpuIntegerGemm.sgemmInto(quant, X, Y, 0, rows, cols);

@@ -118,6 +118,15 @@ tensor-parallel path that's actually real, rather than the current stub.
   - Cluster-mode vision end-to-end latency is **recorded with no threshold** on first delivery — it
     has no prior baseline, and this run establishes it as the reference for later tiers.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `vision.moondream2`, `gpu.vision.moondream2`.
+- Add: high-resolution tiling (item 1), a large image's caption through tiles and a thumbnail; several images in
+  one request (item 2); vision under `./juno cluster` (item 3), a live check; a LLaVA model entry once a file
+  exists (`INVENTORY.md`, "Gaps").
+
 ## Models needed
 
 `moondream2-q5_k.llamafile` (present) covers multi-image and cluster-wiring validation, though it's
@@ -141,6 +150,8 @@ can be validated against the model family that actually needs them.
       otherwise explicitly deferred with reasoning (not silently dropped).
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] `compare-vision.sh` passes with no regression; new tiling perf data published.
 - [ ] Docs (`docs/howto.md`, `assets/Vision-I2T.md`-style tracking) updated, Juno-native language

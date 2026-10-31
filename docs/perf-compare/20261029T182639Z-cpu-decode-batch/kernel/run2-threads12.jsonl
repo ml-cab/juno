@@ -1,0 +1,40 @@
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":4,"variant":"gemm","calls_per_rep":153,"ms_per_call":[3.991591477124183, 3.283982862745098, 3.3355746993464055],"median_ms":3.3356}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":4,"variant":"decode-batch","calls_per_rep":153,"ms_per_call":[5.536772019607843, 5.0329957254901965, 5.05718554248366],"median_ms":5.0572}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":4,"variant":"single-calls","calls_per_rep":153,"ms_per_call":[5.197750307189542, 5.644285431372549, 5.578600928104575],"median_ms":5.5786}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":16,"variant":"gemm","calls_per_rep":76,"ms_per_call":[8.207111750000001, 8.013789223684212, 7.339663171052631],"median_ms":8.0138}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":16,"variant":"decode-batch","calls_per_rep":76,"ms_per_call":[20.91548994736842, 19.39803407894737, 18.888222039473685],"median_ms":19.3980}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":16,"variant":"single-calls","calls_per_rep":76,"ms_per_call":[22.01722138157895, 21.33586614473684, 19.29279211842105],"median_ms":21.3359}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":64,"variant":"gemm","calls_per_rep":23,"ms_per_call":[24.978276217391304, 25.17983547826087, 25.068264521739128],"median_ms":25.0683}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":64,"variant":"decode-batch","calls_per_rep":23,"ms_per_call":[75.30408913043479, 75.24835647826087, 74.64442286956522],"median_ms":75.2484}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":64,"variant":"single-calls","calls_per_rep":23,"ms_per_call":[79.02579913043478, 77.04929730434783, 79.13389026086956],"median_ms":79.0258}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x5632","batch":4,"variant":"gemm","calls_per_rep":242,"ms_per_call":[2.099897326446281, 2.129753347107438, 2.1801063388429753],"median_ms":2.1298}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x5632","batch":4,"variant":"decode-batch","calls_per_rep":242,"ms_per_call":[2.6063208966942146, 2.463154566115702, 2.585029491735537],"median_ms":2.5850}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x5632","batch":4,"variant":"single-calls","calls_per_rep":242,"ms_per_call":[2.5545175454545457, 2.546240561983471, 2.5923949173553718],"median_ms":2.5545}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x5632","batch":16,"variant":"gemm","calls_per_rep":119,"ms_per_call":[4.975209134453782, 5.06906150420168, 5.004565663865546],"median_ms":5.0046}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x5632","batch":16,"variant":"decode-batch","calls_per_rep":119,"ms_per_call":[9.690012781512605, 9.956964386554622, 9.692538680672268],"median_ms":9.6925}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x5632","batch":16,"variant":"single-calls","calls_per_rep":119,"ms_per_call":[10.569636773109243, 10.152191361344538, 10.425307235294117],"median_ms":10.4253}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x5632","batch":64,"variant":"gemm","calls_per_rep":36,"ms_per_call":[16.371733555555558, 16.452691, 17.090455805555553],"median_ms":16.4527}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x5632","batch":64,"variant":"decode-batch","calls_per_rep":36,"ms_per_call":[38.51047386111111, 38.776635694444444, 38.48270177777778],"median_ms":38.5105}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x5632","batch":64,"variant":"single-calls","calls_per_rep":36,"ms_per_call":[42.042106249999996, 40.58580761111111, 41.94852480555556],"median_ms":41.9485}
+# CPU decode-batch matmuls (threads=12, integer width 128 bits, reps=3, target 600 ms per rep)
+
+| Shape | Batch | Variant | Median ms/call | Min to max | Time vs gemm | Rows bit-identical to single |
+|---|---|---|---|---|---|---|
+| Q6_K 2048x5632 | 4 | gemm | 3.336 | 3.284 to 3.992 | 1.000 | no |
+| Q6_K 2048x5632 | 4 | decode-batch | 5.057 | 5.033 to 5.537 | 1.516 | yes |
+| Q6_K 2048x5632 | 4 | single-calls | 5.579 | 5.198 to 5.644 | 1.672 | yes |
+| Q6_K 2048x5632 | 16 | gemm | 8.014 | 7.340 to 8.207 | 1.000 | no |
+| Q6_K 2048x5632 | 16 | decode-batch | 19.398 | 18.888 to 20.915 | 2.421 | yes |
+| Q6_K 2048x5632 | 16 | single-calls | 21.336 | 19.293 to 22.017 | 2.662 | yes |
+| Q6_K 2048x5632 | 64 | gemm | 25.068 | 24.978 to 25.180 | 1.000 | no |
+| Q6_K 2048x5632 | 64 | decode-batch | 75.248 | 74.644 to 75.304 | 3.002 | yes |
+| Q6_K 2048x5632 | 64 | single-calls | 79.026 | 77.049 to 79.134 | 3.152 | yes |
+| Q4_K 2048x5632 | 4 | gemm | 2.130 | 2.100 to 2.180 | 1.000 | no |
+| Q4_K 2048x5632 | 4 | decode-batch | 2.585 | 2.463 to 2.606 | 1.214 | yes |
+| Q4_K 2048x5632 | 4 | single-calls | 2.555 | 2.546 to 2.592 | 1.199 | yes |
+| Q4_K 2048x5632 | 16 | gemm | 5.005 | 4.975 to 5.069 | 1.000 | no |
+| Q4_K 2048x5632 | 16 | decode-batch | 9.693 | 9.690 to 9.957 | 1.937 | yes |
+| Q4_K 2048x5632 | 16 | single-calls | 10.425 | 10.152 to 10.570 | 2.083 | yes |
+| Q4_K 2048x5632 | 64 | gemm | 16.453 | 16.372 to 17.090 | 1.000 | no |
+| Q4_K 2048x5632 | 64 | decode-batch | 38.510 | 38.483 to 38.777 | 2.341 | yes |
+| Q4_K 2048x5632 | 64 | single-calls | 41.949 | 40.586 to 42.042 | 2.550 | yes |

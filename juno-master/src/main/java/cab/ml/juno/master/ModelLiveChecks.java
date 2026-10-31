@@ -99,6 +99,24 @@ public final class ModelLiveChecks {
 	public record LiveCheck(int number, String name, boolean passed, String detail) {
 	}
 
+	/**
+	 * Where the checks run. {@code AUTO} keeps each check's own choice: the forked cluster nodes and checks 9
+	 * and 10 take CUDA wherever a usable GPU is present. {@code CPU} keeps every check, nodes included, on the
+	 * CPU; {@code CUDA} puts them all on the GPU and fails every selected check closed when there is none.
+	 */
+	public enum Backend {
+		AUTO, CPU, CUDA
+	}
+
+	/** NodeMain's switch, forwarded to the forked nodes by {@link ClusterHarness}. */
+	static final String NODE_USE_GPU = "JUNO_USE_GPU";
+
+	private static final String[] PIPELINE_NAMES = { "hello greeting", "no raw SentencePiece markers",
+			"question response", "greedy determinism", "multi-turn context", "FLOAT16 pipeline" };
+	private static final String[] TENSOR_NAMES = { "tensor-parallel generation", "tensor-parallel greedy determinism" };
+	private static final String PREFILL_NAME = "long-prompt prefill, both schedules";
+	private static final String CONTEXT_SHIFT_NAME = "context shift past the context limit, both schedules";
+
 	private static final Set<String> GREETING_WORDS = Set.of("how", "are", "you", "hello", "hi", "help", "doing",
 			"today", "there", "welcome", "assist", "can", "i", "what", "do", "hola", "hey", "greetings", "good",
 			"great", "nice", "pleased");
@@ -123,6 +141,20 @@ public final class ModelLiveChecks {
 	 * {@code progress} as it completes.
 	 */
 	public static List<LiveCheck> run(String modelPath, Set<Suite> suites, PrintStream progress) throws IOException {
+		return run(modelPath, suites, Backend.AUTO, progress);
+	}
+
+	/** As {@link #run(String, Set, PrintStream)}, on {@code backend}. */
+	public static List<LiveCheck> run(String modelPath, Set<Suite> suites, Backend backend, PrintStream progress)
+			throws IOException {
+		boolean cudaPresent = CudaAvailability.isAvailable();
+		if (backend == Backend.CUDA && !cudaPresent) {
+			List<LiveCheck> failed = failClosed(suites,
+					"CUDA requested, but Juno found no usable NVIDIA GPU on this machine");
+			failed.forEach(c -> progress.println("[" + c.number() + "] FAIL " + c.name() + ": " + c.detail()));
+			return failed;
+		}
+		boolean cuda = useCuda(backend, cudaPresent);
 		LlamaConfig cfg;
 		GgufTokenizer tokenizer;
 		int contextLength;
@@ -132,25 +164,67 @@ public final class ModelLiveChecks {
 			contextLength = reader.metaInt(cfg.architecture() + ".context_length", 0);
 		}
 		List<LiveCheck> results = new ArrayList<>();
-		if (suites.contains(Suite.PIPELINE))
-			runPipeline(modelPath, cfg, tokenizer, results, progress);
-		if (suites.contains(Suite.TENSOR))
-			runTensor(modelPath, cfg, tokenizer, results, progress);
+		String nodeGpu = nodeUseGpu(backend);
+		String savedNodeGpu = System.getProperty(NODE_USE_GPU);
+		try {
+			if (nodeGpu != null)
+				System.setProperty(NODE_USE_GPU, nodeGpu);
+			if (suites.contains(Suite.PIPELINE))
+				runPipeline(modelPath, cfg, tokenizer, results, progress);
+			if (suites.contains(Suite.TENSOR))
+				runTensor(modelPath, cfg, tokenizer, results, progress);
+		} finally {
+			if (savedNodeGpu == null)
+				System.clearProperty(NODE_USE_GPU);
+			else
+				System.setProperty(NODE_USE_GPU, savedNodeGpu);
+		}
 		if (suites.contains(Suite.PREFILL))
-			record(results, progress, 9, "long-prompt prefill, both schedules",
-					() -> longPromptPrefill(modelPath, cfg, tokenizer, contextLength));
+			record(results, progress, 9, PREFILL_NAME,
+					() -> longPromptPrefill(modelPath, cfg, tokenizer, contextLength, cuda));
 		if (suites.contains(Suite.CONTEXT_SHIFT))
-			record(results, progress, 10, "context shift past the context limit, both schedules",
-					() -> ContextShiftCheck.run(modelPath, cfg, tokenizer));
+			record(results, progress, 10, CONTEXT_SHIFT_NAME, () -> ContextShiftCheck.run(modelPath, cfg, tokenizer, cuda));
 		return results;
+	}
+
+	/** Whether the in-process checks (9, 10) run on CUDA. */
+	static boolean useCuda(Backend backend, boolean cudaPresent) {
+		return switch (backend) {
+		case AUTO, CUDA -> cudaPresent;
+		case CPU -> false;
+		};
+	}
+
+	/** The value the forked nodes get for {@link #NODE_USE_GPU}, or {@code null} to leave theirs. */
+	static String nodeUseGpu(Backend backend) {
+		return switch (backend) {
+		case AUTO -> null;
+		case CPU -> "false";
+		case CUDA -> "true";
+		};
+	}
+
+	/** Every check of {@code suites}, failed with {@code reason}, in check order. */
+	static List<LiveCheck> failClosed(Set<Suite> suites, String reason) {
+		List<LiveCheck> out = new ArrayList<>();
+		if (suites.contains(Suite.PIPELINE))
+			for (int i = 0; i < PIPELINE_NAMES.length; i++)
+				out.add(new LiveCheck(i + 1, PIPELINE_NAMES[i], false, reason));
+		if (suites.contains(Suite.TENSOR))
+			for (int i = 0; i < TENSOR_NAMES.length; i++)
+				out.add(new LiveCheck(i + 7, TENSOR_NAMES[i], false, reason));
+		if (suites.contains(Suite.PREFILL))
+			out.add(new LiveCheck(9, PREFILL_NAME, false, reason));
+		if (suites.contains(Suite.CONTEXT_SHIFT))
+			out.add(new LiveCheck(10, CONTEXT_SHIFT_NAME, false, reason));
+		return out;
 	}
 
 	// ── Suites ────────────────────────────────────────────────────────────────
 
 	private static void runPipeline(String modelPath, LlamaConfig cfg, GgufTokenizer tokenizer,
 			List<LiveCheck> results, PrintStream progress) {
-		String[] names = { "hello greeting", "no raw SentencePiece markers", "question response",
-				"greedy determinism", "multi-turn context", "FLOAT16 pipeline" };
+		String[] names = PIPELINE_NAMES;
 		ClusterHarness harness = ClusterHarness.threeNodes(modelPath, cfg.numLayers());
 		ProcessPipelineClient client = null;
 		int before = results.size();
@@ -182,7 +256,7 @@ public final class ModelLiveChecks {
 
 	private static void runTensor(String modelPath, LlamaConfig cfg, GgufTokenizer tokenizer, List<LiveCheck> results,
 			PrintStream progress) {
-		String[] names = { "tensor-parallel generation", "tensor-parallel greedy determinism" };
+		String[] names = TENSOR_NAMES;
 		ClusterHarness harness = ClusterHarness.tensorNodes(modelPath, cfg.numLayers(), cfg.numHeads());
 		int before = results.size();
 		try {
@@ -300,15 +374,15 @@ public final class ModelLiveChecks {
 	 * 2048-token prefills of a 7B model take hours, and the detail says so.
 	 */
 	private static String longPromptPrefill(String modelPath, LlamaConfig cfg, GgufTokenizer tokenizer,
-			int contextLength) throws IOException {
-		String detail = prefillLeg(modelPath, cfg, tokenizer, PROMPT_TOKENS, contextLength);
-		if (!CudaAvailability.isAvailable())
+			int contextLength, boolean cuda) throws IOException {
+		String detail = prefillLeg(modelPath, cfg, tokenizer, PROMPT_TOKENS, contextLength, cuda);
+		if (!cuda)
 			return detail + "; " + LONG_PROMPT_TOKENS + "-token leg not run on the CPU backend";
 		int target = longPromptTarget(contextLength);
 		String cap = target < LONG_PROMPT_TOKENS
 				? " (" + LONG_PROMPT_TOKENS + " capped at " + target + ", context " + contextLength + ")"
 				: "";
-		return detail + "; " + prefillLeg(modelPath, cfg, tokenizer, target, contextLength) + cap;
+		return detail + "; " + prefillLeg(modelPath, cfg, tokenizer, target, contextLength, cuda) + cap;
 	}
 
 	/**
@@ -331,10 +405,10 @@ public final class ModelLiveChecks {
 	 * three are run.
 	 */
 	private static String prefillLeg(String modelPath, LlamaConfig cfg, GgufTokenizer tokenizer, int minTokens,
-			int contextLength) throws IOException {
+			int contextLength, boolean cuda) throws IOException {
 		String prompt = longPrompt(tokenizer, minTokens);
 		String savedSchedule = System.getProperty(ServeScheduleOptions.ENV);
-		GpuContext gpu = CudaAvailability.isAvailable() ? GpuContext.init(0) : null;
+		GpuContext gpu = cuda ? GpuContext.init(0) : null;
 		try {
 			MatVec backend = gpu != null ? gpu.createMatVec() : ForwardPassHandlerLoader.selectBackend();
 

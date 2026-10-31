@@ -1,0 +1,13 @@
+06:26:13 tinyllama p=1 rep1 tps=110.6788 mean_latency_ms=4436.62 wall_ms=4626 failed=0 tokens=512
+06:26:39 tinyllama p=8 rep1 tps=101.0859 mean_latency_ms=3825.38 wall_ms=5065 failed=0 tokens=512
+06:27:07 tinyllama p=8 rep2 tps=100.9066 mean_latency_ms=3845.62 wall_ms=5074 failed=0 tokens=512
+06:27:31 tinyllama p=1 rep2 tps=111.9615 mean_latency_ms=4462.12 wall_ms=4573 failed=0 tokens=512
+06:27:54 tinyllama p=1 rep3 tps=112.9495 mean_latency_ms=4312.50 wall_ms=4533 failed=0 tokens=512
+06:28:21 tinyllama p=8 rep3 tps=98.1407 mean_latency_ms=3704.75 wall_ms=5217 failed=0 tokens=512
+06:29:08 qwen2.5 p=1 rep1 tps=49.2118 mean_latency_ms=10093.88 wall_ms=10404 failed=0 tokens=512
+06:30:03 qwen2.5 p=8 rep1 tps=42.4611 mean_latency_ms=8968.50 wall_ms=12011 failed=0 tokens=510
+06:30:58 qwen2.5 p=8 rep2 tps=51.0214 mean_latency_ms=9638.88 wall_ms=10035 failed=0 tokens=512
+06:31:45 qwen2.5 p=1 rep2 tps=49.0140 mean_latency_ms=9973.00 wall_ms=10446 failed=0 tokens=512
+06:32:32 qwen2.5 p=1 rep3 tps=47.7256 mean_latency_ms=10490.62 wall_ms=10728 failed=0 tokens=512
+06:33:28 qwen2.5 p=8 rep3 tps=41.1091 mean_latency_ms=9341.38 wall_ms=12406 failed=0 tokens=510
+done

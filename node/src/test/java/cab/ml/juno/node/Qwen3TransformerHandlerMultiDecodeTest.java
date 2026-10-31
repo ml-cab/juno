@@ -28,6 +28,20 @@ class Qwen3TransformerHandlerMultiDecodeTest {
 	}
 
 	@Test
+	@DisplayName("a decode batch on integer-kernel weights takes the decode-batch matmul, not the prefill gemm")
+	void multi_decode_takes_the_decode_batch_matmul(@TempDir Path tmp) throws IOException {
+		Path gguf = Qwen3AttentionNormTest.buildSyntheticQwen3GgufWithKeyLength(tmp, H, HEADS, 4, 32, LAYERS);
+		ShardContext ctx = new ShardContext("n1", 0, LAYERS, true, true, VOCAB, H, HEADS);
+		Qwen3TransformerHandler handler = handler(gguf);
+		CpuIntegerDecodeBatch.resetCalls();
+		CpuIntegerGemm.resetCalls();
+		handler.forwardMultiDecode(
+				MultiDecodeForwardRequest.withTokens(List.of("a", "b"), new int[] { 3, 17 }, new int[] { 0, 0 }), ctx);
+		assertThat(CpuIntegerDecodeBatch.calls(12)).as("decode-batch matmul calls").isPositive();
+		assertThat(CpuIntegerGemm.calls(12)).as("prefill gemm calls").isZero();
+	}
+
+	@Test
 	@DisplayName("forwardMultiDecode logits match serial forward at independent positions")
 	void multi_decode_matches_serial_forward(@TempDir Path tmp) throws IOException {
 		Path gguf = Qwen3AttentionNormTest.buildSyntheticQwen3GgufWithKeyLength(tmp, H, HEADS, 4, 32, LAYERS);

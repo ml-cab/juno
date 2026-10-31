@@ -1,0 +1,74 @@
+INFO: CPU quantized matmul: float-activation kernels (juno.cpu.integerKernels=false)
+INFO: CPU matmul threads: 12
+MODE single-row kernel only: 'A spider has six legs.' [29909, 805, 1241, 756, 4832, 21152, 29889]
+  step 0: top 'A'(29909) 18.88940, second 'There'(8439) 16.26769, gap 2.62171
+  step 1: top ' sp'(805) 18.41469, second ' single'(2323) 11.67208, gap 6.74260
+  step 2: top 'ider'(1241) 25.82635, second 'id'(333) 16.12941, gap 9.69694
+  step 3: top ' has'(756) 17.32623, second ' only'(871) 13.73829, gap 3.58794
+  step 4: top ' six'(4832) 13.85313, second ' eight'(9475) 13.82737, gap 0.02576
+  step 5: top ' legs'(21152) 15.84623, second '.'(29889) 10.30143, gap 5.54481
+  step 6: top '.'(29889) 15.71337, second '.</'(21106) 15.32385, gap 0.38952
+  step 7: top '</s>'(2) 12.14995, second ' The'(450) 11.21107, gap 0.93888
+MODE gemm only: 'A spider has six legs.' [29909, 805, 1241, 756, 4832, 21152, 29889]
+  step 0: top 'A'(29909) 18.88942, second 'There'(8439) 16.26769, gap 2.62173
+  step 1: top ' sp'(805) 18.41468, second ' single'(2323) 11.67208, gap 6.74260
+  step 2: top 'ider'(1241) 25.82636, second 'id'(333) 16.12942, gap 9.69694
+  step 3: top ' has'(756) 17.32624, second ' only'(871) 13.73827, gap 3.58797
+  step 4: top ' six'(4832) 13.85313, second ' eight'(9475) 13.82737, gap 0.02576
+  step 5: top ' legs'(21152) 15.84624, second '.'(29889) 10.30142, gap 5.54482
+  step 6: top '.'(29889) 15.71338, second '.</'(21106) 15.32384, gap 0.38953
+  step 7: top '</s>'(2) 12.14994, second ' The'(450) 11.21107, gap 0.93887
+MODE gemm for first 1 steps: 'A spider has six legs.' [29909, 805, 1241, 756, 4832, 21152, 29889]
+  step 0: top 'A'(29909) 18.88942, second 'There'(8439) 16.26769, gap 2.62173
+  step 1: top ' sp'(805) 18.41470, second ' single'(2323) 11.67208, gap 6.74261
+  step 2: top 'ider'(1241) 25.82636, second 'id'(333) 16.12941, gap 9.69695
+  step 3: top ' has'(756) 17.32624, second ' only'(871) 13.73828, gap 3.58795
+  step 4: top ' six'(4832) 13.85313, second ' eight'(9475) 13.82736, gap 0.02577
+  step 5: top ' legs'(21152) 15.84624, second '.'(29889) 10.30141, gap 5.54483
+  step 6: top '.'(29889) 15.71337, second '.</'(21106) 15.32384, gap 0.38953
+  step 7: top '</s>'(2) 12.14996, second ' The'(450) 11.21107, gap 0.93889
+MODE gemm for first 2 steps: 'A spider has six legs.' [29909, 805, 1241, 756, 4832, 21152, 29889]
+  step 0: top 'A'(29909) 18.88942, second 'There'(8439) 16.26769, gap 2.62173
+  step 1: top ' sp'(805) 18.41468, second ' single'(2323) 11.67208, gap 6.74260
+  step 2: top 'ider'(1241) 25.82635, second 'id'(333) 16.12943, gap 9.69693
+  step 3: top ' has'(756) 17.32623, second ' only'(871) 13.73828, gap 3.58796
+  step 4: top ' six'(4832) 13.85312, second ' eight'(9475) 13.82738, gap 0.02574
+  step 5: top ' legs'(21152) 15.84623, second '.'(29889) 10.30140, gap 5.54483
+  step 6: top '.'(29889) 15.71337, second '.</'(21106) 15.32384, gap 0.38953
+  step 7: top '</s>'(2) 12.14995, second ' The'(450) 11.21107, gap 0.93888
+MODE gemm for first 3 steps: 'A spider has six legs.' [29909, 805, 1241, 756, 4832, 21152, 29889]
+  step 0: top 'A'(29909) 18.88942, second 'There'(8439) 16.26769, gap 2.62173
+  step 1: top ' sp'(805) 18.41468, second ' single'(2323) 11.67208, gap 6.74260
+  step 2: top 'ider'(1241) 25.82636, second 'id'(333) 16.12942, gap 9.69694
+  step 3: top ' has'(756) 17.32622, second ' only'(871) 13.73827, gap 3.58795
+  step 4: top ' six'(4832) 13.85314, second ' eight'(9475) 13.82737, gap 0.02576
+  step 5: top ' legs'(21152) 15.84623, second '.'(29889) 10.30141, gap 5.54482
+  step 6: top '.'(29889) 15.71337, second '.</'(21106) 15.32384, gap 0.38952
+  step 7: top '</s>'(2) 12.14995, second ' The'(450) 11.21107, gap 0.93888
+MODE gemm for first 4 steps: 'A spider has six legs.' [29909, 805, 1241, 756, 4832, 21152, 29889]
+  step 0: top 'A'(29909) 18.88942, second 'There'(8439) 16.26769, gap 2.62173
+  step 1: top ' sp'(805) 18.41468, second ' single'(2323) 11.67208, gap 6.74260
+  step 2: top 'ider'(1241) 25.82636, second 'id'(333) 16.12942, gap 9.69694
+  step 3: top ' has'(756) 17.32624, second ' only'(871) 13.73827, gap 3.58797
+  step 4: top ' six'(4832) 13.85314, second ' eight'(9475) 13.82739, gap 0.02575
+  step 5: top ' legs'(21152) 15.84623, second '.'(29889) 10.30141, gap 5.54483
+  step 6: top '.'(29889) 15.71338, second '.</'(21106) 15.32384, gap 0.38953
+  step 7: top '</s>'(2) 12.14995, second ' The'(450) 11.21106, gap 0.93888
+MODE gemm for first 5 steps: 'A spider has six legs.' [29909, 805, 1241, 756, 4832, 21152, 29889]
+  step 0: top 'A'(29909) 18.88942, second 'There'(8439) 16.26769, gap 2.62173
+  step 1: top ' sp'(805) 18.41468, second ' single'(2323) 11.67208, gap 6.74260
+  step 2: top 'ider'(1241) 25.82636, second 'id'(333) 16.12942, gap 9.69694
+  step 3: top ' has'(756) 17.32624, second ' only'(871) 13.73827, gap 3.58797
+  step 4: top ' six'(4832) 13.85313, second ' eight'(9475) 13.82737, gap 0.02576
+  step 5: top ' legs'(21152) 15.84623, second '.'(29889) 10.30142, gap 5.54481
+  step 6: top '.'(29889) 15.71338, second '.</'(21106) 15.32384, gap 0.38954
+  step 7: top '</s>'(2) 12.14994, second ' The'(450) 11.21107, gap 0.93887
+MODE gemm for first 6 steps: 'A spider has six legs.' [29909, 805, 1241, 756, 4832, 21152, 29889]
+  step 0: top 'A'(29909) 18.88942, second 'There'(8439) 16.26769, gap 2.62173
+  step 1: top ' sp'(805) 18.41468, second ' single'(2323) 11.67208, gap 6.74260
+  step 2: top 'ider'(1241) 25.82636, second 'id'(333) 16.12942, gap 9.69694
+  step 3: top ' has'(756) 17.32624, second ' only'(871) 13.73827, gap 3.58797
+  step 4: top ' six'(4832) 13.85313, second ' eight'(9475) 13.82737, gap 0.02576
+  step 5: top ' legs'(21152) 15.84624, second '.'(29889) 10.30142, gap 5.54482
+  step 6: top '.'(29889) 15.71338, second '.</'(21106) 15.32384, gap 0.38953
+  step 7: top '</s>'(2) 12.14995, second ' The'(450) 11.21107, gap 0.93888

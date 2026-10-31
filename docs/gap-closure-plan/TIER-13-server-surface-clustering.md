@@ -139,6 +139,17 @@ the finished system.
   a per-document full-generation cost. If the gate is judged not to apply, record that judgement and
   the reasoning here rather than omitting the section.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `cpu.live.*`, `gpu.live.*` (the cluster checks), `tools.qwen2.5-3b`, `launcher.tinyllama`,
+  `context-policy.*`, `gpu.context-policy.*`.
+- Add: failover (item 1), a node stopped during a request, and the request completes or fails as the tier's
+  policy states; N-node clusters (item 2) at more than three nodes, a live check; the rerank endpoint (item 3);
+  tool calling on each newly supported template (item 4), in `tools.qwen2.5-3b` or a sibling; context shift on
+  the cluster (item 5), a cluster variant of the context-policy probe.
+
 ## Models needed
 
 Existing dense models suffice for reranking and tool-calling template extension. Elastic clustering
@@ -163,6 +174,8 @@ and fault-tolerance testing use the existing forked-JVM harness and don't need n
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
 - [ ] Cluster and tensor-parallel requests evict their KV on every node and support context shift
       (item 5), with the context-shift smoke passing against a cluster.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Docs (`docs/howto.md`, `docs/agent-arch.txt`) updated, Juno-native language only.
 - [ ] `CHANGELOG.md` entry added.

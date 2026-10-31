@@ -36,6 +36,30 @@ class GbnfGrammarTest {
 	}
 
 	@Test
+	void an_alternative_is_chosen_at_its_start_and_cannot_be_switched_mid_sequence() {
+		GbnfGrammar g = GbnfGrammar.parse("root ::= \"yes\" | \"no\"");
+		assertThat(g.isComplete(bytes("yes"))).isTrue();
+		assertThat(g.isComplete(bytes("no"))).isTrue();
+		assertThat(g.acceptsPrefix(bytes("yn"))).isFalse();
+		assertThat(g.isComplete(bytes("yno"))).isFalse();
+		assertThat(g.isComplete(bytes("yeno"))).isFalse();
+		boolean[] afterY = g.nextBytes(bytes("y"));
+		assertThat(afterY['e']).isTrue();
+		assertThat(afterY['n']).isFalse();
+	}
+
+	@Test
+	void a_rule_reference_mid_sequence_does_not_open_the_next_alternative() {
+		GbnfGrammar g = GbnfGrammar.parse("""
+				root ::= "a" x | "b"
+				x ::= "c"
+				""");
+		assertThat(g.isComplete(bytes("ac"))).isTrue();
+		assertThat(g.isComplete(bytes("b"))).isTrue();
+		assertThat(g.acceptsPrefix(bytes("ab"))).isFalse();
+	}
+
+	@Test
 	void char_class_and_star() {
 		GbnfGrammar g = GbnfGrammar.parse("""
 				root ::= [ab]* "c"

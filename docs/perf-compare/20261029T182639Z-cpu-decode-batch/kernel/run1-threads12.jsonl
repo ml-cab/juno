@@ -1,0 +1,124 @@
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":1,"variant":"gemm","calls_per_rep":881,"ms_per_call":[0.6750741872871737, 0.7151427627695801, 0.662445639046538],"median_ms":0.6751}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":1,"variant":"decode-batch","calls_per_rep":881,"ms_per_call":[0.2621436526674234, 0.2700538887627696, 0.2749468433598184],"median_ms":0.2701}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":1,"variant":"single-calls","calls_per_rep":881,"ms_per_call":[0.25786705334846766, 0.27276784449489216, 0.264038020431328],"median_ms":0.2640}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":2,"variant":"gemm","calls_per_rep":771,"ms_per_call":[0.7460782101167316, 0.7144500077821012, 0.689942168612192],"median_ms":0.7145}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":2,"variant":"decode-batch","calls_per_rep":771,"ms_per_call":[0.5042167743190661, 0.5347917328145266, 0.49983800129701683],"median_ms":0.5042}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":2,"variant":"single-calls","calls_per_rep":771,"ms_per_call":[0.5505847704280156, 0.5368399053177692, 0.5315432230869],"median_ms":0.5368}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":4,"variant":"gemm","calls_per_rep":815,"ms_per_call":[0.7342457214723926, 0.7020495325153375, 0.7757214490797546],"median_ms":0.7342}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":4,"variant":"decode-batch","calls_per_rep":815,"ms_per_call":[0.953348154601227, 0.9483888797546012, 0.9491553447852761],"median_ms":0.9492}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":4,"variant":"single-calls","calls_per_rep":815,"ms_per_call":[1.1413681705521472, 1.1044417509202455, 1.2076787521472394],"median_ms":1.1414}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":8,"variant":"gemm","calls_per_rep":623,"ms_per_call":[1.0218598186195826, 1.0817975104333868, 1.1285641556982344],"median_ms":1.0818}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":8,"variant":"decode-batch","calls_per_rep":623,"ms_per_call":[1.8680240834670947, 1.891284874799358, 1.8544265650080256],"median_ms":1.8680}
+{"threads":12,"bits":128,"shape":"Q4_K 2048x2048","batch":8,"variant":"single-calls","calls_per_rep":623,"ms_per_call":[2.2253265489566614, 2.1122670786516853, 2.2144894703049762],"median_ms":2.2145}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":1,"variant":"gemm","calls_per_rep":365,"ms_per_call":[1.6699647506849316, 1.7410719260273972, 1.6664066383561644],"median_ms":1.6700}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":1,"variant":"decode-batch","calls_per_rep":365,"ms_per_call":[0.6740001287671232, 0.6458957397260274, 0.7425252410958904],"median_ms":0.6740}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":1,"variant":"single-calls","calls_per_rep":365,"ms_per_call":[0.6880014109589041, 0.6385664575342466, 0.6349363260273972],"median_ms":0.6386}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":2,"variant":"gemm","calls_per_rep":367,"ms_per_call":[1.6994724904632152, 1.794157711171662, 1.839125485013624],"median_ms":1.7942}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":2,"variant":"decode-batch","calls_per_rep":367,"ms_per_call":[1.1987392942779291, 1.2135099046321527, 1.194125152588556],"median_ms":1.1987}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":2,"variant":"single-calls","calls_per_rep":367,"ms_per_call":[1.3304958610354225, 1.2464850190735695, 1.2624465694822888],"median_ms":1.2624}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":4,"variant":"gemm","calls_per_rep":356,"ms_per_call":[1.7706368932584269, 1.865511617977528, 1.7038657415730336],"median_ms":1.7706}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":4,"variant":"decode-batch","calls_per_rep":356,"ms_per_call":[2.4376184747191014, 2.4250286966292136, 2.8001356011235954],"median_ms":2.4376}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":4,"variant":"single-calls","calls_per_rep":356,"ms_per_call":[2.515229575842697, 2.549186264044944, 2.7350308820224716],"median_ms":2.5492}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":8,"variant":"gemm","calls_per_rep":222,"ms_per_call":[2.6265374684684684, 2.6678274684684684, 2.631944734234234],"median_ms":2.6319}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":8,"variant":"decode-batch","calls_per_rep":222,"ms_per_call":[4.715266364864865, 4.811833189189189, 4.893543945945946],"median_ms":4.8118}
+{"threads":12,"bits":128,"shape":"Q4_K 5632x2048","batch":8,"variant":"single-calls","calls_per_rep":222,"ms_per_call":[5.2039594504504505, 5.04687259009009, 5.1843228288288286],"median_ms":5.1843}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":1,"variant":"gemm","calls_per_rep":40,"ms_per_call":[15.19552395, 15.41591745, 15.414954925],"median_ms":15.4150}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":1,"variant":"decode-batch","calls_per_rep":40,"ms_per_call":[1.44884275, 1.6706229000000001, 1.529881175],"median_ms":1.5299}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":1,"variant":"single-calls","calls_per_rep":40,"ms_per_call":[1.3267874499999999, 1.32891235, 1.3141406249999998],"median_ms":1.3268}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":2,"variant":"gemm","calls_per_rep":39,"ms_per_call":[15.552214641025643, 15.315035641025641, 15.183457102564102],"median_ms":15.3150}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":2,"variant":"decode-batch","calls_per_rep":39,"ms_per_call":[3.083668102564103, 2.8079739487179487, 2.8043760769230768],"median_ms":2.8080}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":2,"variant":"single-calls","calls_per_rep":39,"ms_per_call":[2.492989051282051, 2.502389051282051, 2.544708230769231],"median_ms":2.5024}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":4,"variant":"gemm","calls_per_rep":39,"ms_per_call":[15.17567941025641, 15.234643948717949, 15.10029841025641],"median_ms":15.1757}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":4,"variant":"decode-batch","calls_per_rep":39,"ms_per_call":[5.6280775128205125, 6.47530076923077, 5.670500256410256],"median_ms":5.6705}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":4,"variant":"single-calls","calls_per_rep":39,"ms_per_call":[5.219152461538461, 4.901828487179487, 4.830758974358974],"median_ms":4.9018}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":8,"variant":"gemm","calls_per_rep":19,"ms_per_call":[31.672693842105264, 29.78322573684211, 30.50248236842105],"median_ms":30.5025}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":8,"variant":"decode-batch","calls_per_rep":19,"ms_per_call":[10.991533421052631, 11.524325684210526, 11.610319894736842],"median_ms":11.5243}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x5632","batch":8,"variant":"single-calls","calls_per_rep":19,"ms_per_call":[9.774139631578947, 9.771687421052631, 9.535828631578948],"median_ms":9.7717}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":1,"variant":"gemm","calls_per_rep":160,"ms_per_call":[4.11775319375, 5.02576131875, 4.2793153625],"median_ms":4.2793}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":1,"variant":"decode-batch","calls_per_rep":160,"ms_per_call":[1.22635346875, 1.313434925, 1.2234536125],"median_ms":1.2264}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":1,"variant":"single-calls","calls_per_rep":160,"ms_per_call":[1.3646199812500002, 1.3160706125000001, 1.16380804375],"median_ms":1.3161}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":2,"variant":"gemm","calls_per_rep":149,"ms_per_call":[4.09811244966443, 4.3768329261744965, 4.0554364496644295],"median_ms":4.0981}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":2,"variant":"decode-batch","calls_per_rep":149,"ms_per_call":[2.2389696711409393, 2.2580065570469796, 2.501250322147651],"median_ms":2.2580}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":2,"variant":"single-calls","calls_per_rep":149,"ms_per_call":[2.445254577181208, 2.3631393020134226, 2.3387538523489932],"median_ms":2.3631}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":4,"variant":"gemm","calls_per_rep":147,"ms_per_call":[4.001468448979592, 4.027079034013606, 4.025457204081633],"median_ms":4.0255}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":4,"variant":"decode-batch","calls_per_rep":147,"ms_per_call":[4.552451061224489, 4.441907605442177, 4.441226959183673],"median_ms":4.4419}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":4,"variant":"single-calls","calls_per_rep":147,"ms_per_call":[4.8385417346938775, 4.922737333333333, 4.655305653061224],"median_ms":4.8385}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":8,"variant":"gemm","calls_per_rep":86,"ms_per_call":[5.852998604651163, 5.8090047558139535, 6.337427197674418],"median_ms":5.8530}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":8,"variant":"decode-batch","calls_per_rep":86,"ms_per_call":[9.051323290697674, 8.78724811627907, 8.88618108139535],"median_ms":8.8862}
+{"threads":12,"bits":128,"shape":"Q4_K 11008x2048","batch":8,"variant":"single-calls","calls_per_rep":86,"ms_per_call":[9.841331337209303, 9.447975197674419, 9.39449226744186],"median_ms":9.4480}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":1,"variant":"gemm","calls_per_rep":20,"ms_per_call":[29.2394748, 29.633644500000003, 30.1092153],"median_ms":29.6336}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":1,"variant":"decode-batch","calls_per_rep":20,"ms_per_call":[2.7063793499999997, 2.7855387499999997, 2.7927011],"median_ms":2.7855}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":1,"variant":"single-calls","calls_per_rep":20,"ms_per_call":[2.38048025, 2.5962690999999998, 2.4093426],"median_ms":2.4093}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":2,"variant":"gemm","calls_per_rep":20,"ms_per_call":[30.318156750000004, 29.372240749999996, 29.64166455],"median_ms":29.6417}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":2,"variant":"decode-batch","calls_per_rep":20,"ms_per_call":[5.781113599999999, 5.4087902, 5.46668945],"median_ms":5.4667}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":2,"variant":"single-calls","calls_per_rep":20,"ms_per_call":[4.57015325, 4.66471285, 4.658605],"median_ms":4.6586}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":4,"variant":"gemm","calls_per_rep":16,"ms_per_call":[32.9133394375, 30.7217869375, 30.0116891875],"median_ms":30.7218}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":4,"variant":"decode-batch","calls_per_rep":16,"ms_per_call":[11.777473375, 18.117239125, 12.64160725],"median_ms":12.6416}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":4,"variant":"single-calls","calls_per_rep":16,"ms_per_call":[10.9660261875, 11.7773465, 10.885423],"median_ms":10.9660}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":8,"variant":"gemm","calls_per_rep":10,"ms_per_call":[60.4475673, 59.4062217, 60.3827221],"median_ms":60.3827}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":8,"variant":"decode-batch","calls_per_rep":10,"ms_per_call":[22.6065745, 22.8993185, 23.995166599999997],"median_ms":22.8993}
+{"threads":12,"bits":128,"shape":"Q6_K 2048x11008","batch":8,"variant":"single-calls","calls_per_rep":10,"ms_per_call":[20.0462828, 19.6990115, 20.0396255],"median_ms":20.0396}
+# CPU decode-batch matmuls (threads=12, integer width 128 bits, reps=3, target 600 ms per rep)
+
+| Shape | Batch | Variant | Median ms/call | Min to max | Time vs gemm | Rows bit-identical to single |
+|---|---|---|---|---|---|---|
+| Q4_K 2048x2048 | 1 | gemm | 0.675 | 0.662 to 0.715 | 1.000 | no |
+| Q4_K 2048x2048 | 1 | decode-batch | 0.270 | 0.262 to 0.275 | 0.400 | yes |
+| Q4_K 2048x2048 | 1 | single-calls | 0.264 | 0.258 to 0.273 | 0.391 | yes |
+| Q4_K 2048x2048 | 2 | gemm | 0.714 | 0.690 to 0.746 | 1.000 | no |
+| Q4_K 2048x2048 | 2 | decode-batch | 0.504 | 0.500 to 0.535 | 0.706 | yes |
+| Q4_K 2048x2048 | 2 | single-calls | 0.537 | 0.532 to 0.551 | 0.751 | yes |
+| Q4_K 2048x2048 | 4 | gemm | 0.734 | 0.702 to 0.776 | 1.000 | no |
+| Q4_K 2048x2048 | 4 | decode-batch | 0.949 | 0.948 to 0.953 | 1.293 | yes |
+| Q4_K 2048x2048 | 4 | single-calls | 1.141 | 1.104 to 1.208 | 1.554 | yes |
+| Q4_K 2048x2048 | 8 | gemm | 1.082 | 1.022 to 1.129 | 1.000 | no |
+| Q4_K 2048x2048 | 8 | decode-batch | 1.868 | 1.854 to 1.891 | 1.727 | yes |
+| Q4_K 2048x2048 | 8 | single-calls | 2.214 | 2.112 to 2.225 | 2.047 | yes |
+| Q4_K 5632x2048 | 1 | gemm | 1.670 | 1.666 to 1.741 | 1.000 | no |
+| Q4_K 5632x2048 | 1 | decode-batch | 0.674 | 0.646 to 0.743 | 0.404 | yes |
+| Q4_K 5632x2048 | 1 | single-calls | 0.639 | 0.635 to 0.688 | 0.382 | yes |
+| Q4_K 5632x2048 | 2 | gemm | 1.794 | 1.699 to 1.839 | 1.000 | no |
+| Q4_K 5632x2048 | 2 | decode-batch | 1.199 | 1.194 to 1.214 | 0.668 | yes |
+| Q4_K 5632x2048 | 2 | single-calls | 1.262 | 1.246 to 1.330 | 0.704 | yes |
+| Q4_K 5632x2048 | 4 | gemm | 1.771 | 1.704 to 1.866 | 1.000 | no |
+| Q4_K 5632x2048 | 4 | decode-batch | 2.438 | 2.425 to 2.800 | 1.377 | yes |
+| Q4_K 5632x2048 | 4 | single-calls | 2.549 | 2.515 to 2.735 | 1.440 | yes |
+| Q4_K 5632x2048 | 8 | gemm | 2.632 | 2.627 to 2.668 | 1.000 | no |
+| Q4_K 5632x2048 | 8 | decode-batch | 4.812 | 4.715 to 4.894 | 1.828 | yes |
+| Q4_K 5632x2048 | 8 | single-calls | 5.184 | 5.047 to 5.204 | 1.970 | yes |
+| Q6_K 2048x5632 | 1 | gemm | 15.415 | 15.196 to 15.416 | 1.000 | no |
+| Q6_K 2048x5632 | 1 | decode-batch | 1.530 | 1.449 to 1.671 | 0.099 | yes |
+| Q6_K 2048x5632 | 1 | single-calls | 1.327 | 1.314 to 1.329 | 0.086 | yes |
+| Q6_K 2048x5632 | 2 | gemm | 15.315 | 15.183 to 15.552 | 1.000 | no |
+| Q6_K 2048x5632 | 2 | decode-batch | 2.808 | 2.804 to 3.084 | 0.183 | yes |
+| Q6_K 2048x5632 | 2 | single-calls | 2.502 | 2.493 to 2.545 | 0.163 | yes |
+| Q6_K 2048x5632 | 4 | gemm | 15.176 | 15.100 to 15.235 | 1.000 | no |
+| Q6_K 2048x5632 | 4 | decode-batch | 5.671 | 5.628 to 6.475 | 0.374 | yes |
+| Q6_K 2048x5632 | 4 | single-calls | 4.902 | 4.831 to 5.219 | 0.323 | yes |
+| Q6_K 2048x5632 | 8 | gemm | 30.502 | 29.783 to 31.673 | 1.000 | no |
+| Q6_K 2048x5632 | 8 | decode-batch | 11.524 | 10.992 to 11.610 | 0.378 | yes |
+| Q6_K 2048x5632 | 8 | single-calls | 9.772 | 9.536 to 9.774 | 0.320 | yes |
+| Q4_K 11008x2048 | 1 | gemm | 4.279 | 4.118 to 5.026 | 1.000 | no |
+| Q4_K 11008x2048 | 1 | decode-batch | 1.226 | 1.223 to 1.313 | 0.287 | yes |
+| Q4_K 11008x2048 | 1 | single-calls | 1.316 | 1.164 to 1.365 | 0.308 | yes |
+| Q4_K 11008x2048 | 2 | gemm | 4.098 | 4.055 to 4.377 | 1.000 | no |
+| Q4_K 11008x2048 | 2 | decode-batch | 2.258 | 2.239 to 2.501 | 0.551 | yes |
+| Q4_K 11008x2048 | 2 | single-calls | 2.363 | 2.339 to 2.445 | 0.577 | yes |
+| Q4_K 11008x2048 | 4 | gemm | 4.025 | 4.001 to 4.027 | 1.000 | no |
+| Q4_K 11008x2048 | 4 | decode-batch | 4.442 | 4.441 to 4.552 | 1.103 | yes |
+| Q4_K 11008x2048 | 4 | single-calls | 4.839 | 4.655 to 4.923 | 1.202 | yes |
+| Q4_K 11008x2048 | 8 | gemm | 5.853 | 5.809 to 6.337 | 1.000 | no |
+| Q4_K 11008x2048 | 8 | decode-batch | 8.886 | 8.787 to 9.051 | 1.518 | yes |
+| Q4_K 11008x2048 | 8 | single-calls | 9.448 | 9.394 to 9.841 | 1.614 | yes |
+| Q6_K 2048x11008 | 1 | gemm | 29.634 | 29.239 to 30.109 | 1.000 | no |
+| Q6_K 2048x11008 | 1 | decode-batch | 2.786 | 2.706 to 2.793 | 0.094 | yes |
+| Q6_K 2048x11008 | 1 | single-calls | 2.409 | 2.380 to 2.596 | 0.081 | yes |
+| Q6_K 2048x11008 | 2 | gemm | 29.642 | 29.372 to 30.318 | 1.000 | no |
+| Q6_K 2048x11008 | 2 | decode-batch | 5.467 | 5.409 to 5.781 | 0.184 | yes |
+| Q6_K 2048x11008 | 2 | single-calls | 4.659 | 4.570 to 4.665 | 0.157 | yes |
+| Q6_K 2048x11008 | 4 | gemm | 30.722 | 30.012 to 32.913 | 1.000 | no |
+| Q6_K 2048x11008 | 4 | decode-batch | 12.642 | 11.777 to 18.117 | 0.411 | yes |
+| Q6_K 2048x11008 | 4 | single-calls | 10.966 | 10.885 to 11.777 | 0.357 | yes |
+| Q6_K 2048x11008 | 8 | gemm | 60.383 | 59.406 to 60.448 | 1.000 | no |
+| Q6_K 2048x11008 | 8 | decode-batch | 22.899 | 22.607 to 23.995 | 0.379 | yes |
+| Q6_K 2048x11008 | 8 | single-calls | 20.040 | 19.699 to 20.046 | 0.332 | yes |

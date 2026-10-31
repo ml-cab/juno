@@ -46,11 +46,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * {@code huggingface_hub} package or the {@code hf} / {@code huggingface-cli}
  * command-line tools.
  *
- * <p><b>Cache location:</b> {@code ~/.cache/juno/models/<org>__<repo>/<file>}
+ * <p><b>Cache location:</b> {@code ~/.cache/juno/models/<org>_<repo>/<file>}
  * by default (override via the constructor) — deliberately <i>not</i> the
  * repo's {@code models/} directory, which CLAUDE.md reserves for local test
  * fixtures that must never be written to or committed by tooling. One
- * directory per repo (org and repo name joined with {@code __}) keeps
+ * directory per repo (org and repo name joined with {@code _}) keeps
  * same-named files from different repos from colliding.
  *
  * <p><b>Quant selection policy:</b> an explicit {@code :quant} suffix must
@@ -203,27 +203,7 @@ public final class HfGgufFetcher {
 			return dest;
 		}
 
-		long existing = Files.exists(partFile) ? Files.size(partFile) : 0;
-		HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url));
-		if (existing > 0)
-			builder.header("Range", "bytes=" + existing + "-");
-		HttpResponse<InputStream> res = http.send(builder.GET().build(), HttpResponse.BodyHandlers.ofInputStream());
-
-		boolean resumed = res.statusCode() == 206;
-		if (res.statusCode() != 200 && res.statusCode() != 206)
-			throw new IOException("Download failed: HTTP " + res.statusCode() + " for " + url);
-		if (!resumed)
-			existing = 0; // server ignored Range (or nothing to resume) — restart from scratch
-
-		StandardOpenOption[] opts = resumed
-				? new StandardOpenOption[] { StandardOpenOption.CREATE, StandardOpenOption.APPEND }
-				: new StandardOpenOption[] { StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING };
-		long startByte = existing;
-		log.info(() -> (resumed ? "Resuming" : "Starting") + " download of " + asset.filename() + " from byte "
-				+ startByte);
-		try (InputStream in = res.body(); OutputStream out = Files.newOutputStream(partFile, opts)) {
-			in.transferTo(out);
-		}
+		HttpResponse<InputStream> res = transfer(url, partFile, asset.filename());
 		Files.move(partFile, dest, StandardCopyOption.REPLACE_EXISTING);
 
 		String etag = res.headers().firstValue("ETag").orElse(remoteEtag);
@@ -231,6 +211,52 @@ public final class HfGgufFetcher {
 			Files.writeString(etagFile, etag);
 		log.info(() -> "Downloaded " + dest);
 		return dest;
+	}
+
+	/**
+	 * Downloads {@code filename} (any extension) from {@code repo} at commit
+	 * {@code revision} into {@code destDir}, resuming a {@code .part} file left
+	 * by an interrupted attempt. Pinning a commit rather than {@code main} keeps
+	 * the bytes fixed when the repo is re-uploaded later; verifying them is the
+	 * caller's job.
+	 */
+	public Path downloadPinned(String repo, String revision, String filename, Path destDir)
+			throws IOException, InterruptedException {
+		Files.createDirectories(destDir);
+		Path dest = destDir.resolve(filename);
+		Path partFile = destDir.resolve(filename + ".part");
+		transfer(apiBase + "/" + repo + "/resolve/" + revision + "/" + filename, partFile, filename);
+		Files.move(partFile, dest, StandardCopyOption.REPLACE_EXISTING);
+		log.info(() -> "Downloaded " + dest);
+		return dest;
+	}
+
+	/** GETs {@code url} into {@code partFile}, appending from its current size when the server honours Range. */
+	private HttpResponse<InputStream> transfer(String url, Path partFile, String label)
+			throws IOException, InterruptedException {
+		long existing = Files.exists(partFile) ? Files.size(partFile) : 0;
+		HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url));
+		if (existing > 0)
+			builder.header("Range", "bytes=" + existing + "-");
+		HttpResponse<InputStream> res = http.send(builder.GET().build(), HttpResponse.BodyHandlers.ofInputStream());
+
+		boolean resumed = res.statusCode() == 206;
+		if (res.statusCode() != 200 && res.statusCode() != 206) {
+			res.body().close();
+			throw new IOException("Download failed: HTTP " + res.statusCode() + " for " + url);
+		}
+		if (!resumed)
+			existing = 0; // server ignored Range (or nothing to resume) — restart from scratch
+
+		StandardOpenOption[] opts = resumed
+				? new StandardOpenOption[] { StandardOpenOption.CREATE, StandardOpenOption.APPEND }
+				: new StandardOpenOption[] { StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING };
+		long startByte = existing;
+		log.info(() -> (resumed ? "Resuming" : "Starting") + " download of " + label + " from byte " + startByte);
+		try (InputStream in = res.body(); OutputStream out = Files.newOutputStream(partFile, opts)) {
+			in.transferTo(out);
+		}
+		return res;
 	}
 
 	private String headEtag(String url) throws IOException, InterruptedException {

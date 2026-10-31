@@ -99,4 +99,11 @@ class SseTokenConsumerTest {
 			assertThat(event).contains("isComplete");
 		}
 	}
+
+	/** JSON allows no raw control character in a string, and a byte-fallback token can decode to one. */
+	@Test
+	void control_characters_are_escaped_as_unicode() {
+		consumer.onToken("a\u0015b\u0000", 7, 0);
+		assertThat(emitted.get(0)).contains("a\\u0015b\\u0000").doesNotContain("\u0015").doesNotContain("\u0000");
+	}
 }

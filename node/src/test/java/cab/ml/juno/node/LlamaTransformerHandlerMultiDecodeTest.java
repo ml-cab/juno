@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.within;
 import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.Test;
 
 import cab.ml.juno.registry.ShardAssignment;
@@ -71,6 +73,45 @@ class LlamaTransformerHandlerMultiDecodeTest {
 			for (int v = 0; v < VOCAB; v++)
 				assertThat(batched[i][v]).as("req %d vocab %d", i, v).isCloseTo(serial[i][v], within(1e-4f));
 		}
+	}
+
+	@ParameterizedTest(name = "GGUF type {0}")
+	@ValueSource(ints = { 12, 13, 14, 8 })
+	@DisplayName("on integer-kernel weights a decode batch is bit-identical to serial forward, and takes the decode-batch matmul")
+	void multi_decode_on_integer_weights_is_bit_identical_to_serial_forward(int type) {
+		int h = 256;
+		ShardContext ctx = ShardContext.from(new ShardAssignment("n1", "localhost", 0, 0, LAYERS, true, true), VOCAB, h,
+				NH);
+		List<String> ids = List.of("req-a", "req-b", "req-c");
+		int[] tokens = { 3, 17, 42 };
+		int[] positions = { 0, 1, 2 };
+		LlamaTransformerHandler serialHandler = quantized(h, type);
+		LlamaTransformerHandler batchedHandler = quantized(h, type);
+		for (LlamaTransformerHandler hd : List.of(serialHandler, batchedHandler))
+			for (int i = 0; i < ids.size(); i++)
+				for (int p = 0; p < positions[i]; p++)
+					hd.forward(ForwardRequest.withTokens(ids.get(i), new int[] { tokens[i] + p }, p), ctx);
+		float[][] serial = new float[ids.size()][];
+		for (int i = 0; i < ids.size(); i++)
+			serial[i] = serialHandler
+					.forward(ForwardRequest.withTokens(ids.get(i), new int[] { tokens[i] }, positions[i]), ctx).logits();
+
+		CpuIntegerDecodeBatch.resetCalls();
+		CpuIntegerGemm.resetCalls();
+		float[][] batched = batchedHandler
+				.forwardMultiDecode(MultiDecodeForwardRequest.withTokens(ids, tokens, positions), ctx).logits();
+
+		assertThat(CpuIntegerDecodeBatch.calls(type)).as("decode-batch matmul calls").isPositive();
+		assertThat(CpuIntegerGemm.calls(type)).as("prefill gemm calls").isZero();
+		for (int i = 0; i < ids.size(); i++)
+			for (int v = 0; v < VOCAB; v++)
+				assertThat(Float.floatToRawIntBits(batched[i][v])).as("req %d vocab %d", i, v)
+						.isEqualTo(Float.floatToRawIntBits(serial[i][v]));
+	}
+
+	private static LlamaTransformerHandler quantized(int h, int type) {
+		return LlamaTransformerHandler.newTestInstance(VOCAB, h, NH, KVH, LAYERS, 0, LAYERS, true, true, null, 0.5f,
+				SlidingWindow.NONE, type);
 	}
 
 	@Test

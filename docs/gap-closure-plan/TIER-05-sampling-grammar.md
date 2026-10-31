@@ -136,6 +136,18 @@ baseline avoids compounding the confusion Tier 00 fixed).
     own `juno.Sample.mean_ms` on Qwen2.5-3B's vocabulary published beside it.
   - Every other sweep model's GPU tg and pp **>= 0.95x** the pre-tier build (the standing gate).
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `grammar.tinyllama`, `tools.qwen2.5-3b`, `consistency.tinyllama`,
+  `gpu.consistency.tinyllama` (greedy replies), `cpu.throughput.*` and `gpu.throughput.*` (item 6's sampling
+  cost shows in generation throughput).
+- Add: a sampling probe over REST: each new step (min-p, typical-p, tail-free, mirostat v1 and v2, DRY, XTC) and a
+  configured chain accepted, seeded output reproducible, invalid values refused with HTTP 400;
+  `frequency_penalty` scaled per occurrence (item 3); grammar checks for Unicode character classes and bounded
+  repetition (item 4); JSON schema `$ref`/`$defs` (item 5).
+
 ## Models needed
 
 Existing models (`tinyllama`, `qwen2.5-3b`) are sufficient — this tier is sampler/grammar logic,
@@ -159,6 +171,8 @@ not model-architecture-dependent.
       closing on one takes an explicit **Owner decision** recorded here with the measured number.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved.
 - [ ] Existing `smoke-grammar.sh`/`smoke-tools.sh` still pass unmodified.
 - [ ] `x_juno_samplers`, the new `frequency_penalty` semantics and the widened `json_schema` support

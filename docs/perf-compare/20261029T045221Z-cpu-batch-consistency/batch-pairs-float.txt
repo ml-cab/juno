@@ -1,0 +1,7 @@
+INFO: CPU quantized matmul: float-activation kernels (juno.cpu.integerKernels=false)
+INFO: CPU matmul threads: 12
+single 0: 'The capital of France is Paris.' [1576, 7483, 310, 3444, 338, 3681, 29889]
+single 1: 'Red.' [9039, 21106, 29879]
+single 2: 'A spider has six legs.' [29909, 805, 1241, 756, 4832, 21152, 29889]
+SEQUENTIAL mismatches: 0
+CONCURRENT mismatches: 0

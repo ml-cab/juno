@@ -104,6 +104,17 @@ final class GqaMath {
 	}
 
 	/**
+	 * {@link #attendPooled(float[], float[], float[], int, float[], int, int, int, int, int)} with every head through
+	 * the serial loop's body, so the output is {@link #attend}'s bit for bit at any thread count, with or without the
+	 * Vector API module. A decode batch attends this way: a request decoded alone attends through {@link #attend}, and
+	 * its output must not depend on whether it shared a decode step with other requests.
+	 */
+	static void attendPooledAsSerial(float[] q, float[] kCache, float[] vCache, int seqLen, float[] out, int numHeads,
+			int headDim, int gqaRatio, int kvDim, int window) {
+		attendPooled(q, kCache, vCache, seqLen, out, numHeads, headDim, gqaRatio, kvDim, window, false);
+	}
+
+	/**
 	 * {@link #attendPooled(float[], float[], float[], int, float[], int, int, int, int, int)} with the head form
 	 * chosen by the caller: {@code vectorHead} needs the Vector API module. For tests that compare the two.
 	 */

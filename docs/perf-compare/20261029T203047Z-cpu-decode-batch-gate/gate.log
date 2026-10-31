@@ -1,0 +1,119 @@
+baseline jar sha256: 758520d7ad418890
+candidate jar sha256: 1c181de29e52d249
+
+=== CPU decode-batch A/B, pinned by hand (15:30:47)
+--- tinyllama --parallel 1: baseline 1 (15:30:47)
+    exit=0 reading=ok tps=8.9062
+--- tinyllama --parallel 1: candidate 1 (15:31:19)
+    exit=0 reading=ok tps=9.1954
+--- tinyllama --parallel 2: baseline 1 (15:31:51)
+    exit=0 reading=ok tps=9.4159
+--- tinyllama --parallel 2: candidate 1 (15:32:50)
+    exit=0 reading=ok tps=8.9354
+--- tinyllama --parallel 4: baseline 1 (15:33:42)
+    exit=0 reading=ok tps=8.3290
+--- tinyllama --parallel 4: candidate 1 (15:35:20)
+    exit=0 reading=ok tps=9.2552
+--- tinyllama --parallel 8: baseline 1 (15:36:51)
+    exit=0 reading=ok tps=8.0349
+--- tinyllama --parallel 8: candidate 1 (15:39:49)
+    exit=0 reading=ok tps=9.7526
+--- tinyllama --parallel 1: baseline 2 (15:42:35)
+    exit=0 reading=ok tps=8.7087
+--- tinyllama --parallel 1: candidate 2 (15:43:07)
+    exit=0 reading=ok tps=8.7360
+--- tinyllama --parallel 2: baseline 2 (15:43:40)
+    exit=0 reading=ok tps=7.6537
+--- tinyllama --parallel 2: candidate 2 (15:44:45)
+    exit=0 reading=ok tps=8.8557
+--- tinyllama --parallel 4: baseline 2 (15:45:39)
+    exit=0 reading=ok tps=6.9654
+--- tinyllama --parallel 4: candidate 2 (15:47:24)
+    exit=0 reading=ok tps=8.5373
+--- tinyllama --parallel 8: baseline 2 (15:49:01)
+    exit=0 reading=ok tps=6.8145
+--- tinyllama --parallel 8: candidate 2 (15:52:54)
+    exit=0 reading=ok tps=8.4900
+--- tinyllama --parallel 1: baseline 3 (15:56:52)
+    exit=0 reading=ok tps=9.1376
+--- tinyllama --parallel 1: candidate 3 (15:57:23)
+    exit=0 reading=ok tps=7.9553
+--- tinyllama --parallel 2: baseline 3 (15:58:00)
+    exit=0 reading=ok tps=8.6827
+--- tinyllama --parallel 2: candidate 3 (15:59:07)
+    exit=0 reading=ok tps=9.1796
+--- tinyllama --parallel 4: baseline 3 (15:59:57)
+    exit=0 reading=ok tps=8.0625
+--- tinyllama --parallel 4: candidate 3 (16:01:39)
+    exit=0 reading=ok tps=9.7673
+--- tinyllama --parallel 8: baseline 3 (16:03:08)
+    exit=0 reading=ok tps=8.9160
+--- tinyllama --parallel 8: candidate 3 (16:05:55)
+    exit=0 reading=ok tps=9.9077
+--- qwen2.5 --parallel 1: baseline 1 (16:08:36)
+    exit=0 reading=ok tps=3.5124
+--- qwen2.5 --parallel 1: candidate 1 (16:09:48)
+    exit=0 reading=ok tps=3.5483
+--- qwen2.5 --parallel 2: baseline 1 (16:11:00)
+    exit=0 reading=ok tps=3.4058
+--- qwen2.5 --parallel 2: candidate 1 (16:13:33)
+    exit=0 reading=ok tps=3.4900
+--- qwen2.5 --parallel 4: baseline 1 (16:15:37)
+    exit=0 reading=ok tps=2.9046
+--- qwen2.5 --parallel 4: candidate 1 (16:19:49)
+    exit=0 reading=ok tps=3.5548
+--- qwen2.5 --parallel 8: baseline 1 (16:23:36)
+    exit=0 reading=ok tps=3.5153
+--- qwen2.5 --parallel 8: candidate 1 (16:30:50)
+    exit=0 reading=ok tps=3.6139
+--- qwen2.5 --parallel 1: baseline 2 (16:38:03)
+    exit=0 reading=ok tps=3.4396
+--- qwen2.5 --parallel 1: candidate 2 (16:39:15)
+    exit=0 reading=ok tps=3.3888
+--- qwen2.5 --parallel 2: baseline 2 (16:40:29)
+    exit=0 reading=ok tps=3.4980
+--- qwen2.5 --parallel 2: candidate 2 (16:43:01)
+    exit=0 reading=ok tps=3.5449
+--- qwen2.5 --parallel 4: baseline 2 (16:45:04)
+    exit=0 reading=ok tps=2.9243
+--- qwen2.5 --parallel 4: candidate 2 (16:49:44)
+    exit=0 reading=ok tps=3.4745
+--- qwen2.5 --parallel 8: baseline 2 (16:53:32)
+    exit=0 reading=ok tps=3.5582
+--- qwen2.5 --parallel 8: candidate 2 (17:00:57)
+    exit=0 reading=ok tps=3.6508
+--- qwen2.5 --parallel 1: baseline 3 (17:08:07)
+    exit=0 reading=ok tps=3.5451
+--- qwen2.5 --parallel 1: candidate 3 (17:09:19)
+    exit=0 reading=ok tps=3.5275
+--- qwen2.5 --parallel 2: baseline 3 (17:10:31)
+    exit=0 reading=ok tps=3.5165
+--- qwen2.5 --parallel 2: candidate 3 (17:13:03)
+    exit=0 reading=ok tps=3.5310
+--- qwen2.5 --parallel 4: baseline 3 (17:15:04)
+    exit=0 reading=ok tps=2.9404
+--- qwen2.5 --parallel 4: candidate 3 (17:19:00)
+    exit=0 reading=ok tps=3.5442
+--- qwen2.5 --parallel 8: baseline 3 (17:22:50)
+    exit=0 reading=ok tps=3.2577
+--- qwen2.5 --parallel 8: candidate 3 (17:30:15)
+    exit=0 reading=ok tps=3.8283
+clock states recorded before each run (must be only: performance,no_turbo=1):
+     48 performance,no_turbo=1
+
+model      P    baseline_runs              candidate_runs                  B/A   gate
+tinyllama  1    8.9062 8.7087 9.1376       9.1954 8.7360 7.9553          0.981 report
+tinyllama  2    9.4159 7.6537 8.6827       8.9354 8.8557 9.1796          1.029   0.90
+tinyllama  4    8.3290 6.9654 8.0625       9.2552 8.5373 9.7673          1.148   0.90
+tinyllama  8    8.0349 6.8145 8.9160       9.7526 8.4900 9.9077          1.214   0.90
+qwen2.5    1    3.5124 3.4396 3.5451       3.5483 3.3888 3.5275          1.004 report
+qwen2.5    2    3.4058 3.4980 3.5165       3.4900 3.5449 3.5310          1.009   0.90
+qwen2.5    4    2.9046 2.9243 2.9404       3.5548 3.4745 3.5442          1.212   0.90
+qwen2.5    8    3.5153 3.5582 3.2577       3.6139 3.6508 3.8283          1.039   0.90
+
+Replies against each build's single-request reply (--parallel 1, run 1):
+  tinyllama baseline: --parallel 2 0 of 6 differ; --parallel 4 4 of 12 differ; --parallel 8 5 of 24 differ;
+  tinyllama candidate: --parallel 2 0 of 6 differ; --parallel 4 0 of 12 differ; --parallel 8 0 of 24 differ;
+  qwen2.5 baseline: --parallel 2 0 of 6 differ; --parallel 4 6 of 12 differ; --parallel 8 8 of 24 differ;
+  qwen2.5 candidate: --parallel 2 0 of 6 differ; --parallel 4 0 of 12 differ; --parallel 8 0 of 24 differ;
+GATES MET

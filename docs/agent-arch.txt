@@ -38,8 +38,8 @@ Module dependency (excerpt):
         CudaBindings, CudaAvailability, RocmBindings, RocmAvailability,
         DeviceFloatMatrix, DeviceHalfMatrix, GpuContext, MatVecBackend,
         LoraTrainableHandler, LoraMerge, LoraQvInitializer, CpuKernelSelection,
-        CpuIntegerKernels, CpuIntegerGemm, CpuIntegerWidth, CpuIntegerKernels256,
-        CpuIntegerGemm256, CpuThreads, CpuWorkerPool,
+        CpuIntegerKernels, CpuIntegerGemm, CpuIntegerDecodeBatch, CpuIntegerWidth,
+        CpuIntegerKernels256, CpuIntegerGemm256, CpuThreads, CpuWorkerPool,
         CpuDecodeScratch, VectorQuantKernels, SimdThreadPool
         node depends on lora
 
@@ -77,6 +77,33 @@ Module dependency (excerpt):
         differentiates that product). Lane sums use a fixed order and reentrant
         calls on one thread get their own activation buffer, so results are
         bitwise repeatable.
+
+  CpuIntegerDecodeBatch (node module): the CPU integer matmul of a decode batch
+        (forwardMultiDecode: one row per request of a static or continuous decode
+        step). Each activation row is quantized as CpuIntegerKernels quantizes it,
+        and each weight row is dotted against every activation row with the
+        single-row kernel's own row function (q4kRow/q5kRow/q6kRow/q8_0Row at the
+        selected width), so every row is bit for bit what that request's decode
+        alone gives (CpuIntegerDecodeBatchTest). It runs exactly where the
+        single-request decode takes the integer path (CpuKernelSelection.
+        integerMatVec). The handlers' multi-decode paths route their CPU matmuls
+        here (Llama, Qwen3 and Qwen3-MoE decodeBatchLayerInto; Phi2Transformer-
+        Handler.decodeBatchQuantInto, its output head included; Phi3Transformer-
+        Handler.sgemmFusedInto with decodeBatch) and attend through
+        GqaMath.attendPooledAsSerial (Phi-2 attends through attendPooled on both
+        paths); prefill windows keep CpuIntegerGemm and attendPooled. A request's
+        greedy output on the CPU therefore does not depend on what else shares its
+        decode steps: before, a batch's rows went through CpuIntegerGemm, whose
+        last bits differ from the single-row kernel's, and the next layer's 8-bit
+        activation rounding carried that to the logits (0.1 to 0.25 on the real
+        models), enough to flip a near tie when a request's batch dropped to one
+        row (CpuDecodeBatchLiveTest, real models; TinyLlamaStaticBatchLiveTest end
+        to end, in coordinator's static-batch-integer-kernels surefire execution).
+        Device-resident layers keep the device GEMM; the float-activation fallback
+        keeps the weight-stationary kernels. CpuDecodeBatchMicrobench
+        (scripts/performance-tests/cpu-decode-batch-kernels.sh) times it against
+        CpuIntegerGemm and one single-row call per row; calls(type) lets a test see
+        which matmul a decode batch took.
 
   VectorQuantKernels (node module): JDK Vector API helpers for CPU quantized
         matmul. Production policy (policySummary / docs/performance.md):
@@ -123,6 +150,11 @@ Module dependency (excerpt):
   coordinator — Scheduler, GenerationLoop, REST; gRPC pipeline contracts
         ServeBatchOptions — CLI/env resolution for --parallel / --batch-window-ms
         (maps to BatchConfig; streaming consumers bypass static batches)
+        RequestScheduler — static schedule: one collector thread takes the first queued
+        request, holds the batch open until batchWindowMs after it or until
+        maxBatchSize requests, and dispatches it on its own virtual thread
+        (GenerationLoop.generateBatch); SseTokenConsumer — native /v1/inference/stream
+        events, hand-built JSON with control characters escaped
         ServeSchedulePolicy — cluster auto-fallback from continuous to static;
         ContinuousBatchEngine / ContinuousStepEvent / ContinuousLoraPolicy —
         local running-set loop (SSE shares forwardBatch; x_juno_loras fail-closed);
@@ -458,7 +490,9 @@ GPU FFI (node module — Panama project, JEP 454):
         sum held in 128-bit vectors across every key (blocks of 32, then 16, then a scalar tail) and
         stored once. Its output is within attend's oracle bound and the same bits on every call and
         thread count (GqaVectorHeadTest); without the module each head runs the serial body,
-        bit-identical to attend (GqaMathPooledTest). attend itself stays the scalar oracle.
+        bit-identical to attend (GqaMathPooledTest). attendPooledAsSerial(...) runs every head through
+        the serial body with or without the module: a decode batch attends this way, because a
+        request decoded alone attends through attend. attend itself stays the scalar oracle.
   SlidingWindow — the file's sliding-window attention: <arch>.attention.sliding_window (width;
         absent/0 = none) and <arch>.attention.sliding_window_pattern (absent = every layer; boolean
         array of block_count entries, true = windowed; or integer period N, layer i global when

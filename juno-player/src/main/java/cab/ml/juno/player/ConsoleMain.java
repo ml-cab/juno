@@ -1170,9 +1170,9 @@ public final class ConsoleMain {
 		System.out.println("                             env JUNO_KV_PAGE_SIZE; ignored under static (dense)");
 		System.out.println("  --parallel N               Static micro-batch size (default: 1, disabled);");
 		System.out.println("                             under continuous, caps the running set (default cap 8 if N=1)");
-		System.out.println("                             env JUNO_PARALLEL; recommend 8 for API servers");
-		System.out.println("  --batch-window-ms M        Batch collect window when parallel>1 (default: 50)");
-		System.out.println("                             env JUNO_BATCH_WINDOW_MS");
+		System.out.println("                             env JUNO_PARALLEL; 8 suits a CPU API server, keep 1 on the GPU");
+		System.out.println("  --batch-window-ms M        When parallel>1, a static batch dispatches M ms after its first");
+		System.out.println("                             request, or when full (default: 50); env JUNO_BATCH_WINDOW_MS");
 		System.out.println("  --pType pipeline|tensor    Parallelism type (default: pipeline)");
 		System.out.println("  --dtype FLOAT32|FLOAT16    Activation wire format (default: FLOAT16)");
 		System.out.println("  --max-tokens N             Max generated tokens (default: 200)");

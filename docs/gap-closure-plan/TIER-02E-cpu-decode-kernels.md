@@ -294,6 +294,8 @@ vision guard. All present. An AVX2 or AVX-512 host for the width threshold is no
       *2026-10-27:* CPU lane on gate run 2: allocation per token in the recording 0.981x to 1.013x, in-span GC 0 ms on
       every run of both builds: met.
 - [x] Every earlier tier's CPU row-1 correctness result re-verified under the new kernels.
+      *Corrected 2026-10-28 (Tier 02F step 4): the IT's checks 1 to 8 ran on CUDA here, not the CPU; re-run with every check
+      and node on the CPU at HEAD `06d6d22d`, five models, checks 1 to 10 PASS (see the corrected pre-gate bullet below).*
       *2026-10-26, final build `4e480ab9131887eb`, all but one re-verified:* `ModelLiveRunnerIT` checks 1 to 8 on the CPU backend, five models, all
       PASS; `smoke-cpu-kernels.sh` 18 of 18 greedy replies identical to the pre-tier build (four sweep models at 4 and 12
       threads, short and 512-token prompts, CPU vision at the 741 width); `smoke-consistency.sh` CPU half,
@@ -1178,6 +1180,15 @@ is unchanged (`b9a0440b3a1b597a`); the candidate jar and READY are written after
   Qwen2.5-3B, Phi-3.5-mini, Mistral 7B and Qwen3-1.7B: **5 of 5 models, every check PASS**, 0 FAIL, 14 min in the IT.
   Checks 1 to 8 run in forked cluster JVMs on the CPU backend (pipeline and tensor parallel), so they cover the padded
   tile; checks 9 and 10 took CUDA on this host.
+  *Corrected 2026-10-28 (Tier 02F step 4): this IT did not run checks 1 to 8 on the CPU. `ClusterHarness` never set
+  `JUNO_USE_GPU`, which `NodeMain` defaults to true, so on this host the forked nodes took CUDA (seen: three node JVMs
+  holding about 916 MiB each during checks 7 and 8), as checks 9 and 10 did. Re-verified on the CPU at HEAD `06d6d22d`
+  (kernels unchanged since this tier's final build), with the kit's `LiveChecksProbe` and the new CPU backend of
+  `ModelLiveChecks` (nodes given `JUNO_USE_GPU=false`; no process on the GPU in 48 minutes of `nvidia-smi` sampling):
+  **all five models, checks 1 to 10, PASS**. Checks 9 and 10 of Qwen2.5-3B, Mistral 7B and Qwen3-1.7B needed a larger
+  heap (16, 24 and 16 GiB) than the first attempt gave them (5, 10 and 4 GiB: `OutOfMemoryError`), because on the CPU
+  the weights and a dense KV sized to their 32k to 40k contexts sit on the heap. Recorded in
+  [Tier 02F](TIER-02F-hardware-validation-kit.md)'s execution record.*
 - `smoke-cpu-kernels.sh --baseline-jar <pre-tier b9a0440b3a1b597a>` (candidate: the tree jar `4e480ab9131887eb`, the same
   source rebuilt by the IT's `mvn install`): both builds pass every check of `smoke-cpu-hot-path.sh` (four sweep models
   at `--threads` 4 and 12, short decode and a prompt of about 512 tokens, and the moondream2 CPU vision case at the
@@ -1302,8 +1313,8 @@ is lower), so no request reached a limit and nothing shifted.
 | 4 | Static schedule | PASS | `smoke-consistency.sh` (static at `--parallel 2`, CPU and GPU, 54 PASS); `smoke-long-prompt-prefill.sh --cpu` static |
 | 5 | Continuous schedule | PASS | `smoke-consistency.sh` continuous; `smoke-long-prompt-prefill.sh --cpu` continuous; continuous prefill chunks run `CpuIntegerGemm` and the pooled attention |
 | 6 | Single-node local mode | PASS | every smoke above and the closing gate |
-| 7 | Pipeline-parallel cluster | PASS | `ModelLiveRunnerIT` checks 1 to 6 in forked node JVMs on the CPU backend, five models; each node JVM selects its own width at class initialisation |
-| 8 | Tensor-parallel cluster | PASS | `ModelLiveRunnerIT` checks 7 and 8 on the CPU backend, five models |
+| 7 | Pipeline-parallel cluster | PASS | `ModelLiveRunnerIT` checks 1 to 6 in forked node JVMs on the CPU backend, five models; each node JVM selects its own width at class initialisation. *Corrected 2026-10-28: those nodes took CUDA; re-verified with every node on the CPU, five models, checks 1 to 6 PASS (Tier 02F step 4)* |
+| 8 | Tensor-parallel cluster | PASS | `ModelLiveRunnerIT` checks 7 and 8 on the CPU backend, five models. *Corrected 2026-10-28: those nodes took CUDA; re-verified with every node on the CPU, five models, checks 7 and 8 PASS (Tier 02F step 4)* |
 | 9 | LoRA training | PASS | the frozen forward stays on the float-activation kernels (items 1 to 3 do not reach it); the trainable handlers' attention takes the pooled window entry point, bit-identical; Part L training 1.024x (GPU) and 0.999x (CPU) |
 | 10 | LoRA playback | PASS | playback composes against the integer kernels; `LoraQ4KPlaybackParityTest` and the LoRA suites pass in the full unit suite on the final build (2,437 tests, 0 failures); Part L playback 0.977x and 0.995x, recall in every run |
 | 11 | Vision | PASS | `VisionWidthCpuKernelGuardTest` at B = 741; `smoke-cpu-kernels.sh`'s CPU vision case identical to the pre-tier build; `compare-vision.sh` A/B: CPU lane latency 0.555x, decode 2.104x |

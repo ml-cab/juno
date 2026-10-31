@@ -153,6 +153,35 @@ public final class CpuDecodeKernelVariantMicrobench {
 			Files.writeString(out, report.toString());
 	}
 
+	/**
+	 * Milliseconds per call of the shipped decode kernel (the {@code production}
+	 * variant) on synthetic packed weights of {@code type} (12 Q4_K, 14 Q6_K) at
+	 * {@code rows x cols}, one entry per repetition, on the current
+	 * {@link CpuThreads} count and integer width. The hardware validation kit's
+	 * calibration and kernel-width readings call this.
+	 */
+	public static double[] productionMsPerCall(int type, int rows, int cols, int reps, long targetMs, long warmupMs) {
+		if ((type != 12 && type != 14) || cols % 256 != 0 || rows < 1 || reps < 1)
+			throw new IllegalArgumentException(
+					"type must be 12 or 14, cols a multiple of 256, rows and reps >= 1: " + type + " " + rows + "x" + cols);
+		Shape shape = new Shape(type, rows, cols);
+		Variant production = variants(type).get(0);
+		int copies = (int) Math.max(2, (CACHE_DEFEAT_BYTES + shape.bytes() - 1) / shape.bytes());
+		byte[][] weights = new byte[copies][];
+		for (int c = 0; c < copies; c++)
+			weights[c] = synthetic(shape, c);
+		float[] x = new float[cols];
+		Random rnd = new Random(3);
+		for (int i = 0; i < x.length; i++)
+			x[i] = (float) rnd.nextGaussian();
+		timeCalls(production, weights, x, shape, warmupMs);
+		int calls = Math.max(copies, callsFor(production, weights, x, shape, targetMs));
+		double[] ms = new double[reps];
+		for (int r = 0; r < reps; r++)
+			ms[r] = timeN(production, weights, x, shape, calls);
+		return ms;
+	}
+
 	private static List<Variant> variants(int type) {
 		if (type == 12)
 			return List.of(

@@ -171,6 +171,22 @@ record first.)*
   - `Devstral` (24B, IQ1_S) additionally reports peak RSS and GPU-layer-offload behaviour with no
     threshold attached — it is the memory-pressure data point, and this is its first measurement.
 
+## Kit probes
+
+README execution rule 10.
+
+- Keep passing: `cpu.live.*`, `gpu.live.*`, `quality.*`, `cpu.unit-tests`, `gpu.unit-tests`.
+- Add:
+  - A change: `consistency.tinyllama` checks that local mode and both clusters refuse `qwen35`, `gemma4`,
+    `mistral3` and `minimax-m2` and name them. Each architecture this tier supports leaves that list. Its
+    `family:` line in `coverage.tsv` names its new probes; `CoverageTest` fails until it has one, because the
+    supported set comes from `ForwardPassHandlerLoader`.
+  - Per new handler (Gemma, Mistral3, Qwen3.5, Minimax-M2, Mixtral-shaped MoE): a catalog model with its
+    pinned SHA-256, and live and quality checks, CPU and, where the tier adds one, GPU.
+  - The Phi-2 GPU path (item 6): `gpu.vision.moondream2` gains decode readings. The Qwen3 MoE GPU path is
+    covered by `gpu.unit-tests`, as its real file is beyond the kit's downloads.
+  - Phi-2 files with split Q/K/V tensors (item 7): a load and reply check.
+
 ## Models needed
 
 All four target files are already present. So are the two regression files this tier needs for the
@@ -211,6 +227,8 @@ paragraph when deciding whether to ask; this section was stale once.
       handlers had a device path.
 - [ ] Standing throughput and allocation gate met (README, "Test infrastructure"): CPU and GPU tg and pp
       >= 0.95x the pre-tier build, allocation per token <= 1.10x, in-span GC pause total <= 1.25x.
+- [ ] Kit probes (README execution rule 10): the **Add** list above is in the kit's catalog, each with its
+      self-test and its `coverage.tsv` line, and the **Keep passing** list passes on this tier's build.
 - [ ] Cross-surface checklist fully resolved, LoRA-trainability gap (if any) explicitly documented
       per architecture rather than silently absent.
 - [ ] Perf gate published for at least the largest new model (`Devstral`, 24B).

@@ -1,0 +1,21 @@
+{
+  "run_id": "20261029T214029Z",
+  "tool": "compare-parallel",
+  "status": "success",
+  "model": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "model_path": "<repo>/models/qwen2.5-3b-instruct-q4_k_m.gguf",
+  "backend": "cpu",
+  "parallel": 2,
+  "batch_window_ms": 50,
+  "sessions": 2,
+  "max_tokens": 64,
+  "wall_ms": 36592,
+  "sessions_ok": 2,
+  "sessions_failed": 0,
+  "total_completion_tokens": 128,
+  "total_prompt_tokens": 40,
+  "aggregate_token_gen_tps": 3.4980,
+  "mean_per_session_latency_ms": 36535.00,
+  "prompt": "could you please write me a short poem about love and war",
+  "log": "<repo>/dist/cpu-decode-batch-gate/runs/qwen2.5-p2-baseline-2/parallel-2.log"
+}
