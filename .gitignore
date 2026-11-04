@@ -13,3 +13,4 @@ models/*
 *.gguf
 .cursor/
 juno-documentation/_build/
+juno-kit-results/
