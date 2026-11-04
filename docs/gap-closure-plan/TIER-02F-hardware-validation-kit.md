@@ -6,12 +6,15 @@ end to end on this host. Step 5 done 2026-10-30: part 1 2026-10-28 (probe groups
 part 2 2026-10-30 (schedules, LoRA, vision, launcher, and the real-model runs). Step 6 done 2026-10-31 (coverage
 file and test, `ingest`) except the reference run, which is the owner's, at a commit. Step 7 done 2026-10-31 (README
 rule 10, check 10, the **Kit probes** sections, the "Borrowed hardware" table). Step 8 written 2026-10-31
-(`.github/workflows/kit.yml`, checked here); the owner commits it and starts its first run, whose result is recorded
-before step 9. The CPU batch dependence found in part 1 is
+(`.github/workflows/kit.yml`, checked here); not committed (the owner's commit `a1fe7166` left `.github/` out), and its
+runs are deferred by owner decision 2026-11-03 ("for now skip github ci"). Step 10 done 2026-11-03, ahead of step 9,
+whose testers need its guide; the same day's `quick` run corrected three catalog costs and found the CPU live
+probe's wide prefill windows about 5.5x slower inside the kit than outside it (cause open; the engine is not slower).
+The CPU batch dependence found in part 1 is
 explained (not a KV leak; see "CPU batch dependence investigated") and fixed in the engine 2026-10-29 by owner
 go-ahead, an out-of-tier change (see "CPU decode batch made bit for bit the single-request decode"); its pinned
-throughput gate is met (owner run, 2026-10-29). Two exit criteria are ticked: the probe catalog (step 6) and rule 10
-with check 10 (step 7).
+throughput gate is met (owner run, 2026-10-29). Three exit criteria are ticked: the probe catalog (step 6), rule 10
+with check 10 (step 7) and the docs (step 10).
 Gap analysis refs: none — see "Why this tier, why now"
 
 **Added 2026-10-13 (owner decisions, recorded in the execution record below).** This host has one CPU
@@ -290,6 +293,10 @@ GPU, macOS.
       specified, each unit-tested.
 - [ ] The estimate is shown before the run and refined during it. On this host, the first estimate for the
       `quick` suite is `>= 0.65x` and `<= 1.35x` the actual time.
+      *(2026-11-03: read 0.741x, point 1738 s against 2345 s, on the `a1fe7166` catalog
+      (`docs/perf-compare/20261103T205950Z-kit-quick-estimate/`). Not ticked: three catalog costs were corrected after
+      that reading, and `cpu.live.tinyllama` ran about 200 s long for a reason inside the kit that is still open. Owed by
+      the executor, no owner run: a fresh `quick` run on the corrected catalog once that finding is explained.)*
 - [ ] Stage warnings, keep-awake on each OS, and the noise rule's re-runs work as specified.
 - [ ] The model catalog is pinned by SHA-256, downloads resume, and hashes are verified.
 - [x] The probe catalog covers every row of the README's smoke matrix and the Juno-side checks and readings
@@ -309,8 +316,10 @@ GPU, macOS.
       written; see that day's step 7 record.)*
 - [ ] Every module's unit tests pass, `juno-kit` included, and `mvn verify -pl juno-master` passes.
 - [ ] Cross-surface checklist fully resolved.
-- [ ] Docs (`juno-kit/README.md`, `docs/howto.md`, `docs/agent-arch.txt`, `README.md`) updated, in
+- [x] Docs (`juno-kit/README.md`, `docs/howto.md`, `docs/agent-arch.txt`, `README.md`) updated, in
       Juno-native language only; `CHANGELOG.md` entry added.
+      *(2026-11-03, step 10: all five written; a grep of the added text finds no competitor product name, tier number,
+      emoji or pointer into this plan tree. A step 9 fix that changes what a tester sees updates them in the same change.)*
 
 ## Execution record
 
@@ -798,6 +807,8 @@ answered separately; it is applied as proposed. Readings: `docs/perf-compare/202
   - TinyLlama's readings spread by up to 24% within a side even pinned; Qwen2.5-3B's within 9%.
 - **Replies.** Each server's batched replies against its single reply, on the A/B's greedy prompt: the baseline
   differs in 27 of 84 batched replies (half at P=4, a third at P=8, none at P=2). The candidate differs in 0 of 84.
+  *(Clarified 2026-11-03: 27 of 84 is the unpinned A/B, `20261029T182639Z-cpu-decode-batch/`; the pinned gate's count
+  is the 23 of 84 in the bullet above, `20261029T203047Z-cpu-decode-batch-gate/`. `CHANGELOG.md` cites the pinned one.)*
 - **Finding for the owner, not acted on.** CPU batching buys no aggregate throughput on this host, in either build.
   The candidate at P=8 reads 1.02x to 1.04x its own P=1; the baseline reads 0.90x to 0.92x, and 0.82x to 0.83x at
   P=4. Why the gemm loses end to end, though it wins in isolation, was not investigated. The comparison the
@@ -1203,3 +1214,96 @@ feed the criterion "completed at least once each on Windows, macOS and Linux".
 
 **Next:** the owner commits the tree and starts the workflow, and its first runs are recorded. The reference run at
 `main`'s HEAD follows. Then step 9: ingest the CI zips and fix any defect they show, then testers' runs.
+
+### 2026-11-03: step 10 (docs and `CHANGELOG.md`), ahead of step 9; GitHub CI deferred (owner decision)
+
+**Owner decision 2026-11-03: "for now skip github ci".** Step 8's runs (the `self-tests` job on a pull request, the
+`quick-suite` dispatch) and the CI half of step 9 are deferred. `.github/workflows/kit.yml` stays as written and
+uncommitted. Until CI is taken up again, the criterion "completed at least once each on Windows, macOS and Linux" can
+close only on testers' runs. With no decision open and nothing else owed but owner runs, step 10 was taken before
+step 9: step 9's testers need the guide it writes, and they should build a commit that contains it.
+
+**Plan against code, verified at HEAD `a1fe7166`.** `check-plan-thresholds.sh` passed first (26 tier files). No gate,
+sweep or build was running. Findings:
+- The owner's commit `a1fe7166` (2026-10-31) holds the kit, the engine fixes and the plan wiring. It does not hold
+  `.github/` (`ci.yml` and `kit.yml` are still untracked) or the `.gitignore` line for `juno-kit-results/`, which is
+  still a working-tree modification. So `dist/kit-reference/run-reference.sh` refuses to start until a commit holds
+  that line, and on this host the kit names its build `a1fe7166 (modified tree)`.
+- The kit jars (2026-10-31 11:47) were newer than every `src/main` file, so this step's `--skip-build` runs read
+  `a1fe7166`'s code.
+- `--list`: 74 probes, 72 runnable here (`cpu.kernel-width`: 128-bit JVM; `rocm.unit-tests`: no AMD GPU). `--plan`:
+  step 6's figures. `--plan` and `--list` left `git status` unchanged.
+- The step 5 decode-batch record put the unpinned A/B's 27 of 84 under the pinned bullet; clarified in place.
+
+**Docs written** (scope item 15):
+- `juno-kit/README.md` (new): the tester's guide, one standalone page. It covers prerequisites, getting the commit
+  (git or a commit archive), running, the suites with reference-host times, what the tester may do meanwhile,
+  keep-awake, `resume` and `pack`, the zip and its contents, privacy, the six models, options, common problems and
+  exit codes. The prerequisites include RAM per probe and GPU backends per OS: CUDA resolves only Linux library names
+  and ROCm is Linux only, so the GPU probes are not runnable on Windows and macOS. Problems are quoted with the kit's
+  own messages. Exit codes, checked in `KitBootstrap` and `KitMain`: 0 ran, 1 build failure or unexpected error,
+  2 prerequisite, disk or option.
+- `docs/howto.md`:
+  - a section "Hardware validation kit (`juno-kit`)" before "Build and Test": commands, suites, probe mechanics,
+    estimate, noise rule, models, zip, privacy, the maintainer side (`ingest`), coverage;
+  - the kit's test command in "Build and Test", both shells. It is step 8's `package -pl juno-kit -am` form, because
+    `test -pl juno-kit` alone takes the upstream modules from `~/.m2`, and the launcher self-test needs the player's
+    shaded jar.
+- `docs/agent-arch.txt`: a `juno-kit` module entry (classes by role), `ModelLiveChecks`' backend and `ClusterHarness`'s
+  forwarding of `JUNO_USE_GPU` under `juno-master`, `HfGgufFetcher.downloadPinned`, and the dependency-graph line.
+- `README.md`: "Hardware validation kit" under "What's new", and a module-table row.
+- `CHANGELOG.md`, Session 128: the kit, and the changes that shipped with it in `a1fe7166` without an entry:
+  - the CPU decode batch, with the pinned gate's figures;
+  - the collector;
+  - the grammar alternatives fix;
+  - native SSE escaping;
+  - `./juno cluster --cpu` keeping its forked nodes on the CPU (`ConsoleMain.main` sets `JUNO_USE_GPU` before
+    `runClusterRepl`, and `ClusterHarness` now forwards it);
+  - `ModelLiveChecks`' backend.
+- A grep of the added text and the new file finds no competitor product name, tier number, emoji or pointer into this
+  plan tree. `CLAUDE.md` is not in scope item 15; by owner decision (2026-11-03) its module table gains one
+  `juno-kit` row.
+
+**The `quick` suite, scored against exit criterion 3** (`docs/perf-compare/20261103T205950Z-kit-quick-estimate/`,
+unpinned; kit jar `8ef5098cf3034632`):
+- 18 probes PASS or DONE; calibration 1.03x.
+- First estimate 1478 to 2086 s, point 1738 s. Actual 2345 s, so point over actual is **0.741x**: inside the band,
+  above the range's top.
+- Not ticked, for two reasons.
+- **Three catalog costs matched no measurement:** `long-prompt.tinyllama` 240 s (measured 641 and 626),
+  `quality.tinyllama-1.1b` 120 s (468 and 458) and `grammar.tinyllama` 300 s (100 and 97). Step 5's catalog note said
+  the costs were the measured times; these three were not updated from part 1's runs. They are corrected in
+  `ProbeCatalog` (630, 460, 100), not test first: they are data, and `ProbeCatalogTest`'s rule (timeout at least 3x
+  cost) still holds. `juno-kit`: 116 tests, 0 failures, 0 errors (step 8's command, rebuilt jar `df00680b5bbc0f29`).
+  `--plan` now reads `quick` 32 to 45 min, `cpu` 636 to 898, `gpu` 57 to 81, `all` 693 to 979. The docs and
+  `run-reference.sh`'s comment carry these figures. With them, this run's point would have been about 0.97x.
+- **`cpu.live.tinyllama` took 451 s against 243 s on 2026-10-28.** Two windows are about 5.5x slower in this probe
+  only: check 9's 573-token batched window (16.5 s, now 92.7 s) and check 10's (5.1 s, now 28.6 s). Per layer the
+  matmuls are about 6x slower and attention is unchanged.
+  - Re-run alone on an idle machine (other processes 3.9%): 89.7 s and 28.2 s.
+  - Outside the kit, from the same jar: 18.0 to 18.8 s. That holds for check 9 alone at 4 and 16 GiB, for checks 1
+    to 9 in one JVM, for the probe's exact JVM flags, and with `nvidia-smi` polled every 2 s beside it.
+  - The engine's CPU prefill is unchanged elsewhere the same day: the server (`long-prompt.tinyllama`, 512 tokens
+    15.2 s static and 16.1 s continuous, against 15.3 and 16.2 on 2026-10-29) and the throughput probe (33.6 t/s at
+    512).
+  - So this is a kit-side finding, not an engine regression, and not a measurement boundary. Its cause inside the
+    kit's runner is not found. Ruled out: heap, GC, JVM flags, the `hpet` clock source, GPU polling, the probe's
+    entry class and other load. It stays open for step 9, which owns kit defects. The probe's checks are unaffected.
+
+**Tests and checks.** `juno-kit` as above. `check-plan-thresholds.sh` passes after the edits. No engine code
+changed. The full unit suite and `mvn verify -pl juno-master` are owed at the close, as before.
+
+**Out-of-tier changes:** none. `ProbeCatalog` is this tier's code.
+
+**Exit criteria after step 10:** docs ticked. Three of thirteen are ticked. Criterion 3 has a dated note.
+
+**Owed to the owner, in order:**
+1. Commit the tree: this step's docs and the catalog fix, the `.gitignore` line, and this record. `.github/` can stay
+   out while CI is deferred.
+2. The reference run at that commit, `dist/kit-reference/run-reference.sh`: about 11.5 to 16.5 h, the machine idle
+   during the timed probes. Then publish its draft and add its `README-row.md` to `docs/perf-compare/README.md`.
+3. Testers' runs at that commit (Windows, macOS, a 256-bit integer host), each zip ingested (step 9).
+
+**Next for the executor:** find why the CPU live probe's wide windows run slow under the kit's runner, then
+re-score criterion 3 on a fresh `quick` run. Then step 9 as zips arrive, and the close: the full unit suite,
+`mvn verify -pl juno-master`, and the cross-surface table.

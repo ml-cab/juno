@@ -80,6 +80,7 @@ Module dependency graph (acyclic): `node` depends on `api, lora, registry, kvcac
 | `juno-player` | `ConsoleMain` REPL, `ClusterHarness`, `LoraMergeMain`, `JunoPlayer`/`LoraTrainer`/`JunoHttpClient` (JVM embedding facade) |
 | `juno-master`, `juno-node` | Shaded deploy jars (standalone coordinator / node executables) |
 | `juno-bom` | Maven BOM — aligned versions for all `cab.ml` artifacts |
+| `juno-kit` | Hardware validation kit (not deployed): `KitBootstrap` (source-launched, JDK classes only) builds Juno and starts `KitMain`; `ProbeCatalog` lists the checks and readings, each run in a fresh JVM by `ProbeRunner`; packs one scrubbed results zip; `Ingest` reads testers' zips; `CoverageTest` keeps `coverage.tsv` and the catalog in step. Nothing depends on it |
 
 Key cross-cutting behaviors to know before touching inference/serving code:
 

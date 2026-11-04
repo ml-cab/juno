@@ -1455,6 +1455,74 @@ unchanged. GPU by default (`--cpu` for the CPU backend).
 ```
 ---
 
+### Hardware validation kit (`juno-kit`)
+
+Runs Juno's checks and readings on a machine other than a developer's, with one command on Windows, Linux or
+macOS, and returns one zip of results. It is meant for volunteers with hardware a maintainer lacks (another
+CPU vector width, an AMD GPU, Windows, macOS, arm64). The tester needs JDK 25+ and Maven 3.9+ and nothing else:
+the launcher is a source file run by the JDK before anything is built. It checks the JDK, Maven, free disk and
+network, builds the kit (`mvn -B package -DskipTests -pl juno-kit -am`), detects the machine (OS, CPU and its
+feature flags, the JVM's vector widths, RAM, power, GPUs, Juno's own CUDA and ROCm probe), and lists each probe
+as runnable or not with the reason. The tester's guide is `juno-kit/README.md`.
+
+```bash
+./juno-kit.sh                          # asks what to run (juno-kit.bat on Windows)
+./juno-kit.sh --suite quick --yes      # TinyLlama only, no questions
+./juno-kit.sh --plan --suite all       # what would run, the time, the downloads; writes nothing
+./juno-kit.sh --list                   # every probe and model, with what this machine can run
+./juno-kit.sh --budget 2h --suite all  # the highest-priority probes that fit in two hours
+./juno-kit.sh --probes grammar.tinyllama,gpu.live.tinyllama --models-dir models
+./juno-kit.sh resume juno-kit-results/<run dir>   # continue an interrupted run
+./juno-kit.sh pack juno-kit-results/<run dir>     # zip a run, finished or not
+# -> juno-kit-results/juno-kit-results-<os>-<arch>-<UTC>.zip
+```
+
+| Suite | Contents | Downloads | Time on the reference host (6 cores, GTX 1080) |
+|---|---|---|---|
+| `quick` | TinyLlama 1.1B: environment, calibration, live checks, consistency, grammar, long prompt, CPU hot path, quality, throughput at 128 and 512 (GPU 512 and 2048), the CPU kernel width comparison on 256-bit integer hosts, GPU residency and packed K-quant, the launcher | 637 MiB | 32 to 45 min |
+| `cpu` | every CPU probe on six models (the four standard models, Qwen3-1.7B, moondream2): unit tests, live checks per family, tools, context policy, schedules, LoRA train, play and merge, vision | about 12 GiB | 10.5 to 15 h |
+| `gpu` | the same surfaces on the GPU, and the `gpu` and `rocm` unit-test groups | about 12 GiB | 1 to 1.5 h |
+| `all` | `cpu` and `gpu` | about 12 GiB | 11.5 to 16.5 h |
+| `custom` | `--probes id,...` | as needed | |
+
+Each probe is a check (pass or fail) or a reading (median, min and max of its repetitions), and runs in a fresh
+JVM with Juno's runtime flags and a timeout of at least three times its reference cost. A failure, crash or
+timeout is recorded with its log and the run continues; a checkpoint after every probe lets `resume` skip what
+finished. The estimate is the catalog's reference cost per probe scaled by a calibration of about a minute
+(the shipped Q4_K decode kernel), plus downloads at the measured rate, shown as a range and refined from the
+observed pace. Readings follow the outlier rule of the benchmark harness: a reading whose repetitions spread
+by more than 15% of the median, or one taken while other processes used more than 5% of the CPU or the GPU was
+busy, is re-run up to twice and then marked `NOISY`. Comparisons inside one run (two kernel widths, a flag on
+and off, two schedules) are readings; a remote reading is never compared with another host's throughput.
+
+Models come from Hugging Face at pinned commits, resume when interrupted, and are verified by SHA-256;
+`--models-dir` is searched first and never written, `--cache-dir` (default `~/.cache/juno/models/kit`) holds
+downloads. The zip holds a manifest (schema version, kit version, Juno commit, the kit jar's SHA-256, suites,
+hardware), a JSON result and a log per probe, the unit-test reports, `SUMMARY.txt` and `report.html`. Every
+packed file has the user name, home directory, host name and IP and MAC addresses replaced with placeholders;
+JFR recordings are not packed; nothing is uploaded. A failed build still produces a zip with the build log and
+the environment. The kit exits 0 whenever the probes ran, whatever they found.
+
+**Maintainer side.** `ingest` turns a returned zip into a draft `docs/perf-compare/<UTC>-remote-<host label>/`
+entry (`INDEX.md` with readings, noise status and correctness, `README-row.md`, the zip's manifest, checkpoint and
+probe reports). It compares correctness with the newest `*-kit-reference` entry at the same Juno commit: mean NLL
+at most 1.01x the reference's, argmax agreement at most 0.02 lower, checks and greedy replies equal. The
+reference is the `all` suite on the reference host at that commit, drafted with `--reference-run`. A manifest of
+a newer schema is refused.
+
+```bash
+./juno-kit.sh ingest juno-kit-results-linux-amd64-<UTC>.zip            # compare with the reference at its commit
+./juno-kit.sh ingest <zip> --reference docs/perf-compare/<dir>          # compare with a named reference
+./juno-kit.sh ingest <zip> --reference-run                             # the reference host's own run
+```
+
+`juno-kit/src/main/resources/cab/ml/juno/kit/coverage.tsv` maps every cross-surface row, supported architecture,
+smoke and compare script and feature to its probes; `CoverageTest` fails when one has no probe or names a probe
+that does not exist, so a new handler, script or probe without a line breaks `mvn test -pl juno-kit`. Every probe
+has a self-test there that runs on a synthetic model the test writes, with no model file and no GPU.
+
+---
+
 ### Build and Test
 
 Requires JDK 25+ and Maven 3.9+.
@@ -1464,6 +1532,11 @@ mvn clean package -DskipTests          # build — juno-player emits thin jar + 
 
 mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player
                                        # unit tests — no model file, no GPU needed
+
+mvn package -pl juno-kit -am -Dtest='cab.ml.juno.kit.**' -Dsurefire.failIfNoSpecifiedTests=false
+                                       # hardware validation kit: probe self-tests, coverage, ingest; no model,
+                                       # no GPU. package, not test: the launcher self-test needs juno-player's
+                                       # shaded jar
 
 mvn verify -pl juno-master             # integration tests — forks 3 JVM nodes (stub mode)
                                        # includes ThreeNodeClusterIT and TensorParallelClusterIT
@@ -1482,6 +1555,8 @@ mvn verify -pl juno-master -Pintegration -DMODELS=/abs/a.gguf,/abs/b.gguf
 mvn clean package -DskipTests
 
 mvn test -pl tokenizer,lora,node,coordinator,sampler,kvcache,health,registry,vision,metrics,juno-player
+
+mvn package -pl juno-kit -am "-Dtest=cab.ml.juno.kit.**" -Dsurefire.failIfNoSpecifiedTests=false
 
 mvn verify -pl juno-master
 

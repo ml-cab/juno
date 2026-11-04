@@ -220,10 +220,83 @@ Module dependency (excerpt):
   juno-master — CoordinatorMain standalone executable (production coordinator); also carries
                 ModelLiveRunner (./juno test) over ModelLiveChecks, the ten real-model checks
                 ModelLiveRunnerIT runs too (one implementation for the command and the IT)
+        ModelLiveChecks.run(modelPath, suites, Backend, progress): AUTO (the three-argument
+        run, unchanged: checks 9 and 10 take CUDA where present), CPU (every check and every
+        forked node on the CPU), CUDA (all on the GPU; without a usable one each selected check
+        fails with the reason). The cluster suites set JUNO_USE_GPU for their lifetime, and
+        ClusterHarness forwards JUNO_USE_GPU to the nodes it forks (NodeMain reads it, default
+        true), as it forwards the KV, schedule and residency settings.
         depends on juno-player, coordinator, node, kvcache, tokenizer, sampler,
         health, registry, api
   juno-node — NodeMain standalone executable
   juno-bom — Maven BOM (dependencyManagement for cab.ml artifacts)
+  juno-kit — hardware validation kit: one command (juno-kit.sh / juno-kit.bat at the root) that
+        a tester runs on Windows, Linux or macOS, returning one scrubbed results zip. In the
+        reactor, so mvn compiles and tests it; shaded jar (main KitMain) not installed, not
+        deployed, not in juno-bom. Package cab.ml.juno.kit. Tester's guide: juno-kit/README.md.
+        KitBootstrap — the launchers' entry: a source file run by the JDK before any build, JDK
+              classes and Java 17 syntax only (KitBootstrapTest holds both). Checks JDK >= 25,
+              Maven (MAVEN_HOME, M2_HOME, PATH; cmd.exe /c mvn.cmd on Windows), free disk, Maven
+              Central and huggingface.co; builds (mvn -B package -DskipTests -pl juno-kit -am);
+              starts KitMain in a fresh JVM. A failed build packs build.log, environment.txt and a
+              build-failure manifest. Holds Privacy (scrubbing) and zip, which the kit reuses.
+              resume, pack, ingest and --plan reuse the built jar.
+        KitOptions (CLI), KitMain (run, resume, pack, ingest; the menu when a console is
+              attached; exit 0 whenever the probes ran, whatever they found).
+        Detection: HostDetector, DetectionParsers (/proc/cpuinfo, sysctl, Win32_Processor,
+              nvidia-smi, rocm-smi, Linux power supplies, pmset, Win32_Battery, nmcli), EnvProbe
+              (child JVM: vector widths, UseAVX, CpuThreads, CudaAvailability, RocmAvailability;
+              reports on stdout), HostInfo.
+        Choice and estimate: ProbeCatalog (every probe: id, kind CHECK or READING, suites,
+              Requirements, models, reference cost, priority, entry class, timeout >= 3x cost,
+              ProbeCatalogTest), Selection (suite or --probes against the host, then --budget
+              by priority), Estimator (reference cost x calibration scale + download bytes /
+              measured rate, shown 0.85x to 1.20x; the observed pace replaces the scale after
+              60 reference seconds), CalibrationProbe (the shipped Q4_K decode kernel,
+              CpuDecodeKernelVariantMicrobench.productionMsPerCall).
+        Running: ProbeRunner (fresh JVM per probe through JvmLauncher, Juno's runtime flags,
+              -Xms = -Xmx and pre-touch for readings, JFR on the OS clock where the kernel rejected
+              the TSC, timeout, process tree killed on timeout and on kit shutdown), ProbeMain
+              (dispatch by switch, so a renamed probe breaks the build), LoadSampler + GpuLoad
+              (other processes' CPU share; nvidia-smi compute processes split into the probe's own
+              and others; the probe's peak device memory), NoiseRule (a scored reading spread over
+              15% of its median, taken under more than 5% other-process CPU or on a busy GPU, is
+              re-run up to twice, then NOISY), RunSession + Checkpoint (after every probe),
+              Progress, KeepAwake (SetThreadExecutionState through FFM on Windows, caffeinate -i -w
+              on macOS, systemd-inhibit on Linux).
+        Models: CatalogModel (six models: Hugging Face repo, pinned commit, file, bytes, SHA-256),
+              ModelStore (--models-dir read only, then the cache; SHA-256 verified once per path,
+              size and mtime; downloads through HfGgufFetcher.downloadPinned).
+        Probes: LiveChecksProbe (ModelLiveChecks with a Backend), ThroughputProbe (in-process
+              through JunoPlayer, one JFR recording per request read by JfrMetricsCli),
+              KernelWidthProbe + KernelTimingMain, GpuResidencyProbe + ResidencyRunMain,
+              PackedKquantProbe, UnitTestsProbe + SurefireReports, ConsistencyProbe, GrammarProbe,
+              ToolsProbe, ContextPolicyProbe, LongPromptProbe, CpuHotPathProbe, QualityProbe +
+              QualityRunMain, ParallelProbe, ScheduleProbe, MixedPrefillProbe, PrefillBatchProbe,
+              LoraProbe, VisionProbe, LauncherProbe. Helpers: JunoProcess (the launcher's server in
+              a child JVM, stopped by typing exit), ConcurrentChats, StreamTiming, JfrEvents,
+              NoticeCapture (engine log lines through a java.util.logging handler), HeaderOnlyGguf
+              (header-only files declaring unsupported architectures), KitAdapters (one-step LoRA
+              overlays trained in the run), LedgerNotes. ProbeSelfTests runs every probe on a
+              synthetic GGUF the test writes (SyntheticGguf), with no model file and no GPU.
+        Packing: Manifest (schema 1), ReportWriter (SUMMARY.txt, report.html), ResultsPacker
+              (text files only, every one scrubbed; JFR recordings never packed),
+              juno-kit-results-<os>-<arch>-<UTC>.zip under juno-kit-results/.
+        Coverage: coverage.tsv (resources) + Coverage + CoverageTest: every cross-surface row,
+              ForwardPassHandlerLoader.supportedArchitectures() (with
+              LlamaFamilyArchitectures.verified()), smoke and compare script and feature names its
+              probes; the test fails on an item without a probe, a line naming a probe, script,
+              architecture or row that does not exist, and a catalog probe, script, architecture
+              or row without a line.
+        Ingest (maintainer side): Ingest + IngestReport + ReferenceComparison draft
+              docs/perf-compare/<UTC>-remote-<host label>/ (INDEX.md, README-row.md, the zip's
+              manifest, checkpoint and probe reports) from a returned zip; refuse an entry outside
+              the extraction folder and a newer manifest schema; compare correctness with the
+              newest *-kit-reference entry at the same Juno commit (mean NLL <= 1.01x, argmax
+              agreement at most 0.02 lower, checks and greedy replies equal); never compare
+              throughput across hosts. --reference-run drafts <UTC>-kit-reference/.
+        depends on juno-player, juno-master (ModelLiveChecks), juno-node, node, coordinator,
+              vision, lora, registry, tokenizer, sampler, metrics
   DeviceScratchBudget (node module): sizes the device memory kept free for the
         forward pass when --gpu-layers auto decides how many weight layers to
         upload. Weight upload, the prefill window and the GPU attention KV
@@ -1278,7 +1351,10 @@ HfGgufFetcher (juno-player module) — resolves a Hugging Face Hub
   .gguf asset. download() does a HEAD for the remote ETag (cache hit skips
   the body download when it matches a ".etag" sidecar next to the cached
   file), and resumes a partial ".part" file via an HTTP Range request when
-  present. Cache root is ~/.cache/juno/models/<org>_<repo>/ by default
+  present. downloadPinned(repo, revision, filename, dir) fetches one named
+  file of any extension at a fixed commit, never main, sharing the same
+  resume (the kit's ModelStore calls it and verifies SHA-256 itself).
+  Cache root is ~/.cache/juno/models/<org>_<repo>/ by default
   (constructor-overridable for tests) — never models/, which CLAUDE.md
   reserves for manually placed local fixtures. Plain java.net.http.HttpClient
   + the existing Jackson dependency; no new Maven dependency, no Python.
@@ -1327,6 +1403,8 @@ Dependency graph (acyclic):
   juno-master  →  vision, coordinator, node, registry, ...  (pom dependency;
                    no juno-master code references vision today — CoordinatorMain
                    was superseded by ConsoleMain/wireVisionRoutes in juno-player)
+  juno-kit  →  juno-player, juno-master, juno-node, node, coordinator, vision, lora,
+               registry, tokenizer, sampler, metrics  (nothing depends on juno-kit)
 
 
 

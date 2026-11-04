@@ -1,5 +1,62 @@
 ## Status 
 
+**Session 128** - Hardware validation kit; CPU batched decode equal to single-request decode; the static batch collector holds its window
+
+- **New `juno-kit` module and launchers, `./juno-kit.sh` and `juno-kit.bat`.** A tester with hardware the
+  maintainers lack (another CPU vector width, an AMD GPU, Windows, macOS, arm64) runs one command and sends back one
+  zip. The tester needs only JDK 25+ and Maven 3.9+. The launcher is a source file the JDK runs before anything is
+  built. It checks the JDK, Maven, disk and network, builds Juno, and detects the machine: OS, CPU feature flags,
+  the JVM's vector widths, RAM, power, GPUs, and Juno's own CUDA and ROCm probe. Each of 74 probes is listed as
+  runnable or not, with the reason. The tester's guide is `juno-kit/README.md`; `docs/howto.md` has the reference.
+- **Probes cover every surface:** unit tests (and the `gpu` and `rocm` groups), the ten live checks per model
+  family on the CPU and the GPU, consistency, grammar, tools, context policy, long prompts, GPU residency and the
+  packed K-quant path, CPU kernels and the 128-bit against 256-bit width comparison, output quality (mean NLL),
+  throughput at 128, 512 and 2048 prompt tokens, schedules, LoRA train, play and merge, vision, and the `juno`
+  launcher. Each runs in a fresh JVM with a timeout. A failure is recorded with its log, and the run continues.
+- **Suites:** `quick` (TinyLlama, 32 to 45 min on the reference host), `cpu`, `gpu` and `all` (about 11.5 to 16.5 h),
+  and `custom`. Options: `--budget` keeps the highest-priority probes that fit; `--plan` shows the time, downloads
+  and disk and writes nothing; `resume` and `pack` handle an interrupted run. The estimate is calibrated to the
+  machine before the run and refined as probes finish.
+- **Readings follow the benchmark harness's outlier rule.** A reading is re-run, up to twice, when its repetitions
+  spread by more than 15% of the median, when other processes used more than 5% of the CPU, or when the GPU was
+  busy. If it is still noisy, it is marked `NOISY`. The kit keeps the machine awake without admin rights, and
+  says at each stage whether the tester may use the computer.
+- **Models:** six models from Hugging Face at pinned commits. Downloads resume when interrupted, and each file is
+  verified by SHA-256. `HfGgufFetcher.downloadPinned` fetches a named file of any extension at a fixed commit.
+- **Privacy:** user name, home directory, host name, and IP and MAC addresses are replaced in every packed file.
+  JFR recordings are never packed, and nothing is uploaded. A failed build still produces a zip with its build log.
+- **`juno-kit.sh ingest <zip>`** drafts a performance-report entry from a returned zip. Its correctness readings
+  (mean NLL, argmax agreement, checks, greedy replies) are compared with the reference run at the same commit.
+  Throughput is never compared across hosts.
+- **`CoverageTest` fails while anything lacks a probe:** a cross-surface row, a supported architecture, a smoke or
+  compare script, or a feature. `ForwardPassHandlerLoader.supportedArchitectures()` lists the architectures.
+- **CPU batched decode is now bit for bit the single-request decode.** This covers the static schedule at
+  `--parallel` 2 or more and the continuous schedule's decode steps. On the default integer kernels, a batch's
+  matmul and attention took a different summation order from the single path, and a greedy reply at a near tie
+  could change with what else was batched with it. On an ordinary greedy prompt (pinned run), 23 of the previous
+  build's 84 batched replies differed from the single reply; none do now. New `CpuIntegerDecodeBatch` runs the single-row
+  kernel's own row function for each request.
+  - Pinned aggregate throughput against the previous build: 1.01x to 1.21x at `--parallel` 2, 4 and 8 on TinyLlama
+    and Qwen2.5-3B, and 0.98x to 1.00x at `--parallel 1`.
+  - Unchanged: single-request CPU generation and prompt processing, the GPU, and LoRA training and playback.
+- **The static batch collector now holds a batch open for `--batch-window-ms`** after the first request, or until
+  the batch is full, as the flag always said. Before, it took only the requests already queued.
+  - 8 concurrent clients, `--parallel 8` against `--parallel 1` (unpinned): CPU 1.17x (TinyLlama) and 1.08x
+    (Qwen2.5-3B) aggregate t/s; GPU 0.75x and 0.68x, because a batched GPU decode step runs outside the
+    device-resident region a single request uses.
+  - `docs/howto.md` and `--help` now recommend `--parallel 8` on the CPU and `1` on the GPU.
+- **Constrained decoding no longer switches alternatives mid-sequence.** Under `root ::= "yes" | "no"` the grammar
+  accepted `yno`: an alternative could be entered from any position of a sequence, not only from its start. This
+  affected every grammar with alternatives: JSON Schema, tool calls and `x_juno_grammar`.
+- **The native stream escapes control characters.** `/v1/inference/stream` passed control characters other than
+  newline, carriage return and tab into its JSON strings raw, which JSON forbids; a byte-fallback token can decode
+  to one. They are now written as unicode escapes.
+- **`./juno cluster --cpu` keeps its forked nodes on the CPU.** The forked nodes now receive the launcher's GPU
+  choice (`JUNO_USE_GPU`), as they already received the KV, schedule and residency settings. Before, they took the
+  GPU wherever one was usable.
+- **`ModelLiveChecks` takes a backend** (`AUTO`, `CPU`, `CUDA`), so its checks can be held to one device; `./juno
+  test` keeps `AUTO`.
+
 **Session 127** - Faster CPU kernels: 1.3x to 1.7x faster CPU generation, 2x to 4x faster CPU prompt processing
 
 - **Q6_K weights decode in 128-bit vector lanes** instead of a scalar integer loop, with output bit-identical to the

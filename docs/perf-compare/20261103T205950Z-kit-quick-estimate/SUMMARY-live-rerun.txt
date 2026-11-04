@@ -1,0 +1,17 @@
+Juno hardware validation kit 0.1.2, Juno a1fe71668a5e1f1aa2fd1919a9016129684a1964 (modified tree)
+Suite custom, started 20261103T214211Z, finished 20261103T214932Z
+Host: Linux 7.0.0-42-generic amd64; Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz, 6 cores, 12 threads, 62 GiB RAM
+JVM vectors: integer 128-bit, float 128-bit; UseAVX 1; Juno CUDA yes, ROCm no
+GPU: NVIDIA NVIDIA GeForce GTX 1080, 8192 MiB, driver 580.178.04
+
+cpu.live.tinyllama             PASS     7:12
+    ok   1. hello greeting: "Hello, how are you doing today?"
+    ok   2. no raw SentencePiece markers: 10 pieces
+    ok   3. question response: "In order to calculate the sum of 2 and 2"
+    ok   4. greedy determinism: "I'm glad to hear that you" twice
+    ok   5. multi-turn context: 77 prompt tokens
+    ok   6. FLOAT16 pipeline: 5 tokens
+    ok   7. tensor-parallel generation: "I'm glad to hear that you enjoyed the"
+    ok   8. tensor-parallel greedy determinism: "I'm glad to hear that you" twice
+    ok   9. long-prompt prefill, both schedules: backend=cpu prompt_tokens=573 first-divergence static=-1 continuous=-1; 2048-token leg not run on the CPU backend
+    ok   10. context shift past the context limit, both schedules

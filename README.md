@@ -28,6 +28,14 @@ Features:
 
 ## 1.1 What's new?
 
+### Hardware validation kit
+
+- `./juno-kit.sh` (`juno-kit.bat` on Windows) builds Juno, detects what the machine can run, runs Juno's
+  correctness checks and performance readings across every feature surface, and packs the results, scrubbed of
+  personal data, into one zip to send back. It needs only JDK 25+ and Maven 3.9+, and uploads nothing. Suites from
+  `quick` (TinyLlama, about 40 minutes) to `all`; `--plan` shows the time and downloads first. See
+  `juno-kit/README.md`.
+
 ### Faster CPU inference
 
 - CPU matmuls over Q4_K, Q5_K, Q6_K and Q8_0 weights run integer dot products on an 8-bit activation, with a
@@ -234,6 +242,7 @@ and [6.2 AWS Deployment](https://ml.cab/juno-documentation/aws-deployment/).
 | `tokenizer`, `sampler`, `kvcache`, `health`, `metrics` | Shared infrastructure |
 | `juno-player` | CLI REPL and cluster harness |
 | `juno-node`, `juno-master` | Shaded deploy jars |
+| `juno-kit` | Hardware validation kit: one command runs Juno's checks and readings and packs one results zip (not deployed) |
 
 Architecture and design decisions: [Part 2. Architecture](https://ml.cab/juno-documentation/overview/).
 Full module map: [2.6 Module Map](https://ml.cab/juno-documentation/module-map/).
